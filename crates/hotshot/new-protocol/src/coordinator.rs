@@ -20,7 +20,7 @@ use hotshot_types::{
         OneHonestThreshold, SuccessThreshold, TimeoutCertificate2, TimeoutCertificate3,
         TimeoutEvidence, UpgradeCertificate2,
     },
-    simple_vote::{HasEpoch, QuorumVote2, TimeoutVote2, TimeoutVote3},
+    simple_vote::{HasEpoch, QuorumVote2, TimeoutVote2},
     traits::{
         BlockPayload,
         block_contents::BlockHeader,
@@ -69,7 +69,7 @@ use crate::{
         ObtainedPayload, PinnedBy, VidDisperseRequest, VidDisperser, VidFragmentAccumulator,
         VidReconstructor, expected_vid_param,
     },
-    vote::{EpochRootTally, SimpleTally, UpgradeTally, VoteCollector},
+    vote::{EpochRootTally, SimpleTally, TimeoutTally, UpgradeTally, VoteCollector},
 };
 
 /// Views to retain in the VID reconstructor behind the decided view
@@ -121,9 +121,8 @@ pub struct Coordinator<T: NodeType, S> {
     timeout_collector: VoteCollector<T, SimpleTally<T, TimeoutVote2<T>, SuccessThreshold>>,
     timeout_one_honest_collector:
         VoteCollector<T, SimpleTally<T, TimeoutVote2<T>, OneHonestThreshold>>,
-    timeout3_collector: VoteCollector<T, SimpleTally<T, TimeoutVote3<T>, SuccessThreshold>>,
-    timeout_one_honest3_collector:
-        VoteCollector<T, SimpleTally<T, TimeoutVote3<T>, OneHonestThreshold>>,
+    timeout3_collector: VoteCollector<T, TimeoutTally<T, SuccessThreshold>>,
+    timeout_one_honest3_collector: VoteCollector<T, TimeoutTally<T, OneHonestThreshold>>,
     epoch_root_collector: VoteCollector<T, EpochRootTally<T>>,
     upgrade_vote_collector: VoteCollector<T, UpgradeTally<T>>,
     upgrade_protocol: UpgradeProtocol<T>,
@@ -992,12 +991,9 @@ where
                             evidence,
                         })
                     },
-                    TimeoutVote::V3(vote) => {
-                        ConsensusMessage::TimeoutVote3(message::TimeoutVoteMessage3 {
-                            vote,
-                            evidence,
-                        })
-                    },
+                    TimeoutVote::V3(ballot) => ConsensusMessage::TimeoutVote3(
+                        message::TimeoutVoteMessage3::new(ballot, evidence),
+                    ),
                 };
                 self.broadcast(message, "broadcast timeout vote")?
             },
@@ -1464,11 +1460,17 @@ where
                     None
                 },
                 ConsensusMessage::TimeoutVote3(timeout_msg) => {
-                    self.on_timeout_vote(
-                        &message.sender,
-                        TimeoutVote::V3(timeout_msg.vote),
-                        timeout_msg.evidence,
-                    );
+                    match timeout_msg.ballot() {
+                        Ok(ballot) => self.on_timeout_vote(
+                            &message.sender,
+                            TimeoutVote::V3(ballot),
+                            timeout_msg.evidence(),
+                        ),
+                        Err(reason) => warn!(
+                            %node, %sender, view = %timeout_msg.view, %reason,
+                            "malformed timeout vote"
+                        ),
+                    }
                     None
                 },
                 ConsensusMessage::TimeoutCertificate(tc) => {
@@ -1487,7 +1489,7 @@ where
                     debug!(
                         %node, %sender,
                         view = %tc.view_number(),
-                        epoch = %tc.data.epoch,
+                        epoch = %tc.epoch,
                         "recv timeout certificate"
                     );
                     if let Some(epoch) = self.verify_timeout_cert3(&message.sender, tc) {
@@ -2281,9 +2283,14 @@ where
                 self.timeout_collector.accumulate_vote(vote.clone());
                 self.timeout_one_honest_collector.accumulate_vote(vote);
             },
-            TimeoutVote::V3(vote) => {
-                self.timeout3_collector.accumulate_vote(vote.clone());
-                self.timeout_one_honest3_collector.accumulate_vote(vote);
+            TimeoutVote::V3(ballot) => {
+                // A vote whose lock is of an epoch whose committee is not
+                // known yet waits in the collector (`Ballot::epochs`).
+                if let Some(epoch) = self.timeout3_collector.accumulate_vote(ballot.clone()) {
+                    debug!(%node, %sender, %view, %epoch, "timeout vote waits for a committee");
+                    self.epoch_manager.request_drb_result(epoch);
+                }
+                self.timeout_one_honest3_collector.accumulate_vote(ballot);
             },
         }
     }
@@ -2334,6 +2341,10 @@ where
         let view = tc.view_number();
         if !self.consensus.upgrade_lock().timeout_epoch_bound(view) {
             warn!(node = %self.node_id, %sender, %view, "inadmissible timeout certificate");
+            return None;
+        }
+        if let Err(err) = tc.check_lock() {
+            warn!(node = %self.node_id, %sender, %view, %err, "malformed timeout certificate");
             return None;
         }
         self.cert_verifiers.timeout3.verify(sender.clone(), tc)

@@ -170,7 +170,7 @@ async fn split_boundary_votes(
 
 fn v3_vote(vote: TimeoutVote<TestTypes>) -> TimeoutVote3<TestTypes> {
     match vote {
-        TimeoutVote::V3(vote) => vote,
+        TimeoutVote::V3(ballot) => ballot.vote().clone(),
         TimeoutVote::V2(_) => panic!("epoch-binding lock must produce V3 votes"),
     }
 }

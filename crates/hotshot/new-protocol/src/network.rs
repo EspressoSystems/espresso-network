@@ -160,6 +160,7 @@ impl<T: NodeType> Cliquenet<T> {
     }
 
     pub async fn receive(&mut self) -> Result<Message<T, Unchecked>, NetworkError> {
+        #[allow(clippy::never_loop)]
         loop {
             let (src, bytes) = self
                 .receiver

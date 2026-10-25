@@ -53,13 +53,14 @@ use hotshot_types::{
         SequencingMessage,
     },
     simple_certificate::{
-        DaCertificate, LightClientStateUpdateCertificateV2, QuorumCertificate, SimpleCertificate,
-        TimeoutCertificate, TimeoutCertificate2, TimeoutCertificate3, TimeoutEvidence,
-        UpgradeCertificate, UpgradeCertificate2, ViewSyncCommitCertificate,
-        ViewSyncFinalizeCertificate, ViewSyncPreCommitCertificate,
+        DaCertificate, LatestTimeoutSignatures, LightClientStateUpdateCertificateV2,
+        QuorumCertificate, SimpleCertificate, TimeoutCertificate, TimeoutCertificate2,
+        TimeoutCertificate3, TimeoutEvidence, TimeoutSignatures, UpgradeCertificate,
+        UpgradeCertificate2, ViewSyncCommitCertificate, ViewSyncFinalizeCertificate,
+        ViewSyncPreCommitCertificate,
     },
     simple_vote::{
-        DaData, DaVote, LightClientStateUpdateVote2, QuorumData, QuorumData2, QuorumVote,
+        DaData, DaVote, LightClientStateUpdateVote2, LockView, QuorumData, QuorumData2, QuorumVote,
         SimpleVote, TimeoutData, TimeoutData2, TimeoutData3, TimeoutVote, UpgradeProposalData,
         UpgradeProposalData2, UpgradeVote, ViewSyncCommitData, ViewSyncCommitVote,
         ViewSyncFinalizeData, ViewSyncFinalizeVote, ViewSyncPreCommitData, ViewSyncPreCommitVote,
@@ -531,18 +532,28 @@ async fn reference_new_protocol_messages(
         )),
         Default::default(),
     );
-    let timeout_data3 = TimeoutData3 { view, epoch };
-    let timeout_cert3: TimeoutCertificate3<SeqTypes> = SimpleCertificate::new(
-        timeout_data3.clone(),
-        timeout_data3.commit(),
-        view,
-        Some(assemble_qc_signature(
-            &sender,
-            &priv_key,
-            timeout_data3.commit().as_ref(),
-        )),
-        Default::default(),
-    );
+    // A latest group and an earlier one, so the vector pins both encodings.
+    let timeout_data3 = |lock| TimeoutData3 { view, epoch, lock };
+    let timeout_cert3 = TimeoutCertificate3::<SeqTypes> {
+        view_number: view,
+        epoch,
+        latest: LatestTimeoutSignatures {
+            lock_cert: Some(cert1.clone()),
+            signatures: assemble_qc_signature(
+                &sender,
+                &priv_key,
+                timeout_data3(Some(LockView::of(&cert1))).commit().as_ref(),
+            ),
+        },
+        earlier: vec![TimeoutSignatures {
+            lock: None,
+            signatures: assemble_qc_signature(
+                &sender,
+                &priv_key,
+                timeout_data3(None).commit().as_ref(),
+            ),
+        }],
+    };
 
     let timeout_evidence = if bind_timeout_epoch {
         TimeoutEvidence::V3(timeout_cert3.clone())
@@ -559,11 +570,11 @@ async fn reference_new_protocol_messages(
     let timeout_vote_messages = |evidence: Option<CatchupEvidence<SeqTypes>>| {
         if bind_timeout_epoch {
             ConsensusMessage::TimeoutVote3(TimeoutVoteMessage3 {
-                vote: SimpleVote {
-                    signature: (sender, signature.clone()),
-                    data: timeout_data3.clone(),
-                    view_number: view,
-                },
+                signer: sender,
+                signature: signature.clone(),
+                view,
+                epoch,
+                lock: Some(cert1.clone()),
                 evidence,
             })
         } else {
