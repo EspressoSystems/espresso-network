@@ -18,5 +18,7 @@
   `builder_commitment`; `LargeBlock` chain-config change raises `max_block_size`, run by the new protocol's upgrade
   sub-protocol (`crates/hotshot/new-protocol/src/upgrade.rs`)
 
-What a network runs: `base_version` and `upgrade_version` in `data/genesis/<network>.toml`. Live confirmation is
-`consensus_genesis{base_version,upgrade_version}` from `/v1/status/metrics`, see `doc/agents/live-chains.md`.
+`data/genesis/<network>.toml` on `main` is the configured version and `[[upgrade]]`s; it can lead the deployed
+release. What a network runs: `consensus_genesis{base_version,upgrade_version}` from `/v1/status/metrics`, see
+`doc/agents/live-chains.md`. As of 2026-10-25 mainnet and decaf both run 0.6 (release `0.6.3.16`); the 0.7 upgrade in
+`decaf.toml` is not live.

@@ -74,7 +74,8 @@ just demo-native                      # local network via process-compose
 
 - `espresso-node`: main node binary, API, persistence
 - `espresso-types`: domain types (Header, Payload, Transaction, ValidatedState)
-- `hotshot`: BFT consensus implementation
+- `hotshot-new-protocol`: BFT consensus implementation
+- `hotshot-types`: consensus types and traits shared by HotShot and the node
 - `hotshot-query-service`: query APIs for blocks/availability
 - `hotshot-state-prover`: ZK proof generation for light client updates
 - `hotshot-contract-adapter`: Rust <-> Solidity type bridge
@@ -85,8 +86,9 @@ just demo-native                      # local network via process-compose
 
 ## Feature flags
 
-- `embedded-db` (off by default): SQLite. Requires different sqlx features than PostgreSQL; features are additive
-  globally, so use `espresso-node-sqlite` for SQLite builds.
+- `embedded-db` (off by default): makes `espresso-node` default to SQLite (`Options::embedded_db` in
+  `crates/espresso/node/src/persistence/sql/options.rs`). Features unify across the workspace, so use
+  `espresso-node-sqlite` for SQLite builds.
 
 ## Testing
 

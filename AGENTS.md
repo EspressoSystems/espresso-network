@@ -48,5 +48,5 @@ Reviewing is the bottleneck. Default to changes that minimize reviewer time.
 ## Key files
 
 - `justfile` - build/test/deploy commands
-- `data/genesis/*.toml` - genesis configs, including the protocol version each network runs
+- `data/genesis/*.toml` - genesis configs, including each network's configured protocol version and upgrades
 - `data/v*/` - reference serialization test vectors
