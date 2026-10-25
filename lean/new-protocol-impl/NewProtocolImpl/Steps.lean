@@ -55,9 +55,6 @@ structure StepOK (pre : History) (st : Step) : Prop where
     vote.signer = node ∧ pre.InEpoch cfg vote.data.epoch ∧ pre.HasCert1 cfg vote.data.lock
       ∧ ((st.input = .timeout vote.view ∧ pre.InView cfg vote.view)
         ∨ (st.input = .timeoutOneHonest vote.view ∧ ∃ v, pre.InView cfg v ∧ v ≤ vote.view))
-  timeoutAnswered : ∀ v, ((st.input = .timeout v ∧ pre.InView cfg v)
-      ∨ (st.input = .timeoutOneHonest v ∧ ∃ w, pre.InView cfg w ∧ w ≤ v)) →
-    ∃ e L, pre.InEpoch cfg e ∧ Output.send (.timeoutVote ⟨⟨e, L⟩, v, node⟩) ∈ st.output
   propose : ∀ p, Output.send (.proposal p) ∈ st.output →
     ProposalJustified cfg leader node (pre ++ [st]) p
   revote : ∀ r, Output.send (.revote r) ∈ st.output →
@@ -88,6 +85,16 @@ theorem sent_snoc {h : History} {st : Step} {m : Message} :
     · exact ⟨s, Or.inl hs, hm⟩
     · exact ⟨st, Or.inr rfl, hm⟩
 
+theorem upTo_snoc {h : History} {st : Step} {m : Nat} (hm : m ≤ h.length) :
+    (h ++ [st]).upTo m = h.upTo m := by
+  simp only [History.upTo]; rw [List.take_append_of_le_length hm]
+
+/-- A timer an old step took, the extended history took too. -/
+theorem timerAt_snoc {h : History} {st : Step} {m : Nat} {v : ViewNumber} (hm : m < h.length)
+    (ht : h.TimerAt cfg m v) : (h ++ [st]).TimerAt cfg m v := by
+  obtain ⟨st', hst, hcase⟩ := ht
+  exact ⟨st', by rw [List.getElem?_append_left hm]; exact hst, by rw [upTo_snoc (Nat.le_of_lt hm)]; exact hcase⟩
+
 /-- A step of `h ++ [st]` is an old one with its old prefixes, or `st` after `h`. -/
 theorem getElem?_snoc {h : History} {st st' : Step} {n : Nat} (hn : (h ++ [st])[n]? = some st') :
     (h[n]? = some st' ∧ (h ++ [st]).upTo (n + 1) = h.upTo (n + 1) ∧ (h ++ [st]).upTo n = h.upTo n)
@@ -116,7 +123,7 @@ theorem lockable_of_upTo {h : History} {m : Nat} {c : Cert1} (hl : (h.upTo m).Lo
   lockable_mono (fun _ ⟨st, hst, hin⟩ => ⟨st, List.mem_of_mem_take hst, hin⟩) hl
 
 /-- A vote2 a protocol history sent is for a certificate it could lock on. -/
-theorem vote2_lockable {h : History} (hp : ProtocolHistory cfg leader node (fun _ => True) (fun _ => True) h) {v2 : Vote2}
+theorem vote2_lockable {h : History} (hp : ProtocolHistory cfg leader node (fun _ => True) h) {v2 : Vote2}
     (hs : h.Sent (.vote2 v2)) : ∃ c, h.Lockable cfg c ∧ v2.view = c.view ∧ v2.data = c.data.toVote2 := by
   obtain ⟨st, hst, hm⟩ := hs
   obtain ⟨j, hj⟩ := List.mem_iff_getElem?.mp hst
@@ -140,11 +147,11 @@ theorem global_once {h : History} (hg : Global h) :
     rw [(hg.revoteOnce r hs).1 r' hs' (he'.trans he.symm) (hv'.trans hv.symm)]
 
 /-- **Extending a protocol history by a step that obeys the rules.** -/
-theorem protocolHistory_snoc {h : History} {st : Step} (hp : ProtocolHistory cfg leader node (fun _ => True) (fun _ => True) h)
+theorem protocolHistory_snoc {h : History} {st : Step} (hp : ProtocolHistory cfg leader node (fun _ => True) h)
     (hs : StepOK cfg leader node h st) (hg : Global (h ++ [st])) :
-    ProtocolHistory cfg leader node (fun _ => True) (fun _ => True) (h ++ [st]) := by
+    ProtocolHistory cfg leader node (fun _ => True) (h ++ [st]) := by
   refine ⟨⟨?_, fun v v' a b _ he hv => hg.vote1Once v v' a b he hv, ?_,
-    fun v v' a b _ he hv => hg.vote2Once v v' a b he hv, ?_, ?_, ?_, ?_⟩, ?_, ?_, ?_, ?_, ?_,
+    fun v v' a b _ he hv => hg.vote2Once v v' a b he hv, ?_, ?_, ?_, ?_⟩, ?_, ?_, ?_, ?_,
     fun m m' v e hs hs' hv hv' he he' _ => global_once hg m m' v e hs hs' hv hv' he he'⟩
   · rintro n vote ⟨st', hn, hm⟩ _
     rcases getElem?_snoc hn with ⟨hold, hu, _⟩ | ⟨rfl, hu, _⟩
@@ -163,7 +170,7 @@ theorem protocolHistory_snoc {h : History} {st : Step} (hp : ProtocolHistory cfg
     rcases getElem?_snoc hn with ⟨hold, _, hu⟩ | ⟨rfl, _, hu⟩
     · rw [hu]; exact hp.timeoutLock n vote ⟨st', hold, hm⟩ trivial
     · rw [hu]
-      intro v2 hs2 _
+      intro v2 hs2 _ _
       obtain ⟨c, hc, hv, hd⟩ := vote2_lockable hp hs2
       rw [hv, hd]; exact (hs.timeoutLocked vote hm).2 c hc
   · intro n st' blocks c1 c2 hn hm _
@@ -179,13 +186,14 @@ theorem protocolHistory_snoc {h : History} {st : Step} (hp : ProtocolHistory cfg
     · rw [hu]; exact hp.vote1Leader n vote ⟨st', hold, hm⟩ trivial
     · rw [hu]; exact hs.vote1Leader vote hm
   · intro n st' vote hn hm _
-    rcases getElem?_snoc hn with ⟨hold, _, hu⟩ | ⟨rfl, _, hu⟩
-    · rw [hu]; exact hp.timeoutJustified n st' vote hold hm trivial
-    · rw [hu]; exact hs.timeoutJustified vote hm
-  · intro n st' v hn howed _
-    rcases getElem?_snoc hn with ⟨hold, _, hu⟩ | ⟨rfl, _, hu⟩
-    · rw [hu] at howed ⊢; exact hp.timeoutAnswered n st' v hold howed fun _ _ => ⟨trivial, trivial⟩
-    · rw [hu] at howed ⊢; exact hs.timeoutAnswered v howed
+    rcases getElem?_snoc hn with ⟨hold, _, _⟩ | ⟨rfl, _, hu⟩
+    · obtain ⟨hsig, m, hmn, ht, he, hl⟩ := hp.timeoutJustified n st' vote hold hm trivial
+      have hlt : n < h.length := (List.getElem?_eq_some_iff.mp hold).1
+      exact ⟨hsig, m, hmn, timerAt_snoc (by omega) ht, by rw [upTo_snoc (by omega)]; exact he,
+        by rw [upTo_snoc (by omega)]; exact hl⟩
+    · obtain ⟨hsig, he, hl, ht⟩ := hs.timeoutJustified vote hm
+      exact ⟨hsig, n, Nat.le_refl _, ⟨_, hn, by rw [hu]; exact ht⟩, by rw [hu]; exact he,
+        by rw [hu]; exact hl⟩
   · rintro n p ⟨st', hn, hm⟩ _
     rcases getElem?_snoc hn with ⟨hold, hu, _⟩ | ⟨rfl, hu, _⟩
     · rw [hu]; exact hp.proposeJustified n p ⟨st', hold, hm⟩ trivial
@@ -196,8 +204,8 @@ theorem protocolHistory_snoc {h : History} {st : Step} (hp : ProtocolHistory cfg
     · rw [hu]; exact hs.revote r hm
 
 /-- The empty history obeys every rule. -/
-theorem protocolHistory_nil : ProtocolHistory cfg leader node (fun _ => True) (fun _ => True) [] := by
-  refine ⟨⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩, ?_, ?_, ?_, ?_, ?_, ?_⟩ <;> simp [Sent, SentAt]
+theorem protocolHistory_nil : ProtocolHistory cfg leader node (fun _ => True) [] := by
+  refine ⟨⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩, ?_, ?_, ?_, ?_, ?_⟩ <;> simp [Sent, SentAt]
 
 theorem global_nil : Global [] := by
   refine ⟨?_, ?_, ?_, ?_⟩ <;> simp [Sent]

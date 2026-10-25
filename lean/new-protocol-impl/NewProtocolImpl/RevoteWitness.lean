@@ -885,10 +885,20 @@ theorem timedOut {k : PubKey} {n : Nat} {v : ViewNumber} (h : (H k n).TimedOut v
   obtain ⟨u, rfl, rfl⟩ := sent_timeout hjv
   exact ⟨u, hle, hj⟩
 
+/-- A timer or one-honest indication for `v` or a later view comes no earlier than a timeout vote. -/
+theorem timer {k : PubKey} {n : Nat} {v : ViewNumber}
+    (h : ∃ j w, (H k n).TimerAt cfg j w ∧ v ≤ w) : ∃ u, v.toNat ≤ 3 * u + 3 ∧ 15 * u + 12 < n := by
+  obtain ⟨j, w, ht, hle⟩ := h
+  obtain ⟨hj, hi | hi⟩ := Kit.timerAt_input ht
+  · obtain ⟨u, rfl, rfl⟩ := input_timeout hi
+    exact ⟨u, hle, hj⟩
+  · obtain ⟨u, rfl, rfl⟩ := input_oneHonest hi
+    exact ⟨u, hle, by omega⟩
+
 variable (hv : ∀ b, BlockValid b)
 
 include hv in
-theorem protocol (k : PubKey) (n : Nat) : ProtocolHistory cfg leader k (fun _ => True) (fun _ => True) (H k n) :=
+theorem protocol (k : PubKey) (n : Nat) : ProtocolHistory cfg leader k (fun _ => True) (H k n) :=
   Kit.protocol input hv k n
 
 /-- What a justified proposal or request names, the node holds. -/
@@ -1294,7 +1304,10 @@ theorem votes2 (k : PubKey) (u : Nat) (hl : lag k u = 0) : ∃ j, j ≤ 15 * u +
     ∧ Output.send (.vote2 ⟨(C2 u).data, ⟨3 * u + 1⟩, k⟩) ∈ (tr k j).output := by
   refine Classical.byContradiction fun hneg => settled k (15 * u + 4) (.vote2 (certOf (blk u)))
     ⟨⟨blk u, hasCert1_of u (by omega), hasProposal_of u (by omega), ⟨Nat.le_refl _, rfl⟩,
-      payload_of u hl (by omega)⟩, fun vote hs _ hvv => ?_, fun c2 hc2 _ hv2 => ?_, ?_, ?_⟩
+      payload_of u hl (by omega)⟩,
+      notBehind (by rw [cert_epoch]; have := eAt_facts u 5 (by omega); show eAt (15 * u + 5) ≤ u + 1; omega),
+      fun vote hs _ hvv => ?_, fun c2 hc2 _ hv2 => ?_, ?_,
+      by rw [cert_view]; show 0 < 3 * u + 1; omega, Kit.decidedBefore_of fun c2 hc2 => ?_⟩
   · obtain ⟨j, hj, hjv⟩ := sent_iff.mp hs
     obtain ⟨u', -, ⟨rfl, -⟩ | ⟨rfl, -⟩⟩ := sent_vote2 hv hjv
     · rw [cert_view] at hvv
@@ -1308,18 +1321,20 @@ theorem votes2 (k : PubKey) (u : Nat) (hl : lag k u = 0) : ∃ j, j ≤ 15 * u +
     · have : 3 * x + 2 = 3 * u + 1 := view_inj hv2
       omega
   · rw [cert_view]
-    rintro (ht | ⟨tc, htc, hle⟩)
+    rintro (ht | ⟨tc, htc, hle⟩ | ht)
     · obtain ⟨y, hle, hy⟩ := timedOut ht
       have : 3 * u + 1 ≤ 3 * y + 3 := hle
       omega
     · obtain ⟨y, rfl, hy⟩ := received_tc htc
       have : 3 * u + 1 ≤ 3 * y + 3 := hle
       omega
-  · refine Kit.afterFloor_of input hv (by rw [cert_view]; show 0 < 3 * u + 1; omega) fun x hx => ?_
-    rw [cert_view]
-    rcases hasProposal hx with rfl | ⟨y, rfl, hy⟩
-    · show 0 < 3 * u + 1 + 20; omega
-    · rw [blk_view]; show 3 * y + 1 < 3 * u + 1 + 20; omega
+    · obtain ⟨y, hle, hy⟩ := timer ht
+      have : 3 * u + 1 ≤ 3 * y + 3 := hle
+      omega
+  · rw [cert_view]
+    rcases hasCert2 hc2 with ⟨x, rfl, hlt⟩ | ⟨x, rfl, hlt⟩
+    · show 3 * x + 1 < 3 * u + 1; omega
+    · show 3 * x + 2 < 3 * u + 1; omega
 
 include hv in
 /-- Every member of a block's committee votes2 on the re-vote's `Cert1` by the step it arrives in. -/
@@ -1328,7 +1343,14 @@ theorem votes2R (k : PubKey) (u : Nat) (hl : lag k u = 0) : ∃ j, j ≤ 15 * u 
   refine Classical.byContradiction fun hneg => settled k (15 * u + 6) (.vote2 (CR u))
     ⟨⟨blk u, hasCR_of u (by omega), hasProposal_of u (by omega),
       ⟨by rw [blk_view]; show 3 * u + 1 ≤ 3 * u + 2; omega, rfl⟩, payload_of u hl (by omega)⟩,
-      fun vote hs _ hvv => ?_, fun c2 hc2 _ hv2 => ?_, ?_, ?_⟩
+      notBehind (by
+        show eAt (15 * u + 7) ≤ (certOf (blk u)).data.epoch.toNat
+        rw [cert_epoch]
+        have := eAt_facts u 7 (by omega)
+        show eAt (15 * u + 7) ≤ u + 1
+        omega),
+      fun vote hs _ hvv => ?_, fun c2 hc2 _ hv2 => ?_, ?_, by show 0 < 3 * u + 2; omega,
+      Kit.decidedBefore_of fun c2 hc2 => ?_⟩
   · obtain ⟨j, hj, hjv⟩ := sent_iff.mp hs
     obtain ⟨u', -, ⟨rfl, -⟩ | ⟨rfl, -⟩⟩ := sent_vote2 hv hjv
     · have := view_inj hvv; omega
@@ -1339,17 +1361,19 @@ theorem votes2R (k : PubKey) (u : Nat) (hl : lag k u = 0) : ∃ j, j ≤ 15 * u 
       omega
     · have : 3 * x + 2 = 3 * u + 2 := view_inj hv2
       omega
-  · rintro (ht | ⟨tc, htc, hle⟩)
+  · rintro (ht | ⟨tc, htc, hle⟩ | ht)
     · obtain ⟨y, hle, hy⟩ := timedOut ht
       have : 3 * u + 2 ≤ 3 * y + 3 := hle
       omega
     · obtain ⟨y, rfl, hy⟩ := received_tc htc
       have : 3 * u + 2 ≤ 3 * y + 3 := hle
       omega
-  · refine Kit.afterFloor_of input hv (by show 0 < 3 * u + 2; omega) fun x hx => ?_
-    rcases hasProposal hx with rfl | ⟨y, rfl, hy⟩
-    · show 0 < 3 * u + 2 + 20; omega
-    · rw [blk_view]; show 3 * y + 1 < 3 * u + 2 + 20; omega
+    · obtain ⟨y, hle, hy⟩ := timer ht
+      have : 3 * u + 2 ≤ 3 * y + 3 := hle
+      omega
+  · rcases hasCert2 hc2 with ⟨x, rfl, hlt⟩ | ⟨x, rfl, hlt⟩
+    · show 3 * x + 1 < 3 * u + 2; omega
+    · show 3 * x + 2 < 3 * u + 2; omega
 
 end Sends
 
@@ -1908,7 +1932,7 @@ include hv in
 /-- **The liveness premises can be met together, with every re-vote answered.** -/
 theorem premises_met :
     ConfigCoherent cfg ∧ Synchrony (net hv) 0 4 33 ∧ Prompt (net hv) 0
-      ∧ 8 * 4 + 3 * 0 < 33 ∧ LeaderRotation C leader :=
+      ∧ 8 * 4 + 4 * 0 < 33 ∧ LeaderRotation C leader :=
   ⟨cfg_coherent, sync hv, prompt_of_machine _ 0 (fun k _ => ⟨input k, rfl⟩)
     (fun _ hk => Kit.steady_of_uniform (fun _ _ _ h => h) hk), by decide, rotation⟩
 

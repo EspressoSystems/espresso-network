@@ -46,8 +46,8 @@ it has not delivered yet, as far back as it holds them. An ancestor it does not 
 {ref "valid-decides"}[Valid decides] says when a skipped block is delivered later.
 
 A view that produces no {name NewProtocol.Cert1}`Cert1` in time is given up. Each node's timer fires, and
-the node sends a timeout vote. The vote names a {name NewProtocol.Cert1}`Cert1` the node holds, no
-earlier than any block it voted2 on, called the vote's lock. A node that sees
+the node sends a timeout vote. The vote names a {name NewProtocol.Cert1}`Cert1` the node held at the timer, no
+earlier than any block it voted2 on up to the vote's view, called the vote's lock. A node that sees
 timeout votes for a view from enough nodes that one of them is honest (the
 _one-honest indication_) times the view out too. A quorum of timeout votes is a
 {name NewProtocol.TimeoutCert}`TimeoutCert`, whose lock is the latest of its votes' locks. The next view starts
@@ -72,7 +72,7 @@ before GST too, given the signing rules, genuine certificates, quorums of an epo
 that share an honest member, no hash collisions and a coherent configuration.
 {name NewProtocol.ChainGrows}`ChainGrows` holds eventually after GST, given in addition the whole
 protocol, promptness within `δ`, synchrony with bound `Δ`, a view timer `τ` longer
-than `8Δ + 3δ`, honest quorums in every epoch, finitely many honest nodes, and
+than `8Δ + 4δ`, honest quorums in every epoch, finitely many honest nodes, and
 leaders honest in each epoch infinitely often. {ref "proved"}[What is proved] is the
 one complete list of each result's premises.
 
@@ -89,7 +89,7 @@ The rules come in layers, each read by a different result:
 * {name NewProtocol.ProtocolHistory}`ProtocolHistory`: the rest of what a node may do, such as timing out and
   proposing. Liveness needs these.
 * {name NewProtocol.Owed}`Owed`: what a node must eventually do. With a bound on how long anything stays
-  owed ({name NewProtocol.Prompt}`Prompt`), liveness needs this too.
+  owed or a timer unanswered ({name NewProtocol.Prompt}`Prompt`), liveness needs this too.
 
 Everything shown here is spliced from the declaration that states it, and every
 reproduced definition is checked against the source when this document is built.
@@ -966,14 +966,36 @@ end Spec.History_InEpoch
 {includeDocstring NewProtocol.History.InEpoch}
 
 ```lean -show
+namespace Spec.History_TimerAt
+open NewProtocol.History
+```
+
+:::spec NewProtocol.History.TimerAt
+  ```lean
+  def History.TimerAt (cfg : Config) (h : History) (n : Nat) (v : ViewNumber) : Prop :=
+    ∃ st, h[n]? = some st
+      ∧ ((st.input = .timeout v ∧ InView cfg (upTo h n) v)
+        ∨ (st.input = .timeoutOneHonest v ∧ ∃ w, InView cfg (upTo h n) w ∧ w ≤ v))
+  ```
+:::
+
+```lean -show
+example : @Spec.History_TimerAt.History.TimerAt = @NewProtocol.History.TimerAt := rfl
+end Spec.History_TimerAt
+```
+
+{includeDocstring NewProtocol.History.TimerAt}
+
+```lean -show
 namespace Spec.History_PastView
 open NewProtocol.History
 ```
 
 :::spec NewProtocol.History.PastView
   ```lean
-  def History.PastView (h : History) (v : ViewNumber) : Prop :=
-    h.TimedOut v ∨ ∃ tc, h.Received (.timeoutCertificate tc) ∧ v ≤ tc.view
+  def History.PastView (cfg : Config) (h : History) (v : ViewNumber) : Prop :=
+    h.TimedOut v ∨ (∃ tc, h.Received (.timeoutCertificate tc) ∧ v ≤ tc.view)
+      ∨ ∃ n w, TimerAt cfg h n w ∧ v ≤ w
   ```
 :::
 
@@ -1020,8 +1042,8 @@ below, keep a committed view from being skipped:
 
 * A vote1 on a proposal that follows a timeout checks the parent against the
   timeout certificate's lock ({name NewProtocol.SafeParent}`SafeParent`).
-* A timeout vote names a lock at least as late as every view the node voted2 in
-  ({name NewProtocol.SafeHistory.timeoutLock}`SafeHistory.timeoutLock`).
+* A timeout vote names a lock at least as late as every view up to its own that
+  the node voted2 in ({name NewProtocol.SafeHistory.timeoutLock}`SafeHistory.timeoutLock`).
 * No vote2 follows a timeout of its view ({name NewProtocol.SafeHistory.vote2BeforeTimeout}`SafeHistory.vote2BeforeTimeout`).
 
 Suppose a quorum committed a block at view `x`, and a later view's proposal skips
@@ -1219,6 +1241,28 @@ end Spec.ProposedIn
 
 {includeDocstring NewProtocol.ProposedIn}
 
+```lean -show
+namespace Spec.History_TimerAnswered
+open NewProtocol.History
+```
+
+:::spec NewProtocol.History.TimerAnswered
+  ```lean
+  def History.TimerAnswered (cfg : Config) (node : PubKey) (h : History) (n : Nat)
+      (v : ViewNumber) : Prop :=
+    ∃ e L i, n ≤ i ∧ InEpoch cfg (upTo h n) e
+      ∧ SentAt h i
+        (.timeoutVote { data := { epoch := e, lock := L }, view := v, signer := node })
+  ```
+:::
+
+```lean -show
+example : @Spec.History_TimerAnswered.History.TimerAnswered = @NewProtocol.History.TimerAnswered := rfl
+end Spec.History_TimerAnswered
+```
+
+{includeDocstring NewProtocol.History.TimerAnswered}
+
 {docstring NewProtocol.ProtocolHistory}
 
 # What a node owes
@@ -1232,8 +1276,8 @@ The rules above are permissions: a node that never acts satisfies all of them.
 action that is justified by what the node holds, not yet taken, and not overtaken
 by events. Every obligation ends, and none asks for anything the node would have to
 fetch: a vote1 and a proposal are owed only in the node's current view and until it
-times the view out, a vote2 until the node gives its view up, and a decide only
-after the decide floor.
+times the view out, a vote2 until the node gives its view up, decides it or a
+later one, or leaves its epoch, and a decide only after the decide floor.
 
 How long an obligation may stay owed is not said here. That is {name NewProtocol.Prompt}`Prompt`, below.
 
@@ -1716,28 +1760,7 @@ end Spec.Propagates
 
 {expansion NewProtocol.TimedNetwork.Spreads}
 
-```lean -show
-namespace Spec.Prompt
-open NewProtocol.History
-```
-
-:::spec NewProtocol.Prompt
-  ```lean
-  def Prompt {cfg : Config} {leader : EpochNumber → ViewNumber → Option PubKey}
-      {C : Committee} (N : TimedNetwork cfg leader C) (δ : Duration) : Prop :=
-    ∀ k h n (o : Obligation),
-      OwedIn cfg leader k (C.honest · k) ((N.trace k h).history (n + 1)) o →
-      ∃ m, n ≤ m ∧ N.time k h m ≤ N.time k h n + δ
-        ∧ ¬ OwedIn cfg leader k (C.honest · k) ((N.trace k h).history (m + 1)) o
-  ```
-:::
-
-```lean -show
-example : @Spec.Prompt.Prompt = @NewProtocol.Prompt := rfl
-end Spec.Prompt
-```
-
-{includeDocstring NewProtocol.Prompt}
+{docstring NewProtocol.Prompt}
 
 The synchrony assumptions say what the network delivers within `Δ` after GST,
 what a node's own modules deliver within the same bound (the builder's headers and
@@ -1785,7 +1808,7 @@ it quantifies over.
 * {name NewProtocol.ChainGrows}`ChainGrows`, proved by {name NewProtocol.Liveness.chainGrows}`Liveness.chainGrows`: a {name NewProtocol.TimedNetwork}`TimedNetwork`, which
   adds to {name NewProtocol.Network}`Network` the whole protocol and honest quorums in every epoch
   ({name NewProtocol.TimedNetwork.honestQuorum}`TimedNetwork.honestQuorum`); finitely many honest nodes
-  ({name NewProtocol.Committee.honestFinite}`Committee.honestFinite`); {name NewProtocol.Synchrony}`Synchrony`, {name NewProtocol.Prompt}`Prompt`, `8Δ + 3δ < τ`,
+  ({name NewProtocol.Committee.honestFinite}`Committee.honestFinite`); {name NewProtocol.Synchrony}`Synchrony`, {name NewProtocol.Prompt}`Prompt`, `8Δ + 4δ < τ`,
   {name NewProtocol.LeaderRotation}`LeaderRotation`, {name NewProtocol.ConfigCoherent}`ConfigCoherent` and {name NewProtocol.CollisionFree}`CollisionFree`.
 
 ## No fork
@@ -2077,7 +2100,7 @@ open NewProtocol.History
   def ChainGrows (cfg : Config)
       (leader : EpochNumber → ViewNumber → Option PubKey) (C : Committee) : Prop :=
     ∀ (N : TimedNetwork cfg leader C) (GST : Time) (Δ δ τ : Duration), ConfigCoherent cfg →
-      CollisionFree → Synchrony N GST Δ τ → Prompt N δ → 8 * Δ + 3 * δ < τ →
+      CollisionFree → Synchrony N GST Δ τ → Prompt N δ → 8 * Δ + 4 * δ < τ →
       LeaderRotation C leader →
       (∀ t, ∃ k, ∃ h : C.Honest k, N.DecidesAfter k h t)
         ∧ ∀ t k (h : C.Honest k),
@@ -2143,12 +2166,12 @@ A member left in an earlier view keeps timing that one out, and is answered.
 {docstring NewProtocol.Liveness.views_unbounded}
 
 Finally, take a view `w` of `E` with a leader honest in `E`, later than anything
-reached at `t0`. Every honest node reaches it within `2Δ` of the
+reached at `t0`. Every honest node reaches it within `2Δ + δ` of the
 first, without any certificate being sent on in the usual case.
 
 {docstring NewProtocol.Liveness.reach_spread}
  The leader proposes on its lock, opens the epoch on the previous epoch's last
-block, or asks for a re-vote, within `4Δ + δ`.
+block, or asks for a re-vote, within `4Δ + 2δ`.
 
 {docstring NewProtocol.Liveness.leader_acts}
 
@@ -2272,8 +2295,9 @@ kind is where an audit should spend its doubt.
 
 *Harmless omissions.*
 
-* _How a node stores, fetches and prunes._ Votes and proposals are owed only in the
-  node's current view, and a decide only within `decideBuffer` views of its latest
+* _How a node stores, fetches and prunes._ A vote1 and a proposal are owed only in
+  the node's current view, a vote2 only until the node decides its view or a later
+  one or leaves its epoch, and a decide only within `decideBuffer` views of its latest
   decide ({name NewProtocol.History.AfterFloor}`History.AfterFloor`), so a node may
   forget what is older. How it stores the rest, and how it fetches what it missed,
   are its own business. A fetched proposal arrives as an
@@ -2307,7 +2331,7 @@ kind is where an audit should spend its doubt.
   node ever sent, so an implementation meets them across a restart only if it
   persists what it signed.
 * _A bound on how long._ {name NewProtocol.ChainGrows}`ChainGrows` says decides keep coming after GST, not
-  how soon. The proof uses `8Δ + 3δ < τ` to fit a view into one timer, but no
+  how soon. The proof uses `8Δ + 4δ < τ` to fit a view into one timer, but no
   latency bound reaches the statement.
 * _Before GST._ Safety holds at all times. Progress is claimed only after the network
   stabilises ({name NewProtocol.Synchrony}`Synchrony`).
@@ -2376,7 +2400,7 @@ machine and the trace checker; neither needs reading to judge what is claimed.
 * The quorum system: the fields of {name NewProtocol.Committee}`Committee`, quorum intersection and
   finitely many honest nodes ({name NewProtocol.Committee.honestFinite}`Committee.honestFinite`).
 * For liveness: the fields of {name NewProtocol.TimedNetwork}`TimedNetwork` and {name NewProtocol.Synchrony}`Synchrony`, the bound
-  `8Δ + 3δ < τ`, and {name NewProtocol.LeaderRotation}`LeaderRotation`.
+  `8Δ + 4δ < τ`, and {name NewProtocol.LeaderRotation}`LeaderRotation`.
 * {name NewProtocol.Resolves}`Resolves` and {name NewProtocol.TreeCoherent}`TreeCoherent`, which are about the block table of the
   statement rather than about the protocol. Without them the statement says nothing,
   since ancestry is followed through the table.

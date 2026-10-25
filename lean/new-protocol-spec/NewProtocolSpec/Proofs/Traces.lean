@@ -23,6 +23,18 @@ theorem history_length (n : Nat) : (r.history n).length = n := by
 theorem history_getElem? {m n : Nat} (h : m < n) : (r.history n)[m]? = some (r m) := by
   simp [history, List.getElem?_range h]
 
+theorem sentAt_history {m n : Nat} {msg : Message} :
+    (r.history n).SentAt m msg ↔ m < n ∧ Output.send msg ∈ (r m).output := by
+  constructor
+  · rintro ⟨st, hst, hmem⟩
+    have hm : m < n := Nat.lt_of_not_le fun hle => by
+      rw [List.getElem?_eq_none (by rw [history_length]; exact hle)] at hst; cases hst
+    rw [history_getElem? r hm] at hst
+    obtain rfl := Option.some.inj hst
+    exact ⟨hm, hmem⟩
+  · rintro ⟨hm, hmem⟩
+    exact ⟨r m, history_getElem? r hm, hmem⟩
+
 theorem history_upTo {m n : Nat} (h : m ≤ n) : (r.history n).upTo m = r.history m := by
   simp only [History.upTo, history, ← List.map_take, List.take_range, Nat.min_eq_left h]
 

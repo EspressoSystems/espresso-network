@@ -59,9 +59,9 @@ structure TimedNetwork (cfg : Config) (leader : EpochNumber → ViewNumber → O
 
   /--
   Every prefix obeys the protocol, not only the signing rules, for the epochs the
-  node is honest in, answering timers in those it is also a member of.
+  node is honest in.
   -/
-  protocol : ∀ k h n, ProtocolHistory cfg leader k (C.honest · k) (C.members · k) ((trace k h).history n)
+  protocol : ∀ k h n, ProtocolHistory cfg leader k (C.honest · k) ((trace k h).history n)
 
   /--
   A timeout certificate an honest node is handed was formed from the timeout votes
@@ -128,17 +128,36 @@ abbrev Spreads (GST : Time) (Δ : Duration) (e : EpochNumber) (P : History → P
 end TimedNetwork
 
 /--
-No obligation a node has, for an epoch it is honest in, stays owed for more than `δ`.
+No obligation a node has, for an epoch it is honest in, stays owed for more than
+`δ`, and no timer it takes in such an epoch, as a member of its committee, stays
+unanswered for longer.
 
-Whatever a node owes after a step (`OwedIn`), it has discharged, or it has stopped
-owing, by some step at most `δ` later. A node that acts in the step that creates
-the obligation meets this with nothing to spare; one that batches or defers meets
-it as long as it does not defer for longer than `δ`.
+A node that acts in the step that creates the obligation or takes the timer meets
+this with nothing to spare; one that batches or defers, as by storing a vote before
+sending it, meets it as long as it does not defer for longer than `δ`.
 -/
-def Prompt (N : TimedNetwork cfg leader C) (δ : Duration) : Prop :=
-  ∀ k h n (o : Obligation), OwedIn cfg leader k (C.honest · k) ((N.trace k h).history (n + 1)) o →
+structure Prompt (N : TimedNetwork cfg leader C) (δ : Duration) : Prop where
+  /--
+  Whatever a node owes after a step (`OwedIn`), it has discharged, or it has
+  stopped owing, by some step at most `δ` later.
+  -/
+  owed : ∀ k h n (o : Obligation), OwedIn cfg leader k (C.honest · k) ((N.trace k h).history (n + 1)) o →
     ∃ m, n ≤ m ∧ N.time k h m ≤ N.time k h n + δ
       ∧ ¬ OwedIn cfg leader k (C.honest · k) ((N.trace k h).history (m + 1)) o
+
+  /--
+  A timer or one-honest indication a node takes (`History.TimerAt`), in an epoch it
+  is honest in and a member of, it answers with a timeout vote by some step at most
+  `δ` later (`History.TimerAnswered`), unless by then it is past the view.
+
+  A timeout vote counts towards no certificate of an epoch the node is not a member
+  of, and once the node is past the view the vote can no longer help it leave.
+  -/
+  timers : ∀ k h n v, ((N.trace k h).history (n + 1)).TimerAt cfg n v →
+    (∀ e, ((N.trace k h).history n).InEpoch cfg e → C.honest e k ∧ C.members e k) →
+    ∃ m, n ≤ m ∧ N.time k h m ≤ N.time k h n + δ
+      ∧ (((N.trace k h).history (m + 1)).TimerAnswered cfg k n v
+        ∨ ∃ u, ((N.trace k h).history (m + 1)).ViewGround cfg u ∧ v < u)
 
 /--
 What the environment does after GST, as seen from the nodes' histories.
@@ -263,7 +282,7 @@ structure Synchrony (N : TimedNetwork cfg leader C) (GST : Time) (Δ τ : Durati
   The honest members of a quorum hold more than the faulty nodes can, so their
   votes are enough for the indication. An implementation meets it by sending its
   timeout votes to every node. A node answers the indication with its own timeout
-  vote (`ProtocolHistory.timeoutAnswered`), so within an epoch a timeout
+  vote (`Prompt.timers`), so within an epoch a timeout
   certificate that some honest node holds forms everywhere without being sent on:
   the votes of its honest signers draw everyone else's.
   -/
