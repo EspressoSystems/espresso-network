@@ -7,11 +7,12 @@ import NewProtocolDiff.ProtocolCheck
 import NewProtocolDiff.PromptCheck
 import NewProtocolImpl.Machine
 import NewProtocolDiff.Corpus
+import NewProtocolDiff.Coverage
 
 /-!
 Check recorded traces against the rules of the specification.
 
-    check [--delta-ms <δ>] <trace-or-directory>...
+    check [--delta-ms <δ>] [--coverage] <trace-or-directory>...
 
 Each argument is a trace or a directory of `*.jsonl` traces. A trace passes when
 its history obeys every rule of `NewProtocol.ProtocolHistory`, for the leaders the
@@ -25,7 +26,12 @@ does not fail the trace, so a pass with an excuse does not mean `PromptUntil` or
 `TimersUntil`. A trace in which a test set the node's
 view directly is checked against the signing rules of `NewProtocol.SafeHistory`
 only (`NewProtocolDiff.checkSafe_sound`), since its steps do not show the view it
-is in. The exit status is 1 if any trace breaks a rule or cannot be read.
+is in. The exit status is 1 if any trace breaks a rule or cannot be read, or if no
+trace is checked against any rule: a recorder that stopped writing, or a run in
+which every trace is out of scope, must not pass for one that conforms.
+
+With `--coverage`, the traces checked against every rule are also read for what
+they exercise (`NewProtocolDiff.Coverage`), and the report follows the verdicts.
 -/
 
 open Lean NewProtocol NewProtocolDiff
@@ -88,7 +94,8 @@ def owedAtEnd (cfg : Config) (leader : EpochNumber → ViewNumber → Option Pub
     describeObligation |>.eraseDups
 
 /-- Check one trace. -/
-def checkOne (δ : Nat) (path : System.FilePath) : IO Finding := do
+def checkOne (δ : Nat) (coverage : Option (IO.Ref Coverage)) (path : System.FilePath) :
+    IO Finding := do
   let text ← IO.FS.readFile path
   match readPreamble text with
   | .error e => return .unreadable e
@@ -97,6 +104,8 @@ def checkOne (δ : Nat) (path : System.FilePath) : IO Finding := do
       return .outOfScope s!"restored from view {said.anchorView}, and restarts are not covered"
     else if signsNoLock text then
       return .outOfScope "its timeouts sign no lock, as before the certificate rule"
+    else if testFailed text then
+      return .outOfScope "the test that recorded it failed"
     else
     match parseTrace text with
     | .error e =>
@@ -127,6 +136,10 @@ def checkOne (δ : Nat) (path : System.FilePath) : IO Finding := do
             ((time.releases.getD n []).map (·.2)).sum > (h[n]?.map (·.output.length)).getD 0 then
           return .unreadable s!"step {n} released more outputs than it has"
         let ms := moments h time.steps time.releases
+        if let some cov := coverage then
+          -- Counted outside the reference, which the other traces' tasks wait on.
+          let mine := ({} : Coverage).add (said.configFor h) leader ⟨said.node⟩ h ms
+          cov.modify (·.merge mine)
         let faults := promptFaults (said.configFor h) leader ⟨said.node⟩ ms time.ended δ
         let timers := timerFaults (said.configFor h) ⟨said.node⟩ ms time.ended δ
         let late := lateness describeObligation text ms δ faults
@@ -139,17 +152,30 @@ def checkOne (δ : Nat) (path : System.FilePath) : IO Finding := do
 /-- How long a node may take to discharge what it owes, in milliseconds, unless told otherwise. -/
 def defaultDelta : Nat := 100
 
-def usage : String := "usage: check [--delta-ms <δ>] <trace-or-directory>..."
+def usage : String := "usage: check [--delta-ms <δ>] [--coverage] <trace-or-directory>..."
+
+/-- What the command line asked for. -/
+structure CheckOptions where
+  delta : Nat := defaultDelta
+  coverage : Bool := false
+  paths : List String := []
+
+/-- Read the command line, or say why it cannot be read. -/
+def parseOptions : List String → CheckOptions → Option CheckOptions
+  | [], o => some o
+  | "--delta-ms" :: d :: rest, o => d.toNat?.bind fun δ => parseOptions rest { o with delta := δ }
+  | "--coverage" :: rest, o => parseOptions rest { o with coverage := true }
+  | arg :: rest, o =>
+    if arg.startsWith "--" then none else parseOptions rest { o with paths := o.paths ++ [arg] }
 
 public def main (args : List String) : IO UInt32 := do
-  let (δ, paths) ← match args with
-    | "--delta-ms" :: d :: rest => match d.toNat? with
-      | some δ => pure (δ, rest)
-      | none => do IO.eprintln usage; return 2
-    | _ => pure (defaultDelta, args)
-  if paths.isEmpty || paths.any (·.startsWith "--") then
+  let some opts := parseOptions args {} | do IO.eprintln usage; return 2
+  let δ := opts.delta
+  let paths := opts.paths
+  if paths.isEmpty then
     IO.eprintln usage
     return 2
+  let coverage ← if opts.coverage then some <$> IO.mkRef ({} : Coverage) else pure none
   let mut traces := #[]
   for arg in paths do
     traces := traces ++ (← tracesUnder arg)
@@ -158,8 +184,15 @@ public def main (args : List String) : IO UInt32 := do
   let mut skipped := 0
   let mut signingOnly := 0
   let mut excused := 0
-  for path in traces do
-    match ← checkOne δ path with
+  -- Each trace in a task of its own, so the checks use every core.
+  let tasks ← traces.mapM fun path => IO.asTask (checkOne δ coverage path)
+  for (path, task) in traces.zip tasks do
+    -- A trace that cannot be read, gone since it was listed for one, is reported
+    -- with the others rather than ending the run.
+    let finding := match task.get with
+      | .ok finding => finding
+      | .error e => .unreadable (toString e)
+    match finding with
     | .unreadable e =>
       failed := true
       IO.println s!"unreadable: {path}: {e}"
@@ -188,4 +221,10 @@ public def main (args : List String) : IO UInt32 := do
   IO.println s!"checked {traces.size} traces: {passed} obey every rule and discharge \
     what they owe within {δ} ms, {signingOnly} every signing rule, {skipped} out of scope; \
     {excused} of those passing were late where an unmodelled input excuses it"
+  if passed + signingOnly == 0 then
+    IO.println "no trace was checked against any rule"
+    failed := true
+  if let some cov := coverage then
+    IO.println ""
+    IO.print (← cov.get).render
   return if failed then 1 else 0

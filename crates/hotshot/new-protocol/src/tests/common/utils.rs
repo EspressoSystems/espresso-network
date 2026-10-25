@@ -1166,8 +1166,10 @@ impl ConsensusHarness {
             *self.consensus.epoch_height,
         );
         record_leader(&mut self.trace, &self.consensus, &input);
+        record_fallback_anchor(&mut self.trace, &self.consensus);
         let before = outbox.len();
         self.consensus.apply(input.clone(), outbox);
+        record_output_leaders(&mut self.trace, &self.consensus, outbox.iter().skip(before));
         self.trace.record(&input, outbox.iter().skip(before));
     }
 }
@@ -1794,4 +1796,42 @@ pub(crate) fn record_leader(
         .or_else(|| consensus.current_epoch())
         .unwrap_or_else(EpochNumber::genesis);
     trace.leader::<TestTypes>(view, epoch, consensus.leader_of(view, epoch).as_ref());
+}
+
+/// Give the trace the genesis certificate the harness would seed (see
+/// `seed_genesis`), for a run that never names the anchor's.
+pub(crate) fn record_fallback_anchor(
+    trace: &mut trace::Recorder,
+    consensus: &Consensus<TestTypes>,
+) {
+    if trace.recording() && consensus.last_decided_view() == ViewNumber::genesis() {
+        let leaf = consensus.last_decided_leaf();
+        trace.fallback_anchor(&super::coordinator_builder::build_genesis_cert1(leaf));
+    }
+}
+
+/// Name the leader of each proposal among `outputs`, for the epoch and view it
+/// is for.
+///
+/// The input in hand names the leader of its own view only. A leader message
+/// is often for the view after it, and at an epoch boundary for an epoch other
+/// than the node's.
+pub(crate) fn record_output_leaders<'a>(
+    trace: &mut trace::Recorder,
+    consensus: &Consensus<TestTypes>,
+    outputs: impl Iterator<Item = &'a ConsensusOutput<TestTypes>>,
+) {
+    if !trace.recording() {
+        return;
+    }
+    for output in outputs {
+        let (view, epoch) = match output {
+            ConsensusOutput::SendProposal(signed) => (signed.data.view_number, signed.data.epoch),
+            ConsensusOutput::ProposalPaired { proposal, .. } => {
+                (proposal.data.view_number, proposal.data.epoch)
+            },
+            _ => continue,
+        };
+        trace.leader::<TestTypes>(view, epoch, consensus.leader_of(view, epoch).as_ref());
+    }
 }
