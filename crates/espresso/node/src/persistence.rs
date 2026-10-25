@@ -430,6 +430,82 @@ mod tests {
             storage.load_high_qc2().await.unwrap().unwrap().view_number,
             ViewNumber::new(6)
         );
+
+        // Locks order by epoch first: a later epoch at an earlier view replaces
+        // the stored lock, and an earlier epoch at a later view does not.
+        let epoch = qc.data.epoch.unwrap_or_else(EpochNumber::genesis);
+        let at = |qc: &QuorumCertificate2<SeqTypes>| (qc.data.epoch, qc.view_number);
+        qc.data.epoch = Some(epoch + 1);
+        qc.view_number = ViewNumber::new(5);
+        storage.append_high_qc2(qc.clone()).await.unwrap();
+        assert_eq!(
+            at(&storage.load_high_qc2().await.unwrap().unwrap()),
+            (Some(epoch + 1), ViewNumber::new(5))
+        );
+        qc.data.epoch = Some(epoch);
+        qc.view_number = ViewNumber::new(9);
+        storage.append_high_qc2(qc.clone()).await.unwrap();
+        assert_eq!(
+            at(&storage.load_high_qc2().await.unwrap().unwrap()),
+            (Some(epoch + 1), ViewNumber::new(5))
+        );
+    }
+
+    #[rstest_reuse::apply(persistence_types)]
+    pub async fn test_boundary_qc2_monotonic<P: TestablePersistence>(_p: PhantomData<P>) {
+        let tmp = P::tmp_storage().await;
+        let storage = P::connect(&tmp).await;
+
+        assert_eq!(storage.load_boundary_qc2().await.unwrap(), None);
+
+        let mut qc = QuorumCertificate2::genesis(
+            &ValidatedState::default(),
+            &NodeState::mock(),
+            TEST_VERSIONS.test,
+        )
+        .await;
+        let at = |qc: &QuorumCertificate2<SeqTypes>| (qc.data.epoch, qc.view_number);
+
+        // Epoch 2, view 5.
+        qc.data.epoch = Some(EpochNumber::new(2));
+        qc.view_number = ViewNumber::new(5);
+        storage.append_boundary_qc2(qc.clone()).await.unwrap();
+        assert_eq!(
+            at(&storage.load_boundary_qc2().await.unwrap().unwrap()),
+            (Some(EpochNumber::new(2)), ViewNumber::new(5))
+        );
+
+        // An earlier epoch at a later view is older: locks order by epoch first.
+        qc.data.epoch = Some(EpochNumber::new(1));
+        qc.view_number = ViewNumber::new(9);
+        storage.append_boundary_qc2(qc.clone()).await.unwrap();
+        assert_eq!(
+            at(&storage.load_boundary_qc2().await.unwrap().unwrap()),
+            (Some(EpochNumber::new(2)), ViewNumber::new(5))
+        );
+
+        // A later epoch replaces it.
+        qc.data.epoch = Some(EpochNumber::new(3));
+        qc.view_number = ViewNumber::new(4);
+        storage.append_boundary_qc2(qc.clone()).await.unwrap();
+        assert_eq!(
+            at(&storage.load_boundary_qc2().await.unwrap().unwrap()),
+            (Some(EpochNumber::new(3)), ViewNumber::new(4))
+        );
+
+        // Within an epoch, a later view replaces it and an earlier one does not.
+        qc.view_number = ViewNumber::new(6);
+        storage.append_boundary_qc2(qc.clone()).await.unwrap();
+        assert_eq!(
+            at(&storage.load_boundary_qc2().await.unwrap().unwrap()),
+            (Some(EpochNumber::new(3)), ViewNumber::new(6))
+        );
+        qc.view_number = ViewNumber::new(5);
+        storage.append_boundary_qc2(qc.clone()).await.unwrap();
+        assert_eq!(
+            at(&storage.load_boundary_qc2().await.unwrap().unwrap()),
+            (Some(EpochNumber::new(3)), ViewNumber::new(6))
+        );
     }
 
     #[rstest_reuse::apply(persistence_types)]

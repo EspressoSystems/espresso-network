@@ -38,6 +38,7 @@ use hotshot_types::{
         CertificatePair, LightClientStateUpdateCertificateV1, LightClientStateUpdateCertificateV2,
         NextEpochQuorumCertificate2, QuorumCertificate2, UpgradeCertificate,
     },
+    simple_vote::LockView,
     traits::{
         block_contents::{BlockHeader, BlockPayload},
         metrics::Metrics,
@@ -284,6 +285,10 @@ impl Inner {
 
     fn high_qc2(&self) -> PathBuf {
         self.path.join("high_qc2")
+    }
+
+    fn boundary_qc2(&self) -> PathBuf {
+        self.path.join("boundary_qc2")
     }
 
     fn epoch_drb_result_dir_path(&self) -> PathBuf {
@@ -788,11 +793,24 @@ impl SequencerPersistence for Persistence {
         cert2: Option<&Certificate2<SeqTypes>>,
         _consumer: &(impl EventConsumer + 'static),
     ) -> anyhow::Result<()> {
+        let leaf_chain: Vec<_> = leaf_chain.into_iter().collect();
         let mut inner = self.inner.write().await;
         // Written before the leaves and under the same lock as the decide replay, so the replay
-        // can never find the newest leaf on disk without its cert2.
-        if let Some(cert2) = cert2 {
-            inner.append_cert2(cert2.view_number, cert2)?;
+        // can never find the newest leaf on disk without its cert2. Keyed by that leaf's view,
+        // which a re-vote's cert2 is later than.
+        let newest = leaf_chain
+            .iter()
+            .map(|(info, _)| info.leaf.view_number())
+            .max();
+        if let Some(cert2) = cert2
+            && newest.is_none()
+        {
+            tracing::warn!(view = %cert2.view_number, "cert2 without a decided leaf; not stored");
+        }
+        if let Some(cert2) = cert2
+            && let Some(newest) = newest
+        {
+            inner.append_cert2(newest, cert2)?;
         }
         let path = inner.decided_leaf2_path();
 
@@ -969,7 +987,13 @@ impl SequencerPersistence for Persistence {
         action: HotShotAction,
     ) -> anyhow::Result<()> {
         // Todo Remove this after https://github.com/EspressoSystems/espresso-network/issues/1931
-        if !matches!(action, HotShotAction::Propose | HotShotAction::Vote) {
+        //
+        // A timeout vote counts: a restarted node must not vote2 at a view it
+        // sent a timeout vote for.
+        if !matches!(
+            action,
+            HotShotAction::Propose | HotShotAction::Vote | HotShotAction::TimeoutVote
+        ) {
             return Ok(());
         }
         let mut inner = self.inner.write().await;
@@ -1264,7 +1288,8 @@ impl SequencerPersistence for Persistence {
     async fn append_high_qc2(&self, high_qc: QuorumCertificate2<SeqTypes>) -> anyhow::Result<()> {
         let mut inner = self.inner.write().await;
         let path = &inner.high_qc2();
-        let view = high_qc.view_number();
+        // Locks are ordered by epoch, then view.
+        let lock = LockView::of(&high_qc);
         inner.replace(
             path,
             |mut file| {
@@ -1275,7 +1300,7 @@ impl SequencerPersistence for Persistence {
                 file.read_to_end(&mut bytes)?;
                 let existing: QuorumCertificate2<SeqTypes> =
                     bincode::deserialize(&bytes).context("deserializing existing high_qc2")?;
-                Ok(existing.view_number() < view)
+                Ok(LockView::of(&existing) < lock)
             },
             |mut file| {
                 let bytes = bincode::serialize(&high_qc).context("serializing high_qc2")?;
@@ -1294,6 +1319,41 @@ impl SequencerPersistence for Persistence {
         let bytes = fs::read(&path).context("reading high_qc2")?;
         Ok(Some(
             bincode::deserialize(&bytes).context("deserializing high_qc2")?,
+        ))
+    }
+
+    async fn append_boundary_qc2(&self, qc: QuorumCertificate2<SeqTypes>) -> anyhow::Result<()> {
+        let mut inner = self.inner.write().await;
+        let path = &inner.boundary_qc2();
+        let lock = LockView::of(&qc);
+        inner.replace(
+            path,
+            |mut file| {
+                // Overwrite only when the new certificate is later, under the
+                // inner write lock, as for `high_qc2`.
+                let mut bytes = vec![];
+                file.read_to_end(&mut bytes)?;
+                let existing: QuorumCertificate2<SeqTypes> =
+                    bincode::deserialize(&bytes).context("deserializing existing boundary_qc2")?;
+                Ok(LockView::of(&existing) < lock)
+            },
+            |mut file| {
+                let bytes = bincode::serialize(&qc).context("serializing boundary_qc2")?;
+                file.write_all(&bytes)?;
+                Ok(())
+            },
+        )
+    }
+
+    async fn load_boundary_qc2(&self) -> anyhow::Result<Option<QuorumCertificate2<SeqTypes>>> {
+        let inner = self.inner.read().await;
+        let path = inner.boundary_qc2();
+        if !path.is_file() {
+            return Ok(None);
+        }
+        let bytes = fs::read(&path).context("reading boundary_qc2")?;
+        Ok(Some(
+            bincode::deserialize(&bytes).context("deserializing boundary_qc2")?,
         ))
     }
 

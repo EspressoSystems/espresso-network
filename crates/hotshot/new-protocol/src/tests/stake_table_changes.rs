@@ -248,7 +248,7 @@ async fn validator_leaves_at_epoch_boundary() {
 
     // All views 1..=35 decided, so view == block height; node 5's membership
     // ends with epoch 2 at view 20.
-    for (view, action) in runner.node_storages()[5].action_log().await {
+    for (view, _, action) in runner.node_storages()[5].action_log().await {
         assert!(
             *view <= 20,
             "node 5 recorded {action:?} for view {view} after its membership ended"
