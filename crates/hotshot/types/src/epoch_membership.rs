@@ -337,6 +337,12 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
     }
 
     /// Bring `epoch` to a usable membership: its stake table, then its DRB.
+    async fn catchup(&self, epoch: EpochNumber) -> Result<()> {
+        self.catchup_stake_tables(epoch).await?;
+        self.drb_ready(epoch).await
+    }
+
+    /// Bring `epoch`'s stake table into memory.
     ///
     /// Walks from the latest consecutive pair of stake tables this node holds
     /// to `epoch`, fetching what is missing one epoch at a time. `epoch` is
@@ -348,7 +354,10 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
     /// epoch, so whichever reaches an epoch first fetches it while the others
     /// wait for its result. Every walk awaits attempts in increasing epoch
     /// order and an attempt awaits none, so no two can wait on each other.
-    async fn catchup(&self, epoch: EpochNumber) -> Result<()> {
+    ///
+    /// Dropping this future removes the attempt entries it owns. The task spawned for the epoch
+    /// being fetched keeps running, and a later call starts a second fetch of that epoch.
+    async fn catchup_stake_tables(&self, epoch: EpochNumber) -> Result<()> {
         let Some(first_epoch) = self.membership.first_epoch() else {
             return Err(anytrace::error!(
                 "catchup requested for epoch {epoch} but the first epoch is not set"
@@ -397,8 +406,7 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
             })?;
             try_epoch += 1;
         }
-
-        self.drb_ready(epoch).await
+        Ok(())
     }
 
     /// The membership for `epoch`, if its stake table is in memory.
@@ -488,17 +496,16 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
         }
     }
 
-    /// Get the stake table for `epoch`, blocking on catchup if necessary.
-    ///
-    /// Unlike `stake_table_for_epoch`, this returns the result rather than
-    /// kicking off catchup and immediately returning an error. Used at startup
-    /// to drive the existing catchup chain synchronously before consensus is
-    /// running.
+    /// `epoch`'s stake table, derived inline from the latest consecutive pair when missing,
+    /// sharing attempts with any running catchup. No DRB, no background task.
     pub async fn wait_for_stake_table(&self, epoch: EpochNumber) -> Result<EpochMembership<TYPES>> {
-        match self.stake_table_for_epoch(Some(epoch)) {
-            Ok(mem) => Ok(mem),
-            Err(_) => self.wait_for_catchup(epoch).await,
+        if let Some(membership) = self.epoch_membership(epoch) {
+            return Ok(membership);
         }
+        self.catchup_stake_tables(epoch).await?;
+        self.epoch_membership(epoch).ok_or_else(|| {
+            anytrace::error!("Catchup for epoch {epoch} reported success but left no stake table")
+        })
     }
 
     /// Call this method if you think catchup is in progress for a given epoch

@@ -1,10 +1,9 @@
 //! Startup stake-table catchup for new-protocol nodes.
 //!
-//! Purpose: bring the node into the cliquenet window of the current epoch `N`, the stake tables of
-//! `N-1`, `N` and `N+1`. Cliquenet dials only those validators, and until it does no consensus
-//! message arrives. From there consensus and request-response over cliquenet take over, and the
-//! configured state peers are not used anymore. Booting without HTTP state peers, from cliquenet
-//! alone, is future work.
+//! Purpose: bring the node to the stake tables of `N-1`, `N` and `N+1`, the epochs cliquenet
+//! dials, for the current epoch `N`. Until cliquenet dials them no consensus message arrives. From
+//! there consensus and request-response over cliquenet take over, and the configured state peers
+//! are not used anymore. Booting without HTTP state peers, from cliquenet alone, is future work.
 //!
 //! Model: a stake table is the L1 stake-table events up to the cutoff L1 block in its epoch root
 //! header (`l1_finalized`). The root of epoch `e-2` derives the table of epoch `e`, through
@@ -14,43 +13,42 @@
 //!    runs.
 //! 2. LC contract catchup: headers proven by Merkle proofs against the header `F` the LC contract
 //!    (the `LightClient` contract on L1) holds.
-//! 3. Peer catchup: QC-verified leaves, one epoch at a time, up to the goal.
+//! 3. Derivation: QC-verified leaves from the state peers, one epoch at a time.
 //!
 //! Assumptions:
 //!
 //! - Epochs are always on: `epoch_height > 0`. No pre-epoch chains exist.
 //! - L1 is reachable, unless a restart starts from storage because no state peer answers.
 //! - State peers serve the availability and light-client APIs.
+//! - State peers are the list the membership's catchup fetcher uses; `StatePeersUnavailable` is
+//!   judged on it.
 //! - State peers are trusted for liveness and block height during initial sync; everything they
 //!   serve is verified (LC contract proofs, QCs).
-//! - The goal is the median of the peers' reported tips: one bad peer among 3 or more cannot move
-//!   it or fail the fleet's restarts. Operators configure at least 3 independent state peers.
+//! - `N` comes from the median of the peers' reported tips: one bad peer among 3 or more cannot
+//!   move it or fail the fleet's restarts. Operators configure at least 3 independent state peers.
+//! - Block rewards of the epochs cliquenet dials come from the LC contract range (five epochs, the
+//!   two topmost complete) or from contiguous derivation above it.
 //! - Failure at [`STARTUP_CATCHUP_DEADLINE`] exits the node. Operators restart it.
 //!
-//! Validator: [`catch_up_cliquenet_stake_tables`] reads the peer heights first. With a median it
-//! catches up to the epoch after the median tip's, then checks `N` and `N+1`. With no height it
-//! starts from the stake tables storage holds, else at genesis while the LC contract is inside the
-//! seeded epochs, else fails with [`StartupCatchupError::StatePeersUnavailable`]. Consensus
-//! catches up DRBs on demand.
+//! Validator: [`catch_up_cliquenet_stake_tables`] reads the peer heights first. [`current_epoch`]
+//! gives `N` from the median tip, else from storage. Without either, the LC contract header
+//! decides: inside the seeded epochs the node starts at genesis, else it fails with
+//! [`StartupCatchupError::StatePeersUnavailable`]. Consensus catches up DRBs on demand.
 //!
-//! Follower: not on cliquenet, so its upstreams stay its source. Before it stores a block of
-//! epoch `E`, it checks that the stake table of `E+1` is held, and runs [`catch_up_stake_tables`]
-//! with goal `E+1` if not. No peer heights are read. Boot runs the same check for the first block
-//! it will ingest, so a config or peer error exits the node at once instead of warning on every
-//! poll.
+//! Follower: not on cliquenet, so its upstreams stay its source. Before it stores a block it runs
+//! [`ensure_stake_tables`] for [`stake_table_needed_by_block`]; the held check inside makes this
+//! free per block. Boot runs it for the first block it will ingest.
 
-use std::{collections::BTreeSet, ops::RangeInclusive, time::Duration};
+use std::{ops::RangeInclusive, time::Duration};
 
 use anyhow::{Context, anyhow};
 use derive_more::Display;
-use espresso_types::{Header, SeqTypes};
+use espresso_types::{Header, LcContractHeader, SeqTypes};
 use futures::future::{join_all, try_join_all};
-use hotshot_contract_adapter::{sol_types::LightClientStateSol, u256_to_field};
 use hotshot_query_service::node::BlockId;
 use hotshot_types::{
     data::{EpochNumber, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
-    light_client::CircuitField,
     traits::{block_contents::BlockHeader, election::Membership},
     utils::{epoch_from_block_number, root_block_in_epoch},
 };
@@ -64,46 +62,43 @@ const INITIAL_BACKOFF: Duration = Duration::from_secs(1);
 /// Longest wait between two retries.
 const MAX_BACKOFF: Duration = Duration::from_secs(60);
 
-/// Longest the startup catchup retries, in total for the LC contract state read, LC contract
-/// catchup and peer catchup. At the deadline the node exits with an error.
+/// Longest the startup catchup retries, in total for the LC contract header read, LC contract
+/// catchup and derivation. At the deadline the node exits with an error.
 pub(crate) const STARTUP_CATCHUP_DEADLINE: Duration = Duration::from_secs(15 * 60);
 
-/// Validator boot: catch up to the median peer tip, then check `N` and `N+1`, the epochs
-/// cliquenet dials before consensus starts. Returns the current epoch `N`.
+/// Validator boot. Returns `N`; the tables of `N-1 ..= N+1` are held.
 ///
-/// When no state peer reports a height, see [`highest_epoch_without_peers`].
+/// Peer heights first. `current_epoch` gives `N` from the median tip, else from storage. Without
+/// either, the LC contract header decides: inside the seeded epochs the node starts at genesis,
+/// else `StatePeersUnavailable`.
 pub(crate) async fn catch_up_cliquenet_stake_tables<C: Client, Fut>(
     coordinator: &EpochMembershipCoordinator<SeqTypes>,
-    epoch_height: u64,
-    read_lc_contract_state: impl Fn() -> Fut,
+    read_lc_contract_header: impl Fn() -> Fut,
     state_peers: &[(Url, C)],
     params: &StartupCatchupParams,
 ) -> Result<EpochNumber, StartupCatchupError>
 where
-    Fut: Future<Output = anyhow::Result<Option<LightClientStateSol>>>,
+    Fut: Future<Output = anyhow::Result<Option<LcContractHeader>>>,
 {
     let started = Instant::now();
-    let deadline = started + params.total_timeout;
+    let catchup = StartupCatchup::new(coordinator, state_peers, params, read_lc_contract_header)?;
     let heights = read_peer_block_heights(state_peers, params.step_timeout).await;
-    let highest_epoch = if heights.is_empty() {
-        highest_epoch_without_peers(
-            coordinator,
-            epoch_height,
-            read_lc_contract_state,
-            params,
-            deadline,
-        )
-        .await?
-    } else {
-        let goal = match median_peer_tip_epoch(&heights, epoch_height) {
-            Some(tip_epoch) => tip_epoch + 1,
-            None => first_epoch(coordinator)? + 1,
-        };
-        let catchup = StartupCatchup::new(coordinator, state_peers, params, epoch_height, deadline);
-        catch_up_until_goal(&catchup, read_lc_contract_state, goal).await?
+    let median_tip = median_peer_tip_epoch(&heights, catchup.epoch_height);
+    let highest_rooted = coordinator.membership().highest_rooted_epoch();
+    let current = match current_epoch(median_tip, highest_rooted) {
+        Some(current) => {
+            if heights.is_empty() {
+                tracing::warn!(
+                    target: "announce::startup_catchup",
+                    current_epoch = %current,
+                    "no state peer reported a block height; starting from storage"
+                );
+            }
+            current
+        },
+        None => catchup.current_epoch_without_evidence(&heights).await?,
     };
-
-    let current = check_cliquenet_epochs(coordinator, highest_epoch)?;
+    catchup.ensure(cliquenet_epochs(current)).await?;
     tracing::info!(
         target: "announce::startup_catchup",
         current_epoch = %current,
@@ -113,122 +108,292 @@ where
     Ok(current)
 }
 
-/// LC contract catchup, then peer catchup up to `goal`. Returns the highest epoch with a stake
-/// table; `Ok` implies the goal's epoch is held.
-///
-/// `read_lc_contract_state` returns the LC contract state, `None` when there is no LC contract.
-/// Its failures are retried until the deadline.
-pub(crate) async fn catch_up_stake_tables<C: Client, Fut>(
+/// [`StartupCatchup::ensure`] with a fresh deadline.
+pub(crate) async fn ensure_stake_tables<C: Client, Fut>(
     coordinator: &EpochMembershipCoordinator<SeqTypes>,
-    epoch_height: u64,
-    read_lc_contract_state: impl Fn() -> Fut,
+    read_lc_contract_header: impl Fn() -> Fut,
     state_peers: &[(Url, C)],
     params: &StartupCatchupParams,
-    goal: EpochNumber,
-) -> Result<EpochNumber, StartupCatchupError>
+    need: RangeInclusive<EpochNumber>,
+) -> Result<(), StartupCatchupError>
 where
-    Fut: Future<Output = anyhow::Result<Option<LightClientStateSol>>>,
+    Fut: Future<Output = anyhow::Result<Option<LcContractHeader>>>,
 {
-    let deadline = Instant::now() + params.total_timeout;
-    let catchup = StartupCatchup::new(coordinator, state_peers, params, epoch_height, deadline);
-    catch_up_until_goal(&catchup, read_lc_contract_state, goal).await
+    StartupCatchup::new(coordinator, state_peers, params, read_lc_contract_header)?
+        .ensure(need)
+        .await
 }
 
-async fn catch_up_until_goal<C: Client, Fut>(
-    catchup: &StartupCatchup<'_, C>,
-    read_lc_contract_state: impl Fn() -> Fut,
-    goal: EpochNumber,
-) -> Result<EpochNumber, StartupCatchupError>
-where
-    Fut: Future<Output = anyhow::Result<Option<LightClientStateSol>>>,
-{
-    let StartupCatchup {
-        coordinator,
-        params,
-        blocks_per_epoch: epoch_height,
-        ..
-    } = *catchup;
-    let membership = coordinator.membership();
-    let first_epoch = first_epoch(coordinator)?;
-
-    let held = membership.epochs_with_root();
-    let mut highest_held = held.last().copied().unwrap_or(first_epoch + 1);
-
-    let lc_contract_state =
-        read_lc_contract_state_retrying(read_lc_contract_state, params, catchup.deadline).await?;
-    let lc_catchup = lc_contract_state
-        .and_then(|state| LcContractCatchup::missing(&state, epoch_height, first_epoch, &held));
-    if let Some(lc_catchup) = lc_catchup {
-        catchup.catch_up_from_lc_contract(&lc_catchup).await?;
-        highest_held = highest_held.max(*lc_catchup.missing_epochs.last());
-    }
-
-    catchup.catch_up_from_peers(highest_held, goal).await?;
-    // Epochs above the goal can be held while the goal itself is a gap.
-    if membership.snapshot(goal).is_none() {
-        return Err(StartupCatchupError::MissingStakeTable { epoch: goal });
-    }
-    Ok(highest_held.max(goal))
+/// The table a block at `height` needs held before it is stored: the epoch after the block's.
+/// Pure.
+pub(crate) fn stake_table_needed_by_block(height: u64, epoch_height: u64) -> EpochNumber {
+    EpochNumber::new(epoch_from_block_number(height, epoch_height) + 1)
 }
 
-/// No state peer reported a height: the highest epoch storage derived, else genesis while the LC
-/// contract is still inside the seeded epochs. Fails when the chain has progressed past them.
-async fn highest_epoch_without_peers<Fut>(
-    coordinator: &EpochMembershipCoordinator<SeqTypes>,
+/// Where the chain is: the median tip's epoch, else `highest_rooted - 1`. `None` without either.
+/// Pure.
+fn current_epoch(
+    median_tip: Option<EpochNumber>,
+    highest_rooted: Option<EpochNumber>,
+) -> Option<EpochNumber> {
+    median_tip.or_else(|| highest_rooted.map(|epoch| EpochNumber::new(epoch.saturating_sub(1))))
+}
+
+/// Whether a node with no other evidence starts at genesis: `epoch(F) <= first`, so no epoch above
+/// the seeded ones is derivable from `F` yet. No header counts as inside. Pure.
+fn lc_contract_header_inside_seeded_epochs(
+    header: Option<&LcContractHeader>,
+    first: EpochNumber,
     epoch_height: u64,
-    read_lc_contract_state: impl Fn() -> Fut,
-    params: &StartupCatchupParams,
+) -> bool {
+    header.is_none_or(|header| epoch_from_block_number(header.height, epoch_height) <= *first)
+}
+
+/// `N-1 ..= N+1`, the epochs cliquenet dials. Pure.
+fn cliquenet_epochs(current: EpochNumber) -> RangeInclusive<EpochNumber> {
+    EpochNumber::new(current.saturating_sub(1))..=current + 1
+}
+
+/// Epochs provable from `F` worth installing for `top_needed`: `max(first + 2, top - 4) ..= top`
+/// with `top = min(top_needed, epoch(F) + 1)`. Empty when `top < first + 2`. Pure.
+fn lc_contract_epochs(
+    header: &LcContractHeader,
+    top_needed: EpochNumber,
+    first: EpochNumber,
+    epoch_height: u64,
+) -> RangeInclusive<EpochNumber> {
+    let top = top_needed
+        .u64()
+        .min(epoch_from_block_number(header.height, epoch_height) + 1);
+    let start = (*first + 2).max(top.saturating_sub(4));
+    EpochNumber::new(start)..=EpochNumber::new(top)
+}
+
+/// The epochs of `range`, ascending.
+fn epochs(range: &RangeInclusive<EpochNumber>) -> impl Iterator<Item = EpochNumber> {
+    (range.start().u64()..=range.end().u64()).map(EpochNumber::new)
+}
+
+/// Epoch of the last block of the median peer chain (lower median for an even count), `None` for
+/// no peers or no blocks. Pure.
+fn median_peer_tip_epoch(peer_block_heights: &[u64], blocks_per_epoch: u64) -> Option<EpochNumber> {
+    let mut heights = peer_block_heights.to_vec();
+    heights.sort_unstable();
+    let median = heights.get(heights.len().checked_sub(1)? / 2)?;
+    let tip = median.checked_sub(1)?;
+    Some(EpochNumber::new(epoch_from_block_number(
+        tip,
+        blocks_per_epoch,
+    )))
+}
+
+/// What every stage shares. `first_epoch` is resolved once: the only `FirstEpochUnset` site.
+struct StartupCatchup<'a, C, R> {
+    /// Membership to fill, with the catchup machinery behind it.
+    coordinator: &'a EpochMembershipCoordinator<SeqTypes>,
+    /// State peers serving block heights and light-client proofs.
+    state_peers: &'a [(Url, C)],
+    /// Step timeout and total timeout.
+    params: &'a StartupCatchupParams,
+    /// Reads the LC contract header, `None` without an LC contract.
+    read_lc_contract_header: R,
+    /// Blocks in one epoch.
+    epoch_height: u64,
+    /// First epoch of the chain; it and the next are seeded from genesis.
+    first_epoch: EpochNumber,
+    /// When every retry of every stage gives up.
     deadline: Instant,
-) -> Result<EpochNumber, StartupCatchupError>
+}
+
+impl<'a, C, R, Fut> StartupCatchup<'a, C, R>
 where
-    Fut: Future<Output = anyhow::Result<Option<LightClientStateSol>>>,
+    C: Client,
+    R: Fn() -> Fut,
+    Fut: Future<Output = anyhow::Result<Option<LcContractHeader>>>,
 {
-    if let Some(highest) = coordinator.membership().epochs_with_root().last().copied() {
-        tracing::warn!(
-            target: "announce::startup_catchup",
-            highest_epoch = %highest,
-            "no state peer reported a block height; starting from storage"
+    fn new(
+        coordinator: &'a EpochMembershipCoordinator<SeqTypes>,
+        state_peers: &'a [(Url, C)],
+        params: &'a StartupCatchupParams,
+        read_lc_contract_header: R,
+    ) -> Result<Self, StartupCatchupError> {
+        let first_epoch = coordinator
+            .membership()
+            .first_epoch()
+            .ok_or(StartupCatchupError::FirstEpochUnset)?;
+        Ok(Self {
+            coordinator,
+            state_peers,
+            params,
+            read_lc_contract_header,
+            epoch_height: coordinator.epoch_height().u64(),
+            first_epoch,
+            deadline: Instant::now() + params.total_timeout,
+        })
+    }
+
+    /// `N` for a node whose peers gave no median tip and whose storage holds no rooted epoch:
+    /// `first` when the LC contract header is inside the seeded epochs, else
+    /// `StatePeersUnavailable`.
+    async fn current_epoch_without_evidence(
+        &self,
+        heights: &[u64],
+    ) -> Result<EpochNumber, StartupCatchupError> {
+        let header = self.read_lc_contract_header_retrying().await?;
+        let inside = lc_contract_header_inside_seeded_epochs(
+            header.as_ref(),
+            self.first_epoch,
+            self.epoch_height,
         );
-        return Ok(highest);
+        if !inside {
+            return Err(StartupCatchupError::StatePeersUnavailable);
+        }
+        if heights.is_empty() {
+            tracing::info!(
+                target: "announce::startup_catchup",
+                "no state peer reported a block height; starting at genesis"
+            );
+        }
+        Ok(self.first_epoch)
     }
-    let first_epoch = first_epoch(coordinator)?;
-    let state = read_lc_contract_state_retrying(read_lc_contract_state, params, deadline).await?;
-    let past_seeded_epochs = state
-        .and_then(|state| lc_contract_epochs(state.blockHeight, epoch_height, first_epoch))
-        .is_some();
-    if past_seeded_epochs {
-        return Err(StartupCatchupError::StatePeersUnavailable);
+
+    /// In memory or storage.
+    async fn held(&self, epoch: EpochNumber) -> bool {
+        self.coordinator.membership().load_stake_table(epoch).await
     }
-    tracing::info!(
-        target: "announce::startup_catchup",
-        "no state peer reported a block height; starting at genesis"
-    );
-    Ok(first_epoch + 1)
-}
 
-/// Read the LC contract state, retrying until `deadline`.
-async fn read_lc_contract_state_retrying<Fut>(
-    read_lc_contract_state: impl Fn() -> Fut,
-    params: &StartupCatchupParams,
-    deadline: Instant,
-) -> Result<Option<LightClientStateSol>, StartupCatchupError>
-where
-    Fut: Future<Output = anyhow::Result<Option<LightClientStateSol>>>,
-{
-    retry(deadline, Stage::LcContractStateRead, |_, left| {
-        let read = timeout(params.step_timeout.min(left), read_lc_contract_state());
-        async move { read.await.context("attempt timed out")? }
-    })
-    .await
-}
+    /// The epochs of `range` that are [held](Self::held), ascending.
+    async fn held_epochs(&self, range: &RangeInclusive<EpochNumber>) -> Vec<EpochNumber> {
+        let mut held = Vec::new();
+        for epoch in epochs(range) {
+            if self.held(epoch).await {
+                held.push(epoch);
+            }
+        }
+        held
+    }
 
-pub(crate) fn first_epoch(
-    coordinator: &EpochMembershipCoordinator<SeqTypes>,
-) -> Result<EpochNumber, StartupCatchupError> {
-    coordinator
-        .membership()
-        .first_epoch()
-        .ok_or(StartupCatchupError::FirstEpochUnset)
+    /// `Ok` iff every derivable epoch of `need` is held, `max(need.start, first + 2)` and above.
+    /// Epochs below are seeded or before the chain.
+    ///
+    /// 1. Every derivable epoch held: return without I/O.
+    /// 2. `StatePeersUnavailable` when one is missing and there are no state peers.
+    /// 3. Read the LC contract header, retried. With one, install its `lc_contract_epochs` for the
+    ///    derivable range, minus the held ones, from the state peers.
+    /// 4. `derive_stake_table` each derivable epoch still missing, ascending.
+    async fn ensure(&self, need: RangeInclusive<EpochNumber>) -> Result<(), StartupCatchupError> {
+        let derivable =
+            EpochNumber::new(need.start().u64().max(*self.first_epoch + 2))..=*need.end();
+        if self.held_epochs(&derivable).await.len() == epochs(&derivable).count() {
+            return Ok(());
+        }
+        if self.state_peers.is_empty() {
+            return Err(StartupCatchupError::StatePeersUnavailable);
+        }
+        if let Some(header) = self.read_lc_contract_header_retrying().await? {
+            self.install_lc_contract_epochs(&header, &derivable).await?;
+        }
+        for epoch in epochs(&derivable) {
+            if !self.held(epoch).await {
+                self.derive_stake_table(epoch).await?;
+            }
+        }
+        Ok(())
+    }
+
+    /// `retry` until the deadline, each attempt bounded by `step_timeout`.
+    async fn read_lc_contract_header_retrying(
+        &self,
+    ) -> Result<Option<LcContractHeader>, StartupCatchupError> {
+        retry(self.deadline, Stage::LcContractHeaderRead, |_, left| {
+            let read = timeout(
+                self.params.step_timeout.min(left),
+                (self.read_lc_contract_header)(),
+            );
+            async move { read.await.context("attempt timed out")? }
+        })
+        .await
+    }
+
+    /// Fetch the proven epoch roots of the `lc_contract_epochs` of `header` for `derivable` that
+    /// are not held, from the peers in turn, then add them. The missing set is recomputed per
+    /// attempt. Returns at once when nothing is missing.
+    ///
+    /// The fetch is bounded by `step_timeout`. Adding a root can scan L1 events for longer than a
+    /// step, and cancelling restarts the scan.
+    async fn install_lc_contract_epochs(
+        &self,
+        header: &LcContractHeader,
+        derivable: &RangeInclusive<EpochNumber>,
+    ) -> Result<(), StartupCatchupError> {
+        let range = lc_contract_epochs(
+            header,
+            *derivable.end(),
+            self.first_epoch,
+            self.epoch_height,
+        );
+        retry(
+            self.deadline,
+            Stage::LcContractCatchup,
+            |attempt, remaining| {
+                let range = &range;
+                async move {
+                    let held = self.held_epochs(range).await;
+                    let Some(catchup) = LcContractCatchup::missing(header, range, &held) else {
+                        return Ok(());
+                    };
+                    let (url, peer) = &self.state_peers[attempt % self.state_peers.len()];
+                    let headers = timeout(
+                        self.params.step_timeout.min(remaining),
+                        catchup.fetch_proven_epoch_roots(peer, self.epoch_height),
+                    )
+                    .await
+                    .context("attempt timed out")?
+                    .with_context(|| format!("peer {url}"))?;
+                    timeout_at(self.deadline, async {
+                        for header in headers {
+                            let height = header.height();
+                            self.coordinator
+                                .add_epoch_root(header)
+                                .await
+                                .map_err(|err| {
+                                    anyhow!("adding the epoch root at {height}: {err}")
+                                })?;
+                        }
+                        anyhow::Ok(())
+                    })
+                    .await
+                    .context("adding the epoch roots timed out")?
+                }
+            },
+        )
+        .await
+    }
+
+    /// `retry` around `coordinator.wait_for_stake_table(epoch)`, each attempt bounded by the time
+    /// left.
+    ///
+    /// A timed-out attempt drops its await and the attempt entries it owns. The fetch task the
+    /// coordinator spawned for the current step keeps running, and the next attempt may fetch the
+    /// same epoch again.
+    async fn derive_stake_table(&self, epoch: EpochNumber) -> Result<(), StartupCatchupError> {
+        retry(
+            self.deadline,
+            Stage::Derivation { epoch },
+            |_, remaining| {
+                let step = timeout(remaining, self.coordinator.wait_for_stake_table(epoch));
+                async move {
+                    step.await
+                        .context("attempt timed out")?
+                        .map(drop)
+                        .map_err(|err| anyhow!("{err:#}"))
+                }
+            },
+        )
+        .await?;
+        tracing::debug!(%epoch, "startup catchup: derived stake table from peers");
+        Ok(())
+    }
 }
 
 /// The block height each state peer reports. One pass, each read bounded by `step_timeout`, no
@@ -256,209 +421,6 @@ async fn read_peer_block_heights<C: Client>(
         height.ok()
     });
     join_all(reads).await.into_iter().flatten().collect()
-}
-
-/// Check the stake tables of `highest_epoch - 1` and `highest_epoch`. Returns the current epoch
-/// `N = highest_epoch - 1`.
-fn check_cliquenet_epochs(
-    coordinator: &EpochMembershipCoordinator<SeqTypes>,
-    highest_epoch: EpochNumber,
-) -> Result<EpochNumber, StartupCatchupError> {
-    // `highest_epoch` is `N+1`, so `N = highest_epoch - 1`.
-    let current = EpochNumber::new(highest_epoch.saturating_sub(1));
-    let membership = coordinator.membership();
-    for epoch in [current, highest_epoch] {
-        if membership.snapshot(epoch).is_none() {
-            return Err(StartupCatchupError::MissingStakeTable { epoch });
-        }
-    }
-    Ok(current)
-}
-
-/// Time bounds of the startup catchup.
-#[derive(Clone, Copy, Debug)]
-pub struct StartupCatchupParams {
-    /// Bound on a single LC contract catchup fetch, LC contract state read or block height read.
-    pub step_timeout: Duration,
-    /// How long all stages may keep retrying, together, before startup gives up.
-    pub total_timeout: Duration,
-}
-
-/// Why the startup catchup failed.
-#[derive(Debug, thiserror::Error)]
-pub(crate) enum StartupCatchupError {
-    /// The membership has no first epoch to seed from.
-    #[error("first_epoch not seeded; genesis stake table missing")]
-    FirstEpochUnset,
-
-    /// No state peer is configured or answers, and storage and genesis cannot serve the chain.
-    #[error("startup catchup needs a state peer serving the availability and light-client APIs")]
-    StatePeersUnavailable,
-
-    /// A retried stage ran out of time, `source` being its last failure.
-    #[error("startup catchup deadline exceeded after {attempts} attempts while {stage}")]
-    DeadlineExceeded {
-        stage: Stage,
-        attempts: usize,
-        #[source]
-        source: anyhow::Error,
-    },
-
-    /// An epoch cliquenet connects to has no stake table after catchup.
-    #[error("missing stake table for epoch {epoch} after startup catchup")]
-    MissingStakeTable { epoch: EpochNumber },
-}
-
-/// A retried stage of the startup catchup.
-#[derive(Clone, Copy, Debug, Display)]
-pub(crate) enum Stage {
-    /// Reading the LC contract state.
-    #[display("reading the LC contract state")]
-    LcContractStateRead,
-    /// Fetching and adding the LC contract epoch roots.
-    #[display("LC contract catchup")]
-    LcContractCatchup,
-    /// Deriving the stake table of `epoch`, on the way to the epoch `goal`.
-    #[display("peer catchup of epoch {epoch} toward epoch {goal}")]
-    PeerCatchup {
-        epoch: EpochNumber,
-        goal: EpochNumber,
-    },
-}
-
-/// One `QueryServiceClient` per URL, to read block heights and light-client proofs from.
-pub(crate) fn state_peer_clients(urls: &[Url]) -> Vec<(Url, QueryServiceClient)> {
-    urls.iter()
-        .map(|url| (url.clone(), QueryServiceClient::new(url.clone())))
-        .collect()
-}
-
-/// The epochs LC contract catchup covers, `epoch(F)-3 ..= epoch(F)+1` for the LC contract header
-/// `F` at `lc_contract_height`, clamped above the two epochs seeded from `first_epoch`.
-///
-/// `None` when `F` is before the first epoch's end. Pure.
-fn lc_contract_epochs(
-    lc_contract_height: u64,
-    blocks_per_epoch: u64,
-    first_epoch: EpochNumber,
-) -> Option<RangeInclusive<EpochNumber>> {
-    let epoch = epoch_from_block_number(lc_contract_height, blocks_per_epoch);
-    let start = epoch.saturating_sub(3).max(*first_epoch + 2);
-    (start <= epoch + 1).then(|| EpochNumber::new(start)..=EpochNumber::new(epoch + 1))
-}
-
-/// Epoch of the last block of the median peer chain (lower median for an even count), `None` for
-/// no peers or no blocks. Pure.
-fn median_peer_tip_epoch(peer_block_heights: &[u64], blocks_per_epoch: u64) -> Option<EpochNumber> {
-    let mut heights = peer_block_heights.to_vec();
-    heights.sort_unstable();
-    let median = heights.get(heights.len().checked_sub(1)? / 2)?;
-    let tip = median.checked_sub(1)?;
-    Some(EpochNumber::new(epoch_from_block_number(
-        tip,
-        blocks_per_epoch,
-    )))
-}
-
-/// What every stage of the catchup shares.
-struct StartupCatchup<'a, C> {
-    /// Membership to fill, with the catchup machinery behind it.
-    coordinator: &'a EpochMembershipCoordinator<SeqTypes>,
-    /// State peers serving block heights and light-client proofs.
-    state_peers: &'a [(Url, C)],
-    /// Step timeout and total timeout.
-    params: &'a StartupCatchupParams,
-    /// Blocks in one epoch.
-    blocks_per_epoch: u64,
-    /// When every retry of every stage gives up.
-    deadline: Instant,
-}
-
-impl<'a, C: Client> StartupCatchup<'a, C> {
-    fn new(
-        coordinator: &'a EpochMembershipCoordinator<SeqTypes>,
-        state_peers: &'a [(Url, C)],
-        params: &'a StartupCatchupParams,
-        blocks_per_epoch: u64,
-        deadline: Instant,
-    ) -> Self {
-        Self {
-            coordinator,
-            state_peers,
-            params,
-            blocks_per_epoch,
-            deadline,
-        }
-    }
-
-    /// Fetch the proven epoch roots of `catchup` from the peers in turn, then add them.
-    ///
-    /// Only the fetch is bounded by `step_timeout`: adding the roots can scan L1 events for longer,
-    /// and cancelling it would restart that scan.
-    async fn catch_up_from_lc_contract(
-        &self,
-        catchup: &LcContractCatchup,
-    ) -> Result<(), StartupCatchupError> {
-        if self.state_peers.is_empty() {
-            return Err(StartupCatchupError::StatePeersUnavailable);
-        }
-        retry(
-            self.deadline,
-            Stage::LcContractCatchup,
-            |attempt, remaining| async move {
-                let (url, peer) = &self.state_peers[attempt % self.state_peers.len()];
-                let headers = timeout(
-                    self.params.step_timeout.min(remaining),
-                    catchup.fetch_proven_epoch_roots(peer, self.blocks_per_epoch),
-                )
-                .await
-                .context("attempt timed out")?
-                .with_context(|| format!("peer {url}"))?;
-                timeout_at(self.deadline, async {
-                    for header in headers {
-                        let height = header.height();
-                        self.coordinator
-                            .add_epoch_root(header)
-                            .await
-                            .map_err(|err| anyhow!("adding the epoch root at {height}: {err}"))?;
-                    }
-                    anyhow::Ok(())
-                })
-                .await
-                .context("adding the epoch roots timed out")?
-            },
-        )
-        .await
-    }
-
-    /// Derive one epoch at a time from `highest_held_epoch + 1` up to `goal_epoch`, each retried.
-    async fn catch_up_from_peers(
-        &self,
-        highest_held_epoch: EpochNumber,
-        goal_epoch: EpochNumber,
-    ) -> Result<(), StartupCatchupError> {
-        if goal_epoch > highest_held_epoch && self.state_peers.is_empty() {
-            return Err(StartupCatchupError::StatePeersUnavailable);
-        }
-        for epoch in (*highest_held_epoch + 1..=*goal_epoch).map(EpochNumber::new) {
-            let stage = Stage::PeerCatchup {
-                epoch,
-                goal: goal_epoch,
-            };
-            retry(self.deadline, stage, |_, remaining| {
-                let step = timeout(remaining, self.coordinator.wait_for_stake_table(epoch));
-                async move {
-                    step.await
-                        .context("attempt timed out")?
-                        .map(drop)
-                        .map_err(|err| anyhow!("{err:#}"))
-                }
-            })
-            .await?;
-            tracing::debug!(%epoch, "startup catchup: derived stake table from peers");
-        }
-        Ok(())
-    }
 }
 
 /// Run `attempt` with its index and the time left, backing off after each failure, until it
@@ -498,33 +460,79 @@ async fn retry<T, Fut: Future<Output = anyhow::Result<T>>>(
     }
 }
 
-/// LC contract catchup: the epoch roots below `F` that storage lacks.
+/// Time bounds of the startup catchup.
+#[derive(Clone, Copy, Debug)]
+pub struct StartupCatchupParams {
+    /// Bound on a single LC contract catchup fetch, LC contract header read or block height read.
+    pub step_timeout: Duration,
+    /// How long all stages may keep retrying, together, before startup gives up.
+    pub total_timeout: Duration,
+}
+
+/// Why the startup catchup failed.
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum StartupCatchupError {
+    /// The membership has no first epoch to seed from.
+    #[error("first_epoch not seeded; genesis stake table missing")]
+    FirstEpochUnset,
+
+    /// No state peer is configured or answers, and storage and genesis cannot serve the chain.
+    #[error("startup catchup needs a state peer serving the availability and light-client APIs")]
+    StatePeersUnavailable,
+
+    /// A retried stage ran out of time, `source` being its last failure.
+    #[error("startup catchup deadline exceeded after {attempts} attempts while {stage}")]
+    DeadlineExceeded {
+        stage: Stage,
+        attempts: usize,
+        #[source]
+        source: anyhow::Error,
+    },
+}
+
+/// A retried stage of the startup catchup.
+#[derive(Clone, Copy, Debug, Display)]
+pub(crate) enum Stage {
+    /// Reading the LC contract header.
+    #[display("reading the LC contract header")]
+    LcContractHeaderRead,
+    /// Fetching and adding the LC contract epoch roots.
+    #[display("LC contract catchup")]
+    LcContractCatchup,
+    /// Deriving the stake table of `epoch`.
+    #[display("deriving the stake table of epoch {epoch}")]
+    Derivation { epoch: EpochNumber },
+}
+
+/// One `QueryServiceClient` per URL, to read block heights and light-client proofs from.
+pub(crate) fn state_peer_clients(urls: &[Url]) -> Vec<(Url, QueryServiceClient)> {
+    urls.iter()
+        .map(|url| (url.clone(), QueryServiceClient::new(url.clone())))
+        .collect()
+}
+
+/// LC contract catchup: the proven epoch roots to fetch for `missing_epochs`.
 #[derive(Clone, Debug, PartialEq)]
 struct LcContractCatchup {
-    /// Block height of the LC contract header `F`.
-    lc_contract_height: u64,
-    /// Block commitment root the LC contract holds for `F`.
-    block_comm_root: CircuitField,
-    /// LC contract epochs storage lacks, ascending: `add_epoch_root(e)` reads the table of `e - 1`.
+    /// The LC contract header `F` the roots are proven against.
+    header: LcContractHeader,
+    /// LC contract epochs not held, ascending: `add_epoch_root(e)` reads the table of `e-1` for the
+    /// block time and `e-3` for the reward.
     missing_epochs: Vec1<EpochNumber>,
 }
 
 impl LcContractCatchup {
-    /// The `lc_contract_epochs` of `state` that `held` lacks, `None` when there are none.
+    /// The epochs of `range` that `held` lacks, `None` when there are none.
     fn missing(
-        state: &LightClientStateSol,
-        blocks_per_epoch: u64,
-        first_epoch: EpochNumber,
-        held: &BTreeSet<EpochNumber>,
+        header: &LcContractHeader,
+        range: &RangeInclusive<EpochNumber>,
+        held: &[EpochNumber],
     ) -> Option<Self> {
-        let epochs = lc_contract_epochs(state.blockHeight, blocks_per_epoch, first_epoch)?;
-        let missing_epochs = (epochs.start().u64()..=epochs.end().u64())
-            .map(EpochNumber::new)
+        let missing_epochs = epochs(range)
             .filter(|epoch| !held.contains(epoch))
             .collect();
         Some(Self {
-            lc_contract_height: state.blockHeight,
-            block_comm_root: u256_to_field(state.blockCommRoot),
+            header: header.clone(),
             missing_epochs: Vec1::try_from_vec(missing_epochs).ok()?,
         })
     }
@@ -540,7 +548,7 @@ impl LcContractCatchup {
         blocks_per_epoch: u64,
     ) -> Result<Vec<Header>, LcContractProofError> {
         let header = peer
-            .header(self.lc_contract_height)
+            .header(self.header.height)
             .await
             .map_err(LcContractProofError::HeaderFetch)?;
         self.verify_lc_contract_header(&header)?;
@@ -550,7 +558,7 @@ impl LcContractCatchup {
             // The root of epoch `e - 2` derives the stake table of epoch `e`.
             let height = root_block_in_epoch(epoch.u64() - 2, blocks_per_epoch);
             let proof = peer
-                .header_proof(self.lc_contract_height, BlockId::Number(height as usize))
+                .header_proof(self.header.height, BlockId::Number(height as usize))
                 .await
                 .map_err(|source| LcContractProofError::EpochRootFetch { height, source })?;
             let header = proof
@@ -571,18 +579,18 @@ impl LcContractCatchup {
     ///
     /// The view number does not enter `block_comm_root`, so any view serves.
     fn verify_lc_contract_header(&self, header: &Header) -> Result<(), LcContractProofError> {
-        if header.height() != self.lc_contract_height {
+        if header.height() != self.header.height {
             return Err(LcContractProofError::HeaderHeight {
                 got: header.height(),
-                expected: self.lc_contract_height,
+                expected: self.header.height,
             });
         }
         let state = header
             .get_light_client_state(ViewNumber::genesis())
             .map_err(LcContractProofError::HeaderState)?;
-        if state.block_comm_root != self.block_comm_root {
+        if state.block_comm_root != self.header.block_comm_root {
             return Err(LcContractProofError::RootMismatch {
-                height: self.lc_contract_height,
+                height: self.header.height,
             });
         }
         Ok(())
@@ -632,7 +640,7 @@ enum LcContractProofError {
 #[cfg(test)]
 mod tests {
     use std::{
-        collections::HashMap,
+        collections::{HashMap, HashSet},
         sync::{
             Arc,
             atomic::{AtomicUsize, Ordering},
@@ -651,9 +659,11 @@ mod tests {
             EventKey, Fetcher, IndexedStake, RegisteredValidator, RewardAmount, StakeTableEvent,
         },
     };
-    use hotshot_contract_adapter::field_to_u256;
     use hotshot_example_types::storage_types::TestStorage;
-    use hotshot_types::{PeerConfig, ValidatorConfig, drb::DrbResult, signature_key::BLSPubKey};
+    use hotshot_types::{
+        PeerConfig, ValidatorConfig, drb::DrbResult, light_client::CircuitField,
+        signature_key::BLSPubKey,
+    };
     use indexmap::IndexMap;
     use light_client::testing::{TestClient, random_validator};
     use pretty_assertions::assert_matches;
@@ -673,43 +683,117 @@ mod tests {
         total_timeout: Duration::from_secs(30),
     };
 
+    /// `PARAMS` with a deadline that tests of failing stages reach quickly.
+    const SHORT_DEADLINE_PARAMS: StartupCatchupParams = StartupCatchupParams {
+        step_timeout: Duration::from_millis(100),
+        total_timeout: Duration::from_millis(300),
+    };
+
     /// LC contract catchup of every LC contract epoch over the chain of `chain()`.
-    fn catchup_for(state: &LightClientStateSol) -> LcContractCatchup {
-        LcContractCatchup::missing(
-            state,
-            EPOCH_HEIGHT,
+    fn catchup_for(header: &LcContractHeader) -> LcContractCatchup {
+        let epochs = lc_contract_epochs(
+            header,
+            EpochNumber::new(N + 1),
             EpochNumber::new(FIRST_EPOCH),
-            &BTreeSet::new(),
-        )
-        .unwrap()
+            EPOCH_HEIGHT,
+        );
+        LcContractCatchup::missing(header, &epochs, &[]).unwrap()
     }
 
+    /// `first_epoch = 1` seeds epochs 1 and 2.
     #[rstest]
-    #[case::decaf_lc_contract_at_root(3000, 3000 * 1000 - 5, Some(997..=1001))]
-    #[case::decaf_after_root(3000, 3000 * 1000 - 4, Some(997..=1001))]
-    #[case::decaf_epoch_end(3000, 3000 * 1000, Some(997..=1001))]
-    #[case::decaf_next_epoch(3000, 3000 * 1000 + 1, Some(998..=1002))]
-    #[case::mainnet_lc_contract_at_root(40000, 40000 * 100 - 5, Some(97..=101))]
-    #[case::mainnet_next_epoch(40000, 40000 * 100 + 1, Some(98..=102))]
-    #[case::start_is_seeded(100, 100 * 4, Some(3..=5))]
-    #[case::start_clamped(100, 100 * 5, Some(3..=6))]
-    #[case::start_unclamped(100, 100 * 6, Some(3..=7))]
-    #[case::window_only(100, 100 * 2, Some(3..=3))]
-    #[case::before_first_epoch_root(100, 50, None)]
-    #[case::genesis(100, 0, None)]
+    #[case::decaf_at_root(3000, 3000 * 1000 - 5, 1001, Some(997..=1001))]
+    #[case::decaf_epoch_end(3000, 3000 * 1000, 1001, Some(997..=1001))]
+    #[case::decaf_next_epoch(3000, 3000 * 1000 + 1, 1002, Some(998..=1002))]
+    #[case::mainnet_at_root(40000, 40000 * 100 - 5, 101, Some(97..=101))]
+    #[case::mainnet_next_epoch(40000, 40000 * 100 + 1, 102, Some(98..=102))]
+    #[case::needed_below_seeded(100, 100 * 8, 2, None)]
+    #[case::needed_is_epoch_of_lc_contract_plus_one(100, 100 * 8, 9, Some(5..=9))]
+    #[case::needed_above_epoch_of_lc_contract_plus_one(100, 100 * 8, 12, Some(5..=9))]
+    #[case::needed_far_below_lc_contract(100, 100 * 50, 10, Some(6..=10))]
+    #[case::start_clamped_above_seeded(100, 100 * 5, 6, Some(3..=6))]
+    #[case::lc_contract_in_first_epoch(100, 100, 5, None)]
+    #[case::lc_contract_in_second_epoch(100, 100 * 2, 5, Some(3..=3))]
+    #[case::lc_contract_at_genesis(100, 0, 5, None)]
     fn lc_contract_epochs_cases(
         #[case] blocks_per_epoch: u64,
         #[case] lc_contract_height: u64,
+        #[case] top_needed: u64,
         #[case] expected: Option<RangeInclusive<u64>>,
     ) {
-        // `first_epoch = 1` seeds epochs 1 and 2.
+        let header = LcContractHeader {
+            height: lc_contract_height,
+            block_comm_root: CircuitField::from(0u64),
+        };
         let epochs = lc_contract_epochs(
-            lc_contract_height,
-            blocks_per_epoch,
+            &header,
+            EpochNumber::new(top_needed),
             EpochNumber::new(FIRST_EPOCH),
-        )
-        .map(|epochs| epochs.start().u64()..=epochs.end().u64());
+            blocks_per_epoch,
+        );
+        let epochs = (!epochs.is_empty()).then(|| epochs.start().u64()..=epochs.end().u64());
         assert_eq!(epochs, expected);
+    }
+
+    #[rstest]
+    #[case::genesis_block(0, 2)]
+    #[case::first_block(1, 2)]
+    #[case::last_block_of_epoch(10, 2)]
+    #[case::first_block_of_next_epoch(11, 3)]
+    #[case::mid_epoch(95, 11)]
+    fn stake_table_needed_by_block_cases(#[case] height: u64, #[case] expected: u64) {
+        let epoch = stake_table_needed_by_block(height, EPOCH_HEIGHT);
+        assert_eq!(epoch, EpochNumber::new(expected));
+    }
+
+    #[rstest]
+    #[case::median_wins_over_storage(Some(8), Some(12), Some(8))]
+    #[case::median_without_storage(Some(3), None, Some(3))]
+    #[case::storage_only(None, Some(9), Some(8))]
+    #[case::storage_at_epoch_zero(None, Some(0), Some(0))]
+    #[case::no_evidence(None, None, None)]
+    fn current_epoch_cases(
+        #[case] median_tip: Option<u64>,
+        #[case] highest_rooted: Option<u64>,
+        #[case] expected: Option<u64>,
+    ) {
+        let current = current_epoch(
+            median_tip.map(EpochNumber::new),
+            highest_rooted.map(EpochNumber::new),
+        );
+        assert_eq!(current, expected.map(EpochNumber::new));
+    }
+
+    #[rstest]
+    #[case::mid_chain(5, 4..=6)]
+    #[case::first_epoch(1, 0..=2)]
+    #[case::epoch_zero(0, 0..=1)]
+    fn cliquenet_epochs_cases(#[case] current: u64, #[case] expected: RangeInclusive<u64>) {
+        let epochs = cliquenet_epochs(EpochNumber::new(current));
+        assert_eq!(epochs.start().u64()..=epochs.end().u64(), expected);
+    }
+
+    /// `first_epoch = 1`, epoch 1 ends at block 10.
+    #[rstest]
+    #[case::no_lc_contract(None, true)]
+    #[case::genesis(Some(0), true)]
+    #[case::end_of_first_epoch(Some(EPOCH_HEIGHT), true)]
+    #[case::start_of_second_epoch(Some(EPOCH_HEIGHT + 1), false)]
+    #[case::far_past(Some(10 * EPOCH_HEIGHT), false)]
+    fn lc_contract_header_inside_seeded_epochs_cases(
+        #[case] height: Option<u64>,
+        #[case] expected: bool,
+    ) {
+        let header = height.map(|height| LcContractHeader {
+            height,
+            block_comm_root: CircuitField::from(0u64),
+        });
+        let inside = lc_contract_header_inside_seeded_epochs(
+            header.as_ref(),
+            EpochNumber::new(FIRST_EPOCH),
+            EPOCH_HEIGHT,
+        );
+        assert_eq!(inside, expected);
     }
 
     #[rstest]
@@ -725,33 +809,40 @@ mod tests {
         assert_eq!(epoch, expected);
     }
 
-    /// Test chain of `LC_CONTRACT_HEIGHT + 1` blocks and the LC contract state over it.
-    ///
-    /// Peers report that height, so peer catchup targets epoch `N + 1`.
-    async fn chain() -> (TestClient, LightClientStateSol) {
-        let client = TestClient::with_epoch_height(EPOCH_HEIGHT);
-        let header = client.header(LC_CONTRACT_HEIGHT).await.unwrap();
-        let root = header
+    /// The LC contract header over the block at `height` of `client`.
+    async fn lc_header_at(client: &TestClient, height: u64) -> LcContractHeader {
+        let header = client.header(height).await.unwrap();
+        let block_comm_root = header
             .get_light_client_state(ViewNumber::genesis())
             .unwrap()
             .block_comm_root;
-        let state = LightClientStateSol {
-            blockHeight: header.height(),
-            blockCommRoot: field_to_u256(root),
-            ..Default::default()
-        };
-        (client, state)
+        LcContractHeader {
+            height: header.height(),
+            block_comm_root,
+        }
+    }
+
+    /// Test chain of `LC_CONTRACT_HEIGHT + 1` blocks and the LC contract header over it.
+    ///
+    /// Peers report that height, so the current epoch is `N`.
+    async fn chain() -> (TestClient, LcContractHeader) {
+        let client = TestClient::with_epoch_height(EPOCH_HEIGHT);
+        let header = lc_header_at(&client, LC_CONTRACT_HEIGHT).await;
+        (client, header)
     }
 
     #[tokio::test]
     async fn lc_contract_header_verification() {
-        let (client, state) = chain().await;
-        let catchup = catchup_for(&state);
+        let (client, lc_header) = chain().await;
+        let catchup = catchup_for(&lc_header);
         let header = client.header(LC_CONTRACT_HEIGHT).await.unwrap();
         catchup.verify_lc_contract_header(&header).unwrap();
 
         let wrong_root = LcContractCatchup {
-            block_comm_root: catchup.block_comm_root + CircuitField::from(1u64),
+            header: LcContractHeader {
+                block_comm_root: catchup.header.block_comm_root + CircuitField::from(1u64),
+                ..catchup.header.clone()
+            },
             ..catchup.clone()
         };
         let err = wrong_root.verify_lc_contract_header(&header).unwrap_err();
@@ -761,7 +852,10 @@ mod tests {
         );
 
         let wrong_height = LcContractCatchup {
-            lc_contract_height: LC_CONTRACT_HEIGHT + 1,
+            header: LcContractHeader {
+                height: LC_CONTRACT_HEIGHT + 1,
+                ..catchup.header.clone()
+            },
             ..catchup
         };
         let err = wrong_height.verify_lc_contract_header(&header).unwrap_err();
@@ -775,10 +869,14 @@ mod tests {
     /// Stands in for the node's database: it holds a stake table, DRB result and epoch root header
     /// for each epoch the test lets it answer for, with the hash a verified epoch root header
     /// commits to.
+    ///
+    /// Tables answer from `visible` epochs only. `hidden` starts with none, and `add_epoch_root`
+    /// reveals the table of the epoch it adds by storing its root first.
     #[derive(Clone, Debug, Default)]
     struct SeededStore {
         tables: Arc<std::sync::Mutex<HashMap<u64, StakeTuple>>>,
         roots: Arc<std::sync::Mutex<HashMap<u64, Header>>>,
+        visible: Arc<std::sync::Mutex<HashSet<u64>>>,
     }
 
     impl SeededStore {
@@ -801,26 +899,46 @@ mod tests {
                 let root = root_block_in_epoch(epoch - 2, EPOCH_HEIGHT);
                 headers.insert(epoch, client.header(root).await.unwrap());
             }
+            let visible = tables.keys().copied().collect();
             Self {
                 tables: Arc::new(std::sync::Mutex::new(tables)),
                 roots: Arc::new(std::sync::Mutex::new(headers)),
+                visible: Arc::new(std::sync::Mutex::new(visible)),
             }
+        }
+
+        /// No table answers until revealed.
+        fn hidden(self) -> Self {
+            self.visible.lock().unwrap().clear();
+            self
+        }
+
+        fn reveal(&self, epochs: RangeInclusive<u64>) {
+            self.visible.lock().unwrap().extend(epochs);
+        }
+
+        fn visible_table(&self, epoch: u64) -> Option<StakeTuple> {
+            let visible = self.visible.lock().unwrap().contains(&epoch);
+            let table = self.tables.lock().unwrap().get(&epoch).cloned();
+            table.filter(|_| visible)
         }
     }
 
     #[async_trait]
     impl MembershipPersistence for SeededStore {
         async fn load_stake(&self, epoch: EpochNumber) -> anyhow::Result<Option<StakeTuple>> {
-            Ok(self.tables.lock().unwrap().get(&epoch.u64()).cloned())
+            Ok(self.visible_table(epoch.u64()))
         }
 
         async fn load_latest_stake(
             &self,
             _limit: u64,
         ) -> anyhow::Result<Option<Vec<IndexedStake>>> {
+            let visible = self.visible.lock().unwrap();
             let tables = self.tables.lock().unwrap();
             let stakes = tables
                 .iter()
+                .filter(|(epoch, _)| visible.contains(epoch))
                 .map(|(epoch, (validators, reward, hash))| {
                     let stake = (validators.clone(), *reward);
                     (EpochNumber::new(*epoch), stake, *hash)
@@ -830,19 +948,15 @@ mod tests {
         }
 
         async fn load_drb_result(&self, epoch: EpochNumber) -> anyhow::Result<Option<DrbResult>> {
-            Ok(self
-                .tables
-                .lock()
-                .unwrap()
-                .contains_key(&epoch.u64())
-                .then_some([0; 32]))
+            Ok(self.visible_table(epoch.u64()).map(|_| [0; 32]))
         }
 
         async fn load_epoch_root(&self, epoch: EpochNumber) -> anyhow::Result<Option<Header>> {
             Ok(self.roots.lock().unwrap().get(&epoch.u64()).cloned())
         }
 
-        async fn store_epoch_root(&self, _: EpochNumber, _: Header) -> anyhow::Result<()> {
+        async fn store_epoch_root(&self, epoch: EpochNumber, _: Header) -> anyhow::Result<()> {
+            self.visible.lock().unwrap().insert(epoch.u64());
             Ok(())
         }
 
@@ -898,7 +1012,7 @@ mod tests {
     }
 
     /// A real `EpochCommittees` and coordinator over `store`, seeded like a fresh node. No peer
-    /// serves epoch roots, so peer catchup ends at the first epoch above the LC contract ones.
+    /// serves epoch roots, so only the store and LC contract catchup can supply a table.
     fn coordinator(store: SeededStore) -> EpochMembershipCoordinator<SeqTypes> {
         coordinator_over(committees(store))
     }
@@ -936,7 +1050,16 @@ mod tests {
     }
 
     async fn fresh_coordinator(client: &TestClient) -> EpochMembershipCoordinator<SeqTypes> {
-        coordinator(SeededStore::for_chain(client, (N - 3)..=(N + 1)).await)
+        let store = SeededStore::for_chain(client, (N - 3)..=(N + 1)).await;
+        coordinator(store.hidden())
+    }
+
+    /// Storage holding the tables of `N-4 ..= N+1`, loaded into memory as `init_node_state` does.
+    async fn restarted_coordinator(client: &TestClient) -> EpochMembershipCoordinator<SeqTypes> {
+        let store = SeededStore::for_chain(client, (N - 4)..=(N + 1)).await;
+        let mut committees = committees(store);
+        committees.reload_stake(10).await;
+        coordinator_over(committees)
     }
 
     fn peer_list(clients: &[TestClient]) -> Vec<(Url, TestClient)> {
@@ -946,16 +1069,32 @@ mod tests {
 
     async fn run_catchup(
         coordinator: &EpochMembershipCoordinator<SeqTypes>,
-        lc_contract_state: Option<LightClientStateSol>,
+        lc_contract_header: Option<LcContractHeader>,
         state_peers: &[TestClient],
         params: StartupCatchupParams,
     ) -> Result<EpochNumber, StartupCatchupError> {
         catch_up_cliquenet_stake_tables(
             coordinator,
-            EPOCH_HEIGHT,
-            || async { Ok(lc_contract_state.clone()) },
+            || async { Ok(lc_contract_header.clone()) },
             &peer_list(state_peers),
             &params,
+        )
+        .await
+    }
+
+    async fn run_ensure(
+        coordinator: &EpochMembershipCoordinator<SeqTypes>,
+        lc_contract_header: Option<LcContractHeader>,
+        state_peers: &[TestClient],
+        params: StartupCatchupParams,
+        need: RangeInclusive<u64>,
+    ) -> Result<(), StartupCatchupError> {
+        ensure_stake_tables(
+            coordinator,
+            || async { Ok(lc_contract_header.clone()) },
+            &peer_list(state_peers),
+            &params,
+            EpochNumber::new(*need.start())..=EpochNumber::new(*need.end()),
         )
         .await
     }
@@ -978,47 +1117,34 @@ mod tests {
         }
     }
 
-    fn has_epoch_root(coordinator: &EpochMembershipCoordinator<SeqTypes>, epoch: u64) -> bool {
-        coordinator
-            .membership()
-            .epochs_with_root()
-            .contains(&EpochNumber::new(epoch))
-    }
-
     #[test_log::test(tokio::test)]
     async fn fresh_join_catches_up_from_lc_contract() {
-        let (client, lc_contract_state) = chain().await;
+        let (client, header) = chain().await;
         let coordinator = fresh_coordinator(&client).await;
 
-        let current = run_catchup(&coordinator, Some(lc_contract_state), &[client], PARAMS)
+        let current = run_catchup(&coordinator, Some(header), &[client], PARAMS)
             .await
             .unwrap();
 
-        // Peer catchup finds no root above the LC contract state, as when the prover keeps up.
         assert_eq!(current, EpochNumber::new(N));
         for epoch in (N - 3)..=(N + 1) {
             assert!(has_table(&coordinator, epoch), "epoch {epoch}");
         }
         assert_eq!(
-            coordinator.membership().epochs_with_root().last(),
-            Some(&EpochNumber::new(N + 1))
+            coordinator.membership().highest_rooted_epoch(),
+            Some(EpochNumber::new(N + 1))
         );
     }
 
     #[test_log::test(tokio::test)]
     async fn lc_contract_catchup_rotates_past_a_wrong_chain() {
-        let (client, lc_contract_state) = chain().await;
+        let (client, header) = chain().await;
         let (other, _) = chain().await;
         let coordinator = fresh_coordinator(&client).await;
 
-        let current = run_catchup(
-            &coordinator,
-            Some(lc_contract_state),
-            &[other, client],
-            PARAMS,
-        )
-        .await
-        .unwrap();
+        let current = run_catchup(&coordinator, Some(header), &[other, client], PARAMS)
+            .await
+            .unwrap();
 
         assert_eq!(current, EpochNumber::new(N));
         assert!(has_table(&coordinator, N + 1));
@@ -1027,7 +1153,7 @@ mod tests {
     /// An epoch root the peer cannot serve at first must be retried, not read as the tip.
     #[test_log::test(tokio::test)]
     async fn lc_contract_catchup_retries_a_transient_failure() {
-        let (client, lc_contract_state) = chain().await;
+        let (client, header) = chain().await;
         let coordinator = fresh_coordinator(&client).await;
         let flaky_root = root_block_in_epoch(N - 1, EPOCH_HEIGHT) as usize;
         client.forget_leaf(flaky_root).await;
@@ -1037,7 +1163,7 @@ mod tests {
             heal.remember_leaf(flaky_root).await;
         });
 
-        let current = run_catchup(&coordinator, Some(lc_contract_state), &[client], PARAMS)
+        let current = run_catchup(&coordinator, Some(header), &[client], PARAMS)
             .await
             .unwrap();
 
@@ -1047,7 +1173,7 @@ mod tests {
 
     #[test_log::test(tokio::test)]
     async fn lc_contract_header_unavailable_aborts_at_the_deadline() {
-        let (client, lc_contract_state) = chain().await;
+        let (client, header) = chain().await;
         let coordinator = fresh_coordinator(&client).await;
         client.forget_leaf(LC_CONTRACT_HEIGHT as usize).await;
 
@@ -1055,7 +1181,7 @@ mod tests {
             total_timeout: Duration::from_millis(300),
             ..PARAMS
         };
-        let err = run_catchup(&coordinator, Some(lc_contract_state), &[client], params)
+        let err = run_catchup(&coordinator, Some(header), &[client], params)
             .await
             .unwrap_err();
 
@@ -1073,19 +1199,65 @@ mod tests {
         );
     }
 
-    /// Held epochs skip LC contract catchup, and peer catchup starts from the highest held epoch.
+    /// A failed LC contract header read is retried and LC contract catchup then runs.
+    #[test_log::test(tokio::test)]
+    async fn lc_contract_header_read_failure_is_retried() {
+        let (client, header) = chain().await;
+        let coordinator = fresh_coordinator(&client).await;
+        let reads = AtomicUsize::new(0);
+
+        let current = catch_up_cliquenet_stake_tables(
+            &coordinator,
+            || async {
+                ensure!(reads.fetch_add(1, Ordering::Relaxed) > 0, "L1 not ready");
+                Ok(Some(header.clone()))
+            },
+            &peer_list(&[client]),
+            &PARAMS,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(reads.load(Ordering::Relaxed), 2);
+        assert_eq!(current, EpochNumber::new(N));
+        assert!(has_table(&coordinator, N + 1));
+    }
+
+    /// The LC contract header read shares the deadline with the stages after it.
+    #[test_log::test(tokio::test)]
+    async fn lc_contract_read_consumes_the_deadline() {
+        let (client, _) = chain().await;
+        let coordinator = coordinator(SeededStore::default());
+
+        let err = ensure_stake_tables(
+            &coordinator,
+            std::future::pending::<anyhow::Result<Option<LcContractHeader>>>,
+            &peer_list(&[client]),
+            &SHORT_DEADLINE_PARAMS,
+            EpochNumber::new(N)..=EpochNumber::new(N),
+        )
+        .await
+        .unwrap_err();
+
+        assert_matches!(
+            err,
+            StartupCatchupError::DeadlineExceeded {
+                stage: Stage::LcContractHeaderRead,
+                ..
+            }
+        );
+    }
+
+    /// Held epochs skip LC contract catchup.
     #[test_log::test(tokio::test)]
     async fn restart_boots_from_storage() {
-        let (client, lc_contract_state) = chain().await;
-        let store = SeededStore::for_chain(&client, (N - 4)..=(N + 1)).await;
-        let mut committees = committees(store);
-        committees.reload_stake(10).await;
-        let coordinator = coordinator_over(committees);
+        let (client, header) = chain().await;
+        let coordinator = restarted_coordinator(&client).await;
         client.forget_leaf(LC_CONTRACT_HEIGHT as usize).await;
 
         let current = run_catchup(
             &coordinator,
-            Some(lc_contract_state),
+            Some(header),
             std::slice::from_ref(&client),
             PARAMS,
         )
@@ -1097,18 +1269,14 @@ mod tests {
 
     /// No peer height and stored epochs start from storage, without reading the LC contract.
     #[test_log::test(tokio::test)]
-    async fn no_peer_height_continues_from_the_held_epochs() {
+    async fn no_peer_height_boots_from_storage() {
         let (client, _) = chain().await;
-        let store = SeededStore::for_chain(&client, (N - 4)..=(N + 1)).await;
-        let mut committees = committees(store);
-        committees.reload_stake(10).await;
-        let coordinator = coordinator_over(committees);
+        let coordinator = restarted_coordinator(&client).await;
         client.fail_block_height().await;
         let reads = AtomicUsize::new(0);
 
         let current = catch_up_cliquenet_stake_tables(
             &coordinator,
-            EPOCH_HEIGHT,
             || async {
                 reads.fetch_add(1, Ordering::Relaxed);
                 Ok(None)
@@ -1123,12 +1291,34 @@ mod tests {
         assert_eq!(reads.load(Ordering::Relaxed), 0);
     }
 
-    /// Nothing derived: the LC contract inside the seeded epochs (epoch 1 ends at block 10) starts
-    /// at genesis, one block further the chain is past them and storage cannot serve it.
+    /// The median tip decides `N`, even when storage holds tables above it.
+    #[test_log::test(tokio::test)]
+    async fn median_peer_tip_selects_the_current_epoch_over_storage() {
+        let (client, _) = chain().await;
+        client.mock_block_height(LC_CONTRACT_HEIGHT + 1).await;
+        let store = SeededStore::for_chain(&client, (N - 3)..=(N + 3)).await;
+        let coordinator = coordinator(store);
+        hold(&coordinator, (N - 3)..=(N + 3)).await;
+        assert_eq!(
+            coordinator.membership().highest_rooted_epoch(),
+            Some(EpochNumber::new(N + 3))
+        );
+
+        let current = run_catchup(&coordinator, None, &[client], PARAMS)
+            .await
+            .unwrap();
+
+        assert_eq!(current, EpochNumber::new(N));
+    }
+
+    /// Nothing held beyond the seeded epochs: the LC contract inside the first epoch (it ends at
+    /// block 10) starts at genesis, one block further the chain is past the seeded epochs and
+    /// storage cannot serve it.
     #[rstest]
     #[case::no_lc_contract(None, true)]
-    #[case::in_seeded_epochs(Some(EPOCH_HEIGHT), true)]
-    #[case::past_seeded_epochs(Some(EPOCH_HEIGHT + 1), false)]
+    #[case::in_first_epoch(Some(EPOCH_HEIGHT), true)]
+    #[case::in_second_epoch(Some(EPOCH_HEIGHT + 1), false)]
+    #[case::far_past(Some(5 * EPOCH_HEIGHT), false)]
     #[test_log::test(tokio::test)]
     async fn no_peer_height_and_nothing_derived(
         #[case] lc_height: Option<u64>,
@@ -1137,12 +1327,12 @@ mod tests {
         let (client, _) = chain().await;
         let coordinator = coordinator(SeededStore::default());
         client.fail_block_height().await;
-        let state = lc_height.map(|height| LightClientStateSol {
-            blockHeight: height,
-            ..Default::default()
+        let header = lc_height.map(|height| LcContractHeader {
+            height,
+            block_comm_root: CircuitField::from(0u64),
         });
 
-        let result = run_catchup(&coordinator, state, &[client], PARAMS).await;
+        let result = run_catchup(&coordinator, header, &[client], PARAMS).await;
 
         if starts_at_genesis {
             assert_eq!(result.unwrap(), EpochNumber::new(FIRST_EPOCH));
@@ -1169,17 +1359,12 @@ mod tests {
         let (client, _) = chain().await;
         let coordinator = coordinator(SeededStore::default());
         client.fail_block_height().await;
-        let params = StartupCatchupParams {
-            total_timeout: Duration::from_millis(300),
-            ..PARAMS
-        };
 
         let err = catch_up_cliquenet_stake_tables(
             &coordinator,
-            EPOCH_HEIGHT,
             || async { Err(anyhow!("L1 not ready")) },
             &peer_list(&[client]),
-            &params,
+            &SHORT_DEADLINE_PARAMS,
         )
         .await
         .unwrap_err();
@@ -1187,7 +1372,7 @@ mod tests {
         assert_matches!(
             err,
             StartupCatchupError::DeadlineExceeded {
-                stage: Stage::LcContractStateRead,
+                stage: Stage::LcContractHeaderRead,
                 ..
             }
         );
@@ -1195,13 +1380,10 @@ mod tests {
 
     #[test_log::test(tokio::test)]
     async fn no_state_peers_configured_continues_from_the_held_epochs() {
-        let (client, lc_contract_state) = chain().await;
-        let store = SeededStore::for_chain(&client, (N - 4)..=(N + 1)).await;
-        let mut committees = committees(store);
-        committees.reload_stake(10).await;
-        let coordinator = coordinator_over(committees);
+        let (client, header) = chain().await;
+        let coordinator = restarted_coordinator(&client).await;
 
-        let current = run_catchup(&coordinator, Some(lc_contract_state), &[], PARAMS)
+        let current = run_catchup(&coordinator, Some(header), &[], PARAMS)
             .await
             .unwrap();
 
@@ -1214,98 +1396,122 @@ mod tests {
         let coordinator = coordinator(SeededStore::default());
         let no_peers: &[(Url, TestClient)] = &[];
 
-        let highest = catch_up_stake_tables(
-            &coordinator,
-            EPOCH_HEIGHT,
-            || async { Ok(None) },
-            no_peers,
-            &PARAMS,
-            EpochNumber::new(FIRST_EPOCH + 1),
-        )
-        .await
-        .unwrap();
+        let current =
+            catch_up_cliquenet_stake_tables(&coordinator, || async { Ok(None) }, no_peers, &PARAMS)
+                .await
+                .unwrap();
 
-        assert_eq!(highest, EpochNumber::new(FIRST_EPOCH + 1));
+        assert_eq!(current, EpochNumber::new(FIRST_EPOCH));
     }
 
-    /// A held epoch above the goal does not stand in for a goal without a stake table.
     #[test_log::test(tokio::test)]
-    async fn goal_below_held_epochs_without_table_fails() {
-        let (client, _) = chain().await;
-        let coordinator = coordinator(SeededStore::for_chain(&client, (N + 1)..=(N + 1)).await);
-        hold(&coordinator, (N + 1)..=(N + 1)).await;
-        assert!(has_epoch_root(&coordinator, N + 1));
-        let goal = EpochNumber::new(N - 1);
+    async fn no_peers_configured_with_a_missing_table_fails_before_the_lc_read() {
+        let coordinator = coordinator(SeededStore::default());
+        let no_peers: &[(Url, TestClient)] = &[];
+        let reads = AtomicUsize::new(0);
 
-        let result = catch_up_stake_tables(
+        let result = ensure_stake_tables(
             &coordinator,
-            EPOCH_HEIGHT,
-            || async { Ok(None) },
-            &peer_list(&[client]),
+            || async {
+                reads.fetch_add(1, Ordering::Relaxed);
+                Err(anyhow!("L1 not ready"))
+            },
+            no_peers,
             &PARAMS,
-            goal,
+            EpochNumber::new(N)..=EpochNumber::new(N),
         )
         .await;
 
-        assert_matches!(result, Err(StartupCatchupError::MissingStakeTable { epoch }) if epoch == goal);
+        assert_matches!(result, Err(StartupCatchupError::StatePeersUnavailable));
+        assert_eq!(reads.load(Ordering::Relaxed), 0);
     }
 
-    /// A failed peer catchup step is retried until the goal epoch is held, not read as the tip.
+    /// Every needed epoch held: no LC contract read, no peers needed.
     #[test_log::test(tokio::test)]
-    async fn peer_catchup_retries_each_step_until_the_goal() {
+    async fn needed_tables_held_skip_the_lc_contract_read() {
         let (client, _) = chain().await;
-        let store = SeededStore::for_chain(&client, (N - 4)..=(N + 1)).await;
-        let withheld = store.tables.lock().unwrap().remove(&(N - 1)).unwrap();
-        let coordinator = coordinator(store.clone());
-        for epoch in [N - 4, N - 3] {
-            coordinator
-                .membership()
-                .load_stake_table(EpochNumber::new(epoch))
-                .await;
-        }
-        tokio::spawn(async move {
-            tokio::time::sleep(Duration::from_millis(100)).await;
-            store.tables.lock().unwrap().insert(N - 1, withheld);
-        });
+        let coordinator = restarted_coordinator(&client).await;
+        let no_peers: &[(Url, TestClient)] = &[];
+        let reads = AtomicUsize::new(0);
 
-        let highest = catch_up_stake_tables(
+        ensure_stake_tables(
             &coordinator,
-            EPOCH_HEIGHT,
-            || async { Ok(Some(LightClientStateSol::default())) },
-            &peer_list(&[client]),
+            || async {
+                reads.fetch_add(1, Ordering::Relaxed);
+                Err(anyhow!("L1 not ready"))
+            },
+            no_peers,
             &PARAMS,
-            EpochNumber::new(N + 1),
+            EpochNumber::new(N - 1)..=EpochNumber::new(N + 1),
         )
         .await
         .unwrap();
 
-        assert_eq!(highest, EpochNumber::new(N + 1));
+        assert_eq!(reads.load(Ordering::Relaxed), 0);
+    }
+
+    #[test_log::test(tokio::test)]
+    async fn table_in_storage_but_not_memory_counts_as_held() {
+        let (client, _) = chain().await;
+        let store = SeededStore::for_chain(&client, (N - 4)..=(N + 1)).await;
+        let coordinator = coordinator(store);
+        assert!(!has_table(&coordinator, N));
+        let no_peers: &[(Url, TestClient)] = &[];
+
+        ensure_stake_tables(
+            &coordinator,
+            || async { Err(anyhow!("L1 not ready")) },
+            no_peers,
+            &PARAMS,
+            EpochNumber::new(N - 1)..=EpochNumber::new(N + 1),
+        )
+        .await
+        .unwrap();
+
+        assert!(has_table(&coordinator, N));
+    }
+
+    /// A failed derivation step is retried until the epoch is held.
+    #[test_log::test(tokio::test)]
+    async fn derivation_retries_each_step_until_the_epoch_is_held() {
+        let (client, _) = chain().await;
+        let store = SeededStore::for_chain(&client, (N - 4)..=(N + 1))
+            .await
+            .hidden();
+        store.reveal((N - 4)..=(N - 3));
+        let coordinator = coordinator(store.clone());
+        hold(&coordinator, (N - 4)..=(N - 3)).await;
+        let late = store.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            late.reveal((N - 2)..=(N + 1));
+        });
+
+        run_ensure(&coordinator, None, &[client], PARAMS, (N - 1)..=(N + 1))
+            .await
+            .unwrap();
+
+        assert!(has_table(&coordinator, N - 1));
         assert!(has_table(&coordinator, N + 1));
     }
 
-    /// A peer catchup step that keeps failing ends startup at the deadline.
+    /// A derivation step that keeps failing ends startup at the deadline.
     #[test_log::test(tokio::test)]
-    async fn peer_catchup_fails_at_the_deadline() {
+    async fn derivation_fails_at_the_deadline() {
         let (client, _) = chain().await;
-        let store = SeededStore::for_chain(&client, (N - 4)..=(N + 1)).await;
-        store.tables.lock().unwrap().remove(&(N - 1));
+        let store = SeededStore::for_chain(&client, (N - 4)..=(N + 1))
+            .await
+            .hidden();
+        store.reveal((N - 4)..=(N - 3));
         let coordinator = coordinator(store);
-        for epoch in [N - 4, N - 3] {
-            coordinator
-                .membership()
-                .load_stake_table(EpochNumber::new(epoch))
-                .await;
-        }
-        let params = StartupCatchupParams {
-            total_timeout: Duration::from_millis(300),
-            ..PARAMS
-        };
+        hold(&coordinator, (N - 4)..=(N - 3)).await;
 
-        let err = run_catchup(
+        let err = run_ensure(
             &coordinator,
-            Some(LightClientStateSol::default()),
+            None,
             &[client],
-            params,
+            SHORT_DEADLINE_PARAMS,
+            (N - 1)..=(N + 1),
         )
         .await
         .unwrap_err();
@@ -1313,7 +1519,7 @@ mod tests {
         assert_matches!(
             err,
             StartupCatchupError::DeadlineExceeded {
-                stage: Stage::PeerCatchup { epoch, .. },
+                stage: Stage::Derivation { epoch },
                 ..
             } if epoch == EpochNumber::new(N - 1)
         );
@@ -1322,8 +1528,8 @@ mod tests {
     /// A bad proof after the first good ones fails the whole fetch.
     #[test_log::test(tokio::test)]
     async fn invalid_proof_mid_range_fails() {
-        let (client, lc_contract_state) = chain().await;
-        let catchup = catchup_for(&lc_contract_state);
+        let (client, header) = chain().await;
+        let catchup = catchup_for(&header);
         client
             .return_invalid_proof(root_block_in_epoch(N - 3, EPOCH_HEIGHT) as usize)
             .await;
@@ -1340,7 +1546,7 @@ mod tests {
     /// epochs, and the catchup completes them.
     #[test_log::test(tokio::test)]
     async fn partial_lc_contract_catchup_is_completed() {
-        let (client, lc_contract_state) = chain().await;
+        let (client, header) = chain().await;
         let coordinator = fresh_coordinator(&client).await;
         let first_root = client
             .header(root_block_in_epoch(N - 5, EPOCH_HEIGHT))
@@ -1354,7 +1560,7 @@ mod tests {
 
         let current = run_catchup(
             &coordinator,
-            Some(lc_contract_state),
+            Some(header),
             std::slice::from_ref(&client),
             PARAMS,
         )
@@ -1367,48 +1573,78 @@ mod tests {
         }
     }
 
-    /// A held epoch without its root, above the rooted ones, does not move where peer catchup
-    /// starts.
+    /// A held epoch without its root, above the rooted ones, does not select the current epoch.
     #[test_log::test(tokio::test)]
-    async fn rootless_top_epoch_does_not_raise_the_start() {
-        let (client, lc_contract_state) = chain().await;
-        client.mock_block_height(LC_CONTRACT_HEIGHT + 1).await;
+    async fn rootless_top_epoch_does_not_select_the_current_epoch() {
+        let (client, _) = chain().await;
+        client.fail_block_height().await;
         let store = SeededStore::for_chain(&client, (N - 3)..=(N + 2)).await;
         store.roots.lock().unwrap().remove(&(N + 2));
         let coordinator = coordinator(store);
         hold(&coordinator, (N - 3)..=(N + 2)).await;
         assert!(has_table(&coordinator, N + 2));
-        assert!(!has_epoch_root(&coordinator, N + 2));
+        assert_eq!(
+            coordinator.membership().highest_rooted_epoch(),
+            Some(EpochNumber::new(N + 1))
+        );
 
-        let current = run_catchup(&coordinator, Some(lc_contract_state), &[client], PARAMS)
+        let current = run_catchup(&coordinator, None, &[client], PARAMS)
             .await
             .unwrap();
 
         assert_eq!(current, EpochNumber::new(N));
     }
 
-    /// A failed lc_contract_state read is retried and LC contract catchup then runs.
+    /// A goal far below `F` installs the proofs at the goal, not at `F`. The membership has no peer
+    /// to derive from, so only proofs can supply the tables.
     #[test_log::test(tokio::test)]
-    async fn lc_contract_state_failure_is_retried() {
-        let (client, lc_contract_state) = chain().await;
-        let coordinator = fresh_coordinator(&client).await;
-        let reads = AtomicUsize::new(0);
+    async fn follower_goal_far_below_the_lc_contract_uses_proofs_at_the_goal() {
+        let client = TestClient::with_epoch_height(EPOCH_HEIGHT);
+        let header = lc_header_at(&client, 20 * EPOCH_HEIGHT + 7).await;
+        let goal = N + 3;
+        let store = SeededStore::for_chain(&client, (goal - 4)..=goal).await;
+        let coordinator = coordinator(store.hidden());
 
-        let current = catch_up_cliquenet_stake_tables(
-            &coordinator,
-            EPOCH_HEIGHT,
-            || async {
-                ensure!(reads.fetch_add(1, Ordering::Relaxed) > 0, "L1 not ready");
-                Ok(Some(lc_contract_state.clone()))
-            },
-            &peer_list(&[client]),
-            &PARAMS,
-        )
-        .await
-        .unwrap();
+        run_ensure(&coordinator, Some(header), &[client], PARAMS, goal..=goal)
+            .await
+            .unwrap();
 
-        assert_eq!(reads.load(Ordering::Relaxed), 2);
-        assert_eq!(current, EpochNumber::new(N));
-        assert!(has_table(&coordinator, N + 1));
+        for epoch in (goal - 4)..=goal {
+            assert!(has_table(&coordinator, epoch), "epoch {epoch}");
+        }
+        for epoch in (FIRST_EPOCH + 2)..(goal - 4) {
+            assert!(!has_table(&coordinator, epoch), "epoch {epoch}");
+        }
+    }
+
+    /// Held `3..=5` and a lone table at `8`: the goal `7` is in the gap, and `6` below it is
+    /// filled too.
+    #[rstest]
+    #[case::lc_contract_header(true)]
+    #[case::no_lc_contract_header(false)]
+    #[test_log::test(tokio::test)]
+    async fn goal_in_a_gap_is_filled(#[case] with_lc_contract_header: bool) {
+        let (client, header) = chain().await;
+        let store = SeededStore::for_chain(&client, 3..=8).await.hidden();
+        store.reveal(3..=5);
+        store.reveal(8..=8);
+        let coordinator = coordinator(store.clone());
+        hold(&coordinator, 3..=5).await;
+        hold(&coordinator, 8..=8).await;
+        let header = with_lc_contract_header.then_some(header);
+        if header.is_none() {
+            let late = store.clone();
+            tokio::spawn(async move {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                late.reveal(6..=7);
+            });
+        }
+
+        run_ensure(&coordinator, header, &[client], PARAMS, 7..=7)
+            .await
+            .unwrap();
+
+        assert!(has_table(&coordinator, 6));
+        assert!(has_table(&coordinator, 7));
     }
 }

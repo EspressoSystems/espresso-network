@@ -9,10 +9,13 @@ use anyhow::{Context, bail};
 use async_lock::Mutex;
 use async_trait::async_trait;
 #[cfg(feature = "node")]
-use hotshot_contract_adapter::sol_types::{LightClientStateSol, LightClientV3, StakeTableV3};
+use hotshot_contract_adapter::{
+    sol_types::{LightClientStateSol, LightClientV3, StakeTableV3},
+    u256_to_field,
+};
 use hotshot_types::{
     HotShotConfig, data::EpochNumber, drb::DrbResult, epoch_membership::EpochMembershipCoordinator,
-    traits::states::InstanceState,
+    light_client::CircuitField, traits::states::InstanceState,
 };
 use moka::future::Cache;
 use vbs::version::Version;
@@ -38,6 +41,14 @@ use crate::{
     },
     v0_3::{RegisteredValidator, RewardAmount},
 };
+
+/// The header `F` the LC contract (the `LightClient` contract on L1) has finalized, read at the L1
+/// finalized block.
+#[derive(Clone, Debug, PartialEq)]
+pub struct LcContractHeader {
+    pub height: u64,
+    pub block_comm_root: CircuitField,
+}
 
 /// Represents the immutable state of a node.
 ///
@@ -175,16 +186,13 @@ impl NodeState {
         }
     }
 
-    /// The light client contract's finalized state, read at the L1 finalized block. Not cached: it
-    /// advances with every prover update.
-    ///
-    /// `None` when the chain config has no stake table contract, or the light client has no code
-    /// at the finalized block yet, as on a fresh L1. Fails when L1 finality is not yet known or a
-    /// read fails.
+    /// The LC contract header `F`, read at the L1 finalized block. `None`, logged, without a stake
+    /// table contract or contract code at that block. Fails while L1 finality is unknown. Not
+    /// cached.
     #[cfg(feature = "node")]
-    pub async fn lc_contract_state(&self) -> anyhow::Result<Option<LightClientStateSol>> {
+    pub async fn lc_contract_header(&self) -> anyhow::Result<Option<LcContractHeader>> {
         if self.chain_config.stake_table_contract.is_none() {
-            tracing::debug!("no stake table contract in the chain config; no LC contract state");
+            tracing::debug!("no stake table contract in the chain config; no LC contract header");
             return Ok(None);
         }
         // The L1 client learns the finalized block asynchronously after start.
@@ -209,7 +217,7 @@ impl NodeState {
             tracing::debug!(
                 %address,
                 l1_block = finalized,
-                "light client not deployed at the finalized L1 block; no LC contract state"
+                "light client not deployed at the finalized L1 block; no LC contract header"
             );
             return Ok(None);
         }
@@ -219,7 +227,11 @@ impl NodeState {
             .call()
             .await
             .context("reading the light client state")?;
-        Ok(Some(state.into()))
+        let state = LightClientStateSol::from(state);
+        Ok(Some(LcContractHeader {
+            height: state.blockHeight,
+            block_comm_root: u256_to_field(state.blockCommRoot),
+        }))
     }
 
     /// The oldest HotShot block height the light client contract still holds a commitment for, or

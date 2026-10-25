@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeMap, BTreeSet, HashMap},
+    collections::{BTreeMap, HashMap},
     ops::Bound,
     sync::Arc,
     time::Duration,
@@ -200,15 +200,16 @@ impl EpochCommittee {
 }
 
 impl EpochCommittees {
-    /// In-memory epochs whose committee holds the epoch root header and the stake table hash.
-    pub fn epochs_with_root(&self) -> BTreeSet<EpochNumber> {
+    /// Highest in-memory epoch whose committee holds its root header and stake table hash.
+    /// Used to select the current epoch, never for availability.
+    pub fn highest_rooted_epoch(&self) -> Option<EpochNumber> {
         let inner = self.inner.read();
         inner
             .snapshots
             .iter()
             .filter(|(_, snapshot)| snapshot.inner.committee.has_root())
             .map(|(epoch, _)| *epoch)
-            .collect()
+            .max()
     }
 
     pub fn epoch_height(&self) -> BlockNumber {
@@ -2558,28 +2559,17 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn epochs_with_root_lists_rooted_epochs() {
+    async fn highest_rooted_epoch_ignores_rootless_and_unhashed() {
         let header = build_epoch_root_header().await;
         let hash = Some(StakeTableState::default().commit());
         let reward = Some(RewardAmount::default());
         let committees = build_committees(4);
-        put_rooted(&committees, 5, Some(header.clone()), hash, reward);
+        put_rooted(&committees, 5, Some(header.clone()), hash, None);
+        assert_eq!(committees.highest_rooted_epoch(), Some(EpochNumber::new(5)));
+
         put_rooted(&committees, 6, None, hash, reward);
-        put_rooted(&committees, 7, Some(header.clone()), None, reward);
-        put_rooted(&committees, 8, Some(header), hash, reward);
-
-        let expected = [5, 8].map(EpochNumber::new).into();
-        assert_eq!(committees.epochs_with_root(), expected);
-    }
-
-    #[tokio::test]
-    async fn epochs_with_root_ignores_reward() {
-        let header = build_epoch_root_header().await;
-        let hash = Some(StakeTableState::default().commit());
-        let committees = build_committees(4);
-        put_rooted(&committees, 5, Some(header), hash, None);
-
-        assert!(committees.epochs_with_root().contains(&EpochNumber::new(5)));
+        put_rooted(&committees, 7, Some(header), None, reward);
+        assert_eq!(committees.highest_rooted_epoch(), Some(EpochNumber::new(5)));
     }
 
     /// Run `add_stored_epoch_roots` over a store holding `header` as the root of each of
@@ -2657,7 +2647,7 @@ mod tests {
     async fn stored_epoch_roots_add_the_missing_epoch() {
         let committees = add_stored_roots(&[3]).await;
 
-        assert!(committees.epochs_with_root().contains(&EpochNumber::new(3)));
+        assert_eq!(committees.highest_rooted_epoch(), Some(EpochNumber::new(3)));
     }
 
     // Mirrors `init_node_state`: the first epoch is set before the stored roots are added.
@@ -2667,7 +2657,7 @@ mod tests {
         let (result, committees) = add_stored_roots_of(header, &[3], true).await;
 
         result.unwrap();
-        assert!(committees.epochs_with_root().contains(&EpochNumber::new(3)));
+        assert_eq!(committees.highest_rooted_epoch(), Some(EpochNumber::new(3)));
     }
 
     #[tokio::test]
@@ -2682,7 +2672,7 @@ mod tests {
     async fn stored_epoch_roots_stop_at_the_first_missing_root() {
         let committees = add_stored_roots(&[3, 5]).await;
 
-        assert!(committees.epochs_with_root().contains(&EpochNumber::new(3)));
+        assert_eq!(committees.highest_rooted_epoch(), Some(EpochNumber::new(3)));
         assert!(committees.snapshot(EpochNumber::new(5)).is_none());
     }
 

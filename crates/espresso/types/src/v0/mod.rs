@@ -176,7 +176,8 @@ pub type PrivKey = <PubKey as SignatureKey>::PrivateKey;
 pub type NetworkConfig = hotshot_types::network::NetworkConfig<SeqTypes>;
 
 pub use self::impls::{
-    AuthenticatedValidatorMap, NodeState, RegisteredValidatorMap, UpgradeMap, ValidatedState,
+    AuthenticatedValidatorMap, LcContractHeader, NodeState, RegisteredValidatorMap, UpgradeMap,
+    ValidatedState,
 };
 pub use crate::{
     v0::impls::{

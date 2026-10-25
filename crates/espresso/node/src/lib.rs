@@ -692,7 +692,7 @@ where
     let block_reward = fetcher.fetch_fixed_block_reward().await.ok();
     info!("Block reward fetched: {:?}", block_reward);
     let epoch_height = genesis.epoch_height.unwrap_or_default();
-    let genesis_epoch_start_block = genesis.epoch_start_block.unwrap_or_default();
+    let epoch_start_block = genesis.epoch_start_block.unwrap_or_default();
     let mut membership = EpochCommittees::new_stake(
         network_config.config.known_nodes_with_stake.clone(),
         network_config.config.known_da_nodes.clone(),
@@ -706,8 +706,7 @@ where
 
     let persistence = Arc::new(persistence);
     let coordinator = EpochMembershipCoordinator::new(membership, epoch_height, &persistence);
-    seed_first_epoch_and_stored_roots(&coordinator, epoch_height, genesis_epoch_start_block)
-        .await?;
+    seed_first_epoch_and_stored_roots(&coordinator, epoch_height, epoch_start_block).await?;
 
     let epoch_rewards_calculator = Arc::new(Mutex::new(EpochRewardsCalculator::new()));
 
@@ -725,7 +724,7 @@ where
         state_catchup: Arc::new(state_catchup_providers.clone()),
         coordinator,
         genesis_version: genesis.genesis_version,
-        epoch_start_block: genesis_epoch_start_block,
+        epoch_start_block,
         epoch_rewards_calculator,
         light_client_contract_address: Cache::builder().max_capacity(1).build(),
         token_contract_address: Cache::builder().max_capacity(1).build(),
@@ -743,7 +742,7 @@ where
 }
 
 /// Stored epoch roots need the first epoch for reward calculation; `load_start_epoch_info` sets it
-/// again later.
+/// again later. With `F` the first epoch, epochs `F` and `F+1` get the genesis committee.
 pub(crate) async fn seed_first_epoch_and_stored_roots(
     coordinator: &EpochMembershipCoordinator<SeqTypes>,
     epoch_height: u64,

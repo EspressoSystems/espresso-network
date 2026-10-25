@@ -174,8 +174,6 @@ where
         let should_vote =
             state_signature::should_vote(&stake_table, &validator_config.state_public_key);
 
-        let epoch_height = initializer.epoch_height();
-
         let upgrade_lock = restored_upgrade_lock(upgrade, &initializer);
         seed_membership(&membership_coordinator, config, &upgrade_lock, &initializer).await;
 
@@ -184,8 +182,7 @@ where
         let state_peer_clients = state_peer_clients(&state_peers);
         let current_epoch = catch_up_cliquenet_stake_tables(
             &membership_coordinator,
-            epoch_height,
-            || instance_state.lc_contract_state(),
+            || instance_state.lc_contract_header(),
             &state_peer_clients,
             &startup_catchup,
         )

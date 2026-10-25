@@ -24,14 +24,13 @@ use committable::{Commitment, Committable};
 use derivative::Derivative;
 use espresso_api::error::SubmitError;
 use espresso_types::{
-    Certificate2, ChainConfig, Header, Leaf2, NodeState, PubKey, SeqTypes, Transaction,
-    ValidatedState,
+    Certificate2, ChainConfig, Header, LcContractHeader, Leaf2, NodeState, PubKey, SeqTypes,
+    Transaction, ValidatedState,
     traits::MembershipPersistence,
     v0::traits::{SequencerPersistence, StateCatchup, StateCertPersistence},
     v0_1::ChainId,
 };
 use futures::{FutureExt, future::BoxFuture};
-use hotshot_contract_adapter::sol_types::LightClientStateSol;
 use hotshot_query_service::{
     availability::{BlockInfo, BlockQueryData, LeafQueryData, VidCommonQueryData},
     types::HeightIndexed,
@@ -49,7 +48,7 @@ use hotshot_types::{
         metrics::Metrics,
         storage::Storage,
     },
-    utils::{StateAndDelta, epoch_from_block_number, is_epoch_root, is_transition_block},
+    utils::{StateAndDelta, is_epoch_root, is_transition_block},
 };
 use http_client::{Client, StatusCode, error::ClientErr};
 use parking_lot::Mutex;
@@ -68,8 +67,8 @@ use crate::{
     context::TaskList,
     init_node_state, load_or_fetch_network_config,
     startup_catchup::{
-        StartupCatchupError, StartupCatchupParams, catch_up_stake_tables, first_epoch,
-        state_peer_clients,
+        StartupCatchupError, StartupCatchupParams, ensure_stake_tables,
+        stake_table_needed_by_block, state_peer_clients,
     },
     state_signature::StateSignatureMemStorage,
 };
@@ -288,20 +287,7 @@ where
         .block_height()
         .await
         .context("fetching the chain height")?;
-    // Fail fast at boot: a config or peer error exits here instead of warning on every poll.
-    // The first poll then finds the table held.
     let from = first_height_to_ingest(next, tip, params.options.max_blocks_per_poll);
-    let first_goal = EpochNumber::new(epoch_from_block_number(from, epoch_height) + 1);
-    catch_up_stake_tables(
-        &coordinator,
-        epoch_height,
-        || read_lc_contract_state(lc_node_state.as_ref()),
-        &state_peer_clients,
-        &params.startup_catchup,
-        first_goal,
-    )
-    .await
-    .context("startup stake-table catchup failed")?;
 
     // Seeded like a validator's lock, so the API validates state certificates against the
     // version the network has upgraded to rather than the base version forever.
@@ -335,6 +321,12 @@ where
         state_peer_clients,
         next,
     };
+    // Fail fast at boot: a config or peer error exits here instead of warning on every poll.
+    // The first poll then finds the table held.
+    follower
+        .ensure_next_stake_table(from)
+        .await
+        .context("startup stake-table catchup failed")?;
     let mut tasks = TaskList::default();
     tasks.spawn("light client follower", follower.run());
 
@@ -680,7 +672,7 @@ impl<P: SequencerPersistence> Follower<P> {
         {
             info = info.with_cert2(cert2);
         }
-        self.catch_up_next_stake_table(leaf.leaf())
+        self.ensure_next_stake_table(leaf.height())
             .await
             .context("catching up the next stake table")?;
         self.sink.append(info).await.context("storing block")?;
@@ -719,7 +711,7 @@ impl<P: SequencerPersistence> Follower<P> {
         }
     }
 
-    /// Expects the stake table of the epoch after the leaf's, which `catch_up_next_stake_table`
+    /// Expects the stake table of the epoch after the leaf's, which `ensure_next_stake_table`
     /// ensures. Awaited, so the transition block finds the stake table it supplies a DRB for, and a
     /// failed derivation fails the block and is retried with it. Nothing is redone when the
     /// membership already knows the result, as after a restart or a peer catchup.
@@ -743,30 +735,16 @@ impl<P: SequencerPersistence> Follower<P> {
         Ok(())
     }
 
-    /// Catch up the stake table of the epoch after `leaf`'s, which `track_epoch` and the API
-    /// read, unless held.
-    async fn catch_up_next_stake_table(&self, leaf: &Leaf2) -> Result<(), StartupCatchupError> {
-        let Some(block_epoch) = leaf.epoch(self.epoch_height) else {
-            return Ok(());
-        };
-        let first_epoch = first_epoch(&self.coordinator)?;
-        let catch_up = async |goal| {
-            catch_up_stake_tables(
-                &self.coordinator,
-                self.epoch_height,
-                || read_lc_contract_state(self.node_state.as_ref()),
-                &self.state_peer_clients,
-                &self.startup_catchup,
-                goal,
-            )
-            .await
-            .map(drop)
-        };
-        catch_up_if_missing(
-            block_epoch,
-            first_epoch,
-            |epoch| self.has_stake_table(epoch),
-            catch_up,
+    /// Before a block at `height` is stored, the table of its epoch + 1 is held. Boot calls it for
+    /// the first height to ingest, `follow` per block.
+    async fn ensure_next_stake_table(&self, height: u64) -> Result<(), StartupCatchupError> {
+        let epoch = stake_table_needed_by_block(height, self.epoch_height);
+        ensure_stake_tables(
+            &self.coordinator,
+            || read_lc_contract_header(self.node_state.as_ref()),
+            &self.state_peer_clients,
+            &self.startup_catchup,
+            epoch..=epoch,
         )
         .await
     }
@@ -852,27 +830,12 @@ fn first_height_to_ingest(next: u64, tip: u64, max_blocks_per_poll: u64) -> u64 
     max(next, tip.saturating_sub(max_blocks_per_poll))
 }
 
-/// Run `catch_up` for the stake table of the epoch after `block_epoch` when `has_stake_table`
-/// lacks it. Epochs seeded from genesis (`<= first_epoch + 1`) are always held.
-async fn catch_up_if_missing(
-    block_epoch: EpochNumber,
-    first_epoch: EpochNumber,
-    has_stake_table: impl Fn(EpochNumber) -> bool,
-    catch_up: impl AsyncFnOnce(EpochNumber) -> Result<(), StartupCatchupError>,
-) -> Result<(), StartupCatchupError> {
-    let next = block_epoch + 1;
-    if next <= first_epoch + 1 || has_stake_table(next) {
-        return Ok(());
-    }
-    catch_up(next).await
-}
-
-/// The LC contract state, `None` when replaying a recorded chain without an LC contract.
-async fn read_lc_contract_state(
+/// The LC contract header, `None` when replaying a recorded chain without an LC contract.
+async fn read_lc_contract_header(
     node_state: Option<&NodeState>,
-) -> anyhow::Result<Option<LightClientStateSol>> {
+) -> anyhow::Result<Option<LcContractHeader>> {
     match node_state {
-        Some(node_state) => node_state.lc_contract_state().await,
+        Some(node_state) => node_state.lc_contract_header().await,
         None => Ok(None),
     }
 }
@@ -915,65 +878,4 @@ async fn connect_light_client(
         genesis,
         options.light_client.clone(),
     ))
-}
-
-#[cfg(test)]
-mod tests {
-    use std::cell::RefCell;
-
-    use pretty_assertions::assert_matches;
-    use rstest::rstest;
-
-    use super::*;
-
-    const FIRST_EPOCH: u64 = 1;
-
-    /// Run `catch_up_if_missing` with a catchup that fails with `StatePeersUnavailable` when
-    /// `fails`. Returns the result and the goals the catchup was called with.
-    async fn run(
-        block_epoch: u64,
-        held: bool,
-        fails: bool,
-    ) -> (Result<(), StartupCatchupError>, Vec<u64>) {
-        let goals = RefCell::new(vec![]);
-        let result = catch_up_if_missing(
-            EpochNumber::new(block_epoch),
-            EpochNumber::new(FIRST_EPOCH),
-            |_| held,
-            async |goal| {
-                goals.borrow_mut().push(goal.u64());
-                if fails {
-                    return Err(StartupCatchupError::StatePeersUnavailable);
-                }
-                Ok(())
-            },
-        )
-        .await;
-        (result, goals.into_inner())
-    }
-
-    #[rstest]
-    #[case::held(5, true, vec![])]
-    #[case::next_epoch_seeded_from_genesis(FIRST_EPOCH, false, vec![])]
-    #[case::first_unseeded_epoch(FIRST_EPOCH + 1, false, vec![FIRST_EPOCH + 2])]
-    #[case::missing(5, false, vec![6])]
-    #[tokio::test]
-    async fn catch_up_if_missing_calls_once_for_the_next_epoch(
-        #[case] block_epoch: u64,
-        #[case] held: bool,
-        #[case] expected_goals: Vec<u64>,
-    ) {
-        let (result, goals) = run(block_epoch, held, false).await;
-
-        assert_matches!(result, Ok(()));
-        assert_eq!(goals, expected_goals);
-    }
-
-    #[tokio::test]
-    async fn catch_up_if_missing_propagates_the_catchup_error() {
-        let (result, goals) = run(5, false, true).await;
-
-        assert_matches!(result, Err(StartupCatchupError::StatePeersUnavailable));
-        assert_eq!(goals, vec![6]);
-    }
 }
