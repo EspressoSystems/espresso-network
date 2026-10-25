@@ -20,8 +20,9 @@ use hotshot_types::{
 use super::common::{
     coordinator_builder::{build_genesis_cert1, build_genesis_proposal},
     utils::{
-        TestData, TestView, build_cert1, build_state_cert_for_test, build_timeout_cert2_signed_by,
-        build_timeout_cert3, mock_membership,
+        TestData, TestView, build_cert1, build_cert2, build_state_cert_for_test,
+        build_timeout_cert2_signed_by, build_timeout_cert3, build_timeout_cert3_with_lock,
+        mock_membership,
     },
 };
 use crate::{
@@ -29,7 +30,7 @@ use crate::{
     consensus::{ConsensusInput, ConsensusOutput},
     coordinator::GcScope,
     helpers::{proposal_commitment, test_timeout_epoch_lock, test_upgrade_lock},
-    message::{Proposal, ProposalMessage, TimeoutBallot, TimeoutVote},
+    message::{Certificate1, Proposal, ProposalMessage, TimeoutBallot, TimeoutVote},
     outbox::Outbox,
     proposal::{ProposalValidator, ValidationError},
     state::StateResponse,
@@ -967,6 +968,112 @@ async fn test_certified_proposal_without_own_share_is_announced() {
     );
 }
 
+/// Under the certificate rule, a proposal without this node's VID share that
+/// arrives after the `Certificate2` over it is adopted on its word, as one
+/// arriving before it is, and its view decides.
+#[tokio::test]
+async fn test_proposal_after_its_certificates_is_adopted() {
+    let mut harness =
+        ConsensusHarness::new_with_upgrade_lock(0, 10, test_timeout_epoch_lock()).await;
+    let test_data = TestData::new(3).await;
+    let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
+    let view = &test_data.views[0];
+
+    harness.apply(view.cert1_input()).await;
+    harness.apply(view.cert2_input()).await;
+    assert!(
+        !any(harness.outputs(), is_leaf_decided),
+        "nothing decides without the block"
+    );
+
+    let (proposal, _own_share) = view.proposal_input_consensus(&node_key);
+    harness.apply(proposal).await;
+    assert!(
+        any(harness.outputs(), is_proposal_certified),
+        "the proposal is adopted on the certificates already held"
+    );
+    assert!(
+        any(harness.outputs(), is_leaf_decided),
+        "and its view decides"
+    );
+}
+
+/// A `Certificate2` names its block by number as well as by leaf: one whose
+/// number is not that of the block it names decides nothing.
+#[tokio::test]
+async fn test_cert2_of_another_block_number_decides_nothing() {
+    let mut harness =
+        ConsensusHarness::new_with_upgrade_lock(0, 10, test_timeout_epoch_lock()).await;
+    let test_data = TestData::new(3).await;
+    let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
+    let view = &test_data.views[0];
+    harness
+        .apply_pair(view.proposal_input_consensus(&node_key))
+        .await;
+    harness.apply(view.block_reconstructed_input()).await;
+    harness.apply(view.cert1_input()).await;
+
+    let block = BlockHeader::<TestTypes>::block_number(&view.proposal.data.block_header);
+    let membership = mock_membership()
+        .membership_for_epoch(Some(view.epoch_number))
+        .unwrap();
+    let (public_key, private_key) = BLSPubKey::generated_from_seed_indexed([0; 32], 0);
+    let misnumbered = build_cert2(
+        proposal_commitment(&view.proposal.data),
+        view.epoch_number,
+        block + 1,
+        &membership,
+        view.view_number,
+        &public_key,
+        &private_key,
+    );
+    harness
+        .apply(ConsensusInput::Certificate2(ValidCert::new(
+            misnumbered,
+            view.epoch_number,
+        )))
+        .await;
+    assert!(
+        !any(harness.outputs(), is_leaf_decided),
+        "a certificate naming another block number decides nothing"
+    );
+}
+
+/// A block whose child was decided first, its own proposal missing then, is
+/// decided once the fetched proposal arrives: the gap is filled, not left.
+#[tokio::test]
+async fn test_fetched_proposal_fills_a_gap_behind_a_decided_child() {
+    let mut harness =
+        ConsensusHarness::new_with_upgrade_lock(0, 10, test_timeout_epoch_lock()).await;
+    let test_data = TestData::new(3).await;
+    let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
+    let (parent, child) = (&test_data.views[0], &test_data.views[1]);
+
+    harness.apply(parent.cert1_input()).await;
+    harness.apply(parent.cert2_input()).await;
+    harness
+        .apply_pair(child.proposal_input_consensus(&node_key))
+        .await;
+    harness.apply(child.cert1_input()).await;
+    harness.apply(child.cert2_input()).await;
+    assert!(
+        any(harness.outputs(), |o| decides_view(o, 2)),
+        "setup: the child is decided"
+    );
+    assert!(
+        !any(harness.outputs(), |o| decides_view(o, 1)),
+        "setup: the parent is not, its proposal missing"
+    );
+
+    harness
+        .apply(ConsensusInput::FetchedProposal(parent.proposal_message()))
+        .await;
+    assert!(
+        any(harness.outputs(), |o| decides_view(o, 1)),
+        "the fetched parent is decided"
+    );
+}
+
 /// Obtaining a Cert2 broadcasts it once so peers that missed the vote2s can
 /// still decide, and a re-delivered Cert2 for the same view is not re-broadcast.
 #[tokio::test]
@@ -1432,6 +1539,378 @@ async fn test_leader_sends_proposal() {
     assert!(
         any(harness.outputs(), is_proposal),
         "Leader should send a proposal when it has cert1, header, block, and vid_disperse"
+    );
+}
+
+/// Whether a node locked at view 3 decides view 2, and whether it votes1 there,
+/// when view 2's proposal and certificates arrive after the lock moved.
+async fn proposal_behind_the_lock(
+    lock: hotshot_types::message::UpgradeLock<TestTypes>,
+) -> (bool, bool) {
+    let test_data = TestData::new(3).await;
+    let mut harness = ConsensusHarness::new_with_upgrade_lock(0, 10, lock).await;
+    let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
+
+    let later = &test_data.views[2];
+    harness
+        .apply_pair(later.proposal_input_consensus(&node_key))
+        .await;
+    harness.apply(later.block_reconstructed_input()).await;
+    harness.apply(later.cert1_input()).await;
+    assert_eq!(
+        harness.consensus.lock_view().map(|lock| lock.view),
+        Some(ViewNumber::new(3)),
+        "setup: the node is locked at view 3"
+    );
+
+    let earlier = &test_data.views[1];
+    harness
+        .apply_pair(earlier.proposal_input_consensus(&node_key))
+        .await;
+    harness.apply(earlier.block_reconstructed_input()).await;
+    harness.apply(earlier.cert1_input()).await;
+    harness.apply(earlier.cert2_input()).await;
+    (
+        any(harness.outputs(), |o| decides_view(o, 2)),
+        any(harness.outputs(), |o| is_vote1_for_view(o, 2)),
+    )
+}
+
+/// Under the certificate rule a proposal behind the lock is kept and decided by
+/// its `Certificate2`, with no vote1. Before it, the proposal is not wanted, as
+/// it fails `is_safe`.
+#[tokio::test]
+async fn test_proposal_behind_the_lock_is_decided_under_the_certificate_rule() {
+    assert_eq!(
+        proposal_behind_the_lock(test_timeout_epoch_lock()).await,
+        (true, false),
+        "under the certificate rule: decided, no vote1"
+    );
+    let before = hotshot_types::message::UpgradeLock::new(versions::Upgrade::trivial(
+        versions::NEW_PROTOCOL_VERSION,
+    ));
+    assert_eq!(
+        proposal_behind_the_lock(before).await,
+        (false, false),
+        "before the certificate rule: not wanted"
+    );
+}
+
+/// A node at 0.7 that has seen view 1's proposal and payload, with the
+/// confirmations named by `defer` withheld.
+async fn node_at_view_one(
+    test_data: &TestData,
+    defer: impl FnOnce(&mut ConsensusHarness),
+) -> ConsensusHarness {
+    let mut harness =
+        ConsensusHarness::new_with_upgrade_lock(0, 10, test_timeout_epoch_lock()).await;
+    defer(&mut harness);
+    let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
+    harness
+        .apply_pair(test_data.views[0].proposal_input_consensus(&node_key))
+        .await;
+    harness
+        .apply(test_data.views[0].block_reconstructed_input())
+        .await;
+    harness
+}
+
+/// A vote2 that waits for its lock to be stored is not sent once the node has
+/// timed out a later view: a node's timeout vote comes after every vote2 it casts
+/// at that view or an earlier one.
+#[tokio::test]
+async fn test_vote2_waiting_on_storage_is_not_sent_after_a_timeout() {
+    let test_data = TestData::new(3).await;
+    let mut harness = node_at_view_one(&test_data, |h| h.defer_lock(ViewNumber::new(1))).await;
+    harness.apply(test_data.views[0].cert1_input()).await;
+    assert!(
+        !any(harness.outputs(), |o| is_vote2_for_view(o, 1)),
+        "setup: the vote2 waits for its lock to be stored"
+    );
+
+    harness
+        .apply(ConsensusInput::Timeout(ViewNumber::new(2)))
+        .await;
+    assert!(
+        any(harness.outputs(), is_send_timeout_vote),
+        "setup: the node times view 2 out"
+    );
+    harness.release_lock(ViewNumber::new(1)).await;
+    assert!(
+        !any(harness.outputs(), |o| is_vote2_for_view(o, 1)),
+        "no vote2 at a view no later than one timed out"
+    );
+}
+
+/// A vote1 that waits for its action to be stored is not sent once the node has
+/// timed its view out. The specification permits it, but no longer owes it.
+#[tokio::test]
+async fn test_vote1_waiting_on_storage_is_not_sent_after_a_timeout() {
+    let test_data = TestData::new(3).await;
+    let mut harness = node_at_view_one(&test_data, |h| {
+        h.defer_action(ViewNumber::new(1), ActionKind::Vote)
+    })
+    .await;
+    assert!(
+        !any(harness.outputs(), |o| is_vote1_for_view(o, 1)),
+        "setup: the vote1 waits for its action to be stored"
+    );
+
+    harness
+        .apply(ConsensusInput::Timeout(ViewNumber::new(1)))
+        .await;
+    harness
+        .release_action(ViewNumber::new(1), ActionKind::Vote)
+        .await;
+    assert!(
+        !any(harness.outputs(), |o| is_vote1_for_view(o, 1)),
+        "no vote1 in a view timed out"
+    );
+}
+
+/// A vote2 that waits for its lock to be stored, when the view's `Certificate2`
+/// arrives meanwhile: the block is decided, and the vote2 is not sent. The
+/// specification permits it, but no longer owes it.
+#[tokio::test]
+async fn test_cert2_while_vote2_waits_on_storage_decides_without_it() {
+    let test_data = TestData::new(3).await;
+    let mut harness = node_at_view_one(&test_data, |h| h.defer_lock(ViewNumber::new(1))).await;
+    harness.apply(test_data.views[0].cert1_input()).await;
+    harness.apply(test_data.views[0].cert2_input()).await;
+    assert!(
+        any(harness.outputs(), |o| decides_view(o, 1)),
+        "the Certificate2 decides the block while the vote2 waits"
+    );
+    harness.release_lock(ViewNumber::new(1)).await;
+    assert!(
+        !any(harness.outputs(), |o| is_vote2_for_view(o, 1)),
+        "no vote2 once the view is committed"
+    );
+}
+
+/// A proposal that waits for its action to be stored is not sent once the
+/// leader has timed its view out, as none is made after the timeout.
+#[tokio::test]
+async fn test_proposal_waiting_on_storage_is_not_sent_after_a_timeout() {
+    let test_data = TestData::new(4).await;
+    let leader_for_view_2 = test_data.views[1].leader_public_key;
+    let leader_index = node_index_for_key(&leader_for_view_2);
+    let mut harness =
+        ConsensusHarness::new_with_upgrade_lock(leader_index, 10, test_timeout_epoch_lock()).await;
+    harness.defer_action(ViewNumber::new(2), ActionKind::Propose);
+
+    harness
+        .apply_pair(test_data.views[0].proposal_input_consensus(&leader_for_view_2))
+        .await;
+    harness.apply(test_data.views[0].cert1_input()).await;
+    assert!(
+        !any(harness.outputs(), is_proposal),
+        "setup: the proposal waits for its action to be stored"
+    );
+
+    harness
+        .apply(ConsensusInput::Timeout(ViewNumber::new(2)))
+        .await;
+    harness
+        .release_action(ViewNumber::new(2), ActionKind::Propose)
+        .await;
+    assert!(
+        !any(harness.outputs(), is_proposal),
+        "no proposal for a view the leader timed out"
+    );
+}
+
+/// A leader proposes no block whose parent certificate is at the proposal's own
+/// view.
+///
+/// The leader of view 2 enters it on a timeout certificate, so it builds on its
+/// lock. Before its header arrives, a view-2 block under its own key, which it does
+/// not remember proposing, as after a restart, is certified and moves its lock to
+/// view 2. That lock cannot be the parent of a block at view 2.
+#[tokio::test]
+async fn test_leader_never_proposes_on_a_certificate_of_its_own_view() {
+    let test_data = TestData::new(3).await;
+    let leader_for_view_2 = test_data.views[1].leader_public_key;
+    let leader_index = node_index_for_key(&leader_for_view_2);
+    let mut harness =
+        ConsensusHarness::new_with_upgrade_lock(leader_index, 10, test_timeout_epoch_lock()).await;
+    let genesis_leaf = harness.consensus.last_decided_leaf().clone();
+    let genesis_cert1 = build_genesis_cert1(&genesis_leaf);
+    harness.consensus.seed_parent(
+        genesis_cert1.clone(),
+        build_genesis_proposal(&genesis_leaf, &genesis_cert1),
+        std::iter::empty(),
+    );
+    harness.defer_header(ViewNumber::new(2));
+    harness
+        .apply_pair(test_data.views[0].proposal_input_consensus(&leader_for_view_2))
+        .await;
+    harness
+        .apply(test_data.views[0].block_reconstructed_input())
+        .await;
+    let epoch = EpochNumber::genesis();
+    let membership = harness
+        .membership_coordinator
+        .membership_for_epoch(Some(epoch))
+        .expect("the genesis epoch resolves");
+    let timed_out = &test_data.views[0];
+    harness
+        .apply(ConsensusInput::TimeoutCertificate(ValidCert::new(
+            build_timeout_cert3(
+                timed_out.view_number,
+                epoch,
+                &membership,
+                &timed_out.leader_public_key,
+                &timed_out.leader_private_key,
+            ),
+            epoch,
+        )))
+        .await;
+
+    harness
+        .apply_pair(test_data.views[1].proposal_input_consensus(&leader_for_view_2))
+        .await;
+    harness
+        .apply(test_data.views[1].block_reconstructed_input())
+        .await;
+    harness.apply(test_data.views[0].cert1_input()).await;
+    harness.apply(test_data.views[1].cert1_input()).await;
+    harness.release_header(ViewNumber::new(2)).await;
+
+    let parents: Vec<_> = harness
+        .outputs()
+        .iter()
+        .filter_map(|o| match o {
+            ConsensusOutput::SendProposal(p) => {
+                Some((p.data.view_number, p.data.justify_qc.view_number()))
+            },
+            _ => None,
+        })
+        .collect();
+    assert!(
+        parents.iter().all(|(view, parent)| parent < view),
+        "every proposal's parent is at an earlier view: {parents:?}"
+    );
+}
+
+/// A timeout certificate of the next epoch for `timed_out`, locked on `lock`,
+/// which moves a node to that epoch without moving it past the view after.
+fn next_epoch_timeout_cert(
+    harness: &ConsensusHarness,
+    timed_out: ViewNumber,
+    lock: Option<Certificate1<TestTypes>>,
+) -> ConsensusInput<TestTypes> {
+    let ahead = EpochNumber::genesis() + 2;
+    harness
+        .membership_coordinator
+        .membership()
+        .register_epoch(ahead, [0u8; 32]);
+    let membership = harness
+        .membership_coordinator
+        .membership_for_epoch(Some(ahead))
+        .expect("the epoch resolves");
+    let tc = build_timeout_cert3_with_lock(timed_out, ahead, lock, &membership);
+    ConsensusInput::TimeoutCertificate(ValidCert::new(TimeoutEvidence::V3(tc), ahead))
+}
+
+/// A proposal that waits for its action to be stored is not sent once the
+/// leader has moved to a later epoch: a node proposes for no epoch earlier than
+/// its own.
+#[tokio::test]
+async fn test_proposal_waiting_on_storage_is_not_sent_after_an_epoch_change() {
+    let test_data = TestData::new(4).await;
+    let leader_for_view_2 = test_data.views[1].leader_public_key;
+    let leader_index = node_index_for_key(&leader_for_view_2);
+    let mut harness =
+        ConsensusHarness::new_with_upgrade_lock(leader_index, 10, test_timeout_epoch_lock()).await;
+    harness.defer_action(ViewNumber::new(2), ActionKind::Propose);
+    harness
+        .apply_pair(test_data.views[0].proposal_input_consensus(&leader_for_view_2))
+        .await;
+    harness.apply(test_data.views[0].cert1_input()).await;
+    assert!(
+        !any(harness.outputs(), is_proposal),
+        "setup: the proposal waits for its action to be stored"
+    );
+
+    let tc = next_epoch_timeout_cert(
+        &harness,
+        ViewNumber::new(1),
+        Some(test_data.views[0].cert1.clone()),
+    );
+    harness.apply(tc).await;
+    assert_eq!(
+        harness.consensus.current_epoch(),
+        Some(EpochNumber::genesis() + 2),
+        "setup: the leader is in the next epoch, still in view 2"
+    );
+    harness
+        .release_action(ViewNumber::new(2), ActionKind::Propose)
+        .await;
+    assert!(
+        !any(harness.outputs(), is_proposal),
+        "no proposal of an epoch the leader has left"
+    );
+}
+
+/// A vote1 that waits for its action to be stored is not sent once the node
+/// has moved to a later epoch.
+#[tokio::test]
+async fn test_vote1_waiting_on_storage_is_not_sent_after_an_epoch_change() {
+    let test_data = TestData::new(3).await;
+    let mut harness = node_at_view_one(&test_data, |h| {
+        h.defer_action(ViewNumber::new(1), ActionKind::Vote)
+    })
+    .await;
+    assert!(
+        !any(harness.outputs(), |o| is_vote1_for_view(o, 1)),
+        "setup: the vote1 waits for its action to be stored"
+    );
+
+    let tc = next_epoch_timeout_cert(&harness, ViewNumber::genesis(), None);
+    harness.apply(tc).await;
+    assert_eq!(
+        harness.consensus.current_epoch(),
+        Some(EpochNumber::genesis() + 2),
+        "setup: the node is in the next epoch, still in view 1"
+    );
+    harness
+        .release_action(ViewNumber::new(1), ActionKind::Vote)
+        .await;
+    assert!(
+        !any(harness.outputs(), |o| is_vote1_for_view(o, 1)),
+        "no vote1 of an epoch the node has left"
+    );
+}
+
+/// A leader that times its view out before its header is built does not
+/// propose in that view once the header arrives, at the version whose timeout
+/// votes sign their lock.
+#[tokio::test]
+async fn test_leader_does_not_propose_in_a_view_it_timed_out() {
+    let test_data = TestData::new(4).await;
+    let leader_for_view_2 = test_data.views[1].leader_public_key;
+    let leader_index = node_index_for_key(&leader_for_view_2);
+    let mut harness =
+        ConsensusHarness::new_with_upgrade_lock(leader_index, 10, test_timeout_epoch_lock()).await;
+    harness.defer_header(ViewNumber::new(2));
+
+    harness
+        .apply_pair(test_data.views[0].proposal_input_consensus(&leader_for_view_2))
+        .await;
+    harness.apply(test_data.views[0].cert1_input()).await;
+    assert!(
+        any(harness.outputs(), is_request_block_and_header),
+        "setup: the leader asks for its header"
+    );
+
+    harness
+        .apply(ConsensusInput::Timeout(ViewNumber::new(2)))
+        .await;
+    harness.release_header(ViewNumber::new(2)).await;
+    assert!(
+        !any(harness.outputs(), is_proposal),
+        "no proposal for a view the leader timed out"
     );
 }
 
