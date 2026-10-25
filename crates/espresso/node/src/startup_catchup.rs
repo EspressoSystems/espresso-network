@@ -164,6 +164,10 @@ where
     }
 
     catchup.catch_up_from_peers(highest_held, goal).await?;
+    // Epochs above the goal can be held while the goal itself is a gap.
+    if membership.snapshot(goal).is_none() {
+        return Err(StartupCatchupError::MissingStakeTable { epoch: goal });
+    }
     Ok(highest_held.max(goal))
 }
 
@@ -1222,6 +1226,28 @@ mod tests {
         .unwrap();
 
         assert_eq!(highest, EpochNumber::new(FIRST_EPOCH + 1));
+    }
+
+    /// A held epoch above the goal does not stand in for a goal without a stake table.
+    #[test_log::test(tokio::test)]
+    async fn goal_below_held_epochs_without_table_fails() {
+        let (client, _) = chain().await;
+        let coordinator = coordinator(SeededStore::for_chain(&client, (N + 1)..=(N + 1)).await);
+        hold(&coordinator, (N + 1)..=(N + 1)).await;
+        assert!(has_epoch_root(&coordinator, N + 1));
+        let goal = EpochNumber::new(N - 1);
+
+        let result = catch_up_stake_tables(
+            &coordinator,
+            EPOCH_HEIGHT,
+            || async { Ok(None) },
+            &peer_list(&[client]),
+            &PARAMS,
+            goal,
+        )
+        .await;
+
+        assert_matches!(result, Err(StartupCatchupError::MissingStakeTable { epoch }) if epoch == goal);
     }
 
     /// A failed peer catchup step is retried until the goal epoch is held, not read as the tip.
