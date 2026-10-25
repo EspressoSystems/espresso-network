@@ -6,6 +6,10 @@ use serde::{
 };
 pub use vbs::version::Version;
 
+pub use crate::depth::deserialize_limited;
+
+mod depth;
+
 // Known versions:
 
 pub const VERSION_0_0: Version = version(0, 0);
@@ -50,7 +54,7 @@ where
     T: DeserializeOwned,
 {
     let (version, bytes) = Version::deserialize(bytes).map_err(|_| VersionError::Decode)?;
-    let value = bincode::deserialize(bytes)?;
+    let value = deserialize_limited(bytes)?;
     Ok((version, value))
 }
 
@@ -239,7 +243,7 @@ mod tests {
 
     use super::{
         DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_VERSION, NEW_PROTOCOL_VERSION, TIMEOUT_EPOCH_VERSION,
-        VersionError, decode, encode, parse_version, version,
+        Version, VersionError, decode, encode, parse_version, version,
     };
 
     /// Ensure our `encode`/`decode` matches `vbs`'s.
@@ -299,6 +303,25 @@ mod tests {
         QuickCheck::new()
             .rng(Gen::new(4))
             .quickcheck(prop_identical_encoding as fn(_))
+    }
+
+    #[test]
+    fn decode_rejects_deeply_nested_input() {
+        #[derive(Debug, Deserialize)]
+        #[expect(dead_code, reason = "only ever decoded")]
+        enum Nest {
+            End,
+            Inner(Box<Nest>),
+        }
+
+        let end = 0u32.to_le_bytes();
+        let inner = 1u32.to_le_bytes();
+        let mut bytes = Version::serialize(&version(0, 1));
+        bytes.extend(inner.repeat(1_000));
+        bytes.extend(end);
+
+        let err = decode::<Nest>(&bytes).unwrap_err();
+        assert!(err.to_string().contains("nested more than"), "{err}");
     }
 
     #[test]
