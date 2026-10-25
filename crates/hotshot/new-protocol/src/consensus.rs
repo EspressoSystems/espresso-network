@@ -281,7 +281,7 @@ pub struct Consensus<T: NodeType> {
     pending_vote2: BTreeMap<ViewEpoch, PendingVote2<T>>,
     pending_proposal: BTreeMap<ViewEpoch, SignedProposal<T, Proposal<T>>>,
     pending_revote: BTreeMap<ViewEpoch, ReVoteMessage<T, Validated>>,
-    pending_timeout_vote: BTreeMap<ViewNumber, PendingTimeoutVote<T>>,
+    pending_timeout_vote: BTreeMap<ViewEpoch, PendingTimeoutVote<T>>,
 
     /// The highest view this node has sent, or may have sent before a
     /// restart, a lock-carrying timeout vote for.
@@ -637,8 +637,7 @@ impl<T: NodeType> Consensus<T> {
 
     /// Whether a certificate at `view` is of an epoch earlier than this node's,
     /// under the certificate rule: one of the outgoing committee's late
-    /// re-votes, which must not move this node through the incoming
-    /// committee's views.
+    /// re-votes, which this node does not lock on.
     fn behind_current_epoch(&self, view: ViewNumber, epoch: EpochNumber) -> bool {
         self.upgrade_lock.certificate_rule(view) && epoch < self.current_epoch
     }
@@ -1292,7 +1291,8 @@ impl<T: NodeType> Consensus<T> {
                 self.pending_vote2 = self.pending_vote2.split_off(&ViewEpoch::start(view));
                 self.pending_proposal = self.pending_proposal.split_off(&ViewEpoch::start(view));
                 self.pending_revote = self.pending_revote.split_off(&ViewEpoch::start(view));
-                self.pending_timeout_vote = self.pending_timeout_vote.split_off(&view);
+                self.pending_timeout_vote =
+                    self.pending_timeout_vote.split_off(&ViewEpoch::start(view));
                 self.revotes = self.revotes.split_off(&keep_from);
                 self.revote_commits = self.revote_commits.split_off(&keep_from);
                 self.revote_fetches = self
@@ -2085,12 +2085,12 @@ impl<T: NodeType> Consensus<T> {
         self.maybe_vote_2_and_update_lock(view, outbox);
         self.maybe_decide(view, outbox);
 
+        // Every `Cert1` is grounds for the view after it, an earlier epoch's
+        // included: a node that ignored one would split from the nodes that took
+        // it before the epoch change, and the two halves could time out
+        // different views for ever.
         let curr_view = self.current_view;
-        let next_view = view + 1;
-
-        if !self.behind_current_epoch(view, epoch) {
-            self.set_current_view_max(next_view);
-        }
+        self.set_current_view_max(view + 1);
         self.set_current_epoch_max(epoch);
 
         if self.current_view != curr_view {
@@ -2272,7 +2272,8 @@ impl<T: NodeType> Consensus<T> {
             self.send_timeout_vote(vote, evidence, outbox);
         } else {
             self.request_action(view, Some(epoch), ActionKind::Timeout, outbox);
-            self.pending_timeout_vote.insert(view, (vote, evidence));
+            self.pending_timeout_vote
+                .insert(ViewEpoch(view, epoch), (vote, evidence));
         }
     }
 
@@ -2280,8 +2281,15 @@ impl<T: NodeType> Consensus<T> {
         if !self.stored_actions.contains(&(view, ActionKind::Timeout)) {
             return;
         }
-        if let Some((vote, evidence)) = self.pending_timeout_vote.remove(&view) {
-            self.send_timeout_vote(vote, evidence, outbox);
+        let pending: Vec<ViewEpoch> = self
+            .pending_timeout_vote
+            .range(ViewEpoch::at_view(view))
+            .map(|(key, _)| *key)
+            .collect();
+        for key in pending {
+            if let Some((vote, evidence)) = self.pending_timeout_vote.remove(&key) {
+                self.send_timeout_vote(vote, evidence, outbox);
+            }
         }
     }
 
@@ -3591,7 +3599,7 @@ impl<T: NodeType> Consensus<T> {
 
         if self.voted_2_at(view, epoch)
             || self.certs2.contains_key(&key)
-            || self.decided_views.contains(&block_view)
+            || self.decided_views.contains(&view)
             || view <= self.decide_floor()
         {
             return;

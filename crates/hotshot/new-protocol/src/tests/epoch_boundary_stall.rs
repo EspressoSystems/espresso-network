@@ -23,9 +23,12 @@ use hotshot_types::{
     vote::HasViewNumber,
 };
 
-use super::common::utils::{
-    ConsensusHarness, TEST_DRB_RESULT, TestData, build_cert1, build_cert2,
-    build_timeout_cert3_with_lock,
+use super::common::{
+    assertions::{any, decides_view, is_vote2_for_view},
+    utils::{
+        ConsensusHarness, TEST_DRB_RESULT, TestData, build_cert1, build_cert2,
+        build_timeout_cert3_with_lock,
+    },
 };
 use crate::{
     cert_verifier::ValidCert,
@@ -456,6 +459,35 @@ async fn node_votes_on_a_revote_naming_a_revotes_certificate() {
     assert_eq!(vote.vote.data, boundary.cert1.data);
 }
 
+/// A node that decided the boundary block still votes2 on a re-vote's
+/// `Certificate1` over it: the nodes that missed the first commit need the
+/// re-vote's.
+#[tokio::test]
+async fn node_votes2_on_a_revote_of_a_block_it_decided() {
+    let test_data = TestData::new_with_epoch_height(BOUNDARY + 1, EPOCH_HEIGHT).await;
+    let boundary = &test_data.views[BOUNDARY];
+    let mut harness =
+        node_before_the_boundary_certificate(0, &test_data, test_timeout_epoch_lock()).await;
+    harness.apply(boundary.cert1_input()).await;
+    harness.apply(boundary.cert2_input()).await;
+    assert!(
+        any(harness.outputs(), |o| decides_view(o, 10)),
+        "setup: the node decides the boundary block"
+    );
+
+    let (cert1_12, _) = revote_certs(&harness, &test_data, view(12));
+    harness
+        .apply(ConsensusInput::Certificate1(ValidCert::new(
+            cert1_12,
+            epoch(1),
+        )))
+        .await;
+    assert!(
+        any(harness.outputs(), |o| is_vote2_for_view(o, 12)),
+        "the node votes2 on the re-vote's certificate"
+    );
+}
+
 /// A vote2 still waiting for its lock to be stored is not sent once the node
 /// has moved to a later epoch: a node votes for no epoch earlier than its own.
 #[tokio::test]
@@ -762,6 +794,34 @@ async fn a_first_block_skipping_views_without_a_timeout_is_malformed() {
         crate::proposal::well_formed(&forked, EPOCH_HEIGHT),
         Err(crate::proposal::MalformedProposal::ViewChangeEvidenceMissing(v)) if v == view(21)
     ));
+}
+
+/// The outgoing epoch's re-vote certificate moves a node already in the next
+/// epoch to the view after it, as it moves a node that takes it before the
+/// epoch change. Otherwise the two would time out different views, and with
+/// enough of each no timeout certificate would form.
+#[tokio::test]
+async fn earlier_epochs_revote_certificate_moves_a_node_in_the_next_epoch() {
+    let test_data = TestData::new_with_epoch_height(BOUNDARY + 2, EPOCH_HEIGHT).await;
+    let mut harness = node_at_the_first_block(0, &test_data).await;
+    assert_eq!(
+        harness.consensus.current_epoch(),
+        Some(epoch(2)),
+        "setup: in epoch 2"
+    );
+    assert_eq!(
+        harness.consensus.current_view(),
+        view(11),
+        "setup: in view 11"
+    );
+    let (revote_cert, _) = revote_certs(&harness, &test_data, view(11));
+    harness
+        .apply(ConsensusInput::Certificate1(ValidCert::new(
+            revote_cert,
+            epoch(1),
+        )))
+        .await;
+    assert_eq!(harness.consensus.current_view(), view(12));
 }
 
 /// A certificate of the next epoch supersedes the outgoing epoch's re-vote

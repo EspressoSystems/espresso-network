@@ -67,7 +67,7 @@ use crate::{
     },
     outbox::Outbox,
     state::StateResponse,
-    storage::StorageOutput,
+    storage::{ActionKind, StorageOutput},
     trace,
     upgrade::expected_upgrade_data,
 };
@@ -1152,6 +1152,8 @@ pub(crate) struct ConsensusHarness {
     pub collected: Outbox<ConsensusOutput<TestTypes>>,
     deferred_states: BTreeMap<ViewNumber, ConsensusInput<TestTypes>>,
     defer_state_for: BTreeSet<ViewNumber>,
+    deferred_actions: BTreeSet<(ViewNumber, ActionKind)>,
+    defer_action_for: BTreeSet<(ViewNumber, ActionKind)>,
     trace: trace::Recorder,
 }
 
@@ -1222,6 +1224,8 @@ impl ConsensusHarness {
             collected: Outbox::new(),
             deferred_states: BTreeMap::new(),
             defer_state_for: BTreeSet::new(),
+            deferred_actions: BTreeSet::new(),
+            defer_action_for: BTreeSet::new(),
             trace: trace::Recorder::for_current_test(),
         }
     }
@@ -1274,6 +1278,8 @@ impl ConsensusHarness {
             collected: Outbox::new(),
             deferred_states: BTreeMap::new(),
             defer_state_for: BTreeSet::new(),
+            deferred_actions: BTreeSet::new(),
+            defer_action_for: BTreeSet::new(),
             trace: trace::Recorder::for_current_test(),
         }
     }
@@ -1341,6 +1347,28 @@ impl ConsensusHarness {
         self.apply(input).await;
     }
 
+    /// Withhold the storage confirmation of the `kind` action at `view` until
+    /// [`Self::release_action`].
+    ///
+    /// The harness confirms each action as soon as it is recorded, so a vote1 or
+    /// a proposal waiting on storage never waits. A test that turns on what
+    /// happens meanwhile places the delay. Must be called before the action is
+    /// recorded.
+    pub fn defer_action(&mut self, view: ViewNumber, kind: ActionKind) {
+        self.defer_action_for.insert((view, kind));
+    }
+
+    /// Deliver the confirmation withheld by [`Self::defer_action`].
+    pub async fn release_action(&mut self, view: ViewNumber, kind: ActionKind) {
+        self.defer_action_for.remove(&(view, kind));
+        assert!(
+            self.deferred_actions.remove(&(view, kind)),
+            "an action for this view was deferred"
+        );
+        self.apply(ConsensusInput::Stored(StorageOutput::Action(view, kind)))
+            .await;
+    }
+
     /// Apply a [`ConsensusInput`] and drain outputs, auto-responding to
     /// actions that consensus expects feedback for.
     pub async fn apply(&mut self, input: ConsensusInput<TestTypes>) {
@@ -1381,10 +1409,14 @@ impl ConsensusHarness {
                 }
             },
             ConsensusOutput::RecordAction(view, _, kind) => {
-                self.apply_recorded(
-                    ConsensusInput::Stored(StorageOutput::Action(*view, *kind)),
-                    outbox,
-                );
+                if self.defer_action_for.contains(&(*view, *kind)) {
+                    self.deferred_actions.insert((*view, *kind));
+                } else {
+                    self.apply_recorded(
+                        ConsensusInput::Stored(StorageOutput::Action(*view, *kind)),
+                        outbox,
+                    );
+                }
             },
             ConsensusOutput::PersistHighQc(high_qc) => {
                 self.apply_recorded(
