@@ -145,6 +145,8 @@ const TIMED_OUT_AT_5: [u64; 7] = [0, 1, 2, 3, 6, 7, 8];
 ///
 #[tokio::test]
 async fn conflicting_quorums_cannot_both_reach_threshold() {
+    // Tests behaviour before 0.7.
+    crate::helpers::pin_test_version(versions::NEW_PROTOCOL_VERSION);
     let test_data = TestData::new(6).await;
     let committed = &test_data.views[1]; // view 2, parented at view 1
     let leader6 = test_data.views[5].leader_public_key;

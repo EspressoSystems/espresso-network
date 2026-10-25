@@ -959,6 +959,16 @@ impl<T: NodeType> Consensus<T> {
                 }
                 return;
             },
+            ConsensusInput::Timeout(view)
+                if view > self.current_view.max(self.last_decided_view + 1) =>
+            {
+                debug!(
+                    %view,
+                    current_view = %self.current_view,
+                    "ignoring timeout for a view not reached"
+                );
+                Protocol::Abort
+            },
             ConsensusInput::Timeout(view) => {
                 let epoch = self.current_epoch;
                 let leader = self.leader_label(view, epoch);

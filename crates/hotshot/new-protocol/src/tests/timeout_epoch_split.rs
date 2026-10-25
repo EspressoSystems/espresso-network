@@ -272,6 +272,8 @@ async fn v3_timeout_votes_split_at_epoch_boundary_form_no_certificate() {
 /// and the V2 collector then aggregates all 10 into a certificate.
 #[tokio::test]
 async fn v2_timeout_votes_split_at_epoch_boundary_form_a_certificate() {
+    // Tests behaviour before 0.7.
+    crate::helpers::pin_test_version(versions::NEW_PROTOCOL_VERSION);
     let lock = test_upgrade_lock();
     let test_data = TestData::new_with_epoch_height(BOUNDARY + 2, EPOCH_HEIGHT).await;
 

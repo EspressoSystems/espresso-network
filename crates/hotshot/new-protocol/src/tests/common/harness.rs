@@ -365,7 +365,7 @@ impl TestHarness {
         let consensus = self.coordinator.consensus_mut();
         let genesis_leaf = consensus.last_decided_leaf().clone();
         let genesis_cert1 = build_genesis_cert1(&genesis_leaf);
-        let genesis_proposal = build_genesis_proposal(&genesis_leaf, &genesis_cert1);
+        let genesis_proposal = build_genesis_proposal(&genesis_leaf);
         consensus.seed_parent(genesis_cert1.clone(), genesis_proposal, std::iter::empty());
         genesis_cert1
     }

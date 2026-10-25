@@ -293,8 +293,9 @@ impl TestView {
         }
     }
 
-    /// Build a TimeoutVote Event from a specific validator, optionally
-    /// carrying the sender's catchup evidence.
+    /// Build a timeout vote from a specific validator, optionally carrying the
+    /// sender's catchup evidence, in the form the version the tests run at
+    /// admits for the view ([`test_upgrade_lock`]).
     pub fn timeout_vote_input(
         &self,
         node_index: u64,
@@ -304,8 +305,24 @@ impl TestView {
     }
 
     /// A timeout vote naming `epoch` rather than the view's own, for the
-    /// checks that bound which epochs a vote may name.
+    /// checks that bound which epochs a vote may name, in the form the version
+    /// the tests run at admits.
     pub fn timeout_vote_input_for_epoch(
+        &self,
+        node_index: u64,
+        epoch: EpochNumber,
+        evidence: Option<CatchupEvidence<TestTypes>>,
+    ) -> Message<TestTypes, Validated> {
+        if test_upgrade_lock::<TestTypes>().timeout_epoch_bound(self.view_number) {
+            self.timeout_vote3_input_for_epoch(node_index, epoch, evidence)
+        } else {
+            self.timeout_vote2_input_for_epoch(node_index, epoch, evidence)
+        }
+    }
+
+    /// A timeout vote in the form that signs no lock, whatever the version the
+    /// tests run at, for the tests that send it on purpose.
+    pub fn timeout_vote2_input_for_epoch(
         &self,
         node_index: u64,
         epoch: EpochNumber,
@@ -1206,10 +1223,12 @@ impl ConsensusHarness {
         let state_private_key = state_key_pair.sign_key_ref().clone();
         let membership = mock_membership();
         let instance = Arc::new(TestInstanceState::default());
+        // At an epoch version, as a new-protocol anchor is: a leaf from before
+        // epochs commits differently from the proposal rebuilt from it.
         let genesis_leaf = Leaf2::<TestTypes>::genesis(
             &TestValidatedState::default(),
             &instance,
-            TEST_VERSIONS.test.base,
+            TEST_VERSIONS.vid2.base,
         )
         .await;
         let consensus = Consensus::new(

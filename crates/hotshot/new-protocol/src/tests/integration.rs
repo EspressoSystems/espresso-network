@@ -17,7 +17,7 @@ use tokio::time::timeout;
 use super::common::{
     harness::TestHarness,
     utils::{
-        TestData, TestView, build_cert1, build_cert2, build_timeout_cert3,
+        TestData, TestView, build_cert1, build_cert2, build_timeout_cert, build_timeout_cert3,
         build_timeout_cert3_with_lock,
     },
 };
@@ -29,6 +29,7 @@ use crate::{
         CatchupEvidence, Certificate1, ConsensusMessage, EpochChangeMessage, Message, MessageType,
         Proposal, ProposalFetchMessage, TimeoutBallot, TimeoutVoteMessage3, Validated,
     },
+    outbox::Outbox,
     storage::ActionKind,
     tests::common::assertions::{
         any, count_matching, is_block_built, is_block_reconstructed, is_cert1, is_cert2,
@@ -130,6 +131,8 @@ const NO_CERT_WINDOW: Duration = Duration::from_secs(2);
 /// the votes of a view on a certificate nothing can use.
 #[tokio::test]
 async fn test_timeout_votes_in_the_wrong_form_are_not_tallied() {
+    // Tests behaviour before 0.7.
+    crate::helpers::pin_test_version(versions::NEW_PROTOCOL_VERSION);
     let test_data = TestData::new(2).await;
     let timed_out = &test_data.views[0];
 
@@ -653,6 +656,8 @@ fn timeout_cert_naming(
 /// threshold their votes together reach.
 #[tokio::test]
 async fn test_unbound_timeout_votes_pool_across_the_epochs_they_name() {
+    // Tests behaviour before 0.7.
+    crate::helpers::pin_test_version(versions::NEW_PROTOCOL_VERSION);
     let test_data = TestData::new(2).await;
     let timed_out = &test_data.views[0];
     let mut harness = TestHarness::new(0).await;
@@ -803,6 +808,19 @@ async fn test_epoch_binding_timeout_votes_form_a_certificate() {
         any(harness.outputs(), is_view_changed),
         "the certificate must advance the view"
     );
+    // A timeout vote goes out once its action is stored; the run ends after it.
+    if signed {
+        harness
+            .process_until_output(|outputs| timeout_vote_sent(outputs, test_view.view_number))
+            .await;
+    }
+}
+
+/// Whether a timeout vote for `view` was sent.
+fn timeout_vote_sent(outputs: &Outbox<ConsensusOutput<TestTypes>>, view: ViewNumber) -> bool {
+    outputs.iter().any(
+        |o| matches!(o, ConsensusOutput::SendTimeoutVote(vote, ..) if vote.view_number() == view),
+    )
 }
 
 /// Integration: sequential views both produce Vote1 through real state validation.
@@ -1461,10 +1479,10 @@ async fn test_f_plus_1_timeout_votes_trigger_timeout_one_honest() {
         })
         .await;
 
-    assert!(
-        any(harness.outputs(), is_send_timeout_vote),
-        "f+1 timeout votes should trigger TimeoutOneHonest"
-    );
+    // A timeout vote goes out once its action is stored.
+    harness
+        .process_until_output(|outputs| any(outputs, is_send_timeout_vote))
+        .await;
 }
 
 /// A peer's timeout vote carries its locked QC.
@@ -1548,6 +1566,10 @@ async fn test_timeout_vote_tc_advances_view() {
                 .any(|i| matches!(i, ConsensusInput::Timeout(view) if **view == 3))
         })
         .await;
+    // A timeout vote goes out once its action is stored; the run ends after it.
+    harness
+        .process_until_output(|outputs| timeout_vote_sent(outputs, ViewNumber::new(3)))
+        .await;
 }
 
 /// A stuck node's view timer keeps re-firing for the same view (and
@@ -1566,6 +1588,10 @@ async fn test_timer_refires_for_same_view_without_progress() {
             _ => None,
         })
         .expect("timer should fire");
+    // The first timeout vote goes out once its action is stored.
+    harness
+        .process_until_output(|outputs| any(outputs, is_send_timeout_vote))
+        .await;
 
     let timeout_votes_before = count_matching(harness.outputs(), is_send_timeout_vote);
 
@@ -1603,8 +1629,21 @@ async fn test_timeout_vote_evidence_overrides_distance_check() {
 
     // The node starts at genesis (view 1). A peer times out view 32 — more
     // than 30 views ahead, so the vote is dropped — attaching the timeout
-    // certificate for view 31.
-    let tc = CatchupEvidence::from(&test_data.views[30].timeout_cert);
+    // certificate for view 31. Its signers lock on nothing but genesis: the
+    // test data's later certificates are of blocks past the first epoch, which
+    // a lock-signing certificate's lock would have to agree with.
+    let timed_out = &test_data.views[30];
+    let membership = harness
+        .membership()
+        .membership_for_epoch(Some(timed_out.epoch_number))
+        .expect("the genesis epoch resolves");
+    let tc = CatchupEvidence::from(&build_timeout_cert(
+        timed_out.view_number,
+        timed_out.epoch_number,
+        &membership,
+        &timed_out.leader_public_key,
+        &timed_out.leader_private_key,
+    ));
     harness.message(test_data.views[31].timeout_vote_input(1, Some(tc)));
 
     harness
@@ -1677,6 +1716,9 @@ async fn test_stale_timeout_vote_answered_with_catchup_evidence() {
         matches!(
             &evidence,
             ConsensusMessage::TimeoutCertificate(tc) if *tc.view_number() == 2
+        ) || matches!(
+            &evidence,
+            ConsensusMessage::TimeoutCertificate3(tc) if *tc.view_number() == 2
         ),
         "expected the view-2 timeout certificate, got {evidence:?}"
     );

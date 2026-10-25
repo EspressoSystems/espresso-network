@@ -398,6 +398,8 @@ async fn one_missed_payload_stalls_certification() {
 /// takes — arrives and is refused like before.
 #[tokio::test]
 async fn fetched_payload_restores_certification() {
+    // Tests behaviour before 0.7.
+    crate::helpers::pin_test_version(versions::NEW_PROTOCOL_VERSION);
     let test_data = TestData::new(3).await;
     let epoch = EpochNumber::genesis();
 
