@@ -63,17 +63,20 @@ use hotshot_orchestrator::client::{OrchestratorClient, get_complete_config};
 use hotshot_types::{
     ValidatorConfig,
     addr::NetAddr,
-    data::ViewNumber,
+    data::{EpochNumber, ViewNumber},
+    drb::INITIAL_DRB_RESULT,
     epoch_membership::EpochMembershipCoordinator,
     light_client::{StateKeyPair, StateSignKey},
     network::NetworkConfig,
     signature_key::{BLSPrivKey, BLSPubKey},
     traits::{
+        election::Membership,
         metrics::{Metrics, NoMetrics},
         node_implementation::{NodeImplementation, NodeType},
         signature_key::SignatureKey,
         storage::Storage,
     },
+    utils::epoch_from_block_number,
     x25519,
 };
 use moka::future::Cache;
@@ -689,6 +692,7 @@ where
     let block_reward = fetcher.fetch_fixed_block_reward().await.ok();
     info!("Block reward fetched: {:?}", block_reward);
     let epoch_height = genesis.epoch_height.unwrap_or_default();
+    let genesis_epoch_start_block = genesis.epoch_start_block.unwrap_or_default();
     let mut membership = EpochCommittees::new_stake(
         network_config.config.known_nodes_with_stake.clone(),
         network_config.config.known_da_nodes.clone(),
@@ -702,11 +706,8 @@ where
 
     let persistence = Arc::new(persistence);
     let coordinator = EpochMembershipCoordinator::new(membership, epoch_height, &persistence);
-    coordinator
-        .membership()
-        .add_stored_epoch_roots(&coordinator)
-        .await
-        .context("re-deriving stake tables from stored epoch roots failed")?;
+    seed_first_epoch_and_stored_roots(&coordinator, epoch_height, genesis_epoch_start_block)
+        .await?;
 
     let epoch_rewards_calculator = Arc::new(Mutex::new(EpochRewardsCalculator::new()));
 
@@ -724,7 +725,7 @@ where
         state_catchup: Arc::new(state_catchup_providers.clone()),
         coordinator,
         genesis_version: genesis.genesis_version,
-        epoch_start_block: genesis.epoch_start_block.unwrap_or_default(),
+        epoch_start_block: genesis_epoch_start_block,
         epoch_rewards_calculator,
         light_client_contract_address: Cache::builder().max_capacity(1).build(),
         token_contract_address: Cache::builder().max_capacity(1).build(),
@@ -739,6 +740,22 @@ where
         state_catchup: state_catchup_providers,
         persistence,
     })
+}
+
+/// Stored epoch roots need the first epoch for reward calculation; `load_start_epoch_info` sets it
+/// again later.
+pub(crate) async fn seed_first_epoch_and_stored_roots(
+    coordinator: &EpochMembershipCoordinator<SeqTypes>,
+    epoch_height: u64,
+    epoch_start_block: u64,
+) -> anyhow::Result<()> {
+    let membership = coordinator.membership();
+    let first_epoch = EpochNumber::new(epoch_from_block_number(epoch_start_block, epoch_height));
+    membership.set_first_epoch(first_epoch, INITIAL_DRB_RESULT);
+    membership
+        .add_stored_epoch_roots(coordinator)
+        .await
+        .context("re-deriving stake tables from stored epoch roots failed")
 }
 
 /// Scans the whole L1 contract history when nothing is persisted yet, keeping every
@@ -1590,6 +1607,14 @@ pub mod testing {
                 config.epoch_height,
                 &persistence.clone(),
             );
+
+            seed_first_epoch_and_stored_roots(
+                &coordinator,
+                config.epoch_height,
+                config.epoch_start_block,
+            )
+            .await
+            .unwrap();
 
             let max_block_size = *chain_config.max_block_size;
             let mut node_state = NodeState::new(

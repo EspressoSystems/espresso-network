@@ -1683,6 +1683,7 @@ mod tests {
     };
     use rstest::rstest;
     use tokio::{task::JoinSet, time::Duration};
+    use versions::version;
 
     use super::*;
     use crate::{NodeState, Payload, Transaction, traits::MembershipPersistence};
@@ -1736,11 +1737,7 @@ mod tests {
                 && self.stored_headers.lock().unwrap().contains_key(&epoch)
             {
                 let hash = StakeTableState::default().commit();
-                return Ok(Some((
-                    Default::default(),
-                    Some(RewardAmount::default()),
-                    Some(hash),
-                )));
+                return Ok(Some((Default::default(), None, Some(hash))));
             }
             Ok((*epoch == 7 || *epoch == 8).then(|| (Default::default(), None, None)))
         }
@@ -2585,10 +2582,14 @@ mod tests {
         assert!(committees.epochs_with_root().contains(&EpochNumber::new(5)));
     }
 
-    /// Run `add_stored_epoch_roots` over a store holding a root header for each of `root_epochs`.
-    /// The membership holds epochs 1 and 2. Returns the membership.
-    async fn add_stored_roots(root_epochs: &[u64]) -> EpochCommittees {
-        let header = build_epoch_root_header().await;
+    /// Run `add_stored_epoch_roots` over a store holding `header` as the root of each of
+    /// `root_epochs`. The membership holds epochs 1 and 2, and has its first epoch set when
+    /// `seed_first_epoch`, as `init_node_state` does. Returns the result and the membership.
+    async fn add_stored_roots_of(
+        header: Header,
+        root_epochs: &[u64],
+        seed_first_epoch: bool,
+    ) -> (anyhow::Result<()>, EpochCommittees) {
         let store = MockStakeStore {
             header: header.clone(),
             stored_headers: std::sync::Mutex::new(
@@ -2608,17 +2609,46 @@ mod tests {
                 .expect("Failed to create L1 client"),
             crate::ChainConfig::default(),
         );
+        *fetcher.initial_supply.write().await = Some(U256::from(1_000_000u64));
         let committees = build_committees_with_fetcher(4, fetcher);
+        if seed_first_epoch {
+            committees.set_first_epoch(EpochNumber::genesis(), [0u8; 32]);
+        }
         let coordinator = EpochMembershipCoordinator::<SeqTypes>::new(
             committees.clone(),
             *committees.epoch_height(),
             &hotshot_example_types::storage_types::TestStorage::default(),
         );
+        let result = committees.add_stored_epoch_roots(&coordinator).await;
+        (result, committees)
+    }
+
+    async fn add_stored_roots(root_epochs: &[u64]) -> EpochCommittees {
+        let header = build_epoch_root_header().await;
+        let (result, committees) = add_stored_roots_of(header, root_epochs, false).await;
+        result.unwrap();
         committees
-            .add_stored_epoch_roots(&coordinator)
-            .await
-            .unwrap();
-        committees
+    }
+
+    /// Like `build_epoch_root_header` with a V0.4 header, whose reward is computed from the
+    /// first epoch.
+    async fn build_dynamic_reward_epoch_root_header() -> Header {
+        let instance = NodeState::mock().with_genesis_version(version(0, 4));
+        let (payload, _) = Payload::from_transactions(
+            &[Transaction::of_size(10)],
+            &instance.genesis_state,
+            &instance,
+        )
+        .await
+        .expect("payload");
+        let metadata = payload.ns_table().clone();
+        match Header::genesis(&instance, payload, &metadata, version(0, 4)) {
+            Header::V4(mut h) => {
+                h.height = 95;
+                Header::V4(h)
+            },
+            other => panic!("expected V4 header, got {other:?}"),
+        }
     }
 
     // Storage persists a table one epoch late, so a root header can outlive its table. The
@@ -2628,6 +2658,24 @@ mod tests {
         let committees = add_stored_roots(&[3]).await;
 
         assert!(committees.epochs_with_root().contains(&EpochNumber::new(3)));
+    }
+
+    // Mirrors `init_node_state`: the first epoch is set before the stored roots are added.
+    #[tokio::test]
+    async fn stored_epoch_roots_with_dynamic_reward_hold_the_table_after_seeding() {
+        let header = build_dynamic_reward_epoch_root_header().await;
+        let (result, committees) = add_stored_roots_of(header, &[3], true).await;
+
+        result.unwrap();
+        assert!(committees.epochs_with_root().contains(&EpochNumber::new(3)));
+    }
+
+    #[tokio::test]
+    async fn stored_epoch_roots_with_dynamic_reward_fail_without_first_epoch() {
+        let header = build_dynamic_reward_epoch_root_header().await;
+        let (result, _) = add_stored_roots_of(header, &[3], false).await;
+
+        result.unwrap_err();
     }
 
     #[tokio::test]
