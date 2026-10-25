@@ -138,7 +138,7 @@ async fn boundary_timeout_vote(
         .outputs()
         .iter()
         .filter_map(|o| match o {
-            ConsensusOutput::SendTimeoutVote(vote, _) => Some(vote.clone()),
+            ConsensusOutput::SendTimeoutVote(vote, ..) => Some(vote.clone()),
             _ => None,
         })
         .last()

@@ -66,7 +66,7 @@ use hotshot_types::{
 
 use crate::{
     consensus::{ConsensusInput, ConsensusOutput, DECIDE_BUFFER},
-    message::{CatchupEvidence, Certificate1, Certificate2, Proposal, TimeoutVote},
+    message::{CatchupEvidence, Certificate1, Certificate2, Proposal, ReVote, TimeoutVote},
 };
 
 /// Where traces are written, if anywhere.
@@ -446,8 +446,9 @@ impl Recorder {
 
         // A certificate carried inside another message is not held by
         // receiving the message (`History.HasCert1`). Consensus keeps the
-        // lock of a timeout certificate, so it is received just before the
-        // input carrying it.
+        // lock of a timeout certificate, and the timeout certificate and the
+        // certificate of a re-vote request, so each is received just before
+        // the input carrying it.
         for carried in self.carried_steps(input) {
             steps.push((carried, Vec::new()));
         }
@@ -780,6 +781,21 @@ impl Recorder {
                 ]),
             ),
             ConsensusInput::DrbResult(..) => return Err(Dropped("DrbResult")),
+            ConsensusInput::ReVote(message) => {
+                let revote = &message.revote;
+                // Unnamed when the node's membership does not have the request's
+                // epoch, as for a fetched proposal.
+                let sender = self
+                    .led
+                    .get(&(revote.epoch, revote.view))
+                    .filter(|named| *named != "unknown")
+                    .map_or(NO_SENDER, String::as_str)
+                    .to_string();
+                tagged(
+                    "revote",
+                    obj(&[("sender", sender), ("r", self.revote_json(revote))]),
+                )
+            },
             ConsensusInput::UpgradeCertificateFormed(..) => {
                 return Err(Dropped("UpgradeCertificateFormed"));
             },
@@ -830,6 +846,9 @@ impl Recorder {
             ),
             ConsensusOutput::SendProposal(signed) => {
                 tagged("proposal", obj(&[("p", self.proposal_json(&signed.data))]))
+            },
+            ConsensusOutput::SendReVote(message) => {
+                tagged("revote", obj(&[("r", self.revote_json(&message.revote))]))
             },
             ConsensusOutput::SendTimeoutVote(vote, evidence) => tagged(
                 "timeoutVote",
@@ -922,6 +941,21 @@ impl Recorder {
         ])
     }
 
+    /// A re-vote request, as the model's `RevoteRequest`.
+    fn revote_json<T: NodeType>(&self, revote: &ReVote<T>) -> String {
+        obj(&[
+            ("cert", cert1_json_raw(&revote.cert1)),
+            ("view", view_json(revote.view)),
+            (
+                "timeoutEvidence",
+                match &revote.timeout {
+                    Some(tc) => self.timeout_cert3_json(tc),
+                    None => "null".to_string(),
+                },
+            ),
+        ])
+    }
+
     fn evidence_json<T: NodeType>(&self, evidence: Option<&CatchupEvidence<T>>) -> String {
         match evidence {
             None => "null".to_string(),
@@ -1002,7 +1036,8 @@ impl Recorder {
     }
 
     /// The certificates `input` carries that consensus keeps, as inputs of
-    /// their own: a timeout certificate's lock.
+    /// their own: a timeout certificate's lock, and a re-vote request's
+    /// timeout certificate, its lock and the request's certificate.
     fn carried_steps<T: NodeType>(&self, input: &ConsensusInput<T>) -> Vec<String> {
         match input {
             ConsensusInput::TimeoutCertificate(cert) => cert
@@ -1010,6 +1045,19 @@ impl Recorder {
                 .map(|(_, lock)| certificate1_json(lock))
                 .into_iter()
                 .collect(),
+            ConsensusInput::ReVote(message) => {
+                let revote = &message.revote;
+                let mut steps = Vec::new();
+                if let Some(tc) = &revote.timeout {
+                    steps.extend(tc.lock_cert().map(certificate1_json));
+                    steps.push(tagged(
+                        "timeoutCertificate",
+                        obj(&[("c", self.timeout_cert3_json(tc))]),
+                    ));
+                }
+                steps.push(certificate1_json(&revote.cert1));
+                steps
+            },
             _ => Vec::new(),
         }
     }

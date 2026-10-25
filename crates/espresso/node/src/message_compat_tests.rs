@@ -34,8 +34,8 @@ use hotshot_example_types::{node_types::TEST_VERSIONS, storage_types::TestStorag
 use hotshot_new_protocol::message::{
     BlockMessage, CatchupEvidence, Certificate1, Certificate2, ConsensusMessage, DedupManifest,
     EpochChangeMessage, Message as NewProtocolMessage, MessageType, ProposalFetchMessage,
-    ProposalFetchRequest, ProposalMessage, TimeoutVoteMessage, TimeoutVoteMessage3,
-    TransactionMessage, Unchecked, Validated, Vote1,
+    ProposalFetchRequest, ProposalMessage, ReVote, ReVoteMessage, TimeoutVoteMessage,
+    TimeoutVoteMessage3, TransactionMessage, Unchecked, Validated, Vote1,
     fetch::{Request, Response},
     payload::{PayloadFetchMessage, PayloadRequestBody, PayloadResponseBody},
 };
@@ -589,6 +589,21 @@ async fn reference_new_protocol_messages(
         }
     };
 
+    let revote_message = bind_timeout_epoch.then(|| {
+        ConsensusMessage::ReVote(
+            ReVoteMessage::new(
+                ReVote {
+                    view,
+                    epoch,
+                    cert1: cert1.clone(),
+                    timeout: Some(timeout_cert3.clone()),
+                },
+                &priv_key,
+            )
+            .unwrap(),
+        )
+    });
+
     let timeout_certificate_message = if bind_timeout_epoch {
         ConsensusMessage::TimeoutCertificate3(timeout_cert3)
     } else {
@@ -744,7 +759,10 @@ async fn reference_new_protocol_messages(
             data: upgrade_data,
             view_number: view,
         }),
-    ];
+    ]
+    .into_iter()
+    .chain(revote_message)
+    .collect::<Vec<_>>();
 
     let message_types = consensus_messages
         .into_iter()

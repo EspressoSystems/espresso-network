@@ -3,6 +3,7 @@ pub(crate) mod common;
 mod block;
 mod cliquenet;
 mod consensus;
+mod epoch_boundary_stall;
 mod epoch_change;
 mod equivocation;
 mod failures;

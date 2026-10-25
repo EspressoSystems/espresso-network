@@ -202,7 +202,7 @@ pub struct TestRunner {
     decided_transactions: BTreeMap<ViewNumber, Vec<Commitment<TestTransaction>>>,
 
     /// The version upgrade every node is configured for. Trivial by default.
-    #[builder(default = versions::Upgrade::trivial(versions::NEW_PROTOCOL_VERSION))]
+    #[builder(default = versions::Upgrade::trivial(crate::helpers::test_version()))]
     upgrade: versions::Upgrade,
 
     /// Windows for the upgrade sub-protocol. Disabled by default.
@@ -995,7 +995,9 @@ async fn run_node(
                 // from this anchor.
                 if let Some(newest) = leaves.first() {
                     if let Some(cert2) = cert2 {
-                        storage.insert_cert2(cert2.view_number, cert2.clone()).await;
+                        storage
+                            .insert_cert2(newest.view_number(), cert2.clone())
+                            .await;
                     }
                     storage
                         .update_anchor_leaf(newest.clone(), cert1.clone())

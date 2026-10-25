@@ -55,6 +55,11 @@ impl<T: NodeType> Proposals<T> {
         self.all.range(r).flat_map(|(_, a)| a.values())
     }
 
+    /// The proposal held under `c` at the latest view before `v`.
+    pub fn latest_before(&self, v: ViewNumber, c: Commitment<Leaf2<T>>) -> Option<&Proposal<T>> {
+        self.all.range(..v).rev().find_map(|(_, a)| a.get(&c))
+    }
+
     pub fn last(&self) -> Option<&Proposal<T>> {
         let (_, all) = self.all.last_key_value()?;
         all.values().max_by_key(|p| p.justify_qc.view_number())

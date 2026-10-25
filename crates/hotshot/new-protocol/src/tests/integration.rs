@@ -27,15 +27,16 @@ use crate::{
     helpers::test_timeout_epoch_lock,
     message::{
         CatchupEvidence, Certificate1, ConsensusMessage, EpochChangeMessage, Message, MessageType,
-        Proposal, Validated,
+        Proposal, ProposalFetchMessage, TimeoutBallot, TimeoutVoteMessage3, Validated,
     },
+    storage::ActionKind,
     tests::common::assertions::{
         any, count_matching, is_block_built, is_block_reconstructed, is_cert1, is_cert2,
         is_drb_result, is_header_created, is_header_created_for_view, is_leaf_decided, is_proposal,
         is_proposal_for_view, is_request_block_and_header, is_request_vid_disperse, is_send_cert1,
-        is_send_epoch_change, is_send_timeout_vote, is_state_validated, is_timeout,
-        is_timeout_cert, is_timeout_one_honest, is_upgrade_cert_formed, is_vid_disperse,
-        is_view_changed, is_vote1, is_vote2, node_index_for_key,
+        is_send_epoch_change, is_send_timeout_cert, is_send_timeout_vote, is_state_validated,
+        is_timeout, is_timeout_cert, is_timeout_one_honest, is_upgrade_cert_formed,
+        is_vid_disperse, is_view_changed, is_vote1, is_vote2, node_index_for_key,
     },
 };
 
@@ -677,19 +678,18 @@ async fn test_unbound_timeout_votes_pool_across_the_epochs_they_name() {
         harness.message(timed_out.timeout_vote_input_for_epoch(i, named, None));
     }
 
-    harness
+    let inputs = harness
         .process_until(|inputs| any(inputs, is_timeout_cert))
         .await;
 
-    let certs: Vec<_> = harness
-        .outputs()
+    let certs: Vec<_> = inputs
         .iter()
-        .filter_map(|o| match o {
-            ConsensusOutput::SendTimeoutCertificate(cert, _, epoch) => Some((cert.clone(), *epoch)),
+        .filter_map(|i| match i {
+            ConsensusInput::TimeoutCertificate(cert) => Some(cert.cert().clone()),
             _ => None,
         })
         .collect();
-    let [(cert, epoch)] = certs.as_slice() else {
+    let [cert] = certs.as_slice() else {
         panic!("expected one timeout certificate, got {certs:?}");
     };
     assert!(!cert.binds_epoch());
@@ -698,7 +698,10 @@ async fn test_unbound_timeout_votes_pool_across_the_epochs_they_name() {
         Some(ours),
         "the certificate names the epoch of the node that formed it"
     );
-    assert_eq!(*epoch, ours);
+    assert_eq!(
+        harness.coordinator().consensus().current_epoch(),
+        Some(ours)
+    );
 }
 
 /// A timeout vote carries its sender's catchup evidence, and that evidence is
@@ -760,26 +763,42 @@ async fn test_epoch_binding_timeout_votes_form_a_certificate() {
     for i in 0..THRESHOLD {
         harness.message(test_view.timeout_vote3_input(i, None));
     }
-    harness
+    let inputs = harness
         .process_until(|inputs| any(inputs, is_timeout_cert))
         .await;
 
-    let certs: Vec<_> = harness
-        .outputs()
+    let certs: Vec<_> = inputs
         .iter()
-        .filter_map(|o| match o {
-            ConsensusOutput::SendTimeoutCertificate(cert, view, epoch) => {
-                Some((cert.clone(), *view, *epoch))
-            },
+        .filter_map(|i| match i {
+            ConsensusInput::TimeoutCertificate(cert) => Some(cert.cert().clone()),
             _ => None,
         })
         .collect();
-    let [(cert, view, epoch)] = certs.as_slice() else {
+    let [cert] = certs.as_slice() else {
         panic!("expected one timeout certificate, got {certs:?}");
     };
     assert!(cert.binds_epoch(), "the certificate must bind its epoch");
-    assert_eq!(*view, test_view.view_number + 1);
-    assert_eq!(*epoch, test_view.epoch_number);
+    assert_eq!(cert.view_number(), test_view.view_number);
+    assert_eq!(harness.current_view(), test_view.view_number + 1);
+    assert_eq!(
+        harness.coordinator().consensus().current_epoch(),
+        Some(test_view.epoch_number)
+    );
+    // A node that signed a timeout vote for the view, normally on the one-honest
+    // indication, does not send the certificate on; one the certificate reached
+    // first does.
+    let signed = harness.outputs().iter().any(|o| {
+        matches!(
+            o,
+            ConsensusOutput::RecordAction(view, _, ActionKind::Timeout)
+                if *view == test_view.view_number
+        )
+    });
+    assert_eq!(
+        any(harness.outputs(), is_send_timeout_cert),
+        !signed,
+        "the certificate is sent on exactly when the node did not vote for the view"
+    );
     assert!(
         any(harness.outputs(), is_view_changed),
         "the certificate must advance the view"
@@ -1599,6 +1618,45 @@ async fn test_timeout_vote_evidence_overrides_distance_check() {
     );
 }
 
+/// A timeout vote without catchup evidence offers its lock as the evidence, so
+/// a node that fell behind still advances on it.
+#[tokio::test]
+async fn test_timeout_vote_lock_serves_as_catchup_evidence() {
+    let test_data = TestData::new(3).await;
+    // The test data is certified under the default version; the evidence is
+    // taken from the vote before its form is checked against the version.
+    let mut harness = TestHarness::new(0).await;
+    let timed_out = &test_data.views[1];
+    let (pub_key, priv_key) = BLSPubKey::generated_from_seed_indexed([0u8; 32], 1);
+    let ballot = TimeoutBallot::sign(
+        timed_out.view_number,
+        timed_out.epoch_number,
+        Some(test_data.views[0].cert1.clone()),
+        &pub_key,
+        &priv_key,
+        &test_timeout_epoch_lock(),
+    )
+    .expect("sign the timeout vote");
+    harness.message(Message::<TestTypes, Validated> {
+        sender: pub_key,
+        message_type: MessageType::Consensus(ConsensusMessage::TimeoutVote3(
+            TimeoutVoteMessage3::new(ballot, None),
+        )),
+    });
+
+    timeout(
+        Duration::from_secs(5),
+        harness.process_until_output(|outputs| {
+            any(
+                outputs,
+                |o| matches!(o, ConsensusOutput::ViewChanged(view, _) if **view == 2),
+            )
+        }),
+    )
+    .await
+    .expect("the lock advances the node");
+}
+
 /// A stale timeout vote is answered with the responder's newest certificate,
 /// so a node stuck behind receives the evidence it needs to advance.
 #[tokio::test]
@@ -1706,6 +1764,156 @@ async fn test_forged_vid_fragments_do_not_block_the_vote() {
         })
         .expect("the node broadcasts its share alongside vote1");
     assert_eq!(broadcast, view.vid_share_for(&node_key));
+}
+
+/// A node that a certificate moved past a view still assembles its share for
+/// that view.
+///
+/// At an epoch boundary the outgoing committee's re-vote certificate can move a
+/// node past the view of the next epoch's first block before that block's
+/// share arrives, and the node still has to vote on it.
+#[tokio::test]
+async fn test_share_assembles_for_the_view_just_left() {
+    let test_data = TestData::new(1).await;
+    let mut harness = TestHarness::new(0).await;
+    let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
+    let view = &test_data.views[0];
+
+    harness.apply_and_process(view.timeout_cert_input());
+    assert_eq!(harness.current_view(), view.view_number + 1);
+
+    harness.message(view.proposal_input());
+    for fragment in view.vid_share_inputs(&node_key) {
+        harness.message(fragment);
+    }
+    tokio::time::timeout(
+        Duration::from_secs(5),
+        harness.process_until(|inputs| {
+            inputs.iter().any(|input| {
+                matches!(input, ConsensusInput::VidShare(share) if share.view_number == view.view_number)
+            })
+        }),
+    )
+    .await
+    .expect("the share for the view just left must assemble");
+}
+
+/// A node left out of a view, holding no share of its own, rebuilds the
+/// view's payload from the shares the voters broadcast once it fetches the
+/// proposal a certificate names.
+#[tokio::test]
+async fn test_fetched_proposal_rebuilds_payload_from_broadcast_shares() {
+    let test_data = TestData::new(1).await;
+    let mut harness = TestHarness::new(0).await;
+    let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
+    let view = &test_data.views[0];
+
+    for share in view
+        .vid_shares
+        .iter()
+        .filter(|s| s.recipient_key != node_key)
+    {
+        harness.message(Message::<TestTypes, Validated> {
+            sender: share.recipient_key,
+            message_type: MessageType::Consensus(ConsensusMessage::VidShareBroadcast(
+                share.clone(),
+            )),
+        });
+    }
+    // A commit without its proposal makes the node fetch it.
+    harness.apply_and_process(view.cert2_input());
+    harness.message(Message::<TestTypes, Validated> {
+        sender: view.leader_public_key,
+        message_type: MessageType::ProposalFetch(ProposalFetchMessage::Response(Box::new(
+            view.proposal.clone(),
+        ))),
+    });
+    timeout(
+        Duration::from_secs(5),
+        harness.process_until(|inputs| any(inputs, is_block_reconstructed)),
+    )
+    .await
+    .expect("the payload is rebuilt from the broadcast shares");
+}
+
+/// A node that received a view's proposal but not its own share rebuilds the
+/// payload from the shares the voters broadcast once a certificate names the
+/// proposal.
+#[tokio::test]
+async fn test_parked_proposal_rebuilds_payload_from_broadcast_shares() {
+    let test_data = TestData::new(1).await;
+    let mut harness = TestHarness::new(0).await;
+    let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
+    let view = &test_data.views[0];
+
+    // The proposal arrives without this node's share, so it waits for one.
+    harness.message(view.proposal_input());
+    harness
+        .process_until(|inputs| {
+            inputs
+                .iter()
+                .any(|input| matches!(input, ConsensusInput::Proposal(..)))
+        })
+        .await;
+    for share in view
+        .vid_shares
+        .iter()
+        .filter(|s| s.recipient_key != node_key)
+    {
+        harness.message(Message::<TestTypes, Validated> {
+            sender: share.recipient_key,
+            message_type: MessageType::Consensus(ConsensusMessage::VidShareBroadcast(
+                share.clone(),
+            )),
+        });
+    }
+    // A commit names the proposal, which the node then adopts.
+    harness.apply_and_process(view.cert2_input());
+    timeout(
+        Duration::from_secs(5),
+        harness.process_until(|inputs| any(inputs, is_block_reconstructed)),
+    )
+    .await
+    .expect("the payload is rebuilt from the broadcast shares");
+}
+
+/// A node that a timeout certificate moved past a view before any certificate
+/// of the view reached it keeps the shares the voters broadcast for it, and
+/// still rebuilds the payload once a late commit makes it fetch the proposal.
+#[tokio::test]
+async fn test_timed_out_view_keeps_broadcast_shares_for_a_late_commit() {
+    let test_data = TestData::new(1).await;
+    let mut harness = TestHarness::new(0).await;
+    let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
+    let view = &test_data.views[0];
+
+    for share in view
+        .vid_shares
+        .iter()
+        .filter(|s| s.recipient_key != node_key)
+    {
+        harness.message(Message::<TestTypes, Validated> {
+            sender: share.recipient_key,
+            message_type: MessageType::Consensus(ConsensusMessage::VidShareBroadcast(
+                share.clone(),
+            )),
+        });
+    }
+    harness.apply_and_process(view.timeout_cert_input());
+    assert_eq!(harness.current_view(), view.view_number + 1);
+    harness.apply_and_process(view.cert2_input());
+    harness.message(Message::<TestTypes, Validated> {
+        sender: view.leader_public_key,
+        message_type: MessageType::ProposalFetch(ProposalFetchMessage::Response(Box::new(
+            view.proposal.clone(),
+        ))),
+    });
+    timeout(
+        Duration::from_secs(5),
+        harness.process_until(|inputs| any(inputs, is_block_reconstructed)),
+    )
+    .await
+    .expect("the payload is rebuilt from the shares kept past the timeout");
 }
 
 /// A signed `Cert1` whose epoch is not the one its block number falls in is

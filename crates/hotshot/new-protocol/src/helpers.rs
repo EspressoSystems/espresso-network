@@ -62,11 +62,25 @@ pub fn validated_state_cert<T: NodeType>(
         .then_some(state_cert)
 }
 
+/// The protocol version a test runs at unless it chooses one.
+///
+/// [`NEW_PROTOCOL_VERSION`](versions::NEW_PROTOCOL_VERSION) by default.
+/// `NP_TEST_VERSION=0.7` runs the tests at
+/// [`TIMEOUT_EPOCH_VERSION`](versions::TIMEOUT_EPOCH_VERSION) instead, whose
+/// timeout votes and certificates sign their lock: the form the Lean
+/// specification covers. `just test-lean-check` and `just test-lean-diff`
+/// record a second pass that way.
+#[cfg(test)]
+pub fn test_version() -> versions::Version {
+    match std::env::var("NP_TEST_VERSION").as_deref() {
+        Ok("0.7") => versions::TIMEOUT_EPOCH_VERSION,
+        _ => versions::NEW_PROTOCOL_VERSION,
+    }
+}
+
 #[cfg(test)]
 pub fn test_upgrade_lock<T: NodeType>() -> hotshot_types::message::UpgradeLock<T> {
-    use versions::{NEW_PROTOCOL_VERSION, Upgrade};
-
-    hotshot_types::message::UpgradeLock::new(Upgrade::trivial(NEW_PROTOCOL_VERSION))
+    hotshot_types::message::UpgradeLock::new(versions::Upgrade::trivial(test_version()))
 }
 
 /// An upgrade lock with [`TIMEOUT_EPOCH_VERSION`] already in effect, so

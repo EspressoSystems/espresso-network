@@ -13,8 +13,8 @@ use hotshot_types::{
     request_response::ProposalRequestPayload,
     simple_certificate::{TimeoutCertificate2, TimeoutCertificate3, TimeoutEvidence},
     simple_vote::{
-        HasEpoch, LightClientStateUpdateVote2, LockView, QuorumVote2, SimpleVote, TimeoutData3,
-        TimeoutLock, TimeoutVote2, TimeoutVote3, UpgradeVote2, Vote2Data,
+        HasEpoch, LightClientStateUpdateVote2, LockView, QuorumData2, QuorumVote2, SimpleVote,
+        TimeoutData3, TimeoutLock, TimeoutVote2, TimeoutVote3, UpgradeVote2, Vote2Data,
     },
     traits::{
         block_contents::BlockHeader, node_implementation::NodeType, signature_key::SignatureKey,
@@ -390,19 +390,22 @@ impl<T: NodeType> EpochChangeMessage<T, Unchecked> {
 impl<T: NodeType, S> EpochChangeMessage<T, S> {
     /// Structural validity of the message, independent of signatures.
     ///
-    /// Every part must name the same view and block. A certificate's own view
-    /// and block number are covered by the signatures over it, and the
-    /// proposal's are covered by the leaf commitment, so agreement between them
-    /// otherwise rests on an honest signer being in the quorum. Comparing them
-    /// makes the message self-checking. `Proposal::epoch` is not covered by the
-    /// commitment at all and has no other check.
+    /// Every part must name the same block, and `cert1` and the proposal the
+    /// same view. `cert2` may be at a later view: a re-vote commits the last
+    /// block of an epoch again at a view of its own, and the first block of
+    /// the next epoch still names the block's own `cert1`. A certificate's
+    /// own view and block number are covered by the signatures over it, and
+    /// the proposal's are covered by the leaf commitment, so agreement between
+    /// them otherwise rests on an honest signer being in the quorum. Comparing
+    /// them makes the message self-checking. `Proposal::epoch` is not covered
+    /// by the commitment at all and has no other check.
     ///
     /// What the embedded proposal claims about itself and its parent is checked
     /// by the same functions the proposal path uses, except for the boundary
     /// Cert2 only the first proposal of an epoch carries.
     pub fn well_formed(&self, epoch_height: u64) -> Result<(), EpochChangeError> {
         let block_number = self.cert2.data.block_number;
-        if self.cert1.view_number() != self.cert2.view_number()
+        if self.cert1.view_number() > self.cert2.view_number()
             || self.cert1.epoch() != self.cert2.epoch()
             || self.cert1.data.leaf_commit != self.cert2.data.leaf_commit
             || self.cert1.data.block_number != Some(block_number)
@@ -444,7 +447,10 @@ impl<T: NodeType, S> EpochChangeMessage<T, S> {
 /// Reason an [`EpochChangeMessage`] is not [well-formed](EpochChangeMessage::well_formed).
 #[derive(Copy, Clone, Debug, thiserror::Error)]
 pub enum EpochChangeError {
-    #[error("certificates differ in view, epoch, block number or leaf commitment")]
+    #[error(
+        "certificates differ in epoch, block number or leaf commitment, or certificate2 is \
+         earlier than certificate1"
+    )]
     CertificateMismatch,
     #[error("certificate2 is not for the last block of an epoch")]
     NotLastBlock,
@@ -459,14 +465,173 @@ pub enum EpochChangeError {
 }
 
 impl<T: NodeType, S> HasViewNumber for EpochChangeMessage<T, S> {
+    /// The view of the commit: the next epoch starts after it.
     fn view_number(&self) -> ViewNumber {
-        self.cert1.view_number()
+        self.cert2.view_number()
     }
 }
 
 impl<T: NodeType, S> HasEpoch for EpochChangeMessage<T, S> {
     fn epoch(&self) -> Option<EpochNumber> {
         self.cert1.epoch()
+    }
+}
+
+/// A request by the leader of `view` that the committee of `epoch` vote on
+/// the epoch's last block again.
+///
+/// The last block of an epoch must be committed before the next epoch can
+/// start, and its first block needs the commit certificate. If the block has
+/// a `Certificate1` but its `Certificate2` can no longer form, because the
+/// nodes that did not vote2 for it have timed its view out, the committee
+/// votes on the block itself again: a vote1 and then a vote2 over the block's
+/// existing vote data, at `view`. No block is built or dispersed.
+///
+/// The leader asks as soon as it can lock on the block, without waiting for
+/// the view to time out: in the view after the block's, or after a timeout
+/// certificate for the view before.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
+#[serde(bound(deserialize = ""))]
+pub struct ReVote<T: NodeType> {
+    /// The view of the re-vote.
+    pub view: ViewNumber,
+    /// The epoch whose last block is voted on.
+    pub epoch: EpochNumber,
+    /// The block's own `Certificate1`, at the block's view.
+    pub cert1: Certificate1<T>,
+    /// The timeout certificate for the view before `view`, unless that is the
+    /// block's view.
+    pub timeout: Option<TimeoutCertificate3<T>>,
+}
+
+impl<T: NodeType> ReVote<T> {
+    /// The data every vote of the re-vote signs: the block's own.
+    pub fn vote_data(&self) -> QuorumData2<T> {
+        self.cert1.data
+    }
+
+    /// Structural validity, independent of signatures.
+    pub fn well_formed(&self, epoch_height: u64) -> Result<(), ReVoteError> {
+        let data = &self.cert1.data;
+        if data.epoch != Some(self.epoch) {
+            return Err(ReVoteError::Epoch);
+        }
+        let Some(block) = data.block_number else {
+            return Err(ReVoteError::NotLastBlock);
+        };
+        if !is_last_block(block, epoch_height)
+            || EpochNumber::new(epoch_from_block_number(block, epoch_height)) != self.epoch
+        {
+            return Err(ReVoteError::NotLastBlock);
+        }
+        let parent = self.cert1.view_number();
+        if parent == ViewNumber::genesis() || parent >= self.view {
+            return Err(ReVoteError::ParentNotEarlier);
+        }
+        match &self.timeout {
+            None if parent + 1 != self.view => return Err(ReVoteError::Timeout),
+            Some(tc)
+                if tc.view_number.u64().checked_add(1) != Some(self.view.u64())
+                    || tc.epoch != self.epoch =>
+            {
+                return Err(ReVoteError::Timeout);
+            },
+            Some(tc) if tc.check_lock().is_err() => return Err(ReVoteError::TimeoutLock),
+            _ => {},
+        }
+        Ok(())
+    }
+}
+
+impl<T: NodeType> Committable for ReVote<T> {
+    fn commit(&self) -> Commitment<Self> {
+        committable::RawCommitmentBuilder::new("Re-vote request")
+            .u64_field("view number", *self.view)
+            .u64_field("epoch number", *self.epoch)
+            .field("certificate1", self.cert1.commit())
+            .optional("timeout certificate", &self.timeout)
+            .finalize()
+    }
+}
+
+/// Reason a [`ReVote`] is not [well-formed](ReVote::well_formed).
+#[derive(Copy, Clone, Debug, thiserror::Error)]
+pub enum ReVoteError {
+    #[error("re-vote certificate is not of the re-vote's epoch")]
+    Epoch,
+    #[error("re-vote certificate is not over the last block of its epoch")]
+    NotLastBlock,
+    #[error("re-vote certificate is not earlier than the re-vote")]
+    ParentNotEarlier,
+    #[error(
+        "re-vote is neither in the view after its certificate's nor behind a timeout certificate \
+         for the view before it, in its epoch"
+    )]
+    Timeout,
+    #[error("re-vote's timeout certificate has a lock later than its view or epoch")]
+    TimeoutLock,
+}
+
+/// A [`ReVote`] signed by its view's leader.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
+#[serde(bound(deserialize = "S: Deserialize<'de>"))]
+pub struct ReVoteMessage<T: NodeType, S> {
+    pub revote: ReVote<T>,
+    pub signature: <T::SignatureKey as SignatureKey>::PureAssembledSignatureType,
+    #[serde(skip)]
+    _marker: PhantomData<fn() -> S>,
+}
+
+impl<T: NodeType> ReVoteMessage<T, Validated> {
+    /// Sign a re-vote request.
+    pub fn new(
+        revote: ReVote<T>,
+        private_key: &<T::SignatureKey as SignatureKey>::PrivateKey,
+    ) -> Result<Self, <T::SignatureKey as SignatureKey>::SignError> {
+        let signature = T::SignatureKey::sign(private_key, revote.commit().as_ref())?;
+        Ok(Self {
+            revote,
+            signature,
+            _marker: PhantomData,
+        })
+    }
+}
+
+impl<T: NodeType> ReVoteMessage<T, Unchecked> {
+    pub(crate) fn into_validated(self) -> ReVoteMessage<T, Validated> {
+        ReVoteMessage {
+            revote: self.revote,
+            signature: self.signature,
+            _marker: PhantomData,
+        }
+    }
+}
+
+impl<T: NodeType, S> ReVoteMessage<T, S> {
+    /// Whether `leader` signed this request.
+    pub fn signed_by(&self, leader: &T::SignatureKey) -> bool {
+        leader.validate(&self.signature, self.revote.commit().as_ref())
+    }
+
+    #[cfg(any(test, feature = "testing"))]
+    pub fn into_unchecked(self) -> ReVoteMessage<T, Unchecked> {
+        ReVoteMessage {
+            revote: self.revote,
+            signature: self.signature,
+            _marker: PhantomData,
+        }
+    }
+}
+
+impl<T: NodeType, S> HasViewNumber for ReVoteMessage<T, S> {
+    fn view_number(&self) -> ViewNumber {
+        self.revote.view
+    }
+}
+
+impl<T: NodeType, S> HasEpoch for ReVoteMessage<T, S> {
+    fn epoch(&self) -> Option<EpochNumber> {
+        Some(self.revote.epoch)
     }
 }
 
@@ -526,6 +691,7 @@ pub enum ConsensusMessage<T: NodeType, S> {
     TimeoutCertificate3(TimeoutCertificate3<T>),
     UpgradeProposal(UpgradeProposalMessage<T>),
     UpgradeVote(UpgradeVoteMessage<T>),
+    ReVote(ReVoteMessage<T, S>),
 }
 
 impl<T: NodeType, S> ConsensusMessage<T, S> {
@@ -547,6 +713,7 @@ impl<T: NodeType, S> ConsensusMessage<T, S> {
             Self::TimeoutCertificate3(c) => ConsensusMessage::TimeoutCertificate3(c),
             Self::UpgradeProposal(p) => ConsensusMessage::UpgradeProposal(p),
             Self::UpgradeVote(v) => ConsensusMessage::UpgradeVote(v),
+            Self::ReVote(r) => ConsensusMessage::ReVote(r.into_unchecked()),
         }
     }
 }
@@ -561,7 +728,7 @@ impl<T: NodeType, S> HasViewNumber for ConsensusMessage<T, S> {
             Self::Certificate2(certificate, _) => certificate.view_number(),
             Self::TimeoutVote(msg) => msg.view_number(),
             Self::TimeoutCertificate(certificate) => certificate.view_number(),
-            Self::EpochChange(epoch_change) => epoch_change.cert1.view_number(),
+            Self::EpochChange(epoch_change) => epoch_change.view_number(),
             Self::VidShareFragment(fragment) => fragment.data.view_number(),
             Self::VidShareBroadcast(vid_share) => vid_share.view_number(),
             Self::HighQc(certificate) => certificate.view_number(),
@@ -569,6 +736,7 @@ impl<T: NodeType, S> HasViewNumber for ConsensusMessage<T, S> {
             Self::TimeoutCertificate3(certificate) => certificate.view_number(),
             Self::UpgradeProposal(proposal) => proposal.data.view_number(),
             Self::UpgradeVote(vote) => vote.view_number(),
+            Self::ReVote(revote) => revote.view_number(),
         }
     }
 }
