@@ -201,7 +201,7 @@ impl EpochCommittee {
 
 impl EpochCommittees {
     /// Highest in-memory epoch whose committee holds its root header and stake table hash.
-    /// Used to select the current epoch, never for availability.
+    /// Selects the current epoch at startup.
     pub fn highest_rooted_epoch(&self) -> Option<EpochNumber> {
         let inner = self.inner.read();
         inner

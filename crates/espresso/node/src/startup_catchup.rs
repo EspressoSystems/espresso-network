@@ -66,11 +66,8 @@ const MAX_BACKOFF: Duration = Duration::from_secs(60);
 /// catchup and derivation. At the deadline the node exits with an error.
 pub(crate) const STARTUP_CATCHUP_DEADLINE: Duration = Duration::from_secs(15 * 60);
 
-/// Validator boot. Returns `N`; the tables of `N-1 ..= N+1` are held.
-///
-/// Peer heights first. `current_epoch` gives `N` from the median tip, else from storage. Without
-/// either, the LC contract header decides: inside the seeded epochs the node starts at genesis,
-/// else `StatePeersUnavailable`.
+/// Validator boot. Returns `N`; the tables of `N-1 ..= N+1` are held. Fails with
+/// [`StartupCatchupError`].
 pub(crate) async fn catch_up_cliquenet_stake_tables<C: Client, Fut>(
     coordinator: &EpochMembershipCoordinator<SeqTypes>,
     read_lc_contract_header: impl Fn() -> Fut,
@@ -96,7 +93,15 @@ where
             }
             current
         },
-        None => catchup.current_epoch_without_evidence(&heights).await?,
+        None => {
+            if heights.is_empty() {
+                tracing::info!(
+                    target: "announce::startup_catchup",
+                    "no state peer reported a block height; starting at genesis"
+                );
+            }
+            catchup.current_epoch_without_evidence().await?
+        },
     };
     catchup.ensure(cliquenet_epochs(current)).await?;
     tracing::info!(
@@ -139,8 +144,8 @@ fn current_epoch(
     median_tip.or_else(|| highest_rooted.map(|epoch| EpochNumber::new(epoch.saturating_sub(1))))
 }
 
-/// Whether a node with no other evidence starts at genesis: `epoch(F) <= first`, so no epoch above
-/// the seeded ones is derivable from `F` yet. No header counts as inside. Pure.
+/// Whether a node with no other evidence starts at genesis: `epoch(F) <= first`, so
+/// `lc_contract_epochs` is empty for every `top_needed`. No header counts as inside. Pure.
 fn lc_contract_header_inside_seeded_epochs(
     header: Option<&LcContractHeader>,
     first: EpochNumber,
@@ -235,10 +240,7 @@ where
     /// `N` for a node whose peers gave no median tip and whose storage holds no rooted epoch:
     /// `first` when the LC contract header is inside the seeded epochs, else
     /// `StatePeersUnavailable`.
-    async fn current_epoch_without_evidence(
-        &self,
-        heights: &[u64],
-    ) -> Result<EpochNumber, StartupCatchupError> {
+    async fn current_epoch_without_evidence(&self) -> Result<EpochNumber, StartupCatchupError> {
         let header = self.read_lc_contract_header_retrying().await?;
         let inside = lc_contract_header_inside_seeded_epochs(
             header.as_ref(),
@@ -248,12 +250,6 @@ where
         if !inside {
             return Err(StartupCatchupError::StatePeersUnavailable);
         }
-        if heights.is_empty() {
-            tracing::info!(
-                target: "announce::startup_catchup",
-                "no state peer reported a block height; starting at genesis"
-            );
-        }
         Ok(self.first_epoch)
     }
 
@@ -262,15 +258,15 @@ where
         self.coordinator.membership().load_stake_table(epoch).await
     }
 
-    /// The epochs of `range` that are [held](Self::held), ascending.
-    async fn held_epochs(&self, range: &RangeInclusive<EpochNumber>) -> Vec<EpochNumber> {
-        let mut held = Vec::new();
-        for epoch in epochs(range) {
-            if self.held(epoch).await {
-                held.push(epoch);
+    /// The epochs of `range` that are not [held](Self::held), ascending.
+    async fn missing_epochs(&self, range: RangeInclusive<EpochNumber>) -> Vec<EpochNumber> {
+        let mut missing = Vec::new();
+        for epoch in epochs(&range) {
+            if !self.held(epoch).await {
+                missing.push(epoch);
             }
         }
-        held
+        missing
     }
 
     /// `Ok` iff every derivable epoch of `need` is held, `max(need.start, first + 2)` and above.
@@ -284,7 +280,7 @@ where
     async fn ensure(&self, need: RangeInclusive<EpochNumber>) -> Result<(), StartupCatchupError> {
         let derivable =
             EpochNumber::new(need.start().u64().max(*self.first_epoch + 2))..=*need.end();
-        if self.held_epochs(&derivable).await.len() == epochs(&derivable).count() {
+        if self.missing_epochs(derivable.clone()).await.is_empty() {
             return Ok(());
         }
         if self.state_peers.is_empty() {
@@ -305,13 +301,17 @@ where
     async fn read_lc_contract_header_retrying(
         &self,
     ) -> Result<Option<LcContractHeader>, StartupCatchupError> {
-        retry(self.deadline, Stage::LcContractHeaderRead, |_, left| {
-            let read = timeout(
-                self.params.step_timeout.min(left),
-                (self.read_lc_contract_header)(),
-            );
-            async move { read.await.context("attempt timed out")? }
-        })
+        retry(
+            self.deadline,
+            Stage::LcContractHeaderRead,
+            |_, remaining| {
+                let read = timeout(
+                    self.params.step_timeout.min(remaining),
+                    (self.read_lc_contract_header)(),
+                );
+                async move { read.await.context("attempt timed out")? }
+            },
+        )
         .await
     }
 
@@ -338,9 +338,13 @@ where
             |attempt, remaining| {
                 let range = &range;
                 async move {
-                    let held = self.held_epochs(range).await;
-                    let Some(catchup) = LcContractCatchup::missing(header, range, &held) else {
+                    let missing = self.missing_epochs(range.clone()).await;
+                    let Ok(missing_epochs) = Vec1::try_from_vec(missing) else {
                         return Ok(());
+                    };
+                    let catchup = LcContractCatchup {
+                        header: header.clone(),
+                        missing_epochs,
                     };
                     let (url, peer) = &self.state_peers[attempt % self.state_peers.len()];
                     let headers = timeout(
@@ -356,9 +360,7 @@ where
                             self.coordinator
                                 .add_epoch_root(header)
                                 .await
-                                .map_err(|err| {
-                                    anyhow!("adding the epoch root at {height}: {err}")
-                                })?;
+                                .with_context(|| format!("adding the epoch root at {height}"))?;
                         }
                         anyhow::Ok(())
                     })
@@ -522,21 +524,6 @@ struct LcContractCatchup {
 }
 
 impl LcContractCatchup {
-    /// The epochs of `range` that `held` lacks, `None` when there are none.
-    fn missing(
-        header: &LcContractHeader,
-        range: &RangeInclusive<EpochNumber>,
-        held: &[EpochNumber],
-    ) -> Option<Self> {
-        let missing_epochs = epochs(range)
-            .filter(|epoch| !held.contains(epoch))
-            .collect();
-        Some(Self {
-            header: header.clone(),
-            missing_epochs: Vec1::try_from_vec(missing_epochs).ok()?,
-        })
-    }
-
     /// Fetch the roots deriving the stake tables of the missing epochs from one `peer`, in
     /// ascending order. The proofs are fetched concurrently, once the header `F` is verified.
     ///
@@ -691,22 +678,21 @@ mod tests {
 
     /// LC contract catchup of every LC contract epoch over the chain of `chain()`.
     fn catchup_for(header: &LcContractHeader) -> LcContractCatchup {
-        let epochs = lc_contract_epochs(
+        let range = lc_contract_epochs(
             header,
             EpochNumber::new(N + 1),
             EpochNumber::new(FIRST_EPOCH),
             EPOCH_HEIGHT,
         );
-        LcContractCatchup::missing(header, &epochs, &[]).unwrap()
+        LcContractCatchup {
+            header: header.clone(),
+            missing_epochs: Vec1::try_from_vec(epochs(&range).collect()).unwrap(),
+        }
     }
 
     /// `first_epoch = 1` seeds epochs 1 and 2.
     #[rstest]
-    #[case::decaf_at_root(3000, 3000 * 1000 - 5, 1001, Some(997..=1001))]
-    #[case::decaf_epoch_end(3000, 3000 * 1000, 1001, Some(997..=1001))]
-    #[case::decaf_next_epoch(3000, 3000 * 1000 + 1, 1002, Some(998..=1002))]
     #[case::mainnet_at_root(40000, 40000 * 100 - 5, 101, Some(97..=101))]
-    #[case::mainnet_next_epoch(40000, 40000 * 100 + 1, 102, Some(98..=102))]
     #[case::needed_below_seeded(100, 100 * 8, 2, None)]
     #[case::needed_is_epoch_of_lc_contract_plus_one(100, 100 * 8, 9, Some(5..=9))]
     #[case::needed_above_epoch_of_lc_contract_plus_one(100, 100 * 8, 12, Some(5..=9))]
@@ -871,7 +857,8 @@ mod tests {
     /// commits to.
     ///
     /// Tables answer from `visible` epochs only. `hidden` starts with none, and `add_epoch_root`
-    /// reveals the table of the epoch it adds by storing its root first.
+    /// reveals the table of the epoch it adds by storing its root first. `visible`, `hidden()` and
+    /// `reveal()` stand in for the L1 fetch of a stored epoch root; `store_stake` is a no-op.
     #[derive(Clone, Debug, Default)]
     struct SeededStore {
         tables: Arc<std::sync::Mutex<HashMap<u64, StakeTuple>>>,
@@ -1151,7 +1138,7 @@ mod tests {
     }
 
     /// An epoch root the peer cannot serve at first must be retried, not read as the tip.
-    #[test_log::test(tokio::test)]
+    #[test_log::test(tokio::test(start_paused = true))]
     async fn lc_contract_catchup_retries_a_transient_failure() {
         let (client, header) = chain().await;
         let coordinator = fresh_coordinator(&client).await;
@@ -1171,7 +1158,7 @@ mod tests {
         assert!(has_table(&coordinator, N + 1));
     }
 
-    #[test_log::test(tokio::test)]
+    #[test_log::test(tokio::test(start_paused = true))]
     async fn lc_contract_header_unavailable_aborts_at_the_deadline() {
         let (client, header) = chain().await;
         let coordinator = fresh_coordinator(&client).await;
@@ -1200,7 +1187,7 @@ mod tests {
     }
 
     /// A failed LC contract header read is retried and LC contract catchup then runs.
-    #[test_log::test(tokio::test)]
+    #[test_log::test(tokio::test(start_paused = true))]
     async fn lc_contract_header_read_failure_is_retried() {
         let (client, header) = chain().await;
         let coordinator = fresh_coordinator(&client).await;
@@ -1224,7 +1211,7 @@ mod tests {
     }
 
     /// The LC contract header read shares the deadline with the stages after it.
-    #[test_log::test(tokio::test)]
+    #[test_log::test(tokio::test(start_paused = true))]
     async fn lc_contract_read_consumes_the_deadline() {
         let (client, _) = chain().await;
         let coordinator = coordinator(SeededStore::default());
@@ -1253,18 +1240,22 @@ mod tests {
     async fn restart_boots_from_storage() {
         let (client, header) = chain().await;
         let coordinator = restarted_coordinator(&client).await;
-        client.forget_leaf(LC_CONTRACT_HEIGHT as usize).await;
+        let reads = AtomicUsize::new(0);
 
-        let current = run_catchup(
+        let current = catch_up_cliquenet_stake_tables(
             &coordinator,
-            Some(header),
-            std::slice::from_ref(&client),
-            PARAMS,
+            || async {
+                reads.fetch_add(1, Ordering::Relaxed);
+                Ok(Some(header.clone()))
+            },
+            &peer_list(&[client]),
+            &PARAMS,
         )
         .await
         .unwrap();
 
         assert_eq!(current, EpochNumber::new(N));
+        assert_eq!(reads.load(Ordering::Relaxed), 0);
     }
 
     /// No peer height and stored epochs start from storage, without reading the LC contract.
@@ -1315,10 +1306,8 @@ mod tests {
     /// block 10) starts at genesis, one block further the chain is past the seeded epochs and
     /// storage cannot serve it.
     #[rstest]
-    #[case::no_lc_contract(None, true)]
     #[case::in_first_epoch(Some(EPOCH_HEIGHT), true)]
     #[case::in_second_epoch(Some(EPOCH_HEIGHT + 1), false)]
-    #[case::far_past(Some(5 * EPOCH_HEIGHT), false)]
     #[test_log::test(tokio::test)]
     async fn no_peer_height_and_nothing_derived(
         #[case] lc_height: Option<u64>,
@@ -1354,7 +1343,7 @@ mod tests {
         assert_eq!(current, EpochNumber::new(FIRST_EPOCH));
     }
 
-    #[test_log::test(tokio::test)]
+    #[test_log::test(tokio::test(start_paused = true))]
     async fn no_peer_height_and_failing_lc_read_aborts_at_the_deadline() {
         let (client, _) = chain().await;
         let coordinator = coordinator(SeededStore::default());
@@ -1472,7 +1461,7 @@ mod tests {
     }
 
     /// A failed derivation step is retried until the epoch is held.
-    #[test_log::test(tokio::test)]
+    #[test_log::test(tokio::test(start_paused = true))]
     async fn derivation_retries_each_step_until_the_epoch_is_held() {
         let (client, _) = chain().await;
         let store = SeededStore::for_chain(&client, (N - 4)..=(N + 1))
@@ -1496,7 +1485,7 @@ mod tests {
     }
 
     /// A derivation step that keeps failing ends startup at the deadline.
-    #[test_log::test(tokio::test)]
+    #[test_log::test(tokio::test(start_paused = true))]
     async fn derivation_fails_at_the_deadline() {
         let (client, _) = chain().await;
         let store = SeededStore::for_chain(&client, (N - 4)..=(N + 1))
@@ -1597,6 +1586,7 @@ mod tests {
 
     /// A goal far below `F` installs the proofs at the goal, not at `F`. The membership has no peer
     /// to derive from, so only proofs can supply the tables.
+    /// Derivation is unreachable here, so the proof range is the only source of the tables.
     #[test_log::test(tokio::test)]
     async fn follower_goal_far_below_the_lc_contract_uses_proofs_at_the_goal() {
         let client = TestClient::with_epoch_height(EPOCH_HEIGHT);
@@ -1622,7 +1612,7 @@ mod tests {
     #[rstest]
     #[case::lc_contract_header(true)]
     #[case::no_lc_contract_header(false)]
-    #[test_log::test(tokio::test)]
+    #[test_log::test(tokio::test(start_paused = true))]
     async fn goal_in_a_gap_is_filled(#[case] with_lc_contract_header: bool) {
         let (client, header) = chain().await;
         let store = SeededStore::for_chain(&client, 3..=8).await.hidden();

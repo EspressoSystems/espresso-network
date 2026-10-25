@@ -742,7 +742,7 @@ where
 }
 
 /// Stored epoch roots need the first epoch for reward calculation; `load_start_epoch_info` sets it
-/// again later. With `F` the first epoch, epochs `F` and `F+1` get the genesis committee.
+/// again later. The first epoch and the next get the genesis committee.
 pub(crate) async fn seed_first_epoch_and_stored_roots(
     coordinator: &EpochMembershipCoordinator<SeqTypes>,
     epoch_height: u64,
