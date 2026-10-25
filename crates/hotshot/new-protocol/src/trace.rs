@@ -487,6 +487,26 @@ impl Recorder {
         }
     }
 
+    /// Record a proposal the node took and refused before consensus saw it, with
+    /// the share it came with if any: a step that emits nothing.
+    pub fn refused<T: NodeType>(
+        &mut self,
+        sender: &T::SignatureKey,
+        proposal: &Proposal<T>,
+        share: Option<&VidDisperseShare2<T>>,
+    ) {
+        if self.path.is_none() {
+            return;
+        }
+        let t = self.now();
+        let body = self.proposal_json(proposal);
+        let input = match share {
+            Some(share) => paired_proposal_json(body, share, Some(ident(sender))),
+            None => bare_proposal_json(&ident(sender), body),
+        };
+        self.push_step(input, Vec::new(), t);
+    }
+
     /// Write a step, and keep it as the one later outputs join.
     ///
     /// Outputs held for the first step go first, since they were released

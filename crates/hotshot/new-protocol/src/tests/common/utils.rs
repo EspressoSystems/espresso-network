@@ -21,7 +21,7 @@ use hotshot_types::{
     data::{
         EpochNumber, Leaf2, VidCommitment, VidCommitment2, VidDisperse, VidDisperse2,
         VidDisperseShare2, ViewNumber, vid_commitment,
-        vid_disperse::{AvidmGf2DisperseShareFragment, AvidmGf2NamespacePiece},
+        vid_disperse::{AvidmGf2DisperseShareFragment, AvidmGf2NamespacePiece, vid_total_weight},
     },
     epoch_membership::EpochMembershipCoordinator,
     light_client::{StakeTableState, StateKeyPair},
@@ -733,6 +733,9 @@ impl TestData {
     }
 }
 
+/// The stake table capacity a harness's consensus commits to stake tables with.
+pub const STAKE_TABLE_CAPACITY: usize = 10;
+
 pub fn mock_membership() -> EpochMembershipCoordinator<TestTypes> {
     let (public_key, _) = BLSPubKey::generated_from_seed_indexed([0u8; 32], 0);
     let (coordinator, ..) = mock_membership_with_num_nodes(10, 10, public_key);
@@ -1038,7 +1041,28 @@ pub struct MockBlock {
 }
 
 impl MockBlock {
+    /// The block for the ten-node committee of `mock_membership`.
     pub fn new() -> Self {
+        Self::with_total_weight(10)
+    }
+
+    /// The block whose payload commitment the dispersal over `epoch`'s
+    /// committee computes, as the node's own VID does. That of
+    /// [`Self::new`] if the committee is not known.
+    pub fn for_epoch(
+        membership: &EpochMembershipCoordinator<TestTypes>,
+        epoch: EpochNumber,
+    ) -> Self {
+        match membership.stake_table_for_epoch(Some(epoch)) {
+            Ok(committee) => Self::with_total_weight(vid_total_weight::<TestTypes, _>(
+                committee.stake_table(),
+                Some(epoch),
+            )),
+            Err(_) => Self::new(),
+        }
+    }
+
+    fn with_total_weight(total_weight: usize) -> Self {
         let block = TestBlockPayload::genesis();
         let metadata = TestMetadata {
             num_transactions: 0,
@@ -1046,7 +1070,7 @@ impl MockBlock {
         let payload_commitment = vid_commitment(
             &block.encode(),
             &metadata.encode(),
-            10,
+            total_weight,
             crate::helpers::test_version(),
         );
         let builder_commitment =
@@ -1093,7 +1117,9 @@ pub fn state_verified_input(
     })
 }
 
-fn extract_vid_shares(disperse: &VidDisperse2<TestTypes>) -> Vec<VidDisperseShare2<TestTypes>> {
+pub(crate) fn extract_vid_shares(
+    disperse: &VidDisperse2<TestTypes>,
+) -> Vec<VidDisperseShare2<TestTypes>> {
     disperse
         .shares
         .iter()
@@ -1168,6 +1194,7 @@ pub(crate) struct ConsensusHarness {
     pub membership_coordinator: EpochMembershipCoordinator<TestTypes>,
     pub collected: Outbox<ConsensusOutput<TestTypes>>,
     deferred_states: BTreeMap<ViewNumber, Vec<ConsensusInput<TestTypes>>>,
+    invalid_blocks: BTreeSet<Commitment<Leaf2<TestTypes>>>,
     defer_state_for: BTreeSet<ViewNumber>,
     deferred_headers: BTreeMap<ViewNumber, Vec<ConsensusInput<TestTypes>>>,
     defer_header_for: BTreeSet<ViewNumber>,
@@ -1216,12 +1243,22 @@ impl ConsensusHarness {
         epoch_height: u64,
         lock: UpgradeLock<TestTypes>,
     ) -> Self {
+        Self::with_membership(node_index, epoch_height, lock, mock_membership()).await
+    }
+
+    /// A harness whose consensus runs under `lock` with the committees of
+    /// `membership`.
+    pub async fn with_membership(
+        node_index: u64,
+        epoch_height: u64,
+        lock: UpgradeLock<TestTypes>,
+        membership: EpochMembershipCoordinator<TestTypes>,
+    ) -> Self {
         let (public_key, private_key) = BLSPubKey::generated_from_seed_indexed([0; 32], node_index);
         let state_key_pair = hotshot_types::light_client::StateKeyPair::generate_from_seed_indexed(
             [0u8; 32], node_index,
         );
         let state_private_key = state_key_pair.sign_key_ref().clone();
-        let membership = mock_membership();
         let instance = Arc::new(TestInstanceState::default());
         // At an epoch version, as a new-protocol anchor is: a leaf from before
         // epochs commits differently from the proposal rebuilt from it.
@@ -1236,7 +1273,7 @@ impl ConsensusHarness {
             public_key,
             private_key,
             state_private_key,
-            10,
+            STAKE_TABLE_CAPACITY,
             lock,
             genesis_leaf,
             epoch_height,
@@ -1246,6 +1283,7 @@ impl ConsensusHarness {
             membership_coordinator: membership,
             collected: Outbox::new(),
             deferred_states: BTreeMap::new(),
+            invalid_blocks: BTreeSet::new(),
             defer_state_for: BTreeSet::new(),
             deferred_headers: BTreeMap::new(),
             defer_header_for: BTreeSet::new(),
@@ -1304,6 +1342,7 @@ impl ConsensusHarness {
             membership_coordinator: membership,
             collected: Outbox::new(),
             deferred_states: BTreeMap::new(),
+            invalid_blocks: BTreeSet::new(),
             defer_state_for: BTreeSet::new(),
             deferred_headers: BTreeMap::new(),
             defer_header_for: BTreeSet::new(),
@@ -1356,6 +1395,43 @@ impl ConsensusHarness {
             self.trace.held(proposal);
         }
         self.consensus.seed_proposals(proposals);
+    }
+
+    /// Record the run under `label` instead of the test's name, for a test that
+    /// replays several runs.
+    pub fn record_as(mut self, label: &str) -> Self {
+        self.trace = trace::Recorder::new(label);
+        self
+    }
+
+    /// Fail the state validation of the block with this leaf commitment, as for a
+    /// block that is not valid.
+    pub fn invalidate(&mut self, block: Commitment<Leaf2<TestTypes>>) {
+        self.invalid_blocks.insert(block);
+    }
+
+    /// Record a proposal the node took and refused before consensus saw it, as its
+    /// proposal validation refuses a malformed one, with the share it came with:
+    /// the node did nothing.
+    pub fn record_refused(
+        &mut self,
+        sender: BLSPubKey,
+        proposal: ProposalMessage<TestTypes, Validated>,
+        share: Option<VidDisperseShare2<TestTypes>>,
+    ) {
+        self.trace.preamble(
+            self.consensus.public_key(),
+            self.consensus.last_decided_leaf(),
+            self.consensus.cert1_at(ViewNumber::genesis()),
+            *self.consensus.epoch_height,
+        );
+        let input = ConsensusInput::Proposal(sender, proposal);
+        record_leader(&mut self.trace, &self.consensus, &input);
+        let ConsensusInput::Proposal(sender, proposal) = input else {
+            unreachable!("built as a proposal");
+        };
+        self.trace
+            .refused(&sender, &proposal.proposal.data, share.as_ref());
     }
 
     /// Withhold `view`'s state-validation response until [`Self::release_state`].
@@ -1475,7 +1551,19 @@ impl ConsensusHarness {
     ) {
         match output {
             ConsensusOutput::RequestState(req) => {
-                let input = state_verified_input(&req.proposal, req.view);
+                let input = if self
+                    .invalid_blocks
+                    .contains(&proposal_commitment(&req.proposal))
+                {
+                    let ConsensusInput::StateValidated(response) =
+                        state_verified_input(&req.proposal, req.view)
+                    else {
+                        unreachable!("a state response");
+                    };
+                    ConsensusInput::StateValidationFailed(response)
+                } else {
+                    state_verified_input(&req.proposal, req.view)
+                };
                 if self.defer_state_for.contains(&req.view) {
                     self.deferred_states
                         .entry(req.view)
@@ -1532,7 +1620,7 @@ impl ConsensusHarness {
                 );
             },
             ConsensusOutput::RequestBlockAndHeader(req) => {
-                let mock_block = MockBlock::new();
+                let mock_block = MockBlock::for_epoch(&self.membership_coordinator, req.epoch);
                 let parent_leaf = req.parent_proposal.clone().into();
                 let header = TestBlockHeader::new(
                     &parent_leaf,

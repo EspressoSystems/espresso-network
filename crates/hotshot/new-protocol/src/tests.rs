@@ -13,6 +13,7 @@ mod proposal;
 mod random;
 mod restarts;
 mod safety;
+mod scenario;
 mod stake_table_changes;
 mod state;
 mod storage;

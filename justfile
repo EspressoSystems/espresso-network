@@ -217,6 +217,26 @@ test-lean-check dir="":
     fi
     [ "$suite" -eq 0 ] && [ "$checked" -eq 0 ]
 
+# Replay random settings `first` to `first + count - 1` of the Lean simulator to the
+# Rust node and check each trace. Each draws faults, committees, timing and delays.
+test-lean-scenarios first="1" count="48":
+    #!/usr/bin/env bash
+    set -uo pipefail
+    (cd lean/new-protocol-diff && lake build sim check) || exit 1
+    scenarios="$(pwd)/target/np-scenarios"
+    traces="$(pwd)/target/np-scenario-traces"
+    rm -rf "$scenarios" "$traces"
+    lean/new-protocol-diff/.lake/build/bin/sim --scenarios "$scenarios" {{first}} {{count}} || exit 1
+    replayed=0
+    NP_TEST_VERSION=0.7 NP_TRACE_DIR="$traces" NP_SCENARIOS="$scenarios" \
+      cargo test -p hotshot-new-protocol --release --lib tests::scenario:: || replayed=$?
+    checked=0
+    lean/new-protocol-diff/.lake/build/bin/check "$traces" || checked=$?
+    if [ "$replayed" -ne 0 ]; then
+      echo "replaying the scenarios failed" >&2
+    fi
+    [ "$replayed" -eq 0 ] && [ "$checked" -eq 0 ]
+
 test-integration: (build "test")
 	INTEGRATION_TEST_NODE_VERSION=2 cargo nextest run -p tests --nocapture --profile integration test_native_demo_basic
 
