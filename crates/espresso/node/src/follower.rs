@@ -68,7 +68,7 @@ use crate::{
     context::TaskList,
     init_node_state, load_or_fetch_network_config,
     startup_catchup::{
-        PeerCatchupGoal, StartupCatchupError, StartupCatchupParams, catch_up_stake_tables,
+        StartupCatchupError, StartupCatchupParams, catch_up_stake_tables, first_epoch,
         state_peer_clients,
     },
     state_signature::StateSignatureMemStorage,
@@ -107,7 +107,7 @@ pub struct FollowerParams {
     /// The upstreams when unset.
     pub config_peers: Option<Vec<Url>>,
     pub catchup: CatchupParams,
-    pub bootstrap: StartupCatchupParams,
+    pub startup_catchup: StartupCatchupParams,
     pub options: FollowerOptions,
 }
 
@@ -261,7 +261,7 @@ where
     )
     .await;
     let state_peer_clients = state_peer_clients(&params.upstreams);
-    let lc_contract = replay.is_none().then(|| node_state.clone());
+    let lc_node_state = replay.is_none().then(|| node_state.clone());
 
     let (source, light_client): (Arc<dyn ChainSource>, _) = match replay {
         Some(source) => (source, None),
@@ -295,10 +295,10 @@ where
     catch_up_stake_tables(
         &coordinator,
         epoch_height,
-        || read_lc_contract_state(lc_contract.as_ref()),
+        || read_lc_contract_state(lc_node_state.as_ref()),
         &state_peer_clients,
-        &params.bootstrap,
-        PeerCatchupGoal::FollowerEpoch(first_goal),
+        &params.startup_catchup,
+        first_goal,
     )
     .await
     .context("startup stake-table catchup failed")?;
@@ -321,7 +321,7 @@ where
 
     let follower = Follower {
         source,
-        lc_contract_reader: lc_contract,
+        node_state: lc_node_state,
         sink: Arc::new(sink),
         persistence: persistence.clone(),
         coordinator,
@@ -331,7 +331,7 @@ where
         upgrade_lock,
         epoch_height,
         options: params.options,
-        bootstrap: params.bootstrap,
+        startup_catchup: params.startup_catchup,
         state_peer_clients,
         next,
     };
@@ -580,7 +580,7 @@ impl ConsensusSource for FollowerConsensus {
 
 struct Follower<P> {
     source: Arc<dyn ChainSource>,
-    lc_contract_reader: Option<NodeState>,
+    node_state: Option<NodeState>,
     sink: Arc<dyn DecideSink>,
     persistence: Arc<P>,
     coordinator: EpochMembershipCoordinator<SeqTypes>,
@@ -590,7 +590,7 @@ struct Follower<P> {
     upgrade_lock: UpgradeLock<SeqTypes>,
     epoch_height: u64,
     options: FollowerOptions,
-    bootstrap: StartupCatchupParams,
+    startup_catchup: StartupCatchupParams,
     state_peer_clients: Vec<(Url, QueryServiceClient)>,
     next: u64,
 }
@@ -749,19 +749,15 @@ impl<P: SequencerPersistence> Follower<P> {
         let Some(block_epoch) = leaf.epoch(self.epoch_height) else {
             return Ok(());
         };
-        let first_epoch = self
-            .coordinator
-            .membership()
-            .first_epoch()
-            .ok_or(StartupCatchupError::FirstEpochUnset)?;
+        let first_epoch = first_epoch(&self.coordinator)?;
         let catch_up = async |goal| {
             catch_up_stake_tables(
                 &self.coordinator,
                 self.epoch_height,
-                || read_lc_contract_state(self.lc_contract_reader.as_ref()),
+                || read_lc_contract_state(self.node_state.as_ref()),
                 &self.state_peer_clients,
-                &self.bootstrap,
-                PeerCatchupGoal::FollowerEpoch(goal),
+                &self.startup_catchup,
+                goal,
             )
             .await
             .map(drop)
@@ -873,9 +869,9 @@ async fn catch_up_if_missing(
 
 /// The LC contract state, `None` when replaying a recorded chain without an LC contract.
 async fn read_lc_contract_state(
-    lc_contract: Option<&NodeState>,
+    node_state: Option<&NodeState>,
 ) -> anyhow::Result<Option<LightClientStateSol>> {
-    match lc_contract {
+    match node_state {
         Some(node_state) => node_state.lc_contract_state().await,
         None => Ok(None),
     }
@@ -932,8 +928,8 @@ mod tests {
 
     const FIRST_EPOCH: u64 = 1;
 
-    /// Run `catch_up_if_missing` with a catchup that fails with `NoStatePeers` when `fails`.
-    /// Returns the result and the goals the catchup was called with.
+    /// Run `catch_up_if_missing` with a catchup that fails with `StatePeersUnavailable` when
+    /// `fails`. Returns the result and the goals the catchup was called with.
     async fn run(
         block_epoch: u64,
         held: bool,
@@ -947,7 +943,7 @@ mod tests {
             async |goal| {
                 goals.borrow_mut().push(goal.u64());
                 if fails {
-                    return Err(StartupCatchupError::NoStatePeers);
+                    return Err(StartupCatchupError::StatePeersUnavailable);
                 }
                 Ok(())
             },
@@ -977,7 +973,7 @@ mod tests {
     async fn catch_up_if_missing_propagates_the_catchup_error() {
         let (result, goals) = run(5, false, true).await;
 
-        assert_matches!(result, Err(StartupCatchupError::NoStatePeers));
+        assert_matches!(result, Err(StartupCatchupError::StatePeersUnavailable));
         assert_eq!(goals, vec![6]);
     }
 }

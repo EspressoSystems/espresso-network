@@ -32,7 +32,7 @@ use crate::{
     keyset::KeySetOptions,
     persistence,
     proposal_fetcher::ProposalFetcherConfig,
-    startup_catchup::StartupCatchupParams,
+    startup_catchup::{STARTUP_CATCHUP_DEADLINE, StartupCatchupParams},
 };
 
 // This options struct is a bit unconventional. The sequencer has multiple optional modules which
@@ -198,19 +198,10 @@ pub struct Options {
 
     /// Timeout for each step of the startup stake-table catchup.
     ///
-    /// Bounds a peer catchup step, the LC contract state read, an LC contract catchup fetch from
-    /// one peer, a peer height read, and DRB preparation. A timed-out step is retried until the
-    /// bootstrap deadline. The timeout does not cancel the catchup task, which is a detached
-    /// `tokio::spawn` bounded by its own `DEFAULT_CATCHUP_TIMEOUT` watchdog.
+    /// Bounds the LC contract state read, an LC contract catchup fetch from one peer and a peer
+    /// height read. A timed-out step is retried until `STARTUP_CATCHUP_DEADLINE`.
     #[clap(long, env = "ESPRESSO_NODE_BOOTSTRAP_EPOCH_CATCHUP_TIMEOUT", default_value = "30s", value_parser = parse_duration)]
     pub bootstrap_epoch_catchup_timeout: Duration,
-
-    /// How long startup retries before giving up, in total for the LC contract state read, LC
-    /// contract catchup and peer catchup toward the chain tip the state peers report.
-    ///
-    /// At the deadline the node exits with an error.
-    #[clap(long, env = "ESPRESSO_NODE_BOOTSTRAP_DEADLINE", default_value = "15m", value_parser = parse_duration)]
-    pub bootstrap_deadline: Duration,
 
     /// How long a leader waits before proposing a block with no transactions in it.
     #[clap(long, env = "ESPRESSO_NODE_EMPTY_BLOCK_DELAY", default_value = "500ms", value_parser = parse_duration)]
@@ -230,10 +221,10 @@ pub struct Options {
 }
 
 impl Options {
-    pub fn bootstrap_params(&self) -> StartupCatchupParams {
+    pub fn startup_catchup_params(&self) -> StartupCatchupParams {
         StartupCatchupParams {
             step_timeout: self.bootstrap_epoch_catchup_timeout,
-            total_timeout: self.bootstrap_deadline,
+            total_timeout: STARTUP_CATCHUP_DEADLINE,
         }
     }
 
@@ -275,7 +266,7 @@ impl Options {
                 local_timeout: self.local_catchup_timeout,
                 http_delay: self.http_catchup_delay,
             },
-            bootstrap: self.bootstrap_params(),
+            startup_catchup: self.startup_catchup_params(),
             options: FollowerOptions {
                 poll_interval: follower.poll_interval,
                 max_blocks_per_poll: follower.max_blocks_per_poll,
@@ -680,7 +671,6 @@ pub struct PublicNodeConfig {
     pub local_catchup_timeout: Duration,
     pub http_catchup_delay: Duration,
     pub bootstrap_epoch_catchup_timeout: Duration,
-    pub bootstrap_deadline: Duration,
     pub catchup_backoff: BackoffParams,
     /// Unset on a validator.
     pub follower: Option<FollowerConfig>,
@@ -984,7 +974,6 @@ impl PublicNodeConfig {
             local_catchup_timeout: opt.local_catchup_timeout,
             http_catchup_delay: opt.http_catchup_delay,
             bootstrap_epoch_catchup_timeout: opt.bootstrap_epoch_catchup_timeout,
-            bootstrap_deadline: opt.bootstrap_deadline,
             catchup_backoff: opt.catchup_backoff,
             follower: modules.follower.as_ref().map(FollowerConfig::from),
             proposal_fetcher: opt.proposal_fetcher_config,

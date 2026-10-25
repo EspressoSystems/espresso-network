@@ -5751,7 +5751,7 @@ mod test {
                 local_timeout: Duration::from_secs(5),
                 http_delay: Duration::ZERO,
             },
-            bootstrap: StartupCatchupParams {
+            startup_catchup: StartupCatchupParams {
                 step_timeout: Duration::from_secs(30),
                 total_timeout: Duration::from_secs(900),
             },

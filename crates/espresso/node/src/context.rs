@@ -138,7 +138,7 @@ where
         stake_table_capacity: usize,
         event_consumer: impl PersistenceEventConsumer + 'static,
         proposal_fetcher_cfg: ProposalFetcherConfig,
-        bootstrap_params: StartupCatchupParams,
+        startup_catchup: StartupCatchupParams,
         state_peers: Vec<Url>,
         empty_block_delay: Duration,
         block_sizes: BTreeMap<Version, u64>,
@@ -187,7 +187,7 @@ where
             epoch_height,
             || instance_state.lc_contract_state(),
             &state_peer_clients,
-            &bootstrap_params,
+            &startup_catchup,
         )
         .await
         .context("startup stake-table catchup failed")?;

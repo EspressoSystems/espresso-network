@@ -128,7 +128,7 @@ pub struct NetworkParams {
     pub config_peers: Option<Vec<Url>>,
     pub catchup: CatchupParams,
     /// Startup stake-table catchup (`catch_up_cliquenet_stake_tables`).
-    pub bootstrap: StartupCatchupParams,
+    pub startup_catchup: StartupCatchupParams,
     /// The address to advertise as our public API's URL
     pub public_api_url: Option<Url>,
     /// Cliquenet network address.
@@ -461,7 +461,7 @@ where
         genesis.stake_table.capacity,
         event_consumer,
         proposal_fetcher_config,
-        network_params.bootstrap,
+        network_params.startup_catchup,
         state_peers,
         empty_block_delay,
         block_sizes,
