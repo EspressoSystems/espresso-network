@@ -139,10 +139,15 @@ theorem lockable_nil {r : Trace} {c : Cert1} (hl : (r.history 0).Lockable cfg c)
 
 theorem parentReady_grows {h1 h2 : History} (hr : ∀ i, h1.Received i → h2.Received i) {p : Proposal}
     (hp : ParentReady cfg h1 p) : ParentReady cfg h2 p := by
-  rcases hp with hg | he | ⟨parent, hb, hv, hh, hpay⟩
+  rcases hp with hg | ⟨parent, hb, hv, hh⟩
   · exact Or.inl hg
-  · exact Or.inr (Or.inl he)
-  · exact Or.inr (Or.inr ⟨parent, hasProposal_grows hr hb, hv, hh, hasPayload_grows hr hpay⟩)
+  · exact Or.inr ⟨parent, hasProposal_grows hr hb, hv, hh⟩
+
+/-- A proposal opening an epoch has its parent ready once its opening is justified. -/
+theorem parentReady_of_opens {h : History} {p : Proposal} (hent : EntersEpoch cfg p)
+    (hop : OpensEpochJustified cfg h p) : ParentReady cfg h p := by
+  obtain ⟨⟨q, hq, hqv, hqh⟩, -⟩ := hop hent
+  exact Or.inr ⟨q, hq, Nat.le_of_eq (congrArg ViewNumber.toNat hqv), hqh⟩
 
 /-! ## Along a trace -/
 

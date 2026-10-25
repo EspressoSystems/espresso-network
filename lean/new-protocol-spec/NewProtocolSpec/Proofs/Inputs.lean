@@ -98,7 +98,7 @@ theorem SameInputs.certJustified (c : Cert1) (ev : Option TimeoutCert) :
       (he.upTo _).hasCert2]
 
 theorem SameInputs.parentReady (p : Proposal) : ParentReady cfg h1 p ↔ ParentReady cfg h2 p := by
-  simp only [ParentReady, he.hasProposal, he.hasPayload]
+  simp only [ParentReady, he.hasProposal]
 
 theorem SameInputs.opens (p : Proposal) :
     OpensEpochJustified cfg h1 p ↔ OpensEpochJustified cfg h2 p := by
@@ -157,10 +157,9 @@ theorem owed_antitone {h1 h2 : History} (he : SameInputs h1 h2)
     refine ⟨⟨s, vid, (he.received _).mpr hr, hl, hsh⟩, hw, (he.received _).mpr hval, ?_,
       hsk, (he.opens _).mpr hop, (he.notBehind _).mpr hnb, hto _ ht,
       fun vote hsv => honce vote (hs _ hsv), (he.inView _).mpr hv⟩
-    rcases hpr with hg | hen | ⟨parent, hb, hv, hh, hpay⟩
+    rcases hpr with hg | ⟨parent, hb, hv, hh⟩
     · exact Or.inl hg
-    · exact Or.inr (Or.inl hen)
-    · exact Or.inr (Or.inr ⟨parent, (he.hasProposal _).mpr hb, hv, hh, (he.hasPayload _ _).mpr hpay⟩)
+    · exact Or.inr ⟨parent, (he.hasProposal _).mpr hb, hv, hh⟩
   | vote1Again r =>
     obtain ⟨⟨s, hr, hl⟩, hw, hsk, ⟨b, hb, hcert, hpay⟩, hnb, ht, honce, hv⟩ := ho
     exact ⟨⟨s, (he.received _).mpr hr, hl⟩, hw, hsk,

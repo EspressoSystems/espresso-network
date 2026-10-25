@@ -305,7 +305,7 @@ structure Synchrony (N : TimedNetwork cfg leader C) (GST : Time) (Δ τ : Durati
   unless the certificate reaches them.
   -/
   timeoutCertForward : ∀ tc k hk n, (N.trace k hk n).input = .timeoutCertificate tc →
-    (∀ u, ((N.trace k hk).history n).ViewGround cfg u → u.toNat ≤ tc.view.toNat) →
+    (∀ u, ((N.trace k hk).history n).ViewGround cfg u → u ≤ tc.view) →
     (¬ ∃ vote : TimeoutVote, ((N.trace k hk).history (n + 1)).Sent (.timeoutVote vote)
       ∧ vote.view = tc.view ∧ vote.data.epoch = tc.data.epoch) →
     ∀ k' hk', C.HonestFrom tc.data.epoch k' → N.By k' hk' (max (N.time k hk n) GST + Δ) fun hist =>

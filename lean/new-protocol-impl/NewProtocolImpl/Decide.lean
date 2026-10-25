@@ -315,10 +315,9 @@ def OwedB (h : History) : Obligation → Prop
       (∃ x ∈ receivedProposals h, x.2.1 = p ∧ leader p.epoch p.viewNumber = some x.1
         ∧ ShareMatches p x.2.2)
       ∧ ProposalWellFormed cfg p ∧ h.Received (.blockValidated p.viewNumber (blockHash p))
-      ∧ (p.parentCert.view = cfg.anchorView ∨ EntersEpoch cfg p
+      ∧ (p.parentCert.view = cfg.anchorView
           ∨ ∃ parent ∈ proposalsHeld cfg h, parent.viewNumber ≤ p.parentCert.view
-              ∧ p.parentCert.data.blockHash = blockHash parent
-              ∧ h.HasPayload cfg parent.viewNumber parent.payloadCommit)
+              ∧ p.parentCert.data.blockHash = blockHash parent)
       ∧ SafeParentB p ∧ OpensB cfg h p ∧ NotBehindB cfg h p.epoch
       ∧ ¬ TimedOutB h p.viewNumber
       ∧ (∀ vote ∈ vote1sSent h, vote.data.epoch = p.epoch → vote.view ≠ p.viewNumber)

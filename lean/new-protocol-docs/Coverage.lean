@@ -79,8 +79,7 @@ Definitions that only name a field or pick a constructor's argument, shown by
 their docstring alone.
 -/
 def accessors : List Name :=
-  [`NewProtocol.Input.cert1, `NewProtocol.Input.cert2, `NewProtocol.Input.timeoutCert,
-   `NewProtocol.Input.sentBy, `NewProtocol.Message.leaderView,
+  [`NewProtocol.Input.sentBy, `NewProtocol.Message.leaderView,
    `NewProtocol.Message.leaderEpoch, `NewProtocol.Proposal.payloadCommit,
    `NewProtocol.Vote1Data.toVote2, `NewProtocol.ViewNumber.genesis,
    `NewProtocol.Config.anchorCert2, `NewProtocol.Config.startEpoch,

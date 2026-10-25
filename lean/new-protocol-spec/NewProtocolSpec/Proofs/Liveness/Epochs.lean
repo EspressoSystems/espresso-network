@@ -112,7 +112,7 @@ theorem decides_of_epochChange {δ : Nat} (hp : Prompt N δ) {k : PubKey} {hk : 
   have hgen : cfg.anchorView < q.viewNumber := by
     obtain ⟨i, -, hin⟩ := (Trace.received_history _).mp hrec
     have hc2b : Cert2Backed N.trace c2 :=
-      N.cert2Genuine k hk i c2 (by rw [hin]; rfl)
+      N.cert2Genuine k hk i c2 (Or.inr ⟨_, _, hin⟩)
     obtain ⟨cc, hccb, -, hcch, -⟩ := cert2_implies_cert1 cfg N.toNetwork hcfg hc2b
     exact backed_block_after_anchor N.toNetwork hcfg hcf hccb (by rw [hcch, ← hwf.sameData, hwf.cert1Data]; rfl)
   cases m with

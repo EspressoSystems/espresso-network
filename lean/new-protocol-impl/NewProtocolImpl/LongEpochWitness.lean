@@ -750,15 +750,15 @@ theorem votes1 (k : PubKey) (u : Nat) (hl : lag k (u / 2) = 0) : ∃ j, j ≤ 8 
         simp only [phase, hl, ite_true] at this; exact this, rfl, by rw [blk_view], rfl⟩, blk_wellFormed u, ?_, ?_,
       blk_safe u, hopen, notBehind ?_, not_timedOut, fun vote hs _ hvv => ?_, ?_⟩
   · rw [blk_view]; exact recv_at u 2 (by omega) (by omega)
-  · -- The parent is genesis, ends the epoch before, or is the epoch's first block, whose payload the node holds.
+  · -- The parent is genesis, ends the epoch before, or is the epoch's first block, which the node holds.
     cases u with
     | zero => exact Or.inl rfl
     | succ u =>
       rcases par u with hp | hp
       · rw [show (u + 1) / 2 = u / 2 by omega] at hl
-        exact Or.inr (Or.inr ⟨blk u, hasProposal_of u (by omega), by rw [blk_parent]; exact Nat.le_refl _,
-          by rw [blk_parent]; rfl, payload_of u hl (by omega)⟩)
-      · exact Or.inr (Or.inl ((enters_iff _).mpr ⟨by omega, by omega⟩))
+        exact Or.inr ⟨blk u, hasProposal_of u (by omega), by rw [blk_parent]; exact Nat.le_refl _,
+          by rw [blk_parent]; rfl⟩
+      · exact Liveness.parentReady_of_opens ((enters_iff _).mpr ⟨by omega, by omega⟩) hopen
   · rw [blk_epoch]; show eAt (8 * u + 3) ≤ u / 2 + 1; rw [eAt_eq]; omega
   · obtain ⟨j, hj, hjv⟩ := sent_iff.mp hs
     obtain ⟨u', rfl, -, -⟩ := sent_vote1 hv hjv
@@ -850,7 +850,7 @@ def net : TimedNetwork cfg leader C where
   trace k _ := tr k
   safe k _ n := .of_every (protocol hv k n).toSafeHistory
   cert1Genuine k _ n x hc := by
-    rcases Input.mem_cert1.mp hc with hin | ⟨c2, p, hin⟩ | ⟨s, p, vid, hin, rfl⟩
+    rcases hc with hin | ⟨c2, p, hin⟩ | ⟨s, p, vid, hin, rfl⟩
     · obtain ⟨u, -, rfl⟩ := input_cert1 hin
       exact Or.inr (backed1 hv u)
     · obtain ⟨u, -, -, rfl, -, -⟩ := input_epochChange hin
@@ -861,13 +861,13 @@ def net : TimedNetwork cfg leader C where
       | zero => exact Or.inl rfl
       | succ u => exact Or.inr (backed1 hv u)
   cert2Genuine k _ n x hc := by
-    rcases Input.mem_cert2.mp hc with hin | ⟨c1, p, hin⟩
+    rcases hc with hin | ⟨c1, p, hin⟩
     · obtain ⟨u, -, rfl⟩ := input_cert2 hin
       exact backed2 hv u
     · obtain ⟨u, -, -, -, rfl, -⟩ := input_epochChange hin
       exact backed2 hv u
   timeoutCertGenuine k _ n tc hc := by
-    rcases Input.mem_timeoutCert.mp hc with hin | ⟨s, p, vid, hin, hte⟩ | ⟨s, r, hin, hte⟩
+    rcases hc with hin | ⟨s, p, vid, hin, hte⟩ | ⟨s, r, hin, hte⟩
     · exact absurd hin (input_quiet.2.2 tc)
     · obtain ⟨u, -, -, rfl⟩ := input_proposal_any hin
       rw [blk_evidence] at hte; cases hte

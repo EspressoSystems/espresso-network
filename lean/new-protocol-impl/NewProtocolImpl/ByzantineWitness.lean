@@ -1459,8 +1459,8 @@ theorem votes1 (k : PubKey) (u : Nat) : ∃ j, j ≤ sAt u + 2
     | zero => exact Or.inl rfl
     | succ u =>
       have := sAt_succ u
-      exact Or.inr (Or.inr ⟨blk u, hasProposal_of u (by omega), by rw [blk_parent]; exact Nat.le_refl _,
-        by rw [blk_parent]; rfl, payload_of u (by omega)⟩)
+      exact Or.inr ⟨blk u, hasProposal_of u (by omega), by rw [blk_parent]; exact Nat.le_refl _,
+        by rw [blk_parent]; rfl⟩
   have hcur : NotBehind cfg (H k (sAt u + 2 + 1)) (blk u).epoch :=
     notBehind (by rw [blk_epoch, show sAt u + 2 + 1 = sAt u + 3 from rfl, eAt_view u 3 (by omega)]; exact Nat.le_refl _)
   refine Classical.byContradiction fun hneg => settled k (sAt u + 2) (.vote1 (blk u))
@@ -1836,7 +1836,7 @@ def net (B : Bool) : TimedNetwork cfg leader (C' B) where
   trace k _ := tr k
   safe k _ n := .of_every (protocol hv k n).toSafeHistory
   cert1Genuine k _ n x hc := by
-    rcases Input.mem_cert1.mp hc with hin | ⟨c2, p, hin⟩ | ⟨s, p, vid, hin, rfl⟩
+    rcases hc with hin | ⟨c2, p, hin⟩ | ⟨s, p, vid, hin, rfl⟩
     · obtain ⟨u, -, rfl⟩ := input_cert1 hin
       exact Or.inr (backed1 hv u)
     · obtain ⟨w, -, -, rfl, -, -⟩ := input_epochChange hin
@@ -1850,13 +1850,13 @@ def net (B : Bool) : TimedNetwork cfg leader (C' B) where
       · exact Or.inr (backed1 hv _)
       · exact Or.inr (backed1 hv _)
   cert2Genuine k _ n x hc := by
-    rcases Input.mem_cert2.mp hc with hin | ⟨c1, p, hin⟩
+    rcases hc with hin | ⟨c1, p, hin⟩
     · obtain ⟨u, -, rfl⟩ := input_cert2 hin
       exact backed2 hv u
     · obtain ⟨w, -, -, -, rfl, -⟩ := input_epochChange hin
       exact backed2 hv _
   timeoutCertGenuine k _ n tc hc := by
-    rcases Input.mem_timeoutCert.mp hc with hin | ⟨s, p, vid, hin, hte⟩ | ⟨s, r, hin, -⟩
+    rcases hc with hin | ⟨s, p, vid, hin, hte⟩ | ⟨s, r, hin, -⟩
     · obtain ⟨w, -, rfl⟩ := input_tc hin
       exact ⟨tcBacked w, tcChecked hv w⟩
     · obtain ⟨v, rfl⟩ := input_share hin
@@ -2432,8 +2432,8 @@ theorem votesE (w : Nat) {k : PubKey} {E : Block} (hk : (k = a ∧ E = E1 w) ∨
   have hs2 := sAt_at w 2 (by omega)
   have ho := offs_nat k
   have hready : ParentReady cfg (H k (29 * w + 23)) E :=
-    Or.inr (Or.inr ⟨blk (3 * w + 2), hasProposal_of _ (by omega), by rw [hEp]; exact Nat.le_refl _,
-      by rw [hEp]; rfl, payload_of _ (by omega)⟩)
+    Or.inr ⟨blk (3 * w + 2), hasProposal_of _ (by omega), by rw [hEp]; exact Nat.le_refl _,
+      by rw [hEp]; rfl⟩
   have hopens : OpensEpochJustified cfg (H k (29 * w + 23)) E := fun _ =>
     ⟨⟨blk (3 * w + 2), hasProposal_of _ (by omega), by rw [hEp]; rfl, by rw [hEp]; rfl⟩,
       C2 (3 * w + 2), Or.inl <| hasCert2_of _ (by omega),

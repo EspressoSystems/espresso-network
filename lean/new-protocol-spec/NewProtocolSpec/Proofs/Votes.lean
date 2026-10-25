@@ -38,35 +38,35 @@ theorem Network.safe_at (k : PubKey) (h : C.Honest k) (n : Nat) :
 theorem Network.parentGenuine (k : PubKey) (h : C.Honest k) (n : Nat) (sender : PubKey) (p : Proposal)
     (vid : VidShare) (hin : (N.trace k h n).input = .proposal sender p (some vid)) :
     p.parentCert = cfg.anchorCert ∨ Cert1Backed N.trace p.parentCert :=
-  N.cert1Genuine k h n _ (by rw [hin]; rfl)
+  N.cert1Genuine k h n _ (Or.inr (Or.inr ⟨_, _, _, hin, rfl⟩))
 
 /-- The timeout evidence of a proposal an honest node is handed is backed, and its lock checked. -/
 theorem Network.evidenceGenuine (k : PubKey) (h : C.Honest k) (n : Nat) (sender : PubKey)
     (p : Proposal) (vid : VidShare) (tc : TimeoutCert) (hin : (N.trace k h n).input = .proposal sender p (some vid))
     (hte : p.timeoutEvidence = some tc) :
     TimeoutCertBacked N.trace tc ∧ TimeoutLockChecked N.trace cfg tc :=
-  N.timeoutCertGenuine k h n tc (by rw [hin]; simp [Input.timeoutCert, hte])
+  N.timeoutCertGenuine k h n tc (Or.inr (Or.inl ⟨_, _, _, hin, hte⟩))
 
 /-- The timeout evidence of a re-vote request an honest node is handed is backed, and its lock checked. -/
 theorem Network.revoteEvidenceGenuine (k : PubKey) (h : C.Honest k) (n : Nat) (sender : PubKey)
     (r : RevoteRequest) (tc : TimeoutCert) (hin : (N.trace k h n).input = .revote sender r)
     (hte : r.timeoutEvidence = some tc) :
     TimeoutCertBacked N.trace tc ∧ TimeoutLockChecked N.trace cfg tc :=
-  N.timeoutCertGenuine k h n tc (by rw [hin]; simp [Input.timeoutCert, hte])
+  N.timeoutCertGenuine k h n tc (Or.inr (Or.inr ⟨_, _, hin, hte⟩))
 
 /-- A timeout certificate an honest node is handed has a checked lock. -/
 theorem Network.timeoutLockGenuine (k : PubKey) (h : C.Honest k) (n : Nat) (tc : TimeoutCert)
     (hin : (N.trace k h n).input = .timeoutCertificate tc) : TimeoutLockChecked N.trace cfg tc :=
-  (N.timeoutCertGenuine k h n tc (by rw [hin]; rfl)).2
+  (N.timeoutCertGenuine k h n tc (Or.inl hin)).2
 
 /-- A `Cert2` an honest node holds is backed. -/
 theorem cert2_held_backed {k : PubKey} {h : C.Honest k} {n : Nat} {c : Cert2}
     (hc : ((N.trace k h).history n).HasCert2 c) : Cert2Backed N.trace c := by
   rcases hc with hrec | ⟨c1, p, hrec⟩
   · obtain ⟨m, -, hm⟩ := (Trace.received_history _).mp hrec
-    exact N.cert2Genuine k h m c (by rw [hm]; rfl)
+    exact N.cert2Genuine k h m c (Or.inl hm)
   · obtain ⟨m, -, hm⟩ := (Trace.received_history _).mp hrec
-    exact N.cert2Genuine k h m c (by rw [hm]; rfl)
+    exact N.cert2Genuine k h m c (Or.inr ⟨_, _, hm⟩)
 
 /--
 A vote1 an honest node sends is its own, for a well-formed valid proposal it
@@ -187,6 +187,8 @@ theorem cert1_held_backed {k : PubKey} {h : C.Honest k} {n : Nat} {c : Cert1}
   · exact Or.inl hne
   · obtain ⟨m, hm⟩ := cert1_received N hc hne
     refine N.cert1Genuine k h m c ?_
-    rcases hm with hm | ⟨c2, p, hm⟩ <;> rw [hm] <;> rfl
+    rcases hm with hm | ⟨c2, p, hm⟩
+    · exact Or.inl hm
+    · exact Or.inr (Or.inl ⟨c2, p, hm⟩)
 
 end NewProtocol
