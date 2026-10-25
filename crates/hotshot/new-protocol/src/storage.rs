@@ -11,6 +11,7 @@ use hotshot_types::{
     event::HotShotAction,
     message::Proposal as SignedProposal,
     simple_certificate::{LightClientStateUpdateCertificateV2, UpgradeCertificate},
+    simple_vote::LockView,
     traits::{
         BlockPayload, EncodeBytes,
         metrics::{Histogram, Metrics},
@@ -82,17 +83,15 @@ pub enum StorageOutput<T: NodeType> {
     Proposal(ViewNumber, Commitment<Leaf2<T>>),
     Vid(ViewNumber),
     Action(ViewNumber, ActionKind),
-    /// The locked QC for the given view has been durably persisted.
-    HighQc(ViewNumber),
+    /// The locked QC at the given lock position has been durably persisted.
+    HighQc(LockView),
 }
 
 impl<T: NodeType> StorageOutput<T> {
     pub fn view_number(&self) -> ViewNumber {
         match self {
-            Self::Proposal(view, _)
-            | Self::Vid(view)
-            | Self::Action(view, _)
-            | Self::HighQc(view) => *view,
+            Self::Proposal(view, _) | Self::Vid(view) | Self::Action(view, _) => *view,
+            Self::HighQc(lock) => lock.view,
         }
     }
 }
@@ -260,6 +259,7 @@ impl<T: NodeType, S: NewProtocolStorage<T>> Storage<T, S> {
     /// gates the matching phase-2 vote.
     pub fn append_high_qc2(&mut self, high_qc: Certificate1<T>) {
         let view = high_qc.view_number();
+        let lock = LockView::of(&high_qc);
         let storage = self.storage.clone();
         let timer = self
             .metrics
@@ -270,7 +270,7 @@ impl<T: NodeType, S: NewProtocolStorage<T>> Storage<T, S> {
                 match storage.append_high_qc2(high_qc.clone()).await {
                     Ok(()) => {
                         finish_measurement(timer);
-                        return Some(StorageOutput::HighQc(view));
+                        return Some(StorageOutput::HighQc(lock));
                     },
                     Err(err) => {
                         warn!(%err, %view, "failed to append high qc, retrying");

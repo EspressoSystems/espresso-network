@@ -27,7 +27,10 @@ use hotshot_utils::anytrace::{Result, Wrap, bail, ensure};
 use tokio_util::task::JoinMap;
 use tracing::{error, warn};
 
-use crate::message::{EpochChangeMessage, Unchecked, Validated};
+use crate::{
+    helpers::ViewEpoch,
+    message::{EpochChangeMessage, Unchecked, Validated},
+};
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ValidCert<C> {
@@ -109,11 +112,11 @@ where
     V: Threshold<T>,
     Self: Certificate<T, D> + Send + 'static,
 {
-    type Key = ViewNumber;
+    type Key = ViewEpoch;
     type Output = Self;
 
-    fn key(&self) -> Option<ViewNumber> {
-        Some(self.view_number())
+    fn key(&self) -> Option<ViewEpoch> {
+        Some(ViewEpoch(self.view_number(), self.epoch()?))
     }
 
     fn check(
@@ -806,8 +809,8 @@ impl<T: NodeType> CertVerifiers<T> {
     }
 
     pub fn gc(&mut self, view: ViewNumber, epoch: EpochNumber) {
-        self.cert1.gc(view);
-        self.cert2.gc(view);
+        self.cert1.gc(ViewEpoch::start(view));
+        self.cert2.gc(ViewEpoch::start(view));
         self.timeout.gc(view);
         self.timeout3.gc(view);
         self.advance.gc(view);
@@ -911,6 +914,33 @@ mod tests {
         let mut cert = build_timeout_cert3_with_lock(view + 1, epoch, None, &membership);
         cert.view_number = view;
         cert
+    }
+
+    /// Certificates of two epochs at one view are both verified: the outgoing
+    /// committee may certify a re-vote at a view the incoming one certifies
+    /// as well.
+    #[tokio::test]
+    async fn certificates_of_two_epochs_at_one_view_are_both_verified() {
+        let coordinator = mock_membership();
+        let mut verifier = super::CertVerifier::<TestTypes, super::Certificate1<TestTypes>>::new(
+            coordinator.clone(),
+            test_upgrade_lock(),
+        );
+        let view = ViewNumber::new(12);
+        let (pk, sk) = BLSPubKey::generated_from_seed_indexed([0u8; 32], 0);
+        let cert = |epoch: u64, block: u64| {
+            let epoch = EpochNumber::new(epoch);
+            let membership = coordinator.membership_for_epoch(Some(epoch)).unwrap();
+            let leaf = committable::RawCommitmentBuilder::new("leaf")
+                .u64(block)
+                .finalize();
+            build_cert1(leaf, epoch, block, &membership, view, &pk, &sk)
+        };
+        let (older, newer) = (cert(1, 10), cert(2, 11));
+        assert!(verifier.verify(pk, older.clone()).is_none());
+        assert_eq!(verifier.next().await.map(|c| c.into_cert()), Some(older));
+        assert!(verifier.verify(pk, newer.clone()).is_none());
+        assert_eq!(verifier.next().await.map(|c| c.into_cert()), Some(newer));
     }
 
     /// A certificate whose lock is of an epoch whose committee is not known yet

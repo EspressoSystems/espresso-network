@@ -580,7 +580,7 @@ async fn test_locking_the_boundary_block_keeps_the_new_epoch() {
         .await;
 
     assert_eq!(
-        harness.consensus.locked_view(),
+        harness.consensus.lock_view().map(|lock| lock.view),
         Some(boundary.view_number),
         "the lock moved onto the boundary block in the same step"
     );

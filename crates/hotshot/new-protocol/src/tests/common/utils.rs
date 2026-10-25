@@ -48,7 +48,7 @@ use hotshot_types::{
         BuilderCommitment, epoch_from_block_number, is_epoch_root, is_epoch_transition,
         is_last_block,
     },
-    vote::{HasViewNumber, Vote},
+    vote::Vote,
 };
 
 use super::{
@@ -1383,7 +1383,7 @@ impl ConsensusHarness {
             },
             ConsensusOutput::PersistHighQc(high_qc) => {
                 self.apply_recorded(
-                    ConsensusInput::Stored(StorageOutput::HighQc(high_qc.view_number())),
+                    ConsensusInput::Stored(StorageOutput::HighQc(LockView::of(high_qc))),
                     outbox,
                 );
             },
