@@ -2438,7 +2438,7 @@ def render_node_env(
             # The default 5 min cache would report a wiped node as synced from its empty DB.
             env["ESPRESSO_NODE_SYNC_STATUS_TTL"] = f"{ch.SYNC_STATUS_TTL_S:g}s"
     if host["role"] == "query" and query_engine == "sqlite":
-        # The entrypoint then execs espresso-node-sqlite, which prepends storage-sql itself.
+        # The entrypoint then starts the node on SQLite and prepends storage-sql itself.
         env["ESPRESSO_NODE_EMBEDDED_DB"] = "true"
         if consensus_storage == "journal":
             # The journal refuses to open next to an existing sqlite database until its first

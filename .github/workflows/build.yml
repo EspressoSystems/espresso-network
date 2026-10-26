@@ -49,7 +49,6 @@ jobs:
         include:
           - binary: espresso-node
           - binary: other
-          - binary: espresso-node-sqlite
           - binary: espresso-dev-node
 
     steps:
@@ -120,7 +119,6 @@ jobs:
         include:
           - binary: espresso-node
           - binary: other
-          - binary: espresso-node-sqlite
           - binary: espresso-dev-node
 
     steps:

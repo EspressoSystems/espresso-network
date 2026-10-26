@@ -39,7 +39,7 @@ jobs:
           - db: postgres
             features: ""
           - db: sqlite
-            features: --features embedded-db
+            features: --features sqlite
 
     steps:
       - uses: actions/checkout@v7

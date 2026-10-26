@@ -22,7 +22,6 @@ testing = [
     "hotshot-new-protocol/testing",
 ]
 benchmarking = []
-embedded-db = []
 
 [dependencies]
 alloy = { workspace = true }

@@ -78,57 +78,6 @@ jobs:
           path: target/cargo-timings/cargo-timing.html
           retention-days: ${{ github.ref == 'refs/heads/main' && 90 || 14 }}
 
-  build-test-artifacts-sqlite:
-    name: Build test artifacts (sqlite)
-    runs-on: ubuntu-24.04-8core
-    steps:
-      - uses: actions/checkout@v7
-      - uses: rui314/setup-mold@v1
-
-      - name: Install Protoc
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y protobuf-compiler
-
-      - uses: taiki-e/install-action@v2
-        with:
-          tool: nextest,just
-
-      - name: Enable Rust Caching
-        uses: Swatinem/rust-cache@v2
-        with:
-          prefix-key: v1-rust
-          save-if: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release-') }}
-
-      - name: Show memory
-        run: free -h
-
-      - name: Build and archive tests
-        run: |
-          python3 scripts/compile-metrics sample-rss --out peak-rss.json -- \
-            just nextest-archive nextest-archive-sqlite.tar.zst --features "embedded-db,testing" --timings
-
-      - uses: ./.github/actions/compile-metrics
-        continue-on-error: true
-        with:
-          job: test-archive-sqlite
-          timing: target/cargo-timings/cargo-timing.html
-
-      - name: Upload archive to workflow
-        uses: actions/upload-artifact@v7
-        with:
-          name: nextest-archive-sqlite
-          if-no-files-found: error
-          path: nextest-archive-sqlite.tar.zst
-          retention-days: 1
-
-      - name: Upload cargo timings
-        uses: actions/upload-artifact@v7
-        with:
-          name: cargo-timings-test-sqlite
-          path: target/cargo-timings/cargo-timing.html
-          retention-days: ${{ github.ref == 'refs/heads/main' && 90 || 14 }}
-
   build-test-bins:
     name: Build test binaries
     runs-on: ubuntu-24.04-8core
@@ -189,48 +138,6 @@ jobs:
             target/debug/espresso-bridge
             target/debug/node-metrics
             target/debug/staking-cli
-
-  build-test-bins-sqlite:
-    name: Build espresso-node-sqlite test binary
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - uses: ./.github/actions/free-disk-space
-      - uses: rui314/setup-mold@v1
-      - uses: ./.github/actions/free-disk-space
-
-      - name: Install Protoc
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y protobuf-compiler
-
-      - name: Enable Rust Caching
-        uses: Swatinem/rust-cache@v2
-        with:
-          prefix-key: v1-rust
-          save-if: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release-') }}
-
-      - name: Build espresso-node-sqlite binary
-        run: |
-          python3 scripts/compile-metrics sample-rss --out peak-rss.json -- \
-            cargo build --locked --profile test -p espresso-node-sqlite --timings
-        timeout-minutes: 30
-
-      - uses: ./.github/actions/compile-metrics
-        continue-on-error: true
-        with:
-          job: test-bin-sqlite
-          timing: target/cargo-timings/cargo-timing.html
-          binaries-dir: target/debug
-
-      - name: Upload archive to workflow
-        uses: actions/upload-artifact@v7
-        with:
-          name: test-binaries-sqlite
-          if-no-files-found: error
-          retention-days: 1
-          path: |
-            target/debug/espresso-node-sqlite
 
   # The go-sdk test job only needs the dev-node binary, compile it separately.
   build-test-bins-dev-node:
@@ -325,7 +232,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        partition: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+        partition: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
       fail-fast: false
     steps:
       - uses: actions/checkout@v7
@@ -343,7 +250,7 @@ jobs:
         run: |
           cargo nextest run --archive-file nextest-archive-postgres.tar.zst  --verbose --no-fail-fast \
           --workspace-remap $PWD \
-          --partition hash:${{ matrix.partition }}/10
+          --partition hash:${{ matrix.partition }}/20
         timeout-minutes: 30
 
       - name: Upload nextest JUnit
@@ -351,40 +258,6 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: nextest-junit-postgres-${{ matrix.partition }}
-          if-no-files-found: ignore
-          path: target/nextest/*/junit.xml
-          retention-days: 1
-
-  test-sqlite:
-    needs: build-test-artifacts-sqlite
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        partition: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
-      fail-fast: false
-    steps:
-      - uses: actions/checkout@v7
-      - uses: ./.github/actions/install-foundry
-      - uses: ./.github/actions/install-postgres
-      - uses: taiki-e/install-action@nextest
-
-      - name: Download archive
-        uses: actions/download-artifact@v8
-        with:
-          name: nextest-archive-sqlite
-
-      - name: Test
-        run: |
-          cargo nextest run --archive-file nextest-archive-sqlite.tar.zst  --verbose --no-fail-fast \
-          --workspace-remap $PWD \
-          --partition hash:${{ matrix.partition }}/10
-        timeout-minutes: 30
-
-      - name: Upload nextest JUnit
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: nextest-junit-sqlite-${{ matrix.partition }}
           if-no-files-found: ignore
           path: target/nextest/*/junit.xml
           retention-days: 1
@@ -423,7 +296,7 @@ jobs:
           ESPRESSO_DEV_NODE_BIN: ${{ github.workspace }}/test-binaries-dev-node/espresso-dev-node
 
   test-integration:
-    needs: [build-test-bins, build-test-bins-sqlite, build-test-archive-integration]
+    needs: [build-test-bins, build-test-archive-integration]
     strategy:
       matrix:
         include:
@@ -451,12 +324,6 @@ jobs:
         uses: actions/download-artifact@v8
         with:
           name: test-binaries
-          path: target/debug
-
-      - name: Download espresso-node-sqlite binary
-        uses: actions/download-artifact@v8
-        with:
-          name: test-binaries-sqlite
           path: target/debug
 
       - name: Make binaries executable
@@ -507,7 +374,7 @@ jobs:
 
 
   demo-native:
-    needs: [build-test-bins, build-test-bins-sqlite]
+    needs: [build-test-bins]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -526,7 +393,6 @@ jobs:
         run: |
           mkdir -p target/debug
           mv test-binaries/* target/debug
-          mv test-binaries-sqlite/* target/debug
           chmod -c +x target/debug/*
 
       - name: Test Demo
@@ -550,7 +416,7 @@ jobs:
           retention-days: 3
 
   nextest-report:
-    needs: [test-postgres, test-sqlite, test-integration]
+    needs: [test-postgres, test-integration]
     runs-on: ubuntu-latest
     if: ${{ always() && !cancelled() }}
     # Reporter only: failures here must not fail the workflow.
@@ -602,7 +468,7 @@ jobs:
           delete: ${{ hashFiles('junit-artifacts/pr-comment.md') == '' }}
 
   publish-test-stats:
-    needs: [test-postgres, test-sqlite, test-integration]
+    needs: [test-postgres, test-integration]
     # always() so a single flaky shard on main does not freeze the history artifact.
     if: ${{ always() && !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-latest
@@ -641,9 +507,7 @@ jobs:
     name: Compile metrics
     needs:
       - build-test-artifacts-postgres
-      - build-test-artifacts-sqlite
       - build-test-bins
-      - build-test-bins-sqlite
       - build-test-bins-dev-node
       - build-test-archive-integration
     if: ${{ !cancelled() && github.event_name == 'pull_request' }}
@@ -666,9 +530,7 @@ jobs:
     name: Publish compile metrics
     needs:
       - build-test-artifacts-postgres
-      - build-test-artifacts-sqlite
       - build-test-bins
-      - build-test-bins-sqlite
       - build-test-bins-dev-node
     # !cancelled() so one failed build job on main does not freeze the baseline artifact.
     if: ${{ !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
@@ -687,7 +549,7 @@ jobs:
 
   # This job enables having a single required status check in github for all GCL tests.
   aggregate-gcl-tests:
-    needs: [test-postgres, test-sqlite, test-go-sdk, demo-native, test-integration]
+    needs: [test-postgres, test-go-sdk, demo-native, test-integration]
     runs-on: ubuntu-latest
     # explicitly run and fail the job if dependencies failed
     if: ${{ always() && !cancelled() }}

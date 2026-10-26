@@ -688,7 +688,7 @@ mod test {
             "espresso",
         ])
         .unwrap();
-        // The parsed default follows the build (and later the environment), not this test.
+        // The parsed default follows ESPRESSO_NODE_EMBEDDED_DB, not this test.
         opt.embedded_db = false;
         let opt = persistence::sql::postgres::Options::try_from(opt).unwrap();
         let LightClientDbOptions::Postgres(lc) = opt.light_client_db(&Query::default()).unwrap()

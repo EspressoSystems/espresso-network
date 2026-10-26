@@ -16,7 +16,6 @@ members = [
     "crates/espresso/dev-node",
     "crates/espresso/keyset",
     "crates/espresso/node",
-    "crates/espresso/node-sqlite",
     "crates/espresso/telemetry",
     "crates/espresso/types",
     "crates/espresso/utils",
@@ -47,8 +46,8 @@ members = [
     "tests",
 ]
 
-# All crates except espresso-node-sqlite, espresso-dev-node, and crypto-helper.
-# espresso-node-sqlite/espresso-dev-node: embedded-db feature conflict
+# All crates except espresso-dev-node and crypto-helper.
+# espresso-dev-node: enables the espresso-node testing feature
 # crypto-helper: vendored openssl leaks to workspace via feature unification
 default-members = [
     "contracts/rust/adapter",
@@ -90,7 +89,6 @@ default-members = [
     "sp1/target-check",
     "tests",
 ]
-exclude = ["crates/espresso/node-sqlite"]
 # Note: workspace members/default-members reference directory paths, not crate names.
 
 [workspace.package]

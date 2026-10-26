@@ -21,7 +21,7 @@
 ```bash
 cargo nextest run -p <package> -- <test_name>
 
-just check                            # postgres + embedded-db variants (pre-commit only)
+just check                            # whole workspace (pre-commit only)
 just lint                             # clippy with -D warnings
 just test-demo base                   # basic E2E; other cases in the `test-demo` recipe
 just test-slow                        # long-running tests
@@ -86,11 +86,6 @@ just demo-native                      # local network via process-compose
 - `staking-cli`: stake table contract interaction
 - `cliquenet`: fully-connected mesh network (fast finality)
 
-## Feature flags
-
-- `embedded-db` (off by default): SQLite. Requires different sqlx features than PostgreSQL; features are additive
-  globally, so use `espresso-node-sqlite` for SQLite builds.
-
 ## Testing
 
 **Blockchain infrastructure: bugs can cause irreversible financial losses.** Write tests that prove correctness, not
@@ -115,7 +110,12 @@ Backends:
 
 - PostgreSQL (`sql.rs`): production DA/archival, merklized, pruning supported
 - Filesystem (`fs.rs`): production non-DA validators, not merklized, limited pruning
-- SQLite (`sql.rs` + `embedded-db`): not yet production, merklized, pruning supported
+- SQLite (`sql.rs`, chosen at runtime with `ESPRESSO_NODE_EMBEDDED_DB=true`): not yet production, merklized, pruning
+  supported
+
+The SQL code is compiled once per database: each `sql.rs` is loaded by both a `postgres` and a `sqlite` module, each
+with its own `Db`. Branch on `Db::EMBEDDED` where both branches compile for either database, and put code that only
+compiles for one (Postgres array binds, connect options) in that backend's file. Tests in the shared files run on both.
 
 Migrations (all three backends required when adding storage):
 

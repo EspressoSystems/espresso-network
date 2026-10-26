@@ -125,7 +125,9 @@ pub enum SqlBackendOptions {
 #[derivative(Debug)]
 pub struct Options {
     /// Store data in an embedded SQLite database instead of Postgres.
-    #[clap(skip = cfg!(feature = "embedded-db"))]
+    ///
+    /// The database lives under ESPRESSO_NODE_STORAGE_PATH, and the Postgres options are ignored.
+    #[clap(long, env = "ESPRESSO_NODE_EMBEDDED_DB", value_parser = clap::builder::BoolishValueParser::new())]
     pub embedded_db: bool,
 
     #[clap(flatten)]
@@ -678,6 +680,53 @@ pub(crate) fn within_gap_fill_horizon(view: u64, watermark: u64) -> bool {
 #[cfg(test)]
 mod test {
     use super::*;
+
+    #[test]
+    fn embedded_db_is_read_from_the_env_as_a_strict_boolean() {
+        use clap::{CommandFactory as _, FromArgMatches as _};
+
+        fn parse(command: &clap::Command, value: &str) -> Option<bool> {
+            let matches = command
+                .clone()
+                .try_get_matches_from(["espresso-node", "--embedded-db", value])
+                .ok()?;
+            Some(Options::from_arg_matches(&matches).unwrap().embedded_db)
+        }
+
+        let command = Options::command();
+        let arg = command
+            .get_arguments()
+            .find(|arg| arg.get_id() == "embedded_db")
+            .unwrap();
+        assert_eq!(
+            arg.get_env(),
+            Some(std::ffi::OsStr::new("ESPRESSO_NODE_EMBEDDED_DB"))
+        );
+
+        // Feeds the value on the command line so the test runs the variable's parser without
+        // mutating the process environment that concurrent tests read.
+        let command = command.mut_arg("embedded_db", |arg| arg.action(clap::ArgAction::Set));
+        for value in ["true", "TRUE", "t", "1", "yes", "Y", "on"] {
+            assert_eq!(parse(&command, value), Some(true), "{value:?}");
+        }
+        for value in ["false", "False", "f", "0", "no", "N", "off"] {
+            assert_eq!(parse(&command, value), Some(false), "{value:?}");
+        }
+        for value in ["maybe", "enabled", "2"] {
+            assert_eq!(parse(&command, value), None, "{value:?}");
+        }
+    }
+
+    #[test]
+    fn embedded_db_selects_sqlite_under_the_storage_path() {
+        let opt =
+            Options::try_parse_from(["storage-sql", "--embedded-db", "--path", "/data"]).unwrap();
+        assert!(opt.embedded_db);
+        assert_eq!(
+            opt.sqlite_options.path,
+            Some(PathBuf::from("/data/sqlite/database"))
+        );
+    }
 
     #[test]
     fn parsing_the_sqlite_path_creates_no_directory() {

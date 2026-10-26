@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# Kept for callers of the former SQLite binary: the node now picks SQLite from the environment.
+echo "WARNING: espresso-node-sqlite is deprecated, run the node with ESPRESSO_NODE_EMBEDDED_DB=true instead" >&2
+ESPRESSO_NODE_EMBEDDED_DB=true exec /bin/espresso-node-postgres "$@"

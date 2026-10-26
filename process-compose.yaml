@@ -413,8 +413,9 @@ processes:
     availability: *run-forever
 
   espresso-node-4:
-    command: espresso-node-sqlite -- storage-sql -- http -- config -- query
+    command: espresso-node -- storage-sql -- http -- config -- query
     environment:
+      - ESPRESSO_NODE_EMBEDDED_DB=true
       - ESPRESSO_NODE_LIGHTWEIGHT=true
       - ESPRESSO_NODE_API_PORT=${ESPRESSO_NODE_4_API_PORT}
       - ESPRESSO_NODE_TONIC_PORT=${ESPRESSO_NODE_4_TONIC_PORT}
