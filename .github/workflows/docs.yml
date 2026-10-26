@@ -29,7 +29,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y protobuf-compiler
 
-      - uses: taiki-e/install-action@just
+      - uses: taiki-e/install-action@53aaa72a1fed2d5b9189d6d54c38e29bf9be2ab9 # just
 
       - name: Build Rust Docs
         run: just doc
@@ -57,8 +57,8 @@ jobs:
           # TODO: remove and migrate when nix dev shell is on 1.8
           version: v1.7.1
 
-      - uses: taiki-e/install-action@just
-      - uses: taiki-e/install-action@mdbook
+      - uses: taiki-e/install-action@53aaa72a1fed2d5b9189d6d54c38e29bf9be2ab9 # just
+      - uses: taiki-e/install-action@593ed2f2c467785f846bfa5a8b934fad191056ec # mdbook
 
       - name: Build Contract Docs
         run: just doc-contracts
@@ -92,7 +92,7 @@ jobs:
 
       - name: Deploy
         if: ${{ github.ref == 'refs/heads/main' }}
-        uses: peaceiris/actions-gh-pages@v4
+        uses: peaceiris/actions-gh-pages@84c30a85c19949d7eee79c4ff27748b70285e453 # v4.1.0
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           publish_dir: ./public

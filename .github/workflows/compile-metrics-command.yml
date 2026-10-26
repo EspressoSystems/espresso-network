@@ -53,7 +53,7 @@ jobs:
       # unless it says so where the command was given. Sticky, or every retry piles up another.
       - name: Report a failure
         if: failure()
-        uses: marocchino/sticky-pull-request-comment@v3
+        uses: marocchino/sticky-pull-request-comment@5770ad5eb8f42dd2c4f34da00c94c5381e49af88 # v3.0.5
         with:
           number: ${{ github.event.issue.number }}
           header: compile-metrics-command
@@ -63,7 +63,7 @@ jobs:
       # which would leave the previous failure notice standing over a fixed pull request.
       - name: Clear a previous failure
         if: success() || cancelled()
-        uses: marocchino/sticky-pull-request-comment@v3
+        uses: marocchino/sticky-pull-request-comment@5770ad5eb8f42dd2c4f34da00c94c5381e49af88 # v3.0.5
         with:
           number: ${{ github.event.issue.number }}
           header: compile-metrics-command
