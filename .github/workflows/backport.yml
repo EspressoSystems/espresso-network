@@ -1,3 +1,6 @@
+# Threat model: see "CI threat model" in .github/claude/README.md.
+# pull_request_target runs this file from the base branch with secrets and never
+# checks out PR head code: the job starts only on merge.
 name: Backport merged pull request
 on:
   pull_request_target:
@@ -12,9 +15,7 @@ on:
         description: "Target branch"
         required: true
         type: string
-permissions:
-  contents: write
-  pull-requests: write
+permissions: {}
 jobs:
   backport:
     name: Backport pull request
@@ -23,18 +24,16 @@ jobs:
       github.event_name == 'workflow_dispatch' ||
       (github.event.pull_request.merged &&
        !startsWith(github.event.pull_request.head.ref, 'backport-'))
+    permissions:
+      contents: write
+      pull-requests: write
+    outputs:
+      needs_claude: ${{ steps.detect.outputs.needs_claude }}
     steps:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
           filter: blob:none
-
-      - uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: nightly
-          components: rustfmt
-
-      - uses: taiki-e/install-action@just
 
       - uses: taiki-e/install-action@v2
         with:
@@ -68,7 +67,7 @@ jobs:
           experimental: '{"conflict_resolution":"draft_commit_conflicts"}'
 
       - name: Detect remaining conflicts
-        id: resolve
+        id: detect
         if: |
           steps.backport.outputs.created_pull_numbers != '' ||
           steps.dispatch_backport.outputs.created_pull_numbers != ''
@@ -83,88 +82,236 @@ jobs:
             branch=$(gh pr view "$pr" --json headRefName -q .headRefName)
             git fetch origin "$branch"
             if git grep -lE '^<<<<<<< ' "origin/$branch" -- >/dev/null; then
-              needs_claude="$needs_claude $pr"
+              needs_claude="$needs_claude $pr:$branch"
             else
               gh pr ready "$pr" || true
             fi
           done
           echo "needs_claude=$needs_claude" >> "$GITHUB_OUTPUT"
 
+  resolve:
+    name: Resolve conflicts with Claude
+    needs: backport
+    if: needs.backport.outputs.needs_claude != ''
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+          filter: blob:none
+
+      # Installs ci-sandbox outside the worktree, which is untrusted once Claude ran.
+      - uses: ./.github/actions/ci-sandbox
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly
+          components: rustfmt
+
+      - uses: taiki-e/install-action@just
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: protoc
+
+      # No rust-cache: its post step runs cargo in the worktree outside the sandbox.
+      - name: Configure git and install Claude
+        run: |
+          set -euo pipefail
+          # Local config: the sandbox hides ~/.gitconfig.
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          # Keep summaries out of `git add -A` in the prompt.
+          echo 'claude-summaries/' >> .git/info/exclude
+          curl -fsSL https://claude.ai/install.sh | bash
+
+      # The sandbox mounts ~/.rustup read-only, so install each branch's pinned
+      # toolchain while the branches are still trusted.
+      - name: Install backport branch toolchains
+        env:
+          NEEDS_CLAUDE: ${{ needs.backport.outputs.needs_claude }}
+        run: |
+          set -euo pipefail
+          for entry in $NEEDS_CLAUDE; do
+            dir=$(mktemp -d)
+            if ! git show "origin/${entry#*:}:rust-toolchain.toml" > "$dir/rust-toolchain.toml" ||
+              ! (cd "$dir" && rustup toolchain install); then
+              echo "::warning::no toolchain for ${entry#*:}"
+            fi
+          done
+
       - name: Claude conflict resolution
-        if: steps.resolve.outputs.needs_claude != ''
         timeout-minutes: 30
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          NEEDS_CLAUDE: ${{ steps.resolve.outputs.needs_claude }}
+          NEEDS_CLAUDE: ${{ needs.backport.outputs.needs_claude }}
+          CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1"
         run: |
           set -euo pipefail
-          curl -fsSL https://claude.ai/install.sh | bash
+          # Sandboxed output must not be parsed as workflow commands.
+          token=$(openssl rand -hex 16)
+          echo "::stop-commands::$token"
+          trap 'echo "::$token::"' EXIT
           export PATH="$HOME/.local/bin:$PATH"
           # Read the prompt from the triggering commit: the working tree is now on
           # the backport branch, which may predate this file.
           prompt_body=$(git show "$GITHUB_SHA:.github/claude/backport-resolve.md")
-          prompt=$(printf 'Mergiraf left conflict markers in these backport PRs:\n%s\n\n%s' \
+          prompt=$(printf 'Mergiraf left conflict markers in these backport PRs (number:branch):\n%s\n\n%s' \
             "$NEEDS_CLAUDE" "$prompt_body")
-          claude -p "$prompt" --model claude-opus-4-8 --dangerously-skip-permissions
+          # ~/.cargo is mounted read-only, so Claude gets a scratch CARGO_HOME. It is not
+          # the verify step's: verify never trusts a registry cache Claude wrote.
+          export CARGO_HOME="$RUNNER_TEMP/claude-cargo-home"
+          mkdir -p "$CARGO_HOME"
+          ci-sandbox --ro ~/.local/bin --ro ~/.local/share/claude --ro ~/.cargo --ro ~/.rustup \
+            --rw "$CARGO_HOME" --env CARGO_HOME \
+            --env ANTHROPIC_API_KEY --env CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC -- \
+            claude -p "$prompt" --model claude-opus-4-8 --dangerously-skip-permissions \
+            --setting-sources user --strict-mcp-config
 
-      - name: Install protoc
-        if: steps.resolve.outputs.needs_claude != ''
+      - name: Verify resolved backports compile and bundle them
+        timeout-minutes: 120
+        env:
+          NEEDS_CLAUDE: ${{ needs.backport.outputs.needs_claude }}
         run: |
-          sudo apt-get update
-          sudo apt-get install -y protobuf-compiler
+          set -euo pipefail
+          # Sandboxed output must not be parsed as workflow commands.
+          token=$(openssl rand -hex 16)
+          echo "::stop-commands::$token"
+          trap 'echo "::$token::"' EXIT
+          out="$RUNNER_TEMP/out"
+          # ~/.cargo is mounted read-only, so cargo needs a writable CARGO_HOME. A fresh
+          # one, because Claude never saw it and cannot have planted anything in it.
+          export CARGO_HOME="$RUNNER_TEMP/cargo-home"
+          mkdir -p "$out" "$CARGO_HOME"
+          # git and cargo read config and build scripts from Claude's worktree, so they
+          # run sandboxed. The sandbox never sees $out: only this loop writes there.
+          sb() { ci-sandbox --ro ~/.cargo --ro ~/.rustup --rw "$CARGO_HOME" --env CARGO_HOME -- "$@"; }
+          fail() { echo "$2" > "$out/$1.error"; }
+          # Uncommitted changes cannot be attributed to one PR, so they fail all.
+          dirty=0
+          sb git diff --quiet && sb git diff --cached --quiet || dirty=1
+          # shellcheck disable=SC2016
+          for entry in $NEEDS_CLAUDE; do
+            pr="${entry%%:*}" branch="${entry#*:}"
+            sb cat "claude-summaries/$pr.md" > "$out/$pr.md" || rm -f "$out/$pr.md"
+            base=$(sb git rev-parse --verify --quiet "origin/$branch^{commit}" || true)
+            sha=$(sb git rev-parse --verify --quiet "refs/heads/$branch^{commit}" || true)
+            if [ "$dirty" = 1 ]; then
+              fail "$pr" "Claude left uncommitted changes after resolution."
+            elif [[ ! "$sha" =~ ^[0-9a-f]{40}$ || ! "$base" =~ ^[0-9a-f]{40}$ ]]; then
+              fail "$pr" "Claude did not create the local branch $branch."
+            elif [ "$sha" = "$base" ]; then
+              fail "$pr" "Claude produced no new commits over origin/$branch."
+            elif ! sb git checkout --detach "$sha"; then
+              fail "$pr" "git checkout $sha failed."
+            elif ! sb timeout 45m cargo check --locked --tests --examples; then
+              fail "$pr" "\`cargo check --locked --tests --examples\` failed or timed out after resolution."
+            elif ! sb sh -c 'git update-ref "refs/resolved/$1" "$2" && git bundle create - "$3..refs/resolved/$1"' \
+                sh "$pr" "$sha" "$base" > "$out/$pr.bundle"; then
+              rm -f "$out/$pr.bundle"
+              fail "$pr" "git bundle create failed."
+            else
+              # The push job pushes only this commit, the one cargo check ran on.
+              echo "$sha" > "$out/$pr.sha"
+            fi
+          done
 
-      - uses: Swatinem/rust-cache@v2
-        if: steps.resolve.outputs.needs_claude != ''
+      - uses: actions/upload-artifact@v7
         with:
-          prefix-key: v3-rust
-          shared-key: backport-claude
+          name: backport-resolutions
+          path: ${{ runner.temp }}/out/
 
-      - name: Verify Claude-resolved backports compile, label, mark ready
-        if: steps.resolve.outputs.needs_claude != ''
+      # Post steps (checkout cleanup) must not run git on Claude's .git/config.
+      - name: Delete the worktree
+        if: always()
+        run: chmod -R u+rwX . && find . -mindepth 1 -delete
+
+  push:
+    name: Push resolved backports
+    needs: [backport, resolve]
+    # Also after a failed resolve, so every PR gets a failure comment.
+    if: always() && needs.backport.outputs.needs_claude != ''
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/download-artifact@v8
+        continue-on-error: true
+        with:
+          name: backport-resolutions
+          path: ${{ runner.temp }}/out
+
+      - name: Push, label, mark ready
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
+          NEEDS_CLAUDE: ${{ needs.backport.outputs.needs_claude }}
         run: |
           set -euo pipefail
+          out="$RUNNER_TEMP/out"
           run_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          failed=0
 
-          # Comment the failure on the PR, then exit non-zero.
+          # Comment the failure on the PR and fail the job after the loop.
           fail() {
-            local pr="$1" msg="$2" body
+            local pr="$1" msg="${2//[$'\r\n']/ }" body
             echo "::error::PR #$pr: $msg" >&2
             body=$(printf '⚠️ Automated backport conflict resolution failed: %s\n\nSee the [workflow run](%s) for details. This PR needs to be resolved manually.' "$msg" "$run_url")
             gh pr comment "$pr" --body "$body" || true
-            exit 1
+            failed=1
           }
 
           gh label create claude-resolved --color FF6B35 --description "Backport conflicts resolved by Claude" 2>/dev/null || true
-          for pr in ${{ steps.resolve.outputs.needs_claude }}; do
-            branch=$(gh pr view "$pr" --json headRefName -q .headRefName)
-            git checkout "$branch"
-
-            if ! git diff --quiet || ! git diff --cached --quiet; then
-              fail "$pr" "Claude left uncommitted changes after resolution."
+          for entry in $NEEDS_CLAUDE; do
+            pr="${entry%%:*}" branch="${entry#*:}"
+            if [ -f "$out/$pr.error" ]; then
+              fail "$pr" "$(cat "$out/$pr.error")"
+              continue
             fi
-            if git grep -lnE '^(<<<<<<< |>>>>>>> )' HEAD -- >/dev/null 2>&1; then
+            sha=$(cat "$out/$pr.sha" 2>/dev/null || true)
+            if [ ! -f "$out/$pr.bundle" ] || [[ ! "$sha" =~ ^[0-9a-f]{40}$ ]]; then
+              fail "$pr" "the resolve job produced no result."
+              continue
+            fi
+            if ! git fetch --depth=1 origin "$branch" || ! git bundle verify --quiet "$out/$pr.bundle" ||
+              ! git fetch "$out/$pr.bundle" "refs/resolved/$pr"; then
+              fail "$pr" "fetching the resolved commits failed."
+              continue
+            fi
+            if [ "$(git rev-parse FETCH_HEAD)" != "$sha" ]; then
+              fail "$pr" "the bundle does not contain the commit cargo check ran on."
+              continue
+            fi
+            if git grep -lnE '^(<<<<<<< |>>>>>>> )' "$sha" -- >/dev/null; then
               fail "$pr" "conflict markers are still present after resolution."
+              continue
             fi
-            git fetch origin "$branch"
-            if [ "$(git rev-parse HEAD)" = "$(git rev-parse "origin/$branch")" ]; then
-              fail "$pr" "Claude produced no new commits over origin/$branch."
-            fi
-            if ! cargo check --tests --examples; then
-              fail "$pr" "\`cargo check --tests --examples\` failed after resolution."
+
+            # Bot pushes trigger no workflows, so lint never sees this output.
+            if ! scripts/check-invisible-unicode "$sha"; then
+              fail "$pr" "invisible Unicode characters are present after resolution."
+              continue
             fi
 
             # Label before pushing so the PR is tagged even if a later step fails.
-            gh pr edit "$pr" --add-label claude-resolved
-            git push origin "$branch"
-            gh pr ready "$pr"
-            if [ -f "claude-summaries/$pr.md" ]; then
+            gh pr edit "$pr" --add-label claude-resolved || true
+            if ! git push origin "$sha:refs/heads/$branch"; then
+              fail "$pr" "pushing the resolved commits failed."
+              continue
+            fi
+            gh pr ready "$pr" || true
+            if [ -f "$out/$pr.md" ]; then
               # Fixed first line: a model-written body must not start with the claude-gh trust marker.
-              { printf '### Conflict resolution summary\n\n'; cat "claude-summaries/$pr.md"; } \
-                | gh pr comment "$pr" --body-file -
+              { printf '### Conflict resolution summary\n\n'; cat "$out/$pr.md"; } \
+                | gh pr comment "$pr" --body-file - || true
             else
               gh pr comment "$pr" --body "⚠️ No resolution summary was produced for this backport. Claude may not have completed the resolution as expected; please review carefully." || true
             fi
           done
+          exit "$failed"

@@ -5,7 +5,7 @@ runs:
   using: composite
   steps:
     - shell: bash
-      run: |
+      run: |  # zizmor: ignore[github-env] fixed tool directories only
         set -euo pipefail
         sudo apt-get update
         sudo apt-get install -y postgresql

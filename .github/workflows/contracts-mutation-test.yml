@@ -68,7 +68,7 @@ jobs:
       - name: Generate mutants
         run: |
           if [[ "${{ github.event_name }}" == "pull_request" ]]; then
-            dregs generate --diff-base "origin/${{ github.base_ref }}" --output ./mutants
+            dregs generate --diff-base "origin/${GITHUB_BASE_REF}" --output ./mutants
           else
             dregs generate --output ./mutants
           fi
@@ -161,8 +161,11 @@ jobs:
         run: |
           dregs test \
             --manifest ./mutants/manifest.json \
-            --partition "slice:${{ matrix.shard }}/${{ needs.generate.outputs.total_shards }}" \
-            --output "results-${{ matrix.shard }}.json"
+            --partition "slice:${MATRIX_SHARD}/${TOTAL_SHARDS}" \
+            --output "results-${MATRIX_SHARD}.json"
+        env:
+          MATRIX_SHARD: ${{ matrix.shard }}
+          TOTAL_SHARDS: ${{ needs.generate.outputs.total_shards }}
 
       - name: Upload results
         if: always()

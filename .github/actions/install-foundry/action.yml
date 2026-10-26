@@ -14,7 +14,7 @@ runs:
       env:
         FOUNDRY_DIR: ${{ github.workspace }}/.foundry
         FOUNDRY_VERSION: ${{ inputs.version }}
-      run: |
+      run: |  # zizmor: ignore[github-env] fixed tool directories only
         set -euo pipefail
         mkdir -p "$FOUNDRY_DIR"
 

@@ -1,0 +1,48 @@
+#!/usr/bin/env python3
+"""Reject a patch that is not a plain-text edit of AGENTS.md or doc/ files."""
+
+import re
+import subprocess
+import sys
+
+ALLOWED_PATH = re.compile(r"(AGENTS\.md|doc/.+)")
+# Regular files only: any other summary line is a rename, copy, mode change or special file.
+ALLOWED_SUMMARY = re.compile(r" (create|delete) mode 100644 ")
+
+
+def git_apply(flag: str, patch: str) -> list[str]:
+    out = subprocess.run(
+        ["git", "apply", flag, patch], check=True, capture_output=True, text=True
+    ).stdout
+    return out.splitlines()
+
+
+def violations(patch: str) -> list[str]:
+    numstat = git_apply("--numstat", patch)
+    if not numstat:
+        return ["patch is empty"]
+    found = []
+    for line in numstat:
+        added, _, path = line.split("\t", 2)
+        if not ALLOWED_PATH.fullmatch(path) or ".." in path:
+            found.append(f"path outside AGENTS.md and doc/: {path}")
+        if added == "-":
+            found.append(f"binary hunk: {path}")
+    for line in git_apply("--summary", patch):
+        if line and not ALLOWED_SUMMARY.match(line):
+            found.append(f"not a plain create or delete: {line.strip()}")
+    return found
+
+
+def main() -> int:
+    if len(sys.argv) != 2 or sys.argv[1] in ("-h", "--help"):
+        print(f"usage: {sys.argv[0]} PATCH", file=sys.stderr)
+        return 2
+    found = violations(sys.argv[1])
+    for msg in found:
+        print(f"rejected: {msg}", file=sys.stderr)
+    return 1 if found else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

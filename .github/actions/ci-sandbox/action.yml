@@ -1,0 +1,21 @@
+name: Set up ci-sandbox
+description: Install bubblewrap and allow unprivileged user namespaces for scripts/ci-sandbox
+
+runs:
+  using: composite
+  steps:
+    - name: Install bubblewrap
+      shell: bash
+      run: sudo apt-get update && sudo apt-get install -y --no-install-recommends bubblewrap
+
+    - name: Allow unprivileged user namespaces
+      shell: bash
+      # Ubuntu 24.04 blocks unprivileged user namespaces, which bwrap needs.
+      run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+
+    # Outside the worktree, so a later step never runs a copy Claude edited.
+    - name: Install ci-sandbox
+      shell: bash
+      run: |
+        sudo install -m 0755 "$GITHUB_ACTION_PATH/../../../scripts/ci-sandbox" /usr/local/bin/ci-sandbox
+        ci-sandbox -- true

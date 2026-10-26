@@ -134,8 +134,8 @@ jobs:
         run: |
           mkdir -p pr/tmp
           scripts/fetch-pr-team-comments \
-            "${{ github.repository_owner }}" \
-            "${{ github.event.repository.name }}" \
+            "$GITHUB_REPOSITORY_OWNER" \
+            "${GITHUB_REPOSITORY#*/}" \
             "${{ github.event.pull_request.number || github.event.issue.number }}" \
             > pr/tmp/pr-review-comments.json
 

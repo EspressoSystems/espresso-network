@@ -28,6 +28,54 @@ records inline comments, candidates with verdicts, and a summary. `apply` posts 
 edits the status comment with the summary and cost footer. All three jobs run `.github/claude` from one commit: the
 merge commit for PR-open reviews, the default branch head for `claude.yml` (including `/review`).
 
+## CI threat model
+
+Applies to `backport.yml`, `claude-agents-md.yml` and `claude-job.yml`.
+
+Inputs:
+
+- Trusted: the workflow files, prompts and scripts at the ref the workflow runs from.
+- Untrusted: the PR checkout (also from forks), merged code and docs Claude reads (can carry a prompt injection), and
+  every model output.
+- A malicious change that is reviewed and merged is out of scope.
+
+Rules:
+
+- Before review (PR open, `/review`, `/code-review` including forks, `@claude`), Claude only reads and records actions.
+  Bash runs only on reviewed code (backport, scheduled agents-md) or same-repo PRs whose author already has write
+  access.
+- Bash jobs run Claude, and git or cargo on a tree Claude touched, only in `scripts/ci-sandbox`: no host processes,
+  cleared env except PATH, HOME and named `--env` vars, empty home, nothing outlives it.
+- Claude runs with `--setting-sources user --strict-mcp-config` in the Bash jobs: a committed `.claude/settings.json`
+  (hooks), `.mcp.json`, skills or agents are not loaded. `backport.yml` still loads the tree's CLAUDE.md and AGENTS.md,
+  which are reviewed, merged code.
+- `zizmor.yml` audits `.github/` on every PR; `lint.yml` rejects invisible Unicode in tracked files.
+- No write-token job checks out, executes or runs git against a tree Claude touched.
+- Write-token jobs read an artifact only after a format-specific check.
+
+| Workflow               | Job        | Token | Claude | Sandbox      | Handoff                  | Consumer check                                                |
+| ---------------------- | ---------- | ----- | ------ | ------------ | ------------------------ | ------------------------------------------------------------- |
+| `backport.yml`         | `backport` | write | no     | none         | `needs_claude` output    | none: PR numbers and branches come from `gh pr view`          |
+| `backport.yml`         | `resolve`  | read  | yes    | `ci-sandbox` | bundles, shas, summaries | `push`: `git bundle verify`, sha equals the one cargo checked |
+| `backport.yml`         | `push`     | write | no     | none         | reads artifact           | no conflict markers; pushes only the verified sha             |
+| `claude-agents-md.yml` | `audit`    | read  | yes    | `ci-sandbox` | patch, report            | `propose`: paths only `AGENTS.md`, `doc/`; text hunks only    |
+| `claude-agents-md.yml` | `propose`  | write | no     | none         | reads artifact           | `git apply` after the check, then `create-pull-request`       |
+| `claude-job.yml`       | `start`    | write | no     | none         | status comment id        | `apply` edits only that comment                               |
+| `claude-job.yml`       | `run`      | read  | yes    | none         | `actions.json` record    | `apply`: `claude_gh.py` validates the record                  |
+| `claude-job.yml`       | `apply`    | write | no     | none         | reads artifact           | each action validated; allowed actions per job                |
+
+Accepted risks:
+
+- Claude can leak read context through comment text. In the Bash jobs the network stays open, so `ANTHROPIC_API_KEY` can
+  also leave through any host.
+- The sandboxed process's own environment is readable by itself, so every `--env` var is exposed to Claude.
+- `backport.yml` `push` accepts any file content on the backport branch. Author and scope are not checked; human review
+  of the backport PR is the control.
+- `--share-net` leaves the host loopback reachable from the sandbox.
+- `ANTHROPIC_API_KEY` is in Claude's environment in every Claude job. An injection could read it (for example through an
+  aliased `/proc` path the deny rule misses) and post it encoded in a comment. A dedicated CI workspace with a spend
+  limit bounds the loss.
+
 ## Evaluating review changes
 
 `eval/eval.py` replays the `review` job on the PRs in `eval/cases.toml`, using the working tree's `claude_gh.py` and

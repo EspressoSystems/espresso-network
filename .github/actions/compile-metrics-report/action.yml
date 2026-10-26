@@ -36,10 +36,12 @@ runs:
       shell: bash
       env:
         GH_TOKEN: ${{ github.token }}
+        INPUTS_WORKFLOW: ${{ inputs.workflow }}
+        INPUTS_BASELINE_ARTIFACT: ${{ inputs.baseline-artifact }}
       run: |
         python3 scripts/nextest-ci stats-fetch \
-          --workflow "${{ inputs.workflow }}" \
-          --artifact-name "${{ inputs.baseline-artifact }}" \
+          --workflow "${INPUTS_WORKFLOW}" \
+          --artifact-name "${INPUTS_BASELINE_ARTIFACT}" \
           --max-runs 5 \
           --out main-compile-metrics.json
 

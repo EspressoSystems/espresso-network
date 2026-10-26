@@ -49,7 +49,7 @@ jobs:
           # contracts/deployments/proposals/<network>/<slug>, so README or
           # network-level files do not trigger verification.
           mapfile -t proposal_dirs < <(
-            git diff --name-only "origin/${{ github.base_ref }}...HEAD" -- 'contracts/deployments/proposals/**' \
+            git diff --name-only "origin/${GITHUB_BASE_REF}...HEAD" -- 'contracts/deployments/proposals/**' \
               | xargs -r -n1 dirname \
               | awk -F/ 'NF >= 5' \
               | sort -u

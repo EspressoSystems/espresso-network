@@ -13,13 +13,15 @@ runs:
     - shell: bash
       run: |
         set -euxo pipefail
-        if [ "${{ inputs.version }}" = "latest" ]; then
+        if [ "${INPUTS_VERSION}" = "latest" ]; then
           URL="https://github.com/F1bonacc1/process-compose/releases/latest/download/process-compose_linux_amd64.tar.gz"
         else
-          URL="https://github.com/F1bonacc1/process-compose/releases/download/${{ inputs.version }}/process-compose_linux_amd64.tar.gz"
+          URL="https://github.com/F1bonacc1/process-compose/releases/download/${INPUTS_VERSION}/process-compose_linux_amd64.tar.gz"
         fi
         curl -L "$URL" -o /tmp/process-compose.tar.gz
         tar -xzf /tmp/process-compose.tar.gz -C /tmp
         sudo mv /tmp/process-compose /usr/local/bin/
         sudo chmod +x /usr/local/bin/process-compose
         process-compose version
+      env:
+        INPUTS_VERSION: ${{ inputs.version }}

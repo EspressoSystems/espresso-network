@@ -21,6 +21,19 @@ env:
   CARGO_INCREMENTAL: "0"
 
 jobs:
+  invisible-unicode:
+    name: invisible unicode
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Reject zero-width, bidi and tag characters
+        run: scripts/check-invisible-unicode
+
   cargo-sort:
     name: cargo sort
     runs-on: ubuntu-latest

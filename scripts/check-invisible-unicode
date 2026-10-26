@@ -1,0 +1,54 @@
+#!/usr/bin/env bash
+# Fail on tracked text files that contain invisible Unicode: zero-width, bidi controls,
+# tag characters, filler characters and variation selectors other than U+FE0F.
+set -euo pipefail
+
+readonly SCRIPT_NAME="${0##*/}"
+# U+00AD, U+061C, U+115F-1160, U+180E, U+200B-200F, U+202A-202E, U+2060-2064,
+# U+2066-2069, U+3164, U+FE00-FE0E, U+FEFF, U+E0000-E007F, U+E0100-E01EF.
+readonly PATTERN='[\x{00AD}\x{061C}\x{115F}\x{1160}\x{180E}\x{200B}-\x{200F}\x{202A}-\x{202E}\x{2060}-\x{2064}\x{2066}-\x{2069}\x{3164}\x{FE00}-\x{FE0E}\x{FEFF}\x{E0000}-\x{E007F}\x{E0100}-\x{E01EF}]'
+
+usage() {
+  cat << EOF
+Usage: ${SCRIPT_NAME} [TREE-ISH]
+
+Print file:line for every tracked text file containing invisible Unicode characters.
+Scans the working tree, or TREE-ISH (a commit) when given. Exit 1 if any are found.
+EOF
+}
+
+main() {
+  case "${1-}" in
+    -h | --help)
+      usage
+      exit 0
+      ;;
+    -*)
+      echo "${SCRIPT_NAME}: unknown option: $1" >&2
+      usage >&2
+      exit 1
+      ;;
+  esac
+
+  # PCRE needs UTF mode for the code points above U+00FF.
+  export LC_ALL=C.UTF-8
+  local -a tree=()
+  [[ $# -eq 0 ]] || tree=("$1")
+
+  # git grep exits 0 on a match, 1 on none, anything else on error. -I skips binary files.
+  local status=0
+  git grep -nIP --no-color -e "${PATTERN}" "${tree[@]}" -- || status=$?
+  case "${status}" in
+    0)
+      echo "${SCRIPT_NAME}: invisible Unicode characters found (file:line above)" >&2
+      exit 1
+      ;;
+    1) ;;
+    *)
+      echo "${SCRIPT_NAME}: git grep failed with status ${status}" >&2
+      exit "${status}"
+      ;;
+  esac
+}
+
+main "$@"

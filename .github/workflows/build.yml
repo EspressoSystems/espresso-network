@@ -605,7 +605,7 @@ jobs:
           if [[ "${{ github.event_name }}" == "pull_request" ]]; then
             DOCKER_TAG="pr-${{ github.event.pull_request.number }}"
           else
-            DOCKER_TAG=$(echo "${{ github.ref_name }}" | tr '/' '-')
+            DOCKER_TAG=$(echo "${GITHUB_REF_NAME}" | tr '/' '-')
           fi
           echo DOCKER_TAG=$DOCKER_TAG >> $GITHUB_ENV
 
@@ -632,7 +632,7 @@ jobs:
           if [[ "${{ github.event_name }}" == "pull_request" ]]; then
             DOCKER_TAG="pr-${{ github.event.pull_request.number }}"
           else
-            DOCKER_TAG=$(echo "${{ github.ref_name }}" | tr '/' '-')
+            DOCKER_TAG=$(echo "${GITHUB_REF_NAME}" | tr '/' '-')
           fi
           echo DOCKER_TAG=$DOCKER_TAG >> $GITHUB_ENV
 
@@ -745,7 +745,7 @@ jobs:
 
       - name: Set upgrade tag
         run: |
-          UPGRADE_TAG=$(echo "${{ github.ref_name }}" | tr '/' '-')
+          UPGRADE_TAG=$(echo "${GITHUB_REF_NAME}" | tr '/' '-')
           echo "UPGRADE_TAG=$UPGRADE_TAG" >> $GITHUB_ENV
           echo "UPGRADE_PULL=1" >> $GITHUB_ENV
 
@@ -884,7 +884,7 @@ jobs:
       - uses: taiki-e/install-action@just
 
       - name: Set docker tag
-        run: echo "DOCKER_TAG=$(echo '${{ github.ref_name }}' | tr '/' '-')" >> $GITHUB_ENV
+        run: echo "DOCKER_TAG=$(echo "${GITHUB_REF_NAME}" | tr '/' '-')" >> $GITHUB_ENV
 
       - name: Start demo + smoke test
         run: just soak::up

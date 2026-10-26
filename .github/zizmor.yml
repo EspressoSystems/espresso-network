@@ -1,0 +1,59 @@
+rules:
+  # Follow-up: pin actions by SHA (346 uses, needs a Dependabot github-actions update flow).
+  unpinned-uses:
+    disable: true
+  # Follow-up: add a Dependabot cooldown (policy choice).
+  dependabot-cooldown:
+    disable: true
+  # Follow-up: add least-privilege permissions blocks to these workflows; each job needs checking.
+  excessive-permissions:
+    ignore:
+      - audit.yml
+      - benchmark-build.yaml
+      - binary-upgrade-test.yml
+      - build-allocators.yml
+      - build-crypto-helper.yml
+      - build-without-lockfile.yml
+      - build.yml
+      - cargo-features.yml
+      - contracts-mutation-test.yml
+      - contracts.yml
+      - coverage.yml
+      - docs.yml
+      - hotshot.yml
+      - lint.yml
+      - nix-env-macos-arm.yml
+      - slowtest.yaml
+      - tag-release.yml
+      - test.yml
+      - typos.yml
+      - ubuntu-install-without-nix.yml
+      - unused-deps.yml
+      - update-release-tracker.yml
+      - update_nix.yml
+  # Follow-up: review rust-cache use in these jobs.
+  cache-poisoning:
+    ignore:
+      - build.yml:64
+      - build.yml:135
+      - coverage.yml:47
+      - lint.yml:74
+      - lint.yml:91
+      - slowtest.yaml:70
+      - slowtest.yaml:139
+      - test.yml:46
+      - test.yml:97
+      - test.yml:144
+      - test.yml:207
+      - test.yml:250
+      - test.yml:294
+  # Reviewed: these triggers run only trusted code or gate on author association.
+  dangerous-triggers:
+    ignore:
+      - backport.yml:6
+      - claude.yml:4
+      - compile-metrics-command.yml:7
+      - network-bench-command.yml:16
+      - tag-release.yml:4
+      - update-release-tracker.yml:7
+      - update-release-tracker.yml:10

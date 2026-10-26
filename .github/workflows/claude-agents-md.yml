@@ -15,8 +15,13 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.ref_name }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
+permissions: {}
+
+# Threat model: see "CI threat model" in .github/claude/README.md.
+# audit runs Claude sandboxed with a read token; propose holds the write token
+# and only applies a checked patch.
 jobs:
-  maintain:
+  audit:
     # Fork PRs get no secrets and no push access.
     if: |
       github.event_name != 'pull_request' || (
@@ -26,8 +31,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     permissions:
-      contents: write
-      pull-requests: write
+      contents: read
+    outputs:
+      propose: ${{ steps.patch.outputs.propose }}
+      sha: ${{ steps.audited.outputs.sha }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -36,9 +43,15 @@ jobs:
           ref: ${{ github.head_ref || github.ref_name }}
           fetch-depth: 0
           filter: blob:none
-          # Keep push credentials out of the audit step; create-pull-request
-          # pushes with its own token.
           persist-credentials: false
+
+      # The commit the patch is a diff against; propose checks out the same one.
+      - name: Record the audited commit
+        id: audited
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      # Installs ci-sandbox outside the worktree, which is untrusted once Claude ran.
+      - uses: ./.github/actions/ci-sandbox
 
       - name: Fetch live network state
         run: scripts/fetch-network-facts ./tmp/network
@@ -51,60 +64,134 @@ jobs:
           mkdir -p ./tmp/review
           mv AGENTS.md CLAUDE.md ./tmp/review/
 
+      - name: Install Claude
+        run: curl -fsSL https://claude.ai/install.sh | bash
+
       - name: Audit the agent docs
         timeout-minutes: 30
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1"
         run: |
           set -euo pipefail
-          curl -fsSL https://claude.ai/install.sh | bash
+          # Sandboxed output must not be parsed as workflow commands.
+          token=$(openssl rand -hex 16)
+          echo "::stop-commands::$token"
+          trap 'echo "::$token::"' EXIT
           export PATH="$HOME/.local/bin:$PATH"
-          # The agent cannot push (no credentials in this step, no GH_TOKEN) and its
+          prompt=$(cat .github/claude/maintain-agents-md.md)
+          # The agent cannot push (no credentials in the sandbox, no GH_TOKEN) and its
           # network facts are pre-fetched. The deny list documents that and keeps it
           # from wasting turns on tools that would fail anyway.
-          claude -p "$(cat .github/claude/maintain-agents-md.md)" \
+          ci-sandbox --ro ~/.local/bin --ro ~/.local/share/claude \
+            --env ANTHROPIC_API_KEY --env CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC -- \
+            claude -p "$prompt" \
             --model opus \
             --dangerously-skip-permissions \
+            --setting-sources user --strict-mcp-config \
             --disallowedTools "WebFetch,WebSearch,Bash(curl:*),Bash(wget:*),Bash(git commit:*),Bash(git push:*),Bash(gh:*)"
 
       - name: Restore the project instructions
         if: always()
         run: |
           set -euo pipefail
-          [ -e ./tmp/review/AGENTS.md ] || exit 0
-          if [ -e AGENTS.md ]; then
-            echo "::error::agent wrote a new AGENTS.md at the repo root; refusing to overwrite the edited copy"
-            exit 1
-          fi
-          mv ./tmp/review/AGENTS.md ./tmp/review/CLAUDE.md .
+          # Sandboxed output must not be parsed as workflow commands.
+          token=$(openssl rand -hex 16)
+          echo "::stop-commands::$token"
+          trap 'echo "::$token::"' EXIT
+          ci-sandbox -- bash -c '
+            set -euo pipefail
+            [ -e ./tmp/review/AGENTS.md ] || exit 0
+            if [ -e AGENTS.md ]; then
+              echo "error: agent wrote a new AGENTS.md at the repo root; refusing to overwrite the edited copy"
+              exit 1
+            fi
+            mv ./tmp/review/AGENTS.md ./tmp/review/CLAUDE.md .
+          '
 
-      - name: Build PR body
-        id: body
+      - name: Build patch and report
+        id: patch
         run: |
           set -euo pipefail
-          if [ -s ./tmp/agents-md-report.md ]; then
-            cat ./tmp/agents-md-report.md >> "$GITHUB_STEP_SUMMARY"
-          fi
-          # Same pathspec as add-paths below, so the gate and the commit agree.
-          if [ ! -s ./tmp/agents-md-report.md ] || [ -z "$(git status --porcelain -- AGENTS.md doc)" ]; then
+          out="$RUNNER_TEMP/out"
+          mkdir -p "$out"
+          # Sandboxed output must not be parsed as workflow commands.
+          token=$(openssl rand -hex 16)
+          echo "::stop-commands::$token"
+          trap 'echo "::$token::"' EXIT
+          # git reads config and hooks from Claude's worktree, so it runs sandboxed.
+          # The sandbox never sees $out: only these redirects write there.
+          ci-sandbox -- cat tmp/agents-md-report.md > "$out/report.md" || : > "$out/report.md"
+          cat "$out/report.md" >> "$GITHUB_STEP_SUMMARY"
+          # Same pathspec as the propose job, so the gate and the commit agree.
+          ci-sandbox -- sh -c 'git add -A -- AGENTS.md doc && git diff --cached --binary --no-ext-diff --no-textconv -- AGENTS.md doc' > "$out/changes.patch"
+          if [ ! -s "$out/report.md" ] || [ ! -s "$out/changes.patch" ]; then
             echo "no changes proposed" | tee -a "$GITHUB_STEP_SUMMARY"
-            # git clean, not just checkout: Claude may have added untracked files.
-            git checkout -- . && git clean -fd
             exit 0
           fi
+          echo "propose=true" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@v7
+        if: steps.patch.outputs.propose == 'true'
+        with:
+          name: agents-md-proposal
+          path: ${{ runner.temp }}/out/
+
+      # Post steps (checkout cleanup) must not run git on Claude's .git/config.
+      - name: Delete the worktree
+        if: always()
+        run: chmod -R u+rwX . && find . -mindepth 1 -delete
+
+  propose:
+    needs: audit
+    if: needs.audit.outputs.propose == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.audit.outputs.sha }}
+          fetch-depth: 0
+          filter: blob:none
+          persist-credentials: false
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: agents-md-proposal
+          path: ${{ runner.temp }}/in
+
+      - name: Apply patch and build PR body
+        run: |
+          set -euo pipefail
+          in="$RUNNER_TEMP/in"
+          # The patch is audit output: text edits to AGENTS.md and doc/ files only.
+          scripts/check-doc-patch "$in/changes.patch"
+          git apply "$in/changes.patch"
+          # Bot pushes trigger no workflows, so lint never sees this output.
+          scripts/check-invisible-unicode
+          mkdir -p ./tmp
+          # Fence the model-written report so `Fixes #N` and @mentions stay inert. The
+          # fence is longer than any backtick run in the report.
+          longest=$({ grep -o '`\+' "$in/report.md" || true; } | awk '{ if (length($0) > m) m = length($0) } END { print m + 0 }')
+          fence=$(printf '`%.0s' $(seq 1 $(( longest > 2 ? longest + 1 : 3 ))))
           {
             echo "Automated AGENTS.md maintenance. To trigger the CI, close and re-open the PR."
             echo
+            echo "$fence"
             # GitHub rejects bodies over 65536 chars; the run summary has the full report.
-            head -c 60000 ./tmp/agents-md-report.md
+            head -c 60000 "$in/report.md"
+            printf '\n%s\n' "$fence"
           } > ./tmp/pr-body.md
-          echo "propose=true" >> "$GITHUB_OUTPUT"
 
       - name: Create Pull Request
-        if: steps.body.outputs.propose == 'true'
         uses: peter-evans/create-pull-request@v8
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
+          # The checkout is detached at the audited commit.
+          base: ${{ github.head_ref || github.ref_name }}
           # One branch per base, so a PR run does not clobber the scheduled PR.
           # Re-running force-pushes and updates the open PR in place.
           branch: bot/agents-md/${{ github.head_ref || github.ref_name }}
