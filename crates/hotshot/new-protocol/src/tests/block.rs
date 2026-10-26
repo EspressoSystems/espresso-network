@@ -511,6 +511,40 @@ async fn test_request_block_same_view_reuses_transactions() {
     assert_eq!(txns, vec![tx(3)]);
 }
 
+/// The manifest names what the payload kept, not everything the pool gave it.
+#[tokio::test]
+async fn test_request_block_hashes_a_payload_that_dropped_a_transaction() {
+    use crate::{block::BlockAndHeaderRequest, tests::common::utils::TestData};
+
+    let mut b = BlockBuilder::new(
+        Arc::new(TestInstanceState {
+            max_block_transactions: Some(1),
+            ..TestInstanceState::default()
+        }),
+        mock_membership(),
+        small_config(),
+        test_upgrade_lock(),
+    );
+    let test_data = TestData::new(2).await;
+    b.on_transactions(tx_msg(view(4), vec![tx(1), tx(2)]));
+    b.request_block(BlockAndHeaderRequest {
+        view: view(5),
+        epoch: epoch(),
+        parent_proposal: test_data.views[0].proposal.data.clone(),
+    });
+
+    let Some(Ok(output)) = b.next().await else {
+        panic!("expected an Ok block builder output");
+    };
+    let payload = &output.payload;
+    let computed = <TestBlockPayload as BlockPayload<TestTypes>>::transaction_commitments(
+        &payload.payload,
+        &payload.metadata,
+    );
+    assert_eq!(computed.len(), 1, "the payload left one transaction out");
+    assert_eq!(output.manifest.hashes, computed);
+}
+
 #[test]
 fn pooled_hashes_stand_in_when_the_payload_kept_every_transaction() {
     let payload = test_payload(vec![tx(1), tx(2)]);
