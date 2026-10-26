@@ -34,6 +34,15 @@ A fetcher polls finalized L1 blocks, validates signatures, builds a `ValidatorMa
 drops validators below `max_stake / VID_TARGET_TOTAL_STAKE` and truncates to `MAX_VALIDATORS` by descending stake.
 Effective from the next epoch boundary.
 
+## VID
+
+AVID-M over GF(2^16) (`crates/vid/src/avidm_gf2.rs`), systematic: shard indices below the recovery threshold (a third of
+total weight) are the payload's own chunks. `disperse_params()` hands out contiguous shard ranges in descending stake
+order, so the highest-staked nodes hold the systematic shards. The reconstructor
+(`crates/hotshot/new-protocol/src/vid/reconstruct.rs`) races two paths per view: concatenating the systematic shares
+once they are all in hand, and erasure-decoding any threshold of shares. Both re-commit the result; the first to succeed
+wins. `vid_payloads_*` and `vid_reconstruct_*` metrics show which path wins in practice.
+
 ## Fast finality
 
 V0_6, `crates/hotshot/new-protocol/`, `doc/stake-table-fast-finality.md`. Replaces CDN + libp2p networking with
