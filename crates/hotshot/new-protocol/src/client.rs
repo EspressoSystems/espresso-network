@@ -248,7 +248,7 @@ pub enum QueryError {
 ///
 /// The membership layer gets a clone of this so it does not need its own
 /// network handle — the `Coordinator` is the only owner of the underlying
-/// `ConnectedNetwork`.
+/// network.
 pub struct ClientLeafFetcherNetwork<T: NodeType> {
     client: ClientApi<T>,
 }
