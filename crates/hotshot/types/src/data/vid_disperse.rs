@@ -16,8 +16,8 @@
 //!    implementation.
 
 use std::{
-    collections::BTreeMap, fmt::Debug, hash::Hash, marker::PhantomData, ops::Range, sync::Arc,
-    time::Duration,
+    cmp::Reverse, collections::BTreeMap, fmt::Debug, hash::Hash, marker::PhantomData, ops::Range,
+    sync::Arc, time::Duration,
 };
 
 use alloy_primitives::U256;
@@ -403,6 +403,21 @@ fn approximate_weights<TYPES: NodeType>(stake_table: &[PeerConfig<TYPES>]) -> We
             total_weight,
         }
     }
+}
+
+/// `stake_table` in descending stake order; equal stakes keep their order.
+///
+/// Dispersal hands out shard ranges in committee order, and the code is
+/// systematic: the first `recovery_threshold` shard indices are the payload's
+/// own chunks. This order puts the payload itself on the highest-staked nodes,
+/// so a reconstructor holding every one of their shares can concatenate them
+/// instead of decoding.
+pub fn by_descending_stake<TYPES: NodeType>(
+    stake_table: impl IntoIterator<Item = PeerConfig<TYPES>>,
+) -> Vec<PeerConfig<TYPES>> {
+    let mut stake_table: Vec<_> = stake_table.into_iter().collect();
+    stake_table.sort_by_key(|entry| Reverse(entry.stake_table_entry.stake()));
+    stake_table
 }
 
 impl<TYPES: NodeType> AvidMDisperse<TYPES> {
@@ -843,7 +858,7 @@ impl<TYPES: NodeType> AvidmGf2Disperse<TYPES> {
         metadata: &<TYPES::BlockPayload as BlockPayload<TYPES>>::Metadata,
     ) -> Result<AvidmGf2DisperseParams<TYPES>> {
         let target_mem = membership.stake_table_for_epoch(target_epoch)?;
-        let stake_table: Vec<_> = target_mem.stake_table().cloned().collect();
+        let stake_table = by_descending_stake(target_mem.stake_table().cloned());
         let Weights {
             weights,
             total_weight,

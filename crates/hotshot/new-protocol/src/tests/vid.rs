@@ -1,8 +1,19 @@
-use hotshot_example_types::{block_types::TestTransaction, node_types::TestTypes};
+use std::collections::HashMap;
+
+use alloy::primitives::U256;
+use hotshot_example_types::{
+    block_types::TestTransaction,
+    node_stake::{TestNodeStakes, gen_node_lists},
+    node_types::TestTypes,
+};
 use hotshot_types::{
-    data::{VidCommitment2, VidDisperseShare2, ViewNumber, ns_table::parse_ns_table},
+    PeerConfig,
+    data::{
+        VidCommitment2, VidDisperseShare2, ViewNumber, ns_table::parse_ns_table,
+        vid_disperse::by_descending_stake,
+    },
     signature_key::BLSPubKey,
-    traits::signature_key::SignatureKey,
+    traits::signature_key::{SignatureKey, StakeTableEntryType},
     vid::avidm_gf2::{AvidmGf2Scheme, init_avidm_gf2_param},
 };
 
@@ -1213,4 +1224,29 @@ fn test_ns_lens_must_match_a_table_sized_for_their_total() {
         AvidmGf2Scheme::commit(&param, &payload, parse_ns_table(payload.len(), &[])).unwrap();
     assert_eq!(single.ns_lens, vec![100]);
     assert!(ns_lens_match_metadata(&single, &[]));
+}
+
+/// Dispersal hands out shard ranges in this order, so the systematic range
+/// lands on the highest-staked nodes; equal stakes keep their committee order.
+#[test]
+fn test_dispersal_order_is_descending_stake() {
+    let stakes = TestNodeStakes::new(
+        HashMap::from([(1, U256::from(5)), (2, U256::from(9)), (3, U256::from(5))]),
+        U256::from(1),
+    );
+    let (committee, _) = gen_node_lists::<TestTypes>(5, 0, &stakes);
+    let keys = |members: &[PeerConfig<TestTypes>]| -> Vec<BLSPubKey> {
+        members
+            .iter()
+            .map(|member| member.stake_table_entry.public_key())
+            .collect()
+    };
+
+    let ordered = by_descending_stake(committee.clone());
+
+    let expected: Vec<_> = [2, 1, 3, 0, 4]
+        .into_iter()
+        .map(|i| committee[i].clone())
+        .collect();
+    assert_eq!(keys(&ordered), keys(&expected));
 }
