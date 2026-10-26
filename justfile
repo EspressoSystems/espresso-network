@@ -11,9 +11,8 @@ doc *args:
     cargo doc --no-deps --document-private-items {{args}}
     echo "file://${CARGO_TARGET_DIR:-$PWD/target}/doc/espresso_node/index.html"
 
+[script("scripts/with-tools", "docs", "forge", "mdbook")]
 doc-contracts:
-    #!/usr/bin/env bash
-    set -e
     rm -rf docs
     forge doc
     # Flatten structure: remove nested contracts/ directory
@@ -29,8 +28,8 @@ doc-contracts:
     echo "file://$(pwd)/docs/book/index.html"
 
 # Preview all docs locally with the same structure as the published GitHub Pages site
+[script("scripts/with-tools", "python", "python3")]
 doc-all-serve: doc doc-contracts
-    #!/usr/bin/env bash
     rm -rf ./public
     mkdir -p ./public/contracts
     cp -r "${CARGO_TARGET_DIR:-target}"/doc/* ./public/
@@ -417,6 +416,7 @@ contracts-test-fuzz *args='-vv':
 contracts-test-invariant *args='-vv':
     forge test --match-test invariant_ {{args}}
 
+[script("scripts/with-tools", "mutation", "dregs")]
 contracts-mutation-test *args:
     dregs run --project . {{args}}
 
