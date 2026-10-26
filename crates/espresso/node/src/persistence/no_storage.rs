@@ -1,5 +1,5 @@
 //! Mock implementation of persistence, for testing.
-use std::{collections::BTreeMap, sync::Arc};
+use std::collections::BTreeMap;
 
 use anyhow::bail;
 use async_trait::async_trait;
@@ -7,12 +7,8 @@ use espresso_types::{
     AuthenticatedValidatorMap, Header, Leaf2, NetworkConfig, PubKey, RegisteredValidatorMap,
     StakeTableHash,
     traits::{EventsPersistenceRead, MembershipPersistence, StakeTuple},
-    v0::traits::{EventConsumer, PersistenceOptions, SequencerPersistence},
+    v0::traits::{EventConsumer, PersistenceOptions, SequencerPersistence, StateCertPersistence},
     v0_3::{EventKey, IndexedStake, RegisteredValidator, RewardAmount, StakeTableEvent},
-};
-use hotshot::InitializerEpochInfo;
-use hotshot_libp2p_networking::network::behaviours::dht::store::persistent::{
-    DhtPersistentStorage, SerializableRecord,
 };
 use hotshot_types::{
     data::{
@@ -20,15 +16,15 @@ use hotshot_types::{
         VidDisperseShare,
     },
     drb::{DrbInput, DrbResult},
-    event::{Event, EventType, HotShotAction, LeafInfo},
+    event::{HotShotAction, LeafInfo},
+    initializer::InitializerEpochInfo,
     message::Proposal,
     new_protocol::CoordinatorEvent,
     simple_certificate::{
-        CertificatePair, LightClientStateUpdateCertificateV2, NextEpochQuorumCertificate2,
-        QuorumCertificate2, UpgradeCertificate,
+        Certificate2, CertificatePair, LightClientStateUpdateCertificateV2,
+        NextEpochQuorumCertificate2, QuorumCertificate2, UpgradeCertificate,
     },
     traits::metrics::Metrics,
-    vote::HasViewNumber,
 };
 
 use crate::{SeqTypes, ViewNumber};
@@ -68,37 +64,25 @@ impl SequencerPersistence for NoStorage {
 
     async fn persist_decided_leaves(
         &self,
-        view_number: ViewNumber,
         leaves: impl IntoIterator<Item = (&LeafInfo<SeqTypes>, CertificatePair<SeqTypes>)> + Send,
-        deciding_qc: Option<Arc<CertificatePair<SeqTypes>>>,
+        _cert2: Option<&Certificate2<SeqTypes>>,
         consumer: &(impl EventConsumer + 'static),
     ) -> anyhow::Result<()> {
-        let leaves = leaves
-            .into_iter()
-            .map(|(info_ref, qc)| (info_ref.clone(), qc))
-            .collect::<Vec<_>>();
-        for (leaf_info, qc) in leaves {
-            // Insert the deciding QC at the appropriate position, with the last decide event in the
-            // chain.
-            let deciding_qc = if let Some(deciding_qc) = &deciding_qc {
-                (deciding_qc.view_number() == qc.view_number() + 1).then_some(deciding_qc.clone())
-            } else {
-                None
+        // The iterator is not `Send`, so build the event before awaiting.
+        let event = {
+            let mut leaves = leaves.into_iter();
+            let Some((newest, cert)) = leaves.next() else {
+                return Ok(());
             };
-
-            consumer
-                .handle_event(&CoordinatorEvent::LegacyEvent(Event {
-                    view_number,
-                    event: EventType::Decide {
-                        leaf_chain: Arc::new(vec![leaf_info.clone()]),
-                        committing_qc: Arc::new(qc),
-                        deciding_qc,
-                        block_size: None,
-                    },
-                }))
-                .await?;
-        }
-        Ok(())
+            CoordinatorEvent::NewDecide {
+                leaf_infos: std::iter::once(newest.clone())
+                    .chain(leaves.map(|(info, _)| info.clone()))
+                    .collect(),
+                cert1: cert.qc().clone(),
+                cert2: None,
+            }
+        };
+        consumer.handle_event(&event).await
     }
 
     async fn load_latest_acted_view(&self) -> anyhow::Result<Option<ViewNumber>> {
@@ -249,6 +233,11 @@ impl SequencerPersistence for NoStorage {
         Ok(None)
     }
 
+    fn enable_metrics(&mut self, _metrics: &dyn Metrics) {}
+}
+
+#[async_trait]
+impl StateCertPersistence for NoStorage {
     async fn get_state_cert_by_epoch(
         &self,
         _epoch: u64,
@@ -263,8 +252,6 @@ impl SequencerPersistence for NoStorage {
     ) -> anyhow::Result<()> {
         Ok(())
     }
-
-    fn enable_metrics(&mut self, _metrics: &dyn Metrics) {}
 }
 
 #[async_trait]
@@ -340,18 +327,5 @@ impl MembershipPersistence for NoStorage {
         _limit: u64,
     ) -> anyhow::Result<Vec<RegisteredValidator<PubKey>>> {
         Ok(Default::default())
-    }
-}
-
-#[async_trait]
-impl DhtPersistentStorage for NoStorage {
-    /// Don't do anything
-    async fn save(&self, _records: Vec<SerializableRecord>) -> anyhow::Result<()> {
-        Ok(())
-    }
-
-    /// Don't do anything
-    async fn load(&self) -> anyhow::Result<Vec<SerializableRecord>> {
-        Ok(vec![])
     }
 }

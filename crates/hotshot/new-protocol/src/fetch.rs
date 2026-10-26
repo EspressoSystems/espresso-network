@@ -1,10 +1,10 @@
 use std::collections::{HashMap, HashSet};
 
-use hotshot::traits::BlockPayload;
 use hotshot_types::{
     data::{VidCommitment2, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
     traits::{
+        BlockPayload,
         block_contents::{BlockHeader, EncodeBytes},
         node_implementation::NodeType,
         signature_key::SignatureKey,
@@ -269,13 +269,13 @@ impl<T: NodeType> Fetcher<T> {
 mod tests {
     use std::collections::HashSet;
 
-    use hotshot::types::BLSPubKey;
     use hotshot_example_types::{
         block_types::{TestBlockHeader, TestBlockPayload, TestMetadata, TestTransaction},
         node_types::{TEST_VERSIONS, TestTypes},
     };
     use hotshot_types::{
         data::{EpochNumber, Leaf2, VidCommitment, VidCommitment2, ViewNumber, ns_table},
+        signature_key::BLSPubKey,
         traits::{block_contents::EncodeBytes, signature_key::SignatureKey},
         vid::avidm_gf2::AvidmGf2Scheme,
     };
@@ -336,7 +336,7 @@ mod tests {
             TEST_VERSIONS.test.base,
         );
 
-        harness.consensus.force_set_proposal(view(), proposal);
+        harness.force_set_proposal(view(), proposal);
         (bytes, commitment, harness)
     }
 

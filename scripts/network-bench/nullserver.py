@@ -184,7 +184,7 @@ def run_selftest(
                 nb.generate_load(
                     cfg,
                     [url],
-                    url,
+                    [url],
                     [url],
                     directory,
                     nb.SYSTEM_CLOCK,

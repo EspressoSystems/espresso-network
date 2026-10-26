@@ -202,12 +202,12 @@ pub(super) fn fetch_vid_common_with_header<Types, S, P>(
     P: AvailabilityProvider<Types>,
 {
     let Some(vid_fetcher) = fetcher.vid_common_fetcher.as_ref() else {
-        tracing::info!("not fetching vid because of leaf only mode");
+        tracing::debug!("not fetching vid because of leaf only mode");
         return;
     };
 
     // Now that we have the header, we only need to retrieve the VID common data.
-    tracing::info!(
+    tracing::debug!(
         "spawned active fetch for VID common {:?} (height {})",
         header.payload_commitment(),
         header.block_number()

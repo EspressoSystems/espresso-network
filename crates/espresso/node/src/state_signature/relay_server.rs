@@ -367,11 +367,11 @@ mod test {
     use alloy::primitives::{FixedBytes, U256};
     use axum::Json;
     use espresso_types::SeqTypes;
-    use hotshot::types::SchnorrPubKey;
     use hotshot_contract_adapter::light_client::derive_signed_state_digest;
     use hotshot_types::{
         PeerConfig, ValidatorConfig,
         light_client::{LightClientState, StakeTableState},
+        signature_key::SchnorrPubKey,
         traits::signature_key::{LCV2StateSignatureKey, LCV3StateSignatureKey},
     };
     use http_client::{Client, error::ClientErr};

@@ -5,7 +5,7 @@ use async_trait::async_trait;
 use committable::{Commitment, Committable};
 use espresso_types::{
     BackoffParams, BlockMerkleTree, FeeAccount, FeeAccountProof, FeeMerkleCommitment, Leaf2,
-    NodeState, PubKey, SeqTypes,
+    NodeState, SeqTypes,
     traits::{SequencerPersistence, StateCatchup},
     v0_3::{ChainConfig, RewardAccountProofV1, RewardAccountV1, RewardMerkleCommitmentV1},
     v0_4::{
@@ -13,11 +13,11 @@ use espresso_types::{
         forgotten_accounts_include,
     },
 };
-use hotshot::traits::NodeImplementation;
 use hotshot_new_protocol::{storage::NewProtocolStorage, utils::verify_new_protocol_leaf_chain};
 use hotshot_types::{
     data::ViewNumber, epoch_membership::EpochMembershipCoordinator, message::UpgradeLock,
-    simple_certificate::LightClientStateUpdateCertificateV2, traits::network::ConnectedNetwork,
+    simple_certificate::LightClientStateUpdateCertificateV2,
+    traits::node_implementation::NodeImplementation,
 };
 use jf_merkle_tree_compat::{ForgetableMerkleTreeScheme, MerkleTreeScheme};
 use tokio::time::timeout;
@@ -33,8 +33,8 @@ use crate::{
 };
 
 #[async_trait]
-impl<I: NodeImplementation<SeqTypes>, N: ConnectedNetwork<PubKey>, P: SequencerPersistence>
-    StateCatchup for RequestResponseProtocol<I, N, P>
+impl<I: NodeImplementation<SeqTypes>, P: SequencerPersistence> StateCatchup
+    for RequestResponseProtocol<I, P>
 where
     I::Storage: NewProtocolStorage<SeqTypes>,
 {

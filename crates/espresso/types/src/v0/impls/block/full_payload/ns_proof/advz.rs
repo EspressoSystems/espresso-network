@@ -166,10 +166,9 @@ impl ADVZNsProof {
 #[cfg(test)]
 mod tests {
     use futures::future;
-    use hotshot::traits::BlockPayload;
     use hotshot_types::{
         data::VidCommitment,
-        traits::EncodeBytes,
+        traits::{BlockPayload, EncodeBytes},
         vid::advz::{ADVZScheme, advz_scheme},
     };
     use jf_advz::{VidDisperse, VidScheme};
@@ -204,7 +203,7 @@ mod tests {
             // cannot escape `FnMut` closure body` caused by mutable variable `vid`
             // below.
             let blocks_only = future::join_all(tests.iter().map(|t| async {
-                Payload::from_transactions(t.all_txs(), &Default::default(), &Default::default())
+                Payload::from_transactions(&t.all_txs(), &Default::default(), &Default::default())
                     .await
                     .unwrap()
                     .0

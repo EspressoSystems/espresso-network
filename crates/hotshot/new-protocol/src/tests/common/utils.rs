@@ -4,24 +4,16 @@ use std::{
 };
 
 use committable::{Commitment, Committable};
-use futures::StreamExt;
-use hotshot::{
-    traits::{BlockPayload, ValidatedState},
-    types::{BLSPrivKey, BLSPubKey, SchnorrPubKey},
-};
 use hotshot_contract_adapter::light_client::derive_signed_state_digest;
 use hotshot_example_types::{
     block_types::{TestBlockHeader, TestBlockPayload, TestMetadata},
     membership::{
         TestableMembership, static_committee::StaticStakeTable, strict_membership::StrictMembership,
     },
+    node_stake::{TestNodeStakes, gen_node_lists},
     node_types::{TEST_VERSIONS, TestTypes},
     state_types::{TestInstanceState, TestValidatedState},
     storage_types::TestStorage,
-};
-use hotshot_testing::{
-    helpers::build_cert, node_stake::TestNodeStakes, test_builder::gen_node_lists,
-    view_generator::TestViewGenerator,
 };
 use hotshot_types::{
     PeerConnectInfo,
@@ -34,6 +26,7 @@ use hotshot_types::{
     epoch_membership::EpochMembershipCoordinator,
     light_client::{StakeTableState, StateKeyPair},
     message::{Proposal as SignedProposal, UpgradeLock},
+    signature_key::{BLSPrivKey, BLSPubKey, SchnorrPubKey},
     simple_certificate::{
         TimeoutCertificate2, TimeoutCertificate3, TimeoutEvidence, UpgradeCertificate,
         UpgradeCertificate2,
@@ -44,7 +37,7 @@ use hotshot_types::{
     },
     stake_table::HSStakeTable,
     traits::{
-        EncodeBytes,
+        BlockPayload, EncodeBytes, ValidatedState,
         block_contents::{BlockHeader, BuilderFee},
         election::Membership,
         signature_key::{LCV2StateSignatureKey, LCV3StateSignatureKey, SignatureKey},
@@ -56,6 +49,10 @@ use hotshot_types::{
     vote::HasViewNumber,
 };
 
+use super::{
+    certs::build_cert,
+    view_generator::{GeneratedView, TestViewGenerator},
+};
 use crate::{
     cert_verifier::ValidCert,
     client::{ClientLeafFetcherNetwork, CoordinatorClient},
@@ -462,8 +459,7 @@ impl TestData {
         // byte-identical across harnesses.
         let upgrade = versions::Upgrade::trivial(versions::NEW_PROTOCOL_VERSION);
 
-        let mut generator =
-            TestViewGenerator::generate(membership.clone(), node_key_map.clone(), upgrade);
+        let mut generator = TestViewGenerator::new(membership.clone(), node_key_map, upgrade);
 
         let upgrade_cert: Option<(ViewNumber, UpgradeCertificate<TestTypes>)> =
             if let Some((target_view, ref data)) = upgrade_at_view {
@@ -490,7 +486,10 @@ impl TestData {
                 None
             };
 
-        let gen_views: Vec<_> = (&mut generator).take(num_views).collect::<Vec<_>>().await;
+        let mut gen_views = Vec::with_capacity(num_views);
+        for _ in 0..num_views {
+            gen_views.push(generator.next_view().await);
+        }
 
         let mut views = Vec::new();
         // When we patch a view's proposal (DRB or justify_qc update) the leaf
@@ -1092,10 +1091,9 @@ fn extract_vid_shares(disperse: &VidDisperse2<TestTypes>) -> Vec<VidDisperseShar
 }
 
 fn extract_vid_disperse(
-    gen_view: &hotshot_testing::view_generator::TestView,
+    gen_view: &GeneratedView,
 ) -> (VidDisperse2<TestTypes>, Vec<VidDisperseShare2<TestTypes>>) {
-    let hotshot_types::data::VidDisperse::V2(vid_disperse) = gen_view.vid_disperse.data.clone()
-    else {
+    let hotshot_types::data::VidDisperse::V2(vid_disperse) = gen_view.vid_disperse.clone() else {
         panic!("Expected V2 VID disperse");
     };
     let vid_shares = extract_vid_shares(&vid_disperse);
@@ -1165,6 +1163,8 @@ impl ConsensusHarness {
         self.trace.preamble(
             self.consensus.public_key(),
             self.consensus.last_decided_leaf(),
+            self.consensus.cert1_at(ViewNumber::genesis()),
+            *self.consensus.epoch_height,
         );
         record_leader(&mut self.trace, &self.consensus, &input);
         let before = outbox.len();
@@ -1272,6 +1272,49 @@ impl ConsensusHarness {
             defer_state_for: BTreeSet::new(),
             trace: trace::Recorder::for_current_test(),
         }
+    }
+
+    /// Place the node at `view` in `epoch`, as `Consensus::set_view` does, and
+    /// note the placement in the trace.
+    pub fn set_view(&mut self, view: ViewNumber, epoch: EpochNumber) {
+        self.trace.preamble(
+            self.consensus.public_key(),
+            self.consensus.last_decided_leaf(),
+            self.consensus.cert1_at(ViewNumber::genesis()),
+            *self.consensus.epoch_height,
+        );
+        self.trace.placed(view, epoch);
+        self.consensus.set_view(view, epoch);
+    }
+
+    /// Replace the node's proposal for `view`, as `Consensus::force_set_proposal`
+    /// does, and note the replacement in the trace.
+    pub fn force_set_proposal(&mut self, view: ViewNumber, proposal: Proposal<TestTypes>) {
+        self.trace.preamble(
+            self.consensus.public_key(),
+            self.consensus.last_decided_leaf(),
+            self.consensus.cert1_at(ViewNumber::genesis()),
+            *self.consensus.epoch_height,
+        );
+        self.trace.forced(view);
+        self.consensus.force_set_proposal(view, proposal);
+    }
+
+    /// Seed proposals the node holds without having received them, and record
+    /// each as a block it holds, so the trace does not show it deciding a block
+    /// it never had.
+    pub fn seed_proposals(&mut self, proposals: impl IntoIterator<Item = Proposal<TestTypes>>) {
+        let proposals: Vec<_> = proposals.into_iter().collect();
+        self.trace.preamble(
+            self.consensus.public_key(),
+            self.consensus.last_decided_leaf(),
+            self.consensus.cert1_at(ViewNumber::genesis()),
+            *self.consensus.epoch_height,
+        );
+        for proposal in &proposals {
+            self.trace.held(proposal);
+        }
+        self.consensus.seed_proposals(proposals);
     }
 
     /// Withhold `view`'s state-validation response until [`Self::release_state`].
@@ -1670,10 +1713,10 @@ pub(crate) fn build_timeout_cert3(
     ))
 }
 
-/// Name the leader of the view a step is about, for the replay.
+/// Name the leader of the view a step is about, for the trace checker.
 ///
 /// Every view has one, and the model takes the schedule as a parameter, so a
-/// trace that does not say who leads leaves the replay unable to tell a proposal
+/// trace that does not say who leads leaves the checker unable to tell a proposal
 /// this node was entitled to make from one it was not. Asked of the stake table
 /// here rather than taken from the propose path, so a propose path that forgets
 /// to check leadership is caught rather than confirmed.
@@ -1687,7 +1730,7 @@ pub(crate) fn build_timeout_cert3(
 /// silence would not say whether a view's leader was unknown or merely unrecorded,
 /// and the two mean different things to a reader. It is not a failure — an epoch
 /// the membership does not have leaves consensus unable to claim leadership
-/// either, so a replay that refuses to propose there agrees with it. Only reached
+/// either, and the rules, which then find no leader, agree with it. Only reached
 /// while recording, so an ordinary test run is unaffected.
 pub(crate) fn record_leader(
     trace: &mut trace::Recorder,
@@ -1702,5 +1745,5 @@ pub(crate) fn record_leader(
         .epoch()
         .or_else(|| consensus.current_epoch())
         .unwrap_or_else(EpochNumber::genesis);
-    trace.leader::<TestTypes>(view, consensus.leader_of(view, epoch).as_ref());
+    trace.leader::<TestTypes>(view, epoch, consensus.leader_of(view, epoch).as_ref());
 }

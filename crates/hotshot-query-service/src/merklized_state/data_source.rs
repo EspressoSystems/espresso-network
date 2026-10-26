@@ -48,6 +48,12 @@ pub trait UpdateStateData<Types: NodeType, State: MerklizedState<Types, ARITY>, 
     Send + Sync
 {
     async fn set_last_state_height(&mut self, height: usize) -> anyhow::Result<()>;
+    /// Record that no state is stored at or below `height`, so that queries for it fail as pruned.
+    /// The pruner's state height gauge shows the new value after the pruner's next run.
+    async fn set_state_pruned_height(&mut self, height: u64) -> anyhow::Result<()>;
+    /// Record that the state starts from a snapshot at `height`, not from genesis. The trees then
+    /// lack what no update since has touched, for good.
+    async fn set_state_start_height(&mut self, height: u64) -> anyhow::Result<()>;
     async fn insert_merkle_nodes(
         &mut self,
         path: MerkleProof<State::Entry, State::Key, State::T, ARITY>,
@@ -67,6 +73,9 @@ pub trait UpdateStateData<Types: NodeType, State: MerklizedState<Types, ARITY>, 
 #[async_trait]
 pub trait MerklizedStateHeightPersistence {
     async fn get_last_state_height(&self) -> QueryResult<usize>;
+    /// The height of the snapshot the state started from, if it did not start from genesis. See
+    /// [`UpdateStateData::set_state_start_height`].
+    async fn load_state_start_height(&self) -> QueryResult<Option<u64>>;
 }
 
 type StateCommitment<Types, T, const ARITY: usize> = <T as MerklizedState<Types, ARITY>>::Commit;

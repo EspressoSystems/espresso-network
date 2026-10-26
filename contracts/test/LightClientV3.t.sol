@@ -437,7 +437,7 @@ contract LightClient_newFinalizedState_BeforeEpochActivation_Test is LightClient
         // invalid scalar for blockCommRoot
         vm.startPrank(prover);
         badState.blockCommRoot = BN254.ScalarField.wrap(BN254.R_MOD);
-        vm.expectRevert("InvalidScalar()");
+        vm.expectRevert(BN254.InvalidScalar.selector);
         lc.newFinalizedState(badState, nextStakeTable, newAuthRoot, newProof);
     }
 

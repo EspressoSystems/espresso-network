@@ -85,6 +85,7 @@ impl IntoResponse for ApiError {
         let status = match &self {
             ApiError::BadRequest(_) => StatusCode::BAD_REQUEST,
             ApiError::NotFound(_) => StatusCode::NOT_FOUND,
+            ApiError::Gone(_) => StatusCode::GONE,
             ApiError::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
             ApiError::Unavailable(_) => StatusCode::SERVICE_UNAVAILABLE,
         };
@@ -183,17 +184,6 @@ pub(crate) async fn limit_requests(
         Ok(_permit) => next.run(req).await,
         Err(_) => StatusCode::TOO_MANY_REQUESTS.into_response(),
     }
-}
-
-/// Wrapper so the v1 spec is looked up by a distinct type. v2 serves a build-time document
-/// rather than an `Extension<OpenApi>`, so nothing collides today, but the newtype keeps an
-/// `Extension<OpenApi>` added later from silently resolving to v1's.
-#[derive(Clone)]
-struct OpenApiV1(OpenApi);
-
-/// Serve the v1 OpenAPI spec (extracted from Extension)
-async fn serve_openapi_spec_v1(Extension(OpenApiV1(api)): Extension<OpenApiV1>) -> Json<OpenApi> {
-    Json(api)
 }
 
 /// Serve custom Swagger UI with collapsed defaults, pointed at the given OpenAPI spec route.
@@ -3628,8 +3618,14 @@ pub fn finish_v1_docs(router: ApiRouter) -> Router {
         }
     }
 
+    // Not an Extension layer: Router::layer clones it into every route.
+    let spec = Bytes::from(serde_json::to_vec(&api).expect("OpenAPI document serializes"));
+
     router
-        .route(routes::v1::OPENAPI_SPEC_ROUTE, get(serve_openapi_spec_v1))
+        .route(
+            routes::v1::OPENAPI_SPEC_ROUTE,
+            get(move || async move { ([(header::CONTENT_TYPE, "application/json")], spec) }),
+        )
         .route(
             routes::v1::SWAGGER_ROUTE,
             get(|| async { swagger_html(routes::v1::OPENAPI_SPEC_ROUTE) }),
@@ -3644,7 +3640,6 @@ pub fn finish_v1_docs(router: ApiRouter) -> Router {
                 .with_title("Espresso Node API v1")
                 .axum_handler()),
         )
-        .layer(Extension(OpenApiV1(api)))
 }
 
 /// Declare a path parameter for every `{name}` template segment of every operation.
@@ -4864,6 +4859,30 @@ mod tests {
         assert!(content_type.contains("text/html"));
         let body = body_string(resp).await;
         assert!(body.contains(routes::v1::OPENAPI_SPEC_ROUTE));
+    }
+
+    /// The spec is served as JSON and is stable across requests.
+    #[tokio::test]
+    async fn v1_openapi_spec_served_as_json() {
+        let router = create_router_v1(MockState);
+        let get_spec = || async {
+            let req = Request::builder()
+                .uri(routes::v1::OPENAPI_SPEC_ROUTE)
+                .body(axum::body::Body::empty())
+                .unwrap();
+            let resp = tower::ServiceExt::oneshot(router.clone(), req)
+                .await
+                .unwrap();
+            assert_eq!(
+                resp.headers().get(header::CONTENT_TYPE).unwrap(),
+                "application/json"
+            );
+            axum::body::to_bytes(resp.into_body(), usize::MAX)
+                .await
+                .unwrap()
+        };
+        let (first, second) = (get_spec().await, get_spec().await);
+        assert_eq!(first, second);
     }
 
     #[tokio::test]

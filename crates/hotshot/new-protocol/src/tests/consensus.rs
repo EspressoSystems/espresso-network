@@ -1,7 +1,6 @@
 use std::{marker::PhantomData, sync::Arc};
 
 use committable::{Commitment, CommitmentBoundsArkless, Committable};
-use hotshot::{traits::ValidatedState, types::BLSPubKey};
 use hotshot_example_types::{
     block_types::TestBlockHeader,
     node_types::{TEST_VERSIONS, TestTypes},
@@ -10,9 +9,10 @@ use hotshot_example_types::{
 use hotshot_types::{
     data::{EpochNumber, Leaf2, VidCommitment, VidCommitment2, ViewNumber},
     message::Proposal as SignedProposal,
+    signature_key::BLSPubKey,
     simple_certificate::{LightClientStateUpdateCertificateV2, TimeoutEvidence},
     simple_vote::{HasEpoch, QuorumData2, SimpleVote, TimeoutData2, TimeoutData3, Vote2Data},
-    traits::signature_key::SignatureKey,
+    traits::{ValidatedState, block_contents::BlockHeader, signature_key::SignatureKey},
     utils::is_epoch_root,
     vote::HasViewNumber,
 };
@@ -34,7 +34,7 @@ use crate::{
     tests::common::{
         assertions::{
             any, count_matching, decides_view, is_leaf_decided, is_persist_proposal, is_proposal,
-            is_proposal_for_view, is_proposal_paired, is_record_action,
+            is_proposal_certified, is_proposal_for_view, is_proposal_paired, is_record_action,
             is_request_block_and_header, is_request_state, is_send_cert2, is_send_timeout_cert,
             is_send_timeout_vote, is_view_changed, is_vote1, is_vote1_for_view, is_vote2,
             is_vote2_for_view, node_index_for_key,
@@ -73,7 +73,7 @@ async fn test_timeout_vote_names_the_local_epoch() {
     let mut harness = ConsensusHarness::new(0).await;
     let view = ViewNumber::new(2);
     let local = EpochNumber::genesis() + 1;
-    harness.consensus.set_view(view, local);
+    harness.set_view(view, local);
 
     // Whichever input prompts it, and however many times.
     harness.apply(ConsensusInput::Timeout(view)).await;
@@ -98,7 +98,7 @@ async fn test_timeout_vote_binds_the_local_epoch_when_upgraded() {
         ConsensusHarness::new_with_upgrade_lock(0, 10, test_timeout_epoch_lock()).await;
     let view = ViewNumber::new(2);
     let local = EpochNumber::genesis() + 1;
-    harness.consensus.set_view(view, local);
+    harness.set_view(view, local);
 
     harness.apply(ConsensusInput::Timeout(view)).await;
 
@@ -132,7 +132,7 @@ async fn test_timeout_certificate_does_not_lower_the_epoch() {
     let timed_out = &test_data.views[1];
     let left = timed_out.epoch_number;
     let entered = left + 1;
-    harness.consensus.set_view(timed_out.view_number, entered);
+    harness.set_view(timed_out.view_number, entered);
     let membership = harness
         .membership_coordinator
         .membership_for_epoch(Some(left))
@@ -174,7 +174,7 @@ async fn test_unbound_timeout_certificate_does_not_move_the_epoch() {
     let test_data = TestData::new(2).await;
     let timed_out = &test_data.views[1];
     let here = timed_out.epoch_number;
-    harness.consensus.set_view(timed_out.view_number, here);
+    harness.set_view(timed_out.view_number, here);
 
     harness
         .apply(ConsensusInput::TimeoutCertificate(ValidCert::new(
@@ -213,7 +213,7 @@ async fn test_timeout_certificate_raises_the_epoch() {
     let timed_out = &test_data.views[1];
     let behind = timed_out.epoch_number;
     let ahead = behind + 1;
-    harness.consensus.set_view(timed_out.view_number, behind);
+    harness.set_view(timed_out.view_number, behind);
     harness
         .membership_coordinator
         .membership()
@@ -263,7 +263,7 @@ async fn test_later_timeout_certificate_is_kept_for_its_epoch() {
     let timed_out = &test_data.views[1];
     let behind = timed_out.epoch_number;
     let ahead = behind + 1;
-    harness.consensus.set_view(timed_out.view_number, behind);
+    harness.set_view(timed_out.view_number, behind);
     harness
         .membership_coordinator
         .membership()
@@ -586,9 +586,7 @@ async fn test_vote1_with_seeded_parent_proposal() {
     let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
 
     // Restart: re-seed the validated view-1 proposal and mark its block reconstructed.
-    harness
-        .consensus
-        .seed_proposals([test_data.views[0].proposal.data.clone()]);
+    harness.seed_proposals([test_data.views[0].proposal.data.clone()]);
     harness
         .apply(test_data.views[0].block_reconstructed_input())
         .await;
@@ -614,9 +612,7 @@ async fn test_vote1_parent_reconstruction_from_lock() {
 
     // Restart: re-seed the parent proposal and restore the lock that certifies
     // it, but do NOT mark its block reconstructed.
-    harness
-        .consensus
-        .seed_proposals([test_data.views[0].proposal.data.clone()]);
+    harness.seed_proposals([test_data.views[0].proposal.data.clone()]);
     harness
         .consensus
         .seed_locked_cert(test_data.views[0].cert1.clone());
@@ -800,6 +796,67 @@ async fn test_decide_carries_obtained_payload() {
     }
 }
 
+/// A proposal parked without this node's VID share is adopted once a Cert2
+/// vouches for it, and that adoption announces the proposal so the
+/// reconstructor can pin the view and admit the voters' broadcast shares. A
+/// proposal paired with the node's own share never needs the announcement.
+#[tokio::test]
+async fn test_certified_proposal_without_own_share_is_announced() {
+    let mut harness = ConsensusHarness::new(0).await;
+    let test_data = TestData::new(3).await;
+    let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
+    let view = &test_data.views[0];
+
+    // The leader's unicast of this node's share never arrives: only the
+    // broadcast proposal does, so it parks unpaired.
+    let (proposal, _own_share) = view.proposal_input_consensus(&node_key);
+    harness.apply(proposal).await;
+    assert!(
+        !any(harness.outputs(), is_proposal_certified),
+        "a live proposal awaiting its share is not yet certified"
+    );
+
+    harness.apply(view.cert1_input()).await;
+    harness.apply(view.cert2_input()).await;
+
+    let certified: Vec<_> = harness
+        .outputs()
+        .iter()
+        .filter_map(|output| match output {
+            ConsensusOutput::ProposalCertified(proposal) => Some(proposal),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        certified.len(),
+        1,
+        "adopting the parked proposal on the cert2 announces it once"
+    );
+    assert_eq!(certified[0].view_number, view.view_number);
+    assert_eq!(
+        BlockHeader::<TestTypes>::payload_commitment(&certified[0].block_header),
+        VidCommitment::V2(view.vid_commitment()),
+        "the announcement carries the header the reconstructor pins to"
+    );
+    assert!(
+        any(harness.outputs(), is_leaf_decided),
+        "the view decides on the certificates even without the payload"
+    );
+
+    // Control: a proposal that pairs with the node's own share takes the
+    // live path and is never announced as certified.
+    let mut paired = ConsensusHarness::new(0).await;
+    paired
+        .apply_pair(view.proposal_input_consensus(&node_key))
+        .await;
+    paired.apply(view.cert1_input()).await;
+    paired.apply(view.cert2_input()).await;
+    assert!(
+        !any(paired.outputs(), is_proposal_certified),
+        "a proposal paired with this node's share is not announced as certified"
+    );
+}
+
 /// Obtaining a Cert2 broadcasts it once so peers that missed the vote2s can
 /// still decide, and a re-delivered Cert2 for the same view is not re-broadcast.
 #[tokio::test]
@@ -915,9 +972,7 @@ async fn test_gap_fill_decide_of_older_view() {
 
     // The gap view's proposal was received live before the node advanced past
     // it; its Cert1 and Cert2 arrive late.
-    harness
-        .consensus
-        .seed_proposals([test_data.views[2].proposal.data.clone()]);
+    harness.seed_proposals([test_data.views[2].proposal.data.clone()]);
     harness.apply(test_data.views[2].cert1_input()).await;
     harness.apply(test_data.views[2].cert2_input()).await;
 
@@ -1531,9 +1586,7 @@ async fn test_propose_refuses_when_stored_proposal_differs_from_cert() {
         canonical_commit, byzantine_commit,
         "test setup: byzantine proposal must have a different leaf commit"
     );
-    harness
-        .consensus
-        .force_set_proposal(test_data.views[0].view_number, byzantine.clone());
+    harness.force_set_proposal(test_data.views[0].view_number, byzantine.clone());
 
     // Plant a header keyed by the byzantine commit at view 2. Without this
     // step, even the buggy code would silently fail to find a header and
@@ -2123,9 +2176,7 @@ async fn test_no_redecide_below_restart_anchor() {
             .await;
     // Make the pre-anchor proposal available so only the floor stands between
     // the replayed certificates and a duplicate decide.
-    harness
-        .consensus
-        .seed_proposals([decided.proposal.data.clone()]);
+    harness.seed_proposals([decided.proposal.data.clone()]);
     harness
         .consensus
         .resume_from_restart(anchor_view, anchor_view + 1, anchor_view);
@@ -2147,9 +2198,7 @@ async fn test_no_redecide_below_restart_anchor() {
 async fn test_stale_timeout_ignored() {
     let mut harness = ConsensusHarness::new(0).await;
 
-    harness
-        .consensus
-        .set_view(ViewNumber::new(5), EpochNumber::genesis());
+    harness.set_view(ViewNumber::new(5), EpochNumber::genesis());
 
     // Timeout for view 2 (< current view 5) must not produce a vote.
     harness
@@ -2180,9 +2229,7 @@ async fn test_stale_timeout_certificate_ignored() {
     let mut harness = ConsensusHarness::new(0).await;
     let test_data = TestData::new(6).await;
 
-    harness
-        .consensus
-        .set_view(ViewNumber::new(5), EpochNumber::genesis());
+    harness.set_view(ViewNumber::new(5), EpochNumber::genesis());
 
     // TC certifying view 2 advances into view 3 (< current view 5) — ignored.
     harness.apply(test_data.views[1].timeout_cert_input()).await;
@@ -2384,9 +2431,7 @@ async fn test_seed_proposals_populates_undecided_chain() {
     let test_data = TestData::new(4).await;
     let mut harness = ConsensusHarness::new(0).await;
 
-    harness
-        .consensus
-        .seed_proposals(test_data.views.iter().map(|v| v.proposal.data.clone()));
+    harness.seed_proposals(test_data.views.iter().map(|v| v.proposal.data.clone()));
 
     for view in &test_data.views {
         let seeded = harness

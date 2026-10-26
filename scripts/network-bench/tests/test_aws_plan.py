@@ -13,6 +13,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from typing import Any
 
+import chaos as ch
 import netbench
 import pytest
 from fakes import (
@@ -87,6 +88,197 @@ def test_peers_exclude_self_and_node0():
             assert i not in result
             assert 0 not in result
             assert len(result) == min(3, n - 2)
+
+
+# REQ:awsbench-query-nodes
+@pytest.mark.parametrize("n", range(7, 23))
+@pytest.mark.parametrize("k", range(1, 5))
+def test_peers_skip_query_nodes(n, k):
+    for i in range(n):
+        result = awsb.peers(i, n, k)
+        assert i not in result
+        assert len(result) == len(set(result))
+        assert all(k <= j < n for j in result)
+        assert len(result) == min(3, n - k - (i >= k))
+
+
+@pytest.mark.parametrize(
+    ("i", "n", "expected"),
+    [(0, 4, [1, 2, 3]), (3, 4, [0, 1, 2]), (1, 2, [0]), (21, 22, [0, 1, 2])],
+)
+def test_peers_without_validators_cycle_over_all_nodes(i, n, expected):
+    assert awsb.peers(i, n, n) == expected
+
+
+@pytest.mark.parametrize("n", range(2, 23))
+def test_peers_without_validators_are_distinct_and_exclude_self(n):
+    for i in range(n):
+        result = awsb.peers(i, n, n)
+        assert len(result) == min(3, n - 1)
+        assert len(result) == len(set(result))
+        assert i not in result
+
+
+def old_peers(i: int, n: int) -> list[int]:
+    if i == 0:
+        return list(range(1, min(3, n - 1) + 1))
+    if n <= 2:
+        return []
+    count = min(3, n - 2)
+    return [(i - 1 + k) % (n - 1) + 1 for k in range(1, count + 1)]
+
+
+def test_peers_with_one_query_node_match_the_default():
+    for n in range(2, 24):
+        for i in range(n):
+            assert awsb.peers(i, n, 1) == old_peers(i, n)
+    assert awsb.peers(0, 22, 1) == [1, 2, 3]
+    assert awsb.peers(5, 22, 1) == [6, 7, 8]
+    assert awsb.peers(21, 22, 1) == [1, 2, 3]
+
+
+def test_plan_hosts_gives_the_first_query_nodes_the_query_role():
+    hosts = awsb.plan_hosts(small_cfg(nodes=8, query_nodes=4))
+    roles = {h["name"]: h["role"] for h in hosts}
+    assert [n for n, r in roles.items() if r == "query"] == [
+        "node0",
+        "node1",
+        "node2",
+        "node3",
+    ]
+    assert roles == {
+        "ctl": "ctl",
+        **{f"node{i}": "query" if i < 4 else "validator" for i in range(8)},
+    }
+    peers = awsb.plan_peers(hosts)
+    assert all(
+        p not in {"node0", "node1", "node2", "node3"}
+        for i in range(4, 8)
+        for p in peers[f"node{i}"]
+    )
+
+
+@pytest.mark.parametrize(
+    "kw",
+    [
+        {"query_db": "volume"},
+        {"query_db": "rds"},
+        {"query_db": "tmpfs"},
+        {"db_modes": ("colocated", "volume")},
+    ],
+)
+def test_plan_hosts_refuses_several_query_nodes_off_colocated(kw):
+    with pytest.raises(awsb.Refused, match="--query-db colocated"):
+        awsb.plan_hosts(small_cfg(nodes=4, query_nodes=2, **kw))
+
+
+@pytest.mark.parametrize("query_nodes", [0, 5])
+def test_plan_hosts_refuses_query_nodes_outside_one_to_nodes(query_nodes):
+    with pytest.raises(awsb.Refused, match="--query-nodes"):
+        awsb.plan_hosts(small_cfg(nodes=4, query_nodes=query_nodes))
+
+
+def test_query_nodes_flag_reaches_the_config_and_the_hash():
+    cfg = awsb.config_from_args(
+        awsb.parse_args(["plan", "--tag", "x", "--query-nodes", "3"])
+    )
+    assert cfg.query_nodes == 3
+    assert (
+        awsb.config_from_args(awsb.parse_args(["plan", "--tag", "x"])).query_nodes == 1
+    )
+    hosts = awsb.plan_hosts(cfg)
+    other = replace(cfg, query_nodes=2)
+    assert awsb.run_config_hash(
+        cfg, hosts, fake_images(), b"g"
+    ) != awsb.run_config_hash(other, hosts, fake_images(), b"g")
+
+
+def api_peers(hosts: dict, name: str, **kw) -> list[str]:
+    spec = {"name": name, "role": hosts[name]["role"]}
+    env = parse_env(awsb.render_node_env(spec, hosts, awsb.pg_endpoint(), **kw))
+    return env["ESPRESSO_NODE_API_PEERS"].split(",")
+
+
+def test_api_peers_of_a_query_node_are_the_other_query_nodes():
+    hosts = fleet(8, query_nodes=3)
+    urls = {j: awsb._node_url(hosts[f"node{j}"]) for j in range(8)}
+    assert api_peers(hosts, "node1") == [urls[2], urls[0]]
+    assert api_peers(hosts, "node0") == [urls[1], urls[2]]
+    validator = host("node5", "validator")
+    text = awsb.render_node_env(validator, hosts, None)
+    assert "ESPRESSO_NODE_API_PEERS" not in text
+
+
+def test_every_query_node_serves_the_light_client_module_also_after_a_wipe():
+    assert "-- light-client" in awsb.render_start_sh(
+        host("node1", "query"), fake_images(), 32768
+    )
+    assert "-- light-client" in awsb.render_recreate_sh(
+        host("node1", "query"), fake_images()
+    )
+    validator = awsb.render_recreate_sh(host("node2", "validator"), fake_images())
+    assert "light-client" not in validator
+
+
+def test_single_query_node_has_no_api_peers():
+    hosts = fleet(5)
+    text = awsb.render_node_env(host("node0", "query"), hosts, awsb.pg_endpoint())
+    assert "ESPRESSO_NODE_API_PEERS" not in text
+
+
+def test_state_peers_of_a_validator_exclude_every_query_node():
+    hosts = fleet(8, query_nodes=3)
+    text = awsb.render_node_env(host("node5", "validator"), hosts, None)
+    urls = parse_env(text)["ESPRESSO_NODE_STATE_PEERS"].split(",")
+    queries = {awsb._node_url(hosts[f"node{j}"]) for j in range(3)}
+    assert urls and not queries & set(urls)
+
+
+def test_topology_marks_every_query_node():
+    topo = awsb.topology(fleet(6, query_nodes=4), "sqlite")
+    roles = topo["roles"]
+    assert [n for n, r in roles.items() if "query" in r] == [
+        f"node{i}" for i in range(4)
+    ]
+    assert roles["node3"] == "validator, query, sqlite"
+    assert roles["node4"] == "validator"
+    assert topo["query_node"] == "node0"
+
+
+def test_support_plan_gates_postgres_on_every_query_host():
+    plan = awsb.support_plan("colocated", [], "postgres", ["node0", "node1"])
+    hosts = [s["host"] for s in plan if s["host"] != "ctl"]
+    assert hosts == ["node0"] * 3 + ["node1"] * 3
+    assert awsb.support_plan("colocated", [], "sqlite", ["node0", "node1"]) == (
+        awsb.support_plan("colocated", [], "sqlite")
+    )
+
+
+def test_node_summary_prints_the_query_node_count():
+    assert any(
+        "8 (4 query, 4 validator-only)" in line
+        for line in awsb.format_node_summary(small_cfg(8, query_nodes=4))
+    )
+
+
+def test_node_summary_and_preflight_state_the_topology(caplog):
+    cfg = small_cfg(22, query_nodes=22)
+    assert any(
+        "nodes: 22 (22 query, 0 validator-only)" in line
+        for line in awsb.format_node_summary(cfg)
+    )
+    hosts = awsb.plan_hosts(cfg)
+    pre = {"account": "1", "az": "a", "ami_id": "ami", "arch": "arm64", "images": {}}
+    with caplog.at_level("INFO"):
+        awsb.log_preflight(cfg, pre, hosts)
+    assert "(22 query, 0 validator-only, " in caplog.text
+
+
+# EDGE:old-manifest-no-chaos
+def test_manifest_config_without_query_nodes_loads_as_one():
+    saved = json.loads(json.dumps(awsb.config_to_json(small_cfg())))
+    del saved["query_nodes"]
+    assert awsb.config_from_manifest(saved).query_nodes == 1
 
 
 # EDGE:awsbench-two-nodes
@@ -887,7 +1079,10 @@ def test_tofu_validate(tmp_path):
 @pytest.mark.parametrize(("n", "capacity"), [(3, 10), (50, 50)])
 def test_genesis_capacity_at_least_ten(n, capacity):
     rendered = awsb.render_genesis(
-        (HERE / "genesis.toml").read_bytes(), n=n, max_block_size="50mb"
+        (HERE / "genesis.toml").read_bytes(),
+        n=n,
+        max_block_size="50mb",
+        protocol_version="0.6",
     ).decode()
     assert f"stake_table_capacity = {capacity}" in rendered
     assert re.search(rf"^capacity = {capacity}$", rendered, re.MULTILINE)
@@ -895,13 +1090,17 @@ def test_genesis_capacity_at_least_ten(n, capacity):
 
 def test_genesis_max_block_size_replaces_both_chain_configs():
     template = (HERE / "genesis.toml").read_bytes()
-    rendered = awsb.render_genesis(template, n=5, max_block_size="30mb").decode()
+    rendered = awsb.render_genesis(
+        template, n=5, max_block_size="30mb", protocol_version="0.6"
+    ).decode()
     assert (
         re.findall(r"^max_block_size = (.*)$", rendered, re.MULTILINE) == ['"30mb"'] * 2
     )
     assert "100mb" not in rendered
     with pytest.raises(ValueError, match="2 max_block_size"):
-        awsb.render_genesis(b"capacity = 1\nstake_table_capacity = 1\n", 5, "30mb")
+        awsb.render_genesis(
+            b"capacity = 1\nstake_table_capacity = 1\n", 5, "30mb", "0.6"
+        )
 
 
 @pytest.mark.parametrize("bad", ["50", "mb", "50 mb", "5.5mb", "50tb", "", "0kb"])
@@ -918,9 +1117,46 @@ def test_max_block_size_flag_defaults_and_differs_in_the_config_hash():
     hosts = awsb.plan_hosts(cfg)
     hashes = {
         awsb.run_config_hash(
-            cfg, hosts, {}, awsb.render_genesis(template, cfg.nodes, size)
+            cfg, hosts, {}, awsb.render_genesis(template, cfg.nodes, size, "0.6")
         )
         for size in ("30mb", "50mb")
+    }
+    assert len(hashes) == 2
+
+
+def test_genesis_protocol_version_replaces_base_and_upgrade_versions():
+    template = (HERE / "genesis.toml").read_bytes()
+    rendered = awsb.render_genesis(
+        template, n=5, max_block_size="50mb", protocol_version="0.8"
+    ).decode()
+    assert re.findall(r"^base_version = (.*)$", rendered, re.MULTILINE) == ['"0.8"']
+    assert re.findall(r"^upgrade_version = (.*)$", rendered, re.MULTILINE) == ['"0.8"']
+    assert re.findall(r"^genesis_version = (.*)$", rendered, re.MULTILINE) == ['"0.6"']
+    no_versions = (
+        b"capacity = 1\nstake_table_capacity = 1\n"
+        b'max_block_size = "1mb"\nmax_block_size = "1mb"\n'
+    )
+    with pytest.raises(ValueError, match="one base_version"):
+        awsb.render_genesis(no_versions, 5, "30mb", "0.8")
+
+
+@pytest.mark.parametrize("bad", ["8", "0.8.0", "v0.8", "0.x", ""])
+def test_protocol_version_flag_rejects_bad_formats(bad):
+    with pytest.raises(SystemExit):
+        node_env_config("--protocol-version", bad)
+
+
+def test_protocol_version_flag_defaults_and_differs_in_the_config_hash():
+    assert node_env_config().protocol_version == "0.6"
+    assert node_env_config("--protocol-version", "0.8").protocol_version == "0.8"
+    template = (HERE / "genesis.toml").read_bytes()
+    cfg = small_cfg()
+    hosts = awsb.plan_hosts(cfg)
+    hashes = {
+        awsb.run_config_hash(
+            cfg, hosts, {}, awsb.render_genesis(template, cfg.nodes, "50mb", version)
+        )
+        for version in ("0.6", "0.8")
     }
     assert len(hashes) == 2
 
@@ -934,9 +1170,89 @@ def test_plan_writes_the_max_block_size_into_the_run_genesis(fleet_dir):
     assert genesis.count('max_block_size = "30mb"') == 2
 
 
+@pytest.mark.usefixtures("preflighted")
+def test_plan_writes_the_protocol_version_into_the_run_genesis(fleet_dir):
+    args = plan_args()
+    args.protocol_version = "0.8"
+    awsb.cmd_plan(args, FakeSystem(run=FakeRunner(states=[])))
+    genesis = (fleet_dir / "runs/01-run/genesis.toml").read_text()
+    assert 'base_version = "0.8"' in genesis
+    assert 'upgrade_version = "0.8"' in genesis
+
+
+def test_slow_nodes_flags_default_off():
+    cfg = node_env_config()
+    assert (cfg.slow_nodes, cfg.slow_cores) == (0, None)
+    cfg = node_env_config("--slow-nodes", "2", "--slow-cores", "4")
+    assert (cfg.slow_nodes, cfg.slow_cores) == (2, 4)
+
+
+@pytest.mark.parametrize(
+    ("kw", "match"),
+    [
+        ({"slow_nodes": 2}, "--slow-nodes needs --slow-cores"),
+        ({"slow_cores": 4}, "--slow-cores needs --slow-nodes"),
+        ({"slow_nodes": 5, "slow_cores": 4}, "at most the 4 validator-only nodes: 5"),
+    ],
+)
+def test_slow_nodes_refused(kw: dict, match: str):
+    with pytest.raises(awsb.Refused, match=match):
+        awsb.plan_hosts(small_cfg(5, **kw))
+
+
+def test_slow_nodes_are_the_last_nodes():
+    cfg = small_cfg(5, slow_nodes=2, slow_cores=4)
+    assert awsb.slow_node_names(cfg) == ["node3", "node4"]
+    assert awsb.slow_node_names(small_cfg(5)) == []
+
+
+def test_slow_cores_pin_espresso_node_in_start_and_recreate_sh():
+    spec = host("node4", "validator")
+    for script in (
+        awsb.render_start_sh(spec, fake_images(), 32768, cores=4),
+        awsb.render_recreate_sh(spec, fake_images(), cores=4),
+    ):
+        create = script[script.index("docker create --name espresso-node") :]
+        assert "--cpuset-cpus 0-3 " in create
+        assert create.index("--cpuset-cpus") < create.index("@sha256")
+    assert "cpuset" not in awsb.render_start_sh(spec, fake_images(), 32768)
+
+
+def test_slow_nodes_differ_in_the_config_hash_only_when_set():
+    hosts = awsb.plan_hosts(small_cfg(5))
+
+    def digest(**kw) -> str:
+        return awsb.run_config_hash(small_cfg(5, **kw), hosts, {}, b"genesis")
+
+    assert digest() == digest(slow_nodes=0)
+    assert digest() != digest(slow_nodes=2, slow_cores=4)
+    assert digest(slow_nodes=2, slow_cores=4) != digest(slow_nodes=2, slow_cores=8)
+    assert digest(slow_nodes=1, slow_cores=4) != digest(slow_nodes=2, slow_cores=4)
+
+
+def test_manifest_config_without_slow_nodes_loads_as_off():
+    saved = awsb.config_to_json(small_cfg())
+    del saved["slow_nodes"], saved["slow_cores"]
+    cfg = awsb.config_from_manifest(saved)
+    assert (cfg.slow_nodes, cfg.slow_cores) == (0, None)
+
+
+def test_node_summary_names_the_slow_nodes():
+    summary = awsb.format_node_summary(small_cfg(5, slow_nodes=2, slow_cores=4))
+    assert summary[-1] == "slow nodes: node3, node4 on 4 cores (docker --cpuset-cpus)"
+    assert not any(
+        line.startswith("slow") for line in awsb.format_node_summary(small_cfg(5))
+    )
+
+
 def test_genesis_raises_if_template_shape_changes():
     with pytest.raises(ValueError):
-        awsb.render_genesis(b"no capacity fields here", n=5, max_block_size="50mb")
+        awsb.render_genesis(
+            b"no capacity fields here",
+            n=5,
+            max_block_size="50mb",
+            protocol_version="0.6",
+        )
 
 
 @pytest.mark.parametrize(
@@ -989,6 +1305,25 @@ def test_journal_max_bytes_is_set_only_for_journal_storage():
     assert env["fs"]["ESPRESSO_NODE_STORAGE_PATH"] == "/store/espresso"
 
 
+def test_sqlite_node0_env_selects_the_embedded_db_and_has_no_postgres():
+    spec = next(h for h in awsb.plan_hosts(small_cfg()) if h["name"] == "node0")
+    env = parse_env(awsb.render_node_env(spec, fleet(2), None, query_engine="sqlite"))
+    assert env["ESPRESSO_NODE_EMBEDDED_DB"] == "true"
+    assert not [key for key in env if "POSTGRES" in key]
+    assert "ESPRESSO_NODE_EMBEDDED_DB" not in node_env("node0")
+    assert "ESPRESSO_NODE_JOURNAL_IGNORE_EXISTING" not in env
+    journal = parse_env(
+        awsb.render_node_env(
+            spec,
+            fleet(2),
+            None,
+            consensus_storage="journal",
+            query_engine="sqlite",
+        )
+    )
+    assert journal["ESPRESSO_NODE_JOURNAL_IGNORE_EXISTING"] == "true"
+
+
 def test_node_env_streams_l1_heads_over_websocket():
     env = node_env("node1")
     http = env["ESPRESSO_L1_PROVIDER"]
@@ -1019,6 +1354,102 @@ def test_node_env_flag():
     assert node_env_config(*flags).node_env == ("A=1", "B=")
     with pytest.raises(awsb.Refused, match="repeats A"):
         node_env_config("--node-env", "A=1", "--node-env", "A=2")
+
+
+def test_prune_env_deletes_past_the_retention_every_interval():
+    assert awsb.prune_env(60) == {
+        "ESPRESSO_NODE_DATABASE_PRUNE": "true",
+        "ESPRESSO_NODE_PRUNER_TARGET_RETENTION": "60s",
+        "ESPRESSO_NODE_PRUNER_STATE_TARGET_RETENTION": "60s",
+        "ESPRESSO_NODE_PRUNER_INTERVAL": "30s",
+    }
+
+
+@pytest.mark.parametrize("engine", ["postgres", "sqlite"])
+def test_prune_reaches_node0_only_and_node_env_overrides_it(engine: str):
+    hosts = {h["name"]: h for h in awsb.plan_hosts(small_cfg())}
+    pg = awsb.pg_endpoint() if engine == "postgres" else None
+
+    def env(name: str, *extra: str, prune: int | None = 60) -> dict[str, str]:
+        text = awsb.render_node_env(
+            hosts[name], fleet(2), pg, extra, query_engine=engine, prune=prune
+        )
+        return parse_env(text)
+
+    assert env("node0")["ESPRESSO_NODE_PRUNER_TARGET_RETENTION"] == "60s"
+    assert "ESPRESSO_NODE_DATABASE_PRUNE" not in env("node0", prune=None)
+    assert "ESPRESSO_NODE_DATABASE_PRUNE" not in env("node1")
+    second_query = awsb.render_node_env(
+        host("node1", "query"),
+        fleet(3, query_nodes=2),
+        pg,
+        query_engine=engine,
+        prune=60,
+    )
+    assert "ESPRESSO_NODE_DATABASE_PRUNE" not in second_query
+    override = env("node0", "ESPRESSO_NODE_PRUNER_INTERVAL=5s")
+    assert override["ESPRESSO_NODE_PRUNER_INTERVAL"] == "5s"
+
+
+@pytest.mark.parametrize(
+    ("text", "seconds"), [("90s", 90), ("2m", 120), ("1h", 3600), ("010s", 10)]
+)
+def test_retention_parses_seconds_minutes_and_hours(text: str, seconds: int):
+    assert awsb.retention(text) == seconds
+
+
+@pytest.mark.parametrize("bad", ["5", "0m", "1d", "m", "1.5m", "", "-1m"])
+def test_retention_rejects_bad_formats(bad: str):
+    with pytest.raises(ValueError):
+        awsb.retention(bad)
+
+
+def test_prune_flag_is_off_by_default_and_bare_means_one_minute():
+    assert node_env_config().prune is None
+    assert node_env_config("--prune").prune == 60
+    assert node_env_config("--prune", "2m").prune == 120
+    with pytest.raises(SystemExit):
+        node_env_config("--prune", "soon")
+
+
+def test_prune_extends_the_warmup_by_the_retention():
+    assert awsb.prune_warmup_s(60, None) == 60
+    assert awsb.prune_warmup_s(60, 120) == 180
+    assert node_env_config().load.warmup_s == 60
+    assert node_env_config("--prune").load.warmup_s == 120
+    assert node_env_config("--prune", "2m", "--warmup-s", "30").load.warmup_s == 150
+
+
+def test_prune_differs_in_the_config_hash_only_when_set():
+    hosts = awsb.plan_hosts(small_cfg())
+
+    def digest(**kw) -> str:
+        return awsb.run_config_hash(small_cfg(**kw), hosts, {}, b"genesis")
+
+    assert digest() == digest(prune=None)
+    assert digest() != digest(prune=60)
+    assert digest(prune=60) != digest(prune=120)
+
+
+def test_manifest_config_without_prune_loads_as_off():
+    saved = awsb.config_to_json(small_cfg())
+    del saved["prune"]
+    assert awsb.config_from_manifest(saved).prune is None
+
+
+def test_clients_flag_defaults_to_a_sequencer_and_a_follower_per_namespace():
+    assert node_env_config().load.clients == 2
+    assert node_env_config("--clients", "0").load.clients == 0
+    with pytest.raises(SystemExit):
+        node_env_config("--clients", "-1")
+
+
+@pytest.mark.parametrize(("role", "serves"), [("query", True), ("validator", False)])
+def test_only_the_query_node_serves_the_light_client_module(role: str, serves: bool):
+    script = awsb.render_start_sh(host("node0", role), fake_images(), 32768)
+    assert ("-- config -- light-client" in script) is serves
+    if serves:
+        assert script.index("-- light-client") > script.index("-- storage-sql -- http")
 
 
 def test_consensus_storage_flag_defaults_to_fs_and_rejects_other_values():
@@ -1125,10 +1556,6 @@ def test_advertise_addresses_use_private_ip_and_dns():
         env["ESPRESSO_NODE_CLIQUENET_ADVERTISE_ADDRESS"]
         == f"10.0.0.4:{awsb.CLIQUENET_PORT}"
     )
-    assert (
-        env["ESPRESSO_NODE_LIBP2P_ADVERTISE_ADDRESS"]
-        == f"ip-10-0-0-4.eu-west-1.compute.internal:{awsb.LIBP2P_PORT}"
-    )
 
 
 @pytest.fixture
@@ -1193,6 +1620,35 @@ def test_anvil_uses_entrypoint_and_binds_every_interface():
     assert "--host 0.0.0.0" in script
 
 
+START_SH_GOLDEN_DIR = Path(__file__).parent / "golden"
+START_SH_GOLDEN_CASES = {
+    "ctl": (host("ctl", "ctl"), {}),
+    "validator": (host("node1", "validator"), {}),
+    "validator-journal": (host("node1", "validator"), {"consensus_storage": "journal"}),
+    "validator-trace": (host("node1", "validator"), {"leader_trace": True}),
+    "query-postgres": (host("node0", "query"), {}),
+    "query-rds": (host("node0", "query"), {"query_db": "rds"}),
+    "query-sqlite": (host("node0", "query"), {"query_engine": "sqlite"}),
+    "query-sqlite-volume": (
+        host("node0", "query"),
+        {"query_engine": "sqlite", "query_db": "volume"},
+    ),
+    "query-sqlite-tmpfs": (
+        host("node0", "query"),
+        {"query_engine": "sqlite", "query_db": "tmpfs", "leader_trace": True},
+    ),
+}
+
+
+# REQ:awsbench-start-sh-golden
+# TEST:start-sh-golden-ok
+@pytest.mark.parametrize("case", START_SH_GOLDEN_CASES)
+def test_start_sh_matches_golden(case):
+    spec, kwargs = START_SH_GOLDEN_CASES[case]
+    script = awsb.render_start_sh(spec, fake_images(), 32768, **kwargs)
+    assert script == (START_SH_GOLDEN_DIR / f"start-{case}.sh").read_text()
+
+
 def test_validator_start_sh_uses_storage_journal_only():
     script = awsb.render_start_sh(
         host("node1", "validator"), fake_images(), 32768, consensus_storage="journal"
@@ -1213,6 +1669,7 @@ def test_query_start_sh_mounts_payload_dir_from_pg_volume():
             "--name espresso-node"
         )
         assert "-v /data/pg/payload:/payload" in script
+        assert "--tmpfs" not in script
 
 
 def test_validators_get_provisioned_root_disks():
@@ -1237,22 +1694,39 @@ def test_node_summary_names_the_storage_modules_and_every_run_setting():
         consensus_storage="journal",
         query_db="volume",
         max_block_size="20mb",
+        protocol_version="0.8",
         leader_trace=True,
         node_env=("A=1", "B=2"),
     )
     assert awsb.format_node_summary(cfg) == [
         "storage validators: consensus storage-journal",
-        "storage node0:      consensus storage-journal, query storage-sql (volume)",
-        "nodes: max block 20mb; submit 1 nodes; leader-trace on",
+        "storage query:      consensus storage-journal, query storage-sql (postgres, volume)",
+        (
+            "nodes: 2 (1 query, 1 validator-only); max block 20mb; protocol 0.8; "
+            "submit 1 nodes; leader-trace on"
+        ),
         "node-env: A=1 B=2",
     ]
     fs = awsb.format_node_summary(small_cfg())
     assert fs[:2] == [
         "storage validators: consensus storage-fs",
-        "storage node0:      consensus storage-sql, query storage-sql (colocated)",
+        "storage query:      consensus storage-sql, query storage-sql (postgres, colocated)",
     ]
     assert fs[2].endswith("leader-trace off")
     assert fs[3] == "node-env: none"
+    assert len(fs) == 4
+    assert awsb.format_node_summary(small_cfg(prune=60))[-1] == (
+        "prune: data and state older than 60s, every 30s"
+    )
+
+
+def test_format_node_summary_chaos() -> None:
+    chaos = ch.ChaosConfig(minutes=3, kinds=("restart", "kill"))
+    fs = awsb.format_node_summary(small_cfg(22, chaos=chaos))
+    assert fs[-1] == (
+        "chaos: 3 min at 4 MB/s; latency off; budget < 1/3 stake; kinds restart,kill; seed 42; gap 45 s; "
+        "kill down 60 s; recover timeout 300 s; query floor 2"
+    )
 
 
 def test_fs_validator_start_sh_uses_storage_fs_only():
@@ -1260,6 +1734,61 @@ def test_fs_validator_start_sh_uses_storage_fs_only():
     assert "-- storage-fs -- http" in script
     assert "storage-journal" not in script
     assert "storage-sql" not in script
+
+
+def test_sqlite_query_start_sh_leaves_storage_sql_to_the_entrypoint():
+    for storage, modules in (
+        ("journal", "-- storage-journal -- http -- query"),
+        ("fs", "/bin/espresso-node -- http -- query"),
+    ):
+        script = awsb.render_start_sh(
+            host("node0", "query"),
+            fake_images(),
+            32768,
+            consensus_storage=storage,
+            query_engine="sqlite",
+        )
+        assert modules in script
+        assert "storage-sql" not in script
+        assert "--name postgres" not in script
+        assert "/data/pg:/var/lib/postgresql" not in script
+        assert "-v /data/pg/payload:/payload" in script
+        assert "--tmpfs" not in script
+
+
+def test_sqlite_tmpfs_mounts_ram_over_the_database_directory():
+    script = awsb.render_start_sh(
+        host("node0", "query"),
+        fake_images(),
+        32768,
+        "tmpfs",
+        query_engine="sqlite",
+    )
+    assert "--tmpfs /store/espresso/sqlite:size=8g" in script
+    assert script.index("--tmpfs") < script.index("@sha256")
+    validator = awsb.render_start_sh(host("node1", "validator"), fake_images(), 32768)
+    assert "--tmpfs" not in validator
+
+
+def test_sqlite_volume_mounts_the_volume_directory_after_it_is_created():
+    script = awsb.render_start_sh(
+        host("node0", "query"),
+        fake_images(),
+        32768,
+        "volume",
+        query_engine="sqlite",
+    )
+    assert "--tmpfs" not in script and "--name postgres" not in script
+    assert "-v /data/pg/sqlite:/store/espresso/sqlite" in script
+    assert script.index("mkdir -p /data/pg/sqlite") < script.index(
+        "--name espresso-node"
+    )
+
+
+def test_sqlite_topology_names_no_postgres():
+    roles = awsb.topology(fleet(2), "sqlite")["roles"]
+    assert roles["node0"] == "validator, query, sqlite"
+    assert awsb.topology(fleet(2), "postgres")["roles"]["node0"].endswith("postgres")
 
 
 def test_fs_query_start_sh_uses_storage_sql_only():
@@ -1569,7 +2098,8 @@ def test_search_changes_the_run_config_hash():
 def test_the_ramp_run_config_hash_ignores_the_search_field():
     cfg = awsb.RunConfig(tag="x", consensus_storage="journal")
     assert awsb.run_config_hash(cfg, [], {}, b"") == netbench.config_hash(
-        cfg.load, [b"", b"{}", b"[]", b"colocated"]
+        cfg.load,
+        [b"", b"{}", b"[]", b"colocated", b"query-nodes=1", b"postgres", b"prune=None"],
     )
 
 
@@ -1594,3 +2124,21 @@ def test_search_node0_journal_holds_the_offer_below_the_noisy_mark(db_modes, nod
     host = {"role": "query", "root_gb": awsb.node_root_gb(cfg, query=True)}
     stored = awsb.payload_factor(nodes) * 150 * 1_000_000_000
     assert stored <= awsb.JOURNAL_NOISY_FRACTION * awsb._journal_max_bytes(host)
+
+
+def test_genesis_epoch_height_replaces_the_template_value():
+    template = (HERE / "genesis.toml").read_bytes()
+    assert b"epoch_height = 1000000\n" in awsb.render_genesis(
+        template, 5, "50mb", "0.6"
+    )
+    rendered = awsb.render_genesis(template, 5, "50mb", "0.6", epoch_height=3000)
+    assert b"epoch_height = 3000\n" in rendered
+    with pytest.raises(ValueError, match="1 epoch_height"):
+        awsb.render_genesis(
+            b'capacity = 1\nstake_table_capacity = 1\nmax_block_size = "1"\nmax_block_size = "1"\n'
+            b'base_version = "0.6"\nupgrade_version = "0.6"\n',
+            5,
+            "30mb",
+            "0.6",
+            3000,
+        )

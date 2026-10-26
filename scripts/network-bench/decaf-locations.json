@@ -1,0 +1,170 @@
+{
+  "measured_at": "2026-10-12",
+  "source": "https://query.decaf.testnet.espresso.network/v0/node/stake-table/current",
+  "epoch": 6084,
+  "validators": 32,
+  "locations": [
+    {
+      "label": "helsinki-fi",
+      "city": "Helsinki",
+      "country": "FI",
+      "lat": 60.17,
+      "lon": 24.93,
+      "nodes": 5,
+      "stake_share": 0.16675525539609584
+    },
+    {
+      "label": "bucharest-ro",
+      "city": "Bucharest",
+      "country": "RO",
+      "lat": 44.43,
+      "lon": 26.1,
+      "nodes": 4,
+      "stake_share": 0.09173206599339233
+    },
+    {
+      "label": "columbus-us",
+      "city": "Columbus",
+      "country": "US",
+      "lat": 39.96,
+      "lon": -83.0,
+      "nodes": 3,
+      "stake_share": 0.17733796079167058
+    },
+    {
+      "label": "falkenstein-de",
+      "city": "Falkenstein",
+      "country": "DE",
+      "lat": 50.48,
+      "lon": 12.36,
+      "nodes": 3,
+      "stake_share": 0.10040333927398931
+    },
+    {
+      "label": "amsterdam-nl",
+      "city": "Amsterdam",
+      "country": "NL",
+      "lat": 52.35,
+      "lon": 4.94,
+      "nodes": 2,
+      "stake_share": 0.07503986492824313
+    },
+    {
+      "label": "limburg-an-der-lahn-de",
+      "city": "Limburg an der Lahn",
+      "country": "DE",
+      "lat": 50.4,
+      "lon": 8.08,
+      "nodes": 2,
+      "stake_share": 0.050026576618828755
+    },
+    {
+      "label": "singapore-sg",
+      "city": "Singapore",
+      "country": "SG",
+      "lat": 1.28,
+      "lon": 103.85,
+      "nodes": 2,
+      "stake_share": 0.06670210215843833
+    },
+    {
+      "label": "berlin-de",
+      "city": "Berlin",
+      "country": "DE",
+      "lat": 52.51,
+      "lon": 13.4,
+      "nodes": 1,
+      "stake_share": 0.016675525539609583
+    },
+    {
+      "label": "buenos-aires-ar",
+      "city": "Buenos Aires",
+      "country": "AR",
+      "lat": -34.61,
+      "lon": -58.38,
+      "nodes": 1,
+      "stake_share": 0.033351051079219166
+    },
+    {
+      "label": "dublin-ie",
+      "city": "Dublin",
+      "country": "IE",
+      "lat": 53.33,
+      "lon": -6.25,
+      "nodes": 1,
+      "stake_share": 0.008346100532574598
+    },
+    {
+      "label": "incheon-kr",
+      "city": "Incheon",
+      "country": "KR",
+      "lat": 37.46,
+      "lon": 126.71,
+      "nodes": 1,
+      "stake_share": 0.009346632064951172
+    },
+    {
+      "label": "johannesburg-za",
+      "city": "Johannesburg",
+      "country": "ZA",
+      "lat": -26.2,
+      "lon": 28.05,
+      "nodes": 1,
+      "stake_share": 0.045857695233926354
+    },
+    {
+      "label": "manchester-gb",
+      "city": "Manchester",
+      "country": "GB",
+      "lat": 53.48,
+      "lon": -2.24,
+      "nodes": 1,
+      "stake_share": 0.04168881384902396
+    },
+    {
+      "label": "minamishinagawa-jp",
+      "city": "Minamishinagawa",
+      "country": "JP",
+      "lat": 35.62,
+      "lon": 139.74,
+      "nodes": 1,
+      "stake_share": 0.025013288309414378
+    },
+    {
+      "label": "ponte-san-pietro-it",
+      "city": "Ponte San Pietro",
+      "country": "IT",
+      "lat": 45.71,
+      "lon": 9.59,
+      "nodes": 1,
+      "stake_share": 0.016675525539609583
+    },
+    {
+      "label": "riga-lv",
+      "city": "Riga",
+      "country": "LV",
+      "lat": 56.95,
+      "lon": 24.1,
+      "nodes": 1,
+      "stake_share": 0.008346100532574598
+    },
+    {
+      "label": "strasbourg-fr",
+      "city": "Strasbourg",
+      "country": "FR",
+      "lat": 48.58,
+      "lon": 7.74,
+      "nodes": 1,
+      "stake_share": 0.033351051079219166
+    },
+    {
+      "label": "sydney-au",
+      "city": "Sydney",
+      "country": "AU",
+      "lat": -33.87,
+      "lon": 151.2,
+      "nodes": 1,
+      "stake_share": 0.033351051079219166
+    }
+  ]
+}

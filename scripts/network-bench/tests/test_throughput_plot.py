@@ -4,6 +4,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 from fakes import load_script
+from test_chaos import CHAOS_EVENTS
 
 plot = load_script("throughput-plot")
 
@@ -24,6 +25,25 @@ def test_rates_from_counters_and_tx_times():
     t, rate = plot.binned_mb_s([10.1, 10.2, 10.9, 12.5], TX_SIZE, 10.0, 13.0)
     assert list(t) == [11.0, 12.0, 13.0]
     assert list(rate) == [3.0, 0.0, 1.0]
+
+
+def test_client_lag_is_measured_from_the_validator_that_showed_the_last_block():
+    clients = [
+        {"end": 3, "t_done": 105.0, "bytes": 4_000_000, "status": "ok"},
+        {"end": 4, "t_done": 106.0, "bytes": 0, "status": "missing"},
+        {"end": 9, "t_done": 107.0, "bytes": 1_000_000, "status": "ok"},
+    ]
+    done, lag = plot.client_lag(clients, {2: 104.5, 3: 105.5})
+    assert list(done) == [105.0]
+    assert list(lag) == [500.0]
+    t, rate = plot.binned_bytes_mb_s(
+        np.array([c["t_done"] for c in clients]),
+        np.array([c["bytes"] for c in clients]),
+        104.0,
+        108.0,
+    )
+    assert list(t) == [105.0, 106.0, 107.0, 108.0]
+    assert list(rate) == [0.0, 4.0, 0.0, 1.0]
 
 
 def test_block_series_over_the_trailing_window():
@@ -104,3 +124,146 @@ def test_main_writes_the_chart_from_a_minimal_run_dir(tmp_path: Path):
         (run_dir / name).write_text("".join(json.dumps(r) + "\n" for r in rows))
     plot.main([str(run_dir)])
     assert (run_dir / "throughput.png").read_bytes().startswith(b"\x89PNG")
+    three_panels = (run_dir / "throughput.png").read_bytes()
+    clients = [
+        {
+            "ns": 1,
+            "reader": 0,
+            "start": h,
+            "end": h + 1,
+            "t_start": t0 + h + 1,
+            "t_done": t0 + h + 1.2,
+            "bytes": 1_000_000,
+            "status": "ok",
+        }
+        for h in range(18)
+    ]
+    (run_dir / "clients.jsonl").write_text(
+        "".join(json.dumps(c) + "\n" for c in clients)
+    )
+    plot.main([str(run_dir)])
+    assert (run_dir / "throughput.png").read_bytes() != three_panels
+    # A run whose readers wrote nothing keeps the three panels.
+    (run_dir / "clients.jsonl").write_text("")
+    plot.main([str(run_dir)])
+    assert (run_dir / "throughput.png").read_bytes() == three_panels
+
+
+def write_run(run_dir: Path, steps_only: bool = False) -> float:
+    """A minimal run dir for `main`. `steps_only`: as a run that failed leaves it, without
+    `run.json` and with an empty `consensus.jsonl`."""
+    t0 = 1000.0
+    run_dir.mkdir(parents=True, exist_ok=True)
+    consensus = (
+        []
+        if steps_only
+        else [
+            {"ts": t0 + i, "decided_bytes": 2e6 * i, "timeouts": 0} for i in range(60)
+        ]
+    )
+    load = [
+        {"t_submit": t0 + i, "t_included": t0 + i + 1, "height": i} for i in range(50)
+    ]
+    heights = [{"height": h, "validator": t0 + h + 0.5} for h in range(50)]
+    step = {
+        "rate_mb_s": 2.0,
+        "refine": False,
+        "t_start": t0,
+        "t_mid": t0 + 30,
+        "t_end": t0 + 60,
+        "consensus_fails": [],
+        "query_fails": [],
+    }
+    files = {
+        "config.json": {"tx_size": TX_SIZE, "tx_timeout_s": 60},
+        "steps.json": [step],
+    }
+    if not steps_only:
+        files["run.json"] = {"t0": t0}
+    for name, data in files.items():
+        (run_dir / name).write_text(json.dumps(data))
+    (run_dir / "genesis.toml").write_text('[chain_config]\nmax_block_size = "50mb"\n')
+    for name, rows in (
+        ("consensus.jsonl", consensus),
+        ("load.jsonl", load),
+        ("heights.jsonl", heights),
+        ("chaos.jsonl", CHAOS_EVENTS),
+    ):
+        (run_dir / name).write_text("".join(json.dumps(r) + "\n" for r in rows))
+    return t0
+
+
+def test_main_draws_the_chaos_panel_and_shading(tmp_path: Path):
+    run_dir = tmp_path / "fleet" / "runs" / "01-run"
+    write_run(run_dir)
+    plot.main([str(run_dir)])
+    assert (run_dir / "throughput.png").read_bytes().startswith(b"\x89PNG")
+
+
+def test_main_charts_a_failed_run_without_counters_or_run_json(tmp_path: Path):
+    run_dir = tmp_path / "fleet" / "runs" / "01-run"
+    write_run(run_dir, steps_only=True)
+    plot.main([str(run_dir)])
+    assert (run_dir / "throughput.png").read_bytes().startswith(b"\x89PNG")
+
+
+def test_last_time_is_the_latest_step_submit_or_event():
+    assert plot.last_time([{"t_end": 5.0}], [{"t_submit": 7.0}], [{"ts": 6.0}]) == 7.0
+
+
+def test_main_draws_the_chaos_lanes_and_the_clients_panel_together(tmp_path: Path):
+    run_dir = tmp_path / "fleet" / "runs" / "01-run"
+    t0 = write_run(run_dir)
+    plot.main([str(run_dir)])
+    chaos_only = (run_dir / "throughput.png").read_bytes()
+    clients = [
+        {"end": h + 1, "t_done": t0 + h + 1.2, "bytes": 1_000_000, "status": "ok"}
+        for h in range(18)
+    ]
+    (run_dir / "clients.jsonl").write_text(
+        "".join(json.dumps(c) + "\n" for c in clients)
+    )
+    plot.main([str(run_dir)])
+    both = (run_dir / "throughput.png").read_bytes()
+    assert both.startswith(b"\x89PNG")
+    assert both != chaos_only
+
+
+def test_timeout_increments_skip_drops():
+    counters = [{"ts": t, "timeouts": v} for t, v in enumerate([1, 3, 2, 3, 4])]
+    ts, grown = plot.timeout_increments(counters)
+    assert list(ts) == [1, 2, 3, 4]
+    assert list(grown) == [2, 0, 0, 1]
+
+
+def test_bin_counts_sums_weights_per_bin():
+    starts, total = plot.bin_counts(
+        np.array([0.5, 9.9, 10.0, 25.0]), np.array([1, 1, 2, 3]), 0.0, 30.0, 10
+    )
+    assert list(starts) == [0.0, 10.0, 20.0]
+    assert list(total) == [2, 2, 3]
+
+
+def test_region_groups_keep_the_largest_regions_and_pool_the_rest():
+    regions = {"n0": "a", "n1": "a", "n2": "b", "n3": "c", "n4": "d"}
+    assert plot.region_groups(regions, top=3) == {
+        "n0": "a",
+        "n1": "a",
+        "n2": "b",
+        "n3": "c",
+        "n4": "other",
+    }
+    assert plot.region_groups(regions, top=4) == regions
+
+
+def test_binned_by_group_counts_one_label_name_per_group():
+    groups = {"n0": "a", "n1": "b"}
+    events = [
+        (1.0, "n0", "no-propose[missing]"),
+        (2.0, "n1", "no-propose[missing]"),
+        (12.0, "n1", "no-propose[missing]"),
+        (3.0, "n0", "stub"),
+    ]
+    starts, counts = plot.binned_by_group(events, groups, "no-propose", 0.0, 20.0)
+    assert list(starts) == [0.0, 10.0]
+    assert {g: list(c) for g, c in counts.items()} == {"a": [1, 0], "b": [1, 1]}

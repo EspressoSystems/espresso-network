@@ -37,7 +37,7 @@ use crate::{
     simple_certificate::QuorumCertificate2,
     simple_vote::HasEpoch,
     stake_table::StakeTableEntries,
-    traits::{ValidatedState, node_implementation::NodeType},
+    traits::{ValidatedState, election::Membership, node_implementation::NodeType},
     vote::{Certificate, HasViewNumber},
 };
 
@@ -111,17 +111,34 @@ pub async fn verify_leaf_chain<T: NodeType>(
     upgrade_lock: &UpgradeLock<T>,
 ) -> anyhow::Result<Leaf2<T>> {
     let epoch_height = *coordinator.epoch_height();
+    let first_epoch = coordinator.membership().first_epoch();
     // Derive each QC's epoch from the height of the leaf it certifies; trusting
     // the epoch claimed in the QC would let a stale epoch's quorum pick the
     // stake table that verifies its own signatures.
     let validate_qc = |qc: &QuorumCertificate2<T>, certified_height: u64| -> anyhow::Result<()> {
         let epoch = EpochNumber::new(epoch_from_block_number(certified_height, epoch_height));
-        ensure!(
-            qc.data.epoch() == Some(epoch),
-            "QC claims epoch {:?} but certifies the leaf at height {certified_height} in epoch \
-             {epoch}",
-            qc.data.epoch(),
-        );
+        let membership = match qc.data.epoch() {
+            // QCs formed before epochs were enabled carry no epoch. Epochs start part way
+            // through the first epoch, which runs on the genesis stake table like the
+            // non-epoch chain before it, so no later height may be certified this way.
+            None => {
+                ensure!(
+                    first_epoch.is_some_and(|first| epoch <= first),
+                    "QC claims no epoch but certifies the leaf at height {certified_height} in \
+                     epoch {epoch}, after the first epoch {first_epoch:?}"
+                );
+                coordinator.stake_table_for_epoch(None)
+            },
+            Some(claimed) => {
+                ensure!(
+                    claimed == epoch,
+                    "QC claims epoch {claimed} but certifies the leaf at height \
+                     {certified_height} in epoch {epoch}"
+                );
+                coordinator.stake_table_for_epoch(Some(epoch))
+            },
+        }
+        .map_err(|err| anyhow!("no stake table available for epoch {epoch}: {err:?}"))?;
         if let Some(block_number) = qc.data.block_number {
             ensure!(
                 block_number == certified_height,
@@ -129,9 +146,6 @@ pub async fn verify_leaf_chain<T: NodeType>(
                  {certified_height}"
             );
         }
-        let membership = coordinator
-            .stake_table_for_epoch(Some(epoch))
-            .map_err(|err| anyhow!("no stake table available for epoch {epoch}: {err:?}"))?;
         let entries = StakeTableEntries::<T>::from_iter(membership.stake_table()).0;
         qc.is_valid_cert(&entries, membership.success_threshold(), upgrade_lock)?;
         Ok(())
@@ -268,15 +282,6 @@ pub struct View<TYPES: NodeType> {
 pub struct RoundFinishedEvent {
     /// The round that finished
     pub view_number: ViewNumber,
-}
-
-/// Whether or not to stop inclusively or exclusively when walking
-#[derive(Copy, Clone, Debug)]
-pub enum Terminator<T> {
-    /// Stop right before this view number
-    Exclusive(T),
-    /// Stop including this view number
-    Inclusive(T),
 }
 
 /// Type alias for byte array of SHA256 digest length

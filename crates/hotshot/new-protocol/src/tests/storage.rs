@@ -1,8 +1,9 @@
 use std::{sync::atomic::Ordering, time::Duration};
 
-use hotshot::types::BLSPubKey;
 use hotshot_example_types::{node_types::TestTypes, storage_types::TestStorage};
-use hotshot_types::{data::ViewNumber, traits::signature_key::SignatureKey};
+use hotshot_types::{
+    data::ViewNumber, signature_key::BLSPubKey, traits::signature_key::SignatureKey,
+};
 use tokio::time::timeout;
 
 use crate::storage::{ActionKind, Storage, StorageOutput};

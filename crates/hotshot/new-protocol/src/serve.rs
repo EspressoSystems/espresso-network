@@ -207,13 +207,13 @@ impl<T: NodeType> Server<T> {
 
 #[cfg(test)]
 mod tests {
-    use hotshot::types::BLSPubKey;
     use hotshot_example_types::{
         block_types::{TestBlockPayload, TestTransaction},
         node_types::TestTypes,
     };
     use hotshot_types::{
         data::{VidCommitment2, ViewNumber},
+        signature_key::BLSPubKey,
         traits::signature_key::SignatureKey,
     };
 

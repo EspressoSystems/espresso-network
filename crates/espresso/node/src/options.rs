@@ -18,8 +18,10 @@ use espresso_telemetry::TelemetryOptions;
 use espresso_types::{BackoffParams, L1ClientOptions, parse_duration};
 use espresso_utils::logging;
 use hotshot_types::addr::NetAddr;
-use libp2p::Multiaddr;
-use light_client::{state::LightClientOptions, storage::LightClientSqliteOptions};
+use light_client::{
+    state::LightClientOptions,
+    storage::{LightClientDbOptions, LightClientSqliteOptions},
+};
 use serde::Serialize;
 use url::Url;
 
@@ -65,16 +67,6 @@ pub struct Options {
     #[derivative(Debug(format_with = "Display::fmt"))]
     pub orchestrator_url: Url,
 
-    /// The socket address of the HotShot CDN's main entry point (the marshal)
-    /// in `IP:port` form
-    #[clap(
-        short,
-        long,
-        env = "ESPRESSO_NODE_CDN_ENDPOINT",
-        default_value = "127.0.0.1:8081"
-    )]
-    pub cdn_endpoint: String,
-
     /// The address to bind to for cliquenet (in `host:port` | `ip:port` form)
     #[clap(
         long,
@@ -95,169 +87,10 @@ pub struct Options {
     )]
     pub cliquenet_advertise_address: Option<NetAddr>,
 
-    /// The address to bind to for Libp2p (in `host:port` form)
-    #[clap(
-        long,
-        env = "ESPRESSO_NODE_LIBP2P_BIND_ADDRESS",
-        default_value = "0.0.0.0:1769"
-    )]
-    pub libp2p_bind_address: String,
-
-    /// Time between each Libp2p heartbeat
-    #[clap(long, env = "ESPRESSO_NODE_LIBP2P_HEARTBEAT_INTERVAL", default_value = "1s", value_parser = parse_duration)]
-    pub libp2p_heartbeat_interval: Duration,
-
-    /// Number of past heartbeats to gossip about on Libp2p
-    #[clap(long, env = "ESPRESSO_NODE_LIBP2P_HISTORY_GOSSIP", default_value = "3")]
-    pub libp2p_history_gossip: usize,
-
-    /// Number of heartbeats to keep in the Libp2p `memcache`
-    #[clap(long, env = "ESPRESSO_NODE_LIBP2P_HISTORY_LENGTH", default_value = "5")]
-    pub libp2p_history_length: usize,
-
-    /// Target number of peers for the Libp2p mesh network
-    #[clap(long, env = "ESPRESSO_NODE_LIBP2P_MESH_N", default_value = "8")]
-    pub libp2p_mesh_n: usize,
-
-    /// Maximum number of peers in the Libp2p mesh network before removing some
-    #[clap(long, env = "ESPRESSO_NODE_LIBP2P_MESH_N_HIGH", default_value = "12")]
-    pub libp2p_mesh_n_high: usize,
-
-    /// Minimum number of peers in the Libp2p mesh network before adding more
-    #[clap(long, env = "ESPRESSO_NODE_LIBP2P_MESH_N_LOW", default_value = "6")]
-    pub libp2p_mesh_n_low: usize,
-
-    /// Minimum number of outbound Libp2p peers in the mesh network before adding more
-    #[clap(
-        long,
-        env = "ESPRESSO_NODE_LIBP2P_MESH_OUTBOUND_MIN",
-        default_value = "2"
-    )]
-    pub libp2p_mesh_outbound_min: usize,
-
-    /// The maximum number of messages to include in a Libp2p IHAVE message
-    #[clap(
-        long,
-        env = "ESPRESSO_NODE_LIBP2P_MAX_IHAVE_LENGTH",
-        default_value = "5000"
-    )]
-    pub libp2p_max_ihave_length: usize,
-
-    /// The maximum number of IHAVE messages to accept from a Libp2p peer within a heartbeat
-    #[clap(
-        long,
-        env = "ESPRESSO_NODE_LIBP2P_MAX_IHAVE_MESSAGES",
-        default_value = "10"
-    )]
-    pub libp2p_max_ihave_messages: usize,
-
-    /// Libp2p published message ids time cache duration
-    #[clap(long, env = "ESPRESSO_NODE_LIBP2P_PUBLISHED_MESSAGE_IDS_CACHE_TIME", default_value = "10s", value_parser = parse_duration)]
-    pub libp2p_published_message_ids_cache_time: Duration,
-
-    /// Time to wait for a Libp2p message requested through IWANT following an IHAVE advertisement
-    #[clap(
-        long,
-        env = "ESPRESSO_NODE_LIBP2P_MAX_IWANT_FOLLOWUP_TIME",
-        default_value = "3s", value_parser = parse_duration
-    )]
-    pub libp2p_iwant_followup_time: Duration,
-
-    /// The maximum number of Libp2p messages we will process in a given RPC
-    #[clap(long, env = "ESPRESSO_NODE_LIBP2P_MAX_MESSAGES_PER_RPC")]
-    pub libp2p_max_messages_per_rpc: Option<usize>,
-
-    /// How many times we will allow a Libp2p peer to request the same message id through IWANT gossip before we start ignoring them
-    #[clap(
-        long,
-        env = "ESPRESSO_NODE_LIBP2P_GOSSIP_RETRANSMISSION",
-        default_value = "3"
-    )]
-    pub libp2p_gossip_retransmission: u32,
-
-    /// If enabled newly created messages will always be sent to all peers that are subscribed to the topic and have a good enough score
-    #[clap(
-        long,
-        env = "ESPRESSO_NODE_LIBP2P_FLOOD_PUBLISH",
-        default_value = "true"
-    )]
-    pub libp2p_flood_publish: bool,
-
-    /// The time period that Libp2p message hashes are stored in the cache
-    #[clap(long, env = "ESPRESSO_NODE_LIBP2P_DUPLICATE_CACHE_TIME", default_value = "20m", value_parser = parse_duration)]
-    pub libp2p_duplicate_cache_time: Duration,
-
-    /// Time to live for Libp2p fanout peers
-    #[clap(long, env = "ESPRESSO_NODE_LIBP2P_FANOUT_TTL", default_value = "60s", value_parser = parse_duration)]
-    pub libp2p_fanout_ttl: Duration,
-
-    /// Initial delay in each Libp2p heartbeat
-    #[clap(long, env = "ESPRESSO_NODE_LIBP2P_HEARTBEAT_INITIAL_DELAY", default_value = "5s", value_parser = parse_duration)]
-    pub libp2p_heartbeat_initial_delay: Duration,
-
-    /// How many Libp2p peers we will emit gossip to at each heartbeat
-    #[clap(
-        long,
-        env = "ESPRESSO_NODE_LIBP2P_GOSSIP_FACTOR",
-        default_value = "0.25"
-    )]
-    pub libp2p_gossip_factor: f64,
-
-    /// Minimum number of Libp2p peers to emit gossip to during a heartbeat
-    #[clap(long, env = "ESPRESSO_NODE_LIBP2P_GOSSIP_LAZY", default_value = "6")]
-    pub libp2p_gossip_lazy: usize,
-
-    /// The maximum number of bytes we will send in a single Libp2p gossip message
-    #[clap(
-        long,
-        env = "ESPRESSO_NODE_LIBP2P_MAX_GOSSIP_TRANSMIT_SIZE",
-        default_value = "2000000"
-    )]
-    pub libp2p_max_gossip_transmit_size: usize,
-
-    /// The maximum number of bytes we will send in a single Libp2p direct message
-    #[clap(
-        long,
-        env = "ESPRESSO_NODE_LIBP2P_MAX_DIRECT_TRANSMIT_SIZE",
-        default_value = "20000000"
-    )]
-    pub libp2p_max_direct_transmit_size: u64,
-
-    /// Only for the decaf network unmerge migration. Do not set unless specifically requested.
-    #[clap(long, env = "ESPRESSO_NODE_LIBP2P_DHT_PUT_QUORUM")]
-    pub libp2p_dht_put_quorum: Option<std::num::NonZeroUsize>,
-
     /// The URL we advertise to other nodes as being for our public API.
     /// Should be supplied in `http://host:port` form.
     #[clap(long, env = "ESPRESSO_NODE_PUBLIC_API_URL")]
     pub public_api_url: Option<Url>,
-
-    /// The address we advertise to other nodes as being a Libp2p endpoint.
-    /// Should be supplied in `host:port` form.
-    ///
-    /// Operators should set this to a publicly routable address whenever the bind address
-    /// is not directly reachable from peers (NAT, K8s NodePort, Docker bridge). It is added
-    /// to libp2p as an `external_address` so that Identify and Kademlia announce it to the
-    /// network. Non-globally-routable IP literals (loopback, RFC 1918 private, link-local,
-    /// etc.) only work for local testing (`demo-native`, `docker-compose`) and are dropped
-    /// from the libp2p announcement; hostnames are passed through unchanged.
-    ///
-    /// Also required when bootstrapping a fresh network from the orchestrator, where it is
-    /// registered into the stake table so peers can dial us.
-    #[clap(long, env = "ESPRESSO_NODE_LIBP2P_ADVERTISE_ADDRESS")]
-    pub libp2p_advertise_address: Option<String>,
-
-    /// A comma-separated list of Libp2p multiaddresses to use as bootstrap
-    /// nodes.
-    ///
-    /// Overrides those loaded from the `HotShot` config.
-    #[clap(
-        long,
-        env = "ESPRESSO_NODE_LIBP2P_BOOTSTRAP_NODES",
-        value_delimiter = ',',
-        num_args = 1..
-    )]
-    pub libp2p_bootstrap_nodes: Option<Vec<Multiaddr>>,
 
     /// The URL of the builders to use for submitting transactions
     #[clap(long, env = "ESPRESSO_BUILDER_URLS", value_delimiter = ',')]
@@ -348,10 +181,14 @@ pub struct Options {
 
     /// Timeout for local catchup provider requests.
     ///
-    /// If a local provider (e.g. database) takes longer than this, the node falls back to
-    /// remote providers so it can still vote within the current view.
+    /// Remote providers are queried concurrently; this bounds the wait on a slow local provider
+    /// (e.g. database) once remote providers have failed.
     #[clap(long, env = "ESPRESSO_NODE_LOCAL_CATCHUP_TIMEOUT", default_value = "5s", value_parser = parse_duration)]
     pub local_catchup_timeout: Duration,
+
+    /// HTTP catchup starts this long after request-response, if request-response is registered.
+    #[clap(long, env = "ESPRESSO_NODE_HTTP_CATCHUP_DELAY", default_value = "2s", value_parser = parse_duration)]
+    pub http_catchup_delay: Duration,
 
     /// Per-step timeout for the startup stake-table catchup walk.
     ///
@@ -390,6 +227,7 @@ impl Options {
         &self,
         follower: &Follower,
         query: &api::options::Query,
+        light_client_db: LightClientDbOptions,
     ) -> anyhow::Result<FollowerParams> {
         let light_client_genesis = match &follower.light_client_genesis {
             Some(path) => {
@@ -416,13 +254,14 @@ impl Options {
                 backoff: self.catchup_backoff,
                 base_timeout: self.catchup_base_timeout,
                 local_timeout: self.local_catchup_timeout,
+                http_delay: self.http_catchup_delay,
             },
             bootstrap_epoch_catchup_timeout: self.bootstrap_epoch_catchup_timeout,
             options: FollowerOptions {
                 poll_interval: follower.poll_interval,
                 max_blocks_per_poll: follower.max_blocks_per_poll,
                 light_client: query.light_client.clone(),
-                light_client_db: query.light_client_db.clone(),
+                light_client_db,
                 light_client_genesis,
             },
         })
@@ -759,8 +598,7 @@ enum SequencerModule {
     ///
     /// Every block served is verified against finality proofs from the query module's peers
     /// (`--peers`, `ESPRESSO_NODE_API_PEERS`), which `--state-peers` and `--config-peers` default
-    /// to. The node never joins consensus and needs no staking keys, orchestrator, CDN, libp2p or
-    /// cliquenet.
+    /// to. The node never joins consensus and needs no staking keys, orchestrator or cliquenet.
     ///
     /// This module requires the storage-sql, http and query modules to be started.
     Follower(Module<Follower>),
@@ -808,12 +646,8 @@ pub struct Follower {
 #[derive(Clone, Debug, Serialize)]
 pub struct PublicNodeConfig {
     pub orchestrator_url: Url,
-    pub cdn_endpoint: String,
     pub cliquenet_bind_address: NetAddr,
     pub cliquenet_advertise_address: Option<NetAddr>,
-    pub libp2p_bind_address: String,
-    pub libp2p_advertise_address: Option<String>,
-    pub libp2p_bootstrap_nodes: Option<Vec<Multiaddr>>,
     pub public_api_url: Option<Url>,
     pub builder_urls: Vec<Url>,
     pub state_relay_server_url: Url,
@@ -825,12 +659,12 @@ pub struct PublicNodeConfig {
     pub identity: Identity,
     pub catchup_base_timeout: Duration,
     pub local_catchup_timeout: Duration,
+    pub http_catchup_delay: Duration,
     pub bootstrap_epoch_catchup_timeout: Duration,
     pub catchup_backoff: BackoffParams,
     /// Unset on a validator.
     pub follower: Option<FollowerConfig>,
     pub proposal_fetcher: ProposalFetcherConfig,
-    pub libp2p: Libp2pTuning,
     pub l1: L1Tuning,
     pub l1_provider_count: usize,
     pub l1_ws_provider_count: usize,
@@ -993,14 +827,9 @@ impl From<&persistence::sql::Options> for SqlStorageConfig {
             statement_timeout: o.statement_timeout,
             min_connections: o.min_connections,
             max_connections: o.max_connections,
-            #[cfg(not(feature = "embedded-db"))]
-            query_min_connections: o.query_min_connections,
-            #[cfg(feature = "embedded-db")]
-            query_min_connections: None,
-            #[cfg(not(feature = "embedded-db"))]
-            query_max_connections: o.query_max_connections,
-            #[cfg(feature = "embedded-db")]
-            query_max_connections: None,
+            // SQLite shares one pool between consensus and queries, so these do not apply.
+            query_min_connections: o.query_min_connections.filter(|_| !o.embedded_db),
+            query_max_connections: o.query_max_connections.filter(|_| !o.embedded_db),
             pruning: PruningView::from(&o.pruning),
             consensus_pruning: ConsensusPruningView::from(&o.consensus_pruning),
         }
@@ -1031,7 +860,7 @@ impl From<&api::options::Query> for QueryConfig {
         Self {
             peers: o.peers.clone(),
             light_client: o.light_client.clone(),
-            light_client_db: o.light_client_db.clone(),
+            light_client_db: o.sqlite_light_client_db(),
         }
     }
 }
@@ -1053,31 +882,6 @@ impl From<&Modules> for ApiModulesConfig {
 }
 
 #[derive(Clone, Debug, Serialize)]
-pub struct Libp2pTuning {
-    pub heartbeat_interval: Duration,
-    pub heartbeat_initial_delay: Duration,
-    pub history_gossip: usize,
-    pub history_length: usize,
-    pub mesh_n: usize,
-    pub mesh_n_high: usize,
-    pub mesh_n_low: usize,
-    pub mesh_outbound_min: usize,
-    pub max_ihave_length: usize,
-    pub max_ihave_messages: usize,
-    pub published_message_ids_cache_time: Duration,
-    pub iwant_followup_time: Duration,
-    pub max_messages_per_rpc: Option<usize>,
-    pub gossip_retransmission: u32,
-    pub gossip_factor: f64,
-    pub gossip_lazy: usize,
-    pub max_gossip_transmit_size: usize,
-    pub max_direct_transmit_size: u64,
-    pub fanout_ttl: Duration,
-    pub duplicate_cache_time: Duration,
-    pub flood_publish: bool,
-}
-
-#[derive(Clone, Debug, Serialize)]
 pub struct L1Tuning {
     pub retry_delay: Duration,
     pub polling_interval: Duration,
@@ -1095,34 +899,6 @@ pub struct L1Tuning {
     pub stake_table_update_interval: Duration,
     pub events_max_retry_duration: Duration,
     pub finalized_safety_margin: Option<NonZeroU64>,
-}
-
-impl From<&Options> for Libp2pTuning {
-    fn from(o: &Options) -> Self {
-        Self {
-            heartbeat_interval: o.libp2p_heartbeat_interval,
-            heartbeat_initial_delay: o.libp2p_heartbeat_initial_delay,
-            history_gossip: o.libp2p_history_gossip,
-            history_length: o.libp2p_history_length,
-            mesh_n: o.libp2p_mesh_n,
-            mesh_n_high: o.libp2p_mesh_n_high,
-            mesh_n_low: o.libp2p_mesh_n_low,
-            mesh_outbound_min: o.libp2p_mesh_outbound_min,
-            max_ihave_length: o.libp2p_max_ihave_length,
-            max_ihave_messages: o.libp2p_max_ihave_messages,
-            published_message_ids_cache_time: o.libp2p_published_message_ids_cache_time,
-            iwant_followup_time: o.libp2p_iwant_followup_time,
-            max_messages_per_rpc: o.libp2p_max_messages_per_rpc,
-            gossip_retransmission: o.libp2p_gossip_retransmission,
-            gossip_factor: o.libp2p_gossip_factor,
-            gossip_lazy: o.libp2p_gossip_lazy,
-            max_gossip_transmit_size: o.libp2p_max_gossip_transmit_size,
-            max_direct_transmit_size: o.libp2p_max_direct_transmit_size,
-            fanout_ttl: o.libp2p_fanout_ttl,
-            duplicate_cache_time: o.libp2p_duplicate_cache_time,
-            flood_publish: o.libp2p_flood_publish,
-        }
-    }
 }
 
 impl From<&L1ClientOptions> for L1Tuning {
@@ -1173,12 +949,8 @@ impl PublicNodeConfig {
 
         Self {
             orchestrator_url: opt.orchestrator_url.clone(),
-            cdn_endpoint: opt.cdn_endpoint.clone(),
             cliquenet_bind_address: opt.cliquenet_bind_address.clone(),
             cliquenet_advertise_address: opt.cliquenet_advertise_address.clone(),
-            libp2p_bind_address: opt.libp2p_bind_address.clone(),
-            libp2p_advertise_address: opt.libp2p_advertise_address.clone(),
-            libp2p_bootstrap_nodes: opt.libp2p_bootstrap_nodes.clone(),
             public_api_url: opt.public_api_url.clone(),
             builder_urls: opt.builder_urls.clone(),
             state_relay_server_url: opt.state_relay_server_url.clone(),
@@ -1190,11 +962,11 @@ impl PublicNodeConfig {
             identity: opt.identity.clone(),
             catchup_base_timeout: opt.catchup_base_timeout,
             local_catchup_timeout: opt.local_catchup_timeout,
+            http_catchup_delay: opt.http_catchup_delay,
             bootstrap_epoch_catchup_timeout: opt.bootstrap_epoch_catchup_timeout,
             catchup_backoff: opt.catchup_backoff,
             follower: modules.follower.as_ref().map(FollowerConfig::from),
             proposal_fetcher: opt.proposal_fetcher_config,
-            libp2p: Libp2pTuning::from(opt),
             l1: L1Tuning::from(&opt.l1_options),
             l1_provider_count: opt.l1_provider_url.len(),
             l1_ws_provider_count: opt
@@ -1423,11 +1195,6 @@ pub(crate) mod tests {
             cfg.cliquenet_advertise_address
         );
         assert!(
-            cfg.libp2p_bootstrap_nodes.is_none(),
-            "expected no bootstrap nodes: {:?}",
-            cfg.libp2p_bootstrap_nodes
-        );
-        assert!(
             cfg.config_peers.is_none(),
             "expected no config peers: {:?}",
             cfg.config_peers
@@ -1445,7 +1212,6 @@ pub(crate) mod tests {
             value["cliquenet_advertise_address"],
             serde_json::Value::Null
         );
-        assert_eq!(value["libp2p_bootstrap_nodes"], serde_json::Value::Null);
         assert_eq!(value["config_peers"], serde_json::Value::Null);
         assert_eq!(value["public_api_url"], serde_json::Value::Null);
     }
@@ -1460,7 +1226,9 @@ pub(crate) mod tests {
         let follower = Follower::try_parse_from(["follower"]).unwrap();
 
         let opt = parse_options_with(&[]);
-        let params = opt.follower_params(&follower, &query).unwrap();
+        let params = opt
+            .follower_params(&follower, &query, Default::default())
+            .unwrap();
         assert_eq!(params.upstreams, peers);
         assert_eq!(params.catchup.state_peers, peers);
         assert!(
@@ -1474,7 +1242,9 @@ pub(crate) mod tests {
             "--config-peers",
             "http://d.test",
         ]);
-        let params = opt.follower_params(&follower, &query).unwrap();
+        let params = opt
+            .follower_params(&follower, &query, Default::default())
+            .unwrap();
         assert_eq!(params.upstreams, peers);
         assert_eq!(
             params.catchup.state_peers,
@@ -1486,9 +1256,6 @@ pub(crate) mod tests {
         );
     }
 
-    // Postgres only: storage-sql under embedded-db requires a --path arg that's
-    // irrelevant to what this test asserts.
-    #[cfg(not(feature = "embedded-db"))]
     #[test]
     fn follower_module_requirements() {
         let parse = |modules: &[&str]| {
@@ -1540,27 +1307,40 @@ pub(crate) mod tests {
         );
     }
 
-    // Document the JSON shape of GET /config/runtime. Runs under Postgres builds only;
-    // the embedded-db variant produces a near-identical shape and the duplication isn't
-    // worth the test complexity.
-    #[cfg(not(feature = "embedded-db"))]
+    #[test]
+    fn light_client_db_defaults_under_storage_path() {
+        fn lc_path(storage_path: Option<&str>, lc_path: Option<&str>) -> Option<PathBuf> {
+            let query = api::options::Query {
+                storage_path: storage_path.map(PathBuf::from),
+                light_client_db: LightClientSqliteOptions {
+                    lc_path: lc_path.map(PathBuf::from),
+                    ..Default::default()
+                },
+                ..Default::default()
+            };
+            query.sqlite_light_client_db().lc_path
+        }
+        assert_eq!(
+            lc_path(Some("/store/espresso"), None),
+            Some(PathBuf::from("/store/espresso/light-client/lc.db"))
+        );
+        assert_eq!(
+            lc_path(Some("/store/espresso"), Some("/store/lc")),
+            Some(PathBuf::from("/store/lc"))
+        );
+        assert_eq!(lc_path(None, None), None);
+    }
+
+    // Document the JSON shape of GET /config/runtime.
     #[test]
     fn config_node_response_snapshot() {
         let opt = parse_options_with(&[
             "--orchestrator-url",
             "http://orchestrator.example:8080",
-            "--cdn-endpoint",
-            "cdn.example:8081",
             "--cliquenet-bind-address",
             "0.0.0.0:9977",
             "--cliquenet-advertise-address",
             "node1.example:9977",
-            "--libp2p-bind-address",
-            "0.0.0.0:1769",
-            "--libp2p-advertise-address",
-            "node1.example:1769",
-            "--libp2p-bootstrap-nodes",
-            "/ip4/10.0.0.1/tcp/1769",
             "--public-api-url",
             "http://node1.example:24000",
             "--builder-urls",
@@ -1596,6 +1376,8 @@ pub(crate) mod tests {
             "24000",
             "--",
             "query",
+            "--peers",
+            "http://peer.example:24000",
             "--",
             "config",
         ]);
@@ -1606,9 +1388,6 @@ pub(crate) mod tests {
         insta::assert_yaml_snapshot!("config_node_response_postgres", cfg);
     }
 
-    // Postgres only: storage-sql under embedded-db requires a --path arg that's
-    // irrelevant to what this test asserts.
-    #[cfg(not(feature = "embedded-db"))]
     #[test]
     fn public_node_config_includes_pruning() {
         let opt = parse_options_with(&[

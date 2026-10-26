@@ -1,8 +1,8 @@
-use hotshot::types::BLSPubKey;
 use hotshot_example_types::node_types::TestTypes;
 use hotshot_types::{
     data::{EpochNumber, ViewNumber},
     message::Proposal as SignedProposal,
+    signature_key::BLSPubKey,
     traits::{block_contents::BlockHeader, signature_key::SignatureKey},
     utils::is_epoch_transition,
     vote::HasViewNumber,
@@ -115,6 +115,14 @@ async fn test_handle_epoch_change_valid() {
     assert!(
         any(harness.outputs(), is_view_changed),
         "Valid EpochChange should produce ViewChanged output"
+    );
+    assert!(
+        any(harness.outputs(), |output| matches!(
+            output,
+            ConsensusOutput::ProposalCertified(certified)
+                if certified.view_number == epoch_view.view_number
+        )),
+        "the boundary proposal is announced so the reconstructor can pin its view"
     );
 }
 
@@ -450,9 +458,7 @@ async fn test_handle_epoch_change_replay_of_crossed_boundary() {
     // Simulate a node already deep in epoch 3 — e.g. freshly restarted and
     // seeded from its anchor — with no locked cert (genesis safety), so the
     // locked-cert staleness check cannot reject the replay.
-    harness
-        .consensus
-        .set_view(ViewNumber::new(25), EpochNumber::new(3));
+    harness.set_view(ViewNumber::new(25), EpochNumber::new(3));
 
     // Replay the epoch 1 → 2 boundary (view 10, block 10).
     let epoch_view = &test_data.views[9];

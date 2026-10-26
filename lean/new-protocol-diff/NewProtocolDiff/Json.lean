@@ -1,6 +1,6 @@
 module
 
-public import NewProtocolImpl
+public import NewProtocolSpec.Interface
 public import Lean.Data.Json
 
 /-!
@@ -14,7 +14,8 @@ being wrong. Derived instances change when the types change.
 Three deliberate choices:
 
 * The scalar wrappers get instances by hand. Derived, each would read
-  `{"toNat": 3}`, and a single proposal contains five of them.
+  `{"toNat": 3}`, and a single proposal contains nine of them, eleven with
+  timeout evidence.
 * Of those, the three cryptographic ones — a block identity, a payload
   commitment, a key — travel as a **string**, because a real one is 32 bytes or
   more and a recorder's JSON writer will not emit a 78-digit integer. The string
@@ -28,8 +29,8 @@ Three deliberate choices:
 * Everything else is derived, including the one wart that brings: a constructor
   with a single argument keeps that argument's name as a key, so
   `NewProtocol.Output.send` reads `{"send": {"m": …}}`. Removing it would mean
-  writing out instances for `Input`, `Output` and `Message` — thirty
-  constructors of exactly the code this file exists to avoid.
+  writing out instances for every constructor of `Input`, `Output` and
+  `Message`, which is exactly the code this file exists to avoid.
 
 The instances live in this package's namespace, not the specification's: they
 are the harness's business, and the specification has no reason to depend on
@@ -48,13 +49,19 @@ open NewProtocol
 instance : ToJson ViewNumber := ⟨fun v => toJson v.toNat⟩
 instance : FromJson ViewNumber := ⟨fun j => ViewNumber.mk <$> fromJson? j⟩
 
+instance : ToJson EpochNumber := ⟨fun e => toJson e.toNat⟩
+instance : FromJson EpochNumber := ⟨fun j => EpochNumber.mk <$> fromJson? j⟩
+
+instance : ToJson BlockNumber := ⟨fun b => toJson b.toNat⟩
+instance : FromJson BlockNumber := ⟨fun j => BlockNumber.mk <$> fromJson? j⟩
+
 /-!
 ### Identities
 
 A recorder names each cryptographic value with a string; the model stores a
 number. All that is asked of the correspondence is that it be injective, since
 `blockHash` images are only ever compared — which is also exactly what
-`CollisionFree` assumes of them (`NewProtocolSpec.Assumptions`).
+`CollisionFree` assumes of them.
 
 The correspondence is *bijective* base 256 over the string's UTF-8 bytes: a
 string is a numeral whose digits are `byte + 1`, so no digit is zero and no two
@@ -112,9 +119,11 @@ instance : ToJson PubKey := ⟨fun k => cryptoToJson k.toNat⟩
 instance : FromJson PubKey := ⟨fun j => PubKey.mk <$> cryptoFromJson j⟩
 
 deriving instance ToJson, FromJson for Vote1Data, Vote2Data, Certificate
+deriving instance ToJson, FromJson for TimeoutData
 
 instance : ToJson BlockHeader :=
-  ⟨fun h => Json.mkObj [("payloadCommit", toJson h.payloadCommit)]⟩
+  ⟨fun h => Json.mkObj
+    [("payloadCommit", toJson h.payloadCommit), ("blockNumber", toJson h.blockNumber)]⟩
 
 /--
 The mark a parse error carries when a trace is *outside* the specification rather
@@ -142,8 +151,8 @@ instance : FromJson BlockHeader := ⟨fun j => do
   match pc with
   | .null => throw (outOfScopeMark ++ "a header with no payload commitment is a \
       block from before a version boundary, which this model does not cover")
-  | _ => BlockHeader.mk <$> fromJson? pc⟩
-deriving instance ToJson, FromJson for Proposal, VidShare, Vote, CatchupEvidence
-deriving instance ToJson, FromJson for Message, Input, Output, Event
+  | _ => BlockHeader.mk <$> fromJson? pc <*> (do fromJson? (← j.getObjVal? "blockNumber"))⟩
+deriving instance ToJson, FromJson for Proposal, RevoteRequest, VidShare, Vote
+deriving instance ToJson, FromJson for Message, Input, Output
 
 end NewProtocolDiff

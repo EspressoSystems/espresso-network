@@ -4,11 +4,10 @@ use ::light_client::{
     LightClient,
     client::{FallbackClient, QueryServiceClient},
     state::{Genesis, LightClientOptions},
-    storage::LightClientSqliteOptions,
+    storage::LightClientDbOptions,
 };
 use alloy::primitives::U256;
 use anyhow::{Context, bail, ensure};
-use async_lock::RwLock;
 use async_once_cell::Lazy;
 use async_trait::async_trait;
 use committable::Commitment;
@@ -24,7 +23,7 @@ use espresso_types::{
     config::PublicNetworkConfig,
     retain_accounts,
     traits::{EventsPersistenceRead, MembershipPersistence},
-    v0::traits::{SequencerPersistence, StateCatchup},
+    v0::traits::{SequencerPersistence, StateCatchup, StateCertPersistence},
     v0_3::{
         ChainConfig, RegisteredValidator, RewardAccountQueryDataV1, RewardAccountV1, RewardAmount,
         RewardMerkleTreeV1, StakeTableEvent,
@@ -47,10 +46,7 @@ use hotshot_types::{
     network::NetworkConfig,
     simple_certificate::LightClientStateUpdateCertificateV2,
     stake_table::HSStakeTable,
-    traits::{
-        election::{Membership, MembershipSnapshot, NonEpochMembershipSnapshot},
-        network::ConnectedNetwork,
-    },
+    traits::election::{Membership, MembershipSnapshot, NonEpochMembershipSnapshot},
     utils::epoch_from_block_number,
     vid::avidm::{AvidMScheme, init_avidm_param},
     vote::HasViewNumber,
@@ -68,10 +64,8 @@ use self::data_source::{
     HotShotConfigDataSource, NodeKeysDataSource, NodePublicKeys, NodeStateDataSource,
     StateSignatureDataSource,
 };
-#[cfg(any(test, feature = "testing"))]
-use crate::SequencerContext;
 use crate::{
-    SeqTypes, SequencerApiVersion,
+    SeqTypes,
     api::{
         context::{ApiContext, ConsensusSource, NodeLightClient},
         data_source::TokenDataSource,
@@ -87,15 +81,20 @@ use crate::{
         request::{Request, Response},
     },
     state_cert::{StateCertFetchError, validate_state_cert},
-    state_signature::StateSigner,
 };
+#[cfg(any(test, feature = "testing"))]
+use crate::{SequencerApiVersion, SequencerContext};
 
 pub mod context;
 pub mod data_source;
 pub mod fs;
 pub mod light_client;
 pub mod options;
-pub mod sql;
+/// The query service over a SQL database, with one module per backend.
+pub mod sql {
+    pub mod postgres;
+    pub mod sqlite;
+}
 pub mod state;
 pub mod unlock_schedule;
 mod update;
@@ -109,20 +108,20 @@ type BoxLazy<T> = Pin<Arc<Lazy<T, BoxFuture<'static, T>>>>;
 
 #[derive(Derivative)]
 #[derivative(Clone(bound = ""), Debug(bound = ""))]
-struct ApiState<C: ApiContext> {
+struct ApiState {
     // The node context is initialized lazily so we can start the API (and healthcheck endpoints)
     // before consensus has started. Any endpoint that uses consensus state will wait for
     // initialization to finish, but endpoints that do not require a consensus handle can proceed
     // without waiting.
     #[derivative(Debug = "ignore")]
-    context: BoxLazy<C>,
+    context: BoxLazy<Box<dyn ApiContext>>,
 
     // we cache `token_supply` for up to an hour, to avoid repeatedly querying the contract for information that rarely changes
     token_supply: Cache<(), U256>,
 }
 
-impl<C: ApiContext> ApiState<C> {
-    fn new(context_init: impl Future<Output = C> + Send + 'static) -> Self {
+impl ApiState {
+    fn new(context_init: impl Future<Output = Box<dyn ApiContext>> + Send + 'static) -> Self {
         Self {
             context: Arc::pin(Lazy::from_future(context_init.boxed())),
             token_supply: Cache::builder()
@@ -132,20 +131,20 @@ impl<C: ApiContext> ApiState<C> {
         }
     }
 
-    async fn context(&self) -> &C {
-        self.context.as_ref().get().await.get_ref()
+    async fn context(&self) -> &dyn ApiContext {
+        self.context.as_ref().get().await.get_ref().as_ref()
     }
 
     async fn consensus(&self) -> Arc<dyn ConsensusSource> {
         self.context().await.consensus()
     }
 
-    async fn persistence(&self) -> Arc<C::Persistence> {
-        self.context().await.persistence()
+    async fn membership(&self) -> Arc<dyn MembershipPersistence> {
+        self.context().await.membership()
     }
 
-    async fn state_signer(&self) -> Option<Arc<RwLock<StateSigner<SequencerApiVersion>>>> {
-        self.context().await.state_signer()
+    async fn state_certs(&self) -> Arc<dyn StateCertPersistence> {
+        self.context().await.state_certs()
     }
 
     async fn network_config(&self) -> NetworkConfig<SeqTypes> {
@@ -153,9 +152,9 @@ impl<C: ApiContext> ApiState<C> {
     }
 }
 
-type StorageState<C, D> = ExtensibleDataSource<D, ApiState<C>>;
+type StorageState<D> = ExtensibleDataSource<D, ApiState>;
 
-impl<C: ApiContext, D: Send + Sync> TokenDataSource<SeqTypes> for StorageState<C, D> {
+impl<D: Send + Sync> TokenDataSource<SeqTypes> for StorageState<D> {
     async fn get_initial_supply_l1(&self) -> anyhow::Result<U256> {
         self.as_ref().get_initial_supply_l1().await
     }
@@ -169,13 +168,13 @@ impl<C: ApiContext, D: Send + Sync> TokenDataSource<SeqTypes> for StorageState<C
     }
 }
 
-impl<C: ApiContext, D: Send + Sync> SubmitDataSource for StorageState<C, D> {
+impl<D: Send + Sync> SubmitDataSource for StorageState<D> {
     async fn submit(&self, tx: Transaction) -> anyhow::Result<Commitment<Transaction>> {
         self.as_ref().submit(tx).await
     }
 }
 
-impl<C: ApiContext, D: Sync> StakeTableDataSource<SeqTypes> for StorageState<C, D> {
+impl<D: Sync> StakeTableDataSource<SeqTypes> for StorageState<D> {
     /// Get the stake table for a given epoch
     async fn get_stake_table(
         &self,
@@ -255,7 +254,7 @@ impl<C: ApiContext, D: Sync> StakeTableDataSource<SeqTypes> for StorageState<C, 
     }
 }
 
-impl<C: ApiContext> TokenDataSource<SeqTypes> for ApiState<C> {
+impl TokenDataSource<SeqTypes> for ApiState {
     async fn get_initial_supply_l1(&self) -> anyhow::Result<U256> {
         let node_state = self.context().await.node_state();
         let fetcher = node_state.coordinator.membership().fetcher().clone();
@@ -296,7 +295,7 @@ impl<C: ApiContext> TokenDataSource<SeqTypes> for ApiState<C> {
     }
 }
 
-impl<C: ApiContext> StakeTableDataSource<SeqTypes> for ApiState<C> {
+impl StakeTableDataSource<SeqTypes> for ApiState {
     /// Get the stake table for a given epoch
     async fn get_stake_table(
         &self,
@@ -435,8 +434,10 @@ impl<C: ApiContext> StakeTableDataSource<SeqTypes> for ApiState<C> {
         offset: u64,
         limit: u64,
     ) -> anyhow::Result<Vec<RegisteredValidator<PubKey>>> {
-        let storage = self.persistence().await;
-        storage.load_all_validators(epoch, offset, limit).await
+        self.membership()
+            .await
+            .load_all_validators(epoch, offset, limit)
+            .await
     }
 
     async fn stake_table_events(
@@ -444,8 +445,11 @@ impl<C: ApiContext> StakeTableDataSource<SeqTypes> for ApiState<C> {
         from_l1_block: u64,
         to_l1_block: u64,
     ) -> anyhow::Result<Vec<StakeTableEvent>> {
-        let storage = self.persistence().await;
-        let (status, events) = storage.load_events(from_l1_block, to_l1_block).await?;
+        let (status, events) = self
+            .membership()
+            .await
+            .load_events(from_l1_block, to_l1_block)
+            .await?;
         ensure!(
             status == Some(EventsPersistenceRead::Complete),
             "some events in range [{from_l1_block}, {to_l1_block}] are not available ({status:?})"
@@ -454,7 +458,7 @@ impl<C: ApiContext> StakeTableDataSource<SeqTypes> for ApiState<C> {
     }
 }
 
-impl<C: ApiContext, D: Sync> RequestResponseDataSource<SeqTypes> for StorageState<C, D> {
+impl<D: Sync> RequestResponseDataSource<SeqTypes> for StorageState<D> {
     async fn request_vid_shares(
         &self,
         block_number: u64,
@@ -468,7 +472,7 @@ impl<C: ApiContext, D: Sync> RequestResponseDataSource<SeqTypes> for StorageStat
 }
 
 #[async_trait]
-impl<C: ApiContext, D: Sync> StateCertFetchingDataSource<SeqTypes> for StorageState<C, D> {
+impl<D: Sync> StateCertFetchingDataSource<SeqTypes> for StorageState<D> {
     async fn request_state_cert(
         &self,
         epoch: u64,
@@ -478,7 +482,7 @@ impl<C: ApiContext, D: Sync> StateCertFetchingDataSource<SeqTypes> for StorageSt
     }
 }
 
-impl<C: ApiContext> RequestResponseDataSource<SeqTypes> for ApiState<C> {
+impl RequestResponseDataSource<SeqTypes> for ApiState {
     async fn request_vid_shares(
         &self,
         block_number: u64,
@@ -491,14 +495,13 @@ impl<C: ApiContext> RequestResponseDataSource<SeqTypes> for ApiState<C> {
     }
 }
 
-pub(super) fn request_vid_shares<N, P>(
-    request_response_protocol: RequestResponseProtocol<ConsensusNode<N, P>, N, P>,
+pub(super) fn request_vid_shares<P>(
+    request_response_protocol: RequestResponseProtocol<ConsensusNode<P>, P>,
     block_number: u64,
     vid_common_data: VidCommonQueryData<SeqTypes>,
     duration: Duration,
 ) -> BoxFuture<'static, anyhow::Result<Vec<VidShare>>>
 where
-    N: ConnectedNetwork<PubKey>,
     P: SequencerPersistence,
 {
     async move {
@@ -569,7 +572,7 @@ where
 }
 
 #[async_trait]
-impl<C: ApiContext> StateCertFetchingDataSource<SeqTypes> for ApiState<C> {
+impl StateCertFetchingDataSource<SeqTypes> for ApiState {
     async fn request_state_cert(
         &self,
         epoch: u64,
@@ -655,7 +658,7 @@ impl<C: ApiContext> StateCertFetchingDataSource<SeqTypes> for ApiState<C> {
 
 // Thin wrapper implementations that delegate to persistence
 #[async_trait]
-impl<C: ApiContext, D: Sync> StateCertDataSource for StorageState<C, D> {
+impl<D: Sync> StateCertDataSource for StorageState<D> {
     async fn get_state_cert_by_epoch(
         &self,
         epoch: u64,
@@ -673,13 +676,15 @@ impl<C: ApiContext, D: Sync> StateCertDataSource for StorageState<C, D> {
 }
 
 #[async_trait]
-impl<C: ApiContext> StateCertDataSource for ApiState<C> {
+impl StateCertDataSource for ApiState {
     async fn get_state_cert_by_epoch(
         &self,
         epoch: u64,
     ) -> anyhow::Result<Option<LightClientStateUpdateCertificateV2<SeqTypes>>> {
-        let storage = self.persistence().await;
-        storage.get_state_cert_by_epoch(epoch).await
+        self.state_certs()
+            .await
+            .get_state_cert_by_epoch(epoch)
+            .await
     }
 
     async fn insert_state_cert(
@@ -687,12 +692,14 @@ impl<C: ApiContext> StateCertDataSource for ApiState<C> {
         epoch: u64,
         cert: LightClientStateUpdateCertificateV2<SeqTypes>,
     ) -> anyhow::Result<()> {
-        let storage = self.persistence().await;
-        storage.insert_state_cert(epoch, cert).await
+        self.state_certs()
+            .await
+            .insert_state_cert(epoch, cert)
+            .await
     }
 }
 
-impl<C: ApiContext> SubmitDataSource for ApiState<C> {
+impl SubmitDataSource for ApiState {
     async fn submit(&self, tx: Transaction) -> anyhow::Result<Commitment<Transaction>> {
         let handle = self.consensus().await;
 
@@ -727,14 +734,13 @@ impl<C: ApiContext> SubmitDataSource for ApiState<C> {
     }
 }
 
-impl<C: ApiContext, D: Sync> NodeStateDataSource for StorageState<C, D> {
+impl<D: Sync> NodeStateDataSource for StorageState<D> {
     async fn node_state(&self) -> NodeState {
         self.as_ref().node_state().await
     }
 }
 
-impl<C: ApiContext, D: CatchupStorage + Send + Sync> data_source::DatabaseMetadataSource
-    for StorageState<C, D>
+impl<D: CatchupStorage + Send + Sync> data_source::DatabaseMetadataSource for StorageState<D>
 where
     D: data_source::DatabaseMetadataSource + Send + Sync,
 {
@@ -747,8 +753,7 @@ where
     }
 }
 
-impl<C: ApiContext, D: CatchupStorage + Send + Sync> data_source::PruningDataSource
-    for StorageState<C, D>
+impl<D: CatchupStorage + Send + Sync> data_source::PruningDataSource for StorageState<D>
 where
     D: data_source::PruningDataSource + Send + Sync,
 {
@@ -767,7 +772,7 @@ where
     }
 }
 
-impl<C: ApiContext, D: CatchupStorage + Send + Sync> CatchupDataSource for StorageState<C, D> {
+impl<D: CatchupStorage + Send + Sync> CatchupDataSource for StorageState<D> {
     #[tracing::instrument(skip(self, instance))]
     async fn get_accounts(
         &self,
@@ -961,21 +966,22 @@ impl<C: ApiContext, D: CatchupStorage + Send + Sync> CatchupDataSource for Stora
         &self,
         epoch: u64,
     ) -> anyhow::Result<LightClientStateUpdateCertificateV2<SeqTypes>> {
-        let storage = self.as_ref().persistence().await;
-        storage
+        self.as_ref()
+            .state_certs()
+            .await
             .get_state_cert_by_epoch(epoch)
             .await?
             .context(format!("state cert for epoch {epoch} not found"))
     }
 }
 
-impl<C: ApiContext> NodeStateDataSource for ApiState<C> {
+impl NodeStateDataSource for ApiState {
     async fn node_state(&self) -> NodeState {
         self.context().await.node_state()
     }
 }
 
-impl<C: ApiContext> CatchupDataSource for ApiState<C> {
+impl CatchupDataSource for ApiState {
     #[tracing::instrument(skip(self, _instance))]
     async fn get_accounts(
         &self,
@@ -1119,25 +1125,25 @@ impl<C: ApiContext> CatchupDataSource for ApiState<C> {
     }
 }
 
-impl<C: ApiContext, D: Sync> HotShotConfigDataSource for StorageState<C, D> {
+impl<D: Sync> HotShotConfigDataSource for StorageState<D> {
     async fn get_config(&self) -> PublicNetworkConfig {
         self.as_ref().network_config().await.into()
     }
 }
 
-impl<C: ApiContext> HotShotConfigDataSource for ApiState<C> {
+impl HotShotConfigDataSource for ApiState {
     async fn get_config(&self) -> PublicNetworkConfig {
         self.network_config().await.into()
     }
 }
 
-impl<C: ApiContext, D: Sync> NodeKeysDataSource for StorageState<C, D> {
+impl<D: Sync> NodeKeysDataSource for StorageState<D> {
     async fn node_public_keys(&self) -> Option<NodePublicKeys> {
         self.as_ref().node_public_keys().await
     }
 }
 
-impl<C: ApiContext> NodeKeysDataSource for ApiState<C> {
+impl NodeKeysDataSource for ApiState {
     async fn node_public_keys(&self) -> Option<NodePublicKeys> {
         let ctx = self.context().await;
         let config = ctx.validator_config()?;
@@ -1159,21 +1165,21 @@ impl<C: ApiContext> NodeKeysDataSource for ApiState<C> {
 }
 
 #[async_trait]
-impl<C: ApiContext, D: Sync> StateSignatureDataSource for StorageState<C, D> {
+impl<D: Sync> StateSignatureDataSource for StorageState<D> {
     async fn get_state_signature(&self, height: u64) -> Option<LCV3StateSignatureRequestBody> {
         self.as_ref().get_state_signature(height).await
     }
 }
 
 #[async_trait]
-impl<C: ApiContext> StateSignatureDataSource for ApiState<C> {
+impl StateSignatureDataSource for ApiState {
     async fn get_state_signature(&self, height: u64) -> Option<LCV3StateSignatureRequestBody> {
-        self.state_signer()
-            .await?
+        self.context()
+            .await
+            .state_signatures()?
             .read()
             .await
-            .get_state_signature(height)
-            .await
+            .get_signature(height)
     }
 }
 
@@ -1221,14 +1227,7 @@ pub(crate) trait RewardMerkleTreeDataSource: Send + Sync + Clone + 'static {
         merkle_tree: &RewardMerkleTreeV2,
     ) -> impl Send + Future<Output = anyhow::Result<()>> {
         async move {
-            // The merklized state loop always applies full blocks, so an incomplete
-            // tree here indicates something is seriously wrong.
-            let tree_data = TryInto::<RewardMerkleTreeV2Data>::try_into(merkle_tree).inspect_err(
-                |err| tracing::error!(%err, height, "cannot persist incomplete RewardMerkleTreeV2"),
-            )?;
-            let serialization =
-                bincode::serialize(&tree_data).context("Merkle tree serialization failed")?;
-            self.persist_tree(height, serialization).await?;
+            self.save_reward_tree_v2(height, merkle_tree).await?;
 
             // Skip garbage collection in tests
             if cfg!(any(test, feature = "testing")) {
@@ -1281,6 +1280,25 @@ pub(crate) trait RewardMerkleTreeDataSource: Send + Sync + Clone + 'static {
             }
 
             Ok(())
+        }
+    }
+
+    /// Store `merkle_tree`, the whole reward tree at `height`, as key-value pairs.
+    fn save_reward_tree_v2(
+        &self,
+        height: u64,
+        merkle_tree: &RewardMerkleTreeV2,
+    ) -> impl Send + Future<Output = anyhow::Result<()>> {
+        async move {
+            // Every caller holds the whole tree: the merklized state loop always applies full
+            // blocks, and the trees it starts from are whole. So an incomplete tree here indicates
+            // something is seriously wrong.
+            let tree_data = TryInto::<RewardMerkleTreeV2Data>::try_into(merkle_tree).inspect_err(
+                |err| tracing::error!(%err, height, "cannot persist incomplete RewardMerkleTreeV2"),
+            )?;
+            let serialization =
+                bincode::serialize(&tree_data).context("Merkle tree serialization failed")?;
+            self.persist_tree(height, serialization).await
         }
     }
 
@@ -1716,20 +1734,20 @@ pub(crate) fn light_client_genesis(config: &NetworkConfig<SeqTypes>, chain_id: C
 /// tries again.
 #[derive(Derivative)]
 #[derivative(Debug(bound = ""))]
-struct LightClientProvider<C: ApiContext> {
+pub(crate) struct LightClientProvider {
     light_client: OnceCell<Arc<NodeLightClient>>,
-    state: ApiState<C>,
+    state: ApiState,
     client: FallbackClient<QueryServiceClient>,
     opt: LightClientOptions,
-    db_opt: LightClientSqliteOptions,
+    db_opt: LightClientDbOptions,
 }
 
-impl<C: ApiContext> LightClientProvider<C> {
-    pub fn new(
+impl LightClientProvider {
+    fn new(
         peers: impl IntoIterator<Item = Url>,
-        state: ApiState<C>,
+        state: ApiState,
         opt: LightClientOptions,
-        db_opt: LightClientSqliteOptions,
+        db_opt: LightClientDbOptions,
     ) -> anyhow::Result<Self> {
         let client = FallbackClient::new(peers.into_iter().map(QueryServiceClient::new).collect())?;
         Ok(Self {
@@ -1741,7 +1759,7 @@ impl<C: ApiContext> LightClientProvider<C> {
         })
     }
 
-    async fn light_client(&self) -> Option<&Arc<NodeLightClient>> {
+    pub(crate) async fn light_client(&self) -> Option<&Arc<NodeLightClient>> {
         self.light_client
             .get_or_try_init(|| self.init())
             .await
@@ -1763,7 +1781,7 @@ impl<C: ApiContext> LightClientProvider<C> {
             .clone()
             .connect()
             .await
-            .context("creating SQLite database for light client")?;
+            .context("opening the light client database")?;
         let chain_id = ctx.node_state().genesis_chain_config.chain_id;
         let genesis = light_client_genesis(&ctx.network_config(), chain_id);
         Ok(Arc::new(LightClient::from_genesis_with_options(
@@ -1776,9 +1794,8 @@ impl<C: ApiContext> LightClientProvider<C> {
 }
 
 #[async_trait]
-impl<C, T> Provider<SeqTypes, T> for LightClientProvider<C>
+impl<T> Provider<SeqTypes, T> for LightClientProvider
 where
-    C: ApiContext,
     T: fetching::Request<SeqTypes> + 'static,
     NodeLightClient: Provider<SeqTypes, T>,
 {
@@ -1815,7 +1832,6 @@ pub mod test_helpers {
         future::{FutureExt, join_all},
         stream::{Stream, StreamExt},
     };
-    use hotshot::types::{Event, EventType};
     use hotshot_contract_adapter::stake_table::StakeTableContractVersion;
     use hotshot_types::{
         event::LeafInfo, light_client::LCV3StateSignatureRequestBody,
@@ -1836,20 +1852,28 @@ pub mod test_helpers {
 
     use super::*;
     use crate::{
+        api::data_source::testing::TestableSequencerDataSource,
         catchup::{NullStateCatchup, ParallelStateCatchup, StatePeers},
-        network,
         persistence::no_storage,
         testing::{
-            TestConfig, TestConfigBuilder, decided_leaves, deploy_stake_table, run_test_builder,
+            TestConfig, TestConfigBuilder, decided_leaves, deploy_stake_table,
             wait_for_decide_on_handle, wait_for_epochs,
         },
     };
 
     pub const STAKE_TABLE_CAPACITY_FOR_TEST: usize = 10;
 
+    /// One storage per node, and each node's persistence options on it.
+    pub async fn node_storage<D: TestableSequencerDataSource, const NUM_NODES: usize>()
+    -> (Vec<D::Storage>, [D::Options; NUM_NODES]) {
+        let storage = join_all((0..NUM_NODES).map(|_| D::create_storage())).await;
+        let persistence = std::array::from_fn(|i| D::persistence_options(&storage[i]));
+        (storage, persistence)
+    }
+
     pub struct TestNetwork<P: PersistenceOptions, const NUM_NODES: usize> {
-        pub server: SequencerContext<network::Memory, P::Persistence>,
-        pub peers: Vec<SequencerContext<network::Memory, P::Persistence>>,
+        pub server: SequencerContext<P::Persistence>,
+        pub peers: Vec<SequencerContext<P::Persistence>>,
         pub cfg: TestConfig<{ NUM_NODES }>,
         // todo (abdul): remove this when fs storage is removed
         pub temp_dir: Option<TempDir>,
@@ -2135,14 +2159,6 @@ pub mod test_helpers {
             if upgrade.base >= NEW_PROTOCOL_VERSION && !cfg.has_stake_table() {
                 cfg.deploy_default_stake_table().await;
             }
-            let mut builder_tasks = Vec::new();
-
-            let (task, builder_url) =
-                run_test_builder::<{ NUM_NODES }>(cfg.network_config.builder_port()).await;
-            builder_tasks.push(task);
-            cfg.network_config
-                .set_builder_urls(vec1::vec1![builder_url.clone()]);
-
             // add default storage if none is provided as query module is now required
             let mut opt = cfg.api_config.clone();
             let temp_dir = if opt.storage_fs.is_none() && opt.storage_sql.is_none() {
@@ -2227,20 +2243,6 @@ pub mod test_helpers {
             )
             .await;
 
-            let handle_0 = &nodes[0];
-
-            // Hook the builder(s) up to the event stream from the first node
-            for builder_task in builder_tasks {
-                builder_task.start(Box::new(
-                    handle_0
-                        .consensus_handle()
-                        .legacy_consensus()
-                        .read()
-                        .await
-                        .event_stream(),
-                ));
-            }
-
             for ctx in &nodes {
                 ctx.start_consensus().await;
             }
@@ -2270,7 +2272,7 @@ pub mod test_helpers {
             persistence: P,
             catchup: C,
             upgrade: versions::Upgrade,
-        ) -> &SequencerContext<network::Memory, P::Persistence> {
+        ) -> &SequencerContext<P::Persistence> {
             assert_eq!(
                 self.deferred.first(),
                 Some(&i),
@@ -2297,7 +2299,7 @@ pub mod test_helpers {
             persistence: P,
             catchup: C,
             upgrade: versions::Upgrade,
-        ) -> &SequencerContext<network::Memory, P::Persistence> {
+        ) -> &SequencerContext<P::Persistence> {
             self.stop_node(i).await;
             self.start_stopped_node(i, state, persistence, catchup, upgrade)
                 .await
@@ -2336,7 +2338,7 @@ pub mod test_helpers {
             persistence: P,
             catchup: C,
             upgrade: versions::Upgrade,
-        ) -> &SequencerContext<network::Memory, P::Persistence> {
+        ) -> &SequencerContext<P::Persistence> {
             let ctx = self
                 .init_and_start(i, state, persistence, catchup, upgrade)
                 .await;
@@ -2358,7 +2360,7 @@ pub mod test_helpers {
             persistence: P,
             catchup: C,
             upgrade: versions::Upgrade,
-        ) -> SequencerContext<network::Memory, P::Persistence> {
+        ) -> SequencerContext<P::Persistence> {
             let ctx = self
                 .cfg
                 .init_node(
@@ -2387,7 +2389,7 @@ pub mod test_helpers {
         }
 
         /// The context of the node at index `i` (node 0 is the API server).
-        pub fn node(&self, i: usize) -> &SequencerContext<network::Memory, P::Persistence> {
+        pub fn node(&self, i: usize) -> &SequencerContext<P::Persistence> {
             if i == 0 {
                 &self.server
             } else {
@@ -2669,7 +2671,7 @@ pub mod test_helpers {
     /// legacy builder stops producing non-empty blocks after roughly a
     /// hundred views, independent of any stake table activity.
     pub async fn assert_node_live<P: SequencerPersistence>(
-        node: &SequencerContext<network::Memory, P>,
+        node: &SequencerContext<P>,
         epoch_height: u64,
         epochs_ahead: u64,
     ) {
@@ -2700,10 +2702,6 @@ pub mod test_helpers {
         tokio::time::timeout(Duration::from_secs(120), async {
             loop {
                 let leaf = match events.next().await.unwrap() {
-                    CoordinatorEvent::LegacyEvent(Event {
-                        event: EventType::Decide { leaf_chain, .. },
-                        ..
-                    }) => leaf_chain[0].leaf.clone(),
                     CoordinatorEvent::NewDecide { leaf_infos, .. } => leaf_infos[0].leaf.clone(),
                     _ => continue,
                 };
@@ -2725,7 +2723,7 @@ pub mod test_helpers {
     /// Asserts every node has decided at least `min_height`, and that nodes
     /// which have decided the same height agree on the leaf.
     pub async fn assert_nodes_agree<P: SequencerPersistence>(
-        nodes: &[&SequencerContext<network::Memory, P>],
+        nodes: &[&SequencerContext<P>],
         min_height: u64,
     ) {
         let leaves = join_all(nodes.iter().map(|node| node.decided_leaf())).await;
@@ -2992,26 +2990,24 @@ mod api_tests {
     use committable::Committable;
     use data_source::testing::TestableSequencerDataSource;
     use espresso_types::{
-        Header, Leaf2, MOCK_SEQUENCER_VERSIONS, NamespaceId, NamespaceProofQueryData, TEST_UPGRADE,
-        ValidatedState,
+        Header, Leaf2, NamespaceId, NamespaceProofQueryData, TEST_UPGRADE, ValidatedState,
         traits::{EventConsumer, PersistenceOptions},
     };
     use futures::{future, stream::StreamExt};
-    use hotshot_example_types::node_types::TEST_VERSIONS;
     use hotshot_query_service::availability::{
         AvailabilityDataSource, BlockQueryData, VidCommonQueryData,
     };
     use hotshot_types::{
         data::{
             DaProposal2, EpochNumber, QuorumProposal2, QuorumProposalWrapper, VidCommitment,
-            VidDisperseShare, ns_table::parse_ns_table, vid_disperse::AvidMDisperseShare,
+            VidDisperseShare, ns_table::parse_ns_table, vid_disperse::AvidmGf2DisperseShare,
         },
         event::LeafInfo,
         message::Proposal,
         simple_certificate::{CertificatePair, QuorumCertificate2},
         traits::{EncodeBytes, signature_key::SignatureKey},
         utils::EpochTransitionIndicator,
-        vid::avidm::{AvidMScheme, init_avidm_param},
+        vid::avidm_gf2::{AvidmGf2Scheme, init_avidm_gf2_param},
     };
     use http_client::{Client, error::ClientErr};
     use test_helpers::{
@@ -3020,17 +3016,18 @@ mod api_tests {
     };
     use test_utils::reserve_tcp_port;
     use vbs::version::StaticVersion;
+    use versions::NEW_PROTOCOL_VERSION;
 
     use super::{update::ApiEventConsumer, *};
     use crate::{
-        network,
-        persistence::no_storage::NoStorage,
+        persistence::sql::DECIDE_GAP_FILL_HORIZON,
         testing::{TestConfigBuilder, wait_for_decide_on_handle},
     };
 
     #[rstest_reuse::template]
     #[rstest::rstest]
-    #[case(PhantomData::<crate::api::sql::DataSource>)]
+    #[case(PhantomData::<crate::api::sql::postgres::DataSource>)]
+    #[case(PhantomData::<crate::api::sql::sqlite::DataSource>)]
     #[case(PhantomData::<crate::api::fs::DataSource>)]
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     pub fn testable_sequencer_data_source<D: TestableSequencerDataSource>(
@@ -3239,32 +3236,28 @@ mod api_tests {
 
         let storage = D::create_storage().await;
         let persistence = D::persistence_options(&storage).create().await.unwrap();
-        let data_source: Arc<StorageState<SequencerContext<network::Memory, NoStorage>, _>> =
-            Arc::new(StorageState::new(
-                D::create(D::persistence_options(&storage), Default::default(), false)
-                    .await
-                    .unwrap(),
-                ApiState::new(future::pending()),
-            ));
+        let data_source: Arc<StorageState<_>> = Arc::new(StorageState::new(
+            D::create(D::persistence_options(&storage), Default::default(), false)
+                .await
+                .unwrap(),
+            ApiState::new(future::pending()),
+        ));
 
         // Create two non-consecutive leaf chains.
         let mut chain1 = vec![];
 
-        let genesis = Leaf2::genesis(
-            &Default::default(),
-            &NodeState::mock(),
-            TEST_VERSIONS.test.base,
-        )
-        .await;
+        let node_state = NodeState::mock().with_genesis_version(NEW_PROTOCOL_VERSION);
+        let genesis = Leaf2::genesis(&Default::default(), &node_state, TEST_UPGRADE.base).await;
         let payload = genesis.block_payload().unwrap();
         let payload_bytes_arc = payload.encode();
 
-        let avidm_param = init_avidm_param(2).unwrap();
+        let avidm_param = init_avidm_gf2_param(2).unwrap();
         let weights = vec![1u32; 2];
 
         let ns_table = parse_ns_table(payload.byte_len().as_usize(), &payload.ns_table().encode());
-        let (payload_commitment, shares) =
-            AvidMScheme::ns_disperse(&avidm_param, &weights, &payload_bytes_arc, ns_table).unwrap();
+        let (payload_commitment, common, shares) =
+            AvidmGf2Scheme::ns_disperse(&avidm_param, &weights, &payload_bytes_arc, ns_table)
+                .unwrap();
 
         let mut quorum_proposal = QuorumProposalWrapper::<SeqTypes> {
             proposal: QuorumProposal2::<SeqTypes> {
@@ -3272,8 +3265,8 @@ mod api_tests {
                 view_number: ViewNumber::genesis(),
                 justify_qc: QuorumCertificate2::genesis(
                     &ValidatedState::default(),
-                    &NodeState::mock(),
-                    MOCK_SEQUENCER_VERSIONS,
+                    &node_state,
+                    TEST_UPGRADE,
                 )
                 .await,
                 upgrade_certificate: None,
@@ -3284,15 +3277,15 @@ mod api_tests {
                 state_cert: None,
             },
         };
-        let mut qc = QuorumCertificate2::genesis(
-            &ValidatedState::default(),
-            &NodeState::mock(),
-            MOCK_SEQUENCER_VERSIONS,
-        )
-        .await;
+        let mut qc =
+            QuorumCertificate2::genesis(&ValidatedState::default(), &node_state, TEST_UPGRADE)
+                .await;
 
+        // Long enough that the gap at view 2 falls outside `DECIDE_GAP_FILL_HORIZON` of the newest
+        // decide, so the leaves after it are delivered rather than held for a gap-fill decide.
+        let chain_len = 3 + DECIDE_GAP_FILL_HORIZON;
         let mut justify_qc = qc.clone();
-        for i in 0..5 {
+        for i in 0..chain_len {
             *quorum_proposal.proposal.block_header.height_mut() = i;
             quorum_proposal.proposal.view_number = ViewNumber::new(i);
             quorum_proposal.proposal.justify_qc = justify_qc;
@@ -3316,14 +3309,14 @@ mod api_tests {
                 .unwrap();
 
             // Include VID information for each leaf.
-            let share: VidDisperseShare<SeqTypes> = AvidMDisperseShare {
+            let share: VidDisperseShare<SeqTypes> = AvidmGf2DisperseShare {
                 view_number: leaf.view_number(),
                 payload_commitment,
                 share: shares[0].clone(),
                 recipient_key: pubkey,
                 epoch: Some(EpochNumber::new(0)),
                 target_epoch: Some(EpochNumber::new(0)),
-                common: avidm_param.clone(),
+                common: common.clone(),
             }
             .into();
 
@@ -3348,7 +3341,7 @@ mod api_tests {
                 _pd: Default::default(),
             };
             persistence
-                .append_da2(&da_proposal, VidCommitment::V1(payload_commitment))
+                .append_da2(&da_proposal, VidCommitment::V2(payload_commitment))
                 .await
                 .unwrap();
         }
@@ -3367,7 +3360,6 @@ mod api_tests {
             .append_decided_leaves(
                 ViewNumber::new(1),
                 leaf_chain.iter().map(|(leaf, qc)| (leaf, qc.clone())),
-                None,
                 &FailConsumer,
             )
             .await
@@ -3383,9 +3375,8 @@ mod api_tests {
         tracing::info!("decide successfully");
         persistence
             .append_decided_leaves(
-                ViewNumber::new(4),
+                ViewNumber::new(chain_len - 1),
                 leaf_chain.iter().map(|(leaf, qc)| (leaf, qc.clone())),
-                None,
                 &consumer,
             )
             .await
@@ -3467,27 +3458,19 @@ mod api_tests {
 
         let storage = D::create_storage().await;
         let persistence = D::persistence_options(&storage).create().await.unwrap();
-        let data_source: Arc<StorageState<SequencerContext<network::Memory, NoStorage>, _>> =
-            Arc::new(StorageState::new(
-                D::create(D::persistence_options(&storage), Default::default(), false)
-                    .await
-                    .unwrap(),
-                ApiState::new(future::pending()),
-            ));
+        let data_source: Arc<StorageState<_>> = Arc::new(StorageState::new(
+            D::create(D::persistence_options(&storage), Default::default(), false)
+                .await
+                .unwrap(),
+            ApiState::new(future::pending()),
+        ));
         let consumer = ApiEventConsumer::from(data_source.clone());
 
-        let mut qc = QuorumCertificate2::genesis(
-            &ValidatedState::default(),
-            &NodeState::mock(),
-            MOCK_SEQUENCER_VERSIONS,
-        )
-        .await;
-        let leaf = Leaf2::genesis(
-            &ValidatedState::default(),
-            &NodeState::mock(),
-            TEST_VERSIONS.test.base,
-        )
-        .await;
+        let node_state = NodeState::mock().with_genesis_version(NEW_PROTOCOL_VERSION);
+        let mut qc =
+            QuorumCertificate2::genesis(&ValidatedState::default(), &node_state, TEST_UPGRADE)
+                .await;
+        let leaf = Leaf2::genesis(&ValidatedState::default(), &node_state, TEST_UPGRADE.base).await;
 
         // Append the genesis leaf. We don't use this for the test, because the update function will
         // automatically fill in the missing data for genesis. We just append this to get into a
@@ -3500,7 +3483,6 @@ mod api_tests {
                     &leaf_info(leaf.clone()),
                     CertificatePair::non_epoch_change(qc.clone()),
                 )],
-                None,
                 &consumer,
             )
             .await
@@ -3511,7 +3493,7 @@ mod api_tests {
         // with this header, and the payload will not actually be missing.
         let mut block_header = leaf.block_header().clone();
         *block_header.height_mut() += 1;
-        *block_header.payload_commitment_mut() = VidCommitment::V1(
+        *block_header.payload_commitment_mut() = VidCommitment::V2(
             CanonicalDeserialize::deserialize_uncompressed_unchecked([1u8; 32].as_slice()).unwrap(),
         );
         let qp = QuorumProposalWrapper {
@@ -3541,7 +3523,6 @@ mod api_tests {
                     &leaf_info(leaf.clone()),
                     CertificatePair::non_epoch_change(qc),
                 )],
-                None,
                 &consumer,
             )
             .await
@@ -3577,7 +3558,7 @@ mod test {
             leaf::{LeafProof, LeafProofHint},
             payload::PayloadProof,
         },
-        testing::{EpochChangeQuorum, LEGACY_VERSION},
+        testing::EpochChangeQuorum,
     };
     use alloy::{
         eips::BlockId,
@@ -3589,17 +3570,15 @@ mod test {
     use committable::{Commitment, Committable};
     use espresso_contract_deployer::{
         Contract, Contracts, builder::DeployerArgsBuilder,
-        network_config::light_client_genesis_from_stake_table, upgrade_stake_table_v2,
-        upgrade_stake_table_v3,
+        network_config::light_client_genesis_from_stake_table,
     };
     use espresso_types::{
-        FeeAmount, Header, L1Client, L1ClientOptions, MOCK_SEQUENCER_VERSIONS, NamespaceId,
-        NamespaceProofQueryData, NsProof, RegisteredValidatorMap, RewardDistributor,
-        StakeTableState, StateCertQueryDataV1, StateCertQueryDataV2, TEST_UPGRADE, ValidatedState,
-        ValidatorLeaderCounts,
+        FeeAmount, Header, L1ClientOptions, NamespaceId, NamespaceProofQueryData, NsProof,
+        RegisteredValidatorMap, RewardDistributor, StakeTableState, StateCertQueryDataV1,
+        StateCertQueryDataV2, TEST_UPGRADE, ValidatedState, ValidatorLeaderCounts,
         config::PublicHotShotConfig,
         traits::{NullEventConsumer, PersistenceOptions},
-        v0_3::{COMMISSION_BASIS_POINTS, Fetcher, RewardAmount, RewardMerkleProofV1},
+        v0_3::{AuthenticatedValidator, COMMISSION_BASIS_POINTS, Fetcher, RewardAmount},
         v0_4::{RewardAccountV2, RewardMerkleProofV2},
         validators_from_l1_events,
     };
@@ -3608,9 +3587,8 @@ mod test {
         stream::{StreamExt, TryStreamExt},
         try_join,
     };
-    use hotshot::types::{Event, EventType};
     use hotshot_contract_adapter::{
-        reward::RewardClaimInput,
+        reward::{RewardAuthData, RewardClaimInput, RewardProofSiblings},
         sol_types::{EspToken, StakeTableV3},
         stake_table::StakeTableContractVersion,
     };
@@ -3621,20 +3599,23 @@ mod test {
         },
         data_source::{
             Transaction as _, VersionedDataSource,
-            sql::Config,
+            sql::postgres::{Config, SqlStorage},
             storage::{
-                MerklizedStateHeightStorage, SqlStorage, StorageConnectionType,
+                MerklizedStateHeightStorage, NodeStorage, SerializableRetry, StorageConnectionType,
                 UpdateAvailabilityStorage, pruning::PrunedHeightStorage,
             },
         },
         explorer::TransactionSummariesResponse,
+        merklized_state::UpdateStateData,
         node::{NodeDataSource as _, SyncStatus, SyncStatusQueryData},
+        serializable_retry,
         types::HeightIndexed,
     };
     use hotshot_types::{
         ValidatorConfig,
         addr::NetAddr,
         data::EpochNumber,
+        epoch_membership::EpochMembershipCoordinator,
         event::LeafInfo,
         new_protocol::CoordinatorEvent,
         traits::{block_contents::BlockHeader, election::Membership, metrics::NoMetrics},
@@ -3658,20 +3639,23 @@ mod test {
         update_commission, update_network_config,
     };
     use test_helpers::{
-        TestNetwork, TestNetworkConfigBuilder, catchup_test_helper, state_signature_test_helper,
-        status_test_helper, submit_test_helper, wait_for_committee,
+        TestNetwork, TestNetworkConfigBuilder, catchup_test_helper, node_storage,
+        state_signature_test_helper, status_test_helper, submit_test_helper, wait_for_committee,
     };
     use test_utils::reserve_tcp_port;
-    use tokio::time::sleep;
+    use tokio::{
+        net::{TcpListener, TcpStream},
+        time::sleep,
+    };
     use vbs::version::StaticVersion;
     use versions::{
-        DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_REWARD_VERSION, EPOCH_VERSION, LARGE_BLOCK_VERSION,
-        NEW_PROTOCOL_VERSION, Upgrade, version,
+        DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_VERSION, LARGE_BLOCK_VERSION, NEW_PROTOCOL_VERSION,
+        Upgrade,
     };
 
     use self::{
         data_source::{SequencerDataSource, testing::TestableSequencerDataSource},
-        sql::DataSource as SqlDataSource,
+        sql::postgres::DataSource as SqlDataSource,
     };
     use super::*;
 
@@ -3699,22 +3683,21 @@ mod test {
         CatchupParams, L1Params,
         api::{
             options::Query,
-            sql::{impl_testable_data_source::tmp_options, reconstruct_state},
+            sql::postgres::{impl_testable_data_source::tmp_options, reconstruct_state},
             test_helpers::STAKE_TABLE_CAPACITY_FOR_TEST,
         },
         catchup::{NullStateCatchup, StatePeers},
         follower::{FollowerContext, FollowerOptions, FollowerParams, init_follower_node},
         genesis::{Genesis as NodeGenesis, L1Finalized, StakeTableConfig},
+        legacy_chain::LegacyChain,
         persistence,
         persistence::no_storage,
+        state::EmptyStateStart,
         testing::{
             TestConfig, TestConfigBuilder, decided_leaves, wait_for_decide_on_handle,
             wait_for_epochs,
         },
     };
-
-    const POS_V3: Upgrade = Upgrade::trivial(version(0, 3));
-    const POS_V4: Upgrade = Upgrade::trivial(version(0, 4));
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_healthcheck() {
@@ -3875,6 +3858,37 @@ mod test {
         assert!(migration_status.iter().all(|m| !m.name.is_empty()));
     }
 
+    /// A namespace proof range ahead of the chain tip gives up like the other range endpoints,
+    /// instead of holding one of the server's request slots until the chain gets there.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_namespace_proof_range_ahead_of_tip_is_not_found() {
+        let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
+        let storage = SqlDataSource::create_storage().await;
+        let options = SqlDataSource::options(&storage, Options::with_port(port));
+        let config = TestNetworkConfigBuilder::default()
+            .api_config(options)
+            .network_config(TestConfigBuilder::default().build())
+            .build();
+        let _network = TestNetwork::new(config, TEST_UPGRADE).await;
+        let url = format!("http://localhost:{port}").parse().unwrap();
+        let client: Client<ClientErr, SequencerApiVersion> = Client::new(url);
+        client.connect(Some(Duration::from_secs(15))).await;
+
+        for route in [
+            "availability/block/1000000/1000005/namespace/0",
+            "v2/availability/namespace-proof-range?from=1000000&until=1000005&namespace=0",
+        ] {
+            let err = tokio::time::timeout(
+                Duration::from_secs(10),
+                client.get::<serde_json::Value>(route).send(),
+            )
+            .await
+            .unwrap_or_else(|_| panic!("{route} did not answer"))
+            .expect_err(route);
+            assert_eq!(err.status, StatusCode::NOT_FOUND, "{route}");
+        }
+    }
+
     /// Typed light client errors reach the HTTP client with their own status, not as a 500.
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_light_client_proof_errors_keep_their_status() {
@@ -3899,13 +3913,22 @@ mod test {
         .await
         .expect("network did not reach block height 2");
 
+        let past_limit =
+            hotshot_query_service::availability::Options::default().large_object_range_limit + 1;
         for (path, status) in [
             // A finalized height must be past the requested leaf.
-            ("leaf/1/1", reqwest::StatusCode::BAD_REQUEST),
+            ("leaf/1/1".to_string(), reqwest::StatusCode::BAD_REQUEST),
             // A header proof's root must be past the requested header.
-            ("header/1/1", reqwest::StatusCode::BAD_REQUEST),
+            ("header/1/1".to_string(), reqwest::StatusCode::BAD_REQUEST),
             // This 404 comes from the header proof helper, exercising `lc_error`.
-            ("header/1000001/1000000", reqwest::StatusCode::NOT_FOUND),
+            (
+                "header/1000001/1000000".to_string(),
+                reqwest::StatusCode::NOT_FOUND,
+            ),
+            (
+                format!("payload/0/{past_limit}"),
+                reqwest::StatusCode::BAD_REQUEST,
+            ),
         ] {
             let res = reqwest::get(format!("http://localhost:{port}/v1/light-client/{path}"))
                 .await
@@ -4051,13 +4074,10 @@ mod test {
         run_catchup_test("/v1").await;
     }
 
-    /// With no source of state, a node restarted from genesis still follows the network, since a
-    /// decide takes nothing it has to compute. But it cannot catch up: its first proposal has no
-    /// parent state, so it validates the next one from a `from_header` stub, which needs the
-    /// block merkle frontier from a peer, and its first decide garbage-collects everything older,
-    /// so it can't replay from genesis either. Every state it reports stays a stub.
+    /// Without HTTP state peers, a node restarted from genesis seeds a stub for its first decided
+    /// leaf and catches up over request-response at that decided view, which peers still hold.
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_restart_no_state_peers_decides_without_catchup() {
+    async fn test_restart_no_state_peers_catches_up_over_request_response() {
         let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
         const NUM_NODES: usize = 5;
         let config = TestNetworkConfigBuilder::<NUM_NODES, _, _>::with_num_nodes()
@@ -4066,13 +4086,10 @@ mod test {
             .without_api_catchup()
             .build();
         let mut network = TestNetwork::new(config, TEST_UPGRADE).await;
-        let decided =
-            restart_from_genesis_and_decide(&mut network, NullStateCatchup::default(), |_| true)
-                .await;
-        assert!(
-            decided.iter().all(|info| info.delta.is_none()),
-            "a node without state peers validated a state it had no way to rebuild"
-        );
+        restart_from_genesis_and_decide(&mut network, NullStateCatchup::default(), |info| {
+            info.delta.is_some()
+        })
+        .await;
     }
 
     /// A query node with a gap must fill it from a peer over the path production runs: the
@@ -4128,10 +4145,6 @@ mod test {
         let namespace = NamespaceId::from(7_u32);
         let mut decided = network.server.event_stream().filter_map(|event| {
             future::ready(match event {
-                CoordinatorEvent::LegacyEvent(Event {
-                    event: EventType::Decide { leaf_chain, .. },
-                    ..
-                }) => Some(leaf_chain[0].leaf.clone()),
                 CoordinatorEvent::NewDecide { leaf_infos, .. } => Some(leaf_infos[0].leaf.clone()),
                 _ => None,
             })
@@ -4212,9 +4225,13 @@ mod test {
             // the late node for the same database.
             let mut opt = tmp_options(&dbs[LATE]);
             opt.disable_proactive_fetching = true;
-            let ds = SqlDataSource::create(opt, Default::default(), false)
-                .await
-                .unwrap();
+            let ds = SqlDataSource::create(
+                persistence::sql::postgres::Options::try_from(opt).unwrap(),
+                Default::default(),
+                false,
+            )
+            .await
+            .unwrap();
             let mut tx = ds.write().await.unwrap();
             for leaf in &leaves {
                 tx.insert_leaf(leaf).await.unwrap();
@@ -4407,6 +4424,112 @@ mod test {
         drop(network);
     }
 
+    /// A coordinator that dies is not papered over: `join` returns so the node exits, and the
+    /// readers fail instead of serving the resting state as if the chain had stopped.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_dead_coordinator_is_visible() {
+        let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
+        let config = TestNetworkConfigBuilder::default()
+            .api_config(Options::with_port(port))
+            .network_config(TestConfigBuilder::default().build())
+            .build();
+        let mut network = TestNetwork::new(config, TEST_UPGRADE).await;
+        let node = &mut network.peers[0];
+        while node.decided_leaf().await.height() < 1 {
+            sleep(Duration::from_millis(100)).await;
+        }
+
+        let handle = node.consensus_handle();
+        handle.kill_coordinator();
+
+        timeout(Duration::from_secs(10), node.join())
+            .await
+            .expect("join did not return after the coordinator died");
+        let read = tokio::spawn(async move { handle.decided_leaf().await }).await;
+        assert!(
+            read.is_err_and(|err| err.is_panic()),
+            "a dead coordinator was served from the resting state"
+        );
+    }
+
+    /// After shutdown the readers serve the coordinator's last decide, not the anchor the node
+    /// started from, and the leaf and state they serve belong to the same block.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_shut_down_keeps_last_decided_leaf_and_state() {
+        const HEIGHT: u64 = 5;
+        let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
+        let config = TestNetworkConfigBuilder::default()
+            .api_config(Options::with_port(port))
+            .network_config(TestConfigBuilder::default().build())
+            .build();
+        let network = TestNetwork::new(config, TEST_UPGRADE).await;
+        let node = &network.peers[0];
+        while node.decided_leaf().await.height() < HEIGHT {
+            sleep(Duration::from_millis(100)).await;
+        }
+
+        node.shutdown_consensus().await;
+
+        let leaf = node.decided_leaf().await;
+        let state = node.decided_state().await.expect("state after shutdown");
+        assert!(
+            leaf.height() >= HEIGHT,
+            "anchor served instead of the last decide"
+        );
+        // The state at height `h` holds the commitments of the `h` headers before it.
+        assert_eq!(
+            state.block_merkle_tree.num_leaves(),
+            leaf.height(),
+            "state does not belong to the resting leaf"
+        );
+    }
+
+    /// A node shut down before it ever started consensus stays stopped: a later read serves the
+    /// anchor instead of lazily starting the coordinator after shutdown.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_shut_down_before_start_keeps_consensus_stopped() {
+        const NUM_NODES: usize = 3;
+        const LATE: usize = NUM_NODES - 1;
+        let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
+        let config = TestNetworkConfigBuilder::<NUM_NODES, _, _>::with_num_nodes()
+            .api_config(Options::with_port(port))
+            .network_config(TestConfigBuilder::default().build())
+            .deferred_start(&[LATE])
+            .build();
+        let network = TestNetwork::new(config, TEST_UPGRADE).await;
+
+        let late = network
+            .cfg
+            .init_node(
+                LATE,
+                network.genesis_state(LATE),
+                no_storage::Options,
+                Some(NullStateCatchup::default()),
+                None,
+                &NoMetrics,
+                STAKE_TABLE_CAPACITY_FOR_TEST,
+                NullEventConsumer,
+                TEST_UPGRADE,
+                network.cfg.upgrades(),
+            )
+            .await;
+        let handle = late.consensus_handle();
+
+        // No read before the shutdown: a read would lazily start consensus.
+        late.shutdown_consensus().await;
+
+        assert_eq!(late.decided_leaf().await.height(), 0, "not the anchor");
+        assert!(
+            handle.client_api().await.is_none(),
+            "a read started consensus after shutdown"
+        );
+        handle.start_consensus().await;
+        assert!(
+            handle.client_api().await.is_none(),
+            "consensus restarted after shutdown"
+        );
+    }
+
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     pub(crate) async fn test_restart() {
         const NUM_NODES: usize = 5;
@@ -4580,29 +4703,16 @@ mod test {
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_pos_rewards_basic() -> anyhow::Result<()> {
-        // Basic PoS rewards test:
-        // - Sets up a single validator and a single delegator (the node itself).
-        // - Sets the number of blocks in each epoch to 20.
-        // - Rewards begin applying from block 41 (i.e., the start of the 3rd epoch).
-        // - Since the validator is also the delegator, it receives the full reward.
-        // - Verifies that the reward at block height 60 matches the expected amount.
-        let epoch_height = 20;
+        // A single validator that is also its only delegator leads every block, so the rewards
+        // for an epoch, applied at the last block of the next one, all go to it.
+        const EPOCH_HEIGHT: u64 = 10;
+        const NUM_NODES: usize = 1;
 
         let network_config = TestConfigBuilder::default()
-            .epoch_height(epoch_height)
+            .epoch_height(EPOCH_HEIGHT)
             .build();
-
         let api_port = reserve_tcp_port().expect("OS should have ephemeral ports available");
-
-        const NUM_NODES: usize = 1;
-        // Initialize nodes.
-        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
-        let persistence: [_; NUM_NODES] = storage
-            .iter()
-            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
-            .collect::<Vec<_>>()
-            .try_into()
-            .unwrap();
+        let (storage, persistence) = node_storage::<SqlDataSource, NUM_NODES>().await;
 
         let config = TestNetworkConfigBuilder::with_num_nodes()
             .api_config(SqlDataSource::options(
@@ -4611,96 +4721,59 @@ mod test {
             ))
             .network_config(network_config.clone())
             .persistences(persistence.clone())
-            .catchups(std::array::from_fn(|_| {
-                StatePeers::<StaticVersion<0, 1>>::from_urls(
-                    vec![format!("http://localhost:{api_port}").parse().unwrap()],
-                    Default::default(),
-                    Duration::from_secs(2),
-                    &NoMetrics,
-                )
-            }))
             .pos_hook(
                 DelegationConfig::VariableAmounts,
-                Default::default(),
-                POS_V4,
+                StakeTableContractVersion::V3,
+                TEST_UPGRADE,
             )
             .await
             .unwrap()
             .build();
 
-        let network = TestNetwork::new(config, POS_V4).await;
+        let network = TestNetwork::new(config, TEST_UPGRADE).await;
         let client: Client<ClientErr, SequencerApiVersion> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
 
-        // first two epochs will be 1 and 2
-        // rewards are distributed starting third epoch
-        // third epoch starts from block 40 as epoch height is 20
-        // wait for atleast 65 blocks
-        let _blocks = client
-            .socket("availability/stream/blocks/0")
-            .subscribe::<BlockQueryData<SeqTypes>>()
-            .await
-            .unwrap()
-            .take(65)
-            .try_collect::<Vec<_>>()
-            .await
-            .unwrap();
+        // The first rewards are for epoch 3, applied at the last block of epoch 4.
+        let first_boundary = 4 * EPOCH_HEIGHT;
+        wait_until_block_height(&client, "reward-state-v2/block-height", first_boundary).await;
 
-        let staking_priv_keys = network_config.staking_priv_keys();
-        let account = staking_priv_keys[0].signer.clone();
-        let address = account.address();
+        let address = network_config.staking_priv_keys()[0].signer.address();
+        let block_reward = network
+            .server
+            .node_state()
+            .coordinator
+            .membership()
+            .epoch_block_reward(3.into())
+            .expect("block reward is not None");
 
-        let block_height = 60;
-
-        let node_state = network.server.node_state();
-        let membership = node_state.coordinator.membership();
-        let expected_amount = U256::from(20)
-            * (membership
-                .epoch_block_reward(3.into())
-                .expect("block reward is not None"))
-            .0;
-
-        // get the validator address balance at block height 60
-        let amount = client
-            .get::<Option<RewardAmount>>(&format!(
-                "reward-state/reward-balance/{block_height}/{address}"
-            ))
-            .send()
-            .await
-            .unwrap()
-            .unwrap();
-
-        tracing::info!("amount={amount:?}");
-
-        assert_eq!(amount.0, expected_amount, "reward amount don't match");
+        assert_eq!(
+            reward_balance(&client, first_boundary - EPOCH_HEIGHT, address).await,
+            U256::ZERO,
+            "rewards before the first boundary"
+        );
+        assert_eq!(
+            reward_balance(&client, first_boundary, address).await,
+            U256::from(EPOCH_HEIGHT) * block_reward.0,
+            "reward amount don't match"
+        );
 
         Ok(())
     }
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_cumulative_pos_rewards() -> anyhow::Result<()> {
-        // This test registers 5 validators and multiple delegators for each validator.
-        // One of the delegators is also a validator.
-        // The test verifies that the cumulative reward at each block height equals
-        // the total block reward, which is a constant.
-
-        let epoch_height = 20;
+        // Five validators with several delegators each, one of which is also a validator. Across
+        // every account, the balances grow only at an epoch's last block, and there by exactly
+        // the previous epoch's total: its block reward for each of its blocks.
+        const EPOCH_HEIGHT: u64 = 10;
+        const NUM_NODES: usize = 5;
 
         let network_config = TestConfigBuilder::default()
-            .epoch_height(epoch_height)
+            .epoch_height(EPOCH_HEIGHT)
             .build();
-
         let api_port = reserve_tcp_port().expect("OS should have ephemeral ports available");
-
-        const NUM_NODES: usize = 5;
-        // Initialize nodes.
-        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
-        let persistence: [_; NUM_NODES] = storage
-            .iter()
-            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
-            .collect::<Vec<_>>()
-            .try_into()
-            .unwrap();
+        let (storage, persistence) = node_storage::<SqlDataSource, NUM_NODES>().await;
 
         let config = TestNetworkConfigBuilder::with_num_nodes()
             .api_config(SqlDataSource::options(
@@ -4709,96 +4782,140 @@ mod test {
             ))
             .network_config(network_config)
             .persistences(persistence.clone())
-            .catchups(std::array::from_fn(|_| {
-                StatePeers::<StaticVersion<0, 1>>::from_urls(
-                    vec![format!("http://localhost:{api_port}").parse().unwrap()],
-                    Default::default(),
-                    Duration::from_secs(2),
-                    &NoMetrics,
-                )
-            }))
-            .pos_hook(
-                DelegationConfig::MultipleDelegators,
-                Default::default(),
-                POS_V4,
-            )
-            .await
-            .unwrap()
             .build();
 
-        let network = TestNetwork::new(config, POS_V4).await;
+        let network = TestNetwork::new(config, TEST_UPGRADE).await;
         let node_state = network.server.node_state();
+        let membership = node_state.coordinator.membership();
         let client: Client<ClientErr, SequencerApiVersion> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
 
-        // wait for atleast 75 blocks
-        let _blocks = client
-            .socket("availability/stream/blocks/0")
-            .subscribe::<BlockQueryData<SeqTypes>>()
-            .await
-            .unwrap()
-            .take(75)
-            .try_collect::<Vec<_>>()
-            .await
-            .unwrap();
+        // The boundaries that apply the rewards for epochs 3 and 4.
+        let boundaries = [4 * EPOCH_HEIGHT, 5 * EPOCH_HEIGHT];
+        wait_until_block_height(&client, "reward-state-v2/block-height", boundaries[1]).await;
+        let addresses = reward_addresses(&client, [3, 4]).await;
 
-        // We are going to check cumulative blocks from block height 40 to 67
-        // Basically epoch 3 and epoch 4 as epoch height is 20
-        // get all the validators
-        let validators = client
-            .get::<AuthenticatedValidatorMap>("node/validators/3")
-            .send()
-            .await
-            .expect("failed to get validator");
-
-        // insert all the address in a map
-        // We will query the reward-balance at each block height for all the addresses
-        // We don't know which validator was the leader because we don't have access to Membership
-        let mut addresses = HashSet::new();
-        for v in validators.values() {
-            addresses.insert(v.account);
-            addresses.extend(v.clone().delegators.keys().collect::<Vec<_>>());
-        }
-        // get all the validators
-        let validators = client
-            .get::<AuthenticatedValidatorMap>("node/validators/4")
-            .send()
-            .await
-            .expect("failed to get validator");
-        for v in validators.values() {
-            addresses.insert(v.account);
-            addresses.extend(v.clone().delegators.keys().collect::<Vec<_>>());
+        let mut prev_total = U256::ZERO;
+        for height in [3 * EPOCH_HEIGHT].into_iter().chain(boundaries) {
+            let mut total = U256::ZERO;
+            for address in &addresses {
+                total += reward_balance(&client, height, *address).await;
+            }
+            let epoch = epoch_from_block_number(height, EPOCH_HEIGHT);
+            let expected = if epoch <= 3 {
+                U256::ZERO
+            } else {
+                let block_reward = membership
+                    .epoch_block_reward((epoch - 1).into())
+                    .expect("block reward is not None");
+                U256::from(EPOCH_HEIGHT) * block_reward.0
+            };
+            assert_eq!(total - prev_total, expected, "rewards applied at {height}");
+            prev_total = total;
         }
 
-        let mut prev_cumulative_amount = U256::ZERO;
-        // Check Cumulative rewards for epochs 3 (= block height 41 to 59) & 4 (= block height 60 to 67)
-        for block in 41..=67 {
-            let membership = node_state.coordinator.membership();
-            let block_reward = membership
-                .epoch_block_reward(epoch_from_block_number(block, epoch_height).into())
-                .expect("block reward is not None");
+        Ok(())
+    }
 
-            let mut cumulative_amount = U256::ZERO;
-            for address in addresses.clone() {
-                let amount = client
-                    .get::<Option<RewardAmount>>(&format!(
-                        "reward-state/reward-balance/{block}/{address}"
-                    ))
-                    .send()
-                    .await
-                    .ok()
-                    .flatten();
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_epoch_rewards_per_account() -> anyhow::Result<()> {
+        // Every account's balance matches the epoch's rewards computed from the leader counts
+        // in the header of the epoch's last block: each leader gets its count times the block
+        // reward, split between its commission and its delegators by stake. Also checks that
+        // each validator's delegations sum to its stake, that the commission is within rounding
+        // of its rate, and that the header totals what was distributed.
+        const EPOCH_HEIGHT: u64 = 10;
+        const NUM_NODES: usize = 5;
 
-                if let Some(amount) = amount {
-                    tracing::info!("address={address}, amount={amount}");
-                    cumulative_amount += amount.0;
-                };
+        let network_config = TestConfigBuilder::default()
+            .epoch_height(EPOCH_HEIGHT)
+            .build();
+        let api_port = reserve_tcp_port().expect("OS should have ephemeral ports available");
+        let (storage, persistence) = node_storage::<SqlDataSource, NUM_NODES>().await;
+
+        let config = TestNetworkConfigBuilder::with_num_nodes()
+            .api_config(SqlDataSource::options(
+                &storage[0],
+                Options::with_port(api_port),
+            ))
+            .network_config(network_config)
+            .persistences(persistence.clone())
+            .build();
+
+        let network = TestNetwork::new(config, TEST_UPGRADE).await;
+        let coordinator = network.server.node_state().coordinator;
+        let client: Client<ClientErr, SequencerApiVersion> =
+            Client::new(format!("http://localhost:{api_port}").parse().unwrap());
+
+        wait_until_block_height(&client, "reward-state-v2/block-height", 5 * EPOCH_HEIGHT).await;
+
+        let mut expected = HashMap::<Address, U256>::new();
+        let mut total_distributed = U256::ZERO;
+        for epoch in [3, 4] {
+            let header: Header = client
+                .get(&format!("availability/header/{}", epoch * EPOCH_HEIGHT))
+                .send()
+                .await?;
+            let leader_counts = *header
+                .leader_counts()
+                .expect("V6 header must have leader_counts");
+            let snapshot = coordinator
+                .membership()
+                .snapshot(epoch.into())
+                .expect("snapshot");
+            let block_reward = snapshot.epoch_block_reward().expect("block reward");
+
+            for (validator, count) in
+                ValidatorLeaderCounts::new(&snapshot, leader_counts)?.active_leaders()
+            {
+                let delegator_stake_sum: U256 = validator.delegators.values().cloned().sum();
+                assert_eq!(delegator_stake_sum, validator.stake);
+
+                let validator_reward = block_reward.0 * U256::from(count);
+                let computed = RewardDistributor::new(
+                    validator.clone(),
+                    RewardAmount(validator_reward),
+                    Default::default(),
+                )
+                .compute_rewards()?;
+
+                let calculated_commission = U256::from(validator.commission)
+                    .checked_mul(validator_reward)
+                    .context("overflow")?
+                    .checked_div(U256::from(COMMISSION_BASIS_POINTS))
+                    .context("overflow")?;
+                assert!(
+                    computed.leader_commission().0 - calculated_commission <= U256::from(10_u64),
+                    "commission of {} is off by more than rounding",
+                    validator.account
+                );
+
+                for (address, amount) in computed.all_rewards() {
+                    *expected.entry(address).or_default() += amount.0;
+                }
+                total_distributed += validator_reward;
             }
 
-            // assert cumulative reward is equal to block reward
-            assert_eq!(cumulative_amount - prev_cumulative_amount, block_reward.0);
-            tracing::info!("cumulative_amount is correct for block={block}");
-            prev_cumulative_amount = cumulative_amount;
+            let boundary = (epoch + 1) * EPOCH_HEIGHT;
+            for (address, amount) in &expected {
+                let balance = client
+                    .get::<Option<RewardAmount>>(&format!(
+                        "reward-state-v2/reward-balance/{boundary}/{address}"
+                    ))
+                    .send()
+                    .await?
+                    .unwrap_or_else(|| panic!("no reward for {address} at {boundary}"));
+                assert_eq!(balance.0, *amount, "reward of {address} at {boundary}");
+            }
+            let boundary_header: Header = client
+                .get(&format!("availability/header/{boundary}"))
+                .send()
+                .await?;
+            assert_eq!(
+                boundary_header.total_reward_distributed().unwrap().0,
+                total_distributed,
+                "total distributed at {boundary}"
+            );
         }
 
         Ok(())
@@ -4819,13 +4936,7 @@ mod test {
 
         const NUM_NODES: usize = 5;
         // Initialize nodes.
-        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
-        let persistence: [_; NUM_NODES] = storage
-            .iter()
-            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
-            .collect::<Vec<_>>()
-            .try_into()
-            .unwrap();
+        let (storage, persistence) = node_storage::<SqlDataSource, NUM_NODES>().await;
 
         let l1_url = network_config.l1_url();
         let config = TestNetworkConfigBuilder::with_num_nodes()
@@ -4835,24 +4946,9 @@ mod test {
             ))
             .network_config(network_config)
             .persistences(persistence.clone())
-            .catchups(std::array::from_fn(|_| {
-                StatePeers::<StaticVersion<0, 1>>::from_urls(
-                    vec![format!("http://localhost:{api_port}").parse().unwrap()],
-                    Default::default(),
-                    Duration::from_secs(2),
-                    &NoMetrics,
-                )
-            }))
-            .pos_hook(
-                DelegationConfig::MultipleDelegators,
-                Default::default(),
-                POS_V3,
-            )
-            .await
-            .unwrap()
             .build();
 
-        let network = TestNetwork::new(config, POS_V3).await;
+        let network = TestNetwork::new(config, TEST_UPGRADE).await;
 
         let mut prev_st = None;
         let state = network.server.decided_state().await.unwrap();
@@ -4917,274 +5013,264 @@ mod test {
         Ok(())
     }
 
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_rewards_v4() -> anyhow::Result<()> {
-        // This test verifies PoS reward distribution logic for multiple delegators per validator.
-        //
-        //  assertions:
-        // - No rewards are distributed during the first 2 epochs.
-        // - Rewards begin from epoch 3 onward.
-        // - Delegator stake sums match the corresponding validator stake.
-        // - Reward values match those returned by the reward state API.
-        // - Commission calculations are within a small acceptable rounding tolerance.
-        // - Ensure that the `total_reward_distributed` field in the block header matches the total block reward distributed
-        const EPOCH_HEIGHT: u64 = 20;
-
-        let network_config = TestConfigBuilder::default()
-            .epoch_height(EPOCH_HEIGHT)
-            .build();
-
-        let api_port = reserve_tcp_port().expect("OS should have ephemeral ports available");
-
-        const NUM_NODES: usize = 5;
-
-        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
-        let persistence: [_; NUM_NODES] = storage
-            .iter()
-            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
-            .collect::<Vec<_>>()
-            .try_into()
-            .unwrap();
-
-        let config = TestNetworkConfigBuilder::with_num_nodes()
-            .api_config(SqlDataSource::options(
-                &storage[0],
-                Options::with_port(api_port),
-            ))
-            .network_config(network_config)
-            .persistences(persistence.clone())
-            .catchups(std::array::from_fn(|_| {
-                StatePeers::<StaticVersion<0, 1>>::from_urls(
-                    vec![format!("http://localhost:{api_port}").parse().unwrap()],
-                    Default::default(),
-                    Duration::from_secs(2),
-                    &NoMetrics,
-                )
-            }))
-            .pos_hook(
-                DelegationConfig::MultipleDelegators,
-                Default::default(),
-                POS_V4,
-            )
-            .await
-            .unwrap()
-            .build();
-
-        let network = TestNetwork::new(config, POS_V4).await;
-        let client: Client<ClientErr, SequencerApiVersion> =
-            Client::new(format!("http://localhost:{api_port}").parse().unwrap());
-
-        // Wait for the chain to progress beyond epoch 3 so rewards start being distributed.
-        let mut events = network.peers[0].event_stream();
-        while let Some(event) = events.next().await {
-            if let Some(leaf_chain) = decided_leaves(&event) {
-                let height = leaf_chain[0].leaf.height();
-                tracing::info!("Node 0 decided at height: {height}");
-                if height > EPOCH_HEIGHT * 3 {
-                    break;
-                }
+    /// Every validator account and delegator registered in these epochs.
+    async fn reward_addresses(
+        client: &Client<ClientErr, SequencerApiVersion>,
+        epochs: impl IntoIterator<Item = u64>,
+    ) -> HashSet<Address> {
+        let mut addresses = HashSet::new();
+        for epoch in epochs {
+            let validators = client
+                .get::<AuthenticatedValidatorMap>(&format!("node/validators/{epoch}"))
+                .send()
+                .await
+                .expect("failed to get validators");
+            for v in validators.values() {
+                addresses.insert(v.account);
+                addresses.extend(v.delegators.keys());
             }
         }
+        addresses
+    }
 
-        // Verify that there are no validators for epoch # 1 and epoch # 2
-        {
-            client
-                .get::<AuthenticatedValidatorMap>("node/validators/1")
-                .send()
-                .await
-                .unwrap()
-                .is_empty();
-
-            client
-                .get::<AuthenticatedValidatorMap>("node/validators/2")
-                .send()
-                .await
-                .unwrap()
-                .is_empty();
-        }
-
-        // Get the epoch # 3 validators
-        let validators = client
-            .get::<AuthenticatedValidatorMap>("node/validators/3")
+    /// The node stores reward proofs only for the accounts in the tree, so an account without
+    /// rewards at `height` is a 404 rather than a zero balance.
+    async fn reward_balance(
+        client: &Client<ClientErr, SequencerApiVersion>,
+        height: u64,
+        address: Address,
+    ) -> U256 {
+        match client
+            .get::<RewardAmount>(&format!(
+                "reward-state-v2/reward-balance/{height}/{address}"
+            ))
             .send()
             .await
-            .expect("validators");
-
-        assert!(!validators.is_empty());
-
-        // Collect addresses to track rewards for all participants.
-        let mut addresses = HashSet::new();
-        for v in validators.values() {
-            addresses.insert(v.account);
-            addresses.extend(v.clone().delegators.keys().collect::<Vec<_>>());
+        {
+            Ok(amount) => amount.0,
+            Err(err) if err.status == StatusCode::NOT_FOUND => U256::ZERO,
+            Err(err) => panic!("reward balance of {address} at {height}: {err}"),
         }
+    }
 
-        let mut leaves = client
-            .socket("availability/stream/leaves/0")
-            .subscribe::<LeafQueryData<SeqTypes>>()
-            .await
-            .unwrap();
-
-        let node_state = network.server.node_state();
-        let coordinator = node_state.coordinator;
-
+    /// From 0.3 to 0.5 every block paid its leader's commission and delegators, which only legacy
+    /// consensus produced; the v4 chain's commissions change in epoch 2.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_legacy_block_rewards() -> anyhow::Result<()> {
+        let chain = LegacyChain::load("v4")?;
+        let replay = chain.replay().await?;
+        let client = &replay.client;
+        let epoch_height = chain.epoch_height();
+        let coordinator = replay.node.node_state().coordinator;
         let membership = coordinator.membership();
 
-        // Ensure rewards remain zero up for the first two epochs
-        while let Some(leaf) = leaves.next().await {
-            let leaf = leaf.unwrap();
-            let header = leaf.header();
-            assert_eq!(header.total_reward_distributed().unwrap().0, U256::ZERO);
-
-            let epoch_number =
-                EpochNumber::new(epoch_from_block_number(leaf.height(), EPOCH_HEIGHT));
-
-            assert!(membership.epoch_block_reward(epoch_number).is_none());
-
-            let height = header.height();
-            for address in addresses.clone() {
-                let amount = client
-                    .get::<Option<RewardAmount>>(&format!(
-                        "reward-state-v2/reward-balance/{height}/{address}"
-                    ))
-                    .send()
-                    .await
-                    .ok()
-                    .flatten();
-                assert!(amount.is_none(), "amount is not none for block {height}")
-            }
-
-            if leaf.height() == EPOCH_HEIGHT * 2 {
-                break;
-            }
-        }
-
-        let mut rewards_map = HashMap::new();
+        let mut expected = HashMap::<Address, U256>::new();
         let mut total_distributed = U256::ZERO;
-        let mut epoch_rewards = HashMap::<EpochNumber, U256>::new();
+        let mut validators_by_epoch = HashMap::<u64, AuthenticatedValidatorMap>::new();
+        let mut paid_commissions = HashMap::<Address, HashSet<u16>>::new();
+        for recorded in &chain.blocks[1..] {
+            let leaf = recorded.leaf.leaf();
+            let header = leaf.block_header();
+            let height = header.height();
+            let epoch = EpochNumber::new(epoch_from_block_number(height, epoch_height));
+            if let std::collections::hash_map::Entry::Vacant(entry) =
+                validators_by_epoch.entry(*epoch)
+            {
+                entry.insert(
+                    client
+                        .get(&format!("node/validators/{epoch}"))
+                        .send()
+                        .await?,
+                );
+            }
+            let validators = &validators_by_epoch[&*epoch];
 
-        while let Some(leaf) = leaves.next().await {
-            let leaf = leaf.unwrap();
+            match membership.epoch_block_reward(epoch) {
+                None => ensure!(*epoch <= 2, "epoch {epoch} pays no block reward"),
+                Some(block_reward) => {
+                    let snapshot = membership.snapshot(epoch).context("snapshot")?;
+                    let leader = snapshot.leader(leaf.view_number()).expect("leader");
+                    let account = snapshot
+                        .validator_config(&leader)
+                        .expect("leader config")
+                        .account;
+                    let leader = validators.get(&account).context("leader not found")?;
+                    pay_block_reward(
+                        &mut expected,
+                        leader,
+                        block_reward,
+                        RewardAmount(total_distributed),
+                    )?;
+                    total_distributed += block_reward.0;
+                    paid_commissions
+                        .entry(account)
+                        .or_default()
+                        .insert(leader.commission);
+                },
+            }
+            ensure!(
+                header.total_reward_distributed().unwrap().0 == total_distributed,
+                "total_reward_distributed at {height}"
+            );
+            assert_stakers_balances(client, height, validators, &expected).await?;
+        }
+        ensure!(!total_distributed.is_zero(), "the chain paid no rewards");
+        ensure!(
+            paid_commissions.values().any(|seen| seen.len() > 1),
+            "no leader was paid at two different commissions"
+        );
+        Ok(())
+    }
 
-            let header = leaf.header();
-            let distributed = header
-                .total_reward_distributed()
-                .expect("rewards distributed is none");
+    /// Adds what one block pays `leader`'s commission and delegators to `balances`.
+    /// `distributed_before` is the chain's total before this block, as the parent header has it.
+    fn pay_block_reward(
+        balances: &mut HashMap<Address, U256>,
+        leader: &AuthenticatedValidator<PubKey>,
+        block_reward: RewardAmount,
+        distributed_before: RewardAmount,
+    ) -> anyhow::Result<()> {
+        let delegated: U256 = leader.delegators.values().cloned().sum();
+        ensure!(delegated == leader.stake, "delegations add up to the stake");
 
-            let block = leaf.height();
-            tracing::info!("verify rewards for block={block:?}");
-            let membership = coordinator.membership();
-            let epoch_number =
-                EpochNumber::new(epoch_from_block_number(leaf.height(), EPOCH_HEIGHT));
+        let rewards = RewardDistributor::new(leader.clone(), block_reward, distributed_before)
+            .compute_rewards()?;
+        let commission =
+            U256::from(leader.commission) * block_reward.0 / U256::from(COMMISSION_BASIS_POINTS);
+        // The leader also gets what flooring each delegator's share left over.
+        ensure!(
+            rewards.leader_commission().0 - commission <= U256::from(leader.delegators.len()),
+            "commission {} is not {commission}",
+            rewards.leader_commission().0
+        );
 
-            let snapshot = membership.snapshot(epoch_number).expect("snapshot");
-            let block_reward = snapshot.epoch_block_reward().unwrap();
-            let leader = snapshot.leader(leaf.leaf().view_number()).expect("leader");
-            let leader_eth_address = snapshot
-                .validator_config(&leader)
-                .expect("validator config")
-                .account;
+        for (address, amount) in rewards.delegators().clone() {
+            *balances.entry(address).or_default() += amount.0;
+        }
+        *balances.entry(leader.account).or_default() += rewards.leader_commission().0;
+        Ok(())
+    }
 
-            let validators = client
-                .get::<AuthenticatedValidatorMap>(&format!("node/validators/{epoch_number}"))
+    /// Checks every validator's and delegator's balance in the v2 reward tree at `height`.
+    async fn assert_stakers_balances(
+        client: &Client<ClientErr, SequencerApiVersion>,
+        height: u64,
+        validators: &AuthenticatedValidatorMap,
+        expected: &HashMap<Address, U256>,
+    ) -> anyhow::Result<()> {
+        let stakers = validators
+            .values()
+            .flat_map(|v| v.delegators.keys().copied().chain([v.account]))
+            .chain(expected.keys().copied())
+            .collect::<HashSet<_>>();
+        for staker in stakers {
+            let balance = match client
+                .get::<RewardAmount>(&format!("reward-state-v2/reward-balance/{height}/{staker}"))
                 .send()
                 .await
-                .expect("validators");
-
-            let leader_validator = validators
-                .get(&leader_eth_address)
-                .expect("leader not found");
-
-            let distributor =
-                RewardDistributor::new(leader_validator.clone(), block_reward, distributed);
-            // Verify that the sum of delegator stakes equals the validator's total stake.
-            for validator in validators.values() {
-                let delegator_stake_sum: U256 = validator.delegators.values().cloned().sum();
-
-                assert_eq!(delegator_stake_sum, validator.stake);
-            }
-
-            let computed_rewards = distributor.compute_rewards().expect("reward computation");
-
-            // Validate that the leader's commission is within a 10 wei tolerance of the expected value.
-            let total_reward = block_reward.0;
-            let leader_commission_basis_points = U256::from(leader_validator.commission);
-            let calculated_leader_commission_reward = leader_commission_basis_points
-                .checked_mul(total_reward)
-                .context("overflow")?
-                .checked_div(U256::from(COMMISSION_BASIS_POINTS))
-                .context("overflow")?;
-
-            assert!(
-                computed_rewards.leader_commission().0 - calculated_leader_commission_reward
-                    <= U256::from(10_u64)
+            {
+                Ok(amount) => Some(amount.0),
+                // Not in the tree yet.
+                Err(err) if err.status == StatusCode::NOT_FOUND => None,
+                Err(err) => bail!("reward balance of {staker} at {height}: {err}"),
+            };
+            ensure!(
+                balance == expected.get(&staker).copied(),
+                "balance of {staker} at {height}: {balance:?}, expected {:?}",
+                expected.get(&staker)
             );
+        }
+        Ok(())
+    }
 
-            // Aggregate rewards by address (both delegator and leader).
-            let leader_commission = *computed_rewards.leader_commission();
-            for (address, amount) in computed_rewards.delegators().clone() {
-                rewards_map
-                    .entry(address)
-                    .and_modify(|entry| *entry += amount)
-                    .or_insert(amount);
+    /// Stakers claim rewards earned before 0.5 with proofs against those blocks' v2 reward roots.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_legacy_reward_queries() -> anyhow::Result<()> {
+        let chain = LegacyChain::load("v4")?;
+        let replay = chain.replay().await?;
+        let client = &replay.client;
+        let tip = chain.tip();
+        let root = chain
+            .blocks
+            .last()
+            .unwrap()
+            .leaf
+            .header()
+            .reward_merkle_tree_root();
+        let root = root
+            .right()
+            .context("v4 headers commit to the v2 reward tree")?;
+
+        let stakers = all_stakers(client, &chain).await?;
+        let mut balances = vec![];
+        for staker in stakers {
+            let res: RewardAccountQueryDataV2 = client
+                .get(&format!("reward-state-v2/proof/{tip}/{staker}"))
+                .send()
+                .await?;
+            ensure!(res.proof.verify(&root)? == res.balance, "proof of {staker}");
+            if res.balance.is_zero() {
+                continue;
             }
-
-            // add leader commission reward
-            rewards_map
-                .entry(leader_eth_address)
-                .and_modify(|entry| *entry += leader_commission)
-                .or_insert(leader_commission);
-
-            // assert that the reward matches to what is in the reward merkle tree
-            for (address, calculated_amount) in rewards_map.iter() {
-                let mut attempt = 0;
-                let amount_from_api = loop {
-                    let result = client
-                        .get::<Option<RewardAmount>>(&format!(
-                            "reward-state-v2/reward-balance/{block}/{address}"
-                        ))
-                        .send()
-                        .await
-                        .ok()
-                        .flatten();
-
-                    if let Some(amount) = result {
-                        break amount;
-                    }
-
-                    attempt += 1;
-                    if attempt >= 3 {
-                        panic!(
-                            "Failed to fetch reward amount for address {address} after 3 retries"
-                        );
-                    }
-
-                    sleep(Duration::from_secs(2)).await;
-                };
-
-                assert_eq!(amount_from_api, *calculated_amount);
-            }
-
-            // Confirm the header's total distributed field matches the cumulative expected amount.
-            total_distributed += block_reward.0;
-            assert_eq!(
-                header.total_reward_distributed().unwrap().0,
-                total_distributed
+            let claim: RewardClaimInput = client
+                .get(&format!(
+                    "reward-state-v2/reward-claim-input/{tip}/{staker}"
+                ))
+                .send()
+                .await?;
+            ensure!(
+                claim.lifetime_rewards == res.balance,
+                "claim of {staker} pays its proven balance"
             );
+            // The contract rebuilds the root from these siblings, so they must be the proof's.
+            let siblings: RewardProofSiblings = res.proof.clone().try_into()?;
+            ensure!(
+                RewardAuthData::try_from(claim.auth_data)? == RewardAuthData::new(siblings),
+                "claim of {staker} carries its proof"
+            );
+            balances.push((RewardAccountV2(staker), RewardAmount(res.balance)));
+        }
+        ensure!(!balances.is_empty(), "the chain paid no rewards");
 
-            // Block reward shouldn't change for the same epoch
-            epoch_rewards
-                .entry(epoch_number)
-                .and_modify(|r| assert_eq!(*r, block_reward.0))
-                .or_insert(block_reward.0);
+        balances.sort_by_key(|(account, _)| std::cmp::Reverse(*account));
+        let page: Vec<(RewardAccountV2, RewardAmount)> = client
+            .get(&format!("reward-state-v2/reward-amounts/{tip}/0/10000"))
+            .send()
+            .await?;
+        ensure!(page == balances, "reward page {page:?}");
 
-            // Stop the test after verifying 5 full epochs.
-            if leaf.height() == EPOCH_HEIGHT * 5 {
-                break;
+        let coordinator = replay.node.node_state().coordinator;
+        for epoch in 3..=chain.last_epoch() {
+            let reward: Option<RewardAmount> = client
+                .get(&format!("node/block-reward/epoch/{epoch}"))
+                .send()
+                .await?;
+            let expected = coordinator
+                .membership()
+                .epoch_block_reward(EpochNumber::new(epoch));
+            ensure!(reward == expected, "block reward of epoch {epoch}");
+        }
+        Ok(())
+    }
+
+    /// Every validator and delegator of every epoch of `chain`.
+    async fn all_stakers(
+        client: &Client<ClientErr, SequencerApiVersion>,
+        chain: &LegacyChain,
+    ) -> anyhow::Result<HashSet<Address>> {
+        let last_epoch = chain.last_epoch();
+        let mut stakers = HashSet::new();
+        for epoch in 1..=last_epoch {
+            let validators: AuthenticatedValidatorMap = client
+                .get(&format!("node/validators/{epoch}"))
+                .send()
+                .await?;
+            for v in validators.values() {
+                stakers.insert(v.account);
+                stakers.extend(v.delegators.keys());
             }
         }
-
-        Ok(())
+        Ok(stakers)
     }
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
@@ -5192,21 +5278,13 @@ mod test {
         const EPOCH_HEIGHT: u64 = 10;
         const NUM_NODES: usize = 5;
 
-        const V5: Upgrade = Upgrade::trivial(EPOCH_REWARD_VERSION);
-
         let network_config = TestConfigBuilder::default()
             .epoch_height(EPOCH_HEIGHT)
             .build();
 
         let api_port = reserve_tcp_port().expect("No ports free for query service");
 
-        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
-        let persistence: [_; NUM_NODES] = storage
-            .iter()
-            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
-            .collect::<Vec<_>>()
-            .try_into()
-            .unwrap();
+        let (storage, persistence) = node_storage::<SqlDataSource, NUM_NODES>().await;
 
         let config = TestNetworkConfigBuilder::with_num_nodes()
             .api_config(SqlDataSource::options(
@@ -5215,20 +5293,9 @@ mod test {
             ))
             .network_config(network_config)
             .persistences(persistence.clone())
-            .catchups(std::array::from_fn(|_| {
-                StatePeers::<StaticVersion<0, 1>>::from_urls(
-                    vec![format!("http://localhost:{api_port}").parse().unwrap()],
-                    Default::default(),
-                    Duration::from_secs(2),
-                    &NoMetrics,
-                )
-            }))
-            .pos_hook(DelegationConfig::MultipleDelegators, Default::default(), V5)
-            .await
-            .unwrap()
             .build();
 
-        let _network = TestNetwork::new(config, V5).await;
+        let _network = TestNetwork::new(config, TEST_UPGRADE).await;
         let client: Client<ClientErr, SequencerApiVersion> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
 
@@ -5296,8 +5363,6 @@ mod test {
         const NUM_NODES: usize = 5;
         const TARGET_BLOCK_HEIGHT: u64 = 100;
 
-        const NEW_PROTOCOL: Upgrade = Upgrade::trivial(NEW_PROTOCOL_VERSION);
-
         let network_config = TestConfigBuilder::default()
             .epoch_height(EPOCH_HEIGHT)
             .epoch_start_block(0)
@@ -5305,13 +5370,7 @@ mod test {
 
         let api_port = reserve_tcp_port().expect("No ports free for query service");
 
-        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
-        let persistence: [_; NUM_NODES] = storage
-            .iter()
-            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
-            .collect::<Vec<_>>()
-            .try_into()
-            .unwrap();
+        let (storage, persistence) = node_storage::<SqlDataSource, NUM_NODES>().await;
 
         let config = TestNetworkConfigBuilder::<NUM_NODES, _, _>::with_num_nodes()
             .api_config(SqlDataSource::options(
@@ -5320,24 +5379,9 @@ mod test {
             ))
             .network_config(network_config)
             .persistences(persistence)
-            .catchups(std::array::from_fn(|_| {
-                StatePeers::<SequencerApiVersion>::from_urls(
-                    vec![format!("http://localhost:{api_port}").parse().unwrap()],
-                    Default::default(),
-                    Duration::from_secs(2),
-                    &NoMetrics,
-                )
-            }))
-            .pos_hook(
-                DelegationConfig::MultipleDelegators,
-                StakeTableContractVersion::V3,
-                NEW_PROTOCOL,
-            )
-            .await
-            .unwrap()
             .build();
 
-        let _network = TestNetwork::new(config, NEW_PROTOCOL).await;
+        let _network = TestNetwork::new(config, TEST_UPGRADE).await;
 
         let client: Client<ClientErr, SequencerApiVersion> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
@@ -5423,13 +5467,7 @@ mod test {
             ..Default::default()
         };
 
-        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
-        let persistence: [_; NUM_NODES] = storage
-            .iter()
-            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
-            .collect::<Vec<_>>()
-            .try_into()
-            .unwrap();
+        let (storage, persistence) = node_storage::<SqlDataSource, NUM_NODES>().await;
 
         let config = TestNetworkConfigBuilder::<NUM_NODES, _, _>::with_num_nodes()
             .api_config(SqlDataSource::options(
@@ -5518,103 +5556,6 @@ mod test {
         Ok(())
     }
 
-    /// Run entirely without the legacy consensus stack: with base version
-    /// `NEW_PROTOCOL_VERSION` it is torn down at startup, and the explicit
-    /// mid-run `shut_down_legacy` calls below must be harmless to repeat.
-    /// The network has to keep deciding across epoch boundaries: DRB
-    /// computations on the shared membership coordinator must survive the
-    /// teardown.
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_new_protocol_survives_legacy_shutdown() -> anyhow::Result<()> {
-        const EPOCH_HEIGHT: u64 = 20;
-        const NUM_NODES: usize = 5;
-        const SHUTDOWN_HEIGHT: u64 = 10;
-        const TARGET_BLOCK_HEIGHT: u64 = 50;
-
-        const NEW_PROTOCOL: Upgrade = Upgrade::trivial(NEW_PROTOCOL_VERSION);
-
-        let network_config = TestConfigBuilder::default()
-            .epoch_height(EPOCH_HEIGHT)
-            .epoch_start_block(0)
-            .build();
-
-        let api_port = reserve_tcp_port().expect("No ports free for query service");
-
-        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
-        let persistence: [_; NUM_NODES] = storage
-            .iter()
-            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
-            .collect::<Vec<_>>()
-            .try_into()
-            .unwrap();
-
-        let config = TestNetworkConfigBuilder::<NUM_NODES, _, _>::with_num_nodes()
-            .api_config(SqlDataSource::options(
-                &storage[0],
-                Options::with_port(api_port),
-            ))
-            .network_config(network_config)
-            .persistences(persistence)
-            .catchups(std::array::from_fn(|_| {
-                StatePeers::<SequencerApiVersion>::from_urls(
-                    vec![format!("http://localhost:{api_port}").parse().unwrap()],
-                    Default::default(),
-                    Duration::from_secs(2),
-                    &NoMetrics,
-                )
-            }))
-            .pos_hook(
-                DelegationConfig::MultipleDelegators,
-                StakeTableContractVersion::V3,
-                NEW_PROTOCOL,
-            )
-            .await
-            .unwrap()
-            .build();
-
-        let network = TestNetwork::new(config, NEW_PROTOCOL).await;
-
-        let client: Client<ClientErr, SequencerApiVersion> =
-            Client::new(format!("http://localhost:{api_port}").parse().unwrap());
-        client.connect(Some(Duration::from_secs(30))).await;
-
-        let mut leaves = client
-            .socket("availability/stream/leaves/0")
-            .subscribe::<LeafQueryData<SeqTypes>>()
-            .await
-            .expect("subscribe to leaf stream");
-
-        // Let the new protocol decide a few blocks first.
-        let mut height = 0;
-        while height < SHUTDOWN_HEIGHT {
-            let leaf = leaves
-                .next()
-                .await
-                .expect("leaf stream ended early")
-                .expect("leaf stream yielded an error");
-            height = leaf.header().height();
-        }
-
-        // Tear down the legacy stack on every node.
-        network.server.consensus_handle().shut_down_legacy().await;
-        for peer in &network.peers {
-            peer.consensus_handle().shut_down_legacy().await;
-        }
-
-        // The chain must keep growing across the epoch boundaries at 20 and
-        // 40 purely on the new protocol.
-        while height < TARGET_BLOCK_HEIGHT {
-            let leaf = leaves
-                .next()
-                .await
-                .expect("leaf stream ended early")
-                .expect("leaf stream yielded an error");
-            height = leaf.header().height();
-        }
-
-        Ok(())
-    }
-
     /// Full-application epoch-boundary committee change: a validator sends a
     /// real `deregisterValidator` transaction to the StakeTable contract on
     /// L1 mid-run, drops out of the consensus committee at the epoch boundary
@@ -5629,7 +5570,6 @@ mod test {
     async fn test_new_protocol_validator_exit_at_epoch_boundary() -> anyhow::Result<()> {
         const NUM_NODES: usize = 5;
         const EPOCH_HEIGHT: u64 = 10;
-        const NEW_PROTOCOL: Upgrade = Upgrade::trivial(NEW_PROTOCOL_VERSION);
         /// How many epochs after the exit transaction we allow for the event
         /// to finalize on L1 and reach a stake table snapshot before failing.
         const MAX_ACTIVATION_EPOCHS: u64 = 10;
@@ -5641,13 +5581,7 @@ mod test {
 
         let api_port = reserve_tcp_port().expect("No ports free for query service");
 
-        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
-        let persistence: [_; NUM_NODES] = storage
-            .iter()
-            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
-            .collect::<Vec<_>>()
-            .try_into()
-            .unwrap();
+        let (storage, persistence) = node_storage::<SqlDataSource, NUM_NODES>().await;
 
         let config = TestNetworkConfigBuilder::<NUM_NODES, _, _>::with_num_nodes()
             .api_config(SqlDataSource::options(
@@ -5656,24 +5590,9 @@ mod test {
             ))
             .network_config(network_config.clone())
             .persistences(persistence)
-            .catchups(std::array::from_fn(|_| {
-                StatePeers::<SequencerApiVersion>::from_urls(
-                    vec![format!("http://localhost:{api_port}").parse().unwrap()],
-                    Default::default(),
-                    Duration::from_secs(2),
-                    &NoMetrics,
-                )
-            }))
-            .pos_hook(
-                DelegationConfig::MultipleDelegators,
-                StakeTableContractVersion::V3,
-                NEW_PROTOCOL,
-            )
-            .await
-            .unwrap()
             .build();
 
-        let network = TestNetwork::new(config, NEW_PROTOCOL).await;
+        let network = TestNetwork::new(config, TEST_UPGRADE).await;
         let st_addr = network
             .contracts
             .as_ref()
@@ -5832,6 +5751,7 @@ mod test {
                 backoff: Default::default(),
                 base_timeout: Duration::from_secs(2),
                 local_timeout: Duration::from_secs(5),
+                http_delay: Duration::ZERO,
             },
             bootstrap_epoch_catchup_timeout: Duration::from_secs(30),
             options: FollowerOptions {
@@ -5973,11 +5893,11 @@ mod test {
         params: FollowerParams,
         l1_params: L1Params,
     ) -> anyhow::Result<(
-        FollowerContext<persistence::sql::Persistence>,
+        FollowerContext<persistence::sql::postgres::Persistence>,
         Client<ClientErr, SequencerApiVersion>,
     )> {
         let port = reserve_tcp_port().expect("No ports free for query service");
-        let mut db = tmp_options(storage);
+        let mut db = persistence::sql::postgres::Options::try_from(tmp_options(storage))?;
         let persistence = db.create().await?;
         let handle = Options::with_port(port)
             .query_sql(
@@ -5985,7 +5905,7 @@ mod test {
                     peers: params.upstreams.clone(),
                     ..Default::default()
                 },
-                db,
+                db.into_inner(),
             )
             .catchup(Default::default())
             .light_client(Default::default())
@@ -6011,7 +5931,7 @@ mod test {
     }
 
     async fn assert_follows_to(
-        follower: &FollowerContext<persistence::sql::Persistence>,
+        follower: &FollowerContext<persistence::sql::postgres::Persistence>,
         follower_client: &Client<ClientErr, SequencerApiVersion>,
         tip: u64,
     ) -> anyhow::Result<()> {
@@ -6205,7 +6125,7 @@ mod test {
         const NUM_NODES: usize = 6;
         const EPOCH_HEIGHT: u64 = 10;
         const EPOCHS_BEFORE_RESTART: u64 = 7;
-        const NEW_PROTOCOL: Upgrade = Upgrade::trivial(NEW_PROTOCOL_VERSION);
+        const TEST_UPGRADE: Upgrade = Upgrade::trivial(NEW_PROTOCOL_VERSION);
         /// Bound on each stage of the restarted node's recovery.
         const RECOVERY_TIMEOUT: Duration = Duration::from_secs(240);
 
@@ -6219,13 +6139,7 @@ mod test {
         let api_url: Url = format!("http://localhost:{api_port}").parse()?;
         let query_url: Url = format!("http://localhost:{query_port}").parse()?;
 
-        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
-        let persistence: [_; NUM_NODES] = storage
-            .iter()
-            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
-            .collect::<Vec<_>>()
-            .try_into()
-            .unwrap();
+        let (storage, persistence) = node_storage::<SqlDataSource, NUM_NODES>().await;
 
         // Both query nodes need the catchup and light client modules: state
         // catchup is served over the former, and the query service validates
@@ -6255,16 +6169,9 @@ mod test {
                     &NoMetrics,
                 )
             }))
-            .pos_hook(
-                DelegationConfig::MultipleDelegators,
-                StakeTableContractVersion::V3,
-                NEW_PROTOCOL,
-            )
-            .await?
             .build();
-
-        let genesis_state = config.states()[0].clone();
-        let mut network = TestNetwork::new(config, NEW_PROTOCOL).await;
+        let mut network = TestNetwork::new(config, TEST_UPGRADE).await;
+        let genesis_state = network.genesis_state(0);
 
         // `TestNetwork` only gives node 0 an API, so node 1 has to be served
         // separately to become the second query node. Its keys are already in the
@@ -6275,50 +6182,17 @@ mod test {
         let cfg = network.cfg.clone();
         let peer_url = api_url.clone();
         let start_query_node = move |db: persistence::sql::Options| {
-            let cfg = cfg.clone();
-            let genesis_state = genesis_state.clone();
-            let peer_url = peer_url.clone();
-            async move {
-                let opt = Options::with_port(query_port)
+            serve_query_node(
+                cfg.clone(),
+                genesis_state.clone(),
+                persistence::sql::postgres::Options::try_from(db.clone()).unwrap(),
+                db,
+                Options::with_port(query_port)
                     .catchup(Default::default())
-                    .light_client(Default::default())
-                    .query_sql(
-                        Query {
-                            peers: vec![peer_url.clone()],
-                            ..Default::default()
-                        },
-                        db.clone(),
-                    );
-                let ctx = opt
-                    .serve(move |metrics, consumer, storage| {
-                        async move {
-                            Ok(cfg
-                                .init_node(
-                                    1,
-                                    genesis_state,
-                                    db,
-                                    Some(StatePeers::<SequencerApiVersion>::from_urls(
-                                        vec![peer_url],
-                                        Default::default(),
-                                        Duration::from_secs(2),
-                                        &NoMetrics,
-                                    )),
-                                    storage,
-                                    &*metrics,
-                                    test_helpers::STAKE_TABLE_CAPACITY_FOR_TEST,
-                                    consumer,
-                                    NEW_PROTOCOL,
-                                    Default::default(),
-                                )
-                                .await)
-                        }
-                        .boxed()
-                    })
-                    .await
-                    .expect("second query node should start");
-                ctx.start_consensus().await;
-                ctx
-            }
+                    .light_client(Default::default()),
+                vec![peer_url.clone()],
+                peer_url.clone(),
+            )
         };
 
         let mut query_node = start_query_node(tmp_options(&storage[1])).await;
@@ -6511,10 +6385,6 @@ mod test {
         let proposed = timeout(RECOVERY_TIMEOUT, async {
             while let Some(event) = events.next().await {
                 let leaf_infos: &[LeafInfo<SeqTypes>] = match &event {
-                    CoordinatorEvent::LegacyEvent(Event {
-                        event: EventType::Decide { leaf_chain, .. },
-                        ..
-                    }) => leaf_chain,
                     CoordinatorEvent::NewDecide { leaf_infos, .. } => leaf_infos,
                     _ => continue,
                 };
@@ -6562,21 +6432,13 @@ mod test {
         const EPOCH_HEIGHT: u64 = 10;
         const NUM_NODES: usize = 5;
 
-        const V5: Upgrade = Upgrade::trivial(EPOCH_REWARD_VERSION);
-
         let network_config = TestConfigBuilder::default()
             .epoch_height(EPOCH_HEIGHT)
             .build();
 
         let api_port = reserve_tcp_port().expect("No ports free for query service");
 
-        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
-        let persistence: [_; NUM_NODES] = storage
-            .iter()
-            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
-            .collect::<Vec<_>>()
-            .try_into()
-            .unwrap();
+        let (storage, persistence) = node_storage::<SqlDataSource, NUM_NODES>().await;
 
         let config = TestNetworkConfigBuilder::with_num_nodes()
             .api_config(SqlDataSource::options(
@@ -6585,20 +6447,9 @@ mod test {
             ))
             .network_config(network_config)
             .persistences(persistence.clone())
-            .catchups(std::array::from_fn(|_| {
-                StatePeers::<StaticVersion<0, 1>>::from_urls(
-                    vec![format!("http://localhost:{api_port}").parse().unwrap()],
-                    Default::default(),
-                    Duration::from_secs(2),
-                    &NoMetrics,
-                )
-            }))
-            .pos_hook(DelegationConfig::MultipleDelegators, Default::default(), V5)
-            .await
-            .unwrap()
             .build();
 
-        let _network = TestNetwork::new(config, V5).await;
+        let _network = TestNetwork::new(config, TEST_UPGRADE).await;
         let client: Client<ClientErr, SequencerApiVersion> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
 
@@ -6679,7 +6530,6 @@ mod test {
         const EPOCH_HEIGHT: u64 = 10;
         const NUM_NODES: usize = 5;
         const NUM_EPOCHS: u64 = 6;
-        const V5: Upgrade = Upgrade::trivial(EPOCH_REWARD_VERSION);
 
         let network_config = TestConfigBuilder::default()
             .epoch_height(EPOCH_HEIGHT)
@@ -6687,13 +6537,7 @@ mod test {
 
         let api_port = reserve_tcp_port().expect("No ports free for query service");
 
-        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
-        let persistence: [_; NUM_NODES] = storage
-            .iter()
-            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
-            .collect::<Vec<_>>()
-            .try_into()
-            .unwrap();
+        let (storage, persistence) = node_storage::<SqlDataSource, NUM_NODES>().await;
 
         let config = TestNetworkConfigBuilder::with_num_nodes()
             .api_config(SqlDataSource::options(
@@ -6702,72 +6546,20 @@ mod test {
             ))
             .network_config(network_config)
             .persistences(persistence.clone())
-            .catchups(std::array::from_fn(|_| {
-                StatePeers::<StaticVersion<0, 1>>::from_urls(
-                    vec![format!("http://localhost:{api_port}").parse().unwrap()],
-                    Default::default(),
-                    Duration::from_secs(2),
-                    &NoMetrics,
-                )
-            }))
-            .pos_hook(DelegationConfig::MultipleDelegators, Default::default(), V5)
-            .await
-            .unwrap()
             .build();
 
-        let network = TestNetwork::new(config, V5).await;
+        let network = TestNetwork::new(config, TEST_UPGRADE).await;
         let client: Client<ClientErr, SequencerApiVersion> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
 
-        let node_state = network.server.node_state();
-        let coordinator = node_state.coordinator;
-
-        let mut expected_total_distributed = U256::ZERO;
-
-        let mut leaves = client
-            .socket("availability/stream/leaves/0")
-            .subscribe::<LeafQueryData<SeqTypes>>()
-            .await
-            .unwrap();
-
-        while let Some(leaf) = leaves.next().await {
-            let leaf = leaf.unwrap();
-            let header = leaf.header();
-            let height = header.height();
-
-            let epoch = epoch_from_block_number(height, EPOCH_HEIGHT);
-
-            let is_epoch_last_block = height % EPOCH_HEIGHT == 0;
-
-            if epoch <= 3 {
-                continue;
-            }
-
-            let header_total_distributed = header
-                .total_reward_distributed()
-                .expect("total_reward_distributed should exist");
-
-            if is_epoch_last_block {
-                let prev_epoch = epoch - 1;
-                let prev_epoch_number = EpochNumber::new(prev_epoch);
-                let membership = coordinator.membership();
-                let prev_block_reward = membership
-                    .epoch_block_reward(prev_epoch_number)
-                    .expect("epoch block reward should exist");
-
-                let epoch_total = prev_block_reward.0 * U256::from(EPOCH_HEIGHT);
-                expected_total_distributed += epoch_total;
-            }
-
-            assert_eq!(
-                header_total_distributed.0, expected_total_distributed,
-                "total_reward_distributed mismatch at height {height}"
-            );
-
-            if height >= NUM_EPOCHS * EPOCH_HEIGHT {
-                break;
-            }
-        }
+        let coordinator = network.server.node_state().coordinator;
+        assert_epoch_reward_totals(
+            &client,
+            &coordinator,
+            EPOCH_HEIGHT,
+            NUM_EPOCHS * EPOCH_HEIGHT,
+        )
+        .await;
 
         Ok(())
     }
@@ -6778,7 +6570,6 @@ mod test {
         const EPOCH_HEIGHT: u64 = 10;
         const NUM_NODES: usize = 5;
         const NUM_EPOCHS: u64 = 6;
-        const V5: Upgrade = Upgrade::trivial(EPOCH_REWARD_VERSION);
 
         let network_config = TestConfigBuilder::default()
             .epoch_height(EPOCH_HEIGHT)
@@ -6786,13 +6577,7 @@ mod test {
 
         let api_port = reserve_tcp_port().expect("No ports free for query service");
 
-        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
-        let persistence: [_; NUM_NODES] = storage
-            .iter()
-            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
-            .collect::<Vec<_>>()
-            .try_into()
-            .unwrap();
+        let (storage, persistence) = node_storage::<SqlDataSource, NUM_NODES>().await;
 
         let config = TestNetworkConfigBuilder::with_num_nodes()
             .api_config(SqlDataSource::options(
@@ -6801,29 +6586,47 @@ mod test {
             ))
             .network_config(network_config)
             .persistences(persistence.clone())
-            .catchups(std::array::from_fn(|_| {
-                StatePeers::<StaticVersion<0, 1>>::from_urls(
-                    vec![format!("http://localhost:{api_port}").parse().unwrap()],
-                    Default::default(),
-                    Duration::from_secs(2),
-                    &NoMetrics,
-                )
-            }))
-            .pos_hook(DelegationConfig::MultipleDelegators, Default::default(), V5)
-            .await
-            .unwrap()
             .build();
 
-        let network = TestNetwork::new(config, V5).await;
+        let network = TestNetwork::new(config, TEST_UPGRADE).await;
         let client: Client<ClientErr, SequencerApiVersion> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
 
-        let node_state = network.server.node_state();
-        let coordinator = node_state.coordinator;
+        let coordinator = network.server.node_state().coordinator;
+        assert_epoch_leader_counts(
+            &client,
+            &coordinator,
+            EPOCH_HEIGHT,
+            NUM_EPOCHS * EPOCH_HEIGHT,
+        )
+        .await;
 
-        // Track expected leader counts by address
-        let mut expected_counts: HashMap<Address, u16> = HashMap::new();
+        Ok(())
+    }
 
+    /// Mainnet's 0.5 blocks were produced by legacy consensus, so a replayed 0.5 chain is what
+    /// keeps checking their reward totals and leader counts.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_legacy_epoch_rewards_and_leader_counts() -> anyhow::Result<()> {
+        let chain = LegacyChain::load("v5")?;
+        let replay = chain.replay().await?;
+        let epoch_height = chain.epoch_height();
+        let coordinator = replay.node.node_state().coordinator;
+
+        assert_epoch_reward_totals(&replay.client, &coordinator, epoch_height, chain.tip()).await;
+        assert_epoch_leader_counts(&replay.client, &coordinator, epoch_height, chain.tip()).await;
+        Ok(())
+    }
+
+    /// Checks `total_reward_distributed` in every header up to `last` against the epoch block
+    /// rewards.
+    async fn assert_epoch_reward_totals(
+        client: &Client<ClientErr, SequencerApiVersion>,
+        coordinator: &EpochMembershipCoordinator<SeqTypes>,
+        epoch_height: u64,
+        last: u64,
+    ) {
+        let mut expected_total_distributed = U256::ZERO;
         let mut leaves = client
             .socket("availability/stream/leaves/0")
             .subscribe::<LeafQueryData<SeqTypes>>()
@@ -6834,9 +6637,50 @@ mod test {
             let leaf = leaf.unwrap();
             let header = leaf.header();
             let height = header.height();
-            let epoch = epoch_from_block_number(height, EPOCH_HEIGHT);
-            let epoch_number = EpochNumber::new(epoch);
+            let epoch = epoch_from_block_number(height, epoch_height);
+            let header_total_distributed = header
+                .total_reward_distributed()
+                .expect("total_reward_distributed should exist");
 
+            if epoch > 3 && height % epoch_height == 0 {
+                let prev_block_reward = coordinator
+                    .membership()
+                    .epoch_block_reward(EpochNumber::new(epoch - 1))
+                    .expect("epoch block reward should exist");
+                expected_total_distributed += prev_block_reward.0 * U256::from(epoch_height);
+            }
+
+            assert_eq!(
+                header_total_distributed.0, expected_total_distributed,
+                "total_reward_distributed mismatch at height {height}"
+            );
+
+            if height >= last {
+                break;
+            }
+        }
+    }
+
+    /// Checks each header's `leader_counts` up to `last` against the leaders of the epoch's blocks
+    /// so far.
+    async fn assert_epoch_leader_counts(
+        client: &Client<ClientErr, SequencerApiVersion>,
+        coordinator: &EpochMembershipCoordinator<SeqTypes>,
+        epoch_height: u64,
+        last: u64,
+    ) {
+        let mut expected_counts: HashMap<Address, u16> = HashMap::new();
+        let mut leaves = client
+            .socket("availability/stream/leaves/0")
+            .subscribe::<LeafQueryData<SeqTypes>>()
+            .await
+            .unwrap();
+
+        while let Some(leaf) = leaves.next().await {
+            let leaf = leaf.unwrap();
+            let header = leaf.header();
+            let height = header.height();
+            let epoch = epoch_from_block_number(height, epoch_height);
             if epoch <= 2 {
                 continue;
             }
@@ -6844,63 +6688,51 @@ mod test {
             let header_leader_counts = header
                 .leader_counts()
                 .expect("V5+ header must have leader_counts");
-
-            // Reset counts at the start of a new epoch
-            let is_epoch_start = (height - 1) % EPOCH_HEIGHT == 0;
-            if is_epoch_start {
+            if (height - 1) % epoch_height == 0 {
                 expected_counts.clear();
             }
 
-            // Determine the leader for this block and track by address.
-            let view_number = leaf.leaf().view_number();
             let snapshot = coordinator
                 .membership()
-                .snapshot(epoch_number)
+                .snapshot(EpochNumber::new(epoch))
                 .expect("committee for epoch_number");
-            let leader = snapshot.leader(view_number).expect("leader should exist");
+            let leader = snapshot
+                .leader(leaf.leaf().view_number())
+                .expect("leader should exist");
             let leader_address = snapshot
                 .validator_config(&leader)
                 .expect("leader should have an address")
                 .account;
-
-            let validator_leader_counts =
-                ValidatorLeaderCounts::new(&snapshot, *header_leader_counts)
-                    .expect("ValidatorLeaderCounts should build from header leader_counts");
-
             *expected_counts.entry(leader_address).or_insert(0) += 1;
 
-            let header_counts: HashMap<Address, u16> = validator_leader_counts
-                .active_leaders()
-                .map(|(v, count)| (v.account, count))
-                .collect();
-
+            let header_counts: HashMap<Address, u16> =
+                ValidatorLeaderCounts::new(&snapshot, *header_leader_counts)
+                    .expect("ValidatorLeaderCounts should build from header leader_counts")
+                    .active_leaders()
+                    .map(|(v, count)| (v.account, count))
+                    .collect();
             assert_eq!(
                 header_counts, expected_counts,
                 "leader_counts mismatch at height {height} (epoch {epoch})"
             );
 
-            if height % EPOCH_HEIGHT == 0 {
+            if height % epoch_height == 0 {
                 let total: u16 = expected_counts.values().sum();
                 assert_eq!(
-                    total, EPOCH_HEIGHT as u16,
-                    "total leader_counts at epoch boundary should equal EPOCH_HEIGHT at height \
-                     {height}"
+                    total, epoch_height as u16,
+                    "total leader_counts at epoch boundary should equal the epoch height at \
+                     height {height}"
                 );
             }
 
-            if height >= NUM_EPOCHS * EPOCH_HEIGHT {
+            if height >= last {
                 break;
             }
         }
-
-        Ok(())
     }
 
-    #[rstest]
-    #[case(POS_V3)]
-    #[case(POS_V4)]
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_node_stake_table_api(#[case] upgrade: Upgrade) {
+    async fn test_node_stake_table_api() {
         let epoch_height = 20;
 
         let network_config = TestConfigBuilder::default()
@@ -6911,13 +6743,7 @@ mod test {
 
         const NUM_NODES: usize = 2;
         // Initialize nodes.
-        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
-        let persistence: [_; NUM_NODES] = storage
-            .iter()
-            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
-            .collect::<Vec<_>>()
-            .try_into()
-            .unwrap();
+        let (storage, persistence) = node_storage::<SqlDataSource, NUM_NODES>().await;
 
         let config = TestNetworkConfigBuilder::with_num_nodes()
             .api_config(SqlDataSource::options(
@@ -6926,24 +6752,9 @@ mod test {
             ))
             .network_config(network_config)
             .persistences(persistence.clone())
-            .catchups(std::array::from_fn(|_| {
-                StatePeers::<StaticVersion<0, 1>>::from_urls(
-                    vec![format!("http://localhost:{api_port}").parse().unwrap()],
-                    Default::default(),
-                    Duration::from_secs(2),
-                    &NoMetrics,
-                )
-            }))
-            .pos_hook(
-                DelegationConfig::MultipleDelegators,
-                Default::default(),
-                upgrade,
-            )
-            .await
-            .unwrap()
             .build();
 
-        let _network = TestNetwork::new(config, upgrade).await;
+        let _network = TestNetwork::new(config, TEST_UPGRADE).await;
 
         let client: Client<ClientErr, SequencerApiVersion> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
@@ -6974,11 +6785,8 @@ mod test {
             .expect("failed to get stake table");
     }
 
-    #[rstest]
-    #[case(POS_V3)]
-    #[case(POS_V4)]
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_epoch_stake_table_catchup(#[case] upgrade: Upgrade) {
+    async fn test_epoch_stake_table_catchup() {
         const EPOCH_HEIGHT: u64 = 10;
         const NUM_NODES: usize = 6;
 
@@ -6989,14 +6797,7 @@ mod test {
             .build();
 
         // Initialize storage for each node
-        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
-
-        let persistence_options: [_; NUM_NODES] = storage
-            .iter()
-            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
-            .collect::<Vec<_>>()
-            .try_into()
-            .unwrap();
+        let (storage, persistence_options) = node_storage::<SqlDataSource, NUM_NODES>().await;
 
         // setup catchup peers
         let catchup_peers = std::array::from_fn(|_| {
@@ -7015,22 +6816,18 @@ mod test {
             .network_config(network_config)
             .persistences(persistence_options.clone())
             .catchups(catchup_peers)
-            .pos_hook(
-                DelegationConfig::MultipleDelegators,
-                Default::default(),
-                upgrade,
-            )
-            .await
-            .unwrap()
             .build();
-
-        let state = config.states()[0].clone();
-        let mut network = TestNetwork::new(config, upgrade).await;
+        let mut network = TestNetwork::new(config, TEST_UPGRADE).await;
+        let state = network.genesis_state(0);
 
         // Wait for the peer 0 (node 1) to advance past three epochs
         let mut events = network.peers[0].event_stream();
         while let Some(event) = events.next().await {
-            if let Some(leaf_chain) = decided_leaves(&event) {
+            if let CoordinatorEvent::NewDecide {
+                leaf_infos: leaf_chain,
+                ..
+            } = event
+            {
                 let height = leaf_chain[0].leaf.height();
                 tracing::info!("Node 0 decided at height: {height}");
                 if height > EPOCH_HEIGHT * 3 {
@@ -7046,7 +6843,11 @@ mod test {
         // Wait for epochs to progress with node 1 offline
         let mut events = network.server.event_stream();
         while let Some(event) = events.next().await {
-            if let Some(leaf_chain) = decided_leaves(&event) {
+            if let CoordinatorEvent::NewDecide {
+                leaf_infos: leaf_chain,
+                ..
+            } = event
+            {
                 let height = leaf_chain[0].leaf.height();
                 if height > EPOCH_HEIGHT * 7 {
                     break;
@@ -7074,7 +6875,7 @@ mod test {
                 &NoMetrics,
                 test_helpers::STAKE_TABLE_CAPACITY_FOR_TEST,
                 NullEventConsumer,
-                upgrade,
+                TEST_UPGRADE,
                 Default::default(),
             )
             .await;
@@ -7107,11 +6908,8 @@ mod test {
         }
     }
 
-    #[rstest]
-    #[case(POS_V3)]
-    #[case(POS_V4)]
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_epoch_stake_table_catchup_stress(#[case] upgrade: Upgrade) {
+    async fn test_epoch_stake_table_catchup_stress() {
         const EPOCH_HEIGHT: u64 = 10;
         const NUM_NODES: usize = 6;
 
@@ -7122,14 +6920,7 @@ mod test {
             .build();
 
         // Initialize storage for each node
-        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
-
-        let persistence_options: [_; NUM_NODES] = storage
-            .iter()
-            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
-            .collect::<Vec<_>>()
-            .try_into()
-            .unwrap();
+        let (storage, persistence_options) = node_storage::<SqlDataSource, NUM_NODES>().await;
 
         // setup catchup peers
         let catchup_peers = std::array::from_fn(|_| {
@@ -7148,22 +6939,18 @@ mod test {
             .network_config(network_config)
             .persistences(persistence_options.clone())
             .catchups(catchup_peers)
-            .pos_hook(
-                DelegationConfig::MultipleDelegators,
-                Default::default(),
-                upgrade,
-            )
-            .await
-            .unwrap()
             .build();
-
-        let state = config.states()[0].clone();
-        let mut network = TestNetwork::new(config, upgrade).await;
+        let mut network = TestNetwork::new(config, TEST_UPGRADE).await;
+        let state = network.genesis_state(0);
 
         // Wait for the peer 0 (node 1) to advance past three epochs
         let mut events = network.peers[0].event_stream();
         while let Some(event) = events.next().await {
-            if let Some(leaf_chain) = decided_leaves(&event) {
+            if let CoordinatorEvent::NewDecide {
+                leaf_infos: leaf_chain,
+                ..
+            } = event
+            {
                 let height = leaf_chain[0].leaf.height();
                 tracing::info!("Node 0 decided at height: {height}");
                 if height > EPOCH_HEIGHT * 3 {
@@ -7179,7 +6966,11 @@ mod test {
         // Wait for epochs to progress with node 1 offline
         let mut events = network.server.event_stream();
         while let Some(event) = events.next().await {
-            if let Some(leaf_chain) = decided_leaves(&event) {
+            if let CoordinatorEvent::NewDecide {
+                leaf_infos: leaf_chain,
+                ..
+            } = event
+            {
                 let height = leaf_chain[0].leaf.height();
                 tracing::info!("Server decided at height: {height}");
                 //  until 7 epochs
@@ -7210,7 +7001,7 @@ mod test {
                 &NoMetrics,
                 test_helpers::STAKE_TABLE_CAPACITY_FOR_TEST,
                 NullEventConsumer,
-                upgrade,
+                TEST_UPGRADE,
                 Default::default(),
             )
             .await;
@@ -7253,13 +7044,8 @@ mod test {
         }
     }
 
-    #[rstest]
-    #[case(POS_V3)]
-    #[case(POS_V4)]
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_merklized_state_catchup_on_restart(
-        #[case] upgrade: Upgrade,
-    ) -> anyhow::Result<()> {
+    async fn test_merklized_state_catchup_on_restart() -> anyhow::Result<()> {
         // This test verifies that a query node can catch up on
         // merklized state after being offline for multiple epochs.
         //
@@ -7284,17 +7070,11 @@ mod test {
         tracing::info!("API PORT = {api_port}");
         const NUM_NODES: usize = 5;
 
-        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
-        let persistence: [_; NUM_NODES] = storage
-            .iter()
-            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
-            .collect::<Vec<_>>()
-            .try_into()
-            .unwrap();
+        let (storage, persistence) = node_storage::<SqlDataSource, NUM_NODES>().await;
 
         // The light client skips epoch-root stake-table-hash verification for pre-DRB headers only
-        // on the Decaf chain id, so use it to keep the V3->V4 catchup path covered. Must be set
-        // before `pos_hook`, which preserves the chain id from `state[0]`.
+        // on the Decaf chain id, so use it to keep the V3->V4 catchup path covered. The stake
+        // table deploy in `TestNetwork::new` keeps the chain id from `state[0]`.
         let decaf_state = ValidatedState {
             chain_config: ChainConfig {
                 chain_id: DECAF_CHAIN_ID,
@@ -7314,24 +7094,9 @@ mod test {
             .network_config(network_config)
             .persistences(persistence.clone())
             .states(std::array::from_fn(|_| decaf_state.clone()))
-            .catchups(std::array::from_fn(|_| {
-                StatePeers::<StaticVersion<0, 1>>::from_urls(
-                    vec![format!("http://localhost:{api_port}").parse().unwrap()],
-                    Default::default(),
-                    Duration::from_secs(2),
-                    &NoMetrics,
-                )
-            }))
-            .pos_hook(
-                DelegationConfig::MultipleDelegators,
-                hotshot_contract_adapter::stake_table::StakeTableContractVersion::V3,
-                upgrade,
-            )
-            .await
-            .unwrap()
             .build();
-        let state = config.states()[0].clone();
-        let mut network = TestNetwork::new(config, upgrade).await;
+        let mut network = TestNetwork::new(config, TEST_UPGRADE).await;
+        let state = network.genesis_state(0);
 
         // Remove peer 0 and restart it with the query module enabled.
         // Adding an additional node to the test network is not straight forward,
@@ -7353,7 +7118,7 @@ mod test {
         );
 
         // start the query node so that it builds the merklized state
-        let node_0 = opt
+        let mut node_0 = opt
             .clone()
             .serve(|metrics, consumer, storage| {
                 let cfg = network.cfg.clone();
@@ -7375,7 +7140,7 @@ mod test {
                             &*metrics,
                             test_helpers::STAKE_TABLE_CAPACITY_FOR_TEST,
                             consumer,
-                            upgrade,
+                            TEST_UPGRADE,
                             Default::default(),
                         )
                         .await)
@@ -7384,13 +7149,15 @@ mod test {
             })
             .await
             .unwrap();
+        node_0.start_consensus().await;
 
         let mut events = network.peers[2].event_stream();
         // wait for 1 epoch
         wait_for_epochs(&mut events, EPOCH_HEIGHT, 1).await;
 
-        // shutdown the node for 3 epochs
-        drop(node_0);
+        // Shut the node down for 3 epochs. Await it so its cliquenet listener releases its port
+        // before the restarted node binds the same address.
+        node_0.shut_down().await;
 
         // wait for 4 epochs
         wait_for_epochs(&mut events, EPOCH_HEIGHT, 4).await;
@@ -7416,7 +7183,7 @@ mod test {
                             &*metrics,
                             test_helpers::STAKE_TABLE_CAPACITY_FOR_TEST,
                             consumer,
-                            upgrade,
+                            TEST_UPGRADE,
                             Default::default(),
                         )
                         .await)
@@ -7425,6 +7192,7 @@ mod test {
             })
             .await
             .unwrap();
+        node_0.start_consensus().await;
 
         let client: Client<ClientErr, SequencerApiVersion> =
             Client::new(format!("http://localhost:{node_0_port}").parse().unwrap());
@@ -7438,15 +7206,10 @@ mod test {
         let mut retries = 0;
         loop {
             sleep(Duration::from_secs(1)).await;
-            let state = node_0.decided_state().await.unwrap();
-
-            let leaves = if upgrade.base == EPOCH_VERSION {
-                // Use legacy tree for V3
-                state.reward_merkle_tree_v1.num_leaves()
-            } else {
-                // Use new tree for V4 and above
-                state.reward_merkle_tree_v2.num_leaves()
-            };
+            let leaves = node_0
+                .decided_state()
+                .await
+                .map_or(0, |state| state.reward_merkle_tree_v2.num_leaves());
 
             if leaves > 0 {
                 tracing::info!("Node's state has reward accounts");
@@ -7484,10 +7247,9 @@ mod test {
             }
         }
 
-        // shutdown consensus to freeze the state
-        node_0.shutdown_consensus().await;
         let decided_leaf = node_0.decided_leaf().await;
         let state = node_0.decided_state().await.unwrap();
+        node_0.shutdown_consensus().await;
         tracing::info!(
             height = decided_leaf.height(),
             ?decided_leaf,
@@ -7525,13 +7287,7 @@ mod test {
         // loop has to get past the stale pruned height before the check ends.
         const GAP: u64 = 10;
 
-        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
-        let persistence: [_; NUM_NODES] = storage
-            .iter()
-            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
-            .collect::<Vec<_>>()
-            .try_into()
-            .unwrap();
+        let (storage, persistence) = node_storage::<SqlDataSource, NUM_NODES>().await;
         let api_port = reserve_tcp_port().expect("OS should have ephemeral ports available");
         let api_url: Url = format!("http://localhost:{api_port}").parse().unwrap();
         // The query node fetches what it missed from the API node, so the API node serves catchup
@@ -7546,8 +7302,8 @@ mod test {
             .network_config(TestConfigBuilder::default().build())
             .persistences(persistence.clone())
             .build();
-        let genesis_state = config.states()[0].clone();
-        let mut network = TestNetwork::new(config, MOCK_SEQUENCER_VERSIONS).await;
+        let mut network = TestNetwork::new(config, TEST_UPGRADE).await;
+        let genesis_state = network.genesis_state(0);
 
         // Replace peer 0 with a query node whose state pruner runs every second with zero
         // retention: left to itself, every run would prune right up to the chain tip. Consensus
@@ -7573,49 +7329,15 @@ mod test {
             let db_opt = db_opt.clone();
             let api_url = api_url.clone();
             move || {
-                let cfg = cfg.clone();
-                let genesis_state = genesis_state.clone();
-                let node_persistence = node_persistence.clone();
-                let db_opt = db_opt.clone();
-                let api_url = api_url.clone();
-                async move {
-                    let opt = Options::with_port(query_port).query_sql(
-                        Query {
-                            peers: vec![api_url.clone()],
-                            ..Default::default()
-                        },
-                        db_opt,
-                    );
-                    let ctx = opt
-                        .serve(move |metrics, consumer, storage| {
-                            async move {
-                                Ok(cfg
-                                    .init_node(
-                                        1,
-                                        genesis_state,
-                                        node_persistence,
-                                        Some(StatePeers::<StaticVersion<0, 1>>::from_urls(
-                                            vec![api_url],
-                                            Default::default(),
-                                            Duration::from_secs(2),
-                                            &NoMetrics,
-                                        )),
-                                        storage,
-                                        &*metrics,
-                                        STAKE_TABLE_CAPACITY_FOR_TEST,
-                                        consumer,
-                                        MOCK_SEQUENCER_VERSIONS,
-                                        Default::default(),
-                                    )
-                                    .await)
-                            }
-                            .boxed()
-                        })
-                        .await
-                        .expect("query node should start");
-                    ctx.start_consensus().await;
-                    ctx
-                }
+                serve_query_node(
+                    cfg.clone(),
+                    genesis_state.clone(),
+                    node_persistence.clone(),
+                    db_opt.clone(),
+                    Options::with_port(query_port),
+                    vec![api_url.clone()],
+                    api_url.clone(),
+                )
             }
         };
 
@@ -7719,6 +7441,648 @@ mod test {
         Ok(())
     }
 
+    /// When the state loop meets the data pruned height, as on a node that was down for longer
+    /// than its data retention.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    enum DataPruned {
+        /// The marker was stamped past the state head while the node was down: the loop finds
+        /// its head leaf gone and starts on peers.
+        BeforeRestart,
+        /// The marker is stamped while the loop waits on the local stream for a leaf that never
+        /// comes: the loop has to notice and switch to peers. The loop is put well behind first,
+        /// as a long outage would, since a gap above the consensus anchor is re-decided on
+        /// restart and cannot be kept open, and the peers stay unreachable until the stamp, since
+        /// the fetcher would otherwise fill the gap.
+        WhileWaiting,
+    }
+
+    /// The availability layer never fetches a leaf at or below the data pruned height, so the
+    /// state loop has to get the leaves it still needs from peers, without storing them, and
+    /// carry on from the local stream once it is past the pruned height. The leaves come through
+    /// the light client, verified against per-epoch stake tables, so the network runs with epochs.
+    #[rstest]
+    #[case::before_restart(DataPruned::BeforeRestart)]
+    #[case::while_waiting(DataPruned::WhileWaiting)]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_state_loop_fetches_pruned_leaves_from_peers(
+        #[case] pruned_when: DataPruned,
+    ) -> anyhow::Result<()> {
+        const NUM_NODES: usize = 5;
+        const EPOCH_HEIGHT: u64 = 10;
+        // Leaves the node holds beyond the state head when it goes down, the margin by which the
+        // loop has to get past the pruned height before the check ends, and the head the loop is
+        // put back to when it has to be left waiting.
+        const SYNCED: u64 = 5;
+        const GAP: u64 = 10;
+        const BEHIND: u64 = 2;
+
+        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
+        let persistence: [_; NUM_NODES] = storage
+            .iter()
+            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
+            .collect::<Vec<_>>()
+            .try_into()
+            .unwrap();
+        let api_port = reserve_tcp_port().expect("OS should have ephemeral ports available");
+        let api_url: Url = format!("http://localhost:{api_port}").parse().unwrap();
+        // The API node is the peer the query node fetches leaves from.
+        let config = TestNetworkConfigBuilder::with_num_nodes()
+            .api_config(SqlDataSource::options(
+                &storage[0],
+                Options::with_port(api_port)
+                    .catchup(Default::default())
+                    .light_client(Default::default()),
+            ))
+            .network_config(
+                TestConfigBuilder::default()
+                    .epoch_height(EPOCH_HEIGHT)
+                    .build(),
+            )
+            .persistences(persistence.clone())
+            .catchups(std::array::from_fn(|_| {
+                StatePeers::<StaticVersion<0, 1>>::from_urls(
+                    vec![api_url.clone()],
+                    Default::default(),
+                    Duration::from_secs(2),
+                    &NoMetrics,
+                )
+            }))
+            .pos_hook(
+                DelegationConfig::MultipleDelegators,
+                StakeTableContractVersion::V3,
+                TEST_UPGRADE,
+            )
+            .await?
+            .build();
+        let genesis_state = config.states()[0].clone();
+        let mut network = TestNetwork::new(config, TEST_UPGRADE).await;
+
+        // Replace peer 0 with a query node. Its availability fetcher gets the given peers: the
+        // API node, except when the loop has to be left waiting for a leaf that never arrives.
+        network.peers[0].shut_down().await;
+        network.peers.remove(0);
+        let query_port = reserve_tcp_port().expect("OS should have ephemeral ports available");
+        let db_opt = tmp_options(&storage[1]);
+        let start_query_node = {
+            let cfg = network.cfg.clone();
+            let node_persistence = persistence[1].clone();
+            let db_opt = db_opt.clone();
+            let api_url = api_url.clone();
+            move |availability_peers: Vec<Url>| {
+                serve_query_node(
+                    cfg.clone(),
+                    genesis_state.clone(),
+                    node_persistence.clone(),
+                    db_opt.clone(),
+                    Options::with_port(query_port),
+                    availability_peers,
+                    api_url.clone(),
+                )
+            }
+        };
+
+        let mut query_node = start_query_node(vec![api_url.clone()]).await;
+        let query_client: Client<ClientErr, StaticVersion<0, 1>> =
+            Client::new(format!("http://localhost:{query_port}").parse().unwrap());
+        assert!(query_client.connect(Some(Duration::from_secs(60))).await);
+        let api_client: Client<ClientErr, StaticVersion<0, 1>> = Client::new(api_url.clone());
+        assert!(api_client.connect(Some(Duration::from_secs(60))).await);
+
+        // Let the loop build some state, then take the node down while the chain moves on.
+        wait_until_block_height(&query_client, "block-state/block-height", 5).await;
+        query_node.shut_down().await;
+        drop(query_node);
+        // `shut_down` aborts the server task without waiting for it, so wait for the port before
+        // rebinding it.
+        timeout(Duration::from_secs(30), async {
+            while std::net::TcpListener::bind(("127.0.0.1", query_port)).is_err() {
+                sleep(Duration::from_millis(100)).await;
+            }
+        })
+        .await
+        .context("shut-down query node did not release its port")?;
+        let db =
+            SqlStorage::connect(Config::try_from(&db_opt)?, StorageConnectionType::Query).await?;
+        let (_, head_at_shutdown) = state_heights(&db).await;
+        let local_tip = local_block_height(&db).await? - 1;
+
+        let _restarted;
+        let pruned = match pruned_when {
+            DataPruned::BeforeRestart => {
+                // Prune consensus data past the state head, as a pruner run during the downtime
+                // would have once the retention passed. A run never stamps past the node's own
+                // tip, so first give the node a leaf beyond the marker, as its fetcher would have
+                // before the outage outran the loop.
+                let synced_tip = local_tip + SYNCED;
+                let pruned = synced_tip - 1;
+                wait_until_block_height(&api_client, "status/block-height", synced_tip + 1).await;
+                let synced_leaf = api_client
+                    .get::<LeafQueryData<SeqTypes>>(&format!("availability/leaf/{synced_tip}"))
+                    .send()
+                    .await?;
+                let mut tx = db.write().await?;
+                tx.insert_leaf(&synced_leaf).await?;
+                tx.commit().await?;
+                prune_data_to(&db, pruned).await?;
+                _restarted = start_query_node(vec![api_url.clone()]).await;
+                pruned
+            },
+            DataPruned::WhileWaiting => {
+                // Put the loop behind its own storage and take the leaves above its new head out
+                // of local reach. Below the consensus anchor they are never re-decided, and with
+                // the peers unreachable they are never fetched. The loop then waits on the stream
+                // for the leaf above its head while consensus moves the tip on.
+                let proxy_port =
+                    reserve_tcp_port().expect("OS should have ephemeral ports available");
+                {
+                    let mut tx = db.write().await?;
+                    UpdateStateData::<SeqTypes, BlockMerkleTree, { BlockMerkleTree::ARITY }>::set_last_state_height(
+                        &mut tx,
+                        BEHIND as usize,
+                    )
+                    .await?;
+                    tx.commit().await?;
+                }
+                delete_data_between(&db, BEHIND, head_at_shutdown).await?;
+                _restarted =
+                    start_query_node(vec![format!("http://localhost:{proxy_port}").parse()?]).await;
+                let deadline = Instant::now() + Duration::from_secs(120);
+                loop {
+                    if local_block_height(&db).await? > local_tip + GAP {
+                        break;
+                    }
+                    ensure!(
+                        Instant::now() < deadline,
+                        "consensus did not move the local tip past {}",
+                        local_tip + GAP
+                    );
+                    sleep(Duration::from_millis(200)).await;
+                }
+                let (_, head) = state_heights(&db).await;
+                ensure!(
+                    head == BEHIND,
+                    "the loop moved to {head} without the leaf above {BEHIND}"
+                );
+                // Now stamp past the height the loop is waiting for, with the old head well below
+                // the tip as a real run leaves it, and let the peers through. The fetcher no
+                // longer asks them for heights at or below the stamp, so the loop has to.
+                let pruned = head_at_shutdown;
+                prune_data_to(&db, pruned).await?;
+                tokio::spawn(forward_tcp(proxy_port, api_port));
+                pruned
+            },
+        };
+
+        // The loop has to get past the pruned height on leaves from the API node, and then follow
+        // the local stream.
+        let deadline = Instant::now() + Duration::from_secs(180);
+        loop {
+            let (_, head) = state_heights(&db).await;
+            if head > pruned + GAP {
+                break;
+            }
+            ensure!(
+                Instant::now() < deadline,
+                "state loop did not get past the data pruned height {pruned}: head {head}, \
+                 started from {head_at_shutdown}"
+            );
+            sleep(Duration::from_millis(200)).await;
+        }
+
+        // The leaves the loop fetched from peers were not stored: the pruner would only delete
+        // them again.
+        let mut tx = db.read().await?;
+        let stored: i64 = sqlx::query_scalar("SELECT count(*) FROM leaf2 WHERE height <= $1")
+            .bind(pruned as i64)
+            .fetch_one(tx.as_mut())
+            .await?;
+        ensure!(
+            stored == 0,
+            "{stored} leaves at or below the data pruned height {pruned} were stored"
+        );
+        Ok(())
+    }
+
+    /// A query node with no state of its own on a pruned database, as a fresh pruned node, starts
+    /// its state from a snapshot at a recent epoch boundary, from peers, instead of replaying the
+    /// chain from genesis. The loop gets past the next boundary only if the reward tree it fetched
+    /// is whole. The snapshot has no fee accounts, and from V0.6 on no block reads one, so the node
+    /// answers that the fee state is missing from the boundary on, and pruned below it. A
+    /// brand-new database, which the data pruner has not stamped yet, starts from a boundary too.
+    /// A node without a pruner, here one that pruned before and has turned pruning off, still
+    /// replays from genesis, on leaves from peers up to the data pruned height.
+    #[rstest]
+    #[case::recent_boundary(EmptyStateStart::RecentBoundary, true)]
+    #[case::fresh_database(EmptyStateStart::RecentBoundary, false)]
+    #[case::genesis(EmptyStateStart::Genesis, true)]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_state_loop_starts_on_pruned_data(
+        #[case] expected: EmptyStateStart,
+        #[case] stamp_pruned_height: bool,
+    ) -> anyhow::Result<()> {
+        let network = PrunedStartNetwork::start().await?;
+        // Let the chain run an epoch past the data pruned height stamped below, so a recent
+        // boundary lies above it.
+        let stamp = 3 * PRUNED_START_EPOCH_HEIGHT + PRUNED_START_EPOCH_HEIGHT / 2;
+        wait_until_block_height(
+            &network.api_client,
+            "status/block-height",
+            stamp + PRUNED_START_EPOCH_HEIGHT,
+        )
+        .await;
+        let (db_opt, db) = network.query_database(expected).await?;
+        // Unless the database is brand new, stamp a data pruned height on it, as if the data
+        // pruner had run before the loop started.
+        let pruned = if stamp_pruned_height {
+            prune_data_to(&db, stamp).await?;
+            stamp
+        } else {
+            0
+        };
+        // `status/block-height` counts blocks, so the tip is one below it.
+        let tip = network
+            .api_client
+            .get::<u64>("status/block-height")
+            .send()
+            .await?
+            - 1;
+        let (_query_node, query_client) = network.start_query_node(db_opt).await;
+
+        let deadline = Instant::now() + Duration::from_secs(180);
+        let start = wait_for_state_start(&db, deadline).await?;
+        let state_start = db.read().await?.load_state_start_height().await?;
+        check_state_start(expected, start, state_start, pruned, tip)?;
+        let past = start.max(pruned) + PRUNED_START_EPOCH_HEIGHT;
+        wait_for_state_head_above(&db, past, start, deadline).await?;
+        let lowest = lowest_block_tree_node(&db).await?;
+        ensure!(
+            lowest == start,
+            "state below the start {start} was computed, from {lowest}"
+        );
+
+        wait_until_block_height(&network.api_client, "fee-state/block-height", past + 1).await;
+        match expected {
+            EmptyStateStart::RecentBoundary => {
+                check_fee_state_from_start(&query_client, start, past, network.fee_recipient)
+                    .await?
+            },
+            EmptyStateStart::Genesis => {
+                let fee_state = format!("fee-state/{past}/{}", network.fee_recipient);
+                assert_same_response(&network.api_client, &query_client, &fee_state).await?;
+            },
+        }
+        Ok(())
+    }
+
+    /// The epoch height of the network in [`test_state_loop_starts_on_pruned_data`].
+    const PRUNED_START_EPOCH_HEIGHT: u64 = 10;
+
+    /// The network of [`test_state_loop_starts_on_pruned_data`]. Node 0 is the API node, the only
+    /// peer the query node fetches the snapshot, leaves and accounts from. Node 1 is shut down, to
+    /// come back as the query node on its own database, with no query data.
+    struct PrunedStartNetwork {
+        network: TestNetwork<persistence::sql::postgres::Options, 5>,
+        storage: Vec<<SqlDataSource as TestableSequencerDataSource>::Storage>,
+        /// Node 1's consensus persistence.
+        persistence: persistence::sql::postgres::Options,
+        api_url: Url,
+        api_client: Client<ClientErr, StaticVersion<0, 1>>,
+        genesis_state: ValidatedState,
+        fee_recipient: FeeAccount,
+    }
+
+    impl PrunedStartNetwork {
+        async fn start() -> anyhow::Result<Self> {
+            let storage = join_all((0..5).map(|_| SqlDataSource::create_storage())).await;
+            let persistence: [_; 5] = storage
+                .iter()
+                .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
+                .collect::<Vec<_>>()
+                .try_into()
+                .unwrap();
+            let api_port = reserve_tcp_port().expect("OS should have ephemeral ports available");
+            let api_url: Url = format!("http://localhost:{api_port}").parse().unwrap();
+            let config = TestNetworkConfigBuilder::with_num_nodes()
+                .api_config(SqlDataSource::options(
+                    &storage[0],
+                    Options::with_port(api_port)
+                        .catchup(Default::default())
+                        .light_client(Default::default()),
+                ))
+                .network_config(
+                    TestConfigBuilder::default()
+                        .epoch_height(PRUNED_START_EPOCH_HEIGHT)
+                        .build(),
+                )
+                .persistences(persistence.clone())
+                .catchups(std::array::from_fn(|_| api_state_peers(&api_url)))
+                .pos_hook(
+                    DelegationConfig::MultipleDelegators,
+                    StakeTableContractVersion::V3,
+                    TEST_UPGRADE,
+                )
+                .await?
+                .build();
+            let genesis_state = config.states()[0].clone();
+            let fee_recipient = genesis_state
+                .chain_config
+                .resolve()
+                .context("genesis chain config")?
+                .fee_recipient;
+            let mut network = TestNetwork::new(config, TEST_UPGRADE).await;
+            network.peers[0].shut_down().await;
+            network.peers.remove(0);
+            let api_client = Client::new(api_url.clone());
+            assert!(api_client.connect(Some(Duration::from_secs(60))).await);
+            Ok(Self {
+                network,
+                storage,
+                persistence: persistence[1].clone(),
+                api_url,
+                api_client,
+                genesis_state,
+                fee_recipient,
+            })
+        }
+
+        /// The options of node 1's database, with pruning on when `expected` is a recent boundary,
+        /// and a connection to it.
+        async fn query_database(
+            &self,
+            expected: EmptyStateStart,
+        ) -> anyhow::Result<(persistence::sql::Options, SqlStorage)> {
+            // When pruning is on, the pruner never runs within the test.
+            const RETENTION: &str = "1000000s";
+            let mut db_opt = tmp_options(&self.storage[1]);
+            db_opt.prune = expected == EmptyStateStart::RecentBoundary;
+            db_opt.pruning = <persistence::sql::PruningOptions as clap::Parser>::parse_from([
+                "pruning",
+                "--target-retention",
+                RETENTION,
+                "--state-target-retention",
+                RETENTION,
+                "--interval",
+                "3600s",
+            ]);
+            let db = SqlStorage::connect(Config::try_from(&db_opt)?, StorageConnectionType::Query)
+                .await?;
+            Ok((db_opt, db))
+        }
+
+        /// Start node 1 as a query node on `db_opt`, and a client for its API.
+        async fn start_query_node(
+            &self,
+            db_opt: persistence::sql::Options,
+        ) -> (
+            SequencerContext<
+                <persistence::sql::postgres::Options as PersistenceOptions>::Persistence,
+            >,
+            Client<ClientErr, StaticVersion<0, 1>>,
+        ) {
+            let query_port = reserve_tcp_port().expect("OS should have ephemeral ports available");
+            let query_node = serve_query_node(
+                self.network.cfg.clone(),
+                self.genesis_state.clone(),
+                self.persistence.clone(),
+                db_opt,
+                Options::with_port(query_port),
+                vec![self.api_url.clone()],
+                self.api_url.clone(),
+            )
+            .await;
+            let query_client =
+                Client::new(format!("http://localhost:{query_port}").parse().unwrap());
+            (query_node, query_client)
+        }
+    }
+
+    /// Start node 1 of the network `cfg` as a query node on `db_opt`. It serves the API `api`, plus
+    /// the query module. Its availability fetcher asks `availability_peers`, and its state catchup
+    /// the API node at `api_url` alone.
+    async fn serve_query_node<const N: usize>(
+        cfg: TestConfig<N>,
+        genesis_state: ValidatedState,
+        node_persistence: persistence::sql::postgres::Options,
+        db_opt: persistence::sql::Options,
+        api: Options,
+        availability_peers: Vec<Url>,
+        api_url: Url,
+    ) -> SequencerContext<<persistence::sql::postgres::Options as PersistenceOptions>::Persistence>
+    {
+        let opt = api.query_sql(
+            Query {
+                peers: availability_peers,
+                ..Default::default()
+            },
+            db_opt,
+        );
+        let state_peers = api_state_peers(&api_url);
+        let query_node = opt
+            .serve(move |metrics, consumer, storage| {
+                async move {
+                    Ok(cfg
+                        .init_node(
+                            1,
+                            genesis_state,
+                            node_persistence,
+                            Some(state_peers),
+                            storage,
+                            &*metrics,
+                            STAKE_TABLE_CAPACITY_FOR_TEST,
+                            consumer,
+                            TEST_UPGRADE,
+                            Default::default(),
+                        )
+                        .await)
+                }
+                .boxed()
+            })
+            .await
+            .expect("query node should start");
+        query_node.start_consensus().await;
+        query_node
+    }
+
+    /// State peers that are just the API node at `api_url`.
+    fn api_state_peers(api_url: &Url) -> StatePeers<StaticVersion<0, 1>> {
+        StatePeers::from_urls(
+            vec![api_url.clone()],
+            Default::default(),
+            Duration::from_secs(2),
+            &NoMetrics,
+        )
+    }
+
+    /// The height the state loop started from, once it has stored its first snapshot, which holds
+    /// the lowest block tree nodes.
+    async fn wait_for_state_start(db: &SqlStorage, deadline: Instant) -> anyhow::Result<u64> {
+        while state_heights(db).await.1 == 0 {
+            ensure!(Instant::now() < deadline, "state loop did not start");
+            sleep(Duration::from_millis(200)).await;
+        }
+        lowest_block_tree_node(db).await
+    }
+
+    /// Check that the state loop started where `expected` says, given the data pruned height and
+    /// the tip when the query node started, and that it recorded a start from a boundary.
+    fn check_state_start(
+        expected: EmptyStateStart,
+        start: u64,
+        state_start: Option<u64>,
+        pruned: u64,
+        tip: u64,
+    ) -> anyhow::Result<()> {
+        let recorded = (expected == EmptyStateStart::RecentBoundary).then_some(start);
+        ensure!(
+            state_start == recorded,
+            "the recorded state start is {state_start:?}, not {recorded:?}"
+        );
+        match expected {
+            // The boundary is recent only if the node's first local block was the consensus tip,
+            // not a lower block it filled in first.
+            EmptyStateStart::RecentBoundary => ensure!(
+                start > pruned
+                    && start.is_multiple_of(PRUNED_START_EPOCH_HEIGHT)
+                    && start + PRUNED_START_EPOCH_HEIGHT > tip,
+                "state loop started at {start}, not at an epoch boundary above the data pruned \
+                 height {pruned} and within an epoch of the tip {tip} when the node started"
+            ),
+            // The genesis tree has no blocks, so the first block tree nodes are at height 1.
+            EmptyStateStart::Genesis => {
+                ensure!(start == 1, "state loop started at {start}, not at genesis")
+            },
+        }
+        Ok(())
+    }
+
+    async fn wait_for_state_head_above(
+        db: &SqlStorage,
+        past: u64,
+        start: u64,
+        deadline: Instant,
+    ) -> anyhow::Result<()> {
+        loop {
+            let (_, head) = state_heights(db).await;
+            if head > past {
+                return Ok(());
+            }
+            ensure!(
+                Instant::now() < deadline,
+                "state loop did not get past {past}: head {head}, started at {start}"
+            );
+            sleep(Duration::from_millis(200)).await;
+        }
+    }
+
+    /// Check the fee state a node that started from the boundary `start` serves: the snapshot holds
+    /// no fee account, and no block since has read one, so the state is missing at the boundary and
+    /// at `past` above it, and pruned below it.
+    async fn check_fee_state_from_start(
+        client: &Client<ClientErr, StaticVersion<0, 1>>,
+        start: u64,
+        past: u64,
+        account: FeeAccount,
+    ) -> anyhow::Result<()> {
+        for (height, status) in [
+            (start, StatusCode::NOT_FOUND),
+            (past, StatusCode::NOT_FOUND),
+            (start - 1, StatusCode::GONE),
+        ] {
+            // The state query reads the header there, which the node may still be fetching.
+            client
+                .get::<serde_json::Value>(&format!("availability/header/{height}"))
+                .send()
+                .await?;
+            let path = format!("fee-state/{height}/{account}");
+            let answer = client
+                .get::<serde_json::Value>(&path)
+                .send()
+                .await
+                .map_err(|err| err.status);
+            ensure!(
+                answer == Err(status),
+                "{path}: answered {answer:?}, not {status}"
+            );
+        }
+        Ok(())
+    }
+
+    /// The lowest height with a block tree node, which is the first snapshot the state loop stored.
+    async fn lowest_block_tree_node(db: &SqlStorage) -> anyhow::Result<u64> {
+        let mut tx = db.read().await?;
+        let lowest: Option<i64> = sqlx::query_scalar("SELECT min(created) FROM block_merkle_tree")
+            .fetch_one(tx.as_mut())
+            .await?;
+        lowest
+            .map(|height| height as u64)
+            .context("no block tree nodes")
+    }
+
+    /// Forward connections on `port` to `target`, so a peer's URL is dead until this runs and
+    /// reachable from then on.
+    async fn forward_tcp(port: u16, target: u16) {
+        let listener = TcpListener::bind(("127.0.0.1", port)).await.unwrap();
+        loop {
+            let (mut inbound, _) = listener.accept().await.unwrap();
+            tokio::spawn(async move {
+                let mut outbound = TcpStream::connect(("127.0.0.1", target)).await.unwrap();
+                _ = tokio::io::copy_bidirectional(&mut inbound, &mut outbound).await;
+            });
+        }
+    }
+
+    /// The number of blocks in the node's own availability storage.
+    async fn local_block_height(db: &SqlStorage) -> anyhow::Result<u64> {
+        let mut tx = db.read().await?;
+        Ok(NodeStorage::<SeqTypes>::block_height(&mut tx).await? as u64)
+    }
+
+    /// Prune consensus data to `pruned` as a pruner batch would: stamp the data cursor, id 1,
+    /// then delete what `delete_batch` deletes. The node may be writing new blocks meanwhile, so
+    /// a serialization conflict is retried.
+    async fn prune_data_to(db: &SqlStorage, pruned: u64) -> anyhow::Result<()> {
+        serializable_retry!(db, || async {
+            let mut tx = db.write().await?;
+            tx.upsert(
+                "pruned_height",
+                ["id", "last_height"],
+                ["id"],
+                [(1i32, pruned as i64)],
+            )
+            .await?;
+            for statement in [
+                "DELETE FROM transactions WHERE block_height <= $1",
+                "DELETE FROM leaf2 WHERE height <= $1",
+                "DELETE FROM header WHERE height <= $1",
+            ] {
+                sqlx::query(statement)
+                    .bind(pruned as i64)
+                    .execute(tx.as_mut())
+                    .await?;
+            }
+            tx.commit().await
+        })
+        .await
+    }
+
+    /// Delete consensus data above `from` up to and including `to` without moving the data
+    /// cursor, as if the node had never had it.
+    async fn delete_data_between(db: &SqlStorage, from: u64, to: u64) -> anyhow::Result<()> {
+        let mut tx = db.write().await?;
+        for statement in [
+            "DELETE FROM transactions WHERE block_height > $1 AND block_height <= $2",
+            "DELETE FROM leaf2 WHERE height > $1 AND height <= $2",
+            "DELETE FROM header WHERE height > $1 AND height <= $2",
+        ] {
+            sqlx::query(statement)
+                .bind(from as i64)
+                .bind(to as i64)
+                .execute(tx.as_mut())
+                .await?;
+        }
+        tx.commit().await
+    }
+
     /// The state pruned height, then the state head. Read in that order: every move of the
     /// cursor, up by a batch or down by the startup repair, lands below the head, and the head
     /// only grows, so a head read after the cursor is always above it.
@@ -7729,10 +8093,8 @@ mod test {
         (pruned, head)
     }
 
-    #[rstest]
-    #[case(POS_V4)]
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_state_reconstruction(#[case] upgrade: Upgrade) -> anyhow::Result<()> {
+    async fn test_state_reconstruction() -> anyhow::Result<()> {
         // This test verifies that a query node can successfully reconstruct its state
         // after being shut down from the database
         //
@@ -7759,13 +8121,7 @@ mod test {
         tracing::info!("API PORT = {api_port}");
         const NUM_NODES: usize = 5;
 
-        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
-        let persistence: [_; NUM_NODES] = storage
-            .iter()
-            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
-            .collect::<Vec<_>>()
-            .try_into()
-            .unwrap();
+        let (storage, persistence) = node_storage::<SqlDataSource, NUM_NODES>().await;
 
         let config = TestNetworkConfigBuilder::with_num_nodes()
             .api_config(SqlDataSource::options(
@@ -7774,24 +8130,9 @@ mod test {
             ))
             .network_config(network_config)
             .persistences(persistence.clone())
-            .catchups(std::array::from_fn(|_| {
-                StatePeers::<StaticVersion<0, 1>>::from_urls(
-                    vec![format!("http://localhost:{api_port}").parse().unwrap()],
-                    Default::default(),
-                    Duration::from_secs(2),
-                    &NoMetrics,
-                )
-            }))
-            .pos_hook(
-                DelegationConfig::MultipleDelegators,
-                hotshot_contract_adapter::stake_table::StakeTableContractVersion::V3,
-                upgrade,
-            )
-            .await
-            .unwrap()
             .build();
-        let state = config.states()[0].clone();
-        let mut network = TestNetwork::new(config, upgrade).await;
+        let mut network = TestNetwork::new(config, TEST_UPGRADE).await;
+        let state = network.genesis_state(0);
         // Remove peer 0 and restart it with the query module enabled.
         // Adding an additional node to the test network is not straight forward,
         // as the keys have already been initialized in the config above.
@@ -7834,7 +8175,7 @@ mod test {
                             &*metrics,
                             test_helpers::STAKE_TABLE_CAPACITY_FOR_TEST,
                             consumer,
-                            upgrade,
+                            TEST_UPGRADE,
                             Default::default(),
                         )
                         .await)
@@ -7843,92 +8184,103 @@ mod test {
             })
             .await
             .unwrap();
+        node_0.start_consensus().await;
 
         let mut events = network.peers[2].event_stream();
         // Wait until at least 3 epochs have passed
         wait_for_epochs(&mut events, EPOCH_HEIGHT, 3).await;
 
-        tracing::warn!("shutting down node 0");
-
-        node_0.shutdown_consensus().await;
-
         let instance = node_0.node_state();
-        let state = node_0.decided_state().await.unwrap();
+        // A node can decide a leaf before it has validated that leaf's state itself.
+        let state = timeout(Duration::from_secs(60), async {
+            loop {
+                if let Some(state) = node_0.decided_state().await {
+                    break state;
+                }
+                sleep(Duration::from_millis(100)).await;
+            }
+        })
+        .await
+        .context("node 0 never validated a decided state")?;
         let fee_accounts = state
             .fee_merkle_tree
             .clone()
             .into_iter()
             .map(|(acct, _)| acct)
             .collect::<Vec<_>>();
-        let reward_accounts = match upgrade.base {
-            EPOCH_VERSION => state
-                .reward_merkle_tree_v1
-                .clone()
-                .into_iter()
-                .map(|(acct, _)| RewardAccountV2::from(acct))
-                .collect::<Vec<_>>(),
-            DRB_AND_HEADER_UPGRADE_VERSION => state
-                .reward_merkle_tree_v2
-                .clone()
-                .into_iter()
-                .map(|(acct, _)| acct)
-                .collect::<Vec<_>>(),
-            _ => panic!("invalid version"),
-        };
+        let reward_accounts = state
+            .reward_merkle_tree_v2
+            .clone()
+            .into_iter()
+            .map(|(acct, _)| acct)
+            .collect::<Vec<_>>();
+
+        // At 0.6 a leaf can be decided before the next view's proposal arrives, and decided
+        // proposals are pruned from consensus storage, so shut down only once an undecided
+        // proposal is stored for `reconstruct_state` to reach.
+        let persistence = node_0.persistence();
+        timeout(Duration::from_secs(60), async {
+            loop {
+                let decided_view = node_0.decided_leaf().await.view_number();
+                let proposals = persistence.load_quorum_proposals().await?;
+                if proposals.keys().any(|view| *view > decided_view) {
+                    break anyhow::Ok(());
+                }
+                sleep(Duration::from_millis(100)).await;
+            }
+        })
+        .await
+        .context("no undecided proposal was stored")??;
+
+        tracing::warn!("shutting down node 0");
+        node_0.shutdown_consensus().await;
+
+        // The decide processor keeps pruning the proposals of decides that landed before the
+        // shutdown, so wait for the stored set to settle before choosing one.
+        let proposals = timeout(Duration::from_secs(30), async {
+            let mut proposals = persistence.load_quorum_proposals().await?;
+            loop {
+                sleep(Duration::from_millis(500)).await;
+                let now = persistence.load_quorum_proposals().await?;
+                if now.keys().eq(proposals.keys()) {
+                    break anyhow::Ok(now);
+                }
+                proposals = now;
+            }
+        })
+        .await
+        .context("stored proposals did not settle after the shutdown")??;
+        let (to_view, proposal) = proposals
+            .into_iter()
+            .next()
+            .expect("an undecided proposal survives the shutdown");
+        let from_height = proposal.data.block_header().height() - 1;
 
         let client: Client<ClientErr, SequencerApiVersion> =
             Client::new(format!("http://localhost:{node_0_port}").parse().unwrap());
         client.connect(Some(Duration::from_secs(10))).await;
-
-        // wait 3s to be sure that all the
-        // transactions have been committed
-        sleep(Duration::from_secs(3)).await;
-
-        tracing::info!("getting node block height");
-        let node_block_height = client
-            .get::<u64>("node/block-height")
-            .send()
-            .await
-            .context("getting Espresso block height")
-            .unwrap();
-
-        tracing::info!("node block height={node_block_height}");
-
-        let leaf_query_data = client
-            .get::<LeafQueryData<SeqTypes>>(&format!("availability/leaf/{}", node_block_height - 1))
-            .send()
-            .await
-            .context("error getting leaf")
-            .unwrap();
-
-        tracing::info!("leaf={leaf_query_data:?}");
-        let leaf = leaf_query_data.leaf();
-        let to_view = leaf.view_number() + 1;
+        wait_until_block_height(&client, "node/block-height", from_height + 1).await;
+        // `reconstruct_state` loads accounts from the merklized state at `from_height`, which a
+        // separate loop writes after the block is indexed.
+        wait_until_block_height(&client, "fee-state/block-height", from_height).await;
 
         let ds = SqlStorage::connect(
-            Config::try_from(&node_0_persistence).unwrap(),
+            Config::try_from(&*node_0_persistence).unwrap(),
             StorageConnectionType::Sequencer,
         )
         .await
         .unwrap();
         let mut tx = ds.read().await?;
 
-        let (state, leaf) = reconstruct_state(
-            &instance,
-            &ds,
-            &mut tx,
-            node_block_height - 1,
-            to_view,
-            &[],
-            &[],
-        )
-        .await
-        .unwrap();
+        let (state, leaf) =
+            reconstruct_state(&instance, &ds, &mut tx, from_height, to_view, &[], &[])
+                .await
+                .unwrap();
         assert_eq!(leaf.view_number(), to_view);
         assert!(
             state
                 .block_merkle_tree
-                .lookup(node_block_height - 1)
+                .lookup(from_height)
                 .expect_ok()
                 .is_ok(),
             "inconsistent block merkle tree"
@@ -7939,7 +8291,7 @@ mod test {
             &instance,
             &ds,
             &mut tx,
-            node_block_height - 1,
+            from_height,
             to_view,
             &fee_accounts,
             &[],
@@ -7951,7 +8303,7 @@ mod test {
         assert!(
             state
                 .block_merkle_tree
-                .lookup(node_block_height - 1)
+                .lookup(from_height)
                 .expect_ok()
                 .is_ok(),
             "inconsistent block merkle tree"
@@ -7967,7 +8319,7 @@ mod test {
             &instance,
             &ds,
             &mut tx,
-            node_block_height - 1,
+            from_height,
             to_view,
             &[],
             &reward_accounts,
@@ -7975,33 +8327,19 @@ mod test {
         .await
         .unwrap();
 
-        match upgrade.base {
-            EPOCH_VERSION => {
-                for account in reward_accounts.clone() {
-                    state
-                        .reward_merkle_tree_v1
-                        .lookup(RewardAccountV1::from(account))
-                        .expect_ok()
-                        .unwrap();
-                }
-            },
-            DRB_AND_HEADER_UPGRADE_VERSION => {
-                for account in &reward_accounts {
-                    state
-                        .reward_merkle_tree_v2
-                        .lookup(account)
-                        .expect_ok()
-                        .unwrap();
-                }
-            },
-            _ => panic!("invalid version"),
-        };
+        for account in &reward_accounts {
+            state
+                .reward_merkle_tree_v2
+                .lookup(account)
+                .expect_ok()
+                .unwrap();
+        }
 
         assert_eq!(leaf.view_number(), to_view);
         assert!(
             state
                 .block_merkle_tree
-                .lookup(node_block_height - 1)
+                .lookup(from_height)
                 .expect_ok()
                 .is_ok(),
             "inconsistent block merkle tree"
@@ -8012,7 +8350,7 @@ mod test {
             &instance,
             &ds,
             &mut tx,
-            node_block_height - 1,
+            from_height,
             to_view,
             &fee_accounts,
             &reward_accounts,
@@ -8023,34 +8361,20 @@ mod test {
         assert!(
             state
                 .block_merkle_tree
-                .lookup(node_block_height - 1)
+                .lookup(from_height)
                 .expect_ok()
                 .is_ok(),
             "inconsistent block merkle tree"
         );
         assert_eq!(leaf.view_number(), to_view);
 
-        match upgrade.base {
-            EPOCH_VERSION => {
-                for account in reward_accounts.clone() {
-                    state
-                        .reward_merkle_tree_v1
-                        .lookup(RewardAccountV1::from(account))
-                        .expect_ok()
-                        .unwrap();
-                }
-            },
-            DRB_AND_HEADER_UPGRADE_VERSION => {
-                for account in &reward_accounts {
-                    state
-                        .reward_merkle_tree_v2
-                        .lookup(account)
-                        .expect_ok()
-                        .unwrap();
-                }
-            },
-            _ => panic!("invalid version"),
-        };
+        for account in &reward_accounts {
+            state
+                .reward_merkle_tree_v2
+                .lookup(account)
+                .expect_ok()
+                .unwrap();
+        }
 
         for account in &fee_accounts {
             state.fee_merkle_tree.lookup(account).expect_ok().unwrap();
@@ -8059,11 +8383,8 @@ mod test {
         Ok(())
     }
 
-    #[rstest]
-    #[case(POS_V3)]
-    #[case(POS_V4)]
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_block_reward_api(#[case] upgrade: Upgrade) -> anyhow::Result<()> {
+    async fn test_block_reward_api() -> anyhow::Result<()> {
         let epoch_height = 10;
 
         let network_config = TestConfigBuilder::default()
@@ -8074,13 +8395,7 @@ mod test {
 
         const NUM_NODES: usize = 1;
         // Initialize nodes.
-        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
-        let persistence: [_; NUM_NODES] = storage
-            .iter()
-            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
-            .collect::<Vec<_>>()
-            .try_into()
-            .unwrap();
+        let (storage, persistence) = node_storage::<SqlDataSource, NUM_NODES>().await;
 
         let config = TestNetworkConfigBuilder::with_num_nodes()
             .api_config(SqlDataSource::options(
@@ -8089,24 +8404,16 @@ mod test {
             ))
             .network_config(network_config.clone())
             .persistences(persistence.clone())
-            .catchups(std::array::from_fn(|_| {
-                StatePeers::<StaticVersion<0, 1>>::from_urls(
-                    vec![format!("http://localhost:{api_port}").parse().unwrap()],
-                    Default::default(),
-                    Duration::from_secs(2),
-                    &NoMetrics,
-                )
-            }))
             .pos_hook(
                 DelegationConfig::VariableAmounts,
-                Default::default(),
-                upgrade,
+                StakeTableContractVersion::V3,
+                TEST_UPGRADE,
             )
             .await
             .unwrap()
             .build();
 
-        let network = TestNetwork::new(config, upgrade).await;
+        let network = TestNetwork::new(config, TEST_UPGRADE).await;
         let mut events = network.server.event_stream();
         let client: Client<ClientErr, SequencerApiVersion> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
@@ -8299,13 +8606,10 @@ mod test {
 
     /// `chain_id`: None = default (35353, non-mainnet), Some(1) = mainnet
     #[rstest]
-    #[case(POS_V4, None)]
-    #[case(POS_V4, Some(1u64))]
+    #[case(None)]
+    #[case(Some(1u64))]
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_token_supply_api(
-        #[case] upgrade: Upgrade,
-        #[case] chain_id: Option<u64>,
-    ) -> anyhow::Result<()> {
+    async fn test_token_supply_api(#[case] chain_id: Option<u64>) -> anyhow::Result<()> {
         use alloy::primitives::utils::parse_ether;
         use espresso_types::v0_3::ChainConfig;
 
@@ -8317,13 +8621,7 @@ mod test {
         let api_port = reserve_tcp_port().expect("OS should have ephemeral ports available");
 
         const NUM_NODES: usize = 1;
-        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
-        let persistence: [_; NUM_NODES] = storage
-            .iter()
-            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
-            .collect::<Vec<_>>()
-            .try_into()
-            .unwrap();
+        let (storage, persistence) = node_storage::<SqlDataSource, NUM_NODES>().await;
 
         // Use the real initial supply (3.59B tokens) so the unlock schedule
         // produces realistic locked/unlocked values in the supply calculations.
@@ -8337,17 +8635,9 @@ mod test {
             ))
             .network_config(network_config.clone())
             .persistences(persistence.clone())
-            .catchups(std::array::from_fn(|_| {
-                StatePeers::<StaticVersion<0, 1>>::from_urls(
-                    vec![format!("http://localhost:{api_port}").parse().unwrap()],
-                    Default::default(),
-                    Duration::from_secs(2),
-                    &NoMetrics,
-                )
-            }))
             .initial_token_supply(initial_supply_tokens);
 
-        // Must set states before pos_hook, which preserves chain_id from state[0].
+        // The stake table deploy in `pos_hook` keeps chain_id from state[0].
         if let Some(id) = chain_id {
             let state = ValidatedState {
                 chain_config: ChainConfig {
@@ -8363,14 +8653,14 @@ mod test {
         let config = builder
             .pos_hook(
                 DelegationConfig::VariableAmounts,
-                Default::default(),
-                upgrade,
+                StakeTableContractVersion::V3,
+                TEST_UPGRADE,
             )
             .await
             .unwrap()
             .build();
 
-        let _network = TestNetwork::new(config, upgrade).await;
+        let _network = TestNetwork::new(config, TEST_UPGRADE).await;
         let client: Client<ClientErr, SequencerApiVersion> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
 
@@ -8642,9 +8932,11 @@ mod test {
         let url = format!("http://localhost:{port}").parse().unwrap();
         let client: Client<ClientErr, StaticVersion<0, 1>> = Client::new(url);
 
-        let storage = SqlDataSource::create_storage().await;
+        // At 0.6 the query service gets decided payloads from the DA proposals in consensus
+        // storage, and proactive fetching is off, so the nodes need real persistence.
+        let (storage, persistence) = node_storage::<SqlDataSource, 5>().await;
         let network_config = TestConfigBuilder::default().build();
-        let mut ds_opts = tmp_options(&storage);
+        let mut ds_opts = tmp_options(&storage[0]);
         ds_opts.disable_proactive_fetching = true;
         let config = TestNetworkConfigBuilder::default()
             .api_config(
@@ -8655,8 +8947,10 @@ mod test {
                     .explorer(Default::default()),
             )
             .network_config(network_config)
+            .persistences(persistence)
             .build();
-        let network = TestNetwork::new(config, MOCK_SEQUENCER_VERSIONS).await;
+
+        let network = TestNetwork::new(config, TEST_UPGRADE).await;
         let mut events = network.server.event_stream();
 
         client.connect(None).await;
@@ -8895,12 +9189,12 @@ mod test {
 
         // An epoch this network never reaches, so only the status is comparable.
         let v1_err = client
-            .get::<serde_json::Value>("node/stake-table/1")
+            .get::<serde_json::Value>("node/stake-table/1000000")
             .send()
             .await
             .unwrap_err();
         let v2_err = client
-            .get::<serde_json::Value>("v2/node/stake-table?epoch=1")
+            .get::<serde_json::Value>("v2/node/stake-table?epoch=1000000")
             .send()
             .await
             .unwrap_err();
@@ -9127,7 +9421,7 @@ mod test {
             .send()
             .await
             .unwrap();
-        let end = tip["window"].as_array().unwrap().last().unwrap()["timestamp"]
+        let end = tip["window"].as_array().unwrap().last().unwrap()["fields"]["timestamp"]
             .as_u64()
             .unwrap();
         assert!(end > 0, "{tip}");
@@ -9146,9 +9440,11 @@ mod test {
         assert_eq!(v2_window.window.len(), v1_headers.len());
         for (v1_header, v2_header) in v1_headers.iter().zip(&v2_window.window) {
             let v2_header = match v2_header.header.as_ref().unwrap() {
-                espresso_api::proto::header_response::Header::V1(header) => header,
-                other => panic!("this network runs 0.1, not {other:?}"),
+                espresso_api::proto::header_response::Header::V6(header) => header,
+                other => panic!("this network runs 0.6, not {other:?}"),
             };
+            // Versioned headers nest their fields under the version.
+            let v1_header = &v1_header["fields"];
             assert_eq!(v2_header.height, v1_header["height"].as_u64().unwrap());
             assert_eq!(
                 v2_header.payload_commitment,
@@ -9170,7 +9466,19 @@ mod test {
                 v2_header.timestamp,
                 v1_header["timestamp"].as_u64().unwrap()
             );
+            assert_eq!(
+                v2_header.timestamp_millis,
+                v1_header["timestamp_millis"].as_u64().unwrap()
+            );
             assert_eq!(v2_header.l1_head, v1_header["l1_head"].as_u64().unwrap());
+            assert_eq!(
+                v2_header.reward_merkle_tree_root,
+                v1_header["reward_merkle_tree_root"].as_str().unwrap()
+            );
+            assert_eq!(
+                v2_header.total_reward_distributed,
+                v1_header["total_reward_distributed"].as_str().unwrap()
+            );
             let v2_fee = v2_header.fee_info.as_ref().unwrap();
             assert_eq!(
                 v2_fee.account,
@@ -9226,12 +9534,12 @@ mod test {
             );
         }
         let v2_next = match v2_window.next.as_ref().unwrap().header.as_ref().unwrap() {
-            espresso_api::proto::header_response::Header::V1(header) => header,
-            other => panic!("this network runs 0.1, not {other:?}"),
+            espresso_api::proto::header_response::Header::V6(header) => header,
+            other => panic!("this network runs 0.6, not {other:?}"),
         };
         assert_eq!(
             v2_next.height,
-            v1_window["next"]["height"].as_u64().unwrap()
+            v1_window["next"]["fields"]["height"].as_u64().unwrap()
         );
         // start_time=0 precedes every block, so like v1 the window has nothing before it.
         assert!(v1_window["prev"].is_null(), "{v1_window}");
@@ -9243,8 +9551,8 @@ mod test {
         assert_eq!(first.height(), 1);
         let first_hash = committable::Committable::commit(&first);
         let height = |header: &espresso_api::proto::HeaderResponse| match header.header.as_ref() {
-            Some(espresso_api::proto::header_response::Header::V1(header)) => header.height,
-            other => panic!("this network runs 0.1, not {other:?}"),
+            Some(espresso_api::proto::header_response::Header::V6(header)) => header.height,
+            other => panic!("this network runs 0.6, not {other:?}"),
         };
         for (v1_route, v2_query) in [
             (
@@ -9262,25 +9570,29 @@ mod test {
                 .send()
                 .await
                 .unwrap();
-            assert_eq!(v1_window["prev"]["height"].as_u64(), Some(0), "{v1_route}");
+            assert_eq!(
+                v1_window["prev"]["fields"]["height"].as_u64(),
+                Some(0),
+                "{v1_route}"
+            );
             assert_eq!(
                 v2_window.window.iter().map(height).collect::<Vec<_>>(),
                 v1_window["window"]
                     .as_array()
                     .unwrap()
                     .iter()
-                    .map(|header| header["height"].as_u64().unwrap())
+                    .map(|header| header["fields"]["height"].as_u64().unwrap())
                     .collect::<Vec<_>>(),
                 "{v2_query}"
             );
             assert_eq!(
                 v2_window.prev.as_ref().map(height),
-                v1_window["prev"]["height"].as_u64(),
+                v1_window["prev"]["fields"]["height"].as_u64(),
                 "{v2_query}"
             );
             assert_eq!(
                 v2_window.next.as_ref().map(height),
-                v1_window["next"]["height"].as_u64(),
+                v1_window["next"]["fields"]["height"].as_u64(),
                 "{v2_query}"
             );
         }
@@ -9291,55 +9603,18 @@ mod test {
             .send()
             .await
             .unwrap();
-        let v1_advz = &v1_share["V0"];
-        let v2_advz = match v2_share.share.as_ref().unwrap() {
-            espresso_api::proto::vid_share_response::Share::V0(share) => share,
-            other => panic!("this network disperses with ADVZ, not {other:?}"),
-        };
-        assert_eq!(
-            v2_advz.aggregate_proofs,
-            v1_advz["aggregate_proofs"].as_str().unwrap()
+        // 0.6 disperses with AvidmGf2, which v2 renders field for field from the share, so v2
+        // must serve exactly the rendering of v1's share.
+        let share: hotshot_types::data::VidShare =
+            serde_json::from_value(v1_share.clone()).unwrap();
+        assert!(
+            matches!(share, hotshot_types::data::VidShare::V2(_)),
+            "{v1_share}"
         );
-        assert_eq!(v2_advz.evals, v1_advz["evals"].as_str().unwrap());
-        let v2_proof = v2_advz.evals_proof.as_ref().unwrap();
         assert_eq!(
-            v2_proof.pos,
-            v1_advz["evals_proof"]["pos"].as_str().unwrap()
+            v2_share,
+            espresso_api::proto::VidShareResponse::try_from(&share).unwrap()
         );
-        let v1_nodes = v1_advz["evals_proof"]["proof"].as_array().unwrap();
-        assert!(v1_nodes.len() > 1, "{v1_advz}");
-        assert_eq!(v2_proof.proof.len(), v1_nodes.len());
-        fn assert_node(v1: &serde_json::Value, v2: &espresso_api::proto::AdvzMerkleNode) {
-            use espresso_api::proto::advz_merkle_node::Node;
-            match (v2.node.as_ref().unwrap(), v1) {
-                (Node::Leaf(leaf), v1) if v1.get("Leaf").is_some() => {
-                    let v1 = &v1["Leaf"];
-                    assert_eq!(leaf.elem, v1["elem"].as_str().unwrap());
-                    assert_eq!(leaf.pos, v1["pos"].as_str().unwrap());
-                    assert_eq!(leaf.value, v1["value"].as_str().unwrap());
-                },
-                (Node::Branch(branch), v1) if v1.get("Branch").is_some() => {
-                    let v1 = &v1["Branch"];
-                    assert_eq!(branch.value, v1["value"].as_str().unwrap());
-                    let v1_children = v1["children"].as_array().unwrap();
-                    assert_eq!(branch.children.len(), v1_children.len());
-                    for (v1_child, v2_child) in v1_children.iter().zip(&branch.children) {
-                        assert_node(v1_child, v2_child);
-                    }
-                },
-                (Node::ForgottenSubtree(subtree), v1) if v1.get("ForgettenSubtree").is_some() => {
-                    assert_eq!(
-                        subtree.value,
-                        v1["ForgettenSubtree"]["value"].as_str().unwrap()
-                    );
-                },
-                (Node::Empty(_), v1) if v1.as_str() == Some("Empty") => {},
-                (v2, v1) => panic!("{v2:?} against {v1}"),
-            }
-        }
-        for (v1_node, v2_node) in v1_nodes.iter().zip(&v2_proof.proof) {
-            assert_node(v1_node, v2_node);
-        }
 
         // hash and payload_hash select the share by its block's hashes, as v1's own routes do, so
         // block 1's share comes back either way.
@@ -9837,26 +10112,6 @@ mod test {
                 num_bootstrap: v1_hotshot.num_bootstrap as u64,
                 commit_sha: v1_config.commit_sha().to_string(),
                 indexed_da: v1_config.indexed_da(),
-                cdn_marshal_address: v1_config.cdn_marshal_address().map(ToString::to_string),
-                libp2p_config: v1_config.libp2p_config().map(|libp2p| {
-                    espresso_api::proto::Libp2pNetworkConfig {
-                        bootstrap_nodes: libp2p
-                            .bootstrap_nodes
-                            .iter()
-                            .map(
-                                |(peer_id, multiaddr)| espresso_api::proto::Libp2pBootstrapNode {
-                                    peer_id: peer_id.to_string(),
-                                    multiaddr: multiaddr.to_string(),
-                                },
-                            )
-                            .collect(),
-                    }
-                }),
-                combined_network_config: v1_config.combined_network_config().map(|combined| {
-                    espresso_api::proto::CombinedNetworkConfig {
-                        delay_duration_ms: combined.delay_duration.as_millis() as u64,
-                    }
-                }),
                 builder: match v1_config.builder() {
                     hotshot_types::network::BuilderType::External => {
                         espresso_api::proto::BuilderType::External
@@ -9869,6 +10124,7 @@ mod test {
                     },
                 }
                 .into(),
+                ..Default::default()
             }
         );
         // The comparison above builds its expected value with the same `From<PeerConfig>` the
@@ -9966,7 +10222,7 @@ mod test {
         // Nothing in the repository runs a deferred migration yet, so without these rows both
         // versions report an empty list and agree vacuously.
         {
-            let cfg = Config::try_from(&tmp_options(&storage)).unwrap();
+            let cfg = Config::try_from(&tmp_options(&storage[0])).unwrap();
             let db = SqlStorage::connect(cfg, StorageConnectionType::Query)
                 .await
                 .unwrap();
@@ -10074,9 +10330,9 @@ mod test {
         .await;
         assert_eq!(v2, proto::MerklePathResponse::from(&v1_block));
 
-        // The builder paid for `last_block`, so its account is in the fee tree.
-        let header: Header = fetch(client, &format!("availability/header/{last_block}")).await;
-        let account = header.fee_info().first().expect("a fee was paid").account();
+        // 0.6 charges no fees, but every test node prefunds the builder account at genesis, so it
+        // is in the fee tree.
+        let account = TestConfig::<5>::builder_key().fee_account();
         let v1_fee: MerkleProof<FeeAmount, FeeAccount, Sha3Node, 256> =
             fetch(client, &format!("fee-state/{state_height}/{account}")).await;
         let v2: proto::MerklePathResponse = fetch(
@@ -10297,12 +10553,12 @@ mod test {
             .await;
             assert_eq!(v2, proven, "{query}");
         }
-        // A 0.1 block is disseminated with ADVZ, so the proof must land on that arm and carry
-        // the range proof of a non-empty transaction.
-        let Some(proto::tx_proof::Proof::V0(v0)) = proven.proof.unwrap().proof else {
-            panic!("a 0.1 block's inclusion proof is ADVZ");
+        // A 0.6 block is disseminated with AvidmGf2, so the proof must land on that arm and carry
+        // the namespace proof of a non-empty transaction.
+        let Some(proto::tx_proof::Proof::V2(v2)) = proven.proof.unwrap().proof else {
+            panic!("a 0.6 block's inclusion proof is AvidmGf2");
         };
-        assert!(v0.payload_proof_tx.is_some());
+        assert!(v2.ns_proof.is_some());
 
         // 102 is the namespace of the last submitted transaction, so `last_block` carries it.
         let v1_proof: NamespaceProofQueryData = fetch(
@@ -10356,17 +10612,17 @@ mod test {
             assert_eq!(status, StatusCode::BAD_REQUEST, "{missing_selector}");
         }
 
-        // Without epochs there is no state certificate, a 0.1 block has no AvidM encoding to prove
-        // wrong, and no cert2 exists before the new protocol takes over. These only show both
+        // No state certificate or cert2 exists for an epoch or height the network never reaches,
+        // and a block this network built has no bad encoding to prove. These only show both
         // versions refusing alike. The conversions are covered by the reference-vector tests.
         for (v1, v2) in [
             (
-                "availability/state-cert/1".to_string(),
-                "v2/availability/state-cert?epoch=1".to_string(),
+                "availability/state-cert/1000000".to_string(),
+                "v2/availability/state-cert?epoch=1000000".to_string(),
             ),
             (
-                "availability/state-cert-v2/1".to_string(),
-                "v2/availability/state-cert-v2?epoch=1".to_string(),
+                "availability/state-cert-v2/1000000".to_string(),
+                "v2/availability/state-cert-v2?epoch=1000000".to_string(),
             ),
             (
                 format!("availability/incorrect-encoding-proof/{last_block}/102"),
@@ -10375,8 +10631,8 @@ mod test {
                 ),
             ),
             (
-                "availability/cert2/1".to_string(),
-                "v2/availability/cert2?height=1".to_string(),
+                "availability/cert2/1000000".to_string(),
+                "v2/availability/cert2?height=1000000".to_string(),
             ),
         ] {
             assert_eq!(
@@ -11161,20 +11417,69 @@ mod test {
         }
     }
 
+    /// Rewards accrue in the v1 tree before 0.4 and in the v2 tree from 0.4 on. The replay checks
+    /// every derived root against its header, so this only checks which tree each era filled. The
+    /// v1 balances are not queryable: the state loop stores no v1 paths since #4325.
     #[rstest]
-    #[case(POS_V3)]
-    #[case(POS_V4)]
+    #[case::v3("v3", false)]
+    #[case::v4("v4", true)]
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_v3_and_v4_reward_tree_updates(#[case] upgrade: Upgrade) -> anyhow::Result<()> {
-        // This test checks that the correct merkle tree is updated based on version
-        //
-        // When the protocol version is v3:
-        // - The v3 Merkle tree is updated
-        // - The v4 Merkle tree must be empty.
-        //
-        // When the protocol version is v4:
-        // - The v4 Merkle tree is updated
-        // - The v3 Merkle tree must be empty.
+    async fn test_legacy_reward_tree_updates(
+        #[case] chain: &str,
+        #[case] fills_v2: bool,
+    ) -> anyhow::Result<()> {
+        let chain = LegacyChain::load(chain)?;
+        let replay = chain.replay().await?;
+        let client = &replay.client;
+        let tip = chain.tip();
+
+        let roots: Vec<_> = chain
+            .blocks
+            .iter()
+            .map(|block| block.leaf.header().reward_merkle_tree_root())
+            .collect();
+        ensure!(
+            roots.iter().all(|root| root.is_right() == fills_v2),
+            "{} headers commit to the wrong reward tree",
+            chain.name
+        );
+        let reward_blocks = roots.windows(2).filter(|pair| pair[0] != pair[1]).count();
+        ensure!(reward_blocks > 0, "{} never paid a reward", chain.name);
+
+        let validators: AuthenticatedValidatorMap = client.get("node/validators/3").send().await?;
+        ensure!(!validators.is_empty(), "epoch 3 has validators");
+        let mut balances = vec![];
+        for validator in validators.keys() {
+            let balance = client
+                .get::<Option<RewardAmount>>(&format!(
+                    "reward-state-v2/reward-balance/{tip}/{validator}"
+                ))
+                .send()
+                .await;
+            if fills_v2 {
+                balances.push(balance?.unwrap_or_default().0);
+            } else {
+                // The v2 tree was never written, so there is no proof to answer with.
+                match balance {
+                    Err(err) if err.status == StatusCode::NOT_FOUND => {},
+                    other => bail!(
+                        "{}: {validator} v2 balance should be missing, got {other:?}",
+                        chain.name
+                    ),
+                }
+            }
+        }
+        ensure!(
+            balances.iter().any(|balance| !balance.is_zero()) == fills_v2,
+            "{}: v2 reward balances {balances:?}",
+            chain.name
+        );
+        Ok(())
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_only_v2_reward_tree_updates() -> anyhow::Result<()> {
+        // Rewards accrue in the v2 reward Merkle tree, and the v1 tree stays empty.
         const EPOCH_HEIGHT: u64 = 10;
 
         let network_config = TestConfigBuilder::default()
@@ -11186,13 +11491,7 @@ mod test {
         tracing::info!("API PORT = {api_port}");
         const NUM_NODES: usize = 5;
 
-        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
-        let persistence: [_; NUM_NODES] = storage
-            .iter()
-            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
-            .collect::<Vec<_>>()
-            .try_into()
-            .unwrap();
+        let (storage, persistence) = node_storage::<SqlDataSource, NUM_NODES>().await;
 
         let config = TestNetworkConfigBuilder::with_num_nodes()
             .api_config(SqlDataSource::options(
@@ -11201,56 +11500,28 @@ mod test {
             ))
             .network_config(network_config)
             .persistences(persistence.clone())
-            .catchups(std::array::from_fn(|_| {
-                StatePeers::<StaticVersion<0, 1>>::from_urls(
-                    vec![format!("http://localhost:{api_port}").parse().unwrap()],
-                    Default::default(),
-                    Duration::from_secs(2),
-                    &NoMetrics,
-                )
-            }))
-            .pos_hook(
-                DelegationConfig::MultipleDelegators,
-                hotshot_contract_adapter::stake_table::StakeTableContractVersion::V3,
-                upgrade,
-            )
-            .await
-            .unwrap()
             .build();
-        let mut network = TestNetwork::new(config, upgrade).await;
+        let mut network = TestNetwork::new(config, TEST_UPGRADE).await;
 
         let mut events = network.peers[2].event_stream();
         // wait for 4 epochs
         wait_for_epochs(&mut events, EPOCH_HEIGHT, 4).await;
 
         let validated_state = network.server.decided_state().await.unwrap();
-        if upgrade.base == EPOCH_VERSION {
-            let v1_tree = &validated_state.reward_merkle_tree_v1;
-            assert!(v1_tree.num_leaves() > 0, "v1 reward tree tree is empty");
-            let v2_tree = &validated_state.reward_merkle_tree_v2;
-            assert!(
-                v2_tree.num_leaves() == 0,
-                "v2 reward tree tree is not empty"
-            );
-        } else {
-            let v1_tree = &validated_state.reward_merkle_tree_v1;
-            assert!(
-                v1_tree.num_leaves() == 0,
-                "v1 reward tree tree is not empty"
-            );
-            let v2_tree = &validated_state.reward_merkle_tree_v2;
-            assert!(v2_tree.num_leaves() > 0, "v2 reward tree tree is empty");
-        }
+        let v1_tree = &validated_state.reward_merkle_tree_v1;
+        assert!(
+            v1_tree.num_leaves() == 0,
+            "v1 reward tree tree is not empty"
+        );
+        let v2_tree = &validated_state.reward_merkle_tree_v2;
+        assert!(v2_tree.num_leaves() > 0, "v2 reward tree tree is empty");
 
         network.stop_consensus().await;
         Ok(())
     }
 
-    #[rstest]
-    #[case(POS_V3)]
-    #[case(POS_V4)]
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    pub(crate) async fn test_state_cert_query(#[case] upgrade: Upgrade) {
+    pub(crate) async fn test_state_cert_query() {
         const TEST_EPOCH_HEIGHT: u64 = 10;
         const TEST_EPOCHS: u64 = 5;
 
@@ -11263,13 +11534,7 @@ mod test {
         tracing::info!("API PORT = {api_port}");
         const NUM_NODES: usize = 2;
 
-        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
-        let persistence: [_; NUM_NODES] = storage
-            .iter()
-            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
-            .collect::<Vec<_>>()
-            .try_into()
-            .unwrap();
+        let (storage, persistence) = node_storage::<SqlDataSource, NUM_NODES>().await;
 
         let config = TestNetworkConfigBuilder::with_num_nodes()
             .api_config(SqlDataSource::options(
@@ -11278,24 +11543,9 @@ mod test {
             ))
             .network_config(network_config)
             .persistences(persistence.clone())
-            .catchups(std::array::from_fn(|_| {
-                StatePeers::<StaticVersion<0, 1>>::from_urls(
-                    vec![format!("http://localhost:{api_port}").parse().unwrap()],
-                    Default::default(),
-                    Duration::from_secs(2),
-                    &NoMetrics,
-                )
-            }))
-            .pos_hook(
-                DelegationConfig::MultipleDelegators,
-                hotshot_contract_adapter::stake_table::StakeTableContractVersion::V3,
-                upgrade,
-            )
-            .await
-            .unwrap()
             .build();
 
-        let network = TestNetwork::new(config, upgrade).await;
+        let network = TestNetwork::new(config, TEST_UPGRADE).await;
         let mut events = network.server.event_stream();
 
         // Wait until 5 epochs have passed.
@@ -11303,7 +11553,11 @@ mod test {
             let event = events.next().await.unwrap();
             tracing::info!("Received event from handle: {event:?}");
 
-            if let Some(leaf_chain) = decided_leaves(&event) {
+            if let CoordinatorEvent::NewDecide {
+                leaf_infos: leaf_chain,
+                ..
+            } = event
+            {
                 println!(
                     "Decide event received: {:?}",
                     leaf_chain.first().unwrap().leaf.height()
@@ -11324,10 +11578,44 @@ mod test {
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
         client.connect(Some(Duration::from_secs(10))).await;
 
-        // Get the state cert for the epoch 3 to 5
-        for i in 3..=TEST_EPOCHS {
-            // v2
+        assert_state_certs(&client, 3..=TEST_EPOCHS, TEST_EPOCH_HEIGHT).await;
+    }
 
+    /// Light client provers and catching-up nodes still fetch the state certificates of
+    /// mainnet's epochs before 0.6, whose blocks only legacy consensus produced.
+    #[rstest]
+    #[case::v3("v3")]
+    #[case::v4("v4")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_legacy_state_certs(#[case] chain: &str) -> anyhow::Result<()> {
+        let chain = LegacyChain::load(chain)?;
+        let replay = chain.replay().await?;
+        let (last_epoch, _) = chain.state_certs.last().unwrap();
+        assert_state_certs(&replay.client, 3..=*last_epoch, chain.epoch_height()).await;
+
+        let peers = StatePeers::<SequencerApiVersion>::from_urls(
+            vec![replay.url.clone()],
+            Default::default(),
+            Duration::from_secs(2),
+            &NoMetrics,
+        );
+        for (epoch, cert) in &chain.state_certs {
+            ensure!(
+                peers.try_fetch_state_cert(0, *epoch).await? == *cert,
+                "catchup of the epoch {epoch} state certificate"
+            );
+        }
+        Ok(())
+    }
+
+    /// Checks the v1 and v2 state certificates of `epochs` agree, and that each certifies its
+    /// epoch root block.
+    async fn assert_state_certs(
+        client: &Client<ClientErr, StaticVersion<0, 1>>,
+        epochs: std::ops::RangeInclusive<u64>,
+        epoch_height: u64,
+    ) {
+        for i in epochs {
             let state_query_data_v2 = client
                 .get::<StateCertQueryDataV2<SeqTypes>>(&format!("availability/state-cert-v2/{i}"))
                 .send()
@@ -11338,7 +11626,7 @@ mod test {
             assert_eq!(state_cert_v2.epoch.u64(), i);
             assert_eq!(
                 state_cert_v2.light_client_state.block_height,
-                i * TEST_EPOCH_HEIGHT - 5
+                i * epoch_height - 5
             );
             let block_height = state_cert_v2.light_client_state.block_height;
 
@@ -11348,8 +11636,8 @@ mod test {
                 .await
                 .unwrap();
 
-            // verify auth root if the consensus version is v4
-            if header.version() == DRB_AND_HEADER_UPGRADE_VERSION {
+            // Headers commit to an auth root from 0.4 on.
+            if header.version() >= DRB_AND_HEADER_UPGRADE_VERSION {
                 let auth_root = state_cert_v2.auth_root;
                 let header_auth_root = header.auth_root().unwrap();
                 if auth_root.is_zero() || header_auth_root.is_zero() {
@@ -11359,7 +11647,6 @@ mod test {
                 assert_eq!(auth_root, header_auth_root, "auth root mismatch");
             }
 
-            // v1
             let state_query_data_v1 = client
                 .get::<StateCertQueryDataV1<SeqTypes>>(&format!("availability/state-cert/{i}"))
                 .send()
@@ -11376,12 +11663,8 @@ mod test {
     /// to catch up. This test starts a 5-node network with epoch height 10, waits for 3 epochs to
     /// pass, then removes and restarts node 0 with a fresh storage. The
     /// restarted node catches up for the missing state certificates.
-
-    #[rstest]
-    #[case(POS_V3)]
-    #[case(POS_V4)]
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    pub(crate) async fn test_state_cert_catchup(#[case] upgrade: Upgrade) {
+    pub(crate) async fn test_state_cert_catchup() {
         const EPOCH_HEIGHT: u64 = 10;
 
         let network_config = TestConfigBuilder::default()
@@ -11393,13 +11676,7 @@ mod test {
         tracing::info!("API PORT = {api_port}");
         const NUM_NODES: usize = 5;
 
-        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
-        let persistence: [_; NUM_NODES] = storage
-            .iter()
-            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
-            .collect::<Vec<_>>()
-            .try_into()
-            .unwrap();
+        let (storage, persistence) = node_storage::<SqlDataSource, NUM_NODES>().await;
 
         let config = TestNetworkConfigBuilder::with_num_nodes()
             .api_config(SqlDataSource::options(
@@ -11408,24 +11685,9 @@ mod test {
             ))
             .network_config(network_config)
             .persistences(persistence.clone())
-            .catchups(std::array::from_fn(|_| {
-                StatePeers::<StaticVersion<0, 1>>::from_urls(
-                    vec![format!("http://localhost:{api_port}").parse().unwrap()],
-                    Default::default(),
-                    Duration::from_secs(2),
-                    &NoMetrics,
-                )
-            }))
-            .pos_hook(
-                DelegationConfig::MultipleDelegators,
-                hotshot_contract_adapter::stake_table::StakeTableContractVersion::V3,
-                upgrade,
-            )
-            .await
-            .unwrap()
             .build();
-        let state = config.states()[0].clone();
-        let mut network = TestNetwork::new(config, upgrade).await;
+        let mut network = TestNetwork::new(config, TEST_UPGRADE).await;
+        let state = network.genesis_state(0);
 
         let mut events = network.peers[2].event_stream();
         // Wait until at least 5 epochs have passed
@@ -11435,11 +11697,13 @@ mod test {
         // Adding an additional node to the test network is not straight forward,
         // as the keys have already been initialized in the config above.
         // So, we remove this node and re-add it using the same index.
-        network.peers.remove(0);
+        // Await the shutdown so the node's cliquenet listener releases its
+        // port before the replacement node binds the same address.
+        network.peers.remove(0).shut_down().await;
 
-        let new_storage: hotshot_query_service::data_source::sql::testing::TmpDb =
+        let new_storage: hotshot_query_service::data_source::sql::postgres::testing::TmpDb =
             SqlDataSource::create_storage().await;
-        let new_persistence: persistence::sql::Options =
+        let new_persistence: persistence::sql::postgres::Options =
             <SqlDataSource as TestableSequencerDataSource>::persistence_options(&new_storage);
 
         let node_0_port = reserve_tcp_port().expect("OS should have ephemeral ports available");
@@ -11473,7 +11737,7 @@ mod test {
                             &*metrics,
                             test_helpers::STAKE_TABLE_CAPACITY_FOR_TEST,
                             consumer,
-                            upgrade,
+                            TEST_UPGRADE,
                             Default::default(),
                         )
                         .await)
@@ -11482,6 +11746,7 @@ mod test {
             })
             .await
             .unwrap();
+        node_0.start_consensus().await;
 
         let mut events = node_0.event_stream();
         // Wait until at least 5 epochs have passed
@@ -11509,25 +11774,19 @@ mod test {
         const EPOCH_HEIGHT: u64 = 10;
 
         // Use version that supports epochs (V3 or V4)
-        let versions = POS_V4;
 
         let api_port = reserve_tcp_port().expect("OS should have ephemeral ports available");
 
         // Initialize storage for nodes
-        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
-        let persistence: [_; NUM_NODES] = storage
-            .iter()
-            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
-            .collect::<Vec<_>>()
-            .try_into()
-            .unwrap();
+        let (storage, persistence) = node_storage::<SqlDataSource, NUM_NODES>().await;
 
         // Configure test network with epochs
         let network_config = TestConfigBuilder::default()
             .epoch_height(EPOCH_HEIGHT)
             .build();
 
-        // Build test network configuration starting with V1 stake table
+        // At 0.6 only validators with a registered x25519 key and p2p address are eligible, and
+        // only the V3 contract registers them.
         let config = TestNetworkConfigBuilder::<NUM_NODES, _, _>::with_num_nodes()
             .api_config(SqlDataSource::options(
                 &storage[0],
@@ -11535,37 +11794,23 @@ mod test {
             ))
             .network_config(network_config.clone())
             .persistences(persistence.clone())
-            .catchups(std::array::from_fn(|_| {
-                StatePeers::<SequencerApiVersion>::from_urls(
-                    vec![format!("http://localhost:{api_port}").parse().unwrap()],
-                    Default::default(),
-                    Duration::from_secs(2),
-                    &NoMetrics,
-                )
-            }))
             .pos_hook(
-                // We want no new rewards after setting the commission to zero.
                 DelegationConfig::NoSelfDelegation,
-                StakeTableContractVersion::V1, // upgraded later
-                POS_V4,
+                StakeTableContractVersion::V3,
+                TEST_UPGRADE,
             )
             .await
             .unwrap()
             .build();
 
-        let network = TestNetwork::new(config, versions).await;
-        let provider = network.cfg.anvil().unwrap();
-        let deployer_addr = network.cfg.signer().address();
-        let mut contracts = network.contracts.unwrap();
+        let network = TestNetwork::new(config, TEST_UPGRADE).await;
+        let contracts = network.contracts.unwrap();
         let st_addr = contracts.address(Contract::StakeTableProxy).unwrap();
-        upgrade_stake_table_v2(
-            provider,
-            L1Client::new(vec![network.cfg.l1_url()])?,
-            &mut contracts,
-            deployer_addr,
-            deployer_addr,
-        )
-        .await?;
+
+        // Update only once epoch 3 has started: by then the stake tables of epochs 3 and 4 are
+        // fixed, so both carry the old commissions.
+        let mut events = network.peers[0].event_stream();
+        wait_for_epochs(&mut events, EPOCH_HEIGHT, 2).await;
 
         let mut commissions = vec![];
         for (i, (validator, provider)) in
@@ -11587,45 +11832,55 @@ mod test {
                 .await?;
         }
 
-        // wait until new stake table takes effect
-        let current_epoch = network.peers[0]
-            .decided_leaf()
-            .await
-            .epoch(EPOCH_HEIGHT)
-            .unwrap();
-        let target_epoch = current_epoch.u64() + 3;
-        println!("target epoch for new stake table: {target_epoch}");
-        let mut events = network.peers[0].event_stream();
-        wait_for_epochs(&mut events, EPOCH_HEIGHT, target_epoch).await;
-
-        // the last epoch with the old commissions
         let client: Client<ClientErr, SequencerApiVersion> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
-        let validators = client
-            .get::<AuthenticatedValidatorMap>(&format!("node/validators/{}", target_epoch - 1))
-            .send()
-            .await
-            .expect("validators");
-        assert!(!validators.is_empty());
-        for (val, old_comm, _) in commissions.clone() {
-            assert_eq!(validators.get(&val).unwrap().commission, old_comm.to_evm());
+        let commissions_at = async |epoch: u64| {
+            let validators = client
+                .get::<AuthenticatedValidatorMap>(&format!("node/validators/{epoch}"))
+                .send()
+                .await
+                .expect("validators");
+            commissions
+                .iter()
+                .map(|(val, ..)| validators.get(val).unwrap().commission)
+                .collect::<Vec<_>>()
+        };
+        let old = commissions
+            .iter()
+            .map(|(_, old_comm, _)| old_comm.to_evm())
+            .collect::<Vec<_>>();
+        let new = commissions
+            .iter()
+            .map(|(.., new_comm)| new_comm.to_evm())
+            .collect::<Vec<_>>();
+        assert_eq!(commissions_at(4).await, old);
+
+        // Which epoch first has all the new commissions depends on when each update finalizes on
+        // L1 relative to the epoch roots, so search for it. Epochs in between can mix old and new.
+        let mut first_new_epoch = 5;
+        loop {
+            wait_for_epochs(&mut events, EPOCH_HEIGHT, first_new_epoch - 1).await;
+            if commissions_at(first_new_epoch).await == new {
+                break;
+            }
+            first_new_epoch += 1;
+            assert!(
+                first_new_epoch <= 10,
+                "the new commissions never took effect"
+            );
         }
 
-        // the first epoch with the new commissions
-        let client: Client<ClientErr, SequencerApiVersion> =
-            Client::new(format!("http://localhost:{api_port}").parse().unwrap());
-        let validators = client
-            .get::<AuthenticatedValidatorMap>(&format!("node/validators/{target_epoch}"))
-            .send()
-            .await
-            .expect("validators");
-        assert!(!validators.is_empty());
-        for (val, _, new_comm) in commissions.clone() {
-            assert_eq!(validators.get(&val).unwrap().commission, new_comm.to_evm());
-        }
-
-        let last_block_with_old_commissions = EPOCH_HEIGHT * (target_epoch - 1);
-        let block_with_new_commissions = EPOCH_HEIGHT * target_epoch;
+        // An epoch's rewards are applied at the last block of the next epoch, so the rewards
+        // applied at the end of `first_new_epoch + 1` are the first under the new commissions.
+        wait_for_epochs(&mut events, EPOCH_HEIGHT, first_new_epoch + 1).await;
+        let last_block_with_old_commissions = EPOCH_HEIGHT * first_new_epoch;
+        let block_with_new_commissions = EPOCH_HEIGHT * (first_new_epoch + 1);
+        wait_until_block_height(
+            &client,
+            "reward-state-v2/block-height",
+            block_with_new_commissions + 1,
+        )
+        .await;
         let mut new_amounts = vec![];
         for (val, ..) in commissions {
             let before = client
@@ -11655,24 +11910,18 @@ mod test {
         Ok(())
     }
 
-    /// Start on StakeTable V2, upgrade to V3, call `updateNetworkConfig` on one
-    /// validator, and verify the indexer surfaces the new x25519 key and p2p
-    /// address in the validator map.
+    /// Call `updateNetworkConfig` on one validator and verify the indexer surfaces the new x25519
+    /// key and p2p address in the validator map.
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_integration_update_fast_finality_network_config() -> anyhow::Result<()> {
-        const NUM_NODES: usize = 3;
+        // Peers switch to a validator's new key and address as soon as the update lands, and none
+        // can reach the updated one at its made-up address, so the others must keep a quorum.
+        const NUM_NODES: usize = 4;
         const EPOCH_HEIGHT: u64 = 10;
 
-        let versions = POS_V4;
         let api_port = reserve_tcp_port().expect("OS should have ephemeral ports available");
 
-        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
-        let persistence: [_; NUM_NODES] = storage
-            .iter()
-            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
-            .collect::<Vec<_>>()
-            .try_into()
-            .unwrap();
+        let (storage, persistence) = node_storage::<SqlDataSource, NUM_NODES>().await;
 
         let network_config = TestConfigBuilder::default()
             .epoch_height(EPOCH_HEIGHT)
@@ -11685,29 +11934,18 @@ mod test {
             ))
             .network_config(network_config.clone())
             .persistences(persistence.clone())
-            .catchups(std::array::from_fn(|_| {
-                StatePeers::<SequencerApiVersion>::from_urls(
-                    vec![format!("http://localhost:{api_port}").parse().unwrap()],
-                    Default::default(),
-                    Duration::from_secs(2),
-                    &NoMetrics,
-                )
-            }))
             .pos_hook(
-                DelegationConfig::MultipleDelegators,
-                StakeTableContractVersion::V2,
-                POS_V4,
+                DelegationConfig::EqualAmounts,
+                StakeTableContractVersion::V3,
+                TEST_UPGRADE,
             )
             .await
             .unwrap()
             .build();
 
-        let network = TestNetwork::new(config, versions).await;
-        let provider = network.cfg.anvil().unwrap();
-        let mut contracts = network.contracts.unwrap();
+        let network = TestNetwork::new(config, TEST_UPGRADE).await;
+        let contracts = network.contracts.unwrap();
         let st_addr = contracts.address(Contract::StakeTableProxy).unwrap();
-
-        upgrade_stake_table_v3(provider, &mut contracts).await?;
 
         let (validator, validator_provider) = network_config
             .validator_providers()
@@ -11741,6 +11979,64 @@ mod test {
         assert_eq!(v.x25519_key, Some(x25519_key));
         assert_eq!(v.p2p_addr, Some(p2p_addr));
 
+        Ok(())
+    }
+
+    /// Mainnet's validators set their x25519 keys and p2p addresses with the V3 stake table
+    /// contract, after epochs run on V1 and V2.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_legacy_network_config_update() -> anyhow::Result<()> {
+        let chain = LegacyChain::load("v4")?;
+        let update = chain
+            .network_config_update
+            .clone()
+            .context("the v4 recording registered a network config")?;
+        let replay = chain.replay().await?;
+        let last_epoch = chain.last_epoch();
+        let validators = |epoch: u64| {
+            let client = replay.client.clone();
+            async move {
+                client
+                    .get::<AuthenticatedValidatorMap>(&format!("node/validators/{epoch}"))
+                    .send()
+                    .await
+            }
+        };
+
+        // The update reaches the stake table a few epochs after the V3 upgrade in epoch 4.
+        let mut first_seen = None;
+        // The stake table takes effect in epoch 3.
+        for epoch in 3..=last_epoch {
+            let validators = validators(epoch).await?;
+            ensure!(!validators.is_empty(), "epoch {epoch} has validators");
+            let configured = validators
+                .values()
+                .filter(|v| v.x25519_key.is_some() || v.p2p_addr.is_some())
+                .collect::<Vec<_>>();
+            if first_seen.is_none() {
+                if configured.is_empty() {
+                    continue;
+                }
+                first_seen = Some(epoch);
+            }
+            let [v] = configured.as_slice() else {
+                bail!(
+                    "epoch {epoch}: {} validators have a network config",
+                    configured.len()
+                );
+            };
+            ensure!(
+                v.account == update.validator
+                    && v.x25519_key.as_ref() == Some(&update.x25519_key)
+                    && v.p2p_addr.as_ref() == Some(&update.p2p_addr),
+                "epoch {epoch} shows the recorded network config update, not {v:?}"
+            );
+        }
+        let first_seen = first_seen.context("no epoch shows the network config update")?;
+        ensure!(
+            first_seen > 4,
+            "a V1 or V2 contract registers no network config, but epoch {first_seen} has one"
+        );
         Ok(())
     }
 
@@ -11943,10 +12239,8 @@ mod test {
         Ok(())
     }
 
-    #[rstest]
-    #[case(POS_V4)]
     #[test_log::test]
-    fn test_reward_proof_endpoint(#[case] upgrade: Upgrade) {
+    fn test_reward_proof_endpoint() {
         let test = async move {
             const EPOCH_HEIGHT: u64 = 10;
             const NUM_NODES: usize = 5;
@@ -11958,13 +12252,7 @@ mod test {
             let api_port = reserve_tcp_port().expect("OS should have ephemeral ports available");
             println!("API PORT = {api_port}");
 
-            let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
-            let persistence: [_; NUM_NODES] = storage
-                .iter()
-                .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
-                .collect::<Vec<_>>()
-                .try_into()
-                .unwrap();
+            let (storage, persistence) = node_storage::<SqlDataSource, NUM_NODES>().await;
 
             let api_opts = Options::with_port(api_port)
                 .catchup(Default::default())
@@ -11976,24 +12264,9 @@ mod test {
                 .api_config(SqlDataSource::options(&storage[0], api_opts))
                 .network_config(network_config.clone())
                 .persistences(persistence.clone())
-                .catchups(std::array::from_fn(|_| {
-                    StatePeers::<StaticVersion<0, 1>>::from_urls(
-                        vec![format!("http://localhost:{api_port}").parse().unwrap()],
-                        Default::default(),
-                        Duration::from_secs(2),
-                        &NoMetrics,
-                    )
-                }))
-                .pos_hook(
-                    DelegationConfig::MultipleDelegators,
-                    hotshot_contract_adapter::stake_table::StakeTableContractVersion::V3,
-                    upgrade,
-                )
-                .await
-                .unwrap()
                 .build();
 
-            let mut network = TestNetwork::new(config, upgrade).await;
+            let mut network = TestNetwork::new(config, TEST_UPGRADE).await;
 
             // wait for 4 epochs
             let mut events = network.server.event_stream();
@@ -12004,984 +12277,958 @@ mod test {
 
             let validated_state = network.server.decided_state().await.unwrap();
             let decided_leaf = network.server.decided_leaf().await;
-            let height = decided_leaf.height();
+            // Reward trees are persisted only at epoch boundaries, and rewards are distributed only
+            // there, so the last boundary holds the same tree as the decided state.
+            let height = decided_leaf.height() / EPOCH_HEIGHT * EPOCH_HEIGHT;
 
-            // validate proof returned from the api
-            if upgrade.base == EPOCH_VERSION {
-                // V1 case: only the legacy v1 reward tree endpoints apply here
-                wait_until_block_height(&client, "reward-state/block-height", height).await;
+            // Submit two transactions to the same namespace in separate blocks
+            // so the namespace-filtered WS stream produces ≥2 messages.
+            // Submitting both at once risks the builder batching them into a
+            // single block; submitting sequentially (wait between) guarantees
+            // different blocks so the second wait_for_decide_on_handle doesn't
+            // hang looking for an event that was already consumed by the first.
+            let avail_ns = NamespaceId::from(42_u32);
+            let avail_tx = Transaction::new(avail_ns, vec![1, 2, 3]);
+            network
+                .server
+                .submit_transaction(avail_tx.clone())
+                .await
+                .unwrap();
+            let (avail_block, _) = wait_for_decide_on_handle(&mut events, &avail_tx).await;
 
-                network.stop_consensus().await;
+            // Submit the second transaction only after the first is decided,
+            // ensuring it lands in a strictly later block.
+            let avail_tx2 = Transaction::new(avail_ns, vec![4, 5, 6]);
+            network
+                .server
+                .submit_transaction(avail_tx2.clone())
+                .await
+                .unwrap();
+            wait_for_decide_on_handle(&mut events, &avail_tx2).await;
 
-                for (address, _) in validated_state.reward_merkle_tree_v1.iter() {
-                    let (_, expected_proof) = validated_state
-                        .reward_merkle_tree_v1
-                        .lookup(*address)
-                        .expect_ok()
-                        .unwrap();
+            wait_until_block_height(&client, "reward-state-v2/block-height", height).await;
+            // Wait for the availability query service to index avail_block.
+            wait_until_block_height(&client, "node/block-height", avail_block).await;
 
-                    let res = client
-                        .get::<RewardAccountQueryDataV1>(&format!(
-                            "reward-state/proof/{height}/{address}"
+            // Sample a fee account for the fee-state comparisons below.
+            // `validated_state` was captured before the fee-paying blocks above were
+            // decided, so its fee tree can still be empty; poll the decided state while
+            // consensus is still running (it is frozen after stop_consensus). The
+            // decided state can also contain accounts added after `avail_block`, so
+            // only accept an account provable at the `avail_block` snapshot queried
+            // in the comparisons.
+            let sample_start = Instant::now();
+            let fee_account = 'fee_account: loop {
+                // A node can decide a leaf before it has validated that leaf's state itself.
+                let state = network.server.decided_state().await;
+                for (addr, _) in state.iter().flat_map(|state| state.fee_merkle_tree.iter()) {
+                    if client
+                        .get::<MerkleProof<FeeAmount, FeeAccount, Sha3Node, 256>>(&format!(
+                            "fee-state/{avail_block}/{addr}"
                         ))
                         .send()
                         .await
-                        .unwrap();
-
-                    match res.proof.proof {
-                        RewardMerkleProofV1::Presence(p) => {
-                            assert_eq!(
-                                p, expected_proof,
-                                "Proof mismatch for V1 at {height}, addr={address}"
-                            );
-                        },
-                        other => panic!(
-                            "Expected Present proof for V1 at {height}, addr={address}, got \
-                             {other:?}"
-                        ),
+                        .is_ok()
+                    {
+                        break 'fee_account *addr;
                     }
                 }
-            } else {
-                // V2 case
+                assert!(
+                    sample_start.elapsed() < Duration::from_secs(30),
+                    "no fee account provable at avail_block {avail_block} after 30s"
+                );
+                sleep(Duration::from_millis(500)).await;
+            };
 
-                // Submit two transactions to the same namespace in separate blocks
-                // so the namespace-filtered WS stream produces ≥2 messages.
-                // Submitting both at once risks the builder batching them into a
-                // single block; submitting sequentially (wait between) guarantees
-                // different blocks so the second wait_for_decide_on_handle doesn't
-                // hang looking for an event that was already consumed by the first.
-                let avail_ns = NamespaceId::from(42_u32);
-                let avail_tx = Transaction::new(avail_ns, vec![1, 2, 3]);
-                network
-                    .server
-                    .submit_transaction(avail_tx.clone())
-                    .await
-                    .unwrap();
-                let (avail_block, _) = wait_for_decide_on_handle(&mut events, &avail_tx).await;
+            network.stop_consensus().await;
 
-                // Submit the second transaction only after the first is decided,
-                // ensuring it lands in a strictly later block.
-                let avail_tx2 = Transaction::new(avail_ns, vec![4, 5, 6]);
-                network
-                    .server
-                    .submit_transaction(avail_tx2.clone())
-                    .await
-                    .unwrap();
-                wait_for_decide_on_handle(&mut events, &avail_tx2).await;
+            let http = reqwest::Client::new();
 
-                wait_until_block_height(&client, "reward-state-v2/block-height", height).await;
-                // Wait for the availability query service to index avail_block.
-                wait_until_block_height(&client, "node/block-height", avail_block).await;
-
-                // Sample a fee account for the fee-state comparisons below.
-                // `validated_state` was captured before the fee-paying blocks above were
-                // decided, so its fee tree can still be empty; poll the decided state while
-                // consensus is still running (it is frozen after stop_consensus). The
-                // decided state can also contain accounts added after `avail_block`, so
-                // only accept an account provable at the `avail_block` snapshot queried
-                // in the comparisons.
-                let sample_start = Instant::now();
-                let fee_account = 'fee_account: loop {
-                    let state = network.server.decided_state().await.unwrap();
-                    for (addr, _) in state.fee_merkle_tree.iter() {
-                        if client
-                            .get::<MerkleProof<FeeAmount, FeeAccount, Sha3Node, 256>>(&format!(
-                                "fee-state/{avail_block}/{addr}"
-                            ))
-                            .send()
-                            .await
-                            .is_ok()
-                        {
-                            break 'fee_account *addr;
-                        }
-                    }
-                    assert!(
-                        sample_start.elapsed() < Duration::from_secs(30),
-                        "no fee account provable at avail_block {avail_block} after 30s"
-                    );
-                    sleep(Duration::from_millis(500)).await;
-                };
-
-                network.stop_consensus().await;
-
-                let http = reqwest::Client::new();
-
-                for (address, _) in validated_state.reward_merkle_tree_v2.iter() {
-                    let (_, expected_proof) = validated_state
-                        .reward_merkle_tree_v2
-                        .lookup(*address)
-                        .expect_ok()
-                        .unwrap();
-
-                    let res = client
-                        .get::<RewardAccountQueryDataV2>(&format!(
-                            "reward-state-v2/proof/{height}/{address}"
-                        ))
-                        .send()
-                        .await
-                        .unwrap();
-
-                    match res.proof.proof.clone() {
-                        RewardMerkleProofV2::Presence(p) => {
-                            assert_eq!(
-                                p, expected_proof,
-                                "Proof mismatch for V2 at {height}, addr={address}"
-                            );
-                        },
-                        other => panic!(
-                            "Expected Present proof for V2 at {height}, addr={address}, got \
-                             {other:?}"
-                        ),
-                    }
-
-                    let reward_claim_input = client
-                        .get::<RewardClaimInput>(&format!(
-                            "reward-state-v2/reward-claim-input/{height}/{address}"
-                        ))
-                        .send()
-                        .await
-                        .unwrap();
-
-                    assert_eq!(reward_claim_input, res.to_reward_claim_input()?);
-
-                    // Behavior relied on by scripts/claim-rewards-loop: an account with no
-                    // rewards yields 404; any other error status makes the claim loop exit and
-                    // process-compose tear down the whole demo.
-                    let absent = alloy::primitives::Address::with_last_byte(0xaa);
-                    assert!(
-                        validated_state
-                            .reward_merkle_tree_v2
-                            .iter()
-                            .all(|(addr, _)| addr.0 != absent),
-                        "sentinel address unexpectedly present in reward tree"
-                    );
-                    let err = client
-                        .get::<RewardClaimInput>(&format!(
-                            "reward-state-v2/reward-claim-input/{height}/{absent}"
-                        ))
-                        .send()
-                        .await
-                        .unwrap_err();
-                    assert_matches!(err, ClientErr { status, .. } if status == StatusCode::NOT_FOUND);
-
-                    // Smoke-check each per-address endpoint under reward-state-v2.
-                    assert_json_endpoint(
-                        &http,
-                        api_port,
-                        &format!("reward-state-v2/proof/{height}/{address}"),
-                    )
-                    .await?;
-                    assert_json_endpoint(
-                        &http,
-                        api_port,
-                        &format!("reward-state-v2/reward-claim-input/{height}/{address}"),
-                    )
-                    .await?;
-                    assert_json_endpoint(
-                        &http,
-                        api_port,
-                        &format!("reward-state-v2/reward-balance/{height}/{address}"),
-                    )
-                    .await?;
-                    assert_json_endpoint(
-                        &http,
-                        api_port,
-                        &format!("reward-state-v2/proof/latest/{address}"),
-                    )
-                    .await?;
-                    assert_json_endpoint(
-                        &http,
-                        api_port,
-                        &format!("reward-state-v2/reward-balance/latest/{address}"),
-                    )
-                    .await?;
-
-                    // The reward-state mount shares its handlers with reward-state-v2 for
-                    // backwards compatibility, so these two routes hit the same v2-tree-backed
-                    // handlers as the pair above, just under reward-state.
-                    assert_json_endpoint(
-                        &http,
-                        api_port,
-                        &format!("reward-state/proof/latest/{address}"),
-                    )
-                    .await?;
-                    assert_json_endpoint(
-                        &http,
-                        api_port,
-                        &format!("reward-state/reward-balance/latest/{address}"),
-                    )
-                    .await?;
-                }
-
-                let (address, _) = validated_state
+            for (address, _) in validated_state.reward_merkle_tree_v2.iter() {
+                let (_, expected_proof) = validated_state
                     .reward_merkle_tree_v2
-                    .iter()
-                    .next()
-                    .expect("a proof-of-stake network has reward accounts");
-                check_reward_state_v2_parity(&client, height, address.0).await;
-
-                assert_json_endpoint(
-                    &http,
-                    api_port,
-                    &format!("reward-state-v2/reward-amounts/{height}/0/1000"),
-                )
-                .await?;
-                assert_json_endpoint(
-                    &http,
-                    api_port,
-                    &format!("reward-state-v2/reward-merkle-tree-v2/{height}"),
-                )
-                .await?;
-                assert_json_endpoint(
-                    &http,
-                    api_port,
-                    &format!("reward-state/reward-amounts/{height}/0/1000"),
-                )
-                .await?;
-                assert_json_endpoint(
-                    &http,
-                    api_port,
-                    &format!("reward-state/reward-merkle-tree-v2/{height}"),
-                )
-                .await?;
-
-                // Merklized-state `get_path` routes, inherited by both reward mounts from
-                // the legacy `hotshot-query-service` merklized-state base routes (mirrors the block-state /
-                // fee-state checks below). Nothing in this codebase populates the generic
-                // merklized-state tables for the reward trees today; the reward-state modules
-                // persist snapshots via the separate `persist_tree`/`load_tree` bincode-blob
-                // mechanism instead, so these routes fail in practice. We only assert that both
-                // mounts, in both height and commit form, return well-formed JSON.
-                let reward_address = validated_state
-                    .reward_merkle_tree_v2
-                    .iter()
-                    .next()
-                    .map(|(addr, _)| *addr)
-                    .expect("reward tree should have at least one account");
-                let reward_header: Header = client
-                    .get(&format!("availability/header/{height}"))
-                    .send()
-                    .await
+                    .lookup(*address)
+                    .expect_ok()
                     .unwrap();
-                let reward_mt_commit = match reward_header.reward_merkle_tree_root() {
-                    either::Either::Left(commit) => commit.to_string(),
-                    either::Either::Right(commit) => commit.to_string(),
-                };
-                for mount in ["reward-state", "reward-state-v2"] {
-                    assert_json_body(
-                        &http,
-                        api_port,
-                        &format!("{mount}/{height}/{reward_address}"),
-                    )
-                    .await?;
-                    assert_json_body(
-                        &http,
-                        api_port,
-                        &format!("{mount}/commit/{reward_mt_commit}/{reward_address}"),
-                    )
-                    .await?;
-                }
 
-                // Availability v1 routes.
-
-                // Namespace proof by height
-                assert_json_endpoint(
-                    &http,
-                    api_port,
-                    &format!("availability/block/{avail_block}/namespace/{avail_ns}"),
-                )
-                .await?;
-
-                // Namespace proof by block hash and payload hash
-                let avail_header: Header = client
-                    .get(&format!("availability/header/{avail_block}"))
-                    .send()
-                    .await
-                    .unwrap();
-                assert_json_endpoint(
-                    &http,
-                    api_port,
-                    &format!(
-                        "availability/block/hash/{}/namespace/{avail_ns}",
-                        avail_header.commit()
-                    ),
-                )
-                .await?;
-                assert_json_endpoint(
-                    &http,
-                    api_port,
-                    &format!(
-                        "availability/block/payload-hash/{}/namespace/{avail_ns}",
-                        avail_header.payload_commitment()
-                    ),
-                )
-                .await?;
-
-                // Namespace proof range
-                assert_json_endpoint(
-                    &http,
-                    api_port,
-                    &format!(
-                        "availability/block/{avail_block}/{}/namespace/{avail_ns}",
-                        avail_block + 1
-                    ),
-                )
-                .await?;
-
-                // State certificate endpoints (epoch 1 is complete after 4 epochs)
-                assert_json_endpoint(&http, api_port, "availability/state-cert/1").await?;
-                assert_json_endpoint(&http, api_port, "availability/state-cert-v2/1").await?;
-
-                // HotShot availability endpoints: leaf, header, block, payload, vid/common, etc.
-                let avail_leaf: LeafQueryData<SeqTypes> = client
-                    .get(&format!("availability/leaf/{avail_block}"))
-                    .send()
-                    .await
-                    .unwrap();
-                let leaf_hash = avail_leaf.hash();
-                let block_hash = avail_header.commit();
-                let payload_hash = avail_header.payload_commitment();
-
-                // Leaf endpoints
-                assert_json_endpoint(&http, api_port, &format!("availability/leaf/{avail_block}"))
-                    .await?;
-                assert_json_endpoint(
-                    &http,
-                    api_port,
-                    &format!("availability/leaf/hash/{leaf_hash}"),
-                )
-                .await?;
-                assert_json_endpoint(
-                    &http,
-                    api_port,
-                    &format!("availability/leaf/{avail_block}/{}", avail_block + 1),
-                )
-                .await?;
-
-                // Header endpoints
-                assert_json_endpoint(
-                    &http,
-                    api_port,
-                    &format!("availability/header/{avail_block}"),
-                )
-                .await?;
-                assert_json_endpoint(
-                    &http,
-                    api_port,
-                    &format!("availability/header/hash/{block_hash}"),
-                )
-                .await?;
-                assert_json_endpoint(
-                    &http,
-                    api_port,
-                    &format!("availability/header/payload-hash/{payload_hash}"),
-                )
-                .await?;
-                assert_json_endpoint(
-                    &http,
-                    api_port,
-                    &format!("availability/header/{avail_block}/{}", avail_block + 1),
-                )
-                .await?;
-
-                // Block endpoints
-                assert_json_endpoint(
-                    &http,
-                    api_port,
-                    &format!("availability/block/{avail_block}"),
-                )
-                .await?;
-                assert_json_endpoint(
-                    &http,
-                    api_port,
-                    &format!("availability/block/hash/{block_hash}"),
-                )
-                .await?;
-                assert_json_endpoint(
-                    &http,
-                    api_port,
-                    &format!("availability/block/payload-hash/{payload_hash}"),
-                )
-                .await?;
-                assert_json_endpoint(
-                    &http,
-                    api_port,
-                    &format!("availability/block/{avail_block}/{}", avail_block + 1),
-                )
-                .await?;
-
-                // Payload endpoints
-                assert_json_endpoint(
-                    &http,
-                    api_port,
-                    &format!("availability/payload/{avail_block}"),
-                )
-                .await?;
-                assert_json_endpoint(
-                    &http,
-                    api_port,
-                    &format!("availability/payload/hash/{payload_hash}"),
-                )
-                .await?;
-                assert_json_endpoint(
-                    &http,
-                    api_port,
-                    &format!("availability/payload/block-hash/{block_hash}"),
-                )
-                .await?;
-                assert_json_endpoint(
-                    &http,
-                    api_port,
-                    &format!("availability/payload/{avail_block}/{}", avail_block + 1),
-                )
-                .await?;
-
-                // VID common endpoints
-                assert_json_endpoint(
-                    &http,
-                    api_port,
-                    &format!("availability/vid/common/{avail_block}"),
-                )
-                .await?;
-                assert_json_endpoint(
-                    &http,
-                    api_port,
-                    &format!("availability/vid/common/hash/{block_hash}"),
-                )
-                .await?;
-                assert_json_endpoint(
-                    &http,
-                    api_port,
-                    &format!("availability/vid/common/payload-hash/{payload_hash}"),
-                )
-                .await?;
-                assert_json_endpoint(
-                    &http,
-                    api_port,
-                    &format!("availability/vid/common/{avail_block}/{}", avail_block + 1),
-                )
-                .await?;
-
-                // Transaction endpoints
-                let tx_hash = avail_tx.commit();
-                assert_json_endpoint(
-                    &http,
-                    api_port,
-                    &format!("availability/transaction/{avail_block}/0/noproof"),
-                )
-                .await?;
-                assert_json_endpoint(
-                    &http,
-                    api_port,
-                    &format!("availability/transaction/hash/{tx_hash}/noproof"),
-                )
-                .await?;
-                assert_json_endpoint(
-                    &http,
-                    api_port,
-                    &format!("availability/transaction/{avail_block}/0/proof"),
-                )
-                .await?;
-                assert_json_endpoint(
-                    &http,
-                    api_port,
-                    &format!("availability/transaction/hash/{tx_hash}/proof"),
-                )
-                .await?;
-                assert_json_endpoint(
-                    &http,
-                    api_port,
-                    &format!("availability/transaction/{avail_block}/0"),
-                )
-                .await?;
-                assert_json_endpoint(
-                    &http,
-                    api_port,
-                    &format!("availability/transaction/hash/{tx_hash}"),
-                )
-                .await?;
-
-                // Block summary endpoints
-                assert_json_endpoint(
-                    &http,
-                    api_port,
-                    &format!("availability/block/summary/{avail_block}"),
-                )
-                .await?;
-                assert_json_endpoint(
-                    &http,
-                    api_port,
-                    &format!(
-                        "availability/block/summaries/{avail_block}/{}",
-                        avail_block + 1
-                    ),
-                )
-                .await?;
-
-                // Limits endpoint (static response)
-                assert_json_endpoint(&http, api_port, "availability/limits").await?;
-
-                // Cert2 endpoint: `avail_block` is a mid-chain block with no cert2, so both APIs
-                // return 404. Compare status only, since the two error bodies differ by design.
-                assert_endpoint_status(
-                    &http,
-                    api_port,
-                    &format!("availability/cert2/{avail_block}"),
-                    404,
-                )
-                .await?;
-
-                // WebSocket streaming endpoints.
-                //
-                // For unfiltered streams, start 10 blocks before avail_block so there are at
-                // least 10 committed blocks ready to stream (consensus has already stopped).
-                // For namespace-filtered streams, start at avail_block where the two submitted
-                // transactions were included, giving >=2 matching messages.
-                let ws_start = avail_block.saturating_sub(10);
-                assert_ws_endpoint(api_port, &format!("availability/stream/leaves/{ws_start}"))
-                    .await?;
-                assert_ws_endpoint(api_port, &format!("availability/stream/headers/{ws_start}"))
-                    .await?;
-                assert_ws_endpoint(api_port, &format!("availability/stream/blocks/{ws_start}"))
-                    .await?;
-                assert_ws_endpoint(
-                    api_port,
-                    &format!("availability/stream/payloads/{ws_start}"),
-                )
-                .await?;
-                assert_ws_endpoint(
-                    api_port,
-                    &format!("availability/stream/vid/common/{ws_start}"),
-                )
-                .await?;
-                assert_ws_endpoint(
-                    api_port,
-                    &format!("availability/stream/transactions/{ws_start}"),
-                )
-                .await?;
-                // Namespace-filtered streams: start at avail_block; two transactions were
-                // submitted so the stream produces ≥2 messages.
-                assert_ws_endpoint(
-                    api_port,
-                    &format!("availability/stream/transactions/{avail_block}/namespace/{avail_ns}"),
-                )
-                .await?;
-                assert_ws_endpoint(
-                    api_port,
-                    &format!("availability/stream/blocks/{avail_block}/namespace/{avail_ns}"),
-                )
-                .await?;
-
-                // Our clients default to `Accept: application/octet-stream`, so the server must
-                // emit `Message::Binary` (VBS-encoded) frames on that path. Verify it does so
-                // on a representative stream.
-                assert_ws_endpoint_binary(
-                    api_port,
-                    &format!("availability/stream/leaves/{ws_start}"),
-                )
-                .await?;
-
-                // Merklized state endpoints (block-state and fee-state). Wait for
-                // the backend to have indexed the snapshot we'll query.
-                wait_until_block_height(&client, "block-state/block-height", avail_block).await;
-                wait_until_block_height(&client, "fee-state/block-height", avail_block).await;
-
-                // block-state/block-height and fee-state/block-height (latest
-                // height for which merklized state is available).
-                assert_json_endpoint(&http, api_port, "block-state/block-height").await?;
-                assert_json_endpoint(&http, api_port, "fee-state/block-height").await?;
-
-                // block-state path by height: the merkle tree at height H
-                // contains the headers of blocks [0, H), so a valid key is H-1.
-                assert_json_endpoint(
-                    &http,
-                    api_port,
-                    &format!(
-                        "block-state/{avail_block}/{}",
-                        avail_block.saturating_sub(1)
-                    ),
-                )
-                .await?;
-
-                // block-state path by commit. Use the tree commitment from
-                // the header at avail_block.
-                let block_mt_commit = avail_header.block_merkle_tree_root().to_string();
-                assert_json_endpoint(
-                    &http,
-                    api_port,
-                    &format!(
-                        "block-state/commit/{block_mt_commit}/{}",
-                        avail_block.saturating_sub(1)
-                    ),
-                )
-                .await?;
-
-                // fee-state path by height for a known fee account (sampled above while
-                // consensus was running), and fee-balance/latest for the same account.
-                assert_json_endpoint(
-                    &http,
-                    api_port,
-                    &format!("fee-state/{avail_block}/{fee_account}"),
-                )
-                .await?;
-                let fee_mt_commit = avail_header.fee_merkle_tree_root().to_string();
-                assert_json_endpoint(
-                    &http,
-                    api_port,
-                    &format!("fee-state/commit/{fee_mt_commit}/{fee_account}"),
-                )
-                .await?;
-                assert_json_endpoint(
-                    &http,
-                    api_port,
-                    &format!("fee-state/fee-balance/latest/{fee_account}"),
-                )
-                .await?;
-
-                // Status endpoints. Block height and success rate are stable since consensus is
-                // stopped; time-since-last-decide and metrics vary by wall-clock so we only
-                // check for a 2xx.
-                assert_json_endpoint(&http, api_port, "status/block-height").await?;
-                assert_json_endpoint(&http, api_port, "status/success-rate").await?;
-                assert_endpoint_ok(&http, api_port, "status/time-since-last-decide").await?;
-                assert_endpoint_ok(&http, api_port, "status/metrics").await?;
-
-                // Config endpoints. /runtime returns 404 because no PublicNodeConfig was
-                // configured for this test.
-                assert_json_endpoint(&http, api_port, "config/hotshot").await?;
-                assert_json_endpoint(&http, api_port, "config/env").await?;
-                assert_endpoint_status(&http, api_port, "config/runtime", 404).await?;
-
-                // Node endpoints.
-                assert_json_endpoint(&http, api_port, "node/block-height").await?;
-                assert_json_endpoint(&http, api_port, "node/transactions/count").await?;
-                assert_json_endpoint(
-                    &http,
-                    api_port,
-                    &format!("node/transactions/count/{avail_block}"),
-                )
-                .await?;
-                assert_json_endpoint(
-                    &http,
-                    api_port,
-                    &format!("node/transactions/count/0/{avail_block}"),
-                )
-                .await?;
-                assert_json_endpoint(
-                    &http,
-                    api_port,
-                    &format!("node/transactions/count/namespace/{avail_ns}"),
-                )
-                .await?;
-                assert_json_endpoint(
-                    &http,
-                    api_port,
-                    &format!("node/transactions/count/namespace/{avail_ns}/{avail_block}"),
-                )
-                .await?;
-                assert_json_endpoint(
-                    &http,
-                    api_port,
-                    &format!("node/transactions/count/namespace/{avail_ns}/0/{avail_block}"),
-                )
-                .await?;
-
-                assert_json_endpoint(&http, api_port, "node/payloads/size").await?;
-                assert_json_endpoint(&http, api_port, "node/payloads/total-size").await?;
-                assert_json_endpoint(
-                    &http,
-                    api_port,
-                    &format!("node/payloads/size/{avail_block}"),
-                )
-                .await?;
-                assert_json_endpoint(
-                    &http,
-                    api_port,
-                    &format!("node/payloads/size/0/{avail_block}"),
-                )
-                .await?;
-                assert_json_endpoint(
-                    &http,
-                    api_port,
-                    &format!("node/payloads/size/namespace/{avail_ns}"),
-                )
-                .await?;
-                assert_json_endpoint(
-                    &http,
-                    api_port,
-                    &format!("node/payloads/size/namespace/{avail_ns}/{avail_block}"),
-                )
-                .await?;
-                assert_json_endpoint(
-                    &http,
-                    api_port,
-                    &format!("node/payloads/size/namespace/{avail_ns}/0/{avail_block}"),
-                )
-                .await?;
-
-                assert_json_endpoint(&http, api_port, &format!("node/vid/share/{avail_block}"))
-                    .await?;
-                assert_json_endpoint(
-                    &http,
-                    api_port,
-                    &format!("node/vid/share/hash/{block_hash}"),
-                )
-                .await?;
-                assert_json_endpoint(
-                    &http,
-                    api_port,
-                    &format!("node/vid/share/payload-hash/{payload_hash}"),
-                )
-                .await?;
-
-                assert_json_endpoint(&http, api_port, "node/sync-status").await?;
-                assert_json_endpoint(&http, api_port, "node/limits").await?;
-
-                // Header window: cover all three start variants (time, height, hash). `end` is
-                // an exclusive Unix-second cutoff; using the block's own timestamp + 1 yields
-                // a deterministic single-block window.
-                let avail_ts = avail_header.timestamp();
-                assert_json_endpoint(
-                    &http,
-                    api_port,
-                    &format!("node/header/window/{avail_ts}/{}", avail_ts + 1),
-                )
-                .await?;
-                assert_json_endpoint(
-                    &http,
-                    api_port,
-                    &format!("node/header/window/from/{avail_block}/{}", avail_ts + 1),
-                )
-                .await?;
-                assert_json_endpoint(
-                    &http,
-                    api_port,
-                    &format!("node/header/window/from/hash/{block_hash}/{}", avail_ts + 1),
-                )
-                .await?;
-
-                assert_json_endpoint(&http, api_port, "node/stake-table/current").await?;
-                assert_json_endpoint(&http, api_port, "node/stake-table/1").await?;
-                assert_json_endpoint(&http, api_port, "node/da-stake-table/current").await?;
-                assert_json_endpoint(&http, api_port, "node/da-stake-table/1").await?;
-
-                assert_json_endpoint(&http, api_port, "node/validators/1").await?;
-                assert_json_endpoint(&http, api_port, "node/all-validators/1/0/100").await?;
-
-                assert_json_endpoint(&http, api_port, "node/participation/proposal/current")
-                    .await?;
-                assert_json_endpoint(&http, api_port, "node/participation/proposal/1").await?;
-                assert_json_endpoint(&http, api_port, "node/participation/vote/current").await?;
-                assert_json_endpoint(&http, api_port, "node/participation/vote/1").await?;
-
-                assert_json_endpoint(&http, api_port, "node/block-reward").await?;
-                assert_json_endpoint(&http, api_port, "node/block-reward/epoch/1").await?;
-
-                assert_json_endpoint(&http, api_port, "node/oldest-block").await?;
-                assert_json_endpoint(&http, api_port, "node/oldest-leaf").await?;
-
-                // Catchup endpoints. View number and height for in-memory state aren't readily
-                // available after stopping consensus, so we check error semantics on
-                // intentionally invalid lookups and the deprecated routes.
-                let decided_view = decided_leaf.view_number().u64();
-                assert_json_endpoint(
-                    &http,
-                    api_port,
-                    &format!("catchup/{height}/{decided_view}/blocks"),
-                )
-                .await?;
-                // chain-config: a malformed TaggedBase64 commitment (bad checksum) parses-fails
-                // on the request path and yields 400.
-                assert_endpoint_status(
-                    &http,
-                    api_port,
-                    "catchup/chain-config/CHAINCONFIG~AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
-                    400,
-                )
-                .await?;
-                // leafchain: undecided height returns 404 from both.
-                assert_endpoint_status(&http, api_port, "catchup/999999/leafchain", 404).await?;
-                // cert2: missing cert returns 404.
-                assert_endpoint_status(&http, api_port, "catchup/999999/cert2", 404).await?;
-                // Deprecated catchup routes still respond 404.
-                assert_endpoint_status(&http, api_port, "catchup/1/reward-amounts/100/0", 404)
-                    .await?;
-
-                // Production peer-catchup posts VBS-binary bodies via http-client.
-                // Exercise the bulk-account POST endpoints in that exact wire format so any
-                // regression to "JSON-only body" is caught here.
-                // Reuse the account sampled above; `validated_state.fee_merkle_tree` was
-                // captured before the fee-paying blocks and can be empty.
-                assert_post_binary(
-                    &http,
-                    api_port,
-                    &format!("catchup/{height}/{decided_view}/accounts"),
-                    &vec![fee_account],
-                )
-                .await?;
-                // reward-accounts V1 takes a Vec<RewardAccountV1>. We send empty since the V2
-                // tree may not have V1-shaped entries in this test, but the wire format is what
-                // we're validating.
-                assert_post_binary(
-                    &http,
-                    api_port,
-                    &format!("catchup/{height}/{decided_view}/reward-accounts"),
-                    &Vec::<espresso_types::v0_3::RewardAccountV1>::new(),
-                )
-                .await?;
-
-                // State signature: missing heights should 404.
-                assert_endpoint_status(&http, api_port, "state-signature/block/999999", 404)
-                    .await?;
-
-                // Error bodies for endpoints that fail via `ApiError` must keep the
-                // `{"Custom":{"message","status"}}` JSON envelope that existing clients parse.
-                // Availability endpoints (`availability/leaf/...`, etc.) are excluded because
-                // they use per-endpoint error variants like `{"FetchLeaf":{...}}`; their status
-                // codes are still checked by `assert_endpoint_status` above.
-                assert_error_body(&http, api_port, "catchup/999999/cert2", 404).await?;
-                assert_error_body(&http, api_port, "catchup/999999/leafchain", 404).await?;
-                assert_error_body(&http, api_port, "state-signature/block/999999", 404).await?;
-
-                // Explorer endpoints.
-                assert_json_endpoint(&http, api_port, "explorer/explorer-summary").await?;
-                assert_json_endpoint(&http, api_port, &format!("explorer/block/{avail_block}"))
-                    .await?;
-                assert_json_endpoint(
-                    &http,
-                    api_port,
-                    &format!("explorer/block/hash/{block_hash}"),
-                )
-                .await?;
-                assert_json_endpoint(&http, api_port, "explorer/blocks/latest/10").await?;
-                assert_json_endpoint(
-                    &http,
-                    api_port,
-                    &format!("explorer/blocks/{avail_block}/10"),
-                )
-                .await?;
-                assert_json_endpoint(&http, api_port, "explorer/transactions/latest/10").await?;
-
-                // Explorer errors keep their status: missing objects are 404 and unsupported
-                // search tags are 400, while a search that finds nothing is an empty result.
-                assert_error_body(&http, api_port, "explorer/block/999999", 404).await?;
-                assert_error_body(&http, api_port, "explorer/transaction/999999/0", 404).await?;
-                assert_error_body(
-                    &http,
-                    api_port,
-                    &format!("explorer/search/{leaf_hash}"),
-                    400,
-                )
-                .await?;
-                let unknown_block = tagged_base64::TaggedBase64::new("BLOCK", &[0; 32])?;
-                let search: serde_json::Value = http
-                    .get(format!(
-                        "http://localhost:{api_port}/v1/explorer/search/{unknown_block}"
+                let res = client
+                    .get::<RewardAccountQueryDataV2>(&format!(
+                        "reward-state-v2/proof/{height}/{address}"
                     ))
                     .send()
-                    .await?
-                    .error_for_status()?
-                    .json()
-                    .await?;
-                assert_eq!(
-                    search["search_results"],
-                    serde_json::json!({"blocks": [], "transactions": []})
+                    .await
+                    .unwrap();
+
+                match res.proof.proof.clone() {
+                    RewardMerkleProofV2::Presence(p) => {
+                        assert_eq!(
+                            p, expected_proof,
+                            "Proof mismatch for V2 at {height}, addr={address}"
+                        );
+                    },
+                    other => panic!(
+                        "Expected Present proof for V2 at {height}, addr={address}, got {other:?}"
+                    ),
+                }
+
+                let reward_claim_input = client
+                    .get::<RewardClaimInput>(&format!(
+                        "reward-state-v2/reward-claim-input/{height}/{address}"
+                    ))
+                    .send()
+                    .await
+                    .unwrap();
+
+                assert_eq!(reward_claim_input, res.to_reward_claim_input()?);
+
+                // Behavior relied on by scripts/claim-rewards-loop: an account with no
+                // rewards yields 404; any other error status makes the claim loop exit and
+                // process-compose tear down the whole demo.
+                let absent = alloy::primitives::Address::with_last_byte(0xaa);
+                assert!(
+                    validated_state
+                        .reward_merkle_tree_v2
+                        .iter()
+                        .all(|(addr, _)| addr.0 != absent),
+                    "sentinel address unexpectedly present in reward tree"
                 );
+                let err = client
+                    .get::<RewardClaimInput>(&format!(
+                        "reward-state-v2/reward-claim-input/{height}/{absent}"
+                    ))
+                    .send()
+                    .await
+                    .unwrap_err();
+                assert_matches!(err, ClientErr { status, .. } if status == StatusCode::NOT_FOUND);
 
-                // Light-client endpoints. Use the same block we used for availability tests.
-                assert_json_endpoint(&http, api_port, &format!("light-client/leaf/{avail_block}"))
-                    .await?;
+                // Smoke-check each per-address endpoint under reward-state-v2.
                 assert_json_endpoint(
                     &http,
                     api_port,
-                    &format!("light-client/leaf/hash/{leaf_hash}"),
-                )
-                .await?;
-                assert_json_endpoint(
-                    &http,
-                    api_port,
-                    &format!("light-client/payload/{avail_block}"),
-                )
-                .await?;
-                assert_json_endpoint(
-                    &http,
-                    api_port,
-                    &format!("light-client/payload/{avail_block}/{}", avail_block + 1),
+                    &format!("reward-state-v2/proof/{height}/{address}"),
                 )
                 .await?;
                 assert_json_endpoint(
                     &http,
                     api_port,
-                    &format!(
-                        "light-client/namespace/{avail_block}/{}",
-                        u64::from(avail_ns)
-                    ),
+                    &format!("reward-state-v2/reward-claim-input/{height}/{address}"),
                 )
                 .await?;
                 assert_json_endpoint(
                     &http,
                     api_port,
-                    &format!(
-                        "light-client/namespace/{avail_block}/{}/{}",
-                        avail_block + 1,
-                        u64::from(avail_ns)
-                    ),
+                    &format!("reward-state-v2/reward-balance/{height}/{address}"),
+                )
+                .await?;
+                assert_json_endpoint(
+                    &http,
+                    api_port,
+                    &format!("reward-state-v2/proof/latest/{address}"),
+                )
+                .await?;
+                assert_json_endpoint(
+                    &http,
+                    api_port,
+                    &format!("reward-state-v2/reward-balance/latest/{address}"),
                 )
                 .await?;
 
-                // Regression: an oversized range on the plural namespaces route must return
-                // 400 Bad Request (the status carried by the query-service error), not 500.
-                let encoded_ns = tagged_base64::TaggedBase64::new(
-                    ::light_client::client::NAMESPACES_PARAM_TAG,
-                    &serde_json::to_vec(&vec![u64::from(avail_ns)])?,
-                )?;
-                assert_endpoint_status(
+                // The reward-state mount shares its handlers with reward-state-v2 for
+                // backwards compatibility, so these two routes hit the same v2-tree-backed
+                // handlers as the pair above, just under reward-state.
+                assert_json_endpoint(
                     &http,
                     api_port,
-                    &format!(
-                        "light-client/namespaces/{avail_block}/{}/{encoded_ns}",
-                        avail_block + 200
-                    ),
-                    400,
+                    &format!("reward-state/proof/latest/{address}"),
                 )
                 .await?;
-
-                // Token endpoints.
-                assert_json_endpoint(&http, api_port, "token/total-minted-supply").await?;
-                assert_json_endpoint(&http, api_port, "token/circulating-supply").await?;
-                assert_json_endpoint(&http, api_port, "token/circulating-supply-ethereum").await?;
-                assert_json_endpoint(&http, api_port, "token/total-issued-supply").await?;
-                assert_json_endpoint(&http, api_port, "token/total-reward-distributed").await?;
-
-                // HTTP status codes for common failure cases that clients depend on.
-
-                // Requesting a leaf far ahead of the chain tip times out and returns
-                // 404 Not Found.
-                assert_endpoint_status(&http, api_port, "availability/leaf/999999", 404).await?;
-
-                // Requesting a block range that exceeds the per-request limit
-                // returns 400 Bad Request.
-                assert_endpoint_status(
+                assert_json_endpoint(
                     &http,
                     api_port,
-                    &format!("availability/block/{avail_block}/{}", avail_block + 200),
-                    400,
-                )
-                .await?;
-
-                // Requesting a namespace proof range that exceeds the limit also
-                // returns 400 Bad Request.
-                assert_endpoint_status(
-                    &http,
-                    api_port,
-                    &format!(
-                        "availability/block/{avail_block}/{}/namespace/{avail_ns}",
-                        avail_block + 200
-                    ),
-                    400,
+                    &format!("reward-state/reward-balance/latest/{address}"),
                 )
                 .await?;
             }
+
+            let (address, _) = validated_state
+                .reward_merkle_tree_v2
+                .iter()
+                .next()
+                .expect("a proof-of-stake network has reward accounts");
+            check_reward_state_v2_parity(&client, height, address.0).await;
+
+            assert_json_endpoint(
+                &http,
+                api_port,
+                &format!("reward-state-v2/reward-amounts/{height}/0/1000"),
+            )
+            .await?;
+            assert_json_endpoint(
+                &http,
+                api_port,
+                &format!("reward-state-v2/reward-merkle-tree-v2/{height}"),
+            )
+            .await?;
+            assert_json_endpoint(
+                &http,
+                api_port,
+                &format!("reward-state/reward-amounts/{height}/0/1000"),
+            )
+            .await?;
+            assert_json_endpoint(
+                &http,
+                api_port,
+                &format!("reward-state/reward-merkle-tree-v2/{height}"),
+            )
+            .await?;
+
+            // Merklized-state `get_path` routes, inherited by both reward mounts from
+            // the legacy `hotshot-query-service` merklized-state base routes (mirrors the block-state /
+            // fee-state checks below). Nothing in this codebase populates the generic
+            // merklized-state tables for the reward trees today; the reward-state modules
+            // persist snapshots via the separate `persist_tree`/`load_tree` bincode-blob
+            // mechanism instead, so these routes fail in practice. We only assert that both
+            // mounts, in both height and commit form, return well-formed JSON.
+            let reward_address = validated_state
+                .reward_merkle_tree_v2
+                .iter()
+                .next()
+                .map(|(addr, _)| *addr)
+                .expect("reward tree should have at least one account");
+            let reward_header: Header = client
+                .get(&format!("availability/header/{height}"))
+                .send()
+                .await
+                .unwrap();
+            let reward_mt_commit = match reward_header.reward_merkle_tree_root() {
+                either::Either::Left(commit) => commit.to_string(),
+                either::Either::Right(commit) => commit.to_string(),
+            };
+            for mount in ["reward-state", "reward-state-v2"] {
+                assert_json_body(
+                    &http,
+                    api_port,
+                    &format!("{mount}/{height}/{reward_address}"),
+                )
+                .await?;
+                assert_json_body(
+                    &http,
+                    api_port,
+                    &format!("{mount}/commit/{reward_mt_commit}/{reward_address}"),
+                )
+                .await?;
+            }
+
+            // Availability v1 routes.
+
+            // Namespace proof by height
+            assert_json_endpoint(
+                &http,
+                api_port,
+                &format!("availability/block/{avail_block}/namespace/{avail_ns}"),
+            )
+            .await?;
+
+            // Namespace proof by block hash and payload hash
+            let avail_header: Header = client
+                .get(&format!("availability/header/{avail_block}"))
+                .send()
+                .await
+                .unwrap();
+            assert_json_endpoint(
+                &http,
+                api_port,
+                &format!(
+                    "availability/block/hash/{}/namespace/{avail_ns}",
+                    avail_header.commit()
+                ),
+            )
+            .await?;
+            assert_json_endpoint(
+                &http,
+                api_port,
+                &format!(
+                    "availability/block/payload-hash/{}/namespace/{avail_ns}",
+                    avail_header.payload_commitment()
+                ),
+            )
+            .await?;
+
+            // Namespace proof range
+            assert_json_endpoint(
+                &http,
+                api_port,
+                &format!(
+                    "availability/block/{avail_block}/{}/namespace/{avail_ns}",
+                    avail_block + 1
+                ),
+            )
+            .await?;
+
+            // State certificate endpoints (epoch 1 is complete after 4 epochs)
+            assert_json_endpoint(&http, api_port, "availability/state-cert/1").await?;
+            assert_json_endpoint(&http, api_port, "availability/state-cert-v2/1").await?;
+
+            // HotShot availability endpoints: leaf, header, block, payload, vid/common, etc.
+            let avail_leaf: LeafQueryData<SeqTypes> = client
+                .get(&format!("availability/leaf/{avail_block}"))
+                .send()
+                .await
+                .unwrap();
+            let leaf_hash = avail_leaf.hash();
+            let block_hash = avail_header.commit();
+            let payload_hash = avail_header.payload_commitment();
+
+            // Leaf endpoints
+            assert_json_endpoint(&http, api_port, &format!("availability/leaf/{avail_block}"))
+                .await?;
+            assert_json_endpoint(
+                &http,
+                api_port,
+                &format!("availability/leaf/hash/{leaf_hash}"),
+            )
+            .await?;
+            assert_json_endpoint(
+                &http,
+                api_port,
+                &format!("availability/leaf/{avail_block}/{}", avail_block + 1),
+            )
+            .await?;
+
+            // Header endpoints
+            assert_json_endpoint(
+                &http,
+                api_port,
+                &format!("availability/header/{avail_block}"),
+            )
+            .await?;
+            assert_json_endpoint(
+                &http,
+                api_port,
+                &format!("availability/header/hash/{block_hash}"),
+            )
+            .await?;
+            assert_json_endpoint(
+                &http,
+                api_port,
+                &format!("availability/header/payload-hash/{payload_hash}"),
+            )
+            .await?;
+            assert_json_endpoint(
+                &http,
+                api_port,
+                &format!("availability/header/{avail_block}/{}", avail_block + 1),
+            )
+            .await?;
+
+            // Block endpoints
+            assert_json_endpoint(
+                &http,
+                api_port,
+                &format!("availability/block/{avail_block}"),
+            )
+            .await?;
+            assert_json_endpoint(
+                &http,
+                api_port,
+                &format!("availability/block/hash/{block_hash}"),
+            )
+            .await?;
+            assert_json_endpoint(
+                &http,
+                api_port,
+                &format!("availability/block/payload-hash/{payload_hash}"),
+            )
+            .await?;
+            assert_json_endpoint(
+                &http,
+                api_port,
+                &format!("availability/block/{avail_block}/{}", avail_block + 1),
+            )
+            .await?;
+
+            // Payload endpoints
+            assert_json_endpoint(
+                &http,
+                api_port,
+                &format!("availability/payload/{avail_block}"),
+            )
+            .await?;
+            assert_json_endpoint(
+                &http,
+                api_port,
+                &format!("availability/payload/hash/{payload_hash}"),
+            )
+            .await?;
+            assert_json_endpoint(
+                &http,
+                api_port,
+                &format!("availability/payload/block-hash/{block_hash}"),
+            )
+            .await?;
+            assert_json_endpoint(
+                &http,
+                api_port,
+                &format!("availability/payload/{avail_block}/{}", avail_block + 1),
+            )
+            .await?;
+
+            // VID common endpoints
+            assert_json_endpoint(
+                &http,
+                api_port,
+                &format!("availability/vid/common/{avail_block}"),
+            )
+            .await?;
+            assert_json_endpoint(
+                &http,
+                api_port,
+                &format!("availability/vid/common/hash/{block_hash}"),
+            )
+            .await?;
+            assert_json_endpoint(
+                &http,
+                api_port,
+                &format!("availability/vid/common/payload-hash/{payload_hash}"),
+            )
+            .await?;
+            assert_json_endpoint(
+                &http,
+                api_port,
+                &format!("availability/vid/common/{avail_block}/{}", avail_block + 1),
+            )
+            .await?;
+
+            // Transaction endpoints
+            let tx_hash = avail_tx.commit();
+            assert_json_endpoint(
+                &http,
+                api_port,
+                &format!("availability/transaction/{avail_block}/0/noproof"),
+            )
+            .await?;
+            assert_json_endpoint(
+                &http,
+                api_port,
+                &format!("availability/transaction/hash/{tx_hash}/noproof"),
+            )
+            .await?;
+            assert_json_endpoint(
+                &http,
+                api_port,
+                &format!("availability/transaction/{avail_block}/0/proof"),
+            )
+            .await?;
+            assert_json_endpoint(
+                &http,
+                api_port,
+                &format!("availability/transaction/hash/{tx_hash}/proof"),
+            )
+            .await?;
+            assert_json_endpoint(
+                &http,
+                api_port,
+                &format!("availability/transaction/{avail_block}/0"),
+            )
+            .await?;
+            assert_json_endpoint(
+                &http,
+                api_port,
+                &format!("availability/transaction/hash/{tx_hash}"),
+            )
+            .await?;
+
+            // Block summary endpoints
+            assert_json_endpoint(
+                &http,
+                api_port,
+                &format!("availability/block/summary/{avail_block}"),
+            )
+            .await?;
+            assert_json_endpoint(
+                &http,
+                api_port,
+                &format!(
+                    "availability/block/summaries/{avail_block}/{}",
+                    avail_block + 1
+                ),
+            )
+            .await?;
+
+            // Limits endpoint (static response)
+            assert_json_endpoint(&http, api_port, "availability/limits").await?;
+
+            // Cert2 endpoint: a cert2 is stored only at the newest leaf of each decide, so
+            // scan from `avail_block` for one. Every other height has none.
+            let tip = client.get::<u64>("node/block-height").send().await?;
+            let mut cert2_height = None;
+            for height in avail_block..tip {
+                let status = http
+                    .get(format!(
+                        "http://localhost:{api_port}/v1/availability/cert2/{height}"
+                    ))
+                    .send()
+                    .await?
+                    .status()
+                    .as_u16();
+                match status {
+                    200 => {
+                        cert2_height = Some(height);
+                        break;
+                    },
+                    404 => {},
+                    _ => panic!("v1/availability/cert2/{height}: returned {status}"),
+                }
+            }
+            let cert2_height =
+                cert2_height.with_context(|| format!("no cert2 stored in {avail_block}..{tip}"))?;
+            assert_json_endpoint(
+                &http,
+                api_port,
+                &format!("availability/cert2/{cert2_height}"),
+            )
+            .await?;
+
+            // WebSocket streaming endpoints.
+            //
+            // For unfiltered streams, start 10 blocks before avail_block so there are at
+            // least 10 committed blocks ready to stream (consensus has already stopped).
+            // For namespace-filtered streams, start at avail_block where the two submitted
+            // transactions were included, giving >=2 matching messages.
+            let ws_start = avail_block.saturating_sub(10);
+            assert_ws_endpoint(api_port, &format!("availability/stream/leaves/{ws_start}")).await?;
+            assert_ws_endpoint(api_port, &format!("availability/stream/headers/{ws_start}"))
+                .await?;
+            assert_ws_endpoint(api_port, &format!("availability/stream/blocks/{ws_start}")).await?;
+            assert_ws_endpoint(
+                api_port,
+                &format!("availability/stream/payloads/{ws_start}"),
+            )
+            .await?;
+            assert_ws_endpoint(
+                api_port,
+                &format!("availability/stream/vid/common/{ws_start}"),
+            )
+            .await?;
+            assert_ws_endpoint(
+                api_port,
+                &format!("availability/stream/transactions/{ws_start}"),
+            )
+            .await?;
+            // Namespace-filtered streams: start at avail_block; two transactions were
+            // submitted so the stream produces ≥2 messages.
+            assert_ws_endpoint(
+                api_port,
+                &format!("availability/stream/transactions/{avail_block}/namespace/{avail_ns}"),
+            )
+            .await?;
+            assert_ws_endpoint(
+                api_port,
+                &format!("availability/stream/blocks/{avail_block}/namespace/{avail_ns}"),
+            )
+            .await?;
+
+            // Our clients default to `Accept: application/octet-stream`, so the server must
+            // emit `Message::Binary` (VBS-encoded) frames on that path. Verify it does so
+            // on a representative stream.
+            assert_ws_endpoint_binary(api_port, &format!("availability/stream/leaves/{ws_start}"))
+                .await?;
+
+            // Merklized state endpoints (block-state and fee-state). Wait for
+            // the backend to have indexed the snapshot we'll query.
+            wait_until_block_height(&client, "block-state/block-height", avail_block).await;
+            wait_until_block_height(&client, "fee-state/block-height", avail_block).await;
+
+            // block-state/block-height and fee-state/block-height (latest
+            // height for which merklized state is available).
+            assert_json_endpoint(&http, api_port, "block-state/block-height").await?;
+            assert_json_endpoint(&http, api_port, "fee-state/block-height").await?;
+
+            // block-state path by height: the merkle tree at height H
+            // contains the headers of blocks [0, H), so a valid key is H-1.
+            assert_json_endpoint(
+                &http,
+                api_port,
+                &format!(
+                    "block-state/{avail_block}/{}",
+                    avail_block.saturating_sub(1)
+                ),
+            )
+            .await?;
+
+            // block-state path by commit. Use the tree commitment from
+            // the header at avail_block.
+            let block_mt_commit = avail_header.block_merkle_tree_root().to_string();
+            assert_json_endpoint(
+                &http,
+                api_port,
+                &format!(
+                    "block-state/commit/{block_mt_commit}/{}",
+                    avail_block.saturating_sub(1)
+                ),
+            )
+            .await?;
+
+            // fee-state path by height for a known fee account (sampled above while
+            // consensus was running), and fee-balance/latest for the same account.
+            assert_json_endpoint(
+                &http,
+                api_port,
+                &format!("fee-state/{avail_block}/{fee_account}"),
+            )
+            .await?;
+            let fee_mt_commit = avail_header.fee_merkle_tree_root().to_string();
+            assert_json_endpoint(
+                &http,
+                api_port,
+                &format!("fee-state/commit/{fee_mt_commit}/{fee_account}"),
+            )
+            .await?;
+            assert_json_endpoint(
+                &http,
+                api_port,
+                &format!("fee-state/fee-balance/latest/{fee_account}"),
+            )
+            .await?;
+
+            // Status endpoints. Block height and success rate are stable since consensus is
+            // stopped; time-since-last-decide and metrics vary by wall-clock so we only
+            // check for a 2xx.
+            assert_json_endpoint(&http, api_port, "status/block-height").await?;
+            assert_json_endpoint(&http, api_port, "status/success-rate").await?;
+            assert_endpoint_ok(&http, api_port, "status/time-since-last-decide").await?;
+            assert_endpoint_ok(&http, api_port, "status/metrics").await?;
+
+            // Config endpoints. /runtime returns 404 because no PublicNodeConfig was
+            // configured for this test.
+            assert_json_endpoint(&http, api_port, "config/hotshot").await?;
+            assert_json_endpoint(&http, api_port, "config/env").await?;
+            assert_endpoint_status(&http, api_port, "config/runtime", 404).await?;
+
+            // Node endpoints.
+            assert_json_endpoint(&http, api_port, "node/block-height").await?;
+            assert_json_endpoint(&http, api_port, "node/transactions/count").await?;
+            assert_json_endpoint(
+                &http,
+                api_port,
+                &format!("node/transactions/count/{avail_block}"),
+            )
+            .await?;
+            assert_json_endpoint(
+                &http,
+                api_port,
+                &format!("node/transactions/count/0/{avail_block}"),
+            )
+            .await?;
+            assert_json_endpoint(
+                &http,
+                api_port,
+                &format!("node/transactions/count/namespace/{avail_ns}"),
+            )
+            .await?;
+            assert_json_endpoint(
+                &http,
+                api_port,
+                &format!("node/transactions/count/namespace/{avail_ns}/{avail_block}"),
+            )
+            .await?;
+            assert_json_endpoint(
+                &http,
+                api_port,
+                &format!("node/transactions/count/namespace/{avail_ns}/0/{avail_block}"),
+            )
+            .await?;
+
+            assert_json_endpoint(&http, api_port, "node/payloads/size").await?;
+            assert_json_endpoint(&http, api_port, "node/payloads/total-size").await?;
+            assert_json_endpoint(
+                &http,
+                api_port,
+                &format!("node/payloads/size/{avail_block}"),
+            )
+            .await?;
+            assert_json_endpoint(
+                &http,
+                api_port,
+                &format!("node/payloads/size/0/{avail_block}"),
+            )
+            .await?;
+            assert_json_endpoint(
+                &http,
+                api_port,
+                &format!("node/payloads/size/namespace/{avail_ns}"),
+            )
+            .await?;
+            assert_json_endpoint(
+                &http,
+                api_port,
+                &format!("node/payloads/size/namespace/{avail_ns}/{avail_block}"),
+            )
+            .await?;
+            assert_json_endpoint(
+                &http,
+                api_port,
+                &format!("node/payloads/size/namespace/{avail_ns}/0/{avail_block}"),
+            )
+            .await?;
+
+            assert_json_endpoint(&http, api_port, &format!("node/vid/share/{avail_block}")).await?;
+            assert_json_endpoint(
+                &http,
+                api_port,
+                &format!("node/vid/share/hash/{block_hash}"),
+            )
+            .await?;
+            assert_json_endpoint(
+                &http,
+                api_port,
+                &format!("node/vid/share/payload-hash/{payload_hash}"),
+            )
+            .await?;
+
+            assert_json_endpoint(&http, api_port, "node/sync-status").await?;
+            assert_json_endpoint(&http, api_port, "node/limits").await?;
+
+            // Header window: cover all three start variants (time, height, hash). `end` is
+            // an exclusive Unix-second cutoff; using the block's own timestamp + 1 yields
+            // a deterministic single-block window.
+            let avail_ts = avail_header.timestamp();
+            assert_json_endpoint(
+                &http,
+                api_port,
+                &format!("node/header/window/{avail_ts}/{}", avail_ts + 1),
+            )
+            .await?;
+            assert_json_endpoint(
+                &http,
+                api_port,
+                &format!("node/header/window/from/{avail_block}/{}", avail_ts + 1),
+            )
+            .await?;
+            assert_json_endpoint(
+                &http,
+                api_port,
+                &format!("node/header/window/from/hash/{block_hash}/{}", avail_ts + 1),
+            )
+            .await?;
+
+            assert_json_endpoint(&http, api_port, "node/stake-table/current").await?;
+            assert_json_endpoint(&http, api_port, "node/stake-table/1").await?;
+            assert_json_endpoint(&http, api_port, "node/da-stake-table/current").await?;
+            assert_json_endpoint(&http, api_port, "node/da-stake-table/1").await?;
+
+            assert_json_endpoint(&http, api_port, "node/validators/1").await?;
+            assert_json_endpoint(&http, api_port, "node/all-validators/1/0/100").await?;
+
+            assert_json_endpoint(&http, api_port, "node/participation/proposal/current").await?;
+            assert_json_endpoint(&http, api_port, "node/participation/proposal/1").await?;
+            assert_json_endpoint(&http, api_port, "node/participation/vote/current").await?;
+            assert_json_endpoint(&http, api_port, "node/participation/vote/1").await?;
+
+            assert_json_endpoint(&http, api_port, "node/block-reward").await?;
+            assert_json_endpoint(&http, api_port, "node/block-reward/epoch/1").await?;
+
+            assert_json_endpoint(&http, api_port, "node/oldest-block").await?;
+            assert_json_endpoint(&http, api_port, "node/oldest-leaf").await?;
+
+            // Catchup endpoints. View number and height for in-memory state aren't readily
+            // available after stopping consensus, so we check error semantics on
+            // intentionally invalid lookups and the deprecated routes.
+            let decided_view = decided_leaf.view_number().u64();
+            assert_json_endpoint(
+                &http,
+                api_port,
+                &format!("catchup/{height}/{decided_view}/blocks"),
+            )
+            .await?;
+            // chain-config: a malformed TaggedBase64 commitment (bad checksum) parses-fails
+            // on the request path and yields 400.
+            assert_endpoint_status(
+                &http,
+                api_port,
+                "catchup/chain-config/CHAINCONFIG~AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+                400,
+            )
+            .await?;
+            // leafchain: undecided height returns 404 from both.
+            assert_endpoint_status(&http, api_port, "catchup/999999/leafchain", 404).await?;
+            // cert2: missing cert returns 404.
+            assert_endpoint_status(&http, api_port, "catchup/999999/cert2", 404).await?;
+            // Deprecated catchup routes still respond 404.
+            assert_endpoint_status(&http, api_port, "catchup/1/reward-amounts/100/0", 404).await?;
+
+            // Production peer-catchup posts VBS-binary bodies via http-client.
+            // Exercise the bulk-account POST endpoints in that exact wire format so any
+            // regression to "JSON-only body" is caught here.
+            // Reuse the account sampled above; `validated_state.fee_merkle_tree` was
+            // captured before the fee-paying blocks and can be empty.
+            assert_post_binary(
+                &http,
+                api_port,
+                &format!("catchup/{height}/{decided_view}/accounts"),
+                &vec![fee_account],
+            )
+            .await?;
+            // reward-accounts V1 takes a Vec<RewardAccountV1>. We send empty since the V2
+            // tree may not have V1-shaped entries in this test, but the wire format is what
+            // we're validating.
+            assert_post_binary(
+                &http,
+                api_port,
+                &format!("catchup/{height}/{decided_view}/reward-accounts"),
+                &Vec::<espresso_types::v0_3::RewardAccountV1>::new(),
+            )
+            .await?;
+
+            // State signature: missing heights should 404.
+            assert_endpoint_status(&http, api_port, "state-signature/block/999999", 404).await?;
+
+            // Error bodies for endpoints that fail via `ApiError` must keep the
+            // `{"Custom":{"message","status"}}` JSON envelope that existing clients parse.
+            // Availability endpoints (`availability/leaf/...`, etc.) are excluded because
+            // they use per-endpoint error variants like `{"FetchLeaf":{...}}`; their status
+            // codes are still checked by `assert_endpoint_status` above.
+            assert_error_body(&http, api_port, "catchup/999999/cert2", 404).await?;
+            assert_error_body(&http, api_port, "catchup/999999/leafchain", 404).await?;
+            assert_error_body(&http, api_port, "state-signature/block/999999", 404).await?;
+
+            // Explorer endpoints.
+            assert_json_endpoint(&http, api_port, "explorer/explorer-summary").await?;
+            assert_json_endpoint(&http, api_port, &format!("explorer/block/{avail_block}")).await?;
+            assert_json_endpoint(
+                &http,
+                api_port,
+                &format!("explorer/block/hash/{block_hash}"),
+            )
+            .await?;
+            assert_json_endpoint(&http, api_port, "explorer/blocks/latest/10").await?;
+            assert_json_endpoint(
+                &http,
+                api_port,
+                &format!("explorer/blocks/{avail_block}/10"),
+            )
+            .await?;
+            assert_json_endpoint(&http, api_port, "explorer/transactions/latest/10").await?;
+
+            // Explorer errors keep their status: missing objects are 404 and unsupported
+            // search tags are 400, while a search that finds nothing is an empty result.
+            assert_error_body(&http, api_port, "explorer/block/999999", 404).await?;
+            assert_error_body(&http, api_port, "explorer/transaction/999999/0", 404).await?;
+            assert_error_body(
+                &http,
+                api_port,
+                &format!("explorer/search/{leaf_hash}"),
+                400,
+            )
+            .await?;
+            let unknown_block = tagged_base64::TaggedBase64::new("BLOCK", &[0; 32])?;
+            let search: serde_json::Value = http
+                .get(format!(
+                    "http://localhost:{api_port}/v1/explorer/search/{unknown_block}"
+                ))
+                .send()
+                .await?
+                .error_for_status()?
+                .json()
+                .await?;
+            assert_eq!(
+                search["search_results"],
+                serde_json::json!({"blocks": [], "transactions": []})
+            );
+
+            // Light-client endpoints. Use the same block we used for availability tests.
+            assert_json_endpoint(&http, api_port, &format!("light-client/leaf/{avail_block}"))
+                .await?;
+            assert_json_endpoint(
+                &http,
+                api_port,
+                &format!("light-client/leaf/hash/{leaf_hash}"),
+            )
+            .await?;
+            assert_json_endpoint(
+                &http,
+                api_port,
+                &format!("light-client/payload/{avail_block}"),
+            )
+            .await?;
+            assert_json_endpoint(
+                &http,
+                api_port,
+                &format!("light-client/payload/{avail_block}/{}", avail_block + 1),
+            )
+            .await?;
+            assert_json_endpoint(
+                &http,
+                api_port,
+                &format!(
+                    "light-client/namespace/{avail_block}/{}",
+                    u64::from(avail_ns)
+                ),
+            )
+            .await?;
+            assert_json_endpoint(
+                &http,
+                api_port,
+                &format!(
+                    "light-client/namespace/{avail_block}/{}/{}",
+                    avail_block + 1,
+                    u64::from(avail_ns)
+                ),
+            )
+            .await?;
+
+            // Regression: an oversized range on the plural namespaces route must return
+            // 400 Bad Request (the status carried by the query-service error), not 500.
+            let encoded_ns = tagged_base64::TaggedBase64::new(
+                ::light_client::client::NAMESPACES_PARAM_TAG,
+                &serde_json::to_vec(&vec![u64::from(avail_ns)])?,
+            )?;
+            assert_endpoint_status(
+                &http,
+                api_port,
+                &format!(
+                    "light-client/namespaces/{avail_block}/{}/{encoded_ns}",
+                    avail_block + 200
+                ),
+                400,
+            )
+            .await?;
+
+            // Token endpoints.
+            assert_json_endpoint(&http, api_port, "token/total-minted-supply").await?;
+            assert_json_endpoint(&http, api_port, "token/circulating-supply").await?;
+            assert_json_endpoint(&http, api_port, "token/circulating-supply-ethereum").await?;
+            assert_json_endpoint(&http, api_port, "token/total-issued-supply").await?;
+            assert_json_endpoint(&http, api_port, "token/total-reward-distributed").await?;
+
+            // HTTP status codes for common failure cases that clients depend on.
+
+            // Requesting a leaf far ahead of the chain tip times out and returns
+            // 404 Not Found.
+            assert_endpoint_status(&http, api_port, "availability/leaf/999999", 404).await?;
+
+            // Requesting a block range that exceeds the per-request limit
+            // returns 400 Bad Request.
+            assert_endpoint_status(
+                &http,
+                api_port,
+                &format!("availability/block/{avail_block}/{}", avail_block + 200),
+                400,
+            )
+            .await?;
+
+            // Requesting a namespace proof range that exceeds the limit also
+            // returns 400 Bad Request.
+            assert_endpoint_status(
+                &http,
+                api_port,
+                &format!(
+                    "availability/block/{avail_block}/{}/namespace/{avail_ns}",
+                    avail_block + 200
+                ),
+                400,
+            )
+            .await?;
 
             anyhow::Ok(())
         };
@@ -13016,13 +13263,7 @@ mod test {
 
         const NUM_NODES: usize = 5;
 
-        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
-        let persistence: [_; NUM_NODES] = storage
-            .iter()
-            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
-            .collect::<Vec<_>>()
-            .try_into()
-            .unwrap();
+        let (storage, persistence) = node_storage::<SqlDataSource, NUM_NODES>().await;
 
         let config = TestNetworkConfigBuilder::with_num_nodes()
             .api_config(SqlDataSource::options(
@@ -13031,24 +13272,9 @@ mod test {
             ))
             .network_config(network_config)
             .persistences(persistence.clone())
-            .catchups(std::array::from_fn(|_| {
-                StatePeers::<StaticVersion<0, 1>>::from_urls(
-                    vec![format!("http://localhost:{api_port}").parse().unwrap()],
-                    Default::default(),
-                    Duration::from_secs(2),
-                    &NoMetrics,
-                )
-            }))
-            .pos_hook(
-                DelegationConfig::MultipleDelegators,
-                Default::default(),
-                POS_V4,
-            )
-            .await
-            .unwrap()
             .build();
 
-        let network = TestNetwork::new(config, POS_V4).await;
+        let network = TestNetwork::new(config, TEST_UPGRADE).await;
         let client: Client<ClientErr, SequencerApiVersion> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
 
@@ -13109,13 +13335,7 @@ mod test {
         let api_port = reserve_tcp_port().expect("OS should have ephemeral ports available");
         println!("API PORT = {api_port}");
 
-        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
-        let persistence: [_; NUM_NODES] = storage
-            .iter()
-            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
-            .collect::<Vec<_>>()
-            .try_into()
-            .unwrap();
+        let (storage, persistence) = node_storage::<SqlDataSource, NUM_NODES>().await;
 
         let config = TestNetworkConfigBuilder::with_num_nodes()
             .api_config(SqlDataSource::options(
@@ -13124,24 +13344,9 @@ mod test {
             ))
             .network_config(network_config)
             .persistences(persistence.clone())
-            .catchups(std::array::from_fn(|_| {
-                StatePeers::<StaticVersion<0, 1>>::from_urls(
-                    vec![format!("http://localhost:{api_port}").parse().unwrap()],
-                    Default::default(),
-                    Duration::from_secs(2),
-                    &NoMetrics,
-                )
-            }))
-            .pos_hook(
-                DelegationConfig::MultipleDelegators,
-                hotshot_contract_adapter::stake_table::StakeTableContractVersion::V3,
-                POS_V4,
-            )
-            .await
-            .unwrap()
             .build();
 
-        let mut network = TestNetwork::new(config, POS_V4).await;
+        let mut network = TestNetwork::new(config, TEST_UPGRADE).await;
 
         let client: Client<ClientErr, StaticVersion<0, 1>> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
@@ -13152,7 +13357,8 @@ mod test {
         wait_for_epochs(&mut events, EPOCH_HEIGHT, 3).await;
 
         network.stop_consensus().await;
-        let height = network.server.decided_leaf().await.height();
+        // Reward trees are stored only at epoch boundaries, the only blocks that change them.
+        let height = network.server.decided_leaf().await.height() / EPOCH_HEIGHT * EPOCH_HEIGHT;
         wait_until_block_height(&client, "reward-state-v2/block-height", height).await;
 
         let err = client
@@ -13199,24 +13405,24 @@ mod test {
     }
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_namespace_query_compat_v0_3() {
-        test_namespace_query_compat_helper(Upgrade::trivial(EPOCH_VERSION)).await;
-    }
-
-    async fn test_namespace_query_compat_helper(upgrade: Upgrade) {
+    async fn test_namespace_query_compat() {
         // Number of nodes running in the test network.
         const NUM_NODES: usize = 5;
 
         let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
         let url: Url = format!("http://localhost:{port}").parse().unwrap();
 
+        // At 0.6 the query service gets decided payloads and VID from the DA proposals and VID
+        // shares in consensus storage, so the nodes need real persistence.
+        let (storage, persistence) = node_storage::<SqlDataSource, NUM_NODES>().await;
+
         let test_config = TestConfigBuilder::default().build();
         let config = TestNetworkConfigBuilder::<NUM_NODES, _, _>::with_num_nodes()
-            .api_config(Options::from(options::Http {
-                port,
-                max_connections: None,
-                tonic_port: None,
-            }))
+            .api_config(SqlDataSource::options(
+                &storage[0],
+                Options::with_port(port),
+            ))
+            .persistences(persistence)
             .catchups(std::array::from_fn(|_| {
                 StatePeers::<SequencerApiVersion>::from_urls(
                     vec![url.clone()],
@@ -13228,7 +13434,7 @@ mod test {
             .network_config(test_config)
             .build();
 
-        let mut network = TestNetwork::new(config, upgrade).await;
+        let mut network = TestNetwork::new(config, TEST_UPGRADE).await;
         let mut events = network.server.event_stream();
 
         // Submit a transaction.
@@ -13248,7 +13454,6 @@ mod test {
                 .send()
         )
         .unwrap();
-        let version = header.version();
 
         // The latest version of the API (whether we specifically ask for v1 or let the redirect
         // occur) will give us a namespace proof no matter which VID version is in use.
@@ -13263,11 +13468,7 @@ mod test {
                 .await
                 .unwrap();
             let proof = ns_proof.proof.as_ref().unwrap();
-            if version < EPOCH_VERSION {
-                assert!(matches!(proof, NsProof::V0(..)));
-            } else {
-                assert!(matches!(proof, NsProof::V1(..)));
-            }
+            assert!(matches!(proof, NsProof::V2(..)));
             let (txs, ns_from_proof) = proof
                 .verify(
                     header.ns_table(),
@@ -13324,6 +13525,87 @@ mod test {
         }
 
         network.server.shut_down().await;
+    }
+
+    /// Rollups still fetch their namespaces from mainnet blocks before 0.6, proven with ADVZ
+    /// before 0.3 and AvidM after.
+    #[rstest]
+    #[case::v2_v3("v2-v3")]
+    #[case::v4("v4")]
+    #[case::v5("v5")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_legacy_namespace_proofs(#[case] chain: &str) -> anyhow::Result<()> {
+        let chain = LegacyChain::load(chain)?;
+        let replay = chain.replay().await?;
+        let versions = chain.blocks[1..]
+            .iter()
+            .map(|block| block.leaf.header().version())
+            .collect::<HashSet<_>>();
+        // Proving every block of the 1001-block upgrade chain takes too long.
+        let sampled = versions.iter().flat_map(|version| {
+            chain
+                .blocks
+                .iter()
+                .filter(move |block| block.leaf.header().version() == *version)
+                .take(25)
+        });
+        let mut proven = HashSet::new();
+        for recorded in sampled {
+            let header = recorded.leaf.header();
+            let height = header.height();
+            for ns in [101u64, 102].map(NamespaceId::from) {
+                let res: NamespaceProofQueryData = replay
+                    .client
+                    .get(&format!("availability/block/{height}/namespace/{ns}"))
+                    .send()
+                    .await?;
+                let Some(proof) = &res.proof else {
+                    ensure!(
+                        header.ns_table().find_ns_id(&ns).is_none() && res.transactions.is_empty(),
+                        "no proof of namespace {ns} in block {height}"
+                    );
+                    continue;
+                };
+                assert_ns_proof_matches_version(proof, header.version());
+                let (txs, proven_ns) = proof
+                    .verify(
+                        header.ns_table(),
+                        &header.payload_commitment(),
+                        recorded.vid_common.common(),
+                    )
+                    .with_context(|| format!("namespace {ns} of block {height}"))?;
+                ensure!(
+                    proven_ns == ns && !txs.is_empty() && txs == res.transactions,
+                    "namespace {ns} of block {height} proves its transactions"
+                );
+                proven.insert(header.version());
+            }
+
+            let cert2 = replay
+                .client
+                .get::<serde_json::Value>(&format!("availability/cert2/{height}"))
+                .send()
+                .await;
+            ensure!(
+                matches!(&cert2, Err(err) if err.status == StatusCode::NOT_FOUND),
+                "legacy block {height} has a cert2: {cert2:?}"
+            );
+        }
+        ensure!(proven == versions, "proved {proven:?} of {versions:?}");
+        Ok(())
+    }
+
+    /// ADVZ proves namespaces before 0.3, AvidM until 0.6 and AvidmGf2 from then on.
+    fn assert_ns_proof_matches_version(proof: &NsProof, version: Version) {
+        match proof {
+            NsProof::V0(..) => assert!(version < EPOCH_VERSION, "{version}"),
+            NsProof::V1(..) => assert!(
+                (EPOCH_VERSION..NEW_PROTOCOL_VERSION).contains(&version),
+                "{version}"
+            ),
+            NsProof::V2(..) => assert!(version >= NEW_PROTOCOL_VERSION, "{version}"),
+            NsProof::V1IncorrectEncoding(..) => panic!("honest blocks are encoded correctly"),
+        }
     }
 
     /// Verify the light client leaf, header, and payload proofs at each height
@@ -13415,14 +13697,11 @@ mod test {
     /// Check the light client stake table endpoint: replaying `first_epoch + 2`
     /// reproduces the validator set loaded from storage, and an earlier epoch
     /// is a `BAD_REQUEST`.
-    async fn check_light_client_stake_table<N, P>(
+    async fn check_light_client_stake_table(
         client: &Client<ClientErr, StaticVersion<0, 1>>,
-        server: &SequencerContext<N, P>,
+        storage: &impl SequencerPersistence,
         first_epoch: EpochNumber,
-    ) where
-        N: ConnectedNetwork<PubKey>,
-        P: SequencerPersistence,
-    {
+    ) {
         let events: Vec<StakeTableEvent> = client
             .get(&format!("light-client/stake-table/{}", first_epoch + 2))
             .send()
@@ -13434,10 +13713,7 @@ mod test {
         }
         assert_eq!(
             state_from_events.into_validators(),
-            server
-                .consensus_handle()
-                .storage()
-                .await
+            storage
                 .load_all_validators(first_epoch + 2, 0, 1_000_000)
                 .await
                 .unwrap()
@@ -13457,33 +13733,24 @@ mod test {
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_light_client_completeness() {
-        // Run the through a protocol upgrade and epoch change, then check that we are able to get a
-        // correct light client proof for every finalized leaf.
+        // Run through two epoch changes, then check that we are able to get a correct light client
+        // proof for every finalized leaf.
 
         const NUM_NODES: usize = 1;
-        const EPOCH_HEIGHT: u64 = 200;
+        const EPOCH_HEIGHT: u64 = 50;
 
-        let upgrade = Upgrade::new(LEGACY_VERSION, EPOCH_VERSION);
         let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
         let url: Url = format!("http://localhost:{port}").parse().unwrap();
 
         let test_config = TestConfigBuilder::default()
             .epoch_height(EPOCH_HEIGHT)
-            .epoch_start_block(321)
+            .epoch_start_block(0)
             // No transactions here, so this sets the seconds per block, and the
-            // test is bound by block count: ~885 of them, 15 min observed at 1s.
+            // test is bound by block count.
             .builder_timeout(Duration::from_millis(250))
-            .set_upgrades(upgrade.target)
-            .await
             .build();
 
-        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
-        let persistence: [_; NUM_NODES] = storage
-            .iter()
-            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
-            .collect::<Vec<_>>()
-            .try_into()
-            .unwrap();
+        let (storage, persistence) = node_storage::<SqlDataSource, NUM_NODES>().await;
 
         let config = TestNetworkConfigBuilder::<NUM_NODES, _, _>::with_num_nodes()
             .api_config(
@@ -13502,7 +13769,7 @@ mod test {
             .network_config(test_config)
             .build();
 
-        let mut network = TestNetwork::new(config, upgrade).await;
+        let mut network = TestNetwork::new(config, TEST_UPGRADE).await;
         let client: Client<ClientErr, StaticVersion<0, 1>> = Client::new(url);
         client.connect(None).await;
 
@@ -13530,16 +13797,10 @@ mod test {
                 leaf
             });
 
-        // Wait for the upgrade to take effect.
-        let (upgrade_height, first_epoch) = loop {
+        let first_epoch = {
             let leaf: LeafQueryData<SeqTypes> = leaves.next().await.unwrap();
-            if leaf.header().version() < EPOCH_VERSION {
-                tracing::info!(version = %leaf.header().version(), height = leaf.header().height(), view = ?leaf.leaf().view_number(), "waiting for epoch upgrade");
-                continue;
-            }
-            break (leaf.height(), leaf.leaf().epoch(EPOCH_HEIGHT).unwrap());
+            leaf.leaf().epoch(EPOCH_HEIGHT).unwrap()
         };
-        tracing::info!(upgrade_height, ?first_epoch, "epochs enabled");
 
         // Wait for two epoch changes (so we get to the first epoch that actually uses the stake
         // table).
@@ -13586,8 +13847,6 @@ mod test {
         let heights =
         // * The first few blocks, including genesis
             (0..=1)
-        // * A few blocks just before and after the upgrade
-            .chain(upgrade_height-1..=upgrade_height+1)
         // * A few blocks just before and after the first epoch change
             .chain(epoch_heights[0]-1..=epoch_heights[0] + 1)
         // * A few blocks just before and after the stake table comes into effect
@@ -13601,7 +13860,50 @@ mod test {
             EPOCH_HEIGHT,
         )
         .await;
-        check_light_client_stake_table(&client, &network.server, first_epoch).await;
+        check_light_client_stake_table(&client, &*network.server.persistence(), first_epoch).await;
+    }
+
+    /// Light clients still prove mainnet's leaves from before its 0.3 upgrade, across it and across
+    /// the first epoch on the stake table, all produced by legacy consensus.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_legacy_light_client_completeness() -> anyhow::Result<()> {
+        let chain = LegacyChain::load("v2-v3")?;
+        let replay = chain.replay().await?;
+        let epoch_height = chain.epoch_height();
+        let leaves: Vec<_> = chain.blocks.iter().map(|b| b.leaf.clone()).collect();
+        let blocks: Vec<_> = chain.blocks.iter().map(|b| b.block.clone()).collect();
+
+        let upgraded = leaves
+            .iter()
+            .find(|leaf| leaf.header().version() >= EPOCH_VERSION)
+            .context("the chain upgrades to 0.3")?;
+        let upgrade_height = upgraded.height();
+        let first_epoch = upgraded.leaf().epoch(epoch_height).unwrap();
+        let epoch_change = |epoch: EpochNumber| {
+            leaves
+                .iter()
+                .find(|leaf| leaf.leaf().epoch(epoch_height).is_some_and(|e| e > epoch))
+                .map(|leaf| leaf.height())
+                .context("the chain changes epoch")
+        };
+        let epoch_heights = [
+            epoch_change(first_epoch + 1)?,
+            epoch_change(first_epoch + 2)?,
+        ];
+        let max_block = epoch_heights[1] + 1;
+        ensure!(
+            max_block < chain.tip(),
+            "a header proof needs the block after it"
+        );
+
+        let heights = (0..=1)
+            .chain(upgrade_height - 1..=upgrade_height + 1)
+            .chain(epoch_heights[0] - 1..=epoch_heights[0] + 1)
+            .chain(epoch_heights[1] - 1..=max_block);
+        check_light_client_proofs(&replay.client, &leaves, &blocks, heights, epoch_height).await;
+        check_light_client_stake_table(&replay.client, &replay.persistence().await?, first_epoch)
+            .await;
+        Ok(())
     }
 
     /// Test that `fetch_leaf` returns a leaf with exactly the requested block height.
@@ -13617,13 +13919,7 @@ mod test {
 
         let port = reserve_tcp_port().expect("No ports free for query service");
 
-        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
-        let persistence: [_; NUM_NODES] = storage
-            .iter()
-            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
-            .collect::<Vec<_>>()
-            .try_into()
-            .unwrap();
+        let (storage, persistence) = node_storage::<SqlDataSource, NUM_NODES>().await;
 
         let catchup_peers = std::array::from_fn(|_| {
             StatePeers::<StaticVersion<0, 1>>::from_urls(
@@ -13642,15 +13938,9 @@ mod test {
             .network_config(network_config)
             .persistences(persistence)
             .catchups(catchup_peers)
-            .pos_hook(
-                DelegationConfig::MultipleDelegators,
-                Default::default(),
-                POS_V4,
-            )
-            .await?
             .build();
 
-        let network = TestNetwork::new(config, POS_V4).await;
+        let network = TestNetwork::new(config, TEST_UPGRADE).await;
 
         // Wait for chain to advance past our target height
         let height_client: Client<ClientErr, StaticVersion<0, 1>> =
@@ -13692,8 +13982,6 @@ mod test {
         // Blocks to produce after the restart before declaring success.
         const BLOCKS_AFTER_RESTART: u64 = 5;
 
-        const V5: Upgrade = Upgrade::trivial(EPOCH_REWARD_VERSION);
-
         let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
 
         // Slow empty-block production so we comfortably stop at the exact target height. On an idle
@@ -13705,13 +13993,7 @@ mod test {
             .next_view_timeout(Duration::from_secs(10))
             .build();
 
-        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
-        let persistence: [_; NUM_NODES] = storage
-            .iter()
-            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
-            .collect::<Vec<_>>()
-            .try_into()
-            .unwrap();
+        let (storage, persistence) = node_storage::<SqlDataSource, NUM_NODES>().await;
 
         let config = TestNetworkConfigBuilder::<NUM_NODES, _, _>::with_num_nodes()
             .api_config(SqlDataSource::options(
@@ -13719,21 +14001,10 @@ mod test {
                 Options::with_port(port),
             ))
             .persistences(persistence.clone())
-            .catchups(std::array::from_fn(|_| {
-                StatePeers::<SequencerApiVersion>::from_urls(
-                    vec![format!("http://localhost:{port}").parse().unwrap()],
-                    Default::default(),
-                    Duration::from_secs(2),
-                    &NoMetrics,
-                )
-            }))
             .network_config(network_config)
-            .pos_hook(DelegationConfig::MultipleDelegators, Default::default(), V5)
-            .await
-            .unwrap()
             .build();
 
-        let mut network = TestNetwork::new(config, V5).await;
+        let mut network = TestNetwork::new(config, TEST_UPGRADE).await;
 
         // Watch the decide stream and stop as soon as `boundary - 3` is decided. Consuming the
         // stream (rather than polling `decided_leaf`) makes this independent of block timing: we
@@ -13746,7 +14017,11 @@ mod test {
                     .next()
                     .await
                     .expect("event stream ended unexpectedly");
-                let Some(leaf_chain) = decided_leaves(&event) else {
+                let CoordinatorEvent::NewDecide {
+                    leaf_infos: leaf_chain,
+                    ..
+                } = event
+                else {
                     continue;
                 };
                 // `leaf_chain` is newest-first; once any decided leaf has reached the target
@@ -13769,6 +14044,8 @@ mod test {
 
         // Clone the TestConfig before dropping the network so the anvil/L1/contracts stay alive.
         let saved_cfg = network.cfg.clone();
+        // The genesis states carry the deployed stake table, so the rebuild deploys no new one.
+        let genesis_states: [_; NUM_NODES] = std::array::from_fn(|i| network.genesis_state(i));
 
         network.stop_consensus().await;
         drop(network);
@@ -13781,17 +14058,10 @@ mod test {
                 Options::with_port(port2),
             ))
             .persistences(persistence)
-            .catchups(std::array::from_fn(|_| {
-                StatePeers::<SequencerApiVersion>::from_urls(
-                    vec![format!("http://localhost:{port2}").parse().unwrap()],
-                    Default::default(),
-                    Duration::from_secs(2),
-                    &NoMetrics,
-                )
-            }))
             .network_config(saved_cfg)
+            .states(genesis_states)
             .build();
-        let network2 = TestNetwork::new(config2, V5).await;
+        let network2 = TestNetwork::new(config2, TEST_UPGRADE).await;
 
         // The restarted network must keep advancing, including across the next epoch boundary.
         // Require BLOCKS_AFTER_RESTART new decides, using a lack-of-progress watchdog so a
