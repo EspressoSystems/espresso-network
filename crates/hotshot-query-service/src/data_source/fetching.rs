@@ -3438,13 +3438,60 @@ mod test {
             .await
             .unwrap();
 
-        // Build N blocks: block at height i has i+1 transactions.
-        // Each block gets a distinct payload (and thus a distinct payload_commitment),
-        // so the payload table rows are not collapsed by the (hash, ns_table) dedup.
+        // Block at height i has i+1 transactions.
         // Expected cumulative total = 1 + 2 + ... + n = n*(n+1)/2.
         let n = 5usize;
         let expected_total = n * (n + 1) / 2;
+        let (leaves, blocks) = mock_chain(n).await;
 
+        // Insert leaves and blocks directly into the underlying storage, bypassing
+        // `store_and_notify`. The aggregator task has already started and is waiting on a
+        // notification for height 0 that will never arrive via this path.
+        {
+            let inner = ds.inner();
+            let mut tx = inner.write().await.unwrap();
+            for leaf in &leaves {
+                tx.insert_leaf(leaf).await.unwrap();
+            }
+            for block in &blocks {
+                tx.insert_block(block).await.unwrap();
+            }
+            tx.commit().await.unwrap();
+        }
+
+        // The aggregator rebuilds after AGGREGATOR_RETRY_INTERVAL elapses. Allow 4× for the
+        // rebuild and processing.
+        poll_until(
+            AGGREGATOR_RETRY_INTERVAL * 4,
+            Duration::from_millis(500),
+            || async {
+                ds.count_transactions_in_range(..=n - 1, None)
+                    .await
+                    .ok()
+                    .map(|_| ())
+            },
+        )
+        .await;
+
+        // Exact sum verifies no double-count and no skip.
+        let total = ds
+            .count_transactions_in_range(.., None)
+            .await
+            .expect("aggregate should be available after recovery");
+        assert_eq!(total, expected_total);
+    }
+
+    /// `n` mock leaves and blocks from genesis on, where the block at height `i` has `i + 1`
+    /// transactions.
+    ///
+    /// Each block gets a distinct payload (and thus a distinct payload_commitment), so the payload
+    /// table rows are not collapsed by the (hash, ns_table) dedup.
+    async fn mock_chain(
+        n: usize,
+    ) -> (
+        Vec<LeafQueryData<MockTypes>>,
+        Vec<BlockQueryData<MockTypes>>,
+    ) {
         let genesis_leaf = LeafQueryData::<MockTypes>::genesis(
             &Default::default(),
             &Default::default(),
@@ -3490,40 +3537,6 @@ mod test {
             blocks.push(BlockQueryData::new(header, payload));
         }
 
-        // Insert leaves and blocks directly into the underlying storage, bypassing
-        // `store_and_notify`. The aggregator task has already started and is waiting on a
-        // notification for height 0 that will never arrive via this path.
-        {
-            let inner = ds.inner();
-            let mut tx = inner.write().await.unwrap();
-            for leaf in &leaves {
-                tx.insert_leaf(leaf).await.unwrap();
-            }
-            for block in &blocks {
-                tx.insert_block(block).await.unwrap();
-            }
-            tx.commit().await.unwrap();
-        }
-
-        // The aggregator rebuilds after AGGREGATOR_RETRY_INTERVAL elapses. Allow 4× for the
-        // rebuild and processing.
-        poll_until(
-            AGGREGATOR_RETRY_INTERVAL * 4,
-            Duration::from_millis(500),
-            || async {
-                ds.count_transactions_in_range(..=n - 1, None)
-                    .await
-                    .ok()
-                    .map(|_| ())
-            },
-        )
-        .await;
-
-        // Exact sum verifies no double-count and no skip.
-        let total = ds
-            .count_transactions_in_range(.., None)
-            .await
-            .expect("aggregate should be available after recovery");
-        assert_eq!(total, expected_total);
+        (leaves, blocks)
     }
 }
