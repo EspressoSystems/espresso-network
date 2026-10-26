@@ -1952,6 +1952,31 @@ mod test {
         assert_eq!(tx.load_state_pruned_height().await.unwrap(), Some(20));
     }
 
+    /// Archive mode keeps the state start height, so that an archive node whose state started from
+    /// a snapshot can tell that its trees are incomplete.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_archive_keeps_state_start_height() {
+        let db = TmpDb::init().await;
+        let storage = SqlStorage::connect(db.config(), StorageConnectionType::Query)
+            .await
+            .unwrap();
+        let mut tx = storage.read().await.unwrap();
+        assert_eq!(tx.load_state_start_height().await.unwrap(), None);
+        drop(tx);
+        let mut tx = storage.write().await.unwrap();
+        UpdateStateData::<_, MockMerkleTree, 8>::set_state_start_height(&mut tx, 40)
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+        drop(storage);
+
+        let storage = SqlStorage::connect(db.config().archive(), StorageConnectionType::Query)
+            .await
+            .unwrap();
+        let mut tx = storage.read().await.unwrap();
+        assert_eq!(tx.load_state_start_height().await.unwrap(), Some(40));
+    }
+
     fn pruned_height_gauge(storage: &SqlStorage, name: &str) -> usize {
         let pruner_metrics = storage.metrics().get_subgroup(["pruner"]).unwrap();
         pruner_metrics.get_gauge(name).unwrap().get()

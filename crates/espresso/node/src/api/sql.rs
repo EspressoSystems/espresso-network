@@ -73,7 +73,7 @@ use crate::{
     context::TaskList,
     persistence::{ChainConfigPersistence, sql::Options as SqlOptions},
     request_response::data_source::Storage as RequestResponseStorage,
-    state::{compute_state_update, update_state_storage_loop},
+    state::{EmptyStateStart, compute_state_update, update_state_storage_loop},
     util::BoundedJoinSet,
 };
 
@@ -185,9 +185,14 @@ pub(in crate::api) async fn init_query_module(
         let state = state.clone();
         async move { state.node_state().await }
     };
+    let empty_state_start = if mod_opt.prune {
+        EmptyStateStart::RecentBoundary
+    } else {
+        EmptyStateStart::Genesis
+    };
     tasks.spawn(
         "merklized state storage update loop",
-        update_state_storage_loop(ds.clone(), get_node_state, light_client),
+        update_state_storage_loop(ds.clone(), get_node_state, light_client, empty_state_start),
     );
 
     // Archive mode disables the pruner, so nothing else bounds the merklized state tables.

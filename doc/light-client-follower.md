@@ -88,6 +88,9 @@ Everything else is served from the same storage a staked query node fills from i
 
 ## Cold start
 
-A fresh follower starts serving from the tip and backfills history like any fresh query node. The merklized state loop
-replays from genesis, so state, reward and catchup endpoints lag until the backfill completes; restore the database from
-a snapshot to skip it. A restart resumes from the height the database has reached.
+A fresh follower starts serving from the tip and backfills history like any fresh query node. How the merklized state
+loop starts depends on the `storage-sql` module's `--prune` option. Without it, the loop replays from genesis, so state,
+reward and catchup endpoints lag until the backfill completes; restore the database from a snapshot to skip it. With it,
+the loop starts from a snapshot at a recent epoch boundary, from peers, and skips the replay. Its trees then stay
+incomplete: lookups of block proofs below that boundary, and of fee accounts that no block since then has touched, fail.
+A restart resumes from the height the database has reached.
