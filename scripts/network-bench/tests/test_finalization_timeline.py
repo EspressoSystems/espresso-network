@@ -16,7 +16,9 @@ def timeline_trace(split: bool) -> Trace:
     leader = {
         "proposal_queued": 1000 * MS,
         "request_block_header_queued": 940 * MS,
-        "block_built_applied": 990 * MS,
+        "block_built_applied": 960 * MS,
+        "header_created_applied": 962 * MS,
+        "leaf2_commit_computed": 997 * MS,
         "ns_disperse_start": 960 * MS,
         "vid_shares_unicast_end": 985 * MS,
     }
@@ -80,18 +82,91 @@ def test_metrics_need_views():
 
 
 @pytest.mark.parametrize(
-    ("split", "labels"),
+    ("split", "rows_labels"),
     [
-        (True, ["build/prep", "dispersal", "share-sign", "fan-out", "header"]),
-        (False, ["build/prep", "disperse + fan-out", "header"]),
+        (
+            True,
+            [
+                (0, "build/prep"),
+                (1, "dispersal"),
+                (2, "share-sign"),
+                (2, "fan-out"),
+                (0, "header"),
+                (0, "parent Cert1 wait"),
+                (0, "commit + sign + outbox"),
+            ],
+        ),
+        (
+            False,
+            [
+                (0, "build/prep"),
+                (1, "disperse + fan-out"),
+                (0, "header"),
+                (0, "parent Cert1 wait"),
+                (0, "commit + sign + outbox"),
+            ],
+        ),
     ],
 )
-def test_build_bars_split_only_with_the_events_that_split_them(
-    split: bool, labels: list[str]
+def test_build_segments_use_rows_and_split_only_with_the_events_that_split_them(
+    split: bool, rows_labels: list[tuple[int, str]]
 ):
     trace = timeline_trace(split)
     m = ft.timeline_metrics(ft.view_rows(trace, [1]))
-    assert [label for label, *_ in ft.build_segments(m)] == labels
+    segments = ft.build_segments(m)
+    assert [(row, label) for row, label, *_ in segments] == rows_labels
+
+
+def test_build_segments_header_follows_block_built_and_ends_at_the_proposal():
+    m = ft.timeline_metrics(ft.view_rows(timeline_trace(split=True), [1]))
+    by_label = {label: (start, end) for _, label, start, end, _ in ft.build_segments(m)}
+    assert by_label["header"] == ("block_built", "header_created")
+    assert by_label["commit + sign + outbox"][1] == "proposal_sent"
+    assert m["proposal_sent"] == 0
+
+
+@pytest.mark.parametrize("missing", ["header_created_applied", "leaf2_commit_computed"])
+def test_build_segments_omit_the_gap_bars_without_their_events(missing: str):
+    trace = timeline_trace(split=True)
+    del trace[0][1][missing]
+    m = ft.timeline_metrics(ft.view_rows(trace, [1]))
+    labels = [label for _, label, *_ in ft.build_segments(m)]
+    for gap in ("header", "parent Cert1 wait", "commit + sign + outbox"):
+        assert gap not in labels
+
+
+def test_build_prep_ends_at_block_built():
+    m = ft.timeline_metrics(ft.view_rows(timeline_trace(split=True), [1]))
+    (_, _, start, end, _), *_ = ft.build_segments(m)
+    assert (start, end) == ("request_block", "block_built")
+
+
+def test_frame_stacks_rows_inside_build_lanes_only():
+    f = ft.Frame.of(ft.timeline_metrics(ft.view_rows(timeline_trace(split=True), [1])))
+    rows = [f.bar_y("L_V", row) for row in range(3)]
+    assert rows == sorted(rows) and len(set(rows)) == 3
+    assert rows[2] + f.bar_height("L_V") <= f.top("L_V") + f.lane_height("L_V")
+    assert f.top("NextRX") == f.top("L_V") + f.build_lane_h
+    assert f.plot_bottom == f.top("Deciding") + f.lane_h
+
+
+def test_bar_places_labels_that_do_not_fit_and_never_drops_them():
+    f = ft.Frame(t_min=0, t_max=1000)
+    for outside in (None, "right", "above", "below"):
+        assert "tiny" in ft.bar(f, 0, 1, 10, 20, "#000", "tiny", 9, outside=outside)
+    assert 'text-anchor="start"' in ft.bar(
+        f, 0, 1, 10, 20, "#000", "tiny", 9, outside="right"
+    )
+    assert 'text-anchor="middle"' in ft.bar(f, 0, 1, 10, 20, "#000", "tiny", 9)
+
+
+def test_build_bars_skip_bars_shorter_than_1_ms():
+    trace = timeline_trace(split=True)
+    trace[0][1]["leaf2_commit_computed"] = 999_800_000
+    m = ft.timeline_metrics(ft.view_rows(trace, [1]))
+    f = ft.Frame.of(m)
+    assert "commit + sign + outbox" not in ft.build_bars(m, f, 0.0, "L_V")
+    assert "parent Cert1 wait" in ft.build_bars(m, f, 0.0, "L_V")
 
 
 def test_svg_parses_and_labels_the_combined_bar_and_finality(tmp_path: Path):
@@ -101,6 +176,7 @@ def test_svg_parses_and_labels_the_combined_bar_and_finality(tmp_path: Path):
     assert root.tag.endswith("svg")
     text = out.read_text(encoding="utf-8")
     assert "disperse + fan-out 25" in text
+    assert "collect vote1 + Cert1  (205 ms)" in text
     assert "per-view cycle = 200 ms" in text
     assert "finality of V ≈ 50 ms" in text
 

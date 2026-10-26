@@ -3,7 +3,15 @@ leader's `proposal_queued` (t = 0), with the next leader's pipeline one cycle la
 
 Every metric is a median over the given views. A metric whose events the traces lack is 0 and its
 bars or markers collapse. `ns_disperse_end` and `vid_shares_unicast_start` are absent from some
-traces; the leader's build then ends in one "disperse + fan-out" bar."""
+traces; the leader's build then ends in one "disperse + fan-out" bar. Without
+`header_created_applied` or `leaf2_commit_computed` the header, parent Cert1 wait and commit +
+sign + outbox bars are omitted.
+
+Each leader build lane has three sub-rows: the sequential path (build/prep, header, parent Cert1
+wait, commit + sign + outbox), dispersal and fan-out. Dispersal and fan-out overlap in time, so
+they are drawn in parallel rows; share-sign shows in the fan-out row only when it is positive.
+A label that does not fit its bar goes beside, above or below it where the lane has room, else it
+is centered and overflows the bar. Bars shorter than 1 ms are not drawn."""
 
 import statistics
 from dataclasses import dataclass
@@ -16,6 +24,8 @@ from leadertrace import DECIDED, NS_PER_MS, Trace, leaders
 EVENTS = {
     "request_block": ("request_block_header_queued", "leader"),
     "block_built": ("block_built_applied", "leader"),
+    "header_created": ("header_created_applied", "leader"),
+    "leaf2_commit": ("leaf2_commit_computed", "leader"),
     "ns_disperse_start": ("ns_disperse_start", "leader"),
     "vid_disperse": ("ns_disperse_end", "leader"),
     "vid_unicast_start": ("vid_shares_unicast_start", "leader"),
@@ -46,6 +56,7 @@ BUILD_PREP, DISPERSAL, SHARE_SIGN, FAN_OUT, HEADER = (
     "#ea580c",
     "#64748b",
 )
+CERT1_WAIT, COMMIT_SIGN = "#e11d48", "#0f766e"
 SHARE_WAIT, RECOVER, COMMIT, COLLECT = "#bbf7d0", "#10b981", "#d97706", "#8b5cf6"
 VOTE1_CERT1, CERT1_VOTE2, VOTE2_CERT2, CERT2_DECIDED = (
     "#c4b5fd",
@@ -99,7 +110,7 @@ def timeline_metrics(rows: list[ViewRow]) -> Metrics:
         values = [v for row in rows if (v := row[name]) is not None]
         return statistics.median(values) if values else 0.0
 
-    m = {"n_views": float(len(rows))}
+    m = {"n_views": float(len(rows)), "proposal_sent": 0.0}
     m |= {name: median(name) for name in ("cycle", *EVENTS)}
     m["share_wait_ms"] = max(0.0, m["vid_threshold_reached"] - m["proposal_validated"])
     if m["recover_decode_end"]:
@@ -122,27 +133,30 @@ def timeline_metrics(rows: list[ViewRow]) -> Metrics:
     return m
 
 
-def build_segments(m: Metrics) -> list[tuple[str, str, str, str]]:
-    """(label, start metric, end metric, color) of the leader's build, in event order."""
+def build_segments(m: Metrics) -> list[tuple[int, str, str, str, str]]:
+    """(row, label, start metric, end metric, color) of the leader's build. Row 0 is the
+    sequential path, row 1 dispersal, row 2 fan-out."""
     if m["vid_disperse"] and m["vid_unicast_start"]:
         middle = [
-            ("dispersal", "ns_disperse_start", "vid_disperse", DISPERSAL),
-            ("share-sign", "vid_disperse", "vid_unicast_start", SHARE_SIGN),
-            ("fan-out", "vid_unicast_start", "vid_unicast_end", FAN_OUT),
+            (1, "dispersal", "ns_disperse_start", "vid_disperse", DISPERSAL),
+            (2, "share-sign", "vid_disperse", "vid_unicast_start", SHARE_SIGN),
+            (2, "fan-out", "vid_unicast_start", "vid_unicast_end", FAN_OUT),
         ]
     else:
         middle = [
-            (
-                "disperse + fan-out",
-                "ns_disperse_start",
-                "vid_unicast_end",
-                DISPERSAL,
-            )
+            (1, "disperse + fan-out", "ns_disperse_start", "vid_unicast_end", DISPERSAL)
+        ]
+    tail = []
+    if m["header_created"] and m["leaf2_commit"]:
+        tail = [
+            (0, "header", "block_built", "header_created", HEADER),
+            (0, "parent Cert1 wait", "header_created", "leaf2_commit", CERT1_WAIT),
+            (0, "commit + sign + outbox", "leaf2_commit", "proposal_sent", COMMIT_SIGN),
         ]
     return [
-        ("build/prep", "request_block", "ns_disperse_start", BUILD_PREP),
+        (0, "build/prep", "request_block", "block_built", BUILD_PREP),
         *middle,
-        ("header", "vid_unicast_end", "block_built", HEADER),
+        *tail,
     ]
 
 
@@ -153,12 +167,18 @@ class Frame:
     t_min: int
     t_max: int
     width: int = 1700
-    height: int = 770
-    x_left: int = 220
+    height: int = 870
+    x_left: int = 340
     x_right: int = 1680
     plot_top: int = 100
     lane_h: int = 68
     bar_h: int = 26
+    # The leader build lanes hold three stacked rows of thin bars below a label strip.
+    build_lanes: tuple[str, ...] = ("L_V", "NextCPU")
+    build_lane_h: int = 100
+    label_h: int = 26
+    row_h: int = 20
+    row_pitch: int = 24
     lanes: tuple[str, ...] = (
         "L_V",
         "NextRX",
@@ -174,9 +194,12 @@ class Frame:
         t_max = int((max(m["finality_ms"], m["cycle"]) + 80 + 49) // 50) * 50
         return cls(t_min=int(t_left // 50) * 50, t_max=t_max)
 
+    def lane_height(self, lane: str) -> int:
+        return self.build_lane_h if lane in self.build_lanes else self.lane_h
+
     @property
     def plot_bottom(self) -> int:
-        return self.plot_top + len(self.lanes) * self.lane_h
+        return self.plot_top + sum(self.lane_height(lane) for lane in self.lanes)
 
     def x(self, t: float) -> float:
         span = self.t_max - self.t_min
@@ -188,13 +211,22 @@ class Frame:
         return max(0, self.x(t2) - self.x(t1))
 
     def top(self, lane: str) -> int:
-        return self.plot_top + self.lanes.index(lane) * self.lane_h
+        above = self.lanes[: self.lanes.index(lane)]
+        return self.plot_top + sum(self.lane_height(other) for other in above)
 
-    def bar_y(self, lane: str) -> int:
+    def bar_height(self, lane: str) -> int:
+        return self.row_h if lane in self.build_lanes else self.bar_h
+
+    def bar_y(self, lane: str, row: int = 0) -> int:
+        if lane in self.build_lanes:
+            return self.top(lane) + self.label_h + row * self.row_pitch
         return self.top(lane) + (self.lane_h - self.bar_h) // 2 + 1
 
-    def cy(self, lane: str) -> int:
-        return self.top(lane) + self.lane_h // 2
+    def cy(self, lane: str, row: int = 0) -> int:
+        return self.bar_y(lane, row) + self.bar_height(lane) // 2
+
+    def mid(self, lane: str) -> int:
+        return self.top(lane) + self.lane_height(lane) // 2
 
     def ticks(self, step: int = 100) -> list[int]:
         first = int(self.t_min // step) * step
@@ -254,8 +286,36 @@ def path(d: str, stroke: str, width: float, marker: str, dashed: bool = False) -
     return f'  <path d="{d}" stroke="{stroke}" stroke-width="{width}"{dash} fill="none" marker-end="url(#{marker})"/>\n'
 
 
-def bar_label(f: Frame, t0: float, t1: float, y: int, body: str, fill: str, size: int):
-    return text((f.x(t0) + f.x(t1)) / 2, y + f.bar_h // 2 + 4, body, size, fill, 600)
+def fits(f: Frame, t0: float, t1: float, body: str, size: int) -> bool:
+    return f.w(t0, t1) >= 0.6 * size * len(body) + 8
+
+
+def bar(
+    f: Frame,
+    t0: float,
+    t1: float,
+    y: int,
+    h: int,
+    color: str,
+    body: str,
+    size: int,
+    fill: str = "white",
+    outside: str | None = None,
+) -> str:
+    """A bar with its label centered inside. A label that does not fit goes to the `outside`
+    side ("right"; "above", starting at the bar start; "below", ending at the bar end), else it
+    stays centered and overflows the bar."""
+    out = rect(f.x(t0), y, f.w(t0, t1), h, color)
+    x1 = f.x(t1)
+    if fits(f, t0, t1, body, size):
+        return out + text((f.x(t0) + x1) / 2, y + h // 2 + 4, body, size, fill, 600)
+    if outside == "right":
+        return out + text(x1 + 4, y + h // 2 + 4, body, size, "#374151", 600, "start")
+    if outside == "above":
+        return out + text(f.x(t0), y - 4, body, size, "#374151", 600, "start")
+    if outside == "below":
+        return out + text(x1, y + h + 12, body, size, "#374151", 600, "end")
+    return out + text((f.x(t0) + x1) / 2, y + h // 2 + 4, body, size, fill, 600)
 
 
 def svg_header(m: Metrics, f: Frame) -> str:
@@ -322,12 +382,12 @@ def lane_backgrounds(f: Frame) -> str:
     fills = ["#eef2ff", "#fef3c7", "#fef3c7", "#fef3c7", "#f9fafb", "#ecfdf5"]
     out = "".join(
         f'  <rect x="{f.x_left}" y="{f.top(lane)}" width="{f.x_right - f.x_left}" '
-        f'height="{f.lane_h}" fill="{fill}"/>\n'
+        f'height="{f.lane_height(lane)}" fill="{fill}"/>\n'
         for lane, fill in zip(f.lanes, fills, strict=True)
     )
     out += (
         f'  <rect x="{f.x_left}" y="{f.plot_top}" width="{f.x_right - f.x_left}" '
-        f'height="{len(f.lanes) * f.lane_h}" fill="none" stroke="#d1d5db" stroke-width="1"/>\n'
+        f'height="{f.plot_bottom - f.plot_top}" fill="none" stroke="#d1d5db" stroke-width="1"/>\n'
     )
     out += '  <g stroke="#e5e7eb" stroke-width="1">\n'
     out += "".join(
@@ -366,19 +426,19 @@ def time_axis(m: Metrics, f: Frame) -> str:
 
 def lane_labels(f: Frame) -> str:
     labels = {
-        "L_V": ("Leader L_V", "build → VID → share-sign → fan-out → sent V"),
+        "L_V": ("Leader L_V", "build → VID ∥ fan-out → Cert1 wait → sent V"),
         "NextRX": ("L_{V+1} vote1 collect", "vote1[V] → Cert1(V) on L_{V+1}"),
         "NextRecon": (
             "L_{V+1} recover V",
-            "shares → decode → tx-commit  (CPU contention)",
+            "shares → decode → txn-commit  (CPU contention)",
         ),
         "NextCPU": (
             "L_{V+1} build V+1",
-            "build → VID → share-sign → fan-out → sent V+1",
+            "build → VID ∥ fan-out → Cert1 wait → sent V+1",
         ),
         "Recon": (
             "Recon (V, replicas)",
-            "validate V → share-wait → decode → tx-commit",
+            "validate V → share-wait → decode → txn-commit",
         ),
         "Deciding": (
             "Deciding (median)",
@@ -390,32 +450,39 @@ def lane_labels(f: Frame) -> str:
         driver = lane in ("NextRX", "NextRecon", "NextCPU")
         color = "#92400e" if driver else "#111827"
         sub_color = "#92400e" if driver else "#6b7280"
-        out += f'    <text x="210" y="{f.cy(lane) - 6}" text-anchor="end" font-weight="700" fill="{color}">{title}</text>\n'
-        out += f'    <text x="210" y="{f.cy(lane) + 12}" text-anchor="end" font-size="11" fill="{sub_color}">{description}</text>\n'
+        out += f'    <text x="{f.x_left - 10}" y="{f.mid(lane) - 6}" text-anchor="end" font-weight="700" fill="{color}">{title}</text>\n'
+        out += f'    <text x="{f.x_left - 10}" y="{f.mid(lane) + 12}" text-anchor="end" font-size="11" fill="{sub_color}">{description}</text>\n'
     return out + "  </g>\n"
 
 
 def build_bars(m: Metrics, f: Frame, offset: float, lane: str) -> str:
     """The leader's build spans shifted by `offset`, with a marker at block_built."""
-    y = f.bar_y(lane)
     out = ""
-    for label, start, end, color in build_segments(m):
+    for row, label, start, end, color in build_segments(m):
         t0, t1 = m[start] + offset, m[end] + offset
-        if t1 <= t0:
+        if t1 - t0 < 1:
             continue
-        out += rect(f.x(t0), y, f.w(t0, t1), f.bar_h, color)
-        if f.w(t0, t1) > max(34, 4.5 * len(label)):
-            out += bar_label(f, t0, t1, y, f"{label} {t1 - t0:.0f}", "white", 9)
+        out += bar(
+            f,
+            t0,
+            t1,
+            f.bar_y(lane, row),
+            f.bar_height(lane),
+            color,
+            f"{label} {t1 - t0:.0f}",
+            9,
+            outside="above" if row == 0 else "right",
+        )
     return out + dot(f.x(m["block_built"] + offset), f.cy(lane), 4, "#1e40af")
 
 
 def leader_lane(m: Metrics, f: Frame) -> str:
     """L_V's work in the cycle before t = 0, ending in proposal_sent(V)."""
-    y = f.bar_y("L_V")
+    cy = f.cy("L_V")
     return (
         build_bars(m, f, 0.0, "L_V")
-        + dot(f.x(0), f.cy("L_V"), 7, "#dc2626")
-        + text(f.x(0), y - 6, "proposal_sent(V)", 11, "#dc2626", 700)
+        + dot(f.x(0), cy, 7, "#dc2626")
+        + text(f.x(0) + 12, cy + 4, "proposal_sent(V)", 11, "#dc2626", 700, "start")
     )
 
 
@@ -427,24 +494,25 @@ def next_vote1_lane(m: Metrics, f: Frame) -> str:
     return (
         dot(f.x(start), cy, 5, "#1d4ed8")
         + text(f.x(start), y - 4, "vote1[V] arrives (median)", 10, "#1d4ed8", 600)
-        + rect(f.x(start), y, f.w(start, end), f.bar_h, COLLECT)
-        + bar_label(
+        + bar(
             f,
             start,
             end,
             y,
-            f"collect vote1[V] + verify + aggregate Cert1(V)  ({end - start:.0f} ms)",
-            "white",
+            f.bar_h,
+            COLLECT,
+            f"collect vote1 + Cert1  ({end - start:.0f} ms)",
             11,
         )
         + dot(f.x(end), cy, 6, "#dc2626")
         + text(
-            f.x(end),
+            f.x(end) - 10,
             y + f.bar_h + 12,
             "Cert1(V) at L_{V+1} (gates propose V+1)",
             11,
             "#dc2626",
             700,
+            "end",
         )
     )
 
@@ -460,6 +528,30 @@ def next_recover_ends(m: Metrics) -> tuple[float, float, float]:
     )
 
 
+def recover_bars(f: Frame, y: int, start: float, decode: float, end: float) -> str:
+    """Decode and commit bars. Labels that do not fit go below, joined, ending at the bar end."""
+    parts = [
+        (start, decode, RECOVER, f"recover-decode {decode - start:.0f}"),
+        (decode, end, COMMIT, f"txn-commit {end - decode:.0f}"),
+    ]
+    out, unfit = "", []
+    for t0, t1, color, body in parts:
+        if t1 <= t0:
+            continue
+        out += rect(f.x(t0), y, f.w(t0, t1), f.bar_h, color)
+        if fits(f, t0, t1, body, 10):
+            out += text(
+                (f.x(t0) + f.x(t1)) / 2, y + f.bar_h // 2 + 4, body, 10, "white", 600
+            )
+        else:
+            unfit.append(body)
+    if unfit:
+        out += text(
+            f.x(end) - 6, y + f.bar_h + 12, " + ".join(unfit), 10, "#374151", 600, "end"
+        )
+    return out
+
+
 def next_recover_lane(m: Metrics, f: Frame) -> str:
     """Cycle driver 2: L_{V+1} reconstructs V's payload before it can build on it; it shares
     the CPU with the build below."""
@@ -471,33 +563,30 @@ def next_recover_lane(m: Metrics, f: Frame) -> str:
         f.x(start), y - 4, "threshold_share_reached", 10, "#047857", 600
     )
     if decode > start and end > decode:
-        out += rect(f.x(start), y, f.w(start, decode), f.bar_h, RECOVER)
-        if f.w(start, decode) > 50:
-            out += bar_label(
-                f, start, decode, y, f"recover-decode {decode - start:.0f}", "white", 10
-            )
-        out += rect(f.x(decode), y, f.w(decode, end), f.bar_h, COMMIT)
-        if f.w(decode, end) > 50:
-            out += bar_label(
-                f, decode, end, y, f"tx-commit {end - decode:.0f}", "white", 10
-            )
+        out += recover_bars(f, y, start, decode, end)
     else:
-        out += rect(f.x(start), y, f.w(start, end), f.bar_h, RECOVER)
-        if f.w(start, end) > 50:
-            out += bar_label(
-                f,
-                start,
-                end,
-                y,
-                f"recover V on L_{{V+1}} {end - start:.0f}",
-                "white",
-                10,
-            )
+        out += bar(
+            f,
+            start,
+            end,
+            y,
+            f.bar_h,
+            RECOVER,
+            f"recover V on L_{{V+1}} {end - start:.0f}",
+            10,
+            outside="below",
+        )
     return (
         out
         + dot(f.x(end), cy, 5, "#065f46")
         + text(
-            f.x(end), y + f.bar_h + 12, "payload V ready at L_{V+1}", 10, "#065f46", 600
+            f.x(end) + 12,
+            y + f.bar_h + 12,
+            "payload V ready at L_{V+1}",
+            10,
+            "#065f46",
+            600,
+            "start",
         )
     )
 
@@ -505,6 +594,7 @@ def next_recover_lane(m: Metrics, f: Frame) -> str:
 def next_build_lane(m: Metrics, f: Frame) -> str:
     """Cycle driver 3: L_{V+1} builds V+1, the leader's build spans shifted by one cycle."""
     y, cycle = f.bar_y("NextCPU"), m["cycle"]
+    cy = f.cy("NextCPU")
     return (
         build_bars(m, f, cycle, "NextCPU")
         + text(
@@ -514,9 +604,12 @@ def next_build_lane(m: Metrics, f: Frame) -> str:
             10,
             "#92400e",
             600,
+            "end",
         )
-        + dot(f.x(cycle), f.cy("NextCPU"), 6, "#dc2626")
-        + text(f.x(cycle), y - 6, "proposal_sent(V+1)", 11, "#dc2626", 700)
+        + dot(f.x(cycle), cy, 6, "#dc2626")
+        + text(
+            f.x(cycle) + 12, cy + 4, "proposal_sent(V+1)", 11, "#dc2626", 700, "start"
+        )
     )
 
 
@@ -528,59 +621,41 @@ def recon_lane(m: Metrics, f: Frame) -> str:
     if m["share_wait_ms"] > 0:
         out += (
             dot(f.x(recv), cy, 5, "#b45309")
-            + text(f.x(recv), y - 4, "proposal_validated(V)", 10, "#b45309", 600)
-            + rect(f.x(recv), y, f.w(recv, reached), f.bar_h, SHARE_WAIT)
-            + bar_label(
+            + text(f.x(recv), y - 4, "proposal_validated(V)", 10, "#b45309", 600, "end")
+            + bar(
                 f,
                 recv,
                 reached,
                 y,
+                f.bar_h,
+                SHARE_WAIT,
                 f"share wait {m['share_wait_ms']:.0f}",
-                "#065f46",
                 10,
+                "#065f46",
             )
         )
     if m["recover_cpu_ms"] > 0:
         out += dot(f.x(reached), cy, 5, "#047857") + text(
-            f.x(reached), y - 4, "vid_threshold_reached", 10, "#047857", 600
+            f.x(reached), y - 4, "vid_threshold_reached", 10, "#047857", 600, "start"
         )
-        if m["recover_commit_ms"] > 0:
-            out += rect(f.x(reached), y, f.w(reached, decode_end), f.bar_h, RECOVER)
-            out += bar_label(
-                f,
-                reached,
-                decode_end,
-                y,
-                f"recover-decode {m['recover_decode_ms']:.0f}",
-                "white",
-                10,
-            )
-            out += rect(f.x(decode_end), y, f.w(decode_end, built), f.bar_h, COMMIT)
-            out += bar_label(
-                f,
-                decode_end,
-                built,
-                y,
-                f"txn-commit {m['recover_commit_ms']:.0f}",
-                "white",
-                10,
-            )
-        else:
-            out += rect(f.x(reached), y, f.w(reached, built), f.bar_h, RECOVER)
-            out += bar_label(
-                f,
-                reached,
-                built,
-                y,
-                f"recover {m['recover_cpu_ms']:.0f} ms",
-                "white",
-                11,
-            )
+        out += recover_bars(
+            f,
+            y,
+            reached,
+            decode_end if m["recover_commit_ms"] > 0 else built,
+            built,
+        )
     return (
         out
         + dot(f.x(built), cy, 5, "#065f46")
         + text(
-            f.x(built), y + f.bar_h + 12, "block_reconstructed(V)", 10, "#065f46", 600
+            f.x(built) + 8,
+            y + f.bar_h + 12,
+            "block_reconstructed(V)",
+            10,
+            "#065f46",
+            600,
+            "start",
         )
     )
 
@@ -598,41 +673,40 @@ def deciding_lane(m: Metrics, f: Frame) -> str:
     out = (
         dot(f.x(v1), cy, 5, "#1d4ed8")
         + text(f.x(v1), y - 4, "vote1_arrived (median)", 10, "#1d4ed8", 600)
-        + rect(f.x(v1), y, f.w(v1, c1), f.bar_h, VOTE1_CERT1)
-    )
-    if f.w(v1, c1) > 60:
-        out += bar_label(
-            f, v1, c1, y, f"vote1 → Cert1 ({m['cert1_wait_ms']:.0f})", "#3730a3", 10
+        + bar(
+            f,
+            v1,
+            c1,
+            y,
+            f.bar_h,
+            VOTE1_CERT1,
+            f"vote1 → Cert1 ({m['cert1_wait_ms']:.0f})",
+            10,
+            "#3730a3",
         )
-    out += (
-        dot(f.x(c1), cy, 5, "#7c3aed")
+        + dot(f.x(c1), cy, 5, "#7c3aed")
         + text(f.x(c1), y + f.bar_h + 12, "Cert1(V) median", 10, "#7c3aed", 600)
         + rect(f.x(c1), y, f.w(c1, v2), f.bar_h, CERT1_VOTE2)
-    )
-    if f.w(c1, v2) > 60:
-        out += text(
-            (f.x(c1) + f.x(v2)) / 2,
-            y + f.bar_h // 2 + 4,
-            "Cert1 → vote2",
-            10,
-            "#92400e",
-        )
-    out += (
-        dot(f.x(v2), cy, 5, "#1d4ed8")
+        + dot(f.x(v2), cy, 5, "#1d4ed8")
         + text(f.x(v2), y - 4, "vote2_sent (median)", 10, "#1d4ed8", 600)
-        + rect(f.x(v2), y, f.w(v2, c2), f.bar_h, VOTE2_CERT2)
-    )
-    if f.w(v2, c2) > 60:
-        out += bar_label(
-            f, v2, c2, y, f"vote2 → Cert2 ({m['cert2_wait_ms']:.0f})", "white", 10
+        + bar(
+            f,
+            v2,
+            c2,
+            y,
+            f.bar_h,
+            VOTE2_CERT2,
+            f"vote2 → Cert2 ({m['cert2_wait_ms']:.0f})",
+            10,
         )
+    )
     return (
         out
         + dot(f.x(c2), cy, 5, "#7c3aed")
-        + text(f.x(c2), y - 4, "Cert2(V) median", 10, "#7c3aed", 600)
+        + text(f.x(c2), y - 4, "Cert2(V) median", 10, "#7c3aed", 600, "end")
         + rect(f.x(c2), y, f.w(c2, fin), f.bar_h, CERT2_DECIDED)
         + dot(f.x(fin), cy, 6, "#059669")
-        + text(f.x(fin), y - 4, "leaf_decided(V) ✓", 11, "#059669", 700)
+        + text(f.x(fin) + 8, y - 4, "leaf_decided(V) ✓", 11, "#059669", 700, "start")
     )
 
 
@@ -694,6 +768,8 @@ LEGEND_SWATCHES = (
     ("share-sign", SHARE_SIGN),
     ("fan-out", FAN_OUT),
     ("header", HEADER),
+    ("parent Cert1 wait", CERT1_WAIT),
+    ("commit + sign + outbox", COMMIT_SIGN),
     ("share wait", SHARE_WAIT),
     ("recover-decode", RECOVER),
     ("txn-commit", COMMIT),
