@@ -92,7 +92,7 @@ Modules shown are for `--consensus-storage fs` (default). With `journal`, both r
 
 ## Requirements
 
-- nix devShell `.#aws` (opentofu, awscli2, uv).
+- nix: `just bench aws` enters devShell `.#aws` (opentofu, awscli2, uv) itself; without nix these must be on PATH.
 - AWS profile `timeboost-dev` (account 027574771971). Region eu-west-1 unless `--region` is given. Constants live in
   `aws-bench` and `aws/terraform/main.tf`.
 - `ssh-keygen`.

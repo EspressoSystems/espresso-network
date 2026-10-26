@@ -16,7 +16,7 @@ The default shell is the small, fast daily driver. Add-on shells contain everyth
 - `nix develop` (default): rust toolchain, postgres, anvil, solhint, forge fmt, prettier, process-compose
 - `nix develop .#contracts`: `solc` + `go-ethereum` (abigen) + `FOUNDRY_SOLC` set
 - `nix develop .#mutation`: contracts + `dregs` for mutation testing
-- `nix develop .#docs`: `plantuml`, `graphviz`, `mdbook` for `make doc`
+- `nix develop .#docs`: `plantuml`, `graphviz`, `mdbook` for `just doc-figures`, `just doc-contracts`
 - `nix develop .#go`: Go toolchain + `golangci-lint` for `sdks/go/`
 - `nix develop .#python`: `python3`, `uv`, `ruff`, `ty` for repo scripts
 - `nix develop .#aws`: python + `opentofu`, `awscli2` for `scripts/network-bench/aws`
@@ -38,8 +38,7 @@ If a daily workflow forces you to leave the default shell often, it probably bel
 
 - Source of truth: `.pre-commit-config.yaml` (committed)
 - Runner: [`prek`](https://github.com/j178/prek), a rust reimplementation of pre-commit
-- Entering `nix develop` runs `prek install` for the current checkout (works in worktrees: prek queries git for the
-  hooks dir). Run `nix develop` once per worktree to register the hook there.
+- Entering `nix develop` runs `prek install`; the hook lives in the shared git hooks dir, so it covers all worktrees
 - To add or change a hook: edit `.pre-commit-config.yaml`
 - To run a hook manually: `pre-commit run <id>` from inside the default shell
 
@@ -59,7 +58,7 @@ If a daily workflow forces you to leave the default shell often, it probably bel
   `scripts/run-postgres`), so it picks up uncommitted changes
 - Variants: `just demo-native-da-committees`, `just demo-native-large-block-upgrade`, `just demo-native-ff`,
   `just demo-native-benchmark`
-- Stop with `Ctrl-C` then `just cleanup-process-compose` if anything was left behind
+- Stop with `Ctrl-C` then `scripts/cleanup-process-compose` if anything was left behind
 - See `process-compose.yaml` and `docker-compose.yaml` for more information
 
 ## Contracts
@@ -95,7 +94,7 @@ The `deploy` binary deploys and upgrades contracts.
 
 - Rust docs (rendered): [espresso-network.docs.espressosys.com](https://espresso-network.docs.espressosys.com)
 - Build locally: `just doc --open`
-- Architecture / figures (requires `.#docs` shell): `make doc`
+- Architecture / figures: `just doc-figures`
 
 ## Benchmarking and profiling
 
