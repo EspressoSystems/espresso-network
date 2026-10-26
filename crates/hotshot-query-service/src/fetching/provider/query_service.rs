@@ -505,12 +505,11 @@ mod test {
         },
         data_source::{
             AvailabilityProvider, FetchingDataSource, Transaction, VersionedDataSource,
-            sql::{self, SqlDataSource},
+            sql::postgres::{self as sql, SqlDataSource, SqlStorage, testing::TmpDb},
             storage::{
-                AvailabilityStorage, SqlStorage, StorageConnectionType, UpdateAvailabilityStorage,
+                AvailabilityStorage, StorageConnectionType, UpdateAvailabilityStorage,
                 fail_storage::{FailStorage, FailableAction},
                 pruning::{PrunedHeightStorage, PrunerCfg},
-                sql::testing::TmpDb,
             },
         },
         fetching::{

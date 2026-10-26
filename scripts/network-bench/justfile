@@ -11,10 +11,9 @@ storage_root := env_var_or_default("BENCH_STORAGE_ROOT", "/tmp")
 default:
     just --list --justfile {{quote(source_file())}}
 
-# Release binaries the benchmark network runs; postgres and sqlite builds need separate invocations.
+# Release binaries the benchmark network runs.
 build:
     cd {{quote(repo_root)}} && cargo build --locked --release -p espresso-node --bin espresso-node --bin orchestrator --bin state-relay-server -p espresso-deploy --bin deploy
-    cd {{quote(repo_root)}} && cargo build --locked --release -p espresso-node-sqlite
 
 # AWS harness: plan|up|run|down|status|list|collect|render|destroy|prune|publish; `just bench aws --help`, README.md.
 aws *args:

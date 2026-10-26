@@ -5,7 +5,8 @@ authors = ["Espresso Systems <hello@espressosys.com>"]
 edition.workspace = true
 
 [features]
-embedded-db = ["espresso-node/embedded-db"]
+# Run the tests against SQLite instead of Postgres.
+sqlite = []
 
 [dev-dependencies]
 alloy = { workspace = true }

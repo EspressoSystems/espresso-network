@@ -13,7 +13,6 @@ pub mod genesis;
 #[cfg(any(test, feature = "testing"))]
 pub mod legacy_chain;
 pub use espresso_keyset as keyset;
-pub mod network;
 pub mod options;
 pub mod persistence;
 pub mod run;
@@ -356,10 +355,9 @@ where
 
             let registration = orchestrator_registration(&validator_config)?;
 
-            let config =
-                get_complete_config(&orchestrator_client, registration.clone(), None, None)
-                    .await?
-                    .0;
+            let config = get_complete_config(&orchestrator_client, registration.clone())
+                .await?
+                .0;
 
             tracing::warn!(
                 node_id = config.node_index,

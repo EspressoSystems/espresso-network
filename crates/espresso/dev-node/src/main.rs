@@ -37,7 +37,7 @@ use espresso_node::{
     api::{
         data_source::testing::TestableSequencerDataSource,
         options,
-        sql::DataSource,
+        sql::sqlite::DataSource,
         test_helpers::{STAKE_TABLE_CAPACITY_FOR_TEST, TestNetwork, TestNetworkConfigBuilder},
     },
     persistence,
@@ -285,7 +285,7 @@ async fn async_main(migrated_envs: Vec<(&str, &str)>) -> anyhow::Result<()> {
         tonic_port,
         prover_port,
         dev_node_port,
-        sql,
+        mut sql,
         logging,
         update_interval,
         retry_interval,
@@ -301,6 +301,8 @@ async fn async_main(migrated_envs: Vec<(&str, &str)>) -> anyhow::Result<()> {
         token_symbol,
         version,
     } = cli_params;
+    // The dev node always keeps its data in SQLite, under ESPRESSO_NODE_STORAGE_PATH.
+    sql.embedded_db = true;
 
     logging.init();
     espresso_utils::env_compat::log_migrated_env_vars(&migrated_envs);

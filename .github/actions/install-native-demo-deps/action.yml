@@ -1,25 +1,8 @@
 name: Install native demo deps
-description: Install anvil (foundry), KeyDB, and the postgres server for the native demo
+description: Install anvil (foundry) and the postgres server for the native demo
 
 runs:
   using: composite
   steps:
     - uses: ./.github/actions/install-foundry
     - uses: ./.github/actions/install-postgres
-    # download.keydb.dev goes down for hours at a time, so only a cache miss fetches from it.
-    - uses: actions/cache@v4
-      with:
-        path: /tmp/keydb-tools.deb
-        key: keydb-tools-6.3.4-1-jammy1-amd64
-    - shell: bash
-      run: |
-        set -euo pipefail
-        sudo apt-get update
-        # keydb: extract the prebuilt server (no apt repo for 24.04) + its runtime libs
-        sudo apt-get install -y libsnappy1v5 libzstd1 libuuid1 libcurl4t64 libssl3t64
-        if [ ! -f /tmp/keydb-tools.deb ]; then
-          curl -fsSL --connect-timeout 20 --retry 3 "https://download.keydb.dev/pkg/open_source/deb/ubuntu22.04_jammy/amd64/keydb-latest/keydb-tools_6.3.4-1~jammy1_amd64.deb" -o /tmp/keydb-tools.deb
-        fi
-        dpkg-deb -x /tmp/keydb-tools.deb /tmp/keydb
-        echo "/tmp/keydb/usr/bin" >> "$GITHUB_PATH"
-        /tmp/keydb/usr/bin/keydb-server --version

@@ -22,7 +22,6 @@ testing = [
     "hotshot-new-protocol/testing",
 ]
 benchmarking = []
-embedded-db = ["hotshot-query-service/embedded-db", "sqlx/sqlite"]
 
 [dependencies]
 alloy = { workspace = true }
@@ -40,8 +39,6 @@ base64-bytes = { workspace = true }
 bincode = { workspace = true }
 blake3 = { workspace = true }
 byteorder = { workspace = true }
-cdn-broker = { workspace = true }
-cdn-marshal = { workspace = true }
 chrono = { workspace = true }
 clap = { workspace = true }
 client = { workspace = true }
@@ -75,10 +72,8 @@ jf-crhf = { workspace = true }
 jf-merkle-tree-compat = { workspace = true }
 jf-rescue = { workspace = true }
 jf-signature = { workspace = true }
-libp2p = { workspace = true }
 light-client = { workspace = true, features = ["client", "rlp"] }
 moka = { workspace = true }
-num_enum = { workspace = true }
 parking_lot = { workspace = true }
 priority-queue = { workspace = true }
 process-metrics = { workspace = true }
@@ -91,11 +86,9 @@ reqwest = { workspace = true }
 serde = { workspace = true }
 serde_bytes = { workspace = true }
 serde_json = { workspace = true }
-sha2 = { workspace = true }
 snafu = { workspace = true }
-sqlx = { workspace = true }
+sqlx = { workspace = true, features = ["sqlite"] }
 staking-cli = { workspace = true, optional = true }
-static_assertions = { workspace = true }
 strum = { workspace = true }
 tagged-base64 = { workspace = true }
 tempfile = { workspace = true }
@@ -139,8 +132,10 @@ rand = { workspace = true }
 reqwest = { workspace = true }
 rstest = { workspace = true }
 rstest_reuse = { workspace = true }
+staking-cli = { workspace = true }
 tempfile = { workspace = true }
 test-log = { workspace = true }
+test-utils = { workspace = true }
 tokio = { workspace = true, features = ["io-util", "net", "test-util"] }
 tokio-tungstenite = { workspace = true }
 

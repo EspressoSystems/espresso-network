@@ -24,10 +24,6 @@ use crate::{
     message::SequencingMessage,
 };
 
-/// Centralized server specific errors
-#[derive(Debug, Error, Serialize, Deserialize)]
-pub enum PushCdnNetworkError {}
-
 /// the type of transmission
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum TransmitType<TYPES: NodeType> {
@@ -174,7 +170,7 @@ pub enum BroadcastDelay {
 
 /// represents a networking implmentration
 /// exposes low level API for interacting with a network
-/// intended to be implemented for libp2p, the centralized server,
+/// intended to be implemented for a message transport,
 /// and memory network
 #[async_trait]
 pub trait ConnectedNetwork<K: SignatureKey + 'static>: Clone + Send + Sync + 'static {
@@ -297,7 +293,7 @@ pub enum Topic {
     Da,
 }
 
-/// Libp2p topics require a string, so we need to convert our enum to a string
+/// Topics travel as strings, so we need to convert our enum to a string
 impl Display for Topic {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {

@@ -492,12 +492,14 @@ mod test {
     use hotshot_example_types::node_types::TEST_VERSIONS;
     use pretty_assertions::assert_eq;
 
-    use super::*;
+    use super::{
+        super::super::{SqlStorage, testing::TmpDb},
+        *,
+    };
     use crate::{
         data_source::{
             Transaction, VersionedDataSource,
-            sql::testing::TmpDb,
-            storage::{SqlStorage, StorageConnectionType, UpdateAvailabilityStorage},
+            storage::{StorageConnectionType, UpdateAvailabilityStorage},
         },
         testing::{chain::genesis_vid, mocks::MockTypes},
     };

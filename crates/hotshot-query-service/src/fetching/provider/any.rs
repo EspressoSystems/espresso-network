@@ -373,7 +373,7 @@ mod test {
     use super::*;
     use crate::{
         availability::{AvailabilityDataSource, UpdateAvailabilityData},
-        data_source::storage::sql::testing::TmpDb,
+        data_source::storage::sql::postgres::testing::TmpDb,
         fetching::provider::{NoFetching, TrustedQueryServiceProvider, test_fixtures},
         testing::{chain::ChainNode, consensus::MockDataSource, mocks::MockTypes},
         types::HeightIndexed,

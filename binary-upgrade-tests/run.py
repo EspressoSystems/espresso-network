@@ -55,13 +55,19 @@ SAFE_STOP_WINDOW = (2, 10)
 
 # Services NOT touched by the binary upgrade test:
 #   - one-shots that already ran in phase 1 (deploy-*, stake-for-demo,
-#     cdn-whitelist, wait-for-v4)
-#   - infra that doesn't use an espresso-network image (postgres, keydb,
-#     L1 anvil, block-explorer)
+#     wait-for-v4)
+#   - infra that doesn't use an espresso-network image (postgres, L1 anvil,
+#     block-explorer)
+#   - the CDN (broker-*, marshal-0, cdn-whitelist, keydb), which only
+#     the base tag's compose runs: no image for it is published any more, and
+#     the upgraded nodes ignore it. Delete these entries once the base tag is a
+#     release cut after the CDN was removed from docker-compose.yaml.
 NOUPGRADE_SERVICES = (
     "block-explorer",
-    "cdn-open",
+    "broker-0",
+    "broker-1",
     "cdn-whitelist",
+    "marshal-0",
     "demo-l1-network",
     "deploy-espresso-contracts",
     "deploy-lcv3-upgrade",
@@ -85,6 +91,7 @@ PERSIST_OVERLAY = REPO_ROOT / "binary-upgrade-tests" / "compose.persist-storage.
 NODE_5_FS_OVERLAY = REPO_ROOT / "binary-upgrade-tests" / "compose.node-5-fs.yaml"
 NODE_5_PG_OVERLAY = REPO_ROOT / "binary-upgrade-tests" / "compose.node-5-pg.yaml"
 LC_GATING_OVERLAY = REPO_ROOT / "binary-upgrade-tests" / "compose.lc-gating.yaml"
+CDN_OPEN_OVERLAY = REPO_ROOT / "binary-upgrade-tests" / "compose.cdn-open.yaml"
 STAKE_NODE_5_OVERLAY = REPO_ROOT / "binary-upgrade-tests" / "compose.stake-node-5.yaml"
 
 
@@ -294,11 +301,11 @@ class Compose:
             "-f", str(self.base_dir / "docker-compose.yaml"),
             "-f", str(PERSIST_OVERLAY),
         ]  # fmt: skip
-        if (
-            "wait-for-lc-epoch"
-            not in (self.base_dir / "docker-compose.yaml").read_text()
-        ):
+        base_compose = (self.base_dir / "docker-compose.yaml").read_text()
+        if "wait-for-lc-epoch" not in base_compose:
             args += ["-f", str(LC_GATING_OVERLAY)]
+        if "cdn-whitelist" in base_compose:
+            args += ["-f", str(CDN_OPEN_OVERLAY)]
         for overlay in self.extra_overlays:
             args += ["-f", str(overlay)]
         return args
@@ -421,21 +428,22 @@ class Compose:
     def upgraded_services(self) -> list[str]:
         return [s for s in self.services() if s not in NOUPGRADE_SERVICES]
 
-    def pull(self, *tags: str, retries: int = 4, backoff: float = 10.0) -> None:
-        for tag in tags:
-            log.info(f"Pulling images (DOCKER_TAG={tag})")
-            for attempt in range(1, retries + 1):
-                result = self.run("pull", docker_tag=tag, check=False)
-                if result.returncode == 0:
-                    break
-                if attempt == retries:
-                    raise RuntimeError(
-                        f"compose pull failed after {retries} attempts for tag={tag}"
-                    )
-                log.warning(
-                    f"compose pull attempt {attempt}/{retries} for tag={tag} failed; retrying in {backoff:g}s"
+    def pull(
+        self, tag: str, *services: str, retries: int = 4, backoff: float = 10.0
+    ) -> None:
+        log.info(f"Pulling images (DOCKER_TAG={tag})")
+        for attempt in range(1, retries + 1):
+            result = self.run("pull", *services, docker_tag=tag, check=False)
+            if result.returncode == 0:
+                break
+            if attempt == retries:
+                raise RuntimeError(
+                    f"compose pull failed after {retries} attempts for tag={tag}"
                 )
-                time.sleep(backoff)
+            log.warning(
+                f"compose pull attempt {attempt}/{retries} for tag={tag} failed; retrying in {backoff:g}s"
+            )
+            time.sleep(backoff)
 
     def assert_all_espresso_images(self, expected_tag: str) -> None:
         bad: list[str] = []
@@ -1046,10 +1054,9 @@ def main() -> int:
     load_project_env()
 
     with compose_session(config) as compose:
-        tags = (config.base_tag,)
+        compose.pull(config.base_tag)
         if config.upgrade_pull:
-            tags += (config.upgrade_tag,)
-        compose.pull(*tags)
+            compose.pull(config.upgrade_tag, *compose.upgraded_services())
 
         if args.pull_only:
             log.info("--pull-only: images pulled, exiting before stack start")

@@ -2236,6 +2236,16 @@ where
         })
         .await
     }
+
+    async fn load_state_start_height(&self) -> QueryResult<Option<u64>> {
+        serializable_retry!(self.fetcher.storage, || async {
+            let mut tx = self.read().await.map_err(|err| QueryError::Error {
+                message: err.to_string(),
+            })?;
+            tx.load_state_start_height().await
+        })
+        .await
+    }
 }
 
 #[async_trait]
@@ -3020,8 +3030,8 @@ mod test {
     use super::{leaf::RangeRequest, *};
     use crate::{
         data_source::{
-            sql::testing::TmpDb,
-            storage::{SqlStorage, StorageConnectionType},
+            sql::postgres::{SqlStorage, testing::TmpDb},
+            storage::StorageConnectionType,
         },
         fetching::provider::NoFetching,
         testing::{

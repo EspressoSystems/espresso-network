@@ -21,7 +21,18 @@ use espresso_types::{
 pub mod fs;
 pub mod no_storage;
 mod persistence_metrics;
-pub mod sql;
+/// Persistence backed by a SQL database, with one module per backend.
+///
+/// [`postgres`](sql::postgres) and [`sqlite`](sql::sqlite) compile the same code against their own
+/// database. [`sql::Options::embedded_db`] picks one, and the options are shared by both.
+pub mod sql {
+    mod options;
+
+    pub use options::*;
+
+    pub mod postgres;
+    pub mod sqlite;
+}
 pub(crate) mod storage_probe;
 
 /// RegisteredValidator without x25519_key/p2p_addr fields.
@@ -293,7 +304,8 @@ mod tests {
 
     #[rstest_reuse::template]
     #[rstest::rstest]
-    #[case(PhantomData::<crate::persistence::sql::Persistence>)]
+    #[case(PhantomData::<crate::persistence::sql::postgres::Persistence>)]
+    #[case(PhantomData::<crate::persistence::sql::sqlite::Persistence>)]
     #[case(PhantomData::<crate::persistence::fs::Persistence>)]
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     pub fn persistence_types<P: TestablePersistence>(#[case] _p: PhantomData<P>) {}
@@ -1985,7 +1997,8 @@ mod tests {
     /// sql-only: the fs backend keeps the pop-oldest cursor and skips gaps (the consumer
     /// re-fetches missing blocks), trading gap-fill delivery for cheap decide passes.
     #[rstest::rstest]
-    #[case(PhantomData::<crate::persistence::sql::Persistence>)]
+    #[case(PhantomData::<crate::persistence::sql::postgres::Persistence>)]
+    #[case(PhantomData::<crate::persistence::sql::sqlite::Persistence>)]
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     pub async fn test_decide_gap_holds_events<P: TestablePersistence>(#[case] _p: PhantomData<P>) {
         let tmp = P::tmp_storage().await;
@@ -2029,7 +2042,8 @@ mod tests {
     ///
     /// sql-only: see [`test_decide_gap_holds_events`].
     #[rstest::rstest]
-    #[case(PhantomData::<crate::persistence::sql::Persistence>)]
+    #[case(PhantomData::<crate::persistence::sql::postgres::Persistence>)]
+    #[case(PhantomData::<crate::persistence::sql::sqlite::Persistence>)]
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     pub async fn test_decide_gap_fill_delivers_all<P: TestablePersistence>(
         #[case] _p: PhantomData<P>,

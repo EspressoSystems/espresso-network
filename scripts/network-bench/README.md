@@ -763,8 +763,7 @@ Each step is judged over its second half. A step stopped early is judged over it
 - Peers: every node has state peers. Query nodes set `ESPRESSO_NODE_API_PEERS` to the other query nodes; the single
   query node has none.
 - Keys: test mnemonic, index 20 + i. No `keygen`, no `stake-for-demo`.
-- Network: cliquenet over private IPs, libp2p over private DNS. The security group allows ssh from this machine's IP
-  only (checkip).
+- Network: cliquenet over private IPs. The security group allows ssh from this machine's IP only (checkip).
 - Images: `ghcr.io/espressosystems/espresso-network/<component>:<--tag>` plus foundry and postgres. Preflight resolves
   digests, hosts pull by digest, the manifest records them.
 - ssh: every fleet gets an ed25519 key in `<fleet>/ssh/`. The private half is deleted after destroy and kept after a

@@ -2,10 +2,8 @@ use std::{collections::HashSet, env, time::Duration};
 
 use async_trait::async_trait;
 
-use crate::data_source::{
-    Transaction as _, VersionedDataSource,
-    storage::sql::{Backfill, SqlStorage, Transaction},
-};
+use super::{Backfill, SqlStorage, Transaction};
+use crate::data_source::{Transaction as _, VersionedDataSource};
 
 const RETRY_INTERVAL: Duration = Duration::from_secs(300);
 
@@ -379,14 +377,14 @@ mod tests {
             .unwrap();
     }
 
-    // --- Integration tests (require a real postgres database) ---
+    // --- Integration tests (require a real database) ---
 
-    #[cfg(not(feature = "embedded-db"))]
     mod db_tests {
-        use super::*;
-        use crate::data_source::storage::sql::{
-            Migration, SqlStorage, StorageConnectionType, testing::TmpDb,
+        use super::{
+            super::super::{Migration, SqlStorage, testing::TmpDb},
+            *,
         };
+        use crate::data_source::storage::StorageConnectionType;
 
         // The deferred_migrations table lives in espresso-node's migrations; for tests within
         // this crate we inject it as an extra migration.
