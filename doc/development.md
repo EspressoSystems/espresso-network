@@ -37,8 +37,8 @@ If a daily workflow forces you to leave the default shell often, it probably bel
 
 - Source of truth: `.pre-commit-config.yaml` (committed)
 - Runner: [`prek`](https://github.com/j178/prek), a rust reimplementation of pre-commit
-- Entering `nix develop` installs `.git/hooks/pre-commit` automatically. The hook is nix-aware: it runs `prek` directly
-  when the dev shell is active, and re-enters `nix develop` first when committing from outside (IDE, plain terminal)
+- Entering `nix develop` runs `prek install` for the current checkout (works in worktrees: prek queries git for the
+  hooks dir). Run `nix develop` once per worktree to register the hook there.
 - To add or change a hook: edit `.pre-commit-config.yaml`
 - To run a hook manually: `pre-commit run <id>` from inside the default shell
 

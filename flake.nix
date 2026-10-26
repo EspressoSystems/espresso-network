@@ -136,12 +136,9 @@
             prek
             prek-as-pre-commit # `pre-commit` alias for muscle memory
             process-compose
-            entr
             datadog-pup
             lazydocker # used by `just demo-docker`
-            bc # used by scripts/verify-pos-deployment.sh
-            # foundry kept for `anvil`; forge/cast/chisel/solc are in `.#contracts`
-            foundry
+            foundry # need `anvil` in rust tests
             prettier
             solhint
             libusb1 # link-time dep of `libusb1-sys` crate
@@ -154,31 +151,20 @@
             # Avoid clash with rustup's ~/.cargo
             export CARGO_HOME=$HOME/.cargo-nix
 
-            # Install pre-commit hook. Rewritten on every shell entry so updates propagate.
-            if [ -d .git ] && [ -f .pre-commit-config.yaml ]; then
-              mkdir -p .git/hooks
-              cat > .git/hooks/pre-commit <<'HOOK'
-            #!/usr/bin/env bash
-            # espresso-network-precommit-hook — managed by flake.nix
-            set -e
-            if command -v prek >/dev/null 2>&1 && command -v rustfmt >/dev/null 2>&1; then
-              exec prek run --hook-stage=pre-commit "$@"
-            fi
-            # Re-enter nix shell for commits made outside it (IDE etc.).
-            # Force experimental features in case the user's nix.conf doesn't enable them.
-            export NIX_CONFIG="''${NIX_CONFIG:-}"$'\nexperimental-features = nix-command flakes'
-            exec nix develop --quiet --accept-flake-config -c prek run --hook-stage=pre-commit "$@"
-            HOOK
-              chmod +x .git/hooks/pre-commit
+            # Install prek's pre-commit hook (handles worktrees via git rev-parse).
+            if [ -f .pre-commit-config.yaml ]; then
+              prek install -q --overwrite
             fi
           '';
           RUST_SRC_PATH = "${stableToolchain}/lib/rustlib/src/rust/library";
         });
       devShells.docs = pkgs.mkShellNoCC {
+        inputsFrom = [ self.devShells.${system}.default ];
         packages = with pkgs; [ graphviz plantuml mdbook ];
       };
 
       devShells.go = pkgs.mkShellNoCC {
+        inputsFrom = [ self.devShells.${system}.default ];
         packages = [ pkgs.go_1_27 golangci-lint ];
       };
 
@@ -201,6 +187,7 @@
       };
 
       devShells.python = pkgs.mkShellNoCC {
+        inputsFrom = [ self.devShells.${system}.default ];
         packages = with pkgs; [ python3 uv ruff ty ];
         # Let uv-installed binary wheels (matplotlib/numpy/...) find libstdc++ on NixOS.
         shellHook = ''

@@ -383,6 +383,11 @@ dev-download-srs:
     2>&1 | tee log.txt
 
 gen-go-bindings:
+	#!/usr/bin/env bash
+	set -euo pipefail
+	if ! command -v abigen >/dev/null; then
+	    exec nix develop .#contracts --quiet --accept-flake-config -c just gen-go-bindings
+	fi
 	abigen --abi contracts/artifacts/abi/LightClient.json --pkg lightclient --out sdks/go/light-client/lightclient.go
 	abigen --abi contracts/artifacts/abi/LightClientMock.json --pkg lightclientmock --out sdks/go/light-client-mock/lightclient.go
 
