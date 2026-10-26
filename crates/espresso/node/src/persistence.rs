@@ -947,11 +947,6 @@ mod tests {
                 storage.load_da_proposal(ViewNumber::new(i)).await.unwrap(),
                 None
             );
-
-            assert_eq!(
-                storage.load_vid_share(ViewNumber::new(i)).await.unwrap(),
-                None
-            );
         }
 
         assert_eq!(
@@ -1021,11 +1016,6 @@ mod tests {
         // The remaining data should have been GCed.
         assert_eq!(
             storage.load_da_proposal(ViewNumber::new(3)).await.unwrap(),
-            None
-        );
-
-        assert_eq!(
-            storage.load_vid_share(ViewNumber::new(3)).await.unwrap(),
             None
         );
         assert_eq!(
@@ -1624,13 +1614,6 @@ mod tests {
         // Garbage collection should have run.
         for i in 0..4 {
             tracing::info!(i, "check proposal garbage collected");
-            assert!(
-                storage
-                    .load_vid_share(ViewNumber::new(i))
-                    .await
-                    .unwrap()
-                    .is_none()
-            );
             assert!(
                 storage
                     .load_da_proposal(ViewNumber::new(i))
@@ -3403,12 +3386,6 @@ mod tests {
             storage.get_state_cert_by_epoch(1).await.unwrap(),
             Some(state_cert.clone())
         );
-        for i in 0..2 {
-            assert_eq!(
-                storage.load_vid_share(ViewNumber::new(i)).await.unwrap(),
-                None
-            );
-        }
         // Consensus can still decide view 3, so pruning must not reach past the decided view.
         assert!(
             storage

@@ -736,6 +736,7 @@ pub struct PruningView {
 pub struct ConsensusPruningView {
     pub target_retention: u64,
     pub minimum_retention: u64,
+    pub vid_share_retention: u64,
     pub target_usage: u64,
 }
 
@@ -800,6 +801,7 @@ impl From<&persistence::sql::ConsensusPruningOptions> for ConsensusPruningView {
         Self {
             target_retention: o.target_retention,
             minimum_retention: o.minimum_retention,
+            vid_share_retention: o.vid_share_retention,
             target_usage: o.target_usage,
         }
     }

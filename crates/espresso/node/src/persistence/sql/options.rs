@@ -571,6 +571,21 @@ pub struct ConsensusPruningOptions {
     )]
     pub(crate) minimum_retention: u64,
 
+    /// Number of views to retain this node's VID shares, whether or not they have been decided.
+    ///
+    /// Unlike the other consensus data, VID shares are kept for this many views even if consensus
+    /// storage exceeds TARGET_USAGE.
+    ///
+    /// The default of 1728000 views equates to approximately 10 days (864000 seconds) at an average
+    /// view time of 0.5s, the mainnet view time.
+    #[clap(
+        name = "VID_SHARE_RETENTION",
+        long = "consensus-storage-vid-share-retention",
+        env = "ESPRESSO_NODE_CONSENSUS_STORAGE_VID_SHARE_RETENTION",
+        default_value = "1728000"
+    )]
+    pub(crate) vid_share_retention: u64,
+
     /// Amount (in bytes) of data to retain in consensus storage before garbage collecting more
     /// aggressively.
     ///

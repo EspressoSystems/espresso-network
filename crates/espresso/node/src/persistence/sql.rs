@@ -162,6 +162,7 @@ impl PersistenceOptions for Options {
     fn set_view_retention(&mut self, view_retention: u64) {
         self.0.consensus_pruning.target_retention = view_retention;
         self.0.consensus_pruning.minimum_retention = view_retention;
+        self.0.consensus_pruning.vid_share_retention = view_retention;
     }
 
     fn set_consensus_only(&mut self) {
@@ -638,13 +639,8 @@ impl Persistence {
                     .await?;
                 }
 
-                // Delete the data that has been fully processed.
-                tx.execute(
-                    query("DELETE FROM vid_share2 where view >= $1 AND view <= $2")
-                        .bind(from_view_i64)
-                        .bind(to_view_i64),
-                )
-                .await?;
+                // Delete the data that has been fully processed. VID shares are kept until
+                // VID_SHARE_RETENTION expires instead.
                 tx.execute(
                     query("DELETE FROM da_proposal2 where view >= $1 AND view <= $2")
                         .bind(from_view_i64)
@@ -728,6 +724,12 @@ impl Persistence {
                 .await?;
             }
             prune_to_view(&mut tx, view.u64()).await?;
+            prune_table(
+                &mut tx,
+                "vid_share2",
+                view.u64().saturating_sub(self.gc_opt.vid_share_retention),
+            )
+            .await?;
             tx.commit().await
         })
         .await
@@ -771,8 +773,13 @@ impl Persistence {
     /// interval, prune toward the minimum retention if storage is over the target usage.
     #[tracing::instrument(skip(self))]
     async fn prune_to_retention(&self, cur_view: ViewNumber) -> anyhow::Result<()> {
-        self.prune_below(cur_view.u64().saturating_sub(self.gc_opt.target_retention))
-            .await?;
+        let cur_view = cur_view.u64();
+        let vid_share_view = cur_view.saturating_sub(self.gc_opt.vid_share_retention);
+        self.prune_below(
+            cur_view.saturating_sub(self.gc_opt.target_retention),
+            vid_share_view,
+        )
+        .await?;
 
         if !self.usage_check_due() {
             return Ok(());
@@ -785,20 +792,24 @@ impl Persistence {
                 gc_opt = ?self.gc_opt,
                 "consensus storage is running out of space, pruning to minimum retention"
             );
-            self.prune_below(cur_view.u64().saturating_sub(self.gc_opt.minimum_retention))
-                .await?;
+            self.prune_below(
+                cur_view.saturating_sub(self.gc_opt.minimum_retention),
+                vid_share_view,
+            )
+            .await?;
         }
         Ok(())
     }
 
-    async fn prune_below(&self, view: u64) -> anyhow::Result<()> {
+    async fn prune_below(&self, view: u64, vid_share_view: u64) -> anyhow::Result<()> {
         // An empty write transaction still takes SQLite's write lock.
-        if view == 0 {
+        if view == 0 && vid_share_view == 0 {
             return Ok(());
         }
         serializable_retry!(self, || async {
             let mut tx = self.db.write().await?;
             prune_to_view(&mut tx, view).await?;
+            prune_table(&mut tx, "vid_share2", vid_share_view).await?;
             tx.commit().await
         })
         .await
@@ -840,9 +851,11 @@ impl Persistence {
     }
 }
 
+/// Tables pruned by TARGET_RETENTION, MINIMUM_RETENTION and TARGET_USAGE. `vid_share2` is pruned
+/// separately by VID_SHARE_RETENTION, and left out of the usage measurement so that a full window
+/// of VID shares does not push the other tables down to MINIMUM_RETENTION.
 const PRUNE_TABLES: &[&str] = &[
     "anchor_leaf2",
-    "vid_share2",
     "da_proposal2",
     "quorum_proposals2",
     "quorum_certificate2",
@@ -854,19 +867,24 @@ async fn prune_to_view(tx: &mut Transaction<Write>, view: u64) -> anyhow::Result
     tracing::debug!(view, "pruning consensus storage");
 
     for table in PRUNE_TABLES {
-        let res = query(&format!("DELETE FROM {table} WHERE view < $1"))
-            .bind(view as i64)
-            .execute(tx.as_mut())
-            .await
-            .context(format!("pruning {table}"))?;
-        if res.rows_affected() > 0 {
-            tracing::info!(
-                "garbage collected {} rows from {table}",
-                res.rows_affected()
-            );
-        }
+        prune_table(tx, table, view).await?;
     }
 
+    Ok(())
+}
+
+async fn prune_table(tx: &mut Transaction<Write>, table: &str, view: u64) -> anyhow::Result<()> {
+    let res = query(&format!("DELETE FROM {table} WHERE view < $1"))
+        .bind(view as i64)
+        .execute(tx.as_mut())
+        .await
+        .context(format!("pruning {table}"))?;
+    if res.rows_affected() > 0 {
+        tracing::info!(
+            "garbage collected {} rows from {table}",
+            res.rows_affected()
+        );
+    }
     Ok(())
 }
 
@@ -3022,6 +3040,7 @@ mod test {
             // retention.
             target_retention: u64::MAX,
             usage_check_interval: Duration::ZERO,
+            vid_share_retention: 1,
         })
         .await
     }
@@ -3037,8 +3056,87 @@ mod test {
             // retention.
             target_usage: u64::MAX,
             usage_check_interval: Duration::ZERO,
+            vid_share_retention: 1,
         })
         .await
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_vid_share_retention() {
+        let tmp = Persistence::tmp_storage().await;
+        let mut opt = Persistence::options(&tmp);
+        opt.consensus_pruning = ConsensusPruningOptions {
+            target_retention: 0,
+            minimum_retention: 0,
+            target_usage: 0,
+            usage_check_interval: Duration::ZERO,
+            vid_share_retention: 2,
+        };
+        let storage = opt.create().await.unwrap();
+
+        let leaf = Leaf2::genesis(
+            &ValidatedState::default(),
+            &NodeState::mock(),
+            TEST_VERSIONS.test.base,
+        )
+        .await;
+        let qc = QuorumCertificate2::genesis(
+            &ValidatedState::default(),
+            &NodeState::mock(),
+            TEST_VERSIONS.test,
+        )
+        .await;
+        let payload = leaf.block_payload().unwrap();
+        let avidm_param = init_avidm_param(2).unwrap();
+        let ns_table = parse_ns_table(payload.byte_len().as_usize(), &payload.ns_table().encode());
+        let (payload_commitment, shares) =
+            AvidMScheme::ns_disperse(&avidm_param, &[1, 1], &payload.encode(), ns_table).unwrap();
+        let (pubkey, privkey) = BLSPubKey::generated_from_seed_indexed([0; 32], 1);
+        let vid = convert_proposal(
+            AvidMDisperseShare::<SeqTypes> {
+                view_number: leaf.view_number(),
+                payload_commitment,
+                share: shares[0].clone(),
+                recipient_key: pubkey,
+                epoch: None,
+                target_epoch: None,
+                common: avidm_param,
+            }
+            .to_proposal(&privkey)
+            .unwrap(),
+        );
+        storage.append_vid(&vid).await.unwrap();
+
+        let view = leaf.view_number();
+        let info = LeafInfo {
+            leaf,
+            vid_share: None,
+            state: Default::default(),
+            delta: None,
+            state_cert: None,
+        };
+        storage
+            .append_decided_leaves(
+                view,
+                [(&info, CertificatePair::non_epoch_change(qc))],
+                &NullEventConsumer,
+            )
+            .await
+            .unwrap();
+        assert_eq!(storage.load_vid_share(view).await.unwrap(), Some(vid));
+
+        storage
+            .append_decided_leaves(view + 2, [], &NullEventConsumer)
+            .await
+            .unwrap();
+        assert!(!view_row_exists(&storage, "anchor_leaf2", view).await);
+        assert!(view_row_exists(&storage, "vid_share2", view).await);
+
+        storage
+            .append_decided_leaves(view + 3, [], &NullEventConsumer)
+            .await
+            .unwrap();
+        assert!(!view_row_exists(&storage, "vid_share2", view).await);
     }
 
     /// Regression test for an ambiguous behavior in `store_events`/`load_events`.
