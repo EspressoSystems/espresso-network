@@ -10,21 +10,15 @@
 // You should have received a copy of the GNU General Public License along with this program. If not,
 // see <https://www.gnu.org/licenses/>.
 
-#![cfg(feature = "sql-data-source")]
-
-pub use anyhow::Error;
 use hotshot_types::traits::node_implementation::NodeType;
-pub use refinery::Migration;
-pub use sql::Transaction;
 
-use super::{
-    AvailabilityProvider, FetchingDataSource, fetching,
-    storage::sql::{self, SqlStorage, StorageConnectionType},
-};
-pub use crate::include_migrations;
+use super::{self as sql, Error, SqlStorage};
 use crate::{
     Header, Payload,
     availability::{QueryableHeader, QueryablePayload},
+    data_source::{
+        AvailabilityProvider, FetchingDataSource, fetching, storage::StorageConnectionType,
+    },
 };
 
 pub type Builder<Types, Provider> = fetching::Builder<Types, SqlStorage, Provider>;
@@ -60,7 +54,7 @@ impl Config {
     }
 }
 
-/// A data source for the APIs provided in this crate, backed by a remote PostgreSQL database.
+/// A data source for the APIs provided in this crate, backed by a SQL database.
 ///
 /// # Administration
 ///
@@ -74,14 +68,14 @@ impl Config {
 ///
 /// All the objects created and used by [`SqlDataSource`] are grouped under a schema for easy
 /// management. By default, the schema is named `hotshot`, and is created the first time a
-/// [`SqlDataSource`] is constructed. The name of the schema can be configured by setting
-/// [`Config::schema`].
+/// [`SqlDataSource`] is constructed. On Postgres, the name of the schema can be configured by
+/// setting [`Config::schema`](crate::data_source::sql::postgres::Config::schema).
 ///
 /// ## Initialization
 ///
 /// When creating a PostgreSQL [`SqlDataSource`], the caller can use [`Config`] to specify the host, user, and
-/// database for the connection. If the `embedded-db` feature is enabled, the caller can instead specify the
-/// file path for an SQLite database.
+/// database for the connection. For SQLite, the caller instead specifies the file path of the
+/// database.
 /// As such, [`SqlDataSource`] is not very opinionated about how the
 /// database instance is set up. The administrator must simply ensure that there is a database
 /// dedicated to the [`SqlDataSource`] and a user with appropriate permissions (all on `SCHEMA` and
@@ -104,8 +98,7 @@ impl Config {
 /// One could then connect to this database with the following [`Config`] for postgres:
 ///
 /// ```
-/// # use hotshot_query_service::data_source::sql::Config;
-/// #[cfg(not(feature= "embedded-db"))]
+/// # use hotshot_query_service::data_source::sql::postgres::Config;
 /// Config::default()
 ///     .host("postgres.database.hostname")
 ///     .database("hotshot_query_service")
@@ -113,11 +106,10 @@ impl Config {
 ///     .password("password")
 /// # ;
 /// ```
-/// Or, if the `embedded-db` feature is enabled, configure it as follows for SQLite:
+/// Or configure it as follows for SQLite:
 ///
 /// ```
-/// # use hotshot_query_service::data_source::sql::Config;
-/// #[cfg(feature= "embedded-db")]
+/// # use hotshot_query_service::data_source::sql::sqlite::Config;
 /// Config::default()
 ///     .db_path("temp.db".into())
 /// # ;
@@ -177,7 +169,8 @@ impl Config {
 ///
 /// It is standard to store custom migrations as SQL files in a sub-directory of the crate. For ease
 /// of release and deployment, such directories can be embedded into a Rust binary and parsed into
-/// a list of [`Migration`] objects using the [`include_migrations`] macro.
+/// a list of [`Migration`](sql::Migration) objects using the
+/// [`include_migrations`](crate::include_migrations) macro.
 ///
 /// It is also possible to take complete control over migrating the schema using
 /// [`Config::no_migrations`] to prevent the [`SqlDataSource`] from running its own migrations. The
@@ -188,9 +181,12 @@ impl Config {
 ///
 /// # Synchronization
 ///
-/// [`SqlDataSource`] implements [`VersionedDataSource`](super::VersionedDataSource), which means
-/// changes are applied to the underlying database via transactions. [`Transaction`] maps exactly to
-/// a transaction in the underling RDBMS, and inherits the underlying concurrency semantics.
+/// [`SqlDataSource`] implements [`VersionedDataSource`](crate::data_source::VersionedDataSource),
+/// which means changes are applied to the underlying database via transactions. [`Transaction`]
+/// maps exactly to a transaction in the underling RDBMS, and inherits the underlying concurrency
+/// semantics.
+///
+/// [`Transaction`]: sql::Transaction
 ///
 /// # Extension and Composition
 ///
@@ -202,11 +198,11 @@ impl Config {
 ///
 /// It is possible to add additional, application-specific state to [`SqlDataSource`]. If the new
 /// state should live in memory, simply wrap the [`SqlDataSource`] in an
-/// [`ExtensibleDataSource`](super::ExtensibleDataSource):
+/// [`ExtensibleDataSource`](crate::data_source::ExtensibleDataSource):
 ///
 /// ```
 /// # use hotshot_query_service::data_source::{
-/// #   sql::{Config, Error}, ExtensibleDataSource, SqlDataSource,
+/// #   sql::{Error, postgres::{Config, SqlDataSource}}, ExtensibleDataSource,
 /// # };
 /// # use hotshot_query_service::fetching::provider::NoFetching;
 /// # use hotshot_query_service::testing::mocks::MockTypes as AppTypes;
@@ -219,19 +215,19 @@ impl Config {
 /// # }
 /// ```
 ///
-/// The [`ExtensibleDataSource`](super::ExtensibleDataSource) wrapper implements all the same data
-/// source traits as [`SqlDataSource`], and also provides access to the `AppState` parameter for use
-/// in API endpoint handlers. This can be used to implement an app-specific data source trait and
-/// add a new API endpoint that uses this app-specific data, as described in the
+/// The [`ExtensibleDataSource`](crate::data_source::ExtensibleDataSource) wrapper implements all
+/// the same data source traits as [`SqlDataSource`], and also provides access to the `AppState`
+/// parameter for use in API endpoint handlers. This can be used to implement an app-specific data
+/// source trait and add a new API endpoint that uses this app-specific data, as described in the
 /// [extension guide](crate#extension).
 ///
 /// If the new application-specific state should live in the SQL database itself, the implementation
 /// is more involved, but still possible. Follow the steps for [custom
 /// migrations](#custom-migrations) to modify the database schema to account for the new data you
 /// want to store. You can then access this data through the [`SqlDataSource`] using
-/// [`read`](super::VersionedDataSource::read) to run a custom read-only SQL query or
-/// [`write`](super::VersionedDataSource::write) to execute a custom atomic mutation of the
-/// database.
+/// [`read`](crate::data_source::VersionedDataSource::read) to run a custom read-only SQL query or
+/// [`write`](crate::data_source::VersionedDataSource::write) to execute a custom atomic mutation of
+/// the database.
 ///
 /// ## Composition
 ///
@@ -244,7 +240,7 @@ impl Config {
 /// ```
 /// # use futures::{Stream, StreamExt};
 /// # use hotshot_query_service::data_source::{
-/// #   sql::Config, Transaction, SqlDataSource, UpdateDataSource, VersionedDataSource,
+/// #   sql::postgres::{Config, SqlDataSource}, Transaction, UpdateDataSource, VersionedDataSource,
 /// # };
 /// # use hotshot_query_service::fetching::provider::NoFetching;
 /// # use hotshot_query_service::testing::mocks::MockTypes as AppTypes;
@@ -317,8 +313,8 @@ where
 pub mod testing {
     use async_trait::async_trait;
     use hotshot_types::new_protocol::CoordinatorEvent;
-    pub use sql::testing::TmpDb;
 
+    pub use super::sql::testing::TmpDb;
     use super::*;
     use crate::{
         data_source::UpdateDataSource,
@@ -381,11 +377,6 @@ mod test {
         node_types::TEST_VERSIONS,
         state_types::{TestInstanceState, TestValidatedState},
     };
-    use hotshot_types::{
-        data::{VidCommon, VidShare},
-        vid::advz::advz_scheme,
-    };
-    use jf_advz::VidScheme;
 
     use super::*;
     use crate::{
@@ -398,7 +389,7 @@ mod test {
             storage::{NodeStorage, UpdateAvailabilityStorage},
         },
         fetching::provider::NoFetching,
-        testing::{consensus::DataSourceLifeCycle, mocks::MockTypes},
+        testing::{chain::genesis_vid, consensus::DataSourceLifeCycle, mocks::MockTypes},
     };
 
     type D = SqlDataSource<MockTypes, NoFetching>;
@@ -410,9 +401,6 @@ mod test {
         let storage = D::create(0).await;
         let ds = <D as DataSourceLifeCycle>::connect(&storage).await;
 
-        // Generate some test VID data.
-        let disperse = advz_scheme(2).disperse([]).unwrap();
-
         // Insert test data with VID common but no share.
         let leaf = LeafQueryData::<MockTypes>::genesis(
             &TestValidatedState::default(),
@@ -420,7 +408,8 @@ mod test {
             TEST_VERSIONS.test,
         )
         .await;
-        let common = VidCommonQueryData::new(leaf.header().clone(), VidCommon::V0(disperse.common));
+        let (common, shares) = genesis_vid(leaf.header());
+        let common = VidCommonQueryData::new(leaf.header().clone(), common);
         ds.append(BlockInfo::new(leaf, None, Some(common.clone()), None))
             .await
             .unwrap();
@@ -431,7 +420,7 @@ mod test {
             .unwrap_err();
 
         // Re-insert the common data with the share.
-        let share0 = VidShare::V0(disperse.shares[0].clone());
+        let share0 = shares[0].clone();
         let mut tx = ds.write().await.unwrap();
         tx.insert_vid(&common, Some(&share0)).await.unwrap();
         tx.commit().await.unwrap();

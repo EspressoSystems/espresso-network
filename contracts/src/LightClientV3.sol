@@ -8,6 +8,8 @@ import { IPlonkVerifier } from "./interfaces/IPlonkVerifier.sol";
 import { PlonkVerifierV3 } from "./libraries/PlonkVerifierV3.sol";
 import { LightClientStateUpdateVKV3 as VkLib } from "./libraries/LightClientStateUpdateVKV3.sol";
 
+// forge-lint: disable-start(reentrancy-events)
+
 /// @title LightClientV3
 /// @notice LightClientV2 with an additional root for gas-efficient state authentication and
 /// @notice improved public input derivation for efficiency and future-proof.

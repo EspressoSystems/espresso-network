@@ -35,8 +35,6 @@ use hotshot_types::{
     x25519,
 };
 use indexmap::IndexMap;
-#[cfg(not(feature = "embedded-db"))]
-use light_client::storage::LightClientPostgresOptions;
 use light_client::{state::LightClientOptions, storage::LightClientDbOptions};
 use serde::{Deserialize, Serialize};
 use url::Url;
@@ -44,11 +42,10 @@ use url::Url;
 use super::{
     AccountQueryData, BlocksFrontier, fs,
     options::{Options, Query},
-    sql,
 };
 use crate::{
     SeqTypes, U256,
-    api::{ApiState, LightClientProvider, context::ApiContext},
+    api::{ApiState, LightClientProvider},
     persistence,
     state_cert::StateCertFetchError,
 };
@@ -60,32 +57,6 @@ pub trait DataSourceOptions: PersistenceOptions {
 
     /// Where a node on this storage keeps its light client database.
     fn light_client_db(&self, query: &Query) -> anyhow::Result<LightClientDbOptions>;
-}
-
-impl DataSourceOptions for persistence::sql::Options {
-    type DataSource = sql::DataSource;
-
-    fn enable_query_module(&self, opt: Options, query: Query) -> Options {
-        opt.query_sql(query, self.clone())
-    }
-
-    /// A Postgres node keeps its light client in the same database, so it survives restarts and
-    /// container replacement without any extra volume.
-    fn light_client_db(&self, query: &Query) -> anyhow::Result<LightClientDbOptions> {
-        #[cfg(not(feature = "embedded-db"))]
-        {
-            let config = hotshot_query_service::data_source::storage::sql::Config::try_from(self)?;
-            Ok(LightClientDbOptions::Postgres(Box::new(
-                LightClientPostgresOptions {
-                    connect: config.connect_options().clone(),
-                    num_connections: query.light_client_db.num_connections,
-                    num_leaves: query.light_client_db.num_leaves,
-                },
-            )))
-        }
-        #[cfg(feature = "embedded-db")]
-        Ok(LightClientDbOptions::Sqlite(query.sqlite_light_client_db()))
-    }
 }
 
 impl DataSourceOptions for persistence::fs::Options {
@@ -123,9 +94,9 @@ pub trait SequencerDataSource:
 pub type Provider = AnyProvider<SeqTypes>;
 
 /// Create a provider for fetching missing data from a list of peer query services.
-pub(super) async fn provider<C: ApiContext>(
+pub(super) async fn provider(
     peers: impl IntoIterator<Item = Url>,
-    state: &ApiState<C>,
+    state: &ApiState,
     opt: LightClientOptions,
     db_opt: LightClientDbOptions,
 ) -> anyhow::Result<Provider> {
@@ -703,12 +674,11 @@ mod test {
         assert_eq!(keys["p2p_addr"], "node.example.com:9977");
     }
 
-    #[cfg(not(feature = "embedded-db"))]
     #[test]
     fn sql_storage_keeps_light_client_in_postgres() {
         use clap::Parser as _;
 
-        let opt = persistence::sql::Options::try_parse_from([
+        let mut opt = persistence::sql::Options::try_parse_from([
             "espresso-node",
             "--host",
             "db.example",
@@ -718,6 +688,9 @@ mod test {
             "espresso",
         ])
         .unwrap();
+        // The parsed default follows ESPRESSO_NODE_EMBEDDED_DB, not this test.
+        opt.embedded_db = false;
+        let opt = persistence::sql::postgres::Options::try_from(opt).unwrap();
         let LightClientDbOptions::Postgres(lc) = opt.light_client_db(&Query::default()).unwrap()
         else {
             panic!("expected the light client in Postgres");
