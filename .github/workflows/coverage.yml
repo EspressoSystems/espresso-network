@@ -42,10 +42,10 @@ jobs:
       - uses: ./.github/actions/install-postgres
       - uses: ./.github/actions/install-foundry
 
-      - uses: dtolnay/rust-toolchain@nightly
+      - uses: dtolnay/rust-toolchain@2c76c034f9e32a5d6e2c104dc4df23a22476db04 # nightly
 
       - name: Enable Rust Caching
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           save-if: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release-') }}
 
@@ -68,13 +68,13 @@ jobs:
           RUSTFLAGS: ${{ env.COVERAGE_RUSTFLAGS }}
           RUSTDOCFLAGS: ${{ env.COVERAGE_RUSTDOCFLAGS }}
 
-      - uses: alekitto/grcov@v0.2
+      - uses: alekitto/grcov@a35287df135f3ad96ac80260c38ef78b71bdb8df # v0.2
         with:
           config: .github/grcov.yml
         id: coverage
 
       - name: Coveralls upload
-        uses: coverallsapp/github-action@master
+        uses: coverallsapp/github-action@09b709cf6a16e30b0808ba050c7a6e8a5ef13f8d # v1.2.5
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           path-to-lcov: ${{ steps.coverage.outputs.report }}

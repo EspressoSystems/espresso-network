@@ -56,7 +56,7 @@ jobs:
             sym: tcmalloc
     steps:
       - uses: actions/checkout@v7
-      - uses: rui314/setup-mold@v1
+      - uses: rui314/setup-mold@339e96b4ff1f3bd865856ba4cbbe8818a7acb038 # v1
 
       - name: Install build dependencies
         run: |
@@ -90,16 +90,16 @@ jobs:
           done
 
       - name: Setup Docker BuildKit (buildx)
-        uses: Wandalen/wretry.action@v3.8.0
+        uses: Wandalen/wretry.action@e68c23e6309f2871ca8ae4763e7629b9c258e1ea # v3.8.0
         with:
-          action: docker/setup-buildx-action@v3
+          action: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
           attempt_limit: 3
           attempt_delay: 10000
 
       - name: Login to Github Container Repo
-        uses: Wandalen/wretry.action@v3.8.0
+        uses: Wandalen/wretry.action@e68c23e6309f2871ca8ae4763e7629b9c258e1ea # v3.8.0
         with:
-          action: docker/login-action@v3
+          action: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
           attempt_limit: 3
           attempt_delay: 10000
           with: |
@@ -108,7 +108,7 @@ jobs:
             password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build and push image by digest
-        uses: nick-fields/retry@v4
+        uses: nick-fields/retry@ad984534de44a9489a53aefd81eb77f87c70dc60 # v4.0.0
         with:
           timeout_minutes: 30
           max_attempts: 3
@@ -151,16 +151,16 @@ jobs:
       - uses: actions/checkout@v7
 
       - name: Set up Docker Buildx
-        uses: Wandalen/wretry.action@v3.8.0
+        uses: Wandalen/wretry.action@e68c23e6309f2871ca8ae4763e7629b9c258e1ea # v3.8.0
         with:
-          action: docker/setup-buildx-action@v3
+          action: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
           attempt_limit: 3
           attempt_delay: 10000
 
       - name: Login to Github Container Repo
-        uses: Wandalen/wretry.action@v3.8.0
+        uses: Wandalen/wretry.action@e68c23e6309f2871ca8ae4763e7629b9c258e1ea # v3.8.0
         with:
-          action: docker/login-action@v3
+          action: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
           attempt_limit: 3
           attempt_delay: 10000
           with: |
@@ -177,7 +177,7 @@ jobs:
 
       - name: Docker meta
         id: meta
-        uses: docker/metadata-action@v6
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
         with:
           images: ${{ env.IMAGE }}
           flavor: |

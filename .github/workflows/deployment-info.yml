@@ -24,7 +24,7 @@ jobs:
       - uses: actions/checkout@v7
 
       - name: Enable Rust Caching
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           save-if: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release-') }}
 
@@ -54,7 +54,7 @@ jobs:
 
       - name: Create PR with updated deployment info
         if: github.event_name != 'pull_request' && steps.changes.outputs.changed == 'true'
-        uses: peter-evans/create-pull-request@v8
+        uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
         with:
           commit-message: "chore: update deployment info"
           author: "github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>"

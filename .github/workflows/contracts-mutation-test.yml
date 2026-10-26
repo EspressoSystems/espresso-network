@@ -44,7 +44,7 @@ jobs:
           solc-select use 0.8.28
 
       - name: Install cargo-binstall
-        uses: taiki-e/install-action@v2
+        uses: taiki-e/install-action@5488ac5a951645ce95062214902ac4b6bc1a1037 # v2.87.32
         with:
           tool: cargo-binstall
 
@@ -101,7 +101,7 @@ jobs:
         uses: actions/checkout@v7
 
       - name: Enable Rust Caching
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           save-if: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release-') }}
 
@@ -135,7 +135,7 @@ jobs:
         uses: ./.github/actions/install-foundry
 
       - name: Install cargo-binstall
-        uses: taiki-e/install-action@v2
+        uses: taiki-e/install-action@5488ac5a951645ce95062214902ac4b6bc1a1037 # v2.87.32
         with:
           tool: cargo-binstall
 
@@ -180,7 +180,7 @@ jobs:
     timeout-minutes: 5
     steps:
       - name: Install cargo-binstall
-        uses: taiki-e/install-action@v2
+        uses: taiki-e/install-action@5488ac5a951645ce95062214902ac4b6bc1a1037 # v2.87.32
         with:
           tool: cargo-binstall
 

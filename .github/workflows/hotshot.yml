@@ -41,7 +41,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y protobuf-compiler
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         name: Enable Rust Caching
         with:
           shared-key: "hotshot-tests"
@@ -49,7 +49,7 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release-') }}
           prefix-key: v2-hotshot
 
-      - uses: taiki-e/install-action@nextest
+      - uses: taiki-e/install-action@42b98ff034a377bb5e4aa99118b5b160f96a8ef2 # nextest
 
       - name: Build tests
         run: |
@@ -120,7 +120,7 @@ jobs:
       - name: Post/update PR comment
         if: ${{ github.event_name == 'pull_request' }}
         continue-on-error: true
-        uses: marocchino/sticky-pull-request-comment@v3
+        uses: marocchino/sticky-pull-request-comment@5770ad5eb8f42dd2c4f34da00c94c5381e49af88 # v3.0.5
         with:
           header: nextest-hotshot
           path: junit-artifacts/pr-comment.md

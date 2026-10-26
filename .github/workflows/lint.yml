@@ -26,7 +26,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: taiki-e/install-action@v2
+      - uses: taiki-e/install-action@5488ac5a951645ce95062214902ac4b6bc1a1037 # v2.87.32
         with:
           tool: cargo-sort
 
@@ -38,11 +38,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@master
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
         with:
           toolchain: nightly
           components: rustfmt
-      - uses: taiki-e/install-action@just
+      - uses: taiki-e/install-action@53aaa72a1fed2d5b9189d6d54c38e29bf9be2ab9 # just
 
       - name: Check formatting
         run: just fmt && git diff --exit-code
@@ -58,7 +58,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y protobuf-compiler
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           save-if: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release-') }}
 
@@ -72,13 +72,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: taiki-e/install-action@just
+      - uses: taiki-e/install-action@53aaa72a1fed2d5b9189d6d54c38e29bf9be2ab9 # just
 
       # `scripts/compile-metrics` and `scripts/nextest-ci` decide what CI reports and what it
       # alerts on, and no workflow ran their tests. `py::lint` and `py::check` still do not run
       # here: both need a tool installed, and nextest-ci has lint violations that belong in
       # their own change.
-      - uses: astral-sh/setup-uv@v10.3.2
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
         with:
           python-version: "3.14"
 
@@ -90,8 +90,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: taiki-e/install-action@just
-      - uses: astral-sh/setup-uv@v10.3.2
+      - uses: taiki-e/install-action@53aaa72a1fed2d5b9189d6d54c38e29bf9be2ab9 # just
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
         with:
           python-version: "3.14"
 
@@ -121,7 +121,7 @@ jobs:
           # locally and in CI.
           version: 1.72.0
           setup_only: true
-      - uses: taiki-e/install-action@just
+      - uses: taiki-e/install-action@53aaa72a1fed2d5b9189d6d54c38e29bf9be2ab9 # just
 
       # A changed proto must keep the wire and protoJSON encoding of what it replaces.
       - name: Check the v2 protos' formatting and backward compatibility

@@ -76,10 +76,10 @@ jobs:
       - uses: ./.github/actions/install-postgres
       # No cache: the run executes pull request code, which could write into it before the
       # post-step save.
-      - uses: astral-sh/setup-uv@v10.0.1
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
           enable-cache: false
-      - uses: taiki-e/install-action@just
+      - uses: taiki-e/install-action@53aaa72a1fed2d5b9189d6d54c38e29bf9be2ab9 # just
 
       # A token only for another run: without one the action reads the current run, which is
       # the build run itself when called from build.yml.
@@ -188,7 +188,7 @@ jobs:
             echo "Run and artifacts: $RUN_URL"
           } > comment.md
 
-      - uses: marocchino/sticky-pull-request-comment@v3
+      - uses: marocchino/sticky-pull-request-comment@5770ad5eb8f42dd2c4f34da00c94c5381e49af88 # v3.0.5
         with:
           number: ${{ inputs.pr }}
           header: network-bench

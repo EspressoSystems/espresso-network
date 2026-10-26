@@ -32,19 +32,19 @@ jobs:
     runs-on: ubuntu-24.04-8core
     steps:
       - uses: actions/checkout@v7
-      - uses: rui314/setup-mold@v1
+      - uses: rui314/setup-mold@339e96b4ff1f3bd865856ba4cbbe8818a7acb038 # v1
 
       - name: Install Protoc
         run: |
           sudo apt-get update
           sudo apt-get install -y protobuf-compiler
 
-      - uses: taiki-e/install-action@v2
+      - uses: taiki-e/install-action@5488ac5a951645ce95062214902ac4b6bc1a1037 # v2.87.32
         with:
           tool: nextest,just
 
       - name: Enable Rust Caching
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           prefix-key: v1-rust
           save-if: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release-') }}
@@ -83,7 +83,7 @@ jobs:
     runs-on: ubuntu-24.04-8core
     steps:
       - uses: actions/checkout@v7
-      - uses: rui314/setup-mold@v1
+      - uses: rui314/setup-mold@339e96b4ff1f3bd865856ba4cbbe8818a7acb038 # v1
 
       - name: Install Protoc
         run: |
@@ -91,7 +91,7 @@ jobs:
           sudo apt-get install -y protobuf-compiler
 
       - name: Enable Rust Caching
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           prefix-key: v1-rust
           save-if: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release-') }}
@@ -146,7 +146,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/free-disk-space
-      - uses: rui314/setup-mold@v1
+      - uses: rui314/setup-mold@339e96b4ff1f3bd865856ba4cbbe8818a7acb038 # v1
       - uses: ./.github/actions/free-disk-space
 
       - name: Install Protoc
@@ -155,7 +155,7 @@ jobs:
           sudo apt-get install -y protobuf-compiler
 
       - name: Enable Rust Caching
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           prefix-key: v1-rust
           save-if: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release-') }}
@@ -187,19 +187,19 @@ jobs:
     runs-on: ubuntu-24.04-8core
     steps:
       - uses: actions/checkout@v7
-      - uses: rui314/setup-mold@v1
+      - uses: rui314/setup-mold@339e96b4ff1f3bd865856ba4cbbe8818a7acb038 # v1
 
       - name: Install Protoc
         run: |
           sudo apt-get update
           sudo apt-get install -y protobuf-compiler
 
-      - uses: taiki-e/install-action@v2
+      - uses: taiki-e/install-action@5488ac5a951645ce95062214902ac4b6bc1a1037 # v2.87.32
         with:
           tool: nextest
 
       - name: Enable Rust Caching
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           prefix-key: v1-rust
           save-if: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release-') }}
@@ -239,7 +239,7 @@ jobs:
       - uses: ./.github/actions/free-disk-space
       - uses: ./.github/actions/install-foundry
       - uses: ./.github/actions/install-postgres
-      - uses: taiki-e/install-action@nextest
+      - uses: taiki-e/install-action@42b98ff034a377bb5e4aa99118b5b160f96a8ef2 # nextest
 
       - name: Download archive
         uses: actions/download-artifact@v8
@@ -268,7 +268,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/free-disk-space
-      - uses: cachix/install-nix-action@v31
+      - uses: cachix/install-nix-action@75c75c31ebece974e48ebc36b4ad125bd97bd97b # 31.11.3
       - uses: cachix/cachix-action@v17
         continue-on-error: true
         with:
@@ -309,7 +309,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/free-disk-space
-      - uses: taiki-e/install-action@nextest
+      - uses: taiki-e/install-action@42b98ff034a377bb5e4aa99118b5b160f96a8ef2 # nextest
       - uses: ./.github/actions/install-process-compose
         with:
           version: v1.75.2
@@ -461,7 +461,7 @@ jobs:
       - name: Post/update PR comment
         if: ${{ github.event_name == 'pull_request' }}
         continue-on-error: true
-        uses: marocchino/sticky-pull-request-comment@v3
+        uses: marocchino/sticky-pull-request-comment@5770ad5eb8f42dd2c4f34da00c94c5381e49af88 # v3.0.5
         with:
           header: nextest-test
           path: junit-artifacts/pr-comment.md

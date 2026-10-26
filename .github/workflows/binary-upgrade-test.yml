@@ -29,8 +29,8 @@ jobs:
       - uses: actions/checkout@v7
         with:
           fetch-tags: true
-      - uses: taiki-e/install-action@just
-      - uses: astral-sh/setup-uv@v10.0.1
+      - uses: taiki-e/install-action@53aaa72a1fed2d5b9189d6d54c38e29bf9be2ab9 # just
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
 
       - name: Pull docker images
         env:
