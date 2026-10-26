@@ -2,11 +2,10 @@
 use std::collections::BTreeMap;
 
 use committable::Committable;
-use hotshot::traits::BlockPayload;
 use hotshot_query_service::availability::{QueryablePayload, VerifiableInclusion};
 use hotshot_types::{
     data::{VidCommitment, VidCommon},
-    traits::EncodeBytes,
+    traits::{BlockPayload, EncodeBytes},
     vid::advz::advz_scheme,
 };
 use jf_advz::VidScheme;
@@ -14,7 +13,8 @@ use rand::RngCore;
 
 use crate::{
     BlockSize, NamespaceId, NodeState, NsProof, Payload, Transaction, TxProof, ValidatedState,
-    v0::impls::block::MIN_PARALLEL_TRANSACTIONS, v0_3::ChainConfig,
+    v0::impls::block::{MAX_NAMESPACES_PER_BLOCK, MIN_PARALLEL_BYTES, MIN_PARALLEL_TRANSACTIONS},
+    v0_3::ChainConfig,
 };
 
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
@@ -33,7 +33,7 @@ async fn basic_correctness() {
         tracing::info!("test case {} nss {} txs", test.nss.len(), all_txs.len());
 
         let block =
-            Payload::from_transactions(test.all_txs(), &Default::default(), &Default::default())
+            Payload::from_transactions(&test.all_txs(), &Default::default(), &Default::default())
                 .await
                 .unwrap()
                 .0;
@@ -128,7 +128,7 @@ async fn enforce_max_block_size() {
         chain_config: chain_config.into(),
         ..Default::default()
     };
-    let block = Payload::from_transactions(test.all_txs(), &validated_state, &instance_state)
+    let block = Payload::from_transactions(&test.all_txs(), &validated_state, &instance_state)
         .await
         .unwrap()
         .0;
@@ -150,13 +150,135 @@ async fn enforce_max_block_size() {
         ..Default::default()
     };
 
-    let block = Payload::from_transactions(test.all_txs(), &validated_state, &instance_state)
+    let block = Payload::from_transactions(&test.all_txs(), &validated_state, &instance_state)
         .await
         .unwrap()
         .0;
     assert!(block.encode().len() < payload_byte_len_expected);
     assert_eq!(block.ns_table().encode().len(), ns_table_byte_len_expected);
     assert_eq!(block.len(block.ns_table()), tx_count_expected - 1);
+}
+
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
+async fn ns_limit_exact() {
+    let txs: Vec<Transaction> = (0..MAX_NAMESPACES_PER_BLOCK)
+        .map(|i| Transaction::new(NamespaceId::from(i as u32), vec![]))
+        .collect();
+
+    let block = Payload::from_transactions(&txs, &Default::default(), &Default::default())
+        .await
+        .unwrap()
+        .0;
+
+    assert_eq!(block.ns_table().iter().count(), MAX_NAMESPACES_PER_BLOCK);
+    assert_eq!(block.len(block.ns_table()), MAX_NAMESPACES_PER_BLOCK);
+}
+
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
+async fn ns_limit() {
+    // among the first `MAX_NAMESPACES_PER_BLOCK` namespaces admitted below
+    let admitted_ns = NamespaceId::from(7u32);
+
+    let mut txs: Vec<Transaction> = (0..150)
+        .map(|i| Transaction::new(NamespaceId::from(i as u32), vec![]))
+        .collect();
+    txs.push(Transaction::new(admitted_ns, vec![1, 2, 3]));
+
+    let block = Payload::from_transactions(&txs, &Default::default(), &Default::default())
+        .await
+        .unwrap()
+        .0;
+
+    assert_eq!(block.ns_table().iter().count(), MAX_NAMESPACES_PER_BLOCK);
+    // one tx per admitted namespace, plus the extra tx for `admitted_ns`
+    assert_eq!(block.len(block.ns_table()), MAX_NAMESPACES_PER_BLOCK + 1);
+
+    let has_extra_tx = block
+        .iter(block.ns_table())
+        .filter_map(|idx| block.transaction(&idx))
+        .any(|tx| tx.namespace() == admitted_ns && tx.payload() == [1, 2, 3]);
+    assert!(
+        has_extra_tx,
+        "tx for an already-admitted namespace must be in the block"
+    );
+}
+
+/// The dedup manifest is built from these, so they must name exactly the
+/// included transactions, not every transaction offered.
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
+async fn ns_limit_commitments_cover_included_only() {
+    let txs: Vec<Transaction> = (0..2 * MAX_NAMESPACES_PER_BLOCK)
+        .map(|i| Transaction::new(NamespaceId::from(i as u32), vec![]))
+        .collect();
+    let (block, ns_table) =
+        Payload::from_transactions(&txs, &Default::default(), &Default::default())
+            .await
+            .unwrap();
+
+    let mut got = block.transaction_commitments(&ns_table);
+    got.sort();
+    let mut expected: Vec<_> = txs[..MAX_NAMESPACES_PER_BLOCK]
+        .iter()
+        .map(Committable::commit)
+        .collect();
+    expected.sort();
+    assert_eq!(got, expected);
+}
+
+/// A deferred tx (over the namespace cap) must not consume block-byte budget,
+/// or it could push out a later tx for an already-admitted namespace.
+#[test]
+fn ns_limit_ignores_deferred_bytes() {
+    let admitted_ns = NamespaceId::from(0u32);
+
+    let setup_txs: Vec<Transaction> = (0..MAX_NAMESPACES_PER_BLOCK as u32)
+        .map(|i| Transaction::new(NamespaceId::from(i), vec![]))
+        .collect();
+    let setup_bytes: u64 = setup_txs.iter().map(|tx| tx.size_in_block(true)).sum();
+
+    let final_tx = Transaction::new(admitted_ns, vec![9, 9, 9]);
+    let final_bytes = final_tx.size_in_block(false);
+
+    let max_block_size = setup_bytes + final_bytes;
+
+    // Fits the byte budget alone, but pushes the running total over it: the
+    // cumulative byte check must never see it.
+    let deferred_tx = Transaction::new(
+        NamespaceId::from(MAX_NAMESPACES_PER_BLOCK as u32),
+        vec![0; (max_block_size / 2) as usize],
+    );
+    let deferred_bytes = deferred_tx.size_in_block(true);
+    assert!(
+        deferred_bytes <= max_block_size,
+        "deferred tx must fit the byte budget on its own"
+    );
+    assert!(
+        setup_bytes + deferred_bytes > max_block_size,
+        "deferred tx must be large enough to trip the cumulative byte limit if counted"
+    );
+
+    let chain_config = ChainConfig {
+        max_block_size: BlockSize::from(max_block_size),
+        ..Default::default()
+    };
+
+    let mut txs = setup_txs;
+    txs.push(deferred_tx);
+    txs.push(final_tx);
+
+    let block = Payload::from_transactions_sync(&txs, chain_config)
+        .unwrap()
+        .0;
+
+    assert_eq!(block.ns_table().iter().count(), MAX_NAMESPACES_PER_BLOCK);
+    let has_final_tx = block
+        .iter(block.ns_table())
+        .filter_map(|idx| block.transaction(&idx))
+        .any(|tx| tx.namespace() == admitted_ns && tx.payload() == [9, 9, 9]);
+    assert!(
+        has_final_tx,
+        "tx for an already-admitted namespace must survive a deferred tx ahead of it"
+    );
 }
 
 // TODO lots of infra here that could be reused in other tests.
@@ -239,7 +361,7 @@ async fn transaction_commitments_match_serial() {
         .zip(counts)
     {
         let (payload, meta) =
-            Payload::from_transactions(test.all_txs(), &Default::default(), &Default::default())
+            Payload::from_transactions(&test.all_txs(), &Default::default(), &Default::default())
                 .await
                 .unwrap();
 
@@ -257,4 +379,31 @@ async fn transaction_commitments_match_serial() {
             serial,
         );
     }
+}
+
+/// A few transactions past [`MIN_PARALLEL_BYTES`] take the parallel branch and must keep the
+/// serial order.
+#[test]
+fn transaction_commitments_match_serial_few_large() {
+    let mut rng = jf_utils::test_rng();
+    let test = ValidTest::from_tx_lengths(
+        vec![
+            vec![MIN_PARALLEL_BYTES / 2; 2],
+            vec![MIN_PARALLEL_BYTES / 2],
+        ],
+        &mut rng,
+    );
+    let chain_config = ChainConfig {
+        max_block_size: (4 * MIN_PARALLEL_BYTES as u64).into(),
+        ..Default::default()
+    };
+    let (payload, meta) = Payload::from_transactions_sync(&test.all_txs(), chain_config).unwrap();
+    let serial: Vec<_> = BlockPayload::<crate::SeqTypes>::transactions(&payload, &meta)
+        .map(|txn| txn.commit())
+        .collect();
+    assert_eq!(serial.len(), 3);
+    assert_eq!(
+        BlockPayload::<crate::SeqTypes>::transaction_commitments(&payload, &meta),
+        serial,
+    );
 }

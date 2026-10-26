@@ -960,10 +960,8 @@ impl<TYPES: NodeType> ViewChangeEvidence2<TYPES> {
 
     /// Convert to [`ViewChangeEvidence`].
     ///
-    /// `None` for [`Self::Timeout3`], which cannot reach here: the legacy types
-    /// have no epoch binding form, and the only path into them is the legacy
-    /// event stream, which the legacy consensus task feeds and which stops
-    /// running before that form exists.
+    /// `None` for [`Self::Timeout3`]: the legacy types have no epoch binding
+    /// form.
     pub fn to_evidence(self) -> Option<ViewChangeEvidence<TYPES>> {
         match self {
             ViewChangeEvidence2::Timeout(timeout_cert) => {
@@ -1261,12 +1259,6 @@ impl<TYPES: NodeType> From<QuorumProposal2<TYPES>> for QuorumProposalWrapper<TYP
     }
 }
 
-impl<TYPES: NodeType> From<QuorumProposalWrapper<TYPES>> for QuorumProposal<TYPES> {
-    fn from(quorum_proposal_wrapper: QuorumProposalWrapper<TYPES>) -> Self {
-        quorum_proposal_wrapper.proposal.into()
-    }
-}
-
 impl<TYPES: NodeType> From<QuorumProposalWrapper<TYPES>> for QuorumProposal2Legacy<TYPES> {
     fn from(quorum_proposal_wrapper: QuorumProposalWrapper<TYPES>) -> Self {
         quorum_proposal_wrapper.proposal.into()
@@ -1558,7 +1550,7 @@ impl<TYPES: NodeType> Leaf2<TYPES> {
         let epoch = genesis_epoch_from_version(version);
 
         let (payload, metadata) =
-            TYPES::BlockPayload::from_transactions([], validated_state, instance_state)
+            TYPES::BlockPayload::from_transactions(&[], validated_state, instance_state)
                 .await
                 .unwrap();
 
@@ -1969,7 +1961,7 @@ impl<TYPES: NodeType> Leaf<TYPES> {
         version: Version,
     ) -> Self {
         let (payload, metadata) =
-            TYPES::BlockPayload::from_transactions([], validated_state, instance_state)
+            TYPES::BlockPayload::from_transactions(&[], validated_state, instance_state)
                 .await
                 .unwrap();
 

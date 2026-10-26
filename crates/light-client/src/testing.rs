@@ -14,9 +14,9 @@ use bitvec::vec::BitVec;
 use committable::{Commitment, Committable};
 use derivative::Derivative;
 use espresso_types::{
-    BLOCK_MERKLE_TREE_HEIGHT, BlockMerkleTree, Certificate2, EpochVersion, Leaf2, NamespaceId,
-    NodeState, NsProof, Payload, PrivKey, PubKey, RegisteredValidatorMap, SeqTypes, StakeTableHash,
-    StakeTableState, Transaction,
+    BLOCK_MERKLE_TREE_HEIGHT, BlockMerkleTree, Certificate2, EpochVersion, Header, Leaf2,
+    NamespaceId, NodeState, NsProof, Payload, PrivKey, PubKey, RegisteredValidatorMap, SeqTypes,
+    StakeTableHash, StakeTableState, Transaction,
     v0_3::{AuthenticatedValidator, RegisteredValidator, StakeTableEvent},
 };
 use hotshot_contract_adapter::sol_types::StakeTableV3::{Delegated, ValidatorRegistered};
@@ -37,7 +37,7 @@ use hotshot_types::{
     },
     stake_table::{StakeTableEntry, supermajority_threshold},
     traits::{
-        block_contents::EncodeBytes,
+        block_contents::{BlockPayload as _, EncodeBytes},
         signature_key::{SignatureKey, StateSignatureKey},
     },
     utils::{epoch_from_block_number, is_epoch_transition, is_ge_epoch_root},
@@ -112,46 +112,83 @@ pub async fn custom_leaf_chain_with_upgrade(
     upgrade: Upgrade,
     map: impl Fn(&mut QuorumProposal2<SeqTypes>),
 ) -> Vec<LeafQueryData<SeqTypes>> {
-    let upgrade_leaf: Leaf2 = Leaf2::genesis(
-        &Default::default(),
-        &NodeState::mock()
-            .with_genesis_version(upgrade.target)
-            .with_current_version(upgrade.target),
+    custom_leaf_chain_with_upgrades(
+        range,
         upgrade.base,
+        &[(upgrade_height, upgrade.target)],
+        map,
     )
-    .await;
-    let upgrade_data = UpgradeProposalData {
-        old_version: upgrade.base,
-        new_version: upgrade.target,
-        new_version_hash: Default::default(),
-        old_version_last_view: ViewNumber::new(upgrade_height - 1),
-        new_version_first_view: ViewNumber::new(upgrade_height),
-        decide_by: ViewNumber::new(upgrade_height),
-    };
-    let upgrade_commit = upgrade_data.commit();
-    let upgrade_cert = UpgradeCertificate::new(
-        upgrade_data,
-        upgrade_commit,
-        ViewNumber::new(upgrade_height),
-        Default::default(),
-        Default::default(),
-    );
+    .await
+}
 
-    custom_leaf_chain(upgrade, range, |proposal| {
+/// Construct a customized leaf chain which starts at `base` and takes each `(height, version)`
+/// upgrade in turn, every leaf before an upgrade carrying the certificate announcing it.
+pub async fn custom_leaf_chain_with_upgrades(
+    range: impl IntoIterator<Item = u64>,
+    base: Version,
+    upgrades: &[(u64, Version)],
+    map: impl Fn(&mut QuorumProposal2<SeqTypes>),
+) -> Vec<LeafQueryData<SeqTypes>> {
+    let mut steps = vec![];
+    let mut old_version = base;
+    for &(upgrade_height, new_version) in upgrades {
+        steps.push(UpgradeStep::new(old_version, new_version, upgrade_height).await);
+        old_version = new_version;
+    }
+
+    custom_leaf_chain(Upgrade::new(base, old_version), range, |proposal| {
         let height = proposal.block_header.height();
-        if height < upgrade_height {
-            // All views leading up to the upgrade get a certificate indicating the coming upgrade.
-            proposal.upgrade_certificate = Some(upgrade_cert.clone());
-        } else {
-            // After the upgrade takes effect we stop attaching the upgrade certificate, and we use
-            // the upgraded header version.
-            proposal.upgrade_certificate = None;
-            proposal.block_header = upgrade_leaf.block_header().clone();
+        if let Some(step) = steps.iter().rfind(|step| step.height <= height) {
+            proposal.block_header = step.header.clone();
             *proposal.block_header.height_mut() = height;
         }
+        proposal.upgrade_certificate = steps
+            .iter()
+            .find(|step| height < step.height)
+            .map(|step| step.cert.clone());
         map(proposal);
     })
     .await
+}
+
+struct UpgradeStep {
+    height: u64,
+    header: Header,
+    cert: UpgradeCertificate<SeqTypes>,
+}
+
+impl UpgradeStep {
+    async fn new(old_version: Version, new_version: Version, height: u64) -> Self {
+        let upgrade_leaf: Leaf2 = Leaf2::genesis(
+            &Default::default(),
+            &NodeState::mock()
+                .with_genesis_version(new_version)
+                .with_current_version(new_version),
+            old_version,
+        )
+        .await;
+        let upgrade_data = UpgradeProposalData {
+            old_version,
+            new_version,
+            new_version_hash: Default::default(),
+            old_version_last_view: ViewNumber::new(height - 1),
+            new_version_first_view: ViewNumber::new(height),
+            decide_by: ViewNumber::new(height),
+        };
+        let upgrade_commit = upgrade_data.commit();
+        let cert = UpgradeCertificate::new(
+            upgrade_data,
+            upgrade_commit,
+            ViewNumber::new(height),
+            Default::default(),
+            Default::default(),
+        );
+        Self {
+            height,
+            header: upgrade_leaf.block_header().clone(),
+            cert,
+        }
+    }
 }
 
 /// Construct a customized leaf chain for the given height range.
@@ -193,10 +230,13 @@ pub async fn custom_leaf_chain(
         map(&mut quorum_proposal.proposal);
         let leaf = Leaf2::from_quorum_proposal(&quorum_proposal);
 
-        qc.view_number = ViewNumber::new(height);
+        qc.view_number = leaf.view_number();
         qc.data.leaf_commit = Committable::commit(&leaf);
         if leaf.block_header().version() >= EPOCH_VERSION {
             qc.data.block_number = Some(height);
+            // Only the QC gets an epoch, pinned at 1 since these chains are indexed by view; the
+            // proposal's `epoch` stays `None`, so the leaves carry none.
+            qc.data.epoch.get_or_insert(EpochNumber::new(1));
         }
 
         block_merkle_tree
@@ -398,6 +438,8 @@ struct InnerTestClient {
     fail_leaf_ranges: bool,
     /// If set, fail payload proof ranges requests, like a server that predates the endpoint.
     fail_payload_proof_ranges: bool,
+    /// If set, fail header proofs, like a server that pruned the root's merklized state.
+    fail_header_proofs: bool,
 }
 
 impl InnerTestClient {
@@ -510,7 +552,7 @@ impl InnerTestClient {
             };
             tracing::debug!(?transactions, "generated block {i}");
             let (payload, ns_table) =
-                Payload::from_transactions_sync(transactions, node_state.chain_config).unwrap();
+                Payload::from_transactions_sync(&transactions, node_state.chain_config).unwrap();
             let payload_comm = vid_commitment(
                 &payload.encode(),
                 &ns_table.encode(),
@@ -853,6 +895,19 @@ impl TestClient {
         let mut inner = self.inner.lock().await;
         inner.fail_payload_proof_ranges = true;
     }
+
+    /// Fail header proofs, like a server that pruned the root's merklized state.
+    pub async fn fail_header_proofs(&self) {
+        let mut inner = self.inner.lock().await;
+        inner.fail_header_proofs = true;
+    }
+
+    /// Drop the `Certificate2` finalizing the leaf at `height`, like a server that never stored it.
+    pub async fn forget_cert2(&self, height: usize) {
+        let mut inner = self.inner.lock().await;
+        inner.leaf(height, self.epoch_height, None).await;
+        inner.cert2s.remove(&height);
+    }
 }
 
 impl Client for TestClient {
@@ -944,6 +999,10 @@ impl Client for TestClient {
 
     async fn header_proof(&self, root: u64, id: BlockId<SeqTypes>) -> Result<HeaderProof> {
         let mut inner = self.inner.lock().await;
+        ensure!(
+            !inner.fail_header_proofs,
+            "no merklized state at root {root}"
+        );
 
         let root = root as usize;
         let mut height = inner.leaf_height(id.into())?;
@@ -1057,12 +1116,12 @@ impl Client for TestClient {
 
         let payload = if inner.invalid_payloads.contains(&height) {
             tracing::info!(height, "return mock incorrect payload proof");
-            Payload::from_transactions_sync(
-                [Transaction::random(&mut rand::thread_rng())],
-                NodeState::mock_v3().chain_config,
-            )
-            .unwrap()
-            .0
+            // Keep the honest namespace table, so the proof is rejected for its commitment and
+            // not for the table, which is checked first.
+            let honest = &inner.payloads[height];
+            let mut bytes = honest.raw_payload().to_vec();
+            bytes.push(0);
+            Payload::from_bytes(&bytes, honest.ns_table())
         } else {
             inner.payloads[height].clone()
         };
@@ -1109,7 +1168,7 @@ impl Client for TestClient {
             rand::thread_rng().fill_bytes(&mut payload);
             let tx = Transaction::new(namespace, payload);
             let node_state = NodeState::mock_v3();
-            Payload::from_transactions_sync([tx], node_state.chain_config).unwrap()
+            Payload::from_transactions_sync(&[tx], node_state.chain_config).unwrap()
         } else {
             (
                 inner.payloads[height].clone(),

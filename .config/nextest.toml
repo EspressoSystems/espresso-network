@@ -1,7 +1,7 @@
 [profile.default]
 # Kill tests after 3 periods of 2m, because they are probably hanging
 slow-timeout = { period = "2m", terminate-after = 3 }
-default-filter = 'not (deps(hotshot-testing) | package(tests) | package(slow-tests) | package(espresso-dev-node))'
+default-filter = 'not (package(tests) | package(slow-tests) | package(espresso-dev-node))'
 retries = 2
 
 [profile.default.junit]
@@ -31,6 +31,11 @@ slow-timeout = { period = "2m", terminate-after = 15 }
 threads-required = 'num-cpus'
 
 [[profile.default.overrides]]
+filter = 'test(test_light_client_follower_query_node)'
+slow-timeout = { period = "2m", terminate-after = 15 }
+threads-required = 'num-cpus'
+
+[[profile.default.overrides]]
 filter = 'test(slow_test_restart_new_protocol)'
 slow-timeout = { period = "2m", terminate-after = 5 }
 threads-required = 'num-cpus'
@@ -54,19 +59,6 @@ threads-required = 'num-cpus'
 [[profile.default.overrides]]
 filter = 'package(request-response)'
 threads-required = 'num-cpus'
-
-# HotShot integration tests
-[profile.hotshot]
-retries = 0
-slow-timeout = { period = "2m", terminate-after = 2 }
-default-filter = 'deps(hotshot-testing)'
-final-status-level = "flaky"
-threads-required = "num-test-threads"
-
-[profile.hotshot.junit]
-path = "junit.xml"
-store-failure-output = true
-report-name = "nextest"
 
 # New-protocol integration tests (crates/hotshot/new-protocol). Some restart
 # and late-start tests have max_runtime up to 500s, so we give them more
@@ -99,12 +91,5 @@ store-failure-output = true
 report-name = "nextest"
 
 # Serial required
-# TRY 3 FAIL [   2.790s] hotshot-testing::tests_4 tests_4::test_marketplace::test_builders_down::testtypes_::memoryimpl_::test_builders_down
-# TRY 3 FAIL [   4.446s] hotshot-testing::tests_4 tests_4::test_marketplace::test_marketplace_fallback_builder_down::testtypes_::memoryimpl_::test_marketplace_fallback_builder_down
-# TRY 3 FAIL [   5.119s] hotshot-testing::tests_4 tests_4::test_marketplace::test_marketplace_upgrade::testtypes_::memoryimpl_::test_marketplace_upgrade
-#
-# FLAKY 2/3 [  12.037s] hotshot-testing::tests_2 tests_2::catchup::test_all_restart::testtypes_::pushcdnimpl_::test_all_restart
-# FLAKY 2/3 [  49.943s] hotshot-testing::tests_6 tests_6::test_epochs::test_combined_network_cdn_crash_with_epochs::testtypes_::combinedimpl_::test_combined_network_cdn_crash_with_epochs
-# FLAKY 2/3 [   6.968s] hotshot-testing::tests_6 tests_6::test_epochs::test_epoch_end::testtwostaketablestypes_::pushcdnimpl_::test_epoch_end
 # FLAKY 2/3 [ 125.353s] sequencer api::test::test_fee_upgrade_view_based
 # FLAKY 2/3 [   2.870s] sequencer api::test::test_hotshot_event_streaming

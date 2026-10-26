@@ -38,6 +38,7 @@ pub mod error;
 pub mod event;
 /// Holds the configuration file specification for a HotShot node.
 pub mod hotshot_config_file;
+pub mod initializer;
 pub mod light_client;
 pub mod message;
 pub mod new_protocol;

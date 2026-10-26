@@ -1,56 +1,33 @@
-#[cfg(feature = "embedded-db")]
-use std::path::Path;
-use std::{
-    collections::BTreeMap,
-    future::Future,
-    num::NonZeroUsize,
-    path::PathBuf,
-    str::FromStr,
-    sync::Arc,
-    time::{Duration, Instant},
-};
+use std::{collections::BTreeMap, future::Future, sync::Arc, time::Instant};
 
 use alloy::primitives::Address;
 use anyhow::{Context, bail};
 use async_trait::async_trait;
-use clap::Parser;
 use committable::Committable;
-use derivative::Derivative;
-use derive_more::derive::{From, Into};
+use derive_more::{Deref, DerefMut};
 use espresso_types::{
-    AuthenticatedValidatorMap, BackoffParams, BlockMerkleTree, FeeMerkleTree, Header, Leaf, Leaf2,
-    NetworkConfig, Payload, PubKey, Ratio, RegisteredValidatorMap, StakeTableHash, parse_duration,
-    parse_size,
+    AuthenticatedValidatorMap, BackoffParams, Header, Leaf, Leaf2, NetworkConfig, Payload, PubKey,
+    RegisteredValidatorMap, StakeTableHash,
     traits::{EventsPersistenceRead, MembershipPersistence, StakeTuple},
-    v0::traits::{EventConsumer, PersistenceOptions, SequencerPersistence, StateCatchup},
+    v0::traits::{
+        EventConsumer, PersistenceOptions, SequencerPersistence, StateCatchup, StateCertPersistence,
+    },
     v0_3::{
         AuthenticatedValidator, EventKey, IndexedStake, RegisteredValidator, RewardAmount,
         StakeTableEvent,
     },
 };
 use futures::stream::StreamExt;
-use hotshot::InitializerEpochInfo;
-use hotshot_libp2p_networking::network::behaviours::dht::store::persistent::{
-    DhtPersistentStorage, SerializableRecord,
-};
 use hotshot_new_protocol::message::Certificate2;
 use hotshot_query_service::{
     data_source::{
         Transaction as _, VersionedDataSource,
-        storage::{
-            SerializableRetry,
-            pruning::PrunerCfg,
-            sql::{
-                Config, Db, Read, SerializableRetryConfig, SqlStorage, StorageConnectionType,
-                Transaction, Write, include_migrations, query_as, syntax_helpers::MAX_FN,
-            },
-        },
+        storage::{SerializableRetry, pruning::PrunerCfg, sql::StorageConnectionType},
     },
     fetching::{
         Provider,
         request::{PayloadRequest, VidCommonRequest},
     },
-    merklized_state::MerklizedState,
     serializable_retry,
 };
 use hotshot_types::{
@@ -59,7 +36,8 @@ use hotshot_types::{
         QuorumProposalWrapperLegacy, VidCommitment, VidCommon, VidDisperseShare,
     },
     drb::{DrbInput, DrbResult},
-    event::{Event, EventType, HotShotAction, LeafInfo},
+    event::{HotShotAction, LeafInfo},
+    initializer::InitializerEpochInfo,
     message::{Proposal, convert_proposal},
     new_protocol::CoordinatorEvent,
     simple_certificate::{
@@ -74,545 +52,64 @@ use hotshot_types::{
 };
 use indexmap::IndexMap;
 use itertools::Itertools;
-#[cfg(feature = "embedded-db")]
-use sqlx::{Decode, Type};
+use light_client::storage::LightClientDbOptions;
 use sqlx::{Executor, QueryBuilder, Row, query};
 
-#[cfg(feature = "embedded-db")]
-use crate::persistence::storage_probe::{self, SqlitePragmas, StorageProbe};
+use super::{
+    super::{ConsensusPruningOptions, Options as SqlOptions, within_gap_fill_horizon},
+    qs::{
+        Backend as _, Config, Db, DbKind, Read, SerializableRetryConfig, SqlStorage, Transaction,
+        Write, query_as,
+    },
+};
 use crate::{
     NodeType, RECENT_STAKE_TABLES_LIMIT, SeqTypes, ViewNumber,
+    api::options::Query,
     catchup::SqlStateCatchup,
-    persistence::{migrate_network_config, persistence_metrics::PersistenceMetricsValue},
+    persistence::{
+        migrate_network_config, persistence_metrics::PersistenceMetricsValue,
+        storage_probe::StorageProbe,
+    },
 };
 
-/// A few days of heights at mainnet rates, and what binds whenever the light client's history is
-/// shorter than that.
-pub const DEFAULT_ARCHIVE_STATE_MIN_RETENTION: u64 = 500_000;
+/// Node setup that differs between the SQL backends.
+pub(crate) trait BackendOptions {
+    fn apply(cfg: Config, opt: &SqlOptions) -> anyhow::Result<Config>;
 
-/// Options for Postgres-backed persistence.
-#[derive(Parser, Clone, Derivative)]
-#[derivative(Debug)]
-pub struct PostgresOptions {
-    /// Hostname for the remote Postgres database server.
-    #[clap(long, env = "ESPRESSO_NODE_POSTGRES_HOST")]
-    pub(crate) host: Option<String>,
+    fn light_client_db(cfg: &Config, query: &Query) -> LightClientDbOptions;
 
-    /// Port for the remote Postgres database server.
-    #[clap(long, env = "ESPRESSO_NODE_POSTGRES_PORT")]
-    pub(crate) port: Option<u16>,
+    async fn reset_light_client(cfg: &Config) -> anyhow::Result<()>;
 
-    /// Name of database to connect to.
-    #[clap(long, env = "ESPRESSO_NODE_POSTGRES_DATABASE")]
-    pub(crate) database: Option<String>,
-
-    /// Postgres user to connect as.
-    #[clap(long, env = "ESPRESSO_NODE_POSTGRES_USER")]
-    pub(crate) user: Option<String>,
-
-    /// Password for Postgres user.
-    #[clap(long, env = "ESPRESSO_NODE_POSTGRES_PASSWORD")]
-    // Hide from debug output since may contain sensitive data.
-    #[derivative(Debug = "ignore")]
-    pub(crate) password: Option<String>,
-
-    /// Use TLS for an encrypted connection to the database.
-    #[clap(long, env = "ESPRESSO_NODE_POSTGRES_USE_TLS")]
-    pub(crate) use_tls: bool,
-
-    /// Disable `DEFERRABLE` on read transactions for the query service.
-    ///
-    /// When true (the default), read transactions on Postgres start with `SERIALIZABLE READ ONLY`
-    /// (no `DEFERRABLE`), so they begin immediately rather than waiting for a safe serializable
-    /// snapshot. This trades start-up latency for the chance of a serialization-error retry.
-    /// Set to false to restore `DEFERRABLE`.
-    #[clap(
-        long,
-        env = "ESPRESSO_NODE_POSTGRES_NO_DEFERRABLE",
-        default_value_t = true
-    )]
-    pub(crate) no_deferrable: bool,
+    /// A probe of the database file and its settings, for a backend that keeps the database in one.
+    async fn storage_probe(
+        db: &SqlStorage,
+        opt: &SqlOptions,
+    ) -> anyhow::Result<Option<StorageProbe>>;
 }
 
-impl Default for PostgresOptions {
-    fn default() -> Self {
-        Self::parse_from(std::iter::empty::<String>())
-    }
-}
-
-#[derive(Parser, Clone, Derivative, Default, From, Into)]
-#[derivative(Debug)]
-pub struct SqliteOptions {
-    /// Base directory for the SQLite database.
-    /// The SQLite file will be created in the `sqlite` subdirectory with filename as `database`.
-    #[clap(
-        long,
-        env = "ESPRESSO_NODE_STORAGE_PATH",
-        value_parser = build_sqlite_path
-    )]
-    pub(crate) path: PathBuf,
-}
-
-pub fn build_sqlite_path(path: &str) -> anyhow::Result<PathBuf> {
-    let sub_dir = PathBuf::from_str(path)?.join("sqlite");
-
-    // if `sqlite` sub dir does not exist then create it
-    if !sub_dir.exists() {
-        std::fs::create_dir_all(&sub_dir)
-            .with_context(|| format!("failed to create directory: {sub_dir:?}"))?;
-    }
-
-    Ok(sub_dir.join("database"))
-}
-
-/// The directory `storage_probe::probe` should classify for a SQLite database at `path`. Falls
-/// back to `.` when `path` has no parent, e.g. a bare relative filename, or the empty `PathBuf`
-/// from `SqliteOptions::default()`.
-#[cfg(feature = "embedded-db")]
-fn sqlite_probe_dir(path: &Path) -> &Path {
-    match path.parent() {
-        Some(parent) if !parent.as_os_str().is_empty() => parent,
-        _ => Path::new("."),
-    }
-}
-
-#[cfg(feature = "embedded-db")]
-async fn read_pragma<T>(pool: &sqlx::Pool<Db>, pragma: &str) -> Option<T>
-where
-    T: for<'a> Decode<'a, Db> + Type<Db>,
-{
-    match sqlx::query(pragma).fetch_one(pool).await {
-        Ok(row) => row.try_get(0).ok(),
-        Err(err) => {
-            tracing::debug!(pragma, ?err, "storage probe: pragma query failed");
-            None
-        },
-    }
-}
-
-/// The first failure short-circuits the rest: a pragma query only fails if the pool is unusable.
-#[cfg(feature = "embedded-db")]
-async fn read_pragmas(pool: &sqlx::Pool<Db>) -> Option<SqlitePragmas> {
-    let journal_mode = read_pragma(pool, "PRAGMA journal_mode").await?;
-    // SQLite reports these two back as their numeric settings, not the names used to set them.
-    let synchronous = match read_pragma::<i64>(pool, "PRAGMA synchronous").await? {
-        0 => "off",
-        1 => "normal",
-        2 => "full",
-        3 => "extra",
-        _ => "unknown",
-    };
-    let auto_vacuum = match read_pragma::<i64>(pool, "PRAGMA auto_vacuum").await? {
-        0 => "none",
-        1 => "full",
-        2 => "incremental",
-        _ => "unknown",
-    };
-    let page_size: i64 = read_pragma(pool, "PRAGMA page_size").await?;
-
-    Some(SqlitePragmas {
-        journal_mode,
-        synchronous,
-        auto_vacuum,
-        page_size: page_size as u64,
-    })
-}
-
-/// Options for database-backed persistence, supporting both Postgres and SQLite.
-#[derive(Parser, Clone, Derivative, From, Into)]
-#[derivative(Debug)]
-pub struct Options {
-    #[cfg(not(feature = "embedded-db"))]
-    #[clap(flatten)]
-    pub(crate) postgres_options: PostgresOptions,
-
-    #[cfg(feature = "embedded-db")]
-    #[clap(flatten)]
-    pub(crate) sqlite_options: SqliteOptions,
-
-    /// Database URI for Postgres or SQLite.
-    ///
-    /// This is a shorthand for setting a number of other options all at once. The URI has the
-    /// following format ([brackets] indicate optional segments):
-    ///
-    /// - **Postgres:** `postgres[ql]://[username[:password]@][host[:port],]/database[?parameter_list]`
-    /// - **SQLite:** `sqlite://path/to/db.sqlite`
-    ///
-    /// Options set explicitly via other env vars or flags will take precedence, so you can use this
-    /// URI to set a baseline and then use other parameters to override or add configuration. In
-    /// addition, there are some parameters which cannot be set via the URI, such as TLS.
-    // Hide from debug output since may contain sensitive data.
-    #[derivative(Debug = "ignore")]
-    pub(crate) uri: Option<String>,
-
-    /// This will enable the pruner and set the default pruning parameters unless provided.
-    /// Default parameters:
-    /// - pruning_threshold: 3 TB
-    /// - minimum_retention: 1 day
-    /// - target_retention: 7 days
-    /// - batch_size: 1000
-    /// - max_usage: 80%
-    /// - interval: 1 hour
-    #[clap(long, env = "ESPRESSO_NODE_DATABASE_PRUNE")]
-    pub(crate) prune: bool,
-
-    /// Pruning parameters.
-    #[clap(flatten)]
-    pub(crate) pruning: PruningOptions,
-
-    /// Pruning parameters for ephemeral consensus storage.
-    #[clap(flatten)]
-    pub(crate) consensus_pruning: ConsensusPruningOptions,
-
-    /// Retry/backoff parameters for PostgreSQL serialization conflicts.
-    #[clap(flatten)]
-    pub(crate) serializable_retry: SerializableRetryOptions,
-
-    /// Specifies the maximum number of concurrent fetch requests allowed from peers.
-    #[clap(long, env = "ESPRESSO_NODE_FETCH_RATE_LIMIT")]
-    pub(crate) fetch_rate_limit: Option<usize>,
-
-    /// The minimum delay between active fetches in a stream.
-    #[clap(long, env = "ESPRESSO_NODE_ACTIVE_FETCH_DELAY", value_parser = parse_duration)]
-    pub(crate) active_fetch_delay: Option<Duration>,
-
-    /// The minimum delay between loading chunks in a stream.
-    #[clap(long, env = "ESPRESSO_NODE_CHUNK_FETCH_DELAY", value_parser = parse_duration)]
-    pub(crate) chunk_fetch_delay: Option<Duration>,
-
-    /// How many of a request's height ranges to serve at once.
-    #[clap(long, env = "ESPRESSO_NODE_RANGES_CONCURRENCY")]
-    pub(crate) ranges_concurrency: Option<NonZeroUsize>,
-
-    /// The number of items to process in a single transaction when scanning the database for
-    /// missing objects.
-    #[clap(long, env = "ESPRESSO_NODE_SYNC_STATUS_CHUNK_SIZE")]
-    pub(crate) sync_status_chunk_size: Option<usize>,
-
-    /// Duration to cache sync status results for.
-    #[clap(long, env = "ESPRESSO_NODE_SYNC_STATUS_TTL", value_parser = parse_duration)]
-    pub(crate) sync_status_ttl: Option<Duration>,
-
-    /// The number of items to process at a time when scanning for proactive fetching.
-    #[clap(long, env = "ESPRESSO_NODE_PROACTIVE_SCAN_CHUNK_SIZE")]
-    pub(crate) proactive_scan_chunk_size: Option<usize>,
-
-    /// The time interval between proactive fetching scans.
-    #[clap(long, env = "ESPRESSO_NODE_PROACTIVE_SCAN_INTERVAL", value_parser = parse_duration)]
-    pub(crate) proactive_scan_interval: Option<Duration>,
-
-    /// How long a proactive scan waits for one request of missing ranges before fetching its
-    /// chunks one at a time instead.
-    #[clap(long, env = "ESPRESSO_NODE_PROACTIVE_FETCH_TIMEOUT", value_parser = parse_duration)]
-    pub(crate) proactive_fetch_timeout: Option<Duration>,
-
-    /// Disable the proactive scanner task.
-    #[clap(long, env = "ESPRESSO_NODE_DISABLE_PROACTIVE_FETCHING")]
-    pub(crate) disable_proactive_fetching: bool,
-
-    /// Disable pruning and reconstruct previously pruned data.
-    ///
-    /// While running without pruning is the default behavior, the default will not try to
-    /// reconstruct data that was pruned in a previous run where pruning was enabled. This option
-    /// instructs the service to run without pruning _and_ reconstruct all previously pruned data by
-    /// fetching from peers.
-    ///
-    /// Historical merklized state older than the light client contract history is garbage collected,
-    /// but never less than ESPRESSO_NODE_ARCHIVE_STATE_MIN_RETENTION heights behind the head. Use
-    /// ESPRESSO_NODE_ARCHIVE_FULL_STATE to retain all of it.
-    #[clap(long, env = "ESPRESSO_NODE_ARCHIVE", conflicts_with = "prune")]
-    pub(crate) archive: bool,
-
-    /// Block heights of merklized state an archive node retains regardless of the light client.
-    ///
-    /// Collection stops at whichever reaches further back, this floor or the light client
-    /// contract's history. Set it to zero to follow the contract alone.
-    #[clap(
-        long,
-        env = "ESPRESSO_NODE_ARCHIVE_STATE_MIN_RETENTION",
-        default_value_t = DEFAULT_ARCHIVE_STATE_MIN_RETENTION
-    )]
-    pub(crate) archive_state_min_retention: u64,
-
-    /// Retain all historical merklized state on an archive node.
-    ///
-    /// Disables the state garbage collector that archive nodes run by default.
-    #[clap(long, env = "ESPRESSO_NODE_ARCHIVE_FULL_STATE")]
-    pub(crate) archive_full_state: bool,
-
-    /// Turns on leaf only data storage
-    #[clap(
-        long,
-        env = "ESPRESSO_NODE_LIGHTWEIGHT",
-        default_value_t = false,
-        conflicts_with = "archive"
-    )]
-    pub(crate) lightweight: bool,
-
-    /// The maximum idle time of a database connection.
-    ///
-    /// Any connection which has been open and unused longer than this duration will be
-    /// automatically closed to reduce load on the server.
-    #[clap(long, env = "ESPRESSO_NODE_DATABASE_IDLE_CONNECTION_TIMEOUT", value_parser = parse_duration, default_value = "10m")]
-    pub(crate) idle_connection_timeout: Duration,
-
-    /// The maximum lifetime of a database connection.
-    ///
-    /// Any connection which has been open longer than this duration will be automatically closed
-    /// (and, if needed, replaced), even if it is otherwise healthy. It is good practice to refresh
-    /// even healthy connections once in a while (e.g. daily) in case of resource leaks in the
-    /// server implementation.
-    #[clap(long, env = "ESPRESSO_NODE_DATABASE_CONNECTION_TIMEOUT", value_parser = parse_duration, default_value = "30m")]
-    pub(crate) connection_timeout: Duration,
-
-    #[clap(long, env = "ESPRESSO_NODE_DATABASE_SLOW_STATEMENT_THRESHOLD", value_parser = parse_duration, default_value = "1s")]
-    pub(crate) slow_statement_threshold: Duration,
-
-    /// The maximum time a single SQL statement is allowed to run before being canceled.
-    ///
-    /// This helps prevent queries from running indefinitely and consuming resources.
-    /// Set to 10 minutes by default
-    #[clap(long, env = "ESPRESSO_NODE_DATABASE_STATEMENT_TIMEOUT", value_parser = parse_duration, default_value = "10m")]
-    pub(crate) statement_timeout: Duration,
-
-    /// The minimum number of database connections to maintain at any time.
-    ///
-    /// The database client will, to the best of its ability, maintain at least `min` open
-    /// connections at all times. This can be used to reduce the latency hit of opening new
-    /// connections when at least this many simultaneous connections are frequently needed.
-    #[clap(
-        long,
-        env = "ESPRESSO_NODE_DATABASE_MIN_CONNECTIONS",
-        default_value = "0"
-    )]
-    pub(crate) min_connections: u32,
-
-    /// Allows setting a different maximum number of connections for query operations.
-    /// Default value of None implies using the min_connections value.
-    #[cfg(not(feature = "embedded-db"))]
-    #[clap(long, env = "ESPRESSO_NODE_DATABASE_QUERY_MIN_CONNECTIONS", default_value = None)]
-    pub(crate) query_min_connections: Option<u32>,
-
-    /// The maximum number of database connections to maintain at any time.
-    ///
-    /// Once `max` connections are in use simultaneously, further attempts to acquire a connection
-    /// (or begin a transaction) will block until one of the existing connections is released.
-    #[clap(
-        long,
-        env = "ESPRESSO_NODE_DATABASE_MAX_CONNECTIONS",
-        default_value = "25"
-    )]
-    pub(crate) max_connections: u32,
-
-    /// Allows setting a different maximum number of connections for query operations.
-    /// Default value of None implies using the max_connections value.
-    #[cfg(not(feature = "embedded-db"))]
-    #[clap(long, env = "ESPRESSO_NODE_DATABASE_QUERY_MAX_CONNECTIONS", default_value = None)]
-    pub(crate) query_max_connections: Option<u32>,
-
-    // Keep the database connection pool when persistence is created,
-    // allowing it to be reused across multiple instances instead of creating
-    // a new pool each time such as for API, consensus storage etc
-    // This also ensures all storage instances adhere to the MAX_CONNECTIONS limit if set
-    //
-    // Note: Cloning the `Pool` is lightweight and efficient because it simply
-    // creates a new reference-counted handle to the underlying pool state.
-    #[clap(skip)]
-    pub(crate) pool: Option<sqlx::Pool<Db>>,
-
-    #[clap(skip)]
-    pub(crate) consensus_only: bool,
-}
-
-impl Default for Options {
-    fn default() -> Self {
-        Self::parse_from(std::iter::empty::<String>())
-    }
-}
-
-#[cfg(not(feature = "embedded-db"))]
-impl From<PostgresOptions> for Config {
-    fn from(opt: PostgresOptions) -> Self {
-        let mut cfg = Config::default();
-
-        if let Some(host) = opt.host {
-            cfg = cfg.host(host);
-        }
-
-        if let Some(port) = opt.port {
-            cfg = cfg.port(port);
-        }
-
-        if let Some(database) = &opt.database {
-            cfg = cfg.database(database);
-        }
-
-        if let Some(user) = &opt.user {
-            cfg = cfg.user(user);
-        }
-
-        if let Some(password) = &opt.password {
-            cfg = cfg.password(password);
-        }
-
-        if opt.use_tls {
-            cfg = cfg.tls();
-        }
-
-        cfg = cfg.max_connections(20);
-        cfg = cfg.idle_connection_timeout(Duration::from_secs(120));
-        cfg = cfg.connection_timeout(Duration::from_secs(10240));
-        cfg = cfg.slow_statement_threshold(Duration::from_secs(1));
-        cfg = cfg.statement_timeout(Duration::from_secs(600)); // 10 minutes default
-
-        hotshot_query_service::data_source::storage::sql::set_no_deferrable_on_read(
-            opt.no_deferrable,
-        );
-
-        cfg
-    }
-}
-
-#[cfg(feature = "embedded-db")]
-impl From<SqliteOptions> for Config {
-    fn from(opt: SqliteOptions) -> Self {
-        let mut cfg = Config::default();
-
-        cfg = cfg.db_path(opt.path);
-
-        cfg = cfg.max_connections(20);
-        cfg = cfg.idle_connection_timeout(Duration::from_secs(120));
-        cfg = cfg.connection_timeout(Duration::from_secs(10240));
-        cfg = cfg.slow_statement_threshold(Duration::from_secs(2));
-        cfg = cfg.statement_timeout(Duration::from_secs(600));
-        cfg
-    }
-}
-
-#[cfg(not(feature = "embedded-db"))]
-impl From<PostgresOptions> for Options {
-    fn from(opt: PostgresOptions) -> Self {
-        Options {
-            postgres_options: opt,
-            max_connections: 20,
-            idle_connection_timeout: Duration::from_secs(120),
-            connection_timeout: Duration::from_secs(10240),
-            slow_statement_threshold: Duration::from_secs(1),
-            statement_timeout: Duration::from_secs(600),
-            ..Default::default()
-        }
-    }
-}
-
-#[cfg(feature = "embedded-db")]
-impl From<SqliteOptions> for Options {
-    fn from(opt: SqliteOptions) -> Self {
-        Options {
-            sqlite_options: opt,
-            max_connections: 5,
-            idle_connection_timeout: Duration::from_secs(120),
-            connection_timeout: Duration::from_secs(10240),
-            slow_statement_threshold: Duration::from_secs(1),
-            uri: None,
-            statement_timeout: Duration::from_secs(600),
-            prune: false,
-            pruning: Default::default(),
-            consensus_pruning: Default::default(),
-            fetch_rate_limit: None,
-            active_fetch_delay: None,
-            chunk_fetch_delay: None,
-            ranges_concurrency: None,
-            sync_status_chunk_size: None,
-            sync_status_ttl: None,
-            proactive_scan_chunk_size: None,
-            proactive_scan_interval: None,
-            proactive_fetch_timeout: None,
-            disable_proactive_fetching: false,
-            archive: false,
-            archive_state_min_retention: DEFAULT_ARCHIVE_STATE_MIN_RETENTION,
-            archive_full_state: false,
-            lightweight: false,
-            min_connections: 0,
-            pool: None,
-            consensus_only: false,
-            serializable_retry: SerializableRetryOptions::default(),
-        }
-    }
-}
-impl TryFrom<&Options> for Config {
+impl TryFrom<&SqlOptions> for Config {
     type Error = anyhow::Error;
 
-    fn try_from(opt: &Options) -> Result<Self, Self::Error> {
+    fn try_from(opt: &SqlOptions) -> Result<Self, Self::Error> {
         let mut cfg = match &opt.uri {
             Some(uri) => uri.parse()?,
             None => Self::default(),
         };
 
-        if let Some(pool) = &opt.pool {
-            cfg = cfg.pool(pool.clone());
+        if let Some(pool) = opt.pool.clone() {
+            let pool = sqlx::Pool::<Db>::try_from(pool)
+                .ok()
+                .context("the connection pool is for the other SQL backend")?;
+            cfg = cfg.pool(pool);
         }
 
         cfg = cfg.max_connections(opt.max_connections);
         cfg = cfg.idle_connection_timeout(opt.idle_connection_timeout);
         cfg = cfg.min_connections(opt.min_connections);
-
-        #[cfg(not(feature = "embedded-db"))]
-        {
-            cfg =
-                cfg.query_max_connections(opt.query_max_connections.unwrap_or(opt.max_connections));
-            cfg =
-                cfg.query_min_connections(opt.query_min_connections.unwrap_or(opt.min_connections));
-
-            hotshot_query_service::data_source::storage::sql::set_no_deferrable_on_read(
-                opt.postgres_options.no_deferrable,
-            );
-        }
-
         cfg = cfg.connection_timeout(opt.connection_timeout);
         cfg = cfg.slow_statement_threshold(opt.slow_statement_threshold);
         cfg = cfg.statement_timeout(opt.statement_timeout);
-
-        #[cfg(not(feature = "embedded-db"))]
-        {
-            cfg = cfg.migrations(include_migrations!(
-                "$CARGO_MANIFEST_DIR/api/migrations/postgres"
-            ));
-
-            let pg_options = &opt.postgres_options;
-
-            if let Some(host) = &pg_options.host {
-                cfg = cfg.host(host.clone());
-            }
-
-            if let Some(port) = pg_options.port {
-                cfg = cfg.port(port);
-            }
-
-            if let Some(database) = &pg_options.database {
-                cfg = cfg.database(database);
-            }
-
-            if let Some(user) = &pg_options.user {
-                cfg = cfg.user(user);
-            }
-
-            if let Some(password) = &pg_options.password {
-                cfg = cfg.password(password);
-            }
-
-            if pg_options.use_tls {
-                cfg = cfg.tls();
-            }
-        }
-
-        #[cfg(feature = "embedded-db")]
-        {
-            cfg = cfg.migrations(include_migrations!(
-                "$CARGO_MANIFEST_DIR/api/migrations/sqlite"
-            ));
-
-            cfg = cfg.db_path(opt.sqlite_options.path.clone());
-        }
+        cfg = Db::apply(cfg, opt)?;
 
         if opt.prune {
             cfg = cfg.pruner_cfg(PrunerCfg::from(opt.pruning))?;
@@ -621,270 +118,40 @@ impl TryFrom<&Options> for Config {
             cfg = cfg.archive();
         }
 
-        cfg = cfg.serializable_retry(opt.serializable_retry.to_retry_config());
+        let retry = &opt.serializable_retry;
+        cfg = cfg.serializable_retry(SerializableRetryConfig::new(
+            retry.backoff_base,
+            retry.backoff_max,
+            retry.backoff_factor,
+            retry.backoff_jitter.into(),
+            retry.retry_max,
+            retry.pg_stat_diag,
+        ));
 
         Ok(cfg)
     }
 }
 
-/// Pruning parameters.
-#[derive(Parser, Clone, Copy, Debug)]
-pub struct PruningOptions {
-    /// Threshold for pruning, specified in bytes.
-    /// If the disk usage surpasses this threshold, pruning is initiated for data older than the specified minimum retention period.
-    /// Pruning continues until the disk usage drops below the MAX USAGE.
-    #[clap(long, env = "ESPRESSO_NODE_PRUNER_PRUNING_THRESHOLD", value_parser = parse_size)]
-    pub(crate) pruning_threshold: Option<u64>,
+/// [`SqlOptions`] for persistence on this backend, built by
+/// [`SqlOptions::into_backend`](super::super::Options::into_backend) or checked with `try_from`.
+#[derive(Clone, Debug, Deref, DerefMut)]
+pub struct Options(pub(in crate::persistence::sql) SqlOptions);
 
-    /// Minimum retention period.
-    /// Data is retained for at least this duration, even if there's no free disk space.
-    #[clap(
-        long,
-        env = "ESPRESSO_NODE_PRUNER_MINIMUM_RETENTION",
-        value_parser = parse_duration,
-    )]
-    pub(crate) minimum_retention: Option<Duration>,
-
-    /// Minimum retention period for Merklized state.
-    /// State is retained for at least this duration, even if there's no free disk space.
-    #[clap(
-        long,
-        env = "ESPRESSO_NODE_PRUNER_STATE_MINIMUM_RETENTION",
-        value_parser = parse_duration,
-    )]
-    state_minimum_retention: Option<Duration>,
-
-    /// Target retention period.
-    /// Data older than this is pruned to free up space.
-    #[clap(
-        long,
-        env = "ESPRESSO_NODE_PRUNER_TARGET_RETENTION",
-        value_parser = parse_duration,
-    )]
-    pub(crate) target_retention: Option<Duration>,
-
-    /// Target retention period for Merklized state.
-    /// State older than this is pruned to free up space.
-    #[clap(
-        long,
-        env = "ESPRESSO_NODE_PRUNER_STATE_TARGET_RETENTION",
-        value_parser = parse_duration,
-    )]
-    state_target_retention: Option<Duration>,
-
-    /// Batch size for pruning.
-    /// This is the number of blocks worth of data to delete in a single transaction. Heights that
-    /// hold no data are skipped without counting, so a batch, and the `Pruned to height` log line,
-    /// can advance by more than this many heights at once.
-    #[clap(long, env = "ESPRESSO_NODE_PRUNER_BATCH_SIZE")]
-    pub(crate) batch_size: Option<u64>,
-
-    /// Maximum disk usage (in basis points).
-    ///
-    /// Pruning stops once the disk usage falls below this value, even if
-    /// some data older than the `MINIMUM_RETENTION` remains. Values range
-    /// from 0 (0%) to 10000 (100%).
-    #[clap(long, env = "ESPRESSO_NODE_PRUNER_MAX_USAGE")]
-    pub(crate) max_usage: Option<u16>,
-
-    /// Interval for running the pruner.
-    #[clap(
-        long,
-        env = "ESPRESSO_NODE_PRUNER_INTERVAL",
-        value_parser = parse_duration,
-    )]
-    pub(crate) interval: Option<Duration>,
-
-    /// Number of SQLite pages to vacuum from the freelist
-    /// during each pruner cycle.
-    /// This value corresponds to `N` in the SQLite PRAGMA `incremental_vacuum(N)`,
-    #[clap(long, env = "ESPRESSO_NODE_PRUNER_INCREMENTAL_VACUUM_PAGES")]
-    pub(crate) pages: Option<u64>,
-}
-
-impl Default for PruningOptions {
-    fn default() -> Self {
-        Self::parse_from(std::iter::empty::<String>())
+impl Options {
+    pub fn into_inner(self) -> SqlOptions {
+        self.0
     }
 }
 
-impl From<PruningOptions> for PrunerCfg {
-    fn from(opt: PruningOptions) -> Self {
-        let mut cfg = PrunerCfg::new();
-        if let Some(threshold) = opt.pruning_threshold {
-            cfg = cfg.with_pruning_threshold(threshold);
-        }
-        if let Some(min) = opt.minimum_retention {
-            cfg = cfg.with_minimum_retention(min);
-        }
-        if let Some(min) = opt.state_minimum_retention {
-            cfg = cfg.with_state_minimum_retention(min);
-        }
-        if let Some(target) = opt.target_retention {
-            cfg = cfg.with_target_retention(target);
-        }
-        if let Some(target) = opt.state_target_retention {
-            cfg = cfg.with_state_target_retention(target);
-        }
-        if let Some(batch) = opt.batch_size {
-            cfg = cfg.with_batch_size(batch);
-        }
-        if let Some(max) = opt.max_usage {
-            cfg = cfg.with_max_usage(max);
-        }
-        if let Some(interval) = opt.interval {
-            cfg = cfg.with_interval(interval);
-        }
+impl TryFrom<SqlOptions> for Options {
+    type Error = anyhow::Error;
 
-        if let Some(pages) = opt.pages {
-            cfg = cfg.with_incremental_vacuum_pages(pages)
-        }
-
-        cfg = cfg.with_state_tables(vec![
-            BlockMerkleTree::state_type().to_string(),
-            FeeMerkleTree::state_type().to_string(),
-        ]);
-
-        cfg
-    }
-}
-
-/// Pruning parameters for ephemeral consensus storage.
-#[derive(Parser, Clone, Copy, Debug)]
-pub struct ConsensusPruningOptions {
-    /// Number of views to try to retain in consensus storage before data that hasn't been archived
-    /// is garbage collected.
-    ///
-    /// The longer this is, the more certain that all data will eventually be archived, even if
-    /// there are temporary problems with archive storage or partially missing data. This can be set
-    /// very large, as most data is garbage collected as soon as it is finalized by consensus. This
-    /// setting only applies to views which never get decided (ie forks in consensus) and views for
-    /// which this node is partially offline. These should be exceptionally rare.
-    ///
-    /// Note that in extreme scenarios, data may be garbage collected even before TARGET_RETENTION
-    /// views, if consensus storage exceeds TARGET_USAGE. For a hard lower bound on how long
-    /// consensus data will be retained, see MINIMUM_RETENTION.
-    ///
-    /// The default of 302000 views equates to approximately 1 week (604800 seconds) at an average
-    /// view time of 2s.
-    #[clap(
-        name = "TARGET_RETENTION",
-        long = "consensus-storage-target-retention",
-        env = "ESPRESSO_NODE_CONSENSUS_STORAGE_TARGET_RETENTION",
-        default_value = "302000"
-    )]
-    pub(crate) target_retention: u64,
-
-    /// Minimum number of views to try to retain in consensus storage before data that hasn't been
-    /// archived is garbage collected.
-    ///
-    /// This bound allows data to be retained even if consensus storage occupies more than
-    /// TARGET_USAGE. This can be used to ensure sufficient time to move consensus data to archival
-    /// storage as necessary, even under extreme circumstances where otherwise garbage collection
-    /// would kick in based on TARGET_RETENTION.
-    ///
-    /// The default of 130000 views equates to approximately 3 days (259200 seconds) at an average
-    /// view time of 2s.
-    #[clap(
-        name = "MINIMUM_RETENTION",
-        long = "consensus-storage-minimum-retention",
-        env = "ESPRESSO_NODE_CONSENSUS_STORAGE_MINIMUM_RETENTION",
-        default_value = "130000"
-    )]
-    pub(crate) minimum_retention: u64,
-
-    /// Amount (in bytes) of data to retain in consensus storage before garbage collecting more
-    /// aggressively.
-    ///
-    /// See also TARGET_RETENTION and MINIMUM_RETENTION.
-    #[clap(
-        name = "TARGET_USAGE",
-        long = "consensus-storage-target-usage",
-        env = "ESPRESSO_NODE_CONSENSUS_STORAGE_TARGET_USAGE",
-        default_value = "1000000000"
-    )]
-    pub(crate) target_usage: u64,
-}
-
-impl Default for ConsensusPruningOptions {
-    fn default() -> Self {
-        Self::parse_from(std::iter::empty::<String>())
-    }
-}
-
-/// Configuration for retrying transactions aborted by PostgreSQL serialization conflicts (error
-/// 40001).  Under SERIALIZABLE isolation these aborts are expected and safe to retry from scratch.
-#[derive(Parser, Clone, Copy, Debug)]
-pub struct SerializableRetryOptions {
-    /// Maximum number of retries on PostgreSQL serialization conflicts.
-    #[clap(
-        long = "serializable-retry-max",
-        env = "ESPRESSO_NODE_SERIALIZABLE_RETRY_MAX",
-        default_value = "100"
-    )]
-    retry_max: u32,
-
-    /// Initial delay before retrying after a PostgreSQL serialization conflict.
-    #[clap(
-        long = "serializable-backoff-base",
-        env = "ESPRESSO_NODE_SERIALIZABLE_BACKOFF_BASE",
-        default_value = "10ms",
-        value_parser = parse_duration
-    )]
-    backoff_base: Duration,
-
-    /// Maximum delay between retries after a PostgreSQL serialization conflict.
-    #[clap(
-        long = "serializable-backoff-max",
-        env = "ESPRESSO_NODE_SERIALIZABLE_BACKOFF_MAX",
-        default_value = "500ms",
-        value_parser = parse_duration
-    )]
-    backoff_max: Duration,
-
-    /// Multiplier applied to the backoff delay between successive retries.
-    #[clap(
-        long = "serializable-backoff-factor",
-        env = "ESPRESSO_NODE_SERIALIZABLE_BACKOFF_FACTOR",
-        default_value = "2"
-    )]
-    backoff_factor: u32,
-
-    /// Backoff jitter as a ratio of the backoff delay, numerator:denominator.
-    #[clap(
-        long = "serializable-backoff-jitter",
-        env = "ESPRESSO_NODE_SERIALIZABLE_BACKOFF_JITTER",
-        default_value = "5:10"
-    )]
-    backoff_jitter: Ratio,
-
-    /// When set, enable verbose diagnostic logging on PostgreSQL serialization conflicts.  Each
-    /// retried conflict spawns a background query against `pg_stat_activity` and `pg_locks` to
-    /// log concurrent sessions and predicate locks. Off by default.
-    #[clap(
-        long = "serializable-pg-stat-diag",
-        env = "ESPRESSO_NODE_SERIALIZABLE_PG_STAT_DIAG"
-    )]
-    pg_stat_diag: bool,
-}
-
-impl Default for SerializableRetryOptions {
-    fn default() -> Self {
-        Self::parse_from(std::iter::empty::<String>())
-    }
-}
-
-impl SerializableRetryOptions {
-    /// Convert these CLI/env options into the storage-layer retry policy.
-    fn to_retry_config(self) -> SerializableRetryConfig {
-        SerializableRetryConfig::new(
-            self.backoff_base,
-            self.backoff_max,
-            self.backoff_factor,
-            self.backoff_jitter.into(),
-            self.retry_max,
-            self.pg_stat_diag,
-        )
+    fn try_from(opt: SqlOptions) -> anyhow::Result<Options> {
+        anyhow::ensure!(
+            opt.embedded_db == (Db::KIND == DbKind::Sqlite),
+            "the SQL options select the other backend"
+        );
+        Ok(Options(opt))
     }
 }
 
@@ -893,76 +160,59 @@ impl PersistenceOptions for Options {
     type Persistence = Persistence;
 
     fn set_view_retention(&mut self, view_retention: u64) {
-        self.consensus_pruning.target_retention = view_retention;
-        self.consensus_pruning.minimum_retention = view_retention;
+        self.0.consensus_pruning.target_retention = view_retention;
+        self.0.consensus_pruning.minimum_retention = view_retention;
     }
 
     fn set_consensus_only(&mut self) {
-        self.consensus_only = true;
+        self.0.consensus_only = true;
     }
 
     async fn create(&mut self) -> anyhow::Result<Self::Persistence> {
-        let config = (&*self).try_into()?;
+        let config = Config::try_from(&self.0)?;
         let db = SqlStorage::connect(config, StorageConnectionType::Sequencer).await?;
 
-        #[cfg(feature = "embedded-db")]
-        let probe = {
-            let pragmas = read_pragmas(&db.pool()).await;
-            storage_probe::probe(sqlite_probe_dir(&self.sqlite_options.path), pragmas).await?
-        };
+        let probe = Db::storage_probe(&db, &self.0).await?;
 
         let persistence = Persistence {
             db,
-            gc_opt: self.consensus_pruning,
-            consensus_only: self.consensus_only,
+            gc_opt: self.0.consensus_pruning,
+            last_usage_check: Arc::default(),
+            consensus_only: self.0.consensus_only,
             internal_metrics: PersistenceMetricsValue::default(),
-            #[cfg(feature = "embedded-db")]
             probe,
         };
         persistence.migrate_quorum_proposal_leaf_hashes().await?;
-        self.pool = Some(persistence.db.pool());
+        self.0.pool = Some(persistence.db.pool().into());
 
         Ok(persistence)
     }
 
     async fn reset(self) -> anyhow::Result<()> {
-        SqlStorage::connect(
-            Config::try_from(&self)?.reset_schema(),
-            StorageConnectionType::Sequencer,
-        )
-        .await?;
+        let config = Config::try_from(&self.0)?;
+        Db::reset_light_client(&config).await?;
+        SqlStorage::connect(config.reset_schema(), StorageConnectionType::Sequencer).await?;
         Ok(())
     }
 }
 
-/// Postgres-backed persistence.
+/// SQL-backed persistence.
 #[derive(Clone, Debug)]
 pub struct Persistence {
-    db: SqlStorage,
+    pub(super) db: SqlStorage,
     gc_opt: ConsensusPruningOptions,
+    /// When consensus storage usage was last measured, shared by clones.
+    last_usage_check: Arc<parking_lot::Mutex<Option<Instant>>>,
     consensus_only: bool,
     /// A reference to the internal metrics
     internal_metrics: PersistenceMetricsValue,
-    /// Startup findings about the filesystem and SQLite pragmas backing `db`.
-    #[cfg(feature = "embedded-db")]
-    probe: StorageProbe,
+    /// Startup findings about the filesystem and SQLite pragmas backing `db`, on SQLite only.
+    pub(super) probe: Option<StorageProbe>,
 }
 
 /// PostgreSQL error code for serialization failures under SERIALIZABLE isolation.
 /// Transactions that fail with this code are safe to retry from scratch.
 const PG_SERIALIZATION_FAILURE_CODE: &str = "40001";
-
-/// How far behind the newest persisted decide an out-of-order ("gap-fill") decide can still
-/// arrive. Mirrors `DECIDE_BUFFER` in `hotshot-new-protocol`; a leaf missing further behind the
-/// watermark than this will never be filled in by consensus.
-pub(crate) const DECIDE_GAP_FILL_HORIZON: u64 = 20;
-
-/// Whether the height gap directly below the leaf at `view` can still be filled by a late
-/// decide: the missing view (at most `view - 1`) must be within [`DECIDE_GAP_FILL_HORIZON`] of
-/// `watermark`, the newest persisted decide.
-pub(crate) fn within_gap_fill_horizon(view: u64, watermark: u64) -> bool {
-    view.saturating_sub(1) + DECIDE_GAP_FILL_HORIZON > watermark
-}
 
 #[derive(Debug)]
 struct DecidedLeaf {
@@ -970,67 +220,26 @@ struct DecidedLeaf {
     cert: CertificatePair<SeqTypes>,
 }
 
-fn decide_events_from_chain(
-    mut chain: Vec<DecidedLeaf>,
+/// The decide for `chain`, newest leaf first; `cert2`, if any, finalizes the newest leaf only.
+fn decide_event_from_chain(
+    chain: Vec<DecidedLeaf>,
     cert2: Option<Certificate2<SeqTypes>>,
-    deciding_qc: Option<Arc<CertificatePair<SeqTypes>>>,
-) -> Vec<CoordinatorEvent<SeqTypes>> {
-    let split_idx = chain
-        .iter()
-        .position(|leaf| leaf.info.leaf.block_header().version() < versions::NEW_PROTOCOL_VERSION)
-        .unwrap_or(chain.len());
-    let legacy_leaves = chain.split_off(split_idx);
-    let new_leaves = chain;
-
-    let mut events = Vec::with_capacity(2);
-    if !legacy_leaves.is_empty() {
-        let committing_qc = legacy_leaves[0].cert.clone();
-        let deciding_qc = new_leaves
-            .is_empty()
-            .then_some(deciding_qc)
-            .flatten()
-            .filter(|qc| qc.view_number() == committing_qc.view_number() + 1);
-        let view_number = legacy_leaves[0].info.leaf.view_number();
-        let leaf_chain = legacy_leaves
-            .into_iter()
-            .map(|leaf| leaf.info)
-            .collect::<Vec<_>>();
-
-        events.push(CoordinatorEvent::LegacyEvent(Event {
-            view_number,
-            event: EventType::Decide {
-                leaf_chain: Arc::new(leaf_chain),
-                committing_qc: Arc::new(committing_qc),
-                deciding_qc,
-                block_size: None,
-            },
-        }));
-    }
-
-    if new_leaves.is_empty() && cert2.is_some() {
-        tracing::warn!(
-            "decide_events_from_chain called with cert2 but no new-protocol leaves; cert2 will be \
-             dropped"
-        );
-    }
-
-    if !new_leaves.is_empty() {
-        // cert1 is the QC for the newest leaf
-        // ancestors are certified by
-        // their successor's justify_qc. cert2 finalizes the newest leaf.
-        // update() uses cert1 to build LeafQueryData for
-        // the newest leaf and only attaches cert2 to it.
-        let cert1 = new_leaves[0].cert.qc().clone();
-        let leaf_infos = new_leaves.into_iter().map(|leaf| leaf.info).collect();
-
-        events.push(CoordinatorEvent::NewDecide {
-            leaf_infos,
-            cert1,
-            cert2,
-        });
-    }
-
-    events
+) -> Option<CoordinatorEvent<SeqTypes>> {
+    let Some(newest) = chain.first() else {
+        if cert2.is_some() {
+            tracing::warn!(
+                "decide_event_from_chain called with cert2 but no leaves; cert2 will be dropped"
+            );
+        }
+        return None;
+    };
+    let cert1 = newest.cert.qc().clone();
+    let leaf_infos = chain.into_iter().map(|leaf| leaf.info).collect();
+    Some(CoordinatorEvent::NewDecide {
+        leaf_infos,
+        cert1,
+        cert2,
+    })
 }
 
 impl Persistence {
@@ -1093,11 +302,7 @@ impl Persistence {
             .map(|row| ViewNumber::new(row.get::<i64, _>("last_processed_view") as u64)))
     }
 
-    async fn generate_decide_events(
-        &self,
-        deciding_qc: Option<Arc<CertificatePair<SeqTypes>>>,
-        consumer: &impl EventConsumer,
-    ) -> anyhow::Result<()> {
+    async fn generate_decide_events(&self, consumer: &impl EventConsumer) -> anyhow::Result<()> {
         let mut last_processed_view: Option<i64> = serializable_retry!(self, || async {
             Ok(self
                 .db
@@ -1396,7 +601,7 @@ impl Persistence {
                 "generating decide event"
             );
 
-            for event in decide_events_from_chain(chain, cert2, deciding_qc.clone()) {
+            if let Some(event) = decide_event_from_chain(chain, cert2) {
                 consumer.handle_event(&event).await?;
             }
 
@@ -1465,7 +670,7 @@ impl Persistence {
                 )
                 .await?;
                 tx.execute(
-                    query("DELETE FROM decided_cert2 where view >= $1 AND view <= $2")
+                    query("DELETE FROM decided_cert2 where view >= $1 AND view < $2")
                         .bind(from_view_i64)
                         .bind(to_view_i64),
                 )
@@ -1562,57 +767,76 @@ impl Persistence {
         Ok(result)
     }
 
+    /// Prune everything older than the target retention, then, at most once per usage check
+    /// interval, prune toward the minimum retention if storage is over the target usage.
     #[tracing::instrument(skip(self))]
     async fn prune_to_retention(&self, cur_view: ViewNumber) -> anyhow::Result<()> {
-        serializable_retry!(self, || async {
-            let mut tx = self.db.write().await?;
-
-            // Prune everything older than the target retention period.
-            prune_to_view(
-                &mut tx,
-                cur_view.u64().saturating_sub(self.gc_opt.target_retention),
-            )
+        self.prune_below(cur_view.u64().saturating_sub(self.gc_opt.target_retention))
             .await?;
 
-            // Check our storage usage; if necessary we will prune more aggressively (up to the
-            // minimum retention) to get below the target usage.
-            #[cfg(feature = "embedded-db")]
-            let usage_query = format!(
+        if !self.usage_check_due() {
+            return Ok(());
+        }
+        let usage = self.consensus_storage_usage().await?;
+        tracing::debug!(usage, "consensus storage usage after pruning");
+        if usage > self.gc_opt.target_usage {
+            tracing::warn!(
+                usage,
+                gc_opt = ?self.gc_opt,
+                "consensus storage is running out of space, pruning to minimum retention"
+            );
+            self.prune_below(cur_view.u64().saturating_sub(self.gc_opt.minimum_retention))
+                .await?;
+        }
+        Ok(())
+    }
+
+    async fn prune_below(&self, view: u64) -> anyhow::Result<()> {
+        // An empty write transaction still takes SQLite's write lock.
+        if view == 0 {
+            return Ok(());
+        }
+        serializable_retry!(self, || async {
+            let mut tx = self.db.write().await?;
+            prune_to_view(&mut tx, view).await?;
+            tx.commit().await
+        })
+        .await
+    }
+
+    /// Measured in a read transaction: on SQLite it scans every page of the pruned tables, and
+    /// holding the write lock that long stalls the vote and proposal writes consensus waits on.
+    async fn consensus_storage_usage(&self) -> anyhow::Result<u64> {
+        let usage_query = match Db::KIND {
+            DbKind::Sqlite => format!(
                 "SELECT sum(pgsize) FROM dbstat WHERE name IN ({})",
                 PRUNE_TABLES
                     .iter()
                     .map(|table| format!("'{table}'"))
                     .join(",")
-            );
-
-            #[cfg(not(feature = "embedded-db"))]
-            let usage_query = {
+            ),
+            DbKind::Postgres => {
                 let table_sizes = PRUNE_TABLES
                     .iter()
                     .map(|table| format!("pg_table_size('{table}')"))
                     .join(" + ");
                 format!("SELECT {table_sizes}")
-            };
+            },
+        };
 
-            let (usage,): (i64,) = query_as(&usage_query).fetch_one(tx.as_mut()).await?;
-            tracing::debug!(usage, "consensus storage usage after pruning");
+        let mut tx = self.db.read().await?;
+        let (usage,): (i64,) = query_as(&usage_query).fetch_one(tx.as_mut()).await?;
+        Ok(usage as u64)
+    }
 
-            if (usage as u64) > self.gc_opt.target_usage {
-                tracing::warn!(
-                    usage,
-                    gc_opt = ?self.gc_opt,
-                    "consensus storage is running out of space, pruning to minimum retention"
-                );
-                prune_to_view(
-                    &mut tx,
-                    cur_view.u64().saturating_sub(self.gc_opt.minimum_retention),
-                )
-                .await?;
-            }
-
-            tx.commit().await
-        })
-        .await
+    fn usage_check_due(&self) -> bool {
+        let now = Instant::now();
+        let mut last = self.last_usage_check.lock();
+        if last.is_some_and(|last| now.duration_since(last) < self.gc_opt.usage_check_interval) {
+            return false;
+        }
+        *last = Some(now);
+        true
     }
 }
 
@@ -1627,10 +851,6 @@ const PRUNE_TABLES: &[&str] = &[
 ];
 
 async fn prune_to_view(tx: &mut Transaction<Write>, view: u64) -> anyhow::Result<()> {
-    if view == 0 {
-        // Nothing to prune, the entire chain is younger than the retention period.
-        return Ok(());
-    }
     tracing::debug!(view, "pruning consensus storage");
 
     for table in PRUNE_TABLES {
@@ -1700,11 +920,16 @@ impl SequencerPersistence for Persistence {
 
     async fn persist_decided_leaves(
         &self,
-        _view: ViewNumber,
         leaf_chain: impl IntoIterator<Item = (&LeafInfo<SeqTypes>, CertificatePair<SeqTypes>)> + Send,
-        _deciding_qc: Option<Arc<CertificatePair<SeqTypes>>>,
+        cert2: Option<&Certificate2<SeqTypes>>,
         _consumer: &(impl EventConsumer + 'static),
     ) -> anyhow::Result<()> {
+        let cert2_row = cert2
+            .map(|cert2| {
+                let data = bincode::serialize(cert2).context("serializing cert2")?;
+                anyhow::Ok((cert2.view_number.u64() as i64, data))
+            })
+            .transpose()?;
         let values = leaf_chain
             .into_iter()
             .map(|(info, cert)| {
@@ -1726,8 +951,8 @@ impl SequencerPersistence for Persistence {
             })
             .collect::<anyhow::Result<Vec<_>>>()?;
 
-        // Append the new leaves. We do this in its own transaction because even if GC or the
-        // event consumer later fails, there is no need to abort the storage of the leaves.
+        // Append the new leaves and their cert2. We do this in its own transaction because even if
+        // GC or the event consumer later fails, there is no need to abort the storage of the leaves.
         serializable_retry!(self, || async {
             let mut tx = self.db.write().await?;
             tx.upsert(
@@ -1737,6 +962,10 @@ impl SequencerPersistence for Persistence {
                 values.clone(),
             )
             .await?;
+            if let Some(row) = &cert2_row {
+                tx.upsert("decided_cert2", ["view", "data"], ["view"], [row.clone()])
+                    .await?;
+            }
             tx.commit().await
         })
         .await?;
@@ -1747,7 +976,6 @@ impl SequencerPersistence for Persistence {
     async fn process_decided_events(
         &self,
         view: ViewNumber,
-        deciding_qc: Option<Arc<CertificatePair<SeqTypes>>>,
         consumer: &(impl EventConsumer + 'static),
     ) -> anyhow::Result<Option<ViewNumber>> {
         let now = Instant::now();
@@ -1756,7 +984,7 @@ impl SequencerPersistence for Persistence {
         } else {
             // Generate events for the new leaves, then GC. On error `last_processed_view` is not
             // advanced past the failure point, so no data is lost and the range is retried.
-            self.generate_decide_events(deciding_qc, consumer).await?;
+            self.generate_decide_events(consumer).await?;
 
             // Best-effort GC of data not included in any decide event; runs again at the next
             // decide.
@@ -2032,7 +1260,8 @@ impl SequencerPersistence for Persistence {
             let stmt = format!(
                 "INSERT INTO highest_voted_view (id, view) VALUES (0, $1)
                 ON CONFLICT (id) DO UPDATE SET view = {MAX_FN}(highest_voted_view.view, \
-                 excluded.view)"
+                 excluded.view)",
+                MAX_FN = Db::MAX_FN,
             );
 
             let mut tx = self.db.write().await?;
@@ -2043,7 +1272,8 @@ impl SequencerPersistence for Persistence {
                 let stmt = format!(
                     "INSERT INTO restart_view (id, view) VALUES (0, $1)
                     ON CONFLICT (id) DO UPDATE SET view = {MAX_FN}(restart_view.view, \
-                     excluded.view)"
+                     excluded.view)",
+                    MAX_FN = Db::MAX_FN,
                 );
                 tx.execute(query(&stmt).bind(restart_view.u64() as i64))
                     .await?;
@@ -2481,6 +1711,61 @@ impl SequencerPersistence for Persistence {
         Ok(Some(cert))
     }
 
+    async fn load_start_epoch_info(&self) -> anyhow::Result<Vec<InitializerEpochInfo<SeqTypes>>> {
+        let rows = self
+            .db
+            .read()
+            .await?
+            .fetch_all(
+                query("SELECT * from epoch_drb_and_root ORDER BY epoch DESC LIMIT $1")
+                    .bind(RECENT_STAKE_TABLES_LIMIT as i64),
+            )
+            .await?;
+
+        // reverse the rows vector to return the most recent epochs, but in ascending order
+        rows.into_iter()
+            .rev()
+            .map(|row| {
+                let epoch: i64 = row.try_get("epoch")?;
+                let drb_result: Option<Vec<u8>> = row.try_get("drb_result")?;
+                let block_header: Option<Vec<u8>> = row.try_get("block_header")?;
+                if let Some(drb_result) = drb_result {
+                    let drb_result_array = drb_result
+                        .try_into()
+                        .or_else(|_| bail!("invalid drb result"))?;
+                    let block_header: Option<<SeqTypes as NodeType>::BlockHeader> = block_header
+                        .map(|data| bincode::deserialize(&data))
+                        .transpose()?;
+                    Ok(Some(InitializerEpochInfo::<SeqTypes> {
+                        epoch: EpochNumber::new(epoch as u64),
+                        drb_result: drb_result_array,
+                        block_header,
+                    }))
+                } else {
+                    // Right now we skip the epoch_drb_and_root row if there is no drb result.
+                    // This seems reasonable based on the expected order of events, but please double check!
+                    Ok(None)
+                }
+            })
+            .filter_map(|e| match e {
+                Err(v) => Some(Err(v)),
+                Ok(Some(v)) => Some(Ok(v)),
+                Ok(None) => None,
+            })
+            .collect()
+    }
+
+    fn enable_metrics(&mut self, metrics: &dyn Metrics) {
+        self.internal_metrics = PersistenceMetricsValue::new(metrics);
+
+        if let Some(probe) = &self.probe {
+            probe.register(&*metrics.subgroup("disk".into()));
+        }
+    }
+}
+
+#[async_trait]
+impl StateCertPersistence for Persistence {
     async fn get_state_cert_by_epoch(
         &self,
         epoch: u64,
@@ -2542,57 +1827,6 @@ impl SequencerPersistence for Persistence {
         })
         .await
     }
-
-    async fn load_start_epoch_info(&self) -> anyhow::Result<Vec<InitializerEpochInfo<SeqTypes>>> {
-        let rows = self
-            .db
-            .read()
-            .await?
-            .fetch_all(
-                query("SELECT * from epoch_drb_and_root ORDER BY epoch DESC LIMIT $1")
-                    .bind(RECENT_STAKE_TABLES_LIMIT as i64),
-            )
-            .await?;
-
-        // reverse the rows vector to return the most recent epochs, but in ascending order
-        rows.into_iter()
-            .rev()
-            .map(|row| {
-                let epoch: i64 = row.try_get("epoch")?;
-                let drb_result: Option<Vec<u8>> = row.try_get("drb_result")?;
-                let block_header: Option<Vec<u8>> = row.try_get("block_header")?;
-                if let Some(drb_result) = drb_result {
-                    let drb_result_array = drb_result
-                        .try_into()
-                        .or_else(|_| bail!("invalid drb result"))?;
-                    let block_header: Option<<SeqTypes as NodeType>::BlockHeader> = block_header
-                        .map(|data| bincode::deserialize(&data))
-                        .transpose()?;
-                    Ok(Some(InitializerEpochInfo::<SeqTypes> {
-                        epoch: EpochNumber::new(epoch as u64),
-                        drb_result: drb_result_array,
-                        block_header,
-                    }))
-                } else {
-                    // Right now we skip the epoch_drb_and_root row if there is no drb result.
-                    // This seems reasonable based on the expected order of events, but please double check!
-                    Ok(None)
-                }
-            })
-            .filter_map(|e| match e {
-                Err(v) => Some(Err(v)),
-                Ok(Some(v)) => Some(Ok(v)),
-                Ok(None) => None,
-            })
-            .collect()
-    }
-
-    fn enable_metrics(&mut self, metrics: &dyn Metrics) {
-        self.internal_metrics = PersistenceMetricsValue::new(metrics);
-
-        #[cfg(feature = "embedded-db")]
-        self.probe.register(&*metrics.subgroup("disk".into()));
-    }
 }
 
 fn deserialize_authenticated_validator_map(
@@ -2603,8 +1837,9 @@ fn deserialize_authenticated_validator_map(
     }
 
     // Pre-Schnorr-Option: stake_table_key as Option<KEY>, state_ver_key as raw KEY.
-    if let Ok(pre_schnorr) =
-        bincode::deserialize::<IndexMap<Address, super::RegisteredValidatorPreSchnorrOption>>(bytes)
+    if let Ok(pre_schnorr) = bincode::deserialize::<
+        IndexMap<Address, crate::persistence::RegisteredValidatorPreSchnorrOption>,
+    >(bytes)
     {
         return pre_schnorr
             .into_iter()
@@ -2617,7 +1852,7 @@ fn deserialize_authenticated_validator_map(
     }
 
     // Pre-Option: both keys raw, with x25519/p2p fields.
-    let legacy: IndexMap<Address, super::RegisteredValidatorPreOption> =
+    let legacy: IndexMap<Address, crate::persistence::RegisteredValidatorPreOption> =
         bincode::deserialize(bytes).context("deserializing stake table")?;
     legacy
         .into_iter()
@@ -2964,15 +2199,14 @@ impl MembershipPersistence for Persistence {
     async fn delete_stake_tables(&self) -> anyhow::Result<()> {
         serializable_retry!(self, || async {
             let mut tx = self.db.write().await?;
-            #[cfg(not(feature = "embedded-db"))]
-            query(
-                "TRUNCATE stake_table_events, stake_table_events_l1_block, epoch_drb_and_root, \
-                 stake_table_validators",
-            )
-            .execute(tx.as_mut())
-            .await?;
-            #[cfg(feature = "embedded-db")]
-            {
+            if Db::KIND == DbKind::Postgres {
+                query(
+                    "TRUNCATE stake_table_events, stake_table_events_l1_block, \
+                     epoch_drb_and_root, stake_table_validators",
+                )
+                .execute(tx.as_mut())
+                .await?;
+            } else {
                 query("DELETE FROM stake_table_events")
                     .execute(tx.as_mut())
                     .await?;
@@ -3074,66 +2308,6 @@ impl MembershipPersistence for Persistence {
 }
 
 #[async_trait]
-impl DhtPersistentStorage for Persistence {
-    /// Save the DHT to the database
-    ///
-    /// # Errors
-    /// - If we fail to serialize the records
-    /// - If we fail to write the serialized records to the DB
-    async fn save(&self, records: Vec<SerializableRecord>) -> anyhow::Result<()> {
-        // Bincode-serialize the records
-        let to_save =
-            bincode::serialize(&records).with_context(|| "failed to serialize records")?;
-
-        // Prepare the statement
-        let stmt = "INSERT INTO libp2p_dht (id, serialized_records) VALUES (0, $1) ON CONFLICT \
-                    (id) DO UPDATE SET serialized_records = $1";
-
-        serializable_retry!(self, || async {
-            // Execute the query
-            let mut tx = self
-                .db
-                .write()
-                .await
-                .with_context(|| "failed to start an atomic DB transaction")?;
-            tx.execute(query(stmt).bind(to_save.clone()))
-                .await
-                .with_context(|| "failed to execute DB query")?;
-
-            // Commit the state
-            tx.commit().await.with_context(|| "failed to commit to DB")
-        })
-        .await
-    }
-
-    /// Load the DHT from the database
-    ///
-    /// # Errors
-    /// - If we fail to read from the DB
-    /// - If we fail to deserialize the records
-    async fn load(&self) -> anyhow::Result<Vec<SerializableRecord>> {
-        // Fetch the results from the DB
-        let result = self
-            .db
-            .read()
-            .await
-            .with_context(|| "failed to start a DB read transaction")?
-            .fetch_one("SELECT * FROM libp2p_dht where id = 0")
-            .await
-            .with_context(|| "failed to fetch from DB")?;
-
-        // Get the `serialized_records` row
-        let serialied_records: Vec<u8> = result.get("serialized_records");
-
-        // Deserialize it
-        let records: Vec<SerializableRecord> = bincode::deserialize(&serialied_records)
-            .with_context(|| "Failed to deserialize records")?;
-
-        Ok(records)
-    }
-}
-
-#[async_trait]
 impl Provider<SeqTypes, VidCommonRequest> for Persistence {
     #[tracing::instrument(skip(self))]
     async fn fetch(&self, req: VidCommonRequest) -> Option<VidCommon> {
@@ -3222,9 +2396,7 @@ impl Provider<SeqTypes, PayloadRequest> for Persistence {
 
 #[cfg(test)]
 mod testing {
-    use hotshot_query_service::data_source::storage::sql::testing::TmpDb;
-
-    use super::*;
+    use super::{super::qs::testing::TmpDb, *};
     use crate::persistence::tests::TestablePersistence;
 
     #[async_trait]
@@ -3237,33 +2409,18 @@ mod testing {
 
         #[allow(refining_impl_trait)]
         fn options(db: &Self::Storage) -> Options {
-            #[cfg(not(feature = "embedded-db"))]
-            {
-                PostgresOptions {
-                    port: Some(db.port()),
-                    host: Some(db.host()),
-                    user: Some("postgres".into()),
-                    password: Some("password".into()),
-                    ..Default::default()
-                }
-                .into()
-            }
-
-            #[cfg(feature = "embedded-db")]
-            {
-                SqliteOptions { path: db.path() }.into()
-            }
+            Options(super::super::tmp_options(db))
         }
     }
 }
 
 #[cfg(test)]
 mod test {
-    use espresso_types::{Leaf, NodeState, ValidatedState, traits::NullEventConsumer};
+    use std::time::Duration;
+
+    use espresso_types::{Leaf, NodeState, PubKey, ValidatedState, traits::NullEventConsumer};
     use futures::stream::TryStreamExt;
     use hotshot_example_types::node_types::TEST_VERSIONS;
-    #[cfg(feature = "embedded-db")]
-    use hotshot_query_service::metrics::PrometheusMetrics;
     use hotshot_types::{
         data::{
             EpochNumber, QuorumProposal2, ns_table::parse_ns_table,
@@ -3277,46 +2434,7 @@ mod test {
     };
 
     use super::*;
-    use crate::{BLSPubKey, PubKey, persistence::tests::TestablePersistence as _};
-
-    #[cfg(feature = "embedded-db")]
-    #[tokio::test]
-    async fn read_pragmas_falls_back_to_none_on_query_error() {
-        let pool = sqlx::sqlite::SqlitePoolOptions::new()
-            .connect(":memory:")
-            .await
-            .unwrap();
-        pool.close().await;
-
-        assert!(read_pragmas(&pool).await.is_none());
-    }
-
-    #[cfg(feature = "embedded-db")]
-    #[tokio::test]
-    async fn read_pragmas_reads_live_values() {
-        let pool = sqlx::sqlite::SqlitePoolOptions::new()
-            .connect(":memory:")
-            .await
-            .unwrap();
-
-        let pragmas = read_pragmas(&pool).await.expect("pragmas readable");
-
-        assert_eq!(pragmas.journal_mode, "memory");
-        assert_ne!(pragmas.synchronous, "unknown");
-        assert!(pragmas.page_size > 0);
-    }
-
-    #[cfg(feature = "embedded-db")]
-    #[test]
-    fn sqlite_probe_dir_falls_back_to_cwd_without_a_parent() {
-        // `SqliteOptions::default()`'s `path` is empty, whose `parent()` is `Some("")`, not `None`.
-        assert_eq!(sqlite_probe_dir(&PathBuf::new()), Path::new("."));
-        assert_eq!(sqlite_probe_dir(Path::new("database")), Path::new("."));
-        assert_eq!(
-            sqlite_probe_dir(Path::new("/var/lib/espresso/sqlite/database")),
-            Path::new("/var/lib/espresso/sqlite")
-        );
-    }
+    use crate::{BLSPubKey, persistence::tests::TestablePersistence as _};
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_quorum_proposals_leaf_hash_migration() {
@@ -3401,13 +2519,16 @@ mod test {
         }
     }
 
-    fn pre_option_validator(seed: u8, stake: u64) -> super::super::RegisteredValidatorPreOption {
+    fn pre_option_validator(
+        seed: u8,
+        stake: u64,
+    ) -> crate::persistence::RegisteredValidatorPreOption {
         use std::collections::HashMap;
 
         use alloy::primitives::U256;
         use hotshot_types::light_client::StateVerKey;
 
-        super::super::RegisteredValidatorPreOption {
+        crate::persistence::RegisteredValidatorPreOption {
             account: Address::random(),
             stake_table_key: BLSPubKey::generated_from_seed_indexed([seed; 32], 0).0,
             state_ver_key: StateVerKey::default(),
@@ -3423,9 +2544,9 @@ mod test {
     async fn insert_legacy_stake_row(
         persistence: &Persistence,
         epoch: i64,
-        validator: super::super::RegisteredValidatorPreOption,
+        validator: crate::persistence::RegisteredValidatorPreOption,
     ) {
-        let mut map: IndexMap<Address, super::super::RegisteredValidatorPreOption> =
+        let mut map: IndexMap<Address, crate::persistence::RegisteredValidatorPreOption> =
             IndexMap::new();
         map.insert(validator.account, validator);
         let stake_bytes = bincode::serialize(&map).unwrap();
@@ -3843,7 +2964,7 @@ mod test {
         // the target, because of the minimum retention.
         tracing::info!("decide view 1");
         storage
-            .append_decided_leaves(data_view + 1, [], None, &NullEventConsumer)
+            .append_decided_leaves(data_view + 1, [], &NullEventConsumer)
             .await
             .unwrap();
         assert_eq!(
@@ -3865,7 +2986,7 @@ mod test {
         // retention) so it gets pruned.
         tracing::info!("decide view 2");
         storage
-            .append_decided_leaves(data_view + 2, [], None, &NullEventConsumer)
+            .append_decided_leaves(data_view + 2, [], &NullEventConsumer)
             .await
             .unwrap();
         assert!(storage.load_vid_share(data_view).await.unwrap().is_none(),);
@@ -3900,6 +3021,7 @@ mod test {
             // Use a very high target retention, so that pruning is only triggered by the minimum
             // retention.
             target_retention: u64::MAX,
+            usage_check_interval: Duration::ZERO,
         })
         .await
     }
@@ -3914,6 +3036,7 @@ mod test {
             // Use a very high target usage, so that pruning is only triggered by the target
             // retention.
             target_usage: u64::MAX,
+            usage_check_interval: Duration::ZERO,
         })
         .await
     }
@@ -3970,7 +3093,7 @@ mod test {
 
         for view in [10, 5] {
             storage
-                .append_decided_leaves(ViewNumber::new(view), [], None, &NullEventConsumer)
+                .append_decided_leaves(ViewNumber::new(view), [], &NullEventConsumer)
                 .await
                 .unwrap();
         }
@@ -3978,199 +3101,5 @@ mod test {
             storage.load_processed_view().await.unwrap(),
             Some(ViewNumber::new(10))
         );
-    }
-
-    /// The probe is taken in `create()` and only reaches the exported registry through
-    /// `enable_metrics`, which `init_node` calls.
-    #[cfg(feature = "embedded-db")]
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_storage_probe_reaches_exported_registry() {
-        let tmp = Persistence::tmp_storage().await;
-        let mut persistence = Persistence::options(&tmp).create().await.unwrap();
-
-        // Dropping WAL from `sqlite_options()` should fail this assertion.
-        assert_eq!(
-            persistence
-                .probe
-                .pragmas
-                .as_ref()
-                .map(|pragmas| pragmas.journal_mode.as_str()),
-            Some("wal")
-        );
-
-        let metrics = PrometheusMetrics::default();
-        persistence.enable_metrics(&*Metrics::subgroup(&metrics, "consensus".to_string()));
-
-        let exported = metrics.export().unwrap();
-        assert!(exported.contains("consensus_disk_info"), "{exported}");
-        assert!(exported.contains("backend=\"sqlite\""), "{exported}");
-        assert!(
-            exported.contains("consensus_disk_fsync_micros"),
-            "{exported}"
-        );
-    }
-}
-
-#[cfg(test)]
-#[cfg(not(feature = "embedded-db"))]
-mod postgres_tests {
-    use espresso_types::{FeeAccount, Header, Leaf, NodeState, Transaction as Tx};
-    use hotshot_example_types::node_types::TEST_VERSIONS;
-    use hotshot_query_service::{
-        availability::{BlockQueryData, LeafQueryData},
-        data_source::storage::UpdateAvailabilityStorage,
-    };
-    use hotshot_types::{
-        data::vid_commitment,
-        simple_certificate::QuorumCertificate,
-        traits::{
-            EncodeBytes,
-            block_contents::{BlockHeader, BuilderFee, GENESIS_VID_NUM_STORAGE_NODES},
-            election::Membership,
-            signature_key::BuilderSignatureKey,
-        },
-    };
-
-    use super::*;
-    use crate::persistence::tests::TestablePersistence as _;
-
-    async fn test_postgres_read_ns_table(instance_state: NodeState) {
-        instance_state
-            .coordinator
-            .membership()
-            .set_first_epoch(EpochNumber::genesis(), Default::default());
-
-        let tmp = Persistence::tmp_storage().await;
-        let mut opt = Persistence::options(&tmp);
-        let storage = opt.create().await.unwrap();
-
-        let txs = [
-            Tx::new(10001u32.into(), vec![1, 2, 3]),
-            Tx::new(10001u32.into(), vec![4, 5, 6]),
-            Tx::new(10009u32.into(), vec![7, 8, 9]),
-        ];
-
-        let validated_state = Default::default();
-        let justify_qc =
-            QuorumCertificate::genesis(&validated_state, &instance_state, TEST_VERSIONS.test).await;
-        let view_number: ViewNumber = justify_qc.view_number + 1;
-        let parent_leaf = Leaf::genesis(&validated_state, &instance_state, TEST_VERSIONS.test.base)
-            .await
-            .into();
-
-        let (payload, ns_table) =
-            Payload::from_transactions(txs.clone(), &validated_state, &instance_state)
-                .await
-                .unwrap();
-        let payload_bytes = payload.encode();
-        let payload_commitment = vid_commitment(
-            &payload_bytes,
-            &ns_table.encode(),
-            GENESIS_VID_NUM_STORAGE_NODES,
-            instance_state.current_version,
-        );
-        let builder_commitment = payload.builder_commitment(&ns_table);
-        let (fee_account, fee_key) = FeeAccount::generated_from_seed_indexed([0; 32], 0);
-        let fee_amount = 0;
-        let fee_signature = FeeAccount::sign_fee(&fee_key, fee_amount, &ns_table).unwrap();
-        let block_header = Header::new(
-            &validated_state,
-            &instance_state,
-            &parent_leaf,
-            payload_commitment,
-            builder_commitment,
-            ns_table,
-            BuilderFee {
-                fee_amount,
-                fee_account,
-                fee_signature,
-            },
-            instance_state.current_version,
-            view_number.u64(),
-        )
-        .await
-        .unwrap();
-        let proposal = QuorumProposal {
-            block_header: block_header.clone(),
-            view_number,
-            justify_qc: justify_qc.clone(),
-            upgrade_certificate: None,
-            proposal_certificate: None,
-        };
-        let leaf: Leaf2 = Leaf::from_quorum_proposal(&proposal).into();
-        let mut qc = justify_qc.to_qc2();
-        qc.data.leaf_commit = leaf.commit();
-        qc.view_number = view_number;
-
-        let mut tx = storage.db.write().await.unwrap();
-        tx.insert_leaf(&LeafQueryData::new(leaf, qc).unwrap())
-            .await
-            .unwrap();
-        tx.insert_block(&BlockQueryData::<SeqTypes>::new(block_header, payload))
-            .await
-            .unwrap();
-        tx.commit().await.unwrap();
-
-        let mut tx = storage.db.read().await.unwrap();
-        let rows = query(
-            "
-            SELECT ns_id, read_ns_id(get_ns_table(h.data), t.ns_index) AS read_ns_id
-              FROM header AS h
-              JOIN transactions AS t ON t.block_height = h.height
-              ORDER BY t.ns_index, t.position
-        ",
-        )
-        .fetch_all(tx.as_mut())
-        .await
-        .unwrap();
-        assert_eq!(rows.len(), txs.len());
-        for (i, row) in rows.into_iter().enumerate() {
-            let ns = u64::from(txs[i].namespace()) as i64;
-            assert_eq!(row.get::<i64, _>("ns_id"), ns);
-            assert_eq!(row.get::<i64, _>("read_ns_id"), ns);
-        }
-    }
-
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_postgres_read_ns_table_v0_1() {
-        test_postgres_read_ns_table(NodeState::mock()).await;
-    }
-
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_postgres_read_ns_table_v0_2() {
-        test_postgres_read_ns_table(NodeState::mock_v2()).await;
-    }
-
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_postgres_read_ns_table_v0_3() {
-        test_postgres_read_ns_table(NodeState::mock_v3().with_epoch_height(0)).await;
-    }
-
-    /// Verify that concurrent calls to `record_action` all succeed under
-    /// PostgreSQL SERIALIZABLE isolation. `self.serializable_backoff.retry_if` handles any
-    /// 40001 serialization failures that arise when many tasks race to update
-    /// the same row.
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_record_action_concurrent() {
-        let tmp = Persistence::tmp_storage().await;
-        let storage = Arc::new(Persistence::connect(&tmp).await);
-
-        let handles: Vec<_> = (0u64..20)
-            .map(|i| {
-                let storage = Arc::clone(&storage);
-                tokio::spawn(async move {
-                    storage
-                        .record_action(ViewNumber::new(i), None, HotShotAction::Vote)
-                        .await
-                })
-            })
-            .collect();
-
-        for handle in handles {
-            handle.await.unwrap().unwrap();
-        }
-
-        let latest = storage.load_latest_acted_view().await.unwrap();
-        assert_eq!(latest, Some(ViewNumber::new(19)));
     }
 }

@@ -27,6 +27,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
+          filter: blob:none
 
       - uses: dtolnay/rust-toolchain@master
         with:
@@ -160,7 +161,9 @@ jobs:
             git push origin "$branch"
             gh pr ready "$pr"
             if [ -f "claude-summaries/$pr.md" ]; then
-              gh pr comment "$pr" --body-file "claude-summaries/$pr.md"
+              # Fixed first line: a model-written body must not start with the claude-gh trust marker.
+              { printf '### Conflict resolution summary\n\n'; cat "claude-summaries/$pr.md"; } \
+                | gh pr comment "$pr" --body-file -
             else
               gh pr comment "$pr" --body "⚠️ No resolution summary was produced for this backport. Claude may not have completed the resolution as expected; please review carefully." || true
             fi

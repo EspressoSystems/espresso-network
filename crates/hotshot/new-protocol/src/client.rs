@@ -13,7 +13,9 @@ use hotshot_types::{
 };
 use tokio::sync::{mpsc, oneshot};
 
-use crate::{coordinator::error::CoordinatorError, message::Proposal, state::UpdateLeaf};
+use crate::{
+    block::SubmitError, coordinator::error::CoordinatorError, message::Proposal, state::UpdateLeaf,
+};
 
 #[derive(Clone)]
 pub struct ClientApi<T: NodeType> {
@@ -76,7 +78,8 @@ impl<T: NodeType> ClientApi<T> {
     pub async fn submit_transaction(&self, tx: T::Transaction) -> Result<(), QueryError> {
         let (respond, rx) = oneshot::channel();
         self.call(ClientRequest::SubmitTransaction { tx, respond }, rx)
-            .await
+            .await?
+            .map_err(QueryError::from)
     }
 
     pub async fn request_proposal(
@@ -210,7 +213,7 @@ pub(crate) enum ClientRequest<T: NodeType> {
     },
     SubmitTransaction {
         tx: T::Transaction,
-        respond: oneshot::Sender<()>,
+        respond: oneshot::Sender<Result<(), SubmitError>>,
     },
     RequestProposal {
         view: ViewNumber,
@@ -235,6 +238,9 @@ pub enum QueryError {
 
     #[error("coordinator error: {0}")]
     Coordinator(#[from] CoordinatorError),
+
+    #[error("transaction rejected: {0}")]
+    Rejected(#[from] SubmitError),
 }
 
 /// `LeafFetcherNetwork` impl that routes catchup direct-messages through

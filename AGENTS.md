@@ -3,15 +3,11 @@
 Espresso Network is a confirmation layer for Ethereum rollups. `crates/espresso/` is the application, `crates/hotshot/`
 the generic BFT consensus library it is built on, `contracts/` the Solidity L1 side.
 
-## Commands
-
-- Every `cargo` command needs `-p <package>`; a full workspace build OOMs.
-- `cargo test -p espresso-types reference` after changing any serializable type.
-- `just lint` runs clippy with `-D warnings`. `just --list` for the rest.
-
 ## Where to look
 
-- `doc/agents/rust.md` - before writing Rust: commands, conventions, storage, tests, adding an API endpoint
+- `doc/agents/rust.md` - before running cargo or writing Rust: commands, conventions, storage, tests, adding an API
+  endpoint
+- `doc/agents/refinery-migrations.md` - before writing a SQL migration that touches existing rows
 - `doc/agents/solidity.md` - before touching `contracts/`
 - `API.md` - the v1 and v2 APIs, and how to add a v2 endpoint
 - `doc/agents/architecture.md` - transaction and block flow, L1 reads, stake table, consensus upgrades
@@ -22,6 +18,7 @@ the generic BFT consensus library it is built on, `contracts/` the Solidity L1 s
 - `doc/upgrades.md` - configuring and running a consensus upgrade
 - `doc/software-releases.md` - release branches, `MAJOR.MINOR.PHASE.PATCH` tags, the tracker issue and its commands
 - `doc/espresso-dev-node.md` - single-process dev node, for rollup integration work
+- `doc/light-client-follower.md` - a query node without stake that follows the chain through the light client
 - `doc/pup.md` - `pup` Datadog CLI, for logs and metrics of Espresso's own infrastructure
 
 ## Writing Reviewable Code
@@ -52,4 +49,4 @@ Reviewing is the bottleneck. Default to changes that minimize reviewer time.
 
 - `justfile` - build/test/deploy commands
 - `data/genesis/*.toml` - genesis configs, including the protocol version each network runs
-- `data/v1/` .. `data/v6/` - reference serialization test vectors
+- `data/v*/` - reference serialization test vectors

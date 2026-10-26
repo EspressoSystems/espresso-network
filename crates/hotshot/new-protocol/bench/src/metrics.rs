@@ -79,7 +79,7 @@ impl MetricsCollector {
                 self.view_mut(v).state_validated_ns = Some(ts);
             },
             // Both: phase 1 completion + reconstruction
-            ConsensusInput::BlockReconstructed(view, _) => {
+            ConsensusInput::BlockReconstructed { view, .. } => {
                 let v = **view;
                 self.view_mut(v).block_reconstructed_ns = Some(ts);
             },

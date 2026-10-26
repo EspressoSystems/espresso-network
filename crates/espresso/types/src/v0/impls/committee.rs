@@ -2217,7 +2217,7 @@ mod tests {
     async fn build_epoch_root_header() -> Header {
         let instance = NodeState::mock_v2();
         let tx = Transaction::of_size(10);
-        let (payload, _) = Payload::from_transactions([tx], &instance.genesis_state, &instance)
+        let (payload, _) = Payload::from_transactions(&[tx], &instance.genesis_state, &instance)
             .await
             .expect("payload");
         let metadata = payload.ns_table().clone();

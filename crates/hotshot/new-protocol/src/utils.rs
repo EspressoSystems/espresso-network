@@ -133,7 +133,6 @@ mod test {
     use alloy::primitives::U256;
     use bitvec::vec::BitVec;
     use committable::Commitment;
-    use hotshot::types::{BLSPubKey, SchnorrPubKey};
     use hotshot_example_types::{
         block_types::{TestBlockHeader, TestMetadata},
         membership::{
@@ -146,6 +145,7 @@ mod test {
     use hotshot_types::{
         PeerConfig,
         data::{QuorumProposal2, QuorumProposalWrapper, VidCommitment},
+        signature_key::{BLSPubKey, SchnorrPubKey},
         simple_certificate::QuorumCertificate2,
         simple_vote::{QuorumData2, VersionedVoteData, Vote2Data},
         stake_table::{StakeTableEntry, supermajority_threshold},
@@ -332,10 +332,28 @@ mod test {
         epoch_quorum: &Quorum,
         upgrade_lock: &UpgradeLock<TestTypes>,
     ) -> Vec<Leaf2<TestTypes>> {
+        legacy_3_chain(
+            first_height,
+            epoch,
+            Some(EpochNumber::new(epoch)),
+            epoch_quorum,
+            upgrade_lock,
+        )
+    }
+
+    /// Like [`same_epoch_3_chain`], but every QC claims `qc_epoch`, as the QCs formed before
+    /// epochs were enabled claim none.
+    fn legacy_3_chain(
+        first_height: u64,
+        epoch: u64,
+        qc_epoch: Option<EpochNumber>,
+        epoch_quorum: &Quorum,
+        upgrade_lock: &UpgradeLock<TestTypes>,
+    ) -> Vec<Leaf2<TestTypes>> {
         let parent_qc = signed_qc(
             QuorumData2 {
                 leaf_commit: Commitment::from_raw([9; 32]),
-                epoch: Some(EpochNumber::new(epoch)),
+                epoch: qc_epoch,
                 block_number: Some(first_height - 1),
             },
             first_height - 1,
@@ -353,7 +371,7 @@ mod test {
             let qc = signed_qc(
                 QuorumData2 {
                     leaf_commit: Committable::commit(chain.last().unwrap()),
-                    epoch: Some(EpochNumber::new(epoch)),
+                    epoch: qc_epoch,
                     block_number: Some(height - 1),
                 },
                 height - 1,
@@ -436,6 +454,56 @@ mod test {
             err.to_string().contains("no stake table available"),
             "{err:#}"
         );
+    }
+
+    /// QCs formed before epochs were enabled claim no epoch. Up to the first epoch they are
+    /// verified against the genesis stake table, which the first epoch runs on as well.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_verify_leaf_chain_accepts_pre_epoch_qcs() {
+        let quorum1 = quorum(0..5);
+        let quorum2 = quorum(5..10);
+        let upgrade_lock = UpgradeLock::<TestTypes>::new(Upgrade::trivial(EPOCH_VERSION));
+
+        let chain = legacy_3_chain(3, 1, None, &quorum1, &upgrade_lock);
+        let expected = Committable::commit(&chain[0]);
+
+        let coordinator = coordinator(&quorum1, &quorum2);
+        let leaf = verify_leaf_chain(chain, &coordinator, 3, &upgrade_lock)
+            .await
+            .unwrap();
+        assert_eq!(Committable::commit(&leaf), expected);
+    }
+
+    /// A QC claiming no epoch is still checked against the genesis quorum's signatures.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_verify_leaf_chain_pre_epoch_qc_wrong_quorum() {
+        let quorum1 = quorum(0..5);
+        let quorum2 = quorum(5..10);
+        let upgrade_lock = UpgradeLock::<TestTypes>::new(Upgrade::trivial(EPOCH_VERSION));
+
+        let chain = legacy_3_chain(3, 1, None, &quorum2, &upgrade_lock);
+
+        let coordinator = coordinator(&quorum1, &quorum2);
+        verify_leaf_chain(chain, &coordinator, 3, &upgrade_lock)
+            .await
+            .unwrap_err();
+    }
+
+    /// Past the first epoch every QC must claim its epoch: a QC claiming none, genuinely
+    /// signed by the genesis quorum, must not certify a height the epoch 2 quorum owns.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_verify_leaf_chain_rejects_pre_epoch_qcs_after_first_epoch() {
+        let quorum1 = quorum(0..5);
+        let quorum2 = quorum(5..10);
+        let upgrade_lock = UpgradeLock::<TestTypes>::new(Upgrade::trivial(EPOCH_VERSION));
+
+        let chain = legacy_3_chain(13, 2, None, &quorum1, &upgrade_lock);
+
+        let coordinator = coordinator(&quorum1, &quorum2);
+        let err = verify_leaf_chain(chain, &coordinator, 13, &upgrade_lock)
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("claims no epoch"), "{err:#}");
     }
 
     /// A new-protocol leaf range deciding the last block of `epoch`, finalized by a cert2 on

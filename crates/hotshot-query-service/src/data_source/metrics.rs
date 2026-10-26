@@ -31,30 +31,15 @@ use crate::{
 /// Since all the state required by [`MetricsDataSource`] is updated automatically by HotShot, there
 /// is no need to spawn an update loop to update the data source with new events, as is required
 /// with full archival data sources like [`SqlDataSource`](super::SqlDataSource). Instead,
-/// [`MetricsDataSource`] will be populated with useful data as long as its
-/// [`populate_metrics`](crate::status::UpdateStatusData::populate_metrics) is used to initialize
-/// HotShot:
+/// [`MetricsDataSource`] will be populated with useful data as long as consensus records its
+/// metrics through [`populate_metrics`](crate::status::UpdateStatusData::populate_metrics):
 ///
 /// ```
-/// # use hotshot::SystemContext;
-/// # use hotshot_query_service::{
-/// #   data_source::MetricsDataSource,
-/// #   status::UpdateStatusData,
-/// #   testing::mocks::{MockNodeImpl as AppNodeImpl, MockTypes as AppTypes, MockVersions as AppVersions},
-/// #   Error,
-/// # };
+/// # use hotshot_query_service::{data_source::MetricsDataSource, status::UpdateStatusData};
 /// # use hotshot_types::consensus::ConsensusMetricsValue;
-/// # use hotshot_example_types::node_types::TestVersions;
-/// # async fn doc() -> Result<(), hotshot_query_service::Error> {
 /// let data_source = MetricsDataSource::default();
-/// let hotshot = SystemContext::<AppTypes, AppNodeImpl, AppVersions>::init(
-/// #   panic!(), panic!(), panic!(), panic!(), panic!(), panic!(), panic!(),
-///     ConsensusMetricsValue::new(&*data_source.populate_metrics()), panic!(),
-///     panic!(),
-///     // Other fields omitted
-/// ).await.map_err(Error::internal)?.0;
-/// # Ok(())
-/// # }
+/// // Give consensus these metrics when creating it.
+/// let consensus_metrics = ConsensusMetricsValue::new(&*data_source.populate_metrics());
 /// ```
 #[derive(Clone, Debug, Default)]
 pub struct MetricsDataSource {
@@ -83,7 +68,7 @@ impl StatusDataSource for MetricsDataSource {
 
 #[cfg(any(test, feature = "testing"))]
 mod impl_testable_data_source {
-    use hotshot::types::Event;
+    use hotshot_types::new_protocol::CoordinatorEvent;
 
     use super::*;
     use crate::{
@@ -116,7 +101,7 @@ mod impl_testable_data_source {
             }
         }
 
-        async fn handle_event(&self, _event: &Event<MockTypes>) {}
+        async fn handle_event(&self, _event: &CoordinatorEvent<MockTypes>) {}
     }
 }
 

@@ -47,8 +47,8 @@ jobs:
       - name: Check formatting
         run: just fmt && git diff --exit-code
 
-  clippy-postgres:
-    name: clippy (postgres)
+  clippy:
+    name: clippy
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -64,24 +64,8 @@ jobs:
 
       - name: Run clippy
         run: |
-          cargo clippy --workspace --exclude espresso-node-sqlite --exclude espresso-dev-node --features testing --all-targets --keep-going -- -D warnings
-
-  clippy-embedded:
-    name: clippy (embedded-db)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-
-      - name: Install protoc
-        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          save-if: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release-') }}
-
-      - name: Run clippy
-        run: |
-          cargo clippy --workspace --features "embedded-db testing" --all-targets --keep-going -- -D warnings
+          cargo clippy --workspace --features testing --all-targets --keep-going -- -D warnings
+          cargo clippy -p slow-tests --features sqlite --all-targets --keep-going -- -D warnings
 
   python:
     name: python
@@ -94,8 +78,56 @@ jobs:
       # alerts on, and no workflow ran their tests. `py::lint` and `py::check` still do not run
       # here: both need a tool installed, and nextest-ci has lint violations that belong in
       # their own change.
+      - uses: astral-sh/setup-uv@v10.3.2
+        with:
+          python-version: "3.14"
+
       - name: Run the script tests
         run: just py::test
+
+  claude-gh:
+    name: claude-gh
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: taiki-e/install-action@just
+      - uses: astral-sh/setup-uv@v10.3.2
+        with:
+          python-version: "3.14"
+
+      - name: Lint, type-check and test claude-gh
+        run: |
+          just claude::fmt --check
+          just claude::lint
+          just claude::check
+          just claude::test
+
+  protos:
+    name: protos
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # The compatibility check diffs against the merge base with the PR's base branch.
+          fetch-depth: 0
+          filter: blob:none
+      # Pinned by commit: a third-party action's tag can be moved.
+      - uses: bufbuild/buf-action@85aebf73123b5c15fd5528aaecbf9129cddf7fa7 # v1.6.0
+        with:
+          # Keep in step with the `buf` the nix dev shell provides, so `buf format` agrees
+          # locally and in CI.
+          version: 1.72.0
+          setup_only: true
+      - uses: taiki-e/install-action@just
+
+      # A changed proto must keep the wire and protoJSON encoding of what it replaces.
+      - name: Check the v2 protos' formatting and backward compatibility
+        env:
+          BASE: origin/${{ github.base_ref }}
+        run: just proto-check "$BASE"
 
   allocator-patches:
     name: allocator patches

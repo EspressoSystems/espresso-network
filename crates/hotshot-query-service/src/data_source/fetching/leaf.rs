@@ -216,7 +216,7 @@ pub(super) fn trigger_fetch_for_parent<Types, S, P>(
                 },
             }
 
-            tracing::info!(height, "received new leaf; fetching missing parent");
+            tracing::debug!(height, "received new leaf; fetching missing parent");
             fetcher.leaf_fetcher.clone().spawn_fetch(
                 request::LeafRequest::new(height - 1),
                 fetcher.provider.clone(),
@@ -341,7 +341,7 @@ where
     async fn run(self, leaf: LeafQueryData<Types>) {
         match self {
             Self::Leaf { fetcher } => {
-                tracing::info!("fetched leaf {}", leaf.height());
+                tracing::debug!("fetched leaf {}", leaf.height());
                 // Trigger a fetch of the parent leaf, if we don't already have it.
                 trigger_fetch_for_parent(&fetcher, &leaf);
                 fetcher.store_and_notify(&leaf).await;

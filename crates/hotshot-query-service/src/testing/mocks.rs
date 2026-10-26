@@ -10,15 +10,13 @@
 // You should have received a copy of the GNU General Public License along with this program. If not,
 // see <https://www.gnu.org/licenses/>.
 
-use hotshot::traits::{NodeImplementation, implementations::MemoryNetwork};
 use hotshot_example_types::{
     block_types::{TestBlockHeader, TestBlockPayload, TestMetadata, TestTransaction},
     membership::{static_committee::StaticStakeTable, strict_membership::StrictMembership},
     state_types::{TestInstanceState, TestValidatedState},
-    storage_types::TestStorage,
 };
 use hotshot_types::{
-    data::{QuorumProposal, VidCommitment, VidCommon},
+    data::{VidCommitment, VidCommon},
     signature_key::{BLSPubKey, SchnorrPubKey},
     traits::node_implementation::NodeType,
 };
@@ -28,7 +26,6 @@ use jf_merkle_tree_compat::{
     universal_merkle_tree::UniversalMerkleTree,
 };
 use serde::{Deserialize, Serialize};
-use vbs::version::StaticVersion;
 use versions::{Upgrade, version};
 
 use crate::{
@@ -173,24 +170,6 @@ impl NodeType for MockTypes {
 }
 
 pub const MOCK_UPGRADE: Upgrade = Upgrade::new(version(0, 1), version(0, 2));
-
-pub type MockBase = StaticVersion<0, 1>;
-
-pub type MockMembership = StrictMembership<MockTypes, StaticStakeTable<BLSPubKey, SchnorrPubKey>>;
-pub type MockQuorumProposal = QuorumProposal<MockTypes>;
-pub type MockNetwork = MemoryNetwork<BLSPubKey>;
-
-pub type MockStorage = TestStorage<MockTypes>;
-
-#[derive(
-    Copy, Clone, Debug, Default, Hash, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize,
-)]
-pub struct MockNodeImpl;
-
-impl NodeImplementation<MockTypes> for MockNodeImpl {
-    type Network = MockNetwork;
-    type Storage = MockStorage;
-}
 
 pub type MockMerkleTree = UniversalMerkleTree<usize, Sha3Digest, usize, 8, Sha3Node>;
 

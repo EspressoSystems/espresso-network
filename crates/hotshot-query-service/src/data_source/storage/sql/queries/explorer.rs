@@ -586,13 +586,18 @@ where
             );
             let row = query(block_query.as_str())
                 .bind(&search_query_string)
-                .fetch_one(self.as_mut())
+                .fetch_optional(self.as_mut())
                 .await?;
 
-            let block = BlockSummary::from_row(&row)?;
+            // An unknown hash is an empty result, as in the transaction search.
+            let blocks = row
+                .map(|row| BlockSummary::from_row(&row))
+                .transpose()?
+                .into_iter()
+                .collect();
 
             Ok(SearchResult {
-                blocks: vec![block],
+                blocks,
                 transactions: Vec::new(),
             })
         } else {

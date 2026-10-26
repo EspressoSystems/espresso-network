@@ -3,9 +3,9 @@
 //! The other tests here fix a delivery order and assert an outcome. This one
 //! fixes neither: it feeds one node a seeded random permutation of well-formed
 //! inputs and asserts nothing about what the node does. What checks the run is
-//! the recorded trace, replayed against the Lean reference machine — every
-//! action the node took must be one the machine could have taken from the same
-//! inputs, which is the whole of conformance.
+//! the recorded trace, checked against the Lean specification: every action the
+//! node took must be one the rules permit after the same inputs, and every
+//! action they oblige it to take it must take in time.
 //!
 //! The randomness is in the *schedule*, not in the bytes. Consensus consumes
 //! values the verification layer has already accepted (`ValidCert`, a validated
@@ -19,9 +19,8 @@
 //! They would each turn a trace into `out-of-scope`, which is neither evidence
 //! of conformance nor of its absence.
 
-use hotshot::types::BLSPubKey;
 use hotshot_example_types::node_types::TestTypes;
-use hotshot_types::traits::signature_key::SignatureKey;
+use hotshot_types::{signature_key::BLSPubKey, traits::signature_key::SignatureKey};
 use rand::{Rng, SeedableRng, rngs::StdRng, seq::SliceRandom};
 
 use crate::{
@@ -114,6 +113,9 @@ async fn run_seed(seed: u64) -> Reached {
             2 => harness.apply(v.cert1_input()).await,
             3 => harness.apply(v.cert2_input()).await,
             4 => harness.apply(v.timeout_cert_input()).await,
+            // A timer is armed only for a view the node has entered, so one for a
+            // later view cannot fire. One for an earlier view can: it is a late fire.
+            _ if v.view_number > harness.consensus.current_view() => {},
             _ => harness.apply(ConsensusInput::Timeout(v.view_number)).await,
         }
     }

@@ -45,6 +45,45 @@ pub struct ResponseMessage<R: Request> {
     pub response: R::Response,
 }
 
+/// The type byte that prefixes a serialized [`Message::Request`]
+const REQUEST_TAG: u8 = 0;
+/// The type byte that prefixes a serialized [`Message::Response`]
+const RESPONSE_TAG: u8 = 1;
+
+/// A serialized [`Message`] with only its framing parsed: the type byte, and for a response the
+/// request hash. The receiver uses it to route a response to its waiters, or drop it, without
+/// deserializing the body
+#[derive(Clone, Copy, Debug)]
+pub enum MessageFrame<'a> {
+    /// A request. `body` is a serialized [`RequestMessage`]
+    Request { body: &'a [u8] },
+    /// A response to the request with `request_hash`. `body` is a serialized response
+    Response {
+        request_hash: RequestHash,
+        body: &'a [u8],
+    },
+}
+
+impl<'a> MessageFrame<'a> {
+    /// Parse the framing of a serialized [`Message`]
+    ///
+    /// # Errors
+    /// - If the message is empty or has an unknown type byte
+    /// - If a response is too short to hold a request hash
+    pub fn parse(bytes: &'a [u8]) -> Result<Self> {
+        let (&type_byte, body) = bytes.split_first().context("empty message")?;
+
+        match type_byte {
+            REQUEST_TAG => Ok(Self::Request { body }),
+            RESPONSE_TAG => {
+                let (request_hash, body) = split_request_hash(body)?;
+                Ok(Self::Response { request_hash, body })
+            },
+            _ => Err(anyhow::anyhow!("invalid message type")),
+        }
+    }
+}
+
 impl<R: Request, K: SignatureKey> RequestMessage<R, K> {
     /// Create a new signed request message from a request
     ///
@@ -138,14 +177,14 @@ impl<R: Request, K: SignatureKey> Serializable for Message<R, K> {
         match self {
             Message::Request(request_message) => {
                 // Write the type (request)
-                bytes.push(0);
+                bytes.push(REQUEST_TAG);
 
                 // Write the request content
                 bytes.extend_from_slice(request_message.to_bytes()?.as_slice());
             },
             Message::Response(response_message) => {
                 // Write the type (response)
-                bytes.push(1);
+                bytes.push(RESPONSE_TAG);
 
                 // Write the response content
                 bytes.extend_from_slice(response_message.to_bytes()?.as_slice());
@@ -157,28 +196,13 @@ impl<R: Request, K: SignatureKey> Serializable for Message<R, K> {
 
     /// Convert bytes to a [`Message`]
     fn from_bytes(bytes: &[u8]) -> Result<Self> {
-        // Create a cursor so we can easily read the bytes in order
-        let mut bytes = Cursor::new(bytes);
-
-        // Get the message type
-        let type_byte = bytes.read_u8()?;
-
-        // Deserialize the message based on the type
-        match type_byte {
-            0 => {
-                // Read the `RequestMessage`
-                Ok(Message::Request(RequestMessage::from_bytes(&read_to_end(
-                    &mut bytes,
-                )?)?))
-            },
-            1 => {
-                // Read the `ResponseMessage`
-                Ok(Message::Response(ResponseMessage::from_bytes(
-                    &read_to_end(&mut bytes)?,
-                )?))
-            },
-            _ => Err(anyhow::anyhow!("invalid message type")),
-        }
+        Ok(match MessageFrame::parse(bytes)? {
+            MessageFrame::Request { body } => Message::Request(RequestMessage::from_bytes(body)?),
+            MessageFrame::Response { request_hash, body } => Message::Response(ResponseMessage {
+                request_hash,
+                response: R::Response::from_bytes(body)?,
+            }),
+        })
     }
 }
 
@@ -242,22 +266,21 @@ impl<R: Request> Serializable for ResponseMessage<R> {
     }
 
     fn from_bytes(bytes: &[u8]) -> Result<Self> {
-        // Create a buffer for the bytes
-        let mut bytes = Cursor::new(bytes);
-
-        // Read the request hash as a [`blake3::Hash`]
-        let mut request_hash_bytes = [0; 32];
-        bytes.read_exact(&mut request_hash_bytes)?;
-        let request_hash = RequestHash::from(request_hash_bytes);
-
-        // Read the response content to the end
-        let response = R::Response::from_bytes(&read_to_end(&mut bytes)?)?;
-
+        let (request_hash, body) = split_request_hash(bytes)?;
         Ok(Self {
             request_hash,
-            response,
+            response: R::Response::from_bytes(body)?,
         })
     }
+}
+
+/// Split the request hash prefix off a serialized [`ResponseMessage`]
+fn split_request_hash(bytes: &[u8]) -> Result<(RequestHash, &[u8])> {
+    let (hash, body) = bytes
+        .split_at_checked(blake3::OUT_LEN)
+        .context("response message is shorter than a request hash")?;
+    let hash: [u8; blake3::OUT_LEN] = hash.try_into()?;
+    Ok((RequestHash::from(hash), body))
 }
 
 /// A helper function to write a length-prefixed value to a writer
@@ -412,7 +435,32 @@ mod tests {
 
             // Assert that the deserialized message is the same as the original message
             assert_eq!(message, deserialized);
+
+            // The frame alone must agree with the full deserialization
+            let frame = MessageFrame::parse(&serialized).expect("Failed to parse frame");
+            match (&message, frame) {
+                (Message::Request(_), MessageFrame::Request { .. }) => {},
+                (Message::Response(response), MessageFrame::Response { request_hash, .. }) => {
+                    assert_eq!(request_hash, response.request_hash);
+                },
+                (message, frame) => panic!("frame {frame:?} does not match {message:?}"),
+            }
         }
+    }
+
+    /// Tests that malformed framing is rejected before any body would be deserialized
+    #[test]
+    fn test_frame_rejects_malformed_messages() {
+        assert!(MessageFrame::parse(&[]).is_err(), "empty message");
+        assert!(MessageFrame::parse(&[2]).is_err(), "unknown type byte");
+        assert!(
+            MessageFrame::parse(&[RESPONSE_TAG; 20]).is_err(),
+            "response shorter than a hash"
+        );
+        assert!(matches!(
+            MessageFrame::parse(&[REQUEST_TAG]),
+            Ok(MessageFrame::Request { body: &[] })
+        ));
     }
 
     /// Tests that length-prefixed values are read and written correctly

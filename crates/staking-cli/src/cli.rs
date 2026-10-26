@@ -488,7 +488,7 @@ pub async fn run(migrated_envs: Vec<(&str, &str)>) -> Result<()> {
     // Commands that just read from chain
     if let Commands::Account = config.commands {
         let account = NetworkWallet::<Ethereum>::default_signer_address(
-            wallet.as_ref().ok_or_else(&require_wallet)?,
+            wallet.as_ref().ok_or_else(require_wallet)?,
         );
         println!("{account}");
         return Ok(());
@@ -747,7 +747,7 @@ pub async fn run(migrated_envs: Vec<(&str, &str)>) -> Result<()> {
                 );
             }
             if !config.export_calldata {
-                wallet.as_ref().ok_or_else(&require_wallet)?;
+                wallet.as_ref().ok_or_else(require_wallet)?;
             }
             let payload = resolve_node_signatures(
                 signature_args,
@@ -791,7 +791,7 @@ pub async fn run(migrated_envs: Vec<(&str, &str)>) -> Result<()> {
                 );
             }
             if !config.export_calldata {
-                let w = wallet.as_ref().ok_or_else(&require_wallet)?;
+                let w = wallet.as_ref().ok_or_else(require_wallet)?;
                 let addr = NetworkWallet::<Ethereum>::default_signer_address(w);
                 tracing::info!("Updating validator {} with new keys", addr);
             }
@@ -847,7 +847,7 @@ pub async fn run(migrated_envs: Vec<(&str, &str)>) -> Result<()> {
             skip_reachability_check,
         } => {
             if !config.export_calldata {
-                wallet.as_ref().ok_or_else(&require_wallet)?;
+                wallet.as_ref().ok_or_else(require_wallet)?;
             }
             if !skip_reachability_check {
                 check_if_reachable(p2p_addr).await;
@@ -865,7 +865,7 @@ pub async fn run(migrated_envs: Vec<(&str, &str)>) -> Result<()> {
             espresso_key_args,
         } => {
             if !config.export_calldata {
-                wallet.as_ref().ok_or_else(&require_wallet)?;
+                wallet.as_ref().ok_or_else(require_wallet)?;
             }
             Transaction::UpdateX25519Key {
                 stake_table: stake_table_addr,
@@ -879,7 +879,7 @@ pub async fn run(migrated_envs: Vec<(&str, &str)>) -> Result<()> {
             skip_reachability_check,
         } => {
             if !config.export_calldata {
-                wallet.as_ref().ok_or_else(&require_wallet)?;
+                wallet.as_ref().ok_or_else(require_wallet)?;
             }
             if !skip_reachability_check {
                 check_if_reachable(p2p_addr).await;
@@ -930,7 +930,7 @@ pub async fn run(migrated_envs: Vec<(&str, &str)>) -> Result<()> {
                 })?
             } else {
                 NetworkWallet::<Ethereum>::default_signer_address(
-                    wallet.as_ref().ok_or_else(&require_wallet)?,
+                    wallet.as_ref().ok_or_else(require_wallet)?,
                 )
             };
             fetch_claim_rewards_inputs(
@@ -993,7 +993,7 @@ pub async fn run(migrated_envs: Vec<(&str, &str)>) -> Result<()> {
     }
 
     // For execution, we need the wallet
-    let wallet = wallet.ok_or_else(&require_wallet)?;
+    let wallet = wallet.ok_or_else(require_wallet)?;
     let account = NetworkWallet::<Ethereum>::default_signer_address(&wallet);
 
     // Check that our Ethereum balance isn't zero before proceeding.

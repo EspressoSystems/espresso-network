@@ -1,6 +1,5 @@
 use std::{sync::Arc, time::Duration};
 
-use hotshot::types::BLSPubKey;
 use hotshot_example_types::{
     node_types::{TEST_VERSIONS, TestTypes},
     state_types::{TestInstanceState, TestValidatedState},
@@ -9,11 +8,16 @@ use hotshot_types::{
     data::{EpochNumber, Leaf2, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
     message::UpgradeLock,
+    signature_key::BLSPubKey,
     traits::{metrics::NoMetrics, signature_key::SignatureKey},
     upgrade_config::UpgradeConfig,
 };
+use tokio::sync::mpsc;
 
-use super::utils::{mock_membership_with_num_nodes, record_leader};
+use super::{
+    coordinator_builder::{build_genesis_cert1, build_genesis_proposal},
+    utils::{mock_membership_with_num_nodes, record_leader},
+};
 use crate::{
     block::{BlockBuilder, BlockBuilderConfig},
     cert_verifier::CertVerifiers,
@@ -22,7 +26,7 @@ use crate::{
     epoch::EpochManager,
     helpers::test_upgrade_lock,
     logging::KeyPrefix,
-    message::Message,
+    message::{Certificate1, Message},
     network::Cliquenet,
     outbox::Outbox,
     proposal::{ProposalValidator, VidShareValidator},
@@ -129,11 +133,16 @@ impl TestHarness {
             upgrade_lock.clone(),
         );
 
+        let genesis_qc = build_genesis_cert1(&genesis_leaf);
         let mut state_manager = StateManager::new(instance.clone(), upgrade_lock.clone());
         state_manager.seed_state(ViewNumber::genesis(), Arc::new(genesis_state), genesis_leaf);
 
-        let proposal_validator =
-            ProposalValidator::new(membership.clone(), epoch_height, upgrade_lock.clone());
+        let proposal_validator = ProposalValidator::new(
+            membership.clone(),
+            epoch_height,
+            upgrade_lock.clone(),
+            Some(&genesis_qc),
+        );
         let share_validator =
             VidShareValidator::new(membership.clone(), epoch_height, upgrade_lock.clone());
 
@@ -195,7 +204,8 @@ impl TestHarness {
             .client(client)
             .membership_coordinator(membership)
             .outbox(Outbox::new())
-            .timer(Timer::new(timer_duration, ViewNumber::genesis()))
+            .external_tx(mpsc::unbounded_channel().0)
+            .timer(Timer::new(timer_duration, ViewNumber::genesis() + 1))
             .public_key(public_key)
             .node_id(KeyPrefix::from(&public_key))
             .build();
@@ -215,8 +225,12 @@ impl TestHarness {
 
     pub fn apply_and_process(&mut self, input: ConsensusInput<TestTypes>) {
         let consensus = self.coordinator.consensus();
-        self.trace
-            .preamble(consensus.public_key(), consensus.last_decided_leaf());
+        self.trace.preamble(
+            consensus.public_key(),
+            consensus.last_decided_leaf(),
+            consensus.cert1_at(ViewNumber::genesis()),
+            *consensus.epoch_height,
+        );
         record_leader(&mut self.trace, consensus, &input);
         self.coordinator.apply_consensus(input.clone());
         // The outbox was drained at the end of the previous call, so it now holds
@@ -336,12 +350,39 @@ impl TestHarness {
         self.coordinator.current_view()
     }
 
+    /// Seed the genesis QC and proposal as `Coordinator::maker` does, and return
+    /// the QC. The harness otherwise starts without them.
+    pub fn seed_genesis(&mut self) -> Certificate1<TestTypes> {
+        let consensus = self.coordinator.consensus_mut();
+        let genesis_leaf = consensus.last_decided_leaf().clone();
+        let genesis_cert1 = build_genesis_cert1(&genesis_leaf);
+        let genesis_proposal = build_genesis_proposal(&genesis_leaf, &genesis_cert1);
+        consensus.seed_parent(genesis_cert1.clone(), genesis_proposal, std::iter::empty());
+        genesis_cert1
+    }
+
     pub fn coordinator(&self) -> &MockCoordinator {
         &self.coordinator
     }
 
-    /// Place the node at `view` in `epoch`, as `Consensus::set_view` does.
+    /// Direct mutable coordinator access, for tests that need to drain
+    /// `next_consensus_input` without applying the inputs
+    /// (`process_until` applies everything it collects).
+    pub fn coordinator_mut(&mut self) -> &mut MockCoordinator {
+        &mut self.coordinator
+    }
+
+    /// Place the node at `view` in `epoch`, as `Consensus::set_view` does, and
+    /// note the placement in the trace.
     pub fn set_view(&mut self, view: ViewNumber, epoch: EpochNumber) {
+        let consensus = self.coordinator.consensus();
+        self.trace.preamble(
+            consensus.public_key(),
+            consensus.last_decided_leaf(),
+            consensus.cert1_at(ViewNumber::genesis()),
+            *consensus.epoch_height,
+        );
+        self.trace.placed(view, epoch);
         self.coordinator.consensus_mut().set_view(view, epoch);
     }
 

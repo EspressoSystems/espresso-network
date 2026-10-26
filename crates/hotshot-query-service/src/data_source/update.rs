@@ -17,13 +17,11 @@ use anyhow::{Context, ensure};
 use async_trait::async_trait;
 use committable::Committable;
 use futures::future::Future;
-use hotshot::types::EventType;
 use hotshot_types::{
     data::{
         Leaf2, VidCommitment, VidCommon, VidDisperseShare, VidShare, ViewNumber,
         ns_table::parse_ns_table,
     },
-    event::LeafInfo,
     new_protocol::CoordinatorEvent,
     traits::{
         block_contents::{BlockHeader, BlockPayload, EncodeBytes, GENESIS_VID_NUM_STORAGE_NODES},
@@ -34,7 +32,6 @@ use hotshot_types::{
         avidm::{AvidMScheme, init_avidm_param},
         avidm_gf2::{AvidmGf2Scheme, init_avidm_gf2_param},
     },
-    vote::HasViewNumber,
 };
 use jf_advz::VidScheme;
 
@@ -53,10 +50,9 @@ use crate::{
 /// [UpdateStatusData](crate::status::UpdateStatusData), then it can be fully kept up to date
 /// through two interfaces:
 /// * [populate_metrics](crate::status::UpdateStatusData::populate_metrics), to get a handle for
-///   populating the status metrics, which should be used when initializing a
-///   [SystemContextHandle](hotshot::types::SystemContextHandle)
-/// * [update](Self::update), provided by this extension trait, to update the query state when a new
-///   HotShot event is emitted
+///   populating the status metrics, which should be used when initializing consensus
+/// * [update](Self::update), provided by this extension trait, to update the query state when
+///   consensus emits a new event
 #[async_trait]
 pub trait UpdateDataSource<Types: NodeType>: UpdateAvailabilityData<Types> {
     /// Update query state based on consensus event.
@@ -74,25 +70,10 @@ pub trait UpdateDataSource<Types: NodeType>: UpdateAvailabilityData<Types> {
     ///
     /// For each decided leaf the query service stores a `BlockInfo` containing the leaf paired
     /// with a QC that certifies it (`LeafQueryData`), the block payload and VID data when
-    /// available, and only on the **newest** leaf in the batch, it stores the proof that finalizes it:
-    /// a `qc_chain` for legacy protocol set via `BlockInfo::with_qc_chain`, or a `cert2` for new protocol set
-    /// via `BlockInfo::with_cert2`. The two protocols differ only in where those pieces come
-    /// from:
+    /// available, and, only on the **newest** leaf in the batch, the `cert2` that finalizes it.
     ///
-    /// In both events leaves arrive in **newest → oldest** order (`leaves[0]` is the leaf being
-    /// finalized; each subsequent leaf is its ancestor reached via `justify_qc`). For the new
-    /// protocol, `vid_shares` is parallel to `leaves` (same ordering, one share per leaf). The
-    /// handler iterates in reverse so heights are appended ascending.
-    ///
-    /// - **Legacy (`CoordinatorEvent::LegacyEvent` → `EventType::Decide`).** The newest leaf is
-    ///   certified by `committing_qc`; each older leaf is certified by the *next-newer* leaf's
-    ///   `justify_qc`. The newest leaf's `qc_chain` is set to `[committing_qc, deciding_qc]` —
-    ///   the two consecutive QCs that decide it under the legacy 3-chain rule.
-    ///
-    /// - **New protocol (`CoordinatorEvent::NewDecide`).** The newest leaf is certified by
-    ///   `cert1`; older leaves are again certified by the next leaf's `justify_qc`. When a
-    ///   `cert2` is present, it is attached to the newest leaf. Under the new protocol a single
-    ///   `cert2` finalizes that leaf directly, replacing the legacy QC chain.
+    /// Leaves arrive newest first; the handler iterates in reverse so heights are appended
+    /// ascending.
     ///
     /// # Returns
     ///
@@ -111,117 +92,6 @@ where
 {
     async fn update(&self, event: &CoordinatorEvent<Types>) -> Result<(), u64> {
         match event {
-            CoordinatorEvent::LegacyEvent(event) => {
-                let EventType::Decide {
-                    leaf_chain,
-                    committing_qc,
-                    deciding_qc,
-                    ..
-                } = &event.event
-                else {
-                    return Ok(());
-                };
-
-                // `qc` justifies the first (most recent) leaf...
-                let qcs = once(committing_qc.qc().clone())
-                    // ...and each leaf in the chain justifies the subsequent leaf (its parent)
-                    // through `leaf.justify_qc`.
-                    .chain(leaf_chain.iter().map(|leaf| leaf.leaf.justify_qc().clone()))
-                    // Put the QCs in chronological order.
-                    .rev()
-                    // The oldest QC is the `justify_qc` of the oldest leaf, which does not justify
-                    // any leaf in the new chain, so we don't need it.
-                    .skip(1);
-                for (
-                    qc2,
-                    LeafInfo {
-                        leaf: leaf2,
-                        vid_share,
-                        ..
-                    },
-                ) in qcs.zip(leaf_chain.iter().rev())
-                {
-                    let height = leaf2.block_header().block_number();
-
-                    let leaf_data = match LeafQueryData::new(leaf2.clone(), qc2.clone()) {
-                        Ok(leaf) => leaf,
-                        Err(err) => {
-                            tracing::error!(
-                                height,
-                                ?leaf2,
-                                ?committing_qc,
-                                "inconsistent leaf; cannot append leaf information: {err:#}"
-                            );
-                            return Err(leaf2.block_header().block_number());
-                        },
-                    };
-                    let block_data = leaf2
-                        .block_payload()
-                        .map(|payload| BlockQueryData::new(leaf2.block_header().clone(), payload));
-                    if block_data.is_none() {
-                        tracing::warn!(height, "block payload missing at decide");
-                    }
-
-                    let (vid_common, vid_share) = match vid_share {
-                        Some(VidDisperseShare::V0(share)) => (
-                            Some(VidCommonQueryData::new(
-                                leaf2.block_header().clone(),
-                                VidCommon::V0(share.common.clone()),
-                            )),
-                            Some(VidShare::V0(share.share.clone())),
-                        ),
-                        Some(VidDisperseShare::V1(share)) => (
-                            Some(VidCommonQueryData::new(
-                                leaf2.block_header().clone(),
-                                VidCommon::V1(share.common.clone()),
-                            )),
-                            Some(VidShare::V1(share.share.clone())),
-                        ),
-                        Some(VidDisperseShare::V2(share)) => (
-                            Some(VidCommonQueryData::new(
-                                leaf2.block_header().clone(),
-                                VidCommon::V2(share.common.clone()),
-                            )),
-                            Some(VidShare::V2(share.share.clone())),
-                        ),
-                        None => {
-                            if leaf2.view_number() == ViewNumber::genesis() {
-                                // HotShot does not run VID in consensus for the genesis block. In
-                                // this case, the block payload is guaranteed to always be empty, so
-                                // VID isn't really necessary. But for consistency, we will still
-                                // store the VID dispersal data, computing it ourselves based on the
-                                // well-known genesis VID commitment.
-                                match genesis_vid(leaf2) {
-                                    Ok((common, share)) => (Some(common), Some(share)),
-                                    Err(err) => {
-                                        tracing::warn!("failed to compute genesis VID: {err:#}");
-                                        (None, None)
-                                    },
-                                }
-                            } else {
-                                (None, None)
-                            }
-                        },
-                    };
-
-                    if vid_common.is_none() {
-                        tracing::info!(height, "VID not available at decide");
-                    }
-
-                    let mut info = BlockInfo::new(leaf_data, block_data, vid_common, vid_share);
-                    if let Some(deciding_qc) = deciding_qc
-                        && committing_qc.view_number() == info.leaf.leaf().view_number()
-                    {
-                        let qc_chain =
-                            [committing_qc.as_ref().clone(), deciding_qc.as_ref().clone()];
-                        info = info.with_qc_chain(qc_chain);
-                    }
-                    if let Err(err) = self.append(info).await {
-                        tracing::error!(height, "failed to append leaf information: {err:#}");
-                        return Err(leaf2.block_header().block_number());
-                    }
-                }
-            },
             CoordinatorEvent::NewDecide {
                 leaf_infos,
                 cert1,
@@ -275,7 +145,6 @@ where
                         tracing::warn!(height, "block payload missing at decide");
                     }
 
-                    // Extract VID common data from the new protocol's VidDisperseShare2.
                     let (vid_common, vid_share) = match &info.vid_share {
                         Some(VidDisperseShare::V2(share)) => (
                             Some(VidCommonQueryData::new(
@@ -284,6 +153,8 @@ where
                             )),
                             Some(VidShare::V2(share.share.clone())),
                         ),
+                        // No node's own consensus produces pre-0.6 shares any more; pre-0.6 VID
+                        // only arrives as catchup data.
                         Some(_) => (None, None),
                         None => {
                             if leaf.view_number() == ViewNumber::genesis() {
@@ -311,10 +182,7 @@ where
 
                     let mut info = BlockInfo::new(leaf_data, block_data, vid_common, vid_share);
 
-                    // Attach `cert2` only to the newest leaf in the batch (`leaves[0]`, which is
-                    // `index == 0` since we iterate in reverse). Under the new protocol a single
-                    // `cert2` finalizes that leaf directly
-                    // older leaves in the batch are finalized using indirect rule
+                    // `cert2` finalizes only the newest leaf; the older ones follow from it.
                     if index == 0
                         && let Some(cert2) = &cert2
                     {

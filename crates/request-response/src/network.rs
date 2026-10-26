@@ -22,9 +22,6 @@ pub type Bytes = Arc<Vec<u8>>;
 pub trait Sender<K: SignatureKey + 'static>: Send + Sync + 'static + Clone {
     /// Send a message to a specific recipient
     async fn send_direct_message(&self, message: &Bytes, recipient: K) -> Result<()>;
-
-    /// Send a message to all recipients
-    async fn send_broadcast_message(&self, message: &Bytes) -> Result<()>;
 }
 
 /// The [`Receiver`] trait is used to allow the [`RequestResponseProtocol`] to receive messages from a network

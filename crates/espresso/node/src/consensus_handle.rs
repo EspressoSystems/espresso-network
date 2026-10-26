@@ -1,50 +1,61 @@
 use std::{collections::HashMap, mem, sync::Arc};
 
+use anyhow::bail;
 use async_broadcast::{InactiveReceiver, Sender, broadcast};
-use async_lock::RwLock as AsyncRwLock;
 use committable::Commitment;
-use futures::{
-    FutureExt, StreamExt,
-    future::BoxFuture,
-    stream::{self, BoxStream},
-};
-use hotshot::{traits::NodeImplementation, types::SystemContextHandle};
+use espresso_api::error::SubmitError;
+use futures::{FutureExt, StreamExt, future::BoxFuture, stream::BoxStream};
 use hotshot_new_protocol::{
-    client::ClientApi,
+    block,
+    client::{ClientApi, QueryError},
     consensus::{ConsensusInput, ConsensusOutput},
     coordinator::{
         Coordinator,
         error::{CoordinatorError, Severity},
     },
+    message::OpaqueMessage,
     state::UpdateLeaf,
     storage::NewProtocolStorage,
 };
 use hotshot_types::{
     data::{BlockNumber, EpochNumber, Leaf2, QuorumProposalWrapper, VidDisperseShare, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
-    event::{Event, LeafInfo},
+    event::LeafInfo,
+    initializer::HotShotInitializer,
     message::{Proposal as SignedProposal, UpgradeLock, convert_proposal},
     new_protocol::CoordinatorEvent,
     traits::{
         ValidatedState,
         metrics::{Gauge, Metrics},
-        node_implementation::NodeType,
+        node_implementation::{NodeImplementation, NodeType},
         signature_key::SignatureKey,
     },
     utils::StateAndDelta,
 };
 use parking_lot::RwLock;
-use tokio::{select, spawn};
+use tokio::{select, spawn, sync::mpsc::UnboundedReceiver};
 use tokio_util::{sync::CancellationToken, task::AbortOnDropHandle};
 use tracing::{error, warn};
 
+/// The node's handle on consensus: the [`Coordinator`], run on its own task from
+/// [`start_consensus`](Self::start_consensus) on, and what the rest of the node reads from it.
 pub struct ConsensusHandle<T: NodeType, I: NodeImplementation<T>> {
-    legacy_handle: Arc<AsyncRwLock<SystemContextHandle<T, I>>>,
     epoch_height: BlockNumber,
-    legacy_event_rx: InactiveReceiver<Event<T>>,
     event_rx: InactiveReceiver<CoordinatorEvent<T>>,
     upgrade_lock: UpgradeLock<T>,
+    membership_coordinator: EpochMembershipCoordinator<T>,
+    resting: Arc<RwLock<Resting<T>>>,
     new_proto: Arc<RwLock<NewProtocol<T, I::Storage>>>,
+    /// Cancelled once the coordinator task has ended, however it ended.
+    exited: CancellationToken,
+}
+
+/// What the readers serve once the coordinator has stopped: what it held when it stopped, written
+/// by its task on the way out, or the anchor if it never ran.
+struct Resting<T: NodeType> {
+    view: ViewNumber,
+    leaf: Leaf2<T>,
+    state: Arc<T::ValidatedState>,
 }
 
 #[allow(clippy::large_enum_variant)]
@@ -52,10 +63,13 @@ enum NewProtocol<T: NodeType, S> {
     Empty,
     Init {
         coordinator: Coordinator<T, S>,
+        external_rx: UnboundedReceiver<OpaqueMessage<T::SignatureKey>>,
         event_tx: Sender<CoordinatorEvent<T>>,
         queue_len: Option<Arc<dyn Gauge>>,
     },
     Running {
+        /// Held so that dropping the handle aborts the task; `shut_down` waits on `exited`.
+        #[cfg_attr(not(test), allow(dead_code))]
         coordinator: AbortOnDropHandle<()>,
         client_api: ClientApi<T>,
         shutdown: CancellationToken,
@@ -74,11 +88,12 @@ where
     I: NodeImplementation<T>,
     I::Storage: NewProtocolStorage<T>,
 {
-    pub async fn new(
-        ctx: Arc<AsyncRwLock<SystemContextHandle<T, I>>>,
+    pub fn new(
         coordinator: Coordinator<T, I::Storage>,
-        epoch_height: BlockNumber,
-        rx: InactiveReceiver<Event<T>>,
+        external_rx: UnboundedReceiver<OpaqueMessage<T::SignatureKey>>,
+        upgrade_lock: UpgradeLock<T>,
+        membership_coordinator: EpochMembershipCoordinator<T>,
+        initializer: &HotShotInitializer<T>,
         event_channel_capacity: usize,
         metrics: &dyn Metrics,
     ) -> Self {
@@ -92,30 +107,30 @@ where
                 .into()
         });
 
-        let upgrade_lock = ctx.read().await.hotshot.upgrade_lock.clone();
-
         let new_proto = Arc::new(RwLock::new(NewProtocol::Init {
             coordinator,
+            external_rx,
             event_tx,
             queue_len: coordinator_event_queue_len,
         }));
 
         Self {
-            upgrade_lock,
-            legacy_handle: ctx,
-            epoch_height,
-            legacy_event_rx: rx,
+            epoch_height: initializer.epoch_height().into(),
             event_rx: event_rx.deactivate(),
+            upgrade_lock,
+            membership_coordinator,
+            resting: Arc::new(RwLock::new(Resting {
+                view: initializer.anchor_leaf().view_number(),
+                leaf: initializer.anchor_leaf().clone(),
+                state: initializer.anchor_state().clone(),
+            })),
             new_proto,
+            exited: CancellationToken::new(),
         }
     }
 
-    pub async fn activate(&self) {
+    pub async fn start_consensus(&self) {
         if matches!(*self.new_proto.read(), NewProtocol::Running { .. }) {
-            return;
-        }
-
-        if self.upgrade_lock.upgrade().base < versions::NEW_PROTOCOL_VERSION {
             return;
         }
 
@@ -124,6 +139,7 @@ where
         match new_proto.take() {
             NewProtocol::Init {
                 coordinator,
+                external_rx,
                 event_tx,
                 queue_len,
             } => {
@@ -132,9 +148,12 @@ where
                 *new_proto = NewProtocol::Running {
                     coordinator: AbortOnDropHandle::new(spawn(run_coordinator(
                         coordinator,
+                        external_rx,
                         event_tx,
                         queue_len,
                         shutdown.clone(),
+                        self.exited.clone(),
+                        Arc::clone(&self.resting),
                     ))),
                     client_api,
                     shutdown,
@@ -144,56 +163,70 @@ where
         }
     }
 
-    pub fn legacy_consensus(&self) -> Arc<AsyncRwLock<SystemContextHandle<T, I>>> {
-        self.legacy_handle.clone()
-    }
-
     pub fn event_stream(&self) -> BoxStream<'static, CoordinatorEvent<T>> {
-        let old_stream = self
-            .legacy_event_rx
-            .activate_cloned()
-            .map(CoordinatorEvent::LegacyEvent);
-        let new_stream = self.event_rx.activate_cloned();
-        stream::select(old_stream, new_stream).boxed()
+        self.event_rx.activate_cloned().boxed()
     }
 
+    /// Resolves once the coordinator task has ended, whether `shut_down` stopped it or it died
+    /// on a critical error or a panic. Never resolves if consensus never started.
+    pub async fn stopped(&self) {
+        self.exited.cancelled().await
+    }
+
+    /// Serves the resting state once the coordinator has been told to shut down, waiting for
+    /// the state it leaves on the way out if a request fails meanwhile. Panics if the
+    /// coordinator died instead: the node must not answer as if the chain had stopped.
     pub async fn current_view(&self) -> ViewNumber {
-        if let Some(client_api) = self.client_api().await {
-            return client_api
-                .current_view()
-                .await
-                .expect("coordinator channel closed"); // FIXME
+        let Some(client_api) = self.client_api().await else {
+            return self.resting.read().view;
+        };
+        match client_api.current_view().await {
+            Ok(view) => view,
+            Err(err) => self.resting_unless_dead(err).await.view,
         }
-        self.legacy_handle.read().await.cur_view().await
     }
 
+    /// See [`Self::current_view`].
     pub async fn decided_leaf(&self) -> Leaf2<T> {
-        if let Some(client_api) = self.client_api().await {
-            return client_api
-                .decided_leaf()
-                .await
-                .expect("coordinator channel closed"); // FIXME
+        let Some(client_api) = self.client_api().await else {
+            return self.resting.read().leaf.clone();
+        };
+        match client_api.decided_leaf().await {
+            Ok(leaf) => leaf,
+            Err(err) => self.resting_unless_dead(err).await.leaf.clone(),
         }
-        self.legacy_handle.read().await.decided_leaf().await
     }
 
+    /// See [`Self::current_view`].
     pub async fn decided_state(&self) -> Option<Arc<T::ValidatedState>> {
-        if let Some(client_api) = self.client_api().await {
-            return match client_api.decided_state().await {
-                Ok(state) => state,
-                Err(err) => {
-                    warn!(%err, "coordinator unavailable for decided_state");
-                    None
-                },
-            };
+        let Some(client_api) = self.client_api().await else {
+            return Some(self.resting.read().state.clone());
+        };
+        match client_api.decided_state().await {
+            Ok(state) => state,
+            Err(err) => Some(self.resting_unless_dead(err).await.state.clone()),
         }
-        Some(self.legacy_handle.read().await.decided_state().await)
+    }
+
+    /// Where a failed request leaves a reader: the coordinator was told to shut down and the
+    /// resting state it leaves behind answers, or no shutdown was asked for, so it died.
+    async fn resting_unless_dead(
+        &self,
+        err: QueryError,
+    ) -> parking_lot::RwLockReadGuard<'_, Resting<T>> {
+        let stopping = match &*self.new_proto.read() {
+            NewProtocol::Running { shutdown, .. } => shutdown.is_cancelled(),
+            _ => true,
+        };
+        if !stopping {
+            panic!("coordinator died: {err}");
+        }
+        // The coordinator writes the resting state before it exits.
+        self.exited.cancelled().await;
+        self.resting.read()
     }
 
     pub async fn state(&self, view: ViewNumber) -> Option<Arc<T::ValidatedState>> {
-        if !self.upgrade_lock.new_protocol_active(view) {
-            return self.legacy_handle.read().await.state(view).await;
-        }
         match self.client_api().await?.state(view).await {
             Ok(state) => state,
             Err(err) => {
@@ -204,17 +237,6 @@ where
     }
 
     pub async fn state_and_delta(&self, view: ViewNumber) -> StateAndDelta<T> {
-        if !self.upgrade_lock.new_protocol_active(view) {
-            return self
-                .legacy_handle
-                .read()
-                .await
-                .hotshot
-                .consensus()
-                .read()
-                .await
-                .state_and_delta(view);
-        }
         let Some(client_api) = self.client_api().await else {
             return (None, None);
         };
@@ -228,146 +250,101 @@ where
     }
 
     pub async fn undecided_leaves(&self) -> Vec<Leaf2<T>> {
-        if let Some(client_api) = self.client_api().await {
-            return match client_api.undecided_leaves().await {
-                Ok(leaves) => leaves,
-                Err(err) => {
-                    warn!(%err, "coordinator unavailable for undecided_leaves");
-                    Vec::new()
-                },
-            };
+        let Some(client_api) = self.client_api().await else {
+            return Vec::new();
+        };
+        match client_api.undecided_leaves().await {
+            Ok(leaves) => leaves,
+            Err(err) => {
+                warn!(%err, "coordinator unavailable for undecided_leaves");
+                Vec::new()
+            },
         }
-        self.legacy_handle
-            .read()
-            .await
-            .hotshot
-            .consensus()
-            .read()
-            .await
-            .undecided_leaves()
     }
 
     pub async fn current_epoch(&self) -> Option<EpochNumber> {
-        if let Some(client_api) = self.client_api().await {
-            return match client_api.current_epoch().await {
-                Ok(epoch) => epoch,
-                Err(err) => {
-                    warn!(%err, "coordinator unavailable for current_epoch");
-                    None
-                },
-            };
+        let Some(client_api) = self.client_api().await else {
+            return self.resting.read().leaf.epoch(*self.epoch_height);
+        };
+        match client_api.current_epoch().await {
+            Ok(epoch) => epoch,
+            Err(err) => {
+                warn!(%err, "coordinator unavailable for current_epoch");
+                None
+            },
         }
-        self.legacy_handle.read().await.cur_epoch().await
     }
 
     pub async fn epoch_height(&self) -> BlockNumber {
-        if self.is_new_proto_running() {
-            return self.epoch_height;
-        }
-        self.legacy_handle.read().await.epoch_height.into()
+        self.epoch_height
     }
 
-    // TODO: implement for new protocol
     pub async fn membership_coordinator(&self) -> EpochMembershipCoordinator<T> {
-        self.legacy_handle
-            .read()
-            .await
-            .membership_coordinator
-            .clone()
+        self.membership_coordinator.clone()
     }
 
-    // TODO: implement for new protocol
     pub async fn upgrade_lock(&self) -> UpgradeLock<T> {
-        self.legacy_handle.read().await.hotshot.upgrade_lock.clone()
-    }
-
-    // TODO: implement for new protocol
-    pub async fn storage(&self) -> I::Storage {
-        self.legacy_handle.read().await.storage()
+        self.upgrade_lock.clone()
     }
 
     pub async fn current_proposal_participation(&self) -> HashMap<T::SignatureKey, f64> {
-        if let Some(client_api) = self.client_api().await {
-            return client_api
-                .proposal_participation(None)
-                .await
-                .inspect_err(|err| {
-                    warn!(%err, "coordinator unavailable for current_proposal_participation");
-                })
-                .unwrap_or_default();
-        }
-        self.legacy_handle
-            .read()
+        let Some(client_api) = self.client_api().await else {
+            return HashMap::new();
+        };
+        client_api
+            .proposal_participation(None)
             .await
-            .consensus()
-            .read()
-            .await
-            .current_proposal_participation()
+            .inspect_err(|err| {
+                warn!(%err, "coordinator unavailable for current_proposal_participation");
+            })
+            .unwrap_or_default()
     }
 
     pub async fn proposal_participation(
         &self,
         epoch: EpochNumber,
     ) -> HashMap<T::SignatureKey, f64> {
-        if let Some(client_api) = self.client_api().await {
-            match client_api.proposal_participation(Some(epoch)).await {
-                Ok(participation) if !participation.is_empty() => return participation,
-                Ok(_) => {},
-                Err(err) => {
-                    warn!(%err, "coordinator unavailable for proposal_participation");
-                },
-            }
-        }
-        self.legacy_handle
-            .read()
+        let Some(client_api) = self.client_api().await else {
+            return HashMap::new();
+        };
+        client_api
+            .proposal_participation(Some(epoch))
             .await
-            .consensus()
-            .read()
-            .await
-            .proposal_participation(epoch)
+            .inspect_err(|err| {
+                warn!(%err, "coordinator unavailable for proposal_participation");
+            })
+            .unwrap_or_default()
     }
 
     pub async fn current_vote_participation(
         &self,
     ) -> HashMap<<T::SignatureKey as SignatureKey>::VerificationKeyType, f64> {
-        if let Some(client_api) = self.client_api().await {
-            return client_api
-                .vote_participation(None)
-                .await
-                .inspect_err(|err| {
-                    warn!(%err, "coordinator unavailable for current_vote_participation");
-                })
-                .unwrap_or_default();
-        }
-        self.legacy_handle
-            .read()
+        let Some(client_api) = self.client_api().await else {
+            return HashMap::new();
+        };
+        client_api
+            .vote_participation(None)
             .await
-            .consensus()
-            .read()
-            .await
-            .current_vote_participation()
+            .inspect_err(|err| {
+                warn!(%err, "coordinator unavailable for current_vote_participation");
+            })
+            .unwrap_or_default()
     }
 
     pub async fn vote_participation(
         &self,
         epoch: EpochNumber,
     ) -> HashMap<<T::SignatureKey as SignatureKey>::VerificationKeyType, f64> {
-        if let Some(client_api) = self.client_api().await {
-            match client_api.vote_participation(Some(epoch)).await {
-                Ok(participation) if !participation.is_empty() => return participation,
-                Ok(_) => {},
-                Err(err) => {
-                    warn!(%err, "coordinator unavailable for vote_participation");
-                },
-            }
-        }
-        self.legacy_handle
-            .read()
-            .await
-            .consensus()
-            .read()
-            .await
+        let Some(client_api) = self.client_api().await else {
+            return HashMap::new();
+        };
+        client_api
             .vote_participation(Some(epoch))
+            .await
+            .inspect_err(|err| {
+                warn!(%err, "coordinator unavailable for vote_participation");
+            })
+            .unwrap_or_default()
     }
 
     pub async fn request_proposal(
@@ -377,42 +354,35 @@ where
     ) -> anyhow::Result<
         BoxFuture<'static, anyhow::Result<SignedProposal<T, QuorumProposalWrapper<T>>>>,
     > {
-        if self.upgrade_lock.new_protocol_active(view)
-            && let Some(client_api) = self.client_api().await
-        {
-            return Ok(async move {
-                client_api
-                    .request_proposal(view, leaf_commitment)
-                    .await
-                    .map(convert_proposal)
-                    .map_err(anyhow::Error::new)
-            }
-            .boxed());
+        let Some(client_api) = self.client_api().await else {
+            bail!("consensus is not running");
+        };
+        Ok(async move {
+            client_api
+                .request_proposal(view, leaf_commitment)
+                .await
+                .map(convert_proposal)
+                .map_err(anyhow::Error::new)
         }
-
-        let future = self
-            .legacy_handle
-            .read()
-            .await
-            .request_proposal(view, leaf_commitment)
-            .map_err(|e| anyhow::anyhow!("{e}"))?;
-
-        Ok(future.boxed())
+        .boxed())
     }
 
     pub async fn submit_transaction(&self, tx: T::Transaction) -> anyhow::Result<()> {
-        if let Some(client_api) = self.client_api().await {
-            return client_api
-                .submit_transaction(tx)
-                .await
-                .map_err(|e| anyhow::anyhow!("{e}"));
-        }
-        self.legacy_handle
-            .read()
-            .await
+        let Some(client_api) = self.client_api().await else {
+            bail!("consensus is not running");
+        };
+        client_api
             .submit_transaction(tx)
             .await
-            .map_err(|e| anyhow::anyhow!("{e}"))
+            .map_err(|err| match err {
+                QueryError::Rejected(rejection @ block::SubmitError::TooLarge { .. }) => {
+                    SubmitError::Invalid(rejection.to_string()).into()
+                },
+                QueryError::Rejected(rejection @ block::SubmitError::RetryBufferFull) => {
+                    SubmitError::Overloaded(rejection.to_string()).into()
+                },
+                err => anyhow::Error::new(err),
+            })
     }
 
     pub async fn update_leaf(
@@ -422,82 +392,53 @@ where
         delta: Option<Arc<<T::ValidatedState as ValidatedState<T>>::Delta>>,
     ) -> anyhow::Result<()> {
         let view = leaf.view_number();
-        if self.upgrade_lock.new_protocol_active(view)
-            && let Some(client_api) = self.client_api().await
-        {
-            return client_api
-                .update_leaf(UpdateLeaf {
-                    view,
-                    leaf,
-                    state,
-                    delta,
-                })
-                .await
-                .map_err(|e| anyhow::anyhow!("{e}"));
-        }
-        self.legacy_handle
-            .read()
+        let Some(client_api) = self.client_api().await else {
+            bail!("consensus is not running");
+        };
+        client_api
+            .update_leaf(UpdateLeaf {
+                view,
+                leaf,
+                state,
+                delta,
+            })
             .await
-            .hotshot
-            .consensus()
-            .write()
-            .await
-            .update_leaf(leaf, state, delta)
             .map_err(|e| anyhow::anyhow!("{e}"))
     }
 
-    pub async fn start_consensus(&self) {
-        self.activate().await;
-        if self.is_new_proto_running() {
-            tracing::info!("base version runs the new protocol, shutting down legacy stack");
-            self.shut_down_legacy().await;
-            return;
-        }
-        self.legacy_handle
-            .read()
-            .await
-            .hotshot
-            .start_consensus()
-            .await;
-    }
-
+    /// Stops the coordinator if it runs, and drops it if it never started so that nothing can
+    /// start it afterwards; the readers serve the resting state from here on.
     pub async fn shut_down(&self) {
-        self.legacy_handle.write().await.shut_down().await;
-        let NewProtocol::Running {
-            shutdown,
-            coordinator,
-            ..
-        } = self.new_proto.write().take()
-        else {
-            return;
+        self.membership_coordinator.cancel_all_drb();
+        let running = match &*self.new_proto.read() {
+            NewProtocol::Running { shutdown, .. } => {
+                shutdown.cancel();
+                true
+            },
+            _ => false,
         };
-        shutdown.cancel();
-        let _ = coordinator.await;
+        if running {
+            // The coordinator writes the resting state before it exits. Take it only afterwards,
+            // so a reader whose request fails meanwhile waits for that state instead of taking
+            // the coordinator for dead.
+            self.exited.cancelled().await;
+        }
+        drop(self.new_proto.write().take());
     }
 
-    /// Permanently tear down the legacy consensus stack: its tasks and the
-    /// legacy network.
-    ///
-    /// The in-memory legacy consensus state stays readable, and in-flight
-    /// DRB computations on the shared membership coordinator keep running
-    /// (the new protocol needs them for upcoming epochs).
-    pub async fn shut_down_legacy(&self) {
-        self.legacy_handle
-            .write()
-            .await
-            .shut_down_tasks_and_network()
-            .await;
-    }
-
-    fn is_new_proto_running(&self) -> bool {
-        matches!(*self.new_proto.read(), NewProtocol::Running { .. })
+    /// Aborts the coordinator task without touching the handle's state, as a panic in it would.
+    #[cfg(test)]
+    pub(crate) fn kill_coordinator(&self) {
+        if let NewProtocol::Running { coordinator, .. } = &*self.new_proto.read() {
+            coordinator.abort();
+        }
     }
 
     pub(crate) async fn client_api(&self) -> Option<ClientApi<T>> {
         if let NewProtocol::Running { client_api, .. } = &*self.new_proto.read() {
             return Some(client_api.clone());
         }
-        self.activate().await;
+        self.start_consensus().await;
         if let NewProtocol::Running { client_api, .. } = &*self.new_proto.read() {
             Some(client_api.clone())
         } else {
@@ -508,14 +449,30 @@ where
 
 async fn run_coordinator<T, S>(
     mut coord: Coordinator<T, S>,
+    mut external_rx: UnboundedReceiver<OpaqueMessage<T::SignatureKey>>,
     tx: Sender<CoordinatorEvent<T>>,
     queue_len: Option<Arc<dyn Gauge>>,
     shutdown: CancellationToken,
+    exited: CancellationToken,
+    resting: Arc<RwLock<Resting<T>>>,
 ) where
     T: NodeType,
     S: NewProtocolStorage<T>,
 {
+    let _exited = exited.drop_guard();
     coord.start();
+    let _forward = AbortOnDropHandle::new(spawn({
+        let tx = tx.clone();
+        async move {
+            while let Some(m) = external_rx.recv().await {
+                let e = CoordinatorEvent::ExternalMessageReceived {
+                    sender: m.sender,
+                    data: m.data,
+                };
+                broadcast_event(&tx, e).await;
+            }
+        }
+    }));
 
     loop {
         select! {
@@ -532,6 +489,18 @@ async fn run_coordinator<T, S>(
         }
     }
 
+    // Leave the readers what the coordinator holds now. No request reaches it from here on, so
+    // nothing it still has queued moves the chain past this.
+    let leaf = coord.last_decided_leaf().clone();
+    let state = coord
+        .state(leaf.view_number())
+        .map(|entry| entry.state.clone())
+        .unwrap_or_else(|| Arc::new(T::ValidatedState::from_header(leaf.block_header())));
+    *resting.write() = Resting {
+        view: coord.current_view(),
+        leaf,
+        state,
+    };
     coord.stop().await;
 }
 
@@ -564,14 +533,6 @@ where
             }
             warn!(%err, "coordinator: error processing output");
         }
-    }
-
-    while let Some(m) = coord.coordinator_outbox_mut().pop_front() {
-        let e = CoordinatorEvent::ExternalMessageReceived {
-            sender: m.sender,
-            data: m.data,
-        };
-        broadcast_event(tx, e).await;
     }
 
     Ok(())
@@ -624,7 +585,7 @@ where
         },
         ConsensusOutput::ProposalValidated { proposal, sender } => {
             Some(CoordinatorEvent::QuorumProposal {
-                proposal: proposal.clone(),
+                proposal: Box::new(proposal.clone()),
                 sender: sender.clone(),
             })
         },

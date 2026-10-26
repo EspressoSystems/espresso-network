@@ -1,8 +1,8 @@
-//! The recorder and the replay agree on what a dropped input is called.
+//! The recorder and the trace checker agree on what a dropped input is called.
 //!
 //! `NewProtocolDiff.Corpus.unmodelledInputs` lists the dropped inputs that put a
-//! trace outside the specification rather than in disagreement with it, and it
-//! matches them by name against the `# dropped input:` lines this crate writes.
+//! node's delay outside the specification rather than in disagreement with it,
+//! and it matches them by name against the `# dropped input:` lines this crate writes.
 //! Two lists in two languages, joined by string equality and nothing else: an
 //! entry that names an input the recorder never drops excuses nothing, and a
 //! rename on this side silently stops excusing what it used to.
@@ -11,21 +11,21 @@
 //! translated the input into a `certificate1` step, so the entry was dead and no
 //! build minded. This test is what would have minded.
 //!
-//! The check is one-way by design: the recorder drops more than the replay
+//! The check is one-way by design: the recorder drops more than the checker
 //! excuses. `Stored` and `BlockBuilt` are dropped because the model has no such
-//! input, but their outputs ride along on the next written step, so a divergence
-//! near one is a disagreement rather than a boundary of the model.
+//! input, but their outputs join the last step written, so a delay near one is a
+//! fault rather than a boundary of the model.
 //!
 //! Matching is by prefix, because `Corpus.unmodelledDropped` matches that way:
 //! it asks whether the recorded line starts with the entry's name. So a rename
 //! that keeps the prefix — `DrbResult` to `DrbResultV2` — stays excused here and
-//! at replay time alike, and one that does not keeps neither.
+//! at check time alike, and one that does not keeps neither.
 
 /// This crate's recorder, read as text: the `Dropped(...)` strings are the
 /// authoritative set, and reading them is cheaper than constructing every input.
 const TRACE_RS: &str = include_str!("../trace.rs");
 
-/// The replay's list of excuses. A moved file breaks the build, which is the
+/// The checker's list of excuses. A moved file breaks the build, which is the
 /// loudest failure available and better than a check that quietly stops looking.
 const CORPUS_LEAN: &str =
     include_str!("../../../../../lean/new-protocol-diff/NewProtocolDiff/Corpus.lean");
@@ -70,7 +70,7 @@ fn every_excused_input_is_one_the_recorder_drops() {
     for kind in &excused {
         assert!(
             dropped.iter().any(|d| d == kind || d.starts_with(kind)),
-            "`{kind}` is excused by the replay but never dropped by the recorder, so it excuses \
+            "`{kind}` is excused by the checker but never dropped by the recorder, so it excuses \
              nothing: either drop it in trace.rs or remove the entry from unmodelledInputs. \
              Dropped: {dropped:?}"
         );
