@@ -1,6 +1,10 @@
 use std::{
     collections::{BTreeMap, BTreeSet, HashSet, btree_map::Entry},
     ops::Range,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
 };
 
 use committable::Commitment;
@@ -12,10 +16,11 @@ use hotshot_types::{
     traits::{BlockPayload, block_contents::EncodeBytes, node_implementation::NodeType},
     vid::avidm_gf2::{AvidmGf2Common, AvidmGf2Param, AvidmGf2Scheme, AvidmGf2Share},
 };
-use tokio::task::{AbortHandle, JoinSet};
-use tracing::{error, warn};
+use tokio::task::{AbortHandle, Id, JoinSet};
+use tracing::{debug, error, warn};
 
 use super::ns_lens_match_metadata;
+use crate::leader_trace::{LeaderEvent, LeaderTracerHandle};
 
 pub(crate) type Metadata<T> = <<T as NodeType>::BlockPayload as BlockPayload<T>>::Metadata;
 
@@ -24,9 +29,9 @@ type ReconstructResult<T> =
 
 /// A block's payload in hand, with what the node needs to file it.
 ///
-/// Produced by decoding a view's shares and, on the recovery path, by a
-/// payload a peer sent whole. Either way the bytes are bound to
-/// `payload_commitment` before this is built.
+/// Produced from a view's shares and, on the recovery path, from a payload
+/// a peer sent whole. Either way the bytes are bound to `payload_commitment`
+/// before this is built.
 pub struct ObtainedPayload<T: NodeType> {
     pub view: ViewNumber,
     pub epoch: EpochNumber,
@@ -34,6 +39,18 @@ pub struct ObtainedPayload<T: NodeType> {
     pub payload: T::BlockPayload,
     pub metadata: <T::BlockPayload as BlockPayload<T>>::Metadata,
     pub tx_commitments: Vec<Commitment<T::Transaction>>,
+    pub source: PayloadSource,
+}
+
+/// How a payload came into hand.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PayloadSource {
+    /// Every systematic share was in hand: the payload is their concatenation.
+    Systematic,
+    /// A threshold of shares was erasure-decoded.
+    Decoded,
+    /// A peer sent the payload whole.
+    Fetched,
 }
 
 /// Why a reconstruction attempt failed.
@@ -72,9 +89,78 @@ pub struct VidReconstructor<T: NodeType> {
     /// proposal's commitment is worth accumulating.
     accumulators: BTreeMap<ViewNumber, VidShareAccumulator<T>>,
     reconstructed: BTreeSet<ViewNumber>,
-    tasks: JoinSet<ReconstructResult<T>>,
-    calculations: BTreeMap<ViewNumber, AbortHandle>,
-    tracer: Option<crate::leader_trace::LeaderTracerHandle>,
+    tasks: JoinSet<Attempt<T>>,
+    calculations: BTreeMap<ViewNumber, Attempts>,
+    tracer: Option<LeaderTracerHandle>,
+}
+
+/// A reconstruction path: which shares it needs and what it does with them.
+///
+/// The code is systematic, so the shares holding the shard positions below
+/// the recovery threshold hold the payload itself. That set is specific, so
+/// it may complete after any threshold of mixed shares has: the paths race,
+/// and a decode attempt started on mixed shares keeps running when the
+/// systematic set completes behind it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ReconstructPath {
+    /// Every systematic shard in hand; the payload is their concatenation.
+    Systematic,
+    /// A threshold of shards, erasure-decoded.
+    Decode,
+}
+
+impl From<ReconstructPath> for PayloadSource {
+    fn from(path: ReconstructPath) -> Self {
+        match path {
+            ReconstructPath::Systematic => Self::Systematic,
+            ReconstructPath::Decode => Self::Decoded,
+        }
+    }
+}
+
+/// A view's in-flight attempts, at most one per path. `won` is set by the
+/// first to re-commit, so the other skips its own re-commit: a blocking task
+/// cannot be aborted once it has started.
+#[derive(Default)]
+struct Attempts {
+    systematic: Option<AbortHandle>,
+    decode: Option<AbortHandle>,
+    won: Arc<AtomicBool>,
+}
+
+impl Attempts {
+    fn slot(&mut self, path: ReconstructPath) -> &mut Option<AbortHandle> {
+        match path {
+            ReconstructPath::Systematic => &mut self.systematic,
+            ReconstructPath::Decode => &mut self.decode,
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.systematic.is_none() && self.decode.is_none()
+    }
+
+    fn abort(&self) {
+        for handle in [&self.systematic, &self.decode].into_iter().flatten() {
+            handle.abort();
+        }
+    }
+
+    fn forget(&mut self, id: Id) {
+        for slot in [&mut self.systematic, &mut self.decode] {
+            if slot.as_ref().is_some_and(|handle| handle.id() == id) {
+                *slot = None;
+            }
+        }
+    }
+}
+
+/// What a reconstruction task returns.
+struct Attempt<T: NodeType> {
+    view: ViewNumber,
+    path: ReconstructPath,
+    /// `None` if the other path won while this one ran.
+    outcome: Option<ReconstructResult<T>>,
 }
 
 pub(crate) struct VidShareAccumulator<T: NodeType> {
@@ -114,7 +200,7 @@ impl<T: NodeType> VidReconstructor<T> {
         }
     }
 
-    pub fn set_tracer(&mut self, tracer: Option<crate::leader_trace::LeaderTracerHandle>) {
+    pub fn set_tracer(&mut self, tracer: Option<LeaderTracerHandle>) {
         self.tracer = tracer;
     }
 
@@ -186,26 +272,63 @@ impl<T: NodeType> VidReconstructor<T> {
 
     pub async fn next(&mut self) -> Option<ReconstructResult<T>> {
         loop {
-            match self.tasks.join_next().await? {
-                Ok(Ok(out)) => {
-                    self.calculations.remove(&out.view);
-                    self.accumulators.remove(&out.view);
-                    self.reconstructed.insert(out.view);
-                    return Some(Ok(out));
-                },
-                Ok(Err(err)) => {
-                    self.calculations.remove(&err.view);
-                    self.handle_failed_attempt(&err);
-                    return Some(Err(err));
-                },
+            let Attempt {
+                view,
+                path,
+                outcome,
+            } = match self.tasks.join_next().await? {
+                Ok(attempt) => attempt,
                 Err(err) => {
                     if err.is_panic() {
                         error!(%err, "VID reconstruction task panicked");
                     }
-                    self.calculations.retain(|_, task| task.id() != err.id());
+                    self.calculations.retain(|_, attempts| {
+                        attempts.forget(err.id());
+                        !attempts.is_empty()
+                    });
+                    continue;
+                },
+            };
+            self.finish_attempt(view, path);
+            let Some(outcome) = outcome else {
+                continue;
+            };
+            if self.is_superseded(view) {
+                continue;
+            }
+            match outcome {
+                Ok(out) => {
+                    if let Some(attempts) = self.calculations.remove(&view) {
+                        attempts.abort();
+                    }
+                    self.accumulators.remove(&view);
+                    self.reconstructed.insert(view);
+                    return Some(Ok(out));
+                },
+                Err(err) => {
+                    self.handle_failed_attempt(&err);
+                    return Some(Err(err));
                 },
             }
         }
+    }
+
+    /// Clear a finished attempt's slot, dropping the view's entry once both
+    /// paths are idle.
+    fn finish_attempt(&mut self, view: ViewNumber, path: ReconstructPath) {
+        if let Entry::Occupied(mut entry) = self.calculations.entry(view) {
+            *entry.get_mut().slot(path) = None;
+            if entry.get().is_empty() {
+                entry.remove();
+            }
+        }
+    }
+
+    /// Whether an attempt's result is stale: its view was retired, or the
+    /// other path already reconstructed it. The attempt was aborted, but a
+    /// blocking task that had already started still runs to completion.
+    fn is_superseded(&self, view: ViewNumber) -> bool {
+        self.reconstructed.contains(&view)
     }
 
     /// Apply the outcome of a failed attempt: weed the bad shares out of the
@@ -232,62 +355,50 @@ impl<T: NodeType> VidReconstructor<T> {
     }
 
     fn try_reconstruct(&mut self, view: ViewNumber) {
-        if self.calculations.contains_key(&view) {
-            return;
-        }
         let Some(accumulator) = self.accumulators.get(&view) else {
             return;
         };
-        if accumulator.exhausted || !accumulator.has_enough_shares() {
+        if accumulator.exhausted {
             return;
         }
-        // Enough shares implies an admitted share, which pinned the common.
+        let Some(path) = accumulator.ready_path() else {
+            return;
+        };
+        let attempts = self.calculations.entry(view).or_default();
+        if attempts.slot(path).is_some() {
+            return;
+        }
+        // A ready path implies an admitted share, which pinned the common.
         let Some(common) = accumulator.common.clone() else {
             return;
         };
-        let payload_commitment = accumulator.payload_commitment;
-        let metadata = accumulator.metadata.clone();
-        let shares: Vec<(T::SignatureKey, AvidmGf2Share)> = accumulator
-            .shares
-            .iter()
-            .map(|(key, share)| (key.clone(), share.clone()))
-            .collect();
-        let epoch = accumulator.epoch;
-        crate::trace_leader_event!(
-            self.tracer,
+        if attempts.is_empty() {
+            crate::trace_leader_event!(
+                self.tracer,
+                view,
+                LeaderEvent::ThresholdShareReachedVMinus1
+            );
+        }
+        debug!(%view, ?path, "spawning VID reconstruction attempt");
+        let job = ReconstructJob {
             view,
-            crate::leader_trace::LeaderEvent::ThresholdShareReachedVMinus1
-        );
-        let tracer = self.tracer.clone();
-        let task = self.tasks.spawn_blocking(move || {
-            crate::trace_leader_event!(
-                tracer,
-                view,
-                crate::leader_trace::LeaderEvent::RecoverVMinus1Start
-            );
-            let result = reconstruct::<T>(
-                view,
-                epoch,
-                payload_commitment,
-                common,
-                shares,
-                metadata,
-                tracer.clone(),
-            );
-            crate::trace_leader_event!(
-                tracer,
-                view,
-                crate::leader_trace::LeaderEvent::RecoverVMinus1End
-            );
-            result
-        });
-        self.calculations.insert(view, task);
+            epoch: accumulator.epoch,
+            payload_commitment: accumulator.payload_commitment,
+            common,
+            shares: accumulator.shares_for(path),
+            metadata: accumulator.metadata.clone(),
+            path,
+            won: attempts.won.clone(),
+            tracer: self.tracer.clone(),
+        };
+        let task = self.tasks.spawn_blocking(move || job.run());
+        *attempts.slot(path) = Some(task);
     }
 
     pub fn gc(&mut self, view_number: ViewNumber) {
         let keep = self.calculations.split_off(&view_number);
-        for handle in self.calculations.values_mut() {
-            handle.abort();
+        for attempts in self.calculations.values() {
+            attempts.abort();
         }
         self.calculations = keep;
         self.pending = self.pending.split_off(&view_number);
@@ -305,8 +416,8 @@ impl<T: NodeType> VidReconstructor<T> {
         self.reconstructed.insert(view);
         self.pending.remove(&view);
         self.accumulators.remove(&view);
-        if let Some(handle) = self.calculations.remove(&view) {
-            handle.abort();
+        if let Some(attempts) = self.calculations.remove(&view) {
+            attempts.abort();
         }
     }
 }
@@ -460,55 +571,156 @@ impl<T: NodeType> VidShareAccumulator<T> {
         self.ranges().map(ExactSizeIterator::len).sum()
     }
 
-    fn has_enough_shares(&self) -> bool {
-        self.common
+    /// Number of systematic shard positions, those below `threshold`, covered
+    /// by the admitted shares.
+    fn systematic_coverage(&self, threshold: usize) -> usize {
+        self.ranges()
+            .map(|range| range.end.min(threshold).saturating_sub(range.start))
+            .sum()
+    }
+
+    /// The path the admitted shares are ready for, if any. Systematic first:
+    /// with every systematic shard in hand there is nothing to decode.
+    fn ready_path(&self) -> Option<ReconstructPath> {
+        let threshold = self.common.as_ref()?.param.recovery_threshold;
+        if self.systematic_coverage(threshold) >= threshold {
+            Some(ReconstructPath::Systematic)
+        } else if self.coverage() >= threshold {
+            Some(ReconstructPath::Decode)
+        } else {
+            None
+        }
+    }
+
+    /// The admitted shares an attempt down `path` works from. The systematic
+    /// path takes only the shares holding systematic shards, so a bad share
+    /// elsewhere cannot poison it.
+    fn shares_for(&self, path: ReconstructPath) -> Vec<(T::SignatureKey, AvidmGf2Share)> {
+        let threshold = self
+            .common
             .as_ref()
-            .is_some_and(|common| self.coverage() >= common.param.recovery_threshold)
+            .map_or(0, |common| common.param.recovery_threshold);
+        self.shares
+            .iter()
+            .filter(|(_, share)| match path {
+                ReconstructPath::Decode => true,
+                ReconstructPath::Systematic => {
+                    share.range().is_some_and(|range| range.start < threshold)
+                },
+            })
+            .map(|(key, share)| (key.clone(), share.clone()))
+            .collect()
     }
 }
 
-/// Decode the shares and accept the result only if it re-commits to
-/// `payload_commitment`. On failure, report the shares that fail
-/// verification against the commitment (each share is self-authenticating
-/// via its merkle proofs) so they can be weeded out. If every share
-/// verifies, the payload is unrecoverable: the shares cover the recovery
-/// threshold with disjoint ranges, so the disperser committed to a
-/// non-codeword and no share subset can ever succeed.
-fn reconstruct<T: NodeType>(
+/// One reconstruction attempt's inputs.
+struct ReconstructJob<T: NodeType> {
     view: ViewNumber,
     epoch: EpochNumber,
     payload_commitment: VidCommitment2,
     common: AvidmGf2Common,
     shares: Vec<(T::SignatureKey, AvidmGf2Share)>,
     metadata: Metadata<T>,
-    tracer: Option<crate::leader_trace::LeaderTracerHandle>,
-) -> ReconstructResult<T> {
-    let (keys, shares): (Vec<_>, Vec<_>) = shares.into_iter().unzip();
-    if let Some(bytes) =
-        decode_and_recommit::<T>(view, &common, &shares, &payload_commitment, &metadata)
-    {
-        crate::trace_leader_event!(
-            tracer,
-            view,
-            crate::leader_trace::LeaderEvent::RecoverVMinus1DecodeEnd
-        );
-        let payload = T::BlockPayload::from_bytes(&bytes, &metadata);
-        let tx_commitments = payload.transaction_commitments(&metadata);
-        let output = ObtainedPayload {
+    path: ReconstructPath,
+    won: Arc<AtomicBool>,
+    tracer: Option<LeaderTracerHandle>,
+}
+
+impl<T: NodeType> ReconstructJob<T> {
+    /// Recover the payload from the shares and accept it only if it
+    /// re-commits to `payload_commitment`: recovery alone does not bind the
+    /// bytes to the commitment, since a Byzantine disperser can commit to a
+    /// non-codeword and a bad share poisons the erasure decoding.
+    ///
+    /// On failure, report the shares that fail verification against the
+    /// commitment (each share is self-authenticating via its merkle proofs) so
+    /// they can be weeded out. If every share verifies, the payload is
+    /// unrecoverable: the shares cover the recovery threshold with disjoint
+    /// ranges, so the disperser committed to a non-codeword and no share
+    /// subset can ever succeed.
+    fn run(self) -> Attempt<T> {
+        let Self {
             view,
             epoch,
             payload_commitment,
-            payload,
+            common,
+            shares,
             metadata,
-            tx_commitments,
+            path,
+            won,
+            tracer,
+        } = self;
+        crate::trace_leader_event!(tracer, view, LeaderEvent::RecoverVMinus1Start);
+        let (keys, shares): (Vec<_>, Vec<_>) = shares.into_iter().unzip();
+        let bytes = recover(view, &common, &shares);
+        // The other path won meanwhile: its re-commit already bound the
+        // payload, so this one would only confirm it.
+        if won.load(Ordering::Acquire) {
+            return Attempt {
+                view,
+                path,
+                outcome: None,
+            };
+        }
+        let outcome = match bytes {
+            Some(bytes)
+                if matches_commitment(
+                    view,
+                    &common.param,
+                    &metadata.encode(),
+                    &bytes,
+                    &payload_commitment,
+                ) =>
+            {
+                won.store(true, Ordering::Release);
+                crate::trace_leader_event!(tracer, view, LeaderEvent::RecoverVMinus1DecodeEnd);
+                let payload = T::BlockPayload::from_bytes(&bytes, &metadata);
+                let tx_commitments = payload.transaction_commitments(&metadata);
+                Ok(ObtainedPayload {
+                    view,
+                    epoch,
+                    payload_commitment,
+                    payload,
+                    metadata,
+                    tx_commitments,
+                    source: path.into(),
+                })
+            },
+            _ => Err(weed::<T>(view, payload_commitment, &common, keys, &shares)),
         };
-        return Ok(output);
+        crate::trace_leader_event!(tracer, view, LeaderEvent::RecoverVMinus1End);
+        Attempt {
+            view,
+            path,
+            outcome: Some(outcome),
+        }
     }
+}
 
+/// Recover the payload bytes from `shares`, unbound to any commitment.
+fn recover(view: ViewNumber, common: &AvidmGf2Common, shares: &[AvidmGf2Share]) -> Option<Vec<u8>> {
+    match AvidmGf2Scheme::recover(common, shares) {
+        Ok(bytes) => Some(bytes),
+        Err(err) => {
+            warn!(%view, %err, "VID recovery failed");
+            None
+        },
+    }
+}
+
+/// The error for an attempt whose recovered bytes did not re-commit, blaming
+/// the shares that fail verification.
+fn weed<T: NodeType>(
+    view: ViewNumber,
+    payload_commitment: VidCommitment2,
+    common: &AvidmGf2Common,
+    keys: Vec<T::SignatureKey>,
+    shares: &[AvidmGf2Share],
+) -> VidReconstructError<T::SignatureKey> {
     let bad_share_keys: Vec<_> = keys
         .into_iter()
-        .zip(&shares)
-        .filter(|(_, share)| !share_verifies(&common, share))
+        .zip(shares)
+        .filter(|(_, share)| !share_verifies(common, share))
         .map(|(key, _)| key)
         .collect();
 
@@ -528,40 +740,12 @@ fn reconstruct<T: NodeType>(
         );
         VidReconstructErrorKind::AwaitingShares
     };
-    Err(VidReconstructError {
+    VidReconstructError {
         view,
         payload_commitment,
         kind,
         bad_share_keys,
-    })
-}
-
-/// Decode `shares` and return the payload bytes only if they re-commit to
-/// `payload_commitment`. Recovery alone does not bind the decoded bytes
-/// to the commitment: a Byzantine disperser can commit to a non-codeword,
-/// and a bad share poisons the erasure decoding.
-fn decode_and_recommit<T: NodeType>(
-    view: ViewNumber,
-    common: &AvidmGf2Common,
-    shares: &[AvidmGf2Share],
-    payload_commitment: &VidCommitment2,
-    metadata: &Metadata<T>,
-) -> Option<Vec<u8>> {
-    let bytes = match AvidmGf2Scheme::recover(common, shares) {
-        Ok(bytes) => bytes,
-        Err(err) => {
-            warn!(%view, %err, "VID recovery failed");
-            return None;
-        },
-    };
-    matches_commitment(
-        view,
-        &common.param,
-        &metadata.encode(),
-        &bytes,
-        payload_commitment,
-    )
-    .then_some(bytes)
+    }
 }
 
 /// Whether `payload` is what `payload_commitment` commits to, sliced by the
