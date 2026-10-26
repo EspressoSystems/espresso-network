@@ -548,9 +548,18 @@ async fn test_request_block_hashes_a_payload_that_dropped_a_transaction() {
 #[test]
 fn pooled_hashes_stand_in_when_the_payload_kept_every_transaction() {
     let payload = test_payload(vec![tx(1), tx(2)]);
-    // Not the payload's hashes, so the result shows which were used.
-    let pooled = [tx(3).commit(), tx(4).commit()];
+    // Not in the payload's order, so the result shows which were used.
+    let pooled = [tx(2).commit(), tx(1).commit()];
     assert_eq!(transaction_hashes(&payload, &pooled), pooled);
+}
+
+#[cfg(debug_assertions)]
+#[test]
+#[should_panic(expected = "a payload that kept every pooled transaction holds exactly those")]
+fn pooled_hashes_of_other_transactions_fail_a_debug_check() {
+    let payload = test_payload(vec![tx(1), tx(2)]);
+    let pooled = [tx(3).commit(), tx(4).commit()];
+    transaction_hashes(&payload, &pooled);
 }
 
 #[test]

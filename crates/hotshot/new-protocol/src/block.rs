@@ -144,12 +144,21 @@ pub fn block_commitments<T: NodeType>(
 ///
 /// Building a payload can drop transactions but never changes, repeats or adds one, so a payload
 /// that kept as many transactions as the pool gave it holds exactly the pooled ones, and the
-/// pool's hashes save hashing them again.
+/// pool's hashes save hashing them again. Debug builds check this.
 pub(crate) fn transaction_hashes<T: NodeType>(
     payload: &PayloadWithMetadata<T>,
     pooled_hashes: &[Commitment<T::Transaction>],
 ) -> Vec<Commitment<T::Transaction>> {
     if payload.payload.num_transactions(&payload.metadata) == pooled_hashes.len() {
+        debug_assert_eq!(
+            pooled_hashes.iter().copied().collect::<HashSet<_>>(),
+            payload
+                .payload
+                .transaction_commitments(&payload.metadata)
+                .into_iter()
+                .collect::<HashSet<_>>(),
+            "a payload that kept every pooled transaction holds exactly those"
+        );
         pooled_hashes.to_vec()
     } else {
         debug_span!("transaction_hashes")
