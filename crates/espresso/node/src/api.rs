@@ -10042,11 +10042,11 @@ mod test {
             .unwrap();
         assert!(v2_search.blocks.is_empty());
 
-        // Catchup names state by the (height, view) a replaying node is at, so ask for the state
-        // just past the last decide, which is what a peer fetches.
+        // A catching-up peer names state by its parent leaf's (height, view). The decided leaf's
+        // state is always in memory, while the view after it may not have a proposal yet.
         let leaf = network.server.decided_leaf().await;
-        let catchup_height = leaf.height() + 1;
-        let catchup_view = leaf.view_number().u64() + 1;
+        let catchup_height = leaf.height();
+        let catchup_view = leaf.view_number().u64();
         let account = format!("{:x}", Address::default());
         let v1_account: crate::api::AccountQueryData = client
             .get(&format!(
