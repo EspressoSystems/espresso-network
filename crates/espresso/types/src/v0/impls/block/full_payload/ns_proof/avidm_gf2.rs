@@ -280,7 +280,7 @@ mod tests {
         )
         .remove(0);
         let block =
-            Payload::from_transactions(test.all_txs(), &Default::default(), &Default::default())
+            Payload::from_transactions(&test.all_txs(), &Default::default(), &Default::default())
                 .await
                 .unwrap()
                 .0;

@@ -13604,7 +13604,9 @@ mod test {
                 "{version}"
             ),
             NsProof::V2(..) => assert!(version >= NEW_PROTOCOL_VERSION, "{version}"),
-            NsProof::V1IncorrectEncoding(..) => panic!("honest blocks are encoded correctly"),
+            NsProof::V1IncorrectEncoding(..) | NsProof::V2IncorrectEncoding(..) => {
+                panic!("honest blocks are encoded correctly")
+            },
         }
     }
 
