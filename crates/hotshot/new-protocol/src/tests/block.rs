@@ -2,20 +2,23 @@ use std::{collections::BTreeMap, marker::PhantomData, num::NonZeroU64, sync::Arc
 
 use committable::Committable;
 use hotshot_example_types::{
-    block_types::TestTransaction, node_types::TestTypes, state_types::TestInstanceState,
+    block_types::{TestBlockPayload, TestMetadata, TestTransaction},
+    node_types::TestTypes,
+    state_types::TestInstanceState,
 };
 use hotshot_types::{
+    consensus::PayloadWithMetadata,
     data::{EpochNumber, ViewNumber},
     message::UpgradeLock,
     signature_key::BLSPubKey,
     simple_certificate::UpgradeCertificate,
     simple_vote::UpgradeProposalData,
-    traits::signature_key::SignatureKey,
+    traits::{BlockPayload, signature_key::SignatureKey},
 };
 use versions::{NEW_PROTOCOL_VERSION, TIMEOUT_EPOCH_VERSION, Upgrade, Version};
 
 use crate::{
-    block::{BlockBuilder, BlockBuilderConfig, forward_budget},
+    block::{BlockBuilder, BlockBuilderConfig, forward_budget, transaction_hashes},
     helpers::test_upgrade_lock,
     message::{BlockMessage, DedupManifest, Message, MessageType, TransactionMessage, Validated},
     network::{MIN_MESSAGE_LIMIT, message_limit},
@@ -230,8 +233,7 @@ async fn test_smaller_blocks_drop_what_no_longer_fits() {
 /// the builder's own output shows whether the leader still hashed the payload.
 #[tokio::test]
 async fn test_builder_commitment_is_empty_from_the_version_that_dropped_it() {
-    use hotshot_example_types::block_types::TestBlockPayload;
-    use hotshot_types::{traits::BlockPayload, utils::BuilderCommitment};
+    use hotshot_types::utils::BuilderCommitment;
 
     use crate::{block::BlockAndHeaderRequest, tests::common::utils::TestData};
 
@@ -486,14 +488,58 @@ async fn test_request_block_same_view_reuses_transactions() {
         outputs.push(output);
     }
     assert_eq!(outputs[0].payload_commitment, outputs[1].payload_commitment);
-    let mut hashes = outputs[1].manifest.hashes.clone();
-    hashes.sort();
-    let mut expected = vec![tx(1).commit(), tx(2).commit()];
-    expected.sort();
-    assert_eq!(hashes, expected);
+    let expected = sorted(vec![tx(1).commit(), tx(2).commit()]);
+    for output in &outputs {
+        let payload = &output.payload;
+        let computed = <TestBlockPayload as BlockPayload<TestTypes>>::transaction_commitments(
+            &payload.payload,
+            &payload.metadata,
+        );
+        assert_eq!(
+            sorted(output.manifest.hashes.clone()),
+            expected,
+            "both blocks name the pooled transactions"
+        );
+        assert_eq!(
+            sorted(computed),
+            expected,
+            "the manifest names exactly the payload's transactions"
+        );
+    }
 
     let txns = b.drain(view(6));
     assert_eq!(txns, vec![tx(3)]);
+}
+
+#[test]
+fn pooled_hashes_stand_in_when_the_payload_kept_every_transaction() {
+    let payload = test_payload(vec![tx(1), tx(2)]);
+    // Not the payload's hashes, so the result shows which were used.
+    let pooled = [tx(3).commit(), tx(4).commit()];
+    assert_eq!(transaction_hashes(&payload, Some(&pooled)), pooled);
+}
+
+#[test]
+fn payload_is_hashed_when_it_dropped_a_pooled_transaction() {
+    let payload = test_payload(vec![tx(1), tx(2)]);
+    let computed = vec![tx(1).commit(), tx(2).commit()];
+    let pooled = [tx(1).commit(), tx(2).commit(), tx(3).commit()];
+    assert_eq!(transaction_hashes(&payload, Some(&pooled)), computed);
+    assert_eq!(transaction_hashes(&payload, None), computed);
+}
+
+fn test_payload(transactions: Vec<TestTransaction>) -> PayloadWithMetadata<TestTypes> {
+    PayloadWithMetadata {
+        metadata: TestMetadata {
+            num_transactions: transactions.len() as u64,
+        },
+        payload: TestBlockPayload { transactions },
+    }
+}
+
+fn sorted<T: Ord>(mut items: Vec<T>) -> Vec<T> {
+    items.sort();
+    items
 }
 
 /// A duplicate request (same view AND same parent) is still deduped.

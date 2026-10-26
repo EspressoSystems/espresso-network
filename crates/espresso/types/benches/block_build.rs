@@ -9,6 +9,9 @@
 //! which assumes every step span except `tx_hash` is entered and exited exactly once per
 //! iteration, by one thread.
 //!
+//! Like the leader, it passes the pool's hashes of the transactions. Every transaction fits, so
+//! the hashes are reused and the `transaction_hashes` step does not run.
+//!
 //! Inputs mirror the network-bench load generator: random 1 MiB transactions round-robin over
 //! 16 namespaces in 30 to 70 MiB blocks, protocol version 0.6 (AvidmGf2), 100 nodes. Real stakes
 //! are large, so the VID total weight is the `approximate_weights` result for 100 equal stakes
@@ -24,6 +27,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use committable::{Commitment, Committable};
 use criterion::{BenchmarkId, Criterion, SamplingMode};
 use espresso_types::{ChainConfig, NamespaceId, NsTable, Payload, SeqTypes, Transaction};
 use hotshot_new_protocol::block::{BlockCommitments, block_commitments};
@@ -59,24 +63,31 @@ fn bench_block_build(c: &mut Criterion) {
     for block_mib in BLOCK_MIB {
         let label = format!("{block_mib}MiB_t{threads}_n{NODES}");
         let txs = transactions(block_mib);
+        let pooled_hashes: Vec<_> = txs.iter().map(Committable::commit).collect();
         group.bench_function(BenchmarkId::new("request_block", &label), |b| {
-            b.iter_with_large_drop(|| request_block(&txs))
+            b.iter_with_large_drop(|| request_block(&txs, &pooled_hashes))
         });
         write_steps(&format!("block_build/request_block/{label}"));
     }
     group.finish();
 }
 
-/// The leader's build task after the transactions are taken; outputs are returned so their drop
-/// is untimed.
+/// The leader's build task after the transactions and their pool hashes are taken; outputs are
+/// returned so their drop is untimed.
 fn request_block(
     txs: &[Transaction],
+    pooled_hashes: &[Commitment<Transaction>],
 ) -> (PayloadWithMetadata<SeqTypes>, BlockCommitments<SeqTypes>) {
     let _span = tracing::debug_span!("request_block").entered();
     let (payload, metadata): (Payload, NsTable) =
         Payload::from_transactions_sync(txs, chain_config()).expect("payload construction");
     let payload = PayloadWithMetadata { payload, metadata };
-    let commitments = block_commitments(&payload, VID_WEIGHT, NEW_PROTOCOL_VERSION);
+    let commitments = block_commitments(
+        &payload,
+        Some(pooled_hashes),
+        VID_WEIGHT,
+        NEW_PROTOCOL_VERSION,
+    );
     (payload, commitments)
 }
 
@@ -102,7 +113,8 @@ fn chain_config() -> ChainConfig {
 /// relative to the enclosing `request_block` span. The CPU kind depends on the step:
 /// - thread CPU: `from_transactions`, `encode`, `builder_commitment`
 /// - process CPU, including rayon workers spinning for work: `request_block`, `block_commitments`
-/// - sum of the `tx_hash` leaves' thread CPU: `transaction_hashes`
+/// - sum of the `tx_hash` leaves' thread CPU: `transaction_hashes`, absent while the pool's hashes
+///   are reused
 /// - residual upper bound, process CPU of `block_commitments` minus the steps above:
 ///   `vid_commitment`
 static STEPS: Mutex<BTreeMap<&'static str, Vec<[f64; 3]>>> = Mutex::new(BTreeMap::new());
