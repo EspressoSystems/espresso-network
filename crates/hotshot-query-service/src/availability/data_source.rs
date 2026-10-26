@@ -19,9 +19,7 @@ use futures::{
 };
 pub use hotshot_new_protocol::message::Certificate2;
 pub use hotshot_query_service_types::availability::{BlockId, LeafId};
-use hotshot_types::{
-    data::VidShare, simple_certificate::CertificatePair, traits::node_implementation::NodeType,
-};
+use hotshot_types::{data::VidShare, traits::node_implementation::NodeType};
 
 use super::{
     BlockWithTransaction,
@@ -255,7 +253,6 @@ pub struct BlockInfo<Types: NodeType> {
     pub block: Option<BlockQueryData<Types>>,
     pub vid_common: Option<VidCommonQueryData<Types>>,
     pub vid_share: Option<VidShare>,
-    pub qc_chain: Option<[CertificatePair<Types>; 2]>,
     /// New protocol finality certificate, present at heights finalized by cert2.
     pub cert2: Option<Certificate2<Types>>,
 }
@@ -284,14 +281,8 @@ impl<Types: NodeType> BlockInfo<Types> {
             block,
             vid_common,
             vid_share,
-            qc_chain: None,
             cert2: None,
         }
-    }
-
-    pub fn with_qc_chain(mut self, qc_chain: [CertificatePair<Types>; 2]) -> Self {
-        self.qc_chain = Some(qc_chain);
-        self
     }
 
     pub fn with_cert2(mut self, cert2: Certificate2<Types>) -> Self {

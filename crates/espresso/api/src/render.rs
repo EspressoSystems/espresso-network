@@ -124,6 +124,14 @@ impl From<&Header> for proto::HeaderResponse {
     }
 }
 
+/// Empty from 0.7, when the header stopped carrying a builder commitment but kept the 0.5 shape.
+fn builder_commitment(header: &Header) -> String {
+    header
+        .builder_commitment()
+        .map(ToString::to_string)
+        .unwrap_or_default()
+}
+
 impl From<&Header> for proto::HeaderV1 {
     fn from(header: &Header) -> Self {
         proto::HeaderV1 {
@@ -133,7 +141,7 @@ impl From<&Header> for proto::HeaderV1 {
             l1_head: header.l1_head(),
             l1_finalized: header.l1_finalized().map(Into::into),
             payload_commitment: header.payload_commitment().to_string(),
-            builder_commitment: header.builder_commitment().to_string(),
+            builder_commitment: builder_commitment(header),
             ns_table: Some(proto::NsTable {
                 bytes: header.ns_table().encode().to_vec(),
             }),
@@ -155,7 +163,7 @@ impl From<&Header> for proto::HeaderV3 {
             l1_head: header.l1_head(),
             l1_finalized: header.l1_finalized().map(Into::into),
             payload_commitment: header.payload_commitment().to_string(),
-            builder_commitment: header.builder_commitment().to_string(),
+            builder_commitment: builder_commitment(header),
             ns_table: Some(proto::NsTable {
                 bytes: header.ns_table().encode().to_vec(),
             }),
@@ -180,7 +188,7 @@ fn header_v4(header: &Header) -> proto::HeaderV4 {
         l1_head: header.l1_head(),
         l1_finalized: header.l1_finalized().map(Into::into),
         payload_commitment: header.payload_commitment().to_string(),
-        builder_commitment: header.builder_commitment().to_string(),
+        builder_commitment: builder_commitment(header),
         ns_table: Some(proto::NsTable {
             bytes: header.ns_table().encode().to_vec(),
         }),
@@ -207,7 +215,7 @@ fn header_v5(header: &Header) -> proto::HeaderV5 {
         l1_head: header.l1_head(),
         l1_finalized: header.l1_finalized().map(Into::into),
         payload_commitment: header.payload_commitment().to_string(),
-        builder_commitment: header.builder_commitment().to_string(),
+        builder_commitment: builder_commitment(header),
         ns_table: Some(proto::NsTable {
             bytes: header.ns_table().encode().to_vec(),
         }),
@@ -733,30 +741,14 @@ impl From<PublicNetworkConfig> for proto::HotshotConfigResponse {
             num_bootstrap: num_bootstrap as u64,
             commit_sha: public_config.commit_sha().to_string(),
             indexed_da: public_config.indexed_da(),
-            cdn_marshal_address: public_config.cdn_marshal_address().map(ToString::to_string),
-            libp2p_config: public_config
-                .libp2p_config()
-                .map(|libp2p| proto::Libp2pNetworkConfig {
-                    bootstrap_nodes: libp2p
-                        .bootstrap_nodes
-                        .iter()
-                        .map(|(peer_id, multiaddr)| proto::Libp2pBootstrapNode {
-                            peer_id: peer_id.to_string(),
-                            multiaddr: multiaddr.to_string(),
-                        })
-                        .collect(),
-                }),
-            combined_network_config: public_config.combined_network_config().map(|combined| {
-                proto::CombinedNetworkConfig {
-                    delay_duration_ms: combined.delay_duration.as_millis() as u64,
-                }
-            }),
             builder: match public_config.builder() {
                 BuilderType::External => proto::BuilderType::External,
                 BuilderType::Simple => proto::BuilderType::Simple,
                 BuilderType::Random => proto::BuilderType::Random,
             }
             .into(),
+            // The deprecated CDN and libp2p fields stay at their empty defaults.
+            ..Default::default()
         }
     }
 }

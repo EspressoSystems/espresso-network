@@ -1,6 +1,7 @@
-use hotshot::types::BLSPubKey;
 use hotshot_example_types::node_types::TestTypes;
-use hotshot_types::{traits::signature_key::SignatureKey, vote::HasViewNumber};
+use hotshot_types::{
+    signature_key::BLSPubKey, traits::signature_key::SignatureKey, vote::HasViewNumber,
+};
 
 use crate::consensus::{ConsensusInput, ConsensusOutput};
 
@@ -31,6 +32,14 @@ pub(crate) fn decides_view(output: &ConsensusOutput<TestTypes>, view: u64) -> bo
         ConsensusOutput::LeafDecided { leaves, .. }
             if leaves.iter().any(|l| *l.view_number() == view)
     )
+}
+
+pub(crate) fn is_proposal_paired(output: &ConsensusOutput<TestTypes>) -> bool {
+    matches!(output, ConsensusOutput::ProposalPaired { .. })
+}
+
+pub(crate) fn is_proposal_certified(output: &ConsensusOutput<TestTypes>) -> bool {
+    matches!(output, ConsensusOutput::ProposalCertified(_))
 }
 
 pub(crate) fn is_request_state(output: &ConsensusOutput<TestTypes>) -> bool {

@@ -3,76 +3,69 @@ module
 public import NewProtocolSpec.Base
 public import NewProtocolSpec.Types
 public import NewProtocolSpec.Interface
-public import NewProtocolSpec.State
-public import NewProtocolSpec.Step
-public import NewProtocolSpec.Gc
-public import NewProtocolSpec.Run
-public import NewProtocolSpec.Liveness
-public import NewProtocolSpec.DecideStream
-public import NewProtocolSpec.Invariants
-public import NewProtocolSpec.Assumptions
+public import NewProtocolSpec.Validity
+public import NewProtocolSpec.History
+public import NewProtocolSpec.Rules
 public import NewProtocolSpec.Network
-public import NewProtocolSpec.Safety
-public import NewProtocolSpec.Progress
-public import NewProtocolSpec.Deadlock
-public import NewProtocolSpec.Round
-public import NewProtocolSpec.Implements
+public import NewProtocolSpec.Timing
+public import NewProtocolSpec.Properties
+public import NewProtocolSpec.Lists
+public import NewProtocolSpec.Proofs.Traces
+public import NewProtocolSpec.Proofs.Inputs
+public import NewProtocolSpec.Proofs.Votes
+public import NewProtocolSpec.Proofs.Certificates
+public import NewProtocolSpec.Proofs.Safety
+public import NewProtocolSpec.Proofs.Decide
+public import NewProtocolSpec.Proofs.Liveness.Basic
+public import NewProtocolSpec.Proofs.Liveness.First
+public import NewProtocolSpec.Proofs.Liveness.Stable
+public import NewProtocolSpec.Proofs.Liveness.View
+public import NewProtocolSpec.Proofs.Liveness.Epochs
+public import NewProtocolSpec.Witness
 public import NewProtocolSpec.Checks
 
 /-!
 # The consensus specification
 
-What one consensus node must do, and the whole contract an implementation owes:
-`SafetySpec` and `StepSpec` for a step, `GcSpec` for a collection, `decideSafety`
-for the result they are built for, and `Conforms` for what an implementation owes.
+What an honest node must do, stated over its history: the inputs it received and
+the outputs it produced. Nothing here describes how a node stores what it has
+seen, schedules its work or talks to its own modules. Those are left to
+implementations, which are checked against these rules by proof (a Lean machine)
+or on recorded traces (the Rust node).
 
 ## Modules
 
-* `Base` — view numbers
-* `Types` — the data a node sends, receives and stores
-* `Interface` — the configuration, and the inputs and outputs of one step
-* `State` — `NodeState`, the history a node keeps
-* `Step` — the rules, when an action is owed, and the two structures that
-  collect them: `SafetySpec` and `StepSpec`, which extends it
-* `Gc` — pruning, the rule for the other kind of step
-* `Run` — the two kinds of step as one relation, and the runs they generate,
-  over whichever of the two structures a result needs
-* `Liveness` — progress, as fairness over runs
-* `Implements` — what it means to conform: safety *and* progress
-* `DecideStream` — what the decide stream guarantees to the application, and
-  what it deliberately does not
-* `Invariants` — what a node's own state satisfies at every reachable state,
-  where two rules read different fields for the same purpose
-* `Assumptions` — the premises taken rather than proved, in one place
-* `Network` — the committee, certificates as the votes behind them, and what
-  those certificates guarantee
-* `Safety` — the no-fork property
-* `Progress` — what an owed action is worth: fairness turned into an output, and a
-  quorum's worth of votes turned into a certificate
-* `Deadlock` — that an action can always be made owed, by inputs the specification
-  itself admits, and that delivering them makes the node act
-* `Round` — the hops of `Progress` and `Deadlock` composed: delivery to two
-  quorums commits a block, and no-fork places it
-* `Checks` — the claims this specification makes about itself, checked at build
-  time, with `Checks/Examples.lean` exhibiting states that owe an action so that
-  no obligation's guards are checked only in prose
+* `Base`: view, epoch and block numbers, and the epoch a block falls in
+* `Types`: the data nodes exchange
+* `Interface`: the configuration, and the inputs and outputs of a step
+* `Validity`: conditions on data alone, such as a well-formed proposal
+* `History`: a node's history, and what it holds, is locked on, and is in
+* `Rules`: the signing rules, the rest of the protocol, and what a node owes
+* `Network`: committees, one trace per honest node, and certificates that stand
+  for real votes
+* `Timing`: times, promptness, and synchrony after GST
+* `Properties`: no fork, agreement on decides, and a chain that keeps growing
+* `Lists`: a history as finite lists, each proved to hold what a predicate names
+* `Proofs/`: `noFork` (`Proofs/Safety.lean`) and `decideAgreement`
+  (`Proofs/Decide.lean`), from the signing rules and the verification premises
+  alone; `ChainGrows` for every epoch height (`Proofs/Liveness/Epochs.lean`), from
+  the full protocol, promptness and synchrony
+* `Witness`: a network meeting every safety premise, with a block committed and
+  an epoch opened behind it
+* `Checks`: the axiom footprint and the field lists of the rules and premises
 
-`Network`, `Safety`, `DecideStream` and `Progress` come in three parts each: `X/Defs.lean`
-holds the definitions the statements are phrased with, `X/Lemmas.lean` the
-kernel-checked scaffolding, and `X.lean` the results. An audit reads the first
-and the third. `Deadlock` and `Round` have two parts each and no scaffolding:
-their definitions are in `X/Defs.lean` and their results, proved in place, in
-`X.lean`. `Invariants` is one file, proved in place.
+## What is fixed and what is free
 
-Everything from `Network` upwards talks about nodes that obey `SafetySpec` and
-nothing else. So a safety proof cannot reach for another clause: there is none in
-scope to reach for. `Run.weaken` says a node obeying all of `StepSpec` is one
-of these, so the results apply to it too.
+The specification fixes what goes on the wire, when a node may sign, what it must
+eventually do, and what it may propose after a timeout. It leaves free how a node
+checks the signing rules (a lock is one way), how it stores and prunes, how
+promptly it acts within the bound `δ`, and how messages spread, as long as the
+delivery assumptions of `Synchrony` hold.
 
-`Progress`, `Deadlock` and `Round` are the other direction, and are the only
-places the obligations to act are used. Both are conditional throughout: a node acts if the
-environment delivers and nothing overtakes the view, and neither of those is
-something the specification models. What they establish is that the rules
-themselves leave no way to stall — which no reading of a clause list can settle,
-since it is a property of the conjunction.
+## Not covered
+
+Restarts, a node's own storage, anything before GST beyond safety, and more than
+the tolerated number of faulty nodes in a committee. Nor is fetching what a node
+missed: a decide may skip ancestors the node does not hold, so no node is promised
+every committed block.
 -/

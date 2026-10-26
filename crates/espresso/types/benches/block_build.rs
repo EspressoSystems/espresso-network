@@ -1,12 +1,13 @@
 //! The leader's block build (`request_block` in crates/hotshot/new-protocol/src/block.rs), timed
 //! step by step.
 //!
-//! `request_block` runs `from_transactions` on a copy of the cached transactions, then
+//! `request_block` runs `from_transactions` on the cached transactions, then
 //! `hotshot_new_protocol::block::block_commitments`, the function the leader calls. A tracing
-//! layer records each step span's start and duration; when `CRITERION_HOME` is set they are
+//! layer records each step's start, completion and CPU time; when `CRITERION_HOME` is set they are
 //! written to `steps.json` next to the benchmark's criterion output. Step samples start with
 //! criterion's warm-up iterations; scripts/bench-block-build keeps one per measured iteration,
-//! which assumes every recorded span opens exactly once per iteration.
+//! which assumes every step span except `tx_hash` is entered and exited exactly once per
+//! iteration, by one thread.
 //!
 //! Inputs mirror the network-bench load generator: random 1 MiB transactions round-robin over
 //! 16 namespaces in 30 to 70 MiB blocks, protocol version 0.6 (AvidmGf2), 100 nodes. Real stakes
@@ -29,6 +30,7 @@ use hotshot_new_protocol::block::{BlockCommitments, block_commitments};
 use hotshot_types::{consensus::PayloadWithMetadata, data::vid_disperse::VID_TARGET_TOTAL_STAKE};
 use rand::{RngCore, SeedableRng};
 use rand_chacha::ChaCha20Rng;
+use rustix::time::{ClockId, clock_gettime};
 use tracing::{Level, Subscriber, span};
 use tracing_subscriber::{
     Layer,
@@ -71,11 +73,8 @@ fn request_block(
     txs: &[Transaction],
 ) -> (PayloadWithMetadata<SeqTypes>, BlockCommitments<SeqTypes>) {
     let _span = tracing::debug_span!("request_block").entered();
-    // `from_transactions` takes owned transactions, so the leader clones its cached ones
-    // (`transactions_for` in block.rs).
     let (payload, metadata): (Payload, NsTable) =
-        Payload::from_transactions_sync(txs.to_vec(), chain_config())
-            .expect("payload construction");
+        Payload::from_transactions_sync(txs, chain_config()).expect("payload construction");
     let payload = PayloadWithMetadata { payload, metadata };
     let commitments = block_commitments(&payload, VID_WEIGHT, NEW_PROTOCOL_VERSION);
     (payload, commitments)
@@ -99,45 +98,143 @@ fn chain_config() -> ChainConfig {
     }
 }
 
-/// `[start, duration]` in ms of closed spans, by span name; start is relative to the enclosing
-/// `request_block` span.
-static STEPS: Mutex<BTreeMap<&'static str, Vec<[f64; 2]>>> = Mutex::new(BTreeMap::new());
+/// `[start, completion - start, cpu]` in ms per step and iteration, by step name; start is
+/// relative to the enclosing `request_block` span. The CPU kind depends on the step:
+/// - thread CPU: `from_transactions`, `encode`, `builder_commitment`
+/// - process CPU, including rayon workers spinning for work: `request_block`, `block_commitments`
+/// - sum of the `tx_hash` leaves' thread CPU: `transaction_hashes`
+/// - residual upper bound, process CPU of `block_commitments` minus the steps above:
+///   `vid_commitment`
+static STEPS: Mutex<BTreeMap<&'static str, Vec<[f64; 3]>>> = Mutex::new(BTreeMap::new());
 
-/// Start of the current `request_block` span. Steps on rayon threads have no parent span, and
-/// iterations run one at a time, so this is their common origin.
-static ITERATION_START: Mutex<Option<Instant>> = Mutex::new(None);
+/// The running `request_block` iteration. Steps on rayon threads have no parent span, and
+/// iterations run one at a time, so this is their common state.
+static ITERATION: Mutex<Option<Iteration>> = Mutex::new(None);
 
-/// Records when each span starts and how long it lives into [`STEPS`].
+/// Wall and CPU readings at a span's most recent enter.
+struct Entered {
+    at: Instant,
+    thread_cpu: f64,
+    process_cpu: Option<f64>,
+}
+
+/// A step span that has exited, in ms relative to the iteration start.
+struct Step {
+    name: &'static str,
+    start: f64,
+    end: f64,
+    cpu: f64,
+}
+
+struct Iteration {
+    origin: Instant,
+    steps: Vec<Step>,
+    /// Sum of `tx_hash` thread CPU.
+    leaf_cpu: f64,
+    /// Latest `tx_hash` exit, when `transaction_hashes` completes.
+    leaves_end: Option<f64>,
+}
+
+/// Times each step by its own work. A rayon worker that waits inside a step span steals unrelated
+/// jobs, so a step's span can last as long as the VID work. The `tx_hash` spans make no rayon
+/// calls: the hashing step completes at the last leaf exit and costs the leaves' summed thread
+/// CPU. The VID step's CPU is what the process spent in `block_commitments` beyond the other steps.
 struct StepTimer;
 
 impl<S: Subscriber + for<'a> LookupSpan<'a>> Layer<S> for StepTimer {
-    fn on_new_span(&self, _: &span::Attributes<'_>, id: &span::Id, ctx: Context<'_, S>) {
-        let span = ctx.span(id).expect("new span is registered");
-        let now = Instant::now();
+    fn on_enter(&self, id: &span::Id, ctx: Context<'_, S>) {
+        let at = Instant::now();
+        let span = ctx.span(id).expect("entered span is registered");
+        let entered = Entered {
+            at,
+            thread_cpu: cpu_ms(ClockId::ThreadCPUTime),
+            process_cpu: wide(span.name()).then(|| cpu_ms(ClockId::ProcessCPUTime)),
+        };
         if span.name() == "request_block" {
-            *ITERATION_START.lock().expect("iteration start lock") = Some(now);
+            *ITERATION.lock().expect("iteration lock") = Some(Iteration {
+                origin: at,
+                steps: Vec::new(),
+                leaf_cpu: 0.0,
+                leaves_end: None,
+            });
         }
-        span.extensions_mut().insert(now);
+        span.extensions_mut().replace(entered);
     }
 
-    fn on_close(&self, id: span::Id, ctx: Context<'_, S>) {
+    fn on_exit(&self, id: &span::Id, ctx: Context<'_, S>) {
         let end = Instant::now();
-        let span = ctx.span(&id).expect("closing span is registered");
-        let start = *span
-            .extensions()
-            .get::<Instant>()
-            .expect("start recorded in on_new_span");
-        let origin = ITERATION_START
-            .lock()
-            .expect("iteration start lock")
-            .unwrap_or(start);
-        STEPS
-            .lock()
-            .expect("steps lock")
-            .entry(span.name())
-            .or_default()
-            .push([ms(start - origin), ms(end - start)]);
+        let thread_cpu = cpu_ms(ClockId::ThreadCPUTime);
+        let span = ctx.span(id).expect("exited span is registered");
+        let name = span.name();
+        let (start, start_cpu, start_process) = {
+            let ext = span.extensions();
+            let entered = ext.get::<Entered>().expect("recorded in on_enter");
+            (entered.at, entered.thread_cpu, entered.process_cpu)
+        };
+        let mut guard = ITERATION.lock().expect("iteration lock");
+        let iteration = guard.as_mut().expect("spans run inside request_block");
+        let rel = |t: Instant| ms(t - iteration.origin);
+        if name == "tx_hash" {
+            iteration.leaf_cpu += thread_cpu - start_cpu;
+            iteration.leaves_end = Some(iteration.leaves_end.map_or(rel(end), |e| e.max(rel(end))));
+            return;
+        }
+        let cpu = match start_process {
+            Some(process) => cpu_ms(ClockId::ProcessCPUTime) - process,
+            None => thread_cpu - start_cpu,
+        };
+        iteration.steps.push(Step {
+            name,
+            start: rel(start),
+            end: rel(end),
+            cpu,
+        });
+        if name == "request_block" {
+            record(guard.take().expect("iteration present"));
+        }
     }
+}
+
+/// Spans entered outside the rayon pool, whose CPU is read from the process clock.
+fn wide(name: &str) -> bool {
+    matches!(name, "request_block" | "block_commitments")
+}
+
+/// Pushes one row per step of a finished iteration into [`STEPS`].
+fn record(iteration: Iteration) {
+    let cpu_of = |name: &str| {
+        iteration
+            .steps
+            .iter()
+            .find(|s| s.name == name)
+            .map(|s| s.cpu)
+    };
+    // Absent from `NO_BUILDER_COMMITMENT_VERSION` onwards.
+    let builder_cpu = cpu_of("builder_commitment").unwrap_or(0.0);
+    let vid_cpu = cpu_of("block_commitments").expect("block_commitments ran")
+        - iteration.leaf_cpu
+        - builder_cpu
+        - cpu_of("encode").expect("encode ran");
+    let mut steps = STEPS.lock().expect("steps lock");
+    for step in &iteration.steps {
+        let (end, cpu) = match step.name {
+            "transaction_hashes" => (
+                iteration.leaves_end.expect("a tx_hash span ran"),
+                iteration.leaf_cpu,
+            ),
+            "vid_commitment" => (step.end, vid_cpu),
+            _ => (step.end, step.cpu),
+        };
+        steps
+            .entry(step.name)
+            .or_default()
+            .push([step.start, end - step.start, cpu]);
+    }
+}
+
+fn cpu_ms(clock: ClockId) -> f64 {
+    let ts = clock_gettime(clock);
+    ts.tv_sec as f64 * 1e3 + ts.tv_nsec as f64 / 1e6
 }
 
 fn install_step_timer() {

@@ -456,6 +456,9 @@ where
             Err(QueryError::Error { message }) => {
                 anyhow::bail!("failed to load leaves for ranges {req:?}: {message}")
             },
+            Err(err @ QueryError::Pruned { .. }) => {
+                anyhow::bail!("failed to load leaves for ranges {req:?}: {err}")
+            },
         }
         Ok(())
     }
@@ -535,6 +538,9 @@ where
             ),
             Err(QueryError::Error { message }) => {
                 anyhow::bail!("failed to load leaves for ranges {req:?}: {message}")
+            },
+            Err(err @ QueryError::Pruned { .. }) => {
+                anyhow::bail!("failed to load leaves for ranges {req:?}: {err}")
             },
         }
         Ok(())

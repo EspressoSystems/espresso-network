@@ -5,7 +5,7 @@ use async_trait::async_trait;
 use committable::{Commitment, Committable};
 use espresso_types::{
     BackoffParams, BlockMerkleTree, FeeAccount, FeeAccountProof, FeeMerkleCommitment, Leaf2,
-    NodeState, PubKey, SeqTypes,
+    NodeState, SeqTypes,
     traits::{SequencerPersistence, StateCatchup},
     v0_3::{ChainConfig, RewardAccountProofV1, RewardAccountV1, RewardMerkleCommitmentV1},
     v0_4::{
@@ -13,14 +13,13 @@ use espresso_types::{
         forgotten_accounts_include,
     },
 };
-use hotshot::traits::NodeImplementation;
 use hotshot_new_protocol::{storage::NewProtocolStorage, utils::verify_new_protocol_leaf_chain};
 use hotshot_types::{
     data::ViewNumber, epoch_membership::EpochMembershipCoordinator, message::UpgradeLock,
-    simple_certificate::LightClientStateUpdateCertificateV2, traits::network::ConnectedNetwork,
+    simple_certificate::LightClientStateUpdateCertificateV2,
+    traits::node_implementation::NodeImplementation,
 };
 use jf_merkle_tree_compat::{ForgetableMerkleTreeScheme, MerkleTreeScheme};
-use request_response::RequestType;
 use tokio::time::timeout;
 use versions::NEW_PROTOCOL_VERSION;
 
@@ -34,8 +33,8 @@ use crate::{
 };
 
 #[async_trait]
-impl<I: NodeImplementation<SeqTypes>, N: ConnectedNetwork<PubKey>, P: SequencerPersistence>
-    StateCatchup for RequestResponseProtocol<I, N, P>
+impl<I: NodeImplementation<SeqTypes>, P: SequencerPersistence> StateCatchup
+    for RequestResponseProtocol<I, P>
 where
     I::Storage: NewProtocolStorage<SeqTypes>,
 {
@@ -225,7 +224,6 @@ where
         let response = self
             .request_indefinitely(
                 Request::Accounts(height, *view, accounts),
-                RequestType::Batched,
                 response_validation_fn,
             )
             .await
@@ -248,7 +246,6 @@ where
         let leaf_chain = self
             .request_indefinitely(
                 Request::Leaf(height),
-                RequestType::Batched,
                 move |_request: &Request, response: Response| async move {
                     let Response::Leaf(leaves) = response else {
                         return Err(anyhow::anyhow!("expected leaf response"));
@@ -277,7 +274,6 @@ where
             let cert2 = self
                 .request_indefinitely(
                     Request::Cert2(cert2_height),
-                    RequestType::Batched,
                     move |_request: &Request, response: Response| async move {
                         let Response::Cert2(cert2) = response else {
                             return Err(anyhow::anyhow!("expected cert2 response"));
@@ -330,11 +326,7 @@ where
 
         // Wait for the protocol to send us the chain config
         let response = self
-            .request_indefinitely(
-                Request::ChainConfig(commitment),
-                RequestType::Batched,
-                response_validation_fn,
-            )
+            .request_indefinitely(Request::ChainConfig(commitment), response_validation_fn)
             .await
             .with_context(|| "failed to request chain config")?;
 
@@ -389,7 +381,6 @@ where
         let response = self
             .request_indefinitely(
                 Request::BlocksFrontier(height, *view),
-                RequestType::Batched,
                 response_validation_fn,
             )
             .await
@@ -441,7 +432,6 @@ where
         let response = self
             .request_indefinitely(
                 Request::RewardMerkleTreeV2(height, *view),
-                RequestType::Batched,
                 response_validation_fn,
             )
             .await
@@ -499,7 +489,6 @@ where
         let response = self
             .request_indefinitely(
                 Request::RewardAccountsV1(height, *view, accounts),
-                RequestType::Batched,
                 response_validation_fn,
             )
             .await
@@ -528,11 +517,7 @@ where
 
         // Wait for the protocol to send us the state cert
         let response = self
-            .request_indefinitely(
-                Request::StateCert(epoch),
-                RequestType::Batched,
-                response_validation_fn,
-            )
+            .request_indefinitely(Request::StateCert(epoch), response_validation_fn)
             .await
             .with_context(|| "failed to request state cert")?;
 

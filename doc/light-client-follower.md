@@ -9,35 +9,37 @@ light-client proofs, submit.
 
 ```sh
 espresso-node \
-  --follower-peers https://query.decaf.testnet.espresso.network \
   --l1-provider-url <L1 RPC URL> \
   --genesis-file data/genesis/decaf.toml \
   -- storage-sql --postgres-host ... \
   -- http --port 24000 \
-  -- query -- catchup -- config -- submit -- light-client -- explorer
+  -- query --peers https://query.decaf.testnet.espresso.network \
+  -- follower -- catchup -- config -- submit -- light-client -- explorer
 ```
 
-`--follower-peers` (`ESPRESSO_NODE_FOLLOWER_PEERS`) selects follower mode. The follower needs:
+The `follower` module selects follower mode. Its upstreams are the query module's `--peers` (`ESPRESSO_NODE_API_PEERS`),
+which must be set. The follower needs:
 
 - the `storage-sql`, `http` and `query` modules: merklized state, rewards and the explorer need SQL storage;
 - an L1 RPC, for fee deposits and the stake table, like any node;
 - upstream query nodes that serve the `light-client`, `catchup`, `config` and (for `submit`) `submit` modules.
 
-It does not need staking keys, an orchestrator, CDN, libp2p or cliquenet; those options are ignored. `--peers`,
-`--state-peers` and `--config-peers` default to the follower peers. The `hotshot-events` module is refused: a follower
-has no consensus event stream to relay.
+It does not need staking keys, an orchestrator or cliquenet; those options are ignored. `--state-peers` and
+`--config-peers` default to the upstreams. Telemetry is disabled with a warning: a follower has no staking key to
+identify itself with.
 
-Tuning:
+Tuning, as options of the `follower` module:
 
-- `--follower-poll-interval` (1s): how often to poll the upstreams for new blocks.
-- `--follower-max-blocks-per-poll` (10): how many blocks one poll ingests. Older heights are backfilled by the query
-  service, so a fresh follower serves the tip promptly and fills history in the background. Stake tables for epoch roots
-  skipped this way are caught up from the peers before following on.
-- `--light-client-genesis <file>`: pin the light client's root of trust to a reviewed TOML file (see
-  `crates/light-client-query-service/genesis/`) instead of deriving it from the network config fetched from the peers.
+- `--poll-interval` (`ESPRESSO_NODE_FOLLOWER_POLL_INTERVAL`, 1s): how often to poll the upstreams for new blocks.
+- `--max-blocks-per-poll` (`ESPRESSO_NODE_FOLLOWER_MAX_BLOCKS_PER_POLL`, 10): how many blocks one poll ingests. Older
+  heights are backfilled by the query service, so a fresh follower serves the tip promptly and fills history in the
+  background. Stake tables for epoch roots skipped this way are caught up from the peers before following on.
+- `--light-client-genesis <file>` (`ESPRESSO_NODE_LIGHT_CLIENT_GENESIS`): pin the light client's root of trust to a
+  reviewed TOML file (see `crates/light-client-query-service/genesis/`) instead of deriving it from the network config
+  fetched from the peers.
 
 Against the native demo (`just demo-native`), node 0 on port 24000 serves everything a follower needs:
-`--follower-peers http://localhost:24000`.
+`-- query --peers http://localhost:24000 -- follower`.
 
 ## How it works
 
@@ -74,18 +76,20 @@ Not verified, liveness only: the upstreams' claimed block height and submit forw
 
 ## What a follower cannot serve
 
-| Endpoint                | Behaviour                                                         |
-| ----------------------- | ----------------------------------------------------------------- |
-| `state-signature/*`     | 404: only a validator signs light client states                   |
-| `status/keys`           | 404: no validator keys                                            |
-| `node/participation/*`  | empty: participation is derived from votes                        |
-| `node/vid/share/*`      | 404 when not stored: no request-response protocol to fetch shares |
-| `hotshot-events` module | refused at startup                                                |
+| Endpoint               | Behaviour                                                         |
+| ---------------------- | ----------------------------------------------------------------- |
+| `state-signature/*`    | 404: only a validator signs light client states                   |
+| `status/keys`          | 404: no validator keys                                            |
+| `node/participation/*` | empty: participation is derived from votes                        |
+| `node/vid/share/*`     | 404 when not stored: no request-response protocol to fetch shares |
 
 Everything else is served from the same storage a staked query node fills from its decides.
 
 ## Cold start
 
-A fresh follower starts serving from the tip and backfills history like any fresh query node. The merklized state loop
-replays from genesis, so state, reward and catchup endpoints lag until the backfill completes; restore the database from
-a snapshot to skip it. A restart resumes from the height the database has reached.
+A fresh follower starts serving from the tip and backfills history like any fresh query node. How the merklized state
+loop starts depends on the `storage-sql` module's `--prune` option. Without it, the loop replays from genesis, so state,
+reward and catchup endpoints lag until the backfill completes; restore the database from a snapshot to skip it. With it,
+the loop starts from a snapshot at a recent epoch boundary, from peers, and skips the replay. Its trees then stay
+incomplete: lookups of block proofs below that boundary, and of fee accounts that no block since then has touched, fail.
+A restart resumes from the height the database has reached.

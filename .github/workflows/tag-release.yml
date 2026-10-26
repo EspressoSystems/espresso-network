@@ -39,6 +39,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
+          filter: blob:none
 
       - name: Configure git identity
         run: |
@@ -80,5 +81,32 @@ jobs:
           COMMENT: ${{ github.event.comment.body }}
         run: |
           scripts/release backport --issue "$ISSUE" --comment "$COMMENT" \
+            --actor "$GITHUB_ACTOR" \
+            --run-url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+
+  publish:
+    if: |
+      github.event_name == 'issue_comment' &&
+      github.event.issue.pull_request == null &&
+      contains(github.event.issue.labels.*.name, 'release-tracker') &&
+      startsWith(github.event.comment.body, '/publish ') &&
+      contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)
+    concurrency:
+      group: release-publish
+      cancel-in-progress: false
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          filter: blob:none
+
+      - name: Publish the tag to a network
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE: ${{ github.event.issue.number }}
+          COMMENT: ${{ github.event.comment.body }}
+        run: |
+          scripts/release publish --issue "$ISSUE" --comment "$COMMENT" \
             --actor "$GITHUB_ACTOR" \
             --run-url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"

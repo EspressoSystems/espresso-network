@@ -1,5 +1,5 @@
-mod hotshot
 mod py "scripts/py.just"
+mod claude ".github/claude/claude.just"
 mod binary-upgrade-tests "binary-upgrade-tests/justfile"
 mod soak "crates/process-metrics/justfile"
 mod bench "scripts/network-bench/justfile"
@@ -102,21 +102,18 @@ proto-check $base="origin/main":
     git archive "$merge_base" crates/espresso/api/proto | tar -x -C "$dir"
     buf breaking crates/espresso/api/proto --against "$dir/crates/espresso/api/proto"
 
-# postgres and sqlite variants checked separately to cover all code
+# slow-tests picks its storage backend at compile time, so check its sqlite variant too
 clippy *args:
-    cargo clippy --workspace --exclude espresso-node-sqlite --exclude espresso-dev-node --features testing --all-targets {{args}}
-    cargo clippy --workspace --features "embedded-db testing" --all-targets {{args}}
+    cargo clippy --workspace --features testing --all-targets {{args}}
+    cargo clippy -p slow-tests --features sqlite --all-targets {{args}}
 
-# postgres and sqlite variants checked separately to cover all code
 check *args:
-    cargo check --workspace --exclude espresso-node-sqlite --exclude espresso-dev-node {{args}}
-    cargo check -p espresso-node-sqlite -p espresso-dev-node {{args}}
+    cargo check --workspace {{args}}
 
 build profile="dev" features="":
-    # postgres
     cargo build --profile {{profile}} {{features}}
-    # embedded-db
-    cargo build --profile {{profile}} -p espresso-node-sqlite -p espresso-dev-node {{features}}
+    # espresso-dev-node enables the espresso-node testing feature, which release builds reject
+    cargo build --profile {{profile}} -p espresso-dev-node {{features}}
 
 demo-native-da-committees *args: (build "test" "--no-default-features")
     ESPRESSO_NODE_GENESIS_FILE=data/genesis/demo-da-committees.toml scripts/demo-native -f process-compose.yaml {{args}}
@@ -148,13 +145,11 @@ docker-stop-rm:
 anvil *args:
     docker run -p 127.0.0.1:8545:8545 ghcr.io/foundry-rs/foundry:latest "anvil {{args}}"
 
-# hotshot-testing: tested in hotshot.yml
 # hotshot-new-protocol: tested in hotshot.yml
-# espresso-node-sqlite: no tests, enables embedded-db feature
 # slow-tests: slow and serial tests
-# espresso-dev-node: enables embedded-db
+# espresso-dev-node: tested by test-dev-node
 # espresso-crypto-helper: vendored openssl leaks to workspace via feature unification
-nextest_excludes := "--exclude espresso-node-sqlite --exclude hotshot-testing --exclude hotshot-new-protocol --exclude slow-tests --exclude espresso-dev-node --exclude espresso-crypto-helper"
+nextest_excludes := "--exclude hotshot-new-protocol --exclude slow-tests --exclude espresso-dev-node --exclude espresso-crypto-helper"
 
 nextest *args:
     cargo nextest run --locked --workspace {{nextest_excludes}} --lib --bins --tests --verbose {{args}}
@@ -164,16 +159,11 @@ nextest-archive archive-file *args:
 
 test *args:
     @echo 'Omitting slow tests. Use `test-slow` for those. Or `test-all` for all tests.'
-    @echo 'features: "embedded-db"'
-    just nextest --features embedded-db  {{args}}
     just nextest {{args}}
 
-# These tests stand up whole multi-node networks inline on a single libtest
-# thread, which leaves the largest of them a few KB under the 2 MiB default
-# stack. 4 MiB gives them roughly 2x headroom instead.
 test-slow *args:
     @echo 'Only slow tests are included. Use `test` for those deemed not slow. Or `test-all` for all tests.'
-    RUST_MIN_STACK=4194304 cargo nextest run --profile slow --locked -p slow-tests --verbose {{args}}
+    cargo nextest run --profile slow --locked -p slow-tests --verbose {{args}}
 
 build-dev-node *args:
     cargo build -p espresso-dev-node {{args}}
@@ -183,24 +173,20 @@ test-dev-node *args:
     cargo nextest run --profile slow --locked -p espresso-dev-node --verbose {{args}}
 
 test-all:
-    @echo 'features: "embedded-db"'
-    just nextest --features embedded-db --profile all
     just nextest --profile all
 
-# Record runs of the new-protocol tests and replay them against the Lean machine.
+# A pass means the recorded node obeyed `ProtocolHistory` and discharged what it
+# owed within `defaultDelta` (`Prompt`). See `lean/new-protocol-diff/CheckMain.lean`
+# and `crates/hotshot/new-protocol/src/trace.rs`.
 #
-# The machine is proved to satisfy `lean/new-protocol-spec`, so a divergence is
-# either the implementation departing from the specification or the trace running
-# past what the specification covers. The `replay` binary separates the two; see
-# `lean/new-protocol-diff/NewProtocolDiff/Corpus.lean` and
-# `crates/hotshot/new-protocol/src/trace.rs`.
-test-lean-diff dir="":
+# Record runs of the new-protocol tests and check each against `lean/new-protocol-spec`.
+test-lean-check dir="":
     #!/usr/bin/env bash
     set -uo pipefail
-    (cd lean/new-protocol-diff && lake build) || exit 1
-    # Given a directory, record nothing and replay what is already there.
+    (cd lean/new-protocol-diff && lake build check) || exit 1
+    # Given a directory, record nothing and check what is already there.
     if [ -n "{{dir}}" ]; then
-      lean/new-protocol-diff/.lake/build/bin/replay "{{dir}}"
+      lean/new-protocol-diff/.lake/build/bin/check "{{dir}}"
       exit $?
     fi
     # A fixed path, cleared first, so runs overwrite rather than accumulate.
@@ -208,21 +194,8 @@ test-lean-diff dir="":
     traces="$(pwd)/target/np-traces"
     rm -rf "$traces"
     echo "recording to $traces"
-    suite=0
-    NP_TRACE_DIR="$traces" cargo test -p hotshot-new-protocol --release --lib tests:: || suite=$?
-    if [ "$suite" -ne 0 ]; then
-      echo "note: the test suite failed; replaying the traces it did record" >&2
-    fi
-    replayed=0
-    lean/new-protocol-diff/.lake/build/bin/replay "$traces" || replayed=$?
-    # A corpus from a clean run is worth keeping: `just test-lean-diff $traces`
-    # replays it without paying for the suite again.
-    if [ "$suite" -ne 0 ]; then
-      rm -rf "$traces"
-    else
-      echo "traces kept in $traces"
-    fi
-    [ "$suite" -eq 0 ] && [ "$replayed" -eq 0 ]
+    NP_TRACE_DIR="$traces" cargo test -p hotshot-new-protocol --release --lib tests:: || exit $?
+    lean/new-protocol-diff/.lake/build/bin/check "$traces"
 
 test-integration: (build "test")
 	INTEGRATION_TEST_NODE_VERSION=2 cargo nextest run -p tests --nocapture --profile integration test_native_demo_basic
@@ -266,17 +239,11 @@ check-features-ci *args:
     cargo hack check --feature-powerset \
         --depth 2 \
         --exclude-all-features \
-        --exclude hotshot \
-        --exclude hotshot-builder-api \
         --exclude hotshot-contract-adapter \
         --exclude hotshot-example-types \
-        --exclude hotshot-libp2p-networking \
         --exclude hotshot-orchestrator \
         --exclude hotshot-query-service \
         --exclude hotshot-state-prover \
-        --exclude hotshot-task \
-        --exclude hotshot-task-impls \
-        --exclude hotshot-testing \
         --exclude hotshot-types \
         --exclude hotshot-utils \
         --exclude vid \
@@ -302,7 +269,6 @@ dev-state-relay-server:
 dev-espresso-node:
     target/release/espresso-node \
     --orchestrator-url http://localhost:8080 \
-    --cdn-endpoint "127.0.0.1:1738" \
     --state-relay-server-url http://localhost:8083 \
     -- http --port 8083  -- query --storage-path storage
 
@@ -327,17 +293,17 @@ release-cut version="" source_ref="main":
 release-tag branch tag="":
     gh workflow run tag-release.yml --ref {{branch}} -f tag={{tag}}
 
-# Turn the pre-release for a tag into a release operators may deploy, and mark it latest.
-release-publish tag:
-    gh release edit {{tag}} --prerelease=false --latest
+# Preview the release edits and tracker comment of `/publish <tag> <network>` without writing to GitHub.
+release-publish-preview tag network:
+    scripts/release publish --dry-run --comment "/publish {{tag}} {{network}}"
 
 # Render the release tracker body for a version without writing to GitHub.
 release-body version:
     scripts/release refresh --dry-run --version {{version}}
 
 # generate rust bindings for contracts
-VERSIONED := "LightClient(Arbitrum)?(V\\d+)?(Mock)?|PlonkVerifier(V\\d+)?|StakeTable(V\\d+)?|EspToken(V\\d+)?|RewardClaim(V\\d+)?"
-EXACT := "FeeContract|ERC1967Proxy|OpsTimelock|SafeExitTimelock|OwnableUpgradeable|AccessControlUpgradeable|IRewardClaim|IPlonkVerifier"
+VERSIONED := "LightClient(V\\d+)?(Mock)?|PlonkVerifier(V\\d+)?|StakeTable(V\\d+)?|EspToken(V\\d+)?|RewardClaim(V\\d+)?"
+EXACT := "FeeContract|ERC1967Proxy|OpsTimelock|SafeExitTimelock|OwnableUpgradeable|AccessControlUpgradeable"
 REGEXP := "^(" + VERSIONED + "|" + EXACT + ")$"
 gen-bindings:
     # Update the git submodules

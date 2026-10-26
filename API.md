@@ -38,9 +38,9 @@ under `/v2/status/...`, `/v2/token/...`, `/v2/node/...`, `/v2/config/...`, `/v2/
 - `ConfigService` serves v1's config module as typed messages. `hotshot` carries every consensus parameter, including
   the genesis membership and the DA committee overrides. The comment on `HotshotConfigResponse` in `config.proto` says
   what it drops from v1's orchestrator wrapper. `runtime` carries the identity, endpoints, storage settings and enabled
-  modules. The genesis and the catchup, proposal-fetcher, libp2p and L1 tuning stay on v1, and the L1 URLs are reported
-  as a count because they can carry credentials. Nodes joining through `--config-peers` still fetch the full config from
-  v1. Like the v1 `config` module it is only mounted when the node enables that module, and a disabled node answers its
+  modules. The genesis and the catchup, proposal-fetcher and L1 tuning stay on v1, and the L1 URLs are reported as a
+  count because they can carry credentials. Nodes joining through `--config-peers` still fetch the full config from v1.
+  Like the v1 `config` module it is only mounted when the node enables that module, and a disabled node answers its
   routes with a 404 in the v2 error envelope.
 - `DatabaseService` mirrors v1's table sizes and migration status.
 - `AvailabilityService` carries over every v1 `availability` endpoint. A single lookup takes exactly one selector as a
@@ -58,7 +58,8 @@ under `/v2/status/...`, `/v2/token/...`, `/v2/node/...`, `/v2/config/...`, `/v2/
   bytes v1 serves, in a shape a client can walk node by node, though recomputing a leaf hash still needs ark-serialize.
   An account with no fee entry has a balance of zero. Two v1 shapes collapse: the height and commitment snapshot
   selectors become query parameters on one route per tree, exactly one required, and v1's two block-height routes both
-  read the same `get_last_state_height`, so v2 serves that number once.
+  read the same `get_last_state_height`, so v2 serves that number once. A pruned snapshot is a 410 on v1 and a 404 on
+  v2, which has no gone code. Reward balances, proofs and claim inputs stay a 404.
 - `RewardStateService` serves the reward tree (`RewardMerkleTreeV2`) under `/v2/merklized-state/reward/...`: an
   account's balance and its proof, the L1 claim input, paged reward amounts, and the serialized tree. A balance or proof
   takes an optional `height`, absent meaning the newest height the light client contract finalized, where v1 has a route

@@ -137,7 +137,7 @@ impl<T, C> Fetcher<T, C> {
         let backoff = self.backoff;
 
         spawn(async move {
-            tracing::info!("spawned active fetch for {req:?}");
+            tracing::debug!("spawned active fetch for {req:?}");
 
             // Check if the requested object is already being fetched. If not, take a lock on it so
             // we are the only ones to fetch this particular object.
@@ -149,7 +149,7 @@ impl<T, C> Fetcher<T, C> {
                         // task to execute upon completion.
                         let callbacks: Vec<C> = callbacks.into_iter().collect();
                         let heights = || e.get().iter().filter_map(|cb| cb.height());
-                        tracing::info!(
+                        tracing::debug!(
                             ?req,
                             ?callbacks,
                             registered = e.get().len(),

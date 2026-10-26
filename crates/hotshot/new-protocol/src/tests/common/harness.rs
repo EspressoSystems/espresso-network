@@ -1,6 +1,5 @@
 use std::{sync::Arc, time::Duration};
 
-use hotshot::types::BLSPubKey;
 use hotshot_example_types::{
     node_types::{TEST_VERSIONS, TestTypes},
     state_types::{TestInstanceState, TestValidatedState},
@@ -9,9 +8,11 @@ use hotshot_types::{
     data::{EpochNumber, Leaf2, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
     message::UpgradeLock,
+    signature_key::BLSPubKey,
     traits::{metrics::NoMetrics, signature_key::SignatureKey},
     upgrade_config::UpgradeConfig,
 };
+use tokio::sync::mpsc;
 
 use super::{
     coordinator_builder::{build_genesis_cert1, build_genesis_proposal},
@@ -203,7 +204,8 @@ impl TestHarness {
             .client(client)
             .membership_coordinator(membership)
             .outbox(Outbox::new())
-            .timer(Timer::new(timer_duration, ViewNumber::genesis()))
+            .external_tx(mpsc::unbounded_channel().0)
+            .timer(Timer::new(timer_duration, ViewNumber::genesis() + 1))
             .public_key(public_key)
             .node_id(KeyPrefix::from(&public_key))
             .build();
@@ -223,8 +225,12 @@ impl TestHarness {
 
     pub fn apply_and_process(&mut self, input: ConsensusInput<TestTypes>) {
         let consensus = self.coordinator.consensus();
-        self.trace
-            .preamble(consensus.public_key(), consensus.last_decided_leaf());
+        self.trace.preamble(
+            consensus.public_key(),
+            consensus.last_decided_leaf(),
+            consensus.cert1_at(ViewNumber::genesis()),
+            *consensus.epoch_height,
+        );
         record_leader(&mut self.trace, consensus, &input);
         self.coordinator.apply_consensus(input.clone());
         // The outbox was drained at the end of the previous call, so it now holds
@@ -366,8 +372,17 @@ impl TestHarness {
         &mut self.coordinator
     }
 
-    /// Place the node at `view` in `epoch`, as `Consensus::set_view` does.
+    /// Place the node at `view` in `epoch`, as `Consensus::set_view` does, and
+    /// note the placement in the trace.
     pub fn set_view(&mut self, view: ViewNumber, epoch: EpochNumber) {
+        let consensus = self.coordinator.consensus();
+        self.trace.preamble(
+            consensus.public_key(),
+            consensus.last_decided_leaf(),
+            consensus.cert1_at(ViewNumber::genesis()),
+            *consensus.epoch_height,
+        );
+        self.trace.placed(view, epoch);
         self.coordinator.consensus_mut().set_view(view, epoch);
     }
 

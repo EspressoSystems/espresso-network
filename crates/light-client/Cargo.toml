@@ -6,7 +6,7 @@ edition.workspace = true
 
 [features]
 default = []
-# Host-side query client, sqlite storage and query-service provider; disable
+# Host-side query client, SQL storage and query-service provider; disable
 # for constrained targets (e.g. SP1 zkVM).
 client = [
     "dep:hotshot-query-service",
@@ -72,9 +72,12 @@ rand = { workspace = true, optional = true }
 espresso-node = { workspace = true, default-features = false, features = [
     "testing",
 ] }
+hotshot-query-service = { workspace = true, features = ["testing"] }
 itertools = { workspace = true }
 light-client = { path = ".", features = ["rlp", "testing"] }
 pretty_assertions = { workspace = true }
+rstest = { workspace = true }
+rstest_reuse = { workspace = true }
 test-log = { workspace = true }
 test-utils = { workspace = true }
 

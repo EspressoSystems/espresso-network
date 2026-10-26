@@ -17,11 +17,8 @@ use std::{
     sync::Arc,
 };
 
-#[cfg(not(feature = "embedded-db"))]
-use anyhow::Context;
 use ark_serialize::CanonicalDeserialize;
 use async_trait::async_trait;
-use futures::stream::TryStreamExt;
 use hotshot_types::traits::node_implementation::NodeType;
 use jf_merkle_tree_compat::{
     DigestAlgorithm, MerkleCommitment, ToTraversalPath,
@@ -30,16 +27,16 @@ use jf_merkle_tree_compat::{
 use sqlx::types::{BitVec, JsonValue};
 
 use super::{
-    super::transaction::{Transaction, TransactionMode, Write, query_as},
+    super::{
+        Db, StateQueries,
+        transaction::{Transaction, TransactionMode, query_as},
+    },
     DecodeError, QueryBuilder,
 };
-#[cfg(feature = "embedded-db")]
-use crate::data_source::storage::sql::build_where_in;
 use crate::{
     QueryError, QueryResult,
     data_source::storage::{
         MerklizedStateHeightStorage, MerklizedStateStorage, pruning::PrunedHeightStorage,
-        sql::sqlx::Row,
     },
     merklized_state::{MerklizedState, Snapshot},
 };
@@ -58,19 +55,57 @@ where
         snapshot: Snapshot<Types, State, ARITY>,
         key: State::Key,
     ) -> QueryResult<MerkleProof<State::Entry, State::Key, State::T, ARITY>> {
-        let state_type = State::state_type();
+        let (created, merkle_commitment) = self.snapshot_info(snapshot).await?;
+        self.path_at::<Types, State, ARITY>(created, merkle_commitment, key)
+            .await
+    }
+}
+
+impl<Mode: TransactionMode> Transaction<Mode> {
+    /// Retrieves the Merkle path to `key` from the snapshot created at `height`, for a caller that
+    /// already has the snapshot's root. Unlike [`get_path`](MerklizedStateStorage::get_path), this
+    /// does not read the header at `height`, so it still works after the data pruner deleted the
+    /// header while the state pruner kept the snapshot.
+    pub async fn get_path_at<Types, State, const ARITY: usize>(
+        &mut self,
+        height: u64,
+        commit: State::Commit,
+        key: State::Key,
+    ) -> QueryResult<MerkleProof<State::Entry, State::Key, State::T, ARITY>>
+    where
+        Types: NodeType,
+        State: MerklizedState<Types, ARITY> + 'static,
+    {
+        let created = height as i64;
+        self.check_snapshot(created).await?;
+        self.path_at::<Types, State, ARITY>(created, commit, key)
+            .await
+    }
+
+    /// Retrieves the Merkle path to `key` from the snapshot created at `created` with root
+    /// `merkle_commitment`. The caller checks that the snapshot is readable.
+    async fn path_at<Types, State, const ARITY: usize>(
+        &mut self,
+        created: i64,
+        merkle_commitment: State::Commit,
+        key: State::Key,
+    ) -> QueryResult<MerkleProof<State::Entry, State::Key, State::T, ARITY>>
+    where
+        Types: NodeType,
+        State: MerklizedState<Types, ARITY> + 'static,
+    {
         let tree_height = State::tree_height();
 
         // Get the traversal path of the index
         let traversal_path = State::Key::to_traversal_path(&key, tree_height);
-        let (created, merkle_commitment) = self.snapshot_info(snapshot).await?;
 
         // Get all the nodes in the path to the index.
         // Order by pos DESC is to return nodes from the leaf to the root
-        let (query, sql) = build_get_path_query(state_type, traversal_path.clone(), created)?;
+        let paths = traversal_path_values(&traversal_path, traversal_path.len());
+        let (query, sql) = Db::get_path_query::<Types, State, ARITY>(paths, created)?;
         let rows = query.query(&sql).fetch_all(self.as_mut()).await?;
 
-        let nodes: Vec<Node> = rows.into_iter().map(|r| r.into()).collect();
+        let nodes: Vec<Node> = rows.into_iter().map(Db::node_from_row).collect();
 
         // insert all the hash ids to a hashset which is used to query later
         // HashSet is used to avoid duplicates
@@ -89,29 +124,7 @@ where
         // Find all the hash values and create a hashmap
         // Hashmap will be used to get the hash value of the nodes children and the node itself.
         let hashes: HashMap<i64, Vec<u8>> = if !hash_ids.is_empty() {
-            #[cfg(not(feature = "embedded-db"))]
-            {
-                let hash_ids_arr: Vec<i64> = hash_ids.iter().copied().collect();
-                sqlx::query_as("SELECT id, value FROM hash WHERE id = ANY($1::BIGINT[])")
-                    .bind(&hash_ids_arr)
-                    .fetch_all(self.as_mut())
-                    .await
-                    .map_err(|e| QueryError::Error {
-                        message: format!("hash lookup failed: {e}"),
-                    })?
-                    .into_iter()
-                    .collect()
-            }
-
-            #[cfg(feature = "embedded-db")]
-            {
-                let (query, sql) = build_where_in("SELECT id, value FROM hash", "id", hash_ids)?;
-                query
-                    .query_as(&sql)
-                    .fetch(self.as_mut())
-                    .try_collect::<HashMap<i64, Vec<u8>>>()
-                    .await?
-            }
+            Db::hashes_by_id(self.as_mut(), hash_ids.into_iter().collect()).await?
         } else {
             HashMap::new()
         };
@@ -257,6 +270,21 @@ where
             })?;
 
         if commitment_from_path != merkle_commitment.digest() {
+            // With no node stored on the path, not even the root, the snapshot holds nothing of
+            // this tree, as when the state writer started from a snapshot without it. That is
+            // missing data, as for a parent-child mismatch above, not a corrupt path.
+            if nodes.is_empty() {
+                // Debug, not warn: on a node seeded at a boundary without fee state, every fee
+                // path query ends here.
+                tracing::debug!(
+                    state_type = State::state_type(),
+                    ?key,
+                    %created,
+                    %merkle_commitment,
+                    "missing data in merklized state; no node stored on the path",
+                );
+                return Err(QueryError::Missing);
+            }
             return Err(QueryError::Error {
                 message: format!(
                     "Commitment calculated from merkle path ({commitment_from_path:?}) does not \
@@ -283,6 +311,18 @@ impl<Mode: TransactionMode> MerklizedStateHeightStorage for Transaction<Mode> {
             return Ok(0);
         };
         Ok(height as usize)
+    }
+
+    async fn load_state_start_height(&mut self) -> QueryResult<Option<u64>> {
+        let Some((height,)) =
+            query_as::<(i64,)>("SELECT last_height FROM pruned_height WHERE id = $1 LIMIT 1")
+                .bind(Self::STATE_START_HEIGHT_ID)
+                .fetch_optional(self.as_mut())
+                .await?
+        else {
+            return Ok(None);
+        };
+        Ok(Some(height as u64))
     }
 }
 
@@ -338,7 +378,12 @@ impl<Mode: TransactionMode> Transaction<Mode> {
             },
         };
 
-        // Make sure the requested snapshot is up to date.
+        self.check_snapshot(created).await?;
+        Ok((created, commit))
+    }
+
+    /// Make sure the snapshot created at `created` is up to date and has not been pruned.
+    async fn check_snapshot(&mut self, created: i64) -> QueryResult<()> {
         let height = self.get_last_state_height().await?;
 
         if height < (created as usize) {
@@ -353,7 +398,7 @@ impl<Mode: TransactionMode> Transaction<Mode> {
         // below it when it connects. A database that an earlier, unbounded run pruned past the
         // head while a crash had left nodes above it may still be missing some here.
         if (created as usize) == height {
-            return Ok((created, commit));
+            return Ok(());
         }
 
         let pruned_height =
@@ -363,16 +408,20 @@ impl<Mode: TransactionMode> Transaction<Mode> {
                     message: format!("failed to load pruned height: {e}"),
                 })?;
 
-        if pruned_height.is_some_and(|h| created <= h as i64) {
-            return Err(QueryError::NotFound);
+        if let Some(pruned_height) = pruned_height
+            && created <= pruned_height as i64
+        {
+            return Err(QueryError::Pruned {
+                height: created as u64,
+                pruned_height,
+            });
         }
 
-        Ok((created, commit))
+        Ok(())
     }
 }
 
 // TODO: create a generic upsert function with retries that returns the column
-#[cfg(feature = "embedded-db")]
 pub(crate) fn build_hash_batch_insert(
     hashes: &[Vec<u8>],
 ) -> QueryResult<(QueryBuilder<'_>, String)> {
@@ -387,33 +436,6 @@ pub(crate) fn build_hash_batch_insert(
         params.join(",")
     );
     Ok((query, sql))
-}
-
-/// Batch insert hashes using UNNEST for large batches (postgres only).
-/// Returns a map from hash bytes to their database IDs.
-#[cfg(not(feature = "embedded-db"))]
-pub(crate) async fn batch_insert_hashes(
-    hashes: Vec<Vec<u8>>,
-    tx: &mut Transaction<Write>,
-) -> QueryResult<HashMap<Vec<u8>, i64>> {
-    if hashes.is_empty() {
-        return Ok(HashMap::new());
-    }
-
-    // Use UNNEST-based batch insert (more efficient and avoids parameter limits).
-    let sql = "INSERT INTO hash(value) SELECT * FROM UNNEST($1::bytea[]) ON CONFLICT (value) DO \
-               UPDATE SET value = EXCLUDED.value RETURNING value, id";
-
-    let result: HashMap<Vec<u8>, i64> = sqlx::query_as(sql)
-        .bind(&hashes)
-        .fetch(tx.as_mut())
-        .try_collect()
-        .await
-        .map_err(|e| QueryError::Error {
-            message: format!("batch hash insert failed: {e}"),
-        })?;
-
-    Ok(result)
 }
 
 /// Type alias for a merkle proof with its traversal path.
@@ -564,159 +586,6 @@ pub(crate) struct Node {
 /// Used during batch collection before database insertion.
 pub(crate) type NodeWithHashes = (Node, Option<Vec<Vec<u8>>>, Vec<u8>);
 
-#[cfg(feature = "embedded-db")]
-impl From<sqlx::sqlite::SqliteRow> for Node {
-    fn from(row: sqlx::sqlite::SqliteRow) -> Self {
-        let bit_string: Option<String> = row.get_unchecked("children_bitvec");
-        let children_bitvec: Option<BitVec> =
-            bit_string.map(|b| b.chars().map(|c| c == '1').collect());
-
-        Self {
-            path: row.get_unchecked("path"),
-            created: row.get_unchecked("created"),
-            hash_id: row.get_unchecked("hash_id"),
-            children: row.get_unchecked("children"),
-            children_bitvec,
-            idx: row.get_unchecked("idx"),
-            entry: row.get_unchecked("entry"),
-        }
-    }
-}
-
-#[cfg(not(feature = "embedded-db"))]
-impl From<sqlx::postgres::PgRow> for Node {
-    fn from(row: sqlx::postgres::PgRow) -> Self {
-        Self {
-            path: row.get_unchecked("path"),
-            created: row.get_unchecked("created"),
-            hash_id: row.get_unchecked("hash_id"),
-            children: row.get_unchecked("children"),
-            children_bitvec: row.get_unchecked("children_bitvec"),
-            idx: row.get_unchecked("idx"),
-            entry: row.get_unchecked("entry"),
-        }
-    }
-}
-
-impl Node {
-    pub(crate) async fn upsert(
-        name: &str,
-        nodes: impl IntoIterator<Item = Self>,
-        tx: &mut Transaction<Write>,
-    ) -> anyhow::Result<()> {
-        let nodes: Vec<_> = nodes.into_iter().collect();
-
-        // Use UNNEST-based batch insert for postgres (more efficient and avoids parameter limits)
-        #[cfg(not(feature = "embedded-db"))]
-        return Self::upsert_batch_unnest(name, nodes, tx).await;
-
-        #[cfg(feature = "embedded-db")]
-        {
-            for node_chunk in nodes.chunks(20) {
-                let rows: Vec<_> = node_chunk
-                    .iter()
-                    .map(|n| {
-                        let children_bitvec: Option<String> = n
-                            .children_bitvec
-                            .clone()
-                            .map(|b| b.iter().map(|bit| if bit { '1' } else { '0' }).collect());
-
-                        (
-                            n.path.clone(),
-                            n.created,
-                            n.hash_id,
-                            n.children.clone(),
-                            children_bitvec,
-                            n.idx.clone(),
-                            n.entry.clone(),
-                        )
-                    })
-                    .collect();
-
-                tx.upsert(
-                    name,
-                    [
-                        "path",
-                        "created",
-                        "hash_id",
-                        "children",
-                        "children_bitvec",
-                        "idx",
-                        "entry",
-                    ],
-                    ["path", "created"],
-                    rows,
-                )
-                .await?;
-            }
-            Ok(())
-        }
-    }
-
-    #[cfg(not(feature = "embedded-db"))]
-    async fn upsert_batch_unnest(
-        name: &str,
-        nodes: Vec<Self>,
-        tx: &mut Transaction<Write>,
-    ) -> anyhow::Result<()> {
-        if nodes.is_empty() {
-            return Ok(());
-        }
-
-        // Deduplicate nodes by (path, created) - keep the last occurrence
-        // This is required because UNNEST + ON CONFLICT cannot handle duplicates in the same batch
-        let mut deduped = HashMap::new();
-        for node in nodes {
-            deduped.insert((node.path.to_string(), node.created), node);
-        }
-
-        let mut paths = Vec::with_capacity(deduped.len());
-        let mut createds = Vec::with_capacity(deduped.len());
-        let mut hash_ids = Vec::with_capacity(deduped.len());
-        let mut childrens = Vec::with_capacity(deduped.len());
-        let mut children_bitvecs = Vec::with_capacity(deduped.len());
-        let mut idxs = Vec::with_capacity(deduped.len());
-        let mut entries = Vec::with_capacity(deduped.len());
-
-        for node in deduped.into_values() {
-            paths.push(node.path);
-            createds.push(node.created);
-            hash_ids.push(node.hash_id);
-            childrens.push(node.children);
-            children_bitvecs.push(node.children_bitvec);
-            idxs.push(node.idx);
-            entries.push(node.entry);
-        }
-
-        let sql = format!(
-            r#"
-            INSERT INTO "{name}" (path, created, hash_id, children, children_bitvec, idx, entry)
-            SELECT * FROM UNNEST($1::jsonb[], $2::bigint[], $3::bigint[], $4::jsonb[], $5::bit varying[], $6::jsonb[], $7::jsonb[])
-            ON CONFLICT (path, created) DO UPDATE SET
-                hash_id = EXCLUDED.hash_id,
-                children = EXCLUDED.children,
-                children_bitvec = EXCLUDED.children_bitvec,
-                idx = EXCLUDED.idx,
-                entry = EXCLUDED.entry
-            "#
-        );
-
-        sqlx::query(&sql)
-            .bind(&paths)
-            .bind(&createds)
-            .bind(&hash_ids)
-            .bind(&childrens)
-            .bind(&children_bitvecs)
-            .bind(&idxs)
-            .bind(&entries)
-            .execute(tx.as_mut())
-            .await
-            .context("batch upsert with UNNEST failed")?;
-
-        Ok(())
-    }
-}
-
 /// Compute the full set of path JSON values for a traversal path (leaf to root).
 ///
 /// Each element is the path prefix used as a row key in a Merkle-tree table.
@@ -732,50 +601,6 @@ fn traversal_path_values(traversal_path: &[usize], tree_height: usize) -> Vec<se
     result
 }
 
-fn build_get_path_query<'q>(
-    table: &'static str,
-    traversal_path: Vec<usize>,
-    created: i64,
-) -> QueryResult<(QueryBuilder<'q>, String)> {
-    let mut query = QueryBuilder::default();
-    let paths = traversal_path_values(&traversal_path, traversal_path.len());
-
-    #[cfg(not(feature = "embedded-db"))]
-    let sql = {
-        let paths_param = query.bind(paths)?;
-        let created_param = query.bind(created)?;
-        // One LATERAL point-lookup per path in the array, instead of N UNION'd subqueries.
-        // Postgres plans the inner subquery once and reuses it, collapsing N independent
-        // planner decisions into one.
-        format!(
-            "SELECT n.* FROM unnest({paths_param}::jsonb[]) AS p(path), LATERAL (SELECT * FROM \
-             {table} WHERE {table}.path = p.path AND {table}.created <= {created_param} ORDER BY \
-             {table}.path DESC, {table}.created DESC LIMIT 1) AS n ORDER BY n.path DESC"
-        )
-    };
-
-    #[cfg(feature = "embedded-db")]
-    let sql = {
-        // SQLite has no native array binding, so we keep the UNION form. Each subquery
-        // is a point lookup by the composite (path, created) primary key.
-        let created_param = query.bind(created)?;
-        let mut sub_queries = Vec::with_capacity(paths.len());
-        for path in paths {
-            let node_path = query.bind(path)?;
-            sub_queries.push(format!(
-                "SELECT * FROM (SELECT * FROM {table} WHERE path = {node_path} AND created <= \
-                 {created_param} ORDER BY path DESC, created DESC LIMIT 1) AS latest_node",
-            ));
-        }
-        format!(
-            "SELECT * FROM ({}) as t ORDER BY length(t.path) DESC",
-            sub_queries.join(" UNION ")
-        )
-    };
-
-    Ok((query, sql))
-}
-
 #[cfg(test)]
 mod test {
     use futures::stream::StreamExt;
@@ -785,12 +610,12 @@ mod test {
     };
     use rand::{RngCore, seq::IteratorRandom};
 
-    use super::*;
+    use super::{
+        super::super::{testing::TmpDb, *},
+        *,
+    };
     use crate::{
-        data_source::{
-            VersionedDataSource,
-            storage::sql::{testing::TmpDb, *},
-        },
+        data_source::{VersionedDataSource, storage::sql::StorageConnectionType},
         merklized_state::UpdateStateData,
         testing::mocks::{MockMerkleTree, MockTypes},
     };
@@ -946,7 +771,10 @@ mod test {
             .bind(serde_json::to_value(node_path).unwrap())
             .fetch(tx.as_mut());
 
-        let nodes: Vec<Node> = rows.map(|res| res.unwrap().into()).collect().await;
+        let nodes: Vec<Node> = rows
+            .map(|res| Db::node_from_row(res.unwrap()))
+            .collect()
+            .await;
         // There should be only 2 versions of this node
         assert!(nodes.len() == 2, "incorrect number of nodes");
         assert_eq!(nodes[0].created, 1, "wrong block height");
@@ -1767,5 +1595,50 @@ mod test {
                 .unwrap_err();
             assert!(matches!(err, QueryError::Missing));
         }
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_merklized_state_without_nodes() {
+        // A state writer that starts from a snapshot of some trees only stores no node of the
+        // others at that height. A lookup there finds no node at all, not even the root, which is
+        // missing data, not a corrupt path.
+        let db = TmpDb::init().await;
+        let storage = SqlStorage::connect(db.config(), StorageConnectionType::Query)
+            .await
+            .unwrap();
+
+        let mut test_tree = MockMerkleTree::new(MockMerkleTree::tree_height());
+        test_tree.update(0, 0).unwrap();
+
+        let mut tx = storage.write().await.unwrap();
+        tx.upsert(
+            "header",
+            ["height", "hash", "payload_hash", "timestamp", "data", "ns_table"],
+            ["height"],
+            [(
+                0i64,
+                "hash".to_string(),
+                "hash".to_string(),
+                0,
+                serde_json::json!({ MockMerkleTree::header_state_commitment_field() : serde_json::to_value(test_tree.commitment()).unwrap()}),
+                "ns_table".to_string(),
+            )],
+        )
+        .await
+        .unwrap();
+        UpdateStateData::<_, MockMerkleTree, 8>::set_last_state_height(&mut tx, 0)
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+
+        let snapshot = Snapshot::<MockTypes, MockMerkleTree, 8>::Index(0);
+        let err = storage
+            .read()
+            .await
+            .unwrap()
+            .get_path(snapshot, 0)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, QueryError::Missing), "{err}");
     }
 }

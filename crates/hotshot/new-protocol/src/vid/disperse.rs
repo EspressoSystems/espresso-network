@@ -5,7 +5,6 @@ use std::{
     sync::{Arc, LazyLock},
 };
 
-use hotshot::traits::BlockPayload;
 use hotshot_types::{
     data::{
         EpochNumber, VidCommitment2, VidDisperse2, ViewNumber,
@@ -13,7 +12,10 @@ use hotshot_types::{
     },
     epoch_membership::EpochMembershipCoordinator,
     message::Proposal as SignedProposal,
-    traits::{metrics::Histogram, node_implementation::NodeType, signature_key::SignatureKey},
+    traits::{
+        BlockPayload, metrics::Histogram, node_implementation::NodeType,
+        signature_key::SignatureKey,
+    },
     vid::avidm_gf2::AvidmGf2Scheme,
 };
 use hotshot_utils::anytrace::{self, Wrap};
