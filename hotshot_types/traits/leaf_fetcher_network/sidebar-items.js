@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"struct":["ConnectedNetworkLeafFetcher"],"trait":["LeafFetcherNetwork"]};
+window.SIDEBAR_ITEMS = {"trait":["LeafFetcherNetwork"]};
