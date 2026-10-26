@@ -16,12 +16,16 @@ use alloy::primitives::Address;
 #[cfg(feature = "client")]
 use anyhow::Context;
 use anyhow::Result;
+#[cfg(feature = "client")]
+use derivative::Derivative;
 use derive_more::{Display, From};
 #[cfg(feature = "client")]
 use espresso_types::{BackoffParams, PubKey, Ratio, v0_3::RegisteredValidator};
 use espresso_types::{SeqTypes, StakeTableState};
 #[cfg(feature = "client")]
 use futures::TryStreamExt;
+#[cfg(feature = "client")]
+use hotshot_query_service::data_source::storage::sql::release_only_idle;
 #[cfg(feature = "client")]
 use hotshot_query_service_types::HeightIndexed;
 use hotshot_query_service_types::availability::{BlockId, LeafId, LeafQueryData};
@@ -33,7 +37,12 @@ use serde::{Deserialize, Serialize};
 #[cfg(feature = "client")]
 use serde_json::Value;
 #[cfg(feature = "client")]
-use sqlx::{QueryBuilder, SqlitePool, query, query_as, sqlite::SqlitePoolOptions};
+use sqlx::{
+    ConnectOptions, Executor, PgPool, QueryBuilder, SqlitePool,
+    postgres::{PgConnectOptions, PgPoolOptions},
+    query, query_as,
+    sqlite::SqlitePoolOptions,
+};
 #[cfg(feature = "client")]
 use tempfile::{Builder, TempDir};
 #[cfg(feature = "client")]
@@ -68,11 +77,33 @@ const WRITE_BACKOFF: BackoffParams = BackoffParams::new(
     },
 );
 
-/// In-memory LRU recency tracker shared across all clones of a [`SqliteStorage`].
+#[cfg(feature = "client")]
+#[derive(Clone, Debug)]
+enum DbPool {
+    Sqlite(SqlitePool),
+    Postgres(PgPool),
+}
+
+/// Expands `$body` once per backend, so each copy type-checks against a concrete sqlx database.
+///
+/// The closure syntax only keeps rustfmt formatting the body. It is not a closure, so `?` and
+/// `return` leave the enclosing function. sqlx's `Any` driver would avoid the expansion but cannot
+/// bind JSON.
+#[cfg(feature = "client")]
+macro_rules! with_pool {
+    ($pool:expr, |$p:ident| $body:expr) => {
+        match $pool {
+            DbPool::Sqlite($p) => $body,
+            DbPool::Postgres($p) => $body,
+        }
+    };
+}
+
+/// In-memory LRU recency tracker shared across all clones of a [`SqlStorage`].
 ///
 /// `touch` is called on the read path (pure, no DB write). `drain` is called inside
 /// `insert_leaf` to flush pending recency updates as part of the existing write transaction.
-/// Held in an `Arc`, so its `Drop` runs exactly once, when the last `SqliteStorage` clone is
+/// Held in an `Arc`, so its `Drop` runs exactly once, when the last `SqlStorage` clone is
 /// dropped, flushing any touches that no `insert_leaf` persisted (graceful shutdown).
 #[cfg(feature = "client")]
 #[derive(Debug)]
@@ -83,7 +114,7 @@ struct Recency {
     /// height -> latest tick; flushed to DB by the next `insert_leaf` or by `Drop`.
     dirty: std::sync::Mutex<HashMap<i64, i64>>,
     /// Pool handle kept alive for the on-drop flush.
-    pool: SqlitePool,
+    pool: DbPool,
 }
 
 #[cfg(feature = "client")]
@@ -99,17 +130,19 @@ impl Recency {
 
     /// Persist drained touches to `last_used`. Best-effort: a failure only degrades GC ranking,
     /// it never corrupts data.
-    async fn flush(pool: SqlitePool, pending: Vec<(i64, i64)>) {
+    async fn flush(pool: DbPool, pending: Vec<(i64, i64)>) {
         let res: sqlx::Result<()> = async {
-            let mut tx = pool.begin().await?;
-            for (h, tick) in &pending {
-                query("UPDATE leaf SET last_used = $1 WHERE height = $2")
-                    .bind(tick)
-                    .bind(h)
-                    .execute(tx.as_mut())
-                    .await?;
-            }
-            tx.commit().await
+            with_pool!(&pool, |pool| {
+                let mut tx = pool.begin().await?;
+                for (h, tick) in &pending {
+                    query("UPDATE leaf SET last_used = $1 WHERE height = $2")
+                        .bind(tick)
+                        .bind(h)
+                        .execute(tx.as_mut())
+                        .await?;
+                }
+                tx.commit().await
+            })
         }
         .await;
         if let Err(err) = res {
@@ -297,7 +330,8 @@ pub struct LightClientSqliteOptions {
     ///
     /// If not present, the database is created in a temporary directory that is removed when the
     /// storage is dropped. Set this in production so cached leaves and stake tables survive
-    /// restarts.
+    /// restarts. Postgres-backed query nodes ignore it and keep the light client in the node
+    /// database's `light_client` schema.
     #[cfg_attr(
         feature = "clap",
         clap(long = "light-client-db-path", env = "LIGHT_CLIENT_DB_PATH")
@@ -319,8 +353,8 @@ impl Default for LightClientSqliteOptions {
 #[cfg(feature = "client")]
 impl LightClientSqliteOptions {
     /// Create or connect to a database with the given options.
-    pub async fn connect(self) -> Result<SqliteStorage> {
-        let (path, _tmp) = match self.lc_path {
+    pub async fn connect(self) -> Result<SqlStorage> {
+        let (path, tmp) = match self.lc_path {
             Some(p) => {
                 if let Some(parent) = p.parent().filter(|d| !d.as_os_str().is_empty()) {
                     std::fs::create_dir_all(parent)
@@ -354,31 +388,92 @@ impl LightClientSqliteOptions {
             .connect_with(opt)
             .await?;
         sqlx::migrate!("./migrations").run(&pool).await?;
-
-        // Seed the tick counter so new ticks always exceed any value persisted in the DB.
-        let (max_used,): (i64,) = sqlx::query_as("SELECT COALESCE(MAX(last_used), 0) FROM leaf")
-            .fetch_one(&pool)
-            .await?;
-        let recency = Arc::new(Recency {
-            next_tick: AtomicI64::new(max_used + 1),
-            dirty: Default::default(),
-            pool: pool.clone(),
-        });
-
-        Ok(SqliteStorage {
-            pool,
-            num_leaves: self.num_leaves,
-            recency,
-            _tmp,
-        })
+        SqlStorage::new(DbPool::Sqlite(pool), self.num_leaves, tmp).await
     }
 }
 
-/// [`Storage`] based on a SQLite database.
+/// Postgres connection for a light client that shares its node's database.
+///
+/// The light client's tables live in the `light_client` schema, apart from the query service's
+/// own tables. The pool opens up to `num_connections` connections of its own.
+#[cfg(feature = "client")]
+#[derive(Clone, Derivative)]
+#[derivative(Debug)]
+pub struct LightClientPostgresOptions {
+    // Carries the database password.
+    #[derivative(Debug = "ignore")]
+    pub connect: PgConnectOptions,
+    pub num_connections: u32,
+    pub num_leaves: u32,
+}
+
+#[cfg(feature = "client")]
+impl LightClientPostgresOptions {
+    /// Connect, creating the `light_client` schema and its tables if they do not exist.
+    pub async fn connect(self) -> Result<SqlStorage> {
+        let pool = release_only_idle(PgPoolOptions::new().max_connections(self.num_connections))
+            .after_connect(|conn, _| {
+                Box::pin(async move {
+                    conn.execute("SET search_path TO light_client").await?;
+                    Ok(())
+                })
+            })
+            .connect_with(self.connect)
+            .await
+            .context("connecting to Postgres for the light client")?;
+        query("CREATE SCHEMA IF NOT EXISTS light_client")
+            .execute(&pool)
+            .await?;
+        sqlx::migrate!("./migrations-postgres").run(&pool).await?;
+        SqlStorage::new(DbPool::Postgres(pool), self.num_leaves, None).await
+    }
+
+    /// Drop the `light_client` schema and everything cached in it.
+    ///
+    /// Run it whenever the node's own database is reset, since the cache is only valid for the
+    /// chain it was built from.
+    pub async fn reset(connect: &PgConnectOptions) -> Result<()> {
+        let mut conn = connect
+            .connect()
+            .await
+            .context("connecting to Postgres to reset the light client")?;
+        query("DROP SCHEMA IF EXISTS light_client CASCADE")
+            .execute(&mut conn)
+            .await?;
+        Ok(())
+    }
+}
+
+/// Where a node keeps its light client database.
 #[cfg(feature = "client")]
 #[derive(Clone, Debug)]
-pub struct SqliteStorage {
-    pool: SqlitePool,
+pub enum LightClientDbOptions {
+    Sqlite(LightClientSqliteOptions),
+    Postgres(Box<LightClientPostgresOptions>),
+}
+
+#[cfg(feature = "client")]
+impl Default for LightClientDbOptions {
+    fn default() -> Self {
+        Self::Sqlite(Default::default())
+    }
+}
+
+#[cfg(feature = "client")]
+impl LightClientDbOptions {
+    pub async fn connect(self) -> Result<SqlStorage> {
+        match self {
+            Self::Sqlite(opt) => opt.connect().await,
+            Self::Postgres(opt) => opt.connect().await,
+        }
+    }
+}
+
+/// [`Storage`] backed by SQLite or Postgres.
+#[cfg(feature = "client")]
+#[derive(Clone, Debug)]
+pub struct SqlStorage {
+    pool: DbPool,
     num_leaves: u32,
     /// Shared across all clones; all map operations are sync and never held across `.await`.
     recency: Arc<Recency>,
@@ -386,49 +481,77 @@ pub struct SqliteStorage {
 }
 
 #[cfg(feature = "client")]
-impl Storage for SqliteStorage {
+impl SqlStorage {
+    async fn new(pool: DbPool, num_leaves: u32, tmp: Option<Arc<TempDir>>) -> Result<Self> {
+        // Seed the tick counter so new ticks always exceed any value persisted in the DB.
+        let max_used = with_pool!(&pool, |p| {
+            let (max_used,): (i64,) = query_as("SELECT COALESCE(MAX(last_used), 0) FROM leaf")
+                .fetch_one(p)
+                .await?;
+            max_used
+        });
+        let recency = Arc::new(Recency {
+            next_tick: AtomicI64::new(max_used + 1),
+            dirty: Default::default(),
+            pool: pool.clone(),
+        });
+        Ok(Self {
+            pool,
+            num_leaves,
+            recency,
+            _tmp: tmp,
+        })
+    }
+}
+
+#[cfg(feature = "client")]
+impl Storage for SqlStorage {
     async fn default() -> Result<Self> {
         LightClientSqliteOptions::default().connect().await
     }
 
     async fn block_height(&self) -> Result<u64> {
-        let mut tx = self.pool.begin().await?;
-        let (height,) = query_as("SELECT COALESCE(max(height) + 1, 0) FROM leaf")
-            .fetch_one(tx.as_mut())
-            .await?;
-        Ok(height)
+        with_pool!(&self.pool, |pool| {
+            let mut tx = pool.begin().await?;
+            let (height,): (i64,) = query_as("SELECT COALESCE(max(height) + 1, 0) FROM leaf")
+                .fetch_one(tx.as_mut())
+                .await?;
+            Ok(u64::try_from(height)?)
+        })
     }
 
     async fn leaf_upper_bound(
         &self,
         id: impl Into<LeafRequest> + Send,
     ) -> Result<Option<LeafQueryData<SeqTypes>>> {
-        let mut q = QueryBuilder::new("SELECT data FROM leaf WHERE ");
-        match id.into() {
-            LeafRequest::Leaf(LeafId::Number(n)) | LeafRequest::Header(BlockId::Number(n)) => {
-                q.push("height >= ")
-                    .push_bind(n as i64)
-                    .push("ORDER BY HEIGHT");
-            },
-            LeafRequest::Leaf(LeafId::Hash(h)) => {
-                q.push("hash = ").push_bind(h.to_string());
-            },
-            LeafRequest::Header(BlockId::Hash(h)) => {
-                q.push("block_hash = ").push_bind(h.to_string());
-            },
-            LeafRequest::Header(BlockId::PayloadHash(h)) => {
-                q.push("payload_hash = ")
-                    .push_bind(h.to_string())
-                    .push("ORDER BY height");
-            },
-        }
-        q.push(" LIMIT 1");
+        let id = id.into();
+        let row = with_pool!(&self.pool, |pool| {
+            let mut q = QueryBuilder::new("SELECT data FROM leaf WHERE ");
+            match id {
+                LeafRequest::Leaf(LeafId::Number(n)) | LeafRequest::Header(BlockId::Number(n)) => {
+                    q.push("height >= ")
+                        .push_bind(n as i64)
+                        .push(" ORDER BY height");
+                },
+                LeafRequest::Leaf(LeafId::Hash(h)) => {
+                    q.push("hash = ").push_bind(h.to_string());
+                },
+                LeafRequest::Header(BlockId::Hash(h)) => {
+                    q.push("block_hash = ").push_bind(h.to_string());
+                },
+                LeafRequest::Header(BlockId::PayloadHash(h)) => {
+                    q.push("payload_hash = ")
+                        .push_bind(h.to_string())
+                        .push(" ORDER BY height");
+                },
+            }
+            q.push(" LIMIT 1");
 
-        let Some((data,)) = q
-            .build_query_as::<(serde_json::Value,)>()
-            .fetch_optional(&self.pool)
-            .await?
-        else {
+            q.build_query_as::<(serde_json::Value,)>()
+                .fetch_optional(pool)
+                .await?
+        });
+        let Some((data,)) = row else {
             return Ok(None);
         };
 
@@ -442,21 +565,23 @@ impl Storage for SqliteStorage {
         start_height: u32,
         end_height: u32,
     ) -> Result<Vec<LeafQueryData<SeqTypes>>> {
-        query_as::<_, (i64, serde_json::Value)>(
-            "SELECT height, data FROM leaf WHERE height >= $1 AND height < $2 ORDER BY height",
-        )
-        .bind(start_height as i64)
-        .bind(end_height as i64)
-        .fetch_all(&self.pool)
-        .await?
-        .into_iter()
-        .map(|(height, data)| {
-            let leaf = serde_json::from_value(data)?;
-            self.recency.touch(height);
-            Ok(leaf)
+        with_pool!(&self.pool, |pool| {
+            query_as::<_, (i64, serde_json::Value)>(
+                "SELECT height, data FROM leaf WHERE height >= $1 AND height < $2 ORDER BY height",
+            )
+            .bind(start_height as i64)
+            .bind(end_height as i64)
+            .fetch_all(pool)
+            .await?
+            .into_iter()
+            .map(|(height, data)| {
+                let leaf = serde_json::from_value(data)?;
+                self.recency.touch(height);
+                Ok(leaf)
+            })
+            .collect::<Result<Vec<_>, serde_json::Error>>()
+            .map_err(anyhow::Error::new)
         })
-        .collect::<Result<Vec<_>, serde_json::Error>>()
-        .map_err(anyhow::Error::new)
     }
 
     async fn insert_leaf(&self, leaf: LeafQueryData<SeqTypes>) -> Result<()> {
@@ -475,56 +600,58 @@ impl Storage for SqliteStorage {
                 WRITE_RETRY_MAX,
                 |_| true,
                 || async {
-                    let mut tx = self.pool.begin().await?;
+                    with_pool!(&self.pool, |pool| {
+                        let mut tx = pool.begin().await?;
 
-                    tracing::debug!(height, hash, "inserting leaf");
-                    query(
-                        "INSERT INTO leaf (height, hash, block_hash, payload_hash, data, \
-                         last_used) VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (height) DO \
-                         UPDATE SET data = excluded.data, last_used = excluded.last_used",
-                    )
-                    .bind(height)
-                    .bind(&hash)
-                    .bind(&block_hash)
-                    .bind(&payload_hash)
-                    .bind(&data)
-                    .bind(insert_tick)
-                    .execute(tx.as_mut())
-                    .await
-                    .context("inserting new leaf")?;
-                    tracing::debug!(height, hash, "inserted leaf");
-
-                    // Flush pending recency touches accumulated since the last insert.
-                    for (h, tick) in &pending {
-                        query("UPDATE leaf SET last_used = $1 WHERE height = $2")
-                            .bind(tick)
-                            .bind(h)
-                            .execute(tx.as_mut())
-                            .await
-                            .context("flushing recency touch")?;
-                    }
-
-                    // GC: evict least-recently-used leaves until count <= num_leaves.
-                    let (num_leaves,): (u32,) = query_as("SELECT count(*) FROM leaf")
-                        .fetch_one(tx.as_mut())
-                        .await
-                        .context("counting leaves")?;
-                    let to_delete = num_leaves.saturating_sub(self.num_leaves);
-                    if to_delete > 0 {
-                        tracing::debug!("garbage collecting {to_delete} leaves");
-                        let res = query(
-                            "DELETE FROM leaf WHERE height IN (SELECT height FROM leaf ORDER BY \
-                             last_used ASC, height ASC LIMIT $1)",
+                        tracing::debug!(height, hash, "inserting leaf");
+                        query(
+                            "INSERT INTO leaf (height, hash, block_hash, payload_hash, data, \
+                             last_used) VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (height) DO \
+                             UPDATE SET data = excluded.data, last_used = excluded.last_used",
                         )
-                        .bind(to_delete)
+                        .bind(height)
+                        .bind(&hash)
+                        .bind(&block_hash)
+                        .bind(&payload_hash)
+                        .bind(&data)
+                        .bind(insert_tick)
                         .execute(tx.as_mut())
                         .await
-                        .context("deleting old leaves")?;
-                        tracing::debug!("deleted {} leaves", res.rows_affected());
-                    }
+                        .context("inserting new leaf")?;
+                        tracing::debug!(height, hash, "inserted leaf");
 
-                    tx.commit().await?;
-                    Ok(())
+                        // Flush pending recency touches accumulated since the last insert.
+                        for (h, tick) in &pending {
+                            query("UPDATE leaf SET last_used = $1 WHERE height = $2")
+                                .bind(tick)
+                                .bind(h)
+                                .execute(tx.as_mut())
+                                .await
+                                .context("flushing recency touch")?;
+                        }
+
+                        // GC: evict least-recently-used leaves until count <= num_leaves.
+                        let (num_leaves,): (i64,) = query_as("SELECT count(*) FROM leaf")
+                            .fetch_one(tx.as_mut())
+                            .await
+                            .context("counting leaves")?;
+                        let to_delete = num_leaves.saturating_sub(i64::from(self.num_leaves));
+                        if to_delete > 0 {
+                            tracing::debug!("garbage collecting {to_delete} leaves");
+                            let res = query(
+                                "DELETE FROM leaf WHERE height IN (SELECT height FROM leaf ORDER \
+                                 BY last_used ASC, height ASC LIMIT $1)",
+                            )
+                            .bind(to_delete)
+                            .execute(tx.as_mut())
+                            .await
+                            .context("deleting old leaves")?;
+                            tracing::debug!("deleted {} leaves", res.rows_affected());
+                        }
+
+                        tx.commit().await?;
+                        Ok(())
+                    })
                 },
             )
             .await;
@@ -545,106 +672,110 @@ impl Storage for SqliteStorage {
         &self,
         epoch: EpochNumber,
     ) -> Result<Option<(EpochNumber, StakeTableState, Version, Version)>> {
-        let mut tx = self.pool.begin().await?;
+        with_pool!(&self.pool, |pool| {
+            let mut tx = pool.begin().await?;
 
-        // The largest epoch number the database can represent is `i64::MAX`. Since we are only
-        // looking for a lower bound, if requested for an epoch number that can overflow, we can
-        // simply return the lower bound of `i64::MAX`.
-        let epoch = min(*epoch, i64::MAX as u64) as i64;
+            // The largest epoch number the database can represent is `i64::MAX`. Since we are only
+            // looking for a lower bound, if requested for an epoch number that can overflow, we can
+            // simply return the lower bound of `i64::MAX`.
+            let epoch = min(*epoch, i64::MAX as u64) as i64;
 
-        let Some((epoch, epoch_root_protocol_version, next_epoch_root_protocol_version)) =
-            query_as::<_, (i64, String, String)>(
-                "SELECT epoch, epoch_root_protocol_version, next_epoch_root_protocol_version FROM \
-                 stake_table_epoch WHERE epoch <= $1 ORDER BY epoch DESC LIMIT 1",
+            let Some((epoch, epoch_root_protocol_version, next_epoch_root_protocol_version)) =
+                query_as::<_, (i64, String, String)>(
+                    "SELECT epoch, epoch_root_protocol_version, next_epoch_root_protocol_version \
+                     FROM stake_table_epoch WHERE epoch <= $1 ORDER BY epoch DESC LIMIT 1",
+                )
+                .bind(epoch)
+                .fetch_optional(tx.as_mut())
+                .await
+                .context("loading epoch lower bound")?
+            else {
+                return Ok(None);
+            };
+            let epoch_root_protocol_version = versions::parse_version(&epoch_root_protocol_version)
+                .with_context(|| {
+                    format!(
+                        "parsing stored epoch root protocol version \
+                         {epoch_root_protocol_version:?} for epoch {epoch}"
+                    )
+                })?;
+            let next_epoch_root_protocol_version =
+                versions::parse_version(&next_epoch_root_protocol_version).with_context(|| {
+                    format!(
+                        "parsing stored next epoch root protocol version \
+                         {next_epoch_root_protocol_version:?} for epoch {epoch}"
+                    )
+                })?;
+
+            let validators = query_as::<_, (Value,)>(
+                "SELECT data FROM stake_table_validator WHERE epoch = $1 ORDER BY idx",
             )
             .bind(epoch)
-            .fetch_optional(tx.as_mut())
+            .fetch(tx.as_mut())
+            .map_err(anyhow::Error::new)
+            .and_then(|(json,)| async move {
+                let validator: RegisteredValidator<PubKey> = serde_json::from_value(json)?;
+                Ok((validator.account, validator))
+            })
+            .try_collect()
             .await
-            .context("loading epoch lower bound")?
-        else {
-            return Ok(None);
-        };
-        let epoch_root_protocol_version = versions::parse_version(&epoch_root_protocol_version)
-            .with_context(|| {
-                format!(
-                    "parsing stored epoch root protocol version {epoch_root_protocol_version:?} \
-                     for epoch {epoch}"
-                )
-            })?;
-        let next_epoch_root_protocol_version =
-            versions::parse_version(&next_epoch_root_protocol_version).with_context(|| {
-                format!(
-                    "parsing stored next epoch root protocol version \
-                     {next_epoch_root_protocol_version:?} for epoch {epoch}"
-                )
-            })?;
+            .context(format!("loading stake table for epoch {epoch}"))?;
 
-        let validators = query_as::<_, (Value,)>(
-            "SELECT data FROM stake_table_validator WHERE epoch = $1 ORDER BY idx",
-        )
-        .bind(epoch)
-        .fetch(tx.as_mut())
-        .map_err(anyhow::Error::new)
-        .and_then(|(json,)| async move {
-            let validator: RegisteredValidator<PubKey> = serde_json::from_value(json)?;
-            Ok((validator.account, validator))
+            let validator_exits =
+                query_as::<_, (String,)>("SELECT address FROM stake_table_exit WHERE epoch <= $1")
+                    .bind(epoch)
+                    .fetch(tx.as_mut())
+                    .map_err(anyhow::Error::new)
+                    .and_then(|(s,)| async move { Ok(Address::from_str(&s)?) })
+                    .try_collect()
+                    .await
+                    .context(format!("loading validator exits for epoch {epoch}"))?;
+
+            let used_bls_keys =
+                query_as::<_, (String,)>("SELECT key FROM stake_table_bls_key WHERE epoch <= $1")
+                    .bind(epoch)
+                    .fetch(tx.as_mut())
+                    .map_err(anyhow::Error::new)
+                    .and_then(|(s,)| async move { Ok(PubKey::from_str(&s)?) })
+                    .try_collect()
+                    .await
+                    .context(format!("loading BLS keys for epoch {epoch}"))?;
+
+            let used_schnorr_keys = query_as::<_, (String,)>(
+                "SELECT key FROM stake_table_schnorr_key WHERE epoch <= $1",
+            )
+            .bind(epoch)
+            .fetch(tx.as_mut())
+            .map_err(anyhow::Error::new)
+            .and_then(|(s,)| async move { Ok(StateVerKey::from_str(&s)?) })
+            .try_collect()
+            .await
+            .context(format!("loading Schnorr keys for epoch {epoch}"))?;
+
+            let used_x25519_keys = query_as::<_, (String,)>(
+                "SELECT key FROM stake_table_x25519_key WHERE epoch <= $1",
+            )
+            .bind(epoch)
+            .fetch(tx.as_mut())
+            .map_err(anyhow::Error::new)
+            .and_then(|(s,)| async move { Ok(x25519::PublicKey::from_str(&s)?) })
+            .try_collect()
+            .await
+            .context(format!("loading x25519 keys for epoch {epoch}"))?;
+
+            Ok(Some((
+                EpochNumber::new(epoch as u64),
+                StakeTableState::new(
+                    validators,
+                    validator_exits,
+                    used_bls_keys,
+                    used_schnorr_keys,
+                    used_x25519_keys,
+                ),
+                epoch_root_protocol_version,
+                next_epoch_root_protocol_version,
+            )))
         })
-        .try_collect()
-        .await
-        .context(format!("loading stake table for epoch {epoch}"))?;
-
-        let validator_exits =
-            query_as::<_, (String,)>("SELECT address FROM stake_table_exit WHERE epoch <= $1")
-                .bind(epoch)
-                .fetch(tx.as_mut())
-                .map_err(anyhow::Error::new)
-                .and_then(|(s,)| async move { Ok(Address::from_str(&s)?) })
-                .try_collect()
-                .await
-                .context(format!("loading validator exits for epoch {epoch}"))?;
-
-        let used_bls_keys =
-            query_as::<_, (String,)>("SELECT key FROM stake_table_bls_key WHERE epoch <= $1")
-                .bind(epoch)
-                .fetch(tx.as_mut())
-                .map_err(anyhow::Error::new)
-                .and_then(|(s,)| async move { Ok(PubKey::from_str(&s)?) })
-                .try_collect()
-                .await
-                .context(format!("loading BLS keys for epoch {epoch}"))?;
-
-        let used_schnorr_keys =
-            query_as::<_, (String,)>("SELECT key FROM stake_table_schnorr_key WHERE epoch <= $1")
-                .bind(epoch)
-                .fetch(tx.as_mut())
-                .map_err(anyhow::Error::new)
-                .and_then(|(s,)| async move { Ok(StateVerKey::from_str(&s)?) })
-                .try_collect()
-                .await
-                .context(format!("loading Schnorr keys for epoch {epoch}"))?;
-
-        let used_x25519_keys =
-            query_as::<_, (String,)>("SELECT key FROM stake_table_x25519_key WHERE epoch <= $1")
-                .bind(epoch)
-                .fetch(tx.as_mut())
-                .map_err(anyhow::Error::new)
-                .and_then(|(s,)| async move { Ok(x25519::PublicKey::from_str(&s)?) })
-                .try_collect()
-                .await
-                .context(format!("loading x25519 keys for epoch {epoch}"))?;
-
-        Ok(Some((
-            EpochNumber::new(epoch as u64),
-            StakeTableState::new(
-                validators,
-                validator_exits,
-                used_bls_keys,
-                used_schnorr_keys,
-                used_x25519_keys,
-            ),
-            epoch_root_protocol_version,
-            next_epoch_root_protocol_version,
-        )))
     }
 
     async fn insert_stake_table(
@@ -669,108 +800,118 @@ impl Storage for SqliteStorage {
                 WRITE_RETRY_MAX,
                 |_| true,
                 || async {
-                    let mut tx = self.pool.begin().await?;
+                    with_pool!(&self.pool, |pool| {
+                        let mut tx = pool.begin().await?;
 
-                    // Record that the stake table for this epoch is available, along with the
-                    // versions of the epoch root headers in epochs `e-2` and `e-1` (snapshot points
-                    // for `e` and `e+1`). The stake table for an epoch is immutable, so if the row
-                    // already exists (e.g. a concurrent or repeated catchup) the whole operation is
-                    // a no-op: skip the remaining inserts to avoid spurious UNIQUE-constraint
-                    // retries.
-                    let inserted = query(
-                        "INSERT INTO stake_table_epoch (epoch, epoch_root_protocol_version, \
-                         next_epoch_root_protocol_version) VALUES ($1, $2, $3) ON CONFLICT \
-                         (epoch) DO NOTHING",
-                    )
-                    .bind(epoch)
-                    .bind(&epoch_root_protocol_version_str)
-                    .bind(&next_epoch_root_protocol_version_str)
-                    .execute(tx.as_mut())
-                    .await
-                    .context(format!(
-                        "recording stake table availability for epoch {epoch}"
-                    ))?;
-                    if inserted.rows_affected() == 0 {
-                        return Ok(());
-                    }
-
-                    QueryBuilder::new("INSERT INTO stake_table_validator (epoch, idx, data) ")
-                        .push_values(validators.iter().enumerate(), |mut q, (i, data)| {
-                            q.push_bind(epoch).push_bind(i as i64).push_bind(data);
-                        })
-                        .build()
-                        .execute(tx.as_mut())
-                        .await
-                        .context(format!("inserting validators for epoch {epoch}"))?;
-
-                    // Insert only newly used BLS keys.
-                    QueryBuilder::new("INSERT INTO stake_table_bls_key (epoch, key) ")
-                        .push_values(stake_table.used_bls_keys(), |mut q, key| {
-                            q.push_bind(epoch).push_bind(key.to_string());
-                        })
-                        // If we insert keys out of order, make sure `epoch` reflects the earliest time
-                        // when this key was added to the state.
-                        .push(" ON CONFLICT (key) DO UPDATE SET epoch = min(epoch, excluded.epoch)")
-                        .build()
-                        .execute(tx.as_mut())
-                        .await
-                        .context(format!("inserting newly used BLS keys for epoch {epoch}"))?;
-
-                    // Insert only newly used Schnorr keys.
-                    QueryBuilder::new("INSERT INTO stake_table_schnorr_key (epoch, key) ")
-                        .push_values(stake_table.used_schnorr_keys(), |mut q, key| {
-                            q.push_bind(epoch).push_bind(key.to_string());
-                        })
-                        // If we insert keys out of order, make sure `epoch` reflects the earliest time
-                        // when this key was added to the state.
-                        .push(" ON CONFLICT (key) DO UPDATE SET epoch = min(epoch, excluded.epoch)")
-                        .build()
+                        // Record that the stake table for this epoch is available, along with the
+                        // versions of the epoch root headers in epochs `e-2` and `e-1` (snapshot points
+                        // for `e` and `e+1`). The stake table for an epoch is immutable, so if the row
+                        // already exists (e.g. a concurrent or repeated catchup) the whole operation is
+                        // a no-op: skip the remaining inserts to avoid spurious UNIQUE-constraint
+                        // retries.
+                        let inserted = query(
+                            "INSERT INTO stake_table_epoch (epoch, epoch_root_protocol_version, \
+                             next_epoch_root_protocol_version) VALUES ($1, $2, $3) ON CONFLICT \
+                             (epoch) DO NOTHING",
+                        )
+                        .bind(epoch)
+                        .bind(&epoch_root_protocol_version_str)
+                        .bind(&next_epoch_root_protocol_version_str)
                         .execute(tx.as_mut())
                         .await
                         .context(format!(
-                            "inserting newly used Schnorr keys for epoch {epoch}"
+                            "recording stake table availability for epoch {epoch}"
                         ))?;
+                        if inserted.rows_affected() == 0 {
+                            return Ok(());
+                        }
 
-                    // Insert only newly used x25519 keys.
-                    if !stake_table.used_x25519_keys().is_empty() {
-                        QueryBuilder::new("INSERT INTO stake_table_x25519_key (epoch, key) ")
-                            .push_values(stake_table.used_x25519_keys(), |mut q, key| {
+                        QueryBuilder::new("INSERT INTO stake_table_validator (epoch, idx, data) ")
+                            .push_values(validators.iter().enumerate(), |mut q, (i, data)| {
+                                q.push_bind(epoch).push_bind(i as i64).push_bind(data);
+                            })
+                            .build()
+                            .execute(tx.as_mut())
+                            .await
+                            .context(format!("inserting validators for epoch {epoch}"))?;
+
+                        // Insert only newly used BLS keys.
+                        QueryBuilder::new("INSERT INTO stake_table_bls_key (epoch, key) ")
+                            .push_values(stake_table.used_bls_keys(), |mut q, key| {
                                 q.push_bind(epoch).push_bind(key.to_string());
                             })
-                            // If we insert keys out of order, make sure `epoch` reflects the earliest
-                            // time when this key was added to the state.
+                            // If we insert keys out of order, make sure `epoch` reflects the earliest time
+                            // when this key was added to the state.
                             .push(
-                                " ON CONFLICT (key) DO UPDATE SET epoch = min(epoch, \
-                                 excluded.epoch)",
+                                " ON CONFLICT (key) DO UPDATE SET epoch = excluded.epoch WHERE \
+                                 excluded.epoch < stake_table_bls_key.epoch",
+                            )
+                            .build()
+                            .execute(tx.as_mut())
+                            .await
+                            .context(format!("inserting newly used BLS keys for epoch {epoch}"))?;
+
+                        // Insert only newly used Schnorr keys.
+                        QueryBuilder::new("INSERT INTO stake_table_schnorr_key (epoch, key) ")
+                            .push_values(stake_table.used_schnorr_keys(), |mut q, key| {
+                                q.push_bind(epoch).push_bind(key.to_string());
+                            })
+                            // If we insert keys out of order, make sure `epoch` reflects the earliest time
+                            // when this key was added to the state.
+                            .push(
+                                " ON CONFLICT (key) DO UPDATE SET epoch = excluded.epoch WHERE \
+                                 excluded.epoch < stake_table_schnorr_key.epoch",
                             )
                             .build()
                             .execute(tx.as_mut())
                             .await
                             .context(format!(
-                                "inserting newly used x25519 keys for epoch {epoch}"
+                                "inserting newly used Schnorr keys for epoch {epoch}"
                             ))?;
-                    }
 
-                    // Insert only the new validator exits.
-                    if !stake_table.validator_exits().is_empty() {
-                        QueryBuilder::new("INSERT INTO stake_table_exit (epoch, address) ")
-                            .push_values(stake_table.validator_exits(), |mut q, address| {
-                                q.push_bind(epoch).push_bind(address.to_string());
-                            })
-                            // If we insert exits out of order, make sure `epoch` reflects the earliest
-                            // time when this exit was added to the state.
-                            .push(
-                                " ON CONFLICT (address) DO UPDATE SET epoch = min(epoch, \
-                                 excluded.epoch)",
-                            )
-                            .build()
-                            .execute(tx.as_mut())
-                            .await
-                            .context(format!("inserting new validator exits for epoch {epoch}"))?;
-                    }
+                        // Insert only newly used x25519 keys.
+                        if !stake_table.used_x25519_keys().is_empty() {
+                            QueryBuilder::new("INSERT INTO stake_table_x25519_key (epoch, key) ")
+                                .push_values(stake_table.used_x25519_keys(), |mut q, key| {
+                                    q.push_bind(epoch).push_bind(key.to_string());
+                                })
+                                // If we insert keys out of order, make sure `epoch` reflects the earliest
+                                // time when this key was added to the state.
+                                .push(
+                                    " ON CONFLICT (key) DO UPDATE SET epoch = excluded.epoch \
+                                     WHERE excluded.epoch < stake_table_x25519_key.epoch",
+                                )
+                                .build()
+                                .execute(tx.as_mut())
+                                .await
+                                .context(format!(
+                                    "inserting newly used x25519 keys for epoch {epoch}"
+                                ))?;
+                        }
 
-                    tx.commit().await?;
-                    Ok(())
+                        // Insert only the new validator exits.
+                        if !stake_table.validator_exits().is_empty() {
+                            QueryBuilder::new("INSERT INTO stake_table_exit (epoch, address) ")
+                                .push_values(stake_table.validator_exits(), |mut q, address| {
+                                    q.push_bind(epoch).push_bind(address.to_string());
+                                })
+                                // If we insert exits out of order, make sure `epoch` reflects the earliest
+                                // time when this exit was added to the state.
+                                .push(
+                                    " ON CONFLICT (address) DO UPDATE SET epoch = excluded.epoch \
+                                     WHERE excluded.epoch < stake_table_exit.epoch",
+                                )
+                                .build()
+                                .execute(tx.as_mut())
+                                .await
+                                .context(format!(
+                                    "inserting new validator exits for epoch {epoch}"
+                                ))?;
+                        }
+
+                        tx.commit().await?;
+                        Ok(())
+                    })
                 },
             )
             .await
@@ -782,6 +923,7 @@ mod test {
     #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
 
+    use hotshot_query_service::data_source::storage::sql::testing::TmpPostgres;
     use pretty_assertions::assert_eq;
     use sqlx::sqlite::SqliteConnectOptions;
     use tempfile::tempdir;
@@ -790,13 +932,106 @@ mod test {
     use super::*;
     use crate::testing::{leaf_chain, random_validator};
 
+    #[derive(Clone, Copy, Debug)]
+    enum Backend {
+        Sqlite,
+        Postgres,
+    }
+
+    impl Backend {
+        async fn temp_db(self) -> TestDb {
+            match self {
+                Self::Sqlite => TestDb::Sqlite(tempdir().unwrap()),
+                Self::Postgres => TestDb::Postgres(TmpPostgres::init().await),
+            }
+        }
+
+        /// Hold the returned [`TestDb`] for the whole test, since dropping it deletes the
+        /// database.
+        async fn open(self, num_leaves: u32) -> (SqlStorage, TestDb) {
+            let tmp = self.temp_db().await;
+            (tmp.connect(num_leaves).await, tmp)
+        }
+    }
+
+    /// A database that outlives the [`SqlStorage`] handles connected to it, so a test can drop a
+    /// handle and reconnect as a restarted node would.
+    enum TestDb {
+        Sqlite(tempfile::TempDir),
+        Postgres(TmpPostgres),
+    }
+
+    impl TestDb {
+        async fn connect(&self, num_leaves: u32) -> SqlStorage {
+            match self {
+                Self::Sqlite(dir) => LightClientSqliteOptions {
+                    lc_path: Some(dir.path().join("lc.db")),
+                    num_leaves,
+                    ..Default::default()
+                }
+                .connect()
+                .await
+                .unwrap(),
+                Self::Postgres(tmp) => LightClientPostgresOptions {
+                    connect: PgConnectOptions::new()
+                        .host(&tmp.host())
+                        .port(tmp.port())
+                        .username("postgres")
+                        .password("password"),
+                    num_connections: 5,
+                    num_leaves,
+                }
+                .connect()
+                .await
+                .unwrap(),
+            }
+        }
+    }
+
+    #[rstest_reuse::template]
+    #[rstest::rstest]
+    #[case::sqlite(Backend::Sqlite)]
+    #[case::postgres(Backend::Postgres)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn backends(#[case] backend: Backend) {}
+
+    #[test_log::test(rstest_reuse::apply(backends))]
+    async fn test_survives_reconnect(#[case] backend: Backend) {
+        let tmp = backend.temp_db().await;
+        let leaf = leaf_chain(0..1, EPOCH_VERSION).await.remove(0);
+        let state = random_stake_table();
+        {
+            let db = tmp.connect(10).await;
+            db.insert_leaf(leaf.clone()).await.unwrap();
+            db.insert_stake_table(EpochNumber::new(3), &state, EPOCH_VERSION, EPOCH_VERSION)
+                .await
+                .unwrap();
+        }
+
+        let db = tmp.connect(10).await;
+        assert_eq!(
+            db.leaf_upper_bound(LeafId::Number(0)).await.unwrap(),
+            Some(leaf)
+        );
+        assert_eq!(
+            db.stake_table_lower_bound(EpochNumber::new(5))
+                .await
+                .unwrap()
+                .unwrap(),
+            (EpochNumber::new(3), state, EPOCH_VERSION, EPOCH_VERSION)
+        );
+    }
+
     #[tokio::test]
     #[test_log::test]
     async fn test_default_storage_survives_connection_churn() {
-        let db = SqliteStorage::default().await.unwrap();
+        let db = SqlStorage::default().await.unwrap();
 
         {
-            let conn = db.pool.acquire().await.unwrap();
+            let DbPool::Sqlite(pool) = &db.pool else {
+                unreachable!("default storage is SQLite");
+            };
+            let conn = pool.acquire().await.unwrap();
             drop(conn);
         }
 
@@ -810,7 +1045,7 @@ mod test {
     async fn test_default_storage_survives_idle_reap() {
         use std::time::Duration;
 
-        let db = SqliteStorage::default().await.unwrap();
+        let db = SqlStorage::default().await.unwrap();
         let path = db
             ._tmp
             .as_ref()
@@ -854,9 +1089,13 @@ mod test {
     // (LRU recency bump) inside one write transaction, so every read took the
     // WAL write lock and contended with concurrent inserts under a full-history
     // backfill, producing SQLITE_BUSY. The read path is now a pure SELECT.
-    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    async fn test_concurrent_reads_do_not_lock() {
-        let db = Arc::new(SqliteStorage::default().await.unwrap());
+    // The cache is smaller than the chain, so on Postgres concurrent inserts also
+    // race their recency updates against each other's eviction, which can deadlock
+    // and must be absorbed by the write retries.
+    #[test_log::test(rstest_reuse::apply(backends))]
+    async fn test_concurrent_reads_do_not_lock(#[case] backend: Backend) {
+        let (db, _tmp) = backend.open(8).await;
+        let db = Arc::new(db);
         let leaves = leaf_chain(0..40, EPOCH_VERSION).await;
 
         let mut tasks = Vec::new();
@@ -891,7 +1130,7 @@ mod test {
     #[tokio::test]
     #[test_log::test]
     async fn test_default_storage_tempdir_is_owner_only() {
-        let db = SqliteStorage::default().await.unwrap();
+        let db = SqlStorage::default().await.unwrap();
         let dir = db
             ._tmp
             .as_ref()
@@ -916,10 +1155,9 @@ mod test {
         assert!(path.exists(), "sqlite file should have been created");
     }
 
-    #[tokio::test]
-    #[test_log::test]
-    async fn test_block_height() {
-        let db = SqliteStorage::default().await.unwrap();
+    #[test_log::test(rstest_reuse::apply(backends))]
+    async fn test_block_height(#[case] backend: Backend) {
+        let (db, _guard) = backend.open(100).await;
 
         // Test with empty db.
         assert_eq!(db.block_height().await.unwrap(), 0);
@@ -930,10 +1168,9 @@ mod test {
         assert_eq!(db.block_height().await.unwrap(), 101);
     }
 
-    #[tokio::test]
-    #[test_log::test]
-    async fn test_leaf_upper_bound_exact() {
-        let db = SqliteStorage::default().await.unwrap();
+    #[test_log::test(rstest_reuse::apply(backends))]
+    async fn test_leaf_upper_bound_exact(#[case] backend: Backend) {
+        let (db, _guard) = backend.open(100).await;
 
         let leaf = leaf_chain(0..1, EPOCH_VERSION).await.remove(0);
         db.insert_leaf(leaf.clone()).await.unwrap();
@@ -975,10 +1212,9 @@ mod test {
         );
     }
 
-    #[tokio::test]
-    #[test_log::test]
-    async fn test_leaf_upper_bound_loose() {
-        let db = SqliteStorage::default().await.unwrap();
+    #[test_log::test(rstest_reuse::apply(backends))]
+    async fn test_leaf_upper_bound_loose(#[case] backend: Backend) {
+        let (db, _guard) = backend.open(100).await;
 
         let leaves = leaf_chain(0..=1, EPOCH_VERSION).await;
         db.insert_leaf(leaves[1].clone()).await.unwrap();
@@ -1005,10 +1241,9 @@ mod test {
         );
     }
 
-    #[tokio::test]
-    #[test_log::test]
-    async fn test_leaf_upper_bound_least_upper_bound() {
-        let db = SqliteStorage::default().await.unwrap();
+    #[test_log::test(rstest_reuse::apply(backends))]
+    async fn test_leaf_upper_bound_least_upper_bound(#[case] backend: Backend) {
+        let (db, _guard) = backend.open(100).await;
 
         let leaves = leaf_chain(0..=2, EPOCH_VERSION).await;
         db.insert_leaf(leaves[2].clone()).await.unwrap();
@@ -1022,10 +1257,9 @@ mod test {
         );
     }
 
-    #[tokio::test]
-    #[test_log::test]
-    async fn test_leaf_upper_bound_not_found() {
-        let db = SqliteStorage::default().await.unwrap();
+    #[test_log::test(rstest_reuse::apply(backends))]
+    async fn test_leaf_upper_bound_not_found(#[case] backend: Backend) {
+        let (db, _guard) = backend.open(100).await;
 
         let leaves = leaf_chain(0..=1, EPOCH_VERSION).await;
         db.insert_leaf(leaves[0].clone()).await.unwrap();
@@ -1038,16 +1272,9 @@ mod test {
         );
     }
 
-    #[tokio::test]
-    #[test_log::test]
-    async fn test_gc_last_inserted() {
-        let db = LightClientSqliteOptions {
-            num_leaves: 1,
-            ..Default::default()
-        }
-        .connect()
-        .await
-        .unwrap();
+    #[test_log::test(rstest_reuse::apply(backends))]
+    async fn test_gc_last_inserted(#[case] backend: Backend) {
+        let (db, _guard) = backend.open(1).await;
 
         let leaves = leaf_chain(0..=1, EPOCH_VERSION).await;
         db.insert_leaf(leaves[1].clone()).await.unwrap();
@@ -1064,16 +1291,9 @@ mod test {
     }
 
     // LRU GC: leaf touched by a read is kept; untouched leaf is evicted.
-    #[tokio::test]
-    #[test_log::test]
-    async fn test_gc_evicts_least_recently_used() {
-        let db = LightClientSqliteOptions {
-            num_leaves: 2,
-            ..Default::default()
-        }
-        .connect()
-        .await
-        .unwrap();
+    #[test_log::test(rstest_reuse::apply(backends))]
+    async fn test_gc_evicts_least_recently_used(#[case] backend: Backend) {
+        let (db, _guard) = backend.open(2).await;
 
         let leaves = leaf_chain(0..=2, EPOCH_VERSION).await;
         db.insert_leaf(leaves[0].clone()).await.unwrap();
@@ -1114,22 +1334,13 @@ mod test {
     // still honours access history. Specifically: `next_tick` must be seeded
     // above the persisted MAX(last_used) so that a touch recorded after reopen
     // outranks all pre-restart last_used values.
-    #[tokio::test]
-    #[test_log::test]
-    async fn test_recency_survives_restart() {
-        let dir = tempdir().unwrap();
-        let lc_path = dir.path().join("lc.db");
-
-        let opts = || LightClientSqliteOptions {
-            lc_path: Some(lc_path.clone()),
-            num_leaves: 2,
-            ..Default::default()
-        };
-
+    #[test_log::test(rstest_reuse::apply(backends))]
+    async fn test_recency_survives_restart(#[case] backend: Backend) {
+        let tmp = backend.temp_db().await;
         let leaves = leaf_chain(0..=3, EPOCH_VERSION).await;
 
         {
-            let db = opts().connect().await.unwrap();
+            let db = tmp.connect(2).await;
             db.insert_leaf(leaves[0].clone()).await.unwrap();
             db.insert_leaf(leaves[1].clone()).await.unwrap();
 
@@ -1144,7 +1355,7 @@ mod test {
         // Reopen. next_tick seeds from MAX(last_used) + 1, so any post-reopen
         // tick is strictly greater than all persisted last_used values.
         {
-            let db = opts().connect().await.unwrap();
+            let db = tmp.connect(2).await;
 
             // Touch leaf 2 after reopen; its tick now exceeds all pre-restart last_used.
             db.leaf_upper_bound(LeafId::Hash(leaves[2].hash()))
@@ -1184,22 +1395,13 @@ mod test {
     // final reads, so GC after restart honours them. `Drop` spawns the flush as a
     // detached task inside a runtime, so the test awaits the same flush directly to
     // stay deterministic; the subsequent drop is then a no-op.
-    #[tokio::test]
-    #[test_log::test]
-    async fn test_recency_flushed_on_shutdown_without_insert() {
-        let dir = tempdir().unwrap();
-        let lc_path = dir.path().join("lc.db");
-
-        let opts = || LightClientSqliteOptions {
-            lc_path: Some(lc_path.clone()),
-            num_leaves: 2,
-            ..Default::default()
-        };
-
+    #[test_log::test(rstest_reuse::apply(backends))]
+    async fn test_recency_flushed_on_shutdown_without_insert(#[case] backend: Backend) {
+        let tmp = backend.temp_db().await;
         let leaves = leaf_chain(0..=2, EPOCH_VERSION).await;
 
         {
-            let db = opts().connect().await.unwrap();
+            let db = tmp.connect(2).await;
             db.insert_leaf(leaves[0].clone()).await.unwrap();
             db.insert_leaf(leaves[1].clone()).await.unwrap();
 
@@ -1213,7 +1415,7 @@ mod test {
         // Reopen and insert leaf 2; GC evicts the lowest last_used. With the touch
         // flushed, leaf 0 outranks leaf 1, so leaf 1 is evicted.
         {
-            let db = opts().connect().await.unwrap();
+            let db = tmp.connect(2).await;
             db.insert_leaf(leaves[2].clone()).await.unwrap();
 
             assert_eq!(
@@ -1233,10 +1435,9 @@ mod test {
         }
     }
 
-    #[tokio::test]
-    #[test_log::test]
-    async fn test_get_leaves_in_range() {
-        let db = SqliteStorage::default().await.unwrap();
+    #[test_log::test(rstest_reuse::apply(backends))]
+    async fn test_get_leaves_in_range(#[case] backend: Backend) {
+        let (db, _guard) = backend.open(100).await;
 
         let leaves = leaf_chain(0..5, EPOCH_VERSION).await;
         for leaf in &leaves {
@@ -1247,10 +1448,9 @@ mod test {
         assert_eq!(fetched, leaves[1..4]);
     }
 
-    #[tokio::test]
-    #[test_log::test]
-    async fn test_get_leaves_in_range_not_found() {
-        let db = SqliteStorage::default().await.unwrap();
+    #[test_log::test(rstest_reuse::apply(backends))]
+    async fn test_get_leaves_in_range_not_found(#[case] backend: Backend) {
+        let (db, _guard) = backend.open(100).await;
 
         let leaves = leaf_chain(0..3, EPOCH_VERSION).await;
         for leaf in &leaves {
@@ -1261,10 +1461,9 @@ mod test {
         assert!(fetched.is_empty());
     }
 
-    #[tokio::test]
-    #[test_log::test]
-    async fn test_insert_stake_table_idempotent() {
-        let db = SqliteStorage::default().await.unwrap();
+    #[test_log::test(rstest_reuse::apply(backends))]
+    async fn test_insert_stake_table_idempotent(#[case] backend: Backend) {
+        let (db, _guard) = backend.open(100).await;
 
         let epoch = EpochNumber::new(1);
         let state = random_stake_table();
@@ -1281,10 +1480,9 @@ mod test {
         );
     }
 
-    #[tokio::test]
-    #[test_log::test]
-    async fn test_stake_table_lower_bound_exact() {
-        let db = SqliteStorage::default().await.unwrap();
+    #[test_log::test(rstest_reuse::apply(backends))]
+    async fn test_stake_table_lower_bound_exact(#[case] backend: Backend) {
+        let (db, _guard) = backend.open(100).await;
 
         let epoch = EpochNumber::new(1);
         let state = random_stake_table();
@@ -1297,10 +1495,9 @@ mod test {
         );
     }
 
-    #[tokio::test]
-    #[test_log::test]
-    async fn test_stake_table_lower_bound_loose() {
-        let db = SqliteStorage::default().await.unwrap();
+    #[test_log::test(rstest_reuse::apply(backends))]
+    async fn test_stake_table_lower_bound_loose(#[case] backend: Backend) {
+        let (db, _guard) = backend.open(100).await;
 
         let epoch = EpochNumber::new(1);
         let state = random_stake_table();
@@ -1316,10 +1513,9 @@ mod test {
         );
     }
 
-    #[tokio::test]
-    #[test_log::test]
-    async fn test_stake_table_lower_bound_greatest_lower_bound() {
-        let db = SqliteStorage::default().await.unwrap();
+    #[test_log::test(rstest_reuse::apply(backends))]
+    async fn test_stake_table_lower_bound_greatest_lower_bound(#[case] backend: Backend) {
+        let (db, _guard) = backend.open(100).await;
 
         let state1 = random_stake_table();
         let state2 = chain_stake_table(&state1);
@@ -1339,10 +1535,9 @@ mod test {
         );
     }
 
-    #[tokio::test]
-    #[test_log::test]
-    async fn test_stake_table_lower_bound_not_found() {
-        let db = SqliteStorage::default().await.unwrap();
+    #[test_log::test(rstest_reuse::apply(backends))]
+    async fn test_stake_table_lower_bound_not_found(#[case] backend: Backend) {
+        let (db, _guard) = backend.open(100).await;
         db.insert_stake_table(
             EpochNumber::new(2),
             &random_stake_table(),
@@ -1359,10 +1554,9 @@ mod test {
         );
     }
 
-    #[tokio::test]
-    #[test_log::test]
-    async fn test_stake_table_keeps_every_epoch() {
-        let db = SqliteStorage::default().await.unwrap();
+    #[test_log::test(rstest_reuse::apply(backends))]
+    async fn test_stake_table_keeps_every_epoch(#[case] backend: Backend) {
+        let (db, _guard) = backend.open(100).await;
 
         let mut states = Vec::from([random_stake_table()]);
         for _ in 1..150 {
@@ -1385,10 +1579,9 @@ mod test {
         }
     }
 
-    #[tokio::test]
-    #[test_log::test]
-    async fn test_stake_table_insert_out_of_order() {
-        let db = SqliteStorage::default().await.unwrap();
+    #[test_log::test(rstest_reuse::apply(backends))]
+    async fn test_stake_table_insert_out_of_order(#[case] backend: Backend) {
+        let (db, _guard) = backend.open(100).await;
 
         let state1 = random_stake_table();
         let state2 = chain_stake_table(&state1);
@@ -1415,10 +1608,9 @@ mod test {
         );
     }
 
-    #[tokio::test]
-    #[test_log::test]
-    async fn test_stake_table_epoch_root_protocol_version_roundtrip() {
-        let db = SqliteStorage::default().await.unwrap();
+    #[test_log::test(rstest_reuse::apply(backends))]
+    async fn test_stake_table_epoch_root_protocol_version_roundtrip(#[case] backend: Backend) {
+        let (db, _guard) = backend.open(100).await;
 
         let epoch = EpochNumber::new(1);
         let state = random_stake_table();
@@ -1436,12 +1628,11 @@ mod test {
     /// Regression: storage previously dropped `used_x25519_keys` on round trip,
     /// so a reloaded `StakeTableState::commit()` diverged from the proposer's
     /// hash once any V3 events had been applied.
-    #[tokio::test]
-    #[test_log::test]
-    async fn test_stake_table_x25519_keys_round_trip() {
+    #[test_log::test(rstest_reuse::apply(backends))]
+    async fn test_stake_table_x25519_keys_round_trip(#[case] backend: Backend) {
         use committable::Committable;
 
-        let db = SqliteStorage::default().await.unwrap();
+        let (db, _guard) = backend.open(100).await;
         let epoch = EpochNumber::new(1);
         let state = random_stake_table();
         assert!(

@@ -15,7 +15,7 @@ anyhow = { workspace = true }
 axum = { workspace = true }
 clap = { workspace = true }
 espresso-contract-deployer = { workspace = true }
-espresso-node = { path = "../node", features = ["testing", "embedded-db"] }
+espresso-node = { path = "../node", features = ["testing"] }
 espresso-types = { workspace = true, features = ["node"] }
 espresso-utils = { workspace = true, features = ["full"] }
 futures = { workspace = true }
@@ -42,6 +42,7 @@ hotshot-query-service = { workspace = true }
 http-client = { workspace = true }
 jf-merkle-tree-compat = { workspace = true }
 rand = { workspace = true }
+rstest = { workspace = true }
 test-log = { workspace = true }
 tide-disco = { workspace = true }
 tokio = { workspace = true }

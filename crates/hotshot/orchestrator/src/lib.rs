@@ -41,11 +41,6 @@ use hotshot_types::{
 };
 use http_client::{Url, error::ClientErr};
 use http_wire::{self as wire, ServerError, WireVersion, cors_layer, healthcheck_response};
-use libp2p_identity::{
-    Keypair, PeerId,
-    ed25519::{Keypair as EdKeypair, SecretKey},
-};
-use multiaddr::Multiaddr;
 use serde::de::DeserializeOwned;
 use tokio::net::TcpListener;
 use vbs::{BinarySerializer, Serializer};
@@ -55,19 +50,6 @@ use vbs::{BinarySerializer, Serializer};
 /// Responses go through [`wire::respond`], which always encodes at [`WireVersion`]; aliasing
 /// keeps request decoding and the client in lockstep with the responses.
 pub type OrchestratorVersion = WireVersion;
-
-/// Generate an keypair based on a `seed` and an `index`
-/// # Panics
-/// This panics if libp2p is unable to generate a secret key from the seed
-#[must_use]
-pub fn libp2p_generate_indexed_identity(seed: [u8; 32], index: u64) -> Keypair {
-    let mut hasher = blake3::Hasher::new();
-    hasher.update(&seed);
-    hasher.update(&index.to_le_bytes());
-    let new_seed = *hasher.finalize().as_bytes();
-    let sk_bytes = SecretKey::try_from_bytes(new_seed).unwrap();
-    <EdKeypair as From<SecretKey>>::from(sk_bytes).into()
-}
 
 /// The state of the orchestrator
 #[derive(Default, Clone)]
@@ -179,15 +161,10 @@ impl<TYPES: NodeType> OrchestratorState<TYPES> {
 
 /// An api exposed by the orchestrator
 pub trait OrchestratorApi<TYPES: NodeType> {
-    /// Post an identity to the orchestrator. Takes in optional
-    /// arguments so others can identify us on the Libp2p network.
+    /// Post an identity to the orchestrator.
     /// # Errors
     /// If we were unable to serve the request
-    fn post_identity(
-        &mut self,
-        libp2p_address: Option<Multiaddr>,
-        libp2p_public_key: Option<PeerId>,
-    ) -> Result<u16, ServerError>;
+    fn post_identity(&mut self) -> Result<u16, ServerError>;
     /// post endpoint for each node's config
     /// # Errors
     /// if unable to serve
@@ -203,8 +180,6 @@ pub trait OrchestratorApi<TYPES: NodeType> {
         &mut self,
         pubkey: &mut Vec<u8>,
         is_da: bool,
-        libp2p_address: Option<Multiaddr>,
-        libp2p_public_key: Option<PeerId>,
     ) -> Result<(u64, bool), ServerError>;
     /// post endpoint for whether or not all peers public keys are ready
     /// # Errors
@@ -250,8 +225,6 @@ where
         &mut self,
         pubkey: &mut Vec<u8>,
         da_requested: bool,
-        libp2p_address: Option<Multiaddr>,
-        libp2p_public_key: Option<PeerId>,
     ) -> Result<(u64, bool), ServerError> {
         if let Some((node_index, is_da)) = self.pub_posted.get(pubkey) {
             return Ok((*node_index, *is_da));
@@ -297,21 +270,6 @@ where
         self.pub_posted
             .insert(pubkey.clone(), (node_index, added_to_da));
 
-        // If the orchestrator is set up for libp2p and we have supplied the proper
-        // Libp2p data, add our node to the list of bootstrap nodes.
-        if self.config.libp2p_config.clone().is_some()
-            && let (Some(libp2p_public_key), Some(libp2p_address)) =
-                (libp2p_public_key, libp2p_address)
-        {
-            // Push to our bootstrap nodes
-            self.config
-                .libp2p_config
-                .as_mut()
-                .unwrap()
-                .bootstrap_nodes
-                .push((libp2p_public_key, libp2p_address));
-        }
-
         tracing::error!("Posted public key for node_index {node_index}");
 
         // node_index starts at 0, so once it matches `num_nodes_with_stake`
@@ -328,8 +286,6 @@ where
         &mut self,
         pubkey: &mut Vec<u8>,
         da_requested: bool,
-        libp2p_address: Option<Multiaddr>,
-        libp2p_public_key: Option<PeerId>,
     ) -> Result<(u64, bool), ServerError> {
         // if we've already registered this node before, we just retrieve its info from `pub_posted`
         if let Some((node_index, is_da)) = self.pub_posted.get(pubkey) {
@@ -368,21 +324,6 @@ where
         self.pub_posted
             .insert(pubkey.clone(), (node_index as u64, added_to_da));
 
-        // If the orchestrator is set up for libp2p and we have supplied the proper
-        // Libp2p data, add our node to the list of bootstrap nodes.
-        if self.config.libp2p_config.clone().is_some()
-            && let (Some(libp2p_public_key), Some(libp2p_address)) =
-                (libp2p_public_key, libp2p_address)
-        {
-            // Push to our bootstrap nodes
-            self.config
-                .libp2p_config
-                .as_mut()
-                .unwrap()
-                .bootstrap_nodes
-                .push((libp2p_public_key, libp2p_address));
-        }
-
         tracing::error!("Node {node_index} has registered.");
 
         Ok((node_index as u64, added_to_da))
@@ -393,15 +334,7 @@ impl<TYPES: NodeType> OrchestratorApi<TYPES> for OrchestratorState<TYPES>
 where
     TYPES::SignatureKey: serde::Serialize + Clone + SignatureKey + 'static,
 {
-    /// Post an identity to the orchestrator. Takes in optional
-    /// arguments so others can identify us on the Libp2p network.
-    /// # Errors
-    /// If we were unable to serve the request
-    fn post_identity(
-        &mut self,
-        libp2p_address: Option<Multiaddr>,
-        libp2p_public_key: Option<PeerId>,
-    ) -> Result<u16, ServerError> {
+    fn post_identity(&mut self) -> Result<u16, ServerError> {
         let node_index = self.latest_index;
         self.latest_index += 1;
 
@@ -410,21 +343,6 @@ where
                 status: StatusCode::BAD_REQUEST,
                 message: "Network has reached capacity".to_string(),
             });
-        }
-
-        // If the orchestrator is set up for libp2p and we have supplied the proper
-        // Libp2p data, add our node to the list of bootstrap nodes.
-        if self.config.libp2p_config.clone().is_some()
-            && let (Some(libp2p_public_key), Some(libp2p_address)) =
-                (libp2p_public_key, libp2p_address)
-        {
-            // Push to our bootstrap nodes
-            self.config
-                .libp2p_config
-                .as_mut()
-                .unwrap()
-                .bootstrap_nodes
-                .push((libp2p_public_key, libp2p_address));
         }
         Ok(node_index)
     }
@@ -454,13 +372,11 @@ where
         &mut self,
         pubkey: &mut Vec<u8>,
         da_requested: bool,
-        libp2p_address: Option<Multiaddr>,
-        libp2p_public_key: Option<PeerId>,
     ) -> Result<(u64, bool), ServerError> {
         if self.fixed_stake_table {
-            self.register_from_list(pubkey, da_requested, libp2p_address, libp2p_public_key)
+            self.register_from_list(pubkey, da_requested)
         } else {
-            self.register_unknown(pubkey, da_requested, libp2p_address, libp2p_public_key)
+            self.register_unknown(pubkey, da_requested)
         }
     }
 
@@ -705,15 +621,8 @@ async fn healthcheck(headers: HeaderMap) -> Response {
 async fn post_identity<TYPES: NodeType>(
     State(state): State<SharedOrchestratorState<TYPES>>,
     headers: HeaderMap,
-    body: Bytes,
 ) -> Response {
-    let result = match decode_wrapped_body::<(Option<Multiaddr>, Option<PeerId>)>(&body) {
-        Ok((libp2p_address, libp2p_public_key)) => state
-            .write()
-            .await
-            .post_identity(libp2p_address, libp2p_public_key),
-        Err(err) => Err(err),
-    };
+    let result = state.write().await.post_identity();
     wire::respond(&headers, result)
 }
 
@@ -740,11 +649,8 @@ async fn post_pubkey<TYPES: NodeType>(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    let result = match decode_wrapped_body::<(Vec<u8>, Option<Multiaddr>, Option<PeerId>)>(&body) {
-        Ok((mut pubkey, libp2p_address, libp2p_public_key)) => state
-            .write()
-            .await
-            .register_public_key(&mut pubkey, is_da, libp2p_address, libp2p_public_key),
+    let result = match decode_wrapped_body::<Vec<u8>>(&body) {
+        Ok(mut pubkey) => state.write().await.register_public_key(&mut pubkey, is_da),
         Err(err) => Err(err),
     };
     wire::respond(&headers, result)

@@ -24,7 +24,7 @@ use hotshot_contract_adapter::{
     sol_types::{EspTokenV2, LightClientV3, RewardClaim},
     stake_table::StakeTableContractVersion,
 };
-use hotshot_query_service::data_source::SqlDataSource;
+use hotshot_query_service::data_source::sql::postgres::SqlDataSource;
 use hotshot_state_prover::{StateProverConfig, v3::service::run_prover_once};
 use hotshot_types::{
     stake_table::{HSStakeTable, one_honest_threshold},

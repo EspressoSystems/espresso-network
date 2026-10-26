@@ -1079,7 +1079,10 @@ def test_tofu_validate(tmp_path):
 @pytest.mark.parametrize(("n", "capacity"), [(3, 10), (50, 50)])
 def test_genesis_capacity_at_least_ten(n, capacity):
     rendered = awsb.render_genesis(
-        (HERE / "genesis.toml").read_bytes(), n=n, max_block_size="50mb"
+        (HERE / "genesis.toml").read_bytes(),
+        n=n,
+        max_block_size="50mb",
+        protocol_version="0.6",
     ).decode()
     assert f"stake_table_capacity = {capacity}" in rendered
     assert re.search(rf"^capacity = {capacity}$", rendered, re.MULTILINE)
@@ -1087,13 +1090,17 @@ def test_genesis_capacity_at_least_ten(n, capacity):
 
 def test_genesis_max_block_size_replaces_both_chain_configs():
     template = (HERE / "genesis.toml").read_bytes()
-    rendered = awsb.render_genesis(template, n=5, max_block_size="30mb").decode()
+    rendered = awsb.render_genesis(
+        template, n=5, max_block_size="30mb", protocol_version="0.6"
+    ).decode()
     assert (
         re.findall(r"^max_block_size = (.*)$", rendered, re.MULTILINE) == ['"30mb"'] * 2
     )
     assert "100mb" not in rendered
     with pytest.raises(ValueError, match="2 max_block_size"):
-        awsb.render_genesis(b"capacity = 1\nstake_table_capacity = 1\n", 5, "30mb")
+        awsb.render_genesis(
+            b"capacity = 1\nstake_table_capacity = 1\n", 5, "30mb", "0.6"
+        )
 
 
 @pytest.mark.parametrize("bad", ["50", "mb", "50 mb", "5.5mb", "50tb", "", "0kb"])
@@ -1110,9 +1117,46 @@ def test_max_block_size_flag_defaults_and_differs_in_the_config_hash():
     hosts = awsb.plan_hosts(cfg)
     hashes = {
         awsb.run_config_hash(
-            cfg, hosts, {}, awsb.render_genesis(template, cfg.nodes, size)
+            cfg, hosts, {}, awsb.render_genesis(template, cfg.nodes, size, "0.6")
         )
         for size in ("30mb", "50mb")
+    }
+    assert len(hashes) == 2
+
+
+def test_genesis_protocol_version_replaces_base_and_upgrade_versions():
+    template = (HERE / "genesis.toml").read_bytes()
+    rendered = awsb.render_genesis(
+        template, n=5, max_block_size="50mb", protocol_version="0.8"
+    ).decode()
+    assert re.findall(r"^base_version = (.*)$", rendered, re.MULTILINE) == ['"0.8"']
+    assert re.findall(r"^upgrade_version = (.*)$", rendered, re.MULTILINE) == ['"0.8"']
+    assert re.findall(r"^genesis_version = (.*)$", rendered, re.MULTILINE) == ['"0.6"']
+    no_versions = (
+        b"capacity = 1\nstake_table_capacity = 1\n"
+        b'max_block_size = "1mb"\nmax_block_size = "1mb"\n'
+    )
+    with pytest.raises(ValueError, match="one base_version"):
+        awsb.render_genesis(no_versions, 5, "30mb", "0.8")
+
+
+@pytest.mark.parametrize("bad", ["8", "0.8.0", "v0.8", "0.x", ""])
+def test_protocol_version_flag_rejects_bad_formats(bad):
+    with pytest.raises(SystemExit):
+        node_env_config("--protocol-version", bad)
+
+
+def test_protocol_version_flag_defaults_and_differs_in_the_config_hash():
+    assert node_env_config().protocol_version == "0.6"
+    assert node_env_config("--protocol-version", "0.8").protocol_version == "0.8"
+    template = (HERE / "genesis.toml").read_bytes()
+    cfg = small_cfg()
+    hosts = awsb.plan_hosts(cfg)
+    hashes = {
+        awsb.run_config_hash(
+            cfg, hosts, {}, awsb.render_genesis(template, cfg.nodes, "50mb", version)
+        )
+        for version in ("0.6", "0.8")
     }
     assert len(hashes) == 2
 
@@ -1126,9 +1170,89 @@ def test_plan_writes_the_max_block_size_into_the_run_genesis(fleet_dir):
     assert genesis.count('max_block_size = "30mb"') == 2
 
 
+@pytest.mark.usefixtures("preflighted")
+def test_plan_writes_the_protocol_version_into_the_run_genesis(fleet_dir):
+    args = plan_args()
+    args.protocol_version = "0.8"
+    awsb.cmd_plan(args, FakeSystem(run=FakeRunner(states=[])))
+    genesis = (fleet_dir / "runs/01-run/genesis.toml").read_text()
+    assert 'base_version = "0.8"' in genesis
+    assert 'upgrade_version = "0.8"' in genesis
+
+
+def test_slow_nodes_flags_default_off():
+    cfg = node_env_config()
+    assert (cfg.slow_nodes, cfg.slow_cores) == (0, None)
+    cfg = node_env_config("--slow-nodes", "2", "--slow-cores", "4")
+    assert (cfg.slow_nodes, cfg.slow_cores) == (2, 4)
+
+
+@pytest.mark.parametrize(
+    ("kw", "match"),
+    [
+        ({"slow_nodes": 2}, "--slow-nodes needs --slow-cores"),
+        ({"slow_cores": 4}, "--slow-cores needs --slow-nodes"),
+        ({"slow_nodes": 5, "slow_cores": 4}, "at most the 4 validator-only nodes: 5"),
+    ],
+)
+def test_slow_nodes_refused(kw: dict, match: str):
+    with pytest.raises(awsb.Refused, match=match):
+        awsb.plan_hosts(small_cfg(5, **kw))
+
+
+def test_slow_nodes_are_the_last_nodes():
+    cfg = small_cfg(5, slow_nodes=2, slow_cores=4)
+    assert awsb.slow_node_names(cfg) == ["node3", "node4"]
+    assert awsb.slow_node_names(small_cfg(5)) == []
+
+
+def test_slow_cores_pin_espresso_node_in_start_and_recreate_sh():
+    spec = host("node4", "validator")
+    for script in (
+        awsb.render_start_sh(spec, fake_images(), 32768, cores=4),
+        awsb.render_recreate_sh(spec, fake_images(), cores=4),
+    ):
+        create = script[script.index("docker create --name espresso-node") :]
+        assert "--cpuset-cpus 0-3 " in create
+        assert create.index("--cpuset-cpus") < create.index("@sha256")
+    assert "cpuset" not in awsb.render_start_sh(spec, fake_images(), 32768)
+
+
+def test_slow_nodes_differ_in_the_config_hash_only_when_set():
+    hosts = awsb.plan_hosts(small_cfg(5))
+
+    def digest(**kw) -> str:
+        return awsb.run_config_hash(small_cfg(5, **kw), hosts, {}, b"genesis")
+
+    assert digest() == digest(slow_nodes=0)
+    assert digest() != digest(slow_nodes=2, slow_cores=4)
+    assert digest(slow_nodes=2, slow_cores=4) != digest(slow_nodes=2, slow_cores=8)
+    assert digest(slow_nodes=1, slow_cores=4) != digest(slow_nodes=2, slow_cores=4)
+
+
+def test_manifest_config_without_slow_nodes_loads_as_off():
+    saved = awsb.config_to_json(small_cfg())
+    del saved["slow_nodes"], saved["slow_cores"]
+    cfg = awsb.config_from_manifest(saved)
+    assert (cfg.slow_nodes, cfg.slow_cores) == (0, None)
+
+
+def test_node_summary_names_the_slow_nodes():
+    summary = awsb.format_node_summary(small_cfg(5, slow_nodes=2, slow_cores=4))
+    assert summary[-1] == "slow nodes: node3, node4 on 4 cores (docker --cpuset-cpus)"
+    assert not any(
+        line.startswith("slow") for line in awsb.format_node_summary(small_cfg(5))
+    )
+
+
 def test_genesis_raises_if_template_shape_changes():
     with pytest.raises(ValueError):
-        awsb.render_genesis(b"no capacity fields here", n=5, max_block_size="50mb")
+        awsb.render_genesis(
+            b"no capacity fields here",
+            n=5,
+            max_block_size="50mb",
+            protocol_version="0.6",
+        )
 
 
 @pytest.mark.parametrize(
@@ -1432,10 +1556,6 @@ def test_advertise_addresses_use_private_ip_and_dns():
         env["ESPRESSO_NODE_CLIQUENET_ADVERTISE_ADDRESS"]
         == f"10.0.0.4:{awsb.CLIQUENET_PORT}"
     )
-    assert (
-        env["ESPRESSO_NODE_LIBP2P_ADVERTISE_ADDRESS"]
-        == f"ip-10-0-0-4.eu-west-1.compute.internal:{awsb.LIBP2P_PORT}"
-    )
 
 
 @pytest.fixture
@@ -1574,13 +1694,17 @@ def test_node_summary_names_the_storage_modules_and_every_run_setting():
         consensus_storage="journal",
         query_db="volume",
         max_block_size="20mb",
+        protocol_version="0.8",
         leader_trace=True,
         node_env=("A=1", "B=2"),
     )
     assert awsb.format_node_summary(cfg) == [
         "storage validators: consensus storage-journal",
         "storage query:      consensus storage-journal, query storage-sql (postgres, volume)",
-        "nodes: 2 (1 query, 1 validator-only); max block 20mb; submit 1 nodes; leader-trace on",
+        (
+            "nodes: 2 (1 query, 1 validator-only); max block 20mb; protocol 0.8; "
+            "submit 1 nodes; leader-trace on"
+        ),
         "node-env: A=1 B=2",
     ]
     fs = awsb.format_node_summary(small_cfg())
@@ -2004,13 +2128,17 @@ def test_search_node0_journal_holds_the_offer_below_the_noisy_mark(db_modes, nod
 
 def test_genesis_epoch_height_replaces_the_template_value():
     template = (HERE / "genesis.toml").read_bytes()
-    assert b"epoch_height = 1000000\n" in awsb.render_genesis(template, 5, "50mb")
-    rendered = awsb.render_genesis(template, 5, "50mb", epoch_height=3000)
+    assert b"epoch_height = 1000000\n" in awsb.render_genesis(
+        template, 5, "50mb", "0.6"
+    )
+    rendered = awsb.render_genesis(template, 5, "50mb", "0.6", epoch_height=3000)
     assert b"epoch_height = 3000\n" in rendered
     with pytest.raises(ValueError, match="1 epoch_height"):
         awsb.render_genesis(
-            b'capacity = 1\nstake_table_capacity = 1\nmax_block_size = "1"\nmax_block_size = "1"\n',
+            b'capacity = 1\nstake_table_capacity = 1\nmax_block_size = "1"\nmax_block_size = "1"\n'
+            b'base_version = "0.6"\nupgrade_version = "0.6"\n',
             5,
             "30mb",
+            "0.6",
             3000,
         )
