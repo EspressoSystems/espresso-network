@@ -12,7 +12,7 @@ doc *args:
     echo "file://${CARGO_TARGET_DIR:-$PWD/target}/doc/espresso_node/index.html"
 
 # Render doc/*.puml figures to svg
-[script("scripts/with-tools", "docs", "plantuml")]
+[script("scripts/with-tools", "docs", "plantuml", "dot")]
 doc-figures:
     make doc
 
@@ -287,7 +287,6 @@ build-docker-images:
 # Cut the next release branch (PHASE bump); pass a version for a protocol bump. See doc/software-releases.md.
 [script("scripts/with-tools", "python", "python3")]
 release-cut version="" source_ref="main":
-    set -euo pipefail
     requested="{{version}}"
     version=$(scripts/release next-version ${requested:+--version "$requested"})
     git fetch origin "{{source_ref}}"

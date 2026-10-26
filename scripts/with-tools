@@ -9,7 +9,11 @@ set -euo pipefail
 shell=$1
 shift
 cmds=()
-while [[ $1 != /* ]]; do
+while [[ ${1:-} != /* ]]; do
+    if [ $# -eq 0 ]; then
+        echo "usage: with-tools <devshell> <command>... <script> [args...] (script must be an absolute path)" >&2
+        exit 2
+    fi
     cmds+=("$1")
     shift
 done
@@ -34,5 +38,7 @@ fi
 cwd=$PWD
 root=$(CDPATH='' cd -- "$(dirname "$0")/.." && pwd)
 cd "$root"
+export WITH_TOOLS=1
+# shellcheck disable=SC2016 # expanded by the inner bash
 exec nix develop "$root#$shell" --quiet --accept-flake-config -c \
     bash -c 'cd "$1" && shift && exec bash -euo pipefail "$@"' _ "$cwd" "$script" "$@"

@@ -109,6 +109,7 @@
         RUST_SRC_PATH = "${stableToolchain}/lib/rustlib/src/rust/library";
       };
       solc = pkgs.solc-bin."0.8.35";
+      solcEnv = { FOUNDRY_SOLC = "${solc}/bin/solc"; };
       # inputsFrom merges packages and shellHooks, not stdenv or env vars
       addOnShell = { inputsFrom ? [ self.devShells.${system}.default ], ... }@attrs:
         myShell (rustDevEnv // attrs // { inherit inputsFrom; });
@@ -159,8 +160,8 @@
             # Avoid clash with rustup's ~/.cargo
             export CARGO_HOME=$HOME/.cargo-nix
 
-            # Install prek's pre-commit hook (handles worktrees via git rev-parse).
-            if [ -f .pre-commit-config.yaml ]; then
+            # Skipped for with-tools fallbacks: they may run inside a git hook.
+            if [ -f .pre-commit-config.yaml ] && [ -z "''${WITH_TOOLS:-}" ]; then
               prek install -q --overwrite
             fi
           '';
@@ -173,16 +174,14 @@
         packages = [ pkgs.go_1_27 golangci-lint ];
       };
 
-      devShells.contracts = addOnShell {
+      devShells.contracts = addOnShell (solcEnv // {
         packages = [ solc pkgs.go-ethereum ];
-        FOUNDRY_SOLC = "${solc}/bin/solc";
-      };
+      });
 
-      devShells.mutation = addOnShell {
+      devShells.mutation = addOnShell (solcEnv // {
         inputsFrom = [ self.devShells.${system}.contracts ];
         packages = [ dregs.packages.${system}.unwrapped ];
-        FOUNDRY_SOLC = "${solc}/bin/solc";
-      };
+      });
 
       devShells.python = addOnShell {
         packages = with pkgs; [ python3 uv ruff ty ];
