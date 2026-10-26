@@ -22,14 +22,18 @@ use derivative::Derivative;
 use derive_more::{Display, From};
 use disco_types::{request::RequestError, status::StatusCode};
 use hotshot_types::{
-    data::{Leaf, Leaf2, VidCommitment, VidCommon},
+    data::{Leaf, Leaf2, VidCommitment, VidCommon, ns_table::parse_ns_table},
     simple_certificate::QuorumCertificate2,
     traits::{
         self, EncodeBytes,
         block_contents::{BlockHeader, GENESIS_VID_NUM_STORAGE_NODES},
         node_implementation::NodeType,
     },
-    vid::advz::{ADVZCommitment, ADVZCommon, advz_scheme},
+    vid::{
+        advz::{ADVZCommitment, ADVZCommon, advz_scheme},
+        avidm::init_avidm_param,
+        avidm_gf2::{AvidmGf2Scheme, init_avidm_gf2_param},
+    },
 };
 use jf_advz::VidScheme;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
@@ -829,11 +833,28 @@ impl<Types: NodeType> VidCommonQueryData<Types> {
         let leaf = Leaf::<Types>::genesis(validated_state, instance_state, base).await;
         let payload = leaf.block_payload().unwrap();
         let bytes = payload.encode();
-        let disperse = advz_scheme(GENESIS_VID_NUM_STORAGE_NODES)
-            .disperse(bytes)
-            .unwrap();
+        // Use the VID scheme that the genesis header commits to, as the node does when it stores
+        // the genesis VID data.
+        let common = match leaf.block_header().payload_commitment() {
+            VidCommitment::V0(_) => {
+                let disperse = advz_scheme(GENESIS_VID_NUM_STORAGE_NODES)
+                    .disperse(bytes)
+                    .unwrap();
+                VidCommon::V0(disperse.common)
+            },
+            VidCommitment::V1(_) => {
+                VidCommon::V1(init_avidm_param(GENESIS_VID_NUM_STORAGE_NODES).unwrap())
+            },
+            VidCommitment::V2(_) => {
+                let param = init_avidm_gf2_param(GENESIS_VID_NUM_STORAGE_NODES).unwrap();
+                let ns_table =
+                    parse_ns_table(bytes.len(), &leaf.block_header().metadata().encode());
+                let (_, common) = AvidmGf2Scheme::commit(&param, &bytes, ns_table).unwrap();
+                VidCommon::V2(common)
+            },
+        };
 
-        Self::new(leaf.block_header().clone(), VidCommon::V0(disperse.common))
+        Self::new(leaf.block_header().clone(), common)
     }
 
     pub fn block_hash(&self) -> BlockHash<Types> {

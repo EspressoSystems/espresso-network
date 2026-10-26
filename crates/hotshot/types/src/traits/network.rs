@@ -8,37 +8,21 @@
 //!
 //! Contains types and traits used by `HotShot` to abstract over network access
 
-use std::{
-    collections::HashMap,
-    fmt::{Debug, Display},
-    hash::Hash,
-    pin::Pin,
-    sync::Arc,
-    time::Duration,
-};
+use std::{collections::HashMap, fmt::Display, hash::Hash};
 
 use async_trait::async_trait;
-use dyn_clone::DynClone;
-use futures::{Future, future::join_all};
-use rand::{
-    distributions::{Bernoulli, Uniform},
-    prelude::Distribution,
-};
+use futures::future::join_all;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use tokio::{sync::mpsc::error::TrySendError, time::sleep};
+use tokio::sync::mpsc::error::TrySendError;
 
 use super::{node_implementation::NodeType, signature_key::SignatureKey};
 use crate::{
-    BoxSyncFuture, PeerConnectInfo,
+    BoxSyncFuture,
     data::{EpochNumber, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
     message::SequencingMessage,
 };
-
-/// Centralized server specific errors
-#[derive(Debug, Error, Serialize, Deserialize)]
-pub enum PushCdnNetworkError {}
 
 /// the type of transmission
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -186,7 +170,7 @@ pub enum BroadcastDelay {
 
 /// represents a networking implmentration
 /// exposes low level API for interacting with a network
-/// intended to be implemented for libp2p, the centralized server,
+/// intended to be implemented for a message transport,
 /// and memory network
 #[async_trait]
 pub trait ConnectedNetwork<K: SignatureKey + 'static>: Clone + Send + Sync + 'static {
@@ -290,33 +274,6 @@ pub trait ConnectedNetwork<K: SignatureKey + 'static>: Clone + Send + Sync + 'st
     }
 }
 
-/// A channel generator for types that need asynchronous execution
-pub type AsyncGenerator<T> =
-    Pin<Box<dyn Fn(u64) -> Pin<Box<dyn Future<Output = T> + Send>> + Send + Sync>>;
-
-/// Describes additional functionality needed by the test network implementation
-pub trait TestableNetworkingImplementation<TYPES: NodeType>
-where
-    Self: Sized,
-{
-    /// generates a network given an expected node count
-    #[allow(clippy::type_complexity)]
-    fn generator(
-        expected_node_count: usize,
-        num_bootstrap: usize,
-        network_id: usize,
-        da_committee_size: usize,
-        reliability_config: Option<Box<dyn NetworkReliability>>,
-        secondary_network_delay: Duration,
-        connect_infos: &mut HashMap<TYPES::SignatureKey, PeerConnectInfo>,
-    ) -> AsyncGenerator<Arc<Self>>;
-
-    /// Get the number of messages in-flight.
-    ///
-    /// Some implementations will not be able to tell how many messages there are in-flight. These implementations should return `None`.
-    fn in_flight_message_count(&self) -> Option<usize>;
-}
-
 /// Changes that can occur in the network
 #[derive(Debug)]
 pub enum NetworkChange<P: SignatureKey> {
@@ -325,275 +282,6 @@ pub enum NetworkChange<P: SignatureKey> {
 
     /// A node is disconnected
     NodeDisconnected(P),
-}
-
-/// interface describing how reliable the network is
-#[async_trait]
-pub trait NetworkReliability: Debug + Sync + std::marker::Send + DynClone + 'static {
-    /// Sample from bernoulli distribution to decide whether
-    /// or not to keep a packet
-    /// # Panics
-    ///
-    /// Panics if `self.keep_numerator > self.keep_denominator`
-    ///
-    fn sample_keep(&self) -> bool {
-        true
-    }
-
-    /// sample from uniform distribution to decide whether
-    /// or not to keep a packet
-    fn sample_delay(&self) -> Duration {
-        std::time::Duration::ZERO
-    }
-
-    /// scramble the packet
-    fn scramble(&self, msg: Vec<u8>) -> Vec<u8> {
-        msg
-    }
-
-    /// number of times to repeat the packet
-    fn sample_repeat(&self) -> usize {
-        1
-    }
-
-    /// given a message and a way to send the message,
-    /// decide whether or not to send the message
-    /// how long to delay the message
-    /// whether or not to send duplicates
-    /// and whether or not to include noise with the message
-    /// then send the message
-    /// note: usually self is stored in a rwlock
-    /// so instead of doing the sending part, we just fiddle with the message
-    /// then return a future that does the sending and delaying
-    fn chaos_send_msg(
-        &self,
-        msg: Vec<u8>,
-        send_fn: Arc<dyn Send + Sync + 'static + Fn(Vec<u8>) -> BoxSyncFuture<'static, ()>>,
-    ) -> BoxSyncFuture<'static, ()> {
-        let sample_keep = self.sample_keep();
-        let delay = self.sample_delay();
-        let repeats = self.sample_repeat();
-        let mut msgs = Vec::new();
-        for _idx in 0..repeats {
-            let scrambled = self.scramble(msg.clone());
-            msgs.push(scrambled);
-        }
-        let closure = async move {
-            if sample_keep {
-                sleep(delay).await;
-                for msg in msgs {
-                    send_fn(msg).await;
-                }
-            }
-        };
-        Box::pin(closure)
-    }
-}
-
-// hack to get clone
-dyn_clone::clone_trait_object!(NetworkReliability);
-
-/// ideal network
-#[derive(Clone, Copy, Debug, Default)]
-pub struct PerfectNetwork {}
-
-impl NetworkReliability for PerfectNetwork {}
-
-/// A synchronous network. Packets may be delayed, but are guaranteed
-/// to arrive within `timeout` ns
-#[derive(Clone, Copy, Debug, Default)]
-pub struct SynchronousNetwork {
-    /// Max value in milliseconds that a packet may be delayed
-    pub delay_high_ms: u64,
-    /// Lowest value in milliseconds that a packet may be delayed
-    pub delay_low_ms: u64,
-}
-
-impl NetworkReliability for SynchronousNetwork {
-    /// never drop a packet
-    fn sample_keep(&self) -> bool {
-        true
-    }
-    fn sample_delay(&self) -> Duration {
-        Duration::from_millis(
-            Uniform::new_inclusive(self.delay_low_ms, self.delay_high_ms)
-                .sample(&mut rand::thread_rng()),
-        )
-    }
-}
-
-/// An asynchronous network. Packets may be dropped entirely
-/// or delayed for arbitrarily long periods
-/// probability that packet is kept = `keep_numerator` / `keep_denominator`
-/// packet delay is obtained by sampling from a uniform distribution
-/// between `delay_low_ms` and `delay_high_ms`, inclusive
-#[derive(Debug, Clone, Copy)]
-pub struct AsynchronousNetwork {
-    /// numerator for probability of keeping packets
-    pub keep_numerator: u32,
-    /// denominator for probability of keeping packets
-    pub keep_denominator: u32,
-    /// lowest value in milliseconds that a packet may be delayed
-    pub delay_low_ms: u64,
-    /// highest value in milliseconds that a packet may be delayed
-    pub delay_high_ms: u64,
-}
-
-impl NetworkReliability for AsynchronousNetwork {
-    fn sample_keep(&self) -> bool {
-        Bernoulli::from_ratio(self.keep_numerator, self.keep_denominator)
-            .unwrap()
-            .sample(&mut rand::thread_rng())
-    }
-    fn sample_delay(&self) -> Duration {
-        Duration::from_millis(
-            Uniform::new_inclusive(self.delay_low_ms, self.delay_high_ms)
-                .sample(&mut rand::thread_rng()),
-        )
-    }
-}
-
-/// An partially synchronous network. Behaves asynchronously
-/// until some arbitrary time bound, GST,
-/// then synchronously after GST
-#[allow(clippy::similar_names)]
-#[derive(Debug, Clone, Copy)]
-pub struct PartiallySynchronousNetwork {
-    /// asynchronous portion of network
-    pub asynchronous: AsynchronousNetwork,
-    /// synchronous portion of network
-    pub synchronous: SynchronousNetwork,
-    /// time when GST occurs
-    pub gst: std::time::Duration,
-    /// when the network was started
-    pub start: std::time::Instant,
-}
-
-impl NetworkReliability for PartiallySynchronousNetwork {
-    /// never drop a packet
-    fn sample_keep(&self) -> bool {
-        true
-    }
-    fn sample_delay(&self) -> Duration {
-        // act asynchronous before gst
-        if self.start.elapsed() < self.gst {
-            if self.asynchronous.sample_keep() {
-                self.asynchronous.sample_delay()
-            } else {
-                // assume packet was "dropped" and will arrive after gst
-                self.synchronous.sample_delay() + self.gst
-            }
-        } else {
-            // act synchronous after gst
-            self.synchronous.sample_delay()
-        }
-    }
-}
-
-impl Default for AsynchronousNetwork {
-    // disable all chance of failure
-    fn default() -> Self {
-        AsynchronousNetwork {
-            keep_numerator: 1,
-            keep_denominator: 1,
-            delay_low_ms: 0,
-            delay_high_ms: 0,
-        }
-    }
-}
-
-impl Default for PartiallySynchronousNetwork {
-    fn default() -> Self {
-        PartiallySynchronousNetwork {
-            synchronous: SynchronousNetwork::default(),
-            asynchronous: AsynchronousNetwork::default(),
-            gst: std::time::Duration::new(0, 0),
-            start: std::time::Instant::now(),
-        }
-    }
-}
-
-impl SynchronousNetwork {
-    /// create new `SynchronousNetwork`
-    #[must_use]
-    pub fn new(timeout: u64, delay_low_ms: u64) -> Self {
-        SynchronousNetwork {
-            delay_high_ms: timeout,
-            delay_low_ms,
-        }
-    }
-}
-
-impl AsynchronousNetwork {
-    /// create new `AsynchronousNetwork`
-    #[must_use]
-    pub fn new(
-        keep_numerator: u32,
-        keep_denominator: u32,
-        delay_low_ms: u64,
-        delay_high_ms: u64,
-    ) -> Self {
-        AsynchronousNetwork {
-            keep_numerator,
-            keep_denominator,
-            delay_low_ms,
-            delay_high_ms,
-        }
-    }
-}
-
-impl PartiallySynchronousNetwork {
-    /// create new `PartiallySynchronousNetwork`
-    #[allow(clippy::similar_names)]
-    #[must_use]
-    pub fn new(
-        asynchronous: AsynchronousNetwork,
-        synchronous: SynchronousNetwork,
-        gst: std::time::Duration,
-    ) -> Self {
-        PartiallySynchronousNetwork {
-            asynchronous,
-            synchronous,
-            gst,
-            start: std::time::Instant::now(),
-        }
-    }
-}
-
-/// A chaotic network using all the networking calls
-#[derive(Debug, Clone)]
-pub struct ChaosNetwork {
-    /// numerator for probability of keeping packets
-    pub keep_numerator: u32,
-    /// denominator for probability of keeping packets
-    pub keep_denominator: u32,
-    /// lowest value in milliseconds that a packet may be delayed
-    pub delay_low_ms: u64,
-    /// highest value in milliseconds that a packet may be delayed
-    pub delay_high_ms: u64,
-    /// lowest value of repeats for a message
-    pub repeat_low: usize,
-    /// highest value of repeats for a message
-    pub repeat_high: usize,
-}
-
-impl NetworkReliability for ChaosNetwork {
-    fn sample_keep(&self) -> bool {
-        Bernoulli::from_ratio(self.keep_numerator, self.keep_denominator)
-            .unwrap()
-            .sample(&mut rand::thread_rng())
-    }
-
-    fn sample_delay(&self) -> Duration {
-        Duration::from_millis(
-            Uniform::new_inclusive(self.delay_low_ms, self.delay_high_ms)
-                .sample(&mut rand::thread_rng()),
-        )
-    }
-
-    fn sample_repeat(&self) -> usize {
-        Uniform::new_inclusive(self.repeat_low, self.repeat_high).sample(&mut rand::thread_rng())
-    }
 }
 
 /// Used when broadcasting messages
@@ -605,7 +293,7 @@ pub enum Topic {
     Da,
 }
 
-/// Libp2p topics require a string, so we need to convert our enum to a string
+/// Topics travel as strings, so we need to convert our enum to a string
 impl Display for Topic {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {

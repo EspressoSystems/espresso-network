@@ -540,7 +540,7 @@ mod test {
         api::{
             Options,
             data_source::testing::TestableSequencerDataSource,
-            sql::DataSource,
+            sql::postgres::DataSource,
             test_helpers::{TestNetwork, TestNetworkConfigBuilder},
         },
         testing::{TestConfigBuilder, wait_for_decide_on_handle},

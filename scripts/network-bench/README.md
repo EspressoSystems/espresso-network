@@ -421,6 +421,8 @@ just bench aws run --tag release-x --leader-trace
     `<branch>-<allocator>`.
   - Each image is `espresso-node:main` with the branch's two binaries, so its revision label is main's.
 - `--max-block-size`: genesis `max_block_size` of both chain configs; part of the config hash, shown in the summary.
+- `--protocol-version`: genesis `base_version` and `upgrade_version`, the protocol the network runs from genesis; the
+  images must support it. Part of the config hash, shown in the summary.
   - Mainnet uses `10mb`. Local `genesis.toml` uses `100mb`.
   - On 5 x c8g.4xlarge the block interval grows superlinearly above about 60 MB blocks. Blocks at a 100 MB cap decide at
     about 93 MB/s, 45 to 60 MB blocks at about 160 MB/s.
@@ -430,6 +432,13 @@ just bench aws run --tag release-x --leader-trace
   `nodes - 1` keeps txs off the query node.
   - With `node0` submitting, query lag, the query-node rule and `node0` CPU are not comparable across `--submit-nodes`
     values.
+- `--slow-nodes N --slow-cores C`: the last N nodes, which must be validator-only, run espresso-node pinned to cores
+  `0-(C-1)` (`docker --cpuset-cpus`): a slower group on the same network, e.g. to see whether a quorum waits for it.
+  Part of the config hash, listed in the summary.
+  - 5 nodes give quorum 4: one slow node leaves a fast quorum, two put a slow node in every quorum.
+  - Pinning, not `--cpus`: a quota stops every thread of the container for the rest of its 100 ms period once C cores'
+    worth of time is used, a stall a smaller machine does not have.
+  - Network bandwidth stays the node type's, unlike a smaller `--node-type`.
 - `--node-type`, `--ctl-type`: both types share one architecture. Preflight picks the Ubuntu AMI and image platform to
   match. Type choice: [instance-types.md](instance-types.md).
 - `--prune [RETENTION]`: node0 (not the other query nodes) deletes data and state older than RETENTION (`90s`, `2m`,
@@ -574,9 +583,11 @@ Where:
 | `--chaos-query-floor`                 | 2                              | per run      | query nodes kept up; below `--query-nodes`                                                    |
 | `--chaos-mass-nodes`                  | all nodes                      | per run      | nodes per mass fault; needs a mass kind, at most `--nodes`                                    |
 | `--max-block-size`                    | `50mb`                         | per run      | genesis `max_block_size`                                                                      |
+| `--protocol-version`                  | `0.6`                          | per run      | genesis `base_version` and `upgrade_version`; the images must support it                      |
 | `--node-env KEY=VALUE`                | none                           | per run      | repeatable; node environment                                                                  |
 | `--leader-trace`, `--no-leader-trace` | off                            | per run      | leader trace CSVs and plots                                                                   |
 | `--submit-nodes`                      | nodes                          | per run      | nodes receiving txs, 1..nodes                                                                 |
+| `--slow-nodes`, `--slow-cores`        | off                            | per run      | the last N validator-only nodes run espresso-node on C cores                                  |
 | `--latency`                           | `off`                          | per run      | `off`, `decaf-2025`, `decaf-2026`, `mainnet`; `decaf-2025` with `--chaos`                     |
 | `--no-intra-latency`                  | off                            | per run      | with `--latency`: no same-location delay                                                      |
 | `--tcp-cc`                            | bbr                            | per run      | with `--latency`: TCP congestion control, `bbr`, `cubic`, `bbr_hold` or `bbr3`                |
@@ -752,8 +763,7 @@ Each step is judged over its second half. A step stopped early is judged over it
 - Peers: every node has state peers. Query nodes set `ESPRESSO_NODE_API_PEERS` to the other query nodes; the single
   query node has none.
 - Keys: test mnemonic, index 20 + i. No `keygen`, no `stake-for-demo`.
-- Network: cliquenet over private IPs, libp2p over private DNS. The security group allows ssh from this machine's IP
-  only (checkip).
+- Network: cliquenet over private IPs. The security group allows ssh from this machine's IP only (checkip).
 - Images: `ghcr.io/espressosystems/espresso-network/<component>:<--tag>` plus foundry and postgres. Preflight resolves
   digests, hosts pull by digest, the manifest records them.
 - ssh: every fleet gets an ed25519 key in `<fleet>/ssh/`. The private half is deleted after destroy and kept after a

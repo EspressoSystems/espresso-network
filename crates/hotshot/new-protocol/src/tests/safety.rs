@@ -15,7 +15,6 @@
 //! a network does for them. Delivery order is the variable under test, so it is
 //! controlled rather than left to a real network.
 
-use hotshot::types::BLSPubKey;
 use hotshot_example_types::{
     block_types::TestBlockHeader,
     node_types::{TEST_VERSIONS, TestTypes},
@@ -23,6 +22,7 @@ use hotshot_example_types::{
 use hotshot_types::{
     data::{EpochNumber, ViewNumber},
     message::Proposal,
+    signature_key::BLSPubKey,
     stake_table::StakeTableEntries,
     traits::{block_contents::BlockHeader, signature_key::SignatureKey},
     vote::{Certificate, HasViewNumber, Vote},

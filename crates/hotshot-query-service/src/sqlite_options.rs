@@ -1,7 +1,7 @@
 //! Shared SQLite connection defaults.
 //!
-//! Used by both the embedded-db variant of this crate and by external clients (e.g. the light
-//! client) that build their own pool. Keeping the pragma choices in one place ensures every
+//! Used by both the SQLite storage of this crate and by external clients (e.g. the light client)
+//! that build their own pool. Keeping the pragma choices in one place ensures every
 //! SQLite database in the workspace runs with the same journaling, locking, and vacuum settings.
 
 use std::time::Duration;

@@ -591,8 +591,10 @@ mod tests {
 
     use alloy::primitives::{Address, U256};
     use committable::Committable;
-    use hotshot::types::{BLSPubKey, SignatureKey};
-    use hotshot_types::{addr::NetAddr, light_client::StateVerKey, x25519};
+    use hotshot_types::{
+        addr::NetAddr, light_client::StateVerKey, signature_key::BLSPubKey,
+        traits::signature_key::SignatureKey, x25519,
+    };
 
     use super::{AuthenticatedValidator, RegisteredValidator};
 
@@ -807,8 +809,7 @@ mod tests {
 #[cfg(all(test, feature = "rlp"))]
 mod rlp_tests {
     use alloy_rlp::{Decodable, Encodable};
-    use hotshot::types::BLSPubKey;
-    use hotshot_types::traits::signature_key::StateSignatureKey;
+    use hotshot_types::{signature_key::BLSPubKey, traits::signature_key::StateSignatureKey};
 
     use super::*;
 

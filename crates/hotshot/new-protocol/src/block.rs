@@ -7,7 +7,6 @@ use std::{
 };
 
 use committable::{Commitment, Committable};
-use hotshot::traits::{BlockPayload, ValidatedState as _};
 use hotshot_types::{
     consensus::PayloadWithMetadata,
     data::{
@@ -17,7 +16,7 @@ use hotshot_types::{
     epoch_membership::EpochMembershipCoordinator,
     message::UpgradeLock,
     traits::{
-        EncodeBytes,
+        BlockPayload, EncodeBytes, ValidatedState as _,
         block_contents::{BuilderFee, Transaction},
         node_implementation::NodeType,
         signature_key::BuilderSignatureKey,

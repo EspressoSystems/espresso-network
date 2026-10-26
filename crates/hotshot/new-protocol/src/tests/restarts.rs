@@ -3,9 +3,9 @@ use std::{
     time::Duration,
 };
 
-use hotshot::types::BLSPubKey;
 use hotshot_types::{
     data::{EpochNumber, ViewNumber},
+    signature_key::BLSPubKey,
     traits::signature_key::SignatureKey,
 };
 use versions::{TIMEOUT_EPOCH_VERSION, Upgrade};

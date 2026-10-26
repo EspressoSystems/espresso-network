@@ -256,14 +256,14 @@ mod test {
     use hotshot_query_service::types::HeightIndexed;
 
     use super::*;
-    use crate::{storage::SqliteStorage, testing::TestClient};
+    use crate::{storage::SqlStorage, testing::TestClient};
 
     #[tokio::test]
     #[test_log::test]
     async fn test_block_ranges_carry_vid_common() {
         let client = TestClient::default();
         let lc = LightClient::from_genesis(
-            SqliteStorage::default().await.unwrap(),
+            SqlStorage::default().await.unwrap(),
             client.clone(),
             client.genesis().await,
         );

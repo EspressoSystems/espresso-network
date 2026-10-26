@@ -21,7 +21,18 @@ use espresso_types::{
 pub mod fs;
 pub mod no_storage;
 mod persistence_metrics;
-pub mod sql;
+/// Persistence backed by a SQL database, with one module per backend.
+///
+/// [`postgres`](sql::postgres) and [`sqlite`](sql::sqlite) compile the same code against their own
+/// database. [`sql::Options::embedded_db`] picks one, and the options are shared by both.
+pub mod sql {
+    mod options;
+
+    pub use options::*;
+
+    pub mod postgres;
+    pub mod sqlite;
+}
 pub(crate) mod storage_probe;
 
 /// RegisteredValidator without x25519_key/p2p_addr fields.
@@ -223,7 +234,6 @@ mod tests {
         v0_3::{AuthenticatedValidator, EventKey, Fetcher, RegisteredValidator, StakeTableEvent},
     };
     use futures::{StreamExt, TryStreamExt, future::join_all};
-    use hotshot::types::{BLSPubKey, SignatureKey};
     use hotshot_contract_adapter::{
         sol_types::StakeTableV3::Delegated, stake_table::StakeTableContractVersion,
     };
@@ -243,6 +253,7 @@ mod tests {
         light_client::{LightClientState, StakeTableState, StateKeyPair},
         message::{Proposal, UpgradeLock, convert_proposal},
         new_protocol::CoordinatorEvent,
+        signature_key::BLSPubKey,
         simple_certificate::{
             CertificatePair, LightClientStateUpdateCertificateV2, NextEpochQuorumCertificate2,
             QuorumCertificate, QuorumCertificate2, UpgradeCertificate,
@@ -250,7 +261,7 @@ mod tests {
         simple_vote::{
             NextEpochQuorumData2, QuorumData2, UpgradeProposalData, VersionedVoteData, Vote2Data,
         },
-        traits::{EncodeBytes, block_contents::BlockHeader},
+        traits::{EncodeBytes, block_contents::BlockHeader, signature_key::SignatureKey},
         utils::EpochTransitionIndicator,
         vid::{
             avidm::{AvidMScheme, init_avidm_param},
@@ -293,7 +304,8 @@ mod tests {
 
     #[rstest_reuse::template]
     #[rstest::rstest]
-    #[case(PhantomData::<crate::persistence::sql::Persistence>)]
+    #[case(PhantomData::<crate::persistence::sql::postgres::Persistence>)]
+    #[case(PhantomData::<crate::persistence::sql::sqlite::Persistence>)]
     #[case(PhantomData::<crate::persistence::fs::Persistence>)]
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     pub fn persistence_types<P: TestablePersistence>(#[case] _p: PhantomData<P>) {}
@@ -1328,7 +1340,8 @@ mod tests {
 
     /// Recovery must not hand `Consensus::new` a mismatched (high QC, next-epoch QC) pair: when a
     /// newer running high QC is adopted, a persisted next-epoch QC that does not correspond to it
-    /// (`verify_next_epoch_qc`) is dropped to `None` instead of being recovered alongside it.
+    /// (`verify_next_epoch_qc`) is dropped to `None` instead of being recovered alongside it, while
+    /// one that does correspond is kept.
     #[rstest_reuse::apply(persistence_types)]
     pub async fn test_load_consensus_state_drops_noncorresponding_next_epoch_qc<
         P: TestablePersistence,
@@ -1376,10 +1389,16 @@ mod tests {
             .await
             .unwrap();
 
-        // A newer running high QC (view 9) — recovery adopts it...
+        // A newer running high QC (view 9) on an epoch-transition block, so recovery must check the
+        // next-epoch QC against it — recovery adopts it...
+        let epoch_height = 10;
         let mut running_high_qc = eqc_high_qc.clone();
         running_high_qc.view_number = ViewNumber::new(9);
-        storage.append_high_qc2(running_high_qc).await.unwrap();
+        running_high_qc.data.block_number = Some(epoch_height);
+        storage
+            .append_high_qc2(running_high_qc.clone())
+            .await
+            .unwrap();
 
         // ...and a standalone next-epoch QC (view 3) in its table. Neither it nor the eQC's view-5
         // next-epoch QC corresponds to the recovered high QC at view 9.
@@ -1392,7 +1411,7 @@ mod tests {
 
         let (initializer, _anchor_view) = storage
             .load_consensus_state(
-                NodeState::mock(),
+                NodeState::mock().with_epoch_height(epoch_height),
                 Upgrade::trivial(versions::EPOCH_REWARD_VERSION),
             )
             .await
@@ -1404,6 +1423,30 @@ mod tests {
         assert!(
             initializer.next_epoch_high_qc().is_none(),
             "a next-epoch QC that does not correspond to the recovered high QC must be dropped"
+        );
+
+        // A next-epoch QC with the same view and data as the recovered high QC is kept. This shows
+        // that the filter dropped the QC above, and not a QC that never loads.
+        let mut corresponding_next_epoch_qc = next_epoch_qc.clone();
+        corresponding_next_epoch_qc.view_number = running_high_qc.view_number;
+        corresponding_next_epoch_qc.data = running_high_qc.data.into();
+        storage
+            .append_next_epoch_high_qc2(corresponding_next_epoch_qc.clone())
+            .await
+            .unwrap();
+
+        let (initializer, _anchor_view) = storage
+            .load_consensus_state(
+                NodeState::mock().with_epoch_height(epoch_height),
+                Upgrade::trivial(versions::EPOCH_REWARD_VERSION),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            initializer.next_epoch_high_qc(),
+            Some(&corresponding_next_epoch_qc),
+            "a next-epoch QC that corresponds to the recovered high QC must be kept"
         );
     }
 
@@ -1954,7 +1997,8 @@ mod tests {
     /// sql-only: the fs backend keeps the pop-oldest cursor and skips gaps (the consumer
     /// re-fetches missing blocks), trading gap-fill delivery for cheap decide passes.
     #[rstest::rstest]
-    #[case(PhantomData::<crate::persistence::sql::Persistence>)]
+    #[case(PhantomData::<crate::persistence::sql::postgres::Persistence>)]
+    #[case(PhantomData::<crate::persistence::sql::sqlite::Persistence>)]
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     pub async fn test_decide_gap_holds_events<P: TestablePersistence>(#[case] _p: PhantomData<P>) {
         let tmp = P::tmp_storage().await;
@@ -1998,7 +2042,8 @@ mod tests {
     ///
     /// sql-only: see [`test_decide_gap_holds_events`].
     #[rstest::rstest]
-    #[case(PhantomData::<crate::persistence::sql::Persistence>)]
+    #[case(PhantomData::<crate::persistence::sql::postgres::Persistence>)]
+    #[case(PhantomData::<crate::persistence::sql::sqlite::Persistence>)]
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     pub async fn test_decide_gap_fill_delivers_all<P: TestablePersistence>(
         #[case] _p: PhantomData<P>,

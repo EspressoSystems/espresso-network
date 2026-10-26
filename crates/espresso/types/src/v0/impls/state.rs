@@ -1041,23 +1041,29 @@ impl ValidatedState {
             validated_state.chain_config = chain_config.into();
         }
 
-        let l1_deposits = get_l1_deposits(
-            instance,
-            proposed_header,
-            parent_leaf,
-            chain_config.fee_contract,
-        )
-        .await;
+        // The new protocol charges no fees and credits no deposits, so it never touches the fee tree.
+        let (l1_deposits, missing_accounts) = if version < NEW_PROTOCOL_VERSION {
+            let l1_deposits = get_l1_deposits(
+                instance,
+                proposed_header,
+                parent_leaf,
+                chain_config.fee_contract,
+            )
+            .await;
 
-        // Find missing fee state entries. We will need to use the builder account which is paying a
-        // fee and the recipient account which is receiving it, plus any counts receiving deposits
-        // in this block.
-        let missing_accounts = self.forgotten_accounts(
-            [chain_config.fee_recipient]
-                .into_iter()
-                .chain(proposed_header.fee_info().accounts())
-                .chain(l1_deposits.accounts()),
-        );
+            // Find missing fee state entries. We will need to use the builder account which is
+            // paying a fee and the recipient account which is receiving it, plus any counts
+            // receiving deposits in this block.
+            let missing_accounts = self.forgotten_accounts(
+                [chain_config.fee_recipient]
+                    .into_iter()
+                    .chain(proposed_header.fee_info().accounts())
+                    .chain(l1_deposits.accounts()),
+            );
+            (l1_deposits, missing_accounts)
+        } else {
+            (Vec::new(), Vec::new())
+        };
 
         let parent_height = parent_leaf.height();
         let parent_view = parent_leaf.view_number();
@@ -1614,10 +1620,12 @@ mod test {
     use std::{sync::Arc, time::Duration};
 
     use espresso_utils::ser::FromStringOrInteger;
-    use hotshot::traits::BlockPayload;
     use hotshot_example_types::node_types::TEST_VERSIONS;
     use hotshot_query_service::{Resolvable, testing::mocks::MOCK_UPGRADE};
-    use hotshot_types::{data::ViewNumber, traits::signature_key::BuilderSignatureKey};
+    use hotshot_types::{
+        data::ViewNumber,
+        traits::{BlockPayload, signature_key::BuilderSignatureKey},
+    };
     use tracing::debug;
     use versions::{
         FEE_VERSION, LARGE_BLOCK_VERSION, MAX_SUPPORTED_VERSION, NEW_PROTOCOL_VERSION, version,
@@ -1634,13 +1642,18 @@ mod test {
 
     impl Transaction {
         async fn into_mock_header(self) -> (Header, u32) {
-            let instance = NodeState::mock_v2();
+            let instance = NodeState::mock();
             let (payload, metadata) =
                 Payload::from_transactions(&[self], &instance.genesis_state, &instance)
                     .await
                     .unwrap();
 
-            let header = Header::genesis(&instance, payload.clone(), &metadata, MOCK_UPGRADE.base);
+            let header = Header::genesis(
+                &instance,
+                payload.clone(),
+                &metadata,
+                instance.genesis_version,
+            );
 
             let header = header.sign();
 
@@ -1806,7 +1819,7 @@ mod test {
                 proposal,
                 total_rewards_distributed: None,
                 epoch_height: instance.epoch_height,
-                version: version(0, 1),
+                version: instance.current_version,
                 validation_start_time,
                 leader_index: None,
             }
@@ -1859,7 +1872,7 @@ mod test {
         let proposal = Proposal::new(&header, block_size);
         // Note we are using the same header for parent and proposal,
         // this may be OK depending on what we are testing.
-        ValidatedTransition::mock(NodeState::mock_v2(), &header, proposal)
+        ValidatedTransition::mock(NodeState::mock(), &header, proposal)
             .validate_l1_head()
             .unwrap();
 
@@ -1998,7 +2011,7 @@ mod test {
         let tx = Transaction::of_size(20);
         let (header, block_size) = tx.into_mock_header().await;
         let state = ValidatedState::default();
-        let instance = NodeState::mock_v2().with_chain_config(ChainConfig {
+        let instance = NodeState::mock().with_chain_config(ChainConfig {
             base_fee: 1000.into(), // High expected base fee
             ..state.chain_config.resolve().unwrap()
         });
@@ -2023,7 +2036,7 @@ mod test {
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_validation_height() {
         // Setup
-        let instance = NodeState::mock_v2();
+        let instance = NodeState::mock();
         let tx = Transaction::of_size(10);
         let (parent, block_size) = tx.into_mock_header().await;
 
@@ -2080,7 +2093,7 @@ mod test {
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_validation_timestamp_drift() {
         // Setup
-        let instance = NodeState::mock_v2();
+        let instance = NodeState::mock();
         let (parent, block_size) = Transaction::of_size(10).into_mock_header().await;
 
         let header = parent.clone();
@@ -2141,7 +2154,7 @@ mod test {
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_validation_fee_root() {
         // Setup
-        let instance = NodeState::mock_v2();
+        let instance = NodeState::mock();
         let (header, block_size) = Transaction::of_size(10).into_mock_header().await;
 
         // Success case.
@@ -2175,7 +2188,7 @@ mod test {
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_validation_block_root() {
         // Setup.
-        let instance = NodeState::mock_v2();
+        let instance = NodeState::mock();
         let (header, block_size) = Transaction::of_size(10).into_mock_header().await;
 
         // Success case.
@@ -2215,13 +2228,13 @@ mod test {
 
         // Success case.
         let proposal = Proposal::new(&header, block_size);
-        ValidatedTransition::mock(NodeState::mock_v2(), &header, proposal)
+        ValidatedTransition::mock(NodeState::mock(), &header, proposal)
             .validate_namespace_table()
             .unwrap();
 
         // Error case
         let proposal = Proposal::new(&header, 40);
-        let err = ValidatedTransition::mock(NodeState::mock_v2(), &header, proposal)
+        let err = ValidatedTransition::mock(NodeState::mock(), &header, proposal)
             .validate_namespace_table()
             .unwrap_err();
         tracing::info!(%err, "task failed successfully");
@@ -2241,7 +2254,7 @@ mod test {
         // size is supplied.
         let tx = Transaction::of_size(20);
         let (header, block_size) = tx.into_mock_header().await;
-        let instance = NodeState::mock_v2().with_chain_config(ChainConfig {
+        let instance = NodeState::mock().with_chain_config(ChainConfig {
             max_block_size: BlockSize::from_integer(10).unwrap(),
             base_fee: 1000.into(),
             ..ValidatedState::default().chain_config.resolve().unwrap()
@@ -2535,7 +2548,7 @@ mod test {
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_regression_slow_validation_timestamp_drift() {
-        let instance = NodeState::mock_v2();
+        let instance = NodeState::mock();
         let (parent, block_size) = Transaction::of_size(10).into_mock_header().await;
 
         let validation_start_time = OffsetDateTime::now_utc();

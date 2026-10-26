@@ -74,10 +74,9 @@ impl AvidmGf2NsProof {
 #[cfg(test)]
 mod tests {
     use futures::future;
-    use hotshot::traits::BlockPayload;
     use hotshot_types::{
         data::{VidCommitment, VidCommon},
-        traits::EncodeBytes,
+        traits::{BlockPayload, EncodeBytes},
         vid::avidm_gf2::{AvidmGf2Param, AvidmGf2Scheme},
     };
 

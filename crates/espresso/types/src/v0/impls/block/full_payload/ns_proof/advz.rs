@@ -166,10 +166,9 @@ impl ADVZNsProof {
 #[cfg(test)]
 mod tests {
     use futures::future;
-    use hotshot::traits::BlockPayload;
     use hotshot_types::{
         data::VidCommitment,
-        traits::EncodeBytes,
+        traits::{BlockPayload, EncodeBytes},
         vid::advz::{ADVZScheme, advz_scheme},
     };
     use jf_advz::{VidDisperse, VidScheme};

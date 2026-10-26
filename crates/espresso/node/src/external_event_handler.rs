@@ -4,9 +4,11 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result, bail};
 use espresso_types::{PubKey, SeqTypes, v0::traits::SequencerPersistence};
-use hotshot::types::Message;
 use hotshot_new_protocol::client::ClientApi;
-use hotshot_types::{message::MessageKind, traits::metrics::Counter};
+use hotshot_types::{
+    message::{Message, MessageKind},
+    traits::metrics::Counter,
+};
 use request_response::network::Bytes;
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc::{Receiver, Sender, error::TrySendError};
