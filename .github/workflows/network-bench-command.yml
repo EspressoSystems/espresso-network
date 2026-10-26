@@ -70,8 +70,8 @@ jobs:
           fi
 
           # Newest first. A pull_request run from this repository whose build-amd legs uploaded
-          # all three artifacts; they are kept for one day.
-          needed='["amd-espresso-node","amd-espresso-node-sqlite","amd-other"]'
+          # both artifacts; they are kept for one day.
+          needed='["amd-espresso-node","amd-other"]'
           run_ids=$(gh api -X GET "repos/$REPO/actions/workflows/build.yml/runs" \
             -f head_sha="$sha" -f event=pull_request -f per_page=20 \
             --jq ".workflow_runs[] | select(.head_repository.full_name == \"$REPO\") | .id")
@@ -85,8 +85,8 @@ jobs:
             fi
           done
           if [[ -z "$build_run" ]]; then
-            msg="\`/benchmark\`: no build.yml run for $sha has the amd-espresso-node,"
-            msg+=" amd-espresso-node-sqlite and amd-other artifacts (kept 1 day)."
+            msg="\`/benchmark\`: no build.yml run for $sha has the amd-espresso-node"
+            msg+=" and amd-other artifacts (kept 1 day)."
             echo "message=$msg Re-run CI for this pull request first." >> "$GITHUB_OUTPUT"
             exit 0
           fi

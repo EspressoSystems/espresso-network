@@ -14,8 +14,6 @@ use hotshot_types::{
     traits::node_implementation::NodeType,
 };
 use http_client::{Client, Url, error::ClientErr};
-use libp2p_identity::PeerId;
-use multiaddr::Multiaddr;
 use tokio::time::sleep;
 use tracing::{info, instrument};
 use vbs::BinarySerializer;
@@ -136,7 +134,7 @@ pub struct BenchResultsDownloadConfig {
 pub struct ValidatorArgs {
     /// The address the orchestrator runs on
     pub url: Url,
-    /// The optional advertise address to use for Libp2p
+    /// The optional advertise address
     pub advertise_address: Option<String>,
     /// Optional address to run builder on. Address must be accessible by other nodes
     pub builder_address: Option<SocketAddr>,
@@ -153,7 +151,7 @@ pub struct MultiValidatorArgs {
     pub num_nodes: u16,
     /// The address the orchestrator runs on
     pub url: Url,
-    /// The optional advertise address to use for Libp2p
+    /// The optional advertise address
     pub advertise_address: Option<String>,
     /// An optional network config file to save to/load from
     /// Allows for rejoining the network on a complete state loss
@@ -169,8 +167,6 @@ pub struct MultiValidatorArgs {
 pub async fn get_complete_config<TYPES: NodeType>(
     client: &OrchestratorClient,
     mut validator_config: ValidatorConfig<TYPES>,
-    libp2p_advertise_address: Option<Multiaddr>,
-    libp2p_public_key: Option<PeerId>,
 ) -> anyhow::Result<(
     NetworkConfig<TYPES>,
     ValidatorConfig<TYPES>,
@@ -178,11 +174,7 @@ pub async fn get_complete_config<TYPES: NodeType>(
 )> {
     // get the configuration from the orchestrator
     let run_config: NetworkConfig<TYPES> = client
-        .post_and_wait_all_public_keys::<TYPES>(
-            &mut validator_config,
-            libp2p_advertise_address,
-            libp2p_public_key,
-        )
+        .post_and_wait_all_public_keys::<TYPES>(&mut validator_config)
         .await;
 
     info!(
@@ -250,30 +242,12 @@ impl OrchestratorClient {
     /// if unable to convert the node index from usize into u64
     /// (only applicable on 32 bit systems)
     ///
-    /// # Errors
-    /// If we were unable to serialize the Libp2p data
-    #[allow(clippy::type_complexity)]
     pub async fn get_config_without_peer<TYPES: NodeType>(
         &self,
-        libp2p_advertise_address: Option<Multiaddr>,
-        libp2p_public_key: Option<PeerId>,
     ) -> anyhow::Result<NetworkConfig<TYPES>> {
-        // Serialize our (possible) libp2p-specific data
-        let request_body = vbs::Serializer::<OrchestratorVersion>::serialize(&(
-            libp2p_advertise_address,
-            libp2p_public_key,
-        ))?;
-
         let identity = |client: Client<ClientErr, OrchestratorVersion>| {
-            // We need to clone here to move it into the closure
-            let request_body = request_body.clone();
             async move {
-                let node_index: Result<u16, ClientErr> = client
-                    .post("api/identity")
-                    .body_binary(&request_body)
-                    .expect("failed to set request body")
-                    .send()
-                    .await;
+                let node_index: Result<u16, ClientErr> = client.post("api/identity").send().await;
 
                 node_index
             }
@@ -402,20 +376,13 @@ impl OrchestratorClient {
     pub async fn post_and_wait_all_public_keys<TYPES: NodeType>(
         &self,
         validator_config: &mut ValidatorConfig<TYPES>,
-        libp2p_advertise_address: Option<Multiaddr>,
-        libp2p_public_key: Option<PeerId>,
     ) -> NetworkConfig<TYPES> {
         let pubkey: Vec<u8> =
             PeerConfig::<TYPES>::to_bytes(&validator_config.public_config()).clone();
         let da_requested: bool = validator_config.is_da;
 
-        // Serialize our (possible) libp2p-specific data
-        let request_body = vbs::Serializer::<OrchestratorVersion>::serialize(&(
-            pubkey,
-            libp2p_advertise_address,
-            libp2p_public_key,
-        ))
-        .expect("failed to serialize request");
+        let request_body = vbs::Serializer::<OrchestratorVersion>::serialize(&pubkey)
+            .expect("failed to serialize request");
 
         // register our public key with the orchestrator
         let (node_index, is_da): (u64, bool) = loop {

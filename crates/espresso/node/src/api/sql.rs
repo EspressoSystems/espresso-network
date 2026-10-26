@@ -9,6 +9,7 @@ use committable::{Commitment, Committable};
 use espresso_types::{
     BlockMerkleCommitment, BlockMerkleTree, ChainConfig, FeeAccount, FeeMerkleCommitment,
     FeeMerkleTree, Leaf2, NodeState, ValidatedState, get_l1_deposits,
+    v0::traits::PersistenceOptions as _,
     v0_1::IterableFeeInfo,
     v0_3::{
         REWARD_MERKLE_TREE_V1_HEIGHT, RewardAccountProofV1, RewardAccountQueryDataV1,
@@ -23,19 +24,18 @@ use hotshot_query_service::{
     availability::LeafId,
     data_source::{
         VersionedDataSource,
-        sql::{Config, SqlDataSource, Transaction},
         storage::{
-            AvailabilityStorage, MerklizedStateStorage, NodeStorage, SqlStorage,
+            AvailabilityStorage, MerklizedStateStorage, NodeStorage,
             pruning::{PrunerCfg, PrunerConfig},
-            sql::{Db, TransactionMode, Write, query_as},
         },
     },
     merklized_state::Snapshot,
+    status::HasMetrics as _,
 };
 use hotshot_types::{
     data::{EpochNumber, QuorumProposalWrapper, ViewNumber},
     message::Proposal,
-    traits::{ValidatedState as _, election::MembershipSnapshot},
+    traits::{ValidatedState as _, election::MembershipSnapshot, metrics::Metrics},
     utils::{epoch_from_block_number, is_last_block},
     vote::HasViewNumber,
 };
@@ -43,6 +43,8 @@ use jf_merkle_tree_compat::{
     ForgetableMerkleTreeScheme, ForgetableUniversalMerkleTreeScheme, LookupResult,
     MerkleTreeScheme, prelude::MerkleNode,
 };
+use light_client::storage::LightClientDbOptions;
+use process_metrics::ProcessMetrics;
 use sqlx::{Encode, Row, Type};
 use tokio::time::sleep;
 use vbs::version::Version;
@@ -51,19 +53,43 @@ use versions::{
 };
 
 use super::{
-    BlocksFrontier,
-    data_source::{Provider, SequencerDataSource},
+    persistence::{BackendOptions as _, Options},
+    qs::{
+        Backend as _, Config, Db, DbKind, SqlDataSource, SqlStorage, Transaction, TransactionMode,
+        Write, query_as,
+    },
 };
 use crate::{
     SeqTypes,
-    api::{RewardMerkleTreeDataSource, RewardMerkleTreeV2Data},
+    api::{
+        ApiState, BlocksFrontier, LightClientProvider, RewardMerkleTreeDataSource,
+        RewardMerkleTreeV2Data,
+        data_source::{DataSourceOptions, NodeStateDataSource as _, Provider, SequencerDataSource},
+        options::{self, Query, get_public_env_vars, init_query_data_source},
+        state::NodeApiStateImpl,
+        update::{ApiEventConsumer, ApiSink},
+    },
     catchup::{CatchupStorage, NullStateCatchup},
-    persistence::{ChainConfigPersistence, sql::Options},
-    state::compute_state_update,
+    context::TaskList,
+    persistence::{ChainConfigPersistence, sql::Options as SqlOptions},
+    request_response::data_source::Storage as RequestResponseStorage,
+    state::{EmptyStateStart, compute_state_update, update_state_storage_loop},
     util::BoundedJoinSet,
 };
 
 pub type DataSource = SqlDataSource<SeqTypes, Provider>;
+
+impl DataSourceOptions for Options {
+    type DataSource = DataSource;
+
+    fn enable_query_module(&self, opt: options::Options, query: Query) -> options::Options {
+        opt.query_sql(query, self.clone().into_inner())
+    }
+
+    fn light_client_db(&self, query: &Query) -> anyhow::Result<LightClientDbOptions> {
+        Ok(Db::light_client_db(&Config::try_from(&**self)?, query))
+    }
+}
 
 #[async_trait]
 impl SequencerDataSource for DataSource {
@@ -73,7 +99,7 @@ impl SequencerDataSource for DataSource {
         let fetch_limit = opt.fetch_rate_limit;
         let active_fetch_delay = opt.active_fetch_delay;
         let chunk_fetch_delay = opt.chunk_fetch_delay;
-        let mut cfg = Config::try_from(&opt)?;
+        let mut cfg = Config::try_from(&*opt)?;
 
         if reset {
             cfg = cfg.reset_schema();
@@ -119,6 +145,110 @@ impl SequencerDataSource for DataSource {
     }
 }
 
+/// Start the query module of `api` over this backend, returning what consensus needs from it.
+pub(in crate::api) async fn init_query_module(
+    api: &options::Options,
+    query_opt: Query,
+    mod_opt: Options,
+    state: ApiState,
+    tasks: &mut TaskList,
+) -> anyhow::Result<(
+    Box<dyn Metrics>,
+    Box<dyn ApiSink>,
+    Option<RequestResponseStorage>,
+)> {
+    let mut provider = Provider::default();
+
+    // Use the database itself as a fetching provider: sometimes we can fetch data that is
+    // missing from the query service from ephemeral consensus storage.
+    let db_provider = mod_opt.clone().create().await?;
+    provider = provider
+        .with_block_provider(db_provider.clone())
+        .with_vid_common_provider(db_provider);
+    // If that fails, fetch missing data from peers.
+    let light_client_db = mod_opt.light_client_db(&query_opt)?;
+    let light_client = Arc::new(LightClientProvider::new(
+        query_opt.peers,
+        state.clone(),
+        query_opt.light_client,
+        light_client_db,
+    )?);
+    provider = provider.with_provider(Arc::clone(&light_client));
+
+    let ranges_concurrency = mod_opt.ranges_concurrency;
+    let ds = DataSource::create(mod_opt.clone(), provider, false).await?;
+    let inner_storage = ds.inner();
+    tasks.spawn("process_metrics", ProcessMetrics::new(ds.metrics()).run());
+    let (metrics, ds) = init_query_data_source(ds, state.clone());
+
+    let get_node_state = {
+        let state = state.clone();
+        async move { state.node_state().await }
+    };
+    let empty_state_start = if mod_opt.prune {
+        EmptyStateStart::RecentBoundary
+    } else {
+        EmptyStateStart::Genesis
+    };
+    tasks.spawn(
+        "merklized state storage update loop",
+        update_state_storage_loop(ds.clone(), get_node_state, light_client, empty_state_start),
+    );
+
+    // Archive mode disables the pruner, so nothing else bounds the merklized state tables.
+    if mod_opt.archive && !mod_opt.archive_full_state {
+        let get_node_state = {
+            let state = state.clone();
+            async move { state.node_state().await }
+        };
+        tasks.spawn(
+            "archive state garbage collector",
+            ArchiveStateGc::new(&mod_opt).run(inner_storage.clone(), get_node_state),
+        );
+    }
+
+    let port = api.http.port;
+    let env_vars = get_public_env_vars().unwrap_or_default();
+    let node_cfg = api.public_node_config.as_deref().cloned();
+    let modules = espresso_api::OptionalModules {
+        submit: api.submit.is_some(),
+        config: api.config.is_some(),
+        explorer: api.explorer.is_some(),
+        light_client: api.light_client.is_some(),
+        ..Default::default()
+    };
+    let max_connections = api.http.max_connections;
+    // Both transports serve the same state; cloning shares the env vars and node config
+    // rather than copying the genesis they embed.
+    let mut api_state = NodeApiStateImpl::new(ds.clone())
+        .with_env_vars(env_vars)
+        .with_public_node_config(node_cfg);
+    if let Some(ranges_concurrency) = ranges_concurrency {
+        api_state = api_state.with_ranges_concurrency(ranges_concurrency);
+    }
+    let tonic_state = api_state.clone();
+    tasks.spawn("API server", async move {
+        if let Err(e) = espresso_api::serve_axum(port, api_state, modules, max_connections).await {
+            tracing::error!("Axum server error: {}", e);
+        }
+        anyhow::Ok(())
+    });
+
+    if let Some(tonic_port) = api.http.tonic_port {
+        tasks.spawn("Tonic gRPC server", async move {
+            if let Err(e) = espresso_api::serve_tonic(tonic_port, tonic_state, modules).await {
+                tracing::error!("Tonic gRPC server error: {}", e);
+            }
+        });
+    }
+
+    Ok((
+        metrics,
+        Box::new(ApiEventConsumer::from(ds)),
+        Some(RequestResponseStorage::Sql(inner_storage)),
+    ))
+}
+
 /// Prune archive state older than the light client contract's retained history. Block merkle paths
 /// below the marker are rebuilt on request from newer snapshots; fee and reward state is gone.
 ///
@@ -131,7 +261,7 @@ pub(crate) struct ArchiveStateGc {
 }
 
 impl ArchiveStateGc {
-    pub(crate) fn new(opt: &Options) -> Self {
+    pub(crate) fn new(opt: &SqlOptions) -> Self {
         Self {
             min_retention: opt.archive_state_min_retention,
             cfg: PrunerCfg::from(opt.pruning),
@@ -436,10 +566,10 @@ impl RewardMerkleTreeDataSource for SqlStorage {
             // Postgres supports improved performance by using `FOR UPDATE` in a sub-select to
             // acquire exclusive locks on visited rows, which are later deleted. SQLite does not
             // support this syntax.
-            #[cfg(not(feature = "embedded-db"))]
-            let for_update = "FOR UPDATE";
-            #[cfg(feature = "embedded-db")]
-            let for_update = "";
+            let for_update = match Db::KIND {
+                DbKind::Sqlite => "",
+                DbKind::Postgres => "FOR UPDATE",
+            };
 
             // Delete batches from the merkle data table until there is nothing left to delete.
             loop {
@@ -1060,6 +1190,92 @@ impl RewardMerkleTreeDataSource for DataSource {
     }
 }
 
+// A module of its own so `RequestStorage` is not in scope where `CatchupStorage` methods are
+// called by name on this type.
+mod request_storage {
+    use async_trait::async_trait;
+    use espresso_types::{
+        Certificate2, ChainConfig, FeeAccount, FeeMerkleTree, Leaf2, NodeState,
+        v0_3::{RewardAccountV1, RewardMerkleTreeV1},
+        v0_4::{RewardAccountV2, RewardMerkleTreeV2},
+    };
+    use hotshot_types::data::{VidShare, ViewNumber};
+
+    use super::SqlStorage;
+    use crate::{
+        SeqTypes,
+        api::{BlocksFrontier, RewardMerkleTreeDataSource},
+        catchup::CatchupStorage,
+        request_response::data_source::RequestStorage,
+    };
+
+    #[async_trait]
+    impl RequestStorage for SqlStorage {
+        async fn get_accounts(
+            &self,
+            instance: &NodeState,
+            height: u64,
+            view: ViewNumber,
+            accounts: &[FeeAccount],
+        ) -> anyhow::Result<(FeeMerkleTree, Leaf2)> {
+            CatchupStorage::get_accounts(self, instance, height, view, accounts).await
+        }
+
+        async fn get_reward_accounts_v1(
+            &self,
+            instance: &NodeState,
+            height: u64,
+            view: ViewNumber,
+            accounts: &[RewardAccountV1],
+        ) -> anyhow::Result<(RewardMerkleTreeV1, Leaf2)> {
+            CatchupStorage::get_reward_accounts_v1(self, instance, height, view, accounts).await
+        }
+
+        async fn get_reward_accounts_v2(
+            &self,
+            instance: &NodeState,
+            height: u64,
+            view: ViewNumber,
+            accounts: &[RewardAccountV2],
+        ) -> anyhow::Result<(RewardMerkleTreeV2, Leaf2)> {
+            CatchupStorage::get_reward_accounts_v2(self, instance, height, view, accounts).await
+        }
+
+        async fn get_frontier(
+            &self,
+            instance: &NodeState,
+            height: u64,
+            view: ViewNumber,
+        ) -> anyhow::Result<BlocksFrontier> {
+            CatchupStorage::get_frontier(self, instance, height, view).await
+        }
+
+        async fn get_chain_config(
+            &self,
+            commitment: committable::Commitment<ChainConfig>,
+        ) -> anyhow::Result<ChainConfig> {
+            CatchupStorage::get_chain_config(self, commitment).await
+        }
+
+        async fn get_leaf_chain(&self, height: u64) -> anyhow::Result<Vec<Leaf2>> {
+            CatchupStorage::get_leaf_chain(self, height).await
+        }
+
+        async fn load_cert2(&self, height: u64) -> anyhow::Result<Option<Certificate2<SeqTypes>>> {
+            CatchupStorage::load_cert2(self, height).await
+        }
+
+        async fn load_tree(&self, height: u64) -> anyhow::Result<Vec<u8>> {
+            RewardMerkleTreeDataSource::load_tree(self, height).await
+        }
+
+        async fn get_vid_share(&self, block_number: u64) -> anyhow::Result<VidShare> {
+            let id = hotshot_query_service::node::BlockId::Number(block_number as usize);
+            Ok(SqlStorage::get_vid_share::<SeqTypes>(self, id).await?)
+        }
+    }
+}
+
 impl CatchupStorage for DataSource {
     async fn get_accounts(
         &self,
@@ -1166,7 +1382,7 @@ impl ChainConfigPersistence for Transaction<Write> {
     }
 }
 
-impl super::data_source::PruningDataSource for SqlStorage {
+impl crate::api::data_source::PruningDataSource for SqlStorage {
     async fn get_oldest_block(
         &self,
     ) -> anyhow::Result<Option<hotshot_query_service::availability::BlockQueryData<SeqTypes>>> {
@@ -1218,15 +1434,14 @@ impl super::data_source::PruningDataSource for SqlStorage {
     }
 }
 
-impl super::data_source::DatabaseMetadataSource for SqlStorage {
-    async fn get_table_sizes(&self) -> anyhow::Result<Vec<super::data_source::TableSize>> {
+impl crate::api::data_source::DatabaseMetadataSource for SqlStorage {
+    async fn get_table_sizes(&self) -> anyhow::Result<Vec<crate::api::data_source::TableSize>> {
         let mut tx = self
             .read()
             .await
             .context("opening transaction to fetch table sizes")?;
 
-        #[cfg(not(feature = "embedded-db"))]
-        {
+        if Db::KIND == DbKind::Postgres {
             let query = r#"
                 SELECT
                     schemaname || '.' || relname AS table_name,
@@ -1247,7 +1462,7 @@ impl super::data_source::DatabaseMetadataSource for SqlStorage {
                 let row_count: i64 = row.try_get("row_count").unwrap_or(-1);
                 let total_size_bytes: Option<i64> = row.try_get("total_size_bytes").ok();
 
-                table_sizes.push(super::data_source::TableSize {
+                table_sizes.push(crate::api::data_source::TableSize {
                     table_name,
                     row_count,
                     total_size_bytes,
@@ -1255,10 +1470,7 @@ impl super::data_source::DatabaseMetadataSource for SqlStorage {
             }
 
             Ok(table_sizes)
-        }
-
-        #[cfg(feature = "embedded-db")]
-        {
+        } else {
             // First, get all table names from sqlite_master
             let table_names_query = r#"
                 SELECT name
@@ -1292,7 +1504,7 @@ impl super::data_source::DatabaseMetadataSource for SqlStorage {
 
                 let row_count: i64 = count_row.try_get("count").unwrap_or(0);
 
-                table_sizes.push(super::data_source::TableSize {
+                table_sizes.push(crate::api::data_source::TableSize {
                     table_name,
                     row_count,
                     total_size_bytes: None,
@@ -1305,7 +1517,7 @@ impl super::data_source::DatabaseMetadataSource for SqlStorage {
 
     async fn get_migration_status(
         &self,
-    ) -> anyhow::Result<Vec<super::data_source::MigrationStatus>> {
+    ) -> anyhow::Result<Vec<crate::api::data_source::MigrationStatus>> {
         let mut tx = self
             .read()
             .await
@@ -1329,7 +1541,7 @@ impl super::data_source::DatabaseMetadataSource for SqlStorage {
         Ok(rows
             .into_iter()
             .map(|(name, started_at, completed_at, last_offset)| {
-                super::data_source::MigrationStatus {
+                crate::api::data_source::MigrationStatus {
                     name,
                     started_at,
                     completed_at,
@@ -1340,19 +1552,19 @@ impl super::data_source::DatabaseMetadataSource for SqlStorage {
     }
 }
 
-impl super::data_source::DatabaseMetadataSource for DataSource {
-    async fn get_table_sizes(&self) -> anyhow::Result<Vec<super::data_source::TableSize>> {
+impl crate::api::data_source::DatabaseMetadataSource for DataSource {
+    async fn get_table_sizes(&self) -> anyhow::Result<Vec<crate::api::data_source::TableSize>> {
         self.as_ref().get_table_sizes().await
     }
 
     async fn get_migration_status(
         &self,
-    ) -> anyhow::Result<Vec<super::data_source::MigrationStatus>> {
+    ) -> anyhow::Result<Vec<crate::api::data_source::MigrationStatus>> {
         self.as_ref().get_migration_status().await
     }
 }
 
-impl super::data_source::PruningDataSource for DataSource {
+impl crate::api::data_source::PruningDataSource for DataSource {
     async fn get_oldest_block(
         &self,
     ) -> anyhow::Result<Option<hotshot_query_service::availability::BlockQueryData<SeqTypes>>> {
@@ -1924,31 +2136,9 @@ where
 #[cfg(any(test, feature = "testing"))]
 pub(crate) mod impl_testable_data_source {
 
-    use hotshot_query_service::data_source::storage::sql::testing::TmpDb;
-
-    use super::*;
-    use crate::api::{self, data_source::testing::TestableSequencerDataSource, options::Query};
-
-    pub fn tmp_options(db: &TmpDb) -> Options {
-        #[cfg(not(feature = "embedded-db"))]
-        {
-            let opt = crate::persistence::sql::PostgresOptions {
-                port: Some(db.port()),
-                host: Some(db.host()),
-                user: Some("postgres".into()),
-                password: Some("password".into()),
-                ..Default::default()
-            };
-
-            opt.into()
-        }
-
-        #[cfg(feature = "embedded-db")]
-        {
-            let opt = crate::persistence::sql::SqliteOptions { path: db.path() };
-            opt.into()
-        }
-    }
+    pub(crate) use super::super::persistence::tmp_options;
+    use super::{super::qs::testing::TmpDb, *};
+    use crate::api::{self, data_source::testing::TestableSequencerDataSource};
 
     #[async_trait]
     impl TestableSequencerDataSource for DataSource {
@@ -1959,7 +2149,7 @@ pub(crate) mod impl_testable_data_source {
         }
 
         fn persistence_options(storage: &Self::Storage) -> Self::Options {
-            tmp_options(storage)
+            Options::try_from(tmp_options(storage)).unwrap()
         }
 
         fn leaf_only_ds_options(
@@ -1991,14 +2181,8 @@ mod tests {
     use hotshot_query_service::{
         data_source::{
             Transaction, VersionedDataSource,
-            sql::Config,
             storage::{
-                UpdateAvailabilityStorage,
-                pruning::PrunedHeightStorage,
-                sql::{
-                    SqlStorage, StorageConnectionType, Transaction as SqlTransaction, Write,
-                    testing::TmpDb,
-                },
+                UpdateAvailabilityStorage, pruning::PrunedHeightStorage, sql::StorageConnectionType,
             },
         },
         merklized_state::{MerklizedState, UpdateStateData},
@@ -2011,7 +2195,12 @@ mod tests {
     use light_client::testing::{leaf_chain, leaf_chain_with_upgrade};
     use versions::{DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_REWARD_VERSION, Upgrade};
 
-    use super::{ArchiveStateGc, SeqTypes, impl_testable_data_source::tmp_options, query_as};
+    use super::{
+        super::qs::{Config, SqlStorage, Transaction as SqlTransaction, Write, testing::TmpDb},
+        ArchiveStateGc, SeqTypes,
+        impl_testable_data_source::tmp_options,
+        query_as,
+    };
     use crate::{
         api::RewardMerkleTreeDataSource,
         catchup::{CatchupStorage, SqlStateCatchup},
@@ -2377,7 +2566,7 @@ mod tests {
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_get_table_sizes() {
-        use super::super::data_source::DatabaseMetadataSource;
+        use crate::api::data_source::DatabaseMetadataSource;
 
         let db = TmpDb::init().await;
         let opt = tmp_options(&db);

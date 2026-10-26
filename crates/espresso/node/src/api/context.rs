@@ -7,14 +7,14 @@ use std::{collections::HashMap, sync::Arc, time::Duration};
 use ::light_client::{
     LightClient,
     client::{FallbackClient, QueryServiceClient},
-    storage::SqliteStorage,
+    storage::SqlStorage,
 };
 use async_lock::RwLock;
 use async_trait::async_trait;
 use committable::{Commitment, Committable};
 use espresso_types::{
     Leaf2, NodeState, PubKey, SeqTypes, Transaction, ValidatedState,
-    v0::traits::SequencerPersistence,
+    v0::traits::{MembershipPersistence, SequencerPersistence, StateCertPersistence},
 };
 use futures::future::BoxFuture;
 use hotshot_new_protocol::storage::NewProtocolStorage;
@@ -34,7 +34,7 @@ use crate::{
     state_signature::StateSignatureMemStorage,
 };
 
-pub type NodeLightClient = LightClient<SqliteStorage, FallbackClient<QueryServiceClient>>;
+pub type NodeLightClient = LightClient<SqlStorage, FallbackClient<QueryServiceClient>>;
 
 pub type Delta = <ValidatedState as hotshot_types::traits::ValidatedState<SeqTypes>>::Delta;
 
@@ -63,11 +63,10 @@ pub trait ConsensusSource: Send + Sync + 'static {
     async fn vote_participation(&self, epoch: EpochNumber) -> HashMap<PubKey, f64>;
 }
 
-pub trait ApiContext: Clone + Send + Sync + 'static {
-    type Persistence: SequencerPersistence;
-
+pub trait ApiContext: Send + Sync + 'static {
     fn consensus(&self) -> Arc<dyn ConsensusSource>;
-    fn persistence(&self) -> Arc<Self::Persistence>;
+    fn membership(&self) -> Arc<dyn MembershipPersistence>;
+    fn state_certs(&self) -> Arc<dyn StateCertPersistence>;
     fn node_state(&self) -> NodeState;
     fn network_config(&self) -> NetworkConfig<SeqTypes>;
     fn validator_config(&self) -> Option<&ValidatorConfig<SeqTypes>>;
@@ -163,13 +162,15 @@ impl<P> ApiContext for SequencerContext<P>
 where
     P: SequencerPersistence,
 {
-    type Persistence = P;
-
     fn consensus(&self) -> Arc<dyn ConsensusSource> {
         self.consensus_handle()
     }
 
-    fn persistence(&self) -> Arc<P> {
+    fn membership(&self) -> Arc<dyn MembershipPersistence> {
+        SequencerContext::persistence(self)
+    }
+
+    fn state_certs(&self) -> Arc<dyn StateCertPersistence> {
         SequencerContext::persistence(self)
     }
 

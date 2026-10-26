@@ -38,6 +38,10 @@ pub(crate) fn is_proposal_paired(output: &ConsensusOutput<TestTypes>) -> bool {
     matches!(output, ConsensusOutput::ProposalPaired { .. })
 }
 
+pub(crate) fn is_proposal_certified(output: &ConsensusOutput<TestTypes>) -> bool {
+    matches!(output, ConsensusOutput::ProposalCertified(_))
+}
+
 pub(crate) fn is_request_state(output: &ConsensusOutput<TestTypes>) -> bool {
     matches!(output, ConsensusOutput::RequestState(_))
 }

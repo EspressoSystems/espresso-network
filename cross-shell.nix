@@ -15,7 +15,7 @@ pkgs.mkShell (envVars // {
 
     # Crate dependencies
     cargoDeps.openssl-sys
-    protobuf # required by libp2p
+    protobuf # required by tonic-build
 
     openssh
   ];

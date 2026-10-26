@@ -284,15 +284,6 @@ pub struct RoundFinishedEvent {
     pub view_number: ViewNumber,
 }
 
-/// Whether or not to stop inclusively or exclusively when walking
-#[derive(Copy, Clone, Debug)]
-pub enum Terminator<T> {
-    /// Stop right before this view number
-    Exclusive(T),
-    /// Stop including this view number
-    Inclusive(T),
-}
-
 /// Type alias for byte array of SHA256 digest length
 type Sha256Digest = [u8; <sha2::Sha256 as OutputSizeUser>::OutputSize::USIZE];
 

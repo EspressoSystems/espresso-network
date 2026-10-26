@@ -20,7 +20,7 @@ concurrency:
 # Build test binary with `testing` feature, which requires `hotshot_example` config
 env:
   CARGO_TERM_COLOR: always
-  RUST_LOG: info,libp2p=off,node=error
+  RUST_LOG: info,node=error
   NEXTEST_PROFILE: slow
   CARGO_INCREMENTAL: "0"
   # A stale value silently drops a shard's worth of tests; guarded below.
@@ -39,7 +39,7 @@ jobs:
           - db: postgres
             features: ""
           - db: sqlite
-            features: --features embedded-db
+            features: --features sqlite
 
     steps:
       - uses: actions/checkout@v7
@@ -120,7 +120,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        partition: [1, 2]
+        partition: [1, 2, 3]
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/free-disk-space

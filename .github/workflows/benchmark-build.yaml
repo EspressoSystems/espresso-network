@@ -11,7 +11,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  RUST_LOG: info,libp2p=off,node=error
+  RUST_LOG: info,node=error
 
 jobs:
   build:
@@ -36,7 +36,7 @@ jobs:
       - name: Build Espresso Dev Node
         # Espresso Dev Node currently requires testing feature, so it is built separately.
         run: |
-          cargo build --locked --release --features benchmarking,testing,embedded-db --bin espresso-dev-node
+          cargo build --locked --release --features benchmarking,testing --bin espresso-dev-node
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v7
@@ -45,9 +45,6 @@ jobs:
           retention-days: 1
           path: |
             target/release/orchestrator
-            target/release/cdn-broker
-            target/release/cdn-marshal
-            target/release/cdn-whitelist
             target/release/state-relay-server
             target/release/state-prover
             target/release/espresso-node
@@ -80,7 +77,7 @@ jobs:
       - name: Build Espresso Dev Node
         # Espresso Dev Node currently requires testing feature, so it is built separately.
         run: |
-          cargo build --locked --release --features benchmarking,testing,embedded-db --bin espresso-dev-node
+          cargo build --locked --release --features benchmarking,testing --bin espresso-dev-node
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v7
@@ -89,9 +86,6 @@ jobs:
           retention-days: 1
           path: |
             target/release/orchestrator
-            target/release/cdn-broker
-            target/release/cdn-marshal
-            target/release/cdn-whitelist
             target/release/state-relay-server
             target/release/state-prover
             target/release/espresso-node
@@ -115,9 +109,6 @@ jobs:
     needs: [build, build-arm]
     outputs:
       espresso-node-tag: ${{ steps.espresso-node.outputs.tags }}
-      cdn-broker-tag: ${{ steps.cdn-broker.outputs.tags }}
-      cdn-marshal-tag: ${{ steps.cdn-marshal.outputs.tags }}
-      cdn-whitelist-tag: ${{ steps.cdn-whitelist.outputs.tags }}
       state-relay-server-tag: ${{ steps.state-relay-server.outputs.tags }}
       prover-service-tag: ${{ steps.prover-service.outputs.tags }}
       orchestrator-tag: ${{ steps.orchestrator.outputs.tags }}
@@ -166,33 +157,6 @@ jobs:
         id: espresso-node
         with:
           images: ghcr.io/espressosystems/espresso-network/espresso-node
-          flavor: suffix=bench
-
-      - name: Generate cdn-broker docker metadata
-        uses: docker/metadata-action@v6
-        id: cdn-broker
-        with:
-          images: |
-            ghcr.io/espressosystems/espresso-network/cdn-broker
-            ghcr.io/espressosystems/espresso-sequencer/cdn-broker
-          flavor: suffix=bench
-
-      - name: Generate cdn-marshal docker metadata
-        uses: docker/metadata-action@v6
-        id: cdn-marshal
-        with:
-          images: |
-            ghcr.io/espressosystems/espresso-network/cdn-marshal
-            ghcr.io/espressosystems/espresso-sequencer/cdn-marshal
-          flavor: suffix=bench
-
-      - name: Generate cdn-whitelist docker metadata
-        uses: docker/metadata-action@v6
-        id: cdn-whitelist
-        with:
-          images: |
-            ghcr.io/espressosystems/espresso-network/cdn-whitelist
-            ghcr.io/espressosystems/espresso-sequencer/cdn-whitelist
           flavor: suffix=bench
 
       - name: Generate state-relay-server docker metadata
@@ -299,36 +263,6 @@ jobs:
           tags: ${{ steps.legacy-sequencer.outputs.tags }}
           labels: ${{ steps.legacy-sequencer.outputs.labels }}
 
-      - name: Build and push cdn-broker docker
-        uses: docker/build-push-action@v7
-        with:
-          context: ./
-          file: ./docker/cdn-broker.Dockerfile
-          platforms: linux/amd64,linux/arm64
-          push: ${{ github.event_name != 'pull_request' }}
-          tags: ${{ steps.cdn-broker.outputs.tags }}
-          labels: ${{ steps.cdn-broker.outputs.labels }}
-
-      - name: Build and push cdn-marshal docker
-        uses: docker/build-push-action@v7
-        with:
-          context: ./
-          file: ./docker/cdn-marshal.Dockerfile
-          platforms: linux/amd64,linux/arm64
-          push: ${{ github.event_name != 'pull_request' }}
-          tags: ${{ steps.cdn-marshal.outputs.tags }}
-          labels: ${{ steps.cdn-marshal.outputs.labels }}
-
-      - name: Build and push cdn-whitelist docker
-        uses: docker/build-push-action@v7
-        with:
-          context: ./
-          file: ./docker/cdn-whitelist.Dockerfile
-          platforms: linux/amd64,linux/arm64
-          push: ${{ github.event_name != 'pull_request' }}
-          tags: ${{ steps.cdn-whitelist.outputs.tags }}
-          labels: ${{ steps.cdn-whitelist.outputs.labels }}
-
       - name: Build and push state-relay-server docker
         uses: docker/build-push-action@v7
         with:
@@ -421,9 +355,6 @@ jobs:
       - name: Pull docker images
         run: |
           docker pull ${{ needs.build-dockers.outputs.espresso-node-tag }}
-          docker pull ${{ needs.build-dockers.outputs.cdn-broker-tag }}
-          docker pull ${{ needs.build-dockers.outputs.cdn-marshal-tag }}
-          docker pull ${{ needs.build-dockers.outputs.cdn-whitelist-tag }}
           docker pull ${{ needs.build-dockers.outputs.state-relay-server-tag }}
           docker pull ${{ needs.build-dockers.outputs.prover-service-tag }}
           docker pull ${{ needs.build-dockers.outputs.orchestrator-tag }}
@@ -434,9 +365,6 @@ jobs:
       - name: Tag new docker images
         run: |
           docker tag ${{ needs.build-dockers.outputs.espresso-node-tag }} ghcr.io/espressosystems/espresso-network/espresso-node:main
-          docker tag ${{ needs.build-dockers.outputs.cdn-broker-tag }} ghcr.io/espressosystems/espresso-network/cdn-broker:main
-          docker tag ${{ needs.build-dockers.outputs.cdn-marshal-tag }} ghcr.io/espressosystems/espresso-network/cdn-marshal:main
-          docker tag ${{ needs.build-dockers.outputs.cdn-whitelist-tag }} ghcr.io/espressosystems/espresso-network/cdn-whitelist:main
           docker tag ${{ needs.build-dockers.outputs.state-relay-server-tag }} ghcr.io/espressosystems/espresso-network/state-relay-server:main
           docker tag ${{ needs.build-dockers.outputs.prover-service-tag }} ghcr.io/espressosystems/espresso-network/prover-service:main
           docker tag ${{ needs.build-dockers.outputs.orchestrator-tag }} ghcr.io/espressosystems/espresso-network/orchestrator:main

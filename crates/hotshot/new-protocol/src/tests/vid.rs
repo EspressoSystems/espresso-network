@@ -1,4 +1,4 @@
-use hotshot_example_types::node_types::TestTypes;
+use hotshot_example_types::{block_types::TestTransaction, node_types::TestTypes};
 use hotshot_types::{
     data::{VidCommitment2, VidDisperseShare2, ViewNumber, ns_table::parse_ns_table},
     signature_key::BLSPubKey,
@@ -10,8 +10,8 @@ use super::common::utils::{TestData, TestView};
 use crate::{
     tests::common::utils::vid_fragments,
     vid::{
-        VidFragmentAccumulator, VidFragmentError, VidReconstructErrorKind, VidReconstructor,
-        matches_commitment, ns_lens_match_metadata,
+        PinnedBy, VidFragmentAccumulator, VidFragmentError, VidReconstructErrorKind,
+        VidReconstructor, matches_commitment, ns_lens_match_metadata,
     },
 };
 
@@ -115,6 +115,41 @@ fn non_codeword_shares(view: &TestView) -> (VidCommitment2, Vec<VidDisperseShare
     (payload_commitment, shares)
 }
 
+/// A real dispersal of another payload over the view's committee: the shares
+/// the voters broadcast when the leader sent the quorum a proposal other than
+/// this node's. Addressed to the same voter keys `honest_share` uses.
+fn rival_shares(view: &TestView) -> (VidCommitment2, Vec<VidDisperseShare2<TestTypes>>) {
+    let template = &view.vid_shares[0];
+    let param = template.common.param.clone();
+    let weights: Vec<u32> = view
+        .vid_shares
+        .iter()
+        .map(|s| s.share.weight() as u32)
+        .collect();
+    let payload = TestTransaction::encode(&[TestTransaction::new(vec![0xc4u8; 32])]);
+    let (payload_commitment, common, shares) = AvidmGf2Scheme::ns_disperse(
+        &param,
+        &weights,
+        &payload,
+        std::iter::once(0..payload.len()),
+    )
+    .expect("rival dispersal");
+    let shares = shares
+        .into_iter()
+        .enumerate()
+        .map(|(i, share)| VidDisperseShare2::<TestTypes> {
+            view_number: template.view_number,
+            epoch: template.epoch,
+            target_epoch: template.target_epoch,
+            payload_commitment,
+            share,
+            recipient_key: BLSPubKey::generated_from_seed_indexed([0u8; 32], i as u64).0,
+            common: common.clone(),
+        })
+        .collect();
+    (payload_commitment, shares)
+}
+
 /// Feed a share as if it arrived from the voter it is addressed to (the
 /// honest case: the authenticated sender equals the share's `recipient_key`).
 fn feed(reconstructor: &mut VidReconstructor<TestTypes>, share: VidDisperseShare2<TestTypes>) {
@@ -123,7 +158,7 @@ fn feed(reconstructor: &mut VidReconstructor<TestTypes>, share: VidDisperseShare
 }
 
 /// Pin the reconstructor to the view's proposal, as the coordinator does
-/// when the validated proposal arrives.
+/// when the validated proposal pairs with this node's share.
 fn handle_proposal(reconstructor: &mut VidReconstructor<TestTypes>, view: &TestView) {
     reconstructor.handle_proposal(
         view.view_number,
@@ -133,6 +168,24 @@ fn handle_proposal(reconstructor: &mut VidReconstructor<TestTypes>, view: &TestV
         // The committee-fixed param the coordinator derives; equals the honest
         // shares' `common.param`.
         Some(view.vid_shares[0].common.param.clone()),
+        PinnedBy::Leader,
+    );
+}
+
+/// Pin the reconstructor to another proposal for the view on a certificate's
+/// word, as the coordinator does when consensus adopts a certified proposal.
+fn pin_certified(
+    reconstructor: &mut VidReconstructor<TestTypes>,
+    view: &TestView,
+    payload_commitment: VidCommitment2,
+) {
+    reconstructor.handle_proposal(
+        view.view_number,
+        payload_commitment,
+        view.proposal.data.block_header.metadata,
+        view.proposal.data.epoch,
+        Some(view.vid_shares[0].common.param.clone()),
+        PinnedBy::Certificate,
     );
 }
 
@@ -179,16 +232,28 @@ async fn assert_no_duplicate_success(
 /// Drive the reconstructor to a single successful reconstruction and assert it
 /// matches `view`'s commitment.
 async fn expect_reconstruction(reconstructor: &mut VidReconstructor<TestTypes>, view: &TestView) {
+    expect_reconstruction_of(
+        reconstructor,
+        view.view_number,
+        view.vid_shares[0].payload_commitment,
+    )
+    .await;
+}
+
+/// Drive the reconstructor to a single successful reconstruction and assert it
+/// is `payload_commitment`'s payload for `view`.
+async fn expect_reconstruction_of(
+    reconstructor: &mut VidReconstructor<TestTypes>,
+    view: ViewNumber,
+    payload_commitment: VidCommitment2,
+) {
     let out = tokio::time::timeout(std::time::Duration::from_secs(5), reconstructor.next())
         .await
         .expect("reconstruction should complete in time")
         .expect("should produce a result")
         .expect("reconstruction should succeed");
-    assert_eq!(out.view, view.view_number);
-    assert_eq!(
-        out.payload_commitment,
-        view.vid_shares[0].payload_commitment
-    );
+    assert_eq!(out.view, view);
+    assert_eq!(out.payload_commitment, payload_commitment);
 }
 
 /// Feeding shares beyond the threshold produces exactly one reconstruction
@@ -279,6 +344,95 @@ async fn test_shares_before_proposal_reconstruct_on_proposal() {
     // The proposal admits the pending shares; no further input is needed.
     handle_proposal(&mut reconstructor, view);
     expect_reconstruction(&mut reconstructor, view).await;
+}
+
+/// An equivocating leader paired this node with a proposal the quorum did not
+/// vote for. The voters' shares are for the certified one, so under the
+/// leader's pin they are held rather than dropped, and the certificate's pin
+/// replaces the leader's and admits them.
+#[tokio::test]
+async fn test_certified_proposal_replaces_the_leaders_pin() {
+    let test_data = TestData::new(1).await;
+    let view = &test_data.views[0];
+    let (rival_commitment, rival_shares) = rival_shares(view);
+    let mut reconstructor = VidReconstructor::<TestTypes>::new();
+
+    handle_proposal(&mut reconstructor, view);
+    feed(&mut reconstructor, honest_share(view, 0));
+    for share in &rival_shares[1..=THRESHOLD as usize] {
+        feed(&mut reconstructor, share.clone());
+    }
+    assert_no_reconstruction(
+        &mut reconstructor,
+        "the voters' shares under the leader's pin",
+    )
+    .await;
+
+    pin_certified(&mut reconstructor, view, rival_commitment);
+    expect_reconstruction_of(&mut reconstructor, view.view_number, rival_commitment).await;
+}
+
+/// The voters' shares may arrive before either proposal. The leader's pin
+/// admits only the shares for its commitment and keeps the rest held for the
+/// certificate's.
+#[tokio::test]
+async fn test_shares_held_before_any_pin_survive_the_leaders_pin() {
+    let test_data = TestData::new(1).await;
+    let view = &test_data.views[0];
+    let (rival_commitment, rival_shares) = rival_shares(view);
+    let mut reconstructor = VidReconstructor::<TestTypes>::new();
+
+    for share in &rival_shares[1..=THRESHOLD as usize] {
+        feed(&mut reconstructor, share.clone());
+    }
+    handle_proposal(&mut reconstructor, view);
+    feed(&mut reconstructor, honest_share(view, 0));
+    assert_no_reconstruction(&mut reconstructor, "the held shares under the leader's pin").await;
+
+    pin_certified(&mut reconstructor, view, rival_commitment);
+    expect_reconstruction_of(&mut reconstructor, view.view_number, rival_commitment).await;
+}
+
+/// A certificate's pin is final: the leader's proposal arriving after it,
+/// paired with this node's share, neither re-pins the view nor gets that share
+/// admitted.
+#[tokio::test]
+async fn test_leaders_proposal_does_not_replace_a_certified_pin() {
+    let test_data = TestData::new(1).await;
+    let view = &test_data.views[0];
+    let (rival_commitment, rival_shares) = rival_shares(view);
+    let mut reconstructor = VidReconstructor::<TestTypes>::new();
+
+    pin_certified(&mut reconstructor, view, rival_commitment);
+    handle_proposal(&mut reconstructor, view);
+    feed(&mut reconstructor, honest_share(view, 0));
+    for share in &rival_shares[1..=THRESHOLD as usize] {
+        feed(&mut reconstructor, share.clone());
+    }
+    expect_reconstruction_of(&mut reconstructor, view.view_number, rival_commitment).await;
+}
+
+/// A reconstruction of the leader's payload still running when the
+/// certificate re-pins the view neither retires the view nor stands in for
+/// the certified payload: only the certified one is reported.
+#[tokio::test]
+async fn test_superseded_reconstruction_is_dropped() {
+    let test_data = TestData::new(1).await;
+    let view = &test_data.views[0];
+    let (rival_commitment, rival_shares) = rival_shares(view);
+    let mut reconstructor = VidReconstructor::<TestTypes>::new();
+
+    handle_proposal(&mut reconstructor, view);
+    for i in 0..THRESHOLD {
+        feed(&mut reconstructor, honest_share(view, i));
+    }
+    for share in &rival_shares[1..=THRESHOLD as usize] {
+        feed(&mut reconstructor, share.clone());
+    }
+    pin_certified(&mut reconstructor, view, rival_commitment);
+
+    expect_reconstruction_of(&mut reconstructor, view.view_number, rival_commitment).await;
+    assert_no_duplicate_success(&mut reconstructor, "after the certified payload").await;
 }
 
 /// Shares whose common is not hash-bound to the proposal's commitment are
@@ -397,6 +551,7 @@ async fn test_non_codeword_payload_is_unrecoverable() {
         view.proposal.data.block_header.metadata,
         view.proposal.data.epoch,
         Some(shares[0].common.param.clone()),
+        PinnedBy::Leader,
     );
 
     // Feed just enough verifying shares to cover the recovery threshold.

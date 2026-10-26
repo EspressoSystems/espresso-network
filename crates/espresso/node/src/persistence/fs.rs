@@ -17,7 +17,7 @@ use espresso_types::{
     AuthenticatedValidatorMap, Header, Leaf2, NetworkConfig, Payload, PubKey,
     RegisteredValidatorMap, SeqTypes, StakeTableHash,
     traits::{EventsPersistenceRead, MembershipPersistence, StakeTuple},
-    v0::traits::{EventConsumer, PersistenceOptions, SequencerPersistence},
+    v0::traits::{EventConsumer, PersistenceOptions, SequencerPersistence, StateCertPersistence},
     v0_3::{
         AuthenticatedValidator, EventKey, IndexedStake, RegisteredValidator, RewardAmount,
         StakeTableEvent,
@@ -1541,6 +1541,14 @@ impl SequencerPersistence for Persistence {
         Ok(result)
     }
 
+    fn enable_metrics(&mut self, metrics: &dyn Metrics) {
+        self.metrics = Arc::new(PersistenceMetricsValue::new(metrics));
+        self.probe.register(&*metrics.subgroup("disk".into()));
+    }
+}
+
+#[async_trait]
+impl StateCertPersistence for Persistence {
     async fn get_state_cert_by_epoch(
         &self,
         epoch: u64,
@@ -1601,11 +1609,6 @@ impl SequencerPersistence for Persistence {
         ))?;
 
         Ok(())
-    }
-
-    fn enable_metrics(&mut self, metrics: &dyn Metrics) {
-        self.metrics = Arc::new(PersistenceMetricsValue::new(metrics));
-        self.probe.register(&*metrics.subgroup("disk".into()));
     }
 }
 
