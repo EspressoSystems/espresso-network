@@ -4,7 +4,7 @@ repos:
     hooks:
       - id: doc
         name: Generate figures
-        entry: make doc
+        entry: just doc-figures
         language: system
         types_or: [plantuml]
         pass_filenames: false

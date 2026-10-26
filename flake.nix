@@ -104,17 +104,24 @@
             inherit pkgs rustShellHook;
             envVars = rustEnvVars;
           };
+      stableToolchain = pkgs.rust-bin.fromRustupToolchainFile ./rust-toolchain.toml;
+      rustDevEnv = rustEnvVars // {
+        RUST_SRC_PATH = "${stableToolchain}/lib/rustlib/src/rust/library";
+      };
+      solc = pkgs.solc-bin."0.8.35";
+      # inputsFrom merges packages and shellHooks, not stdenv or env vars
+      addOnShell = { inputsFrom ? [ self.devShells.${system}.default ], ... }@attrs:
+        myShell (rustDevEnv // attrs // { inherit inputsFrom; });
     in
     {
       devShells.default =
         let
-          stableToolchain = pkgs.rust-bin.fromRustupToolchainFile ./rust-toolchain.toml;
           # Bump the date when a newer rust-analyzer/rustfmt is wanted.
           nightlyToolchain = pkgs.rust-bin.nightly."2026-04-16".minimal.override {
             extensions = [ "rust-analyzer" "rustfmt" ];
           };
         in
-        myShell (rustEnvVars // {
+        myShell (rustDevEnv // {
           packages = with pkgs; [
             pkg-config
             openssl
@@ -138,7 +145,7 @@
             process-compose
             postgresql_18 # TmpDb in rust tests, scripts/run-postgres for demo-native
             datadog-pup
-            lazydocker # used by `just demo-docker`
+            lazydocker # used by `just demo`
             foundry # need `anvil` in rust tests
             prettier
             solhint
@@ -157,38 +164,27 @@
               prek install -q --overwrite
             fi
           '';
-          RUST_SRC_PATH = "${stableToolchain}/lib/rustlib/src/rust/library";
         });
-      devShells.docs = pkgs.mkShellNoCC {
-        inputsFrom = [ self.devShells.${system}.default ];
+      devShells.docs = addOnShell {
         packages = with pkgs; [ graphviz plantuml mdbook ];
       };
 
-      devShells.go = pkgs.mkShellNoCC {
-        inputsFrom = [ self.devShells.${system}.default ];
+      devShells.go = addOnShell {
         packages = [ pkgs.go_1_27 golangci-lint ];
       };
 
-      devShells.contracts =
-        let
-          solc = pkgs.solc-bin."0.8.35";
-        in
-        pkgs.mkShellNoCC {
-          inputsFrom = [ self.devShells.${system}.default ];
-          packages = [
-            solc
-            pkgs.go-ethereum
-          ];
-          FOUNDRY_SOLC = "${solc}/bin/solc";
-        };
-
-      devShells.mutation = pkgs.mkShellNoCC {
-        inputsFrom = [ self.devShells.${system}.contracts ];
-        packages = [ dregs.packages.${system}.unwrapped ];
+      devShells.contracts = addOnShell {
+        packages = [ solc pkgs.go-ethereum ];
+        FOUNDRY_SOLC = "${solc}/bin/solc";
       };
 
-      devShells.python = pkgs.mkShellNoCC {
-        inputsFrom = [ self.devShells.${system}.default ];
+      devShells.mutation = addOnShell {
+        inputsFrom = [ self.devShells.${system}.contracts ];
+        packages = [ dregs.packages.${system}.unwrapped ];
+        FOUNDRY_SOLC = "${solc}/bin/solc";
+      };
+
+      devShells.python = addOnShell {
         packages = with pkgs; [ python3 uv ruff ty ];
         # Let uv-installed binary wheels (matplotlib/numpy/...) find libstdc++ on NixOS.
         shellHook = ''
@@ -196,18 +192,15 @@
         '';
       };
 
-      devShells.aws = pkgs.mkShellNoCC {
+      devShells.aws = addOnShell {
         inputsFrom = [ self.devShells.${system}.python ];
         packages = with pkgs; [ opentofu awscli2 ]; # scripts/network-bench/aws
       };
 
-      devShells.dockerShell = pkgs.mkShell {
-        inputsFrom = [ self.devShells.${system}.default ];
+      devShells.dockerShell = addOnShell {
         packages = [ pkgs.docker ];
+        # Required for demo-native to run with docker-rootless
         shellHook = ''
-          ${self.devShells.${system}.default.shellHook}
-
-          # Required for demo-native to run with docker-rootless
           export DOCKER_HOST=unix://$XDG_RUNTIME_DIR/docker.sock
         '';
       };

@@ -2,20 +2,27 @@
 # Runner for just `[script]` recipes: runs the body directly if all commands are on PATH,
 # otherwise inside the given nix dev shell.
 #
-# usage: with-tools <devshell> <command>... <script>
+# usage: with-tools <devshell> <command>... <script> [args...]
+# The script is the first absolute path; just passes recipe args after it with `set positional-arguments`.
 set -euo pipefail
 
 shell=$1
-script=${!#}
-cmds=("${@:2:$#-2}")
+shift
+cmds=()
+while [[ $1 != /* ]]; do
+    cmds+=("$1")
+    shift
+done
+script=$1
+shift
 
 missing=()
-for cmd in "${cmds[@]}"; do
+for cmd in ${cmds[@]+"${cmds[@]}"}; do
     command -v "$cmd" >/dev/null || missing+=("$cmd")
 done
 
 if [ ${#missing[@]} -eq 0 ]; then
-    exec bash -euo pipefail "$script"
+    exec bash -euo pipefail "$script" "$@"
 fi
 
 if ! command -v nix >/dev/null; then
@@ -23,5 +30,9 @@ if ! command -v nix >/dev/null; then
     exit 127
 fi
 
+# Enter the shell from the repo root so its shellHook sets repo-relative paths (CARGO_TARGET_DIR).
+cwd=$PWD
 root=$(CDPATH='' cd -- "$(dirname "$0")/.." && pwd)
-exec nix develop "$root#$shell" --quiet --accept-flake-config -c bash -euo pipefail "$script"
+cd "$root"
+exec nix develop "$root#$shell" --quiet --accept-flake-config -c \
+    bash -c 'cd "$1" && shift && exec bash -euo pipefail "$@"' _ "$cwd" "$script" "$@"
