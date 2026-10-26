@@ -1980,7 +1980,7 @@ where
     #[tracing::instrument(skip_all)]
     async fn aggregate(self: Arc<Self>, chunk_size: usize, metrics: AggregatorMetrics) {
         loop {
-            let prev_aggregate = loop {
+            let (prev_aggregate, pruned_height) = loop {
                 let mut tx = match self.read().await {
                     Ok(tx) => tx,
                     Err(err) => {
@@ -1989,20 +1989,20 @@ where
                         continue;
                     },
                 };
-                match tx.load_prev_aggregate().await {
-                    Ok(agg) => break agg,
-                    Err(err) => {
-                        tracing::error!("unable to load previous aggregate: {err:#}");
+                match (
+                    tx.load_prev_aggregate().await,
+                    tx.load_pruned_height().await,
+                ) {
+                    (Ok(agg), Ok(pruned_height)) => break (agg, pruned_height),
+                    (Err(err), _) | (_, Err(err)) => {
+                        tracing::error!("unable to load where the aggregator starts: {err:#}");
                         sleep(Duration::from_secs(5)).await;
                         continue;
                     },
                 }
             };
 
-            let (start, mut prev_aggregate) = match prev_aggregate {
-                Some(aggregate) => (aggregate.height as usize + 1, aggregate),
-                None => (0, Aggregate::default()),
-            };
+            let (start, mut prev_aggregate) = aggregator_start(prev_aggregate, pruned_height);
 
             tracing::debug!(start, "starting aggregator");
             metrics.height.set(start);
@@ -2065,6 +2065,37 @@ where
             tracing::debug!("aggregator stream restarting");
         }
     }
+}
+
+/// Where the aggregator resumes, with the aggregate it builds on: just above its last aggregate, or,
+/// with none yet, just above the pruned data, which it could never read. The totals then count from
+/// there, and ranges that start lower have none.
+fn aggregator_start<Types>(
+    prev: Option<Aggregate<Types>>,
+    pruned_height: Option<u64>,
+) -> (usize, Aggregate<Types>)
+where
+    Types: NodeType,
+    Header<Types>: QueryableHeader<Types>,
+{
+    let (start, prev) = match prev {
+        Some(aggregate) => (aggregate.height as usize + 1, aggregate),
+        None => (
+            pruned_height.map_or(0, |height| height as usize + 1),
+            Aggregate::default(),
+        ),
+    };
+    if let Some(pruned_height) = pruned_height
+        && start <= pruned_height as usize
+    {
+        tracing::error!(
+            start,
+            pruned_height,
+            "the aggregator fell behind the data pruner and cannot continue: the next block it \
+             needs is pruned"
+        );
+    }
+    (start, prev)
 }
 
 impl<Types, S, P> Fetcher<Types, S, P>
@@ -3479,6 +3510,50 @@ mod test {
             .await
             .expect("aggregate should be available after recovery");
         assert_eq!(total, expected_total);
+    }
+
+    /// With no aggregates yet, the aggregator starts just above the data pruned height, as on a
+    /// node whose pruner ran first. Blocks at or below it are never fetched, so an aggregator
+    /// starting at genesis would wait for them forever.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_aggregator_starts_above_pruned_height() {
+        let storage = TmpDb::init().await;
+        let db = SqlStorage::connect(storage.config(), StorageConnectionType::Query)
+            .await
+            .unwrap();
+
+        // Store only the blocks above the pruned height, before the aggregator starts.
+        let n = 5;
+        let pruned = 1;
+        let (leaves, blocks) = mock_chain(n).await;
+        {
+            let mut tx = db.write().await.unwrap();
+            for (leaf, block) in leaves.iter().zip(&blocks).skip(pruned + 1) {
+                tx.insert_leaf(leaf).await.unwrap();
+                tx.insert_block(block).await.unwrap();
+            }
+            tx.save_pruned_height(pruned as u64).await.unwrap();
+            tx.commit().await.unwrap();
+        }
+        let ds = MockSqlDataSource::builder(db, NoFetching)
+            .build()
+            .await
+            .unwrap();
+
+        // The block at height i has i + 1 transactions.
+        let total = poll_until(
+            Duration::from_secs(30),
+            Duration::from_millis(500),
+            || async {
+                ds.count_transactions_in_range(pruned + 1..n, None)
+                    .await
+                    .ok()
+            },
+        )
+        .await;
+        assert_eq!(total, (pruned + 2..=n).sum::<usize>());
+        let err = ds.count_transactions_in_range(.., None).await.unwrap_err();
+        assert!(matches!(err, QueryError::Pruned { .. }), "{err:?}");
     }
 
     /// `n` mock leaves and blocks from genesis on, where the block at height `i` has `i + 1`
