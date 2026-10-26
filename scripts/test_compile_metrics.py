@@ -376,11 +376,11 @@ class AlertCauses(unittest.TestCase):
         """Binary names carry no `": "`, which is what separates the two shapes."""
         rows = [
             cm.Change("j", binary, ".text", 10**7, 2 * 10**7, 2.0)
-            for binary in ("espresso-node", "espresso-node-sqlite")
+            for binary in ("espresso-node", "espresso-dev-node")
         ]
         self.assertEqual(
             cm.alert_causes(rows),
-            {(".text", "espresso-node"), (".text", "espresso-node-sqlite")},
+            {(".text", "espresso-node"), (".text", "espresso-dev-node")},
         )
 
 

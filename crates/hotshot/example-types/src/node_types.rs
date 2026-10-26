@@ -8,19 +8,14 @@ use std::{
     marker::PhantomData,
 };
 
-use hotshot::traits::{
-    NodeImplementation,
-    implementations::{CombinedNetworks, Libp2pNetwork, MemoryNetwork, PushCdnNetwork},
-};
 use hotshot_types::{
     constants::TEST_UPGRADE_CONSTANTS,
     signature_key::{BLSPubKey, BuilderKey, SchnorrPubKey},
     traits::node_implementation::NodeType,
     upgrade_config::UpgradeConstants,
 };
-use serde::{Deserialize, Serialize};
 use vbs::version::StaticVersion;
-use versions::{Upgrade, version};
+use versions::{NEW_PROTOCOL_VERSION, Upgrade, version};
 
 pub use crate::membership::helpers::{RandomOverlapQuorumFilterConfig, StableQuorumFilterConfig};
 use crate::{
@@ -33,7 +28,6 @@ use crate::{
         strict_membership::StrictMembership, two_static_committees::TwoStakeTables,
     },
     state_types::{TestInstanceState, TestValidatedState},
-    storage_types::TestStorage,
 };
 
 #[derive(
@@ -266,46 +260,6 @@ impl NodeType for TestTwoStakeTablesTypes {
     type StateSignatureKey = SchnorrPubKey;
 }
 
-/// The Push CDN implementation
-#[derive(Clone, Debug, Deserialize, Serialize, Hash, Eq, PartialEq)]
-pub struct PushCdnImpl;
-
-/// Memory network implementation
-#[derive(Clone, Debug, Deserialize, Serialize, Hash, Eq, PartialEq)]
-pub struct MemoryImpl;
-
-/// Libp2p network implementation
-#[derive(Clone, Debug, Deserialize, Serialize, Hash, Eq, PartialEq)]
-pub struct Libp2pImpl;
-
-/// Web server network implementation
-#[derive(Clone, Debug, Deserialize, Serialize, Hash, Eq, PartialEq)]
-pub struct WebImpl;
-
-/// Combined Network implementation (libp2p + web server)
-#[derive(Clone, Debug, Deserialize, Serialize, Hash, Eq, PartialEq)]
-pub struct CombinedImpl;
-
-impl<TYPES: NodeType> NodeImplementation<TYPES> for PushCdnImpl {
-    type Network = PushCdnNetwork<TYPES::SignatureKey>;
-    type Storage = TestStorage<TYPES>;
-}
-
-impl<TYPES: NodeType> NodeImplementation<TYPES> for MemoryImpl {
-    type Network = MemoryNetwork<TYPES::SignatureKey>;
-    type Storage = TestStorage<TYPES>;
-}
-
-impl<TYPES: NodeType> NodeImplementation<TYPES> for CombinedImpl {
-    type Network = CombinedNetworks<TYPES>;
-    type Storage = TestStorage<TYPES>;
-}
-
-impl<TYPES: NodeType> NodeImplementation<TYPES> for Libp2pImpl {
-    type Network = Libp2pNetwork<TYPES>;
-    type Storage = TestStorage<TYPES>;
-}
-
 #[non_exhaustive]
 pub struct TestVersions {
     pub test: Upgrade,
@@ -319,8 +273,8 @@ pub struct TestVersions {
 pub const TEST_VERSIONS: TestVersions = TestVersions {
     epoch: Upgrade::trivial(version(0, 3)),
     da_committee: Upgrade::trivial(version(0, 4)),
-    vid2: Upgrade::trivial(version(0, 6)),
-    test: Upgrade::new(version(0, 1), version(0, 2)),
+    vid2: Upgrade::trivial(NEW_PROTOCOL_VERSION),
+    test: Upgrade::trivial(NEW_PROTOCOL_VERSION),
     epoch_upgrade: Upgrade::new(version(0, 3), version(0, 4)),
     vid2_upgrade: Upgrade::new(version(0, 5), version(0, 6)),
 };

@@ -419,6 +419,9 @@ class DeploymentMeta(TypedDict):
     staking: NotRequired[bool]
     # How far the light-client prover got on ctl; absent without `--prover`.
     prover: NotRequired[str]
+    # `--slow-nodes`: the nodes whose espresso-node ran on `slow_cores` cores; absent without.
+    slow_nodes: NotRequired[list[str]]
+    slow_cores: NotRequired[int]
 
 
 class BenchResult(TypedDict):
@@ -3582,6 +3585,11 @@ def deployment_lines(result: BenchResult) -> list[str]:
         *(
             ["- node env: " + ", ".join(f"`{pair}`" for pair in d["node_env"])]
             if "node_env" in d
+            else []
+        ),
+        *(
+            [f"- slow nodes: {', '.join(d['slow_nodes'])} on {d['slow_cores']} cores"]
+            if "slow_nodes" in d and "slow_cores" in d
             else []
         ),
         *prune_lines(result),

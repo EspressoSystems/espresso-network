@@ -4,7 +4,7 @@ use ::light_client::{
     LightClient,
     client::{FallbackClient, QueryServiceClient},
     state::{Genesis, LightClientOptions},
-    storage::LightClientSqliteOptions,
+    storage::LightClientDbOptions,
 };
 use alloy::primitives::U256;
 use anyhow::{Context, bail, ensure};
@@ -23,7 +23,7 @@ use espresso_types::{
     config::PublicNetworkConfig,
     retain_accounts,
     traits::{EventsPersistenceRead, MembershipPersistence},
-    v0::traits::{SequencerPersistence, StateCatchup},
+    v0::traits::{SequencerPersistence, StateCatchup, StateCertPersistence},
     v0_3::{
         ChainConfig, RegisteredValidator, RewardAccountQueryDataV1, RewardAccountV1, RewardAmount,
         RewardMerkleTreeV1, StakeTableEvent,
@@ -64,10 +64,8 @@ use self::data_source::{
     HotShotConfigDataSource, NodeKeysDataSource, NodePublicKeys, NodeStateDataSource,
     StateSignatureDataSource,
 };
-#[cfg(any(test, feature = "testing"))]
-use crate::SequencerContext;
 use crate::{
-    SeqTypes, SequencerApiVersion,
+    SeqTypes,
     api::{
         context::{ApiContext, ConsensusSource, NodeLightClient},
         data_source::TokenDataSource,
@@ -84,13 +82,19 @@ use crate::{
     },
     state_cert::{StateCertFetchError, validate_state_cert},
 };
+#[cfg(any(test, feature = "testing"))]
+use crate::{SequencerApiVersion, SequencerContext};
 
 pub mod context;
 pub mod data_source;
 pub mod fs;
 pub mod light_client;
 pub mod options;
-pub mod sql;
+/// The query service over a SQL database, with one module per backend.
+pub mod sql {
+    pub mod postgres;
+    pub mod sqlite;
+}
 pub mod state;
 pub mod unlock_schedule;
 mod update;
@@ -104,20 +108,20 @@ type BoxLazy<T> = Pin<Arc<Lazy<T, BoxFuture<'static, T>>>>;
 
 #[derive(Derivative)]
 #[derivative(Clone(bound = ""), Debug(bound = ""))]
-struct ApiState<C: ApiContext> {
+struct ApiState {
     // The node context is initialized lazily so we can start the API (and healthcheck endpoints)
     // before consensus has started. Any endpoint that uses consensus state will wait for
     // initialization to finish, but endpoints that do not require a consensus handle can proceed
     // without waiting.
     #[derivative(Debug = "ignore")]
-    context: BoxLazy<C>,
+    context: BoxLazy<Box<dyn ApiContext>>,
 
     // we cache `token_supply` for up to an hour, to avoid repeatedly querying the contract for information that rarely changes
     token_supply: Cache<(), U256>,
 }
 
-impl<C: ApiContext> ApiState<C> {
-    fn new(context_init: impl Future<Output = C> + Send + 'static) -> Self {
+impl ApiState {
+    fn new(context_init: impl Future<Output = Box<dyn ApiContext>> + Send + 'static) -> Self {
         Self {
             context: Arc::pin(Lazy::from_future(context_init.boxed())),
             token_supply: Cache::builder()
@@ -127,16 +131,20 @@ impl<C: ApiContext> ApiState<C> {
         }
     }
 
-    async fn context(&self) -> &C {
-        self.context.as_ref().get().await.get_ref()
+    async fn context(&self) -> &dyn ApiContext {
+        self.context.as_ref().get().await.get_ref().as_ref()
     }
 
     async fn consensus(&self) -> Arc<dyn ConsensusSource> {
         self.context().await.consensus()
     }
 
-    async fn persistence(&self) -> Arc<C::Persistence> {
-        self.context().await.persistence()
+    async fn membership(&self) -> Arc<dyn MembershipPersistence> {
+        self.context().await.membership()
+    }
+
+    async fn state_certs(&self) -> Arc<dyn StateCertPersistence> {
+        self.context().await.state_certs()
     }
 
     async fn network_config(&self) -> NetworkConfig<SeqTypes> {
@@ -144,9 +152,9 @@ impl<C: ApiContext> ApiState<C> {
     }
 }
 
-type StorageState<C, D> = ExtensibleDataSource<D, ApiState<C>>;
+type StorageState<D> = ExtensibleDataSource<D, ApiState>;
 
-impl<C: ApiContext, D: Send + Sync> TokenDataSource<SeqTypes> for StorageState<C, D> {
+impl<D: Send + Sync> TokenDataSource<SeqTypes> for StorageState<D> {
     async fn get_initial_supply_l1(&self) -> anyhow::Result<U256> {
         self.as_ref().get_initial_supply_l1().await
     }
@@ -160,13 +168,13 @@ impl<C: ApiContext, D: Send + Sync> TokenDataSource<SeqTypes> for StorageState<C
     }
 }
 
-impl<C: ApiContext, D: Send + Sync> SubmitDataSource for StorageState<C, D> {
+impl<D: Send + Sync> SubmitDataSource for StorageState<D> {
     async fn submit(&self, tx: Transaction) -> anyhow::Result<Commitment<Transaction>> {
         self.as_ref().submit(tx).await
     }
 }
 
-impl<C: ApiContext, D: Sync> StakeTableDataSource<SeqTypes> for StorageState<C, D> {
+impl<D: Sync> StakeTableDataSource<SeqTypes> for StorageState<D> {
     /// Get the stake table for a given epoch
     async fn get_stake_table(
         &self,
@@ -246,7 +254,7 @@ impl<C: ApiContext, D: Sync> StakeTableDataSource<SeqTypes> for StorageState<C, 
     }
 }
 
-impl<C: ApiContext> TokenDataSource<SeqTypes> for ApiState<C> {
+impl TokenDataSource<SeqTypes> for ApiState {
     async fn get_initial_supply_l1(&self) -> anyhow::Result<U256> {
         let node_state = self.context().await.node_state();
         let fetcher = node_state.coordinator.membership().fetcher().clone();
@@ -287,7 +295,7 @@ impl<C: ApiContext> TokenDataSource<SeqTypes> for ApiState<C> {
     }
 }
 
-impl<C: ApiContext> StakeTableDataSource<SeqTypes> for ApiState<C> {
+impl StakeTableDataSource<SeqTypes> for ApiState {
     /// Get the stake table for a given epoch
     async fn get_stake_table(
         &self,
@@ -426,8 +434,10 @@ impl<C: ApiContext> StakeTableDataSource<SeqTypes> for ApiState<C> {
         offset: u64,
         limit: u64,
     ) -> anyhow::Result<Vec<RegisteredValidator<PubKey>>> {
-        let storage = self.persistence().await;
-        storage.load_all_validators(epoch, offset, limit).await
+        self.membership()
+            .await
+            .load_all_validators(epoch, offset, limit)
+            .await
     }
 
     async fn stake_table_events(
@@ -435,8 +445,11 @@ impl<C: ApiContext> StakeTableDataSource<SeqTypes> for ApiState<C> {
         from_l1_block: u64,
         to_l1_block: u64,
     ) -> anyhow::Result<Vec<StakeTableEvent>> {
-        let storage = self.persistence().await;
-        let (status, events) = storage.load_events(from_l1_block, to_l1_block).await?;
+        let (status, events) = self
+            .membership()
+            .await
+            .load_events(from_l1_block, to_l1_block)
+            .await?;
         ensure!(
             status == Some(EventsPersistenceRead::Complete),
             "some events in range [{from_l1_block}, {to_l1_block}] are not available ({status:?})"
@@ -445,7 +458,7 @@ impl<C: ApiContext> StakeTableDataSource<SeqTypes> for ApiState<C> {
     }
 }
 
-impl<C: ApiContext, D: Sync> RequestResponseDataSource<SeqTypes> for StorageState<C, D> {
+impl<D: Sync> RequestResponseDataSource<SeqTypes> for StorageState<D> {
     async fn request_vid_shares(
         &self,
         block_number: u64,
@@ -459,7 +472,7 @@ impl<C: ApiContext, D: Sync> RequestResponseDataSource<SeqTypes> for StorageStat
 }
 
 #[async_trait]
-impl<C: ApiContext, D: Sync> StateCertFetchingDataSource<SeqTypes> for StorageState<C, D> {
+impl<D: Sync> StateCertFetchingDataSource<SeqTypes> for StorageState<D> {
     async fn request_state_cert(
         &self,
         epoch: u64,
@@ -469,7 +482,7 @@ impl<C: ApiContext, D: Sync> StateCertFetchingDataSource<SeqTypes> for StorageSt
     }
 }
 
-impl<C: ApiContext> RequestResponseDataSource<SeqTypes> for ApiState<C> {
+impl RequestResponseDataSource<SeqTypes> for ApiState {
     async fn request_vid_shares(
         &self,
         block_number: u64,
@@ -559,7 +572,7 @@ where
 }
 
 #[async_trait]
-impl<C: ApiContext> StateCertFetchingDataSource<SeqTypes> for ApiState<C> {
+impl StateCertFetchingDataSource<SeqTypes> for ApiState {
     async fn request_state_cert(
         &self,
         epoch: u64,
@@ -645,7 +658,7 @@ impl<C: ApiContext> StateCertFetchingDataSource<SeqTypes> for ApiState<C> {
 
 // Thin wrapper implementations that delegate to persistence
 #[async_trait]
-impl<C: ApiContext, D: Sync> StateCertDataSource for StorageState<C, D> {
+impl<D: Sync> StateCertDataSource for StorageState<D> {
     async fn get_state_cert_by_epoch(
         &self,
         epoch: u64,
@@ -663,13 +676,15 @@ impl<C: ApiContext, D: Sync> StateCertDataSource for StorageState<C, D> {
 }
 
 #[async_trait]
-impl<C: ApiContext> StateCertDataSource for ApiState<C> {
+impl StateCertDataSource for ApiState {
     async fn get_state_cert_by_epoch(
         &self,
         epoch: u64,
     ) -> anyhow::Result<Option<LightClientStateUpdateCertificateV2<SeqTypes>>> {
-        let storage = self.persistence().await;
-        storage.get_state_cert_by_epoch(epoch).await
+        self.state_certs()
+            .await
+            .get_state_cert_by_epoch(epoch)
+            .await
     }
 
     async fn insert_state_cert(
@@ -677,12 +692,14 @@ impl<C: ApiContext> StateCertDataSource for ApiState<C> {
         epoch: u64,
         cert: LightClientStateUpdateCertificateV2<SeqTypes>,
     ) -> anyhow::Result<()> {
-        let storage = self.persistence().await;
-        storage.insert_state_cert(epoch, cert).await
+        self.state_certs()
+            .await
+            .insert_state_cert(epoch, cert)
+            .await
     }
 }
 
-impl<C: ApiContext> SubmitDataSource for ApiState<C> {
+impl SubmitDataSource for ApiState {
     async fn submit(&self, tx: Transaction) -> anyhow::Result<Commitment<Transaction>> {
         let handle = self.consensus().await;
 
@@ -717,14 +734,13 @@ impl<C: ApiContext> SubmitDataSource for ApiState<C> {
     }
 }
 
-impl<C: ApiContext, D: Sync> NodeStateDataSource for StorageState<C, D> {
+impl<D: Sync> NodeStateDataSource for StorageState<D> {
     async fn node_state(&self) -> NodeState {
         self.as_ref().node_state().await
     }
 }
 
-impl<C: ApiContext, D: CatchupStorage + Send + Sync> data_source::DatabaseMetadataSource
-    for StorageState<C, D>
+impl<D: CatchupStorage + Send + Sync> data_source::DatabaseMetadataSource for StorageState<D>
 where
     D: data_source::DatabaseMetadataSource + Send + Sync,
 {
@@ -737,8 +753,7 @@ where
     }
 }
 
-impl<C: ApiContext, D: CatchupStorage + Send + Sync> data_source::PruningDataSource
-    for StorageState<C, D>
+impl<D: CatchupStorage + Send + Sync> data_source::PruningDataSource for StorageState<D>
 where
     D: data_source::PruningDataSource + Send + Sync,
 {
@@ -757,7 +772,7 @@ where
     }
 }
 
-impl<C: ApiContext, D: CatchupStorage + Send + Sync> CatchupDataSource for StorageState<C, D> {
+impl<D: CatchupStorage + Send + Sync> CatchupDataSource for StorageState<D> {
     #[tracing::instrument(skip(self, instance))]
     async fn get_accounts(
         &self,
@@ -951,21 +966,22 @@ impl<C: ApiContext, D: CatchupStorage + Send + Sync> CatchupDataSource for Stora
         &self,
         epoch: u64,
     ) -> anyhow::Result<LightClientStateUpdateCertificateV2<SeqTypes>> {
-        let storage = self.as_ref().persistence().await;
-        storage
+        self.as_ref()
+            .state_certs()
+            .await
             .get_state_cert_by_epoch(epoch)
             .await?
             .context(format!("state cert for epoch {epoch} not found"))
     }
 }
 
-impl<C: ApiContext> NodeStateDataSource for ApiState<C> {
+impl NodeStateDataSource for ApiState {
     async fn node_state(&self) -> NodeState {
         self.context().await.node_state()
     }
 }
 
-impl<C: ApiContext> CatchupDataSource for ApiState<C> {
+impl CatchupDataSource for ApiState {
     #[tracing::instrument(skip(self, _instance))]
     async fn get_accounts(
         &self,
@@ -1109,25 +1125,25 @@ impl<C: ApiContext> CatchupDataSource for ApiState<C> {
     }
 }
 
-impl<C: ApiContext, D: Sync> HotShotConfigDataSource for StorageState<C, D> {
+impl<D: Sync> HotShotConfigDataSource for StorageState<D> {
     async fn get_config(&self) -> PublicNetworkConfig {
         self.as_ref().network_config().await.into()
     }
 }
 
-impl<C: ApiContext> HotShotConfigDataSource for ApiState<C> {
+impl HotShotConfigDataSource for ApiState {
     async fn get_config(&self) -> PublicNetworkConfig {
         self.network_config().await.into()
     }
 }
 
-impl<C: ApiContext, D: Sync> NodeKeysDataSource for StorageState<C, D> {
+impl<D: Sync> NodeKeysDataSource for StorageState<D> {
     async fn node_public_keys(&self) -> Option<NodePublicKeys> {
         self.as_ref().node_public_keys().await
     }
 }
 
-impl<C: ApiContext> NodeKeysDataSource for ApiState<C> {
+impl NodeKeysDataSource for ApiState {
     async fn node_public_keys(&self) -> Option<NodePublicKeys> {
         let ctx = self.context().await;
         let config = ctx.validator_config()?;
@@ -1149,14 +1165,14 @@ impl<C: ApiContext> NodeKeysDataSource for ApiState<C> {
 }
 
 #[async_trait]
-impl<C: ApiContext, D: Sync> StateSignatureDataSource for StorageState<C, D> {
+impl<D: Sync> StateSignatureDataSource for StorageState<D> {
     async fn get_state_signature(&self, height: u64) -> Option<LCV3StateSignatureRequestBody> {
         self.as_ref().get_state_signature(height).await
     }
 }
 
 #[async_trait]
-impl<C: ApiContext> StateSignatureDataSource for ApiState<C> {
+impl StateSignatureDataSource for ApiState {
     async fn get_state_signature(&self, height: u64) -> Option<LCV3StateSignatureRequestBody> {
         self.context()
             .await
@@ -1211,14 +1227,7 @@ pub(crate) trait RewardMerkleTreeDataSource: Send + Sync + Clone + 'static {
         merkle_tree: &RewardMerkleTreeV2,
     ) -> impl Send + Future<Output = anyhow::Result<()>> {
         async move {
-            // The merklized state loop always applies full blocks, so an incomplete
-            // tree here indicates something is seriously wrong.
-            let tree_data = TryInto::<RewardMerkleTreeV2Data>::try_into(merkle_tree).inspect_err(
-                |err| tracing::error!(%err, height, "cannot persist incomplete RewardMerkleTreeV2"),
-            )?;
-            let serialization =
-                bincode::serialize(&tree_data).context("Merkle tree serialization failed")?;
-            self.persist_tree(height, serialization).await?;
+            self.save_reward_tree_v2(height, merkle_tree).await?;
 
             // Skip garbage collection in tests
             if cfg!(any(test, feature = "testing")) {
@@ -1271,6 +1280,25 @@ pub(crate) trait RewardMerkleTreeDataSource: Send + Sync + Clone + 'static {
             }
 
             Ok(())
+        }
+    }
+
+    /// Store `merkle_tree`, the whole reward tree at `height`, as key-value pairs.
+    fn save_reward_tree_v2(
+        &self,
+        height: u64,
+        merkle_tree: &RewardMerkleTreeV2,
+    ) -> impl Send + Future<Output = anyhow::Result<()>> {
+        async move {
+            // Every caller holds the whole tree: the merklized state loop always applies full
+            // blocks, and the trees it starts from are whole. So an incomplete tree here indicates
+            // something is seriously wrong.
+            let tree_data = TryInto::<RewardMerkleTreeV2Data>::try_into(merkle_tree).inspect_err(
+                |err| tracing::error!(%err, height, "cannot persist incomplete RewardMerkleTreeV2"),
+            )?;
+            let serialization =
+                bincode::serialize(&tree_data).context("Merkle tree serialization failed")?;
+            self.persist_tree(height, serialization).await
         }
     }
 
@@ -1706,20 +1734,20 @@ pub(crate) fn light_client_genesis(config: &NetworkConfig<SeqTypes>, chain_id: C
 /// tries again.
 #[derive(Derivative)]
 #[derivative(Debug(bound = ""))]
-pub(crate) struct LightClientProvider<C: ApiContext> {
+pub(crate) struct LightClientProvider {
     light_client: OnceCell<Arc<NodeLightClient>>,
-    state: ApiState<C>,
+    state: ApiState,
     client: FallbackClient<QueryServiceClient>,
     opt: LightClientOptions,
-    db_opt: LightClientSqliteOptions,
+    db_opt: LightClientDbOptions,
 }
 
-impl<C: ApiContext> LightClientProvider<C> {
+impl LightClientProvider {
     fn new(
         peers: impl IntoIterator<Item = Url>,
-        state: ApiState<C>,
+        state: ApiState,
         opt: LightClientOptions,
-        db_opt: LightClientSqliteOptions,
+        db_opt: LightClientDbOptions,
     ) -> anyhow::Result<Self> {
         let client = FallbackClient::new(peers.into_iter().map(QueryServiceClient::new).collect())?;
         Ok(Self {
@@ -1753,7 +1781,7 @@ impl<C: ApiContext> LightClientProvider<C> {
             .clone()
             .connect()
             .await
-            .context("creating SQLite database for light client")?;
+            .context("opening the light client database")?;
         let chain_id = ctx.node_state().genesis_chain_config.chain_id;
         let genesis = light_client_genesis(&ctx.network_config(), chain_id);
         Ok(Arc::new(LightClient::from_genesis_with_options(
@@ -1766,9 +1794,8 @@ impl<C: ApiContext> LightClientProvider<C> {
 }
 
 #[async_trait]
-impl<C, T> Provider<SeqTypes, T> for LightClientProvider<C>
+impl<T> Provider<SeqTypes, T> for LightClientProvider
 where
-    C: ApiContext,
     T: fetching::Request<SeqTypes> + 'static,
     NodeLightClient: Provider<SeqTypes, T>,
 {
@@ -2993,13 +3020,14 @@ mod api_tests {
 
     use super::{update::ApiEventConsumer, *};
     use crate::{
-        persistence::{no_storage::NoStorage, sql::DECIDE_GAP_FILL_HORIZON},
+        persistence::sql::DECIDE_GAP_FILL_HORIZON,
         testing::{TestConfigBuilder, wait_for_decide_on_handle},
     };
 
     #[rstest_reuse::template]
     #[rstest::rstest]
-    #[case(PhantomData::<crate::api::sql::DataSource>)]
+    #[case(PhantomData::<crate::api::sql::postgres::DataSource>)]
+    #[case(PhantomData::<crate::api::sql::sqlite::DataSource>)]
     #[case(PhantomData::<crate::api::fs::DataSource>)]
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     pub fn testable_sequencer_data_source<D: TestableSequencerDataSource>(
@@ -3208,13 +3236,12 @@ mod api_tests {
 
         let storage = D::create_storage().await;
         let persistence = D::persistence_options(&storage).create().await.unwrap();
-        let data_source: Arc<StorageState<SequencerContext<NoStorage>, _>> =
-            Arc::new(StorageState::new(
-                D::create(D::persistence_options(&storage), Default::default(), false)
-                    .await
-                    .unwrap(),
-                ApiState::new(future::pending()),
-            ));
+        let data_source: Arc<StorageState<_>> = Arc::new(StorageState::new(
+            D::create(D::persistence_options(&storage), Default::default(), false)
+                .await
+                .unwrap(),
+            ApiState::new(future::pending()),
+        ));
 
         // Create two non-consecutive leaf chains.
         let mut chain1 = vec![];
@@ -3431,13 +3458,12 @@ mod api_tests {
 
         let storage = D::create_storage().await;
         let persistence = D::persistence_options(&storage).create().await.unwrap();
-        let data_source: Arc<StorageState<SequencerContext<NoStorage>, _>> =
-            Arc::new(StorageState::new(
-                D::create(D::persistence_options(&storage), Default::default(), false)
-                    .await
-                    .unwrap(),
-                ApiState::new(future::pending()),
-            ));
+        let data_source: Arc<StorageState<_>> = Arc::new(StorageState::new(
+            D::create(D::persistence_options(&storage), Default::default(), false)
+                .await
+                .unwrap(),
+            ApiState::new(future::pending()),
+        ));
         let consumer = ApiEventConsumer::from(data_source.clone());
 
         let node_state = NodeState::mock().with_genesis_version(NEW_PROTOCOL_VERSION);
@@ -3573,10 +3599,10 @@ mod test {
         },
         data_source::{
             Transaction as _, VersionedDataSource,
-            sql::Config,
+            sql::postgres::{Config, SqlStorage},
             storage::{
-                MerklizedStateHeightStorage, NodeStorage, SerializableRetry, SqlStorage,
-                StorageConnectionType, UpdateAvailabilityStorage, pruning::PrunedHeightStorage,
+                MerklizedStateHeightStorage, NodeStorage, SerializableRetry, StorageConnectionType,
+                UpdateAvailabilityStorage, pruning::PrunedHeightStorage,
             },
         },
         explorer::TransactionSummariesResponse,
@@ -3629,7 +3655,7 @@ mod test {
 
     use self::{
         data_source::{SequencerDataSource, testing::TestableSequencerDataSource},
-        sql::DataSource as SqlDataSource,
+        sql::postgres::DataSource as SqlDataSource,
     };
     use super::*;
 
@@ -3657,7 +3683,7 @@ mod test {
         CatchupParams, L1Params,
         api::{
             options::Query,
-            sql::{impl_testable_data_source::tmp_options, reconstruct_state},
+            sql::postgres::{impl_testable_data_source::tmp_options, reconstruct_state},
             test_helpers::STAKE_TABLE_CAPACITY_FOR_TEST,
         },
         catchup::{NullStateCatchup, StatePeers},
@@ -3666,6 +3692,7 @@ mod test {
         legacy_chain::LegacyChain,
         persistence,
         persistence::no_storage,
+        state::EmptyStateStart,
         testing::{
             TestConfig, TestConfigBuilder, decided_leaves, wait_for_decide_on_handle,
             wait_for_epochs,
@@ -3886,13 +3913,22 @@ mod test {
         .await
         .expect("network did not reach block height 2");
 
+        let past_limit =
+            hotshot_query_service::availability::Options::default().large_object_range_limit + 1;
         for (path, status) in [
             // A finalized height must be past the requested leaf.
-            ("leaf/1/1", reqwest::StatusCode::BAD_REQUEST),
+            ("leaf/1/1".to_string(), reqwest::StatusCode::BAD_REQUEST),
             // A header proof's root must be past the requested header.
-            ("header/1/1", reqwest::StatusCode::BAD_REQUEST),
+            ("header/1/1".to_string(), reqwest::StatusCode::BAD_REQUEST),
             // This 404 comes from the header proof helper, exercising `lc_error`.
-            ("header/1000001/1000000", reqwest::StatusCode::NOT_FOUND),
+            (
+                "header/1000001/1000000".to_string(),
+                reqwest::StatusCode::NOT_FOUND,
+            ),
+            (
+                format!("payload/0/{past_limit}"),
+                reqwest::StatusCode::BAD_REQUEST,
+            ),
         ] {
             let res = reqwest::get(format!("http://localhost:{port}/v1/light-client/{path}"))
                 .await
@@ -4189,9 +4225,13 @@ mod test {
             // the late node for the same database.
             let mut opt = tmp_options(&dbs[LATE]);
             opt.disable_proactive_fetching = true;
-            let ds = SqlDataSource::create(opt, Default::default(), false)
-                .await
-                .unwrap();
+            let ds = SqlDataSource::create(
+                persistence::sql::postgres::Options::try_from(opt).unwrap(),
+                Default::default(),
+                false,
+            )
+            .await
+            .unwrap();
             let mut tx = ds.write().await.unwrap();
             for leaf in &leaves {
                 tx.insert_leaf(leaf).await.unwrap();
@@ -5711,6 +5751,7 @@ mod test {
                 backoff: Default::default(),
                 base_timeout: Duration::from_secs(2),
                 local_timeout: Duration::from_secs(5),
+                http_delay: Duration::ZERO,
             },
             bootstrap_epoch_catchup_timeout: Duration::from_secs(30),
             options: FollowerOptions {
@@ -5852,11 +5893,11 @@ mod test {
         params: FollowerParams,
         l1_params: L1Params,
     ) -> anyhow::Result<(
-        FollowerContext<persistence::sql::Persistence>,
+        FollowerContext<persistence::sql::postgres::Persistence>,
         Client<ClientErr, SequencerApiVersion>,
     )> {
         let port = reserve_tcp_port().expect("No ports free for query service");
-        let mut db = tmp_options(storage);
+        let mut db = persistence::sql::postgres::Options::try_from(tmp_options(storage))?;
         let persistence = db.create().await?;
         let handle = Options::with_port(port)
             .query_sql(
@@ -5864,7 +5905,7 @@ mod test {
                     peers: params.upstreams.clone(),
                     ..Default::default()
                 },
-                db,
+                db.into_inner(),
             )
             .catchup(Default::default())
             .light_client(Default::default())
@@ -5890,7 +5931,7 @@ mod test {
     }
 
     async fn assert_follows_to(
-        follower: &FollowerContext<persistence::sql::Persistence>,
+        follower: &FollowerContext<persistence::sql::postgres::Persistence>,
         follower_client: &Client<ClientErr, SequencerApiVersion>,
         tip: u64,
     ) -> anyhow::Result<()> {
@@ -6141,50 +6182,17 @@ mod test {
         let cfg = network.cfg.clone();
         let peer_url = api_url.clone();
         let start_query_node = move |db: persistence::sql::Options| {
-            let cfg = cfg.clone();
-            let genesis_state = genesis_state.clone();
-            let peer_url = peer_url.clone();
-            async move {
-                let opt = Options::with_port(query_port)
+            serve_query_node(
+                cfg.clone(),
+                genesis_state.clone(),
+                persistence::sql::postgres::Options::try_from(db.clone()).unwrap(),
+                db,
+                Options::with_port(query_port)
                     .catchup(Default::default())
-                    .light_client(Default::default())
-                    .query_sql(
-                        Query {
-                            peers: vec![peer_url.clone()],
-                            ..Default::default()
-                        },
-                        db.clone(),
-                    );
-                let ctx = opt
-                    .serve(move |metrics, consumer, storage| {
-                        async move {
-                            Ok(cfg
-                                .init_node(
-                                    1,
-                                    genesis_state,
-                                    db,
-                                    Some(StatePeers::<SequencerApiVersion>::from_urls(
-                                        vec![peer_url],
-                                        Default::default(),
-                                        Duration::from_secs(2),
-                                        &NoMetrics,
-                                    )),
-                                    storage,
-                                    &*metrics,
-                                    test_helpers::STAKE_TABLE_CAPACITY_FOR_TEST,
-                                    consumer,
-                                    TEST_UPGRADE,
-                                    Default::default(),
-                                )
-                                .await)
-                        }
-                        .boxed()
-                    })
-                    .await
-                    .expect("second query node should start");
-                ctx.start_consensus().await;
-                ctx
-            }
+                    .light_client(Default::default()),
+                vec![peer_url.clone()],
+                peer_url.clone(),
+            )
         };
 
         let mut query_node = start_query_node(tmp_options(&storage[1])).await;
@@ -7321,49 +7329,15 @@ mod test {
             let db_opt = db_opt.clone();
             let api_url = api_url.clone();
             move || {
-                let cfg = cfg.clone();
-                let genesis_state = genesis_state.clone();
-                let node_persistence = node_persistence.clone();
-                let db_opt = db_opt.clone();
-                let api_url = api_url.clone();
-                async move {
-                    let opt = Options::with_port(query_port).query_sql(
-                        Query {
-                            peers: vec![api_url.clone()],
-                            ..Default::default()
-                        },
-                        db_opt,
-                    );
-                    let ctx = opt
-                        .serve(move |metrics, consumer, storage| {
-                            async move {
-                                Ok(cfg
-                                    .init_node(
-                                        1,
-                                        genesis_state,
-                                        node_persistence,
-                                        Some(StatePeers::<StaticVersion<0, 1>>::from_urls(
-                                            vec![api_url],
-                                            Default::default(),
-                                            Duration::from_secs(2),
-                                            &NoMetrics,
-                                        )),
-                                        storage,
-                                        &*metrics,
-                                        STAKE_TABLE_CAPACITY_FOR_TEST,
-                                        consumer,
-                                        TEST_UPGRADE,
-                                        Default::default(),
-                                    )
-                                    .await)
-                            }
-                            .boxed()
-                        })
-                        .await
-                        .expect("query node should start");
-                    ctx.start_consensus().await;
-                    ctx
-                }
+                serve_query_node(
+                    cfg.clone(),
+                    genesis_state.clone(),
+                    node_persistence.clone(),
+                    db_opt.clone(),
+                    Options::with_port(query_port),
+                    vec![api_url.clone()],
+                    api_url.clone(),
+                )
             }
         };
 
@@ -7555,49 +7529,15 @@ mod test {
             let db_opt = db_opt.clone();
             let api_url = api_url.clone();
             move |availability_peers: Vec<Url>| {
-                let cfg = cfg.clone();
-                let genesis_state = genesis_state.clone();
-                let node_persistence = node_persistence.clone();
-                let db_opt = db_opt.clone();
-                let api_url = api_url.clone();
-                async move {
-                    let opt = Options::with_port(query_port).query_sql(
-                        Query {
-                            peers: availability_peers,
-                            ..Default::default()
-                        },
-                        db_opt,
-                    );
-                    let ctx = opt
-                        .serve(move |metrics, consumer, storage| {
-                            async move {
-                                Ok(cfg
-                                    .init_node(
-                                        1,
-                                        genesis_state,
-                                        node_persistence,
-                                        Some(StatePeers::<StaticVersion<0, 1>>::from_urls(
-                                            vec![api_url],
-                                            Default::default(),
-                                            Duration::from_secs(2),
-                                            &NoMetrics,
-                                        )),
-                                        storage,
-                                        &*metrics,
-                                        STAKE_TABLE_CAPACITY_FOR_TEST,
-                                        consumer,
-                                        TEST_UPGRADE,
-                                        Default::default(),
-                                    )
-                                    .await)
-                            }
-                            .boxed()
-                        })
-                        .await
-                        .expect("query node should start");
-                    ctx.start_consensus().await;
-                    ctx
-                }
+                serve_query_node(
+                    cfg.clone(),
+                    genesis_state.clone(),
+                    node_persistence.clone(),
+                    db_opt.clone(),
+                    Options::with_port(query_port),
+                    availability_peers,
+                    api_url.clone(),
+                )
             }
         };
 
@@ -7721,6 +7661,361 @@ mod test {
             "{stored} leaves at or below the data pruned height {pruned} were stored"
         );
         Ok(())
+    }
+
+    /// A query node with no state of its own on a pruned database, as a fresh pruned node, starts
+    /// its state from a snapshot at a recent epoch boundary, from peers, instead of replaying the
+    /// chain from genesis. The loop gets past the next boundary only if the reward tree it fetched
+    /// is whole. The snapshot has no fee accounts, and from V0.6 on no block reads one, so the node
+    /// answers that the fee state is missing from the boundary on, and pruned below it. A
+    /// brand-new database, which the data pruner has not stamped yet, starts from a boundary too.
+    /// A node without a pruner, here one that pruned before and has turned pruning off, still
+    /// replays from genesis, on leaves from peers up to the data pruned height.
+    #[rstest]
+    #[case::recent_boundary(EmptyStateStart::RecentBoundary, true)]
+    #[case::fresh_database(EmptyStateStart::RecentBoundary, false)]
+    #[case::genesis(EmptyStateStart::Genesis, true)]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_state_loop_starts_on_pruned_data(
+        #[case] expected: EmptyStateStart,
+        #[case] stamp_pruned_height: bool,
+    ) -> anyhow::Result<()> {
+        let network = PrunedStartNetwork::start().await?;
+        // Let the chain run an epoch past the data pruned height stamped below, so a recent
+        // boundary lies above it.
+        let stamp = 3 * PRUNED_START_EPOCH_HEIGHT + PRUNED_START_EPOCH_HEIGHT / 2;
+        wait_until_block_height(
+            &network.api_client,
+            "status/block-height",
+            stamp + PRUNED_START_EPOCH_HEIGHT,
+        )
+        .await;
+        let (db_opt, db) = network.query_database(expected).await?;
+        // Unless the database is brand new, stamp a data pruned height on it, as if the data
+        // pruner had run before the loop started.
+        let pruned = if stamp_pruned_height {
+            prune_data_to(&db, stamp).await?;
+            stamp
+        } else {
+            0
+        };
+        // `status/block-height` counts blocks, so the tip is one below it.
+        let tip = network
+            .api_client
+            .get::<u64>("status/block-height")
+            .send()
+            .await?
+            - 1;
+        let (_query_node, query_client) = network.start_query_node(db_opt).await;
+
+        let deadline = Instant::now() + Duration::from_secs(180);
+        let start = wait_for_state_start(&db, deadline).await?;
+        let state_start = db.read().await?.load_state_start_height().await?;
+        check_state_start(expected, start, state_start, pruned, tip)?;
+        let past = start.max(pruned) + PRUNED_START_EPOCH_HEIGHT;
+        wait_for_state_head_above(&db, past, start, deadline).await?;
+        let lowest = lowest_block_tree_node(&db).await?;
+        ensure!(
+            lowest == start,
+            "state below the start {start} was computed, from {lowest}"
+        );
+
+        wait_until_block_height(&network.api_client, "fee-state/block-height", past + 1).await;
+        match expected {
+            EmptyStateStart::RecentBoundary => {
+                check_fee_state_from_start(&query_client, start, past, network.fee_recipient)
+                    .await?
+            },
+            EmptyStateStart::Genesis => {
+                let fee_state = format!("fee-state/{past}/{}", network.fee_recipient);
+                assert_same_response(&network.api_client, &query_client, &fee_state).await?;
+            },
+        }
+        Ok(())
+    }
+
+    /// The epoch height of the network in [`test_state_loop_starts_on_pruned_data`].
+    const PRUNED_START_EPOCH_HEIGHT: u64 = 10;
+
+    /// The network of [`test_state_loop_starts_on_pruned_data`]. Node 0 is the API node, the only
+    /// peer the query node fetches the snapshot, leaves and accounts from. Node 1 is shut down, to
+    /// come back as the query node on its own database, with no query data.
+    struct PrunedStartNetwork {
+        network: TestNetwork<persistence::sql::postgres::Options, 5>,
+        storage: Vec<<SqlDataSource as TestableSequencerDataSource>::Storage>,
+        /// Node 1's consensus persistence.
+        persistence: persistence::sql::postgres::Options,
+        api_url: Url,
+        api_client: Client<ClientErr, StaticVersion<0, 1>>,
+        genesis_state: ValidatedState,
+        fee_recipient: FeeAccount,
+    }
+
+    impl PrunedStartNetwork {
+        async fn start() -> anyhow::Result<Self> {
+            let storage = join_all((0..5).map(|_| SqlDataSource::create_storage())).await;
+            let persistence: [_; 5] = storage
+                .iter()
+                .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
+                .collect::<Vec<_>>()
+                .try_into()
+                .unwrap();
+            let api_port = reserve_tcp_port().expect("OS should have ephemeral ports available");
+            let api_url: Url = format!("http://localhost:{api_port}").parse().unwrap();
+            let config = TestNetworkConfigBuilder::with_num_nodes()
+                .api_config(SqlDataSource::options(
+                    &storage[0],
+                    Options::with_port(api_port)
+                        .catchup(Default::default())
+                        .light_client(Default::default()),
+                ))
+                .network_config(
+                    TestConfigBuilder::default()
+                        .epoch_height(PRUNED_START_EPOCH_HEIGHT)
+                        .build(),
+                )
+                .persistences(persistence.clone())
+                .catchups(std::array::from_fn(|_| api_state_peers(&api_url)))
+                .pos_hook(
+                    DelegationConfig::MultipleDelegators,
+                    StakeTableContractVersion::V3,
+                    TEST_UPGRADE,
+                )
+                .await?
+                .build();
+            let genesis_state = config.states()[0].clone();
+            let fee_recipient = genesis_state
+                .chain_config
+                .resolve()
+                .context("genesis chain config")?
+                .fee_recipient;
+            let mut network = TestNetwork::new(config, TEST_UPGRADE).await;
+            network.peers[0].shut_down().await;
+            network.peers.remove(0);
+            let api_client = Client::new(api_url.clone());
+            assert!(api_client.connect(Some(Duration::from_secs(60))).await);
+            Ok(Self {
+                network,
+                storage,
+                persistence: persistence[1].clone(),
+                api_url,
+                api_client,
+                genesis_state,
+                fee_recipient,
+            })
+        }
+
+        /// The options of node 1's database, with pruning on when `expected` is a recent boundary,
+        /// and a connection to it.
+        async fn query_database(
+            &self,
+            expected: EmptyStateStart,
+        ) -> anyhow::Result<(persistence::sql::Options, SqlStorage)> {
+            // When pruning is on, the pruner never runs within the test.
+            const RETENTION: &str = "1000000s";
+            let mut db_opt = tmp_options(&self.storage[1]);
+            db_opt.prune = expected == EmptyStateStart::RecentBoundary;
+            db_opt.pruning = <persistence::sql::PruningOptions as clap::Parser>::parse_from([
+                "pruning",
+                "--target-retention",
+                RETENTION,
+                "--state-target-retention",
+                RETENTION,
+                "--interval",
+                "3600s",
+            ]);
+            let db = SqlStorage::connect(Config::try_from(&db_opt)?, StorageConnectionType::Query)
+                .await?;
+            Ok((db_opt, db))
+        }
+
+        /// Start node 1 as a query node on `db_opt`, and a client for its API.
+        async fn start_query_node(
+            &self,
+            db_opt: persistence::sql::Options,
+        ) -> (
+            SequencerContext<
+                <persistence::sql::postgres::Options as PersistenceOptions>::Persistence,
+            >,
+            Client<ClientErr, StaticVersion<0, 1>>,
+        ) {
+            let query_port = reserve_tcp_port().expect("OS should have ephemeral ports available");
+            let query_node = serve_query_node(
+                self.network.cfg.clone(),
+                self.genesis_state.clone(),
+                self.persistence.clone(),
+                db_opt,
+                Options::with_port(query_port),
+                vec![self.api_url.clone()],
+                self.api_url.clone(),
+            )
+            .await;
+            let query_client =
+                Client::new(format!("http://localhost:{query_port}").parse().unwrap());
+            (query_node, query_client)
+        }
+    }
+
+    /// Start node 1 of the network `cfg` as a query node on `db_opt`. It serves the API `api`, plus
+    /// the query module. Its availability fetcher asks `availability_peers`, and its state catchup
+    /// the API node at `api_url` alone.
+    async fn serve_query_node<const N: usize>(
+        cfg: TestConfig<N>,
+        genesis_state: ValidatedState,
+        node_persistence: persistence::sql::postgres::Options,
+        db_opt: persistence::sql::Options,
+        api: Options,
+        availability_peers: Vec<Url>,
+        api_url: Url,
+    ) -> SequencerContext<<persistence::sql::postgres::Options as PersistenceOptions>::Persistence>
+    {
+        let opt = api.query_sql(
+            Query {
+                peers: availability_peers,
+                ..Default::default()
+            },
+            db_opt,
+        );
+        let state_peers = api_state_peers(&api_url);
+        let query_node = opt
+            .serve(move |metrics, consumer, storage| {
+                async move {
+                    Ok(cfg
+                        .init_node(
+                            1,
+                            genesis_state,
+                            node_persistence,
+                            Some(state_peers),
+                            storage,
+                            &*metrics,
+                            STAKE_TABLE_CAPACITY_FOR_TEST,
+                            consumer,
+                            TEST_UPGRADE,
+                            Default::default(),
+                        )
+                        .await)
+                }
+                .boxed()
+            })
+            .await
+            .expect("query node should start");
+        query_node.start_consensus().await;
+        query_node
+    }
+
+    /// State peers that are just the API node at `api_url`.
+    fn api_state_peers(api_url: &Url) -> StatePeers<StaticVersion<0, 1>> {
+        StatePeers::from_urls(
+            vec![api_url.clone()],
+            Default::default(),
+            Duration::from_secs(2),
+            &NoMetrics,
+        )
+    }
+
+    /// The height the state loop started from, once it has stored its first snapshot, which holds
+    /// the lowest block tree nodes.
+    async fn wait_for_state_start(db: &SqlStorage, deadline: Instant) -> anyhow::Result<u64> {
+        while state_heights(db).await.1 == 0 {
+            ensure!(Instant::now() < deadline, "state loop did not start");
+            sleep(Duration::from_millis(200)).await;
+        }
+        lowest_block_tree_node(db).await
+    }
+
+    /// Check that the state loop started where `expected` says, given the data pruned height and
+    /// the tip when the query node started, and that it recorded a start from a boundary.
+    fn check_state_start(
+        expected: EmptyStateStart,
+        start: u64,
+        state_start: Option<u64>,
+        pruned: u64,
+        tip: u64,
+    ) -> anyhow::Result<()> {
+        let recorded = (expected == EmptyStateStart::RecentBoundary).then_some(start);
+        ensure!(
+            state_start == recorded,
+            "the recorded state start is {state_start:?}, not {recorded:?}"
+        );
+        match expected {
+            // The boundary is recent only if the node's first local block was the consensus tip,
+            // not a lower block it filled in first.
+            EmptyStateStart::RecentBoundary => ensure!(
+                start > pruned
+                    && start.is_multiple_of(PRUNED_START_EPOCH_HEIGHT)
+                    && start + PRUNED_START_EPOCH_HEIGHT > tip,
+                "state loop started at {start}, not at an epoch boundary above the data pruned \
+                 height {pruned} and within an epoch of the tip {tip} when the node started"
+            ),
+            // The genesis tree has no blocks, so the first block tree nodes are at height 1.
+            EmptyStateStart::Genesis => {
+                ensure!(start == 1, "state loop started at {start}, not at genesis")
+            },
+        }
+        Ok(())
+    }
+
+    async fn wait_for_state_head_above(
+        db: &SqlStorage,
+        past: u64,
+        start: u64,
+        deadline: Instant,
+    ) -> anyhow::Result<()> {
+        loop {
+            let (_, head) = state_heights(db).await;
+            if head > past {
+                return Ok(());
+            }
+            ensure!(
+                Instant::now() < deadline,
+                "state loop did not get past {past}: head {head}, started at {start}"
+            );
+            sleep(Duration::from_millis(200)).await;
+        }
+    }
+
+    /// Check the fee state a node that started from the boundary `start` serves: the snapshot holds
+    /// no fee account, and no block since has read one, so the state is missing at the boundary and
+    /// at `past` above it, and pruned below it.
+    async fn check_fee_state_from_start(
+        client: &Client<ClientErr, StaticVersion<0, 1>>,
+        start: u64,
+        past: u64,
+        account: FeeAccount,
+    ) -> anyhow::Result<()> {
+        for (height, status) in [
+            (start, StatusCode::NOT_FOUND),
+            (past, StatusCode::NOT_FOUND),
+            (start - 1, StatusCode::GONE),
+        ] {
+            // The state query reads the header there, which the node may still be fetching.
+            client
+                .get::<serde_json::Value>(&format!("availability/header/{height}"))
+                .send()
+                .await?;
+            let path = format!("fee-state/{height}/{account}");
+            let answer = client
+                .get::<serde_json::Value>(&path)
+                .send()
+                .await
+                .map_err(|err| err.status);
+            ensure!(
+                answer == Err(status),
+                "{path}: answered {answer:?}, not {status}"
+            );
+        }
+        Ok(())
+    }
+
+    /// The lowest height with a block tree node, which is the first snapshot the state loop stored.
+    async fn lowest_block_tree_node(db: &SqlStorage) -> anyhow::Result<u64> {
+        let mut tx = db.read().await?;
+        let lowest: Option<i64> = sqlx::query_scalar("SELECT min(created) FROM block_merkle_tree")
+            .fetch_one(tx.as_mut())
+            .await?;
+        lowest
+            .map(|height| height as u64)
+            .context("no block tree nodes")
     }
 
     /// Forward connections on `port` to `target`, so a peer's URL is dead until this runs and
@@ -7970,7 +8265,7 @@ mod test {
         wait_until_block_height(&client, "fee-state/block-height", from_height).await;
 
         let ds = SqlStorage::connect(
-            Config::try_from(&node_0_persistence).unwrap(),
+            Config::try_from(&*node_0_persistence).unwrap(),
             StorageConnectionType::Sequencer,
         )
         .await
@@ -9817,26 +10112,6 @@ mod test {
                 num_bootstrap: v1_hotshot.num_bootstrap as u64,
                 commit_sha: v1_config.commit_sha().to_string(),
                 indexed_da: v1_config.indexed_da(),
-                cdn_marshal_address: v1_config.cdn_marshal_address().map(ToString::to_string),
-                libp2p_config: v1_config.libp2p_config().map(|libp2p| {
-                    espresso_api::proto::Libp2pNetworkConfig {
-                        bootstrap_nodes: libp2p
-                            .bootstrap_nodes
-                            .iter()
-                            .map(
-                                |(peer_id, multiaddr)| espresso_api::proto::Libp2pBootstrapNode {
-                                    peer_id: peer_id.to_string(),
-                                    multiaddr: multiaddr.to_string(),
-                                },
-                            )
-                            .collect(),
-                    }
-                }),
-                combined_network_config: v1_config.combined_network_config().map(|combined| {
-                    espresso_api::proto::CombinedNetworkConfig {
-                        delay_duration_ms: combined.delay_duration.as_millis() as u64,
-                    }
-                }),
                 builder: match v1_config.builder() {
                     hotshot_types::network::BuilderType::External => {
                         espresso_api::proto::BuilderType::External
@@ -9849,6 +10124,7 @@ mod test {
                     },
                 }
                 .into(),
+                ..Default::default()
             }
         );
         // The comparison above builds its expected value with the same `From<PeerConfig>` the
@@ -11425,9 +11701,9 @@ mod test {
         // port before the replacement node binds the same address.
         network.peers.remove(0).shut_down().await;
 
-        let new_storage: hotshot_query_service::data_source::sql::testing::TmpDb =
+        let new_storage: hotshot_query_service::data_source::sql::postgres::testing::TmpDb =
             SqlDataSource::create_storage().await;
-        let new_persistence: persistence::sql::Options =
+        let new_persistence: persistence::sql::postgres::Options =
             <SqlDataSource as TestableSequencerDataSource>::persistence_options(&new_storage);
 
         let node_0_port = reserve_tcp_port().expect("OS should have ephemeral ports available");

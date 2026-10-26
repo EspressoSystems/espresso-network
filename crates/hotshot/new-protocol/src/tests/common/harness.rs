@@ -1,6 +1,5 @@
 use std::{sync::Arc, time::Duration};
 
-use hotshot::types::BLSPubKey;
 use hotshot_example_types::{
     node_types::{TEST_VERSIONS, TestTypes},
     state_types::{TestInstanceState, TestValidatedState},
@@ -9,6 +8,7 @@ use hotshot_types::{
     data::{EpochNumber, Leaf2, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
     message::UpgradeLock,
+    signature_key::BLSPubKey,
     traits::{metrics::NoMetrics, signature_key::SignatureKey},
     upgrade_config::UpgradeConfig,
 };

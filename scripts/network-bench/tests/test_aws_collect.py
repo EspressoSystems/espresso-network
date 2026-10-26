@@ -1082,6 +1082,18 @@ def test_report_has_hosts_deployment_and_summary_blocks(collected_run: Path) -> 
     summary = (collected_run / "summary.md").read_text()
     assert "Deployment" in summary
     assert "| node1 |" in summary
+    assert "slow_nodes" not in deployment
+
+
+def test_report_records_the_slow_nodes(collected_run: Path) -> None:
+    path = collected_run / "manifest.json"
+    manifest = netbench.read_json(path)
+    manifest["config"] |= {"slow_nodes": 1, "slow_cores": 4}
+    netbench.write_json(path, manifest)
+    deployment = awsb.write_report(collected_run)["deployment"]
+    assert (deployment["slow_nodes"], deployment["slow_cores"]) == (["node2"], 4)
+    summary = (collected_run / "summary.md").read_text()
+    assert "- slow nodes: node2 on 4 cores" in summary
 
 
 UP = ["up", "--tag", "old", "--nodes", "3", "--yes"]

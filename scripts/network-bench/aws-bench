@@ -297,7 +297,6 @@ PROXY_ADDRESS_KEYS = (
 NODE_API_PORT = 8080
 NODE_TONIC_PORT = 8081
 CLIQUENET_PORT = 9000
-LIBP2P_PORT = 1769
 # From .env; render_ctl_env asserts these still match the parsed file.
 # The bench's own postgres container, independent of .env.
 POSTGRES_PORT = 5432
@@ -1038,6 +1037,9 @@ class RunConfig:
     node_env: tuple[str, ...] = ()
     # Genesis `max_block_size`, verbatim.
     max_block_size: str = "50mb"
+    # Genesis `base_version` and `upgrade_version`, verbatim: the protocol the network runs
+    # from genesis. The images must support it.
+    protocol_version: str = "0.6"
     # espresso-node writes leader_trace_node{N}.csv to /opt/bench/trace; `trace-plots` renders it.
     leader_trace: bool = False
     # `latency.PROFILES` name; `off` shapes nothing. `intra_latency` adds the same-location delay.
@@ -1066,6 +1068,10 @@ class RunConfig:
     prune: int | None = None
     # The light-client prover runs on ctl; needs epochs and a ctl of PROVER_MIN_MIB.
     prover: bool = False
+    # The last `slow_nodes` nodes, all validator-only, run espresso-node on `slow_cores` cores:
+    # a slower group on the same network.
+    slow_nodes: int = 0
+    slow_cores: int | None = None
 
 
 # Callers need the return code and stderr, unlike scripts/release's Runner, to report a
@@ -1369,6 +1375,7 @@ def plan_hosts(cfg: RunConfig) -> list[HostSpec]:
     if cfg.nodes < 2:
         raise Refused(f"--nodes must be at least 2: {cfg.nodes}")
     check_submit_nodes(cfg)
+    check_slow_nodes(cfg)
     if not 1 <= cfg.query_nodes <= cfg.nodes:
         raise Refused(
             f"--query-nodes must be between 1 and nodes ({cfg.nodes}): {cfg.query_nodes}"
@@ -1711,10 +1718,12 @@ def format_node_summary(cfg: RunConfig) -> list[str]:
         (
             f"nodes: {cfg.nodes} ({cfg.query_nodes} query, "
             f"{cfg.nodes - cfg.query_nodes} validator-only); max block {cfg.max_block_size}; "
+            f"protocol {cfg.protocol_version}; "
             f"submit {cfg.load.submit_nodes} nodes; "
             f"leader-trace {'on' if cfg.leader_trace else 'off'}"
         ),
         f"node-env: {' '.join(cfg.node_env) or 'none'}",
+        *([format_slow_nodes_summary(cfg)] if cfg.slow_nodes else []),
         *([format_chaos_summary(cfg.chaos, cfg.latency)] if cfg.chaos else []),
         *(
             [f"prune: data and state older than {cfg.prune}s, every {PRUNE_INTERVAL}"]
@@ -1733,6 +1742,11 @@ def format_node_summary(cfg: RunConfig) -> list[str]:
             else []
         ),
     ]
+
+
+def format_slow_nodes_summary(cfg: RunConfig) -> str:
+    names = ", ".join(slow_node_names(cfg))
+    return f"slow nodes: {names} on {cfg.slow_cores} cores (docker --cpuset-cpus)"
 
 
 def format_chaos_summary(chaos: ch.ChaosConfig, latency: str) -> str:
@@ -2353,11 +2367,14 @@ def render_genesis(
     template: bytes,
     capacity: int,
     max_block_size: str,
+    protocol_version: str,
     epoch_height: int | None = None,
 ) -> bytes:
     """`capacity` is the stake table capacity; contract addresses stay as the template's, since
     they are deterministic from the deployer nonce. `max_block_size` goes into both chain
-    configs; `epoch_height` replaces the template's when given."""
+    configs. `protocol_version` goes into `base_version` and `upgrade_version`, so the network
+    runs it from genesis; `genesis_version` stays the template's. `epoch_height` replaces the
+    template's when given."""
     text = template.decode()
     text, size_n = re.subn(
         r'(?m)^max_block_size = ".*"$', f'max_block_size = "{max_block_size}"', text
@@ -2365,6 +2382,17 @@ def render_genesis(
     if size_n != 2:
         raise ValueError(
             f"expected 2 max_block_size fields in genesis template, replaced {size_n}"
+        )
+    text, base_n = re.subn(
+        r'(?m)^base_version = ".*"$', f'base_version = "{protocol_version}"', text
+    )
+    text, upgrade_n = re.subn(
+        r'(?m)^upgrade_version = ".*"$', f'upgrade_version = "{protocol_version}"', text
+    )
+    if base_n != 1 or upgrade_n != 1:
+        raise ValueError(
+            "expected one base_version and one upgrade_version field in genesis template, "
+            f"replaced {base_n} and {upgrade_n}"
         )
     text, stake_n = re.subn(
         r"(?m)^stake_table_capacity = \d+$", f"stake_table_capacity = {capacity}", text
@@ -2461,8 +2489,6 @@ def render_node_env(
         "ESPRESSO_NODE_KEY_INDEX": str(KEY_INDEX_BASE + i),
         "ESPRESSO_NODE_CLIQUENET_BIND_ADDRESS": f"0.0.0.0:{CLIQUENET_PORT}",
         "ESPRESSO_NODE_CLIQUENET_ADVERTISE_ADDRESS": f"{self_info['private_ip']}:{CLIQUENET_PORT}",
-        "ESPRESSO_NODE_LIBP2P_BIND_ADDRESS": f"0.0.0.0:{LIBP2P_PORT}",
-        "ESPRESSO_NODE_LIBP2P_ADVERTISE_ADDRESS": f"{self_info['private_dns']}:{LIBP2P_PORT}",
         "ESPRESSO_NODE_API_PORT": str(NODE_API_PORT),
         "ESPRESSO_NODE_TONIC_PORT": str(NODE_TONIC_PORT),
         "ESPRESSO_NODE_ORCHESTRATOR_URL": f"http://{ctl_info['private_ip']}:{env_port('ESPRESSO_ORCHESTRATOR_PORT')}",
@@ -2473,7 +2499,7 @@ def render_node_env(
         "ESPRESSO_NODE_IS_DA": "true",
         "ESPRESSO_NODE_TELEMETRY_LOGS_ENABLE": "false",
         "ESPRESSO_NODE_TELEMETRY_METRICS_ENABLE": "false",
-        "RUST_LOG": "info,libp2p=off",
+        "RUST_LOG": "info",
         "RUST_LOG_FORMAT": "json",
         "ESPRESSO_NODE_STORAGE_PATH": "/store/espresso",
         "ESPRESSO_NODE_IDENTITY_NODE_NAME": host["name"],
@@ -2499,7 +2525,7 @@ def render_node_env(
             # The default 5 min cache would report a wiped node as synced from its empty DB.
             env["ESPRESSO_NODE_SYNC_STATUS_TTL"] = f"{ch.SYNC_STATUS_TTL_S:g}s"
     if host["role"] == "query" and query_engine == "sqlite":
-        # The entrypoint then execs espresso-node-sqlite, which prepends storage-sql itself.
+        # The entrypoint then starts the node on SQLite and prepends storage-sql itself.
         env["ESPRESSO_NODE_EMBEDDED_DB"] = "true"
         if consensus_storage == "journal":
             # The journal refuses to open next to an existing sqlite database until its first
@@ -2705,10 +2731,12 @@ def render_start_sh(
     query_engine: QueryEngine = "postgres",
     stake_nodes: int | None = None,
     prover: bool = False,
+    cores: int | None = None,
 ) -> str:
     """Deviates from the plan signature (drops unused `hosts`, `cfg`): every value start.sh
     needs is already in `host`, `images` and the host's `memory_mib`, or in ctl.env/node.env
-    rendered separately. With `query_db` rds or `query_engine` sqlite there is no postgres container."""
+    rendered separately. With `query_db` rds or `query_engine` sqlite there is no postgres container.
+    `cores` limits espresso-node to that many cores; None leaves it the whole host."""
     script = (
         "#!/usr/bin/env bash\nset -eEu -o pipefail\n\n"
         f"echo '{{}}' > {BENCH_DIR}/containers.json\n\n"
@@ -2805,6 +2833,7 @@ def render_start_sh(
         consensus_storage,
         query_engine,
         f"{BENCH_DIR}/node.env",
+        cores,
     )
     script += _docker_create("espresso-node", argv)
     return script
@@ -2924,8 +2953,11 @@ def node_create_argv(
     consensus_storage: ConsensusStorage,
     query_engine: QueryEngine,
     env_file: str,
+    cores: int | None = None,
 ) -> list[str]:
-    """`docker create` arguments of the espresso-node container."""
+    """`docker create` arguments of the espresso-node container. `cores` pins it to the first
+    that many cores: a smaller machine, without the stalls a `--cpus` quota adds when more
+    threads than that are runnable."""
     node = images["espresso-node"]
     role: NodeRole = "query" if host["role"] == "query" else "validator"
     storage = STORAGE_MODULES[consensus_storage, role]
@@ -2948,6 +2980,8 @@ def node_create_argv(
             argv += ["--tmpfs", f"{SQLITE_CONTAINER_DIR}:size={SQLITE_TMPFS_GB}g"]
     if leader_trace:
         argv += ["-v", f"{TRACE_HOST_DIR}:{TRACE_CONTAINER_DIR}"]
+    if cores is not None:
+        argv += ["--cpuset-cpus", f"0-{cores - 1}"]
     argv.append(f"{node['ref']}@{node['digest']}")
     argv.append("/bin/espresso-node")
     for module in modules:
@@ -2962,6 +2996,7 @@ def render_recreate_sh(
     leader_trace: bool = False,
     consensus_storage: ConsensusStorage = "fs",
     query_engine: QueryEngine = "postgres",
+    cores: int | None = None,
 ) -> str:
     """Recreates the espresso-node container from `node-rejoin.env`; same arguments as start.sh
     otherwise."""
@@ -2973,6 +3008,7 @@ def render_recreate_sh(
         consensus_storage,
         query_engine,
         f"{BENCH_DIR}/node-rejoin.env",
+        cores,
     )
     return "#!/usr/bin/env bash\nset -eEu -o pipefail\n\n" + _docker_create(
         "espresso-node", argv
@@ -3320,6 +3356,16 @@ def add_prover_flag(parser: argparse.ArgumentParser) -> None:
     )
 
 
+def add_protocol_version_flag(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--protocol-version",
+        type=protocol_version,
+        default=RunConfig(tag="").protocol_version,
+        help="genesis base_version and upgrade_version, e.g. 0.8: the protocol the network "
+        "runs from genesis; the images must support it",
+    )
+
+
 def add_leader_trace_flag(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--leader-trace",
@@ -3339,6 +3385,22 @@ def add_submit_nodes_flag(parser: argparse.ArgumentParser) -> None:
     )
 
 
+def add_slow_nodes_flags(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--slow-nodes",
+        type=positive_int,
+        default=RunConfig(tag="").slow_nodes,
+        help="the last N nodes, validator-only, run espresso-node on --slow-cores cores",
+    )
+    parser.add_argument(
+        "--slow-cores",
+        type=positive_int,
+        default=RunConfig(tag="").slow_cores,
+        help="cores of each --slow-nodes node (docker --cpuset-cpus 0-(C-1)); at most the "
+        "node type's vCPUs",
+    )
+
+
 def submit_nodes(args: argparse.Namespace, nodes: int) -> int:
     return nodes if args.submit_nodes is None else args.submit_nodes
 
@@ -3351,9 +3413,30 @@ def check_submit_nodes(cfg: RunConfig) -> None:
         )
 
 
+def check_slow_nodes(cfg: RunConfig) -> None:
+    if cfg.slow_cores is not None and not cfg.slow_nodes:
+        raise Refused("--slow-cores needs --slow-nodes")
+    if not cfg.slow_nodes:
+        return
+    if cfg.slow_cores is None:
+        raise Refused("--slow-nodes needs --slow-cores")
+    validators = cfg.nodes - cfg.query_nodes
+    if cfg.slow_nodes > validators:
+        raise Refused(
+            f"--slow-nodes must be at most the {validators} validator-only nodes: "
+            f"{cfg.slow_nodes}"
+        )
+
+
 def block_size(text: str) -> str:
     if re.fullmatch(r"[1-9]\d*(kb|mb|gb)", text, re.IGNORECASE) is None:
         raise argparse.ArgumentTypeError(f"not a size like 50mb: {text}")
+    return text
+
+
+def protocol_version(text: str) -> str:
+    if re.fullmatch(r"\d+\.\d+", text) is None:
+        raise argparse.ArgumentTypeError(f"not a version like 0.8: {text}")
     return text
 
 
@@ -3443,6 +3526,7 @@ def config_from_args(args: argparse.Namespace) -> RunConfig:
         load=load,
         node_env=tuple(args.node_env),
         max_block_size=args.max_block_size,
+        protocol_version=args.protocol_version,
         leader_trace=args.leader_trace,
         latency=profile,
         intra_latency=args.intra_latency,
@@ -3454,6 +3538,8 @@ def config_from_args(args: argparse.Namespace) -> RunConfig:
         prover=args.prover,
         consensus_storage=args.consensus_storage,
         prune=args.prune,
+        slow_nodes=args.slow_nodes,
+        slow_cores=args.slow_cores,
         root_gb=args.root_gb,
         pg_iops=args.pg_iops,
         pg_mbps=args.pg_mbps,
@@ -3610,11 +3696,13 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     add_run_flags(plan_p)
     add_node_env_flag(plan_p)
     add_block_size_flag(plan_p)
+    add_protocol_version_flag(plan_p)
     add_leader_trace_flag(plan_p)
     add_latency_flags(plan_p)
     add_consensus_storage_flag(plan_p)
     add_prune_flag(plan_p)
     add_submit_nodes_flag(plan_p)
+    add_slow_nodes_flags(plan_p)
     add_chaos_flags(plan_p)
     add_prover_flag(plan_p)
     add_ttl_flag(plan_p)
@@ -3634,6 +3722,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         func=cmd_up,
         node_env=[],
         max_block_size=defaults.max_block_size,
+        protocol_version=defaults.protocol_version,
         leader_trace=defaults.leader_trace,
         latency=defaults.latency,
         intra_latency=defaults.intra_latency,
@@ -3646,6 +3735,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         consensus_storage=defaults.consensus_storage,
         prune=defaults.prune,
         submit_nodes=None,
+        slow_nodes=defaults.slow_nodes,
+        slow_cores=defaults.slow_cores,
         chaos=False,
         fleet=None,
         force=False,
@@ -3665,11 +3756,13 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     add_run_flags(run_p, tag_required=False)
     add_node_env_flag(run_p)
     add_block_size_flag(run_p)
+    add_protocol_version_flag(run_p)
     add_leader_trace_flag(run_p)
     add_latency_flags(run_p)
     add_consensus_storage_flag(run_p)
     add_prune_flag(run_p)
     add_submit_nodes_flag(run_p)
+    add_slow_nodes_flags(run_p)
     add_chaos_flags(run_p)
     add_prover_flag(run_p)
     add_ttl_flag(run_p)
@@ -4925,6 +5018,7 @@ def fleet_run_config(args: argparse.Namespace, saved: FleetManifest) -> RunConfi
         query_db=cli.query_db,
         node_env=cli.node_env,
         max_block_size=cli.max_block_size,
+        protocol_version=cli.protocol_version,
         leader_trace=cli.leader_trace,
         latency=cli.latency,
         intra_latency=cli.intra_latency,
@@ -4936,11 +5030,14 @@ def fleet_run_config(args: argparse.Namespace, saved: FleetManifest) -> RunConfi
         prover=cli.prover,
         consensus_storage=cli.consensus_storage,
         prune=cli.prune,
+        slow_nodes=cli.slow_nodes,
+        slow_cores=cli.slow_cores,
         fleet=cli.fleet,
         force=cli.force,
         search=cli.search,
     )
     check_submit_nodes(cfg)
+    check_slow_nodes(cfg)
     check_search(cfg)
     check_chaos(cfg)
     check_fleet_disks(saved, cfg)
@@ -5518,6 +5615,7 @@ def render_run(
         (SCRIPT_DIR / "genesis.toml").read_bytes(),
         stake_table_capacity(cfg),
         cfg.max_block_size,
+        cfg.protocol_version,
         cfg.epoch_height,
     )
     run_dir = new_run_dir(fleet_dir, name)
@@ -5603,6 +5701,11 @@ def run_config_hash(
             *([b"staking"] if staking(cfg) else []),
             *([b"prover"] if cfg.prover else []),
             f"prune={cfg.prune}".encode(),
+            *(
+                [f"slow-nodes={cfg.slow_nodes},cores={cfg.slow_cores}".encode()]
+                if cfg.slow_nodes
+                else []
+            ),
             *(
                 [json.dumps(dataclasses.asdict(cfg.chaos), sort_keys=True).encode()]
                 if cfg.chaos
@@ -5827,15 +5930,22 @@ def node_hosts(hosts: dict[str, HostInfo]) -> list[HostInfo]:
     return [hosts[name] for name in _node_names(hosts)]
 
 
+def slow_node_names(cfg: RunConfig) -> list[str]:
+    """The last `cfg.slow_nodes` nodes; `check_slow_nodes` keeps them validator-only."""
+    return [f"node{i}" for i in range(cfg.nodes - cfg.slow_nodes, cfg.nodes)]
+
+
 def render_host_files(
     run_dir: Path,
     cfg: RunConfig,
     manifest: FleetManifest,
     hosts: dict[str, HostInfo],
 ) -> None:
+    slow = slow_node_names(cfg)
     for spec in manifest["hosts"]:
         host_dir = run_dir / "hosts" / spec["name"]
         host_dir.mkdir(parents=True, exist_ok=True)
+        cores = cfg.slow_cores if spec["name"] in slow else None
         (host_dir / "start.sh").write_text(
             render_start_sh(
                 spec,
@@ -5847,6 +5957,7 @@ def render_host_files(
                 query_engine=cfg.query_engine,
                 stake_nodes=len(_node_names(hosts)) if staking(cfg) else None,
                 prover=cfg.prover,
+                cores=cores,
             )
         )
         if spec["role"] == "ctl":
@@ -5889,6 +6000,7 @@ def render_host_files(
                         leader_trace=cfg.leader_trace,
                         consensus_storage=cfg.consensus_storage,
                         query_engine=cfg.query_engine,
+                        cores=cores,
                     )
                 )
             if pg is not None:
@@ -8691,6 +8803,11 @@ def deployment_meta(manifest: Manifest, evidence: Evidence) -> nb.DeploymentMeta
             if "max_block_size" in config
             else {}
         ),
+        **(
+            {"protocol_version": config["protocol_version"]}
+            if "protocol_version" in config
+            else {}
+        ),
         **({"prune": f"{config['prune']} s"} if config.get("prune") else {}),
         # Manifests from before epochs have no such key; a null one is the template's.
         **(
@@ -8700,6 +8817,14 @@ def deployment_meta(manifest: Manifest, evidence: Evidence) -> nb.DeploymentMeta
         ),
         **({"staking": True} if config.get("staking") else {}),
         **({"prover": evidence["prover"]} if "prover" in evidence else {}),
+        **(
+            {
+                "slow_nodes": slow_node_names(config_from_manifest(config)),
+                "slow_cores": config["slow_cores"],
+            }
+            if config.get("slow_nodes")
+            else {}
+        ),
     }
 
 

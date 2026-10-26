@@ -1,13 +1,13 @@
 use std::{collections::BTreeMap, marker::PhantomData, num::NonZeroU64, sync::Arc, time::Duration};
 
 use committable::Committable;
-use hotshot::types::BLSPubKey;
 use hotshot_example_types::{
     block_types::TestTransaction, node_types::TestTypes, state_types::TestInstanceState,
 };
 use hotshot_types::{
     data::{EpochNumber, ViewNumber},
     message::UpgradeLock,
+    signature_key::BLSPubKey,
     simple_certificate::UpgradeCertificate,
     simple_vote::UpgradeProposalData,
     traits::signature_key::SignatureKey,

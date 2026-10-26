@@ -8,8 +8,6 @@ use std::{fs, ops::Range, path::Path, time::Duration, vec};
 
 use alloy_primitives::U256;
 use clap::ValueEnum;
-use libp2p_identity::PeerId;
-use multiaddr::Multiaddr;
 use serde_inline_default::serde_inline_default;
 use thiserror::Error;
 
@@ -21,20 +19,6 @@ use crate::{
     },
     hotshot_config_file::HotShotConfigFile,
 };
-
-/// Configuration describing a libp2p node
-#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
-pub struct Libp2pConfig {
-    /// The bootstrap nodes to connect to (multiaddress, serialized public key)
-    pub bootstrap_nodes: Vec<(PeerId, Multiaddr)>,
-}
-
-/// configuration for combined network
-#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
-pub struct CombinedNetworkConfig {
-    /// delay duration before sending a message through the secondary network
-    pub delay_duration: Duration,
-}
 
 /// a network configuration error
 #[derive(Error, Debug)]
@@ -138,14 +122,8 @@ pub struct NetworkConfig<TYPES: NodeType> {
     pub transaction_size: usize,
     /// name of the key type (for debugging)
     pub key_type_name: String,
-    /// the libp2p config
-    pub libp2p_config: Option<Libp2pConfig>,
     /// the hotshot config
     pub config: HotShotConfig<TYPES>,
-    /// The address for the Push CDN's "marshal", A.K.A. load balancer
-    pub cdn_marshal_address: Option<String>,
-    /// combined network config
-    pub combined_network_config: Option<CombinedNetworkConfig>,
     /// the commit this run is based on
     pub commit_sha: String,
     /// builder to use
@@ -282,11 +260,8 @@ impl<TYPES: NodeType> Default for NetworkConfig<TYPES> {
             seed: [0u8; 32],
             transaction_size: ORCHESTRATOR_DEFAULT_TRANSACTION_SIZE,
             manual_start_password: None,
-            libp2p_config: None,
             config: HotShotConfigFile::hotshot_config_5_nodes_10_da().into(),
             key_type_name: std::any::type_name::<TYPES>().to_string(),
-            cdn_marshal_address: None,
-            combined_network_config: None,
             next_view_timeout: 10,
             view_sync_timeout: Duration::from_secs(2),
             num_bootrap: 5,
@@ -342,12 +317,6 @@ pub struct NetworkConfigFile<TYPES: NodeType> {
     /// the hotshot config file
     #[serde(default = "HotShotConfigFile::hotshot_config_5_nodes_10_da")]
     pub config: HotShotConfigFile<TYPES>,
-    /// The address of the Push CDN's "marshal", A.K.A. load balancer
-    #[serde(default)]
-    pub cdn_marshal_address: Option<String>,
-    /// combined network config
-    #[serde(default)]
-    pub combined_network_config: Option<CombinedNetworkConfig>,
     /// builder to use
     #[serde(default)]
     pub builder: BuilderType,
@@ -379,13 +348,8 @@ impl<TYPES: NodeType> From<NetworkConfigFile<TYPES>> for NetworkConfig<TYPES> {
                 .unwrap_or(Duration::from_millis(REQUEST_DATA_DELAY)),
             seed: val.seed,
             transaction_size: val.transaction_size,
-            libp2p_config: Some(Libp2pConfig {
-                bootstrap_nodes: Vec::new(),
-            }),
             config: val.config.into(),
             key_type_name: std::any::type_name::<TYPES>().to_string(),
-            cdn_marshal_address: val.cdn_marshal_address,
-            combined_network_config: val.combined_network_config,
             commit_sha: String::new(),
             builder: val.builder,
             random_builder: val.random_builder,

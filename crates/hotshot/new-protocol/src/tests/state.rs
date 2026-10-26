@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use hotshot::traits::BlockPayload;
 use hotshot_example_types::{
     block_types::{TestBlockPayload, TestMetadata},
     node_types::{TEST_VERSIONS, TestTypes},
@@ -9,7 +8,7 @@ use hotshot_example_types::{
 use hotshot_types::{
     data::{Leaf2, ViewNumber, vid_commitment},
     traits::{
-        EncodeBytes, ValidatedState,
+        BlockPayload, EncodeBytes, ValidatedState,
         block_contents::{BlockHeader, BuilderFee},
         signature_key::BuilderSignatureKey,
     },

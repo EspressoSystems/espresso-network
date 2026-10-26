@@ -137,9 +137,6 @@ else
   else
     images=(
       bridge
-      cdn-broker
-      cdn-marshal
-      cdn-whitelist
       deploy
       espresso-dev-node
       nasty-client
@@ -164,8 +161,7 @@ else
     "")
     # By default compile all binaries
     cargo_cmd_line="cargo build $cargo_extra_args \
-    && cargo build -p espresso-dev-node  $cargo_extra_args \
-    && cargo build -p espresso-node-sqlite $cargo_extra_args"
+    && cargo build -p espresso-dev-node  $cargo_extra_args"
       ;;
     "espresso-dev-node")
       cargo_cmd_line="cargo build -p espresso-dev-node $cargo_extra_args"
@@ -177,8 +173,7 @@ else
         --bin reset-storage \
         --bin keygen \
         --bin pub-key \
-        $cargo_extra_args \
-      && cargo build -p espresso-node-sqlite $cargo_extra_args"
+        $cargo_extra_args"
       ;;
     "bridge")
       cargo_cmd_line="cargo build --bin espresso-bridge $cargo_extra_args"
@@ -261,9 +256,10 @@ done
 mkdir -p "${workdir}/docker/scripts"
 cp -v docker/scripts/espresso-node-awssecretsmanager.sh "${workdir}/docker/scripts"
 
-# Copy the dev-node and espresso-node-entrypoint script
+# Copy the dev-node and espresso-node-entrypoint scripts, and the espresso-node-sqlite wrapper
 mkdir -p "${workdir}/scripts"
 cp -v scripts/espresso-node-entrypoint "${workdir}/scripts/"
+cp -v scripts/espresso-node-sqlite "${workdir}/scripts/"
 
 export DOCKER_BUILDKIT=1
 

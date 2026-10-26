@@ -1,4 +1,4 @@
-use hotshot::traits::BlockPayload;
+use hotshot_types::traits::BlockPayload;
 use rand::{Rng, RngCore};
 
 use crate::{

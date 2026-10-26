@@ -153,6 +153,15 @@ def test_deployment_shows_the_max_block_size_when_recorded():
     assert "- max block size: 30mb" in netbench.render(current, None)
 
 
+def test_deployment_shows_the_slow_nodes_when_recorded():
+    current = make_result()
+    current["deployment"] = deployment()
+    assert "slow nodes" not in netbench.render(current, None)
+    current["deployment"]["slow_nodes"] = ["node3", "node4"]
+    current["deployment"]["slow_cores"] = 4
+    assert "- slow nodes: node3, node4 on 4 cores" in netbench.render(current, None)
+
+
 def test_load_baseline_single_result(tmp_path: Path):
     path = tmp_path / "result.json"
     netbench.write_json(path, make_result())

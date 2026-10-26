@@ -478,6 +478,17 @@ def test_render_host_files_writes_rejoin_files_only_for_chaos(tmp_path: Path):
     assert not (plain / "hosts/node0/node-rejoin.env").exists()
 
 
+def test_render_host_files_pins_only_the_slow_nodes_also_on_recreate(tmp_path: Path):
+    render(tmp_path, chaos_cfg(slow_nodes=2, slow_cores=4))
+    for script in ("start.sh", "recreate.sh"):
+        pinned = {
+            name
+            for name in (f"node{i}" for i in range(7))
+            if "--cpuset-cpus 0-3" in (tmp_path / "hosts" / name / script).read_text()
+        }
+        assert pinned == {"node5", "node6"}
+
+
 # REQ:awsbench-chaos-check-nodes
 # TEST:check-nodes-expected-down-ok
 def test_check_nodes_ignores_expected_down(isolated: Path):

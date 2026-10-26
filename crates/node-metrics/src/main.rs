@@ -1,5 +1,5 @@
 use clap::Parser;
-use hotshot::helpers::initialize_logging;
+use espresso_utils::logging::initialize_logging;
 use node_metrics::{Options, run_standalone_service};
 
 fn main() {

@@ -68,6 +68,7 @@ def test_genesis_capacity_without_the_prover_is_unchanged(nodes, capacity):
         (HERE / "genesis.toml").read_bytes(),
         awsb.stake_table_capacity(cfg),
         "50mb",
+        "0.6",
     ).decode()
     assert f"stake_table_capacity = {capacity}\n" in rendered
     assert re.search(rf"^capacity = {capacity}$", rendered, re.MULTILINE)
@@ -76,7 +77,10 @@ def test_genesis_capacity_without_the_prover_is_unchanged(nodes, capacity):
 def test_capacity_200_reaches_genesis_and_the_ctl_env_with_the_prover():
     cfg = small_cfg(nodes=3, prover=True)
     rendered = awsb.render_genesis(
-        (HERE / "genesis.toml").read_bytes(), awsb.stake_table_capacity(cfg), "50mb"
+        (HERE / "genesis.toml").read_bytes(),
+        awsb.stake_table_capacity(cfg),
+        "50mb",
+        "0.6",
     ).decode()
     assert "stake_table_capacity = 200\n" in rendered
     assert re.search(r"^capacity = 200$", rendered, re.MULTILINE)

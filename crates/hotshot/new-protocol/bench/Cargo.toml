@@ -19,10 +19,8 @@ clap = { workspace = true }
 cliquenet = { workspace = true }
 committable = { workspace = true }
 csv = { workspace = true }
-hotshot = { workspace = true, features = ["hotshot-testing"] }
 hotshot-example-types = { workspace = true }
 hotshot-new-protocol = { workspace = true }
-hotshot-testing = { workspace = true }
 hotshot-types = { workspace = true }
 serde = { workspace = true }
 time = { workspace = true }
