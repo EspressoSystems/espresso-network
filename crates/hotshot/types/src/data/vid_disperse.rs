@@ -16,8 +16,8 @@
 //!    implementation.
 
 use std::{
-    collections::BTreeMap, fmt::Debug, hash::Hash, marker::PhantomData, ops::Range, sync::Arc,
-    time::Duration,
+    cmp::Reverse, collections::BTreeMap, fmt::Debug, hash::Hash, marker::PhantomData, ops::Range,
+    sync::Arc, time::Duration,
 };
 
 use alloy_primitives::U256;
@@ -403,6 +403,21 @@ fn approximate_weights<TYPES: NodeType>(stake_table: &[PeerConfig<TYPES>]) -> We
             total_weight,
         }
     }
+}
+
+/// `stake_table` in descending stake order; equal stakes keep their order.
+///
+/// Dispersal hands out shard ranges in committee order, and the code is
+/// systematic: the first `recovery_threshold` shard indices are the payload's
+/// own chunks. This order puts the payload itself on the highest-staked nodes,
+/// so a reconstructor holding every one of their shares can concatenate them
+/// instead of decoding.
+pub fn by_descending_stake<TYPES: NodeType>(
+    stake_table: impl IntoIterator<Item = PeerConfig<TYPES>>,
+) -> Vec<PeerConfig<TYPES>> {
+    let mut stake_table: Vec<_> = stake_table.into_iter().collect();
+    stake_table.sort_by_key(|entry| Reverse(entry.stake_table_entry.stake()));
+    stake_table
 }
 
 impl<TYPES: NodeType> AvidMDisperse<TYPES> {
@@ -979,7 +994,7 @@ pub struct AvidmGf2NamespacePiece {
 pub struct AvidmGf2DisperseParams<T: NodeType> {
     /// VID erasure parameters.
     pub param: AvidmGf2Param,
-    /// Per-node weights, in stake-table order.
+    /// Per-node weights, in descending stake order (see `by_descending_stake`).
     pub weights: Vec<u32>,
     /// Recipients, in the same order as `weights`.
     pub recipients: Vec<T::SignatureKey>,
@@ -993,10 +1008,11 @@ impl<T: NodeType> AvidmGf2DisperseParams<T> {
     /// The parameters to disperse an encoded payload with encoded `metadata` to the nodes of
     /// `stake_table`.
     pub fn new(stake_table: &[PeerConfig<T>], payload: Arc<[u8]>, metadata: &[u8]) -> Result<Self> {
+        let stake_table = by_descending_stake(stake_table.iter().cloned());
         let Weights {
             weights,
             total_weight,
-        } = approximate_weights(stake_table);
+        } = approximate_weights(&stake_table);
         let recipients = stake_table
             .iter()
             .map(|entry| entry.stake_table_entry.public_key())
