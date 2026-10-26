@@ -23,7 +23,7 @@ use crate::{
             PayloadFetchMessage, PayloadFetchResponse, PayloadRequestBody, PayloadResponseBody,
         },
     },
-    vid::{ObtainedPayload, expected_vid_param, matches_commitment},
+    vid::{ObtainedPayload, PayloadSource, expected_vid_param, matches_commitment},
 };
 
 /// The requesting half of payload recovery.
@@ -195,6 +195,7 @@ impl<T: NodeType> Fetcher<T> {
                         payload,
                         metadata,
                         tx_commitments,
+                        source: PayloadSource::Fetched,
                     })
                 });
 

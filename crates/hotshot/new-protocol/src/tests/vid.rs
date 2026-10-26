@@ -21,8 +21,8 @@ use super::common::utils::{TestData, TestView};
 use crate::{
     tests::common::utils::vid_fragments,
     vid::{
-        PinnedBy, VidFragmentAccumulator, VidFragmentError, VidReconstructErrorKind,
-        VidReconstructor, matches_commitment, ns_lens_match_metadata,
+        ObtainedPayload, PayloadSource, PinnedBy, VidFragmentAccumulator, VidFragmentError,
+        VidReconstructErrorKind, VidReconstructor, matches_commitment, ns_lens_match_metadata,
     },
 };
 
@@ -242,13 +242,16 @@ async fn assert_no_duplicate_success(
 
 /// Drive the reconstructor to a single successful reconstruction and assert it
 /// matches `view`'s commitment.
-async fn expect_reconstruction(reconstructor: &mut VidReconstructor<TestTypes>, view: &TestView) {
+async fn expect_reconstruction(
+    reconstructor: &mut VidReconstructor<TestTypes>,
+    view: &TestView,
+) -> ObtainedPayload<TestTypes> {
     expect_reconstruction_of(
         reconstructor,
         view.view_number,
         view.vid_shares[0].payload_commitment,
     )
-    .await;
+    .await
 }
 
 /// Drive the reconstructor to a single successful reconstruction and assert it
@@ -257,7 +260,7 @@ async fn expect_reconstruction_of(
     reconstructor: &mut VidReconstructor<TestTypes>,
     view: ViewNumber,
     payload_commitment: VidCommitment2,
-) {
+) -> ObtainedPayload<TestTypes> {
     let out = tokio::time::timeout(std::time::Duration::from_secs(5), reconstructor.next())
         .await
         .expect("reconstruction should complete in time")
@@ -265,6 +268,111 @@ async fn expect_reconstruction_of(
         .expect("reconstruction should succeed");
     assert_eq!(out.view, view);
     assert_eq!(out.payload_commitment, payload_commitment);
+    out
+}
+
+/// Drive the reconstructor to a failed attempt for `view` and return the error.
+async fn expect_failed_attempt(
+    reconstructor: &mut VidReconstructor<TestTypes>,
+    view: &TestView,
+) -> crate::vid::VidReconstructError<BLSPubKey> {
+    let result = tokio::time::timeout(std::time::Duration::from_secs(5), reconstructor.next())
+        .await
+        .expect("attempt should complete in time")
+        .expect("should produce a result");
+    match result {
+        Err(err) => {
+            assert_eq!(err.view, view.view_number);
+            err
+        },
+        Ok(out) => panic!(
+            "BUG: reconstruction for view {:?} produced a payload",
+            out.view
+        ),
+    }
+}
+
+/// The systematic shares hold the payload itself: with exactly those in hand
+/// the reconstructor concatenates them, and the payload reports as such.
+#[tokio::test]
+async fn test_systematic_shares_reconstruct_without_decoding() {
+    let test_data = TestData::new(1).await;
+    let view = &test_data.views[0];
+    let mut reconstructor = VidReconstructor::<TestTypes>::new();
+
+    handle_proposal(&mut reconstructor, view);
+    for i in 0..recovery_threshold(view) {
+        feed(&mut reconstructor, honest_share(view, i));
+    }
+
+    let out = expect_reconstruction(&mut reconstructor, view).await;
+    assert_eq!(out.source, PayloadSource::Systematic);
+}
+
+/// A threshold of shares holding no systematic shard decodes the payload.
+#[tokio::test]
+async fn test_recovery_shares_reconstruct_by_decoding() {
+    let test_data = TestData::new(1).await;
+    let view = &test_data.views[0];
+    let mut reconstructor = VidReconstructor::<TestTypes>::new();
+
+    let recovery_threshold = recovery_threshold(view);
+    handle_proposal(&mut reconstructor, view);
+    for i in recovery_threshold..2 * recovery_threshold {
+        feed(&mut reconstructor, honest_share(view, i));
+    }
+
+    let out = expect_reconstruction(&mut reconstructor, view).await;
+    assert_eq!(out.source, PayloadSource::Decoded);
+}
+
+/// A bad share in the systematic set fails the systematic attempt, which
+/// blames exactly that voter; the next share to arrive restores a threshold
+/// and the payload is decoded instead.
+#[tokio::test]
+async fn test_bad_systematic_share_falls_back_to_decoding() {
+    let test_data = TestData::new(1).await;
+    let view = &test_data.views[0];
+    let mut reconstructor = VidReconstructor::<TestTypes>::new();
+
+    let recovery_threshold = recovery_threshold(view);
+    let poison_voter = BLSPubKey::generated_from_seed_indexed([0u8; 32], 0).0;
+    let poison = garbage_share(view, poison_voter, 0);
+
+    handle_proposal(&mut reconstructor, view);
+    for i in 1..recovery_threshold {
+        feed(&mut reconstructor, honest_share(view, i));
+    }
+    feed(&mut reconstructor, poison);
+
+    let err = expect_failed_attempt(&mut reconstructor, view).await;
+    assert_eq!(err.kind, VidReconstructErrorKind::AwaitingShares);
+    assert_eq!(err.bad_share_keys, vec![poison_voter]);
+
+    feed(&mut reconstructor, honest_share(view, recovery_threshold));
+    let out = expect_reconstruction(&mut reconstructor, view).await;
+    assert_eq!(out.source, PayloadSource::Decoded);
+}
+
+/// A decode attempt in flight when the systematic set completes races a
+/// systematic attempt; exactly one payload comes out.
+#[tokio::test]
+async fn test_racing_paths_reconstruct_once() {
+    let test_data = TestData::new(1).await;
+    let view = &test_data.views[0];
+    let mut reconstructor = VidReconstructor::<TestTypes>::new();
+
+    let recovery_threshold = recovery_threshold(view);
+    handle_proposal(&mut reconstructor, view);
+    for i in recovery_threshold..2 * recovery_threshold {
+        feed(&mut reconstructor, honest_share(view, i));
+    }
+    for i in 0..recovery_threshold {
+        feed(&mut reconstructor, honest_share(view, i));
+    }
+
+    expect_reconstruction(&mut reconstructor, view).await;
+    assert_no_duplicate_success(&mut reconstructor, "both paths completed").await;
 }
 
 /// Feeding shares beyond the threshold produces exactly one reconstruction
@@ -541,12 +649,15 @@ async fn test_weeds_bad_shares_and_recovers() {
 }
 
 /// A disperser that commits to a non-codeword produces shares that each verify
-/// against the commitment yet cannot decode to a matching payload. The
+/// against the commitment yet cannot recover a matching payload. The
 /// reconstructor blames no voter (the shares are all individually valid),
 /// reports the view as unrecoverable, and — having proven the disperser
 /// faulty — spawns no further attempt even as the remaining shares arrive.
-#[tokio::test]
-async fn test_non_codeword_payload_is_unrecoverable() {
+///
+/// Feeds a threshold of the poisoned shares starting at voter `first`, so the
+/// attempt takes the systematic path from voter 0 and the decode path from
+/// the recovery threshold on.
+async fn assert_non_codeword_unrecoverable(first: usize) {
     let test_data = TestData::new(1).await;
     let view = &test_data.views[0];
     let mut reconstructor = VidReconstructor::<TestTypes>::new();
@@ -567,7 +678,7 @@ async fn test_non_codeword_payload_is_unrecoverable() {
 
     // Feed just enough verifying shares to cover the recovery threshold.
     let mut coverage = 0u64;
-    for share in &shares {
+    for share in &shares[first..] {
         if coverage >= recovery_threshold {
             break;
         }
@@ -575,20 +686,9 @@ async fn test_non_codeword_payload_is_unrecoverable() {
         feed(&mut reconstructor, share.clone());
     }
 
-    // Every share verifies, so no voter is blamed; but the shares decode to a
+    // Every share verifies, so no voter is blamed; but the shares recover a
     // payload that does not re-commit, so the view is unrecoverable.
-    let result = tokio::time::timeout(std::time::Duration::from_secs(5), reconstructor.next())
-        .await
-        .expect("attempt should complete in time")
-        .expect("should produce a result");
-    let err = match result {
-        Err(err) => err,
-        Ok(out) => panic!(
-            "BUG: non-codeword reconstruction for view {:?} produced a payload",
-            out.view
-        ),
-    };
-    assert_eq!(err.view, view.view_number);
+    let err = expect_failed_attempt(&mut reconstructor, view).await;
     assert_eq!(err.payload_commitment, payload_commitment);
     assert_eq!(err.kind, VidReconstructErrorKind::Unrecoverable);
     assert!(
@@ -607,6 +707,18 @@ async fn test_non_codeword_payload_is_unrecoverable() {
         "shares for a view already proven unrecoverable",
     )
     .await;
+}
+
+#[tokio::test]
+async fn test_non_codeword_payload_is_unrecoverable_systematically() {
+    assert_non_codeword_unrecoverable(0).await;
+}
+
+#[tokio::test]
+async fn test_non_codeword_payload_is_unrecoverable_by_decoding() {
+    let test_data = TestData::new(1).await;
+    let recovery_threshold = recovery_threshold(&test_data.views[0]) as usize;
+    assert_non_codeword_unrecoverable(recovery_threshold).await;
 }
 
 /// Replaying another voter's valid share under your own key adds no coverage:
