@@ -2,7 +2,7 @@
 //! It also includes some trait implementations that cannot be implemented in an external crate.
 #[cfg(feature = "node")]
 use std::{cmp::max, collections::BTreeMap};
-use std::{fmt::Debug, ops::Range, sync::Arc};
+use std::{fmt::Debug, ops::Range, sync::Arc, time::Duration};
 
 use alloy::primitives::Address;
 #[cfg(feature = "node")]
@@ -305,6 +305,12 @@ pub trait StateCatchup: Send + Sync {
 
     /// Returns the name of the catchup provider.
     fn name(&self) -> String;
+
+    /// A copy of this provider that waits up to `local_timeout` on its local providers, or `None`
+    /// if it has no such timeout.
+    fn with_local_timeout(&self, _local_timeout: Duration) -> Option<Arc<dyn StateCatchup>> {
+        None
+    }
 }
 
 #[async_trait]
@@ -484,6 +490,10 @@ impl<T: StateCatchup + ?Sized> StateCatchup for Arc<T> {
 
     fn is_local(&self) -> bool {
         (**self).is_local()
+    }
+
+    fn with_local_timeout(&self, local_timeout: Duration) -> Option<Arc<dyn StateCatchup>> {
+        (**self).with_local_timeout(local_timeout)
     }
 }
 
