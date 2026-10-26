@@ -304,7 +304,10 @@ impl<T: NodeType> BlockBuilder<T> {
             return;
         };
         let epoch = request.epoch;
-        let PooledBlock { txs, hashes } = self.transactions_for(view);
+        let PooledBlock {
+            txs,
+            hashes: pooled_hashes,
+        } = self.transactions_for(view);
         let instance = self.instance.clone();
         let membership = self.membership.clone();
 
@@ -332,7 +335,8 @@ impl<T: NodeType> BlockBuilder<T> {
                 vid_total_weight(target_mem.stake_table(), Some(epoch))
             };
             let commitments = spawn_blocking(move || {
-                let commitments = block_commitments(&payload, &hashes, total_weight, version);
+                let commitments =
+                    block_commitments(&payload, &pooled_hashes, total_weight, version);
                 (payload, commitments)
             });
             let (
