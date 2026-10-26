@@ -288,6 +288,8 @@ impl NsAvidmGf2BadEncodingProof {
 
 #[cfg(test)]
 mod tests {
+    use std::borrow::Cow;
+
     use rand::seq::SliceRandom;
 
     use crate::{
@@ -517,8 +519,12 @@ mod tests {
         // Five bytes fill two-byte shards; four-byte shards decode to the same
         // bytes, which re-commit at two.
         let payload = [7u8; 5];
-        let originals =
-            AvidmGf2Scheme::chunk_and_pad(&payload, 4, param.recovery_threshold).unwrap();
+        let originals: Vec<Vec<u8>> =
+            AvidmGf2Scheme::chunk_and_pad(&payload, 4, param.recovery_threshold)
+                .unwrap()
+                .into_iter()
+                .map(Cow::into_owned)
+                .collect();
         let recovery =
             reed_solomon_simd::encode(param.recovery_threshold, recovery_count, &originals)
                 .unwrap();
