@@ -5,15 +5,22 @@ use std::{
         Arc,
         atomic::{AtomicBool, Ordering},
     },
+    time::{Duration, Instant},
 };
 
 use committable::Commitment;
 use hotshot_types::{
+    consensus::ConsensusMetricsValue,
     data::{
         EpochNumber, VidCommitment2, VidDisperseShare2, ViewNumber,
         ns_table::{ns_table_payload_byte_len, parse_ns_table},
     },
-    traits::{BlockPayload, block_contents::EncodeBytes, node_implementation::NodeType},
+    traits::{
+        BlockPayload,
+        block_contents::EncodeBytes,
+        metrics::{Counter, Histogram},
+        node_implementation::NodeType,
+    },
     vid::avidm_gf2::{AvidmGf2Common, AvidmGf2Param, AvidmGf2Scheme, AvidmGf2Share},
 };
 use tokio::task::{AbortHandle, Id, JoinSet};
@@ -92,6 +99,40 @@ pub struct VidReconstructor<T: NodeType> {
     tasks: JoinSet<Attempt<T>>,
     calculations: BTreeMap<ViewNumber, Attempts>,
     tracer: Option<LeaderTracerHandle>,
+    metrics: Option<VidReconstructMetrics>,
+}
+
+/// Per-attempt metrics: run time by path, and how many attempts failed or
+/// lost the race to the other path.
+pub struct VidReconstructMetrics {
+    systematic_duration: Arc<dyn Histogram>,
+    decode_duration: Arc<dyn Histogram>,
+    failures: Arc<dyn Counter>,
+    lost: Arc<dyn Counter>,
+}
+
+impl VidReconstructMetrics {
+    pub fn new(consensus: &ConsensusMetricsValue) -> Self {
+        Self {
+            systematic_duration: consensus.vid_reconstruct_systematic_duration.clone().into(),
+            decode_duration: consensus.vid_reconstruct_decode_duration.clone().into(),
+            failures: consensus.vid_reconstruct_failures.clone().into(),
+            lost: consensus.vid_reconstruct_lost.clone().into(),
+        }
+    }
+
+    fn record<T: NodeType>(&self, attempt: &Attempt<T>) {
+        let duration = match attempt.path {
+            ReconstructPath::Systematic => &self.systematic_duration,
+            ReconstructPath::Decode => &self.decode_duration,
+        };
+        duration.add_point(attempt.elapsed.as_secs_f64());
+        match &attempt.outcome {
+            Some(Ok(_)) => {},
+            Some(Err(_)) => self.failures.add(1),
+            None => self.lost.add(1),
+        }
+    }
 }
 
 /// A reconstruction path: which shares it needs and what it does with them.
@@ -159,6 +200,7 @@ impl Attempts {
 struct Attempt<T: NodeType> {
     view: ViewNumber,
     path: ReconstructPath,
+    elapsed: Duration,
     /// `None` if the other path won while this one ran.
     outcome: Option<ReconstructResult<T>>,
 }
@@ -197,11 +239,17 @@ impl<T: NodeType> VidReconstructor<T> {
             tasks: JoinSet::new(),
             calculations: BTreeMap::new(),
             tracer: None,
+            metrics: None,
         }
     }
 
     pub fn set_tracer(&mut self, tracer: Option<LeaderTracerHandle>) {
         self.tracer = tracer;
+    }
+
+    pub fn with_metrics(mut self, metrics: Option<VidReconstructMetrics>) -> Self {
+        self.metrics = metrics;
+        self
     }
 
     /// Pin `view` to its validated proposal's payload commitment and
@@ -272,11 +320,7 @@ impl<T: NodeType> VidReconstructor<T> {
 
     pub async fn next(&mut self) -> Option<ReconstructResult<T>> {
         loop {
-            let Attempt {
-                view,
-                path,
-                outcome,
-            } = match self.tasks.join_next().await? {
+            let attempt = match self.tasks.join_next().await? {
                 Ok(attempt) => attempt,
                 Err(err) => {
                     if err.is_panic() {
@@ -289,6 +333,15 @@ impl<T: NodeType> VidReconstructor<T> {
                     continue;
                 },
             };
+            if let Some(metrics) = &self.metrics {
+                metrics.record(&attempt);
+            }
+            let Attempt {
+                view,
+                path,
+                outcome,
+                ..
+            } = attempt;
             self.finish_attempt(view, path);
             let Some(outcome) = outcome else {
                 continue;
@@ -651,6 +704,7 @@ impl<T: NodeType> ReconstructJob<T> {
             tracer,
         } = self;
         crate::trace_leader_event!(tracer, view, LeaderEvent::RecoverVMinus1Start);
+        let started = Instant::now();
         let (keys, shares): (Vec<_>, Vec<_>) = shares.into_iter().unzip();
         let bytes = recover(view, &common, &shares);
         // The other path won meanwhile: its re-commit already bound the
@@ -659,6 +713,7 @@ impl<T: NodeType> ReconstructJob<T> {
             return Attempt {
                 view,
                 path,
+                elapsed: started.elapsed(),
                 outcome: None,
             };
         }
@@ -692,6 +747,7 @@ impl<T: NodeType> ReconstructJob<T> {
         Attempt {
             view,
             path,
+            elapsed: started.elapsed(),
             outcome: Some(outcome),
         }
     }

@@ -68,7 +68,7 @@ use crate::{
     upgrade::UpgradeProtocol,
     vid::{
         BuiltDispersal, ObtainedPayload, VidDisperseRequest, VidDisperser, VidFragmentAccumulator,
-        VidReconstructor, expected_vid_param,
+        VidReconstructMetrics, VidReconstructor, expected_vid_param,
     },
     vote::{EpochRootTally, SimpleTally, UpgradeTally, VoteCollector},
 };
@@ -372,7 +372,13 @@ where
             .network(network)
             .state_manager(state_manager)
             .vid_disperser(vid_disperser)
-            .vid_reconstructor(vid_reconstructor)
+            .vid_reconstructor(
+                vid_reconstructor.with_metrics(
+                    coordinator_metrics
+                        .as_ref()
+                        .map(|m| VidReconstructMetrics::new(&m.consensus)),
+                ),
+            )
             .vote1_collector(VoteCollector::new(
                 membership_coordinator.clone(),
                 lock.clone(),
@@ -774,6 +780,9 @@ where
     }
 
     fn on_payload_obtained(&mut self, out: ObtainedPayload<T>) -> ConsensusInput<T> {
+        if let Some(m) = &self.metrics {
+            m.payload_obtained(out.source);
+        }
         self.server
             .retain(out.view, out.payload_commitment, &out.payload);
         self.payload_txn_bytes
