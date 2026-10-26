@@ -43,7 +43,8 @@ use hotshot_types::{
 };
 pub(crate) use reconstruct::matches_commitment;
 pub use reconstruct::{
-    ObtainedPayload, PayloadSource, VidReconstructError, VidReconstructErrorKind, VidReconstructor,
+    ObtainedPayload, PayloadSource, VidReconstructError, VidReconstructErrorKind,
+    VidReconstructMetrics, VidReconstructor,
 };
 
 /// The VID erasure parameters the committee for `epoch` fixes, matching what
