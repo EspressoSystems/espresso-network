@@ -283,11 +283,6 @@ where
         .block_height()
         .await
         .context("reading the height the query database has reached")?;
-    let tip = source
-        .block_height()
-        .await
-        .context("fetching the chain height")?;
-    let from = first_height_to_ingest(next, tip, params.options.max_blocks_per_poll);
 
     // Seeded like a validator's lock, so the API validates state certificates against the
     // version the network has upgraded to rather than the base version forever.
@@ -321,10 +316,10 @@ where
         state_peer_clients,
         next,
     };
-    // Fail fast at boot: a config or peer error exits here instead of warning on every poll.
-    // The first poll then finds the table held.
+    // Boot must not depend on the upstreams: a restart with a persisted network config needs none
+    // until the first poll. `follow` checks every block it stores, which covers skip-ahead.
     follower
-        .ensure_next_stake_table(from)
+        .ensure_next_stake_table(next)
         .await
         .context("startup stake-table catchup failed")?;
     let mut tasks = TaskList::default();
@@ -736,7 +731,7 @@ impl<P: SequencerPersistence> Follower<P> {
     }
 
     /// Before a block at `height` is stored, the table of its epoch + 1 is held. Boot calls it for
-    /// the first height to ingest, `follow` per block.
+    /// the next height the sink expects, `follow` per block.
     async fn ensure_next_stake_table(&self, height: u64) -> Result<(), StartupCatchupError> {
         let epoch = stake_table_needed_by_block(height, self.epoch_height);
         ensure_stake_tables(

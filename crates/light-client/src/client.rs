@@ -61,7 +61,7 @@ pub trait Client: Send + Sync + 'static {
     /// Get the header at `height`.
     ///
     /// The header is unverified. Callers must check it against a trusted commitment.
-    fn header(&self, height: u64) -> impl Send + Future<Output = Result<Header>>;
+    fn unverified_header(&self, height: u64) -> impl Send + Future<Output = Result<Header>>;
 
     /// Get an inclusion proof for the requested header relative to the Merkle tree at height `root`.
     fn header_proof(
@@ -245,7 +245,7 @@ impl Client for QueryServiceClient {
             .context("fetching leaf ranges")
     }
 
-    async fn header(&self, height: u64) -> Result<Header> {
+    async fn unverified_header(&self, height: u64) -> Result<Header> {
         self.fetch(&format!("/availability/header/{height}")).await
     }
 
@@ -384,8 +384,8 @@ where
             .await
     }
 
-    async fn header(&self, height: u64) -> Result<Header> {
-        self.get_any(&self.clients, |client| client.header(height))
+    async fn unverified_header(&self, height: u64) -> Result<Header> {
+        self.get_any(&self.clients, |client| client.unverified_header(height))
             .await
     }
 

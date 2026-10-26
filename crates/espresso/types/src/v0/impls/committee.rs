@@ -1269,6 +1269,10 @@ impl Membership<SeqTypes> for EpochCommittees {
 impl EpochCommittees {
     /// Re-derive from L1 the stake tables of epochs whose epoch root header is stored but whose
     /// table is not. Storage persists a table one epoch late.
+    ///
+    /// Stops at the first epoch without a stored root, or at the first failed derivation. A failed
+    /// epoch stays missing and is derived on demand, by the startup catchup when it lies in
+    /// `N-1 ..= N+1`, else by consensus catchup.
     pub async fn add_stored_epoch_roots(
         &self,
         coordinator: &EpochMembershipCoordinator<SeqTypes>,
@@ -1291,10 +1295,10 @@ impl EpochCommittees {
                 return Ok(());
             };
             info!(%epoch, "re-deriving the stake table from the stored epoch root");
-            coordinator
-                .add_epoch_root(header)
-                .await
-                .with_context(|| format!("adding the stored epoch root of epoch {epoch}"))?;
+            if let Err(err) = coordinator.add_epoch_root(header).await {
+                warn!(%epoch, err = %format_args!("{err:#}"), "re-deriving the stored epoch root failed");
+                return Ok(());
+            }
             epoch += 1;
         }
     }
@@ -2660,12 +2664,13 @@ mod tests {
         assert_eq!(committees.highest_rooted_epoch(), Some(EpochNumber::new(3)));
     }
 
+    // Without the first epoch the dynamic reward computation fails; the epoch stays missing.
     #[tokio::test]
-    async fn stored_epoch_roots_with_dynamic_reward_fail_without_first_epoch() {
+    async fn stored_epoch_roots_skip_a_failed_derivation() {
         let header = build_dynamic_reward_epoch_root_header().await;
         let (result, _) = add_stored_roots_of(header, &[3], false).await;
 
-        result.unwrap_err();
+        result.unwrap();
     }
 
     #[tokio::test]

@@ -6742,13 +6742,13 @@ mod test {
             .await;
 
         let membership = node.node_state().coordinator.membership().clone();
-        for epoch in (lc_contract_epoch - 3)..=(lc_contract_epoch + 1) {
+        for epoch in (lc_contract_epoch - 4)..=(lc_contract_epoch + 1) {
             assert!(
                 membership.snapshot(EpochNumber::new(epoch)).is_some(),
                 "stake table for epoch {epoch} was not caught up from the LC contract"
             );
         }
-        for epoch in [lc_contract_epoch, lc_contract_epoch + 1] {
+        for epoch in (lc_contract_epoch - 1)..=(lc_contract_epoch + 1) {
             assert!(
                 membership
                     .epoch_block_reward(EpochNumber::new(epoch))

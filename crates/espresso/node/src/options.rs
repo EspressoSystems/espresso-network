@@ -158,9 +158,10 @@ pub struct Options {
     /// Peer nodes used to fetch missing state and to join a running network
     ///
     /// Trusted for liveness and block height during initial sync; everything they serve is
-    /// verified. Startup catches up to the median of their reported tips: one bad peer among 3 or
-    /// more cannot move the goal, so configure at least 3 independent peers that serve the
-    /// light-client API (query module with SQL storage).
+    /// verified. The current epoch comes from the median of the tips the peers report within the
+    /// step timeout. One lying peer among three answering cannot move it, and peers that do not
+    /// answer do not count. Configure at least 3 independent peers that serve the light-client
+    /// API (query module with SQL storage).
     #[clap(long, env = "ESPRESSO_NODE_STATE_PEERS", value_delimiter = ',')]
     #[derivative(Debug(format_with = "fmt_urls"))]
     pub state_peers: Vec<Url>,

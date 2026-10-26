@@ -442,6 +442,10 @@ struct InnerTestClient {
     fail_header_proofs: bool,
     /// If set, fail block height requests, like a peer that does not answer.
     fail_block_height: bool,
+    /// Block height requests still to fail before the client answers.
+    block_height_failures: usize,
+    /// Block height requests received, failed or not.
+    block_height_calls: usize,
 }
 
 impl InnerTestClient {
@@ -909,6 +913,16 @@ impl TestClient {
         self.inner.lock().await.fail_block_height = true;
     }
 
+    /// Fail the next `count` block height requests, then answer.
+    pub async fn fail_next_block_heights(&self, count: usize) {
+        self.inner.lock().await.block_height_failures = count;
+    }
+
+    /// Block height requests received so far, failed or not.
+    pub async fn block_height_calls(&self) -> usize {
+        self.inner.lock().await.block_height_calls
+    }
+
     /// Drop the `Certificate2` finalizing the leaf at `height`, like a server that never stored it.
     pub async fn forget_cert2(&self, height: usize) {
         let mut inner = self.inner.lock().await;
@@ -919,8 +933,13 @@ impl TestClient {
 
 impl Client for TestClient {
     async fn block_height(&self) -> Result<u64> {
-        let inner = self.inner.lock().await;
+        let mut inner = self.inner.lock().await;
+        inner.block_height_calls += 1;
         ensure!(!inner.fail_block_height, "block height unavailable");
+        if inner.block_height_failures > 0 {
+            inner.block_height_failures -= 1;
+            bail!("block height unavailable");
+        }
         Ok(inner
             .mock_block_height
             .unwrap_or_else(|| inner.leaves.len() as u64))
@@ -1005,7 +1024,7 @@ impl Client for TestClient {
         Ok(proof)
     }
 
-    async fn header(&self, height: u64) -> Result<Header> {
+    async fn unverified_header(&self, height: u64) -> Result<Header> {
         let mut inner = self.inner.lock().await;
         ensure!(
             !inner.missing_leaves.contains(&(height as usize)),
