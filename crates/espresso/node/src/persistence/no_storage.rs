@@ -7,7 +7,7 @@ use espresso_types::{
     AuthenticatedValidatorMap, Header, Leaf2, NetworkConfig, PubKey, RegisteredValidatorMap,
     StakeTableHash,
     traits::{EventsPersistenceRead, MembershipPersistence, StakeTuple},
-    v0::traits::{EventConsumer, PersistenceOptions, SequencerPersistence},
+    v0::traits::{EventConsumer, PersistenceOptions, SequencerPersistence, StateCertPersistence},
     v0_3::{EventKey, IndexedStake, RegisteredValidator, RewardAmount, StakeTableEvent},
 };
 use hotshot_types::{
@@ -227,6 +227,11 @@ impl SequencerPersistence for NoStorage {
         Ok(None)
     }
 
+    fn enable_metrics(&mut self, _metrics: &dyn Metrics) {}
+}
+
+#[async_trait]
+impl StateCertPersistence for NoStorage {
     async fn get_state_cert_by_epoch(
         &self,
         _epoch: u64,
@@ -241,8 +246,6 @@ impl SequencerPersistence for NoStorage {
     ) -> anyhow::Result<()> {
         Ok(())
     }
-
-    fn enable_metrics(&mut self, _metrics: &dyn Metrics) {}
 }
 
 #[async_trait]

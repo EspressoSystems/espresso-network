@@ -13,7 +13,6 @@ pub mod genesis;
 #[cfg(any(test, feature = "testing"))]
 pub mod legacy_chain;
 pub use espresso_keyset as keyset;
-pub mod network;
 pub mod options;
 pub mod persistence;
 pub mod run;
@@ -151,6 +150,7 @@ pub struct CatchupParams {
     pub backoff: BackoffParams,
     pub base_timeout: Duration,
     pub local_timeout: Duration,
+    pub http_delay: Duration,
 }
 
 pub(crate) enum LoadedNetworkConfig {
@@ -355,10 +355,9 @@ where
 
             let registration = orchestrator_registration(&validator_config)?;
 
-            let config =
-                get_complete_config(&orchestrator_client, registration.clone(), None, None)
-                    .await?
-                    .0;
+            let config = get_complete_config(&orchestrator_client, registration.clone())
+                .await?
+                .0;
 
             tracing::warn!(
                 node_id = config.node_index,
@@ -638,15 +637,20 @@ where
         genesis_state.prefund_account(*address, *amount);
     }
 
-    let state_catchup_providers = ParallelStateCatchup::new(&[], catchup.local_timeout);
+    let state_catchup_providers = ParallelStateCatchup::new(&[], catchup.local_timeout)
+        .with_fallback_delay(catchup.http_delay);
     let state_peers = StatePeers::<SequencerApiVersion>::from_urls(
         catchup.state_peers,
         catchup.backoff,
         catchup.base_timeout,
         metrics,
     );
-    state_catchup_providers.add_provider(Arc::new(state_peers));
-    match persistence.clone().into_catchup_provider(catchup.backoff) {
+    state_catchup_providers.add_fallback_provider(Arc::new(state_peers));
+    // Local is a single attempt per call; remote providers retry.
+    match persistence
+        .clone()
+        .into_catchup_provider(BackoffParams::disabled())
+    {
         Ok(provider) => {
             state_catchup_providers.add_provider(Arc::new(provider));
         },
@@ -1522,9 +1526,10 @@ pub mod testing {
             }
 
             // If we have a working local catchup provider, add it
+            // Local is a single attempt per call; remote providers retry.
             match persistence
                 .clone()
-                .into_catchup_provider(BackoffParams::default())
+                .into_catchup_provider(BackoffParams::disabled())
             {
                 Ok(local_catchup) => {
                     catchup_providers.add_provider(local_catchup);

@@ -2,7 +2,7 @@
 //! It also includes some trait implementations that cannot be implemented in an external crate.
 #[cfg(feature = "node")]
 use std::{cmp::max, collections::BTreeMap};
-use std::{fmt::Debug, ops::Range, sync::Arc};
+use std::{fmt::Debug, ops::Range, sync::Arc, time::Duration};
 
 use alloy::primitives::Address;
 #[cfg(feature = "node")]
@@ -301,6 +301,12 @@ pub trait StateCatchup: Send + Sync {
 
     /// Returns the name of the catchup provider.
     fn name(&self) -> String;
+
+    /// A copy of this provider that waits up to `local_timeout` on its local providers, or `None`
+    /// if it has no such timeout.
+    fn with_local_timeout(&self, _local_timeout: Duration) -> Option<Arc<dyn StateCatchup>> {
+        None
+    }
 }
 
 #[async_trait]
@@ -481,6 +487,10 @@ impl<T: StateCatchup + ?Sized> StateCatchup for Arc<T> {
     fn is_local(&self) -> bool {
         (**self).is_local()
     }
+
+    fn with_local_timeout(&self, local_timeout: Duration) -> Option<Arc<dyn StateCatchup>> {
+        (**self).with_local_timeout(local_timeout)
+    }
 }
 
 #[cfg(feature = "node")]
@@ -572,10 +582,29 @@ pub trait MembershipPersistence: Send + Sync + 'static {
     ) -> anyhow::Result<Vec<RegisteredValidator<PubKey>>>;
 }
 
+/// State certificates by epoch, apart from [`SequencerPersistence`] so that the API can hold them as
+/// a trait object.
+#[cfg(feature = "node")]
+#[async_trait]
+pub trait StateCertPersistence: Send + Sync + 'static {
+    /// Get a state certificate for an epoch.
+    async fn get_state_cert_by_epoch(
+        &self,
+        epoch: u64,
+    ) -> anyhow::Result<Option<LightClientStateUpdateCertificateV2<SeqTypes>>>;
+
+    /// Insert a state certificate for a given epoch.
+    async fn insert_state_cert(
+        &self,
+        epoch: u64,
+        cert: LightClientStateUpdateCertificateV2<SeqTypes>,
+    ) -> anyhow::Result<()>;
+}
+
 #[cfg(feature = "node")]
 #[async_trait]
 pub trait SequencerPersistence:
-    Sized + Send + Sync + Clone + 'static + MembershipPersistence
+    Sized + Send + Sync + Clone + 'static + MembershipPersistence + StateCertPersistence
 {
     /// Use this storage as a state catchup backend, if supported.
     fn into_catchup_provider(
@@ -625,19 +654,6 @@ pub trait SequencerPersistence:
     async fn load_state_cert(
         &self,
     ) -> anyhow::Result<Option<LightClientStateUpdateCertificateV2<SeqTypes>>>;
-
-    /// Get a state certificate for an epoch.
-    async fn get_state_cert_by_epoch(
-        &self,
-        epoch: u64,
-    ) -> anyhow::Result<Option<LightClientStateUpdateCertificateV2<SeqTypes>>>;
-
-    /// Insert a state certificate for a given epoch.
-    async fn insert_state_cert(
-        &self,
-        epoch: u64,
-        cert: LightClientStateUpdateCertificateV2<SeqTypes>,
-    ) -> anyhow::Result<()>;
 
     /// Load the latest known consensus state.
     ///

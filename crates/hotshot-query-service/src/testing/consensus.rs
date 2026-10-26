@@ -16,7 +16,9 @@ use hotshot_types::new_protocol::CoordinatorEvent;
 use super::mocks::MockTypes;
 use crate::{
     availability::{AvailabilityDataSource, UpdateAvailabilityData},
-    data_source::{FileSystemDataSource, SqlDataSource, VersionedDataSource, fetching::Builder},
+    data_source::{
+        FileSystemDataSource, VersionedDataSource, fetching::Builder, sql::postgres::SqlDataSource,
+    },
     fetching::provider::NoFetching,
     node::NodeDataSource,
     status::StatusDataSource,

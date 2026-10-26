@@ -3,15 +3,10 @@
 Espresso Network is a confirmation layer for Ethereum rollups. `crates/espresso/` is the application, `crates/hotshot/`
 the generic BFT consensus library it is built on, `contracts/` the Solidity L1 side.
 
-## Commands
-
-- Every `cargo` command needs `-p <package>`; a full workspace build OOMs.
-- `cargo test -p espresso-types reference` after changing any serializable type.
-- `just lint` runs clippy with `-D warnings`. `just --list` for the rest.
-
 ## Where to look
 
-- `doc/agents/rust.md` - before writing Rust: commands, conventions, storage, tests, adding an API endpoint
+- `doc/agents/rust.md` - before running cargo or writing Rust: commands, conventions, storage, tests, adding an API
+  endpoint
 - `doc/agents/refinery-migrations.md` - before writing a SQL migration that touches existing rows
 - `doc/agents/solidity.md` - before touching `contracts/`
 - `API.md` - the v1 and v2 APIs, and how to add a v2 endpoint

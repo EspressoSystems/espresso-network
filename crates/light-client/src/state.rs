@@ -64,6 +64,13 @@ pub struct Genesis {
 /// reject or ignore distant hints; beyond this we omit the hint and verify against a quorum.
 const MAX_FINALIZED_HINT_DISTANCE: u64 = 500;
 
+/// Whether a range fetch writes the leaves it chains to a proven leaf into the cache.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CacheLeaves {
+    Yes,
+    No,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[cfg_attr(feature = "clap", derive(clap::Parser))]
 pub struct LightClientOptions {
@@ -253,6 +260,31 @@ where
         start_height: usize,
         end_height: usize,
     ) -> Result<Vec<LeafQueryData<SeqTypes>>> {
+        self.fetch_leaves_in_range_with(start_height, end_height, CacheLeaves::Yes)
+            .await
+    }
+
+    /// [`fetch_leaves_in_range`](Self::fetch_leaves_in_range) for a caller that needs each leaf
+    /// once, such as the state loop replaying history.
+    ///
+    /// Only the proven last leaf goes into the cache. Writing the others costs one transaction per
+    /// leaf, more than fetching the whole range, and a range longer than the cache would evict
+    /// every leaf other callers keep there as anchors.
+    pub async fn fetch_leaves_in_range_uncached(
+        &self,
+        start_height: usize,
+        end_height: usize,
+    ) -> Result<Vec<LeafQueryData<SeqTypes>>> {
+        self.fetch_leaves_in_range_with(start_height, end_height, CacheLeaves::No)
+            .await
+    }
+
+    async fn fetch_leaves_in_range_with(
+        &self,
+        start_height: usize,
+        end_height: usize,
+        cache: CacheLeaves,
+    ) -> Result<Vec<LeafQueryData<SeqTypes>>> {
         ensure!(
             start_height < end_height,
             "invalid range: start must be < end"
@@ -278,7 +310,7 @@ where
         // at this point, we know the end leaf is valid and is finalized
         // now we need to fetch all leaves from start to end - 1 from the server
         let leaves = self
-            .fetch_leaves_in_range_from_server(start_height, end_height - 1, &known_end_leaf)
+            .fetch_leaves_in_range_from_server(start_height, end_height - 1, &known_end_leaf, cache)
             .await
             // add the known end leaf to the result
             .map(|mut leaves| {
@@ -360,6 +392,7 @@ where
         start_height: usize,
         end_height: usize,
         known_finalized: &LeafQueryData<SeqTypes>,
+        cache: CacheLeaves,
     ) -> Result<Vec<LeafQueryData<SeqTypes>>> {
         // we will fetch all the leaves till the known finalized leaf
         let leaves = self
@@ -377,7 +410,8 @@ where
             end_height
         );
 
-        self.verify_leaf_chain(&leaves, known_finalized).await?;
+        self.verify_leaf_chain(&leaves, known_finalized, cache)
+            .await?;
         Ok(leaves)
     }
 
@@ -390,6 +424,7 @@ where
         &self,
         leaves: &[LeafQueryData<SeqTypes>],
         known_finalized: &LeafQueryData<SeqTypes>,
+        cache: CacheLeaves,
     ) -> Result<()> {
         let mut expected_parent = known_finalized.leaf().parent_commitment();
         for leaf in leaves.iter().rev() {
@@ -403,6 +438,9 @@ where
             expected_parent = leaf.leaf().parent_commitment();
         }
 
+        if cache == CacheLeaves::No {
+            return Ok(());
+        }
         // Cache the verified leaves, but do not fail the fetch if caching does.
         for leaf in leaves {
             if let Err(err) = self.db.insert_leaf(leaf.clone()).await {
@@ -522,7 +560,8 @@ where
                 };
                 run.push(leaf);
             }
-            self.verify_leaf_chain(&run, &anchor).await?;
+            self.verify_leaf_chain(&run, &anchor, CacheLeaves::Yes)
+                .await?;
             leaves.extend(run);
             leaves.push(anchor);
         }
@@ -1150,7 +1189,7 @@ mod test {
 
     use super::*;
     use crate::{
-        storage::SqliteStorage,
+        storage::SqlStorage,
         testing::{TestClient, leaf_chain, random_validator},
     };
 
@@ -1158,7 +1197,7 @@ mod test {
     #[test_log::test]
     async fn test_block_height() {
         let client = TestClient::default();
-        let db = SqliteStorage::default().await.unwrap();
+        let db = SqlStorage::default().await.unwrap();
 
         let lc = LightClient::from_genesis(db.clone(), client.clone(), client.genesis().await);
 
@@ -1190,7 +1229,7 @@ mod test {
     async fn test_fetch_leaf_twice() {
         let client = TestClient::default();
         let lc = LightClient::from_genesis(
-            SqliteStorage::default().await.unwrap(),
+            SqlStorage::default().await.unwrap(),
             client.clone(),
             client.genesis().await,
         );
@@ -1209,7 +1248,7 @@ mod test {
     async fn test_fetch_leaf_upper_bound() {
         let client = TestClient::default();
 
-        let db = SqliteStorage::default().await.unwrap();
+        let db = SqlStorage::default().await.unwrap();
         db.insert_leaf(client.leaf(2).await).await.unwrap();
 
         let lc = LightClient::from_genesis(db, client.clone(), client.genesis().await);
@@ -1231,7 +1270,7 @@ mod test {
         let distant_leaf = leaf_chain(distant..=distant, DRB_AND_HEADER_UPGRADE_VERSION)
             .await
             .remove(0);
-        let db = SqliteStorage::default().await.unwrap();
+        let db = SqlStorage::default().await.unwrap();
         db.insert_leaf(distant_leaf).await.unwrap();
 
         let lc = LightClient::from_genesis(db, client.clone(), client.genesis().await);
@@ -1246,7 +1285,7 @@ mod test {
     async fn test_fetch_leaf_invalid_proof() {
         let client = TestClient::default();
         let lc = LightClient::from_genesis(
-            SqliteStorage::default().await.unwrap(),
+            SqlStorage::default().await.unwrap(),
             client.clone(),
             client.genesis().await,
         );
@@ -1262,7 +1301,7 @@ mod test {
     async fn test_fetch_leaf_wrong_leaf() {
         let client = TestClient::default();
         let lc = LightClient::from_genesis(
-            SqliteStorage::default().await.unwrap(),
+            SqlStorage::default().await.unwrap(),
             client.clone(),
             client.genesis().await,
         );
@@ -1278,7 +1317,7 @@ mod test {
     async fn test_fetch_header_twice() {
         let client = TestClient::default();
         let lc = LightClient::from_genesis(
-            SqliteStorage::default().await.unwrap(),
+            SqlStorage::default().await.unwrap(),
             client.clone(),
             client.genesis().await,
         );
@@ -1303,7 +1342,7 @@ mod test {
     async fn test_fetch_header_upper_bound() {
         let client = TestClient::default();
 
-        let db = SqliteStorage::default().await.unwrap();
+        let db = SqlStorage::default().await.unwrap();
         db.insert_leaf(client.leaf(2).await).await.unwrap();
 
         let lc = LightClient::from_genesis(db, client.clone(), client.genesis().await);
@@ -1318,7 +1357,7 @@ mod test {
     async fn test_fetch_header_falls_back_to_leaf_proof_when_header_proof_fails() {
         let client = TestClient::default();
 
-        let db = SqliteStorage::default().await.unwrap();
+        let db = SqlStorage::default().await.unwrap();
         db.insert_leaf(client.leaf(2).await).await.unwrap();
         client.fail_header_proofs().await;
 
@@ -1335,7 +1374,7 @@ mod test {
         let client = TestClient::default();
         client.set_upgrade(1, NEW_PROTOCOL_VERSION).await;
 
-        let db = SqliteStorage::default().await.unwrap();
+        let db = SqlStorage::default().await.unwrap();
         db.insert_leaf(client.leaf(2).await).await.unwrap();
         client.fail_header_proofs().await;
         client.forget_cert2(1).await;
@@ -1352,7 +1391,7 @@ mod test {
     async fn test_fetch_header_reports_header_proof_error_when_fallback_fails() {
         let client = TestClient::default();
 
-        let db = SqliteStorage::default().await.unwrap();
+        let db = SqlStorage::default().await.unwrap();
         db.insert_leaf(client.leaf(2).await).await.unwrap();
         client.fail_header_proofs().await;
         client.forget_leaf(1).await;
@@ -1369,7 +1408,7 @@ mod test {
     #[test_log::test]
     async fn test_fetch_header_invalid_proof() {
         let client = TestClient::default();
-        let db = SqliteStorage::default().await.unwrap();
+        let db = SqlStorage::default().await.unwrap();
 
         // Start with an upper bound, so that `fetch_header` goes through the `client.header_proof`
         // path.
@@ -1386,7 +1425,7 @@ mod test {
     #[test_log::test]
     async fn test_fetch_header_wrong_header() {
         let client = TestClient::default();
-        let db = SqliteStorage::default().await.unwrap();
+        let db = SqlStorage::default().await.unwrap();
 
         // Start with an upper bound, so that `fetch_header` goes through the `client.header_proof`
         // path.
@@ -1408,7 +1447,7 @@ mod test {
     async fn test_fetch_leaves_in_range() {
         let client = TestClient::default();
         let lc = LightClient::from_genesis(
-            SqliteStorage::default().await.unwrap(),
+            SqlStorage::default().await.unwrap(),
             client.clone(),
             client.genesis().await,
         );
@@ -1431,10 +1470,30 @@ mod test {
 
     #[tokio::test]
     #[test_log::test]
+    async fn test_fetch_leaves_in_range_uncached() {
+        let client = TestClient::default();
+        let lc = LightClient::from_genesis(
+            SqlStorage::default().await.unwrap(),
+            client.clone(),
+            client.genesis().await,
+        );
+        let leaf1 = client.remember_leaf(1).await;
+        let leaf2 = client.remember_leaf(2).await;
+        let leaf3 = client.remember_leaf(3).await;
+
+        let leaves = lc.fetch_leaves_in_range_uncached(1, 4).await.unwrap();
+        assert_eq!(leaves, vec![leaf1, leaf2, leaf3.clone()]);
+
+        // Only the proven last leaf is cached; the ones chained to it are not.
+        assert_eq!(lc.db.get_leaves_in_range(1, 4).await.unwrap(), vec![leaf3]);
+    }
+
+    #[tokio::test]
+    #[test_log::test]
     async fn test_fetch_headers_in_range() {
         let client = TestClient::default();
         let lc = LightClient::from_genesis(
-            SqliteStorage::default().await.unwrap(),
+            SqlStorage::default().await.unwrap(),
             client.clone(),
             client.genesis().await,
         );
@@ -1466,7 +1525,7 @@ mod test {
     async fn test_fetch_leaves_in_range_invalid_proof() {
         let client = TestClient::default();
         let lc = LightClient::from_genesis(
-            SqliteStorage::default().await.unwrap(),
+            SqlStorage::default().await.unwrap(),
             client.clone(),
             client.genesis().await,
         );
@@ -1486,7 +1545,7 @@ mod test {
     async fn test_fetch_headers_in_range_invalid_proof() {
         let client = TestClient::default();
         let lc = LightClient::from_genesis(
-            SqliteStorage::default().await.unwrap(),
+            SqlStorage::default().await.unwrap(),
             client.clone(),
             client.genesis().await,
         );
@@ -1506,7 +1565,7 @@ mod test {
     async fn test_fetch_leaves_in_range_wrong_leaf() {
         let client = TestClient::default();
         let lc = LightClient::from_genesis(
-            SqliteStorage::default().await.unwrap(),
+            SqlStorage::default().await.unwrap(),
             client.clone(),
             client.genesis().await,
         );
@@ -1520,7 +1579,7 @@ mod test {
     async fn test_fetch_leaves_for_ranges() {
         let client = TestClient::default();
         let lc = LightClient::from_genesis(
-            SqliteStorage::default().await.unwrap(),
+            SqlStorage::default().await.unwrap(),
             client.clone(),
             client.genesis().await,
         );
@@ -1550,7 +1609,7 @@ mod test {
     async fn test_fetch_leaves_for_ranges_ordering() {
         let client = TestClient::default();
         let lc = LightClient::from_genesis(
-            SqliteStorage::default().await.unwrap(),
+            SqlStorage::default().await.unwrap(),
             client.clone(),
             client.genesis().await,
         );
@@ -1574,7 +1633,7 @@ mod test {
     async fn test_fetch_leaves_for_ranges_wrong_leaf() {
         let client = TestClient::default();
         let lc = LightClient::from_genesis(
-            SqliteStorage::default().await.unwrap(),
+            SqlStorage::default().await.unwrap(),
             client.clone(),
             client.genesis().await,
         );
@@ -1595,7 +1654,7 @@ mod test {
     async fn test_fetch_leaves_for_ranges_wide_span() {
         let client = TestClient::default();
         let lc = LightClient::from_genesis(
-            SqliteStorage::default().await.unwrap(),
+            SqlStorage::default().await.unwrap(),
             client.clone(),
             client.genesis().await,
         );
@@ -1615,7 +1674,7 @@ mod test {
     async fn test_fetch_leaves_for_ranges_without_ranges_endpoint() {
         let client = TestClient::default();
         let lc = LightClient::from_genesis(
-            SqliteStorage::default().await.unwrap(),
+            SqlStorage::default().await.unwrap(),
             client.clone(),
             client.genesis().await,
         );
@@ -1634,7 +1693,7 @@ mod test {
     async fn test_fetch_headers_in_range_wrong_leaf() {
         let client = TestClient::default();
         let lc = LightClient::from_genesis(
-            SqliteStorage::default().await.unwrap(),
+            SqlStorage::default().await.unwrap(),
             client.clone(),
             client.genesis().await,
         );
@@ -1649,7 +1708,7 @@ mod test {
         let client = TestClient::default();
         let genesis = client.genesis().await;
         let lc = LightClient::from_genesis(
-            SqliteStorage::default().await.unwrap(),
+            SqlStorage::default().await.unwrap(),
             client.clone(),
             genesis.clone(),
         );
@@ -1667,7 +1726,7 @@ mod test {
     #[tokio::test]
     #[test_log::test]
     async fn test_fetch_stake_table_twice_storage() {
-        let db = SqliteStorage::default().await.unwrap();
+        let db = SqlStorage::default().await.unwrap();
         let client = TestClient::default();
         let genesis = client.genesis().await;
         let lc = LightClient::from_genesis(db.clone(), client.clone(), genesis.clone());
@@ -1687,7 +1746,7 @@ mod test {
     #[tokio::test]
     #[test_log::test]
     async fn test_fetch_stake_table_catchup_from_lower_bound() {
-        let db = SqliteStorage::default().await.unwrap();
+        let db = SqlStorage::default().await.unwrap();
         let client = TestClient::default();
         let genesis = client.genesis().await;
         let lc = LightClient::from_genesis(db.clone(), client.clone(), genesis.clone());
@@ -1715,7 +1774,7 @@ mod test {
         let genesis = client.genesis().await;
         let epoch = genesis.first_epoch_with_dynamic_stake_table + 5;
 
-        let db = SqliteStorage::default().await.unwrap();
+        let db = SqlStorage::default().await.unwrap();
         let above_every_root = root_block_in_epoch(*epoch + 1, 10) as usize;
         db.insert_leaf(client.leaf(above_every_root).await)
             .await
@@ -1730,7 +1789,7 @@ mod test {
     #[tokio::test]
     #[test_log::test]
     async fn test_fetch_stake_table_cache_removal() {
-        let db = SqliteStorage::default().await.unwrap();
+        let db = SqlStorage::default().await.unwrap();
         let client = TestClient::default();
         let genesis = client.genesis().await;
         let lc = LightClient::from_genesis_with_options(
@@ -1779,7 +1838,7 @@ mod test {
     #[tokio::test]
     #[test_log::test]
     async fn test_fetch_stake_table_invalid() {
-        let db = SqliteStorage::default().await.unwrap();
+        let db = SqlStorage::default().await.unwrap();
         let client = TestClient::default();
         let genesis = client.genesis().await;
         let lc = LightClient::from_genesis(db.clone(), client.clone(), genesis.clone());
@@ -1802,7 +1861,7 @@ mod test {
         let client = TestClient::with_epoch_height(10);
         let genesis = client.genesis().await;
         let lc = LightClient::from_genesis(
-            SqliteStorage::default().await.unwrap(),
+            SqlStorage::default().await.unwrap(),
             client.clone(),
             genesis.clone(),
         );
@@ -1825,7 +1884,7 @@ mod test {
         let client = TestClient::with_epoch_height(10);
         let genesis = client.genesis().await;
         let lc = LightClient::from_genesis(
-            SqliteStorage::default().await.unwrap(),
+            SqlStorage::default().await.unwrap(),
             client.clone(),
             genesis.clone(),
         );
@@ -1854,7 +1913,7 @@ mod test {
     async fn test_fetch_stake_table_catchup_genesis_bootstrap_version() {
         let client = TestClient::with_epoch_height(10);
         let genesis = client.genesis().await;
-        let db = SqliteStorage::default().await.unwrap();
+        let db = SqlStorage::default().await.unwrap();
         let lc = LightClient::from_genesis(db.clone(), client.clone(), genesis.clone());
 
         let epoch = genesis.first_epoch_with_dynamic_stake_table;
@@ -1888,7 +1947,7 @@ mod test {
 
         let client = TestClient::with_epoch_height(10);
         let genesis = client.genesis().await;
-        let db = SqliteStorage::default().await.unwrap();
+        let db = SqlStorage::default().await.unwrap();
         let lc = LightClient::from_genesis(db.clone(), client.clone(), genesis.clone());
 
         let lower_bound_epoch = genesis.first_epoch_with_dynamic_stake_table;
@@ -1933,7 +1992,7 @@ mod test {
 
         let client = TestClient::with_epoch_height(10);
         let genesis = client.genesis().await;
-        let db = SqliteStorage::default().await.unwrap();
+        let db = SqlStorage::default().await.unwrap();
         let lc = LightClient::from_genesis(db.clone(), client.clone(), genesis.clone());
 
         let prev_epoch = genesis.first_epoch_with_dynamic_stake_table;
@@ -1964,7 +2023,7 @@ mod test {
     #[tokio::test]
     #[test_log::test]
     async fn test_fetch_stake_table_cliquenet_filter() {
-        let db = SqliteStorage::default().await.unwrap();
+        let db = SqlStorage::default().await.unwrap();
         let client = TestClient::default();
         let genesis = client.genesis().await;
         let lc = LightClient::from_genesis(db.clone(), client.clone(), genesis.clone());
@@ -2036,7 +2095,7 @@ mod test {
     #[tokio::test]
     #[test_log::test]
     async fn test_fetch_stake_table_cliquenet_filter_reconstruction() {
-        let db = SqliteStorage::default().await.unwrap();
+        let db = SqlStorage::default().await.unwrap();
         let client = TestClient::default();
         let genesis = client.genesis().await;
         let lc = LightClient::from_genesis(db.clone(), client.clone(), genesis.clone());
@@ -2058,7 +2117,7 @@ mod test {
     async fn test_fetch_payload() {
         let client = TestClient::default();
         let lc = LightClient::from_genesis(
-            SqliteStorage::default().await.unwrap(),
+            SqlStorage::default().await.unwrap(),
             client.clone(),
             client.genesis().await,
         );
@@ -2092,7 +2151,7 @@ mod test {
     async fn test_fetch_payload_invalid() {
         let client = TestClient::default();
         let lc = LightClient::from_genesis(
-            SqliteStorage::default().await.unwrap(),
+            SqlStorage::default().await.unwrap(),
             client.clone(),
             client.genesis().await,
         );
@@ -2113,7 +2172,7 @@ mod test {
     async fn test_fetch_blocks_for_ranges_without_ranges_endpoint() {
         let client = TestClient::default();
         let lc = LightClient::from_genesis(
-            SqliteStorage::default().await.unwrap(),
+            SqlStorage::default().await.unwrap(),
             client.clone(),
             client.genesis().await,
         );
@@ -2138,7 +2197,7 @@ mod test {
     async fn test_fetch_blocks_for_ranges_invalid_proof() {
         let client = TestClient::default();
         let lc = LightClient::from_genesis(
-            SqliteStorage::default().await.unwrap(),
+            SqlStorage::default().await.unwrap(),
             client.clone(),
             client.genesis().await,
         );
@@ -2161,7 +2220,7 @@ mod test {
     async fn test_fetch_namespace() {
         let client = TestClient::default();
         let lc = LightClient::from_genesis(
-            SqliteStorage::default().await.unwrap(),
+            SqlStorage::default().await.unwrap(),
             client.clone(),
             client.genesis().await,
         );
@@ -2214,7 +2273,7 @@ mod test {
     async fn test_fetch_all_namespaces_in_range() {
         let client = TestClient::default();
         let lc = LightClient::from_genesis(
-            SqliteStorage::default().await.unwrap(),
+            SqlStorage::default().await.unwrap(),
             client.clone(),
             client.genesis().await,
         );
@@ -2272,7 +2331,7 @@ mod test {
     async fn test_fetch_namespace_invalid() {
         let client = TestClient::default();
         let lc = LightClient::from_genesis(
-            SqliteStorage::default().await.unwrap(),
+            SqlStorage::default().await.unwrap(),
             client.clone(),
             client.genesis().await,
         );
@@ -2303,7 +2362,7 @@ mod test {
         let client = TestClient::default();
         let genesis = client.genesis().await;
         let lc = LightClient::from_genesis(
-            SqliteStorage::default().await.unwrap(),
+            SqlStorage::default().await.unwrap(),
             client.clone(),
             genesis.clone(),
         );

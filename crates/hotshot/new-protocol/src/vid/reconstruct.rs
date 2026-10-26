@@ -62,14 +62,26 @@ pub struct VidReconstructError<K> {
     pub bad_share_keys: Vec<K>,
 }
 
+/// What vouches for the proposal a view is pinned to.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PinnedBy {
+    /// The leader alone: the proposal validated and paired with this node's
+    /// share. An equivocating leader may have given the quorum another one.
+    Leader,
+    /// A certificate: the quorum voted for it, so the view decides on it if
+    /// it decides at all.
+    Certificate,
+}
+
 #[derive(Default)]
 pub struct VidReconstructor<T: NodeType> {
-    /// Shares that arrived before their view's proposal, one per voter:
-    /// admitted (or dropped) once the proposal pins the view's commitment.
+    /// Shares held for a commitment no proposal has pinned their view to,
+    /// one per voter: they arrived before the proposal, or while the leader's
+    /// pin holds another commitment that a certificate may yet replace.
     pending: BTreeMap<ViewNumber, BTreeMap<T::SignatureKey, VidDisperseShare2<T>>>,
-    /// One accumulator per view, created when its validated proposal
-    /// arrives: reconstruction needs the proposal's metadata, so only the
-    /// proposal's commitment is worth accumulating.
+    /// One accumulator per view, created when a proposal pins it:
+    /// reconstruction needs the proposal's metadata, so only the pinned
+    /// commitment is worth accumulating.
     accumulators: BTreeMap<ViewNumber, VidShareAccumulator<T>>,
     reconstructed: BTreeSet<ViewNumber>,
     tasks: JoinSet<ReconstructResult<T>>,
@@ -77,8 +89,10 @@ pub struct VidReconstructor<T: NodeType> {
 }
 
 pub(crate) struct VidShareAccumulator<T: NodeType> {
-    /// The payload commitment claimed by the view's validated proposal.
+    /// The payload commitment claimed by the proposal the view is pinned to.
     payload_commitment: VidCommitment2,
+    /// What vouches for that proposal; only a certificate's pin is final.
+    pinned_by: PinnedBy,
     metadata: Metadata<T>,
     epoch: EpochNumber,
     /// The VID erasure parameters the committee fixes for this view, used to
@@ -112,8 +126,12 @@ impl<T: NodeType> VidReconstructor<T> {
         }
     }
 
-    /// Pin `view` to its validated proposal's payload commitment and
-    /// metadata, and admit any shares that arrived before the proposal.
+    /// Pin `view` to a proposal's payload commitment and metadata, and admit
+    /// the held shares for that commitment.
+    ///
+    /// The first pin holds against later ones, except that a certificate's
+    /// replaces the leader's: an equivocating leader may have paired this
+    /// node with a proposal the quorum did not certify.
     pub(crate) fn handle_proposal(
         &mut self,
         view: ViewNumber,
@@ -121,27 +139,55 @@ impl<T: NodeType> VidReconstructor<T> {
         metadata: Metadata<T>,
         epoch: EpochNumber,
         expected_param: Option<AvidmGf2Param>,
+        pinned_by: PinnedBy,
     ) {
         if self.reconstructed.contains(&view) {
             return;
         }
         let accumulator = match self.accumulators.entry(view) {
-            Entry::Occupied(existing) => {
-                // The first proposal wins: an equivocating leader cannot re-pin
-                // the view to another commitment.
-                if existing.get().payload_commitment != payload_commitment {
-                    warn!(%view, "conflicting proposal for a view pinned to another commitment");
+            Entry::Occupied(mut existing) => {
+                let pinned = existing.get_mut();
+                if pinned.payload_commitment == payload_commitment {
+                    if pinned_by == PinnedBy::Certificate {
+                        pinned.pinned_by = PinnedBy::Certificate;
+                    }
+                    return;
                 }
-                return;
+                if pinned_by == PinnedBy::Leader || pinned.pinned_by == PinnedBy::Certificate {
+                    warn!(%view, "conflicting proposal for a view pinned to another commitment");
+                    return;
+                }
+                warn!(%view, "leader equivocated; re-pinning to the certified proposal");
+                if let Some(task) = self.calculations.remove(&view) {
+                    task.abort();
+                }
+                existing.insert(VidShareAccumulator::new(
+                    payload_commitment,
+                    metadata,
+                    epoch,
+                    expected_param,
+                    pinned_by,
+                ));
+                existing.into_mut()
             },
             Entry::Vacant(slot) => slot.insert(VidShareAccumulator::new(
                 payload_commitment,
                 metadata,
                 epoch,
                 expected_param,
+                pinned_by,
             )),
         };
-        for (sender, share) in self.pending.remove(&view).into_iter().flatten() {
+        // Shares for other commitments stay held: a certificate may yet re-pin
+        // the view to one of them.
+        let held = self.pending.remove(&view).unwrap_or_default();
+        let (admitted, held): (BTreeMap<_, _>, BTreeMap<_, _>) = held
+            .into_iter()
+            .partition(|(_, share)| share.payload_commitment == payload_commitment);
+        if !held.is_empty() {
+            self.pending.insert(view, held);
+        }
+        for (sender, share) in admitted {
             accumulator.accept(view, sender, share);
         }
         self.try_reconstruct(view);
@@ -155,8 +201,8 @@ impl<T: NodeType> VidReconstructor<T> {
         let view = share.view_number;
         // A share carries the voter it belongs to; only the authenticated
         // sender may contribute its own. This cheap check bounds each node to
-        // one slot and guards the pre-proposal `pending` window, where a share
-        // cannot yet be verified against a commitment.
+        // one slot and guards the `pending` window, where a share cannot yet
+        // be verified against a commitment.
         if share.recipient_key != sender {
             warn!(%view, ?sender, "VID share recipient key does not match its sender");
             return;
@@ -165,29 +211,49 @@ impl<T: NodeType> VidReconstructor<T> {
             return;
         }
         let Some(accumulator) = self.accumulators.get_mut(&view) else {
-            // No validated proposal yet: hold the voter's share until
-            // `handle_proposal` pins the view's commitment.
-            self.pending
-                .entry(view)
-                .or_default()
-                .entry(sender)
-                .or_insert(share);
+            self.hold(view, sender, share);
             return;
         };
-        accumulator.accept(view, sender, share);
-        self.try_reconstruct(view);
+        if share.payload_commitment == accumulator.payload_commitment {
+            accumulator.accept(view, sender, share);
+            self.try_reconstruct(view);
+            return;
+        }
+        match accumulator.pinned_by {
+            // A certificate may yet re-pin the view to the share's commitment.
+            PinnedBy::Leader => self.hold(view, sender, share),
+            PinnedBy::Certificate => {
+                warn!(%view, ?sender, "VID share commitment differs from the certified proposal's");
+            },
+        }
+    }
+
+    /// Hold a voter's share until a proposal pins the view to its commitment.
+    /// One slot per voter: the first share it sends for the view stays.
+    fn hold(&mut self, view: ViewNumber, sender: T::SignatureKey, share: VidDisperseShare2<T>) {
+        self.pending
+            .entry(view)
+            .or_default()
+            .entry(sender)
+            .or_insert(share);
     }
 
     pub async fn next(&mut self) -> Option<ReconstructResult<T>> {
         loop {
             match self.tasks.join_next().await? {
                 Ok(Ok(out)) => {
+                    if self.is_superseded(out.view, out.payload_commitment) {
+                        continue;
+                    }
                     self.calculations.remove(&out.view);
                     self.accumulators.remove(&out.view);
                     self.reconstructed.insert(out.view);
                     return Some(Ok(out));
                 },
                 Ok(Err(err)) => {
+                    if self.is_superseded(err.view, err.payload_commitment) {
+                        continue;
+                    }
                     self.calculations.remove(&err.view);
                     self.handle_failed_attempt(&err);
                     return Some(Err(err));
@@ -202,6 +268,15 @@ impl<T: NodeType> VidReconstructor<T> {
         }
     }
 
+    /// Whether an attempt's result is for a pin a certificate has since
+    /// replaced. The attempt was aborted, but a blocking task that had already
+    /// started still runs to completion.
+    fn is_superseded(&self, view: ViewNumber, payload_commitment: VidCommitment2) -> bool {
+        self.accumulators
+            .get(&view)
+            .is_some_and(|accumulator| accumulator.payload_commitment != payload_commitment)
+    }
+
     /// Apply the outcome of a failed attempt: weed the bad shares out of the
     /// accumulator, then either mark the payload as unrecoverable or retry
     /// (`try_reconstruct` re-checks coverage, which shares that arrived while
@@ -210,12 +285,6 @@ impl<T: NodeType> VidReconstructor<T> {
         let Some(accumulator) = self.accumulators.get_mut(&err.view) else {
             return;
         };
-        // Views are pinned to one commitment for their lifetime, so a
-        // finished attempt always matches; guard anyway so a future re-pin
-        // policy can't weed the wrong accumulator.
-        if accumulator.payload_commitment != err.payload_commitment {
-            return;
-        }
         for key in &err.bad_share_keys {
             accumulator.shares.remove(key);
         }
@@ -286,9 +355,11 @@ impl<T: NodeType> VidShareAccumulator<T> {
         metadata: Metadata<T>,
         epoch: EpochNumber,
         expected_param: Option<AvidmGf2Param>,
+        pinned_by: PinnedBy,
     ) -> Self {
         Self {
             payload_commitment,
+            pinned_by,
             metadata,
             epoch,
             expected_param,
@@ -299,16 +370,14 @@ impl<T: NodeType> VidShareAccumulator<T> {
         }
     }
 
-    /// Admit `share` from the authenticated `sender`, dropping it if it fails
-    /// any intake check. The non-overlapping path stays crypto-free; a
-    /// shard-range overlap is the only case that triggers per-share
-    /// verification, via [`Self::resolve_conflict`].
+    /// Admit `share`, which claims this accumulator's commitment, from the
+    /// authenticated `sender`, dropping it if it fails any intake check. The
+    /// non-overlapping path stays crypto-free; a shard-range overlap is the
+    /// only case that triggers per-share verification, via
+    /// [`Self::resolve_conflict`].
     fn accept(&mut self, view: ViewNumber, sender: T::SignatureKey, share: VidDisperseShare2<T>) {
+        debug_assert_eq!(share.payload_commitment, self.payload_commitment);
         if self.exhausted {
-            return;
-        }
-        if share.payload_commitment != self.payload_commitment {
-            warn!(%view, ?sender, "VID share commitment differs from the proposal's");
             return;
         }
         // The commitment binds a share's `ns_commits` but not its `param`, so a

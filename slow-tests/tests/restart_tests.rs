@@ -21,6 +21,10 @@ use espresso_contract_deployer::{
     Contract, Contracts, builder::DeployerArgsBuilder,
     network_config::light_client_genesis_from_stake_table,
 };
+#[cfg(not(feature = "sqlite"))]
+use espresso_node::api::sql::postgres::DataSource as SqlDataSource;
+#[cfg(feature = "sqlite")]
+use espresso_node::api::sql::sqlite::DataSource as SqlDataSource;
 use espresso_node::{
     SequencerApiVersion,
     api::{
@@ -624,8 +628,8 @@ type AnvilFillProvider = AnvilProvider<
 #[derive(Derivative)]
 #[derivative(Debug)]
 struct TestNetwork {
-    da_nodes: Vec<TestNode<api::sql::DataSource>>,
-    regular_nodes: Vec<TestNode<api::sql::DataSource>>,
+    da_nodes: Vec<TestNode<SqlDataSource>>,
+    regular_nodes: Vec<TestNode<SqlDataSource>>,
     tmp: TempDir,
     builder_port: u16,
     orchestrator_task: Option<JoinHandle<()>>,

@@ -27,10 +27,14 @@ use sqlx::{Arguments, FromRow};
 use super::{Database, Db, Query, QueryAs, Transaction};
 use crate::{Header, QueryError, QueryResult, availability::BlockId};
 
+#[path = "queries/availability.rs"]
 pub(super) mod availability;
+#[path = "queries/explorer.rs"]
 pub(super) mod explorer;
+#[path = "queries/node.rs"]
 pub(super) mod node;
-pub(super) mod state;
+#[path = "queries/state.rs"]
+pub(in crate::data_source::storage::sql) mod state;
 
 /// Helper type for programmatically constructing queries.
 ///
