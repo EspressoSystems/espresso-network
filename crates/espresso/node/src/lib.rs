@@ -1472,6 +1472,37 @@ pub mod testing {
         pub async fn init_node<P: PersistenceOptions>(
             &self,
             i: usize,
+            state: ValidatedState,
+            persistence_opt: P,
+            state_peers: Option<impl StateCatchup + 'static>,
+            storage: Option<RequestResponseStorage>,
+            metrics: &dyn Metrics,
+            stake_table_capacity: usize,
+            event_consumer: impl EventConsumer + 'static,
+            upgrade: versions::Upgrade,
+            upgrades: BTreeMap<Version, Upgrade>,
+        ) -> SequencerContext<P::Persistence> {
+            self.try_init_node(
+                i,
+                state,
+                persistence_opt,
+                state_peers,
+                storage,
+                metrics,
+                stake_table_capacity,
+                event_consumer,
+                upgrade,
+                upgrades,
+            )
+            .await
+            .expect("node initializes")
+        }
+
+        /// [`Self::init_node`], returning the error `SequencerContext::init` refuses with.
+        #[allow(clippy::too_many_arguments)]
+        pub async fn try_init_node<P: PersistenceOptions>(
+            &self,
+            i: usize,
             mut state: ValidatedState,
             mut persistence_opt: P,
             state_peers: Option<impl StateCatchup + 'static>,
@@ -1481,7 +1512,7 @@ pub mod testing {
             event_consumer: impl EventConsumer + 'static,
             upgrade: versions::Upgrade,
             upgrades: BTreeMap<Version, Upgrade>,
-        ) -> SequencerContext<P::Persistence> {
+        ) -> anyhow::Result<SequencerContext<P::Persistence>> {
             let config = self.config.clone();
             let my_peer_config = &config.known_nodes_with_stake[i];
             let is_da = config.known_da_nodes.contains(my_peer_config);
@@ -1649,7 +1680,6 @@ pub mod testing {
                 BTreeMap::from([(upgrade.base, max_block_size)]),
             )
             .await
-            .unwrap()
         }
 
         pub fn builder_key() -> EthKeyPair {

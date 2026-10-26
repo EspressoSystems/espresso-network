@@ -3618,6 +3618,8 @@ mod test {
         epoch_membership::EpochMembershipCoordinator,
         event::LeafInfo,
         new_protocol::CoordinatorEvent,
+        simple_certificate::UpgradeCertificate,
+        simple_vote::UpgradeProposalData,
         traits::{block_contents::BlockHeader, election::Membership, metrics::NoMetrics},
         utils::epoch_from_block_number,
         x25519,
@@ -3649,8 +3651,8 @@ mod test {
     };
     use vbs::version::StaticVersion;
     use versions::{
-        DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_VERSION, LARGE_BLOCK_VERSION, NEW_PROTOCOL_VERSION,
-        Upgrade,
+        DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_REWARD_VERSION, EPOCH_VERSION, LARGE_BLOCK_VERSION,
+        NEW_PROTOCOL_VERSION, Upgrade,
     };
 
     use self::{
@@ -4528,6 +4530,101 @@ mod test {
             handle.client_api().await.is_none(),
             "consensus restarted after shutdown"
         );
+    }
+
+    /// A genesis file whose base version predates the new protocol, as a custom genesis left at
+    /// the previous base is.
+    const PRE_NEW_PROTOCOL_UPGRADE: Upgrade =
+        Upgrade::new(EPOCH_REWARD_VERSION, NEW_PROTOCOL_VERSION);
+
+    /// Initializes a node from `persistence` with [`PRE_NEW_PROTOCOL_UPGRADE`], without starting
+    /// its consensus. The network is returned with the result because it owns the L1 the node
+    /// talks to.
+    async fn try_init_pre_new_protocol_node<P: PersistenceOptions>(
+        persistence: P,
+    ) -> (
+        TestNetwork<no_storage::Options, 2>,
+        anyhow::Result<SequencerContext<P::Persistence>>,
+    ) {
+        const NUM_NODES: usize = 2;
+        const LATE: usize = NUM_NODES - 1;
+        let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
+        let config = TestNetworkConfigBuilder::<NUM_NODES, _, _>::with_num_nodes()
+            .api_config(Options::with_port(port))
+            .network_config(TestConfigBuilder::default().build())
+            .deferred_start(&[LATE])
+            .build();
+        let network = TestNetwork::new(config, TEST_UPGRADE).await;
+        let node = network
+            .cfg
+            .try_init_node(
+                LATE,
+                network.genesis_state(LATE),
+                persistence,
+                Some(NullStateCatchup::default()),
+                None,
+                &NoMetrics,
+                STAKE_TABLE_CAPACITY_FOR_TEST,
+                NullEventConsumer,
+                PRE_NEW_PROTOCOL_UPGRADE,
+                network.cfg.upgrades(),
+            )
+            .await;
+        (network, node)
+    }
+
+    /// With no decided upgrade, a chain at a base version before the new protocol is refused:
+    /// this node runs no other consensus.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_init_refuses_undecided_pre_new_protocol_base() {
+        let (_network, node) = try_init_pre_new_protocol_node(no_storage::Options).await;
+        let err = node.expect_err("a chain before the new protocol started");
+        assert!(
+            format!("{err:#}").contains("predates the new protocol"),
+            "unexpected error: {err:#}"
+        );
+    }
+
+    /// The gate checks the version the chain decided, not the configured base: storage holding
+    /// the decided upgrade to the new protocol starts even though genesis still says the old base.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_init_starts_decided_new_protocol_from_older_base() {
+        let storage = SqlDataSource::create_storage().await;
+        let mut persistence =
+            <SqlDataSource as TestableSequencerDataSource>::persistence_options(&storage);
+        let decided = {
+            let data = UpgradeProposalData {
+                old_version: PRE_NEW_PROTOCOL_UPGRADE.base,
+                new_version: PRE_NEW_PROTOCOL_UPGRADE.target,
+                decide_by: ViewNumber::genesis(),
+                new_version_hash: Default::default(),
+                old_version_last_view: ViewNumber::genesis(),
+                new_version_first_view: ViewNumber::genesis(),
+            };
+            UpgradeCertificate::<SeqTypes>::new(
+                data.clone(),
+                data.commit(),
+                ViewNumber::genesis(),
+                Default::default(),
+                Default::default(),
+            )
+        };
+        persistence
+            .create()
+            .await
+            .unwrap()
+            .store_upgrade_certificate(Some(decided.clone()))
+            .await
+            .unwrap();
+
+        let (_network, node) = try_init_pre_new_protocol_node(persistence).await;
+        let node = node.expect("a decided upgrade to the new protocol starts");
+        assert_eq!(
+            node.upgrade_lock().await.decided_upgrade_cert(),
+            Some(decided),
+            "the restored lock lost the decided upgrade"
+        );
+        node.shutdown_consensus().await;
     }
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
