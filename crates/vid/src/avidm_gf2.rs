@@ -497,54 +497,56 @@ impl VidScheme for AvidmGf2Scheme {
         };
         let shard_bytes = first_share.payload[0].len();
 
-        // Track references to input original shards; avoids the per-shard
-        // `.clone()` the previous version did to populate a
-        // `Vec<Option<Vec<u8>>>`. Reconstructed shards come from the decoder
-        // and are copied directly into the output buffer below.
+        // Track references to input shards; reconstructed originals come from
+        // the decoder and are copied directly into the output buffer below.
         let mut input_orig: Vec<Option<&[u8]>> = vec![None; original_count];
+        let mut input_recovery: Vec<(usize, &[u8])> = Vec::new();
+        for share in shares {
+            if !share.validate()
+                || share.range.end > param.total_weights
+                || share.payload.iter().any(|p| p.len() != shard_bytes)
+            {
+                return Err(VidError::InvalidShare);
+            }
+            for (i, index) in share.range.clone().enumerate() {
+                let shard = &share.payload[i];
+                if index < original_count {
+                    input_orig[index] = Some(shard);
+                } else {
+                    input_recovery.push((index - original_count, shard));
+                }
+            }
+        }
 
         let mut recovered: Vec<u8> = Vec::with_capacity(original_count * shard_bytes);
-        if recovery_count == 0 {
-            // Edge case where there are no recovery shares: every original must
-            // be supplied as input.
-            for share in shares {
-                if !share.validate() || share.payload.iter().any(|p| p.len() != shard_bytes) {
-                    return Err(VidError::InvalidShare);
-                }
-                for (i, index) in share.range.clone().enumerate() {
-                    if index < original_count {
-                        input_orig[index] = Some(&share.payload[i]);
-                    }
-                }
-            }
-            for slot in &input_orig {
-                let shard = slot
-                    .ok_or_else(|| VidError::Internal(anyhow!("Failed to recover the payload.")))?;
+        if input_orig.iter().all(Option::is_some) {
+            // The code is systematic: with every original shard in hand the
+            // payload is their concatenation, and the decoder is not needed.
+            for shard in input_orig.iter().flatten() {
                 recovered.extend_from_slice(shard);
             }
+        } else if recovery_count == 0 {
+            // No recovery shards exist, so a missing original is unrecoverable.
+            return Err(VidError::Internal(anyhow!(
+                "Failed to recover the payload."
+            )));
         } else {
             let mut decoder = reed_solomon_simd::ReedSolomonDecoder::new(
                 original_count,
                 recovery_count,
                 shard_bytes,
             )?;
-            for share in shares {
-                if !share.validate() || share.payload.iter().any(|p| p.len() != shard_bytes) {
-                    return Err(VidError::InvalidShare);
+            for (index, shard) in input_orig.iter().enumerate() {
+                if let Some(shard) = shard {
+                    decoder.add_original_shard(index, shard)?;
                 }
-                for (i, index) in share.range.clone().enumerate() {
-                    let shard = &share.payload[i];
-                    if index < original_count {
-                        input_orig[index] = Some(shard);
-                        decoder.add_original_shard(index, shard)?;
-                    } else {
-                        decoder.add_recovery_shard(index - original_count, shard)?;
-                    }
-                }
+            }
+            for (index, shard) in &input_recovery {
+                decoder.add_recovery_shard(*index, shard)?;
             }
 
             let result = decoder.decode()?;
-            for (i, shard) in input_orig.iter().enumerate().take(original_count) {
+            for (i, shard) in input_orig.iter().enumerate() {
                 let shard: &[u8] = match shard {
                     Some(data) => data,
                     None => result.restored_original(i).ok_or_else(|| {
@@ -661,6 +663,43 @@ pub mod tests {
                 assert_eq!(payload_recovered, payload);
             }
         }
+    }
+
+    /// The shares holding the original shards recover the payload by
+    /// themselves, with or without recovery shards alongside, and a share
+    /// reaching past the encoded payload is rejected.
+    #[test]
+    fn recovers_from_original_shards() {
+        let weights = [3u32, 2, 4, 1, 5];
+        let total_weights = weights.iter().sum::<u32>() as usize;
+        let recovery_threshold = total_weights.div_ceil(3);
+        let params = AvidmGf2Scheme::setup(recovery_threshold, total_weights).unwrap();
+        let mut rng = jf_utils::test_rng();
+        let mut payload = vec![0u8; 200];
+        rng.fill_bytes(&mut payload);
+
+        let (commit, shares) = AvidmGf2Scheme::disperse(&params, &weights, &payload).unwrap();
+        let originals: Vec<_> = shares
+            .iter()
+            .filter(|share| share.range.start < recovery_threshold)
+            .cloned()
+            .collect();
+        assert!(originals.len() < shares.len());
+        assert_eq!(
+            AvidmGf2Scheme::recover(&params, &commit, &originals).unwrap(),
+            payload
+        );
+        assert_eq!(
+            AvidmGf2Scheme::recover(&params, &commit, &shares).unwrap(),
+            payload
+        );
+
+        let mut out_of_range = shares.last().unwrap().clone();
+        out_of_range.range = total_weights - 1..total_weights + out_of_range.payload.len() - 1;
+        assert!(matches!(
+            AvidmGf2Scheme::recover(&params, &commit, &[out_of_range]),
+            Err(crate::VidError::InvalidShare)
+        ));
     }
 
     #[test]
