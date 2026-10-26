@@ -13,13 +13,13 @@
 
 The default shell is the small, fast daily driver. Add-on shells contain everything in default plus extras.
 
-- `nix develop` (default): rust toolchain, anvil, solhint, forge fmt, prettier, process-compose
+- `nix develop` (default): rust toolchain, postgres, anvil, solhint, forge fmt, prettier, process-compose
 - `nix develop .#contracts`: `solc` + `go-ethereum` (abigen) + `FOUNDRY_SOLC` set
 - `nix develop .#mutation`: contracts + `dregs` for mutation testing
 - `nix develop .#docs`: `plantuml`, `graphviz`, `mdbook` for `make doc`
 - `nix develop .#go`: Go toolchain + `golangci-lint` for `sdks/go/`
 - `nix develop .#python`: `python3`, `uv`, `ruff`, `ty` for repo scripts
-- `nix develop .#aws`: `opentofu`, `awscli2` for `scripts/network-bench/aws`
+- `nix develop .#aws`: python + `opentofu`, `awscli2` for `scripts/network-bench/aws`
 - `nix develop .#dockerShell`: `docker`
 
 Standalone shells:
@@ -30,7 +30,7 @@ Standalone shells:
 
 Recipes that need an add-on shell declare it with `[script("scripts/with-tools", "<devshell>", "<command>"...)]`. The
 body runs directly if all commands are on PATH, otherwise inside `nix develop .#<devshell>`; without nix it fails
-listing the missing commands. Requires just >= 1.44.
+listing the missing commands. Module justfiles pass the path relative to their own directory. Requires just >= 1.44.
 
 If a daily workflow forces you to leave the default shell often, it probably belongs in default. File an issue.
 
@@ -45,19 +45,22 @@ If a daily workflow forces you to leave the default shell often, it probably bel
 
 ## Tests
 
-- Per-package, fast: `cargo nextest run -p <package>` (see `CLAUDE.md` for the package layout)
+- Per-package, fast: `cargo nextest run -p <package>` (package layout: `doc/agents/rust.md`)
 - Full workspace: `just test` (slow, mostly used by CI)
 - Long-running: `just test-slow`
 - Process-compose integration: `just test-demo base`, `just test-demo pos-base`, etc.
 - Contracts: `just sol-test` (foundry unit + fuzz + invariant)
+- SQL storage tests start a native postgres (`initdb`, `postgres` on PATH; in the default shell)
 
 ## Running a local network
 
-- `just demo-native` brings up a full local network via `process-compose` (postgres in docker, espresso nodes, prover,
-  etc.)
-- Variants: `just demo-native-pos`, `just demo-native-pos-base`, `just demo-native-drb-header`,
-  `just demo-native-epoch-reward`, etc.
+- `just demo`: Docker Compose, images from ghcr (updated on every push to main)
+- `just demo-native`: process-compose, builds and runs the binaries locally (native postgres via
+  `scripts/run-postgres`), so it picks up uncommitted changes
+- Variants: `just demo-native-da-committees`, `just demo-native-large-block-upgrade`, `just demo-native-ff`,
+  `just demo-native-benchmark`
 - Stop with `Ctrl-C` then `just cleanup-process-compose` if anything was left behind
+- See `process-compose.yaml` and `docker-compose.yaml` for more information
 
 ## Contracts
 
@@ -69,7 +72,7 @@ Enter the contracts shell: `nix develop .#contracts`.
 - Format: `forge fmt`
 - Rust bindings: `just gen-bindings` (regenerates rust + ABI exports under `contracts/rust/adapter/src/bindings`,
   `contracts/artifacts/`, `sdks/go/`)
-- Solidity docs: `forge doc`
+- Solidity docs: `just doc-contracts`
 
 Conventions:
 
@@ -81,50 +84,12 @@ Conventions:
 
 ## Deployment
 
-Three paths exist.
+The `deploy` binary deploys and upgrades contracts.
 
-### Via the `deploy` binary (preferred)
-
-- Build and run: `cargo run --bin deploy -- [FLAGS/OPTIONS]`
-- Help: `cargo run --bin deploy -- --help`
-- Source: `crates/espresso/node/src/bin/deploy.rs`
-
-Common env vars (full list in the source):
-
-- `ESPRESSO_L1_PROVIDER`: L1 JSON-RPC endpoint
-- `ESPRESSO_ETH_MNEMONIC`: deployer wallet mnemonic
-- `ESPRESSO_ETH_MULTISIG_ADDRESS`: multisig admin address
-- `ESPRESSO_DEPLOYER_ACCOUNT_INDEX`: wallet account index
-- `ESPRESSO_API_NODE_URL`: espresso node URL for HotShot config
-
-Use a `.env` file with:
-
-```bash
-set -a; source .env; set +a
-```
-
-### Via Docker compose
-
-- Pull images: `just pull`
-- Deploy: `just demo deploy-prover-contracts`
-- Local-changes rebuild: `./scripts/build-docker-images-native --image $IMAGE` instead of `just pull`
-
-### Dry-run multisig upgrades
-
-```bash
-just pull
-just demo
-docker compose run --rm upgrade-prover-contracts-v2 \
-    /bin/deploy --upgrade-light-client-v2 --dry-run --use-multisig
-```
-
-For AWS ECS, set all required env vars and secrets on the task definition.
-
-## Logging
-
-- Per-binary level: `RUST_LOG=debug cargo run --bin deploy -- ...`
-- In docker: `docker run --env-file .env.docker -e RUST_LOG=debug ...`
-- See `.env.docker.example` for the docker env-file format
+- Help: `cargo run --bin deploy -- --help`, or
+  `ghcr.io/espressosystems/espresso-network/deploy:$DOCKER_TAG deploy --help`
+- Example invocations: `process-compose.yaml`, `docker-compose.yaml`
+- Log level: `RUST_LOG=debug cargo run --bin deploy -- ...`
 
 ## Documentation
 
@@ -158,4 +123,4 @@ Light-client contract gas profile via sentio:
 - `forge fmt`, `forge test`, `just sol-test`
 - `just gen-bindings` after touching contracts
 
-See `CLAUDE.md` for more detail and pitfalls.
+See `CLAUDE.md` and `doc/agents/` for more detail and pitfalls.
