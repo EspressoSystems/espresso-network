@@ -305,6 +305,7 @@ release-body version:
 VERSIONED := "LightClient(V\\d+)?(Mock)?|PlonkVerifier(V\\d+)?|StakeTable(V\\d+)?|EspToken(V\\d+)?|RewardClaim(V\\d+)?"
 EXACT := "FeeContract|ERC1967Proxy|OpsTimelock|SafeExitTimelock|OwnableUpgradeable|AccessControlUpgradeable"
 REGEXP := "^(" + VERSIONED + "|" + EXACT + ")$"
+[script("scripts/with-tools", "contracts", "forge", "solc", "abigen", "jq")]
 gen-bindings:
     # Update the git submodules
     git submodule update --init --recursive
@@ -382,27 +383,26 @@ dev-download-srs:
     @AZTEC_SRS_PATH="$PWD/data/aztec20/kzg10-aztec20-srs-65544.bin" ./scripts/download_srs_aztec.sh
     2>&1 | tee log.txt
 
+[script("scripts/with-tools", "contracts", "abigen")]
 gen-go-bindings:
-	#!/usr/bin/env bash
-	set -euo pipefail
-	if ! command -v abigen >/dev/null; then
-	    exec nix develop .#contracts --quiet --accept-flake-config -c just gen-go-bindings
-	fi
 	abigen --abi contracts/artifacts/abi/LightClient.json --pkg lightclient --out sdks/go/light-client/lightclient.go
 	abigen --abi contracts/artifacts/abi/LightClientMock.json --pkg lightclientmock --out sdks/go/light-client-mock/lightclient.go
 
+[script("scripts/with-tools", "go", "cargo", "jq", "go")]
 build-go-crypto-helper *args:
     ./scripts/build-go-crypto-helper {{args}}
 
+[script("scripts/with-tools", "go", "gofmt")]
 fmt-go:
     gofmt -w sdks/go/
 
+[script("scripts/with-tools", "go", "go")]
 lint-go:
     cd sdks/go && go vet ./...
 
+[script("scripts/with-tools", "go", "go")]
 test-go *args:
-    #!/usr/bin/env bash
-    export LD_LIBRARY_PATH=$PWD/sdks/go/verification/target/lib:$LD_LIBRARY_PATH
+    export LD_LIBRARY_PATH=$PWD/sdks/go/verification/target/lib:${LD_LIBRARY_PATH:-}
     cd sdks/go && go test -v ./... {{args}}
 
 contracts-test-echidna *args:

@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# Runner for just `[script]` recipes: runs the body directly if all commands are on PATH,
+# otherwise inside the given nix dev shell.
+#
+# usage: with-tools <devshell> <command>... <script>
+set -euo pipefail
+
+shell=$1
+script=${!#}
+cmds=("${@:2:$#-2}")
+
+missing=()
+for cmd in "${cmds[@]}"; do
+    command -v "$cmd" >/dev/null || missing+=("$cmd")
+done
+
+if [ ${#missing[@]} -eq 0 ]; then
+    exec bash -euo pipefail "$script"
+fi
+
+if ! command -v nix >/dev/null; then
+    echo "error: not on PATH: ${missing[*]} (provided by nix devShell .#$shell)" >&2
+    exit 127
+fi
+
+root=$(CDPATH='' cd -- "$(dirname "$0")/.." && pwd)
+exec nix develop "$root#$shell" --quiet --accept-flake-config -c bash -euo pipefail "$script"

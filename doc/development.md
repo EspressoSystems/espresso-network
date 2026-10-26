@@ -11,25 +11,26 @@
 
 ## Dev shells
 
-The default shell is the small, fast daily driver. Other shells are either add-ons (everything in default plus extras)
-or standalone (smaller, focused on one toolchain).
-
-Add-ons (default + extras, suitable for daily use):
+The default shell is the small, fast daily driver. Add-on shells contain everything in default plus extras.
 
 - `nix develop` (default): rust toolchain, anvil, solhint, forge fmt, prettier, process-compose
-- `nix develop .#contracts`: default + `solc` + `go-ethereum` (abigen) + `FOUNDRY_SOLC` set. Use when working on
-  contracts and rust tests at the same time (e.g. running `cargo test` against forge-built contracts)
+- `nix develop .#contracts`: `solc` + `go-ethereum` (abigen) + `FOUNDRY_SOLC` set
 - `nix develop .#mutation`: contracts + `dregs` for mutation testing
-- `nix develop .#dockerShell`: default + `docker`
-
-Standalone (smaller, separate toolchain):
-
 - `nix develop .#docs`: `plantuml`, `graphviz`, `mdbook` for `make doc`
-- `nix develop .#go`: full Go toolchain + `golangci-lint` for `sdks/go/`
-- `nix develop .#python`: `python3`, `ruff`, `ty` for repo scripts
+- `nix develop .#go`: Go toolchain + `golangci-lint` for `sdks/go/`
+- `nix develop .#python`: `python3`, `uv`, `ruff`, `ty` for repo scripts
+- `nix develop .#aws`: `opentofu`, `awscli2` for `scripts/network-bench/aws`
+- `nix develop .#dockerShell`: `docker`
+
+Standalone shells:
+
 - `nix develop .#echidna`: `slither`, `echidna`, `crytic-compile`
 - `nix develop .#crossShell`, `.#armCrossShell`: rust cross-compile (musl)
 - `nix develop .#nightly`, `.#coverage`, `.#rustShell`: minimal rust variants
+
+Recipes that need an add-on shell declare it with `[script("scripts/with-tools", "<devshell>", "<command>"...)]`. The
+body runs directly if all commands are on PATH, otherwise inside `nix develop .#<devshell>`; without nix it fails
+listing the missing commands. Requires just >= 1.44.
 
 If a daily workflow forces you to leave the default shell often, it probably belongs in default. File an issue.
 
