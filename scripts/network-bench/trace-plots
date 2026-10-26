@@ -8,8 +8,11 @@ aws-bench) into `<run_dir>/trace/`: `leader_path.png` (median waterfall and per-
 segments), `leader_path_typical.png` and `leader_path_worst.png` (single-view waterfalls),
 `leader_path.md` (segment medians per load step of `<run_dir>/steps.json`, if present, over
 the views whose t0 lies in the step's measured half),
-`finality.png` (cluster finality histogram and CDF) and `stats.json`. With `steps.json`, all of
-these cover only the views in the measured halves; without it, every view after the warmup.
+`finality.png` (cluster finality histogram and CDF), `timeline.svg` (median finalization timeline),
+`leader_window.png` (one leader's work, CPU and network around a view in the middle of the used
+views; CPU and network need the `cpu_node*.csv` and `net_node*.csv` samples beside the trace) and
+`stats.json`. With `steps.json`, all of these cover only the views in the measured halves;
+without it, every view after the warmup.
 
     trace-plots RUN_DIR [--warmup N]
 """
@@ -21,6 +24,8 @@ from collections import Counter
 from collections.abc import Callable
 from pathlib import Path
 
+import finalization_timeline
+import leader_window
 import leadertrace
 import matplotlib
 import numpy as np
@@ -92,6 +97,13 @@ def main(argv: list[str]) -> None:
         leader = f"{hosts[node]} (trace node {node})"
         plot_view(view, leader, rows[view], out / f"leader_path_{name}.png")
     plot_finality(list(finality.values()), stats["finality"], out / "finality.png")
+    ordered = sorted(path)
+    finalization_timeline.write_timeline(trace, ordered, out / "timeline.svg")
+    window_view = ordered[len(ordered) // 2]
+    cpu, net = node_samples(paths, leaders[window_view][0])
+    leader_window.write_leader_window(
+        trace, leaders, window_view, cpu, net, out / "leader_window.png"
+    )
     (out / "stats.json").write_text(json.dumps(stats, indent=2) + "\n")
     (out / "leader_path.md").write_text(leader_path_table(stats))
 
@@ -297,6 +309,19 @@ def trace_hosts(paths: list[Path]) -> dict[int, str]:
     return {
         int(p.stem.removeprefix("leader_trace_node")): p.parents[1].name for p in paths
     }
+
+
+def node_samples(
+    paths: list[Path], node: int
+) -> tuple[leadertrace.Cpu, leadertrace.Net]:
+    """The CPU and network samples beside the trace of `node`; empty for a run without them."""
+    [trace_path] = [p for p in paths if p.name == f"leader_trace_node{node}.csv"]
+    cpu_path = trace_path.with_name(f"cpu_node{node}.csv")
+    net_path = trace_path.with_name(f"net_node{node}.csv")
+    return (
+        leadertrace.read_cpu(cpu_path) if cpu_path.exists() else [],
+        leadertrace.read_net(net_path) if net_path.exists() else {},
+    )
 
 
 def plot_view(view: int, leader: str, durations: np.ndarray, path: Path) -> None:

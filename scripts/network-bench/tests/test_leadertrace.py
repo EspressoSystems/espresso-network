@@ -205,3 +205,25 @@ def test_cluster_finality_counts_decisions_of_views_without_a_leader():
     trace[0][99] = {"leaf_decided": 5}
     _, skipped = leadertrace.cluster_finality_ms(trace, warmup=0)
     assert skipped == Counter({"no leader": 1})
+
+
+def test_read_cpu_and_net_samples(tmp_path: Path):
+    cpu = tmp_path / "cpu_node0.csv"
+    cpu.write_text("t_ns,kind,id,user_us,sys_us\n20,proc,-1,3,4\n10,proc,-1,1,2\n")
+    assert leadertrace.read_cpu(cpu) == [(10, 1, 2), (20, 3, 4)]
+    net = tmp_path / "net_node0.csv"
+    net.write_text("t_ns,iface,rx_bytes,tx_bytes\n2,eth0,5,6\n1,eth0,1,2\n1,eth1,7,8\n")
+    assert leadertrace.read_net(net) == {
+        "eth0": [(1, 1, 2), (2, 5, 6)],
+        "eth1": [(1, 7, 8)],
+    }
+
+
+def test_read_cpu_rejects_a_foreign_header_and_kind(tmp_path: Path):
+    cpu = tmp_path / "cpu_node0.csv"
+    cpu.write_text("t,kind\n")
+    with pytest.raises(ValueError, match="header is not t_ns,kind,id,user_us,sys_us"):
+        leadertrace.read_cpu(cpu)
+    cpu.write_text("t_ns,kind,id,user_us,sys_us\n1,thread,7,1,2\n")
+    with pytest.raises(ValueError, match="unexpected kind 'thread'"):
+        leadertrace.read_cpu(cpu)

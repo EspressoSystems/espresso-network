@@ -950,6 +950,16 @@ def test_hostmon_samples_postgres_unless_sqlite(isolated: Path):
     assert "--pg" not in sample["sqlite"][0]
 
 
+def test_hostmon_samples_the_trace_with_leader_trace(isolated: Path):
+    sample = {}
+    for leader_trace in (False, True):
+        runner = Scripted({})
+        awsb.start_hostmon(remote(runner, isolated), "sqlite", leader_trace)
+        sample[leader_trace] = [c[-1] for c in runner.calls if "--role query" in c[-1]]
+    assert "--leader-trace" not in sample[False][0]
+    assert sample[True][0].endswith("--role query --leader-trace")
+
+
 def test_collect_hosts_skips_postgres_statistics_on_sqlite(isolated: Path):
     scripts = {}
     for engine in ("postgres", "sqlite"):

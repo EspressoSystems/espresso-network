@@ -465,14 +465,23 @@ just bench aws run --tag release-x --leader-trace
     adds a lag panel. No step rule uses them.
   - Needs the `light-client` module, which every query node runs (routes only).
 - `--leader-trace`: nodes get `ESPRESSO_NODE_LEADER_TRACE_DIR=/trace` (host `/opt/bench/trace`).
-  - Collected: `hosts/<name>/trace/leader_trace_node*.csv`.
+  - Collected: `hosts/<name>/trace/leader_trace_node*.csv`, `cpu_node*.csv`, `net_node*.csv`.
+  - `agent-host` (validators and query nodes) samples every 10 ms, from the moment the node creates its trace file, on
+    the wall clock of the trace: `cpu_node{N}.csv` (`t_ns,kind,id,user_us,sys_us`; `kind` is `proc`, `id` -1; the
+    `espresso-node` container's cgroup `user_usec` and `system_usec` since the previous tick) and `net_node{N}.csv`
+    (`t_ns,iface,rx_bytes,tx_bytes`; `/proc/net/dev` bytes since the previous tick, `lo` skipped).
   - `node_id` in the file name and rows is the orchestrator-assigned node index, not the host number; the host is the
     directory it was collected from. Per-view plots name both.
   - `parent Cert1 wait` (header created until the leaf commitment): `maybe_propose` waits for the parent's Cert1, not
     leader-local work.
   - `trace-plots RUN_DIR` (uv script, matplotlib; also run by `render`) writes `trace/leader_path.png`,
     `trace/leader_path_typical.png`, `trace/leader_path_worst.png`, `trace/finality.png`, `trace/stats.json`,
-    `trace/leader_path.md` (segment medians per load step).
+    `trace/leader_path.md` (segment medians per load step), `trace/timeline.svg` (median finalization timeline of one
+    view and the next leader's pipeline, SVG), `trace/leader_window.png` (the leader of a view in the middle of the used
+    views: work spans, process CPU in cores busy, network Gbps; a panel reads "no data" without the `cpu_node*.csv` or
+    `net_node*.csv` of that node, as in runs before the sampler).
+  - Without `ns_disperse_end` or `vid_shares_unicast_start` in the traces, the build in both figures ends in one
+    "disperse + fan-out" bar.
   - With `steps.json`, plots and stats cover only views whose t0 lies in a step's measured window `t_mid`..`t_end`.
 
 ### Baselines
@@ -913,7 +922,7 @@ runs/01-run/             one measurement
   hosts/<host>/          node.env|ctl.env, start.sh, agent.json, <container>.log.gz, collect-<k>/ (`collect`),
                          cloud-init-output.log, chrony.txt, host.jsonl, sockets.jsonl (nodes), ena-allowance.txt,
                          node-rejoin.env, recreate.sh (--chaos), espresso-node.wiped.log.gz (wiped nodes)
-                         trace/ (--leader-trace)
+                         trace/ (--leader-trace: leader_trace_node*.csv, cpu_node*.csv, net_node*.csv)
                          pg-stats.json pg-stats.jsonl pg-statements.json pg-settings.json du-payload.txt (node0)
   cloudwatch/            ec2-node0.json (EBS balance, every run); rds.json (rds runs)
   rds-logs/              postgres logs of the run window (rds runs)
@@ -946,8 +955,9 @@ runs/01-run/             one measurement
 
 #### Published files
 
-- Pushed: `summary.md`, `result.json`, `cost.json`, `throughput.png`, `trace/*.png`, `trace/leader_path.md`,
-  `trace/stats.json`, `index-row.json`, a reduced `manifest.json`. Other files stay local. Symlinks are refused.
+- Pushed: `summary.md`, `result.json`, `cost.json`, `throughput.png`, `trace/*.png`, `trace/*.svg`,
+  `trace/leader_path.md`, `trace/stats.json`, `index-row.json`, a reduced `manifest.json`. Other files stay local.
+  Symlinks are refused.
 - A workflow in the results repo rebuilds its `INDEX.md` and `README.md` (leaderboard, recent runs, totals).
 - The reduced `manifest.json` keeps `fleet`, `created_at`, `git_rev`, `query_db`, `images`, `config` without `node_env`,
   and each host's name, role and instance type. `summary.md` is published as written and lists `--node-env` values.
@@ -978,7 +988,9 @@ scripts/network-bench/
   decaf-locations.json   decaf validator cities, same fields
   throughput-plot        throughput.png of a run dir (uv script)
   trace-plots            leader trace plots of a run dir (uv script)
-  leadertrace.py         leader critical-path breakdown used by trace-plots
+  leadertrace.py         leader critical-path breakdown and trace/sample readers used by trace-plots
+  finalization_timeline.py timeline.svg of trace-plots
+  leader_window.py       leader_window.png of trace-plots
   instance-types.md      leader block-build time and cost per block per instance type
   genesis.toml           0.6, 100 MB blocks, 1 wei base fee
   process-compose.yaml   local 3-node network

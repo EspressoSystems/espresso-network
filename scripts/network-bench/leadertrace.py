@@ -1,5 +1,6 @@
 """Leader critical-path breakdown of consensus views from the per-node `leader_trace_node{N}.csv` files that
-espresso-node writes under `ESPRESSO_NODE_LEADER_TRACE_DIR`. Pure functions, stdlib only.
+espresso-node writes under `ESPRESSO_NODE_LEADER_TRACE_DIR`, and readers of the `cpu_node{N}.csv` and
+`net_node{N}.csv` samples aws-bench writes beside them. Pure functions, stdlib only.
 
 Every row is keyed by the subject view the event is about. The leader of view V is the node
 whose trace has `proposal_queued` for V. Values that span hosts (wait to propose, finality, and
@@ -13,8 +14,14 @@ from pathlib import Path
 
 # node -> view -> event -> first ts_ns
 Trace = dict[int, dict[int, dict[str, int]]]
+# (t_ns, user_us, sys_us) per tick
+Cpu = list[tuple[int, int, int]]
+# interface -> (t_ns, rx_bytes, tx_bytes) per tick
+Net = dict[str, list[tuple[int, int, int]]]
 
 HEADER = ["view", "node_id", "event", "ts_ns"]
+CPU_HEADER = ["t_ns", "kind", "id", "user_us", "sys_us"]
+NET_HEADER = ["t_ns", "iface", "rx_bytes", "tx_bytes"]
 # (segment, end event on the leader of V); each segment starts where the previous one ends
 LEADER_PATH = (
     ("wait to propose", "request_block_header_queued"),
@@ -53,6 +60,34 @@ def read_traces(paths: Iterable[Path]) -> Trace:
                 except ValueError as exc:
                     raise ValueError(f"{path}:{reader.line_num}: {row}: {exc}") from exc
     return trace
+
+
+def read_csv_rows(path: Path, header: list[str]) -> list[list[str]]:
+    with path.open(newline="") as f:
+        reader = csv.reader(f)
+        if next(reader, None) != header:
+            raise ValueError(f"{path}:1: header is not {','.join(header)}")
+        return list(reader)
+
+
+def read_cpu(path: Path) -> Cpu:
+    """`cpu_node{N}.csv` of aws-bench's sampler: (t_ns, user_us, sys_us) per tick, the CPU time
+    of the node process since the previous tick."""
+    rows = []
+    for t_ns, kind, _, user_us, sys_us in read_csv_rows(path, CPU_HEADER):
+        if kind != "proc":
+            raise ValueError(f"{path}: unexpected kind {kind!r}")
+        rows.append((int(t_ns), int(user_us), int(sys_us)))
+    return sorted(rows)
+
+
+def read_net(path: Path) -> Net:
+    """`net_node{N}.csv`: interface to (t_ns, rx_bytes, tx_bytes) per tick, the bytes since the
+    previous tick."""
+    ifaces: Net = {}
+    for t_ns, iface, rx, tx in read_csv_rows(path, NET_HEADER):
+        ifaces.setdefault(iface, []).append((int(t_ns), int(rx), int(tx)))
+    return {iface: sorted(rows) for iface, rows in ifaces.items()}
 
 
 def leaders(trace: Trace) -> dict[int, tuple[int, int]]:

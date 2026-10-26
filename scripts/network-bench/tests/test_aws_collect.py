@@ -150,6 +150,151 @@ def test_socket_sampler_records_ss_failures_and_samples_qdisc_every_few(tmp_path
     assert "RetransSegs" in samples[1]["tcp"]
 
 
+NETDEV_FMT = (
+    "Inter-|   Receive\n face |bytes packets\n"
+    "    lo: 100 1 0 0 0 0 0 0 100 1 0 0 0 0 0 0\n"
+    "  eth0: {rx} 5 0 0 0 0 0 0 {tx} 7 0 0 0 0 0 0\n"
+)
+
+
+def test_parse_cpu_times_reads_user_and_system():
+    text = "usage_usec 30\nuser_usec 10\nsystem_usec 20\nnr_periods 0\n"
+    assert awsb.parse_cpu_times(text) == (10, 20)
+    with pytest.raises(KeyError):
+        awsb.parse_cpu_times("usage_usec 30\n")
+
+
+def test_cpu_row_is_the_delta_and_none_after_a_counter_restart():
+    assert awsb.cpu_row(5, (10, 20), (15, 28)) == "5,proc,-1,5,8\n"
+    assert awsb.cpu_row(5, (10, 20), (3, 4)) is None
+
+
+def test_net_rows_skip_loopback_and_new_interfaces():
+    prev = {
+        "lo": {"rx_bytes": 1, "tx_bytes": 1},
+        "eth0": {"rx_bytes": 10, "tx_bytes": 20},
+    }
+    cur = {
+        "lo": {"rx_bytes": 5, "tx_bytes": 5},
+        "eth0": {"rx_bytes": 15, "tx_bytes": 29},
+        "veth1": {"rx_bytes": 1, "tx_bytes": 1},
+    }
+    assert awsb.net_rows(7, prev, cur) == ["7,eth0,5,9\n"]
+
+
+def test_trace_node_waits_for_the_node_and_refuses_several(tmp_path: Path):
+    assert awsb.trace_node(tmp_path / "missing") is None
+    assert awsb.trace_node(tmp_path) is None
+    (tmp_path / "leader_trace_node3.csv").touch()
+    assert awsb.trace_node(tmp_path) == 3
+    (tmp_path / "leader_trace_node4.csv").touch()
+    with pytest.raises(ValueError, match="several leader traces"):
+        awsb.trace_node(tmp_path)
+
+
+class TraceHost:
+    """cgroup and /proc/net/dev files that advance one step per clock tick."""
+
+    def __init__(self, root: Path, ticks: int) -> None:
+        self.trace_dir = root / "trace"
+        self.trace_dir.mkdir()
+        self.scope = root / "cg" / "system.slice" / "docker-abc.scope"
+        self.scope.mkdir(parents=True)
+        self.containers = root / "containers.json"
+        self.containers.write_text('{"espresso-node": "abc"}')
+        self.net_dev = root / "net-dev"
+        self.stop = threading.Event()
+        self.ticks, self.step = ticks, 0
+        self.write()
+        self.clock = FakeClock(start=1.0, on_advance=self.advance)
+
+    def write(self) -> None:
+        k = self.step
+        (self.scope / "cpu.stat").write_text(
+            f"usage_usec {k * 30}\nuser_usec {k * 10}\nsystem_usec {k * 20}\n"
+        )
+        self.net_dev.write_text(NETDEV_FMT.format(rx=k * 100, tx=k * 200))
+
+    def advance(self, now: float) -> None:
+        self.step += 1
+        self.write()
+        if self.step == self.ticks:
+            self.stop.set()
+
+    def sample(self) -> None:
+        awsb.sample_trace(
+            self.trace_dir,
+            self.stop,
+            self.containers,
+            FakeSystem(clock=self.clock),
+            self.scope.parents[1],
+            self.net_dev,
+        )
+
+
+def test_trace_sampler_appends_deltas_beside_the_leader_trace(tmp_path: Path):
+    host = TraceHost(tmp_path, ticks=3)
+    (host.trace_dir / "leader_trace_node3.csv").touch()
+    host.sample()
+    assert (host.trace_dir / "cpu_node3.csv").read_text() == (
+        "t_ns,kind,id,user_us,sys_us\n"
+        "1010000000,proc,-1,10,20\n"
+        "1020000000,proc,-1,10,20\n"
+    )
+    assert (host.trace_dir / "net_node3.csv").read_text() == (
+        "t_ns,iface,rx_bytes,tx_bytes\n"
+        "1010000000,eth0,100,200\n"
+        "1020000000,eth0,100,200\n"
+    )
+
+
+def test_trace_sampler_writes_nothing_until_the_node_has_a_trace(tmp_path: Path):
+    host = TraceHost(tmp_path, ticks=2)
+    host.sample()
+    assert list(host.trace_dir.iterdir()) == []
+    assert host.clock.sleeps == [awsb.TRACE_SAMPLE_S] * 2
+
+
+def test_trace_sampler_waits_for_the_container_scope_before_the_first_cpu_row(
+    tmp_path: Path,
+):
+    host = TraceHost(tmp_path, ticks=3)
+    (host.trace_dir / "leader_trace_node0.csv").touch()
+    (host.scope / "cpu.stat").unlink()
+    host.sample()
+    cpu = (host.trace_dir / "cpu_node0.csv").read_text().splitlines()[1:]
+    net = (host.trace_dir / "net_node0.csv").read_text().splitlines()[1:]
+    assert cpu == ["1020000000,proc,-1,10,20"]
+    assert len(net) == 2
+
+
+@pytest.mark.parametrize(
+    ("role", "flag", "sampled"),
+    [("validator", True, True), ("validator", False, False), ("ctl", True, False)],
+)
+def test_agent_host_samples_the_trace_only_for_nodes_with_the_flag(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    role: str,
+    flag: bool,
+    sampled: bool,
+) -> None:
+    argv = ["agent-host", str(tmp_path / "host.jsonl"), "--role", role]
+    args = awsb.parse_args(argv + (["--leader-trace"] if flag else []))
+    calls: list[Path] = []
+    system = FakeSystem(
+        clock=FakeClock(on_advance=lambda now: system.fire(signal.SIGINT))
+    )
+    monkeypatch.setattr(awsb, "BENCH_DIR", str(tmp_path))
+    monkeypatch.setattr(awsb, "host_sample", lambda *a: {"ts": 1})
+    monkeypatch.setattr(awsb, "sample_sockets", lambda *a: None)
+    monkeypatch.setattr(
+        awsb, "sample_trace", lambda trace_dir, *a: calls.append(trace_dir)
+    )
+    assert awsb.cmd_agent_host(args, system) == awsb.EXIT_OK
+    assert calls == ([Path(awsb.TRACE_HOST_DIR)] if sampled else [])
+
+
 def test_agent_host_role_query_starts_pg_sampler(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -72,8 +72,10 @@ def test_main_writes_the_plots_and_stats(tmp_path: Path):
         "leader_path_typical.png",
         "leader_path_worst.png",
         "finality.png",
+        "leader_window.png",
     ):
         assert (out / name).read_bytes().startswith(b"\x89PNG")
+    assert (out / "timeline.svg").read_text(encoding="utf-8").startswith("<?xml")
     assert not (out / "phases.png").exists()
     stats = read_stats(tmp_path)
     path = stats["leader_path"]
@@ -200,3 +202,17 @@ def test_trace_hosts_maps_trace_node_ids_to_the_host_dirs():
         Path("run/hosts/node2/trace/leader_trace_node0.csv"),
     ]
     assert plots.trace_hosts(paths) == {4: "node0", 0: "node2"}
+
+
+def test_node_samples_read_the_files_beside_the_trace(tmp_path: Path):
+    write_run(tmp_path)
+    paths = sorted(tmp_path.glob(plots.TRACE_GLOB))
+    assert plots.node_samples(paths, 1) == ([], {})
+    trace_dir = tmp_path / "hosts" / "node1" / "trace"
+    (trace_dir / "cpu_node1.csv").write_text(
+        "t_ns,kind,id,user_us,sys_us\n1,proc,-1,2,3\n"
+    )
+    (trace_dir / "net_node1.csv").write_text(
+        "t_ns,iface,rx_bytes,tx_bytes\n1,eth0,2,3\n"
+    )
+    assert plots.node_samples(paths, 1) == ([(1, 2, 3)], {"eth0": [(1, 2, 3)]})
