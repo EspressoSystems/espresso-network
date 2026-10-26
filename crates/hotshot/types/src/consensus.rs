@@ -578,6 +578,20 @@ pub struct ConsensusMetricsValue {
     pub update_leaf_duration: Box<dyn Histogram>,
     /// The time it took to calculate the disperse
     pub vid_disperse_duration: Box<dyn Histogram>,
+    /// Run time of VID reconstruction attempts that concatenated the systematic shares
+    pub vid_reconstruct_systematic_duration: Box<dyn Histogram>,
+    /// Run time of VID reconstruction attempts that erasure-decoded a threshold of shares
+    pub vid_reconstruct_decode_duration: Box<dyn Histogram>,
+    /// VID reconstruction attempts that failed (bad shares or a non-codeword)
+    pub vid_reconstruct_failures: Box<dyn Counter>,
+    /// VID reconstruction attempts that lost the race to the other path
+    pub vid_reconstruct_lost: Box<dyn Counter>,
+    /// Payloads obtained by concatenating the systematic shares
+    pub vid_payloads_systematic: Box<dyn Counter>,
+    /// Payloads obtained by erasure-decoding a threshold of shares
+    pub vid_payloads_decoded: Box<dyn Counter>,
+    /// Payloads obtained whole from a peer
+    pub vid_payloads_fetched: Box<dyn Counter>,
 }
 
 impl ConsensusMetricsValue {
@@ -626,6 +640,24 @@ impl ConsensusMetricsValue {
                 String::from("vid_disperse_duration"),
                 Some("seconds".to_string()),
             ),
+            vid_reconstruct_systematic_duration: metrics.create_histogram(
+                String::from("vid_reconstruct_systematic_duration"),
+                Some("seconds".to_string()),
+            ),
+            vid_reconstruct_decode_duration: metrics.create_histogram(
+                String::from("vid_reconstruct_decode_duration"),
+                Some("seconds".to_string()),
+            ),
+            vid_reconstruct_failures: metrics
+                .create_counter(String::from("vid_reconstruct_failures"), None),
+            vid_reconstruct_lost: metrics
+                .create_counter(String::from("vid_reconstruct_lost"), None),
+            vid_payloads_systematic: metrics
+                .create_counter(String::from("vid_payloads_systematic"), None),
+            vid_payloads_decoded: metrics
+                .create_counter(String::from("vid_payloads_decoded"), None),
+            vid_payloads_fetched: metrics
+                .create_counter(String::from("vid_payloads_fetched"), None),
         }
     }
 }
