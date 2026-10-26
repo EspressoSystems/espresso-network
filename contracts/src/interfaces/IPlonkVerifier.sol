@@ -8,7 +8,7 @@ import { BN254 } from "bn254/BN254.sol";
 interface IPlonkVerifier {
     // Flatten out TurboPlonk proof
     struct PlonkProof {
-        // the first 5 are 4 inputs and 1 output wire poly commmitments
+        // the first 5 are 4 inputs and 1 output wire poly commitments
         // i.e., batch_proof.wires_poly_comms_vec.iter()
         // wire0 is 32 bytes which is a pointer to BN254.G1Point
         BN254.G1Point wire0; // 0x00
@@ -19,7 +19,7 @@ interface IPlonkVerifier {
         // the next one is the  product permutation poly commitment
         // i.e., batch_proof.prod_perm_poly_comms_vec.iter()
         BN254.G1Point prodPerm; // 0xA0
-        // the next 5 are split quotient poly commmitments
+        // the next 5 are split quotient poly commitments
         // i.e., batch_proof.split_quot_poly_comms
         BN254.G1Point split0; // 0xC0
         BN254.G1Point split1; // 0xE0

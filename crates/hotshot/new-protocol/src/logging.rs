@@ -1,6 +1,6 @@
 use std::{env, fmt, sync::Once};
 
-use hotshot::types::SignatureKey;
+use hotshot_types::traits::signature_key::SignatureKey;
 use tracing_subscriber::EnvFilter;
 
 static LOG_INIT: Once = Once::new();

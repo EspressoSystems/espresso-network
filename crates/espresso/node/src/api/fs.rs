@@ -44,7 +44,6 @@ impl PruningDataSource for DataSource {
 
 #[cfg(test)]
 mod impl_testable_data_source {
-    use light_client::state::LightClientOptions;
     use tempfile::TempDir;
 
     use super::*;
@@ -63,17 +62,7 @@ mod impl_testable_data_source {
         }
 
         fn options(storage: &Self::Storage, opt: api::Options) -> api::Options {
-            opt.query_fs(
-                Query {
-                    light_client: LightClientOptions {
-                        // Enable testnet features when running in tests.
-                        decaf: true,
-                        ..Default::default()
-                    },
-                    ..Default::default()
-                },
-                Options::new(storage.path().into()),
-            )
+            opt.query_fs(Query::default(), Options::new(storage.path().into()))
         }
     }
 }

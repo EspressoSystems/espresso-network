@@ -50,9 +50,10 @@ impl<TYPES: NodeType> From<TestStakeTableEntry<TYPES::SignatureKey, TYPES::State
     }
 }
 
-// Map from first epoch to DA committee stake table entries
+/// Per-epoch committee schedule: each entry is the committee effective from
+/// its first epoch (inclusive) until the next scheduled change.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct TestDaCommittees<
+pub struct TestCommitteeSchedule<
     PubKey: SignatureKey,
     StatePubKey: StateSignatureKey + LCV1StateSignatureKey + LCV2StateSignatureKey + LCV3StateSignatureKey,
 >(BTreeMap<u64, Vec<TestStakeTableEntry<PubKey, StatePubKey>>>);
@@ -60,7 +61,7 @@ pub struct TestDaCommittees<
 impl<
     PubKey: SignatureKey,
     StatePubKey: StateSignatureKey + LCV1StateSignatureKey + LCV2StateSignatureKey + LCV3StateSignatureKey,
-> TestDaCommittees<PubKey, StatePubKey>
+> TestCommitteeSchedule<PubKey, StatePubKey>
 {
     pub fn new() -> Self {
         Self(BTreeMap::new())
@@ -91,7 +92,7 @@ impl<
 impl<
     PubKey: SignatureKey,
     StatePubKey: StateSignatureKey + LCV1StateSignatureKey + LCV2StateSignatureKey + LCV3StateSignatureKey,
-> Default for TestDaCommittees<PubKey, StatePubKey>
+> Default for TestCommitteeSchedule<PubKey, StatePubKey>
 {
     fn default() -> Self {
         Self::new()
@@ -157,4 +158,15 @@ pub trait TestStakeTable<
         first_epoch: u64,
         committee: Vec<TestStakeTableEntry<PubKey, StatePubKey>>,
     );
+
+    /// Register a quorum committee effective from `first_epoch` (inclusive).
+    /// Mirrors `add_da_committee`; implementations without per-epoch quorum
+    /// committees keep the panicking default.
+    fn add_quorum_committee(
+        &mut self,
+        _first_epoch: u64,
+        _committee: Vec<TestStakeTableEntry<PubKey, StatePubKey>>,
+    ) {
+        panic!("add_quorum_committee is not supported by this TestStakeTable implementation");
+    }
 }

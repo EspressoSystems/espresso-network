@@ -21,7 +21,7 @@ use tracing::error;
 
 use crate::membership::{
     helpers::QuorumFilterConfig,
-    stake_table::{TestDaCommittees, TestStakeTable, TestStakeTableEntry},
+    stake_table::{TestCommitteeSchedule, TestStakeTable, TestStakeTableEntry},
 };
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
@@ -41,7 +41,7 @@ pub struct RandomizedCommitteeMembers<
 
     drb_results: BTreeMap<u64, DrbResult>,
 
-    da_committees: TestDaCommittees<PubKey, StatePubKey>,
+    da_committees: TestCommitteeSchedule<PubKey, StatePubKey>,
 
     _quorum_pd: PhantomData<QuorumConfig>,
 
@@ -108,7 +108,7 @@ impl<
             first_epoch: None,
             epochs: BTreeSet::new(),
             drb_results: BTreeMap::new(),
-            da_committees: TestDaCommittees::new(),
+            da_committees: TestCommitteeSchedule::new(),
             _quorum_pd: PhantomData,
             _da_pd: PhantomData,
         };

@@ -1,6 +1,6 @@
 use std::{fmt, str::FromStr};
 
-use cliquenet::x25519::{InvalidKeypair, InvalidPublicKey, InvalidSecretKey};
+use cliquenet_types::x25519::{InvalidKeypair, InvalidPublicKey, InvalidSecretKey};
 use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha20Rng;
 use serde::{Deserialize, Serialize};
@@ -9,19 +9,19 @@ use tagged_base64::{TaggedBase64, Tb64Error};
 use crate::traits::signature_key::{PrivateSignatureKey, SignatureKey};
 
 #[derive(Clone, PartialEq, Eq, Hash)]
-pub struct Keypair(cliquenet::x25519::Keypair);
+pub struct Keypair(cliquenet_types::x25519::Keypair);
 
 #[derive(Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(transparent)]
-pub struct PublicKey(cliquenet::x25519::PublicKey);
+pub struct PublicKey(cliquenet_types::x25519::PublicKey);
 
 #[derive(Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
-pub struct SecretKey(cliquenet::x25519::SecretKey);
+pub struct SecretKey(cliquenet_types::x25519::SecretKey);
 
 impl Keypair {
     pub fn generate() -> Result<Self, InvalidKeypair> {
-        cliquenet::x25519::Keypair::generate().map(Self)
+        cliquenet_types::x25519::Keypair::generate().map(Self)
     }
 
     pub fn generated_from_seed_indexed(seed: [u8; 32], index: u64) -> Result<Self, InvalidKeypair> {
@@ -30,7 +30,7 @@ impl Keypair {
         hasher.update(&index.to_be_bytes());
         let mut rng = ChaCha20Rng::from_seed(*hasher.finalize().as_bytes());
         let seed: [u8; 32] = rng.r#gen();
-        cliquenet::x25519::Keypair::from_seed(seed).map(Self)
+        cliquenet_types::x25519::Keypair::from_seed(seed).map(Self)
     }
 
     pub fn derive_from<K: SignatureKey>(k: &K::PrivateKey) -> Result<Self, InvalidSecretKey> {
@@ -72,20 +72,20 @@ impl SecretKey {
     }
 }
 
-impl From<Keypair> for cliquenet::x25519::Keypair {
+impl From<Keypair> for cliquenet_types::x25519::Keypair {
     fn from(k: Keypair) -> Self {
         k.0
     }
 }
 
-impl From<PublicKey> for cliquenet::x25519::PublicKey {
+impl From<PublicKey> for cliquenet_types::x25519::PublicKey {
     fn from(k: PublicKey) -> Self {
         k.0
     }
 }
 
-impl From<cliquenet::x25519::PublicKey> for PublicKey {
-    fn from(k: cliquenet::x25519::PublicKey) -> Self {
+impl From<cliquenet_types::x25519::PublicKey> for PublicKey {
+    fn from(k: cliquenet_types::x25519::PublicKey) -> Self {
         Self(k)
     }
 }
@@ -141,7 +141,7 @@ impl TryFrom<&[u8]> for PublicKey {
     type Error = InvalidPublicKey;
 
     fn try_from(s: &[u8]) -> Result<Self, Self::Error> {
-        Ok(Self(cliquenet::x25519::PublicKey::try_from(s)?))
+        Ok(Self(cliquenet_types::x25519::PublicKey::try_from(s)?))
     }
 }
 
@@ -149,7 +149,7 @@ impl TryFrom<&[u8]> for SecretKey {
     type Error = InvalidSecretKey;
 
     fn try_from(s: &[u8]) -> Result<Self, Self::Error> {
-        Ok(Self(cliquenet::x25519::SecretKey::try_from(s)?))
+        Ok(Self(cliquenet_types::x25519::SecretKey::try_from(s)?))
     }
 }
 
@@ -157,7 +157,7 @@ impl TryFrom<[u8; 32]> for SecretKey {
     type Error = InvalidSecretKey;
 
     fn try_from(a: [u8; 32]) -> Result<Self, Self::Error> {
-        Ok(Self(cliquenet::x25519::SecretKey::try_from(a)?))
+        Ok(Self(cliquenet_types::x25519::SecretKey::try_from(a)?))
     }
 }
 
@@ -165,7 +165,7 @@ impl TryFrom<&str> for PublicKey {
     type Error = InvalidPublicKey;
 
     fn try_from(s: &str) -> Result<Self, Self::Error> {
-        Ok(Self(cliquenet::x25519::PublicKey::try_from(s)?))
+        Ok(Self(cliquenet_types::x25519::PublicKey::try_from(s)?))
     }
 }
 
@@ -173,7 +173,7 @@ impl TryFrom<&str> for SecretKey {
     type Error = InvalidSecretKey;
 
     fn try_from(s: &str) -> Result<Self, Self::Error> {
-        Ok(Self(cliquenet::x25519::SecretKey::try_from(s)?))
+        Ok(Self(cliquenet_types::x25519::SecretKey::try_from(s)?))
     }
 }
 

@@ -1,12 +1,11 @@
 use std::sync::Arc;
 
-use alloy::primitives::U256;
 use anyhow::Context;
 use async_trait::async_trait;
 use committable::{Commitment, Committable};
 use espresso_types::{
     BackoffParams, BlockMerkleTree, FeeAccount, FeeAccountProof, FeeMerkleCommitment, Leaf2,
-    NodeState, PubKey, SeqTypes,
+    NodeState, SeqTypes,
     traits::{SequencerPersistence, StateCatchup},
     v0_3::{ChainConfig, RewardAccountProofV1, RewardAccountV1, RewardMerkleCommitmentV1},
     v0_4::{
@@ -14,20 +13,19 @@ use espresso_types::{
         forgotten_accounts_include,
     },
 };
-use hotshot::traits::NodeImplementation;
-use hotshot_new_protocol::utils::verify_leaf_chain_with_cert2;
+use hotshot_new_protocol::{storage::NewProtocolStorage, utils::verify_new_protocol_leaf_chain};
 use hotshot_types::{
-    data::ViewNumber, message::UpgradeLock,
-    simple_certificate::LightClientStateUpdateCertificateV2, stake_table::HSStakeTable,
-    traits::network::ConnectedNetwork, utils::verify_leaf_chain,
+    data::ViewNumber, epoch_membership::EpochMembershipCoordinator, message::UpgradeLock,
+    simple_certificate::LightClientStateUpdateCertificateV2,
+    traits::node_implementation::NodeImplementation,
 };
 use jf_merkle_tree_compat::{ForgetableMerkleTreeScheme, MerkleTreeScheme};
-use request_response::RequestType;
 use tokio::time::timeout;
-use versions::{EPOCH_VERSION, NEW_PROTOCOL_VERSION};
+use versions::NEW_PROTOCOL_VERSION;
 
 use crate::{
     api::RewardMerkleTreeV2Data,
+    catchup::verify_legacy_leaf_chain,
     request_response::{
         RequestResponseProtocol,
         request::{Request, Response},
@@ -35,26 +33,24 @@ use crate::{
 };
 
 #[async_trait]
-impl<I: NodeImplementation<SeqTypes>, N: ConnectedNetwork<PubKey>, P: SequencerPersistence>
-    StateCatchup for RequestResponseProtocol<I, N, P>
+impl<I: NodeImplementation<SeqTypes>, P: SequencerPersistence> StateCatchup
+    for RequestResponseProtocol<I, P>
+where
+    I::Storage: NewProtocolStorage<SeqTypes>,
 {
     async fn try_fetch_leaf(
         &self,
         _retry: usize,
+        coordinator: EpochMembershipCoordinator<SeqTypes>,
         height: u64,
-        stake_table: HSStakeTable<SeqTypes>,
-        success_threshold: U256,
     ) -> anyhow::Result<Leaf2> {
         // Timeout after a few batches
         let timeout_duration = self.config.request_batch_interval * 3;
 
         // Fetch the leaf
-        timeout(
-            timeout_duration,
-            self.fetch_leaf(height, stake_table, success_threshold),
-        )
-        .await
-        .with_context(|| "timed out while fetching leaf")?
+        timeout(timeout_duration, self.fetch_leaf(coordinator, height))
+            .await
+            .with_context(|| "timed out while fetching leaf")?
     }
 
     async fn try_fetch_accounts(
@@ -228,7 +224,6 @@ impl<I: NodeImplementation<SeqTypes>, N: ConnectedNetwork<PubKey>, P: SequencerP
         let response = self
             .request_indefinitely(
                 Request::Accounts(height, *view, accounts),
-                RequestType::Batched,
                 response_validation_fn,
             )
             .await
@@ -241,9 +236,8 @@ impl<I: NodeImplementation<SeqTypes>, N: ConnectedNetwork<PubKey>, P: SequencerP
 
     async fn fetch_leaf(
         &self,
+        coordinator: EpochMembershipCoordinator<SeqTypes>,
         height: u64,
-        stake_table: HSStakeTable<SeqTypes>,
-        success_threshold: U256,
     ) -> anyhow::Result<Leaf2> {
         tracing::info!("Fetching leaf for height: {height}");
 
@@ -252,7 +246,6 @@ impl<I: NodeImplementation<SeqTypes>, N: ConnectedNetwork<PubKey>, P: SequencerP
         let leaf_chain = self
             .request_indefinitely(
                 Request::Leaf(height),
-                RequestType::Batched,
                 move |_request: &Request, response: Response| async move {
                     let Response::Leaf(leaves) = response else {
                         return Err(anyhow::anyhow!("expected leaf response"));
@@ -272,17 +265,22 @@ impl<I: NodeImplementation<SeqTypes>, N: ConnectedNetwork<PubKey>, P: SequencerP
             // New protocol: pair the leaf range with its finalizing cert2 for verification.
             let upgrade_lock =
                 UpgradeLock::<SeqTypes>::new(versions::Upgrade::trivial(NEW_PROTOCOL_VERSION));
+            // The chain terminates at the leaf the cert2 finalizes, so request that cert2 by its
+            // exact height
+            let cert2_height = leaf_chain
+                .last()
+                .ok_or_else(|| anyhow::anyhow!("empty leaf chain for height {height}"))?
+                .height();
             let cert2 = self
                 .request_indefinitely(
-                    Request::Cert2(height),
-                    RequestType::Batched,
+                    Request::Cert2(cert2_height),
                     move |_request: &Request, response: Response| async move {
                         let Response::Cert2(cert2) = response else {
                             return Err(anyhow::anyhow!("expected cert2 response"));
                         };
-                        if cert2.data.block_number < height {
+                        if cert2.data.block_number != cert2_height {
                             return Err(anyhow::anyhow!(
-                                "received cert2 at height {} below requested height {height}",
+                                "received cert2 at height {} but expected exactly {cert2_height}",
                                 cert2.data.block_number
                             ));
                         }
@@ -290,30 +288,13 @@ impl<I: NodeImplementation<SeqTypes>, N: ConnectedNetwork<PubKey>, P: SequencerP
                     },
                 )
                 .await
-                .with_context(|| format!("failed to request cert2 at or above height {height}"))?;
+                .with_context(|| format!("failed to request cert2 at height {cert2_height}"))?;
 
-            verify_leaf_chain_with_cert2(
-                leaf_chain,
-                &stake_table,
-                success_threshold,
-                height,
-                &upgrade_lock,
-                cert2,
-            )
-            .await
-            .with_context(|| "leaf chain verification with cert2 failed")?
+            verify_new_protocol_leaf_chain(leaf_chain, &coordinator, height, &upgrade_lock, cert2)
+                .await
+                .with_context(|| "leaf chain verification with cert2 failed")?
         } else {
-            let upgrade_lock =
-                UpgradeLock::<SeqTypes>::new(versions::Upgrade::trivial(EPOCH_VERSION));
-            verify_leaf_chain(
-                leaf_chain,
-                &stake_table,
-                success_threshold,
-                height,
-                &upgrade_lock,
-            )
-            .await
-            .with_context(|| "leaf chain verification failed")?
+            verify_legacy_leaf_chain(leaf_chain, &coordinator, height).await?
         };
 
         tracing::info!("Fetched leaf for height: {height}");
@@ -345,11 +326,7 @@ impl<I: NodeImplementation<SeqTypes>, N: ConnectedNetwork<PubKey>, P: SequencerP
 
         // Wait for the protocol to send us the chain config
         let response = self
-            .request_indefinitely(
-                Request::ChainConfig(commitment),
-                RequestType::Batched,
-                response_validation_fn,
-            )
+            .request_indefinitely(Request::ChainConfig(commitment), response_validation_fn)
             .await
             .with_context(|| "failed to request chain config")?;
 
@@ -404,7 +381,6 @@ impl<I: NodeImplementation<SeqTypes>, N: ConnectedNetwork<PubKey>, P: SequencerP
         let response = self
             .request_indefinitely(
                 Request::BlocksFrontier(height, *view),
-                RequestType::Batched,
                 response_validation_fn,
             )
             .await
@@ -456,7 +432,6 @@ impl<I: NodeImplementation<SeqTypes>, N: ConnectedNetwork<PubKey>, P: SequencerP
         let response = self
             .request_indefinitely(
                 Request::RewardMerkleTreeV2(height, *view),
-                RequestType::Batched,
                 response_validation_fn,
             )
             .await
@@ -514,7 +489,6 @@ impl<I: NodeImplementation<SeqTypes>, N: ConnectedNetwork<PubKey>, P: SequencerP
         let response = self
             .request_indefinitely(
                 Request::RewardAccountsV1(height, *view, accounts),
-                RequestType::Batched,
                 response_validation_fn,
             )
             .await
@@ -543,11 +517,7 @@ impl<I: NodeImplementation<SeqTypes>, N: ConnectedNetwork<PubKey>, P: SequencerP
 
         // Wait for the protocol to send us the state cert
         let response = self
-            .request_indefinitely(
-                Request::StateCert(epoch),
-                RequestType::Batched,
-                response_validation_fn,
-            )
+            .request_indefinitely(Request::StateCert(epoch), response_validation_fn)
             .await
             .with_context(|| "failed to request state cert")?;
 

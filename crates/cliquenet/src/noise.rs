@@ -22,7 +22,7 @@ static NOISE_PARAMS: LazyLock<HashMap<Protocol, NoiseParams>> = LazyLock::new(||
 /// Supported noise protocol names.
 ///
 /// A protocol name contains the handshake pattern, DH, cipher, and
-/// hash function names. See https://noiseprotocol.org for details.
+/// hash function names. See <https://noiseprotocol.org> for details.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[allow(non_camel_case_types)]
 #[non_exhaustive]

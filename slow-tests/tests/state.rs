@@ -1,75 +1,100 @@
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
-use alloy::primitives::{Address, U256};
+use alloy::primitives::U256;
 use committable::Commitment;
+#[cfg(not(feature = "sqlite"))]
+use espresso_node::api::sql::postgres::DataSource as SqlDataSource;
+#[cfg(feature = "sqlite")]
+use espresso_node::api::sql::sqlite::DataSource as SqlDataSource;
 use espresso_node::{
     SequencerApiVersion,
     api::{
         Options,
         data_source::testing::TestableSequencerDataSource,
-        sql::DataSource as SqlDataSource,
         test_helpers::{TestNetwork, TestNetworkConfigBuilder},
     },
+    catchup::StatePeers,
     testing::{TestConfig, TestConfigBuilder},
 };
-use espresso_types::{
-    FeeAccount, FeeAmount, Header, SeqTypes,
-    v0_3::RewardAmount,
-    v0_4::{REWARD_MERKLE_TREE_V2_HEIGHT, RewardAccountV2, RewardMerkleTreeV2},
-};
-use futures::{StreamExt, TryStreamExt};
-use hotshot_query_service::{
-    availability::BlockQueryData,
-    data_source::{
-        Transaction, VersionedDataSource,
-        sql::Config,
-        storage::sql::{
-            SqlStorage, StorageConnectionType, Transaction as SqlTransaction, Write, testing::TmpDb,
-        },
-    },
-    merklized_state::{MerklizedState, UpdateStateData},
-    types::HeightIndexed,
-};
-use jf_merkle_tree_compat::{
-    LookupResult, MerkleTreeScheme, ToTraversalPath, UniversalMerkleTreeScheme,
-    prelude::{MerkleProof, Sha3Node},
-};
-use surf_disco::Client;
+use espresso_types::{FeeAccount, FeeAmount, Header, SeqTypes};
+use futures::{StreamExt, TryStreamExt, future::join_all};
+use hotshot_contract_adapter::stake_table::StakeTableContractVersion;
+use hotshot_query_service::{availability::BlockQueryData, types::HeightIndexed};
+use hotshot_types::traits::metrics::NoMetrics;
+use http_client::{Client, error::ClientErr};
+use jf_merkle_tree_compat::prelude::{MerkleProof, Sha3Node};
+use staking_cli::demo::DelegationConfig;
 use test_utils::reserve_tcp_port;
-use tide_disco::error::ServerError;
-use tokio::time::sleep;
-use versions::{EPOCH_VERSION, Upgrade};
+use tokio::time::{sleep, timeout};
+use versions::{NEW_PROTOCOL_VERSION, Upgrade};
+
+const NEW_PROTOCOL: Upgrade = Upgrade::trivial(NEW_PROTOCOL_VERSION);
 
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn slow_test_merklized_state_api() {
+    const NUM_NODES: usize = 5;
+    const EPOCH_HEIGHT: u64 = 20;
     let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
 
-    let storage = SqlDataSource::create_storage().await;
+    // SQL persistence on every node and catchup from node 0's query API: at
+    // 0.6 the query node fills decided blocks' payloads from its persisted DA
+    // proposals, and epoch boundaries need state catchup.
+    let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
+    let persistence: [_; NUM_NODES] = storage
+        .iter()
+        .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
+        .collect::<Vec<_>>()
+        .try_into()
+        .unwrap();
 
-    let options = SqlDataSource::options(&storage, Options::with_port(port));
-
-    let network_config = TestConfigBuilder::default().build();
-    let config = TestNetworkConfigBuilder::default()
-        .api_config(options)
-        .network_config(network_config)
+    let network_config = TestConfigBuilder::default()
+        .epoch_height(EPOCH_HEIGHT)
+        .epoch_start_block(0)
         .build();
-    let mut network = TestNetwork::new(config, Upgrade::trivial(EPOCH_VERSION)).await;
+    let config = TestNetworkConfigBuilder::<NUM_NODES, _, _>::with_num_nodes()
+        .api_config(SqlDataSource::options(
+            &storage[0],
+            Options::with_port(port),
+        ))
+        .network_config(network_config)
+        .persistences(persistence)
+        .catchups(std::array::from_fn(|_| {
+            StatePeers::<SequencerApiVersion>::from_urls(
+                vec![format!("http://localhost:{port}").parse().unwrap()],
+                Default::default(),
+                Duration::from_secs(2),
+                &NoMetrics,
+            )
+        }))
+        .pos_hook(
+            DelegationConfig::MultipleDelegators,
+            StakeTableContractVersion::V3,
+            NEW_PROTOCOL,
+        )
+        .await
+        .unwrap()
+        .build();
+    let mut network = TestNetwork::new(config, NEW_PROTOCOL).await;
     let url = format!("http://localhost:{port}").parse().unwrap();
-    let client: Client<ServerError, SequencerApiVersion> = Client::new(url);
+    let client: Client<ClientErr, SequencerApiVersion> = Client::new(url);
 
     client.connect(Some(Duration::from_secs(15))).await;
 
     // Wait until some blocks have been decided.
     tracing::info!("waiting for blocks");
-    let blocks = client
-        .socket("availability/stream/blocks/0")
-        .subscribe::<BlockQueryData<SeqTypes>>()
-        .await
-        .unwrap()
-        .take(4)
-        .try_collect::<Vec<_>>()
-        .await
-        .unwrap();
+    let blocks = timeout(
+        Duration::from_secs(120),
+        client
+            .socket("availability/stream/blocks/0")
+            .subscribe::<BlockQueryData<SeqTypes>>()
+            .await
+            .unwrap()
+            .take(4)
+            .try_collect::<Vec<_>>(),
+    )
+    .await
+    .expect("the query service did not serve the first blocks in time")
+    .unwrap();
 
     // sleep for few seconds so that state data is upserted
     tracing::info!("waiting for state to be inserted");
@@ -114,124 +139,4 @@ async fn slow_test_merklized_state_api() {
         .unwrap();
     let expected = U256::MAX;
     assert_eq!(expected, amount.0);
-}
-
-fn make_reward_account(i: usize) -> RewardAccountV2 {
-    let mut addr_bytes = [0u8; 20];
-    addr_bytes[16..20].copy_from_slice(&(i as u32).to_be_bytes());
-    RewardAccountV2(Address::from(addr_bytes))
-}
-
-async fn insert_test_header(
-    tx: &mut SqlTransaction<Write>,
-    block_height: u64,
-    reward_tree: &RewardMerkleTreeV2,
-) {
-    let reward_commitment = serde_json::to_value(reward_tree.commitment()).unwrap();
-    let test_data = serde_json::json!({
-        "block_merkle_tree_root": format!("block_root_{}", block_height),
-        "fee_merkle_tree_root": format!("fee_root_{}", block_height),
-        "fields": {
-            RewardMerkleTreeV2::header_state_commitment_field(): reward_commitment
-        }
-    });
-    tx.upsert(
-        "header",
-        [
-            "height",
-            "hash",
-            "payload_hash",
-            "timestamp",
-            "data",
-            "ns_table",
-        ],
-        ["height"],
-        [(
-            block_height as i64,
-            format!("hash_{}", block_height),
-            format!("payload_{}", block_height),
-            block_height as i64,
-            test_data,
-            "ns_table".to_string(),
-        )],
-    )
-    .await
-    .unwrap();
-}
-
-async fn batch_insert_proofs(
-    tx: &mut SqlTransaction<Write>,
-    reward_tree: &RewardMerkleTreeV2,
-    accounts: &[RewardAccountV2],
-    block_height: u64,
-) {
-    let proofs_and_paths: Vec<_> = accounts
-        .iter()
-        .map(|account| {
-            let proof = match reward_tree.universal_lookup(*account) {
-                LookupResult::Ok(_, proof) => proof,
-                LookupResult::NotInMemory => panic!("account not in memory"),
-                LookupResult::NotFound(proof) => proof,
-            };
-            let traversal_path = <RewardAccountV2 as ToTraversalPath<
-                { RewardMerkleTreeV2::ARITY },
-            >>::to_traversal_path(account, reward_tree.height());
-            (proof, traversal_path)
-        })
-        .collect();
-
-    UpdateStateData::<SeqTypes, RewardMerkleTreeV2, { RewardMerkleTreeV2::ARITY }>::insert_merkle_nodes_batch(
-        tx,
-        proofs_and_paths,
-        block_height,
-    )
-    .await
-    .expect("failed to batch insert proofs");
-}
-
-#[test_log::test(tokio::test(flavor = "multi_thread"))]
-async fn slow_test_batch_insertion_20k_accounts() {
-    let db = TmpDb::init().await;
-    let opt = SqlDataSource::persistence_options(&db);
-    let cfg = Config::try_from(&opt).expect("failed to create config from options");
-    let storage = SqlStorage::connect(cfg, StorageConnectionType::Query)
-        .await
-        .expect("failed to connect to storage");
-
-    let num_accounts = 20_000usize;
-
-    let accounts: Vec<RewardAccountV2> = (0..num_accounts).map(make_reward_account).collect();
-
-    tracing::info!("Starting tree update for {} accounts", num_accounts);
-    let tree_update_start = Instant::now();
-    let mut reward_tree = RewardMerkleTreeV2::new(REWARD_MERKLE_TREE_V2_HEIGHT);
-    for (i, account) in accounts.iter().enumerate() {
-        let reward_amount = RewardAmount::from(((i + 1) * 100) as u64);
-        reward_tree.update(*account, reward_amount).unwrap();
-        if (i + 1) % 5_000 == 0 {
-            tracing::info!("tree_update: {}/{}", i + 1, num_accounts);
-        }
-    }
-    let tree_update_duration = tree_update_start.elapsed();
-    tracing::info!("tree_update complete: {:?}", tree_update_duration);
-
-    let mut tx = storage.write().await.unwrap();
-    insert_test_header(&mut tx, 1, &reward_tree).await;
-
-    tracing::info!("Starting batch insert for {} accounts", num_accounts);
-    let batch_insert_start = Instant::now();
-    batch_insert_proofs(&mut tx, &reward_tree, &accounts, 1).await;
-    let batch_insert_duration = batch_insert_start.elapsed();
-    tracing::info!("batch_insert complete: {:?}", batch_insert_duration);
-
-    UpdateStateData::<SeqTypes, RewardMerkleTreeV2, { RewardMerkleTreeV2::ARITY }>::set_last_state_height(&mut tx, 1)
-        .await
-        .unwrap();
-    tx.commit().await.unwrap();
-
-    tracing::info!(
-        "20k accounts: tree_update={:?}, batch_insert={:?}",
-        tree_update_duration,
-        batch_insert_duration
-    );
 }

@@ -11,8 +11,9 @@ pub enum UpgradeType {
     Fee { chain_config: ChainConfig },
     Epoch { chain_config: ChainConfig },
     DrbAndHeader { chain_config: ChainConfig },
-    Da { chain_config: ChainConfig },
+    NewProtocol { chain_config: ChainConfig },
     EpochReward { chain_config: ChainConfig },
+    LargeBlock { chain_config: ChainConfig },
 }
 
 impl UpgradeType {
@@ -23,8 +24,9 @@ impl UpgradeType {
             UpgradeType::Fee { chain_config } => Some(*chain_config),
             UpgradeType::Epoch { chain_config } => Some(*chain_config),
             UpgradeType::DrbAndHeader { chain_config } => Some(*chain_config),
-            UpgradeType::Da { chain_config } => Some(*chain_config),
+            UpgradeType::NewProtocol { chain_config } => Some(*chain_config),
             UpgradeType::EpochReward { chain_config } => Some(*chain_config),
+            UpgradeType::LargeBlock { chain_config } => Some(*chain_config),
         }
     }
 }

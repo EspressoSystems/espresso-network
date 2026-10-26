@@ -1,36 +1,173 @@
 use anyhow::Context;
-use clap::Parser;
-use espresso_types::traits::{NullEventConsumer, SequencerPersistence};
+use espresso_telemetry as telemetry;
+use espresso_types::{traits::NullEventConsumer, v0::traits::SequencerPersistence};
 use futures::future::FutureExt;
 use hotshot_types::traits::metrics::NoMetrics;
+use process_metrics::log_cpu_probe;
+use url::Url;
 
 use super::{
-    Genesis, L1Params, NetworkParams,
+    CatchupParams, Genesis, L1Params, NetworkParams,
     api::{self, data_source::DataSourceOptions},
     context::SequencerContext,
-    init_node, network,
+    init_node,
     options::{Modules, Options, PublicNodeConfig},
     persistence,
 };
-use crate::keyset::KeySet;
+use crate::{
+    default_telemetry_endpoint,
+    follower::{FollowerContext, FollowerParams, init_follower_node},
+    keyset::KeySet,
+};
+
+pub enum NodeContext<P: SequencerPersistence> {
+    Validator(Box<SequencerContext<P>>),
+    Follower(Box<FollowerContext<P>>),
+}
+
+impl<P: SequencerPersistence> NodeContext<P> {
+    pub async fn start(&mut self) -> anyhow::Result<()> {
+        match self {
+            Self::Validator(ctx) => ctx.start_consensus().await,
+            // Following began in `init_follower_node`.
+            Self::Follower(_) => {},
+        }
+        Ok(())
+    }
+
+    pub async fn join(&mut self) {
+        match self {
+            Self::Validator(ctx) => ctx.join().await,
+            Self::Follower(ctx) => ctx.join().await,
+        }
+    }
+
+    pub async fn shut_down(&mut self) {
+        match self {
+            Self::Validator(ctx) => ctx.shut_down().await,
+            Self::Follower(ctx) => ctx.shut_down().await,
+        }
+    }
+}
 
 pub async fn main(migrated_envs: Vec<(&str, &str)>) -> anyhow::Result<()> {
-    let opt = Options::parse();
-    opt.logging.init();
-    espresso_utils::env_compat::log_migrated_env_vars(&migrated_envs);
-
+    espresso_types::assert_node_feature();
+    let opt = <Options as clap::Parser>::parse();
     let mut modules = opt.modules();
+
+    // Genesis carries the chain ID, which selects the default telemetry
+    // endpoint. Load it before telemetry init; the genesis log line is emitted
+    // later, once the subscriber is installed.
+    let genesis = Genesis::load(&opt.genesis_file).await?;
+    let telemetry_endpoint: Option<Url> = opt.telemetry.endpoint.clone().or_else(|| {
+        default_telemetry_endpoint(genesis.chain_config.chain_id).map(|s| {
+            s.parse()
+                .expect("default telemetry endpoint is a valid URL")
+        })
+    });
+    let telemetry_enabled = opt.telemetry.logs_enable || opt.telemetry.metrics_enable;
+
+    // Build telemetry before logging so its layer attaches to the global
+    // subscriber. The registry is still `None` here (the API setup runs later);
+    // the metrics push is attached then via `attach_metrics_push`.
+    let (mut telemetry_handle, deferred_warnings, telemetry_init_error) =
+        match (opt.key_set.clone().try_into(), telemetry_endpoint.as_ref()) {
+            (Ok(KeySet { staking, .. }), Some(endpoint)) => match telemetry::init(
+                &opt.telemetry,
+                &staking,
+                opt.identity.node_name.as_deref(),
+                opt.identity.company_name.as_deref(),
+                endpoint,
+                telemetry::registry(),
+            ) {
+                Ok((h, warns)) => (h, warns, None),
+                Err(e) => (None, Vec::new(), Some(e.context("telemetry init failed"))),
+            },
+            // Telemetry requested but no endpoint resolved (unknown chain, no
+            // override). Stay off and warn so the misconfig is visible.
+            (Ok(_), None) if telemetry_enabled => (
+                None,
+                vec![format!(
+                    "telemetry enabled but no endpoint resolved for chain {}; set \
+                     ESPRESSO_NODE_TELEMETRY_ENDPOINT",
+                    genesis.chain_config.chain_id
+                )],
+                None,
+            ),
+            (Err(_), _) if telemetry_enabled && modules.follower.is_some() => (
+                None,
+                vec![
+                    "telemetry enabled but a follower has no staking key to identify itself with; \
+                     continuing without telemetry"
+                        .into(),
+                ],
+                None,
+            ),
+            // Keyset error (surfaced later) or telemetry not requested.
+            _ => (None, Vec::new(), None),
+        };
+    let otel_layer = telemetry_handle.as_ref().and_then(|h| h.tracing_layer());
+    opt.logging.init_with_otel(otel_layer);
+    for w in deferred_warnings {
+        tracing::warn!("{w}");
+    }
+    if let Some(e) = telemetry_init_error {
+        tracing::error!("{e:#}; continuing without telemetry");
+    }
+    espresso_utils::env_compat::log_migrated_env_vars(&migrated_envs);
+    log_cpu_probe(genesis.drb_difficulty.max(genesis.drb_upgrade_difficulty)).await;
+
     tracing::warn!(?modules, "sequencer starting up");
+    if modules
+        .query
+        .as_ref()
+        .is_some_and(|query| query.peers.is_empty())
+    {
+        tracing::error!(
+            "module query fetches missing data from its peers but none are set: set --peers \
+             (ESPRESSO_NODE_API_PEERS)"
+        );
+    }
 
-    let public_node_config = PublicNodeConfig::new(&opt, &modules);
+    let public_node_config = PublicNodeConfig::new(&opt, &modules, &genesis);
 
-    let genesis = Genesis::from_file(&opt.genesis_file)?;
     tracing::warn!(?genesis, "genesis");
 
-    if let Some(storage) = modules.storage_fs.take() {
-        run_with_storage(genesis, modules, opt, storage, public_node_config).await
+    let result = if let Some(storage) = modules.storage_fs.take() {
+        run_with_storage(
+            genesis,
+            modules,
+            opt,
+            storage,
+            public_node_config,
+            telemetry_handle.as_mut(),
+        )
+        .await
     } else if let Some(storage) = modules.storage_sql.take() {
-        run_with_storage(genesis, modules, opt, storage, public_node_config).await
+        match storage.into_backend() {
+            persistence::sql::SqlBackendOptions::Sqlite(storage) => {
+                run_with_storage(
+                    genesis,
+                    modules,
+                    opt,
+                    storage,
+                    public_node_config,
+                    telemetry_handle.as_mut(),
+                )
+                .await
+            },
+            persistence::sql::SqlBackendOptions::Postgres(storage) => {
+                run_with_storage(
+                    genesis,
+                    modules,
+                    opt,
+                    storage,
+                    public_node_config,
+                    telemetry_handle.as_mut(),
+                )
+                .await
+            },
+        }
     } else {
         // Persistence is required. If none is provided, just use the local file system.
         run_with_storage(
@@ -39,9 +176,15 @@ pub async fn main(migrated_envs: Vec<(&str, &str)>) -> anyhow::Result<()> {
             opt,
             persistence::fs::Options::default(),
             public_node_config,
+            telemetry_handle.as_mut(),
         )
         .await
+    };
+
+    if let Some(h) = telemetry_handle {
+        h.shutdown();
     }
+    result
 }
 
 async fn run_with_storage<S>(
@@ -50,126 +193,105 @@ async fn run_with_storage<S>(
     opt: Options,
     storage_opt: S,
     public_node_config: PublicNodeConfig,
+    telemetry_handle: Option<&mut telemetry::TelemetryHandle>,
 ) -> anyhow::Result<()>
 where
     S: DataSourceOptions,
 {
-    let ctx = init_with_storage(genesis, modules, opt, storage_opt, public_node_config).await?;
+    let mut ctx = init_with_storage(genesis, modules, opt, storage_opt, public_node_config).await?;
 
-    // Start doing consensus.
-    ctx.start_consensus().await;
-    ctx.join().await;
+    // The API setup deposited the prometheus Registry into `telemetry::REGISTRY`
+    // (if the HTTP module was configured). Attach the metrics push task now,
+    // before consensus starts churning.
+    if let (Some(handle), Some(registry)) = (telemetry_handle, telemetry::registry()) {
+        handle.attach_metrics_push(registry);
+    }
+
+    ctx.start().await?;
+
+    tokio::select! {
+        () = ctx.join() => tracing::warn!("consensus stopped; exiting"),
+        _ = espresso_utils::shutdown::wait_for_shutdown_signal() => ctx.shut_down().await,
+    }
 
     Ok(())
 }
 
 pub async fn init_with_storage<S>(
     genesis: Genesis,
-    modules: Modules,
+    mut modules: Modules,
     opt: Options,
     mut storage_opt: S,
     public_node_config: PublicNodeConfig,
-) -> anyhow::Result<SequencerContext<network::Production, S::Persistence>>
+) -> anyhow::Result<NodeContext<S::Persistence>>
 where
     S: DataSourceOptions,
 {
-    let KeySet {
-        staking,
-        state,
-        x25519,
-    } = opt.key_set.try_into()?;
+    let follower_params = match (&modules.follower, &modules.query) {
+        (Some(follower), Some(query)) => {
+            Some(opt.follower_params(follower, query, storage_opt.light_client_db(query)?)?)
+        },
+        _ => None,
+    };
     let l1_params = L1Params {
         urls: opt.l1_provider_url,
         options: opt.l1_options,
     };
 
+    if let Some(params) = follower_params {
+        let ctx = init_follower_with_storage(
+            genesis,
+            modules,
+            params,
+            l1_params,
+            storage_opt,
+            public_node_config,
+        )
+        .await?;
+        return Ok(NodeContext::Follower(Box::new(ctx)));
+    }
+
+    let KeySet {
+        staking,
+        state,
+        x25519,
+    } = opt.key_set.try_into()?;
+
     let network_params = NetworkParams {
-        cdn_endpoint: opt.cdn_endpoint,
         cliquenet_bind_addr: opt.cliquenet_bind_address,
         cliquenet_advertise_addr: opt.cliquenet_advertise_address,
         x25519_secret_key: x25519,
-        libp2p_advertise_address: opt.libp2p_advertise_address,
-        libp2p_bind_address: opt.libp2p_bind_address,
-        libp2p_bootstrap_nodes: opt.libp2p_bootstrap_nodes,
         orchestrator_url: opt.orchestrator_url,
         builder_urls: opt.builder_urls,
         state_relay_server_url: opt.state_relay_server_url,
         public_api_url: opt.public_api_url,
         private_staking_key: staking,
         private_state_key: state,
-        state_peers: opt.state_peers,
         config_peers: opt.config_peers,
-        catchup_backoff: opt.catchup_backoff,
-        catchup_base_timeout: opt.catchup_base_timeout,
-        local_catchup_timeout: opt.local_catchup_timeout,
+        catchup: CatchupParams {
+            state_peers: opt.state_peers,
+            backoff: opt.catchup_backoff,
+            base_timeout: opt.catchup_base_timeout,
+            local_timeout: opt.local_catchup_timeout,
+            http_delay: opt.http_catchup_delay,
+        },
         bootstrap_epoch_catchup_timeout: opt.bootstrap_epoch_catchup_timeout,
-        new_protocol_consensus_gc_interval: opt.new_protocol_consensus_gc_interval,
-        libp2p_history_gossip: opt.libp2p_history_gossip,
-        libp2p_history_length: opt.libp2p_history_length,
-        libp2p_max_ihave_length: opt.libp2p_max_ihave_length,
-        libp2p_max_ihave_messages: opt.libp2p_max_ihave_messages,
-        libp2p_max_gossip_transmit_size: opt.libp2p_max_gossip_transmit_size,
-        libp2p_max_direct_transmit_size: opt.libp2p_max_direct_transmit_size,
-        libp2p_mesh_outbound_min: opt.libp2p_mesh_outbound_min,
-        libp2p_mesh_n: opt.libp2p_mesh_n,
-        libp2p_mesh_n_high: opt.libp2p_mesh_n_high,
-        libp2p_heartbeat_interval: opt.libp2p_heartbeat_interval,
-        libp2p_mesh_n_low: opt.libp2p_mesh_n_low,
-        libp2p_published_message_ids_cache_time: opt.libp2p_published_message_ids_cache_time,
-        libp2p_iwant_followup_time: opt.libp2p_iwant_followup_time,
-        libp2p_max_messages_per_rpc: opt.libp2p_max_messages_per_rpc,
-        libp2p_gossip_retransmission: opt.libp2p_gossip_retransmission,
-        libp2p_flood_publish: opt.libp2p_flood_publish,
-        libp2p_duplicate_cache_time: opt.libp2p_duplicate_cache_time,
-        libp2p_fanout_ttl: opt.libp2p_fanout_ttl,
-        libp2p_heartbeat_initial_delay: opt.libp2p_heartbeat_initial_delay,
-        libp2p_gossip_factor: opt.libp2p_gossip_factor,
-        libp2p_gossip_lazy: opt.libp2p_gossip_lazy,
     };
 
     let proposal_fetcher_config = opt.proposal_fetcher_config;
+    let empty_block_delay = opt.empty_block_delay;
 
+    if modules.query.is_none() {
+        storage_opt.set_consensus_only();
+    }
     let persistence = storage_opt.create().await?;
-    persistence
-        .migrate_storage()
-        .await
-        .context("failed to migrate consensus data")?;
 
     // Initialize HotShot. If the user requested the HTTP module, we must initialize the handle in
     // a special way, in order to populate the API with consensus metrics. Otherwise, we initialize
     // the handle directly, with no metrics.
-    let ctx = match modules.http {
+    let ctx = match modules.http.take() {
         Some(http_opt) => {
-            // Add optional API modules as requested.
-            let mut http_opt = api::Options::from(http_opt);
-            if let Some(query) = modules.query {
-                http_opt = storage_opt.enable_query_module(http_opt, query);
-            }
-            if let Some(submit) = modules.submit {
-                http_opt = http_opt.submit(submit);
-            }
-            if let Some(status) = modules.status {
-                http_opt = http_opt.status(status);
-            }
-
-            if let Some(catchup) = modules.catchup {
-                http_opt = http_opt.catchup(catchup);
-            }
-            if let Some(hotshot_events) = modules.hotshot_events {
-                http_opt = http_opt.hotshot_events(hotshot_events);
-            }
-            if let Some(explorer) = modules.explorer {
-                http_opt = http_opt.explorer(explorer);
-            }
-            if let Some(light_client) = modules.light_client {
-                http_opt = http_opt.light_client(light_client);
-            }
-            if let Some(config) = modules.config {
-                http_opt = http_opt
-                    .config(config)
-                    .public_node_config(public_node_config);
-            }
-
+            let http_opt = api_options(http_opt, modules, &storage_opt, public_node_config);
             http_opt
                 .serve(move |metrics, consumer, storage| {
                     async move {
@@ -184,6 +306,7 @@ where
                             opt.is_da,
                             opt.identity,
                             proposal_fetcher_config,
+                            empty_block_delay,
                         )
                         .await
                     }
@@ -203,26 +326,99 @@ where
                 opt.is_da,
                 opt.identity,
                 proposal_fetcher_config,
+                empty_block_delay,
             )
             .await?
         },
     };
 
-    Ok(ctx)
+    Ok(NodeContext::Validator(Box::new(ctx)))
+}
+
+/// Module parsing has checked that the http, query and storage-sql modules are present.
+async fn init_follower_with_storage<S>(
+    genesis: Genesis,
+    mut modules: Modules,
+    params: FollowerParams,
+    l1_params: L1Params,
+    mut storage_opt: S,
+    public_node_config: PublicNodeConfig,
+) -> anyhow::Result<FollowerContext<S::Persistence>>
+where
+    S: DataSourceOptions,
+{
+    let http_opt = modules
+        .http
+        .take()
+        .context("a follower needs the http module")?;
+    let http_opt = api_options(http_opt, modules, &storage_opt, public_node_config);
+    let persistence = storage_opt.create().await?;
+    http_opt
+        .serve(move |metrics, sink, _storage| {
+            async move {
+                init_follower_node(genesis, params, metrics, persistence, l1_params, sink).await
+            }
+            .boxed()
+        })
+        .await
+        .map(FollowerContext::new)
+}
+
+fn api_options<S: DataSourceOptions>(
+    http_opt: api::options::Http,
+    modules: Modules,
+    storage_opt: &S,
+    public_node_config: PublicNodeConfig,
+) -> api::Options {
+    let mut http_opt = api::Options::from(http_opt);
+    if let Some(query) = modules.query {
+        http_opt = storage_opt.enable_query_module(http_opt, query);
+    }
+    if let Some(submit) = modules.submit {
+        http_opt = http_opt.submit(submit);
+    }
+    if let Some(status) = modules.status {
+        http_opt = http_opt.status(status);
+    }
+    if let Some(catchup) = modules.catchup {
+        http_opt = http_opt.catchup(catchup);
+    }
+    if modules.hotshot_events.is_some() {
+        tracing::warn!(
+            "the hotshot-events module is deprecated and ignored: the node no longer serves \
+             /hotshot-events. Remove it from the command line."
+        );
+    }
+    if let Some(explorer) = modules.explorer {
+        http_opt = http_opt.explorer(explorer);
+    }
+    if let Some(light_client) = modules.light_client {
+        http_opt = http_opt.light_client(light_client);
+    }
+    if let Some(config) = modules.config {
+        http_opt = http_opt
+            .config(config)
+            .public_node_config(public_node_config);
+    }
+    http_opt
 }
 
 #[cfg(test)]
 mod test {
     use std::time::Duration;
 
-    use espresso_types::PubKey;
+    use clap::Parser;
+    use espresso_types::{
+        PubKey, Upgrade, UpgradeType,
+        v0_1::{UpgradeMode, ViewBasedUpgrade},
+    };
     use hotshot_types::{light_client::StateKeyPair, traits::signature_key::SignatureKey, x25519};
-    use surf_disco::{Client, Url, error::ClientError};
+    use http_client::{Client, Url, error::ClientErr};
     use tagged_base64::TaggedBase64;
     use tempfile::TempDir;
     use test_utils::reserve_tcp_port;
     use tokio::spawn;
-    use vbs::version::Version;
+    use versions::{LARGE_BLOCK_VERSION, NEW_PROTOCOL_VERSION};
 
     use super::*;
     use crate::{
@@ -249,15 +445,30 @@ mod test {
             accounts: Default::default(),
             l1_finalized: L1Finalized::Number { number: 0 },
             header: Default::default(),
-            upgrades: Default::default(),
-            base_version: Version { major: 0, minor: 1 },
-            upgrade_version: Version { major: 0, minor: 2 },
-            epoch_height: None,
+            upgrades: [(
+                LARGE_BLOCK_VERSION,
+                Upgrade {
+                    mode: UpgradeMode::View(ViewBasedUpgrade {
+                        start_proposing_view: 100,
+                        stop_proposing_view: 200,
+                        start_voting_view: None,
+                        stop_voting_view: None,
+                    }),
+                    upgrade_type: UpgradeType::LargeBlock {
+                        chain_config: Default::default(),
+                    },
+                },
+            )]
+            .into_iter()
+            .collect(),
+            base_version: NEW_PROTOCOL_VERSION,
+            upgrade_version: LARGE_BLOCK_VERSION,
+            epoch_height: Some(10),
             drb_difficulty: None,
             drb_upgrade_difficulty: None,
             epoch_start_block: None,
             stake_table_capacity: None,
-            genesis_version: Version { major: 0, minor: 1 },
+            genesis_version: NEW_PROTOCOL_VERSION,
             da_committees: None,
         };
         genesis.to_file(&genesis_file).unwrap();
@@ -285,11 +496,8 @@ mod test {
                 .to_string(),
             "--cliquenet-bind-address",
             &format!("127.0.0.1:{port2}"),
-            // Never bound: this test blocks at orchestrator before libp2p starts. Port 0 is a
-            // placeholder to satisfy the orchestrator-bootstrap requirement on the advertise
-            // address.
-            "--libp2p-advertise-address",
-            "127.0.0.1:0",
+            "--cliquenet-advertise-address",
+            &format!("127.0.0.1:{port2}"),
             "--genesis-file",
             &genesis_file.display().to_string(),
         ]);
@@ -298,7 +506,7 @@ mod test {
         // be waiting for the orchestrator, but it should at least start up the API server and
         // populate some metrics.
         tracing::info!(port = %port1, "starting sequencer");
-        let public_node_config = PublicNodeConfig::new(&opt, &modules);
+        let public_node_config = PublicNodeConfig::new(&opt, &modules, &genesis);
         let task = spawn(async move {
             if let Err(err) = init_with_storage(
                 genesis,
@@ -317,15 +525,18 @@ mod test {
         // orchestrator.
         tracing::info!("waiting for API to start");
         let url: Url = format!("http://localhost:{port1}").parse().unwrap();
-        let client = Client::<ClientError, SequencerApiVersion>::new(url.clone());
+        let client = Client::<ClientErr, SequencerApiVersion>::new(url.clone());
         assert!(client.connect(Some(Duration::from_secs(60))).await);
         client.get::<()>("healthcheck").send().await.unwrap();
 
-        // The metrics should include information about the node and software version. surf-disco
-        // doesn't currently support fetching a plaintext file, so we use a raw reqwest client.
-        let res = reqwest::get(url.join("/status/metrics").unwrap())
-            .await
-            .unwrap();
+        // The metrics should include information about the node and software version. The
+        // client doesn't support fetching a plaintext file, so we use a raw reqwest client.
+        let res = reqwest::get(
+            url.join(&espresso_api::routes::v1::status_metrics())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
         assert!(res.status().is_success(), "{}", res.status());
         let metrics = res.text().await.unwrap();
         let lines = metrics.lines().collect::<Vec<_>>();
@@ -365,12 +576,27 @@ mod test {
             build_info_line.contains("testing"),
             "expected testing in features: {lines:#?}"
         );
+        let genesis_line = concat!(
+            r#"consensus_genesis{base_version="0.6",genesis_version="0.6","#,
+            r#"upgrade_version="0.7"} 1"#
+        );
+        assert!(
+            lines.contains(&genesis_line),
+            "missing consensus_genesis metric: {lines:#?}"
+        );
+        assert!(
+            lines.contains(&r#"consensus_genesis_upgrade{version="0.7"} 1"#),
+            "missing consensus_genesis_upgrade metric: {lines:#?}"
+        );
 
         // The /config/runtime endpoint should be available and reflect CLI overrides. Use a raw
-        // reqwest client to fetch JSON, since surf-disco defaults to bincode encoding which can't
+        // reqwest client to fetch JSON, since our client defaults to VBS encoding which can't
         // round-trip arbitrary JSON via `serde_json::Value`.
         let res = reqwest::Client::new()
-            .get(url.join("/config/runtime").unwrap())
+            .get(
+                url.join(&espresso_api::routes::v1::config_runtime())
+                    .unwrap(),
+            )
             .header(reqwest::header::ACCEPT, "application/json")
             .send()
             .await
@@ -400,6 +626,21 @@ mod test {
                 "top-level key '{key}' contains 'private': {node_cfg}"
             );
         }
+        assert_eq!(
+            node_cfg["genesis"]["base_version"],
+            serde_json::Value::String("0.6".into()),
+            "genesis.base_version mismatch: {node_cfg}"
+        );
+        assert_eq!(
+            node_cfg["genesis"]["upgrade"][0]["version"],
+            serde_json::Value::String("0.7".into()),
+            "genesis.upgrade[0].version mismatch: {node_cfg}"
+        );
+        assert_eq!(
+            node_cfg["genesis"]["upgrade"][0]["start_proposing_view"],
+            serde_json::Value::Number(100.into()),
+            "genesis.upgrade[0].start_proposing_view mismatch: {node_cfg}"
+        );
 
         task.abort();
     }

@@ -1,3 +1,5 @@
+pub(crate) mod nonempty;
+
 use std::time::Duration;
 
 use crate::NetworkError;

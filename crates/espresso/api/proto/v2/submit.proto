@@ -1,0 +1,28 @@
+syntax = "proto3";
+
+package espresso.api.v2;
+
+import "google/api/annotations.proto";
+
+message SubmitTransactionRequest {
+  // Namespace the transaction is sequenced in. Required, and at most u32::MAX
+  optional uint64 namespace = 1;
+
+  // Transaction payload, base64 in JSON. Required, and may be empty
+  optional bytes payload = 2;
+}
+
+message SubmitTransactionResponse {
+  // Commitment to the accepted transaction, TaggedBase64 `TX~`
+  string hash = 1;
+}
+
+service SubmitService {
+  // Submit a transaction for sequencing
+  rpc SubmitTransaction(SubmitTransactionRequest) returns (SubmitTransactionResponse) {
+    option (google.api.http) = {
+      post: "/v2/submit/transaction"
+      body: "*"
+    };
+  }
+}

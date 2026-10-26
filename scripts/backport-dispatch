@@ -1,0 +1,68 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ $# -ne 2 ]]; then
+  echo "usage: $0 PR_NUMBER TARGET_BRANCH" >&2
+  exit 1
+fi
+
+pr_number="$1"
+target_branch="$2"
+
+: "${GITHUB_OUTPUT:?GITHUB_OUTPUT is not set}"
+: "${GH_TOKEN:?GH_TOKEN is not set}"
+
+meta=$(gh pr view "${pr_number}" --json state,title,mergeCommit \
+  -q '{state,title,sha:.mergeCommit.oid}')
+if [[ "$(jq -r '.state' <<<"${meta}")" != "MERGED" ]]; then
+  echo "PR #${pr_number} is not merged; refusing to backport" >&2
+  exit 1
+fi
+title=$(jq -r '.title' <<<"${meta}")
+sha=$(jq -r '.sha' <<<"${meta}")
+
+echo "backporting PR #${pr_number} (${sha}) to ${target_branch}"
+
+branch="backport-${pr_number}-to-${target_branch}"
+if git ls-remote --exit-code --heads origin "${branch}" >/dev/null; then
+  existing_pr=$(gh pr list --head "${branch}" --state open --json number,url -q '.[0]')
+  echo "branch '${branch}' already exists on origin: ${existing_pr:-no open PR}" >&2
+  echo "delete the branch (and close its PR) and re-run to retry" >&2
+  exit 1
+fi
+
+git fetch origin "${target_branch}"
+git checkout -b "${branch}" "origin/${target_branch}"
+
+cherry_status=0
+git cherry-pick -x "${sha}" || cherry_status=$?
+
+if [[ "${cherry_status}" -ne 0 ]]; then
+  mapfile -t conflicted < <(git diff --name-only --diff-filter=U)
+
+  if [[ ${#conflicted[@]} -eq 0 ]]; then
+    echo "cherry-pick failed (status ${cherry_status}) with no conflicted paths" >&2
+    exit 1
+  fi
+
+  git add -- "${conflicted[@]}"
+  git commit -m "backport: cherry-pick #${pr_number} to ${target_branch}" \
+             -m "Cherry-picked from ${sha}; conflict markers committed for resolution."
+fi
+
+git push -u origin "${branch}"
+
+pr_url=$(gh pr create \
+  --base "${target_branch}" \
+  --head "${branch}" \
+  --draft \
+  --title "[Backport ${target_branch}] ${title}" \
+  --body "Backport of #${pr_number} to \`${target_branch}\`.")
+pr_number_new="${pr_url##*/}"
+
+if [[ -z "${pr_number_new}" || ! "${pr_number_new}" =~ ^[0-9]+$ ]]; then
+  echo "Could not parse new PR number from gh output: ${pr_url}" >&2
+  exit 1
+fi
+
+echo "created_pull_numbers=${pr_number_new}" >>"${GITHUB_OUTPUT}"

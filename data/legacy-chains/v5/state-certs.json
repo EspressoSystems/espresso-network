@@ -1,0 +1,250 @@
+[
+  [
+    1,
+    {
+      "epoch": 1,
+      "light_client_state": "LIGHT_CLIENT_STATE~BQAAAAAAAAAFAAAAAAAAACEPpQzo5fayX6N_ah39R2QAn76tFDn9gwTAtq-g36sjIw",
+      "next_stake_table_state": "STAKE_TABLE_STATE~XyIiNvxpstdSwz3lX0pm7-t93TOjPVBx7FCv-13JCy-qAETht_A4vL71YcjPLO7eZEjraB6hc8YkigyVx5SUEAs-2ntduM2RBBkBXJA-9zOzt7_hbLw4RCBpZkmfqhMnAgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADj",
+      "signatures": [
+        [
+          "SCHNORR_VER_KEY~LfL6fFJQ8UZWR1Jro6LHtKm_y5-VQZBapO0XhcB8ABAmsVght9B8k7NntrgniffAMD8_OJ6Zjg8XUklhbb42CIw",
+          "SCHNORR_SIG~jUGSX2scKfzPuzO-Hdq9KAIa1K9xbJvJcvNZduQ0fgOXb1rv-Z06Csen9gMZjQq4DCdZjL6QkF4NqJura6BDGr9MLIfiMQ2KyygfbasI5MbrGgX4PEAfSHOGApYL0akATw",
+          "SCHNORR_SIG~lPvRellX8Uwl3lxyk1NZIbNeIdulcu0yfeV-8fJGzwQQeWj_HcyEhAymtINHwv2tsv8OUdKRXehxg6opr4LoLr3MiXet7R7AZzEKTvyRmAIIt4WJRw-bDW0B3rMjWwErUQ"
+        ],
+        [
+          "SCHNORR_VER_KEY~le6RHdTasbBsTcbMqArt0XWFwfIJTY7RbUwaCvdxswL8LpXpO3eb86iyYUr63dtv4GGa5fIJaRH97nCd1lV9H8g",
+          "SCHNORR_SIG~-5Sv6BxkqcyHi_SzkdOzFa3I7eXmqe37CpPiP4jiaQFO2BmOcLdXE92liWipYV7C9eFZgEzB7JsBTEFEo08ZH-lu7Ke_U_W3H6GgnVftLhG4ma7Q8TuaWjzkoQTyHlQMNA",
+          "SCHNORR_SIG~Vod8TVAhjbS2jUYclKie0nSpeMn0Z2_yDqNPGLF7TwO5jXgRTpwB7bUEmMih6I8I5fOzGlVXwbeL8rBGG1B-B8ZZAA0Dn6JwpSRv76D95pPgxymaSUCZY2C1qYkrOasupg"
+        ],
+        [
+          "SCHNORR_VER_KEY~lJqDaVZyM0hWP2Br52IX5FeE-dCAIC-dPX7bL5-qUx-vjbunwe-ENOeZxj6FuOyvDCFzoGeP7yZ0fM995qF-CRE",
+          "SCHNORR_SIG~QPB7UK_HgrmreVXXSGz_bl3WDG0VF1CSvBOoKUGKbQVg58bA8bvNmwpqUVPCwigvtLY7zxHV2frVmPZH7bHrAQaG51CTqxWOslQSEwvw_8401VFGKx6W4gxPn0Vzgq0Eew",
+          "SCHNORR_SIG~MPRRIt9N6N4ElpkPPYIx7MZBrOn8H8jLHspJT2jCsQM6i3t3vDqtoaVCMme-XE2tUDBudAedqy6-W8r9jJQ3Fc4eZpi9ZnHiLdB48JPIXBcjnUEeQqJxrNFrzDocDPYFiQ"
+        ],
+        [
+          "SCHNORR_VER_KEY~tyuplKrHzvjODsjPKMHVFYfoMcgklQsMye-2aSCktBcbW_CIzLOq3wZXRIPBbw3FiV6_QoUXYAlpZ5up0zG_ANY",
+          "SCHNORR_SIG~LcvQSf4g56WsFc7g6JwRt8a7t_wAnYLpNxOOnivUXwN3ZBYlfbY1JMeDFEXAMw94EikYeb7t-jtwIpw9LtwYGO9UlLZbG6aEWEtuQ1pN6ySzzq_EOdgT4nRXpLGkhOcX7g",
+          "SCHNORR_SIG~__ScB_yLna1UkE7x2XU7jKy58c7WFpB4x83aTf6nLANwULPOuvq72uuXweY7fBXr5Y0vwGHapkHHS2t9TwF0LxB3emfoMFKlQka8Gd0SeGWJft0mVttWgftULebwL0wdiw"
+        ]
+      ],
+      "auth_root": "0xd397b3b043d87fcd6fad1291ff0bfd16401c274896d8c63a923727f077b8e0b5"
+    }
+  ],
+  [
+    2,
+    {
+      "epoch": 2,
+      "light_client_state": "LIGHT_CLIENT_STATE~DwAAAAAAAAAPAAAAAAAAAI8v5VAf2GbfR_lX2hicHxUigHIzm-TuT3zXgKb_UeMdJg",
+      "next_stake_table_state": "STAKE_TABLE_STATE~XyIiNvxpstdSwz3lX0pm7-t93TOjPVBx7FCv-13JCy-qAETht_A4vL71YcjPLO7eZEjraB6hc8YkigyVx5SUEP8bNzykHuesLuV_BUsu9LPKco_3Zky5VCaW4sYFnRYEVlVR50Q6bARnAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2",
+      "signatures": [
+        [
+          "SCHNORR_VER_KEY~le6RHdTasbBsTcbMqArt0XWFwfIJTY7RbUwaCvdxswL8LpXpO3eb86iyYUr63dtv4GGa5fIJaRH97nCd1lV9H8g",
+          "SCHNORR_SIG~sZJMpRw4nP99w8lI3ku7qhkrUMdHovhlCIB3PLYT9wQ0JMIAFJUXCGI33giLtkwDG17NsRnCwadzD5pjXkvUCm-eyxD3iNlNVQnG4azBD5Qd8dgrXRA57SfcUByleuAVbw",
+          "SCHNORR_SIG~NQ9hu3VxHLYtKXR5Dvz08FW9wfT-qIAQ9FZRQqRUjwRXb0YnMDNfpNWiH-NurBqlujXZoG0xySQ-gfVjZlw_GU8bK7T0jnkNIHAgfLycWQkT8qXm-rNeaGakuol4CLoE2g"
+        ],
+        [
+          "SCHNORR_VER_KEY~tyuplKrHzvjODsjPKMHVFYfoMcgklQsMye-2aSCktBcbW_CIzLOq3wZXRIPBbw3FiV6_QoUXYAlpZ5up0zG_ANY",
+          "SCHNORR_SIG~ud9BktI5PrY3A8cngcfLdx0F_WEV1Afwww-IksqY7wIrlsWnsAIoPI7lHf2gRFHWGMf3YO3n0dx13vgIf8e3LSThiDG2Nyng2U65dTQTW6zwyGC96tJ_Lm2xtVFjT2Yd5g",
+          "SCHNORR_SIG~ygwH9MvYQ8QAHjjEXS-12IbuxlSEKCPSWlH1Y06ztQCWhnWC22H2zYaFAbVI7qq4ShtXoPZsAYvKwbJAZip4C9GmvjgYknY0FMFpRdxvlETmHTuRuXSGeAy763eR9OQDsw"
+        ],
+        [
+          "SCHNORR_VER_KEY~qQAC373HPv4s0mTTpdmSaynfUXC4SfPCuGD2fbeigSpexFB2ycCeXV9UAjuR86CC9udPhopgMsFLyD29VO2iJSg",
+          "SCHNORR_SIG~cPxnYr3HCULjCKgXyuhPCqxE5Gn-G1hnDAg7mj5tSwSmzrPgWhNVb52s3BrnLYqj_Hd1gdVVBilkMMaWBBEtEm4bqW_0MNqFUFOwvRZIJN-xINqKKOiDe0H3OvaN0mAqqA",
+          "SCHNORR_SIG~ascnwiQpQ15gwTgh4_ENUijbiG6m3m7kq_q5QucS5QFC4CBB3ly5y3ppwpgH_Q0Meoal3BgdOXNybUXLFNdXCQctcH5XkzDdjnDX2vjGso09pEaWvzA_UV8VEy4-XFcM1Q"
+        ],
+        [
+          "SCHNORR_VER_KEY~LfL6fFJQ8UZWR1Jro6LHtKm_y5-VQZBapO0XhcB8ABAmsVght9B8k7NntrgniffAMD8_OJ6Zjg8XUklhbb42CIw",
+          "SCHNORR_SIG~KQgDYwCiJOVUG0ZyJzADfenIZCOanjfjU-zy0j9epQC3SmWDnSXOs9rofpE6KVKf8wozt9xI78rTpzDYtzkyMI70BsWgtlpd4mmnxBaRIyGZRvbpzqsDAAPinJ3hLkMdiw",
+          "SCHNORR_SIG~1z-Tk6fTlIq8l9QGKWQMgHjvR8rnpIro3KSLPnMYUgBkd-yVFG5ABM-tHYZkzRQM9krtzvqxUf2ear7qMC8ELginAoSshcvqZza1AmdPWG5Iy_SjMb_CvIDv22ON4H4a7g"
+        ]
+      ],
+      "auth_root": "0xd397b3b043d87fcd6fad1291ff0bfd16401c274896d8c63a923727f077b8e0b5"
+    }
+  ],
+  [
+    3,
+    {
+      "epoch": 3,
+      "light_client_state": "LIGHT_CLIENT_STATE~GQAAAAAAAAAZAAAAAAAAADhXonG9RWzeotBqTmO0z4fHrsyRGCVZuU1mkj1zw70QhA",
+      "next_stake_table_state": "STAKE_TABLE_STATE~XyIiNvxpstdSwz3lX0pm7-t93TOjPVBx7FCv-13JCy-qAETht_A4vL71YcjPLO7eZEjraB6hc8YkigyVx5SUEP8bNzykHuesLuV_BUsu9LPKco_3Zky5VCaW4sYFnRYEVlVR50Q6bARnAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2",
+      "signatures": [
+        [
+          "SCHNORR_VER_KEY~qQAC373HPv4s0mTTpdmSaynfUXC4SfPCuGD2fbeigSpexFB2ycCeXV9UAjuR86CC9udPhopgMsFLyD29VO2iJSg",
+          "SCHNORR_SIG~V7fCNROGaLBt9-uESh4kzkXoAzqgG10pkBtsb7yUZwPGeI8sdJBVHRpj1mKD9mTKWp9S8n9MGTbHFCUdP6-UJbzJpsUBWraJTRUheTJSLocuC_LHIj9z78-O97WkWuwPLg",
+          "SCHNORR_SIG~XLQvMSDsAxqJvs-db7bopIV5oiSwmixWKcyex3NzGAJW7Jjpljv-CIMyS-OAT8r4sj5-KmWzPJcV8uaePI8aDHUDhyItGgoi8PFnovB8qcd0qcpLsi4o-ifwy0wp6IkpRg"
+        ],
+        [
+          "SCHNORR_VER_KEY~tyuplKrHzvjODsjPKMHVFYfoMcgklQsMye-2aSCktBcbW_CIzLOq3wZXRIPBbw3FiV6_QoUXYAlpZ5up0zG_ANY",
+          "SCHNORR_SIG~PmcBqnPTq3pA1HqvZnN-qIna-lG4JuYltDQHWLVEiQSWP1idIS3G8A0i9CzimqpRD_j2gUdH2M_K-nKBQ3MFKEnHo8GPQdwoZ0-S0ru1PT-cwTWQ-CqmlT9lFnl8nmUeZg",
+          "SCHNORR_SIG~sK80OZ0bGajRKbUtIdTeIatMAs8LpXPoOj9v34tpwgIRun4e_igfRwnTTj6chrgafl89o25ORSJcsPhUjQDKG_3RazCvIxpqMvSPjSO-YzHK9x1D3UcP31zrAaCL2vsJrw"
+        ],
+        [
+          "SCHNORR_VER_KEY~LfL6fFJQ8UZWR1Jro6LHtKm_y5-VQZBapO0XhcB8ABAmsVght9B8k7NntrgniffAMD8_OJ6Zjg8XUklhbb42CIw",
+          "SCHNORR_SIG~syZP6iaRXRYY67y8ZlIEncf3I6GUqpbz_MOPkv4kxQCdSNjrjd3wWzVp1qf_ZjgVXaTeUKKiDSkeBCrp8aSRJE2aRUuCfNQ4Opfq8Htuyrzz0WrQA9r-E8knEJTeUnEecQ",
+          "SCHNORR_SIG~z2eFVjNdeLSSljjS1fBnby9DyMjfK8vuWuT3AD5aXwTvHlq4Dzmyybh9bYA11yzc89XNxaUUyCoon-1JpSHMELqea8IWXDO1cT8MmUyk1stZNOch-AKcCk_-3FoItEMXgg"
+        ],
+        [
+          "SCHNORR_VER_KEY~lJqDaVZyM0hWP2Br52IX5FeE-dCAIC-dPX7bL5-qUx-vjbunwe-ENOeZxj6FuOyvDCFzoGeP7yZ0fM995qF-CRE",
+          "SCHNORR_SIG~U1yi5PNp58ChQYG_KK2YctD3_hNLGGsmimrP2LwU6AC68dWbsxMjkk7WHh7T-5ZubfTIK2_wXobQTldlv1L6L0c9fv5-LxBJI9NPMf_Ycg7Vlf6A3s2ZTSzSoIRqNVEbgg",
+          "SCHNORR_SIG~N9KVfUWhITKLx4qKWGCYm9-2fi3FKOtN8Y0I8jplCAD5eX2V6lOITqS4S4AIMKRtwYJg7W07LRzvp2i7vxYpE9hUmkAeaLN57xhnNkuBJVltwMAFcjptpOepr7dPduYlKw"
+        ]
+      ],
+      "auth_root": "0xd397b3b043d87fcd6fad1291ff0bfd16401c274896d8c63a923727f077b8e0b5"
+    }
+  ],
+  [
+    4,
+    {
+      "epoch": 4,
+      "light_client_state": "LIGHT_CLIENT_STATE~IwAAAAAAAAAjAAAAAAAAAAwci3GMkz2mMAzl6j8GSP80JOD9C88jSPUF-Ej8-d8TcQ",
+      "next_stake_table_state": "STAKE_TABLE_STATE~XyIiNvxpstdSwz3lX0pm7-t93TOjPVBx7FCv-13JCy-qAETht_A4vL71YcjPLO7eZEjraB6hc8YkigyVx5SUEP8bNzykHuesLuV_BUsu9LPKco_3Zky5VCaW4sYFnRYEVlVR50Q6bARnAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2",
+      "signatures": [
+        [
+          "SCHNORR_VER_KEY~qQAC373HPv4s0mTTpdmSaynfUXC4SfPCuGD2fbeigSpexFB2ycCeXV9UAjuR86CC9udPhopgMsFLyD29VO2iJSg",
+          "SCHNORR_SIG~i2-LklsmIocf47l20mz6fmIs60L37FBmuGbFC6xidgG7WB8yX8hZUm8dGkY9OUIOkwaluXnyTxf5UjL1UfXDJdeIxjDlQEXzbw4ww-Rh_rhQDx9CLKYdFpYttMawp6MY0Q",
+          "SCHNORR_SIG~-AtGWfGZHYpYASAoDtnedS8d_tsCm_ZlcmPAUImdugBGQMgttNa_gB8ZDgvu7vZP8oaNSdeHj1tOIBk4qTeEE9S6yjbpLGe4KNuLCc1b9770trVKTkvghcEI4z_ieJga7g"
+        ],
+        [
+          "SCHNORR_VER_KEY~le6RHdTasbBsTcbMqArt0XWFwfIJTY7RbUwaCvdxswL8LpXpO3eb86iyYUr63dtv4GGa5fIJaRH97nCd1lV9H8g",
+          "SCHNORR_SIG~ULdlahANwzqkonddIhcsBohhr_B3LyFePNZZyyaD-QGVWRMHiYnPm8FHRd2akRgXnpe7YWnbus2lUB9yYCw2G6wRWvhghdpc1cTTya-tXRPR-CEfQl5ALl4gBYwGupop-g",
+          "SCHNORR_SIG~5uYGeoI4hQvpdq7B6GZ2EdTkazJT2ybi_bN6rum_mQJ-meSZvQ4J05yezhbTlGeokCQibGxr3bAdNfTaOF7sCv5xTZjkLrA-MfSyN2XCB6GiUKWHOA1e-mJuDaLBDw4Kbw"
+        ],
+        [
+          "SCHNORR_VER_KEY~LfL6fFJQ8UZWR1Jro6LHtKm_y5-VQZBapO0XhcB8ABAmsVght9B8k7NntrgniffAMD8_OJ6Zjg8XUklhbb42CIw",
+          "SCHNORR_SIG~fgrLvSqfTblgqWx7nZ-ofwWFaeLRNZARIXa-a5OgZwN20C_b2BjSh4dcVEMFMTSbW1_cMrU1yVjr2gJ_mGKDGDOKxR1fUImmnft_AsTBTmnnsq8TtHvbKNIyk5H7bGIuwQ",
+          "SCHNORR_SIG~RVh9XMkeZsFZcXO9EddA_pDza8xZxR-_LFrfbpkiwAUqvR5t4wd_OZeRNmNMoPS9m3UXViCXRri0VK4za5mMGjxY8HeuEY8ctAdtXiwPU5M_cJd888ASvEMuEOJ-1CQSkA"
+        ],
+        [
+          "SCHNORR_VER_KEY~tyuplKrHzvjODsjPKMHVFYfoMcgklQsMye-2aSCktBcbW_CIzLOq3wZXRIPBbw3FiV6_QoUXYAlpZ5up0zG_ANY",
+          "SCHNORR_SIG~dMT9bjpeqR-mfrAbDkPKx48TtQ8gfHAP80BjIL0YGAHqPvegiMuzziFN9a3cefoDSHgBGRrF7dj_XJyyhsvkJ1HVPTAloznUa2XvZlAs72bPKCMCmENwGzOQs-9w1uQImw",
+          "SCHNORR_SIG~cF5X8QxdO_c69G2dorPGgJrHwF3Y5tCtvq8uC6AUSgGrNLm4ATaDR8Q0oKwU9S6PrgImvolClpX0rml9u8wPAP5i1GQuK75WK2Esk7CkC4Eo-Nc75f8I15YvQg2lSX8WWA"
+        ]
+      ],
+      "auth_root": "0xd397b3b043d87fcd6fad1291ff0bfd16401c274896d8c63a923727f077b8e0b5"
+    }
+  ],
+  [
+    5,
+    {
+      "epoch": 5,
+      "light_client_state": "LIGHT_CLIENT_STATE~LQAAAAAAAAAtAAAAAAAAAFpUWi-AKKEbk8ZrcieAnFhX7NUVeJY2HTVbzQw4LhMkAw",
+      "next_stake_table_state": "STAKE_TABLE_STATE~XyIiNvxpstdSwz3lX0pm7-t93TOjPVBx7FCv-13JCy-qAETht_A4vL71YcjPLO7eZEjraB6hc8YkigyVx5SUEP8bNzykHuesLuV_BUsu9LPKco_3Zky5VCaW4sYFnRYEVlVR50Q6bARnAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2",
+      "signatures": [
+        [
+          "SCHNORR_VER_KEY~LfL6fFJQ8UZWR1Jro6LHtKm_y5-VQZBapO0XhcB8ABAmsVght9B8k7NntrgniffAMD8_OJ6Zjg8XUklhbb42CIw",
+          "SCHNORR_SIG~dKaIC7fm3WDsknZ_l41AtlfpjvL4VcjyT2acAp8-kATGNr0MhzA8F2WnfCV-YyqXIQJfQuZtbjQm3DTYzVbKLB9z8O9lOtoCHNFKjYVn3dQVnJ5uIhw2rVx7gG8qoCoRlg",
+          "SCHNORR_SIG~8UFjoW4G8Bt8MV2qgRlEfeCHKZ7k22or8ACWQST6YwQbvQjjBbKV5LkaSY29jnyULGzJtvJx0s2ivv87iF_4Iv5EftxknNWKkDelnY_E38mYOpB0wvYMqNizqytXVXonWA"
+        ],
+        [
+          "SCHNORR_VER_KEY~lJqDaVZyM0hWP2Br52IX5FeE-dCAIC-dPX7bL5-qUx-vjbunwe-ENOeZxj6FuOyvDCFzoGeP7yZ0fM995qF-CRE",
+          "SCHNORR_SIG~noCdh-0EG5FkKa3CPmqF7DWzwHgEhhTspk3TzyUSlwUlLYTWrv7UsllHDvxmenINDHaBykv2jvUtQBZuTZHIEnX-CGp21WmHZqYUyJZJsfxs5wvlNyFDd9VGLH0SIa4iFw",
+          "SCHNORR_SIG~_bAxnrvAEjZFIgl8Fy0x_fzvnIdEW9GYVLdgKQEE8QIReIDGoqNflB6Z2FuF5ip6ZmbUesqzn7pB4mUqUxhrJYK9ZwNyw39BLtfag9IRCmMRf0tFVF9uX-M5silX2h0RSw"
+        ],
+        [
+          "SCHNORR_VER_KEY~qQAC373HPv4s0mTTpdmSaynfUXC4SfPCuGD2fbeigSpexFB2ycCeXV9UAjuR86CC9udPhopgMsFLyD29VO2iJSg",
+          "SCHNORR_SIG~wiGLvC0GTxpsfM9C_f5mXTBwBRFMX2GGnuAnCTPXuAHpr6b0fibu-PYE8GGojTVwxy4txhSaZs2d-04XKsCmJ86W8G2yfKrVbQjL8n_qfVxahlX2AFQqEAOVoeWFpQUfVA",
+          "SCHNORR_SIG~Rp5mhCiV1WJQ3H7pD5T_Q2iy8eN5YB5Qcs0gJggRmADuNGVFgEEipOcjdeXFROKCY6J9sxI2XltIRsZ6-XWZIfcOoEy_cmEoBPPkASOlcLZ5SLYJvCyzfn53uaP5Bs8Riw"
+        ],
+        [
+          "SCHNORR_VER_KEY~tyuplKrHzvjODsjPKMHVFYfoMcgklQsMye-2aSCktBcbW_CIzLOq3wZXRIPBbw3FiV6_QoUXYAlpZ5up0zG_ANY",
+          "SCHNORR_SIG~zUsUbAzQP4-PLJaEZH2YO1tzx7FDJwPCseGd5dmkJgLLZp-tbUL87UNRr73bO0uwvwQH7F6xy5CcYlKiUFMzEr8n5O5mi5IO2Jj0WsqLd2QKFVJtwE49gHJ5Edn4JM4CXw",
+          "SCHNORR_SIG~N3zu_dBIzfZSZ9afI-ZkM7VXawTK-SJLBRrX-sLoZQLIQDGSQBctVIkkDd7IhTwp0SX24DZOUQHeOs5LPqu2AWj-heg99wX49CGjquYKgl_GXywHTy0HNbnD9JYpaI4AkQ"
+        ]
+      ],
+      "auth_root": "0x05119709775ee0e76b338edcc184619719692867e8195d02aee0b4436b306403"
+    }
+  ],
+  [
+    6,
+    {
+      "epoch": 6,
+      "light_client_state": "LIGHT_CLIENT_STATE~NwAAAAAAAAA3AAAAAAAAAJIRMpO22dZKsVBBTcmXXpbii_TewkPuq6dLzRKDrdEnog",
+      "next_stake_table_state": "STAKE_TABLE_STATE~XyIiNvxpstdSwz3lX0pm7-t93TOjPVBx7FCv-13JCy-qAETht_A4vL71YcjPLO7eZEjraB6hc8YkigyVx5SUEP8bNzykHuesLuV_BUsu9LPKco_3Zky5VCaW4sYFnRYEVlVR50Q6bARnAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2",
+      "signatures": [
+        [
+          "SCHNORR_VER_KEY~tyuplKrHzvjODsjPKMHVFYfoMcgklQsMye-2aSCktBcbW_CIzLOq3wZXRIPBbw3FiV6_QoUXYAlpZ5up0zG_ANY",
+          "SCHNORR_SIG~iTGYt7m-tFAet_vCaWK21xf4zsxtftRXKEzkBiWObgLef3JZ_iEANlzuF1qA7tx5qhVlotHHIRD6AsM8VkgtGMffRvoFI9Kh91eOiMjST71uJs7Qq97M5bP4q2E0WaAjhw",
+          "SCHNORR_SIG~ApI3BouqMNDnJKQrw29EnkGF8nXZHrpUOeOAtaFgqQBwUqulD3Kw7XZp-uKfPxUqHMMql3LQ7ETtsyZdVWo9IPvqP9bi-8HQbd6xeRQdklT7W6didj9L76lJhVorI3IDeg"
+        ],
+        [
+          "SCHNORR_VER_KEY~qQAC373HPv4s0mTTpdmSaynfUXC4SfPCuGD2fbeigSpexFB2ycCeXV9UAjuR86CC9udPhopgMsFLyD29VO2iJSg",
+          "SCHNORR_SIG~kxFSSPbxIYBLSE4BAZjHBQiZHW4kLCO5Wr6apYmaVgC4-gkBuqJ8H5FWJelhlGJVvhP2jNnGT0HtbPFMVhmcE8p3kbWMmMopXQ_IIlhJtwFRkel_1C5Xh8cmRB9wuiMGtA",
+          "SCHNORR_SIG~2dwLsj4C58GWHKvp-NkkuE0mxi1bI7cTzS8WsGVobwWfP4zUn_HGmXFa59u49hJ48133avkjj6VBX-ep2hi4ECaVFvifaxxRkDC5RPTWtZoKJlyWESfRH_cF_fGStPQqng"
+        ],
+        [
+          "SCHNORR_VER_KEY~le6RHdTasbBsTcbMqArt0XWFwfIJTY7RbUwaCvdxswL8LpXpO3eb86iyYUr63dtv4GGa5fIJaRH97nCd1lV9H8g",
+          "SCHNORR_SIG~QW9uCjQeod27nIhOxd84vIFFpVqhOiAZXKUUIiiBKAJ3oRrpRzAjV6AqPSRfjGnbKCK8jNoEgVO3iZ1iWhZuKvzYrXRWQM5WnQwlChykLnzwUdtSBuxtF-XJHLi4DKYugQ",
+          "SCHNORR_SIG~x1ZvnTv-pPXiG8DUXMeeuWIMcagoRHf9FyCc9C3JiQF3_fXF-1KTTD0QO5VhMZLw5F73SIAp7_1FifhVA5nACWJ8tkRh4Frz6qp6cMDG-2-2Fk0DHw6F0i4nRNYCsZciQg"
+        ],
+        [
+          "SCHNORR_VER_KEY~LfL6fFJQ8UZWR1Jro6LHtKm_y5-VQZBapO0XhcB8ABAmsVght9B8k7NntrgniffAMD8_OJ6Zjg8XUklhbb42CIw",
+          "SCHNORR_SIG~wmjfbn_e5aFaJmW2B4VdQsLllNcckOF4eWdNm6e2ZQRTHSnF-PW3-_5Zsqnb7nn3O3YBvvxDiedVq9PI4YpIKgzXUuCqs3-d88gF6nVZsuWXROzqDmOBOGcQbmbMZNwqzg",
+          "SCHNORR_SIG~eJis02eIJl8Rq7wdAPylKiIh0jljGnBPseY8JuSK3wBXKlz_bHtBX5W2l60hpeUH-L7HlXIXFewturKdUyjRA0KW0OUkDi_dv9H_hNq4-HZ9HIIbxvGKlFwjnYLWwMcPcQ"
+        ]
+      ],
+      "auth_root": "0x1766072ce5f3c0006873f7a855c0cb5185a66645e71be5fd15abff7c50256771"
+    }
+  ],
+  [
+    7,
+    {
+      "epoch": 7,
+      "light_client_state": "LIGHT_CLIENT_STATE~QQAAAAAAAABBAAAAAAAAALX_QbY9ajD4G5xDnjlNl6NJ4l3P3m-A26l5U7xgKGwPsw",
+      "next_stake_table_state": "STAKE_TABLE_STATE~XyIiNvxpstdSwz3lX0pm7-t93TOjPVBx7FCv-13JCy-qAETht_A4vL71YcjPLO7eZEjraB6hc8YkigyVx5SUEP8bNzykHuesLuV_BUsu9LPKco_3Zky5VCaW4sYFnRYEVlVR50Q6bARnAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2",
+      "signatures": [
+        [
+          "SCHNORR_VER_KEY~tyuplKrHzvjODsjPKMHVFYfoMcgklQsMye-2aSCktBcbW_CIzLOq3wZXRIPBbw3FiV6_QoUXYAlpZ5up0zG_ANY",
+          "SCHNORR_SIG~jZ56NyZDmQ08j5Dd21vlejCG_UHYhElzC-Waxy4A0gP4HcxZS-ZTNBdl_lhC5R8QZXcBAaWdKcFJU-JGhWloL_i7DLkiliSCK5mbhls5bzgwfhckYQ5-OwSFB8zrZ38tyQ",
+          "SCHNORR_SIG~2JlzfBzxv3NutFIdX80C978xo8CLDhBkEmrBjg7eewFL1wsatpq5wTdowttz-qgZvuGLPCONIePqm_J-gBOIFUiaOX99jKuV-FlRUvPcO06WoDY3fJQYkd4WLUylWEUU1Q"
+        ],
+        [
+          "SCHNORR_VER_KEY~LfL6fFJQ8UZWR1Jro6LHtKm_y5-VQZBapO0XhcB8ABAmsVght9B8k7NntrgniffAMD8_OJ6Zjg8XUklhbb42CIw",
+          "SCHNORR_SIG~p4I9DMjLDs4o4Frf1gqhzAPkTLpQnXzSSba1LHRv2wWjFymT8eegA2Z1vzYiO3CpItTlwKEbp-z9Lp_-jHBmAKuf8PiPnW0P6PXwMp9na9_bCXI2ubKEaKUlh09mDsETyA",
+          "SCHNORR_SIG~MRb9tOho0qrLF0CfLNP-PewIpTl9fKbfKnNwZARl_gJKHegsFzOtWudZVJ2joaiXH9ZL77BuU28Ullwv0RiTDWHBjuWnQsygddITet8t7ZFCeK7I4yLHxhkxPkXTOp4fzg"
+        ],
+        [
+          "SCHNORR_VER_KEY~qQAC373HPv4s0mTTpdmSaynfUXC4SfPCuGD2fbeigSpexFB2ycCeXV9UAjuR86CC9udPhopgMsFLyD29VO2iJSg",
+          "SCHNORR_SIG~dOMqiQWjeAzgy9s2AaUI4T-mYZqlP4Vx2eS6Px-2CgDQZ5YZ-WR1mKUDGmNO3dqfJrFA1tBOS7hKMFmC305rA6BJCFL4OqdB_8NrRXEA1Hws7em2GDEdEOH38gHhfuchjw",
+          "SCHNORR_SIG~js8dkEfboFXAE5-p8SBi6oQbCpULAOFhOVAxE4VACQORQk65au4FtGzr6pKyOYD66dEq-UmH0-TLMJkxH0y6F_PA70NHfITRiOCGB7cPFTL0WoOO5SHONYa96ZJI4gkXLA"
+        ],
+        [
+          "SCHNORR_VER_KEY~lJqDaVZyM0hWP2Br52IX5FeE-dCAIC-dPX7bL5-qUx-vjbunwe-ENOeZxj6FuOyvDCFzoGeP7yZ0fM995qF-CRE",
+          "SCHNORR_SIG~jSxW7hn_Up8dFoaiqHJOURxVuWdJKjh6RP1HF2K2sQR7L_tAMVpFcwfYnRPWaUH_5LUprKb6iZsJb0OU5iSGAXX8zPE3gulT89XdE_GPsO2ZPD-kr0YuoPRBEvP55mcYrQ",
+          "SCHNORR_SIG~U4Gu6K66cR1XWrtqfhf8BYVBl-WPrWC2zj8MHKf-YAXw2Z3ao-lC3gs1pdMgWf4jBaArBALiBHTOHW85T3nVLWNXbwy9ZPu0PUHErc-ALWYAAeHJw0u5AwX4Hh2Q_RYabw"
+        ]
+      ],
+      "auth_root": "0xbfb041c8d9492a3639af1543bf28ddd45f271865f12352abcaf2081d497f7ca0"
+    }
+  ],
+  [
+    8,
+    {
+      "epoch": 8,
+      "light_client_state": "LIGHT_CLIENT_STATE~SwAAAAAAAABLAAAAAAAAAK3tBbqKkCEpxu-wzbmy-QakRsodLsvnUeOMQz_jU1gCWw",
+      "next_stake_table_state": "STAKE_TABLE_STATE~XyIiNvxpstdSwz3lX0pm7-t93TOjPVBx7FCv-13JCy-qAETht_A4vL71YcjPLO7eZEjraB6hc8YkigyVx5SUEP8bNzykHuesLuV_BUsu9LPKco_3Zky5VCaW4sYFnRYEVlVR50Q6bARnAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2",
+      "signatures": [
+        [
+          "SCHNORR_VER_KEY~LfL6fFJQ8UZWR1Jro6LHtKm_y5-VQZBapO0XhcB8ABAmsVght9B8k7NntrgniffAMD8_OJ6Zjg8XUklhbb42CIw",
+          "SCHNORR_SIG~79EFhaf4NFJ3kYPxeYrujGZ872eiZ1JM5W_VTuS0nwM8htBb55mjAmlTlCNA_lCXpYMZh_Ds0yY24HMTzjJTLv8te1hJAZbvX5Bh5QMcUEdco0kaXxgaFAkiVmr_QIUKPg",
+          "SCHNORR_SIG~Vu6oa9ZDW7lNPcqYATvze27D0X_QKuUc_XlsdLK8CQMfuogwp6RQnGVBS0HhUJlrrAHV0zFTTVDR8wQWF8BzHwyPsHNrpACXZdYHEBbojNzxfFgsS5XJz2en2uIYW2MjYA"
+        ],
+        [
+          "SCHNORR_VER_KEY~tyuplKrHzvjODsjPKMHVFYfoMcgklQsMye-2aSCktBcbW_CIzLOq3wZXRIPBbw3FiV6_QoUXYAlpZ5up0zG_ANY",
+          "SCHNORR_SIG~0w9t0_iwm6PVuzq6xUprjbLpBLjcbgImOia85BvPLAFHjOLdl6CfEUjSrQNOSxAp-xFYqprWtotU2BO9DJtAMDfgPTQ0amOH1o2rwbY2bqN6xgvwkJRosNuxZN6MUXgQOw",
+          "SCHNORR_SIG~A32lLQ_URzhRFwu5MOA80upoVqpfqwFiH5SwVI0tyQQ1rGVtQ7jXc2Ka0U61elqGgRRQMXHRtGLpm2zXM_SNE2B42DEadYYNtVAFmB1a6BxGlfLTDDfD0IgPGiDwRQsJHQ"
+        ],
+        [
+          "SCHNORR_VER_KEY~lJqDaVZyM0hWP2Br52IX5FeE-dCAIC-dPX7bL5-qUx-vjbunwe-ENOeZxj6FuOyvDCFzoGeP7yZ0fM995qF-CRE",
+          "SCHNORR_SIG~Ujvgr1UZHUUA9LTtUZaQYMEhAUu0B4-fGUE-75wTdQAiL5pzj9K5KOOx5o9QlPHG7Jp4wL42dndAKglwf8ayIEKpOYyq2H26wTUn67M4B11Ti6xizZWzq4yVF0SgQ2osAQ",
+          "SCHNORR_SIG~zk-pz_OIAuUKTck5IeGkBMexSVH5cQY1RPtJIbtFtgUnh5zqos0iog5ReYQVlu_WtfEclpHzRPyf9DEoEZYWMHjTjLOIL-Iz-jaGUjIR3NA_szAXsXJbv16lGTbE_AIPug"
+        ],
+        [
+          "SCHNORR_VER_KEY~qQAC373HPv4s0mTTpdmSaynfUXC4SfPCuGD2fbeigSpexFB2ycCeXV9UAjuR86CC9udPhopgMsFLyD29VO2iJSg",
+          "SCHNORR_SIG~fzqeQYpwwirGtESmPCcrIGR5VIdkGO7UFA6YgArnoAELjF1X5ZhAZqDHNAsE4McaXf-LJqMtGhl7Mod8eDtZF3WmeQnuF1vl61SChLrqGs3RTHyT2pFEZ2XQeDgHBCokew",
+          "SCHNORR_SIG~I9Z1urudMKConrFSoc19QuySvFMgdpWmPY15Y_L-ggU1tfMu2yTDoUf_EV7iyjeCVhGgkca-e5hn8ecb4jepBMVMONRRNablPSHgLPx-In4AGMQ1RRQUeuxhK2vD9Z4oeA"
+        ]
+      ],
+      "auth_root": "0x36df8b915eeef03a7182e64d97431552bc1a0891b82765977a0bb572ab84b43f"
+    }
+  ]
+]

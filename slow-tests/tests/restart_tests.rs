@@ -14,11 +14,6 @@ use alloy::{
 };
 use anyhow::{Context, bail};
 use async_lock::RwLock;
-use cdn_broker::{
-    Broker, Config as BrokerConfig,
-    reexports::{crypto::signature::KeyPair, def::hook::NoMessageHook},
-};
-use cdn_marshal::{Config as MarshalConfig, Marshal};
 use clap::Parser;
 use committable::{Commitment, Committable};
 use derivative::Derivative;
@@ -26,6 +21,10 @@ use espresso_contract_deployer::{
     Contract, Contracts, builder::DeployerArgsBuilder,
     network_config::light_client_genesis_from_stake_table,
 };
+#[cfg(not(feature = "sqlite"))]
+use espresso_node::api::sql::postgres::DataSource as SqlDataSource;
+#[cfg(feature = "sqlite")]
+use espresso_node::api::sql::sqlite::DataSource as SqlDataSource;
 use espresso_node::{
     SequencerApiVersion,
     api::{
@@ -35,43 +34,35 @@ use espresso_node::{
     context::SequencerContext,
     genesis::{Genesis, L1Finalized, StakeTableConfig},
     keyset::KeySet,
-    network::{
-        self,
-        cdn::{TestingDef, WrappedSignatureKey},
-    },
     options::{Modules, Options, PublicNodeConfig},
-    run::init_with_storage,
-    testing::{staking_priv_keys, wait_for_decide_on_handle},
+    run::{NodeContext, init_with_storage},
+    testing::staking_priv_keys,
 };
 use espresso_types::{
-    FeeAccount, L1Client, Leaf2, PrivKey, PubKey, SeqTypes, Transaction,
-    eth_signature_key::EthKeyPair, traits::PersistenceOptions, v0_3::ChainConfig,
+    FeeAccount, L1Client, Leaf2, PrivKey, PubKey, SeqTypes, eth_signature_key::EthKeyPair,
+    traits::PersistenceOptions, v0_3::ChainConfig,
 };
 use futures::{
     future::{BoxFuture, FutureExt, join_all, try_join_all},
     stream::{BoxStream, StreamExt},
 };
-use hotshot::traits::implementations::derive_libp2p_peer_id;
 use hotshot_contract_adapter::stake_table::StakeTableContractVersion;
 use hotshot_orchestrator::run_orchestrator;
-use hotshot_testing::{
-    block_builder::{SimpleBuilderImplementation, TestBuilderImplementation},
-    test_builder::BuilderChange,
-};
 use hotshot_types::{
     PeerConfig,
     data::EpochNumber,
-    event::{Event, EventType},
+    event::LeafInfo,
     light_client::StateKeyPair,
-    network::{Libp2pConfig, NetworkConfig},
+    network::NetworkConfig,
     new_protocol::CoordinatorEvent,
     signature_key::{BLSPrivKey, BLSPubKey},
+    simple_vote::HasEpoch,
     traits::signature_key::SignatureKey,
     x25519,
 };
+use http_client::{Client, Url, error::ClientErr};
 use itertools::Itertools;
-use staking_cli::demo::{DelegationConfig, StakingTransactions};
-use surf_disco::{Url, error::ClientError};
+use staking_cli::demo::{DelegationConfig, StakingKeySet, StakingTransactions};
 use tagged_base64::TaggedBase64;
 use tempfile::TempDir;
 use test_utils::reserve_tcp_port;
@@ -79,11 +70,81 @@ use tokio::{
     task::{JoinHandle, spawn},
     time::{sleep, timeout},
 };
-use vbs::version::Version;
 use vec1::vec1;
+use versions::NEW_PROTOCOL_VERSION;
 
-async fn test_restart_helper(network: (usize, usize), restart: (usize, usize), cdn: bool) {
-    let mut network = TestNetwork::new(network.0, network.1, cdn).await;
+/// Bound on each per-node recovery wait after a restart.
+const RECOVERY_TIMEOUT: Duration = Duration::from_secs(240);
+
+/// Extract the decided leaf chain from a consensus event, or `None` if it isn't a decide.
+fn decided_leaves(event: &CoordinatorEvent<SeqTypes>) -> Option<&[LeafInfo<SeqTypes>]> {
+    match event {
+        CoordinatorEvent::NewDecide { leaf_infos, .. } => Some(leaf_infos),
+        _ => None,
+    }
+}
+
+/// Epoch of the certificate committing a decide event, or `None` if it isn't a decide.
+fn decided_epoch(event: &CoordinatorEvent<SeqTypes>) -> Option<EpochNumber> {
+    match event {
+        CoordinatorEvent::NewDecide { cert1, .. } => cert1.epoch(),
+        _ => None,
+    }
+}
+
+/// Wait until the query node at index `restarted` serves merklized state at
+/// the current tip again, so it can act as a catchup source for other nodes.
+/// The tip is read from the healthy query node at index `healthy`.
+async fn wait_for_query_node_at_tip(network: &TestNetwork, restarted: usize, healthy: usize) {
+    let restarted_port = network.node_api_port(restarted);
+    let healthy_port = network.node_api_port(healthy);
+    let tip_url: Url = format!("http://127.0.0.1:{healthy_port}").parse().unwrap();
+    let url: Url = format!("http://127.0.0.1:{restarted_port}")
+        .parse()
+        .unwrap();
+    let tip_client = Client::<ClientErr, SequencerApiVersion>::new(tip_url);
+    let client = Client::<ClientErr, SequencerApiVersion>::new(url);
+
+    let tip = timeout(RECOVERY_TIMEOUT, async {
+        loop {
+            match tip_client.get::<u64>("status/block-height").send().await {
+                Ok(tip) => break tip,
+                Err(err) => {
+                    tracing::info!(healthy_port, %err, "healthy query node not ready");
+                    sleep(Duration::from_secs(3)).await;
+                },
+            }
+        }
+    })
+    .await
+    .expect("timed out reading the tip from the healthy query node");
+    tracing::info!(
+        restarted_port,
+        tip,
+        "waiting for restarted query node to reach the tip"
+    );
+
+    timeout(RECOVERY_TIMEOUT, async {
+        loop {
+            match client.get::<u64>("block-state/block-height").send().await {
+                Ok(height) if height >= tip => {
+                    tracing::info!(restarted_port, height, "query node reached the tip");
+                    break;
+                },
+                Ok(height) => {
+                    tracing::info!(restarted_port, height, tip, "query node still catching up")
+                },
+                Err(err) => tracing::info!(restarted_port, %err, "query node API not ready"),
+            }
+            sleep(Duration::from_secs(3)).await;
+        }
+    })
+    .await
+    .expect("timed out waiting for restarted query node to reach the tip");
+}
+
+async fn test_restart_helper(network: (usize, usize), restart: (usize, usize)) {
+    let mut network = TestNetwork::new(network.0, network.1).await;
 
     // Let the network get going.
     network.check_progress().await;
@@ -93,130 +154,79 @@ async fn test_restart_helper(network: (usize, usize), restart: (usize, usize), c
     network.shut_down().await;
 }
 
+// The network runs `NEW_PROTOCOL_VERSION` from genesis, so all consensus
+// traffic is on cliquenet and the harness runs no CDN.
+
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
-async fn slow_test_restart_1_da_with_cdn() {
-    test_restart_helper((2, 3), (1, 0), true).await;
+async fn slow_test_restart_new_protocol_1_of_5() {
+    test_restart_helper((2, 3), (1, 0)).await;
 }
 
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
-async fn slow_test_restart_1_regular_with_cdn() {
-    test_restart_helper((2, 3), (0, 1), true).await;
+async fn slow_test_restart_new_protocol_2_of_10() {
+    test_restart_helper((4, 6), (1, 1)).await;
 }
 
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
-async fn slow_test_restart_f_with_cdn() {
-    test_restart_helper((4, 6), (1, 2), true).await;
+async fn slow_test_restart_new_protocol_3_of_10() {
+    test_restart_helper((4, 6), (1, 2)).await;
 }
 
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
-async fn slow_test_restart_f_minus_1_with_cdn() {
-    test_restart_helper((4, 6), (1, 1), true).await;
+async fn slow_test_restart_new_protocol_4_of_10() {
+    test_restart_helper((4, 6), (1, 3)).await;
 }
 
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
-async fn slow_test_restart_f_plus_1_with_cdn() {
-    test_restart_helper((4, 6), (1, 3), true).await;
+async fn slow_test_restart_new_protocol_5_of_10() {
+    test_restart_helper((4, 6), (1, 4)).await;
 }
 
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
-async fn slow_test_restart_2f_with_cdn() {
-    test_restart_helper((4, 6), (1, 5), true).await;
+async fn slow_test_restart_new_protocol_6_of_10() {
+    test_restart_helper((4, 6), (1, 5)).await;
 }
 
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
-async fn slow_test_restart_2f_minus_1_with_cdn() {
-    test_restart_helper((4, 6), (1, 4), true).await;
+async fn slow_test_restart_new_protocol_7_of_10() {
+    test_restart_helper((4, 6), (2, 5)).await;
 }
 
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
-async fn slow_test_restart_2f_plus_1_with_cdn() {
-    test_restart_helper((4, 6), (2, 5), true).await;
+async fn slow_test_restart_new_protocol_10_of_10() {
+    test_restart_helper((2, 8), (2, 8)).await;
 }
 
-#[ignore]
+/// Rolling restarts of every node one at a time on its existing storage,
+/// non query nodes first and then query nodes, followed by a restart of the
+/// whole network with a staggered shutdown. The new protocol has no DA
+/// committee, so all ten nodes are equal validators; two of them (nodes 0 and
+/// 4) also serve query APIs. The harness's da/regular grouping only affects
+/// legacy networking, which a pure new protocol network does not use.
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
-async fn slow_test_restart_all_with_cdn() {
-    test_restart_helper((2, 8), (2, 8), true).await;
-}
+async fn slow_test_restart_new_protocol_rolling_and_full() {
+    let mut network = TestNetwork::new_with_query_nodes(4, 6, &[0, 4]).await;
 
-#[test_log::test(tokio::test(flavor = "multi_thread"))]
-async fn slow_test_restart_all_da_with_cdn() {
-    test_restart_helper((2, 8), (2, 0), true).await;
-}
+    network.check_progress().await;
+    network.wait_for_epoch().await;
 
-#[test_log::test(tokio::test(flavor = "multi_thread"))]
-async fn slow_test_restart_1_da_without_cdn() {
-    test_restart_helper((2, 3), (1, 0), false).await;
-}
-
-#[test_log::test(tokio::test(flavor = "multi_thread"))]
-async fn slow_test_restart_1_regular_without_cdn() {
-    test_restart_helper((2, 3), (0, 1), false).await;
-}
-
-#[test_log::test(tokio::test(flavor = "multi_thread"))]
-async fn slow_test_restart_f_without_cdn() {
-    test_restart_helper((4, 6), (1, 2), false).await;
-}
-
-#[test_log::test(tokio::test(flavor = "multi_thread"))]
-async fn slow_test_restart_f_minus_1_without_cdn() {
-    test_restart_helper((4, 6), (1, 1), false).await;
-}
-
-#[test_log::test(tokio::test(flavor = "multi_thread"))]
-async fn slow_test_restart_f_plus_1_without_cdn() {
-    test_restart_helper((4, 6), (1, 3), false).await;
-}
-
-#[test_log::test(tokio::test(flavor = "multi_thread"))]
-async fn slow_test_restart_2f_without_cdn() {
-    test_restart_helper((4, 6), (1, 5), false).await;
-}
-
-#[test_log::test(tokio::test(flavor = "multi_thread"))]
-async fn slow_test_restart_2f_minus_1_without_cdn() {
-    test_restart_helper((4, 6), (1, 4), false).await;
-}
-
-#[test_log::test(tokio::test(flavor = "multi_thread"))]
-async fn slow_test_restart_2f_plus_1_without_cdn() {
-    test_restart_helper((4, 6), (2, 5), false).await;
-}
-
-#[ignore]
-#[test_log::test(tokio::test(flavor = "multi_thread"))]
-async fn slow_test_restart_all_without_cdn() {
-    test_restart_helper((2, 8), (2, 8), false).await;
-}
-
-#[test_log::test(tokio::test(flavor = "multi_thread"))]
-async fn slow_test_restart_all_da_without_cdn() {
-    test_restart_helper((2, 8), (2, 0), false).await;
-}
-
-#[ignore]
-#[test_log::test(tokio::test(flavor = "multi_thread"))]
-async fn slow_test_restart_staggered() {
-    let mut network = TestNetwork::new(4, 6, false).await;
-
-    // Check that the builder works at the beginning.
-    network.check_builder().await;
-
-    // Restart nodes in a staggered fashion, so that progress never halts, but eventually every node
-    // has been restarted. This can lead to a situation where no node has the full validated state
-    // in memory, so we will need a pretty advanced form of catchup in order to make progress and
-    // process blocks after this.
-    for i in 0..4 {
-        network.restart_and_progress([i], []).await;
-    }
-    // Restart the remaining regular nodes.
-    for i in 0..6 {
-        network.restart_and_progress([], [i]).await;
+    // Roll the non-query nodes one at a time.
+    for node in [1, 2, 3, 5, 6, 7, 8, 9] {
+        network.restart_and_progress_node(node).await;
     }
 
-    // Check that we can still build blocks after the restart.
-    network.check_builder().await;
+    // Roll the query nodes, health-gating each so the network always has a
+    // current catchup source.
+    network.restart_and_progress_node(0).await;
+    wait_for_query_node_at_tip(&network, 0, 4).await;
+    network.restart_and_progress_node(4).await;
+    wait_for_query_node_at_tip(&network, 4, 0).await;
+
+    // Take the whole network down, a few seconds between stops so nodes shut
+    // down at different points in the chain, and check it recovers.
+    network
+        .restart_all_with_staggered_shutdown(Duration::from_secs(3))
+        .await;
 
     network.shut_down().await;
 }
@@ -225,49 +235,58 @@ async fn slow_test_restart_staggered() {
 struct NetworkParams<'a> {
     genesis_file: &'a Path,
     orchestrator_port: u16,
-    cdn_port: u16,
     l1_provider: &'a str,
     peer_ports: &'a [u16],
     api_ports: &'a [u16],
+    state_peer_ports: &'a [u16],
 }
 
 #[derive(Clone, Debug)]
 struct NodeParams {
     api_port: u16,
-    libp2p_port: u16,
     cliquenet_port: u16,
     staking_key: PrivKey,
     state_key: StateKeyPair,
     x25519_key: x25519::Keypair,
     is_da: bool,
+    is_query: bool,
+    query_peers: bool,
 }
 
 impl NodeParams {
-    fn new(i: u64, is_da: bool) -> anyhow::Result<Self> {
+    fn new(i: u64, is_da: bool, is_query: bool, query_peers: bool) -> anyhow::Result<Self> {
         Ok(Self {
             api_port: reserve_tcp_port()?,
-            libp2p_port: reserve_tcp_port()?,
             cliquenet_port: reserve_tcp_port()?,
             staking_key: PubKey::generated_from_seed_indexed([0; 32], i).1,
             state_key: StateKeyPair::generate_from_seed_indexed([0; 32], i),
             x25519_key: x25519::Keypair::generated_from_seed_indexed([0; 32], i)?,
             is_da,
+            is_query,
+            query_peers,
         })
+    }
+
+    /// The address other nodes use to reach this node's cliquenet coordinator
+    /// network. Must match `--cliquenet-advertise-address` and the connect info
+    /// registered on-chain so the new protocol can dial peers.
+    fn cliquenet_advertise_addr(&self) -> String {
+        format!("127.0.0.1:{}", self.cliquenet_port)
     }
 }
 
 #[derive(Debug)]
 struct TestNode<S: TestableSequencerDataSource> {
     storage: S::Storage,
-    context: Option<
-        SequencerContext<network::Production, <S::Options as PersistenceOptions>::Persistence>,
-    >,
+    context: Option<SequencerContext<<S::Options as PersistenceOptions>::Persistence>>,
     modules: Modules,
     opt: Options,
     num_nodes: usize,
+    api_port: u16,
     reference_state: Arc<RwLock<BTreeMap<u64, Commitment<Leaf2>>>>,
     /// Number of epochs to wait after restart before running progress check.
     wait_for_epoch: EpochNumber,
+    progress_timeout_factor: u32,
 }
 
 impl<S: TestableSequencerDataSource> TestNode<S> {
@@ -279,22 +298,30 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
         let storage = S::create_storage().await;
         let opt = S::options(&storage, opts);
 
+        // Storage options stay set even without the query module, matching how
+        // a production validator runs (`storage-sql` without `query`); only the
+        // public node config reads them here.
         let mut modules = Modules {
             http: Some(api::options::Http::with_port(node.api_port)),
-            query: Some(Default::default()),
             storage_fs: opt.storage_fs,
             storage_sql: opt.storage_sql,
             ..Default::default()
         };
-        if node.is_da {
-            modules.query = Some(Query {
-                peers: network
+        if node.is_query {
+            let peers = if node.query_peers {
+                network
                     .api_ports
                     .iter()
                     .map(|port| format!("http://127.0.0.1:{port}").parse().unwrap())
-                    .collect(),
+                    .collect()
+            } else {
+                vec![]
+            };
+            modules.query = Some(Query {
+                peers,
                 ..Default::default()
             });
+            modules.light_client = Some(Default::default());
         }
 
         let mut opt = Options::parse_from([
@@ -320,17 +347,13 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
             &network.genesis_file.display().to_string(),
             "--orchestrator-url",
             &format!("http://localhost:{}", network.orchestrator_port),
-            "--libp2p-bind-address",
-            &format!("0.0.0.0:{}", node.libp2p_port),
-            "--libp2p-advertise-address",
-            &format!("127.0.0.1:{}", node.libp2p_port),
             "--cliquenet-bind-address",
             &format!("0.0.0.0:{}", node.cliquenet_port),
-            "--cdn-endpoint",
-            &format!("127.0.0.1:{}", network.cdn_port),
+            "--cliquenet-advertise-address",
+            &node.cliquenet_advertise_addr(),
             "--state-peers",
             &network
-                .peer_ports
+                .state_peer_ports
                 .iter()
                 .map(|port| format!("http://127.0.0.1:{port}"))
                 .join(","),
@@ -347,9 +370,11 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
             modules,
             opt,
             num_nodes: network.peer_ports.len(),
+            api_port: node.api_port,
             context: None,
             reference_state: Default::default(),
             wait_for_epoch: EpochNumber::new(3),
+            progress_timeout_factor: 4,
         }
     }
 
@@ -372,22 +397,25 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
 
             // If we are starting a node which had already been started and stopped, we may need to
             // delay a bit for the OS to reclaim the node's P2P port. Otherwise initialization of
-            // libp2p may fail with "address already in use". Thus, retry the node initialization
-            // with a backoff.
+            // cliquenet may fail with "address already in use". Thus, retry the node
+            // initialization with a backoff.
             let mut retries = 5;
             let mut delay = Duration::from_secs(1);
-            let genesis = Genesis::from_file(&self.opt.genesis_file).unwrap();
+            let genesis = Genesis::load(&self.opt.genesis_file).await.unwrap();
             let ctx = loop {
                 match init_with_storage(
                     genesis.clone(),
                     self.modules.clone(),
                     self.opt.clone(),
                     S::persistence_options(&self.storage),
-                    PublicNodeConfig::new(&self.opt, &self.modules),
+                    PublicNodeConfig::new(&self.opt, &self.modules, &genesis),
                 )
                 .await
                 {
-                    Ok(ctx) => break ctx,
+                    Ok(NodeContext::Validator(ctx)) => break *ctx,
+                    Ok(NodeContext::Follower(_)) => {
+                        unreachable!("the restart tests configure validators")
+                    },
                     Err(err) => {
                         tracing::error!(retries, ?delay, "initialization failed: {err:#}");
                         if retries == 0 {
@@ -430,21 +458,11 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
                 return Ok(());
             };
             let node_id = context.node_id();
-            let next_view_timeout = {
-                context
-                    .consensus_handle()
-                    .legacy_consensus()
-                    .read()
-                    .await
-                    .hotshot
-                    .config
-                    .next_view_timeout
-            };
-            // Give enough time for every node to propose, with every view timing out. This is
-            // conservative: of course if we actually make progress, not every view will time out,
-            // and we will take less than this amount of time.
-            let timeout_duration =
-                4 * Duration::from_millis(next_view_timeout) * (self.num_nodes as u32);
+            let next_view_timeout = context.network_config().config.next_view_timeout;
+            // Enough time for every node to propose with every view timing out.
+            let timeout_duration = self.progress_timeout_factor
+                * Duration::from_millis(next_view_timeout)
+                * (self.num_nodes as u32);
             match timeout(timeout_duration, self.check_progress()).await {
                 Ok(res) => res,
                 Err(_) => bail!("timed out waiting for progress on node {node_id}"),
@@ -459,28 +477,14 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
             return Ok(());
         };
 
-        let num_nodes = {
-            context
-                .consensus_handle()
-                .legacy_consensus()
-                .read()
-                .await
-                .hotshot
-                .config
-                .num_nodes_with_stake
-        };
+        let num_nodes = context.network_config().config.num_nodes_with_stake;
         let node_id = context.node_id();
         tracing::info!(node_id, num_nodes, "waiting for progress from node");
 
-        // Wait for a block proposed by this node. This proves that the node is tracking consensus
-        // (getting Decide events) and participating (able to propose).
+        // A decided leaf proposed by this node proves it both follows consensus and can propose.
         let mut events = context.event_stream();
         while let Some(event) = events.next().await {
-            let CoordinatorEvent::LegacyEvent(Event {
-                event: EventType::Decide { leaf_chain, .. },
-                ..
-            }) = event
-            else {
+            let Some(leaf_chain) = decided_leaves(&event) else {
                 continue;
             };
 
@@ -521,11 +525,7 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
         let mut state_write = self.reference_state.write().await;
 
         while let Some(event) = events.next().await {
-            let CoordinatorEvent::LegacyEvent(Event {
-                event: EventType::Decide { leaf_chain, .. },
-                ..
-            }) = event
-            else {
+            let Some(leaf_chain) = decided_leaves(&event) else {
                 continue;
             };
 
@@ -539,63 +539,13 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
                     collected_leaves += 1;
                 }
 
-                if collected_leaves == 30 {
+                if collected_leaves >= 30 {
                     return Ok(());
                 }
             }
         }
 
         bail!("node {node_id} event stream ended unexpectedly");
-    }
-
-    async fn check_builder(&self, port: u16) {
-        tracing::info!("testing builder liveness");
-
-        // Configure the builder to shut down in 50 views, so we don't leak resources or ports.
-        let ctx = self.context.as_ref().unwrap();
-        let down_view = ctx.consensus_handle().current_view().await + 50;
-
-        // Start a builder.
-        let url: Url = format!("http://localhost:{port}").parse().unwrap();
-        let task = <SimpleBuilderImplementation as TestBuilderImplementation<SeqTypes>>::start(
-            self.num_nodes,
-            format!("http://0.0.0.0:{port}").parse().unwrap(),
-            (),
-            [(down_view.u64(), BuilderChange::Down)]
-                .into_iter()
-                .collect(),
-        )
-        .await;
-        task.start(Box::new(ctx.event_stream().filter_map(|event| {
-            futures::future::ready(match event {
-                CoordinatorEvent::LegacyEvent(e) => Some(e),
-                _ => None,
-            })
-        })));
-
-        // Wait for the API to start serving.
-        let client = surf_disco::Client::<ClientError, SequencerApiVersion>::new(url);
-        assert!(
-            client.connect(Some(Duration::from_secs(60))).await,
-            "timed out connecting to builder API"
-        );
-
-        // Submit a transaction and wait for it to be sequenced.
-        let mut events = ctx.event_stream();
-        let tx = Transaction::random(&mut rand::thread_rng());
-        ctx.submit_transaction(tx.clone()).await.unwrap();
-        let (block, _) = timeout(
-            Duration::from_secs(60),
-            wait_for_decide_on_handle(&mut events, &tx),
-        )
-        .await
-        .expect("timed out waiting for transaction to be sequenced");
-        tracing::info!(block, "transaction sequenced");
-
-        // Wait until the builder is cleaned up.
-        while ctx.consensus_handle().current_view().await <= down_view {
-            sleep(Duration::from_secs(1)).await;
-        }
     }
 
     /// Wait for the given Epoch.
@@ -610,20 +560,12 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
         tracing::info!(node_id, "waiting for epoch: {epoch:?}");
         let mut events = context.event_stream();
 
-        let timeout_duration = Duration::from_secs(60);
-        timeout(timeout_duration, async {
+        timeout(RECOVERY_TIMEOUT, async {
             while let Some(event) = events.next().await {
-                let CoordinatorEvent::LegacyEvent(Event {
-                    event:
-                        EventType::Decide {
-                            committing_qc: qc, ..
-                        },
-                    ..
-                }) = event
-                else {
+                let Some(decided_epoch) = decided_epoch(&event) else {
                     continue;
                 };
-                if qc.epoch() >= Some(epoch) {
+                if Some(decided_epoch) >= Some(epoch) {
                     tracing::info!(node_id, "reached epoch: {epoch:?}");
                     break;
                 }
@@ -631,6 +573,45 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
         })
         .await
         .expect("timed out waiting for epoch after restart");
+    }
+
+    /// Height of this node's latest decided leaf, or `None` if it is stopped.
+    async fn decided_height(&self) -> Option<u64> {
+        let context = self.context.as_ref()?;
+        Some(context.decided_leaf().await.height())
+    }
+
+    /// Wait until this node decides a leaf above `height`. A restarted node
+    /// re-emits decides for the leaves it recovers during catchup, so only a
+    /// decide past its pre-restart height proves it has rejoined the live
+    /// chain.
+    async fn wait_for_decide_past(&self, height: u64, timeout_duration: Duration) {
+        let context = self
+            .context
+            .as_ref()
+            .expect("waiting for decides on a stopped node");
+        let node_id = context.node_id();
+        tracing::info!(node_id, height, "waiting for a decide past height");
+        let mut events = context.event_stream();
+
+        timeout(timeout_duration, async {
+            while let Some(event) = events.next().await {
+                let Some(leaf_chain) = decided_leaves(&event) else {
+                    continue;
+                };
+                if let Some(leaf) = leaf_chain.iter().find(|leaf| leaf.leaf.height() > height) {
+                    tracing::info!(
+                        node_id,
+                        height = leaf.leaf.height(),
+                        "node decided past the target height"
+                    );
+                    return;
+                }
+            }
+            panic!("node {node_id} event stream ended unexpectedly");
+        })
+        .await
+        .expect("timed out waiting for a decide past the pre-restart height");
     }
 }
 
@@ -647,13 +628,11 @@ type AnvilFillProvider = AnvilProvider<
 #[derive(Derivative)]
 #[derivative(Debug)]
 struct TestNetwork {
-    da_nodes: Vec<TestNode<api::sql::DataSource>>,
-    regular_nodes: Vec<TestNode<api::sql::DataSource>>,
+    da_nodes: Vec<TestNode<SqlDataSource>>,
+    regular_nodes: Vec<TestNode<SqlDataSource>>,
     tmp: TempDir,
     builder_port: u16,
     orchestrator_task: Option<JoinHandle<()>>,
-    broker_task: Option<JoinHandle<()>>,
-    marshal_task: Option<JoinHandle<()>>,
     #[derivative(Debug = "ignore")]
     anvil: AnvilFillProvider,
 }
@@ -663,17 +642,35 @@ impl Drop for TestNetwork {
         if let Some(task) = self.orchestrator_task.take() {
             task.abort();
         }
-        if let Some(task) = self.broker_task.take() {
-            task.abort();
-        }
-        if let Some(task) = self.marshal_task.take() {
-            task.abort();
-        }
     }
 }
 
 impl TestNetwork {
-    async fn new(da_nodes: usize, regular_nodes: usize, cdn: bool) -> Self {
+    async fn new(da_nodes: usize, regular_nodes: usize) -> Self {
+        Self::new_inner(da_nodes, regular_nodes, None).await
+    }
+
+    /// Like [`new`](Self::new), but only the nodes at `query_nodes` (indices
+    /// into the full node list, `da_nodes` group first) run the query module
+    /// and serve state catchup. Being a query node is independent of the
+    /// da/regular grouping.
+    async fn new_with_query_nodes(
+        da_nodes: usize,
+        regular_nodes: usize,
+        query_nodes: &[usize],
+    ) -> Self {
+        assert!(
+            !query_nodes.is_empty() && query_nodes.iter().all(|i| *i < da_nodes + regular_nodes),
+            "query node indices out of range: {query_nodes:?}"
+        );
+        Self::new_inner(da_nodes, regular_nodes, Some(query_nodes)).await
+    }
+
+    async fn new_inner(
+        da_nodes: usize,
+        regular_nodes: usize,
+        query_nodes: Option<&[usize]>,
+    ) -> Self {
         let tmp = TempDir::new().unwrap();
         let genesis_file_path = tmp.path().join("genesis.toml");
 
@@ -686,24 +683,39 @@ impl TestNetwork {
             l1_finalized: L1Finalized::Number { number: 20 },
             header: Default::default(),
             upgrades: Default::default(),
-            base_version: Version { major: 0, minor: 3 },
-            upgrade_version: Version { major: 0, minor: 3 },
+            // Consensus runs through the cliquenet coordinator from genesis,
+            // so each node's cliquenet connect info must be registered
+            // on-chain (see `deploy`) and advertised via the node CLI.
+            base_version: NEW_PROTOCOL_VERSION,
+            upgrade_version: NEW_PROTOCOL_VERSION,
             epoch_height: Some(15),
-            drb_difficulty: None,
+            drb_difficulty: Some(10),
             epoch_start_block: Some(1),
             // TODO we apparently have two `capacity` configurations
             stake_table_capacity: Some(STAKE_TABLE_CAPACITY_FOR_TEST),
-            drb_upgrade_difficulty: None,
+            drb_upgrade_difficulty: Some(20),
             // Start with a funded account, so we can test catchup after restart.
             accounts: [(builder_account(), 1000000000.into())]
                 .into_iter()
                 .collect(),
-            genesis_version: Version { major: 0, minor: 3 },
+            genesis_version: NEW_PROTOCOL_VERSION,
             da_committees: None,
         };
 
         let node_params = (0..da_nodes + regular_nodes)
-            .map(|i| NodeParams::new(i as u64, i < da_nodes))
+            .map(|i| {
+                let is_da = i < da_nodes;
+                // Without an explicit query set, every node runs the query
+                // module and the DA nodes act as the query peers.
+                let (is_query, query_peers) = match query_nodes {
+                    Some(query_nodes) => {
+                        let is_query = query_nodes.contains(&i);
+                        (is_query, is_query)
+                    },
+                    None => (true, is_da),
+                };
+                NodeParams::new(i as u64, is_da, is_query, query_peers)
+            })
             .collect::<Result<Vec<_>, _>>()
             .unwrap();
 
@@ -714,19 +726,6 @@ impl TestNetwork {
             &node_params,
             builder_port,
         ));
-
-        let cdn_dir = tmp.path().join("cdn");
-        let cdn_port = reserve_tcp_port().unwrap();
-        let broker_task = if cdn {
-            Some(start_broker(&cdn_dir).await)
-        } else {
-            None
-        };
-        let marshal_task = if cdn {
-            Some(start_marshal(&cdn_dir, cdn_port).await)
-        } else {
-            None
-        };
 
         let anvil_port = reserve_tcp_port().unwrap();
         let anvil = Anvil::new()
@@ -740,20 +739,24 @@ impl TestNetwork {
 
         let api_ports = node_params
             .iter()
-            .take(da_nodes)
+            .filter(|node| node.query_peers)
             .map(|node| node.api_port)
             .collect::<Vec<_>>();
         let peer_ports = node_params
             .iter()
             .map(|node| node.api_port)
             .collect::<Vec<_>>();
+        let state_peer_ports = match query_nodes {
+            None => peer_ports.clone(),
+            Some(_) => api_ports.clone(),
+        };
         let network_params = NetworkParams {
             genesis_file: &genesis_file_path,
             orchestrator_port,
-            cdn_port,
             l1_provider: &anvil_endpoint,
             api_ports: &api_ports,
             peer_ports: &peer_ports,
+            state_peer_ports: &state_peer_ports,
         };
 
         let mut network = Self {
@@ -769,13 +772,11 @@ impl TestNetwork {
             tmp,
             builder_port,
             orchestrator_task,
-            broker_task,
-            marshal_task,
             anvil,
         };
 
         // Deploy stake contracts and delegate.
-        let stake_table_address = network.deploy(&genesis).await.unwrap();
+        let stake_table_address = network.deploy(&genesis, &node_params).await.unwrap();
 
         // Add contract address to `ChainConfig`.
         let chain_config = ChainConfig {
@@ -817,7 +818,11 @@ impl TestNetwork {
     }
 
     /// Deploy stake contracts and delegate.
-    async fn deploy(&self, genesis: &Genesis) -> anyhow::Result<Address> {
+    async fn deploy(
+        &self,
+        genesis: &Genesis,
+        node_params: &[NodeParams],
+    ) -> anyhow::Result<Address> {
         let stake_table_version = StakeTableContractVersion::V3;
         let delegation_config = DelegationConfig::EqualAmounts;
 
@@ -846,7 +851,25 @@ impl TestNetwork {
 
         let (bls, state): (Vec<BLSPrivKey>, Vec<StateKeyPair>) =
             staking_keys.clone().into_iter().unzip();
-        let staking_priv_keys = staking_priv_keys(&bls, &state, staking_keys.len());
+        // Start from the base staking sets (eth signer / BLS / state keys), then
+        // override each node's cliquenet connect info with the *actual* x25519
+        // key and advertise address the node process binds. Registering the real
+        // values on-chain is what lets the new protocol's coordinator resolve and
+        // dial peers; the `&[]` default would register placeholder addresses that
+        // don't match any running node.
+        let staking_priv_keys: Vec<StakingKeySet> =
+            staking_priv_keys(&bls, &state, &[], staking_keys.len())
+                .into_iter()
+                .zip(node_params)
+                .map(|(mut key_set, node)| {
+                    key_set.x25519 = node.x25519_key.clone();
+                    key_set.p2p_addr = node
+                        .cliquenet_advertise_addr()
+                        .parse()
+                        .expect("valid cliquenet advertise address");
+                    key_set
+                })
+                .collect();
 
         let hss_staking: Vec<PeerConfig<SeqTypes>> = staking_keys
             .iter()
@@ -984,19 +1007,21 @@ impl TestNetwork {
             let node_id = node.node_id().expect("Node id not found");
             let state = node.reference_state.read().await.clone();
 
+            let mut compared = 0;
             for (height, commitment) in state.iter() {
                 if let Some(ref_commitment) = ref_state.get(height) {
                     assert_eq!(
                         ref_commitment, commitment,
                         "State mismatch between node {node_id} and reference node {ref_id}"
                     );
+                    compared += 1;
                 }
             }
+            assert!(
+                compared > 0,
+                "no overlapping heights between node {node_id} and reference node {ref_id}"
+            );
         }
-    }
-
-    async fn check_builder(&self) {
-        self.da_nodes[0].check_builder(self.builder_port).await;
     }
 
     /// Restart indicated number of DA and non-DA nodes.
@@ -1012,6 +1037,81 @@ impl TestNetwork {
         self.check_state().await;
     }
 
+    /// Restart the whole network, stopping nodes a few seconds apart instead
+    /// of all at once, so they shut down at different points in the chain and
+    /// come back with different anchors. Nodes are started together: starting
+    /// them one at a time can deadlock the network layer.
+    async fn restart_all_with_staggered_shutdown(&mut self, gap: Duration) {
+        tracing::info!(?gap, "stopping all nodes with a staggered shutdown");
+        // Recovery is only proven by decides past the highest height any node
+        // goes down with; anything below can be replayed from catchup.
+        let mut tip = 0;
+        for node in self
+            .da_nodes
+            .iter_mut()
+            .chain(self.regular_nodes.iter_mut())
+        {
+            if let Some(height) = node.decided_height().await {
+                tip = tip.max(height);
+            }
+            node.stop().await;
+            // Gap until the next stop; after the last node it doubles as the
+            // delay the OS needs to release the nodes' ports.
+            sleep(gap).await;
+        }
+
+        join_all(
+            self.da_nodes
+                .iter_mut()
+                .map(TestNode::start)
+                .chain(self.regular_nodes.iter_mut().map(TestNode::start)),
+        )
+        .await;
+
+        for node in self
+            .da_nodes
+            .iter_mut()
+            .chain(self.regular_nodes.iter_mut())
+        {
+            node.progress_timeout_factor = 8;
+        }
+
+        tracing::info!(
+            tip,
+            "waiting for the network to decide past the pre-shutdown tip"
+        );
+        join_all(
+            self.da_nodes
+                .iter()
+                .chain(self.regular_nodes.iter())
+                .map(|node| node.wait_for_decide_past(tip, RECOVERY_TIMEOUT)),
+        )
+        .await;
+        self.check_progress().await;
+        self.check_state().await;
+    }
+
+    /// Restart the node with the given index in the full node list, ensuring
+    /// progress is maintained at all times. The da/regular grouping is a
+    /// harness artifact, so callers can address nodes by one flat index.
+    async fn restart_and_progress_node(&mut self, node: usize) {
+        if node < self.da_nodes.len() {
+            self.restart_and_progress([node], []).await
+        } else {
+            self.restart_and_progress([], [node - self.da_nodes.len()])
+                .await
+        }
+    }
+
+    /// API port of the node with the given index in the full node list.
+    fn node_api_port(&self, node: usize) -> u16 {
+        if node < self.da_nodes.len() {
+            self.da_nodes[node].api_port
+        } else {
+            self.regular_nodes[node - self.da_nodes.len()].api_port
+        }
+    }
+
     /// Restart indicated nodes, ensuring progress is maintained at all times.
     ///
     /// This is a lighter weight version of [`restart`](Self::restart). While the former includes
@@ -1024,32 +1124,38 @@ impl TestNetwork {
         da_nodes: impl IntoIterator<Item = usize>,
         regular_nodes: impl IntoIterator<Item = usize>,
     ) {
+        let da_nodes = da_nodes.into_iter().collect::<Vec<_>>();
+        let regular_nodes = regular_nodes.into_iter().collect::<Vec<_>>();
+
+        let mut targets = Vec::new();
+        for &i in &da_nodes {
+            let height = self.da_nodes[i]
+                .decided_height()
+                .await
+                .expect("node to restart should be running");
+            targets.push((true, i, height));
+        }
+        for &i in &regular_nodes {
+            let height = self.regular_nodes[i]
+                .decided_height()
+                .await
+                .expect("node to restart should be running");
+            targets.push((false, i, height));
+        }
+
         self.restart_helper(da_nodes, regular_nodes, true).await;
 
-        // Just wait for one decide after the restart, so we don't restart subsequent nodes too
-        // quickly.
-        tracing::info!("waiting for progress after restart");
-        let mut events = self.da_nodes[0].event_stream().await.unwrap();
-        let timeout_duration = Duration::from_secs((2 * self.num_nodes()) as u64);
-        timeout(timeout_duration, async {
-            loop {
-                let event = events
-                    .next()
-                    .await
-                    .expect("event stream terminated unexpectedly");
-                let CoordinatorEvent::LegacyEvent(Event {
-                    event: EventType::Decide { leaf_chain, .. },
-                    ..
-                }) = event
-                else {
-                    continue;
-                };
-                tracing::info!(?leaf_chain, "got decide, chain is progressing");
-                break;
-            }
-        })
-        .await
-        .expect("timed out waiting for progress after restart");
+        tracing::info!("waiting for restarted nodes to rejoin");
+        let timeout_duration = Duration::from_secs((8 * self.num_nodes()) as u64);
+        join_all(targets.into_iter().map(|(is_da, i, height)| {
+            let node = if is_da {
+                &self.da_nodes[i]
+            } else {
+                &self.regular_nodes[i]
+            };
+            node.wait_for_decide_past(height, timeout_duration)
+        }))
+        .await;
     }
 
     async fn restart_helper(
@@ -1103,20 +1209,18 @@ impl TestNetwork {
                 .unwrap();
             let mut events = da_node.event_stream().await.unwrap();
 
-            // Wait for a few decides, the first couple may be from before the restart.
+            // Wait for a few decides, the first couple may be from before the restart. The
+            // per-decide budget has headroom for view failures while recently restarted nodes
+            // are still rejoining.
             for _ in 0..5 {
-                let timeout_duration = Duration::from_secs((2 * self.num_nodes()) as u64);
+                let timeout_duration = Duration::from_secs((4 * self.num_nodes()) as u64);
                 timeout(timeout_duration, async {
                     loop {
                         let event = events
                             .next()
                             .await
                             .expect("event stream terminated unexpectedly");
-                        let CoordinatorEvent::LegacyEvent(Event {
-                            event: EventType::Decide { leaf_chain, .. },
-                            ..
-                        }) = event
-                        else {
+                        let Some(leaf_chain) = decided_leaves(&event) else {
                             continue;
                         };
                         tracing::info!(?leaf_chain, "got decide, chain is progressing");
@@ -1178,21 +1282,8 @@ fn start_orchestrator(port: u16, nodes: &[NodeParams], builder_port: u16) -> Joi
     let view_timeout = Duration::from_secs(2);
 
     let num_nodes = nodes.len();
-    let bootstrap_nodes = nodes
-        .iter()
-        .map(|node| {
-            let port = node.libp2p_port;
-            let peer_id = derive_libp2p_peer_id::<PubKey>(&node.staking_key).unwrap();
-            let addr = format!("/ip4/127.0.0.1/udp/{port}/quic-v1")
-                .parse()
-                .unwrap();
-            (peer_id, addr)
-        })
-        .collect();
-
     let mut config = NetworkConfig::<SeqTypes> {
         indexed_da: false,
-        libp2p_config: Some(Libp2pConfig { bootstrap_nodes }),
         ..Default::default()
     };
     config.config.num_nodes_with_stake = num_nodes.try_into().unwrap();
@@ -1208,62 +1299,6 @@ fn start_orchestrator(port: u16, nodes: &[NodeParams], builder_port: u16) -> Joi
         match run_orchestrator(config, bind).await {
             Ok(()) => tracing::warn!("orchestrator exited"),
             Err(err) => tracing::error!(%err, "orchestrator failed"),
-        }
-    })
-}
-
-async fn start_broker(dir: &Path) -> JoinHandle<()> {
-    let (public_key, private_key) = PubKey::generated_from_seed_indexed([0; 32], 1337);
-    let public_port = reserve_tcp_port().unwrap();
-    let private_port = reserve_tcp_port().unwrap();
-    let broker_config: BrokerConfig<TestingDef<SeqTypes>> = BrokerConfig {
-        public_advertise_endpoint: format!("127.0.0.1:{public_port}"),
-        public_bind_endpoint: format!("127.0.0.1:{public_port}"),
-        private_advertise_endpoint: format!("127.0.0.1:{private_port}"),
-        private_bind_endpoint: format!("127.0.0.1:{private_port}"),
-
-        metrics_bind_endpoint: None,
-        discovery_endpoint: dir.display().to_string(),
-        keypair: KeyPair {
-            public_key: WrappedSignatureKey(public_key),
-            private_key,
-        },
-
-        user_message_hook: NoMessageHook,
-        broker_message_hook: NoMessageHook,
-
-        ca_cert_path: None,
-        ca_key_path: None,
-        global_memory_pool_size: Some(1024 * 1024 * 1024),
-    };
-
-    spawn(async move {
-        match Broker::new(broker_config).await.unwrap().start().await {
-            Ok(()) => tracing::warn!("broker exited"),
-            Err(err) => tracing::error!("broker failed: {err:#}"),
-        }
-    })
-}
-
-async fn start_marshal(dir: &Path, port: u16) -> JoinHandle<()> {
-    let marshal_config = MarshalConfig {
-        bind_endpoint: format!("0.0.0.0:{port}"),
-        metrics_bind_endpoint: None,
-        discovery_endpoint: dir.display().to_string(),
-        ca_cert_path: None,
-        ca_key_path: None,
-        global_memory_pool_size: Some(1024 * 1024 * 1024),
-    };
-
-    spawn(async move {
-        match Marshal::<TestingDef<SeqTypes>>::new(marshal_config)
-            .await
-            .unwrap()
-            .start()
-            .await
-        {
-            Ok(()) => tracing::warn!("marshal exited"),
-            Err(err) => tracing::error!("marshal failed: {err:#}"),
         }
     })
 }

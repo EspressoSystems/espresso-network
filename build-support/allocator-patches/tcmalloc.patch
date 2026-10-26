@@ -1,0 +1,16 @@
+diff --git a/crates/espresso/node/src/main.rs b/crates/espresso/node/src/main.rs
+--- a/crates/espresso/node/src/main.rs
++++ b/crates/espresso/node/src/main.rs
+@@ -1 +1,4 @@
++#[global_allocator]
++static ALLOC: tcmalloc_better::TCMalloc = tcmalloc_better::TCMalloc;
++
+ // NOTE: due to nextest eagerly compiling binaries we allow the build if we're
+diff --git a/crates/espresso/node/src/run.rs b/crates/espresso/node/src/run.rs
+--- a/crates/espresso/node/src/run.rs
++++ b/crates/espresso/node/src/run.rs
+@@ -18,2 +18,4 @@ use crate::{default_telemetry_endpoint, keyset::KeySet};
+ pub async fn main(migrated_envs: Vec<(&str, &str)>) -> anyhow::Result<()> {
++    // Spawn tcmalloc's periodic memory-release thread.
++    tcmalloc_better::TCMalloc::process_background_actions_thread();
+     espresso_types::assert_node_feature();

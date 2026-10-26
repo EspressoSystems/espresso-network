@@ -32,7 +32,7 @@ use crate::{
 /// Possible charge fee failures
 #[derive(Error, Debug, Eq, PartialEq)]
 pub enum FeeError {
-    #[error("Insuficcient Funds: have {balance:?}, required {amount:?}")]
+    #[error("Insufficient Funds: have {balance:?}, required {amount:?}")]
     InsufficientFunds {
         balance: Option<FeeAmount>,
         amount: FeeAmount,

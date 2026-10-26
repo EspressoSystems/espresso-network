@@ -33,7 +33,7 @@ impl Trailer {
         let trailer_typ = bytes[len - 2];
         match trailer_typ {
             STD => {
-                if trailer_len != 16 {
+                if trailer_len != 16 || len < 18 {
                     return None;
                 }
                 let id = u64::from_be_bytes(bytes[len - 10..len - 2].try_into().ok()?);
@@ -45,7 +45,7 @@ impl Trailer {
                 })
             },
             NO_ACK => {
-                if trailer_len != 8 {
+                if trailer_len != 8 || len < 10 {
                     return None;
                 }
                 let slot = u64::from_be_bytes(bytes[len - 10..len - 2].try_into().ok()?);
@@ -107,7 +107,7 @@ mod tests {
     use bytes::Bytes;
     use quickcheck::{Arbitrary, Gen, quickcheck};
 
-    use super::Trailer;
+    use super::{NO_ACK, STD, Trailer};
     use crate::msg::{MsgId, Slot};
 
     impl Arbitrary for Trailer {
@@ -124,11 +124,56 @@ mod tests {
         }
     }
 
+    /// Trailer-shaped bytes: a short body plus a tail biased toward the type
+    /// and length bytes the parser recognises, so the short-input slicing
+    /// paths are hit on nearly every case (uniform `Vec<u8>` almost never is).
+    #[derive(Debug, Clone)]
+    struct TrailerLike(Vec<u8>);
+
+    impl Arbitrary for TrailerLike {
+        fn arbitrary(g: &mut Gen) -> Self {
+            let body_len = usize::arbitrary(g) % 20;
+            let mut bytes: Vec<u8> = (0..body_len).map(|_| u8::arbitrary(g)).collect();
+
+            let rand_typ = u8::arbitrary(g);
+            let typ = *g.choose(&[STD, NO_ACK, rand_typ]).unwrap();
+            let rand_len = u8::arbitrary(g);
+            let trailer_len = *g.choose(&[16u8, 8, rand_len]).unwrap();
+            bytes.push(typ);
+            bytes.push(trailer_len);
+            TrailerLike(bytes)
+        }
+    }
+
     quickcheck! {
         fn prop_to_bytes_from_bytes_id(t1: Trailer) -> bool {
             let mut b = Bytes::copy_from_slice(t1.to_bytes().as_ref());
             let t2 = Trailer::from_bytes(&mut b);
             Some(t1) == t2
         }
+
+        fn prop_from_bytes_arbitrary_does_not_panic(bytes: Vec<u8>) -> bool {
+            let mut b = Bytes::copy_from_slice(&bytes);
+            let _ = Trailer::from_bytes(&mut b);
+            true
+        }
+
+        fn prop_from_bytes_trailer_like_does_not_panic(t: TrailerLike) -> bool {
+            let mut b = Bytes::copy_from_slice(&t.0);
+            let _ = Trailer::from_bytes(&mut b);
+            true
+        }
+    }
+
+    #[test]
+    fn regression_std_trailer_short_input_does_not_panic() {
+        let mut b = Bytes::copy_from_slice(&[STD, 16]);
+        assert_eq!(Trailer::from_bytes(&mut b), None);
+    }
+
+    #[test]
+    fn regression_no_ack_trailer_short_input_does_not_panic() {
+        let mut b = Bytes::copy_from_slice(&[NO_ACK, 8]);
+        assert_eq!(Trailer::from_bytes(&mut b), None);
     }
 }

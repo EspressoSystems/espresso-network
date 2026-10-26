@@ -27,7 +27,7 @@ use tagged_base64::{TaggedBase64, Tb64Error};
 use thiserror::Error;
 use vbs::version::Version;
 use vec1::Vec1;
-use versions::{EPOCH_VERSION, Upgrade, VID2_UPGRADE_VERSION};
+use versions::{EPOCH_VERSION, NEW_PROTOCOL_VERSION, Upgrade};
 
 use crate::{
     drb::DrbResult,
@@ -36,11 +36,13 @@ use crate::{
     simple_certificate::{
         LightClientStateUpdateCertificateV1, LightClientStateUpdateCertificateV2,
         NextEpochQuorumCertificate2, QuorumCertificate, QuorumCertificate2, TimeoutCertificate,
-        TimeoutCertificate2, UpgradeCertificate, ViewSyncFinalizeCertificate,
-        ViewSyncFinalizeCertificate2,
+        TimeoutCertificate2, TimeoutCertificate3, TimeoutEvidence, UpgradeCertificate,
+        ViewSyncFinalizeCertificate, ViewSyncFinalizeCertificate2,
     },
-    simple_vote::{HasEpoch, QuorumData, QuorumData2, UpgradeProposalData, VersionedVoteData},
-    stake_table::StakeTableEntries,
+    simple_vote::{
+        HasEpoch, QuorumData, QuorumData2, UpgradeProposalData, UpgradeProposalData2,
+        VersionedVoteData,
+    },
     traits::{
         BlockPayload,
         block_contents::{BlockHeader, BuilderFee, EncodeBytes, TestableBlock},
@@ -66,15 +68,15 @@ macro_rules! impl_u64_wrapper {
     ($t:ty, $genesis_val:expr) => {
         impl $t {
             /// Create a genesis number
-            pub fn genesis() -> Self {
+            pub const fn genesis() -> Self {
                 Self($genesis_val)
             }
             /// Create a new number with the given value.
-            pub fn new(n: u64) -> Self {
+            pub const fn new(n: u64) -> Self {
                 Self(n)
             }
             /// Return the u64 format
-            pub fn u64(&self) -> u64 {
+            pub const fn u64(&self) -> u64 {
                 self.0
             }
         }
@@ -145,6 +147,10 @@ impl_u64_wrapper!(ViewNumber, 0u64);
 #[derive(
     Copy, Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
 )]
+#[cfg_attr(
+    feature = "rlp",
+    derive(alloy_rlp::RlpEncodableWrapper, alloy_rlp::RlpDecodableWrapper)
+)]
 pub struct EpochNumber(u64);
 
 impl Committable for EpochNumber {
@@ -176,6 +182,7 @@ impl_u64_wrapper!(BlockNumber, 0u64);
 #[serde(bound = "TYPES: NodeType")]
 pub struct DaProposal<TYPES: NodeType> {
     /// Encoded transactions in the block to be applied.
+    #[serde(with = "crate::arc_bytes")]
     pub encoded_transactions: Arc<[u8]>,
     /// Metadata of the block to be applied.
     pub metadata: <TYPES::BlockPayload as BlockPayload<TYPES>>::Metadata,
@@ -188,6 +195,7 @@ pub struct DaProposal<TYPES: NodeType> {
 #[serde(bound = "TYPES: NodeType")]
 pub struct DaProposal2<TYPES: NodeType> {
     /// Encoded transactions in the block to be applied.
+    #[serde(with = "crate::arc_bytes")]
     pub encoded_transactions: Arc<[u8]>,
     /// Metadata of the block to be applied.
     pub metadata: <TYPES::BlockPayload as BlockPayload<TYPES>>::Metadata,
@@ -227,6 +235,15 @@ impl<TYPES: NodeType> From<DaProposal2<TYPES>> for DaProposal<TYPES> {
 pub struct UpgradeProposal {
     /// The information about which version we are upgrading to.
     pub upgrade_proposal: UpgradeProposalData,
+    /// View this proposal applies to
+    pub view_number: ViewNumber,
+}
+
+/// A proposal to upgrade the network, binding the epoch it is proposed in
+#[derive(derive_more::Debug, Serialize, Deserialize, Clone, Eq, PartialEq, Hash)]
+pub struct UpgradeProposal2 {
+    /// The information about which version we are upgrading to.
+    pub upgrade_proposal: UpgradeProposalData2,
     /// View this proposal applies to
     pub view_number: ViewNumber,
 }
@@ -384,7 +401,7 @@ pub fn vid_commitment(
                      error: {err}"
                 )
             })
-    } else if version < VID2_UPGRADE_VERSION {
+    } else if version < NEW_PROTOCOL_VERSION {
         let param = init_avidm_param(total_weight).unwrap();
         let encoded_tx_len = encoded_transactions.len();
         AvidMScheme::commit(
@@ -918,6 +935,8 @@ pub enum ViewChangeEvidence2<TYPES: NodeType> {
     Timeout(TimeoutCertificate2<TYPES>),
     /// Holds a view sync finalized certificate.
     ViewSync(ViewSyncFinalizeCertificate2<TYPES>),
+    /// Holds a timeout certificate.
+    Timeout3(TimeoutCertificate3<TYPES>),
 }
 
 impl<TYPES: NodeType> ViewChangeEvidence2<TYPES> {
@@ -926,18 +945,41 @@ impl<TYPES: NodeType> ViewChangeEvidence2<TYPES> {
         match self {
             ViewChangeEvidence2::Timeout(timeout_cert) => timeout_cert.data().view == *view - 1,
             ViewChangeEvidence2::ViewSync(view_sync_cert) => view_sync_cert.view_number == *view,
+            ViewChangeEvidence2::Timeout3(timeout_cert) => timeout_cert.data().view == *view - 1,
         }
     }
 
-    /// Convert to ViewChangeEvidence
-    pub fn to_evidence(self) -> ViewChangeEvidence<TYPES> {
+    /// The timeout certificate this holds.
+    pub fn timeout_evidence(self) -> Option<TimeoutEvidence<TYPES>> {
+        match self {
+            Self::Timeout(cert) => Some(TimeoutEvidence::V2(cert)),
+            Self::Timeout3(cert) => Some(TimeoutEvidence::V3(cert)),
+            Self::ViewSync(_) => None,
+        }
+    }
+
+    /// Convert to [`ViewChangeEvidence`].
+    ///
+    /// `None` for [`Self::Timeout3`]: the legacy types have no epoch binding
+    /// form.
+    pub fn to_evidence(self) -> Option<ViewChangeEvidence<TYPES>> {
         match self {
             ViewChangeEvidence2::Timeout(timeout_cert) => {
-                ViewChangeEvidence::Timeout(timeout_cert.to_tc())
+                Some(ViewChangeEvidence::Timeout(timeout_cert.to_tc()))
             },
             ViewChangeEvidence2::ViewSync(view_sync_cert) => {
-                ViewChangeEvidence::ViewSync(view_sync_cert.to_vsc())
+                Some(ViewChangeEvidence::ViewSync(view_sync_cert.to_vsc()))
             },
+            ViewChangeEvidence2::Timeout3(_) => None,
+        }
+    }
+}
+
+impl<TYPES: NodeType> From<TimeoutEvidence<TYPES>> for ViewChangeEvidence2<TYPES> {
+    fn from(evidence: TimeoutEvidence<TYPES>) -> Self {
+        match evidence {
+            TimeoutEvidence::V2(cert) => Self::Timeout(cert),
+            TimeoutEvidence::V3(cert) => Self::Timeout3(cert),
         }
     }
 }
@@ -1003,34 +1045,6 @@ pub struct QuorumProposal2<TYPES: NodeType> {
 }
 
 impl<TYPES: NodeType> QuorumProposal2<TYPES> {
-    pub async fn validate_certs(
-        &self,
-        membership: EpochMembershipCoordinator<TYPES>,
-        upgrade_lock: &UpgradeLock<TYPES>,
-    ) -> Result<()> {
-        let stake_table = membership.membership_for_epoch(self.epoch)?;
-        let entries = StakeTableEntries::from_iter(stake_table.stake_table()).0;
-        let threshold = stake_table.success_threshold();
-        self.justify_qc
-            .is_valid_cert(&entries, threshold, upgrade_lock)?;
-        let view_change_view = match &self.view_change_evidence {
-            Some(ViewChangeEvidence2::Timeout(timeout_cert)) => {
-                timeout_cert.is_valid_cert(&entries, threshold, upgrade_lock)?;
-                Some(timeout_cert.view_number() + 1)
-            },
-            Some(ViewChangeEvidence2::ViewSync(view_sync_cert)) => {
-                view_sync_cert.is_valid_cert(&entries, threshold, upgrade_lock)?;
-                Some(view_sync_cert.view_number())
-            },
-            _ => None,
-        };
-        if !(self.justify_qc.view_number() + 1 == self.view_number()
-            || view_change_view == Some(self.view_number()))
-        {
-            bail!("Invalid view change evidence");
-        }
-        Ok(())
-    }
     pub fn is_validate_block_height(&self) -> bool {
         self.justify_qc
             .data()
@@ -1245,12 +1259,6 @@ impl<TYPES: NodeType> From<QuorumProposal2<TYPES>> for QuorumProposalWrapper<TYP
     }
 }
 
-impl<TYPES: NodeType> From<QuorumProposalWrapper<TYPES>> for QuorumProposal<TYPES> {
-    fn from(quorum_proposal_wrapper: QuorumProposalWrapper<TYPES>) -> Self {
-        quorum_proposal_wrapper.proposal.into()
-    }
-}
-
 impl<TYPES: NodeType> From<QuorumProposalWrapper<TYPES>> for QuorumProposal2Legacy<TYPES> {
     fn from(quorum_proposal_wrapper: QuorumProposalWrapper<TYPES>) -> Self {
         quorum_proposal_wrapper.proposal.into()
@@ -1290,7 +1298,7 @@ impl<TYPES: NodeType> From<QuorumProposal2<TYPES>> for QuorumProposal<TYPES> {
             upgrade_certificate: quorum_proposal2.upgrade_certificate,
             proposal_certificate: quorum_proposal2
                 .view_change_evidence
-                .map(ViewChangeEvidence2::to_evidence),
+                .and_then(ViewChangeEvidence2::to_evidence),
         }
     }
 }
@@ -1362,6 +1370,12 @@ impl HasViewNumber for UpgradeProposal {
     }
 }
 
+impl HasViewNumber for UpgradeProposal2 {
+    fn view_number(&self) -> ViewNumber {
+        self.view_number
+    }
+}
+
 impl<NODE: NodeType> HasEpoch for QuorumProposal2<NODE> {
     fn epoch(&self) -> Option<EpochNumber> {
         self.epoch
@@ -1383,6 +1397,12 @@ impl<NODE: NodeType> HasEpoch for QuorumProposal2Legacy<NODE> {
 impl HasEpoch for UpgradeProposal {
     fn epoch(&self) -> Option<EpochNumber> {
         None
+    }
+}
+
+impl HasEpoch for UpgradeProposal2 {
+    fn epoch(&self) -> Option<EpochNumber> {
+        Some(self.upgrade_proposal.epoch)
     }
 }
 
@@ -1530,7 +1550,7 @@ impl<TYPES: NodeType> Leaf2<TYPES> {
         let epoch = genesis_epoch_from_version(version);
 
         let (payload, metadata) =
-            TYPES::BlockPayload::from_transactions([], validated_state, instance_state)
+            TYPES::BlockPayload::from_transactions(&[], validated_state, instance_state)
                 .await
                 .unwrap();
 
@@ -1591,18 +1611,18 @@ impl<TYPES: NodeType> Leaf2<TYPES> {
         self.block_header.block_number()
     }
     /// The QC linking this leaf to its parent in the chain.
-    pub fn justify_qc(&self) -> QuorumCertificate2<TYPES> {
-        self.justify_qc.clone()
+    pub fn justify_qc(&self) -> &QuorumCertificate2<TYPES> {
+        &self.justify_qc
     }
     /// The QC linking this leaf to its parent in the chain, signed by the next epoch's quorum.
     ///
     /// Only available for QCs that are part of an epoch transition.
-    pub fn next_epoch_justify_qc(&self) -> Option<NextEpochQuorumCertificate2<TYPES>> {
-        self.next_epoch_justify_qc.clone()
+    pub fn next_epoch_justify_qc(&self) -> Option<&NextEpochQuorumCertificate2<TYPES>> {
+        self.next_epoch_justify_qc.as_ref()
     }
     /// The QC linking this leaf to its parent in the chain.
-    pub fn upgrade_certificate(&self) -> Option<UpgradeCertificate<TYPES>> {
-        self.upgrade_certificate.clone()
+    pub fn upgrade_certificate(&self) -> Option<&UpgradeCertificate<TYPES>> {
+        self.upgrade_certificate.as_ref()
     }
     /// Commitment to this leaf's parent.
     pub fn parent_commitment(&self) -> Commitment<Self> {
@@ -1657,6 +1677,10 @@ impl<TYPES: NodeType> Leaf2<TYPES> {
     /// Optional block payload.
     pub fn block_payload(&self) -> Option<TYPES::BlockPayload> {
         self.block_payload.clone()
+    }
+
+    pub fn block_payload_ref(&self) -> Option<&TYPES::BlockPayload> {
+        self.block_payload.as_ref()
     }
 
     /// A commitment to the block payload contained in this leaf.
@@ -1762,6 +1786,9 @@ impl<TYPES: NodeType> Committable for Leaf2<TYPES> {
                 },
                 Some(ViewChangeEvidence2::ViewSync(cert)) => {
                     cb = cb.field("viewsync cert", cert.commit());
+                },
+                Some(ViewChangeEvidence2::Timeout3(cert)) => {
+                    cb = cb.field("timeout cert v3", cert.commit());
                 },
                 None => {},
             }
@@ -1934,7 +1961,7 @@ impl<TYPES: NodeType> Leaf<TYPES> {
         version: Version,
     ) -> Self {
         let (payload, metadata) =
-            TYPES::BlockPayload::from_transactions([], validated_state, instance_state)
+            TYPES::BlockPayload::from_transactions(&[], validated_state, instance_state)
                 .await
                 .unwrap();
 
@@ -2201,6 +2228,40 @@ impl<TYPES: NodeType> Leaf2<TYPES> {
             block_payload: None,
             view_change_evidence: view_change_evidence.clone(),
             next_drb_result: *next_drb_result,
+            with_epoch: epoch.is_some(),
+        }
+    }
+}
+
+impl<TYPES: NodeType> From<QuorumProposalWrapper<TYPES>> for Leaf2<TYPES> {
+    fn from(value: QuorumProposalWrapper<TYPES>) -> Self {
+        let QuorumProposalWrapper {
+            proposal:
+                QuorumProposal2 {
+                    view_number,
+                    epoch,
+                    justify_qc,
+                    next_epoch_justify_qc,
+                    block_header,
+                    upgrade_certificate,
+                    view_change_evidence,
+                    next_drb_result,
+                    state_cert: _,
+                },
+        } = value;
+
+        let parent_commitment = justify_qc.data().leaf_commit;
+
+        Self {
+            view_number,
+            justify_qc,
+            next_epoch_justify_qc,
+            parent_commitment,
+            block_header,
+            upgrade_certificate,
+            block_payload: None,
+            view_change_evidence,
+            next_drb_result,
             with_epoch: epoch.is_some(),
         }
     }

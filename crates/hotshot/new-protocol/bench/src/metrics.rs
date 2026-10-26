@@ -70,7 +70,7 @@ impl MetricsCollector {
                 self.view_mut(v).vid_disperse_ns = Some(ts);
             },
             // Replica: proposal processing
-            ConsensusInput::ProposalWithVidShare(_sender, p, _) => {
+            ConsensusInput::Proposal(_sender, p) => {
                 let v = *p.view_number();
                 self.view_mut(v).proposal_recv_ns = Some(ts);
             },
@@ -79,7 +79,7 @@ impl MetricsCollector {
                 self.view_mut(v).state_validated_ns = Some(ts);
             },
             // Both: phase 1 completion + reconstruction
-            ConsensusInput::BlockReconstructed(view, _) => {
+            ConsensusInput::BlockReconstructed { view, .. } => {
                 let v = **view;
                 self.view_mut(v).block_reconstructed_ns = Some(ts);
             },

@@ -1,7 +1,9 @@
 use std::{
     cmp::max,
     collections::{BTreeMap, HashMap},
-    path::Path,
+    fmt::{self, Display, Formatter},
+    path::{Path, PathBuf},
+    str::FromStr,
 };
 
 use alloy::primitives::Address;
@@ -11,9 +13,48 @@ use espresso_types::{
     v0_3::ChainConfig,
 };
 use hotshot_types::{VersionedDaCommittee, version_ser};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, Serializer};
+use url::Url;
 use vbs::version::Version;
 use versions::{DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_VERSION};
+
+/// A location from which to load the genesis file.
+///
+/// Accepts a plain filesystem path (e.g. `/etc/espresso/genesis.toml`) or an `http://` /
+/// `https://` URL.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum GenesisSource {
+    Path(PathBuf),
+    Http(Url),
+}
+
+impl FromStr for GenesisSource {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> anyhow::Result<Self> {
+        if s.starts_with("http://") || s.starts_with("https://") {
+            let url = Url::parse(s).with_context(|| format!("invalid genesis URL: {s}"))?;
+            Ok(Self::Http(url))
+        } else {
+            Ok(Self::Path(PathBuf::from(s)))
+        }
+    }
+}
+
+impl Display for GenesisSource {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Path(p) => write!(f, "{}", p.display()),
+            Self::Http(u) => write!(f, "{u}"),
+        }
+    }
+}
+
+impl Serialize for GenesisSource {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.collect_str(self)
+    }
+}
 
 /// Initial configuration of an Espresso stake table.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -89,6 +130,17 @@ impl Genesis {
         }
 
         base_fee
+    }
+
+    /// `max_block_size` per protocol version: base version and upgrades with a chain config.
+    pub fn block_sizes(&self) -> BTreeMap<Version, u64> {
+        let upgrades = self.upgrades.iter().filter_map(|(version, upgrade)| {
+            let cf = upgrade.upgrade_type.chain_config()?;
+            Some((*version, *cf.max_block_size))
+        });
+        std::iter::once((self.base_version, *self.chain_config.max_block_size))
+            .chain(upgrades)
+            .collect()
     }
 }
 
@@ -313,7 +365,34 @@ impl Genesis {
         let path = path.as_ref();
         let bytes = std::fs::read(path).context(format!("genesis file {}", path.display()))?;
         let text = std::str::from_utf8(&bytes).context("genesis file must be UTF-8")?;
+        Self::from_toml(text)
+    }
 
+    /// Load a genesis configuration from a local file or HTTP(S) URL.
+    pub async fn load(source: &GenesisSource) -> anyhow::Result<Self> {
+        match source {
+            GenesisSource::Path(p) => Self::from_file(p),
+            GenesisSource::Http(url) => {
+                let client = reqwest::Client::builder()
+                    .timeout(std::time::Duration::from_secs(30))
+                    .build()
+                    .context("building HTTP client")?;
+                let text = client
+                    .get(url.clone())
+                    .send()
+                    .await
+                    .with_context(|| format!("fetching genesis from {url}"))?
+                    .error_for_status()
+                    .with_context(|| format!("fetching genesis from {url}"))?
+                    .text()
+                    .await
+                    .with_context(|| format!("reading genesis response from {url}"))?;
+                Self::from_toml(&text)
+            },
+        }
+    }
+
+    fn from_toml(text: &str) -> anyhow::Result<Self> {
         let genesis: Self = toml::from_str(text).context("malformed genesis file")?;
         genesis.validate().context("validating genesis")?;
         Ok(genesis)
@@ -435,6 +514,20 @@ mod test {
         }
 
         assert!(checked > 0, "no genesis files found");
+    }
+
+    #[test]
+    fn block_sizes_cover_upgrades() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../data/genesis/demo-large-block-upgrade.toml");
+        let genesis = Genesis::from_file(&path).unwrap();
+        assert_eq!(
+            genesis.block_sizes(),
+            BTreeMap::from([
+                (Version { major: 0, minor: 6 }, 1_000_000),
+                (Version { major: 0, minor: 7 }, 10_000_000),
+            ])
+        );
     }
 
     #[test]
@@ -1113,6 +1206,83 @@ mod test {
     }
 
     #[test]
+    fn test_genesis_toml_large_block_upgrade_view_mode() {
+        let toml = toml! {
+            base_version = "0.6"
+            upgrade_version = "0.7"
+            genesis_version = "0.6"
+
+            [stake_table]
+            capacity = 10
+
+            [chain_config]
+            chain_id = 12345
+            max_block_size = 30000
+            base_fee = 1
+            fee_recipient = "0x0000000000000000000000000000000000000000"
+            fee_contract = "0x0000000000000000000000000000000000000000"
+            stake_table_contract = "0x0000000000000000000000000000000000000000"
+
+            [header]
+            timestamp = 123456
+
+            [header.chain_config]
+            chain_id = 35353
+            max_block_size = 30720
+            base_fee = 0
+            fee_recipient = "0x0000000000000000000000000000000000000000"
+
+            [accounts]
+            "0x23618e81E3f5cdF7f54C3d65f7FBc0aBf5B21E8f" = 100000
+            "0x0000000000000000000000000000000000000000" = 42
+
+            [l1_finalized]
+            number = 64
+            timestamp = "0x123def"
+            hash = "0x80f5dd11f2bdda2814cb1ad94ef30a47de02cf28ad68c89e104c00c4e51bb7a5"
+
+            [[upgrade]]
+            version = "0.7"
+            start_proposing_view = 1
+            stop_proposing_view = 15
+
+            [upgrade.large_block]
+
+            [upgrade.large_block.chain_config]
+            chain_id = 12345
+            max_block_size = 10485760
+            base_fee = 1
+            fee_recipient = "0x0000000000000000000000000000000000000000"
+            fee_contract = "0x0000000000000000000000000000000000000000"
+            stake_table_contract = "0x0000000000000000000000000000000000000000"
+        }
+        .to_string();
+
+        let genesis: Genesis = toml::from_str(&toml).unwrap_or_else(|err| panic!("{err:#}"));
+
+        let (version, genesis_upgrade) = genesis.upgrades.last_key_value().unwrap();
+
+        assert_eq!(*version, Version { major: 0, minor: 7 });
+
+        let UpgradeType::LargeBlock { chain_config } = genesis_upgrade.upgrade_type else {
+            panic!("expected large_block upgrade, got {genesis_upgrade:?}");
+        };
+        assert_eq!(chain_config.max_block_size, (10 * 1024 * 1024).into());
+
+        let upgrade = Upgrade {
+            mode: UpgradeMode::View(ViewBasedUpgrade {
+                start_voting_view: None,
+                stop_voting_view: None,
+                start_proposing_view: 1,
+                stop_proposing_view: 15,
+            }),
+            upgrade_type: UpgradeType::LargeBlock { chain_config },
+        };
+
+        assert_eq!(*genesis_upgrade, upgrade);
+    }
+
+    #[test]
     fn test_genesis_toml_fee_upgrade_time_mode() {
         // without optional fields
         // with time settings
@@ -1448,8 +1618,8 @@ mod test {
             start_proposing_view = 1
             stop_proposing_view = 15
 
-            [upgrade.da]
-            [upgrade.da.chain_config]
+            [upgrade.new_protocol]
+            [upgrade.new_protocol.chain_config]
             chain_id = 12345
             max_block_size = 30000
             base_fee = 1

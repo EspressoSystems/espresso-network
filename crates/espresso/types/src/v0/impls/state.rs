@@ -29,8 +29,10 @@ use versions::{
     DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_REWARD_VERSION, EPOCH_VERSION, NEW_PROTOCOL_VERSION,
 };
 
+#[cfg(feature = "node")]
+use super::L1Client;
 use super::{
-    BlockMerkleCommitment, BlockSize, FeeMerkleCommitment, L1Client, fee_info::FeeError,
+    BlockMerkleCommitment, BlockSize, FeeMerkleCommitment, fee_info::FeeError,
     instance_state::NodeState, v0_1::IterableFeeInfo,
 };
 use crate::{
@@ -71,6 +73,14 @@ pub enum BuilderValidationError {
     FeeAmountOutOfRange(FeeAmount),
     #[error("Invalid Builder Signature")]
     InvalidBuilderSignature,
+    #[error(
+        "Fee info / builder signature count mismatch: fee_count={fee_count}, \
+         signature_count={signature_count}"
+    )]
+    FeeAndSignatureCountMismatch {
+        fee_count: usize,
+        signature_count: usize,
+    },
 }
 
 /// Possible proposal validation failures
@@ -436,15 +446,32 @@ impl ValidatedState {
     }
 }
 /// Block Proposal to be verified and applied.
+#[cfg_attr(not(feature = "node"), allow(dead_code))]
 #[derive(Debug)]
 pub(crate) struct Proposal<'a> {
     header: &'a Header,
-    block_size: u32,
+    /// `None` when this node does not hold the payload; see [`Self::without_size`].
+    block_size: Option<u32>,
 }
 
+#[cfg_attr(not(feature = "node"), allow(dead_code))]
 impl<'a> Proposal<'a> {
     pub(crate) fn new(header: &'a Header, block_size: u32) -> Self {
-        Self { header, block_size }
+        Self {
+            header,
+            block_size: Some(block_size),
+        }
+    }
+
+    /// A proposal whose payload size this node does not know, e.g. one fetched
+    /// from a peer without a VID share. Only valid for a proposal a quorum has
+    /// already certified, which vouches for the checks this skips: block size,
+    /// fee and namespace table.
+    pub(crate) fn without_size(header: &'a Header) -> Self {
+        Self {
+            header,
+            block_size: None,
+        }
     }
     /// The L1 head block number in the proposal must be non-decreasing relative
     /// to the parent.
@@ -539,6 +566,7 @@ impl<'a> Proposal<'a> {
 /// Type to hold cloned validated state and provide validation methods.
 ///
 /// The [Self::validate] method must be called to validate the proposal.
+#[cfg_attr(not(feature = "node"), allow(dead_code))]
 #[derive(Debug)]
 pub(crate) struct ValidatedTransition<'a> {
     state: ValidatedState,
@@ -552,6 +580,7 @@ pub(crate) struct ValidatedTransition<'a> {
     leader_index: Option<usize>,
 }
 
+#[cfg_attr(not(feature = "node"), allow(dead_code))]
 impl<'a> ValidatedTransition<'a> {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
@@ -638,6 +667,7 @@ impl<'a> ValidatedTransition<'a> {
     ///
     /// The finalized [L1BlockInfo](super::L1BlockInfo) in the proposal must match the one fetched
     /// from L1.
+    #[cfg(feature = "node")]
     async fn wait_for_l1(self, l1_client: &L1Client) -> Result<Self, ProposalValidationError> {
         self.wait_for_l1_head(l1_client).await;
         self.wait_for_finalized_block(l1_client).await?;
@@ -646,6 +676,7 @@ impl<'a> ValidatedTransition<'a> {
 
     /// Wait for our view of the latest L1 block number to catch up to the
     /// proposal.
+    #[cfg(feature = "node")]
     async fn wait_for_l1_head(&self, l1_client: &L1Client) {
         let _ = l1_client
             .wait_for_block(self.proposal.header.l1_head())
@@ -653,6 +684,7 @@ impl<'a> ValidatedTransition<'a> {
     }
     /// Wait for our view of the finalized L1 block number to catch up to the
     /// proposal.
+    #[cfg(feature = "node")]
     async fn wait_for_finalized_block(
         &self,
         l1_client: &L1Client,
@@ -681,7 +713,7 @@ impl<'a> ValidatedTransition<'a> {
     /// verifying signatures. Signatures are identified by index of fee `Vec`.
     fn validate_builder_fee(&self) -> Result<(), ProposalValidationError> {
         // TODO move logic from stand alone fn to here.
-        if let Err(err) = validate_builder_fee(self.proposal.header) {
+        if let Err(err) = validate_builder_fee(self.proposal.header, self.version) {
             return Err(ProposalValidationError::BuilderValidationError(err));
         }
         Ok(())
@@ -695,7 +727,10 @@ impl<'a> ValidatedTransition<'a> {
     /// Validate that proposal block size does not exceed configured
     /// `ChainConfig.max_block_size`.
     fn validate_block_size(&self) -> Result<(), ProposalValidationError> {
-        let block_size = self.proposal.block_size as u64;
+        let Some(block_size) = self.proposal.block_size else {
+            return Ok(());
+        };
+        let block_size = block_size as u64;
         if block_size > *self.expected_chain_config.max_block_size {
             return Err(ProposalValidationError::MaxBlockSizeExceeded {
                 max_block_size: self.expected_chain_config.max_block_size,
@@ -712,8 +747,11 @@ impl<'a> ValidatedTransition<'a> {
         let Some(amount) = self.proposal.header.fee_info().amount() else {
             return Err(ProposalValidationError::SomeFeeAmountOutOfRange);
         };
+        let Some(block_size) = self.proposal.block_size else {
+            return Ok(());
+        };
 
-        if amount < self.expected_chain_config.base_fee * U256::from(self.proposal.block_size) {
+        if amount < self.expected_chain_config.base_fee * U256::from(block_size) {
             return Err(ProposalValidationError::InsufficientFee {
                 max_block_size: self.expected_chain_config.max_block_size,
                 base_fee: self.expected_chain_config.base_fee,
@@ -800,11 +838,14 @@ impl<'a> ValidatedTransition<'a> {
     }
     /// Proxy to [`super::NsTable::validate()`].
     fn validate_namespace_table(&self) -> Result<(), ProposalValidationError> {
+        let Some(block_size) = self.proposal.block_size else {
+            return Ok(());
+        };
         self.proposal
             .header
             .ns_table()
             // Should be safe since `u32` will always fit in a `usize`.
-            .validate(&PayloadByteLen(self.proposal.block_size as usize))
+            .validate(&PayloadByteLen(block_size as usize))
             .map_err(ProposalValidationError::from)
     }
 
@@ -926,13 +967,23 @@ impl From<MerkleTreeError> for FeeError {
 
 /// Validate builder accounts by verifying signatures. All fees are
 /// verified against signature by index.
-fn validate_builder_fee(proposed_header: &Header) -> Result<(), BuilderValidationError> {
+#[cfg_attr(not(feature = "node"), allow(dead_code))]
+fn validate_builder_fee(
+    proposed_header: &Header,
+    version: Version,
+) -> Result<(), BuilderValidationError> {
+    let fee_info = proposed_header.fee_info();
+    let builder_signature = proposed_header.builder_signature();
+
+    if version >= EPOCH_REWARD_VERSION && fee_info.len() != builder_signature.len() {
+        return Err(BuilderValidationError::FeeAndSignatureCountMismatch {
+            fee_count: fee_info.len(),
+            signature_count: builder_signature.len(),
+        });
+    }
+
     // TODO since we are iterating, should we include account/amount in errors?
-    for (fee_info, signature) in proposed_header
-        .fee_info()
-        .iter()
-        .zip(proposed_header.builder_signature())
-    {
+    for (fee_info, signature) in fee_info.iter().zip(builder_signature) {
         // check that `amount` fits in a u64
         fee_info
             .amount()
@@ -990,23 +1041,29 @@ impl ValidatedState {
             validated_state.chain_config = chain_config.into();
         }
 
-        let l1_deposits = get_l1_deposits(
-            instance,
-            proposed_header,
-            parent_leaf,
-            chain_config.fee_contract,
-        )
-        .await;
+        // The new protocol charges no fees and credits no deposits, so it never touches the fee tree.
+        let (l1_deposits, missing_accounts) = if version < NEW_PROTOCOL_VERSION {
+            let l1_deposits = get_l1_deposits(
+                instance,
+                proposed_header,
+                parent_leaf,
+                chain_config.fee_contract,
+            )
+            .await;
 
-        // Find missing fee state entries. We will need to use the builder account which is paying a
-        // fee and the recipient account which is receiving it, plus any counts receiving deposits
-        // in this block.
-        let missing_accounts = self.forgotten_accounts(
-            [chain_config.fee_recipient]
-                .into_iter()
-                .chain(proposed_header.fee_info().accounts())
-                .chain(l1_deposits.accounts()),
-        );
+            // Find missing fee state entries. We will need to use the builder account which is
+            // paying a fee and the recipient account which is receiving it, plus any counts
+            // receiving deposits in this block.
+            let missing_accounts = self.forgotten_accounts(
+                [chain_config.fee_recipient]
+                    .into_iter()
+                    .chain(proposed_header.fee_info().accounts())
+                    .chain(l1_deposits.accounts()),
+            );
+            (l1_deposits, missing_accounts)
+        } else {
+            (Vec::new(), Vec::new())
+        };
 
         let parent_height = parent_leaf.height();
         let parent_view = parent_leaf.view_number();
@@ -1143,8 +1200,9 @@ impl ValidatedState {
             UpgradeType::Fee { chain_config } => chain_config,
             UpgradeType::Epoch { chain_config } => chain_config,
             UpgradeType::DrbAndHeader { chain_config } => chain_config,
-            UpgradeType::Da { chain_config } => chain_config,
+            UpgradeType::NewProtocol { chain_config } => chain_config,
             UpgradeType::EpochReward { chain_config } => chain_config,
+            UpgradeType::LargeBlock { chain_config } => chain_config,
         };
 
         self.chain_config = cf.into();
@@ -1179,6 +1237,7 @@ impl ValidatedState {
     }
 }
 
+#[cfg(feature = "node")]
 pub async fn get_l1_deposits(
     instance: &NodeState,
     header: &Header,
@@ -1202,6 +1261,24 @@ pub async fn get_l1_deposits(
     }
 }
 
+/// Twin of the `node` variant so callers compile unchanged. Only the actual
+/// fetch requires the node feature; chains without a fee contract or without a
+/// finalized L1 block behave identically in both cfgs.
+#[cfg(not(feature = "node"))]
+pub async fn get_l1_deposits(
+    _instance: &NodeState,
+    header: &Header,
+    _parent_leaf: &Leaf2,
+    fee_contract_address: Option<Address>,
+) -> Vec<FeeInfo> {
+    if fee_contract_address.is_some() && header.l1_finalized().is_some() {
+        unimplemented!("fetching L1 deposits requires the node feature")
+    } else {
+        vec![]
+    }
+}
+
+#[cfg_attr(not(feature = "node"), allow(dead_code))]
 async fn validate_next_stake_table_hash(
     instance: &NodeState,
     proposed_header: &Header,
@@ -1262,65 +1339,78 @@ impl HotShotState<SeqTypes> for ValidatedState {
             height = parent_leaf.height(),
         ),
     )]
+    #[cfg_attr(not(feature = "node"), allow(unused_variables))]
     async fn validate_and_apply_header(
         &self,
         instance: &Self::Instance,
         parent_leaf: &Leaf2,
         proposed_header: &Header,
-        payload_byte_len: u32,
+        payload_byte_len: Option<u32>,
         version: Version,
         view_number: u64,
     ) -> Result<(Self, Self::Delta), Self::Error> {
-        // Preferably we would do all validation that does not require catchup first, but this would
-        // require some refactoring of the header validation code that is out of scope for now.
-        // Record the time when validation started to later use it to validate the timestamp drift.
-        let validation_start_time = OffsetDateTime::now_utc();
-
-        let (validated_state, delta, total_rewards_distributed) = self
-            // TODO We can add this logic to `ValidatedTransition` or do something similar to that here.
-            .apply_header(
-                instance,
-                &instance.state_catchup,
-                parent_leaf,
-                proposed_header,
-                version,
-                ViewNumber::new(view_number),
-            )
-            .await
-            .map_err(|e| BlockError::FailedHeaderApply(e.to_string()))?;
-
-        if version >= DRB_AND_HEADER_UPGRADE_VERSION {
-            validate_next_stake_table_hash(instance, proposed_header).await?;
+        // The L1 deposit fetch and the wait for the proposal's L1 blocks require an L1 client.
+        #[cfg(not(feature = "node"))]
+        {
+            unimplemented!("validate_and_apply_header requires the node feature");
         }
+        #[cfg(feature = "node")]
+        {
+            // Preferably we would do all validation that does not require catchup first, but this
+            // would require some refactoring of the header validation code that is out of scope for
+            // now. Record the time when validation started to later use it to validate the
+            // timestamp drift.
+            let validation_start_time = OffsetDateTime::now_utc();
 
-        // Get leader index for V6+ validation
-        let leader_index =
-            Header::get_leader_index(version, proposed_header.height(), view_number, instance)
+            let (validated_state, delta, total_rewards_distributed) = self
+                // TODO We can add this logic to `ValidatedTransition` or do something similar to that here.
+                .apply_header(
+                    instance,
+                    &instance.state_catchup,
+                    parent_leaf,
+                    proposed_header,
+                    version,
+                    ViewNumber::new(view_number),
+                )
                 .await
-                .map_err(|e| BlockError::InvalidBlockHeader(e.to_string()))?;
+                .map_err(|e| BlockError::FailedHeaderApply(e.to_string()))?;
 
-        // Validate the proposal.
-        let validated_state = ValidatedTransition::new(
-            validated_state,
-            parent_leaf.block_header(),
-            Proposal::new(proposed_header, payload_byte_len),
-            total_rewards_distributed,
-            version,
-            validation_start_time,
-            instance.epoch_height,
-            leader_index,
-        )
-        .validate()?
-        .wait_for_l1(&instance.l1_client)
-        .await?
-        .state;
+            if version >= DRB_AND_HEADER_UPGRADE_VERSION {
+                validate_next_stake_table_hash(instance, proposed_header).await?;
+            }
 
-        // log successful progress about once in 10 - 20 seconds,
-        // TODO: we may want to make this configurable
-        if parent_leaf.view_number().u64().is_multiple_of(10) {
-            tracing::info!("validated and applied new header");
+            // Get leader index for V6+ validation
+            let leader_index =
+                Header::get_leader_index(version, proposed_header.height(), view_number, instance)
+                    .await
+                    .map_err(|e| BlockError::InvalidBlockHeader(e.to_string()))?;
+
+            // Validate the proposal.
+            let validated_state = ValidatedTransition::new(
+                validated_state,
+                parent_leaf.block_header(),
+                match payload_byte_len {
+                    Some(len) => Proposal::new(proposed_header, len),
+                    None => Proposal::without_size(proposed_header),
+                },
+                total_rewards_distributed,
+                version,
+                validation_start_time,
+                instance.epoch_height,
+                leader_index,
+            )
+            .validate()?
+            .wait_for_l1(&instance.l1_client)
+            .await?
+            .state;
+
+            // log successful progress about once in 10 - 20 seconds,
+            // TODO: we may want to make this configurable
+            if parent_leaf.view_number().u64().is_multiple_of(10) {
+                tracing::info!("validated and applied new header");
+            }
+            Ok((validated_state, delta))
         }
-        Ok((validated_state, delta))
     }
     /// Construct the state with the given block header.
     ///
@@ -1530,28 +1620,40 @@ mod test {
     use std::{sync::Arc, time::Duration};
 
     use espresso_utils::ser::FromStringOrInteger;
-    use hotshot::traits::BlockPayload;
     use hotshot_example_types::node_types::TEST_VERSIONS;
     use hotshot_query_service::{Resolvable, testing::mocks::MOCK_UPGRADE};
-    use hotshot_types::{data::ViewNumber, traits::signature_key::BuilderSignatureKey};
+    use hotshot_types::{
+        data::ViewNumber,
+        traits::{BlockPayload, signature_key::BuilderSignatureKey},
+    };
     use tracing::debug;
-    use versions::{FEE_VERSION, MAX_SUPPORTED_VERSION, version};
+    use versions::{
+        FEE_VERSION, LARGE_BLOCK_VERSION, MAX_SUPPORTED_VERSION, NEW_PROTOCOL_VERSION, version,
+    };
 
     use super::*;
     use crate::{
         BlockSize, FeeAccountProof, FeeMerkleProof, Leaf, Payload, TimestampMillis, Transaction,
-        eth_signature_key::EthKeyPair, mock::MockStateCatchup, v0_1, v0_2, v0_3, v0_4, v0_5, v0_6,
+        UpgradeMode, UpgradeType, ViewBasedUpgrade,
+        eth_signature_key::{BuilderSignature, EthKeyPair},
+        mock::MockStateCatchup,
+        v0_1, v0_2, v0_3, v0_4, v0_5, v0_6, v0_7,
     };
 
     impl Transaction {
         async fn into_mock_header(self) -> (Header, u32) {
-            let instance = NodeState::mock_v2();
+            let instance = NodeState::mock();
             let (payload, metadata) =
-                Payload::from_transactions([self], &instance.genesis_state, &instance)
+                Payload::from_transactions(&[self], &instance.genesis_state, &instance)
                     .await
                     .unwrap();
 
-            let header = Header::genesis(&instance, payload.clone(), &metadata, MOCK_UPGRADE.base);
+            let header = Header::genesis(
+                &instance,
+                payload.clone(),
+                &metadata,
+                instance.genesis_version,
+            );
 
             let header = header.sign();
 
@@ -1589,14 +1691,18 @@ mod test {
                     timestamp_millis,
                     ..parent.clone()
                 }),
-                Header::V6(parent) | Header::V7(parent) | Header::V8(parent) => {
-                    Header::V6(v0_6::Header {
-                        height: parent.height + 1,
-                        timestamp,
-                        timestamp_millis,
-                        ..parent.clone()
-                    })
-                },
+                Header::V6(parent) => Header::V6(v0_6::Header {
+                    height: parent.height + 1,
+                    timestamp,
+                    timestamp_millis,
+                    ..parent.clone()
+                }),
+                Header::V7(parent) => Header::V7(v0_7::Header {
+                    height: parent.height + 1,
+                    timestamp,
+                    timestamp_millis,
+                    ..parent.clone()
+                }),
             }
         }
         /// Replaces builder signature w/ invalid one.
@@ -1633,13 +1739,16 @@ mod test {
                     builder_signature: Some(sig),
                     ..header.clone()
                 }),
-                Header::V6(header) | Header::V7(header) | Header::V8(header) => {
-                    Header::V6(v0_6::Header {
-                        fee_info,
-                        builder_signature: Some(sig),
-                        ..header.clone()
-                    })
-                },
+                Header::V6(header) => Header::V6(v0_6::Header {
+                    fee_info,
+                    builder_signature: Some(sig),
+                    ..header.clone()
+                }),
+                Header::V7(header) => Header::V7(v0_7::Header {
+                    fee_info,
+                    builder_signature: Some(sig),
+                    ..header.clone()
+                }),
             }
         }
 
@@ -1655,38 +1764,45 @@ mod test {
                 self.metadata(),
             )
             .unwrap();
+            self.with_fee(fee_info, Some(sig))
+        }
 
+        /// Replaces the fee info and builder signature.
+        fn with_fee(&self, fee_info: FeeInfo, builder_signature: Option<BuilderSignature>) -> Self {
             match self {
-                Header::V1(_) => panic!(
-                    "You called `Header.invalid_builder_signature()` on unimplemented version (v1)"
-                ),
+                Header::V1(_) => {
+                    panic!("You called `Header.with_fee()` on unimplemented version (v1)")
+                },
                 Header::V2(parent) => Header::V2(v0_2::Header {
                     fee_info,
-                    builder_signature: Some(sig),
+                    builder_signature,
                     ..parent.clone()
                 }),
                 Header::V3(parent) => Header::V3(v0_3::Header {
                     fee_info,
-                    builder_signature: Some(sig),
+                    builder_signature,
                     ..parent.clone()
                 }),
                 Header::V4(parent) => Header::V4(v0_4::Header {
                     fee_info,
-                    builder_signature: Some(sig),
+                    builder_signature,
                     ..parent.clone()
                 }),
                 Header::V5(parent) => Header::V5(v0_5::Header {
                     fee_info,
-                    builder_signature: Some(sig),
+                    builder_signature,
                     ..parent.clone()
                 }),
-                Header::V6(parent) | Header::V7(parent) | Header::V8(parent) => {
-                    Header::V6(v0_6::Header {
-                        fee_info,
-                        builder_signature: Some(sig),
-                        ..parent.clone()
-                    })
-                },
+                Header::V6(parent) => Header::V6(v0_6::Header {
+                    fee_info,
+                    builder_signature,
+                    ..parent.clone()
+                }),
+                Header::V7(parent) => Header::V7(v0_7::Header {
+                    fee_info,
+                    builder_signature,
+                    ..parent.clone()
+                }),
             }
         }
     }
@@ -1703,7 +1819,7 @@ mod test {
                 proposal,
                 total_rewards_distributed: None,
                 epoch_height: instance.epoch_height,
-                version: version(0, 1),
+                version: instance.current_version,
                 validation_start_time,
                 leader_index: None,
             }
@@ -1756,7 +1872,7 @@ mod test {
         let proposal = Proposal::new(&header, block_size);
         // Note we are using the same header for parent and proposal,
         // this may be OK depending on what we are testing.
-        ValidatedTransition::mock(NodeState::mock_v2(), &header, proposal)
+        ValidatedTransition::mock(NodeState::mock(), &header, proposal)
             .validate_l1_head()
             .unwrap();
 
@@ -1793,6 +1909,30 @@ mod test {
             ),
             err
         );
+    }
+
+    /// A state holding only a chain config commitment takes the full config from the instance
+    /// when the commitments match, without asking peers.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_chain_config_resolved_from_instance() {
+        // The mock peers serve the default config, so the instance's must differ from it for
+        // an answer fetched from them to fail the assertion.
+        let instance = NodeState::mock().with_chain_config(ChainConfig {
+            max_block_size: BlockSize(300),
+            ..Default::default()
+        });
+        let commitment_only = ResolvableChainConfig::from(instance.chain_config.commit());
+        let state = ValidatedState {
+            chain_config: commitment_only,
+            ..Default::default()
+        };
+
+        let chain_config = state
+            .get_chain_config(&instance, &MockStateCatchup::default(), &commitment_only)
+            .await
+            .unwrap();
+
+        assert_eq!(chain_config, instance.chain_config);
     }
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
@@ -1871,7 +2011,7 @@ mod test {
         let tx = Transaction::of_size(20);
         let (header, block_size) = tx.into_mock_header().await;
         let state = ValidatedState::default();
-        let instance = NodeState::mock_v2().with_chain_config(ChainConfig {
+        let instance = NodeState::mock().with_chain_config(ChainConfig {
             base_fee: 1000.into(), // High expected base fee
             ..state.chain_config.resolve().unwrap()
         });
@@ -1896,7 +2036,7 @@ mod test {
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_validation_height() {
         // Setup
-        let instance = NodeState::mock_v2();
+        let instance = NodeState::mock();
         let tx = Transaction::of_size(10);
         let (parent, block_size) = tx.into_mock_header().await;
 
@@ -1953,7 +2093,7 @@ mod test {
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_validation_timestamp_drift() {
         // Setup
-        let instance = NodeState::mock_v2();
+        let instance = NodeState::mock();
         let (parent, block_size) = Transaction::of_size(10).into_mock_header().await;
 
         let header = parent.clone();
@@ -2014,7 +2154,7 @@ mod test {
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_validation_fee_root() {
         // Setup
-        let instance = NodeState::mock_v2();
+        let instance = NodeState::mock();
         let (header, block_size) = Transaction::of_size(10).into_mock_header().await;
 
         // Success case.
@@ -2048,7 +2188,7 @@ mod test {
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_validation_block_root() {
         // Setup.
-        let instance = NodeState::mock_v2();
+        let instance = NodeState::mock();
         let (header, block_size) = Transaction::of_size(10).into_mock_header().await;
 
         // Success case.
@@ -2088,13 +2228,13 @@ mod test {
 
         // Success case.
         let proposal = Proposal::new(&header, block_size);
-        ValidatedTransition::mock(NodeState::mock_v2(), &header, proposal)
+        ValidatedTransition::mock(NodeState::mock(), &header, proposal)
             .validate_namespace_table()
             .unwrap();
 
         // Error case
         let proposal = Proposal::new(&header, 40);
-        let err = ValidatedTransition::mock(NodeState::mock_v2(), &header, proposal)
+        let err = ValidatedTransition::mock(NodeState::mock(), &header, proposal)
             .validate_namespace_table()
             .unwrap_err();
         tracing::info!(%err, "task failed successfully");
@@ -2104,6 +2244,57 @@ mod test {
             ProposalValidationError::InvalidNsTable(InvalidFinalOffset),
             err
         );
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_validation_without_payload_size_skips_size_checks() {
+        use NsTableValidationError::InvalidFinalOffset;
+        // A proposal adopted without its VID share carries no payload size. Under
+        // this chain config every size-dependent check rejects the block once a
+        // size is supplied.
+        let tx = Transaction::of_size(20);
+        let (header, block_size) = tx.into_mock_header().await;
+        let instance = NodeState::mock().with_chain_config(ChainConfig {
+            max_block_size: BlockSize::from_integer(10).unwrap(),
+            base_fee: 1000.into(),
+            ..ValidatedState::default().chain_config.resolve().unwrap()
+        });
+
+        let sized = ValidatedTransition::mock(
+            instance.clone(),
+            &header,
+            Proposal::new(&header, block_size),
+        );
+        assert!(matches!(
+            sized.validate_block_size(),
+            Err(ProposalValidationError::MaxBlockSizeExceeded { .. })
+        ));
+        assert!(matches!(
+            sized.validate_fee(),
+            Err(ProposalValidationError::InsufficientFee { .. })
+        ));
+        // Standing in a size of zero, as the fetch path once did, rejects every
+        // non-empty block.
+        let zero_sized =
+            ValidatedTransition::mock(instance.clone(), &header, Proposal::new(&header, 0));
+        assert_eq!(
+            ProposalValidationError::InvalidNsTable(InvalidFinalOffset),
+            zero_sized.validate_namespace_table().unwrap_err()
+        );
+
+        let sizeless =
+            ValidatedTransition::mock(instance.clone(), &header, Proposal::without_size(&header));
+        sizeless.validate_block_size().unwrap();
+        sizeless.validate_fee().unwrap();
+        sizeless.validate_namespace_table().unwrap();
+
+        // Fee presence does not depend on the size and is still checked.
+        let fee_account = EthKeyPair::random().fee_account();
+        let header = header.with_fee(FeeInfo::new(fee_account, FeeAmount(U256::MAX)), None);
+        let err = ValidatedTransition::mock(instance, &header, Proposal::without_size(&header))
+            .validate_fee()
+            .unwrap_err();
+        assert_eq!(ProposalValidationError::SomeFeeAmountOutOfRange, err);
     }
 
     #[test_log::test]
@@ -2272,16 +2463,20 @@ mod test {
                 fee_info: FeeInfo::new(account, data),
                 ..header
             }),
-            Header::V6(header) | Header::V7(header) | Header::V8(header) => {
-                Header::V6(v0_6::Header {
-                    builder_signature: Some(sig),
-                    fee_info: FeeInfo::new(account, data),
-                    ..header
-                })
-            },
+            Header::V6(header) => Header::V6(v0_6::Header {
+                builder_signature: Some(sig),
+                fee_info: FeeInfo::new(account, data),
+                ..header
+            }),
+            Header::V7(header) => Header::V7(v0_7::Header {
+                builder_signature: Some(sig),
+                fee_info: FeeInfo::new(account, data),
+                ..header
+            }),
         };
 
-        validate_builder_fee(&header).unwrap();
+        let version = header.version();
+        validate_builder_fee(&header, version).unwrap();
     }
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
@@ -2289,7 +2484,7 @@ mod test {
         let instance = NodeState::mock().with_genesis_version(version(0, 4));
 
         let (payload, metadata) =
-            Payload::from_transactions([], &instance.genesis_state, &instance)
+            Payload::from_transactions(&[], &instance.genesis_state, &instance)
                 .await
                 .unwrap();
 
@@ -2353,7 +2548,7 @@ mod test {
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_regression_slow_validation_timestamp_drift() {
-        let instance = NodeState::mock_v2();
+        let instance = NodeState::mock();
         let (parent, block_size) = Transaction::of_size(10).into_mock_header().await;
 
         let validation_start_time = OffsetDateTime::now_utc();
@@ -2451,11 +2646,45 @@ mod test {
                 &instance,
                 &parent_leaf,
                 &proposed_header,
-                0, /* payload_byte_len */
+                Some(0), /* payload_byte_len */
                 FEE_VERSION,
                 0, /* view_number */
             )
             .await
             .unwrap();
+    }
+
+    #[test]
+    fn test_apply_large_block_upgrade() {
+        let upgraded_chain_config = ChainConfig {
+            max_block_size: (10 * 1024 * 1024).into(),
+            ..Default::default()
+        };
+        let upgrade = crate::Upgrade {
+            mode: UpgradeMode::View(ViewBasedUpgrade {
+                start_voting_view: None,
+                stop_voting_view: None,
+                start_proposing_view: 1,
+                stop_proposing_view: 10,
+            }),
+            upgrade_type: UpgradeType::LargeBlock {
+                chain_config: upgraded_chain_config,
+            },
+        };
+        let instance = NodeState::mock()
+            .with_current_version(NEW_PROTOCOL_VERSION)
+            .with_upgrades([(LARGE_BLOCK_VERSION, upgrade)].into());
+
+        let mut state = ValidatedState::default();
+        let pre_upgrade_chain_config = state.chain_config;
+        state.apply_upgrade(&instance, NEW_PROTOCOL_VERSION);
+        assert_eq!(state.chain_config, pre_upgrade_chain_config);
+
+        state.apply_upgrade(&instance, LARGE_BLOCK_VERSION);
+        assert_eq!(state.chain_config, upgraded_chain_config.into());
+        assert_eq!(
+            state.chain_config.resolve().unwrap().max_block_size,
+            (10 * 1024 * 1024).into()
+        );
     }
 }

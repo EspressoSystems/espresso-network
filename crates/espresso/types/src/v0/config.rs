@@ -3,13 +3,11 @@ use std::{num::NonZeroUsize, time::Duration};
 use hotshot_types::{
     HotShotConfig, PeerConfig, ValidatorConfig, VersionedDaCommittee,
     addr::NetAddr,
-    network::{
-        BuilderType, CombinedNetworkConfig, Libp2pConfig, NetworkConfig, RandomBuilderConfig,
-    },
+    network::{BuilderType, NetworkConfig, RandomBuilderConfig},
     x25519,
 };
 use serde::{Deserialize, Serialize};
-use tide_disco::Url;
+use url::Url;
 use vec1::Vec1;
 
 use crate::{PubKey, SeqTypes};
@@ -234,13 +232,20 @@ pub struct PublicNetworkConfig {
     seed: [u8; 32],
     transaction_size: usize,
     key_type_name: String,
-    libp2p_config: Option<Libp2pConfig>,
     config: PublicHotShotConfig,
-    cdn_marshal_address: Option<String>,
-    combined_network_config: Option<CombinedNetworkConfig>,
+    /// Served for peers running a release before this one, which refuse to start without a
+    /// libp2p section in the config they fetch; they never read its bootstrap nodes.
+    #[serde(default, skip_deserializing)]
+    libp2p_config: LegacyLibp2pConfig,
     commit_sha: String,
     builder: BuilderType,
     random_builder: Option<RandomBuilderConfig>,
+}
+
+/// Always `{"bootstrap_nodes": []}` on the wire.
+#[derive(Clone, Debug, Default, Serialize)]
+struct LegacyLibp2pConfig {
+    bootstrap_nodes: Vec<()>,
 }
 
 impl From<NetworkConfig<SeqTypes>> for PublicNetworkConfig {
@@ -259,10 +264,8 @@ impl From<NetworkConfig<SeqTypes>> for PublicNetworkConfig {
             seed: cfg.seed,
             transaction_size: cfg.transaction_size,
             key_type_name: cfg.key_type_name,
-            libp2p_config: cfg.libp2p_config,
             config: cfg.config.into(),
-            cdn_marshal_address: cfg.cdn_marshal_address,
-            combined_network_config: cfg.combined_network_config,
+            libp2p_config: LegacyLibp2pConfig::default(),
             commit_sha: cfg.commit_sha,
             builder: cfg.builder,
             random_builder: cfg.random_builder,
@@ -296,10 +299,7 @@ impl PublicNetworkConfig {
             seed: self.seed,
             transaction_size: self.transaction_size,
             key_type_name: self.key_type_name,
-            libp2p_config: self.libp2p_config,
             config: self.config.into_hotshot_config(),
-            cdn_marshal_address: self.cdn_marshal_address,
-            combined_network_config: self.combined_network_config,
             commit_sha: self.commit_sha,
             builder: self.builder,
             random_builder: self.random_builder,
@@ -310,11 +310,76 @@ impl PublicNetworkConfig {
     pub fn hotshot_config(&self) -> PublicHotShotConfig {
         self.config.clone()
     }
+
+    // Read-only accessors rather than public fields: `manual_start_password` is masked when a
+    // `PublicNetworkConfig` is built, and a public constructor would let a real one through.
+
+    pub fn commit_sha(&self) -> &str {
+        &self.commit_sha
+    }
+
+    pub fn indexed_da(&self) -> bool {
+        self.indexed_da
+    }
+
+    pub fn builder(&self) -> BuilderType {
+        self.builder
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::PublicNetworkConfig;
+    use super::{NetworkConfig, PublicNetworkConfig};
+    use crate::SeqTypes;
+
+    /// `/v2/config/hotshot` renders this struct from the api crate, where these fields are
+    /// private and cannot be destructured. Adding one below fails to compile until it is either
+    /// served there or listed among the drops in `proto/v2/config.proto`.
+    #[test]
+    fn every_field_is_accounted_for_by_the_v2_config_api() {
+        let PublicNetworkConfig {
+            // Served.
+            config: _,
+            commit_sha: _,
+            indexed_da: _,
+            builder: _,
+            // Dropped: orchestrator run parameters, the masked password, a Rust type name, the
+            // timings and bootstrap count repeated here with stale values, and the empty libp2p
+            // section served only to older peers.
+            libp2p_config: _,
+            rounds: _,
+            transactions_per_round: _,
+            transaction_size: _,
+            node_index: _,
+            seed: _,
+            random_builder: _,
+            manual_start_password: _,
+            key_type_name: _,
+            num_bootrap: _,
+            next_view_timeout: _,
+            view_sync_timeout: _,
+            builder_timeout: _,
+            data_request_delay: _,
+        } = PublicNetworkConfig::from(NetworkConfig::<SeqTypes>::default());
+    }
+
+    /// A node from a release before this one fetches its config from peers and fails to start
+    /// unless the JSON carries a libp2p section, so the key is served with no bootstrap nodes.
+    #[test]
+    fn serves_an_empty_libp2p_section_for_older_peers() {
+        let config = PublicNetworkConfig::from(NetworkConfig::<SeqTypes>::default());
+        let json = serde_json::to_value(&config).unwrap();
+        assert_eq!(
+            json["libp2p_config"],
+            serde_json::json!({ "bootstrap_nodes": [] })
+        );
+        // Incoming values, including the non-empty lists older peers serve, are ignored.
+        let mut with_peers = json.clone();
+        with_peers["libp2p_config"] =
+            serde_json::json!({ "bootstrap_nodes": [["12D3KooW", "/ip4/10.0.0.1/tcp/1769"]] });
+        let parsed: PublicNetworkConfig = serde_json::from_value(with_peers).unwrap();
+        assert!(parsed.libp2p_config.bootstrap_nodes.is_empty());
+    }
 
     #[test]
     fn test_deserialize_from_old_config() {

@@ -47,12 +47,13 @@ async fn async_main(migrated_envs: Vec<(&str, &str)>) {
 
     tracing::info!(port = args.port, "starting state relay server");
 
-    run_relay_server(
-        None,
-        args.sequencer_url,
-        format!("http://0.0.0.0:{}", args.port).parse().unwrap(),
-        SequencerApiVersion::instance(),
-    )
-    .await
-    .unwrap();
+    tokio::select! {
+        res = run_relay_server(
+            None,
+            args.sequencer_url,
+            format!("http://0.0.0.0:{}", args.port).parse().unwrap(),
+            SequencerApiVersion::instance(),
+        ) => res.unwrap(),
+        _ = espresso_utils::shutdown::wait_for_shutdown_signal() => {},
+    }
 }

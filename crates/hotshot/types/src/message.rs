@@ -20,7 +20,10 @@ use hotshot_utils::anytrace::*;
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use vbs::version::Version;
-use versions::{DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_VERSION, Upgrade, VID2_UPGRADE_VERSION};
+use versions::{
+    DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_VERSION, NEW_PROTOCOL_VERSION, TIMEOUT_EPOCH_VERSION,
+    Upgrade,
+};
 
 /// The version we should expect for external messages
 pub const EXTERNAL_MESSAGE_VERSION: Version = Version { major: 0, minor: 0 };
@@ -128,7 +131,7 @@ pub enum MessageKind<TYPES: NodeType> {
     /// Messages relating to sharing data between nodes
     Data(DataMessage<TYPES>),
     /// A (still serialized) message to be passed through to external listeners
-    External(Vec<u8>),
+    External(#[serde(with = "serde_bytes")] Vec<u8>),
 }
 
 /// List of keys to send a message to, or broadcast to all known keys
@@ -552,6 +555,21 @@ pub struct Proposal<TYPES: NodeType, PROPOSAL: HasViewNumber + HasEpoch + Deseri
     pub _pd: PhantomData<TYPES>,
 }
 
+impl<TYPES: NodeType, PROPOSAL: HasViewNumber + HasEpoch + DeserializeOwned>
+    Proposal<TYPES, PROPOSAL>
+{
+    pub fn new(
+        data: PROPOSAL,
+        signature: <TYPES::SignatureKey as SignatureKey>::PureAssembledSignatureType,
+    ) -> Self {
+        Self {
+            data,
+            signature,
+            _pd: PhantomData,
+        }
+    }
+}
+
 /// Convert a `Proposal` by converting the underlying proposal type
 pub fn convert_proposal<TYPES, PROPOSAL, PROPOSAL2>(
     proposal: Proposal<TYPES, PROPOSAL>,
@@ -755,7 +773,13 @@ impl<TYPES: NodeType> UpgradeLock<TYPES> {
     }
 
     pub fn upgraded_vid2(&self, view: ViewNumber) -> bool {
-        self.version_infallible(view) >= VID2_UPGRADE_VERSION
+        self.version_infallible(view) >= NEW_PROTOCOL_VERSION
+    }
+
+    /// Whether a timeout certificate must be a `TimeoutEvidence::V3`.
+    pub fn timeout_epoch_bound(&self, timed_out_view: ViewNumber) -> bool {
+        let v = ViewNumber::new(timed_out_view.u64().saturating_add(1));
+        self.version_infallible(v) >= TIMEOUT_EPOCH_VERSION
     }
 
     /// Serialize a message with a version number, using `message.view_number()`

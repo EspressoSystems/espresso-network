@@ -1,6 +1,11 @@
 name: Ubuntu install without nix
 
 on:
+  pull_request:
+    paths:
+      - "doc/ubuntu.md"
+      - "scripts/ubuntu-install-test-no-nix"
+      - ".github/workflows/ubuntu-install-without-nix.yml"
   schedule:
     - cron: "0 0 * * MON"
   workflow_dispatch:
@@ -17,7 +22,7 @@ jobs:
   ubuntu:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           submodules: recursive
 

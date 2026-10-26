@@ -17,15 +17,15 @@ use async_lock::RwLock;
 use async_trait::async_trait;
 use hotshot_types::{
     data::{
-        DaProposal, DaProposal2, EpochNumber, QuorumProposal, QuorumProposal2,
+        DaProposal, DaProposal2, EpochNumber, Leaf2, QuorumProposal, QuorumProposal2,
         QuorumProposalWrapper, VidCommitment, VidDisperseShare, ViewNumber,
     },
     drb::{DrbInput, DrbResult},
     event::HotShotAction,
-    message::{Proposal, convert_proposal},
+    message::Proposal,
     simple_certificate::{
-        LightClientStateUpdateCertificateV2, NextEpochQuorumCertificate2, QuorumCertificate2,
-        UpgradeCertificate,
+        Certificate2, LightClientStateUpdateCertificateV2, NextEpochQuorumCertificate2,
+        QuorumCertificate2, UpgradeCertificate,
     },
     traits::{node_implementation::NodeType, storage::Storage},
     vote::HasViewNumber,
@@ -54,12 +54,15 @@ pub struct TestStorageState<TYPES: NodeType> {
     next_epoch_high_qc2:
         Option<hotshot_types::simple_certificate::NextEpochQuorumCertificate2<TYPES>>,
     action: ViewNumber,
+    action_log: Vec<(ViewNumber, HotShotAction)>,
     epoch: Option<EpochNumber>,
     state_certs: BTreeMap<EpochNumber, LightClientStateUpdateCertificateV2<TYPES>>,
     drb_results: BTreeMap<EpochNumber, DrbResult>,
     drb_inputs: BTreeMap<u64, DrbInput>,
     epoch_roots: BTreeMap<EpochNumber, TYPES::BlockHeader>,
     restart_view: ViewNumber,
+    anchor_leaf: Option<(Leaf2<TYPES>, QuorumCertificate2<TYPES>)>,
+    cert2s: BTreeMap<ViewNumber, Certificate2<TYPES>>,
 }
 
 impl<TYPES: NodeType> Default for TestStorageState<TYPES> {
@@ -76,12 +79,15 @@ impl<TYPES: NodeType> Default for TestStorageState<TYPES> {
             eqc: None,
             next_epoch_high_qc2: None,
             action: ViewNumber::genesis(),
+            action_log: Vec::new(),
             epoch: None,
             state_certs: BTreeMap::new(),
             drb_results: BTreeMap::new(),
             drb_inputs: BTreeMap::new(),
             epoch_roots: BTreeMap::new(),
             restart_view: ViewNumber::genesis(),
+            anchor_leaf: None,
+            cert2s: BTreeMap::new(),
         }
     }
 }
@@ -139,8 +145,40 @@ impl<TYPES: NodeType> TestStorage<TYPES> {
         self.inner.read().await.action
     }
 
+    /// Every action successfully recorded, in call order.
+    pub async fn action_log(&self) -> Vec<(ViewNumber, HotShotAction)> {
+        self.inner.read().await.action_log.clone()
+    }
+
     pub async fn restart_view(&self) -> ViewNumber {
         self.inner.read().await.restart_view
+    }
+
+    /// Record the newest decided leaf and the QC certifying it, keeping the
+    /// pair with the highest view. Plays the role of the application-level
+    /// anchor persistence (e.g. `append_decided_leaves` in the sequencer);
+    /// the anchor is what a restarted node resumes consensus from.
+    pub async fn update_anchor_leaf(&self, leaf: Leaf2<TYPES>, qc: QuorumCertificate2<TYPES>) {
+        let mut inner = self.inner.write().await;
+        if inner
+            .anchor_leaf
+            .as_ref()
+            .is_none_or(|(anchor, _)| leaf.view_number() > anchor.view_number())
+        {
+            inner.anchor_leaf = Some((leaf, qc));
+        }
+    }
+
+    pub async fn anchor_leaf(&self) -> Option<(Leaf2<TYPES>, QuorumCertificate2<TYPES>)> {
+        self.inner.read().await.anchor_leaf.clone()
+    }
+
+    pub async fn insert_cert2(&self, view: ViewNumber, cert2: Certificate2<TYPES>) {
+        self.inner.write().await.cert2s.insert(view, cert2);
+    }
+
+    pub async fn cert2(&self, view: ViewNumber) -> Option<Certificate2<TYPES>> {
+        self.inner.read().await.cert2s.get(&view).cloned()
     }
 
     pub async fn last_actioned_epoch(&self) -> Option<EpochNumber> {
@@ -264,6 +302,7 @@ impl<TYPES: NodeType> Storage<TYPES> for TestStorage<TYPES> {
             bail!("Failed to append Action to storage");
         }
         let mut inner = self.inner.write().await;
+        inner.action_log.push((view, action));
         if matches!(
             action,
             HotShotAction::Vote | HotShotAction::Propose | HotShotAction::TimeoutVote
@@ -383,18 +422,6 @@ impl<TYPES: NodeType> Storage<TYPES> for TestStorage<TYPES> {
         decided_upgrade_certificate: Option<UpgradeCertificate<TYPES>>,
     ) -> Result<()> {
         *self.decided_upgrade_certificate.write().await = decided_upgrade_certificate;
-
-        Ok(())
-    }
-
-    async fn migrate_storage(&self) -> Result<()> {
-        let mut storage_writer = self.inner.write().await;
-
-        for (view, proposal) in storage_writer.proposals.clone().iter() {
-            storage_writer
-                .proposals2
-                .insert(*view, convert_proposal(proposal.clone()));
-        }
 
         Ok(())
     }

@@ -15,7 +15,7 @@
 
 use std::fmt::Debug;
 
-use alloy::primitives::U256;
+use alloy_primitives::U256;
 use committable::{Commitment, Committable};
 use hotshot_utils::anytrace;
 
@@ -24,6 +24,7 @@ use crate::{
     PeerConfig,
     data::{EpochNumber, Leaf2, ViewNumber},
     drb::DrbResult,
+    epoch_membership::EpochMembershipCoordinator,
     stake_table::supermajority_threshold,
     traits::signature_key::StakeTableEntryType,
 };
@@ -282,33 +283,40 @@ pub trait Membership<T: NodeType>: Debug + Send + Sync {
     fn first_epoch(&self) -> Option<EpochNumber>;
 
     /// Get the highest epoch for which a stake table is currently in memory,
-    /// or `None` if no stake tables are loaded. Used at startup to find the
-    /// point from which to walk forward catching up missing epochs.
-    fn highest_known_epoch(&self) -> Option<EpochNumber> {
-        None
-    }
+    /// or `None` if no stake tables are loaded. It is where catchup resumes
+    /// from, so an implementation that leaves it at `None` makes catchup
+    /// rediscover that point one epoch at a time.
+    fn highest_known_epoch(&self) -> Option<EpochNumber>;
 
     /// Gets the validated block header and epoch number of the epoch root
     /// at the given block height.
     fn get_epoch_root(
         &self,
         e: EpochNumber,
+        coordinator: &EpochMembershipCoordinator<T>,
     ) -> impl Future<Output = Result<Leaf2<T>, Self::Error>> + Send;
 
     /// Gets the DRB result for the given epoch.
     fn get_epoch_drb(
         &self,
         e: EpochNumber,
+        coordinator: &EpochMembershipCoordinator<T>,
     ) -> impl Future<Output = Result<DrbResult, Self::Error>> + Send;
 
     /// Handles notifications that a new epoch root has been created.
     fn add_epoch_root(
         &self,
         h: T::BlockHeader,
+        coordinator: &EpochMembershipCoordinator<T>,
     ) -> impl Future<Output = Result<(), Self::Error>> + Send;
 
     /// Called to notify the Membership when a new DRB result has been calculated.
     fn add_drb_result(&self, e: EpochNumber, d: DrbResult);
+
+    /// Load the committee for `epoch` from local storage.
+    ///
+    /// Returns `true` if a snapshot for `epoch` is available afterwards.
+    fn load_stake_table(&self, epoch: EpochNumber) -> impl Future<Output = bool> + Send;
 
     /// Called to notify the Membership that Epochs are enabled.
     /// Implementations should copy the pre-epoch stake table into epoch and epoch+1

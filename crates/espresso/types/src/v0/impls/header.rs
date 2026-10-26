@@ -9,10 +9,11 @@ use either::Either;
 use hotshot_query_service_types::{
     HeightIndexed, availability::QueryableHeader, explorer::traits::ExplorerHeader,
 };
+#[cfg(feature = "node")]
+use hotshot_types::utils::is_ge_epoch_root;
 use hotshot_types::{
     data::{EpochNumber, VidCommitment, ViewNumber, vid_commitment},
     light_client::LightClientState,
-    stake_table::HSStakeTable,
     traits::{
         BlockPayload, EncodeBytes, ValidatedState as _,
         block_contents::{BlockHeader, BuilderFee, GENESIS_VID_NUM_STORAGE_NODES},
@@ -20,7 +21,7 @@ use hotshot_types::{
         node_implementation::NodeType,
         signature_key::BuilderSignatureKey,
     },
-    utils::{BuilderCommitment, epoch_from_block_number, is_ge_epoch_root, is_last_block},
+    utils::{BuilderCommitment, epoch_from_block_number, is_last_block},
 };
 use jf_merkle_tree_compat::{AppendableMerkleTreeScheme, MerkleCommitment, MerkleTreeScheme};
 use serde::{
@@ -29,9 +30,12 @@ use serde::{
 };
 use serde_json::{Map, Value};
 use thiserror::Error;
+#[cfg(feature = "node")]
 use time::OffsetDateTime;
 use vbs::version::Version;
-use versions::{DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_REWARD_VERSION, EPOCH_VERSION};
+use versions::EPOCH_REWARD_VERSION;
+#[cfg(feature = "node")]
+use versions::{DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_VERSION};
 
 use super::{
     instance_state::NodeState, state::ValidatedState, v0_1::IterableFeeInfo, v0_3::ChainConfig,
@@ -39,11 +43,11 @@ use super::{
 use crate::{
     BlockMerkleCommitment, FeeAccount, FeeAmount, FeeInfo, FeeMerkleCommitment, Header,
     L1BlockInfo, L1Snapshot, Leaf2, NamespaceId, NsIndex, NsTable, PayloadByteLen, SeqTypes,
-    TimestampMillis, UpgradeType,
+    TimestampMillis,
     eth_signature_key::BuilderSignature,
     v0::{
         header::{EitherOrVersion, VersionedHeader},
-        impls::{StakeTableHash, distribute_block_reward},
+        impls::StakeTableHash,
     },
     v0_1::{self},
     v0_2,
@@ -53,8 +57,11 @@ use crate::{
     },
     v0_4::{self, RewardAccountV2, RewardMerkleCommitmentV2},
     v0_5::{self, LeaderCounts, MAX_VALIDATORS},
-    v0_6::{self, REWARD_MERKLE_TREE_V2_HEIGHT, RewardMerkleTreeV2},
+    v0_6::{self},
+    v0_7,
 };
+#[cfg(feature = "node")]
+use crate::{UpgradeType, v0::impls::distribute_block_reward};
 
 impl v0_1::Header {
     pub(crate) fn commit(&self) -> Commitment<Header> {
@@ -119,11 +126,6 @@ impl Committable for Header {
                 .u64_field("version_minor", 7)
                 .field("fields", fields.commit())
                 .finalize(),
-            Self::V8(fields) => RawCommitmentBuilder::new(&Self::tag())
-                .u64_field("version_major", 0)
-                .u64_field("version_minor", 8)
-                .field("fields", fields.commit())
-                .finalize(),
         }
     }
 
@@ -168,11 +170,6 @@ impl Serialize for Header {
             .serialize(serializer),
             Self::V7(fields) => VersionedHeader {
                 version: EitherOrVersion::Version(Version { major: 0, minor: 7 }),
-                fields: fields.clone(),
-            }
-            .serialize(serializer),
-            Self::V8(fields) => VersionedHeader {
-                version: EitherOrVersion::Version(Version { major: 0, minor: 8 }),
                 fields: fields.clone(),
             }
             .serialize(serializer),
@@ -229,19 +226,14 @@ impl<'de> Deserialize<'de> for Header {
                         seq.next_element()?
                             .ok_or_else(|| de::Error::missing_field("fields"))?,
                     )),
-                    EitherOrVersion::Version(Version {
-                        major: 0,
-                        minor: minor @ 6..=8,
-                    }) => {
-                        let fields = seq
-                            .next_element()?
-                            .ok_or_else(|| de::Error::missing_field("fields"))?;
-                        Ok(match minor {
-                            7 => Header::V7(fields),
-                            8 => Header::V8(fields),
-                            _ => Header::V6(fields),
-                        })
-                    },
+                    EitherOrVersion::Version(Version { major: 0, minor: 6 }) => Ok(Header::V6(
+                        seq.next_element()?
+                            .ok_or_else(|| de::Error::missing_field("fields"))?,
+                    )),
+                    EitherOrVersion::Version(Version { major: 0, minor: 7 }) => Ok(Header::V7(
+                        seq.next_element()?
+                            .ok_or_else(|| de::Error::missing_field("fields"))?,
+                    )),
                     EitherOrVersion::Version(v) => {
                         Err(serde::de::Error::custom(format!("invalid version {v:?}")))
                     },
@@ -279,18 +271,12 @@ impl<'de> Deserialize<'de> for Header {
                         EitherOrVersion::Version(Version { major: 0, minor: 5 }) => Ok(Header::V5(
                             serde_json::from_value(fields.clone()).map_err(de::Error::custom)?,
                         )),
-                        EitherOrVersion::Version(Version {
-                            major: 0,
-                            minor: minor @ 6..=8,
-                        }) => {
-                            let fields = serde_json::from_value(fields.clone())
-                                .map_err(de::Error::custom)?;
-                            Ok(match minor {
-                                7 => Header::V7(fields),
-                                8 => Header::V8(fields),
-                                _ => Header::V6(fields),
-                            })
-                        },
+                        EitherOrVersion::Version(Version { major: 0, minor: 6 }) => Ok(Header::V6(
+                            serde_json::from_value(fields.clone()).map_err(de::Error::custom)?,
+                        )),
+                        EitherOrVersion::Version(Version { major: 0, minor: 7 }) => Ok(Header::V7(
+                            serde_json::from_value(fields.clone()).map_err(de::Error::custom)?,
+                        )),
                         EitherOrVersion::Version(v) => {
                             Err(de::Error::custom(format!("invalid version {v:?}")))
                         },
@@ -352,7 +338,6 @@ impl Header {
             Self::V5(_) => Version { major: 0, minor: 5 },
             Self::V6(_) => Version { major: 0, minor: 6 },
             Self::V7(_) => Version { major: 0, minor: 7 },
-            Self::V8(_) => Version { major: 0, minor: 8 },
         }
     }
     #[allow(clippy::too_many_arguments)]
@@ -465,33 +450,44 @@ impl Header {
                 next_stake_table_hash,
                 leader_counts: leader_counts.expect("leader_counts required for V5 header"),
             }),
-            // V6 header format is used for v0.6, v0.7, and v0.8 (new protocol).
-            (0, 6) | (0, 7) | (0, 8) => {
-                let fields = v0_6::Header {
-                    chain_config: chain_config.into(),
-                    height,
-                    timestamp,
-                    timestamp_millis: TimestampMillis::from_millis(timestamp_millis),
-                    l1_head,
-                    l1_finalized,
-                    payload_commitment,
-                    builder_commitment,
-                    ns_table,
-                    block_merkle_tree_root,
-                    fee_merkle_tree_root,
-                    fee_info: fee_info[0],
-                    builder_signature: builder_signature.first().copied(),
-                    reward_merkle_tree_root: reward_merkle_tree_root_v2,
-                    total_reward_distributed: total_reward_distributed.unwrap_or_default(),
-                    next_stake_table_hash,
-                    leader_counts: leader_counts.expect("leader_counts required for V6+ header"),
-                };
-                match version.minor {
-                    7 => Self::V7(fields),
-                    8 => Self::V8(fields),
-                    _ => Self::V6(fields),
-                }
-            },
+            (0, 6) => Self::V6(v0_6::Header {
+                chain_config: chain_config.into(),
+                height,
+                timestamp,
+                timestamp_millis: TimestampMillis::from_millis(timestamp_millis),
+                l1_head,
+                l1_finalized,
+                payload_commitment,
+                builder_commitment,
+                ns_table,
+                block_merkle_tree_root,
+                fee_merkle_tree_root,
+                fee_info: fee_info[0],
+                builder_signature: builder_signature.first().copied(),
+                reward_merkle_tree_root: reward_merkle_tree_root_v2,
+                total_reward_distributed: total_reward_distributed.unwrap_or_default(),
+                next_stake_table_hash,
+                leader_counts: leader_counts.expect("leader_counts required for V6 header"),
+            }),
+            // From 0.7 the header carries no builder commitment.
+            (0, 7) => Self::V7(v0_7::Header {
+                chain_config: chain_config.into(),
+                height,
+                timestamp,
+                timestamp_millis: TimestampMillis::from_millis(timestamp_millis),
+                l1_head,
+                l1_finalized,
+                payload_commitment,
+                ns_table,
+                block_merkle_tree_root,
+                fee_merkle_tree_root,
+                fee_info: fee_info[0],
+                builder_signature: builder_signature.first().copied(),
+                reward_merkle_tree_root: reward_merkle_tree_root_v2,
+                total_reward_distributed: total_reward_distributed.unwrap_or_default(),
+                next_stake_table_hash,
+                leader_counts: leader_counts.expect("leader_counts required for V7 header"),
+            }),
             // This case should never occur
             // but if it does, we must panic
             // because we don't have the versioned types for this version
@@ -502,9 +498,8 @@ impl Header {
     pub fn next_stake_table_hash(&self) -> Option<StakeTableHash> {
         match self {
             Self::V4(fields) => fields.next_stake_table_hash,
-            Self::V5(fields) | Self::V6(fields) | Self::V7(fields) | Self::V8(fields) => {
-                fields.next_stake_table_hash
-            },
+            Self::V5(fields) | Self::V6(fields) => fields.next_stake_table_hash,
+            Self::V7(fields) => fields.next_stake_table_hash,
             _ => None,
         }
     }
@@ -513,9 +508,8 @@ impl Header {
     /// Returns None for earlier versions.
     pub fn leader_counts(&self) -> Option<&LeaderCounts> {
         match self {
-            Self::V5(fields) | Self::V6(fields) | Self::V7(fields) | Self::V8(fields) => {
-                Some(&fields.leader_counts)
-            },
+            Self::V5(fields) | Self::V6(fields) => Some(&fields.leader_counts),
+            Self::V7(fields) => Some(&fields.leader_counts),
             _ => None,
         }
     }
@@ -526,7 +520,11 @@ impl Header {
                 fields.next_stake_table_hash = Some(hash);
                 true
             },
-            Self::V5(fields) | Self::V6(fields) | Self::V7(fields) | Self::V8(fields) => {
+            Self::V5(fields) | Self::V6(fields) => {
+                fields.next_stake_table_hash = Some(hash);
+                true
+            },
+            Self::V7(fields) => {
                 fields.next_stake_table_hash = Some(hash);
                 true
             },
@@ -546,7 +544,6 @@ macro_rules! field {
             Self::V5(data) => &data.$name,
             Self::V6(data) => &data.$name,
             Self::V7(data) => &data.$name,
-            Self::V8(data) => &data.$name,
         }
     };
 }
@@ -561,12 +558,12 @@ macro_rules! field_mut {
             Self::V5(data) => &mut data.$name,
             Self::V6(data) => &mut data.$name,
             Self::V7(data) => &mut data.$name,
-            Self::V8(data) => &mut data.$name,
         }
     };
 }
 
 impl Header {
+    #[cfg_attr(not(feature = "node"), allow(dead_code))]
     #[allow(clippy::too_many_arguments)]
     fn from_info(
         payload_commitment: VidCommitment,
@@ -787,34 +784,44 @@ impl Header {
                 next_stake_table_hash,
                 leader_counts: leader_counts.expect("leader_counts is required for V5 headers"),
             }),
-            // V6 header format is used for v0.6, v0.7, and v0.8 (new protocol).
-            (0, 6) | (0, 7) | (0, 8) => {
-                let fields = v0_6::Header {
-                    chain_config: chain_config.into(),
-                    height,
-                    timestamp,
-                    timestamp_millis: TimestampMillis::from_millis(timestamp_millis),
-                    l1_head: l1.head,
-                    l1_finalized: l1.finalized,
-                    payload_commitment,
-                    builder_commitment,
-                    ns_table,
-                    block_merkle_tree_root,
-                    fee_merkle_tree_root,
-                    reward_merkle_tree_root: state.reward_merkle_tree_v2.commitment(),
-                    fee_info: fee_info[0],
-                    builder_signature: builder_signature.first().copied(),
-                    total_reward_distributed: total_reward_distributed.unwrap_or_default(),
-                    next_stake_table_hash,
-                    leader_counts: leader_counts
-                        .expect("leader_counts is required for V6+ headers"),
-                };
-                match version.minor {
-                    7 => Self::V7(fields),
-                    8 => Self::V8(fields),
-                    _ => Self::V6(fields),
-                }
-            },
+            (0, 6) => Self::V6(v0_6::Header {
+                chain_config: chain_config.into(),
+                height,
+                timestamp,
+                timestamp_millis: TimestampMillis::from_millis(timestamp_millis),
+                l1_head: l1.head,
+                l1_finalized: l1.finalized,
+                payload_commitment,
+                builder_commitment,
+                ns_table,
+                block_merkle_tree_root,
+                fee_merkle_tree_root,
+                reward_merkle_tree_root: state.reward_merkle_tree_v2.commitment(),
+                fee_info: fee_info[0],
+                builder_signature: builder_signature.first().copied(),
+                total_reward_distributed: total_reward_distributed.unwrap_or_default(),
+                next_stake_table_hash,
+                leader_counts: leader_counts.expect("leader_counts is required for V6 headers"),
+            }),
+            // From 0.7 the header carries no builder commitment.
+            (0, 7) => Self::V7(v0_7::Header {
+                chain_config: chain_config.into(),
+                height,
+                timestamp,
+                timestamp_millis: TimestampMillis::from_millis(timestamp_millis),
+                l1_head: l1.head,
+                l1_finalized: l1.finalized,
+                payload_commitment,
+                ns_table,
+                block_merkle_tree_root,
+                fee_merkle_tree_root,
+                reward_merkle_tree_root: state.reward_merkle_tree_v2.commitment(),
+                fee_info: fee_info[0],
+                builder_signature: builder_signature.first().copied(),
+                total_reward_distributed: total_reward_distributed.unwrap_or_default(),
+                next_stake_table_hash,
+                leader_counts: leader_counts.expect("leader_counts is required for V7 headers"),
+            }),
             // This case should never occur
             // but if it does, we must panic
             // because we don't have the versioned types for this version
@@ -916,9 +923,10 @@ impl Header {
     ///   validation.
     ///
     /// If the previous epoch's result is missing at the boundary (e.g. after a
-    /// restart or catchup), the function fetches the epoch's leaf, recovers the
-    /// leader counts and stake table, computes rewards synchronously, and applies
-    /// them before proceeding.
+    /// restart), the function spawns the calculation and awaits it before
+    /// applying. The background task fetches the epoch's leaf and recovers the
+    /// leader counts and stake table itself, returning zero rewards for epochs
+    /// whose header version is < V5
     ///
     /// # Returns
     /// `(total_rewards_applied, changed_accounts)` — the total reward amount
@@ -969,9 +977,11 @@ impl Header {
 
         tracing::info!(%height, %epoch, %prev_epoch, "epoch boundary: applying rewards");
 
-        let (epoch_rewards_applied, changed_accounts) = if let Some(result) =
-            reward_calculator.get_result(prev_epoch).await
-        {
+        // Take the result. A failed task propagates its
+        // error here rather than retrying
+        let result = reward_calculator.get_result(prev_epoch).await.transpose()?;
+
+        let (epoch_rewards_applied, changed_accounts) = if let Some(result) = result {
             tracing::info!(
                 %epoch,
                 prev_epoch = %result.epoch,
@@ -984,95 +994,39 @@ impl Header {
             // Previous epoch is too early to have rewards.
             (RewardAmount::default(), HashSet::new())
         } else {
-            // the background result is missing
-            // Fetch the previous epoch's leaf and compute rewards synchronously.
-            let prev_epoch_last_block = *prev_epoch * epoch_height;
-            if let Err(err) = coordinator.membership_for_epoch(Some(prev_epoch)) {
-                tracing::info!(%prev_epoch, "stake table missing for prev_epoch, triggering catchup: {err:#}");
-                coordinator
-                    .wait_for_catchup(prev_epoch)
-                    .await
-                    .context(format!("failed to catch up for prev_epoch={prev_epoch}"))?;
-            }
+            // The background result is missing so compute
+            tracing::warn!(
+                %epoch,
+                %prev_epoch,
+                "missing epoch rewards at boundary, spawning calculation now"
+            );
 
-            let prev_snapshot = coordinator
-                .membership()
-                .snapshot(prev_epoch)
-                .with_context(|| format!("no committee for prev_epoch={prev_epoch}"))?;
+            reward_calculator.spawn_background_task(
+                prev_epoch,
+                epoch_height,
+                validated_state.reward_merkle_tree_v2.clone(),
+                instance_state.clone(),
+                coordinator.clone(),
+                None,
+            );
 
-            let stake_table = HSStakeTable::from_iter(prev_snapshot.stake_table());
-            let success_threshold = prev_snapshot.success_threshold();
-
-            let prev_epoch_leaf = instance_state
-                .state_catchup
-                .as_ref()
-                .fetch_leaf(prev_epoch_last_block, stake_table, success_threshold)
+            let result = reward_calculator
+                .get_result(prev_epoch)
                 .await
-                .with_context(|| {
-                    format!(
-                        "failed to fetch leaf at height {prev_epoch_last_block} for prev_epoch \
-                         {prev_epoch}"
-                    )
-                })?;
-            let prev_epoch_header = prev_epoch_leaf.block_header();
+                .context(format!("no pending reward task for epoch {prev_epoch}"))?
+                .context(format!(
+                    "failed to calculate missing rewards for epoch {prev_epoch}"
+                ))?;
 
-            if prev_epoch_header.version() >= EPOCH_REWARD_VERSION {
-                tracing::warn!(
-                    %epoch,
-                    %prev_epoch,
-                    "missing epoch rewards at boundary, spawning calculation now"
-                );
+            tracing::info!(
+                %epoch,
+                %prev_epoch,
+                total = %result.total_distributed.0,
+                "applied delayed epoch rewards"
+            );
 
-                if !reward_calculator.is_calculating(prev_epoch) {
-                    // Pick the reward tree to build on
-                    // use the local tree if its
-                    // root matches what the previous epoch's header committed to,
-                    // otherwise start from an empty tree because catchup will fill it
-                    let expected_root = prev_epoch_header.reward_merkle_tree_root().right();
-                    let actual_root = validated_state.reward_merkle_tree_v2.commitment();
-                    let reward_tree = if expected_root == Some(actual_root) {
-                        validated_state.reward_merkle_tree_v2.clone()
-                    } else {
-                        tracing::warn!(
-                            %epoch,
-                            %prev_epoch,
-                            ?expected_root,
-                            ?actual_root,
-                            "reward merkle tree root mismatch, using empty tree for catchup"
-                        );
-                        RewardMerkleTreeV2::new(REWARD_MERKLE_TREE_V2_HEIGHT)
-                    };
-
-                    reward_calculator.spawn_background_task(
-                        prev_epoch,
-                        epoch_height,
-                        reward_tree,
-                        instance_state.clone(),
-                        coordinator.clone(),
-                        prev_epoch_header.leader_counts().copied(),
-                    );
-                }
-
-                let result = reward_calculator
-                    .get_result(prev_epoch)
-                    .await
-                    .context(format!(
-                        "failed to calculate missing rewards for epoch {prev_epoch}"
-                    ))?;
-
-                tracing::info!(
-                    %epoch,
-                    %prev_epoch,
-                    total = %result.total_distributed.0,
-                    "applied delayed epoch rewards"
-                );
-
-                validated_state.reward_merkle_tree_v2 = result.reward_tree.clone();
-                (result.total_distributed, result.changed_accounts)
-            } else {
-                tracing::info!(%epoch, %prev_epoch, "no rewards for pre-V5 epoch");
-                (RewardAmount::default(), HashSet::new())
-            }
+            validated_state.reward_merkle_tree_v2 = result.reward_tree.clone();
+            (result.total_distributed, result.changed_accounts)
         };
 
         // Verify the reward tree root matches the proposed header, if available.
@@ -1080,6 +1034,9 @@ impl Header {
         if let Some(header_root) = header_root
             && calculated_root != header_root
         {
+            // The result came from an unfinalized boundary proposal's leader counts, so the
+            // next application must not reuse it.
+            reward_calculator.discard(prev_epoch);
             bail!(
                 "reward merkle tree root mismatch, using new merkle tree. Header root: \
                  {header_root}, Calculated root: {calculated_root}"
@@ -1100,6 +1057,7 @@ impl Header {
         Ok((epoch_rewards_applied, changed_accounts))
     }
 
+    #[cfg_attr(not(feature = "node"), allow(dead_code))]
     async fn get_chain_config(
         validated_state: &ValidatedState,
         instance_state: &NodeState,
@@ -1134,8 +1092,8 @@ impl Header {
             Self::V2(fields) => v0_3::ResolvableChainConfig::from(&fields.chain_config),
             Self::V3(fields) => fields.chain_config,
             Self::V4(fields) => fields.chain_config,
-            Self::V5(fields) => fields.chain_config,
-            Self::V6(fields) | Self::V7(fields) | Self::V8(fields) => fields.chain_config,
+            Self::V5(fields) | Self::V6(fields) => fields.chain_config,
+            Self::V7(fields) => fields.chain_config,
         }
     }
 
@@ -1153,8 +1111,8 @@ impl Header {
             Self::V2(fields) => fields.timestamp,
             Self::V3(fields) => fields.timestamp,
             Self::V4(fields) => fields.timestamp,
-            Self::V5(fields) => fields.timestamp,
-            Self::V6(fields) | Self::V7(fields) | Self::V8(fields) => fields.timestamp,
+            Self::V5(fields) | Self::V6(fields) => fields.timestamp,
+            Self::V7(fields) => fields.timestamp,
         }
     }
 
@@ -1164,8 +1122,8 @@ impl Header {
             Self::V2(fields) => fields.timestamp * 1_000,
             Self::V3(fields) => fields.timestamp * 1_000,
             Self::V4(fields) => fields.timestamp_millis.u64(),
-            Self::V5(fields) => fields.timestamp_millis.u64(),
-            Self::V6(fields) | Self::V7(fields) | Self::V8(fields) => fields.timestamp_millis.u64(),
+            Self::V5(fields) | Self::V6(fields) => fields.timestamp_millis.u64(),
+            Self::V7(fields) => fields.timestamp_millis.u64(),
         }
     }
 
@@ -1184,11 +1142,11 @@ impl Header {
                 fields.timestamp = timestamp;
                 fields.timestamp_millis = TimestampMillis::from_millis(timestamp_millis);
             },
-            Self::V5(fields) => {
+            Self::V5(fields) | Self::V6(fields) => {
                 fields.timestamp = timestamp;
                 fields.timestamp_millis = TimestampMillis::from_millis(timestamp_millis);
             },
-            Self::V6(fields) | Self::V7(fields) | Self::V8(fields) => {
+            Self::V7(fields) => {
                 fields.timestamp = timestamp;
                 fields.timestamp_millis = TimestampMillis::from_millis(timestamp_millis);
             },
@@ -1219,6 +1177,10 @@ impl Header {
     /// Rollups that want a stronger guarantee of finality, or that want Espresso to attest to data
     /// from the L1 block that might change in reorgs, can instead use the latest L1 _finalized_
     /// block at the time this L2 block was sequenced: [`Self::l1_finalized`].
+    ///
+    /// Leaders propose `local_head - L1_HEAD_MARGIN` clamped to the parent's `l1_head` and the
+    /// finalized block, so this value may trail the proposer's L1 head by up to `L1_HEAD_MARGIN`
+    /// blocks.
     pub fn l1_head(&self) -> u64 {
         *field!(self.l1_head)
     }
@@ -1257,12 +1219,16 @@ impl Header {
         &mut *field_mut!(self.payload_commitment)
     }
 
-    pub fn builder_commitment(&self) -> &BuilderCommitment {
-        field!(self.builder_commitment)
-    }
-
-    pub fn builder_commitment_mut(&mut self) -> &mut BuilderCommitment {
-        &mut *field_mut!(self.builder_commitment)
+    /// `None` from 0.7, when the header stopped carrying a builder commitment.
+    pub fn builder_commitment(&self) -> Option<&BuilderCommitment> {
+        match self {
+            Self::V1(data) => Some(&data.builder_commitment),
+            Self::V2(data) => Some(&data.builder_commitment),
+            Self::V3(data) => Some(&data.builder_commitment),
+            Self::V4(data) => Some(&data.builder_commitment),
+            Self::V5(data) | Self::V6(data) => Some(&data.builder_commitment),
+            Self::V7(_) => None,
+        }
     }
 
     pub fn ns_table(&self) -> &NsTable {
@@ -1298,8 +1264,8 @@ impl Header {
             Self::V2(fields) => vec![fields.fee_info],
             Self::V3(fields) => vec![fields.fee_info],
             Self::V4(fields) => vec![fields.fee_info],
-            Self::V5(fields) => vec![fields.fee_info],
-            Self::V6(fields) | Self::V7(fields) | Self::V8(fields) => vec![fields.fee_info],
+            Self::V5(fields) | Self::V6(fields) => vec![fields.fee_info],
+            Self::V7(fields) => vec![fields.fee_info],
         }
     }
 
@@ -1312,10 +1278,8 @@ impl Header {
             Self::V2(_) => Either::Left(empty_reward_merkle_tree.commitment()),
             Self::V3(fields) => Either::Left(fields.reward_merkle_tree_root),
             Self::V4(fields) => Either::Right(fields.reward_merkle_tree_root),
-            Self::V5(fields) => Either::Right(fields.reward_merkle_tree_root),
-            Self::V6(fields) | Self::V7(fields) | Self::V8(fields) => {
-                Either::Right(fields.reward_merkle_tree_root)
-            },
+            Self::V5(fields) | Self::V6(fields) => Either::Right(fields.reward_merkle_tree_root),
+            Self::V7(fields) => Either::Right(fields.reward_merkle_tree_root),
         }
     }
 
@@ -1337,10 +1301,8 @@ impl Header {
             Self::V2(fields) => fields.builder_signature.as_slice().to_vec(),
             Self::V3(fields) => fields.builder_signature.as_slice().to_vec(),
             Self::V4(fields) => fields.builder_signature.as_slice().to_vec(),
-            Self::V5(fields) => fields.builder_signature.as_slice().to_vec(),
-            Self::V6(fields) | Self::V7(fields) | Self::V8(fields) => {
-                fields.builder_signature.as_slice().to_vec()
-            },
+            Self::V5(fields) | Self::V6(fields) => fields.builder_signature.as_slice().to_vec(),
+            Self::V7(fields) => fields.builder_signature.as_slice().to_vec(),
         }
     }
 
@@ -1348,10 +1310,8 @@ impl Header {
         match self {
             Self::V1(_) | Self::V2(_) | Self::V3(_) => None,
             Self::V4(fields) => Some(fields.total_reward_distributed),
-            Self::V5(fields) => Some(fields.total_reward_distributed),
-            Self::V6(fields) | Self::V7(fields) | Self::V8(fields) => {
-                Some(fields.total_reward_distributed)
-            },
+            Self::V5(fields) | Self::V6(fields) => Some(fields.total_reward_distributed),
+            Self::V7(fields) => Some(fields.total_reward_distributed),
         }
     }
 }
@@ -1370,6 +1330,40 @@ impl InvalidBlockHeader {
 impl From<anyhow::Error> for InvalidBlockHeader {
     fn from(err: anyhow::Error) -> Self {
         Self::new(format!("{err:#}"))
+    }
+}
+
+/// Blocks the proposer holds `l1_head` behind its local L1 head, so validators trailing the
+/// proposer by at most this many blocks do not wait in `wait_for_block`.
+const L1_HEAD_MARGIN: u64 = 3;
+
+/// The `l1_head` a leader with local L1 head `local_head` should propose.
+///
+/// At least `parent_l1_head` and `finalized`; at most `local_head` unless the parent or
+/// finalized block exceeds it.
+fn proposal_l1_head(local_head: u64, parent_l1_head: u64, finalized: Option<u64>) -> u64 {
+    local_head
+        .saturating_sub(L1_HEAD_MARGIN)
+        .max(parent_l1_head)
+        .max(finalized.unwrap_or(0))
+}
+
+impl L1Snapshot {
+    /// This snapshot with `head` replaced by the `l1_head` a leader should propose on top of a
+    /// parent with `parent_l1_head`.
+    fn for_proposal(&self, parent_l1_head: u64) -> Self {
+        // The parent clamp hides `from_info`'s lagging-client warning on this path.
+        if self.head < parent_l1_head {
+            tracing::warn!(
+                local = self.head,
+                parent = parent_l1_head,
+                "local L1 head behind parent, L1 client may be lagging"
+            );
+        }
+        Self {
+            head: proposal_l1_head(self.head, parent_l1_head, self.finalized.map(|f| f.number)),
+            ..*self
+        }
     }
 }
 
@@ -1393,6 +1387,7 @@ impl BlockHeader<SeqTypes> for Header {
             version,
         )
     )]
+    #[cfg_attr(not(feature = "node"), allow(unused_variables))]
     async fn new(
         parent_state: &ValidatedState,
         instance_state: &NodeState,
@@ -1404,213 +1399,230 @@ impl BlockHeader<SeqTypes> for Header {
         version: Version,
         view_number: u64,
     ) -> Result<Self, Self::Error> {
-        tracing::info!("preparing to propose header");
-
-        let height = parent_leaf.height();
-        let view = parent_leaf.view_number();
-
-        let mut validated_state = parent_state.clone();
-
-        let chain_config = if version > instance_state.current_version {
-            match instance_state.upgrades.get(&version) {
-                Some(upgrade) => match upgrade.upgrade_type {
-                    UpgradeType::Fee { chain_config } => chain_config,
-                    UpgradeType::Epoch { chain_config } => chain_config,
-                    UpgradeType::DrbAndHeader { chain_config } => chain_config,
-                    UpgradeType::Da { chain_config } => chain_config,
-                    UpgradeType::EpochReward { chain_config } => chain_config,
-                },
-                None => Header::get_chain_config(&validated_state, instance_state).await?,
-            }
-        } else {
-            Header::get_chain_config(&validated_state, instance_state).await?
-        };
-
-        validated_state.chain_config = chain_config.into();
-
-        // Fetch the latest L1 snapshot.
-        let l1_snapshot = instance_state.l1_client.snapshot().await;
-        // Fetch the new L1 deposits between parent and current finalized L1 block.
-        let l1_deposits = if let (Some(addr), Some(block_info)) =
-            (chain_config.fee_contract, l1_snapshot.finalized)
+        // Proposing requires the L1 client for the L1 snapshot and deposits.
+        #[cfg(not(feature = "node"))]
         {
-            instance_state
-                .l1_client
-                .get_finalized_deposits(
-                    addr,
-                    parent_leaf
-                        .block_header()
-                        .l1_finalized()
-                        .map(|block_info| block_info.number),
-                    block_info.number,
-                )
-                .await
-        } else {
-            vec![]
-        };
-        // Find missing fee state entries. We will need to use the builder account which is paying a
-        // fee and the recipient account which is receiving it, plus any counts receiving deposits
-        // in this block.
-        let missing_accounts = parent_state.forgotten_accounts(
-            [builder_fee.fee_account, chain_config.fee_recipient]
-                .into_iter()
-                .chain(l1_deposits.iter().map(|info| info.account())),
-        );
-        if !missing_accounts.is_empty() {
-            tracing::warn!(
-                height,
-                ?view,
-                ?missing_accounts,
-                "fetching missing accounts from peers"
-            );
+            unimplemented!("proposing a block header requires the node feature");
+        }
+        #[cfg(feature = "node")]
+        {
+            tracing::info!("preparing to propose header");
 
-            // Fetch missing fee state entries
-            let missing_account_proofs = instance_state
-                .state_catchup
-                .as_ref()
-                .fetch_accounts(
-                    instance_state,
+            let height = parent_leaf.height();
+            let view = parent_leaf.view_number();
+
+            let mut validated_state = parent_state.clone();
+
+            let chain_config = if version > instance_state.current_version {
+                match instance_state.upgrades.get(&version) {
+                    Some(upgrade) => match upgrade.upgrade_type {
+                        UpgradeType::Fee { chain_config } => chain_config,
+                        UpgradeType::Epoch { chain_config } => chain_config,
+                        UpgradeType::DrbAndHeader { chain_config } => chain_config,
+                        UpgradeType::NewProtocol { chain_config } => chain_config,
+                        UpgradeType::EpochReward { chain_config } => chain_config,
+                        UpgradeType::LargeBlock { chain_config } => chain_config,
+                    },
+                    None => Header::get_chain_config(&validated_state, instance_state).await?,
+                }
+            } else {
+                Header::get_chain_config(&validated_state, instance_state).await?
+            };
+
+            validated_state.chain_config = chain_config.into();
+
+            // Fetch the latest L1 snapshot.
+            let l1_snapshot = instance_state
+                .l1_client
+                .snapshot()
+                .await
+                .for_proposal(parent_leaf.block_header().l1_head());
+            // Fetch the new L1 deposits between parent and current finalized L1 block.
+            let l1_deposits = if version >= versions::NEW_PROTOCOL_VERSION {
+                Vec::new()
+            } else if let (Some(addr), Some(block_info)) =
+                (chain_config.fee_contract, l1_snapshot.finalized)
+            {
+                instance_state
+                    .l1_client
+                    .get_finalized_deposits(
+                        addr,
+                        parent_leaf
+                            .block_header()
+                            .l1_finalized()
+                            .map(|block_info| block_info.number),
+                        block_info.number,
+                    )
+                    .await
+            } else {
+                vec![]
+            };
+            // Find missing fee state entries. We will need to use the builder account which is paying a
+            // fee and the recipient account which is receiving it, plus any counts receiving deposits
+            // in this block.
+            let missing_accounts = parent_state.forgotten_accounts(
+                [builder_fee.fee_account, chain_config.fee_recipient]
+                    .into_iter()
+                    .chain(l1_deposits.iter().map(|info| info.account())),
+            );
+            if !missing_accounts.is_empty() {
+                tracing::warn!(
                     height,
-                    view,
-                    parent_state.fee_merkle_tree.commitment(),
-                    missing_accounts,
+                    ?view,
+                    ?missing_accounts,
+                    "fetching missing accounts from peers"
+                );
+
+                // Fetch missing fee state entries
+                let missing_account_proofs = instance_state
+                    .state_catchup
+                    .as_ref()
+                    .fetch_accounts(
+                        instance_state,
+                        height,
+                        view,
+                        parent_state.fee_merkle_tree.commitment(),
+                        missing_accounts,
+                    )
+                    .await?;
+
+                // Insert missing fee state entries
+                for proof in missing_account_proofs.iter() {
+                    proof
+                        .remember(&mut validated_state.fee_merkle_tree)
+                        .context("remembering fee account")?;
+                }
+            }
+
+            // Ensure merkle tree has frontier
+            if validated_state.need_to_fetch_blocks_mt_frontier() {
+                tracing::warn!(height, ?view, "fetching block frontier from peers");
+                instance_state
+                    .state_catchup
+                    .as_ref()
+                    .remember_blocks_merkle_tree(
+                        instance_state,
+                        height,
+                        view,
+                        &mut validated_state.block_merkle_tree,
+                    )
+                    .await
+                    .context("remembering block proof")?;
+            }
+
+            // Handle rewards and calculate leader_counts based on version
+            let (leader_counts, total_reward_distributed) = if version >= EPOCH_REWARD_VERSION {
+                let epoch_height = instance_state
+                    .epoch_height
+                    .context("epoch_height not configured for V6")?;
+                // Use the new block's height (parent + 1), not the parent's height
+                let new_height = height + 1;
+                let leader_index =
+                    Header::get_leader_index(version, new_height, view_number, instance_state)
+                        .await?
+                        .context("leader_index must be present for V6")?;
+
+                let leader_counts = Header::calculate_leader_counts(
+                    parent_leaf.block_header(),
+                    new_height,
+                    leader_index,
+                    epoch_height,
+                );
+
+                let (epoch_rewards_applied, _changed_accounts) = Header::handle_epoch_rewards(
+                    new_height,
+                    &leader_counts,
+                    instance_state,
+                    &mut validated_state,
+                    None,
                 )
                 .await?;
 
-            // Insert missing fee state entries
-            for proof in missing_account_proofs.iter() {
-                proof
-                    .remember(&mut validated_state.fee_merkle_tree)
-                    .context("remembering fee account")?;
-            }
-        }
+                // Note: changed_accounts are not used here during header creation.
+                // Delta updates are handled in apply_header during validation.
 
-        // Ensure merkle tree has frontier
-        if validated_state.need_to_fetch_blocks_mt_frontier() {
-            tracing::warn!(height, ?view, "fetching block frontier from peers");
-            instance_state
-                .state_catchup
-                .as_ref()
-                .remember_blocks_merkle_tree(
-                    instance_state,
-                    height,
-                    view,
-                    &mut validated_state.block_merkle_tree,
+                let parent_total = parent_leaf
+                    .block_header()
+                    .total_reward_distributed()
+                    .unwrap_or_default();
+
+                (
+                    Some(leader_counts),
+                    Some(RewardAmount(parent_total.0 + epoch_rewards_applied.0)),
                 )
-                .await
-                .context("remembering block proof")?;
-        }
+            } else if version >= EPOCH_VERSION {
+                // V3-V4: per-block distribution returns cumulative total
+                let total = distribute_block_reward(
+                    instance_state,
+                    &mut validated_state,
+                    parent_leaf,
+                    ViewNumber::new(view_number),
+                    version,
+                )
+                .await?
+                .map(|r| r.total_distributed());
 
-        // Handle rewards and calculate leader_counts based on version
-        let (leader_counts, total_reward_distributed) = if version >= EPOCH_REWARD_VERSION {
-            let epoch_height = instance_state
-                .epoch_height
-                .context("epoch_height not configured for V6")?;
-            // Use the new block's height (parent + 1), not the parent's height
-            let new_height = height + 1;
-            let leader_index =
-                Header::get_leader_index(version, new_height, view_number, instance_state)
-                    .await?
-                    .context("leader_index must be present for V6")?;
+                (None, total)
+            } else {
+                (None, None)
+            };
 
-            let leader_counts = Header::calculate_leader_counts(
-                parent_leaf.block_header(),
-                new_height,
-                leader_index,
-                epoch_height,
-            );
+            let mut next_stake_table_hash = None;
 
-            let (epoch_rewards_applied, _changed_accounts) = Header::handle_epoch_rewards(
-                new_height,
-                &leader_counts,
-                instance_state,
-                &mut validated_state,
-                None,
-            )
-            .await?;
+            if version >= DRB_AND_HEADER_UPGRADE_VERSION {
+                let epoch_height = instance_state
+                    .epoch_height
+                    .context("epoch height not in instance state")?;
+                if is_ge_epoch_root(height + 1, epoch_height) {
+                    let coordinator = instance_state.coordinator.clone();
+                    let first_epoch = {
+                        coordinator
+                            .membership()
+                            .first_epoch()
+                            .context("The first epoch was not set.")?
+                    };
 
-            // Note: changed_accounts are not used here during header creation.
-            // Delta updates are handled in apply_header during validation.
+                    let epoch = EpochNumber::new(epoch_from_block_number(height + 1, epoch_height));
 
-            let parent_total = parent_leaf
-                .block_header()
-                .total_reward_distributed()
-                .unwrap_or_default();
-
-            (
-                Some(leader_counts),
-                Some(RewardAmount(parent_total.0 + epoch_rewards_applied.0)),
-            )
-        } else if version >= EPOCH_VERSION {
-            // V3-V4: per-block distribution returns cumulative total
-            let total = distribute_block_reward(
-                instance_state,
-                &mut validated_state,
-                parent_leaf,
-                ViewNumber::new(view_number),
-                version,
-            )
-            .await?
-            .map(|r| r.total_distributed());
-
-            (None, total)
-        } else {
-            (None, None)
-        };
-
-        let mut next_stake_table_hash = None;
-
-        if version >= DRB_AND_HEADER_UPGRADE_VERSION {
-            let epoch_height = instance_state
-                .epoch_height
-                .context("epoch height not in instance state")?;
-            if is_ge_epoch_root(height + 1, epoch_height) {
-                let coordinator = instance_state.coordinator.clone();
-                let first_epoch = {
-                    coordinator
-                        .membership()
-                        .first_epoch()
-                        .context("The first epoch was not set.")?
-                };
-
-                let epoch = EpochNumber::new(epoch_from_block_number(height + 1, epoch_height));
-
-                // first 2 epochs don't have a stake table hash because they are configured.
-                if epoch > first_epoch {
-                    let epoch_membership = coordinator
-                        .stake_table_for_epoch(Some(epoch + 1))
-                        .map_err(|e| anyhow::anyhow!("failed to get epoch membership: {e}"))?;
-                    next_stake_table_hash = Some(
-                        epoch_membership
-                            .stake_table_hash()
-                            .context("failed to get next stake table hash")?,
-                    );
+                    // first 2 epochs don't have a stake table hash because they are configured.
+                    if epoch > first_epoch {
+                        let epoch_membership = coordinator
+                            .stake_table_for_epoch(Some(epoch + 1))
+                            .map_err(|e| {
+                            anyhow::anyhow!("failed to get epoch membership: {e}")
+                        })?;
+                        next_stake_table_hash = Some(
+                            epoch_membership
+                                .stake_table_hash()
+                                .context("failed to get next stake table hash")?,
+                        );
+                    }
                 }
             }
+
+            let now = OffsetDateTime::now_utc();
+
+            let timestamp = now.unix_timestamp() as u64;
+            let timestamp_millis = TimestampMillis::from_time(&now).u64();
+
+            Ok(Self::from_info(
+                payload_commitment,
+                builder_commitment,
+                metadata,
+                parent_leaf,
+                l1_snapshot,
+                &l1_deposits,
+                vec![builder_fee],
+                timestamp,
+                timestamp_millis,
+                validated_state,
+                chain_config,
+                version,
+                total_reward_distributed,
+                next_stake_table_hash,
+                leader_counts,
+            )?)
         }
-
-        let now = OffsetDateTime::now_utc();
-
-        let timestamp = now.unix_timestamp() as u64;
-        let timestamp_millis = TimestampMillis::from_time(&now).u64();
-
-        Ok(Self::from_info(
-            payload_commitment,
-            builder_commitment,
-            metadata,
-            parent_leaf,
-            l1_snapshot,
-            &l1_deposits,
-            vec![builder_fee],
-            timestamp,
-            timestamp_millis,
-            validated_state,
-            chain_config,
-            version,
-            total_reward_distributed,
-            next_stake_table_hash,
-            leader_counts,
-        )?)
     }
 
     fn genesis(
@@ -1701,9 +1713,12 @@ impl BlockHeader<SeqTypes> for Header {
         self.ns_table()
     }
 
-    /// Commit over fee_amount, payload_commitment and metadata
+    /// From 0.7 the header carries none. The trait wants a value, so those
+    /// headers report the digest of no bytes.
     fn builder_commitment(&self) -> BuilderCommitment {
-        self.builder_commitment().clone()
+        self.builder_commitment()
+            .cloned()
+            .unwrap_or_else(BuilderCommitment::empty)
     }
 
     fn get_light_client_state(&self, view: ViewNumber) -> anyhow::Result<LightClientState> {
@@ -1721,58 +1736,34 @@ impl BlockHeader<SeqTypes> for Header {
     }
 
     fn auth_root(&self) -> anyhow::Result<B256> {
-        match self {
-            Header::V1(_) | Header::V2(_) | Header::V3(_) => Ok(B256::ZERO),
-            Header::V4(header) => {
-                // Temporary placeholder values for future fields
-                let placeholder_1 = B256::ZERO;
-                let placeholder_2 = B256::ZERO;
-                let placeholder_3 = B256::ZERO;
-                let placeholder_4 = B256::ZERO;
-                let placeholder_5 = B256::ZERO;
-                let placeholder_6 = B256::ZERO;
-                let placeholder_7 = B256::ZERO;
+        // Only the second reward tree, carried from 0.4 on, feeds the auth root.
+        let Either::Right(reward_merkle_tree_root) = self.reward_merkle_tree_root() else {
+            return Ok(B256::ZERO);
+        };
 
-                let mut hasher = Keccak256::new();
+        // Temporary placeholder values for future fields
+        let placeholder_1 = B256::ZERO;
+        let placeholder_2 = B256::ZERO;
+        let placeholder_3 = B256::ZERO;
+        let placeholder_4 = B256::ZERO;
+        let placeholder_5 = B256::ZERO;
+        let placeholder_6 = B256::ZERO;
+        let placeholder_7 = B256::ZERO;
 
-                let digest = header.reward_merkle_tree_root.digest();
-                hasher.update(digest.0);
-                hasher.update(placeholder_1);
-                hasher.update(placeholder_2);
-                hasher.update(placeholder_3);
-                hasher.update(placeholder_4);
-                hasher.update(placeholder_5);
-                hasher.update(placeholder_6);
-                hasher.update(placeholder_7);
+        let mut hasher = Keccak256::new();
 
-                Ok(hasher.finalize())
-            },
-            Header::V5(header) | Header::V6(header) | Header::V7(header) | Header::V8(header) => {
-                // Temporary placeholder values for future fields
-                let placeholder_1 = B256::ZERO;
-                let placeholder_2 = B256::ZERO;
-                let placeholder_3 = B256::ZERO;
-                let placeholder_4 = B256::ZERO;
-                let placeholder_5 = B256::ZERO;
-                let placeholder_6 = B256::ZERO;
-                let placeholder_7 = B256::ZERO;
+        // Start with the reward Merkle tree root digest as the base input
+        let digest = reward_merkle_tree_root.digest();
+        hasher.update(digest.0);
+        hasher.update(placeholder_1);
+        hasher.update(placeholder_2);
+        hasher.update(placeholder_3);
+        hasher.update(placeholder_4);
+        hasher.update(placeholder_5);
+        hasher.update(placeholder_6);
+        hasher.update(placeholder_7);
 
-                let mut hasher = Keccak256::new();
-
-                // Start with the reward Merkle tree root digest as the base input
-                let digest = header.reward_merkle_tree_root.digest();
-                hasher.update(digest.0);
-                hasher.update(placeholder_1);
-                hasher.update(placeholder_2);
-                hasher.update(placeholder_3);
-                hasher.update(placeholder_4);
-                hasher.update(placeholder_5);
-                hasher.update(placeholder_6);
-                hasher.update(placeholder_7);
-
-                Ok(hasher.finalize())
-            },
-        }
+        Ok(hasher.finalize())
     }
 }
 
@@ -1939,7 +1930,7 @@ mod test_headers {
 
             let header = Header::from_info(
                 genesis.header.payload_commitment(),
-                genesis.header.builder_commitment().clone(),
+                genesis.header.builder_commitment().unwrap().clone(),
                 genesis.ns_table,
                 &parent_leaf,
                 L1Snapshot {
@@ -2213,7 +2204,7 @@ mod test_headers {
         let key_pair = EthKeyPair::for_test();
         let fee_amount = 0u64;
         let payload_commitment = parent_header.payload_commitment();
-        let builder_commitment = parent_header.builder_commitment();
+        let builder_commitment = parent_header.builder_commitment().unwrap().clone();
         let ns_table = genesis.ns_table;
         let fee_signature = FeeAccount::sign_fee(&key_pair, fee_amount, &ns_table).unwrap();
         let builder_fee = BuilderFee {
@@ -2305,7 +2296,7 @@ mod test_headers {
             3,
             Default::default(),
             header.payload_commitment(),
-            header.builder_commitment().clone(),
+            header.builder_commitment().unwrap().clone(),
             ns_table.clone(),
             header.fee_merkle_tree_root(),
             header.block_merkle_tree_root(),
@@ -2338,7 +2329,7 @@ mod test_headers {
             3,
             Default::default(),
             header.payload_commitment(),
-            header.builder_commitment().clone(),
+            header.builder_commitment().unwrap().clone(),
             ns_table.clone(),
             header.fee_merkle_tree_root(),
             header.block_merkle_tree_root(),
@@ -2371,7 +2362,7 @@ mod test_headers {
             3,
             Default::default(),
             header.payload_commitment(),
-            header.builder_commitment().clone(),
+            header.builder_commitment().unwrap().clone(),
             ns_table.clone(),
             header.fee_merkle_tree_root(),
             header.block_merkle_tree_root(),
@@ -2410,5 +2401,89 @@ mod test_headers {
         let deserialized: Header =
             BincodeSerializer::<StaticVersion<0, 3>>::deserialize(&v3_bytes).unwrap();
         assert_eq!(v3_header, deserialized);
+
+        let v7_header = Header::create(
+            genesis.instance_state.chain_config,
+            1,
+            2,
+            2_000_000_000,
+            3,
+            Default::default(),
+            header.payload_commitment(),
+            header.builder_commitment().unwrap().clone(),
+            ns_table.clone(),
+            header.fee_merkle_tree_root(),
+            header.block_merkle_tree_root(),
+            header.reward_merkle_tree_root().left().unwrap_or_else(|| {
+                RewardMerkleTreeV1::new(REWARD_MERKLE_TREE_V1_HEIGHT).commitment()
+            }),
+            header.reward_merkle_tree_root().right().unwrap_or_else(|| {
+                RewardMerkleTreeV2::new(REWARD_MERKLE_TREE_V2_HEIGHT).commitment()
+            }),
+            vec![FeeInfo {
+                amount: 0.into(),
+                account: fee_account,
+            }],
+            Default::default(),
+            None,
+            version(0, 7),
+            None,
+            Some([0; MAX_VALIDATORS]),
+        );
+        assert_eq!(v7_header.version(), version(0, 7));
+
+        let serialized = serde_json::to_string(&v7_header).unwrap();
+        let deserialized: Header = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(v7_header, deserialized);
+
+        let v7_bytes = BincodeSerializer::<StaticVersion<0, 7>>::serialize(&v7_header).unwrap();
+        let deserialized: Header =
+            BincodeSerializer::<StaticVersion<0, 7>>::deserialize(&v7_bytes).unwrap();
+        assert_eq!(v7_header, deserialized);
+    }
+
+    #[test]
+    fn test_proposal_l1_head() {
+        // (local_head, parent_l1_head, finalized, expected)
+        let cases = [
+            // Margin applies: local head is well ahead of both floors.
+            (100, 50, None, 97),
+            // Parent floor: local head trails the parent by less than the margin.
+            (100, 99, None, 99),
+            // Parent floor: local head is behind the parent entirely.
+            (100, 120, None, 120),
+            // Mixed fleet: an old, eager proposer built the parent at the tip.
+            (100, 100, None, 100),
+            // Near L1 genesis: `saturating_sub` floors at 0, then the parent clamp applies.
+            (2, 0, None, 0),
+            // Finalized floor: short-finalization devnets (Anvil `--slots-in-an-epoch 0|1`) can
+            // finalize within the margin of the head, above `local_head - MARGIN`.
+            (10, 0, Some(8), 8),
+            // Finalized floor still below the margin: the margin wins.
+            (10, 5, Some(3), 7),
+            // Finalized equal to the parent: either floor gives the same result.
+            (10, 9, Some(9), 9),
+        ];
+        for (local_head, parent_l1_head, finalized, expected) in cases {
+            assert_eq!(
+                proposal_l1_head(local_head, parent_l1_head, finalized),
+                expected,
+                "local_head={local_head}, parent_l1_head={parent_l1_head}, finalized={finalized:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_proposal_l1_head_bounds() {
+        for local_head in 0..=10 {
+            for parent_l1_head in 0..=local_head {
+                for finalized in 0..=local_head {
+                    let result = proposal_l1_head(local_head, parent_l1_head, Some(finalized));
+                    assert!(result >= parent_l1_head);
+                    assert!(result >= finalized);
+                    assert!(result <= local_head.max(parent_l1_head));
+                }
+            }
+        }
     }
 }

@@ -9,6 +9,7 @@ use std::{
 
 use rand::RngExt;
 use snow::{Builder, HandshakeState, TransportState, params::NoiseParams};
+use socket2::{SockRef, TcpKeepalive};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpStream,
@@ -18,8 +19,7 @@ use tokio::{
 use tracing::{debug, warn};
 
 use crate::{
-    Config, Version,
-    addr::NetAddr,
+    Config, NetAddr, Version,
     error::NetworkError,
     msg::{Header, MAX_NOISE_MESSAGE_SIZE, hello::Hello},
     util::until,
@@ -42,15 +42,15 @@ type Prologue = Vec<u8>;
 impl Connection {
     pub async fn accept(conf: Arc<Config>, mut stream: TcpStream) -> Result<Self> {
         let node = conf.keypair.public_key();
+        let addr = stream.peer_addr()?;
 
-        if let Err(err) = stream.set_nodelay(true) {
-            warn!(name = %conf.name, %node, %err, "failed to enable NO_DELAY option")
-        }
+        configure_socket(&conf, &node, &addr, &stream);
 
         until(conf.handshake_timeout, async move {
-            let (version, prologue) = select_version(&conf, &mut stream, false).await?;
+            let (version, prologue) =
+                select_version(&node, &addr, &conf, &mut stream, false).await?;
 
-            debug!(name = %conf.name, %node, %version, "negotiated version");
+            debug!(name = %conf.name, %node, %addr, %version, "negotiated version");
 
             let noise_proto = conf
                 .noise_protocols
@@ -65,7 +65,6 @@ impl Connection {
                 .build_responder()
                 .expect("valid noise params yield valid handshake state");
 
-            let addr = stream.peer_addr()?;
             let state = on_handshake(&mut stream, hs).await?;
 
             if let Some(key) = remote_static_key(&state) {
@@ -92,13 +91,15 @@ impl Connection {
             }
         })
         .chain(
-            conf.retry_delays
+            conf.connect_retry_delays
                 .iter()
                 .map(|&d| Duration::from_secs(d.into())),
         )
-        .chain(repeat(conf.max_retry_delay));
+        .chain(repeat({
+            let d = *conf.connect_retry_delays.last();
+            Duration::from_secs(d.into())
+        }));
 
-        let addr = addr.to_string();
         let node = conf.keypair.public_key();
 
         let mut backoff = None;
@@ -173,7 +174,7 @@ impl Connection {
     }
 }
 
-async fn try_connect(conf: &Config, peer: &PublicKey, addr: &str) -> Result<Connection> {
+async fn try_connect(conf: &Config, peer: &PublicKey, addr: &NetAddr) -> Result<Connection> {
     let new_handshake_state = |prologue: &Prologue, params: NoiseParams| {
         Builder::new(params)
             .local_private_key(conf.keypair.secret_key().as_slice())
@@ -186,19 +187,20 @@ async fn try_connect(conf: &Config, peer: &PublicKey, addr: &str) -> Result<Conn
             .expect("valid noise params yield valid handshake state")
     };
 
-    let mut stream = until(conf.connect_timeout, TcpStream::connect(addr)).await?;
+    let mut stream = match addr {
+        NetAddr::Inet(i, p) => until(conf.connect_timeout, TcpStream::connect((*i, *p))).await?,
+        NetAddr::Name(h, p) => until(conf.connect_timeout, TcpStream::connect((&**h, *p))).await?,
+    };
 
     let node = conf.keypair.public_key();
     let addr = stream.peer_addr()?;
 
     debug!(name = %conf.name, %node, %peer, %addr, "tcp connection established");
 
-    if let Err(err) = stream.set_nodelay(true) {
-        warn!(name = %conf.name, %node, %err, "failed to enable NO_DELAY option");
-    }
+    configure_socket(conf, &node, &addr, &stream);
 
     until(conf.handshake_timeout, async move {
-        let (version, prologue) = select_version(conf, &mut stream, true).await?;
+        let (version, prologue) = select_version(&node, &addr, conf, &mut stream, true).await?;
 
         debug!(name = %conf.name, %node, %peer, %addr, %version, "negotiated version");
 
@@ -229,6 +231,21 @@ async fn try_connect(conf: &Config, peer: &PublicKey, addr: &str) -> Result<Conn
     .await
 }
 
+fn configure_socket(conf: &Config, node: &PublicKey, addr: &SocketAddr, stream: &TcpStream) {
+    if let Err(err) = stream.set_nodelay(true) {
+        warn!(name = %conf.name, %node, %addr, %err, "failed to enable no_delay option")
+    }
+
+    let k = TcpKeepalive::new()
+        .with_time(conf.keep_alive_after)
+        .with_interval(conf.keep_alive_interval)
+        .with_retries(conf.keep_alive_retries.into());
+
+    if let Err(err) = SockRef::from(stream).set_tcp_keepalive(&k) {
+        warn!(name = %conf.name, %node, %addr, %err, "failed to enable tcp keepalive");
+    }
+}
+
 fn remote_static_key(state: &TransportState) -> Option<PublicKey> {
     let k = state.get_remote_static()?;
     PublicKey::try_from(k).ok()
@@ -238,22 +255,16 @@ fn remote_static_key(state: &TransportState) -> Option<PublicKey> {
 ///
 /// This will be the minimum of the max. supported ones from both sides.
 async fn select_version(
+    node: &PublicKey,
+    addr: &SocketAddr,
     conf: &Config,
     stream: &mut TcpStream,
     is_initiator: bool,
 ) -> Result<(Version, Prologue)> {
     const INIT_PAYLOAD_LEN: usize = 4;
 
-    let our_min = conf
-        .noise_protocols
-        .first_key_value()
-        .map(|(k, _)| *k)
-        .expect("noise_configs is not empty");
-    let our_max = conf
-        .noise_protocols
-        .last_key_value()
-        .map(|(k, _)| *k)
-        .expect("noise_configs is not empty");
+    let our_min = *conf.noise_protocols.first().0;
+    let our_max = *conf.noise_protocols.last().0;
 
     let mut send_buf = [0u8; INIT_PAYLOAD_LEN];
     let mut recv_buf = [0u8; INIT_PAYLOAD_LEN];
@@ -270,10 +281,15 @@ async fn select_version(
     let selected = min(our_max, their_max);
 
     if selected < their_min || selected < our_min {
-        return Err(NetworkError::IncompatibleVersions {
-            ours: (our_min, our_max),
-            theirs: (their_min, their_max),
-        });
+        warn!(
+            name = %conf.name,
+            %node,
+            %addr,
+            local  = ?(u16::from(our_min), u16::from(our_max)),
+            remote = ?(u16::from(their_min), u16::from(their_max)),
+            "incompatible versions"
+        );
+        return Err(NetworkError::IncompatibleVersions);
     }
 
     // Construct the prologue so that both sides end up with the same value.
@@ -389,11 +405,11 @@ mod tests {
         tokio::join!(
             async {
                 let mut s = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
-                select_version(a, &mut s, true).await
+                select_version(&a.public_key(), &s.peer_addr().unwrap(), a, &mut s, true).await
             },
             async {
                 let (mut s, _) = listener.accept().await.unwrap();
-                select_version(b, &mut s, false).await
+                select_version(&b.public_key(), &s.peer_addr().unwrap(), b, &mut s, false).await
             },
         )
     }
@@ -431,7 +447,7 @@ mod tests {
     #[tokio::test]
     async fn disjoint_ranges_fail() {
         let (ra, rb) = negotiate(&config([1]), &config([2])).await;
-        assert!(matches!(ra, Err(NetworkError::IncompatibleVersions { .. })));
-        assert!(matches!(rb, Err(NetworkError::IncompatibleVersions { .. })));
+        assert!(matches!(ra, Err(NetworkError::IncompatibleVersions)));
+        assert!(matches!(rb, Err(NetworkError::IncompatibleVersions)));
     }
 }

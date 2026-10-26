@@ -1,5 +1,4 @@
-pub use hotshot_new_protocol::message::Certificate2;
-pub use hotshot_types::new_protocol::Proposal as NewProposal;
+pub use hotshot_types::{new_protocol::Proposal as NewProposal, simple_certificate::Certificate2};
 use hotshot_types::{
     signature_key::{BLSPubKey, SchnorrPubKey},
     traits::{node_implementation::NodeType, signature_key::SignatureKey},
@@ -28,8 +27,8 @@ pub use impls::reward::{
 pub use impls::testing;
 pub use impls::{
     BuilderValidationError, EpochCommittees, EpochCommitteesError, EpochSnapshot, FeeError,
-    ProposalValidationError, StateValidationError, ValidatorSet, get_l1_deposits, retain_accounts,
-    validators_from_l1_events,
+    ProposalValidationError, RECENT_STAKE_TABLES_LIMIT, StateValidationError, ValidatorSet,
+    get_l1_deposits, retain_accounts, validators_from_l1_events,
 };
 pub use nsproof::*;
 pub use txproof::*;
@@ -46,7 +45,7 @@ use vbs::version::StaticVersion;
 // instead we write `with_minor_versions!(some_macro!(args))`.
 macro_rules! with_minor_versions {
     ($m:ident!($($arg:tt),*)) => {
-        $m!($($arg,)* v0_1, v0_2, v0_3, v0_4, v0_5, v0_6, v0_7, v0_8);
+        $m!($($arg,)* v0_1, v0_2, v0_3, v0_4, v0_5, v0_6, v0_7);
     };
 }
 
@@ -96,8 +95,8 @@ reexport_unchanged_types!(
     Index,
     Iter,
     L1BlockInfo,
-    L1Client,
     L1ClientOptions,
+    L1SafetyMargin,
     L1Snapshot,
     NamespaceId,
     NsIndex,
@@ -131,10 +130,13 @@ reexport_unchanged_types!(
     BlockSize,
 );
 
+#[cfg(feature = "node")]
+reexport_unchanged_types!(L1Client);
+
 pub use v0_3::StateCertQueryDataV1;
+#[cfg(feature = "node")]
 pub(crate) use v0_3::{L1ClientMetrics, L1Event, L1State, L1UpdateTask};
 pub use v0_4::StateCertQueryDataV2;
-use versions::version;
 
 #[derive(
     Clone, Copy, Debug, Default, Hash, Eq, PartialEq, PartialOrd, Ord, Deserialize, Serialize,
@@ -153,20 +155,20 @@ impl NodeType for SeqTypes {
     type StateSignatureKey = SchnorrPubKey;
 }
 
-pub const MOCK_SEQUENCER_VERSIONS: versions::Upgrade =
-    versions::Upgrade::new(version(0, 1), version(0, 2));
+/// The version integration tests run a network at: the oldest one a live
+/// network can start from.
+pub const TEST_UPGRADE: versions::Upgrade =
+    versions::Upgrade::trivial(versions::NEW_PROTOCOL_VERSION);
 
 pub type FeeVersion = StaticVersion<0, 2>;
 pub type EpochVersion = StaticVersion<0, 3>;
 pub type DrbAndHeaderUpgradeVersion = StaticVersion<0, 4>;
 pub type EpochRewardVersion = StaticVersion<0, 5>;
-pub type DaUpgradeVersion = StaticVersion<0, 6>;
-pub type Vid2UpgradeVersion = StaticVersion<0, 7>;
 
 pub type Leaf = hotshot_types::data::Leaf<SeqTypes>;
 pub type Leaf2 = hotshot_types::data::Leaf2<SeqTypes>;
 
-pub type Event = hotshot::types::Event<SeqTypes>;
+pub type Event = hotshot_types::event::Event<SeqTypes>;
 
 pub type PubKey = BLSPubKey;
 pub type PrivKey = <PubKey as SignatureKey>::PrivateKey;
@@ -182,8 +184,8 @@ pub use crate::{
         to_registered_validator_map,
     },
     v0_1::{
-        BLOCK_MERKLE_TREE_HEIGHT, FEE_MERKLE_TREE_HEIGHT, NS_ID_BYTE_LEN, NS_OFFSET_BYTE_LEN,
-        NUM_NSS_BYTE_LEN, NUM_TXS_BYTE_LEN, TX_OFFSET_BYTE_LEN,
+        BLOCK_MERKLE_TREE_HEIGHT, DECAF_CHAIN_ID, FEE_MERKLE_TREE_HEIGHT, MAINNET_CHAIN_ID,
+        NS_ID_BYTE_LEN, NS_OFFSET_BYTE_LEN, NUM_NSS_BYTE_LEN, NUM_TXS_BYTE_LEN, TX_OFFSET_BYTE_LEN,
     },
     v0_3::ChainConfig,
 };

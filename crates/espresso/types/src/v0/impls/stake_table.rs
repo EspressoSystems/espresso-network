@@ -1,41 +1,55 @@
 use std::{
-    cmp::min,
+    cmp::{max, min},
     collections::{HashMap, HashSet},
-    future::Future,
     str::FromStr,
-    sync::Arc,
     time::{Duration, Instant},
 };
+#[cfg(feature = "node")]
+use std::{future::Future, sync::Arc};
 
+#[cfg(feature = "node")]
 use alloy::{
     eips::{BlockId, BlockNumberOrTag},
-    primitives::{Address, U256, utils::format_ether},
+    primitives::utils::format_ether,
     providers::Provider,
-    rpc::types::{Filter, Log},
+    rpc::types::Filter,
     sol_types::{SolEvent, SolEventInterface},
 };
-use anyhow::{Context, bail, ensure};
+use alloy::{
+    primitives::{Address, U256, address},
+    rpc::types::Log,
+};
+#[cfg(feature = "node")]
+use anyhow::bail;
+use anyhow::{Context, ensure};
 use ark_ec::AffineRepr;
 use ark_serialize::CanonicalSerialize;
 use ark_std::One;
-use async_lock::{Mutex as AsyncMutex, RwLock as AsyncRwLock};
+#[cfg(any(feature = "node", test, feature = "testing"))]
+use async_lock::Mutex as AsyncMutex;
+#[cfg(feature = "node")]
+use async_lock::RwLock as AsyncRwLock;
 use bigdecimal::BigDecimal;
 use committable::{Commitment, Committable, RawCommitmentBuilder};
 use futures::future::BoxFuture;
-use hotshot::types::{BLSPubKey, SchnorrPubKey, SignatureKey as _};
+#[cfg(feature = "node")]
 use hotshot_contract_adapter::sol_types::{
     EspToken::{self, EspTokenInstance},
-    StakeTableV3::{
-        self, CommissionUpdated, ConsensusKeysUpdated, ConsensusKeysUpdatedV2, Delegated,
-        P2pAddrUpdated, StakeTableV3Events, Undelegated, UndelegatedV2, ValidatorExit,
-        ValidatorExitV2, ValidatorRegistered, ValidatorRegisteredV2, ValidatorRegisteredV3,
-        X25519KeyUpdated,
+    StakeTableV3,
+};
+use hotshot_contract_adapter::{
+    sol_types::StakeTableV3::{
+        CommissionUpdated, ConsensusKeysUpdated, ConsensusKeysUpdatedV2, Delegated, P2pAddrUpdated,
+        StakeTableV3Events, Undelegated, UndelegatedV2, ValidatorExit, ValidatorExitV2,
+        ValidatorRegistered, ValidatorRegisteredV2, ValidatorRegisteredV3, X25519KeyUpdated,
     },
+    stake_table::StakeTableSolError,
 };
 use hotshot_types::{
-    PeerConfig,
     addr::NetAddr,
     data::{EpochNumber, vid_disperse::VID_TARGET_TOTAL_STAKE},
+    signature_key::{BLSPubKey, SchnorrPubKey},
+    traits::signature_key::SignatureKey as _,
     x25519,
 };
 use humantime::format_duration;
@@ -43,26 +57,38 @@ use indexmap::IndexMap;
 use itertools::Itertools;
 use num_traits::{FromPrimitive, Zero};
 use thiserror::Error;
-use tokio::{spawn, time::sleep};
+#[cfg(feature = "node")]
+use tokio::spawn;
+use tokio::time::sleep;
+#[cfg(feature = "node")]
 use tracing::Instrument;
 use vbs::version::Version;
 
+#[cfg(feature = "node")]
+use super::L1Client;
 #[cfg(any(test, feature = "testing"))]
 use super::v0_3::DAMembers;
 use super::{
-    Header, L1Client, SeqTypes,
-    traits::{MembershipPersistence, StateCatchup},
+    Header,
+    traits::StateCatchup,
     v0_3::{
         AuthenticatedValidator, ChainConfig, EventKey, Fetcher, MAX_VALIDATORS,
-        RegisteredValidator, StakeTableEvent, StakeTableUpdateTask,
+        RegisteredValidator, StakeTableEvent,
     },
 };
+#[cfg(feature = "node")]
+use super::{traits::MembershipPersistence, v0_3::StakeTableUpdateTask};
+#[cfg(feature = "node")]
+use crate::traits::EventsPersistenceRead;
+#[cfg(feature = "node")]
+use crate::v0_1::L1Provider;
+#[cfg(feature = "node")]
+use crate::v0_3::{BLOCKS_PER_YEAR, INFLATION_RATE};
 use crate::{
-    traits::EventsPersistenceRead,
-    v0_1::L1Provider,
+    v0_1::{ChainId, DECAF_CHAIN_ID, MAINNET_CHAIN_ID},
     v0_3::{
-        BLOCKS_PER_YEAR, COMMISSION_BASIS_POINTS, EventSortingError, ExpectedStakeTableError,
-        FetchRewardError, INFLATION_RATE, MILLISECONDS_PER_YEAR, RewardAmount, StakeTableError,
+        COMMISSION_BASIS_POINTS, EventSortingError, ExpectedStakeTableError, FetchRewardError,
+        MILLISECONDS_PER_YEAR, RewardAmount, StakeTableError,
     },
 };
 
@@ -87,6 +113,7 @@ pub type StakeTableHash = Commitment<StakeTableState>;
 type ApplyEventResult<T> = Result<Result<T, ExpectedStakeTableError>, StakeTableError>;
 
 /// Format the alloy Log RPC type in a way to make it easy to find the event in an explorer.
+#[cfg_attr(not(feature = "node"), allow(dead_code))]
 trait DisplayLog {
     fn display(&self) -> String;
 }
@@ -173,6 +200,7 @@ impl TryFrom<StakeTableV3Events> for StakeTableEvent {
     }
 }
 
+#[cfg_attr(not(feature = "node"), allow(dead_code))]
 fn sort_stake_table_events(
     event_logs: Vec<(StakeTableV3Events, Log)>,
 ) -> Result<Vec<(EventKey, StakeTableEvent)>, EventSortingError> {
@@ -205,6 +233,125 @@ pub struct StakeTableState {
     used_bls_keys: HashSet<BLSPubKey>,
     used_schnorr_keys: HashSet<SchnorrPubKey>,
     used_x25519_keys: HashSet<x25519::PublicKey>,
+}
+
+#[cfg(feature = "rlp")]
+mod stake_table_state_rlp {
+    use alloy_rlp::{Decodable, Encodable, RlpDecodable, RlpEncodable};
+
+    use super::*;
+
+    #[derive(RlpEncodable, RlpDecodable)]
+    struct StakeTableStateRlp {
+        validators: Vec<RegisteredValidator<BLSPubKey>>,
+        validator_exits: Vec<Address>,
+        used_bls_keys: Vec<Vec<u8>>,
+        used_schnorr_keys: Vec<Vec<u8>>,
+        used_x25519_keys: Vec<Vec<u8>>,
+    }
+
+    impl TryFrom<&StakeTableState> for StakeTableStateRlp {
+        type Error = anyhow::Error;
+
+        fn try_from(state: &StakeTableState) -> Result<Self, Self::Error> {
+            // The HashSets of used keys do not have a canonical order, so we need to sort them to
+            // make this format canonical.
+            let mut validators = state.validators.values().cloned().collect::<Vec<_>>();
+            validators.sort_by_key(|v| v.account);
+
+            let mut validator_exits = state.validator_exits.iter().copied().collect::<Vec<_>>();
+            validator_exits.sort();
+
+            let mut used_bls_keys = state
+                .used_bls_keys
+                .iter()
+                .map(bincode::serialize)
+                .collect::<Result<Vec<_>, _>>()
+                .context("serializing used_bls_keys")?;
+            used_bls_keys.sort();
+
+            let mut used_schnorr_keys = state
+                .used_schnorr_keys
+                .iter()
+                .map(bincode::serialize)
+                .collect::<Result<Vec<_>, _>>()
+                .context("serializing used_schnorr_keys")?;
+            used_schnorr_keys.sort();
+
+            let mut used_x25519_keys = state
+                .used_x25519_keys
+                .iter()
+                .map(bincode::serialize)
+                .collect::<Result<Vec<_>, _>>()
+                .context("serializing used_x25519_keys")?;
+            used_x25519_keys.sort();
+
+            Ok(Self {
+                validators,
+                validator_exits,
+                used_bls_keys,
+                used_schnorr_keys,
+                used_x25519_keys,
+            })
+        }
+    }
+
+    impl TryFrom<StakeTableStateRlp> for StakeTableState {
+        type Error = anyhow::Error;
+
+        fn try_from(state: StakeTableStateRlp) -> Result<Self, Self::Error> {
+            Ok(Self {
+                validators: state
+                    .validators
+                    .into_iter()
+                    .map(|v| (v.account, v))
+                    .collect(),
+                validator_exits: state.validator_exits.into_iter().collect(),
+                used_bls_keys: state
+                    .used_bls_keys
+                    .iter()
+                    .map(|bytes| bincode::deserialize(bytes))
+                    .collect::<Result<HashSet<_>, _>>()
+                    .context("deserializing used_bls_keys")?,
+                used_schnorr_keys: state
+                    .used_schnorr_keys
+                    .iter()
+                    .map(|bytes| bincode::deserialize(bytes))
+                    .collect::<Result<HashSet<_>, _>>()
+                    .context("deserializing used_schnorr_keys")?,
+                used_x25519_keys: state
+                    .used_x25519_keys
+                    .iter()
+                    .map(|bytes| bincode::deserialize(bytes))
+                    .collect::<Result<HashSet<_>, _>>()
+                    .context("deserializing used_x25519_keys")?,
+            })
+        }
+    }
+
+    impl Encodable for StakeTableState {
+        fn encode(&self, out: &mut dyn alloy_rlp::BufMut) {
+            StakeTableStateRlp::try_from(self)
+                .expect("failed to canonicalize StakeTableState")
+                .encode(out);
+        }
+
+        fn length(&self) -> usize {
+            StakeTableStateRlp::try_from(self)
+                .expect("failed to canonicalize StakeTableState")
+                .length()
+        }
+    }
+
+    impl Decodable for StakeTableState {
+        fn decode(buf: &mut &[u8]) -> alloy_rlp::Result<Self> {
+            let rlp = StakeTableStateRlp::decode(buf)?;
+            rlp.try_into().map_err(|err| {
+                tracing::error!("failed to parse canonical StakeTableState: {err:#}");
+                alloy_rlp::Error::Custom("failed to parse canonical StakeTableState")
+            })
+        }
+    }
 }
 
 impl Committable for StakeTableState {
@@ -311,8 +458,21 @@ impl StakeTableState {
                 schnorrVk,
                 commission,
             }) => {
-                let stake_table_key: BLSPubKey = blsVk.into();
-                let state_ver_key: SchnorrPubKey = schnorrVk.into();
+                let stake_table_key = BLSPubKey::try_from(blsVk).ok();
+                if stake_table_key.is_none() {
+                    tracing::warn!(
+                        ?account,
+                        "registering unauthenticated validator (invalid BLS key)"
+                    );
+                }
+                let state_ver_key = SchnorrPubKey::try_from(schnorrVk).ok();
+                if state_ver_key.is_none() {
+                    tracing::warn!(
+                        ?account,
+                        "registering unauthenticated validator (invalid Schnorr key)"
+                    );
+                }
+                let authenticated = stake_table_key.is_some() && state_ver_key.is_some();
 
                 if self.validator_exits.contains(&account) {
                     return Err(StakeTableError::ValidatorAlreadyExited(account));
@@ -323,23 +483,32 @@ impl StakeTableState {
                     return Err(StakeTableError::AlreadyRegistered(account));
                 }
 
-                // The stake table contract enforces that each bls key is only used once.
-                if self.used_bls_keys.contains(&stake_table_key) {
-                    return Err(StakeTableError::BlsKeyAlreadyUsed(
-                        stake_table_key.to_string(),
-                    ));
+                // Unparsable keys (`None`) are never deduped; the L1 contract
+                // dedups by raw G2 bytes so distinct registrations are unique
+                // on-chain regardless.
+                if let Some(k) = stake_table_key.as_ref()
+                    && self.used_bls_keys.contains(k)
+                {
+                    return Err(StakeTableError::BlsKeyAlreadyUsed(k.to_string()));
                 }
 
                 // The stake table v1 contract does *not* enforce that each schnorr key is only used once.
-                if self.used_schnorr_keys.contains(&state_ver_key) {
+                // Unparsable schnorr keys (`None`) are not deduped.
+                if let Some(k) = state_ver_key.as_ref()
+                    && self.used_schnorr_keys.contains(k)
+                {
                     return Ok(Err(ExpectedStakeTableError::SchnorrKeyAlreadyUsed(
-                        state_ver_key.to_string(),
+                        k.to_string(),
                     )));
                 }
 
                 // All checks ok, applying changes
-                self.used_bls_keys.insert(stake_table_key);
-                self.used_schnorr_keys.insert(state_ver_key.clone());
+                if let Some(k) = stake_table_key.as_ref() {
+                    self.used_bls_keys.insert(*k);
+                }
+                if let Some(k) = state_ver_key.as_ref() {
+                    self.used_schnorr_keys.insert(k.clone());
+                }
 
                 entry.or_insert(RegisteredValidator {
                     account,
@@ -348,31 +517,34 @@ impl StakeTableState {
                     stake: U256::ZERO,
                     commission,
                     delegators: HashMap::new(),
-                    authenticated: true,
+                    authenticated,
                     x25519_key: None,
                     p2p_addr: None,
                 });
             },
 
             StakeTableEvent::RegisterV2(ref reg) => {
-                let authenticated = reg.authenticate().is_ok();
-                if !authenticated {
-                    tracing::warn!(
-                        account = ?reg.account,
-                        "Validator registered with invalid signature"
-                    );
-                }
+                let (stake_table_key, state_ver_key, authenticated) = match reg.authenticate() {
+                    Ok((bls, schnorr)) => (Some(bls), Some(schnorr), true),
+                    Err(e) => {
+                        tracing::warn!(
+                            account = ?reg.account,
+                            %e,
+                            "registering unauthenticated validator",
+                        );
+                        (
+                            BLSPubKey::try_from(reg.blsVK).ok(),
+                            SchnorrPubKey::try_from(reg.schnorrVK).ok(),
+                            false,
+                        )
+                    },
+                };
 
                 let ValidatorRegisteredV2 {
                     account,
-                    blsVK,
-                    schnorrVK,
                     commission,
                     ..
                 } = reg;
-
-                let stake_table_key: BLSPubKey = (*blsVK).into();
-                let state_ver_key: SchnorrPubKey = (*schnorrVK).into();
 
                 // Reject if validator already exited
                 if self.validator_exits.contains(account) {
@@ -384,23 +556,35 @@ impl StakeTableState {
                     return Err(StakeTableError::AlreadyRegistered(*account));
                 }
 
-                // The stake table v2 contract enforces that each bls key is only used once.
-                if self.used_bls_keys.contains(&stake_table_key) {
-                    return Err(StakeTableError::BlsKeyAlreadyUsed(
-                        stake_table_key.to_string(),
-                    ));
+                // Unparsable keys aren't deduped, parsable ones are whether or not the signature verified.
+                if let Some(k) = stake_table_key.as_ref()
+                    && self.used_bls_keys.contains(k)
+                {
+                    return Err(StakeTableError::BlsKeyAlreadyUsed(k.to_string()));
                 }
 
-                // The stake table v2 contract enforces schnorr key is only used once.
-                if self.used_schnorr_keys.contains(&state_ver_key) {
-                    return Err(StakeTableError::SchnorrKeyAlreadyUsed(
-                        state_ver_key.to_string(),
-                    ));
-                }
+                // The contract only remembers schnorr keys registered since its v2 upgrade, so a
+                // key from a v1 registration can be accepted on chain a second time. Decaf started
+                // on the v1 contract and mainnet on v2, so only decaf has v1 registrations.
+                let (state_ver_key, authenticated) = match state_ver_key {
+                    Some(k) if self.used_schnorr_keys.contains(&k) => {
+                        tracing::warn!(
+                            ?account,
+                            schnorr_key = %k,
+                            "registering unauthenticated validator (schnorr key already used)"
+                        );
+                        (None, false)
+                    },
+                    key => (key, authenticated),
+                };
 
                 // All checks ok, applying changes
-                self.used_bls_keys.insert(stake_table_key);
-                self.used_schnorr_keys.insert(state_ver_key.clone());
+                if let Some(k) = stake_table_key.as_ref() {
+                    self.used_bls_keys.insert(*k);
+                }
+                if let Some(k) = state_ver_key.as_ref() {
+                    self.used_schnorr_keys.insert(k.clone());
+                }
 
                 entry.or_insert(RegisteredValidator {
                     account: *account,
@@ -519,8 +703,12 @@ impl StakeTableState {
                     schnorrVK,
                 } = update;
 
-                let stake_table_key: BLSPubKey = blsVK.into();
-                let state_ver_key: SchnorrPubKey = schnorrVK.into();
+                let Ok(stake_table_key) = BLSPubKey::try_from(blsVK) else {
+                    return Ok(Err(ExpectedStakeTableError::InvalidBlsKey));
+                };
+                let Ok(state_ver_key) = SchnorrPubKey::try_from(schnorrVK) else {
+                    return Ok(Err(ExpectedStakeTableError::InvalidSchnorrKey));
+                };
 
                 if !self.validators.contains_key(&account) {
                     return Err(StakeTableError::ValidatorNotFound(account));
@@ -547,26 +735,29 @@ impl StakeTableState {
                 let validator = self.validators.get_mut(&account).unwrap_or_else(|| {
                     panic!("validator {account} must exist after contains_key check")
                 });
-                validator.stake_table_key = stake_table_key;
-                validator.state_ver_key = state_ver_key;
+                validator.stake_table_key = Some(stake_table_key);
+                validator.state_ver_key = Some(state_ver_key);
+                // V1 contract verified BLS POP at submission; no off-chain sig to re-check.
+                validator.authenticated = true;
             },
 
             StakeTableEvent::KeyUpdateV2(update) => {
-                // Signature authentication is performed right after fetching, if we get an
-                // unauthenticated event here, something went wrong, we abort early.
-                update
-                    .authenticate()
-                    .map_err(|e| StakeTableError::AuthenticationFailed(e.to_string()))?;
+                // `validate_event` pre-filters auth failures during live fetch;
+                // on replay an unparsable key is a soft skip, other failures are fatal.
+                let (stake_table_key, state_ver_key) = match update.authenticate() {
+                    Ok(parsed) => parsed,
+                    Err(StakeTableSolError::InvalidBlsKey) => {
+                        return Ok(Err(ExpectedStakeTableError::InvalidBlsKey));
+                    },
+                    Err(StakeTableSolError::InvalidSchnorrKey) => {
+                        return Ok(Err(ExpectedStakeTableError::InvalidSchnorrKey));
+                    },
+                    Err(e) => {
+                        return Err(StakeTableError::AuthenticationFailed(e.to_string()));
+                    },
+                };
 
-                let ConsensusKeysUpdatedV2 {
-                    account,
-                    blsVK,
-                    schnorrVK,
-                    ..
-                } = update;
-
-                let stake_table_key: BLSPubKey = blsVK.into();
-                let state_ver_key: SchnorrPubKey = schnorrVK.into();
+                let ConsensusKeysUpdatedV2 { account, .. } = update;
 
                 if !self.validators.contains_key(&account) {
                     return Err(StakeTableError::ValidatorNotFound(account));
@@ -579,11 +770,10 @@ impl StakeTableState {
                     ));
                 }
 
-                // The stake table v2 contract enforces that each schnorr key is only used once
                 if self.used_schnorr_keys.contains(&state_ver_key) {
-                    return Err(StakeTableError::SchnorrKeyAlreadyUsed(
+                    return Ok(Err(ExpectedStakeTableError::SchnorrKeyAlreadyUsed(
                         state_ver_key.to_string(),
-                    ));
+                    )));
                 }
 
                 // All checks ok, applying changes
@@ -594,8 +784,9 @@ impl StakeTableState {
                 let validator = self.validators.get_mut(&account).unwrap_or_else(|| {
                     panic!("validator {account} must exist after contains_key check")
                 });
-                validator.stake_table_key = stake_table_key;
-                validator.state_ver_key = state_ver_key;
+                validator.stake_table_key = Some(stake_table_key);
+                validator.state_ver_key = Some(state_ver_key);
+                validator.authenticated = true;
             },
 
             StakeTableEvent::CommissionUpdate(CommissionUpdated {
@@ -620,32 +811,33 @@ impl StakeTableState {
             },
 
             StakeTableEvent::RegisterV3(ref reg) => {
-                let authenticated = reg.authenticate().is_ok();
-                if !authenticated {
-                    tracing::warn!(
-                        account = ?reg.account,
-                        "Validator registered with invalid signature"
-                    );
-                }
+                let (stake_table_key, state_ver_key, authenticated) = match reg.authenticate() {
+                    Ok((bls, schnorr)) => (Some(bls), Some(schnorr), true),
+                    Err(e) => {
+                        tracing::warn!(
+                            account = ?reg.account,
+                            %e,
+                            "registering unauthenticated validator",
+                        );
+                        (
+                            BLSPubKey::try_from(reg.blsVK).ok(),
+                            SchnorrPubKey::try_from(reg.schnorrVK).ok(),
+                            false,
+                        )
+                    },
+                };
 
                 let ValidatorRegisteredV3 {
                     account,
-                    blsVK,
-                    schnorrVK,
                     commission,
                     x25519Key,
                     p2pAddr,
                     ..
                 } = reg;
 
-                let stake_table_key: BLSPubKey = (*blsVK).into();
-                let state_ver_key: SchnorrPubKey = (*schnorrVK).into();
-
-                if x25519Key.0 == [0u8; 32] {
-                    return Err(StakeTableError::InvalidX25519Key("zero key".into()));
-                }
-                let x25519_key = x25519::PublicKey::try_from(x25519Key.0.as_slice())
-                    .map_err(|e| StakeTableError::InvalidX25519Key(format!("{e}")))?;
+                let x25519_key = parse_x25519_key(x25519Key.0)
+                    .inspect_err(|e| tracing::warn!(%e, ?account, "Invalid x25519 key"))
+                    .ok();
 
                 // Parse p2p addr
                 let p2p_addr = match p2pAddr.parse::<NetAddr>() {
@@ -667,28 +859,41 @@ impl StakeTableState {
                     return Err(StakeTableError::AlreadyRegistered(*account));
                 }
 
-                if self.used_bls_keys.contains(&stake_table_key) {
-                    return Err(StakeTableError::BlsKeyAlreadyUsed(
-                        stake_table_key.to_string(),
-                    ));
+                // Unparsable keys aren't deduped; the L1 contract dedups by raw G2 bytes.
+                if let Some(k) = stake_table_key.as_ref()
+                    && self.used_bls_keys.contains(k)
+                {
+                    return Err(StakeTableError::BlsKeyAlreadyUsed(k.to_string()));
                 }
 
-                if self.used_schnorr_keys.contains(&state_ver_key) {
-                    return Err(StakeTableError::SchnorrKeyAlreadyUsed(
-                        state_ver_key.to_string(),
-                    ));
+                if let Some(k) = x25519_key.as_ref()
+                    && self.used_x25519_keys.contains(k)
+                {
+                    return Err(StakeTableError::X25519KeyAlreadyUsed(k.to_string()));
                 }
 
-                if self.used_x25519_keys.contains(&x25519_key) {
-                    return Err(StakeTableError::X25519KeyAlreadyUsed(
-                        x25519_key.to_string(),
-                    ));
-                }
+                let (state_ver_key, authenticated) = match state_ver_key {
+                    Some(k) if self.used_schnorr_keys.contains(&k) => {
+                        tracing::warn!(
+                            ?account,
+                            schnorr_key = %k,
+                            "registering unauthenticated validator (schnorr key already used)"
+                        );
+                        (None, false)
+                    },
+                    key => (key, authenticated),
+                };
 
                 // All checks ok, applying changes
-                self.used_bls_keys.insert(stake_table_key);
-                self.used_schnorr_keys.insert(state_ver_key.clone());
-                self.used_x25519_keys.insert(x25519_key);
+                if let Some(k) = stake_table_key.as_ref() {
+                    self.used_bls_keys.insert(*k);
+                }
+                if let Some(k) = state_ver_key.as_ref() {
+                    self.used_schnorr_keys.insert(k.clone());
+                }
+                if let Some(k) = x25519_key.as_ref() {
+                    self.used_x25519_keys.insert(*k);
+                }
 
                 entry.or_insert(RegisteredValidator {
                     account: *account,
@@ -698,7 +903,7 @@ impl StakeTableState {
                     commission: *commission,
                     delegators: HashMap::new(),
                     authenticated,
-                    x25519_key: Some(x25519_key),
+                    x25519_key,
                     p2p_addr,
                 });
             },
@@ -712,13 +917,17 @@ impl StakeTableState {
                     .get_mut(&validator)
                     .ok_or(StakeTableError::ValidatorNotFound(validator))?;
 
-                let key = x25519::PublicKey::try_from(x25519Key.0.as_slice())
-                    .map_err(|e| StakeTableError::InvalidX25519Key(format!("{e}")))?;
-                if self.used_x25519_keys.contains(&key) {
-                    return Err(StakeTableError::X25519KeyAlreadyUsed(key.to_string()));
+                let x25519_key = parse_x25519_key(x25519Key.0)
+                    .inspect_err(|e| tracing::warn!(%e, ?validator, "Invalid x25519 key"))
+                    .ok();
+
+                if let Some(key) = x25519_key {
+                    if self.used_x25519_keys.contains(&key) {
+                        return Err(StakeTableError::X25519KeyAlreadyUsed(key.to_string()));
+                    }
+                    self.used_x25519_keys.insert(key);
                 }
-                self.used_x25519_keys.insert(key);
-                val.x25519_key = Some(key);
+                val.x25519_key = x25519_key;
             },
 
             StakeTableEvent::P2pAddrUpdate(P2pAddrUpdated {
@@ -742,6 +951,16 @@ impl StakeTableState {
 
         Ok(Ok(()))
     }
+}
+
+/// The contract enforces canonical nonzero encodings, so an error here means a
+/// contract bug. Callers degrade it to `None` instead of aborting (defense in
+/// depth): the key only affects p2p networking, not consensus safety, so this
+/// is preferred over halting stake table processing on every node. The zero
+/// check is explicit because the Rust parser accepts the zero encoding.
+fn parse_x25519_key(bytes: [u8; 32]) -> anyhow::Result<x25519::PublicKey> {
+    ensure!(bytes != [0u8; 32], "zero key");
+    Ok(x25519::PublicKey::try_from(bytes.as_slice())?)
 }
 
 pub fn validators_from_l1_events<I: Iterator<Item = StakeTableEvent>>(
@@ -788,18 +1007,17 @@ pub(crate) fn select_active_validator_set(
                 },
                 Ok(cv) => {
                     if cv.delegators.is_empty() {
-                        tracing::info!("Validator {address:?} does not have any delegator");
+                        tracing::debug!("Validator {address:?} does not have any delegator");
                         return None;
                     }
                     if cv.stake.is_zero() {
-                        tracing::info!("Validator {address:?} does not have any stake");
+                        tracing::debug!("Validator {address:?} does not have any stake");
                         return None;
                     }
-                    if !cv.is_eligible(protocol_version) {
+                    if let Err(err) = cv.ensure_eligible(protocol_version) {
                         tracing::debug!(
                             ?address,
-                            has_x25519 = cv.x25519_key.is_some(),
-                            has_p2p = cv.p2p_addr.is_some(),
+                            %err,
                             "Validator not eligible at protocol version {protocol_version}"
                         );
                         return None;
@@ -954,7 +1172,55 @@ impl std::fmt::Debug for StakeTableEvent {
     }
 }
 
+/// ESP token initial supply on Espresso mainnet, in wei (18 decimals).
+const MAINNET_INITIAL_SUPPLY_WEI: u128 = 3_590_000_000_000_000_000_000_000_000;
+/// ESP token initial supply on the Decaf testnet, in wei (18 decimals).
+const DECAF_INITIAL_SUPPLY_WEI: u128 = 10_000_000_000_000_000_000_000_000_000;
+
+/// Attempts to persist a batch of fetched L1 events before giving up.
+#[cfg_attr(not(feature = "node"), allow(dead_code))]
+const STORE_EVENTS_ATTEMPTS: usize = 5;
+/// Delay between those attempts.
+#[cfg_attr(not(feature = "node"), allow(dead_code))]
+const STORE_EVENTS_RETRY_DELAY: Duration = Duration::from_secs(1);
+
+/// Elapsed time between progress reports during an L1 event scan, checked between chunks.
+#[cfg_attr(not(feature = "node"), allow(dead_code))]
+const PROGRESS_INTERVAL: Duration = Duration::from_secs(30);
+
+const MAINNET_STAKE_TABLE_CONTRACT: Address =
+    address!("0xcef474d372b5b09defe2af187bf17338dc704451");
+const DECAF_STAKE_TABLE_CONTRACT: Address = address!("0x40304fbe94d5e7d1492dd90c53a2d63e8506a037");
+
+/// Returns the ESP token's initial supply for the stake table contracts where it is already known.
+///
+/// The initial supply is fixed at token deployment: `fetch_and_update_initial_supply` locates
+/// the one-time `Initialized` event and the matching mint `Transfer` from `address(0)`, which
+/// can only occur once and can never change afterwards. Hardcoding it for known deployments
+/// removes the last L1 dependency on the epoch-root reward-calculation path, so a node whose
+/// L1 connection is down can still compute block rewards.
+///
+/// Keyed on the stake table contract as well as the chain id, so that a redeploy invalidates
+/// the entry: the lookup misses and the node falls back to fetching from L1. The contract
+/// address alone is not a unique key, since the same address can be deployed on more than one
+/// L1.
+///
+/// A wrong constant here has no local symptom: the node keeps computing rewards, just the
+/// wrong ones, diverging from the rest of the network and losing consensus.
+/// `assert_known_initial_supply_matches_l1` (below, in tests) guards against this by fetching
+/// the value from L1 and comparing it to the constant.
+fn known_initial_supply(chain_id: ChainId, stake_table_contract: Address) -> Option<U256> {
+    if chain_id == MAINNET_CHAIN_ID && stake_table_contract == MAINNET_STAKE_TABLE_CONTRACT {
+        Some(U256::from(MAINNET_INITIAL_SUPPLY_WEI))
+    } else if chain_id == DECAF_CHAIN_ID && stake_table_contract == DECAF_STAKE_TABLE_CONTRACT {
+        Some(U256::from(DECAF_INITIAL_SUPPLY_WEI))
+    } else {
+        None
+    }
+}
+
 impl Fetcher {
+    #[cfg(feature = "node")]
     pub fn new(
         peers: Arc<dyn StateCatchup>,
         persistence: Arc<AsyncMutex<dyn MembershipPersistence>>,
@@ -971,6 +1237,7 @@ impl Fetcher {
         }
     }
 
+    #[cfg(feature = "node")]
     pub async fn spawn_update_loop(&self) {
         let mut update_task = self.update_task.0.lock().await;
         if update_task.is_none() {
@@ -982,6 +1249,7 @@ impl Fetcher {
     /// This function polls the finalized block number from the L1 client at an interval
     /// and fetches stake table from contract
     /// and updates the persistence
+    #[cfg(feature = "node")]
     fn update_loop(&self) -> impl Future<Output = ()> + use<> {
         let span = tracing::warn_span!("Stake table update loop");
         let self_clone = self.clone();
@@ -1057,6 +1325,7 @@ impl Fetcher {
     /// contract's initialization block to the provided `to_block` value.
     /// Events are fetched in chunks and retries are implemented for failed requests.
     /// Only new events fetched from L1 are stored in persistence.
+    #[cfg(feature = "node")]
     pub async fn fetch_and_store_stake_table_events(
         &self,
         contract: Address,
@@ -1104,12 +1373,23 @@ impl Fetcher {
             "storing {} new events in storage to_block={to_block:?}",
             contract_events.len()
         );
-        {
-            let persistence_lock = self.persistence.lock().await;
-            persistence_lock
-                .store_events(to_block, contract_events.clone())
-                .await
-                .inspect_err(|e| tracing::error!("failed to store events. err={e}"))?;
+        // A failed write discards the whole scan, which on a cold start is hours of refetching.
+        // The SQL backend only retries serialization conflicts, not transient write failures.
+        for attempt in 1..=STORE_EVENTS_ATTEMPTS {
+            let result = {
+                let persistence_lock = self.persistence.lock().await;
+                persistence_lock
+                    .store_events(to_block, contract_events.clone())
+                    .await
+            };
+            match result {
+                Ok(()) => break,
+                Err(e) if attempt < STORE_EVENTS_ATTEMPTS => {
+                    tracing::warn!(attempt, %e, "failed to store stake table events, retrying");
+                    sleep(STORE_EVENTS_RETRY_DELAY).await;
+                },
+                Err(e) => return Err(e.context("storing stake table events")),
+            }
         }
 
         let mut events = match from_block {
@@ -1140,6 +1420,7 @@ impl Fetcher {
     /// - `Ok(true)` if the event is valid and should be processed
     /// - `Ok(false)` if the event should be skipped (non-fatal error)
     /// - `Err(StakeTableError)` if a fatal error occurs
+    #[cfg_attr(not(feature = "node"), allow(dead_code))]
     fn validate_event(event: &StakeTableV3Events, log: &Log) -> Result<bool, StakeTableError> {
         match event {
             StakeTableV3Events::ConsensusKeysUpdatedV2(evt) => {
@@ -1167,6 +1448,7 @@ impl Fetcher {
     }
 
     /// Break a block range into fixed-size chunks.
+    #[cfg_attr(not(feature = "node"), allow(dead_code))]
     fn block_range_chunks(
         from_block: u64,
         to_block: u64,
@@ -1185,7 +1467,33 @@ impl Fetcher {
         })
     }
 
+    /// Break a block range into fixed-size chunks, highest first.
+    ///
+    /// Both bounds of every chunk are inclusive, as `eth_getLogs` treats them, so a chunk spans
+    /// `chunk_size` blocks rather than `chunk_size + 1`.
+    #[cfg_attr(not(feature = "node"), allow(dead_code))]
+    fn block_range_chunks_rev(
+        from_block: u64,
+        to_block: u64,
+        chunk_size: u64,
+    ) -> impl Iterator<Item = (u64, u64)> {
+        let chunk_size = chunk_size.max(1);
+        let mut end = to_block;
+        let mut exhausted = to_block < from_block;
+        std::iter::from_fn(move || {
+            if exhausted {
+                return None;
+            }
+            let chunk_end = end;
+            let chunk_start = max(from_block, chunk_end.saturating_sub(chunk_size - 1));
+            exhausted = chunk_start == from_block;
+            end = chunk_start.saturating_sub(1);
+            Some((chunk_start, chunk_end))
+        })
+    }
+
     /// Fetch all stake table events from L1
+    #[cfg(feature = "node")]
     pub async fn fetch_events_from_contract(
         l1_client: L1Client,
         contract: Address,
@@ -1224,10 +1532,12 @@ impl Fetcher {
         // default value  is `10000` if env variable is not set
         let chunk_size = l1_client.options().l1_events_max_block_range;
         let chunks = Self::block_range_chunks(from_block, to_block, chunk_size);
+        let scan_start = Instant::now();
+        let mut last_report = Instant::now();
 
         let mut events = vec![];
 
-        for (from, to) in chunks {
+        for (chunk, (from, to)) in chunks.enumerate() {
             let provider = l1_client.provider.clone();
 
             tracing::debug!(from, to, "fetch all stake table events in range");
@@ -1241,51 +1551,96 @@ impl Fetcher {
                     let provider = provider.clone();
 
                     Box::pin(async move {
-                        let filter = Filter::new()
-                            .events([
-                                ValidatorRegistered::SIGNATURE,
-                                ValidatorRegisteredV2::SIGNATURE,
-                                ValidatorRegisteredV3::SIGNATURE,
-                                ValidatorExit::SIGNATURE,
-                                ValidatorExitV2::SIGNATURE,
-                                Delegated::SIGNATURE,
-                                Undelegated::SIGNATURE,
-                                UndelegatedV2::SIGNATURE,
-                                ConsensusKeysUpdated::SIGNATURE,
-                                ConsensusKeysUpdatedV2::SIGNATURE,
-                                CommissionUpdated::SIGNATURE,
-                                X25519KeyUpdated::SIGNATURE,
-                                P2pAddrUpdated::SIGNATURE,
-                            ])
-                            .address(contract)
-                            .from_block(from)
-                            .to_block(to);
-                        provider.get_logs(&filter).await
+                        provider
+                            .get_logs(&Self::events_filter(contract, from, to))
+                            .await
                     })
                 },
             )
             .await;
 
-            let chunk_events = logs
-                .into_iter()
-                .filter_map(|log| {
-                    let event =
-                        StakeTableV3Events::decode_raw_log(log.topics(), &log.data().data).ok()?;
-                    match Self::validate_event(&event, &log) {
-                        Ok(true) => Some(Ok((event, log))),
-                        Ok(false) => None,
-                        Err(e) => Some(Err(e)),
-                    }
-                })
-                .collect::<Result<Vec<_>, _>>()?;
+            events.extend(Self::decode_events(logs)?);
 
-            events.extend(chunk_events);
+            // An up to date node fetches one chunk and finishes before the first report.
+            if last_report.elapsed() >= PROGRESS_INTERVAL {
+                last_report = Instant::now();
+                tracing::info!(
+                    target: "announce",
+                    chunks = chunk + 1,
+                    at_block = to,
+                    to_block,
+                    events = events.len(),
+                    elapsed_secs = scan_start.elapsed().as_secs(),
+                    "scanning stake table event history"
+                );
+            }
         }
 
         sort_stake_table_events(events).map_err(Into::into)
     }
 
+    /// The filter matching every stake table event the fetcher understands.
+    #[cfg(feature = "node")]
+    fn events_filter(contract: Address, from_block: u64, to_block: u64) -> Filter {
+        Filter::new()
+            .events([
+                ValidatorRegistered::SIGNATURE,
+                ValidatorRegisteredV2::SIGNATURE,
+                ValidatorRegisteredV3::SIGNATURE,
+                ValidatorExit::SIGNATURE,
+                ValidatorExitV2::SIGNATURE,
+                Delegated::SIGNATURE,
+                Undelegated::SIGNATURE,
+                UndelegatedV2::SIGNATURE,
+                ConsensusKeysUpdated::SIGNATURE,
+                ConsensusKeysUpdatedV2::SIGNATURE,
+                CommissionUpdated::SIGNATURE,
+                X25519KeyUpdated::SIGNATURE,
+                P2pAddrUpdated::SIGNATURE,
+            ])
+            .address(contract)
+            .from_block(from_block)
+            .to_block(to_block)
+    }
+
+    /// Decode logs, dropping the ones that fail authentication.
+    #[cfg(feature = "node")]
+    fn decode_events(logs: Vec<Log>) -> Result<Vec<(StakeTableV3Events, Log)>, StakeTableError> {
+        logs.into_iter()
+            .filter_map(|log| {
+                let event =
+                    StakeTableV3Events::decode_raw_log(log.topics(), &log.data().data).ok()?;
+                match Self::validate_event(&event, &log) {
+                    Ok(true) => Some(Ok((event, log))),
+                    Ok(false) => None,
+                    Err(e) => Some(Err(e)),
+                }
+            })
+            .collect()
+    }
+
+    /// Fetch all stake table events in a single request.
+    ///
+    /// Unlike [`Self::fetch_events_from_contract`] this neither splits the range into chunks nor
+    /// retries, so a provider that caps the block range or the result size fails immediately
+    /// instead of after the retry budget expires. Callers that can fall back to the chunked
+    /// fetcher use this to avoid paying for chunks against a provider that does not need them.
+    #[cfg(feature = "node")]
+    pub async fn try_fetch_events_from_contract(
+        l1_client: L1Client,
+        contract: Address,
+        from_block: u64,
+        to_block: u64,
+    ) -> anyhow::Result<Vec<(EventKey, StakeTableEvent)>> {
+        let logs = l1_client
+            .provider
+            .get_logs(&Self::events_filter(contract, from_block, to_block))
+            .await?;
+        Ok(sort_stake_table_events(Self::decode_events(logs)?)?)
+    }
+
     // Only used by staking CLI which doesn't have persistence
+    #[cfg(feature = "node")]
     pub async fn fetch_all_validators_from_contract(
         l1_client: L1Client,
         contract: Address,
@@ -1298,16 +1653,46 @@ impl Fetcher {
             .context("failed to construct validators set from l1 events")
     }
 
-    /// Calculates the fixed block reward based on the token's initial supply.
-    /// - The initial supply is fetched from the token contract
-    /// - If the supply is not present, it invokes `fetch_and_update_initial_supply` to retrieve it.
-    pub async fn fetch_fixed_block_reward(&self) -> Result<RewardAmount, FetchRewardError> {
+    /// Returns the initial token supply, fetching it from L1 if not yet known.
+    ///
+    /// Known deployments resolve immediately via `known_initial_supply`, without touching the
+    /// cache or L1. Unknown ones fall back to the cache, then an L1 fetch.
+    #[cfg(feature = "node")]
+    pub async fn initial_supply_or_fetch(&self) -> Result<U256, FetchRewardError> {
+        if let Some(supply) = self.known_initial_supply().await {
+            return Ok(supply);
+        }
+
         // `fetch_and_update_initial_supply` needs a write lock, create temporary to drop lock
-        let initial_supply = *self.initial_supply.read().await;
-        let initial_supply = match initial_supply {
-            Some(supply) => supply,
-            None => self.fetch_and_update_initial_supply().await?,
-        };
+        let supply = *self.initial_supply.read().await;
+        match supply {
+            Some(supply) => Ok(supply),
+            None => self.fetch_and_update_initial_supply().await,
+        }
+    }
+
+    /// Returns the initial token supply, from the hardcoded table or the pre-populated cache.
+    #[cfg(not(feature = "node"))]
+    pub async fn initial_supply_or_fetch(&self) -> Result<U256, FetchRewardError> {
+        if let Some(supply) = self.known_initial_supply().await {
+            return Ok(supply);
+        }
+
+        Ok((*self.initial_supply.read().await).expect("initial supply pre-populated"))
+    }
+
+    /// Returns the hardcoded initial supply for the configured chain and stake table contract,
+    /// if known.
+    async fn known_initial_supply(&self) -> Option<U256> {
+        let chain_config = *self.chain_config.lock().await;
+        known_initial_supply(chain_config.chain_id, chain_config.stake_table_contract?)
+    }
+
+    /// Calculates the fixed block reward based on the token's initial supply,
+    /// obtained via `initial_supply_or_fetch`.
+    #[cfg(feature = "node")]
+    pub async fn fetch_fixed_block_reward(&self) -> Result<RewardAmount, FetchRewardError> {
+        let initial_supply = self.initial_supply_or_fetch().await?;
 
         let reward = ((initial_supply * U256::from(INFLATION_RATE)) / U256::from(BLOCKS_PER_YEAR))
             .checked_div(U256::from(COMMISSION_BASIS_POINTS))
@@ -1332,6 +1717,7 @@ impl Fetcher {
     /// The stake table contract is deployed after the token contract as it holds the token
     /// contract address. We use the stake table contract initialization block as a safe upper bound
     /// when scanning backwards for the token contract initialization event.
+    #[cfg(feature = "node")]
     pub async fn fetch_and_update_initial_supply(&self) -> Result<U256, FetchRewardError> {
         tracing::info!("Fetching token initial supply");
         let chain_config = *self.chain_config.lock().await;
@@ -1448,6 +1834,7 @@ impl Fetcher {
     /// Starting from the stake table contract’s initialization block (which comes after the token contract
     /// is deployed), it scans in chunks (defined by `l1_events_max_block_range`) until it finds the event
     /// or until a maximum number of blocks (`MAX_BLOCKS_SCANNED`) is reached.
+    #[cfg(feature = "node")]
     pub async fn scan_token_contract_initialized_event_log(
         &self,
         stake_table_init_block: u64,
@@ -1455,20 +1842,12 @@ impl Fetcher {
     ) -> Result<Log, FetchRewardError> {
         let max_events_range = self.l1_client.options().l1_events_max_block_range;
         const MAX_BLOCKS_SCANNED: u64 = 200_000;
-        let mut total_scanned = 0;
 
-        let mut from_block = stake_table_init_block.saturating_sub(max_events_range);
-        let mut to_block = stake_table_init_block;
+        let lowest_block = stake_table_init_block.saturating_sub(MAX_BLOCKS_SCANNED - 1);
+        let chunks =
+            Self::block_range_chunks_rev(lowest_block, stake_table_init_block, max_events_range);
 
-        loop {
-            if total_scanned >= MAX_BLOCKS_SCANNED {
-                tracing::error!(
-                    total_scanned,
-                    "Exceeded maximum scan range while searching for token Initialized event"
-                );
-                return Err(FetchRewardError::ExceededMaxScanRange(MAX_BLOCKS_SCANNED));
-            }
-
+        for (from_block, to_block) in chunks {
             let init_logs = token
                 .Initialized_filter()
                 .from_block(from_block)
@@ -1486,11 +1865,14 @@ impl Fetcher {
                 );
                 return Ok(init_log);
             }
-
-            total_scanned += max_events_range;
-            from_block = from_block.saturating_sub(max_events_range);
-            to_block = to_block.saturating_sub(max_events_range);
         }
+
+        tracing::error!(
+            lowest_block,
+            stake_table_init_block,
+            "Exceeded maximum scan range while searching for token Initialized event"
+        );
+        Err(FetchRewardError::ExceededMaxScanRange(MAX_BLOCKS_SCANNED))
     }
 
     pub async fn update_chain_config(&self, header: &Header) -> anyhow::Result<()> {
@@ -1501,6 +1883,7 @@ impl Fetcher {
         Ok(())
     }
 
+    #[cfg(feature = "node")]
     pub async fn fetch(&self, epoch: EpochNumber, header: &Header) -> anyhow::Result<ValidatorSet> {
         let chain_config = *self.chain_config.lock().await;
         let Some(address) = chain_config.stake_table_contract else {
@@ -1579,6 +1962,7 @@ impl Fetcher {
     }
 }
 
+#[cfg_attr(not(feature = "node"), allow(dead_code))]
 async fn retry<F, T, E>(
     retry_delay: Duration,
     max_duration: Duration,
@@ -1695,6 +2079,7 @@ pub(crate) fn compute_block_reward(
 
 #[derive(Error, Debug)]
 /// Error representing fail cases for retrieving the stake table.
+#[cfg_attr(not(feature = "node"), allow(dead_code))]
 enum GetStakeTablesError {
     #[error("Error fetching from L1: {0}")]
     L1ClientFetchError(anyhow::Error),
@@ -1704,8 +2089,11 @@ enum GetStakeTablesError {
 impl super::v0_3::StakeTable {
     /// Generate a `StakeTable` with `n` members.
     pub fn mock(n: u64) -> Self {
-        [..n]
-            .iter()
+        use hotshot_types::PeerConfig;
+
+        use super::SeqTypes;
+
+        (0..n)
             .map(|_| PeerConfig::test_default())
             .collect::<Vec<PeerConfig<SeqTypes>>>()
             .into()
@@ -1716,8 +2104,11 @@ impl super::v0_3::StakeTable {
 impl DAMembers {
     /// Generate a `DaMembers` (alias committee) with `n` members.
     pub fn mock(n: u64) -> Self {
-        [..n]
-            .iter()
+        use hotshot_types::PeerConfig;
+
+        use super::SeqTypes;
+
+        (0..n)
             .map(|_| PeerConfig::test_default())
             .collect::<Vec<PeerConfig<SeqTypes>>>()
             .into()
@@ -1893,13 +2284,14 @@ pub mod testing {
                 validator_stake += alloy::primitives::U256::from(stake);
             }
 
-            let stake_table_key = val.bls_vk.into();
-            let state_ver_key = val.schnorr_vk.into();
+            let stake_table_key = BLSPubKey::try_from(val.bls_vk).expect("valid test BLS key");
+            let state_ver_key =
+                SchnorrPubKey::try_from(val.schnorr_vk).expect("valid test Schnorr key");
 
             RegisteredValidator {
                 account: val.account,
-                stake_table_key,
-                state_ver_key,
+                stake_table_key: Some(stake_table_key),
+                state_ver_key: Some(state_ver_key),
                 stake: validator_stake,
                 commission: val.commission,
                 delegators,
@@ -1929,18 +2321,83 @@ pub mod testing {
 
 #[cfg(test)]
 mod tests {
-    use alloy::{primitives::Address, rpc::types::Log};
-    use hotshot_contract_adapter::stake_table::{StakeTableContractVersion, sign_address_bls};
-    use hotshot_types::signature_key::BLSKeyPair;
+    use alloy::{
+        primitives::{Address, Bytes},
+        rpc::types::Log,
+    };
+    use hotshot_contract_adapter::{
+        sol_types::{G1PointSol, G2PointSol},
+        stake_table::{StakeTableContractVersion, sign_address_bls},
+    };
+    use hotshot_types::{light_client::StateKeyPair, signature_key::BLSKeyPair};
     use pretty_assertions::assert_matches;
     use rstest::rstest;
     use versions::{
-        CLIQUENET_VERSION, DA_UPGRADE_VERSION, DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_VERSION,
-        VID2_UPGRADE_VERSION,
+        DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_REWARD_VERSION, EPOCH_VERSION, NEW_PROTOCOL_VERSION,
     };
 
     use super::*;
     use crate::{L1ClientOptions, v0::impls::testing::*};
+
+    fn zero_g2() -> G2PointSol {
+        G2PointSol {
+            x0: U256::ZERO,
+            x1: U256::ZERO,
+            y0: U256::ZERO,
+            y1: U256::ZERO,
+        }
+    }
+
+    fn zero_g1() -> G1PointSol {
+        G1PointSol {
+            x: U256::ZERO,
+            y: U256::ZERO,
+        }
+    }
+
+    /// `eth_getLogs` counts both endpoints, so a chunk of `chunk_size` must span `chunk_size`
+    /// blocks. The backward scan used to ask for `chunk_size + 1`, which providers rejected with
+    /// "Block range 10001 exceeds the maximum of 10000 blocks per logs request", so the fallback
+    /// scan for the token `Initialized` event could never succeed at the default range.
+    #[test_log::test]
+    fn test_block_range_chunks_never_exceed_chunk_size() {
+        const MAX_RANGE: u64 = 10_000;
+        const INIT_BLOCK: u64 = 1_000_000;
+        const LOWEST_BLOCK: u64 = INIT_BLOCK - 200_000 + 1;
+
+        let width = |(from, to): &(u64, u64)| to - from + 1;
+
+        let descending: Vec<_> =
+            Fetcher::block_range_chunks_rev(LOWEST_BLOCK, INIT_BLOCK, MAX_RANGE).collect();
+
+        assert_eq!(descending[0], (INIT_BLOCK - MAX_RANGE + 1, INIT_BLOCK));
+        assert_eq!(descending.last().unwrap().0, LOWEST_BLOCK);
+        for chunk in &descending {
+            assert_eq!(width(chunk), MAX_RANGE, "chunk {chunk:?} is missized");
+        }
+        for pair in descending.windows(2) {
+            assert_eq!(pair[0].0, pair[1].1 + 1, "gap or overlap at {pair:?}");
+        }
+
+        let ascending: Vec<_> =
+            Fetcher::block_range_chunks(LOWEST_BLOCK, INIT_BLOCK, MAX_RANGE).collect();
+        for chunk in &ascending {
+            assert!(
+                width(chunk) <= MAX_RANGE,
+                "chunk {chunk:?} exceeds {MAX_RANGE}"
+            );
+        }
+
+        // A range shorter than one chunk, and one bottoming out at genesis, must both terminate.
+        assert_eq!(
+            Fetcher::block_range_chunks_rev(0, 5, MAX_RANGE).collect::<Vec<_>>(),
+            vec![(0, 5)]
+        );
+        assert_eq!(
+            Fetcher::block_range_chunks_rev(0, MAX_RANGE, MAX_RANGE).collect::<Vec<_>>(),
+            vec![(1, MAX_RANGE), (0, 0)]
+        );
+    }
 
     #[test_log::test]
     fn test_from_l1_events() -> anyhow::Result<()> {
@@ -2158,7 +2615,7 @@ mod tests {
         )
         .unwrap_err();
 
-        let bls: BLSPubKey = val.bls_vk.into();
+        let bls = BLSPubKey::try_from(val.bls_vk).expect("valid test BLS key");
         assert!(matches!(err, StakeTableError::BlsKeyAlreadyUsed(addr) if addr == bls.to_string()));
     }
 
@@ -2324,6 +2781,48 @@ mod tests {
     }
 
     #[test]
+    fn test_register_v2_bad_sig_preserves_parsed_bls_key() {
+        let val = TestValidator::random();
+        let other = TestValidator::random();
+        let bad_val = TestValidator {
+            bls_sig: other.bls_sig,
+            ..val.clone()
+        };
+
+        let mut state = StakeTableState::default();
+        state
+            .apply_event(StakeTableEvent::RegisterV2((&bad_val).into()))
+            .expect("no fatal error")
+            .expect("registered unauthenticated");
+
+        let registered = state.validators().get(&val.account).expect("present");
+        assert!(!registered.authenticated);
+        let expected_bls = BLSPubKey::try_from(val.bls_vk).expect("valid bls key");
+        assert_eq!(registered.stake_table_key.as_ref(), Some(&expected_bls));
+    }
+
+    #[test]
+    fn test_register_v3_bad_sig_preserves_parsed_bls_key() {
+        let val = TestValidator::random();
+        let other = TestValidator::random();
+        let bad_val = TestValidator {
+            bls_sig: other.bls_sig,
+            ..val.clone()
+        };
+
+        let mut state = StakeTableState::default();
+        state
+            .apply_event(StakeTableEvent::RegisterV3((&bad_val).into()))
+            .expect("no fatal error")
+            .expect("registered unauthenticated");
+
+        let registered = state.validators().get(&val.account).expect("present");
+        assert!(!registered.authenticated);
+        let expected_bls = BLSPubKey::try_from(val.bls_vk).expect("valid bls key");
+        assert_eq!(registered.stake_table_key.as_ref(), Some(&expected_bls));
+    }
+
+    #[test]
     fn test_authenticated_validator_deserialize_rejects_unauthenticated() {
         let mut validator = RegisteredValidator::<BLSPubKey>::mock();
         validator.authenticated = false;
@@ -2434,8 +2933,11 @@ mod tests {
         state.apply_event(event).unwrap().unwrap();
 
         let updated = state.validators.get(&val.account).unwrap();
-        assert_eq!(updated.stake_table_key, new_keys.bls_vk.into());
-        assert_eq!(updated.state_ver_key, new_keys.schnorr_vk.into());
+        let expected_bls = BLSPubKey::try_from(new_keys.bls_vk).expect("valid test BLS key");
+        assert_eq!(updated.stake_table_key.as_ref(), Some(&expected_bls));
+        let expected_schnorr =
+            SchnorrPubKey::try_from(new_keys.schnorr_vk).expect("valid test Schnorr key");
+        assert_eq!(updated.state_ver_key.as_ref(), Some(&expected_schnorr));
     }
 
     #[test]
@@ -2451,7 +2953,9 @@ mod tests {
         state.apply_event(event1).unwrap().unwrap();
         let result = state.apply_event(event2);
 
-        let expected_bls_key = BLSPubKey::from(val.bls_vk).to_string();
+        let expected_bls_key = BLSPubKey::try_from(val.bls_vk)
+            .expect("valid test BLS key")
+            .to_string();
 
         assert_matches!(
             result,
@@ -2475,7 +2979,7 @@ mod tests {
         state.apply_event(event1).unwrap().unwrap();
         let result = state.apply_event(event2);
 
-        let schnorr: SchnorrPubKey = val.schnorr_vk.into();
+        let schnorr = SchnorrPubKey::try_from(val.schnorr_vk).expect("valid test Schnorr key");
         assert_matches!(
             result,
             Ok(Err(ExpectedStakeTableError::SchnorrKeyAlreadyUsed(key)))
@@ -2505,10 +3009,10 @@ mod tests {
         state.apply_event(event1).unwrap().unwrap();
         let result = state.apply_event(event2);
 
-        let schnorr: SchnorrPubKey = val1.schnorr_vk.into();
+        let schnorr = SchnorrPubKey::try_from(val1.schnorr_vk).expect("valid test Schnorr key");
         assert_matches!(
             result,
-            Err(StakeTableError::SchnorrKeyAlreadyUsed(key))
+            Ok(Err(ExpectedStakeTableError::SchnorrKeyAlreadyUsed(key)))
                 if key == schnorr.to_string(),
             "Expected SchnorrKeyAlreadyUsed({schnorr}), but got: {result:?}",
         );
@@ -2816,6 +3320,164 @@ mod tests {
         );
     }
 
+    async fn snapshot_stake_table_commit(
+        network: &str,
+        rpc_url: &str,
+        contract: &str,
+        to_block: u64,
+    ) {
+        let l1 = L1ClientOptions {
+            l1_events_max_retry_duration: Duration::from_secs(120),
+            l1_events_max_block_range: 10_000,
+            l1_retry_delay: Duration::from_secs(2),
+            ..Default::default()
+        }
+        .connect(vec![rpc_url.parse().unwrap()])
+        .expect("unable to construct l1 client");
+
+        let events =
+            Fetcher::fetch_events_from_contract(l1, contract.parse().unwrap(), None, to_block)
+                .await
+                .unwrap();
+
+        let validator_set =
+            ValidatorSet::from_l1_events(events.into_iter().map(|(_, e)| e), EPOCH_VERSION)
+                .expect("failed to build validator set");
+
+        let active_as_registered = to_registered_validator_map(validator_set.active_validators());
+        let active_state = StakeTableState::new(
+            active_as_registered,
+            Default::default(),
+            Default::default(),
+            Default::default(),
+            Default::default(),
+        );
+        let active_commit = active_state.commit();
+
+        let summary = format!(
+            "network: {network}\nto_block: {to_block}\nstake_table_contract: \
+             {contract}\nstake_table_hash: {}\nactive_validators_commit: {}\nall_validators: \
+             {}\nactive_validators: {}\n",
+            validator_set
+                .stake_table_hash()
+                .expect("stake_table_hash should be set"),
+            active_commit,
+            validator_set.all_validators().len(),
+            validator_set.active_validators().len(),
+        );
+
+        let mut settings = insta::Settings::clone_current();
+        let data_dir = std::path::Path::new(&std::env::var("CARGO_MANIFEST_DIR").unwrap())
+            .join("../../../data/insta_snapshots");
+        settings.set_snapshot_path(data_dir);
+        settings.set_prepend_module_to_snapshot(false);
+        settings.bind(|| {
+            insta::assert_snapshot!(format!("{network}_stake_table_snapshot"), summary);
+        });
+    }
+
+    #[ignore = "talks to public Sepolia RPC"]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn snapshot_decaf_stake_table_commit() {
+        snapshot_stake_table_commit(
+            "decaf",
+            "https://ethereum-sepolia.publicnode.com",
+            "0x40304fbe94d5e7d1492dd90c53a2d63e8506a037",
+            10_935_000,
+        )
+        .await;
+    }
+
+    #[ignore = "talks to public Ethereum mainnet RPC"]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn snapshot_mainnet_stake_table_commit() {
+        snapshot_stake_table_commit(
+            "mainnet",
+            "https://ethereum-rpc.publicnode.com",
+            "0xcef474d372b5b09defe2af187bf17338dc704451",
+            25_188_000,
+        )
+        .await;
+    }
+
+    /// Fetches the initial supply from L1 for `stake_table_contract` and asserts it matches the
+    /// constant hardcoded in `known_initial_supply`.
+    ///
+    /// Guards against a wrong hardcoded constant: since `known_initial_supply` is consulted
+    /// before any L1 call, a wrong value would make this node compute different block rewards
+    /// from the rest of the network, a consensus fault.
+    async fn assert_known_initial_supply_matches_l1(
+        rpc_url: &str,
+        chain_id: ChainId,
+        stake_table_contract: Address,
+    ) {
+        let expected = known_initial_supply(chain_id, stake_table_contract)
+            .expect("stake table contract must have a hardcoded initial supply");
+
+        let l1 = L1ClientOptions {
+            l1_events_max_retry_duration: Duration::from_secs(120),
+            l1_events_max_block_range: 10_000,
+            l1_retry_delay: Duration::from_secs(2),
+            ..Default::default()
+        }
+        .connect(vec![rpc_url.parse().unwrap()])
+        .expect("unable to construct l1 client");
+
+        let fetcher = Fetcher::new(
+            Arc::new(crate::mock::MockStateCatchup::default()),
+            Arc::new(AsyncMutex::new(crate::v0_1::NoStorage)),
+            l1,
+            ChainConfig {
+                chain_id,
+                stake_table_contract: Some(stake_table_contract),
+                ..Default::default()
+            },
+        );
+
+        let fetched = fetcher
+            .fetch_and_update_initial_supply()
+            .await
+            .expect("failed to fetch initial supply from L1");
+
+        assert_eq!(
+            fetched, expected,
+            "hardcoded initial supply for {stake_table_contract} does not match L1"
+        );
+    }
+
+    /// Needs an archival RPC: publicnode's free tier rejects the full-range `eth_getLogs` with
+    /// "Archive requests require a personal token". Tenderly's public gateway serves it.
+    ///
+    /// Tenderly rejects `finalized` as a `toBlock`, so the full-range query fails there and
+    /// `scan_token_contract_initialized_event_log` finds the event instead, in one chunk.
+    #[ignore = "talks to public Ethereum mainnet RPC"]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn fetch_initial_supply_matches_mainnet_constant() {
+        assert_known_initial_supply_matches_l1(
+            "https://mainnet.gateway.tenderly.co",
+            MAINNET_CHAIN_ID,
+            MAINNET_STAKE_TABLE_CONTRACT,
+        )
+        .await;
+    }
+
+    /// Needs an archival RPC with working topic-indexed log queries. Confirmed by hand that
+    /// publicnode's free-tier Sepolia endpoint is not one: a topic-filtered `eth_getLogs`
+    /// silently returns no results for this block range, even though an unfiltered query over
+    /// the same range and address returns the `Initialized` log. That makes
+    /// `EspToken::Initialized_filter` unusable there, and the scan fallback exhausts
+    /// `MAX_BLOCKS_SCANNED` without ever seeing the event.
+    #[ignore = "talks to public Sepolia RPC"]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn fetch_initial_supply_matches_decaf_constant() {
+        assert_known_initial_supply_matches_l1(
+            "https://sepolia.gateway.tenderly.co",
+            DECAF_CHAIN_ID,
+            DECAF_STAKE_TABLE_CONTRACT,
+        )
+        .await;
+    }
+
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     #[should_panic]
     async fn test_large_max_events_range_panic() {
@@ -2845,17 +3507,119 @@ mod tests {
         .unwrap();
     }
 
+    /// Pins the block reward each hardcoded initial supply produces.
+    ///
+    /// `known_initial_supply` has no local symptom when wrong: the node keeps computing
+    /// rewards, just different ones from the rest of the network. The live-chain tests above
+    /// need an archival RPC and do not run in CI, so a digit slip has to fail here.
+    #[test]
+    fn block_reward_for_known_initial_supplies() {
+        let reward = |supply: U256| {
+            ((supply * U256::from(INFLATION_RATE)) / U256::from(BLOCKS_PER_YEAR))
+                .checked_div(U256::from(COMMISSION_BASIS_POINTS))
+                .unwrap()
+        };
+
+        assert_eq!(
+            reward(U256::from(MAINNET_INITIAL_SUPPLY_WEI)),
+            U256::from(6_830_289_193_302_891_933u128)
+        );
+        assert_eq!(
+            reward(U256::from(DECAF_INITIAL_SUPPLY_WEI)),
+            U256::from(19_025_875_190_258_751_902u128)
+        );
+    }
+
+    /// Pins the constants themselves, so a digit slip fails here as well as in the reward test.
+    #[test]
+    fn known_initial_supply_values() {
+        assert_eq!(
+            known_initial_supply(MAINNET_CHAIN_ID, MAINNET_STAKE_TABLE_CONTRACT),
+            Some(U256::from_str("3590000000000000000000000000").unwrap())
+        );
+        assert_eq!(
+            known_initial_supply(DECAF_CHAIN_ID, DECAF_STAKE_TABLE_CONTRACT),
+            Some(U256::from_str("10000000000000000000000000000").unwrap())
+        );
+        assert_eq!(
+            known_initial_supply(MAINNET_CHAIN_ID, Address::repeat_byte(9)),
+            None
+        );
+        assert_eq!(
+            known_initial_supply(DECAF_CHAIN_ID, MAINNET_STAKE_TABLE_CONTRACT),
+            None
+        );
+        assert_eq!(
+            known_initial_supply(ChainId(U256::from(9)), MAINNET_STAKE_TABLE_CONTRACT),
+            None
+        );
+    }
+
+    /// The hardcoded chain ids and addresses are the ones the networks actually run, per their
+    /// genesis files.
+    #[test]
+    fn known_chains_match_genesis() {
+        let genesis = |network: &str| {
+            let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../../data/genesis")
+                .join(format!("{network}.toml"));
+            let genesis: toml::Value =
+                toml::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+            let chain_config = &genesis["chain_config"];
+            (
+                ChainId(U256::from(chain_config["chain_id"].as_integer().unwrap())),
+                chain_config["stake_table_contract"]
+                    .as_str()
+                    .unwrap()
+                    .parse::<Address>()
+                    .unwrap(),
+            )
+        };
+
+        assert_eq!(
+            genesis("mainnet"),
+            (MAINNET_CHAIN_ID, MAINNET_STAKE_TABLE_CONTRACT)
+        );
+        assert_eq!(
+            genesis("decaf"),
+            (DECAF_CHAIN_ID, DECAF_STAKE_TABLE_CONTRACT)
+        );
+    }
+
+    /// `initial_supply_or_fetch` short-circuits on a known chain without touching the L1.
+    /// `Fetcher::mock` points at an unroutable L1, so the fetch path would hang; the timeout
+    /// turns that regression into a named failure instead of a CI job timeout.
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn sanity_check_block_reward_v3() {
-        // 10b tokens
-        let initial_supply = U256::from_str("10000000000000000000000000000").unwrap();
+    async fn initial_supply_or_fetch_skips_l1_for_known_chains() {
+        for (chain_id, contract, expected) in [
+            (
+                MAINNET_CHAIN_ID,
+                MAINNET_STAKE_TABLE_CONTRACT,
+                MAINNET_INITIAL_SUPPLY_WEI,
+            ),
+            (
+                DECAF_CHAIN_ID,
+                DECAF_STAKE_TABLE_CONTRACT,
+                DECAF_INITIAL_SUPPLY_WEI,
+            ),
+        ] {
+            let fetcher = Fetcher::mock();
+            {
+                let mut chain_config = fetcher.chain_config.lock().await;
+                chain_config.chain_id = chain_id;
+                chain_config.stake_table_contract = Some(contract);
+            }
 
-        let reward = ((initial_supply * U256::from(INFLATION_RATE)) / U256::from(BLOCKS_PER_YEAR))
-            .checked_div(U256::from(COMMISSION_BASIS_POINTS))
-            .unwrap();
+            let supply =
+                tokio::time::timeout(Duration::from_secs(5), fetcher.initial_supply_or_fetch())
+                    .await
+                    .expect(
+                        "initial_supply_or_fetch reached the L1 fetch path for a known contract",
+                    )
+                    .unwrap();
 
-        println!("Calculated reward: {reward}");
-        assert!(reward > U256::ZERO);
+            assert_eq!(supply, U256::from(expected));
+        }
     }
 
     #[test]
@@ -3125,12 +3889,16 @@ mod tests {
                 state.apply_event(StakeTableEvent::KeyUpdateV2((&new_keys).into()))??;
 
                 let validator = state.validators().get(&val.account).context("validator")?;
-                let expected_bls: BLSPubKey = new_keys.bls_vk.into();
-                let expected_schnorr: SchnorrPubKey = new_keys.schnorr_vk.into();
-                assert_eq!(validator.stake_table_key, expected_bls);
-                assert_eq!(validator.state_ver_key, expected_schnorr);
-                // KeyUpdate does not re-authenticate
-                assert!(!validator.authenticated);
+                let expected_bls =
+                    BLSPubKey::try_from(new_keys.bls_vk).expect("valid test BLS key");
+                let expected_schnorr =
+                    SchnorrPubKey::try_from(new_keys.schnorr_vk).expect("valid test Schnorr key");
+                assert_eq!(validator.stake_table_key.as_ref(), Some(&expected_bls));
+                assert_eq!(validator.state_ver_key.as_ref(), Some(&expected_schnorr));
+                // KeyUpdateV2 authenticates signatures, so on success the validator
+                // is promoted to `authenticated=true`, even if a prior registration
+                // left it unauthenticated.
+                assert!(validator.authenticated);
             },
             EventType::CommissionUpdate => {
                 let new_commission: u16 = 5000;
@@ -3173,11 +3941,21 @@ mod tests {
             },
         }
 
+        // For most event types the validator is still unauthenticated and is
+        // filtered out of the active set. The KeyUpdate case is the exception:
+        // KeyUpdateV2 verifies signatures and promotes the validator to
+        // `authenticated=true`, so it becomes eligible for selection.
         let active = select_active_validator_set(state.validators(), EPOCH_VERSION);
-        match active {
-            Err(StakeTableError::NoValidValidators) => {},
-            Err(e) => bail!("Unexpected error: {e}"),
-            Ok(map) => assert!(!map.contains_key(&val.account)),
+        match event_type {
+            EventType::KeyUpdate => match active {
+                Ok(map) => assert!(map.contains_key(&val.account)),
+                Err(e) => bail!("expected validator to be selected after KeyUpdate, got {e}"),
+            },
+            _ => match active {
+                Err(StakeTableError::NoValidValidators) => {},
+                Err(e) => bail!("Unexpected error: {e}"),
+                Ok(map) => assert!(!map.contains_key(&val.account)),
+            },
         }
         Ok(())
     }
@@ -3394,15 +4172,60 @@ mod tests {
     }
 
     #[test]
-    fn test_register_v3_duplicate_schnorr_key() -> anyhow::Result<()> {
+    fn test_register_v2_duplicate_schnorr_key_is_unauthenticated() -> anyhow::Result<()> {
+        let val1 = TestValidator::random();
+        let mut val2 = TestValidator::random();
+        val2.schnorr_vk = val1.schnorr_vk;
+
+        let mut state = StakeTableState::default();
+        state.apply_event(StakeTableEvent::RegisterV2((&val1).into()))??;
+        state.apply_event(StakeTableEvent::RegisterV2((&val2).into()))??;
+
+        let registered = state.validators().get(&val2.account).expect("present");
+        assert!(!registered.authenticated);
+        assert!(registered.state_ver_key.is_none());
+        assert_excluded_from_active_set(&state, val2.account);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_register_v3_duplicate_schnorr_key_is_unauthenticated() -> anyhow::Result<()> {
         let val1 = TestValidator::random();
         let mut val2 = TestValidator::random();
         val2.schnorr_vk = val1.schnorr_vk;
 
         let mut state = StakeTableState::default();
         state.apply_event(StakeTableEvent::RegisterV3((&val1).into()))??;
-        let result = state.apply_event(StakeTableEvent::RegisterV3((&val2).into()));
-        assert_matches!(result, Err(StakeTableError::SchnorrKeyAlreadyUsed(_)));
+        state.apply_event(StakeTableEvent::RegisterV3((&val2).into()))??;
+
+        let registered = state.validators().get(&val2.account).expect("present");
+        assert!(!registered.authenticated);
+        assert!(registered.state_ver_key.is_none());
+        assert_excluded_from_active_set(&state, val2.account);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_register_v3_reusing_v1_schnorr_key_keeps_both_validators() -> anyhow::Result<()> {
+        let v1 = TestValidator::random();
+        let mut v3 = TestValidator::random();
+        v3.schnorr_vk = v1.schnorr_vk;
+
+        let events = Vec::from([
+            StakeTableEvent::Register((&v1).into()),
+            StakeTableEvent::RegisterV3((&v3).into()),
+        ]);
+        let (validators, _) = validators_from_l1_events(events.into_iter())?;
+
+        let first = validators.get(&v1.account).expect("present");
+        assert!(first.authenticated);
+        assert!(first.state_ver_key.is_some());
+
+        let second = validators.get(&v3.account).expect("present");
+        assert!(!second.authenticated);
+        assert!(second.state_ver_key.is_none());
 
         Ok(())
     }
@@ -3442,12 +4265,86 @@ mod tests {
     }
 
     #[test]
-    fn test_register_v3_zero_x25519_errors() -> anyhow::Result<()> {
+    fn test_register_v3_zero_x25519_soft_fails() -> anyhow::Result<()> {
         let val = TestValidator::random().with_x25519_key([0u8; 32]);
 
         let mut state = StakeTableState::default();
-        let result = state.apply_event(StakeTableEvent::RegisterV3((&val).into()));
-        assert_matches!(result, Err(StakeTableError::InvalidX25519Key(_)));
+        state.apply_event(StakeTableEvent::RegisterV3((&val).into()))??;
+
+        let registered = state.validators().get(&val.account).unwrap();
+        assert!(registered.x25519_key.is_none());
+        assert!(state.used_x25519_keys().is_empty());
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_x25519_key_update_zero_soft_fails() -> anyhow::Result<()> {
+        let val = TestValidator::random();
+
+        let mut state = StakeTableState::default();
+        state.apply_event(StakeTableEvent::RegisterV3((&val).into()))??;
+
+        state.apply_event(val.x25519_update([0u8; 32]))??;
+        let registered = state.validators().get(&val.account).unwrap();
+        assert!(registered.x25519_key.is_none());
+        assert_eq!(state.used_x25519_keys().len(), 1);
+
+        Ok(())
+    }
+
+    /// LE encoding of the curve25519 field prime 2^255 - 19: nonzero but
+    /// rejected by the Rust parser as non-canonical.
+    fn noncanonical_x25519_key() -> [u8; 32] {
+        let mut key = [0xffu8; 32];
+        key[0] = 0xed;
+        key[31] = 0x7f;
+        key
+    }
+
+    /// An invalid x25519 key must not halt event processing;
+    /// the validator registers with `x25519_key: None`.
+    #[test]
+    fn test_register_v3_noncanonical_x25519_soft_fails() -> anyhow::Result<()> {
+        let val = TestValidator::random().with_x25519_key(noncanonical_x25519_key());
+
+        let mut state = StakeTableState::default();
+        state.apply_event(StakeTableEvent::RegisterV3((&val).into()))??;
+
+        let registered = state.validators().get(&val.account).unwrap();
+        assert!(registered.x25519_key.is_none());
+        assert!(state.used_x25519_keys().is_empty());
+
+        Ok(())
+    }
+
+    /// An invalid x25519 key in an update must not halt event
+    /// processing; the validator's key is cleared.
+    #[test]
+    fn test_x25519_key_update_noncanonical_soft_fails() -> anyhow::Result<()> {
+        let val = TestValidator::random();
+
+        let mut state = StakeTableState::default();
+        state.apply_event(StakeTableEvent::RegisterV3((&val).into()))??;
+        assert!(
+            state
+                .validators()
+                .get(&val.account)
+                .unwrap()
+                .x25519_key
+                .is_some()
+        );
+
+        state.apply_event(val.x25519_update(noncanonical_x25519_key()))??;
+
+        let registered = state.validators().get(&val.account).unwrap();
+        assert!(registered.x25519_key.is_none());
+        assert_eq!(state.used_x25519_keys().len(), 1);
+
+        state.apply_event(val.x25519_update([42u8; 32]))??;
+        let registered = state.validators().get(&val.account).unwrap();
+        assert!(registered.x25519_key.is_some());
+        assert_eq!(state.used_x25519_keys().len(), 2);
 
         Ok(())
     }
@@ -3471,7 +4368,7 @@ mod tests {
         Ok(())
     }
 
-    // --- CLIQUENET_VERSION selection filter tests ---
+    // --- NEW_PROTOCOL_VERSION selection filter tests ---
 
     /// Construct a `RegisteredValidator` with both x25519_key and p2p_addr populated.
     fn complete_mock_validator() -> RegisteredValidator<BLSPubKey> {
@@ -3511,7 +4408,7 @@ mod tests {
         let complete = complete_mock_validator();
         map.insert(complete.account, complete.clone());
 
-        let active = select_active_validator_set(&map, CLIQUENET_VERSION).unwrap();
+        let active = select_active_validator_set(&map, NEW_PROTOCOL_VERSION).unwrap();
         assert!(!active.contains_key(&missing_x25519.account));
         assert!(active.contains_key(&complete.account));
     }
@@ -3528,9 +4425,30 @@ mod tests {
         let complete = complete_mock_validator();
         map.insert(complete.account, complete.clone());
 
-        let active = select_active_validator_set(&map, CLIQUENET_VERSION).unwrap();
+        let active = select_active_validator_set(&map, NEW_PROTOCOL_VERSION).unwrap();
         assert!(!active.contains_key(&missing_p2p.account));
         assert!(active.contains_key(&complete.account));
+    }
+
+    /// Post-upgrade: a p2p address nobody can dial counts as missing, before the upgrade it
+    /// doesn't matter.
+    #[test]
+    fn test_select_post_upgrade_excludes_invalid_p2p() {
+        let mut map = RegisteredValidatorMap::new();
+
+        let mut invalid_p2p = complete_mock_validator();
+        invalid_p2p.p2p_addr = Some("[[a]:b]:80".parse().unwrap());
+        map.insert(invalid_p2p.account, invalid_p2p.clone());
+
+        let complete = complete_mock_validator();
+        map.insert(complete.account, complete.clone());
+
+        let active = select_active_validator_set(&map, NEW_PROTOCOL_VERSION).unwrap();
+        assert!(!active.contains_key(&invalid_p2p.account));
+        assert!(active.contains_key(&complete.account));
+
+        let active = select_active_validator_set(&map, EPOCH_VERSION).unwrap();
+        assert!(active.contains_key(&invalid_p2p.account));
     }
 
     /// Post-upgrade: a single complete validator is kept.
@@ -3540,7 +4458,7 @@ mod tests {
         let complete = complete_mock_validator();
         map.insert(complete.account, complete.clone());
 
-        let active = select_active_validator_set(&map, CLIQUENET_VERSION).unwrap();
+        let active = select_active_validator_set(&map, NEW_PROTOCOL_VERSION).unwrap();
         assert!(active.contains_key(&complete.account));
     }
 
@@ -3554,7 +4472,7 @@ mod tests {
             map.insert(v.account, v);
         }
 
-        let result = select_active_validator_set(&map, CLIQUENET_VERSION);
+        let result = select_active_validator_set(&map, NEW_PROTOCOL_VERSION);
         assert_matches!(result, Err(StakeTableError::NoValidValidators));
     }
 
@@ -3584,7 +4502,7 @@ mod tests {
             }
         }
 
-        let active = select_active_validator_set(&map, CLIQUENET_VERSION).unwrap();
+        let active = select_active_validator_set(&map, NEW_PROTOCOL_VERSION).unwrap();
 
         assert!(
             active.len() <= MAX_VALIDATORS,
@@ -3602,8 +4520,8 @@ mod tests {
     }
 
     /// Verify the version boundary: the filter only kicks in at/after
-    /// `CLIQUENET_VERSION`. A validator missing the x25519 key must be retained at
-    /// every prior version and rejected at `CLIQUENET_VERSION`.
+    /// `NEW_PROTOCOL_VERSION`. A validator missing the x25519 key must be retained at
+    /// every prior version and rejected at `NEW_PROTOCOL_VERSION`.
     #[test]
     fn test_select_version_boundary() {
         let mut v = complete_mock_validator();
@@ -3614,8 +4532,7 @@ mod tests {
         for protocol_version in [
             EPOCH_VERSION,
             DRB_AND_HEADER_UPGRADE_VERSION,
-            DA_UPGRADE_VERSION,
-            VID2_UPGRADE_VERSION,
+            EPOCH_REWARD_VERSION,
         ] {
             let active = select_active_validator_set(&map, protocol_version).unwrap();
             assert!(
@@ -3625,7 +4542,7 @@ mod tests {
             );
         }
 
-        let result = select_active_validator_set(&map, CLIQUENET_VERSION);
+        let result = select_active_validator_set(&map, NEW_PROTOCOL_VERSION);
         assert_matches!(result, Err(StakeTableError::NoValidValidators));
     }
 
@@ -3652,9 +4569,996 @@ mod tests {
         assert!(pre.contains_key(&val.account));
 
         // Post-upgrade: the sole validator is filtered out, so selection fails.
-        let post = select_active_validator_set(state.validators(), CLIQUENET_VERSION);
+        let post = select_active_validator_set(state.validators(), NEW_PROTOCOL_VERSION);
         assert_matches!(post, Err(StakeTableError::NoValidValidators));
 
         Ok(())
+    }
+
+    #[test]
+    fn test_register_v1_zero_g2_excluded_from_active_set() {
+        let account = Address::random();
+        let mut state = StakeTableState::default();
+        state
+            .apply_event(StakeTableEvent::Register(ValidatorRegistered {
+                account,
+                blsVk: zero_g2(),
+                schnorrVk: StateKeyPair::generate().ver_key().into(),
+                commission: 0,
+            }))
+            .unwrap()
+            .unwrap();
+
+        let v = state.validators().get(&account).expect("present");
+        assert!(v.stake_table_key.is_none());
+        assert!(!v.authenticated);
+
+        state
+            .apply_event(StakeTableEvent::Delegate(Delegated {
+                delegator: Address::random(),
+                validator: account,
+                amount: U256::from(100),
+            }))
+            .unwrap()
+            .unwrap();
+
+        match select_active_validator_set(state.validators(), EPOCH_VERSION) {
+            Err(StakeTableError::NoValidValidators) => {},
+            Ok(map) => assert!(map.get(&account).is_none()),
+            Err(e) => panic!("unexpected error: {e}"),
+        }
+    }
+
+    #[test]
+    fn test_register_v2_zero_g2_excluded_from_active_set() {
+        let account = Address::random();
+        let mut state = StakeTableState::default();
+        state
+            .apply_event(StakeTableEvent::RegisterV2(ValidatorRegisteredV2 {
+                account,
+                blsVK: zero_g2(),
+                schnorrVK: StateKeyPair::generate().ver_key().into(),
+                commission: 0,
+                blsSig: zero_g1().into(),
+                schnorrSig: Bytes::default(),
+                metadataUri: String::new(),
+            }))
+            .unwrap()
+            .unwrap();
+
+        let v = state.validators().get(&account).expect("present");
+        assert!(v.stake_table_key.is_none());
+        assert!(!v.authenticated);
+
+        state
+            .apply_event(StakeTableEvent::Delegate(Delegated {
+                delegator: Address::random(),
+                validator: account,
+                amount: U256::from(100),
+            }))
+            .unwrap()
+            .unwrap();
+
+        match select_active_validator_set(state.validators(), EPOCH_VERSION) {
+            Err(StakeTableError::NoValidValidators) => {},
+            Ok(map) => assert!(map.get(&account).is_none()),
+            Err(e) => panic!("unexpected error: {e}"),
+        }
+    }
+
+    #[test]
+    fn test_register_v3_zero_g2_excluded_from_active_set() {
+        let val = TestValidator::random();
+        let account = val.account;
+        let mut state = StakeTableState::default();
+        state
+            .apply_event(StakeTableEvent::RegisterV3(register_v3_with_bls(
+                &val,
+                zero_g2(),
+            )))
+            .unwrap()
+            .unwrap();
+
+        let v = state.validators().get(&account).expect("present");
+        assert!(v.stake_table_key.is_none());
+        assert!(!v.authenticated);
+
+        state
+            .apply_event(StakeTableEvent::Delegate(Delegated {
+                delegator: Address::random(),
+                validator: account,
+                amount: U256::from(100),
+            }))
+            .unwrap()
+            .unwrap();
+
+        assert_excluded_from_active_set(&state, account);
+    }
+
+    fn zero_schnorr() -> hotshot_contract_adapter::sol_types::EdOnBN254PointSol {
+        hotshot_contract_adapter::sol_types::EdOnBN254PointSol {
+            x: U256::ZERO,
+            y: U256::ZERO,
+        }
+    }
+
+    /// The twisted Edwards identity (0, 1): on-curve and in-subgroup but not a
+    /// valid key.
+    fn identity_schnorr() -> hotshot_contract_adapter::sol_types::EdOnBN254PointSol {
+        hotshot_contract_adapter::sol_types::EdOnBN254PointSol {
+            x: U256::ZERO,
+            y: U256::from(1),
+        }
+    }
+
+    /// Build a valid V3 registration for `val` but overwrite `blsVK` with a poison value.
+    /// The blsSig is for the original key so `authenticate()` will also fail, which is
+    /// fine: the BLS key is unparsable regardless.
+    fn register_v3_with_bls(val: &TestValidator, bls: G2PointSol) -> ValidatorRegisteredV3 {
+        let mut reg = ValidatorRegisteredV3::from(val);
+        reg.blsVK = bls;
+        reg
+    }
+
+    /// Check that `account` is excluded from the active validator set.
+    fn assert_excluded_from_active_set(state: &StakeTableState, account: Address) {
+        match select_active_validator_set(state.validators(), EPOCH_VERSION) {
+            Err(StakeTableError::NoValidValidators) => {},
+            Ok(map) => assert!(map.get(&account).is_none()),
+            Err(e) => panic!("unexpected error: {e}"),
+        }
+    }
+
+    #[test]
+    fn test_register_v1_identity_schnorr_excluded_from_active_set() {
+        let account = Address::random();
+        let bls: G2PointSol = BLSPubKey::generated_from_seed_indexed([8u8; 32], 0)
+            .0
+            .into();
+        let mut state = StakeTableState::default();
+        state
+            .apply_event(StakeTableEvent::Register(ValidatorRegistered {
+                account,
+                blsVk: bls,
+                schnorrVk: identity_schnorr(),
+                commission: 0,
+            }))
+            .unwrap()
+            .unwrap();
+
+        let v = state.validators().get(&account).expect("present");
+        assert!(
+            !v.authenticated,
+            "validator with identity schnorr key must be unauthenticated"
+        );
+        assert!(v.state_ver_key.is_none());
+
+        state
+            .apply_event(StakeTableEvent::Delegate(Delegated {
+                delegator: Address::random(),
+                validator: account,
+                amount: U256::from(100),
+            }))
+            .unwrap()
+            .unwrap();
+
+        match select_active_validator_set(state.validators(), EPOCH_VERSION) {
+            Err(StakeTableError::NoValidValidators) => {},
+            Ok(map) => assert!(map.get(&account).is_none()),
+            Err(e) => panic!("unexpected error: {e}"),
+        }
+    }
+
+    #[test]
+    fn test_register_v1_invalid_schnorr_excluded_from_active_set() {
+        let account = Address::random();
+        let bls: G2PointSol = BLSPubKey::generated_from_seed_indexed([9u8; 32], 0)
+            .0
+            .into();
+        let mut state = StakeTableState::default();
+        state
+            .apply_event(StakeTableEvent::Register(ValidatorRegistered {
+                account,
+                blsVk: bls,
+                schnorrVk: zero_schnorr(),
+                commission: 0,
+            }))
+            .unwrap()
+            .unwrap();
+
+        let v = state.validators().get(&account).expect("present");
+        assert!(
+            !v.authenticated,
+            "validator with zero schnorr key must be unauthenticated"
+        );
+
+        state
+            .apply_event(StakeTableEvent::Delegate(Delegated {
+                delegator: Address::random(),
+                validator: account,
+                amount: U256::from(100),
+            }))
+            .unwrap()
+            .unwrap();
+
+        match select_active_validator_set(state.validators(), EPOCH_VERSION) {
+            Err(StakeTableError::NoValidValidators) => {},
+            Ok(map) => assert!(map.get(&account).is_none()),
+            Err(e) => panic!("unexpected error: {e}"),
+        }
+    }
+
+    #[test]
+    fn test_register_v3_identity_schnorr_excluded_from_active_set() {
+        let val = TestValidator::random();
+        let account = val.account;
+        let mut reg = ValidatorRegisteredV3::from(&val);
+        reg.schnorrVK = identity_schnorr();
+        let mut state = StakeTableState::default();
+        state
+            .apply_event(StakeTableEvent::RegisterV3(reg))
+            .unwrap()
+            .unwrap();
+
+        let v = state.validators().get(&account).expect("present");
+        assert!(
+            !v.authenticated,
+            "validator with identity schnorr key must be unauthenticated"
+        );
+        assert!(v.state_ver_key.is_none());
+
+        state
+            .apply_event(StakeTableEvent::Delegate(Delegated {
+                delegator: Address::random(),
+                validator: account,
+                amount: U256::from(100),
+            }))
+            .unwrap()
+            .unwrap();
+
+        assert_excluded_from_active_set(&state, account);
+    }
+
+    #[test]
+    fn test_register_v3_invalid_schnorr_excluded_from_active_set() {
+        let val = TestValidator::random();
+        let account = val.account;
+        let mut reg = ValidatorRegisteredV3::from(&val);
+        reg.schnorrVK = zero_schnorr();
+        let mut state = StakeTableState::default();
+        state
+            .apply_event(StakeTableEvent::RegisterV3(reg))
+            .unwrap()
+            .unwrap();
+
+        let v = state.validators().get(&account).expect("present");
+        assert!(
+            !v.authenticated,
+            "validator with zero schnorr key must be unauthenticated"
+        );
+        assert!(v.state_ver_key.is_none());
+
+        state
+            .apply_event(StakeTableEvent::Delegate(Delegated {
+                delegator: Address::random(),
+                validator: account,
+                amount: U256::from(100),
+            }))
+            .unwrap()
+            .unwrap();
+
+        assert_excluded_from_active_set(&state, account);
+    }
+
+    #[test]
+    fn test_zero_bls_key_register_unauthenticated() {
+        let account = Address::random();
+        let schnorr_key_pair = StateKeyPair::generate();
+        let mut state = StakeTableState::default();
+
+        let reg_v2 = ValidatorRegisteredV2 {
+            account,
+            blsVK: zero_g2(),
+            schnorrVK: schnorr_key_pair.ver_key().into(),
+            commission: 0,
+            blsSig: zero_g1().into(),
+            schnorrSig: Bytes::default(),
+            metadataUri: String::new(),
+        };
+        state
+            .apply_event(StakeTableEvent::RegisterV2(reg_v2))
+            .expect("no fatal error")
+            .expect("registered as unauthenticated");
+        let registered = state.validators().get(&account).expect("present");
+        assert!(!registered.authenticated);
+        assert!(registered.stake_table_key.is_none());
+        assert!(AuthenticatedValidator::try_from(registered).is_err());
+
+        // V1 Register on a fresh state takes the same path.
+        let account_v1 = Address::random();
+        let schnorr_v1 = StateKeyPair::generate();
+        let mut state_v1 = StakeTableState::default();
+        let reg_v1 = ValidatorRegistered {
+            account: account_v1,
+            blsVk: zero_g2(),
+            schnorrVk: schnorr_v1.ver_key().into(),
+            commission: 0,
+        };
+        state_v1
+            .apply_event(StakeTableEvent::Register(reg_v1))
+            .expect("no fatal error")
+            .expect("registered as unauthenticated");
+        let registered_v1 = state_v1.validators().get(&account_v1).expect("present");
+        assert!(!registered_v1.authenticated);
+        assert!(registered_v1.stake_table_key.is_none());
+
+        // KeyUpdateV2 with unparsable key: soft skip, prior key preserved.
+        let valid_val = TestValidator::random();
+        state
+            .apply_event(StakeTableEvent::RegisterV2((&valid_val).into()))
+            .unwrap()
+            .unwrap();
+        let prior_key_v2 = state
+            .validators()
+            .get(&valid_val.account)
+            .unwrap()
+            .stake_table_key;
+        let update = ConsensusKeysUpdatedV2 {
+            account: valid_val.account,
+            blsVK: zero_g2(),
+            schnorrVK: schnorr_key_pair.ver_key().into(),
+            blsSig: zero_g1().into(),
+            schnorrSig: Bytes::default(),
+        };
+        assert_matches!(
+            state.apply_event(StakeTableEvent::KeyUpdateV2(update)),
+            Ok(Err(ExpectedStakeTableError::InvalidBlsKey))
+        );
+        assert_eq!(
+            state
+                .validators()
+                .get(&valid_val.account)
+                .unwrap()
+                .stake_table_key,
+            prior_key_v2
+        );
+
+        // V1 KeyUpdate keeps the skip-event behavior so the prior valid key is preserved.
+        let valid_v1 = TestValidator::random();
+        state_v1
+            .apply_event(StakeTableEvent::Register((&valid_v1).into()))
+            .unwrap()
+            .unwrap();
+        let prior_key = state_v1
+            .validators()
+            .get(&valid_v1.account)
+            .unwrap()
+            .stake_table_key;
+        let update_v1 = ConsensusKeysUpdated {
+            account: valid_v1.account,
+            blsVK: zero_g2(),
+            schnorrVK: schnorr_key_pair.ver_key().into(),
+        };
+        assert_matches!(
+            state_v1.apply_event(StakeTableEvent::KeyUpdate(update_v1)),
+            Ok(Err(ExpectedStakeTableError::InvalidBlsKey))
+        );
+        assert_eq!(
+            state_v1
+                .validators()
+                .get(&valid_v1.account)
+                .unwrap()
+                .stake_table_key,
+            prior_key
+        );
+    }
+
+    /// Regression for the bug: a Register with an unparsable BLS key must
+    /// leave the validator in the map so subsequent events to that account
+    /// (delegations, exits) apply cleanly instead of hitting ValidatorNotFound.
+    #[test]
+    fn test_zero_bls_key_registered_unauthenticated_in_from_l1_events() {
+        let valid_val = TestValidator::random();
+        let poison_account = Address::random();
+        let schnorr_key_pair = StateKeyPair::generate();
+
+        let events = vec![
+            StakeTableEvent::RegisterV2((&valid_val).into()),
+            StakeTableEvent::RegisterV2(ValidatorRegisteredV2 {
+                account: poison_account,
+                blsVK: zero_g2(),
+                schnorrVK: schnorr_key_pair.ver_key().into(),
+                commission: 0,
+                blsSig: zero_g1().into(),
+                schnorrSig: Bytes::default(),
+                metadataUri: String::new(),
+            }),
+            StakeTableEvent::Delegate(Delegated {
+                delegator: Address::random(),
+                validator: poison_account,
+                amount: U256::from(10),
+            }),
+        ];
+
+        let (validators, _) = validators_from_l1_events(events.into_iter()).expect("must not fail");
+        let valid = validators
+            .get(&valid_val.account)
+            .expect("valid validator present");
+        assert!(valid.authenticated);
+
+        let poisoned = validators
+            .get(&poison_account)
+            .expect("poison validator present as unauthenticated");
+        assert!(!poisoned.authenticated);
+        assert!(poisoned.stake_table_key.is_none());
+        assert_eq!(poisoned.stake, U256::from(10));
+        assert!(AuthenticatedValidator::try_from(poisoned).is_err());
+    }
+
+    #[test]
+    fn test_register_v3_zero_bls_key_unauthenticated_in_from_l1_events() {
+        let valid_val = TestValidator::random();
+        let poison_val = TestValidator::random();
+        let poison_account = poison_val.account;
+
+        let events = vec![
+            StakeTableEvent::RegisterV3((&valid_val).into()),
+            StakeTableEvent::RegisterV3(register_v3_with_bls(&poison_val, zero_g2())),
+            StakeTableEvent::Delegate(Delegated {
+                delegator: Address::random(),
+                validator: poison_account,
+                amount: U256::from(10),
+            }),
+        ];
+
+        let (validators, _) = validators_from_l1_events(events.into_iter()).expect("must not fail");
+        let valid = validators
+            .get(&valid_val.account)
+            .expect("valid validator present");
+        assert!(valid.authenticated);
+
+        let poisoned = validators
+            .get(&poison_account)
+            .expect("poison validator present as unauthenticated");
+        assert!(!poisoned.authenticated);
+        assert!(poisoned.stake_table_key.is_none());
+        assert_eq!(poisoned.stake, U256::from(10));
+        assert!(AuthenticatedValidator::try_from(poisoned).is_err());
+    }
+
+    /// Two distinct off-curve registrations must both succeed; unparsable
+    /// keys are never inserted into `used_bls_keys`.
+    #[test]
+    fn test_two_distinct_unparsable_g2_keys_both_register() {
+        let zero = zero_g2();
+        // x=(1, 0), y=(0, 0): violates y² = x³ + b' over Fp2.
+        let nonzero = G2PointSol {
+            x0: U256::from(1),
+            x1: U256::ZERO,
+            y0: U256::ZERO,
+            y1: U256::ZERO,
+        };
+        assert!(BLSPubKey::try_from(zero).is_err());
+        assert!(BLSPubKey::try_from(nonzero).is_err());
+        assert_ne!(zero, nonzero);
+
+        let acc_a = Address::random();
+        let acc_b = Address::random();
+
+        let mut state = StakeTableState::default();
+        state
+            .apply_event(StakeTableEvent::RegisterV2(ValidatorRegisteredV2 {
+                account: acc_a,
+                blsVK: zero,
+                schnorrVK: StateKeyPair::generate().ver_key().into(),
+                commission: 0,
+                blsSig: zero_g1().into(),
+                schnorrSig: Bytes::default(),
+                metadataUri: String::new(),
+            }))
+            .expect("first unparsable register must not fail")
+            .expect("first unparsable register must apply");
+        state
+            .apply_event(StakeTableEvent::RegisterV2(ValidatorRegisteredV2 {
+                account: acc_b,
+                blsVK: nonzero,
+                schnorrVK: StateKeyPair::generate().ver_key().into(),
+                commission: 0,
+                blsSig: zero_g1().into(),
+                schnorrSig: Bytes::default(),
+                metadataUri: String::new(),
+            }))
+            .expect("second unparsable register must not fail")
+            .expect("second unparsable register must apply");
+
+        for account in [acc_a, acc_b] {
+            let v = state.validators().get(&account).expect("present");
+            assert!(!v.authenticated);
+            assert!(v.stake_table_key.is_none());
+        }
+        assert!(state.used_bls_keys().is_empty());
+    }
+
+    /// Two distinct V3 off-curve registrations must both succeed; unparsable
+    /// keys are never inserted into `used_bls_keys`. Each account uses a
+    /// distinct nonzero x25519 key so the x25519 dedup check does not fire.
+    #[test]
+    fn test_register_v3_two_distinct_unparsable_g2_keys_both_register() {
+        let zero = zero_g2();
+        // x=(1, 0), y=(0, 0): violates y² = x³ + b' over Fp2.
+        let nonzero = G2PointSol {
+            x0: U256::from(1),
+            x1: U256::ZERO,
+            y0: U256::ZERO,
+            y1: U256::ZERO,
+        };
+        assert!(BLSPubKey::try_from(zero).is_err());
+        assert!(BLSPubKey::try_from(nonzero).is_err());
+        assert_ne!(zero, nonzero);
+
+        let val_a = TestValidator::random();
+        let val_b = TestValidator::random();
+        let acc_a = val_a.account;
+        let acc_b = val_b.account;
+
+        let mut state = StakeTableState::default();
+        state
+            .apply_event(StakeTableEvent::RegisterV3(register_v3_with_bls(
+                &val_a, zero,
+            )))
+            .expect("first unparsable register must not fail")
+            .expect("first unparsable register must apply");
+        state
+            .apply_event(StakeTableEvent::RegisterV3(register_v3_with_bls(
+                &val_b, nonzero,
+            )))
+            .expect("second unparsable register must not fail")
+            .expect("second unparsable register must apply");
+
+        for account in [acc_a, acc_b] {
+            let v = state.validators().get(&account).expect("present");
+            assert!(!v.authenticated);
+            assert!(v.stake_table_key.is_none());
+        }
+        assert!(state.used_bls_keys().is_empty());
+    }
+
+    /// After a poison Register, a subsequent valid KeyUpdateV2 must
+    /// authenticate the validator and install the new keys.
+    #[test]
+    fn test_zero_g2_then_valid_key_update() {
+        let mut state = StakeTableState::default();
+        let valid_val = TestValidator::random();
+        let account = valid_val.account;
+
+        state
+            .apply_event(StakeTableEvent::RegisterV2(ValidatorRegisteredV2 {
+                account,
+                blsVK: zero_g2(),
+                schnorrVK: StateKeyPair::generate().ver_key().into(),
+                commission: 0,
+                blsSig: zero_g1().into(),
+                schnorrSig: Bytes::default(),
+                metadataUri: String::new(),
+            }))
+            .unwrap()
+            .unwrap();
+        assert!(!state.validators().get(&account).unwrap().authenticated);
+
+        let new_keys = TestValidator::random_update_keys(account, 0);
+        let update: ConsensusKeysUpdatedV2 = (&new_keys).into();
+        state
+            .apply_event(StakeTableEvent::KeyUpdateV2(update))
+            .unwrap()
+            .unwrap();
+
+        let v = state.validators().get(&account).unwrap();
+        let expected_bls = BLSPubKey::try_from(new_keys.bls_vk).unwrap();
+        assert_eq!(v.stake_table_key.as_ref(), Some(&expected_bls));
+        // KeyUpdateV2 authenticates signatures, so on success the validator
+        // is promoted to `authenticated=true`.
+        assert!(v.authenticated);
+    }
+
+    #[test]
+    fn test_register_v3_zero_g2_then_valid_key_update() {
+        let val = TestValidator::random();
+        let account = val.account;
+        let mut state = StakeTableState::default();
+
+        state
+            .apply_event(StakeTableEvent::RegisterV3(register_v3_with_bls(
+                &val,
+                zero_g2(),
+            )))
+            .unwrap()
+            .unwrap();
+        assert!(!state.validators().get(&account).unwrap().authenticated);
+
+        let new_keys = TestValidator::random_update_keys(account, 0);
+        let update: ConsensusKeysUpdatedV2 = (&new_keys).into();
+        state
+            .apply_event(StakeTableEvent::KeyUpdateV2(update))
+            .unwrap()
+            .unwrap();
+
+        let v = state.validators().get(&account).unwrap();
+        let expected_bls = BLSPubKey::try_from(new_keys.bls_vk).unwrap();
+        assert_eq!(v.stake_table_key.as_ref(), Some(&expected_bls));
+        // KeyUpdateV2 authenticates signatures, so on success the validator
+        // is promoted to `authenticated=true`.
+        assert!(v.authenticated);
+    }
+
+    #[test]
+    fn test_key_update_bad_key_no_corruption() {
+        // V1 path
+        let mut state_v1 = StakeTableState::default();
+        let val = TestValidator::random();
+        state_v1
+            .apply_event(StakeTableEvent::Register((&val).into()))
+            .unwrap()
+            .unwrap();
+        let prior_v1 = state_v1
+            .validators()
+            .get(&val.account)
+            .unwrap()
+            .stake_table_key;
+        assert_matches!(
+            state_v1.apply_event(StakeTableEvent::KeyUpdate(ConsensusKeysUpdated {
+                account: val.account,
+                blsVK: zero_g2(),
+                schnorrVK: StateKeyPair::generate().ver_key().into(),
+            })),
+            Ok(Err(ExpectedStakeTableError::InvalidBlsKey))
+        );
+        assert_eq!(
+            state_v1
+                .validators()
+                .get(&val.account)
+                .unwrap()
+                .stake_table_key,
+            prior_v1
+        );
+
+        // V2 path: replay-from-persistence safety net; live fetch is pre-filtered.
+        let mut state_v2 = StakeTableState::default();
+        let val2 = TestValidator::random();
+        state_v2
+            .apply_event(StakeTableEvent::RegisterV2((&val2).into()))
+            .unwrap()
+            .unwrap();
+        let prior_v2 = state_v2
+            .validators()
+            .get(&val2.account)
+            .unwrap()
+            .stake_table_key;
+        assert_matches!(
+            state_v2.apply_event(StakeTableEvent::KeyUpdateV2(ConsensusKeysUpdatedV2 {
+                account: val2.account,
+                blsVK: zero_g2(),
+                schnorrVK: StateKeyPair::generate().ver_key().into(),
+                blsSig: zero_g1().into(),
+                schnorrSig: Bytes::default(),
+            })),
+            Ok(Err(ExpectedStakeTableError::InvalidBlsKey))
+        );
+        assert_eq!(
+            state_v2
+                .validators()
+                .get(&val2.account)
+                .unwrap()
+                .stake_table_key,
+            prior_v2
+        );
+    }
+}
+
+// Deploys StakeTableV3 on anvil and fuzzes the property: Solidity accepts an x25519 key =>
+// `apply_event` returns the outer `Ok(_)` and stores `parse_x25519_key(key).ok()`.
+// See `parse_x25519_key` for why contract-rejected keys must still soft-fail.
+#[cfg(test)]
+mod proptest_x25519_key {
+    use alloy::{
+        primitives::FixedBytes,
+        providers::{ProviderBuilder, WalletProvider},
+    };
+    use proptest::{
+        prelude::*,
+        test_runner::{Config as ProptestConfig, TestRunner},
+    };
+
+    use super::{testing::TestValidator, *};
+
+    fn x25519_key_strategy() -> impl Strategy<Value = [u8; 32]> {
+        // LE encoding of the curve25519 field prime p = 2^255 - 19.
+        let mut p = [0xffu8; 32];
+        p[0] = 0xed;
+        p[31] = 0x7f;
+        prop_oneof![
+            // Uniform random bytes
+            any::<[u8; 32]>(),
+            // All zeros (contract rejects)
+            Just([0u8; 32]),
+            // Exactly p: nonzero but non-canonical
+            Just(p),
+            // The 19 non-canonical encodings p..2^255-1 (0xed + 18 = 0xff, so no overflow)
+            (0..19u8).prop_map(move |k| {
+                let mut key = p;
+                key[0] += k;
+                key
+            }),
+            // p - 1: largest canonical value
+            Just({
+                let mut key = p;
+                key[0] = 0xec;
+                key
+            }),
+            // 2^256 - 1: top bit set. Rust parses it (bit 255 is only masked during DH),
+            // the contract rejects it as a non-canonical alias.
+            Just([0xffu8; 32]),
+            // Top bit only: same alias class as above
+            Just({
+                let mut key = [0u8; 32];
+                key[31] = 0x80;
+                key
+            }),
+            // Small integers, including low-order point encodings
+            (0..=2u8).prop_map(|v| {
+                let mut key = [0u8; 32];
+                key[0] = v;
+                key
+            }),
+        ]
+    }
+
+    #[test]
+    fn solidity_rust_x25519_validation_equivalence() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+
+        let provider = ProviderBuilder::new().connect_anvil_with_wallet();
+        let sender = provider.default_signer_address();
+        let contract_addr = rt.block_on(async {
+            let contract = StakeTableV3::deploy(&provider).await.unwrap();
+            *contract.address()
+        });
+        let contract = StakeTableV3::new(contract_addr, &provider);
+
+        // Committed registration for the update-path oracle: gives `updateX25519Key` an
+        // active validator. Done before both passes so every case sees identical state.
+        let registered = TestValidator::random_update_keys(sender, 100).with_x25519_key([7u8; 32]);
+        rt.block_on(async {
+            let receipt = contract
+                .registerValidatorV3(
+                    registered.bls_vk,
+                    registered.schnorr_vk,
+                    registered.bls_sig.into(),
+                    registered.schnorr_sig.clone(),
+                    registered.commission,
+                    String::new(),
+                    FixedBytes(registered.x25519_key),
+                    registered.p2p_addr.clone(),
+                )
+                .send()
+                .await
+                .unwrap()
+                .get_receipt()
+                .await
+                .unwrap();
+            assert!(receipt.status());
+        });
+
+        // Rust mirror of the committed registration, base state for the update pass.
+        let mut registered_state = StakeTableState::default();
+        registered_state
+            .apply_event(StakeTableEvent::RegisterV3((&registered).into()))
+            .unwrap()
+            .unwrap();
+
+        let base = TestValidator::random();
+
+        let cases = std::env::var("PROPTEST_CASES")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(512);
+        let mut runner = TestRunner::new(ProptestConfig {
+            cases,
+            ..ProptestConfig::default()
+        });
+
+        // Register path: static call so no state is committed between cases.
+        runner
+            .run(&x25519_key_strategy(), |key| {
+                let sol_valid = rt.block_on(async {
+                    contract
+                        .registerValidatorV3(
+                            base.bls_vk,
+                            base.schnorr_vk,
+                            base.bls_sig.into(),
+                            base.schnorr_sig.clone(),
+                            base.commission,
+                            String::new(),
+                            FixedBytes(key),
+                            base.p2p_addr.clone(),
+                        )
+                        .from(base.account)
+                        .call()
+                        .await
+                        .is_ok()
+                });
+
+                let val = base.clone().with_x25519_key(key);
+                let mut state = StakeTableState::default();
+                let result = state.apply_event(StakeTableEvent::RegisterV3((&val).into()));
+
+                if sol_valid {
+                    prop_assert!(
+                        result.is_ok(),
+                        "Solidity accepted registration with x25519 key {key:?} but apply_event \
+                         failed: {result:?}"
+                    );
+                    let stored = state.validators().get(&val.account).unwrap().x25519_key;
+                    // Contract-valid keys are always Rust-parsable, so `stored` must
+                    // not degrade to `None`; the eq then pins the exact key.
+                    prop_assert!(stored.is_some());
+                    prop_assert_eq!(stored, parse_x25519_key(key).ok());
+                }
+                Ok(())
+            })
+            .unwrap();
+
+        // Update path: static call against the committed registration.
+        runner
+            .run(&x25519_key_strategy(), |key| {
+                let sol_valid = rt.block_on(async {
+                    contract
+                        .updateX25519Key(FixedBytes(key))
+                        .from(sender)
+                        .call()
+                        .await
+                        .is_ok()
+                });
+
+                let mut state = registered_state.clone();
+                let result = state.apply_event(registered.x25519_update(key));
+
+                if sol_valid {
+                    prop_assert!(
+                        result.is_ok(),
+                        "Solidity accepted x25519 key update {key:?} but apply_event failed: \
+                         {result:?}"
+                    );
+                    let stored = state.validators().get(&sender).unwrap().x25519_key;
+                    prop_assert!(stored.is_some());
+                    prop_assert_eq!(stored, parse_x25519_key(key).ok());
+                }
+                Ok(())
+            })
+            .unwrap();
+    }
+}
+
+#[cfg(all(test, feature = "rlp"))]
+mod rlp_tests {
+    use alloy_rlp::{Decodable, Encodable};
+    use hotshot_types::{signature_key::BLSPubKey, traits::signature_key::StateSignatureKey};
+
+    use super::*;
+
+    #[test]
+    fn test_registered_validator_round_canonical_order() {
+        let seed = [0; 32];
+        let validator1 = RegisteredValidator {
+            account: Address::random(),
+            stake_table_key: Some(BLSPubKey::generated_from_seed_indexed(seed, 0).0),
+            state_ver_key: Some(SchnorrPubKey::generated_from_seed_indexed(seed, 0).0),
+            stake: U256::MAX,
+            commission: u16::MAX,
+            delegators: [
+                (Address::random(), U256::ZERO),
+                (Address::random(), U256::MAX),
+            ]
+            .into_iter()
+            .collect(),
+            authenticated: true,
+            x25519_key: Some(x25519::Keypair::generate().unwrap().public_key()),
+            p2p_addr: Some(NetAddr::named("localhost", 8080)),
+        };
+        let validator2 = RegisteredValidator {
+            account: Address::random(),
+            ..validator1.clone()
+        };
+
+        // Two hashsets with different capacities are very likely to end up with a different
+        // iteration order.
+        let mut validator_exits1 = HashSet::with_capacity(100);
+        let mut validator_exits2 = HashSet::with_capacity(10_000);
+        let mut used_bls_keys1 = HashSet::with_capacity(100);
+        let mut used_bls_keys2 = HashSet::with_capacity(10_000);
+        let mut used_schnorr_keys1 = HashSet::with_capacity(100);
+        let mut used_schnorr_keys2 = HashSet::with_capacity(10_000);
+        let mut used_x25519_keys1 = HashSet::with_capacity(100);
+        let mut used_x25519_keys2 = HashSet::with_capacity(10_000);
+
+        for i in 0..100 {
+            let exit = Address::random();
+            let bls_key = BLSPubKey::generated_from_seed_indexed([0; 32], i).0;
+            let schnorr_key = SchnorrPubKey::generated_from_seed_indexed([0; 32], i).0;
+            let x25519_key = x25519::Keypair::generate().unwrap().public_key();
+
+            validator_exits1.insert(exit);
+            validator_exits2.insert(exit);
+            used_bls_keys1.insert(bls_key);
+            used_bls_keys2.insert(bls_key);
+            used_schnorr_keys1.insert(schnorr_key.clone());
+            used_schnorr_keys2.insert(schnorr_key);
+            used_x25519_keys1.insert(x25519_key);
+            used_x25519_keys2.insert(x25519_key);
+        }
+        assert_eq!(validator_exits1, validator_exits2);
+        assert_eq!(used_bls_keys1, used_bls_keys2);
+        assert_eq!(used_schnorr_keys1, used_schnorr_keys2);
+        assert_eq!(used_x25519_keys1, used_x25519_keys2);
+        assert_ne!(
+            validator_exits1.iter().collect::<Vec<_>>(),
+            validator_exits2.iter().collect::<Vec<_>>()
+        );
+        assert_ne!(
+            used_bls_keys1.iter().collect::<Vec<_>>(),
+            used_bls_keys2.iter().collect::<Vec<_>>()
+        );
+        assert_ne!(
+            used_schnorr_keys1.iter().collect::<Vec<_>>(),
+            used_schnorr_keys2.iter().collect::<Vec<_>>()
+        );
+        assert_ne!(
+            used_x25519_keys1.iter().collect::<Vec<_>>(),
+            used_x25519_keys2.iter().collect::<Vec<_>>()
+        );
+
+        let state1 = StakeTableState {
+            validators: [
+                (validator1.account, validator1.clone()),
+                (validator2.account, validator2.clone()),
+            ]
+            .into_iter()
+            .collect(),
+            validator_exits: validator_exits1,
+            used_bls_keys: used_bls_keys1,
+            used_schnorr_keys: used_schnorr_keys1,
+            used_x25519_keys: used_x25519_keys1,
+        };
+        let state2 = StakeTableState {
+            validators: [
+                (validator2.account, validator2.clone()),
+                (validator1.account, validator1.clone()),
+            ]
+            .into_iter()
+            .collect(),
+            validator_exits: validator_exits2,
+            used_bls_keys: used_bls_keys2,
+            used_schnorr_keys: used_schnorr_keys2,
+            used_x25519_keys: used_x25519_keys2,
+        };
+        assert_eq!(state1, state2);
+        assert_eq!(state1.commit(), state2.commit());
+
+        let mut bytes1 = vec![];
+        state1.encode(&mut bytes1);
+        assert_eq!(bytes1.len(), state1.length());
+
+        let mut bytes2 = vec![];
+        state2.encode(&mut bytes2);
+        assert_eq!(bytes2.len(), state2.length());
+
+        assert_eq!(bytes1, bytes2);
+        assert_eq!(
+            state1,
+            StakeTableState::decode(&mut bytes2.as_slice()).unwrap()
+        );
+        assert_eq!(
+            state2,
+            StakeTableState::decode(&mut bytes1.as_slice()).unwrap()
+        );
     }
 }

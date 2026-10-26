@@ -9,9 +9,7 @@ use alloy::{
 };
 use committable::{Commitment, Committable};
 use escargot::CargoBuild;
-use espresso_dev_node::{
-    AltChainInfo, DevInfo, DevNodeVersion, SetHotshotDownReqBody, SetHotshotUpReqBody,
-};
+use espresso_dev_node::{AltChainInfo, DevInfo, SetHotshotDownReqBody, SetHotshotUpReqBody};
 use espresso_node::SequencerApiVersion;
 use espresso_types::{BlockMerkleTree, Header, NamespaceProofQueryData, SeqTypes, Transaction};
 use futures::{StreamExt, TryStreamExt};
@@ -20,11 +18,10 @@ use hotshot_query_service::{
     availability::{BlockQueryData, TransactionQueryData, VidCommonQueryData},
     explorer::TransactionDetailResponse,
 };
+use http_client::{Client, error::ClientErr};
 use jf_merkle_tree_compat::MerkleTreeScheme;
 use rand::Rng;
-use surf_disco::Client;
 use test_utils::reserve_tcp_port;
-use tide_disco::error::ServerError;
 use tokio::time::sleep;
 use url::Url;
 
@@ -46,16 +43,7 @@ impl Drop for BackgroundProcess {
 // - Types (like `Header`) update
 #[rstest::rstest]
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
-async fn slow_dev_node_test(
-    #[values(
-        DevNodeVersion::V0_3,
-        DevNodeVersion::V0_4,
-        DevNodeVersion::V0_5,
-        DevNodeVersion::V0_6
-    )]
-    version: DevNodeVersion,
-) {
-    let builder_port = reserve_tcp_port().unwrap();
+async fn slow_dev_node_test(#[values("0.6", "0.7")] version: &str) {
     let api_port = reserve_tcp_port().unwrap();
     let dev_node_port = reserve_tcp_port().unwrap();
 
@@ -71,7 +59,6 @@ async fn slow_dev_node_test(
         .unwrap()
         .command()
         .env("ESPRESSO_L1_PROVIDER", l1_url.to_string())
-        .env("ESPRESSO_BUILDER_PORT", builder_port.to_string())
         .env("ESPRESSO_NODE_API_PORT", api_port.to_string())
         .env("ESPRESSO_ETH_MNEMONIC", TEST_MNEMONIC)
         .env("ESPRESSO_DEPLOYER_ACCOUNT_INDEX", "0")
@@ -79,13 +66,13 @@ async fn slow_dev_node_test(
         .env("ESPRESSO_NODE_STORAGE_PATH", tmp_dir.path().as_os_str())
         .env("ESPRESSO_NODE_DATABASE_MAX_CONNECTIONS", "25")
         .env("ESPRESSO_DEV_NODE_MAX_BLOCK_SIZE", "500000")
-        .env("ESPRESSO_DEV_NODE_VERSION", version.to_string())
+        .env("ESPRESSO_DEV_NODE_VERSION", version)
         .spawn()
         .unwrap();
 
     let process = BackgroundProcess(process);
 
-    let api_client: Client<ServerError, SequencerApiVersion> =
+    let api_client: Client<ClientErr, SequencerApiVersion> =
         Client::new(format!("http://localhost:{api_port}").parse().unwrap());
     api_client.connect(None).await;
 
@@ -100,14 +87,10 @@ async fn slow_dev_node_test(
         .await
         .unwrap();
 
-    let builder_api_client: Client<ServerError, SequencerApiVersion> =
-        Client::new(format!("http://localhost:{builder_port}").parse().unwrap());
-    builder_api_client.connect(None).await;
-
     let tx = Transaction::new(100_u32.into(), vec![1, 2, 3]);
 
-    let hash: Commitment<Transaction> = builder_api_client
-        .post("txn_submit/submit")
+    let hash: Commitment<Transaction> = api_client
+        .post("submit/submit")
         .body_json(&tx)
         .unwrap()
         .send()
@@ -244,11 +227,12 @@ async fn slow_dev_node_test(
             .await
             .unwrap();
 
-        api_client
+        let header = api_client
             .get::<Header>("availability/header/3")
             .send()
             .await
             .unwrap();
+        assert_eq!(header.version().to_string(), version);
 
         api_client
             .get::<VidCommonQueryData<SeqTypes>>(&format!(
@@ -268,7 +252,7 @@ async fn slow_dev_node_test(
         }
     }
 
-    let dev_node_client: Client<ServerError, SequencerApiVersion> =
+    let dev_node_client: Client<ClientErr, SequencerApiVersion> =
         Client::new(format!("http://localhost:{dev_node_port}").parse().unwrap());
     dev_node_client.connect(None).await;
 
@@ -370,7 +354,6 @@ async fn alt_chain_providers() -> (Vec<AnvilInstance>, Vec<Url>) {
 
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn slow_dev_node_multiple_lc_providers_test() {
-    let builder_port = reserve_tcp_port().unwrap();
     let api_port = reserve_tcp_port().unwrap();
     let dev_node_port = reserve_tcp_port().unwrap();
 
@@ -394,7 +377,6 @@ async fn slow_dev_node_multiple_lc_providers_test() {
         .unwrap()
         .command()
         .env("ESPRESSO_L1_PROVIDER", l1_url.to_string())
-        .env("ESPRESSO_BUILDER_PORT", builder_port.to_string())
         .env("ESPRESSO_NODE_API_PORT", api_port.to_string())
         .env("ESPRESSO_ETH_MNEMONIC", TEST_MNEMONIC)
         .env("ESPRESSO_DEPLOYER_ACCOUNT_INDEX", "0")
@@ -410,7 +392,7 @@ async fn slow_dev_node_multiple_lc_providers_test() {
 
     let process = BackgroundProcess(process);
 
-    let api_client: Client<ServerError, SequencerApiVersion> =
+    let api_client: Client<ClientErr, SequencerApiVersion> =
         Client::new(format!("http://localhost:{api_port}").parse().unwrap());
     api_client.connect(None).await;
 
@@ -425,7 +407,7 @@ async fn slow_dev_node_multiple_lc_providers_test() {
         .await
         .unwrap();
 
-    let dev_node_client: Client<ServerError, SequencerApiVersion> =
+    let dev_node_client: Client<ClientErr, SequencerApiVersion> =
         Client::new(format!("http://localhost:{dev_node_port}").parse().unwrap());
     dev_node_client.connect(None).await;
 

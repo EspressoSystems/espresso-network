@@ -1,0 +1,8 @@
+diff --git a/crates/espresso/node/src/main.rs b/crates/espresso/node/src/main.rs
+--- a/crates/espresso/node/src/main.rs
++++ b/crates/espresso/node/src/main.rs
+@@ -1 +1,4 @@
++#[global_allocator]
++static ALLOC: snmalloc_rs::SnMalloc = snmalloc_rs::SnMalloc;
++
+ // NOTE: due to nextest eagerly compiling binaries we allow the build if we're

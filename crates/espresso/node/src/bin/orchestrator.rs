@@ -6,10 +6,7 @@ use derive_more::From;
 use espresso_types::{Ratio, SeqTypes, parse_duration};
 use espresso_utils::logging;
 use hotshot_orchestrator::run_orchestrator;
-use hotshot_types::{
-    PeerConfig,
-    network::{Libp2pConfig, NetworkConfig},
-};
+use hotshot_types::{PeerConfig, network::NetworkConfig};
 use snafu::Snafu;
 use url::Url;
 use vec1::Vec1;
@@ -66,22 +63,16 @@ struct Args {
     )]
     round_start_delay: Duration,
 
-    /// The number of nodes a Libp2p node should try to maintain
-    /// a connection with at one time.
-    #[arg(
-        long,
-        env = "ESPRESSO_ORCHESTRATOR_LIBP2P_MESH_N",
-        default_value = "20"
-    )]
-    libp2p_mesh_n: usize,
-
     /// Seed to use for generating node keys.
     ///
     /// The seed is a 32 byte integer, encoded in hex.
     #[arg(long, env = "ESPRESSO_ORCHESTRATOR_KEYGEN_SEED", default_value = "0x0000000000000000000000000000000000000000000000000000000000000000", value_parser = parse_seed)]
     keygen_seed: [u8; 32],
 
-    /// HotShot builder URL
+    /// HotShot builder URLs, only used by networks below `NEW_PROTOCOL_VERSION`.
+    ///
+    /// From `NEW_PROTOCOL_VERSION` on, leaders build blocks in-process and never contact a
+    /// builder. When no URL is given, nodes receive the placeholder from the default config.
     #[arg(long, env = "ESPRESSO_ORCHESTRATOR_BUILDER_URLS", num_args = 1.., value_delimiter = ',')]
     builder_urls: Vec<Url>,
 
@@ -133,24 +124,21 @@ async fn async_main(migrated_envs: Vec<(&str, &str)>) {
         ..Default::default()
     };
 
-    // The Libp2p configuration
-    let libp2p_config = Libp2pConfig {
-        bootstrap_nodes: Vec::new(),
-    };
-
     config.config.num_nodes_with_stake = args.num_nodes;
     config.config.known_nodes_with_stake = vec![PeerConfig::test_default(); args.num_nodes.get()];
     config.config.known_da_nodes = Vec::new();
     config.config.next_view_timeout = args.next_view_timeout.as_millis() as u64;
-    config.libp2p_config = Some(libp2p_config);
     config.config.start_threshold = args.start_threshold.into();
     config.config.da_staked_committee_size = args.num_nodes.get();
-    config.config.builder_urls = Vec1::try_from_vec(args.builder_urls).unwrap();
+    if let Ok(builder_urls) = Vec1::try_from_vec(args.builder_urls) {
+        config.config.builder_urls = builder_urls;
+    }
     config.config.builder_timeout = args.builder_timeout;
-    run_orchestrator(
-        config,
-        format!("http://0.0.0.0:{}", args.port).parse().unwrap(),
-    )
-    .await
-    .unwrap();
+    tokio::select! {
+        res = run_orchestrator(
+            config,
+            format!("http://0.0.0.0:{}", args.port).parse().unwrap(),
+        ) => res.unwrap(),
+        _ = espresso_utils::shutdown::wait_for_shutdown_signal() => {},
+    }
 }

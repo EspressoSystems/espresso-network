@@ -53,6 +53,11 @@ pub trait Metrics: Send + Sync + DynClone + Debug {
 
     /// Create a subgroup with a specified prefix.
     fn subgroup(&self, subgroup_name: String) -> Box<dyn Metrics>;
+
+    /// Is this type storing metrics values?
+    fn is_recording(&self) -> bool {
+        true
+    }
 }
 
 /// A family of related metrics, partitioned by their label values.
@@ -181,6 +186,10 @@ impl Metrics for NoMetrics {
 
     fn subgroup(&self, _: String) -> Box<dyn Metrics> {
         Box::new(NoMetrics)
+    }
+
+    fn is_recording(&self) -> bool {
+        false
     }
 }
 

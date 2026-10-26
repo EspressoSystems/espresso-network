@@ -1,0 +1,71 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Pre-fetches live query-service state for AI agents (see .github/workflows/claude-agents-md.yml).
+# The agent reads these files instead of making its own requests, so the audit step
+# needs no outbound access beyond the model API, and every fetched URL is fixed here
+# rather than chosen by the model.
+
+readonly SCRIPT_NAME="${0##*/}"
+readonly NETWORKS=(
+  "mainnet=https://query.main.net.espresso.network"
+  "decaf=https://query.decaf.testnet.espresso.network"
+)
+
+usage() {
+  cat <<EOF
+Usage: ${SCRIPT_NAME} <output-dir>
+
+Fetch query-service state for mainnet and decaf into <output-dir>/<network>/.
+Log messages go to stderr.
+EOF
+}
+
+err() {
+  echo "${SCRIPT_NAME}: $*" >&2
+}
+
+get() {
+  curl -fsSL --max-time 60 --retry 3 "$1"
+}
+
+fetch_network() {
+  local name="$1" base="$2" dir="$3" height
+  mkdir -p "$dir"
+
+  # metrics.prom carries consensus_version and consensus_genesis; /status/version
+  # only reports the API version and is absent on decaf.
+  get "$base/v1/status/metrics" > "$dir/metrics.prom"
+  get "$base/v1/config/runtime" > "$dir/config-runtime.json"
+  get "$base/v1/config/hotshot" > "$dir/config-hotshot.json"
+  get "$base/v1/node/transactions/count" > "$dir/transaction-count"
+
+  height="$(get "$base/v1/status/block-height")"
+  echo "$height" > "$dir/block-height"
+  get "$base/v1/availability/header/$height" > "$dir/header-latest.json"
+  get "$base/v1/availability/leaf/$height" > "$dir/leaf-latest.json"
+
+  err "${name}: block height ${height}"
+}
+
+main() {
+  case "${1-}" in
+    -h | --help)
+      usage
+      exit 0
+      ;;
+  esac
+
+  if [[ $# -ne 1 ]]; then
+    err "expected 1 argument, got $#"
+    usage >&2
+    exit 1
+  fi
+
+  local out="$1" entry
+  for entry in "${NETWORKS[@]}"; do
+    fetch_network "${entry%%=*}" "${entry#*=}" "$out/${entry%%=*}"
+  done
+}
+
+main "$@"

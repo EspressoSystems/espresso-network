@@ -1,7 +1,7 @@
 [profile.default]
 # Kill tests after 3 periods of 2m, because they are probably hanging
 slow-timeout = { period = "2m", terminate-after = 3 }
-default-filter = 'not (deps(hotshot-testing) | package(tests) | package(slow-tests) | package(espresso-dev-node))'
+default-filter = 'not (package(tests) | package(slow-tests) | package(espresso-dev-node))'
 retries = 2
 
 [profile.default.junit]
@@ -20,17 +20,35 @@ test(test_process_client_handling_stream_subscribe_voters)
 slow-timeout = { period = "2s", terminate-after = 1 }
 retries = 10
 
-[[profile.default.overrides]]
-filter = 'test(test_hotshot_event_streaming_epoch_progression)'
-slow-timeout = { period = "8m", terminate-after = 4 }
-
-[[profile.default.overrides]]
-filter = 'test(test_pos_upgrade_view_based)'
-slow-timeout = { period = "2m", terminate-after = 5 }
 
 [[profile.default.overrides]]
 filter = 'test(test_light_client_completeness)'
 slow-timeout = { period = "2m", terminate-after = 15 }
+
+[[profile.default.overrides]]
+filter = 'test(test_new_protocol_query_node_restart_with_fresh_storage)'
+slow-timeout = { period = "2m", terminate-after = 15 }
+threads-required = 'num-cpus'
+
+[[profile.default.overrides]]
+filter = 'test(test_light_client_follower_query_node)'
+slow-timeout = { period = "2m", terminate-after = 15 }
+threads-required = 'num-cpus'
+
+[[profile.default.overrides]]
+filter = 'test(slow_test_restart_new_protocol)'
+slow-timeout = { period = "2m", terminate-after = 5 }
+threads-required = 'num-cpus'
+
+# Stake-table-change integration tests (slow-tests crate): multi-node
+# networks against a real L1, running for several epochs. No retries: these
+# run serialized (threads-required = num-cpus), so retrying a hung test would
+# cost more CI wall-clock than most full runs, and a flake here is signal.
+[[profile.default.overrides]]
+filter = 'package(slow-tests) & binary(stake_table_changes)'
+slow-timeout = { period = "2m", terminate-after = 8 }
+threads-required = 'num-cpus'
+retries = 0
 
 # The restart tests run an entire sequencing network, and so are quite resource intensive.
 [[profile.default.overrides]]
@@ -42,42 +60,6 @@ threads-required = 'num-cpus'
 filter = 'package(request-response)'
 threads-required = 'num-cpus'
 
-# HotShot integration tests
-[profile.hotshot]
-retries = 0
-slow-timeout = { period = "2m", terminate-after = 2 }
-default-filter = 'deps(hotshot-testing)'
-final-status-level = "flaky"
-threads-required = "num-test-threads"
-
-[profile.hotshot.junit]
-path = "junit.xml"
-store-failure-output = true
-report-name = "nextest"
-
-# cross_tests! macro tests: use binary() not test(), because the macro names the
-# binary after the file but the test function is always the base test name.
-#
-# Example: `cargo nextest list ..`
-#     package:binary
-#         test
-#
-#     hotshot-testing::test_epoch_success_overlap_3f:
-#         test_epoch_success::testtypesrandomizedcommitteemembers_stablequorumfilterconfig_123_6__stablequorumfilterconfig_123_6___::cliquenetimpl_::test_epoch_success
-[[profile.hotshot.overrides]]
-filter = """
-test(test_success_with_async_delay_with_epochs) |
-test(test_success_with_async_delay_2_with_epochs) |
-test(test_vid2_success) |
-test(test_combined_network_half_dc) |
-test(test_staggered_restart_first_block) |
-test(/test_staggered_restart$/) |
-binary(test_epoch_success_overlap_2_f) |
-binary(test_epoch_success_overlap_3f) |
-binary(test_epoch_success_types_randomized_leader)
-"""
-retries = 3
-
 # New-protocol integration tests (crates/hotshot/new-protocol). Some restart
 # and late-start tests have max_runtime up to 500s, so we give them more
 # headroom than the default profile's 360s termination.
@@ -87,7 +69,9 @@ default-filter = 'package(hotshot-new-protocol)'
 retries = 0
 
 [profile.slow]
-slow-timeout = "2m"
+# Without `terminate-after` a hung test runs until the job timeout, which discards
+# the JUnit and its output.
+slow-timeout = { period = "2m", terminate-after = 12 }
 default-filter = 'package(espresso-dev-node) | package(slow-tests)'
 retries = 2
 
@@ -107,12 +91,5 @@ store-failure-output = true
 report-name = "nextest"
 
 # Serial required
-# TRY 3 FAIL [   2.790s] hotshot-testing::tests_4 tests_4::test_marketplace::test_builders_down::testtypes_::memoryimpl_::test_builders_down
-# TRY 3 FAIL [   4.446s] hotshot-testing::tests_4 tests_4::test_marketplace::test_marketplace_fallback_builder_down::testtypes_::memoryimpl_::test_marketplace_fallback_builder_down
-# TRY 3 FAIL [   5.119s] hotshot-testing::tests_4 tests_4::test_marketplace::test_marketplace_upgrade::testtypes_::memoryimpl_::test_marketplace_upgrade
-#
-# FLAKY 2/3 [  12.037s] hotshot-testing::tests_2 tests_2::catchup::test_all_restart::testtypes_::pushcdnimpl_::test_all_restart
-# FLAKY 2/3 [  49.943s] hotshot-testing::tests_6 tests_6::test_epochs::test_combined_network_cdn_crash_with_epochs::testtypes_::combinedimpl_::test_combined_network_cdn_crash_with_epochs
-# FLAKY 2/3 [   6.968s] hotshot-testing::tests_6 tests_6::test_epochs::test_epoch_end::testtwostaketablestypes_::pushcdnimpl_::test_epoch_end
 # FLAKY 2/3 [ 125.353s] sequencer api::test::test_fee_upgrade_view_based
 # FLAKY 2/3 [   2.870s] sequencer api::test::test_hotshot_event_streaming

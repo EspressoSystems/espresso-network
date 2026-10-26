@@ -9,19 +9,19 @@ extend-exclude = [
   "**/*.drawio",
   "contracts/lib",
   "contracts/rust/adapter/src/bindings",
-  "node-metrics/src/api/node_validator/v0/example_prometheus_metrics_output.txt",
+  "crates/node-metrics/src/api/node_validator/v0/example_prometheus_metrics_output.txt",
   "crates/hotshot/orchestrator/run-config.toml",
-  "crates/hotshot/macros/src/lib.rs",
   "crates/hotshot/types/src/light_client.rs",
-  "light-client-query-service/genesis/*.toml",
-  "staking-cli/tests/cli.rs",
+  "lean",
+  "crates/light-client-query-service/genesis/*.toml",
+  "crates/staking-cli/tests/cli.rs",
   "sdks/go/types/common/consts.go",
   "crates/espresso/node/src/genesis.rs",
+  "*.snap",
   "data/insta_snapshots",
   "data/initial_stake_table.toml",
   "data/initial_staging_stake_table.toml",
   "data/genesis/staging.toml",
-  "data/genesis/staging-proposer.toml",
   "data/genesis/staging-new.toml",
   "data/genesis/demo-da-committees.toml",
   "tests/proof_of_stake.rs",
@@ -29,9 +29,13 @@ extend-exclude = [
 
 [default.extend-words]
 Forgetten = "Forgetten"
+# Serialized network config field name; renaming would break the wire format
+bootrap = "bootrap"
 # Common "spelling" of "type" in Rust/go
 typ = "typ"
 # Token Generation Event
 tge = "tge"
 # Rust crate name
 bimap = "bimap"
+# espresso-utils serialization module
+ser = "ser"

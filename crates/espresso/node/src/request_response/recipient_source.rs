@@ -3,8 +3,11 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use espresso_types::{PubKey, SeqTypes};
-use hotshot::traits::NodeImplementation;
-use hotshot_types::{data::EpochNumber, epoch_membership::EpochMembershipCoordinator};
+use hotshot_new_protocol::storage::NewProtocolStorage;
+use hotshot_types::{
+    data::EpochNumber, epoch_membership::EpochMembershipCoordinator,
+    traits::node_implementation::NodeImplementation,
+};
 use request_response::recipient_source::RecipientSource as RecipientSourceTrait;
 use tracing::warn;
 
@@ -24,7 +27,10 @@ pub struct RecipientSource<I: NodeImplementation<SeqTypes>> {
 /// Implement the RecipientSourceTrait, which allows the request-response protocol to derive the
 /// intended recipients for a given request
 #[async_trait]
-impl<I: NodeImplementation<SeqTypes>> RecipientSourceTrait<Request, PubKey> for RecipientSource<I> {
+impl<I: NodeImplementation<SeqTypes>> RecipientSourceTrait<Request, PubKey> for RecipientSource<I>
+where
+    I::Storage: NewProtocolStorage<SeqTypes>,
+{
     async fn get_expected_responders(&self, _request: &Request) -> Result<Vec<PubKey>> {
         // Get the current epoch number
         let epoch_number = self

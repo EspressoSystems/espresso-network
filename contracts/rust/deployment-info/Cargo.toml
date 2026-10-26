@@ -14,7 +14,7 @@ alloy = { workspace = true }
 anyhow = { workspace = true }
 clap = { workspace = true }
 dotenvy = { workspace = true }
-espresso-utils = { workspace = true }
+espresso-utils = { workspace = true, features = ["full"] }
 humantime = "2"
 humantime-serde = "1.1.1"
 serde = { workspace = true }
@@ -26,7 +26,7 @@ url = { workspace = true }
 
 [dev-dependencies]
 espresso-contract-deployer = { path = "../deployer" }
-hotshot-state-prover = { workspace = true }
+hotshot-state-prover = { workspace = true, features = ["testing"] }
 tempfile = { workspace = true }
 test-log = { workspace = true }
 

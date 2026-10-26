@@ -7,15 +7,19 @@ use alloy::{
 use async_lock::{Mutex, RwLock};
 use committable::{Commitment, Committable, RawCommitmentBuilder};
 use derive_more::derive::{From, Into};
-use hotshot::types::SignatureKey;
 use hotshot_contract_adapter::sol_types::StakeTableV3::{
     CommissionUpdated, ConsensusKeysUpdated, ConsensusKeysUpdatedV2, Delegated, P2pAddrUpdated,
     Undelegated, UndelegatedV2, ValidatorExit, ValidatorExitV2, ValidatorRegistered,
     ValidatorRegisteredV2, ValidatorRegisteredV3, X25519KeyUpdated,
 };
 use hotshot_types::{
-    PeerConfig, addr::NetAddr, data::EpochNumber, light_client::StateVerKey,
-    network::PeerConfigKeys, x25519,
+    PeerConfig,
+    addr::{InvalidNetAddr, NetAddr},
+    data::EpochNumber,
+    light_client::StateVerKey,
+    network::PeerConfigKeys,
+    traits::signature_key::SignatureKey,
+    x25519,
 };
 use itertools::Itertools;
 use jf_utils::to_bytes;
@@ -23,8 +27,9 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::task::JoinHandle;
 use vbs::version::Version;
-use versions::CLIQUENET_VERSION;
+use versions::NEW_PROTOCOL_VERSION;
 
+#[cfg(feature = "node")]
 use super::L1Client;
 use crate::{
     AuthenticatedValidatorMap, SeqTypes,
@@ -50,17 +55,21 @@ pub(crate) fn to_fixed_bytes(value: U256) -> [u8; std::mem::size_of::<U256>()] {
 }
 
 /// Validator as registered in the stake table contract.
-/// May or may not have valid signatures (contract can't fully verify Schnorr).
-/// Used for state tracking. To participate in consensus, must be authenticated
-/// and converted to `AuthenticatedValidator` via `TryFrom`.
+///
+/// `stake_table_key` is `None` when the on-chain BLS key is unparsable
+/// (e.g. the Solidity all-zero G2 point); such validators are always
+/// unauthenticated and excluded from the active set.
+/// `state_ver_key` is `None` when the on-chain Schnorr key is unparsable
+/// (e.g. the all-zero EdOnBN254 point); such validators are likewise always
+/// unauthenticated and excluded from the active set.
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug, PartialEq, Eq)]
 #[serde(bound(deserialize = ""))]
 pub struct RegisteredValidator<KEY: SignatureKey> {
     pub account: Address,
     /// The peer's public key
-    pub stake_table_key: KEY,
+    pub stake_table_key: Option<KEY>,
     /// the peer's state public key
-    pub state_ver_key: StateVerKey,
+    pub state_ver_key: Option<StateVerKey>,
     /// the peer's stake
     pub stake: U256,
     // commission
@@ -74,6 +83,139 @@ pub struct RegisteredValidator<KEY: SignatureKey> {
     pub x25519_key: Option<x25519::PublicKey>,
     /// Network address.
     pub p2p_addr: Option<NetAddr>,
+}
+
+#[cfg(feature = "rlp")]
+mod registered_validator_rlp {
+    use alloy_rlp::{Decodable, Encodable, RlpDecodable, RlpEncodable};
+    use anyhow::Context;
+
+    use super::*;
+
+    #[derive(RlpEncodable, RlpDecodable, PartialEq, Eq, PartialOrd, Ord)]
+    struct DelegatorRlp {
+        address: Address,
+        stake: U256,
+    }
+
+    #[derive(RlpEncodable, RlpDecodable)]
+    #[rlp(trailing(canonical))]
+    struct RegisteredValidatorRlp {
+        account: Address,
+        stake: U256,
+        commission: u16,
+        delegators: Vec<DelegatorRlp>,
+        authenticated: bool,
+        stake_table_key: Option<Vec<u8>>,
+        state_ver_key: Option<Vec<u8>>,
+        x25519_key: Option<Vec<u8>>,
+        p2p_addr: Option<Vec<u8>>,
+    }
+
+    impl<KEY: SignatureKey> TryFrom<&RegisteredValidator<KEY>> for RegisteredValidatorRlp {
+        type Error = anyhow::Error;
+
+        fn try_from(v: &RegisteredValidator<KEY>) -> Result<Self, Self::Error> {
+            let mut delegators = v
+                .delegators
+                .iter()
+                .map(|(&address, &stake)| DelegatorRlp { address, stake })
+                .collect::<Vec<_>>();
+            // The order of delegators thus far depends on hashing. Sort to make the order
+            // canonical.
+            delegators.sort();
+
+            Ok(Self {
+                account: v.account,
+                stake: v.stake,
+                commission: v.commission,
+                delegators,
+                authenticated: v.authenticated,
+                stake_table_key: match &v.stake_table_key {
+                    Some(key) => {
+                        Some(bincode::serialize(key).context("serializing stake_table_key")?)
+                    },
+                    None => None,
+                },
+                state_ver_key: match &v.state_ver_key {
+                    Some(key) => {
+                        Some(bincode::serialize(key).context("serializing state_ver_key")?)
+                    },
+                    None => None,
+                },
+                x25519_key: match &v.x25519_key {
+                    Some(key) => Some(bincode::serialize(key).context("serializing x25519_key")?),
+                    None => None,
+                },
+                p2p_addr: match &v.p2p_addr {
+                    Some(addr) => Some(bincode::serialize(addr).context("serializing p2p2_addr")?),
+                    None => None,
+                },
+            })
+        }
+    }
+
+    impl<KEY: SignatureKey> TryFrom<RegisteredValidatorRlp> for RegisteredValidator<KEY> {
+        type Error = anyhow::Error;
+
+        fn try_from(v: RegisteredValidatorRlp) -> Result<Self, Self::Error> {
+            Ok(Self {
+                account: v.account,
+                stake: v.stake,
+                commission: v.commission,
+                delegators: v
+                    .delegators
+                    .into_iter()
+                    .map(|d| (d.address, d.stake))
+                    .collect(),
+                authenticated: v.authenticated,
+                stake_table_key: if let Some(bytes) = &v.stake_table_key {
+                    Some(bincode::deserialize(bytes).context("deserializing stake_table_key")?)
+                } else {
+                    None
+                },
+                state_ver_key: if let Some(bytes) = &v.state_ver_key {
+                    Some(bincode::deserialize(bytes).context("deserializing state_ver_key")?)
+                } else {
+                    None
+                },
+                x25519_key: if let Some(bytes) = &v.x25519_key {
+                    Some(bincode::deserialize(bytes).context("deserializing x25519_key")?)
+                } else {
+                    None
+                },
+                p2p_addr: if let Some(bytes) = &v.p2p_addr {
+                    Some(bincode::deserialize(bytes).context("deserializing p2p_addr")?)
+                } else {
+                    None
+                },
+            })
+        }
+    }
+
+    impl<KEY: SignatureKey> Encodable for RegisteredValidator<KEY> {
+        fn encode(&self, out: &mut dyn alloy_rlp::BufMut) {
+            RegisteredValidatorRlp::try_from(self)
+                .expect("failed to canonicalize RegisteredValidator")
+                .encode(out);
+        }
+
+        fn length(&self) -> usize {
+            RegisteredValidatorRlp::try_from(self)
+                .expect("failed to canonicalize RegisteredValidator")
+                .length()
+        }
+    }
+
+    impl<KEY: SignatureKey> Decodable for RegisteredValidator<KEY> {
+        fn decode(buf: &mut &[u8]) -> alloy_rlp::Result<Self> {
+            let rlp = RegisteredValidatorRlp::decode(buf)?;
+            rlp.try_into().map_err(|err| {
+                tracing::error!("failed to parse canonicalized RegisteredValidator: {err:#}");
+                alloy_rlp::Error::Custom("failed to parse canonicalized RegisteredValidator")
+            })
+        }
+    }
 }
 
 /// Validator eligible for consensus participation.
@@ -93,6 +235,16 @@ impl<'de, KEY: SignatureKey> Deserialize<'de> for AuthenticatedValidator<KEY> {
                 "cannot deserialize unauthenticated validator as AuthenticatedValidator",
             ));
         }
+        if inner.stake_table_key.is_none() {
+            return Err(serde::de::Error::custom(
+                "cannot deserialize validator without BLS key as AuthenticatedValidator",
+            ));
+        }
+        if inner.state_ver_key.is_none() {
+            return Err(serde::de::Error::custom(
+                "cannot deserialize validator without Schnorr key as AuthenticatedValidator",
+            ));
+        }
         Ok(AuthenticatedValidator(inner))
     }
 }
@@ -102,10 +254,13 @@ impl<KEY: SignatureKey> AuthenticatedValidator<KEY> {
         self.0
     }
 
-    /// Whether this validator can participate in consensus at `protocol_version`.
+    /// Checks that this validator can participate in consensus at `protocol_version`.
     ///
     /// Encodes only protocol-version-gated requirements; stake and delegation checks
     /// live in `select_active_validator_set`.
+    ///
+    /// The contract only checks the port of a p2p address, so the address is also
+    /// checked with [`NetAddr::validate`]: one that fails it cannot be dialed.
     ///
     /// # Liveness during the CLIQUENET upgrade transition
     ///
@@ -122,14 +277,37 @@ impl<KEY: SignatureKey> AuthenticatedValidator<KEY> {
     /// onward, roots are post-CLIQUENET and this filter applies.
     ///
     /// Operators are warned at startup on the version immediately preceding
-    /// CLIQUENET if their on-chain entry is missing network info.
-    pub fn is_eligible(&self, protocol_version: Version) -> bool {
-        if protocol_version >= CLIQUENET_VERSION
-            && (self.x25519_key.is_none() || self.p2p_addr.is_none())
-        {
-            return false;
+    /// NEW_PROTOCOL if their on-chain entry is missing network info.
+    pub fn ensure_eligible(&self, protocol_version: Version) -> Result<(), IneligibleValidator> {
+        if protocol_version < NEW_PROTOCOL_VERSION {
+            return Ok(());
         }
-        true
+        if self.x25519_key.is_none() {
+            return Err(IneligibleValidator::MissingX25519Key);
+        }
+        let addr = self
+            .p2p_addr
+            .as_ref()
+            .ok_or(IneligibleValidator::MissingP2pAddr)?;
+        addr.validate()
+            .map_err(|source| IneligibleValidator::InvalidP2pAddr {
+                addr: addr.clone(),
+                source,
+            })
+    }
+
+    pub fn stake_table_key(&self) -> &KEY {
+        self.0
+            .stake_table_key
+            .as_ref()
+            .expect("AuthenticatedValidator invariant: key is Some")
+    }
+
+    pub fn state_ver_key(&self) -> &StateVerKey {
+        self.0
+            .state_ver_key
+            .as_ref()
+            .expect("AuthenticatedValidator invariant: state_ver_key is Some")
     }
 }
 
@@ -145,11 +323,25 @@ impl<KEY: SignatureKey> std::ops::Deref for AuthenticatedValidator<KEY> {
 #[error("Validator {0:#x} not authenticated (invalid registration signature)")]
 pub struct UnauthenticatedValidatorError(pub Address);
 
+/// Why [`AuthenticatedValidator::ensure_eligible`] keeps a validator out of the active set.
+#[derive(Debug, Error)]
+pub enum IneligibleValidator {
+    #[error("missing x25519 key")]
+    MissingX25519Key,
+    #[error("missing p2p address")]
+    MissingP2pAddr,
+    #[error("invalid p2p address {addr:?}: {source}")]
+    InvalidP2pAddr {
+        addr: NetAddr,
+        source: InvalidNetAddr,
+    },
+}
+
 impl<KEY: SignatureKey + Clone> TryFrom<&RegisteredValidator<KEY>> for AuthenticatedValidator<KEY> {
     type Error = UnauthenticatedValidatorError;
 
     fn try_from(v: &RegisteredValidator<KEY>) -> Result<Self, Self::Error> {
-        if !v.authenticated {
+        if !v.authenticated || v.stake_table_key.is_none() || v.state_ver_key.is_none() {
             return Err(UnauthenticatedValidatorError(v.account));
         }
         Ok(AuthenticatedValidator(v.clone()))
@@ -160,7 +352,7 @@ impl<KEY: SignatureKey> TryFrom<RegisteredValidator<KEY>> for AuthenticatedValid
     type Error = UnauthenticatedValidatorError;
 
     fn try_from(v: RegisteredValidator<KEY>) -> Result<Self, Self::Error> {
-        if !v.authenticated {
+        if !v.authenticated || v.stake_table_key.is_none() || v.state_ver_key.is_none() {
             return Err(UnauthenticatedValidatorError(v.account));
         }
         Ok(AuthenticatedValidator(v))
@@ -175,13 +367,24 @@ impl<KEY: SignatureKey> From<AuthenticatedValidator<KEY>> for RegisteredValidato
 
 impl<KEY: SignatureKey> Committable for RegisteredValidator<KEY> {
     fn commit(&self) -> Commitment<Self> {
-        let mut builder = RawCommitmentBuilder::new(&Self::tag())
-            .fixed_size_field("account", &self.account)
-            .var_size_field(
-                "stake_table_key",
-                self.stake_table_key.to_bytes().as_slice(),
-            )
-            .var_size_field("state_ver_key", &to_bytes!(&self.state_ver_key).unwrap())
+        let mut builder =
+            RawCommitmentBuilder::new(&Self::tag()).fixed_size_field("account", &self.account);
+
+        // Present-key layout is preserved for backwards compatibility; absent
+        // keys use a distinct marker that can't collide with any present key.
+        builder = match &self.stake_table_key {
+            Some(key) => builder.var_size_field("stake_table_key", key.to_bytes().as_slice()),
+            None => builder.constant_str("no_bls_key"),
+        };
+
+        // Present-key layout is preserved for backwards compatibility; absent
+        // keys use a distinct marker that can't collide with any present key.
+        builder = match &self.state_ver_key {
+            Some(key) => builder.var_size_field("state_ver_key", &to_bytes!(key).unwrap()),
+            None => builder.constant_str("no_schnorr_key"),
+        };
+
+        builder = builder
             .fixed_size_field("stake", &to_fixed_bytes(self.stake))
             .constant_str("commission")
             .u16(self.commission);
@@ -193,7 +396,7 @@ impl<KEY: SignatureKey> Committable for RegisteredValidator<KEY> {
             builder = builder.var_size_field("x25519_key", key.as_slice());
         }
         if let Some(addr) = &self.p2p_addr {
-            builder = builder.var_size_field("p2p_addr", addr.to_string().as_bytes());
+            builder = builder.var_size_field("p2p_addr", addr.unbracketed_string().as_bytes());
         }
 
         builder = builder.constant_str("delegators");
@@ -240,11 +443,13 @@ pub struct Fetcher {
     #[debug(skip)]
     pub(crate) persistence: Arc<Mutex<dyn MembershipPersistence>>,
     /// L1 provider
+    #[cfg(feature = "node")]
     pub(crate) l1_client: L1Client,
     /// Verifiable `ChainConfig` holding contract address
     pub(crate) chain_config: Arc<Mutex<ChainConfig>>,
+    #[cfg_attr(not(feature = "node"), allow(dead_code))]
     pub(crate) update_task: Arc<StakeTableUpdateTask>,
-    pub initial_supply: Arc<RwLock<Option<U256>>>,
+    pub(crate) initial_supply: Arc<RwLock<Option<U256>>>,
 }
 
 #[derive(Debug, Default)]
@@ -306,8 +511,6 @@ pub enum StakeTableError {
     ValidatorAlreadyExited(Address),
     #[error("Validator {0:#x} has invalid commission {1}")]
     InvalidCommission(Address, u16),
-    #[error("Schnorr key already used: {0}")]
-    SchnorrKeyAlreadyUsed(String),
     #[error("x25519 key already used: {0}")]
     X25519KeyAlreadyUsed(String),
     #[error("Invalid x25519 key: {0}")]
@@ -322,6 +525,10 @@ pub enum StakeTableError {
 pub enum ExpectedStakeTableError {
     #[error("Schnorr key already used: {0}")]
     SchnorrKeyAlreadyUsed(String),
+    #[error("Invalid BLS key")]
+    InvalidBlsKey,
+    #[error("Invalid Schnorr key")]
+    InvalidSchnorrKey,
 }
 
 #[derive(Debug, Error)]
@@ -384,10 +591,12 @@ mod tests {
 
     use alloy::primitives::{Address, U256};
     use committable::Committable;
-    use hotshot::types::{BLSPubKey, SignatureKey};
-    use hotshot_types::{addr::NetAddr, light_client::StateVerKey, x25519};
+    use hotshot_types::{
+        addr::NetAddr, light_client::StateVerKey, signature_key::BLSPubKey,
+        traits::signature_key::SignatureKey, x25519,
+    };
 
-    use super::RegisteredValidator;
+    use super::{AuthenticatedValidator, RegisteredValidator};
 
     /// Both x25519_key and p2p_addr must independently affect the commitment.
     #[test]
@@ -410,13 +619,35 @@ mod tests {
         assert_ne!(commit_x25519, commit_p2p);
     }
 
+    #[test]
+    fn test_commitment_of_ipv6_addr_is_frozen() {
+        let p2p_addr: NetAddr = "[2001:db8::1]:9977".parse().unwrap();
+        assert_eq!(p2p_addr.unbracketed_string(), "2001:db8::1:9977");
+
+        let validator = RegisteredValidator::<BLSPubKey> {
+            account: Address::repeat_byte(7),
+            stake_table_key: Some(BLSPubKey::generated_from_seed_indexed([1u8; 32], 0).0),
+            state_ver_key: Some(StateVerKey::default()),
+            stake: U256::from(1000),
+            commission: 500,
+            delegators: HashMap::new(),
+            authenticated: true,
+            x25519_key: None,
+            p2p_addr: Some(p2p_addr),
+        };
+        assert_eq!(
+            validator.commit().to_string(),
+            "VALIDATOR~7K4UdfSAqHRUGHW6HvabPzbi7dnJxEbHfO66O3eO3Sbw"
+        );
+    }
+
     /// Unauthenticated validators must produce a different commitment than authenticated ones.
     /// This ensures validators with invalid signatures are distinguishable in the commitment tree.
     #[test]
     fn test_unauthenticated_validator_commitment_differs() {
         let account = Address::random();
-        let stake_table_key = BLSPubKey::generated_from_seed_indexed([1u8; 32], 0).0;
-        let state_ver_key = StateVerKey::default();
+        let stake_table_key = Some(BLSPubKey::generated_from_seed_indexed([1u8; 32], 0).0);
+        let state_ver_key = Some(StateVerKey::default());
         let stake = U256::from(1000);
         let commission = 500u16;
         let delegators = HashMap::new();
@@ -450,6 +681,241 @@ mod tests {
         assert_ne!(
             auth_commitment.as_ref() as &[u8],
             unauth_commitment.as_ref() as &[u8]
+        );
+    }
+
+    #[test]
+    fn test_registered_validator_serde_roundtrip_with_none_key() {
+        let v: RegisteredValidator<BLSPubKey> = RegisteredValidator {
+            account: Address::random(),
+            stake_table_key: None,
+            state_ver_key: Some(StateVerKey::default()),
+            stake: U256::from(42u64),
+            commission: 1000,
+            delegators: HashMap::new(),
+            authenticated: false,
+            x25519_key: None,
+            p2p_addr: None,
+        };
+        let json = serde_json::to_string(&v).unwrap();
+        let v2: RegisteredValidator<BLSPubKey> = serde_json::from_str(&json).unwrap();
+        assert_eq!(v, v2);
+        assert!(v2.stake_table_key.is_none());
+    }
+
+    #[test]
+    fn test_authenticated_try_from_rejects_none_key() {
+        let v: RegisteredValidator<BLSPubKey> = RegisteredValidator {
+            account: Address::random(),
+            stake_table_key: None,
+            state_ver_key: Some(StateVerKey::default()),
+            stake: U256::from(1u64),
+            commission: 0,
+            delegators: HashMap::new(),
+            authenticated: true,
+            x25519_key: None,
+            p2p_addr: None,
+        };
+        assert!(AuthenticatedValidator::try_from(&v).is_err());
+        assert!(AuthenticatedValidator::try_from(v).is_err());
+    }
+
+    #[test]
+    fn test_authenticated_try_from_rejects_none_schnorr_key() {
+        let v: RegisteredValidator<BLSPubKey> = RegisteredValidator {
+            account: Address::random(),
+            stake_table_key: Some(BLSPubKey::generated_from_seed_indexed([1u8; 32], 0).0),
+            state_ver_key: None,
+            stake: U256::from(1u64),
+            commission: 0,
+            delegators: HashMap::new(),
+            authenticated: true,
+            x25519_key: None,
+            p2p_addr: None,
+        };
+        assert!(AuthenticatedValidator::try_from(&v).is_err());
+        assert!(AuthenticatedValidator::try_from(v).is_err());
+    }
+
+    #[test]
+    fn test_commit_none_vs_some_differs() {
+        let account = Address::random();
+        let state_ver_key = Some(StateVerKey::default());
+        let stake = U256::from(7u64);
+
+        let with_key: RegisteredValidator<BLSPubKey> = RegisteredValidator {
+            account,
+            stake_table_key: Some(BLSPubKey::generated_from_seed_indexed([2u8; 32], 0).0),
+            state_ver_key: state_ver_key.clone(),
+            stake,
+            commission: 100,
+            delegators: HashMap::new(),
+            authenticated: false,
+            x25519_key: None,
+            p2p_addr: None,
+        };
+        let without_key: RegisteredValidator<BLSPubKey> = RegisteredValidator {
+            account,
+            stake_table_key: None,
+            state_ver_key,
+            stake,
+            commission: 100,
+            delegators: HashMap::new(),
+            authenticated: false,
+            x25519_key: None,
+            p2p_addr: None,
+        };
+        assert_ne!(
+            with_key.commit().as_ref() as &[u8],
+            without_key.commit().as_ref() as &[u8]
+        );
+    }
+
+    #[test]
+    fn test_commit_none_vs_some_schnorr_differs() {
+        let account = Address::random();
+        let stake_table_key = Some(BLSPubKey::generated_from_seed_indexed([3u8; 32], 0).0);
+        let stake = U256::from(11u64);
+
+        let with_schnorr: RegisteredValidator<BLSPubKey> = RegisteredValidator {
+            account,
+            stake_table_key,
+            state_ver_key: Some(StateVerKey::default()),
+            stake,
+            commission: 100,
+            delegators: HashMap::new(),
+            authenticated: false,
+            x25519_key: None,
+            p2p_addr: None,
+        };
+        let without_schnorr: RegisteredValidator<BLSPubKey> = RegisteredValidator {
+            account,
+            stake_table_key,
+            state_ver_key: None,
+            stake,
+            commission: 100,
+            delegators: HashMap::new(),
+            authenticated: false,
+            x25519_key: None,
+            p2p_addr: None,
+        };
+        assert_ne!(
+            with_schnorr.commit().as_ref() as &[u8],
+            without_schnorr.commit().as_ref() as &[u8]
+        );
+    }
+}
+
+#[cfg(all(test, feature = "rlp"))]
+mod rlp_tests {
+    use alloy_rlp::{Decodable, Encodable};
+    use hotshot_types::{signature_key::BLSPubKey, traits::signature_key::StateSignatureKey};
+
+    use super::*;
+
+    #[test]
+    fn test_registered_validator_round_trip() {
+        let seed = [0; 32];
+        let validator = RegisteredValidator {
+            account: Address::random(),
+            stake_table_key: Some(BLSPubKey::generated_from_seed_indexed(seed, 0).0),
+            state_ver_key: Some(StateVerKey::generated_from_seed_indexed(seed, 0).0),
+            stake: U256::MAX,
+            commission: u16::MAX,
+            delegators: [
+                (Address::random(), U256::ZERO),
+                (Address::random(), U256::MAX),
+            ]
+            .into_iter()
+            .collect(),
+            authenticated: true,
+            x25519_key: Some(x25519::Keypair::generate().unwrap().public_key()),
+            p2p_addr: Some(NetAddr::named("localhost", 8080)),
+        };
+
+        let mut bytes = vec![];
+        validator.encode(&mut bytes);
+        assert_eq!(bytes.len(), validator.length());
+        assert_eq!(
+            validator,
+            RegisteredValidator::decode(&mut bytes.as_slice()).unwrap()
+        );
+    }
+
+    #[test]
+    fn test_registered_validator_round_trip_empty() {
+        let validator = RegisteredValidator::<BLSPubKey> {
+            account: Address::random(),
+            stake_table_key: None,
+            state_ver_key: None,
+            stake: U256::MAX,
+            commission: u16::MAX,
+            delegators: Default::default(),
+            authenticated: true,
+            x25519_key: None,
+            p2p_addr: None,
+        };
+
+        let mut bytes = vec![];
+        validator.encode(&mut bytes);
+        assert_eq!(bytes.len(), validator.length());
+        assert_eq!(
+            validator,
+            RegisteredValidator::decode(&mut bytes.as_slice()).unwrap()
+        );
+    }
+
+    #[test]
+    fn test_registered_validator_round_canonical_order() {
+        // Two hashmaps with different capacities are very likely to end up with a different
+        // iteration order.
+        let mut delegators1 = HashMap::with_capacity(100);
+        let mut delegators2 = HashMap::with_capacity(10_000);
+        for i in 0..100 {
+            let delegator = Address::random();
+            let amount = U256::from(i);
+            delegators1.insert(delegator, amount);
+            delegators2.insert(delegator, amount);
+        }
+        assert_eq!(delegators1, delegators2);
+        assert_ne!(
+            delegators1.iter().collect::<Vec<_>>(),
+            delegators2.iter().collect::<Vec<_>>()
+        );
+
+        let validator1 = RegisteredValidator::<BLSPubKey> {
+            account: Address::random(),
+            stake_table_key: None,
+            state_ver_key: None,
+            stake: U256::MAX,
+            commission: u16::MAX,
+            delegators: delegators1,
+            authenticated: true,
+            x25519_key: None,
+            p2p_addr: None,
+        };
+        let validator2 = RegisteredValidator::<BLSPubKey> {
+            delegators: delegators2,
+            ..validator1.clone()
+        };
+        assert_eq!(validator1, validator2);
+
+        let mut bytes1 = vec![];
+        validator1.encode(&mut bytes1);
+        assert_eq!(bytes1.len(), validator1.length());
+
+        let mut bytes2 = vec![];
+        validator2.encode(&mut bytes2);
+        assert_eq!(bytes2.len(), validator2.length());
+
+        assert_eq!(bytes1, bytes2);
+        assert_eq!(
+            validator1,
+            RegisteredValidator::decode(&mut bytes2.as_slice()).unwrap()
+        );
+        assert_eq!(
+            validator2,
+            RegisteredValidator::decode(&mut bytes1.as_slice()).unwrap()
         );
     }
 }

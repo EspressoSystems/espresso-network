@@ -15,6 +15,8 @@ library Transcript {
     // Primitive functions
     // ================================
     function appendMessage(TranscriptData memory self, bytes memory message) internal pure {
+        // Sequential transcript append; no production caller.
+        // forge-lint: disable-next-line(encode-packed-collision)
         self.transcript = abi.encodePacked(self.transcript, message);
     }
 
@@ -87,7 +89,9 @@ library Transcript {
         self.transcript = abi.encodePacked(
             self.transcript,
             uint32(sizeInBits),
+            // forge-lint: disable-next-line(unsafe-typecast)
             uint64(verifyingKey.domainSize),
+            // forge-lint: disable-next-line(unsafe-typecast)
             uint64(verifyingKey.numInputs),
             bytes12(0) // padding to align with word size
         );

@@ -400,7 +400,7 @@ same situation as key rotation today.
 
 ## 4. Staking CLI Changes
 
-**File:** `staking-cli/src/lib.rs`
+**File:** `crates/staking-cli/src/lib.rs`
 
 Add three new commands:
 
@@ -489,7 +489,7 @@ time to register and for values to propagate through epoch transitions.
 Multisig-owned proxy (Decaf testnet path):
 
 ```bash
-cargo run -p espresso-node --bin deploy -- \
+cargo run -p espresso-deploy --bin deploy -- \
     --rpc-url "$RPC_URL" \
     --upgrade-stake-table-v3 \
     --use-multisig \
@@ -499,14 +499,19 @@ cargo run -p espresso-node --bin deploy -- \
 Timelock-owned proxy (Mainnet path) emits both `schedule.json` and `execute.json` into the given directory:
 
 ```bash
-cargo run -p espresso-node --bin deploy -- \
+cargo run -p espresso-deploy --bin deploy -- \
     --rpc-url "$RPC_URL" \
     --upgrade-stake-table-v3 \
     --use-timelock-owner \
     --timelock-operation-salt "0x$(openssl rand -hex 32)" \
     --timelock-operation-delay 172800 \
+    --schedule-safe espresso_labs \
+    --execute-safe serviceco \
     --calldata-out-dir ./tmp/st_v3_timelock/
 ```
+
+`--schedule-safe`/`--execute-safe` name the multisig submitting each phase; they are required when the timelock role has
+more than one holder, as on mainnet (proposers: `espresso_labs`, `serviceco`; executor: `serviceco`).
 
 ### Testing the Safe TX output against a mainnet fork
 
@@ -521,12 +526,14 @@ In another terminal, generate the Safe TX Builder JSON against the fork:
 ```bash
 ESPRESSO_STAKE_TABLE_PROXY_ADDRESS=0xcef474d372b5b09defe2af187bf17338dc704451 \
 ESPRESSO_OPS_TIMELOCK_ADDRESS=0x67861f1ef4db9bcaddd8c5e86db92386dd4ec700 \
-cargo run -p espresso-node --bin deploy -- \
+cargo run -p espresso-deploy --bin deploy -- \
     --rpc-url http://localhost:8545 \
     --upgrade-stake-table-v3 \
     --use-timelock-owner \
     --timelock-operation-salt "0x$(openssl rand -hex 32)" \
     --timelock-operation-delay 172800 \
+    --schedule-safe espresso_labs \
+    --execute-safe serviceco \
     --calldata-out-dir ./tmp/st_v3_timelock_mainnet/
 ```
 
@@ -593,9 +600,9 @@ compatibility concerns.
 | TEST:rust-p2p-addr-ok             | REQ:rust-p2p-addr             | [`test_p2p_addr_update_sets_value`](../crates/espresso/types/src/v0/impls/stake_table.rs)              |
 | TEST:upgrade-v2-to-v3-ok          | REQ:upgrade-v2-to-v3          | [`test_UpgradeV2ToV3_PreservesState`](../contracts/test/StakeTableUpgradeToV3.t.sol)                   |
 | TEST:upgrade-storage-compat-ok    | REQ:upgrade-storage-compat    | [`test_Network_StorageLayout_StakeTable_Sepolia`](../contracts/test/StorageUpgradeCompatibility.t.sol) |
-| TEST:cli-update-network-config-ok | REQ:cli-update-network-config | [`test_update_network_config`](../staking-cli/src/registration.rs)                                     |
-| TEST:cli-update-x25519-key-ok     | REQ:cli-update-x25519-key     | [`test_update_x25519_key`](../staking-cli/src/registration.rs)                                         |
-| TEST:cli-update-p2p-addr-ok       | REQ:cli-update-p2p-addr       | [`test_update_p2p_addr`](../staking-cli/src/registration.rs)                                           |
+| TEST:cli-update-network-config-ok | REQ:cli-update-network-config | [`test_update_network_config`](../crates/staking-cli/src/registration.rs)                              |
+| TEST:cli-update-x25519-key-ok     | REQ:cli-update-x25519-key     | [`test_update_x25519_key`](../crates/staking-cli/src/registration.rs)                                  |
+| TEST:cli-update-p2p-addr-ok       | REQ:cli-update-p2p-addr       | [`test_update_p2p_addr`](../crates/staking-cli/src/registration.rs)                                    |
 
 ### Contract Edge Cases
 
@@ -753,13 +760,13 @@ Existing invariants cover the new functions because network config changes do no
 
 ### Integration Tests
 
-CLI integration tests are in [`staking-cli/src/registration.rs`](../staking-cli/src/registration.rs):
+CLI integration tests are in [`crates/staking-cli/src/registration.rs`](../crates/staking-cli/src/registration.rs):
 
 | Test                                                                                         | Description                                                                                                                                                                                            |
 | -------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| [`test_update_network_config`](../staking-cli/src/registration.rs)                           | Deploy V3, register validator, call updateNetworkConfig, verify X25519KeyUpdated and P2pAddrUpdated events.                                                                                            |
-| [`test_update_x25519_key`](../staking-cli/src/registration.rs)                               | Deploy V3, register validator, call updateX25519Key, verify X25519KeyUpdated event.                                                                                                                    |
-| [`test_update_p2p_addr`](../staking-cli/src/registration.rs)                                 | Deploy V3, register validator, call updateP2pAddr, verify P2pAddrUpdated event.                                                                                                                        |
+| [`test_update_network_config`](../crates/staking-cli/src/registration.rs)                    | Deploy V3, register validator, call updateNetworkConfig, verify X25519KeyUpdated and P2pAddrUpdated events.                                                                                            |
+| [`test_update_x25519_key`](../crates/staking-cli/src/registration.rs)                        | Deploy V3, register validator, call updateX25519Key, verify X25519KeyUpdated event.                                                                                                                    |
+| [`test_update_p2p_addr`](../crates/staking-cli/src/registration.rs)                          | Deploy V3, register validator, call updateP2pAddr, verify P2pAddrUpdated event.                                                                                                                        |
 | [`test_integration_update_fast_finality_network_config`](../crates/espresso/node/src/api.rs) | Start test network at StakeTable V2, upgrade to V3, call updateNetworkConfig on one validator, wait for epoch activation, assert x25519_key and p2p_addr appear in `node/validators/{epoch}` response. |
 | TEST:e2e-register-v3-pipeline                                                                | not yet implemented                                                                                                                                                                                    |
-| TEST:e2e-epoch-activation                                                                    | not yet implemented                                                                                                                                                                                    |
+| [`test_new_protocol_validator_exit_at_epoch_boundary`](../crates/espresso/node/src/api.rs)   | Start test network at NEW_PROTOCOL_VERSION (StakeTable V3), deregister one validator on L1 mid-run, assert it leaves `node/validators/{epoch}` at the activation epoch and the network keeps deciding. |

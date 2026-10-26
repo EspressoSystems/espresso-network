@@ -1,13 +1,20 @@
-use std::{collections::BTreeSet, time::Duration};
+use std::{
+    collections::{BTreeMap, HashSet},
+    time::Duration,
+};
 
-use hotshot_types::data::ViewNumber;
+use hotshot_types::{
+    data::{EpochNumber, ViewNumber},
+    signature_key::BLSPubKey,
+    traits::signature_key::SignatureKey,
+};
+use versions::{TIMEOUT_EPOCH_VERSION, Upgrade};
 
-use crate::tests::common::runner::{NodeAction, NodeChange, TestRunner};
-
-/// Helper: collect view numbers from an iterator.
-fn views(iter: impl IntoIterator<Item = u64>) -> BTreeSet<ViewNumber> {
-    iter.into_iter().map(ViewNumber::new).collect()
-}
+use crate::tests::common::{
+    runner::{NodeAction, NodeChange, TestRunner},
+    utils::{build_timeout_cert, mock_membership_with_num_nodes},
+    views,
+};
 
 // ---------------------------------------------------------------------------
 // Restart from blank state (with epochs)
@@ -76,33 +83,158 @@ async fn restart_f_nodes_with_epochs() {
         .unwrap();
 }
 
-// TODO: This test currently builds a brand-new chain from genesis after
-// the restart because there is no persistent storage.  Once storage is
-// implemented the restarted nodes should resume from their last decided
-// state instead of starting a fresh chain.
-//
-// #[tokio::test(flavor = "multi_thread")]
-// async fn restart_all_nodes_with_epochs() {
-//     TestRunner {
-//         num_nodes: 5,
-//         target_decisions: 30,
-//         max_runtime: Duration::from_secs(300),
-//         epoch_height: 10,
-//         node_changes: vec![(
-//             15,
-//             (0..5)
-//                 .map(|i| NodeChange {
-//                     idx: i,
-//                     action: NodeAction::Restart,
-//                 })
-//                 .collect(),
-//         )],
-//         ..Default::default()
-//     }
-//     .run::<MemoryTestNetwork>()
-//     .await
-//     .unwrap();
-// }
+/// 5 nodes all crash at view ~5 and restart with their persisted storage.
+///
+/// Each node resumes from its persisted decided anchor (the newest decided
+/// leaf at crash time) instead of re-growing the chain from genesis, and
+/// the persisted action records keep every node out of the views it acted
+/// in before the crash: views resume past the crash and no node records a
+/// Vote or Propose action twice for any view.
+/// The crash/recovery window is nondeterministic, so those views are
+/// excluded from the usual per-view verification.
+#[tokio::test(flavor = "multi_thread")]
+async fn restart_all_nodes_with_storage() {
+    let num_nodes = 5;
+    let crash_view = 5;
+    let mut runner = TestRunner::builder()
+        .num_nodes(num_nodes)
+        .target_decisions(35)
+        .epoch_height(10)
+        .persistent_storage(true)
+        .tolerated_failed_views(views(1..=30))
+        .node_changes(vec![(
+            crash_view,
+            (0..num_nodes)
+                .map(|idx| NodeChange {
+                    idx,
+                    action: NodeAction::Restart,
+                })
+                .collect(),
+        )])
+        .build();
+    runner.run().await.unwrap();
+
+    for (idx, storage) in runner.node_storages().iter().enumerate() {
+        let mut seen = HashSet::new();
+        for (view, action) in storage.action_log().await {
+            assert!(
+                seen.insert((view, action)),
+                "node {idx} recorded {action:?} twice for view {view} — it re-entered a view it \
+                 had already acted in"
+            );
+        }
+
+        let (anchor, _) = storage
+            .anchor_leaf()
+            .await
+            .unwrap_or_else(|| panic!("node {idx} has no persisted anchor"));
+        assert!(
+            *anchor.view_number() > crash_view,
+            "node {idx} anchor stuck at view {} — it did not keep deciding after the restart",
+            anchor.view_number()
+        );
+    }
+}
+
+/// All nodes crash at the epoch boundary and restart with storage: the quorum
+/// must re-cast its phase-2 votes (without re-recording any action) or the
+/// epoch transition never completes.
+#[tokio::test(flavor = "multi_thread")]
+async fn restart_all_nodes_at_epoch_boundary() {
+    let num_nodes = 5;
+    let crash_view = 10;
+    let mut runner = TestRunner::builder()
+        .num_nodes(num_nodes)
+        .target_decisions(35)
+        .epoch_height(10)
+        .persistent_storage(true)
+        .tolerated_failed_views(views(1..=30))
+        .node_changes(vec![(
+            crash_view,
+            (0..num_nodes)
+                .map(|idx| NodeChange {
+                    idx,
+                    action: NodeAction::Restart,
+                })
+                .collect(),
+        )])
+        .build();
+    runner.run().await.unwrap();
+
+    for (idx, storage) in runner.node_storages().iter().enumerate() {
+        let mut seen = HashSet::new();
+        for (view, action) in storage.action_log().await {
+            assert!(
+                seen.insert((view, action)),
+                "node {idx} recorded {action:?} twice for view {view} — it re-entered a view it \
+                 had already acted in"
+            );
+        }
+
+        let (anchor, _) = storage
+            .anchor_leaf()
+            .await
+            .unwrap_or_else(|| panic!("node {idx} has no persisted anchor"));
+        assert!(
+            *anchor.view_number() > crash_view,
+            "node {idx} anchor stuck at view {} — it did not keep deciding past the epoch \
+             boundary after the restart",
+            anchor.view_number()
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// View divergence between cohorts
+// ---------------------------------------------------------------------------
+
+/// Reproduces a devnet stall after a mass restart. 4 of 6 nodes (2/3 of
+/// stake — one short of the 2f+1 = 5 timeout-cert threshold) sit on view 1,
+/// while nodes 4 and 5 (1/3 of stake — one short of the f+1 = 3 one-honest
+/// threshold) advanced to view 3 via timeout certificates the majority never
+/// received, e.g. formed while it was down.
+///
+/// Without catchup this deadlocks permanently: the majority's view-1 timeout
+/// votes are stale to the minority (dropped on receipt), so it only ever
+/// re-forms a one-honest cert for view 1, while the minority cannot reach
+/// any threshold at view 3 — no certificate forms on any single view. The
+/// stale-vote catchup reply and the TC attached to timeout votes let the
+/// majority adopt view 3; the pooled timeout votes then form a full timeout
+/// certificate and views progress normally.
+#[tokio::test(flavor = "multi_thread")]
+async fn view_divergence_between_cohorts_recovers() {
+    let num_nodes = 6;
+    let epoch_height = 100;
+    let (public_key, private_key) = BLSPubKey::generated_from_seed_indexed([0u8; 32], 0);
+    let (membership, _storage, _client) =
+        mock_membership_with_num_nodes(num_nodes, epoch_height, public_key);
+    let epoch_membership = membership
+        .membership_for_epoch(Some(EpochNumber::genesis()))
+        .unwrap();
+    let ahead: Vec<_> = [1, 2]
+        .map(|view| {
+            build_timeout_cert(
+                ViewNumber::new(view),
+                EpochNumber::genesis(),
+                &epoch_membership,
+                &public_key,
+                &private_key,
+            )
+        })
+        .into_iter()
+        .collect();
+
+    TestRunner::builder()
+        .num_nodes(num_nodes)
+        .target_decisions(10)
+        .epoch_height(epoch_height)
+        .initial_timeout_certs(BTreeMap::from([(4, ahead.clone()), (5, ahead)]))
+        .tolerated_failed_views(views(1..=3))
+        .build()
+        .run()
+        .await
+        .unwrap();
+}
 
 // ---------------------------------------------------------------------------
 // Late start (with epochs)
@@ -130,6 +262,39 @@ async fn late_start_one_node_with_epochs() {
                 action: NodeAction::Start,
             }],
         )])
+        .build()
+        .run()
+        .await
+        .unwrap();
+}
+
+/// 10 nodes, 1 starts late at view 39, epoch_height=15, at the version whose
+/// timeout votes and certificates bind their epoch.
+///
+/// The 0.7 twin of `late_start_one_node_with_epochs`. The views node 9 would
+/// have led while offline time out, so the nine live nodes leave them on epoch
+/// binding certificates, across two epoch boundaries.
+///
+/// Node 9 itself catches up on a high QC rather than on one of those
+/// certificates: it joins once view 39 has decided, and `catchup_evidence`
+/// offers whichever of the locked QC and the newest timeout certificate has
+/// the higher view, which by then is the QC.
+#[tokio::test(flavor = "multi_thread")]
+async fn late_start_one_node_with_epochs_bound() {
+    TestRunner::builder()
+        .num_nodes(10)
+        .target_decisions(50)
+        .max_runtime(Duration::from_secs(500))
+        .epoch_height(15)
+        .expected_failed_views(views([9, 19, 29, 39]))
+        .node_changes(vec![(
+            39,
+            vec![NodeChange {
+                idx: 9,
+                action: NodeAction::Start,
+            }],
+        )])
+        .upgrade(Upgrade::trivial(TIMEOUT_EPOCH_VERSION))
         .build()
         .run()
         .await

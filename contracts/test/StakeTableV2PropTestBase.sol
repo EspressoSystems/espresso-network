@@ -734,9 +734,22 @@ contract StakeTableV2PropTestBase is FunctionCallTracking {
         }
     }
 
+    /// @dev Map a seed to a canonical x25519 key: little-endian value in [1, CURVE25519_P - 1].
+    /// StakeTableV3.updateX25519Key rejects non-canonical encodings, so keccak output cannot be
+    /// used directly for the `Ok` path.
+    function canonicalX25519Key(bytes32 seed) internal pure returns (bytes32) {
+        uint256 v = uint256(seed) % (((uint256(1) << 255) - 19) - 1) + 1;
+        uint256 be = 0;
+        for (uint256 i = 0; i < 32; i++) {
+            be |= uint256(uint8(v >> (8 * i))) << (8 * (31 - i));
+        }
+        return bytes32(be);
+    }
+
     function updateX25519KeyOk(uint256 actorIndex) public withActiveValidator(actorIndex) {
         x25519KeyCounter++;
-        bytes32 x25519Key = keccak256(abi.encode("x25519-setkey", x25519KeyCounter));
+        bytes32 x25519Key =
+            canonicalX25519Key(keccak256(abi.encode("x25519-setkey", x25519KeyCounter)));
 
         ivm.prank(validator);
         stakeTable.updateX25519Key(x25519Key);

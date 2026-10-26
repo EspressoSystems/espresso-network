@@ -1,7 +1,6 @@
 use std::{path::PathBuf, sync::Arc};
 
 use anyhow::Result;
-use hotshot::{traits::BlockPayload, types::BLSPubKey};
 use hotshot_example_types::{
     block_types::{TestBlockHeader, TestBlockPayload, TestMetadata, TestTransaction},
     node_types::{TEST_VERSIONS, TestTypes},
@@ -10,16 +9,17 @@ use hotshot_example_types::{
 };
 use hotshot_new_protocol::{
     block::{BlockBuilder, BlockBuilderConfig},
+    cert_verifier::CertVerifiers,
     client::CoordinatorClient,
     consensus::{Consensus, ConsensusInput, ConsensusOutput},
     coordinator::{Coordinator, timer::Timer},
     epoch::EpochManager,
-    epoch_root_vote_collector::EpochRootVoteCollector,
     helpers::proposal_commitment,
-    network::cliquenet::Cliquenet,
+    network::Cliquenet,
     outbox::Outbox,
     proposal::{ProposalValidator, VidShareValidator},
     state::StateManager,
+    upgrade::UpgradeProtocol,
     vid::{VidDisperser, VidReconstructor},
     vote::VoteCollector,
 };
@@ -29,15 +29,21 @@ use hotshot_types::{
     data::{EpochNumber, Leaf2, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
     message::UpgradeLock,
-    traits::{metrics::NoMetrics, node_implementation::NodeType, signature_key::SignatureKey},
+    signature_key::BLSPubKey,
+    traits::{
+        BlockPayload, metrics::NoMetrics, node_implementation::NodeType,
+        signature_key::SignatureKey,
+    },
+    upgrade_config::UpgradeConfig,
     x25519::Keypair,
 };
+use tokio::sync::mpsc;
 use tracing::{error, info, warn};
-use versions::{CLIQUENET_VERSION, Upgrade};
+use versions::{NEW_PROTOCOL_VERSION, Upgrade};
 
 use crate::{config::NodeConfig, membership::make_membership, metrics::MetricsCollector};
 
-type BenchCoordinator = Coordinator<TestTypes, Cliquenet<TestTypes>, TestStorage<TestTypes>>;
+type BenchCoordinator = Coordinator<TestTypes, TestStorage<TestTypes>>;
 
 /// Build and run a single benchmark node.
 pub async fn run(cfg: NodeConfig) -> Result<()> {
@@ -91,6 +97,7 @@ async fn create_network(
         keypair,
         bind_addr,
         parties,
+        None,
         upgrade_lock(),
         Box::new(NoMetrics),
     )
@@ -131,20 +138,26 @@ async fn build_coordinator(
         upgrade_lock.clone(),
         genesis_leaf.clone(),
         epoch_height,
-        100,
     );
 
     let vote1_collector = VoteCollector::new(membership.clone(), upgrade_lock.clone());
     let vote2_collector = VoteCollector::new(membership.clone(), upgrade_lock.clone());
     let timeout_collector = VoteCollector::new(membership.clone(), upgrade_lock.clone());
     let timeout_one_honest_collector = VoteCollector::new(membership.clone(), upgrade_lock.clone());
-    let checkpoint_collector = VoteCollector::new(membership.clone(), upgrade_lock.clone());
-    let epoch_root_collector =
-        EpochRootVoteCollector::new(membership.clone(), upgrade_lock.clone());
+    let timeout3_collector = VoteCollector::new(membership.clone(), upgrade_lock.clone());
+    let timeout_one_honest3_collector =
+        VoteCollector::new(membership.clone(), upgrade_lock.clone());
+    let epoch_root_collector = VoteCollector::new(membership.clone(), upgrade_lock.clone());
 
     let epoch_manager = EpochManager::new(epoch_height, membership.clone());
 
-    let vid_disperser = VidDisperser::new(membership.clone());
+    let vid_disperser = VidDisperser::new(
+        membership.clone(),
+        network.sender().clone(),
+        public_key,
+        private_key.clone(),
+    );
+
     let vid_reconstructor = VidReconstructor::new();
 
     let block_config = BlockBuilderConfig::default();
@@ -177,18 +190,18 @@ async fn build_coordinator(
         genesis_state,
         Leaf2::from(genesis_proposal.clone()),
     );
-    consensus.seed_genesis(genesis_cert1, genesis_proposal);
+    consensus.seed_parent(genesis_cert1, genesis_proposal, std::iter::empty());
 
-    let proposal_validator =
-        ProposalValidator::new(membership.clone(), epoch_height, upgrade_lock.clone());
+    let proposal_validator = ProposalValidator::new(
+        membership.clone(),
+        epoch_height,
+        upgrade_lock.clone(),
+        consensus.cert1_at(ViewNumber::genesis()),
+    );
     let share_validator =
         VidShareValidator::new(membership.clone(), epoch_height, upgrade_lock.clone());
 
-    let timer = Timer::new(
-        cfg.timeout_duration(),
-        ViewNumber::genesis(),
-        EpochNumber::genesis(),
-    );
+    let timer = Timer::new(cfg.timeout_duration(), ViewNumber::genesis());
 
     let mut coordinator = Coordinator::builder()
         .consensus(consensus)
@@ -198,8 +211,17 @@ async fn build_coordinator(
         .vote2_collector(vote2_collector)
         .timeout_collector(timeout_collector)
         .timeout_one_honest_collector(timeout_one_honest_collector)
-        .checkpoint_collector(checkpoint_collector)
+        .timeout3_collector(timeout3_collector)
+        .timeout_one_honest3_collector(timeout_one_honest3_collector)
         .epoch_root_collector(epoch_root_collector)
+        .upgrade_vote_collector(VoteCollector::new(membership.clone(), upgrade_lock.clone()))
+        .upgrade_protocol(UpgradeProtocol::new(
+            UpgradeConfig::default(),
+            upgrade_lock.clone(),
+            public_key,
+            private_key.clone(),
+        ))
+        .cert_verifiers(CertVerifiers::new(membership.clone(), upgrade_lock.clone()))
         .vid_disperser(vid_disperser)
         .vid_reconstructor(vid_reconstructor)
         .epoch_manager(epoch_manager)
@@ -213,6 +235,7 @@ async fn build_coordinator(
         .client(client)
         .membership_coordinator(membership)
         .outbox(Outbox::new())
+        .external_tx(mpsc::unbounded_channel().0)
         .timer(timer)
         .public_key(public_key)
         .build();
@@ -289,6 +312,7 @@ async fn run_instrumented(mut coordinator: BenchCoordinator, cfg: &NodeConfig) -
                     epoch: req.epoch,
                     payload: block.block,
                     metadata: block.metadata,
+                    payload_commitment: block.payload_commitment,
                 };
                 metrics.on_input(&block_input);
                 coordinator.apply_consensus(block_input);
@@ -343,7 +367,7 @@ fn build_test_block(size: usize, num_nodes: usize) -> TestBlock {
         &block.encode(),
         &metadata.encode(),
         num_nodes,
-        versions::VID2_UPGRADE_VERSION,
+        versions::NEW_PROTOCOL_VERSION,
     );
     let builder_commitment =
         <TestBlockPayload as BlockPayload<TestTypes>>::builder_commitment(&block, &metadata);
@@ -356,7 +380,7 @@ fn build_test_block(size: usize, num_nodes: usize) -> TestBlock {
 }
 
 fn bench_upgrade_lock() -> UpgradeLock<TestTypes> {
-    UpgradeLock::new(Upgrade::trivial(CLIQUENET_VERSION))
+    UpgradeLock::new(Upgrade::trivial(NEW_PROTOCOL_VERSION))
 }
 
 /// Create a genesis `Certificate1` that references the genesis leaf.
@@ -399,5 +423,5 @@ fn build_genesis_proposal(
 }
 
 pub fn upgrade_lock<T: NodeType>() -> UpgradeLock<T> {
-    UpgradeLock::new(CLIQUENET_VERSION.into())
+    UpgradeLock::new(NEW_PROTOCOL_VERSION.into())
 }

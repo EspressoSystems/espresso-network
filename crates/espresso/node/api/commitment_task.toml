@@ -1,3 +1,0 @@
-[route.gethotshotcontract]
-PATH = ["/hotshot_contract"]
-DOC = "Get the address of HotShot contract on Layer1."

@@ -25,7 +25,7 @@ impl ADVZNsProof {
     /// ([`TxProof::new`](crate::block::namespace_payload::TxProof::new)
     /// conforms to this convention.) In the future we should change this API to
     /// conform to convention. But that would require a change to our RPC
-    /// endpoint API at [`endpoints`](crate::api::endpoints), which is a hassle.
+    /// endpoint API, which is a hassle.
     pub fn new(payload: &Payload, index: &NsIndex, common: &ADVZCommon) -> Option<ADVZNsProof> {
         let payload_byte_len = payload.byte_len();
         if !payload_byte_len.is_consistent(common) {
@@ -166,10 +166,9 @@ impl ADVZNsProof {
 #[cfg(test)]
 mod tests {
     use futures::future;
-    use hotshot::traits::BlockPayload;
     use hotshot_types::{
         data::VidCommitment,
-        traits::EncodeBytes,
+        traits::{BlockPayload, EncodeBytes},
         vid::advz::{ADVZScheme, advz_scheme},
     };
     use jf_advz::{VidDisperse, VidScheme};
@@ -204,7 +203,7 @@ mod tests {
             // cannot escape `FnMut` closure body` caused by mutable variable `vid`
             // below.
             let blocks_only = future::join_all(tests.iter().map(|t| async {
-                Payload::from_transactions(t.all_txs(), &Default::default(), &Default::default())
+                Payload::from_transactions(&t.all_txs(), &Default::default(), &Default::default())
                     .await
                     .unwrap()
                     .0

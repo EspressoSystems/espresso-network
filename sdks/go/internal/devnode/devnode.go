@@ -14,16 +14,11 @@ import (
 
 type Ports struct {
 	SequencerAPI int
-	Builder      int
 	DevNode      int
 }
 
 func (p Ports) NodeURL() string {
 	return fmt.Sprintf("http://localhost:%d", p.SequencerAPI)
-}
-
-func (p Ports) BuilderURL() string {
-	return fmt.Sprintf("http://localhost:%d", p.Builder)
 }
 
 func (p Ports) DevNodeURL() string {
@@ -33,7 +28,7 @@ func (p Ports) DevNodeURL() string {
 // reservePort allocates a free TCP port and puts it into TIME_WAIT state.
 // This prevents the OS from handing it out via ephemeral allocation, while
 // still allowing explicit binds (like the dev node will do).
-// Mirrors the Rust reserve_tcp_port() in test-utils/src/lib.rs.
+// Mirrors the Rust reserve_tcp_port() in crates/test-utils/src/lib.rs.
 func reservePort() (int, error) {
 	server, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -67,17 +62,12 @@ func AllocatePorts() (Ports, error) {
 	if err != nil {
 		return Ports{}, err
 	}
-	builderPort, err := reservePort()
-	if err != nil {
-		return Ports{}, err
-	}
 	devNodePort, err := reservePort()
 	if err != nil {
 		return Ports{}, err
 	}
 	return Ports{
 		SequencerAPI: apiPort,
-		Builder:      builderPort,
 		DevNode:      devNodePort,
 	}, nil
 }
@@ -120,7 +110,6 @@ func Start(t *testing.T, ctx context.Context, ports Ports, storageDir string) {
 
 	env := os.Environ()
 	env = append(env, fmt.Sprintf("ESPRESSO_NODE_API_PORT=%d", ports.SequencerAPI))
-	env = append(env, fmt.Sprintf("ESPRESSO_BUILDER_PORT=%d", ports.Builder))
 	env = append(env, fmt.Sprintf("ESPRESSO_DEV_NODE_PORT=%d", ports.DevNode))
 	env = append(env, "ESPRESSO_ETH_MNEMONIC=test test test test test test test test test test test junk")
 	env = append(env, "ESPRESSO_DEPLOYER_ACCOUNT_INDEX=0")

@@ -1,0 +1,140 @@
+# Rust
+
+## Critical rules
+
+**MUST:**
+
+- Use `-p <package>` for all cargo commands (full workspace builds OOM)
+- Run `cargo test -p espresso-types reference` after modifying any serializable type
+- Run `cargo fmt` and `cargo check -p <package>` after changes
+- Update all three storage backends (PostgreSQL, SQLite, filesystem) when changing persistence
+- Add a `doc/operator-notes/` fragment when a change requires operator intervention (see its `README.md`)
+
+**NEVER:**
+
+- Use `just test` during iteration (use `cargo test -p <package>`)
+- Set `RUSTFLAGS` without repeating `--cfg tokio_unstable`: it replaces `build.rustflags` from `.cargo/config.toml`
+  rather than adding to it, and `process-metrics` needs that cfg for the tokio blocking-pool metrics
+
+## Commands
+
+```bash
+cargo nextest run -p <package> -- <test_name>
+
+just check                            # whole workspace (pre-commit only)
+just lint                             # clippy with -D warnings
+just test-demo base                   # basic E2E; other cases in the `test-demo` recipe
+just test-slow                        # long-running tests
+just demo-native                      # local network via process-compose
+```
+
+## Project conventions
+
+- Errors: `anyhow` for binaries, `thiserror` for libraries
+- HTTP API: axum routers in `crates/espresso/api/src/axum.rs`; v1 API traits in `crates/espresso/api/src/v1/`; v2 is
+  generated from `crates/espresso/api/proto/v2/`. Both are implemented on the node's state in
+  `crates/espresso/node/src/api/state.rs`
+- HTTP clients: `http-client` (reqwest)
+
+## Type-driven design
+
+- **Parse, don't validate**: convert inputs to refined types at module boundaries; downstream code takes only refined
+  types and does not re-check.
+- **Newtype** every domain ID and unit (`BlockHeight`, `ValidatorAddress`, `FeeAmount`). Never pass raw `u64` or
+  `[u8; 32]` across module boundaries.
+- Replace `bool` parameters, return values and stringly-typed APIs with two-variant enums.
+- Make invalid states unrepresentable: enums with associated data over `struct`-of-`Option`; `NonEmpty` over
+  `Vec`-that-must-not-be-empty.
+- Typestate for multi-step protocols (`Proposal<Unverified>` -> `Proposal<Verified>`); the compiler enforces ordering,
+  not runtime asserts.
+- Smart constructors return `Result`; keep raw constructors private.
+- Push partiality (`panic`, `unwrap`) and Result handling to module edges; interior functions stay total.
+
+## Architecture pointers
+
+- **SequencerContext** (`crates/espresso/node/src/context.rs`): runs the new protocol's `Coordinator` behind
+  `ConsensusHandle` (`consensus_handle.rs`), which is what the rest of the node reads consensus state from.
+- **Node** (`crates/espresso/node/src/lib.rs`): generic over `P: SequencerPersistence`.
+- **ValidatedState** (`crates/espresso/types/src/v0/impls/state.rs`): four merkle trees (block, fee, reward v1, reward
+  v2) plus chain config; `validate_and_apply_header()` is the state transition. Persisting the merklized state is
+  `crates/espresso/node/src/state.rs`: a loop that replays every leaf from its newest snapshot. With no state, it first
+  stores a snapshot at a recent epoch boundary, from peers, on a pruned node; archive nodes and nodes without a pruner
+  replay from genesis, which gives complete trees. A state that started at a boundary stays incomplete after a switch to
+  `--archive`, and the loop logs an error at start. Leaves the data pruner has already deleted, and state the local
+  snapshot lacks, come from peers; the state pruner never passes that snapshot.
+- **Coordinator** (`crates/hotshot/new-protocol/src/coordinator.rs`): the consensus protocol.
+  `EpochMembershipCoordinator` (`crates/hotshot/types/src/epoch_membership.rs`) manages per-epoch stake tables.
+- **L1Client** (`crates/espresso/types/src/v0/impls/l1.rs`): tracks `head` and `finalized`; reads use
+  `BlockId::finalized()`.
+- **Stake table fetcher** (`crates/espresso/types/src/v0/impls/stake_table.rs`): polls finalized L1, builds
+  `ValidatorMap`. Selection rules: `doc/agents/architecture.md`.
+- **Catchup** (`crates/espresso/node/src/catchup.rs`): `SqlStateCatchup` (local DB), `StatePeers` (HTTP, reliability
+  scored), `ParallelStateCatchup` (races all providers, first success wins; `StatePeers` is a fallback provider started
+  after `ESPRESSO_NODE_HTTP_CATCHUP_DELAY` when a request-response provider is present). Fetches fee/reward proofs,
+  block frontier, chain config, leaf chain, and `LightClientStateUpdateCertificateV2` state certs per epoch.
+
+## Key crates
+
+- `espresso-node`: main node binary, API, persistence
+- `espresso-types`: domain types (Header, Payload, Transaction, ValidatedState)
+- `hotshot`: BFT consensus implementation
+- `hotshot-query-service`: query APIs for blocks/availability
+- `hotshot-state-prover`: ZK proof generation for light client updates
+- `hotshot-contract-adapter`: Rust <-> Solidity type bridge
+- `versions`: protocol version constants and the `Upgrade` type
+- `http-client`: reqwest-based HTTP/WebSocket client for the node APIs
+- `staking-cli`: stake table contract interaction
+- `cliquenet`: fully-connected mesh network (fast finality)
+
+## Testing
+
+**Blockchain infrastructure: bugs can cause irreversible financial losses.** Write tests that prove correctness, not
+just exercise code paths. Regression test first when fixing bugs.
+
+Test layers:
+
+- Unit (`cargo nextest run -p <crate>`): individual functions/modules
+- Reference (`cargo nextest run -p espresso-types reference`): serialization compatibility, in
+  `crates/espresso/types/src/reference_tests.rs`
+- New protocol (`cargo nextest run -p hotshot-new-protocol`): consensus, cutover, network sims, in
+  `crates/hotshot/new-protocol/src/tests/`
+- Integration (`cargo nextest run -p tests`): full system E2E in `tests/`
+- Slow (`just test-slow`): in `slow-tests/`
+
+When a `reference` test fails after a type change: if intentional, regenerate `/data/` reference files and commitment
+constants. If unintentional, revert.
+
+## Storage
+
+Backends:
+
+- PostgreSQL (`sql.rs`): production DA/archival, merklized, pruning supported
+- Filesystem (`fs.rs`): production non-DA validators, not merklized, limited pruning
+- SQLite (`sql.rs`, chosen at runtime with `ESPRESSO_NODE_EMBEDDED_DB=true`): not yet production, merklized, pruning
+  supported
+
+The SQL code is compiled once per database: each `sql.rs` is loaded by both a `postgres` and a `sqlite` module, each
+with its own `Db`. Branch on `Db::EMBEDDED` where both branches compile for either database, and put code that only
+compiles for one (Postgres array binds, connect options) in that backend's file. Tests in the shared files run on both.
+
+Migrations (all three backends required when adding storage):
+
+- SQL via Refinery. Naming `V{n}__{name}.sql`. Refinery migrations run at startup before the node joins consensus:
+  schema-only, fast. Work that scales with database size uses `DataBackfill`; see `doc/agents/refinery-migrations.md`.
+- Locations: `crates/espresso/node/api/migrations/{postgres,sqlite}/`,
+  `crates/hotshot-query-service/migrations/{postgres,sqlite}/`.
+- hotshot-query-service uses multiples of 100 (V100, V200...) leaving gaps for applications.
+- Filesystem (`crates/espresso/node/src/persistence/fs.rs`): no migration framework. Handle older on-disk formats with
+  read-time fallbacks (see `load_stake` and `legacy_anchor_leaf_path`), and keep writes atomic via `Inner::replace`.
+- Update `SequencerPersistence` for all backends; test with `cargo test -p espresso-node persistence`.
+
+## Adding an API endpoint
+
+For v2, define the rpc in its proto instead and let the build generate the route and handlers; see
+[`API.md`](../../API.md). For v1:
+
+1. Add the method to the version's API trait (`crates/espresso/api/src/v1/<module>.rs`) and implement it on the node's
+   state (`crates/espresso/node/src/api/state.rs`).
+2. Add the path constant to `crates/espresso/api/src/axum/routes.rs`.
+3. Write the handler and register it on the module's `ApiRouter` in `crates/espresso/api/src/axum.rs` with
+   `.api_route(routes::v1::<ROUTE>, get_with(handler, docs))`.

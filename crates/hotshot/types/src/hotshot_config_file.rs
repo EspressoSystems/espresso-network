@@ -6,7 +6,7 @@
 
 use std::{num::NonZeroUsize, time::Duration};
 
-use alloy::primitives::U256;
+use alloy_primitives::U256;
 use url::Url;
 use vec1::Vec1;
 

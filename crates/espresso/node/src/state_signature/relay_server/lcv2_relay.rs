@@ -4,22 +4,22 @@ use std::{
 };
 
 use alloy::primitives::U256;
+use axum::http::StatusCode;
 use hotshot_types::{
     light_client::{
         LCV2StateSignatureRequestBody, LCV2StateSignaturesBundle, LightClientState, StateVerKey,
     },
     traits::signature_key::LCV2StateSignatureKey,
 };
-use tide_disco::{Error, StatusCode, error::ServerError};
 
-use super::stake_table_tracker::StakeTableTracker;
+use super::{RelayError, stake_table_tracker::StakeTableTracker};
 
 #[async_trait::async_trait]
 pub trait LCV2StateRelayServerDataSource {
     /// Get the latest available signatures bundle.
     /// # Errors
     /// Errors if there's no available signatures bundle.
-    fn get_latest_signature_bundle(&self) -> Result<LCV2StateSignaturesBundle, ServerError>;
+    fn get_latest_signature_bundle(&self) -> Result<LCV2StateSignaturesBundle, RelayError>;
 
     /// Post a signature to the relay server
     /// # Errors
@@ -27,7 +27,7 @@ pub trait LCV2StateRelayServerDataSource {
     async fn post_signature(
         &mut self,
         req: LCV2StateSignatureRequestBody,
-    ) -> Result<(), ServerError>;
+    ) -> Result<(), RelayError>;
 }
 
 /// Server state that tracks the light client V2 state and signatures
@@ -49,10 +49,10 @@ pub struct LCV2StateRelayServerState {
 
 #[async_trait::async_trait]
 impl LCV2StateRelayServerDataSource for LCV2StateRelayServerState {
-    fn get_latest_signature_bundle(&self) -> Result<LCV2StateSignaturesBundle, ServerError> {
+    fn get_latest_signature_bundle(&self) -> Result<LCV2StateSignaturesBundle, RelayError> {
         self.latest_available_bundle
             .clone()
-            .ok_or(ServerError::catch_all(
+            .ok_or(RelayError::catch_all(
                 StatusCode::NOT_FOUND,
                 "The light client V2 state signatures are not ready.".to_owned(),
             ))
@@ -61,7 +61,7 @@ impl LCV2StateRelayServerDataSource for LCV2StateRelayServerState {
     async fn post_signature(
         &mut self,
         req: LCV2StateSignatureRequestBody,
-    ) -> Result<(), ServerError> {
+    ) -> Result<(), RelayError> {
         let block_height = req.state.block_height;
         if block_height <= self.latest_block_height.unwrap_or(0) {
             // This signature is no longer needed
@@ -71,12 +71,10 @@ impl LCV2StateRelayServerDataSource for LCV2StateRelayServerState {
             .stake_table_tracker
             .stake_table_info_for_block(block_height)
             .await
-            .map_err(|e| {
-                ServerError::catch_all(StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
-            })?;
+            .map_err(|e| RelayError::catch_all(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
         let Some(weight) = stake_table.known_nodes.get(&req.key) else {
             tracing::warn!("Received LCV2 signature from unknown node: {req}");
-            return Err(ServerError::catch_all(
+            return Err(RelayError::catch_all(
                 StatusCode::UNAUTHORIZED,
                 "LCV2 signature posted by nodes not on the stake table".to_owned(),
             ));
@@ -90,7 +88,7 @@ impl LCV2StateRelayServerDataSource for LCV2StateRelayServerState {
             &req.next_stake,
         ) {
             tracing::warn!("Couldn't verify the received LCV2 signature: {req}");
-            return Err(ServerError::catch_all(
+            return Err(RelayError::catch_all(
                 StatusCode::BAD_REQUEST,
                 "The posted LCV2 signature is not valid.".to_owned(),
             ));
@@ -115,7 +113,7 @@ impl LCV2StateRelayServerDataSource for LCV2StateRelayServerState {
         match bundle.signatures.entry(req.key) {
             Entry::Occupied(_) => {
                 // A signature is already posted for this key with this state
-                return Err(ServerError::catch_all(
+                return Err(RelayError::catch_all(
                     StatusCode::BAD_REQUEST,
                     "A LCV2 signature of this light client state is already posted at this block \
                      height for this key."

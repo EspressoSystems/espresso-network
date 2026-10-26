@@ -99,7 +99,35 @@ impl<T: NodeType> EpochManager<T> {
                 error!("Leaf has no epoch");
                 return;
             };
-            self.request_drb_result(epoch + 2);
+
+            let target_epoch = epoch + 2;
+            if self.completed_drb_requests.contains(&target_epoch)
+                || self.pending_drb_requests.contains(&target_epoch)
+            {
+                return;
+            }
+            self.pending_drb_requests.insert(target_epoch);
+
+            let membership_coordinator = self.membership_coordinator.clone();
+            let root_leaf = leaf.clone();
+            let handles = self.handles.entry(target_epoch).or_default();
+            handles.push(self.tasks.spawn(async move {
+                let result = async {
+                    membership_coordinator
+                        .add_epoch_root(root_leaf.block_header().clone())
+                        .await
+                        .map_err(|e| EpochManagerError::EpochRoot(anyhow::anyhow!("{e}")))?;
+
+                    // Compute the DRB from the decided root leaf.
+                    let drb = membership_coordinator
+                        .compute_drb_result(target_epoch, root_leaf)
+                        .await
+                        .map_err(EpochManagerError::DrbCompute)?;
+                    Ok(EpochRootResult::DrbResult(target_epoch, drb))
+                }
+                .await;
+                (target_epoch, result)
+            }));
         }
 
         // If this is the transition block of an epoch feed the DRB result to the coordinator.

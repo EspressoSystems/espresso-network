@@ -8,20 +8,23 @@ license = "MIT"
 alloy = { workspace = true }
 anyhow = { workspace = true }
 async-lock = { workspace = true }
-blake3 = { workspace = true }
+axum = { workspace = true }
 clap = { workspace = true }
 csv = { workspace = true }
 futures = { workspace = true }
 hotshot-types = { workspace = true }
-libp2p-identity = { workspace = true }
-multiaddr = { workspace = true }
+http-client = { workspace = true }
+http-wire = { workspace = true, features = ["server"] }
 serde = { workspace = true }
-surf-disco = { workspace = true }
-tide-disco = { workspace = true }
+serde_json = { workspace = true }
 tokio = { workspace = true }
 toml = { workspace = true }
 tracing = { workspace = true }
 vbs = { workspace = true }
+
+[dev-dependencies]
+hotshot-example-types = { workspace = true }
+tower = { workspace = true, features = ["util"] }
 
 [lints]
 workspace = true

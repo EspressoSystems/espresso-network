@@ -86,6 +86,8 @@ contract FeeContract is Initializable, OwnableUpgradeable, UUPSUpgradeable {
 
     /// @notice only the owner can authorize an upgrade
     function _authorizeUpgrade(address newImplementation) internal override onlyOwner {
+        // Owner-gated upgrade authorisation; no external call precedes the event.
+        // forge-lint: disable-next-line(reentrancy-events)
         emit Upgrade(newImplementation);
     }
 

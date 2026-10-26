@@ -2,81 +2,230 @@
 
 pub mod routes;
 
+use std::{ops::Range, sync::Arc};
+
 use aide::{
-    axum::{ApiRouter, routing::get_with},
-    openapi::{Info, OpenApi},
+    axum::{
+        ApiRouter,
+        routing::{get_with, post_with},
+    },
+    openapi::{
+        Info, OpenApi, Parameter, ParameterData, ParameterSchemaOrContent, PathStyle, ReferenceOr,
+        SchemaObject,
+    },
     operation::OperationOutput,
-    redoc::Redoc,
     scalar::Scalar,
 };
 use axum::{
     Extension, Json, Router,
-    extract::{Path, Request, State},
-    http::{StatusCode, Uri},
-    middleware::{self, Next},
+    body::Bytes,
+    extract::{Path, Request, State, ws::WebSocketUpgrade},
+    http::{HeaderMap, StatusCode, Uri, header},
     response::{Html, IntoResponse, Response},
-    routing::get,
+    routing::{any, get},
+};
+use http_wire::{
+    ContentType, DecodeFailure, WireError, drive_ws_stream, healthcheck_response,
+    module_healthcheck_response,
 };
 use schemars::transform::Transform;
-use serde::Serialize;
-use serialization_api::v2::{
-    GetIncorrectEncodingProofRequest, GetNamespaceProofRequest, GetRewardAccountProofRequest,
-    GetRewardBalanceRequest, GetRewardBalancesRequest, GetRewardClaimInputRequest,
-    GetRewardMerkleTreeRequest, GetStakeTableRequest, GetStateCertificateRequest,
+use serde::{Deserialize, Serialize};
+use tokio::sync::Semaphore;
+
+use crate::{
+    dyn_api::{
+        AvailabilityState, BlockState, CatchupState, ConfigState, DatabaseState, ExplorerState,
+        FeeState, LightClientState, NodeState, RewardState, StateSignatureState, StatusState,
+        SubmitState, TokenState,
+    },
+    error::{ApiError, classify as classify_availability_error},
+    v1,
 };
 
-use crate::{error::ApiError, handlers, v1, v2};
-
-/// API error response
-#[derive(Debug, Serialize, schemars::JsonSchema)]
+/// API error response, wire-compatible with the `Custom` variant of the per-module error enums
+/// (`node::Error::Custom`, `merklized_state::Error::Custom`, etc.) that all of tide-disco's
+/// `Error::catch_all` calls produce. Most of our migrated endpoints (catchup, submit,
+/// state-signature, light-client, node, status, config, token, database) take that path, so this
+/// envelope is byte-identical with tide's error response for them. Endpoints that use a specific
+/// variant directly (e.g. `availability::Error::FetchLeaf`) emit their own shape on tide; those
+/// bytes are not matched here.
+#[derive(Debug, Serialize, Deserialize, thiserror::Error)]
+#[error("{custom}")]
 struct ErrorResponse {
-    error: String,
+    #[serde(rename = "Custom")]
+    custom: CustomError,
+}
+
+#[derive(Debug, Serialize, Deserialize, thiserror::Error)]
+#[error("error {status}: {message}")]
+struct CustomError {
+    // Field order matches `node::Error::Custom { message, status }` declaration so serde_json
+    // emits the same key order on the wire.
+    message: String,
+    status: u16,
+}
+
+impl ErrorResponse {
+    /// Scrubs credentials out of the message. `ApiError`'s `Display` already does this for handler
+    /// errors, which the tonic adapter shares; this also covers messages that never went through
+    /// it, such as a serialization failure. Error bodies go to unauthenticated callers and never
+    /// pass the OTLP exporter.
+    fn new(status: StatusCode, message: String) -> Self {
+        Self {
+            custom: CustomError {
+                message: espresso_utils::redact::scrub(&message),
+                status: status.as_u16(),
+            },
+        }
+    }
 }
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
-        let status = match self {
+        let status = match &self {
             ApiError::BadRequest(_) => StatusCode::BAD_REQUEST,
+            ApiError::NotFound(_) => StatusCode::NOT_FOUND,
+            ApiError::Gone(_) => StatusCode::GONE,
             ApiError::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
+            ApiError::Unavailable(_) => StatusCode::SERVICE_UNAVAILABLE,
         };
-
-        let body = Json(ErrorResponse {
-            error: self.to_string(),
-        });
-
-        (status, body).into_response()
+        (status, Json(ErrorResponse::new(status, self.to_string()))).into_response()
     }
+}
+
+impl WireError for ErrorResponse {
+    fn status(&self) -> StatusCode {
+        StatusCode::from_u16(self.custom.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR)
+    }
+
+    fn catch_all(status: StatusCode, message: String) -> Self {
+        Self::new(status, message)
+    }
+}
+
+/// Encode a successful response body based on the request's `Accept` header, matching
+/// tide-disco's content negotiation.
+///
+/// surf-disco's default `Accept` is `application/octet-stream`, so production internal clients
+/// (peer-catchup, submit-transactions, light-client provider) expect VBS-encoded responses for
+/// the endpoints that flow large structured data. Falls back to JSON otherwise.
+fn encode_response<T: Serialize>(headers: &HeaderMap, value: T) -> Response {
+    http_wire::encode_ok::<ErrorResponse, _>(headers, value)
+}
+
+/// Decode a request body based on its `Content-Type`, matched by media-type essence.
+///
+/// - `application/octet-stream`: VBS (versioned binary), what `Request::body_binary`
+///   sends, and what production peer-catchup / submit-transactions clients use.
+/// - `application/json`: serde_json.
+pub(crate) fn decode_body<T: serde::de::DeserializeOwned>(
+    headers: &HeaderMap,
+    body: &[u8],
+) -> Result<T, ApiError> {
+    http_wire::decode_body(headers, body).map_err(|err| {
+        ApiError::BadRequest(match err {
+            DecodeFailure::Binary(err) => anyhow::anyhow!("invalid binary body: {err}"),
+            DecodeFailure::Json(err) => anyhow::anyhow!("invalid json body: {err}"),
+            DecodeFailure::UnsupportedContentType => {
+                match headers
+                    .get(header::CONTENT_TYPE)
+                    .and_then(|v| v.to_str().ok())
+                {
+                    Some(other) => anyhow::anyhow!("unsupported Content-Type: {other}"),
+                    None => anyhow::anyhow!("missing Content-Type header"),
+                }
+            },
+        })
+    })
 }
 
 impl OperationOutput for ApiError {
     type Inner = Self;
 }
 
-/// Serve the OpenAPI spec (extracted from Extension)
-async fn serve_openapi_spec(Extension(api): Extension<OpenApi>) -> Json<OpenApi> {
-    Json(api)
+/// Successful JSON response for v1 handlers, most of which return domain types (from
+/// `espresso-types`, `hotshot-query-service`, etc.) that don't implement `schemars::JsonSchema`;
+/// this crate doesn't add OpenAPI derives to domain types. Wire format is identical to
+/// `axum::Json<T>`; only the OpenAPI operation gets an untyped 200 response instead of a generated
+/// schema.
+struct ApiJson<T>(T);
+
+impl<T: Serialize> IntoResponse for ApiJson<T> {
+    fn into_response(self) -> Response {
+        Json(self.0).into_response()
+    }
 }
 
-/// Serve custom Swagger UI with collapsed defaults
-async fn serve_swagger_ui() -> Html<&'static str> {
-    Html(include_str!("../templates/swagger.html"))
+impl<T> OperationOutput for ApiJson<T> {
+    type Inner = T;
+
+    fn inferred_responses(
+        _ctx: &mut aide::generate::GenContext,
+        _operation: &mut aide::openapi::Operation,
+    ) -> Vec<(Option<u16>, aide::openapi::Response)> {
+        vec![(Some(200), aide::openapi::Response::default())]
+    }
 }
 
-/// Middleware to rewrite root paths to /v2 paths
+/// In-flight request slots for `max_connections`.
+#[derive(Clone)]
+pub(crate) struct RequestLimit(pub(crate) Arc<Semaphore>);
+
+/// Each request holds a slot while in flight, excess gets 429. A websocket's slot is released
+/// at the 101 upgrade and an SSE stream's once its headers go out: long-lived streams are
+/// deliberately unbounded here, since demo workloads (nasty-client holds hundreds of streams by
+/// design) dwarf the request budget of 25.
+pub(crate) async fn limit_requests(
+    Extension(RequestLimit(semaphore)): Extension<RequestLimit>,
+    req: Request,
+    next: axum::middleware::Next,
+) -> Response {
+    match semaphore.try_acquire_owned() {
+        Ok(_permit) => next.run(req).await,
+        Err(_) => StatusCode::TOO_MANY_REQUESTS.into_response(),
+    }
+}
+
+/// Serve custom Swagger UI with collapsed defaults, pointed at the given OpenAPI spec route.
+fn swagger_html(spec_route: &str) -> Html<String> {
+    Html(include_str!("../templates/swagger.html").replace("{{OPENAPI_SPEC_ROUTE}}", spec_route))
+}
+
+/// v2 is WIP, so `/` points at the v1 docs; 307 so browsers don't cache the redirect.
+async fn redirect_to_docs() -> axum::response::Redirect {
+    axum::response::Redirect::temporary("/v1")
+}
+
+/// Tide-disco served every v1 module at both `/<module>/...` and `/v1/<module>/...`, and legacy
+/// clients (surf-disco, the light-client, tests) still address the unversioned and `/v0` forms.
+/// Axum only declares the `/v1/...` and `/v2/...` route shapes, and `Router::layer` middleware
+/// runs after routing, so it can never redirect a request onto a route it doesn't already match.
+/// This function is instead wrapped around the whole router with `tower::util::MapRequestLayer`
+/// (see `serve_axum`), which runs before routing, to rewrite the URI so the declared routes match.
 ///
-/// Requests to `/rewards/...` get rewritten to `/v2/rewards/...`
-/// Paths already prefixed with `/v2` are left unchanged
-///
-/// Note: This middleware is only applied to the v2 router, so v1 routes never pass through it
-async fn rewrite_root_to_v2(mut req: Request, next: Next) -> Response {
+/// Excludes paths that are intentionally unversioned: `/`, `/healthcheck`, `/version`, and
+/// anything already prefixed with `/v1` or `/v2`.
+pub(crate) fn rewrite_legacy_uri(mut req: Request) -> Request {
     let uri = req.uri().clone();
     let path = uri.path();
 
-    // Only rewrite unversioned paths (not starting with /v2)
-    if !path.starts_with("/v2") && path != "/" {
-        let new_path = format!("/v2{}", path);
+    let is_reserved =
+        path == "/" || path == "/healthcheck" || path == "/version" || path.is_empty();
+    let is_versioned =
+        path == "/v1" || path.starts_with("/v1/") || path == "/v2" || path.starts_with("/v2/");
+    let new_path = if is_versioned || is_reserved {
+        None
+    } else if path == "/v0" {
+        Some("/v1".to_string())
+    } else if let Some(rest) = path.strip_prefix("/v0/") {
+        Some(format!("/v1/{rest}"))
+    } else {
+        Some(format!("/v1{path}"))
+    };
+
+    if let Some(new_path) = new_path {
         let pq = if let Some(q) = uri.query() {
-            format!("{}?{}", new_path, q)
+            format!("{new_path}?{q}")
         } else {
             new_path
         };
@@ -85,263 +234,3369 @@ async fn rewrite_root_to_v2(mut req: Request, next: Next) -> Response {
         }
     }
 
-    next.run(req).await
+    req
 }
 
-/// Redirect handler for root path
-async fn redirect_to_docs() -> axum::response::Redirect {
-    axum::response::Redirect::permanent("/v2")
+/// Add the routes that every mode serves regardless of which API modules are enabled:
+/// `/`, `/healthcheck`, `/v1/healthcheck`, `/v2/healthcheck`, `/v1/{module}/healthcheck`, and
+/// `/version`. Callers apply CORS.
+pub(crate) fn with_top_level_routes(router: Router) -> Router {
+    router
+        .route("/", get(redirect_to_docs))
+        .route("/healthcheck", get(healthcheck))
+        // Clients configured with a versioned base URL resolve `healthcheck` against it, so each
+        // version prefix answers with the same app health as the unversioned route.
+        .route("/v1/healthcheck", get(healthcheck))
+        .route("/v2/healthcheck", get(healthcheck))
+        .route("/v1/{module}/healthcheck", get(module_healthcheck))
+        .route("/version", get(version))
 }
 
-struct SendQuery<T>(T);
-
-impl<T, S> axum::extract::FromRequestParts<S> for SendQuery<T>
-where
-    T: serde::de::DeserializeOwned + Send,
-    S: Send + Sync,
-{
-    type Rejection = axum::extract::rejection::QueryRejection;
-
-    async fn from_request_parts(
-        parts: &mut axum::http::request::Parts,
-        state: &S,
-    ) -> Result<Self, Self::Rejection> {
-        axum::extract::Query::<T>::from_request_parts(parts, state)
-            .await
-            .map(|axum::extract::Query(inner)| SendQuery(inner))
-    }
+async fn healthcheck(headers: HeaderMap) -> Response {
+    healthcheck_response(&headers)
 }
 
-impl<T: schemars::JsonSchema> aide::operation::OperationInput for SendQuery<T> {
-    fn operation_input(
-        ctx: &mut aide::generate::GenContext,
-        operation: &mut aide::openapi::Operation,
-    ) {
-        let schema = ctx.schema.subschema_for::<T>();
-        let params = aide::operation::parameters_from_schema(
-            ctx,
-            schema,
-            aide::operation::ParamLocation::Query,
-        );
-        aide::operation::add_parameters(ctx, operation, params);
-    }
+/// `/v1/{module}/healthcheck`, reached by legacy clients via the `/{module}/healthcheck` rewrite.
+///
+/// Divergence from tide-disco: matches any `{module}` string, so unregistered module names report
+/// healthy instead of 404. Constraining it to the registered set would have to track which
+/// modules each serve mode mounts; not worth it for a liveness probe.
+async fn module_healthcheck(headers: HeaderMap) -> Response {
+    module_healthcheck_response(&headers)
 }
 
-/// Create a combined router serving both v1 and v2 APIs
-pub fn create_combined_router<S>(state: S) -> Router
-where
-    S: v1::RewardApi
-        + v1::AvailabilityApi
-        + v2::RewardApi
-        + v2::DataApi
-        + v2::ConsensusApi
-        + Clone
-        + Send
-        + Sync
-        + 'static,
-{
-    let router_v1 = create_router_v1(state.clone());
-    let router_v2 = create_router_v2(state).layer(middleware::from_fn(rewrite_root_to_v2));
-
-    router_v2.merge(router_v1).route("/", get(redirect_to_docs))
+/// Tide-disco-compatible version response. Tide emits the binary's clap version; we emit the
+/// crate version so `http_client::Client::connect` and similar polling helpers succeed.
+async fn version() -> Json<serde_json::Value> {
+    Json(serde_json::json!({
+        "version": env!("CARGO_PKG_VERSION"),
+    }))
 }
 
-/// Create v1 router without OpenAPI documentation (internal types)
-pub fn create_router_v1<S>(state: S) -> Router
-where
-    S: v1::RewardApi + v1::AvailabilityApi + Clone + Send + Sync + 'static,
-{
-    // Create handler closures that capture the generic state type
+pub(crate) fn router_reward(state: RewardState) -> ApiRouter {
     let get_reward_claim_input =
-        |State(state): State<S>, Path((height, address)): Path<(u64, String)>| async move {
+        |State(state): State<RewardState>, Path((height, address)): Path<(u64, String)>| async move {
             state
                 .get_reward_claim_input(height, address)
                 .await
-                .map(Json)
-                .map_err(ApiError::Internal)
+                .map(ApiJson)
+                .map_err(classify_availability_error)
         };
 
     let get_reward_balance =
-        |State(state): State<S>, Path((height, address)): Path<(u64, String)>| async move {
+        |State(state): State<RewardState>, Path((height, address)): Path<(u64, String)>| async move {
             state
                 .get_reward_balance(height, address)
                 .await
-                .map(Json)
-                .map_err(ApiError::Internal)
+                .map(ApiJson)
+                .map_err(classify_availability_error)
         };
 
-    let get_latest_reward_balance = |State(state): State<S>, Path(address): Path<String>| async move {
-        state
-            .get_latest_reward_balance(address)
-            .await
-            .map(Json)
-            .map_err(ApiError::Internal)
-    };
+    let get_latest_reward_balance =
+        |State(state): State<RewardState>, Path(address): Path<String>| async move {
+            state
+                .get_latest_reward_balance(address)
+                .await
+                .map(ApiJson)
+                .map_err(classify_availability_error)
+        };
 
     let get_reward_account_proof =
-        |State(state): State<S>, Path((height, address)): Path<(u64, String)>| async move {
+        |State(state): State<RewardState>, Path((height, address)): Path<(u64, String)>| async move {
             state
                 .get_reward_account_proof(height, address)
                 .await
-                .map(Json)
-                .map_err(ApiError::Internal)
+                .map(ApiJson)
+                .map_err(classify_availability_error)
         };
 
-    let get_latest_reward_account_proof = |State(state): State<S>, Path(address): Path<String>| async move {
-        state
-            .get_latest_reward_account_proof(address)
-            .await
-            .map(Json)
-            .map_err(ApiError::Internal)
-    };
+    let get_latest_reward_account_proof =
+        |State(state): State<RewardState>, Path(address): Path<String>| async move {
+            state
+                .get_latest_reward_account_proof(address)
+                .await
+                .map(ApiJson)
+                .map_err(classify_availability_error)
+        };
 
     let get_reward_amounts =
-        |State(state): State<S>, Path((height, offset, limit)): Path<(u64, u64, u64)>| async move {
+        |State(state): State<RewardState>, Path((height, offset, limit)): Path<(u64, u64, u64)>| async move {
             state
                 .get_reward_amounts(height, offset, limit)
                 .await
-                .map(Json)
-                .map_err(ApiError::Internal)
+                .map(ApiJson)
+                .map_err(classify_availability_error)
         };
 
-    let get_reward_merkle_tree_v2 = |State(state): State<S>, Path(height): Path<u64>| async move {
+    let get_reward_merkle_tree_v2 = |State(state): State<RewardState>, Path(height): Path<u64>| async move {
         state
             .get_reward_merkle_tree_v2(height)
             .await
-            .map(Json)
-            .map_err(ApiError::Internal)
+            .map(ApiJson)
+            .map_err(classify_availability_error)
     };
 
+    let get_reward_state_height = |State(state): State<RewardState>| async move {
+        state
+            .get_reward_state_height()
+            .await
+            .map(ApiJson)
+            .map_err(classify_availability_error)
+    };
+
+    let get_reward_state_v2_height = |State(state): State<RewardState>| async move {
+        state
+            .get_reward_state_v2_height()
+            .await
+            .map(ApiJson)
+            .map_err(classify_availability_error)
+    };
+
+    // Same underlying V2-tree lookup as `reward-state-v2/reward-balance`; tide registers this
+    // route unconditionally for both merklized-state modules regardless of tree version.
+    let get_reward_balance_v1 =
+        |State(state): State<RewardState>, Path((height, address)): Path<(u64, String)>| async move {
+            state
+                .get_reward_balance(height, address)
+                .await
+                .map(ApiJson)
+                .map_err(classify_availability_error)
+        };
+
+    let get_reward_account_proof_v1 =
+        |State(state): State<RewardState>, Path((height, address)): Path<(u64, String)>| async move {
+            state
+                .get_reward_account_proof_v1(height, address)
+                .await
+                .map(ApiJson)
+                .map_err(classify_availability_error)
+        };
+
+    // Merklized-state `get_path` handlers, inherited by both reward mounts from the legacy
+    // `hotshot-query-service` merklized-state base routes (mirrors router_block_state /
+    // router_fee_state below).
+    let get_reward_state_path_v1_by_height =
+        |State(state): State<RewardState>, Path((height, key)): Path<(u64, String)>| async move {
+            state
+                .get_reward_state_path_v1(v1::Snapshot::Height(height), key)
+                .await
+                .map(ApiJson)
+                .map_err(classify_availability_error)
+        };
+
+    let get_reward_state_path_v1_by_commit =
+        |State(state): State<RewardState>, Path((commit, key)): Path<(String, String)>| async move {
+            state
+                .get_reward_state_path_v1(v1::Snapshot::Commit(commit), key)
+                .await
+                .map(ApiJson)
+                .map_err(classify_availability_error)
+        };
+
+    let get_reward_state_path_v2_by_height =
+        |State(state): State<RewardState>, Path((height, key)): Path<(u64, String)>| async move {
+            state
+                .get_reward_state_path_v2(v1::Snapshot::Height(height), key)
+                .await
+                .map(ApiJson)
+                .map_err(classify_availability_error)
+        };
+
+    let get_reward_state_path_v2_by_commit =
+        |State(state): State<RewardState>, Path((commit, key)): Path<(String, String)>| async move {
+            state
+                .get_reward_state_path_v2(v1::Snapshot::Commit(commit), key)
+                .await
+                .map(ApiJson)
+                .map_err(classify_availability_error)
+        };
+
+    ApiRouter::new()
+        .api_route(
+            routes::v1::REWARD_CLAIM_INPUT_ROUTE,
+            get_with(get_reward_claim_input, |op| {
+                op.summary("Get reward claim input").description(
+                    "Returns the RewardClaimInput needed to call claimRewards() on L1: lifetime \
+                     rewards, Merkle proof, and auth root inputs, for the account at the given \
+                     block height finalized by the light client contract.",
+                )
+            }),
+        )
+        .api_route(
+            routes::v1::REWARD_BALANCE_ROUTE,
+            get_with(get_reward_balance, |op| {
+                op.summary("Get reward balance at height").description(
+                    "Get balance in reward state at a specific height for an Ethereum address.",
+                )
+            }),
+        )
+        .api_route(
+            routes::v1::LATEST_REWARD_BALANCE_ROUTE,
+            get_with(get_latest_reward_balance, |op| {
+                op.summary("Get latest reward balance")
+                    .description("Get current balance in reward state for an Ethereum address.")
+            }),
+        )
+        .api_route(
+            routes::v1::REWARD_ACCOUNT_PROOF_ROUTE,
+            get_with(get_reward_account_proof, |op| {
+                op.summary("Get reward account proof").description(
+                    "Get the Merkle proof for a reward account at a given block height \
+                     (RewardAccountProofV1 pre-V4, RewardAccountProofV2 from V4 onward).",
+                )
+            }),
+        )
+        .api_route(
+            routes::v1::LATEST_REWARD_ACCOUNT_PROOF_ROUTE,
+            get_with(get_latest_reward_account_proof, |op| {
+                op.summary("Get latest reward account proof").description(
+                    "Get the Merkle proof (RewardAccountProofV2) for a reward account at the \
+                     latest block height finalized by the light client contract.",
+                )
+            }),
+        )
+        .api_route(
+            routes::v1::REWARD_AMOUNTS_ROUTE,
+            get_with(get_reward_amounts, |op| {
+                op.summary("List reward amounts").description(
+                    "Return all RewardMerkleTreeV2 accounts stored for the requested height, \
+                     paginated by offset and limit (limit must be <= 10000).",
+                )
+            }),
+        )
+        .api_route(
+            routes::v1::REWARD_MERKLE_TREE_V2_ROUTE,
+            get_with(get_reward_merkle_tree_v2, |op| {
+                op.summary("Get RewardMerkleTreeV2 snapshot").description(
+                    "Get the snapshot of this node's RewardMerkleTreeV2 at the given block \
+                     height, serialized as RewardMerkleTreeV2Data.",
+                )
+            }),
+        )
+        .api_route(
+            routes::v1::REWARD_STATE_HEIGHT_ROUTE,
+            get_with(get_reward_state_height, |op| {
+                op.summary("Get reward-state block height").description(
+                    "Latest block height for which the merklized reward state (V1) is available.",
+                )
+            }),
+        )
+        .api_route(
+            routes::v1::REWARD_STATE_V2_HEIGHT_ROUTE,
+            get_with(get_reward_state_v2_height, |op| {
+                op.summary("Get reward-state-v2 block height").description(
+                    "Latest block height for which the merklized reward state (V2) is available.",
+                )
+            }),
+        )
+        .api_route(
+            routes::v1::REWARD_V1_BALANCE_ROUTE,
+            get_with(get_reward_balance_v1, |op| {
+                op.summary("Get reward balance at height (v1 mount)")
+                    .description(
+                        "Same handler as reward-state-v2/reward-balance, registered on the \
+                         reward-state mount; tide-disco shared this handler across both \
+                         merklized-state mounts.",
+                    )
+            }),
+        )
+        .api_route(
+            routes::v1::REWARD_V1_ACCOUNT_PROOF_ROUTE,
+            get_with(get_reward_account_proof_v1, |op| {
+                op.summary("Get reward account proof (v1 mount)")
+                    .description(
+                        "Same handler as reward-state-v2/proof, registered on the reward-state \
+                         mount; tide-disco shared this handler across both merklized-state mounts.",
+                    )
+            }),
+        )
+        // Tide-disco twins of the reward-state-v2 routes above, registered on the same
+        // handlers (tide shared them across both merklized-state modules).
+        .api_route(
+            routes::v1::REWARD_V1_LATEST_BALANCE_ROUTE,
+            get_with(get_latest_reward_balance, |op| {
+                op.summary("Get latest reward balance (v1 mount)")
+                    .description(
+                        "Same handler as reward-state-v2/reward-balance/latest, registered on the \
+                         reward-state mount; tide-disco shared this handler across both \
+                         merklized-state mounts.",
+                    )
+            }),
+        )
+        .api_route(
+            routes::v1::REWARD_V1_LATEST_ACCOUNT_PROOF_ROUTE,
+            get_with(get_latest_reward_account_proof, |op| {
+                op.summary("Get latest reward account proof (v1 mount)")
+                    .description(
+                        "Same handler as reward-state-v2/proof/latest, registered on the \
+                         reward-state mount; tide-disco shared this handler across both \
+                         merklized-state mounts.",
+                    )
+            }),
+        )
+        .api_route(
+            routes::v1::REWARD_V1_AMOUNTS_ROUTE,
+            get_with(get_reward_amounts, |op| {
+                op.summary("List reward amounts (v1 mount)").description(
+                    "Same handler as reward-state-v2/reward-amounts, registered on the \
+                     reward-state mount; tide-disco shared this handler across both \
+                     merklized-state mounts.",
+                )
+            }),
+        )
+        .api_route(
+            routes::v1::REWARD_V1_MERKLE_TREE_V2_ROUTE,
+            get_with(get_reward_merkle_tree_v2, |op| {
+                op.summary("Get RewardMerkleTreeV2 snapshot (v1 mount)")
+                    .description(
+                        "Same handler as reward-state-v2/reward-merkle-tree-v2, registered on the \
+                         reward-state mount; tide-disco shared this handler across both \
+                         merklized-state mounts.",
+                    )
+            }),
+        )
+        .api_route(
+            routes::v1::REWARD_STATE_PATH_BY_HEIGHT_ROUTE,
+            get_with(get_reward_state_path_v1_by_height, |op| {
+                op.summary("Get reward-state Merkle path by height")
+                    .description(
+                        "Retrieve the Merkle path for the membership proof of a leaf in the \
+                         reward-state (V1) tree, by block height and key.",
+                    )
+            }),
+        )
+        .api_route(
+            routes::v1::REWARD_STATE_PATH_BY_COMMIT_ROUTE,
+            get_with(get_reward_state_path_v1_by_commit, |op| {
+                op.summary("Get reward-state Merkle path by commitment")
+                    .description(
+                        "Retrieve the Merkle path for the membership proof of a leaf in the \
+                         reward-state (V1) tree, by tree commitment and key.",
+                    )
+            }),
+        )
+        .api_route(
+            routes::v1::REWARD_STATE_V2_PATH_BY_HEIGHT_ROUTE,
+            get_with(get_reward_state_path_v2_by_height, |op| {
+                op.summary("Get reward-state-v2 Merkle path by height")
+                    .description(
+                        "Retrieve the Merkle path for the membership proof of a leaf in the \
+                         reward-state-v2 tree, by block height and key.",
+                    )
+            }),
+        )
+        .api_route(
+            routes::v1::REWARD_STATE_V2_PATH_BY_COMMIT_ROUTE,
+            get_with(get_reward_state_path_v2_by_commit, |op| {
+                op.summary("Get reward-state-v2 Merkle path by commitment")
+                    .description(
+                        "Retrieve the Merkle path for the membership proof of a leaf in the \
+                         reward-state-v2 tree, by tree commitment and key.",
+                    )
+            }),
+        )
+        .with_state(state)
+}
+
+pub(crate) fn router_availability(state: AvailabilityState) -> ApiRouter {
     // Availability API handlers
     // Route: /v1/availability/block/{height}/namespace/{namespace}
     let get_namespace_proof_by_height =
-        |State(state): State<S>, Path((height, namespace)): Path<(u64, u32)>| async move {
+        |State(state): State<AvailabilityState>, Path((height, namespace)): Path<(u64, u32)>| async move {
             state
                 .get_namespace_proof(v1::availability::BlockId::Height(height), namespace)
                 .await
-                .map(Json)
-                .map_err(ApiError::Internal)
+                .map(ApiJson)
+                .map_err(classify_availability_error)
         };
 
     // Route: /v1/availability/block/hash/{hash}/namespace/{namespace}
     let get_namespace_proof_by_hash =
-        |State(state): State<S>, Path((hash, namespace)): Path<(String, u32)>| async move {
+        |State(state): State<AvailabilityState>, Path((hash, namespace)): Path<(String, u32)>| async move {
             state
                 .get_namespace_proof(v1::availability::BlockId::Hash(hash), namespace)
                 .await
-                .map(Json)
-                .map_err(ApiError::Internal)
+                .map(ApiJson)
+                .map_err(classify_availability_error)
         };
 
     // Route: /v1/availability/block/payload-hash/{payload-hash}/namespace/{namespace}
     let get_namespace_proof_by_payload_hash =
-        |State(state): State<S>, Path((payload_hash, namespace)): Path<(String, u32)>| async move {
+        |State(state): State<AvailabilityState>,
+         Path((payload_hash, namespace)): Path<(String, u32)>| async move {
             state
                 .get_namespace_proof(
                     v1::availability::BlockId::PayloadHash(payload_hash),
                     namespace,
                 )
                 .await
-                .map(Json)
-                .map_err(ApiError::Internal)
+                .map(ApiJson)
+                .map_err(classify_availability_error)
         };
 
     // Route: /v1/availability/block/{from}/{until}/namespace/{namespace}
     let get_namespace_proof_range =
-        |State(state): State<S>, Path((from, until, namespace)): Path<(u64, u64, u32)>| async move {
+        |State(state): State<AvailabilityState>,
+         Path((from, until, namespace)): Path<(u64, u64, u32)>| async move {
             state
                 .get_namespace_proof_range(from, until, namespace)
                 .await
-                .map(Json)
-                .map_err(ApiError::Internal)
+                .map(ApiJson)
+                .map_err(classify_availability_error)
         };
 
     let get_incorrect_encoding_proof =
-        |State(state): State<S>, Path((block_number, namespace)): Path<(u64, u32)>| async move {
+        |State(state): State<AvailabilityState>,
+         Path((block_number, namespace)): Path<(u64, u32)>| async move {
             state
                 .get_incorrect_encoding_proof(
                     v1::availability::BlockId::Height(block_number),
                     namespace,
                 )
                 .await
-                .map(Json)
-                .map_err(ApiError::Internal)
+                .map(ApiJson)
+                .map_err(classify_availability_error)
         };
 
-    let get_state_cert_v1 = |State(state): State<S>, Path(epoch): Path<u64>| async move {
+    let get_state_cert_v1 = |State(state): State<AvailabilityState>, Path(epoch): Path<u64>| async move {
         state
             .get_state_cert(epoch)
             .await
-            .map(Json)
-            .map_err(ApiError::Internal)
+            .map(ApiJson)
+            .map_err(classify_availability_error)
     };
 
-    let get_state_cert_v2 = |State(state): State<S>, Path(epoch): Path<u64>| async move {
+    let get_state_cert_v2 = |State(state): State<AvailabilityState>, Path(epoch): Path<u64>| async move {
         state
             .get_state_cert_v2(epoch)
             .await
-            .map(Json)
+            .map(ApiJson)
+            .map_err(classify_availability_error)
+    };
+
+    // HotShot availability API handlers
+    let get_leaf_by_height = |State(state): State<AvailabilityState>, Path(height): Path<u64>| async move {
+        state
+            .get_leaf(v1::LeafId::Height(height))
+            .await
+            .map(ApiJson)
+            .map_err(classify_availability_error)
+    };
+
+    let get_leaf_by_hash = |State(state): State<AvailabilityState>, Path(hash): Path<String>| async move {
+        state
+            .get_leaf(v1::LeafId::Hash(hash))
+            .await
+            .map(ApiJson)
+            .map_err(classify_availability_error)
+    };
+
+    let get_leaf_range = |State(state): State<AvailabilityState>,
+                          Path((from, until)): Path<(usize, usize)>| async move {
+        state
+            .get_leaf_range(from, until)
+            .await
+            .map(ApiJson)
+            .map_err(classify_availability_error)
+    };
+
+    let get_header_by_height = |State(state): State<AvailabilityState>, Path(height): Path<u64>| async move {
+        state
+            .get_header(v1::BlockId::Height(height))
+            .await
+            .map(ApiJson)
+            .map_err(classify_availability_error)
+    };
+
+    let get_header_by_hash = |State(state): State<AvailabilityState>, Path(hash): Path<String>| async move {
+        state
+            .get_header(v1::BlockId::Hash(hash))
+            .await
+            .map(ApiJson)
+            .map_err(classify_availability_error)
+    };
+
+    let get_header_by_payload_hash =
+        |State(state): State<AvailabilityState>, Path(payload_hash): Path<String>| async move {
+            state
+                .get_header(v1::BlockId::PayloadHash(payload_hash))
+                .await
+                .map(ApiJson)
+                .map_err(classify_availability_error)
+        };
+
+    let get_header_range = |State(state): State<AvailabilityState>,
+                            Path((from, until)): Path<(usize, usize)>| async move {
+        state
+            .get_header_range(from, until)
+            .await
+            .map(ApiJson)
+            .map_err(classify_availability_error)
+    };
+
+    let get_block_by_height = |State(state): State<AvailabilityState>, Path(height): Path<u64>| async move {
+        state
+            .get_block(v1::BlockId::Height(height))
+            .await
+            .map(ApiJson)
+            .map_err(classify_availability_error)
+    };
+
+    let get_block_by_hash = |State(state): State<AvailabilityState>, Path(hash): Path<String>| async move {
+        state
+            .get_block(v1::BlockId::Hash(hash))
+            .await
+            .map(ApiJson)
+            .map_err(classify_availability_error)
+    };
+
+    let get_block_by_payload_hash =
+        |State(state): State<AvailabilityState>, Path(payload_hash): Path<String>| async move {
+            state
+                .get_block(v1::BlockId::PayloadHash(payload_hash))
+                .await
+                .map(ApiJson)
+                .map_err(classify_availability_error)
+        };
+
+    let get_block_range = |State(state): State<AvailabilityState>,
+                           Path((from, until)): Path<(usize, usize)>| async move {
+        state
+            .get_block_range(from, until)
+            .await
+            .map(ApiJson)
+            .map_err(classify_availability_error)
+    };
+
+    let get_payload_by_height = |State(state): State<AvailabilityState>,
+                                 Path(height): Path<u64>| async move {
+        state
+            .get_payload(v1::PayloadId::Height(height))
+            .await
+            .map(ApiJson)
+            .map_err(classify_availability_error)
+    };
+
+    let get_payload_by_hash = |State(state): State<AvailabilityState>, Path(hash): Path<String>| async move {
+        state
+            .get_payload(v1::PayloadId::Hash(hash))
+            .await
+            .map(ApiJson)
+            .map_err(classify_availability_error)
+    };
+
+    let get_payload_by_block_hash =
+        |State(state): State<AvailabilityState>, Path(block_hash): Path<String>| async move {
+            state
+                .get_payload(v1::PayloadId::BlockHash(block_hash))
+                .await
+                .map(ApiJson)
+                .map_err(classify_availability_error)
+        };
+
+    let get_payload_range =
+        |State(state): State<AvailabilityState>, Path((from, until)): Path<(usize, usize)>| async move {
+            state
+                .get_payload_range(from, until)
+                .await
+                .map(ApiJson)
+                .map_err(classify_availability_error)
+        };
+
+    let get_vid_common_by_height = |State(state): State<AvailabilityState>,
+                                    Path(height): Path<u64>| async move {
+        state
+            .get_vid_common(v1::BlockId::Height(height))
+            .await
+            .map(ApiJson)
+            .map_err(classify_availability_error)
+    };
+
+    let get_vid_common_by_hash = |State(state): State<AvailabilityState>,
+                                  Path(hash): Path<String>| async move {
+        state
+            .get_vid_common(v1::BlockId::Hash(hash))
+            .await
+            .map(ApiJson)
+            .map_err(classify_availability_error)
+    };
+
+    let get_vid_common_by_payload_hash =
+        |State(state): State<AvailabilityState>, Path(payload_hash): Path<String>| async move {
+            state
+                .get_vid_common(v1::BlockId::PayloadHash(payload_hash))
+                .await
+                .map(ApiJson)
+                .map_err(classify_availability_error)
+        };
+
+    let get_vid_common_range =
+        |State(state): State<AvailabilityState>, Path((from, until)): Path<(usize, usize)>| async move {
+            state
+                .get_vid_common_range(from, until)
+                .await
+                .map(ApiJson)
+                .map_err(classify_availability_error)
+        };
+
+    let get_leaf_ranges =
+        |State(state): State<AvailabilityState>, headers: HeaderMap, body: Bytes| async move {
+            let ranges: Vec<Range<u64>> = decode_body(&headers, &body)?;
+            let leaves = state
+                .get_leaf_ranges(ranges)
+                .await
+                .map_err(classify_availability_error)?;
+            Ok::<_, ApiError>(encode_response(&headers, leaves))
+        };
+
+    let get_block_ranges =
+        |State(state): State<AvailabilityState>, headers: HeaderMap, body: Bytes| async move {
+            let ranges: Vec<Range<u64>> = decode_body(&headers, &body)?;
+            let blocks = state
+                .get_block_ranges(ranges)
+                .await
+                .map_err(classify_availability_error)?;
+            Ok::<_, ApiError>(encode_response(&headers, blocks))
+        };
+
+    let get_vid_common_ranges =
+        |State(state): State<AvailabilityState>, headers: HeaderMap, body: Bytes| async move {
+            let ranges: Vec<Range<u64>> = decode_body(&headers, &body)?;
+            let common = state
+                .get_vid_common_ranges(ranges)
+                .await
+                .map_err(classify_availability_error)?;
+            Ok::<_, ApiError>(encode_response(&headers, common))
+        };
+
+    let get_transaction_by_position =
+        |State(state): State<AvailabilityState>, Path((height, index)): Path<(u64, u64)>| async move {
+            state
+                .get_transaction_by_position(height, index)
+                .await
+                .map(ApiJson)
+                .map_err(classify_availability_error)
+        };
+
+    let get_transaction_by_hash = |State(state): State<AvailabilityState>,
+                                   Path(hash): Path<String>| async move {
+        state
+            .get_transaction_by_hash(hash)
+            .await
+            .map(ApiJson)
+            .map_err(classify_availability_error)
+    };
+
+    let get_transaction_proof_by_position =
+        |State(state): State<AvailabilityState>, Path((height, index)): Path<(u64, u64)>| async move {
+            state
+                .get_transaction_proof_by_position(height, index)
+                .await
+                .map(ApiJson)
+                .map_err(classify_availability_error)
+        };
+
+    let get_transaction_proof_by_hash =
+        |State(state): State<AvailabilityState>, Path(hash): Path<String>| async move {
+            state
+                .get_transaction_proof_by_hash(hash)
+                .await
+                .map(ApiJson)
+                .map_err(classify_availability_error)
+        };
+
+    let get_block_summary_by_height =
+        |State(state): State<AvailabilityState>, Path(height): Path<usize>| async move {
+            state
+                .get_block_summary(height)
+                .await
+                .map(ApiJson)
+                .map_err(classify_availability_error)
+        };
+
+    let get_block_summary_range =
+        |State(state): State<AvailabilityState>, Path((from, until)): Path<(usize, usize)>| async move {
+            state
+                .get_block_summary_range(from, until)
+                .await
+                .map(ApiJson)
+                .map_err(classify_availability_error)
+        };
+
+    let get_limits = |State(state): State<AvailabilityState>| async move {
+        state
+            .get_limits()
+            .await
+            .map(ApiJson)
             .map_err(ApiError::Internal)
     };
 
-    // Build plain Axum router without OpenAPI (for v1 - internal types)
-    Router::new()
-        .route(
-            routes::v1::REWARD_CLAIM_INPUT_ROUTE,
-            get(get_reward_claim_input),
-        )
-        .route(routes::v1::REWARD_BALANCE_ROUTE, get(get_reward_balance))
-        .route(
-            routes::v1::LATEST_REWARD_BALANCE_ROUTE,
-            get(get_latest_reward_balance),
-        )
-        .route(
-            routes::v1::REWARD_ACCOUNT_PROOF_ROUTE,
-            get(get_reward_account_proof),
-        )
-        .route(
-            routes::v1::LATEST_REWARD_ACCOUNT_PROOF_ROUTE,
-            get(get_latest_reward_account_proof),
-        )
-        .route(routes::v1::REWARD_AMOUNTS_ROUTE, get(get_reward_amounts))
-        .route(
-            routes::v1::REWARD_MERKLE_TREE_V2_ROUTE,
-            get(get_reward_merkle_tree_v2),
-        )
-        // Availability API routes
-        .route(
+    let get_cert2 = |State(state): State<AvailabilityState>, Path(height): Path<u64>| async move {
+        match state.get_cert2(height).await {
+            Ok(Some(cert2)) => Ok(ApiJson(cert2)),
+            Ok(None) => Err(ApiError::NotFound(anyhow::anyhow!(
+                "no cert2 available for height {height}"
+            ))),
+            Err(err) => Err(ApiError::Internal(err)),
+        }
+    };
+
+    // WebSocket streaming handlers
+    let stream_leaves = |ws: WebSocketUpgrade,
+                         State(state): State<AvailabilityState>,
+                         headers: HeaderMap,
+                         Path(height): Path<usize>| async move {
+        let format = ContentType::negotiate(&headers);
+        ws.on_upgrade(move |socket| async move {
+            match state.stream_leaves(height).await {
+                Ok(stream) => drive_ws_stream(socket, stream, format).await,
+                Err(e) => tracing::warn!("stream_leaves: {e}"),
+            }
+        })
+    };
+
+    let stream_headers = |ws: WebSocketUpgrade,
+                          State(state): State<AvailabilityState>,
+                          headers: HeaderMap,
+                          Path(height): Path<usize>| async move {
+        let format = ContentType::negotiate(&headers);
+        ws.on_upgrade(move |socket| async move {
+            match state.stream_headers(height).await {
+                Ok(stream) => drive_ws_stream(socket, stream, format).await,
+                Err(e) => tracing::warn!("stream_headers: {e}"),
+            }
+        })
+    };
+
+    let stream_blocks = |ws: WebSocketUpgrade,
+                         State(state): State<AvailabilityState>,
+                         headers: HeaderMap,
+                         Path(height): Path<usize>| async move {
+        let format = ContentType::negotiate(&headers);
+        ws.on_upgrade(move |socket| async move {
+            match state.stream_blocks(height).await {
+                Ok(stream) => drive_ws_stream(socket, stream, format).await,
+                Err(e) => tracing::warn!("stream_blocks: {e}"),
+            }
+        })
+    };
+
+    let stream_payloads = |ws: WebSocketUpgrade,
+                           State(state): State<AvailabilityState>,
+                           headers: HeaderMap,
+                           Path(height): Path<usize>| async move {
+        let format = ContentType::negotiate(&headers);
+        ws.on_upgrade(move |socket| async move {
+            match state.stream_payloads(height).await {
+                Ok(stream) => drive_ws_stream(socket, stream, format).await,
+                Err(e) => tracing::warn!("stream_payloads: {e}"),
+            }
+        })
+    };
+
+    let stream_vid_common = |ws: WebSocketUpgrade,
+                             State(state): State<AvailabilityState>,
+                             headers: HeaderMap,
+                             Path(height): Path<usize>| async move {
+        let format = ContentType::negotiate(&headers);
+        ws.on_upgrade(move |socket| async move {
+            match state.stream_vid_common(height).await {
+                Ok(stream) => drive_ws_stream(socket, stream, format).await,
+                Err(e) => tracing::warn!("stream_vid_common: {e}"),
+            }
+        })
+    };
+
+    let stream_transactions = |ws: WebSocketUpgrade,
+                               State(state): State<AvailabilityState>,
+                               headers: HeaderMap,
+                               Path(height): Path<usize>| async move {
+        let format = ContentType::negotiate(&headers);
+        ws.on_upgrade(move |socket| async move {
+            match state.stream_transactions(height, None).await {
+                Ok(stream) => drive_ws_stream(socket, stream, format).await,
+                Err(e) => tracing::warn!("stream_transactions: {e}"),
+            }
+        })
+    };
+
+    let stream_transactions_ns =
+        |ws: WebSocketUpgrade,
+         State(state): State<AvailabilityState>,
+         headers: HeaderMap,
+         Path((height, namespace)): Path<(usize, u32)>| async move {
+            let format = ContentType::negotiate(&headers);
+            ws.on_upgrade(move |socket| async move {
+                match state.stream_transactions(height, Some(namespace)).await {
+                    Ok(stream) => drive_ws_stream(socket, stream, format).await,
+                    Err(e) => tracing::warn!("stream_transactions_ns: {e}"),
+                }
+            })
+        };
+
+    let stream_namespace_proofs =
+        |ws: WebSocketUpgrade,
+         State(state): State<AvailabilityState>,
+         headers: HeaderMap,
+         Path((height, namespace)): Path<(usize, u32)>| async move {
+            let format = ContentType::negotiate(&headers);
+            ws.on_upgrade(move |socket| async move {
+                match state.stream_namespace_proofs(height, namespace).await {
+                    Ok(stream) => drive_ws_stream(socket, stream, format).await,
+                    Err(e) => tracing::warn!("stream_namespace_proofs: {e}"),
+                }
+            })
+        };
+
+    ApiRouter::new()
+        .api_route(
             routes::v1::NAMESPACE_PROOF_BY_HEIGHT_ROUTE,
-            get(get_namespace_proof_by_height),
+            get_with(get_namespace_proof_by_height, |op| {
+                op.summary("Get namespace proof").description(
+                    "Get the transactions in a namespace of the given block, along with a proof \
+                     of completeness.",
+                )
+            }),
         )
-        .route(
+        .api_route(
             routes::v1::NAMESPACE_PROOF_BY_HASH_ROUTE,
-            get(get_namespace_proof_by_hash),
+            get_with(get_namespace_proof_by_hash, |op| {
+                op.summary("Get namespace proof").description(
+                    "Get the transactions in a namespace of the given block, along with a proof \
+                     of completeness.",
+                )
+            }),
         )
-        .route(
+        .api_route(
             routes::v1::NAMESPACE_PROOF_BY_PAYLOAD_HASH_ROUTE,
-            get(get_namespace_proof_by_payload_hash),
+            get_with(get_namespace_proof_by_payload_hash, |op| {
+                op.summary("Get namespace proof").description(
+                    "Get the transactions in a namespace of the given block, along with a proof \
+                     of completeness.",
+                )
+            }),
         )
-        .route(
+        .api_route(
             routes::v1::NAMESPACE_PROOF_RANGE_ROUTE,
-            get(get_namespace_proof_range),
+            get_with(get_namespace_proof_range, |op| {
+                op.summary("Get namespace proofs for a range").description(
+                    "Get the transactions in the specified namespace from each block in a range, \
+                     with proofs.",
+                )
+            }),
         )
-        .route(
+        .api_route(
             routes::v1::INCORRECT_ENCODING_PROOF_ROUTE,
-            get(get_incorrect_encoding_proof),
+            get_with(get_incorrect_encoding_proof, |op| {
+                op.summary("Get incorrect-encoding proof").description(
+                    "Generate a proof of incorrect namespace encoding for the given block number.",
+                )
+            }),
         )
-        .route(routes::v1::STATE_CERT_V1_ROUTE, get(get_state_cert_v1))
-        .route(routes::v1::STATE_CERT_V2_ROUTE, get(get_state_cert_v2))
+        .api_route(
+            routes::v1::STATE_CERT_V1_ROUTE,
+            get_with(get_state_cert_v1, |op| {
+                op.summary("Get state certificate (V1)").description(
+                    "Get the light client state update certificate (V1) for the given epoch, used \
+                     to update the light client contract's stake table.",
+                )
+            }),
+        )
+        .api_route(
+            routes::v1::STATE_CERT_V2_ROUTE,
+            get_with(get_state_cert_v2, |op| {
+                op.summary("Get state certificate (V2)").description(
+                    "Get the light client state update certificate (V2) for the given epoch; \
+                     includes the auth_root Keccak-256 hash of the reward Merkle tree roots.",
+                )
+            }),
+        )
+        .api_route(
+            routes::v1::LEAF_BY_HEIGHT_ROUTE,
+            get_with(get_leaf_by_height, |op| {
+                op.summary("Get leaf").description(
+                    "Get a leaf by its position in the ledger (0 is genesis) or its hash.",
+                )
+            }),
+        )
+        .api_route(
+            routes::v1::LEAF_BY_HASH_ROUTE,
+            get_with(get_leaf_by_hash, |op| {
+                op.summary("Get leaf").description(
+                    "Get a leaf by its position in the ledger (0 is genesis) or its hash.",
+                )
+            }),
+        )
+        .api_route(
+            routes::v1::LEAF_RANGE_ROUTE,
+            get_with(get_leaf_range, |op| {
+                op.summary("Get leaves in range").description(
+                    "Get leaves by position in the ledger, from the given `from` up to `until`.",
+                )
+            }),
+        )
+        .api_route(
+            routes::v1::HEADER_BY_HEIGHT_ROUTE,
+            get_with(get_header_by_height, |op| {
+                op.summary("Get header").description(
+                    "Get a header by its position in the ledger (0 is genesis) or its hash.",
+                )
+            }),
+        )
+        .api_route(
+            routes::v1::HEADER_BY_HASH_ROUTE,
+            get_with(get_header_by_hash, |op| {
+                op.summary("Get header").description(
+                    "Get a header by its position in the ledger (0 is genesis) or its hash.",
+                )
+            }),
+        )
+        .api_route(
+            routes::v1::HEADER_BY_PAYLOAD_HASH_ROUTE,
+            get_with(get_header_by_payload_hash, |op| {
+                op.summary("Get header").description(
+                    "Get a header by its position in the ledger (0 is genesis) or its hash.",
+                )
+            }),
+        )
+        .api_route(
+            routes::v1::HEADER_RANGE_ROUTE,
+            get_with(get_header_range, |op| {
+                op.summary("Get headers in range").description(
+                    "Get headers by position in the ledger, from the given `from` up to `until`.",
+                )
+            }),
+        )
+        .api_route(
+            routes::v1::BLOCK_BY_HEIGHT_ROUTE,
+            get_with(get_block_by_height, |op| {
+                op.summary("Get block").description(
+                    "Get a block (header, payload, hash, size) by its position in the ledger or \
+                     its hash.",
+                )
+            }),
+        )
+        .api_route(
+            routes::v1::BLOCK_BY_HASH_ROUTE,
+            get_with(get_block_by_hash, |op| {
+                op.summary("Get block").description(
+                    "Get a block (header, payload, hash, size) by its position in the ledger or \
+                     its hash.",
+                )
+            }),
+        )
+        .api_route(
+            routes::v1::BLOCK_BY_PAYLOAD_HASH_ROUTE,
+            get_with(get_block_by_payload_hash, |op| {
+                op.summary("Get block").description(
+                    "Get a block (header, payload, hash, size) by its position in the ledger or \
+                     its hash.",
+                )
+            }),
+        )
+        .api_route(
+            routes::v1::BLOCK_RANGE_ROUTE,
+            get_with(get_block_range, |op| {
+                op.summary("Get blocks in range").description(
+                    "Get blocks by position in the ledger, from the given `from` up to `until`.",
+                )
+            }),
+        )
+        .api_route(
+            routes::v1::PAYLOAD_BY_HEIGHT_ROUTE,
+            get_with(get_payload_by_height, |op| {
+                op.summary("Get payload").description(
+                    "Get the payload of a block by its position in the ledger or its hash.",
+                )
+            }),
+        )
+        .api_route(
+            routes::v1::PAYLOAD_BY_HASH_ROUTE,
+            get_with(get_payload_by_hash, |op| {
+                op.summary("Get payload").description(
+                    "Get the payload of a block by its position in the ledger or its hash.",
+                )
+            }),
+        )
+        .api_route(
+            routes::v1::PAYLOAD_BY_BLOCK_HASH_ROUTE,
+            get_with(get_payload_by_block_hash, |op| {
+                op.summary("Get payload").description(
+                    "Get the payload of a block by its position in the ledger or its hash.",
+                )
+            }),
+        )
+        .api_route(
+            routes::v1::PAYLOAD_RANGE_ROUTE,
+            get_with(get_payload_range, |op| {
+                op.summary("Get payloads in range").description(
+                    "Get payloads by block position, from the given `from` up to `until`.",
+                )
+            }),
+        )
+        .api_route(
+            routes::v1::VID_COMMON_BY_HEIGHT_ROUTE,
+            get_with(get_vid_common_by_height, |op| {
+                op.summary("Get VID common data").description(
+                    "Get common VID data for a block; data shared by all storage nodes, not a VID \
+                     share.",
+                )
+            }),
+        )
+        .api_route(
+            routes::v1::VID_COMMON_BY_HASH_ROUTE,
+            get_with(get_vid_common_by_hash, |op| {
+                op.summary("Get VID common data").description(
+                    "Get common VID data for a block; data shared by all storage nodes, not a VID \
+                     share.",
+                )
+            }),
+        )
+        .api_route(
+            routes::v1::VID_COMMON_BY_PAYLOAD_HASH_ROUTE,
+            get_with(get_vid_common_by_payload_hash, |op| {
+                op.summary("Get VID common data").description(
+                    "Get common VID data for a block; data shared by all storage nodes, not a VID \
+                     share.",
+                )
+            }),
+        )
+        .api_route(
+            routes::v1::VID_COMMON_RANGE_ROUTE,
+            get_with(get_vid_common_range, |op| {
+                op.summary("Get VID common data in range").description(
+                    "Get VID common objects by block position, from the given `from` up to \
+                     `until`.",
+                )
+            }),
+        )
+        .api_route(
+            routes::v1::LEAF_RANGES_ROUTE,
+            post_with(get_leaf_ranges, |op| {
+                op.summary("Get leaves for a set of height ranges")
+                    .description(
+                        "Get leaves for the height ranges in the request body, which must be \
+                         ascending and disjoint but need not be contiguous. Answers in full or \
+                         not at all, like the range endpoints: heights this node lacks are \
+                         fetched from peers, and a 404 means at least one was not available in \
+                         time.",
+                    )
+            }),
+        )
+        .api_route(
+            routes::v1::BLOCK_RANGES_ROUTE,
+            post_with(get_block_ranges, |op| {
+                op.summary("Get blocks for a set of height ranges")
+                    .description(
+                        "Get blocks for the height ranges in the request body, which must be \
+                         ascending and disjoint but need not be contiguous. Answers in full or \
+                         not at all, like the range endpoints: heights this node lacks are \
+                         fetched from peers, and a 404 means at least one was not available in \
+                         time.",
+                    )
+            }),
+        )
+        .api_route(
+            routes::v1::VID_COMMON_RANGES_ROUTE,
+            post_with(get_vid_common_ranges, |op| {
+                op.summary("Get VID common data for a set of height ranges")
+                    .description(
+                        "Get VID common data for the height ranges in the request body, which \
+                         must be ascending and disjoint but need not be contiguous. Answers in \
+                         full or not at all, like the range endpoints: heights this node lacks \
+                         are fetched from peers, and a 404 means at least one was not available \
+                         in time.",
+                    )
+            }),
+        )
+        .api_route(
+            routes::v1::TRANSACTION_BY_POSITION_NOPROOF_ROUTE,
+            get_with(get_transaction_by_position, |op| {
+                op.summary("Get transaction (no proof)").description(
+                    "Get a transaction by its index in a block or by its hash, without an \
+                     inclusion proof.",
+                )
+            }),
+        )
+        .api_route(
+            routes::v1::TRANSACTION_BY_HASH_NOPROOF_ROUTE,
+            get_with(get_transaction_by_hash, |op| {
+                op.summary("Get transaction (no proof)").description(
+                    "Get a transaction by its index in a block or by its hash, without an \
+                     inclusion proof.",
+                )
+            }),
+        )
+        .api_route(
+            routes::v1::TRANSACTION_PROOF_BY_POSITION_ROUTE,
+            get_with(get_transaction_proof_by_position, |op| {
+                op.summary("Get transaction with inclusion proof")
+                    .description(
+                        "Get a transaction by its index in a block or by its hash, along with an \
+                         application-defined inclusion proof.",
+                    )
+            }),
+        )
+        .api_route(
+            routes::v1::TRANSACTION_PROOF_BY_HASH_ROUTE,
+            get_with(get_transaction_proof_by_hash, |op| {
+                op.summary("Get transaction with inclusion proof")
+                    .description(
+                        "Get a transaction by its index in a block or by its hash, along with an \
+                         application-defined inclusion proof.",
+                    )
+            }),
+        )
+        .api_route(
+            routes::v1::TRANSACTION_BY_POSITION_ROUTE,
+            get_with(get_transaction_proof_by_position, |op| {
+                op.summary("Get transaction with inclusion proof")
+                    .description(
+                        "Get a transaction by its index in a block or by its hash, along with an \
+                         application-defined inclusion proof.",
+                    )
+            }),
+        )
+        .api_route(
+            routes::v1::TRANSACTION_BY_HASH_ROUTE,
+            get_with(get_transaction_proof_by_hash, |op| {
+                op.summary("Get transaction with inclusion proof")
+                    .description(
+                        "Get a transaction by its index in a block or by its hash, along with an \
+                         application-defined inclusion proof.",
+                    )
+            }),
+        )
+        .api_route(
+            routes::v1::BLOCK_SUMMARY_BY_HEIGHT_ROUTE,
+            get_with(get_block_summary_by_height, |op| {
+                op.summary("Get block summary").description(
+                    "Get the block summary for a block based on its position in the ledger.",
+                )
+            }),
+        )
+        .api_route(
+            routes::v1::BLOCK_SUMMARY_RANGE_ROUTE,
+            get_with(get_block_summary_range, |op| {
+                op.summary("Get block summaries in range").description(
+                    "Get block summaries by position, from the given `from` up to `until`.",
+                )
+            }),
+        )
+        .api_route(
+            routes::v1::LIMITS_ROUTE,
+            get_with(get_limits, |op| {
+                op.summary("Get availability limits").description(
+                    "Get implementation-defined limits restricting availability range queries \
+                     (small/large object range limits).",
+                )
+            }),
+        )
+        .api_route(
+            routes::v1::CERT2_BY_HEIGHT_ROUTE,
+            get_with(get_cert2, |op| {
+                op.summary("Get finality certificate").description(
+                    "Get the finality certificate (Certificate2) at the given block height.",
+                )
+            }),
+        )
+        .api_route(
+            routes::v1::STREAM_LEAVES_ROUTE,
+            get_with(stream_leaves, |op| {
+                op.summary("Stream leaves (websocket)").description(
+                    "Websocket endpoint: subscribe to a stream of leaves in sequence order, \
+                     starting at the given height.",
+                )
+            }),
+        )
+        .api_route(
+            routes::v1::STREAM_HEADERS_ROUTE,
+            get_with(stream_headers, |op| {
+                op.summary("Stream headers (websocket)").description(
+                    "Websocket endpoint: subscribe to a stream of headers in sequence order, \
+                     starting at the given height.",
+                )
+            }),
+        )
+        .api_route(
+            routes::v1::STREAM_BLOCKS_ROUTE,
+            get_with(stream_blocks, |op| {
+                op.summary("Stream blocks (websocket)").description(
+                    "Websocket endpoint: subscribe to a stream of blocks in sequence order, \
+                     starting at the given height.",
+                )
+            }),
+        )
+        .api_route(
+            routes::v1::STREAM_PAYLOADS_ROUTE,
+            get_with(stream_payloads, |op| {
+                op.summary("Stream payloads (websocket)").description(
+                    "Websocket endpoint: subscribe to a stream of block payloads in sequence \
+                     order, starting at the given height.",
+                )
+            }),
+        )
+        .api_route(
+            routes::v1::STREAM_VID_COMMON_ROUTE,
+            get_with(stream_vid_common, |op| {
+                op.summary("Stream VID common data (websocket)")
+                    .description(
+                        "Websocket endpoint: subscribe to a stream of VID common data in sequence \
+                         order, starting at the given height.",
+                    )
+            }),
+        )
+        .api_route(
+            routes::v1::STREAM_TRANSACTIONS_ROUTE,
+            get_with(stream_transactions, |op| {
+                op.summary("Stream transactions (websocket)").description(
+                    "Websocket endpoint: subscribe to a stream of all transactions starting at \
+                     the given height.",
+                )
+            }),
+        )
+        .api_route(
+            routes::v1::STREAM_TRANSACTIONS_NS_ROUTE,
+            get_with(stream_transactions_ns, |op| {
+                op.summary("Stream namespace transactions (websocket)")
+                    .description(
+                        "Websocket endpoint: subscribe to a stream of transactions in one \
+                         namespace, starting at the given height.",
+                    )
+            }),
+        )
+        .api_route(
+            routes::v1::STREAM_NAMESPACE_PROOFS_ROUTE,
+            get_with(stream_namespace_proofs, |op| {
+                op.summary("Stream namespace proofs (websocket)")
+                    .description(
+                        "Websocket endpoint: subscribe to namespace data and proofs for each \
+                         block, starting at the given height.",
+                    )
+            }),
+        )
         .with_state(state)
 }
 
-/// Create v2 router with OpenAPI documentation (proto types)
-pub fn create_router_v2<S>(state: S) -> Router
+pub(crate) fn router_block_state(state: BlockState) -> ApiRouter {
+    let get_block_state_height = |State(state): State<BlockState>| async move {
+        state
+            .get_block_state_height()
+            .await
+            .map(ApiJson)
+            .map_err(classify_availability_error)
+    };
+
+    let get_block_state_path_by_commit =
+        |State(state): State<BlockState>, Path((commit, key)): Path<(String, String)>| async move {
+            state
+                .get_block_state_path(v1::Snapshot::Commit(commit), key)
+                .await
+                .map(ApiJson)
+                .map_err(classify_availability_error)
+        };
+
+    // Merklized state handlers: block-state
+    let get_block_state_path_by_height =
+        |State(state): State<BlockState>, Path((height, key)): Path<(u64, String)>| async move {
+            state
+                .get_block_state_path(v1::Snapshot::Height(height), key)
+                .await
+                .map(ApiJson)
+                .map_err(classify_availability_error)
+        };
+
+    ApiRouter::new()
+        .api_route(
+            routes::v1::BLOCK_STATE_HEIGHT_ROUTE,
+            get_with(get_block_state_height, |op| {
+                op.summary("Get block-state height").description(
+                    "Latest block height for which the merklized blocks-Merkle-tree state is \
+                     available.",
+                )
+            }),
+        )
+        .api_route(
+            routes::v1::BLOCK_STATE_PATH_BY_COMMIT_ROUTE,
+            get_with(get_block_state_path_by_commit, |op| {
+                op.summary("Get block-state Merkle path by commitment")
+                    .description(
+                        "Retrieve the Merkle path for a leaf in the blocks Merkle tree, by tree \
+                         commitment and key.",
+                    )
+            }),
+        )
+        .api_route(
+            routes::v1::BLOCK_STATE_PATH_BY_HEIGHT_ROUTE,
+            get_with(get_block_state_path_by_height, |op| {
+                op.summary("Get block-state Merkle path by height")
+                    .description(
+                        "Retrieve the Merkle path for a leaf in the blocks Merkle tree, by block \
+                         height and key.",
+                    )
+            }),
+        )
+        .with_state(state)
+}
+
+pub(crate) fn router_fee_state(state: FeeState) -> ApiRouter {
+    let get_fee_state_height = |State(state): State<FeeState>| async move {
+        state
+            .get_fee_state_height()
+            .await
+            .map(ApiJson)
+            .map_err(classify_availability_error)
+    };
+
+    let get_fee_balance_latest = |State(state): State<FeeState>, Path(address): Path<String>| async move {
+        state
+            .get_fee_balance_latest(address)
+            .await
+            .map(ApiJson)
+            .map_err(classify_availability_error)
+    };
+
+    let get_fee_state_path_by_commit =
+        |State(state): State<FeeState>, Path((commit, key)): Path<(String, String)>| async move {
+            state
+                .get_fee_state_path(v1::Snapshot::Commit(commit), key)
+                .await
+                .map(ApiJson)
+                .map_err(classify_availability_error)
+        };
+
+    // Merklized state handlers: fee-state
+    let get_fee_state_path_by_height =
+        |State(state): State<FeeState>, Path((height, key)): Path<(u64, String)>| async move {
+            state
+                .get_fee_state_path(v1::Snapshot::Height(height), key)
+                .await
+                .map(ApiJson)
+                .map_err(classify_availability_error)
+        };
+
+    ApiRouter::new()
+        .api_route(
+            routes::v1::FEE_STATE_HEIGHT_ROUTE,
+            get_with(get_fee_state_height, |op| {
+                op.summary("Get fee-state height").description(
+                    "Latest block height for which the merklized fee state is available.",
+                )
+            }),
+        )
+        .api_route(
+            routes::v1::FEE_STATE_BALANCE_LATEST_ROUTE,
+            get_with(get_fee_balance_latest, |op| {
+                op.summary("Get latest fee balance").description(
+                    "Get the latest fee account balance for an address from the fee Merkle tree.",
+                )
+            }),
+        )
+        .api_route(
+            routes::v1::FEE_STATE_PATH_BY_COMMIT_ROUTE,
+            get_with(get_fee_state_path_by_commit, |op| {
+                op.summary("Get fee-state Merkle path by commitment")
+                    .description(
+                        "Retrieve the Merkle path for a leaf in the fee state tree, by tree \
+                         commitment and key.",
+                    )
+            }),
+        )
+        .api_route(
+            routes::v1::FEE_STATE_PATH_BY_HEIGHT_ROUTE,
+            get_with(get_fee_state_path_by_height, |op| {
+                op.summary("Get fee-state Merkle path by height")
+                    .description(
+                        "Retrieve the Merkle path for a leaf in the fee state tree, by block \
+                         height and key.",
+                    )
+            }),
+        )
+        .with_state(state)
+}
+
+pub(crate) fn router_status(state: StatusState) -> ApiRouter {
+    let status_block_height = |State(state): State<StatusState>| async move {
+        state
+            .block_height()
+            .await
+            .map(ApiJson)
+            .map_err(ApiError::Internal)
+    };
+
+    let status_success_rate = |State(state): State<StatusState>| async move {
+        state
+            .success_rate()
+            .await
+            .map(ApiJson)
+            .map_err(ApiError::Internal)
+    };
+
+    let status_time_since_last_decide = |State(state): State<StatusState>| async move {
+        state
+            .time_since_last_decide()
+            .await
+            .map(ApiJson)
+            .map_err(ApiError::Internal)
+    };
+
+    let status_metrics = |State(state): State<StatusState>| async move {
+        match state.metrics().await {
+            Ok(text) => (
+                [(
+                    axum::http::header::CONTENT_TYPE,
+                    "text/plain; charset=utf-8",
+                )],
+                text,
+            )
+                .into_response(),
+            Err(e) => ApiError::Internal(e).into_response(),
+        }
+    };
+
+    let status_keys = |State(state): State<StatusState>| async move {
+        state
+            .keys()
+            .await
+            .map(ApiJson)
+            .map_err(classify_availability_error)
+    };
+
+    ApiRouter::new()
+        .api_route(
+            routes::v1::STATUS_BLOCK_HEIGHT_ROUTE,
+            get_with(status_block_height, |op| {
+                op.summary("Get latest committed block height")
+                    .description("Get the height of the latest committed block.")
+            }),
+        )
+        .api_route(
+            routes::v1::STATUS_SUCCESS_RATE_ROUTE,
+            get_with(status_success_rate, |op| {
+                op.summary("Get view success rate")
+                    .description("Get the fraction of views which resulted in a committed block.")
+            }),
+        )
+        .api_route(
+            routes::v1::STATUS_TIME_SINCE_LAST_DECIDE_ROUTE,
+            get_with(status_time_since_last_decide, |op| {
+                op.summary("Get time since last decide")
+                    .description("Get the time elapsed in seconds since the last decided view.")
+            }),
+        )
+        .api_route(
+            routes::v1::STATUS_METRICS_ROUTE,
+            get_with(status_metrics, |op| {
+                op.summary("Get Prometheus metrics")
+                    .description("Prometheus endpoint exposing consensus-related metrics.")
+            }),
+        )
+        .api_route(
+            routes::v1::STATUS_KEYS_ROUTE,
+            get_with(status_keys, |op| {
+                op.summary("Get node public keys").description(
+                    "Get this node's public keys (Ethereum account, BLS, Schnorr, x25519). The \
+                     BLS and Schnorr keys are formatted as in stake-table responses; the x25519 \
+                     key is tagged base64. The Ethereum account is taken from the node's \
+                     stake-table registration and is null if the node is not registered.",
+                )
+            }),
+        )
+        .with_state(state)
+}
+
+pub(crate) fn router_config(state: ConfigState) -> ApiRouter {
+    let config_hotshot = |State(state): State<ConfigState>| async move {
+        state
+            .hotshot_config()
+            .await
+            .map(ApiJson)
+            .map_err(ApiError::Internal)
+    };
+
+    let config_env = |State(state): State<ConfigState>| async move {
+        state.env().await.map(ApiJson).map_err(ApiError::Internal)
+    };
+
+    let config_runtime = |State(state): State<ConfigState>| async move {
+        state
+            .runtime_config()
+            .await
+            .map(ApiJson)
+            .map_err(classify_availability_error)
+    };
+
+    ApiRouter::new()
+        .api_route(
+            routes::v1::CONFIG_HOTSHOT_ROUTE,
+            get_with(config_hotshot, |op| {
+                op.summary("Get HotShot config")
+                    .description("Get the HotShot configuration for the current node.")
+            }),
+        )
+        .api_route(
+            routes::v1::CONFIG_ENV_ROUTE,
+            get_with(config_env, |op| {
+                op.summary("Get environment variables").description(
+                    "Get all ESPRESSO_ environment variables set for the current node.",
+                )
+            }),
+        )
+        .api_route(
+            routes::v1::CONFIG_RUNTIME_ROUTE,
+            get_with(config_runtime, |op| {
+                op.summary("Get runtime config").description(
+                    "Get the merged runtime configuration (CLI flags + env vars + defaults); \
+                     secrets and L1 RPC URLs are redacted.",
+                )
+            }),
+        )
+        .with_state(state)
+}
+
+pub(crate) fn router_node(state: NodeState) -> ApiRouter {
+    let node_block_height = |State(state): State<NodeState>| async move {
+        state
+            .block_height()
+            .await
+            .map(ApiJson)
+            .map_err(classify_availability_error)
+    };
+
+    let node_count_txs = |State(state): State<NodeState>| async move {
+        state
+            .count_transactions(None, None, None)
+            .await
+            .map(ApiJson)
+            .map_err(classify_availability_error)
+    };
+
+    let node_count_txs_ns = |State(state): State<NodeState>, Path(namespace): Path<u64>| async move {
+        state
+            .count_transactions(None, None, Some(namespace))
+            .await
+            .map(ApiJson)
+            .map_err(classify_availability_error)
+    };
+
+    let node_count_txs_ns_to =
+        |State(state): State<NodeState>, Path((namespace, to)): Path<(u64, u64)>| async move {
+            state
+                .count_transactions(None, Some(to), Some(namespace))
+                .await
+                .map(ApiJson)
+                .map_err(classify_availability_error)
+        };
+
+    let node_count_txs_ns_from_to =
+        |State(state): State<NodeState>, Path((namespace, from, to)): Path<(u64, u64, u64)>| async move {
+            state
+                .count_transactions(Some(from), Some(to), Some(namespace))
+                .await
+                .map(ApiJson)
+                .map_err(classify_availability_error)
+        };
+
+    let node_count_txs_to = |State(state): State<NodeState>, Path(to): Path<u64>| async move {
+        state
+            .count_transactions(None, Some(to), None)
+            .await
+            .map(ApiJson)
+            .map_err(classify_availability_error)
+    };
+
+    let node_count_txs_from_to =
+        |State(state): State<NodeState>, Path((from, to)): Path<(u64, u64)>| async move {
+            state
+                .count_transactions(Some(from), Some(to), None)
+                .await
+                .map(ApiJson)
+                .map_err(classify_availability_error)
+        };
+
+    let node_payload_size = |State(state): State<NodeState>| async move {
+        state
+            .payload_size(None, None, None)
+            .await
+            .map(ApiJson)
+            .map_err(classify_availability_error)
+    };
+
+    let node_payload_size_ns = |State(state): State<NodeState>, Path(namespace): Path<u64>| async move {
+        state
+            .payload_size(None, None, Some(namespace))
+            .await
+            .map(ApiJson)
+            .map_err(classify_availability_error)
+    };
+
+    let node_payload_size_ns_to =
+        |State(state): State<NodeState>, Path((namespace, to)): Path<(u64, u64)>| async move {
+            state
+                .payload_size(None, Some(to), Some(namespace))
+                .await
+                .map(ApiJson)
+                .map_err(classify_availability_error)
+        };
+
+    let node_payload_size_ns_from_to =
+        |State(state): State<NodeState>, Path((namespace, from, to)): Path<(u64, u64, u64)>| async move {
+            state
+                .payload_size(Some(from), Some(to), Some(namespace))
+                .await
+                .map(ApiJson)
+                .map_err(classify_availability_error)
+        };
+
+    let node_payload_size_to = |State(state): State<NodeState>, Path(to): Path<u64>| async move {
+        state
+            .payload_size(None, Some(to), None)
+            .await
+            .map(ApiJson)
+            .map_err(classify_availability_error)
+    };
+
+    let node_payload_size_from_to =
+        |State(state): State<NodeState>, Path((from, to)): Path<(u64, u64)>| async move {
+            state
+                .payload_size(Some(from), Some(to), None)
+                .await
+                .map(ApiJson)
+                .map_err(classify_availability_error)
+        };
+
+    let node_vid_share_by_hash = |State(state): State<NodeState>, Path(hash): Path<String>| async move {
+        state
+            .get_vid_share(v1::VidShareId::Hash(hash))
+            .await
+            .map(ApiJson)
+            .map_err(classify_availability_error)
+    };
+
+    let node_vid_share_by_payload_hash =
+        |State(state): State<NodeState>, Path(payload_hash): Path<String>| async move {
+            state
+                .get_vid_share(v1::VidShareId::PayloadHash(payload_hash))
+                .await
+                .map(ApiJson)
+                .map_err(classify_availability_error)
+        };
+
+    let node_vid_share_by_height = |State(state): State<NodeState>, Path(height): Path<u64>| async move {
+        state
+            .get_vid_share(v1::VidShareId::Height(height))
+            .await
+            .map(ApiJson)
+            .map_err(classify_availability_error)
+    };
+
+    let node_sync_status = |State(state): State<NodeState>| async move {
+        state
+            .sync_status()
+            .await
+            .map(ApiJson)
+            .map_err(classify_availability_error)
+    };
+
+    let node_header_window_hash =
+        |State(state): State<NodeState>, Path((hash, end)): Path<(String, u64)>| async move {
+            state
+                .get_header_window(v1::HeaderWindowStart::Hash(hash), end)
+                .await
+                .map(ApiJson)
+                .map_err(classify_availability_error)
+        };
+
+    let node_header_window_height =
+        |State(state): State<NodeState>, Path((height, end)): Path<(u64, u64)>| async move {
+            state
+                .get_header_window(v1::HeaderWindowStart::Height(height), end)
+                .await
+                .map(ApiJson)
+                .map_err(classify_availability_error)
+        };
+
+    let node_header_window_time =
+        |State(state): State<NodeState>, Path((start, end)): Path<(u64, u64)>| async move {
+            state
+                .get_header_window(v1::HeaderWindowStart::Time(start), end)
+                .await
+                .map(ApiJson)
+                .map_err(classify_availability_error)
+        };
+
+    let node_limits = |State(state): State<NodeState>| async move {
+        state
+            .limits()
+            .await
+            .map(ApiJson)
+            .map_err(ApiError::Internal)
+    };
+
+    let node_stake_table_current = |State(state): State<NodeState>| async move {
+        state
+            .stake_table_current()
+            .await
+            .map(ApiJson)
+            .map_err(ApiError::Internal)
+    };
+
+    let node_stake_table = |State(state): State<NodeState>, Path(epoch): Path<u64>| async move {
+        state
+            .stake_table(epoch)
+            .await
+            .map(ApiJson)
+            .map_err(ApiError::Internal)
+    };
+
+    let node_da_stake_table_current = |State(state): State<NodeState>| async move {
+        state
+            .da_stake_table_current()
+            .await
+            .map(ApiJson)
+            .map_err(ApiError::Internal)
+    };
+
+    let node_da_stake_table = |State(state): State<NodeState>, Path(epoch): Path<u64>| async move {
+        state
+            .da_stake_table(epoch)
+            .await
+            .map(ApiJson)
+            .map_err(ApiError::Internal)
+    };
+
+    let node_validators = |State(state): State<NodeState>, Path(epoch): Path<u64>| async move {
+        state
+            .get_validators(epoch)
+            .await
+            .map(ApiJson)
+            .map_err(ApiError::Internal)
+    };
+
+    let node_all_validators =
+        |State(state): State<NodeState>, Path((epoch, offset, limit)): Path<(u64, u64, u64)>| async move {
+            state
+                .get_all_validators(epoch, offset, limit)
+                .await
+                .map(ApiJson)
+                .map_err(ApiError::BadRequest)
+        };
+
+    let node_proposal_participation_current = |State(state): State<NodeState>| async move {
+        state
+            .current_proposal_participation()
+            .await
+            .map(ApiJson)
+            .map_err(ApiError::Internal)
+    };
+
+    let node_proposal_participation = |State(state): State<NodeState>, Path(epoch): Path<u64>| async move {
+        state
+            .proposal_participation(epoch)
+            .await
+            .map(ApiJson)
+            .map_err(ApiError::Internal)
+    };
+
+    let node_vote_participation_current = |State(state): State<NodeState>| async move {
+        state
+            .current_vote_participation()
+            .await
+            .map(ApiJson)
+            .map_err(ApiError::Internal)
+    };
+
+    let node_vote_participation = |State(state): State<NodeState>, Path(epoch): Path<u64>| async move {
+        state
+            .vote_participation(epoch)
+            .await
+            .map(ApiJson)
+            .map_err(ApiError::Internal)
+    };
+
+    let node_block_reward = |State(state): State<NodeState>| async move {
+        state
+            .get_block_reward(None)
+            .await
+            .map(ApiJson)
+            .map_err(ApiError::Internal)
+    };
+
+    let node_block_reward_epoch = |State(state): State<NodeState>, Path(epoch): Path<u64>| async move {
+        state
+            .get_block_reward(Some(epoch))
+            .await
+            .map(ApiJson)
+            .map_err(ApiError::Internal)
+    };
+
+    let node_oldest_block = |State(state): State<NodeState>| async move {
+        state
+            .get_oldest_block()
+            .await
+            .map(ApiJson)
+            .map_err(ApiError::Internal)
+    };
+
+    let node_oldest_leaf = |State(state): State<NodeState>| async move {
+        state
+            .get_oldest_leaf()
+            .await
+            .map(ApiJson)
+            .map_err(ApiError::Internal)
+    };
+
+    ApiRouter::new()
+        .api_route(
+            routes::v1::NODE_BLOCK_HEIGHT_ROUTE,
+            get_with(node_block_height, |op| {
+                op.summary("Get node's block height")
+                    .description("The current height of the chain, as observed by this node.")
+            }),
+        )
+        .api_route(
+            routes::v1::NODE_TRANSACTIONS_COUNT_ROUTE,
+            get_with(node_count_txs, |op| {
+                op.summary("Count transactions").description(
+                    "Get the number of transactions in the chain, optionally restricted by block \
+                     range and/or namespace.",
+                )
+            }),
+        )
+        .api_route(
+            routes::v1::NODE_TRANSACTIONS_COUNT_NS_ROUTE,
+            get_with(node_count_txs_ns, |op| {
+                op.summary("Count transactions").description(
+                    "Get the number of transactions in the chain, optionally restricted by block \
+                     range and/or namespace.",
+                )
+            }),
+        )
+        .api_route(
+            routes::v1::NODE_TRANSACTIONS_COUNT_NS_TO_ROUTE,
+            get_with(node_count_txs_ns_to, |op| {
+                op.summary("Count transactions").description(
+                    "Get the number of transactions in the chain, optionally restricted by block \
+                     range and/or namespace.",
+                )
+            }),
+        )
+        .api_route(
+            routes::v1::NODE_TRANSACTIONS_COUNT_NS_FROM_TO_ROUTE,
+            get_with(node_count_txs_ns_from_to, |op| {
+                op.summary("Count transactions").description(
+                    "Get the number of transactions in the chain, optionally restricted by block \
+                     range and/or namespace.",
+                )
+            }),
+        )
+        .api_route(
+            routes::v1::NODE_TRANSACTIONS_COUNT_TO_ROUTE,
+            get_with(node_count_txs_to, |op| {
+                op.summary("Count transactions").description(
+                    "Get the number of transactions in the chain, optionally restricted by block \
+                     range and/or namespace.",
+                )
+            }),
+        )
+        .api_route(
+            routes::v1::NODE_TRANSACTIONS_COUNT_FROM_TO_ROUTE,
+            get_with(node_count_txs_from_to, |op| {
+                op.summary("Count transactions").description(
+                    "Get the number of transactions in the chain, optionally restricted by block \
+                     range and/or namespace.",
+                )
+            }),
+        )
+        .api_route(
+            routes::v1::NODE_PAYLOADS_SIZE_ROUTE,
+            get_with(node_payload_size, |op| {
+                op.summary("Get payload size").description(
+                    "Get the cumulative size (bytes) of payload data in the chain, optionally \
+                     restricted by block range and/or namespace.",
+                )
+            }),
+        )
+        .api_route(
+            routes::v1::NODE_PAYLOADS_TOTAL_SIZE_ROUTE,
+            get_with(node_payload_size, |op| {
+                op.summary("Get payload size")
+                    .description("Deprecated alias for payloads/size.")
+            }),
+        )
+        .api_route(
+            routes::v1::NODE_PAYLOADS_SIZE_NS_ROUTE,
+            get_with(node_payload_size_ns, |op| {
+                op.summary("Get payload size").description(
+                    "Get the cumulative size (bytes) of payload data in the chain, optionally \
+                     restricted by block range and/or namespace.",
+                )
+            }),
+        )
+        .api_route(
+            routes::v1::NODE_PAYLOADS_SIZE_NS_TO_ROUTE,
+            get_with(node_payload_size_ns_to, |op| {
+                op.summary("Get payload size").description(
+                    "Get the cumulative size (bytes) of payload data in the chain, optionally \
+                     restricted by block range and/or namespace.",
+                )
+            }),
+        )
+        .api_route(
+            routes::v1::NODE_PAYLOADS_SIZE_NS_FROM_TO_ROUTE,
+            get_with(node_payload_size_ns_from_to, |op| {
+                op.summary("Get payload size").description(
+                    "Get the cumulative size (bytes) of payload data in the chain, optionally \
+                     restricted by block range and/or namespace.",
+                )
+            }),
+        )
+        .api_route(
+            routes::v1::NODE_PAYLOADS_SIZE_TO_ROUTE,
+            get_with(node_payload_size_to, |op| {
+                op.summary("Get payload size").description(
+                    "Get the cumulative size (bytes) of payload data in the chain, optionally \
+                     restricted by block range and/or namespace.",
+                )
+            }),
+        )
+        .api_route(
+            routes::v1::NODE_PAYLOADS_SIZE_FROM_TO_ROUTE,
+            get_with(node_payload_size_from_to, |op| {
+                op.summary("Get payload size").description(
+                    "Get the cumulative size (bytes) of payload data in the chain, optionally \
+                     restricted by block range and/or namespace.",
+                )
+            }),
+        )
+        .api_route(
+            routes::v1::NODE_VID_SHARE_BY_HASH_ROUTE,
+            get_with(node_vid_share_by_hash, |op| {
+                op.summary("Get this node's VID share").description(
+                    "Get information needed to run the VID reconstruction protocol for a block: \
+                     this node's VID share, if available.",
+                )
+            }),
+        )
+        .api_route(
+            routes::v1::NODE_VID_SHARE_BY_PAYLOAD_HASH_ROUTE,
+            get_with(node_vid_share_by_payload_hash, |op| {
+                op.summary("Get this node's VID share").description(
+                    "Get information needed to run the VID reconstruction protocol for a block: \
+                     this node's VID share, if available.",
+                )
+            }),
+        )
+        .api_route(
+            routes::v1::NODE_VID_SHARE_BY_HEIGHT_ROUTE,
+            get_with(node_vid_share_by_height, |op| {
+                op.summary("Get this node's VID share").description(
+                    "Get information needed to run the VID reconstruction protocol for a block: \
+                     this node's VID share, if available.",
+                )
+            }),
+        )
+        .api_route(
+            routes::v1::NODE_SYNC_STATUS_ROUTE,
+            get_with(node_sync_status, |op| {
+                op.summary("Get node sync status").description(
+                    "Get the node's progress syncing with the latest chain state \
+                     (missing/present/pruned ranges for blocks, leaves, and VID common).",
+                )
+            }),
+        )
+        .api_route(
+            routes::v1::NODE_HEADER_WINDOW_HASH_ROUTE,
+            get_with(node_header_window_hash, |op| {
+                op.summary("Get header window").description(
+                    "Get block headers whose timestamps fall in a time window, plus one header \
+                     before and after to prove completeness.",
+                )
+            }),
+        )
+        .api_route(
+            routes::v1::NODE_HEADER_WINDOW_HEIGHT_ROUTE,
+            get_with(node_header_window_height, |op| {
+                op.summary("Get header window").description(
+                    "Get block headers whose timestamps fall in a time window, plus one header \
+                     before and after to prove completeness.",
+                )
+            }),
+        )
+        .api_route(
+            routes::v1::NODE_HEADER_WINDOW_TIME_ROUTE,
+            get_with(node_header_window_time, |op| {
+                op.summary("Get header window").description(
+                    "Get block headers whose timestamps fall in a time window, plus one header \
+                     before and after to prove completeness.",
+                )
+            }),
+        )
+        .api_route(
+            routes::v1::NODE_LIMITS_ROUTE,
+            get_with(node_limits, |op| {
+                op.summary("Get node limits").description(
+                    "Get implementation-defined limits restricting node API requests (e.g. \
+                     header/window query size).",
+                )
+            }),
+        )
+        .api_route(
+            routes::v1::NODE_STAKE_TABLE_CURRENT_ROUTE,
+            get_with(node_stake_table_current, |op| {
+                op.summary("Get current stake table")
+                    .description("Get the stake table for the current epoch.")
+            }),
+        )
+        .api_route(
+            routes::v1::NODE_STAKE_TABLE_ROUTE,
+            get_with(node_stake_table, |op| {
+                op.summary("Get stake table for epoch")
+                    .description("Get the stake table for the given epoch.")
+            }),
+        )
+        .api_route(
+            routes::v1::NODE_DA_STAKE_TABLE_CURRENT_ROUTE,
+            get_with(node_da_stake_table_current, |op| {
+                op.summary("Get current DA stake table")
+                    .description("Get the DA stake table for the current epoch.")
+            }),
+        )
+        .api_route(
+            routes::v1::NODE_DA_STAKE_TABLE_ROUTE,
+            get_with(node_da_stake_table, |op| {
+                op.summary("Get DA stake table for epoch")
+                    .description("Get the DA stake table for the given epoch.")
+            }),
+        )
+        .api_route(
+            routes::v1::NODE_VALIDATORS_ROUTE,
+            get_with(node_validators, |op| {
+                op.summary("Get validators for epoch")
+                    .description("Get the validators map for the given epoch.")
+            }),
+        )
+        .api_route(
+            routes::v1::NODE_ALL_VALIDATORS_ROUTE,
+            get_with(node_all_validators, |op| {
+                op.summary("Get all validators for epoch").description(
+                    "Get all validators, including inactive ones, for the given epoch, paginated \
+                     by offset and limit.",
+                )
+            }),
+        )
+        .api_route(
+            routes::v1::NODE_PROPOSAL_PARTICIPATION_CURRENT_ROUTE,
+            get_with(node_proposal_participation_current, |op| {
+                op.summary("Get current proposal participation")
+                    .description(
+                        "Get the mapping from leader key to the fraction of views proposed \
+                         properly as leader.",
+                    )
+            }),
+        )
+        .api_route(
+            routes::v1::NODE_PROPOSAL_PARTICIPATION_ROUTE,
+            get_with(node_proposal_participation, |op| {
+                op.summary("Get proposal participation for epoch")
+                    .description(
+                        "Get the mapping from leader key to proposal participation rate for the \
+                         given epoch.",
+                    )
+            }),
+        )
+        .api_route(
+            routes::v1::NODE_VOTE_PARTICIPATION_CURRENT_ROUTE,
+            get_with(node_vote_participation_current, |op| {
+                op.summary("Get current vote participation").description(
+                    "Get the mapping from node key to the fraction of views properly voted.",
+                )
+            }),
+        )
+        .api_route(
+            routes::v1::NODE_VOTE_PARTICIPATION_ROUTE,
+            get_with(node_vote_participation, |op| {
+                op.summary("Get vote participation for epoch").description(
+                    "Get the mapping from node key to vote participation rate for the given epoch.",
+                )
+            }),
+        )
+        .api_route(
+            routes::v1::NODE_BLOCK_REWARD_ROUTE,
+            get_with(node_block_reward, |op| {
+                op.summary("Get block reward")
+                    .description("Get the block reward.")
+            }),
+        )
+        .api_route(
+            routes::v1::NODE_BLOCK_REWARD_EPOCH_ROUTE,
+            get_with(node_block_reward_epoch, |op| {
+                op.summary("Get block reward for epoch")
+                    .description("Get the block reward for the given epoch.")
+            }),
+        )
+        .api_route(
+            routes::v1::NODE_OLDEST_BLOCK_ROUTE,
+            get_with(node_oldest_block, |op| {
+                op.summary("Get oldest block").description(
+                    "Get the oldest (smallest height) block present in storage, or null if none \
+                     is stored.",
+                )
+            }),
+        )
+        .api_route(
+            routes::v1::NODE_OLDEST_LEAF_ROUTE,
+            get_with(node_oldest_leaf, |op| {
+                op.summary("Get oldest leaf").description(
+                    "Get the oldest (smallest height) leaf present in storage, or null if none is \
+                     stored.",
+                )
+            }),
+        )
+        .with_state(state)
+}
+
+pub(crate) fn router_catchup(state: CatchupState) -> ApiRouter {
+    // Catchup handlers
+    let catchup_account =
+        |State(state): State<CatchupState>,
+         Path((height, view, address)): Path<(u64, u64, String)>| async move {
+            state
+                .get_account(height, view, address)
+                .await
+                .map(ApiJson)
+                .map_err(classify_availability_error)
+        };
+
+    let catchup_accounts = |State(state): State<CatchupState>,
+                            Path((height, view)): Path<(u64, u64)>,
+                            headers: HeaderMap,
+                            body: Bytes| async move {
+        let tree = state.get_accounts(height, view, &headers, &body).await?;
+        Ok::<_, ApiError>(encode_response(&headers, tree))
+    };
+
+    let catchup_blocks = |State(state): State<CatchupState>,
+                          Path((height, view)): Path<(u64, u64)>| async move {
+        state
+            .get_blocks_frontier(height, view)
+            .await
+            .map(ApiJson)
+            .map_err(classify_availability_error)
+    };
+
+    let catchup_chainconfig = |State(state): State<CatchupState>,
+                               Path(commitment): Path<String>| async move {
+        state
+            .get_chain_config(commitment)
+            .await
+            .map(ApiJson)
+            .map_err(classify_availability_error)
+    };
+
+    let catchup_leafchain = |State(state): State<CatchupState>, Path(height): Path<u64>| async move {
+        state
+            .get_leaf_chain(height)
+            .await
+            .map(ApiJson)
+            .map_err(classify_availability_error)
+    };
+
+    let catchup_cert2 = |State(state): State<CatchupState>, Path(height): Path<u64>| async move {
+        state
+            .get_cert2(height)
+            .await
+            .map(ApiJson)
+            .map_err(classify_availability_error)
+    };
+
+    let catchup_reward_account =
+        |State(state): State<CatchupState>,
+         Path((height, view, address)): Path<(u64, u64, String)>| async move {
+            state
+                .get_reward_account_v1(height, view, address)
+                .await
+                .map(ApiJson)
+                .map_err(classify_availability_error)
+        };
+
+    let catchup_reward_accounts = |State(state): State<CatchupState>,
+                                   Path((height, view)): Path<(u64, u64)>,
+                                   headers: HeaderMap,
+                                   body: Bytes| async move {
+        let tree = state
+            .get_reward_accounts_v1(height, view, &headers, &body)
+            .await?;
+        Ok::<_, ApiError>(encode_response(&headers, tree))
+    };
+
+    let catchup_reward_account_v2 =
+        |State(state): State<CatchupState>,
+         Path((height, view, address)): Path<(u64, u64, String)>| async move {
+            state
+                .get_reward_account_v2(height, view, address)
+                .await
+                .map(ApiJson)
+                .map_err(classify_availability_error)
+        };
+
+    let catchup_reward_accounts_v2 =
+        |State(_): State<CatchupState>, Path((_height, _view)): Path<(u64, u64)>| async move {
+            Err::<Json<()>, ApiError>(ApiError::NotFound(anyhow::anyhow!(
+                "catchup/reward-accounts-v2 is deprecated"
+            )))
+        };
+
+    let catchup_reward_amounts =
+        |State(_): State<CatchupState>, Path((_height, _limit, _offset)): Path<(u64, u64, u64)>| async move {
+            Err::<Json<()>, ApiError>(ApiError::NotFound(anyhow::anyhow!(
+                "catchup/reward-amounts is deprecated"
+            )))
+        };
+
+    let catchup_reward_merkle_tree_v2 =
+        |State(state): State<CatchupState>, Path((height, view)): Path<(u64, u64)>| async move {
+            state
+                .get_reward_merkle_tree_v2(height, view)
+                .await
+                .map(ApiJson)
+                .map_err(classify_availability_error)
+        };
+
+    let catchup_state_cert = |State(state): State<CatchupState>, Path(epoch): Path<u64>| async move {
+        state
+            .get_state_cert(epoch)
+            .await
+            .map(ApiJson)
+            .map_err(classify_availability_error)
+    };
+
+    ApiRouter::new()
+        .api_route(
+            routes::v1::CATCHUP_ACCOUNT_ROUTE,
+            get_with(catchup_account, |op| {
+                op.summary("Catch up fee account balance").description(
+                    "Get the fee account balance and Merkle proof for an address at the given \
+                     block height and view, for catchup.",
+                )
+            }),
+        )
+        .api_route(
+            routes::v1::CATCHUP_ACCOUNTS_ROUTE,
+            post_with(catchup_accounts, |op| {
+                op.summary("Catch up fee accounts (bulk)").description(
+                    "Bulk version of the fee account endpoint; request body is a JSON array of \
+                     TaggedBase64 fee accounts, response is a FeeMerkleTree.",
+                )
+            }),
+        )
+        .api_route(
+            routes::v1::CATCHUP_BLOCKS_ROUTE,
+            get_with(catchup_blocks, |op| {
+                op.summary("Catch up blocks Merkle frontier").description(
+                    "Get the blocks Merkle tree frontier at the given block height and view, for \
+                     catchup.",
+                )
+            }),
+        )
+        .api_route(
+            routes::v1::CATCHUP_CHAINCONFIG_ROUTE,
+            get_with(catchup_chainconfig, |op| {
+                op.summary("Catch up chain config").description(
+                    "Retrieve the chain config matching the given commitment from a peer; used \
+                     when a node missed a protocol upgrade.",
+                )
+            }),
+        )
+        .api_route(
+            routes::v1::CATCHUP_LEAFCHAIN_ROUTE,
+            get_with(catchup_leafchain, |op| {
+                op.summary("Catch up leaf chain").description(
+                    "Fetch a leaf chain that decides the block at the given height, for catching \
+                     up the stake table.",
+                )
+            }),
+        )
+        .api_route(
+            routes::v1::CATCHUP_CERT2_ROUTE,
+            get_with(catchup_cert2, |op| {
+                op.summary("Catch up cert2").description(
+                    "Fetch the cert2 stored at exactly the given height, if one exists; 404 \
+                     otherwise.",
+                )
+            }),
+        )
+        .api_route(
+            routes::v1::CATCHUP_REWARD_ACCOUNT_ROUTE,
+            get_with(catchup_reward_account, |op| {
+                op.summary("Catch up reward account (V1)").description(
+                    "Get the reward account balance for an address at the given height and view.",
+                )
+            }),
+        )
+        .api_route(
+            routes::v1::CATCHUP_REWARD_ACCOUNTS_ROUTE,
+            post_with(catchup_reward_accounts, |op| {
+                op.summary("Catch up reward accounts (bulk, V1)")
+                    .description(
+                        "Bulk version of the reward account endpoint; request body is a JSON \
+                         array of TaggedBase64 reward accounts, response is a RewardMerkleTreeV1.",
+                    )
+            }),
+        )
+        .api_route(
+            routes::v1::CATCHUP_REWARD_ACCOUNT_V2_ROUTE,
+            get_with(catchup_reward_account_v2, |op| {
+                op.summary("Catch up reward account (V2)").description(
+                    "Get the reward account balance for an address at the given height and view, \
+                     from RewardMerkleTreeV2.",
+                )
+            }),
+        )
+        .api_route(
+            routes::v1::CATCHUP_REWARD_ACCOUNTS_V2_ROUTE,
+            post_with(catchup_reward_accounts_v2, |op| {
+                op.summary("Catch up reward accounts (bulk, V2) (deprecated)")
+                    .description("Deprecated: this endpoint always returns 404 Not Found.")
+            }),
+        )
+        .api_route(
+            routes::v1::CATCHUP_REWARD_AMOUNTS_ROUTE,
+            get_with(catchup_reward_amounts, |op| {
+                op.summary("List reward amounts (deprecated)")
+                    .description("Deprecated: this endpoint always returns 404 Not Found.")
+            }),
+        )
+        .api_route(
+            routes::v1::CATCHUP_REWARD_MERKLE_TREE_V2_ROUTE,
+            get_with(catchup_reward_merkle_tree_v2, |op| {
+                op.summary("Catch up RewardMerkleTreeV2").description(
+                    "Get the RewardMerkleTreeV2 from consensus state at the given height and \
+                     view, serialized as RewardMerkleTreeV2Data.",
+                )
+            }),
+        )
+        .api_route(
+            routes::v1::CATCHUP_STATE_CERT_ROUTE,
+            get_with(catchup_state_cert, |op| {
+                op.summary("Catch up state certificate")
+                    .description("Get the light client state certificate for the given epoch.")
+            }),
+        )
+        .with_state(state)
+}
+
+pub(crate) fn router_submit(state: SubmitState) -> ApiRouter {
+    // Submit handler: body is decoded as VBS (binary) or JSON based on Content-Type, matching
+    // tide-disco's `body_auto`.
+    let submit_submit = |State(state): State<SubmitState>, headers: HeaderMap, body: Bytes| async move {
+        let hash = state.submit(&headers, &body).await?;
+        Ok::<_, ApiError>(encode_response(&headers, hash))
+    };
+
+    ApiRouter::new()
+        .api_route(
+            routes::v1::SUBMIT_ROUTE,
+            post_with(submit_submit, |op| {
+                op.summary("Submit transaction")
+                    .description("Submit a transaction to the HotShot handle for sequencing.")
+            }),
+        )
+        .with_state(state)
+}
+
+pub(crate) fn router_state_signature(state: StateSignatureState) -> ApiRouter {
+    // State signature handler
+    let state_signature_block = |State(state): State<StateSignatureState>,
+                                 Path(height): Path<u64>| async move {
+        state
+            .get_state_signature(height)
+            .await
+            .map(ApiJson)
+            .map_err(classify_availability_error)
+    };
+
+    ApiRouter::new()
+        .api_route(
+            routes::v1::STATE_SIGNATURE_BLOCK_ROUTE,
+            get_with(state_signature_block, |op| {
+                op.summary("Get light client state signature").description(
+                    "Get this node's signature for the light client state at the given block \
+                     height.",
+                )
+            }),
+        )
+        .with_state(state)
+}
+
+pub(crate) fn router_light_client(state: LightClientState) -> ApiRouter {
+    // Light-client handlers
+    let lc_leaf_by_height = |State(state): State<LightClientState>, Path(height): Path<u64>| async move {
+        state
+            .get_leaf_proof(v1::LeafQuery::Height(height), None)
+            .await
+            .map(ApiJson)
+            .map_err(classify_availability_error)
+    };
+
+    let lc_leaf_by_height_finalized =
+        |State(state): State<LightClientState>, Path((height, finalized)): Path<(u64, u64)>| async move {
+            state
+                .get_leaf_proof(v1::LeafQuery::Height(height), Some(finalized))
+                .await
+                .map(ApiJson)
+                .map_err(classify_availability_error)
+        };
+
+    let lc_leaf_by_hash = |State(state): State<LightClientState>, Path(hash): Path<String>| async move {
+        state
+            .get_leaf_proof(v1::LeafQuery::Hash(hash), None)
+            .await
+            .map(ApiJson)
+            .map_err(classify_availability_error)
+    };
+
+    let lc_leaf_by_hash_finalized =
+        |State(state): State<LightClientState>, Path((hash, finalized)): Path<(String, u64)>| async move {
+            state
+                .get_leaf_proof(v1::LeafQuery::Hash(hash), Some(finalized))
+                .await
+                .map(ApiJson)
+                .map_err(classify_availability_error)
+        };
+
+    let lc_leaf_by_block_hash = |State(state): State<LightClientState>,
+                                 Path(block_hash): Path<String>| async move {
+        state
+            .get_leaf_proof(v1::LeafQuery::BlockHash(block_hash), None)
+            .await
+            .map(ApiJson)
+            .map_err(classify_availability_error)
+    };
+
+    let lc_leaf_by_block_hash_finalized =
+        |State(state): State<LightClientState>,
+         Path((block_hash, finalized)): Path<(String, u64)>| async move {
+            state
+                .get_leaf_proof(v1::LeafQuery::BlockHash(block_hash), Some(finalized))
+                .await
+                .map(ApiJson)
+                .map_err(classify_availability_error)
+        };
+
+    let lc_leaf_by_payload_hash =
+        |State(state): State<LightClientState>, Path(payload_hash): Path<String>| async move {
+            state
+                .get_leaf_proof(v1::LeafQuery::PayloadHash(payload_hash), None)
+                .await
+                .map(ApiJson)
+                .map_err(classify_availability_error)
+        };
+
+    let lc_leaf_by_payload_hash_finalized =
+        |State(state): State<LightClientState>,
+         Path((payload_hash, finalized)): Path<(String, u64)>| async move {
+            state
+                .get_leaf_proof(v1::LeafQuery::PayloadHash(payload_hash), Some(finalized))
+                .await
+                .map(ApiJson)
+                .map_err(classify_availability_error)
+        };
+
+    let lc_header_by_height =
+        |State(state): State<LightClientState>, Path((root, height)): Path<(u64, u64)>| async move {
+            state
+                .get_header_proof(root, v1::HeaderQuery::Height(height))
+                .await
+                .map(ApiJson)
+                .map_err(classify_availability_error)
+        };
+
+    let lc_header_by_hash = |State(state): State<LightClientState>,
+                             Path((root, hash)): Path<(u64, String)>| async move {
+        state
+            .get_header_proof(root, v1::HeaderQuery::Hash(hash))
+            .await
+            .map(ApiJson)
+            .map_err(classify_availability_error)
+    };
+
+    let lc_header_by_payload_hash =
+        |State(state): State<LightClientState>, Path((root, payload_hash)): Path<(u64, String)>| async move {
+            state
+                .get_header_proof(root, v1::HeaderQuery::PayloadHash(payload_hash))
+                .await
+                .map(ApiJson)
+                .map_err(classify_availability_error)
+        };
+
+    let lc_stake_table = |State(state): State<LightClientState>, Path(epoch): Path<u64>| async move {
+        state
+            .get_light_client_stake_table(epoch)
+            .await
+            .map(ApiJson)
+            .map_err(classify_availability_error)
+    };
+
+    let lc_payload = |State(state): State<LightClientState>, Path(height): Path<u64>| async move {
+        state
+            .get_payload_proof(height)
+            .await
+            .map(ApiJson)
+            .map_err(classify_availability_error)
+    };
+
+    let lc_payload_range = |State(state): State<LightClientState>,
+                            Path((start, end)): Path<(u64, u64)>| async move {
+        state
+            .get_payload_proof_range(start, end)
+            .await
+            .map(ApiJson)
+            .map_err(classify_availability_error)
+    };
+
+    let lc_payload_ranges =
+        |State(state): State<LightClientState>, headers: HeaderMap, body: Bytes| async move {
+            let ranges: Vec<Range<u64>> = decode_body(&headers, &body)?;
+            let proofs = state
+                .get_payload_proof_ranges(ranges)
+                .await
+                .map_err(classify_availability_error)?;
+            Ok::<_, ApiError>(encode_response(&headers, proofs))
+        };
+
+    let lc_namespace = |State(state): State<LightClientState>,
+                        Path((height, namespace)): Path<(u64, u64)>| async move {
+        state
+            .get_lc_namespace_proof(height, namespace)
+            .await
+            .map(ApiJson)
+            .map_err(classify_availability_error)
+    };
+
+    let lc_namespace_range =
+        |State(state): State<LightClientState>,
+         Path((start, end, namespace)): Path<(u64, u64, u64)>| async move {
+            state
+                .get_lc_namespace_proof_range(start, end, namespace)
+                .await
+                .map(ApiJson)
+                .map_err(classify_availability_error)
+        };
+
+    let lc_namespaces_range =
+        |State(state): State<LightClientState>,
+         Path((start, end, namespaces)): Path<(u64, u64, String)>| async move {
+            state
+                .get_lc_namespaces_proof_range(start, end, namespaces)
+                .await
+                .map(ApiJson)
+                .map_err(classify_availability_error)
+        };
+
+    ApiRouter::new()
+        .api_route(
+            routes::v1::LC_LEAF_BY_HEIGHT_ROUTE,
+            get_with(lc_leaf_by_height, |op| {
+                op.summary("Get leaf with finality proof").description(
+                    "Fetch a leaf by height plus a proof of its finality, optionally relative to \
+                     an already-known-finalized height.",
+                )
+            }),
+        )
+        .api_route(
+            routes::v1::LC_LEAF_BY_HEIGHT_FINALIZED_ROUTE,
+            get_with(lc_leaf_by_height_finalized, |op| {
+                op.summary("Get leaf with finality proof").description(
+                    "Fetch a leaf by height plus a proof of its finality, optionally relative to \
+                     an already-known-finalized height.",
+                )
+            }),
+        )
+        .api_route(
+            routes::v1::LC_LEAF_BY_HASH_ROUTE,
+            get_with(lc_leaf_by_hash, |op| {
+                op.summary("Get leaf with finality proof").description(
+                    "Fetch a leaf by hash plus a proof of its finality, optionally relative to an \
+                     already-known-finalized height.",
+                )
+            }),
+        )
+        .api_route(
+            routes::v1::LC_LEAF_BY_HASH_FINALIZED_ROUTE,
+            get_with(lc_leaf_by_hash_finalized, |op| {
+                op.summary("Get leaf with finality proof").description(
+                    "Fetch a leaf by hash plus a proof of its finality, optionally relative to an \
+                     already-known-finalized height.",
+                )
+            }),
+        )
+        .api_route(
+            routes::v1::LC_LEAF_BY_BLOCK_HASH_ROUTE,
+            get_with(lc_leaf_by_block_hash, |op| {
+                op.summary("Get leaf with finality proof").description(
+                    "Fetch a leaf by block hash plus a proof of its finality, optionally relative \
+                     to an already-known-finalized height.",
+                )
+            }),
+        )
+        .api_route(
+            routes::v1::LC_LEAF_BY_BLOCK_HASH_FINALIZED_ROUTE,
+            get_with(lc_leaf_by_block_hash_finalized, |op| {
+                op.summary("Get leaf with finality proof").description(
+                    "Fetch a leaf by block hash plus a proof of its finality, optionally relative \
+                     to an already-known-finalized height.",
+                )
+            }),
+        )
+        .api_route(
+            routes::v1::LC_LEAF_BY_PAYLOAD_HASH_ROUTE,
+            get_with(lc_leaf_by_payload_hash, |op| {
+                op.summary("Get leaf with finality proof").description(
+                    "Fetch a leaf by payload hash plus a proof of its finality, optionally \
+                     relative to an already-known-finalized height.",
+                )
+            }),
+        )
+        .api_route(
+            routes::v1::LC_LEAF_BY_PAYLOAD_HASH_FINALIZED_ROUTE,
+            get_with(lc_leaf_by_payload_hash_finalized, |op| {
+                op.summary("Get leaf with finality proof").description(
+                    "Fetch a leaf by payload hash plus a proof of its finality, optionally \
+                     relative to an already-known-finalized height.",
+                )
+            }),
+        )
+        .api_route(
+            routes::v1::LC_HEADER_BY_HEIGHT_ROUTE,
+            get_with(lc_header_by_height, |op| {
+                op.summary("Get header with inclusion proof").description(
+                    "Fetch a header plus a Merkle proof that it belongs to the blocks Merkle tree \
+                     rooted at the given root height.",
+                )
+            }),
+        )
+        .api_route(
+            routes::v1::LC_HEADER_BY_HASH_ROUTE,
+            get_with(lc_header_by_hash, |op| {
+                op.summary("Get header with inclusion proof").description(
+                    "Fetch a header plus a Merkle proof that it belongs to the blocks Merkle tree \
+                     rooted at the given root height.",
+                )
+            }),
+        )
+        .api_route(
+            routes::v1::LC_HEADER_BY_PAYLOAD_HASH_ROUTE,
+            get_with(lc_header_by_payload_hash, |op| {
+                op.summary("Get header with inclusion proof").description(
+                    "Fetch a header plus a Merkle proof that it belongs to the blocks Merkle tree \
+                     rooted at the given root height.",
+                )
+            }),
+        )
+        .api_route(
+            routes::v1::LC_STAKE_TABLE_ROUTE,
+            get_with(lc_stake_table, |op| {
+                op.summary("Get stake table events for epoch").description(
+                    "Get the events needed to transform the stake table from the previous epoch \
+                     into the given epoch.",
+                )
+            }),
+        )
+        .api_route(
+            routes::v1::LC_PAYLOAD_ROUTE,
+            get_with(lc_payload, |op| {
+                op.summary("Get payload with VID common data").description(
+                    "Fetch a payload plus the VID common data needed to recompute and verify its \
+                     hash.",
+                )
+            }),
+        )
+        .api_route(
+            routes::v1::LC_PAYLOAD_RANGE_ROUTE,
+            get_with(lc_payload_range, |op| {
+                op.summary("Get payload proofs in range").description(
+                    "Fetch a list of payload proofs for each block in the given range.",
+                )
+            }),
+        )
+        .api_route(
+            routes::v1::LC_PAYLOAD_RANGES_ROUTE,
+            post_with(lc_payload_ranges, |op| {
+                op.summary("Get payload proofs for a set of height ranges")
+                    .description(
+                        "Fetch payload proofs for the height ranges in the request body, which \
+                         must be ascending and disjoint. Answers in full or not at all, like the \
+                         range endpoint: heights this node lacks are fetched from peers, and a \
+                         404 means at least one was not available in time.",
+                    )
+            }),
+        )
+        .api_route(
+            routes::v1::LC_NAMESPACE_ROUTE,
+            get_with(lc_namespace, |op| {
+                op.summary("Get namespace proof with VID common data")
+                    .description(
+                        "Fetch a namespace proof plus the VID common data needed to verify it.",
+                    )
+            }),
+        )
+        .api_route(
+            routes::v1::LC_NAMESPACE_RANGE_ROUTE,
+            get_with(lc_namespace_range, |op| {
+                op.summary("Get namespace proofs in range").description(
+                    "Fetch a list of namespace proofs for each block in the given range.",
+                )
+            }),
+        )
+        .api_route(
+            routes::v1::LC_NAMESPACES_RANGE_ROUTE,
+            get_with(lc_namespaces_range, |op| {
+                op.summary("Get proofs for multiple namespaces in range")
+                    .description(
+                        "Fetch namespace proofs for each block in the given range, restricted to \
+                         a caller-specified set of namespaces.",
+                    )
+            }),
+        )
+        .with_state(state)
+}
+
+pub(crate) fn router_explorer(state: ExplorerState) -> ApiRouter {
+    // Explorer handlers
+    let explorer_block_detail_by_height =
+        |State(state): State<ExplorerState>, Path(height): Path<u64>| async move {
+            state
+                .get_block_detail(v1::BlockIdent::Height(height))
+                .await
+                .map(ApiJson)
+                .map_err(classify_availability_error)
+        };
+
+    let explorer_block_detail_by_hash =
+        |State(state): State<ExplorerState>, Path(hash): Path<String>| async move {
+            state
+                .get_block_detail(v1::BlockIdent::Hash(hash))
+                .await
+                .map(ApiJson)
+                .map_err(classify_availability_error)
+        };
+
+    let explorer_block_summaries_latest =
+        |State(state): State<ExplorerState>, Path(limit): Path<u64>| async move {
+            state
+                .get_block_summaries(v1::BlockIdent::Latest, limit)
+                .await
+                .map(ApiJson)
+                .map_err(classify_availability_error)
+        };
+
+    let explorer_block_summaries_from =
+        |State(state): State<ExplorerState>, Path((from, limit)): Path<(u64, u64)>| async move {
+            state
+                .get_block_summaries(v1::BlockIdent::Height(from), limit)
+                .await
+                .map(ApiJson)
+                .map_err(classify_availability_error)
+        };
+
+    let explorer_tx_detail_by_position =
+        |State(state): State<ExplorerState>, Path((height, offset)): Path<(u64, u64)>| async move {
+            state
+                .get_transaction_detail(v1::TxIdent::HeightAndOffset(height, offset))
+                .await
+                .map(ApiJson)
+                .map_err(classify_availability_error)
+        };
+
+    let explorer_tx_detail_by_hash =
+        |State(state): State<ExplorerState>, Path(hash): Path<String>| async move {
+            state
+                .get_transaction_detail(v1::TxIdent::Hash(hash))
+                .await
+                .map(ApiJson)
+                .map_err(classify_availability_error)
+        };
+
+    let explorer_tx_summaries_latest_block =
+        |State(state): State<ExplorerState>, Path((limit, block)): Path<(u64, u64)>| async move {
+            state
+                .get_transaction_summaries(
+                    v1::TxIdent::Latest,
+                    limit,
+                    v1::TxSummaryFilter::Block(block),
+                )
+                .await
+                .map(ApiJson)
+                .map_err(classify_availability_error)
+        };
+
+    let explorer_tx_summaries_from_block =
+        |State(state): State<ExplorerState>,
+         Path((height, offset, limit, block)): Path<(u64, u64, u64, u64)>| async move {
+            state
+                .get_transaction_summaries(
+                    v1::TxIdent::HeightAndOffset(height, offset),
+                    limit,
+                    v1::TxSummaryFilter::Block(block),
+                )
+                .await
+                .map(ApiJson)
+                .map_err(classify_availability_error)
+        };
+
+    let explorer_tx_summaries_by_hash_block =
+        |State(state): State<ExplorerState>,
+         Path((hash, limit, block)): Path<(String, u64, u64)>| async move {
+            state
+                .get_transaction_summaries(
+                    v1::TxIdent::Hash(hash),
+                    limit,
+                    v1::TxSummaryFilter::Block(block),
+                )
+                .await
+                .map(ApiJson)
+                .map_err(classify_availability_error)
+        };
+
+    let explorer_tx_summaries_latest_ns =
+        |State(state): State<ExplorerState>, Path((limit, namespace)): Path<(u64, i64)>| async move {
+            state
+                .get_transaction_summaries(
+                    v1::TxIdent::Latest,
+                    limit,
+                    v1::TxSummaryFilter::Namespace(namespace),
+                )
+                .await
+                .map(ApiJson)
+                .map_err(classify_availability_error)
+        };
+
+    let explorer_tx_summaries_from_ns =
+        |State(state): State<ExplorerState>,
+         Path((height, offset, limit, namespace)): Path<(u64, u64, u64, i64)>| async move {
+            state
+                .get_transaction_summaries(
+                    v1::TxIdent::HeightAndOffset(height, offset),
+                    limit,
+                    v1::TxSummaryFilter::Namespace(namespace),
+                )
+                .await
+                .map(ApiJson)
+                .map_err(classify_availability_error)
+        };
+
+    let explorer_tx_summaries_by_hash_ns =
+        |State(state): State<ExplorerState>,
+         Path((hash, limit, namespace)): Path<(String, u64, i64)>| async move {
+            state
+                .get_transaction_summaries(
+                    v1::TxIdent::Hash(hash),
+                    limit,
+                    v1::TxSummaryFilter::Namespace(namespace),
+                )
+                .await
+                .map(ApiJson)
+                .map_err(classify_availability_error)
+        };
+
+    let explorer_tx_summaries_latest =
+        |State(state): State<ExplorerState>, Path(limit): Path<u64>| async move {
+            state
+                .get_transaction_summaries(v1::TxIdent::Latest, limit, v1::TxSummaryFilter::None)
+                .await
+                .map(ApiJson)
+                .map_err(classify_availability_error)
+        };
+
+    let explorer_tx_summaries_from =
+        |State(state): State<ExplorerState>,
+         Path((height, offset, limit)): Path<(u64, u64, u64)>| async move {
+            state
+                .get_transaction_summaries(
+                    v1::TxIdent::HeightAndOffset(height, offset),
+                    limit,
+                    v1::TxSummaryFilter::None,
+                )
+                .await
+                .map(ApiJson)
+                .map_err(classify_availability_error)
+        };
+
+    let explorer_tx_summaries_by_hash =
+        |State(state): State<ExplorerState>, Path((hash, limit)): Path<(String, u64)>| async move {
+            state
+                .get_transaction_summaries(
+                    v1::TxIdent::Hash(hash),
+                    limit,
+                    v1::TxSummaryFilter::None,
+                )
+                .await
+                .map(ApiJson)
+                .map_err(classify_availability_error)
+        };
+
+    let explorer_summary = |State(state): State<ExplorerState>| async move {
+        state
+            .get_explorer_summary()
+            .await
+            .map(ApiJson)
+            .map_err(classify_availability_error)
+    };
+
+    let explorer_search = |State(state): State<ExplorerState>, Path(query): Path<String>| async move {
+        state
+            .get_search_result(query)
+            .await
+            .map(ApiJson)
+            .map_err(classify_availability_error)
+    };
+
+    ApiRouter::new()
+        .api_route(
+            routes::v1::EXPLORER_BLOCK_DETAIL_BY_HEIGHT_ROUTE,
+            get_with(explorer_block_detail_by_height, |op| {
+                op.summary("Get block detail")
+                    .description("Get details for a block identified by height or hash.")
+            }),
+        )
+        .api_route(
+            routes::v1::EXPLORER_BLOCK_DETAIL_BY_HASH_ROUTE,
+            get_with(explorer_block_detail_by_hash, |op| {
+                op.summary("Get block detail")
+                    .description("Get details for a block identified by height or hash.")
+            }),
+        )
+        .api_route(
+            routes::v1::EXPLORER_BLOCK_SUMMARIES_LATEST_ROUTE,
+            get_with(explorer_block_summaries_latest, |op| {
+                op.summary("List block summaries").description(
+                    "Retrieve up to `limit` block summaries, targeting the latest block or a \
+                     block identified by height.",
+                )
+            }),
+        )
+        .api_route(
+            routes::v1::EXPLORER_BLOCK_SUMMARIES_FROM_ROUTE,
+            get_with(explorer_block_summaries_from, |op| {
+                op.summary("List block summaries").description(
+                    "Retrieve up to `limit` block summaries, targeting the latest block or a \
+                     block identified by height.",
+                )
+            }),
+        )
+        .api_route(
+            routes::v1::EXPLORER_TX_DETAIL_BY_POSITION_ROUTE,
+            get_with(explorer_tx_detail_by_position, |op| {
+                op.summary("Get transaction detail").description(
+                    "Get details for a transaction identified by height and offset, or by hash.",
+                )
+            }),
+        )
+        .api_route(
+            routes::v1::EXPLORER_TX_DETAIL_BY_HASH_ROUTE,
+            get_with(explorer_tx_detail_by_hash, |op| {
+                op.summary("Get transaction detail").description(
+                    "Get details for a transaction identified by height and offset, or by hash.",
+                )
+            }),
+        )
+        .api_route(
+            routes::v1::EXPLORER_TX_SUMMARIES_LATEST_BLOCK_ROUTE,
+            get_with(explorer_tx_summaries_latest_block, |op| {
+                op.summary("List transaction summaries").description(
+                    "Retrieve up to `limit` transaction summaries, targeting the latest \
+                     transaction, one identified by height/offset, or by hash; optionally \
+                     filtered by block or namespace.",
+                )
+            }),
+        )
+        .api_route(
+            routes::v1::EXPLORER_TX_SUMMARIES_FROM_BLOCK_ROUTE,
+            get_with(explorer_tx_summaries_from_block, |op| {
+                op.summary("List transaction summaries").description(
+                    "Retrieve up to `limit` transaction summaries, targeting the latest \
+                     transaction, one identified by height/offset, or by hash; optionally \
+                     filtered by block or namespace.",
+                )
+            }),
+        )
+        .api_route(
+            routes::v1::EXPLORER_TX_SUMMARIES_BY_HASH_BLOCK_ROUTE,
+            get_with(explorer_tx_summaries_by_hash_block, |op| {
+                op.summary("List transaction summaries").description(
+                    "Retrieve up to `limit` transaction summaries, targeting the latest \
+                     transaction, one identified by height/offset, or by hash; optionally \
+                     filtered by block or namespace.",
+                )
+            }),
+        )
+        .api_route(
+            routes::v1::EXPLORER_TX_SUMMARIES_LATEST_NS_ROUTE,
+            get_with(explorer_tx_summaries_latest_ns, |op| {
+                op.summary("List transaction summaries").description(
+                    "Retrieve up to `limit` transaction summaries, targeting the latest \
+                     transaction, one identified by height/offset, or by hash; optionally \
+                     filtered by block or namespace.",
+                )
+            }),
+        )
+        .api_route(
+            routes::v1::EXPLORER_TX_SUMMARIES_FROM_NS_ROUTE,
+            get_with(explorer_tx_summaries_from_ns, |op| {
+                op.summary("List transaction summaries").description(
+                    "Retrieve up to `limit` transaction summaries, targeting the latest \
+                     transaction, one identified by height/offset, or by hash; optionally \
+                     filtered by block or namespace.",
+                )
+            }),
+        )
+        .api_route(
+            routes::v1::EXPLORER_TX_SUMMARIES_BY_HASH_NS_ROUTE,
+            get_with(explorer_tx_summaries_by_hash_ns, |op| {
+                op.summary("List transaction summaries").description(
+                    "Retrieve up to `limit` transaction summaries, targeting the latest \
+                     transaction, one identified by height/offset, or by hash; optionally \
+                     filtered by block or namespace.",
+                )
+            }),
+        )
+        .api_route(
+            routes::v1::EXPLORER_TX_SUMMARIES_LATEST_ROUTE,
+            get_with(explorer_tx_summaries_latest, |op| {
+                op.summary("List transaction summaries").description(
+                    "Retrieve up to `limit` transaction summaries, targeting the latest \
+                     transaction, one identified by height/offset, or by hash; optionally \
+                     filtered by block or namespace.",
+                )
+            }),
+        )
+        .api_route(
+            routes::v1::EXPLORER_TX_SUMMARIES_FROM_ROUTE,
+            get_with(explorer_tx_summaries_from, |op| {
+                op.summary("List transaction summaries").description(
+                    "Retrieve up to `limit` transaction summaries, targeting the latest \
+                     transaction, one identified by height/offset, or by hash; optionally \
+                     filtered by block or namespace.",
+                )
+            }),
+        )
+        .api_route(
+            routes::v1::EXPLORER_TX_SUMMARIES_BY_HASH_ROUTE,
+            get_with(explorer_tx_summaries_by_hash, |op| {
+                op.summary("List transaction summaries").description(
+                    "Retrieve up to `limit` transaction summaries, targeting the latest \
+                     transaction, one identified by height/offset, or by hash; optionally \
+                     filtered by block or namespace.",
+                )
+            }),
+        )
+        .api_route(
+            routes::v1::EXPLORER_SUMMARY_ROUTE,
+            get_with(explorer_summary, |op| {
+                op.summary("Get explorer summary")
+                    .description("Get the current chain explorer summary.")
+            }),
+        )
+        .api_route(
+            routes::v1::EXPLORER_SEARCH_ROUTE,
+            get_with(explorer_search, |op| {
+                op.summary("Search blocks and transactions").description(
+                    "Search for blocks or transactions matching the given query string; currently \
+                     matched against hash.",
+                )
+            }),
+        )
+        .with_state(state)
+}
+
+pub(crate) fn router_token(state: TokenState) -> ApiRouter {
+    // Token handlers
+    let token_total_minted = |State(state): State<TokenState>| async move {
+        state
+            .total_minted_supply()
+            .await
+            .map(ApiJson)
+            .map_err(classify_availability_error)
+    };
+
+    let token_circulating = |State(state): State<TokenState>| async move {
+        state
+            .circulating_supply()
+            .await
+            .map(ApiJson)
+            .map_err(classify_availability_error)
+    };
+
+    let token_circulating_eth = |State(state): State<TokenState>| async move {
+        state
+            .circulating_supply_ethereum()
+            .await
+            .map(ApiJson)
+            .map_err(classify_availability_error)
+    };
+
+    let token_total_issued = |State(state): State<TokenState>| async move {
+        state
+            .total_issued_supply()
+            .await
+            .map(ApiJson)
+            .map_err(classify_availability_error)
+    };
+
+    let token_total_reward_distributed = |State(state): State<TokenState>| async move {
+        state
+            .total_reward_distributed()
+            .await
+            .map(ApiJson)
+            .map_err(classify_availability_error)
+    };
+
+    ApiRouter::new()
+        .api_route(
+            routes::v1::TOKEN_TOTAL_MINTED_SUPPLY_ROUTE,
+            get_with(token_total_minted, |op| {
+                op.summary("Get total minted supply").description(
+                    "Total supply of the ESP token minted on Ethereum; excludes unclaimed \
+                     rewards. Cached for an hour.",
+                )
+            }),
+        )
+        .api_route(
+            routes::v1::TOKEN_CIRCULATING_SUPPLY_ROUTE,
+            get_with(token_circulating, |op| {
+                op.summary("Get circulating supply").description(
+                    "Circulating supply: initial_supply + reward_distributed - locked, following \
+                     the mainnet unlock schedule.",
+                )
+            }),
+        )
+        .api_route(
+            routes::v1::TOKEN_CIRCULATING_SUPPLY_ETHEREUM_ROUTE,
+            get_with(token_circulating_eth, |op| {
+                op.summary("Get circulating supply (Ethereum L1)")
+                    .description(
+                        "Circulating supply of ESP tokens on Ethereum L1: total_supply_l1 - \
+                         locked.",
+                    )
+            }),
+        )
+        .api_route(
+            routes::v1::TOKEN_TOTAL_ISSUED_SUPPLY_ROUTE,
+            get_with(token_total_issued, |op| {
+                op.summary("Get total issued supply").description(
+                    "Total issued supply: initial_supply + total_reward_distributed, including \
+                     rewards not yet claimed on Ethereum.",
+                )
+            }),
+        )
+        .api_route(
+            routes::v1::TOKEN_TOTAL_REWARD_DISTRIBUTED_ROUTE,
+            get_with(token_total_reward_distributed, |op| {
+                op.summary("Get total reward distributed").description(
+                    "Total rewards distributed by consensus, including rewards not yet claimed on \
+                     Ethereum.",
+                )
+            }),
+        )
+        .with_state(state)
+}
+
+pub(crate) fn router_database(state: DatabaseState) -> ApiRouter {
+    // Database handlers
+    let database_table_sizes = |State(state): State<DatabaseState>| async move {
+        state
+            .get_table_sizes()
+            .await
+            .map(ApiJson)
+            .map_err(ApiError::Internal)
+    };
+    let database_migration_status = |State(state): State<DatabaseState>| async move {
+        state
+            .get_migration_status()
+            .await
+            .map(ApiJson)
+            .map_err(ApiError::Internal)
+    };
+
+    ApiRouter::new()
+        .api_route(
+            routes::v1::DATABASE_TABLE_SIZES_ROUTE,
+            get_with(database_table_sizes, |op| {
+                op.summary("Get database table sizes")
+                    .description("Get the sizes of all database tables: row counts and disk usage.")
+            }),
+        )
+        .api_route(
+            routes::v1::DATABASE_MIGRATION_STATUS_ROUTE,
+            get_with(database_migration_status, |op| {
+                op.summary("Get migration status").description(
+                    "Get the status of all deferred background migrations: start/completion time \
+                     and last processed offset.",
+                )
+            }),
+        )
+        .with_state(state)
+}
+
+/// Create v1 router with OpenAPI documentation.
+///
+/// Unlike v2 (whose spec comes from the protos, with real schemas for every request and response;
+/// see [`router_v2_docs`]), most v1 handlers return internal domain types that don't implement
+/// `schemars::JsonSchema` by design - see [`ApiJson`]. The generated spec therefore documents
+/// routes, parameters, and summaries, but response bodies are mostly untyped.
+pub fn create_router_v1<S>(state: S) -> Router
 where
-    S: v2::RewardApi + v2::DataApi + v2::ConsensusApi + Clone + Send + Sync + 'static,
+    S: v1::RewardApi
+        + v1::AvailabilityApi
+        + v1::HotShotAvailabilityApi
+        + v1::BlockStateApi
+        + v1::FeeStateApi
+        + v1::StatusApi
+        + v1::ConfigApi
+        + v1::NodeApi
+        + v1::CatchupApi
+        + v1::SubmitApi
+        + v1::StateSignatureApi
+        + v1::LightClientApi
+        + v1::ExplorerApi
+        + v1::TokenApi
+        + v1::DatabaseApi
+        + Send
+        + Sync
+        + 'static,
 {
+    // Each `router_*` function already calls `with_state`, so the merged router is already
+    // stateless (`ApiRouter<()>`) by the time it reaches `finish_api`.
+    let state = Arc::new(state);
+    let router = router_reward(state.clone())
+        .merge(router_availability(state.clone()))
+        .merge(router_block_state(state.clone()))
+        .merge(router_fee_state(state.clone()))
+        .merge(router_status(state.clone()))
+        .merge(router_config(state.clone()))
+        .merge(router_node(state.clone()))
+        .merge(router_catchup(state.clone()))
+        .merge(router_submit(state.clone()))
+        .merge(router_state_signature(state.clone()))
+        .merge(router_light_client(state.clone()))
+        .merge(router_explorer(state.clone()))
+        .merge(router_token(state.clone()))
+        .merge(router_database(state));
+
+    finish_v1_docs(router)
+}
+
+/// Give framework-level rejections on the v2 routes the same error envelope as handler errors.
+///
+/// The generated handlers extract with `Query<T>` or, on a POST, `Json<T>`, and axum answers a
+/// rejected query string or body itself, in `text/plain`, before `tonic_rest::RestError` is ever
+/// involved. protoJSON rejects unknown fields, which makes this the most common client error on
+/// these routes. Rebuilding the rejection as a [`tonic::Status`] reuses tonic-rest's envelope.
+pub(crate) async fn v2_error_envelope(req: Request, next: axum::middleware::Next) -> Response {
+    /// Rejection bodies are single-line messages; this only needs to be larger than one.
+    const MAX_REJECTION_BODY: usize = 8 * 1024;
+
+    let response = next.run(req).await;
+
+    // Only the statuses whose gRPC code maps back to the same HTTP status, so the rewrite cannot
+    // change what the client sees beyond the body shape. The body extractor's 413, 415 and 422
+    // are the exception: the Google error model has no code for any of them, so they become the
+    // 400 every other malformed request gets.
+    let code = match response.status() {
+        StatusCode::BAD_REQUEST
+        | StatusCode::PAYLOAD_TOO_LARGE
+        | StatusCode::UNSUPPORTED_MEDIA_TYPE
+        | StatusCode::UNPROCESSABLE_ENTITY => tonic::Code::InvalidArgument,
+        StatusCode::NOT_FOUND => tonic::Code::NotFound,
+        _ => return response,
+    };
+    let already_enveloped = response
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .is_some_and(|value| value.as_bytes().starts_with(b"application/json"));
+    if already_enveloped {
+        return response;
+    }
+
+    let (parts, body) = response.into_parts();
+    let message = match axum::body::to_bytes(body, MAX_REJECTION_BODY).await {
+        Ok(bytes) => String::from_utf8_lossy(&bytes).into_owned(),
+        Err(_) => parts
+            .status
+            .canonical_reason()
+            .unwrap_or("request rejected")
+            .to_string(),
+    };
+    tonic_rest::RestError::from(tonic::Status::new(code, message)).into_response()
+}
+
+/// A POST reads its whole request from the body, so the generated handler never looks at the
+/// query string. Refusing one keeps the rule that a misspelled parameter is a 400, not ignored.
+pub(crate) async fn v2_refuse_post_query(req: Request, next: axum::middleware::Next) -> Response {
+    if req.method() == axum::http::Method::POST && req.uri().query().is_some() {
+        return tonic_rest::RestError::from(tonic::Status::invalid_argument(
+            "a POST takes its request as a JSON body, not query parameters",
+        ))
+        .into_response();
+    }
+    next.run(req).await
+}
+
+/// The v2 OpenAPI document, generated by the build script from the protos.
+pub(crate) const V2_OPENAPI: &str =
+    include_str!(concat!(env!("OUT_DIR"), "/espresso.api.v2.openapi.json"));
+
+/// Serve the v2 API documentation: the build-time OpenAPI document and the two UIs that render
+/// it. Unlike [`finish_v1_docs`], nothing here inspects the router, so a route that is generated
+/// but never mounted would still appear in the document; `v2_documented_routes_are_mounted`
+/// asserts that never ships.
+pub fn router_v2_docs() -> Router {
+    Router::new()
+        .route(
+            routes::v2::OPENAPI_SPEC_ROUTE,
+            get(|| async { ([(header::CONTENT_TYPE, "application/json")], V2_OPENAPI) }),
+        )
+        .route(
+            routes::v2::SWAGGER_ROUTE,
+            get(|| async { swagger_html(routes::v2::OPENAPI_SPEC_ROUTE) }),
+        )
+        .route(
+            routes::v2::SWAGGER_SLASH_ROUTE,
+            get(|| async { swagger_html(routes::v2::OPENAPI_SPEC_ROUTE) }),
+        )
+        .route(
+            routes::v2::SCALAR_ROUTE,
+            get(Scalar::new(routes::v2::OPENAPI_SPEC_ROUTE)
+                .with_title("Espresso Node API v2")
+                .axum_handler()),
+        )
+}
+
+/// A gated module's v2 paths when its flag is off. `serve_axum` merges [`router_v2_docs`] last and
+/// axum keeps the last merged router's fallback, so an unregistered v2 path would get axum's empty
+/// 404 instead of the [`v2_error_envelope`] one.
+pub(crate) fn router_module_disabled(module: &'static str, paths: &[&str]) -> Router {
+    let mut router = Router::new();
+    for path in paths {
+        router = router.route(
+            path,
+            any(move || async move {
+                tonic_rest::RestError::from(tonic::Status::not_found(format!(
+                    "{module} module disabled"
+                )))
+            }),
+        );
+    }
+    router
+}
+
+/// Build the OpenAPI spec for the mounted routes and attach the docs routes; every serve mode
+/// must route through this.
+pub fn finish_v1_docs(router: ApiRouter) -> Router {
     let mut api = OpenApi {
         info: Info {
-            title: "Espresso Node API v2".to_string(),
+            title: "Espresso Node API v1".to_string(),
             description: None,
             version: "1.0.0".to_string(),
             ..Default::default()
@@ -349,134 +3604,13 @@ where
         ..Default::default()
     };
 
-    let get_reward_claim_input =
-        |State(state): State<S>, SendQuery(request): SendQuery<GetRewardClaimInputRequest>| async move {
-            handlers::get_reward_claim_input(&state, request)
-                .await
-                .map(Json)
-        };
+    let router = router.finish_api(&mut api);
 
-    let get_reward_balance =
-        |State(state): State<S>, SendQuery(request): SendQuery<GetRewardBalanceRequest>| async move {
-            handlers::get_reward_balance(&state, request)
-                .await
-                .map(Json)
-        };
-
-    let get_reward_account_proof =
-        |State(state): State<S>, SendQuery(request): SendQuery<GetRewardAccountProofRequest>| async move {
-            handlers::get_reward_account_proof(&state, request)
-                .await
-                .map(Json)
-        };
-
-    let get_reward_balances =
-        |State(state): State<S>, SendQuery(request): SendQuery<GetRewardBalancesRequest>| async move {
-            handlers::get_reward_balances(&state, request)
-                .await
-                .map(Json)
-        };
-
-    let get_reward_merkle_tree_v2 =
-        |State(state): State<S>, SendQuery(request): SendQuery<GetRewardMerkleTreeRequest>| async move {
-            handlers::get_reward_merkle_tree_v2(&state, request)
-                .await
-                .map(Json)
-        };
-
-    let get_state_certificate =
-        |State(state): State<S>, SendQuery(request): SendQuery<GetStateCertificateRequest>| async move {
-            handlers::get_state_certificate(&state, request)
-                .await
-                .map(Json)
-        };
-
-    let get_stake_table =
-        |State(state): State<S>, SendQuery(request): SendQuery<GetStakeTableRequest>| async move {
-            handlers::get_stake_table(&state, request).await.map(Json)
-        };
-
-    let get_namespace_proof =
-        |State(state): State<S>, SendQuery(query): SendQuery<GetNamespaceProofRequest>| async move {
-            handlers::get_namespace_proof(&state, query).await.map(Json)
-        };
-
-    let get_incorrect_encoding_proof = |State(state): State<S>,
-                                        SendQuery(query): SendQuery<
-        GetIncorrectEncodingProofRequest,
-    >| async move {
-        handlers::get_incorrect_encoding_proof(&state, query)
-            .await
-            .map(Json)
-    };
-
-    let router = ApiRouter::new()
-        .api_route(
-            routes::v2::REWARD_CLAIM_INPUT_ROUTE.http,
-            get_with(get_reward_claim_input, |op| {
-                op.description(routes::v2::REWARD_CLAIM_INPUT_ROUTE.description)
-                    .tag(routes::v2::REWARD_CLAIM_INPUT_ROUTE.tag)
-            }),
-        )
-        .api_route(
-            routes::v2::REWARD_BALANCE_ROUTE.http,
-            get_with(get_reward_balance, |op| {
-                op.description(routes::v2::REWARD_BALANCE_ROUTE.description)
-                    .tag(routes::v2::REWARD_BALANCE_ROUTE.tag)
-            }),
-        )
-        .api_route(
-            routes::v2::REWARD_ACCOUNT_PROOF_ROUTE.http,
-            get_with(get_reward_account_proof, |op| {
-                op.description(routes::v2::REWARD_ACCOUNT_PROOF_ROUTE.description)
-                    .tag(routes::v2::REWARD_ACCOUNT_PROOF_ROUTE.tag)
-            }),
-        )
-        .api_route(
-            routes::v2::REWARD_BALANCES_ROUTE.http,
-            get_with(get_reward_balances, |op| {
-                op.description(routes::v2::REWARD_BALANCES_ROUTE.description)
-                    .tag(routes::v2::REWARD_BALANCES_ROUTE.tag)
-            }),
-        )
-        .api_route(
-            routes::v2::REWARD_MERKLE_TREE_V2_ROUTE.http,
-            get_with(get_reward_merkle_tree_v2, |op| {
-                op.description(routes::v2::REWARD_MERKLE_TREE_V2_ROUTE.description)
-                    .tag(routes::v2::REWARD_MERKLE_TREE_V2_ROUTE.tag)
-            }),
-        )
-        .api_route(
-            routes::v2::NAMESPACE_PROOF_ROUTE.http,
-            get_with(get_namespace_proof, |op| {
-                op.description(routes::v2::NAMESPACE_PROOF_ROUTE.description)
-                    .tag(routes::v2::NAMESPACE_PROOF_ROUTE.tag)
-            }),
-        )
-        .api_route(
-            routes::v2::INCORRECT_ENCODING_PROOF_ROUTE.http,
-            get_with(get_incorrect_encoding_proof, |op| {
-                op.description(routes::v2::INCORRECT_ENCODING_PROOF_ROUTE.description)
-                    .tag(routes::v2::INCORRECT_ENCODING_PROOF_ROUTE.tag)
-            }),
-        )
-        .api_route(
-            routes::v2::STATE_CERTIFICATE_ROUTE.http,
-            get_with(get_state_certificate, |op| {
-                op.description(routes::v2::STATE_CERTIFICATE_ROUTE.description)
-                    .tag(routes::v2::STATE_CERTIFICATE_ROUTE.tag)
-            }),
-        )
-        .api_route(
-            routes::v2::STAKE_TABLE_ROUTE.http,
-            get_with(get_stake_table, |op| {
-                op.description(routes::v2::STAKE_TABLE_ROUTE.description)
-                    .tag(routes::v2::STAKE_TABLE_ROUTE.tag)
-            }),
-        )
-        .finish_api(&mut api);
+    declare_path_template_parameters(&mut api);
+    tag_operations_by_module(&mut api);
 
     // Transform examples (array) to example (singular) for OpenAPI 3.0/Swagger compatibility
+    // (a no-op unless a future v1 route adds a JsonSchema body/query).
     if let Some(ref mut components) = api.components {
         let mut transform = schemars::transform::SetSingleExample::default();
         for schema in components.schemas.values_mut() {
@@ -484,65 +3618,2512 @@ where
         }
     }
 
-    // Also transform path parameter schemas
-    if let Some(ref mut paths) = api.paths {
-        let mut transform = schemars::transform::SetSingleExample::default();
-        for path_item_ref in paths.paths.values_mut() {
-            if let aide::openapi::ReferenceOr::Item(path_item) = path_item_ref {
-                for operation in [
-                    &mut path_item.get,
-                    &mut path_item.post,
-                    &mut path_item.put,
-                    &mut path_item.delete,
-                    &mut path_item.patch,
-                ]
-                .into_iter()
-                .flatten()
-                {
-                    for param in &mut operation.parameters {
-                        if let aide::openapi::ReferenceOr::Item(param_item) = param {
-                            let parameter_data = match param_item {
-                                aide::openapi::Parameter::Query { parameter_data, .. } => {
-                                    parameter_data
-                                },
-                                aide::openapi::Parameter::Header { parameter_data, .. } => {
-                                    parameter_data
-                                },
-                                aide::openapi::Parameter::Path { parameter_data, .. } => {
-                                    parameter_data
-                                },
-                                aide::openapi::Parameter::Cookie { parameter_data, .. } => {
-                                    parameter_data
-                                },
-                            };
-                            if let aide::openapi::ParameterSchemaOrContent::Schema(ref mut schema) =
-                                parameter_data.format
-                            {
-                                transform.transform(&mut schema.json_schema);
-                            }
-                        }
-                    }
+    // Not an Extension layer: Router::layer clones it into every route.
+    let spec = Bytes::from(serde_json::to_vec(&api).expect("OpenAPI document serializes"));
+
+    router
+        .route(
+            routes::v1::OPENAPI_SPEC_ROUTE,
+            get(move || async move { ([(header::CONTENT_TYPE, "application/json")], spec) }),
+        )
+        .route(
+            routes::v1::SWAGGER_ROUTE,
+            get(|| async { swagger_html(routes::v1::OPENAPI_SPEC_ROUTE) }),
+        )
+        .route(
+            "/v1/",
+            get(|| async { swagger_html(routes::v1::OPENAPI_SPEC_ROUTE) }),
+        )
+        .route(
+            routes::v1::SCALAR_ROUTE,
+            get(Scalar::new(routes::v1::OPENAPI_SPEC_ROUTE)
+                .with_title("Espresso Node API v1")
+                .axum_handler()),
+        )
+}
+
+/// Declare a path parameter for every `{name}` template segment of every operation.
+///
+/// aide only derives path parameters from `Path<T>` extractors whose `T` is a named-field
+/// struct; the v1 handlers all use primitives and tuples (`Path<u64>`, `Path<(u64, String)>`),
+/// so nothing is derived and Swagger's try-it-out cannot fill the URL templates. The template
+/// itself names every parameter, so declare them from it.
+///
+/// Parameter types come from [`path_parameter_schema`]; the handlers parse the raw segment
+/// either way, so a wrong entry there affects only documentation, not behavior.
+/// Tag each operation with its module (first path segment after `/v1/`) so Swagger groups them.
+fn tag_operations_by_module(api: &mut OpenApi) {
+    let Some(ref mut paths) = api.paths else {
+        return;
+    };
+    let mut modules = std::collections::BTreeSet::new();
+    for (path, path_item_ref) in paths.paths.iter_mut() {
+        let ReferenceOr::Item(path_item) = path_item_ref else {
+            continue;
+        };
+        let Some(module) = path
+            .strip_prefix("/v1/")
+            .and_then(|rest| rest.split('/').next())
+        else {
+            continue;
+        };
+        modules.insert(module.to_string());
+        for operation in [
+            &mut path_item.get,
+            &mut path_item.post,
+            &mut path_item.put,
+            &mut path_item.delete,
+            &mut path_item.patch,
+        ]
+        .into_iter()
+        .flatten()
+        {
+            operation.tags = vec![module.to_string()];
+        }
+    }
+    api.tags = modules
+        .into_iter()
+        .map(|name| aide::openapi::Tag {
+            name,
+            ..Default::default()
+        })
+        .collect();
+}
+
+/// Types read off the handlers' `Path<T>` extractors; unknown names are strings.
+fn path_parameter_schema(name: &str) -> schemars::Schema {
+    match name {
+        "height" | "block_number" | "from" | "until" | "to" | "start" | "end" | "epoch"
+        | "epoch_number" | "view" | "index" | "limit" | "offset" | "namespace" | "finalized" => {
+            schemars::json_schema!({"type": "integer", "minimum": 0})
+        },
+        _ => schemars::json_schema!({"type": "string"}),
+    }
+}
+
+fn declare_path_template_parameters(api: &mut OpenApi) {
+    let Some(ref mut paths) = api.paths else {
+        return;
+    };
+    for (path, path_item_ref) in paths.paths.iter_mut() {
+        let ReferenceOr::Item(path_item) = path_item_ref else {
+            continue;
+        };
+        let names: Vec<&str> = path
+            .split('/')
+            .filter_map(|seg| seg.strip_prefix('{').and_then(|s| s.strip_suffix('}')))
+            .collect();
+        if names.is_empty() {
+            continue;
+        }
+        for operation in [
+            &mut path_item.get,
+            &mut path_item.post,
+            &mut path_item.put,
+            &mut path_item.delete,
+            &mut path_item.patch,
+        ]
+        .into_iter()
+        .flatten()
+        {
+            for name in &names {
+                let already_declared = operation.parameters.iter().any(|p| {
+                    matches!(
+                        p,
+                        ReferenceOr::Item(Parameter::Path {
+                            parameter_data,
+                            ..
+                        }) if parameter_data.name == *name
+                    )
+                });
+                if already_declared {
+                    continue;
                 }
+                operation
+                    .parameters
+                    .push(ReferenceOr::Item(Parameter::Path {
+                        parameter_data: ParameterData {
+                            name: (*name).to_string(),
+                            description: None,
+                            required: true,
+                            deprecated: None,
+                            format: ParameterSchemaOrContent::Schema(SchemaObject {
+                                json_schema: path_parameter_schema(name),
+                                external_docs: None,
+                                example: None,
+                            }),
+                            example: None,
+                            examples: Default::default(),
+                            explode: None,
+                            extensions: Default::default(),
+                        },
+                        style: PathStyle::Simple,
+                    }));
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use futures::stream::BoxStream;
+    use http_wire::WireVersion;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use vbs::{BinarySerializer, Serializer};
+
+    use super::*;
+
+    fn rewritten_uri(uri: &str) -> String {
+        let req = Request::builder()
+            .uri(uri)
+            .body(axum::body::Body::empty())
+            .unwrap();
+        rewrite_legacy_uri(req).uri().to_string()
+    }
+
+    #[test]
+    fn rewrite_legacy_uri_prefixes_unversioned_paths() {
+        assert_eq!(
+            rewritten_uri("/status/block-height"),
+            "/v1/status/block-height"
+        );
+    }
+
+    #[test]
+    fn rewrite_legacy_uri_rewrites_v0_to_v1() {
+        assert_eq!(
+            rewritten_uri("/v0/status/block-height"),
+            "/v1/status/block-height"
+        );
+        assert_eq!(rewritten_uri("/v0"), "/v1");
+    }
+
+    #[test]
+    fn rewrite_legacy_uri_rewrites_v0_availability_paths() {
+        assert_eq!(
+            rewritten_uri("/v0/availability/block/1/namespace/2"),
+            "/v1/availability/block/1/namespace/2"
+        );
+        assert_eq!(
+            rewritten_uri("/v0/availability/leaf/1"),
+            "/v1/availability/leaf/1"
+        );
+        assert_eq!(
+            rewritten_uri("/v0/availability/vid/common/1"),
+            "/v1/availability/vid/common/1"
+        );
+        assert_eq!(
+            rewritten_uri("/v0/availability/stream/leaves/0"),
+            "/v1/availability/stream/leaves/0"
+        );
+        assert_eq!(
+            rewritten_uri("/availability/block/1/namespace/2"),
+            "/v1/availability/block/1/namespace/2"
+        );
+        assert_eq!(
+            rewritten_uri("/availability/leaf/1"),
+            "/v1/availability/leaf/1"
+        );
+    }
+
+    #[test]
+    fn rewrite_legacy_uri_leaves_v1_unchanged() {
+        assert_eq!(
+            rewritten_uri("/v1/node/block-height"),
+            "/v1/node/block-height"
+        );
+    }
+
+    #[test]
+    fn rewrite_legacy_uri_leaves_v2_unchanged() {
+        assert_eq!(
+            rewritten_uri("/v2/status/block-height"),
+            "/v2/status/block-height"
+        );
+    }
+
+    #[test]
+    fn rewrite_legacy_uri_respects_version_prefix_boundaries() {
+        assert_eq!(rewritten_uri("/v1"), "/v1");
+        assert_eq!(rewritten_uri("/v2"), "/v2");
+        assert_eq!(rewritten_uri("/v1x"), "/v1/v1x");
+        assert_eq!(rewritten_uri("/v2-foo/bar"), "/v1/v2-foo/bar");
+        assert_eq!(rewritten_uri("/v0x/leaf"), "/v1/v0x/leaf");
+    }
+
+    #[test]
+    fn rewrite_legacy_uri_leaves_reserved_paths_unchanged() {
+        assert_eq!(rewritten_uri("/"), "/");
+        assert_eq!(rewritten_uri("/healthcheck"), "/healthcheck");
+        assert_eq!(rewritten_uri("/version"), "/version");
+    }
+
+    #[test]
+    fn rewrite_legacy_uri_maps_versioned_healthchecks() {
+        assert_eq!(rewritten_uri("/v1/healthcheck"), "/v1/healthcheck");
+        assert_eq!(rewritten_uri("/v2/healthcheck"), "/v2/healthcheck");
+        assert_eq!(rewritten_uri("/v0/healthcheck"), "/v1/healthcheck");
+    }
+
+    #[test]
+    fn rewrite_legacy_uri_preserves_query_string() {
+        assert_eq!(
+            rewritten_uri("/availability/leaf/1?foo=bar"),
+            "/v1/availability/leaf/1?foo=bar"
+        );
+    }
+
+    /// Error bodies go to unauthenticated callers, so an L1 provider URL in the message must not
+    /// reach them.
+    #[test]
+    fn error_response_redacts_provider_credentials() {
+        let msg = r#"failed to get total supply: reqwest::Error { url: "https://u:p@rpc.invalid/v1/FAKEKEY" }"#;
+
+        let body = ErrorResponse::new(StatusCode::INTERNAL_SERVER_ERROR, msg.to_string());
+
+        assert!(!body.custom.message.contains("FAKEKEY"), "{body:?}");
+        assert!(!body.custom.message.contains("u:p"), "{body:?}");
+        assert!(body.custom.message.contains("rpc.invalid"), "{body:?}");
+    }
+
+    /// Implements every v1 API trait with `unimplemented!()` bodies, purely so `create_router_v1`
+    /// can be instantiated in tests that only exercise the static docs routes (root redirect,
+    /// swagger UI, OpenAPI spec) and never call into a handler. The one exception is `keys`,
+    /// which answers like a node without validator keys.
+    #[derive(Clone)]
+    struct MockState;
+
+    #[async_trait::async_trait]
+    impl v1::RewardApi for MockState {
+        type RewardClaimInput = ();
+        type RewardBalance = ();
+        type RewardAccountQueryData = ();
+        type RewardAmounts = ();
+        type RewardMerkleTreeData = ();
+        type RewardAccountQueryDataV1 = ();
+        type RewardStatePathV1 = ();
+        type RewardStatePathV2 = ();
+
+        async fn get_reward_state_height(&self) -> anyhow::Result<u64> {
+            unimplemented!()
+        }
+        async fn get_reward_state_v2_height(&self) -> anyhow::Result<u64> {
+            unimplemented!()
+        }
+        async fn get_reward_account_proof_v1(
+            &self,
+            _height: u64,
+            _address: String,
+        ) -> anyhow::Result<Self::RewardAccountQueryDataV1> {
+            unimplemented!()
+        }
+        async fn get_reward_claim_input(
+            &self,
+            _block_height: u64,
+            _address: String,
+        ) -> anyhow::Result<Self::RewardClaimInput> {
+            unimplemented!()
+        }
+        async fn get_reward_balance(
+            &self,
+            _height: u64,
+            _address: String,
+        ) -> anyhow::Result<Self::RewardBalance> {
+            unimplemented!()
+        }
+        async fn get_latest_reward_balance(
+            &self,
+            _address: String,
+        ) -> anyhow::Result<Self::RewardBalance> {
+            unimplemented!()
+        }
+        async fn get_reward_account_proof(
+            &self,
+            _height: u64,
+            _address: String,
+        ) -> anyhow::Result<Self::RewardAccountQueryData> {
+            unimplemented!()
+        }
+        async fn get_latest_reward_account_proof(
+            &self,
+            _address: String,
+        ) -> anyhow::Result<Self::RewardAccountQueryData> {
+            unimplemented!()
+        }
+        async fn get_reward_amounts(
+            &self,
+            _height: u64,
+            _offset: u64,
+            _limit: u64,
+        ) -> anyhow::Result<Self::RewardAmounts> {
+            unimplemented!()
+        }
+        async fn get_reward_merkle_tree_v2(
+            &self,
+            _height: u64,
+        ) -> anyhow::Result<Self::RewardMerkleTreeData> {
+            unimplemented!()
+        }
+        async fn get_reward_state_path_v1(
+            &self,
+            _snapshot: v1::merklized_state::Snapshot,
+            _key: String,
+        ) -> anyhow::Result<Self::RewardStatePathV1> {
+            unimplemented!()
+        }
+        async fn get_reward_state_path_v2(
+            &self,
+            _snapshot: v1::merklized_state::Snapshot,
+            _key: String,
+        ) -> anyhow::Result<Self::RewardStatePathV2> {
+            unimplemented!()
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl v1::AvailabilityApi for MockState {
+        type NamespaceProofQueryData = ();
+        type IncorrectEncodingProof = ();
+        type StateCertQueryDataV1 = ();
+        type StateCertQueryDataV2 = ();
+
+        async fn get_namespace_proof(
+            &self,
+            _block_id: v1::BlockId,
+            _namespace: u32,
+        ) -> anyhow::Result<Self::NamespaceProofQueryData> {
+            unimplemented!()
+        }
+        async fn get_namespace_proof_range(
+            &self,
+            _from: u64,
+            _until: u64,
+            _namespace: u32,
+        ) -> anyhow::Result<Vec<Self::NamespaceProofQueryData>> {
+            unimplemented!()
+        }
+        async fn stream_namespace_proofs(
+            &self,
+            _from: usize,
+            _namespace: u32,
+        ) -> anyhow::Result<BoxStream<'static, Self::NamespaceProofQueryData>> {
+            unimplemented!()
+        }
+        async fn get_incorrect_encoding_proof(
+            &self,
+            _block_id: v1::BlockId,
+            _namespace: u32,
+        ) -> anyhow::Result<Self::IncorrectEncodingProof> {
+            unimplemented!()
+        }
+        async fn get_state_cert(&self, _epoch: u64) -> anyhow::Result<Self::StateCertQueryDataV1> {
+            unimplemented!()
+        }
+        async fn get_state_cert_v2(
+            &self,
+            _epoch: u64,
+        ) -> anyhow::Result<Self::StateCertQueryDataV2> {
+            unimplemented!()
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl v1::HotShotAvailabilityApi for MockState {
+        type Leaf = ();
+        type Block = ();
+        type Header = ();
+        type Payload = ();
+        type VidCommon = ();
+        type Transaction = ();
+        type TransactionWithProof = ();
+        type BlockSummary = ();
+        type Limits = ();
+        type Cert2 = ();
+
+        async fn get_leaf(&self, _id: v1::LeafId) -> anyhow::Result<Self::Leaf> {
+            unimplemented!()
+        }
+        async fn get_leaf_range(
+            &self,
+            _from: usize,
+            _until: usize,
+        ) -> anyhow::Result<Vec<Self::Leaf>> {
+            unimplemented!()
+        }
+        async fn get_header(&self, _id: v1::BlockId) -> anyhow::Result<Self::Header> {
+            unimplemented!()
+        }
+        async fn get_header_range(
+            &self,
+            _from: usize,
+            _until: usize,
+        ) -> anyhow::Result<Vec<Self::Header>> {
+            unimplemented!()
+        }
+        async fn get_block(&self, _id: v1::BlockId) -> anyhow::Result<Self::Block> {
+            unimplemented!()
+        }
+        async fn get_block_range(
+            &self,
+            _from: usize,
+            _until: usize,
+        ) -> anyhow::Result<Vec<Self::Block>> {
+            unimplemented!()
+        }
+        async fn get_payload(&self, _id: v1::PayloadId) -> anyhow::Result<Self::Payload> {
+            unimplemented!()
+        }
+        async fn get_payload_range(
+            &self,
+            _from: usize,
+            _until: usize,
+        ) -> anyhow::Result<Vec<Self::Payload>> {
+            unimplemented!()
+        }
+        async fn get_vid_common(&self, _id: v1::BlockId) -> anyhow::Result<Self::VidCommon> {
+            unimplemented!()
+        }
+        async fn get_vid_common_range(
+            &self,
+            _from: usize,
+            _until: usize,
+        ) -> anyhow::Result<Vec<Self::VidCommon>> {
+            unimplemented!()
+        }
+        async fn get_leaf_ranges(
+            &self,
+            _ranges: Vec<Range<u64>>,
+        ) -> anyhow::Result<Vec<Self::Leaf>> {
+            unimplemented!()
+        }
+        async fn get_block_ranges(
+            &self,
+            _ranges: Vec<Range<u64>>,
+        ) -> anyhow::Result<Vec<Self::Block>> {
+            unimplemented!()
+        }
+        async fn get_vid_common_ranges(
+            &self,
+            _ranges: Vec<Range<u64>>,
+        ) -> anyhow::Result<Vec<Self::VidCommon>> {
+            unimplemented!()
+        }
+        async fn get_transaction_by_position(
+            &self,
+            _height: u64,
+            _index: u64,
+        ) -> anyhow::Result<Self::Transaction> {
+            unimplemented!()
+        }
+        async fn get_transaction_by_hash(
+            &self,
+            _hash: String,
+        ) -> anyhow::Result<Self::Transaction> {
+            unimplemented!()
+        }
+        async fn get_transaction_proof_by_position(
+            &self,
+            _height: u64,
+            _index: u64,
+        ) -> anyhow::Result<Self::TransactionWithProof> {
+            unimplemented!()
+        }
+        async fn get_transaction_proof_by_hash(
+            &self,
+            _hash: String,
+        ) -> anyhow::Result<Self::TransactionWithProof> {
+            unimplemented!()
+        }
+        async fn get_block_summary(&self, _height: usize) -> anyhow::Result<Self::BlockSummary> {
+            unimplemented!()
+        }
+        async fn get_block_summary_range(
+            &self,
+            _from: usize,
+            _until: usize,
+        ) -> anyhow::Result<Vec<Self::BlockSummary>> {
+            unimplemented!()
+        }
+        async fn get_limits(&self) -> anyhow::Result<Self::Limits> {
+            unimplemented!()
+        }
+        async fn get_cert2(&self, _height: u64) -> anyhow::Result<Option<Self::Cert2>> {
+            unimplemented!()
+        }
+        async fn stream_leaves(
+            &self,
+            _from: usize,
+        ) -> anyhow::Result<BoxStream<'static, Self::Leaf>> {
+            unimplemented!()
+        }
+        async fn stream_headers(
+            &self,
+            _from: usize,
+        ) -> anyhow::Result<BoxStream<'static, Self::Header>> {
+            unimplemented!()
+        }
+        async fn stream_blocks(
+            &self,
+            _from: usize,
+        ) -> anyhow::Result<BoxStream<'static, Self::Block>> {
+            unimplemented!()
+        }
+        async fn stream_payloads(
+            &self,
+            _from: usize,
+        ) -> anyhow::Result<BoxStream<'static, Self::Payload>> {
+            unimplemented!()
+        }
+        async fn stream_vid_common(
+            &self,
+            _from: usize,
+        ) -> anyhow::Result<BoxStream<'static, Self::VidCommon>> {
+            unimplemented!()
+        }
+        async fn stream_transactions(
+            &self,
+            _from: usize,
+            _namespace: Option<u32>,
+        ) -> anyhow::Result<BoxStream<'static, Self::Transaction>> {
+            unimplemented!()
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl v1::BlockStateApi for MockState {
+        type MerkleProof = ();
+
+        async fn get_block_state_path(
+            &self,
+            _snapshot: v1::merklized_state::Snapshot,
+            _key: String,
+        ) -> anyhow::Result<Self::MerkleProof> {
+            unimplemented!()
+        }
+        async fn get_block_state_height(&self) -> anyhow::Result<u64> {
+            unimplemented!()
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl v1::FeeStateApi for MockState {
+        type MerkleProof = ();
+        type FeeAmount = ();
+
+        async fn get_fee_state_path(
+            &self,
+            _snapshot: v1::merklized_state::Snapshot,
+            _key: String,
+        ) -> anyhow::Result<Self::MerkleProof> {
+            unimplemented!()
+        }
+        async fn get_fee_state_height(&self) -> anyhow::Result<u64> {
+            unimplemented!()
+        }
+        async fn get_fee_balance_latest(
+            &self,
+            _address: String,
+        ) -> anyhow::Result<Option<Self::FeeAmount>> {
+            unimplemented!()
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl v1::StatusApi for MockState {
+        type Keys = ();
+
+        async fn block_height(&self) -> anyhow::Result<u64> {
+            unimplemented!()
+        }
+        async fn success_rate(&self) -> anyhow::Result<f64> {
+            unimplemented!()
+        }
+        async fn time_since_last_decide(&self) -> anyhow::Result<u64> {
+            unimplemented!()
+        }
+        async fn metrics(&self) -> anyhow::Result<String> {
+            unimplemented!()
+        }
+        async fn keys(&self) -> anyhow::Result<Self::Keys> {
+            Err(
+                crate::error::AvailabilityError::NotFound("this node has no validator keys".into())
+                    .into(),
+            )
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl v1::ConfigApi for MockState {
+        type HotShotConfig = ();
+        type RuntimeConfig = ();
+
+        async fn hotshot_config(&self) -> anyhow::Result<Self::HotShotConfig> {
+            unimplemented!()
+        }
+        async fn env(&self) -> anyhow::Result<Vec<String>> {
+            unimplemented!()
+        }
+        async fn runtime_config(&self) -> anyhow::Result<Self::RuntimeConfig> {
+            unimplemented!()
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl v1::NodeApi for MockState {
+        type VidShare = ();
+        type SyncStatus = ();
+        type HeaderWindow = ();
+        type Limits = ();
+        type StakeTable = ();
+        type StakeTableCurrent = ();
+        type Validators = ();
+        type AllValidators = ();
+        type Participation = ();
+        type BlockReward = ();
+        type Block = ();
+        type Leaf = ();
+
+        async fn block_height(&self) -> anyhow::Result<u64> {
+            unimplemented!()
+        }
+        async fn count_transactions(
+            &self,
+            _from: Option<u64>,
+            _to: Option<u64>,
+            _namespace: Option<u64>,
+        ) -> anyhow::Result<u64> {
+            unimplemented!()
+        }
+        async fn payload_size(
+            &self,
+            _from: Option<u64>,
+            _to: Option<u64>,
+            _namespace: Option<u64>,
+        ) -> anyhow::Result<u64> {
+            unimplemented!()
+        }
+        async fn get_vid_share(&self, _id: v1::VidShareId) -> anyhow::Result<Self::VidShare> {
+            unimplemented!()
+        }
+        async fn sync_status(&self) -> anyhow::Result<Self::SyncStatus> {
+            unimplemented!()
+        }
+        async fn get_header_window(
+            &self,
+            _start: v1::HeaderWindowStart,
+            _end: u64,
+        ) -> anyhow::Result<Self::HeaderWindow> {
+            unimplemented!()
+        }
+        async fn limits(&self) -> anyhow::Result<Self::Limits> {
+            unimplemented!()
+        }
+        async fn stake_table(&self, _epoch: u64) -> anyhow::Result<Self::StakeTable> {
+            unimplemented!()
+        }
+        async fn stake_table_current(&self) -> anyhow::Result<Self::StakeTableCurrent> {
+            unimplemented!()
+        }
+        async fn da_stake_table(&self, _epoch: u64) -> anyhow::Result<Self::StakeTable> {
+            unimplemented!()
+        }
+        async fn da_stake_table_current(&self) -> anyhow::Result<Self::StakeTableCurrent> {
+            unimplemented!()
+        }
+        async fn get_validators(&self, _epoch: u64) -> anyhow::Result<Self::Validators> {
+            unimplemented!()
+        }
+        async fn get_all_validators(
+            &self,
+            _epoch: u64,
+            _offset: u64,
+            _limit: u64,
+        ) -> anyhow::Result<Self::AllValidators> {
+            unimplemented!()
+        }
+        async fn current_proposal_participation(&self) -> anyhow::Result<Self::Participation> {
+            unimplemented!()
+        }
+        async fn proposal_participation(&self, _epoch: u64) -> anyhow::Result<Self::Participation> {
+            unimplemented!()
+        }
+        async fn current_vote_participation(&self) -> anyhow::Result<Self::Participation> {
+            unimplemented!()
+        }
+        async fn vote_participation(&self, _epoch: u64) -> anyhow::Result<Self::Participation> {
+            unimplemented!()
+        }
+        async fn get_block_reward(&self, _epoch: Option<u64>) -> anyhow::Result<Self::BlockReward> {
+            unimplemented!()
+        }
+        async fn get_oldest_block(&self) -> anyhow::Result<Option<Self::Block>> {
+            unimplemented!()
+        }
+        async fn get_oldest_leaf(&self) -> anyhow::Result<Option<Self::Leaf>> {
+            unimplemented!()
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl v1::CatchupApi for MockState {
+        type FeeAccount = ();
+        type RewardAccountV1 = ();
+        type RewardAccountV2 = ();
+        type AccountQueryData = ();
+        type FeeMerkleTree = ();
+        type BlocksFrontier = ();
+        type ChainConfig = ();
+        type LeafChain = ();
+        type Cert2 = ();
+        type RewardAccountQueryDataV1 = ();
+        type RewardMerkleTreeV1 = ();
+        type RewardAccountQueryDataV2 = ();
+        type RewardMerkleTreeV2Data = ();
+        type StateCert = ();
+
+        async fn get_account(
+            &self,
+            _height: u64,
+            _view: u64,
+            _address: String,
+        ) -> anyhow::Result<Self::AccountQueryData> {
+            unimplemented!()
+        }
+        async fn get_accounts(
+            &self,
+            _height: u64,
+            _view: u64,
+            _accounts: Vec<Self::FeeAccount>,
+        ) -> anyhow::Result<Self::FeeMerkleTree> {
+            unimplemented!()
+        }
+        async fn get_blocks_frontier(
+            &self,
+            _height: u64,
+            _view: u64,
+        ) -> anyhow::Result<Self::BlocksFrontier> {
+            unimplemented!()
+        }
+        async fn get_chain_config(&self, _commitment: String) -> anyhow::Result<Self::ChainConfig> {
+            unimplemented!()
+        }
+        async fn get_leaf_chain(&self, _height: u64) -> anyhow::Result<Self::LeafChain> {
+            unimplemented!()
+        }
+        async fn get_cert2(&self, _height: u64) -> anyhow::Result<Self::Cert2> {
+            unimplemented!()
+        }
+        async fn get_reward_account_v1(
+            &self,
+            _height: u64,
+            _view: u64,
+            _address: String,
+        ) -> anyhow::Result<Self::RewardAccountQueryDataV1> {
+            unimplemented!()
+        }
+        async fn get_reward_accounts_v1(
+            &self,
+            _height: u64,
+            _view: u64,
+            _accounts: Vec<Self::RewardAccountV1>,
+        ) -> anyhow::Result<Self::RewardMerkleTreeV1> {
+            unimplemented!()
+        }
+        async fn get_reward_account_v2(
+            &self,
+            _height: u64,
+            _view: u64,
+            _address: String,
+        ) -> anyhow::Result<Self::RewardAccountQueryDataV2> {
+            unimplemented!()
+        }
+        async fn get_reward_merkle_tree_v2(
+            &self,
+            _height: u64,
+            _view: u64,
+        ) -> anyhow::Result<Self::RewardMerkleTreeV2Data> {
+            unimplemented!()
+        }
+        async fn get_state_cert(&self, _epoch: u64) -> anyhow::Result<Self::StateCert> {
+            unimplemented!()
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl v1::SubmitApi for MockState {
+        type Transaction = ();
+        type TxHash = ();
+
+        async fn submit(&self, _tx: Self::Transaction) -> anyhow::Result<Self::TxHash> {
+            unimplemented!()
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl v1::StateSignatureApi for MockState {
+        type Signature = ();
+
+        async fn get_state_signature(&self, _height: u64) -> anyhow::Result<Self::Signature> {
+            unimplemented!()
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl v1::LightClientApi for MockState {
+        type LeafProof = ();
+        type HeaderProof = ();
+        type StakeTableEvents = ();
+        type PayloadProof = ();
+        type NamespaceProof = ();
+
+        async fn get_leaf_proof(
+            &self,
+            _query: v1::LeafQuery,
+            _finalized: Option<u64>,
+        ) -> anyhow::Result<Self::LeafProof> {
+            unimplemented!()
+        }
+        async fn get_header_proof(
+            &self,
+            _root: u64,
+            _requested: v1::HeaderQuery,
+        ) -> anyhow::Result<Self::HeaderProof> {
+            unimplemented!()
+        }
+        async fn get_light_client_stake_table(
+            &self,
+            _epoch: u64,
+        ) -> anyhow::Result<Self::StakeTableEvents> {
+            unimplemented!()
+        }
+        async fn get_payload_proof(&self, _height: u64) -> anyhow::Result<Self::PayloadProof> {
+            unimplemented!()
+        }
+        async fn get_payload_proof_range(
+            &self,
+            _start: u64,
+            _end: u64,
+        ) -> anyhow::Result<Vec<Self::PayloadProof>> {
+            unimplemented!()
+        }
+        async fn get_payload_proof_ranges(
+            &self,
+            _ranges: Vec<Range<u64>>,
+        ) -> anyhow::Result<Vec<Self::PayloadProof>> {
+            unimplemented!()
+        }
+        async fn get_lc_namespace_proof(
+            &self,
+            _height: u64,
+            _namespace: u64,
+        ) -> anyhow::Result<Self::NamespaceProof> {
+            unimplemented!()
+        }
+        async fn get_lc_namespace_proof_range(
+            &self,
+            _start: u64,
+            _end: u64,
+            _namespace: u64,
+        ) -> anyhow::Result<Vec<Self::NamespaceProof>> {
+            unimplemented!()
+        }
+        async fn get_lc_namespaces_proof_range(
+            &self,
+            _start: u64,
+            _end: u64,
+            _namespaces: String,
+        ) -> anyhow::Result<Vec<std::collections::HashMap<u64, Self::NamespaceProof>>> {
+            unimplemented!()
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl v1::ExplorerApi for MockState {
+        type BlockDetail = ();
+        type BlockSummaries = ();
+        type TransactionDetail = ();
+        type TransactionSummaries = ();
+        type ExplorerSummary = ();
+        type SearchResult = ();
+
+        async fn get_block_detail(
+            &self,
+            _ident: v1::BlockIdent,
+        ) -> anyhow::Result<Self::BlockDetail> {
+            unimplemented!()
+        }
+        async fn get_block_summaries(
+            &self,
+            _target: v1::BlockIdent,
+            _limit: u64,
+        ) -> anyhow::Result<Self::BlockSummaries> {
+            unimplemented!()
+        }
+        async fn get_transaction_detail(
+            &self,
+            _ident: v1::TxIdent,
+        ) -> anyhow::Result<Self::TransactionDetail> {
+            unimplemented!()
+        }
+        async fn get_transaction_summaries(
+            &self,
+            _target: v1::TxIdent,
+            _limit: u64,
+            _filter: v1::TxSummaryFilter,
+        ) -> anyhow::Result<Self::TransactionSummaries> {
+            unimplemented!()
+        }
+        async fn get_explorer_summary(&self) -> anyhow::Result<Self::ExplorerSummary> {
+            unimplemented!()
+        }
+        async fn get_search_result(&self, _query: String) -> anyhow::Result<Self::SearchResult> {
+            unimplemented!()
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl v1::TokenApi for MockState {
+        async fn total_minted_supply(&self) -> anyhow::Result<String> {
+            unimplemented!()
+        }
+        async fn circulating_supply(&self) -> anyhow::Result<String> {
+            unimplemented!()
+        }
+        async fn circulating_supply_ethereum(&self) -> anyhow::Result<String> {
+            unimplemented!()
+        }
+        async fn total_issued_supply(&self) -> anyhow::Result<String> {
+            unimplemented!()
+        }
+        async fn total_reward_distributed(&self) -> anyhow::Result<String> {
+            unimplemented!()
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl v1::DatabaseApi for MockState {
+        type TableSizes = ();
+        type MigrationStatus = ();
+
+        async fn get_table_sizes(&self) -> anyhow::Result<Self::TableSizes> {
+            unimplemented!()
+        }
+        async fn get_migration_status(&self) -> anyhow::Result<Self::MigrationStatus> {
+            unimplemented!()
+        }
+    }
+
+    async fn body_string(resp: Response) -> String {
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .expect("read response body");
+        String::from_utf8(bytes.to_vec()).expect("response body is utf8")
+    }
+
+    /// Checks that every response carries
+    /// `Access-Control-Allow-Origin: *`: top-level routes, API routes merged in by the caller,
+    /// error responses, and 404s. Also checks that an OPTIONS preflight is answered with the
+    /// allow-origin, allow-methods, and allow-headers a browser requires.
+    #[tokio::test]
+    async fn responses_carry_cors_headers() {
+        let router = with_top_level_routes(
+            Router::new()
+                .route("/v1/status/block-height", get(|| async { "0" }))
+                .route(
+                    "/v1/failing",
+                    get(|| async { StatusCode::INTERNAL_SERVER_ERROR }),
+                ),
+        )
+        .layer(http_wire::cors_layer());
+
+        let allow_origin = |resp: &Response, uri: &str| {
+            resp.headers()
+                .get(header::ACCESS_CONTROL_ALLOW_ORIGIN)
+                .unwrap_or_else(|| panic!("no CORS header on {uri}"))
+                .clone()
+        };
+
+        for (uri, expected_status) in [
+            ("/healthcheck", StatusCode::OK),
+            ("/v1/status/block-height", StatusCode::OK),
+            ("/v1/failing", StatusCode::INTERNAL_SERVER_ERROR),
+            ("/no/such/route", StatusCode::NOT_FOUND),
+        ] {
+            let req = Request::builder()
+                .uri(uri)
+                .header(header::ORIGIN, "https://example.com")
+                .body(axum::body::Body::empty())
+                .unwrap();
+            let resp = tower::ServiceExt::oneshot(router.clone(), req)
+                .await
+                .unwrap();
+            assert_eq!(resp.status(), expected_status, "{uri}");
+            assert_eq!(allow_origin(&resp, uri), "*", "{uri}");
+        }
+
+        // Browsers preflight non-simple requests (e.g. a JSON POST to submit) with OPTIONS and
+        // require allow-origin, allow-methods, and allow-headers in the answer, even on routes
+        // that only register GET handlers.
+        let preflight = Request::builder()
+            .method(axum::http::Method::OPTIONS)
+            .uri("/v1/status/block-height")
+            .header(header::ORIGIN, "https://example.com")
+            .header(header::ACCESS_CONTROL_REQUEST_METHOD, "POST")
+            .header(header::ACCESS_CONTROL_REQUEST_HEADERS, "content-type")
+            .body(axum::body::Body::empty())
+            .unwrap();
+        let resp = tower::ServiceExt::oneshot(router, preflight).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(allow_origin(&resp, "preflight"), "*");
+        assert_eq!(
+            resp.headers()
+                .get(header::ACCESS_CONTROL_ALLOW_METHODS)
+                .expect("allow-methods on preflight"),
+            "*"
+        );
+        assert_eq!(
+            resp.headers()
+                .get(header::ACCESS_CONTROL_ALLOW_HEADERS)
+                .expect("allow-headers on preflight"),
+            "*"
+        );
+    }
+
+    /// Serves with zero connection slots so every request is shed, and checks the 429 still
+    /// carries `Access-Control-Allow-Origin: *`.
+    #[tokio::test]
+    async fn shed_requests_carry_cors_headers() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(crate::serve_router(
+            listener,
+            "test",
+            Router::new().route("/v1/status/block-height", get(|| async { "0" })),
+            Some(0),
+        ));
+
+        let mut sock = tokio::net::TcpStream::connect(addr).await.unwrap();
+        sock.write_all(
+            b"GET /v1/status/block-height HTTP/1.1\r\nHost: localhost\r\nOrigin: https://example.com\r\n\r\n",
+        )
+        .await
+        .unwrap();
+        let mut head = Vec::new();
+        let mut buf = [0u8; 512];
+        while !head.windows(4).any(|w| w == b"\r\n\r\n") {
+            let n = sock.read(&mut buf).await.unwrap();
+            assert!(
+                n > 0,
+                "connection closed before the response head: {head:?}"
+            );
+            head.extend_from_slice(&buf[..n]);
+        }
+        let head = String::from_utf8_lossy(&head).to_ascii_lowercase();
+        assert!(head.contains("429"), "request must be shed: {head}");
+        assert!(
+            head.contains("access-control-allow-origin: *"),
+            "no CORS header on 429: {head}"
+        );
+    }
+
+    #[tokio::test]
+    async fn root_redirects_to_v1() {
+        let router = with_top_level_routes(Router::new());
+        let req = Request::builder()
+            .uri("/")
+            .body(axum::body::Body::empty())
+            .unwrap();
+        let resp = tower::ServiceExt::oneshot(router, req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::TEMPORARY_REDIRECT);
+        assert_eq!(
+            resp.headers().get(axum::http::header::LOCATION).unwrap(),
+            "/v1"
+        );
+    }
+
+    /// The app-level `/healthcheck` reports `tide_disco::app::AppHealth`, which is what every
+    /// non-singleton tide app served; a module-level one reports the bare `HealthStatus`. Both
+    /// shapes are load-bearing for clients built against the tide-disco servers.
+    #[tokio::test]
+    async fn healthcheck_shapes_match_tide() {
+        let router = with_top_level_routes(Router::new());
+
+        async fn get(router: &Router, uri: &str, accept: &str) -> Vec<u8> {
+            let req = Request::builder()
+                .uri(uri)
+                .header(header::ACCEPT, accept)
+                .body(axum::body::Body::empty())
+                .unwrap();
+            let resp = tower::ServiceExt::oneshot(router.clone(), req)
+                .await
+                .unwrap();
+            assert_eq!(resp.status(), StatusCode::OK, "{uri}");
+            axum::body::to_bytes(resp.into_body(), usize::MAX)
+                .await
+                .unwrap()
+                .to_vec()
+        }
+
+        assert_eq!(
+            get(&router, "/healthcheck", "application/json").await,
+            br#"{"status":"available","modules":{}}"#
+        );
+        assert_eq!(
+            get(&router, "/v1/status/healthcheck", "application/json").await,
+            br#""available""#
+        );
+        for uri in ["/v1/healthcheck", "/v2/healthcheck"] {
+            assert_eq!(
+                get(&router, uri, "application/json").await,
+                br#"{"status":"available","modules":{}}"#,
+                "{uri} should serve the app health, not the module shape"
+            );
+        }
+
+        // vbs field order (status ordinal, then modules map) must not change either: surf-disco
+        // clients default to `Accept: application/octet-stream`.
+        #[derive(Debug, PartialEq, serde::Deserialize)]
+        enum TideHealthStatus {
+            Available,
+        }
+        #[derive(Debug, PartialEq, serde::Deserialize)]
+        struct TideAppHealth {
+            status: TideHealthStatus,
+            modules: BTreeMap<String, BTreeMap<u64, u16>>,
+        }
+        let binary = get(&router, "/healthcheck", "application/octet-stream").await;
+        // `BuilderClient::connect` and the events-service wrapper poll this route and decode the
+        // body as a bare `HealthStatus`. That only works because bincode allows trailing bytes and
+        // `AppHealth`'s first field is the status ordinal, so the bare enum is a prefix of the
+        // object. Reordering `AppHealth`'s fields would break both clients silently.
+        assert_eq!(
+            Serializer::<WireVersion>::deserialize::<TideHealthStatus>(&binary).unwrap(),
+            TideHealthStatus::Available
+        );
+        assert_eq!(
+            Serializer::<WireVersion>::deserialize::<TideAppHealth>(&binary).unwrap(),
+            TideAppHealth {
+                status: TideHealthStatus::Available,
+                modules: BTreeMap::new(),
+            }
+        );
+    }
+
+    /// Adding `/v1/healthcheck` on top of the real v1 route table would panic if it collided with
+    /// a declared route, so this also guards against a future single-segment `/v1/{param}`.
+    #[tokio::test]
+    async fn versioned_healthcheck_coexists_with_v1_routes() {
+        let router = with_top_level_routes(create_router_v1(MockState));
+        let req = Request::builder()
+            .uri("/v1/healthcheck")
+            .header(header::ACCEPT, "application/json")
+            .body(axum::body::Body::empty())
+            .unwrap();
+        let resp = tower::ServiceExt::oneshot(router, req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(
+            body_string(resp).await,
+            r#"{"status":"available","modules":{}}"#
+        );
+    }
+
+    #[tokio::test]
+    async fn status_keys_without_validator_keys_is_not_found() {
+        let router = create_router_v1(MockState);
+        let req = Request::builder()
+            .uri(routes::v1::STATUS_KEYS_ROUTE)
+            .body(axum::body::Body::empty())
+            .unwrap();
+        let resp = tower::ServiceExt::oneshot(router, req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn v1_swagger_ui_serves_html() {
+        let router = create_router_v1(MockState);
+        let req = Request::builder()
+            .uri("/v1")
+            .body(axum::body::Body::empty())
+            .unwrap();
+        let resp = tower::ServiceExt::oneshot(router, req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let content_type = resp
+            .headers()
+            .get(axum::http::header::CONTENT_TYPE)
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_string();
+        assert!(content_type.contains("text/html"));
+        let body = body_string(resp).await;
+        assert!(body.contains(routes::v1::OPENAPI_SPEC_ROUTE));
+    }
+
+    /// The spec is served as JSON and is stable across requests.
+    #[tokio::test]
+    async fn v1_openapi_spec_served_as_json() {
+        let router = create_router_v1(MockState);
+        let get_spec = || async {
+            let req = Request::builder()
+                .uri(routes::v1::OPENAPI_SPEC_ROUTE)
+                .body(axum::body::Body::empty())
+                .unwrap();
+            let resp = tower::ServiceExt::oneshot(router.clone(), req)
+                .await
+                .unwrap();
+            assert_eq!(
+                resp.headers().get(header::CONTENT_TYPE).unwrap(),
+                "application/json"
+            );
+            axum::body::to_bytes(resp.into_body(), usize::MAX)
+                .await
+                .unwrap()
+        };
+        let (first, second) = (get_spec().await, get_spec().await);
+        assert_eq!(first, second);
+    }
+
+    #[tokio::test]
+    async fn v1_openapi_spec_contains_known_route() {
+        let router = create_router_v1(MockState);
+        let req = Request::builder()
+            .uri(routes::v1::OPENAPI_SPEC_ROUTE)
+            .body(axum::body::Body::empty())
+            .unwrap();
+        let resp = tower::ServiceExt::oneshot(router, req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = body_string(resp).await;
+        let spec: serde_json::Value = serde_json::from_str(&body).expect("valid JSON");
+        assert!(
+            spec["paths"]
+                .as_object()
+                .expect("spec has paths")
+                .contains_key(routes::v1::STATUS_BLOCK_HEIGHT_ROUTE),
+            "expected {} in spec paths: {}",
+            routes::v1::STATUS_BLOCK_HEIGHT_ROUTE,
+            body
+        );
+    }
+
+    #[tokio::test]
+    async fn v2_openapi_spec_documents_the_proto_routes() {
+        let req = Request::builder()
+            .uri(routes::v2::OPENAPI_SPEC_ROUTE)
+            .body(axum::body::Body::empty())
+            .unwrap();
+        let resp = tower::ServiceExt::oneshot(router_v2_docs(), req)
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = body_string(resp).await;
+        let spec: serde_json::Value = serde_json::from_str(&body).expect("valid JSON");
+        let documented: std::collections::BTreeSet<&str> = spec["paths"]
+            .as_object()
+            .expect("spec has paths")
+            .keys()
+            .map(String::as_str)
+            .collect();
+
+        // Every documented route is one `serve_axum` mounts, so a generated client cannot ship a
+        // method that always 404s. Adding an endpoint has to update this list.
+        let expected: std::collections::BTreeSet<&str> = [
+            "/v2/config/env",
+            "/v2/config/hotshot",
+            "/v2/config/runtime",
+            "/v2/database/migration-status",
+            "/v2/database/table-sizes",
+            "/v2/node/all-validators",
+            "/v2/node/block-height",
+            "/v2/node/block-reward",
+            "/v2/node/header-window",
+            "/v2/node/limits",
+            "/v2/node/participation/proposal",
+            "/v2/node/participation/vote",
+            "/v2/node/payload-size",
+            "/v2/node/stake-table",
+            "/v2/node/sync-status",
+            "/v2/node/transaction-count",
+            "/v2/node/validators",
+            "/v2/node/vid-share",
+            "/v2/status/block-height",
+            "/v2/status/keys",
+            "/v2/status/success-rate",
+            "/v2/status/time-since-last-decide",
+            "/v2/token/circulating-supply",
+            "/v2/token/circulating-supply-ethereum",
+            "/v2/token/total-issued-supply",
+            "/v2/token/total-minted-supply",
+            "/v2/token/total-reward-distributed",
+            "/v2/merklized-state/block/path",
+            "/v2/merklized-state/fee/path",
+            "/v2/merklized-state/reward/amounts",
+            "/v2/merklized-state/reward/balance",
+            "/v2/merklized-state/reward/claim-input",
+            "/v2/merklized-state/reward/proof",
+            "/v2/merklized-state/reward/tree",
+            "/v2/merklized-state/fee/balance",
+            "/v2/merklized-state/height",
+            "/v2/availability/limits",
+            "/v2/availability/header",
+            "/v2/availability/header-range",
+            "/v2/availability/leaf",
+            "/v2/availability/leaf-range",
+            "/v2/availability/leaf-ranges",
+            "/v2/availability/cert2",
+            "/v2/availability/block",
+            "/v2/availability/block-range",
+            "/v2/availability/block-ranges",
+            "/v2/availability/payload",
+            "/v2/availability/payload-range",
+            "/v2/availability/vid-common",
+            "/v2/availability/vid-common-range",
+            "/v2/availability/vid-common-ranges",
+            "/v2/availability/transaction",
+            "/v2/availability/transaction-proof",
+            "/v2/availability/block-summary",
+            "/v2/availability/block-summary-range",
+            "/v2/availability/namespace-proof",
+            "/v2/availability/namespace-proof-range",
+            "/v2/availability/incorrect-encoding-proof",
+            "/v2/availability/state-cert",
+            "/v2/availability/state-cert-v2",
+            "/v2/availability/stream/leaves",
+            "/v2/availability/stream/headers",
+            "/v2/availability/stream/blocks",
+            "/v2/availability/stream/payloads",
+            "/v2/availability/stream/vid-common",
+            "/v2/availability/stream/transactions",
+            "/v2/availability/stream/namespace-proofs",
+            "/v2/state-signature/block",
+            "/v2/submit/transaction",
+            "/v2/explorer/block",
+            "/v2/explorer/blocks",
+            "/v2/explorer/transaction",
+            "/v2/explorer/transactions",
+            "/v2/explorer/summary",
+            "/v2/explorer/search",
+        ]
+        .into_iter()
+        .collect();
+        assert_eq!(documented, expected);
+    }
+
+    /// Implements the v2 tonic service traits with `Err(Status::internal)` bodies rather than
+    /// `unimplemented!()`: the mounted-routes test below invokes the handlers, and any response
+    /// at all proves the route is mounted, while a panic would abort the test.
+    #[derive(Clone)]
+    struct MockV2State;
+
+    #[tonic::async_trait]
+    impl crate::proto::status_service_server::StatusService for MockV2State {
+        async fn get_block_height(
+            &self,
+            _request: tonic::Request<crate::proto::GetBlockHeightRequest>,
+        ) -> Result<tonic::Response<crate::proto::BlockHeightResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_success_rate(
+            &self,
+            _request: tonic::Request<crate::proto::GetSuccessRateRequest>,
+        ) -> Result<tonic::Response<crate::proto::SuccessRateResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_time_since_last_decide(
+            &self,
+            _request: tonic::Request<crate::proto::GetTimeSinceLastDecideRequest>,
+        ) -> Result<tonic::Response<crate::proto::TimeSinceLastDecideResponse>, tonic::Status>
+        {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_node_keys(
+            &self,
+            _request: tonic::Request<crate::proto::GetNodeKeysRequest>,
+        ) -> Result<tonic::Response<crate::proto::NodeKeysResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+    }
+
+    #[tonic::async_trait]
+    impl crate::proto::token_service_server::TokenService for MockV2State {
+        async fn get_total_minted_supply(
+            &self,
+            _request: tonic::Request<crate::proto::GetTotalMintedSupplyRequest>,
+        ) -> Result<tonic::Response<crate::proto::TotalMintedSupplyResponse>, tonic::Status>
+        {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_circulating_supply(
+            &self,
+            _request: tonic::Request<crate::proto::GetCirculatingSupplyRequest>,
+        ) -> Result<tonic::Response<crate::proto::CirculatingSupplyResponse>, tonic::Status>
+        {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_circulating_supply_ethereum(
+            &self,
+            _request: tonic::Request<crate::proto::GetCirculatingSupplyEthereumRequest>,
+        ) -> Result<tonic::Response<crate::proto::CirculatingSupplyEthereumResponse>, tonic::Status>
+        {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_total_issued_supply(
+            &self,
+            _request: tonic::Request<crate::proto::GetTotalIssuedSupplyRequest>,
+        ) -> Result<tonic::Response<crate::proto::TotalIssuedSupplyResponse>, tonic::Status>
+        {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_total_reward_distributed(
+            &self,
+            _request: tonic::Request<crate::proto::GetTotalRewardDistributedRequest>,
+        ) -> Result<tonic::Response<crate::proto::TotalRewardDistributedResponse>, tonic::Status>
+        {
+            Err(tonic::Status::internal("mock"))
+        }
+    }
+
+    #[tonic::async_trait]
+    impl crate::proto::node_service_server::NodeService for MockV2State {
+        async fn get_transaction_count(
+            &self,
+            _request: tonic::Request<crate::proto::GetTransactionCountRequest>,
+        ) -> Result<tonic::Response<crate::proto::TransactionCountResponse>, tonic::Status>
+        {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_payload_size(
+            &self,
+            _request: tonic::Request<crate::proto::GetPayloadSizeRequest>,
+        ) -> Result<tonic::Response<crate::proto::PayloadSizeResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_sync_status(
+            &self,
+            _request: tonic::Request<crate::proto::GetSyncStatusRequest>,
+        ) -> Result<tonic::Response<crate::proto::SyncStatusResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_block_reward(
+            &self,
+            _request: tonic::Request<crate::proto::GetBlockRewardRequest>,
+        ) -> Result<tonic::Response<crate::proto::BlockRewardResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_vid_share(
+            &self,
+            _request: tonic::Request<crate::proto::GetVidShareRequest>,
+        ) -> Result<tonic::Response<crate::proto::VidShareResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_header_window(
+            &self,
+            _request: tonic::Request<crate::proto::GetHeaderWindowRequest>,
+        ) -> Result<tonic::Response<crate::proto::HeaderWindowResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_node_block_height(
+            &self,
+            _request: tonic::Request<crate::proto::GetNodeBlockHeightRequest>,
+        ) -> Result<tonic::Response<crate::proto::NodeBlockHeightResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_node_limits(
+            &self,
+            _request: tonic::Request<crate::proto::GetNodeLimitsRequest>,
+        ) -> Result<tonic::Response<crate::proto::NodeLimitsResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_stake_table(
+            &self,
+            _request: tonic::Request<crate::proto::GetStakeTableRequest>,
+        ) -> Result<tonic::Response<crate::proto::StakeTableResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_validators(
+            &self,
+            _request: tonic::Request<crate::proto::GetValidatorsRequest>,
+        ) -> Result<tonic::Response<crate::proto::ValidatorsResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_all_validators(
+            &self,
+            _request: tonic::Request<crate::proto::GetAllValidatorsRequest>,
+        ) -> Result<tonic::Response<crate::proto::ValidatorsResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_proposal_participation(
+            &self,
+            _request: tonic::Request<crate::proto::GetProposalParticipationRequest>,
+        ) -> Result<tonic::Response<crate::proto::ParticipationResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_vote_participation(
+            &self,
+            _request: tonic::Request<crate::proto::GetVoteParticipationRequest>,
+        ) -> Result<tonic::Response<crate::proto::ParticipationResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+    }
+
+    #[tonic::async_trait]
+    impl crate::proto::config_service_server::ConfigService for MockV2State {
+        async fn get_hotshot_config(
+            &self,
+            _request: tonic::Request<crate::proto::GetHotshotConfigRequest>,
+        ) -> Result<tonic::Response<crate::proto::HotshotConfigResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_env(
+            &self,
+            _request: tonic::Request<crate::proto::GetEnvRequest>,
+        ) -> Result<tonic::Response<crate::proto::EnvResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_runtime_config(
+            &self,
+            _request: tonic::Request<crate::proto::GetRuntimeConfigRequest>,
+        ) -> Result<tonic::Response<crate::proto::RuntimeConfigResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+    }
+
+    #[tonic::async_trait]
+    impl crate::proto::availability_service_server::AvailabilityService for MockV2State {
+        async fn get_limits(
+            &self,
+            _request: tonic::Request<crate::proto::GetLimitsRequest>,
+        ) -> Result<tonic::Response<crate::proto::LimitsResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_header(
+            &self,
+            _request: tonic::Request<crate::proto::GetHeaderRequest>,
+        ) -> Result<tonic::Response<crate::proto::HeaderResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_header_range(
+            &self,
+            _request: tonic::Request<crate::proto::GetHeaderRangeRequest>,
+        ) -> Result<tonic::Response<crate::proto::HeaderRangeResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_leaf(
+            &self,
+            _request: tonic::Request<crate::proto::GetLeafRequest>,
+        ) -> Result<tonic::Response<crate::proto::LeafResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_leaf_range(
+            &self,
+            _request: tonic::Request<crate::proto::GetLeafRangeRequest>,
+        ) -> Result<tonic::Response<crate::proto::LeafRangeResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_leaf_ranges(
+            &self,
+            _request: tonic::Request<crate::proto::GetLeafRangesRequest>,
+        ) -> Result<tonic::Response<crate::proto::LeafRangeResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_cert2(
+            &self,
+            _request: tonic::Request<crate::proto::GetCert2Request>,
+        ) -> Result<tonic::Response<crate::proto::Cert2Response>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_block(
+            &self,
+            _request: tonic::Request<crate::proto::GetBlockRequest>,
+        ) -> Result<tonic::Response<crate::proto::BlockResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_block_range(
+            &self,
+            _request: tonic::Request<crate::proto::GetBlockRangeRequest>,
+        ) -> Result<tonic::Response<crate::proto::BlockRangeResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_block_ranges(
+            &self,
+            _request: tonic::Request<crate::proto::GetBlockRangesRequest>,
+        ) -> Result<tonic::Response<crate::proto::BlockRangeResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_payload(
+            &self,
+            _request: tonic::Request<crate::proto::GetPayloadRequest>,
+        ) -> Result<tonic::Response<crate::proto::PayloadResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_payload_range(
+            &self,
+            _request: tonic::Request<crate::proto::GetPayloadRangeRequest>,
+        ) -> Result<tonic::Response<crate::proto::PayloadRangeResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_vid_common(
+            &self,
+            _request: tonic::Request<crate::proto::GetVidCommonRequest>,
+        ) -> Result<tonic::Response<crate::proto::VidCommonResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_vid_common_range(
+            &self,
+            _request: tonic::Request<crate::proto::GetVidCommonRangeRequest>,
+        ) -> Result<tonic::Response<crate::proto::VidCommonRangeResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_vid_common_ranges(
+            &self,
+            _request: tonic::Request<crate::proto::GetVidCommonRangesRequest>,
+        ) -> Result<tonic::Response<crate::proto::VidCommonRangeResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_transaction(
+            &self,
+            _request: tonic::Request<crate::proto::GetTransactionRequest>,
+        ) -> Result<tonic::Response<crate::proto::TransactionResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_transaction_proof(
+            &self,
+            _request: tonic::Request<crate::proto::GetTransactionProofRequest>,
+        ) -> Result<tonic::Response<crate::proto::TransactionWithProofResponse>, tonic::Status>
+        {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_block_summary(
+            &self,
+            _request: tonic::Request<crate::proto::GetBlockSummaryRequest>,
+        ) -> Result<tonic::Response<crate::proto::BlockSummaryResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_block_summary_range(
+            &self,
+            _request: tonic::Request<crate::proto::GetBlockSummaryRangeRequest>,
+        ) -> Result<tonic::Response<crate::proto::BlockSummaryRangeResponse>, tonic::Status>
+        {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_namespace_proof(
+            &self,
+            _request: tonic::Request<crate::proto::GetNamespaceProofRequest>,
+        ) -> Result<tonic::Response<crate::proto::NamespaceProofResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_namespace_proof_range(
+            &self,
+            _request: tonic::Request<crate::proto::GetNamespaceProofRangeRequest>,
+        ) -> Result<tonic::Response<crate::proto::NamespaceProofRangeResponse>, tonic::Status>
+        {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_incorrect_encoding_proof(
+            &self,
+            _request: tonic::Request<crate::proto::GetIncorrectEncodingProofRequest>,
+        ) -> Result<tonic::Response<crate::proto::IncorrectEncodingProofResponse>, tonic::Status>
+        {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_state_cert(
+            &self,
+            _request: tonic::Request<crate::proto::GetStateCertRequest>,
+        ) -> Result<tonic::Response<crate::proto::StateCertV1Response>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_state_cert_v2(
+            &self,
+            _request: tonic::Request<crate::proto::GetStateCertV2Request>,
+        ) -> Result<tonic::Response<crate::proto::StateCertV2Response>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        type StreamLeavesStream =
+            BoxStream<'static, Result<crate::proto::LeafResponse, tonic::Status>>;
+
+        async fn stream_leaves(
+            &self,
+            _request: tonic::Request<crate::proto::StreamLeavesRequest>,
+        ) -> Result<tonic::Response<Self::StreamLeavesStream>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        type StreamHeadersStream =
+            BoxStream<'static, Result<crate::proto::HeaderResponse, tonic::Status>>;
+
+        async fn stream_headers(
+            &self,
+            _request: tonic::Request<crate::proto::StreamHeadersRequest>,
+        ) -> Result<tonic::Response<Self::StreamHeadersStream>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        type StreamBlocksStream =
+            BoxStream<'static, Result<crate::proto::BlockResponse, tonic::Status>>;
+
+        async fn stream_blocks(
+            &self,
+            _request: tonic::Request<crate::proto::StreamBlocksRequest>,
+        ) -> Result<tonic::Response<Self::StreamBlocksStream>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        type StreamPayloadsStream =
+            BoxStream<'static, Result<crate::proto::PayloadResponse, tonic::Status>>;
+
+        async fn stream_payloads(
+            &self,
+            _request: tonic::Request<crate::proto::StreamPayloadsRequest>,
+        ) -> Result<tonic::Response<Self::StreamPayloadsStream>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        type StreamVidCommonStream =
+            BoxStream<'static, Result<crate::proto::VidCommonResponse, tonic::Status>>;
+
+        async fn stream_vid_common(
+            &self,
+            _request: tonic::Request<crate::proto::StreamVidCommonRequest>,
+        ) -> Result<tonic::Response<Self::StreamVidCommonStream>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        type StreamTransactionsStream =
+            BoxStream<'static, Result<crate::proto::TransactionResponse, tonic::Status>>;
+
+        async fn stream_transactions(
+            &self,
+            _request: tonic::Request<crate::proto::StreamTransactionsRequest>,
+        ) -> Result<tonic::Response<Self::StreamTransactionsStream>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        type StreamNamespaceProofsStream =
+            BoxStream<'static, Result<crate::proto::NamespaceProofResponse, tonic::Status>>;
+
+        async fn stream_namespace_proofs(
+            &self,
+            _request: tonic::Request<crate::proto::StreamNamespaceProofsRequest>,
+        ) -> Result<tonic::Response<Self::StreamNamespaceProofsStream>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+    }
+
+    #[tonic::async_trait]
+    impl crate::proto::database_service_server::DatabaseService for MockV2State {
+        async fn get_table_sizes(
+            &self,
+            _request: tonic::Request<crate::proto::GetTableSizesRequest>,
+        ) -> Result<tonic::Response<crate::proto::TableSizesResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_migration_status(
+            &self,
+            _request: tonic::Request<crate::proto::GetMigrationStatusRequest>,
+        ) -> Result<tonic::Response<crate::proto::MigrationStatusResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+    }
+
+    #[tonic::async_trait]
+    impl crate::proto::merklized_state_service_server::MerklizedStateService for MockV2State {
+        async fn get_block_state_path(
+            &self,
+            _request: tonic::Request<crate::proto::GetBlockStatePathRequest>,
+        ) -> Result<tonic::Response<crate::proto::MerklePathResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_fee_state_path(
+            &self,
+            _request: tonic::Request<crate::proto::GetFeeStatePathRequest>,
+        ) -> Result<tonic::Response<crate::proto::MerklePathResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_latest_fee_balance(
+            &self,
+            _request: tonic::Request<crate::proto::GetLatestFeeBalanceRequest>,
+        ) -> Result<tonic::Response<crate::proto::FeeBalanceResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_state_height(
+            &self,
+            _request: tonic::Request<crate::proto::GetStateHeightRequest>,
+        ) -> Result<tonic::Response<crate::proto::StateHeightResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+    }
+
+    #[tonic::async_trait]
+    impl crate::proto::reward_state_service_server::RewardStateService for MockV2State {
+        async fn get_reward_balance(
+            &self,
+            _request: tonic::Request<crate::proto::GetRewardBalanceRequest>,
+        ) -> Result<tonic::Response<crate::proto::RewardBalanceResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_reward_account_proof(
+            &self,
+            _request: tonic::Request<crate::proto::GetRewardAccountProofRequest>,
+        ) -> Result<tonic::Response<crate::proto::RewardAccountProofResponse>, tonic::Status>
+        {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_reward_claim_input(
+            &self,
+            _request: tonic::Request<crate::proto::GetRewardClaimInputRequest>,
+        ) -> Result<tonic::Response<crate::proto::RewardClaimInputResponse>, tonic::Status>
+        {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_reward_amounts(
+            &self,
+            _request: tonic::Request<crate::proto::GetRewardAmountsRequest>,
+        ) -> Result<tonic::Response<crate::proto::RewardAmountsResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_reward_merkle_tree_v2(
+            &self,
+            _request: tonic::Request<crate::proto::GetRewardMerkleTreeV2Request>,
+        ) -> Result<tonic::Response<crate::proto::RewardMerkleTreeV2Response>, tonic::Status>
+        {
+            Err(tonic::Status::internal("mock"))
+        }
+    }
+
+    #[tonic::async_trait]
+    impl crate::proto::state_signature_service_server::StateSignatureService for MockV2State {
+        async fn get_state_signature(
+            &self,
+            _request: tonic::Request<crate::proto::GetStateSignatureRequest>,
+        ) -> Result<tonic::Response<crate::proto::StateSignatureResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+    }
+
+    #[tonic::async_trait]
+    impl crate::proto::explorer_service_server::ExplorerService for MockV2State {
+        async fn get_explorer_block_detail(
+            &self,
+            _request: tonic::Request<crate::proto::GetExplorerBlockDetailRequest>,
+        ) -> Result<tonic::Response<crate::proto::ExplorerBlockDetailResponse>, tonic::Status>
+        {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_explorer_block_summaries(
+            &self,
+            _request: tonic::Request<crate::proto::GetExplorerBlockSummariesRequest>,
+        ) -> Result<tonic::Response<crate::proto::ExplorerBlockSummariesResponse>, tonic::Status>
+        {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_explorer_transaction_detail(
+            &self,
+            _request: tonic::Request<crate::proto::GetExplorerTransactionDetailRequest>,
+        ) -> Result<tonic::Response<crate::proto::ExplorerTransactionDetailResponse>, tonic::Status>
+        {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_explorer_transaction_summaries(
+            &self,
+            _request: tonic::Request<crate::proto::GetExplorerTransactionSummariesRequest>,
+        ) -> Result<
+            tonic::Response<crate::proto::ExplorerTransactionSummariesResponse>,
+            tonic::Status,
+        > {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_explorer_summary(
+            &self,
+            _request: tonic::Request<crate::proto::GetExplorerSummaryRequest>,
+        ) -> Result<tonic::Response<crate::proto::ExplorerSummaryResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_explorer_search(
+            &self,
+            _request: tonic::Request<crate::proto::GetExplorerSearchRequest>,
+        ) -> Result<tonic::Response<crate::proto::ExplorerSearchResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+    }
+
+    #[tonic::async_trait]
+    impl crate::proto::submit_service_server::SubmitService for MockV2State {
+        async fn submit_transaction(
+            &self,
+            _request: tonic::Request<crate::proto::SubmitTransactionRequest>,
+        ) -> Result<tonic::Response<crate::proto::SubmitTransactionResponse>, tonic::Status>
+        {
+            Err(tonic::Status::internal("mock"))
+        }
+    }
+
+    /// Every path in the OpenAPI document must be a route [`crate::router_v2`] mounts, so a
+    /// generated client cannot ship a method that always 404s.
+    #[tokio::test]
+    async fn v2_documented_routes_are_mounted() {
+        let spec: serde_json::Value = serde_json::from_str(super::V2_OPENAPI).expect("valid JSON");
+        let router = crate::router_v2(
+            Arc::new(MockV2State),
+            crate::OptionalModules {
+                config: true,
+                submit: true,
+                explorer: true,
+                ..Default::default()
+            },
+        );
+        for (path, item) in spec["paths"].as_object().expect("spec has paths") {
+            for verb in item.as_object().expect("path item has operations").keys() {
+                let req = Request::builder()
+                    .method(verb.to_uppercase().as_str())
+                    .uri(path)
+                    .body(axum::body::Body::empty())
+                    .unwrap();
+                let resp = tower::ServiceExt::oneshot(router.clone(), req)
+                    .await
+                    .unwrap();
+                // A 405 would mean the path is mounted under another verb than the documented one.
+                assert!(
+                    ![StatusCode::NOT_FOUND, StatusCode::METHOD_NOT_ALLOWED]
+                        .contains(&resp.status()),
+                    "{verb} {path} is documented but not mounted: {}",
+                    resp.status()
+                );
             }
         }
     }
 
-    router
-        .route(routes::v2::OPENAPI_SPEC_ROUTE, get(serve_openapi_spec))
-        .route(routes::v2::SWAGGER_ROUTE, get(serve_swagger_ui))
-        .route("/v2/", get(serve_swagger_ui))
-        .route(
+    /// A subscription is served as server-sent events, and its documentation has to say so: a
+    /// generated client reading it as `application/json` would try to parse the stream as one
+    /// body. Everything else stays JSON.
+    #[test]
+    fn v2_streams_are_documented_as_event_streams() {
+        use prost::Message as _;
+
+        let descriptors = prost_types::FileDescriptorSet::decode(crate::FILE_DESCRIPTOR_SET)
+            .expect("valid descriptor set");
+        let streaming: std::collections::BTreeSet<&str> = descriptors
+            .file
+            .iter()
+            .flat_map(|file| &file.service)
+            .flat_map(|service| &service.method)
+            .filter(|method| method.server_streaming())
+            .map(|method| method.name())
+            .collect();
+        assert!(!streaming.is_empty());
+
+        let spec: serde_json::Value = serde_json::from_str(super::V2_OPENAPI).expect("valid JSON");
+        let mut documented = std::collections::BTreeSet::new();
+        for (path, item) in spec["paths"].as_object().expect("spec has paths") {
+            for operation in item.as_object().expect("path item has operations").values() {
+                let id = operation["operationId"].as_str().expect("operation id");
+                let content = &operation["responses"]["200"]["content"];
+                let is_stream = streaming.contains(id);
+                if is_stream {
+                    documented.insert(id);
+                }
+                assert_eq!(
+                    content.get("text/event-stream").is_some(),
+                    is_stream,
+                    "{path}"
+                );
+                assert_eq!(
+                    content.get("application/json").is_some(),
+                    !is_stream,
+                    "{path}"
+                );
+            }
+        }
+        assert_eq!(documented, streaming, "every streaming rpc is documented");
+    }
+
+    /// A `map` field is a repeated synthetic entry message in the descriptor, which the generator
+    /// would otherwise publish as an array of a schema that does not exist.
+    #[test]
+    fn v2_maps_are_documented_as_objects() {
+        let spec: serde_json::Value = serde_json::from_str(super::V2_OPENAPI).expect("valid JSON");
+        let schemas = spec["components"]["schemas"]
+            .as_object()
+            .expect("spec has schemas");
+        let namespaces = &schemas["BlockSummaryResponse"]["properties"]["namespaces"];
+        assert_eq!(namespaces["type"], "object");
+        assert_eq!(
+            namespaces["additionalProperties"]["$ref"],
+            "#/components/schemas/NamespaceInfo"
+        );
+        assert!(schemas.contains_key("NamespaceInfo"));
+        // protoc names the synthetic entry after the field, so this is what leaks if the
+        // generator ever registers one as a schema of its own.
+        assert!(
+            !schemas.contains_key("NamespacesEntry"),
+            "a map entry leaked into the published schemas"
+        );
+    }
+
+    /// The docs router is merged in as `serve_axum` does: that merge swaps `router_v2`'s layered
+    /// fallback for a plain one, so `router_v2` alone passes even with the paths unregistered.
+    #[tokio::test]
+    async fn disabled_modules_answer_in_the_envelope() {
+        let spec: serde_json::Value = serde_json::from_str(super::V2_OPENAPI).expect("valid JSON");
+        let paths = spec["paths"].as_object().expect("spec has paths");
+        let router = crate::router_v2(Arc::new(MockV2State), crate::OptionalModules::default())
+            .merge(router_v2_docs());
+        for (prefix, registered) in [
+            ("/v2/config/", routes::v2::CONFIG_ROUTES),
+            ("/v2/submit/", routes::v2::SUBMIT_ROUTES),
+            ("/v2/explorer/", routes::v2::EXPLORER_ROUTES),
+        ] {
+            let mut documented: Vec<&str> = paths
+                .keys()
+                .map(String::as_str)
+                .filter(|path| path.starts_with(prefix))
+                .collect();
+            documented.sort_unstable();
+            let mut registered = registered.to_vec();
+            registered.sort_unstable();
+            assert_eq!(registered, documented);
+            for path in documented {
+                let method = paths[path]
+                    .as_object()
+                    .unwrap()
+                    .keys()
+                    .next()
+                    .unwrap()
+                    .to_uppercase();
+                assert_disabled_in_envelope(&router, &method, path).await;
+            }
+        }
+    }
+
+    async fn assert_disabled_in_envelope(router: &Router, method: &str, path: &str) {
+        let req = Request::builder()
+            .method(method)
+            .uri(path)
+            .body(axum::body::Body::empty())
+            .unwrap();
+        let resp = tower::ServiceExt::oneshot(router.clone(), req)
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND, "{method} {path}");
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let envelope: serde_json::Value = serde_json::from_slice(&body)
+            .unwrap_or_else(|err| panic!("{path}: {err}: {:?}", String::from_utf8_lossy(&body)));
+        assert_eq!(envelope["error"]["code"], 404, "{path}");
+        assert_eq!(envelope["error"]["status"], "NOT_FOUND", "{path}");
+    }
+
+    /// A bad query parameter is refused by the extractor and wrapped by the envelope layer,
+    /// neither of which is handler code, so a dependency bump could change either without any
+    /// other test noticing.
+    #[tokio::test]
+    async fn v2_rejects_malformed_query_parameters() {
+        let router = crate::router_v2(Arc::new(MockV2State), crate::OptionalModules::default());
+        // v2 paths come from the proto annotations, not a constants module.
+        let count = "/v2/node/transaction-count";
+        for query in [
+            "from=abc",
+            "from=-1",
+            "from=",
+            "from=1.0",
+            // A leading `+` is accepted, so it is not a rejection case; written raw it decoded to
+            // a space and passed here for the wrong reason.
+            // One past u64, and a repeat of a field that is not repeated.
+            "from=18446744073709551616",
+            "from=1&from=2",
+            // Unknown fields are refused, so a misspelling is not silently a different query.
+            "From=7",
+            "bogus=1",
+        ] {
+            let req = Request::builder()
+                .uri(format!("{count}?{query}"))
+                .body(axum::body::Body::empty())
+                .unwrap();
+            let resp = tower::ServiceExt::oneshot(router.clone(), req)
+                .await
+                .unwrap();
+            assert_eq!(resp.status(), StatusCode::BAD_REQUEST, "{query}");
+
+            let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            let envelope: serde_json::Value = serde_json::from_slice(&body).unwrap();
+            assert_eq!(envelope["error"]["code"], 400, "{query}");
+            assert_eq!(envelope["error"]["status"], "INVALID_ARGUMENT", "{query}");
+            assert!(
+                envelope["error"]["message"]
+                    .as_str()
+                    .is_some_and(|m| !m.is_empty()),
+                "{query}: empty message"
+            );
+        }
+
+        // An rpc whose request has no fields still refuses one.
+        let req = Request::builder()
+            .uri("/v2/node/sync-status?from=1")
+            .body(axum::body::Body::empty())
+            .unwrap();
+        let resp = tower::ServiceExt::oneshot(router, req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    /// A POST body is refused by the `Json` extractor, whose 413, 415 and 422 the envelope layer
+    /// turns into the same 400 a bad query parameter gets. A query string is refused too, since the
+    /// handler would ignore it.
+    #[tokio::test]
+    async fn v2_rejects_malformed_request_bodies() {
+        let router = crate::router_v2(Arc::new(MockV2State), crate::OptionalModules::default());
+        let ranges = "/v2/availability/leaf-ranges";
+        let with_query = "/v2/availability/leaf-ranges?bogus=1";
+        // Past axum's default body limit, which the extractor answers with 413.
+        let oversized = format!(r#"{{"ranges": [{}]}}"#, " ".repeat(3 << 20));
+        for (uri, content_type, body) in [
+            (ranges, "application/json", oversized.as_str()),
+            (ranges, "application/json", "not json"),
+            (ranges, "application/json", r#"{"ranges": 1}"#),
+            // Unknown fields are refused in a body as in a query string.
+            (ranges, "application/json", r#"{"bogus": []}"#),
+            (ranges, "text/plain", r#"{"ranges": []}"#),
+            (with_query, "application/json", r#"{"ranges": []}"#),
+        ] {
+            let req = Request::builder()
+                .method("POST")
+                .uri(uri)
+                .header(header::CONTENT_TYPE, content_type)
+                .body(axum::body::Body::from(body.to_owned()))
+                .unwrap();
+            let resp = tower::ServiceExt::oneshot(router.clone(), req)
+                .await
+                .unwrap();
+            let case = body.get(..40).unwrap_or(body);
+            assert_eq!(resp.status(), StatusCode::BAD_REQUEST, "{uri} {case}");
+            let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            let envelope: serde_json::Value = serde_json::from_slice(&body).unwrap();
+            assert_eq!(envelope["error"]["status"], "INVALID_ARGUMENT");
+        }
+    }
+
+    #[tokio::test]
+    async fn v2_docs_uis_serve_html() {
+        for uri in [
+            routes::v2::SWAGGER_ROUTE,
+            routes::v2::SWAGGER_SLASH_ROUTE,
             routes::v2::SCALAR_ROUTE,
-            get(Scalar::new(routes::v2::OPENAPI_SPEC_ROUTE)
-                .with_title("Espresso Node API v2")
-                .axum_handler()),
+        ] {
+            let req = Request::builder()
+                .uri(uri)
+                .body(axum::body::Body::empty())
+                .unwrap();
+            let resp = tower::ServiceExt::oneshot(router_v2_docs(), req)
+                .await
+                .unwrap();
+            assert_eq!(resp.status(), StatusCode::OK, "{uri} should serve docs");
+            let content_type = resp
+                .headers()
+                .get(axum::http::header::CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok())
+                .unwrap_or_default()
+                .to_string();
+            assert!(content_type.contains("text/html"), "{uri}: {content_type}");
+            assert!(
+                body_string(resp)
+                    .await
+                    .contains(routes::v2::OPENAPI_SPEC_ROUTE)
+            );
+        }
+    }
+
+    /// `submit` and the bulk `catchup` routes take bodies over axum's 2 MiB `Bytes` default, and
+    /// the chain's `max_block_size` is what decides whether a transaction is too big, so the body
+    /// has to reach the handler. Drives the real `serve_router`.
+    #[tokio::test]
+    async fn served_router_admits_bodies_over_the_axum_default() {
+        const LEN: usize = 3 * 1024 * 1024;
+        let router = Router::new().route(
+            "/v1/submit/submit",
+            axum::routing::post(|body: Bytes| async move { body.len().to_string() }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(crate::serve_router(listener, "test", router, None));
+
+        let mut sock = tokio::net::TcpStream::connect(addr).await.unwrap();
+        sock.write_all(
+            format!(
+                "POST /v1/submit/submit HTTP/1.1\r\nHost: localhost\r\nContent-Type: \
+                 application/octet-stream\r\nContent-Length: {LEN}\r\n\r\n"
+            )
+            .as_bytes(),
         )
-        .route(
-            routes::v2::REDOC_ROUTE,
-            get(Redoc::new(routes::v2::OPENAPI_SPEC_ROUTE)
-                .with_title("Espresso Node API v2")
-                .axum_handler()),
-        )
-        .layer(Extension(api))
-        .with_state(state)
+        .await
+        .unwrap();
+        // The server may reset the connection mid-write if it rejects the body early; the asserts
+        // below report that legibly.
+        let _ = sock.write_all(&vec![b'x'; LEN]).await;
+
+        let mut resp = String::new();
+        let read = async {
+            loop {
+                let mut buf = [0u8; 1024];
+                // A read error is end-of-input too: the server resets the connection after an
+                // early rejection, and whatever arrived before the reset belongs in the asserts.
+                let Ok(n) = sock.read(&mut buf).await else {
+                    break;
+                };
+                if n == 0 {
+                    break;
+                }
+                resp.push_str(&String::from_utf8_lossy(&buf[..n]));
+                if resp.contains(&LEN.to_string()) || resp.len() > 4096 {
+                    break;
+                }
+            }
+        };
+        tokio::time::timeout(std::time::Duration::from_secs(30), read)
+            .await
+            .expect("server never answered; a 413 would produce no matching body");
+        assert!(resp.starts_with("HTTP/1.1 200 OK"), "{resp}");
+        let body = resp.split_once("\r\n\r\n").map_or("", |(_, body)| body);
+        assert!(
+            body.contains(&LEN.to_string()),
+            "handler saw a truncated body: {resp}"
+        );
+    }
+
+    /// The control: the same handler without the layer, pinning that the test above can fail.
+    #[tokio::test]
+    async fn axum_default_body_limit_rejects_the_same_request() {
+        let router = Router::new().route(
+            "/v1/submit/submit",
+            axum::routing::post(|body: Bytes| async move { body.len().to_string() }),
+        );
+        let req = Request::builder()
+            .method("POST")
+            .uri("/v1/submit/submit")
+            .header(header::CONTENT_TYPE, "application/octet-stream")
+            .body(axum::body::Body::from(vec![b'x'; 3 * 1024 * 1024]))
+            .unwrap();
+        let resp = tower::ServiceExt::oneshot(router, req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::PAYLOAD_TOO_LARGE);
+    }
+
+    #[tokio::test]
+    async fn max_connections_limits_in_flight_requests() {
+        let router = Router::new().route(
+            "/slow",
+            get(|| async {
+                tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                "ok"
+            }),
+        );
+        let router = crate::apply_connection_limit(router, 2);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            axum::serve(listener, router).await.unwrap();
+        });
+
+        async fn get_slow(addr: std::net::SocketAddr) -> (tokio::net::TcpStream, String) {
+            use tokio::io::{AsyncReadExt, AsyncWriteExt};
+            let mut sock = tokio::net::TcpStream::connect(addr).await.unwrap();
+            sock.write_all(b"GET /slow HTTP/1.1\r\nHost: localhost\r\n\r\n")
+                .await
+                .unwrap();
+            let mut buf = [0u8; 32];
+            let n = sock.read(&mut buf).await.unwrap();
+            (sock, String::from_utf8_lossy(&buf[..n]).to_string())
+        }
+
+        use tokio::io::AsyncWriteExt;
+        let mut s1 = tokio::net::TcpStream::connect(addr).await.unwrap();
+        s1.write_all(b"GET /slow HTTP/1.1\r\nHost: localhost\r\n\r\n")
+            .await
+            .unwrap();
+        let mut s2 = tokio::net::TcpStream::connect(addr).await.unwrap();
+        s2.write_all(b"GET /slow HTTP/1.1\r\nHost: localhost\r\n\r\n")
+            .await
+            .unwrap();
+        // Both requests in flight (each sleeps 2s); the third must be shed.
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        let (_s3, status) = get_slow(addr).await;
+        assert!(
+            status.contains("429"),
+            "third request must be limited: {status}"
+        );
+    }
+
+    /// Regression test: the docs routes must exist in the app a serve mode actually builds, not
+    /// only in `create_router_v1` (which the serve modes don't call). Assembles a router the way
+    /// `serve_axum_status` does, wrapped in the same top-level routes and legacy-URI rewrite
+    /// layers as `serve_router`, and checks the docs are reachable and the spec reflects only
+    /// the mounted modules.
+    #[tokio::test]
+    async fn serve_mode_assembly_serves_v1_docs() {
+        let api_router =
+            router_status(Arc::new(MockState)).merge(router_state_signature(Arc::new(MockState)));
+        let router = with_top_level_routes(finish_v1_docs(api_router));
+        let app = tower::Layer::layer(
+            &tower::util::MapRequestLayer::new(rewrite_legacy_uri),
+            router,
+        );
+
+        let get = |uri: &'static str| {
+            let app = app.clone();
+            async move {
+                let req = Request::builder()
+                    .uri(uri)
+                    .body(axum::body::Body::empty())
+                    .unwrap();
+                tower::ServiceExt::oneshot(app, req).await.unwrap()
+            }
+        };
+
+        let resp = get("/").await;
+        assert_eq!(resp.status(), StatusCode::TEMPORARY_REDIRECT);
+        assert_eq!(
+            resp.headers().get(axum::http::header::LOCATION).unwrap(),
+            "/v1"
+        );
+
+        let resp = get("/v1").await;
+        assert_eq!(resp.status(), StatusCode::OK, "/v1 must serve the docs UI");
+
+        let resp = get(routes::v1::OPENAPI_SPEC_ROUTE).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let spec: serde_json::Value =
+            serde_json::from_str(&body_string(resp).await).expect("valid JSON");
+        let paths = spec["paths"].as_object().expect("spec has paths");
+        assert!(paths.contains_key(routes::v1::STATUS_BLOCK_HEIGHT_ROUTE));
+        assert!(
+            !paths.contains_key(routes::v1::LEAF_BY_HEIGHT_ROUTE),
+            "spec must only document the modules this mode mounts"
+        );
+
+        // Every `{name}` template segment must be declared as a path parameter, or Swagger's
+        // try-it-out cannot fill the URL.
+        let params = &paths[routes::v1::STATE_SIGNATURE_BLOCK_ROUTE]["get"]["parameters"];
+        assert_eq!(
+            params[0]["name"], "height",
+            "template parameters must be declared: {params}"
+        );
+        assert_eq!(params[0]["in"], "path");
+        assert_eq!(params[0]["required"], true);
+        assert_eq!(params[0]["schema"]["type"], "integer");
+    }
+
+    /// Multi-segment templates declare one parameter per `{name}`, in template order.
+    #[tokio::test]
+    async fn v1_spec_declares_all_template_parameters() {
+        let router = create_router_v1(MockState);
+        let req = Request::builder()
+            .uri(routes::v1::OPENAPI_SPEC_ROUTE)
+            .body(axum::body::Body::empty())
+            .unwrap();
+        let resp = tower::ServiceExt::oneshot(router, req).await.unwrap();
+        let spec: serde_json::Value =
+            serde_json::from_str(&body_string(resp).await).expect("valid JSON");
+        let paths = spec["paths"].as_object().expect("spec has paths");
+        for (path, item) in paths {
+            let names: Vec<&str> = path
+                .split('/')
+                .filter_map(|s| s.strip_prefix('{').and_then(|s| s.strip_suffix('}')))
+                .collect();
+            for op in item.as_object().unwrap().values() {
+                let declared: Vec<&str> = op["parameters"]
+                    .as_array()
+                    .map(|ps| {
+                        ps.iter()
+                            .filter(|p| p["in"] == "path")
+                            .map(|p| p["name"].as_str().unwrap())
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                assert_eq!(
+                    declared, names,
+                    "path {path} must declare its template params"
+                );
+            }
+        }
+
+        // Numeric segments are typed integer, hash/key-like segments string.
+        let key_path = &paths[routes::v1::REWARD_STATE_PATH_BY_HEIGHT_ROUTE]["get"]["parameters"];
+        assert_eq!(key_path[0]["name"], "height");
+        assert_eq!(key_path[0]["schema"]["type"], "integer");
+        assert_eq!(key_path[1]["name"], "key");
+        assert_eq!(key_path[1]["schema"]["type"], "string");
+
+        // Operations are grouped by module tag.
+        assert_eq!(
+            paths[routes::v1::LEAF_BY_HEIGHT_ROUTE]["get"]["tags"][0],
+            "availability"
+        );
+        assert!(
+            spec["tags"]
+                .as_array()
+                .expect("spec has tags")
+                .iter()
+                .any(|t| t["name"] == "status")
+        );
+    }
 }

@@ -1,14 +1,15 @@
 use std::{
     collections::{BTreeMap, HashMap},
-    io::{self, Read},
+    io::Read,
     iter::{self, once},
+    sync::Arc,
     time::Duration,
 };
 
 use alloy::{
     network::EthereumWallet,
     node_bindings::Anvil,
-    primitives::{Address, Bytes, U256},
+    primitives::{Address, Bytes as AlloyBytes, U256},
     providers::{Provider, ProviderBuilder, WalletProvider},
     rpc::client::RpcClient,
     signers::{
@@ -17,19 +18,26 @@ use alloy::{
     },
 };
 use anyhow::Context;
-use async_trait::async_trait;
+use axum::{
+    Json, Router,
+    body::Bytes,
+    extract::State,
+    http::{HeaderMap, StatusCode, header},
+    response::{IntoResponse, Response},
+    routing::{get, post},
+};
 use clap::{Parser, ValueEnum};
 use espresso_contract_deployer::{
     self as deployer, Contract, Contracts, DEFAULT_EXIT_ESCROW_PERIOD_SECONDS, DeployedContracts,
     HttpProviderWithWallet, network_config::light_client_genesis_from_stake_table,
 };
-use espresso_dev_node::{
-    AltChainInfo, DevInfo, DevNodeVersion, SetHotshotDownReqBody, SetHotshotUpReqBody,
-};
+use espresso_dev_node::{AltChainInfo, DevInfo, SetHotshotDownReqBody, SetHotshotUpReqBody};
 use espresso_node::{
     SequencerApiVersion,
     api::{
+        data_source::testing::TestableSequencerDataSource,
         options,
+        sql::sqlite::DataSource,
         test_helpers::{STAKE_TABLE_CAPACITY_FOR_TEST, TestNetwork, TestNetworkConfigBuilder},
     },
     persistence,
@@ -40,23 +48,40 @@ use espresso_types::{
     L1ClientOptions, SeqTypes, ValidatedState, parse_duration, v0_3::ChainConfig,
 };
 use espresso_utils::logging;
-use futures::{FutureExt, StreamExt, future::BoxFuture, stream::FuturesUnordered};
+use futures::{StreamExt, future::join_all, stream::FuturesUnordered};
 use hotshot_contract_adapter::sol_types::LightClientV2Mock::{self, LightClientV2MockInstance};
 use hotshot_state_prover::{StateProverConfig, v2::service::run_prover_service};
 use hotshot_types::{
     stake_table::{HSStakeTable, one_honest_threshold},
     utils::epoch_from_block_number,
 };
+use http_wire::{cors_layer, healthcheck_response};
 use itertools::izip;
 use serde::{Deserialize, Serialize};
 use staking_cli::demo::{DelegationConfig, StakingTransactions};
 use tempfile::NamedTempFile;
 use test_utils::reserve_tcp_port;
-use tide_disco::{Api, Error, StatusCode, error::ServerError, method::ReadState};
 use tokio::spawn;
 use url::Url;
 use vbs::version::StaticVersionType;
-use versions::Upgrade;
+use versions::{Upgrade, Version};
+
+#[derive(Debug, Copy, Clone, ValueEnum)]
+enum DevNodeVersion {
+    #[value(name = "0.6")]
+    V0_6,
+    #[value(name = "0.7")]
+    V0_7,
+}
+
+impl DevNodeVersion {
+    fn protocol_version(self) -> Version {
+        match self {
+            DevNodeVersion::V0_6 => versions::NEW_PROTOCOL_VERSION,
+            DevNodeVersion::V0_7 => versions::TIMEOUT_EPOCH_VERSION,
+        }
+    }
+}
 
 #[derive(Default, Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
 enum L1Deployment {
@@ -170,17 +195,9 @@ struct Args {
     #[clap(long, env = "ESPRESSO_NODE_API_MAX_CONNECTIONS")]
     sequencer_api_max_connections: Option<usize>,
 
-    /// Optional port for new Axum API server (skeleton implementation).
-    #[clap(long, env = "ESPRESSO_NODE_AXUM_PORT")]
-    axum_port: Option<u16>,
-
     /// Optional port for Tonic gRPC API server.
     #[clap(long, env = "ESPRESSO_NODE_TONIC_PORT")]
     tonic_port: Option<u16>,
-
-    /// Port for connecting to the builder.
-    #[clap(short, long, env = "ESPRESSO_BUILDER_PORT")]
-    builder_port: Option<u16>,
 
     /// Port for connecting to the prover.
     #[clap(short, long, env = "ESPRESSO_PROVER_PORT")]
@@ -224,8 +241,8 @@ struct Args {
     #[clap(flatten)]
     sql: persistence::sql::Options,
 
-    /// protocol version to run (V3, V4, V5, or V6)
-    #[clap(long, env = "ESPRESSO_DEV_NODE_VERSION", default_value = "0.3")]
+    /// protocol version to run
+    #[clap(long, env = "ESPRESSO_DEV_NODE_VERSION", default_value = "0.6")]
     version: DevNodeVersion,
 
     #[clap(flatten)]
@@ -244,6 +261,7 @@ struct ChainInfo {
 }
 
 fn main() -> anyhow::Result<()> {
+    espresso_types::assert_node_feature();
     let migrated_envs = espresso_utils::env_compat::migrate_legacy_env_vars();
     tokio::runtime::Runtime::new()
         .unwrap()
@@ -264,12 +282,10 @@ async fn async_main(migrated_envs: Vec<(&str, &str)>) -> anyhow::Result<()> {
         alt_multisig_addresses,
         sequencer_api_port,
         sequencer_api_max_connections,
-        axum_port,
         tonic_port,
-        builder_port,
         prover_port,
         dev_node_port,
-        sql,
+        mut sql,
         logging,
         update_interval,
         retry_interval,
@@ -285,6 +301,8 @@ async fn async_main(migrated_envs: Vec<(&str, &str)>) -> anyhow::Result<()> {
         token_symbol,
         version,
     } = cli_params;
+    // The dev node always keeps its data in SQLite, under ESPRESSO_NODE_STORAGE_PATH.
+    sql.embedded_db = true;
 
     logging.init();
     espresso_utils::env_compat::log_migrated_env_vars(&migrated_envs);
@@ -325,11 +343,10 @@ async fn async_main(migrated_envs: Vec<(&str, &str)>) -> anyhow::Result<()> {
 
     let network_config = TestConfigBuilder::default()
         .epoch_height(epoch_height)
-        .builder_port(builder_port)
         .stake_table_capacity(STAKE_TABLE_CAPACITY_FOR_TEST)
         .state_relay_url(relay_server_url.clone())
         .l1_url(l1_url.clone())
-        .l1_opt(l1_opt)
+        .l1_opt(l1_opt.clone())
         .build();
     let blocks_per_epoch = network_config.hotshot_config().epoch_height;
     let epoch_start_block = network_config.hotshot_config().epoch_start_block;
@@ -521,6 +538,11 @@ async fn async_main(migrated_envs: Vec<(&str, &str)>) -> anyhow::Result<()> {
                 admin,
             )
             .await?;
+
+            let l1_client = l1_opt.clone().connect(vec![l1_url.clone()])?;
+            deployer::upgrade_stake_table_v2(&provider, l1_client, contracts, admin, admin).await?;
+            deployer::upgrade_stake_table_v3(&provider, contracts).await?;
+
             if let Some(multisig) = multisig_address {
                 deployer::transfer_ownership(
                     &provider,
@@ -649,31 +671,31 @@ async fn async_main(migrated_envs: Vec<(&str, &str)>) -> anyhow::Result<()> {
     let api_options = options::Options::from(options::Http {
         port: sequencer_api_port,
         max_connections: sequencer_api_max_connections,
-        axum_port,
         tonic_port,
     })
     .submit(Default::default())
     .config(Default::default())
     .explorer(Default::default())
     .query_sql(Default::default(), sql)
-    .hotshot_events(Default::default());
+    .light_client(Default::default());
+    let consensus_dbs = join_all((0..NUM_NODES).map(|_| DataSource::create_storage())).await;
+    let persistences: [_; NUM_NODES] = consensus_dbs
+        .iter()
+        .map(DataSource::persistence_options)
+        .collect::<Vec<_>>()
+        .try_into()
+        .expect("one persistence per node");
 
     let config = TestNetworkConfigBuilder::<NUM_NODES, _, _>::with_num_nodes()
         .api_config(api_options)
         .network_config(network_config)
         .states(states)
+        .persistences(persistences)
         .build();
 
     // Start the nodes
-    let network = {
-        let u = match version {
-            DevNodeVersion::V0_3 => Upgrade::trivial(versions::version(0, 3)),
-            DevNodeVersion::V0_4 => Upgrade::trivial(versions::version(0, 4)),
-            DevNodeVersion::V0_5 => Upgrade::trivial(versions::version(0, 5)),
-            DevNodeVersion::V0_6 => Upgrade::trivial(versions::version(0, 6)),
-        };
-        TestNetwork::new(config, u).await
-    };
+    let network = TestNetwork::new(config, Upgrade::trivial(version.protocol_version())).await;
+    tracing::info!("Espresso node API on http://0.0.0.0:{sequencer_api_port}");
 
     let relay_server_handle = spawn(async move {
         // using explicit relayer state will avoid it calling the dev-node on `/config/hotshot` for epoch info,
@@ -746,16 +768,19 @@ async fn async_main(migrated_envs: Vec<(&str, &str)>) -> anyhow::Result<()> {
     ));
     handles.push(dev_node_handle);
 
-    // if any of the async task is complete then dev node binary exits
-    if let Some(item) = handles.next().await {
-        tracing::error!("exiting dev node: {item:?}");
-        drop(network);
+    // if any of the async task is complete or a shutdown signal arrives, the
+    // dev node binary exits
+    tokio::select! {
+        Some(item) = handles.next() => {
+            tracing::error!("exiting dev node: {item:?}");
+        },
+        _ = espresso_utils::shutdown::wait_for_shutdown_signal() => {},
     }
 
     Ok(())
 }
 
-// ApiState is passed to the tide disco app so avoid cloning the contracts for each endpoint
+// ApiState is passed to the axum router state, so avoid cloning the contracts for each endpoint
 #[derive(Clone)]
 pub struct ApiState {
     /// all light client proxy addresses indexed by chain_id
@@ -781,21 +806,21 @@ impl Default for ApiState {
 
 impl ApiState {
     /// Return a client/handle to the light client proxy on `chain_id`
-    pub fn light_client_instance(
+    pub(crate) fn light_client_instance(
         &self,
         chain_id: Option<u64>,
-    ) -> Result<LightClientV2MockInstance<HttpProviderWithWallet>, ServerError> {
+    ) -> Result<LightClientV2MockInstance<HttpProviderWithWallet>, DevNodeError> {
         // if chain id is not provided, primary L1 light client is used
         let id = chain_id.unwrap_or(self.l1_chain_id);
 
         let proxy_addr = self.lc_proxy_addr.get(&id).ok_or_else(|| {
-            ServerError::catch_all(
+            DevNodeError::catch_all(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "LightClientProxy address not found for chain id {chain_id}".to_string(),
             )
         })?;
         let provider_url = self.provider_urls.get(&id).ok_or_else(|| {
-            ServerError::catch_all(
+            DevNodeError::catch_all(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "Provider URL not found for chain id {chain_id}".to_string(),
             )
@@ -809,94 +834,149 @@ impl ApiState {
     }
 }
 
-#[async_trait]
-impl ReadState for ApiState {
-    type State = ApiState;
-    async fn read<T>(
-        &self,
-        op: impl Send + for<'a> FnOnce(&'a Self::State) -> BoxFuture<'a, T> + 'async_trait,
-    ) -> T {
-        op(self).await
+#[derive(Clone)]
+struct DevNodeState {
+    api: ApiState,
+    dev_info: Arc<DevInfo>,
+}
+
+/// Error envelope matching tide-disco's `ServerError`: `{"status": <code>, "message": <text>}`,
+/// with the HTTP status set to the same code.
+#[derive(Debug, Serialize)]
+pub(crate) struct DevNodeError {
+    status: u16,
+    message: String,
+}
+
+impl DevNodeError {
+    fn catch_all(status: StatusCode, message: String) -> Self {
+        Self {
+            status: status.as_u16(),
+            message,
+        }
     }
+}
+
+impl IntoResponse for DevNodeError {
+    fn into_response(self) -> Response {
+        let status = StatusCode::from_u16(self.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+        (status, Json(self)).into_response()
+    }
+}
+
+/// Decode a JSON request body, matching tide-disco's `body_auto` behavior for the
+/// `application/json` content type (the only one this server needs to support).
+fn json_body<T: serde::de::DeserializeOwned>(
+    headers: &HeaderMap,
+    body: &[u8],
+) -> Result<T, DevNodeError> {
+    let content_type = headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok());
+    match content_type {
+        Some("application/json") => serde_json::from_slice(body).map_err(|_| {
+            DevNodeError::catch_all(
+                StatusCode::BAD_REQUEST,
+                "Unable to deserialize from JSON".to_string(),
+            )
+        }),
+        _ => Err(DevNodeError::catch_all(
+            StatusCode::BAD_REQUEST,
+            "Content type not specified or type not supported".to_string(),
+        )),
+    }
+}
+
+async fn get_dev_info(State(state): State<DevNodeState>) -> Json<DevInfo> {
+    Json((*state.dev_info).clone())
+}
+
+async fn set_hotshot_down(
+    State(state): State<DevNodeState>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<Json<()>, DevNodeError> {
+    let body: SetHotshotDownReqBody = json_body(&headers, &body)?;
+    let contract = state.api.light_client_instance(body.chain_id)?;
+
+    contract
+        .setHotShotDownSince(U256::from(body.height))
+        .send()
+        .await
+        .map_err(|err| DevNodeError::catch_all(StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?
+        .watch()
+        .await
+        .map_err(|err| {
+            DevNodeError::catch_all(StatusCode::INTERNAL_SERVER_ERROR, err.to_string())
+        })?;
+    Ok(Json(()))
+}
+
+async fn set_hotshot_up(
+    State(state): State<DevNodeState>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<Json<()>, DevNodeError> {
+    let body: Option<SetHotshotUpReqBody> = json_body(&headers, &body)?;
+    let contract = state.api.light_client_instance(body.map(|b| b.chain_id))?;
+
+    contract
+        .setHotShotUp()
+        .send()
+        .await
+        .map_err(|err| DevNodeError::catch_all(StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?
+        .watch()
+        .await
+        .map_err(|err| {
+            DevNodeError::catch_all(StatusCode::INTERNAL_SERVER_ERROR, err.to_string())
+        })?;
+    Ok(Json(()))
+}
+
+async fn healthcheck(headers: HeaderMap) -> Response {
+    healthcheck_response(&headers)
+}
+
+/// Serves the dev-info/set-hotshot-down/set-hotshot-up routes at both the `/v0/api/...` forms
+/// tide-disco served directly and the unversioned `/api/...` forms it served via a redirect
+/// (used by the Go SDK and our HTTP clients, respectively).
+fn dev_node_router(state: DevNodeState) -> Router {
+    let api = Router::new().nest(
+        "/api",
+        Router::new()
+            .route("/dev-info", get(get_dev_info))
+            .route("/set-hotshot-down", post(set_hotshot_down))
+            .route("/set-hotshot-up", post(set_hotshot_up))
+            .with_state(state),
+    );
+
+    Router::new()
+        .merge(api.clone())
+        .nest("/v0", api)
+        .route("/healthcheck", get(healthcheck))
+        .layer(cors_layer())
 }
 
 async fn run_dev_node_server<ApiVer: StaticVersionType + 'static>(
     port: u16,
     client_states: ApiState,
     dev_info: DevInfo,
-    bind_version: ApiVer,
+    _bind_version: ApiVer,
 ) -> anyhow::Result<()> {
-    let mut app = tide_disco::App::<_, ServerError>::with_state(client_states);
-    let toml = toml::from_str::<toml::value::Value>(include_str!("../api/espresso_dev_node.toml"))
-        .map_err(io::Error::other)?;
+    let state = DevNodeState {
+        api: client_states,
+        dev_info: Arc::new(dev_info),
+    };
+    let router = dev_node_router(state);
 
-    let mut api = Api::<_, ServerError, ApiVer>::new(toml).map_err(io::Error::other)?;
-    api.get("devinfo", move |_, _| {
-        let info = dev_info.clone();
-        async move { Ok(info.clone()) }.boxed()
-    })
-    .map_err(io::Error::other)?
-    .at("sethotshotdown", move |req, state: &ApiState| {
-        async move {
-            let body = req
-                .body_auto::<SetHotshotDownReqBody, ApiVer>(ApiVer::instance())
-                .map_err(ServerError::from_request_error)?;
-            let contract = state.light_client_instance(body.chain_id)?;
-
-            contract
-                .setHotShotDownSince(U256::from(body.height))
-                .send()
-                .await
-                .map_err(|err| {
-                    ServerError::catch_all(StatusCode::INTERNAL_SERVER_ERROR, err.to_string())
-                })?
-                .watch()
-                .await
-                .map_err(|err| {
-                    ServerError::catch_all(StatusCode::INTERNAL_SERVER_ERROR, err.to_string())
-                })?;
-            Ok(())
-        }
-        .boxed()
-    })
-    .map_err(io::Error::other)?
-    .at("sethotshotup", move |req, state| {
-        async move {
-            let chain_id = req
-                .body_auto::<Option<SetHotshotUpReqBody>, ApiVer>(ApiVer::instance())
-                .map_err(ServerError::from_request_error)?
-                .map(|b| b.chain_id);
-            let contract = state.light_client_instance(chain_id)?;
-
-            contract
-                .setHotShotUp()
-                .send()
-                .await
-                .map_err(|err| {
-                    ServerError::catch_all(StatusCode::INTERNAL_SERVER_ERROR, err.to_string())
-                })?
-                .watch()
-                .await
-                .map_err(|err| {
-                    ServerError::catch_all(StatusCode::INTERNAL_SERVER_ERROR, err.to_string())
-                })?;
-            Ok(())
-        }
-        .boxed()
-    })
-    .map_err(io::Error::other)?;
-
-    app.register_module("api", api).map_err(io::Error::other)?;
-
-    tracing::info!("Starting dev-node API on http://0.0.0.0:{port}");
-
-    app.serve(format!("0.0.0.0:{port}"), bind_version)
-        .await
-        .map_err(|err| {
-            // If we get an "Address in use" during startup, make it a bit easier to find the cause.
-            tracing::error!("Failed to start dev-node API on http://0.0.0.0:{port} : {err}");
-            err
-        })?;
+    let addr = format!("0.0.0.0:{port}");
+    tracing::info!("Starting dev-node debug API (/api/dev-info) on http://{addr}");
+    let listener = tokio::net::TcpListener::bind(&addr).await.map_err(|err| {
+        // If we get an "Address in use" during startup, make it a bit easier to find the cause.
+        tracing::error!("Failed to start dev-node API on http://{addr} : {err}");
+        err
+    })?;
+    axum::serve(listener, router).await?;
 
     Ok(())
 }
@@ -904,7 +984,7 @@ async fn run_dev_node_server<ApiVer: StaticVersionType + 'static>(
 #[derive(Default, Debug, Serialize, Deserialize, PartialEq, Eq)]
 struct AnvilAccount {
     nonce: u64,
-    code: Bytes,
+    code: AlloyBytes,
     storage: HashMap<U256, U256>,
     balance: U256,
     /// Name of the contract at this account, filled

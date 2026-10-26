@@ -4,13 +4,16 @@
 
 ## Install system dependencies
 
+The `postgresql` package provides the server binaries (`initdb`, `postgres`, `pg_ctl`, `pg_isready`) the SQL tests use;
+docker is not required.
+
     sudo apt-get update
-    sudo apt-get install -y curl cmake pkg-config libssl-dev protobuf-compiler git postgresql-client lsb-release gpg nodejs npm
+    sudo apt-get install -y curl cmake pkg-config libssl-dev protobuf-compiler git postgresql lsb-release gpg nodejs npm
     sudo npm install -g yarn
 
-## Install docker
+The postgres server binaries are not on `PATH` on Debian/Ubuntu; add them.
 
-Refer to https://docs.docker.com/engine/install/ubuntu
+    export "PATH=$(ls -d /usr/lib/postgresql/*/bin | sort -V | tail -1):$PATH"
 
 ## Install just
 
@@ -47,16 +50,23 @@ Just is outdated in the official ubuntu repos.
 
     forge build
 
-## Run the rust tests
+## Build and smoke-test the rust tests
 
-To run the SQL tests docker needs to be installed and running.
+Compiling the test binaries verifies the toolchain and system dependencies. The SQL tests run against a native postgres
+server (installed above), so a single migration test smoke-tests that path without docker.
 
-    export "PATH=$PWD/target/release:$PATH"
-    cargo build --release --bin diff-test
-    just test --no-fail-fast
+    just nextest --no-run
+    just nextest --no-fail-fast test_migrations
+
+To run the full suite, use `just test` (slow) or `just test-all`.
 
 ## Run the foundry tests
 
-Here a single fuzz run is used just to check that things are working.
+Many forge tests shell out to the `diff-test` helper binary via `vm.ffi`, so build it and put it on `PATH` first.
 
-    env FOUNDRY_FUZZ_RUNS=1 forge test -v
+    cargo build --profile test --bin diff-test
+    export "PATH=${CARGO_TARGET_DIR:-$PWD/target}/debug:$PATH"
+    just contracts-test-forge
+
+`just contracts-test-forge` skips the fuzz, invariant and network tests. The network tests fork from a live RPC and need
+an Etherscan API key; run them with `just contracts-test-network` once `ETHERSCAN_API_KEY` is set.

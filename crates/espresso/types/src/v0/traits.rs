@@ -1,29 +1,33 @@
 //! This module contains all the traits used for building the sequencer types.
 //! It also includes some trait implementations that cannot be implemented in an external crate.
-use std::{cmp::max, collections::BTreeMap, fmt::Debug, ops::Range, sync::Arc};
+#[cfg(feature = "node")]
+use std::{cmp::max, collections::BTreeMap};
+use std::{fmt::Debug, ops::Range, sync::Arc, time::Duration};
 
-use alloy::primitives::{Address, U256};
+use alloy::primitives::Address;
+#[cfg(feature = "node")]
 use anyhow::{Context, bail, ensure};
 use async_trait::async_trait;
 use committable::Commitment;
 use futures::{FutureExt, TryFutureExt};
-use hotshot::{HotShotInitializer, InitializerEpochInfo, types::EventType};
-use hotshot_libp2p_networking::network::behaviours::dht::store::persistent::DhtPersistentStorage;
-use hotshot_new_protocol::{message::Certificate2, storage::NewProtocolStorage};
+#[cfg(feature = "node")]
+use hotshot_new_protocol::storage::NewProtocolStorage;
+#[cfg(feature = "node")]
+use hotshot_types::simple_certificate::{Certificate1, Certificate2};
+#[cfg(feature = "node")]
 use hotshot_types::{
     data::{
-        DaProposal, DaProposal2, EpochNumber, QuorumProposal, QuorumProposal2,
-        QuorumProposalWrapper, VidCommitment, VidDisperseShare, ViewNumber,
+        DaProposal, DaProposal2, QuorumProposal, QuorumProposal2, QuorumProposalWrapper,
+        VidCommitment, VidDisperseShare,
     },
-    drb::{DrbInput, DrbResult},
+    drb::DrbInput,
     event::{HotShotAction, LeafInfo},
+    initializer::{HotShotInitializer, InitializerEpochInfo},
     message::{Proposal, convert_proposal},
-    new_protocol::CoordinatorEvent,
     simple_certificate::{
-        CertificatePair, LightClientStateUpdateCertificateV2, NextEpochQuorumCertificate2,
-        QuorumCertificate, QuorumCertificate2, UpgradeCertificate,
+        CertificatePair, NextEpochQuorumCertificate2, QuorumCertificate, QuorumCertificate2,
+        UpgradeCertificate,
     },
-    stake_table::HSStakeTable,
     traits::{
         ValidatedState as HotShotState, metrics::Metrics, node_implementation::NodeType,
         storage::Storage,
@@ -31,9 +35,17 @@ use hotshot_types::{
     utils::genesis_epoch_from_version,
     vote::HasViewNumber,
 };
+use hotshot_types::{
+    data::{EpochNumber, ViewNumber},
+    drb::DrbResult,
+    epoch_membership::EpochMembershipCoordinator,
+    new_protocol::CoordinatorEvent,
+    simple_certificate::LightClientStateUpdateCertificateV2,
+};
 use indexmap::IndexMap;
 use serde::{Serialize, de::DeserializeOwned};
-use versions::Upgrade;
+#[cfg(feature = "node")]
+use versions::{NEW_PROTOCOL_VERSION, Upgrade};
 
 use super::{
     impls::NodeState,
@@ -42,42 +54,41 @@ use super::{
 };
 use crate::{
     AuthenticatedValidatorMap, BlockMerkleTree, FeeAccount, FeeAccountProof, FeeMerkleCommitment,
-    Leaf2, NetworkConfig, PubKey, SeqTypes,
-    v0::impls::{StakeTableHash, ValidatedState},
+    Header, Leaf2, PubKey, SeqTypes,
+    v0::impls::StakeTableHash,
     v0_3::{
         ChainConfig, RegisteredValidator, RewardAccountProofV1, RewardAccountV1, RewardAmount,
         RewardMerkleCommitmentV1,
     },
     v0_4::{PermittedRewardMerkleTreeV2, RewardAccountV2, RewardMerkleCommitmentV2},
 };
+#[cfg(feature = "node")]
+use crate::{NetworkConfig, v0::impls::ValidatedState};
 
 #[async_trait]
 pub trait StateCatchup: Send + Sync {
     /// Fetch the leaf at the given height without retrying on transient errors.
+    ///
+    /// `coordinator` resolves the stake tables used to verify the fetched leaf
+    /// chain, triggering catchup for epochs whose stake table is not yet
+    /// available.
     async fn try_fetch_leaf(
         &self,
         retry: usize,
+        coordinator: EpochMembershipCoordinator<SeqTypes>,
         height: u64,
-        stake_table: HSStakeTable<SeqTypes>,
-        success_threshold: U256,
     ) -> anyhow::Result<Leaf2>;
 
     /// Fetch the leaf at the given height, retrying on transient errors.
     async fn fetch_leaf(
         &self,
+        coordinator: EpochMembershipCoordinator<SeqTypes>,
         height: u64,
-        stake_table: HSStakeTable<SeqTypes>,
-        success_threshold: U256,
     ) -> anyhow::Result<Leaf2> {
         self.backoff()
             .retry(self, |provider, retry| {
-                let stake_table_clone = stake_table.clone();
-                async move {
-                    provider
-                        .try_fetch_leaf(retry, height, stake_table_clone, success_threshold)
-                        .await
-                }
-                .boxed()
+                let coordinator = coordinator.clone();
+                async move { provider.try_fetch_leaf(retry, coordinator, height).await }.boxed()
             })
             .await
     }
@@ -291,6 +302,12 @@ pub trait StateCatchup: Send + Sync {
 
     /// Returns the name of the catchup provider.
     fn name(&self) -> String;
+
+    /// A copy of this provider that waits up to `local_timeout` on its local providers, or `None`
+    /// if it has no such timeout.
+    fn with_local_timeout(&self, _local_timeout: Duration) -> Option<Arc<dyn StateCatchup>> {
+        None
+    }
 }
 
 #[async_trait]
@@ -298,24 +315,18 @@ impl<T: StateCatchup + ?Sized> StateCatchup for Arc<T> {
     async fn try_fetch_leaf(
         &self,
         retry: usize,
+        coordinator: EpochMembershipCoordinator<SeqTypes>,
         height: u64,
-        stake_table: HSStakeTable<SeqTypes>,
-        success_threshold: U256,
     ) -> anyhow::Result<Leaf2> {
-        (**self)
-            .try_fetch_leaf(retry, height, stake_table, success_threshold)
-            .await
+        (**self).try_fetch_leaf(retry, coordinator, height).await
     }
 
     async fn fetch_leaf(
         &self,
+        coordinator: EpochMembershipCoordinator<SeqTypes>,
         height: u64,
-        stake_table: HSStakeTable<SeqTypes>,
-        success_threshold: U256,
     ) -> anyhow::Result<Leaf2> {
-        (**self)
-            .fetch_leaf(height, stake_table, success_threshold)
-            .await
+        (**self).fetch_leaf(coordinator, height).await
     }
 
     async fn try_fetch_accounts(
@@ -477,13 +488,19 @@ impl<T: StateCatchup + ?Sized> StateCatchup for Arc<T> {
     fn is_local(&self) -> bool {
         (**self).is_local()
     }
+
+    fn with_local_timeout(&self, local_timeout: Duration) -> Option<Arc<dyn StateCatchup>> {
+        (**self).with_local_timeout(local_timeout)
+    }
 }
 
+#[cfg(feature = "node")]
 #[async_trait]
 pub trait PersistenceOptions: Clone + Send + Sync + Debug + 'static {
     type Persistence: SequencerPersistence + MembershipPersistence;
 
     fn set_view_retention(&mut self, view_retention: u64);
+    fn set_consensus_only(&mut self);
     async fn create(&mut self) -> anyhow::Result<Self::Persistence>;
     async fn reset(self) -> anyhow::Result<()>;
 }
@@ -512,6 +529,19 @@ pub trait MembershipPersistence: Send + Sync + 'static {
 
     /// Load stake tables for storage for latest `n` known epochs
     async fn load_latest_stake(&self, limit: u64) -> anyhow::Result<Option<Vec<IndexedStake>>>;
+
+    /// Load the DRB result for `epoch`.
+    async fn load_drb_result(&self, epoch: EpochNumber) -> anyhow::Result<Option<DrbResult>>;
+
+    /// Load the epoch root block header for `epoch`.
+    async fn load_epoch_root(&self, epoch: EpochNumber) -> anyhow::Result<Option<Header>>;
+
+    /// Store the epoch root block header for `epoch`.
+    async fn store_epoch_root(
+        &self,
+        epoch: EpochNumber,
+        block_header: Header,
+    ) -> anyhow::Result<()>;
 
     /// Store stake table at `epoch` in the persistence layer
     async fn store_stake(
@@ -553,12 +583,30 @@ pub trait MembershipPersistence: Send + Sync + 'static {
     ) -> anyhow::Result<Vec<RegisteredValidator<PubKey>>>;
 }
 
+/// State certificates by epoch, apart from [`SequencerPersistence`] so that the API can hold them as
+/// a trait object.
+#[cfg(feature = "node")]
+#[async_trait]
+pub trait StateCertPersistence: Send + Sync + 'static {
+    /// Get a state certificate for an epoch.
+    async fn get_state_cert_by_epoch(
+        &self,
+        epoch: u64,
+    ) -> anyhow::Result<Option<LightClientStateUpdateCertificateV2<SeqTypes>>>;
+
+    /// Insert a state certificate for a given epoch.
+    async fn insert_state_cert(
+        &self,
+        epoch: u64,
+        cert: LightClientStateUpdateCertificateV2<SeqTypes>,
+    ) -> anyhow::Result<()>;
+}
+
+#[cfg(feature = "node")]
 #[async_trait]
 pub trait SequencerPersistence:
-    Sized + Send + Sync + Clone + 'static + DhtPersistentStorage + MembershipPersistence
+    Sized + Send + Sync + Clone + 'static + MembershipPersistence + StateCertPersistence
 {
-    async fn migrate_reward_merkle_tree_v2(&self) -> anyhow::Result<()>;
-
     /// Use this storage as a state catchup backend, if supported.
     fn into_catchup_provider(
         self,
@@ -608,19 +656,6 @@ pub trait SequencerPersistence:
         &self,
     ) -> anyhow::Result<Option<LightClientStateUpdateCertificateV2<SeqTypes>>>;
 
-    /// Get a state certificate for an epoch.
-    async fn get_state_cert_by_epoch(
-        &self,
-        epoch: u64,
-    ) -> anyhow::Result<Option<LightClientStateUpdateCertificateV2<SeqTypes>>>;
-
-    /// Insert a state certificate for a given epoch.
-    async fn insert_state_cert(
-        &self,
-        epoch: u64,
-        cert: LightClientStateUpdateCertificateV2<SeqTypes>,
-    ) -> anyhow::Result<()>;
-
     /// Load the latest known consensus state.
     ///
     /// Returns an initializer to resume HotShot from the latest saved state (or start from genesis,
@@ -662,31 +697,51 @@ pub trait SequencerPersistence:
                 ViewNumber::genesis()
             },
         };
-        let next_epoch_high_qc = self
-            .load_next_epoch_quorum_certificate()
-            .await
-            .context("loading next epoch qc")?;
-        let (leaf, mut high_qc, anchor_view) = match self
+        let config = self.load_config().await.context("loading config")?;
+        // Use epoch height from node state. Node state gets the epoch height from the genesis file.
+        let epoch_height = state.epoch_height.unwrap_or_else(|| {
+            config
+                .as_ref()
+                .map(|c| c.config.epoch_height)
+                .unwrap_or_default()
+        });
+        let (leaf, cert_pair, anchor_view) = match self
             .load_anchor_leaf()
             .await
             .context("loading anchor leaf")?
         {
-            Some((leaf, high_qc)) => {
-                tracing::info!(?leaf, ?high_qc, "starting from saved leaf");
+            Some((leaf, cert_pair)) => {
+                tracing::info!(?leaf, ?cert_pair, "starting from saved leaf");
+                let high_qc = cert_pair.qc().clone();
+                let leaf_view = leaf.view_number();
                 ensure!(
-                    leaf.view_number() == high_qc.view_number,
+                    leaf_view == high_qc.view_number,
                     format!(
                         "loaded anchor leaf from view {}, but high QC is from view {}",
-                        leaf.view_number(),
-                        high_qc.view_number
+                        leaf_view, high_qc.view_number
                     )
                 );
+                if leaf.block_header().version() < NEW_PROTOCOL_VERSION {
+                    ensure!(
+                        epoch_height == 0
+                            || cert_pair.block_number().is_none()
+                            || cert_pair.verify_next_epoch_qc(epoch_height).is_ok(),
+                        format!(
+                            "Next epoch QC is required but it's not present or doesn't match \
+                             primary QC\nPrimary QC: {:?}\nNext epoch QC: {:?}",
+                            cert_pair.qc(),
+                            cert_pair.next_epoch_qc()
+                        )
+                    );
+                }
 
                 let anchor_view = leaf.view_number();
-                (leaf, high_qc, Some(anchor_view))
+                (leaf, cert_pair, Some(anchor_view))
             },
             None => {
                 tracing::info!("no saved leaf, starting from genesis leaf");
+                let genesis_qc =
+                    QuorumCertificate2::genesis(&genesis_validated_state, &state, upgrade).await;
                 (
                     hotshot_types::data::Leaf2::genesis(
                         &genesis_validated_state,
@@ -694,16 +749,37 @@ pub trait SequencerPersistence:
                         upgrade.base,
                     )
                     .await,
-                    QuorumCertificate2::genesis(&genesis_validated_state, &state, upgrade).await,
+                    CertificatePair::new(genesis_qc, None),
                     None,
                 )
             },
         };
 
-        if let Some((extended_high_qc, _)) = self.load_eqc().await
+        let mut high_qc = cert_pair.qc().clone();
+        let mut next_epoch_high_qc = cert_pair.next_epoch_qc().cloned();
+        if let Some((extended_high_qc, extended_next_qc)) = self.load_eqc().await
             && extended_high_qc.view_number() > high_qc.view_number()
         {
-            high_qc = extended_high_qc
+            high_qc = extended_high_qc;
+            next_epoch_high_qc = Some(extended_next_qc);
+        }
+
+        if let Some(running_high_qc) = self
+            .load_high_qc2()
+            .await
+            .context("loading persisted high qc")?
+            && running_high_qc.view_number() > high_qc.view_number()
+        {
+            high_qc = running_high_qc;
+            next_epoch_high_qc = self
+                .load_next_epoch_quorum_certificate()
+                .await
+                .context("loading persisted next epoch qc")?
+                .filter(|neqc| {
+                    CertificatePair::new(high_qc.clone(), Some(neqc.clone()))
+                        .verify_next_epoch_qc(epoch_height)
+                        .is_ok()
+                });
         }
 
         let validated_state = if leaf.block_header().height() == 0 {
@@ -723,15 +799,8 @@ pub trait SequencerPersistence:
         // TODO:
         let epoch = genesis_epoch_from_version(upgrade.base);
 
-        let config = self.load_config().await.context("loading config")?;
-        let epoch_height = config
-            .as_ref()
-            .map(|c| c.config.epoch_height)
-            .unwrap_or_default();
-        let epoch_start_block = config
-            .as_ref()
-            .map(|c| c.config.epoch_start_block)
-            .unwrap_or_default();
+        // Use epoch start block from node state. Node state gets it from the genesis file.
+        let epoch_start_block = state.epoch_start_block;
 
         let saved_proposals = self
             .load_quorum_proposals()
@@ -764,92 +833,56 @@ pub trait SequencerPersistence:
         );
 
         Ok((
-            HotShotInitializer {
-                instance_state: state,
+            HotShotInitializer::load(
+                state,
                 epoch_height,
                 epoch_start_block,
-                anchor_leaf: leaf,
-                anchor_state: Arc::new(validated_state),
-                anchor_state_delta: None,
-                start_view: restart_view,
-                start_epoch: epoch,
-                last_actioned_view: highest_voted_view,
-                saved_proposals,
-                high_qc,
-                next_epoch_high_qc,
-                decided_upgrade_certificate: upgrade_certificate,
-                undecided_leaves: Default::default(),
-                undecided_state: Default::default(),
-                saved_vid_shares: Default::default(), // TODO: implement saved_vid_shares
                 start_epoch_info,
+                (leaf, Some(Arc::new(validated_state)), None),
+                (restart_view, epoch),
+                (high_qc, next_epoch_high_qc),
+                highest_voted_view,
+                saved_proposals,
+                Default::default(), // TODO: implement saved_vid_shares
+                upgrade_certificate,
                 state_cert,
-            },
+            ),
             anchor_view,
         ))
     }
 
-    /// Update storage based on an event from consensus.
-    async fn handle_event(
+    /// Decode a consensus decide event and persist its leaves, for the consensus event loop.
+    /// Returns the decided view on a decide so the caller can wake a background task to run
+    /// [`process_decided_events`](Self::process_decided_events); `None` otherwise.
+    ///
+    /// This is the persist-only half of a decide: query-service ingestion and GC are deferred to
+    /// [`process_decided_events`](Self::process_decided_events). Tests that want the synchronous
+    /// persist-then-process behavior use [`append_decided_leaves`](Self::append_decided_leaves).
+    async fn persist_event(
         &self,
         event: &CoordinatorEvent<SeqTypes>,
         consumer: &(impl EventConsumer + 'static),
-    ) {
+    ) -> Option<ViewNumber> {
         match event {
-            CoordinatorEvent::LegacyEvent(hotshot_event) => {
-                if let EventType::Decide {
-                    leaf_chain,
-                    committing_qc,
-                    deciding_qc,
-                    ..
-                } = &hotshot_event.event
-                {
-                    let Some(LeafInfo { leaf, .. }) = leaf_chain.first() else {
-                        return;
-                    };
-
-                    let chain = leaf_chain.iter().zip(
-                        std::iter::once((**committing_qc).clone()).chain(
-                            leaf_chain
-                                .iter()
-                                .map(|leaf| CertificatePair::for_parent(&leaf.leaf)),
-                        ),
-                    );
-
-                    if let Err(err) = self
-                        .append_decided_leaves(
-                            leaf.view_number(),
-                            chain,
-                            deciding_qc.clone(),
-                            consumer,
-                        )
-                        .await
-                    {
-                        tracing::error!(
-                            "failed to save decided leaves, chain may not be up to date: {err:#}"
-                        );
-                    }
-                }
-            },
             CoordinatorEvent::NewDecide {
-                leaf_infos, cert1, ..
+                leaf_infos,
+                cert1,
+                cert2,
             } => {
-                let Some(first) = leaf_infos.first() else {
-                    return;
-                };
-                let view_number = first.leaf.view_number();
+                let first = leaf_infos.first()?;
+                let decided_view = first.leaf.view_number();
 
                 // `cert1` certifies the newest leaf; each newer leaf's justify_qc certifies the
                 // next older leaf.
                 let certifying_qcs = std::iter::once(cert1.clone())
-                    .chain(leaf_infos.iter().map(|info| info.leaf.justify_qc()))
+                    .chain(leaf_infos.iter().map(|info| info.leaf.justify_qc().clone()))
                     .take(leaf_infos.len())
                     .map(CertificatePair::non_epoch_change);
 
                 if let Err(err) = self
-                    .append_decided_leaves(
-                        view_number,
+                    .persist_decided_leaves(
                         leaf_infos.iter().zip(certifying_qcs),
-                        None,
+                        cert2.as_ref(),
                         consumer,
                     )
                     .await
@@ -858,9 +891,11 @@ pub trait SequencerPersistence:
                         "failed to save decided leaves from new protocol, chain may not be up to \
                          date: {err:#}"
                     );
+                    return None;
                 }
+                Some(decided_view)
             },
-            _ => {},
+            _ => None,
         }
     }
 
@@ -889,17 +924,59 @@ pub trait SequencerPersistence:
     /// This functionality is useful for keeping a separate view of the blockchain in sync with the
     /// consensus storage. For example, the `consumer` could be used for moving data from consensus
     /// storage to long-term archival storage.
+    ///
+    /// Convenience combinator: [`persist_decided_leaves`](Self::persist_decided_leaves) then
+    /// [`process_decided_events`](Self::process_decided_events). Production drives the two halves on
+    /// separate tasks; tests and back-compat callers use this synchronous form.
     async fn append_decided_leaves(
         &self,
         decided_view: ViewNumber,
         leaf_chain: impl IntoIterator<Item = (&LeafInfo<SeqTypes>, CertificatePair<SeqTypes>)> + Send,
-        deciding_qc: Option<Arc<CertificatePair<SeqTypes>>>,
+        consumer: &(impl EventConsumer + 'static),
+    ) -> anyhow::Result<()> {
+        self.persist_decided_leaves(leaf_chain, None, consumer)
+            .await?;
+        // Leaves are persisted; processing failures are non-fatal here and retried in production.
+        if let Err(err) = self.process_decided_events(decided_view, consumer).await {
+            tracing::warn!(?decided_view, "decide event processing failed: {err:#}");
+        }
+        Ok(())
+    }
+
+    /// Persist decided leaves only (the critical, must-not-lag half of a decide; also the
+    /// anchor for restart recovery). Query-service ingestion and GC are deferred to
+    /// [`process_decided_events`](Self::process_decided_events). Backends with no replayable storage
+    /// (e.g. `NoStorage`) may instead forward decide events to `consumer` here.
+    ///
+    /// `cert2` finalizes the newest leaf of `leaf_chain`. It is persisted atomically with the
+    /// leaves, so [`process_decided_events`](Self::process_decided_events) never sees that leaf
+    /// without it.
+    async fn persist_decided_leaves(
+        &self,
+        leaf_chain: impl IntoIterator<Item = (&LeafInfo<SeqTypes>, CertificatePair<SeqTypes>)> + Send,
+        cert2: Option<&Certificate2<SeqTypes>>,
         consumer: &(impl EventConsumer + 'static),
     ) -> anyhow::Result<()>;
 
-    async fn load_anchor_leaf(
+    /// Generate decide events for `consumer` from persisted leaves, then GC processed data.
+    /// Cursor-driven (e.g. `last_processed_view`): advances only on success, so it may lag
+    /// consensus without losing data.
+    ///
+    /// Returns the highest view confirmed processed (the cursor), or `None` if nothing was
+    /// processed, so the caller can track real progress. Errors are propagated; the failed range
+    /// is retried on the next call.
+    ///
+    /// Default returns `Some(decided_view)`: backends with no replayable storage (e.g. `NoStorage`)
+    /// forward events synchronously in `persist_decided_leaves` and are always caught up here.
+    async fn process_decided_events(
         &self,
-    ) -> anyhow::Result<Option<(Leaf2, QuorumCertificate2<SeqTypes>)>>;
+        decided_view: ViewNumber,
+        _consumer: &(impl EventConsumer + 'static),
+    ) -> anyhow::Result<Option<ViewNumber>> {
+        Ok(Some(decided_view))
+    }
+
+    async fn load_anchor_leaf(&self) -> anyhow::Result<Option<(Leaf2, CertificatePair<SeqTypes>)>>;
     async fn append_vid(
         &self,
         proposal: &Proposal<SeqTypes, VidDisperseShare<SeqTypes>>,
@@ -938,6 +1015,20 @@ pub trait SequencerPersistence:
         Ok(None)
     }
 
+    /// Persist the new protocol's locked QC, written before each phase-2 vote.
+    ///
+    /// Implementations must apply this as an atomic monotonic compare-and-set: a
+    /// write whose view is not newer than the stored one is a no-op. This lets
+    /// concurrent, retried writes race without ever regressing the persisted lock.
+    async fn append_high_qc2(&self, _high_qc: QuorumCertificate2<SeqTypes>) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    /// Load the persisted locked QC, if any.
+    async fn load_high_qc2(&self) -> anyhow::Result<Option<QuorumCertificate2<SeqTypes>>> {
+        Ok(None)
+    }
+
     /// Update the current eQC in storage.
     async fn store_eqc(
         &self,
@@ -958,31 +1049,6 @@ pub trait SequencerPersistence:
         decided_upgrade_certificate: Option<UpgradeCertificate<SeqTypes>>,
     ) -> anyhow::Result<()>;
 
-    async fn migrate_storage(&self) -> anyhow::Result<()> {
-        tracing::warn!("migrating consensus data...");
-
-        self.migrate_anchor_leaf().await?;
-        self.migrate_da_proposals().await?;
-        self.migrate_vid_shares().await?;
-        self.migrate_quorum_proposals().await?;
-        self.migrate_quorum_certificates().await?;
-        self.migrate_reward_merkle_tree_v2()
-            .await
-            .context("failed to migrate reward merkle tree v2")?;
-        self.migrate_x25519_keys().await?;
-        tracing::warn!("consensus storage has been migrated to new types");
-
-        Ok(())
-    }
-
-    async fn migrate_x25519_keys(&self) -> anyhow::Result<()>;
-
-    async fn migrate_anchor_leaf(&self) -> anyhow::Result<()>;
-    async fn migrate_da_proposals(&self) -> anyhow::Result<()>;
-    async fn migrate_vid_shares(&self) -> anyhow::Result<()>;
-    async fn migrate_quorum_proposals(&self) -> anyhow::Result<()>;
-    async fn migrate_quorum_certificates(&self) -> anyhow::Result<()>;
-
     async fn load_anchor_view(&self) -> anyhow::Result<ViewNumber> {
         match self.load_anchor_leaf().await? {
             Some((leaf, _)) => Ok(leaf.view_number()),
@@ -990,14 +1056,16 @@ pub trait SequencerPersistence:
         }
     }
 
-    async fn store_next_epoch_quorum_certificate(
-        &self,
-        high_qc: NextEpochQuorumCertificate2<SeqTypes>,
-    ) -> anyhow::Result<()>;
-
     async fn load_next_epoch_quorum_certificate(
         &self,
     ) -> anyhow::Result<Option<NextEpochQuorumCertificate2<SeqTypes>>>;
+
+    async fn append_next_epoch_high_qc2(
+        &self,
+        _next_epoch_high_qc: NextEpochQuorumCertificate2<SeqTypes>,
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
 
     async fn append_da2(
         &self,
@@ -1019,11 +1087,6 @@ pub trait SequencerPersistence:
     ) -> anyhow::Result<()>;
     async fn store_drb_input(&self, drb_input: DrbInput) -> anyhow::Result<()>;
     async fn load_drb_input(&self, epoch: u64) -> anyhow::Result<DrbInput>;
-    async fn store_epoch_root(
-        &self,
-        epoch: EpochNumber,
-        block_header: <SeqTypes as NodeType>::BlockHeader,
-    ) -> anyhow::Result<()>;
     async fn add_state_cert(
         &self,
         state_cert: LightClientStateUpdateCertificateV2<SeqTypes>,
@@ -1057,6 +1120,7 @@ impl EventConsumer for NullEventConsumer {
     }
 }
 
+#[cfg(feature = "node")]
 #[async_trait]
 impl<P: SequencerPersistence> Storage<SeqTypes> for Arc<P> {
     async fn append_vid(
@@ -1113,8 +1177,8 @@ impl<P: SequencerPersistence> Storage<SeqTypes> for Arc<P> {
         (**self).append_quorum_proposal2(&proposal_qp_wrapper).await
     }
 
-    async fn update_high_qc2(&self, _high_qc: QuorumCertificate2<SeqTypes>) -> anyhow::Result<()> {
-        Ok(())
+    async fn update_high_qc2(&self, high_qc: QuorumCertificate2<SeqTypes>) -> anyhow::Result<()> {
+        (**self).append_high_qc2(high_qc).await
     }
 
     /// Update the current eQC in storage.
@@ -1134,9 +1198,11 @@ impl<P: SequencerPersistence> Storage<SeqTypes> for Arc<P> {
 
     async fn update_next_epoch_high_qc2(
         &self,
-        _next_epoch_high_qc: NextEpochQuorumCertificate2<SeqTypes>,
+        next_epoch_high_qc: NextEpochQuorumCertificate2<SeqTypes>,
     ) -> anyhow::Result<()> {
-        Ok(())
+        (**self)
+            .append_next_epoch_high_qc2(next_epoch_high_qc)
+            .await
     }
 
     async fn update_decided_upgrade_certificate(
@@ -1180,14 +1246,19 @@ impl<P: SequencerPersistence> Storage<SeqTypes> for Arc<P> {
     }
 }
 
+#[cfg(feature = "node")]
 #[async_trait]
 impl<P: SequencerPersistence> NewProtocolStorage<SeqTypes> for Arc<P> {
-    async fn append_cert2(
-        &self,
-        view: ViewNumber,
-        cert: Certificate2<SeqTypes>,
-    ) -> anyhow::Result<()> {
-        (**self).append_cert2(view, cert).await
+    async fn append_high_qc2(&self, high_qc: Certificate1<SeqTypes>) -> anyhow::Result<()> {
+        // Writes are spawned concurrently and retried, so a stale write can land
+        // after a newer one. The backend applies a monotonic compare-and-set
+        // atomically, so such a stale write is a no-op and never regresses the
+        // persisted view.
+        (**self).append_high_qc2(high_qc).await
+    }
+
+    async fn load_high_qc2(&self) -> anyhow::Result<Option<Certificate1<SeqTypes>>> {
+        (**self).load_high_qc2().await
     }
 }
 

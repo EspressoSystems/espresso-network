@@ -1,18 +1,14 @@
 //! Mock implementation of persistence, for testing.
-use std::{collections::BTreeMap, sync::Arc};
+use std::collections::BTreeMap;
 
 use anyhow::bail;
 use async_trait::async_trait;
 use espresso_types::{
-    AuthenticatedValidatorMap, Leaf2, NetworkConfig, PubKey, RegisteredValidatorMap,
+    AuthenticatedValidatorMap, Header, Leaf2, NetworkConfig, PubKey, RegisteredValidatorMap,
     StakeTableHash,
     traits::{EventsPersistenceRead, MembershipPersistence, StakeTuple},
-    v0::traits::{EventConsumer, PersistenceOptions, SequencerPersistence},
+    v0::traits::{EventConsumer, PersistenceOptions, SequencerPersistence, StateCertPersistence},
     v0_3::{EventKey, IndexedStake, RegisteredValidator, RewardAmount, StakeTableEvent},
-};
-use hotshot::InitializerEpochInfo;
-use hotshot_libp2p_networking::network::behaviours::dht::store::persistent::{
-    DhtPersistentStorage, SerializableRecord,
 };
 use hotshot_types::{
     data::{
@@ -20,18 +16,18 @@ use hotshot_types::{
         VidDisperseShare,
     },
     drb::{DrbInput, DrbResult},
-    event::{Event, EventType, HotShotAction, LeafInfo},
+    event::{HotShotAction, LeafInfo},
+    initializer::InitializerEpochInfo,
     message::Proposal,
     new_protocol::CoordinatorEvent,
     simple_certificate::{
-        CertificatePair, LightClientStateUpdateCertificateV2, NextEpochQuorumCertificate2,
-        QuorumCertificate2, UpgradeCertificate,
+        Certificate2, CertificatePair, LightClientStateUpdateCertificateV2,
+        NextEpochQuorumCertificate2, QuorumCertificate2, UpgradeCertificate,
     },
     traits::metrics::Metrics,
-    vote::HasViewNumber,
 };
 
-use crate::{NodeType, SeqTypes, ViewNumber};
+use crate::{SeqTypes, ViewNumber};
 
 #[derive(Clone, Copy, Debug)]
 pub struct Options;
@@ -41,6 +37,8 @@ impl PersistenceOptions for Options {
     type Persistence = NoStorage;
 
     fn set_view_retention(&mut self, _: u64) {}
+
+    fn set_consensus_only(&mut self) {}
 
     async fn create(&mut self) -> anyhow::Result<Self::Persistence> {
         Ok(NoStorage)
@@ -56,10 +54,6 @@ pub struct NoStorage;
 
 #[async_trait]
 impl SequencerPersistence for NoStorage {
-    async fn migrate_reward_merkle_tree_v2(&self) -> anyhow::Result<()> {
-        Ok(())
-    }
-
     async fn load_config(&self) -> anyhow::Result<Option<NetworkConfig>> {
         Ok(None)
     }
@@ -68,39 +62,27 @@ impl SequencerPersistence for NoStorage {
         Ok(())
     }
 
-    async fn append_decided_leaves(
+    async fn persist_decided_leaves(
         &self,
-        view_number: ViewNumber,
         leaves: impl IntoIterator<Item = (&LeafInfo<SeqTypes>, CertificatePair<SeqTypes>)> + Send,
-        deciding_qc: Option<Arc<CertificatePair<SeqTypes>>>,
-        consumer: &impl EventConsumer,
+        _cert2: Option<&Certificate2<SeqTypes>>,
+        consumer: &(impl EventConsumer + 'static),
     ) -> anyhow::Result<()> {
-        let leaves = leaves
-            .into_iter()
-            .map(|(info_ref, qc)| (info_ref.clone(), qc))
-            .collect::<Vec<_>>();
-        for (leaf_info, qc) in leaves {
-            // Insert the deciding QC at the appropriate position, with the last decide event in the
-            // chain.
-            let deciding_qc = if let Some(deciding_qc) = &deciding_qc {
-                (deciding_qc.view_number() == qc.view_number() + 1).then_some(deciding_qc.clone())
-            } else {
-                None
+        // The iterator is not `Send`, so build the event before awaiting.
+        let event = {
+            let mut leaves = leaves.into_iter();
+            let Some((newest, cert)) = leaves.next() else {
+                return Ok(());
             };
-
-            consumer
-                .handle_event(&CoordinatorEvent::LegacyEvent(Event {
-                    view_number,
-                    event: EventType::Decide {
-                        leaf_chain: Arc::new(vec![leaf_info.clone()]),
-                        committing_qc: Arc::new(qc),
-                        deciding_qc,
-                        block_size: None,
-                    },
-                }))
-                .await?;
-        }
-        Ok(())
+            CoordinatorEvent::NewDecide {
+                leaf_infos: std::iter::once(newest.clone())
+                    .chain(leaves.map(|(info, _)| info.clone()))
+                    .collect(),
+                cert1: cert.qc().clone(),
+                cert2: None,
+            }
+        };
+        consumer.handle_event(&event).await
     }
 
     async fn load_latest_acted_view(&self) -> anyhow::Result<Option<ViewNumber>> {
@@ -111,9 +93,7 @@ impl SequencerPersistence for NoStorage {
         Ok(None)
     }
 
-    async fn load_anchor_leaf(
-        &self,
-    ) -> anyhow::Result<Option<(Leaf2, QuorumCertificate2<SeqTypes>)>> {
+    async fn load_anchor_leaf(&self) -> anyhow::Result<Option<(Leaf2, CertificatePair<SeqTypes>)>> {
         Ok(None)
     }
 
@@ -183,13 +163,6 @@ impl SequencerPersistence for NoStorage {
         Ok(())
     }
 
-    async fn store_next_epoch_quorum_certificate(
-        &self,
-        _high_qc: NextEpochQuorumCertificate2<SeqTypes>,
-    ) -> anyhow::Result<()> {
-        Ok(())
-    }
-
     async fn load_next_epoch_quorum_certificate(
         &self,
     ) -> anyhow::Result<Option<NextEpochQuorumCertificate2<SeqTypes>>> {
@@ -228,30 +201,6 @@ impl SequencerPersistence for NoStorage {
         Ok(())
     }
 
-    async fn migrate_anchor_leaf(&self) -> anyhow::Result<()> {
-        Ok(())
-    }
-
-    async fn migrate_da_proposals(&self) -> anyhow::Result<()> {
-        Ok(())
-    }
-
-    async fn migrate_vid_shares(&self) -> anyhow::Result<()> {
-        Ok(())
-    }
-
-    async fn migrate_quorum_proposals(&self) -> anyhow::Result<()> {
-        Ok(())
-    }
-
-    async fn migrate_quorum_certificates(&self) -> anyhow::Result<()> {
-        Ok(())
-    }
-
-    async fn migrate_x25519_keys(&self) -> anyhow::Result<()> {
-        Ok(())
-    }
-
     async fn store_drb_result(
         &self,
         _epoch: EpochNumber,
@@ -265,14 +214,6 @@ impl SequencerPersistence for NoStorage {
     }
     async fn load_drb_input(&self, _epoch: u64) -> anyhow::Result<DrbInput> {
         bail!("Cannot load from NoStorage")
-    }
-
-    async fn store_epoch_root(
-        &self,
-        _epoch: EpochNumber,
-        _block_header: <SeqTypes as NodeType>::BlockHeader,
-    ) -> anyhow::Result<()> {
-        Ok(())
     }
 
     async fn load_start_epoch_info(&self) -> anyhow::Result<Vec<InitializerEpochInfo<SeqTypes>>> {
@@ -292,6 +233,11 @@ impl SequencerPersistence for NoStorage {
         Ok(None)
     }
 
+    fn enable_metrics(&mut self, _metrics: &dyn Metrics) {}
+}
+
+#[async_trait]
+impl StateCertPersistence for NoStorage {
     async fn get_state_cert_by_epoch(
         &self,
         _epoch: u64,
@@ -306,8 +252,6 @@ impl SequencerPersistence for NoStorage {
     ) -> anyhow::Result<()> {
         Ok(())
     }
-
-    fn enable_metrics(&mut self, _metrics: &dyn Metrics) {}
 }
 
 #[async_trait]
@@ -318,6 +262,22 @@ impl MembershipPersistence for NoStorage {
 
     async fn load_latest_stake(&self, _limit: u64) -> anyhow::Result<Option<Vec<IndexedStake>>> {
         Ok(None)
+    }
+
+    async fn load_drb_result(&self, _epoch: EpochNumber) -> anyhow::Result<Option<DrbResult>> {
+        Ok(None)
+    }
+
+    async fn load_epoch_root(&self, _epoch: EpochNumber) -> anyhow::Result<Option<Header>> {
+        Ok(None)
+    }
+
+    async fn store_epoch_root(
+        &self,
+        _epoch: EpochNumber,
+        _block_header: Header,
+    ) -> anyhow::Result<()> {
+        Ok(())
     }
 
     async fn store_stake(
@@ -367,18 +327,5 @@ impl MembershipPersistence for NoStorage {
         _limit: u64,
     ) -> anyhow::Result<Vec<RegisteredValidator<PubKey>>> {
         Ok(Default::default())
-    }
-}
-
-#[async_trait]
-impl DhtPersistentStorage for NoStorage {
-    /// Don't do anything
-    async fn save(&self, _records: Vec<SerializableRecord>) -> anyhow::Result<()> {
-        Ok(())
-    }
-
-    /// Don't do anything
-    async fn load(&self) -> anyhow::Result<Vec<SerializableRecord>> {
-        Ok(vec![])
     }
 }

@@ -1,12 +1,17 @@
-use std::{collections::BTreeMap, sync::Arc, time::Duration};
+#[cfg(feature = "node")]
+use std::time::Duration;
+use std::{collections::BTreeMap, sync::Arc};
 
 use alloy::primitives::Address;
+#[cfg(feature = "node")]
+use alloy::{eips::BlockId, primitives::U256};
 use anyhow::{Context, bail};
 use async_lock::Mutex;
 use async_trait::async_trait;
+#[cfg(feature = "node")]
 use hotshot_contract_adapter::sol_types::{LightClientV3, StakeTableV3};
 use hotshot_types::{
-    HotShotConfig, data::EpochNumber, epoch_membership::EpochMembershipCoordinator,
+    HotShotConfig, data::EpochNumber, drb::DrbResult, epoch_membership::EpochMembershipCoordinator,
     traits::states::InstanceState,
 };
 use moka::future::Cache;
@@ -19,10 +24,12 @@ use super::{
     v0_1::NoStorage,
     v0_3::{EventKey, IndexedStake, StakeTableEvent},
 };
+#[cfg(feature = "node")]
+use crate::v0::L1Client;
 use crate::{
-    AuthenticatedValidatorMap, EpochCommittees, PubKey, RegisteredValidatorMap,
+    AuthenticatedValidatorMap, Header, PubKey, RegisteredValidatorMap,
     v0::{
-        GenesisHeader, L1BlockInfo, L1Client, Timestamp, Upgrade, UpgradeMode,
+        GenesisHeader, L1BlockInfo, Timestamp, Upgrade, UpgradeMode,
         impls::{StakeTableHash, fetch_and_calculate_block_reward, reward::EpochRewardsCalculator},
         traits::StateCatchup,
         v0_3::ChainConfig,
@@ -37,6 +44,7 @@ use crate::{
 pub struct NodeState {
     pub node_id: u64,
     pub chain_config: ChainConfig,
+    #[cfg(feature = "node")]
     pub l1_client: L1Client,
     #[debug("{}", state_catchup.name())]
     pub state_catchup: Arc<dyn StateCatchup>,
@@ -88,6 +96,7 @@ impl NodeState {
             .context("fixed block reward not found")
     }
 
+    #[cfg(feature = "node")]
     pub async fn light_client_contract_address(&self) -> anyhow::Result<Address> {
         match self.light_client_contract_address.get(&()).await {
             Some(address) => Ok(address),
@@ -110,6 +119,7 @@ impl NodeState {
         }
     }
 
+    #[cfg(feature = "node")]
     pub async fn token_contract_address(&self) -> anyhow::Result<Address> {
         match self.token_contract_address.get(&()).await {
             Some(address) => Ok(address),
@@ -132,6 +142,7 @@ impl NodeState {
         }
     }
 
+    #[cfg(feature = "node")]
     pub async fn finalized_hotshot_height(&self) -> anyhow::Result<u64> {
         match self.finalized_hotshot_height.get(&()).await {
             Some(block) => Ok(block),
@@ -157,6 +168,49 @@ impl NodeState {
             },
         }
     }
+
+    /// The oldest HotShot block height the light client contract still holds a commitment for, or
+    /// `None` when L1 finality or the contract's history is unreadable. `Some(0)` means it still
+    /// vouches for genesis. Never decreases for a given contract.
+    ///
+    /// The window is set by prover cadence, not `stateHistoryRetentionPeriod`: one entry is evicted
+    /// per update, so it can reach far further back than that setting suggests.
+    #[cfg(feature = "node")]
+    pub async fn light_client_history_start(&self) -> anyhow::Result<Option<u64>> {
+        let Some(finalized) = self.l1_client.snapshot().await.finalized else {
+            return Ok(None);
+        };
+        // One block for all three reads. By number, not hash: hash is EIP-1898, which some
+        // providers reject, and a finalized block cannot reorg.
+        let block = BlockId::number(finalized.number);
+        let light_client_contract = LightClientV3::new(
+            self.light_client_contract_address().await?,
+            self.l1_client.provider.clone(),
+        );
+        let count = light_client_contract
+            .getStateHistoryCount()
+            .block(block)
+            .call()
+            .await?;
+        let first = light_client_contract
+            .stateHistoryFirstIndex()
+            .block(block)
+            .call()
+            .await?;
+        // The length counts zeroed tombstones, so only `first >= count` means nothing live. Only a
+        // mock that resets the history without the index gets here; reading `first` would revert.
+        if U256::from(first) >= count {
+            return Ok(None);
+        }
+        Ok(Some(
+            light_client_contract
+                .stateHistoryCommitments(U256::from(first))
+                .block(block)
+                .call()
+                .await?
+                .hotShotBlockHeight,
+        ))
+    }
 }
 
 #[async_trait]
@@ -167,6 +221,22 @@ impl MembershipPersistence for NoStorage {
 
     async fn load_latest_stake(&self, _limit: u64) -> anyhow::Result<Option<Vec<IndexedStake>>> {
         Ok(None)
+    }
+
+    async fn load_drb_result(&self, _epoch: EpochNumber) -> anyhow::Result<Option<DrbResult>> {
+        Ok(None)
+    }
+
+    async fn load_epoch_root(&self, _epoch: EpochNumber) -> anyhow::Result<Option<Header>> {
+        Ok(None)
+    }
+
+    async fn store_epoch_root(
+        &self,
+        _epoch: EpochNumber,
+        _block_header: Header,
+    ) -> anyhow::Result<()> {
+        Ok(())
     }
 
     async fn store_stake(
@@ -221,6 +291,7 @@ impl MembershipPersistence for NoStorage {
 }
 
 impl NodeState {
+    #[cfg(feature = "node")]
     pub fn new(
         node_id: u64,
         chain_config: ChainConfig,
@@ -271,9 +342,9 @@ impl NodeState {
     #[cfg(any(test, feature = "testing"))]
     pub fn mock() -> Self {
         use hotshot_example_types::storage_types::TestStorage;
-        use versions::version;
+        use versions::NEW_PROTOCOL_VERSION;
 
-        use crate::v0_3::Fetcher;
+        use crate::{EpochCommittees, v0_3::Fetcher};
 
         let chain_config = ChainConfig::default();
         let l1 = L1Client::new(vec!["http://localhost:3331".parse().unwrap()])
@@ -289,9 +360,9 @@ impl NodeState {
             chain_config,
             l1,
             Arc::new(mock::MockStateCatchup::default()),
-            version(0, 1),
+            NEW_PROTOCOL_VERSION,
             coordinator,
-            version(0, 1),
+            NEW_PROTOCOL_VERSION,
         )
     }
 
@@ -300,7 +371,7 @@ impl NodeState {
         use hotshot_example_types::storage_types::TestStorage;
         use versions::version;
 
-        use crate::v0_3::Fetcher;
+        use crate::{EpochCommittees, v0_3::Fetcher};
 
         let chain_config = ChainConfig::default();
         let l1 = L1Client::new(vec!["http://localhost:3331".parse().unwrap()])
@@ -327,7 +398,7 @@ impl NodeState {
         use hotshot_example_types::storage_types::TestStorage;
         use versions::version;
 
-        use crate::v0_3::Fetcher;
+        use crate::{EpochCommittees, v0_3::Fetcher};
         let l1 = L1Client::new(vec!["http://localhost:3331".parse().unwrap()])
             .expect("Failed to create L1 client");
 
@@ -347,6 +418,7 @@ impl NodeState {
         )
     }
 
+    #[cfg(feature = "node")]
     pub fn with_l1(mut self, l1_client: L1Client) -> Self {
         self.l1_client = l1_client;
         self
@@ -415,7 +487,7 @@ impl Default for NodeState {
         use hotshot_example_types::storage_types::TestStorage;
         use versions::version;
 
-        use crate::v0_3::Fetcher;
+        use crate::{EpochCommittees, v0_3::Fetcher};
 
         let chain_config = ChainConfig::default();
         let l1 = L1Client::new(vec!["http://localhost:3331".parse().unwrap()])
@@ -485,19 +557,36 @@ impl Upgrade {
         let upgrade_type = UpgradeType::Epoch { chain_config };
         Upgrade { mode, upgrade_type }
     }
+
+    pub fn large_block_view_based(address: Address) -> Upgrade {
+        let chain_config = ChainConfig {
+            base_fee: 0.into(),
+            stake_table_contract: Some(address),
+            max_block_size: (10 * 1024 * 1024).into(),
+            ..Default::default()
+        };
+
+        let mode = UpgradeMode::View(ViewBasedUpgrade {
+            start_voting_view: None,
+            stop_voting_view: None,
+            start_proposing_view: 200,
+            stop_proposing_view: 1000,
+        });
+
+        let upgrade_type = UpgradeType::LargeBlock { chain_config };
+        Upgrade { mode, upgrade_type }
+    }
 }
 
 #[cfg(any(test, feature = "testing"))]
 pub mod mock {
     use std::collections::HashMap;
 
-    use alloy::primitives::U256;
     use anyhow::Context;
     use async_trait::async_trait;
     use committable::Commitment;
     use hotshot_types::{
         data::ViewNumber, simple_certificate::LightClientStateUpdateCertificateV2,
-        stake_table::HSStakeTable,
     };
     use jf_merkle_tree_compat::{ForgetableMerkleTreeScheme, MerkleTreeScheme};
 
@@ -548,9 +637,8 @@ pub mod mock {
         async fn try_fetch_leaf(
             &self,
             _retry: usize,
+            _coordinator: EpochMembershipCoordinator<SeqTypes>,
             _height: u64,
-            _stake_table: HSStakeTable<SeqTypes>,
-            _success_threshold: U256,
         ) -> anyhow::Result<Leaf2> {
             Err(anyhow::anyhow!("todo"))
         }

@@ -531,6 +531,8 @@ pub struct StakeTableV3TimelockProposal {
     pub v3_impl_addr: Address,
     /// Timelock address that must submit both txs.
     pub timelock_addr: Address,
+    /// Proxy address being upgraded.
+    pub proxy_addr: Address,
 }
 
 /// Encode timelock `schedule` + `execute` calldata wrapping a StakeTable V3 upgrade.
@@ -591,6 +593,7 @@ pub fn encode_stake_table_v3_timelock_proposal(
         execute,
         v3_impl_addr,
         timelock_addr,
+        proxy_addr,
     })
 }
 

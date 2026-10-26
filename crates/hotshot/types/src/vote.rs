@@ -11,7 +11,7 @@ use std::{
     marker::PhantomData,
 };
 
-use alloy::primitives::{FixedBytes, U256};
+use alloy_primitives::{FixedBytes, U256};
 use bitvec::{bitvec, vec::BitVec};
 use committable::{Commitment, Committable};
 use hotshot_utils::anytrace::*;
@@ -166,6 +166,12 @@ impl<
             upgrade_lock,
         }
     }
+
+    pub fn clear(&mut self) {
+        self.vote_outcomes.clear();
+        self.signers.clear();
+    }
+
     /// Add a vote to the total accumulated votes for the given epoch.
     /// Returns the accumulator or the certificate if we
     /// have accumulated enough votes to exceed the threshold for creating a certificate.

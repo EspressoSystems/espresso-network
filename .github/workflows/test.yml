@@ -6,8 +6,8 @@ on:
       - main
       - release-*
     tags:
-      # YYYYMMDD
-      - "20[0-9][0-9][0-1][0-9][0-3][0-9]*"
+      # MAJOR.MINOR.PHASE.PATCH
+      - "[0-9]*.[0-9]*.[0-9]*.[0-9]*"
   schedule:
     - cron: "0 0 * * 1"
   pull_request:
@@ -19,7 +19,7 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
-  RUST_LOG: info,libp2p=off,node=error
+  RUST_LOG: info,node=error
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: "0"
   # Save the process compose logs
@@ -31,7 +31,7 @@ jobs:
     name: Build test artifacts (postgres)
     runs-on: ubuntu-24.04-8core
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: rui314/setup-mold@v1
 
       - name: Install Protoc
@@ -53,7 +53,15 @@ jobs:
         run: free -h
 
       - name: Build and archive tests
-        run: just nextest-archive nextest-archive-postgres.tar.zst --timings
+        run: |
+          python3 scripts/compile-metrics sample-rss --out peak-rss.json -- \
+            just nextest-archive nextest-archive-postgres.tar.zst --timings
+
+      - uses: ./.github/actions/compile-metrics
+        continue-on-error: true
+        with:
+          job: test-archive-postgres
+          timing: target/cargo-timings/cargo-timing.html
 
       - name: Upload archive to workflow
         uses: actions/upload-artifact@v7
@@ -68,62 +76,13 @@ jobs:
         with:
           name: cargo-timings-test-postgres
           path: target/cargo-timings/cargo-timing.html
-          retention-days: 1
-
-      - name: Cargo timing summary
-        run: scripts/cargo-timing-summary target/cargo-timings/cargo-timing.html >> "$GITHUB_STEP_SUMMARY"
-
-  build-test-artifacts-sqlite:
-    name: Build test artifacts (sqlite)
-    runs-on: ubuntu-24.04-8core
-    steps:
-      - uses: actions/checkout@v6
-      - uses: rui314/setup-mold@v1
-
-      - name: Install Protoc
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y protobuf-compiler
-
-      - uses: taiki-e/install-action@v2
-        with:
-          tool: nextest,just
-
-      - name: Enable Rust Caching
-        uses: Swatinem/rust-cache@v2
-        with:
-          prefix-key: v1-rust
-          save-if: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release-') }}
-
-      - name: Show memory
-        run: free -h
-
-      - name: Build and archive tests
-        run: just nextest-archive nextest-archive-sqlite.tar.zst --features "embedded-db,testing" --timings
-
-      - name: Upload archive to workflow
-        uses: actions/upload-artifact@v7
-        with:
-          name: nextest-archive-sqlite
-          if-no-files-found: error
-          path: nextest-archive-sqlite.tar.zst
-          retention-days: 1
-
-      - name: Upload cargo timings
-        uses: actions/upload-artifact@v7
-        with:
-          name: cargo-timings-test-sqlite
-          path: target/cargo-timings/cargo-timing.html
-          retention-days: 1
-
-      - name: Cargo timing summary
-        run: scripts/cargo-timing-summary target/cargo-timings/cargo-timing.html >> "$GITHUB_STEP_SUMMARY"
+          retention-days: ${{ github.ref == 'refs/heads/main' && 90 || 14 }}
 
   build-test-bins:
     name: Build test binaries
     runs-on: ubuntu-24.04-8core
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: rui314/setup-mold@v1
 
       - name: Install Protoc
@@ -139,18 +98,23 @@ jobs:
 
       - name: Build all binaries (postgres)
         run: |
-          cargo build --locked --profile test --bins --timings
+          python3 scripts/compile-metrics sample-rss --out peak-rss.json -- \
+            cargo build --locked --profile test --bins --timings
         timeout-minutes: 60
+
+      - uses: ./.github/actions/compile-metrics
+        continue-on-error: true
+        with:
+          job: test-bins
+          timing: target/cargo-timings/cargo-timing.html
+          binaries-dir: target/debug
 
       - name: Upload cargo timings
         uses: actions/upload-artifact@v7
         with:
           name: cargo-timings-test-bins
           path: target/cargo-timings/cargo-timing.html
-          retention-days: 1
-
-      - name: Cargo timing summary
-        run: scripts/cargo-timing-summary target/cargo-timings/cargo-timing.html >> "$GITHUB_STEP_SUMMARY"
+          retention-days: ${{ github.ref == 'refs/heads/main' && 90 || 14 }}
 
       - name: Upload archive to workflow
         uses: actions/upload-artifact@v7
@@ -160,9 +124,6 @@ jobs:
           retention-days: 1
           path: |
             target/debug/orchestrator
-            target/debug/cdn-broker
-            target/debug/cdn-marshal
-            target/debug/cdn-whitelist
             target/debug/state-relay-server
             target/debug/state-prover
             target/debug/espresso-node
@@ -172,53 +133,18 @@ jobs:
             target/debug/utils
             target/debug/deploy
             target/debug/keygen
-            target/debug/permissionless-builder
             target/debug/nasty-client
             target/debug/pub-key
             target/debug/espresso-bridge
             target/debug/node-metrics
             target/debug/staking-cli
 
-  build-test-bins-sqlite:
-    name: Build espresso-node-sqlite test binary
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-      - uses: ./.github/actions/free-disk-space
-      - uses: rui314/setup-mold@v1
-      - uses: ./.github/actions/free-disk-space
-
-      - name: Install Protoc
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y protobuf-compiler
-
-      - name: Enable Rust Caching
-        uses: Swatinem/rust-cache@v2
-        with:
-          prefix-key: v1-rust
-          save-if: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release-') }}
-
-      - name: Build espresso-node-sqlite binary
-        run: |
-          cargo build --locked --profile test -p espresso-node-sqlite
-        timeout-minutes: 30
-
-      - name: Upload archive to workflow
-        uses: actions/upload-artifact@v7
-        with:
-          name: test-binaries-sqlite
-          if-no-files-found: error
-          retention-days: 1
-          path: |
-            target/debug/espresso-node-sqlite
-
   # The go-sdk test job only needs the dev-node binary, compile it separately.
   build-test-bins-dev-node:
     name: Build espresso-dev-node test binary
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/free-disk-space
       - uses: rui314/setup-mold@v1
       - uses: ./.github/actions/free-disk-space
@@ -236,8 +162,16 @@ jobs:
 
       - name: Build espresso-dev-node binary
         run: |
-          cargo build --locked --profile test -p espresso-dev-node
+          python3 scripts/compile-metrics sample-rss --out peak-rss.json -- \
+            cargo build --locked --profile test -p espresso-dev-node --timings
         timeout-minutes: 30
+
+      - uses: ./.github/actions/compile-metrics
+        continue-on-error: true
+        with:
+          job: test-bin-dev-node
+          timing: target/cargo-timings/cargo-timing.html
+          binaries-dir: target/debug
 
       - name: Upload archive to workflow
         uses: actions/upload-artifact@v7
@@ -248,17 +182,63 @@ jobs:
           path: |
             target/debug/espresso-dev-node
 
+  build-test-archive-integration:
+    name: Build integration test archive
+    runs-on: ubuntu-24.04-8core
+    steps:
+      - uses: actions/checkout@v7
+      - uses: rui314/setup-mold@v1
+
+      - name: Install Protoc
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y protobuf-compiler
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: nextest
+
+      - name: Enable Rust Caching
+        uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: v1-rust
+          save-if: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release-') }}
+
+      # The integration legs run only `package(tests)`; the binaries they exercise
+      # come from `build-test-bins`. Keeps them off the workspace archive.
+      - name: Build and archive integration tests
+        run: |
+          python3 scripts/compile-metrics sample-rss --out peak-rss.json -- \
+            cargo nextest archive --locked -p tests --tests --timings \
+              --archive-file nextest-archive-integration.tar.zst
+        timeout-minutes: 60
+
+      - uses: ./.github/actions/compile-metrics
+        continue-on-error: true
+        with:
+          job: test-archive-integration
+          timing: target/cargo-timings/cargo-timing.html
+
+      - name: Upload archive to workflow
+        uses: actions/upload-artifact@v7
+        with:
+          name: nextest-archive-integration
+          if-no-files-found: error
+          path: nextest-archive-integration.tar.zst
+          retention-days: 1
+
   test-postgres:
     needs: build-test-artifacts-postgres
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        partition: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+        partition: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
       fail-fast: false
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/free-disk-space
       - uses: ./.github/actions/install-foundry
+      - uses: ./.github/actions/install-postgres
       - uses: taiki-e/install-action@nextest
 
       - name: Download archive
@@ -270,7 +250,7 @@ jobs:
         run: |
           cargo nextest run --archive-file nextest-archive-postgres.tar.zst  --verbose --no-fail-fast \
           --workspace-remap $PWD \
-          --partition hash:${{ matrix.partition }}/10
+          --partition hash:${{ matrix.partition }}/20
         timeout-minutes: 30
 
       - name: Upload nextest JUnit
@@ -282,47 +262,14 @@ jobs:
           path: target/nextest/*/junit.xml
           retention-days: 1
 
-  test-sqlite:
-    needs: build-test-artifacts-sqlite
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        partition: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
-      fail-fast: false
-    steps:
-      - uses: actions/checkout@v6
-      - uses: ./.github/actions/install-foundry
-      - uses: taiki-e/install-action@nextest
-
-      - name: Download archive
-        uses: actions/download-artifact@v8
-        with:
-          name: nextest-archive-sqlite
-
-      - name: Test
-        run: |
-          cargo nextest run --archive-file nextest-archive-sqlite.tar.zst  --verbose --no-fail-fast \
-          --workspace-remap $PWD \
-          --partition hash:${{ matrix.partition }}/10
-        timeout-minutes: 30
-
-      - name: Upload nextest JUnit
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: nextest-junit-sqlite-${{ matrix.partition }}
-          if-no-files-found: ignore
-          path: target/nextest/*/junit.xml
-          retention-days: 1
-
   test-go-sdk:
     needs: build-test-bins-dev-node
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/free-disk-space
       - uses: cachix/install-nix-action@v31
-      - uses: cachix/cachix-action@v16
+      - uses: cachix/cachix-action@v17
         continue-on-error: true
         with:
           name: espresso-systems-private
@@ -349,49 +296,51 @@ jobs:
           ESPRESSO_DEV_NODE_BIN: ${{ github.workspace }}/test-binaries-dev-node/espresso-dev-node
 
   test-integration:
-    needs: [build-test-bins, build-test-bins-sqlite, build-test-artifacts-postgres]
+    needs: [build-test-bins, build-test-archive-integration]
     strategy:
       matrix:
         include:
           - test-name: test_native_demo_base
-          - test-name: test_native_demo_pos_base
-          - test-name: test_native_demo_drb_header_base
-          - test-name: test_native_demo_pos_upgrade
-          - test-name: test_native_demo_drb_header_upgrade
-          - test-name: test_native_demo_fee_to_drb_header_upgrade
-          - test-name: test_native_demo_epoch_reward_upgrade
           - test-name: test_native_demo_da_committee
           - test-name: test_native_demo_ff_base
 
       fail-fast: false
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/free-disk-space
       - uses: taiki-e/install-action@nextest
       - uses: ./.github/actions/install-process-compose
         with:
           version: v1.75.2
+      - uses: ./.github/actions/install-native-demo-deps
 
-      - name: Download archive
+      - name: Download integration test archive
         uses: actions/download-artifact@v8
+        with:
+          name: nextest-archive-integration
 
-      - name: Move files
-        run: |
-          mv nextest-archive-postgres/* .
-          mkdir -p target/debug
-          mv test-binaries/* target/debug
-          mv test-binaries-sqlite/* target/debug
-          chmod -c +x target/debug/*
+      - name: Download node binaries
+        uses: actions/download-artifact@v8
+        with:
+          name: test-binaries
+          path: target/debug
 
-      - name: Configure PATH
-        run: PATH="$PWD/target/debug:$PATH"
+      - name: Make binaries executable
+        run: chmod -c +x target/debug/*
 
       - name: Test Integration
         env:
           NEXTEST_PROFILE: integration
+          # Dominates seconds-per-block on an idle demo chain, and these legs are
+          # bound by block count; the view round trip sets the rest (~490ms floor
+          # observed at 250ms). Reaches the orchestrator through the interpolation
+          # in process-compose.yaml; a `.env` entry would shadow it.
+          ESPRESSO_ORCHESTRATOR_BUILDER_TIMEOUT: 250ms
+          # Must move with it, or `max_consecutive_blocks_without_tx` trips.
+          ESPRESSO_SUBMIT_TRANSACTIONS_DELAY: 200ms
         run: |
-          cargo nextest run --archive-file nextest-archive-postgres.tar.zst --verbose --no-fail-fast --nocapture \
+          cargo nextest run --archive-file nextest-archive-integration.tar.zst --verbose --no-fail-fast --nocapture \
           --workspace-remap $PWD ${{ matrix.test-name }}
         timeout-minutes: 60
 
@@ -425,13 +374,14 @@ jobs:
 
 
   demo-native:
-    needs: [build-test-bins, build-test-bins-sqlite]
+    needs: [build-test-bins]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/install-process-compose
         with:
           version: v1.75.2
+      - uses: ./.github/actions/install-native-demo-deps
       - uses: ./.github/actions/free-disk-space
 
         # TODO: this downloads all (available) artifacts, which is a bit wasteful but artifact
@@ -443,7 +393,6 @@ jobs:
         run: |
           mkdir -p target/debug
           mv test-binaries/* target/debug
-          mv test-binaries-sqlite/* target/debug
           chmod -c +x target/debug/*
 
       - name: Test Demo
@@ -467,7 +416,7 @@ jobs:
           retention-days: 3
 
   nextest-report:
-    needs: [test-postgres, test-sqlite, test-integration]
+    needs: [test-postgres, test-integration]
     runs-on: ubuntu-latest
     if: ${{ always() && !cancelled() }}
     # Reporter only: failures here must not fail the workflow.
@@ -477,7 +426,7 @@ jobs:
       contents: read
       pull-requests: write
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Download JUnit artifacts
         uses: actions/download-artifact@v8
@@ -512,14 +461,14 @@ jobs:
       - name: Post/update PR comment
         if: ${{ github.event_name == 'pull_request' }}
         continue-on-error: true
-        uses: marocchino/sticky-pull-request-comment@v2
+        uses: marocchino/sticky-pull-request-comment@v3
         with:
           header: nextest-test
           path: junit-artifacts/pr-comment.md
           delete: ${{ hashFiles('junit-artifacts/pr-comment.md') == '' }}
 
   publish-test-stats:
-    needs: [test-postgres, test-sqlite, test-integration]
+    needs: [test-postgres, test-integration]
     # always() so a single flaky shard on main does not freeze the history artifact.
     if: ${{ always() && !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-latest
@@ -529,7 +478,7 @@ jobs:
       actions: read
       contents: read
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Download JUnit artifacts
         uses: actions/download-artifact@v8
@@ -554,9 +503,53 @@ jobs:
           if-no-files-found: error
           retention-days: 90
 
+  compile-metrics-report:
+    name: Compile metrics
+    needs:
+      - build-test-artifacts-postgres
+      - build-test-bins
+      - build-test-bins-dev-node
+      - build-test-archive-integration
+    if: ${{ !cancelled() && github.event_name == 'pull_request' }}
+    runs-on: ubuntu-latest
+    # Reporter only: failures here must not fail the workflow.
+    continue-on-error: true
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: ./.github/actions/compile-metrics-report
+        with:
+          workflow: test.yml
+          baseline-artifact: compile-metrics-test
+          title: "Compile metrics: test binaries"
+
+  publish-compile-metrics:
+    name: Publish compile metrics
+    needs:
+      - build-test-artifacts-postgres
+      - build-test-bins
+      - build-test-bins-dev-node
+    # !cancelled() so one failed build job on main does not freeze the baseline artifact.
+    if: ${{ !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    # Reporter only: failures here must not fail the workflow.
+    continue-on-error: true
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: ./.github/actions/compile-metrics-publish
+        with:
+          artifact: compile-metrics-test
+
   # This job enables having a single required status check in github for all GCL tests.
   aggregate-gcl-tests:
-    needs: [test-postgres, test-sqlite, test-go-sdk, demo-native, test-integration]
+    needs: [test-postgres, test-go-sdk, demo-native, test-integration]
     runs-on: ubuntu-latest
     # explicitly run and fail the job if dependencies failed
     if: ${{ always() && !cancelled() }}

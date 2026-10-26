@@ -241,7 +241,7 @@ contract PlonkVerifier_validateProof_Test is PlonkVerifierCommonTest {
             }
         }
 
-        vm.expectRevert("InvalidG1()");
+        vm.expectRevert(BN254.InvalidG1.selector);
         V._validateProof(proof);
     }
 
@@ -262,7 +262,7 @@ contract PlonkVerifier_validateProof_Test is PlonkVerifierCommonTest {
             mstore(add(start, mul(nthField, 0x20)), invalidField)
         }
 
-        vm.expectRevert("InvalidScalar()");
+        vm.expectRevert(BN254.InvalidScalar.selector);
         V._validateProof(proof);
     }
 }

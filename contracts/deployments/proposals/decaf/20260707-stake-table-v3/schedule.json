@@ -1,0 +1,60 @@
+{
+  "version": "1.0",
+  "chainId": "11155111",
+  "createdAt": 1783440474090,
+  "meta": {
+    "name": "Espresso Multisig Transactions",
+    "description": "Schedule StakeTable V2 -> V3 upgrade via timelock 0x8e3b6563d683b87964104a2c3a4bf542bb70767f (proxy 0x40304fbe94d5e7d1492dd90c53a2d63e8506a037, impl 0x8ed0b40c67a8f0e50deeac4736431518fad15630)"
+  },
+  "transactions": [
+    {
+      "to": "0x8e3b6563D683b87964104A2c3A4bf542bb70767F",
+      "value": "0",
+      "data": null,
+      "contractMethod": {
+        "inputs": [
+          {
+            "internalType": "address",
+            "name": "target",
+            "type": "address"
+          },
+          {
+            "internalType": "uint256",
+            "name": "value",
+            "type": "uint256"
+          },
+          {
+            "internalType": "bytes",
+            "name": "data",
+            "type": "bytes"
+          },
+          {
+            "internalType": "bytes32",
+            "name": "predecessor",
+            "type": "bytes32"
+          },
+          {
+            "internalType": "bytes32",
+            "name": "salt",
+            "type": "bytes32"
+          },
+          {
+            "internalType": "uint256",
+            "name": "delay",
+            "type": "uint256"
+          }
+        ],
+        "name": "schedule",
+        "payable": false
+      },
+      "contractInputsValues": {
+        "data": "0x4f1ef2860000000000000000000000008ed0b40c67a8f0e50deeac4736431518fad156300000000000000000000000000000000000000000000000000000000000000040000000000000000000000000000000000000000000000000000000000000000438e454b100000000000000000000000000000000000000000000000000000000",
+        "delay": "300",
+        "predecessor": "0x0000000000000000000000000000000000000000000000000000000000000000",
+        "salt": "0xfac521a6a662d266308639d1f13593d145c5f1029dbf78c5bfdf83851980fcf7",
+        "target": "0x40304FbE94D5E7D1492Dd90c53a2D63E8506a037",
+        "value": "0"
+      }
+    }
+  ]
+}

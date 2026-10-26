@@ -1,6 +1,8 @@
-mod hotshot
 mod py "scripts/py.just"
+mod claude ".github/claude/claude.just"
 mod binary-upgrade-tests "binary-upgrade-tests/justfile"
+mod soak "crates/process-metrics/justfile"
+mod bench "scripts/network-bench/justfile"
 
 default:
     just --list
@@ -76,54 +78,56 @@ fmt *args:
 fix *args:
     just clippy --fix {{args}}
 
+# Every workflow's compile-metrics report, as CI renders it: --pr N, --rev REV, --run ID
+compile-metrics *args:
+    scripts/compile-metrics local {{args}}
+
 lint *args:
     just clippy {{args}} -- -D warnings
 
-# postgres and sqlite variants checked separately to cover all code
-clippy *args:
-    cargo clippy --workspace --exclude espresso-node-sqlite --exclude espresso-dev-node --features testing --all-targets {{args}}
-    cargo clippy --workspace --features "embedded-db testing" --all-targets {{args}}
+# Check the v2 protos' formatting and, if they changed since `base`, that they stay wire and JSON compatible
+proto-check $base="origin/main":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    buf format --diff --exit-code crates/espresso/api/proto
+    merge_base=$(git merge-base "$base" HEAD)
+    # `buf.yaml` too, so a PR that only loosens the rules is still checked under them.
+    if git diff --quiet "$merge_base" -- 'crates/espresso/api/proto/*.proto' crates/espresso/api/proto/buf.yaml; then
+        echo "No proto changes since $base"
+        exit 0
+    fi
+    # buf's own `.git#ref=` input cannot read a git worktree, so compare against an export.
+    dir=$(mktemp -d)
+    trap 'rm -rf "$dir"' EXIT
+    git archive "$merge_base" crates/espresso/api/proto | tar -x -C "$dir"
+    buf breaking crates/espresso/api/proto --against "$dir/crates/espresso/api/proto"
 
-# postgres and sqlite variants checked separately to cover all code
+# slow-tests picks its storage backend at compile time, so check its sqlite variant too
+clippy *args:
+    cargo clippy --workspace --features testing --all-targets {{args}}
+    cargo clippy -p slow-tests --features sqlite --all-targets {{args}}
+
 check *args:
-    cargo check --workspace --exclude espresso-node-sqlite --exclude espresso-dev-node {{args}}
-    cargo check -p espresso-node-sqlite -p espresso-dev-node {{args}}
+    cargo check --workspace {{args}}
 
 build profile="dev" features="":
-    # postgres
     cargo build --profile {{profile}} {{features}}
-    # embedded-db
-    cargo build --profile {{profile}} -p espresso-node-sqlite -p espresso-dev-node {{features}}
-
-demo-native-fee *args: (build "test" "--no-default-features")
-    ESPRESSO_NODE_GENESIS_FILE=data/genesis/demo.toml scripts/demo-native -f process-compose.yaml {{args}}
-
-demo-native-pos *args: (build "test" "--no-default-features")
-    ESPRESSO_NODE_GENESIS_FILE=data/genesis/demo-pos.toml scripts/demo-native -f process-compose.yaml {{args}}
-
-demo-native-pos-base *args: (build "test" "--no-default-features")
-    ESPRESSO_NODE_GENESIS_FILE=data/genesis/demo-pos-base.toml scripts/demo-native -f process-compose.yaml {{args}}
-
-demo-native-drb-header-upgrade *args: (build "test" "--no-default-features")
-    ESPRESSO_NODE_GENESIS_FILE=data/genesis/demo-drb-header-upgrade.toml scripts/demo-native -f process-compose.yaml {{args}}
-
-demo-native-drb-header *args: (build "test" "--no-default-features")
-    ESPRESSO_NODE_GENESIS_FILE=data/genesis/demo-drb-header.toml scripts/demo-native -f process-compose.yaml {{args}}
-
-demo-native-fee-to-drb-header-upgrade *args: (build "test" "--no-default-features")
-    ESPRESSO_NODE_GENESIS_FILE=data/genesis/demo-fee-to-drb-header-upgrade.toml scripts/demo-native -f process-compose.yaml {{args}}
+    # espresso-dev-node enables the espresso-node testing feature, which release builds reject
+    cargo build --profile {{profile}} -p espresso-dev-node {{features}}
 
 demo-native-da-committees *args: (build "test" "--no-default-features")
     ESPRESSO_NODE_GENESIS_FILE=data/genesis/demo-da-committees.toml scripts/demo-native -f process-compose.yaml {{args}}
 
-demo-native-epoch-reward *args: (build "test" "--no-default-features")
-    ESPRESSO_NODE_GENESIS_FILE=data/genesis/demo-epoch-reward.toml scripts/demo-native -f process-compose.yaml {{args}}
-
-demo-native-epoch-reward-upgrade *args: (build "test" "--no-default-features")
-    ESPRESSO_NODE_GENESIS_FILE=data/genesis/demo-epoch-reward-upgrade.toml scripts/demo-native -f process-compose.yaml {{args}}
+demo-native-large-block-upgrade *args: (build "test" "--no-default-features")
+    ESPRESSO_NODE_GENESIS_FILE=data/genesis/demo-large-block-upgrade.toml scripts/demo-native -f process-compose.yaml {{args}}
 
 demo-native-ff *args: (build "test" "--no-default-features")
     ESPRESSO_NODE_GENESIS_FILE=data/genesis/demo-ff.toml scripts/demo-native -f process-compose.yaml {{args}}
+
+# A/B the leader block-build critical path between two git refs (see scripts/bench-block-build)
+[positional-arguments]
+bench-block-build *args:
+    scripts/bench-block-build "$@"
 
 demo-native-benchmark:
     cargo build --release --features benchmarking
@@ -141,13 +145,11 @@ docker-stop-rm:
 anvil *args:
     docker run -p 127.0.0.1:8545:8545 ghcr.io/foundry-rs/foundry:latest "anvil {{args}}"
 
-# hotshot-testing: tested in hotshot.yml
 # hotshot-new-protocol: tested in hotshot.yml
-# espresso-node-sqlite: no tests, enables embedded-db feature
 # slow-tests: slow and serial tests
-# espresso-dev-node: enables embedded-db
+# espresso-dev-node: tested by test-dev-node
 # espresso-crypto-helper: vendored openssl leaks to workspace via feature unification
-nextest_excludes := "--exclude espresso-node-sqlite --exclude hotshot-testing --exclude hotshot-new-protocol --exclude slow-tests --exclude espresso-dev-node --exclude hotshot-examples --exclude espresso-crypto-helper"
+nextest_excludes := "--exclude hotshot-new-protocol --exclude slow-tests --exclude espresso-dev-node --exclude espresso-crypto-helper"
 
 nextest *args:
     cargo nextest run --locked --workspace {{nextest_excludes}} --lib --bins --tests --verbose {{args}}
@@ -157,8 +159,6 @@ nextest-archive archive-file *args:
 
 test *args:
     @echo 'Omitting slow tests. Use `test-slow` for those. Or `test-all` for all tests.'
-    @echo 'features: "embedded-db"'
-    just nextest --features embedded-db  {{args}}
     just nextest {{args}}
 
 test-slow *args:
@@ -173,15 +173,35 @@ test-dev-node *args:
     cargo nextest run --profile slow --locked -p espresso-dev-node --verbose {{args}}
 
 test-all:
-    @echo 'features: "embedded-db"'
-    just nextest --features embedded-db --profile all
     just nextest --profile all
+
+# A pass means the recorded node obeyed `ProtocolHistory` and discharged what it
+# owed within `defaultDelta` (`Prompt`). See `lean/new-protocol-diff/CheckMain.lean`
+# and `crates/hotshot/new-protocol/src/trace.rs`.
+#
+# Record runs of the new-protocol tests and check each against `lean/new-protocol-spec`.
+test-lean-check dir="":
+    #!/usr/bin/env bash
+    set -uo pipefail
+    (cd lean/new-protocol-diff && lake build check) || exit 1
+    # Given a directory, record nothing and check what is already there.
+    if [ -n "{{dir}}" ]; then
+      lean/new-protocol-diff/.lake/build/bin/check "{{dir}}"
+      exit $?
+    fi
+    # A fixed path, cleared first, so runs overwrite rather than accumulate.
+    # Under `target` because it is build output: gitignored, and cleaned with it.
+    traces="$(pwd)/target/np-traces"
+    rm -rf "$traces"
+    echo "recording to $traces"
+    NP_TRACE_DIR="$traces" cargo test -p hotshot-new-protocol --release --lib tests:: || exit $?
+    lean/new-protocol-diff/.lake/build/bin/check "$traces"
 
 test-integration: (build "test")
 	INTEGRATION_TEST_NODE_VERSION=2 cargo nextest run -p tests --nocapture --profile integration test_native_demo_basic
 
 # Run process-compose integration tests with minimal features
-# Examples: just test-demo pos-base, just test-demo drb-header-base
+# Examples: just test-demo base, just test-demo da-committees
 test-demo test_name:
 	#!/usr/bin/env bash
 	set -euo pipefail
@@ -190,37 +210,13 @@ test-demo test_name:
 			features="--no-default-features"
 			test="test_native_demo_base"
 			;;
-		pos-upgrade)
-			features="--no-default-features"
-			test="test_native_demo_pos_upgrade"
-			;;
-		pos-base)
-			features="--no-default-features"
-			test="test_native_demo_pos_base"
-			;;
-		fee-to-drb-header-upgrade)
-			features="--no-default-features"
-			test="test_native_demo_fee_to_drb_header_upgrade"
-			;;
-		drb-header-upgrade)
-			features="--no-default-features"
-			test="test_native_demo_drb_header_upgrade"
-			;;
-		drb-header-base)
-			features="--no-default-features"
-			test="test_native_demo_drb_header_base"
-			;;
 		da-committees)
 			features="--no-default-features"
 			test="test_native_demo_da_committee"
 			;;
-		epoch-reward-base)
+		large-block-upgrade)
 			features="--no-default-features"
-			test="test_native_demo_epoch_reward_base"
-			;;
-		epoch-reward-upgrade)
-			features="--no-default-features"
-			test="test_native_demo_epoch_reward_upgrade"
+			test="test_native_demo_large_block_upgrade"
 			;;
 		ff-base)
 			features="--no-default-features"
@@ -228,7 +224,7 @@ test-demo test_name:
 			;;
 		*)
 			echo "Unknown test: {{test_name}}"
-			echo "Available tests: base, pos-base, drb-header-base, epoch-reward-base, ff-base, pos-upgrade, drb-header-upgrade, fee-to-drb-header-upgrade, da-committees, epoch-reward-upgrade"
+			echo "Available tests: base, ff-base, da-committees, large-block-upgrade"
 			exit 1
 			;;
 	esac
@@ -243,30 +239,29 @@ check-features-ci *args:
     cargo hack check --feature-powerset \
         --depth 2 \
         --exclude-all-features \
-        --exclude hotshot \
-        --exclude hotshot-builder-api \
         --exclude hotshot-contract-adapter \
-        --exclude hotshot-events-service \
         --exclude hotshot-example-types \
-        --exclude hotshot-libp2p-networking \
-        --exclude hotshot-macros \
         --exclude hotshot-orchestrator \
         --exclude hotshot-query-service \
         --exclude hotshot-state-prover \
-        --exclude hotshot-task \
-        --exclude hotshot-task-impls \
-        --exclude hotshot-testing \
         --exclude hotshot-types \
         --exclude hotshot-utils \
         --exclude vid \
         {{args}}
 
+# requires the succinct toolchain (`sp1up`, https://docs.succinct.xyz/docs/sp1/getting-started/install)
+# check that the zkVM client crates compile for the SP1 target
+check-sp1-target:
+    # getrandom 0.3/0.4 have no zkVM backend; opt out explicitly (0.2 is
+    # handled by the `custom` feature in sp1/target-check)
+    # --ignore-rust-version: the succinct toolchain reports rustc 1.94.0-dev,
+    # one patch below alloy's declared 1.94.1 MSRV
+    CARGO_TARGET_RISCV64IM_SUCCINCT_ZKVM_ELF_RUSTFLAGS='--cfg getrandom_backend="unsupported"' \
+        cargo +succinct check --ignore-rust-version --target riscv64im-succinct-zkvm-elf -p sp1-target-check
+
 # Helpful shortcuts for local development
 dev-orchestrator:
     target/release/orchestrator -p 8080 -n 1
-
-dev-cdn *args:
-    RUST_LOG=info cargo run --release --bin dev-cdn -- {{args}}
 
 dev-state-relay-server:
     target/release/state-relay-server -p 8083
@@ -274,31 +269,57 @@ dev-state-relay-server:
 dev-espresso-node:
     target/release/espresso-node \
     --orchestrator-url http://localhost:8080 \
-    --cdn-endpoint "127.0.0.1:1738" \
     --state-relay-server-url http://localhost:8083 \
     -- http --port 8083  -- query --storage-path storage
 
 build-docker-images:
     scripts/build-docker-images-native
 
+# Repository rules block the workflow token from creating release-* branches, so the
+# branch is pushed from here and the workflow then tags it and opens the tracker.
+# The empty lease (`<ref>:`) makes the push fail unless the branch does not exist yet;
+# a plain push would fast-forward an existing release branch onto the source ref.
+# Cut the next release branch (PHASE bump); pass a version for a protocol bump. See doc/software-releases.md.
+release-cut version="" source_ref="main":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    requested="{{version}}"
+    version=$(scripts/release next-version ${requested:+--version "$requested"})
+    git fetch origin "{{source_ref}}"
+    git push --force-with-lease=refs/heads/release-$version: origin FETCH_HEAD:refs/heads/release-$version
+    gh workflow run release-branch.yml -f version=$version -f source_ref=$(git rev-parse FETCH_HEAD)
+
+# Cut the next X.Y.Z.N tag on a release-X.Y.Z branch, like commenting `/tag` on its tracker.
+release-tag branch tag="":
+    gh workflow run tag-release.yml --ref {{branch}} -f tag={{tag}}
+
+# Preview the release edits and tracker comment of `/publish <tag> <network>` without writing to GitHub.
+release-publish-preview tag network:
+    scripts/release publish --dry-run --comment "/publish {{tag}} {{network}}"
+
+# Render the release tracker body for a version without writing to GitHub.
+release-body version:
+    scripts/release refresh --dry-run --version {{version}}
+
 # generate rust bindings for contracts
-VERSIONED := "LightClient(Arbitrum)?(V\\d+)?(Mock)?|PlonkVerifier(V\\d+)?|StakeTable(V\\d+)?|EspToken(V\\d+)?|RewardClaim(V\\d+)?"
-EXACT := "FeeContract|ERC1967Proxy|OpsTimelock|SafeExitTimelock|OwnableUpgradeable|AccessControlUpgradeable|IRewardClaim|IPlonkVerifier"
+VERSIONED := "LightClient(V\\d+)?(Mock)?|PlonkVerifier(V\\d+)?|StakeTable(V\\d+)?|EspToken(V\\d+)?|RewardClaim(V\\d+)?"
+EXACT := "FeeContract|ERC1967Proxy|OpsTimelock|SafeExitTimelock|OwnableUpgradeable|AccessControlUpgradeable"
 REGEXP := "^(" + VERSIONED + "|" + EXACT + ")$"
 gen-bindings:
     # Update the git submodules
     git submodule update --init --recursive
 
-    # Generate the alloy bindings
+    # `forge bind` builds with a reduced output selection that omits bytecode, so
+    # build separately and let bind reuse those artifacts.
     # TODO: `forge bind --alloy ...` fails if there's an unliked library so we pass pass it an address for the PlonkVerifier contract.
-    forge bind --skip test --skip script --use "0.8.28"  --contracts ./contracts/src/ \
-      --module --bindings-path contracts/rust/adapter/src/bindings --select "{{REGEXP}}" --overwrite --force \
+    forge build --skip test --skip script --use "0.8.28" --contracts ./contracts/src/ --force \
       --libraries contracts/src/libraries/PlonkVerifier.sol:PlonkVerifier:0xffffffffffffffffffffffffffffffffffffffff \
       --libraries contracts/src/libraries/PlonkVerifierV2.sol:PlonkVerifierV2:0xffffffffffffffffffffffffffffffffffffffff \
       --libraries contracts/src/libraries/PlonkVerifierV3.sol:PlonkVerifierV3:0xffffffffffffffffffffffffffffffffffffffff
 
-    # HACK: add serde support for fixed byte arrays in the generated bindings
-    sed -i '/pub proof: \[alloy::sol_types::private::FixedBytes<32>; 160usize\],/i \        #[serde(with = "serde_arrays")]' contracts/rust/adapter/src/bindings/*.rs
+    # Generate the alloy bindings from the artifacts built above.
+    forge bind --skip-build --module --bindings-path contracts/rust/adapter/src/bindings \
+      --select "{{REGEXP}}" --overwrite
 
     just export-contract-abis
     just gen-go-bindings

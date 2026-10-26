@@ -39,28 +39,34 @@ impl<T> Queue<T> {
         self.0.sig.notify_waiters();
     }
 
-    pub fn try_dequeue(&self) -> Option<(Slot, MsgId, T)> {
-        let mut map = self.0.map.lock();
-        let ((s, i), v) = map.pop_first()?;
-        Some((s, i, v))
-    }
-
-    pub async fn dequeue(&self) -> (Slot, MsgId, T) {
-        loop {
-            let future = self.0.sig.notified();
-            if let Some(v) = self.try_dequeue() {
-                return v;
-            }
-            future.await;
-        }
-    }
-
     pub fn gc(&self, s: Slot) {
         let mut map = self.0.map.lock();
         *map = map.split_off(&(s, MsgId(0)))
     }
 
+    pub fn remove(&self, s: Slot, i: MsgId) {
+        self.0.map.lock().remove(&(s, i));
+    }
+
     pub fn len(&self) -> usize {
         self.0.map.lock().len()
+    }
+}
+
+impl<T: Clone> Queue<T> {
+    pub fn try_next(&self) -> Option<(Slot, MsgId, T)> {
+        let map = self.0.map.lock();
+        let (&(s, i), v) = map.first_key_value()?;
+        Some((s, i, v.clone()))
+    }
+
+    pub async fn next(&self) -> (Slot, MsgId, T) {
+        loop {
+            let future = self.0.sig.notified();
+            if let Some(v) = self.try_next() {
+                return v;
+            }
+            future.await;
+        }
     }
 }

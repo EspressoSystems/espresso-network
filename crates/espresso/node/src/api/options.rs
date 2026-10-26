@@ -1,53 +1,32 @@
 //! Sequencer-specific API options and initialization.
 
-use std::sync::Arc;
+use std::{collections::BTreeSet, env, path::PathBuf, sync::Arc};
 
 use ::light_client::{state::LightClientOptions, storage::LightClientSqliteOptions};
 use anyhow::{Context, bail};
 use clap::Parser;
-use espresso_types::{
-    BlockMerkleTree, PubKey, SeqTypes,
-    v0::traits::{EventConsumer, NullEventConsumer, PersistenceOptions, SequencerPersistence},
-    v0_3::RewardMerkleTreeV1,
-    v0_4::RewardMerkleTreeV2,
-};
-use futures::{
-    channel::oneshot,
-    future::{BoxFuture, Future},
-};
+use espresso_telemetry as telemetry;
+use espresso_types::v0::traits::NullEventConsumer;
+use futures::{channel::oneshot, future::BoxFuture};
 use hotshot_query_service::{
-    ApiState as AppState, Error,
     data_source::{ExtensibleDataSource, MetricsDataSource},
-    status::{self, UpdateStatusData},
+    status::{HasMetrics, UpdateStatusData},
 };
-use hotshot_types::traits::{
-    metrics::{Metrics, NoMetrics},
-    network::ConnectedNetwork,
-};
-use jf_merkle_tree_compat::MerkleTreeScheme;
-use tide_disco::{Api, App, Url, listener::RateLimitListener, method::ReadState};
-use vbs::version::StaticVersionType;
+use hotshot_types::traits::metrics::{Metrics, NoMetrics};
+use process_metrics::ProcessMetrics;
+use url::Url;
 
 use super::{
     ApiState, StorageState,
-    data_source::{
-        CatchupDataSource, HotShotConfigDataSource, NodeStateDataSource, Provider,
-        PruningDataSource, SequencerDataSource, StateSignatureDataSource, SubmitDataSource,
-        provider,
-    },
-    endpoints, fs, light_client, sql,
+    context::ApiContext,
+    data_source::{DataSourceOptions, PruningDataSource, SequencerDataSource, provider},
+    fs, sql,
     state::NodeApiStateImpl,
-    update::ApiEventConsumer,
+    update::{ApiEventConsumer, ApiSink},
 };
 use crate::{
-    SequencerApiVersion,
-    api::{LightClientProvider, endpoints::RewardMerkleTreeVersion},
-    catchup::CatchupStorage,
-    context::{SequencerContext, TaskList},
-    options::PublicNodeConfig,
-    persistence,
+    catchup::CatchupStorage, context::TaskList, options::PublicNodeConfig, persistence,
     request_response::data_source::Storage as RequestResponseStorage,
-    state::update_state_storage_loop,
 };
 
 #[derive(Clone, Debug)]
@@ -58,7 +37,6 @@ pub struct Options {
     pub status: Option<Status>,
     pub catchup: Option<Catchup>,
     pub config: Option<Config>,
-    pub hotshot_events: Option<HotshotEvents>,
     pub explorer: Option<Explorer>,
     pub light_client: Option<LightClient>,
     pub storage_fs: Option<persistence::fs::Options>,
@@ -75,7 +53,6 @@ impl From<Http> for Options {
             status: None,
             catchup: None,
             config: None,
-            hotshot_events: None,
             explorer: None,
             light_client: None,
             storage_fs: None,
@@ -137,12 +114,6 @@ impl Options {
         self
     }
 
-    /// Add a Hotshot events streaming API module.
-    pub fn hotshot_events(mut self, opt: HotshotEvents) -> Self {
-        self.hotshot_events = Some(opt);
-        self
-    }
-
     /// Add an explorer API module.
     pub fn explorer(mut self, opt: Explorer) -> Self {
         self.explorer = Some(opt);
@@ -165,15 +136,14 @@ impl Options {
     /// The function `init_context` is used to create a sequencer context from a metrics object and
     /// optional saved consensus state. The metrics object is created from the API data source, so
     /// that consensus will populuate metrics that can then be read and served by the API.
-    pub async fn serve<N, P, F>(mut self, init_context: F) -> anyhow::Result<SequencerContext<N, P>>
+    pub async fn serve<C, F>(mut self, init_context: F) -> anyhow::Result<C>
     where
-        N: ConnectedNetwork<PubKey>,
-        P: SequencerPersistence,
+        C: ApiContext + Clone,
         F: FnOnce(
             Box<dyn Metrics>,
-            Box<dyn EventConsumer>,
+            Box<dyn ApiSink>,
             Option<RequestResponseStorage>,
-        ) -> BoxFuture<'static, anyhow::Result<SequencerContext<N, P>>>,
+        ) -> BoxFuture<'static, anyhow::Result<C>>,
     {
         // Create a channel to send the context to the web server after it is initialized. This
         // allows the web server to start before initialization can complete, since initialization
@@ -191,27 +161,23 @@ impl Options {
         #[allow(clippy::type_complexity)]
         let (metrics, consumer, storage): (
             Box<dyn Metrics>,
-            Box<dyn EventConsumer>,
+            Box<dyn ApiSink>,
             Option<RequestResponseStorage>,
         ) = if let Some(query_opt) = self.query.take() {
             if let Some(opt) = self.storage_sql.take() {
-                self.init_with_query_module_sql(
-                    query_opt,
-                    opt,
-                    state,
-                    &mut tasks,
-                    SequencerApiVersion::instance(),
-                )
-                .await?
+                match opt.into_backend() {
+                    persistence::sql::SqlBackendOptions::Sqlite(opt) => {
+                        sql::sqlite::init_query_module(&self, query_opt, opt, state, &mut tasks)
+                            .await?
+                    },
+                    persistence::sql::SqlBackendOptions::Postgres(opt) => {
+                        sql::postgres::init_query_module(&self, query_opt, opt, state, &mut tasks)
+                            .await?
+                    },
+                }
             } else if let Some(opt) = self.storage_fs.take() {
-                self.init_with_query_module_fs(
-                    query_opt,
-                    opt,
-                    state,
-                    &mut tasks,
-                    SequencerApiVersion::instance(),
-                )
-                .await?
+                self.init_with_query_module_fs(query_opt, opt, state, &mut tasks)
+                    .await?
             } else {
                 bail!("query module requested but not storage provided");
             }
@@ -221,37 +187,34 @@ impl Options {
             // storage.
             let ds = MetricsDataSource::default();
             let metrics = ds.populate_metrics();
-            let mut app = App::<_, Error>::with_state(AppState::from(ExtensibleDataSource::new(
-                ds,
-                state.clone(),
-            )));
+            telemetry::set_registry(Arc::new(ds.metrics().registry().clone()));
+            tasks.spawn("process_metrics", ProcessMetrics::new(ds.metrics()).run());
+            let axum_ds = Arc::new(ExtensibleDataSource::new(ds, state.clone()));
 
-            // Initialize v0 and v1 status API.
-            register_api("status", &mut app, move |ver| {
-                status::define_api(&Default::default(), SequencerApiVersion::instance(), ver)
-                    .context("failed to define status api")
-            })?;
-
-            self.init_hotshot_modules(&mut app)?;
-
-            // Initialize hotshot events API if enabled
-            if self.hotshot_events.is_some() {
-                self.init_hotshot_events_module(&mut app)?;
-            }
-
-            tasks.spawn(
-                "API server",
-                self.listen(self.http.port, app, SequencerApiVersion::instance()),
-            );
-
-            // Spawn new Axum and gRPC servers if ports are configured
-            // TODO: Use NodeApiStateImpl with real data source once available for status-only mode
-            if self.http.axum_port.is_some() {
-                tracing::warn!("Axum reward API not available in status-only mode");
-            }
+            let port = self.http.port;
+            let env_vars = get_public_env_vars().unwrap_or_default();
+            let node_cfg = self.public_node_config.as_deref().cloned();
+            let modules = espresso_api::OptionalModules {
+                submit: self.submit.is_some(),
+                catchup: self.catchup.is_some(),
+                config: self.config.is_some(),
+                ..Default::default()
+            };
+            let max_connections = self.http.max_connections;
+            tasks.spawn("API server", async move {
+                let state = NodeApiStateImpl::new(axum_ds)
+                    .with_env_vars(env_vars)
+                    .with_public_node_config(node_cfg);
+                if let Err(e) =
+                    espresso_api::serve_axum_status(port, state, modules, max_connections).await
+                {
+                    tracing::error!("Axum server error: {}", e);
+                }
+                anyhow::Ok(())
+            });
 
             if self.http.tonic_port.is_some() {
-                tracing::warn!("gRPC reward API not available in status-only mode");
+                tracing::warn!("gRPC API not available in status-only mode");
             }
 
             (metrics, Box::new(NullEventConsumer), None)
@@ -262,127 +225,59 @@ impl Options {
             //
             // If we have no availability API, we cannot load a saved leaf from local storage,
             // so we better have been provided the leaf ahead of time if we want it at all.
-            let mut app = App::<_, Error>::with_state(AppState::from(state.clone()));
-
-            self.init_hotshot_modules(&mut app)?;
-
-            // Initialize hotshot events API if enabled
-            if self.hotshot_events.is_some() {
-                self.init_hotshot_events_module(&mut app)?;
-            }
-
-            tasks.spawn(
-                "API server",
-                self.listen(self.http.port, app, SequencerApiVersion::instance()),
-            );
+            let port = self.http.port;
+            let env_vars = get_public_env_vars().unwrap_or_default();
+            let node_cfg = self.public_node_config.as_deref().cloned();
+            let modules = espresso_api::OptionalModules {
+                submit: self.submit.is_some(),
+                catchup: self.catchup.is_some(),
+                config: self.config.is_some(),
+                ..Default::default()
+            };
+            let axum_ds = Arc::new(state.clone());
+            let max_connections = self.http.max_connections;
+            tasks.spawn("API server", async move {
+                let state = NodeApiStateImpl::new(axum_ds)
+                    .with_env_vars(env_vars)
+                    .with_public_node_config(node_cfg);
+                if let Err(e) =
+                    espresso_api::serve_axum_bare(port, state, modules, max_connections).await
+                {
+                    tracing::error!("Axum server error: {}", e);
+                }
+                anyhow::Ok(())
+            });
 
             (Box::new(NoMetrics), Box::new(NullEventConsumer), None)
         };
 
         let ctx = init_context(metrics, consumer, storage.clone()).await?;
         send_ctx
-            .send(ctx.clone())
+            .send(Box::new(ctx.clone()))
             .ok()
             .context("API server exited without receiving context")?;
         Ok(ctx.with_task_list(tasks))
     }
 
-    async fn init_app_modules<N, P, D>(
-        &self,
-        ds: D,
-        state: ApiState<N, P>,
-        bind_version: SequencerApiVersion,
-    ) -> anyhow::Result<(
-        Box<dyn Metrics>,
-        Arc<StorageState<N, P, D>>,
-        App<AppState<StorageState<N, P, D>>, Error>,
-    )>
-    where
-        N: ConnectedNetwork<PubKey>,
-        P: SequencerPersistence,
-        D: SequencerDataSource + CatchupStorage + PruningDataSource + Send + Sync + 'static,
-    {
-        let metrics = ds.populate_metrics();
-        let ds = Arc::new(ExtensibleDataSource::new(ds, state.clone()));
-        let api_state: endpoints::AvailState<N, P, D> = ds.clone().into();
-        let mut app = App::<_, Error>::with_state(api_state);
-
-        // Initialize v0 and v1 status API.
-        register_api("status", &mut app, move |ver| {
-            status::define_api(&Default::default(), SequencerApiVersion::instance(), ver)
-                .context("failed to define status api")
-        })?;
-
-        // Initialize availability and node APIs (these both use the same data source).
-
-        // Note: We initialize two versions of the availability module: `availability/v0` and `availability/v1`.
-        // - `availability/v0/leaf/0` returns the old `Leaf1` type for backward compatibility.
-        // - `availability/v1/leaf/0` returns the new `Leaf2` type
-
-        register_api("availability", &mut app, move |ver| {
-            endpoints::availability(ver).context("failed to define availability api")
-        })?;
-
-        register_api("node", &mut app, move |ver| {
-            endpoints::node(ver).context("failed to define node api")
-        })?;
-
-        register_api("token", &mut app, move |ver| {
-            endpoints::token(ver).context("failed to define token api")
-        })?;
-
-        // Initialize submit API
-        if self.submit.is_some() {
-            register_api("submit", &mut app, move |ver| {
-                endpoints::submit::<_, _, _, SequencerApiVersion>(ver)
-                    .context("failed to define submit api")
-            })?;
-        }
-
-        tracing::info!("initializing catchup API");
-
-        register_api("catchup", &mut app, move |ver| {
-            endpoints::catchup(bind_version, ver).context("failed to define catchup api")
-        })?;
-
-        register_api("state-signature", &mut app, move |ver| {
-            endpoints::state_signature(bind_version, ver)
-                .context("failed to define state signature api")
-        })?;
-
-        if self.config.is_some() {
-            let node_cfg = self.public_node_config.as_deref().cloned();
-            register_api("config", &mut app, move |ver| {
-                endpoints::config(bind_version, ver, node_cfg.clone())
-                    .context("failed to define config api")
-            })?;
-        }
-        Ok((metrics, ds, app))
-    }
-
-    async fn init_with_query_module_fs<N, P>(
+    async fn init_with_query_module_fs(
         &self,
         query_opt: Query,
         mod_opt: persistence::fs::Options,
-        state: ApiState<N, P>,
+        state: ApiState,
         tasks: &mut TaskList,
-        bind_version: SequencerApiVersion,
     ) -> anyhow::Result<(
         Box<dyn Metrics>,
-        Box<dyn EventConsumer>,
+        Box<dyn ApiSink>,
         Option<RequestResponseStorage>,
-    )>
-    where
-        N: ConnectedNetwork<PubKey>,
-        P: SequencerPersistence,
-    {
+    )> {
+        let light_client_db = mod_opt.light_client_db(&query_opt)?;
         let ds = <fs::DataSource as SequencerDataSource>::create(
             mod_opt,
             provider(
                 query_opt.peers,
                 &state,
                 query_opt.light_client,
-                query_opt.light_client_db,
+                light_client_db,
             )
             .await?,
             false,
@@ -392,25 +287,33 @@ impl Options {
         // Get the inner storage from the data source
         let inner_storage = ds.inner();
 
-        let (metrics, ds, mut app) = self
-            .init_app_modules(ds, state.clone(), bind_version)
-            .await?;
+        tasks.spawn("process_metrics", ProcessMetrics::new(ds.metrics()).run());
 
-        // Initialize hotshot events API if enabled
-        if self.hotshot_events.is_some() {
-            self.init_hotshot_events_module(&mut app)?;
-        }
+        let (metrics, ds) = init_query_data_source(ds, state.clone());
 
-        tasks.spawn("API server", self.listen(self.http.port, app, bind_version));
-
-        // Reward APIs not available with filesystem storage
-        // Note: Filesystem storage doesn't support RewardMerkleTreeDataSource
-        if self.http.axum_port.is_some() {
-            tracing::warn!("Axum reward API not available with filesystem storage");
-        }
+        let port = self.http.port;
+        let ds_for_axum = ds.clone();
+        let env_vars = get_public_env_vars().unwrap_or_default();
+        let node_cfg = self.public_node_config.as_deref().cloned();
+        let modules = espresso_api::OptionalModules {
+            submit: self.submit.is_some(),
+            config: self.config.is_some(),
+            ..Default::default()
+        };
+        let max_connections = self.http.max_connections;
+        tasks.spawn("API server", async move {
+            let state = NodeApiStateImpl::new(ds_for_axum)
+                .with_env_vars(env_vars)
+                .with_public_node_config(node_cfg);
+            if let Err(e) = espresso_api::serve_axum_fs(port, state, modules, max_connections).await
+            {
+                tracing::error!("Axum server error: {}", e);
+            }
+            anyhow::Ok(())
+        });
 
         if self.http.tonic_port.is_some() {
-            tracing::warn!("gRPC reward API not available with filesystem storage");
+            tracing::warn!("gRPC API not available with filesystem storage");
         }
 
         Ok((
@@ -418,245 +321,6 @@ impl Options {
             Box::new(ApiEventConsumer::from(ds)),
             Some(RequestResponseStorage::Fs(inner_storage)),
         ))
-    }
-
-    async fn init_with_query_module_sql<N, P>(
-        self,
-        query_opt: Query,
-        mod_opt: persistence::sql::Options,
-        state: ApiState<N, P>,
-        tasks: &mut TaskList,
-        bind_version: SequencerApiVersion,
-    ) -> anyhow::Result<(
-        Box<dyn Metrics>,
-        Box<dyn EventConsumer>,
-        Option<RequestResponseStorage>,
-    )>
-    where
-        N: ConnectedNetwork<PubKey>,
-        P: SequencerPersistence,
-    {
-        let mut provider = Provider::default();
-
-        // Use the database itself as a fetching provider: sometimes we can fetch data that is
-        // missing from the query service from ephemeral consensus storage.
-        let db_provider = mod_opt.clone().create().await?;
-        provider = provider
-            .with_block_provider(db_provider.clone())
-            .with_vid_common_provider(db_provider);
-        // If that fails, fetch missing data from peers.
-        provider = provider.with_provider(
-            LightClientProvider::new(
-                query_opt.peers,
-                state.clone(),
-                query_opt.light_client,
-                query_opt.light_client_db,
-            )
-            .await?,
-        );
-
-        let ds = sql::DataSource::create(mod_opt.clone(), provider, false).await?;
-        let inner_storage = ds.inner();
-        let (metrics, ds, mut app) = self
-            .init_app_modules(ds, state.clone(), bind_version)
-            .await?;
-
-        if self.explorer.is_some() {
-            register_api("explorer", &mut app, move |ver| {
-                endpoints::explorer(ver).context("failed to define explorer api")
-            })?;
-        }
-
-        // Initialize database metadata API (SQL-only)
-        register_api("database", &mut app, move |ver| {
-            endpoints::database::<_, SequencerApiVersion>(ver)
-                .context("failed to define database api")
-        })?;
-
-        // Initialize merklized state module for block merkle tree
-
-        register_api("block-state", &mut app, move |ver| {
-            endpoints::merklized_state::<N, P, _, BlockMerkleTree, 3>(ver)
-                .context("failed to define block-state api")
-        })?;
-
-        // Initialize merklized state module for fee merkle tree
-
-        register_api("fee-state", &mut app, move |ver| {
-            endpoints::fee::<_, SequencerApiVersion>(ver).context("failed to define fee-state api")
-        })?;
-
-        register_api("reward-state", &mut app, move |ver| {
-            endpoints::reward::<
-                _,
-                SequencerApiVersion,
-                RewardMerkleTreeV1,
-                { RewardMerkleTreeV1::ARITY },
-            >(ver, RewardMerkleTreeVersion::V1)
-            .context("failed to define reward-state api")
-        })?;
-
-        // register new api for new reward merkle tree
-        register_api("reward-state-v2", &mut app, move |ver| {
-            endpoints::reward::<
-                _,
-                SequencerApiVersion,
-                RewardMerkleTreeV2,
-                { RewardMerkleTreeV2::ARITY },
-            >(ver, RewardMerkleTreeVersion::V2)
-            .context("failed to define reward-state api")
-        })?;
-
-        let get_node_state = {
-            let state = state.clone();
-            async move { state.node_state().await.clone() }
-        };
-        tasks.spawn(
-            "merklized state storage update loop",
-            update_state_storage_loop(ds.clone(), get_node_state),
-        );
-
-        // Initialize hotshot events API if enabled
-        if self.hotshot_events.is_some() {
-            self.init_hotshot_events_module(&mut app)?;
-        }
-
-        // Initialize light client API if enabled.
-        if self.light_client.is_some() {
-            register_api("light-client", &mut app, move |ver| {
-                light_client::define_api::<_, SequencerApiVersion>(Default::default(), ver)
-                    .context("failed to define light client api")
-            })?;
-        }
-
-        tasks.spawn(
-            "API server",
-            self.listen(self.http.port, app, SequencerApiVersion::instance()),
-        );
-
-        // Spawn new Axum and gRPC servers if ports are configured
-        if let Some(axum_port) = self.http.axum_port {
-            let ds_for_axum = ds.clone();
-            tasks.spawn("Axum API server", async move {
-                let state = NodeApiStateImpl::new(ds_for_axum);
-                if let Err(e) = espresso_api::serve_axum(axum_port, state).await {
-                    tracing::error!("Axum server error: {}", e);
-                }
-            });
-        }
-
-        if let Some(tonic_port) = self.http.tonic_port {
-            let ds_for_tonic = ds.clone();
-            tasks.spawn("Tonic gRPC server", async move {
-                let state = NodeApiStateImpl::new(ds_for_tonic);
-                if let Err(e) = espresso_api::serve_tonic(tonic_port, state).await {
-                    tracing::error!("Tonic gRPC server error: {}", e);
-                }
-            });
-        }
-
-        Ok((
-            metrics,
-            Box::new(ApiEventConsumer::from(ds)),
-            Some(RequestResponseStorage::Sql(inner_storage)),
-        ))
-    }
-
-    /// Initialize the modules for interacting with HotShot.
-    ///
-    /// This function adds the `submit`, `state`, and `state_signature` API modules to the given
-    /// app. These modules only require a HotShot handle as state, and thus they work with any data
-    /// source, so initialization is the same no matter what mode the service is running in.
-    fn init_hotshot_modules<N, P, S>(&self, app: &mut App<S, Error>) -> anyhow::Result<()>
-    where
-        S: 'static + Send + Sync + ReadState,
-        P: SequencerPersistence,
-        S::State: Send
-            + Sync
-            + SubmitDataSource<N, P>
-            + StateSignatureDataSource<N>
-            + NodeStateDataSource
-            + CatchupDataSource
-            + HotShotConfigDataSource,
-        N: ConnectedNetwork<PubKey>,
-    {
-        let bind_version = SequencerApiVersion::instance();
-        // Initialize submit API
-        if self.submit.is_some() {
-            register_api("submit", app, move |ver| {
-                endpoints::submit::<_, _, _, SequencerApiVersion>(ver)
-                    .context("failed to define submit api")
-            })?;
-        }
-
-        // Initialize state API.
-        if self.catchup.is_some() {
-            tracing::info!("initializing state API");
-
-            register_api("catchup", app, move |ver| {
-                endpoints::catchup(bind_version, ver).context("failed to define catchup api")
-            })?;
-        }
-
-        register_api("state-signature", app, move |ver| {
-            endpoints::state_signature(bind_version, ver)
-                .context("failed to define state signature api")
-        })?;
-
-        if self.config.is_some() {
-            let node_cfg = self.public_node_config.as_deref().cloned();
-            register_api("config", app, move |ver| {
-                endpoints::config(bind_version, ver, node_cfg.clone())
-                    .context("failed to define config api")
-            })?;
-        }
-
-        Ok(())
-    }
-
-    /// Initialize the hotshot events API module if enabled.
-    ///
-    /// This function adds the hotshot events API module to the given app if the hotshot_events
-    /// option is enabled. This module requires the app state to implement EventsSource.
-    fn init_hotshot_events_module<S>(&self, app: &mut App<S, Error>) -> anyhow::Result<()>
-    where
-        S: 'static + Send + Sync + ReadState,
-        S::State: Send + Sync + hotshot_events_service::events_source::EventsSource<SeqTypes>,
-    {
-        tracing::info!("Initializing HotShot events API at /hotshot-events");
-        register_api("hotshot-events", app, move |ver| {
-            hotshot_events_service::events::define_api::<_, _, SequencerApiVersion>(
-                &hotshot_events_service::events::Options::default(),
-                ver,
-            )
-            .with_context(|| "failed to define the HotShot events API")
-        })?;
-
-        Ok(())
-    }
-
-    fn listen<S, E, ApiVer>(
-        &self,
-        port: u16,
-        app: App<S, E>,
-        bind_version: ApiVer,
-    ) -> impl Future<Output = anyhow::Result<()>> + use<S, E, ApiVer>
-    where
-        S: Send + Sync + 'static,
-        E: Send + Sync + tide_disco::Error,
-        ApiVer: StaticVersionType + 'static,
-    {
-        let max_connections = self.http.max_connections;
-
-        async move {
-            if let Some(limit) = max_connections {
-                app.serve(RateLimitListener::with_port(port, limit), bind_version)
-                    .await?;
-            } else {
-                app.serve(format!("0.0.0.0:{port}"), bind_version).await?;
-            }
-            Ok(())
-        }
     }
 }
 
@@ -678,10 +342,6 @@ pub struct Http {
     #[clap(long, env = "ESPRESSO_NODE_API_MAX_CONNECTIONS")]
     pub max_connections: Option<usize>,
 
-    /// Optional port for new Axum API server (skeleton implementation).
-    #[clap(long, env = "ESPRESSO_NODE_AXUM_PORT")]
-    pub axum_port: Option<u16>,
-
     /// Optional port for Tonic gRPC API server.
     #[clap(long, env = "ESPRESSO_NODE_TONIC_PORT")]
     pub tonic_port: Option<u16>,
@@ -693,7 +353,6 @@ impl Http {
         Self {
             port,
             max_connections: None,
-            axum_port: None,
             tonic_port: None,
         }
     }
@@ -729,18 +388,31 @@ pub struct Query {
     /// Persistence for the light client, enabling faster startup.
     #[clap(flatten)]
     pub light_client_db: LightClientSqliteOptions,
+
+    /// Node storage directory. A SQLite light client database without `--light-client-db-path`
+    /// is kept under it, so the stake tables it verified survive a restart.
+    #[clap(long, env = "ESPRESSO_NODE_STORAGE_PATH")]
+    pub storage_path: Option<PathBuf>,
+}
+
+impl Query {
+    pub fn sqlite_light_client_db(&self) -> LightClientSqliteOptions {
+        let lc_path = self.light_client_db.lc_path.clone().or_else(|| {
+            self.storage_path
+                .as_ref()
+                .map(|dir| dir.join("light-client").join("lc.db"))
+        });
+        LightClientSqliteOptions {
+            lc_path,
+            ..self.light_client_db.clone()
+        }
+    }
 }
 
 #[cfg(test)]
 impl Query {
     pub fn test() -> Self {
-        Self {
-            light_client: LightClientOptions {
-                decaf: true,
-                ..Default::default()
-            },
-            ..Default::default()
-        }
+        Self::default()
     }
 }
 
@@ -748,7 +420,8 @@ impl Query {
 #[derive(Parser, Clone, Copy, Debug, Default)]
 pub struct State;
 
-/// Options for the Hotshot events streaming API module.
+/// Options for the retired Hotshot events streaming API module, which is still accepted on the
+/// command line but serves nothing.
 #[derive(Parser, Clone, Copy, Debug, Default)]
 pub struct HotshotEvents;
 
@@ -760,26 +433,39 @@ pub struct Explorer;
 #[derive(Parser, Clone, Copy, Debug, Default)]
 pub struct LightClient;
 
-/// Registers two versions (v0 and v1) of the same API module under the given path.
-fn register_api<E, S, F, ModuleError, ModuleVersion>(
-    path: &'static str,
-    app: &mut App<S, E>,
-    f: F,
-) -> anyhow::Result<()>
+/// Populate consensus metrics on `ds`, deposit its prometheus registry for the in-process
+/// telemetry push task (idempotent), and wrap it with the API state.
+///
+/// Returns the metrics handle plus the wrapped query data source shared by the axum server and
+/// update loops.
+#[allow(clippy::type_complexity)]
+pub(super) fn init_query_data_source<D>(
+    ds: D,
+    state: ApiState,
+) -> (Box<dyn Metrics>, Arc<StorageState<D>>)
 where
-    S: 'static + Send + Sync,
-    E: Send + Sync + 'static + tide_disco::Error + From<ModuleError>,
-    ModuleError: Send + Sync + 'static,
-    ModuleVersion: StaticVersionType + 'static,
-    F: Fn(semver::Version) -> anyhow::Result<Api<S, ModuleError, ModuleVersion>>,
+    D: SequencerDataSource + CatchupStorage + PruningDataSource + Send + Sync + 'static,
 {
-    let v0 = "0.0.1".parse().unwrap();
-    let v1 = "1.1.0".parse().unwrap();
-    let result1 = f(v0)?;
-    let result2 = f(v1)?;
+    let metrics = ds.populate_metrics();
+    telemetry::set_registry(Arc::new(ds.metrics().registry().clone()));
+    let ds = Arc::new(ExtensibleDataSource::new(ds, state));
+    (metrics, ds)
+}
 
-    app.register_module(path, result1)?;
-    app.register_module(path, result2)?;
+/// The environment variables listed in `api/public-env-vars.toml`, as `KEY=value` strings.
+pub(super) fn get_public_env_vars() -> anyhow::Result<Vec<String>> {
+    #[derive(serde::Deserialize)]
+    struct PublicEnvVars {
+        variables: BTreeSet<String>,
+    }
 
-    Ok(())
+    let PublicEnvVars { variables } =
+        toml::from_str(include_str!("../../api/public-env-vars.toml"))?;
+    Ok(variables
+        .into_iter()
+        .map(|key| {
+            let value = env::var(&key).unwrap_or_default();
+            format!("{key}={value}")
+        })
+        .collect())
 }

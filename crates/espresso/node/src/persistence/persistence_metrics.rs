@@ -11,6 +11,10 @@ pub struct PersistenceMetricsValue {
     pub internal_append_da2_duration: Box<dyn Histogram>,
     /// Time taken by the underlying storage to execute the command that appends Quorum Proposal 2
     pub internal_append_quorum2_duration: Box<dyn Histogram>,
+    /// Time taken by a full decide-event pass (event generation plus garbage collection),
+    /// including any lock or transaction waits. On the fs backend this pass holds the exclusive
+    /// persistence write lock, so it bounds how long concurrent appends can block.
+    pub internal_process_decided_events_duration: Box<dyn Histogram>,
 }
 
 impl PersistenceMetricsValue {
@@ -32,6 +36,10 @@ impl PersistenceMetricsValue {
             ),
             internal_append_quorum2_duration: metrics.create_histogram(
                 String::from("internal_append_quorum2_duration"),
+                Some("seconds".to_string()),
+            ),
+            internal_process_decided_events_duration: metrics.create_histogram(
+                String::from("internal_process_decided_events_duration"),
                 Some("seconds".to_string()),
             ),
         }

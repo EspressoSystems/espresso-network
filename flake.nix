@@ -12,7 +12,7 @@
     ];
   };
 
-  inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+  inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
 
   inputs.rust-overlay.url = "github:oxalica/rust-overlay";
   inputs.rust-overlay.inputs.nixpkgs.follows = "nixpkgs";
@@ -49,7 +49,7 @@
     flake-utils.lib.eachDefaultSystem (system:
     let
       # node=error: disable noisy anvil output
-      RUST_LOG = "info,libp2p=off,isahc=error,surf=error,node=error";
+      RUST_LOG = "info,node=error";
       RUST_BACKTRACE = 1;
       rustEnvVars = { inherit RUST_LOG RUST_BACKTRACE; };
 
@@ -70,7 +70,6 @@
       inherit (pkgs) lib stdenv;
 
       solhint = pkgs.callPackage ./nix/solhint { };
-      pup = pkgs.callPackage ./nix/pup { };
       golangci-lint = pkgs.golangci-lint.overrideAttrs (old: rec {
         version = "1.64.8";
         src = pkgs.fetchFromGitHub {
@@ -120,7 +119,8 @@
             pkg-config
             openssl
             curl
-            protobuf # libp2p-autonat
+            protobuf # protoc, for the espresso-api v2 codegen
+            buf # just proto-check
             stableToolchain
             jq
             cargo-audit
@@ -137,12 +137,12 @@
             prek-as-pre-commit # `pre-commit` alias for muscle memory
             process-compose
             entr
-            pup # html parser for Datadog log queries
+            datadog-pup
             lazydocker # used by `just demo-docker`
             bc # used by scripts/verify-pos-deployment.sh
             # foundry kept for `anvil`; forge/cast/chisel/solc are in `.#contracts`
             foundry
-            nodePackages.prettier
+            prettier
             solhint
             libusb1 # link-time dep of `libusb1-sys` crate
           ] ++ lib.optionals stdenv.isDarwin [ pkgs.darwin.libresolv ];
@@ -179,12 +179,12 @@
       };
 
       devShells.go = pkgs.mkShellNoCC {
-        packages = [ pkgs.go golangci-lint ];
+        packages = [ pkgs.go_1_27 golangci-lint ];
       };
 
       devShells.contracts =
         let
-          solc = pkgs.solc-bin."0.8.28";
+          solc = pkgs.solc-bin."0.8.35";
         in
         pkgs.mkShellNoCC {
           inputsFrom = [ self.devShells.${system}.default ];
@@ -201,7 +201,16 @@
       };
 
       devShells.python = pkgs.mkShellNoCC {
-        packages = with pkgs; [ python3 ruff ty ];
+        packages = with pkgs; [ python3 uv ruff ty ];
+        # Let uv-installed binary wheels (matplotlib/numpy/...) find libstdc++ on NixOS.
+        shellHook = ''
+          export LD_LIBRARY_PATH="${lib.makeLibraryPath [ pkgs.stdenv.cc.cc.lib pkgs.zlib ]}''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+        '';
+      };
+
+      devShells.aws = pkgs.mkShellNoCC {
+        inputsFrom = [ self.devShells.${system}.default ];
+        packages = with pkgs; [ opentofu awscli2 ]; # scripts/network-bench/aws
       };
 
       devShells.dockerShell = pkgs.mkShell {
@@ -229,7 +238,7 @@
             pkg-config
             openssl
             curl
-            protobuf # libp2p-autonat
+            protobuf # protoc, for the espresso-api v2 codegen
             toolchain
           ];
           shellHook = rustShellHook;
@@ -243,16 +252,18 @@
             pkg-config
             openssl
             curl
-            protobuf # libp2p-autonat
+            protobuf # protoc, for the espresso-api v2 codegen
             toolchain
             grcov
           ];
           CARGO_INCREMENTAL = "0";
           shellHook = ''
             ${rustShellHook}
-            RUSTFLAGS="$RUSTFLAGS -Zprofile -Ccodegen-units=1 -Cinline-threshold=0 -Clink-dead-code -Coverflow-checks=off -Cpanic=abort -Zpanic_abort_tests -Cdebuginfo=2"
+            # These replace `build.rustflags` from `.cargo/config.toml` rather than adding to it,
+            # so `--cfg tokio_unstable` (needed for the blocking-pool metrics) is repeated here.
+            export RUSTFLAGS="$RUSTFLAGS -Zprofile -Ccodegen-units=1 -Cinline-threshold=0 -Clink-dead-code -Coverflow-checks=off -Cpanic=abort -Zpanic_abort_tests -Cdebuginfo=2 --cfg tokio_unstable"
           '';
-          RUSTDOCFLAGS = "-Zprofile -Ccodegen-units=1 -Cinline-threshold=0 -Clink-dead-code -Coverflow-checks=off -Cpanic=abort -Zpanic_abort_tests";
+          RUSTDOCFLAGS = "-Zprofile -Ccodegen-units=1 -Cinline-threshold=0 -Clink-dead-code -Coverflow-checks=off -Cpanic=abort -Zpanic_abort_tests --cfg tokio_unstable";
         });
 
       devShells.rustShell =
@@ -266,7 +277,7 @@
             pkg-config
             openssl
             curl
-            protobuf # libp2p-autonat
+            protobuf # protoc, for the espresso-api v2 codegen
             stableToolchain
           ];
           shellHook = rustShellHook;

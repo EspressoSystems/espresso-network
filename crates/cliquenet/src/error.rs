@@ -2,7 +2,7 @@ use std::io;
 
 use thiserror::Error;
 
-use crate::{Version, addr::NetAddr, x25519::PublicKey};
+use crate::{NetAddr, x25519::PublicKey};
 pub use crate::{addr::InvalidNetAddr, msg::InvalidHeader};
 
 /// The empty type has no values.
@@ -41,11 +41,8 @@ pub enum NetworkError {
     UnknownFrameType(u8),
 
     /// Version negotiation failed.
-    #[error("version negotiation failed, ours = {ours:?}, theirs = {theirs:?}")]
-    IncompatibleVersions {
-        ours: (Version, Version),
-        theirs: (Version, Version),
-    },
+    #[error("incompatible versions")]
+    IncompatibleVersions,
 
     /// Generic Noise error.
     #[error("noise error: {0}")]

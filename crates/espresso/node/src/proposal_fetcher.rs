@@ -5,17 +5,15 @@ use async_channel::{Receiver, Sender};
 use clap::Parser;
 use committable::Commitment;
 use derivative::Derivative;
-use espresso_types::{PubKey, ValidatedState, parse_duration, v0::traits::SequencerPersistence};
+use espresso_types::{ValidatedState, parse_duration, v0::traits::SequencerPersistence};
 use futures::stream::StreamExt;
 use hotshot_types::{
     data::{Leaf2, QuorumProposalWrapper, ViewNumber},
-    event::{Event, EventType},
     message::Proposal,
     new_protocol::CoordinatorEvent,
     traits::{
         ValidatedState as _,
         metrics::{Counter, Gauge, Metrics},
-        network::ConnectedNetwork,
     },
 };
 use serde::Serialize;
@@ -53,14 +51,13 @@ impl Default for ProposalFetcherConfig {
 }
 
 impl ProposalFetcherConfig {
-    pub(crate) fn spawn<N, P>(
+    pub(crate) fn spawn<P>(
         self,
         tasks: &mut TaskList,
-        consensus_handle: Arc<ConsensusHandle<SeqTypes, ConsensusNode<N, P>>>,
+        consensus_handle: Arc<ConsensusHandle<SeqTypes, ConsensusNode<P>>>,
         persistence: Arc<P>,
         metrics: &(impl Metrics + ?Sized),
     ) where
-        N: ConnectedNetwork<PubKey>,
         P: SequencerPersistence,
     {
         let (sender, receiver) = async_channel::unbounded();
@@ -112,23 +109,21 @@ type Request = (ViewNumber, Commitment<Leaf2<SeqTypes>>);
 
 #[derive(Derivative)]
 #[derivative(Clone(bound = ""), Debug(bound = ""))]
-struct ProposalFetcher<N, P>
+struct ProposalFetcher<P>
 where
-    N: ConnectedNetwork<PubKey>,
     P: SequencerPersistence,
 {
     sender: Sender<Request>,
     #[derivative(Debug = "ignore")]
-    consensus_handle: Arc<ConsensusHandle<SeqTypes, ConsensusNode<N, P>>>,
+    consensus_handle: Arc<ConsensusHandle<SeqTypes, ConsensusNode<P>>>,
     #[derivative(Debug = "ignore")]
     persistence: Arc<P>,
     cfg: ProposalFetcherConfig,
     metrics: ProposalFetcherMetrics,
 }
 
-impl<N, P> ProposalFetcher<N, P>
+impl<P> ProposalFetcher<P>
 where
-    N: ConnectedNetwork<PubKey>,
     P: SequencerPersistence,
 {
     #[tracing::instrument(skip_all)]
@@ -136,14 +131,6 @@ where
         let mut events = self.consensus_handle.event_stream();
         while let Some(event) = events.next().await {
             let (parent_view, parent_leaf) = match event {
-                CoordinatorEvent::LegacyEvent(Event {
-                    event: EventType::QuorumProposal { proposal, .. },
-                    ..
-                }) => {
-                    let parent_view = proposal.data.justify_qc().view_number;
-                    let parent_leaf = proposal.data.justify_qc().data.leaf_commit;
-                    (parent_view, parent_leaf)
-                },
                 CoordinatorEvent::QuorumProposal { proposal, .. } => {
                     let parent_view = proposal.data.justify_qc.view_number;
                     let parent_leaf = proposal.data.justify_qc.data.leaf_commit;
@@ -174,13 +161,18 @@ where
     async fn fetch_request(&self, (view, leaf): Request) {
         let span = tracing::warn_span!("fetch proposal", ?view, %leaf);
         let res: anyhow::Result<()> = async {
-            let anchor_view = self
-                .persistence
-                .load_anchor_view()
-                .await
-                .context("loading anchor view")?;
-            if view <= anchor_view {
-                tracing::debug!(?anchor_view, "skipping already-decided proposal");
+            let mut decided_view = self.consensus_handle.decided_leaf().await.view_number();
+            if decided_view == ViewNumber::genesis() {
+                // A freshly restarted node may not have decided anything
+                // yet sofall back to the persisted anchor view
+                decided_view = self
+                    .persistence
+                    .load_anchor_view()
+                    .await
+                    .context("loading anchor view")?;
+            }
+            if view <= decided_view {
+                tracing::debug!(?decided_view, "skipping already-decided proposal");
                 return Ok(());
             }
 
@@ -228,7 +220,7 @@ where
         .instrument(span)
         .await;
         if let Err(err) = res {
-            tracing::warn!("failed to fetch proposal: {err:#}");
+            tracing::warn!(?view, err = %format!("{err:#}"), "failed to fetch proposal");
             self.metrics.failed.add(1);
 
             // Avoid busy loop when operations are failing.

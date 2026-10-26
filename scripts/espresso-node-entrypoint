@@ -3,19 +3,20 @@ set -eEu -o pipefail
 
 # Backward compat: ESPRESSO_SEQUENCER_EMBEDDED_DB -> ESPRESSO_NODE_EMBEDDED_DB
 if [ -z "${ESPRESSO_NODE_EMBEDDED_DB:-}" ] && [ -n "${ESPRESSO_SEQUENCER_EMBEDDED_DB:-}" ]; then
-    echo "ERROR: ESPRESSO_SEQUENCER_EMBEDDED_DB is deprecated, use ESPRESSO_NODE_EMBEDDED_DB instead" >&2
-    ESPRESSO_NODE_EMBEDDED_DB="$ESPRESSO_SEQUENCER_EMBEDDED_DB"
+    echo "WARNING: ESPRESSO_SEQUENCER_EMBEDDED_DB is deprecated, use ESPRESSO_NODE_EMBEDDED_DB instead" >&2
+    export ESPRESSO_NODE_EMBEDDED_DB="$ESPRESSO_SEQUENCER_EMBEDDED_DB"
 fi
-export ESPRESSO_NODE_EMBEDDED_DB=${ESPRESSO_NODE_EMBEDDED_DB:-false}
 
-# Trap SIGTERM and SIGINT signals and send them to the process group
-trap "trap - SIGTERM && kill -- -$$" SIGINT SIGTERM EXIT
-
-# Decide which binary to run based on the environment variable
-if [ "$ESPRESSO_NODE_EMBEDDED_DB" = "true" ]; then
+# `exec` the node so it replaces this shell as the entrypoint process and
+# receives SIGTERM/SIGINT directly. The node handles these for graceful shutdown
+# without `exec` the signal would go to this shell instead 
+# and the node would be force killed on `docker stop`.
+# Only the exact value `true` selects SQLite here, as before the node read the variable itself.
+if [ "${ESPRESSO_NODE_EMBEDDED_DB:-}" = "true" ]; then
     echo "Starting Espresso node with sqlite..."
-    /bin/espresso-node-sqlite -- storage-sql "$@"
+    exec /bin/espresso-node-postgres -- storage-sql "$@"
 else
+    export ESPRESSO_NODE_EMBEDDED_DB=false
     echo "Starting Espresso node..."
-    /bin/espresso-node-postgres "$@"
+    exec /bin/espresso-node-postgres "$@"
 fi

@@ -7,37 +7,44 @@ edition = { workspace = true }
 version = { workspace = true }
 
 [features]
-example-upgrade = []
-rewind = []
-stats = []
+testing = []
+trace = []
 
 [dependencies]
 alloy = { workspace = true }
 anyhow = { workspace = true }
 async-broadcast = { workspace = true }
-async-lock = { workspace = true }
 async-trait = { workspace = true }
+bincode = { workspace = true }
 bon = { workspace = true }
 cliquenet = { workspace = true }
 committable = { workspace = true }
 futures = { workspace = true }
-hotshot = { workspace = true }
 hotshot-contract-adapter = { workspace = true }
 hotshot-example-types = { workspace = true }
-hotshot-testing = { workspace = true }
 hotshot-types = { workspace = true }
 hotshot-utils = { workspace = true }
 parking_lot = { workspace = true }
 rand = { workspace = true }
+rayon = { workspace = true }
 serde = { workspace = true }
 serde_bytes = { workspace = true }
 test-utils = { workspace = true }
 thiserror = { workspace = true }
 time = { workspace = true }
 tokio = { workspace = true }
+tokio-util = { workspace = true }
 tracing = { workspace = true }
-tracing-subscriber = { workspace = true }
+tracing-subscriber = { workspace = true, features = ["env-filter", "json"] }
 versions = { workspace = true }
+
+[dev-dependencies]
+bitvec = { workspace = true }
+quickcheck = { workspace = true }
+vbs = { workspace = true }
+# Enables `vid/testing` for tests only: constructs non-codeword dispersals to
+# exercise the unrecoverable VID reconstruction path.
+vid = { workspace = true, features = ["testing"] }
 
 [lints]
 workspace = true

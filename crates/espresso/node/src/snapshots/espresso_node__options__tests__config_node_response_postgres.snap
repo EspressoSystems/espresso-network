@@ -1,16 +1,10 @@
 ---
 source: crates/espresso/node/src/options.rs
-assertion_line: 1254
 expression: cfg
 ---
 orchestrator_url: "http://orchestrator.example:8080/"
-cdn_endpoint: "cdn.example:8081"
 cliquenet_bind_address: "0.0.0.0:9977"
 cliquenet_advertise_address: "node1.example:9977"
-libp2p_bind_address: "0.0.0.0:1769"
-libp2p_advertise_address: "node1.example:1769"
-libp2p_bootstrap_nodes:
-  - /ip4/10.0.0.1/tcp/1769
 public_api_url: "http://node1.example:24000/"
 builder_urls:
   - "http://builder.example:31004/"
@@ -22,6 +16,61 @@ config_peers:
   - "https://peer1.example/"
 is_da: true
 genesis_file: /path/to/genesis.toml
+genesis:
+  base_version: "0.4"
+  upgrade_version: "0.5"
+  genesis_version: "0.2"
+  epoch_height: 40000
+  drb_difficulty: 25000000000
+  drb_upgrade_difficulty: 25000000000
+  epoch_start_block: 10960201
+  stake_table_capacity: 200
+  chain_config:
+    chain_id: "999999999"
+    max_block_size: "3000"
+    base_fee: "1"
+    fee_contract: "0x1111111111111111111111111111111111111111"
+    fee_recipient: "0x0000000000000000000000000000000000000000"
+    stake_table_contract: "0x2222222222222222222222222222222222222222"
+  stake_table:
+    capacity: 200
+  accounts: {}
+  l1_finalized:
+    number: 21116303
+    timestamp: "0x6553f100"
+    hash: "0x4444444444444444444444444444444444444444444444444444444444444444"
+  header:
+    timestamp: "1970-01-02T10:17:36Z"
+    chain_config:
+      chain_id: "999999999"
+      max_block_size: "3000"
+      base_fee: "1"
+      fee_contract: "0x1111111111111111111111111111111111111111"
+      fee_recipient: "0x0000000000000000000000000000000000000000"
+      stake_table_contract: "0x2222222222222222222222222222222222222222"
+  upgrade:
+    - version: "0.5"
+      start_proposing_view: 100
+      stop_proposing_view: 200
+      start_voting_view: 1
+      stop_voting_view: 300
+      epoch_reward:
+        chain_config:
+          chain_id: "999999999"
+          max_block_size: "3000"
+          base_fee: "1"
+          fee_contract: "0x1111111111111111111111111111111111111111"
+          fee_recipient: "0x0000000000000000000000000000000000000000"
+          stake_table_contract: "0x2222222222222222222222222222222222222222"
+  da_committees:
+    - start_version: "0.6"
+      start_epoch: 10
+      committee:
+        - stake_table_entry:
+            stake_key: BLS_VER_KEY~bQszS-QKYvUij2g20VqS8asttGSb95NrTu2PUj0uMh1CBUxNy1FqyPDjZqB29M7ZbjWqj79QkEOWkpga84AmDYUeTuWmy-0P1AdKHD3ehc-dKvei78BDj5USwXPJiDUlCxvYs_9rWYhagaq-5_LXENr78xel17spftNd5MA1Mw5U
+            stake_amount: "0x1"
+          state_ver_key: SCHNORR_VER_KEY~lJqDaVZyM0hWP2Br52IX5FeE-dCAIC-dPX7bL5-qUx-vjbunwe-ENOeZxj6FuOyvDCFzoGeP7yZ0fM995qF-CRE
+          connect_info: ~
 identity:
   country_code: US
   latitude: ~
@@ -45,10 +94,12 @@ catchup_base_timeout:
 local_catchup_timeout:
   secs: 5
   nanos: 0
+http_catchup_delay:
+  secs: 2
+  nanos: 0
 bootstrap_epoch_catchup_timeout:
   secs: 30
   nanos: 0
-new_protocol_consensus_gc_interval: 100
 catchup_backoff:
   factor: 4
   base:
@@ -61,51 +112,27 @@ catchup_backoff:
     numerator: 1
     denominator: 10
   disable: false
+follower: ~
 proposal_fetcher:
   num_workers: 2
   fetch_timeout:
     secs: 2
     nanos: 0
-libp2p:
-  heartbeat_interval:
-    secs: 1
-    nanos: 0
-  heartbeat_initial_delay:
-    secs: 5
-    nanos: 0
-  history_gossip: 3
-  history_length: 5
-  mesh_n: 8
-  mesh_n_high: 12
-  mesh_n_low: 6
-  mesh_outbound_min: 2
-  max_ihave_length: 5000
-  max_ihave_messages: 10
-  published_message_ids_cache_time:
-    secs: 10
-    nanos: 0
-  iwant_followup_time:
-    secs: 3
-    nanos: 0
-  max_messages_per_rpc: ~
-  gossip_retransmission: 3
-  gossip_factor: 0.25
-  gossip_lazy: 6
-  max_gossip_transmit_size: 2000000
-  max_direct_transmit_size: 20000000
-  fanout_ttl:
-    secs: 60
-    nanos: 0
-  duplicate_cache_time:
-    secs: 1200
-    nanos: 0
-  flood_publish: true
 l1:
   retry_delay:
     secs: 1
     nanos: 0
   polling_interval:
     secs: 7
+    nanos: 0
+  wait_refresh_interval:
+    secs: 0
+    nanos: 500000000
+  wait_refresh_timeout:
+    secs: 1
+    nanos: 500000000
+  request_timeout:
+    secs: 10
     nanos: 0
   blocks_cache_size: 100
   events_channel_capacity: 100
@@ -127,7 +154,7 @@ l1:
   events_max_retry_duration:
     secs: 1200
     nanos: 0
-  finalized_safety_margin: ~
+  finalized_safety_margin: 100
 l1_provider_count: 1
 l1_ws_provider_count: 0
 storage:
@@ -136,6 +163,8 @@ storage:
   sql:
     prune: true
     archive: false
+    archive_state_min_retention: 500000
+    archive_full_state: false
     lightweight: false
     disable_proactive_fetching: false
     fetch_rate_limit: ~
@@ -177,17 +206,15 @@ modules:
   http:
     port: 24000
     max_connections: ~
-    axum_port: ~
     tonic_port: ~
   query:
-    peers: []
+    peers:
+      - "http://peer.example:24000/"
     light_client:
       num_stake_tables_in_memory: 100
-      decaf: false
     light_client_db:
       num_connections: 5
       num_leaves: 100
-      num_stake_tables: 100
       lc_path: ~
   submit: false
   status: false

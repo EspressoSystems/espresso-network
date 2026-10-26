@@ -35,7 +35,7 @@ pub fn migrate_legacy_env_vars() -> Vec<(&'static str, &'static str)> {
             "ESPRESSO_SAFE_EXIT_TIMELOCK_ADDRESS",
             "ESPRESSO_SEQUENCER_SAFE_EXIT_TIMELOCK_ADDRESS",
         ),
-        // ── crates/builder/src/bin/permissionless-builder.rs ──
+        // ── crates/espresso/node/src/options.rs, bin/nasty-client.rs, bin/deploy.rs ──
         // Peer nodes used to fetch missing state
         (
             "ESPRESSO_NODE_STATE_PEERS",
@@ -74,7 +74,7 @@ pub fn migrate_legacy_env_vars() -> Vec<(&'static str, &'static str)> {
         // ── crates/espresso/node/src/api/options.rs ──
         // Peer URLs for fetching missing query service data
         ("ESPRESSO_NODE_API_PEERS", "ESPRESSO_SEQUENCER_API_PEERS"),
-        // ── crates/espresso/node/src/bin/deploy.rs ──
+        // ── crates/espresso/deploy/src/main.rs ──
         // Number of blocks per epoch for HotShot consensus
         (
             "ESPRESSO_NETWORK_BLOCKS_PER_EPOCH",
@@ -138,11 +138,6 @@ pub fn migrate_legacy_env_vars() -> Vec<(&'static str, &'static str)> {
         (
             "ESPRESSO_NODE_CATCHUP_BASE_TIMEOUT",
             "ESPRESSO_SEQUENCER_CATCHUP_BASE_TIMEOUT",
-        ),
-        // CDN endpoint for consensus messaging
-        (
-            "ESPRESSO_NODE_CDN_ENDPOINT",
-            "ESPRESSO_SEQUENCER_CDN_ENDPOINT",
         ),
         // Bind address for cliquenet protocol
         (
@@ -241,126 +236,6 @@ pub fn migrate_legacy_env_vars() -> Vec<(&'static str, &'static str)> {
         ),
         // Whether this node participates in DA
         ("ESPRESSO_NODE_IS_DA", "ESPRESSO_SEQUENCER_IS_DA"),
-        // Public address advertised to libp2p peers
-        (
-            "ESPRESSO_NODE_LIBP2P_ADVERTISE_ADDRESS",
-            "ESPRESSO_SEQUENCER_LIBP2P_ADVERTISE_ADDRESS",
-        ),
-        // Local address for the libp2p listener
-        (
-            "ESPRESSO_NODE_LIBP2P_BIND_ADDRESS",
-            "ESPRESSO_SEQUENCER_LIBP2P_BIND_ADDRESS",
-        ),
-        // Bootstrap nodes for libp2p peer discovery
-        (
-            "ESPRESSO_NODE_LIBP2P_BOOTSTRAP_NODES",
-            "ESPRESSO_SEQUENCER_LIBP2P_BOOTSTRAP_NODES",
-        ),
-        // Cache duration for libp2p message hashes
-        (
-            "ESPRESSO_NODE_LIBP2P_DUPLICATE_CACHE_TIME",
-            "ESPRESSO_SEQUENCER_LIBP2P_DUPLICATE_CACHE_TIME",
-        ),
-        // TTL for libp2p fanout peers
-        (
-            "ESPRESSO_NODE_LIBP2P_FANOUT_TTL",
-            "ESPRESSO_SEQUENCER_LIBP2P_FANOUT_TTL",
-        ),
-        // Flood publish messages in libp2p
-        (
-            "ESPRESSO_NODE_LIBP2P_FLOOD_PUBLISH",
-            "ESPRESSO_SEQUENCER_LIBP2P_FLOOD_PUBLISH",
-        ),
-        // Gossip sub protocol factor
-        (
-            "ESPRESSO_NODE_LIBP2P_GOSSIP_FACTOR",
-            "ESPRESSO_SEQUENCER_LIBP2P_GOSSIP_FACTOR",
-        ),
-        // Number of lazy gossip messages
-        (
-            "ESPRESSO_NODE_LIBP2P_GOSSIP_LAZY",
-            "ESPRESSO_SEQUENCER_LIBP2P_GOSSIP_LAZY",
-        ),
-        // Gossip retransmission count
-        (
-            "ESPRESSO_NODE_LIBP2P_GOSSIP_RETRANSMISSION",
-            "ESPRESSO_SEQUENCER_LIBP2P_GOSSIP_RETRANSMISSION",
-        ),
-        // Initial delay for libp2p heartbeat
-        (
-            "ESPRESSO_NODE_LIBP2P_HEARTBEAT_INITIAL_DELAY",
-            "ESPRESSO_SEQUENCER_LIBP2P_HEARTBEAT_INITIAL_DELAY",
-        ),
-        // Interval between libp2p heartbeats
-        (
-            "ESPRESSO_NODE_LIBP2P_HEARTBEAT_INTERVAL",
-            "ESPRESSO_SEQUENCER_LIBP2P_HEARTBEAT_INTERVAL",
-        ),
-        // Gossip history length
-        (
-            "ESPRESSO_NODE_LIBP2P_HISTORY_GOSSIP",
-            "ESPRESSO_SEQUENCER_LIBP2P_HISTORY_GOSSIP",
-        ),
-        // History length for libp2p
-        (
-            "ESPRESSO_NODE_LIBP2P_HISTORY_LENGTH",
-            "ESPRESSO_SEQUENCER_LIBP2P_HISTORY_LENGTH",
-        ),
-        // Max direct transmit message size
-        (
-            "ESPRESSO_NODE_LIBP2P_MAX_DIRECT_TRANSMIT_SIZE",
-            "ESPRESSO_SEQUENCER_LIBP2P_MAX_DIRECT_TRANSMIT_SIZE",
-        ),
-        // Max gossip transmit message size
-        (
-            "ESPRESSO_NODE_LIBP2P_MAX_GOSSIP_TRANSMIT_SIZE",
-            "ESPRESSO_SEQUENCER_LIBP2P_MAX_GOSSIP_TRANSMIT_SIZE",
-        ),
-        // Max IHAVE message length
-        (
-            "ESPRESSO_NODE_LIBP2P_MAX_IHAVE_LENGTH",
-            "ESPRESSO_SEQUENCER_LIBP2P_MAX_IHAVE_LENGTH",
-        ),
-        // Max number of IHAVE messages
-        (
-            "ESPRESSO_NODE_LIBP2P_MAX_IHAVE_MESSAGES",
-            "ESPRESSO_SEQUENCER_LIBP2P_MAX_IHAVE_MESSAGES",
-        ),
-        // Max IWANT follow-up time
-        (
-            "ESPRESSO_NODE_LIBP2P_MAX_IWANT_FOLLOWUP_TIME",
-            "ESPRESSO_SEQUENCER_LIBP2P_MAX_IWANT_FOLLOWUP_TIME",
-        ),
-        // Max messages per libp2p RPC
-        (
-            "ESPRESSO_NODE_LIBP2P_MAX_MESSAGES_PER_RPC",
-            "ESPRESSO_SEQUENCER_LIBP2P_MAX_MESSAGES_PER_RPC",
-        ),
-        // Target mesh network peer count
-        (
-            "ESPRESSO_NODE_LIBP2P_MESH_N",
-            "ESPRESSO_SEQUENCER_LIBP2P_MESH_N",
-        ),
-        // Upper bound for mesh peers
-        (
-            "ESPRESSO_NODE_LIBP2P_MESH_N_HIGH",
-            "ESPRESSO_SEQUENCER_LIBP2P_MESH_N_HIGH",
-        ),
-        // Lower bound for mesh peers
-        (
-            "ESPRESSO_NODE_LIBP2P_MESH_N_LOW",
-            "ESPRESSO_SEQUENCER_LIBP2P_MESH_N_LOW",
-        ),
-        // Minimum outbound mesh peers
-        (
-            "ESPRESSO_NODE_LIBP2P_MESH_OUTBOUND_MIN",
-            "ESPRESSO_SEQUENCER_LIBP2P_MESH_OUTBOUND_MIN",
-        ),
-        // Cache duration for published message IDs
-        (
-            "ESPRESSO_NODE_LIBP2P_PUBLISHED_MESSAGE_IDS_CACHE_TIME",
-            "ESPRESSO_SEQUENCER_LIBP2P_PUBLISHED_MESSAGE_IDS_CACHE_TIME",
-        ),
         // Orchestrator URL for consensus coordination
         (
             "ESPRESSO_NODE_ORCHESTRATOR_URL",
@@ -671,7 +546,7 @@ pub fn migrate_legacy_env_vars() -> Vec<(&'static str, &'static str)> {
             "ESPRESSO_L1_WS_PROVIDER",
             "ESPRESSO_SEQUENCER_L1_WS_PROVIDER",
         ),
-        // ── hotshot-state-prover/src/bin/state-prover.rs ──
+        // ── crates/hotshot-state-prover/src/bin/state-prover.rs ──
         // Light client proxy contract address
         (
             "ESPRESSO_LIGHT_CLIENT_PROXY_ADDRESS",
@@ -682,7 +557,7 @@ pub fn migrate_legacy_env_vars() -> Vec<(&'static str, &'static str)> {
             "ESPRESSO_STATE_PROVER_ACCOUNT_INDEX",
             "ESPRESSO_SEQUENCER_STATE_PROVER_ACCOUNT_INDEX",
         ),
-        // ── staking-cli/src/lib.rs ──
+        // ── crates/staking-cli/src/lib.rs ──
         // Stake table proxy contract address
         (
             "ESPRESSO_STAKE_TABLE_PROXY_ADDRESS",

@@ -1,0 +1,219 @@
+use std::fmt;
+
+use alloy::signers::local::coins_bip39::{English, Mnemonic};
+use anyhow::{Context as _, Result, anyhow, bail};
+use clap::Args;
+use espresso_keyset::KeySet;
+use hotshot_types::{light_client::StateKeyPair, x25519};
+
+use crate::{BLSKeyPair, BLSPrivKey, StateSignKey};
+
+/// The Espresso node key mnemonic, an alternative to passing the validator's keys individually.
+///
+/// Distinct from the Ethereum wallet mnemonic `--mnemonic`, which derives the L1 account that
+/// signs and pays for transactions. This mnemonic derives the validator's BLS, Schnorr state and
+/// x25519 keys, with the same derivation `espresso-node` performs at startup, so a single mnemonic
+/// configures both the node and its on-chain registration.
+///
+/// Only accepted as a flag or environment variable. Unlike the Ethereum wallet, it is never read
+/// from or written to the config file.
+#[derive(Args, Clone, Default)]
+pub struct EspressoKeyArgs {
+    /// BIP-39 mnemonic the validator's Espresso keys are derived from.
+    ///
+    /// Conflicts with the keys it derives, so that a stale key in the environment cannot
+    /// silently replace one of them.
+    #[clap(long, env = "ESPRESSO_NODE_KEY_MNEMONIC", hide_env_values = true)]
+    pub espresso_mnemonic: Option<String>,
+
+    /// Keyset index to derive from `--espresso-mnemonic`. Defaults to 0.
+    #[clap(long, env = "ESPRESSO_NODE_KEY_INDEX", requires = "espresso_mnemonic")]
+    pub espresso_key_index: Option<u64>,
+}
+
+impl EspressoKeyArgs {
+    /// The BLS and Schnorr key pairs, from the mnemonic if one was given, otherwise from the
+    /// individual keys. clap keeps the two sources mutually exclusive.
+    pub fn resolve_key_pairs(
+        &self,
+        consensus_private_key: Option<BLSPrivKey>,
+        state_private_key: Option<StateSignKey>,
+    ) -> Result<(BLSKeyPair, StateKeyPair)> {
+        if let Some(keys) = self.key_set()? {
+            return Ok((keys.staking.into(), StateKeyPair::from_sign_key(keys.state)));
+        }
+        let consensus = consensus_private_key
+            .context("--consensus-private-key or --espresso-mnemonic is required")?;
+        let state =
+            state_private_key.context("--state-private-key or --espresso-mnemonic is required")?;
+        Ok((consensus.into(), StateKeyPair::from_sign_key(state)))
+    }
+
+    /// The x25519 public key, from the mnemonic if one was given, otherwise the individual key.
+    /// `None` when neither is available.
+    pub fn resolve_x25519_key(
+        &self,
+        x25519_key: Option<x25519::PublicKey>,
+    ) -> Result<Option<x25519::PublicKey>> {
+        match self.key_set()? {
+            Some(keys) => Ok(Some(keys.x25519.into())),
+            None => Ok(x25519_key),
+        }
+    }
+
+    /// The keys the mnemonic derives, or `None` if no mnemonic was given.
+    fn key_set(&self) -> Result<Option<KeySet>> {
+        let Some(phrase) = &self.espresso_mnemonic else {
+            return Ok(None);
+        };
+        if let Some(var) = node_key_override() {
+            bail!(
+                "{var} is set alongside --espresso-mnemonic. espresso-node gives it precedence \
+                 over the mnemonic, so the key registered here would not be the one the node \
+                 holds. Pass that key with --consensus-private-key, --state-private-key or \
+                 --x25519-key, or unset {var}."
+            );
+        }
+        // The phrase must not reach the error, which is printed to stderr and ends up in shell
+        // history, CI logs and journals.
+        let mnemonic = Mnemonic::<English>::new_from_phrase(phrase)
+            .map_err(|_| anyhow!("--espresso-mnemonic is not a valid BIP-39 mnemonic"))?;
+        Ok(Some(KeySet::from_mnemonic(
+            mnemonic,
+            self.espresso_key_index,
+        )?))
+    }
+}
+
+/// The environment variables `espresso-node` resolves ahead of its mnemonic. staking-cli reads
+/// only the mnemonic, so a node configured with both would run a key the CLI never derives.
+fn node_key_override() -> Option<&'static str> {
+    const OVERRIDES: [&str; 4] = [
+        "ESPRESSO_NODE_PRIVATE_STAKING_KEY",
+        "ESPRESSO_NODE_PRIVATE_STATE_KEY",
+        "ESPRESSO_NODE_PRIVATE_X25519_KEY",
+        "ESPRESSO_NODE_KEY_FILE",
+    ];
+    OVERRIDES
+        .into_iter()
+        .find(|var| std::env::var_os(var).is_some_and(|value| !value.is_empty()))
+}
+
+impl fmt::Debug for EspressoKeyArgs {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("EspressoKeyArgs")
+            .field(
+                "espresso_mnemonic",
+                &self.espresso_mnemonic.as_ref().map(|_| "***"),
+            )
+            .field("espresso_key_index", &self.espresso_key_index)
+            .finish()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use hotshot_types::{signature_key::BLSPubKey, traits::signature_key::SignatureKey as _};
+
+    use super::*;
+    use crate::DEV_MNEMONIC;
+
+    fn args(index: Option<u64>) -> EspressoKeyArgs {
+        EspressoKeyArgs {
+            espresso_mnemonic: Some(DEV_MNEMONIC.into()),
+            espresso_key_index: index,
+        }
+    }
+
+    fn other_keys() -> (BLSPrivKey, StateSignKey) {
+        let keys = args(Some(1)).key_set().unwrap().unwrap();
+        (keys.staking, keys.state)
+    }
+
+    #[test]
+    fn no_mnemonic_derives_nothing() {
+        assert!(EspressoKeyArgs::default().key_set().unwrap().is_none());
+        assert!(
+            EspressoKeyArgs::default()
+                .resolve_x25519_key(None)
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    /// The pairs come from the mnemonic at the requested index. Parity with what
+    /// `espresso-node` derives is pinned against `.env` by
+    /// `demo::tests::dev_mnemonic_matches_env_demo_keys`, not here.
+    #[test]
+    fn resolves_from_mnemonic_at_index() {
+        let (consensus, state) = args(Some(20)).resolve_key_pairs(None, None).unwrap();
+        let keyset = KeySet::from_mnemonic(DEV_MNEMONIC.parse().unwrap(), Some(20)).unwrap();
+
+        assert_eq!(
+            BLSPubKey::from(consensus.ver_key()),
+            BLSPubKey::from_private(&keyset.staking)
+        );
+        assert_eq!(
+            state.ver_key(),
+            StateKeyPair::from_sign_key(keyset.state).ver_key()
+        );
+        assert_eq!(
+            args(Some(20)).resolve_x25519_key(None).unwrap(),
+            Some(keyset.x25519.into())
+        );
+    }
+
+    #[test]
+    fn index_changes_keys() {
+        let zero = args(None).resolve_x25519_key(None).unwrap();
+        let explicit_zero = args(Some(0)).resolve_x25519_key(None).unwrap();
+        let one = args(Some(1)).resolve_x25519_key(None).unwrap();
+
+        assert_eq!(zero, explicit_zero);
+        assert_ne!(zero, one);
+    }
+
+    /// One key alone is not enough, and without a mnemonic the missing one is named.
+    #[test]
+    fn partial_keys_without_mnemonic_fail() {
+        let (consensus, state) = other_keys();
+        let empty = EspressoKeyArgs::default();
+
+        assert!(
+            empty
+                .resolve_key_pairs(Some(consensus), None)
+                .unwrap_err()
+                .to_string()
+                .contains("--state-private-key")
+        );
+        assert!(
+            empty
+                .resolve_key_pairs(None, Some(state))
+                .unwrap_err()
+                .to_string()
+                .contains("--consensus-private-key")
+        );
+    }
+
+    #[test]
+    fn invalid_mnemonic_is_not_echoed() {
+        let bad = "test test test test test test test test test test test wrongword";
+        let err = EspressoKeyArgs {
+            espresso_mnemonic: Some(bad.into()),
+            espresso_key_index: None,
+        }
+        .key_set()
+        .unwrap_err()
+        .to_string();
+
+        assert!(!err.contains("wrongword"), "{err}");
+        assert!(err.contains("--espresso-mnemonic"), "{err}");
+    }
+
+    #[test]
+    fn debug_redacts_mnemonic() {
+        let debug = format!("{:?}", args(None));
+        assert!(!debug.contains(DEV_MNEMONIC), "{debug}");
+        assert!(debug.contains("***"), "{debug}");
+    }
+}

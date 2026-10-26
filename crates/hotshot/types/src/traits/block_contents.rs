@@ -17,7 +17,7 @@ use std::{
     sync::Arc,
 };
 
-use alloy::primitives::FixedBytes;
+use alloy_primitives::FixedBytes;
 use async_trait::async_trait;
 use committable::{Commitment, Committable};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
@@ -95,7 +95,7 @@ pub trait BlockPayload<TYPES: NodeType>:
     /// # Errors
     /// If the transaction length conversion fails.
     async fn from_transactions(
-        transactions: impl IntoIterator<Item = Self::Transaction> + Send,
+        transactions: &[Self::Transaction],
         validated_state: &Self::ValidatedState,
         instance_state: &Self::Instance,
     ) -> Result<(Self, Self::Metadata), Self::Error>;
