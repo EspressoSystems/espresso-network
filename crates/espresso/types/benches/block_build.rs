@@ -82,12 +82,7 @@ fn request_block(
     let (payload, metadata): (Payload, NsTable) =
         Payload::from_transactions_sync(txs, chain_config()).expect("payload construction");
     let payload = PayloadWithMetadata { payload, metadata };
-    let commitments = block_commitments(
-        &payload,
-        Some(pooled_hashes),
-        VID_WEIGHT,
-        NEW_PROTOCOL_VERSION,
-    );
+    let commitments = block_commitments(&payload, pooled_hashes, VID_WEIGHT, NEW_PROTOCOL_VERSION);
     (payload, commitments)
 }
 

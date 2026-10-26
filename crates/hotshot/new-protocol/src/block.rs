@@ -96,7 +96,7 @@ pub struct BlockCommitments<T: NodeType> {
 /// `pooled_hashes` are the pool's hashes of the transactions the payload was built from.
 pub fn block_commitments<T: NodeType>(
     payload: &PayloadWithMetadata<T>,
-    pooled_hashes: Option<&[Commitment<T::Transaction>]>,
+    pooled_hashes: &[Commitment<T::Transaction>],
     total_weight: usize,
     version: Version,
 ) -> BlockCommitments<T> {
@@ -147,14 +147,13 @@ pub fn block_commitments<T: NodeType>(
 /// pool's hashes save hashing them again.
 pub(crate) fn transaction_hashes<T: NodeType>(
     payload: &PayloadWithMetadata<T>,
-    pooled_hashes: Option<&[Commitment<T::Transaction>]>,
+    pooled_hashes: &[Commitment<T::Transaction>],
 ) -> Vec<Commitment<T::Transaction>> {
-    match pooled_hashes {
-        Some(hashes) if payload.payload.num_transactions(&payload.metadata) == hashes.len() => {
-            hashes.to_vec()
-        },
-        _ => debug_span!("transaction_hashes")
-            .in_scope(|| payload.payload.transaction_commitments(&payload.metadata)),
+    if payload.payload.num_transactions(&payload.metadata) == pooled_hashes.len() {
+        pooled_hashes.to_vec()
+    } else {
+        debug_span!("transaction_hashes")
+            .in_scope(|| payload.payload.transaction_commitments(&payload.metadata))
     }
 }
 
@@ -324,8 +323,7 @@ impl<T: NodeType> BlockBuilder<T> {
                 vid_total_weight(target_mem.stake_table(), Some(epoch))
             };
             let commitments = spawn_blocking(move || {
-                let commitments =
-                    block_commitments(&payload, Some(hashes.as_slice()), total_weight, version);
+                let commitments = block_commitments(&payload, &hashes, total_weight, version);
                 (payload, commitments)
             });
             let (

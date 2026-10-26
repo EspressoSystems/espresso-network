@@ -516,7 +516,7 @@ fn pooled_hashes_stand_in_when_the_payload_kept_every_transaction() {
     let payload = test_payload(vec![tx(1), tx(2)]);
     // Not the payload's hashes, so the result shows which were used.
     let pooled = [tx(3).commit(), tx(4).commit()];
-    assert_eq!(transaction_hashes(&payload, Some(&pooled)), pooled);
+    assert_eq!(transaction_hashes(&payload, &pooled), pooled);
 }
 
 #[test]
@@ -524,8 +524,7 @@ fn payload_is_hashed_when_it_dropped_a_pooled_transaction() {
     let payload = test_payload(vec![tx(1), tx(2)]);
     let computed = vec![tx(1).commit(), tx(2).commit()];
     let pooled = [tx(1).commit(), tx(2).commit(), tx(3).commit()];
-    assert_eq!(transaction_hashes(&payload, Some(&pooled)), computed);
-    assert_eq!(transaction_hashes(&payload, None), computed);
+    assert_eq!(transaction_hashes(&payload, &pooled), computed);
 }
 
 fn test_payload(transactions: Vec<TestTransaction>) -> PayloadWithMetadata<TestTypes> {
