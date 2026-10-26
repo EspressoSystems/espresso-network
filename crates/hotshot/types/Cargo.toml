@@ -25,7 +25,6 @@ ark-ff = { workspace = true }
 ark-serialize = { workspace = true }
 ark-std = { workspace = true }
 async-broadcast = { workspace = true }
-async-lock = { workspace = true }
 async-trait = { workspace = true }
 bincode = { workspace = true }
 bitvec = { workspace = true }
