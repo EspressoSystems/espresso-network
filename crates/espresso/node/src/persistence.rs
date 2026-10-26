@@ -21,7 +21,18 @@ use espresso_types::{
 pub mod fs;
 pub mod no_storage;
 mod persistence_metrics;
-pub mod sql;
+/// Persistence backed by a SQL database, with one module per backend.
+///
+/// [`postgres`](sql::postgres) and [`sqlite`](sql::sqlite) compile the same code against their own
+/// database. [`sql::Options::embedded_db`] picks one, and the options are shared by both.
+pub mod sql {
+    mod options;
+
+    pub use options::*;
+
+    pub mod postgres;
+    pub mod sqlite;
+}
 pub(crate) mod storage_probe;
 
 /// RegisteredValidator without x25519_key/p2p_addr fields.
@@ -293,7 +304,8 @@ mod tests {
 
     #[rstest_reuse::template]
     #[rstest::rstest]
-    #[case(PhantomData::<crate::persistence::sql::Persistence>)]
+    #[case(PhantomData::<crate::persistence::sql::postgres::Persistence>)]
+    #[case(PhantomData::<crate::persistence::sql::sqlite::Persistence>)]
     #[case(PhantomData::<crate::persistence::fs::Persistence>)]
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     pub fn persistence_types<P: TestablePersistence>(#[case] _p: PhantomData<P>) {}
@@ -1192,11 +1204,15 @@ mod tests {
         // A newer running high QC (view 9): recovery adopts it over the eQC checkpoint.
         let mut running_high_qc = eqc_high_qc.clone();
         running_high_qc.view_number = ViewNumber::new(9);
-        storage.append_high_qc2(running_high_qc).await.unwrap();
+        running_high_qc.data.block_number = Some(epoch_height);
+        storage
+            .append_high_qc2(running_high_qc.clone())
+            .await
+            .unwrap();
 
         let (initializer, _anchor_view) = storage
             .load_consensus_state(
-                NodeState::mock(),
+                NodeState::mock().with_epoch_height(epoch_height),
                 Upgrade::trivial(versions::EPOCH_REWARD_VERSION),
             )
             .await
@@ -1752,7 +1768,8 @@ mod tests {
     /// sql-only: the fs backend keeps the pop-oldest cursor and skips gaps (the consumer
     /// re-fetches missing blocks), trading gap-fill delivery for cheap decide passes.
     #[rstest::rstest]
-    #[case(PhantomData::<crate::persistence::sql::Persistence>)]
+    #[case(PhantomData::<crate::persistence::sql::postgres::Persistence>)]
+    #[case(PhantomData::<crate::persistence::sql::sqlite::Persistence>)]
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     pub async fn test_decide_gap_holds_events<P: TestablePersistence>(#[case] _p: PhantomData<P>) {
         let tmp = P::tmp_storage().await;
@@ -1796,7 +1813,8 @@ mod tests {
     ///
     /// sql-only: see [`test_decide_gap_holds_events`].
     #[rstest::rstest]
-    #[case(PhantomData::<crate::persistence::sql::Persistence>)]
+    #[case(PhantomData::<crate::persistence::sql::postgres::Persistence>)]
+    #[case(PhantomData::<crate::persistence::sql::sqlite::Persistence>)]
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     pub async fn test_decide_gap_fill_delivers_all<P: TestablePersistence>(
         #[case] _p: PhantomData<P>,
