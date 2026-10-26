@@ -2,11 +2,10 @@
 use std::collections::BTreeMap;
 
 use committable::Committable;
-use hotshot::traits::BlockPayload;
 use hotshot_query_service::availability::{QueryablePayload, VerifiableInclusion};
 use hotshot_types::{
     data::{VidCommitment, VidCommon},
-    traits::EncodeBytes,
+    traits::{BlockPayload, EncodeBytes},
     vid::advz::advz_scheme,
 };
 use jf_advz::VidScheme;

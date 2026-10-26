@@ -141,7 +141,7 @@ where
         }
     }
 
-    // The stored legacy QC chain is no longer read: it could only close a chain whose tip was
+    // There is no stored legacy QC chain to fall back on: it could only close a chain whose tip was
     // legacy, and every network is past the 0.6 cutover, so running out of leaves is a 404.
     Err(not_found("not enough leaves to prove finality"))
 }
@@ -751,10 +751,8 @@ mod test {
         availability::{BlockQueryData, TransactionIndex, VidCommonQueryData},
         data_source::{
             Transaction,
-            sql::Config,
-            storage::{
-                AvailabilityStorage, SqlStorage, UpdateAvailabilityStorage, pruning::PrunerCfg,
-            },
+            sql::postgres::{Config, SqlStorage},
+            storage::{AvailabilityStorage, UpdateAvailabilityStorage, pruning::PrunerCfg},
         },
         fetching::provider::TrustedQueryServiceProvider,
         merklized_state::{MerklizedState, UpdateStateData},
@@ -785,7 +783,7 @@ mod test {
     use super::*;
     use crate::api::{
         data_source::{Provider, SequencerDataSource, testing::TestableSequencerDataSource},
-        sql::DataSource,
+        sql::postgres::DataSource,
     };
 
     const CHAIN_LIMIT: usize = 500;
@@ -2059,7 +2057,7 @@ mod test {
         for stored_out_of_limit in [false, true] {
             requested.lock().unwrap().clear();
             let storage = <DataSource as TestableSequencerDataSource>::create_storage().await;
-            let ds = Config::try_from(&DataSource::persistence_options(&storage))
+            let ds = Config::try_from(&*DataSource::persistence_options(&storage))
                 .unwrap()
                 .builder(Provider::default().with_cert2_provider(peer.clone()))
                 .await
@@ -2131,7 +2129,7 @@ mod test {
         let (peer, requested) = serve_cert2(cert2_for_leaf(&leaves[3])).await;
 
         let storage = <DataSource as TestableSequencerDataSource>::create_storage().await;
-        let ds = Config::try_from(&DataSource::persistence_options(&storage))
+        let ds = Config::try_from(&*DataSource::persistence_options(&storage))
             .unwrap()
             .builder(Provider::default().with_cert2_provider(peer))
             .await

@@ -86,11 +86,10 @@ impl AvidmGf2TxProof {
 
 #[cfg(test)]
 mod tests {
-    use hotshot::traits::BlockPayload;
     use hotshot_query_service::availability::QueryablePayload;
     use hotshot_types::{
         data::{VidCommitment, VidCommon},
-        traits::EncodeBytes,
+        traits::{BlockPayload, EncodeBytes},
         vid::avidm_gf2::{AvidmGf2Param, AvidmGf2Scheme},
     };
 

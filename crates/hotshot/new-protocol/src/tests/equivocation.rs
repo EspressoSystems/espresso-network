@@ -13,11 +13,11 @@
 //! already verified, and only its pairing key matters here.
 
 use committable::Committable;
-use hotshot::types::BLSPubKey;
 use hotshot_example_types::node_types::TestTypes;
 use hotshot_types::{
     data::{VidCommitment, VidCommitment2, ViewNumber},
     message::Proposal as SignedProposal,
+    signature_key::BLSPubKey,
     traits::signature_key::SignatureKey,
     vote::HasViewNumber,
 };

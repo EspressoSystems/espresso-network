@@ -4,24 +4,16 @@ use std::{
 };
 
 use committable::{Commitment, Committable};
-use futures::StreamExt;
-use hotshot::{
-    traits::{BlockPayload, ValidatedState},
-    types::{BLSPrivKey, BLSPubKey, SchnorrPubKey},
-};
 use hotshot_contract_adapter::light_client::derive_signed_state_digest;
 use hotshot_example_types::{
     block_types::{TestBlockHeader, TestBlockPayload, TestMetadata},
     membership::{
         TestableMembership, static_committee::StaticStakeTable, strict_membership::StrictMembership,
     },
+    node_stake::{TestNodeStakes, gen_node_lists},
     node_types::{TEST_VERSIONS, TestTypes},
     state_types::{TestInstanceState, TestValidatedState},
     storage_types::TestStorage,
-};
-use hotshot_testing::{
-    helpers::build_cert, node_stake::TestNodeStakes, test_builder::gen_node_lists,
-    view_generator::TestViewGenerator,
 };
 use hotshot_types::{
     PeerConnectInfo,
@@ -34,6 +26,7 @@ use hotshot_types::{
     epoch_membership::EpochMembershipCoordinator,
     light_client::{StakeTableState, StateKeyPair},
     message::{Proposal as SignedProposal, UpgradeLock},
+    signature_key::{BLSPrivKey, BLSPubKey, SchnorrPubKey},
     simple_certificate::{
         TimeoutCertificate2, TimeoutCertificate3, TimeoutEvidence, UpgradeCertificate,
         UpgradeCertificate2,
@@ -44,7 +37,7 @@ use hotshot_types::{
     },
     stake_table::HSStakeTable,
     traits::{
-        EncodeBytes,
+        BlockPayload, EncodeBytes, ValidatedState,
         block_contents::{BlockHeader, BuilderFee},
         election::Membership,
         signature_key::{LCV2StateSignatureKey, LCV3StateSignatureKey, SignatureKey},
@@ -56,6 +49,10 @@ use hotshot_types::{
     vote::HasViewNumber,
 };
 
+use super::{
+    certs::build_cert,
+    view_generator::{GeneratedView, TestViewGenerator},
+};
 use crate::{
     cert_verifier::ValidCert,
     client::{ClientLeafFetcherNetwork, CoordinatorClient},
@@ -462,8 +459,7 @@ impl TestData {
         // byte-identical across harnesses.
         let upgrade = versions::Upgrade::trivial(versions::NEW_PROTOCOL_VERSION);
 
-        let mut generator =
-            TestViewGenerator::generate(membership.clone(), node_key_map.clone(), upgrade);
+        let mut generator = TestViewGenerator::new(membership.clone(), node_key_map, upgrade);
 
         let upgrade_cert: Option<(ViewNumber, UpgradeCertificate<TestTypes>)> =
             if let Some((target_view, ref data)) = upgrade_at_view {
@@ -490,7 +486,10 @@ impl TestData {
                 None
             };
 
-        let gen_views: Vec<_> = (&mut generator).take(num_views).collect::<Vec<_>>().await;
+        let mut gen_views = Vec::with_capacity(num_views);
+        for _ in 0..num_views {
+            gen_views.push(generator.next_view().await);
+        }
 
         let mut views = Vec::new();
         // When we patch a view's proposal (DRB or justify_qc update) the leaf
@@ -1092,10 +1091,9 @@ fn extract_vid_shares(disperse: &VidDisperse2<TestTypes>) -> Vec<VidDisperseShar
 }
 
 fn extract_vid_disperse(
-    gen_view: &hotshot_testing::view_generator::TestView,
+    gen_view: &GeneratedView,
 ) -> (VidDisperse2<TestTypes>, Vec<VidDisperseShare2<TestTypes>>) {
-    let hotshot_types::data::VidDisperse::V2(vid_disperse) = gen_view.vid_disperse.data.clone()
-    else {
+    let hotshot_types::data::VidDisperse::V2(vid_disperse) = gen_view.vid_disperse.clone() else {
         panic!("Expected V2 VID disperse");
     };
     let vid_shares = extract_vid_shares(&vid_disperse);

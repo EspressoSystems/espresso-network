@@ -133,7 +133,6 @@ mod test {
     use alloy::primitives::U256;
     use bitvec::vec::BitVec;
     use committable::Commitment;
-    use hotshot::types::{BLSPubKey, SchnorrPubKey};
     use hotshot_example_types::{
         block_types::{TestBlockHeader, TestMetadata},
         membership::{
@@ -146,6 +145,7 @@ mod test {
     use hotshot_types::{
         PeerConfig,
         data::{QuorumProposal2, QuorumProposalWrapper, VidCommitment},
+        signature_key::{BLSPubKey, SchnorrPubKey},
         simple_certificate::QuorumCertificate2,
         simple_vote::{QuorumData2, VersionedVoteData, Vote2Data},
         stake_table::{StakeTableEntry, supermajority_threshold},

@@ -9,7 +9,6 @@ use async_broadcast::Sender;
 use bon::Builder;
 use cliquenet::noise::Protocol;
 use committable::{Commitment, Committable};
-use hotshot::types::{BLSPubKey, Event, EventType};
 use hotshot_example_types::{
     block_types::TestTransaction, node_types::TestTypes, storage_types::TestStorage,
 };
@@ -18,7 +17,9 @@ use hotshot_types::{
     addr::NetAddr,
     data::ViewNumber,
     epoch_membership::EpochMembershipCoordinator,
+    event::{Event, EventType},
     message::UpgradeLock,
+    signature_key::BLSPubKey,
     simple_certificate::TimeoutEvidence,
     simple_vote::HasEpoch,
     traits::{metrics::NoMetrics, signature_key::SignatureKey},

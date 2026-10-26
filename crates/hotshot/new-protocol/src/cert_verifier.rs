@@ -742,12 +742,13 @@ mod tests {
     use std::marker::PhantomData;
 
     use committable::Committable;
-    use hotshot::types::{BLSPubKey, SignatureKey as _};
     use hotshot_example_types::node_types::TestTypes;
     use hotshot_types::{
         data::{EpochNumber, ViewNumber},
+        signature_key::BLSPubKey,
         simple_certificate::{TimeoutCertificate2, TimeoutCertificate3, TimeoutEvidence},
         simple_vote::{TimeoutData2, TimeoutData3},
+        traits::signature_key::SignatureKey as _,
         vote::HasViewNumber,
     };
 

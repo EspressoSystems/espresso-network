@@ -310,6 +310,7 @@ def expires_in(minutes: int) -> dict:
         # EDGE:fleet-ttl-expired
         (expires_in(-5), (), r"expired at .*status.*destroy --orphans"),
         ({}, ("--nodes", "3"), "shape the fleet"),
+        ({}, ("--query-nodes", "2"), "shape the fleet"),
         ({}, ("--max-usd=5",), "shape the fleet"),
         ({}, ("--ttl-min", "10"), "shape the fleet"),
         ({}, ("--node-type", "c8i.4xlarge"), "shape the fleet"),
@@ -339,6 +340,13 @@ def test_run_refusals_before_any_call(harness, argv, pattern):
     with pytest.raises(awsb.Refused, match=pattern):
         awsb.cmd_run(harness.parse(*argv), FakeSystem(run=runner))
     assert runner.calls == []
+
+
+# TEST:fleet-query-nodes-from-manifest-ok
+def test_run_on_a_fleet_takes_query_nodes_from_the_manifest(harness, runner):
+    manifest = harness.fleet()
+    manifest["config"]["query_nodes"] = 3
+    assert awsb.fleet_run_config(harness.run_args(), manifest).query_nodes == 3
 
 
 def test_allocator_belongs_to_one_run_and_retags_the_fleet(harness, runner):
@@ -378,6 +386,26 @@ def test_max_block_size_belongs_to_one_run(harness, runner):
     assert awsb.fleet_run_config(harness.run_args(), manifest).max_block_size == "50mb"
     cfg = awsb.fleet_run_config(harness.run_args("--max-block-size", "30mb"), manifest)
     assert cfg.max_block_size == "30mb"
+
+
+def test_protocol_version_belongs_to_one_run(harness, runner):
+    manifest = harness.fleet()
+    assert awsb.fleet_run_config(harness.run_args(), manifest).protocol_version == "0.6"
+    cfg = awsb.fleet_run_config(harness.run_args("--protocol-version", "0.8"), manifest)
+    assert cfg.protocol_version == "0.8"
+
+
+def test_slow_nodes_belong_to_one_run(harness, runner):
+    manifest = harness.fleet()
+    cfg = awsb.fleet_run_config(harness.run_args(), manifest)
+    assert (cfg.slow_nodes, cfg.slow_cores) == (0, None)
+    flags = ("--slow-nodes", "1", "--slow-cores", "4")
+    cfg = awsb.fleet_run_config(harness.run_args(*flags), manifest)
+    assert (cfg.slow_nodes, cfg.slow_cores) == (1, 4)
+    with pytest.raises(awsb.Refused, match="validator-only"):
+        awsb.fleet_run_config(
+            harness.run_args("--slow-nodes", "9", "--slow-cores", "4"), manifest
+        )
 
 
 def test_lock_held(harness, runner):

@@ -14,7 +14,7 @@ use ::light_client::{
     LightClient,
     client::{FallbackClient, QueryServiceClient},
     state::{Genesis as LightClientGenesis, LightClientOptions},
-    storage::LightClientSqliteOptions,
+    storage::LightClientDbOptions,
 };
 use alloy::primitives::U256;
 use anyhow::{Context, anyhow, bail, ensure};
@@ -27,7 +27,7 @@ use espresso_types::{
     Certificate2, ChainConfig, Header, Leaf2, NodeState, PubKey, SeqTypes, Transaction,
     ValidatedState,
     traits::MembershipPersistence,
-    v0::traits::{SequencerPersistence, StateCatchup},
+    v0::traits::{SequencerPersistence, StateCatchup, StateCertPersistence},
     v0_1::ChainId,
 };
 use futures::{FutureExt, future::BoxFuture};
@@ -79,7 +79,7 @@ pub struct FollowerOptions {
     /// Older heights are left to the query service's backfill.
     pub max_blocks_per_poll: u64,
     pub light_client: LightClientOptions,
-    pub light_client_db: LightClientSqliteOptions,
+    pub light_client_db: LightClientDbOptions,
     /// Derived from the network config when unset.
     pub light_client_genesis: Option<LightClientGenesis>,
 }
@@ -395,13 +395,15 @@ impl<P: SequencerPersistence> Drop for FollowerContext<P> {
 }
 
 impl<P: SequencerPersistence> ApiContext for FollowerHandle<P> {
-    type Persistence = P;
-
     fn consensus(&self) -> Arc<dyn ConsensusSource> {
         self.consensus.clone()
     }
 
-    fn persistence(&self) -> Arc<P> {
+    fn membership(&self) -> Arc<dyn MembershipPersistence> {
+        self.persistence.clone()
+    }
+
+    fn state_certs(&self) -> Arc<dyn StateCertPersistence> {
         self.persistence.clone()
     }
 

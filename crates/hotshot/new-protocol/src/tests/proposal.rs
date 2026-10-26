@@ -1,12 +1,13 @@
 use std::marker::PhantomData;
 
 use committable::{Commitment, CommitmentBoundsArkless, Committable};
-use hotshot::types::{BLSPubKey, SignatureKey};
 use hotshot_example_types::node_types::TestTypes;
 use hotshot_types::{
     data::{EpochNumber, Leaf2, ViewNumber},
     message::Proposal as SignedProposal,
+    signature_key::BLSPubKey,
     simple_certificate::{TimeoutEvidence, UpgradeCertificate2},
+    traits::signature_key::SignatureKey,
     utils::is_epoch_root,
     vote::HasViewNumber,
 };

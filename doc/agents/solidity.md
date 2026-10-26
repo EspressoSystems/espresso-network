@@ -30,7 +30,7 @@ just gen-bindings                     # regenerate Rust bindings after ABI chang
   commitments; `authRoot` is V3 only. `LightClientArbitrum*.sol` are the Arbitrum-deployment variants.
 - `StakeTable.sol` / `StakeTableV2.sol` / `StakeTableV3.sol`: validator staking, delegations, withdrawals, x25519/p2p
   registration (V3, fast finality)
-- `FeeContract.sol`: builder fee deposits, read by Espresso node from finalized L1
+- `FeeContract.sol`: builder fee deposits
 - `EspToken.sol` / `EspTokenV2.sol`: ESP token (ERC20)
 - `RewardClaim.sol`: validator reward distribution; verifies merkle proofs against `lightClient.authRoot()`
 

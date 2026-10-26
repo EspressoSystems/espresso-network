@@ -75,7 +75,6 @@ use futures::{
 };
 use hotshot_types::{
     data::VidShare,
-    simple_certificate::CertificatePair,
     traits::{
         block_contents::BlockHeader,
         metrics::{Counter, Gauge, Histogram, Metrics},
@@ -878,7 +877,7 @@ where
 
         // Save the new decided leaf.
         self.fetcher
-            .store(&(info.leaf.clone(), info.qc_chain, info.cert2.clone()))
+            .store(&(info.leaf.clone(), info.cert2.clone()))
             .await;
 
         // Trigger a fetch of the parent leaf, if we don't already have it.
@@ -2237,6 +2236,16 @@ where
         })
         .await
     }
+
+    async fn load_state_start_height(&self) -> QueryResult<Option<u64>> {
+        serializable_retry!(self.fetcher.storage, || async {
+            let mut tx = self.read().await.map_err(|err| QueryError::Error {
+                message: err.to_string(),
+            })?;
+            tx.load_state_start_height().await
+        })
+        .await
+    }
 }
 
 #[async_trait]
@@ -2609,20 +2618,14 @@ where
     }
 }
 
-impl<Types: NodeType> Storable<Types>
-    for (
-        LeafQueryData<Types>,
-        Option<[CertificatePair<Types>; 2]>,
-        Option<Certificate2<Types>>,
-    )
-{
+impl<Types: NodeType> Storable<Types> for (LeafQueryData<Types>, Option<Certificate2<Types>>) {
     fn debug_name(&self) -> String {
-        format!("leaf {} with QC chain", self.0.height())
+        format!("leaf {}", self.0.height())
     }
 
     async fn notify(&self, notifiers: &Notifiers<Types>) {
         self.0.notify(notifiers).await;
-        if let Some(cert2) = &self.2 {
+        if let Some(cert2) = &self.1 {
             cert2.notify(notifiers).await;
         }
     }
@@ -2633,10 +2636,10 @@ impl<Types: NodeType> Storable<Types>
         leaf_only: bool,
     ) -> anyhow::Result<()> {
         storage
-            .insert_leaf_with_qc_chain(&self.0, self.1.clone())
+            .insert_leaf(&self.0)
             .await
-            .context("inserting leaf with QC chain")?;
-        if let Some(cert2) = &self.2 {
+            .context("inserting leaf")?;
+        if let Some(cert2) = &self.1 {
             debug_assert_eq!(self.0.height(), cert2.data.block_number);
             cert2.store(storage, leaf_only).await?;
         }
@@ -3027,8 +3030,8 @@ mod test {
     use super::{leaf::RangeRequest, *};
     use crate::{
         data_source::{
-            sql::testing::TmpDb,
-            storage::{SqlStorage, StorageConnectionType},
+            sql::postgres::{SqlStorage, testing::TmpDb},
+            storage::StorageConnectionType,
         },
         fetching::provider::NoFetching,
         testing::{

@@ -30,7 +30,6 @@ use committable::Committable;
 use futures::future::Future;
 use hotshot_types::{
     data::{VidCommitment, VidShare},
-    simple_certificate::CertificatePair,
     traits::{block_contents::BlockHeader, node_implementation::NodeType},
 };
 use serde::{Serialize, de::DeserializeOwned};
@@ -83,7 +82,6 @@ where
     leaf_storage: LedgerLog<LeafQueryData<Types>>,
     block_storage: LedgerLog<BlockQueryData<Types>>,
     vid_storage: LedgerLog<(VidCommonQueryData<Types>, Option<VidShare>)>,
-    latest_qc_chain: Option<[CertificatePair<Types>; 2]>,
     cert2_storage: LedgerLog<Certificate2<Types>>,
 }
 
@@ -206,7 +204,6 @@ where
                 block_storage: LedgerLog::create(loader, "blocks", CACHED_BLOCKS_COUNT)?,
                 vid_storage: LedgerLog::create(loader, "vid_common", CACHED_VID_COMMON_COUNT)?,
                 cert2_storage: LedgerLog::create(loader, "cert2", CACHED_CERT2_COUNT)?,
-                latest_qc_chain: None,
             }),
             metrics: Default::default(),
         })
@@ -281,7 +278,6 @@ where
                 vid_storage,
                 cert2_storage,
                 top_storage: None,
-                latest_qc_chain: None,
             }),
             metrics: Default::default(),
         })
@@ -721,28 +717,6 @@ where
     Payload<Types>: QueryablePayload<Types>,
     Header<Types>: QueryableHeader<Types>,
 {
-    async fn insert_qc_chain(
-        &mut self,
-        height: u64,
-        qc_chain: Option<[CertificatePair<Types>; 2]>,
-    ) -> anyhow::Result<()> {
-        if height + 1 >= (self.inner.leaf_storage.iter().len() as u64) {
-            // If this QC chain is for the latest leaf we know about, store it so that we can prove
-            // to clients that the corresponding leaf is finalized. (If it is not the latest leaf,
-            // this is unnecessary, since we can prove it is an ancestor of some later, finalized
-            // leaf.)
-            if let Some(qc_chain) = qc_chain {
-                self.inner.latest_qc_chain = Some(qc_chain);
-            } else {
-                // Since we have a new latest leaf, we have to update latest QC chain even if we
-                // don't actually have a QC chain to store.
-                self.inner.latest_qc_chain = None;
-            }
-        }
-
-        Ok(())
-    }
-
     async fn insert_cert2(
         &mut self,
         height: u64,
@@ -981,10 +955,6 @@ where
         }
 
         Ok(res)
-    }
-
-    async fn latest_qc_chain(&mut self) -> QueryResult<Option<[CertificatePair<Types>; 2]>> {
-        Ok(self.inner.latest_qc_chain.clone())
     }
 
     async fn load_earliest_cert2(

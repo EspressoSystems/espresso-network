@@ -1,4 +1,4 @@
-use hotshot::traits::BlockPayload;
+use hotshot_types::traits::BlockPayload;
 use serde::Serialize;
 use serde_json::Value;
 

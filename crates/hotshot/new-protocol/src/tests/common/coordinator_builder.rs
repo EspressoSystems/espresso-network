@@ -1,7 +1,6 @@
 use std::{marker::PhantomData, sync::Arc, time::Duration};
 
 use committable::Committable;
-use hotshot::types::BLSPubKey;
 use hotshot_example_types::{
     node_types::{TEST_VERSIONS, TestTypes},
     state_types::{TestInstanceState, TestValidatedState},
@@ -14,6 +13,7 @@ use hotshot_types::{
     epoch_membership::EpochMembershipCoordinator,
     light_client::StateKeyPair,
     message::Proposal as SignedProposal,
+    signature_key::BLSPubKey,
     simple_certificate::UpgradeCertificate2,
     simple_vote::QuorumData2,
     traits::{signature_key::SignatureKey, storage::Storage as _},

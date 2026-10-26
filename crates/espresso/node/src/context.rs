@@ -2,7 +2,6 @@ use std::{
     collections::BTreeMap,
     fmt::{Debug, Display},
     future::Future,
-    marker::PhantomData,
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -11,7 +10,7 @@ use anyhow::{Context, ensure};
 use async_lock::RwLock;
 use derivative::Derivative;
 use espresso_types::{
-    NodeState, PubKey, Transaction, ValidatedState,
+    NodeState, Transaction, ValidatedState,
     v0::traits::{EventConsumer as PersistenceEventConsumer, SequencerPersistence},
 };
 use futures::{
@@ -37,7 +36,6 @@ use hotshot_types::{
     traits::{
         election::Membership,
         metrics::{Counter, Gauge, Histogram, Metrics},
-        network::ConnectedNetwork,
     },
     upgrade_config::UpgradeConfig,
 };
@@ -71,7 +69,7 @@ use crate::{
     startup_catchup::bootstrap_epoch_window,
     state_signature::{self, DecidedLeaf, StateSignatureMemStorage, StateSigner},
 };
-pub(crate) type ConsensusNode<N, P> = Node<N, P>;
+pub(crate) type ConsensusNode<P> = Node<P>;
 
 /// Inbound request-response messages are dropped (not queued) when this channel is full. A node
 /// catching up has many batched requests in flight, each answered by up to `request_batch_size`
@@ -84,10 +82,10 @@ const OUTBOUND_MESSAGE_CHANNEL_CAPACITY: usize = 128;
 /// The sequencer context contains a consensus handle and other sequencer specific information.
 #[derive(Derivative, Clone)]
 #[derivative(Debug(bound = ""))]
-pub struct SequencerContext<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> {
+pub struct SequencerContext<P: SequencerPersistence> {
     /// The consensus adapter that dispatches between old HotShot and new coordinator.
     #[derivative(Debug = "ignore")]
-    consensus_handle: Arc<ConsensusHandle<SeqTypes, ConsensusNode<N, P>>>,
+    consensus_handle: Arc<ConsensusHandle<SeqTypes, ConsensusNode<P>>>,
 
     #[derivative(Debug = "ignore")]
     persistence: Arc<P>,
@@ -95,7 +93,7 @@ pub struct SequencerContext<N: ConnectedNetwork<PubKey>, P: SequencerPersistence
     /// The request-response protocol
     #[derivative(Debug = "ignore")]
     #[allow(dead_code)]
-    pub request_response_protocol: RequestResponseProtocol<ConsensusNode<N, P>, N, P>,
+    pub request_response_protocol: RequestResponseProtocol<ConsensusNode<P>, P>,
 
     /// Light client state signatures produced by the state signer task.
     state_signatures: Arc<RwLock<StateSignatureMemStorage>>,
@@ -116,15 +114,10 @@ pub struct SequencerContext<N: ConnectedNetwork<PubKey>, P: SequencerPersistence
 
     #[derivative(Debug = "ignore")]
     validator_config: ValidatorConfig<SeqTypes>,
-
-    /// The pre-0.6 network, which nothing sends or receives on; torn down once consensus starts.
-    #[derivative(Debug = "ignore")]
-    legacy_network: Arc<N>,
 }
 
-impl<N, P> SequencerContext<N, P>
+impl<P> SequencerContext<P>
 where
-    N: ConnectedNetwork<PubKey>,
     P: SequencerPersistence,
 {
     #[tracing::instrument(skip_all, fields(node_id = initializer.instance_state().node_id))]
@@ -139,7 +132,6 @@ where
         storage: Option<RequestResponseStorage>,
         state_catchup: ParallelStateCatchup,
         persistence: Arc<P>,
-        network: Arc<N>,
         coordinator_network: F,
         state_relay_server: Option<Url>,
         metrics: &dyn Metrics,
@@ -299,7 +291,6 @@ where
                 storage,
                 persistence: persistence.clone(),
                 consensus_handle: consensus_handle.clone(),
-                phantom: PhantomData,
             },
             validator_config.public_key,
             validator_config.private_key.clone(),
@@ -335,7 +326,6 @@ where
             instance_state,
             network_config,
             validator_config,
-            network,
             event_consumer,
             anchor_view,
             proposal_fetcher_cfg,
@@ -347,15 +337,14 @@ where
     /// Constructor
     #[allow(clippy::too_many_arguments)]
     fn new(
-        consensus_handle: Arc<ConsensusHandle<SeqTypes, ConsensusNode<N, P>>>,
+        consensus_handle: Arc<ConsensusHandle<SeqTypes, ConsensusNode<P>>>,
         persistence: Arc<P>,
         state_signer: StateSigner<SequencerApiVersion>,
         external_event_handler: ExternalEventHandler,
-        request_response_protocol: RequestResponseProtocol<ConsensusNode<N, P>, N, P>,
+        request_response_protocol: RequestResponseProtocol<ConsensusNode<P>, P>,
         node_state: NodeState,
         network_config: NetworkConfig<SeqTypes>,
         validator_config: ValidatorConfig<SeqTypes>,
-        legacy_network: Arc<N>,
         event_consumer: impl PersistenceEventConsumer + 'static,
         anchor_view: Option<ViewNumber>,
         proposal_fetcher_cfg: ProposalFetcherConfig,
@@ -375,7 +364,6 @@ where
             node_state,
             network_config,
             validator_config,
-            legacy_network,
         };
 
         // Spawn proposal fetching tasks.
@@ -462,7 +450,7 @@ where
     }
 
     /// Return a reference to the consensus adapter.
-    pub fn consensus_handle(&self) -> Arc<ConsensusHandle<SeqTypes, ConsensusNode<N, P>>> {
+    pub fn consensus_handle(&self) -> Arc<ConsensusHandle<SeqTypes, ConsensusNode<P>>> {
         self.consensus_handle.clone()
     }
 
@@ -517,7 +505,6 @@ where
         }
         tracing::warn!("starting consensus");
         self.consensus_handle.start_consensus().await;
-        self.legacy_network.shut_down().await;
     }
 
     /// Spawn a background task attached to this context.
@@ -547,7 +534,6 @@ where
     pub async fn shut_down(&mut self) {
         tracing::info!("shutting down SequencerContext");
         self.consensus_handle.shut_down().await;
-        self.legacy_network.shut_down().await;
         self.tasks.shut_down();
         self.node_state.l1_client.shut_down_tasks().await;
 
@@ -626,19 +612,17 @@ async fn seed_membership(
     .await;
 }
 
-impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> Drop for SequencerContext<N, P> {
+impl<P: SequencerPersistence> Drop for SequencerContext<P> {
     fn drop(&mut self) {
         if !self.detached {
             // Spawn a task to shut down the context
             let consensus_handle = self.consensus_handle.clone();
-            let legacy_network = self.legacy_network.clone();
             let tasks_clone = self.tasks.clone();
             let node_state_clone = self.node_state.clone();
 
             spawn(async move {
                 tracing::info!("shutting down SequencerContext");
                 consensus_handle.shut_down().await;
-                legacy_network.shut_down().await;
                 tasks_clone.shut_down();
                 node_state_clone.l1_client.shut_down_tasks().await;
             });
@@ -744,12 +728,11 @@ const SIGNER_QUEUE_CAPACITY: usize = 128;
 /// relay post can take as long as its HTTP timeout. The relay needs a threshold of signatures on
 /// one height, so every node must sign the same heights. Signing every decide keeps that while
 /// posts fall behind, and dropping only the oldest once the queue is full keeps it as well.
-async fn sign_decided_leaves<N, P>(
-    consensus_handle: Arc<ConsensusHandle<SeqTypes, ConsensusNode<N, P>>>,
+async fn sign_decided_leaves<P>(
+    consensus_handle: Arc<ConsensusHandle<SeqTypes, ConsensusNode<P>>>,
     mut state_signer: StateSigner<SequencerApiVersion>,
     mut leaves: broadcast::Receiver<DecidedLeaf>,
 ) where
-    N: ConnectedNetwork<PubKey>,
     P: SequencerPersistence,
 {
     loop {

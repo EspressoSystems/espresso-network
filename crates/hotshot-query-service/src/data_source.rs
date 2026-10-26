@@ -16,7 +16,7 @@
 //! retrieves data in answer to queries. We call this implementation a _data source_. This module
 //! defines a data source and provides several pre-built implementations:
 //! * [`FileSystemDataSource`]
-//! * [`SqlDataSource`]
+//! * [`sql::postgres::SqlDataSource`] and [`sql::sqlite::SqlDataSource`]
 //! * [`FetchingDataSource`], a generalization of the above
 //! * [`MetricsDataSource`]
 //!
@@ -31,7 +31,12 @@ pub mod fetching;
 pub mod fs;
 mod metrics;
 mod notifier;
-pub mod sql;
+/// Data sources backed by a SQL database: [`sql::postgres::SqlDataSource`] and
+/// [`sql::sqlite::SqlDataSource`].
+#[cfg(feature = "sql-data-source")]
+pub mod sql {
+    pub use super::storage::sql::{Migration, include_migrations, postgres, sqlite};
+}
 pub mod storage;
 mod update;
 
@@ -41,8 +46,6 @@ pub use fetching::{AvailabilityProvider, FetchingDataSource};
 pub use fs::FileSystemDataSource;
 #[cfg(feature = "metrics-data-source")]
 pub use metrics::MetricsDataSource;
-#[cfg(feature = "sql-data-source")]
-pub use sql::SqlDataSource;
 pub use update::{Transaction, UpdateDataSource, VersionedDataSource};
 
 #[cfg(any(test, feature = "testing"))]
@@ -1032,8 +1035,7 @@ pub mod node_tests {
         state_types::{TestInstanceState, TestValidatedState},
     };
     use hotshot_types::{
-        data::{VidCommitment, VidCommon, VidShare, ViewNumber, vid_commitment},
-        simple_certificate::{CertificatePair, QuorumCertificate2},
+        data::{VidCommitment, VidCommon, VidShare, vid_commitment},
         traits::{
             BlockPayload,
             block_contents::{BlockHeader, EncodeBytes},
@@ -1044,7 +1046,7 @@ pub mod node_tests {
     use pretty_assertions::assert_eq;
 
     use crate::{
-        Header, Leaf2,
+        Header,
         availability::{BlockInfo, BlockQueryData, LeafQueryData, VidCommonQueryData},
         data_source::{
             storage::{NodeStorage, UpdateAvailabilityStorage},
@@ -1055,7 +1057,7 @@ pub mod node_tests {
             SyncStatusRange, TimeWindowQueryData, WindowStart,
         },
         testing::{
-            chain::{ChainNode, EPOCH_HEIGHT, MockChain, NUM_NODES},
+            chain::{ChainNode, EPOCH_HEIGHT, MockChain, NUM_NODES, genesis_vid},
             consensus::TestableDataSource,
             mocks::{MockPayload, MockTypes, mock_transaction},
             sleep,
@@ -1098,10 +1100,10 @@ pub mod node_tests {
             )
             .await,
         ];
-        let dispersal = vid.disperse([]).unwrap();
+        let (genesis_common, _) = genesis_vid(leaves[0].header());
         let mut vid_commons = vec![VidCommonQueryData::new(
             leaves[0].header().clone(),
-            VidCommon::V0(dispersal.common.clone()),
+            genesis_common,
         )];
         for i in 0..2 {
             // Generate a unique payload and VID data, so that missing data is actually missing
@@ -1463,10 +1465,6 @@ pub mod node_tests {
         let storage = D::create(0).await;
         let ds = D::connect(&storage).await;
 
-        // Generate some test VID data.
-        let mut vid = advz_scheme(2);
-        let disperse = vid.disperse([]).unwrap();
-
         // Insert test data with VID common and a share.
         let leaf = LeafQueryData::<MockTypes>::genesis(
             &TestValidatedState::default(),
@@ -1474,22 +1472,21 @@ pub mod node_tests {
             TEST_VERSIONS.test,
         )
         .await;
-        let common = VidCommonQueryData::new(leaf.header().clone(), VidCommon::V0(disperse.common));
+        let (common, shares) = genesis_vid(leaf.header());
+        let common = VidCommonQueryData::new(leaf.header().clone(), common);
+        let share = shares[0].clone();
         ds.append(BlockInfo::new(
             leaf,
             None,
             Some(common.clone()),
-            Some(VidShare::V0(disperse.shares[0].clone())),
+            Some(share.clone()),
         ))
         .await
         .unwrap();
 
         {
             assert_eq!(ds.get_vid_common(0).await.await, common);
-            assert_eq!(
-                ds.vid_share(0).await.unwrap(),
-                VidShare::V0(disperse.shares[0].clone())
-            );
+            assert_eq!(ds.vid_share(0).await.unwrap(), share);
         }
 
         // Re-insert the common data, without a share. This should not overwrite the share we
@@ -1501,10 +1498,7 @@ pub mod node_tests {
         }
         {
             assert_eq!(ds.get_vid_common(0).await.await, common);
-            assert_eq!(
-                ds.vid_share(0).await.unwrap(),
-                VidShare::V0(disperse.shares[0].clone())
-            );
+            assert_eq!(ds.vid_share(0).await.unwrap(), share);
         }
     }
 
@@ -1736,99 +1730,6 @@ pub mod node_tests {
             .unwrap();
         assert_eq!(res.window, blocks[2..].to_vec());
         assert_eq!(res.next, Some(test_blocks[2][0].clone()));
-    }
-
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    pub async fn test_latest_qc_chain<D: TestableDataSource>()
-    where
-        for<'a> D::ReadOnly<'a>: NodeStorage<MockTypes>,
-        for<'a> D::Transaction<'a>: UpdateAvailabilityStorage<MockTypes>,
-    {
-        let storage = D::create(0).await;
-        let ds = D::connect(&storage).await;
-
-        {
-            let mut tx = ds.read().await.unwrap();
-            assert_eq!(tx.latest_qc_chain().await.unwrap(), None);
-        }
-
-        async fn leaf_with_qc_chain(
-            number: u64,
-        ) -> (LeafQueryData<MockTypes>, [CertificatePair<MockTypes>; 2]) {
-            let mut leaf = Leaf2::<MockTypes>::genesis(
-                &Default::default(),
-                &Default::default(),
-                TEST_VERSIONS.test.base,
-            )
-            .await;
-            leaf.block_header_mut().block_number = number;
-
-            let mut qc1 = QuorumCertificate2::<MockTypes>::genesis(
-                &Default::default(),
-                &Default::default(),
-                TEST_VERSIONS.test,
-            )
-            .await;
-            qc1.view_number = ViewNumber::new(1);
-            qc1.data.leaf_commit = Committable::commit(&leaf);
-
-            let mut qc2 = qc1.clone();
-            qc2.view_number += 1;
-
-            let leaf = LeafQueryData::new(leaf, qc1.clone()).unwrap();
-            (
-                leaf,
-                [
-                    CertificatePair::non_epoch_change(qc1),
-                    CertificatePair::non_epoch_change(qc2),
-                ],
-            )
-        }
-
-        // Insert a leaf with QC chain.
-        {
-            let (leaf, qcs) = leaf_with_qc_chain(2).await;
-            let mut tx = ds.write().await.unwrap();
-            tx.insert_leaf_with_qc_chain(&leaf, Some(qcs.clone()))
-                .await
-                .unwrap();
-            tx.commit().await.unwrap();
-
-            assert_eq!(
-                ds.read().await.unwrap().latest_qc_chain().await.unwrap(),
-                Some(qcs)
-            );
-        }
-
-        // Insert a later leaf without a QC chain. This should clear the previously saved QC chain,
-        // which is no longer up to date.
-        {
-            let (leaf, _) = leaf_with_qc_chain(3).await;
-            let mut tx = ds.write().await.unwrap();
-            tx.insert_leaf_with_qc_chain(&leaf, None).await.unwrap();
-            tx.commit().await.unwrap();
-
-            assert_eq!(
-                ds.read().await.unwrap().latest_qc_chain().await.unwrap(),
-                None
-            );
-        }
-
-        // Insert an earlier leaf with a QC chain. This should not be saved since it is not the
-        // latest leaf.
-        {
-            let (leaf, qcs) = leaf_with_qc_chain(1).await;
-            let mut tx = ds.write().await.unwrap();
-            tx.insert_leaf_with_qc_chain(&leaf, Some(qcs))
-                .await
-                .unwrap();
-            tx.commit().await.unwrap();
-
-            assert_eq!(
-                ds.read().await.unwrap().latest_qc_chain().await.unwrap(),
-                None
-            );
-        }
     }
 }
 

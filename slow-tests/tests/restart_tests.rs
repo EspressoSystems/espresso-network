@@ -21,6 +21,10 @@ use espresso_contract_deployer::{
     Contract, Contracts, builder::DeployerArgsBuilder,
     network_config::light_client_genesis_from_stake_table,
 };
+#[cfg(not(feature = "sqlite"))]
+use espresso_node::api::sql::postgres::DataSource as SqlDataSource;
+#[cfg(feature = "sqlite")]
+use espresso_node::api::sql::sqlite::DataSource as SqlDataSource;
 use espresso_node::{
     SequencerApiVersion,
     api::{
@@ -30,7 +34,6 @@ use espresso_node::{
     context::SequencerContext,
     genesis::{Genesis, L1Finalized, StakeTableConfig},
     keyset::KeySet,
-    network,
     options::{Modules, Options, PublicNodeConfig},
     run::{NodeContext, init_with_storage},
     testing::staking_priv_keys,
@@ -43,7 +46,6 @@ use futures::{
     future::{BoxFuture, FutureExt, join_all, try_join_all},
     stream::{BoxStream, StreamExt},
 };
-use hotshot::traits::implementations::derive_libp2p_peer_id;
 use hotshot_contract_adapter::stake_table::StakeTableContractVersion;
 use hotshot_orchestrator::run_orchestrator;
 use hotshot_types::{
@@ -51,7 +53,7 @@ use hotshot_types::{
     data::EpochNumber,
     event::LeafInfo,
     light_client::StateKeyPair,
-    network::{Libp2pConfig, NetworkConfig},
+    network::NetworkConfig,
     new_protocol::CoordinatorEvent,
     signature_key::{BLSPrivKey, BLSPubKey},
     simple_vote::HasEpoch,
@@ -242,7 +244,6 @@ struct NetworkParams<'a> {
 #[derive(Clone, Debug)]
 struct NodeParams {
     api_port: u16,
-    libp2p_port: u16,
     cliquenet_port: u16,
     staking_key: PrivKey,
     state_key: StateKeyPair,
@@ -256,7 +257,6 @@ impl NodeParams {
     fn new(i: u64, is_da: bool, is_query: bool, query_peers: bool) -> anyhow::Result<Self> {
         Ok(Self {
             api_port: reserve_tcp_port()?,
-            libp2p_port: reserve_tcp_port()?,
             cliquenet_port: reserve_tcp_port()?,
             staking_key: PubKey::generated_from_seed_indexed([0; 32], i).1,
             state_key: StateKeyPair::generate_from_seed_indexed([0; 32], i),
@@ -278,9 +278,7 @@ impl NodeParams {
 #[derive(Debug)]
 struct TestNode<S: TestableSequencerDataSource> {
     storage: S::Storage,
-    context: Option<
-        SequencerContext<network::Production, <S::Options as PersistenceOptions>::Persistence>,
-    >,
+    context: Option<SequencerContext<<S::Options as PersistenceOptions>::Persistence>>,
     modules: Modules,
     opt: Options,
     num_nodes: usize,
@@ -349,10 +347,6 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
             &network.genesis_file.display().to_string(),
             "--orchestrator-url",
             &format!("http://localhost:{}", network.orchestrator_port),
-            "--libp2p-bind-address",
-            &format!("0.0.0.0:{}", node.libp2p_port),
-            "--libp2p-advertise-address",
-            &format!("127.0.0.1:{}", node.libp2p_port),
             "--cliquenet-bind-address",
             &format!("0.0.0.0:{}", node.cliquenet_port),
             "--cliquenet-advertise-address",
@@ -403,8 +397,8 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
 
             // If we are starting a node which had already been started and stopped, we may need to
             // delay a bit for the OS to reclaim the node's P2P port. Otherwise initialization of
-            // libp2p may fail with "address already in use". Thus, retry the node initialization
-            // with a backoff.
+            // cliquenet may fail with "address already in use". Thus, retry the node
+            // initialization with a backoff.
             let mut retries = 5;
             let mut delay = Duration::from_secs(1);
             let genesis = Genesis::load(&self.opt.genesis_file).await.unwrap();
@@ -634,8 +628,8 @@ type AnvilFillProvider = AnvilProvider<
 #[derive(Derivative)]
 #[derivative(Debug)]
 struct TestNetwork {
-    da_nodes: Vec<TestNode<api::sql::DataSource>>,
-    regular_nodes: Vec<TestNode<api::sql::DataSource>>,
+    da_nodes: Vec<TestNode<SqlDataSource>>,
+    regular_nodes: Vec<TestNode<SqlDataSource>>,
     tmp: TempDir,
     builder_port: u16,
     orchestrator_task: Option<JoinHandle<()>>,
@@ -1288,21 +1282,8 @@ fn start_orchestrator(port: u16, nodes: &[NodeParams], builder_port: u16) -> Joi
     let view_timeout = Duration::from_secs(2);
 
     let num_nodes = nodes.len();
-    let bootstrap_nodes = nodes
-        .iter()
-        .map(|node| {
-            let port = node.libp2p_port;
-            let peer_id = derive_libp2p_peer_id::<PubKey>(&node.staking_key).unwrap();
-            let addr = format!("/ip4/127.0.0.1/udp/{port}/quic-v1")
-                .parse()
-                .unwrap();
-            (peer_id, addr)
-        })
-        .collect();
-
     let mut config = NetworkConfig::<SeqTypes> {
         indexed_da: false,
-        libp2p_config: Some(Libp2pConfig { bootstrap_nodes }),
         ..Default::default()
     };
     config.config.num_nodes_with_stake = num_nodes.try_into().unwrap();

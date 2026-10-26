@@ -1,7 +1,6 @@
 use std::{marker::PhantomData, sync::Arc};
 
 use committable::{Commitment, CommitmentBoundsArkless, Committable};
-use hotshot::{traits::ValidatedState, types::BLSPubKey};
 use hotshot_example_types::{
     block_types::TestBlockHeader,
     node_types::{TEST_VERSIONS, TestTypes},
@@ -10,6 +9,7 @@ use hotshot_example_types::{
 use hotshot_types::{
     data::{EpochNumber, Leaf2, VidCommitment, VidCommitment2, ViewNumber},
     message::{Proposal as SignedProposal, UpgradeLock},
+    signature_key::BLSPubKey,
     simple_certificate::{
         LightClientStateUpdateCertificateV2, TimeoutEvidence, UpgradeCertificate,
     },
@@ -17,7 +17,7 @@ use hotshot_types::{
         HasEpoch, QuorumData2, SimpleVote, TimeoutData2, TimeoutData3, UpgradeProposalData,
         Vote2Data,
     },
-    traits::signature_key::SignatureKey,
+    traits::{ValidatedState, block_contents::BlockHeader, signature_key::SignatureKey},
     utils::is_epoch_root,
     vote::HasViewNumber,
 };
@@ -42,7 +42,7 @@ use crate::{
     tests::common::{
         assertions::{
             any, count_matching, decides_view, is_leaf_decided, is_persist_proposal, is_proposal,
-            is_proposal_for_view, is_proposal_paired, is_record_action,
+            is_proposal_certified, is_proposal_for_view, is_proposal_paired, is_record_action,
             is_request_block_and_header, is_request_state, is_send_cert2, is_send_timeout_cert,
             is_send_timeout_vote, is_view_changed, is_vote1, is_vote1_for_view, is_vote2,
             is_vote2_for_view, node_index_for_key,
@@ -802,6 +802,67 @@ async fn test_decide_carries_obtained_payload() {
             "decided leaf at view {view:?} should carry the payload obtained for it"
         );
     }
+}
+
+/// A proposal parked without this node's VID share is adopted once a Cert2
+/// vouches for it, and that adoption announces the proposal so the
+/// reconstructor can pin the view and admit the voters' broadcast shares. A
+/// proposal paired with the node's own share never needs the announcement.
+#[tokio::test]
+async fn test_certified_proposal_without_own_share_is_announced() {
+    let mut harness = ConsensusHarness::new(0).await;
+    let test_data = TestData::new(3).await;
+    let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
+    let view = &test_data.views[0];
+
+    // The leader's unicast of this node's share never arrives: only the
+    // broadcast proposal does, so it parks unpaired.
+    let (proposal, _own_share) = view.proposal_input_consensus(&node_key);
+    harness.apply(proposal).await;
+    assert!(
+        !any(harness.outputs(), is_proposal_certified),
+        "a live proposal awaiting its share is not yet certified"
+    );
+
+    harness.apply(view.cert1_input()).await;
+    harness.apply(view.cert2_input()).await;
+
+    let certified: Vec<_> = harness
+        .outputs()
+        .iter()
+        .filter_map(|output| match output {
+            ConsensusOutput::ProposalCertified(proposal) => Some(proposal),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        certified.len(),
+        1,
+        "adopting the parked proposal on the cert2 announces it once"
+    );
+    assert_eq!(certified[0].view_number, view.view_number);
+    assert_eq!(
+        BlockHeader::<TestTypes>::payload_commitment(&certified[0].block_header),
+        VidCommitment::V2(view.vid_commitment()),
+        "the announcement carries the header the reconstructor pins to"
+    );
+    assert!(
+        any(harness.outputs(), is_leaf_decided),
+        "the view decides on the certificates even without the payload"
+    );
+
+    // Control: a proposal that pairs with the node's own share takes the
+    // live path and is never announced as certified.
+    let mut paired = ConsensusHarness::new(0).await;
+    paired
+        .apply_pair(view.proposal_input_consensus(&node_key))
+        .await;
+    paired.apply(view.cert1_input()).await;
+    paired.apply(view.cert2_input()).await;
+    assert!(
+        !any(paired.outputs(), is_proposal_certified),
+        "a proposal paired with this node's share is not announced as certified"
+    );
 }
 
 /// Obtaining a Cert2 broadcasts it once so peers that missed the vote2s can

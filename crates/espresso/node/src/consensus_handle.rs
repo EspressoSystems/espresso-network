@@ -5,7 +5,6 @@ use async_broadcast::{InactiveReceiver, Sender, broadcast};
 use committable::Commitment;
 use espresso_api::error::SubmitError;
 use futures::{FutureExt, StreamExt, future::BoxFuture, stream::BoxStream};
-use hotshot::traits::NodeImplementation;
 use hotshot_new_protocol::{
     block,
     client::{ClientApi, QueryError},
@@ -28,7 +27,7 @@ use hotshot_types::{
     traits::{
         ValidatedState,
         metrics::{Gauge, Metrics},
-        node_implementation::NodeType,
+        node_implementation::{NodeImplementation, NodeType},
         signature_key::SignatureKey,
     },
     utils::StateAndDelta,

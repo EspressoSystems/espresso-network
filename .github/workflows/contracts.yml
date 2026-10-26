@@ -17,7 +17,7 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
-  RUST_LOG: info,libp2p=off
+  RUST_LOG: info
   CARGO_INCREMENTAL: "0"
 
 jobs:

@@ -269,7 +269,10 @@ def test_rds_parameters_keep_the_reference_tuning() -> None:
         assert rds["parameters"][key] == setting, key
 
 
-@pytest.mark.parametrize("node_type", sorted(MEMORY_MIB))
+# Postgres on hosts below 16 GiB, such as the chaos c8g.xlarge, is untuned and unsupported.
+@pytest.mark.parametrize(
+    "node_type", sorted(t for t, mib in MEMORY_MIB.items() if mib >= 16384)
+)
 def test_memory_budget_fits_the_query_host(node_type: str) -> None:
     """node0 also runs espresso-node and the journal's page cache: Postgres's peak shared and
     autovacuum memory stays within a third of the host."""
@@ -1070,6 +1073,18 @@ def test_report_has_hosts_deployment_and_summary_blocks(collected_run: Path) -> 
     summary = (collected_run / "summary.md").read_text()
     assert "Deployment" in summary
     assert "| node1 |" in summary
+    assert "slow_nodes" not in deployment
+
+
+def test_report_records_the_slow_nodes(collected_run: Path) -> None:
+    path = collected_run / "manifest.json"
+    manifest = netbench.read_json(path)
+    manifest["config"] |= {"slow_nodes": 1, "slow_cores": 4}
+    netbench.write_json(path, manifest)
+    deployment = awsb.write_report(collected_run)["deployment"]
+    assert (deployment["slow_nodes"], deployment["slow_cores"]) == (["node2"], 4)
+    summary = (collected_run / "summary.md").read_text()
+    assert "- slow nodes: node2 on 4 cores" in summary
 
 
 UP = ["up", "--tag", "old", "--nodes", "3", "--yes"]

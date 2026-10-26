@@ -5441,8 +5441,7 @@ mod proptest_x25519_key {
 #[cfg(all(test, feature = "rlp"))]
 mod rlp_tests {
     use alloy_rlp::{Decodable, Encodable};
-    use hotshot::types::BLSPubKey;
-    use hotshot_types::traits::signature_key::StateSignatureKey;
+    use hotshot_types::{signature_key::BLSPubKey, traits::signature_key::StateSignatureKey};
 
     use super::*;
 

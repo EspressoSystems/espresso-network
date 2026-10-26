@@ -123,7 +123,8 @@ async fn async_main(migrated_envs: Vec<(&str, &str)>) {
     // prepare config for state prover from user options
     let transport = SwitchingTransport::new(args.l1_options.clone(), args.l1_provider_url)
         .expect("failed to create switching transport, check your l1 provider urls");
-    let rpc_client = RpcClient::new(transport.clone(), false);
+    let rpc_client = RpcClient::new(transport.clone(), false)
+        .with_poll_interval(args.l1_options.l1_polling_interval);
     let l1_provider = ProviderBuilder::new().connect_client(rpc_client.clone());
 
     let chain_id = ChainIdRetry::default()

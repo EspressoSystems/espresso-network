@@ -5,7 +5,7 @@ use async_channel::{Receiver, Sender};
 use clap::Parser;
 use committable::Commitment;
 use derivative::Derivative;
-use espresso_types::{PubKey, ValidatedState, parse_duration, v0::traits::SequencerPersistence};
+use espresso_types::{ValidatedState, parse_duration, v0::traits::SequencerPersistence};
 use futures::stream::StreamExt;
 use hotshot_types::{
     data::{Leaf2, QuorumProposalWrapper, ViewNumber},
@@ -14,7 +14,6 @@ use hotshot_types::{
     traits::{
         ValidatedState as _,
         metrics::{Counter, Gauge, Metrics},
-        network::ConnectedNetwork,
     },
 };
 use serde::Serialize;
@@ -52,14 +51,13 @@ impl Default for ProposalFetcherConfig {
 }
 
 impl ProposalFetcherConfig {
-    pub(crate) fn spawn<N, P>(
+    pub(crate) fn spawn<P>(
         self,
         tasks: &mut TaskList,
-        consensus_handle: Arc<ConsensusHandle<SeqTypes, ConsensusNode<N, P>>>,
+        consensus_handle: Arc<ConsensusHandle<SeqTypes, ConsensusNode<P>>>,
         persistence: Arc<P>,
         metrics: &(impl Metrics + ?Sized),
     ) where
-        N: ConnectedNetwork<PubKey>,
         P: SequencerPersistence,
     {
         let (sender, receiver) = async_channel::unbounded();
@@ -111,23 +109,21 @@ type Request = (ViewNumber, Commitment<Leaf2<SeqTypes>>);
 
 #[derive(Derivative)]
 #[derivative(Clone(bound = ""), Debug(bound = ""))]
-struct ProposalFetcher<N, P>
+struct ProposalFetcher<P>
 where
-    N: ConnectedNetwork<PubKey>,
     P: SequencerPersistence,
 {
     sender: Sender<Request>,
     #[derivative(Debug = "ignore")]
-    consensus_handle: Arc<ConsensusHandle<SeqTypes, ConsensusNode<N, P>>>,
+    consensus_handle: Arc<ConsensusHandle<SeqTypes, ConsensusNode<P>>>,
     #[derivative(Debug = "ignore")]
     persistence: Arc<P>,
     cfg: ProposalFetcherConfig,
     metrics: ProposalFetcherMetrics,
 }
 
-impl<N, P> ProposalFetcher<N, P>
+impl<P> ProposalFetcher<P>
 where
-    N: ConnectedNetwork<PubKey>,
     P: SequencerPersistence,
 {
     #[tracing::instrument(skip_all)]

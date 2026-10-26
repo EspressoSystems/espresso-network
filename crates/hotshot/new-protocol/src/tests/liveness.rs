@@ -37,11 +37,11 @@
 //! runs by default. From that version no vote waits for a payload, so the
 //! stall cannot arise and no request is made; `tests::consensus` covers that.
 
-use hotshot::types::BLSPubKey;
 use hotshot_example_types::{block_types::TestBlockHeader, node_types::TEST_VERSIONS};
 use hotshot_types::{
     data::{EpochNumber, ViewNumber},
     message::Proposal,
+    signature_key::BLSPubKey,
     traits::signature_key::SignatureKey,
     vote::HasViewNumber,
 };

@@ -23,11 +23,11 @@
 Reads **finalized L1 blocks** only, to avoid reorgs.
 
 - Headers carry `l1_finalized` referencing the latest finalized L1 block. Proposal validation enforces non-decreasing.
-- Data read from L1: fee deposits (FeeContract), stake table events (StakeTable).
+- Data read from L1: fee deposits (FeeContract, below V0_6 only), stake table events (StakeTable).
 
 ## Stake table events
 
-`StakeTableEvent` (`crates/espresso/types/src/v0/v0_3/stake_table.rs:439`) is the full set of `StakeTable` contract
+`StakeTableEvent` (`crates/espresso/types/src/v0/v0_3/stake_table.rs`) is the full set of `StakeTable` contract
 events that affect consensus membership, including the V2/V3 event variants.
 
 A fetcher polls finalized L1 blocks, validates signatures, builds a `ValidatorMap`; `select_active_validator_set()`

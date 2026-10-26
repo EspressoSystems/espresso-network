@@ -742,30 +742,14 @@ impl From<PublicNetworkConfig> for proto::HotshotConfigResponse {
             num_bootstrap: num_bootstrap as u64,
             commit_sha: public_config.commit_sha().to_string(),
             indexed_da: public_config.indexed_da(),
-            cdn_marshal_address: public_config.cdn_marshal_address().map(ToString::to_string),
-            libp2p_config: public_config
-                .libp2p_config()
-                .map(|libp2p| proto::Libp2pNetworkConfig {
-                    bootstrap_nodes: libp2p
-                        .bootstrap_nodes
-                        .iter()
-                        .map(|(peer_id, multiaddr)| proto::Libp2pBootstrapNode {
-                            peer_id: peer_id.to_string(),
-                            multiaddr: multiaddr.to_string(),
-                        })
-                        .collect(),
-                }),
-            combined_network_config: public_config.combined_network_config().map(|combined| {
-                proto::CombinedNetworkConfig {
-                    delay_duration_ms: combined.delay_duration.as_millis() as u64,
-                }
-            }),
             builder: match public_config.builder() {
                 BuilderType::External => proto::BuilderType::External,
                 BuilderType::Simple => proto::BuilderType::Simple,
                 BuilderType::Random => proto::BuilderType::Random,
             }
             .into(),
+            // The deprecated CDN and libp2p fields stay at their empty defaults.
+            ..Default::default()
         }
     }
 }

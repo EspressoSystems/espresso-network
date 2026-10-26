@@ -23,7 +23,6 @@ pub const LARGE_BLOCK_VERSION: Version = TIMEOUT_EPOCH_VERSION;
 // Votes no longer wait for the block payload: a vote attests to the node's own VID share, and
 // reconstruction runs outside consensus.
 pub const ASYNC_VID_VERSION: Version = version(0, 8);
-pub const MIN_SUPPORTED_VERSION: Version = VERSION_0_1;
 pub const MAX_SUPPORTED_VERSION: Version = ASYNC_VID_VERSION;
 
 // Known upgrade hashes:

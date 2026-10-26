@@ -1,5 +1,4 @@
 use anyhow::Context;
-use clap::Parser;
 use espresso_telemetry as telemetry;
 use espresso_types::{traits::NullEventConsumer, v0::traits::SequencerPersistence};
 use futures::future::FutureExt;
@@ -11,7 +10,7 @@ use super::{
     CatchupParams, Genesis, L1Params, NetworkParams,
     api::{self, data_source::DataSourceOptions},
     context::SequencerContext,
-    init_node, network,
+    init_node,
     options::{Modules, Options, PublicNodeConfig},
     persistence,
 };
@@ -22,7 +21,7 @@ use crate::{
 };
 
 pub enum NodeContext<P: SequencerPersistence> {
-    Validator(Box<SequencerContext<network::Production, P>>),
+    Validator(Box<SequencerContext<P>>),
     Follower(Box<FollowerContext<P>>),
 }
 
@@ -53,7 +52,7 @@ impl<P: SequencerPersistence> NodeContext<P> {
 
 pub async fn main(migrated_envs: Vec<(&str, &str)>) -> anyhow::Result<()> {
     espresso_types::assert_node_feature();
-    let opt = Options::parse();
+    let opt = <Options as clap::Parser>::parse();
     let mut modules = opt.modules();
 
     // Genesis carries the chain ID, which selects the default telemetry
@@ -145,15 +144,30 @@ pub async fn main(migrated_envs: Vec<(&str, &str)>) -> anyhow::Result<()> {
         )
         .await
     } else if let Some(storage) = modules.storage_sql.take() {
-        run_with_storage(
-            genesis,
-            modules,
-            opt,
-            storage,
-            public_node_config,
-            telemetry_handle.as_mut(),
-        )
-        .await
+        match storage.into_backend() {
+            persistence::sql::SqlBackendOptions::Sqlite(storage) => {
+                run_with_storage(
+                    genesis,
+                    modules,
+                    opt,
+                    storage,
+                    public_node_config,
+                    telemetry_handle.as_mut(),
+                )
+                .await
+            },
+            persistence::sql::SqlBackendOptions::Postgres(storage) => {
+                run_with_storage(
+                    genesis,
+                    modules,
+                    opt,
+                    storage,
+                    public_node_config,
+                    telemetry_handle.as_mut(),
+                )
+                .await
+            },
+        }
     } else {
         // Persistence is required. If none is provided, just use the local file system.
         run_with_storage(
@@ -214,7 +228,9 @@ where
     S: DataSourceOptions,
 {
     let follower_params = match (&modules.follower, &modules.query) {
-        (Some(follower), Some(query)) => Some(opt.follower_params(follower, query)?),
+        (Some(follower), Some(query)) => {
+            Some(opt.follower_params(follower, query, storage_opt.light_client_db(query)?)?)
+        },
         _ => None,
     };
     let l1_params = L1Params {
@@ -242,13 +258,9 @@ where
     } = opt.key_set.try_into()?;
 
     let network_params = NetworkParams {
-        cdn_endpoint: opt.cdn_endpoint,
         cliquenet_bind_addr: opt.cliquenet_bind_address,
         cliquenet_advertise_addr: opt.cliquenet_advertise_address,
         x25519_secret_key: x25519,
-        libp2p_advertise_address: opt.libp2p_advertise_address,
-        libp2p_bind_address: opt.libp2p_bind_address,
-        libp2p_bootstrap_nodes: opt.libp2p_bootstrap_nodes,
         orchestrator_url: opt.orchestrator_url,
         builder_urls: opt.builder_urls,
         state_relay_server_url: opt.state_relay_server_url,
@@ -261,30 +273,9 @@ where
             backoff: opt.catchup_backoff,
             base_timeout: opt.catchup_base_timeout,
             local_timeout: opt.local_catchup_timeout,
+            http_delay: opt.http_catchup_delay,
         },
         bootstrap_epoch_catchup_timeout: opt.bootstrap_epoch_catchup_timeout,
-        libp2p_history_gossip: opt.libp2p_history_gossip,
-        libp2p_history_length: opt.libp2p_history_length,
-        libp2p_max_ihave_length: opt.libp2p_max_ihave_length,
-        libp2p_max_ihave_messages: opt.libp2p_max_ihave_messages,
-        libp2p_max_gossip_transmit_size: opt.libp2p_max_gossip_transmit_size,
-        libp2p_max_direct_transmit_size: opt.libp2p_max_direct_transmit_size,
-        libp2p_mesh_outbound_min: opt.libp2p_mesh_outbound_min,
-        libp2p_mesh_n: opt.libp2p_mesh_n,
-        libp2p_mesh_n_high: opt.libp2p_mesh_n_high,
-        libp2p_heartbeat_interval: opt.libp2p_heartbeat_interval,
-        libp2p_mesh_n_low: opt.libp2p_mesh_n_low,
-        libp2p_published_message_ids_cache_time: opt.libp2p_published_message_ids_cache_time,
-        libp2p_iwant_followup_time: opt.libp2p_iwant_followup_time,
-        libp2p_max_messages_per_rpc: opt.libp2p_max_messages_per_rpc,
-        libp2p_gossip_retransmission: opt.libp2p_gossip_retransmission,
-        libp2p_flood_publish: opt.libp2p_flood_publish,
-        libp2p_duplicate_cache_time: opt.libp2p_duplicate_cache_time,
-        libp2p_fanout_ttl: opt.libp2p_fanout_ttl,
-        libp2p_heartbeat_initial_delay: opt.libp2p_heartbeat_initial_delay,
-        libp2p_gossip_factor: opt.libp2p_gossip_factor,
-        libp2p_gossip_lazy: opt.libp2p_gossip_lazy,
-        libp2p_dht_put_quorum: opt.libp2p_dht_put_quorum,
     };
 
     let proposal_fetcher_config = opt.proposal_fetcher_config;
@@ -416,6 +407,7 @@ fn api_options<S: DataSourceOptions>(
 mod test {
     use std::time::Duration;
 
+    use clap::Parser;
     use espresso_types::{
         PubKey, Upgrade, UpgradeType,
         v0_1::{UpgradeMode, ViewBasedUpgrade},
@@ -506,11 +498,6 @@ mod test {
             &format!("127.0.0.1:{port2}"),
             "--cliquenet-advertise-address",
             &format!("127.0.0.1:{port2}"),
-            // Never bound: this test blocks at orchestrator before libp2p starts. Port 0 is a
-            // placeholder to satisfy the orchestrator-bootstrap requirement on the advertise
-            // address.
-            "--libp2p-advertise-address",
-            "127.0.0.1:0",
             "--genesis-file",
             &genesis_file.display().to_string(),
         ]);
