@@ -36,6 +36,8 @@ pub enum LeaderEvent {
 
     // Erasure-code the block and unicast the shares.
     NsDisperseStart,
+    NsDisperseEnd,
+    VidSharesUnicastStart,
     VidSharesUnicastEnd,
 
     // Replica work for V-1, in parallel.
@@ -82,6 +84,8 @@ impl LeaderEvent {
             HeaderCreatedApplied => "header_created_applied",
             BlockBuiltApplied => "block_built_applied",
             NsDisperseStart => "ns_disperse_start",
+            NsDisperseEnd => "ns_disperse_end",
+            VidSharesUnicastStart => "vid_shares_unicast_start",
             VidSharesUnicastEnd => "vid_shares_unicast_end",
             Vote1VMinus1Arrived => "vote1_v_minus_1_arrived",
             ThresholdShareReachedVMinus1 => "threshold_share_reached_v_minus_1",

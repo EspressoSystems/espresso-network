@@ -2,7 +2,10 @@ use std::{
     collections::BTreeMap,
     mem,
     ops::Range,
-    sync::{Arc, LazyLock},
+    sync::{
+        Arc, LazyLock,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+    },
 };
 
 use hotshot_types::{
@@ -155,8 +158,8 @@ fn handle_vid_disperse_request<T: NodeType>(
     let epoch = vid_disperse_request.epoch;
     let payload_commitment = vid_disperse_request.payload_commitment;
 
-    // Encoding and unicast are interleaved per bucket, so `NsDisperseStart` to
-    // `VidSharesUnicastEnd` brackets the whole dispersal.
+    // Encoding and unicast overlap across buckets, so `NsDisperseEnd` (last encode)
+    // can come after `VidSharesUnicastStart` (first send).
     crate::trace_leader_event!(
         tracer,
         view,
@@ -189,6 +192,9 @@ fn handle_vid_disperse_request<T: NodeType>(
         bucketize(&params.ns_table, threshold)
     };
 
+    let buckets_left = AtomicUsize::new(buckets.len());
+    let unicast_started = AtomicBool::new(false);
+
     buckets.par_iter().try_for_each_with(
         network,
         |network, bucket| -> Result<(), VidDisperseError> {
@@ -214,6 +220,21 @@ fn handle_vid_disperse_request<T: NodeType>(
                         ns_share,
                     });
                 }
+            }
+
+            if buckets_left.fetch_sub(1, Ordering::AcqRel) == 1 {
+                crate::trace_leader_event!(
+                    tracer,
+                    view,
+                    crate::leader_trace::LeaderEvent::NsDisperseEnd
+                );
+            }
+            if !unicast_started.swap(true, Ordering::AcqRel) {
+                crate::trace_leader_event!(
+                    tracer,
+                    view,
+                    crate::leader_trace::LeaderEvent::VidSharesUnicastStart
+                );
             }
 
             for (recipient, pieces) in params.recipients.iter().zip(pieces) {
