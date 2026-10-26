@@ -150,11 +150,6 @@ struct EpochCommittee {
 }
 
 impl EpochCommittee {
-    /// Holds the epoch root header and the stake table hash.
-    fn has_root(&self) -> bool {
-        self.header.is_some() && self.stake_table_hash.is_some()
-    }
-
     fn new(
         validators: AuthenticatedValidatorMap,
         block_reward: Option<RewardAmount>,
@@ -200,18 +195,6 @@ impl EpochCommittee {
 }
 
 impl EpochCommittees {
-    /// Highest in-memory epoch whose committee holds its root header and stake table hash.
-    /// Selects the current epoch at startup.
-    pub fn highest_rooted_epoch(&self) -> Option<EpochNumber> {
-        let inner = self.inner.read();
-        inner
-            .snapshots
-            .iter()
-            .filter(|(_, snapshot)| snapshot.inner.committee.has_root())
-            .map(|(epoch, _)| *epoch)
-            .max()
-    }
-
     pub fn epoch_height(&self) -> BlockNumber {
         self.epoch_height
     }
@@ -1267,40 +1250,14 @@ impl Membership<SeqTypes> for EpochCommittees {
 
 #[cfg(feature = "node")]
 impl EpochCommittees {
-    /// Re-derive from L1 the stake tables of epochs whose epoch root header is stored but whose
-    /// table is not. Storage persists a table one epoch late.
-    ///
-    /// Stops at the first epoch without a stored root, or at the first failed derivation. A failed
-    /// epoch stays missing and is derived on demand, by the startup catchup when it lies in
-    /// `N-1 ..= N+1`, else by consensus catchup.
-    pub async fn add_stored_epoch_roots(
-        &self,
-        coordinator: &EpochMembershipCoordinator<SeqTypes>,
-    ) -> anyhow::Result<()> {
-        // Without a held table there is nothing to derive the next one from.
-        let Some(highest) = self.highest_known_epoch() else {
-            return Ok(());
-        };
-        let mut epoch = highest + 1;
-        loop {
-            let header = self
-                .fetcher
-                .persistence
-                .lock()
-                .await
-                .load_epoch_root(epoch)
-                .await
-                .with_context(|| format!("loading the stored epoch root of epoch {epoch}"))?;
-            let Some(header) = header else {
-                return Ok(());
-            };
-            info!(%epoch, "re-deriving the stake table from the stored epoch root");
-            if let Err(err) = coordinator.add_epoch_root(header).await {
-                warn!(%epoch, err = %format_args!("{err:#}"), "re-deriving the stored epoch root failed");
-                return Ok(());
-            }
-            epoch += 1;
-        }
+    /// The stored root header deriving `epoch`, if any. A read error is returned, not logged.
+    pub async fn stored_epoch_root(&self, epoch: EpochNumber) -> anyhow::Result<Option<Header>> {
+        self.fetcher
+            .persistence
+            .lock()
+            .await
+            .load_epoch_root(epoch)
+            .await
     }
 }
 
@@ -1688,7 +1645,6 @@ mod tests {
     };
     use rstest::rstest;
     use tokio::{task::JoinSet, time::Duration};
-    use versions::version;
 
     use super::*;
     use crate::{NodeState, Payload, Transaction, traits::MembershipPersistence};
@@ -1721,14 +1677,12 @@ mod tests {
     /// result and an epoch root header for epoch 7 only. `stored_headers`
     /// records headers written via `store_epoch_root`, independent of
     /// `header`. `fail_next_store` makes the next `store_epoch_root` fail
-    /// once, then clears itself. With `stored_header_loads_table`, `load_stake`
-    /// returns a default table for every epoch with a stored header.
+    /// once, then clears itself.
     #[derive(Debug)]
     struct MockStakeStore {
         header: Header,
         stored_headers: std::sync::Mutex<HashMap<EpochNumber, Header>>,
         fail_next_store: Arc<AtomicBool>,
-        stored_header_loads_table: bool,
     }
 
     #[async_trait::async_trait]
@@ -1737,13 +1691,6 @@ mod tests {
             &self,
             epoch: EpochNumber,
         ) -> anyhow::Result<Option<crate::traits::StakeTuple>> {
-            // A stored epoch root header makes the table of its epoch loadable without L1.
-            if self.stored_header_loads_table
-                && self.stored_headers.lock().unwrap().contains_key(&epoch)
-            {
-                let hash = StakeTableState::default().commit();
-                return Ok(Some((Default::default(), None, Some(hash))));
-            }
             Ok((*epoch == 7 || *epoch == 8).then(|| (Default::default(), None, None)))
         }
 
@@ -1841,7 +1788,6 @@ mod tests {
             header: build_epoch_root_header().await,
             stored_headers: Default::default(),
             fail_next_store: Default::default(),
-            stored_header_loads_table: false,
         };
         let fetcher = Fetcher::new(
             Arc::new(crate::mock::MockStateCatchup::default()),
@@ -1871,6 +1817,30 @@ mod tests {
         assert!(!committees.load_stake_table(EpochNumber::new(9)).await);
     }
 
+    // `stored_epoch_root` returns the persisted root header and no row as `None`.
+    #[tokio::test]
+    async fn stored_epoch_root_reads_the_persisted_header() {
+        let header = build_epoch_root_header().await;
+        let store = MockStakeStore {
+            header: header.clone(),
+            stored_headers: Default::default(),
+            fail_next_store: Default::default(),
+        };
+        let fetcher = Fetcher::new(
+            Arc::new(crate::mock::MockStateCatchup::default()),
+            Arc::new(AsyncMutex::new(store)),
+            crate::L1Client::new(vec!["http://localhost:3331".parse().unwrap()])
+                .expect("Failed to create L1 client"),
+            crate::ChainConfig::default(),
+        );
+        let committees = build_committees_with_fetcher(4, fetcher);
+
+        let stored = committees.stored_epoch_root(EpochNumber::new(7)).await;
+        assert_eq!(stored.unwrap(), Some(header));
+        let missing = committees.stored_epoch_root(EpochNumber::new(6)).await;
+        assert_eq!(missing.unwrap(), None);
+    }
+
     // A caller that times out queueing for the storage locks must still
     // answer `true` when the epoch was loaded by someone else while it
     // queued: `load_stake_table`'s contract is "is a snapshot available",
@@ -1883,7 +1853,6 @@ mod tests {
             header: build_epoch_root_header().await,
             stored_headers: Default::default(),
             fail_next_store: Default::default(),
-            stored_header_loads_table: false,
         };
         let persistence = Arc::new(AsyncMutex::new(store));
         let fetcher = Fetcher::new(
@@ -2429,7 +2398,6 @@ mod tests {
             header: header.clone(),
             stored_headers: Default::default(),
             fail_next_store: fail_next_store.clone(),
-            stored_header_loads_table: false,
         };
         let fetcher = Fetcher::new(
             Arc::new(crate::mock::MockStateCatchup::default()),
@@ -2536,158 +2504,6 @@ mod tests {
                 .unwrap(),
             Some(header)
         );
-    }
-
-    /// Put a committee for `epoch` that copies the genesis one, with the given root parts.
-    fn put_rooted(
-        committees: &EpochCommittees,
-        epoch: u64,
-        header: Option<Header>,
-        hash: Option<StakeTableHash>,
-        reward: Option<RewardAmount>,
-    ) {
-        let mut inner = committees.inner.write();
-        let template = inner
-            .epoch_committee(EpochNumber::genesis())
-            .expect("genesis committee exists");
-        let committee = EpochCommittee {
-            block_reward: reward,
-            stake_table_hash: hash,
-            header,
-            eligible_leaders: template.eligible_leaders.clone(),
-            stake_table: template.stake_table.clone(),
-            validators: template.validators.clone(),
-            address_mapping: template.address_mapping.clone(),
-        };
-        inner.put_epoch_committee(EpochNumber::new(epoch), Arc::new(committee));
-    }
-
-    #[tokio::test]
-    async fn highest_rooted_epoch_ignores_rootless_and_unhashed() {
-        let header = build_epoch_root_header().await;
-        let hash = Some(StakeTableState::default().commit());
-        let reward = Some(RewardAmount::default());
-        let committees = build_committees(4);
-        put_rooted(&committees, 5, Some(header.clone()), hash, None);
-        assert_eq!(committees.highest_rooted_epoch(), Some(EpochNumber::new(5)));
-
-        put_rooted(&committees, 6, None, hash, reward);
-        put_rooted(&committees, 7, Some(header), None, reward);
-        assert_eq!(committees.highest_rooted_epoch(), Some(EpochNumber::new(5)));
-    }
-
-    /// Run `add_stored_epoch_roots` over a store holding `header` as the root of each of
-    /// `root_epochs`. The membership holds epochs 1 and 2, and has its first epoch set when
-    /// `seed_first_epoch`, as `init_node_state` does. Returns the result and the membership.
-    async fn add_stored_roots_of(
-        header: Header,
-        root_epochs: &[u64],
-        seed_first_epoch: bool,
-    ) -> (anyhow::Result<()>, EpochCommittees) {
-        let store = MockStakeStore {
-            header: header.clone(),
-            stored_headers: std::sync::Mutex::new(
-                root_epochs
-                    .iter()
-                    .map(|epoch| (EpochNumber::new(*epoch), header.clone()))
-                    .collect(),
-            ),
-            fail_next_store: Default::default(),
-            stored_header_loads_table: true,
-        };
-        let store = Arc::new(AsyncMutex::new(store));
-        let fetcher = Fetcher::new(
-            Arc::new(crate::mock::MockStateCatchup::default()),
-            Arc::clone(&store) as Arc<AsyncMutex<dyn MembershipPersistence>>,
-            crate::L1Client::new(vec!["http://localhost:3331".parse().unwrap()])
-                .expect("Failed to create L1 client"),
-            crate::ChainConfig::default(),
-        );
-        *fetcher.initial_supply.write().await = Some(U256::from(1_000_000u64));
-        let committees = build_committees_with_fetcher(4, fetcher);
-        if seed_first_epoch {
-            committees.set_first_epoch(EpochNumber::genesis(), [0u8; 32]);
-        }
-        let coordinator = EpochMembershipCoordinator::<SeqTypes>::new(
-            committees.clone(),
-            *committees.epoch_height(),
-            &hotshot_example_types::storage_types::TestStorage::default(),
-        );
-        let result = committees.add_stored_epoch_roots(&coordinator).await;
-        (result, committees)
-    }
-
-    async fn add_stored_roots(root_epochs: &[u64]) -> EpochCommittees {
-        let header = build_epoch_root_header().await;
-        let (result, committees) = add_stored_roots_of(header, root_epochs, false).await;
-        result.unwrap();
-        committees
-    }
-
-    /// Like `build_epoch_root_header` with a V0.4 header, whose reward is computed from the
-    /// first epoch.
-    async fn build_dynamic_reward_epoch_root_header() -> Header {
-        let instance = NodeState::mock().with_genesis_version(version(0, 4));
-        let (payload, _) = Payload::from_transactions(
-            &[Transaction::of_size(10)],
-            &instance.genesis_state,
-            &instance,
-        )
-        .await
-        .expect("payload");
-        let metadata = payload.ns_table().clone();
-        match Header::genesis(&instance, payload, &metadata, version(0, 4)) {
-            Header::V4(mut h) => {
-                h.height = 95;
-                Header::V4(h)
-            },
-            other => panic!("expected V4 header, got {other:?}"),
-        }
-    }
-
-    // Storage persists a table one epoch late, so a root header can outlive its table. The
-    // header built by `build_epoch_root_header` derives epoch 3.
-    #[tokio::test]
-    async fn stored_epoch_roots_add_the_missing_epoch() {
-        let committees = add_stored_roots(&[3]).await;
-
-        assert_eq!(committees.highest_rooted_epoch(), Some(EpochNumber::new(3)));
-    }
-
-    // Mirrors `init_node_state`: the first epoch is set before the stored roots are added.
-    #[tokio::test]
-    async fn stored_epoch_roots_with_dynamic_reward_hold_the_table_after_seeding() {
-        let header = build_dynamic_reward_epoch_root_header().await;
-        let (result, committees) = add_stored_roots_of(header, &[3], true).await;
-
-        result.unwrap();
-        assert_eq!(committees.highest_rooted_epoch(), Some(EpochNumber::new(3)));
-    }
-
-    /// Without the first epoch the dynamic reward computation fails for a stored root; init still
-    /// returns `Ok` so the rest of startup continues, and the epoch has no block reward.
-    #[tokio::test]
-    async fn stored_epoch_roots_skip_a_failed_derivation() {
-        let header = build_dynamic_reward_epoch_root_header().await;
-        let (result, committees) = add_stored_roots_of(header, &[3], false).await;
-
-        result.unwrap();
-        assert!(committees.epoch_block_reward(EpochNumber::new(3)).is_none());
-    }
-
-    #[tokio::test]
-    async fn stored_epoch_roots_stop_at_the_first_missing_root() {
-        let committees = add_stored_roots(&[3, 5]).await;
-
-        assert_eq!(committees.highest_rooted_epoch(), Some(EpochNumber::new(3)));
-        assert!(committees.snapshot(EpochNumber::new(5)).is_none());
-    }
-
-    #[tokio::test]
-    async fn stored_epoch_roots_none_stored_changes_nothing() {
-        let committees = add_stored_roots(&[]).await;
-
-        assert!(committees.snapshot(EpochNumber::new(3)).is_none());
     }
 
     // `add_da_committee` updates the per-epoch `da_committees` map and

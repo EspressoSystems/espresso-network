@@ -6736,12 +6736,6 @@ mod test {
                 "no block reward for epoch {epoch}"
             );
         }
-        // The current epoch is one below the highest epoch with a root. Peer catchup above the LC
-        // contract header may advance it past the header's epoch.
-        let highest_root = membership
-            .highest_rooted_epoch()
-            .context("no epoch root after startup catchup")?;
-        assert!(highest_root.u64() > lc_contract_epoch);
 
         node.start_consensus().await;
 

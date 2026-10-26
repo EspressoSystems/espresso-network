@@ -159,7 +159,8 @@ pub struct Options {
     ///
     /// Trusted for liveness and block height during initial sync; everything they serve is
     /// verified. The current epoch comes from the median of the tips the peers report within the
-    /// step timeout. One lying peer among three answering cannot move it, and peers that do not
+    /// step timeout. The heights raise it above the floor the LC contract and own storage give,
+    /// never lower it. One lying peer among three answering cannot move it, and peers that do not
     /// answer do not count. Configure at least 3 independent peers that serve the light-client
     /// API (query module with SQL storage).
     #[clap(long, env = "ESPRESSO_NODE_STATE_PEERS", value_delimiter = ',')]
@@ -199,8 +200,8 @@ pub struct Options {
 
     /// Timeout for each step of the startup stake-table catchup.
     ///
-    /// Bounds the LC contract state read, an LC contract catchup fetch from one peer and a peer
-    /// height read. A timed-out step is retried until `STARTUP_CATCHUP_DEADLINE`.
+    /// Bounds the LC contract header read, one proof fetch from one peer and one peer height read.
+    /// A timed-out step is retried until `STARTUP_CATCHUP_DEADLINE`.
     #[clap(long, env = "ESPRESSO_NODE_BOOTSTRAP_EPOCH_CATCHUP_TIMEOUT", default_value = "30s", value_parser = parse_duration)]
     pub bootstrap_epoch_catchup_timeout: Duration,
 

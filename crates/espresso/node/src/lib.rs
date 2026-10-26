@@ -706,7 +706,10 @@ where
 
     let persistence = Arc::new(persistence);
     let coordinator = EpochMembershipCoordinator::new(membership, epoch_height, &persistence);
-    seed_first_epoch_and_stored_roots(&coordinator, epoch_height, epoch_start_block).await?;
+    let first_epoch = EpochNumber::new(epoch_from_block_number(epoch_start_block, epoch_height));
+    coordinator
+        .membership()
+        .set_first_epoch(first_epoch, INITIAL_DRB_RESULT);
 
     let epoch_rewards_calculator = Arc::new(Mutex::new(EpochRewardsCalculator::new()));
 
@@ -739,22 +742,6 @@ where
         state_catchup: state_catchup_providers,
         persistence,
     })
-}
-
-/// Stored epoch roots need the first epoch for reward calculation; `load_start_epoch_info` sets it
-/// again later. The first epoch and the next get the genesis committee.
-pub(crate) async fn seed_first_epoch_and_stored_roots(
-    coordinator: &EpochMembershipCoordinator<SeqTypes>,
-    epoch_height: u64,
-    epoch_start_block: u64,
-) -> anyhow::Result<()> {
-    let membership = coordinator.membership();
-    let first_epoch = EpochNumber::new(epoch_from_block_number(epoch_start_block, epoch_height));
-    membership.set_first_epoch(first_epoch, INITIAL_DRB_RESULT);
-    membership
-        .add_stored_epoch_roots(coordinator)
-        .await
-        .context("re-deriving stake tables from stored epoch roots failed")
 }
 
 /// Scans the whole L1 contract history when nothing is persisted yet, keeping every
@@ -1607,13 +1594,13 @@ pub mod testing {
                 &persistence.clone(),
             );
 
-            seed_first_epoch_and_stored_roots(
-                &coordinator,
-                config.epoch_height,
+            let first_epoch = EpochNumber::new(epoch_from_block_number(
                 config.epoch_start_block,
-            )
-            .await
-            .unwrap();
+                config.epoch_height,
+            ));
+            coordinator
+                .membership()
+                .set_first_epoch(first_epoch, INITIAL_DRB_RESULT);
 
             let max_block_size = *chain_config.max_block_size;
             let mut node_state = NodeState::new(

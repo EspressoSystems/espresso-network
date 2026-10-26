@@ -185,11 +185,12 @@ where
             || instance_state.lc_contract_header(),
             &state_peer_clients,
             &startup_catchup,
+            initializer.anchor_leaf().epoch(config.epoch_height),
         )
         .await
         .context("startup stake-table catchup failed")?;
 
-        // For cliquenet this dials the stake tables of N-1, N and N+1 before consensus starts.
+        // For cliquenet this dials the stake tables of N and N+1 before consensus starts.
         if let Err(err) = coordinator_network.apply_epoch(current_epoch, &membership_coordinator) {
             tracing::warn!(%current_epoch, %err, "coordinator network apply_epoch failed at startup");
         }

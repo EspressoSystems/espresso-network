@@ -48,7 +48,7 @@ use hotshot_types::{
         metrics::Metrics,
         storage::Storage,
     },
-    utils::{StateAndDelta, is_epoch_root, is_transition_block},
+    utils::{StateAndDelta, epoch_from_block_number, is_epoch_root, is_transition_block},
 };
 use http_client::{Client, StatusCode, error::ClientErr};
 use parking_lot::Mutex;
@@ -67,8 +67,7 @@ use crate::{
     context::TaskList,
     init_node_state, load_or_fetch_network_config,
     startup_catchup::{
-        StartupCatchupError, StartupCatchupParams, ensure_stake_tables,
-        stake_table_needed_by_block, state_peer_clients,
+        StartupCatchupError, StartupCatchupParams, ensure_stake_tables, state_peer_clients,
     },
     state_signature::StateSignatureMemStorage,
 };
@@ -316,12 +315,6 @@ where
         state_peer_clients,
         next,
     };
-    // Boot must not depend on the upstreams: a restart with a persisted network config needs none
-    // until the first poll. `follow` checks every block it stores, which covers skip-ahead.
-    follower
-        .ensure_next_stake_table(next)
-        .await
-        .context("startup stake-table catchup failed")?;
     let mut tasks = TaskList::default();
     tasks.spawn("light client follower", follower.run());
 
@@ -667,7 +660,7 @@ impl<P: SequencerPersistence> Follower<P> {
         {
             info = info.with_cert2(cert2);
         }
-        self.ensure_next_stake_table(leaf.height())
+        self.ensure_stake_tables_for_block(leaf.height())
             .await
             .context("catching up the next stake table")?;
         self.sink.append(info).await.context("storing block")?;
@@ -706,7 +699,7 @@ impl<P: SequencerPersistence> Follower<P> {
         }
     }
 
-    /// Expects the stake table of the epoch after the leaf's, which `ensure_next_stake_table`
+    /// Expects the stake table of the epoch after the leaf's, which `ensure_stake_tables_for_block`
     /// ensures. Awaited, so the transition block finds the stake table it supplies a DRB for, and a
     /// failed derivation fails the block and is retried with it. Nothing is redone when the
     /// membership already knows the result, as after a restart or a peer catchup.
@@ -730,16 +723,16 @@ impl<P: SequencerPersistence> Follower<P> {
         Ok(())
     }
 
-    /// Before a block at `height` is stored, the table of its epoch + 1 is held. Boot calls it for
-    /// the next height the sink expects, `follow` per block.
-    async fn ensure_next_stake_table(&self, height: u64) -> Result<(), StartupCatchupError> {
-        let epoch = stake_table_needed_by_block(height, self.epoch_height);
+    /// Before a block at `height` is stored: `ensure_stake_tables` for the block's epoch.
+    /// `follow` calls it per block; boot does not.
+    async fn ensure_stake_tables_for_block(&self, height: u64) -> Result<(), StartupCatchupError> {
+        let current = EpochNumber::new(epoch_from_block_number(height, self.epoch_height));
         ensure_stake_tables(
             &self.coordinator,
             || read_lc_contract_header(self.node_state.as_ref()),
             &self.state_peer_clients,
             &self.startup_catchup,
-            epoch..=epoch,
+            current,
         )
         .await
     }
