@@ -38,9 +38,9 @@ Below is sequence diagram to accompany the overview:
 ## Espresso Confirmation Layer
 
 This diagram below depicts a simplified view of the current architecture of the Espresso Confirmation Layer. The diagram
-includes views of an Espresso node, the Espresso Network (nodes, CDN, builders, prover, state relay service), two
-rollups (one ZK rollup "Z", one optimistic rollup "O") that use Espresso Network for finalization and some important
-L1 contracts.
+includes views of an Espresso node, the Espresso Network (nodes, builders, prover, state relay service), two rollups
+(one ZK rollup "Z", one optimistic rollup "O") that use Espresso Network for finalization and some important L1
+contracts.
 
 - Glossary
   - Namespace: an identifier to distinguish rollups, akin to an Ethereum chain ID

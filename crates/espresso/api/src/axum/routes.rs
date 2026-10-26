@@ -991,4 +991,15 @@ pub mod v2 {
     /// What the generated `config_service_rest_router` mounts, pinned to it by a test.
     pub const CONFIG_ROUTES: &[&str] =
         &["/v2/config/hotshot", "/v2/config/env", "/v2/config/runtime"];
+    /// What the generated `submit_service_rest_router` mounts, pinned to it by a test.
+    pub const SUBMIT_ROUTES: &[&str] = &["/v2/submit/transaction"];
+    /// What the generated `explorer_service_rest_router` mounts, pinned to it by a test.
+    pub const EXPLORER_ROUTES: &[&str] = &[
+        "/v2/explorer/block",
+        "/v2/explorer/blocks",
+        "/v2/explorer/transaction",
+        "/v2/explorer/transactions",
+        "/v2/explorer/summary",
+        "/v2/explorer/search",
+    ];
 }

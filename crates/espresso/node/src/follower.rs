@@ -14,7 +14,7 @@ use ::light_client::{
     LightClient,
     client::{FallbackClient, QueryServiceClient},
     state::{Genesis as LightClientGenesis, LightClientOptions},
-    storage::LightClientSqliteOptions,
+    storage::LightClientDbOptions,
 };
 use alloy::primitives::U256;
 use anyhow::{Context, anyhow, bail, ensure};
@@ -24,9 +24,10 @@ use committable::{Commitment, Committable};
 use derivative::Derivative;
 use espresso_api::error::SubmitError;
 use espresso_types::{
-    ChainConfig, Header, Leaf2, NodeState, PubKey, SeqTypes, Transaction, ValidatedState,
+    Certificate2, ChainConfig, Header, Leaf2, NodeState, PubKey, SeqTypes, Transaction,
+    ValidatedState,
     traits::MembershipPersistence,
-    v0::traits::{SequencerPersistence, StateCatchup},
+    v0::traits::{SequencerPersistence, StateCatchup, StateCertPersistence},
     v0_1::ChainId,
 };
 use futures::{FutureExt, future::BoxFuture};
@@ -37,8 +38,8 @@ use hotshot_query_service::{
 use hotshot_types::{
     ValidatorConfig,
     data::{EpochNumber, VidShare, ViewNumber},
-    drb::INITIAL_DRB_RESULT,
     epoch_membership::EpochMembershipCoordinator,
+    initializer::load_start_epoch_info,
     message::UpgradeLock,
     network::NetworkConfig,
     traits::{
@@ -69,7 +70,7 @@ use crate::{
     context::TaskList,
     init_node_state, load_or_fetch_network_config,
     startup_catchup::bootstrap_epoch_window,
-    state_signature::StateSigner,
+    state_signature::StateSignatureMemStorage,
 };
 
 #[derive(Clone, Debug)]
@@ -78,7 +79,7 @@ pub struct FollowerOptions {
     /// Older heights are left to the query service's backfill.
     pub max_blocks_per_poll: u64,
     pub light_client: LightClientOptions,
-    pub light_client_db: LightClientSqliteOptions,
+    pub light_client_db: LightClientDbOptions,
     /// Derived from the network config when unset.
     pub light_client_genesis: Option<LightClientGenesis>,
 }
@@ -117,7 +118,7 @@ pub struct FollowerHandle<P: SequencerPersistence> {
     #[derivative(Debug = "ignore")]
     consensus: Arc<FollowerConsensus>,
     #[derivative(Debug = "ignore")]
-    light_client: Arc<NodeLightClient>,
+    light_client: Option<Arc<NodeLightClient>>,
     node_state: NodeState,
     #[derivative(Debug = "ignore")]
     persistence: Arc<P>,
@@ -148,6 +149,50 @@ pub async fn init_follower_node<P>(
     persistence: P,
     l1_params: L1Params,
     sink: impl DecideSink + 'static,
+) -> anyhow::Result<FollowerHandle<P>>
+where
+    P: SequencerPersistence + MembershipPersistence,
+    Arc<P>: Storage<SeqTypes>,
+{
+    init_with_source(genesis, params, metrics, persistence, l1_params, sink, None).await
+}
+
+/// For tests that replay a recorded chain; the network config must already be persisted, as there
+/// are no peers to fetch it from.
+#[cfg(any(test, feature = "testing"))]
+pub(crate) async fn init_replay_node<P>(
+    genesis: Genesis,
+    params: FollowerParams,
+    metrics: Box<dyn Metrics>,
+    persistence: P,
+    l1_params: L1Params,
+    sink: impl DecideSink + 'static,
+    source: Arc<dyn ChainSource>,
+) -> anyhow::Result<FollowerHandle<P>>
+where
+    P: SequencerPersistence + MembershipPersistence,
+    Arc<P>: Storage<SeqTypes>,
+{
+    init_with_source(
+        genesis,
+        params,
+        metrics,
+        persistence,
+        l1_params,
+        sink,
+        Some(source),
+    )
+    .await
+}
+
+async fn init_with_source<P>(
+    genesis: Genesis,
+    params: FollowerParams,
+    metrics: Box<dyn Metrics>,
+    persistence: P,
+    l1_params: L1Params,
+    sink: impl DecideSink + 'static,
+    replay: Option<Arc<dyn ChainSource>>,
 ) -> anyhow::Result<FollowerHandle<P>>
 where
     P: SequencerPersistence + MembershipPersistence,
@@ -207,11 +252,13 @@ where
     .await?;
     let coordinator = node_state.coordinator.clone();
 
-    seed_first_epoch(
+    load_start_epoch_info(
         &coordinator,
+        &[],
         epoch_height,
         genesis.epoch_start_block.unwrap_or_default(),
-    );
+    )
+    .await;
     let current_epoch = bootstrap_epoch_window(
         &coordinator,
         epoch_height,
@@ -221,16 +268,22 @@ where
     .context("startup stake-table catchup failed")?;
     tracing::info!(%current_epoch, "startup catchup complete");
 
-    let light_client = Arc::new(
-        connect_light_client(
-            &params.options,
-            &params.upstreams,
-            &network_config,
-            genesis.chain_config.chain_id,
-            fetched,
-        )
-        .await?,
-    );
+    let (source, light_client): (Arc<dyn ChainSource>, _) = match replay {
+        Some(source) => (source, None),
+        None => {
+            let light_client = Arc::new(
+                connect_light_client(
+                    &params.options,
+                    &params.upstreams,
+                    &network_config,
+                    genesis.chain_config.chain_id,
+                    fetched,
+                )
+                .await?,
+            );
+            (light_client.clone(), Some(light_client))
+        },
+    };
 
     // Seeded like a validator's lock, so the API validates state certificates against the
     // version the network has upgraded to rather than the base version forever.
@@ -253,7 +306,7 @@ where
         .await
         .context("reading the height the query database has reached")?;
     let follower = Follower {
-        light_client: light_client.clone(),
+        source,
         sink: Arc::new(sink),
         persistence: persistence.clone(),
         coordinator,
@@ -304,7 +357,8 @@ impl<P: SequencerPersistence> FollowerContext<P> {
         self.handle.node_state.clone()
     }
 
-    pub fn light_client(&self) -> Arc<NodeLightClient> {
+    /// `None` when replaying a recorded chain.
+    pub fn light_client(&self) -> Option<Arc<NodeLightClient>> {
         self.handle.light_client.clone()
     }
 
@@ -341,13 +395,15 @@ impl<P: SequencerPersistence> Drop for FollowerContext<P> {
 }
 
 impl<P: SequencerPersistence> ApiContext for FollowerHandle<P> {
-    type Persistence = P;
-
     fn consensus(&self) -> Arc<dyn ConsensusSource> {
         self.consensus.clone()
     }
 
-    fn persistence(&self) -> Arc<P> {
+    fn membership(&self) -> Arc<dyn MembershipPersistence> {
+        self.persistence.clone()
+    }
+
+    fn state_certs(&self) -> Arc<dyn StateCertPersistence> {
         self.persistence.clone()
     }
 
@@ -363,12 +419,12 @@ impl<P: SequencerPersistence> ApiContext for FollowerHandle<P> {
         None
     }
 
-    fn state_signer(&self) -> Option<Arc<RwLock<StateSigner<SequencerApiVersion>>>> {
+    fn state_signatures(&self) -> Option<Arc<RwLock<StateSignatureMemStorage>>> {
         None
     }
 
     fn light_client(&self) -> Option<Arc<NodeLightClient>> {
-        Some(self.light_client.clone())
+        self.light_client.clone()
     }
 
     fn request_vid_shares(
@@ -507,7 +563,7 @@ impl ConsensusSource for FollowerConsensus {
 }
 
 struct Follower<P> {
-    light_client: Arc<NodeLightClient>,
+    source: Arc<dyn ChainSource>,
     sink: Arc<dyn DecideSink>,
     persistence: Arc<P>,
     coordinator: EpochMembershipCoordinator<SeqTypes>,
@@ -521,10 +577,22 @@ struct Follower<P> {
     next: u64,
 }
 
-struct VerifiedBlock {
-    leaf: LeafQueryData<SeqTypes>,
-    block: BlockQueryData<SeqTypes>,
-    vid_common: VidCommonQueryData<SeqTypes>,
+/// Where a follower reads the chain from.
+#[async_trait]
+pub(crate) trait ChainSource: Send + Sync {
+    async fn block_height(&self) -> anyhow::Result<u64>;
+
+    /// The blocks at heights `from..to`, in order.
+    async fn fetch_range(&self, from: u64, to: u64) -> anyhow::Result<Vec<VerifiedBlock>>;
+
+    /// The cert2 that finalized `header` directly, if any.
+    async fn fetch_cert2(&self, header: &Header) -> anyhow::Result<Option<Certificate2<SeqTypes>>>;
+}
+
+pub(crate) struct VerifiedBlock {
+    pub(crate) leaf: LeafQueryData<SeqTypes>,
+    pub(crate) block: BlockQueryData<SeqTypes>,
+    pub(crate) vid_common: VidCommonQueryData<SeqTypes>,
 }
 
 impl<P: SequencerPersistence> Follower<P> {
@@ -544,7 +612,7 @@ impl<P: SequencerPersistence> Follower<P> {
 
     async fn poll(&mut self) -> anyhow::Result<()> {
         let tip = self
-            .light_client
+            .source
             .block_height()
             .await
             .context("fetching the chain height")?;
@@ -565,7 +633,7 @@ impl<P: SequencerPersistence> Follower<P> {
             self.catch_up_skipped_epochs(self.next..from).await?;
             self.next = from;
         }
-        for block in self.fetch_range(from, tip).await? {
+        for block in self.source.fetch_range(from, tip).await? {
             let height = block.leaf.height();
             ensure!(
                 height == self.next,
@@ -580,37 +648,6 @@ impl<P: SequencerPersistence> Follower<P> {
         Ok(())
     }
 
-    /// One finality proof and one payload proof request cover the whole range.
-    async fn fetch_range(&self, from: u64, to: u64) -> anyhow::Result<Vec<VerifiedBlock>> {
-        let (from, to) = (from as usize, to as usize);
-        let leaves = self
-            .light_client
-            .fetch_leaves_in_range(from, to)
-            .await
-            .context("fetching leaves")?;
-        let blocks = self
-            .light_client
-            .fetch_blocks_and_vid_common_in_range(from, to)
-            .await
-            .context("fetching payloads")?;
-        ensure!(
-            leaves.len() == to - from && blocks.len() == to - from,
-            "the light client returned {} leaves and {} payloads for {} blocks",
-            leaves.len(),
-            blocks.len(),
-            to - from
-        );
-        Ok(leaves
-            .into_iter()
-            .zip(blocks)
-            .map(|(leaf, (block, vid_common))| VerifiedBlock {
-                leaf,
-                block,
-                vid_common,
-            })
-            .collect())
-    }
-
     async fn follow(&self, block: VerifiedBlock) -> anyhow::Result<()> {
         let VerifiedBlock {
             leaf,
@@ -622,8 +659,8 @@ impl<P: SequencerPersistence> Follower<P> {
         // are `None`; asking at every height is what keeps the follower serving the same cert2s.
         if leaf.header().version() >= NEW_PROTOCOL_VERSION
             && let Some(cert2) = self
-                .light_client
-                .fetch_certificate2_for_header(leaf.header())
+                .source
+                .fetch_cert2(leaf.header())
                 .await
                 .context("fetching cert2")?
         {
@@ -760,16 +797,44 @@ impl<P: SequencerPersistence> Follower<P> {
     }
 }
 
-/// As `SystemContext::init` does for a validator.
-fn seed_first_epoch(
-    coordinator: &EpochMembershipCoordinator<SeqTypes>,
-    epoch_height: u64,
-    epoch_start_block: u64,
-) {
-    let first_epoch = EpochNumber::new(epoch_from_block_number(epoch_start_block, epoch_height));
-    coordinator
-        .membership()
-        .set_first_epoch(first_epoch, INITIAL_DRB_RESULT);
+#[async_trait]
+impl ChainSource for NodeLightClient {
+    async fn block_height(&self) -> anyhow::Result<u64> {
+        Ok(NodeLightClient::block_height(self).await?)
+    }
+
+    /// One finality proof and one payload proof request cover the whole range.
+    async fn fetch_range(&self, from: u64, to: u64) -> anyhow::Result<Vec<VerifiedBlock>> {
+        let (from, to) = (from as usize, to as usize);
+        let leaves = self
+            .fetch_leaves_in_range(from, to)
+            .await
+            .context("fetching leaves")?;
+        let blocks = self
+            .fetch_blocks_and_vid_common_in_range(from, to)
+            .await
+            .context("fetching payloads")?;
+        ensure!(
+            leaves.len() == to - from && blocks.len() == to - from,
+            "the light client returned {} leaves and {} payloads for {} blocks",
+            leaves.len(),
+            blocks.len(),
+            to - from
+        );
+        Ok(leaves
+            .into_iter()
+            .zip(blocks)
+            .map(|(leaf, (block, vid_common))| VerifiedBlock {
+                leaf,
+                block,
+                vid_common,
+            })
+            .collect())
+    }
+
+    async fn fetch_cert2(&self, header: &Header) -> anyhow::Result<Option<Certificate2<SeqTypes>>> {
+        Ok(self.fetch_certificate2_for_header(header).await?)
+    }
 }
 
 async fn connect_light_client(

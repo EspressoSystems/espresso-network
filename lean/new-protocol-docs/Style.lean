@@ -8,7 +8,7 @@ examples, so they should not look like the ordinary code that surrounds them.
 `:::spec` draws a box around one and tints it, and carries the stylesheet that
 does so — Verso collects `extraCss` from the extensions a document actually uses.
 
-A box names the declaration it reproduces, `:::spec NewProtocol.SafeToExtend`, and
+A box names the declaration it reproduces, `:::spec NewProtocol.SafeParent`, and
 that does two jobs beyond documenting the correspondence. The name is resolved
 against the environment, so a box outlives a rename no better than a
 `{docstring}` splice does. And the box registers itself as that declaration's

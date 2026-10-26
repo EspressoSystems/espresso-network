@@ -2,26 +2,31 @@
 //! to calculate/derive a response for a specific request. In the confirmation layer the implementer
 //! would be something like a [`FeeMerkleTree`] for fee catchup
 
-use std::{marker::PhantomData, sync::Arc};
+use std::sync::Arc;
 
 use anyhow::{Context, Result, bail};
 use async_trait::async_trait;
+use committable::Commitment;
 use espresso_types::{
-    NodeState, PubKey, SeqTypes, retain_accounts,
+    Certificate2, ChainConfig, FeeAccount, FeeMerkleTree, Leaf2, NodeState, SeqTypes,
+    retain_accounts,
     traits::SequencerPersistence,
     v0_3::{RewardAccountV1, RewardMerkleTreeV1},
     v0_4::{RewardAccountV2, RewardMerkleTreeV2},
 };
-use hotshot::traits::NodeImplementation;
 use hotshot_new_protocol::storage::NewProtocolStorage;
 use hotshot_query_service::{
     data_source::{
         VersionedDataSource,
-        storage::{FileSystemStorage, NodeStorage, SqlStorage},
+        storage::{FileSystemStorage, NodeStorage},
     },
     node::BlockId,
 };
-use hotshot_types::{data::ViewNumber, traits::network::ConnectedNetwork, vote::HasViewNumber};
+use hotshot_types::{
+    data::{VidShare, ViewNumber},
+    traits::node_implementation::NodeImplementation,
+    vote::HasViewNumber,
+};
 use itertools::Itertools;
 use jf_merkle_tree_compat::{
     ForgetableMerkleTreeScheme, ForgetableUniversalMerkleTreeScheme, LookupResult,
@@ -31,10 +36,9 @@ use request_response::data_source::DataSource as DataSourceTrait;
 
 use super::request::{Request, Response};
 use crate::{
-    api::{BlocksFrontier, RewardMerkleTreeDataSource, RewardMerkleTreeV2Data},
+    api::{BlocksFrontier, RewardMerkleTreeV2Data},
     catchup::{
-        CatchupStorage, add_fee_accounts_to_state, add_v1_reward_accounts_to_state,
-        add_v2_reward_accounts_to_state,
+        add_fee_accounts_to_state, add_v1_reward_accounts_to_state, add_v2_reward_accounts_to_state,
     },
     consensus_handle::ConsensusHandle,
 };
@@ -42,16 +46,57 @@ use crate::{
 /// Query Service Storage types that can be used for request-response data source
 #[derive(Clone)]
 pub enum Storage {
-    Sql(Arc<SqlStorage>),
+    Sql(Arc<dyn RequestStorage>),
     Fs(Arc<FileSystemStorage<SeqTypes>>),
 }
 
+/// What a response is derived from on a SQL storage, whichever backend holds it.
+#[async_trait]
+pub trait RequestStorage: Send + Sync {
+    async fn get_accounts(
+        &self,
+        instance: &NodeState,
+        height: u64,
+        view: ViewNumber,
+        accounts: &[FeeAccount],
+    ) -> Result<(FeeMerkleTree, Leaf2)>;
+
+    async fn get_reward_accounts_v1(
+        &self,
+        instance: &NodeState,
+        height: u64,
+        view: ViewNumber,
+        accounts: &[RewardAccountV1],
+    ) -> Result<(RewardMerkleTreeV1, Leaf2)>;
+
+    async fn get_reward_accounts_v2(
+        &self,
+        instance: &NodeState,
+        height: u64,
+        view: ViewNumber,
+        accounts: &[RewardAccountV2],
+    ) -> Result<(RewardMerkleTreeV2, Leaf2)>;
+
+    async fn get_frontier(
+        &self,
+        instance: &NodeState,
+        height: u64,
+        view: ViewNumber,
+    ) -> Result<BlocksFrontier>;
+
+    async fn get_chain_config(&self, commitment: Commitment<ChainConfig>) -> Result<ChainConfig>;
+
+    async fn get_leaf_chain(&self, height: u64) -> Result<Vec<Leaf2>>;
+
+    async fn load_cert2(&self, height: u64) -> Result<Option<Certificate2<SeqTypes>>>;
+
+    async fn load_tree(&self, height: u64) -> Result<Vec<u8>>;
+
+    async fn get_vid_share(&self, block_number: u64) -> Result<VidShare>;
+}
+
 #[derive(Clone)]
-pub struct DataSource<
-    I: NodeImplementation<SeqTypes>,
-    N: ConnectedNetwork<PubKey>,
-    P: SequencerPersistence,
-> {
+pub struct DataSource<I: NodeImplementation<SeqTypes>, P: SequencerPersistence> {
     /// The consensus adapter handle
     pub consensus_handle: Arc<ConsensusHandle<SeqTypes, I>>,
     /// The node's state
@@ -60,14 +105,22 @@ pub struct DataSource<
     pub storage: Option<Storage>,
     /// sequencer persistence
     pub persistence: Arc<P>,
-    /// Phantom data
-    pub phantom: PhantomData<N>,
+}
+
+impl<I: NodeImplementation<SeqTypes>, P: SequencerPersistence> DataSource<I, P> {
+    fn sql_storage(&self, what: &str) -> Result<&dyn RequestStorage> {
+        match &self.storage {
+            Some(Storage::Sql(storage)) => Ok(&**storage),
+            Some(Storage::Fs(_)) => bail!("fs storage not supported for {what}"),
+            None => bail!("storage was not initialized"),
+        }
+    }
 }
 
 /// Implement the trait that allows the [`RequestResponseProtocol`] to calculate/derive a response for a specific request
 #[async_trait]
-impl<I: NodeImplementation<SeqTypes>, N: ConnectedNetwork<PubKey>, P: SequencerPersistence>
-    DataSourceTrait<Request> for DataSource<I, N, P>
+impl<I: NodeImplementation<SeqTypes>, P: SequencerPersistence> DataSourceTrait<Request>
+    for DataSource<I, P>
 where
     I::Storage: NewProtocolStorage<SeqTypes>,
 {
@@ -83,14 +136,11 @@ where
                 }
 
                 // Fall back to storage
-                let (merkle_tree, leaf) = match &self.storage {
-                    Some(Storage::Sql(storage)) => storage
-                        .get_accounts(&self.node_state, *height, ViewNumber::new(*view), accounts)
-                        .await
-                        .with_context(|| "failed to get accounts from sql storage")?,
-                    Some(Storage::Fs(_)) => bail!("fs storage not supported for accounts"),
-                    _ => bail!("storage was not initialized"),
-                };
+                let (merkle_tree, leaf) = self
+                    .sql_storage("accounts")?
+                    .get_accounts(&self.node_state, *height, ViewNumber::new(*view), accounts)
+                    .await
+                    .with_context(|| "failed to get accounts from sql storage")?;
 
                 // If we successfully fetched accounts from storage, try to add them back into the in-memory
                 // state.
@@ -118,14 +168,11 @@ where
                     return Ok(Response::Leaf(leaf_chain));
                 }
 
-                let leaf_chain = match &self.storage {
-                    Some(Storage::Sql(storage)) => storage
-                        .get_leaf_chain(*height)
-                        .await
-                        .with_context(|| "failed to get leaf from sql storage")?,
-                    Some(Storage::Fs(_)) => bail!("fs storage not supported for leaf"),
-                    _ => bail!("storage was not initialized"),
-                };
+                let leaf_chain = self
+                    .sql_storage("leaf")?
+                    .get_leaf_chain(*height)
+                    .await
+                    .with_context(|| "failed to get leaf from sql storage")?;
 
                 Ok(Response::Leaf(leaf_chain))
             },
@@ -141,16 +188,12 @@ where
                 }
 
                 // Fall back to storage
-                Ok(Response::ChainConfig(match &self.storage {
-                    Some(Storage::Sql(storage)) => storage
+                Ok(Response::ChainConfig(
+                    self.sql_storage("chain config")?
                         .get_chain_config(*commitment)
                         .await
                         .with_context(|| "failed to get chain config from sql storage")?,
-                    Some(Storage::Fs(_)) => {
-                        bail!("fs storage not supported for chain config")
-                    },
-                    _ => bail!("storage was not initialized"),
-                }))
+                ))
             },
             Request::BlocksFrontier(height, view) => {
                 // First try to respond from memory
@@ -168,16 +211,11 @@ where
                     return Ok(Response::BlocksFrontier(blocks_frontier_from_memory));
                 } else {
                     // If we can't get the blocks frontier from memory, fall through to storage
-                    let blocks_frontier_from_storage = match &self.storage {
-                        Some(Storage::Sql(storage)) => storage
-                            .get_frontier(&self.node_state, *height, ViewNumber::new(*view))
-                            .await
-                            .with_context(|| "failed to get blocks frontier from sql storage")?,
-                        Some(Storage::Fs(_)) => {
-                            bail!("fs storage not supported for blocks frontier")
-                        },
-                        _ => bail!("storage was not initialized"),
-                    };
+                    let blocks_frontier_from_storage = self
+                        .sql_storage("blocks frontier")?
+                        .get_frontier(&self.node_state, *height, ViewNumber::new(*view))
+                        .await
+                        .with_context(|| "failed to get blocks frontier from sql storage")?;
 
                     Ok(Response::BlocksFrontier(blocks_frontier_from_storage))
                 }
@@ -194,21 +232,16 @@ where
                 }
 
                 // Fall back to storage
-                let (merkle_tree, leaf) = match &self.storage {
-                    Some(Storage::Sql(storage)) => storage
-                        .get_reward_accounts_v2(
-                            &self.node_state,
-                            *height,
-                            ViewNumber::new(*view),
-                            accounts,
-                        )
-                        .await
-                        .with_context(|| "failed to get accounts from sql storage")?,
-                    Some(Storage::Fs(_)) => {
-                        bail!("fs storage not supported for reward accounts")
-                    },
-                    _ => bail!("storage was not initialized"),
-                };
+                let (merkle_tree, leaf) = self
+                    .sql_storage("reward accounts")?
+                    .get_reward_accounts_v2(
+                        &self.node_state,
+                        *height,
+                        ViewNumber::new(*view),
+                        accounts,
+                    )
+                    .await
+                    .with_context(|| "failed to get accounts from sql storage")?;
 
                 // If we successfully fetched accounts from storage, try to add them back into the in-memory
                 // state.
@@ -239,21 +272,16 @@ where
                 }
 
                 // Fall back to storage
-                let (merkle_tree, leaf) = match &self.storage {
-                    Some(Storage::Sql(storage)) => storage
-                        .get_reward_accounts_v1(
-                            &self.node_state,
-                            *height,
-                            ViewNumber::new(*view),
-                            accounts,
-                        )
-                        .await
-                        .with_context(|| "failed to get v1 reward accounts from sql storage")?,
-                    Some(Storage::Fs(_)) => {
-                        bail!("fs storage not supported for v1 reward accounts")
-                    },
-                    _ => bail!("storage was not initialized"),
-                };
+                let (merkle_tree, leaf) = self
+                    .sql_storage("v1 reward accounts")?
+                    .get_reward_accounts_v1(
+                        &self.node_state,
+                        *height,
+                        ViewNumber::new(*view),
+                        accounts,
+                    )
+                    .await
+                    .with_context(|| "failed to get v1 reward accounts from sql storage")?;
 
                 // If we successfully fetched accounts from storage, try to add them back into the in-memory
                 // state.
@@ -278,7 +306,7 @@ where
                 // Load the VID share from storage
                 let vid_share = match &self.storage {
                     Some(Storage::Sql(storage)) => storage
-                        .get_vid_share::<SeqTypes>(BlockId::Number(*block_number as usize))
+                        .get_vid_share(*block_number)
                         .await
                         .with_context(|| "failed to get vid share from sql storage")?,
                     Some(Storage::Fs(storage)) => {
@@ -294,7 +322,7 @@ where
                             .await
                             .with_context(|| "failed to get vid share from fs storage")?
                     },
-                    _ => bail!("storage was not initialized"),
+                    None => bail!("storage was not initialized"),
                 };
 
                 Ok(Response::VidShare(vid_share))
@@ -314,14 +342,11 @@ where
                 }
             },
             Request::Cert2(height) => {
-                let cert2 = match &self.storage {
-                    Some(Storage::Sql(storage)) => storage
-                        .load_cert2(*height)
-                        .await
-                        .with_context(|| "failed to load cert2 from sql storage")?,
-                    Some(Storage::Fs(_)) => bail!("fs storage not supported for cert2"),
-                    _ => bail!("storage was not initialized"),
-                };
+                let cert2 = self
+                    .sql_storage("cert2")?
+                    .load_cert2(*height)
+                    .await
+                    .with_context(|| "failed to load cert2 from sql storage")?;
 
                 match cert2 {
                     Some(cert2) => Ok(Response::Cert2(cert2)),
@@ -346,16 +371,11 @@ where
                 }
 
                 // Fall back to storage
-                let merkle_tree_bytes = match &self.storage {
-                    Some(Storage::Sql(storage)) => storage
-                        .load_tree(*height)
-                        .await
-                        .with_context(|| "failed to get reward merkle tree from sql storage")?,
-                    Some(Storage::Fs(_)) => {
-                        bail!("fs storage not supported for reward merkle tree catchup")
-                    },
-                    _ => bail!("storage was not initialized"),
-                };
+                let merkle_tree_bytes = self
+                    .sql_storage("reward merkle tree catchup")?
+                    .load_tree(*height)
+                    .await
+                    .with_context(|| "failed to get reward merkle tree from sql storage")?;
 
                 Ok(Response::RewardMerkleTreeV2(merkle_tree_bytes))
             },

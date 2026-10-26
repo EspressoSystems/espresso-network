@@ -99,14 +99,14 @@ message HotshotConfigResponse {
   // When true the first nodes to register form the DA committee; when false a node asks to join
   bool indexed_da = 29;
 
-  // Absent unless the node reaches the CDN through a marshal
-  optional string cdn_marshal_address = 30;
+  // Always absent: the CDN marshal went with the networks consensus ran on before protocol 0.6
+  optional string cdn_marshal_address = 30 [deprecated = true];
 
-  // Absent unless libp2p is configured
-  optional Libp2pNetworkConfig libp2p_config = 31;
+  // Always absent: libp2p went with the networks consensus ran on before protocol 0.6
+  optional Libp2pNetworkConfig libp2p_config = 31 [deprecated = true];
 
-  // Absent unless the node runs the combined network
-  optional CombinedNetworkConfig combined_network_config = 32;
+  // Always absent: the combined network went with the networks consensus ran on before protocol 0.6
+  optional CombinedNetworkConfig combined_network_config = 32 [deprecated = true];
 
   BuilderType builder = 33;
 }
@@ -120,17 +120,26 @@ message VersionedDaCommittee {
   repeated PeerConfig committee = 3;
 }
 
+// Never served: kept so `libp2p_config` keeps its type
 message Libp2pBootstrapNode {
+  option deprecated = true;
+
   string peer_id = 1;
 
   string multiaddr = 2;
 }
 
+// Never served: kept so `libp2p_config` keeps its type
 message Libp2pNetworkConfig {
+  option deprecated = true;
+
   repeated Libp2pBootstrapNode bootstrap_nodes = 1;
 }
 
+// Never served: kept so `combined_network_config` keeps its type
 message CombinedNetworkConfig {
+  option deprecated = true;
+
   // Wait before a message also goes out over the secondary network
   uint64 delay_duration_ms = 1;
 }
@@ -318,10 +327,8 @@ message LightClientDbOptions {
 
   uint32 num_leaves = 2;
 
-  uint32 num_stake_tables = 3;
-
-  // Absent when the light-client database is in memory
-  optional string lc_path = 4;
+  // Absent when the light-client database is in a temporary directory
+  optional string lc_path = 3;
 }
 
 message QueryModule {
@@ -363,7 +370,7 @@ message FollowerModule {
 }
 
 // The node's effective runtime configuration: CLI flags, environment and defaults merged. The
-// genesis and the catchup, proposal-fetcher, libp2p and L1 tuning stay on v1. No credential this
+// genesis and the catchup, proposal-fetcher and L1 tuning stay on v1. No credential this
 // node holds is served, but a URL an operator configured with userinfo is served as given, as v1
 // serves it
 message RuntimeConfigResponse {
@@ -390,7 +397,8 @@ message RuntimeConfigResponse {
 
   string orchestrator_url = 10;
 
-  string cdn_endpoint = 11;
+  // Always empty: the CDN went with the networks consensus ran on before protocol 0.6
+  string cdn_endpoint = 11 [deprecated = true];
 
   // "host:port", with an IPv6 literal left unbracketed as v1 writes it
   string cliquenet_bind_address = 12;
@@ -398,12 +406,14 @@ message RuntimeConfigResponse {
   // "host:port", with an IPv6 literal left unbracketed as v1 writes it
   optional string cliquenet_advertise_address = 13;
 
-  string libp2p_bind_address = 14;
+  // Always empty: libp2p went with the networks consensus ran on before protocol 0.6
+  string libp2p_bind_address = 14 [deprecated = true];
 
-  optional string libp2p_advertise_address = 15;
+  // Always absent: libp2p went with the networks consensus ran on before protocol 0.6
+  optional string libp2p_advertise_address = 15 [deprecated = true];
 
-  // libp2p multiaddrs, empty when not configured
-  repeated string libp2p_bootstrap_nodes = 16;
+  // Always empty: libp2p went with the networks consensus ran on before protocol 0.6
+  repeated string libp2p_bootstrap_nodes = 16 [deprecated = true];
 
   // How many L1 RPC endpoints are configured. These URLs are the ones most often given an API
   // key, so only the count is served

@@ -14,6 +14,9 @@ pub enum AvailabilityError {
     RangeExceeded(String),
     #[error("{0}")]
     BadRequest(String),
+    /// Pruned by this node (410).
+    #[error("{0}")]
+    Pruned(String),
 }
 
 /// Why a node refused a transaction. Downcast by [`classify`] to pick the status code.
@@ -34,6 +37,8 @@ pub enum ApiError {
     BadRequest(anyhow::Error),
     /// Requested resource does not exist (maps to 404 Not Found)
     NotFound(anyhow::Error),
+    /// Pruned by this node (maps to 410 Gone / NOT_FOUND)
+    Gone(anyhow::Error),
     /// Handler failed for any reason (maps to 500 Internal Server Error / INTERNAL)
     Internal(anyhow::Error),
     /// The node cannot serve the request right now (maps to 503 Service Unavailable / UNAVAILABLE)
@@ -45,6 +50,7 @@ impl fmt::Display for ApiError {
         match self {
             ApiError::BadRequest(err)
             | ApiError::NotFound(err)
+            | ApiError::Gone(err)
             | ApiError::Internal(err)
             | ApiError::Unavailable(err) => {
                 // Both transports render handler errors through this impl (v1 via the axum
@@ -61,6 +67,7 @@ impl std::error::Error for ApiError {
         match self {
             ApiError::BadRequest(err)
             | ApiError::NotFound(err)
+            | ApiError::Gone(err)
             | ApiError::Internal(err)
             | ApiError::Unavailable(err) => err.source(),
         }
@@ -69,7 +76,8 @@ impl std::error::Error for ApiError {
 
 /// Errors raised as [`SubmitError`] or [`AvailabilityError`] by a state implementation carry
 /// semantic meaning; anything else is a failure the client cannot act on. Both transports classify
-/// through here, so v1 and v2 cannot drift on what counts as a 404.
+/// through here, so v1 and v2 cannot drift on what counts as a 404. gRPC has no gone code, so v2
+/// reports a 410 as `not_found`.
 pub fn classify(err: anyhow::Error) -> ApiError {
     match err.downcast_ref::<SubmitError>() {
         Some(SubmitError::Invalid(_)) => return ApiError::BadRequest(err),
@@ -78,7 +86,10 @@ pub fn classify(err: anyhow::Error) -> ApiError {
     }
     match err.downcast_ref::<AvailabilityError>() {
         Some(AvailabilityError::NotFound(_)) => ApiError::NotFound(err),
-        Some(_) => ApiError::BadRequest(err),
+        Some(AvailabilityError::Pruned(_)) => ApiError::Gone(err),
+        Some(AvailabilityError::RangeExceeded(_) | AvailabilityError::BadRequest(_)) => {
+            ApiError::BadRequest(err)
+        },
         None => ApiError::Internal(err),
     }
 }
@@ -90,7 +101,7 @@ pub fn to_status(err: anyhow::Error) -> tonic::Status {
     let err = classify(err);
     let message = err.to_string();
     match err {
-        ApiError::NotFound(_) => tonic::Status::not_found(message),
+        ApiError::NotFound(_) | ApiError::Gone(_) => tonic::Status::not_found(message),
         ApiError::BadRequest(_) => tonic::Status::invalid_argument(message),
         ApiError::Internal(_) => tonic::Status::internal(message),
         ApiError::Unavailable(_) => tonic::Status::unavailable(message),
@@ -133,5 +144,13 @@ mod tests {
             "leaf 7".to_string(),
         )));
         assert_eq!(status.code(), tonic::Code::NotFound);
+    }
+
+    #[test]
+    fn availability_pruned_maps_to_gone() {
+        let err = classify(anyhow::Error::new(AvailabilityError::Pruned(
+            "state at height 7".to_string(),
+        )));
+        assert!(matches!(err, ApiError::Gone(_)), "{err}");
     }
 }

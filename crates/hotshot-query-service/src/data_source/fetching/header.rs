@@ -102,9 +102,14 @@ where
         fetch_header_and_then(
             tx,
             req,
-            [HeaderCallback::Payload {
-                fetcher: fetcher.clone(),
-            }],
+            [
+                HeaderCallback::Payload {
+                    fetcher: fetcher.clone(),
+                },
+                HeaderCallback::VidCommon {
+                    fetcher: fetcher.clone(),
+                },
+            ],
         )
         .await
     }
@@ -189,14 +194,14 @@ where
     pub(super) fn run(self, header: Header<Types>) {
         match self {
             Self::Payload { fetcher } => {
-                tracing::info!(
+                tracing::debug!(
                     "fetched leaf {}, will now fetch payload",
                     header.block_number()
                 );
                 fetch_block_with_header(fetcher, header);
             },
             Self::VidCommon { fetcher } => {
-                tracing::info!(
+                tracing::debug!(
                     "fetched leaf {}, will now fetch VID common",
                     header.block_number()
                 );
@@ -265,6 +270,13 @@ where
     match tx.get_header(req).await {
         Ok(header) => {
             for callback in callbacks {
+                // Only a stored header can have stored VID common, as when just its payload is
+                // missing, so this is the one branch that can skip fetching it.
+                if matches!(callback, HeaderCallback::VidCommon { .. })
+                    && tx.get_vid_common_metadata(req).await.is_ok()
+                {
+                    continue;
+                }
                 callback.run(header.clone());
             }
             return Ok(());
@@ -278,6 +290,9 @@ where
             // An error occurred while querying the database. We don't know if we need to fetch the
             // header or not. Return an error so we can try again.
             bail!("failed to fetch header for block {req:?}: {message}");
+        },
+        Err(err @ QueryError::Pruned { .. }) => {
+            bail!("failed to fetch header for block {req:?}: {err}")
         },
     }
 
@@ -338,7 +353,18 @@ where
     // payload data.
     match <NonEmptyRange<LeafQueryData<Types>>>::load(tx, req).await {
         Ok(leaves) => {
+            let range = req.start as usize..req.end as usize;
             for callback in callbacks {
+                if matches!(callback, HeaderCallback::VidCommon { .. })
+                    && tx
+                        .get_vid_common_metadata_range(range.clone())
+                        .await
+                        .is_ok_and(|common| {
+                            common.iter().filter(|c| c.is_ok()).count() == range.len()
+                        })
+                {
+                    continue;
+                }
                 callback.run_range(&leaves);
             }
             return Ok(());
@@ -352,6 +378,9 @@ where
             // An error occurred while querying the database. We don't know if we need to fetch the
             // headers or not. Return an error so we can try again.
             bail!("failed to fetch headers for range {req:?}: {message}");
+        },
+        Err(err @ QueryError::Pruned { .. }) => {
+            bail!("failed to fetch headers for range {req:?}: {err}")
         },
     }
 

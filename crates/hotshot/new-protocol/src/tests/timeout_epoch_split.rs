@@ -18,11 +18,11 @@
 use std::{collections::BTreeSet, sync::Arc, time::Duration};
 
 use committable::Committable;
-use hotshot::types::BLSPubKey;
 use hotshot_example_types::node_types::TestTypes;
 use hotshot_types::{
     data::{EpochNumber, ViewNumber},
     message::UpgradeLock,
+    signature_key::BLSPubKey,
     simple_certificate::SuccessThreshold,
     simple_vote::{TimeoutVote2, TimeoutVote3},
     traits::{block_contents::BlockHeader, signature_key::SignatureKey},

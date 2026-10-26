@@ -12,7 +12,7 @@
     ];
   };
 
-  inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+  inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
 
   inputs.rust-overlay.url = "github:oxalica/rust-overlay";
   inputs.rust-overlay.inputs.nixpkgs.follows = "nixpkgs";
@@ -52,7 +52,7 @@
     flake-utils.lib.eachDefaultSystem (system:
     let
       # node=error: disable noisy anvil output
-      RUST_LOG = "info,libp2p=off,node=error";
+      RUST_LOG = "info,node=error";
       RUST_BACKTRACE = 1;
       rustEnvVars = { inherit RUST_LOG RUST_BACKTRACE; };
 
@@ -96,7 +96,6 @@
         })
       ];
       pkgs = import nixpkgs { inherit system overlays; };
-      keydb = pkgs.callPackage ./nix/keydb.nix { };
       myShell = pkgs.mkShellNoCC.override (pkgs.lib.optionalAttrs pkgs.stdenv.isLinux {
         # The mold linker is around 50% faster on Linux than the default linker.
         stdenv = pkgs.stdenvAdapters.useMoldLinker pkgs.clangStdenv;
@@ -199,7 +198,6 @@
           };
         };
       };
-      packages.keydb = keydb;
 
       devShells.default =
         let
@@ -240,8 +238,9 @@
             datadog-pup
             process-compose
             lazydocker # a docker compose TUI
-            keydb
             postgresql_18
+            opentofu # scripts/network-bench/aws
+            awscli2 # scripts/network-bench/aws
 
             # Figures
             graphviz
@@ -265,7 +264,7 @@
             ty
             uv
 
-            go
+            go_1_27
             golangci-lint
             # provides abigen
             go-ethereum

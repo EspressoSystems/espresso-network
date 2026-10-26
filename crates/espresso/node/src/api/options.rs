@@ -1,12 +1,12 @@
 //! Sequencer-specific API options and initialization.
 
-use std::{collections::BTreeSet, env, sync::Arc};
+use std::{collections::BTreeSet, env, path::PathBuf, sync::Arc};
 
 use ::light_client::{state::LightClientOptions, storage::LightClientSqliteOptions};
 use anyhow::{Context, bail};
 use clap::Parser;
 use espresso_telemetry as telemetry;
-use espresso_types::v0::traits::{NullEventConsumer, PersistenceOptions};
+use espresso_types::v0::traits::NullEventConsumer;
 use futures::{channel::oneshot, future::BoxFuture};
 use hotshot_query_service::{
     data_source::{ExtensibleDataSource, MetricsDataSource},
@@ -19,19 +19,14 @@ use url::Url;
 use super::{
     ApiState, StorageState,
     context::ApiContext,
-    data_source::{
-        NodeStateDataSource, Provider, PruningDataSource, SequencerDataSource, provider,
-    },
+    data_source::{DataSourceOptions, PruningDataSource, SequencerDataSource, provider},
     fs, sql,
-    sql::ArchiveStateGc,
     state::NodeApiStateImpl,
     update::{ApiEventConsumer, ApiSink},
 };
 use crate::{
-    api::LightClientProvider, catchup::CatchupStorage, context::TaskList,
-    options::PublicNodeConfig, persistence,
+    catchup::CatchupStorage, context::TaskList, options::PublicNodeConfig, persistence,
     request_response::data_source::Storage as RequestResponseStorage,
-    state::update_state_storage_loop,
 };
 
 #[derive(Clone, Debug)]
@@ -143,7 +138,7 @@ impl Options {
     /// that consensus will populuate metrics that can then be read and served by the API.
     pub async fn serve<C, F>(mut self, init_context: F) -> anyhow::Result<C>
     where
-        C: ApiContext,
+        C: ApiContext + Clone,
         F: FnOnce(
             Box<dyn Metrics>,
             Box<dyn ApiSink>,
@@ -170,8 +165,16 @@ impl Options {
             Option<RequestResponseStorage>,
         ) = if let Some(query_opt) = self.query.take() {
             if let Some(opt) = self.storage_sql.take() {
-                self.init_with_query_module_sql(query_opt, opt, state, &mut tasks)
-                    .await?
+                match opt.into_backend() {
+                    persistence::sql::SqlBackendOptions::Sqlite(opt) => {
+                        sql::sqlite::init_query_module(&self, query_opt, opt, state, &mut tasks)
+                            .await?
+                    },
+                    persistence::sql::SqlBackendOptions::Postgres(opt) => {
+                        sql::postgres::init_query_module(&self, query_opt, opt, state, &mut tasks)
+                            .await?
+                    },
+                }
             } else if let Some(opt) = self.storage_fs.take() {
                 self.init_with_query_module_fs(query_opt, opt, state, &mut tasks)
                     .await?
@@ -250,30 +253,31 @@ impl Options {
 
         let ctx = init_context(metrics, consumer, storage.clone()).await?;
         send_ctx
-            .send(ctx.clone())
+            .send(Box::new(ctx.clone()))
             .ok()
             .context("API server exited without receiving context")?;
         Ok(ctx.with_task_list(tasks))
     }
 
-    async fn init_with_query_module_fs<C: ApiContext>(
+    async fn init_with_query_module_fs(
         &self,
         query_opt: Query,
         mod_opt: persistence::fs::Options,
-        state: ApiState<C>,
+        state: ApiState,
         tasks: &mut TaskList,
     ) -> anyhow::Result<(
         Box<dyn Metrics>,
         Box<dyn ApiSink>,
         Option<RequestResponseStorage>,
     )> {
+        let light_client_db = mod_opt.light_client_db(&query_opt)?;
         let ds = <fs::DataSource as SequencerDataSource>::create(
             mod_opt,
             provider(
                 query_opt.peers,
                 &state,
                 query_opt.light_client,
-                query_opt.light_client_db,
+                light_client_db,
             )
             .await?,
             false,
@@ -316,104 +320,6 @@ impl Options {
             metrics,
             Box::new(ApiEventConsumer::from(ds)),
             Some(RequestResponseStorage::Fs(inner_storage)),
-        ))
-    }
-
-    async fn init_with_query_module_sql<C: ApiContext>(
-        self,
-        query_opt: Query,
-        mod_opt: persistence::sql::Options,
-        state: ApiState<C>,
-        tasks: &mut TaskList,
-    ) -> anyhow::Result<(
-        Box<dyn Metrics>,
-        Box<dyn ApiSink>,
-        Option<RequestResponseStorage>,
-    )> {
-        let mut provider = Provider::default();
-
-        // Use the database itself as a fetching provider: sometimes we can fetch data that is
-        // missing from the query service from ephemeral consensus storage.
-        let db_provider = mod_opt.clone().create().await?;
-        provider = provider
-            .with_block_provider(db_provider.clone())
-            .with_vid_common_provider(db_provider);
-        // If that fails, fetch missing data from peers.
-        provider = provider.with_provider(LightClientProvider::new(
-            query_opt.peers,
-            state.clone(),
-            query_opt.light_client,
-            query_opt.light_client_db,
-        )?);
-
-        let ranges_concurrency = mod_opt.ranges_concurrency;
-        let ds = sql::DataSource::create(mod_opt.clone(), provider, false).await?;
-        let inner_storage = ds.inner();
-        tasks.spawn("process_metrics", ProcessMetrics::new(ds.metrics()).run());
-        let (metrics, ds) = init_query_data_source(ds, state.clone());
-
-        let get_node_state = {
-            let state = state.clone();
-            async move { state.node_state().await }
-        };
-        tasks.spawn(
-            "merklized state storage update loop",
-            update_state_storage_loop(ds.clone(), get_node_state),
-        );
-
-        // Archive mode disables the pruner, so nothing else bounds the merklized state tables.
-        if mod_opt.archive && !mod_opt.archive_full_state {
-            let get_node_state = {
-                let state = state.clone();
-                async move { state.node_state().await }
-            };
-            tasks.spawn(
-                "archive state garbage collector",
-                ArchiveStateGc::new(&mod_opt).run(inner_storage.clone(), get_node_state),
-            );
-        }
-
-        let port = self.http.port;
-        let env_vars = get_public_env_vars().unwrap_or_default();
-        let node_cfg = self.public_node_config.as_deref().cloned();
-        let modules = espresso_api::OptionalModules {
-            submit: self.submit.is_some(),
-            config: self.config.is_some(),
-            explorer: self.explorer.is_some(),
-            light_client: self.light_client.is_some(),
-            ..Default::default()
-        };
-        let max_connections = self.http.max_connections;
-        // Both transports serve the same state; cloning shares the env vars and node config
-        // rather than copying the genesis they embed.
-        let mut api_state = NodeApiStateImpl::new(ds.clone())
-            .with_env_vars(env_vars)
-            .with_public_node_config(node_cfg);
-        if let Some(ranges_concurrency) = ranges_concurrency {
-            api_state = api_state.with_ranges_concurrency(ranges_concurrency);
-        }
-        let tonic_state = api_state.clone();
-        tasks.spawn("API server", async move {
-            if let Err(e) =
-                espresso_api::serve_axum(port, api_state, modules, max_connections).await
-            {
-                tracing::error!("Axum server error: {}", e);
-            }
-            anyhow::Ok(())
-        });
-
-        if let Some(tonic_port) = self.http.tonic_port {
-            tasks.spawn("Tonic gRPC server", async move {
-                if let Err(e) = espresso_api::serve_tonic(tonic_port, tonic_state, modules).await {
-                    tracing::error!("Tonic gRPC server error: {}", e);
-                }
-            });
-        }
-
-        Ok((
-            metrics,
-            Box::new(ApiEventConsumer::from(ds)),
-            Some(RequestResponseStorage::Sql(inner_storage)),
         ))
     }
 }
@@ -482,6 +388,25 @@ pub struct Query {
     /// Persistence for the light client, enabling faster startup.
     #[clap(flatten)]
     pub light_client_db: LightClientSqliteOptions,
+
+    /// Node storage directory. A SQLite light client database without `--light-client-db-path`
+    /// is kept under it, so the stake tables it verified survive a restart.
+    #[clap(long, env = "ESPRESSO_NODE_STORAGE_PATH")]
+    pub storage_path: Option<PathBuf>,
+}
+
+impl Query {
+    pub fn sqlite_light_client_db(&self) -> LightClientSqliteOptions {
+        let lc_path = self.light_client_db.lc_path.clone().or_else(|| {
+            self.storage_path
+                .as_ref()
+                .map(|dir| dir.join("light-client").join("lc.db"))
+        });
+        LightClientSqliteOptions {
+            lc_path,
+            ..self.light_client_db.clone()
+        }
+    }
 }
 
 #[cfg(test)]
@@ -514,10 +439,10 @@ pub struct LightClient;
 /// Returns the metrics handle plus the wrapped query data source shared by the axum server and
 /// update loops.
 #[allow(clippy::type_complexity)]
-fn init_query_data_source<C: ApiContext, D>(
+pub(super) fn init_query_data_source<D>(
     ds: D,
-    state: ApiState<C>,
-) -> (Box<dyn Metrics>, Arc<StorageState<C, D>>)
+    state: ApiState,
+) -> (Box<dyn Metrics>, Arc<StorageState<D>>)
 where
     D: SequencerDataSource + CatchupStorage + PruningDataSource + Send + Sync + 'static,
 {
@@ -528,7 +453,7 @@ where
 }
 
 /// The environment variables listed in `api/public-env-vars.toml`, as `KEY=value` strings.
-fn get_public_env_vars() -> anyhow::Result<Vec<String>> {
+pub(super) fn get_public_env_vars() -> anyhow::Result<Vec<String>> {
     #[derive(serde::Deserialize)]
     struct PublicEnvVars {
         variables: BTreeSet<String>,

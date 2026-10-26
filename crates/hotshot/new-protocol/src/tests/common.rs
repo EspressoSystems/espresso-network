@@ -1,9 +1,11 @@
 pub(crate) mod assertions;
+pub(crate) mod certs;
 pub(crate) mod coordinator_builder;
 pub(crate) mod harness;
 pub(crate) mod mock;
 pub(crate) mod runner;
 pub(crate) mod utils;
+pub(crate) mod view_generator;
 
 use std::collections::BTreeSet;
 

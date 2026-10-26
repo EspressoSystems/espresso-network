@@ -22,7 +22,7 @@ use axum::{
     extract::{Path, Request, State, ws::WebSocketUpgrade},
     http::{HeaderMap, StatusCode, Uri, header},
     response::{Html, IntoResponse, Response},
-    routing::get,
+    routing::{any, get},
 };
 use http_wire::{
     ContentType, DecodeFailure, WireError, drive_ws_stream, healthcheck_response,
@@ -85,6 +85,7 @@ impl IntoResponse for ApiError {
         let status = match &self {
             ApiError::BadRequest(_) => StatusCode::BAD_REQUEST,
             ApiError::NotFound(_) => StatusCode::NOT_FOUND,
+            ApiError::Gone(_) => StatusCode::GONE,
             ApiError::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
             ApiError::Unavailable(_) => StatusCode::SERVICE_UNAVAILABLE,
         };
@@ -183,17 +184,6 @@ pub(crate) async fn limit_requests(
         Ok(_permit) => next.run(req).await,
         Err(_) => StatusCode::TOO_MANY_REQUESTS.into_response(),
     }
-}
-
-/// Wrapper so the v1 spec is looked up by a distinct type. v2 serves a build-time document
-/// rather than an `Extension<OpenApi>`, so nothing collides today, but the newtype keeps an
-/// `Extension<OpenApi>` added later from silently resolving to v1's.
-#[derive(Clone)]
-struct OpenApiV1(OpenApi);
-
-/// Serve the v1 OpenAPI spec (extracted from Extension)
-async fn serve_openapi_spec_v1(Extension(OpenApiV1(api)): Extension<OpenApiV1>) -> Json<OpenApi> {
-    Json(api)
 }
 
 /// Serve custom Swagger UI with collapsed defaults, pointed at the given OpenAPI spec route.
@@ -3583,16 +3573,18 @@ pub fn router_v2_docs() -> Router {
         )
 }
 
-/// The `ConfigService` paths when the `config` module is off. `serve_axum` merges [`router_v2_docs`]
-/// last and axum keeps the last merged router's fallback, so an unregistered v2 path would get
-/// axum's empty 404 instead of the [`v2_error_envelope`] one.
-pub(crate) fn router_config_disabled() -> Router {
+/// A gated module's v2 paths when its flag is off. `serve_axum` merges [`router_v2_docs`] last and
+/// axum keeps the last merged router's fallback, so an unregistered v2 path would get axum's empty
+/// 404 instead of the [`v2_error_envelope`] one.
+pub(crate) fn router_module_disabled(module: &'static str, paths: &[&str]) -> Router {
     let mut router = Router::new();
-    for path in routes::v2::CONFIG_ROUTES {
+    for path in paths {
         router = router.route(
             path,
-            get(|| async {
-                tonic_rest::RestError::from(tonic::Status::not_found("config module disabled"))
+            any(move || async move {
+                tonic_rest::RestError::from(tonic::Status::not_found(format!(
+                    "{module} module disabled"
+                )))
             }),
         );
     }
@@ -3626,8 +3618,14 @@ pub fn finish_v1_docs(router: ApiRouter) -> Router {
         }
     }
 
+    // Not an Extension layer: Router::layer clones it into every route.
+    let spec = Bytes::from(serde_json::to_vec(&api).expect("OpenAPI document serializes"));
+
     router
-        .route(routes::v1::OPENAPI_SPEC_ROUTE, get(serve_openapi_spec_v1))
+        .route(
+            routes::v1::OPENAPI_SPEC_ROUTE,
+            get(move || async move { ([(header::CONTENT_TYPE, "application/json")], spec) }),
+        )
         .route(
             routes::v1::SWAGGER_ROUTE,
             get(|| async { swagger_html(routes::v1::OPENAPI_SPEC_ROUTE) }),
@@ -3642,7 +3640,6 @@ pub fn finish_v1_docs(router: ApiRouter) -> Router {
                 .with_title("Espresso Node API v1")
                 .axum_handler()),
         )
-        .layer(Extension(OpenApiV1(api)))
 }
 
 /// Declare a path parameter for every `{name}` template segment of every operation.
@@ -4864,6 +4861,30 @@ mod tests {
         assert!(body.contains(routes::v1::OPENAPI_SPEC_ROUTE));
     }
 
+    /// The spec is served as JSON and is stable across requests.
+    #[tokio::test]
+    async fn v1_openapi_spec_served_as_json() {
+        let router = create_router_v1(MockState);
+        let get_spec = || async {
+            let req = Request::builder()
+                .uri(routes::v1::OPENAPI_SPEC_ROUTE)
+                .body(axum::body::Body::empty())
+                .unwrap();
+            let resp = tower::ServiceExt::oneshot(router.clone(), req)
+                .await
+                .unwrap();
+            assert_eq!(
+                resp.headers().get(header::CONTENT_TYPE).unwrap(),
+                "application/json"
+            );
+            axum::body::to_bytes(resp.into_body(), usize::MAX)
+                .await
+                .unwrap()
+        };
+        let (first, second) = (get_spec().await, get_spec().await);
+        assert_eq!(first, second);
+    }
+
     #[tokio::test]
     async fn v1_openapi_spec_contains_known_route() {
         let router = create_router_v1(MockState);
@@ -4976,6 +4997,13 @@ mod tests {
             "/v2/availability/stream/transactions",
             "/v2/availability/stream/namespace-proofs",
             "/v2/state-signature/block",
+            "/v2/submit/transaction",
+            "/v2/explorer/block",
+            "/v2/explorer/blocks",
+            "/v2/explorer/transaction",
+            "/v2/explorer/transactions",
+            "/v2/explorer/summary",
+            "/v2/explorer/search",
         ]
         .into_iter()
         .collect();
@@ -5526,6 +5554,68 @@ mod tests {
         }
     }
 
+    #[tonic::async_trait]
+    impl crate::proto::explorer_service_server::ExplorerService for MockV2State {
+        async fn get_explorer_block_detail(
+            &self,
+            _request: tonic::Request<crate::proto::GetExplorerBlockDetailRequest>,
+        ) -> Result<tonic::Response<crate::proto::ExplorerBlockDetailResponse>, tonic::Status>
+        {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_explorer_block_summaries(
+            &self,
+            _request: tonic::Request<crate::proto::GetExplorerBlockSummariesRequest>,
+        ) -> Result<tonic::Response<crate::proto::ExplorerBlockSummariesResponse>, tonic::Status>
+        {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_explorer_transaction_detail(
+            &self,
+            _request: tonic::Request<crate::proto::GetExplorerTransactionDetailRequest>,
+        ) -> Result<tonic::Response<crate::proto::ExplorerTransactionDetailResponse>, tonic::Status>
+        {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_explorer_transaction_summaries(
+            &self,
+            _request: tonic::Request<crate::proto::GetExplorerTransactionSummariesRequest>,
+        ) -> Result<
+            tonic::Response<crate::proto::ExplorerTransactionSummariesResponse>,
+            tonic::Status,
+        > {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_explorer_summary(
+            &self,
+            _request: tonic::Request<crate::proto::GetExplorerSummaryRequest>,
+        ) -> Result<tonic::Response<crate::proto::ExplorerSummaryResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_explorer_search(
+            &self,
+            _request: tonic::Request<crate::proto::GetExplorerSearchRequest>,
+        ) -> Result<tonic::Response<crate::proto::ExplorerSearchResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+    }
+
+    #[tonic::async_trait]
+    impl crate::proto::submit_service_server::SubmitService for MockV2State {
+        async fn submit_transaction(
+            &self,
+            _request: tonic::Request<crate::proto::SubmitTransactionRequest>,
+        ) -> Result<tonic::Response<crate::proto::SubmitTransactionResponse>, tonic::Status>
+        {
+            Err(tonic::Status::internal("mock"))
+        }
+    }
+
     /// Every path in the OpenAPI document must be a route [`crate::router_v2`] mounts, so a
     /// generated client cannot ship a method that always 404s.
     #[tokio::test]
@@ -5535,6 +5625,8 @@ mod tests {
             Arc::new(MockV2State),
             crate::OptionalModules {
                 config: true,
+                submit: true,
+                explorer: true,
                 ..Default::default()
             },
         );
@@ -5629,40 +5721,55 @@ mod tests {
     /// The docs router is merged in as `serve_axum` does: that merge swaps `router_v2`'s layered
     /// fallback for a plain one, so `router_v2` alone passes even with the paths unregistered.
     #[tokio::test]
-    async fn disabled_config_module_answers_in_the_envelope() {
+    async fn disabled_modules_answer_in_the_envelope() {
         let spec: serde_json::Value = serde_json::from_str(super::V2_OPENAPI).expect("valid JSON");
-        let mut documented: Vec<&str> = spec["paths"]
-            .as_object()
-            .expect("spec has paths")
-            .keys()
-            .map(String::as_str)
-            .filter(|path| path.starts_with("/v2/config/"))
-            .collect();
-        documented.sort_unstable();
-        let mut registered = routes::v2::CONFIG_ROUTES.to_vec();
-        registered.sort_unstable();
-        assert_eq!(registered, documented);
-
+        let paths = spec["paths"].as_object().expect("spec has paths");
         let router = crate::router_v2(Arc::new(MockV2State), crate::OptionalModules::default())
             .merge(router_v2_docs());
-        for path in documented {
-            let req = Request::builder()
-                .uri(path)
-                .body(axum::body::Body::empty())
-                .unwrap();
-            let resp = tower::ServiceExt::oneshot(router.clone(), req)
-                .await
-                .unwrap();
-            assert_eq!(resp.status(), StatusCode::NOT_FOUND, "{path}");
-            let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
-                .await
-                .unwrap();
-            let envelope: serde_json::Value = serde_json::from_slice(&body).unwrap_or_else(|err| {
-                panic!("{path}: {err}: {:?}", String::from_utf8_lossy(&body))
-            });
-            assert_eq!(envelope["error"]["code"], 404, "{path}");
-            assert_eq!(envelope["error"]["status"], "NOT_FOUND", "{path}");
+        for (prefix, registered) in [
+            ("/v2/config/", routes::v2::CONFIG_ROUTES),
+            ("/v2/submit/", routes::v2::SUBMIT_ROUTES),
+            ("/v2/explorer/", routes::v2::EXPLORER_ROUTES),
+        ] {
+            let mut documented: Vec<&str> = paths
+                .keys()
+                .map(String::as_str)
+                .filter(|path| path.starts_with(prefix))
+                .collect();
+            documented.sort_unstable();
+            let mut registered = registered.to_vec();
+            registered.sort_unstable();
+            assert_eq!(registered, documented);
+            for path in documented {
+                let method = paths[path]
+                    .as_object()
+                    .unwrap()
+                    .keys()
+                    .next()
+                    .unwrap()
+                    .to_uppercase();
+                assert_disabled_in_envelope(&router, &method, path).await;
+            }
         }
+    }
+
+    async fn assert_disabled_in_envelope(router: &Router, method: &str, path: &str) {
+        let req = Request::builder()
+            .method(method)
+            .uri(path)
+            .body(axum::body::Body::empty())
+            .unwrap();
+        let resp = tower::ServiceExt::oneshot(router.clone(), req)
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND, "{method} {path}");
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let envelope: serde_json::Value = serde_json::from_slice(&body)
+            .unwrap_or_else(|err| panic!("{path}: {err}: {:?}", String::from_utf8_lossy(&body)));
+        assert_eq!(envelope["error"]["code"], 404, "{path}");
+        assert_eq!(envelope["error"]["status"], "NOT_FOUND", "{path}");
     }
 
     /// A bad query parameter is refused by the extractor and wrapped by the envelope layer,

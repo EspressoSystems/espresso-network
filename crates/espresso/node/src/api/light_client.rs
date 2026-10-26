@@ -1,21 +1,25 @@
-use std::{collections::HashMap, fmt::Display, sync::Arc, time::Duration};
+use std::{cmp::Ordering, collections::HashMap, fmt::Display, sync::Arc, time::Duration};
 
-use anyhow::Result;
-use committable::Committable;
+use anyhow::{Result, bail, ensure};
+use committable::{Commitment, Committable};
 use disco_types::status::StatusCode;
 use espresso_types::{BlockMerkleTree, Header, NsIndex, NsProof, SeqTypes};
 use futures::{TryStreamExt, future::try_join, stream::StreamExt};
 use hotshot_query_service::{
-    Error,
+    Error, QueryError,
     availability::{AvailabilityDataSource, LeafQueryData, PayloadQueryData, VidCommonQueryData},
     data_source::{VersionedDataSource, storage::NodeStorage},
-    merklized_state::{MerklizedStateDataSource, Snapshot},
+    merklized_state::{MerklizedStateDataSource, MerklizedStateHeightPersistence, Snapshot},
     node::BlockId,
     types::HeightIndexed,
 };
 use hotshot_types::simple_certificate::QuorumCertificate2;
 use itertools::izip;
-use jf_merkle_tree_compat::MerkleTreeScheme;
+use jf_merkle_tree_compat::{
+    DigestAlgorithm, MerkleTreeScheme,
+    internal::MerkleNode,
+    prelude::{Sha3Digest, Sha3Node},
+};
 use light_client::{
     client::NAMESPACES_PARAM_TAG,
     consensus::{header::HeaderProof, leaf::LeafProof, namespace::NamespaceProof},
@@ -65,7 +69,7 @@ where
     } else if new_protocol {
         get_leaf_proof_with_cert2(state, requested_leaf, fetch_timeout, chain_limit).await
     } else {
-        get_leaf_proof_with_qc_chain(state, requested_leaf, fetch_timeout, chain_limit).await
+        get_leaf_proof_with_leaf_chain(state, requested_leaf, fetch_timeout, chain_limit).await
     }
 }
 
@@ -86,7 +90,8 @@ where
     Some(cert2.data.block_number)
 }
 
-pub(crate) async fn get_leaf_proof_with_qc_chain<State>(
+/// Build a leaf proof for a legacy leaf from the justify QCs of the leaves that follow it.
+pub(crate) async fn get_leaf_proof_with_leaf_chain<State>(
     state: &State,
     requested_leaf: LeafQueryData<SeqTypes>,
     fetch_timeout: Duration,
@@ -97,12 +102,8 @@ where
     for<'a> State::ReadOnly<'a>: NodeStorage<SeqTypes>,
 {
     let requested = requested_leaf.height() as usize;
-    // Grab the endpoint and the final QC chain in the same transaction, to ensure that
-    // the QC chain actually corresponds to the endpoint block (and is not subject to
-    // concurrent updates).
     let mut tx = state.read().await.map_err(internal)?;
     let latest_height = NodeStorage::block_height(&mut tx).await.map_err(internal)?;
-    let qc_chain = tx.latest_qc_chain().await.map_err(internal)?;
     drop(tx);
 
     let mut leaves = state.get_leaf_range(requested + 1..latest_height).await;
@@ -140,15 +141,9 @@ where
         }
     }
 
-    // We reached the end of the range of interest without encountering a 3-chain. Thus, if the last
-    // leaf in the chain is not already assumed finalized by the client, we must prove it finalized
-    // by appending two more QCs.
-    let Some([committing_qc, deciding_qc]) = qc_chain else {
-        return Err(not_found("missing QC 2-chain to prove finality"));
-    };
-    proof.add_qc_chain(Arc::new(committing_qc), Arc::new(deciding_qc));
-
-    Ok(proof)
+    // There is no stored legacy QC chain to fall back on: it could only close a chain whose tip was
+    // legacy, and every network is past the 0.6 cutover, so running out of leaves is a 404.
+    Err(not_found("not enough leaves to prove finality"))
 }
 
 /// Build a leaf proof for the new protocol using certificate2 finality.
@@ -361,6 +356,7 @@ pub(crate) async fn get_header_proof<State>(
 where
     State: AvailabilityDataSource<SeqTypes>
         + MerklizedStateDataSource<SeqTypes, BlockMerkleTree, { BlockMerkleTree::ARITY }>
+        + MerklizedStateHeightPersistence
         + VersionedDataSource,
 {
     let header = state
@@ -383,12 +379,162 @@ where
         Snapshot::Index(root),
         header.height(),
     )
-    .await
-    .map_err(|source| Error::MerklizedState {
-        source: source.into(),
-    })?;
+    .await;
+    let path = match path {
+        Ok(path) => path,
+        Err(err) if matches!(err.status(), StatusCode::NOT_FOUND | StatusCode::GONE) => {
+            // No usable snapshot at `root` (pruned or missing): rebuild from the newest one.
+            let head = state.get_last_state_height().await.map_err(merkle_error)? as u64;
+            if head <= root {
+                return Err(merkle_error(err));
+            }
+            return rebuild_header_path(state, root, header, head, fetch_timeout).await;
+        },
+        Err(err) => return Err(merkle_error(err)),
+    };
 
     Ok(HeaderProof::new(header, path))
+}
+
+fn merkle_error(source: QueryError) -> Error {
+    Error::MerklizedState {
+        source: source.into(),
+    }
+}
+
+/// Prove `header` against `root` using the snapshot at `head`, when the state at `root` is pruned.
+///
+/// The result is verified against the commitment in header `root`.
+async fn rebuild_header_path<State>(
+    state: &State,
+    root: u64,
+    header: Header,
+    head: u64,
+    fetch_timeout: Duration,
+) -> Result<HeaderProof, Error>
+where
+    State: AvailabilityDataSource<SeqTypes>
+        + MerklizedStateDataSource<SeqTypes, BlockMerkleTree, { BlockMerkleTree::ARITY }>,
+{
+    let get_path = |height| {
+        MerklizedStateDataSource::<SeqTypes, BlockMerkleTree, _>::get_path(
+            state,
+            Snapshot::Index(head),
+            height,
+        )
+    };
+    let frontier = get_path(root - 1).await.map_err(merkle_error)?;
+    let target = get_path(header.height()).await.map_err(merkle_error)?;
+    let root_header = state
+        .get_header(BlockId::Number(root as usize))
+        .await
+        .with_timeout(fetch_timeout)
+        .await
+        .ok_or_else(|| not_found(format!("unknown header {root}")))?;
+
+    let proof = rebuild_block_proof(root, &frontier, &target).map_err(internal)?;
+    let proof = HeaderProof::new(header, proof);
+    proof
+        .verify_ref(root_header.block_merkle_tree_root())
+        .map_err(|err| {
+            internal(format!(
+                "rebuilt block merkle path does not match root {root}: {err:#}"
+            ))
+        })?;
+    Ok(proof)
+}
+
+type BlockMerkleProof = <BlockMerkleTree as MerkleTreeScheme>::MembershipProof;
+type BlockMerkleNode = MerkleNode<Commitment<Header>, u64, Sha3Node>;
+
+/// The path to `target.pos` in the block tree of the first `num_leaves` leaves.
+///
+/// Both proofs come from one snapshot with more than `num_leaves` leaves; `frontier` is for leaf
+/// `num_leaves - 1`. Subtrees left of the frontier are full and unchanged since, subtrees right of
+/// it are empty, and the frontier nodes are recomputed.
+pub(crate) fn rebuild_block_proof(
+    num_leaves: u64,
+    frontier: &BlockMerkleProof,
+    target: &BlockMerkleProof,
+) -> Result<BlockMerkleProof> {
+    ensure!(
+        frontier.pos + 1 == num_leaves,
+        "frontier proof is for leaf {}, expected {}",
+        frontier.pos,
+        num_leaves.wrapping_sub(1),
+    );
+    ensure!(target.pos < num_leaves, "target leaf is beyond the tree");
+    ensure!(
+        frontier.proof.len() == target.proof.len(),
+        "proofs have different heights"
+    );
+
+    // Value of the frontier node at each level, starting with the leaf.
+    let mut edge_values = vec![frontier.proof[0].value()];
+    for (level, node) in frontier.proof.iter().enumerate().skip(1) {
+        let edge = frontier.pos / ARITY.pow(level as u32 - 1);
+        let data = child_values(node, edge / ARITY, edge, edge_values[level - 1])?;
+        edge_values.push(<Sha3Digest as DigestAlgorithm<
+            Commitment<Header>,
+            u64,
+            _,
+        >>::digest(&data)?);
+    }
+
+    let mut proof = vec![target.proof[0].clone()];
+    for (level, node) in target.proof.iter().enumerate().skip(1) {
+        let divisor = ARITY.pow(level as u32 - 1);
+        let edge = frontier.pos / divisor;
+        let data = child_values(
+            node,
+            target.pos / divisor / ARITY,
+            edge,
+            edge_values[level - 1],
+        )?;
+        let children = data
+            .iter()
+            .enumerate()
+            .map(|(n, value)| {
+                let index = target.pos / divisor / ARITY * ARITY + n as u64;
+                Arc::new(match index.cmp(&edge) {
+                    Ordering::Greater => BlockMerkleNode::Empty,
+                    _ => BlockMerkleNode::ForgettenSubtree { value: *value },
+                })
+            })
+            .collect();
+        proof.push(BlockMerkleNode::Branch {
+            value: Sha3Node::default(),
+            children,
+        });
+    }
+    Ok(BlockMerkleProof {
+        pos: target.pos,
+        proof,
+    })
+}
+
+const ARITY: u64 = BlockMerkleTree::ARITY as u64;
+
+/// Child values of `node`, whose children have indices `parent * ARITY + n` at their level, in the
+/// tree where the rightmost non-empty node of that level is `edge` with value `edge_value`.
+fn child_values(
+    node: &BlockMerkleNode,
+    parent: u64,
+    edge: u64,
+    edge_value: Sha3Node,
+) -> Result<Vec<Sha3Node>> {
+    let BlockMerkleNode::Branch { children, .. } = node else {
+        bail!("expected a branch node in the proof");
+    };
+    Ok(children
+        .iter()
+        .enumerate()
+        .map(|(n, child)| match (parent * ARITY + n as u64).cmp(&edge) {
+            Ordering::Less => child.value(),
+            Ordering::Equal => edge_value,
+            Ordering::Greater => Sha3Node::default(),
+        })
+        .collect())
 }
 
 pub(crate) async fn fetch_block_data_range<State>(
@@ -605,34 +751,39 @@ mod test {
         availability::{BlockQueryData, TransactionIndex, VidCommonQueryData},
         data_source::{
             Transaction,
-            sql::Config,
-            storage::{AvailabilityStorage, UpdateAvailabilityStorage},
+            sql::postgres::{Config, SqlStorage},
+            storage::{AvailabilityStorage, UpdateAvailabilityStorage, pruning::PrunerCfg},
         },
         fetching::provider::TrustedQueryServiceProvider,
-        merklized_state::UpdateStateData,
+        merklized_state::{MerklizedState, UpdateStateData},
     };
-    use hotshot_types::{
-        data::ViewNumber, simple_certificate::CertificatePair, simple_vote::Vote2Data,
-    };
+    use hotshot_types::{data::ViewNumber, simple_vote::Vote2Data};
     use http_wire::{ServerError, respond};
-    use jf_merkle_tree_compat::{AppendableMerkleTreeScheme, ToTraversalPath};
+    use itertools::Itertools;
+    use jf_merkle_tree_compat::{
+        AppendableMerkleTreeScheme, ToTraversalPath, prelude::SHA3MerkleTree,
+    };
     use light_client::{
         consensus::leaf::{FinalityProof, LeafProofHint},
         testing::{
-            AlwaysTrueQuorum, ENABLE_EPOCHS, LEGACY_VERSION, TestClient, VersionCheckQuorum,
-            custom_leaf_chain_with_upgrade, leaf_chain, leaf_chain_with_upgrade,
+            AlwaysTrueQuorum, TestClient, VersionCheckQuorum, custom_leaf_chain_with_upgrade,
+            custom_leaf_chain_with_upgrades, leaf_chain, leaf_chain_with_upgrade,
         },
     };
     use tokio::{
         net::TcpListener,
         time::{sleep, timeout},
     };
-    use versions::{DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_VERSION, NEW_PROTOCOL_VERSION, Upgrade};
+    use vbs::version::Version;
+    use versions::{
+        DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_REWARD_VERSION, EPOCH_VERSION, FEE_VERSION,
+        NEW_PROTOCOL_VERSION, Upgrade,
+    };
 
     use super::*;
     use crate::api::{
         data_source::{Provider, SequencerDataSource, testing::TestableSequencerDataSource},
-        sql::DataSource,
+        sql::postgres::DataSource,
     };
 
     const CHAIN_LIMIT: usize = 500;
@@ -675,7 +826,7 @@ mod test {
 
         // Ask for the first leaf; it is proved finalized by the chain formed along with the second.
         let proof =
-            get_leaf_proof_with_qc_chain(&ds, leaves[0].clone(), Duration::MAX, CHAIN_LIMIT)
+            get_leaf_proof_with_leaf_chain(&ds, leaves[0].clone(), Duration::MAX, CHAIN_LIMIT)
                 .await
                 .unwrap();
         assert_eq!(
@@ -996,12 +1147,12 @@ mod test {
             tx.commit().await.unwrap();
         }
 
-        let err = get_leaf_proof_with_qc_chain(&ds, leaves[0].clone(), Duration::MAX, 1)
+        let err = get_leaf_proof_with_leaf_chain(&ds, leaves[0].clone(), Duration::MAX, 1)
             .await
             .unwrap_err();
         assert_eq!(err.status(), StatusCode::NOT_FOUND);
 
-        let proof = get_leaf_proof_with_qc_chain(&ds, leaves[0].clone(), Duration::MAX, 2)
+        let proof = get_leaf_proof_with_leaf_chain(&ds, leaves[0].clone(), Duration::MAX, 2)
             .await
             .unwrap();
         assert_eq!(
@@ -1080,7 +1231,7 @@ mod test {
         }
 
         let proof =
-            get_leaf_proof_with_qc_chain(&ds, leaves[0].clone(), Duration::MAX, CHAIN_LIMIT)
+            get_leaf_proof_with_leaf_chain(&ds, leaves[0].clone(), Duration::MAX, CHAIN_LIMIT)
                 .await
                 .unwrap();
         assert!(matches!(proof.proof(), FinalityProof::NewProtocol { .. }));
@@ -1124,7 +1275,7 @@ mod test {
         }
 
         let proof =
-            get_leaf_proof_with_qc_chain(&ds, leaves[0].clone(), Duration::MAX, CHAIN_LIMIT)
+            get_leaf_proof_with_leaf_chain(&ds, leaves[0].clone(), Duration::MAX, CHAIN_LIMIT)
                 .await
                 .unwrap();
         assert!(matches!(proof.proof(), FinalityProof::HotStuff2 { .. }));
@@ -1174,7 +1325,7 @@ mod test {
         }
 
         let proof =
-            get_leaf_proof_with_qc_chain(&ds, leaves[0].clone(), Duration::MAX, CHAIN_LIMIT)
+            get_leaf_proof_with_leaf_chain(&ds, leaves[0].clone(), Duration::MAX, CHAIN_LIMIT)
                 .await
                 .unwrap();
         assert!(matches!(proof.proof(), FinalityProof::NewProtocol { .. }));
@@ -1223,7 +1374,7 @@ mod test {
         }
 
         let proof =
-            get_leaf_proof_with_qc_chain(&ds, leaves[1].clone(), Duration::MAX, CHAIN_LIMIT)
+            get_leaf_proof_with_leaf_chain(&ds, leaves[1].clone(), Duration::MAX, CHAIN_LIMIT)
                 .await
                 .unwrap();
         assert!(matches!(proof.proof(), FinalityProof::HotStuff2 { .. }));
@@ -1280,7 +1431,7 @@ mod test {
         }
 
         let proof =
-            get_leaf_proof_with_qc_chain(&ds, leaves[1].clone(), Duration::MAX, CHAIN_LIMIT)
+            get_leaf_proof_with_leaf_chain(&ds, leaves[1].clone(), Duration::MAX, CHAIN_LIMIT)
                 .await
                 .unwrap();
         assert!(matches!(proof.proof(), FinalityProof::NewProtocol { .. }));
@@ -1291,6 +1442,112 @@ mod test {
                 .unwrap(),
             leaves[1]
         );
+    }
+
+    /// Every leaf of a history whose tip is past the 0.6 cutover is proved from stored leaves and
+    /// cert2s alone, with no legacy QC chain stored.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_leaf_proofs_across_history() {
+        // Every protocol version from mainnet's 0.2 genesis on, with the height it took effect.
+        const UPGRADES: [(u64, Version); 4] = [
+            (6, EPOCH_VERSION),
+            (11, DRB_AND_HEADER_UPGRADE_VERSION),
+            (16, EPOCH_REWARD_VERSION),
+            (21, NEW_PROTOCOL_VERSION),
+        ];
+        // A view fails just before each of these heights, under HotStuff and under HotStuff2.
+        const FAILED_VIEWS_BEFORE: [u64; 2] = [3, 13];
+        const CERT2_HEIGHTS: [u64; 3] = [22, 24, 25];
+
+        let view_of = |height: u64| {
+            height + FAILED_VIEWS_BEFORE.iter().filter(|&&h| h <= height).count() as u64
+        };
+        let leaves = custom_leaf_chain_with_upgrades(1..=25, FEE_VERSION, &UPGRADES, |proposal| {
+            proposal.view_number = ViewNumber::new(view_of(proposal.block_header.height()));
+            // Upgrades take effect by view, so failed views move where each one starts.
+            if let Some(cert) = &mut proposal.upgrade_certificate {
+                let (height, _) = UPGRADES
+                    .into_iter()
+                    .find(|(_, version)| *version == cert.data.new_version)
+                    .unwrap();
+                let first_view = ViewNumber::new(view_of(height));
+                cert.data.old_version_last_view = first_view - 1;
+                cert.data.new_version_first_view = first_view;
+                cert.data.decide_by = first_view;
+            }
+        })
+        .await;
+        let leaf_at = |height: u64| &leaves[height as usize - 1];
+
+        let storage = <DataSource as TestableSequencerDataSource>::create_storage().await;
+        let ds = DataSource::create(
+            DataSource::persistence_options(&storage),
+            Default::default(),
+            false,
+        )
+        .await
+        .unwrap();
+        {
+            let mut tx = ds.write().await.unwrap();
+            for leaf in &leaves {
+                tx.insert_leaf(leaf).await.unwrap();
+            }
+            for height in CERT2_HEIGHTS {
+                tx.insert_cert2(height, cert2_for_leaf(leaf_at(height)))
+                    .await
+                    .unwrap();
+            }
+            tx.commit().await.unwrap();
+        }
+
+        let quorum = VersionCheckQuorum::new(leaves.iter().map(|leaf| leaf.leaf().clone()));
+        for leaf in &leaves {
+            let height = leaf.height();
+            let proof = get_leaf_proof(&ds, leaf.clone(), None, Duration::MAX, CHAIN_LIMIT)
+                .await
+                .unwrap_or_else(|err| panic!("no proof for height {height}: {err:#}"));
+            match height {
+                // A 3-chain, which past a failed view closes later on.
+                1..=4 => assert!(matches!(proof.proof(), FinalityProof::HotStuff { .. })),
+                // From 5, the first 2-chain closes before the 3-chain does.
+                5..=19 => assert!(matches!(proof.proof(), FinalityProof::HotStuff2 { .. })),
+                // The last legacy leaf's 2-chain would span the cutover.
+                _ => assert!(matches!(proof.proof(), FinalityProof::NewProtocol { .. })),
+            }
+            assert_eq!(
+                proof.verify(LeafProofHint::Quorum(&quorum)).await.unwrap(),
+                *leaf,
+                "height {height}"
+            );
+        }
+
+        // The client may instead name a leaf it already trusts, here the next one.
+        for (leaf, finalized) in leaves.iter().tuple_windows() {
+            let height = leaf.height();
+            let proof = get_leaf_proof(
+                &ds,
+                leaf.clone(),
+                Some(finalized.height() as usize),
+                Duration::MAX,
+                CHAIN_LIMIT,
+            )
+            .await
+            .unwrap_or_else(|err| panic!("no proof for height {height}: {err:#}"));
+            assert!(
+                matches!(proof.proof(), FinalityProof::Assumption),
+                "height {height}"
+            );
+            assert_eq!(
+                proof
+                    .verify(LeafProofHint::<AlwaysTrueQuorum>::Assumption(
+                        finalized.leaf()
+                    ))
+                    .await
+                    .unwrap(),
+                *leaf,
+                "height {height}"
+            );
+        }
     }
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
@@ -1347,7 +1604,7 @@ mod test {
             tx.commit().await.unwrap();
         }
 
-        let err = get_leaf_proof_with_qc_chain(
+        let err = get_leaf_proof_with_leaf_chain(
             &ds,
             leaves[0].clone(),
             Duration::from_secs(1),
@@ -1373,7 +1630,7 @@ mod test {
     }
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_final_qcs() {
+    async fn test_chain_ends_before_finality() {
         let storage = <DataSource as TestableSequencerDataSource>::create_storage().await;
         let ds = DataSource::create(
             DataSource::persistence_options(&storage),
@@ -1383,22 +1640,38 @@ mod test {
         .await
         .unwrap();
 
-        // Insert a single leaf, plus an extra QC chain proving it finalized.
-        let leaves = leaf_chain(1..=3, EPOCH_VERSION).await;
-        let qcs = [
-            CertificatePair::for_parent(leaves[1].leaf()),
-            CertificatePair::for_parent(leaves[2].leaf()),
-        ];
+        // A legacy tip, as every replayed pre-0.6 chain has: the next leaf chains onto the
+        // requested one, but no deciding QC has arrived and no cert2 ever will.
+        let leaves = leaf_chain(1..=3, EPOCH_REWARD_VERSION).await;
         {
             let mut tx = ds.write().await.unwrap();
-            tx.insert_leaf_with_qc_chain(&leaves[0], Some(qcs.clone()))
-                .await
-                .unwrap();
+            tx.insert_leaf(&leaves[0]).await.unwrap();
+            tx.insert_leaf(&leaves[1]).await.unwrap();
             tx.commit().await.unwrap();
         }
 
+        let err = get_leaf_proof_with_leaf_chain(
+            &ds,
+            leaves[0].clone(),
+            Duration::from_secs(1),
+            CHAIN_LIMIT,
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err.status(), StatusCode::NOT_FOUND);
+        assert!(
+            matches!(&err, hotshot_query_service::Error::Custom { message, .. } if message.contains("not enough leaves")),
+            "{err}"
+        );
+
+        // Once the leaf carrying the deciding QC is stored, the same request succeeds.
+        {
+            let mut tx = ds.write().await.unwrap();
+            tx.insert_leaf(&leaves[2]).await.unwrap();
+            tx.commit().await.unwrap();
+        }
         let proof =
-            get_leaf_proof_with_qc_chain(&ds, leaves[0].clone(), Duration::MAX, CHAIN_LIMIT)
+            get_leaf_proof_with_leaf_chain(&ds, leaves[0].clone(), Duration::MAX, CHAIN_LIMIT)
                 .await
                 .unwrap();
         assert_eq!(
@@ -1408,52 +1681,6 @@ mod test {
                 .unwrap(),
             leaves[0]
         );
-    }
-
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_upgrade_to_epochs() {
-        let storage = <DataSource as TestableSequencerDataSource>::create_storage().await;
-        let ds = DataSource::create(
-            DataSource::persistence_options(&storage),
-            Default::default(),
-            false,
-        )
-        .await
-        .unwrap();
-
-        // Upgrade to epochs (and enabling HotStuff2) in the middle of a leaf chain, so that the
-        // last leaf in the chain only requires 2 QCs to verify, even though at the start of the
-        // chain we would have required 3.
-        let leaves = leaf_chain_with_upgrade(1..=4, 2, ENABLE_EPOCHS).await;
-        assert_eq!(leaves[0].header().version(), LEGACY_VERSION);
-        assert_eq!(leaves[1].header().version(), DRB_AND_HEADER_UPGRADE_VERSION);
-        let qcs = [
-            CertificatePair::for_parent(leaves[2].leaf()),
-            CertificatePair::for_parent(leaves[3].leaf()),
-        ];
-        {
-            let mut tx = ds.write().await.unwrap();
-            tx.insert_leaf(&leaves[0]).await.unwrap();
-            tx.insert_leaf_with_qc_chain(&leaves[1], Some(qcs.clone()))
-                .await
-                .unwrap();
-            tx.commit().await.unwrap();
-        }
-
-        let proof =
-            get_leaf_proof_with_qc_chain(&ds, leaves[0].clone(), Duration::MAX, CHAIN_LIMIT)
-                .await
-                .unwrap();
-        assert_eq!(
-            proof
-                .verify(LeafProofHint::Quorum(&VersionCheckQuorum::new(
-                    leaves.iter().map(|leaf| leaf.leaf().clone())
-                )))
-                .await
-                .unwrap(),
-            leaves[0]
-        );
-        assert!(matches!(proof.proof(), FinalityProof::HotStuff2 { .. }))
     }
 
     #[tokio::test]
@@ -1536,6 +1763,164 @@ mod test {
             .await
             .unwrap_err();
         assert_eq!(err.status(), StatusCode::BAD_REQUEST);
+    }
+
+    // The light-weight block tree forgets all but its last leaf.
+    type FullTree = SHA3MerkleTree<Commitment<Header>>;
+
+    fn fake_tree(num_leaves: u64) -> FullTree {
+        FullTree::from_elems(
+            Some(BLOCK_MERKLE_TREE_HEIGHT),
+            (0..num_leaves).map(|i| Commitment::<Header>::from_raw([i as u8 + 1; 32])),
+        )
+        .unwrap()
+    }
+
+    fn lookup(tree: &FullTree, pos: u64) -> BlockMerkleProof {
+        tree.lookup(pos).expect_ok().unwrap().1
+    }
+
+    /// Rebuilding from `head_leaves` leaves matches the tree of `r` leaves for every `r` in `rs`.
+    fn check_rebuild(head_leaves: u64, rs: impl IntoIterator<Item = u64>) {
+        let head = fake_tree(head_leaves);
+        for r in rs {
+            let tree = fake_tree(r);
+            let frontier = lookup(&head, r - 1);
+            for i in 0..r {
+                let proof = rebuild_block_proof(r, &frontier, &lookup(&head, i)).unwrap();
+                assert_eq!(proof, lookup(&tree, i), "r={r} i={i}");
+                assert!(
+                    BlockMerkleTree::verify(tree.commitment(), i, &proof)
+                        .unwrap()
+                        .is_ok()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_rebuild_block_proof_matches_snapshot() {
+        check_rebuild(100, [2, 4, 5, 10, 26, 28, 50, 99]);
+    }
+
+    #[test]
+    fn test_rebuild_block_proof_last_leaf() {
+        let head = fake_tree(40);
+        let tree = fake_tree(13);
+        let proof = rebuild_block_proof(13, &lookup(&head, 12), &lookup(&head, 12)).unwrap();
+        assert_eq!(proof, lookup(&tree, 12));
+    }
+
+    #[test]
+    fn test_rebuild_block_proof_full_subtree() {
+        check_rebuild(100, [3, 9, 27, 81]);
+    }
+
+    #[test]
+    fn test_rebuild_block_proof_single_leaf() {
+        check_rebuild(5, [1]);
+    }
+
+    #[test]
+    fn test_rebuild_block_proof_wrong_frontier() {
+        let head = fake_tree(40);
+        let err = rebuild_block_proof(13, &lookup(&head, 11), &lookup(&head, 3)).unwrap_err();
+        assert!(err.to_string().contains("frontier"), "{err:#}");
+    }
+
+    /// A data source with `num_leaves` headers, state at every height, and state below `pruned`
+    /// collected. Returns the data source and the block tree at each height. The storage guard
+    /// keeps the database alive.
+    async fn pruned_data_source(
+        num_leaves: usize,
+        pruned: u64,
+    ) -> (impl Sized, DataSource, Vec<BlockMerkleTree>) {
+        let storage = <DataSource as TestableSequencerDataSource>::create_storage().await;
+        let ds = DataSource::create(
+            DataSource::persistence_options(&storage),
+            Default::default(),
+            false,
+        )
+        .await
+        .unwrap();
+
+        let leaves = leaf_chain(0..num_leaves as u64, EPOCH_VERSION).await;
+        let mts = leaves
+            .iter()
+            .scan(
+                BlockMerkleTree::new(BLOCK_MERKLE_TREE_HEIGHT),
+                |mt, leaf| {
+                    let item = mt.clone();
+                    mt.push(leaf.block_hash()).unwrap();
+                    Some(item)
+                },
+            )
+            .collect::<Vec<_>>();
+
+        let mut tx = ds.write().await.unwrap();
+        for (leaf, mt) in leaves.iter().zip(&mts) {
+            tx.insert_leaf(leaf).await.unwrap();
+            if leaf.height() > 0 {
+                let merkle_path = mt.lookup(leaf.height() - 1).expect_ok().unwrap().1;
+                UpdateStateData::<SeqTypes, BlockMerkleTree, _>::insert_merkle_nodes(
+                    &mut tx,
+                    merkle_path,
+                    ToTraversalPath::<{ BlockMerkleTree::ARITY }>::to_traversal_path(
+                        &(leaf.height() - 1),
+                        BLOCK_MERKLE_TREE_HEIGHT,
+                    ),
+                    leaf.height(),
+                )
+                .await
+                .unwrap();
+                UpdateStateData::<SeqTypes, BlockMerkleTree, _>::set_last_state_height(
+                    &mut tx,
+                    leaf.height() as usize,
+                )
+                .await
+                .unwrap();
+            }
+        }
+        tx.commit().await.unwrap();
+
+        let cfg =
+            PrunerCfg::default().with_state_tables(vec![BlockMerkleTree::state_type().into()]);
+        let sql: &SqlStorage = ds.as_ref();
+        sql.prune_state_below(pruned, 0, &cfg).await.unwrap();
+        (storage, ds, mts)
+    }
+
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_header_proof_pruned_root() {
+        let num_leaves = 40;
+        let (_storage, ds, mts) = pruned_data_source(num_leaves, 30).await;
+
+        // Roots below the pruned height are rebuilt from the newest snapshot.
+        for root in [1, 2, 4, 10, 13, 27, 28] {
+            for height in 0..root {
+                let proof = get_header_proof(
+                    &ds,
+                    root as u64,
+                    BlockId::Number(height),
+                    Duration::from_secs(10),
+                )
+                .await
+                .unwrap();
+                proof.verify(mts[root].commitment()).unwrap();
+            }
+        }
+    }
+
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_header_proof_root_beyond_head_fails() {
+        let (_storage, ds, _) = pruned_data_source(10, 5).await;
+        // The state at the head height is stored; beyond it there is no snapshot to rebuild from.
+        let err = get_header_proof(&ds, 20, BlockId::Number(3), Duration::from_secs(10))
+            .await
+            .unwrap_err();
+        assert_eq!(err.status(), StatusCode::NOT_FOUND);
     }
 
     #[tokio::test]
@@ -1672,7 +2057,7 @@ mod test {
         for stored_out_of_limit in [false, true] {
             requested.lock().unwrap().clear();
             let storage = <DataSource as TestableSequencerDataSource>::create_storage().await;
-            let ds = Config::try_from(&DataSource::persistence_options(&storage))
+            let ds = Config::try_from(&*DataSource::persistence_options(&storage))
                 .unwrap()
                 .builder(Provider::default().with_cert2_provider(peer.clone()))
                 .await
@@ -1744,7 +2129,7 @@ mod test {
         let (peer, requested) = serve_cert2(cert2_for_leaf(&leaves[3])).await;
 
         let storage = <DataSource as TestableSequencerDataSource>::create_storage().await;
-        let ds = Config::try_from(&DataSource::persistence_options(&storage))
+        let ds = Config::try_from(&*DataSource::persistence_options(&storage))
             .unwrap()
             .builder(Provider::default().with_cert2_provider(peer))
             .await

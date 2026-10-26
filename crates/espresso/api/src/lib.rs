@@ -48,11 +48,13 @@ use self::proto::{
     availability_service_server::{AvailabilityService, AvailabilityServiceServer},
     config_service_server::{ConfigService, ConfigServiceServer},
     database_service_server::{DatabaseService, DatabaseServiceServer},
+    explorer_service_server::{ExplorerService, ExplorerServiceServer},
     merklized_state_service_server::{MerklizedStateService, MerklizedStateServiceServer},
     node_service_server::{NodeService, NodeServiceServer},
     reward_state_service_server::{RewardStateService, RewardStateServiceServer},
     state_signature_service_server::{StateSignatureService, StateSignatureServiceServer},
     status_service_server::{StatusService, StatusServiceServer},
+    submit_service_server::{SubmitService, SubmitServiceServer},
     token_service_server::{TokenService, TokenServiceServer},
 };
 
@@ -74,8 +76,8 @@ pub fn url(base: &::url::Url, path: impl AsRef<str>) -> ::url::Url {
 /// `catchup`, like the query-service modules (`status`, `availability`, `node`, `token`,
 /// `block-state`, `fee-state`, `reward-state`, `database`) and `v2`, is always on: tide-disco's
 /// SQL mode registered it unconditionally. `submit`, `config`, `explorer`, and `light-client`
-/// follow `Options`, matching `Options::init_with_query_module_sql`; v2's `ConfigService` follows
-/// the same `config` flag as the v1 module.
+/// follow `Options`, matching `Options::init_with_query_module_sql`, and v2's gated services follow
+/// the same flag as their v1 module.
 pub async fn serve_axum<S>(
     port: u16,
     state: S,
@@ -107,6 +109,8 @@ where
         + MerklizedStateService
         + RewardStateService
         + StateSignatureService
+        + SubmitService
+        + ExplorerService
         + Send
         + Sync
         + 'static,
@@ -155,6 +159,8 @@ where
         + MerklizedStateService
         + RewardStateService
         + StateSignatureService
+        + SubmitService
+        + ExplorerService
         + Send
         + Sync
         + 'static,
@@ -167,10 +173,29 @@ where
         .merge(rest::merklized_state_service_rest_router(state.clone()))
         .merge(rest::reward_state_service_rest_router(state.clone()))
         .merge(rest::state_signature_service_rest_router(state.clone()));
+    let router = if modules.submit {
+        router.merge(rest::submit_service_rest_router(state.clone()))
+    } else {
+        router.merge(axum::router_module_disabled(
+            "submit",
+            routes::v2::SUBMIT_ROUTES,
+        ))
+    };
+    let router = if modules.explorer {
+        router.merge(rest::explorer_service_rest_router(state.clone()))
+    } else {
+        router.merge(axum::router_module_disabled(
+            "explorer",
+            routes::v2::EXPLORER_ROUTES,
+        ))
+    };
     let router = if modules.config {
         router.merge(rest::config_service_rest_router(state))
     } else {
-        router.merge(axum::router_config_disabled())
+        router.merge(axum::router_module_disabled(
+            "config",
+            routes::v2::CONFIG_ROUTES,
+        ))
     };
     router
         .layer(::axum::middleware::from_fn(axum::v2_refuse_post_query))
@@ -371,8 +396,8 @@ fn apply_connection_limit(router: ::axum::Router, limit: usize) -> ::axum::Route
         .layer(::axum::Extension(axum::RequestLimit(semaphore)))
 }
 
-/// Start Tonic gRPC server. `ConfigService` follows `modules.config` like the REST side; the
-/// reflection service still lists it, so a disabled deployment answers it with `Unimplemented`.
+/// Start Tonic gRPC server. The gated services follow their module flag like the REST side; the
+/// reflection service still lists them, so a disabled deployment answers them with `Unimplemented`.
 pub async fn serve_tonic<S>(port: u16, state: S, modules: OptionalModules) -> anyhow::Result<()>
 where
     S: StatusService
@@ -384,6 +409,8 @@ where
         + MerklizedStateService
         + RewardStateService
         + StateSignatureService
+        + SubmitService
+        + ExplorerService
         + Clone,
 {
     use ::tonic::transport::Server;
@@ -405,6 +432,17 @@ where
         .add_service(RewardStateServiceServer::new(state.clone()))
         .add_service(StateSignatureServiceServer::new(state.clone()))
         .add_service(reflection_service)
+        .add_optional_service(modules.submit.then(|| {
+            // tonic's 4 MiB default would refuse a transaction the REST route and the block size
+            // limit accept.
+            SubmitServiceServer::new(state.clone())
+                .max_decoding_message_size(http_wire::MAX_REQUEST_BODY_BYTES)
+        }))
+        .add_optional_service(
+            modules
+                .explorer
+                .then(|| ExplorerServiceServer::new(state.clone())),
+        )
         .add_optional_service(modules.config.then(|| ConfigServiceServer::new(state)));
 
     tracing::info!("gRPC server listening on {}", addr);

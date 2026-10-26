@@ -33,11 +33,11 @@
 //! ordinary `BlockReconstructed`. The first test walks the stall up to the
 //! emitted request; the second walks through the exit.
 
-use hotshot::types::BLSPubKey;
 use hotshot_example_types::{block_types::TestBlockHeader, node_types::TEST_VERSIONS};
 use hotshot_types::{
     data::{EpochNumber, ViewNumber},
     message::Proposal,
+    signature_key::BLSPubKey,
     traits::signature_key::SignatureKey,
     vote::HasViewNumber,
 };
@@ -496,10 +496,11 @@ async fn fetched_payload_restores_certification() {
     // What the coordinator injects once a peer's response re-committed to the
     // proposal's payload commitment.
     harness
-        .apply(ConsensusInput::BlockReconstructed(
-            ViewNumber::new(1),
-            test_data.views[0].vid_commitment(),
-        ))
+        .apply(ConsensusInput::BlockReconstructed {
+            view: ViewNumber::new(1),
+            payload_commitment: test_data.views[0].vid_commitment(),
+            payload: test_data.views[0].payload.clone(),
+        })
         .await;
 
     assert!(

@@ -1,26 +1,27 @@
 use std::{marker::PhantomData, time::Duration};
 
 use committable::{Commitment, CommitmentBoundsArkless, Committable};
-use hotshot::types::{BLSPrivKey, BLSPubKey};
 use hotshot_example_types::node_types::TestTypes;
-use hotshot_testing::helpers::build_cert;
 use hotshot_types::{
     data::{EpochNumber, VidCommitment2, ViewNumber},
     epoch_membership::EpochMembership,
+    signature_key::{BLSPrivKey, BLSPubKey},
     simple_certificate::{TimeoutCertificate3, TimeoutEvidence},
     simple_vote::{HasEpoch, QuorumData2, TimeoutData3, TimeoutVote3},
     stake_table::StakeTableEntries,
     traits::signature_key::SignatureKey,
     vote::HasViewNumber,
 };
+use tokio::time::timeout;
 
 use super::common::{
+    certs::build_cert,
     harness::TestHarness,
-    utils::{TestData, build_cert1, build_cert2, build_timeout_cert3},
+    utils::{TestData, TestView, build_cert1, build_cert2, build_timeout_cert3},
 };
 use crate::{
     consensus::{ConsensusInput, ConsensusOutput},
-    coordinator::EPOCH_CHANGE_LOOKAHEAD,
+    coordinator::{EPOCH_CHANGE_LOOKAHEAD, error::Severity},
     helpers::test_timeout_epoch_lock,
     message::{
         CatchupEvidence, Certificate1, ConsensusMessage, EpochChangeMessage, Message, MessageType,
@@ -940,6 +941,72 @@ async fn test_multi_view_decide() {
     assert!(count_matching(harness.outputs(), is_leaf_decided) >= 2);
 }
 
+/// A node whose own VID share never arrives still rebuilds the payload from
+/// the shares the voters broadcast, once a Cert2 certifies the proposal it
+/// parked without that share.
+///
+/// Before the certificate the broadcast shares sit in the reconstructor's
+/// pending set: nothing has pinned the view's commitment, so no
+/// reconstruction starts. Adopting the proposal on the Cert2 pins it, the
+/// held shares are admitted, and the payload follows the decide.
+#[tokio::test]
+async fn test_reconstructs_from_broadcast_shares_without_own_share() {
+    let test_data = TestData::new(2).await;
+    let mut harness = TestHarness::new(0).await;
+    let test_view = &test_data.views[0];
+
+    // No `vid_share_inputs`: the leader's unicast to this node is lost.
+    harness.message(test_view.proposal_input());
+    for i in 0..THRESHOLD {
+        harness.message(test_view.vote1_input(i));
+        harness.message(test_view.vid_share_broadcast_input(i));
+    }
+    // A parked proposal requests nothing, state validation included, until
+    // a certificate adopts it; only the cert1 the votes form is awaited.
+    harness
+        .process_until(|inputs| {
+            assert!(!any(inputs, is_timeout));
+            any(inputs, is_cert1)
+        })
+        .await;
+
+    // Negative control: the voters' shares alone rebuild nothing while the
+    // proposal is parked without a commitment to admit them against.
+    let inputs = harness.process_for(NO_CERT_WINDOW).await;
+    assert!(
+        !any(&inputs, is_block_reconstructed),
+        "no reconstruction before the proposal is certified"
+    );
+
+    send_vote2s(&mut harness, &test_data, 0).await;
+    harness
+        .process_until(|inputs| {
+            assert!(!any(inputs, is_timeout));
+            any(inputs, is_block_reconstructed)
+        })
+        .await;
+
+    assert!(
+        any(harness.outputs(), is_leaf_decided),
+        "the view decides on the cert2"
+    );
+    let reconstructed: Vec<_> = harness
+        .outputs()
+        .iter()
+        .filter_map(|output| match output {
+            ConsensusOutput::BlockPayloadReconstructed { view, payload, .. } => {
+                Some((*view, payload.as_ref().clone()))
+            },
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        reconstructed,
+        vec![(test_view.view_number, test_view.payload.clone())],
+        "the payload rebuilt from broadcast shares is announced for the decided view"
+    );
+}
+
 /// Timeout votes are collected by the CPU VoteCollector and form a
 /// TimeoutCertificate, which advances the view.
 #[tokio::test]
@@ -958,6 +1025,110 @@ async fn test_timeout_votes_form_tc() {
         any(harness.outputs(), is_view_changed),
         "View should advance after timeout certificate"
     );
+}
+
+/// Drain `next_consensus_input` without applying until `pred` matches, or
+/// `wait` elapses. `process_until` applies everything it collects; applying
+/// a certificate advances the view and the late votes would then be dropped
+/// as stale before ever reaching the collector.
+async fn next_input_matching(
+    harness: &mut TestHarness,
+    wait: Duration,
+    pred: fn(&ConsensusInput<TestTypes>) -> bool,
+) -> Option<ConsensusInput<TestTypes>> {
+    timeout(wait, async {
+        loop {
+            match harness.coordinator_mut().next_consensus_input().await {
+                Ok(input) if pred(&input) => break input,
+                Ok(_) => {},
+                Err(err) if err.severity == Severity::Critical => {
+                    panic!("critical coordinator error: {err}")
+                },
+                Err(_) => {},
+            }
+        }
+    })
+    .await
+    .ok()
+}
+
+/// Once a network-received certificate for a view has been returned by the
+/// coordinator, `THRESHOLD` late votes for that view must not form a second
+/// one through the local vote collector.
+async fn assert_network_cert_suppresses_local_collector(
+    test_view: &TestView,
+    cert_message: Message<TestTypes, Validated>,
+    vote_message: impl Fn(u64) -> Message<TestTypes, Validated>,
+    is_cert: fn(&ConsensusInput<TestTypes>) -> bool,
+) {
+    let mut harness = TestHarness::new(0).await;
+    let view = test_view.view_number;
+
+    harness.message(cert_message);
+    let first = next_input_matching(&mut harness, Duration::from_secs(30), is_cert)
+        .await
+        .expect("network certificate should be verified and returned");
+    // `ConsensusInput::view_number` reports the view a TC advances to, so
+    // read the certificate's own view.
+    let cert_view = match &first {
+        ConsensusInput::Certificate1(cert) => cert.view_number(),
+        ConsensusInput::Certificate2(cert) => cert.view_number(),
+        ConsensusInput::TimeoutCertificate(cert) => cert.view_number(),
+        other => panic!("not a certificate: {other:?}"),
+    };
+    assert_eq!(cert_view, view);
+
+    for i in 0..THRESHOLD {
+        harness.message(vote_message(i));
+    }
+    let second = next_input_matching(&mut harness, Duration::from_secs(2), is_cert).await;
+    assert!(
+        second.is_none(),
+        "certificate for view {view} was produced twice: {second:?}"
+    );
+}
+
+/// Regression test for duplicate timeout-certificate applies: a peer's TC
+/// wins the race against the local timeout-vote collector.
+#[tokio::test]
+async fn test_network_tc_suppresses_local_timeout_collector() {
+    let test_data = TestData::new(2).await;
+    let test_view = &test_data.views[0];
+    assert_network_cert_suppresses_local_collector(
+        test_view,
+        test_view.timeout_cert_message(1),
+        |i| test_view.timeout_vote_input(i, None),
+        is_timeout_cert,
+    )
+    .await;
+}
+
+/// A peer's Certificate1 wins the race against the local vote1 collector.
+#[tokio::test]
+async fn test_network_cert1_suppresses_local_vote1_collector() {
+    let test_data = TestData::new(2).await;
+    let test_view = &test_data.views[0];
+    assert_network_cert_suppresses_local_collector(
+        test_view,
+        test_view.cert1_message(1),
+        |i| test_view.vote1_input(i),
+        is_cert1,
+    )
+    .await;
+}
+
+/// A peer's Certificate2 wins the race against the local vote2 collector.
+#[tokio::test]
+async fn test_network_cert2_suppresses_local_vote2_collector() {
+    let test_data = TestData::new(2).await;
+    let test_view = &test_data.views[0];
+    assert_network_cert_suppresses_local_collector(
+        test_view,
+        test_view.cert2_message(1),
+        |i| test_view.vote2_input(i),
+        is_cert2,
+    )
+    .await;
 }
 
 /// Full leader path after timeout: establish lock → timer fires for

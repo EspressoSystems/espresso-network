@@ -96,16 +96,13 @@ use crate::{
 ///
 /// ```
 /// # use atomic_store::{AtomicStore, AtomicStoreLoader};
-/// # use futures::StreamExt;
-/// # use hotshot::types::SystemContextHandle;
+/// # use futures::{Stream, StreamExt};
 /// # use hotshot_query_service::data_source::{
 /// #   FileSystemDataSource, Transaction, UpdateDataSource, VersionedDataSource,
 /// # };
 /// # use hotshot_query_service::fetching::provider::NoFetching;
-/// # use hotshot_query_service::testing::mocks::{
-/// #   MockNodeImpl as AppNodeImpl, MockTypes as AppTypes, MockVersions as AppVersions
-/// # };
-/// # use hotshot_example_types::node_types::TestVersions;
+/// # use hotshot_query_service::testing::mocks::MockTypes as AppTypes;
+/// # use hotshot_types::new_protocol::CoordinatorEvent;
 /// # use std::{path::Path, sync::Arc};
 /// # use tokio::{spawn, sync::RwLock};
 /// struct AppState {
@@ -117,7 +114,7 @@ use crate::{
 ///
 /// async fn init_state(
 ///     storage_path: &Path,
-///     hotshot: SystemContextHandle<AppTypes, AppNodeImpl, AppVersions>,
+///     mut events: impl Stream<Item = CoordinatorEvent<AppTypes>> + Send + Unpin + 'static,
 /// ) -> anyhow::Result<Arc<RwLock<AppState>>> {
 ///     let mut loader = AtomicStoreLoader::create(storage_path, "my_app")?; // or `open`
 ///     let hotshot_qs = FileSystemDataSource::create_with_store(&mut loader, NoFetching)
@@ -134,7 +131,6 @@ use crate::{
 ///     spawn({
 ///         let state = state.clone();
 ///         async move {
-///             let mut events = hotshot.event_stream();
 ///             while let Some(event) = events.next().await {
 ///                 let mut state = state.write().await;
 ///                 if state.hotshot_qs.update(&event).await.is_err() {
@@ -302,7 +298,6 @@ where
 #[cfg(any(test, feature = "testing"))]
 mod impl_testable_data_source {
     use async_trait::async_trait;
-    use hotshot::types::Event;
     use hotshot_types::new_protocol::CoordinatorEvent;
     use tempfile::TempDir;
 
@@ -342,9 +337,8 @@ mod impl_testable_data_source {
                 .unwrap()
         }
 
-        async fn handle_event(&self, event: &Event<MockTypes>) {
-            let event = CoordinatorEvent::LegacyEvent(event.clone());
-            self.update(&event).await.unwrap();
+        async fn handle_event(&self, event: &CoordinatorEvent<MockTypes>) {
+            self.update(event).await.unwrap();
         }
     }
 }
