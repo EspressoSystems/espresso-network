@@ -93,7 +93,7 @@ def test_metrics_need_views():
                 (2, "fan-out"),
                 (0, "header"),
                 (0, "parent Cert1 wait"),
-                (0, "commit + sign + outbox"),
+                (0, "commit + sign"),
             ],
         ),
         (
@@ -103,7 +103,7 @@ def test_metrics_need_views():
                 (1, "disperse + fan-out"),
                 (0, "header"),
                 (0, "parent Cert1 wait"),
-                (0, "commit + sign + outbox"),
+                (0, "commit + sign"),
             ],
         ),
     ],
@@ -121,8 +121,8 @@ def test_build_segments_header_follows_block_built_and_ends_at_the_proposal():
     m = ft.timeline_metrics(ft.view_rows(timeline_trace(split=True), [1]))
     by_label = {label: (start, end) for _, label, start, end, _ in ft.build_segments(m)}
     assert by_label["header"] == ("block_built", "header_created")
-    assert by_label["commit + sign + outbox"][1] == "proposal_sent"
-    assert m["proposal_sent"] == 0
+    assert by_label["commit + sign"][1] == "proposal_queued"
+    assert m["proposal_queued"] == 0
 
 
 @pytest.mark.parametrize("missing", ["header_created_applied", "leaf2_commit_computed"])
@@ -131,7 +131,7 @@ def test_build_segments_omit_the_gap_bars_without_their_events(missing: str):
     del trace[0][1][missing]
     m = ft.timeline_metrics(ft.view_rows(trace, [1]))
     labels = [label for _, label, *_ in ft.build_segments(m)]
-    for gap in ("header", "parent Cert1 wait", "commit + sign + outbox"):
+    for gap in ("header", "parent Cert1 wait", "commit + sign"):
         assert gap not in labels
 
 
@@ -165,7 +165,7 @@ def test_build_bars_skip_bars_shorter_than_1_ms():
     trace[0][1]["leaf2_commit_computed"] = 999_800_000
     m = ft.timeline_metrics(ft.view_rows(trace, [1]))
     f = ft.Frame.of(m)
-    assert "commit + sign + outbox" not in ft.build_bars(m, f, 0.0, "L_V")
+    assert "commit + sign" not in ft.build_bars(m, f, 0.0, "L_V")
     assert "parent Cert1 wait" in ft.build_bars(m, f, 0.0, "L_V")
 
 
@@ -188,3 +188,51 @@ def test_svg_renders_without_any_cluster_events(tmp_path: Path):
     out = tmp_path / "timeline.svg"
     ft.write_timeline(trace, [1], out)
     ET.fromstring(out.read_bytes())
+
+
+def build_row(**overrides: float | None) -> ft.ViewRow:
+    row: ft.ViewRow = dict.fromkeys(ft.EVENTS)
+    row |= {"cycle": 100.0, "request_block": -50.0, "block_built": -40.0}
+    row |= {"ns_disperse_start": -40.0, "vid_unicast_end": -10.0}
+    return row | overrides
+
+
+SPLIT = {"vid_disperse": -30.0, "vid_unicast_start": -20.0}
+
+
+def test_layout_follows_the_majority_and_medians_use_complete_views_only():
+    rows = [
+        build_row(**SPLIT),
+        build_row(**SPLIT, vid_unicast_end=-8.0),
+        build_row(vid_unicast_end=-100.0),
+    ]
+    m = ft.timeline_metrics(rows)
+    assert m["vid_disperse"] == -30
+    assert m["vid_unicast_end"] == -9  # the combined-layout view is left out
+    rows = [build_row(**SPLIT), build_row(), build_row()]
+    m = ft.timeline_metrics(rows)
+    assert m["present_vid_disperse"] == 0
+    assert [label for _, label, *_ in ft.build_segments(m)][1] == "disperse + fan-out"
+
+
+def test_segments_with_an_absent_endpoint_are_skipped():
+    row = build_row(request_block=None, header_created=-35.0)
+    m = ft.timeline_metrics([row])
+    assert m["present_request_block"] == 0
+    assert ft.build_segments(m) == []
+    assert "<circle" not in ft.build_bars(m, ft.Frame.of(m), 0.0, "L_V")
+
+
+def test_outside_labels_that_would_overlap_are_dropped():
+    f = ft.Frame(t_min=0, t_max=1000)
+    placed: list[tuple[float, float, int]] = []
+    first = ft.bar(f, 0, 1, 10, 20, "#000", "first", 9, outside="right", placed=placed)
+    second = ft.bar(
+        f, 2, 3, 10, 20, "#000", "second", 9, outside="right", placed=placed
+    )
+    assert "first" in first and "second" not in second
+    assert "<rect" in second
+    other_row = ft.bar(
+        f, 2, 3, 40, 20, "#000", "third", 9, outside="right", placed=placed
+    )
+    assert "third" in other_row

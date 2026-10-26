@@ -84,6 +84,8 @@ def main(argv: list[str]) -> None:
     stats = build_stats(path, list(finality.values()), skipped, finality_skipped, steps)
     out = args.run_dir / "trace"
     out.mkdir(exist_ok=True)
+    (out / "stats.json").write_text(json.dumps(stats, indent=2) + "\n")
+    (out / "leader_path.md").write_text(leader_path_table(stats))
     plt.rcParams.update({"font.size": FONT})
     views = np.array(list(path))
     data = np.array(list(path.values()))
@@ -98,14 +100,31 @@ def main(argv: list[str]) -> None:
         plot_view(view, leader, rows[view], out / f"leader_path_{name}.png")
     plot_finality(list(finality.values()), stats["finality"], out / "finality.png")
     ordered = sorted(path)
-    finalization_timeline.write_timeline(trace, ordered, out / "timeline.svg")
     window_view = ordered[len(ordered) // 2]
-    cpu, net = node_samples(paths, leaders[window_view][0])
-    leader_window.write_leader_window(
-        trace, leaders, window_view, cpu, net, out / "leader_window.png"
+    optional_figure(
+        "timeline.svg",
+        lambda: finalization_timeline.write_timeline(
+            trace, ordered, out / "timeline.svg"
+        ),
     )
-    (out / "stats.json").write_text(json.dumps(stats, indent=2) + "\n")
-    (out / "leader_path.md").write_text(leader_path_table(stats))
+    optional_figure(
+        "leader_window.png",
+        lambda: leader_window.write_leader_window(
+            trace,
+            leaders,
+            window_view,
+            *node_samples(paths, leaders[window_view][0]),
+            out / "leader_window.png",
+        ),
+    )
+
+
+def optional_figure(name: str, draw: Callable[[], None]) -> None:
+    """Runs `draw`; a failing figure is reported on stderr so the other outputs survive."""
+    try:
+        draw()
+    except Exception as exc:  # noqa: BLE001 the figure is optional
+        print(f"warning: {name} not written: {exc!r}", file=sys.stderr)
 
 
 def build_stats(

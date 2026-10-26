@@ -9819,32 +9819,60 @@ def sample_trace(
         net_f = open_trace_csv(
             files, trace_dir / f"net_node{node}.csv", TRACE_NET_HEADER
         )
+        reported = False
         while not stop.is_set():
             t_ns = round(system.clock.time() * 1e9)
-            usage = read_cpu_usage(cpu_stat)
-            if usage is None:
-                cpu_stat = node_cpu_stat(load_containers(containers_path), cgroup_root)
+            usage = net = None
+            # A container or interface that is briefly gone skips that row only. The first
+            # skip is reported, so a persistent failure is not silent.
+            try:
                 usage = read_cpu_usage(cpu_stat)
+                if usage is None:
+                    cpu_stat = node_cpu_stat(
+                        load_containers(containers_path), cgroup_root
+                    )
+                    usage = read_cpu_usage(cpu_stat)
+            except (KeyError, OSError) as exc:
+                if not reported:
+                    print(f"trace sampler skips cpu rows: {exc!r}", file=sys.stderr)
+                    reported = True
+            try:
+                net = netdev(net_dev.read_text())[iface]
+            except (KeyError, OSError) as exc:
+                if not reported:
+                    print(f"trace sampler skips net rows: {exc!r}", file=sys.stderr)
+                    reported = True
             if usage is not None:
                 cpu_f.write(f"{t_ns},{usage}\n")
-            net = netdev(net_dev.read_text())[iface]
-            net_f.write(f"{t_ns},{net['rx_bytes']},{net['tx_bytes']}\n")
+            if net is not None:
+                net_f.write(f"{t_ns},{net['rx_bytes']},{net['tx_bytes']}\n")
             system.clock.wait(stop, TRACE_SAMPLE_S)
 
 
 class SamplerThread(threading.Thread):
     """Stops the agent on an exception and keeps it for `raise_error`, so a failed sampler does
-    not leave the agent running without it."""
+    not leave the agent running without it. A sampler that is not `essential` only ends itself
+    and reports the exception on stderr."""
 
-    def __init__(self, stop: threading.Event, target: Callable[..., None], *args: Any):
+    def __init__(
+        self,
+        stop: threading.Event,
+        target: Callable[..., None],
+        *args: Any,
+        essential: bool = True,
+    ):
         super().__init__(target=target, args=args)
         self.halt = stop
+        self.essential = essential
         self.error: Exception | None = None
 
     def run(self) -> None:
         try:
             super().run()
-        except Exception as exc:  # noqa: BLE001 re-raised by raise_error
+        except Exception as exc:  # noqa: BLE001 re-raised by raise_error or reported when not essential
+            if not self.essential:
+                print(f"{self.name} sampler failed: {exc!r}", file=sys.stderr)
+                return
             self.error = exc
             self.halt.set()
 
@@ -9874,6 +9902,7 @@ def cmd_agent_host(args: argparse.Namespace, system: System) -> int:
                 stop,
                 containers_path,
                 system,
+                essential=False,
             )
         )
     for thread in threads:

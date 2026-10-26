@@ -279,6 +279,35 @@ def test_trace_sampler_reads_containers_json_only_when_the_scope_is_missing(
     assert len(loads) == 1
 
 
+def test_trace_sampler_keeps_cpu_rows_when_only_the_net_lookup_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+):
+    host = TraceHost(tmp_path, ticks=3)
+    (host.trace_dir / "leader_trace_node0.csv").touch()
+    monkeypatch.setattr(awsb, "netdev", lambda text: {})
+    host.sample()
+    cpu = (host.trace_dir / "cpu_node0.csv").read_text().splitlines()
+    assert len(cpu) == 1 + 3
+    assert (host.trace_dir / "net_node0.csv").read_text() == (
+        "t_ns,rx_bytes,tx_bytes\n"
+    )
+    assert capsys.readouterr().err.count("skips net rows") == 1
+
+
+@pytest.mark.parametrize("essential", [True, False])
+def test_a_failed_sampler_stops_the_agent_only_when_essential(essential: bool):
+    stop = threading.Event()
+
+    def fail() -> None:
+        raise RuntimeError("boom")
+
+    thread = awsb.SamplerThread(stop, fail, essential=essential)
+    thread.start()
+    thread.join()
+    assert stop.is_set() is essential
+    assert (thread.error is not None) is essential
+
+
 @pytest.mark.parametrize(
     ("role", "flag", "sampled"),
     [("validator", True, True), ("validator", False, False), ("ctl", True, False)],

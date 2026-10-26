@@ -44,7 +44,7 @@ DISPERSE_FAN_OUT = (
     0,
 )
 SPLIT_EVENTS = ("ns_disperse_end", "vid_shares_unicast_start")
-MARKS = (("proposal_queued", "*", "proposal_sent"), ("leaf_decided", "D", "decided"))
+MARKS = (("proposal_queued", "*", "proposal_queued"), ("leaf_decided", "D", "decided"))
 # (start event, end event, label, direction); drawn on the network panel's TX and RX rows.
 NET_SPANS = (
     ("vid_shares_unicast_start", "vid_shares_unicast_end", "fan-out", "tx"),
@@ -265,7 +265,7 @@ def draw_work_legend(ax: Axes, used: set[str]) -> None:
             color="#555",
             linestyle="-",
             linewidth=1.4,
-            label="proposal_sent | view start",
+            label="proposal_queued | view start",
         ),
         Line2D(
             [0],
@@ -319,7 +319,7 @@ def draw_view_boundaries(
     colors: dict[int, str],
     window: Window,
 ) -> None:
-    """A line at each proposal_sent in the window with its view id and the cycle since the
+    """A line at each proposal_queued in the window with its view id and the cycle since the
     previous view's, and a dashed line where each Cert1 formed at the next leader."""
     boundaries = sorted((ts, v) for v, (_, ts) in lead.items() if window.contains(ts))
     for ts, v in boundaries:
@@ -430,7 +430,11 @@ def draw_cpu(ax: Axes, cpu: Cpu, window: Window) -> None:
         drawstyle="steps-post",
         label="process CPU (cores)",
     )
-    k = max(1, round(CPU_SMOOTH_MS / float(xs[1] - xs[0]))) if len(xs) > 1 else 1
+    k = (
+        max(1, round(CPU_SMOOTH_MS / float(np.median(np.diff(xs)))))
+        if len(xs) > 1
+        else 1
+    )
     if 1 < k <= len(busy):
         ax.plot(
             xs,

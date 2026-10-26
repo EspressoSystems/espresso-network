@@ -68,7 +68,11 @@ def read_csv_rows(path: Path, header: list[str]) -> list[list[str]]:
         reader = csv.reader(f)
         if next(reader, None) != header:
             raise ValueError(f"{path}:1: header is not {','.join(header)}")
-        return list(reader)
+        rows = list(reader)
+    # The sampler may be killed mid-write: only the final row can be truncated.
+    if rows and (len(rows[-1]) != len(header) or not all(rows[-1])):
+        rows.pop()
+    return rows
 
 
 def intervals(samples: list[tuple[int, ...]]) -> list[tuple[int, ...]]:

@@ -233,3 +233,19 @@ def test_read_cpu_rejects_a_foreign_header(tmp_path: Path):
     cpu.write_text("t,kind\n")
     with pytest.raises(ValueError, match="header is not t_ns,usage_usec"):
         leadertrace.read_cpu(cpu)
+
+
+def test_read_cpu_stops_at_a_truncated_final_row(tmp_path: Path):
+    cpu = tmp_path / "cpu_node0.csv"
+    cpu.write_text("t_ns,usage_usec\n10,10\n20,30\n30,")
+    assert leadertrace.read_cpu(cpu) == [(20, 10, 20)]
+    net = tmp_path / "net_node0.csv"
+    net.write_text("t_ns,rx_bytes,tx_bytes\n1,1,2\n2,5,9\n3,7")
+    assert leadertrace.read_net(net) == [(2, 1, 4, 7)]
+
+
+def test_read_cpu_rejects_a_broken_row_in_the_middle(tmp_path: Path):
+    cpu = tmp_path / "cpu_node0.csv"
+    cpu.write_text("t_ns,usage_usec\n10,10\n20\n30,40\n")
+    with pytest.raises(ValueError):
+        leadertrace.read_cpu(cpu)

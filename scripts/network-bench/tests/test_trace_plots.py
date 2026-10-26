@@ -212,3 +212,19 @@ def test_node_samples_read_the_files_beside_the_trace(tmp_path: Path):
     (trace_dir / "cpu_node1.csv").write_text("t_ns,usage_usec\n1,2\n11,5\n")
     (trace_dir / "net_node1.csv").write_text("t_ns,rx_bytes,tx_bytes\n1,2,3\n11,6,9\n")
     assert plots.node_samples(paths, 1) == ([(11, 10, 3)], [(11, 10, 4, 6)])
+
+
+def test_a_failing_figure_keeps_the_other_outputs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+):
+    def fail(*args: object) -> None:
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(plots.finalization_timeline, "write_timeline", fail)
+    write_run(tmp_path)
+    plots.main([str(tmp_path)])
+    out = tmp_path / "trace"
+    assert not (out / "timeline.svg").exists()
+    assert (out / "leader_window.png").exists()
+    assert (out / "stats.json").exists() and (out / "leader_path.md").exists()
+    assert "timeline.svg not written" in capsys.readouterr().err

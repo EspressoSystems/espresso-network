@@ -1,18 +1,21 @@
 """Block finalization timeline of the leader traces as one SVG: the median view, anchored at the
 leader's `proposal_queued` (t = 0), with the next leader's pipeline one cycle later.
 
-Every metric is a median over the given views. A metric whose events the traces lack is 0 and its
-bars or markers collapse. `ns_disperse_end` and `vid_shares_unicast_start` are absent from some
-traces; the leader's build then ends in one "disperse + fan-out" bar. Without
-`header_created_applied` or `leaf2_commit_computed` the header, parent Cert1 wait and commit +
-sign + outbox bars are omitted.
+Every metric is a median over the given views. A metric whose events the traces lack is 0 in the
+arithmetic, so its bars or markers collapse, and `present_<metric>` is 0; a leader build bar with
+an absent endpoint is not drawn. The leader build metrics are medians over the views that have
+every event of the layout the majority of views supports: split (`ns_disperse_end` and
+`vid_shares_unicast_start` present) or one "disperse + fan-out" bar, with or without the
+`header_created_applied` and `leaf2_commit_computed` tail (header, parent Cert1 wait, commit +
+sign).
 
 Each leader build lane has three sub-rows: the sequential path (build/prep, header, parent Cert1
-wait, commit + sign + outbox), dispersal and fan-out. Dispersal and fan-out overlap in time, so
+wait, commit + sign), dispersal and fan-out. Dispersal and fan-out overlap in time, so
 they are drawn in parallel rows; share-sign shows in the fan-out row only when it is positive.
 A label that does not fit its bar goes beside, above or below it where the lane has room, else it
 is centered and overflows the bar. Bars shorter than 1 ms are not drawn."""
 
+import math
 import statistics
 from dataclasses import dataclass
 from pathlib import Path
@@ -46,6 +49,11 @@ EVENTS = {
 }
 
 Metrics = dict[str, float]
+# Leader build events by group: always drawn, the dispersal/fan-out split, the header tail.
+BUILD_EVENTS = ("request_block", "block_built", "ns_disperse_start", "vid_unicast_end")
+SPLIT_EVENTS = ("vid_disperse", "vid_unicast_start")
+TAIL_EVENTS = ("header_created", "leaf2_commit")
+BUILD_GROUP_EVENTS = BUILD_EVENTS + SPLIT_EVENTS + TAIL_EVENTS
 ViewRow = dict[str, float | None]
 
 TITLE = "Block V finalization timeline"
@@ -102,16 +110,28 @@ def view_row(trace: Trace, lead: dict[int, tuple[int, int]], view: int) -> ViewR
 
 
 def timeline_metrics(rows: list[ViewRow]) -> Metrics:
-    """Medians over the rows plus the durations the SVG labels. Missing values are 0."""
+    """Medians over the rows plus the durations the SVG labels. Missing values are 0, with
+    `present_<name>` telling them from a median of 0."""
     if not rows:
         raise ValueError("no views for the timeline")
+    layout = build_layout(rows)
+    complete = [row for row in rows if all(row[name] is not None for name in layout)]
 
-    def median(name: str) -> float:
-        values = [v for row in rows if (v := row[name]) is not None]
-        return statistics.median(values) if values else 0.0
+    def median(name: str) -> float | None:
+        if name in BUILD_GROUP_EVENTS:
+            source = complete if name in layout else []
+        else:
+            source = rows
+        values = [v for row in source if (v := row[name]) is not None]
+        return statistics.median(values) if values else None
 
-    m = {"n_views": float(len(rows)), "proposal_sent": 0.0}
-    m |= {name: median(name) for name in ("cycle", *EVENTS)}
+    medians = {name: median(name) for name in ("cycle", *EVENTS)}
+    m = {"n_views": float(len(rows)), "proposal_queued": 0.0}
+    m |= {name: value or 0.0 for name, value in medians.items()}
+    m |= {
+        f"present_{name}": float(value is not None) for name, value in medians.items()
+    }
+    m["present_proposal_queued"] = 1.0
     m["share_wait_ms"] = max(0.0, m["vid_threshold_reached"] - m["proposal_validated"])
     if m["recover_decode_end"]:
         m["recover_decode_ms"] = max(
@@ -133,10 +153,20 @@ def timeline_metrics(rows: list[ViewRow]) -> Metrics:
     return m
 
 
+def build_layout(rows: list[ViewRow]) -> tuple[str, ...]:
+    """The richest set of leader build events that at least half of the views have in full."""
+    for extra in (SPLIT_EVENTS + TAIL_EVENTS, SPLIT_EVENTS, TAIL_EVENTS, ()):
+        events = BUILD_EVENTS + extra
+        have = sum(all(row[name] is not None for name in events) for row in rows)
+        if have and have * 2 >= len(rows):
+            return events
+    return BUILD_EVENTS
+
+
 def build_segments(m: Metrics) -> list[tuple[int, str, str, str, str]]:
-    """(row, label, start metric, end metric, color) of the leader's build. Row 0 is the
-    sequential path, row 1 dispersal, row 2 fan-out."""
-    if m["vid_disperse"] and m["vid_unicast_start"]:
+    """(row, label, start metric, end metric, color) of the leader's build whose endpoints are
+    both present. Row 0 is the sequential path, row 1 dispersal, row 2 fan-out."""
+    if m["present_vid_disperse"] and m["present_vid_unicast_start"]:
         middle = [
             (1, "dispersal", "ns_disperse_start", "vid_disperse", DISPERSAL),
             (2, "share-sign", "vid_disperse", "vid_unicast_start", SHARE_SIGN),
@@ -146,17 +176,17 @@ def build_segments(m: Metrics) -> list[tuple[int, str, str, str, str]]:
         middle = [
             (1, "disperse + fan-out", "ns_disperse_start", "vid_unicast_end", DISPERSAL)
         ]
-    tail = []
-    if m["header_created"] and m["leaf2_commit"]:
-        tail = [
-            (0, "header", "block_built", "header_created", HEADER),
-            (0, "parent Cert1 wait", "header_created", "leaf2_commit", CERT1_WAIT),
-            (0, "commit + sign + outbox", "leaf2_commit", "proposal_sent", COMMIT_SIGN),
-        ]
-    return [
+    segments = [
         (0, "build/prep", "request_block", "block_built", BUILD_PREP),
         *middle,
-        *tail,
+        (0, "header", "block_built", "header_created", HEADER),
+        (0, "parent Cert1 wait", "header_created", "leaf2_commit", CERT1_WAIT),
+        (0, "commit + sign", "leaf2_commit", "proposal_queued", COMMIT_SIGN),
+    ]
+    return [
+        segment
+        for segment in segments
+        if m[f"present_{segment[2]}"] and m[f"present_{segment[3]}"]
     ]
 
 
@@ -286,8 +316,12 @@ def path(d: str, stroke: str, width: float, marker: str, dashed: bool = False) -
     return f'  <path d="{d}" stroke="{stroke}" stroke-width="{width}"{dash} fill="none" marker-end="url(#{marker})"/>\n'
 
 
+def label_width(body: str, size: int) -> float:
+    return 0.6 * size * len(body)
+
+
 def fits(f: Frame, t0: float, t1: float, body: str, size: int) -> bool:
-    return f.w(t0, t1) >= 0.6 * size * len(body) + 8
+    return f.w(t0, t1) >= label_width(body, size) + 8
 
 
 def bar(
@@ -301,26 +335,34 @@ def bar(
     size: int,
     fill: str = "white",
     outside: str | None = None,
+    placed: list[tuple[float, float, int]] | None = None,
 ) -> str:
     """A bar with its label centered inside. A label that does not fit goes to the `outside`
     side ("right"; "above", starting at the bar start; "below", ending at the bar end), else it
-    stays centered and overflows the bar."""
+    stays centered and overflows the bar. An outside label that would overlap one already in
+    `placed` (x start, x end, baseline) is dropped."""
     out = rect(f.x(t0), y, f.w(t0, t1), h, color)
-    x1 = f.x(t1)
-    if fits(f, t0, t1, body, size):
-        return out + text((f.x(t0) + x1) / 2, y + h // 2 + 4, body, size, fill, 600)
-    if outside == "right":
-        return out + text(x1 + 4, y + h // 2 + 4, body, size, "#374151", 600, "start")
-    if outside == "above":
-        return out + text(f.x(t0), y - 4, body, size, "#374151", 600, "start")
-    if outside == "below":
-        return out + text(x1, y + h + 12, body, size, "#374151", 600, "end")
-    return out + text((f.x(t0) + x1) / 2, y + h // 2 + 4, body, size, fill, 600)
+    x0, x1 = f.x(t0), f.x(t1)
+    middle, base = (x0 + x1) / 2, y + h // 2 + 4
+    if fits(f, t0, t1, body, size) or outside is None:
+        return out + text(middle, base, body, size, fill, 600)
+    x, base, anchor = {
+        "right": (x1 + 4, base, "start"),
+        "above": (x0, y - 4, "start"),
+        "below": (x1, y + h + 12, "end"),
+    }[outside]
+    width = label_width(body, size)
+    span = (x, x + width) if anchor == "start" else (x - width, x)
+    if placed is not None:
+        if any(s < span[1] and span[0] < e and b == base for s, e, b in placed):
+            return out
+        placed.append((*span, base))
+    return out + text(x, base, body, size, "#374151", 600, anchor)
 
 
 def svg_header(m: Metrics, f: Frame) -> str:
     subtitle = (
-        f"{m['n_views']:.0f} views, t = 0 anchored at proposal_sent(V), "
+        f"{m['n_views']:.0f} views, t = 0 anchored at proposal_queued(V), "
         "all values medians from the leader traces"
     )
     summary = (
@@ -349,7 +391,7 @@ def svg_header(m: Metrics, f: Frame) -> str:
 
 
 def cycle_gate(m: Metrics, f: Frame) -> str:
-    """L_{V+1} proposes once Cert1(V) has formed at it; the bar is the time from proposal_sent(V)
+    """L_{V+1} proposes once Cert1(V) has formed at it; the bar is the time from proposal_queued(V)
     to that Cert1 as a share of the cycle, capped at the full width."""
     gate_y, height = 86, 10
     cert1_ms = m["cert1_at_L_V"] + m["cycle"]
@@ -359,7 +401,7 @@ def cycle_gate(m: Metrics, f: Frame) -> str:
         text(
             f.x_left,
             gate_y - 3,
-            "Cycle gate: Cert1(V) at L_{V+1} gates proposal_sent(V+1)",
+            "Cycle gate: Cert1(V) at L_{V+1} gates proposal_queued(V+1)",
             11,
             "#374151",
             600,
@@ -369,7 +411,7 @@ def cycle_gate(m: Metrics, f: Frame) -> str:
         + text(
             f.x_left + width / 2,
             gate_y + height - 1,
-            f"proposal_sent(V) to Cert1(V) at L_{{V+1}} = {cert1_ms:.0f} ms ({pct * 100:.0f}% of cycle)",
+            f"proposal_queued(V) to Cert1(V) at L_{{V+1}} = {cert1_ms:.0f} ms ({pct * 100:.0f}% of cycle)",
             9,
             "white",
             600,
@@ -426,7 +468,7 @@ def time_axis(m: Metrics, f: Frame) -> str:
 
 def lane_labels(f: Frame) -> str:
     labels = {
-        "L_V": ("Leader L_V", "build → VID ∥ fan-out → Cert1 wait → sent V"),
+        "L_V": ("Leader L_V", "build → VID ∥ fan-out → Cert1 wait → queued V"),
         "NextRX": ("L_{V+1} vote1 collect", "vote1[V] → Cert1(V) on L_{V+1}"),
         "NextRecon": (
             "L_{V+1} recover V",
@@ -434,7 +476,7 @@ def lane_labels(f: Frame) -> str:
         ),
         "NextCPU": (
             "L_{V+1} build V+1",
-            "build → VID ∥ fan-out → Cert1 wait → sent V+1",
+            "build → VID ∥ fan-out → Cert1 wait → queued V+1",
         ),
         "Recon": (
             "Recon (V, replicas)",
@@ -457,7 +499,7 @@ def lane_labels(f: Frame) -> str:
 
 def build_bars(m: Metrics, f: Frame, offset: float, lane: str) -> str:
     """The leader's build spans shifted by `offset`, with a marker at block_built."""
-    out = ""
+    out, placed = "", []
     for row, label, start, end, color in build_segments(m):
         t0, t1 = m[start] + offset, m[end] + offset
         if t1 - t0 < 1:
@@ -472,17 +514,20 @@ def build_bars(m: Metrics, f: Frame, offset: float, lane: str) -> str:
             f"{label} {t1 - t0:.0f}",
             9,
             outside="above" if row == 0 else "right",
+            placed=placed,
         )
+    if not m["present_block_built"]:
+        return out
     return out + dot(f.x(m["block_built"] + offset), f.cy(lane), 4, "#1e40af")
 
 
 def leader_lane(m: Metrics, f: Frame) -> str:
-    """L_V's work in the cycle before t = 0, ending in proposal_sent(V)."""
+    """L_V's work in the cycle before t = 0, ending in proposal_queued(V)."""
     cy = f.cy("L_V")
     return (
         build_bars(m, f, 0.0, "L_V")
         + dot(f.x(0), cy, 7, "#dc2626")
-        + text(f.x(0) + 12, cy + 4, "proposal_sent(V)", 11, "#dc2626", 700, "start")
+        + text(f.x(0) + 12, cy + 4, "proposal_queued(V)", 11, "#dc2626", 700, "start")
     )
 
 
@@ -608,7 +653,7 @@ def next_build_lane(m: Metrics, f: Frame) -> str:
         )
         + dot(f.x(cycle), cy, 6, "#dc2626")
         + text(
-            f.x(cycle) + 12, cy + 4, "proposal_sent(V+1)", 11, "#dc2626", 700, "start"
+            f.x(cycle) + 12, cy + 4, "proposal_queued(V+1)", 11, "#dc2626", 700, "start"
         )
     )
 
@@ -661,7 +706,7 @@ def recon_lane(m: Metrics, f: Frame) -> str:
 
 
 def deciding_lane(m: Metrics, f: Frame) -> str:
-    """V's finality chain from cluster medians; it does not gate proposal_sent(V+1)."""
+    """V's finality chain from cluster medians; it does not gate proposal_queued(V+1)."""
     y, cy = f.bar_y("Deciding"), f.cy("Deciding")
     v1, c1, v2, c2, fin = (
         m["vote1_arrived"],
@@ -769,7 +814,7 @@ LEGEND_SWATCHES = (
     ("fan-out", FAN_OUT),
     ("header", HEADER),
     ("parent Cert1 wait", CERT1_WAIT),
-    ("commit + sign + outbox", COMMIT_SIGN),
+    ("commit + sign", COMMIT_SIGN),
     ("share wait", SHARE_WAIT),
     ("recover-decode", RECOVER),
     ("txn-commit", COMMIT),
@@ -790,7 +835,7 @@ def legend(f: Frame) -> str:
         x, y = col * LEGEND_COLUMN_W, row * LEGEND_ROW_H
         out += f'    <rect x="{x}" y="{y}" width="14" height="14" fill="{color}" rx="2"/>\n'
         out += f'    <text x="{x + 20}" y="{y + 11}">{label}</text>\n'
-    y = (len(LEGEND_SWATCHES) // LEGEND_COLUMNS + 1) * LEGEND_ROW_H
+    y = math.ceil(len(LEGEND_SWATCHES) / LEGEND_COLUMNS) * LEGEND_ROW_H
     out += f"""    <line x1="0" y1="{y + 7}" x2="30" y2="{y + 7}" stroke="#dc2626" stroke-width="2.2" marker-end="url(#critArrow)"/>
     <text x="38" y="{y + 11}" font-weight="600" fill="#dc2626">critical path</text>
     <line x1="{LEGEND_COLUMN_W}" y1="{y + 7}" x2="{LEGEND_COLUMN_W + 30}" y2="{y + 7}" stroke="#9ca3af" stroke-width="1.2" stroke-dasharray="3 3" marker-end="url(#grayArrow)"/>
