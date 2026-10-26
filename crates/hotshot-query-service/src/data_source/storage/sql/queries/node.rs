@@ -72,7 +72,9 @@ where
         namespace: Option<NamespaceId<Types>>,
     ) -> QueryResult<usize> {
         let namespace: i64 = namespace.map(|ns| ns.into()).unwrap_or(-1);
-        let Some((from, to)) = aggregate_range_bounds::<Types>(self, range).await? else {
+        let Some(AggregateRange { before, to }) =
+            aggregate_range_bounds::<Types>(self, range).await?
+        else {
             return Ok(0);
         };
         let (count,) = query_as::<(i64,)>(
@@ -84,11 +86,11 @@ where
         .await?;
         let mut count = count as usize;
 
-        if from > 0 {
+        if let Some(before) = before {
             let (prev_count,) = query_as::<(i64,)>(
                 "SELECT num_transactions FROM aggregate WHERE height = $1 AND namespace = $2",
             )
-            .bind((from - 1) as i64)
+            .bind(before as i64)
             .bind(namespace)
             .fetch_one(self.as_mut())
             .await?;
@@ -104,7 +106,9 @@ where
         namespace: Option<NamespaceId<Types>>,
     ) -> QueryResult<usize> {
         let namespace: i64 = namespace.map(|ns| ns.into()).unwrap_or(-1);
-        let Some((from, to)) = aggregate_range_bounds::<Types>(self, range).await? else {
+        let Some(AggregateRange { before, to }) =
+            aggregate_range_bounds::<Types>(self, range).await?
+        else {
             return Ok(0);
         };
         let (size,) = query_as::<(i64,)>(
@@ -116,11 +120,11 @@ where
         .await?;
         let mut size = size as usize;
 
-        if from > 0 {
+        if let Some(before) = before {
             let (prev_size,) = query_as::<(i64,)>(
                 "SELECT payload_size FROM aggregate WHERE height = $1 AND namespace = $2",
             )
-            .bind((from - 1) as i64)
+            .bind(before as i64)
             .bind(namespace)
             .fetch_one(self.as_mut())
             .await?;
@@ -746,14 +750,27 @@ impl<Mode: TransactionMode> Transaction<Mode> {
     }
 }
 
-/// Get inclusive start and end bounds for a range to pull aggregate statistics.
+/// The cumulative aggregate rows that bound a range: the statistic over the range is the value at
+/// `to`, minus the value at `before` if there is one.
+struct AggregateRange {
+    /// The height just below the range, or [`None`] if the range starts where the aggregates do.
+    before: Option<usize>,
+    /// The last height in the range.
+    to: usize,
+}
+
+/// Get the aggregate rows that bound a range to pull aggregate statistics.
 ///
 /// Returns [`None`] if there are no blocks in the given range, in which case the result should be
 /// the default value of the aggregate statistic.
+///
+/// Fails with [`QueryError::Pruned`] if the range starts below the first aggregated height. The
+/// aggregator starts above genesis when the data below was pruned before it ran, so the totals
+/// count from there, and no statistic covers a lower height.
 async fn aggregate_range_bounds<Types>(
     tx: &mut Transaction<impl TransactionMode>,
     range: impl RangeBounds<usize>,
-) -> QueryResult<Option<(usize, usize)>>
+) -> QueryResult<Option<AggregateRange>>
 where
     Types: NodeType,
     Header<Types>: QueryableHeader<Types>,
@@ -782,7 +799,25 @@ where
             height - 1
         },
     };
-    Ok(Some((from, to)))
+    let start = aggregates_start(tx).await?;
+    if from < start {
+        return Err(QueryError::Pruned {
+            height: from as u64,
+            pruned_height: start as u64 - 1,
+        });
+    }
+    Ok(Some(AggregateRange {
+        before: (from > start).then(|| from - 1),
+        to,
+    }))
+}
+
+/// The first height with aggregate statistics, or 0 if there are none yet.
+async fn aggregates_start(tx: &mut Transaction<impl TransactionMode>) -> QueryResult<usize> {
+    let (start,) = query_as::<(Option<i64>,)>("SELECT min(height) FROM aggregate")
+        .fetch_one(tx.as_mut())
+        .await?;
+    Ok(start.unwrap_or(0) as usize)
 }
 
 #[cfg(test)]
@@ -1177,5 +1212,83 @@ mod test {
                 pruned_height: None,
             }
         );
+    }
+
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_aggregate_ranges_from_later_start() {
+        let storage = TmpDb::init().await;
+        let db = SqlStorage::connect(storage.config(), StorageConnectionType::Query)
+            .await
+            .unwrap();
+
+        // Aggregate blocks from `start` on only, as an aggregator that started above genesis does.
+        // Each block has one transaction of 2 bytes.
+        let start = 10;
+        let genesis = PayloadMetadata::from(
+            BlockQueryData::<MockTypes>::genesis(
+                &Default::default(),
+                &Default::default(),
+                TEST_VERSIONS.test.base,
+            )
+            .await,
+        );
+        let blocks = (start..start + 3)
+            .map(|height| PayloadMetadata {
+                height: height as u64,
+                size: 2,
+                num_transactions: 1,
+                ..genesis.clone()
+            })
+            .collect::<Vec<_>>();
+        let mut tx = db.write().await.unwrap();
+        tx.update_aggregates(Aggregate::default(), &blocks)
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+
+        let mut tx = db.read().await.unwrap();
+
+        // A range from the start on needs no row below it.
+        let from_start = (Bound::Included(start), Bound::Unbounded);
+        assert_eq!(
+            totals(&mut tx, from_start).await.map(Result::unwrap),
+            [3, 6]
+        );
+        let above_start = (Bound::Included(start + 1), Bound::Included(start + 1));
+        assert_eq!(
+            totals(&mut tx, above_start).await.map(Result::unwrap),
+            [1, 2]
+        );
+
+        // A range that starts below it has no totals, whether or not it names its start.
+        for (from, range) in [
+            (0, (Bound::Unbounded, Bound::Unbounded)),
+            (0, (Bound::Unbounded, Bound::Included(start + 2))),
+            (start - 1, (Bound::Included(start - 1), Bound::Unbounded)),
+        ] {
+            for res in totals(&mut tx, range).await {
+                let err = res.unwrap_err();
+                assert!(
+                    matches!(
+                        err,
+                        QueryError::Pruned { height, pruned_height }
+                            if height == from as u64 && pruned_height == start as u64 - 1
+                    ),
+                    "{range:?}: {err:?}"
+                );
+            }
+        }
+    }
+
+    /// The transaction count and the payload size over `range`.
+    async fn totals(
+        tx: &mut Transaction<impl TransactionMode>,
+        range: (Bound<usize>, Bound<usize>),
+    ) -> [QueryResult<usize>; 2] {
+        [
+            NodeStorage::<MockTypes>::count_transactions_in_range(tx, range, None).await,
+            NodeStorage::<MockTypes>::payload_size_in_range(tx, range, None).await,
+        ]
     }
 }

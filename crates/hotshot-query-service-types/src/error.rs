@@ -85,10 +85,8 @@ pub enum QueryError {
     #[snafu(display("Failed to fetch requested resource: {message}"))]
     #[snafu(context(suffix(ErrorSnafu)))]
     Error { message: String },
-    /// The requested state was pruned.
-    #[snafu(display(
-        "state at height {height} was pruned (pruned through height {pruned_height})"
-    ))]
+    /// The requested data was pruned.
+    #[snafu(display("data at height {height} was pruned (pruned through height {pruned_height})"))]
     Pruned { height: u64, pruned_height: u64 },
 }
 
