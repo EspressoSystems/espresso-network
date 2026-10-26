@@ -2664,13 +2664,15 @@ mod tests {
         assert_eq!(committees.highest_rooted_epoch(), Some(EpochNumber::new(3)));
     }
 
-    // Without the first epoch the dynamic reward computation fails; the epoch stays missing.
+    /// Without the first epoch the dynamic reward computation fails for a stored root; init still
+    /// returns `Ok` so the rest of startup continues, and the epoch has no block reward.
     #[tokio::test]
     async fn stored_epoch_roots_skip_a_failed_derivation() {
         let header = build_dynamic_reward_epoch_root_header().await;
-        let (result, _) = add_stored_roots_of(header, &[3], false).await;
+        let (result, committees) = add_stored_roots_of(header, &[3], false).await;
 
         result.unwrap();
+        assert!(committees.epoch_block_reward(EpochNumber::new(3)).is_none());
     }
 
     #[tokio::test]

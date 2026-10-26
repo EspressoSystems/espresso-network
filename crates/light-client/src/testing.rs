@@ -440,8 +440,6 @@ struct InnerTestClient {
     fail_payload_proof_ranges: bool,
     /// If set, fail header proofs, like a server that pruned the root's merklized state.
     fail_header_proofs: bool,
-    /// If set, fail block height requests, like a peer that does not answer.
-    fail_block_height: bool,
     /// Block height requests still to fail before the client answers.
     block_height_failures: usize,
     /// Block height requests received, failed or not.
@@ -908,11 +906,6 @@ impl TestClient {
         inner.fail_header_proofs = true;
     }
 
-    /// Fail block height requests, like a peer that does not answer.
-    pub async fn fail_block_height(&self) {
-        self.inner.lock().await.fail_block_height = true;
-    }
-
     /// Fail the next `count` block height requests, then answer.
     pub async fn fail_next_block_heights(&self, count: usize) {
         self.inner.lock().await.block_height_failures = count;
@@ -935,7 +928,6 @@ impl Client for TestClient {
     async fn block_height(&self) -> Result<u64> {
         let mut inner = self.inner.lock().await;
         inner.block_height_calls += 1;
-        ensure!(!inner.fail_block_height, "block height unavailable");
         if inner.block_height_failures > 0 {
             inner.block_height_failures -= 1;
             bail!("block height unavailable");

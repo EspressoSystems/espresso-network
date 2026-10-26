@@ -255,7 +255,7 @@ where
         }
         tracing::warn!(
             target: "announce::startup_catchup",
-            "no state peer reported a block height and the LC contract is past the seeded epochs; \
+            "no state peer reported a chain tip and the LC contract is past the seeded epochs; \
              retrying"
         );
         let heights = retry(
@@ -418,7 +418,8 @@ where
     }
 }
 
-/// The block height each state peer reports. One pass, each read bounded by `step_timeout`. Logs each peer URL and height once. Peers that fail or time out are omitted.
+/// The block height each state peer reports. One pass, each read bounded by `step_timeout`. Logs
+/// each peer URL and height once. Peers that fail or time out are omitted.
 async fn read_peer_block_heights<C: Client>(
     state_peers: &[(Url, C)],
     step_timeout: Duration,
@@ -1296,7 +1297,7 @@ mod tests {
     async fn no_peer_height_boots_from_storage() {
         let (client, _) = chain().await;
         let coordinator = restarted_coordinator(&client).await;
-        client.fail_block_height().await;
+        client.fail_next_block_heights(usize::MAX).await;
         let reads = AtomicUsize::new(0);
 
         let current = catch_up_cliquenet_stake_tables(
@@ -1348,7 +1349,7 @@ mod tests {
     ) {
         let (client, _) = chain().await;
         let coordinator = coordinator(SeededStore::default());
-        client.fail_block_height().await;
+        client.fail_next_block_heights(usize::MAX).await;
         let header = LcContractHeader {
             height: lc_height,
             block_comm_root: CircuitField::from(0u64),
@@ -1382,12 +1383,12 @@ mod tests {
         assert_matches!(result, Err(StartupCatchupError::StatePeersUnavailable));
     }
 
-    /// Peers that fail the first pass and answer the second still give `N`.
+    /// Peers that fail the first two passes and answer the third still give `N`; one backoff runs.
     #[test_log::test(tokio::test(start_paused = true))]
     async fn fresh_join_retries_the_peer_height_read() {
         let (client, header) = chain().await;
         let coordinator = fresh_coordinator(&client).await;
-        client.fail_next_block_heights(1).await;
+        client.fail_next_block_heights(2).await;
 
         let current = run_catchup(
             &coordinator,
@@ -1398,7 +1399,7 @@ mod tests {
         .await
         .unwrap();
 
-        assert_eq!(client.block_height_calls().await, 2);
+        assert_eq!(client.block_height_calls().await, 3);
         assert_eq!(current, EpochNumber::new(N));
         for epoch in (N - 4)..=(N + 1) {
             assert!(has_table(&coordinator, epoch), "epoch {epoch}");
@@ -1413,7 +1414,7 @@ mod tests {
     async fn genesis_boot_with_silent_peers_starts_at_first(#[case] lc_height: Option<u64>) {
         let (client, _) = chain().await;
         let coordinator = coordinator(SeededStore::default());
-        client.fail_block_height().await;
+        client.fail_next_block_heights(usize::MAX).await;
         let header = lc_height.map(|height| LcContractHeader {
             height,
             block_comm_root: CircuitField::from(0u64),
@@ -1444,7 +1445,7 @@ mod tests {
     async fn no_peer_height_and_failing_lc_read_aborts_at_the_deadline() {
         let (client, _) = chain().await;
         let coordinator = coordinator(SeededStore::default());
-        client.fail_block_height().await;
+        client.fail_next_block_heights(usize::MAX).await;
 
         let err = catch_up_cliquenet_stake_tables(
             &coordinator,
@@ -1663,7 +1664,7 @@ mod tests {
     #[test_log::test(tokio::test)]
     async fn rootless_top_epoch_does_not_select_the_current_epoch() {
         let (client, _) = chain().await;
-        client.fail_block_height().await;
+        client.fail_next_block_heights(usize::MAX).await;
         let store = SeededStore::for_chain(&client, (N - 3)..=(N + 2)).await;
         store.roots.lock().unwrap().remove(&(N + 2));
         let coordinator = coordinator(store);
@@ -1681,8 +1682,8 @@ mod tests {
         assert_eq!(current, EpochNumber::new(N));
     }
 
-    /// A goal far below `F` installs the proofs at the goal, not at `F`; the membership has no peer
-    /// to derive from, so only proofs can supply the tables.
+    /// An epoch far below `F` installs the proofs at that epoch, not at `F`; the membership has no
+    /// peer to derive from, so only proofs can supply the tables.
     #[test_log::test(tokio::test)]
     async fn follower_goal_far_below_the_lc_contract_uses_proofs_at_the_goal() {
         let client = TestClient::with_epoch_height(EPOCH_HEIGHT);
@@ -1704,7 +1705,7 @@ mod tests {
         }
     }
 
-    /// Held `3..=5` and a lone table at `8`: the goal `7` is in the gap, and `6` below it is
+    /// Held `3..=5` and a lone table at `8`: epoch `7` is in the gap, and `6` below it is
     /// filled too.
     #[rstest]
     #[case::lc_contract_header(true)]
