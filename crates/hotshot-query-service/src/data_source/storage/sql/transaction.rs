@@ -681,6 +681,7 @@ impl Transaction<Prune> {
 impl<Mode> Transaction<Mode> {
     pub(super) const PRUNED_HEIGHT_ID: i32 = 1;
     pub(super) const STATE_PRUNED_HEIGHT_ID: i32 = 2;
+    pub(super) const STATE_START_HEIGHT_ID: i32 = 3;
 }
 
 /// Query service specific mutations.
@@ -931,6 +932,28 @@ impl<Types: NodeType, State: MerklizedState<Types, ARITY>, const ARITY: usize>
         .await?;
 
         Ok(())
+    }
+
+    async fn set_state_pruned_height(&mut self, height: u64) -> anyhow::Result<()> {
+        self.upsert(
+            "pruned_height",
+            ["id", "last_height"],
+            ["id"],
+            [(Self::STATE_PRUNED_HEIGHT_ID, height as i64)],
+        )
+        .await
+        .context("updating state pruned height")
+    }
+
+    async fn set_state_start_height(&mut self, height: u64) -> anyhow::Result<()> {
+        self.upsert(
+            "pruned_height",
+            ["id", "last_height"],
+            ["id"],
+            [(Self::STATE_START_HEIGHT_ID, height as i64)],
+        )
+        .await
+        .context("updating state start height")
     }
 
     async fn insert_merkle_nodes(
