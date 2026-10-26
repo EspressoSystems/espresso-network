@@ -750,8 +750,11 @@ where
             .retain(out.view, out.payload_commitment, &out.payload);
         self.payload_txn_bytes
             .insert(out.view, out.payload.txn_bytes());
-        self.block_builder
-            .on_block_reconstructed(out.view, out.tx_commitments);
+        self.block_builder.on_block_reconstructed(
+            out.view,
+            out.payload_commitment,
+            out.tx_commitments,
+        );
         self.storage.append_da(
             out.view,
             out.epoch,
@@ -833,6 +836,14 @@ where
                     "leaves decided"
                 );
                 self.on_decide_metrics(&leaves);
+                self.block_builder
+                    .on_blocks_decided(leaves.iter().filter_map(|leaf| {
+                        // New-protocol headers always carry a V2 commitment.
+                        match leaf.block_header().payload_commitment() {
+                            VidCommitment::V2(commit) => Some((leaf.view_number(), commit)),
+                            VidCommitment::V0(_) | VidCommitment::V1(_) => None,
+                        }
+                    }));
                 // `leaves` is ordered newest first.
                 //  Garbage collect the data for views < decided view
                 if let Some(newest) = leaves.first() {
@@ -907,8 +918,9 @@ where
                         }
                         // A leader never reconstructs its own block, and a block it built
                         // but did not propose puts nothing on the chain, so this is where
-                        // its transactions count as included.
-                        self.block_builder.on_block_reconstructed(view, da.hashes);
+                        // it records the block's transactions.
+                        self.block_builder
+                            .on_block_reconstructed(view, commit, da.hashes);
                         self.storage.append_da(
                             view,
                             da.epoch,
