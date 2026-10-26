@@ -27,7 +27,7 @@ use espresso_types::{
     Certificate2, ChainConfig, Header, Leaf2, NodeState, PubKey, SeqTypes, Transaction,
     ValidatedState,
     traits::MembershipPersistence,
-    v0::traits::{SequencerPersistence, StateCatchup},
+    v0::traits::{SequencerPersistence, StateCatchup, StateCertPersistence},
     v0_1::ChainId,
 };
 use futures::{FutureExt, future::BoxFuture};
@@ -395,13 +395,15 @@ impl<P: SequencerPersistence> Drop for FollowerContext<P> {
 }
 
 impl<P: SequencerPersistence> ApiContext for FollowerHandle<P> {
-    type Persistence = P;
-
     fn consensus(&self) -> Arc<dyn ConsensusSource> {
         self.consensus.clone()
     }
 
-    fn persistence(&self) -> Arc<P> {
+    fn membership(&self) -> Arc<dyn MembershipPersistence> {
+        self.persistence.clone()
+    }
+
+    fn state_certs(&self) -> Arc<dyn StateCertPersistence> {
         self.persistence.clone()
     }
 

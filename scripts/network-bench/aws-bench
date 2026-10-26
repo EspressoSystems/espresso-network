@@ -283,7 +283,6 @@ PROXY_ADDRESS_KEYS = (
 NODE_API_PORT = 8080
 NODE_TONIC_PORT = 8081
 CLIQUENET_PORT = 9000
-LIBP2P_PORT = 1769
 # From .env; render_ctl_env asserts these still match the parsed file.
 # The bench's own postgres container, independent of .env.
 POSTGRES_PORT = 5432
@@ -2403,8 +2402,6 @@ def render_node_env(
         "ESPRESSO_NODE_KEY_INDEX": str(KEY_INDEX_BASE + i),
         "ESPRESSO_NODE_CLIQUENET_BIND_ADDRESS": f"0.0.0.0:{CLIQUENET_PORT}",
         "ESPRESSO_NODE_CLIQUENET_ADVERTISE_ADDRESS": f"{self_info['private_ip']}:{CLIQUENET_PORT}",
-        "ESPRESSO_NODE_LIBP2P_BIND_ADDRESS": f"0.0.0.0:{LIBP2P_PORT}",
-        "ESPRESSO_NODE_LIBP2P_ADVERTISE_ADDRESS": f"{self_info['private_dns']}:{LIBP2P_PORT}",
         "ESPRESSO_NODE_API_PORT": str(NODE_API_PORT),
         "ESPRESSO_NODE_TONIC_PORT": str(NODE_TONIC_PORT),
         "ESPRESSO_NODE_ORCHESTRATOR_URL": f"http://{ctl_info['private_ip']}:{env_port('ESPRESSO_ORCHESTRATOR_PORT')}",
@@ -2415,7 +2412,7 @@ def render_node_env(
         "ESPRESSO_NODE_IS_DA": "true",
         "ESPRESSO_NODE_TELEMETRY_LOGS_ENABLE": "false",
         "ESPRESSO_NODE_TELEMETRY_METRICS_ENABLE": "false",
-        "RUST_LOG": "info,libp2p=off",
+        "RUST_LOG": "info",
         "RUST_LOG_FORMAT": "json",
         "ESPRESSO_NODE_STORAGE_PATH": "/store/espresso",
         "ESPRESSO_NODE_IDENTITY_NODE_NAME": host["name"],
@@ -2441,7 +2438,7 @@ def render_node_env(
             # The default 5 min cache would report a wiped node as synced from its empty DB.
             env["ESPRESSO_NODE_SYNC_STATUS_TTL"] = f"{ch.SYNC_STATUS_TTL_S:g}s"
     if host["role"] == "query" and query_engine == "sqlite":
-        # The entrypoint then execs espresso-node-sqlite, which prepends storage-sql itself.
+        # The entrypoint then starts the node on SQLite and prepends storage-sql itself.
         env["ESPRESSO_NODE_EMBEDDED_DB"] = "true"
         if consensus_storage == "journal":
             # The journal refuses to open next to an existing sqlite database until its first

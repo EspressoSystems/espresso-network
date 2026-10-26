@@ -2,12 +2,15 @@ use std::time::Duration;
 
 use alloy::primitives::U256;
 use committable::Commitment;
+#[cfg(not(feature = "sqlite"))]
+use espresso_node::api::sql::postgres::DataSource as SqlDataSource;
+#[cfg(feature = "sqlite")]
+use espresso_node::api::sql::sqlite::DataSource as SqlDataSource;
 use espresso_node::{
     SequencerApiVersion,
     api::{
         Options,
         data_source::testing::TestableSequencerDataSource,
-        sql::DataSource as SqlDataSource,
         test_helpers::{TestNetwork, TestNetworkConfigBuilder},
     },
     catchup::StatePeers,

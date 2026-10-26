@@ -25,12 +25,12 @@ use anyhow::{Context, bail, ensure};
 use async_trait::async_trait;
 use espresso_types::{
     Certificate2, Header, SeqTypes,
-    traits::{PersistenceOptions, SequencerPersistence},
+    traits::{PersistenceOptions, SequencerPersistence, StateCertPersistence},
 };
 use futures::FutureExt;
 use hotshot_query_service::{
     availability::{BlockQueryData, LeafQueryData, VidCommonQueryData},
-    data_source::storage::sql::testing::TmpDb,
+    data_source::sql::postgres::testing::TmpDb,
     types::HeightIndexed,
 };
 use hotshot_types::{
@@ -48,13 +48,13 @@ use crate::{
         Options,
         data_source::testing::TestableSequencerDataSource,
         options::Query,
-        sql::{DataSource as SqlDataSource, impl_testable_data_source::tmp_options},
+        sql::postgres::{DataSource as SqlDataSource, impl_testable_data_source::tmp_options},
     },
     follower::{
         ChainSource, FollowerContext, FollowerOptions, FollowerParams, VerifiedBlock,
         init_replay_node,
     },
-    persistence,
+    persistence::sql::postgres::{self as persistence, Persistence},
 };
 
 /// A chain recorded from legacy consensus, as stored under `data/legacy-chains/<name>`.
@@ -98,7 +98,7 @@ pub struct RecordedNetworkConfigUpdate {
 
 /// A query node serving a replayed [`LegacyChain`].
 pub struct ReplayNode {
-    pub node: FollowerContext<persistence::sql::Persistence>,
+    pub node: FollowerContext<Persistence>,
     pub client: Client<ClientErr, SequencerApiVersion>,
     pub url: url::Url,
     pub l1: AnvilInstance,
@@ -155,7 +155,7 @@ impl LegacyChain {
             .with_context(|| format!("replaying the {} chain's L1", self.name))?;
 
         let storage = SqlDataSource::create_storage().await;
-        let mut db = tmp_options(&storage);
+        let mut db = persistence::Options::try_from(tmp_options(&storage))?;
         let persistence = db.create().await?;
         // There are no peers to fetch the config or state certs from.
         persistence.save_config(&self.network_config).await?;
@@ -175,7 +175,7 @@ impl LegacyChain {
         let url: url::Url = format!("http://localhost:{port}").parse()?;
         let params = replay_params(url.clone());
         let handle = Options::with_port(port)
-            .query_sql(Query::default(), db)
+            .query_sql(Query::default(), db.into_inner())
             .catchup(Default::default())
             .config(Default::default())
             .explorer(Default::default())
@@ -217,8 +217,10 @@ impl LegacyChain {
 
 impl ReplayNode {
     /// Another connection to the node's consensus storage.
-    pub async fn persistence(&self) -> anyhow::Result<persistence::sql::Persistence> {
-        tmp_options(&self.storage).create().await
+    pub async fn persistence(&self) -> anyhow::Result<Persistence> {
+        persistence::Options::try_from(tmp_options(&self.storage))?
+            .create()
+            .await
     }
 }
 

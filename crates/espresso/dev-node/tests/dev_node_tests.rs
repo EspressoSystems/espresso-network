@@ -41,8 +41,9 @@ impl Drop for BackgroundProcess {
 // and open a PR.
 // - APIs update
 // - Types (like `Header`) update
+#[rstest::rstest]
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
-async fn slow_dev_node_test() {
+async fn slow_dev_node_test(#[values("0.6", "0.7")] version: &str) {
     let api_port = reserve_tcp_port().unwrap();
     let dev_node_port = reserve_tcp_port().unwrap();
 
@@ -65,6 +66,7 @@ async fn slow_dev_node_test() {
         .env("ESPRESSO_NODE_STORAGE_PATH", tmp_dir.path().as_os_str())
         .env("ESPRESSO_NODE_DATABASE_MAX_CONNECTIONS", "25")
         .env("ESPRESSO_DEV_NODE_MAX_BLOCK_SIZE", "500000")
+        .env("ESPRESSO_DEV_NODE_VERSION", version)
         .spawn()
         .unwrap();
 
@@ -225,11 +227,12 @@ async fn slow_dev_node_test() {
             .await
             .unwrap();
 
-        api_client
+        let header = api_client
             .get::<Header>("availability/header/3")
             .send()
             .await
             .unwrap();
+        assert_eq!(header.version().to_string(), version);
 
         api_client
             .get::<VidCommonQueryData<SeqTypes>>(&format!(

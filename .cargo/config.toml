@@ -14,3 +14,8 @@ git-fetch-with-cli = true
 [build]
 rustflags = ["--cfg", "tokio_unstable"]
 rustdocflags = ["--cfg", "tokio_unstable"]
+
+# Workspace-wide: unoptimized espresso-node futures overflow the 2 MiB default
+# test thread stack, including the multi-node networks in slow-tests.
+[env]
+RUST_MIN_STACK = "8388608"

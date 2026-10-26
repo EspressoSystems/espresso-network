@@ -21,14 +21,8 @@ license = "GPL-3.0-or-later"
 [features]
 default = ["file-system-data-source", "metrics-data-source", "sql-data-source"]
 
-# Enables support for an embedded SQLite database instead of PostgreSQL.
-# Ideal for lightweight nodes that benefit from pruning and merklized state storage,
-# offering advantages over file system storage.
-embedded-db = ["sqlx/sqlite", "sqlite-options"]
-
 # Exposes shared SQLite connection helpers (e.g. `sqlite_options`) for callers that build their
-# own pool. Separate from `embedded-db` so clients can opt in to the helpers without flipping the
-# workspace into SQLite mode.
+# own pool without the SQL data source.
 sqlite-options = ["sqlx/sqlite"]
 
 # Enable the availability data source backed by the local file system.
@@ -37,8 +31,16 @@ file-system-data-source = ["atomic_store"]
 # Enable a lightweight data source for status APIs without the archival availability API.
 metrics-data-source = []
 
-# Enable the availability data source backed by a Postgres database.
-sql-data-source = ["include_dir", "refinery", "refinery-core", "sqlx", "log", "rand"]
+# Enable the availability data source backed by a Postgres or SQLite database.
+sql-data-source = [
+    "include_dir",
+    "refinery",
+    "refinery-core",
+    "sqlx",
+    "log",
+    "rand",
+    "sqlite-options",
+]
 
 testing = [
     "espresso-macros",
