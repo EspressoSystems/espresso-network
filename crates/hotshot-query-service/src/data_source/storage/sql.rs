@@ -49,9 +49,7 @@ use crate::{
     status::HasMetrics,
 };
 pub extern crate sqlx;
-pub use sqlx::Database;
-#[cfg(feature = "embedded-db")]
-pub use sqlx::Sqlite;
+pub use sqlx::{Database, Sqlite};
 
 // Loaded through `#[path]` by each backend module, so its children are named from here.
 #[path = "sql/data_source.rs"]
