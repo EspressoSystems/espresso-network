@@ -64,6 +64,13 @@ pub struct Genesis {
 /// reject or ignore distant hints; beyond this we omit the hint and verify against a quorum.
 const MAX_FINALIZED_HINT_DISTANCE: u64 = 500;
 
+/// Whether a range fetch writes the leaves it chains to a proven leaf into the cache.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CacheLeaves {
+    Yes,
+    No,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[cfg_attr(feature = "clap", derive(clap::Parser))]
 pub struct LightClientOptions {
@@ -253,6 +260,31 @@ where
         start_height: usize,
         end_height: usize,
     ) -> Result<Vec<LeafQueryData<SeqTypes>>> {
+        self.fetch_leaves_in_range_with(start_height, end_height, CacheLeaves::Yes)
+            .await
+    }
+
+    /// [`fetch_leaves_in_range`](Self::fetch_leaves_in_range) for a caller that needs each leaf
+    /// once, such as the state loop replaying history.
+    ///
+    /// Only the proven last leaf goes into the cache. Writing the others costs one transaction per
+    /// leaf, more than fetching the whole range, and a range longer than the cache would evict
+    /// every leaf other callers keep there as anchors.
+    pub async fn fetch_leaves_in_range_uncached(
+        &self,
+        start_height: usize,
+        end_height: usize,
+    ) -> Result<Vec<LeafQueryData<SeqTypes>>> {
+        self.fetch_leaves_in_range_with(start_height, end_height, CacheLeaves::No)
+            .await
+    }
+
+    async fn fetch_leaves_in_range_with(
+        &self,
+        start_height: usize,
+        end_height: usize,
+        cache: CacheLeaves,
+    ) -> Result<Vec<LeafQueryData<SeqTypes>>> {
         ensure!(
             start_height < end_height,
             "invalid range: start must be < end"
@@ -278,7 +310,7 @@ where
         // at this point, we know the end leaf is valid and is finalized
         // now we need to fetch all leaves from start to end - 1 from the server
         let leaves = self
-            .fetch_leaves_in_range_from_server(start_height, end_height - 1, &known_end_leaf)
+            .fetch_leaves_in_range_from_server(start_height, end_height - 1, &known_end_leaf, cache)
             .await
             // add the known end leaf to the result
             .map(|mut leaves| {
@@ -360,6 +392,7 @@ where
         start_height: usize,
         end_height: usize,
         known_finalized: &LeafQueryData<SeqTypes>,
+        cache: CacheLeaves,
     ) -> Result<Vec<LeafQueryData<SeqTypes>>> {
         // we will fetch all the leaves till the known finalized leaf
         let leaves = self
@@ -377,7 +410,8 @@ where
             end_height
         );
 
-        self.verify_leaf_chain(&leaves, known_finalized).await?;
+        self.verify_leaf_chain(&leaves, known_finalized, cache)
+            .await?;
         Ok(leaves)
     }
 
@@ -390,6 +424,7 @@ where
         &self,
         leaves: &[LeafQueryData<SeqTypes>],
         known_finalized: &LeafQueryData<SeqTypes>,
+        cache: CacheLeaves,
     ) -> Result<()> {
         let mut expected_parent = known_finalized.leaf().parent_commitment();
         for leaf in leaves.iter().rev() {
@@ -403,6 +438,9 @@ where
             expected_parent = leaf.leaf().parent_commitment();
         }
 
+        if cache == CacheLeaves::No {
+            return Ok(());
+        }
         // Cache the verified leaves, but do not fail the fetch if caching does.
         for leaf in leaves {
             if let Err(err) = self.db.insert_leaf(leaf.clone()).await {
@@ -522,7 +560,8 @@ where
                 };
                 run.push(leaf);
             }
-            self.verify_leaf_chain(&run, &anchor).await?;
+            self.verify_leaf_chain(&run, &anchor, CacheLeaves::Yes)
+                .await?;
             leaves.extend(run);
             leaves.push(anchor);
         }
@@ -1427,6 +1466,26 @@ mod test {
         client.forget_leaf(2).await;
         let leaves = lc.fetch_leaves_in_range(1, 3).await.unwrap();
         assert_eq!(leaves, vec![leaf1, leaf2]);
+    }
+
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_fetch_leaves_in_range_uncached() {
+        let client = TestClient::default();
+        let lc = LightClient::from_genesis(
+            SqlStorage::default().await.unwrap(),
+            client.clone(),
+            client.genesis().await,
+        );
+        let leaf1 = client.remember_leaf(1).await;
+        let leaf2 = client.remember_leaf(2).await;
+        let leaf3 = client.remember_leaf(3).await;
+
+        let leaves = lc.fetch_leaves_in_range_uncached(1, 4).await.unwrap();
+        assert_eq!(leaves, vec![leaf1, leaf2, leaf3.clone()]);
+
+        // Only the proven last leaf is cached; the ones chained to it are not.
+        assert_eq!(lc.db.get_leaves_in_range(1, 4).await.unwrap(), vec![leaf3]);
     }
 
     #[tokio::test]

@@ -570,15 +570,18 @@ where
 /// The leaves at `heights`, which the data pruned height says are gone, from the query module's
 /// peers through its light client, retrying until they arrive. The light client verifies leaves
 /// of every protocol version, and one proof covers the run: it proves the last leaf final and
-/// chains the rest to it. The leaves are not stored in this database, since the loop needs them
-/// once and the pruner would only delete them again.
+/// chains the rest to it. The loop needs each leaf once, so the leaves are stored neither in this
+/// database, where the pruner would only delete them again, nor in the light client's cache.
 async fn fetch_pruned_leaves(provider: &LightClientProvider, heights: Range<u64>) -> Vec<Leaf2> {
     let start = heights.start as usize;
     let end = heights.end as usize;
     let mut delay = Duration::from_secs(1);
     loop {
         if let Some(light_client) = provider.light_client().await {
-            match light_client.fetch_leaves_in_range(start, end).await {
+            match light_client
+                .fetch_leaves_in_range_uncached(start, end)
+                .await
+            {
                 Ok(leaves) => return leaves.into_iter().map(|leaf| leaf.leaf().clone()).collect(),
                 Err(err) => tracing::warn!(
                     ?heights,

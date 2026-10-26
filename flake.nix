@@ -12,7 +12,7 @@
     ];
   };
 
-  inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+  inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
 
   inputs.rust-overlay.url = "github:oxalica/rust-overlay";
   inputs.rust-overlay.inputs.nixpkgs.follows = "nixpkgs";
@@ -264,7 +264,7 @@
             ty
             uv
 
-            go
+            go_1_27
             golangci-lint
             # provides abigen
             go-ethereum

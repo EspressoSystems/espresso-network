@@ -14,6 +14,8 @@ import { ILightClient } from "./interfaces/ILightClient.sol";
 import { EdOnBN254 } from "./libraries/EdOnBn254.sol";
 import { InitializedAt } from "./InitializedAt.sol";
 
+// forge-lint: disable-start(reentrancy-events)
+
 using EdOnBN254 for EdOnBN254.EdOnBN254Point;
 
 /// @title Ethereum L1 component of the Espresso Global Confirmation Layer (GCL) stake table.
