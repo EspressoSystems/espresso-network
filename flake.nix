@@ -83,7 +83,7 @@
       prek-as-pre-commit = pkgs.writeShellScriptBin "pre-commit" ''
         exec ${pkgs.prek}/bin/prek "$@"
       '';
-      myShell = pkgs.mkShellNoCC.override (lib.optionalAttrs stdenv.isLinux {
+      myShell = pkgs.mkShellNoCC.override (lib.optionalAttrs stdenv.hostPlatform.isLinux {
         # mold linker, ~50% faster on Linux
         stdenv = pkgs.stdenvAdapters.useMoldLinker pkgs.clangStdenv;
       });
@@ -136,13 +136,14 @@
             prek
             prek-as-pre-commit # `pre-commit` alias for muscle memory
             process-compose
+            postgresql_18 # TmpDb in rust tests, scripts/run-postgres for demo-native
             datadog-pup
             lazydocker # used by `just demo-docker`
             foundry # need `anvil` in rust tests
             prettier
             solhint
             libusb1 # link-time dep of `libusb1-sys` crate
-          ] ++ lib.optionals stdenv.isDarwin [ pkgs.darwin.libresolv ];
+          ] ++ lib.optionals stdenv.hostPlatform.isDarwin [ pkgs.darwin.libresolv ];
           shellHook = ''
             ${rustShellHook}
 
@@ -196,7 +197,7 @@
       };
 
       devShells.aws = pkgs.mkShellNoCC {
-        inputsFrom = [ self.devShells.${system}.default ];
+        inputsFrom = [ self.devShells.${system}.python ];
         packages = with pkgs; [ opentofu awscli2 ]; # scripts/network-bench/aws
       };
 
