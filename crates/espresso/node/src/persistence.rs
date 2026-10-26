@@ -1202,6 +1202,7 @@ mod tests {
             .unwrap();
 
         // A newer running high QC (view 9): recovery adopts it over the eQC checkpoint.
+        let epoch_height = 10;
         let mut running_high_qc = eqc_high_qc.clone();
         running_high_qc.view_number = ViewNumber::new(9);
         running_high_qc.data.block_number = Some(epoch_height);
