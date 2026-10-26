@@ -24,4 +24,8 @@ ignore = [
     # only via routefinder -> tide-disco, the legacy HTTP stack being retired; it goes away with
     # the last tide-disco consumer.
     "RUSTSEC-2026-0249",
+    # Timing leaks in crypto-bigint's constant-time operations. Reached only as 0.5.5 through
+    # elliptic-curve 0.13 (alloy-signer, k256, ethers-core), and no 0.5.x release is patched. It
+    # goes away once alloy moves to an elliptic-curve built on a fixed crypto-bigint.
+    "RUSTSEC-2026-0387",
 ]
