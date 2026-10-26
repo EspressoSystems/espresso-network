@@ -153,33 +153,36 @@ def test_socket_sampler_records_ss_failures_and_samples_qdisc_every_few(tmp_path
 NETDEV_FMT = (
     "Inter-|   Receive\n face |bytes packets\n"
     "    lo: 100 1 0 0 0 0 0 0 100 1 0 0 0 0 0 0\n"
-    "  eth0: {rx} 5 0 0 0 0 0 0 {tx} 7 0 0 0 0 0 0\n"
+    "  ens5: {rx} 5 0 0 0 0 0 0 {tx} 7 0 0 0 0 0 0\n"
+    "  ens6: 999999 5 0 0 0 0 0 0 999999 7 0 0 0 0 0 0\n"
 )
 
 
-def test_parse_cpu_times_reads_user_and_system():
-    text = "usage_usec 30\nuser_usec 10\nsystem_usec 20\nnr_periods 0\n"
-    assert awsb.parse_cpu_times(text) == (10, 20)
-    with pytest.raises(KeyError):
-        awsb.parse_cpu_times("usage_usec 30\n")
+IP_ROUTE = (
+    "default via 10.0.0.1 dev ens5 proto dhcp src 10.0.0.5 metric 100\n"
+    "default via 10.1.0.1 dev ens6 proto dhcp src 10.1.0.5 metric 200\n"
+)
 
 
-def test_cpu_row_is_the_delta_and_none_after_a_counter_restart():
-    assert awsb.cpu_row(5, (10, 20), (15, 28)) == "5,proc,-1,5,8\n"
-    assert awsb.cpu_row(5, (10, 20), (3, 4)) is None
+def route_system(clock: FakeClock, stdout: str = IP_ROUTE, returncode: int = 0):
+    runner = FakeRunner(
+        {
+            ("ip", "-o", "-4", "route", "show", "to", "default"): completed(
+                stdout, returncode
+            )
+        }
+    )
+    return FakeSystem(run=runner, clock=clock)
 
 
-def test_net_rows_skip_loopback_and_new_interfaces():
-    prev = {
-        "lo": {"rx_bytes": 1, "tx_bytes": 1},
-        "eth0": {"rx_bytes": 10, "tx_bytes": 20},
-    }
-    cur = {
-        "lo": {"rx_bytes": 5, "tx_bytes": 5},
-        "eth0": {"rx_bytes": 15, "tx_bytes": 29},
-        "veth1": {"rx_bytes": 1, "tx_bytes": 1},
-    }
-    assert awsb.net_rows(7, prev, cur) == ["7,eth0,5,9\n"]
+def test_primary_iface_is_the_first_default_route_device():
+    assert awsb.primary_iface(route_system(FakeClock())) == "ens5"
+
+
+@pytest.mark.parametrize(("stdout", "returncode"), [("", 0), ("", 1)])
+def test_primary_iface_fails_without_a_default_route(stdout: str, returncode: int):
+    with pytest.raises(RuntimeError):
+        awsb.primary_iface(route_system(FakeClock(), stdout, returncode))
 
 
 def test_trace_node_waits_for_the_node_and_refuses_several(tmp_path: Path):
@@ -226,25 +229,21 @@ class TraceHost:
             self.trace_dir,
             self.stop,
             self.containers,
-            FakeSystem(clock=self.clock),
+            route_system(self.clock),
             self.scope.parents[1],
             self.net_dev,
         )
 
 
-def test_trace_sampler_appends_deltas_beside_the_leader_trace(tmp_path: Path):
+def test_trace_sampler_appends_cumulative_counters_of_the_primary_iface(tmp_path: Path):
     host = TraceHost(tmp_path, ticks=3)
     (host.trace_dir / "leader_trace_node3.csv").touch()
     host.sample()
     assert (host.trace_dir / "cpu_node3.csv").read_text() == (
-        "t_ns,kind,id,user_us,sys_us\n"
-        "1010000000,proc,-1,10,20\n"
-        "1020000000,proc,-1,10,20\n"
+        "t_ns,usage_usec\n1000000000,0\n1010000000,30\n1020000000,60\n"
     )
     assert (host.trace_dir / "net_node3.csv").read_text() == (
-        "t_ns,iface,rx_bytes,tx_bytes\n"
-        "1010000000,eth0,100,200\n"
-        "1020000000,eth0,100,200\n"
+        "t_ns,rx_bytes,tx_bytes\n1000000000,0,0\n1010000000,100,200\n1020000000,200,400\n"
     )
 
 
@@ -264,8 +263,20 @@ def test_trace_sampler_waits_for_the_container_scope_before_the_first_cpu_row(
     host.sample()
     cpu = (host.trace_dir / "cpu_node0.csv").read_text().splitlines()[1:]
     net = (host.trace_dir / "net_node0.csv").read_text().splitlines()[1:]
-    assert cpu == ["1020000000,proc,-1,10,20"]
-    assert len(net) == 2
+    assert cpu == ["1010000000,30", "1020000000,60"]
+    assert len(net) == 3
+
+
+def test_trace_sampler_reads_containers_json_only_when_the_scope_is_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    host = TraceHost(tmp_path, ticks=4)
+    (host.trace_dir / "leader_trace_node0.csv").touch()
+    loads: list[Path] = []
+    load = awsb.load_containers
+    monkeypatch.setattr(awsb, "load_containers", lambda p: loads.append(p) or load(p))
+    host.sample()
+    assert len(loads) == 1
 
 
 @pytest.mark.parametrize(
@@ -293,6 +304,20 @@ def test_agent_host_samples_the_trace_only_for_nodes_with_the_flag(
     )
     assert awsb.cmd_agent_host(args, system) == awsb.EXIT_OK
     assert calls == ([Path(awsb.TRACE_HOST_DIR)] if sampled else [])
+
+
+def test_agent_host_fails_when_a_sampler_thread_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    args = awsb.parse_args(
+        ["agent-host", str(tmp_path / "host.jsonl"), "--role", "validator"]
+    )
+    system = FakeSystem(clock=FakeClock(limit_s=10))
+    monkeypatch.setattr(awsb, "BENCH_DIR", str(tmp_path))
+    monkeypatch.setattr(awsb, "host_sample", lambda *a: {"ts": 1})
+    monkeypatch.setattr(awsb, "sample_sockets", raiser(RuntimeError("ss broke")))
+    with pytest.raises(RuntimeError, match="ss broke"):
+        awsb.cmd_agent_host(args, system)
 
 
 def test_agent_host_role_query_starts_pg_sampler(

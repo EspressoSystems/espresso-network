@@ -467,9 +467,12 @@ just bench aws run --tag release-x --leader-trace
 - `--leader-trace`: nodes get `ESPRESSO_NODE_LEADER_TRACE_DIR=/trace` (host `/opt/bench/trace`).
   - Collected: `hosts/<name>/trace/leader_trace_node*.csv`, `cpu_node*.csv`, `net_node*.csv`.
   - `agent-host` (validators and query nodes) samples every 10 ms, from the moment the node creates its trace file, on
-    the wall clock of the trace: `cpu_node{N}.csv` (`t_ns,kind,id,user_us,sys_us`; `kind` is `proc`, `id` -1; the
-    `espresso-node` container's cgroup `user_usec` and `system_usec` since the previous tick) and `net_node{N}.csv`
-    (`t_ns,iface,rx_bytes,tx_bytes`; `/proc/net/dev` bytes since the previous tick, `lo` skipped).
+    the wall clock of the trace. Values are cumulative counters; `trace-plots` differences them and drops an interval
+    whose counter decreased (container recreated) or whose time did not advance.
+    - `cpu_node{N}.csv`: `t_ns,usage_usec`, the cgroup `usage_usec` of the `espresso-node` container.
+    - `net_node{N}.csv`: `t_ns,rx_bytes,tx_bytes`, `/proc/net/dev` of the default-route interface (resolved once at
+      sampler start, as `ip -o -4 route show to default`).
+    - Files are block-buffered; the last rows reach disk when the buffer fills or the agent stops.
   - `node_id` in the file name and rows is the orchestrator-assigned node index, not the host number; the host is the
     directory it was collected from. Per-view plots name both.
   - `parent Cert1 wait` (header created until the leaf commitment): `maybe_propose` waits for the parent's Cert1, not

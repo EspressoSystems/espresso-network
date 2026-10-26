@@ -11,17 +11,18 @@ import itertools
 from collections import Counter
 from collections.abc import Iterable
 from pathlib import Path
+from typing import cast
 
 # node -> view -> event -> first ts_ns
 Trace = dict[int, dict[int, dict[str, int]]]
-# (t_ns, user_us, sys_us) per tick
+# (t_ns, dt_ns, cpu_us) per sampling interval, t_ns its end
 Cpu = list[tuple[int, int, int]]
-# interface -> (t_ns, rx_bytes, tx_bytes) per tick
-Net = dict[str, list[tuple[int, int, int]]]
+# (t_ns, dt_ns, rx_bytes, tx_bytes) per sampling interval, t_ns its end
+Net = list[tuple[int, int, int, int]]
 
 HEADER = ["view", "node_id", "event", "ts_ns"]
-CPU_HEADER = ["t_ns", "kind", "id", "user_us", "sys_us"]
-NET_HEADER = ["t_ns", "iface", "rx_bytes", "tx_bytes"]
+CPU_HEADER = ["t_ns", "usage_usec"]
+NET_HEADER = ["t_ns", "rx_bytes", "tx_bytes"]
 # (segment, end event on the leader of V); each segment starts where the previous one ends
 LEADER_PATH = (
     ("wait to propose", "request_block_header_queued"),
@@ -70,24 +71,34 @@ def read_csv_rows(path: Path, header: list[str]) -> list[list[str]]:
         return list(reader)
 
 
+def intervals(samples: list[tuple[int, ...]]) -> list[tuple[int, ...]]:
+    """(t_ns, dt_ns, *deltas) per pair of consecutive cumulative samples (t_ns, *counters). An
+    interval is dropped when time does not advance (clock step) or a counter decreased (the
+    container was recreated)."""
+    out = []
+    for prev, cur in itertools.pairwise(sorted(samples)):
+        dt = cur[0] - prev[0]
+        deltas = [c - p for c, p in zip(cur[1:], prev[1:], strict=True)]
+        if dt > 0 and min(deltas) >= 0:
+            out.append((cur[0], dt, *deltas))
+    return out
+
+
 def read_cpu(path: Path) -> Cpu:
-    """`cpu_node{N}.csv` of aws-bench's sampler: (t_ns, user_us, sys_us) per tick, the CPU time
-    of the node process since the previous tick."""
-    rows = []
-    for t_ns, kind, _, user_us, sys_us in read_csv_rows(path, CPU_HEADER):
-        if kind != "proc":
-            raise ValueError(f"{path}: unexpected kind {kind!r}")
-        rows.append((int(t_ns), int(user_us), int(sys_us)))
-    return sorted(rows)
+    """`cpu_node{N}.csv` of aws-bench's sampler, cumulative `usage_usec` of the node container,
+    as the CPU time of each interval."""
+    rows = [(int(t_ns), int(usage)) for t_ns, usage in read_csv_rows(path, CPU_HEADER)]
+    return cast(Cpu, intervals(rows))
 
 
 def read_net(path: Path) -> Net:
-    """`net_node{N}.csv`: interface to (t_ns, rx_bytes, tx_bytes) per tick, the bytes since the
-    previous tick."""
-    ifaces: Net = {}
-    for t_ns, iface, rx, tx in read_csv_rows(path, NET_HEADER):
-        ifaces.setdefault(iface, []).append((int(t_ns), int(rx), int(tx)))
-    return {iface: sorted(rows) for iface, rows in ifaces.items()}
+    """`net_node{N}.csv`, cumulative rx and tx bytes of the primary interface, as the bytes of
+    each interval."""
+    rows = [
+        (int(t_ns), int(rx), int(tx))
+        for t_ns, rx, tx in read_csv_rows(path, NET_HEADER)
+    ]
+    return cast(Net, intervals(rows))
 
 
 def leaders(trace: Trace) -> dict[int, tuple[int, int]]:

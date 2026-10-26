@@ -29,6 +29,8 @@ def timeline_trace(split: bool) -> Trace:
             1000 + offset
         ) * MS
     trace[1][2] = {"proposal_queued": 1200 * MS}
+    for node, offset in enumerate((40, 50, 60)):
+        trace[node][1]["leaf_decided"] = (1000 + offset) * MS
     return trace
 
 
@@ -37,10 +39,11 @@ def test_view_rows_are_relative_to_the_proposal_and_take_the_cluster_median():
     assert row["cycle"] == 200
     assert row["request_block"] == -60
     assert row["vid_unicast_end"] == -15
-    assert row["proposal_recv"] == 20
+    assert row["proposal_validated"] == 20
     assert row["cert1_at_L_V"] == 5
     assert row["vid_disperse"] is None
     assert row["cert2_formed"] is None
+    assert row["leaf_decided"] == 50
 
 
 def test_metrics_are_medians_that_skip_absent_values():
@@ -52,8 +55,8 @@ def test_metrics_are_medians_that_skip_absent_values():
     rows = [{**dict.fromkeys(ft.EVENTS), **row} for row in rows]
     m = ft.timeline_metrics(rows)
     assert (m["n_views"], m["cycle"], m["cert1_formed"]) == (3, 200, 20)
-    assert m["vote1_sent"] == 0
-    assert m["finality_ms"] == 10
+    assert m["vote1_arrived"] == 0
+    assert m["finality_ms"] == 0
     assert m["throughput_vps"] == pytest.approx(5)
 
 
@@ -91,12 +94,15 @@ def test_build_bars_split_only_with_the_events_that_split_them(
     assert [label for label, *_ in ft.build_segments(m)] == labels
 
 
-def test_svg_labels_the_combined_bar_and_parses(tmp_path: Path):
+def test_svg_parses_and_labels_the_combined_bar_and_finality(tmp_path: Path):
     out = tmp_path / "timeline.svg"
     ft.write_timeline(timeline_trace(split=False), [1], out)
     root = ET.fromstring(out.read_bytes())
     assert root.tag.endswith("svg")
-    assert "per-view cycle = 200 ms" in out.read_text(encoding="utf-8")
+    text = out.read_text(encoding="utf-8")
+    assert "disperse + fan-out 25" in text
+    assert "per-view cycle = 200 ms" in text
+    assert "finality of V ≈ 50 ms" in text
 
 
 def test_svg_renders_without_any_cluster_events(tmp_path: Path):

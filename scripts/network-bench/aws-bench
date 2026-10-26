@@ -386,8 +386,8 @@ TRACE_HOST_DIR = f"{BENCH_DIR}/trace"
 TRACE_CONTAINER_DIR = "/trace"
 TRACE_PLOTS_TIMEOUT_S = 600
 TRACE_SAMPLE_S = 0.01
-TRACE_CPU_HEADER = "t_ns,kind,id,user_us,sys_us\n"
-TRACE_NET_HEADER = "t_ns,iface,rx_bytes,tx_bytes\n"
+TRACE_CPU_HEADER = "t_ns,usage_usec\n"
+TRACE_NET_HEADER = "t_ns,rx_bytes,tx_bytes\n"
 NET_DEV = Path("/proc/net/dev")
 PAYLOAD_CONTAINER_DIR = "/payload"
 VOLUME_BY_ID = "/dev/disk/by-id"
@@ -4095,7 +4095,7 @@ def measure_run(run: Run) -> None:
         )
         update_manifest(run.manifest_path, "shipping", git_rev=git_rev, **volume)
         ship(remote, run.run_dir)
-        start_hostmon(remote, run.cfg.query_engine, run.cfg.leader_trace)
+        start_hostmon(remote, run.cfg)
         create_containers(remote)
         if run.cfg.latency != "off":
             enter_phase(
@@ -5859,14 +5859,12 @@ def ship(remote: Remote, run_dir: Path) -> None:
     remote.parallel(send, remote.hosts)
 
 
-def start_hostmon(
-    remote: Remote, query_engine: QueryEngine, leader_trace: bool = False
-) -> None:
+def start_hostmon(remote: Remote, cfg: RunConfig) -> None:
     def start(host: str) -> None:
         role = remote.hosts[host]["role"]
-        postgres = role == "query" and query_engine == "postgres"
+        postgres = role == "query" and cfg.query_engine == "postgres"
         pg = f" --pg {PG_JSON}" if postgres else ""
-        trace = " --leader-trace" if leader_trace else ""
+        trace = " --leader-trace" if cfg.leader_trace else ""
         remote.ssh(
             host,
             f"sudo systemd-run --unit bench-host --collect -p TimeoutStopSec=3 {AGENT_PYTHON} {BENCH_DIR}/aws-bench "
@@ -9585,12 +9583,6 @@ def parse_cpu_stat(text: str) -> int:
     raise ValueError("usage_usec not found in cpu.stat")
 
 
-def parse_cpu_times(text: str) -> tuple[int, int]:
-    """cgroup v2 cpu.stat, (user_usec, system_usec)."""
-    fields = dict(line.split() for line in text.splitlines())
-    return int(fields["user_usec"]), int(fields["system_usec"])
-
-
 def parse_memory_stat_anon(text: str) -> int:
     """cgroup v2 memory.stat, `anon <n>` line: the RSS-equivalent field. memory.current also
     counts page cache, which journal writes inflate well past actual process memory use."""
@@ -9764,43 +9756,36 @@ def trace_node(trace_dir: Path) -> int | None:
     return int(files[0].stem.removeprefix("leader_trace_node")) if files else None
 
 
-def node_cpu_times(
-    containers: dict[str, str], cgroup_root: Path
-) -> tuple[int, int] | None:
-    """(user_usec, system_usec) of the espresso-node container; None while its scope is gone."""
+def node_cpu_stat(containers: dict[str, str], cgroup_root: Path) -> Path:
+    """cpu.stat of the espresso-node container's scope."""
     scope = cgroup_root / "system.slice" / f"docker-{containers['espresso-node']}.scope"
+    return scope / "cpu.stat"
+
+
+def read_cpu_usage(cpu_stat: Path | None) -> int | None:
+    """Cumulative usage_usec; None while the scope is unknown or gone."""
+    if cpu_stat is None:
+        return None
     try:
-        return parse_cpu_times((scope / "cpu.stat").read_text())
+        return parse_cpu_stat(cpu_stat.read_text())
     except FileNotFoundError:
         return None
 
 
-def cpu_row(t_ns: int, prev: tuple[int, int], cur: tuple[int, int]) -> str | None:
-    """The delta since the previous tick; None when the counters restarted (container
-    recreated)."""
-    user, sys_ = cur[0] - prev[0], cur[1] - prev[1]
-    if min(user, sys_) < 0:
-        return None
-    return f"{t_ns},proc,-1,{user},{sys_}\n"
-
-
-def net_rows(
-    t_ns: int, prev: dict[str, dict[str, int]], cur: dict[str, dict[str, int]]
-) -> list[str]:
-    """Per-interface byte deltas since the previous tick, loopback and new interfaces skipped."""
-    return [
-        f"{t_ns},{iface},{now['rx_bytes'] - prev[iface]['rx_bytes']},"
-        f"{now['tx_bytes'] - prev[iface]['tx_bytes']}\n"
-        for iface, now in cur.items()
-        if iface != "lo" and iface in prev
-    ]
+def primary_iface(system: System) -> str:
+    """The default-route interface, as `COLLECT_SCRIPT` and the latency shaping pick it."""
+    result = system.run(["ip", "-o", "-4", "route", "show", "to", "default"])
+    if result.returncode != 0:
+        raise RuntimeError(f"ip route failed: {result.stderr.strip()}")
+    fields = result.stdout.split()
+    if "dev" not in fields:
+        raise RuntimeError(f"no default route: {result.stdout!r}")
+    return fields[fields.index("dev") + 1]
 
 
 def open_trace_csv(files: ExitStack, path: Path, header: str) -> TextIO:
-    fresh = not path.exists()
-    f = files.enter_context(path.open("a"))
-    if fresh:
-        f.write(header)
+    f = files.enter_context(path.open("w"))
+    f.write(header)
     return f
 
 
@@ -9812,10 +9797,12 @@ def sample_trace(
     cgroup_root: Path = CGROUP_ROOT,
     net_dev: Path = NET_DEV,
 ) -> None:
-    """Every TRACE_SAMPLE_S, appends the espresso-node container's CPU time and the host's
-    network bytes since the previous tick to `cpu_node{N}.csv` and `net_node{N}.csv` in
-    `trace_dir`, next to the node's `leader_trace_node{N}.csv` and on the same wall clock.
-    Starts once the node has created its trace file; writes are buffered until stop."""
+    """Every TRACE_SAMPLE_S, appends the espresso-node container's cumulative `usage_usec` and
+    the primary interface's cumulative bytes to `cpu_node{N}.csv` and `net_node{N}.csv` in
+    `trace_dir`, next to the node's `leader_trace_node{N}.csv` and on the same wall clock; the
+    reader differences them. Starts once the node has created its trace file. The files are
+    block-buffered: flushed when full and on close. containers.json is re-read only when the
+    scope is missing."""
     node = None
     while node is None and not stop.is_set():
         node = trace_node(trace_dir)
@@ -9823,7 +9810,8 @@ def sample_trace(
             system.clock.wait(stop, TRACE_SAMPLE_S)
     if node is None:
         return
-    cpu_prev = net_prev = None
+    iface = primary_iface(system)
+    cpu_stat = None
     with ExitStack() as files:
         cpu_f = open_trace_csv(
             files, trace_dir / f"cpu_node{node}.csv", TRACE_CPU_HEADER
@@ -9833,39 +9821,59 @@ def sample_trace(
         )
         while not stop.is_set():
             t_ns = round(system.clock.time() * 1e9)
-            cpu = node_cpu_times(load_containers(containers_path), cgroup_root)
-            net = netdev(net_dev.read_text())
-            if cpu is not None and cpu_prev is not None:
-                row = cpu_row(t_ns, cpu_prev, cpu)
-                if row is not None:
-                    cpu_f.write(row)
-            if net_prev is not None:
-                net_f.writelines(net_rows(t_ns, net_prev, net))
-            cpu_prev, net_prev = cpu, net
+            usage = read_cpu_usage(cpu_stat)
+            if usage is None:
+                cpu_stat = node_cpu_stat(load_containers(containers_path), cgroup_root)
+                usage = read_cpu_usage(cpu_stat)
+            if usage is not None:
+                cpu_f.write(f"{t_ns},{usage}\n")
+            net = netdev(net_dev.read_text())[iface]
+            net_f.write(f"{t_ns},{net['rx_bytes']},{net['tx_bytes']}\n")
             system.clock.wait(stop, TRACE_SAMPLE_S)
+
+
+class SamplerThread(threading.Thread):
+    """Stops the agent on an exception and keeps it for `raise_error`, so a failed sampler does
+    not leave the agent running without it."""
+
+    def __init__(self, stop: threading.Event, target: Callable[..., None], *args: Any):
+        super().__init__(target=target, args=args)
+        self.halt = stop
+        self.error: Exception | None = None
+
+    def run(self) -> None:
+        try:
+            super().run()
+        except Exception as exc:  # noqa: BLE001 re-raised by raise_error
+            self.error = exc
+            self.halt.set()
+
+    def raise_error(self) -> None:
+        if self.error is not None:
+            raise self.error
 
 
 def cmd_agent_host(args: argparse.Namespace, system: System) -> int:
     containers_path = Path(BENCH_DIR) / "containers.json"
     stop = threading.Event()
     system.trap((signal.SIGINT, signal.SIGTERM), lambda *_: stop.set())
-    threads = []
+    threads: list[SamplerThread] = []
     if args.pg is not None:
         pg_out = args.out.with_name("pg-stats.jsonl")
         pg = cast(PgEndpoint, json.loads(args.pg.read_text()))
-        threads.append(
-            threading.Thread(target=sample_pg, args=(pg_out, stop, pg, system))
-        )
+        threads.append(SamplerThread(stop, sample_pg, pg_out, stop, pg, system))
     if args.role != "ctl":
         sockets_out = args.out.with_name("sockets.jsonl")
-        threads.append(
-            threading.Thread(target=sample_sockets, args=(sockets_out, stop, system))
-        )
+        threads.append(SamplerThread(stop, sample_sockets, sockets_out, stop, system))
     if args.leader_trace and args.role != "ctl":
         threads.append(
-            threading.Thread(
-                target=sample_trace,
-                args=(Path(TRACE_HOST_DIR), stop, containers_path, system),
+            SamplerThread(
+                stop,
+                sample_trace,
+                Path(TRACE_HOST_DIR),
+                stop,
+                containers_path,
+                system,
             )
         )
     for thread in threads:
@@ -9877,6 +9885,8 @@ def cmd_agent_host(args: argparse.Namespace, system: System) -> int:
             system.clock.wait(stop, HOST_SAMPLE_S)
     for thread in threads:
         thread.join()
+    for thread in threads:
+        thread.raise_error()
     return EXIT_OK
 
 

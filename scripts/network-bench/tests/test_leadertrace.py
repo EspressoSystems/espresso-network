@@ -207,23 +207,29 @@ def test_cluster_finality_counts_decisions_of_views_without_a_leader():
     assert skipped == Counter({"no leader": 1})
 
 
-def test_read_cpu_and_net_samples(tmp_path: Path):
+def test_read_cpu_and_net_difference_the_cumulative_counters(tmp_path: Path):
     cpu = tmp_path / "cpu_node0.csv"
-    cpu.write_text("t_ns,kind,id,user_us,sys_us\n20,proc,-1,3,4\n10,proc,-1,1,2\n")
-    assert leadertrace.read_cpu(cpu) == [(10, 1, 2), (20, 3, 4)]
+    cpu.write_text("t_ns,usage_usec\n20,30\n10,10\n40,35\n")
+    assert leadertrace.read_cpu(cpu) == [(20, 10, 20), (40, 20, 5)]
     net = tmp_path / "net_node0.csv"
-    net.write_text("t_ns,iface,rx_bytes,tx_bytes\n2,eth0,5,6\n1,eth0,1,2\n1,eth1,7,8\n")
-    assert leadertrace.read_net(net) == {
-        "eth0": [(1, 1, 2), (2, 5, 6)],
-        "eth1": [(1, 7, 8)],
-    }
+    net.write_text("t_ns,rx_bytes,tx_bytes\n2,5,9\n1,1,2\n")
+    assert leadertrace.read_net(net) == [(2, 1, 4, 7)]
 
 
-def test_read_cpu_rejects_a_foreign_header_and_kind(tmp_path: Path):
+def test_read_cpu_drops_the_interval_of_a_counter_reset(tmp_path: Path):
+    cpu = tmp_path / "cpu_node0.csv"
+    cpu.write_text("t_ns,usage_usec\n10,100\n20,150\n30,5\n40,15\n")
+    assert leadertrace.read_cpu(cpu) == [(20, 10, 50), (40, 10, 10)]
+
+
+def test_read_net_drops_intervals_where_time_does_not_advance(tmp_path: Path):
+    net = tmp_path / "net_node0.csv"
+    net.write_text("t_ns,rx_bytes,tx_bytes\n10,0,0\n10,5,5\n20,9,9\n")
+    assert leadertrace.read_net(net) == [(20, 10, 4, 4)]
+
+
+def test_read_cpu_rejects_a_foreign_header(tmp_path: Path):
     cpu = tmp_path / "cpu_node0.csv"
     cpu.write_text("t,kind\n")
-    with pytest.raises(ValueError, match="header is not t_ns,kind,id,user_us,sys_us"):
-        leadertrace.read_cpu(cpu)
-    cpu.write_text("t_ns,kind,id,user_us,sys_us\n1,thread,7,1,2\n")
-    with pytest.raises(ValueError, match="unexpected kind 'thread'"):
+    with pytest.raises(ValueError, match="header is not t_ns,usage_usec"):
         leadertrace.read_cpu(cpu)

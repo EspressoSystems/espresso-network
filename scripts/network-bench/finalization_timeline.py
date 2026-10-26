@@ -9,7 +9,7 @@ import statistics
 from dataclasses import dataclass
 from pathlib import Path
 
-from leadertrace import NS_PER_MS, Trace, leaders
+from leadertrace import DECIDED, NS_PER_MS, Trace, leaders
 
 # metric -> (event, where). "leader": L_V's own stamp of view V; "cluster": the median stamp over
 # all nodes at view V; "leader_prev": L_V's stamp at view V - 1.
@@ -20,14 +20,15 @@ EVENTS = {
     "vid_disperse": ("ns_disperse_end", "leader"),
     "vid_unicast_start": ("vid_shares_unicast_start", "leader"),
     "vid_unicast_end": ("vid_shares_unicast_end", "leader"),
-    "proposal_recv": ("proposal_validated_v_minus_1", "cluster"),
-    "vote1_sent": ("vote1_v_minus_1_arrived", "cluster"),
+    "proposal_validated": ("proposal_validated_v_minus_1", "cluster"),
+    "vote1_arrived": ("vote1_v_minus_1_arrived", "cluster"),
     "vid_threshold_reached": ("threshold_share_reached_v_minus_1", "cluster"),
     "recover_decode_end": ("recover_v_minus_1_decode_end", "cluster"),
     "block_reconstructed": ("recover_v_minus_1_end", "cluster"),
     "cert1_formed": ("cert1_v_minus_1_input_dispatched", "cluster"),
     "vote2_sent": ("vote2_v_minus_1_queued", "cluster"),
     "cert2_formed": ("cert2_v_minus_1_input_dispatched", "cluster"),
+    "leaf_decided": (DECIDED, "cluster"),
     "cert1_at_L_V": ("cert1_v_minus_1_input_dispatched", "leader_prev"),
     "leader_recover_start": ("recover_v_minus_1_start", "leader_prev"),
     "leader_recover_decode_end": ("recover_v_minus_1_decode_end", "leader_prev"),
@@ -44,6 +45,13 @@ BUILD_PREP, DISPERSAL, SHARE_SIGN, FAN_OUT, HEADER = (
     "#9333ea",
     "#ea580c",
     "#64748b",
+)
+SHARE_WAIT, RECOVER, COMMIT, COLLECT = "#bbf7d0", "#10b981", "#d97706", "#8b5cf6"
+VOTE1_CERT1, CERT1_VOTE2, VOTE2_CERT2, CERT2_DECIDED = (
+    "#c4b5fd",
+    "#fde68a",
+    "#a78bfa",
+    "#a7f3d0",
 )
 
 
@@ -74,10 +82,8 @@ def view_row(trace: Trace, lead: dict[int, tuple[int, int]], view: int) -> ViewR
             return rel(stamp(leader, view, event))
         if where == "leader_prev":
             return rel(stamp(leader, view - 1, event))
-        stamps = sorted(
-            ts for node in trace if (ts := stamp(node, view, event)) is not None
-        )
-        return rel(stamps[round(0.5 * (len(stamps) - 1))]) if stamps else None
+        stamps = [ts for node in trace if (ts := stamp(node, view, event)) is not None]
+        return rel(statistics.median_low(stamps)) if stamps else None
 
     return {"cycle": (queued - lead[view - 1][1]) / NS_PER_MS} | {
         name: metric(*spec) for name, spec in EVENTS.items()
@@ -95,7 +101,7 @@ def timeline_metrics(rows: list[ViewRow]) -> Metrics:
 
     m = {"n_views": float(len(rows))}
     m |= {name: median(name) for name in ("cycle", *EVENTS)}
-    m["share_wait_ms"] = max(0.0, m["vid_threshold_reached"] - m["proposal_recv"])
+    m["share_wait_ms"] = max(0.0, m["vid_threshold_reached"] - m["proposal_validated"])
     if m["recover_decode_end"]:
         m["recover_decode_ms"] = max(
             0.0, m["recover_decode_end"] - m["vid_threshold_reached"]
@@ -109,10 +115,9 @@ def timeline_metrics(rows: list[ViewRow]) -> Metrics:
         )
         m["recover_commit_ms"] = 0.0
     m["recover_cpu_ms"] = m["recover_decode_ms"] + m["recover_commit_ms"]
-    m["cert1_wait_ms"] = max(0.0, m["cert1_formed"] - m["vote1_sent"])
+    m["cert1_wait_ms"] = max(0.0, m["cert1_formed"] - m["vote1_arrived"])
     m["cert2_wait_ms"] = max(0.0, m["cert2_formed"] - m["vote2_sent"])
-    # No leaf_decided in the cluster medians: Cert2 plus a broadcast tail of 10 ms.
-    m["finality_ms"] = m["cert2_formed"] + 10
+    m["finality_ms"] = m["leaf_decided"]
     m["throughput_vps"] = 1000.0 / m["cycle"] if m["cycle"] > 0 else 0.0
     return m
 
@@ -148,7 +153,7 @@ class Frame:
     t_min: int
     t_max: int
     width: int = 1700
-    height: int = 710
+    height: int = 770
     x_left: int = 220
     x_right: int = 1680
     plot_top: int = 100
@@ -212,7 +217,7 @@ def timeline_svg(m: Metrics) -> str:
         deciding_lane(m, f),
         arrows(m, f),
         brackets(m, f),
-        LEGEND.format(x=f.x_left, y=f.plot_bottom + 170),
+        legend(f),
         "</svg>\n",
     ]
     return "".join(parts)
@@ -284,28 +289,27 @@ def svg_header(m: Metrics, f: Frame) -> str:
 
 
 def cycle_gate(m: Metrics, f: Frame) -> str:
-    """L_{V+1} proposes once Cert1(V) has formed at it and its own build is done; the bar is the
-    RX chain's share of the cycle. The CPU chain (the build, `-block_built`) lies under the
-    lanes."""
+    """L_{V+1} proposes once Cert1(V) has formed at it; the bar is the time from proposal_sent(V)
+    to that Cert1 as a share of the cycle, capped at the full width."""
     gate_y, height = 86, 10
-    rx_ms = m["cert1_at_L_V"] + m["cycle"]
-    pct = rx_ms / m["cycle"] if m["cycle"] > 0 else 0
-    width = (f.x_right - f.x_left - 280) * pct
+    cert1_ms = m["cert1_at_L_V"] + m["cycle"]
+    pct = cert1_ms / m["cycle"] if m["cycle"] > 0 else 0
+    width = (f.x_right - f.x_left - 280) * min(pct, 1)
     return (
         text(
             f.x_left,
             gate_y - 3,
-            "Cycle gate = max(RX chain, CPU chain) on L_{V+1} — both must finish before proposal_sent(V+1)",
+            "Cycle gate: Cert1(V) at L_{V+1} gates proposal_sent(V+1)",
             11,
             "#374151",
             600,
             "start",
         )
-        + f'  <rect x="{f.x_left:.1f}" y="{gate_y}" width="{width:.1f}" height="{height}" fill="#8b5cf6"/>\n'
+        + rect(f.x_left, gate_y, width, height, COLLECT, rx=0)
         + text(
             f.x_left + width / 2,
             gate_y + height - 1,
-            f"RX chain: vote1 collect → Cert1(V) @ L_{{V+1}} = {rx_ms:.0f} ms ({pct * 100:.0f}% of cycle)",
+            f"proposal_sent(V) to Cert1(V) at L_{{V+1}} = {cert1_ms:.0f} ms ({pct * 100:.0f}% of cycle)",
             9,
             "white",
             600,
@@ -374,7 +378,7 @@ def lane_labels(f: Frame) -> str:
         ),
         "Recon": (
             "Recon (V, replicas)",
-            "recv V → share-wait → decode → tx-commit",
+            "validate V → share-wait → decode → tx-commit",
         ),
         "Deciding": (
             "Deciding (median)",
@@ -416,14 +420,14 @@ def leader_lane(m: Metrics, f: Frame) -> str:
 
 
 def next_vote1_lane(m: Metrics, f: Frame) -> str:
-    """Cycle driver 1: first vote1[V] arrival to Cert1(V) at L_{V+1}, which by symmetry is L_V's
+    """Cycle driver 1: median vote1[V] arrival to Cert1(V) at L_{V+1}, which by symmetry is L_V's
     own Cert1[V-1] time shifted by one cycle."""
     y, cy = f.bar_y("NextRX"), f.cy("NextRX")
-    start, end = m["vote1_sent"], m["cert1_at_L_V"] + m["cycle"]
+    start, end = m["vote1_arrived"], m["cert1_at_L_V"] + m["cycle"]
     return (
         dot(f.x(start), cy, 5, "#1d4ed8")
-        + text(f.x(start), y - 4, "first vote1[V] arrives", 10, "#1d4ed8", 600)
-        + rect(f.x(start), y, f.w(start, end), f.bar_h, "#8b5cf6")
+        + text(f.x(start), y - 4, "vote1[V] arrives (median)", 10, "#1d4ed8", 600)
+        + rect(f.x(start), y, f.w(start, end), f.bar_h, COLLECT)
         + bar_label(
             f,
             start,
@@ -467,18 +471,18 @@ def next_recover_lane(m: Metrics, f: Frame) -> str:
         f.x(start), y - 4, "threshold_share_reached", 10, "#047857", 600
     )
     if decode > start and end > decode:
-        out += rect(f.x(start), y, f.w(start, decode), f.bar_h, "#10b981")
+        out += rect(f.x(start), y, f.w(start, decode), f.bar_h, RECOVER)
         if f.w(start, decode) > 50:
             out += bar_label(
                 f, start, decode, y, f"recover-decode {decode - start:.0f}", "white", 10
             )
-        out += rect(f.x(decode), y, f.w(decode, end), f.bar_h, "#d97706")
+        out += rect(f.x(decode), y, f.w(decode, end), f.bar_h, COMMIT)
         if f.w(decode, end) > 50:
             out += bar_label(
                 f, decode, end, y, f"tx-commit {end - decode:.0f}", "white", 10
             )
     else:
-        out += rect(f.x(start), y, f.w(start, end), f.bar_h, "#10b981")
+        out += rect(f.x(start), y, f.w(start, end), f.bar_h, RECOVER)
         if f.w(start, end) > 50:
             out += bar_label(
                 f,
@@ -518,14 +522,14 @@ def next_build_lane(m: Metrics, f: Frame) -> str:
 
 def recon_lane(m: Metrics, f: Frame) -> str:
     y, cy = f.bar_y("Recon"), f.cy("Recon")
-    recv, reached = m["proposal_recv"], m["vid_threshold_reached"]
+    recv, reached = m["proposal_validated"], m["vid_threshold_reached"]
     decode_end, built = m["recover_decode_end"], m["block_reconstructed"]
     out = ""
     if m["share_wait_ms"] > 0:
         out += (
             dot(f.x(recv), cy, 5, "#b45309")
-            + text(f.x(recv), y - 4, "proposal_recv(V)", 10, "#b45309", 600)
-            + rect(f.x(recv), y, f.w(recv, reached), f.bar_h, "#bbf7d0")
+            + text(f.x(recv), y - 4, "proposal_validated(V)", 10, "#b45309", 600)
+            + rect(f.x(recv), y, f.w(recv, reached), f.bar_h, SHARE_WAIT)
             + bar_label(
                 f,
                 recv,
@@ -541,34 +545,34 @@ def recon_lane(m: Metrics, f: Frame) -> str:
             f.x(reached), y - 4, "vid_threshold_reached", 10, "#047857", 600
         )
         if m["recover_commit_ms"] > 0:
-            out += rect(f.x(reached), y, f.w(reached, decode_end), f.bar_h, "#10b981")
+            out += rect(f.x(reached), y, f.w(reached, decode_end), f.bar_h, RECOVER)
             out += bar_label(
                 f,
                 reached,
                 decode_end,
                 y,
-                f"recover-decode (par) {m['recover_decode_ms']:.0f}",
+                f"recover-decode {m['recover_decode_ms']:.0f}",
                 "white",
                 10,
             )
-            out += rect(f.x(decode_end), y, f.w(decode_end, built), f.bar_h, "#d97706")
+            out += rect(f.x(decode_end), y, f.w(decode_end, built), f.bar_h, COMMIT)
             out += bar_label(
                 f,
                 decode_end,
                 built,
                 y,
-                f"txn-commit (Keccak) {m['recover_commit_ms']:.0f}",
+                f"txn-commit {m['recover_commit_ms']:.0f}",
                 "white",
                 10,
             )
         else:
-            out += rect(f.x(reached), y, f.w(reached, built), f.bar_h, "#10b981")
+            out += rect(f.x(reached), y, f.w(reached, built), f.bar_h, RECOVER)
             out += bar_label(
                 f,
                 reached,
                 built,
                 y,
-                f"AvidmGf2::recover — {m['recover_cpu_ms']:.0f} ms",
+                f"recover {m['recover_cpu_ms']:.0f} ms",
                 "white",
                 11,
             )
@@ -585,7 +589,7 @@ def deciding_lane(m: Metrics, f: Frame) -> str:
     """V's finality chain from cluster medians; it does not gate proposal_sent(V+1)."""
     y, cy = f.bar_y("Deciding"), f.cy("Deciding")
     v1, c1, v2, c2, fin = (
-        m["vote1_sent"],
+        m["vote1_arrived"],
         m["cert1_formed"],
         m["vote2_sent"],
         m["cert2_formed"],
@@ -593,8 +597,8 @@ def deciding_lane(m: Metrics, f: Frame) -> str:
     )
     out = (
         dot(f.x(v1), cy, 5, "#1d4ed8")
-        + text(f.x(v1), y - 4, "vote1_sent (median)", 10, "#1d4ed8", 600)
-        + rect(f.x(v1), y, f.w(v1, c1), f.bar_h, "#c4b5fd")
+        + text(f.x(v1), y - 4, "vote1_arrived (median)", 10, "#1d4ed8", 600)
+        + rect(f.x(v1), y, f.w(v1, c1), f.bar_h, VOTE1_CERT1)
     )
     if f.w(v1, c1) > 60:
         out += bar_label(
@@ -603,7 +607,7 @@ def deciding_lane(m: Metrics, f: Frame) -> str:
     out += (
         dot(f.x(c1), cy, 5, "#7c3aed")
         + text(f.x(c1), y + f.bar_h + 12, "Cert1(V) median", 10, "#7c3aed", 600)
-        + rect(f.x(c1), y, f.w(c1, v2), f.bar_h, "#fde68a")
+        + rect(f.x(c1), y, f.w(c1, v2), f.bar_h, CERT1_VOTE2)
     )
     if f.w(c1, v2) > 60:
         out += text(
@@ -616,7 +620,7 @@ def deciding_lane(m: Metrics, f: Frame) -> str:
     out += (
         dot(f.x(v2), cy, 5, "#1d4ed8")
         + text(f.x(v2), y - 4, "vote2_sent (median)", 10, "#1d4ed8", 600)
-        + rect(f.x(v2), y, f.w(v2, c2), f.bar_h, "#a78bfa")
+        + rect(f.x(v2), y, f.w(v2, c2), f.bar_h, VOTE2_CERT2)
     )
     if f.w(v2, c2) > 60:
         out += bar_label(
@@ -626,7 +630,7 @@ def deciding_lane(m: Metrics, f: Frame) -> str:
         out
         + dot(f.x(c2), cy, 5, "#7c3aed")
         + text(f.x(c2), y - 4, "Cert2(V) median", 10, "#7c3aed", 600)
-        + rect(f.x(c2), y, f.w(c2, fin), f.bar_h, "#a7f3d0")
+        + rect(f.x(c2), y, f.w(c2, fin), f.bar_h, CERT2_DECIDED)
         + dot(f.x(fin), cy, 6, "#059669")
         + text(f.x(fin), y - 4, "leaf_decided(V) ✓", 11, "#059669", 700)
     )
@@ -639,8 +643,8 @@ def arrows(m: Metrics, f: Frame) -> str:
     _, _, recover_end = next_recover_ends(m)
     cy = f.cy
     red = [
-        f"M {f.x(0):.1f} {cy('L_V') + 8} V {cy('Recon')} H {f.x(m['proposal_recv']) - 6:.1f}",
-        f"M {f.x(m['vote1_sent']):.1f} {cy('Deciding') + 8} V {cy('NextRX')} H {f.x(m['vote1_sent']) + 6:.1f}",
+        f"M {f.x(0):.1f} {cy('L_V') + 8} V {cy('Recon')} H {f.x(m['proposal_validated']) - 6:.1f}",
+        f"M {f.x(m['vote1_arrived']):.1f} {cy('Deciding') + 8} V {cy('NextRX')} H {f.x(m['vote1_arrived']) + 6:.1f}",
         f"M {f.x(cert1_next) + 4:.1f} {cy('NextRX') + 8} V {cy('NextCPU')} H {f.x(cycle) - 6:.1f}",
     ]
     gray = [
@@ -684,26 +688,37 @@ def brackets(m: Metrics, f: Frame) -> str:
     )
 
 
-LEGEND = """  <g transform="translate({x}, {y})" font-size="11" fill="#374151">
-    <rect x="0"   y="0" width="14" height="14" fill="#94a3b8" rx="2"/>
-    <text x="20"  y="11">build/prep</text>
-    <rect x="95"  y="0" width="14" height="14" fill="#2563eb" rx="2"/>
-    <text x="115" y="11">dispersal</text>
-    <rect x="185" y="0" width="14" height="14" fill="#ea580c" rx="2"/>
-    <text x="205" y="11">fan-out</text>
-    <rect x="270" y="0" width="14" height="14" fill="#f59e0b" rx="2"/>
-    <text x="290" y="11">network + replica validation</text>
-    <rect x="470" y="0" width="14" height="14" fill="#bbf7d0" rx="2"/>
-    <text x="490" y="11">share collection wait</text>
-    <rect x="620" y="0" width="14" height="14" fill="#10b981" rx="2"/>
-    <text x="640" y="11">recover CPU</text>
-    <rect x="740" y="0" width="14" height="14" fill="#8b5cf6" rx="2"/>
-    <text x="760" y="11">vote aggregation / cert</text>
-    <rect x="910" y="0" width="14" height="14" fill="#e5e7eb" stroke="#9ca3af" stroke-dasharray="3 3"/>
-    <text x="930" y="11">idle / slack</text>
-    <line x1="1010" y1="7" x2="1040" y2="7" stroke="#dc2626" stroke-width="2.2" marker-end="url(#critArrow)"/>
-    <text x="1048" y="11" font-weight="600" fill="#dc2626">critical path</text>
-    <line x1="1160" y1="7" x2="1190" y2="7" stroke="#9ca3af" stroke-width="1.2" stroke-dasharray="3 3" marker-end="url(#grayArrow)"/>
-    <text x="1198" y="11" fill="#6b7280">parallel dependency</text>
+LEGEND_SWATCHES = (
+    ("build/prep", BUILD_PREP),
+    ("dispersal", DISPERSAL),
+    ("share-sign", SHARE_SIGN),
+    ("fan-out", FAN_OUT),
+    ("header", HEADER),
+    ("share wait", SHARE_WAIT),
+    ("recover-decode", RECOVER),
+    ("txn-commit", COMMIT),
+    ("collect vote1, aggregate Cert1", COLLECT),
+    ("vote1 to Cert1", VOTE1_CERT1),
+    ("Cert1 to vote2", CERT1_VOTE2),
+    ("vote2 to Cert2", VOTE2_CERT2),
+    ("Cert2 to decided", CERT2_DECIDED),
+)
+LEGEND_COLUMNS, LEGEND_COLUMN_W, LEGEND_ROW_H = 5, 270, 22
+
+
+def legend(f: Frame) -> str:
+    """Swatches of the colors drawn, then the two arrow styles."""
+    out = f'  <g transform="translate({f.x_left}, {f.plot_bottom + 170})" font-size="11" fill="#374151">\n'
+    for i, (label, color) in enumerate(LEGEND_SWATCHES):
+        row, col = divmod(i, LEGEND_COLUMNS)
+        x, y = col * LEGEND_COLUMN_W, row * LEGEND_ROW_H
+        out += f'    <rect x="{x}" y="{y}" width="14" height="14" fill="{color}" rx="2"/>\n'
+        out += f'    <text x="{x + 20}" y="{y + 11}">{label}</text>\n'
+    y = (len(LEGEND_SWATCHES) // LEGEND_COLUMNS + 1) * LEGEND_ROW_H
+    out += f"""    <line x1="0" y1="{y + 7}" x2="30" y2="{y + 7}" stroke="#dc2626" stroke-width="2.2" marker-end="url(#critArrow)"/>
+    <text x="38" y="{y + 11}" font-weight="600" fill="#dc2626">critical path</text>
+    <line x1="{LEGEND_COLUMN_W}" y1="{y + 7}" x2="{LEGEND_COLUMN_W + 30}" y2="{y + 7}" stroke="#9ca3af" stroke-width="1.2" stroke-dasharray="3 3" marker-end="url(#grayArrow)"/>
+    <text x="{LEGEND_COLUMN_W + 38}" y="{y + 11}" fill="#6b7280">parallel dependency</text>
   </g>
 """
+    return out

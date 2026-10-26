@@ -1,5 +1,5 @@
 """One leader's action window across views V-2..V+2 as a PNG: the leader's work spans, the node's
-CPU load in cores busy, and the host's network rate with the send and receive phases of consensus.
+CPU load in cores busy, and the primary interface's network rate with the send and receive phases of consensus.
 
 The CPU and network panels read the samples of `leadertrace.read_cpu` and `read_net`; without
 samples (a run before the sampler existed) a panel says so and the figure still renders."""
@@ -16,6 +16,8 @@ from matplotlib.figure import Figure
 from matplotlib.lines import Line2D
 
 Leaders = dict[int, tuple[int, int]]
+
+CERT1 = "cert1_v_minus_1_input_dispatched"
 
 # (start event, end event, label, cpu heavy, tier). Hatched spans burn cores and shade the CPU
 # panel; the others move bytes. Tier 1 is drawn below tier 0.
@@ -62,7 +64,7 @@ NET_SPANS = (
     ),
     (
         "vote1_v_minus_1_arrived",
-        "cert1_v_minus_1_input_dispatched",
+        CERT1,
         "vote1 collect",
         "rx",
     ),
@@ -79,7 +81,6 @@ OFF_WINDOW_COLOR = "#a3a3a3"
 CERT1_COLOR = "#ea580c"
 CPU_SMOOTH_MS = 50
 NET_BIN_MS = 50
-NET_SMOOTH_MS = 1000
 TX_COLOR, RX_COLOR = "#dc2626", "#1d4ed8"
 
 
@@ -123,7 +124,7 @@ def write_leader_window(
     draw_view_boundaries(top, cpu_ax, trace, lead, view, colors, window)
     top.set_title(
         f"Leader (node {node}) action window across views {view - 2}..{view + 2}"
-        f"  —  duty at V={view}",
+        f", duty at V={view}",
         fontsize=11,
     )
     draw_cpu(cpu_ax, cpu, window)
@@ -363,13 +364,8 @@ def draw_view_boundaries(
             bbox={"facecolor": "white", "edgecolor": "none", "alpha": 0.85, "pad": 0.5},
             zorder=6,
         )
-    for v in range(view - 2, view + 2):
-        if v + 1 not in lead:
-            continue
-        ts = (
-            trace[lead[v + 1][0]].get(v + 1, {}).get("cert1_v_minus_1_input_dispatched")
-        )
-        if ts is not None and window.contains(ts):
+    for ts in cert1_stamps(trace, lead, view):
+        if window.contains(ts):
             ax.axvline(
                 window.ms(ts),
                 color=CERT1_COLOR,
@@ -388,15 +384,24 @@ def draw_view_boundaries(
             )
 
 
+def cert1_stamps(trace: Trace, lead: Leaders, view: int) -> list[int]:
+    """When Cert1(v) formed at L_{v+1}, for v in view-2..view+1. Rows are keyed by subject view,
+    so it is row v of L_{v+1}'s trace: the parent cert that gates proposal v+1."""
+    return [
+        ts
+        for v in range(view - 2, view + 2)
+        if v + 1 in lead
+        and (ts := trace[lead[v + 1][0]].get(v, {}).get(CERT1)) is not None
+    ]
+
+
 def cpu_series(cpu: Cpu, window: Window) -> tuple[np.ndarray, np.ndarray] | None:
-    """(ms in window, cores busy) per tick: the CPU time of the tick over its duration. None
-    without two samples in the window."""
+    """(ms in window, cores busy) per interval ending in the window; None without one."""
     rows = np.array([row for row in cpu if window.contains(row[0])], dtype=np.int64)
-    if len(rows) < 2:
+    if len(rows) == 0:
         return None
-    dt_ns = np.diff(rows[:, 0])
-    busy = (rows[1:, 1] + rows[1:, 2]) * 1000.0 / dt_ns
-    return (rows[1:, 0] - window.t_start) / NS_PER_MS, busy
+    busy = rows[:, 2] * 1000.0 / rows[:, 1]
+    return (rows[:, 0] - window.t_start) / NS_PER_MS, busy
 
 
 def draw_cpu(ax: Axes, cpu: Cpu, window: Window) -> None:
@@ -413,7 +418,7 @@ def draw_cpu(ax: Axes, cpu: Cpu, window: Window) -> None:
             color="#94a3b8",
             transform=ax.transAxes,
         )
-        ax.set_title("process CPU load — no data", fontsize=10)
+        ax.set_title("process CPU load, no data", fontsize=10)
         return
     xs, busy = series
     ax.plot(
@@ -438,55 +443,42 @@ def draw_cpu(ax: Axes, cpu: Cpu, window: Window) -> None:
     ax.set_ylim(0, max(1.1, float(busy.max()) * 1.1))
     ax.grid(axis="y", alpha=0.3)
     ax.set_title(
-        "process CPU load (cores busy) — from cpu_node proc counter", fontsize=10
+        "process CPU load (cores busy), cgroup usage_usec of the espresso-node container",
+        fontsize=10,
     )
     ax.legend(loc="upper right", fontsize=8, framealpha=0.9)
 
 
 def net_series(
     net: Net, window: Window
-) -> dict[str, tuple[np.ndarray, np.ndarray, np.ndarray]]:
-    """Per interface (ms in window, tx Gbps, rx Gbps) per tick, for the ticks in the window."""
-    series = {}
-    for iface, rows in net.items():
-        data = np.array(rows, dtype=np.int64)
-        elapsed = np.diff(data[:, 0])
-        keep = (elapsed > 0) & np.array([window.contains(t) for t in data[1:, 0]])
-        if keep.any():
-            ticks = data[1:][keep]
-            series[iface] = (
-                (ticks[:, 0] - window.t_start) / NS_PER_MS,
-                ticks[:, 2] * 8.0 / elapsed[keep],
-                ticks[:, 1] * 8.0 / elapsed[keep],
-            )
-    return series
+) -> tuple[np.ndarray, np.ndarray, np.ndarray] | None:
+    """(ms in window, tx Gbps, rx Gbps) per interval ending in the window; None without one."""
+    rows = np.array([row for row in net if window.contains(row[0])], dtype=np.int64)
+    if len(rows) == 0:
+        return None
+    return (
+        (rows[:, 0] - window.t_start) / NS_PER_MS,
+        rows[:, 3] * 8.0 / rows[:, 1],
+        rows[:, 2] * 8.0 / rows[:, 1],
+    )
 
 
-def net_smoothed(
+def net_binned(
     net: Net, window: Window
-) -> dict[str, tuple[np.ndarray, np.ndarray, np.ndarray]]:
-    """Per interface (ms, tx Gbps, rx Gbps) moving average over NET_SMOOTH_MS of the bytes in
-    NET_BIN_MS bins. The grid extends by the smoothing window on both sides, so the average is
-    defined at the edges of the window."""
+) -> tuple[np.ndarray, np.ndarray, np.ndarray] | None:
+    """(ms of bin centers, tx Gbps, rx Gbps) over the whole NET_BIN_MS bins of the window, from
+    the intervals ending in each bin."""
     bin_ns = NET_BIN_MS * NS_PER_MS
-    pad_ns = NET_SMOOTH_MS * NS_PER_MS
-    grid_lo = window.t_start - pad_ns
-    bins = int((window.t_end + pad_ns - grid_lo) / bin_ns) + 1
-    kernel = np.ones(NET_SMOOTH_MS // NET_BIN_MS) / (NET_SMOOTH_MS // NET_BIN_MS)
-    first = int(pad_ns / bin_ns)
-    last = int((window.t_end - grid_lo) / bin_ns) + 1
-    out = {}
-    for iface, rows in net.items():
-        tx, rx = np.zeros(bins), np.zeros(bins)
-        for t_ns, rx_bytes, tx_bytes in rows[1:]:
-            index = (t_ns - grid_lo) // bin_ns
-            if 0 <= index < bins:
-                tx[index] += tx_bytes * 8.0 / bin_ns
-                rx[index] += rx_bytes * 8.0 / bin_ns
-        smooth_tx = np.convolve(tx, kernel, mode="same")[first:last]
-        smooth_rx = np.convolve(rx, kernel, mode="same")[first:last]
-        out[iface] = (np.arange(len(smooth_tx)) * NET_BIN_MS, smooth_tx, smooth_rx)
-    return out
+    bins = (window.t_end - window.t_start) // bin_ns
+    tx, rx = np.zeros(bins), np.zeros(bins)
+    for t_ns, _, rx_bytes, tx_bytes in net:
+        index = (t_ns - window.t_start) // bin_ns
+        if 0 <= index < bins:
+            tx[index] += tx_bytes * 8.0 / bin_ns
+            rx[index] += rx_bytes * 8.0 / bin_ns
+    if not bins:
+        return None
+    return (np.arange(bins) + 0.5) * NET_BIN_MS, tx, rx
 
 
 def draw_net(
@@ -499,14 +491,14 @@ def draw_net(
 ) -> None:
     """`events_ax`: TX and RX phase bars above `ax`, which plots the rates in Gbps."""
     series = net_series(net, window)
-    draw_net_events(events_ax, node, columns, window, bool(series))
+    draw_net_events(events_ax, node, columns, window, series is not None)
     min_visible_ms = max(1.0, window.span_ms * 0.005)
     for x0, x1, _, color, _ in columns:
         ax.axvspan(
             x0, x0 + max(x1 - x0, min_visible_ms), color=color, alpha=0.18, zorder=0
         )
     peak = 0.0
-    if not series:
+    if series is None:
         message = (
             "no net samples in the window" if net else "no net_node{N}.csv samples"
         )
@@ -520,42 +512,16 @@ def draw_net(
             color="#888",
             transform=ax.transAxes,
         )
-    for iface, (xs, tx, rx) in series.items():
-        ax.plot(
-            xs,
-            tx,
-            color=TX_COLOR,
-            linewidth=0.9,
-            alpha=0.45,
-            drawstyle="steps-post",
-            label=f"{iface} tx (raw)",
-        )
-        ax.plot(
-            xs,
-            rx,
-            color=RX_COLOR,
-            linewidth=0.9,
-            alpha=0.45,
-            drawstyle="steps-post",
-            label=f"{iface} rx (raw)",
-        )
-        peak = max(peak, float(tx.max()), float(rx.max()))
-    if series:
-        for iface, (xs, tx, rx) in net_smoothed(net, window).items():
-            ax.plot(
-                xs,
-                tx,
-                color=TX_COLOR,
-                linewidth=1.6,
-                label=f"{iface} tx {NET_SMOOTH_MS // 1000}s avg",
-            )
-            ax.plot(
-                xs,
-                rx,
-                color=RX_COLOR,
-                linewidth=1.6,
-                label=f"{iface} rx {NET_SMOOTH_MS // 1000}s avg",
-            )
+    else:
+        xs, tx, rx = series
+        ax.plot(xs, tx, color=TX_COLOR, linewidth=0.9, alpha=0.45, label="tx (raw)")
+        ax.plot(xs, rx, color=RX_COLOR, linewidth=0.9, alpha=0.45, label="rx (raw)")
+        peak = max(float(tx.max()), float(rx.max()))
+        binned = net_binned(net, window)
+        if binned is not None:
+            bx, btx, brx = binned
+            ax.plot(bx, btx, color=TX_COLOR, linewidth=1.6, label=f"tx {NET_BIN_MS} ms")
+            ax.plot(bx, brx, color=RX_COLOR, linewidth=1.6, label=f"rx {NET_BIN_MS} ms")
         ax.legend(loc="upper right", fontsize=7.5, framealpha=0.9)
     ax.set_ylim(0, max(peak * 1.1, 1.2))
     ax.set_ylabel("network\nGbps")
@@ -579,7 +545,7 @@ def draw_net_events(
     ax.tick_params(axis="x", labelbottom=False, length=0)
     ax.set_title(
         f"network utilization on node {node} (tx/rx)"
-        f"{'' if have_samples else ' — no net samples'}",
+        f"{'' if have_samples else ', no net samples'}",
         fontsize=10,
     )
     for direction, (bar_y, bar_h) in rows.items():

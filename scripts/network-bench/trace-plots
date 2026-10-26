@@ -320,7 +320,7 @@ def node_samples(
     net_path = trace_path.with_name(f"net_node{node}.csv")
     return (
         leadertrace.read_cpu(cpu_path) if cpu_path.exists() else [],
-        leadertrace.read_net(net_path) if net_path.exists() else {},
+        leadertrace.read_net(net_path) if net_path.exists() else [],
     )
 
 
