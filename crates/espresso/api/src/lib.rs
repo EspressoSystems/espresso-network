@@ -50,6 +50,7 @@ use self::proto::{
     config_service_server::{ConfigService, ConfigServiceServer},
     database_service_server::{DatabaseService, DatabaseServiceServer},
     explorer_service_server::{ExplorerService, ExplorerServiceServer},
+    light_client_service_server::{LightClientService, LightClientServiceServer},
     merklized_state_service_server::{MerklizedStateService, MerklizedStateServiceServer},
     node_service_server::{NodeService, NodeServiceServer},
     reward_state_service_server::{RewardStateService, RewardStateServiceServer},
@@ -114,6 +115,7 @@ where
         + SubmitService
         + ExplorerService
         + CatchupService
+        + LightClientService
         + Send
         + Sync
         + 'static,
@@ -163,6 +165,7 @@ where
         + SubmitService
         + ExplorerService
         + CatchupService
+        + LightClientService
         + Send
         + Sync
         + 'static,
@@ -175,7 +178,8 @@ where
         .merge(rest::merklized_state_service_rest_router(state.clone()))
         .merge(rest::reward_state_service_rest_router(state.clone()))
         .merge(rest::state_signature_service_rest_router(state.clone()))
-        .merge(rest::catchup_service_rest_router(state.clone()));
+        .merge(rest::catchup_service_rest_router(state.clone()))
+        .merge(rest::light_client_service_rest_router(state.clone()));
     let router = if modules.submit {
         router.merge(rest::submit_service_rest_router(state.clone()))
     } else {
@@ -414,6 +418,7 @@ where
         + SubmitService
         + ExplorerService
         + CatchupService
+        + LightClientService
         + Clone,
 {
     use ::tonic::transport::Server;
@@ -435,6 +440,7 @@ where
         .add_service(RewardStateServiceServer::new(state.clone()))
         .add_service(StateSignatureServiceServer::new(state.clone()))
         .add_service(CatchupServiceServer::new(state.clone()))
+        .add_service(LightClientServiceServer::new(state.clone()))
         .add_service(reflection_service)
         .add_optional_service(modules.submit.then(|| {
             // tonic's 4 MiB default would refuse a transaction the REST route and the block size

@@ -10,12 +10,15 @@ use espresso_types::{
     config::PublicNetworkConfig,
     v0_3::{
         self, AvidMIncorrectEncodingNsProof, AvidMNsProof, RegisteredValidator,
-        ResolvableChainConfig, StateCertQueryDataV1,
+        ResolvableChainConfig, StakeTableEvent, StateCertQueryDataV1,
     },
     v0_4::{
         RewardAccountProofV2, RewardAccountQueryDataV2, RewardMerkleProofV2, StateCertQueryDataV2,
     },
     v0_6::AvidmGf2NsProof,
+};
+use hotshot_contract_adapter::sol_types::{
+    EdOnBN254PointSol, G2PointSol, stake_table_v3::BN254::G1Point as G1PointSol,
 };
 use hotshot_query_service_types::{
     availability::{
@@ -34,8 +37,8 @@ use hotshot_types::{
     light_client::LCV3StateSignatureRequestBody,
     network::BuilderType,
     simple_certificate::{
-        Certificate2, SimpleCertificate, SuccessThreshold, Threshold, TimeoutCertificate2,
-        TimeoutCertificate3, UpgradeCertificate, ViewSyncFinalizeCertificate2,
+        Certificate2, CertificatePair, SimpleCertificate, SuccessThreshold, Threshold,
+        TimeoutCertificate2, TimeoutCertificate3, UpgradeCertificate, ViewSyncFinalizeCertificate2,
     },
     simple_vote::{QuorumData2, Voteable},
     traits::EncodeBytes as _,
@@ -44,6 +47,11 @@ use hotshot_types::{
 use jf_merkle_tree_compat::{
     Element, Index, NodeValue,
     prelude::{MerkleNode, MerkleProof},
+};
+use light_client::consensus::{
+    leaf::{FinalityProof, LeafProof},
+    namespace::NamespaceProof,
+    payload::PayloadProof,
 };
 use tagged_base64::TaggedBase64;
 
@@ -859,6 +867,15 @@ where
     }
 }
 
+impl From<&CertificatePair<SeqTypes>> for proto::CertificatePair {
+    fn from(pair: &CertificatePair<SeqTypes>) -> Self {
+        proto::CertificatePair {
+            qc: Some(pair.qc().into()),
+            next_epoch_qc: pair.next_epoch_qc().map(Into::into),
+        }
+    }
+}
+
 impl From<&Certificate2<SeqTypes>> for proto::Certificate2 {
     fn from(cert: &Certificate2<SeqTypes>) -> Self {
         proto::Certificate2 {
@@ -1027,9 +1044,22 @@ impl TryFrom<&VidCommonQueryData<SeqTypes>> for proto::VidCommonResponse {
     type Error = tonic::Status;
 
     fn try_from(common: &VidCommonQueryData<SeqTypes>) -> Result<Self, Self::Error> {
-        use proto::vid_common_response::Common;
+        Ok(proto::VidCommonResponse {
+            height: common.height,
+            block_hash: common.block_hash().to_string(),
+            payload_hash: common.payload_hash().to_string(),
+            common: Some(common.common().try_into()?),
+        })
+    }
+}
 
-        let arm = match common.common() {
+impl TryFrom<&VidCommon> for proto::vid_common::Common {
+    type Error = tonic::Status;
+
+    fn try_from(common: &VidCommon) -> Result<Self, Self::Error> {
+        use proto::vid_common::Common;
+
+        Ok(match common {
             VidCommon::V0(advz) => {
                 let value = to_json(advz)?;
                 Common::V0(proto::AdvzCommon {
@@ -1056,13 +1086,213 @@ impl TryFrom<&VidCommonQueryData<SeqTypes>> for proto::VidCommonResponse {
                     .collect(),
                 ns_lens: namespaced.ns_lens.iter().map(|len| *len as u64).collect(),
             }),
-        };
-        Ok(proto::VidCommonResponse {
-            height: common.height,
-            block_hash: common.block_hash().to_string(),
-            payload_hash: common.payload_hash().to_string(),
-            common: Some(arm),
         })
+    }
+}
+
+impl TryFrom<&VidCommon> for proto::VidCommon {
+    type Error = tonic::Status;
+
+    fn try_from(common: &VidCommon) -> Result<Self, Self::Error> {
+        Ok(proto::VidCommon {
+            common: Some(common.try_into()?),
+        })
+    }
+}
+
+impl From<&LeafProof> for proto::LightClientLeafProofResponse {
+    fn from(proof: &LeafProof) -> Self {
+        proto::LightClientLeafProofResponse {
+            leaves: proof.leaves().iter().map(Into::into).collect(),
+            proof: Some(proof.proof().into()),
+        }
+    }
+}
+
+impl From<&FinalityProof> for proto::FinalityProof {
+    fn from(proof: &FinalityProof) -> Self {
+        use proto::finality_proof::Proof;
+
+        let arm = match proof {
+            FinalityProof::Assumption => Proof::Assumption(proto::FinalityAssumption {}),
+            FinalityProof::HotStuff2 {
+                committing_qc,
+                deciding_qc,
+            } => Proof::HotStuff2(proto::HotStuff2Finality {
+                committing_qc: Some(committing_qc.as_ref().into()),
+                deciding_qc: Some(deciding_qc.as_ref().into()),
+            }),
+            FinalityProof::NewProtocol { cert2, leaf_qc } => {
+                Proof::NewProtocol(proto::NewProtocolFinality {
+                    cert2: Some(cert2.as_ref().into()),
+                    leaf_qc: Some(leaf_qc.as_ref().into()),
+                })
+            },
+            FinalityProof::HotStuff {
+                precommit_qc,
+                committing_qc,
+                deciding_qc,
+            } => Proof::HotStuff(proto::HotStuffFinality {
+                precommit_qc: Some(precommit_qc.as_ref().into()),
+                committing_qc: Some(committing_qc.as_ref().into()),
+                deciding_qc: Some(deciding_qc.as_ref().into()),
+            }),
+        };
+        proto::FinalityProof { proof: Some(arm) }
+    }
+}
+
+impl TryFrom<&PayloadProof> for proto::LightClientPayloadProofResponse {
+    type Error = tonic::Status;
+
+    fn try_from(proof: &PayloadProof) -> Result<Self, Self::Error> {
+        Ok(proto::LightClientPayloadProofResponse {
+            payload: Some(proof.payload().into()),
+            vid_common: Some(proof.vid_common().try_into()?),
+        })
+    }
+}
+
+impl TryFrom<&NamespaceProof> for proto::LightClientNamespaceProofResponse {
+    type Error = tonic::Status;
+
+    fn try_from(proof: &NamespaceProof) -> Result<Self, Self::Error> {
+        Ok(proto::LightClientNamespaceProofResponse {
+            contents: proof.contents().map(TryInto::try_into).transpose()?,
+        })
+    }
+}
+
+/// The pair [`NamespaceProof::contents`] returns.
+impl TryFrom<(&NsProof, &VidCommon)> for proto::LightClientNamespaceProofContents {
+    type Error = tonic::Status;
+
+    fn try_from((proof, common): (&NsProof, &VidCommon)) -> Result<Self, Self::Error> {
+        Ok(proto::LightClientNamespaceProofContents {
+            proof: Some(proof.try_into()?),
+            vid_common: Some(common.try_into()?),
+        })
+    }
+}
+
+impl From<&StakeTableEvent> for proto::StakeTableEvent {
+    fn from(event: &StakeTableEvent) -> Self {
+        use proto::stake_table_event::Event;
+
+        let arm = match event {
+            StakeTableEvent::Register(event) => Event::Register(proto::ValidatorRegistered {
+                account: format!("{:#x}", event.account),
+                bls_vk: Some((&event.blsVk).into()),
+                schnorr_vk: Some((&event.schnorrVk).into()),
+                commission: u32::from(event.commission),
+            }),
+            StakeTableEvent::RegisterV2(event) => Event::RegisterV2(proto::ValidatorRegisteredV2 {
+                account: format!("{:#x}", event.account),
+                bls_vk: Some((&event.blsVK).into()),
+                schnorr_vk: Some((&event.schnorrVK).into()),
+                commission: u32::from(event.commission),
+                bls_sig: Some((&event.blsSig).into()),
+                schnorr_sig: event.schnorrSig.to_vec(),
+                metadata_uri: event.metadataUri.clone(),
+            }),
+            StakeTableEvent::RegisterV3(event) => Event::RegisterV3(proto::ValidatorRegisteredV3 {
+                account: format!("{:#x}", event.account),
+                bls_vk: Some((&event.blsVK).into()),
+                schnorr_vk: Some((&event.schnorrVK).into()),
+                commission: u32::from(event.commission),
+                bls_sig: Some((&event.blsSig).into()),
+                schnorr_sig: event.schnorrSig.to_vec(),
+                metadata_uri: event.metadataUri.clone(),
+                x25519_key: event.x25519Key.to_vec(),
+                p2p_addr: event.p2pAddr.clone(),
+            }),
+            StakeTableEvent::Deregister(event) => Event::Deregister(proto::ValidatorExit {
+                validator: format!("{:#x}", event.validator),
+            }),
+            StakeTableEvent::DeregisterV2(event) => Event::DeregisterV2(proto::ValidatorExitV2 {
+                validator: format!("{:#x}", event.validator),
+                unlocks_at: event.unlocksAt.to_string(),
+            }),
+            StakeTableEvent::Delegate(event) => Event::Delegate(proto::Delegated {
+                delegator: format!("{:#x}", event.delegator),
+                validator: format!("{:#x}", event.validator),
+                amount: event.amount.to_string(),
+            }),
+            StakeTableEvent::Undelegate(event) => Event::Undelegate(proto::Undelegated {
+                delegator: format!("{:#x}", event.delegator),
+                validator: format!("{:#x}", event.validator),
+                amount: event.amount.to_string(),
+            }),
+            StakeTableEvent::UndelegateV2(event) => Event::UndelegateV2(proto::UndelegatedV2 {
+                delegator: format!("{:#x}", event.delegator),
+                validator: format!("{:#x}", event.validator),
+                undelegation_id: event.undelegationId,
+                amount: event.amount.to_string(),
+                unlocks_at: event.unlocksAt.to_string(),
+            }),
+            StakeTableEvent::KeyUpdate(event) => Event::KeyUpdate(proto::ConsensusKeysUpdated {
+                account: format!("{:#x}", event.account),
+                bls_vk: Some((&event.blsVK).into()),
+                schnorr_vk: Some((&event.schnorrVK).into()),
+            }),
+            StakeTableEvent::KeyUpdateV2(event) => {
+                Event::KeyUpdateV2(proto::ConsensusKeysUpdatedV2 {
+                    account: format!("{:#x}", event.account),
+                    bls_vk: Some((&event.blsVK).into()),
+                    schnorr_vk: Some((&event.schnorrVK).into()),
+                    bls_sig: Some((&event.blsSig).into()),
+                    schnorr_sig: event.schnorrSig.to_vec(),
+                })
+            },
+            StakeTableEvent::CommissionUpdate(event) => {
+                Event::CommissionUpdate(proto::CommissionUpdated {
+                    validator: format!("{:#x}", event.validator),
+                    timestamp: event.timestamp.to_string(),
+                    old_commission: u32::from(event.oldCommission),
+                    new_commission: u32::from(event.newCommission),
+                })
+            },
+            StakeTableEvent::X25519KeyUpdate(event) => {
+                Event::X25519KeyUpdate(proto::X25519KeyUpdated {
+                    validator: format!("{:#x}", event.validator),
+                    x25519_key: event.x25519Key.to_vec(),
+                })
+            },
+            StakeTableEvent::P2pAddrUpdate(event) => Event::P2pAddrUpdate(proto::P2pAddrUpdated {
+                validator: format!("{:#x}", event.validator),
+                p2p_addr: event.p2pAddr.clone(),
+            }),
+        };
+        proto::StakeTableEvent { event: Some(arm) }
+    }
+}
+
+impl From<&G1PointSol> for proto::Bn254G1Point {
+    fn from(point: &G1PointSol) -> Self {
+        proto::Bn254G1Point {
+            x: format!("{:#x}", point.x),
+            y: format!("{:#x}", point.y),
+        }
+    }
+}
+
+impl From<&G2PointSol> for proto::Bn254G2Point {
+    fn from(point: &G2PointSol) -> Self {
+        proto::Bn254G2Point {
+            x0: format!("{:#x}", point.x0),
+            x1: format!("{:#x}", point.x1),
+            y0: format!("{:#x}", point.y0),
+            y1: format!("{:#x}", point.y1),
+        }
+    }
+}
+
+impl From<&EdOnBN254PointSol> for proto::EdOnBn254Point {
+    fn from(point: &EdOnBN254PointSol) -> Self {
+        proto::EdOnBn254Point {
+            x: format!("{:#x}", point.x),
+            y: format!("{:#x}", point.y),
+        }
     }
 }
 
