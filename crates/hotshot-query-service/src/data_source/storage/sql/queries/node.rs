@@ -77,24 +77,10 @@ where
         else {
             return Ok(0);
         };
-        let (count,) = query_as::<(i64,)>(
-            "SELECT num_transactions FROM aggregate WHERE height = $1 AND namespace = $2",
-        )
-        .bind(to as i64)
-        .bind(namespace)
-        .fetch_one(self.as_mut())
-        .await?;
-        let mut count = count as usize;
-
+        let (mut count, _) = cumulative_totals(self, to, namespace).await?;
         if let Some(before) = before {
-            let (prev_count,) = query_as::<(i64,)>(
-                "SELECT num_transactions FROM aggregate WHERE height = $1 AND namespace = $2",
-            )
-            .bind(before as i64)
-            .bind(namespace)
-            .fetch_one(self.as_mut())
-            .await?;
-            count = count.saturating_sub(prev_count as usize);
+            let (prev_count, _) = cumulative_totals(self, before, namespace).await?;
+            count = count.saturating_sub(prev_count);
         }
 
         Ok(count)
@@ -111,24 +97,10 @@ where
         else {
             return Ok(0);
         };
-        let (size,) = query_as::<(i64,)>(
-            "SELECT payload_size FROM aggregate WHERE height = $1 AND namespace = $2",
-        )
-        .bind(to as i64)
-        .bind(namespace)
-        .fetch_one(self.as_mut())
-        .await?;
-        let mut size = size as usize;
-
+        let (_, mut size) = cumulative_totals(self, to, namespace).await?;
         if let Some(before) = before {
-            let (prev_size,) = query_as::<(i64,)>(
-                "SELECT payload_size FROM aggregate WHERE height = $1 AND namespace = $2",
-            )
-            .bind(before as i64)
-            .bind(namespace)
-            .fetch_one(self.as_mut())
-            .await?;
-            size = size.saturating_sub(prev_size as usize);
+            let (_, prev_size) = cumulative_totals(self, before, namespace).await?;
+            size = size.saturating_sub(prev_size);
         }
 
         Ok(size)
@@ -812,6 +784,29 @@ where
     }))
 }
 
+/// The cumulative transaction count and payload size of `namespace` (-1 for all namespaces) at
+/// `height`.
+///
+/// Fails with [`QueryError::NotFound`] if `height` is not aggregated yet. A namespace has no rows
+/// below the first block that contains it, so there it counts as zero.
+async fn cumulative_totals(
+    tx: &mut Transaction<impl TransactionMode>,
+    height: usize,
+    namespace: i64,
+) -> QueryResult<(usize, usize)> {
+    let (count, size) = query_as::<(i64, i64)>(
+        "SELECT coalesce(ns.num_transactions, 0), coalesce(ns.payload_size, 0)
+           FROM aggregate AS total
+           LEFT JOIN aggregate AS ns ON ns.height = total.height AND ns.namespace = $2
+          WHERE total.height = $1 AND total.namespace = -1",
+    )
+    .bind(height as i64)
+    .bind(namespace)
+    .fetch_one(tx.as_mut())
+    .await?;
+    Ok((count as usize, size as usize))
+}
+
 /// The first height with aggregate statistics, or 0 if there are none yet.
 async fn aggregates_start(tx: &mut Transaction<impl TransactionMode>) -> QueryResult<usize> {
     let (start,) = query_as::<(Option<i64>,)>("SELECT min(height) FROM aggregate")
@@ -831,7 +826,7 @@ mod test {
         *,
     };
     use crate::{
-        availability::{BlockQueryData, LeafQueryData, VidCommonQueryData},
+        availability::{BlockQueryData, LeafQueryData, NamespaceInfo, VidCommonQueryData},
         data_source::{
             Transaction as _, VersionedDataSource,
             storage::{StorageConnectionType, UpdateAvailabilityStorage},
@@ -1252,12 +1247,12 @@ mod test {
         // A range from the start on needs no row below it.
         let from_start = (Bound::Included(start), Bound::Unbounded);
         assert_eq!(
-            totals(&mut tx, from_start).await.map(Result::unwrap),
+            totals(&mut tx, from_start, None).await.map(Result::unwrap),
             [3, 6]
         );
         let above_start = (Bound::Included(start + 1), Bound::Included(start + 1));
         assert_eq!(
-            totals(&mut tx, above_start).await.map(Result::unwrap),
+            totals(&mut tx, above_start, None).await.map(Result::unwrap),
             [1, 2]
         );
 
@@ -1267,7 +1262,7 @@ mod test {
             (0, (Bound::Unbounded, Bound::Included(start + 2))),
             (start - 1, (Bound::Included(start - 1), Bound::Unbounded)),
         ] {
-            for res in totals(&mut tx, range).await {
+            for res in totals(&mut tx, range, None).await {
                 let err = res.unwrap_err();
                 assert!(
                     matches!(
@@ -1281,14 +1276,100 @@ mod test {
         }
     }
 
-    /// The transaction count and the payload size over `range`.
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_namespace_totals_below_its_first_block() {
+        let storage = TmpDb::init().await;
+        let db = SqlStorage::connect(storage.config(), StorageConnectionType::Query)
+            .await
+            .unwrap();
+
+        // Blocks 0 and 1 are empty. From block 2 on, each block has one transaction of 2 bytes in
+        // namespace `ns`, so `ns` has no aggregate rows below block 2.
+        let ns = 7;
+        let genesis = PayloadMetadata::from(
+            BlockQueryData::<MockTypes>::genesis(
+                &Default::default(),
+                &Default::default(),
+                TEST_VERSIONS.test.base,
+            )
+            .await,
+        );
+        let blocks = (0..4)
+            .map(|height| {
+                let namespaces = if height < 2 {
+                    Default::default()
+                } else {
+                    [(
+                        ns,
+                        NamespaceInfo {
+                            num_transactions: 1,
+                            size: 2,
+                        },
+                    )]
+                    .into_iter()
+                    .collect()
+                };
+                PayloadMetadata {
+                    height,
+                    size: if height < 2 { 0 } else { 2 },
+                    num_transactions: if height < 2 { 0 } else { 1 },
+                    namespaces,
+                    ..genesis.clone()
+                }
+            })
+            .collect::<Vec<_>>();
+        let mut tx = db.write().await.unwrap();
+        tx.update_aggregates(Aggregate::default(), &blocks)
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+
+        let mut tx = db.read().await.unwrap();
+
+        // A range that ends below the namespace's first block counts nothing.
+        let before_first = (Bound::Included(0), Bound::Included(1));
+        assert_eq!(
+            totals(&mut tx, before_first, Some(ns))
+                .await
+                .map(Result::unwrap),
+            [0, 0]
+        );
+
+        // A range that starts below it counts from it, also when the row before the range is
+        // missing.
+        for from in 0..=2 {
+            let range = (Bound::Included(from), Bound::Unbounded);
+            assert_eq!(
+                totals(&mut tx, range, Some(ns)).await.map(Result::unwrap),
+                [2, 4],
+                "from {from}"
+            );
+        }
+
+        // A namespace that never appeared counts nothing.
+        assert_eq!(
+            totals(&mut tx, (Bound::Unbounded, Bound::Unbounded), Some(ns + 1))
+                .await
+                .map(Result::unwrap),
+            [0, 0]
+        );
+
+        // A block that is not aggregated yet is still not found.
+        for res in totals(&mut tx, (Bound::Unbounded, Bound::Included(4)), Some(ns)).await {
+            assert!(matches!(res, Err(QueryError::NotFound)), "{res:?}");
+        }
+    }
+
+    /// The transaction count and the payload size of `namespace` over `range`.
     async fn totals(
         tx: &mut Transaction<impl TransactionMode>,
         range: (Bound<usize>, Bound<usize>),
+        namespace: Option<i64>,
     ) -> [QueryResult<usize>; 2] {
         [
-            NodeStorage::<MockTypes>::count_transactions_in_range(tx, range, None).await,
-            NodeStorage::<MockTypes>::payload_size_in_range(tx, range, None).await,
+            NodeStorage::<MockTypes>::count_transactions_in_range(tx, range, namespace).await,
+            NodeStorage::<MockTypes>::payload_size_in_range(tx, range, namespace).await,
         ]
     }
 }
