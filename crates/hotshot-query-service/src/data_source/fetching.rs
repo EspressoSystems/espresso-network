@@ -1962,13 +1962,18 @@ where
 /// the aggregator breaks the inner loop and rebuilds the stream from the committed aggregate
 /// height, which re-evaluates `might_exist` against current storage and loads now-present
 /// heights as `Ready`.
+///
+/// If the pruner deleted the next block meanwhile, the rebuild starts over instead, and deletes
+/// every total (see [`aggregator_start`]). So this is also how long an aggregator that fell behind
+/// the pruner waits before it starts over.
 pub(crate) const AGGREGATOR_RETRY_INTERVAL: Duration = Duration::from_secs(30);
 
 /// How many heights of aggregates one transaction deletes when the aggregator starts over.
 ///
-/// Each height has a row for every namespace seen so far, so this bounds how long a transaction
-/// holds the database.
-const AGGREGATE_DELETE_BATCH: usize = 1000;
+/// Each height has a row for every namespace seen so far, so a batch is this many times the
+/// namespace count in rows. It is as small as a default pruner batch, because each batch holds the
+/// database (on SQLite, its only write lock) until it commits.
+const AGGREGATE_DELETE_BATCH: usize = 100;
 
 impl<Types, S, P> Fetcher<Types, S, P>
 where
