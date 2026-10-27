@@ -1,6 +1,4 @@
-
-
-    use clap::Parser;
+use clap::Parser;
 use espresso_telemetry as telemetry;
 use espresso_types::traits::NullEventConsumer;
 use futures::future::FutureExt;
@@ -249,8 +247,9 @@ where
             }
             if modules.light_client.is_some() {
                 tracing::warn!(
-                    "the light-client module is deprecated and ignored: every node with SQL storage and \
-                     the query module serves /light-client. Remove it from the command line."
+                    "the light-client module is deprecated and ignored: every node with SQL \
+                     storage and the query module serves /light-client. Remove it from the \
+                     command line."
                 );
             }
             if let Some(config) = modules.config {

@@ -57,19 +57,9 @@ pub fn url(base: &::url::Url, path: impl AsRef<str>) -> ::url::Url {
 ///
 /// `catchup`, like the query-service modules (`status`, `availability`, `node`, `token`,
 /// `block-state`, `fee-state`, `reward-state`, `database`) and `v2`, is always on: tide-disco's
-<<<<<<< HEAD
-/// SQL mode registered it unconditionally. `submit`, `config`, `explorer`, `light-client`, and
-/// `hotshot-events` follow `Options`, matching `Options::init_with_query_module_sql`.
-||||||| parent of 8513af025 (serve the light client api on every sql query node (#5394))
-/// SQL mode registered it unconditionally. `submit`, `config`, `explorer`, and `light-client`
-/// follow `Options`, matching `Options::init_with_query_module_sql`, and v2's gated services follow
-/// the same flag as their v1 module.
-=======
 /// SQL mode registered it unconditionally. `light-client` is always on too, since peers fetch
-/// missing data from it. `submit`, `config`, and `explorer` follow `Options`, matching
-/// `Options::init_with_query_module_sql`, and v2's gated services follow the same flag as their
-/// v1 module.
->>>>>>> 8513af025 (serve the light client api on every sql query node (#5394))
+/// missing data from it. `submit`, `config`, `explorer`, and `hotshot-events` follow `Options`,
+/// matching `Options::init_with_query_module_sql`.
 pub async fn serve_axum<S>(
     port: u16,
     state: S,
@@ -144,14 +134,7 @@ where
 }
 
 /// Which of the optional API modules to serve, for modes that make them conditional
-<<<<<<< HEAD
-/// (mirroring `Options::submit`/`Options::config`/`Options::explorer`/`Options::light_client`/
-/// `Options::hotshot_events`).
-||||||| parent of 8513af025 (serve the light client api on every sql query node (#5394))
-/// (mirroring `Options::submit`/`Options::config`/`Options::explorer`/`Options::light_client`).
-=======
-/// (mirroring `Options::submit`/`Options::config`/`Options::explorer`).
->>>>>>> 8513af025 (serve the light client api on every sql query node (#5394))
+/// (mirroring `Options::submit`/`Options::config`/`Options::explorer`/`Options::hotshot_events`).
 #[derive(Default, Clone, Copy, Debug)]
 pub struct OptionalModules {
     pub submit: bool,

@@ -404,7 +404,6 @@ impl Options {
             submit: self.submit.is_some(),
             config: self.config.is_some(),
             explorer: self.explorer.is_some(),
-            light_client: self.light_client.is_some(),
             hotshot_events: self.hotshot_events.is_some(),
             ..Default::default()
         };
