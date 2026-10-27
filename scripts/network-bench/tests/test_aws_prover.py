@@ -91,6 +91,13 @@ def test_capacity_200_reaches_genesis_and_the_ctl_env_with_the_prover():
     assert "ESPRESSO_STAKE_TABLE_CAPACITY=10\n" in plain
 
 
+def test_more_nodes_than_the_stake_table_capacity_refuse_the_prover():
+    cap = awsb.PROVER_STAKE_TABLE_CAPACITY
+    awsb.plan_hosts(small_cfg(nodes=cap, prover=True))
+    with pytest.raises(awsb.Refused, match="--prover"):
+        awsb.plan_hosts(small_cfg(nodes=cap + 1, prover=True))
+
+
 def test_a_small_ctl_is_refused():
     awsb.check_prover_ctl(awsb.PROVER_MIN_MIB)
     with pytest.raises(awsb.Refused, match=str(awsb.PROVER_MIN_MIB)):

@@ -418,10 +418,11 @@ just bench aws run --fleet --prover   # the fleet's ctl needs 12288 MiB, e.g. up
   (`ESPRESSO_STATE_PROVER_UPDATE_INTERVAL=0s`).
 - Flags not given take `--epoch-height 300` and `--ctl-type c8g.4xlarge` (16 vCPU; also with `--chaos`, whose
   `c8g.xlarge` is too small). A `ctl` below 12288 MiB is refused by `plan`, `run` and `run --fleet`; a fleet from before
-  the image is refused unless `--tag` pulls the images.
+  the image is refused unless a new `--tag` pulls the images.
 - Stake table capacity 200 in genesis (`stake_table_capacity`, `[stake_table] capacity`) and in
   `ESPRESSO_STAKE_TABLE_CAPACITY` of `ctl.env` (relay, `deploy`, prover). Without `--prover` genesis uses
-  `max(10, nodes)` and `ctl.env` keeps the `ESPRESSO_STAKE_TABLE_CAPACITY` of `.env`.
+  `max(10, nodes)` and `ctl.env` keeps the `ESPRESSO_STAKE_TABLE_CAPACITY` of `.env`. `--prover` with more than 200
+  nodes is refused.
 - `prover.sh` runs as unit `bench-prover` on `ctl` once the nodes have started and the load never waits for it. Steps:
   `node0-up` (node0 answers `block-height`), `lc-deployed` (container `deploy-lc`:
   `deploy --deploy-light-client-v1 --upgrade-light-client-v2 --upgrade-light-client-v3`), `lc-address-ok` (code at

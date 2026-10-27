@@ -1374,6 +1374,10 @@ def plan_hosts(cfg: RunConfig) -> list[HostSpec]:
     check_chaos(cfg)
     if cfg.nodes < 2:
         raise Refused(f"--nodes must be at least 2: {cfg.nodes}")
+    if cfg.prover and cfg.nodes > PROVER_STAKE_TABLE_CAPACITY:
+        raise Refused(
+            f"--prover supports at most {PROVER_STAKE_TABLE_CAPACITY} nodes: {cfg.nodes}"
+        )
     check_submit_nodes(cfg)
     check_slow_nodes(cfg)
     if not 1 <= cfg.query_nodes <= cfg.nodes:
@@ -2884,7 +2888,7 @@ def render_prover_sh(lc_address: str, node0_url: str) -> str:
     contract is where the prover looks for it, then starts the prover. Each step appends to
     PROVER_LOG; a failing command appends `failed <step>` and ends the script."""
     actions = {
-        "node0-up": f"until curl -sf {node0_url}/v1/node/block-height > /dev/null; do sleep 2; done",
+        "node0-up": f"until curl -sf --max-time 5 {node0_url}/v1/node/block-height > /dev/null; do sleep 2; done",
         "lc-deployed": (
             "docker start deploy-lc > /dev/null\n"
             f'[ "$(timeout {DEPLOY_TIMEOUT_S} docker wait deploy-lc)" = 0 ]'
@@ -5072,7 +5076,7 @@ def check_fleet_images(saved: FleetManifest, cfg: RunConfig) -> None:
     ):
         if used and image not in saved["images"]:
             raise Refused(
-                f"the fleet has no {image} image: pass --tag to pull the images, or "
+                f"the fleet has no {image} image: pass a new --tag to pull the images, or "
                 f"run without {flag}"
             )
 
