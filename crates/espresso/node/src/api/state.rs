@@ -2713,12 +2713,12 @@ where
     }
 }
 
-/// A whole tree travels as the bytes v1 serves for the same endpoint, so a peer decodes the
-/// field and parses the JSON it already knows how to parse.
+/// A whole tree travels as bincode, the encoding peers already decode from v1 and from the v2
+/// reward tree route.
 fn tree_to_proto<T: serde::Serialize>(
     tree: &T,
 ) -> Result<proto::CatchupMerkleTreeResponse, tonic::Status> {
-    let tree = serde_json::to_vec(tree)
+    let tree = bincode::serialize(tree)
         .map_err(|err| tonic::Status::internal(format!("serializing tree: {err}")))?;
     Ok(proto::CatchupMerkleTreeResponse { tree })
 }

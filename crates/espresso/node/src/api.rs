@@ -10047,7 +10047,12 @@ mod test {
         let leaf = network.server.decided_leaf().await;
         let catchup_height = leaf.height();
         let catchup_view = leaf.view_number().u64();
-        let account = format!("{:x}", Address::default());
+        // The prefunded builder account, so the fee routes prove a presence. Its address has hex
+        // letters, so lowercase and EIP-55 renderings differ.
+        let account = format!(
+            "{:x}",
+            TestConfig::<5>::builder_key().fee_account().address()
+        );
         let v1_account: crate::api::AccountQueryData = client
             .get(&format!(
                 "catchup/{catchup_height}/{catchup_view}/account/{account}"
@@ -10063,19 +10068,24 @@ mod test {
             .send()
             .await
             .unwrap();
-        // Compared as a value rather than a string: v1 serves this `U256` as `0x` hex and v2 as
-        // a decimal string, matching the reward balances.
+        // Compared as a value rather than a string, since v1 serves this `U256` as `0x` hex and
+        // v2 as a decimal string.
         assert_eq!(
             v2_account.balance.parse::<U256>().unwrap(),
             v1_account.balance
         );
+        let v2_proof = v2_account.proof.unwrap();
         assert_eq!(
-            v2_account.proof.unwrap().account,
+            v2_proof.account,
             format!("0x{account}"),
-            "the proof names the account it was asked for"
+            "the proof names the account in lowercase hex"
         );
+        assert!(matches!(
+            v2_proof.proof.unwrap().proof,
+            Some(espresso_api::proto::fee_merkle_proof::Proof::Presence(_))
+        ));
 
-        // On this pre-epoch network some catchup routes have nothing to serve, so a route both
+        // Some catchup routes may have nothing to serve this early in the chain, so a route both
         // versions refuse must at least refuse with the same status.
         fn both_or_same_status<A, B>(
             route: &str,
@@ -10109,19 +10119,17 @@ mod test {
             espresso_api::proto::MerklePathResponse::from(&v1_frontier)
         );
 
-        // The client asks v1 for VBS, so its trees are decoded as their type and compared with
-        // v2's JSON bytes through that type's serde.
+        // v2's bincode trees are decoded as their type and compared with v1's through serde.
         let accounts = vec![format!("0x{account}")];
-        let v1 = client
-            .post::<espresso_types::FeeMerkleTree>(&format!(
-                "catchup/{catchup_height}/{catchup_view}/accounts"
-            ))
+        let v1: espresso_types::FeeMerkleTree = client
+            .post(&format!("catchup/{catchup_height}/{catchup_view}/accounts"))
             .body_json(&accounts)
             .unwrap()
             .send()
-            .await;
-        let v2 = client
-            .post::<espresso_api::proto::CatchupMerkleTreeResponse>("v2/catchup/fee-accounts")
+            .await
+            .unwrap();
+        let v2: espresso_api::proto::CatchupMerkleTreeResponse = client
+            .post("v2/catchup/fee-accounts")
             .body_json(&espresso_api::proto::GetCatchupFeeAccountsRequest {
                 height: Some(catchup_height),
                 view: Some(catchup_view),
@@ -10129,13 +10137,13 @@ mod test {
             })
             .unwrap()
             .send()
-            .await;
-        if let Some((v1, v2)) = both_or_same_status("fee-accounts", v1, v2) {
-            assert_eq!(
-                serde_json::from_slice::<serde_json::Value>(&v2.tree).unwrap(),
-                serde_json::to_value(&v1).unwrap()
-            );
-        }
+            .await
+            .unwrap();
+        let v2: espresso_types::FeeMerkleTree = bincode::deserialize(&v2.tree).unwrap();
+        assert_eq!(
+            serde_json::to_value(&v2).unwrap(),
+            serde_json::to_value(&v1).unwrap()
+        );
         let v1 = client
             .post::<espresso_types::v0_3::RewardMerkleTreeV1>(&format!(
                 "catchup/{catchup_height}/{catchup_view}/reward-accounts"
@@ -10155,8 +10163,10 @@ mod test {
             .send()
             .await;
         if let Some((v1, v2)) = both_or_same_status("reward-accounts", v1, v2) {
+            let v2: espresso_types::v0_3::RewardMerkleTreeV1 =
+                bincode::deserialize(&v2.tree).unwrap();
             assert_eq!(
-                serde_json::from_slice::<serde_json::Value>(&v2.tree).unwrap(),
+                serde_json::to_value(&v2).unwrap(),
                 serde_json::to_value(&v1).unwrap()
             );
         }
@@ -10307,6 +10317,33 @@ mod test {
                 .await
                 .unwrap_err();
             assert_eq!(err.status, StatusCode::BAD_REQUEST, "{query}");
+        }
+        for (route, body) in [
+            (
+                "v2/catchup/fee-accounts",
+                serde_json::json!({ "height": 1, "accounts": [] }),
+            ),
+            (
+                "v2/catchup/fee-accounts",
+                serde_json::json!({ "height": 1, "view": 1, "accounts": ["0xnot-hex"] }),
+            ),
+            (
+                "v2/catchup/reward-accounts",
+                serde_json::json!({ "view": 1, "accounts": [] }),
+            ),
+            (
+                "v2/catchup/reward-accounts",
+                serde_json::json!({ "height": 1, "view": 1, "accounts": ["0xnot-hex"] }),
+            ),
+        ] {
+            let err = client
+                .post::<serde_json::Value>(route)
+                .body_json(&body)
+                .unwrap()
+                .send()
+                .await
+                .unwrap_err();
+            assert_eq!(err.status, StatusCode::BAD_REQUEST, "{route} {body}");
         }
 
         let v1_config = client

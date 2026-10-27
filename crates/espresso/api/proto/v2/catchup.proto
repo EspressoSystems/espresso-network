@@ -12,7 +12,7 @@ import "v2/reward_state.proto";
 // reward trees name the state they want by the `(height, view)` the asking node is replaying,
 // which is why these are not the snapshot selectors the `merklized-state` module takes.
 //
-// v1's `reward-accounts-v2` and `reward-amounts` are not carried over: both are tombstones that
+// v1's `reward-accounts-v2` and `reward-amounts` are not carried over. Both are tombstones that
 // answer every request with a deprecation 404
 
 message FeeMerkleProof {
@@ -23,7 +23,7 @@ message FeeMerkleProof {
 }
 
 message FeeAccountProof {
-  // Account the proof is for, `0x`-prefixed hex
+  // Account the proof is for, lowercase `0x`-prefixed hex
   string account = 1;
 
   FeeMerkleProof proof = 2;
@@ -40,7 +40,7 @@ message CatchupFeeAccountResponse {
 
 // A whole merkle tree, opaque to the API
 message CatchupMerkleTreeResponse {
-  // The tree as the JSON v1 serves for the same route, base64 in protoJSON
+  // bincode-serialized tree, base64 in JSON
   bytes tree = 1;
 }
 
