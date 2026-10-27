@@ -285,19 +285,37 @@ def waterfall(runs: pd.DataFrame, path: Path) -> None:
             if not pd.isna(cpu):
                 note += CPU_NOTES.get(step, ", cpu {:.1f} ms").format(cpu)
             x = 0 if pd.isna(start) else start + duration + error
-            ax.text(x, lane, f"  {note}", va="center")
+            ax.text(x, lane, f"  {note}", va="center", in_layout=False)
         ax.set_yticks(list(lanes), steps)
         ax.invert_yaxis()
         ax.set_title(" · ".join(panel).replace("block_build/", ""), loc="left")
         ax.grid(axis="x", color="#e1e0d9")
         ax.set_axisbelow(True)
-    axes[-1, 0].set_xlim(0, (medians.start + medians.duration).max() * 1.15)
     axes[-1, 0].set_xlabel(
         "ms since the build started; overlapping bars ran in parallel;"
         " whiskers are one standard error across runs"
     )
     fig.tight_layout()
+    fit_notes(list(axes[:, 0]))
     fig.savefig(path)
+
+
+def fit_notes(axes: list[plt.Axes]) -> None:
+    """Widen the shared x axis until every note, which starts after its bar, ends in its panel."""
+    renderer = axes[0].figure.canvas.get_renderer()
+    # A note keeps its width in pixels, so it ends inside when its start is at most the share of
+    # the axis width it leaves free.
+    right = max(
+        text.get_position()[0]
+        / (
+            1
+            - text.get_window_extent(renderer).width
+            / ax.get_window_extent(renderer).width
+        )
+        for ax in axes
+        for text in ax.texts
+    )
+    axes[0].set_xlim(0, right * 1.02)
 
 
 def other_cpu(window: float = 0.3) -> float:
