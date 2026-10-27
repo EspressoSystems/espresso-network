@@ -423,6 +423,8 @@ just bench aws run --fleet --prover   # the fleet's ctl needs 12288 MiB, e.g. up
   `ESPRESSO_STAKE_TABLE_CAPACITY` of `ctl.env` (relay, `deploy`, prover). Without `--prover` genesis uses
   `max(10, nodes)` and `ctl.env` keeps the `ESPRESSO_STAKE_TABLE_CAPACITY` of `.env`. `--prover` with more than 200
   nodes is refused.
+- The prover reads from node0 only (`ESPRESSO_API_NODE_URL`). With `--chaos`, a fault on node0 stalls the prover until
+  node0 serves again, which lowers the LC height of `summary.md`.
 - `prover.sh` runs as unit `bench-prover` on `ctl` once the nodes have started and the load never waits for it. Steps:
   `node0-up` (node0 answers `block-height`), `lc-deployed` (container `deploy-lc`:
   `deploy --deploy-light-client-v1 --upgrade-light-client-v2 --upgrade-light-client-v3`), `lc-address-ok` (code at
