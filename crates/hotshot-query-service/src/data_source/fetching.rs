@@ -3557,6 +3557,40 @@ mod test {
         assert!(matches!(err, QueryError::Pruned { .. }), "{err:?}");
     }
 
+    /// The pruned height picks the start only when there are no aggregates yet. With aggregates,
+    /// the aggregator resumes just above the last one, even when that height is pruned: jumping
+    /// past the pruned blocks would leave them out of every later total.
+    #[test]
+    fn test_aggregator_start() {
+        let prev = Aggregate::<MockTypes> {
+            height: 3,
+            num_transactions: [(None, 7), (Some(0), 7)].into_iter().collect(),
+            payload_size: [(None, 70), (Some(0), 70)].into_iter().collect(),
+        };
+        for (case, prev, pruned_height, start) in [
+            ("genesis", None, None, 0),
+            ("above the pruned height", None, Some(5), 6),
+            ("resume", Some(prev.clone()), None, 4),
+            (
+                "resume above the pruned height",
+                Some(prev.clone()),
+                Some(1),
+                4,
+            ),
+            ("fell behind the pruner", Some(prev.clone()), Some(5), 4),
+        ] {
+            let expected = prev.clone().unwrap_or_default();
+            let (actual, aggregate) = aggregator_start(prev, pruned_height);
+            assert_eq!(actual, start, "{case}");
+            assert_eq!(aggregate.height, expected.height, "{case}");
+            assert_eq!(
+                aggregate.num_transactions, expected.num_transactions,
+                "{case}"
+            );
+            assert_eq!(aggregate.payload_size, expected.payload_size, "{case}");
+        }
+    }
+
     /// `n` mock leaves and blocks from genesis on, where the block at height `i` has `i + 1`
     /// transactions.
     ///
