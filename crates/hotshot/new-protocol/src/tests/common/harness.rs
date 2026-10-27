@@ -271,6 +271,33 @@ impl TestHarness {
         }
     }
 
+    /// Process events for `duration` and return the inputs that arrived.
+    ///
+    /// For negative assertions: something that must not happen produces no
+    /// event to wait for, so the test bounds the wait itself. Pair it with a
+    /// positive control, or a window too short to reach the event makes the
+    /// assertion vacuous.
+    pub async fn process_for(&mut self, duration: Duration) -> Vec<ConsensusInput<TestTypes>> {
+        let deadline = tokio::time::Instant::now() + duration;
+        let mut inputs = Vec::new();
+        loop {
+            let next = tokio::time::timeout_at(deadline, self.coordinator.next_consensus_input());
+            let Ok(next) = next.await else {
+                return inputs;
+            };
+            match next {
+                Ok(input) => {
+                    self.apply_and_process(input.clone());
+                    inputs.push(input);
+                },
+                Err(err) if err.severity == Severity::Critical => {
+                    panic!("Critical coordinator error: {err}")
+                },
+                Err(_err) => {},
+            }
+        }
+    }
+
     pub fn outputs(&self) -> &Outbox<ConsensusOutput<TestTypes>> {
         &self.outputs
     }
