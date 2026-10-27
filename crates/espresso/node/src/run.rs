@@ -402,8 +402,11 @@ fn api_options<S: DataSourceOptions>(
     if let Some(explorer) = modules.explorer {
         http_opt = http_opt.explorer(explorer);
     }
-    if let Some(light_client) = modules.light_client {
-        http_opt = http_opt.light_client(light_client);
+    if modules.light_client.is_some() {
+        tracing::warn!(
+            "the light-client module is deprecated and ignored: every node with SQL storage and \
+             the query module serves /light-client. Remove it from the command line."
+        );
     }
     if let Some(config) = modules.config {
         http_opt = http_opt
