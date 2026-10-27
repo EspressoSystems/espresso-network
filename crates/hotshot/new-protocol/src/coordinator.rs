@@ -1863,7 +1863,7 @@ where
                 // resolves now.
                 let _ = respond.send(Ok(()));
                 if let Some(forward) = forward {
-                    self.send_transactions(forward, self.epoch())?;
+                    self.send_transactions(forward, self.consensus.current_epoch())?;
                 }
             },
             ClientRequest::UpdateLeaf { update, respond } => {
@@ -2146,14 +2146,10 @@ where
         v > self.consensus.current_view() + *MAX_VIEWS_AHEAD
     }
 
-    /// The epoch this node is in.
-    fn epoch(&self) -> EpochNumber {
-        self.consensus.current_epoch()
-    }
-
     /// Is `epoch` close enough to the node's own to tally a vote naming it?
     fn is_vote_epoch_admissible(&self, epoch: Option<EpochNumber>) -> bool {
-        epoch.is_none_or(|e| is_epoch_admissible(e, self.epoch()))
+        let current = self.consensus.current_epoch();
+        epoch.is_none_or(|e| is_epoch_admissible(e, current))
     }
 
     /// We ignore messages more than `EPOCH_CHANGE_LOOKAHEAD` ahead of ours.
@@ -2237,7 +2233,7 @@ where
         // re-signs and re-sends its timeout vote on every re-arm of the timer,
         // so the new tally fills from the next round.
         if let TimeoutVote::V2(vote) = &mut vote {
-            vote.data.epoch = Some(self.epoch());
+            vote.data.epoch = Some(self.consensus.current_epoch());
         }
 
         if !self.is_vote_epoch_admissible(vote.epoch()) {
