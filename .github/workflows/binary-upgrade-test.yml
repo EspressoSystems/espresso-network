@@ -28,6 +28,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
+          fetch-depth: 0
           fetch-tags: true
       - uses: taiki-e/install-action@just
       - uses: astral-sh/setup-uv@v10.0.1

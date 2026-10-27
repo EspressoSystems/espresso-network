@@ -10,9 +10,11 @@ runs:
       run: |
         set -euo pipefail
         sudo apt-get update
-        # keydb: extract the prebuilt server (no apt repo for 24.04) + its runtime libs
+        # keydb: copy the server out of the Docker Hub image (download.keydb.dev is unreachable)
         sudo apt-get install -y libsnappy1v5 libzstd1 libuuid1 libcurl4t64 libssl3t64
-        curl -fsSL "https://download.keydb.dev/pkg/open_source/deb/ubuntu22.04_jammy/amd64/keydb-latest/keydb-tools_6.3.4-1~jammy1_amd64.deb" -o /tmp/keydb-tools.deb
-        dpkg-deb -x /tmp/keydb-tools.deb /tmp/keydb
-        echo "/tmp/keydb/usr/bin" >> "$GITHUB_PATH"
-        /tmp/keydb/usr/bin/keydb-server --version
+        mkdir -p /tmp/keydb/bin
+        id=$(docker create eqalpha/keydb:x86_64_v6.3.4)
+        docker cp -L "$id:/usr/local/bin/keydb-server" /tmp/keydb/bin/keydb-server
+        docker rm "$id"
+        echo "/tmp/keydb/bin" >> "$GITHUB_PATH"
+        /tmp/keydb/bin/keydb-server --version

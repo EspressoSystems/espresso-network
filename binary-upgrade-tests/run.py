@@ -214,6 +214,7 @@ def release_tags() -> list[str]:
 
     Creation order is uniform across the legacy YYYYMMDD and the X.Y.Z.N schemes and
     across parallel release branches, where version order is not chronological.
+    Only tags reachable from HEAD count, so a newer release line is never the base.
     """
     out = subprocess.check_output(
         [
@@ -222,6 +223,8 @@ def release_tags() -> list[str]:
             "--list",
             LEGACY_TAG_GLOB,
             RELEASE_TAG_GLOB,
+            "--merged",
+            "HEAD",
             "--sort=creatordate",
         ],
         cwd=REPO_ROOT,
