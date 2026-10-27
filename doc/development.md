@@ -17,7 +17,7 @@ The default shell is the small, fast daily driver. Add-on shells contain everyth
 - `nix develop .#contracts`: `solc` + `go-ethereum` (abigen) + `FOUNDRY_SOLC` set
 - `nix develop .#mutation`: contracts + `dregs` for mutation testing
 - `nix develop .#docs`: `plantuml`, `graphviz`, `mdbook` for `just doc-figures`, `just doc-contracts`
-- `nix develop .#go`: Go toolchain + `golangci-lint` for `sdks/go/`
+- `nix develop .#go`: Go toolchain for `sdks/go/`
 - `nix develop .#python`: `python3`, `uv`, `ruff`, `ty` for repo scripts
 - `nix develop .#aws`: python + `opentofu`, `awscli2` for `scripts/network-bench/aws`
 - `nix develop .#dockerShell`: `docker`
@@ -42,8 +42,6 @@ If a daily workflow forces you to leave the default shell often, it probably bel
 - Checkouts that used the old git-hooks.nix shell have an untracked `.pre-commit-config.yaml` symlink; delete it once
   before pulling (`rm .pre-commit-config.yaml`), otherwise git refuses to overwrite it
 - Commit from inside the dev shell: hooks run `rustfmt`, `nixpkgs-fmt`, `prettier` etc. from PATH
-- Contract or figure work: use `nix develop .#contracts` / `.#docs`; from the default shell the `contract-bindings` and
-  `doc` hooks enter that shell via nix on each matching commit
 - To add or change a hook: edit `.pre-commit-config.yaml`
 - To run a hook manually: `pre-commit run <id>` from inside the default shell
 
@@ -75,7 +73,7 @@ Enter the contracts shell: `nix develop .#contracts`.
 - Lint: `solhint 'contracts/{script,src,test}/**/*.sol'` (also a pre-commit hook)
 - Format: `forge fmt`
 - Rust bindings: `just gen-bindings` (regenerates rust + ABI exports under `contracts/rust/adapter/src/bindings`,
-  `contracts/artifacts/`, `sdks/go/`)
+  `contracts/artifacts/`, `sdks/go/`); run it after contract changes, CI fails on stale bindings
 - Solidity docs: `just doc-contracts`
 
 Conventions:

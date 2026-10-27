@@ -59,7 +59,7 @@ jobs:
         run: nix develop .#contracts --accept-flake-config -c forge lint --deny notes contracts/src/
 
       - name: Check if bindings up to date (also forces a build)
-        run: nix develop .#contracts --accept-flake-config -c pre-commit run contract-bindings --all-files --show-diff-on-failure
+        run: nix develop .#contracts --accept-flake-config -c just gen-bindings && git diff --exit-code
 
       - name: Print changes to bindings
         if: ${{ failure() }}

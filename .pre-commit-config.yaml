@@ -2,13 +2,6 @@
 repos:
   - repo: local
     hooks:
-      - id: doc
-        name: Generate figures
-        entry: just doc-figures
-        language: system
-        types_or: [plantuml]
-        pass_filenames: false
-
       - id: rustfmt
         name: Run rustfmt on changed files
         # cargo-fmt is slower, does not format all files, and doesn't allow passing file arguments
@@ -44,13 +37,6 @@ repos:
         language: system
         types_or: [solidity]
         pass_filenames: true
-
-      - id: contract-bindings
-        name: Generate contract bindings
-        entry: just gen-bindings
-        language: system
-        types_or: [solidity]
-        pass_filenames: false
 
       - id: prettier-fmt
         name: Enforce markdown formatting

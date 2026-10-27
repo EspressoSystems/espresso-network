@@ -70,16 +70,6 @@
       inherit (pkgs) lib stdenv;
 
       solhint = pkgs.callPackage ./nix/solhint { };
-      golangci-lint = pkgs.golangci-lint.overrideAttrs (old: rec {
-        version = "1.64.8";
-        src = pkgs.fetchFromGitHub {
-          owner = "golangci";
-          repo = "golangci-lint";
-          rev = "v${version}";
-          sha256 = "sha256-ODnNBwtfILD0Uy2AKDR/e76ZrdyaOGlCktVUcf9ujy8";
-        };
-        vendorHash = "sha256-/iq7Ju7c2gS7gZn3n+y0kLtPn2Nn8HY/YdqSDYjtEkI=";
-      });
       prek-as-pre-commit = pkgs.writeShellScriptBin "pre-commit" ''
         exec ${pkgs.prek}/bin/prek "$@"
       '';
@@ -176,7 +166,7 @@
       };
 
       devShells.go = addOnShell {
-        packages = [ pkgs.go_1_27 golangci-lint ];
+        packages = [ pkgs.go_1_27 ];
       };
 
       devShells.contracts = addOnShell (solcEnv // {
