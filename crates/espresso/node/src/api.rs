@@ -3720,7 +3720,7 @@ mod test {
         catchup::{NullStateCatchup, StatePeers},
         follower::{FollowerContext, FollowerOptions, FollowerParams, init_follower_node},
         genesis::{Genesis as NodeGenesis, L1Finalized, StakeTableConfig},
-        persistence,
+        network, persistence,
         persistence::no_storage,
         state::EmptyStateStart,
         testing::{
@@ -5945,93 +5945,12 @@ mod test {
             serve_query_node(
                 cfg.clone(),
                 genesis_state.clone(),
-                persistence::sql::postgres::Options::try_from(db.clone()).unwrap(),
+                db.clone(),
                 db,
-                Options::with_port(query_port)
-                    .catchup(Default::default())
-<<<<<<< HEAD
-                    .query_sql(
-                        Query {
-                            peers: vec![peer_url.clone()],
-                            ..Default::default()
-                        },
-                        db.clone(),
-                    );
-                let ctx = opt
-                    .serve(move |metrics, consumer, storage| {
-                        async move {
-                            Ok(cfg
-                                .init_node(
-                                    1,
-                                    genesis_state,
-                                    db,
-                                    Some(StatePeers::<SequencerApiVersion>::from_urls(
-                                        vec![peer_url],
-                                        Default::default(),
-                                        Duration::from_secs(2),
-                                        &NoMetrics,
-                                    )),
-                                    storage,
-                                    &*metrics,
-                                    test_helpers::STAKE_TABLE_CAPACITY_FOR_TEST,
-                                    consumer,
-                                    TEST_UPGRADE,
-                                    Default::default(),
-                                )
-                                .await)
-                        }
-                        .boxed()
-                    })
-                    .await
-                    .expect("second query node should start");
-                ctx.start_consensus().await;
-                ctx
-            }
-||||||| parent of ff3ef851d (feat(node): start the state loop at a recent epoch boundary (#5258))
-                    .light_client(Default::default())
-                    .query_sql(
-                        Query {
-                            peers: vec![peer_url.clone()],
-                            ..Default::default()
-                        },
-                        db.clone(),
-                    );
-                let ctx = opt
-                    .serve(move |metrics, consumer, storage| {
-                        async move {
-                            Ok(cfg
-                                .init_node(
-                                    1,
-                                    genesis_state,
-                                    persistence::sql::postgres::Options::try_from(db).unwrap(),
-                                    Some(StatePeers::<SequencerApiVersion>::from_urls(
-                                        vec![peer_url],
-                                        Default::default(),
-                                        Duration::from_secs(2),
-                                        &NoMetrics,
-                                    )),
-                                    storage,
-                                    &*metrics,
-                                    test_helpers::STAKE_TABLE_CAPACITY_FOR_TEST,
-                                    consumer,
-                                    TEST_UPGRADE,
-                                    Default::default(),
-                                )
-                                .await)
-                        }
-                        .boxed()
-                    })
-                    .await
-                    .expect("second query node should start");
-                ctx.start_consensus().await;
-                ctx
-            }
-=======
-                    .light_client(Default::default()),
+                Options::with_port(query_port).catchup(Default::default()),
                 vec![peer_url.clone()],
                 peer_url.clone(),
             )
->>>>>>> ff3ef851d (feat(node): start the state loop at a recent epoch boundary (#5258))
         };
 
         let mut query_node = start_query_node(tmp_options(&storage[1])).await;
@@ -7556,10 +7475,10 @@ mod test {
     /// peer the query node fetches the snapshot, leaves and accounts from. Node 1 is shut down, to
     /// come back as the query node on its own database, with no query data.
     struct PrunedStartNetwork {
-        network: TestNetwork<persistence::sql::postgres::Options, 5>,
+        network: TestNetwork<persistence::sql::Options, 5>,
         storage: Vec<<SqlDataSource as TestableSequencerDataSource>::Storage>,
         /// Node 1's consensus persistence.
-        persistence: persistence::sql::postgres::Options,
+        persistence: persistence::sql::Options,
         api_url: Url,
         api_client: Client<ClientErr, StaticVersion<0, 1>>,
         genesis_state: ValidatedState,
@@ -7580,9 +7499,7 @@ mod test {
             let config = TestNetworkConfigBuilder::with_num_nodes()
                 .api_config(SqlDataSource::options(
                     &storage[0],
-                    Options::with_port(api_port)
-                        .catchup(Default::default())
-                        .light_client(Default::default()),
+                    Options::with_port(api_port).catchup(Default::default()),
                 ))
                 .network_config(
                     TestConfigBuilder::default()
@@ -7650,7 +7567,8 @@ mod test {
             db_opt: persistence::sql::Options,
         ) -> (
             SequencerContext<
-                <persistence::sql::postgres::Options as PersistenceOptions>::Persistence,
+                network::Memory,
+                <persistence::sql::Options as PersistenceOptions>::Persistence,
             >,
             Client<ClientErr, StaticVersion<0, 1>>,
         ) {
@@ -7677,13 +7595,15 @@ mod test {
     async fn serve_query_node<const N: usize>(
         cfg: TestConfig<N>,
         genesis_state: ValidatedState,
-        node_persistence: persistence::sql::postgres::Options,
+        node_persistence: persistence::sql::Options,
         db_opt: persistence::sql::Options,
         api: Options,
         availability_peers: Vec<Url>,
         api_url: Url,
-    ) -> SequencerContext<<persistence::sql::postgres::Options as PersistenceOptions>::Persistence>
-    {
+    ) -> SequencerContext<
+        network::Memory,
+        <persistence::sql::Options as PersistenceOptions>::Persistence,
+    > {
         let opt = api.query_sql(
             Query {
                 peers: availability_peers,

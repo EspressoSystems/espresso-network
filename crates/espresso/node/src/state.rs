@@ -30,8 +30,7 @@ use versions::{DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_REWARD_VERSION, EPOCH_VERSI
 
 use crate::{
     NodeState, SeqTypes,
-    api::{
-        LightClientProvider, RewardMerkleTreeDataSource, context::ApiContext, },
+    api::{LightClientProvider, RewardMerkleTreeDataSource, context::ApiContext},
     catchup::{CatchupStorage, SingleAttemptCatchup},
     persistence::ChainConfigPersistence,
 };
@@ -566,14 +565,15 @@ where
 ///
 /// Returns `None`, which leaves the loop to replay from genesis, when there is no boundary yet, or
 /// when it predates epoch rewards and so has no reward tree stored at it.
-async fn seed_boundary_snapshot<T>(
+async fn seed_boundary_snapshot<T, C>(
     storage: &Arc<T>,
     instance: &NodeState,
-    provider: &LightClientProvider,
+    provider: &LightClientProvider<C>,
 ) -> Option<u64>
 where
     T: SequencerStateDataSource,
     for<'a> T::Transaction<'a>: SequencerStateUpdate,
+    C: ApiContext,
 {
     let epoch_height = instance.epoch_height.filter(|height| *height > 0)?;
     let pruned = retry_until_ok("loading the data pruned height", || {
