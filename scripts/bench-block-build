@@ -3,15 +3,18 @@
 # requires-python = ">=3.11"
 # dependencies = ["matplotlib", "pandas", "psutil", "tabulate", "typer"]
 # ///
-r"""A/B the leader's block build between two git refs, step by step.
+r"""A/B the leader's block build and VID work between two git refs, step by step.
 
-Runs the `request_block` benchmarks of espresso-types' `block_build` bench for both refs and
-writes tmp/bench-block-build/<base>-<head>.{csv,md,svg}: samples, a table of the whole build and
-each step, and a waterfall chart.
+Runs the benchmarks of espresso-types' `block_build` bench for both refs and writes
+tmp/bench-block-build/<base>-<head>.{csv,md,svg}: samples, a table of each benchmark and its
+steps, and a waterfall chart. `request_block` is the leader's block build, the proposal's
+critical path; `leader_vid` is that build plus the disperser's work until every share fragment
+is serialized. A benchmark missing from either ref is skipped.
 
     just bench-block-build                      # origin/main vs this checkout, edits included
     just bench-block-build main my-branch
-    scripts/bench-block-build --filter 'request_block/50MiB' --repeats 3 main HEAD
+    scripts/bench-block-build --filter 'leader_vid/50MiB' --repeats 3 main HEAD
+    RAYON_NUM_THREADS=1 just bench-block-build  # a leader with one core
     scripts/bench-block-build --chart tmp/bench-block-build/<base>-<head>.csv
 
 Each ref is built in a temporary git worktree into this checkout's target dir. Each
@@ -44,9 +47,10 @@ ROOT = Path(
 OUT = ROOT / "tmp/bench-block-build"
 BENCH_FILE = "crates/espresso/types/benches/block_build.rs"
 WORKTREE = "worktree"
-DEFAULT_FILTER = r"^block_build/request_block/(30|50|70)MiB_t\d+_n100$"
+DEFAULT_FILTER = r"^block_build/(request_block|leader_vid)/(30|50|70)MiB_t\d+_n100$"
 BUSY_LIMIT = 0.05
 LANES = {
+    "leader_vid": "#52514e",
     "request_block": "#898781",
     "from_transactions": "#2a78d6",
     "block_commitments": "#c3c2b7",
@@ -54,12 +58,23 @@ LANES = {
     "transaction_hashes": "#eb6834",
     "vid_commitment": "#1baf7a",
     "builder_commitment": "#eda100",
+    "vid_disperse": "#c3c2b7",
+    "disperse_params": "#7e57c2",
+    "sign": "#00838f",
+    "ns_encode": "#1baf7a",
+    "fragments": "#8d6e63",
+    "serialize": "#d84315",
 }
+# The step a benchmark is named after, which spans the whole iteration.
+ROOTS = ["leader_vid", "request_block"]
 # Per-step wording of the cpu kind, see STEPS in the bench.
 CPU_NOTES = {
+    "leader_vid": ", process cpu {:.1f} ms",
     "request_block": ", process cpu {:.1f} ms",
     "block_commitments": ", process cpu {:.1f} ms",
     "vid_commitment": ", cpu <= {:.1f} ms (residual)",
+    "vid_disperse": ", process cpu {:.1f} ms",
+    "ns_encode": ", cpu <= {:.1f} ms (residual)",
 }
 
 log = logging.getLogger("bench-block-build")
@@ -107,11 +122,7 @@ def main(
     labels = {side: f"{side} {refs[side]} {sha[:10]}" for side, sha in shas.items()}
     with tempfile.TemporaryDirectory(prefix="bench-block-build-") as tmp:
         binaries = {side: build(sha, Path(tmp)) for side, sha in shas.items()}
-        names = [
-            n for n in list_benches(binaries["head"]) if re.search(bench_filter, n)
-        ]
-        if not names:
-            raise SystemExit(f"no benchmark matches {bench_filter!r}")
+        names = shared_benches(binaries, bench_filter)
         mallocs = malloc or [Malloc.hugetlb]
         runs = measure(
             binaries, labels, names, mallocs, repeats, Path(tmp) / "criterion"
@@ -158,7 +169,7 @@ def measure(
                             other_cpu=busy,
                         )
                     )
-                    total = run.loc[run.step == "request_block", "duration"].median()
+                    total = run.loc[run.step == root(name), "duration"].median()
                     log.info(
                         "rep %d %s %s %s %.2f ms", rep, malloc.value, side, name, total
                     )
@@ -213,9 +224,9 @@ def summarize(runs: pd.DataFrame) -> str:
         )
     table = table.reset_index()
     table["benchmark"] = table.benchmark.str.removeprefix("block_build/")
-    table["later"] = table.step.ne("request_block")
-    table = table.sort_values(["malloc", "benchmark", "later", "step"]).drop(
-        columns="later"
+    table["rank"] = [ROOTS.index(s) if s in ROOTS else len(ROOTS) for s in table.step]
+    table = table.sort_values(["malloc", "benchmark", "rank", "step"]).drop(
+        columns="rank"
     )
     return table.to_markdown(index=False, floatfmt=".2f")
 
@@ -226,34 +237,43 @@ def waterfall(runs: pd.DataFrame, path: Path) -> None:
     medians = runs.groupby(keys)[["start", "duration", "cpu"]].median()
     sem = runs.groupby([*keys, "rep"]).duration.median().groupby(level=keys).sem()
     panels = medians.index.droplevel("step").unique()
+    # A benchmark's lanes are the steps either ref ran, so a step one ref skips shows as such.
+    ran = medians.reset_index().groupby(["malloc", "benchmark"]).step.agg(set)
+    steps_of = {panel: [s for s in LANES if s in ran[panel[:2]]] for panel in panels}
+    heights = [len(steps_of[panel]) for panel in panels]
     fig, axes = plt.subplots(
-        len(panels), sharex=True, squeeze=False, figsize=(10, 2.2 * len(panels))
+        len(panels),
+        sharex=True,
+        squeeze=False,
+        figsize=(10, 0.25 * sum(heights) + 0.5 * len(panels)),
+        gridspec_kw={"height_ratios": heights},
     )
     for ax, panel in zip(axes[:, 0], panels, strict=True):
-        bars = medians.loc[panel].reindex(list(LANES))
-        errors = sem.loc[panel].reindex(list(LANES)).fillna(0)
-        lanes = range(len(LANES))
+        steps = steps_of[panel]
+        bars = medians.loc[panel].reindex(steps)
+        errors = sem.loc[panel].reindex(steps).fillna(0)
+        lanes = range(len(steps))
         ax.barh(
             lanes,
             bars.duration,
             left=bars.start,
-            color=list(LANES.values()),
+            color=[LANES[step] for step in steps],
             height=0.6,
             xerr=errors,
             error_kw={"ecolor": "#52514e", "capsize": 3},
         )
         for lane, step, start, duration, cpu, error in zip(
-            lanes, LANES, bars.start, bars.duration, bars.cpu, errors, strict=True
+            lanes, steps, bars.start, bars.duration, bars.cpu, errors, strict=True
         ):
             note = "not run" if pd.isna(duration) else f"{duration:.1f} ms"
             if not pd.isna(cpu):
                 note += CPU_NOTES.get(step, ", cpu {:.1f} ms").format(cpu)
             x = 0 if pd.isna(start) else start + duration + error
             ax.text(x, lane, f"  {note}", va="center")
-        ax.set_yticks(list(lanes), list(LANES))
+        ax.set_yticks(list(lanes), steps)
         ax.invert_yaxis()
         ax.set_title(
-            " · ".join(panel).replace("block_build/request_block/", ""), loc="left"
+            " · ".join(panel).replace("block_build/", ""), loc="left"
         )
         ax.grid(axis="x", color="#e1e0d9")
         ax.set_axisbelow(True)
@@ -298,6 +318,24 @@ def run_one(binary: Path, name: str, env: dict[str, str], home: Path) -> pd.Data
         for span in spans[-measured:]
     ]
     return pd.DataFrame(rows, columns=["step", "start", "duration", "cpu"])
+
+
+def shared_benches(binaries: dict[str, Path], bench_filter: str) -> list[str]:
+    """The benchmarks matching `bench_filter` that every ref has, in head's order."""
+    listed = {side: list_benches(binary) for side, binary in binaries.items()}
+    names = [n for n in listed["head"] if re.search(bench_filter, n)]
+    for side, benches in listed.items():
+        for name in [n for n in names if n not in benches]:
+            log.info("skipping %s: %s has no such benchmark", name, side)
+            names.remove(name)
+    if not names:
+        raise SystemExit(f"no benchmark matches {bench_filter!r} in every ref")
+    return names
+
+
+def root(name: str) -> str:
+    """The step spanning a benchmark's iteration: `block_build/<root>/<size>`."""
+    return name.split("/")[1]
 
 
 def list_benches(binary: Path) -> list[str]:

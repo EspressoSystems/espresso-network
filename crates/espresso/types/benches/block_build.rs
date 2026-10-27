@@ -1,21 +1,27 @@
-//! The leader's block build (`request_block` in crates/hotshot/new-protocol/src/block.rs), timed
-//! step by step.
+//! The leader's block build (`request_block` in crates/hotshot/new-protocol/src/block.rs) and its
+//! VID work (`leader_vid`), timed step by step.
 //!
 //! `request_block` runs `from_transactions` on the cached transactions, then
-//! `hotshot_new_protocol::block::block_commitments`, the function the leader calls. A tracing
-//! layer records each step's start, completion and CPU time; when `CRITERION_HOME` is set they are
-//! written to `steps.json` next to the benchmark's criterion output. Step samples start with
-//! criterion's warm-up iterations; scripts/bench-block-build keeps one per measured iteration,
-//! which assumes every step span except `tx_hash` is entered and exited exactly once per
-//! iteration, by one thread.
+//! `hotshot_new_protocol::block::block_commitments`, the function the leader calls. It is the
+//! proposal's critical path.
+//!
+//! `leader_vid` runs `request_block`, then the disperser's work for the built block:
+//! `hotshot_new_protocol::vid::disperse_payload` with a `send` that serializes each fragment as
+//! the network does. Consensus asks for the dispersal as soon as the block is built, so this is
+//! when peers can start receiving their shares, and its CPU is the leader's VID cost per block.
+//!
+//! A tracing layer records each step's start, completion and CPU time; when `CRITERION_HOME` is
+//! set they are written to `steps.json` next to the benchmark's criterion output. Step samples
+//! start with criterion's warm-up iterations; scripts/bench-block-build keeps one per measured
+//! iteration, which assumes the timer below records every step exactly once per iteration.
 //!
 //! Like the leader, it passes the pool's hashes of the transactions. Every transaction fits, so
 //! the hashes are reused and the `transaction_hashes` step does not run.
 //!
 //! Inputs mirror the network-bench load generator: random 1 MiB transactions round-robin over
 //! 16 namespaces in 30 to 70 MiB blocks, protocol version 0.6 (AvidmGf2), 100 nodes. Real stakes
-//! are large, so the VID total weight is the `approximate_weights` result for 100 equal stakes
-//! (1100).
+//! are large, so the nodes have equal stakes of 1 ESP, which `approximate_weights` scales to a VID
+//! total weight of 1100.
 //!
 //! To compare two git refs, run `just bench-block-build BASE HEAD` (scripts/bench-block-build).
 
@@ -27,11 +33,24 @@ use std::{
     time::{Duration, Instant},
 };
 
+use alloy::primitives::U256;
 use committable::{Commitment, Committable};
 use criterion::{BenchmarkId, Criterion, SamplingMode};
 use espresso_types::{ChainConfig, NamespaceId, NsTable, Payload, SeqTypes, Transaction};
-use hotshot_new_protocol::block::{BlockCommitments, block_commitments};
-use hotshot_types::{consensus::PayloadWithMetadata, data::vid_disperse::VID_TARGET_TOTAL_STAKE};
+use hotshot_new_protocol::{
+    block::{BlockCommitments, block_commitments},
+    vid::disperse_payload,
+};
+use hotshot_types::{
+    PeerConfig, ValidatorConfig,
+    consensus::PayloadWithMetadata,
+    data::{
+        EpochNumber, VidCommitment, VidCommitment2, ViewNumber,
+        vid_disperse::{AvidmGf2DisperseParams, vid_total_weight},
+    },
+    message::UpgradeLock,
+    traits::EncodeBytes,
+};
 use rand::{RngCore, SeedableRng};
 use rand_chacha::ChaCha20Rng;
 use rustix::time::{ClockId, clock_gettime};
@@ -42,18 +61,17 @@ use tracing_subscriber::{
     layer::{Context, SubscriberExt},
     registry::LookupSpan,
 };
-use versions::NEW_PROTOCOL_VERSION;
+use versions::{NEW_PROTOCOL_VERSION, Upgrade};
 
 const MIB: usize = 1 << 20;
 const NAMESPACES: u64 = 16;
 const NODES: usize = 100;
 const BLOCK_MIB: [usize; 5] = [30, 40, 50, 60, 70];
-/// `approximate_weights` total for `NODES` equal stakes above `VID_TARGET_TOTAL_STAKE`.
-const VID_WEIGHT: usize = NODES * (VID_TARGET_TOTAL_STAKE as usize / NODES + 1);
 
 fn bench_block_build(c: &mut Criterion) {
     install_step_timer();
     let threads = rayon::current_num_threads();
+    let committee = Committee::new();
     let mut group = c.benchmark_group("block_build");
     group
         .sampling_mode(SamplingMode::Flat)
@@ -65,9 +83,13 @@ fn bench_block_build(c: &mut Criterion) {
         let txs = transactions(block_mib);
         let pooled_hashes: Vec<_> = txs.iter().map(Committable::commit).collect();
         group.bench_function(BenchmarkId::new("request_block", &label), |b| {
-            b.iter_with_large_drop(|| request_block(&txs, &pooled_hashes))
+            b.iter_with_large_drop(|| request_block(&txs, &pooled_hashes, &committee))
         });
         write_steps(&format!("block_build/request_block/{label}"));
+        group.bench_function(BenchmarkId::new("leader_vid", &label), |b| {
+            b.iter_with_large_drop(|| leader_vid(&txs, &pooled_hashes, &committee))
+        });
+        write_steps(&format!("block_build/leader_vid/{label}"));
     }
     group.finish();
 }
@@ -77,13 +99,106 @@ fn bench_block_build(c: &mut Criterion) {
 fn request_block(
     txs: &[Transaction],
     pooled_hashes: &[Commitment<Transaction>],
+    committee: &Committee,
 ) -> (PayloadWithMetadata<SeqTypes>, BlockCommitments<SeqTypes>) {
     let _span = tracing::debug_span!("request_block").entered();
     let (payload, metadata): (Payload, NsTable) =
         Payload::from_transactions_sync(txs, chain_config()).expect("payload construction");
     let payload = PayloadWithMetadata { payload, metadata };
-    let commitments = block_commitments(&payload, pooled_hashes, VID_WEIGHT, NEW_PROTOCOL_VERSION);
+    let commitments = block_commitments(
+        &payload,
+        pooled_hashes,
+        committee.total_weight,
+        NEW_PROTOCOL_VERSION,
+    );
     (payload, commitments)
+}
+
+/// [`request_block`], then the disperser's work for the block. Outputs are returned so their drop
+/// is untimed.
+fn leader_vid(
+    txs: &[Transaction],
+    pooled_hashes: &[Commitment<Transaction>],
+    committee: &Committee,
+) -> (
+    PayloadWithMetadata<SeqTypes>,
+    BlockCommitments<SeqTypes>,
+    Vec<Vec<u8>>,
+) {
+    let _span = tracing::debug_span!("leader_vid").entered();
+    let (payload, commitments) = request_block(txs, pooled_hashes, committee);
+    let VidCommitment::V2(payload_commitment) = commitments.payload_commitment else {
+        panic!("protocol 0.6 commits with AvidmGf2");
+    };
+    let fragments = tracing::debug_span!("vid_disperse")
+        .in_scope(|| disperse(&payload, payload_commitment, committee));
+    (payload, commitments, fragments)
+}
+
+/// The disperser's work for a built block, until every fragment is serialized as the network
+/// does. The serialized fragments are kept, as the network takes them.
+fn disperse(
+    payload: &PayloadWithMetadata<SeqTypes>,
+    payload_commitment: VidCommitment2,
+    committee: &Committee,
+) -> Vec<Vec<u8>> {
+    let params = tracing::debug_span!("disperse_params")
+        .in_scope(|| {
+            AvidmGf2DisperseParams::new(
+                &committee.stake_table,
+                payload.payload.encode(),
+                &payload.metadata.encode(),
+            )
+        })
+        .expect("disperse params");
+    let fragments = Mutex::new(Vec::new());
+    let upgrade_lock = &committee.upgrade_lock;
+    disperse_payload(
+        &params,
+        ViewNumber::new(1),
+        EpochNumber::genesis(),
+        payload_commitment,
+        &committee.leader.public_key,
+        &committee.leader.private_key,
+        |_, message| {
+            let bytes = tracing::debug_span!("serialize")
+                .in_scope(|| upgrade_lock.serialize(message))
+                .expect("serialize fragment");
+            fragments.lock().expect("fragments lock").push(bytes);
+            Ok(())
+        },
+    )
+    .expect("dispersal");
+    fragments.into_inner().expect("fragments lock")
+}
+
+/// The block's epoch committee as the leader sees it, the leader being its first node.
+struct Committee {
+    stake_table: Vec<PeerConfig<SeqTypes>>,
+    total_weight: usize,
+    leader: ValidatorConfig<SeqTypes>,
+    upgrade_lock: UpgradeLock<SeqTypes>,
+}
+
+impl Committee {
+    fn new() -> Self {
+        let node = |i| {
+            ValidatorConfig::<SeqTypes>::generated_from_seed_indexed(
+                [0; 32],
+                i,
+                U256::from(10u64.pow(18)),
+                false,
+            )
+        };
+        let stake_table: Vec<_> = (0..NODES as u64).map(|i| node(i).public_config()).collect();
+        let total_weight = vid_total_weight(stake_table.iter(), Some(EpochNumber::genesis()));
+        Self {
+            stake_table,
+            total_weight,
+            leader: node(0),
+            upgrade_lock: UpgradeLock::new(Upgrade::trivial(NEW_PROTOCOL_VERSION)),
+        }
+    }
 }
 
 fn transactions(block_mib: usize) -> Vec<Transaction> {
@@ -105,17 +220,19 @@ fn chain_config() -> ChainConfig {
 }
 
 /// `[start, completion - start, cpu]` in ms per step and iteration, by step name; start is
-/// relative to the enclosing `request_block` span. The CPU kind depends on the step:
-/// - thread CPU: `from_transactions`, `encode`, `builder_commitment`
-/// - process CPU, including rayon workers spinning for work: `request_block`, `block_commitments`
-/// - sum of the `tx_hash` leaves' thread CPU: `transaction_hashes`, absent while the pool's hashes
-///   are reused
-/// - residual upper bound, process CPU of `block_commitments` minus the steps above:
-///   `vid_commitment`
+/// relative to the iteration's root span, `request_block` or `leader_vid`. The CPU kind depends
+/// on the step:
+/// - thread CPU: `from_transactions`, `encode`, `builder_commitment`, `disperse_params`, `sign`
+/// - process CPU, including rayon workers spinning for work: `leader_vid`, `request_block`,
+///   `block_commitments`, `vid_disperse`
+/// - sum of the leaves' thread CPU: `transaction_hashes` (its `tx_hash` leaves), absent while the
+///   pool's hashes are reused; `fragments` and `serialize`
+/// - residual upper bound, process CPU of the enclosing step minus its other steps:
+///   `vid_commitment` in `block_commitments`, `ns_encode` in `vid_disperse`
 static STEPS: Mutex<BTreeMap<&'static str, Vec<[f64; 3]>>> = Mutex::new(BTreeMap::new());
 
-/// The running `request_block` iteration. Steps on rayon threads have no parent span, and
-/// iterations run one at a time, so this is their common state.
+/// The running iteration. Steps on rayon threads have no parent span, and iterations run one at
+/// a time, so this is their common state.
 static ITERATION: Mutex<Option<Iteration>> = Mutex::new(None);
 
 /// Wall and CPU readings at a span's most recent enter.
@@ -134,36 +251,42 @@ struct Step {
 }
 
 struct Iteration {
+    /// The span whose exit ends the iteration.
+    root: &'static str,
     origin: Instant,
     steps: Vec<Step>,
-    /// Sum of `tx_hash` thread CPU.
-    leaf_cpu: f64,
-    /// Latest `tx_hash` exit, when `transaction_hashes` completes.
-    leaves_end: Option<f64>,
+    /// Leaf spans entered many times per iteration, by name: their first start, last end and
+    /// summed thread CPU.
+    leaves: BTreeMap<&'static str, Step>,
 }
 
 /// Times each step by its own work. A rayon worker that waits inside a step span steals unrelated
-/// jobs, so a step's span can last as long as the VID work. The `tx_hash` spans make no rayon
-/// calls: the hashing step completes at the last leaf exit and costs the leaves' summed thread
-/// CPU. The VID step's CPU is what the process spent in `block_commitments` beyond the other steps.
+/// jobs, so a step's span can last as long as the VID work. Leaf spans run once per transaction,
+/// bucket or fragment. Those making no rayon calls (`tx_hash`, `fragments`, `serialize`) cost
+/// their summed thread CPU; the VID steps (`vid_commitment`, `ns_encode`) cost what the process
+/// spent in the enclosing step beyond its other steps.
 struct StepTimer;
 
 impl<S: Subscriber + for<'a> LookupSpan<'a>> Layer<S> for StepTimer {
     fn on_enter(&self, id: &span::Id, ctx: Context<'_, S>) {
         let at = Instant::now();
         let span = ctx.span(id).expect("entered span is registered");
+        let name = span.name();
         let entered = Entered {
             at,
             thread_cpu: cpu_ms(ClockId::ThreadCPUTime),
-            process_cpu: wide(span.name()).then(|| cpu_ms(ClockId::ProcessCPUTime)),
+            process_cpu: wide(name).then(|| cpu_ms(ClockId::ProcessCPUTime)),
         };
-        if span.name() == "request_block" {
-            *ITERATION.lock().expect("iteration lock") = Some(Iteration {
-                origin: at,
-                steps: Vec::new(),
-                leaf_cpu: 0.0,
-                leaves_end: None,
-            });
+        if matches!(name, "request_block" | "leader_vid") {
+            ITERATION
+                .lock()
+                .expect("iteration lock")
+                .get_or_insert_with(|| Iteration {
+                    root: name,
+                    origin: at,
+                    steps: Vec::new(),
+                    leaves: BTreeMap::new(),
+                });
         }
         span.extensions_mut().replace(entered);
     }
@@ -179,24 +302,31 @@ impl<S: Subscriber + for<'a> LookupSpan<'a>> Layer<S> for StepTimer {
             (entered.at, entered.thread_cpu, entered.process_cpu)
         };
         let mut guard = ITERATION.lock().expect("iteration lock");
-        let iteration = guard.as_mut().expect("spans run inside request_block");
+        let iteration = guard.as_mut().expect("spans run inside an iteration");
         let rel = |t: Instant| ms(t - iteration.origin);
-        if name == "tx_hash" {
-            iteration.leaf_cpu += thread_cpu - start_cpu;
-            iteration.leaves_end = Some(iteration.leaves_end.map_or(rel(end), |e| e.max(rel(end))));
-            return;
-        }
-        let cpu = match start_process {
-            Some(process) => cpu_ms(ClockId::ProcessCPUTime) - process,
-            None => thread_cpu - start_cpu,
-        };
-        iteration.steps.push(Step {
+        let step = Step {
             name,
             start: rel(start),
             end: rel(end),
-            cpu,
-        });
-        if name == "request_block" {
+            cpu: match start_process {
+                Some(process) => cpu_ms(ClockId::ProcessCPUTime) - process,
+                None => thread_cpu - start_cpu,
+            },
+        };
+        if matches!(name, "tx_hash" | "ns_encode" | "fragments" | "serialize") {
+            iteration
+                .leaves
+                .entry(name)
+                .and_modify(|leaf| {
+                    leaf.start = leaf.start.min(step.start);
+                    leaf.end = leaf.end.max(step.end);
+                    leaf.cpu += step.cpu;
+                })
+                .or_insert(step);
+            return;
+        }
+        iteration.steps.push(step);
+        if name == iteration.root {
             record(guard.take().expect("iteration present"));
         }
     }
@@ -204,7 +334,10 @@ impl<S: Subscriber + for<'a> LookupSpan<'a>> Layer<S> for StepTimer {
 
 /// Spans entered outside the rayon pool, whose CPU is read from the process clock.
 fn wide(name: &str) -> bool {
-    matches!(name, "request_block" | "block_commitments")
+    matches!(
+        name,
+        "leader_vid" | "request_block" | "block_commitments" | "vid_disperse"
+    )
 }
 
 /// Pushes one row per step of a finished iteration into [`STEPS`].
@@ -213,23 +346,37 @@ fn record(iteration: Iteration) {
         iteration
             .steps
             .iter()
+            .chain(iteration.leaves.values())
             .find(|s| s.name == name)
             .map(|s| s.cpu)
     };
+    let tx_hashes = iteration.leaves.get("tx_hash");
     // Absent from `NO_BUILDER_COMMITMENT_VERSION` onwards.
     let builder_cpu = cpu_of("builder_commitment").unwrap_or(0.0);
     let vid_cpu = cpu_of("block_commitments").expect("block_commitments ran")
-        - iteration.leaf_cpu
+        - tx_hashes.map_or(0.0, |leaves| leaves.cpu)
         - builder_cpu
         - cpu_of("encode").expect("encode ran");
+    let encode_cpu = cpu_of("vid_disperse").map(|disperse| {
+        disperse
+            - cpu_of("disperse_params").unwrap_or(0.0)
+            - cpu_of("sign").expect("sign ran")
+            - cpu_of("fragments").expect("fragments ran")
+            - cpu_of("serialize").expect("serialize ran")
+    });
     let mut steps = STEPS.lock().expect("steps lock");
-    for step in &iteration.steps {
+    let leaves = iteration
+        .leaves
+        .values()
+        .filter(|leaf| leaf.name != "tx_hash");
+    for step in iteration.steps.iter().chain(leaves) {
         let (end, cpu) = match step.name {
-            "transaction_hashes" => (
-                iteration.leaves_end.expect("a tx_hash span ran"),
-                iteration.leaf_cpu,
-            ),
+            "transaction_hashes" => {
+                let leaves = tx_hashes.expect("a tx_hash span ran");
+                (leaves.end, leaves.cpu)
+            },
             "vid_commitment" => (step.end, vid_cpu),
+            "ns_encode" => (step.end, encode_cpu.expect("vid_disperse ran")),
             _ => (step.end, step.cpu),
         };
         steps
@@ -248,6 +395,7 @@ fn install_step_timer() {
     let targets = Targets::new()
         .with_target("block_build", Level::DEBUG)
         .with_target("hotshot_new_protocol::block", Level::DEBUG)
+        .with_target("hotshot_new_protocol::vid", Level::DEBUG)
         .with_target("espresso_types", Level::DEBUG);
     tracing::subscriber::set_global_default(
         tracing_subscriber::registry().with(StepTimer.with_filter(targets)),
