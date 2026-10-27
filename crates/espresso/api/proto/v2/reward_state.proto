@@ -45,8 +45,8 @@ message RewardAccountProof {
 
 message RewardAccountProofResponse {
   // Lifetime rewards in wei, as a decimal string, where v1 serves `0x` hex. For an account with no
-  // entry, the merklized-state routes answer not found and the catchup routes an absence proof
-  // with `0`
+  // entry, the merklized-state routes answer not found and the catchup routes answer with an
+  // absence proof and `0`
   string balance = 1;
 
   RewardAccountProof proof = 2;

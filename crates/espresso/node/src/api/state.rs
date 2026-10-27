@@ -2556,7 +2556,7 @@ where
     async fn get_catchup_fee_account(
         &self,
         request: tonic::Request<proto::GetCatchupFeeAccountRequest>,
-    ) -> Result<tonic::Response<proto::CatchupFeeAccountResponse>, tonic::Status> {
+    ) -> Result<tonic::Response<proto::FeeAccountProofResponse>, tonic::Status> {
         let request = request.into_inner();
         let (height, view) = catchup_at(request.height, request.view)?;
         let address = required(request.address, "address")?;
@@ -2575,11 +2575,14 @@ where
         let accounts = request
             .accounts
             .iter()
-            .map(|account| account.parse())
-            .collect::<Result<Vec<espresso_types::FeeAccount>, _>>()
-            .map_err(|err| {
-                tonic::Status::invalid_argument(format!("malformed fee account: {err}"))
-            })?;
+            .map(|account| {
+                account.parse().map_err(|err| {
+                    tonic::Status::invalid_argument(format!(
+                        "malformed fee account {account}: {err}"
+                    ))
+                })
+            })
+            .collect::<Result<Vec<espresso_types::FeeAccount>, _>>()?;
         let tree = <Self as v1::CatchupApi>::get_accounts(self, height, view, accounts)
             .await
             .map_err(to_status)?;
@@ -2620,7 +2623,7 @@ where
             .await
             .map_err(to_status)?;
         Ok(tonic::Response::new(proto::CatchupLeafChainResponse {
-            leaf_chain: leaves.iter().map(Into::into).collect(),
+            leaves: leaves.iter().map(Into::into).collect(),
         }))
     }
 
@@ -2659,11 +2662,14 @@ where
         let accounts = request
             .accounts
             .iter()
-            .map(|account| account.parse())
-            .collect::<Result<Vec<RewardAccountV1>, _>>()
-            .map_err(|err| {
-                tonic::Status::invalid_argument(format!("malformed reward account: {err}"))
-            })?;
+            .map(|account| {
+                account.parse().map_err(|err| {
+                    tonic::Status::invalid_argument(format!(
+                        "malformed reward account {account}: {err}"
+                    ))
+                })
+            })
+            .collect::<Result<Vec<RewardAccountV1>, _>>()?;
         let tree = <Self as v1::CatchupApi>::get_reward_accounts_v1(self, height, view, accounts)
             .await
             .map_err(to_status)?;
@@ -2689,6 +2695,7 @@ where
     ) -> Result<tonic::Response<proto::RewardMerkleTreeV2Response>, tonic::Status> {
         let request = request.into_inner();
         let (height, view) = catchup_at(request.height, request.view)?;
+        // v1 wraps these bytes in a `serde_json::Value`, so take them from the source instead.
         let tree = self
             .data_source
             .get_reward_merkle_tree_v2(height, hotshot_types::data::ViewNumber::new(view))
@@ -2713,7 +2720,7 @@ where
     }
 }
 
-/// A whole tree travels as bincode, the encoding peers already decode from v1 and from the v2
+/// A tree travels as bincode, the encoding peers already decode from v1 and from the v2
 /// reward tree route.
 fn tree_to_proto<T: serde::Serialize>(
     tree: &T,

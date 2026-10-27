@@ -644,7 +644,7 @@ impl From<v0_3::RewardAccountQueryDataV1> for proto::RewardAccountProofResponse 
     }
 }
 
-impl From<AccountQueryData> for proto::CatchupFeeAccountResponse {
+impl From<AccountQueryData> for proto::FeeAccountProofResponse {
     fn from(query: AccountQueryData) -> Self {
         let proof = match query.proof.proof {
             FeeMerkleProof::Presence(proof) => {
@@ -654,7 +654,7 @@ impl From<AccountQueryData> for proto::CatchupFeeAccountResponse {
                 proto::fee_merkle_proof::Proof::Absence(proto::MerklePathResponse::from(&proof))
             },
         };
-        proto::CatchupFeeAccountResponse {
+        proto::FeeAccountProofResponse {
             balance: query.balance.to_string(),
             proof: Some(proto::FeeAccountProof {
                 account: format!("{:#x}", query.proof.account),

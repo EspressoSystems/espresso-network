@@ -10060,7 +10060,7 @@ mod test {
             .send()
             .await
             .unwrap();
-        let v2_account: espresso_api::proto::CatchupFeeAccountResponse = client
+        let v2_account: espresso_api::proto::FeeAccountProofResponse = client
             .get(&format!(
                 "v2/catchup/fee-account?height={catchup_height}&view={catchup_view}&\
                  address=0x{account}"
@@ -10221,30 +10221,31 @@ mod test {
             assert_eq!(v2.tree, v1);
         }
 
-        let decided = leaf.height();
         let v1_chain: Vec<espresso_types::Leaf2> = client
-            .get(&format!("catchup/{decided}/leafchain"))
+            .get(&format!("catchup/{catchup_height}/leafchain"))
             .send()
             .await
             .unwrap();
         let v2_chain: espresso_api::proto::CatchupLeafChainResponse = client
-            .get(&format!("v2/catchup/leaf-chain?height={decided}"))
+            .get(&format!("v2/catchup/leaf-chain?height={catchup_height}"))
             .send()
             .await
             .unwrap();
         assert!(!v1_chain.is_empty());
         assert_eq!(
-            v2_chain.leaf_chain,
+            v2_chain.leaves,
             v1_chain.iter().map(Into::into).collect::<Vec<_>>()
         );
 
         let v1 = client
-            .get::<espresso_types::Certificate2<SeqTypes>>(&format!("catchup/{decided}/cert2"))
+            .get::<espresso_types::Certificate2<SeqTypes>>(&format!(
+                "catchup/{catchup_height}/cert2"
+            ))
             .send()
             .await;
         let v2 = client
             .get::<espresso_api::proto::Cert2Response>(&format!(
-                "v2/catchup/cert2?height={decided}"
+                "v2/catchup/cert2?height={catchup_height}"
             ))
             .send()
             .await;
@@ -10301,13 +10302,13 @@ mod test {
         assert_eq!(v2_status, v1_status);
 
         for query in [
-            "v2/catchup/fee-account?view=1&address=0x0",
+            format!("v2/catchup/fee-account?view=1&address=0x{account}").as_str(),
             "v2/catchup/blocks-frontier?height=1",
             "v2/catchup/leaf-chain",
             "v2/catchup/cert2",
             "v2/catchup/chain-config",
             "v2/catchup/reward-account?height=1&view=1",
-            "v2/catchup/reward-account-v2?view=1&address=0x0",
+            format!("v2/catchup/reward-account-v2?view=1&address=0x{account}").as_str(),
             "v2/catchup/reward-merkle-tree-v2?height=1",
             "v2/catchup/state-cert",
         ] {

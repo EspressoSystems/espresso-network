@@ -5570,8 +5570,7 @@ mod tests {
         async fn get_catchup_fee_account(
             &self,
             _request: tonic::Request<crate::proto::GetCatchupFeeAccountRequest>,
-        ) -> Result<tonic::Response<crate::proto::CatchupFeeAccountResponse>, tonic::Status>
-        {
+        ) -> Result<tonic::Response<crate::proto::FeeAccountProofResponse>, tonic::Status> {
             Err(tonic::Status::internal("mock"))
         }
 
