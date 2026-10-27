@@ -27,6 +27,9 @@
 //!
 //! Follower: not on cliquenet, so its upstreams stay its source. Before it stores a block it runs
 //! [`ensure_stake_tables`] for the epoch of the block.
+//!
+//! Both fill the epochs of `F` first when the goal lies above `epoch(F)` and own sources miss, so
+//! derivation walks up from the proven pair, not from genesis.
 
 use std::{ops::RangeInclusive, time::Duration};
 
@@ -59,8 +62,9 @@ pub(crate) const STARTUP_CATCHUP_DEADLINE: Duration = Duration::from_secs(15 * 6
 /// Validator boot. `F` read once; `floor = max(first, epoch(F), anchor_epoch)`;
 /// `install_stored_roots(required_epochs(floor))`; peer heights, retried only when that returned
 /// `false` and state peers are configured, else one pass (no nonzero height logs `info` at
-/// `floor == first`, `warn` above); `N = max(floor, median tip)`; `ensure(required_epochs(floor))`
-/// then `ensure(required_epochs(N))`. Returns `N`.
+/// `floor == first`, `warn` above); `N = max(floor, median tip)`; on a miss
+/// `ensure_lc_contract_epochs_below(floor)`; `ensure(required_epochs(floor))` then
+/// `ensure(required_epochs(N))`. Returns `N`.
 pub(crate) async fn catch_up_cliquenet_stake_tables<C: Client, Fut>(
     coordinator: &EpochMembershipCoordinator<SeqTypes>,
     read_lc_contract_header: impl Fn() -> Fut,
@@ -102,6 +106,9 @@ where
         "current epoch"
     );
 
+    if !own_sources_suffice {
+        catchup.ensure_lc_contract_epochs_below(floor).await?;
+    }
     catchup.ensure(floor_epochs).await?;
     catchup.ensure(required_epochs(current, first)).await?;
     tracing::info!(
@@ -114,9 +121,8 @@ where
 }
 
 /// Follower, before a block of epoch `current` is stored, with a fresh deadline:
-/// `install_stored_roots(required_epochs(current))`; on a miss `F` is read, then
-/// `ensure(required_epochs(epoch(F)))` when `epoch(F) < current`, then
-/// `ensure(required_epochs(current))`.
+/// `install_stored_roots(required_epochs(current))`; on a miss
+/// `ensure_lc_contract_epochs_below(current)`, then `ensure(required_epochs(current))`.
 pub(crate) async fn ensure_stake_tables<C: Client, Fut>(
     coordinator: &EpochMembershipCoordinator<SeqTypes>,
     read_lc_contract_header: impl Fn() -> Fut,
@@ -132,16 +138,7 @@ where
     if catchup.install_stored_roots(&need).await? {
         return Ok(());
     }
-    if !state_peers.is_empty()
-        && let Some(header) = catchup.lc_contract_header().await?
-    {
-        let lc_contract_epoch = block_epoch(header.height, catchup.epoch_height);
-        if lc_contract_epoch < current {
-            catchup
-                .ensure(required_epochs(lc_contract_epoch, catchup.first_epoch))
-                .await?;
-        }
-    }
+    catchup.ensure_lc_contract_epochs_below(current).await?;
     catchup.ensure(need).await
 }
 
@@ -332,6 +329,27 @@ where
             all_held &= self.held(epoch).await || self.install_from_stored_root(epoch).await?;
         }
         Ok(all_held)
+    }
+
+    /// With state peers, `F` is read and `ensure(required_epochs(epoch(F)))` runs when
+    /// `epoch(F) < goal`. Those epochs are all provable, so derivation of the epochs above walks
+    /// up from them. No-op without state peers or an LC contract.
+    async fn ensure_lc_contract_epochs_below(
+        &self,
+        goal: EpochNumber,
+    ) -> Result<(), StartupCatchupError> {
+        if self.state_peers.is_empty() {
+            return Ok(());
+        }
+        let Some(header) = self.lc_contract_header().await? else {
+            return Ok(());
+        };
+        let lc_contract_epoch = block_epoch(header.height, self.epoch_height);
+        if lc_contract_epoch < goal {
+            self.ensure(required_epochs(lc_contract_epoch, self.first_epoch))
+                .await?;
+        }
+        Ok(())
     }
 
     /// `retry` (Stage `PeerHeights`) around `read_peer_block_heights` until one height arrives,
@@ -1580,6 +1598,28 @@ mod tests {
 
         assert_eq!(current, EpochNumber::new(N));
         assert!(!has_table(&coordinator, N + 2));
+    }
+
+    /// Anchor above `epoch(F)` with no table or root stored, as after `reset-storage
+    /// --stake-table-only`: the proofs of `epoch(F)` come first, then the walk derives the
+    /// epochs up to the anchor from the proven pair instead of from genesis.
+    #[test_log::test(tokio::test(start_paused = true))]
+    async fn anchor_above_the_lc_contract_with_nothing_held_installs_proofs_first() {
+        let (client, header) = chain().await;
+        let anchor = N + 7;
+        let store = SeededStore::for_chain(&client, (N - 4)..=(anchor + 1))
+            .await
+            .hidden();
+        reveal_later(&store, (N + 2)..=(anchor + 1), Duration::from_millis(100));
+        let coordinator = coordinator(store);
+
+        let (current, reads) =
+            run_catchup_counting_reads(&coordinator, Some(header), &[client], Some(anchor)).await;
+
+        assert_eq!(current.unwrap(), EpochNumber::new(anchor));
+        assert_eq!(reads, 1);
+        assert_tables(&coordinator, (N - 4)..=(N + 1));
+        assert_tables(&coordinator, (anchor - 4)..=(anchor + 1));
     }
 
     /// The anchor lifts `N` over a stale median, even when storage holds tables above it.
