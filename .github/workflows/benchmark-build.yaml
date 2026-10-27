@@ -17,7 +17,9 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: taiki-e/install-action@53aaa72a1fed2d5b9189d6d54c38e29bf9be2ab9 # just
+      - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+        with:
+          tool: just
 
       - name: Checkout Repository
         uses: actions/checkout@v7
@@ -347,7 +349,9 @@ jobs:
     runs-on: ubuntu-latest
     needs: [build-dockers]
     steps:
-      - uses: taiki-e/install-action@53aaa72a1fed2d5b9189d6d54c38e29bf9be2ab9 # just
+      - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+        with:
+          tool: just
 
       - name: Checkout Repository
         uses: actions/checkout@v7

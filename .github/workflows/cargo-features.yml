@@ -38,8 +38,9 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y protobuf-compiler
 
-      - uses: taiki-e/install-action@e54d1273511b8c2ffe93ae78b1b5d6652705222a # cargo-hack
-      - uses: taiki-e/install-action@53aaa72a1fed2d5b9189d6d54c38e29bf9be2ab9 # just
+      - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+        with:
+          tool: cargo-hack,just
       # Note: this job doesn't use a cache on purpose because it mostly compiles
       # the crates in this repo over and over again with different feature
       # combinations. The target directory gets really large. Adding caching
@@ -53,7 +54,9 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: taiki-e/install-action@53aaa72a1fed2d5b9189d6d54c38e29bf9be2ab9 # just
+      - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+        with:
+          tool: just
       - uses: ./.github/actions/install-sp1
 
       - name: Check zkVM client crates for the SP1 target

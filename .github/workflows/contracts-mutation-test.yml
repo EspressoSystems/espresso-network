@@ -44,7 +44,7 @@ jobs:
           solc-select use 0.8.28
 
       - name: Install cargo-binstall
-        uses: taiki-e/install-action@5488ac5a951645ce95062214902ac4b6bc1a1037 # v2.87.32
+        uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
         with:
           tool: cargo-binstall
 
@@ -135,7 +135,7 @@ jobs:
         uses: ./.github/actions/install-foundry
 
       - name: Install cargo-binstall
-        uses: taiki-e/install-action@5488ac5a951645ce95062214902ac4b6bc1a1037 # v2.87.32
+        uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
         with:
           tool: cargo-binstall
 
@@ -180,7 +180,7 @@ jobs:
     timeout-minutes: 5
     steps:
       - name: Install cargo-binstall
-        uses: taiki-e/install-action@5488ac5a951645ce95062214902ac4b6bc1a1037 # v2.87.32
+        uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
         with:
           tool: cargo-binstall
 
