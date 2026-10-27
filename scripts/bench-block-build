@@ -58,15 +58,25 @@ LANES = {
     "transaction_hashes": "#eb6834",
     "vid_commitment": "#1baf7a",
     "builder_commitment": "#eda100",
-    "vid_disperse": "#c3c2b7",
+    "vid_disperse": "#1c2633",
     "disperse_params": "#7e57c2",
     "sign": "#00838f",
-    "ns_encode": "#1baf7a",
+    "ns_encode": "#008300",
     "fragments": "#8d6e63",
     "serialize": "#d84315",
 }
 # The step a benchmark is named after, which spans the whole iteration.
 ROOTS = ["leader_vid", "request_block"]
+# Steps only `leader_vid` runs; other benchmarks get no lane for them.
+LEADER_VID_ONLY = {
+    "leader_vid",
+    "vid_disperse",
+    "disperse_params",
+    "sign",
+    "ns_encode",
+    "fragments",
+    "serialize",
+}
 # Per-step wording of the cpu kind, see STEPS in the bench.
 CPU_NOTES = {
     "leader_vid": ", process cpu {:.1f} ms",
@@ -237,9 +247,15 @@ def waterfall(runs: pd.DataFrame, path: Path) -> None:
     medians = runs.groupby(keys)[["start", "duration", "cpu"]].median()
     sem = runs.groupby([*keys, "rep"]).duration.median().groupby(level=keys).sem()
     panels = medians.index.droplevel("step").unique()
-    # A benchmark's lanes are the steps either ref ran, so a step one ref skips shows as such.
-    ran = medians.reset_index().groupby(["malloc", "benchmark"]).step.agg(set)
-    steps_of = {panel: [s for s in LANES if s in ran[panel[:2]]] for panel in panels}
+    # A benchmark's lanes are the steps it can run, so a step a ref skips shows as "not run".
+    steps_of = {
+        panel: [
+            s
+            for s in LANES
+            if s not in LEADER_VID_ONLY or panel[1].split("/")[1] == "leader_vid"
+        ]
+        for panel in panels
+    }
     heights = [len(steps_of[panel]) for panel in panels]
     fig, axes = plt.subplots(
         len(panels),
@@ -272,9 +288,7 @@ def waterfall(runs: pd.DataFrame, path: Path) -> None:
             ax.text(x, lane, f"  {note}", va="center")
         ax.set_yticks(list(lanes), steps)
         ax.invert_yaxis()
-        ax.set_title(
-            " · ".join(panel).replace("block_build/", ""), loc="left"
-        )
+        ax.set_title(" · ".join(panel).replace("block_build/", ""), loc="left")
         ax.grid(axis="x", color="#e1e0d9")
         ax.set_axisbelow(True)
     axes[-1, 0].set_xlim(0, (medians.start + medians.duration).max() * 1.15)

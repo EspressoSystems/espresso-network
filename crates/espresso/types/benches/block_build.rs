@@ -27,7 +27,7 @@
 
 use std::{
     collections::BTreeMap,
-    env, fs, mem,
+    env, fs, iter, mem,
     path::PathBuf,
     sync::Mutex,
     time::{Duration, Instant},
@@ -190,12 +190,15 @@ impl Committee {
                 false,
             )
         };
-        let stake_table: Vec<_> = (0..NODES as u64).map(|i| node(i).public_config()).collect();
+        let leader = node(0);
+        let stake_table: Vec<_> = iter::once(leader.public_config())
+            .chain((1..NODES as u64).map(|i| node(i).public_config()))
+            .collect();
         let total_weight = vid_total_weight(stake_table.iter(), Some(EpochNumber::genesis()));
         Self {
             stake_table,
             total_weight,
-            leader: node(0),
+            leader,
             upgrade_lock: UpgradeLock::new(Upgrade::trivial(NEW_PROTOCOL_VERSION)),
         }
     }
@@ -359,7 +362,7 @@ fn record(iteration: Iteration) {
         - cpu_of("encode").expect("encode ran");
     let encode_cpu = cpu_of("vid_disperse").map(|disperse| {
         disperse
-            - cpu_of("disperse_params").unwrap_or(0.0)
+            - cpu_of("disperse_params").expect("disperse_params ran")
             - cpu_of("sign").expect("sign ran")
             - cpu_of("fragments").expect("fragments ran")
             - cpu_of("serialize").expect("serialize ran")
