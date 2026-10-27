@@ -37,4 +37,9 @@ ignore = [
     # only via routefinder -> tide-disco, the legacy HTTP stack being retired; it goes away with
     # the last tide-disco consumer.
     "RUSTSEC-2026-0249",
+    # crypto-bigint 0.5.5 timing variability. Pulled in by elliptic-curve 0.13 (k256, ecdsa,
+    # alloy-signer, ethers-core); the fix is only in 0.7.6+, which needs elliptic-curve 0.14.
+    # Latest alloy (2.5.0) still requires k256/elliptic-curve 0.13.
+    # https://github.com/alloy-rs/alloy/issues/4445
+    "RUSTSEC-2026-0387",
 ]
