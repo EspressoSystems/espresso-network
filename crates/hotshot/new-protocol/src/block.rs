@@ -16,6 +16,7 @@ use hotshot_types::{
     traits::{
         BlockPayload, EncodeBytes, ValidatedState as _,
         block_contents::{BuilderFee, Transaction},
+        metrics::Histogram,
         node_implementation::NodeType,
         signature_key::BuilderSignatureKey,
     },
@@ -30,6 +31,7 @@ use versions::{NO_BUILDER_COMMITMENT_VERSION, Version};
 
 use crate::{
     consensus::ConsensusInput,
+    coordinator::metrics::{Measurement, finish_measurement},
     helpers::proposal_commitment,
     message::{DedupManifest, Proposal, TransactionMessage},
     network::message_limit,
@@ -273,6 +275,7 @@ pub struct BlockBuilder<T: NodeType> {
     /// change how the payload is built.
     view_transactions: BTreeMap<ViewNumber, PooledBlock<T>>,
     tasks: JoinSet<Result<BlockBuilderOutput<T>, BlockError>>,
+    commitments_duration_metric: Option<Arc<dyn Histogram>>,
 }
 
 impl<T: NodeType> BlockBuilder<T> {
@@ -298,7 +301,13 @@ impl<T: NodeType> BlockBuilder<T> {
             calculations: BTreeMap::new(),
             view_transactions: BTreeMap::new(),
             tasks: JoinSet::new(),
+            commitments_duration_metric: None,
         }
+    }
+
+    pub fn with_metrics(mut self, commitments_duration: Option<Arc<dyn Histogram>>) -> Self {
+        self.commitments_duration_metric = commitments_duration;
+        self
     }
 
     pub fn request_block(&mut self, request: BlockAndHeaderRequest<T>) {
@@ -320,6 +329,7 @@ impl<T: NodeType> BlockBuilder<T> {
         let membership = self.membership.clone();
 
         let empty_block_delay = self.config.empty_block_delay;
+        let duration_metric = self.commitments_duration_metric.clone();
 
         let handle = self.tasks.spawn(async move {
             // Without this an idle network produces empty blocks as fast as consensus can run
@@ -343,8 +353,10 @@ impl<T: NodeType> BlockBuilder<T> {
                 .cloned()
                 .collect();
             let commitments = spawn_blocking(move || {
+                let measurement = duration_metric.map(Measurement::start);
                 let commitments =
                     block_commitments(&payload, &pooled_hashes, &stake_table, version);
+                finish_measurement(measurement);
                 (payload, commitments)
             });
             let (payload, commitments) = match commitments.await {

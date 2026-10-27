@@ -395,16 +395,23 @@ where
                 initializer.epoch_height(),
                 membership_coordinator.clone(),
             ))
-            .block_builder(BlockBuilder::new(
-                Arc::new(initializer.instance_state().clone()),
-                membership_coordinator.clone(),
-                BlockBuilderConfig {
-                    empty_block_delay,
-                    block_sizes,
-                    ..BlockBuilderConfig::default()
-                },
-                upgrade_lock.clone(),
-            ))
+            .block_builder(
+                BlockBuilder::new(
+                    Arc::new(initializer.instance_state().clone()),
+                    membership_coordinator.clone(),
+                    BlockBuilderConfig {
+                        empty_block_delay,
+                        block_sizes,
+                        ..BlockBuilderConfig::default()
+                    },
+                    upgrade_lock.clone(),
+                )
+                .with_metrics(
+                    coordinator_metrics
+                        .as_ref()
+                        .map(|m| m.consensus.block_commitments_duration.clone().into()),
+                ),
+            )
             .proposal_validator(ProposalValidator::new(
                 membership_coordinator.clone(),
                 initializer.epoch_height(),
