@@ -681,10 +681,8 @@ enum SequencerModule {
     ///
     /// This module requires the http and storage-sql modules to be started.
     Explorer(Module<api::options::Explorer>),
-    /// Run the light client API module.
-    ///
-    /// This module provides data and proofs necessary for an untrusting light client to retrieve
-    /// and verify Espresso data from this server.
+    /// Deprecated and ignored: the light client API is served by every node running the query
+    /// module with storage-sql.
     ///
     /// This module requires the http and storage-sql modules to be started.
     LightClient(Module<api::options::LightClient>),
@@ -930,7 +928,7 @@ impl From<&Modules> for ApiModulesConfig {
             config: m.config.is_some(),
             hotshot_events: m.hotshot_events.is_some(),
             explorer: m.explorer.is_some(),
-            light_client: m.light_client.is_some(),
+            light_client: m.query.is_some() && m.storage_sql.is_some(),
         }
     }
 }

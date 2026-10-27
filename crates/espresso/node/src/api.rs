@@ -3889,10 +3889,7 @@ mod test {
         let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
         let storage = SqlDataSource::create_storage().await;
         let config = TestNetworkConfigBuilder::default()
-            .api_config(
-                SqlDataSource::options(&storage, Options::with_port(port))
-                    .light_client(Default::default()),
-            )
+            .api_config(SqlDataSource::options(&storage, Options::with_port(port)))
             .network_config(TestConfigBuilder::default().build())
             .build();
         let _network = TestNetwork::new(config, MOCK_SEQUENCER_VERSIONS).await;
@@ -4191,10 +4188,7 @@ mod test {
             .try_into()
             .unwrap();
         let config = TestNetworkConfigBuilder::<NUM_NODES, _, _>::with_num_nodes()
-            .api_config(
-                SqlDataSource::options(&dbs[0], Options::with_port(port))
-                    .light_client(Default::default()),
-            )
+            .api_config(SqlDataSource::options(&dbs[0], Options::with_port(port)))
             .persistences(persistence)
             .catchups(std::array::from_fn(|_| state_peers()))
             .network_config(TestConfigBuilder::default().build())
@@ -6223,7 +6217,6 @@ mod test {
             .api_config(
                 Options::with_port(api_port)
                     .catchup(Default::default())
-                    .light_client(Default::default())
                     .query_sql(
                         Query {
                             peers: vec![query_url.clone()],
@@ -6268,7 +6261,6 @@ mod test {
             async move {
                 let opt = Options::with_port(query_port)
                     .catchup(Default::default())
-                    .light_client(Default::default())
                     .query_sql(
                         Query {
                             peers: vec![peer_url.clone()],
@@ -7310,9 +7302,7 @@ mod test {
         let config = TestNetworkConfigBuilder::with_num_nodes()
             .api_config(SqlDataSource::options(
                 &storage[0],
-                Options::with_port(api_port)
-                    .catchup(Default::default())
-                    .light_client(Default::default()),
+                Options::with_port(api_port).catchup(Default::default()),
             ))
             .network_config(network_config)
             .persistences(persistence.clone())
@@ -7542,9 +7532,7 @@ mod test {
         let config = TestNetworkConfigBuilder::with_num_nodes()
             .api_config(SqlDataSource::options(
                 &storage[0],
-                Options::with_port(api_port)
-                    .catchup(Default::default())
-                    .light_client(Default::default()),
+                Options::with_port(api_port).catchup(Default::default()),
             ))
             .network_config(TestConfigBuilder::default().build())
             .persistences(persistence.clone())
@@ -7773,7 +7761,7 @@ mod test {
         let config = TestNetworkConfigBuilder::with_num_nodes()
             .api_config(SqlDataSource::options(
                 &storage[0],
-                Options::with_port(api_port).light_client(Default::default()),
+                Options::with_port(api_port),
             ))
             .network_config(network_config)
             .persistences(persistence.clone())
@@ -9780,7 +9768,7 @@ mod test {
         let config = TestNetworkConfigBuilder::with_num_nodes()
             .api_config(SqlDataSource::options(
                 &storage[0],
-                Options::with_port(api_port).light_client(Default::default()),
+                Options::with_port(api_port),
             ))
             .network_config(network_config)
             .persistences(persistence.clone())
@@ -10346,7 +10334,6 @@ mod test {
                 .catchup(Default::default())
                 .config(Default::default())
                 .explorer(Default::default())
-                .light_client(Default::default())
                 .hotshot_events(Default::default());
 
             let config = TestNetworkConfigBuilder::with_num_nodes()
@@ -11838,10 +11825,10 @@ mod test {
             .unwrap();
 
         let config = TestNetworkConfigBuilder::<NUM_NODES, _, _>::with_num_nodes()
-            .api_config(
-                SqlDataSource::options(&storage[0], Options::with_port(port))
-                    .light_client(Default::default()),
-            )
+            .api_config(SqlDataSource::options(
+                &storage[0],
+                Options::with_port(port),
+            ))
             .persistences(persistence.clone())
             .catchups(std::array::from_fn(|_| {
                 StatePeers::<SequencerApiVersion>::from_urls(
@@ -12004,10 +11991,10 @@ mod test {
             .unwrap();
 
         let config = TestNetworkConfigBuilder::<NUM_NODES, _, _>::with_num_nodes()
-            .api_config(
-                SqlDataSource::options(&storage[0], Options::with_port(port))
-                    .light_client(Default::default()),
-            )
+            .api_config(SqlDataSource::options(
+                &storage[0],
+                Options::with_port(port),
+            ))
             .persistences(persistence)
             .states(std::array::from_fn(|_| genesis_state.clone()))
             .catchups(std::array::from_fn(|_| {
