@@ -375,7 +375,6 @@ impl Options {
             submit: self.submit.is_some(),
             config: self.config.is_some(),
             explorer: self.explorer.is_some(),
-            light_client: self.light_client.is_some(),
             ..Default::default()
         };
         let max_connections = self.http.max_connections;
