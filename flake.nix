@@ -151,6 +151,8 @@
             prettier
             solhint
             libusb1 # link-time dep of `libusb1-sys` crate
+            coreutils # GNU timeout, realpath -m on macOS
+            bc # scripts/verify-pos-deployment.sh
           ] ++ lib.optionals stdenv.hostPlatform.isDarwin [ pkgs.darwin.libresolv ];
           shellHook = ''
             ${rustShellHook}
@@ -161,7 +163,7 @@
             export CARGO_HOME=$HOME/.cargo-nix
 
             # Skipped for with-tools fallbacks: they may run inside a git hook.
-            if [ -f .pre-commit-config.yaml ] && [ -z "''${WITH_TOOLS:-}" ]; then
+            if [ -f .pre-commit-config.yaml ] && [ -z "''${WITH_TOOLS:-}" ] && git rev-parse --git-dir >/dev/null 2>&1; then
               prek install -q --overwrite
             fi
           '';
@@ -175,7 +177,7 @@
       };
 
       devShells.contracts = addOnShell (solcEnv // {
-        packages = [ solc pkgs.go-ethereum ];
+        packages = [ solc pkgs.go-ethereum pkgs.python3 ]; # python3: forge ffi storage-layout tests
       });
 
       devShells.mutation = addOnShell (solcEnv // {
