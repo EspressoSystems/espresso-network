@@ -2069,7 +2069,8 @@ where
 
 /// Where the aggregator resumes, with the aggregate it builds on: just above its last aggregate, or,
 /// with none yet, just above the pruned data, which it could never read. The totals then count from
-/// there, and ranges that start lower have none.
+/// there, and ranges that start lower have none. This stays so when a switch to archive mode
+/// refetches the pruned data, because the aggregator then resumes from its last aggregate.
 fn aggregator_start<Types>(
     prev: Option<Aggregate<Types>>,
     pruned_height: Option<u64>,

@@ -6,7 +6,9 @@ import "google/api/annotations.proto";
 import "v2/common.proto";
 
 message GetTransactionCountRequest {
-  // Lowest block height to include; the genesis block when absent
+  // Lowest block height to include; the genesis block when absent. A node that pruned blocks
+  // before it counted them has totals only from the first block it counted, and a range that
+  // starts lower is a 404 that a retry does not fix
   optional uint64 from = 1;
 
   // Highest block height to include (inclusive); the latest aggregated block when absent,
@@ -22,7 +24,9 @@ message TransactionCountResponse {
 }
 
 message GetPayloadSizeRequest {
-  // Lowest block height to include; the genesis block when absent
+  // Lowest block height to include; the genesis block when absent. A node that pruned blocks
+  // before it counted them has totals only from the first block it counted, and a range that
+  // starts lower is a 404 that a retry does not fix
   optional uint64 from = 1;
 
   // Highest block height to include (inclusive); the latest aggregated block when absent,

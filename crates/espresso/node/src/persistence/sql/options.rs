@@ -164,6 +164,10 @@ pub struct Options {
     /// lack block proofs below that boundary, and fee accounts that no block after it touched. They
     /// stay incomplete after a switch to `--archive`: complete trees need a replay from genesis,
     /// which runs only on a database with no merklized state.
+    ///
+    /// Likewise, a pruned node with no transaction and payload totals counts them from just above
+    /// the pruned blocks, and a total over a range that starts lower is a 410. This stays so after a
+    /// switch to `--archive`: totals from genesis need an empty `aggregate` table.
     #[clap(long, env = "ESPRESSO_NODE_DATABASE_PRUNE")]
     pub(crate) prune: bool,
 

@@ -34,7 +34,11 @@ under `/v2/status/...`, `/v2/token/...`, `/v2/node/...`, `/v2/config/...`, `/v2/
 - `NodeService` carries over every v1 `node` endpoint except `oldest-block` and `oldest-leaf`. Where v1 has a route per
   epoch and a `current` route, v2 has one route with an optional `epoch` parameter, as it does for the block reward;
   where v1 has a route per way of naming a block, v2 has one route with an optional parameter per naming, of which
-  exactly one must be given. `/v2/node/block-height` duplicates `/v2/status/block-height` because v1 has both.
+  exactly one must be given. `/v2/node/block-height` duplicates `/v2/status/block-height` because v1 has both. The
+  transaction count and the payload size count from the first block the node aggregated. That block is above genesis on
+  a node that pruned blocks before it aggregated them, and there a range that starts lower, also one with no `from`, is
+  a 410 on v1 and a 404 on v2. The explorer summary counts transactions from genesis, so it fails the same way on such a
+  node.
 - `ConfigService` serves v1's config module as typed messages. `hotshot` carries every consensus parameter, including
   the genesis membership and the DA committee overrides. The comment on `HotshotConfigResponse` in `config.proto` says
   what it drops from v1's orchestrator wrapper. `runtime` carries the identity, endpoints, storage settings and enabled
