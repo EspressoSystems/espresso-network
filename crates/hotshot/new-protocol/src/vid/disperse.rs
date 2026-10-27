@@ -454,9 +454,12 @@ mod tests {
     use std::ops::Range;
 
     use alloy::primitives::U256;
-    use hotshot_example_types::node_types::TestTypes;
+    use hotshot_example_types::{
+        node_stake::{TestNodeStakes, gen_node_lists},
+        node_types::TestTypes,
+    };
     use hotshot_types::{
-        PeerConfig, ValidatorConfig,
+        PeerConfig,
         data::{
             EpochNumber, VidCommitment, ViewNumber, vid_commitment, vid_disperse::vid_total_weight,
         },
@@ -465,6 +468,7 @@ mod tests {
     use versions::NEW_PROTOCOL_VERSION;
 
     use super::{Bucket, BuiltDispersal, bucketize, fragments, into_buckets};
+    use crate::tests::common::utils::ns_table;
 
     /// Build a contiguous namespace table from per-namespace byte lengths.
     /// Only the lengths matter to `bucketize`; the offsets are incidental.
@@ -535,27 +539,10 @@ mod tests {
 
     /// Nodes with unequal stakes, so their VID weights differ.
     fn stake_table() -> Vec<PeerConfig<TestTypes>> {
-        (0..5)
-            .map(|i| {
-                ValidatorConfig::<TestTypes>::generated_from_seed_indexed(
-                    [0; 32],
-                    i,
-                    U256::from(i + 1),
-                    false,
-                )
-                .public_config()
-            })
-            .collect()
-    }
-
-    /// An encoded namespace table whose namespaces end at `offsets`.
-    fn ns_table(offsets: &[u32]) -> Vec<u8> {
-        let mut bytes = (offsets.len() as u32).to_le_bytes().to_vec();
-        for (id, offset) in offsets.iter().enumerate() {
-            bytes.extend_from_slice(&(id as u32).to_le_bytes());
-            bytes.extend_from_slice(&offset.to_le_bytes());
-        }
-        bytes
+        let stakes = (0..5).fold(TestNodeStakes::default(), |stakes, i| {
+            stakes.with_stake(i, U256::from(i + 1))
+        });
+        gen_node_lists(5, 0, &stakes).0
     }
 
     /// A payload with three namespaces of different sizes.
