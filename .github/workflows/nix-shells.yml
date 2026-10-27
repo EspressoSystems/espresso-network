@@ -1,0 +1,35 @@
+name: Nix dev shells
+
+on:
+  pull_request:
+    paths:
+      - flake.nix
+      - flake.lock
+      - cross-shell.nix
+      - rust-toolchain.toml
+      - nix/**
+      - scripts/with-tools
+      - .github/workflows/nix-shells.yml
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  nix-shell:
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        shell: [default, contracts, mutation, docs, go, python, aws, dockerShell]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Install Nix
+        uses: cachix/install-nix-action@v31
+
+      - uses: actions/checkout@v7
+
+      - name: Enter .#${{ matrix.shell }}
+        run: nix develop .#${{ matrix.shell }} --accept-flake-config -c true
