@@ -784,6 +784,9 @@ where
             height - 1
         },
     };
+    if to < from {
+        return Ok(None);
+    }
     let start = aggregates_start(tx).await?;
     if from < start {
         return Err(QueryError::Pruned {
@@ -1268,6 +1271,18 @@ mod test {
             totals(&mut tx, above_start, None).await.map(Result::unwrap),
             [1, 2]
         );
+
+        // An empty range counts nothing, also where the row below it is missing.
+        for range in [
+            (Bound::Included(start), Bound::Excluded(start)),
+            (Bound::Included(start), Bound::Included(start - 1)),
+        ] {
+            assert_eq!(
+                totals(&mut tx, range, None).await.map(Result::unwrap),
+                [0, 0],
+                "{range:?}"
+            );
+        }
 
         // A range that starts below it has no totals, whether or not it names its start.
         for (from, range) in [
