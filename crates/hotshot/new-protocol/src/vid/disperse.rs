@@ -128,7 +128,9 @@ impl<T: NodeType> VidDisperser<T> {
     }
 
     /// Disperses a block: sends `built` if the block builder computed it, else encodes the
-    /// payload first.
+    /// payload first. The coordinator always hands over its block builder's dispersal; only the
+    /// bench node, which skips the block builder, and tests that feed `BlockBuilt` directly pass
+    /// `None`. A repeated request is dropped, `built` with it.
     pub fn request_vid_disperse(
         &mut self,
         vid_disperse_request: VidDisperseRequest<T>,

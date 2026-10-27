@@ -1224,6 +1224,16 @@ where
     }
 
     #[cfg(test)]
+    pub(crate) fn holds_built_dispersal(
+        &self,
+        view: ViewNumber,
+        epoch: EpochNumber,
+        commit: VidCommitment2,
+    ) -> bool {
+        self.built_dispersals.contains_key(&(view, epoch, commit))
+    }
+
+    #[cfg(test)]
     pub(crate) fn network(&self) -> &Cliquenet<T> {
         &self.network
     }
