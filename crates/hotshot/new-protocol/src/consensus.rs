@@ -839,8 +839,8 @@ impl<T: NodeType> Consensus<T> {
         &self.upgrade_lock
     }
 
-    pub fn current_epoch(&self) -> Option<EpochNumber> {
-        Some(self.current_epoch)
+    pub fn current_epoch(&self) -> EpochNumber {
+        self.current_epoch
     }
 
     #[cfg(test)]

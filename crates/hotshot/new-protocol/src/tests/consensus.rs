@@ -151,7 +151,7 @@ async fn test_timeout_certificate_does_not_lower_the_epoch() {
         )))
         .await;
 
-    assert_eq!(harness.consensus.current_epoch(), Some(entered));
+    assert_eq!(harness.consensus.current_epoch(), entered);
     let changes: Vec<_> = harness
         .outputs()
         .iter()
@@ -183,7 +183,7 @@ async fn test_unbound_timeout_certificate_does_not_move_the_epoch() {
         )))
         .await;
 
-    assert_eq!(harness.consensus.current_epoch(), Some(here));
+    assert_eq!(harness.consensus.current_epoch(), here);
     assert_eq!(
         *harness.consensus.current_view(),
         *timed_out.view_number + 1
@@ -236,7 +236,7 @@ async fn test_timeout_certificate_raises_the_epoch() {
         )))
         .await;
 
-    assert_eq!(harness.consensus.current_epoch(), Some(ahead));
+    assert_eq!(harness.consensus.current_epoch(), ahead);
     let changes: Vec<_> = harness
         .outputs()
         .iter()
@@ -287,11 +287,11 @@ async fn test_later_timeout_certificate_is_kept_for_its_epoch() {
     };
 
     harness.apply(certificate(behind)).await;
-    assert_eq!(harness.consensus.current_epoch(), Some(behind));
+    assert_eq!(harness.consensus.current_epoch(), behind);
 
     harness.apply(certificate(ahead)).await;
 
-    assert_eq!(harness.consensus.current_epoch(), Some(ahead));
+    assert_eq!(harness.consensus.current_epoch(), ahead);
     let entered = timed_out.view_number + 1;
     assert_eq!(
         harness

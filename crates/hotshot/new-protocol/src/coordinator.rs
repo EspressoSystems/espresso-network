@@ -431,10 +431,7 @@ where
         // Client requests are served before the outbox reaches the builder, so it must know the
         // view before that first `ViewChanged`.
         self.block_builder.start_at(next_view);
-        let epoch = self
-            .consensus
-            .current_epoch()
-            .unwrap_or(EpochNumber::genesis());
+        let epoch = self.consensus.current_epoch();
 
         if self.consensus.last_decided_leaf().view_number() == ViewNumber::genesis() {
             // Genesis DA never flows through the normal block-builder path.
@@ -502,10 +499,7 @@ where
                 },
                 () = &mut self.timer => {
                     let view = self.timer.view();
-                    let epoch = self
-                        .consensus
-                        .current_epoch()
-                        .unwrap_or(EpochNumber::genesis());
+                    let epoch = self.consensus.current_epoch();
                     // Re-arm for the same view: a node stuck exactly at TC2
                     // threshold can lose its only timeout-vote broadcast, so
                     // the vote is re-sent every timeout period until the
@@ -1141,10 +1135,7 @@ where
             ConsensusOutput::ViewTimedOut(view) => {
                 debug!(%node, %view, "view timed out");
                 self.server.view_timed_out(view);
-                let epoch = self
-                    .consensus
-                    .current_epoch()
-                    .unwrap_or_else(EpochNumber::genesis);
+                let epoch = self.consensus.current_epoch();
                 self.gc(epoch, GcScope::Timeout(view))?;
             },
             ConsensusOutput::ProposalCertified(proposal) => {
@@ -1532,10 +1523,7 @@ where
                         return None;
                     }
                     let current_view = self.consensus.current_view();
-                    let current_epoch = self
-                        .consensus
-                        .current_epoch()
-                        .unwrap_or(EpochNumber::genesis());
+                    let current_epoch = self.consensus.current_epoch();
                     let leader = self.leader(view, current_epoch);
                     if let Some(vote) = self.upgrade_protocol.maybe_vote(
                         &upgrade_proposal,
@@ -2160,9 +2148,7 @@ where
 
     /// The epoch this node is in.
     fn epoch(&self) -> EpochNumber {
-        self.consensus
-            .current_epoch()
-            .unwrap_or_else(EpochNumber::genesis)
+        self.consensus.current_epoch()
     }
 
     /// Is `epoch` close enough to the node's own to tally a vote naming it?
@@ -2172,19 +2158,13 @@ where
 
     /// We ignore messages more than `EPOCH_CHANGE_LOOKAHEAD` ahead of ours.
     fn is_epoch_too_far_ahead(&self, epoch: Option<EpochNumber>) -> bool {
-        let current = self
-            .consensus
-            .current_epoch()
-            .unwrap_or(EpochNumber::genesis());
+        let current = self.consensus.current_epoch();
         epoch.is_some_and(|e| e > current + EPOCH_CHANGE_LOOKAHEAD)
     }
 
     /// Is `epoch` close enough to the node's own to buffer a fragment naming it?
     fn is_fragment_epoch_admissible(&self, epoch: EpochNumber) -> bool {
-        let current = self
-            .consensus
-            .current_epoch()
-            .unwrap_or(EpochNumber::genesis());
+        let current = self.consensus.current_epoch();
         is_epoch_admissible(epoch, current)
     }
 

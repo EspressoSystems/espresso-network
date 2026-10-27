@@ -359,7 +359,7 @@ async fn test_unsigned_view_zero_high_qc_does_not_move_the_epoch() {
 
     assert_eq!(
         harness.coordinator().consensus().current_epoch(),
-        Some(EpochNumber::genesis()),
+        EpochNumber::genesis(),
         "an unsigned view-0 certificate must not move the epoch"
     );
     assert_eq!(
@@ -408,7 +408,7 @@ async fn test_unsigned_view_zero_timeout_certificate_does_not_move_the_epoch() {
 
     assert_eq!(
         harness.coordinator().consensus().current_epoch(),
-        Some(EpochNumber::genesis()),
+        EpochNumber::genesis(),
         "an unsigned view-0 timeout certificate must not move the epoch"
     );
     assert!(!any(&inputs, is_timeout_cert), "nor reach consensus at all");
