@@ -16,26 +16,32 @@ build:
     cd {{quote(repo_root)}} && cargo build --locked --release -p espresso-node --bin espresso-node --bin orchestrator --bin state-relay-server -p espresso-deploy --bin deploy
 
 # AWS harness: plan|up|run|down|status|list|collect|render|destroy|prune|publish; `just bench aws --help`, README.md.
+[script("../with-tools", "aws", "uv", "tofu", "aws")]
 aws *args:
     cd {{quote(repo_root)}} && {{quote(aws_bench)}} "$@"
 
 # Start the network, load and measure it, tear it down; writes result.json and summary.md.
+[script("../with-tools", "python", "uv")]
 run *args:
     cd {{quote(repo_root)}} && {{quote(bench)}} run --bin-dir {{quote(bin_dir)}} --out {{quote(out)}} --storage-root {{quote(storage_root)}} "$@"
 
 # The load driver's own ceiling against a local null server, no network; `--rate`, `--step-s`.
+[script("../with-tools", "python", "uv")]
 selftest *args:
     cd {{quote(repo_root)}} && {{quote(bench)}} selftest "$@"
 
 # Re-analyse a run directory, optionally against a baseline, without rerunning.
+[script("../with-tools", "python", "uv")]
 render dir=out *args:
     cd {{quote(repo_root)}} && {{quote(bench)}} render "$@"
 
 # Compare a result.json with a baseline (a result.json or `nextest-ci stats-fetch` output).
+[script("../with-tools", "python", "uv")]
 compare result baseline:
     cd {{quote(repo_root)}} && {{quote(bench)}} compare "$1" --baseline "$2"
 
 # Runner info and CPU calibration only.
+[script("../with-tools", "python", "uv")]
 sysinfo:
     cd {{quote(repo_root)}} && {{quote(bench)}} sysinfo --out {{quote(out)}}
 
