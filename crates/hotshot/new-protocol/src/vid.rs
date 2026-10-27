@@ -5,11 +5,13 @@
 //! whose shards cover the recovery threshold. This module owns the three stages
 //! of that lifecycle, one per submodule:
 //!
-//! - [`disperse`] -- the leader side. [`VidDisperser`] erasure-codes each
-//!   namespace, coalesces namespaces into size-balanced buckets, and unicasts
-//!   to every node a stream of [`AvidmGf2DisperseShareFragment`] messages
-//!   (one per bucket), each carrying that node's shares for the bucket's
-//!   namespaces.
+//! - [`disperse`] -- the leader side. The block builder erasure-codes each
+//!   namespace into a [`BuiltDispersal`] and folds the payload commitment from
+//!   it. [`VidDisperser`] coalesces namespaces into size-balanced buckets and
+//!   unicasts to every node a stream of [`AvidmGf2DisperseShareFragment`]
+//!   messages (one per bucket), each carrying that node's shares for the
+//!   bucket's namespaces. Without a built dispersal it erasure-codes the
+//!   namespaces itself.
 //!
 //! - [`fragments`] -- the receive side of dispersal, the mirror of
 //!   [`VidDisperser`]. [`VidFragmentAccumulator`] buffers the fragments a node
@@ -30,7 +32,8 @@ mod fragments;
 mod reconstruct;
 
 pub use disperse::{
-    VidDisperseError, VidDisperseOutput, VidDisperseRequest, VidDisperser, disperse_payload,
+    BuiltDispersal, Dispersal, VidDisperseError, VidDisperseOutput, VidDisperseRequest,
+    VidDisperser, disperse_payload,
 };
 pub use fragments::{VidFragmentAccumulator, VidFragmentError};
 use hotshot_types::{

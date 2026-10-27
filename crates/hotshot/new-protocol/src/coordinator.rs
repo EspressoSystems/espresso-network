@@ -66,8 +66,8 @@ use crate::{
     storage::{NewProtocolStorage, Storage},
     upgrade::UpgradeProtocol,
     vid::{
-        ObtainedPayload, PinnedBy, VidDisperseRequest, VidDisperser, VidFragmentAccumulator,
-        VidReconstructor, expected_vid_param,
+        BuiltDispersal, ObtainedPayload, PinnedBy, VidDisperseRequest, VidDisperser,
+        VidFragmentAccumulator, VidReconstructor, expected_vid_param,
     },
     vote::{EpochRootTally, SimpleTally, UpgradeTally, VoteCollector},
 };
@@ -151,6 +151,9 @@ pub struct Coordinator<T: NodeType, S> {
     server: Server<T>,
     #[builder(skip)]
     da_payloads: BTreeMap<(ViewNumber, VidCommitment2), PendingDa<T>>,
+    /// Dispersals the block builder computed, until consensus asks to disperse their block.
+    #[builder(skip)]
+    built_dispersals: BTreeMap<(ViewNumber, EpochNumber, VidCommitment2), BuiltDispersal<T>>,
     metrics: Option<metrics::Metrics>,
     #[builder(default)]
     participation: ParticipationTracker<T>,
@@ -649,13 +652,17 @@ where
                     }
                 },
                 Some(item) = self.block_builder.next() => match item {
-                    Ok(block) => {
+                    Ok(mut block) => {
                         self.state_manager.request_header(HeaderRequest::from(&block));
                         let epoch = block.epoch;
                         let manifest = block.manifest.clone();
                         // Retain the payload and persist it when consensus proposes this
                         // exact block (cf. SendProposal):
                         if let VidCommitment::V2(commit) = block.payload_commitment {
+                            if let Some(dispersal) = block.dispersal.take() {
+                                self.built_dispersals
+                                    .insert((block.view, epoch, commit), dispersal);
+                            }
                             self.da_payloads.insert(
                                 (block.view, commit),
                                 PendingDa {
@@ -812,13 +819,19 @@ where
                 payload_commitment,
             } => {
                 debug!(%node, %view, %epoch, "request vid disperse");
-                self.vid_disperser.request_vid_disperse(VidDisperseRequest {
-                    view,
-                    epoch,
-                    block: payload,
-                    metadata,
-                    payload_commitment,
-                });
+                let built = self
+                    .built_dispersals
+                    .remove(&(view, epoch, payload_commitment));
+                self.vid_disperser.request_vid_disperse(
+                    VidDisperseRequest {
+                        view,
+                        epoch,
+                        block: payload,
+                        metadata,
+                        payload_commitment,
+                    },
+                    built,
+                );
             },
             ConsensusOutput::RequestDrbResult(epoch) => {
                 debug!(%node, %epoch, "request drb result");
@@ -2132,6 +2145,9 @@ where
                     .gc(view.saturating_sub(VID_RECONSTRUCT_GC_MARGIN).into());
                 let vc = VidCommitment2::default();
                 self.da_payloads = self.da_payloads.split_off(&(view, vc));
+                self.built_dispersals =
+                    self.built_dispersals
+                        .split_off(&(view, EpochNumber::new(0), vc));
                 self.payload_txn_bytes = self.payload_txn_bytes.split_off(&(decide_floor + 1));
             },
             GcScope::Timeout(view) => {
@@ -2147,6 +2163,10 @@ where
                 let vc = VidCommitment2::default();
                 self.da_payloads
                     .extract_if((view, vc)..(view + 1, vc), |_, _| true)
+                    .for_each(drop);
+                let e = EpochNumber::new(0);
+                self.built_dispersals
+                    .extract_if((view, e, vc)..(view + 1, e, vc), |_, _| true)
                     .for_each(drop);
             },
         }

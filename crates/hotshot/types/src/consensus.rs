@@ -576,7 +576,8 @@ pub struct ConsensusMetricsValue {
     pub validate_and_apply_header_duration: Box<dyn Histogram>,
     /// The duration of update leaf
     pub update_leaf_duration: Box<dyn Histogram>,
-    /// The time it took to calculate the disperse
+    /// The time a leader took to disperse a block: signing and sending the shares, plus
+    /// erasure-coding the payload when the block builder had not
     pub vid_disperse_duration: Box<dyn Histogram>,
 }
 

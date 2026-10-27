@@ -545,6 +545,62 @@ async fn test_request_block_hashes_a_payload_that_dropped_a_transaction() {
     assert_eq!(output.manifest.hashes, computed);
 }
 
+/// The leader folds a block's payload commitment from the dispersal it hands to the disperser,
+/// so the commitment must equal the one computed from the payload alone.
+#[tokio::test]
+async fn test_payload_commitment_comes_from_the_built_dispersal() {
+    use hotshot_types::{
+        data::{VidCommitment, vid_commitment, vid_disperse::vid_total_weight},
+        traits::EncodeBytes,
+    };
+
+    use crate::{block::BlockAndHeaderRequest, tests::common::utils::TestData};
+
+    let mut b = builder_with(BlockBuilderConfig {
+        empty_block_delay: Duration::ZERO,
+        ..small_config()
+    });
+    let parent = TestData::new(2).await.views[0].proposal.data.clone();
+    // View 4 takes both transactions, so view 5 builds an empty block.
+    b.on_transactions(tx_msg(view(3), vec![tx(1), tx(2)]));
+    for target_view in [4, 5] {
+        b.request_block(BlockAndHeaderRequest {
+            view: view(target_view),
+            epoch: epoch(),
+            parent_proposal: parent.clone(),
+        });
+    }
+
+    let membership = mock_membership();
+    let members = membership.stake_table_for_epoch(Some(epoch())).unwrap();
+    let total_weight = vid_total_weight(members.stake_table(), Some(epoch()));
+    let version = test_upgrade_lock::<TestTypes>().version(view(4)).unwrap();
+    let mut num_transactions = Vec::new();
+    for _ in 0..2 {
+        let Some(Ok(output)) = b.next().await else {
+            panic!("expected an Ok block builder output");
+        };
+        let payload = &output.payload;
+        num_transactions.push(output.manifest.hashes.len());
+        let expected = vid_commitment(
+            &payload.payload.encode(),
+            &payload.metadata.encode(),
+            total_weight,
+            version,
+        );
+        assert_eq!(output.payload_commitment, expected);
+        let dispersal = output
+            .dispersal
+            .expect("the builder hands over its dispersal");
+        assert_eq!(
+            VidCommitment::V2(dispersal.payload_commitment().unwrap()),
+            expected
+        );
+    }
+    num_transactions.sort();
+    assert_eq!(num_transactions, [0, 2], "one block is empty");
+}
+
 #[test]
 fn pooled_hashes_stand_in_when_the_payload_kept_every_transaction() {
     let payload = test_payload(vec![tx(1), tx(2)]);
