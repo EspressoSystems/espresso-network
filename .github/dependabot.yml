@@ -9,6 +9,8 @@ updates:
         - "*"
     schedule:
       interval: "daily"
+    cooldown:
+      default-days: 7
 
   - package-ecosystem: "cargo"
     directories:
@@ -24,6 +26,8 @@ updates:
           - "jf-*"
     schedule:
       interval: "daily"
+    cooldown:
+      default-days: 7
 
   - package-ecosystem: "uv"
     directory: "/.github/claude"
@@ -33,3 +37,5 @@ updates:
           - "*"
     schedule:
       interval: "weekly"
+    cooldown:
+      default-days: 7
