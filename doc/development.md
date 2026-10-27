@@ -41,6 +41,9 @@ If a daily workflow forces you to leave the default shell often, it probably bel
 - Entering `nix develop` runs `prek install`; the hook lives in the shared git hooks dir, so it covers all worktrees
 - Checkouts that used the old git-hooks.nix shell have an untracked `.pre-commit-config.yaml` symlink; delete it once
   before pulling (`rm .pre-commit-config.yaml`), otherwise git refuses to overwrite it
+- Commit from inside the dev shell: hooks run `rustfmt`, `nixpkgs-fmt`, `prettier` etc. from PATH
+- Contract or figure work: use `nix develop .#contracts` / `.#docs`; from the default shell the `contract-bindings` and
+  `doc` hooks enter that shell via nix on each matching commit
 - To add or change a hook: edit `.pre-commit-config.yaml`
 - To run a hook manually: `pre-commit run <id>` from inside the default shell
 

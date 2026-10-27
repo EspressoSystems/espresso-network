@@ -17,19 +17,47 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  nix-shell:
-    timeout-minutes: 90
+  # One job per OS: add-on shells share the default closure, so one store downloads it once.
+  nix-shells:
+    timeout-minutes: 120
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
-        shell: [default, contracts, mutation, docs, go, python, aws, dockerShell]
     runs-on: ${{ matrix.os }}
     steps:
       - name: Install Nix
         uses: cachix/install-nix-action@v31
 
+      - uses: taiki-e/install-action@just
+
       - uses: actions/checkout@v7
 
-      - name: Enter .#${{ matrix.shell }}
-        run: nix develop .#${{ matrix.shell }} --accept-flake-config -c true
+      # Commands per shell: what with-tools recipes declare for it.
+      - name: Check shell commands
+        run: |
+          check() {
+            shell=$1
+            shift
+            echo "::group::.#$shell"
+            nix develop ".#$shell" --accept-flake-config -c bash -c '
+              for cmd in "$@"; do
+                command -v "$cmd" >/dev/null || { echo "missing: $cmd" >&2; exit 1; }
+              done' _ "$@"
+            echo "::endgroup::"
+          }
+          check default cargo rustfmt rust-analyzer jq just prek forge anvil initdb postgres timeout bc
+          check contracts forge solc abigen jq python3
+          check mutation dregs forge solc
+          check docs plantuml dot mdbook forge
+          check go go gofmt cargo jq
+          check python python3 uv ruff ty
+          check aws uv tofu aws
+          check dockerShell docker
+
+      # The runner is outside any dev shell, so these recipes take the with-tools nix fallback.
+      - name: with-tools fallback
+        if: runner.os == 'Linux'
+        run: |
+          just doc-figures
+          just bench-block-build --help
