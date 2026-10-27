@@ -490,6 +490,15 @@ where
         aggregate: Aggregate<Types>,
         blocks: &[PayloadMetadata<Types>],
     ) -> impl Future<Output = anyhow::Result<Aggregate<Types>>> + Send;
+
+    /// Delete the aggregate statistics of the highest `limit` heights below `height`.
+    ///
+    /// Returns the number of rows deleted, which is 0 once none are left below `height`.
+    fn delete_aggregates(
+        &mut self,
+        height: usize,
+        limit: usize,
+    ) -> impl Future<Output = anyhow::Result<u64>> + Send;
 }
 
 /// An interface for querying Data and Statistics from the HotShot Blockchain.

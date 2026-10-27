@@ -997,6 +997,10 @@ where
     ) -> anyhow::Result<Aggregate<Types>> {
         Ok(Aggregate::default())
     }
+
+    async fn delete_aggregates(&mut self, _height: usize, _limit: usize) -> anyhow::Result<u64> {
+        Ok(0)
+    }
 }
 
 impl<T: Revert> PrunedHeightStorage for Transaction<T> {}

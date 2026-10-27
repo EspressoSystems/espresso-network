@@ -640,4 +640,9 @@ where
         self.maybe_fail_write(FailableAction::Any).await?;
         self.inner.update_aggregates(prev, blocks).await
     }
+
+    async fn delete_aggregates(&mut self, height: usize, limit: usize) -> anyhow::Result<u64> {
+        self.maybe_fail_write(FailableAction::Any).await?;
+        self.inner.delete_aggregates(height, limit).await
+    }
 }

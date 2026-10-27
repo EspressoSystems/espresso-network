@@ -632,6 +632,19 @@ where
             payload_size,
         })
     }
+
+    async fn delete_aggregates(&mut self, height: usize, limit: usize) -> anyhow::Result<u64> {
+        let res = query(
+            "DELETE FROM aggregate
+              WHERE height < $1
+                AND height > (SELECT max(height) FROM aggregate WHERE height < $1) - $2",
+        )
+        .bind(height as i64)
+        .bind(limit as i64)
+        .execute(self.as_mut())
+        .await?;
+        Ok(res.rows_affected())
+    }
 }
 
 impl<Mode: TransactionMode> Transaction<Mode> {
@@ -1358,6 +1371,58 @@ mod test {
         // A block that is not aggregated yet is still not found.
         for res in totals(&mut tx, (Bound::Unbounded, Bound::Included(4)), Some(ns)).await {
             assert!(matches!(res, Err(QueryError::NotFound)), "{res:?}");
+        }
+    }
+
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_delete_aggregates() {
+        let storage = TmpDb::init().await;
+        let db = SqlStorage::connect(storage.config(), StorageConnectionType::Query)
+            .await
+            .unwrap();
+
+        // Aggregate blocks 0 to 4. Each has one transaction of 2 bytes, and no namespace, so one
+        // row per height.
+        let genesis = PayloadMetadata::from(
+            BlockQueryData::<MockTypes>::genesis(
+                &Default::default(),
+                &Default::default(),
+                TEST_VERSIONS.test.base,
+            )
+            .await,
+        );
+        let blocks = (0..5)
+            .map(|height| PayloadMetadata {
+                height,
+                size: 2,
+                num_transactions: 1,
+                ..genesis.clone()
+            })
+            .collect::<Vec<_>>();
+        let mut tx = db.write().await.unwrap();
+        tx.update_aggregates(Aggregate::default(), &blocks)
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+
+        // Two heights at a time from the top down: the rows left still count from height 0.
+        for (deleted, left) in [(2, 3), (2, 1), (1, 0), (0, 0)] {
+            let mut tx = db.write().await.unwrap();
+            assert_eq!(
+                UpdateAggregatesStorage::<MockTypes>::delete_aggregates(&mut tx, 5, 2)
+                    .await
+                    .unwrap(),
+                deleted
+            );
+            tx.commit().await.unwrap();
+
+            let mut tx = db.read().await.unwrap();
+            let all = (Bound::Unbounded, Bound::Unbounded);
+            assert_eq!(
+                totals(&mut tx, all, None).await.map(Result::unwrap),
+                [left, 2 * left]
+            );
         }
     }
 

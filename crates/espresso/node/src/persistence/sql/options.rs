@@ -166,7 +166,8 @@ pub struct Options {
     /// which runs only on a database with no merklized state.
     ///
     /// Likewise, a pruned node with no transaction and payload totals counts them from just above
-    /// the pruned blocks, and a total over a range that starts lower is a 410. This stays so after a
+    /// the pruned blocks, and a total over a range that starts lower is a 410. So does a node whose
+    /// totals fell behind the pruner: it deletes them and counts again. This stays so after a
     /// switch to `--archive`: totals from genesis need an empty `aggregate` table.
     #[clap(long, env = "ESPRESSO_NODE_DATABASE_PRUNE")]
     pub(crate) prune: bool,

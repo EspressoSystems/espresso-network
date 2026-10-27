@@ -1964,6 +1964,12 @@ where
 /// heights as `Ready`.
 pub(crate) const AGGREGATOR_RETRY_INTERVAL: Duration = Duration::from_secs(30);
 
+/// How many heights of aggregates one transaction deletes when the aggregator starts over.
+///
+/// Each height has a row for every namespace seen so far, so this bounds how long a transaction
+/// holds the database.
+const AGGREGATE_DELETE_BATCH: usize = 1000;
+
 impl<Types, S, P> Fetcher<Types, S, P>
 where
     Types: NodeType,
@@ -1980,29 +1986,7 @@ where
     #[tracing::instrument(skip_all)]
     async fn aggregate(self: Arc<Self>, chunk_size: usize, metrics: AggregatorMetrics) {
         loop {
-            let (prev_aggregate, pruned_height) = loop {
-                let mut tx = match self.read().await {
-                    Ok(tx) => tx,
-                    Err(err) => {
-                        tracing::error!("unable to open read tx: {err:#}");
-                        sleep(Duration::from_secs(5)).await;
-                        continue;
-                    },
-                };
-                match (
-                    tx.load_prev_aggregate().await,
-                    tx.load_pruned_height().await,
-                ) {
-                    (Ok(agg), Ok(pruned_height)) => break (agg, pruned_height),
-                    (Err(err), _) | (_, Err(err)) => {
-                        tracing::error!("unable to load where the aggregator starts: {err:#}");
-                        sleep(Duration::from_secs(5)).await;
-                        continue;
-                    },
-                }
-            };
-
-            let (start, mut prev_aggregate) = aggregator_start(prev_aggregate, pruned_height);
+            let (start, mut prev_aggregate) = self.load_aggregator_start().await;
 
             tracing::debug!(start, "starting aggregator");
             metrics.height.set(start);
@@ -2065,38 +2049,104 @@ where
             tracing::debug!("aggregator stream restarting");
         }
     }
+
+    /// Where the aggregator starts, with the aggregate it adds to. See [`aggregator_start`].
+    async fn load_aggregator_start(&self) -> (usize, Aggregate<Types>) {
+        loop {
+            match self.try_load_aggregator_start().await {
+                Ok(start) => return start,
+                Err(err) => {
+                    tracing::error!("unable to load where the aggregator starts: {err:#}");
+                    sleep(Duration::from_secs(5)).await;
+                },
+            }
+        }
+    }
+
+    async fn try_load_aggregator_start(&self) -> anyhow::Result<(usize, Aggregate<Types>)> {
+        let (prev, pruned_height) = {
+            let mut tx = self.read().await.context("opening transaction")?;
+            (
+                tx.load_prev_aggregate().await?,
+                tx.load_pruned_height().await?,
+            )
+        };
+        match aggregator_start(prev, pruned_height) {
+            AggregatorStart::Resume { start, prev } => Ok((start, prev)),
+            AggregatorStart::StartOver { start } => {
+                tracing::warn!(
+                    start,
+                    "the aggregator fell behind the data pruner, and the next block it needs is \
+                     pruned; deleting its totals to count again from the first unpruned block"
+                );
+                self.delete_aggregates_below(start).await?;
+                Ok((start, Aggregate::default()))
+            },
+        }
+    }
+
+    /// Delete every aggregate below `height`, from the top down, a batch of heights per
+    /// transaction. The rows left after each batch still count from the same first height, so the
+    /// totals stay correct even if the node stops halfway.
+    async fn delete_aggregates_below(&self, height: usize) -> anyhow::Result<()> {
+        loop {
+            let mut tx = self.write().await.context("opening transaction")?;
+            let deleted = tx.delete_aggregates(height, AGGREGATE_DELETE_BATCH).await?;
+            tx.commit().await.context("committing transaction")?;
+            if deleted == 0 {
+                return Ok(());
+            }
+        }
+    }
 }
 
-/// Where the aggregator resumes, with the aggregate it builds on: just above its last aggregate, or,
-/// with none yet, just above the pruned data, which it could never read. The totals then count from
-/// there, and ranges that start lower have none. This stays so when a switch to archive mode
-/// refetches the pruned data, because the aggregator then resumes from its last aggregate.
-fn aggregator_start<Types>(
-    prev: Option<Aggregate<Types>>,
-    pruned_height: Option<u64>,
-) -> (usize, Aggregate<Types>)
+/// Where the aggregator starts.
+#[derive(Debug)]
+enum AggregatorStart<Types>
 where
     Types: NodeType,
     Header<Types>: QueryableHeader<Types>,
 {
-    let (start, prev) = match prev {
-        Some(aggregate) => (aggregate.height as usize + 1, aggregate),
-        None => (
-            pruned_height.map_or(0, |height| height as usize + 1),
-            Aggregate::default(),
-        ),
-    };
-    if let Some(pruned_height) = pruned_height
-        && start <= pruned_height as usize
-    {
-        tracing::error!(
-            start,
-            pruned_height,
-            "the aggregator fell behind the data pruner and cannot continue: the next block it \
-             needs is pruned"
-        );
+    /// Count from `start` on, adding to the totals in `prev`.
+    Resume {
+        start: usize,
+        prev: Aggregate<Types>,
+    },
+    /// Delete every aggregate, all of which are below `start`, and count from `start` on, from
+    /// zero.
+    StartOver { start: usize },
+}
+
+/// Where the aggregator starts: just above its last aggregate, or, with none yet, just above the
+/// pruned data, which it could never read. The totals then count from there, and ranges that start
+/// lower have none. This stays so when a switch to archive mode refetches the pruned data, because
+/// the aggregator then resumes from its last aggregate.
+///
+/// An aggregator that fell behind the data pruner can never read its next block either, so it
+/// starts over just above the pruned data. Its old totals cannot carry over: they would leave out
+/// the pruned blocks in between.
+fn aggregator_start<Types>(
+    prev: Option<Aggregate<Types>>,
+    pruned_height: Option<u64>,
+) -> AggregatorStart<Types>
+where
+    Types: NodeType,
+    Header<Types>: QueryableHeader<Types>,
+{
+    let first_unpruned = pruned_height.map_or(0, |height| height as usize + 1);
+    match prev {
+        None => AggregatorStart::Resume {
+            start: first_unpruned,
+            prev: Aggregate::default(),
+        },
+        Some(prev) if prev.height as usize + 1 >= first_unpruned => AggregatorStart::Resume {
+            start: prev.height as usize + 1,
+            prev,
+        },
+        Some(_) => AggregatorStart::StartOver {
+            start: first_unpruned,
+        },
     }
-    (start, prev)
 }
 
 impl<Types, S, P> Fetcher<Types, S, P>
@@ -3513,81 +3563,119 @@ mod test {
         assert_eq!(total, expected_total);
     }
 
-    /// With no aggregates yet, the aggregator starts just above the data pruned height, as on a
-    /// node whose pruner ran first. Blocks at or below it are never fetched, so an aggregator
-    /// starting at genesis would wait for them forever.
+    /// The aggregator starts just above the data pruned height, as on a node whose pruner ran
+    /// first: with no aggregates yet, and also with aggregates below that height, as on the nodes
+    /// that aggregated their genesis block before the pruner deleted the next one. Blocks at or
+    /// below the pruned height are never fetched, so an aggregator resuming there would wait for
+    /// them forever.
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_aggregator_starts_above_pruned_height() {
-        let storage = TmpDb::init().await;
-        let db = SqlStorage::connect(storage.config(), StorageConnectionType::Query)
-            .await
-            .unwrap();
-
-        // Store only the blocks above the pruned height, before the aggregator starts.
         let n = 5;
         let pruned = 1;
         let (leaves, blocks) = mock_chain(n).await;
-        {
-            let mut tx = db.write().await.unwrap();
-            for (leaf, block) in leaves.iter().zip(&blocks).skip(pruned + 1) {
-                tx.insert_leaf(leaf).await.unwrap();
-                tx.insert_block(block).await.unwrap();
-            }
-            tx.save_pruned_height(pruned as u64).await.unwrap();
-            tx.commit().await.unwrap();
-        }
-        let ds = MockSqlDataSource::builder(db, NoFetching)
-            .build()
-            .await
-            .unwrap();
+        for aggregated in [0, 1] {
+            let storage = TmpDb::init().await;
+            let db = SqlStorage::connect(storage.config(), StorageConnectionType::Query)
+                .await
+                .unwrap();
 
-        // The block at height i has i + 1 transactions.
-        let total = poll_until(
-            Duration::from_secs(30),
-            Duration::from_millis(500),
-            || async {
-                ds.count_transactions_in_range(pruned + 1..n, None)
-                    .await
-                    .ok()
-            },
-        )
-        .await;
-        assert_eq!(total, (pruned + 2..=n).sum::<usize>());
-        let err = ds.count_transactions_in_range(.., None).await.unwrap_err();
-        assert!(matches!(err, QueryError::Pruned { .. }), "{err:?}");
+            // Store only the blocks above the pruned height, and aggregates for the first
+            // `aggregated` blocks, before the aggregator starts.
+            {
+                let mut tx = db.write().await.unwrap();
+                for (leaf, block) in leaves.iter().zip(&blocks).skip(pruned + 1) {
+                    tx.insert_leaf(leaf).await.unwrap();
+                    tx.insert_block(block).await.unwrap();
+                }
+                tx.save_pruned_height(pruned as u64).await.unwrap();
+                if aggregated > 0 {
+                    let metadata = blocks[..aggregated]
+                        .iter()
+                        .cloned()
+                        .map(PayloadMetadata::from)
+                        .collect::<Vec<_>>();
+                    tx.update_aggregates(Aggregate::default(), &metadata)
+                        .await
+                        .unwrap();
+                }
+                tx.commit().await.unwrap();
+            }
+            let ds = MockSqlDataSource::builder(db, NoFetching)
+                .build()
+                .await
+                .unwrap();
+
+            // The block at height i has i + 1 transactions.
+            let total = poll_until(
+                Duration::from_secs(30),
+                Duration::from_millis(500),
+                || async {
+                    ds.count_transactions_in_range(pruned + 1..n, None)
+                        .await
+                        .ok()
+                },
+            )
+            .await;
+            assert_eq!(total, (pruned + 2..=n).sum::<usize>(), "{aggregated}");
+            let err = ds.count_transactions_in_range(.., None).await.unwrap_err();
+            assert!(
+                matches!(err, QueryError::Pruned { .. }),
+                "{aggregated}: {err:?}"
+            );
+        }
     }
 
-    /// The pruned height picks the start only when there are no aggregates yet. With aggregates,
-    /// the aggregator resumes just above the last one, even when that height is pruned: jumping
-    /// past the pruned blocks would leave them out of every later total.
+    /// The pruned height picks the start when there are no aggregates yet. With aggregates, the
+    /// aggregator resumes just above the last one, unless that height is pruned: then it can never
+    /// read it, and it starts over just above the pruned data. Resuming there instead would leave
+    /// the pruned blocks in between out of every later total.
     #[test]
     fn test_aggregator_start() {
+        #[derive(Debug, PartialEq)]
+        enum Start {
+            Resume(usize),
+            StartOver(usize),
+        }
+
         let prev = Aggregate::<MockTypes> {
             height: 3,
             num_transactions: [(None, 7), (Some(0), 7)].into_iter().collect(),
             payload_size: [(None, 70), (Some(0), 70)].into_iter().collect(),
         };
-        for (case, prev, pruned_height, start) in [
-            ("genesis", None, None, 0),
-            ("above the pruned height", None, Some(5), 6),
-            ("resume", Some(prev.clone()), None, 4),
+        for (case, prev, pruned_height, expected) in [
+            ("genesis", None, None, Start::Resume(0)),
+            ("above the pruned height", None, Some(5), Start::Resume(6)),
+            ("resume", Some(prev.clone()), None, Start::Resume(4)),
             (
                 "resume above the pruned height",
                 Some(prev.clone()),
                 Some(1),
-                4,
+                Start::Resume(4),
             ),
-            ("fell behind the pruner", Some(prev.clone()), Some(5), 4),
+            (
+                "resume at the first unpruned height",
+                Some(prev.clone()),
+                Some(3),
+                Start::Resume(4),
+            ),
+            (
+                "fell behind the pruner",
+                Some(prev.clone()),
+                Some(4),
+                Start::StartOver(5),
+            ),
         ] {
-            let expected = prev.clone().unwrap_or_default();
-            let (actual, aggregate) = aggregator_start(prev, pruned_height);
-            assert_eq!(actual, start, "{case}");
-            assert_eq!(aggregate.height, expected.height, "{case}");
-            assert_eq!(
-                aggregate.num_transactions, expected.num_transactions,
-                "{case}"
-            );
-            assert_eq!(aggregate.payload_size, expected.payload_size, "{case}");
+            let kept = prev.clone().unwrap_or_default();
+            let actual = match aggregator_start(prev, pruned_height) {
+                AggregatorStart::Resume { start, prev } => {
+                    assert_eq!(prev.height, kept.height, "{case}");
+                    assert_eq!(prev.num_transactions, kept.num_transactions, "{case}");
+                    assert_eq!(prev.payload_size, kept.payload_size, "{case}");
+                    Start::Resume(start)
+                },
+                AggregatorStart::StartOver { start } => Start::StartOver(start),
+            };
+            assert_eq!(actual, expected, "{case}");
         }
     }
 
