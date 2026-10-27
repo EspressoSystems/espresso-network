@@ -8,7 +8,7 @@
 //! default to the very upstreams it verifies. Pin the genesis wherever the upstreams are not
 //! trusted on first start.
 
-use std::{cmp::max, collections::HashMap, ops::Range, sync::Arc, time::Duration};
+use std::{cmp::max, collections::HashMap, sync::Arc, time::Duration};
 
 use ::light_client::{
     LightClient,
@@ -24,8 +24,8 @@ use committable::{Commitment, Committable};
 use derivative::Derivative;
 use espresso_api::error::SubmitError;
 use espresso_types::{
-    Certificate2, ChainConfig, Header, Leaf2, NodeState, PubKey, SeqTypes, Transaction,
-    ValidatedState,
+    Certificate2, ChainConfig, Header, LcContractHeader, Leaf2, NodeState, PubKey, SeqTypes,
+    Transaction, ValidatedState,
     traits::MembershipPersistence,
     v0::traits::{SequencerPersistence, StateCatchup, StateCertPersistence},
     v0_1::ChainId,
@@ -48,10 +48,7 @@ use hotshot_types::{
         metrics::Metrics,
         storage::Storage,
     },
-    utils::{
-        StateAndDelta, epoch_from_block_number, is_epoch_root, is_transition_block,
-        root_block_in_epoch,
-    },
+    utils::{StateAndDelta, epoch_from_block_number, is_epoch_root, is_transition_block},
 };
 use http_client::{Client, StatusCode, error::ClientErr};
 use parking_lot::Mutex;
@@ -69,7 +66,9 @@ use crate::{
     apply_genesis_overrides,
     context::TaskList,
     init_node_state, load_or_fetch_network_config,
-    startup_catchup::bootstrap_epoch_window,
+    startup_catchup::{
+        StartupCatchupError, StartupCatchupParams, ensure_stake_tables, state_peer_clients,
+    },
     state_signature::StateSignatureMemStorage,
 };
 
@@ -106,7 +105,7 @@ pub struct FollowerParams {
     /// The upstreams when unset.
     pub config_peers: Option<Vec<Url>>,
     pub catchup: CatchupParams,
-    pub bootstrap_epoch_catchup_timeout: Duration,
+    pub startup_catchup: StartupCatchupParams,
     pub options: FollowerOptions,
 }
 
@@ -259,14 +258,8 @@ where
         genesis.epoch_start_block.unwrap_or_default(),
     )
     .await;
-    let current_epoch = bootstrap_epoch_window(
-        &coordinator,
-        epoch_height,
-        params.bootstrap_epoch_catchup_timeout,
-    )
-    .await
-    .context("startup stake-table catchup failed")?;
-    tracing::info!(%current_epoch, "startup catchup complete");
+    let state_peer_clients = state_peer_clients(&params.upstreams);
+    let lc_node_state = replay.is_none().then(|| node_state.clone());
 
     let (source, light_client): (Arc<dyn ChainSource>, _) = match replay {
         Some(source) => (source, None),
@@ -285,6 +278,11 @@ where
         },
     };
 
+    let next = sink
+        .block_height()
+        .await
+        .context("reading the height the query database has reached")?;
+
     // Seeded like a validator's lock, so the API validates state certificates against the
     // version the network has upgraded to rather than the base version forever.
     let upgrade_lock =
@@ -301,12 +299,9 @@ where
         epoch_height,
     };
 
-    let next = sink
-        .block_height()
-        .await
-        .context("reading the height the query database has reached")?;
     let follower = Follower {
         source,
+        node_state: lc_node_state,
         sink: Arc::new(sink),
         persistence: persistence.clone(),
         coordinator,
@@ -316,7 +311,8 @@ where
         upgrade_lock,
         epoch_height,
         options: params.options,
-        bootstrap_epoch_catchup_timeout: params.bootstrap_epoch_catchup_timeout,
+        startup_catchup: params.startup_catchup,
+        state_peer_clients,
         next,
     };
     let mut tasks = TaskList::default();
@@ -564,6 +560,7 @@ impl ConsensusSource for FollowerConsensus {
 
 struct Follower<P> {
     source: Arc<dyn ChainSource>,
+    node_state: Option<NodeState>,
     sink: Arc<dyn DecideSink>,
     persistence: Arc<P>,
     coordinator: EpochMembershipCoordinator<SeqTypes>,
@@ -573,7 +570,8 @@ struct Follower<P> {
     upgrade_lock: UpgradeLock<SeqTypes>,
     epoch_height: u64,
     options: FollowerOptions,
-    bootstrap_epoch_catchup_timeout: Duration,
+    startup_catchup: StartupCatchupParams,
+    state_peer_clients: Vec<(Url, QueryServiceClient)>,
     next: u64,
 }
 
@@ -616,10 +614,7 @@ impl<P: SequencerPersistence> Follower<P> {
             .block_height()
             .await
             .context("fetching the chain height")?;
-        let from = max(
-            self.next,
-            tip.saturating_sub(self.options.max_blocks_per_poll),
-        );
+        let from = first_height_to_ingest(self.next, tip, self.options.max_blocks_per_poll);
         if from >= tip {
             return Ok(());
         }
@@ -630,7 +625,6 @@ impl<P: SequencerPersistence> Follower<P> {
                 tip,
                 "skipping ahead; the query service backfills the gap"
             );
-            self.catch_up_skipped_epochs(self.next..from).await?;
             self.next = from;
         }
         for block in self.source.fetch_range(from, tip).await? {
@@ -666,6 +660,9 @@ impl<P: SequencerPersistence> Follower<P> {
         {
             info = info.with_cert2(cert2);
         }
+        self.ensure_stake_tables_for_block(leaf.height())
+            .await
+            .context("catching up the next stake table")?;
         self.sink.append(info).await.context("storing block")?;
 
         self.track_upgrade(leaf.leaf()).await;
@@ -702,9 +699,10 @@ impl<P: SequencerPersistence> Follower<P> {
         }
     }
 
-    /// Awaited, so the transition block finds the stake table it supplies a DRB for, and a
+    /// Expects the stake table of the epoch after the leaf's, which `ensure_stake_tables_for_block`
+    /// ensures. Awaited, so the transition block finds the stake table it supplies a DRB for, and a
     /// failed derivation fails the block and is retried with it. Nothing is redone when the
-    /// membership already knows the result, as after a restart or a catchup walk.
+    /// membership already knows the result, as after a restart or a peer catchup.
     async fn track_epoch(&self, leaf: &Leaf2) -> anyhow::Result<()> {
         let height = leaf.height();
         let Some(epoch) = leaf.epoch(self.epoch_height) else {
@@ -725,41 +723,18 @@ impl<P: SequencerPersistence> Follower<P> {
         Ok(())
     }
 
-    /// Skipping an epoch root skips the stake table it derives, which later roots build on. DRBs
-    /// the skipped transition blocks carried are left to the coordinator, which fetches them on
-    /// demand.
-    async fn catch_up_skipped_epochs(&self, skipped: Range<u64>) -> anyhow::Result<()> {
-        if skipped.is_empty() {
-            return Ok(());
-        }
-        let Some(first_epoch) = self.coordinator.membership().first_epoch() else {
-            return Ok(());
-        };
-        let first = max(
-            epoch_from_block_number(skipped.start, self.epoch_height),
-            first_epoch.u64(),
-        );
-        let last = epoch_from_block_number(skipped.end - 1, self.epoch_height);
-        let missing = (first..=last).any(|epoch| {
-            skipped.contains(&root_block_in_epoch(epoch, self.epoch_height))
-                && !self.has_stake_table(EpochNumber::new(epoch + 2))
-        });
-        if !missing {
-            return Ok(());
-        }
-        tracing::warn!(
-            ?skipped,
-            "skipped epoch roots whose stake tables are missing; catching up from peers"
-        );
-        let current_epoch = bootstrap_epoch_window(
+    /// Before a block at `height` is stored: `ensure_stake_tables` for the block's epoch.
+    /// `follow` calls it per block; boot does not.
+    async fn ensure_stake_tables_for_block(&self, height: u64) -> Result<(), StartupCatchupError> {
+        let current = EpochNumber::new(epoch_from_block_number(height, self.epoch_height));
+        ensure_stake_tables(
             &self.coordinator,
-            self.epoch_height,
-            self.bootstrap_epoch_catchup_timeout,
+            || read_lc_contract_header(self.node_state.as_ref()),
+            &self.state_peer_clients,
+            &self.startup_catchup,
+            current,
         )
         .await
-        .context("stake-table catchup after skipping ahead")?;
-        tracing::info!(%current_epoch, "stake-table catchup complete");
-        Ok(())
     }
 
     fn has_stake_table(&self, epoch: EpochNumber) -> bool {
@@ -834,6 +809,22 @@ impl ChainSource for NodeLightClient {
 
     async fn fetch_cert2(&self, header: &Header) -> anyhow::Result<Option<Certificate2<SeqTypes>>> {
         Ok(self.fetch_certificate2_for_header(header).await?)
+    }
+}
+
+/// The first height a poll ingests: `next`, or skipping ahead so at most `max_blocks_per_poll`
+/// blocks below `tip` remain. Pure.
+fn first_height_to_ingest(next: u64, tip: u64, max_blocks_per_poll: u64) -> u64 {
+    max(next, tip.saturating_sub(max_blocks_per_poll))
+}
+
+/// The LC contract header, `None` when replaying a recorded chain without an LC contract.
+async fn read_lc_contract_header(
+    node_state: Option<&NodeState>,
+) -> anyhow::Result<Option<LcContractHeader>> {
+    match node_state {
+        Some(node_state) => node_state.lc_contract_header().await,
+        None => Ok(None),
     }
 }
 

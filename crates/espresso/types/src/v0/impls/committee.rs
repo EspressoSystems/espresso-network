@@ -551,15 +551,9 @@ impl EpochCommittees {
             },
         }
 
+        let persistence = self.fetcher.persistence.lock().await;
         // Load the `limit` latest stored stake tables
-        let loaded_stake = match self
-            .fetcher
-            .persistence
-            .lock()
-            .await
-            .load_latest_stake(limit)
-            .await
-        {
+        let loaded_stake = match persistence.load_latest_stake(limit).await {
             Ok(Some(loaded)) => loaded,
             Ok(None) => {
                 warn!("No stake table history found in persistence!");
@@ -572,7 +566,14 @@ impl EpochCommittees {
         };
 
         for (epoch, (validators, block_reward), stake_table_hash) in loaded_stake {
-            let committee = EpochCommittee::new(validators, block_reward, stake_table_hash, None);
+            let header = match persistence.load_epoch_root(epoch).await {
+                Ok(header) => header,
+                Err(err) => {
+                    warn!(%err, "failed to load epoch root for epoch {epoch} from persistence");
+                    None
+                },
+            };
+            let committee = EpochCommittee::new(validators, block_reward, stake_table_hash, header);
             self.inner
                 .write()
                 .put_epoch_committee(epoch, Arc::new(committee));
@@ -1247,6 +1248,19 @@ impl Membership<SeqTypes> for EpochCommittees {
     }
 }
 
+#[cfg(feature = "node")]
+impl EpochCommittees {
+    /// The stored root header deriving `epoch`, if any. A read error is returned, not logged.
+    pub async fn stored_epoch_root(&self, epoch: EpochNumber) -> anyhow::Result<Option<Header>> {
+        self.fetcher
+            .persistence
+            .lock()
+            .await
+            .load_epoch_root(epoch)
+            .await
+    }
+}
+
 #[derive(Error, Debug)]
 pub enum EpochCommitteesError {
     #[error("could not lookup leader")]
@@ -1801,6 +1815,30 @@ mod tests {
         assert!(snapshot.inner.committee.header.is_none());
         // Nothing persisted for epoch 9.
         assert!(!committees.load_stake_table(EpochNumber::new(9)).await);
+    }
+
+    // `stored_epoch_root` returns the persisted root header and no row as `None`.
+    #[tokio::test]
+    async fn stored_epoch_root_reads_the_persisted_header() {
+        let header = build_epoch_root_header().await;
+        let store = MockStakeStore {
+            header: header.clone(),
+            stored_headers: Default::default(),
+            fail_next_store: Default::default(),
+        };
+        let fetcher = Fetcher::new(
+            Arc::new(crate::mock::MockStateCatchup::default()),
+            Arc::new(AsyncMutex::new(store)),
+            crate::L1Client::new(vec!["http://localhost:3331".parse().unwrap()])
+                .expect("Failed to create L1 client"),
+            crate::ChainConfig::default(),
+        );
+        let committees = build_committees_with_fetcher(4, fetcher);
+
+        let stored = committees.stored_epoch_root(EpochNumber::new(7)).await;
+        assert_eq!(stored.unwrap(), Some(header));
+        let missing = committees.stored_epoch_root(EpochNumber::new(6)).await;
+        assert_eq!(missing.unwrap(), None);
     }
 
     // A caller that times out queueing for the storage locks must still

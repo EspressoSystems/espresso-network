@@ -3573,13 +3573,17 @@ mod test {
         network_config::light_client_genesis_from_stake_table,
     };
     use espresso_types::{
-        FeeAmount, Header, L1ClientOptions, NamespaceId, NamespaceProofQueryData, NsProof,
-        RegisteredValidatorMap, RewardDistributor, StakeTableState, StateCertQueryDataV1,
-        StateCertQueryDataV2, TEST_UPGRADE, ValidatedState, ValidatorLeaderCounts,
+        BackoffParams, FeeAccountProof, FeeAmount, FeeMerkleCommitment, Header, L1ClientOptions,
+        NamespaceId, NamespaceProofQueryData, NsProof, RegisteredValidatorMap, RewardDistributor,
+        StakeTableState, StateCertQueryDataV1, StateCertQueryDataV2, TEST_UPGRADE, ValidatedState,
+        ValidatorLeaderCounts,
         config::PublicHotShotConfig,
         traits::{NullEventConsumer, PersistenceOptions},
-        v0_3::{AuthenticatedValidator, COMMISSION_BASIS_POINTS, Fetcher, RewardAmount},
-        v0_4::{RewardAccountV2, RewardMerkleProofV2},
+        v0_3::{
+            AuthenticatedValidator, COMMISSION_BASIS_POINTS, Fetcher, RewardAccountProofV1,
+            RewardAmount, RewardMerkleCommitmentV1,
+        },
+        v0_4::{RewardAccountV2, RewardMerkleCommitmentV2, RewardMerkleProofV2},
         validators_from_l1_events,
     };
     use futures::{
@@ -3588,8 +3592,9 @@ mod test {
         try_join,
     };
     use hotshot_contract_adapter::{
+        field_to_u256,
         reward::{RewardAuthData, RewardClaimInput, RewardProofSiblings},
-        sol_types::{EspToken, StakeTableV3},
+        sol_types::{EspToken, LightClientStateSol, LightClientV3Mock, StakeTableV3},
         stake_table::StakeTableContractVersion,
     };
     use hotshot_query_service::{
@@ -3607,6 +3612,7 @@ mod test {
         },
         explorer::TransactionSummariesResponse,
         merklized_state::UpdateStateData,
+        metrics::PrometheusMetrics,
         node::{NodeDataSource as _, SyncStatus, SyncStatusQueryData},
         serializable_retry,
         types::HeightIndexed,
@@ -3614,12 +3620,16 @@ mod test {
     use hotshot_types::{
         ValidatorConfig,
         addr::NetAddr,
-        data::EpochNumber,
+        data::{EpochNumber, ViewNumber},
         epoch_membership::EpochMembershipCoordinator,
         event::LeafInfo,
         new_protocol::CoordinatorEvent,
-        traits::{block_contents::BlockHeader, election::Membership, metrics::NoMetrics},
-        utils::epoch_from_block_number,
+        traits::{
+            block_contents::BlockHeader,
+            election::Membership,
+            metrics::{Metrics as _, NoMetrics},
+        },
+        utils::{epoch_from_block_number, root_block_in_epoch},
         x25519,
     };
     use http_client::{
@@ -3692,6 +3702,7 @@ mod test {
         legacy_chain::LegacyChain,
         persistence,
         persistence::no_storage,
+        startup_catchup::StartupCatchupParams,
         state::EmptyStateStart,
         testing::{
             TestConfig, TestConfigBuilder, decided_leaves, wait_for_decide_on_handle,
@@ -5753,7 +5764,10 @@ mod test {
                 local_timeout: Duration::from_secs(5),
                 http_delay: Duration::ZERO,
             },
-            bootstrap_epoch_catchup_timeout: Duration::from_secs(30),
+            startup_catchup: StartupCatchupParams {
+                step_timeout: Duration::from_secs(30),
+                total_timeout: Duration::from_secs(900),
+            },
             options: FollowerOptions {
                 poll_interval: Duration::from_millis(500),
                 max_blocks_per_poll: 10,
@@ -6117,7 +6131,7 @@ mod test {
     /// other; nodes 2 through 5 are plain validators. Once the network decides
     /// past epoch seven, node 1 is taken down and started again on an empty
     /// database: no consensus state, no archive, no merklized state. To recover
-    /// it has to bootstrap its stake-table window, resync consensus, backfill
+    /// it has to catch up its stake tables, resync consensus, backfill
     /// the chain it lost from node 0 (including the new protocol's cert2
     /// finality certificates), and resume proposing.
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
@@ -6418,6 +6432,342 @@ mod test {
         .await
         .context("restarted node's event stream stalled")?;
         let proposed = proposed.context("restarted node's event stream ended")?;
+        tracing::info!(proposed, "restarted node proposed a decided block");
+
+        Ok(())
+    }
+
+    /// Forwards to `inner`, except that it cannot serve the leaf at one height, like a peer that
+    /// fails for a single epoch root.
+    #[derive(Debug)]
+    struct FailingLeafCatchup<T> {
+        inner: T,
+        height: u64,
+    }
+
+    impl<T> FailingLeafCatchup<T> {
+        fn new(inner: T, height: u64) -> Self {
+            Self { inner, height }
+        }
+    }
+
+    #[async_trait]
+    impl<T: StateCatchup> StateCatchup for FailingLeafCatchup<T> {
+        async fn try_fetch_leaf(
+            &self,
+            retry: usize,
+            coordinator: EpochMembershipCoordinator<SeqTypes>,
+            height: u64,
+        ) -> anyhow::Result<Leaf2> {
+            anyhow::ensure!(height != self.height, "injected failure for leaf {height}");
+            self.inner.try_fetch_leaf(retry, coordinator, height).await
+        }
+
+        async fn try_fetch_accounts(
+            &self,
+            retry: usize,
+            instance: &NodeState,
+            height: u64,
+            view: ViewNumber,
+            fee_merkle_tree_root: FeeMerkleCommitment,
+            accounts: &[FeeAccount],
+        ) -> anyhow::Result<Vec<FeeAccountProof>> {
+            self.inner
+                .try_fetch_accounts(
+                    retry,
+                    instance,
+                    height,
+                    view,
+                    fee_merkle_tree_root,
+                    accounts,
+                )
+                .await
+        }
+
+        async fn try_remember_blocks_merkle_tree(
+            &self,
+            retry: usize,
+            instance: &NodeState,
+            height: u64,
+            view: ViewNumber,
+            mt: &mut BlockMerkleTree,
+        ) -> anyhow::Result<()> {
+            self.inner
+                .try_remember_blocks_merkle_tree(retry, instance, height, view, mt)
+                .await
+        }
+
+        async fn try_fetch_chain_config(
+            &self,
+            retry: usize,
+            commitment: Commitment<ChainConfig>,
+        ) -> anyhow::Result<ChainConfig> {
+            self.inner.try_fetch_chain_config(retry, commitment).await
+        }
+
+        async fn try_fetch_reward_merkle_tree_v2(
+            &self,
+            retry: usize,
+            height: u64,
+            view: ViewNumber,
+            reward_merkle_tree_root: RewardMerkleCommitmentV2,
+            accounts: Arc<Vec<RewardAccountV2>>,
+        ) -> anyhow::Result<PermittedRewardMerkleTreeV2> {
+            self.inner
+                .try_fetch_reward_merkle_tree_v2(
+                    retry,
+                    height,
+                    view,
+                    reward_merkle_tree_root,
+                    accounts,
+                )
+                .await
+        }
+
+        async fn try_fetch_reward_accounts_v1(
+            &self,
+            retry: usize,
+            instance: &NodeState,
+            height: u64,
+            view: ViewNumber,
+            reward_merkle_tree_root: RewardMerkleCommitmentV1,
+            accounts: &[RewardAccountV1],
+        ) -> anyhow::Result<Vec<RewardAccountProofV1>> {
+            self.inner
+                .try_fetch_reward_accounts_v1(
+                    retry,
+                    instance,
+                    height,
+                    view,
+                    reward_merkle_tree_root,
+                    accounts,
+                )
+                .await
+        }
+
+        async fn try_fetch_state_cert(
+            &self,
+            retry: usize,
+            epoch: u64,
+        ) -> anyhow::Result<LightClientStateUpdateCertificateV2<SeqTypes>> {
+            self.inner.try_fetch_state_cert(retry, epoch).await
+        }
+
+        fn backoff(&self) -> &BackoffParams {
+            self.inner.backoff()
+        }
+
+        fn name(&self) -> String {
+            format!("FailingLeafCatchup({})", self.inner.name())
+        }
+
+        fn is_local(&self) -> bool {
+            self.inner.is_local()
+        }
+    }
+
+    /// A validator that restarts on an empty database catches up its stake tables from the
+    /// LC contract header instead of from peers epoch by epoch, and goes on to propose again.
+    ///
+    /// Six nodes run the new protocol. Once the network is past epoch twelve, the LC contract
+    /// mock is pointed at a recent decided block, node 5 is stopped, and it restarts on an empty
+    /// database with node 0 as its only state peer. That peer cannot serve the epoch root of
+    /// epoch 3, which stalls a peer catchup at epoch 3, the way one failed fetch left a decaf validator
+    /// stuck far below the tip.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_new_protocol_fresh_validator_catches_up_from_lc_contract() -> anyhow::Result<()> {
+        const NUM_NODES: usize = 6;
+        const NODE: usize = 5;
+        const EPOCH_HEIGHT: u64 = 10;
+        const EPOCHS_BEFORE_RESTART: u64 = 12;
+        const NEW_PROTOCOL: Upgrade = Upgrade::trivial(NEW_PROTOCOL_VERSION);
+        const RECOVERY_TIMEOUT: Duration = Duration::from_secs(240);
+
+        let network_config = TestConfigBuilder::default()
+            .epoch_height(EPOCH_HEIGHT)
+            .epoch_start_block(0)
+            .build();
+
+        let api_port = reserve_tcp_port().expect("No ports free for query service");
+        let api_url: Url = format!("http://localhost:{api_port}").parse()?;
+
+        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
+        let persistence: [_; NUM_NODES] = storage
+            .iter()
+            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
+            .collect::<Vec<_>>()
+            .try_into()
+            .unwrap();
+
+        let config = TestNetworkConfigBuilder::<NUM_NODES, _, _>::with_num_nodes()
+            .api_config(
+                Options::with_port(api_port)
+                    .catchup(Default::default())
+                    .light_client(Default::default())
+                    .query_sql(Default::default(), tmp_options(&storage[0])),
+            )
+            .network_config(network_config)
+            .persistences(persistence)
+            .catchups(std::array::from_fn(|_| {
+                StatePeers::<SequencerApiVersion>::from_urls(
+                    vec![api_url.clone()],
+                    Default::default(),
+                    Duration::from_secs(2),
+                    &NoMetrics,
+                )
+            }))
+            .pos_hook(
+                DelegationConfig::MultipleDelegators,
+                StakeTableContractVersion::V3,
+                NEW_PROTOCOL,
+            )
+            .await?
+            .build();
+
+        let genesis_state = config.states()[NODE].clone();
+        let mut network = TestNetwork::new(config, NEW_PROTOCOL).await;
+        let api_client: Client<ClientErr, SequencerApiVersion> = Client::new(api_url.clone());
+        assert!(
+            api_client.connect(Some(Duration::from_secs(60))).await,
+            "node 0 query API did not come up"
+        );
+
+        let mut events = network.peers[0].event_stream();
+        wait_for_epochs(&mut events, EPOCH_HEIGHT, EPOCHS_BEFORE_RESTART).await;
+
+        // Point the LC contract at a decided block the API can still serve.
+        let tip: u64 = api_client.get("status/block-height").send().await?;
+        let lc_contract_height = tip - 1;
+        let lc_contract_epoch = epoch_from_block_number(lc_contract_height, EPOCH_HEIGHT);
+        let header: Header = api_client
+            .get(&format!("availability/header/{lc_contract_height}"))
+            .send()
+            .await?;
+        let state = header.get_light_client_state(ViewNumber::genesis())?;
+        let lc_contract_address = network
+            .contracts
+            .as_ref()
+            .and_then(|contracts| contracts.address(Contract::LightClientProxy))
+            .context("LC contract not deployed")?;
+        let provider = ProviderBuilder::new()
+            .wallet(EthereumWallet::from(network.cfg.signer()))
+            .connect_http(network.cfg.l1_url());
+        let receipt = LightClientV3Mock::new(lc_contract_address, provider)
+            .setFinalizedState(
+                LightClientStateSol {
+                    viewNum: 0,
+                    blockHeight: lc_contract_height,
+                    blockCommRoot: field_to_u256(state.block_comm_root),
+                }
+                .into(),
+            )
+            .send()
+            .await?
+            .get_receipt()
+            .await?;
+        let server_state = network.server.node_state();
+        timeout(
+            RECOVERY_TIMEOUT,
+            server_state
+                .l1_client
+                .wait_for_finalized_block(receipt.block_number.context("no block number")?),
+        )
+        .await
+        .context("the LC contract header never became L1 finalized")?;
+
+        let height_before_restart = tip;
+        let mut node = network.peers.pop().context("no validator to restart")?;
+        node.shut_down().await;
+        // Cliquenet peers dial the address in the stake table, so the node returns on its old port.
+        let cliquenet_port = network.cfg.known_nodes_with_stake()[NODE]
+            .connect_info
+            .as_ref()
+            .expect("node registered cliquenet connect info")
+            .p2p_addr
+            .port();
+        timeout(RECOVERY_TIMEOUT, async {
+            while std::net::TcpListener::bind(("127.0.0.1", cliquenet_port)).is_err() {
+                sleep(Duration::from_millis(100)).await;
+            }
+        })
+        .await
+        .context("shut-down node did not release its port")?;
+
+        let fresh_storage = SqlDataSource::create_storage().await;
+        let metrics = PrometheusMetrics::default();
+        let mut cfg = network.cfg.clone();
+        cfg.set_bootstrap_peers(vec![api_url.clone()]);
+        let failing_root = root_block_in_epoch(3, EPOCH_HEIGHT);
+        let node = cfg
+            .init_node(
+                NODE,
+                genesis_state,
+                <SqlDataSource as TestableSequencerDataSource>::persistence_options(&fresh_storage),
+                Some(FailingLeafCatchup::new(
+                    StatePeers::<SequencerApiVersion>::from_urls(
+                        vec![api_url],
+                        Default::default(),
+                        Duration::from_secs(2),
+                        &NoMetrics,
+                    ),
+                    failing_root,
+                )),
+                None,
+                &*metrics.subgroup("consensus".into()),
+                test_helpers::STAKE_TABLE_CAPACITY_FOR_TEST,
+                NullEventConsumer,
+                NEW_PROTOCOL,
+                Default::default(),
+            )
+            .await;
+
+        let membership = node.node_state().coordinator.membership().clone();
+        for epoch in (lc_contract_epoch - 4)..=(lc_contract_epoch + 1) {
+            assert!(
+                membership.snapshot(EpochNumber::new(epoch)).is_some(),
+                "stake table for epoch {epoch} was not caught up from the LC contract"
+            );
+        }
+        for epoch in (lc_contract_epoch - 1)..=(lc_contract_epoch + 1) {
+            assert!(
+                membership
+                    .epoch_block_reward(EpochNumber::new(epoch))
+                    .is_some(),
+                "no block reward for epoch {epoch}"
+            );
+        }
+
+        node.start_consensus().await;
+
+        // Rejoining means proposing again: wait for a decided block the node led.
+        let node_key = network.cfg.known_nodes_with_stake()[NODE]
+            .stake_table_entry
+            .stake_key;
+        let coordinator = node.node_state().coordinator;
+        let mut events = node.event_stream();
+        let proposed = timeout(RECOVERY_TIMEOUT, async {
+            while let Some(event) = events.next().await {
+                let CoordinatorEvent::NewDecide { leaf_infos, .. } = &event else {
+                    continue;
+                };
+                for LeafInfo { leaf, .. } in leaf_infos {
+                    if leaf.height() <= height_before_restart {
+                        continue;
+                    }
+                    let Ok(membership) = coordinator.membership_for_epoch(leaf.epoch(EPOCH_HEIGHT))
+                    else {
+                        continue;
+                    };
+                    if membership.leader(leaf.view_number()).ok() == Some(node_key) {
+                        return Some(leaf.height());
+                    }
+                }
+            }
+            None
+        })
+        .await
+        .context("restarted node's event stream stalled")?
+        .context("restarted node's event stream ended")?;
         tracing::info!(proposed, "restarted node proposed a decided block");
 
         Ok(())

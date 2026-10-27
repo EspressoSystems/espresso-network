@@ -18,5 +18,8 @@
   `builder_commitment`; `LargeBlock` chain-config change raises `max_block_size`, run by the new protocol's upgrade
   sub-protocol (`crates/hotshot/new-protocol/src/upgrade.rs`)
 
+Every network runs epochs: each `data/genesis/*.toml` has `base_version` 0.6 or later and a positive `epoch_height`.
+Pre-epoch chains (`epoch_height` 0, versions below V0_3) do not exist. Code for them is dead and may fail or be removed.
+
 What a network runs: `base_version` and `upgrade_version` in `data/genesis/<network>.toml`. Live confirmation is
 `consensus_genesis{base_version,upgrade_version}` from `/v1/status/metrics`, see `doc/agents/live-chains.md`.

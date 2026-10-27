@@ -19,7 +19,7 @@ pub use committee::{
 pub use fee_info::{FeeError, retain_accounts};
 #[cfg(any(test, feature = "testing"))]
 pub use instance_state::mock;
-pub use instance_state::{NodeState, UpgradeMap};
+pub use instance_state::{LcContractHeader, NodeState, UpgradeMap};
 pub use reward::*;
 pub use stake_table::*;
 pub use state::{

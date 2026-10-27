@@ -66,7 +66,7 @@ use crate::{
         network::Sender as RequestResponseSender,
         recipient_source::RecipientSource,
     },
-    startup_catchup::bootstrap_epoch_window,
+    startup_catchup::{StartupCatchupParams, catch_up_cliquenet_stake_tables, state_peer_clients},
     state_signature::{self, DecidedLeaf, StateSignatureMemStorage, StateSigner},
 };
 pub(crate) type ConsensusNode<P> = Node<P>;
@@ -138,7 +138,8 @@ where
         stake_table_capacity: usize,
         event_consumer: impl PersistenceEventConsumer + 'static,
         proposal_fetcher_cfg: ProposalFetcherConfig,
-        bootstrap_epoch_catchup_timeout: Duration,
+        startup_catchup: StartupCatchupParams,
+        state_peers: Vec<Url>,
         empty_block_delay: Duration,
         block_sizes: BTreeMap<Version, u64>,
     ) -> anyhow::Result<Self>
@@ -173,23 +174,23 @@ where
         let should_vote =
             state_signature::should_vote(&stake_table, &validator_config.state_public_key);
 
-        let epoch_height = initializer.epoch_height();
-
         let upgrade_lock = restored_upgrade_lock(upgrade, &initializer);
         seed_membership(&membership_coordinator, config, &upgrade_lock, &initializer).await;
 
         let mut coordinator_network = coordinator_network(upgrade_lock.clone()).await?;
 
-        let current_epoch = bootstrap_epoch_window(
+        let state_peer_clients = state_peer_clients(&state_peers);
+        let current_epoch = catch_up_cliquenet_stake_tables(
             &membership_coordinator,
-            epoch_height,
-            bootstrap_epoch_catchup_timeout,
+            || instance_state.lc_contract_header(),
+            &state_peer_clients,
+            &startup_catchup,
+            initializer.anchor_leaf().epoch(config.epoch_height),
         )
         .await
         .context("startup stake-table catchup failed")?;
-        tracing::info!(%current_epoch, "Startup catchup complete");
 
-        // For cliquenet this dials the N-1/N/N+1 epoch window before consensus starts.
+        // For cliquenet this dials the stake tables of N and N+1 before consensus starts.
         if let Err(err) = coordinator_network.apply_epoch(current_epoch, &membership_coordinator) {
             tracing::warn!(%current_epoch, %err, "coordinator network apply_epoch failed at startup");
         }

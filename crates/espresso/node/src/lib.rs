@@ -63,17 +63,20 @@ use hotshot_orchestrator::client::{OrchestratorClient, get_complete_config};
 use hotshot_types::{
     ValidatorConfig,
     addr::NetAddr,
-    data::ViewNumber,
+    data::{EpochNumber, ViewNumber},
+    drb::INITIAL_DRB_RESULT,
     epoch_membership::EpochMembershipCoordinator,
     light_client::{StateKeyPair, StateSignKey},
     network::NetworkConfig,
     signature_key::{BLSPrivKey, BLSPubKey},
     traits::{
+        election::Membership,
         metrics::{Metrics, NoMetrics},
         node_implementation::{NodeImplementation, NodeType},
         signature_key::SignatureKey,
         storage::Storage,
     },
+    utils::epoch_from_block_number,
     x25519,
 };
 use moka::future::Cache;
@@ -82,6 +85,7 @@ pub use options::Options;
 use proposal_fetcher::ProposalFetcherConfig;
 pub use run::main;
 use serde::{Deserialize, Serialize};
+pub use startup_catchup::StartupCatchupParams;
 use tracing::info;
 use url::Url;
 use vbs::version::StaticVersion;
@@ -126,9 +130,8 @@ pub struct NetworkParams {
     pub private_state_key: StateSignKey,
     pub config_peers: Option<Vec<Url>>,
     pub catchup: CatchupParams,
-    /// Per-step timeout for the startup stake-table catchup walk
-    /// (`bootstrap_epoch_window`).
-    pub bootstrap_epoch_catchup_timeout: Duration,
+    /// Startup stake-table catchup (`catch_up_cliquenet_stake_tables`).
+    pub startup_catchup: StartupCatchupParams,
     /// The address to advertise as our public API's URL
     pub public_api_url: Option<Url>,
     /// Cliquenet network address.
@@ -332,6 +335,7 @@ where
         is_da,
     );
 
+    let state_peers = network_params.catchup.state_peers.clone();
     let catchup_params = network_params.catchup;
 
     let loaded_network_config = load_or_fetch_network_config(
@@ -460,7 +464,8 @@ where
         genesis.stake_table.capacity,
         event_consumer,
         proposal_fetcher_config,
-        network_params.bootstrap_epoch_catchup_timeout,
+        network_params.startup_catchup,
+        state_peers,
         empty_block_delay,
         block_sizes,
     )
@@ -687,6 +692,7 @@ where
     let block_reward = fetcher.fetch_fixed_block_reward().await.ok();
     info!("Block reward fetched: {:?}", block_reward);
     let epoch_height = genesis.epoch_height.unwrap_or_default();
+    let epoch_start_block = genesis.epoch_start_block.unwrap_or_default();
     let mut membership = EpochCommittees::new_stake(
         network_config.config.known_nodes_with_stake.clone(),
         network_config.config.known_da_nodes.clone(),
@@ -700,6 +706,10 @@ where
 
     let persistence = Arc::new(persistence);
     let coordinator = EpochMembershipCoordinator::new(membership, epoch_height, &persistence);
+    let first_epoch = EpochNumber::new(epoch_from_block_number(epoch_start_block, epoch_height));
+    coordinator
+        .membership()
+        .set_first_epoch(first_epoch, INITIAL_DRB_RESULT);
 
     let epoch_rewards_calculator = Arc::new(Mutex::new(EpochRewardsCalculator::new()));
 
@@ -717,7 +727,7 @@ where
         state_catchup: Arc::new(state_catchup_providers.clone()),
         coordinator,
         genesis_version: genesis.genesis_version,
-        epoch_start_block: genesis.epoch_start_block.unwrap_or_default(),
+        epoch_start_block,
         epoch_rewards_calculator,
         light_client_contract_address: Cache::builder().max_capacity(1).build(),
         token_contract_address: Cache::builder().max_capacity(1).build(),
@@ -735,8 +745,8 @@ where
 }
 
 /// Scans the whole L1 contract history when nothing is persisted yet, keeping every
-/// `bootstrap_epoch_window` step bounded to one epoch instead of loading that scan onto
-/// the first step, which silently downgrades the node to a stale epoch window when it
+/// `catch_up_cliquenet_stake_tables` step bounded to one epoch instead of loading that scan onto
+/// the first step, which silently leaves the node with stale cliquenet stake tables when it
 /// exceeds its timeout. Untimed: an unreachable L1 panics after
 /// `l1_events_max_retry_duration`.
 pub(crate) async fn prefetch_stake_table_events(
@@ -1192,6 +1202,7 @@ pub mod testing {
                 coordinator_addrs: self.coordinator_addrs,
                 contracts: self.contracts,
                 genesis_chain_config: None,
+                bootstrap_peers: Vec::new(),
             }
         }
 
@@ -1327,6 +1338,9 @@ pub mod testing {
         contracts: Option<Contracts>,
         /// See [`Self::set_genesis_chain_config`].
         genesis_chain_config: Option<ChainConfig>,
+        /// State peers the startup LC contract catchup fetches from. Required once the LC contract
+        /// has state.
+        bootstrap_peers: Vec<Url>,
     }
 
     impl<const NUM_NODES: usize> TestConfig<NUM_NODES> {
@@ -1418,6 +1432,10 @@ pub mod testing {
         /// other's genesis QC.
         pub fn set_genesis_chain_config(&mut self, chain_config: ChainConfig) {
             self.genesis_chain_config = Some(chain_config);
+        }
+
+        pub fn set_bootstrap_peers(&mut self, peers: Vec<Url>) {
+            self.bootstrap_peers = peers;
         }
 
         /// Contracts deployed by [`TestConfigBuilder::set_upgrades_with`], if
@@ -1576,6 +1594,14 @@ pub mod testing {
                 &persistence.clone(),
             );
 
+            let first_epoch = EpochNumber::new(epoch_from_block_number(
+                config.epoch_start_block,
+                config.epoch_height,
+            ));
+            coordinator
+                .membership()
+                .set_first_epoch(first_epoch, INITIAL_DRB_RESULT);
+
             let max_block_size = *chain_config.max_block_size;
             let mut node_state = NodeState::new(
                 i as u64,
@@ -1644,7 +1670,11 @@ pub mod testing {
                 stake_table_capacity,
                 event_consumer,
                 Default::default(),
-                Duration::from_secs(2),
+                StartupCatchupParams {
+                    step_timeout: Duration::from_secs(2),
+                    total_timeout: Duration::from_secs(15),
+                },
+                self.bootstrap_peers.clone(),
                 Duration::from_millis(500),
                 BTreeMap::from([(upgrade.base, max_block_size)]),
             )

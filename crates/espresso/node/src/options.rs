@@ -32,6 +32,7 @@ use crate::{
     keyset::KeySetOptions,
     persistence,
     proposal_fetcher::ProposalFetcherConfig,
+    startup_catchup::{STARTUP_CATCHUP_DEADLINE, StartupCatchupParams},
 };
 
 // This options struct is a bit unconventional. The sequencer has multiple optional modules which
@@ -154,7 +155,14 @@ pub struct Options {
     #[clap(long, env = "ESPRESSO_NODE_IS_DA", action)]
     pub is_da: bool,
 
-    /// Peer nodes use to fetch missing state
+    /// Peer nodes used to fetch missing state and to join a running network
+    ///
+    /// Trusted for liveness and block height during initial sync; everything they serve is
+    /// verified. The current epoch comes from the median of the tips the peers report within the
+    /// step timeout. The heights raise it above the floor the LC contract and own storage give,
+    /// never lower it. One lying peer among three answering cannot move it, and peers that do not
+    /// answer do not count. Configure at least 3 independent peers that serve the light-client
+    /// API (query module with SQL storage).
     #[clap(long, env = "ESPRESSO_NODE_STATE_PEERS", value_delimiter = ',')]
     #[derivative(Debug(format_with = "fmt_urls"))]
     pub state_peers: Vec<Url>,
@@ -190,13 +198,10 @@ pub struct Options {
     #[clap(long, env = "ESPRESSO_NODE_HTTP_CATCHUP_DELAY", default_value = "2s", value_parser = parse_duration)]
     pub http_catchup_delay: Duration,
 
-    /// Per-step timeout for the startup stake-table catchup walk.
+    /// Timeout for each step of the startup stake-table catchup.
     ///
-    /// Bounds a single `wait_for_stake_table` call during `bootstrap_epoch_window`. The
-    /// underlying peer leaf fetch is bounded to 3 attempts, so exceeding this means a slow
-    /// or unresponsive peer set, not a retry loop. Exceeding it terminates the walk but
-    /// does not cancel the catchup task, which is a detached `tokio::spawn` bounded by its
-    /// own `DEFAULT_CATCHUP_TIMEOUT` watchdog.
+    /// Bounds the LC contract header read, one proof fetch from one peer and one peer height read.
+    /// A timed-out step is retried until `STARTUP_CATCHUP_DEADLINE`.
     #[clap(long, env = "ESPRESSO_NODE_BOOTSTRAP_EPOCH_CATCHUP_TIMEOUT", default_value = "30s", value_parser = parse_duration)]
     pub bootstrap_epoch_catchup_timeout: Duration,
 
@@ -218,6 +223,13 @@ pub struct Options {
 }
 
 impl Options {
+    pub fn startup_catchup_params(&self) -> StartupCatchupParams {
+        StartupCatchupParams {
+            step_timeout: self.bootstrap_epoch_catchup_timeout,
+            total_timeout: STARTUP_CATCHUP_DEADLINE,
+        }
+    }
+
     pub fn modules(&self) -> Modules {
         ModuleArgs(self.modules.clone()).parse()
     }
@@ -256,7 +268,7 @@ impl Options {
                 local_timeout: self.local_catchup_timeout,
                 http_delay: self.http_catchup_delay,
             },
-            bootstrap_epoch_catchup_timeout: self.bootstrap_epoch_catchup_timeout,
+            startup_catchup: self.startup_catchup_params(),
             options: FollowerOptions {
                 poll_interval: follower.poll_interval,
                 max_blocks_per_poll: follower.max_blocks_per_poll,

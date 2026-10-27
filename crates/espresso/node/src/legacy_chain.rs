@@ -43,7 +43,7 @@ use test_utils::reserve_tcp_port;
 use tokio::time::sleep;
 
 use crate::{
-    CatchupParams, Genesis, L1Params, SequencerApiVersion,
+    CatchupParams, Genesis, L1Params, SequencerApiVersion, StartupCatchupParams,
     api::{
         Options,
         data_source::testing::TestableSequencerDataSource,
@@ -321,7 +321,10 @@ fn replay_params(own_url: url::Url) -> FollowerParams {
             local_timeout: Duration::from_secs(5),
             http_delay: Duration::ZERO,
         },
-        bootstrap_epoch_catchup_timeout: Duration::from_secs(30),
+        startup_catchup: StartupCatchupParams {
+            step_timeout: Duration::from_secs(30),
+            total_timeout: Duration::from_secs(30),
+        },
         options: FollowerOptions {
             poll_interval: Duration::from_millis(100),
             // Skipping ahead would leave the gap to a backfill with nothing to fetch from.
