@@ -43,7 +43,6 @@ pub struct Options {
     pub catchup: Option<Catchup>,
     pub config: Option<Config>,
     pub explorer: Option<Explorer>,
-    pub light_client: Option<LightClient>,
     pub storage_fs: Option<persistence::fs::Options>,
     pub storage_sql: Option<persistence::sql::Options>,
     pub public_node_config: Option<Box<PublicNodeConfig>>,
@@ -59,7 +58,6 @@ impl From<Http> for Options {
             catchup: None,
             config: None,
             explorer: None,
-            light_client: None,
             storage_fs: None,
             storage_sql: None,
             public_node_config: None,
@@ -122,12 +120,6 @@ impl Options {
     /// Add an explorer API module.
     pub fn explorer(mut self, opt: Explorer) -> Self {
         self.explorer = Some(opt);
-        self
-    }
-
-    /// Add a light client API module.
-    pub fn light_client(mut self, opt: LightClient) -> Self {
-        self.light_client = Some(opt);
         self
     }
 
@@ -383,7 +375,6 @@ impl Options {
             submit: self.submit.is_some(),
             config: self.config.is_some(),
             explorer: self.explorer.is_some(),
-            light_client: self.light_client.is_some(),
             ..Default::default()
         };
         let max_connections = self.http.max_connections;
@@ -526,7 +517,8 @@ pub struct HotshotEvents;
 #[derive(Parser, Clone, Copy, Debug, Default)]
 pub struct Explorer;
 
-/// Options for the light client API module.
+/// Options for the light client API module, which is still accepted on the command line but has
+/// no effect: every SQL query node serves the light client API.
 #[derive(Parser, Clone, Copy, Debug, Default)]
 pub struct LightClient;
 
