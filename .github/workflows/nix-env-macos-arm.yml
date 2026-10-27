@@ -54,4 +54,4 @@ jobs:
         run: nix develop --accept-flake-config -c just check
 
       - name: Build contracts
-        run: nix develop --accept-flake-config -c forge build
+        run: nix develop .#contracts --accept-flake-config -c forge build

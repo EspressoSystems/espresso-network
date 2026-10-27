@@ -1,0 +1,60 @@
+name: Nix dev shells
+
+on:
+  pull_request:
+    paths:
+      - flake.nix
+      - flake.lock
+      - cross-shell.nix
+      - rust-toolchain.toml
+      - nix/**
+      - justfile
+      - "**/justfile"
+      - "**/*.just"
+      - scripts/with-tools
+      - .github/workflows/nix-shells.yml
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  # One job per OS: add-on shells share the default closure, so one store downloads it once.
+  nix-shells:
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Install Nix
+        uses: cachix/install-nix-action@v31
+
+      - uses: taiki-e/install-action@just
+
+      - uses: actions/checkout@v7
+
+      # One line per shell: "<shell> <command>...", collected from the with-tools [script] attributes,
+      # plus the shells no recipe uses.
+      - name: Check shell commands
+        run: |
+          { printf 'default just\ndockerShell docker\n'
+            awk -F'"' '/^\[script\(".*with-tools"/ { for (i = 6; i < NF; i += 2) if (!seen[$4, $i]++) c[$4] = c[$4] " " $i }
+              END { for (s in c) print s c[s] }' $(git ls-files justfile '*/justfile' '*.just'); } |
+          while read -r shell cmds; do
+            echo "::group::.#$shell: $cmds"
+            nix develop ".#$shell" --accept-flake-config -c bash -c '
+              for cmd in "$@"; do
+                command -v "$cmd" >/dev/null || { echo "missing: $cmd" >&2; exit 1; }
+              done' _ $cmds </dev/null
+            echo "::endgroup::"
+          done
+
+      # The runner is outside any dev shell, so these recipes take the with-tools nix fallback.
+      - name: with-tools fallback
+        if: runner.os == 'Linux'
+        run: |
+          just doc-figures
+          just bench-block-build --help
