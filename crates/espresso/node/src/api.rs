@@ -3896,10 +3896,7 @@ mod test {
         let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
         let storage = SqlDataSource::create_storage().await;
         let config = TestNetworkConfigBuilder::default()
-            .api_config(
-                SqlDataSource::options(&storage, Options::with_port(port))
-                    .light_client(Default::default()),
-            )
+            .api_config(SqlDataSource::options(&storage, Options::with_port(port)))
             .network_config(TestConfigBuilder::default().build())
             .build();
         let _network = TestNetwork::new(config, TEST_UPGRADE).await;
@@ -4130,10 +4127,7 @@ mod test {
             .try_into()
             .unwrap();
         let config = TestNetworkConfigBuilder::<NUM_NODES, _, _>::with_num_nodes()
-            .api_config(
-                SqlDataSource::options(&dbs[0], Options::with_port(port))
-                    .light_client(Default::default()),
-            )
+            .api_config(SqlDataSource::options(&dbs[0], Options::with_port(port)))
             .persistences(persistence)
             .catchups(std::array::from_fn(|_| state_peers()))
             .network_config(TestConfigBuilder::default().build())
@@ -5708,7 +5702,6 @@ mod test {
             .api_config(
                 Options::with_port(api_port)
                     .catchup(Default::default())
-                    .light_client(Default::default())
                     .config(Default::default())
                     .submit(Default::default())
                     .query_sql(Query::default(), tmp_options(&storage[0])),
@@ -5909,7 +5902,6 @@ mod test {
                 db.into_inner(),
             )
             .catchup(Default::default())
-            .light_client(Default::default())
             .config(Default::default())
             .submit(Default::default())
             .serve(move |metrics, sink, _| {
@@ -6151,7 +6143,6 @@ mod test {
             .api_config(
                 Options::with_port(api_port)
                     .catchup(Default::default())
-                    .light_client(Default::default())
                     .query_sql(
                         Query {
                             peers: vec![query_url.clone()],
@@ -6188,9 +6179,7 @@ mod test {
                 genesis_state.clone(),
                 persistence::sql::postgres::Options::try_from(db.clone()).unwrap(),
                 db,
-                Options::with_port(query_port)
-                    .catchup(Default::default())
-                    .light_client(Default::default()),
+                Options::with_port(query_port).catchup(Default::default()),
                 vec![peer_url.clone()],
                 peer_url.clone(),
             )
@@ -7088,9 +7077,7 @@ mod test {
         let config = TestNetworkConfigBuilder::with_num_nodes()
             .api_config(SqlDataSource::options(
                 &storage[0],
-                Options::with_port(api_port)
-                    .catchup(Default::default())
-                    .light_client(Default::default()),
+                Options::with_port(api_port).catchup(Default::default()),
             ))
             .network_config(network_config)
             .persistences(persistence.clone())
@@ -7296,9 +7283,7 @@ mod test {
         let config = TestNetworkConfigBuilder::with_num_nodes()
             .api_config(SqlDataSource::options(
                 &storage[0],
-                Options::with_port(api_port)
-                    .catchup(Default::default())
-                    .light_client(Default::default()),
+                Options::with_port(api_port).catchup(Default::default()),
             ))
             .network_config(TestConfigBuilder::default().build())
             .persistences(persistence.clone())
@@ -7490,9 +7475,7 @@ mod test {
         let config = TestNetworkConfigBuilder::with_num_nodes()
             .api_config(SqlDataSource::options(
                 &storage[0],
-                Options::with_port(api_port)
-                    .catchup(Default::default())
-                    .light_client(Default::default()),
+                Options::with_port(api_port).catchup(Default::default()),
             ))
             .network_config(
                 TestConfigBuilder::default()
@@ -7766,9 +7749,7 @@ mod test {
             let config = TestNetworkConfigBuilder::with_num_nodes()
                 .api_config(SqlDataSource::options(
                     &storage[0],
-                    Options::with_port(api_port)
-                        .catchup(Default::default())
-                        .light_client(Default::default()),
+                    Options::with_port(api_port).catchup(Default::default()),
                 ))
                 .network_config(
                     TestConfigBuilder::default()
@@ -8127,7 +8108,7 @@ mod test {
         let config = TestNetworkConfigBuilder::with_num_nodes()
             .api_config(SqlDataSource::options(
                 &storage[0],
-                Options::with_port(api_port).light_client(Default::default()),
+                Options::with_port(api_port),
             ))
             .network_config(network_config)
             .persistences(persistence.clone())
@@ -8945,8 +8926,7 @@ mod test {
                     .query_sql(Default::default(), ds_opts)
                     .submit(Default::default())
                     .config(Default::default())
-                    .explorer(Default::default())
-                    .light_client(Default::default()),
+                    .explorer(Default::default()),
             )
             .network_config(network_config)
             .persistences(persistence)
@@ -10049,7 +10029,12 @@ mod test {
         let leaf = network.server.decided_leaf().await;
         let catchup_height = leaf.height();
         let catchup_view = leaf.view_number().u64();
-        let account = format!("{:x}", Address::default());
+        // The prefunded builder account, so the fee routes prove a presence. Its address has hex
+        // letters, so lowercase and EIP-55 renderings differ.
+        let account = format!(
+            "{:x}",
+            TestConfig::<5>::builder_key().fee_account().address()
+        );
         let v1_account: crate::api::AccountQueryData = client
             .get(&format!(
                 "catchup/{catchup_height}/{catchup_view}/account/{account}"
@@ -10057,7 +10042,7 @@ mod test {
             .send()
             .await
             .unwrap();
-        let v2_account: espresso_api::proto::CatchupFeeAccountResponse = client
+        let v2_account: espresso_api::proto::FeeAccountProofResponse = client
             .get(&format!(
                 "v2/catchup/fee-account?height={catchup_height}&view={catchup_view}&\
                  address=0x{account}"
@@ -10065,19 +10050,25 @@ mod test {
             .send()
             .await
             .unwrap();
-        // Compared as a value rather than a string: v1 serves this `U256` as `0x` hex and v2 as
-        // a decimal string, matching the reward balances.
+        // Compared as a value rather than a string, since v1 serves this `U256` as `0x` hex and
+        // v2 as a decimal string.
         assert_eq!(
             v2_account.balance.parse::<U256>().unwrap(),
             v1_account.balance
         );
+        assert_eq!(v2_account, v1_account.clone().into());
+        let v2_proof = v2_account.proof.unwrap();
         assert_eq!(
-            v2_account.proof.unwrap().account,
+            v2_proof.account,
             format!("0x{account}"),
-            "the proof names the account it was asked for"
+            "the proof names the account in lowercase hex"
         );
+        assert!(matches!(
+            v2_proof.proof.unwrap().proof,
+            Some(espresso_api::proto::fee_merkle_proof::Proof::Presence(_))
+        ));
 
-        // On this pre-epoch network some catchup routes have nothing to serve, so a route both
+        // Some catchup routes may have nothing to serve this early in the chain, so a route both
         // versions refuse must at least refuse with the same status.
         fn both_or_same_status<A, B>(
             route: &str,
@@ -10111,33 +10102,31 @@ mod test {
             espresso_api::proto::MerklePathResponse::from(&v1_frontier)
         );
 
-        // The client asks v1 for VBS, so its trees are decoded as their type and compared with
-        // v2's JSON bytes through that type's serde.
+        // v2's bincode trees are decoded as their type and compared with v1's through serde.
         let accounts = vec![format!("0x{account}")];
-        let v1 = client
-            .post::<espresso_types::FeeMerkleTree>(&format!(
-                "catchup/{catchup_height}/{catchup_view}/accounts"
-            ))
+        let v1: espresso_types::FeeMerkleTree = client
+            .post(&format!("catchup/{catchup_height}/{catchup_view}/accounts"))
             .body_json(&accounts)
             .unwrap()
             .send()
-            .await;
-        let v2 = client
-            .post::<espresso_api::proto::CatchupMerkleTreeResponse>("v2/catchup/fee-accounts")
+            .await
+            .unwrap();
+        let v2: espresso_api::proto::FeeMerkleTreeResponse = client
+            .post("v2/catchup/fee-accounts")
             .body_json(&espresso_api::proto::GetCatchupFeeAccountsRequest {
                 height: Some(catchup_height),
                 view: Some(catchup_view),
-                accounts: accounts.clone(),
+                addresses: accounts.clone(),
             })
             .unwrap()
             .send()
-            .await;
-        if let Some((v1, v2)) = both_or_same_status("fee-accounts", v1, v2) {
-            assert_eq!(
-                serde_json::from_slice::<serde_json::Value>(&v2.tree).unwrap(),
-                serde_json::to_value(&v1).unwrap()
-            );
-        }
+            .await
+            .unwrap();
+        let v2: espresso_types::FeeMerkleTree = bincode::deserialize(&v2.tree).unwrap();
+        assert_eq!(
+            serde_json::to_value(&v2).unwrap(),
+            serde_json::to_value(&v1).unwrap()
+        );
         let v1 = client
             .post::<espresso_types::v0_3::RewardMerkleTreeV1>(&format!(
                 "catchup/{catchup_height}/{catchup_view}/reward-accounts"
@@ -10147,18 +10136,20 @@ mod test {
             .send()
             .await;
         let v2 = client
-            .post::<espresso_api::proto::CatchupMerkleTreeResponse>("v2/catchup/reward-accounts")
+            .post::<espresso_api::proto::RewardMerkleTreeV1Response>("v2/catchup/reward-accounts")
             .body_json(&espresso_api::proto::GetCatchupRewardAccountsRequest {
                 height: Some(catchup_height),
                 view: Some(catchup_view),
-                accounts,
+                addresses: accounts,
             })
             .unwrap()
             .send()
             .await;
         if let Some((v1, v2)) = both_or_same_status("reward-accounts", v1, v2) {
+            let v2: espresso_types::v0_3::RewardMerkleTreeV1 =
+                bincode::deserialize(&v2.tree).unwrap();
             assert_eq!(
-                serde_json::from_slice::<serde_json::Value>(&v2.tree).unwrap(),
+                serde_json::to_value(&v2).unwrap(),
                 serde_json::to_value(&v1).unwrap()
             );
         }
@@ -10213,30 +10204,31 @@ mod test {
             assert_eq!(v2.tree, v1);
         }
 
-        let decided = leaf.height();
         let v1_chain: Vec<espresso_types::Leaf2> = client
-            .get(&format!("catchup/{decided}/leafchain"))
+            .get(&format!("catchup/{catchup_height}/leafchain"))
             .send()
             .await
             .unwrap();
         let v2_chain: espresso_api::proto::CatchupLeafChainResponse = client
-            .get(&format!("v2/catchup/leaf-chain?height={decided}"))
+            .get(&format!("v2/catchup/leaf-chain?height={catchup_height}"))
             .send()
             .await
             .unwrap();
         assert!(!v1_chain.is_empty());
         assert_eq!(
-            v2_chain.leaf_chain,
+            v2_chain.leaves,
             v1_chain.iter().map(Into::into).collect::<Vec<_>>()
         );
 
         let v1 = client
-            .get::<espresso_types::Certificate2<SeqTypes>>(&format!("catchup/{decided}/cert2"))
+            .get::<espresso_types::Certificate2<SeqTypes>>(&format!(
+                "catchup/{catchup_height}/cert2"
+            ))
             .send()
             .await;
         let v2 = client
             .get::<espresso_api::proto::Cert2Response>(&format!(
-                "v2/catchup/cert2?height={decided}"
+                "v2/catchup/cert2?height={catchup_height}"
             ))
             .send()
             .await;
@@ -10293,13 +10285,13 @@ mod test {
         assert_eq!(v2_status, v1_status);
 
         for query in [
-            "v2/catchup/fee-account?view=1&address=0x0",
+            format!("v2/catchup/fee-account?view=1&address=0x{account}").as_str(),
             "v2/catchup/blocks-frontier?height=1",
             "v2/catchup/leaf-chain",
             "v2/catchup/cert2",
             "v2/catchup/chain-config",
             "v2/catchup/reward-account?height=1&view=1",
-            "v2/catchup/reward-account-v2?view=1&address=0x0",
+            format!("v2/catchup/reward-account-v2?view=1&address=0x{account}").as_str(),
             "v2/catchup/reward-merkle-tree-v2?height=1",
             "v2/catchup/state-cert",
         ] {
@@ -10309,6 +10301,33 @@ mod test {
                 .await
                 .unwrap_err();
             assert_eq!(err.status, StatusCode::BAD_REQUEST, "{query}");
+        }
+        for (route, body) in [
+            (
+                "v2/catchup/fee-accounts",
+                serde_json::json!({ "height": 1, "addresses": [] }),
+            ),
+            (
+                "v2/catchup/fee-accounts",
+                serde_json::json!({ "height": 1, "view": 1, "addresses": ["0xnot-hex"] }),
+            ),
+            (
+                "v2/catchup/reward-accounts",
+                serde_json::json!({ "view": 1, "addresses": [] }),
+            ),
+            (
+                "v2/catchup/reward-accounts",
+                serde_json::json!({ "height": 1, "view": 1, "addresses": ["0xnot-hex"] }),
+            ),
+        ] {
+            let err = client
+                .post::<serde_json::Value>(route)
+                .body_json(&body)
+                .unwrap()
+                .send()
+                .await
+                .unwrap_err();
+            assert_eq!(err.status, StatusCode::BAD_REQUEST, "{route} {body}");
         }
 
         assert_v2_light_client_agrees_with_v1(
@@ -12197,7 +12216,7 @@ mod test {
         let config = TestNetworkConfigBuilder::with_num_nodes()
             .api_config(SqlDataSource::options(
                 &storage[0],
-                Options::with_port(api_port).light_client(Default::default()),
+                Options::with_port(api_port),
             ))
             .network_config(network_config)
             .persistences(persistence.clone())
@@ -12773,8 +12792,7 @@ mod test {
             let api_opts = Options::with_port(api_port)
                 .catchup(Default::default())
                 .config(Default::default())
-                .explorer(Default::default())
-                .light_client(Default::default());
+                .explorer(Default::default());
 
             let config = TestNetworkConfigBuilder::with_num_nodes()
                 .api_config(SqlDataSource::options(&storage[0], api_opts))
@@ -14269,10 +14287,10 @@ mod test {
         let (storage, persistence) = node_storage::<SqlDataSource, NUM_NODES>().await;
 
         let config = TestNetworkConfigBuilder::<NUM_NODES, _, _>::with_num_nodes()
-            .api_config(
-                SqlDataSource::options(&storage[0], Options::with_port(port))
-                    .light_client(Default::default()),
-            )
+            .api_config(SqlDataSource::options(
+                &storage[0],
+                Options::with_port(port),
+            ))
             .persistences(persistence.clone())
             .catchups(std::array::from_fn(|_| {
                 StatePeers::<SequencerApiVersion>::from_urls(

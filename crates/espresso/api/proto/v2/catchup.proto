@@ -8,13 +8,7 @@ import "v2/common.proto";
 import "v2/merklized_state.proto";
 import "v2/reward_state.proto";
 
-// The module peers fetch state from when they fall behind. The routes over the fee, block and
-// reward trees name the state they want by the `(height, view)` the asking node is replaying,
-// which is why these are not the snapshot selectors the `merklized-state` module takes.
-//
-// v1's `reward-accounts-v2` and `reward-amounts` are not carried over: both are tombstones that
-// answer every request with a deprecation 404
-
+// Mirrors the tree's own presence or absence proof. Exactly one arm is set
 message FeeMerkleProof {
   oneof proof {
     MerklePathResponse presence = 1;
@@ -23,13 +17,13 @@ message FeeMerkleProof {
 }
 
 message FeeAccountProof {
-  // Account the proof is for, `0x`-prefixed hex
+  // Account the proof is for, lowercase `0x`-prefixed hex
   string account = 1;
 
   FeeMerkleProof proof = 2;
 }
 
-message CatchupFeeAccountResponse {
+message FeeAccountProofResponse {
   // Balance in wei, as a decimal string, matching how the reward balances are served. v1 serves
   // this one as `0x`-prefixed hex, since it is a bare `U256` there. An absent account proves a
   // zero balance, so this is `0` rather than missing
@@ -38,9 +32,13 @@ message CatchupFeeAccountResponse {
   FeeAccountProof proof = 2;
 }
 
-// A whole merkle tree, opaque to the API
-message CatchupMerkleTreeResponse {
-  // The tree as the JSON v1 serves for the same route, base64 in protoJSON
+message FeeMerkleTreeResponse {
+  // bincode-serialized `FeeMerkleTree` holding only the requested accounts, base64 in JSON
+  bytes tree = 1;
+}
+
+message RewardMerkleTreeV1Response {
+  // bincode-serialized `RewardMerkleTreeV1` holding only the requested accounts, base64 in JSON
   bytes tree = 1;
 }
 
@@ -51,7 +49,7 @@ message GetCatchupFeeAccountRequest {
   // View the asking node is replaying. Required
   optional uint64 view = 2;
 
-  // Account to prove, `0x`-prefixed hex. Required
+  // Account to prove, hex with an optional `0x` prefix. Required
   optional string address = 3;
 }
 
@@ -62,8 +60,8 @@ message GetCatchupFeeAccountsRequest {
   // View the asking node is replaying. Required
   optional uint64 view = 2;
 
-  // Accounts to include in the returned tree, `0x`-prefixed hex
-  repeated string accounts = 3;
+  // Accounts to include in the returned tree, hex with an optional `0x` prefix
+  repeated string addresses = 3;
 }
 
 message GetCatchupBlocksFrontierRequest {
@@ -84,13 +82,13 @@ message CatchupChainConfigResponse {
 }
 
 message GetCatchupLeafChainRequest {
-  // Height whose decide the chain proves, walking forward from it. Required
+  // Height of the chain's first leaf, the one the chain proves decided. Required
   optional uint64 height = 1;
 }
 
 message CatchupLeafChainResponse {
   // Oldest first, as v1 orders them
-  repeated Leaf2 leaf_chain = 1;
+  repeated Leaf2 leaves = 1;
 }
 
 message GetCatchupCert2Request {
@@ -105,7 +103,7 @@ message GetCatchupRewardAccountRequest {
   // View the asking node is replaying. Required
   optional uint64 view = 2;
 
-  // Account to prove, `0x`-prefixed hex. Required
+  // Account to prove, hex with an optional `0x` prefix. Required
   optional string address = 3;
 }
 
@@ -116,7 +114,7 @@ message GetCatchupRewardAccountV2Request {
   // View the asking node is replaying. Required
   optional uint64 view = 2;
 
-  // Account to prove, `0x`-prefixed hex. Required
+  // Account to prove, hex with an optional `0x` prefix. Required
   optional string address = 3;
 }
 
@@ -127,8 +125,8 @@ message GetCatchupRewardAccountsRequest {
   // View the asking node is replaying. Required
   optional uint64 view = 2;
 
-  // Accounts to include in the returned tree, `0x`-prefixed hex
-  repeated string accounts = 3;
+  // Accounts to include in the returned tree, hex with an optional `0x` prefix
+  repeated string addresses = 3;
 }
 
 message GetCatchupRewardMerkleTreeV2Request {
@@ -144,14 +142,20 @@ message GetCatchupStateCertRequest {
   optional uint64 epoch = 1;
 }
 
+// The module peers fetch state from when they fall behind. The routes over the fee, block and
+// reward trees name the state they want by the `(height, view)` the asking node is replaying,
+// which is why these are not the snapshot selectors the `merklized-state` module takes.
+//
+// v1's `reward-accounts-v2` and `reward-amounts` are not carried over. Both are tombstones that
+// answer every request with a deprecation 404
 service CatchupService {
   // Prove one fee account's balance at a height and view
-  rpc GetCatchupFeeAccount(GetCatchupFeeAccountRequest) returns (CatchupFeeAccountResponse) {
+  rpc GetCatchupFeeAccount(GetCatchupFeeAccountRequest) returns (FeeAccountProofResponse) {
     option (google.api.http) = {get: "/v2/catchup/fee-account"};
   }
 
   // Get the fee merkle tree holding the given accounts at a height and view
-  rpc GetCatchupFeeAccounts(GetCatchupFeeAccountsRequest) returns (CatchupMerkleTreeResponse) {
+  rpc GetCatchupFeeAccounts(GetCatchupFeeAccountsRequest) returns (FeeMerkleTreeResponse) {
     option (google.api.http) = {
       post: "/v2/catchup/fee-accounts"
       body: "*"
@@ -185,7 +189,7 @@ service CatchupService {
   }
 
   // Get the v1 reward merkle tree holding the given accounts
-  rpc GetCatchupRewardAccounts(GetCatchupRewardAccountsRequest) returns (CatchupMerkleTreeResponse) {
+  rpc GetCatchupRewardAccounts(GetCatchupRewardAccountsRequest) returns (RewardMerkleTreeV1Response) {
     option (google.api.http) = {
       post: "/v2/catchup/reward-accounts"
       body: "*"

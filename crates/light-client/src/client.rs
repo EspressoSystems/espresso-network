@@ -585,10 +585,7 @@ mod test {
             <DataSource as TestableSequencerDataSource>::persistence_options(&storage);
 
         let config = TestNetworkConfigBuilder::<1, _, _>::with_num_nodes()
-            .api_config(
-                DataSource::options(&storage, Options::with_port(port))
-                    .light_client(Default::default()),
-            )
+            .api_config(DataSource::options(&storage, Options::with_port(port)))
             .persistences([persistence])
             .network_config(test_config)
             .build();
@@ -624,10 +621,7 @@ mod test {
             <DataSource as TestableSequencerDataSource>::persistence_options(&storage);
 
         let config = TestNetworkConfigBuilder::<1, _, _>::with_num_nodes()
-            .api_config(
-                DataSource::options(&storage, Options::with_port(port))
-                    .light_client(Default::default()),
-            )
+            .api_config(DataSource::options(&storage, Options::with_port(port)))
             .persistences([persistence])
             .network_config(test_config)
             .build();
@@ -707,10 +701,7 @@ mod test {
             <DataSource as TestableSequencerDataSource>::persistence_options(&storage);
 
         let config = TestNetworkConfigBuilder::<1, _, _>::with_num_nodes()
-            .api_config(
-                DataSource::options(&storage, Options::with_port(port))
-                    .light_client(Default::default()),
-            )
+            .api_config(DataSource::options(&storage, Options::with_port(port)))
             .persistences([persistence])
             .network_config(test_config)
             .build();
@@ -784,10 +775,7 @@ mod test {
             <DataSource as TestableSequencerDataSource>::persistence_options(&storage);
 
         let config = TestNetworkConfigBuilder::<1, _, _>::with_num_nodes()
-            .api_config(
-                DataSource::options(&storage, Options::with_port(port))
-                    .light_client(Default::default()),
-            )
+            .api_config(DataSource::options(&storage, Options::with_port(port)))
             .persistences([persistence])
             .network_config(test_config)
             .build();
@@ -839,10 +827,7 @@ mod test {
             <DataSource as TestableSequencerDataSource>::persistence_options(&storage);
 
         let config = TestNetworkConfigBuilder::<1, _, _>::with_num_nodes()
-            .api_config(
-                DataSource::options(&storage, Options::with_port(port))
-                    .light_client(Default::default()),
-            )
+            .api_config(DataSource::options(&storage, Options::with_port(port)))
             .persistences([persistence])
             .network_config(test_config)
             .build();

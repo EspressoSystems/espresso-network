@@ -5662,16 +5662,14 @@ mod tests {
         async fn get_catchup_fee_account(
             &self,
             _request: tonic::Request<crate::proto::GetCatchupFeeAccountRequest>,
-        ) -> Result<tonic::Response<crate::proto::CatchupFeeAccountResponse>, tonic::Status>
-        {
+        ) -> Result<tonic::Response<crate::proto::FeeAccountProofResponse>, tonic::Status> {
             Err(tonic::Status::internal("mock"))
         }
 
         async fn get_catchup_fee_accounts(
             &self,
             _request: tonic::Request<crate::proto::GetCatchupFeeAccountsRequest>,
-        ) -> Result<tonic::Response<crate::proto::CatchupMerkleTreeResponse>, tonic::Status>
-        {
+        ) -> Result<tonic::Response<crate::proto::FeeMerkleTreeResponse>, tonic::Status> {
             Err(tonic::Status::internal("mock"))
         }
 
@@ -5716,7 +5714,7 @@ mod tests {
         async fn get_catchup_reward_accounts(
             &self,
             _request: tonic::Request<crate::proto::GetCatchupRewardAccountsRequest>,
-        ) -> Result<tonic::Response<crate::proto::CatchupMerkleTreeResponse>, tonic::Status>
+        ) -> Result<tonic::Response<crate::proto::RewardMerkleTreeV1Response>, tonic::Status>
         {
             Err(tonic::Status::internal("mock"))
         }
@@ -5818,7 +5816,6 @@ mod tests {
                 config: true,
                 submit: true,
                 explorer: true,
-                light_client: true,
                 ..Default::default()
             },
         );
@@ -5922,7 +5919,6 @@ mod tests {
             ("/v2/config/", routes::v2::CONFIG_ROUTES),
             ("/v2/submit/", routes::v2::SUBMIT_ROUTES),
             ("/v2/explorer/", routes::v2::EXPLORER_ROUTES),
-            ("/v2/light-client/", routes::v2::LIGHT_CLIENT_ROUTES),
         ] {
             let mut documented: Vec<&str> = paths
                 .keys()
