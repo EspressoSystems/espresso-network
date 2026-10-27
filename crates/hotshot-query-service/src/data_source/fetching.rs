@@ -2064,24 +2064,28 @@ where
     }
 
     async fn try_load_aggregator_start(&self) -> anyhow::Result<(usize, Aggregate<Types>)> {
-        let (prev, pruned_height) = {
-            let mut tx = self.read().await.context("opening transaction")?;
-            (
-                tx.load_prev_aggregate().await?,
-                tx.load_pruned_height().await?,
-            )
-        };
-        match aggregator_start(prev, pruned_height) {
-            AggregatorStart::Resume { start, prev } => Ok((start, prev)),
-            AggregatorStart::StartOver { start } => {
-                tracing::warn!(
-                    start,
-                    "the aggregator fell behind the data pruner, and the next block it needs is \
-                     pruned; deleting its totals to count again from the first unpruned block"
-                );
-                self.delete_aggregates_below(start).await?;
-                Ok((start, Aggregate::default()))
-            },
+        loop {
+            let (prev, pruned_height) = {
+                let mut tx = self.read().await.context("opening transaction")?;
+                (
+                    tx.load_prev_aggregate().await?,
+                    tx.load_pruned_height().await?,
+                )
+            };
+            match aggregator_start(prev, pruned_height) {
+                AggregatorStart::Resume { start, prev } => return Ok((start, prev)),
+                AggregatorStart::StartOver { start } => {
+                    tracing::warn!(
+                        start,
+                        "the aggregator fell behind the data pruner, and the next block it needs \
+                         is pruned; deleting its totals to count again from the first unpruned \
+                         block"
+                    );
+                    // The pruner can pass `start` while this runs, so load the start again after
+                    // it: with no aggregates left, it is just above the pruned data.
+                    self.delete_aggregates_below(start).await?;
+                },
+            }
         }
     }
 
@@ -2112,8 +2116,8 @@ where
         start: usize,
         prev: Aggregate<Types>,
     },
-    /// Delete every aggregate, all of which are below `start`, and count from `start` on, from
-    /// zero.
+    /// Delete every aggregate, all of which are below `start`, and count from zero just above the
+    /// pruned data, which is `start` unless the pruner moved on meanwhile.
     StartOver { start: usize },
 }
 
