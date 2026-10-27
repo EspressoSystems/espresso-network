@@ -107,8 +107,11 @@
       stableToolchain = pkgs.rust-bin.fromRustupToolchainFile ./rust-toolchain.toml;
       stableChannel = (lib.importTOML ./rust-toolchain.toml).toolchain.channel;
       stableManifest = (if stableChannel == "stable" then pkgs.rust-bin.stable.latest else pkgs.rust-bin.stable.${stableChannel})._manifest;
-      # rustfmt.toml uses nightly-only options; nightly from the stable release date
-      nightlyToolchain = pkgs.rust-bin.nightly.${stableManifest.date}.minimal.override {
+      # rustfmt.toml uses nightly-only options; newest nightly on or before the stable release date
+      # (some days have no nightly)
+      nightlyDate = lib.last (builtins.filter (d: d != "latest" && d <= stableManifest.date)
+        (builtins.attrNames pkgs.rust-bin.nightly));
+      nightlyToolchain = pkgs.rust-bin.nightly.${nightlyDate}.minimal.override {
         extensions = [ "rust-analyzer" "rustfmt" ];
       };
       rustDevEnv = rustEnvVars // {
