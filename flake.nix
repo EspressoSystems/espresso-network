@@ -46,7 +46,7 @@
     , dregs
     , ...
     }:
-    flake-utils.lib.eachDefaultSystem (system:
+    flake-utils.lib.eachSystem [ "x86_64-linux" "aarch64-linux" "aarch64-darwin" ] (system:
     let
       # node=error: disable noisy anvil output
       RUST_LOG = "info,node=error";
@@ -105,6 +105,12 @@
             envVars = rustEnvVars;
           };
       stableToolchain = pkgs.rust-bin.fromRustupToolchainFile ./rust-toolchain.toml;
+      stableChannel = (lib.importTOML ./rust-toolchain.toml).toolchain.channel;
+      stableManifest = (if stableChannel == "stable" then pkgs.rust-bin.stable.latest else pkgs.rust-bin.stable.${stableChannel})._manifest;
+      # rustfmt.toml uses nightly-only options; nightly from the stable release date
+      nightlyToolchain = pkgs.rust-bin.nightly.${stableManifest.date}.minimal.override {
+        extensions = [ "rust-analyzer" "rustfmt" ];
+      };
       rustDevEnv = rustEnvVars // {
         RUST_SRC_PATH = "${stableToolchain}/lib/rustlib/src/rust/library";
       };
@@ -116,12 +122,6 @@
     in
     {
       devShells.default =
-        let
-          # Bump the date when a newer rustfmt is wanted.
-          nightlyToolchain = pkgs.rust-bin.nightly."2026-04-16".minimal.override {
-            extensions = [ "rustfmt" ];
-          };
-        in
         myShell (rustDevEnv // {
           packages = with pkgs; [
             pkg-config
@@ -138,6 +138,7 @@
             cargo-sort
             typos
             just
+            nightlyToolchain.passthru.availableComponents.rust-analyzer
             nightlyToolchain.passthru.availableComponents.rustfmt
             nixpkgs-fmt
             prek
