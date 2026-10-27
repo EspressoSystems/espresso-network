@@ -71,12 +71,7 @@ pub trait Storage<TYPES: NodeType>: Send + Sync + Clone + 'static {
             .await
     }
     /// Record a HotShotAction taken.
-    async fn record_action(
-        &self,
-        view: ViewNumber,
-        epoch: Option<EpochNumber>,
-        action: HotShotAction,
-    ) -> Result<()>;
+    async fn record_action(&self, view: ViewNumber, action: HotShotAction) -> Result<()>;
     /// Update the current high QC in storage.
     async fn update_high_qc(&self, high_qc: QuorumCertificate<TYPES>) -> Result<()>;
     /// Update the current high QC in storage.

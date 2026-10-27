@@ -285,7 +285,7 @@ mod test {
                 let storage = Arc::clone(&storage);
                 tokio::spawn(async move {
                     storage
-                        .record_action(ViewNumber::new(i), None, HotShotAction::Vote)
+                        .record_action(ViewNumber::new(i), HotShotAction::Vote)
                         .await
                 })
             })

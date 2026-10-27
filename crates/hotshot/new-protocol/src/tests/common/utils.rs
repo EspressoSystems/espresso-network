@@ -1376,7 +1376,7 @@ impl ConsensusHarness {
                     self.apply_recorded(input, outbox);
                 }
             },
-            ConsensusOutput::RecordAction(view, _, kind) => {
+            ConsensusOutput::RecordAction(view, kind) => {
                 self.apply_recorded(
                     ConsensusInput::Stored(StorageOutput::Action(*view, *kind)),
                     outbox,

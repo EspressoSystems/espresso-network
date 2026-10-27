@@ -881,9 +881,9 @@ where
                 );
                 self.block_builder.request_block(request);
             },
-            ConsensusOutput::RecordAction(view, epoch, kind) => {
+            ConsensusOutput::RecordAction(view, kind) => {
                 debug!(%node, %view, ?kind, "record action");
-                self.storage.record_action(view, epoch, kind);
+                self.storage.record_action(view, kind);
             },
             ConsensusOutput::PersistProposal(proposal) => {
                 let view = proposal.data.view_number;
