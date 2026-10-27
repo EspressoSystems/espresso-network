@@ -117,9 +117,9 @@
     {
       devShells.default =
         let
-          # Bump the date when a newer rust-analyzer/rustfmt is wanted.
+          # Bump the date when a newer rustfmt is wanted.
           nightlyToolchain = pkgs.rust-bin.nightly."2026-04-16".minimal.override {
-            extensions = [ "rust-analyzer" "rustfmt" ];
+            extensions = [ "rustfmt" ];
           };
         in
         myShell (rustDevEnv // {
@@ -138,7 +138,6 @@
             cargo-sort
             typos
             just
-            nightlyToolchain.passthru.availableComponents.rust-analyzer
             nightlyToolchain.passthru.availableComponents.rustfmt
             nixpkgs-fmt
             prek
