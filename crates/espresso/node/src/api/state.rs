@@ -2624,9 +2624,7 @@ where
         let leaves = <Self as v1::CatchupApi>::get_leaf_chain(self, height)
             .await
             .map_err(to_status)?;
-        Ok(tonic::Response::new(proto::CatchupLeafChainResponse {
-            leaves: leaves.iter().map(Into::into).collect(),
-        }))
+        Ok(tonic::Response::new(leaves.as_slice().into()))
     }
 
     async fn get_catchup_cert2(

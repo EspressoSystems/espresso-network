@@ -541,6 +541,14 @@ impl From<&[BlockSummaryQueryData<SeqTypes>]> for proto::BlockSummaryRangeRespon
     }
 }
 
+impl From<&[Leaf2<SeqTypes>]> for proto::CatchupLeafChainResponse {
+    fn from(leaves: &[Leaf2<SeqTypes>]) -> Self {
+        proto::CatchupLeafChainResponse {
+            leaves: leaves.iter().map(Into::into).collect(),
+        }
+    }
+}
+
 impl TryFrom<&[NamespaceProofQueryData]> for proto::NamespaceProofRangeResponse {
     type Error = tonic::Status;
 
