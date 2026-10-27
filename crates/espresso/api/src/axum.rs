@@ -5577,8 +5577,7 @@ mod tests {
         async fn get_catchup_fee_accounts(
             &self,
             _request: tonic::Request<crate::proto::GetCatchupFeeAccountsRequest>,
-        ) -> Result<tonic::Response<crate::proto::CatchupMerkleTreeResponse>, tonic::Status>
-        {
+        ) -> Result<tonic::Response<crate::proto::FeeMerkleTreeResponse>, tonic::Status> {
             Err(tonic::Status::internal("mock"))
         }
 
@@ -5623,7 +5622,7 @@ mod tests {
         async fn get_catchup_reward_accounts(
             &self,
             _request: tonic::Request<crate::proto::GetCatchupRewardAccountsRequest>,
-        ) -> Result<tonic::Response<crate::proto::CatchupMerkleTreeResponse>, tonic::Status>
+        ) -> Result<tonic::Response<crate::proto::RewardMerkleTreeV1Response>, tonic::Status>
         {
             Err(tonic::Status::internal("mock"))
         }

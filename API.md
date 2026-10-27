@@ -92,10 +92,10 @@ descriptor set is exported as `espresso_api::FILE_DESCRIPTOR_SET`).
   mounted on a SQL node. The routes over the fee, block and reward trees name the state they want by the
   `(height, view)` the asking node is replaying, which is why these are not the snapshot selectors `merklized-state`
   takes. The routes that name a set of accounts are POSTs with the set in the body. A tree built for a set of accounts
-  is served as opaque bincode bytes, since a peer feeds it straight back into the tree type and `merklized-state`
-  already gives a caller a typed way to read one node. The whole v2 reward tree is the same bincode bytes the
-  `merklized-state` reward tree route serves, so every tree in the module decodes the same way. v1's
-  `reward-accounts-v2` and `reward-amounts` are not carried over, since both answer every request with a
+  is served as opaque bincode bytes, a `FeeMerkleTree` or a `RewardMerkleTreeV1`, since a peer feeds it straight back
+  into the tree type and `merklized-state` already gives a caller a typed way to read one node. The whole v2 reward tree
+  is the same bincode bytes the `merklized-state` reward tree route serves, so every tree in the module decodes the same
+  way. v1's `reward-accounts-v2` and `reward-amounts` are not carried over, since both answer every request with a
   deprecation 404. Like the reward balances, the fee balance is a decimal string, where v1 serves it as `0x`-prefixed
   hex. Accounts in proofs are lowercase `0x`-prefixed hex.
 

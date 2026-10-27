@@ -4,8 +4,9 @@ use std::{borrow::Borrow, collections::HashMap};
 
 use ark_serialize::CanonicalSerialize;
 use espresso_types::{
-    AccountQueryData, BuilderSignature, FeeAccount, FeeInfo, FeeMerkleProof, Header, L1BlockInfo,
-    NamespaceProofQueryData, NsProof, Payload, PubKey, SeqTypes, Transaction, TxProof,
+    AccountQueryData, BuilderSignature, FeeAccount, FeeAccountProof, FeeInfo, FeeMerkleProof,
+    Header, L1BlockInfo, NamespaceProofQueryData, NsProof, Payload, PubKey, SeqTypes, Transaction,
+    TxProof,
     config::PublicNetworkConfig,
     v0_3::{
         self, AvidMIncorrectEncodingNsProof, AvidMNsProof, RegisteredValidator,
@@ -626,7 +627,11 @@ impl From<RewardAccountQueryDataV2> for proto::RewardAccountProofResponse {
 /// so the match cannot be written once over both.
 impl From<v0_3::RewardAccountQueryDataV1> for proto::RewardAccountProofResponse {
     fn from(query: v0_3::RewardAccountQueryDataV1) -> proto::RewardAccountProofResponse {
-        let proof = match query.proof.proof {
+        let v0_3::RewardAccountQueryDataV1 {
+            balance,
+            proof: v0_3::RewardAccountProofV1 { account, proof },
+        } = query;
+        let proof = match proof {
             v0_3::RewardMerkleProofV1::Presence(proof) => {
                 proto::reward_merkle_proof::Proof::Presence(proto::MerklePathResponse::from(&proof))
             },
@@ -635,9 +640,9 @@ impl From<v0_3::RewardAccountQueryDataV1> for proto::RewardAccountProofResponse 
             },
         };
         proto::RewardAccountProofResponse {
-            balance: query.balance.to_string(),
+            balance: balance.to_string(),
             proof: Some(proto::RewardAccountProof {
-                account: format!("{:#x}", query.proof.account),
+                account: format!("{account:#x}"),
                 proof: Some(proto::RewardMerkleProof { proof: Some(proof) }),
             }),
         }
@@ -646,7 +651,11 @@ impl From<v0_3::RewardAccountQueryDataV1> for proto::RewardAccountProofResponse 
 
 impl From<AccountQueryData> for proto::FeeAccountProofResponse {
     fn from(query: AccountQueryData) -> Self {
-        let proof = match query.proof.proof {
+        let AccountQueryData {
+            balance,
+            proof: FeeAccountProof { account, proof },
+        } = query;
+        let proof = match proof {
             FeeMerkleProof::Presence(proof) => {
                 proto::fee_merkle_proof::Proof::Presence(proto::MerklePathResponse::from(&proof))
             },
@@ -655,9 +664,9 @@ impl From<AccountQueryData> for proto::FeeAccountProofResponse {
             },
         };
         proto::FeeAccountProofResponse {
-            balance: query.balance.to_string(),
+            balance: balance.to_string(),
             proof: Some(proto::FeeAccountProof {
-                account: format!("{:#x}", query.proof.account),
+                account: format!("{account:#x}"),
                 proof: Some(proto::FeeMerkleProof { proof: Some(proof) }),
             }),
         }

@@ -10074,6 +10074,7 @@ mod test {
             v2_account.balance.parse::<U256>().unwrap(),
             v1_account.balance
         );
+        assert_eq!(v2_account, v1_account.clone().into());
         let v2_proof = v2_account.proof.unwrap();
         assert_eq!(
             v2_proof.account,
@@ -10128,12 +10129,12 @@ mod test {
             .send()
             .await
             .unwrap();
-        let v2: espresso_api::proto::CatchupMerkleTreeResponse = client
+        let v2: espresso_api::proto::FeeMerkleTreeResponse = client
             .post("v2/catchup/fee-accounts")
             .body_json(&espresso_api::proto::GetCatchupFeeAccountsRequest {
                 height: Some(catchup_height),
                 view: Some(catchup_view),
-                accounts: accounts.clone(),
+                addresses: accounts.clone(),
             })
             .unwrap()
             .send()
@@ -10153,11 +10154,11 @@ mod test {
             .send()
             .await;
         let v2 = client
-            .post::<espresso_api::proto::CatchupMerkleTreeResponse>("v2/catchup/reward-accounts")
+            .post::<espresso_api::proto::RewardMerkleTreeV1Response>("v2/catchup/reward-accounts")
             .body_json(&espresso_api::proto::GetCatchupRewardAccountsRequest {
                 height: Some(catchup_height),
                 view: Some(catchup_view),
-                accounts,
+                addresses: accounts,
             })
             .unwrap()
             .send()
@@ -10322,19 +10323,19 @@ mod test {
         for (route, body) in [
             (
                 "v2/catchup/fee-accounts",
-                serde_json::json!({ "height": 1, "accounts": [] }),
+                serde_json::json!({ "height": 1, "addresses": [] }),
             ),
             (
                 "v2/catchup/fee-accounts",
-                serde_json::json!({ "height": 1, "view": 1, "accounts": ["0xnot-hex"] }),
+                serde_json::json!({ "height": 1, "view": 1, "addresses": ["0xnot-hex"] }),
             ),
             (
                 "v2/catchup/reward-accounts",
-                serde_json::json!({ "view": 1, "accounts": [] }),
+                serde_json::json!({ "view": 1, "addresses": [] }),
             ),
             (
                 "v2/catchup/reward-accounts",
-                serde_json::json!({ "height": 1, "view": 1, "accounts": ["0xnot-hex"] }),
+                serde_json::json!({ "height": 1, "view": 1, "addresses": ["0xnot-hex"] }),
             ),
         ] {
             let err = client

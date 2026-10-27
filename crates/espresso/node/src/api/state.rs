@@ -2569,11 +2569,11 @@ where
     async fn get_catchup_fee_accounts(
         &self,
         request: tonic::Request<proto::GetCatchupFeeAccountsRequest>,
-    ) -> Result<tonic::Response<proto::CatchupMerkleTreeResponse>, tonic::Status> {
+    ) -> Result<tonic::Response<proto::FeeMerkleTreeResponse>, tonic::Status> {
         let request = request.into_inner();
         let (height, view) = catchup_at(request.height, request.view)?;
         let accounts = request
-            .accounts
+            .addresses
             .iter()
             .map(|account| {
                 account.parse().map_err(|err| {
@@ -2586,7 +2586,9 @@ where
         let tree = <Self as v1::CatchupApi>::get_accounts(self, height, view, accounts)
             .await
             .map_err(to_status)?;
-        Ok(tonic::Response::new(tree_to_proto(&tree)?))
+        Ok(tonic::Response::new(proto::FeeMerkleTreeResponse {
+            tree: serialize_tree(&tree)?,
+        }))
     }
 
     async fn get_catchup_blocks_frontier(
@@ -2656,11 +2658,11 @@ where
     async fn get_catchup_reward_accounts(
         &self,
         request: tonic::Request<proto::GetCatchupRewardAccountsRequest>,
-    ) -> Result<tonic::Response<proto::CatchupMerkleTreeResponse>, tonic::Status> {
+    ) -> Result<tonic::Response<proto::RewardMerkleTreeV1Response>, tonic::Status> {
         let request = request.into_inner();
         let (height, view) = catchup_at(request.height, request.view)?;
         let accounts = request
-            .accounts
+            .addresses
             .iter()
             .map(|account| {
                 account.parse().map_err(|err| {
@@ -2673,7 +2675,9 @@ where
         let tree = <Self as v1::CatchupApi>::get_reward_accounts_v1(self, height, view, accounts)
             .await
             .map_err(to_status)?;
-        Ok(tonic::Response::new(tree_to_proto(&tree)?))
+        Ok(tonic::Response::new(proto::RewardMerkleTreeV1Response {
+            tree: serialize_tree(&tree)?,
+        }))
     }
 
     async fn get_catchup_reward_account_v2(
@@ -2722,12 +2726,9 @@ where
 
 /// A tree travels as bincode, the encoding peers already decode from v1 and from the v2
 /// reward tree route.
-fn tree_to_proto<T: serde::Serialize>(
-    tree: &T,
-) -> Result<proto::CatchupMerkleTreeResponse, tonic::Status> {
-    let tree = bincode::serialize(tree)
-        .map_err(|err| tonic::Status::internal(format!("serializing tree: {err}")))?;
-    Ok(proto::CatchupMerkleTreeResponse { tree })
+fn serialize_tree<T: serde::Serialize>(tree: &T) -> Result<Vec<u8>, tonic::Status> {
+    bincode::serialize(tree)
+        .map_err(|err| tonic::Status::internal(format!("serializing tree: {err}")))
 }
 
 /// The `(height, view)` the catchup routes over a merkle tree are asked for.

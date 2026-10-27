@@ -32,9 +32,13 @@ message FeeAccountProofResponse {
   FeeAccountProof proof = 2;
 }
 
-// A merkle tree holding only the requested accounts, opaque to the API
-message CatchupMerkleTreeResponse {
-  // bincode-serialized tree, base64 in JSON
+message FeeMerkleTreeResponse {
+  // bincode-serialized `FeeMerkleTree` holding only the requested accounts, base64 in JSON
+  bytes tree = 1;
+}
+
+message RewardMerkleTreeV1Response {
+  // bincode-serialized `RewardMerkleTreeV1` holding only the requested accounts, base64 in JSON
   bytes tree = 1;
 }
 
@@ -57,7 +61,7 @@ message GetCatchupFeeAccountsRequest {
   optional uint64 view = 2;
 
   // Accounts to include in the returned tree, hex with an optional `0x` prefix
-  repeated string accounts = 3;
+  repeated string addresses = 3;
 }
 
 message GetCatchupBlocksFrontierRequest {
@@ -78,7 +82,7 @@ message CatchupChainConfigResponse {
 }
 
 message GetCatchupLeafChainRequest {
-  // Height whose decide the chain proves, walking forward from it. Required
+  // Height of the chain's first leaf, the one the chain proves decided. Required
   optional uint64 height = 1;
 }
 
@@ -122,7 +126,7 @@ message GetCatchupRewardAccountsRequest {
   optional uint64 view = 2;
 
   // Accounts to include in the returned tree, hex with an optional `0x` prefix
-  repeated string accounts = 3;
+  repeated string addresses = 3;
 }
 
 message GetCatchupRewardMerkleTreeV2Request {
@@ -151,7 +155,7 @@ service CatchupService {
   }
 
   // Get the fee merkle tree holding the given accounts at a height and view
-  rpc GetCatchupFeeAccounts(GetCatchupFeeAccountsRequest) returns (CatchupMerkleTreeResponse) {
+  rpc GetCatchupFeeAccounts(GetCatchupFeeAccountsRequest) returns (FeeMerkleTreeResponse) {
     option (google.api.http) = {
       post: "/v2/catchup/fee-accounts"
       body: "*"
@@ -185,7 +189,7 @@ service CatchupService {
   }
 
   // Get the v1 reward merkle tree holding the given accounts
-  rpc GetCatchupRewardAccounts(GetCatchupRewardAccountsRequest) returns (CatchupMerkleTreeResponse) {
+  rpc GetCatchupRewardAccounts(GetCatchupRewardAccountsRequest) returns (RewardMerkleTreeV1Response) {
     option (google.api.http) = {
       post: "/v2/catchup/reward-accounts"
       body: "*"
