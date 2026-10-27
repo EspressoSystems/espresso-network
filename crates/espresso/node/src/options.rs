@@ -876,7 +876,7 @@ impl From<&Modules> for ApiModulesConfig {
             config: m.config.is_some(),
             hotshot_events: m.hotshot_events.is_some(),
             explorer: m.explorer.is_some(),
-            light_client: m.light_client.is_some(),
+            light_client: m.query.is_some() && m.storage_sql.is_some(),
         }
     }
 }
