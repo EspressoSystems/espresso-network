@@ -8,6 +8,9 @@ on:
       - cross-shell.nix
       - rust-toolchain.toml
       - nix/**
+      - justfile
+      - "**/justfile"
+      - "**/*.just"
       - scripts/with-tools
       - .github/workflows/nix-shells.yml
   workflow_dispatch:
@@ -33,11 +36,13 @@ jobs:
 
       - uses: actions/checkout@v7
 
-      # One line per shell: "<shell> <command>...", collected from the with-tools [script] attributes.
+      # One line per shell: "<shell> <command>...", collected from the with-tools [script] attributes,
+      # plus the shells no recipe uses.
       - name: Check shell commands
         run: |
-          awk -F'"' '/^\[script\(".*with-tools"/ { for (i = 6; i < NF; i += 2) if (!seen[$4, $i]++) c[$4] = c[$4] " " $i }
-            END { for (s in c) print s c[s] }' $(git ls-files justfile '*/justfile' '*.just') |
+          { printf 'default just\ndockerShell docker\n'
+            awk -F'"' '/^\[script\(".*with-tools"/ { for (i = 6; i < NF; i += 2) if (!seen[$4, $i]++) c[$4] = c[$4] " " $i }
+              END { for (s in c) print s c[s] }' $(git ls-files justfile '*/justfile' '*.just'); } |
           while read -r shell cmds; do
             echo "::group::.#$shell: $cmds"
             nix develop ".#$shell" --accept-flake-config -c bash -c '
