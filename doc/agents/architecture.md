@@ -42,6 +42,8 @@ order, so the highest-staked nodes hold the systematic shards. The reconstructor
 (`crates/hotshot/new-protocol/src/vid/reconstruct.rs`) races two paths per view: concatenating the systematic shares
 once they are all in hand, and erasure-decoding any threshold of shares. Both re-commit the result; the first to succeed
 wins. `vid_payloads_*` and `vid_reconstruct_*` metrics show which path wins in practice.
+`ESPRESSO_BENCH_VID_SYSTEMATIC_WAIT_MS` (bench knob, default 0) holds the decode back for that long after a threshold of
+mixed shares arrives, giving the systematic set a chance to complete first.
 
 ## Fast finality
 

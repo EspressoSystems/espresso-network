@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use alloy::primitives::U256;
 use hotshot_example_types::node_types::TestTypes;
 use hotshot_types::{
@@ -302,6 +304,53 @@ async fn test_racing_paths_reconstruct_once() {
 
     expect_reconstruction(&mut reconstructor, view).await;
     assert_no_duplicate_success(&mut reconstructor, "both paths completed").await;
+}
+
+/// With a systematic wait, a threshold of recovery shares does not start a
+/// decode; the systematic set arriving within the wait reconstructs instead.
+#[tokio::test]
+async fn test_decode_waits_for_systematic_shares() {
+    let test_data = TestData::new(1).await;
+    let view = &test_data.views[0];
+    let mut reconstructor =
+        VidReconstructor::<TestTypes>::new().with_systematic_wait(Duration::from_secs(30));
+
+    let recovery_threshold = recovery_threshold(view);
+    handle_proposal(&mut reconstructor, view);
+    for i in recovery_threshold..2 * recovery_threshold {
+        feed(&mut reconstructor, honest_share(view, i));
+    }
+    assert!(
+        tokio::time::timeout(Duration::from_millis(200), reconstructor.next())
+            .await
+            .is_err(),
+        "BUG: decoded without waiting for the systematic shares"
+    );
+
+    for i in 0..recovery_threshold {
+        feed(&mut reconstructor, honest_share(view, i));
+    }
+    let out = expect_reconstruction(&mut reconstructor, view).await;
+    assert_eq!(out.source, PayloadSource::Systematic);
+    assert_no_duplicate_success(&mut reconstructor, "wait expired after success").await;
+}
+
+/// A systematic wait that runs out decodes the threshold of shares in hand.
+#[tokio::test]
+async fn test_decode_starts_when_systematic_wait_expires() {
+    let test_data = TestData::new(1).await;
+    let view = &test_data.views[0];
+    let mut reconstructor =
+        VidReconstructor::<TestTypes>::new().with_systematic_wait(Duration::from_millis(50));
+
+    let recovery_threshold = recovery_threshold(view);
+    handle_proposal(&mut reconstructor, view);
+    for i in recovery_threshold..2 * recovery_threshold {
+        feed(&mut reconstructor, honest_share(view, i));
+    }
+
+    let out = expect_reconstruction(&mut reconstructor, view).await;
+    assert_eq!(out.source, PayloadSource::Decoded);
 }
 
 /// Feeding shares beyond the threshold produces exactly one reconstruction

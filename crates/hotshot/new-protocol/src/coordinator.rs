@@ -328,7 +328,8 @@ where
                 .map(|m| m.consensus.vid_disperse_duration.clone().into()),
         );
         vid_disperser.set_tracer(leader_tracer.clone());
-        let mut vid_reconstructor = VidReconstructor::new();
+        let mut vid_reconstructor =
+            VidReconstructor::new().with_systematic_wait(vid_systematic_wait());
         vid_reconstructor.set_tracer(leader_tracer.clone());
         let mut block_builder = BlockBuilder::new(
             Arc::new(initializer.instance_state().clone()),
@@ -2547,4 +2548,14 @@ impl<T: NodeType> PendingProposalFetches<T> {
             }
         }
     }
+}
+
+/// Bench knob: how long a node waits for the systematic VID shares before it
+/// erasure-decodes a threshold of mixed ones, from
+/// `ESPRESSO_BENCH_VID_SYSTEMATIC_WAIT_MS`; unset or unparsable decodes at once.
+fn vid_systematic_wait() -> std::time::Duration {
+    std::env::var("ESPRESSO_BENCH_VID_SYSTEMATIC_WAIT_MS")
+        .ok()
+        .and_then(|ms| ms.parse().ok())
+        .map_or(std::time::Duration::ZERO, std::time::Duration::from_millis)
 }
