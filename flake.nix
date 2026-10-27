@@ -3,11 +3,9 @@
 
   nixConfig = {
     extra-substituters = [
-      "https://espresso-systems-private.cachix.org"
       "https://nixpkgs-cross-overlay.cachix.org"
     ];
     extra-trusted-public-keys = [
-      "espresso-systems-private.cachix.org-1:LHYk03zKQCeZ4dvg3NctyCq88e44oBZVug5LpYKjPRI="
       "nixpkgs-cross-overlay.cachix.org-1:TjKExGN4ys960TlsGqNOI/NBdoz2Jdr2ow1VybWV5JM="
     ];
   };
