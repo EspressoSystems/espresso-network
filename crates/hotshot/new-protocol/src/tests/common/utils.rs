@@ -527,7 +527,7 @@ impl TestData {
             let epoch = if epoch_height > 0 && block_number > 0 {
                 EpochNumber::new(epoch_from_block_number(block_number, epoch_height))
             } else {
-                gen_view.epoch_number.unwrap_or(EpochNumber::genesis())
+                gen_view.epoch_number
             };
             // Use genesis membership for signing — same committee in tests.
             let epoch_membership = membership
@@ -555,7 +555,7 @@ impl TestData {
                 proposal.next_drb_result = computed_drbs.get(&next_epoch).copied();
             }
             // Always set epoch (may differ from generator output).
-            let gen_epoch = gen_view.epoch_number.unwrap_or(EpochNumber::genesis());
+            let gen_epoch = gen_view.epoch_number;
             let epoch_patched = epoch != gen_epoch;
             proposal.epoch = epoch;
             // The dispersal carries the proposal's epoch, as `VidDisperser`
