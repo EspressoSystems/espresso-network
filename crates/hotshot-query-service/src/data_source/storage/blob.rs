@@ -211,7 +211,7 @@ impl<F: JournalFs> BlobStore<F> {
 
         let lsn = lane
             .lane
-            .enqueue(height, PAYLOAD, body, Class::Durable, Some(permit));
+            .enqueue(height, 0, PAYLOAD, body, Class::Durable, Some(permit));
         lane.lane.wait_durable(lsn).await?;
         let loc = lane
             .locate(height, PAYLOAD)
@@ -229,7 +229,7 @@ impl<F: JournalFs> BlobStore<F> {
         let lsn = self
             .share
             .lane
-            .enqueue(height, SHARE, body.clone(), Class::Enqueue, None);
+            .enqueue(height, 0, SHARE, body.clone(), Class::Enqueue, None);
         let mut pending = self.share.pending.lock();
         // Concurrent appends can get here out of lsn order.
         if pending.get(&height).is_none_or(|(newest, _)| *newest < lsn) {
@@ -589,7 +589,7 @@ fn open_lane_blocking<F: JournalFs>(
     let known_kind: fn(u8) -> bool = match stream {
         Stream::Payload => is_payload,
         Stream::Share => is_share,
-        Stream::Wal | Stream::Data => unreachable!("not a blob lane: {stream:?}"),
+        Stream::Wal | Stream::Da => unreachable!("not a blob lane: {stream:?}"),
     };
     let recovered = recover_lane(&**fs, &dir, stream, known_kind)?;
 

@@ -319,8 +319,8 @@ API_MODULES: dict[NodeRole, tuple[str, ...]] = {
 PRUNE_INTERVAL = "30s"
 PRUNE_RETENTION_S = 60
 RETENTION_UNITS = {"s": 1, "m": 60, "h": 3600}
-# Headroom below the usable disk so the journal's own retention GCs data before the volume
-# fills.
+# Headroom below the usable disk. ESPRESSO_NODE_JOURNAL_MAX_BYTES only sets the size at which the
+# node warns that the share lane is over budget; share retention alone prunes it.
 JOURNAL_MAX_BYTES_FRACTION = 0.8
 # OS, docker images, and worst-case docker json-file logs (up to 2 containers x 4 x 2 GB,
 # user-data.sh's daemon.json), subtracted from root_gb before applying JOURNAL_MAX_BYTES_FRACTION.
@@ -385,6 +385,21 @@ PAYLOAD_HOST_DIR = "/data/pg/payload"
 TRACE_HOST_DIR = f"{BENCH_DIR}/trace"
 TRACE_CONTAINER_DIR = "/trace"
 TRACE_PLOTS_TIMEOUT_S = 600
+# `--heap-profile`: jemalloc writes `heap.*.heap` dumps to HEAP_HOST_DIR (/store/jeprof in the
+# container) and the collect keeps the newest HEAP_DUMPS_KEEP per node.
+HEAP_HOST_DIR = "/data/journal/jeprof"
+HEAP_CONTAINER_DIR = "/store/jeprof"
+HEAP_DUMPS_KEEP = 20
+# 2^32 bytes: one dump per 4 GiB allocated.
+HEAP_LG_INTERVAL = 32
+# Sampling every 2^19 bytes (512 KiB) allocated.
+HEAP_LG_SAMPLE = 19
+# Binaries `docker cp`'d out of the stopped node container, as named in HEAP_BINARIES.
+HEAP_BIN_DIR = f"{BENCH_DIR}/heap-bin"
+HEAP_BINARIES = {
+    "espresso-node.bin": "/bin/espresso-node-postgres",
+    "espresso-node-sqlite.bin": "/bin/espresso-node-sqlite",
+}
 PAYLOAD_CONTAINER_DIR = "/payload"
 VOLUME_BY_ID = "/dev/disk/by-id"
 # Seconds `up` waits for udev to publish the by-id link of the attached volume.
@@ -983,6 +998,10 @@ class RunConfig:
     max_block_size: str = "50mb"
     # espresso-node writes leader_trace_node{N}.csv to /opt/bench/trace; `trace-plots` renders it.
     leader_trace: bool = False
+    # Needs allocator jemalloc: nodes dump heap profiles, `heap-report` renders them.
+    heap_profile: bool = False
+    # `lg_prof_interval`: a dump every 2^N bytes allocated.
+    heap_profile_interval: int = HEAP_LG_INTERVAL
     # `latency.PROFILES` name; `off` shapes nothing. `intra_latency` adds the same-location delay.
     latency: str = "off"
     intra_latency: bool = True
@@ -1646,6 +1665,11 @@ def format_node_summary(cfg: RunConfig) -> list[str]:
             f"leader-trace {'on' if cfg.leader_trace else 'off'}"
         ),
         f"node-env: {' '.join(cfg.node_env) or 'none'}",
+        *(
+            [f"heap-profile: on (lg_prof_interval {cfg.heap_profile_interval})"]
+            if cfg.heap_profile
+            else []
+        ),
         *([format_chaos_summary(cfg.chaos, cfg.latency)] if cfg.chaos else []),
         *(
             [f"prune: data and state older than {cfg.prune}s, every {PRUNE_INTERVAL}"]
@@ -2586,6 +2610,7 @@ def render_start_sh(
     leader_trace: bool = False,
     consensus_storage: ConsensusStorage = "fs",
     query_engine: QueryEngine = "postgres",
+    heap_profile: bool = False,
 ) -> str:
     """Deviates from the plan signature (drops unused `hosts`, `cfg`): every value start.sh
     needs is already in `host`, `images` and the host's `memory_mib`, or in ctl.env/node.env
@@ -2661,6 +2686,8 @@ def render_start_sh(
             script += f"mkdir -p {SQLITE_VOLUME_DIR}\n\n"
     if leader_trace:
         script += f"mkdir -p {TRACE_HOST_DIR}\n\n"
+    if heap_profile:
+        script += heap_dir_script()
     argv = node_create_argv(
         host,
         images,
@@ -2672,6 +2699,11 @@ def render_start_sh(
     )
     script += _docker_create("espresso-node", argv)
     return script
+
+
+def heap_dir_script() -> str:
+    """jemalloc does not create the dump directory; the container user may not be root."""
+    return f"mkdir -p {HEAP_HOST_DIR}\nchmod 777 {HEAP_HOST_DIR}\n\n"
 
 
 def node_create_argv(
@@ -2720,6 +2752,7 @@ def render_recreate_sh(
     leader_trace: bool = False,
     consensus_storage: ConsensusStorage = "fs",
     query_engine: QueryEngine = "postgres",
+    heap_profile: bool = False,
 ) -> str:
     """Recreates the espresso-node container from `node-rejoin.env`; same arguments as start.sh
     otherwise."""
@@ -2732,8 +2765,12 @@ def render_recreate_sh(
         query_engine,
         f"{BENCH_DIR}/node-rejoin.env",
     )
-    return "#!/usr/bin/env bash\nset -eEu -o pipefail\n\n" + _docker_create(
-        "espresso-node", argv
+    # wipe_script emptied /data/journal, jeprof included.
+    heap = heap_dir_script() if heap_profile else ""
+    return (
+        "#!/usr/bin/env bash\nset -eEu -o pipefail\n\n"
+        + heap
+        + _docker_create("espresso-node", argv)
     )
 
 
@@ -2749,6 +2786,23 @@ def wipe_script(query: bool) -> str:
         lines.append(f"find {PAYLOAD_HOST_DIR} -mindepth 1 -delete")
     lines += [f"bash {BENCH_DIR}/recreate.sh", "docker start espresso-node"]
     return "\n".join(lines) + "\n"
+
+
+def share_wipe_script() -> str:
+    """Run as root through `bounded`. Prints the path the share lane moved to. Host path of the
+    node's `<storage>/journal/share`: `/data/journal` is mounted at `/store`, storage is
+    `/store/espresso`. Fails before stopping the node when the lane is missing; once stopped,
+    the node is started again on every exit."""
+    return (
+        "set -eu\n"
+        "share=/data/journal/espresso/journal/share\n"
+        'test -d "$share" || { echo "no share lane at $share" >&2; exit 1; }\n'
+        "docker stop -t 30 espresso-node >/dev/null\n"
+        "trap 'docker start espresso-node >/dev/null' EXIT\n"
+        "dest=/data/journal/share.orig.$(date +%s)\n"
+        'mv "$share" "$dest"\n'
+        'echo "$dest"\n'
+    )
 
 
 def geometric_steps(start: float, factor: float, top: float) -> tuple[float, ...]:
@@ -2920,7 +2974,8 @@ def add_chaos_flags(parser: argparse.ArgumentParser) -> None:
         type=chaos_kinds,
         default=chaos.kinds,
         help="with --chaos: comma separated fault kinds, used in turn; `mass-restart` and `mass-kill` "
-        "fault every node at once, or --chaos-mass-nodes of them; `none` for no faults",
+        "fault every node at once, or --chaos-mass-nodes of them; `share-wipe` moves the share lane "
+        "of a node to /data/journal/share.orig.<ts>; `none` for no faults",
     )
     for flag, value, text in (
         ("gap", chaos.gap_s, "seconds between two faults"),
@@ -3077,6 +3132,22 @@ def add_leader_trace_flag(parser: argparse.ArgumentParser) -> None:
     )
 
 
+def add_heap_profile_flag(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--heap-profile",
+        action="store_true",
+        help="needs --allocator jemalloc: nodes dump jemalloc heap profiles; collected into "
+        "hosts/<name>/jeprof/ with the binary as <run>/espresso-node.bin; render with `heap-report`",
+    )
+    parser.add_argument(
+        "--heap-profile-interval",
+        type=positive_int,
+        default=HEAP_LG_INTERVAL,
+        metavar="LG_BYTES",
+        help="a dump every 2^LG_BYTES bytes allocated (32 = 4 GiB)",
+    )
+
+
 def add_submit_nodes_flag(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--submit-nodes",
@@ -3160,6 +3231,8 @@ def config_from_args(args: argparse.Namespace) -> RunConfig:
     for key in keys:
         if keys.count(key) > 1:
             raise Refused(f"--node-env repeats {key}")
+    if args.heap_profile and args.allocator != "jemalloc":
+        raise Refused("--heap-profile needs --allocator jemalloc")
     profile = chaos_default(args, "--latency", CHAOS_LATENCY)
     netem = args.netem if profile == "off" else chaos_default(args, "--netem", "full")
     check_latency_flags(
@@ -3183,6 +3256,8 @@ def config_from_args(args: argparse.Namespace) -> RunConfig:
         node_env=tuple(args.node_env),
         max_block_size=args.max_block_size,
         leader_trace=args.leader_trace,
+        heap_profile=args.heap_profile,
+        heap_profile_interval=args.heap_profile_interval,
         latency=profile,
         intra_latency=args.intra_latency,
         tcp_cc=args.tcp_cc,
@@ -3349,6 +3424,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     add_node_env_flag(plan_p)
     add_block_size_flag(plan_p)
     add_leader_trace_flag(plan_p)
+    add_heap_profile_flag(plan_p)
     add_latency_flags(plan_p)
     add_consensus_storage_flag(plan_p)
     add_prune_flag(plan_p)
@@ -3372,6 +3448,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         node_env=[],
         max_block_size=defaults.max_block_size,
         leader_trace=defaults.leader_trace,
+        heap_profile=defaults.heap_profile,
+        heap_profile_interval=defaults.heap_profile_interval,
         latency=defaults.latency,
         intra_latency=defaults.intra_latency,
         tcp_cc=defaults.tcp_cc,
@@ -3402,6 +3480,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     add_node_env_flag(run_p)
     add_block_size_flag(run_p)
     add_leader_trace_flag(run_p)
+    add_heap_profile_flag(run_p)
     add_latency_flags(run_p)
     add_consensus_storage_flag(run_p)
     add_prune_flag(run_p)
@@ -4071,6 +4150,7 @@ def connect(fleet: FleetState) -> Remote:
 CollectStep = Literal[
     "stop_agent",
     "freeze",
+    "heap_binary",
     "collect_hosts",
     "rsync_out",
     "ebs_balance",
@@ -4081,12 +4161,19 @@ RdsCollect = Callable[[Runner, str, RdsInfo, float, float, Path], None]
 
 
 def collect_plan(
-    error: str | None, agent_started: bool, query_db: DbMode, cloudwatch: bool
+    error: str | None,
+    agent_started: bool,
+    query_db: DbMode,
+    cloudwatch: bool,
+    heap_profile: bool = False,
 ) -> list[CollectStep]:
     """The collection steps in order. `skip_collect` is not an input: it can be set by a signal
     during any step, so `finish_run` checks it before each one."""
     steps: list[CollectStep] = ["stop_agent"] if error is not None else []
-    steps += ["freeze", "collect_hosts"]
+    steps.append("freeze")
+    if heap_profile:
+        steps.append("heap_binary")
+    steps.append("collect_hosts")
     if agent_started:
         steps.append("rsync_out")
     if cloudwatch:
@@ -4113,6 +4200,10 @@ def finish_run(run: Run, cloudwatch: bool) -> None:
         actions: dict[CollectStep, tuple[str, Callable[[], object]]] = {
             "stop_agent": ("stop agent", lambda: stop_agent(remote)),
             "freeze": ("freeze", lambda: freeze(remote)),
+            "heap_binary": (
+                "heap binary",
+                lambda: collect_heap_binary(remote, run.run_dir, run.cfg.query_engine),
+            ),
             "collect_hosts": (
                 "collect",
                 lambda: collect_hosts(
@@ -4129,7 +4220,13 @@ def finish_run(run: Run, cloudwatch: bool) -> None:
             **cloudwatch_actions(run),
             "rds_logs": rds_step(run, "rds logs", collect_rds_logs),
         }
-        plan = collect_plan(run.error, run.agent_started, run.cfg.query_db, cloudwatch)
+        plan = collect_plan(
+            run.error,
+            run.agent_started,
+            run.cfg.query_db,
+            cloudwatch,
+            run.cfg.heap_profile,
+        )
         run_steps(interrupts, [actions[name] for name in plan])
 
 
@@ -4649,6 +4746,8 @@ def fleet_run_config(args: argparse.Namespace, saved: FleetManifest) -> RunConfi
         node_env=cli.node_env,
         max_block_size=cli.max_block_size,
         leader_trace=cli.leader_trace,
+        heap_profile=cli.heap_profile,
+        heap_profile_interval=cli.heap_profile_interval,
         latency=cli.latency,
         intra_latency=cli.intra_latency,
         tcp_cc=cli.tcp_cc,
@@ -5282,6 +5381,11 @@ def run_config_hash(
             cfg.query_engine.encode(),
             *([json.dumps(sorted(cfg.node_env)).encode()] if cfg.node_env else []),
             *([b"leader-trace"] if cfg.leader_trace else []),
+            *(
+                [f"heap-profile={cfg.heap_profile_interval}".encode()]
+                if cfg.heap_profile
+                else []
+            ),
             f"prune={cfg.prune}".encode(),
             *(
                 [json.dumps(dataclasses.asdict(cfg.chaos), sort_keys=True).encode()]
@@ -5503,6 +5607,24 @@ def trace_env(cfg: RunConfig) -> tuple[str, ...]:
     return (f"ESPRESSO_NODE_LEADER_TRACE_DIR={TRACE_CONTAINER_DIR}",)
 
 
+def heap_env(cfg: RunConfig) -> tuple[str, ...]:
+    """`prof_final` dumps at exit, which `docker stop` reaches through the node's SIGTERM
+    handler. `_RJEM_` because tikv-jemallocator prefixes its symbols."""
+    if not cfg.heap_profile:
+        return ()
+    conf = ",".join(
+        [
+            "prof:true",
+            "prof_active:true",
+            "prof_final:true",
+            f"lg_prof_sample:{HEAP_LG_SAMPLE}",
+            f"lg_prof_interval:{cfg.heap_profile_interval}",
+            f"prof_prefix:{HEAP_CONTAINER_DIR}/heap",
+        ]
+    )
+    return (f"_RJEM_MALLOC_CONF={conf}",)
+
+
 def node_hosts(hosts: dict[str, HostInfo]) -> list[HostInfo]:
     return [hosts[name] for name in _node_names(hosts)]
 
@@ -5525,6 +5647,7 @@ def render_host_files(
                 leader_trace=cfg.leader_trace,
                 consensus_storage=cfg.consensus_storage,
                 query_engine=cfg.query_engine,
+                heap_profile=cfg.heap_profile,
             )
         )
         if spec["role"] == "ctl":
@@ -5539,7 +5662,7 @@ def render_host_files(
                 spec,
                 hosts,
                 pg,
-                (*trace_env(cfg), *cfg.node_env),
+                (*trace_env(cfg), *heap_env(cfg), *cfg.node_env),
                 cfg.consensus_storage,
                 cfg.query_engine,
                 cfg.prune,
@@ -5558,6 +5681,7 @@ def render_host_files(
                         leader_trace=cfg.leader_trace,
                         consensus_storage=cfg.consensus_storage,
                         query_engine=cfg.query_engine,
+                        heap_profile=cfg.heap_profile,
                     )
                 )
             if pg is not None:
@@ -6411,6 +6535,8 @@ class ChaosRunner:
         def act(name: str) -> subprocess.CompletedProcess[str]:
             if actions[name] == "wipe":
                 script = bounded(wipe_script(name in self.queries))
+            elif actions[name] == "share-wipe":
+                script = bounded(share_wipe_script())
             else:
                 script = DOCKER_NODE_COMMANDS[actions[name]]
             return self.remote.ssh(name, script, check=False)
@@ -6418,6 +6544,9 @@ class ChaosRunner:
         # One worker per action: a mass restart goes out at once, not in pool-sized batches.
         done = self.remote.parallel(act, actions, workers=max(1, len(actions)))
         failed = {name for name, out in done.items() if out.returncode != 0}
+        for name, out in done.items():
+            if actions[name] == "share-wipe" and name not in failed:
+                log.info("chaos: %s share lane moved to %s", name, out.stdout.strip())
         step = ch.revert_failed(prev, step, failed)
         self.state = step["state"]
         for name, s in self.state["nodes"].items():
@@ -6573,6 +6702,20 @@ def freeze(remote: Remote) -> None:
     remote.parallel(stop, remote.hosts)
 
 
+# The newest HEAP_DUMPS_KEEP dumps (prof_final's included) go to jeprof/; the names of the rest
+# are listed in jeprof/dropped.txt and counted in the log.
+_HEAP_NEWEST = (
+    f"(cd {HEAP_HOST_DIR} && find \"$PWD\" -name '*.heap' -printf '%T@ %p\\n')"
+    " | sort -rn | cut -d' ' -f2-"
+)
+HEAP_COLLECT_SCRIPT = (
+    f"if [ -d {HEAP_HOST_DIR} ]; then\n"
+    "mkdir -p jeprof\n"
+    f"{_HEAP_NEWEST} | sed -n '1,{HEAP_DUMPS_KEEP}p' | xargs -r cp -p -t jeprof\n"
+    f"{_HEAP_NEWEST} | sed -n '{HEAP_DUMPS_KEEP + 1},$p' > jeprof/dropped.txt\n"
+    'echo "heap dumps dropped: $(wc -l < jeprof/dropped.txt)"\n'
+    "fi\n"
+)
 COLLECT_SCRIPT = (
     f"cd {BENCH_DIR}\n"
     "ip -o link show > ip-link.txt\n"
@@ -6587,6 +6730,7 @@ COLLECT_SCRIPT = (
     "du -sb /data/journal/espresso/sqlite > du-sqlite.txt; fi\n"
     f"if [ -d {SQLITE_VOLUME_DIR} ]; then du -sb {SQLITE_VOLUME_DIR} > du-sqlite.txt; fi\n"
     f"if [ -d {PAYLOAD_HOST_DIR} ]; then du -sb {PAYLOAD_HOST_DIR} > du-payload.txt; fi\n"
+    f"{HEAP_COLLECT_SCRIPT}"
     "lscpu > lscpu.txt\n"
     "uname -r > uname.txt\n"
     "grep MemTotal /proc/meminfo > meminfo.txt\n"
@@ -6655,7 +6799,32 @@ COLLECT_EXCLUDES = (
     "--exclude=/latency.py",
     "--exclude=/bbr-hold.sh",
     "--exclude=/pg.json",
+    "--exclude=/heap-bin/",
 )
+
+
+def heap_binary_command(query_engine: QueryEngine) -> str:
+    """Copies the node binaries out of the stopped container, so that jeprof can symbolize the
+    dumps. SQLite's only matters for node0, which runs it."""
+    wanted = [
+        (dest, src)
+        for dest, src in HEAP_BINARIES.items()
+        if query_engine == "sqlite" or dest == "espresso-node.bin"
+    ]
+    lines = [f"mkdir -p {HEAP_BIN_DIR}"]
+    lines += [
+        f"docker cp espresso-node:{src} {HEAP_BIN_DIR}/{dest}" for dest, src in wanted
+    ]
+    return "\n".join(lines) + "\n"
+
+
+def collect_heap_binary(
+    remote: Remote, run_dir: Path, query_engine: QueryEngine
+) -> None:
+    """Every node runs the same image: the first node host serves for all."""
+    host = next(n for n, h in remote.hosts.items() if h["role"] != "ctl")
+    remote.ssh(host, bounded(heap_binary_command(query_engine)))
+    remote.rsync_from(host, f"{HEAP_BIN_DIR}/", run_dir, "--exclude=/dropped.txt")
 
 
 def collect_hosts(
@@ -6677,7 +6846,9 @@ def collect_hosts(
         # The copy runs even when the script failed or timed out: files already on the
         # host (host.jsonl) are still wanted.
         try:
-            remote.ssh(name, bounded(script))
+            done = remote.ssh(name, bounded(script))
+            if "heap dumps dropped" in done.stdout:
+                log.info("%s: %s", name, done.stdout.strip().splitlines()[-1])
         except RemoteError as exc:
             log.warning("collect script %s failed: %s", name, exc)
         try:
@@ -7626,10 +7797,18 @@ def chaos_view(
         "",
         "",
         *(ch.recovery_table(rows, config["chaos"]["kinds"]) if rows else []),
+        *heal_section(run_dir, rows),
         *([""] + throughput if throughput else []),
         *floor_section(run_dir, manifest, consensus, rows, steps, end),
     ]
     return {"lead": lead, "faults": ch.fault_table(rows, t0), "steps": chaos_steps}
+
+
+def heal_section(run_dir: Path, rows: list[ch.FaultRow]) -> list[str]:
+    """The share heal of each `share-wipe` from `metrics.jsonl`; empty without any."""
+    nodes = {r.node for r in rows if r.kind == ch.SHARE_WIPE}
+    table = ch.heal_table(ch.heal_rows(rows, ch.read_heal_series(run_dir, nodes)))
+    return ["", "Share heal from the rejoin:", "", *table] if table else []
 
 
 def floor_section(

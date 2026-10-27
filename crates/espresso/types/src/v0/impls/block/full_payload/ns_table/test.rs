@@ -244,3 +244,25 @@ fn expect_invalid(ns_table: &NsTable, err: NsTableValidationError) {
         bincode::Error::custom(err).to_string(),
     );
 }
+
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
+async fn declared_payload_byte_len_matches_payload() {
+    let mut rng = jf_utils::test_rng();
+    let test = ValidTest::from_tx_lengths(vec![vec![5, 8], vec![7], vec![10, 5, 8]], &mut rng);
+    let block =
+        Payload::from_transactions(&test.all_txs(), &Default::default(), &Default::default())
+            .await
+            .unwrap()
+            .0;
+    assert!(block.ns_table().len().0 > 1);
+    assert_eq!(
+        block.ns_table().payload_byte_len(),
+        block.byte_len().as_usize()
+    );
+
+    let empty = Payload::from_transactions(&[], &Default::default(), &Default::default())
+        .await
+        .unwrap()
+        .0;
+    assert_eq!(empty.ns_table().payload_byte_len(), 0);
+}

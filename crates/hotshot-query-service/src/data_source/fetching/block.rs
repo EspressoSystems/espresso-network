@@ -12,14 +12,25 @@
 
 //! [`Fetchable`] implementation for [`BlockQueryData`] and [`PayloadQueryData`].
 
-use std::{cmp::Ordering, future::IntoFuture, iter::once, ops::RangeBounds, sync::Arc};
+use std::{
+    cmp::Ordering,
+    collections::{HashMap, HashSet},
+    future::IntoFuture,
+    iter::once,
+    ops::RangeBounds,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
+use anyhow::Context;
 use async_trait::async_trait;
 use derivative::Derivative;
 use futures::future::{BoxFuture, FutureExt, join_all, try_join_all};
 use hotshot_types::traits::{
     EncodeBytes, block_contents::BlockHeader, node_implementation::NodeType,
 };
+use parking_lot::Mutex;
+use tokio::{spawn, time::sleep};
 
 use super::{
     AvailabilityProvider, FetchRequest, Fetchable, Fetcher, Heights, Notifiers, RangedFetchable,
@@ -204,6 +215,13 @@ async fn stage_payloads<'a, Types: NodeType>(
     .await
 }
 
+/// Fetch the payload of `header` from a provider.
+///
+/// A block decided by this process without its payload may get it from the node's own consensus,
+/// see [`Builder::with_local_payload_grace`](super::Builder::with_local_payload_grace). Its fetch
+/// waits out the rest of the grace and is dropped if the payload was stored meanwhile. A request
+/// for the block waits on the passive notifier, which storing the local payload triggers. Other
+/// heights are fetched at once.
 pub(super) fn fetch_block_with_header<Types, S, P>(
     fetcher: Arc<Fetcher<Types, S, P>>,
     header: Header<Types>,
@@ -213,14 +231,105 @@ pub(super) fn fetch_block_with_header<Types, S, P>(
     Payload<Types>: QueryablePayload<Types>,
     S: VersionedDataSource + 'static,
     for<'a> S::Transaction<'a>: UpdateAvailabilityStorage<Types>,
+    for<'a> S::ReadOnly<'a>: AvailabilityStorage<Types> + NodeStorage<Types> + PrunedHeightStorage,
+    P: AvailabilityProvider<Types>,
+{
+    if fetcher.payload_fetcher.is_none() {
+        // If we're in light-weight mode, we don't need to fetch the block data.
+        return;
+    }
+    let height = header.block_number();
+    let wait = fetcher.local_grace.remaining(height);
+    if wait.is_zero() {
+        spawn_payload_fetch(&fetcher, header);
+        return;
+    }
+    if !fetcher.local_grace.begin_wait(height) {
+        return;
+    }
+
+    tracing::debug!(
+        height,
+        ?wait,
+        "waiting for the local payload before fetching it"
+    );
+    spawn(async move {
+        sleep(wait).await;
+        fetcher.local_grace.end_wait(height);
+        match fetcher.payload_stored(height).await {
+            Ok(true) => tracing::debug!(height, "payload stored locally, not fetching it"),
+            Ok(false) => spawn_payload_fetch(&fetcher, header),
+            Err(err) => {
+                tracing::warn!(height, "fetching payload: {err:#}");
+                spawn_payload_fetch(&fetcher, header);
+            },
+        }
+    });
+}
+
+/// When this process decided blocks whose payload was missing, and the heights waiting out the
+/// grace for them.
+#[derive(Debug)]
+pub(super) struct LocalPayloadGrace {
+    grace: Duration,
+    decided: Mutex<HashMap<u64, Instant>>,
+    waiting: Mutex<HashSet<u64>>,
+}
+
+impl LocalPayloadGrace {
+    pub(super) fn new(grace: Duration) -> Self {
+        Self {
+            grace,
+            decided: Default::default(),
+            waiting: Default::default(),
+        }
+    }
+
+    pub(super) fn note_decided(&self, height: u64) {
+        if self.grace.is_zero() {
+            return;
+        }
+        let mut decided = self.decided.lock();
+        decided.retain(|_, at| at.elapsed() < self.grace);
+        decided.insert(height, Instant::now());
+    }
+
+    /// What is left of the grace since the decide of `height`; zero for any other height.
+    fn remaining(&self, height: u64) -> Duration {
+        self.decided
+            .lock()
+            .get(&height)
+            .map_or(Duration::ZERO, |at| self.grace.saturating_sub(at.elapsed()))
+    }
+
+    /// Whether the caller is the first to wait for `height`.
+    fn begin_wait(&self, height: u64) -> bool {
+        self.waiting.lock().insert(height)
+    }
+
+    fn end_wait(&self, height: u64) {
+        self.waiting.lock().remove(&height);
+    }
+
+    #[cfg(test)]
+    pub(super) fn waiting(&self) -> usize {
+        self.waiting.lock().len()
+    }
+}
+
+fn spawn_payload_fetch<Types, S, P>(fetcher: &Arc<Fetcher<Types, S, P>>, header: Header<Types>)
+where
+    Types: NodeType,
+    Header<Types>: QueryableHeader<Types>,
+    Payload<Types>: QueryablePayload<Types>,
+    S: VersionedDataSource + 'static,
+    for<'a> S::Transaction<'a>: UpdateAvailabilityStorage<Types>,
+    for<'a> S::ReadOnly<'a>: AvailabilityStorage<Types> + NodeStorage<Types> + PrunedHeightStorage,
     P: AvailabilityProvider<Types>,
 {
     let Some(payload_fetcher) = fetcher.payload_fetcher.as_ref() else {
-        // If we're in light-weight mode, we don't need to fetch the block data.
         return;
     };
-
-    // Now that we have the header, we only need to retrieve the payload.
     tracing::debug!(
         "spawned active fetch for payload {:?} (height {})",
         header.payload_commitment(),
@@ -345,17 +454,54 @@ where
     Payload<Types>: QueryablePayload<Types>,
     S: 'static + VersionedDataSource,
     for<'a> S::Transaction<'a>: UpdateAvailabilityStorage<Types>,
+    for<'a> S::ReadOnly<'a>: AvailabilityStorage<Types> + NodeStorage<Types> + PrunedHeightStorage,
     P: AvailabilityProvider<Types>,
 {
     async fn run(self, payload: Payload<Types>) {
         tracing::debug!("fetched payload {:?}", self.header.payload_commitment());
+        let height = self.header.block_number();
         let block = BlockQueryData::new(self.header, payload);
+        // The node's own payload may have been stored while this fetch was in flight, and
+        // storing rewrites the whole payload. Waiters still get notified: the block can have
+        // become readable without a notification, e.g. through a payload shared with another
+        // height.
+        if block_stored(&self.fetcher, height).await {
+            tracing::debug!(height, "fetched payload already stored");
+            block.notify(&self.fetcher.notifiers).await;
+            return;
+        }
         self.fetcher.store_and_notify(&block).await;
     }
 
     fn height(&self) -> Option<u64> {
         Some(self.header.block_number())
     }
+}
+
+/// Whether the block at `height` is stored per [`Fetcher::payload_stored`] and its payload also
+/// reads back, so a fetch still replaces an unreadable payload record. Only a fetched payload
+/// pays for that read.
+async fn block_stored<Types, S, P>(fetcher: &Fetcher<Types, S, P>, height: u64) -> bool
+where
+    Types: NodeType,
+    Header<Types>: QueryableHeader<Types>,
+    Payload<Types>: QueryablePayload<Types>,
+    S: VersionedDataSource + 'static,
+    for<'a> S::Transaction<'a>: UpdateAvailabilityStorage<Types>,
+    for<'a> S::ReadOnly<'a>: AvailabilityStorage<Types> + NodeStorage<Types> + PrunedHeightStorage,
+    P: AvailabilityProvider<Types>,
+{
+    let checked = async {
+        if !fetcher.payload_stored(height).await? {
+            return Ok(false);
+        }
+        let mut tx = fetcher.read().await.context("opening read transaction")?;
+        anyhow::Ok(tx.get_block(BlockId::Number(height as usize)).await.is_ok())
+    };
+    checked.await.unwrap_or_else(|err| {
+        tracing::warn!(height, "checking whether block is stored: {err:#}");
+        false
+    })
 }
 
 #[async_trait]
@@ -611,5 +757,42 @@ where
     async fn run(self, blocks: NonEmptyRange<BlockQueryData<Types>>) {
         tracing::info!("fetched blocks {}..{}", blocks.start(), blocks.end());
         self.fetcher.store_and_notify(&blocks).await;
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn test_local_payload_grace() {
+        let grace = LocalPayloadGrace::new(Duration::from_secs(60));
+        assert_eq!(grace.remaining(1), Duration::ZERO);
+
+        grace.note_decided(1);
+        let remaining = grace.remaining(1);
+        assert!(remaining > Duration::from_secs(59) && remaining <= Duration::from_secs(60));
+        assert_eq!(grace.remaining(2), Duration::ZERO);
+
+        assert!(grace.begin_wait(1));
+        assert!(!grace.begin_wait(1));
+        grace.end_wait(1);
+        assert!(grace.begin_wait(1));
+    }
+
+    #[test]
+    fn test_local_payload_grace_zero_records_nothing() {
+        let grace = LocalPayloadGrace::new(Duration::ZERO);
+        grace.note_decided(1);
+        assert_eq!(grace.remaining(1), Duration::ZERO);
+    }
+
+    #[test]
+    fn test_local_payload_grace_forgets_expired_decides() {
+        let grace = LocalPayloadGrace::new(Duration::from_millis(10));
+        grace.note_decided(1);
+        std::thread::sleep(Duration::from_millis(20));
+        grace.note_decided(2);
+        assert_eq!(grace.decided.lock().len(), 1);
     }
 }

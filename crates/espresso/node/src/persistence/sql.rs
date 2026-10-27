@@ -92,6 +92,10 @@ use crate::{
 /// shorter than that.
 pub const DEFAULT_ARCHIVE_STATE_MIN_RETENTION: u64 = 500_000;
 
+/// Matches the `--local-payload-grace` default of `5s`.
+#[cfg(any(feature = "embedded-db", test))]
+const DEFAULT_LOCAL_PAYLOAD_GRACE: Duration = Duration::from_secs(5);
+
 /// Matches the `--share-retention` default of `7d`.
 #[cfg(any(feature = "embedded-db", test))]
 const DEFAULT_SHARE_RETENTION: Duration = Duration::from_secs(7 * 24 * 60 * 60);
@@ -281,6 +285,12 @@ pub struct Options {
     /// The minimum delay between active fetches in a stream.
     #[clap(long, env = "ESPRESSO_NODE_ACTIVE_FETCH_DELAY", value_parser = parse_duration)]
     pub(crate) active_fetch_delay: Option<Duration>,
+
+    /// How long after a block's timestamp its payload is left to this node's own consensus
+    /// before the query service fetches it from a peer. Consensus can decide a block before VID
+    /// reconstruction yields its payload.
+    #[clap(long, env = "ESPRESSO_NODE_LOCAL_PAYLOAD_GRACE", value_parser = parse_duration, default_value = "5s")]
+    pub(crate) local_payload_grace: Duration,
 
     /// The minimum delay between loading chunks in a stream.
     #[clap(long, env = "ESPRESSO_NODE_CHUNK_FETCH_DELAY", value_parser = parse_duration)]
@@ -539,6 +549,7 @@ impl From<SqliteOptions> for Options {
             consensus_pruning: Default::default(),
             fetch_rate_limit: None,
             active_fetch_delay: None,
+            local_payload_grace: DEFAULT_LOCAL_PAYLOAD_GRACE,
             chunk_fetch_delay: None,
             ranges_concurrency: None,
             sync_status_chunk_size: None,
@@ -3440,6 +3451,19 @@ mod test {
         assert_eq!(opt.blob_dir, None);
         assert_eq!(opt.share_retention, DEFAULT_SHARE_RETENTION);
         assert_eq!(opt.share_retention, Duration::from_secs(7 * 24 * 3600));
+    }
+
+    #[test]
+    fn local_payload_grace_defaults_to_five_seconds() {
+        assert_eq!(
+            parse_sql_options(&[]).local_payload_grace,
+            DEFAULT_LOCAL_PAYLOAD_GRACE
+        );
+        assert_eq!(DEFAULT_LOCAL_PAYLOAD_GRACE, Duration::from_secs(5));
+        assert_eq!(
+            parse_sql_options(&["--local-payload-grace", "0s"]).local_payload_grace,
+            Duration::ZERO
+        );
     }
 
     #[test]

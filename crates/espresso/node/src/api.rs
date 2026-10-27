@@ -90,6 +90,7 @@ pub mod data_source;
 pub mod fs;
 pub mod light_client;
 pub mod options;
+pub mod payload_budget;
 pub mod sql;
 pub mod state;
 pub mod unlock_schedule;
@@ -3530,6 +3531,7 @@ mod test {
         consensus::{
             header::HeaderProof,
             leaf::{LeafProof, LeafProofHint},
+            namespace::NamespaceProof,
             payload::PayloadProof,
         },
         testing::EpochChangeQuorum,
@@ -3608,6 +3610,7 @@ mod test {
     use pretty_assertions::assert_matches;
     use rand::seq::SliceRandom;
     use rstest::rstest;
+    use serde::de::DeserializeOwned;
     use staking_cli::{
         Transaction as StakingTransaction, demo::DelegationConfig, fetch_commission,
         update_commission, update_network_config,
@@ -3621,7 +3624,7 @@ mod test {
         net::{TcpListener, TcpStream},
         time::sleep,
     };
-    use vbs::version::StaticVersion;
+    use vbs::{BinarySerializer, Serializer, version::StaticVersion};
     use versions::{
         DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_VERSION, LARGE_BLOCK_VERSION, NEW_PROTOCOL_VERSION,
         Upgrade,
@@ -3657,6 +3660,7 @@ mod test {
         CatchupParams, L1Params,
         api::{
             options::Query,
+            payload_budget::PayloadBudget,
             sql::{impl_testable_data_source::tmp_options, reconstruct_state},
             test_helpers::STAKE_TABLE_CAPACITY_FOR_TEST,
         },
@@ -3908,6 +3912,156 @@ mod test {
                 .unwrap();
             assert_eq!(res.status(), status, "{path}");
         }
+    }
+
+    /// Start a network with the given payload budget and two decided blocks of one 4 KiB
+    /// transaction each. Returns what must stay alive, the API port and the block heights.
+    async fn payload_admission_network(budget: PayloadBudget) -> (impl Sized, u16, Vec<u64>) {
+        let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
+        let storage = SqlDataSource::create_storage().await;
+        let mut api_config = SqlDataSource::options(&storage, Options::with_port(port))
+            .light_client(Default::default());
+        let query = api_config.query.as_mut().unwrap();
+        query.payload_budget_override = Some(budget);
+        let config = TestNetworkConfigBuilder::default()
+            .api_config(api_config)
+            .network_config(TestConfigBuilder::default().build())
+            .build();
+        let network = TestNetwork::new(config, TEST_UPGRADE).await;
+
+        let mut events = network.server.event_stream();
+        let ns = NamespaceId::from(42_u32);
+        let mut heights = vec![];
+        for payload in [vec![1; 4096], vec![2; 4096]] {
+            let tx = Transaction::new(ns, payload);
+            network.server.submit_transaction(tx.clone()).await.unwrap();
+            heights.push(wait_for_decide_on_handle(&mut events, &tx).await.0);
+        }
+        let client: Client<ClientErr, StaticVersion<0, 1>> =
+            Client::new(format!("http://localhost:{port}").parse().unwrap());
+        wait_until_block_height(&client, "node/block-height", heights[1] + 1).await;
+        ((storage, network), port, heights)
+    }
+
+    /// Blocks of 4 KiB against a 1 KiB pool: every payload route still serves (a request larger
+    /// than its pool takes all of it), ranges requests acquire once for all their ranges, and
+    /// concurrent requests that find the pool held get a 503 with `Retry-After`.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_payload_admission() {
+        let (_network, port, heights) =
+            payload_admission_network(PayloadBudget::new(1).with_wait(Duration::from_millis(1)))
+                .await;
+        let ns = u64::from(NamespaceId::from(42_u32));
+
+        let base = format!("http://localhost:{port}/v1");
+        let http = reqwest::Client::new();
+        let height = heights[0];
+        let two_ranges = serde_json::json!([
+            {"start": heights[0], "end": heights[0] + 1},
+            {"start": heights[1], "end": heights[1] + 1},
+        ]);
+
+        for path in [
+            format!("light-client/payload/{height}"),
+            format!("light-client/payload/{height}/{}", height + 1),
+            format!("light-client/namespace/{height}/{ns}"),
+            format!("light-client/namespace/{height}/{}/{ns}", height + 1),
+            format!("availability/block/{height}"),
+            format!("availability/payload/{height}"),
+            format!("availability/block/{height}/{}", height + 1),
+            format!("availability/transaction/{height}/0"),
+        ] {
+            let res = http.get(format!("{base}/{path}")).send().await.unwrap();
+            assert_eq!(res.status(), reqwest::StatusCode::OK, "{path}");
+            res.bytes().await.unwrap();
+        }
+        // Each range alone exceeds the pool, so this fails unless the per-range loads share the
+        // request's permit.
+        for path in ["availability/block/ranges", "light-client/payload/ranges"] {
+            let res = http
+                .post(format!("{base}/{path}"))
+                .json(&two_ranges)
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(res.status(), reqwest::StatusCode::OK, "{path}");
+            res.bytes().await.unwrap();
+        }
+
+        // Concurrent ranges overlap on the one-pool budget and some outwait the 1 ms wait. Retry
+        // rounds in case a round happens to serialize.
+        let mut rejected = None;
+        for _ in 0..10 {
+            let responses = futures::future::join_all((0..64).map(|_| {
+                http.post(format!("{base}/availability/block/ranges"))
+                    .json(&two_ranges)
+                    .send()
+            }))
+            .await;
+            for res in responses.into_iter().map(Result::unwrap) {
+                match res.status() {
+                    reqwest::StatusCode::OK => {},
+                    reqwest::StatusCode::SERVICE_UNAVAILABLE => {
+                        rejected = Some(res.headers().clone());
+                    },
+                    status => panic!("unexpected status {status}"),
+                }
+                res.bytes().await.unwrap();
+            }
+            if rejected.is_some() {
+                break;
+            }
+        }
+        let rejected = rejected.expect("no request was turned away");
+        assert_eq!(rejected[reqwest::header::RETRY_AFTER], "1");
+
+        // Content-Length survives, the body is not wrapped.
+        let res = http
+            .get(format!("{base}/light-client/payload/{height}"))
+            .send()
+            .await
+            .unwrap();
+        assert!(res.content_length().unwrap() > 4096);
+    }
+
+    /// A range pool of 20 KiB with 10 KiB held: a 4 KiB block fits as binary (2x, about 9 KiB)
+    /// and not as JSON (4x, about 17 KiB).
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_payload_admission_weighs_binary_below_json() {
+        let budget = PayloadBudget::new(40 * 1024).with_wait(Duration::from_millis(1));
+        let (_network, port, heights) = payload_admission_network(budget.clone()).await;
+        let _held = budget.acquire_ranges(10 * 1024).await.unwrap();
+        let range = serde_json::json!([{"start": heights[0], "end": heights[0] + 1}]);
+
+        let post = |accept: &str| {
+            reqwest::Client::new()
+                .post(format!(
+                    "http://localhost:{port}/v1/availability/block/ranges"
+                ))
+                .header(reqwest::header::ACCEPT, accept)
+                .json(&range)
+                .send()
+        };
+
+        let binary = post("application/octet-stream").await.unwrap();
+        assert_eq!(binary.status(), reqwest::StatusCode::OK);
+        let json = post("application/json").await.unwrap();
+        assert_eq!(json.status(), reqwest::StatusCode::SERVICE_UNAVAILABLE);
+
+        let lc_range = |accept: &str| {
+            reqwest::Client::new()
+                .get(format!(
+                    "http://localhost:{port}/v1/light-client/payload/{}/{}",
+                    heights[0],
+                    heights[0] + 1
+                ))
+                .header(reqwest::header::ACCEPT, accept)
+                .send()
+        };
+        let binary = lc_range("application/octet-stream").await.unwrap();
+        assert_eq!(binary.status(), reqwest::StatusCode::OK);
+        let json = lc_range("application/json").await.unwrap();
+        assert_eq!(json.status(), reqwest::StatusCode::SERVICE_UNAVAILABLE);
     }
 
     async fn run_catchup_test(url_suffix: &str) {
@@ -5866,6 +6020,8 @@ mod test {
     )> {
         let port = reserve_tcp_port().expect("No ports free for query service");
         let mut db = tmp_options(storage);
+        // As `run::init_follower_with_storage` sets it.
+        db.local_payload_grace = Duration::ZERO;
         let persistence = db.create().await?;
         let handle = Options::with_port(port)
             .query_sql(
@@ -11905,6 +12061,39 @@ mod test {
         Ok(())
     }
 
+    /// GET with `Accept: application/octet-stream` and decode the VBS body.
+    ///
+    /// Internal clients (`QueryServiceClient`, peer catchup) send this `Accept` header. A handler
+    /// that ignores it answers JSON, which for payload routes base64-encodes the whole block.
+    async fn assert_binary_endpoint<T: DeserializeOwned>(
+        http: &reqwest::Client,
+        api_port: u16,
+        path: &str,
+    ) -> anyhow::Result<T> {
+        let resp = http
+            .get(format!("http://localhost:{api_port}/v1/{path}"))
+            .header("Accept", "application/octet-stream")
+            .send()
+            .await?;
+        let status = resp.status();
+        assert!(
+            status.is_success(),
+            "v1/{path}: binary GET returned {status}, expected 2xx"
+        );
+        let content_type = resp
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_owned);
+        assert_eq!(
+            content_type.as_deref(),
+            Some("application/octet-stream"),
+            "v1/{path}: Accept header ignored"
+        );
+        let body = resp.bytes().await?;
+        Serializer::<StaticVersion<0, 1>>::deserialize(&body)
+    }
+
     /// Connect to the WebSocket endpoint, collect up to 10 messages, and assert that at least 2
     /// of them are valid JSON.
     async fn assert_ws_endpoint(api_port: u16, path: &str) -> anyhow::Result<()> {
@@ -12909,6 +13098,41 @@ mod test {
                 ),
             )
             .await?;
+            let proof: PayloadProof = assert_binary_endpoint(
+                &http,
+                api_port,
+                &format!("light-client/payload/{avail_block}"),
+            )
+            .await?;
+            proof.verify(&avail_header)?;
+            let proofs: Vec<PayloadProof> = assert_binary_endpoint(
+                &http,
+                api_port,
+                &format!("light-client/payload/{avail_block}/{}", avail_block + 1),
+            )
+            .await?;
+            assert_eq!(proofs.len(), 1);
+            let proof: NamespaceProof = assert_binary_endpoint(
+                &http,
+                api_port,
+                &format!(
+                    "light-client/namespace/{avail_block}/{}",
+                    u64::from(avail_ns)
+                ),
+            )
+            .await?;
+            proof.verify(&avail_header, avail_ns)?;
+            let proofs: Vec<NamespaceProof> = assert_binary_endpoint(
+                &http,
+                api_port,
+                &format!(
+                    "light-client/namespace/{avail_block}/{}/{}",
+                    avail_block + 1,
+                    u64::from(avail_ns)
+                ),
+            )
+            .await?;
+            assert_eq!(proofs.len(), 1);
 
             // Regression: an oversized range on the plural namespaces route must return
             // 400 Bad Request (the status carried by the query-service error), not 500.
@@ -12926,6 +13150,17 @@ mod test {
                 400,
             )
             .await?;
+            let by_ns: Vec<HashMap<NamespaceId, NamespaceProof>> = assert_binary_endpoint(
+                &http,
+                api_port,
+                &format!(
+                    "light-client/namespaces/{avail_block}/{}/{encoded_ns}",
+                    avail_block + 1
+                ),
+            )
+            .await?;
+            assert_eq!(by_ns.len(), 1);
+            by_ns[0][&avail_ns].verify(&avail_header, avail_ns)?;
 
             // Token endpoints.
             assert_json_endpoint(&http, api_port, "token/total-minted-supply").await?;

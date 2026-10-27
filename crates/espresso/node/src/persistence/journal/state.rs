@@ -4,19 +4,15 @@
 
 use std::collections::BTreeMap;
 
-use espresso_types::{Header, Leaf2, Payload, SeqTypes};
+use espresso_types::{Leaf2, SeqTypes};
 use hotshot_new_protocol::message::Certificate2;
 use hotshot_types::{
-    data::{DaProposal2, QuorumProposalWrapper, VidDisperseShare},
+    data::{QuorumProposalWrapper, VidDisperseShare},
     event::HotShotAction,
     message::Proposal,
     simple_certificate::{
         CertificatePair, LightClientStateUpdateCertificateV2, NextEpochQuorumCertificate2,
         QuorumCertificate2, UpgradeCertificate,
-    },
-    traits::{
-        EncodeBytes as _,
-        block_contents::{BlockHeader as _, BlockPayload as _},
     },
     vote::HasViewNumber,
 };
@@ -37,11 +33,6 @@ pub struct State {
     pub voted: Option<ViewNumber>,
     pub restart: Option<ViewNumber>,
     pub high_qc2: Option<QuorumCertificate2<SeqTypes>>,
-    pub eqc: Option<(
-        QuorumCertificate2<SeqTypes>,
-        NextEpochQuorumCertificate2<SeqTypes>,
-    )>,
-    pub next_epoch_qc: Option<NextEpochQuorumCertificate2<SeqTypes>>,
     pub upgrade: Option<UpgradeCertificate<SeqTypes>>,
     pub anchor: Option<(
         Leaf2,
@@ -107,25 +98,11 @@ pub enum Record {
     },
     StateCert(LightClientStateUpdateCertificateV2<SeqTypes>),
     Upgrade(Option<UpgradeCertificate<SeqTypes>>),
-    Eqc(
-        QuorumCertificate2<SeqTypes>,
-        NextEpochQuorumCertificate2<SeqTypes>,
-    ),
-    NextEpochQc(NextEpochQuorumCertificate2<SeqTypes>),
     Vid(Proposal<SeqTypes, VidDisperseShare<SeqTypes>>),
-    Da(Proposal<SeqTypes, DaProposal2<SeqTypes>>),
     /// The query service has ingested every decided leaf up to `view`, at block `height`.
     Processed {
         view: ViewNumber,
         height: u64,
-    },
-    /// A payload this node obtained for `view`. No longer written: a query node holds payloads
-    /// in memory until their view is replayed. Still decoded so segments written before that
-    /// recover.
-    PendingPayload {
-        view: ViewNumber,
-        header: Header,
-        payload: Payload,
     },
 }
 
@@ -142,12 +119,11 @@ pub enum Kind {
     Cert2 = 6,
     StateCert = 7,
     Upgrade = 8,
-    Eqc = 9,
-    NextEpochQc = 10,
+    // 9 (Eqc) and 10 (NextEpochQc) are reserved: no longer written.
     Vid = 11,
-    Da = 12,
+    // 12 (Da) is reserved: no longer written.
     Processed = 13,
-    PendingPayload = 14,
+    // 14 (PendingPayload) is reserved: no longer written.
 }
 
 // The lane layer recognizes snapshot frames by this tag.
@@ -164,12 +140,8 @@ impl Kind {
             6 => Self::Cert2,
             7 => Self::StateCert,
             8 => Self::Upgrade,
-            9 => Self::Eqc,
-            10 => Self::NextEpochQc,
             11 => Self::Vid,
-            12 => Self::Da,
             13 => Self::Processed,
-            14 => Self::PendingPayload,
             _ => return None,
         })
     }
@@ -197,12 +169,8 @@ impl Record {
             Self::Cert2 { .. } => Kind::Cert2,
             Self::StateCert(_) => Kind::StateCert,
             Self::Upgrade(_) => Kind::Upgrade,
-            Self::Eqc(..) => Kind::Eqc,
-            Self::NextEpochQc(_) => Kind::NextEpochQc,
             Self::Vid(_) => Kind::Vid,
-            Self::Da(_) => Kind::Da,
             Self::Processed { .. } => Kind::Processed,
-            Self::PendingPayload { .. } => Kind::PendingPayload,
         }
     }
 
@@ -218,12 +186,8 @@ impl Record {
             Self::Leaf { leaf, .. } => leaf.view_number().u64(),
             Self::Cert2 { view, .. } => view.u64(),
             Self::StateCert(c) => c.light_client_state.view_number,
-            Self::Eqc(qc, _) => qc.view_number().u64(),
-            Self::NextEpochQc(n) => n.view_number().u64(),
             Self::Vid(p) => p.data.view_number().u64(),
-            Self::Da(p) => p.data.view_number().u64(),
             Self::Processed { view, .. } => view.u64(),
-            Self::PendingPayload { view, .. } => view.u64(),
         }
     }
 
@@ -241,14 +205,8 @@ impl Record {
             Self::Cert2 { cert, .. } => bincode::serialize(cert)?,
             Self::StateCert(c) => bincode::serialize(c)?,
             Self::Upgrade(u) => bincode::serialize(u)?,
-            Self::Eqc(qc, next) => bincode::serialize(&(qc, next))?,
-            Self::NextEpochQc(n) => bincode::serialize(n)?,
             Self::Vid(p) => bincode::serialize(p)?,
-            Self::Da(p) => bincode::serialize(p)?,
             Self::Processed { height, .. } => bincode::serialize(height)?,
-            Self::PendingPayload {
-                header, payload, ..
-            } => bincode::serialize(&(header, payload.encode().as_ref()))?,
         })
     }
 
@@ -277,35 +235,13 @@ impl Record {
             },
             Kind::StateCert => Self::StateCert(bincode::deserialize(body)?),
             Kind::Upgrade => Self::Upgrade(bincode::deserialize(body)?),
-            Kind::Eqc => {
-                let (qc, next) = bincode::deserialize(body)?;
-                Self::Eqc(qc, next)
-            },
-            Kind::NextEpochQc => Self::NextEpochQc(bincode::deserialize(body)?),
             Kind::Vid => Self::Vid(bincode::deserialize(body)?),
-            Kind::Da => Self::Da(bincode::deserialize(body)?),
             Kind::Processed => Self::Processed {
                 view: ViewNumber::new(view),
                 height: bincode::deserialize(body)?,
             },
-            Kind::PendingPayload => {
-                let (header, payload) = decode_pending_payload(body)?;
-                Self::PendingPayload {
-                    view: ViewNumber::new(view),
-                    header,
-                    payload,
-                }
-            },
         })
     }
-}
-
-/// Body of a [`Record::PendingPayload`] frame. The payload is stored as its encoded bytes, which
-/// only decode against the header's namespace table.
-pub fn decode_pending_payload(body: &[u8]) -> anyhow::Result<(Header, Payload)> {
-    let (header, payload) = bincode::deserialize::<(Header, Vec<u8>)>(body)?;
-    let payload = Payload::from_bytes(&payload, header.metadata());
-    Ok((header, payload))
 }
 
 impl State {
@@ -313,10 +249,7 @@ impl State {
     /// Returns a state cert finalized by a `Leaf` reaching its view, if any.
     pub fn apply(&mut self, rec: &Record) -> Option<Finalized> {
         match rec {
-            Record::Snapshot(_)
-            | Record::Vid(_)
-            | Record::Da(_)
-            | Record::PendingPayload { .. } => None,
+            Record::Snapshot(_) | Record::Vid(_) => None,
             Record::Cert2 { view, cert } => {
                 if let Some(replay) = &mut self.replay
                     && !replay.is_replayed(*view)
@@ -414,22 +347,6 @@ impl State {
                 self.upgrade = u.clone();
                 None
             },
-            // Unconditional overwrite, matching fs/sql `store_eqc` (unlike `HighQc2`/`NextEpochQc`,
-            // which only ever advance).
-            Record::Eqc(qc, next) => {
-                self.eqc = Some((qc.clone(), next.clone()));
-                None
-            },
-            Record::NextEpochQc(next) => {
-                if self
-                    .next_epoch_qc
-                    .as_ref()
-                    .is_none_or(|cur| next.view_number() > cur.view_number())
-                {
-                    self.next_epoch_qc = Some(next.clone());
-                }
-                None
-            },
         }
     }
 
@@ -445,14 +362,10 @@ impl State {
 
 #[cfg(test)]
 mod tests {
-    use std::marker::PhantomData;
-
     use committable::Committable;
     use espresso_types::{NodeState, ValidatedState};
     use hotshot_example_types::node_types::TEST_VERSIONS;
-    use hotshot_types::{
-        data::QuorumProposal2, light_client::LightClientState, simple_vote::NextEpochQuorumData2,
-    };
+    use hotshot_types::{data::QuorumProposal2, light_client::LightClientState};
 
     use super::*;
 
@@ -491,20 +404,6 @@ mod tests {
         qc.view_number = leaf.view_number();
         qc.data.leaf_commit = Committable::commit(&leaf);
         (leaf, qc)
-    }
-
-    fn next_epoch_qc_at(
-        base: &QuorumCertificate2<SeqTypes>,
-        view: u64,
-    ) -> NextEpochQuorumCertificate2<SeqTypes> {
-        let data: NextEpochQuorumData2<SeqTypes> = base.data.into();
-        NextEpochQuorumCertificate2::new(
-            data.clone(),
-            data.commit(),
-            ViewNumber::new(view),
-            None,
-            PhantomData,
-        )
     }
 
     fn state_cert(view: u64) -> LightClientStateUpdateCertificateV2<SeqTypes> {
@@ -566,25 +465,6 @@ mod tests {
         s.apply(&Record::HighQc2(qc3));
         s.apply(&Record::HighQc2(qc1));
         assert_eq!(s.high_qc2.unwrap().view_number(), ViewNumber::new(3));
-    }
-
-    #[tokio::test]
-    async fn eqc_overwrites_unconditionally_next_epoch_qc_applies_as_max() {
-        let (_, qc5) = leaf_and_qc(5).await;
-        let (_, qc2) = leaf_and_qc(2).await;
-        let next5 = next_epoch_qc_at(&qc5, 5);
-        let next2 = next_epoch_qc_at(&qc2, 2);
-
-        let mut s = State::default();
-        s.apply(&Record::Eqc(qc5, next5));
-        s.apply(&Record::Eqc(qc2, next2));
-        assert_eq!(s.eqc.as_ref().unwrap().0.view_number(), ViewNumber::new(2));
-
-        let (_, qc4) = leaf_and_qc(4).await;
-        let (_, qc1) = leaf_and_qc(1).await;
-        s.apply(&Record::NextEpochQc(next_epoch_qc_at(&qc4, 4)));
-        s.apply(&Record::NextEpochQc(next_epoch_qc_at(&qc1, 1)));
-        assert_eq!(s.next_epoch_qc.unwrap().view_number(), ViewNumber::new(4));
     }
 
     #[tokio::test]

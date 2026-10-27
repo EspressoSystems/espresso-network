@@ -1277,3 +1277,66 @@ def test_the_trace_dir_is_collected_and_wiped_by_a_reset(isolated: Path) -> None
     awsb.collect_hosts(hosts, [hosts.hosts["node0"]], isolated, "postgres")
     (rsync,) = [c for c in runner.calls if c[0] == "rsync"]
     assert not [a for a in rsync if a.startswith("--exclude") and "trace" in a]
+
+
+def heap_cfg(**kw: Any) -> Any:
+    return two_node_cfg(allocator="jemalloc", heap_profile=True, **kw)
+
+
+def test_heap_profile_sets_the_env_and_creates_the_dump_dir(tmp_path: Path) -> None:
+    render_run_dir(tmp_path, heap_cfg(heap_profile_interval=30))
+    for node in ("node0", "node1"):
+        env = read_host_file(tmp_path, node, "node.env")
+        assert "\n_RJEM_MALLOC_CONF=prof:true," in env
+        assert ",lg_prof_interval:30,prof_prefix:/store/jeprof/heap\n" in env
+        assert "mkdir -p /data/journal/jeprof\n" in read_host_file(
+            tmp_path, node, "start.sh"
+        )
+    assert "MALLOC_CONF" not in read_host_file(tmp_path, "ctl", "ctl.env")
+
+
+def test_heap_profile_off_writes_no_env_or_dir(tmp_path: Path) -> None:
+    render_run_dir(tmp_path, two_node_cfg())
+    for node in ("node0", "node1"):
+        assert "MALLOC_CONF" not in read_host_file(tmp_path, node, "node.env")
+        assert "jeprof" not in read_host_file(tmp_path, node, "start.sh")
+
+
+def test_node_env_overrides_the_heap_profile_conf(tmp_path: Path) -> None:
+    cfg = heap_cfg(node_env=("_RJEM_MALLOC_CONF=prof:false",))
+    render_run_dir(tmp_path, cfg)
+    text = read_host_file(tmp_path, "node1", "node.env")
+    assert text.count("_RJEM_MALLOC_CONF=") == 1
+    assert "\n_RJEM_MALLOC_CONF=prof:false\n" in text
+
+
+def test_recreate_after_a_wipe_makes_the_dump_dir_again() -> None:
+    host: Any = {"name": "node1", "role": "validator"}
+    assert "jeprof" not in awsb.render_recreate_sh(host, fake_images())
+    assert "mkdir -p /data/journal/jeprof" in awsb.render_recreate_sh(
+        host, fake_images(), heap_profile=True
+    )
+
+
+def test_collect_script_keeps_the_newest_dumps_and_lists_the_rest() -> None:
+    script = awsb.COLLECT_SCRIPT
+    assert "cp -p -t jeprof" in script
+    assert f"sed -n '1,{awsb.HEAP_DUMPS_KEEP}p'" in script
+    assert f"sed -n '{awsb.HEAP_DUMPS_KEEP + 1},$p' > jeprof/dropped.txt" in script
+    assert script.startswith("cd /opt/bench\n")
+
+
+def test_heap_binary_command_copies_the_sqlite_binary_only_for_sqlite() -> None:
+    postgres = awsb.heap_binary_command("postgres")
+    assert "docker cp espresso-node:/bin/espresso-node-postgres " in postgres
+    assert "sqlite" not in postgres
+    sqlite = awsb.heap_binary_command("sqlite")
+    assert "espresso-node:/bin/espresso-node-sqlite /opt/bench/heap-bin/" in sqlite
+
+
+def test_the_heap_binary_dir_is_excluded_from_the_host_rsync(isolated: Path) -> None:
+    runner = Scripted({})
+    hosts = remote(runner, isolated)
+    awsb.collect_hosts(hosts, [hosts.hosts["node0"]], isolated, "postgres")
+    (rsync,) = [c for c in runner.calls if c[0] == "rsync"]
+    assert "--exclude=/heap-bin/" in rsync

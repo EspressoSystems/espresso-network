@@ -1,4 +1,9 @@
-use std::{collections::BTreeMap, marker::PhantomData, sync::Arc, time::Duration};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    marker::PhantomData,
+    sync::Arc,
+    time::Duration,
+};
 
 use async_trait::async_trait;
 use committable::Commitment;
@@ -41,6 +46,34 @@ pub trait NewProtocolStorage<T: NodeType>: StorageTrait<T> {
 
     /// Load the persisted locked QC, if any.
     async fn load_high_qc2(&self) -> anyhow::Result<Option<Certificate1<T>>>;
+
+    /// Persist a VID share, with `stamp` the unix seconds of its proposal's header. Backends that
+    /// do not age shares by header time ignore it.
+    async fn append_vid_stamped(
+        &self,
+        proposal: &SignedProposal<T, VidDisperseShare<T>>,
+        _stamp: u32,
+    ) -> anyhow::Result<()> {
+        StorageTrait::append_vid(self, proposal).await
+    }
+
+    /// This node's stored VID share for `view`, for serving to peers.
+    async fn load_vid_share(
+        &self,
+        view: ViewNumber,
+    ) -> anyhow::Result<Option<SignedProposal<T, VidDisperseShare<T>>>>;
+
+    /// Views whose VID share is stored.
+    async fn held_vid_views(&self) -> anyhow::Result<BTreeSet<ViewNumber>>;
+
+    /// Decided leaves with header time at least `min_header_ts`, newest first.
+    async fn decided_leaves(&self, min_header_ts: u64) -> anyhow::Result<Vec<Leaf2<T>>>;
+
+    /// Write the archive copies of the decided leaves at `views`, which outlive the wal and are
+    /// lost with the share store.
+    async fn restore_leaf_copies(&self, _views: &BTreeSet<ViewNumber>) -> anyhow::Result<()> {
+        Ok(())
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -136,8 +169,17 @@ impl<T: NodeType, S: NewProtocolStorage<T>> Storage<T, S> {
         self
     }
 
-    pub fn append_vid(&mut self, vid_share: VidDisperseShare2<T>) {
+    /// `header_timestamp` is the proposal header's timestamp in seconds.
+    pub fn append_vid(&mut self, vid_share: VidDisperseShare2<T>, header_timestamp: u64) {
         let view = vid_share.view_number;
+        let Ok(stamp) = u32::try_from(header_timestamp) else {
+            error!(
+                %view,
+                header_timestamp,
+                "header timestamp does not fit a u32 stamp"
+            );
+            return;
+        };
         let storage = self.storage.clone();
         let private_key = self.private_key.clone();
         let timer = self
@@ -151,7 +193,7 @@ impl<T: NodeType, S: NewProtocolStorage<T>> Storage<T, S> {
                 return None;
             };
             loop {
-                match storage.append_vid(&proposal).await {
+                match storage.append_vid_stamped(&proposal, stamp).await {
                     Ok(()) => {
                         finish_measurement(timer);
                         return Some(StorageOutput::Vid(view));
@@ -354,5 +396,20 @@ impl<T: NodeType> NewProtocolStorage<T> for TestStorage<T> {
 
     async fn load_high_qc2(&self) -> anyhow::Result<Option<Certificate1<T>>> {
         Ok(self.high_qc_cloned().await)
+    }
+
+    async fn load_vid_share(
+        &self,
+        view: ViewNumber,
+    ) -> anyhow::Result<Option<SignedProposal<T, VidDisperseShare<T>>>> {
+        Ok(self.vid_share(view).await)
+    }
+
+    async fn held_vid_views(&self) -> anyhow::Result<BTreeSet<ViewNumber>> {
+        Ok(self.vids_cloned().await.into_keys().collect())
+    }
+
+    async fn decided_leaves(&self, min_header_ts: u64) -> anyhow::Result<Vec<Leaf2<T>>> {
+        Ok(self.decided_leaves_cloned(min_header_ts).await)
     }
 }

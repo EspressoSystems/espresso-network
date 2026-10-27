@@ -258,6 +258,11 @@ just bench aws run --tag chaos-dense --chaos --nodes 32 --query-nodes 3 --chaos-
     `--chaos-kinds restart,kill,wipe,mass-restart` or alone): `docker restart` of every node, or of `--chaos-mass-nodes`
     of them, in one tick, all ssh in parallel, to test recovery from storage. `mass-kill` (opt-in, same use):
     `docker kill` of the group, `docker start` after `--chaos-kill-down`.
+  - `share-wipe` (opt-in, any node): `docker stop`, `/data/journal/espresso/journal/share` moved to
+    `/data/journal/share.orig.<ts>`, `docker start` (also when the move fails; a missing lane fails before the stop).
+    The path is logged as `chaos: <node> share lane moved to <path>`. After the heal, compare the lanes:
+    `python3 share_diff.py <orig_dir> <healed_dir>` prints `equal=N differ=N orig_only=N healed_only=N`, exit 1 if
+    `differ` > 0.
 - Faults beyond `f` only through the mass kinds. A group holding a third of the stake or more halts the network; its
   members rejoin only after a block decided after the fault.
 - Mass scheduling (`mass-restart` and `mass-kill`): bypasses the fault budget, query floor and peer rules. Issued only
@@ -464,6 +469,23 @@ just bench aws run --tag release-x --leader-trace
     `trace/leader_path_typical.png`, `trace/leader_path_worst.png`, `trace/finality.png`, `trace/stats.json`,
     `trace/leader_path.md` (segment medians per load step).
   - With `steps.json`, plots and stats cover only views whose t0 lies in a step's measured window `t_mid`..`t_end`.
+- `--heap-profile`: jemalloc heap profiles of every node; needs `--allocator jemalloc`, refused otherwise.
+  - Build the image: `gh workflow run build-allocators.yml --repo EspressoSystems/espresso-network --ref <branch>` (tag
+    `<branch>-jemalloc`, `tikv-jemallocator` with `profiling`, symbols not stripped).
+  - Run: `just bench aws run --tag <branch> --allocator jemalloc --heap-profile [--heap-profile-interval LG_BYTES]`.
+  - Nodes get
+    `_RJEM_MALLOC_CONF=prof:true,prof_active:true,prof_final:true,lg_prof_sample:19,lg_prof_interval:N,prof_prefix:/store/jeprof/heap`
+    (`N` = `--heap-profile-interval`, default 32: a dump per 4 GiB allocated; sampling every 512 KiB). `start.sh` and
+    `recreate.sh` create host `/data/journal/jeprof` (mode 777).
+  - `prof_final` writes a last dump when `docker stop` ends the node during the freeze.
+  - Collected: newest 20 dumps per node in `hosts/<name>/jeprof/*.heap`; `dropped.txt` lists older ones left on the host
+    (count in the log). The binary is copied out of the stopped container as `espresso-node.bin`
+    (`espresso-node-sqlite.bin` with `--query-engine sqlite`, used for node0) into the run dir.
+  - Report: `scripts/network-bench/heap-report RUN_DIR [--top N]` symbolizes the newest dump per node with `readelf` and
+    `nm` (devshell `binutils`) against the binary named in the dump's `MAPPED_LIBRARIES`; writes
+    `RUN_DIR/heap/<node>.txt` (total, top N flat by first non-allocator frame, top N cumulative). `jeprof` is not used:
+    it assumes LOAD segments have vaddr == file offset, false for the node binary.
+  - Part of the config hash when on. Profiling adds CPU and memory overhead: not for capacity numbers.
 
 ### Baselines
 
@@ -542,6 +564,8 @@ Where:
 | ------------------------------------- | ------------------------------ | ------------ | --------------------------------------------------------------------------------------------- |
 | `--tag`                               | required; fleet's on `--fleet` | all          | ghcr image tag pushed by CI                                                                   |
 | `--allocator`                         | none                           | all          | `jemalloc`, `mimalloc`, `snmalloc`, `tcmalloc`                                                |
+| `--heap-profile`                      | off                            | per run      | jemalloc heap dumps per node (needs `--allocator jemalloc`)                                   |
+| `--heap-profile-interval LG_BYTES`    | 32                             | per run      | dump every 2^LG_BYTES bytes allocated                                                         |
 | `--nodes`                             | 5                              | provision    | validator count, `node0` included                                                             |
 | `--query-nodes`                       | 1                              | provision    | query service nodes, the first `K` of `--nodes`; above 1 needs `--query-db colocated`         |
 | `--node-type`                         | `c8g.4xlarge`                  | provision    | node instance type                                                                            |
@@ -916,6 +940,7 @@ runs/01-run/             one measurement
   stake-table.json final-<node>.prom
   run.json agent-state.json agent.log result.json summary.md throughput.png
   trace/                 trace-plots output (--leader-trace)
+  espresso-node.bin      --heap-profile: node binary for heap-report; hosts/<node>/jeprof/*.heap, heap/ from heap-report
 ```
 
 - `bench-state/aws/INDEX.md`: one row per run (fleet/run, rev, tag, N, db, latency, capacity, validity, exit, run cost).
@@ -967,6 +992,7 @@ scripts/network-bench/
   decaf-locations.json   decaf validator cities, same fields
   throughput-plot        throughput.png of a run dir (uv script)
   trace-plots            leader trace plots of a run dir (uv script)
+  heap-report            symbolized newest heap dump per node of a run dir
   leadertrace.py         leader critical-path breakdown used by trace-plots
   instance-types.md      leader block-build time and cost per block per instance type
   genesis.toml           0.6, 100 MB blocks, 1 wei base fee

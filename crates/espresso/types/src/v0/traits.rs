@@ -1,7 +1,10 @@
 //! This module contains all the traits used for building the sequencer types.
 //! It also includes some trait implementations that cannot be implemented in an external crate.
 #[cfg(feature = "node")]
-use std::{cmp::max, collections::BTreeMap};
+use std::{
+    cmp::max,
+    collections::{BTreeMap, BTreeSet},
+};
 use std::{fmt::Debug, ops::Range, sync::Arc};
 
 use alloy::primitives::Address;
@@ -13,7 +16,7 @@ use futures::{FutureExt, TryFutureExt};
 #[cfg(feature = "node")]
 use hotshot_libp2p_networking::network::behaviours::dht::store::persistent::DhtPersistentStorage;
 #[cfg(feature = "node")]
-use hotshot_new_protocol::storage::NewProtocolStorage;
+use hotshot_new_protocol::{heal::HealConfig, storage::NewProtocolStorage};
 #[cfg(feature = "node")]
 use hotshot_types::simple_certificate::{Certificate1, Certificate2};
 #[cfg(feature = "node")]
@@ -588,6 +591,12 @@ pub trait SequencerPersistence:
         bail!("state catchup is not implemented for this persistence type");
     }
 
+    /// How this node re-creates its lost VID shares from peers and serves its own, or `None`
+    /// when share heal is off.
+    fn share_heal_config(&self) -> Option<HealConfig> {
+        None
+    }
+
     /// Load the orchestrator config from storage.
     ///
     /// Returns `None` if no config exists (we are joining a network for the first time). Fails with
@@ -617,6 +626,23 @@ pub trait SequencerPersistence:
         &self,
         view: ViewNumber,
     ) -> anyhow::Result<Option<Proposal<SeqTypes, VidDisperseShare<SeqTypes>>>>;
+
+    /// Views whose VID share is on disk. Share heal only; needs `storage-journal`.
+    async fn held_vid_views(&self) -> anyhow::Result<BTreeSet<ViewNumber>> {
+        anyhow::bail!("share heal needs storage-journal")
+    }
+
+    /// Decided leaves with header time at least `min_header_ts`, newest first. Share heal only;
+    /// needs `storage-journal`.
+    async fn decided_leaves(&self, _min_header_ts: u64) -> anyhow::Result<Vec<Leaf2>> {
+        anyhow::bail!("share heal needs storage-journal")
+    }
+
+    /// Write the archive copies of the decided leaves at `views` that outlive the wal, which a
+    /// wiped share store lost. Share heal only; needs `storage-journal`.
+    async fn restore_leaf_copies(&self, _views: &BTreeSet<ViewNumber>) -> anyhow::Result<()> {
+        anyhow::bail!("share heal needs storage-journal")
+    }
     async fn load_da_proposal(
         &self,
         view: ViewNumber,
@@ -981,6 +1007,17 @@ pub trait SequencerPersistence:
         &self,
         proposal: &Proposal<SeqTypes, VidDisperseShare<SeqTypes>>,
     ) -> anyhow::Result<()>;
+
+    /// `append_vid` with the unix seconds of the proposal's header. Backends that do not age
+    /// shares by header time ignore `stamp`.
+    async fn append_vid_stamped(
+        &self,
+        proposal: &Proposal<SeqTypes, VidDisperseShare<SeqTypes>>,
+        _stamp: u32,
+    ) -> anyhow::Result<()> {
+        self.append_vid(proposal).await
+    }
+
     async fn append_da(
         &self,
         proposal: &Proposal<SeqTypes, DaProposal<SeqTypes>>,
@@ -1280,6 +1317,33 @@ impl<P: SequencerPersistence> NewProtocolStorage<SeqTypes> for Arc<P> {
 
     async fn load_high_qc2(&self) -> anyhow::Result<Option<Certificate1<SeqTypes>>> {
         (**self).load_high_qc2().await
+    }
+
+    async fn append_vid_stamped(
+        &self,
+        proposal: &Proposal<SeqTypes, VidDisperseShare<SeqTypes>>,
+        stamp: u32,
+    ) -> anyhow::Result<()> {
+        (**self).append_vid_stamped(proposal, stamp).await
+    }
+
+    async fn load_vid_share(
+        &self,
+        view: ViewNumber,
+    ) -> anyhow::Result<Option<Proposal<SeqTypes, VidDisperseShare<SeqTypes>>>> {
+        (**self).load_vid_share(view).await
+    }
+
+    async fn held_vid_views(&self) -> anyhow::Result<BTreeSet<ViewNumber>> {
+        (**self).held_vid_views().await
+    }
+
+    async fn decided_leaves(&self, min_header_ts: u64) -> anyhow::Result<Vec<Leaf2>> {
+        (**self).decided_leaves(min_header_ts).await
+    }
+
+    async fn restore_leaf_copies(&self, views: &BTreeSet<ViewNumber>) -> anyhow::Result<()> {
+        (**self).restore_leaf_copies(views).await
     }
 }
 

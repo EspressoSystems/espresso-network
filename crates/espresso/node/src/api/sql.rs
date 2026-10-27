@@ -96,6 +96,7 @@ impl SequencerDataSource for DataSource {
         if let Some(delay) = chunk_fetch_delay {
             builder = builder.with_chunk_fetch_delay(delay);
         }
+        builder = builder.with_local_payload_grace(opt.local_payload_grace);
         if let Some(chunk_size) = opt.sync_status_chunk_size {
             builder = builder.with_sync_status_chunk_size(chunk_size);
         }

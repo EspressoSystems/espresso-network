@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use anyhow::{Context, ensure};
 use espresso_telemetry as telemetry;
 use espresso_types::{traits::NullEventConsumer, v0::traits::SequencerPersistence};
@@ -350,7 +352,11 @@ where
         .http
         .take()
         .context("a follower needs the http module")?;
-    let http_opt = api_options(http_opt, modules, &storage_opt, public_node_config)?;
+    let mut http_opt = api_options(http_opt, modules, &storage_opt, public_node_config)?;
+    // A follower runs no consensus, so no payload of its own is on the way.
+    if let Some(sql) = &mut http_opt.storage_sql {
+        sql.local_payload_grace = Duration::ZERO;
+    }
     let persistence = storage_opt.create().await?;
     http_opt
         .serve(move |metrics, sink, _storage| {

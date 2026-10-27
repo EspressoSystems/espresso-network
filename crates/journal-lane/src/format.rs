@@ -11,7 +11,7 @@ pub type Lsn = u64;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Stream {
     Wal = 0,
-    Data = 1,
+    Da = 1,
     Payload = 2,
     Share = 3,
 }
@@ -21,7 +21,7 @@ impl Stream {
     pub fn label(self) -> &'static str {
         match self {
             Self::Wal => "wal",
-            Self::Data => "data",
+            Self::Da => "da",
             Self::Payload => "payload",
             Self::Share => "share",
         }
@@ -58,6 +58,8 @@ pub struct SegmentHeader {
     /// Max key written to the *previous* segment of this stream. Lets GC bound a sealed segment
     /// without scanning it: the bound for segment `seq` is `prev_max_key` of segment `seq + 1`.
     pub prev_max_key: u64,
+    /// Same as `prev_max_key`, for the frame stamps.
+    pub prev_max_stamp: u32,
 }
 
 impl SegmentHeader {
@@ -68,10 +70,11 @@ impl SegmentHeader {
         buf[0..4].copy_from_slice(&SEGMENT_MAGIC.to_le_bytes());
         buf[4..6].copy_from_slice(&SEGMENT_FORMAT.to_le_bytes());
         buf[6] = self.stream as u8;
-        // buf[7] and buf[32..36] are reserved padding, left zero.
+        // buf[7] is reserved padding, left zero.
         buf[8..16].copy_from_slice(&self.seq.to_le_bytes());
         buf[16..24].copy_from_slice(&self.first_lsn.to_le_bytes());
         buf[24..32].copy_from_slice(&self.prev_max_key.to_le_bytes());
+        buf[32..36].copy_from_slice(&self.prev_max_stamp.to_le_bytes());
         let crc = crc32fast::hash(&buf[0..36]);
         buf[36..40].copy_from_slice(&crc.to_le_bytes());
         buf
@@ -88,7 +91,7 @@ impl SegmentHeader {
         );
         let stream = match b[6] {
             0 => Stream::Wal,
-            1 => Stream::Data,
+            1 => Stream::Da,
             2 => Stream::Payload,
             3 => Stream::Share,
             other => anyhow::bail!("segment header: bad stream tag {other}"),
@@ -96,6 +99,7 @@ impl SegmentHeader {
         let seq = u64::from_le_bytes(b[8..16].try_into().unwrap());
         let first_lsn = u64::from_le_bytes(b[16..24].try_into().unwrap());
         let prev_max_key = u64::from_le_bytes(b[24..32].try_into().unwrap());
+        let prev_max_stamp = u32::from_le_bytes(b[32..36].try_into().unwrap());
         let crc = u32::from_le_bytes(b[36..40].try_into().unwrap());
         anyhow::ensure!(crc32fast::hash(&b[0..36]) == crc, "segment header: bad crc");
         Ok(Self {
@@ -103,6 +107,7 @@ impl SegmentHeader {
             seq,
             first_lsn,
             prev_max_key,
+            prev_max_stamp,
         })
     }
 }
@@ -113,10 +118,12 @@ pub struct FrameHeader {
     pub len: u32,
     pub lsn: Lsn,
     pub key: u64,
+    /// Unix seconds the caller attributes to the record; 0 on lanes that don't use it.
+    pub stamp: u32,
     pub kind: Kind,
 }
 
-/// Record header: 32 bytes LE (`crc32(4) len(4) lsn(8) key(8) kind(1) pad(7)`), followed by
+/// Record header: 32 bytes LE (`crc32(4) len(4) lsn(8) key(8) kind(1) stamp(4) pad(3)`), followed by
 /// `len` bytes of bincode payload.
 pub const FRAME_HEADER_LEN: usize = 32;
 
@@ -127,16 +134,17 @@ pub enum FrameError {
     Lsn { expected: Lsn, got: Lsn },
 }
 
-/// Appends one frame to `out`. `key` and `kind` are stored uncompressed in the header so `scan`
-/// never needs to decode `body` to bound a segment or route a record.
-pub fn encode_frame(out: &mut Vec<u8>, lsn: Lsn, key: u64, kind: Kind, body: &[u8]) {
+/// Appends one frame to `out`. `key`, `stamp` and `kind` are stored uncompressed in the header so
+/// `scan` never needs to decode `body` to bound a segment or route a record.
+pub fn encode_frame(out: &mut Vec<u8>, lsn: Lsn, key: u64, stamp: u32, kind: Kind, body: &[u8]) {
     let start = out.len();
     out.extend_from_slice(&0u32.to_le_bytes()); // crc placeholder, patched below
     out.extend_from_slice(&(body.len() as u32).to_le_bytes());
     out.extend_from_slice(&lsn.to_le_bytes());
     out.extend_from_slice(&key.to_le_bytes());
     out.push(kind.0);
-    out.extend_from_slice(&[0u8; 7]);
+    out.extend_from_slice(&stamp.to_le_bytes());
+    out.extend_from_slice(&[0u8; 3]);
     out.extend_from_slice(body);
     let crc = crc32fast::hash(&out[start + 4..]);
     out[start..start + 4].copy_from_slice(&crc.to_le_bytes());
@@ -167,6 +175,7 @@ pub fn decode_frame(
     let lsn = u64::from_le_bytes(buf[8..16].try_into().unwrap());
     let key = u64::from_le_bytes(buf[16..24].try_into().unwrap());
     let kind = Kind(buf[24]);
+    let stamp = u32::from_le_bytes(buf[25..29].try_into().unwrap());
     if lsn != expect_lsn {
         return Err(FrameError::Lsn {
             expected: expect_lsn,
@@ -178,6 +187,7 @@ pub fn decode_frame(
             len,
             lsn,
             key,
+            stamp,
             kind,
         },
         &buf[FRAME_HEADER_LEN..total],
@@ -195,29 +205,36 @@ pub enum ScanEnd {
 
 /// Scans consecutive frames starting at `first_lsn`, calling `f` on each valid one in order. Never
 /// reads past the first invalid frame; a frame whose kind tag fails `known_kind` is invalid (crc
-/// passed but the tag is unrecognized: corruption, not a new format). Returns the scan end, the lsn the next frame must have, and
-/// the max `key` seen.
+/// passed but the tag is unrecognized: corruption, not a new format). Returns the scan end, the lsn
+/// the next frame must have, and the max `key` and max `stamp` seen.
 pub fn scan(
     buf: &[u8],
     first_lsn: Lsn,
     known_kind: fn(u8) -> bool,
     mut f: impl FnMut(&FrameHeader, &[u8]) -> anyhow::Result<()>,
-) -> anyhow::Result<(ScanEnd, Lsn, u64)> {
+) -> anyhow::Result<(ScanEnd, Lsn, u64, u32)> {
     let mut offset = 0usize;
     let mut expect_lsn = first_lsn;
     let mut max_key = 0u64;
+    let mut max_stamp = 0u32;
     loop {
         if offset == buf.len() {
-            return Ok((ScanEnd::Clean(offset as u64), expect_lsn, max_key));
+            return Ok((
+                ScanEnd::Clean(offset as u64),
+                expect_lsn,
+                max_key,
+                max_stamp,
+            ));
         }
         match decode_frame(&buf[offset..], expect_lsn) {
             Ok((header, body, consumed)) if known_kind(header.kind.0) => {
                 f(&header, body)?;
                 max_key = max_key.max(header.key);
+                max_stamp = max_stamp.max(header.stamp);
                 expect_lsn = header.lsn + 1;
                 offset += consumed;
             },
-            _ => return Ok((ScanEnd::Torn(offset as u64), expect_lsn, max_key)),
+            _ => return Ok((ScanEnd::Torn(offset as u64), expect_lsn, max_key, max_stamp)),
         }
     }
 }
@@ -234,7 +251,7 @@ mod tests {
 
     fn frame(lsn: Lsn, key: u64, kind: Kind, body: &[u8]) -> Vec<u8> {
         let mut out = Vec::new();
-        encode_frame(&mut out, lsn, key, kind, body);
+        encode_frame(&mut out, lsn, key, 0, kind, body);
         out
     }
 
@@ -254,7 +271,7 @@ mod tests {
         let mut buf = frame(1, 0, ACTION, b"a");
         buf.extend(frame(3, 0, ACTION, b"b")); // lsn 2 missing
         let mut seen = vec![];
-        let (end, next_lsn, _) = scan(&buf, 1, known, |h, b| {
+        let (end, next_lsn, ..) = scan(&buf, 1, known, |h, b| {
             seen.push((h.lsn, b.to_vec()));
             Ok(())
         })
@@ -271,7 +288,7 @@ mod tests {
         let mut buf = frame(1, 0, ACTION, b"a");
         let boundary = buf.len() as u64;
         buf.extend(frame(2, 0, Kind(99), b"b"));
-        let (end, next_lsn, _) = scan(&buf, 1, known, |_, _| Ok(())).unwrap();
+        let (end, next_lsn, ..) = scan(&buf, 1, known, |_, _| Ok(())).unwrap();
         assert!(matches!(end, ScanEnd::Torn(n) if n == boundary));
         assert_eq!(next_lsn, 2);
     }
@@ -279,7 +296,7 @@ mod tests {
     #[test]
     fn scan_clean_at_exact_end() {
         let buf = frame(1, 0, ACTION, b"a");
-        let (end, next_lsn, _) = scan(&buf, 1, known, |_, _| Ok(())).unwrap();
+        let (end, next_lsn, ..) = scan(&buf, 1, known, |_, _| Ok(())).unwrap();
         assert!(matches!(end, ScanEnd::Clean(n) if n == buf.len() as u64));
         assert_eq!(next_lsn, 2);
     }
@@ -346,19 +363,31 @@ mod tests {
     fn oversize_len_stops_scan_without_reading_body() {
         let mut buf = vec![0u8; FRAME_HEADER_LEN];
         buf[4..8].copy_from_slice(&(u32::MAX).to_le_bytes());
-        let (end, next_lsn, max_key) = scan(&buf, 5, known, |_, _| Ok(())).unwrap();
+        let (end, next_lsn, max_key, _) = scan(&buf, 5, known, |_, _| Ok(())).unwrap();
         assert!(matches!(end, ScanEnd::Torn(0)));
         assert_eq!(next_lsn, 5);
         assert_eq!(max_key, 0);
     }
 
     #[test]
+    fn frame_stamp_roundtrips_and_scan_returns_max() {
+        let mut buf = Vec::new();
+        encode_frame(&mut buf, 1, 4, 700, ACTION, b"a");
+        encode_frame(&mut buf, 2, 5, 300, ACTION, b"b");
+        let (header, ..) = decode_frame(&buf, 1).unwrap();
+        assert_eq!(header.stamp, 700);
+        let (_, _, max_key, max_stamp) = scan(&buf, 1, known, |_, _| Ok(())).unwrap();
+        assert_eq!((max_key, max_stamp), (5, 700));
+    }
+
+    #[test]
     fn segment_header_roundtrip() {
         let header = SegmentHeader {
-            stream: Stream::Data,
+            stream: Stream::Da,
             seq: 42,
             first_lsn: 100,
             prev_max_key: 9,
+            prev_max_stamp: 13,
         };
         let encoded = header.encode();
         assert_eq!(encoded.len(), SegmentHeader::LEN);
@@ -368,12 +397,13 @@ mod tests {
 
     #[test]
     fn segment_header_roundtrips_every_stream() {
-        for stream in [Stream::Wal, Stream::Data, Stream::Payload, Stream::Share] {
+        for stream in [Stream::Wal, Stream::Da, Stream::Payload, Stream::Share] {
             let header = SegmentHeader {
                 stream,
                 seq: 7,
                 first_lsn: 3,
                 prev_max_key: 11,
+                prev_max_stamp: 5,
             };
             assert_eq!(SegmentHeader::decode(&header.encode()).unwrap(), header);
         }
@@ -386,6 +416,7 @@ mod tests {
             seq: 1,
             first_lsn: 1,
             prev_max_key: 0,
+            prev_max_stamp: 0,
         }
         .encode();
         encoded[6] = 4;
@@ -401,6 +432,7 @@ mod tests {
             seq: 1,
             first_lsn: 1,
             prev_max_key: 0,
+            prev_max_stamp: 0,
         };
         let encoded = header.encode();
         for i in 0..SegmentHeader::LEN * 8 {

@@ -2,6 +2,9 @@ Espresso nodes provide both a HTTP/JSON and gRPC API, served by the `espresso-ap
 
 The v1 API is a set of hand-written Axum routes over traits defined in `crates/espresso/api/src/v1/`.
 
+- Light-client payload and namespace GETs (`/v1/light-client/payload/...`, `/v1/light-client/namespace/...`,
+  `/v1/light-client/namespaces/...`) return VBS for `Accept: application/octet-stream` and JSON otherwise.
+
 The node implements the API traits in `crates/espresso/node/src/api/state.rs`.
 
 ## The v2 API

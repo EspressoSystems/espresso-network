@@ -244,6 +244,7 @@
             postgresql_18
             opentofu # scripts/network-bench/aws
             awscli2 # scripts/network-bench/aws
+            binutils # readelf, nm, for scripts/network-bench/heap-report
 
             # Figures
             graphviz

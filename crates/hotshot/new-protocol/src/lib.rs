@@ -5,6 +5,7 @@ pub mod consensus;
 pub mod coordinator;
 pub mod epoch;
 pub mod fetch;
+pub mod heal;
 pub mod helpers;
 pub mod leader_trace;
 pub mod logging;

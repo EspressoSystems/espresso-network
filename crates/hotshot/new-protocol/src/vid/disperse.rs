@@ -11,7 +11,9 @@ use std::{
 use hotshot_types::{
     data::{
         EpochNumber, VidCommitment2, VidDisperse2, ViewNumber,
-        vid_disperse::{AvidmGf2DisperseShareFragment, AvidmGf2NamespacePiece},
+        vid_disperse::{
+            AvidmGf2DisperseParams, AvidmGf2DisperseShareFragment, AvidmGf2NamespacePiece,
+        },
     },
     epoch_membership::EpochMembershipCoordinator,
     message::Proposal as SignedProposal,
@@ -198,29 +200,7 @@ fn handle_vid_disperse_request<T: NodeType>(
     buckets.par_iter().try_for_each_with(
         network,
         |network, bucket| -> Result<(), VidDisperseError> {
-            let mut pieces = vec![Vec::new(); params.recipients.len()];
-
-            for &ns_index in bucket {
-                let dispersal = AvidmGf2Scheme::ns_disperse_one(
-                    &params.param,
-                    &params.weights,
-                    &params.payload[params.ns_table[ns_index].clone()],
-                    ns_index,
-                )
-                .wrap()
-                .map_err(VidDisperseError::Vid)?;
-
-                let ns_payload_byte_len = dispersal.payload_byte_len;
-                let ns_commit = dispersal.commit;
-                for (pieces, ns_share) in pieces.iter_mut().zip(dispersal.shares) {
-                    pieces.push(AvidmGf2NamespacePiece {
-                        ns_index: dispersal.ns_index,
-                        ns_payload_byte_len,
-                        ns_commit,
-                        ns_share,
-                    });
-                }
-            }
+            let pieces = encode_namespaces(&params, bucket)?;
 
             if buckets_left.fetch_sub(1, Ordering::AcqRel) == 1 {
                 crate::trace_leader_event!(
@@ -275,6 +255,37 @@ fn handle_vid_disperse_request<T: NodeType>(
         view,
         payload_commitment,
     })
+}
+
+/// Erasure-code the namespaces at `ns_indices`, returning each recipient's pieces
+/// in `params.recipients` order.
+pub(crate) fn encode_namespaces<T: NodeType>(
+    params: &AvidmGf2DisperseParams<T>,
+    ns_indices: &[usize],
+) -> Result<Vec<Vec<AvidmGf2NamespacePiece>>, VidDisperseError> {
+    let mut pieces = vec![Vec::new(); params.recipients.len()];
+    for &ns_index in ns_indices {
+        let dispersal = AvidmGf2Scheme::ns_disperse_one(
+            &params.param,
+            &params.weights,
+            &params.payload[params.ns_table[ns_index].clone()],
+            ns_index,
+        )
+        .wrap()
+        .map_err(VidDisperseError::Vid)?;
+
+        let ns_payload_byte_len = dispersal.payload_byte_len;
+        let ns_commit = dispersal.commit;
+        for (pieces, ns_share) in pieces.iter_mut().zip(dispersal.shares) {
+            pieces.push(AvidmGf2NamespacePiece {
+                ns_index: dispersal.ns_index,
+                ns_payload_byte_len,
+                ns_commit,
+                ns_share,
+            });
+        }
+    }
+    Ok(pieces)
 }
 
 /// Group namespace indices into buckets whose payload sizes are each at least

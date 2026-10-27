@@ -73,6 +73,7 @@ use super::{
         StateCertDataSource, StateCertFetchingDataSource, StateSignatureDataSource,
         SubmitDataSource, TableSize, TokenDataSource,
     },
+    payload_budget::PayloadBudget,
 };
 
 /// Timeout for failing requests due to missing data.
@@ -82,7 +83,7 @@ use super::{
 /// missing data to be fetched before giving up and failing the request.
 ///
 /// Matches the `hotshot_query_service` availability API default.
-const FETCH_TIMEOUT: Duration = Duration::from_millis(500);
+pub(super) const FETCH_TIMEOUT: Duration = Duration::from_millis(500);
 
 /// Node API state implementation
 ///
@@ -94,6 +95,7 @@ pub struct NodeApiStateImpl<D> {
     env_vars: std::sync::Arc<Vec<String>>,
     public_node_config: Option<std::sync::Arc<crate::options::PublicNodeConfig>>,
     ranges_concurrency: NonZeroUsize,
+    payload_budget: PayloadBudget,
 }
 
 impl<D> NodeApiStateImpl<D> {
@@ -103,11 +105,17 @@ impl<D> NodeApiStateImpl<D> {
             env_vars: std::sync::Arc::new(Vec::new()),
             public_node_config: None,
             ranges_concurrency: NonZeroUsize::new(4).unwrap(),
+            payload_budget: PayloadBudget::default(),
         }
     }
 
     pub fn with_ranges_concurrency(mut self, concurrency: NonZeroUsize) -> Self {
         self.ranges_concurrency = concurrency;
+        self
+    }
+
+    pub fn with_payload_budget(mut self, budget: PayloadBudget) -> Self {
+        self.payload_budget = budget;
         self
     }
 
@@ -497,6 +505,7 @@ where
         // Fetch block and VID common data
         let ds = &*self.data_source;
         let timeout = FETCH_TIMEOUT;
+        let _permit = self.payload_budget.admit_block(ds, hs_block_id).await?;
         let (block_fetch, vid_fetch) =
             join!(ds.get_block(hs_block_id), ds.get_vid_common(hs_block_id));
         let (block, vid_common) = join!(
@@ -562,6 +571,11 @@ where
                 range_size, NAMESPACE_PROOF_RANGE_LIMIT
             )));
         }
+
+        let _permit = self
+            .payload_budget
+            .admit_range(&*self.data_source, from as usize..until as usize)
+            .await?;
 
         // Fetch blocks and VID common data for the range
         let (blocks_stream, vids_stream) = join!(
@@ -694,6 +708,7 @@ where
 
         let ds = &*self.data_source;
         let timeout = FETCH_TIMEOUT;
+        let _permit = self.payload_budget.admit_block(ds, hs_block_id).await?;
         let (block_fetch, vid_fetch) =
             join!(ds.get_block(hs_block_id), ds.get_vid_common(hs_block_id));
         let (block, vid_common) = join!(
@@ -883,6 +898,80 @@ fn large_object_range_limit() -> usize {
     hotshot_query_service::availability::Options::default().large_object_range_limit
 }
 
+fn usize_ranges(ranges: &[Range<u64>]) -> Vec<Range<usize>> {
+    ranges
+        .iter()
+        .map(|range| range.start as usize..range.end as usize)
+        .collect()
+}
+
+/// Loaders for the endpoints that admit a request against the payload budget up front. A ranges
+/// request holds budget for all its ranges, so its per-range loads must not acquire again.
+impl<D> NodeApiStateImpl<D>
+where
+    D: Deref + Send + Sync,
+    D::Target: AvailabilityDataSource<SeqTypes> + Send + Sync,
+{
+    async fn load_block_range(
+        &self,
+        from: usize,
+        until: usize,
+    ) -> anyhow::Result<Vec<BlockQueryData<SeqTypes>>> {
+        let timeout = FETCH_TIMEOUT;
+        let ds = &*self.data_source;
+        let stream = ds.get_block_range(from..until).await;
+        let mut results = Vec::new();
+        futures::pin_mut!(stream);
+        let mut i = from;
+        while let Some(fetch) = stream.next().await {
+            let item = fetch
+                .with_timeout(timeout)
+                .await
+                .ok_or_else(|| not_found(format!("block {} not found", i)))?;
+            results.push(item);
+            i += 1;
+        }
+        Ok(results)
+    }
+
+    async fn load_payload_proof_range(
+        &self,
+        start: u64,
+        end: u64,
+    ) -> anyhow::Result<Vec<light_client::consensus::payload::PayloadProof>> {
+        let ds = &*self.data_source;
+        let fetch_timeout = FETCH_TIMEOUT;
+        let start = start as usize;
+        let end = end as usize;
+
+        let payloads_stream = AvailabilityDataSource::get_payload_range(ds, start..end).await;
+        let vid_stream = AvailabilityDataSource::get_vid_common_range(ds, start..end).await;
+        let mut out = Vec::new();
+        let mut payloads = payloads_stream.enumerate();
+        let mut vid_commons = vid_stream.enumerate();
+        loop {
+            let (next_payload, next_vid) =
+                futures::future::join(payloads.next(), vid_commons.next()).await;
+            let (Some((i, payload_fut)), Some((_, vid_fut))) = (next_payload, next_vid) else {
+                break;
+            };
+            let payload = payload_fut
+                .with_timeout(fetch_timeout)
+                .await
+                .ok_or_else(|| not_found(format!("missing payload {}", start + i)))?;
+            let vid_common = vid_fut
+                .with_timeout(fetch_timeout)
+                .await
+                .ok_or_else(|| not_found(format!("missing VID common {}", start + i)))?;
+            out.push(light_client::consensus::payload::PayloadProof::new(
+                payload.data().clone(),
+                vid_common.common().clone(),
+            ));
+        }
+        Ok(out)
+    }
+}
+
 #[async_trait]
 impl<D> HotShotAvailabilityApi for NodeApiStateImpl<D>
 where
@@ -975,6 +1064,7 @@ where
     async fn get_block(&self, id: v1::availability::BlockId) -> anyhow::Result<Self::Block> {
         let hs_id = block_id_to_hs(id)?;
         let ds = &*self.data_source;
+        let _permit = self.payload_budget.admit_block(ds, hs_id).await?;
         ds.get_block(hs_id)
             .await
             .with_timeout(FETCH_TIMEOUT)
@@ -984,26 +1074,15 @@ where
 
     async fn get_block_range(&self, from: usize, until: usize) -> anyhow::Result<Vec<Self::Block>> {
         enforce_range(from, until, large_object_range_limit())?;
-        let timeout = FETCH_TIMEOUT;
         let ds = &*self.data_source;
-        let stream = ds.get_block_range(from..until).await;
-        let mut results = Vec::new();
-        futures::pin_mut!(stream);
-        let mut i = from;
-        while let Some(fetch) = stream.next().await {
-            let item = fetch
-                .with_timeout(timeout)
-                .await
-                .ok_or_else(|| not_found(format!("block {} not found", i)))?;
-            results.push(item);
-            i += 1;
-        }
-        Ok(results)
+        let _permit = self.payload_budget.admit_range(ds, from..until).await?;
+        self.load_block_range(from, until).await
     }
 
     async fn get_payload(&self, id: v1::availability::PayloadId) -> anyhow::Result<Self::Payload> {
         let hs_id = payload_id_to_hs(id)?;
         let ds = &*self.data_source;
+        let _permit = self.payload_budget.admit_block(ds, hs_id).await?;
         ds.get_payload(hs_id)
             .await
             .with_timeout(FETCH_TIMEOUT)
@@ -1019,6 +1098,7 @@ where
         enforce_range(from, until, large_object_range_limit())?;
         let timeout = FETCH_TIMEOUT;
         let ds = &*self.data_source;
+        let _permit = self.payload_budget.admit_range(ds, from..until).await?;
         let stream = ds.get_payload_range(from..until).await;
         let mut results = Vec::new();
         futures::pin_mut!(stream);
@@ -1093,6 +1173,10 @@ where
 
     async fn get_block_ranges(&self, ranges: Vec<Range<u64>>) -> anyhow::Result<Vec<Self::Block>> {
         let ranges = validate_ranges(ranges, large_object_range_limit())?;
+        let _permit = self
+            .payload_budget
+            .admit_ranges(&*self.data_source, usize_ranges(&ranges))
+            .await?;
 
         let heights: u64 = ranges.iter().map(|range| range.end - range.start).sum();
         if let Ok(mut tx) = self.data_source.read().await
@@ -1103,7 +1187,7 @@ where
         }
 
         let ranges: Vec<_> = futures::stream::iter(ranges)
-            .map(|range| self.get_block_range(range.start as usize, range.end as usize))
+            .map(|range| self.load_block_range(range.start as usize, range.end as usize))
             .buffered(self.ranges_concurrency.get())
             .try_collect()
             .await?;
@@ -1138,6 +1222,10 @@ where
         index: u64,
     ) -> anyhow::Result<Self::Transaction> {
         let ds = &*self.data_source;
+        let _permit = self
+            .payload_budget
+            .admit_block(ds, HsBlockId::Number(height as usize))
+            .await?;
         let block = ds
             .get_block(HsBlockId::Number(height as usize))
             .await
@@ -1182,6 +1270,10 @@ where
     ) -> anyhow::Result<Self::TransactionWithProof> {
         let ds = &*self.data_source;
         let timeout = FETCH_TIMEOUT;
+        let _permit = self
+            .payload_budget
+            .admit_block(ds, HsBlockId::Number(height as usize))
+            .await?;
 
         let (block_fetch, vid_fetch) = futures::join!(
             ds.get_block(HsBlockId::Number(height as usize)),
@@ -1254,6 +1346,10 @@ where
 
     async fn get_block_summary(&self, height: usize) -> anyhow::Result<Self::BlockSummary> {
         let ds = &*self.data_source;
+        let _permit = self
+            .payload_budget
+            .admit_block(ds, HsBlockId::Number(height))
+            .await?;
         let block = ds
             .get_block(HsBlockId::Number(height))
             .await
@@ -1271,6 +1367,7 @@ where
         enforce_range(from, until, large_object_range_limit())?;
         let timeout = FETCH_TIMEOUT;
         let ds = &*self.data_source;
+        let _permit = self.payload_budget.admit_range(ds, from..until).await?;
         let stream = ds.get_block_range(from..until).await;
         let mut results = Vec::new();
         futures::pin_mut!(stream);
@@ -3186,6 +3283,10 @@ where
         let ds = &*self.data_source;
         let fetch_timeout = FETCH_TIMEOUT;
         let height = height as usize;
+        let _permit = self
+            .payload_budget
+            .admit_block(ds, HsBlockId::Number(height))
+            .await?;
         let payload = AvailabilityDataSource::get_payload(ds, height)
             .await
             .with_timeout(fetch_timeout)
@@ -3207,37 +3308,12 @@ where
         start: u64,
         end: u64,
     ) -> anyhow::Result<Vec<Self::PayloadProof>> {
-        let ds = &*self.data_source;
-        let fetch_timeout = FETCH_TIMEOUT;
-        let start = start as usize;
-        let end = end as usize;
-        enforce_range(start, end, lc_large_object_range_limit())?;
-
-        let payloads_stream = AvailabilityDataSource::get_payload_range(ds, start..end).await;
-        let vid_stream = AvailabilityDataSource::get_vid_common_range(ds, start..end).await;
-        let mut out = Vec::new();
-        let mut payloads = payloads_stream.enumerate();
-        let mut vid_commons = vid_stream.enumerate();
-        loop {
-            let (next_payload, next_vid) =
-                futures::future::join(payloads.next(), vid_commons.next()).await;
-            let (Some((i, payload_fut)), Some((_, vid_fut))) = (next_payload, next_vid) else {
-                break;
-            };
-            let payload = payload_fut
-                .with_timeout(fetch_timeout)
-                .await
-                .ok_or_else(|| not_found(format!("missing payload {}", start + i)))?;
-            let vid_common = vid_fut
-                .with_timeout(fetch_timeout)
-                .await
-                .ok_or_else(|| not_found(format!("missing VID common {}", start + i)))?;
-            out.push(light_client::consensus::payload::PayloadProof::new(
-                payload.data().clone(),
-                vid_common.common().clone(),
-            ));
-        }
-        Ok(out)
+        enforce_range(start as usize, end as usize, lc_large_object_range_limit())?;
+        let _permit = self
+            .payload_budget
+            .admit_range(&*self.data_source, start as usize..end as usize)
+            .await?;
+        self.load_payload_proof_range(start, end).await
     }
 
     async fn get_payload_proof_ranges(
@@ -3245,6 +3321,10 @@ where
         ranges: Vec<Range<u64>>,
     ) -> anyhow::Result<Vec<Self::PayloadProof>> {
         let ranges = validate_ranges(ranges, lc_large_object_range_limit())?;
+        let _permit = self
+            .payload_budget
+            .admit_ranges(&*self.data_source, usize_ranges(&ranges))
+            .await?;
 
         let heights: u64 = ranges.iter().map(|range| range.end - range.start).sum();
         let read = async {
@@ -3277,7 +3357,7 @@ where
         }
 
         let ranges: Vec<_> = futures::stream::iter(ranges)
-            .map(|range| self.get_payload_proof_range(range.start, range.end))
+            .map(|range| self.load_payload_proof_range(range.start, range.end))
             .buffered(self.ranges_concurrency.get())
             .try_collect()
             .await?;
@@ -3291,6 +3371,10 @@ where
     ) -> anyhow::Result<Self::NamespaceProof> {
         let ds = &*self.data_source;
         let fetch_timeout = FETCH_TIMEOUT;
+        let _permit = self
+            .payload_budget
+            .admit_block(ds, HsBlockId::Number(height as usize))
+            .await?;
         let mut proofs = crate::api::light_client::get_namespace_proof_range(
             ds,
             height as usize,
@@ -3315,6 +3399,11 @@ where
     ) -> anyhow::Result<Vec<Self::NamespaceProof>> {
         let ds = &*self.data_source;
         let fetch_timeout = FETCH_TIMEOUT;
+        enforce_range(start as usize, end as usize, lc_large_object_range_limit())?;
+        let _permit = self
+            .payload_budget
+            .admit_range(ds, start as usize..end as usize)
+            .await?;
         crate::api::light_client::get_namespace_proof_range(
             ds,
             start as usize,
@@ -3337,6 +3426,11 @@ where
             .map_err(|err| bad_request(err.to_string()))?;
         let ds = &*self.data_source;
         let fetch_timeout = FETCH_TIMEOUT;
+        enforce_range(start as usize, end as usize, lc_large_object_range_limit())?;
+        let _permit = self
+            .payload_budget
+            .admit_range(ds, start as usize..end as usize)
+            .await?;
         crate::api::light_client::get_namespaces_proof_range(
             ds,
             start as usize,

@@ -29,7 +29,9 @@ mod disperse;
 mod fragments;
 mod reconstruct;
 
+pub(crate) use disperse::encode_namespaces;
 pub use disperse::{VidDisperseError, VidDisperseOutput, VidDisperseRequest, VidDisperser};
+pub(crate) use fragments::assemble_share;
 pub use fragments::{VidFragmentAccumulator, VidFragmentError};
 use hotshot_types::{
     data::{
@@ -41,7 +43,9 @@ use hotshot_types::{
     traits::node_implementation::NodeType,
     vid::avidm_gf2::{AvidmGf2Common, AvidmGf2Param, init_avidm_gf2_param},
 };
-pub(crate) use reconstruct::matches_commitment;
+pub(crate) use reconstruct::{
+    Metadata, VidShareAccumulator, matches_commitment, reconstruct_borrowed,
+};
 pub use reconstruct::{
     ObtainedPayload, VidReconstructError, VidReconstructErrorKind, VidReconstructor,
 };

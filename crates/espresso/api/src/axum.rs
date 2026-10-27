@@ -2,7 +2,11 @@
 
 pub mod routes;
 
-use std::{ops::Range, sync::Arc};
+use std::{
+    any::Any,
+    ops::Range,
+    sync::{Arc, Mutex},
+};
 
 use aide::{
     axum::{
@@ -38,7 +42,7 @@ use crate::{
         FeeState, LightClientState, NodeState, RewardState, StateSignatureState, StatusState,
         SubmitState, TokenState,
     },
-    error::{ApiError, classify as classify_availability_error},
+    error::{ApiError, AvailabilityError, classify as classify_availability_error},
     v1,
 };
 
@@ -89,7 +93,21 @@ impl IntoResponse for ApiError {
             ApiError::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
             ApiError::Unavailable(_) => StatusCode::SERVICE_UNAVAILABLE,
         };
-        (status, Json(ErrorResponse::new(status, self.to_string()))).into_response()
+        let body = Json(ErrorResponse::new(status, self.to_string()));
+        match self {
+            ApiError::Unavailable(err) => match err.downcast_ref::<AvailabilityError>() {
+                Some(AvailabilityError::Overloaded {
+                    retry_after_secs, ..
+                }) => (
+                    status,
+                    [(header::RETRY_AFTER, retry_after_secs.to_string())],
+                    body,
+                )
+                    .into_response(),
+                _ => (status, body).into_response(),
+            },
+            _ => (status, body).into_response(),
+        }
     }
 }
 
@@ -111,6 +129,19 @@ impl WireError for ErrorResponse {
 /// the endpoints that flow large structured data. Falls back to JSON otherwise.
 fn encode_response<T: Serialize>(headers: &HeaderMap, value: T) -> Response {
     http_wire::encode_ok::<ErrorResponse, _>(headers, value)
+}
+
+/// Run a handler's future knowing the response format the request negotiated (see
+/// [`response_is_binary`]), then encode its result in that format.
+async fn negotiated<T: Serialize>(
+    headers: &HeaderMap,
+    fut: impl Future<Output = anyhow::Result<T>>,
+) -> Result<Response, ApiError> {
+    let value = RESPONSE_FORMAT
+        .scope(ContentType::negotiate(headers), fut)
+        .await
+        .map_err(classify_availability_error)?;
+    Ok(encode_response(headers, value))
 }
 
 /// Decode a request body based on its `Content-Type`, matched by media-type essence.
@@ -167,6 +198,45 @@ impl<T> OperationOutput for ApiJson<T> {
     }
 }
 
+type ResponseGuards = Arc<Mutex<Vec<Box<dyn Any + Send>>>>;
+
+tokio::task_local! {
+    static RESPONSE_GUARDS: ResponseGuards;
+    static RESPONSE_FORMAT: ContentType;
+}
+
+/// Whether the response being built is VBS binary. False outside a [`negotiated`] handler: routes
+/// that always answer JSON, gRPC calls and tests.
+pub fn response_is_binary() -> bool {
+    RESPONSE_FORMAT
+        .try_with(|format| *format == ContentType::Binary)
+        .unwrap_or(false)
+}
+
+/// Keep `guard` alive until the handler has built its response, serialized body included, so a
+/// resource the response bytes depend on, such as a memory budget, covers the serialization copy.
+/// The guard is dropped before the body is written to the client, so a slow reader cannot pin it.
+///
+/// Returns the guard when the caller is not inside a request served by this router (a gRPC call,
+/// a unit test) or runs on a spawned task. The caller then keeps it for as long as it needs.
+pub fn hold_until_response_built<T: Send + 'static>(guard: T) -> Option<T> {
+    let mut guard = Some(guard);
+    // `try_with` fails outside a scope, leaving `guard` with the caller.
+    let _ = RESPONSE_GUARDS.try_with(|guards| {
+        let guard = guard.take().expect("closure runs once");
+        guards.lock().expect("not poisoned").push(Box::new(guard));
+    });
+    guard
+}
+
+/// Run the handler with a guard list that [`hold_until_response_built`] fills. The list, and so
+/// the guards, drop when the handler returns.
+pub(crate) async fn hold_response_guards(req: Request, next: axum::middleware::Next) -> Response {
+    RESPONSE_GUARDS
+        .scope(ResponseGuards::default(), next.run(req))
+        .await
+}
+
 /// In-flight request slots for `max_connections`.
 #[derive(Clone)]
 pub(crate) struct RequestLimit(pub(crate) Arc<Semaphore>);
@@ -184,17 +254,6 @@ pub(crate) async fn limit_requests(
         Ok(_permit) => next.run(req).await,
         Err(_) => StatusCode::TOO_MANY_REQUESTS.into_response(),
     }
-}
-
-/// Wrapper so the v1 spec is looked up by a distinct type. v2 serves a build-time document
-/// rather than an `Extension<OpenApi>`, so nothing collides today, but the newtype keeps an
-/// `Extension<OpenApi>` added later from silently resolving to v1's.
-#[derive(Clone)]
-struct OpenApiV1(OpenApi);
-
-/// Serve the v1 OpenAPI spec (extracted from Extension)
-async fn serve_openapi_spec_v1(Extension(OpenApiV1(api)): Extension<OpenApiV1>) -> Json<OpenApi> {
-    Json(api)
 }
 
 /// Serve custom Swagger UI with collapsed defaults, pointed at the given OpenAPI spec route.
@@ -863,11 +922,7 @@ pub(crate) fn router_availability(state: AvailabilityState) -> ApiRouter {
     let get_block_ranges =
         |State(state): State<AvailabilityState>, headers: HeaderMap, body: Bytes| async move {
             let ranges: Vec<Range<u64>> = decode_body(&headers, &body)?;
-            let blocks = state
-                .get_block_ranges(ranges)
-                .await
-                .map_err(classify_availability_error)?;
-            Ok::<_, ApiError>(encode_response(&headers, blocks))
+            negotiated(&headers, state.get_block_ranges(ranges)).await
         };
 
     let get_vid_common_ranges =
@@ -2749,60 +2804,50 @@ pub(crate) fn router_light_client(state: LightClientState) -> ApiRouter {
             .map_err(classify_availability_error)
     };
 
-    let lc_payload = |State(state): State<LightClientState>, Path(height): Path<u64>| async move {
-        state
-            .get_payload_proof(height)
-            .await
-            .map(ApiJson)
-            .map_err(classify_availability_error)
+    let lc_payload = |State(state): State<LightClientState>,
+                      headers: HeaderMap,
+                      Path(height): Path<u64>| async move {
+        negotiated(&headers, state.get_payload_proof(height)).await
     };
 
     let lc_payload_range = |State(state): State<LightClientState>,
+                            headers: HeaderMap,
                             Path((start, end)): Path<(u64, u64)>| async move {
-        state
-            .get_payload_proof_range(start, end)
-            .await
-            .map(ApiJson)
-            .map_err(classify_availability_error)
+        negotiated(&headers, state.get_payload_proof_range(start, end)).await
     };
 
     let lc_payload_ranges =
         |State(state): State<LightClientState>, headers: HeaderMap, body: Bytes| async move {
             let ranges: Vec<Range<u64>> = decode_body(&headers, &body)?;
-            let proofs = state
-                .get_payload_proof_ranges(ranges)
-                .await
-                .map_err(classify_availability_error)?;
-            Ok::<_, ApiError>(encode_response(&headers, proofs))
+            negotiated(&headers, state.get_payload_proof_ranges(ranges)).await
         };
 
     let lc_namespace = |State(state): State<LightClientState>,
+                        headers: HeaderMap,
                         Path((height, namespace)): Path<(u64, u64)>| async move {
-        state
-            .get_lc_namespace_proof(height, namespace)
-            .await
-            .map(ApiJson)
-            .map_err(classify_availability_error)
+        negotiated(&headers, state.get_lc_namespace_proof(height, namespace)).await
     };
 
     let lc_namespace_range =
         |State(state): State<LightClientState>,
+         headers: HeaderMap,
          Path((start, end, namespace)): Path<(u64, u64, u64)>| async move {
-            state
-                .get_lc_namespace_proof_range(start, end, namespace)
-                .await
-                .map(ApiJson)
-                .map_err(classify_availability_error)
+            negotiated(
+                &headers,
+                state.get_lc_namespace_proof_range(start, end, namespace),
+            )
+            .await
         };
 
     let lc_namespaces_range =
         |State(state): State<LightClientState>,
+         headers: HeaderMap,
          Path((start, end, namespaces)): Path<(u64, u64, String)>| async move {
-            state
-                .get_lc_namespaces_proof_range(start, end, namespaces)
-                .await
-                .map(ApiJson)
-                .map_err(classify_availability_error)
+            negotiated(
+                &headers,
+                state.get_lc_namespaces_proof_range(start, end, namespaces),
+            )
+            .await
         };
 
     ApiRouter::new()
@@ -3629,8 +3674,14 @@ pub fn finish_v1_docs(router: ApiRouter) -> Router {
         }
     }
 
+    // Not an Extension layer: Router::layer clones it into every route.
+    let spec = Bytes::from(serde_json::to_vec(&api).expect("OpenAPI document serializes"));
+
     router
-        .route(routes::v1::OPENAPI_SPEC_ROUTE, get(serve_openapi_spec_v1))
+        .route(
+            routes::v1::OPENAPI_SPEC_ROUTE,
+            get(move || async move { ([(header::CONTENT_TYPE, "application/json")], spec) }),
+        )
         .route(
             routes::v1::SWAGGER_ROUTE,
             get(|| async { swagger_html(routes::v1::OPENAPI_SPEC_ROUTE) }),
@@ -3645,7 +3696,6 @@ pub fn finish_v1_docs(router: ApiRouter) -> Router {
                 .with_title("Espresso Node API v1")
                 .axum_handler()),
         )
-        .layer(Extension(OpenApiV1(api)))
 }
 
 /// Declare a path parameter for every `{name}` template segment of every operation.
@@ -4867,6 +4917,30 @@ mod tests {
         assert!(body.contains(routes::v1::OPENAPI_SPEC_ROUTE));
     }
 
+    /// The spec is served as JSON and is stable across requests.
+    #[tokio::test]
+    async fn v1_openapi_spec_served_as_json() {
+        let router = create_router_v1(MockState);
+        let get_spec = || async {
+            let req = Request::builder()
+                .uri(routes::v1::OPENAPI_SPEC_ROUTE)
+                .body(axum::body::Body::empty())
+                .unwrap();
+            let resp = tower::ServiceExt::oneshot(router.clone(), req)
+                .await
+                .unwrap();
+            assert_eq!(
+                resp.headers().get(header::CONTENT_TYPE).unwrap(),
+                "application/json"
+            );
+            axum::body::to_bytes(resp.into_body(), usize::MAX)
+                .await
+                .unwrap()
+        };
+        let (first, second) = (get_spec().await, get_spec().await);
+        assert_eq!(first, second);
+    }
+
     #[tokio::test]
     async fn v1_openapi_spec_contains_known_route() {
         let router = create_router_v1(MockState);
@@ -5948,6 +6022,122 @@ mod tests {
             .unwrap();
         let resp = tower::ServiceExt::oneshot(router, req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::PAYLOAD_TOO_LARGE);
+    }
+
+    #[test]
+    fn overloaded_payload_request_is_503_with_retry_after() {
+        let err = classify_availability_error(anyhow::Error::new(AvailabilityError::Overloaded {
+            message: "budget exhausted".into(),
+            retry_after_secs: 5,
+        }));
+
+        let res = err.into_response();
+
+        assert_eq!(res.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(res.headers()[header::RETRY_AFTER], "5");
+    }
+
+    #[test]
+    fn submit_overload_has_no_retry_after() {
+        let err = classify_availability_error(anyhow::Error::new(
+            crate::error::SubmitError::Overloaded("queue full".into()),
+        ));
+
+        let res = err.into_response();
+
+        assert_eq!(res.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert!(res.headers().get(header::RETRY_AFTER).is_none());
+    }
+
+    /// The guard is held while the handler builds its response, `IntoResponse` included, and is
+    /// released before the body is consumed. The body is not wrapped, so its size stays known.
+    #[tokio::test]
+    async fn response_guard_covers_building_the_response_not_writing_it() {
+        struct Payload(Arc<Semaphore>);
+
+        impl IntoResponse for Payload {
+            fn into_response(self) -> Response {
+                assert_eq!(
+                    self.0.available_permits(),
+                    0,
+                    "guard held while serializing"
+                );
+                "payload".into_response()
+            }
+        }
+
+        let budget = Arc::new(Semaphore::new(1));
+        let handler_budget = budget.clone();
+        let router = Router::new()
+            .route(
+                "/payload",
+                get(move || {
+                    let budget = handler_budget.clone();
+                    async move {
+                        let permit = budget.clone().try_acquire_owned().unwrap();
+                        assert!(hold_until_response_built(permit).is_none());
+                        Payload(budget)
+                    }
+                }),
+            )
+            .layer(axum::middleware::from_fn(hold_response_guards));
+        let request = Request::builder()
+            .uri("/payload")
+            .body(axum::body::Body::empty())
+            .unwrap();
+
+        let res = tower::ServiceExt::oneshot(router, request).await.unwrap();
+
+        assert_eq!(
+            budget.available_permits(),
+            1,
+            "guard released before the body is read"
+        );
+        assert_eq!(axum::body::HttpBody::size_hint(res.body()).exact(), Some(7));
+    }
+
+    #[test]
+    fn guard_is_returned_outside_a_request() {
+        assert_eq!(hold_until_response_built(7), Some(7));
+    }
+
+    /// `response_is_binary()` as seen by a handler: one route through [`negotiated`], one that
+    /// always answers JSON.
+    async fn binary_seen_by_handler(route: &'static str, accept: &'static str) -> bool {
+        let router = Router::new()
+            .route(
+                "/negotiated",
+                get(|headers: HeaderMap| async move {
+                    negotiated(&headers, async { Ok(response_is_binary()) }).await
+                }),
+            )
+            .route("/json", get(|| async { ApiJson(response_is_binary()) }));
+        let request = Request::builder()
+            .uri(route)
+            .header(header::ACCEPT, accept)
+            .body(axum::body::Body::empty())
+            .unwrap();
+        let res = tower::ServiceExt::oneshot(router, request).await.unwrap();
+        let format = ContentType::parse(res.headers()[header::CONTENT_TYPE].to_str().unwrap())
+            .expect("known content type");
+        let body = axum::body::to_bytes(res.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        match format {
+            ContentType::Binary => Serializer::<WireVersion>::deserialize(&body).unwrap(),
+            ContentType::Json => serde_json::from_slice(&body).unwrap(),
+        }
+    }
+
+    #[tokio::test]
+    async fn negotiated_binary_response_is_seen_as_binary() {
+        assert!(binary_seen_by_handler("/negotiated", "application/octet-stream").await);
+    }
+
+    #[tokio::test]
+    async fn json_responses_are_not_seen_as_binary() {
+        assert!(!binary_seen_by_handler("/negotiated", "application/json").await);
+        assert!(!binary_seen_by_handler("/json", "application/octet-stream").await);
     }
 
     #[tokio::test]

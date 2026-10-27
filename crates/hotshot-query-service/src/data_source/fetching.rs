@@ -131,12 +131,14 @@ mod block;
 mod cert2;
 mod header;
 mod leaf;
+#[cfg(all(test, not(target_os = "windows")))]
+mod local_payload_test;
 mod ranges;
 mod transaction;
 mod vid;
 
 use self::{
-    block::{PayloadFetcher, PayloadRangeFetcher},
+    block::{LocalPayloadGrace, PayloadFetcher, PayloadRangeFetcher},
     cert2::Cert2Fetcher,
     leaf::{LeafFetcher, LeafRangeFetcher, RangeRequest},
     ranges::{
@@ -159,6 +161,7 @@ pub struct Builder<Types, S, P> {
     sync_status_chunk_size: usize,
     active_fetch_delay: Duration,
     chunk_fetch_delay: Duration,
+    local_payload_grace: Duration,
     proactive_fetching: bool,
     aggregator: bool,
     aggregator_chunk_size: Option<usize>,
@@ -191,6 +194,7 @@ impl<Types, S, P> Builder<Types, S, P> {
             sync_status_chunk_size: 100_000,
             active_fetch_delay: Duration::from_millis(50),
             chunk_fetch_delay: Duration::from_millis(100),
+            local_payload_grace: Duration::ZERO,
             proactive_fetching: true,
             aggregator: true,
             aggregator_chunk_size: None,
@@ -310,6 +314,17 @@ impl<Types, S, P> Builder<Types, S, P> {
     /// catch up on, as without a delay, scanning can be extremely burdensome on the peer.
     pub fn with_active_fetch_delay(mut self, active_fetch_delay: Duration) -> Self {
         self.active_fetch_delay = active_fetch_delay;
+        self
+    }
+
+    /// Wait up to `grace` after a block's timestamp before fetching its payload from a peer.
+    ///
+    /// A node that runs consensus decides a block before its own VID reconstruction has always
+    /// produced the payload, and then appends the payload separately. Within the grace a missing
+    /// payload is only fetched if it is still missing once the grace has passed. Older blocks are
+    /// fetched at once.
+    pub fn with_local_payload_grace(mut self, grace: Duration) -> Self {
+        self.local_payload_grace = grace;
         self
     }
 
@@ -510,6 +525,11 @@ where
         + AggregatesStorage<Types>,
     P: AvailabilityProvider<Types>,
 {
+    #[cfg(test)]
+    fn waiting_for_local_payload(&self) -> usize {
+        self.fetcher.local_grace.waiting()
+    }
+
     /// Build a [`FetchingDataSource`] with the given `storage` and `provider`.
     pub fn builder(storage: S, provider: P) -> Builder<Types, S, P> {
         Builder::new(storage, provider)
@@ -876,6 +896,10 @@ where
     async fn append(&self, info: BlockInfo<Types>) -> anyhow::Result<()> {
         let height = info.height() as usize;
 
+        if info.block.is_none() {
+            self.fetcher.local_grace.note_decided(info.height());
+        }
+
         // Save the new decided leaf.
         self.fetcher
             .store(&(info.leaf.clone(), info.cert2.clone()))
@@ -952,23 +976,12 @@ where
             );
             return Ok(());
         }
-        // Storing is an upsert that rewrites the whole payload, and the same block arrives
-        // again on every replay, so skip blocks that are already stored. The payload row is
-        // shared by every height with the same payload, so it only counts once this height's
-        // transactions are indexed too.
-        match tx
-            .get_payload_metadata(BlockId::Number(height as usize))
-            .await
-        {
-            Ok(stored) if stored.num_transactions == 0 || !stored.namespaces.is_empty() => {
-                return Ok(());
-            },
-            Ok(_) | Err(QueryError::Missing | QueryError::NotFound) => {},
-            Err(err) => {
-                return Err(err).context(format!("checking whether block {height} is stored"));
-            },
-        }
         drop(tx);
+        // Storing is an upsert that rewrites the whole payload, and the same block arrives
+        // again on every replay, so skip blocks that are already stored.
+        if self.fetcher.payload_stored(height).await? {
+            return Ok(());
+        }
         self.fetcher.store_and_notify(&block).await;
         Ok(())
     }
@@ -1027,6 +1040,8 @@ where
     active_fetch_delay: Duration,
     // Duration to sleep after each chunk fetched
     chunk_fetch_delay: Duration,
+    // Leaves of this process's decides, to leave their payloads time to arrive locally.
+    local_grace: LocalPayloadGrace,
     // Exponential backoff when retrying failed operations.
     backoff: ExponentialBuilder,
     // Semaphore limiting the number of simultaneous DB accesses we can have from tasks spawned to
@@ -1141,6 +1156,7 @@ where
             sync_status_chunk_size: builder.sync_status_chunk_size,
             active_fetch_delay: builder.active_fetch_delay,
             chunk_fetch_delay: builder.chunk_fetch_delay,
+            local_grace: LocalPayloadGrace::new(builder.local_payload_grace),
             backoff,
             retry_semaphore,
             leaf_only,
@@ -1244,6 +1260,21 @@ where
         // Wait for the object to be fetched, either from the local database on retry or from
         // another provider eventually.
         passive(req, select_some(passive_fetch, recv.map(Result::ok)))
+    }
+
+    /// Whether the payload of the block at `height` is stored. The payload row is shared by every
+    /// height with the same payload, so it only counts once this height's transactions are
+    /// indexed too.
+    async fn payload_stored(&self, height: u64) -> anyhow::Result<bool> {
+        let mut tx = self.read().await.context("opening read transaction")?;
+        match tx
+            .get_payload_metadata(BlockId::Number(height as usize))
+            .await
+        {
+            Ok(stored) => Ok(stored.num_transactions == 0 || !stored.namespaces.is_empty()),
+            Err(QueryError::Missing | QueryError::NotFound) => Ok(false),
+            Err(err) => Err(err).context(format!("checking whether block {height} is stored")),
+        }
     }
 
     /// `ready` if the caller has the object, else storage, else `None` with a fetch spawned if
