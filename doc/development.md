@@ -39,6 +39,8 @@ If a daily workflow forces you to leave the default shell often, it probably bel
 - Source of truth: `.pre-commit-config.yaml` (committed)
 - Runner: [`prek`](https://github.com/j178/prek), a rust reimplementation of pre-commit
 - Entering `nix develop` runs `prek install`; the hook lives in the shared git hooks dir, so it covers all worktrees
+- Checkouts that used the old git-hooks.nix shell have an untracked `.pre-commit-config.yaml` symlink; delete it once
+  before pulling (`rm .pre-commit-config.yaml`), otherwise git refuses to overwrite it
 - To add or change a hook: edit `.pre-commit-config.yaml`
 - To run a hook manually: `pre-commit run <id>` from inside the default shell
 
