@@ -19,7 +19,8 @@ message CertificatePair {
   QuorumCertificate2 next_epoch_qc = 2;
 }
 
-// The client has said it already trusts the last leaf of the chain
+// The client already trusts the leaf at the requested finalized height, whose parent is the last
+// leaf of the chain
 message FinalityAssumption {}
 
 // A 2-chain of QCs under the HotStuff2 commit rule
@@ -80,10 +81,11 @@ message GetLightClientLeafProofRequest {
   // Look up by payload hash, which may match several blocks, of which the first is used
   optional string payload_hash = 4;
 
-  // A height above the requested one that the client already trusts as finalized. When set, the
-  // leaf chain stops at the parent of the leaf at this height, which the client checks against
-  // the leaf it trusts, and the proof is a `FinalityAssumption` instead of certificates. It is
-  // ignored when it lies further past the requested height than one proof may span
+  // A height the client already trusts as finalized, which must be above the requested one. The
+  // leaf chain then stops at the parent of the leaf at this height, which the client checks
+  // against the leaf it trusts, with a `FinalityAssumption` proof, unless certificates prove
+  // finality sooner. It is ignored when it lies further past the requested height than one proof
+  // may span, and on a new-protocol chain when a stored cert2 gives a shorter chain
   optional uint64 finalized = 5;
 }
 
@@ -103,20 +105,20 @@ message GetLightClientHeaderProofRequest {
   optional uint64 height = 2;
 
   // Look up by block hash, TaggedBase64 `BLOCK~`
-  optional string hash = 3;
+  optional string block_hash = 3;
 
   // Look up by payload hash, which may match several blocks, of which the first is used
   optional string payload_hash = 4;
 }
 
-// A 256-bit value that is a curve coordinate rather than a quantity is a `0x`-prefixed hex
-// string, as the stake table contract emits it
+// Coordinates are `0x`-prefixed hex, as v1 serves them
 message Bn254G1Point {
   string x = 1;
 
   string y = 2;
 }
 
+// Coordinates are `0x`-prefixed hex, as v1 serves them
 message Bn254G2Point {
   string x0 = 1;
 
@@ -127,6 +129,7 @@ message Bn254G2Point {
   string y1 = 4;
 }
 
+// Coordinates are `0x`-prefixed hex, as v1 serves them
 message EdOnBn254Point {
   string x = 1;
 
@@ -334,17 +337,6 @@ message GetLightClientStakeTableRequest {
   optional uint64 epoch = 1;
 }
 
-message VidCommon {
-  // The arm names the VID scheme the block was disseminated with
-  oneof common {
-    AdvzCommon v0 = 1;
-
-    AvidmCommon v1 = 2;
-
-    AvidmGf2Common v2 = 3;
-  }
-}
-
 message LightClientPayloadProofResponse {
   Payload payload = 1;
 
@@ -358,12 +350,12 @@ message GetLightClientPayloadProofRequest {
 }
 
 message GetLightClientPayloadProofRangesRequest {
-  // Non-empty, ascending and disjoint, and together bounded by the large-object range limit
+  // Each non-empty, ascending and disjoint, and together bounded by the large-object range limit
   repeated HeightRange ranges = 1;
 }
 
 message GetLightClientPayloadProofRangeRequest {
-  // First height in the range (inclusive)
+  // Required, the first height in the range (inclusive), below `until`
   optional uint64 from = 1;
 
   // Height just past the last one in the range (exclusive)
@@ -396,7 +388,7 @@ message GetLightClientNamespaceProofRequest {
 }
 
 message GetLightClientNamespaceProofRangeRequest {
-  // First height in the range (inclusive)
+  // Required, the first height in the range (inclusive), below `until`
   optional uint64 from = 1;
 
   // Height just past the last one in the range (exclusive)
@@ -411,7 +403,7 @@ message LightClientNamespaceProofRangeResponse {
 }
 
 message GetLightClientNamespacesProofRangeRequest {
-  // First height in the range (inclusive)
+  // Required, the first height in the range (inclusive), below `until`
   optional uint64 from = 1;
 
   // Height just past the last one in the range (exclusive)
@@ -425,7 +417,7 @@ message LightClientNamespacesProof {
   // Keyed by namespace, with an entry only for a requested namespace the block's namespace table
   // holds. A missing one claims the namespace is not in the block, which the client checks
   // against that table
-  map<uint64, LightClientNamespaceProofResponse> proofs = 1;
+  map<uint64, LightClientNamespaceProofContents> proofs = 1;
 }
 
 message LightClientNamespacesProofRangeResponse {

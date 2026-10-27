@@ -3555,7 +3555,7 @@ mod test {
     use ::light_client::{
         consensus::{
             header::HeaderProof,
-            leaf::{FinalityProof, LeafProof, LeafProofHint},
+            leaf::{LeafProof, LeafProofHint},
             namespace::NamespaceProof,
             payload::PayloadProof,
         },
@@ -3619,9 +3619,7 @@ mod test {
         epoch_membership::EpochMembershipCoordinator,
         event::LeafInfo,
         new_protocol::CoordinatorEvent,
-        traits::{
-            EncodeBytes as _, block_contents::BlockHeader, election::Membership, metrics::NoMetrics,
-        },
+        traits::{block_contents::BlockHeader, election::Membership, metrics::NoMetrics},
         utils::epoch_from_block_number,
         x25519,
     };
@@ -11378,36 +11376,32 @@ mod test {
     }
 
     /// Asks both versions for each light-client proof of the block at `height`, where `namespace`
-    /// has transactions. The proofs are compared on what a client verifies them by, since v2 is a
-    /// re-encoding of the v1 type rather than the same bytes.
+    /// has transactions, and holds every v2 response to the v1 proof re-encoded.
     async fn assert_v2_light_client_agrees_with_v1(
         client: &Client<ClientErr, StaticVersion<0, 1>>,
         height: u64,
         namespace: u64,
     ) {
+        use espresso_api::proto;
+
+        let payloads_to_proto = |proofs: &[PayloadProof]| {
+            proofs
+                .iter()
+                .map(|proof| proto::LightClientPayloadProofResponse::try_from(proof).unwrap())
+                .collect::<Vec<_>>()
+        };
+
         let v1_leaf: LeafProof = client
             .get(&format!("light-client/leaf/{height}"))
             .send()
             .await
             .unwrap();
-        let v2_leaf: espresso_api::proto::LightClientLeafProofResponse = client
+        let v2_leaf: proto::LightClientLeafProofResponse = client
             .get(&format!("v2/light-client/leaf?height={height}"))
             .send()
             .await
             .unwrap();
-        assert_eq!(
-            v2_leaf
-                .leaves
-                .iter()
-                .map(|leaf| leaf.parent_commitment.clone())
-                .collect::<Vec<_>>(),
-            v1_leaf
-                .leaves()
-                .iter()
-                .map(|leaf| leaf.parent_commitment().to_string())
-                .collect::<Vec<_>>(),
-        );
-        assert_same_finality_rule(v1_leaf.proof(), v2_leaf.proof);
+        assert_eq!(v2_leaf, (&v1_leaf).into());
 
         let root = height + 1;
         let v1_assumed: LeafProof = client
@@ -11415,21 +11409,21 @@ mod test {
             .send()
             .await
             .unwrap();
-        let v2_assumed: espresso_api::proto::LightClientLeafProofResponse = client
+        let v2_assumed: proto::LightClientLeafProofResponse = client
             .get(&format!(
                 "v2/light-client/leaf?height={height}&finalized={root}"
             ))
             .send()
             .await
             .unwrap();
-        assert_same_finality_rule(v1_assumed.proof(), v2_assumed.proof);
+        assert_eq!(v2_assumed, (&v1_assumed).into());
 
         let v1_header: HeaderProof = client
             .get(&format!("light-client/header/{root}/{height}"))
             .send()
             .await
             .unwrap();
-        let v2_header: espresso_api::proto::LightClientHeaderProofResponse = client
+        let v2_header: proto::LightClientHeaderProofResponse = client
             .get(&format!(
                 "v2/light-client/header?root={root}&height={height}"
             ))
@@ -11437,35 +11431,39 @@ mod test {
             .await
             .unwrap();
         assert_eq!(
-            v2_header.proof.unwrap().proof.len(),
-            v1_header.proof().proof.len()
+            v2_header,
+            proto::LightClientHeaderProofResponse {
+                header: Some(v1_header.header().into()),
+                proof: Some(v1_header.proof().into()),
+            }
         );
-        assert_eq!(v1_header.header().height(), height);
-        assert!(v2_header.header.unwrap().header.is_some());
 
         let v1_payload: PayloadProof = client
             .get(&format!("light-client/payload/{height}"))
             .send()
             .await
             .unwrap();
-        let v2_payload: espresso_api::proto::LightClientPayloadProofResponse = client
+        let v2_payload: proto::LightClientPayloadProofResponse = client
             .get(&format!("v2/light-client/payload?height={height}"))
             .send()
             .await
             .unwrap();
-        assert_eq!(
-            v2_payload.payload.unwrap().raw_payload,
-            v1_payload.payload().encode().to_vec()
-        );
-        assert!(v2_payload.vid_common.unwrap().common.is_some());
-        let v2_payloads: espresso_api::proto::LightClientPayloadProofRangeResponse = client
+        assert_eq!(v2_payload, (&v1_payload).try_into().unwrap());
+
+        let v1_payloads: Vec<PayloadProof> = client
+            .get(&format!("light-client/payload/{height}/{root}"))
+            .send()
+            .await
+            .unwrap();
+        let v2_payloads: proto::LightClientPayloadProofRangeResponse = client
             .get(&format!(
                 "v2/light-client/payload-range?from={height}&until={root}"
             ))
             .send()
             .await
             .unwrap();
-        assert_eq!(v2_payloads.proofs.len(), 1);
+        assert_eq!(v2_payloads.proofs, payloads_to_proto(&v1_payloads));
+
         let v1_batch: Vec<PayloadProof> = client
             .post("light-client/payload/ranges")
             .body_json(&std::iter::once(height..root).collect::<Vec<_>>())
@@ -11473,29 +11471,20 @@ mod test {
             .send()
             .await
             .unwrap();
-        let v2_batch: espresso_api::proto::LightClientPayloadProofRangeResponse = client
+        let v2_batch: proto::LightClientPayloadProofRangeResponse = client
             .post("v2/light-client/payload-ranges")
-            .body_json(
-                &espresso_api::proto::GetLightClientPayloadProofRangesRequest {
-                    ranges: vec![espresso_api::proto::HeightRange {
-                        from: Some(height),
-                        until: Some(root),
-                    }],
-                },
-            )
+            .body_json(&proto::GetLightClientPayloadProofRangesRequest {
+                ranges: vec![proto::HeightRange {
+                    from: Some(height),
+                    until: Some(root),
+                }],
+            })
             .unwrap()
             .send()
             .await
             .unwrap();
-        assert_eq!(v2_batch.proofs.len(), v1_batch.len());
-        for (v1, v2) in v1_batch.iter().zip(&v2_batch.proofs) {
-            assert_eq!(
-                v2.payload.as_ref().unwrap().raw_payload,
-                v1.payload().encode().to_vec()
-            );
-        }
+        assert_eq!(v2_batch.proofs, payloads_to_proto(&v1_batch));
 
-        // A namespace the block does not carry gets the trivial proof on both versions.
         let absent = 999;
         for ns in [namespace, absent] {
             let v1_ns: NamespaceProof = client
@@ -11503,33 +11492,38 @@ mod test {
                 .send()
                 .await
                 .unwrap();
-            let v2_ns: espresso_api::proto::LightClientNamespaceProofResponse = client
+            let v2_ns: proto::LightClientNamespaceProofResponse = client
                 .get(&format!(
                     "v2/light-client/namespace?height={height}&namespace={ns}"
                 ))
                 .send()
                 .await
                 .unwrap();
-            assert_eq!(v2_ns.contents.is_some(), v1_ns.contents().is_some(), "{ns}");
+            assert_eq!(v1_ns.contents().is_some(), ns == namespace, "{ns}");
+            assert_eq!(v2_ns, (&v1_ns).try_into().unwrap(), "{ns}");
         }
-        assert!(
-            client
-                .get::<NamespaceProof>(&format!("light-client/namespace/{height}/{namespace}"))
-                .send()
-                .await
-                .unwrap()
-                .contents()
-                .is_some(),
-            "the block carries {namespace}, so the check above compared real proofs"
-        );
-        let v2_range: espresso_api::proto::LightClientNamespaceProofRangeResponse = client
+
+        let v1_range: Vec<NamespaceProof> = client
+            .get(&format!(
+                "light-client/namespace/{height}/{root}/{namespace}"
+            ))
+            .send()
+            .await
+            .unwrap();
+        let v2_range: proto::LightClientNamespaceProofRangeResponse = client
             .get(&format!(
                 "v2/light-client/namespace-range?from={height}&until={root}&namespace={namespace}"
             ))
             .send()
             .await
             .unwrap();
-        assert_eq!(v2_range.proofs.len(), 1);
+        assert_eq!(
+            v2_range.proofs,
+            v1_range
+                .iter()
+                .map(|proof| proto::LightClientNamespaceProofResponse::try_from(proof).unwrap())
+                .collect::<Vec<_>>()
+        );
 
         let encoded = tagged_base64::TaggedBase64::new(
             ::light_client::client::NAMESPACES_PARAM_TAG,
@@ -11543,57 +11537,45 @@ mod test {
             .send()
             .await
             .unwrap();
-        let v2_blocks: espresso_api::proto::LightClientNamespacesProofRangeResponse = client
+        let v2_blocks: proto::LightClientNamespacesProofRangeResponse = client
             .post("v2/light-client/namespaces-range")
-            .body_json(
-                &espresso_api::proto::GetLightClientNamespacesProofRangeRequest {
-                    from: Some(height),
-                    until: Some(root),
-                    namespaces: Vec::from([namespace, absent]),
-                },
-            )
+            .body_json(&proto::GetLightClientNamespacesProofRangeRequest {
+                from: Some(height),
+                until: Some(root),
+                namespaces: Vec::from([namespace, absent]),
+            })
             .unwrap()
             .send()
             .await
             .unwrap();
         assert_eq!(
-            v2_blocks
-                .blocks
-                .iter()
-                .map(|block| block
-                    .proofs
-                    .keys()
-                    .copied()
-                    .collect::<std::collections::BTreeSet<_>>())
-                .collect::<Vec<_>>(),
+            v2_blocks.blocks,
             v1_blocks
                 .iter()
-                .map(|block| block
-                    .keys()
-                    .copied()
-                    .collect::<std::collections::BTreeSet<_>>())
+                .map(|block| proto::LightClientNamespacesProof {
+                    proofs: block
+                        .iter()
+                        .filter_map(|(ns, proof)| {
+                            Some((*ns, proof.contents()?.try_into().unwrap()))
+                        })
+                        .collect(),
+                })
                 .collect::<Vec<_>>(),
         );
 
-        // Epochs may not have started on this network, so the two are held to the same answer
-        // rather than to a success.
-        let epoch = 3;
-        let v1_events = client
-            .get::<Vec<espresso_types::v0_3::StakeTableEvent>>(&format!(
-                "light-client/stake-table/{epoch}"
-            ))
-            .send()
-            .await;
-        let v2_events = client
-            .get::<espresso_api::proto::LightClientStakeTableResponse>(&format!(
-                "v2/light-client/stake-table?epoch={epoch}"
-            ))
-            .send()
-            .await;
-        match (v1_events, v2_events) {
-            (Ok(v1_events), Ok(v2_events)) => assert_eq!(v2_events.events.len(), v1_events.len()),
-            (Err(v1_err), Err(v2_err)) => assert_eq!(v2_err.status, v1_err.status),
-            (v1_events, v2_events) => panic!("v1 {v1_events:?} but v2 {v2_events:?}"),
+        for query in [
+            format!("light-client/namespace/{}/{namespace}", u64::MAX),
+            format!(
+                "v2/light-client/namespace?height={}&namespace={namespace}",
+                u64::MAX
+            ),
+        ] {
+            let err = client
+                .get::<serde_json::Value>(&query)
+                .send()
+                .await
+                .unwrap_err();
+            assert_eq!(err.status, StatusCode::NOT_FOUND, "{query}");
         }
 
         for query in [
@@ -11630,31 +11612,6 @@ mod test {
                 .await
                 .unwrap_err();
             assert_eq!(err.status, StatusCode::BAD_REQUEST);
-        }
-    }
-
-    fn assert_same_finality_rule(
-        v1: &FinalityProof,
-        v2: Option<espresso_api::proto::FinalityProof>,
-    ) {
-        match (v1, v2.and_then(|proof| proof.proof)) {
-            (
-                FinalityProof::Assumption,
-                Some(espresso_api::proto::finality_proof::Proof::Assumption(_)),
-            )
-            | (
-                FinalityProof::HotStuff2 { .. },
-                Some(espresso_api::proto::finality_proof::Proof::HotStuff2(_)),
-            )
-            | (
-                FinalityProof::NewProtocol { .. },
-                Some(espresso_api::proto::finality_proof::Proof::NewProtocol(_)),
-            )
-            | (
-                FinalityProof::HotStuff { .. },
-                Some(espresso_api::proto::finality_proof::Proof::HotStuff(_)),
-            ) => {},
-            (v1, v2) => panic!("v1 proves finality by {v1:?} but v2 by {v2:?}"),
         }
     }
 
