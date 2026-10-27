@@ -75,9 +75,10 @@ pub fn url(base: &::url::Url, path: impl AsRef<str>) -> ::url::Url {
 ///
 /// `catchup`, like the query-service modules (`status`, `availability`, `node`, `token`,
 /// `block-state`, `fee-state`, `reward-state`, `database`) and `v2`, is always on: tide-disco's
-/// SQL mode registered it unconditionally. `submit`, `config`, `explorer`, and `light-client`
-/// follow `Options`, matching `Options::init_with_query_module_sql`, and v2's gated services follow
-/// the same flag as their v1 module.
+/// SQL mode registered it unconditionally. `light-client` is always on too, since peers fetch
+/// missing data from it. `submit`, `config`, and `explorer` follow `Options`, matching
+/// `Options::init_with_query_module_sql`, and v2's gated services follow the same flag as their
+/// v1 module.
 pub async fn serve_axum<S>(
     port: u16,
     state: S,
@@ -126,7 +127,8 @@ where
         .merge(axum::router_catchup(state.clone()))
         .merge(axum::router_state_signature(state.clone()))
         .merge(axum::router_token(state.clone()))
-        .merge(axum::router_database(state.clone()));
+        .merge(axum::router_database(state.clone()))
+        .merge(axum::router_light_client(state.clone()));
     if modules.submit {
         router = router.merge(axum::router_submit(state.clone()));
     }
@@ -135,9 +137,6 @@ where
     }
     if modules.explorer {
         router = router.merge(axum::router_explorer(state.clone()));
-    }
-    if modules.light_client {
-        router = router.merge(axum::router_light_client(state.clone()));
     }
 
     let router = axum::finish_v1_docs(router)
@@ -203,14 +202,13 @@ where
 }
 
 /// Which of the optional API modules to serve, for modes that make them conditional
-/// (mirroring `Options::submit`/`Options::config`/`Options::explorer`/`Options::light_client`).
+/// (mirroring `Options::submit`/`Options::config`/`Options::explorer`).
 #[derive(Default, Clone, Copy, Debug)]
 pub struct OptionalModules {
     pub submit: bool,
     pub catchup: bool,
     pub config: bool,
     pub explorer: bool,
-    pub light_client: bool,
 }
 
 /// Serve the query API used by the filesystem-backed storage mode: status, availability, node,
