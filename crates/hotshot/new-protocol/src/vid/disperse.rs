@@ -214,9 +214,9 @@ where
                     .map(|&ns_index| disperse_namespace(params, ns_index))
                     .collect::<Result<_, _>>()
             })?;
-            let fragments = debug_span!("fragments")
+            let bucket_fragments = debug_span!("fragments")
                 .in_scope(|| fragments(view, epoch, payload_commitment, params, dispersals));
-            for fragment in fragments {
+            for fragment in bucket_fragments {
                 let recipient = fragment.recipient_key.clone();
                 let message = Message {
                     sender: public_key.clone(),
