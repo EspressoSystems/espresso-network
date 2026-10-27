@@ -1,7 +1,7 @@
 use hotshot::types::BLSPubKey;
 use hotshot_example_types::{block_types::TestTransaction, node_types::TestTypes};
 use hotshot_types::{
-    data::{VidCommitment2, VidDisperseShare2},
+    data::{VidCommitment2, VidDisperseShare2, ViewNumber},
     traits::signature_key::SignatureKey,
     vid::avidm_gf2::AvidmGf2Scheme,
 };
@@ -11,7 +11,8 @@ use crate::{
     tests::common::utils::vid_fragments,
     vid::{
         PinnedBy, VidFragmentAccumulator, VidFragmentError, VidReconstructErrorKind,
-        VidReconstructor},
+        VidReconstructor,
+    },
 };
 
 /// Threshold for SuccessThreshold with 10 nodes of stake 1: (10*2)/3 + 1 = 7.

@@ -28,6 +28,12 @@ use crate::{
 /// Threshold for SuccessThreshold with 10 nodes of stake 1: (10*2)/3 + 1 = 7.
 const THRESHOLD: u64 = 7;
 
+/// How long a negative assertion waits for something that must not happen.
+///
+/// Every test that uses it follows with a positive control, so a window too
+/// short to reach the event cannot make the assertion pass silently.
+const NO_CERT_WINDOW: Duration = Duration::from_secs(2);
+
 /// Send a proposal and enough Vote1 messages to form Certificate1.
 ///
 /// Sends the proposal first (providing metadata for VID reconstruction),
@@ -307,7 +313,7 @@ async fn test_reconstructs_from_broadcast_shares_without_own_share() {
         .iter()
         .filter_map(|output| match output {
             ConsensusOutput::BlockPayloadReconstructed { view, payload, .. } => {
-                Some((*view, payload.as_ref().clone()))
+                Some((*view, payload.clone()))
             },
             _ => None,
         })

@@ -7,11 +7,11 @@ use hotshot_example_types::{
     state_types::TestValidatedState,
 };
 use hotshot_types::{
-    data::{EpochNumber, Leaf2, ViewNumber},
+    data::{EpochNumber, Leaf2, VidCommitment, ViewNumber},
     message::Proposal as SignedProposal,
     simple_certificate::{LightClientStateUpdateCertificateV2, TimeoutCertificate2},
     simple_vote::HasEpoch,
-    traits::signature_key::SignatureKey,
+    traits::{block_contents::BlockHeader, signature_key::SignatureKey},
     utils::is_epoch_root,
     vote::HasViewNumber,
 };
@@ -30,9 +30,10 @@ use crate::{
     tests::common::{
         assertions::{
             any, count_matching, decides_view, is_leaf_decided, is_persist_proposal, is_proposal,
-            is_proposal_certified, is_proposal_for_view, is_record_action, is_request_block_and_header, is_request_state,
-            is_send_cert2, is_send_timeout_cert, is_send_timeout_vote, is_view_changed, is_vote1,
-            is_vote1_for_view, is_vote2, is_vote2_for_view, node_index_for_key,
+            is_proposal_certified, is_proposal_for_view, is_record_action,
+            is_request_block_and_header, is_request_state, is_send_cert2, is_send_timeout_cert,
+            is_send_timeout_vote, is_view_changed, is_vote1, is_vote1_for_view, is_vote2,
+            is_vote2_for_view, node_index_for_key,
         },
         utils::{ConsensusHarness, MockBlock, state_verified_input},
     },
