@@ -23,11 +23,11 @@ use hotshot_types::{
 use hotshot_utils::anytrace::{self, Wrap};
 use rayon::prelude::*;
 use tokio::task::{AbortHandle, JoinSet};
-use tracing::{error, warn};
+use tracing::{debug_span, error, warn};
 
 use crate::{
     coordinator::metrics::{Measurement, finish_measurement},
-    message::{ConsensusMessage, Message, MessageType},
+    message::{ConsensusMessage, Message, MessageType, Validated},
     network::{NetworkError, Sender},
 };
 
@@ -156,7 +156,40 @@ fn handle_vid_disperse_request<T: NodeType>(
     )
     .map_err(VidDisperseError::Vid)?;
 
-    let signature = T::SignatureKey::sign(&private_key, payload_commitment.as_ref())
+    disperse_payload(
+        &params,
+        view,
+        epoch,
+        payload_commitment,
+        &public_key,
+        &private_key,
+        move |recipient, message| network.unicast(view, recipient, message),
+    )?;
+
+    Ok(VidDisperseOutput {
+        view,
+        payload_commitment,
+    })
+}
+
+/// Erasure-codes the payload in `params` and hands every recipient's fragment of each bucket of
+/// namespaces to `send`, which the disperser points at the network. The `block_build` bench in
+/// espresso-types passes a `send` that only serializes; the spans time each step.
+pub fn disperse_payload<T, S>(
+    params: &AvidmGf2DisperseParams<T>,
+    view: ViewNumber,
+    epoch: EpochNumber,
+    payload_commitment: VidCommitment2,
+    public_key: &T::SignatureKey,
+    private_key: &<T::SignatureKey as SignatureKey>::PrivateKey,
+    send: S,
+) -> Result<(), VidDisperseError>
+where
+    T: NodeType,
+    S: Fn(&T::SignatureKey, &Message<T, Validated>) -> Result<(), NetworkError> + Clone + Send,
+{
+    let signature = debug_span!("sign")
+        .in_scope(|| T::SignatureKey::sign(private_key, payload_commitment.as_ref()))
         .map_err(|err| VidDisperseError::Sign(err.into()))?;
 
     // Coalesce namespaces into size-balanced buckets, roughly one per core,
@@ -172,14 +205,18 @@ fn handle_vid_disperse_request<T: NodeType>(
         bucketize(&params.ns_table, threshold)
     };
 
-    buckets.par_iter().try_for_each_with(
-        network,
-        |network, bucket| -> Result<(), VidDisperseError> {
-            let dispersals = bucket
-                .iter()
-                .map(|&ns_index| disperse_namespace(&params, ns_index))
-                .collect::<Result<_, _>>()?;
-            for fragment in fragments(view, epoch, payload_commitment, &params, dispersals) {
+    buckets
+        .par_iter()
+        .try_for_each_with(send, |send, bucket| -> Result<(), VidDisperseError> {
+            let dispersals = debug_span!("ns_encode").in_scope(|| {
+                bucket
+                    .iter()
+                    .map(|&ns_index| disperse_namespace(params, ns_index))
+                    .collect::<Result<_, _>>()
+            })?;
+            let fragments = debug_span!("fragments")
+                .in_scope(|| fragments(view, epoch, payload_commitment, params, dispersals));
+            for fragment in fragments {
                 let recipient = fragment.recipient_key.clone();
                 let message = Message {
                     sender: public_key.clone(),
@@ -187,7 +224,7 @@ fn handle_vid_disperse_request<T: NodeType>(
                         SignedProposal::new(fragment, signature.clone()),
                     )),
                 };
-                if let Err(err) = network.unicast(view, &recipient, &message) {
+                if let Err(err) = send(&recipient, &message) {
                     if err.is_critical() {
                         return Err(err.into());
                     }
@@ -195,13 +232,7 @@ fn handle_vid_disperse_request<T: NodeType>(
                 }
             }
             Ok(())
-        },
-    )?;
-
-    Ok(VidDisperseOutput {
-        view,
-        payload_commitment,
-    })
+        })
 }
 
 /// Erasure-codes the namespace at `ns_index` of the payload in `params`.
