@@ -31,7 +31,6 @@ pub struct GeneratedView {
     /// The proposal's leaf, with its (empty) payload filled in.
     pub leaf: Leaf2<TestTypes>,
     pub view_number: ViewNumber,
-    pub epoch_number: EpochNumber,
     pub leader_public_key: BLSPubKey,
     pub vid_disperse: VidDisperse<TestTypes>,
 }
@@ -44,7 +43,6 @@ pub struct TestViewGenerator {
     node_key_map: Arc<TestNodeKeyMap>,
     upgrade: Upgrade,
     upgrade_lock: UpgradeLock<TestTypes>,
-    epoch: EpochNumber,
     last: Option<GeneratedView>,
 }
 
@@ -59,7 +57,6 @@ impl TestViewGenerator {
             node_key_map,
             upgrade,
             upgrade_lock: UpgradeLock::new(upgrade),
-            epoch: EpochNumber::genesis(),
             last: None,
         }
     }
@@ -121,7 +118,7 @@ impl TestViewGenerator {
         >(
             QuorumData2 {
                 leaf_commit: last.leaf.commit(),
-                epoch: Some(self.epoch),
+                epoch: Some(EpochNumber::genesis()),
                 block_number: Some(last.leaf.height()),
             },
             &membership,
@@ -171,8 +168,8 @@ impl TestViewGenerator {
             &payload,
             &membership.coordinator,
             view_number,
-            Some(self.epoch),
-            Some(self.epoch),
+            Some(EpochNumber::genesis()),
+            Some(EpochNumber::genesis()),
             &metadata,
             &self.upgrade_lock,
         )
@@ -184,7 +181,7 @@ impl TestViewGenerator {
             proposal: QuorumProposal2::<TestTypes> {
                 block_header,
                 view_number,
-                epoch: Some(self.epoch),
+                epoch: Some(EpochNumber::genesis()),
                 justify_qc,
                 next_epoch_justify_qc: None,
                 upgrade_certificate: None,
@@ -206,7 +203,6 @@ impl TestViewGenerator {
             },
             leaf,
             view_number,
-            epoch_number: self.epoch,
             leader_public_key,
             vid_disperse,
         }
@@ -214,7 +210,7 @@ impl TestViewGenerator {
 
     fn epoch_membership(&self) -> EpochMembership<TestTypes> {
         self.membership
-            .membership_for_epoch(Some(self.epoch))
+            .membership_for_epoch(Some(EpochNumber::genesis()))
             .unwrap()
     }
 

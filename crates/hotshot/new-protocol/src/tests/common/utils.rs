@@ -527,7 +527,7 @@ impl TestData {
             let epoch = if epoch_height > 0 && block_number > 0 {
                 EpochNumber::new(epoch_from_block_number(block_number, epoch_height))
             } else {
-                gen_view.epoch_number
+                EpochNumber::genesis()
             };
             // Use genesis membership for signing — same committee in tests.
             let epoch_membership = membership
@@ -555,8 +555,7 @@ impl TestData {
                 proposal.next_drb_result = computed_drbs.get(&next_epoch).copied();
             }
             // Always set epoch (may differ from generator output).
-            let gen_epoch = gen_view.epoch_number;
-            let epoch_patched = epoch != gen_epoch;
+            let epoch_patched = epoch != EpochNumber::genesis();
             proposal.epoch = epoch;
             // The dispersal carries the proposal's epoch, as `VidDisperser`
             // gives it: the two must agree for the share to pair with the
