@@ -83,7 +83,7 @@ laptop                       EC2, one AZ, private IPs
 
 | Host        | Runs                                                                                                   |
 | ----------- | ------------------------------------------------------------------------------------------------------ |
-| `ctl`       | anvil, `deploy`, orchestrator, state-relay-server, `agent-drive`, `agent-host`                         |
+| `ctl`       | anvil, `deploy`, `stake`, orchestrator, relay, `state-prover`, `agent-drive`, `agent-host`             |
 | `node0`     | espresso-node `-- storage-sql -- http -- query ... -- light-client`, postgres container, `agent-host`  |
 | query nodes | with `--query-nodes K` (all nodes under `--chaos`), `node0..node{K-1}` run the same modules as `node0` |
 | `node1..`   | espresso-node `-- storage-fs -- http -- status -- submit -- catchup -- config`, `agent-host`           |
@@ -239,10 +239,13 @@ just bench aws run --tag chaos-dense --chaos --nodes 32 --query-nodes 3 --chaos-
 
 - `--chaos` restarts, kills and wipes nodes, any node, while the load runs at a constant rate. Flags not given take the
   chaos shape: 22 nodes, every node a query node, `sqlite` colocated, `c8g.large` nodes, `c8g.xlarge` `ctl`,
-  `--latency decaf-2025`, `--netem full`, `--chaos-min` steps of 60 s at `--chaos-rate` MB/s, `--keep-going`. `--nodes`,
-  `--query-nodes`, `--node-type`, `--ctl-type`, `--latency` (`off`, `mainnet`, `decaf-2025` or `decaf-2026`), `--netem`,
-  `--submit-nodes` and `--query-engine` given on the command line are kept; `--latency` is per run, `up` does not take
-  it; `--nodes N` alone gives N query nodes.
+  `--latency decaf-2025`, `--netem full`, `--epoch-height 300`, `--chaos-min` steps of 60 s at `--chaos-rate` MB/s,
+  `--keep-going`. `--nodes`, `--query-nodes`, `--node-type`, `--ctl-type`, `--latency` (`off`, `mainnet`, `decaf-2025`
+  or `decaf-2026`), `--netem`, `--submit-nodes`, `--epoch-height` and `--query-engine` given on the command line are
+  kept; `--latency` is per run, `up` does not take it; `--nodes N` alone gives N query nodes.
+- Any `--epoch-height` stakes every node on L1 before the nodes start: `staking-cli stake-for-demo` on `ctl`, then a
+  wait for the L1 finalized block (`scripts/wait-for-l1-finalized`). Nodes then read the stake table from L1 at each
+  epoch change. A run without `--epoch-height` is unchanged.
 - Refused: `--steps`, `--step-s`, `--search`, `--keep-going` and `--warmup-s` (set by the chaos config); fewer than 7
   nodes; 2 or fewer query nodes; a shape where no node has 2 peers (`--nodes 7 --query-nodes 6`; not with mass kinds
   only or `none`); a `--chaos-min` that gives no faults (not with `--chaos-kinds none`); `--query-engine postgres`;
@@ -385,8 +388,8 @@ just bench aws run --tag chaos-dense --chaos --nodes 32 --query-nodes 3 --chaos-
 #### Not covered
 
 - Stake table changes: no delegation, undelegation, validator registration or exit during the run.
-- Epoch transitions under faults: runs do not span a stake table epoch change. `--epoch-height 3000` (decaf's value) is
-  accepted but not exercised by a chaos run; the default is the template's 1000000.
+- Epoch transitions without `--chaos`: the default `--epoch-height` is the template's 1000000, which a run does not
+  reach. `--chaos` crosses several epochs (300 blocks), the stake table fixed at the staked nodes.
 - L1 faults: anvil on ctl never stalls, reorgs or drops RPC.
 - Network faults: no partitions or latency spikes; `--latency` shaping is static, with `--netem full` a steady jitter
   and loss floor.
@@ -400,6 +403,43 @@ just bench aws run --tag chaos-dense --chaos --nodes 32 --query-nodes 3 --chaos-
 - Load shape: constant rate only; no bursts or capacity search under faults.
 - Correlated or simultaneous faults: one fault per tick, at least `--chaos-gap` apart; mass kinds fault a group at once.
 - Faults aimed at upcoming leaders: targets follow the seeded order, not the leader schedule.
+
+### Light client prover
+
+```
+just bench aws run --tag release-x --prover
+just bench aws run --tag release-x --chaos --prover
+just bench aws run --fleet --prover   # the fleet's ctl needs 12288 MiB, e.g. up --ctl-type c8g.4xlarge
+```
+
+- `ctl` runs `stake` (`--epoch-height` given or implied) and `state-prover` (`--prover`) in addition to the services of
+  [Topology](#topology). `--prover` runs the light-client prover on `ctl` beside the network: `state-prover -d` of the
+  `prover-service` image against the real verifier, updating the light client contract back to back
+  (`ESPRESSO_STATE_PROVER_UPDATE_INTERVAL=0s`).
+- Flags not given take `--epoch-height 300` and `--ctl-type c8g.4xlarge` (16 vCPU; also with `--chaos`, whose
+  `c8g.xlarge` is too small). A `ctl` below 12288 MiB is refused by `plan`, `run` and `run --fleet`; a fleet from before
+  the image is refused unless a new `--tag` pulls the images.
+- Stake table capacity 200 in genesis (`stake_table_capacity`, `[stake_table] capacity`) and in
+  `ESPRESSO_STAKE_TABLE_CAPACITY` of `ctl.env` (relay, `deploy`, prover). Without `--prover` genesis uses
+  `max(10, nodes)` and `ctl.env` keeps the `ESPRESSO_STAKE_TABLE_CAPACITY` of `.env`. `--prover` with more than 200
+  nodes is refused.
+- The prover reads from node0 only (`ESPRESSO_API_NODE_URL`). With `--chaos`, a fault on node0 stalls the prover until
+  node0 serves again, which lowers the LC height of `summary.md`.
+- `prover.sh` runs as unit `bench-prover` on `ctl` once the nodes have started and the load never waits for it. Steps:
+  `node0-up` (node0 answers `block-height`), `lc-deployed` (container `deploy-lc`:
+  `deploy --deploy-light-client-v1 --upgrade-light-client-v2 --upgrade-light-client-v3`), `lc-address-ok` (code at
+  `ESPRESSO_LIGHT_CLIENT_PROXY_ADDRESS` of `.env`), `prover-started`.
+- Output: `hosts/ctl/prover.log` (`<epoch s> <step>`, or `<epoch s> failed <step>`), `hosts/ctl/prover-state.json`
+  (written at freeze: `state-prover` container status, exit code, `finalizedState().blockHeight` of the light client
+  from anvil) and the `light-client prover:` line of `summary.md`: the last step, or once started `running, LC height N`
+  / `exited N at prover-started, LC height N`. A failed step does not fail the run.
+- Nodes find the light client through `StakeTableV3.lightClient()`; no node environment changes.
+- The prover container uses every `ctl` core (no `--cpus`, no `RAYON_NUM_THREADS`) at `--cpu-shares 2` (cgroup v2
+  `cpu.weight` 1, the minimum), so it yields to the orchestrator, the relay and the load driver. `nice` would not: the
+  load driver runs in its own systemd unit cgroup, and CFS weighs sibling cgroups before nice values. The `ctl` CPU
+  noisy check is skipped with `--prover`. The config hash includes `--prover`.
+- SRS: ark-srs downloads its parameters on first use (`ctl` needs internet egress) into `/data/ark-srs` on `ctl`, which
+  a fleet keeps across runs.
 
 ### Node build and config
 
@@ -555,7 +595,7 @@ Where:
 | `--nodes`                             | 5                              | provision    | validator count, `node0` included                                                             |
 | `--query-nodes`                       | 1                              | provision    | query service nodes, the first `K` of `--nodes`; above 1 needs `--query-db colocated`         |
 | `--node-type`                         | `c8g.4xlarge`                  | provision    | node instance type                                                                            |
-| `--ctl-type`                          | `c8g.2xlarge`                  | provision    | `ctl` instance type                                                                           |
+| `--ctl-type`                          | `c8g.2xlarge`                  | provision    | `ctl` instance type (`c8g.4xlarge` with `--prover`)                                           |
 | `--root-gb`                           | `auto`                         | provision    | root volume GB; `auto` sizes from the ramp, or from `--offered-gb` with `--search`            |
 | `--pg-iops`, `--pg-mbps`              | 12000, 500                     | provision    | node0 root volume and `volume` store                                                          |
 | `--region`                            | eu-west-1                      | provision    | AWS region                                                                                    |
@@ -594,7 +634,8 @@ Where:
 | `--mtu`                               | 1500                           | per run      | with `--latency`: interface MTU of the nodes                                                  |
 | `--netem`                             | `delay`; `full` with `--chaos` | per run      | with `--latency`: `full` adds per-pair jitter and loss to the delay                           |
 | `--jitter-ratio`                      | 0.0065                         | per run      | with `--netem full`: floor of the jitter half-width as a ratio of the one-way delay           |
-| `--epoch-height`                      | template (1000000)             | per run      | genesis `epoch_height`, in blocks                                                             |
+| `--prover`                            | off                            | per run      | light-client prover on `ctl`; see [Light client prover](#light-client-prover)                 |
+| `--epoch-height`                      | `1000000`; 300 w. `--chaos`    | per run      | genesis `epoch_height`, in blocks; any value stakes every node on L1                          |
 | `--consensus-storage`                 | `fs`                           | per run      | `fs`, `journal` (experimental, not in `main` images); query node uses `storage-sql` with `fs` |
 | `--prune [RETENTION]`                 | off; bare `1m`                 | per run      | node0 prunes data and state older than RETENTION every 30 s; part of the config hash          |
 | `--fleet [FLEET]`                     | none                           | run          | measure on a fleet from `up`                                                                  |
@@ -762,7 +803,7 @@ Each step is judged over its second half. A step stopped early is judged over it
 - Stake: equal, orchestrator self-registration. 5 nodes give quorum 4, so a lagging `node0` never stalls consensus.
 - Peers: every node has state peers. Query nodes set `ESPRESSO_NODE_API_PEERS` to the other query nodes; the single
   query node has none.
-- Keys: test mnemonic, index 20 + i. No `keygen`, no `stake-for-demo`.
+- Keys: test mnemonic, index 20 + i. No `keygen`. `stake-for-demo` only with `--epoch-height`.
 - Network: cliquenet over private IPs. The security group allows ssh from this machine's IP only (checkip).
 - Images: `ghcr.io/espressosystems/espresso-network/<component>:<--tag>` plus foundry and postgres. Preflight resolves
   digests, hosts pull by digest, the manifest records them.

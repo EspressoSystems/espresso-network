@@ -3,6 +3,7 @@ import base64
 import collections
 import dataclasses
 import functools
+import http.client
 import inspect
 import itertools
 import json
@@ -360,6 +361,27 @@ def test_closing_the_pool_stops_retries(caplog: pytest.LogCaptureFixture):
     levels = [record.levelname for record in caplog.records]
     assert levels[0] == "WARNING"
     assert set(levels[1:]) == {"DEBUG"}
+
+
+def closed_mid_response() -> netbench.ResponseLost:
+    lost = netbench.ResponseLost("GET http://x: Remote end closed connection")
+    lost.__cause__ = http.client.RemoteDisconnected("Remote end closed connection")
+    return lost
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [ConnectionRefusedError(111, "refused"), closed_mid_response()],
+    ids=["refused", "closed"],
+)
+def test_a_node_going_down_retries_quietly(
+    caplog: pytest.LogCaptureFixture, failure: OSError
+):
+    clock = fakes.FakeClock()
+    pool = ScriptedPool(clock, failure, (200, b"7"))
+    with caplog.at_level(logging.DEBUG, netbench.log.name):
+        assert netbench.get_ok(pool, "http://x") == b"7"
+    assert [record.levelname for record in caplog.records] == ["DEBUG"]
 
 
 def test_not_found_is_not_retried():
@@ -2938,3 +2960,23 @@ def test_pruned_heights_reach_the_summary_when_pruning_is_on(tmp_path: Path):
     assert "- prune: retention 60 s; pruned to height: node0 data 1120, state 480" in (
         netbench.render(result, None)
     )
+
+
+def test_summary_names_the_epoch_height_only_when_nodes_were_staked(tmp_path: Path):
+    write_run_dir(tmp_path)
+    result = analyze(tmp_path)
+    result["deployment"] = deployment()
+    assert "epoch height" not in netbench.render(result, None)
+    result["deployment"] = deployment() | {"epoch_height": 300, "staking": True}
+    assert "- epoch height: 300, every node staked on L1" in netbench.render(
+        result, None
+    )
+
+
+def test_summary_names_how_far_the_prover_got(tmp_path: Path):
+    write_run_dir(tmp_path)
+    result = analyze(tmp_path)
+    result["deployment"] = deployment()
+    assert "prover" not in netbench.render(result, None)
+    result["deployment"] = deployment() | {"prover": "prover-started"}
+    assert "- light-client prover: prover-started" in netbench.render(result, None)
