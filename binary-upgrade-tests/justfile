@@ -1,13 +1,17 @@
 # Recipes for the binary upgrade test. Invoke via `just binary-upgrade-tests::<recipe>`.
 
+[script("../scripts/with-tools", "python", "uv")]
 run *args:
     ./run.py {{args}}
 
+[script("../scripts/with-tools", "python", "ruff")]
 fmt *args:
     ruff format run.py {{args}}
 
+[script("../scripts/with-tools", "python", "ruff")]
 lint *args:
     ruff check run.py {{args}}
 
+[script("../scripts/with-tools", "python", "ty")]
 check *args:
     ty check run.py {{args}}

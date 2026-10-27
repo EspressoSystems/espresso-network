@@ -279,11 +279,11 @@ jobs:
 
       - name: Build verification module
         run: |
-          nix develop --accept-flake-config -c just build-go-crypto-helper
+          nix develop .#go --accept-flake-config -c just build-go-crypto-helper
 
       - name: Test
         run: |
-          nix develop --accept-flake-config -c just test-go
+          nix develop .#go --accept-flake-config -c just test-go
         env:
           ESPRESSO_DEV_NODE_BIN: ${{ github.workspace }}/test-binaries-dev-node/espresso-dev-node
 
