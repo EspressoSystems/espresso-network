@@ -639,8 +639,7 @@ impl Persistence {
                     .await?;
                 }
 
-                // Delete the data that has been fully processed. VID shares are kept until
-                // VID_SHARE_RETENTION expires instead.
+                // Delete the data that has been fully processed.
                 tx.execute(
                     query("DELETE FROM da_proposal2 where view >= $1 AND view <= $2")
                         .bind(from_view_i64)
@@ -724,9 +723,8 @@ impl Persistence {
                 .await?;
             }
             prune_to_view(&mut tx, view.u64()).await?;
-            prune_table(
+            prune_vid_shares(
                 &mut tx,
-                "vid_share2",
                 view.u64().saturating_sub(self.gc_opt.vid_share_retention),
             )
             .await?;
@@ -809,7 +807,7 @@ impl Persistence {
         serializable_retry!(self, || async {
             let mut tx = self.db.write().await?;
             prune_to_view(&mut tx, view).await?;
-            prune_table(&mut tx, "vid_share2", vid_share_view).await?;
+            prune_vid_shares(&mut tx, vid_share_view).await?;
             tx.commit().await
         })
         .await
@@ -873,7 +871,11 @@ async fn prune_to_view(tx: &mut Transaction<Write>, view: u64) -> anyhow::Result
     Ok(())
 }
 
-async fn prune_table(tx: &mut Transaction<Write>, table: &str, view: u64) -> anyhow::Result<()> {
+async fn prune_table(
+    tx: &mut Transaction<Write>,
+    table: &'static str,
+    view: u64,
+) -> anyhow::Result<()> {
     let res = query(&format!("DELETE FROM {table} WHERE view < $1"))
         .bind(view as i64)
         .execute(tx.as_mut())
@@ -882,6 +884,30 @@ async fn prune_table(tx: &mut Transaction<Write>, table: &str, view: u64) -> any
     if res.rows_affected() > 0 {
         tracing::info!(
             "garbage collected {} rows from {table}",
+            res.rows_affected()
+        );
+    }
+    Ok(())
+}
+
+// Lowering VID_SHARE_RETENTION would otherwise delete days of shares in one write transaction,
+// holding SQLite's write lock that consensus votes wait on. A node stores one share per view, so a
+// backlog still drains.
+const VID_SHARE_PRUNE_BATCH: i64 = 100;
+
+async fn prune_vid_shares(tx: &mut Transaction<Write>, view: u64) -> anyhow::Result<()> {
+    let res = query(
+        "DELETE FROM vid_share2 WHERE view IN
+            (SELECT view FROM vid_share2 WHERE view < $1 ORDER BY view LIMIT $2)",
+    )
+    .bind(view as i64)
+    .bind(VID_SHARE_PRUNE_BATCH)
+    .execute(tx.as_mut())
+    .await
+    .context("pruning vid_share2")?;
+    if res.rows_affected() > 0 {
+        tracing::info!(
+            "garbage collected {} rows from vid_share2",
             res.rows_affected()
         );
     }
@@ -2421,6 +2447,8 @@ mod testing {
     impl TestablePersistence for Persistence {
         type Storage = Arc<TmpDb>;
 
+        const DELETES_VID_SHARES_ON_DECIDE: bool = false;
+
         async fn tmp_storage() -> Self::Storage {
             Arc::new(TmpDb::init().await)
         }
@@ -3061,8 +3089,11 @@ mod test {
         .await
     }
 
+    #[rstest::rstest]
+    #[case::decide_events(false)]
+    #[case::consensus_only(true)]
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_vid_share_retention() {
+    async fn test_vid_share_retention(#[case] consensus_only: bool) {
         let tmp = Persistence::tmp_storage().await;
         let mut opt = Persistence::options(&tmp);
         opt.consensus_pruning = ConsensusPruningOptions {
@@ -3072,6 +3103,9 @@ mod test {
             usage_check_interval: Duration::ZERO,
             vid_share_retention: 2,
         };
+        if consensus_only {
+            opt.set_consensus_only();
+        }
         let storage = opt.create().await.unwrap();
 
         let leaf = Leaf2::genesis(

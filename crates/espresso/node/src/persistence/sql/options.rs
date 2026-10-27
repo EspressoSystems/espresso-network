@@ -574,7 +574,8 @@ pub struct ConsensusPruningOptions {
     /// Number of views to retain this node's VID shares, whether or not they have been decided.
     ///
     /// Unlike the other consensus data, VID shares are kept for this many views even if consensus
-    /// storage exceeds TARGET_USAGE.
+    /// storage exceeds TARGET_USAGE. Disk use is this many views times this node's share size,
+    /// which grows with block size and shrinks as the committee grows.
     ///
     /// The default of 1728000 views equates to approximately 10 days (864000 seconds) at an average
     /// view time of 0.5s, the mainnet view time.
