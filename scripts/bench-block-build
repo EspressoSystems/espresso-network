@@ -65,8 +65,6 @@ LANES = {
     "fragments": "#8d6e63",
     "serialize": "#d84315",
 }
-# The step a benchmark is named after, which spans the whole iteration.
-ROOTS = ["leader_vid", "request_block"]
 # Steps only `leader_vid` runs; other benchmarks get no lane for them.
 LEADER_VID_ONLY = {
     "leader_vid",
@@ -234,7 +232,9 @@ def summarize(runs: pd.DataFrame) -> str:
         )
     table = table.reset_index()
     table["benchmark"] = table.benchmark.str.removeprefix("block_build/")
-    table["rank"] = [ROOTS.index(s) if s in ROOTS else len(ROOTS) for s in table.step]
+    table["rank"] = [
+        list(LANES).index(s) if s in LANES else len(LANES) for s in table.step
+    ]
     table = table.sort_values(["malloc", "benchmark", "rank", "step"]).drop(
         columns="rank"
     )
@@ -252,7 +252,7 @@ def waterfall(runs: pd.DataFrame, path: Path) -> None:
         panel: [
             s
             for s in LANES
-            if s not in LEADER_VID_ONLY or panel[1].split("/")[1] == "leader_vid"
+            if s not in LEADER_VID_ONLY or root(panel[1]) == "leader_vid"
         ]
         for panel in panels
     }
