@@ -668,9 +668,16 @@ async fn async_main(migrated_envs: Vec<(&str, &str)>) -> anyhow::Result<()> {
     .submit(Default::default())
     .config(Default::default())
     .explorer(Default::default())
+<<<<<<< HEAD
     .query_sql(Default::default(), sql)
     .hotshot_events(Default::default())
     .light_client(Default::default());
+||||||| parent of 8513af025 (serve the light client api on every sql query node (#5394))
+    .query_sql(Default::default(), sql)
+    .light_client(Default::default());
+=======
+    .query_sql(Default::default(), sql);
+>>>>>>> 8513af025 (serve the light client api on every sql query node (#5394))
     let consensus_dbs = join_all((0..NUM_NODES).map(|_| DataSource::create_storage())).await;
     let persistences: [_; NUM_NODES] = consensus_dbs
         .iter()
