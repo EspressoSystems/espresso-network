@@ -98,8 +98,24 @@ pub struct VidReconstructor<T: NodeType> {
     reconstructed: BTreeSet<ViewNumber>,
     tasks: JoinSet<Attempt<T>>,
     calculations: BTreeMap<ViewNumber, Attempts>,
+    /// How long a view with a threshold of mixed shares waits for the rest
+    /// of the systematic set before it decodes; zero decodes at once.
+    systematic_wait: Duration,
+    /// Views waiting for their systematic set, and whether the wait ran out.
+    waits: BTreeMap<ViewNumber, Wait>,
+    /// One timer per wait, yielding its view when the wait runs out.
+    timers: JoinSet<ViewNumber>,
     tracer: Option<LeaderTracerHandle>,
     metrics: Option<VidReconstructMetrics>,
+}
+
+/// The state of a view's wait for its systematic shares.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Wait {
+    /// The timer is running: a decode attempt would be premature.
+    Pending,
+    /// The timer ran out without the systematic set completing.
+    Expired,
 }
 
 /// Per-attempt metrics: run time by path, and how many attempts failed or
@@ -238,9 +254,19 @@ impl<T: NodeType> VidReconstructor<T> {
             reconstructed: BTreeSet::new(),
             tasks: JoinSet::new(),
             calculations: BTreeMap::new(),
+            systematic_wait: Duration::ZERO,
+            waits: BTreeMap::new(),
+            timers: JoinSet::new(),
             tracer: None,
             metrics: None,
         }
+    }
+
+    /// Wait up to `wait` for the systematic set after a threshold of mixed
+    /// shares is in hand, before erasure-decoding them.
+    pub fn with_systematic_wait(mut self, wait: Duration) -> Self {
+        self.systematic_wait = wait;
+        self
     }
 
     pub fn set_tracer(&mut self, tracer: Option<LeaderTracerHandle>) {
@@ -320,7 +346,18 @@ impl<T: NodeType> VidReconstructor<T> {
 
     pub async fn next(&mut self) -> Option<ReconstructResult<T>> {
         loop {
-            let attempt = match self.tasks.join_next().await? {
+            let attempt = tokio::select! {
+                biased;
+                attempt = self.tasks.join_next(), if !self.tasks.is_empty() => attempt?,
+                view = self.timers.join_next(), if !self.timers.is_empty() => {
+                    if let Some(Ok(view)) = view {
+                        self.expire_wait(view);
+                    }
+                    continue;
+                },
+                else => return None,
+            };
+            let attempt = match attempt {
                 Ok(attempt) => attempt,
                 Err(err) => {
                     if err.is_panic() {
@@ -355,6 +392,7 @@ impl<T: NodeType> VidReconstructor<T> {
                         attempts.abort();
                     }
                     self.accumulators.remove(&view);
+                    self.waits.remove(&view);
                     self.reconstructed.insert(view);
                     return Some(Ok(out));
                 },
@@ -382,6 +420,17 @@ impl<T: NodeType> VidReconstructor<T> {
     /// blocking task that had already started still runs to completion.
     fn is_superseded(&self, view: ViewNumber) -> bool {
         self.reconstructed.contains(&view)
+    }
+
+    /// The wait for `view`'s systematic set ran out: decode what is in hand.
+    fn expire_wait(&mut self, view: ViewNumber) {
+        if !self.accumulators.contains_key(&view) {
+            self.waits.remove(&view);
+            return;
+        }
+        debug!(%view, "wait for the systematic VID shares ran out");
+        self.waits.insert(view, Wait::Expired);
+        self.try_reconstruct(view);
     }
 
     /// Apply the outcome of a failed attempt: weed the bad shares out of the
@@ -417,6 +466,19 @@ impl<T: NodeType> VidReconstructor<T> {
         let Some(path) = accumulator.ready_path() else {
             return;
         };
+        if !self.calculations.contains_key(&view) && !self.waits.contains_key(&view) {
+            crate::trace_leader_event!(
+                self.tracer,
+                view,
+                LeaderEvent::ThresholdShareReachedVMinus1
+            );
+        }
+        if path == ReconstructPath::Decode && !self.may_decode(view) {
+            return;
+        }
+        let Some(accumulator) = self.accumulators.get(&view) else {
+            return;
+        };
         let attempts = self.calculations.entry(view).or_default();
         if attempts.slot(path).is_some() {
             return;
@@ -425,13 +487,6 @@ impl<T: NodeType> VidReconstructor<T> {
         let Some(common) = accumulator.common.clone() else {
             return;
         };
-        if attempts.is_empty() {
-            crate::trace_leader_event!(
-                self.tracer,
-                view,
-                LeaderEvent::ThresholdShareReachedVMinus1
-            );
-        }
         debug!(%view, ?path, "spawning VID reconstruction attempt");
         let job = ReconstructJob {
             view,
@@ -448,7 +503,30 @@ impl<T: NodeType> VidReconstructor<T> {
         *attempts.slot(path) = Some(task);
     }
 
+    /// Whether a decode attempt may start for `view`: at once without a
+    /// systematic wait, otherwise only once the wait has run out. The first
+    /// call with a wait configured starts its timer.
+    fn may_decode(&mut self, view: ViewNumber) -> bool {
+        if self.systematic_wait.is_zero() {
+            return true;
+        }
+        match self.waits.entry(view) {
+            Entry::Occupied(wait) => *wait.get() == Wait::Expired,
+            Entry::Vacant(slot) => {
+                slot.insert(Wait::Pending);
+                let wait = self.systematic_wait;
+                debug!(%view, ?wait, "waiting for the systematic VID shares before decoding");
+                self.timers.spawn(async move {
+                    tokio::time::sleep(wait).await;
+                    view
+                });
+                false
+            },
+        }
+    }
+
     pub fn gc(&mut self, view_number: ViewNumber) {
+        self.waits = self.waits.split_off(&view_number);
         let keep = self.calculations.split_off(&view_number);
         for attempts in self.calculations.values() {
             attempts.abort();
@@ -469,6 +547,7 @@ impl<T: NodeType> VidReconstructor<T> {
         self.reconstructed.insert(view);
         self.pending.remove(&view);
         self.accumulators.remove(&view);
+        self.waits.remove(&view);
         if let Some(attempts) = self.calculations.remove(&view) {
             attempts.abort();
         }
