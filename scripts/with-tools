@@ -40,5 +40,5 @@ root=$(CDPATH='' cd -- "$(dirname "$0")/.." && pwd)
 cd "$root"
 export WITH_TOOLS=1
 # shellcheck disable=SC2016 # expanded by the inner bash
-exec nix develop "$root#$shell" --quiet --accept-flake-config -c \
+exec nix --extra-experimental-features 'nix-command flakes' develop "$root#$shell" --quiet --accept-flake-config -c \
     bash -c 'cd "$1" && shift && exec bash -euo pipefail "$@"' _ "$cwd" "$script" "$@"

@@ -131,6 +131,7 @@ demo-native-ff *args: (build "test" "--no-default-features")
 
 # A/B the leader block-build critical path between two git refs (see scripts/bench-block-build)
 [positional-arguments]
+[script("scripts/with-tools", "python", "uv")]
 bench-block-build *args:
     scripts/bench-block-build "$@"
 
@@ -346,6 +347,7 @@ sol-lint:
 
 # Build diff-test binary and forge test
 # Note: we use an invalid etherscan api key in order to avoid annoying warnings. See https://github.com/EspressoSystems/espresso-network/issues/979
+[script("scripts/with-tools", "contracts", "forge", "solc", "python3")]
 sol-test *args:
     export CARGO_TARGET_DIR=${CARGO_TARGET_DIR:-target} &&\
     cargo build --release --bin diff-test &&\
@@ -364,10 +366,11 @@ lc-contract-profiling-sepolia:
     echo $LC_CONTRACT_ADDRESS
     forge script contracts/script/LightClientCallNewFinalizedState.s.sol --sig "run(uint32 numInitValidators, address lcContractAddress)" {{NUM_INIT_VALIDATORS}} $LC_CONTRACT_ADDRESS --fork-url ${SEPOLIA_RPC_URL}  --broadcast  --chain-id sepolia
 
+[script("scripts/with-tools", "contracts", "forge", "solc", "python3")]
 gas-benchmarks:
     cargo build --profile test --bin diff-test
     forge snapshot --mt "test_verify_succeeds|testCorrectUpdateBench"
-    @[ -n "$(git diff --name-only .gas-snapshot)" ] && echo "⚠️ Uncommitted gas benchmarks, please stage them before committing." && exit 1 || exit 0
+    [ -n "$(git diff --name-only .gas-snapshot)" ] && echo "⚠️ Uncommitted gas benchmarks, please stage them before committing." && exit 1 || exit 0
 
 # This is meant for local development and produces HTML output. In CI
 # the lcov output is pushed to coveralls.
@@ -414,12 +417,15 @@ test-go *args:
 contracts-test-echidna *args:
     nix develop .#echidna -c echidna contracts/test/StakeTableV2.echidna.sol --contract StakeTableV2EchidnaTest --config contracts/echidna.yaml {{args}}
 
+[script("scripts/with-tools", "contracts", "forge", "solc", "python3")]
 contracts-test-forge *args='-vv':
     forge test --no-match-test "testFuzz_|invariant_|test_Network_" {{args}}
 
+[script("scripts/with-tools", "contracts", "forge", "solc", "python3")]
 contracts-test-fuzz *args='-vv':
     forge test --match-test testFuzz {{args}}
 
+[script("scripts/with-tools", "contracts", "forge", "solc", "python3")]
 contracts-test-invariant *args='-vv':
     forge test --match-test invariant_ {{args}}
 
@@ -427,9 +433,8 @@ contracts-test-invariant *args='-vv':
 contracts-mutation-test *args:
     dregs run --project . {{args}}
 
+[script("scripts/with-tools", "contracts", "forge", "solc", "python3")]
 contracts-test-network *args='-vv':
-    #!/usr/bin/env bash
-    set -euo pipefail
     if [ -z "${ETHERSCAN_API_KEY:-}" ]; then
         echo "Error: ETHERSCAN_API_KEY must be set to run network tests" >&2
         echo "Set it in your environment or in .env file" >&2
