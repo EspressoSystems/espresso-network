@@ -33,27 +33,19 @@ jobs:
 
       - uses: actions/checkout@v7
 
-      # Commands per shell: what with-tools recipes declare for it.
+      # One line per shell: "<shell> <command>...", collected from the with-tools [script] attributes.
       - name: Check shell commands
         run: |
-          check() {
-            shell=$1
-            shift
-            echo "::group::.#$shell"
+          awk -F'"' '/^\[script\(".*with-tools"/ { for (i = 6; i < NF; i += 2) if (!seen[$4, $i]++) c[$4] = c[$4] " " $i }
+            END { for (s in c) print s c[s] }' $(git ls-files justfile '*/justfile' '*.just') |
+          while read -r shell cmds; do
+            echo "::group::.#$shell: $cmds"
             nix develop ".#$shell" --accept-flake-config -c bash -c '
               for cmd in "$@"; do
                 command -v "$cmd" >/dev/null || { echo "missing: $cmd" >&2; exit 1; }
-              done' _ "$@"
+              done' _ $cmds </dev/null
             echo "::endgroup::"
-          }
-          check default cargo rustfmt rust-analyzer jq just prek forge anvil initdb postgres timeout bc
-          check contracts forge solc abigen jq python3
-          check mutation dregs forge solc
-          check docs plantuml dot mdbook forge
-          check go go gofmt cargo jq
-          check python python3 uv ruff ty
-          check aws uv tofu aws
-          check dockerShell docker
+          done
 
       # The runner is outside any dev shell, so these recipes take the with-tools nix fallback.
       - name: with-tools fallback
