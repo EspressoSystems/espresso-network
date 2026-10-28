@@ -1,3 +1,5 @@
+use std::num::NonZeroUsize;
+
 use hotshot_example_types::{block_types::TestTransaction, node_types::TestTypes};
 use hotshot_types::{
     data::{VidCommitment2, VidDisperseShare2, ViewNumber, ns_table::parse_ns_table},
@@ -801,7 +803,7 @@ async fn fragment_accumulator_reassembles_share() {
     fragments.reverse();
     let last = fragments.len() - 1;
 
-    let mut accumulator = VidFragmentAccumulator::<TestTypes>::new();
+    let mut accumulator = VidFragmentAccumulator::<TestTypes>::new(NonZeroUsize::MAX);
     let mut reassembled = None;
     for (i, fragment) in fragments.into_iter().enumerate() {
         let out = accumulator
@@ -829,7 +831,7 @@ async fn fragment_accumulator_rejects_malformed_fragments() {
         .collect::<Vec<_>>()
         .remove(0);
 
-    let mut accumulator = VidFragmentAccumulator::<TestTypes>::new();
+    let mut accumulator = VidFragmentAccumulator::<TestTypes>::new(NonZeroUsize::MAX);
 
     // Out-of-range index.
     let mut out_of_range = template.clone();
@@ -918,7 +920,7 @@ async fn fragment_accumulator_reassembles_multi_piece_fragments() {
     whole.namespaces = vid_fragments(&original)
         .flat_map(|f| f.namespaces)
         .collect();
-    let mut accumulator = VidFragmentAccumulator::<TestTypes>::new();
+    let mut accumulator = VidFragmentAccumulator::<TestTypes>::new(NonZeroUsize::MAX);
     assert_eq!(
         accumulator
             .accept(&disperser_key(), whole)
@@ -937,7 +939,7 @@ async fn fragment_accumulator_reassembles_multi_piece_fragments() {
     let mut second = template;
     second.namespaces = pieces[2..].to_vec();
 
-    let mut accumulator = VidFragmentAccumulator::<TestTypes>::new();
+    let mut accumulator = VidFragmentAccumulator::<TestTypes>::new(NonZeroUsize::MAX);
     assert!(
         accumulator
             .accept(&disperser_key(), second)
@@ -967,7 +969,7 @@ async fn fragment_accumulator_rejects_intra_fragment_duplicate() {
     let mut fragment = vid_fragments(&original).next().unwrap();
     fragment.namespaces = vec![pieces[0].clone(), pieces[0].clone()];
 
-    let mut accumulator = VidFragmentAccumulator::<TestTypes>::new();
+    let mut accumulator = VidFragmentAccumulator::<TestTypes>::new(NonZeroUsize::MAX);
     assert!(matches!(
         accumulator.accept(&disperser_key(), fragment),
         Err(VidFragmentError::DuplicateIndex(0))
@@ -988,7 +990,7 @@ async fn fragment_accumulator_rejects_diverging_epochs() {
         .next()
         .expect("at least one piece");
 
-    let mut accumulator = VidFragmentAccumulator::<TestTypes>::new();
+    let mut accumulator = VidFragmentAccumulator::<TestTypes>::new(NonZeroUsize::MAX);
 
     let mut diverging = template.clone();
     diverging.target_epoch = diverging.epoch.map(|e| e + 1);
@@ -1021,7 +1023,7 @@ async fn fragment_accumulator_isolates_dispersers() {
     // so its "share" completes on the first fragment.
     let mut squat = vid_fragments(&original).next().expect("at least one piece");
     squat.num_namespaces = 1;
-    let mut accumulator = VidFragmentAccumulator::<TestTypes>::new();
+    let mut accumulator = VidFragmentAccumulator::<TestTypes>::new(NonZeroUsize::MAX);
     assert!(
         accumulator
             .accept(&attacker_key(), squat)
@@ -1062,7 +1064,7 @@ async fn fragment_accumulator_keeps_epochs_apart() {
         .collect::<Vec<_>>()
         .into_iter();
 
-    let mut accumulator = VidFragmentAccumulator::<TestTypes>::new();
+    let mut accumulator = VidFragmentAccumulator::<TestTypes>::new(NonZeroUsize::MAX);
     let mut feed = |fragment| {
         accumulator
             .accept(&disperser_key(), fragment)

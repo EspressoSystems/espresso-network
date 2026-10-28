@@ -34,7 +34,7 @@ use crate::{
     tests::common::mock::MockCoordinator,
     trace,
     upgrade::UpgradeProtocol,
-    vid::{VidDisperser, VidReconstructor},
+    vid::{VidDisperser, VidFragmentAccumulator, VidReconstructor},
     vote::VoteCollector,
 };
 
@@ -174,6 +174,9 @@ impl TestHarness {
         let membership_handle = membership.clone();
         let coordinator = MockCoordinator::builder()
             .consensus(consensus)
+            .vid_fragment_accumulator(VidFragmentAccumulator::new(
+                network.sender().max_message_size(),
+            ))
             .network(network)
             .state_manager(state_manager)
             .vote1_collector(vote1_collector)
