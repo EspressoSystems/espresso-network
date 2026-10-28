@@ -5,7 +5,7 @@
 //! HTTP client of the node would.
 
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{HashMap, HashSet, hash_map::Entry},
     ops::Range,
     sync::{
         Arc,
@@ -190,9 +190,12 @@ impl QueryPeers {
     /// Route replies and answer requests until the network shuts down.
     async fn run(self, mut receiver: QueryReceiver<SeqTypes>) {
         // Capped by the network's per peer budget, so a burst of requests can neither pile up
-        // handler work nor hold back the replies this node is waiting for.
+        // handler work nor hold back the replies this node is waiting for. Each peer gets an
+        // equal share of it, so one peer catching up cannot take every answer.
         let budget = self.0.sender.peer_budget().get();
         let mut answering = JoinSet::new();
+        let mut owners = HashMap::new();
+        let mut in_flight = HashMap::<PubKey, usize>::new();
         loop {
             select! {
                 event = receiver.receive() => {
@@ -205,9 +208,14 @@ impl QueryPeers {
                         },
                         None => break,
                     };
+                    let held = in_flight.get(&from).copied().unwrap_or(0);
+                    let share = budget / (in_flight.len() + usize::from(held == 0));
+                    let room = answering.len() < budget && held < share.max(1);
                     match bincode::deserialize(&bytes) {
-                        Ok(Message::Request { id, request }) if answering.len() < budget => {
-                            answering.spawn(self.clone().serve(from, id, request));
+                        Ok(Message::Request { id, request }) if room => {
+                            let task = answering.spawn(self.clone().serve(from, id, request));
+                            owners.insert(task.id(), from);
+                            *in_flight.entry(from).or_default() += 1;
                         },
                         Ok(Message::Request { id, request: _ }) => {
                             debug!(%from, id, "too many query requests in flight");
@@ -223,11 +231,23 @@ impl QueryPeers {
                         Err(err) => debug!(%from, %err, "undecodable query message"),
                     }
                 },
-                Some(served) = answering.join_next(), if !answering.is_empty() => {
-                    if let Err(err) = served
-                        && err.is_panic()
+                Some(served) = answering.join_next_with_id(), if !answering.is_empty() => {
+                    let task = match served {
+                        Ok((task, ())) => task,
+                        Err(err) => {
+                            if err.is_panic() {
+                                error!(%err, "query answer panicked");
+                            }
+                            err.id()
+                        },
+                    };
+                    if let Some(peer) = owners.remove(&task)
+                        && let Entry::Occupied(mut held) = in_flight.entry(peer)
                     {
-                        error!(%err, "query answer panicked");
+                        *held.get_mut() -= 1;
+                        if *held.get() == 0 {
+                            held.remove();
+                        }
                     }
                 },
             }
