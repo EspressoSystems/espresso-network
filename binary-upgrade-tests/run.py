@@ -55,13 +55,19 @@ SAFE_STOP_WINDOW = (2, 10)
 
 # Services NOT touched by the binary upgrade test:
 #   - one-shots that already ran in phase 1 (deploy-*, stake-for-demo,
-#     cdn-whitelist, wait-for-v4)
-#   - infra that doesn't use an espresso-network image (postgres, keydb,
-#     L1 anvil, block-explorer)
+#     wait-for-v4)
+#   - infra that doesn't use an espresso-network image (postgres, L1 anvil,
+#     block-explorer)
+#   - the CDN (broker-*, marshal-0, cdn-whitelist, keydb), which only
+#     the base tag's compose runs: the upgraded nodes ignore it. Delete these
+#     entries once the base tag is a release cut after the CDN was removed
+#     from docker-compose.yaml.
 NOUPGRADE_SERVICES = (
     "block-explorer",
-    "cdn-open",
+    "broker-0",
+    "broker-1",
     "cdn-whitelist",
+    "marshal-0",
     "demo-l1-network",
     "deploy-espresso-contracts",
     "deploy-lcv3-upgrade",
@@ -421,21 +427,22 @@ class Compose:
     def upgraded_services(self) -> list[str]:
         return [s for s in self.services() if s not in NOUPGRADE_SERVICES]
 
-    def pull(self, *tags: str, retries: int = 4, backoff: float = 10.0) -> None:
-        for tag in tags:
-            log.info(f"Pulling images (DOCKER_TAG={tag})")
-            for attempt in range(1, retries + 1):
-                result = self.run("pull", docker_tag=tag, check=False)
-                if result.returncode == 0:
-                    break
-                if attempt == retries:
-                    raise RuntimeError(
-                        f"compose pull failed after {retries} attempts for tag={tag}"
-                    )
-                log.warning(
-                    f"compose pull attempt {attempt}/{retries} for tag={tag} failed; retrying in {backoff:g}s"
+    def pull(
+        self, tag: str, *services: str, retries: int = 4, backoff: float = 10.0
+    ) -> None:
+        log.info(f"Pulling images (DOCKER_TAG={tag})")
+        for attempt in range(1, retries + 1):
+            result = self.run("pull", *services, docker_tag=tag, check=False)
+            if result.returncode == 0:
+                break
+            if attempt == retries:
+                raise RuntimeError(
+                    f"compose pull failed after {retries} attempts for tag={tag}"
                 )
-                time.sleep(backoff)
+            log.warning(
+                f"compose pull attempt {attempt}/{retries} for tag={tag} failed; retrying in {backoff:g}s"
+            )
+            time.sleep(backoff)
 
     def assert_all_espresso_images(self, expected_tag: str) -> None:
         bad: list[str] = []
@@ -1045,10 +1052,9 @@ def main() -> int:
     load_project_env()
 
     with compose_session(config) as compose:
-        tags = (config.base_tag,)
+        compose.pull(config.base_tag)
         if config.upgrade_pull:
-            tags += (config.upgrade_tag,)
-        compose.pull(*tags)
+            compose.pull(config.upgrade_tag, *compose.upgraded_services())
 
         if args.pull_only:
             log.info("--pull-only: images pulled, exiting before stack start")
