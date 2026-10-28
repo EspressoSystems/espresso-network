@@ -2248,6 +2248,21 @@ where
     }
 }
 
+impl<Types, S, P> FetchingDataSource<Types, S, P>
+where
+    Types: NodeType,
+{
+    /// Transaction counts and payload sizes come from the aggregator. Without one, this data source
+    /// has none: rows an earlier run left in storage stop where that run did, and a node without an
+    /// aggregator, such as a pruned one, never has the blocks to count from genesis.
+    fn check_aggregator(&self) -> QueryResult<()> {
+        if self.aggregator.is_none() {
+            return Err(QueryError::NotFound);
+        }
+        Ok(())
+    }
+}
+
 #[async_trait]
 impl<Types, S, P> NodeDataSource<Types> for FetchingDataSource<Types, S, P>
 where
@@ -2272,6 +2287,7 @@ where
         range: impl RangeBounds<usize> + Send + Sync + Clone,
         namespace: Option<NamespaceId<Types>>,
     ) -> QueryResult<usize> {
+        self.check_aggregator()?;
         serializable_retry!(self.fetcher.storage, || async {
             let mut tx = self.read().await.map_err(|err| QueryError::Error {
                 message: err.to_string(),
@@ -2287,6 +2303,7 @@ where
         range: impl RangeBounds<usize> + Send + Sync + Clone,
         namespace: Option<NamespaceId<Types>>,
     ) -> QueryResult<usize> {
+        self.check_aggregator()?;
         serializable_retry!(self.fetcher.storage, || async {
             let mut tx = self.read().await.map_err(|err| QueryError::Error {
                 message: err.to_string(),
@@ -2415,6 +2432,8 @@ where
         explorer::query_data::ExplorerSummary<Types>,
         explorer::query_data::GetExplorerSummaryError,
     > {
+        // The summary counts transactions from genesis.
+        self.check_aggregator()?;
         serializable_retry!(self.fetcher.storage, || async {
             let mut tx = self.read().await.map_err(|err| QueryError::Error {
                 message: err.to_string(),
@@ -3525,5 +3544,53 @@ mod test {
             .await
             .expect("aggregate should be available after recovery");
         assert_eq!(total, expected_total);
+    }
+
+    /// A data source without an aggregator has no totals, also when an earlier run with one left
+    /// aggregate rows in storage: those stop where that run did.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_no_totals_without_aggregator() {
+        let storage = TmpDb::init().await;
+        let db = SqlStorage::connect(storage.config(), StorageConnectionType::Query)
+            .await
+            .unwrap();
+        let genesis = BlockQueryData::<MockTypes>::genesis(
+            &Default::default(),
+            &Default::default(),
+            TEST_VERSIONS.test.base,
+        )
+        .await;
+        {
+            let mut tx = db.write().await.unwrap();
+            tx.update_aggregates(Aggregate::default(), &[PayloadMetadata::from(genesis)])
+                .await
+                .unwrap();
+            tx.commit().await.unwrap();
+        }
+        let ds = MockSqlDataSource::builder(db, NoFetching)
+            .disable_aggregator()
+            .build()
+            .await
+            .unwrap();
+
+        for res in [
+            ds.count_transactions_in_range(.., None).await,
+            ds.count_transactions_in_range(..=0, None).await,
+            ds.payload_size_in_range(.., None).await,
+        ] {
+            assert!(matches!(res, Err(QueryError::NotFound)), "{res:?}");
+        }
+        let err = ds.get_explorer_summary().await.unwrap_err();
+        assert!(
+            matches!(
+                err,
+                explorer::query_data::GetExplorerSummaryError::QueryError(
+                    explorer::errors::QueryError {
+                        error: QueryError::NotFound
+                    }
+                )
+            ),
+            "{err:?}"
+        );
     }
 }
