@@ -1673,12 +1673,12 @@ impl StateCatchup for ParallelStateCatchup {
 /// We use this during catchup after receiving verified accounts.
 pub async fn add_fee_accounts_to_state(
     consensus_handle: &dyn ConsensusSource,
-    view: &ViewNumber,
     accounts: &[FeeAccount],
     tree: &FeeMerkleTree,
     leaf: Leaf2,
 ) -> anyhow::Result<()> {
-    let (existing_state, delta) = consensus_handle.state_and_delta(*view).await;
+    let view = leaf.view_number();
+    let (existing_state, delta) = consensus_handle.state_and_delta(view).await;
     let (state, delta) = match existing_state {
         Some(existing) => {
             let mut state = (*existing).clone();
@@ -1720,12 +1720,12 @@ pub async fn add_fee_accounts_to_state(
 /// We use this during catchup after receiving verified accounts.
 pub async fn add_v2_reward_accounts_to_state(
     consensus_handle: &dyn ConsensusSource,
-    view: &ViewNumber,
     accounts: &[RewardAccountV2],
     tree: &RewardMerkleTreeV2,
     leaf: Leaf2,
 ) -> anyhow::Result<()> {
-    let (existing_state, delta) = consensus_handle.state_and_delta(*view).await;
+    let view = leaf.view_number();
+    let (existing_state, delta) = consensus_handle.state_and_delta(view).await;
     let (state, delta) = match existing_state {
         Some(existing) => {
             let mut state = (*existing).clone();
@@ -1767,12 +1767,12 @@ pub async fn add_v2_reward_accounts_to_state(
 /// We use this during catchup after receiving verified accounts.
 pub async fn add_v1_reward_accounts_to_state(
     consensus_handle: &dyn ConsensusSource,
-    view: &ViewNumber,
     accounts: &[RewardAccountV1],
     tree: &RewardMerkleTreeV1,
     leaf: Leaf2,
 ) -> anyhow::Result<()> {
-    let (existing_state, delta) = consensus_handle.state_and_delta(*view).await;
+    let view = leaf.view_number();
+    let (existing_state, delta) = consensus_handle.state_and_delta(view).await;
     let (state, delta) = match existing_state {
         Some(existing) => {
             let mut state = (*existing).clone();
@@ -1823,6 +1823,114 @@ mod test {
 
     use super::*;
     use crate::SequencerApiVersion;
+
+    struct RecordingConsensus {
+        view: ViewNumber,
+        state: Arc<ValidatedState>,
+        updates: Mutex<Vec<(Leaf2, Arc<ValidatedState>)>>,
+    }
+
+    #[async_trait]
+    impl crate::api::context::ConsensusSource for RecordingConsensus {
+        async fn decided_leaf(&self) -> Leaf2 {
+            unimplemented!()
+        }
+        async fn decided_state(&self) -> Option<Arc<ValidatedState>> {
+            unimplemented!()
+        }
+        async fn state(&self, _: ViewNumber) -> Option<Arc<ValidatedState>> {
+            unimplemented!()
+        }
+        async fn state_and_delta(
+            &self,
+            view: ViewNumber,
+        ) -> hotshot_types::utils::StateAndDelta<SeqTypes> {
+            if view == self.view {
+                (Some(Arc::clone(&self.state)), Some(Arc::default()))
+            } else {
+                (None, None)
+            }
+        }
+        async fn undecided_leaves(&self) -> Vec<Leaf2> {
+            unimplemented!()
+        }
+        async fn current_epoch(&self) -> Option<hotshot_types::data::EpochNumber> {
+            unimplemented!()
+        }
+        async fn membership_coordinator(&self) -> EpochMembershipCoordinator<SeqTypes> {
+            unimplemented!()
+        }
+        async fn upgrade_lock(&self) -> UpgradeLock<SeqTypes> {
+            unimplemented!()
+        }
+        async fn submit_transaction(
+            &self,
+            _: espresso_types::Transaction,
+        ) -> anyhow::Result<Commitment<espresso_types::Transaction>> {
+            unimplemented!()
+        }
+        async fn update_leaf(
+            &self,
+            leaf: Leaf2,
+            state: Arc<ValidatedState>,
+            _: Option<Arc<crate::api::context::Delta>>,
+        ) -> anyhow::Result<()> {
+            self.updates.lock().push((leaf, state));
+            Ok(())
+        }
+        async fn current_proposal_participation(&self) -> HashMap<espresso_types::PubKey, f64> {
+            unimplemented!()
+        }
+        async fn proposal_participation(
+            &self,
+            _: hotshot_types::data::EpochNumber,
+        ) -> HashMap<espresso_types::PubKey, f64> {
+            unimplemented!()
+        }
+        async fn current_vote_participation(&self) -> HashMap<espresso_types::PubKey, f64> {
+            unimplemented!()
+        }
+        async fn vote_participation(
+            &self,
+            _: hotshot_types::data::EpochNumber,
+        ) -> HashMap<espresso_types::PubKey, f64> {
+            unimplemented!()
+        }
+    }
+
+    #[tokio::test]
+    async fn fee_accounts_from_storage_are_not_stored_with_another_views_state() {
+        let instance = NodeState::mock();
+        let leaf = Leaf2::genesis(
+            &ValidatedState::default(),
+            &instance,
+            espresso_types::TEST_UPGRADE.base,
+        )
+        .await;
+        let tree = ValidatedState::default().fee_merkle_tree;
+
+        let mut other_view_state = ValidatedState::default();
+        other_view_state.prefund_account(FeeAccount::default(), espresso_types::FeeAmount::from(1));
+        let consensus = RecordingConsensus {
+            view: leaf.view_number() + 7,
+            state: Arc::new(other_view_state),
+            updates: Mutex::default(),
+        };
+
+        add_fee_accounts_to_state(&consensus, &[FeeAccount::default()], &tree, leaf.clone())
+            .await
+            .unwrap();
+
+        let updates = consensus.updates.lock();
+        let [(updated, state)] = updates.as_slice() else {
+            panic!("expected one state update, got {}", updates.len());
+        };
+        assert_eq!(updated.commit(), leaf.commit());
+        assert_eq!(
+            state.fee_merkle_tree.commitment(),
+            leaf.block_header().fee_merkle_tree_root()
+        );
+    }
 
     /// A peer that never answers keeps the `fetch_*` methods of a [`ParallelStateCatchup`] retrying
     /// for good, so a caller that retries on its own never gets an error to retry from.
