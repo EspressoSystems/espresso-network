@@ -1,25 +1,8 @@
 name: Install native demo deps
-description: Install anvil (foundry), KeyDB, and the postgres server for the native demo
+description: Install anvil (foundry) and the postgres server for the native demo
 
 runs:
   using: composite
   steps:
     - uses: ./.github/actions/install-foundry
     - uses: ./.github/actions/install-postgres
-    - shell: bash
-      run: |
-        set -euo pipefail
-        # keydb: download.keydb.dev is unreachable, and the binary in the Docker Hub image links
-        # against Ubuntu 20.04 libraries (libssl 1.1) the runner does not have. So run the image
-        # itself, behind a `keydb-server` shim on PATH for process-compose.yaml. Host networking
-        # keeps the `--bind 127.0.0.1 --port 6379` arguments and the `nc` readiness probe working.
-        image=eqalpha/keydb:x86_64_v6.3.4
-        docker pull -q "$image"
-        mkdir -p /tmp/keydb/bin
-        cat > /tmp/keydb/bin/keydb-server <<SHIM
-        #!/usr/bin/env bash
-        exec docker run --rm --network host "$image" keydb-server "\$@"
-        SHIM
-        chmod +x /tmp/keydb/bin/keydb-server
-        echo "/tmp/keydb/bin" >> "$GITHUB_PATH"
-        /tmp/keydb/bin/keydb-server --version
