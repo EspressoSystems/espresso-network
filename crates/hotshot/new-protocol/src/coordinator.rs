@@ -1246,9 +1246,20 @@ where
                         warn!(%node, %sender, %view, %epoch, "proposal epoch is too far ahead");
                         return None;
                     }
-                    if !self.is_view_too_far_ahead(view)
-                        && self.proposal_received_at.is_none_or(|(v, _)| v < view)
+                    if self.is_view_too_far_ahead(view) {
+                        warn!(%node, %sender, %view, "proposal is too far ahead");
+                        return None;
+                    }
+                    // An unknown leader means the epoch's stake table is still being
+                    // fetched, and the proposal must reach the validator to wait for it.
+                    if self
+                        .leader(view, epoch)
+                        .is_some_and(|leader| leader != message.sender)
                     {
+                        warn!(%node, %sender, %view, %epoch, "proposal not sent by the leader");
+                        return None;
+                    }
+                    if self.proposal_received_at.is_none_or(|(v, _)| v < view) {
                         self.proposal_received_at = Some((view, Instant::now()));
                     }
                     if self.consensus.wants_proposal_for_view(&view) {
