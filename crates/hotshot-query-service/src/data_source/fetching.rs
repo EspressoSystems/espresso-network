@@ -3032,7 +3032,7 @@ mod test {
 
     use super::{leaf::RangeRequest, *};
     use crate::testing::{
-        consensus::{TestTransaction, TestableDataSource, sql_data_sources},
+        consensus::{SavePrunedHeight, TestableDataSource, sql_data_sources},
         mocks::{MockPayload, MockTypes, mock_transaction},
     };
 
@@ -3204,7 +3204,7 @@ mod test {
     async fn test_sync_status<D>(chunk_size: usize, present_ranges: &[(usize, usize)])
     where
         D: TestableDataSource,
-        for<'a> D::Transaction<'a>: UpdateAvailabilityStorage<MockTypes> + TestTransaction,
+        for<'a> D::Transaction<'a>: UpdateAvailabilityStorage<MockTypes> + SavePrunedHeight,
     {
         let block_height = present_ranges.last().unwrap().1;
         let storage = D::create(0).await;
@@ -3309,7 +3309,7 @@ mod test {
     async fn test_sync_status_multiple_chunks<D>(_d: PhantomData<D>)
     where
         D: TestableDataSource,
-        for<'a> D::Transaction<'a>: UpdateAvailabilityStorage<MockTypes> + TestTransaction,
+        for<'a> D::Transaction<'a>: UpdateAvailabilityStorage<MockTypes> + SavePrunedHeight,
     {
         test_sync_status::<D>(10, &[(0, 1), (3, 5), (8, 10)]).await;
     }
@@ -3318,7 +3318,7 @@ mod test {
     async fn test_sync_status_multiple_chunks_present_range_overlapping_chunk<D>(_d: PhantomData<D>)
     where
         D: TestableDataSource,
-        for<'a> D::Transaction<'a>: UpdateAvailabilityStorage<MockTypes> + TestTransaction,
+        for<'a> D::Transaction<'a>: UpdateAvailabilityStorage<MockTypes> + SavePrunedHeight,
     {
         test_sync_status::<D>(5, &[(1, 4)]).await;
     }
@@ -3327,7 +3327,7 @@ mod test {
     async fn test_sync_status_multiple_chunks_missing_range_overlapping_chunk<D>(_d: PhantomData<D>)
     where
         D: TestableDataSource,
-        for<'a> D::Transaction<'a>: UpdateAvailabilityStorage<MockTypes> + TestTransaction,
+        for<'a> D::Transaction<'a>: UpdateAvailabilityStorage<MockTypes> + SavePrunedHeight,
     {
         test_sync_status::<D>(5, &[(0, 1), (4, 5)]).await;
     }

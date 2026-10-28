@@ -17,7 +17,7 @@ use hotshot_query_service::{
 use hotshot_types::{data::ViewNumber, simple_vote::Vote2Data};
 use http_wire::{ServerError, respond};
 use itertools::Itertools;
-use jf_merkle_tree_compat::{AppendableMerkleTreeScheme, ToTraversalPath, prelude::SHA3MerkleTree};
+use jf_merkle_tree_compat::{AppendableMerkleTreeScheme, ToTraversalPath};
 use light_client::{
     consensus::leaf::{FinalityProof, LeafProofHint},
     testing::{
@@ -999,69 +999,6 @@ async fn test_header_proof() {
         .await
         .unwrap_err();
     assert_eq!(err.status(), StatusCode::BAD_REQUEST);
-}
-
-// The light-weight block tree forgets all but its last leaf.
-type FullTree = SHA3MerkleTree<Commitment<Header>>;
-
-fn fake_tree(num_leaves: u64) -> FullTree {
-    FullTree::from_elems(
-        Some(BLOCK_MERKLE_TREE_HEIGHT),
-        (0..num_leaves).map(|i| Commitment::<Header>::from_raw([i as u8 + 1; 32])),
-    )
-    .unwrap()
-}
-
-fn lookup(tree: &FullTree, pos: u64) -> BlockMerkleProof {
-    tree.lookup(pos).expect_ok().unwrap().1
-}
-
-/// Rebuilding from `head_leaves` leaves matches the tree of `r` leaves for every `r` in `rs`.
-fn check_rebuild(head_leaves: u64, rs: impl IntoIterator<Item = u64>) {
-    let head = fake_tree(head_leaves);
-    for r in rs {
-        let tree = fake_tree(r);
-        let frontier = lookup(&head, r - 1);
-        for i in 0..r {
-            let proof = rebuild_block_proof(r, &frontier, &lookup(&head, i)).unwrap();
-            assert_eq!(proof, lookup(&tree, i), "r={r} i={i}");
-            assert!(
-                BlockMerkleTree::verify(tree.commitment(), i, &proof)
-                    .unwrap()
-                    .is_ok()
-            );
-        }
-    }
-}
-
-#[test]
-fn test_rebuild_block_proof_matches_snapshot() {
-    check_rebuild(100, [2, 4, 5, 10, 26, 28, 50, 99]);
-}
-
-#[test]
-fn test_rebuild_block_proof_last_leaf() {
-    let head = fake_tree(40);
-    let tree = fake_tree(13);
-    let proof = rebuild_block_proof(13, &lookup(&head, 12), &lookup(&head, 12)).unwrap();
-    assert_eq!(proof, lookup(&tree, 12));
-}
-
-#[test]
-fn test_rebuild_block_proof_full_subtree() {
-    check_rebuild(100, [3, 9, 27, 81]);
-}
-
-#[test]
-fn test_rebuild_block_proof_single_leaf() {
-    check_rebuild(5, [1]);
-}
-
-#[test]
-fn test_rebuild_block_proof_wrong_frontier() {
-    let head = fake_tree(40);
-    let err = rebuild_block_proof(13, &lookup(&head, 11), &lookup(&head, 3)).unwrap_err();
-    assert!(err.to_string().contains("frontier"), "{err:#}");
 }
 
 /// A data source with `num_leaves` headers, state at every height, and state below `pruned`

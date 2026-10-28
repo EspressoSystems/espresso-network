@@ -2211,11 +2211,11 @@ pub(crate) mod impl_testable_data_source {
         // Read in this order because every move of the pruned height, up by a batch or down by
         // the startup repair, lands below the head, and the head only grows, so a head read
         // after the pruned height is always above it.
-        async fn state_heights(db: &SqlStorage) -> (Option<u64>, u64) {
-            let mut tx = db.read().await.unwrap();
-            let pruned = tx.load_state_pruned_height().await.unwrap();
-            let head = tx.get_last_state_height().await.unwrap() as u64;
-            (pruned, head)
+        async fn state_heights(db: &SqlStorage) -> anyhow::Result<(Option<u64>, u64)> {
+            let mut tx = db.read().await?;
+            let pruned = tx.load_state_pruned_height().await?;
+            let head = tx.get_last_state_height().await? as u64;
+            Ok((pruned, head))
         }
 
         async fn state_start_height(db: &SqlStorage) -> anyhow::Result<Option<u64>> {
@@ -2252,21 +2252,19 @@ pub(crate) mod impl_testable_data_source {
             tx.commit().await
         }
 
-        // Id 2 is the state pruned height.
         async fn stamp_state_pruned_height(db: &SqlStorage, height: u64) -> anyhow::Result<()> {
             let mut tx = db.write().await?;
             tx.upsert(
                 "pruned_height",
                 ["id", "last_height"],
                 ["id"],
-                [(2i32, height as i64)],
+                [(Transaction::<Write>::STATE_PRUNED_HEIGHT_ID, height as i64)],
             )
             .await?;
             tx.commit().await
         }
 
         // The node may be writing new blocks meanwhile, so a serialization conflict is retried.
-        // Id 1 is the data pruned height.
         async fn prune_data_to(db: &SqlStorage, pruned: u64) -> anyhow::Result<()> {
             serializable_retry!(db, || async {
                 let mut tx = db.write().await?;
@@ -2274,7 +2272,7 @@ pub(crate) mod impl_testable_data_source {
                     "pruned_height",
                     ["id", "last_height"],
                     ["id"],
-                    [(1i32, pruned as i64)],
+                    [(Transaction::<Write>::PRUNED_HEIGHT_ID, pruned as i64)],
                 )
                 .await?;
                 for statement in [

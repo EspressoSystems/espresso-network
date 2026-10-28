@@ -7339,7 +7339,7 @@ mod test {
         .await
         .context("shut-down query node did not release its port")?;
         let db = D::connect(&db_opt, StorageConnectionType::Query).await?;
-        let (_, head_at_shutdown) = D::state_heights(&db).await;
+        let (_, head_at_shutdown) = D::state_heights(&db).await?;
         wait_until_block_height(&api_client, "status/block-height", head_at_shutdown + GAP).await;
         // `status/block-height` counts blocks, so the tip is one below it.
         let stale_cursor = api_client.get::<u64>("status/block-height").send().await? - 1;
@@ -7353,7 +7353,7 @@ mod test {
         // past the loop while it was behind. Stamp the tip as such a run would have.
         D::stamp_state_pruned_height(&db, stale_cursor).await?;
         ensure!(
-            D::state_heights(&db).await.0 == Some(stale_cursor),
+            D::state_heights(&db).await?.0 == Some(stale_cursor),
             "the stale cursor was not stamped"
         );
 
@@ -7362,7 +7362,7 @@ mod test {
         let _query_node = start_query_node().await;
         let deadline = Instant::now() + Duration::from_secs(120);
         loop {
-            let (pruned, head) = D::state_heights(&db).await;
+            let (pruned, head) = D::state_heights(&db).await?;
             let pruned = pruned.context("state pruned height is stamped")?;
             tracing::info!(pruned, head, stale_cursor, "state loop progress");
             if pruned > stale_cursor {
@@ -7385,7 +7385,7 @@ mod test {
         // The head snapshot is served. The loop and the pruner keep moving, so a head read just
         // before a pruner run can be below the cursor by the time the query runs; read it again.
         for attempt in 1.. {
-            let (_, head) = D::state_heights(&db).await;
+            let (_, head) = D::state_heights(&db).await?;
             let frontier = query_client
                 .get::<MerkleProof<Commitment<Header>, u64, Sha3Node, 3>>(&format!(
                     "block-state/{head}/{}",
@@ -7526,7 +7526,7 @@ mod test {
         .await
         .context("shut-down query node did not release its port")?;
         let db = D::connect(&db_opt, StorageConnectionType::Query).await?;
-        let (_, head_at_shutdown) = D::state_heights(&db).await;
+        let (_, head_at_shutdown) = D::state_heights(&db).await?;
         let local_tip = D::local_block_height(&db).await? - 1;
 
         let _restarted;
@@ -7571,7 +7571,7 @@ mod test {
                     );
                     sleep(Duration::from_millis(200)).await;
                 }
-                let (_, head) = D::state_heights(&db).await;
+                let (_, head) = D::state_heights(&db).await?;
                 ensure!(
                     head == BEHIND,
                     "the loop moved to {head} without the leaf above {BEHIND}"
@@ -7590,7 +7590,7 @@ mod test {
         // the local stream.
         let deadline = Instant::now() + Duration::from_secs(180);
         loop {
-            let (_, head) = D::state_heights(&db).await;
+            let (_, head) = D::state_heights(&db).await?;
             if head > pruned + GAP {
                 break;
             }
@@ -7863,7 +7863,7 @@ mod test {
         db: &D::SqlStorage,
         deadline: Instant,
     ) -> anyhow::Result<u64> {
-        while D::state_heights(db).await.1 == 0 {
+        while D::state_heights(db).await?.1 == 0 {
             ensure!(Instant::now() < deadline, "state loop did not start");
             sleep(Duration::from_millis(200)).await;
         }
@@ -7909,7 +7909,7 @@ mod test {
         deadline: Instant,
     ) -> anyhow::Result<()> {
         loop {
-            let (_, head) = D::state_heights(db).await;
+            let (_, head) = D::state_heights(db).await?;
             if head > past {
                 return Ok(());
             }

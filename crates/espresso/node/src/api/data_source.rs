@@ -741,7 +741,7 @@ pub mod testing {
         async fn local_block_height(db: &Self::SqlStorage) -> anyhow::Result<u64>;
 
         /// The state pruned height, then the state head.
-        async fn state_heights(db: &Self::SqlStorage) -> (Option<u64>, u64);
+        async fn state_heights(db: &Self::SqlStorage) -> anyhow::Result<(Option<u64>, u64)>;
 
         /// The height the state loop recorded as its start, if it started from a boundary.
         async fn state_start_height(db: &Self::SqlStorage) -> anyhow::Result<Option<u64>>;
@@ -764,7 +764,7 @@ pub mod testing {
         ) -> anyhow::Result<()>;
 
         /// Prune consensus data to `pruned` as a pruner batch would, stamping the data pruned
-        /// height and then deleting what `delete_batch` deletes.
+        /// height and then deleting the height-keyed rows `delete_batch` deletes.
         async fn prune_data_to(db: &Self::SqlStorage, pruned: u64) -> anyhow::Result<()>;
 
         /// Delete consensus data above `from` up to and including `to` without moving the data

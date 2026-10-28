@@ -89,7 +89,7 @@ impl<T> TestableDataSource for T where
 /// Write access a test needs that no storage trait offers.
 #[cfg(test)]
 #[async_trait]
-pub trait TestTransaction {
+pub trait SavePrunedHeight {
     /// Mark everything up to and including `height` as pruned.
     async fn save_pruned_height(&mut self, height: u64) -> anyhow::Result<()>;
 }

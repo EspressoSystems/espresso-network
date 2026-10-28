@@ -28,7 +28,7 @@ env:
 
 jobs:
   build-test-artifacts-postgres:
-    name: Build test artifacts (postgres)
+    name: Build test artifacts
     runs-on: ubuntu-24.04-8core
     steps:
       - uses: actions/checkout@v7
@@ -55,7 +55,7 @@ jobs:
       - name: Build and archive tests
         run: |
           python3 scripts/compile-metrics sample-rss --out peak-rss.json -- \
-            just nextest-archive nextest-archive-postgres.tar.zst --timings
+            just nextest-archive nextest-archive.tar.zst --timings
 
       - uses: ./.github/actions/compile-metrics
         continue-on-error: true
@@ -66,9 +66,9 @@ jobs:
       - name: Upload archive to workflow
         uses: actions/upload-artifact@v7
         with:
-          name: nextest-archive-postgres
+          name: nextest-archive
           if-no-files-found: error
-          path: nextest-archive-postgres.tar.zst
+          path: nextest-archive.tar.zst
           retention-days: 1
 
       - name: Upload cargo timings
@@ -244,12 +244,12 @@ jobs:
       - name: Download archive
         uses: actions/download-artifact@v8
         with:
-          name: nextest-archive-postgres
+          name: nextest-archive
 
-      # SQLite variants carry `sqlite` in their names and run in `test-sqlite`.
+      # Tests whose names mention sqlite run in `test-sqlite`.
       - name: Test
         run: |
-          cargo nextest run --archive-file nextest-archive-postgres.tar.zst  --verbose --no-fail-fast \
+          cargo nextest run --archive-file nextest-archive.tar.zst  --verbose --no-fail-fast \
           --workspace-remap $PWD \
           -E 'not test(/(?i)sqlite/)' \
           --partition hash:${{ matrix.partition }}/20
@@ -277,17 +277,18 @@ jobs:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/free-disk-space
       - uses: ./.github/actions/install-foundry
+      # Some Postgres tests mention sqlite in their names, so they run here.
       - uses: ./.github/actions/install-postgres
       - uses: taiki-e/install-action@nextest
 
       - name: Download archive
         uses: actions/download-artifact@v8
         with:
-          name: nextest-archive-postgres
+          name: nextest-archive
 
       - name: Test
         run: |
-          cargo nextest run --archive-file nextest-archive-postgres.tar.zst  --verbose --no-fail-fast \
+          cargo nextest run --archive-file nextest-archive.tar.zst  --verbose --no-fail-fast \
           --workspace-remap $PWD \
           -E 'test(/(?i)sqlite/)' \
           --partition hash:${{ matrix.partition }}/10

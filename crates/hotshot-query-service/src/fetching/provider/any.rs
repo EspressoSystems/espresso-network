@@ -365,7 +365,7 @@ where
     None
 }
 
-// These tests run the `postgres` Docker image, which doesn't work on Windows.
+// The SQL test databases (`TmpDb`) are not built on Windows.
 #[cfg(all(test, not(target_os = "windows")))]
 mod postgres;
 #[cfg(all(test, not(target_os = "windows")))]
