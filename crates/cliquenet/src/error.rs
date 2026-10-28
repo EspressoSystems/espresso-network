@@ -72,10 +72,6 @@ pub enum NetworkError {
     #[error("peer process interrupted")]
     PeerInterrupt,
 
-    /// The remote does not accept query lane connections.
-    #[error("query lane refused")]
-    QueryLaneRefused,
-
     /// We have accumulated too many ACKs for a peer that we can not send
     /// to the remote, meaning we can read fine, but not write properly.
     #[error("too many pending acks for peer {0}")]

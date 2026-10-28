@@ -1,10 +1,10 @@
-use std::{collections::HashMap, pin::Pin, sync::Arc, time::Duration};
+use std::{collections::HashMap, fmt::Debug, pin::Pin, sync::Arc, time::Duration};
 
 use ::light_client::{
     LightClient,
-    client::{FallbackClient, QueryServiceClient},
+    client::{Client, FallbackClient, QueryServiceClient},
     state::{Genesis, LightClientOptions},
-    storage::LightClientDbOptions,
+    storage::{LightClientDbOptions, SqlStorage},
 };
 use alloy::primitives::U256;
 use anyhow::{Context, bail, ensure};
@@ -67,8 +67,9 @@ use self::data_source::{
 use crate::{
     SeqTypes,
     api::{
-        context::{ApiContext, ConsensusSource, NodeLightClient},
+        context::{ApiContext, ConsensusSource},
         data_source::TokenDataSource,
+        peer_client::PeerClient,
     },
     catchup::{
         CatchupStorage, add_fee_accounts_to_state, add_v1_reward_accounts_to_state,
@@ -90,7 +91,7 @@ pub mod data_source;
 pub mod fs;
 pub mod light_client;
 pub mod options;
-pub(crate) mod query_p2p;
+pub(crate) mod peer_client;
 /// The query service over a SQL database, with one module per backend.
 pub mod sql {
     pub mod postgres;
@@ -1734,16 +1735,22 @@ pub(crate) fn light_client_genesis(config: &NetworkConfig<SeqTypes>, chain_id: C
 /// is therefore opened lazily as well; if that fails, the fetch returns `None` and the next fetch
 /// tries again.
 #[derive(Derivative)]
-#[derivative(Debug(bound = ""))]
-pub(crate) struct LightClientProvider {
-    light_client: OnceCell<Arc<NodeLightClient>>,
+#[derivative(Debug(bound = "C: Debug"))]
+pub(crate) struct LightClientProvider<C = FallbackClient<QueryServiceClient>> {
+    light_client: OnceCell<Arc<LightClient<SqlStorage, C>>>,
     state: ApiState,
-    client: FallbackClient<QueryServiceClient>,
+    client: C,
     opt: LightClientOptions,
     db_opt: LightClientDbOptions,
+    #[derivative(Debug = "ignore")]
+    shared: SharedLightClient<C>,
 }
 
+/// Finds a light client the node already runs, to fetch through instead of building one.
+type SharedLightClient<C> = fn(&dyn ApiContext) -> Option<Arc<LightClient<SqlStorage, C>>>;
+
 impl LightClientProvider {
+    /// A provider fetching from the HTTP query service `peers`.
     fn new(
         peers: impl IntoIterator<Item = Url>,
         state: ApiState,
@@ -1751,16 +1758,38 @@ impl LightClientProvider {
         db_opt: LightClientDbOptions,
     ) -> anyhow::Result<Self> {
         let client = FallbackClient::new(peers.into_iter().map(QueryServiceClient::new).collect())?;
-        Ok(Self {
+        Ok(LightClientProvider {
             light_client: OnceCell::new(),
             state,
             client,
             opt,
             db_opt,
+            shared: |ctx| ctx.light_client(),
         })
     }
+}
 
-    pub(crate) async fn light_client(&self) -> Option<&Arc<NodeLightClient>> {
+impl LightClientProvider<PeerClient> {
+    /// A provider fetching from staked peers over the cliquenet query lane.
+    ///
+    /// Its light client keeps its own database, so it never contends with the HTTP one.
+    fn peers(state: ApiState, opt: LightClientOptions) -> LightClientProvider<PeerClient> {
+        LightClientProvider {
+            light_client: OnceCell::new(),
+            client: PeerClient::new(state.clone()),
+            state,
+            opt,
+            db_opt: LightClientDbOptions::Sqlite(Default::default()),
+            shared: |_| None,
+        }
+    }
+}
+
+impl<C> LightClientProvider<C>
+where
+    C: Client + Clone,
+{
+    pub(crate) async fn light_client(&self) -> Option<&Arc<LightClient<SqlStorage, C>>> {
         self.light_client
             .get_or_try_init(|| self.init())
             .await
@@ -1772,9 +1801,9 @@ impl LightClientProvider {
             .ok()
     }
 
-    async fn init(&self) -> anyhow::Result<Arc<NodeLightClient>> {
+    async fn init(&self) -> anyhow::Result<Arc<LightClient<SqlStorage, C>>> {
         let ctx = self.state.context().await;
-        if let Some(light_client) = ctx.light_client() {
+        if let Some(light_client) = (self.shared)(ctx) {
             return Ok(light_client);
         }
         let db = self
@@ -1795,10 +1824,11 @@ impl LightClientProvider {
 }
 
 #[async_trait]
-impl<T> Provider<SeqTypes, T> for LightClientProvider
+impl<T, C> Provider<SeqTypes, T> for LightClientProvider<C>
 where
     T: fetching::Request<SeqTypes> + 'static,
-    NodeLightClient: Provider<SeqTypes, T>,
+    C: Client + Clone,
+    LightClient<SqlStorage, C>: Provider<SeqTypes, T>,
 {
     async fn fetch(&self, req: T) -> Option<T::Response> {
         self.light_client().await?.fetch(req).await
@@ -4091,6 +4121,15 @@ mod test {
         .await;
     }
 
+    /// Where a query node fetches the data its query service is missing.
+    #[derive(Clone, Copy, Debug)]
+    enum Source {
+        /// The HTTP query service of a configured peer.
+        HttpPeer,
+        /// Staked peers over the cliquenet query lane, with no HTTP peer configured.
+        StakedPeers,
+    }
+
     /// A query node with a gap must fill it from a peer over the path production runs: the
     /// proactive scanner, `LightClientProvider`, the light-client HTTP client and the peer's
     /// endpoints. One node takes part in consensus while the chain is built, then is shut down and
@@ -4104,8 +4143,14 @@ mod test {
     /// fetches by hash. Both are bounded and neither uses a ranges request, so they cost the test
     /// its claim on the route rather than its result;
     /// `test_scanner_backfills_over_ranges_endpoints_only` is what covers the route.
+    ///
+    /// With `Source::StakedPeers` the late node has no HTTP peers and fetches over the cliquenet
+    /// query lane instead, from node 0's query storage.
+    #[rstest]
+    #[case::http_peer(Source::HttpPeer)]
+    #[case::staked_peers(Source::StakedPeers)]
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_query_service_catchup_from_peer() {
+    async fn test_query_service_catchup_from_peer(#[case] source: Source) {
         const NUM_NODES: usize = 5;
         const LATE: usize = NUM_NODES - 1;
         let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
@@ -4270,13 +4315,17 @@ mod test {
         late_db.sync_status_ttl = Some(Duration::from_secs(1));
         // Chunks smaller than the gap, so the missing runs pack into several requests.
         late_db.proactive_scan_chunk_size = Some(4);
-        let api = Options::with_port(late_port).query_sql(
-            Query {
+        let query = match source {
+            Source::HttpPeer => Query {
                 peers: vec![peer_url.clone()],
                 ..Default::default()
             },
-            late_db,
-        );
+            Source::StakedPeers => Query {
+                p2p: true,
+                ..Default::default()
+            },
+        };
+        let api = Options::with_port(late_port).query_sql(query, late_db);
         let cfg = network.cfg.clone();
         let upgrades_map = cfg.upgrades();
         let persistence =

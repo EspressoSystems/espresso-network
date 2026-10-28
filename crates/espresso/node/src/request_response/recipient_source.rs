@@ -8,10 +8,11 @@ use hotshot_types::{
     data::EpochNumber, epoch_membership::EpochMembershipCoordinator,
     traits::node_implementation::NodeImplementation,
 };
-use request_response::recipient_source::RecipientSource as RecipientSourceTrait;
+use request_response::{
+    recipient_source::RecipientSource as RecipientSourceTrait, request::Request,
+};
 use tracing::warn;
 
-use super::request::Request;
 use crate::consensus_handle::ConsensusHandle;
 
 #[derive(Clone)]
@@ -27,11 +28,13 @@ pub struct RecipientSource<I: NodeImplementation<SeqTypes>> {
 /// Implement the RecipientSourceTrait, which allows the request-response protocol to derive the
 /// intended recipients for a given request
 #[async_trait]
-impl<I: NodeImplementation<SeqTypes>> RecipientSourceTrait<Request, PubKey> for RecipientSource<I>
+impl<I, R> RecipientSourceTrait<R, PubKey> for RecipientSource<I>
 where
+    I: NodeImplementation<SeqTypes>,
     I::Storage: NewProtocolStorage<SeqTypes>,
+    R: Request,
 {
-    async fn get_expected_responders(&self, _request: &Request) -> Result<Vec<PubKey>> {
+    async fn get_expected_responders(&self, _request: &R) -> Result<Vec<PubKey>> {
         // Get the current epoch number
         let epoch_number = self
             .consensus_handle

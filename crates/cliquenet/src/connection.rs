@@ -19,7 +19,7 @@ use tokio::{
 use tracing::{debug, warn};
 
 use crate::{
-    Config, NetAddr, Version,
+    Config, Lane, NetAddr, Version,
     error::NetworkError,
     msg::{Header, MAX_NOISE_MESSAGE_SIZE, hello::Hello},
     util::until,
@@ -82,7 +82,11 @@ impl Connection {
         .await
     }
 
-    pub async fn connect(conf: Arc<Config>, peer: PublicKey, addr: NetAddr) -> Self {
+    pub async fn connect(conf: Arc<Config>, peer: PublicKey, addr: NetAddr, lane: Lane) -> Self {
+        let hello = match lane {
+            Lane::Consensus => Hello::Ok,
+            Lane::Query => Hello::OkQuery,
+        };
         let mut delays = once({
             if conf.random_connect_delay {
                 Duration::from_millis(rand::rng().random_range(0..1000))
@@ -111,16 +115,21 @@ impl Connection {
                 sleep(delays.next().expect("delays iterator is infinite")).await;
             }
 
-            debug!(name = %conf.name, %node, %peer, %addr, "connecting");
+            debug!(name = %conf.name, %node, %peer, %addr, ?lane, "connecting");
 
             match try_connect(&conf, &peer, &addr).await {
                 Ok(mut conn) => {
                     let hello_exchange = until(conf.handshake_timeout, async {
-                        conn.send_hello(Hello::Ok).await?;
+                        conn.send_hello(hello).await?;
                         conn.recv_hello().await
                     });
                     match hello_exchange.await {
-                        Ok(Hello::Ok) => break conn,
+                        Ok(h) if h == hello => break conn,
+                        // Parties that do not serve queries refuse, which is expected.
+                        Ok(h) if lane == Lane::Query => {
+                            debug!(name = %conf.name, %node, %peer, %addr, ?h, "query lane refused");
+                            backoff = h.backoff_duration();
+                        },
                         Ok(h) => {
                             warn!(
                                 name = %conf.name,
@@ -128,6 +137,7 @@ impl Connection {
                                 %peer,
                                 remote = %conn.key,
                                 %addr,
+                                ?lane,
                                 "hello response was not ok"
                             );
                             backoff = h.backoff_duration();
@@ -149,20 +159,6 @@ impl Connection {
                     warn!(name = %conf.name, %node, %peer, %addr, %err, "connect/handshake error")
                 },
             }
-        }
-    }
-
-    /// Make a single attempt to open a query lane connection.
-    pub async fn connect_query(conf: Arc<Config>, peer: PublicKey, addr: NetAddr) -> Result<Self> {
-        let mut conn = try_connect(&conf, &peer, &addr).await?;
-        let reply = until(conf.handshake_timeout, async {
-            conn.send_hello(Hello::OkQuery).await?;
-            conn.recv_hello().await
-        })
-        .await?;
-        match reply {
-            Hello::OkQuery => Ok(conn),
-            Hello::Ok | Hello::BackOff(_) | Hello::Unknown => Err(NetworkError::QueryLaneRefused),
         }
     }
 

@@ -30,8 +30,11 @@ use hotshot_types::{
 };
 
 use crate::{
-    SequencerContext, api::query_p2p::QueryLane, consensus_handle::ConsensusHandle,
-    context::TaskList, state_signature::StateSignatureMemStorage,
+    SequencerContext,
+    consensus_handle::ConsensusHandle,
+    context::TaskList,
+    request_response::query::{QueryRequest, QueryResponse},
+    state_signature::StateSignatureMemStorage,
 };
 
 pub type NodeLightClient = LightClient<SqlStorage, FallbackClient<QueryServiceClient>>;
@@ -75,10 +78,12 @@ pub trait ApiContext: Send + Sync + 'static {
     /// A light client the node already runs, for the query service to fetch through.
     fn light_client(&self) -> Option<Arc<NodeLightClient>>;
 
-    /// The cliquenet query lane, for a node that takes part in consensus. Returns `None` once
-    /// taken.
-    fn take_query_lane(&self) -> Option<QueryLane> {
-        None
+    /// Ask staked peers over the cliquenet query lane.
+    fn query_peers(
+        &self,
+        _request: QueryRequest,
+    ) -> BoxFuture<'static, anyhow::Result<QueryResponse>> {
+        Box::pin(async { anyhow::bail!("this node does not query peers over cliquenet") })
     }
     fn request_vid_shares(
         &self,
@@ -200,8 +205,11 @@ where
         None
     }
 
-    fn take_query_lane(&self) -> Option<QueryLane> {
-        SequencerContext::take_query_lane(self)
+    fn query_peers(
+        &self,
+        request: QueryRequest,
+    ) -> BoxFuture<'static, anyhow::Result<QueryResponse>> {
+        SequencerContext::query_peers(self, request)
     }
 
     fn request_vid_shares(

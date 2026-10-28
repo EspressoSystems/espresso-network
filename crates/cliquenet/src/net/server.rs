@@ -9,7 +9,6 @@ use tokio::{
         watch,
     },
     task::{JoinHandle, JoinSet},
-    time::{Instant, MissedTickBehavior, interval},
 };
 use tokio_util::{sync::CancellationToken, task::JoinMap};
 use tracing::{debug, error, info, trace, warn};
@@ -37,14 +36,13 @@ pub struct Server {
     query_ibound: UnboundedSender<PeerMessage>,
     obound: UnboundedReceiver<Command>,
     next_slot: watch::Receiver<Slot>,
-    started: Instant,
     accept_tasks: JoinSet<Result<Connection, NetworkError>>,
     /// Keyed by a per-connection id because the lane is only known once the hello is read.
     #[allow(clippy::type_complexity)]
     hello_tasks:
         JoinMap<(PublicKey, u64), Result<(Hello, Connection, Option<Hello>), NetworkError>>,
     next_hello_id: u64,
-    connect_tasks: JoinMap<(PublicKey, Lane), Result<Connection, NetworkError>>,
+    connect_tasks: JoinMap<(PublicKey, Lane), Connection>,
     peer_tasks: JoinMap<(PublicKey, Lane), Peer>,
     metrics: Arc<dyn Metrics>,
 }
@@ -61,8 +59,6 @@ struct Link {
     outbox: Queue<(RetryPolicy, Bytes)>,
     retry: DelayQueue,
     peer: PeerState,
-    /// When we last connected or queued a message. Idle query links are closed.
-    last_used: Instant,
 }
 
 /// Which side opened a connection. This decides which one is kept when both
@@ -88,9 +84,6 @@ enum Origin {
 /// finishes. We keep the peer here until we have a new connection to resume.
 /// Once a connect or accept task finishes we set the connection and spawn
 /// a new peer task again.
-///
-/// Query links never enter `Reconnect`. They drop back to `None` and the next
-/// query message reopens them.
 enum PeerState {
     /// Initial state.
     None,
@@ -142,7 +135,6 @@ impl Server {
             query_ibound: query_tx,
             obound: rx,
             parties,
-            started: Instant::now(),
             accept_tasks: JoinSet::new(),
             connect_tasks: JoinMap::new(),
             hello_tasks: JoinMap::new(),
@@ -167,9 +159,6 @@ impl Server {
         {
             self.spawn_connect(k, Lane::Consensus, a)
         }
-
-        let mut query_tick = interval(QUERY_TICK);
-        query_tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
 
         loop {
             select! {
@@ -268,6 +257,10 @@ impl Server {
                             );
                             continue
                         }
+                        if their_hello == Some(Hello::OkQuery) && our_hello != Hello::OkQuery {
+                            debug!(name = %self.conf.name, node = %self.key, peer = %key, "refused query lane");
+                            continue
+                        }
                         let lane = match our_hello.lane() {
                             Some(lane) if their_hello == Some(our_hello) => lane,
                             Some(_) | None => {
@@ -310,26 +303,9 @@ impl Server {
                 },
 
                 Some(x) = self.connect_tasks.join_next() => match x {
-                    ((key, lane), Ok(Ok(conn))) => {
+                    ((key, lane), Ok(conn)) => {
                         self.metrics.set(&self.key, CONNECT_TASKS, self.connect_tasks.len());
                         self.on_connection(key, lane, conn, Origin::Connected);
-                    }
-                    ((key, lane), Ok(Err(err))) => {
-                        self.metrics.set(&self.key, CONNECT_TASKS, self.connect_tasks.len());
-                        // Only query connects give up. Whoever queued for this party times out.
-                        debug!(
-                            name = %self.conf.name,
-                            node = %self.key,
-                            peer = %key,
-                            ?lane,
-                            %err,
-                            "connect failed"
-                        );
-                        if let Some(party) = self.parties.get(&key)
-                            && matches!(party.query.peer, PeerState::None)
-                        {
-                            party.query.outbox.clear();
-                        }
                     }
                     ((key, lane), Err(err)) => {
                         self.metrics.set(&self.key, CONNECT_TASKS, self.connect_tasks.len());
@@ -342,9 +318,8 @@ impl Server {
                                 %err,
                                 "connect task panic"
                             );
-                            if lane == Lane::Consensus
-                                && let Some(party) = self.parties.get_mut(&key)
-                                && matches!(party.consensus.peer, PeerState::None | PeerState::Reconnect(_))
+                            if let Some(party) = self.parties.get_mut(&key)
+                                && matches!(party.link_mut(lane).peer, PeerState::None | PeerState::Reconnect(_))
                             {
                                 let addr = party.addr.clone();
                                 self.spawn_connect(key, lane, addr);
@@ -370,22 +345,13 @@ impl Server {
                         };
                         let addr = party.addr.clone();
                         let link = party.link_mut(lane);
-                        match (link.peer.take(), lane) {
-                            (PeerState::Replace(conn), _) => {
-                                let cancel = CancellationToken::new();
-                                link.peer = PeerState::Connected(cancel.clone());
-                                self.spawn_peer(key, lane, peer, conn, cancel);
-                            }
-                            (_, Lane::Consensus) => {
-                                link.peer = PeerState::Reconnect(peer);
-                                self.spawn_connect(key, lane, addr);
-                            }
-                            // Closed while idle, or failed. Reopen only for messages already queued.
-                            (_, Lane::Query) => {
-                                if !link.outbox.is_empty() {
-                                    self.spawn_connect(key, lane, addr);
-                                }
-                            }
+                        if let PeerState::Replace(conn) = link.peer.take() {
+                            let cancel = CancellationToken::new();
+                            link.peer = PeerState::Connected(cancel.clone());
+                            self.spawn_peer(key, lane, peer, conn, cancel);
+                        } else {
+                            link.peer = PeerState::Reconnect(peer);
+                            self.spawn_connect(key, lane, addr);
                         }
                     }
                     ((key, lane), Err(err)) => {
@@ -405,15 +371,11 @@ impl Server {
                             if let Some(party) = self.parties.get_mut(&key) {
                                 let addr = party.addr.clone();
                                 party.link_mut(lane).peer = PeerState::None;
-                                if lane == Lane::Consensus {
-                                    self.spawn_connect(key, lane, addr);
-                                }
+                                self.spawn_connect(key, lane, addr);
                             }
                         }
                     }
                 },
-
-                _ = query_tick.tick() => self.expire_query_links(),
 
                 r = self.next_slot.changed() => {
                     if r.is_err() {
@@ -424,8 +386,10 @@ impl Server {
                     self.lower_bound = s;
                     self.metrics.set(&self.key, LOWER_BOUND, u64::from(s) as usize);
                     for party in self.parties.values() {
-                        party.consensus.outbox.gc(s);
-                        party.consensus.retry.gc(s);
+                        for link in [&party.consensus, &party.query] {
+                            link.outbox.gc(s);
+                            link.retry.gc(s);
+                        }
                     }
                 }
 
@@ -702,7 +666,6 @@ impl Server {
         }
         let cancel = CancellationToken::new();
         link.peer = PeerState::Connected(cancel.clone());
-        link.last_used = Instant::now();
         self.spawn_peer(key, lane, peer, conn, cancel);
     }
 
@@ -718,9 +681,8 @@ impl Server {
             }
             return;
         }
-        let slot = self.query_slot();
         let msgid = self.next_msgid();
-        let Some(party) = self.parties.get_mut(&to) else {
+        let Some(party) = self.parties.get(&to) else {
             warn!(
                 name = %self.conf.name,
                 node = %self.key,
@@ -729,46 +691,17 @@ impl Server {
             );
             return;
         };
-        let link = &mut party.query;
-        if link.outbox.len() >= QUERY_OUTBOX_CAPACITY {
-            warn!(
-                name = %self.conf.name,
-                node = %self.key,
-                peer = %to,
-                "query outbox full, dropping message"
-            );
-            return;
-        }
-        link.outbox
-            .enqueue(slot, msgid, (RetryPolicy::NoRetry, bytes));
-        link.last_used = Instant::now();
-        if matches!(link.peer, PeerState::None)
+        // Queued under the current lower bound, so the next GC drops it if still unsent.
+        party
+            .query
+            .outbox
+            .enqueue(self.lower_bound, msgid, (RetryPolicy::NoRetry, bytes));
+        if matches!(party.query.peer, PeerState::None)
             && !self.connect_tasks.contains_key(&(to, Lane::Query))
         {
             let addr = party.addr.clone();
             self.spawn_connect(to, Lane::Query, addr);
         }
-    }
-
-    /// Drop queued query messages older than `QUERY_TTL` and close idle query links.
-    fn expire_query_links(&mut self) {
-        let expired = Slot(self.started.elapsed().saturating_sub(QUERY_TTL).as_secs());
-        for party in self.parties.values() {
-            let link = &party.query;
-            link.outbox.gc(expired);
-            if let PeerState::Connected(cancel) = &link.peer
-                && link.outbox.is_empty()
-                && link.last_used.elapsed() >= QUERY_IDLE_TIMEOUT
-            {
-                cancel.cancel();
-            }
-        }
-    }
-
-    /// Query messages are queued under the second they were sent in, so
-    /// `expire_query_links` can drop them by age with the slot GC.
-    fn query_slot(&self) -> Slot {
-        Slot(self.started.elapsed().as_secs())
     }
 
     fn spawn_connect(&mut self, key: PublicKey, lane: Lane, addr: NetAddr) {
@@ -783,13 +716,8 @@ impl Server {
             ?lane,
             "spawning connect task"
         );
-        let conf = self.conf.clone();
-        self.connect_tasks.spawn((key, lane), async move {
-            match lane {
-                Lane::Consensus => Ok(Connection::connect(conf, key, addr).await),
-                Lane::Query => Connection::connect_query(conf, key, addr).await,
-            }
-        });
+        let conn = Connection::connect(self.conf.clone(), key, addr, lane);
+        self.connect_tasks.spawn((key, lane), conn);
         self.metrics.add(&key, CONNECT_ATTEMPTS, 1);
         self.metrics
             .set(&self.key, CONNECT_TASKS, self.connect_tasks.len());
@@ -824,21 +752,8 @@ impl Server {
         // send our hello and drop the connection. NB that this may cause the remote
         // to see a connection reset.
         //
-        // Each party may open one connection per lane, so we expect up to two
-        // hellos per party and drop the oldest beyond that.
+        // Each party may open one connection per lane, hence two hellos per party.
         let under_pressure = self.hello_tasks.len() > 4 * self.parties.len();
-
-        let in_flight = self
-            .hello_tasks
-            .keys()
-            .filter(|(k, _)| *k == conn.key)
-            .copied()
-            .collect::<Vec<_>>();
-        if in_flight.len() >= MAX_HELLOS_PER_PARTY
-            && let Some(oldest) = in_flight.iter().min_by_key(|(_, id)| *id)
-        {
-            self.hello_tasks.abort(oldest);
-        }
 
         let id = self.next_hello_id;
         self.next_hello_id = self.next_hello_id.wrapping_add(1);
@@ -944,7 +859,6 @@ impl Link {
             outbox: Queue::new(),
             retry: DelayQueue::new(c),
             peer: PeerState::None,
-            last_used: Instant::now(),
         }
     }
 }
@@ -970,22 +884,6 @@ fn remove_trailer(mut bytes: Bytes) -> Bytes {
     debug_assert!(_t.is_some());
     bytes
 }
-
-/// How often queued query messages are expired and idle query links closed.
-const QUERY_TICK: Duration = Duration::from_secs(1);
-
-/// Queued query messages older than this are dropped unsent. Callers have
-/// given up on them by then.
-const QUERY_TTL: Duration = Duration::from_secs(10);
-
-/// A query link with nothing sent for this long is closed.
-const QUERY_IDLE_TIMEOUT: Duration = Duration::from_secs(60);
-
-/// Max. number of query messages queued per party.
-const QUERY_OUTBOX_CAPACITY: usize = 8;
-
-/// Max. number of concurrent hellos per party, one per lane.
-const MAX_HELLOS_PER_PARTY: usize = 2;
 
 // Metrics labels /////////////////////////////////////////////////////////////
 

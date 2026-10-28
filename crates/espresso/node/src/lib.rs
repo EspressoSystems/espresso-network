@@ -1609,6 +1609,8 @@ pub mod testing {
                 "starting node",
             );
 
+            // Every test node with a query database serves its peers over the query lane.
+            let accept_query = matches!(storage, Some(RequestResponseStorage::Sql(_)));
             let coordinator_network = move |upgrade| {
                 Cliquenet::create(
                     "test-coordinator",
@@ -1617,7 +1619,7 @@ pub mod testing {
                     coordinator_addr,
                     [],
                     Some(message_limit(max_block_size)),
-                    false,
+                    accept_query,
                     upgrade,
                     Box::new(NoMetrics),
                 )

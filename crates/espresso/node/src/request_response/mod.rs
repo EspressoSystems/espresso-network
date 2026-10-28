@@ -14,6 +14,7 @@ use tokio::sync::mpsc::Receiver;
 pub mod catchup;
 pub mod data_source;
 pub mod network;
+pub mod query;
 pub mod recipient_source;
 pub mod request;
 

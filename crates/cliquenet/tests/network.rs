@@ -888,10 +888,10 @@ async fn query_lane_round_trip() {
 #[tokio::test]
 async fn query_lane_refused_keeps_consensus_lane() {
     let (net_a, mut net_b, pka, pkb) = two_query_nodes(false).await;
-    let mut query_b = net_b.take_query_receiver().unwrap();
+    assert!(net_b.take_query_receiver().is_none());
 
     net_a.send_query(pkb, b"request".to_vec()).unwrap();
-    assert_silent(&mut query_b).await;
+    assert_silent(net_b.receiver_mut()).await;
 
     net_a.unicast(Slot::MIN, pkb, b"vote".to_vec()).unwrap();
     let (src, data) = timeout(TIMEOUT, net_b.receive())

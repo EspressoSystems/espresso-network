@@ -149,7 +149,7 @@ impl Network {
         );
 
         let recv = NetworkReceiver { rx: irx };
-        let query_recv = Some(NetworkReceiver { rx: qrx });
+        let query_recv = conf.accept_query.then_some(NetworkReceiver { rx: qrx });
         let send = NetworkSender {
             conf: conf.clone(),
             node,
@@ -169,8 +169,9 @@ impl Network {
 
     /// Take the receiver of query lane messages.
     ///
-    /// Returns `None` once taken. Messages sent with
-    /// [`NetworkSender::send_query`] arrive here and never on the main receiver.
+    /// Returns `None` once taken, or if the network does not accept query
+    /// lanes. Messages sent with [`NetworkSender::send_query`] arrive here and
+    /// never on the main receiver.
     pub fn take_query_receiver(&mut self) -> Option<NetworkReceiver> {
         self.query_recv.take()
     }
@@ -287,9 +288,9 @@ impl NetworkSender {
     /// Send a message to a party over its query lane.
     ///
     /// The query lane is a separate connection, so a busy query lane never
-    /// delays consensus messages. It is opened on first use and closed when
-    /// idle. Messages are sent at most once and dropped if they wait too long
-    /// in the queue, or if the party refuses the query lane.
+    /// delays consensus messages. It is opened on first use. Messages are
+    /// sent at most once, and dropped by the next [`NetworkSender::gc`] if
+    /// still queued, as when the party refuses the query lane.
     pub fn send_query(&self, to: PublicKey, mut msg: Vec<u8>) -> Result<(), NetworkError> {
         debug!(%to, len = msg.len(), "send_query");
         self.length_check(&msg)?;

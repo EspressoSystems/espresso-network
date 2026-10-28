@@ -2,7 +2,7 @@
 //! to calculate/derive a response for a specific request. In the confirmation layer the implementer
 //! would be something like a [`FeeMerkleTree`] for fee catchup
 
-use std::sync::Arc;
+use std::{ops::Range, sync::Arc};
 
 use anyhow::{Context, Result, bail};
 use async_trait::async_trait;
@@ -16,6 +16,7 @@ use espresso_types::{
 };
 use hotshot_new_protocol::storage::NewProtocolStorage;
 use hotshot_query_service::{
+    availability::LeafQueryData,
     data_source::{
         VersionedDataSource,
         storage::{FileSystemStorage, NodeStorage},
@@ -32,9 +33,13 @@ use jf_merkle_tree_compat::{
     ForgetableMerkleTreeScheme, ForgetableUniversalMerkleTreeScheme, LookupResult,
     MerkleTreeScheme, UniversalMerkleTreeScheme,
 };
+use light_client::consensus::{leaf::LeafProof, payload::PayloadProof};
 use request_response::data_source::DataSource as DataSourceTrait;
 
-use super::request::{Request, Response};
+use super::{
+    query::LeafRef,
+    request::{Request, Response},
+};
 use crate::{
     api::{BlocksFrontier, RewardMerkleTreeV2Data},
     catchup::{
@@ -93,6 +98,14 @@ pub trait RequestStorage: Send + Sync {
     async fn load_tree(&self, height: u64) -> Result<Vec<u8>>;
 
     async fn get_vid_share(&self, block_number: u64) -> Result<VidShare>;
+
+    /// A finality proof for a stored leaf, built from stored leaves and certificates only.
+    async fn get_leaf_proof(&self, leaf: LeafRef, finalized: Option<u64>) -> Result<LeafProof>;
+
+    /// The stored leaves in `range`, all of them or an error.
+    async fn get_leaves(&self, range: Range<u64>) -> Result<Vec<LeafQueryData<SeqTypes>>>;
+
+    async fn get_payload_proof(&self, height: u64) -> Result<PayloadProof>;
 }
 
 #[derive(Clone)]

@@ -14,7 +14,7 @@ use espresso_types::{
     v0::traits::{EventConsumer as PersistenceEventConsumer, SequencerPersistence},
 };
 use futures::{
-    future::join_all,
+    future::{BoxFuture, join_all},
     stream::{BoxStream, Stream, StreamExt},
 };
 use hotshot_new_protocol::{
@@ -40,7 +40,7 @@ use hotshot_types::{
     upgrade_config::UpgradeConfig,
 };
 use parking_lot::Mutex;
-use request_response::RequestResponseConfig;
+use request_response::{RequestResponse, RequestResponseConfig, message::RequestMessage};
 use tokio::{
     select, spawn,
     sync::{
@@ -56,7 +56,6 @@ use versions::{NEW_PROTOCOL_VERSION, Version};
 
 use crate::{
     Node, SeqTypes, SequencerApiVersion,
-    api::query_p2p::QueryLane,
     catchup::ParallelStateCatchup,
     consensus_handle::ConsensusHandle,
     external_event_handler::ExternalEventHandler,
@@ -65,6 +64,10 @@ use crate::{
         RequestResponseProtocol,
         data_source::{DataSource, Storage as RequestResponseStorage},
         network::Sender as RequestResponseSender,
+        query::{
+            QueryDataSource, QueryLaneReceiver, QueryLaneSender, QueryProtocol, QueryRequest,
+            QueryResponse,
+        },
         recipient_source::RecipientSource,
     },
     startup_catchup::bootstrap_epoch_window,
@@ -79,6 +82,20 @@ const REQUEST_RESPONSE_CHANNEL_CAPACITY: usize = 256;
 
 /// Responders block on the outbound channel while holding request-response admission permits.
 const OUTBOUND_MESSAGE_CHANNEL_CAPACITY: usize = 128;
+
+/// Shared by the consensus and query request-response instances.
+fn request_response_config() -> RequestResponseConfig {
+    RequestResponseConfig {
+        incoming_request_ttl: Duration::from_secs(40),
+        incoming_request_timeout: Duration::from_secs(5),
+        request_batch_size: 5,
+        request_batch_interval: Duration::from_secs(2),
+        // Permits are held while a response is derived (possibly from SQL), and a peer
+        // catching up legitimately issues several distinct requests concurrently
+        max_incoming_requests: 32,
+        max_incoming_requests_per_key: 4,
+    }
+}
 
 /// The sequencer context contains a consensus handle and other sequencer specific information.
 #[derive(Derivative, Clone)]
@@ -99,9 +116,9 @@ pub struct SequencerContext<P: SequencerPersistence> {
     /// Light client state signatures produced by the state signer task.
     state_signatures: Arc<RwLock<StateSignatureMemStorage>>,
 
-    /// The cliquenet query lane, until the query service takes it.
+    /// Request-response over the cliquenet query lane, when this node serves and asks peers.
     #[derivative(Debug = "ignore")]
-    query_lane: Arc<Mutex<Option<QueryLane>>>,
+    query_protocol: Option<QueryProtocol<ConsensusNode<P>>>,
 
     /// An orchestrator to wait for before starting consensus, with the peer config this node
     /// registered there.
@@ -272,28 +289,33 @@ where
         let (request_response_sender, request_response_receiver) =
             channel(REQUEST_RESPONSE_CHANNEL_CAPACITY);
 
-        // Configure the request-response protocol
-        let request_response_config = RequestResponseConfig {
-            incoming_request_ttl: Duration::from_secs(40),
-            incoming_request_timeout: Duration::from_secs(5),
-            request_batch_size: 5,
-            request_batch_interval: Duration::from_secs(2),
-            // Permits are held while a response is derived (possibly from SQL), and a peer
-            // catching up legitimately issues several distinct requests concurrently
-            max_incoming_requests: 32,
-            max_incoming_requests_per_key: 4,
+        let recipient_source = RecipientSource {
+            memberships: membership_coordinator,
+            consensus_handle: consensus_handle.clone(),
+            public_key: validator_config.public_key,
+        };
+
+        // Query service requests get their own instance on the query lane, answered from the
+        // same query storage.
+        let query_protocol = match (query_lane, &storage) {
+            (Some((sender, receiver)), Some(RequestResponseStorage::Sql(query_storage))) => {
+                Some(RequestResponse::new(
+                    request_response_config(),
+                    QueryLaneSender(sender),
+                    QueryLaneReceiver(receiver),
+                    recipient_source.clone(),
+                    QueryDataSource(Arc::clone(query_storage)),
+                ))
+            },
+            _ => None,
         };
 
         // Create the request-response protocol
         let request_response_protocol = RequestResponseProtocol::new(
-            request_response_config,
+            request_response_config(),
             RequestResponseSender::new(outbound_message_sender),
             request_response_receiver,
-            RecipientSource {
-                memberships: membership_coordinator,
-                consensus_handle: consensus_handle.clone(),
-                public_key: validator_config.public_key,
-            },
+            recipient_source,
             DataSource {
                 node_state: instance_state.clone(),
                 storage,
@@ -325,7 +347,7 @@ where
         .await
         .with_context(|| "Failed to create external event handler")?;
 
-        let ctx = Self::new(
+        let mut ctx = Self::new(
             consensus_handle,
             persistence,
             state_signer,
@@ -339,7 +361,7 @@ where
             proposal_fetcher_cfg,
             metrics,
         );
-        *ctx.query_lane.lock() = query_lane;
+        ctx.query_protocol = query_protocol;
         Ok(ctx.with_task_list(tasks))
     }
 
@@ -366,7 +388,7 @@ where
             consensus_handle,
             persistence: persistence.clone(),
             state_signatures: Arc::clone(&state_signer.signatures),
-            query_lane: Default::default(),
+            query_protocol: None,
             request_response_protocol,
             tasks: Default::default(),
             detached: false,
@@ -450,9 +472,30 @@ where
         self.state_signatures.clone()
     }
 
-    /// Take the cliquenet query lane. Returns `None` once taken.
-    pub(crate) fn take_query_lane(&self) -> Option<QueryLane> {
-        self.query_lane.lock().take()
+    /// Ask staked peers over the cliquenet query lane, returning the first response that answers
+    /// the request. The response is unverified.
+    pub(crate) fn query_peers(
+        &self,
+        request: QueryRequest,
+    ) -> BoxFuture<'static, anyhow::Result<QueryResponse>> {
+        let protocol = self.query_protocol.clone();
+        let public_key = self.validator_config.public_key;
+        let private_key = self.validator_config.private_key.clone();
+        Box::pin(async move {
+            let protocol = protocol.context("query p2p is off")?;
+            let message = RequestMessage::new_signed(&public_key, &private_key, &request)?;
+            let ttl = request_response_config().incoming_request_ttl;
+            protocol
+                .request(message, ttl, |request, response| {
+                    let answers = response.answers(request);
+                    async move {
+                        ensure!(answers, "response does not answer the request");
+                        Ok(response)
+                    }
+                })
+                .await
+                .map_err(|err| anyhow::anyhow!("{err}"))
+        })
     }
 
     /// Stream consensus events.

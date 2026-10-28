@@ -9,7 +9,7 @@ use tokio::{
 use tokio_util::sync::CancellationToken;
 
 use crate::{
-    Config, Keypair, NetAddr, PublicKey,
+    Config, Keypair, Lane, NetAddr, PublicKey,
     connection::Connection,
     delay::DelayQueue,
     error::NetworkError,
@@ -57,7 +57,7 @@ async fn connection_pair(
             conn.send_hello(Hello::Ok).await.unwrap();
             conn
         },
-        Connection::connect(conf_a, pkb, addr),
+        Connection::connect(conf_a, pkb, addr, Lane::Consensus),
     );
     (ca, cb)
 }

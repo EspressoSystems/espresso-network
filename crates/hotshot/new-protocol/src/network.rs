@@ -155,8 +155,9 @@ impl<T: NodeType> Cliquenet<T> {
 
     /// Take both ends of the query lane.
     ///
-    /// Returns `None` once taken. Query messages are raw bytes addressed by
-    /// signature key, and never reach [`Cliquenet::receive`].
+    /// Returns `None` once taken, or if this network does not accept query
+    /// lanes. Query messages are raw bytes addressed by signature key, and
+    /// never reach [`Cliquenet::receive`].
     pub fn take_query_lane(&mut self) -> Option<(QuerySender<T>, QueryReceiver<T>)> {
         let receiver = self.query_receiver.take()?;
         let sender = QuerySender {
@@ -521,11 +522,6 @@ impl<T: NodeType> QuerySender<T> {
         };
         self.sender.send_query(target.into(), bytes)?;
         Ok(())
-    }
-
-    /// The largest message this sender accepts.
-    pub fn max_message_size(&self) -> NonZeroUsize {
-        self.sender.config().max_message_size()
     }
 }
 
