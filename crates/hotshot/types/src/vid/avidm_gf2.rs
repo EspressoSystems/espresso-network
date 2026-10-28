@@ -15,6 +15,7 @@ pub type AvidmGf2Param = vid::avidm_gf2::namespaced::NsAvidmGf2Param;
 pub type AvidmGf2Commitment = vid::avidm_gf2::namespaced::NsAvidmGf2Commit;
 pub type AvidmGf2Share = vid::avidm_gf2::namespaced::NsAvidmGf2Share;
 pub type AvidmGf2Common = vid::avidm_gf2::namespaced::NsAvidmGf2Common;
+pub type AvidmGf2NsDispersal = vid::avidm_gf2::namespaced::NsDispersal;
 
 /// Benchmark only: shares covering 2/3 of the weight rebuild a block instead of 1/3, which
 /// halves the encoded size. Incompatible with nodes that run without it, and safe only while
