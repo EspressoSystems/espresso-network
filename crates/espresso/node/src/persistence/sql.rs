@@ -846,9 +846,8 @@ impl Persistence {
     }
 }
 
-/// Tables pruned by TARGET_RETENTION, MINIMUM_RETENTION and TARGET_USAGE. `vid_share2` is pruned
-/// separately by VID_SHARE_RETENTION, and left out of the usage measurement so that a full window
-/// of VID shares does not push the other tables down to MINIMUM_RETENTION.
+// `vid_share2` is left out on purpose. It has its own retention, and counting a week of shares
+// toward TARGET_USAGE would prune every other table down to MINIMUM_RETENTION.
 const PRUNE_TABLES: &[&str] = &[
     "anchor_leaf2",
     "da_proposal2",
@@ -887,9 +886,9 @@ async fn prune_table(
     Ok(())
 }
 
-// Lowering VID_SHARE_RETENTION would otherwise delete days of shares in one write transaction,
-// holding SQLite's write lock that consensus votes wait on. A node stores one share per view, so a
-// backlog still drains.
+// Small batches keep the SQLite write lock short, since consensus votes wait on it. Without them,
+// lowering VID_SHARE_RETENTION would delete days of shares in one go. Only one share is added per
+// view, so a batch per decide still clears any backlog.
 const VID_SHARE_PRUNE_BATCH: i64 = 100;
 
 async fn prune_vid_shares(tx: &mut Transaction<Write>, view: u64) -> anyhow::Result<()> {

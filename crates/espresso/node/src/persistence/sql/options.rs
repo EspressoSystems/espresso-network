@@ -571,14 +571,12 @@ pub struct ConsensusPruningOptions {
     )]
     pub(crate) minimum_retention: u64,
 
-    /// Number of views to retain this node's VID shares, whether or not they have been decided.
+    /// How many views to keep this node's VID shares for.
     ///
-    /// Unlike the other consensus data, VID shares are kept for this many views even if consensus
-    /// storage exceeds TARGET_USAGE. Disk use is this many views times this node's share size,
-    /// which grows with block size and shrinks as the committee grows.
+    /// VID shares do not count toward TARGET_USAGE, so they are kept for this many views even when
+    /// consensus storage is over that limit.
     ///
-    /// The default of 1209600 views equates to approximately 7 days (604800 seconds) at an average
-    /// view time of 0.5s, the mainnet view time.
+    /// The default of 1209600 views is about 7 days at the mainnet average of 0.5s per view.
     #[clap(
         name = "VID_SHARE_RETENTION",
         long = "consensus-storage-vid-share-retention",
