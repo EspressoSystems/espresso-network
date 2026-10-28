@@ -46,8 +46,6 @@ NATIVE_PROCESSES=(
 	espresso-node-sqlite
 	orchestrator
 	state-relay-server
-	cdn-marshal
-	cdn-broker
 	submit-transactions
 	nasty-client
 	node-metrics
@@ -56,7 +54,6 @@ NATIVE_PROCESSES=(
 	staking-cli
 	anvil
 	postgres
-	keydb-server
 )
 
 # Helper function to safely kill processes only if they're running from this project

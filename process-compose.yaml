@@ -14,7 +14,6 @@ x-availability:
     restart: exit_on_failure
 
 environment:
-  - ESPRESSO_NODE_CDN_ENDPOINT=127.0.0.1:${ESPRESSO_CDN_SERVER_PORT}
   - ESPRESSO_NODE_ORCHESTRATOR_URL=http://localhost:${ESPRESSO_ORCHESTRATOR_PORT}
   - ESPRESSO_API_NODE_URL=http://localhost:${ESPRESSO_NODE_0_API_PORT}
   - ESPRESSO_API_NODE_URLS=http://localhost:${ESPRESSO_NODE_0_API_PORT},http://localhost:${ESPRESSO_NODE_1_API_PORT}
@@ -250,12 +249,6 @@ processes:
         condition: process_healthy
       espresso-node-db-0:
         condition: process_healthy
-      broker_0:
-        condition: process_healthy
-      broker_1:
-        condition: process_healthy
-      marshal_0:
-        condition: process_healthy
       stake-for-demo:
         condition: process_completed
       wait-for-l1-finalized:
@@ -314,12 +307,6 @@ processes:
         condition: process_healthy
       espresso-node-db-1:
         condition: process_healthy
-      broker_0:
-        condition: process_healthy
-      broker_1:
-        condition: process_healthy
-      marshal_0:
-        condition: process_healthy
       stake-for-demo:
         condition: process_completed
       wait-for-l1-finalized:
@@ -367,12 +354,6 @@ processes:
       demo-l1-network:
         condition: process_healthy
       state-relay-server:
-        condition: process_healthy
-      broker_0:
-        condition: process_healthy
-      broker_1:
-        condition: process_healthy
-      marshal_0:
         condition: process_healthy
       stake-for-demo:
         condition: process_completed
@@ -425,12 +406,6 @@ processes:
         condition: process_healthy
       state-relay-server:
         condition: process_healthy
-      broker_0:
-        condition: process_healthy
-      broker_1:
-        condition: process_healthy
-      marshal_0:
-        condition: process_healthy
       stake-for-demo:
         condition: process_completed
       wait-for-l1-finalized:
@@ -480,12 +455,6 @@ processes:
         condition: process_healthy
       state-relay-server:
         condition: process_healthy
-      broker_0:
-        condition: process_healthy
-      broker_1:
-        condition: process_healthy
-      marshal_0:
-        condition: process_healthy
       stake-for-demo:
         condition: process_completed
       wait-for-l1-finalized:
@@ -507,10 +476,6 @@ processes:
       - ESPRESSO_NODE_VALIDATOR_LEAF_STREAM_SOURCE_BASE_URL=http://localhost:${ESPRESSO_NODE_0_API_PORT}/v1/
       - ESPRESSO_NODE_VALIDATOR_INITIAL_NODE_PUBLIC_BASE_URLS=http://localhost:${ESPRESSO_NODE_0_API_PORT}/,http://localhost:${ESPRESSO_NODE_1_API_PORT}/,http://localhost:${ESPRESSO_NODE_2_API_PORT}/,http://localhost:${ESPRESSO_NODE_3_API_PORT}/,http://localhost:${ESPRESSO_NODE_4_API_PORT}/
     depends_on:
-      broker_0:
-        condition: process_healthy
-      broker_1:
-        condition: process_healthy
       espresso-node-0:
         condition: process_healthy
       espresso-node-1:
@@ -530,78 +495,6 @@ processes:
       period_seconds: 1
       failure_threshold: 100
     availability: *run-forever
-
-  keydb:
-    command: keydb-server --bind 127.0.0.1 --port 6379 --requirepass 'changeme!'
-    readiness_probe:
-      exec:
-        command: nc -zv localhost 6379
-      period_seconds: 5
-      timeout_seconds: 4
-      failure_threshold: 20
-    availability: *run-forever
-
-  # The CDN system's main entry point; where users contact first.
-  marshal_0:
-    command: cdn-marshal -d "redis://:changeme!@localhost:6379" -b ${ESPRESSO_CDN_SERVER_PORT} -m 127.0.0.1:9093
-    depends_on:
-      keydb:
-        condition: process_healthy
-    readiness_probe:
-      http_get:
-        scheme: http
-        host: 127.0.0.1
-        port: 9093
-        path: /metrics
-      period_seconds: 1
-      failure_threshold: 100
-    availability: *run-forever
-
-  # A broker is the main message-routing unit of the CDN
-  broker_0:
-    command: cdn-broker -d "redis://:changeme!@localhost:6379" -m 127.0.0.1:9091 --public-advertise-endpoint local_ip:1738
-    depends_on:
-      keydb:
-        condition: process_healthy
-    readiness_probe:
-      http_get:
-        scheme: http
-        host: 127.0.0.1
-        port: 9091
-        path: /metrics
-      period_seconds: 1
-      failure_threshold: 100
-    availability: *run-forever
-
-  # A broker is the main message-routing unit of the CDN
-  # as we're running a local demo, we need to operate on different ports
-  broker_1:
-    command:
-      cdn-broker --public-bind-endpoint 0.0.0.0:1740 --public-advertise-endpoint local_ip:1740
-      --private-bind-endpoint 0.0.0.0:1741 --private-advertise-endpoint local_ip:1741 -d
-      "redis://:changeme!@localhost:6379" -m 127.0.0.1:9092
-    depends_on:
-      keydb:
-        condition: process_healthy
-    readiness_probe:
-      http_get:
-        scheme: http
-        host: 127.0.0.1
-        port: 9092
-        path: /metrics
-      period_seconds: 1
-      failure_threshold: 100
-    availability: *run-forever
-
-  cdn-whitelist:
-    command: cdn-whitelist -d redis://:changeme!@localhost:6379 -o http://localhost:${ESPRESSO_ORCHESTRATOR_PORT}
-    namespace: setup
-    depends_on:
-      orchestrator:
-        condition: process_healthy
-      keydb:
-        condition: process_healthy
-    availability: *exit-ok
 
   submit-transactions-public:
     command: submit-transactions

@@ -226,92 +226,6 @@ services:
       - RUST_LOG_FORMAT
       - ASYNC_STD_THREAD_COUNT
 
-  # We use KeyDB (a Redis variant) to maintain consistency between
-  # different parts of the CDN
-  keydb:
-    image: docker.io/eqalpha/keydb:latest
-    command: [ "--requirepass", "changemeplease!!" ]
-    healthcheck:
-      # Attempt to PING the database
-      test: keydb-cli --pass changemeplease!! --raw incr PING
-      interval: 5s
-      timeout: 4s
-      retries: 20
-
-  # The CDN system's main entry point; where users contact first.
-  marshal-0:
-    environment:
-      - RUST_LOG
-      - ESPRESSO_CDN_SERVER_METRICS_PORT
-    image: ghcr.io/espressosystems/espresso-network/cdn-marshal:${DOCKER_TAG:-main}
-    command:
-      - cdn-marshal
-      - -d
-      - redis://:changemeplease!!@keydb:6379
-      - -b
-      - $ESPRESSO_CDN_SERVER_PORT
-      - -m
-      - 0.0.0.0:$ESPRESSO_CDN_SERVER_METRICS_PORT
-    depends_on:
-      keydb:
-        condition: service_healthy
-
-  # A broker is the main message-routing unit of the CDN
-  broker-0:
-    environment:
-      - RUST_LOG
-      - ESPRESSO_CDN_SERVER_METRICS_PORT
-    image: ghcr.io/espressosystems/espresso-network/cdn-broker:${DOCKER_TAG:-main}
-    command:
-      - cdn-broker
-      - -d
-      - redis://:changemeplease!!@keydb:6379
-      - --public-advertise-endpoint
-      - broker-0:1738
-      - --private-advertise-endpoint
-      - broker-0:1739
-      - -m
-      - 0.0.0.0:$ESPRESSO_CDN_SERVER_METRICS_PORT
-    depends_on:
-      keydb:
-        condition: service_healthy
-
-  # A broker is the main message-routing unit of the CDN
-  broker-1:
-    environment:
-      - RUST_LOG
-      - ESPRESSO_CDN_SERVER_METRICS_PORT
-    image: ghcr.io/espressosystems/espresso-network/cdn-broker:${DOCKER_TAG:-main}
-    command:
-      - cdn-broker
-      - -d
-      - redis://:changemeplease!!@keydb:6379
-      - --public-advertise-endpoint
-      - broker-1:1738
-      - --private-advertise-endpoint
-      - broker-1:1739
-      - -m
-      - 0.0.0.0:$ESPRESSO_CDN_SERVER_METRICS_PORT
-    depends_on:
-      keydb:
-        condition: service_healthy
-
-  # A service to whitelist specific public keys for the CDN
-  cdn-whitelist:
-    environment:
-      - RUST_LOG
-      - ESPRESSO_NODE_ORCHESTRATOR_URL=http://orchestrator:${ESPRESSO_ORCHESTRATOR_PORT}
-    image: ghcr.io/espressosystems/espresso-network/cdn-whitelist:${DOCKER_TAG:-main}
-    command:
-      - cdn-whitelist
-      - -d
-      - redis://:changemeplease!!@keydb:6379
-    depends_on:
-      keydb:
-        condition: service_healthy
-      orchestrator:
-        condition: service_healthy
-
   state-relay-server:
     image: ghcr.io/espressosystems/espresso-network/state-relay-server:${DOCKER_TAG:-main}
     ports:
@@ -380,7 +294,6 @@ services:
       - ESPRESSO_NODE_EMBEDDED_DB=false
       - ESPRESSO_NODE_GENESIS_FILE=${ESPRESSO_NODE_GENESIS_FILE:-genesis/demo-ff.toml}
       - ESPRESSO_NODE_ORCHESTRATOR_URL=http://orchestrator:${ESPRESSO_ORCHESTRATOR_PORT}
-      - ESPRESSO_NODE_CDN_ENDPOINT=marshal-0:${ESPRESSO_CDN_SERVER_PORT}
       - ESPRESSO_NODE_API_PORT=$ESPRESSO_NODE_0_API_PORT
       - ESPRESSO_NODE_API_MAX_CONNECTIONS
       - ESPRESSO_NODE_API_PEERS=http://espresso-node-1:$ESPRESSO_NODE_1_API_PORT
@@ -425,12 +338,6 @@ services:
         condition: service_healthy
       state-relay-server:
         condition: service_healthy
-      broker-0:
-        condition: service_healthy
-      broker-1:
-        condition: service_healthy
-      marshal-0:
-        condition: service_healthy
       stake-for-demo:
         condition: service_completed_successfully
 
@@ -445,7 +352,6 @@ services:
       - ESPRESSO_NODE_EMBEDDED_DB=false
       - ESPRESSO_NODE_GENESIS_FILE=${ESPRESSO_NODE_GENESIS_FILE:-genesis/demo-ff.toml}
       - ESPRESSO_NODE_ORCHESTRATOR_URL=http://orchestrator:${ESPRESSO_ORCHESTRATOR_PORT}
-      - ESPRESSO_NODE_CDN_ENDPOINT=marshal-0:${ESPRESSO_CDN_SERVER_PORT}
       - ESPRESSO_NODE_API_PORT=$ESPRESSO_NODE_1_API_PORT
       - ESPRESSO_NODE_API_MAX_CONNECTIONS
       - ESPRESSO_NODE_API_PEERS=http://espresso-node-4:$ESPRESSO_NODE_4_API_PORT
@@ -491,12 +397,6 @@ services:
         condition: service_healthy
       state-relay-server:
         condition: service_healthy
-      broker-0:
-        condition: service_healthy
-      broker-1:
-        condition: service_healthy
-      marshal-0:
-        condition: service_healthy
       stake-for-demo:
         condition: service_completed_successfully
 
@@ -509,7 +409,6 @@ services:
       - ESPRESSO_NODE_EMBEDDED_DB=false
       - ESPRESSO_NODE_GENESIS_FILE=${ESPRESSO_NODE_GENESIS_FILE:-genesis/demo-ff.toml}
       - ESPRESSO_NODE_ORCHESTRATOR_URL=http://orchestrator:${ESPRESSO_ORCHESTRATOR_PORT}
-      - ESPRESSO_NODE_CDN_ENDPOINT=marshal-0:${ESPRESSO_CDN_SERVER_PORT}
       - ESPRESSO_NODE_API_PORT=$ESPRESSO_NODE_2_API_PORT
       - ESPRESSO_NODE_API_MAX_CONNECTIONS
       - ESPRESSO_NODE_STATE_PEERS=http://espresso-node-0:$ESPRESSO_NODE_0_API_PORT,http://espresso-node-1:$ESPRESSO_NODE_1_API_PORT
@@ -546,12 +445,6 @@ services:
         condition: service_healthy
       state-relay-server:
         condition: service_healthy
-      broker-0:
-        condition: service_healthy
-      broker-1:
-        condition: service_healthy
-      marshal-0:
-        condition: service_healthy
       stake-for-demo:
         condition: service_completed_successfully
 
@@ -567,7 +460,6 @@ services:
       - ESPRESSO_NODE_EMBEDDED_DB=false
       - ESPRESSO_NODE_GENESIS_FILE=${ESPRESSO_NODE_GENESIS_FILE:-genesis/demo-ff.toml}
       - ESPRESSO_NODE_ORCHESTRATOR_URL=http://orchestrator:${ESPRESSO_ORCHESTRATOR_PORT}
-      - ESPRESSO_NODE_CDN_ENDPOINT=marshal-0:${ESPRESSO_CDN_SERVER_PORT}
       - ESPRESSO_NODE_API_PORT=$ESPRESSO_NODE_3_API_PORT
       - ESPRESSO_NODE_API_MAX_CONNECTIONS
       - ESPRESSO_NODE_API_PEERS=http://espresso-node-0:$ESPRESSO_NODE_0_API_PORT
@@ -606,12 +498,6 @@ services:
         condition: service_healthy
       state-relay-server:
         condition: service_healthy
-      broker-0:
-        condition: service_healthy
-      broker-1:
-        condition: service_healthy
-      marshal-0:
-        condition: service_healthy
       stake-for-demo:
         condition: service_completed_successfully
 
@@ -625,7 +511,6 @@ services:
       - LIGHT_CLIENT_DB_PATH=/store/lc
       - ESPRESSO_NODE_GENESIS_FILE=${ESPRESSO_NODE_GENESIS_FILE:-genesis/demo-ff.toml}
       - ESPRESSO_NODE_ORCHESTRATOR_URL=http://orchestrator:${ESPRESSO_ORCHESTRATOR_PORT}
-      - ESPRESSO_NODE_CDN_ENDPOINT=marshal-0:${ESPRESSO_CDN_SERVER_PORT}
       - ESPRESSO_NODE_API_PORT=$ESPRESSO_NODE_4_API_PORT
       - ESPRESSO_NODE_API_MAX_CONNECTIONS
       - ESPRESSO_NODE_STATE_PEERS=http://espresso-node-0:$ESPRESSO_NODE_0_API_PORT,http://espresso-node-1:$ESPRESSO_NODE_1_API_PORT
@@ -661,12 +546,6 @@ services:
       demo-l1-network:
         condition: service_healthy
       state-relay-server:
-        condition: service_healthy
-      broker-0:
-        condition: service_healthy
-      broker-1:
-        condition: service_healthy
-      marshal-0:
         condition: service_healthy
       stake-for-demo:
         condition: service_completed_successfully
