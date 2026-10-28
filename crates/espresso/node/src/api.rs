@@ -2202,7 +2202,7 @@ pub mod test_helpers {
                         let upgrades_map = cfg.upgrades();
                         async move {
                             if i == 0 {
-                                opt.serve(|metrics, consumer, storage, _| {
+                                opt.serve(|metrics, consumer, storage, query_handlers| {
                                     let cfg = cfg.clone();
                                     async move {
                                         Ok(cfg
@@ -2212,6 +2212,7 @@ pub mod test_helpers {
                                                 persistence,
                                                 Some(state_peers),
                                                 storage,
+                                                query_handlers,
                                                 &*metrics,
                                                 STAKE_TABLE_CAPACITY_FOR_TEST,
                                                 consumer,
@@ -2230,6 +2231,7 @@ pub mod test_helpers {
                                     state,
                                     persistence,
                                     Some(state_peers),
+                                    None,
                                     None,
                                     &NoMetrics,
                                     STAKE_TABLE_CAPACITY_FOR_TEST,
@@ -2370,6 +2372,7 @@ pub mod test_helpers {
                     state,
                     persistence,
                     Some(with_api_catchup(catchup, self.api_catchup.as_ref())),
+                    None,
                     None,
                     &NoMetrics,
                     STAKE_TABLE_CAPACITY_FOR_TEST,
@@ -4293,6 +4296,7 @@ mod test {
                             persistence,
                             Some(catchup),
                             storage,
+                            None,
                             &*metrics,
                             STAKE_TABLE_CAPACITY_FOR_TEST,
                             consumer,
@@ -4347,6 +4351,198 @@ mod test {
                     .get::<VidCommonQueryData<SeqTypes>>(&format!("availability/vid/common/{h}"))
                     .send(),
                 peer.get::<VidCommonQueryData<SeqTypes>>(&format!("availability/vid/common/{h}"))
+                    .send(),
+            )
+            .unwrap();
+            assert_eq!(ours, theirs);
+        }
+    }
+
+    /// A query node with no HTTP query peers fills its query service from staked peers over the
+    /// cliquenet query lane. The late node only starts once the chain is built, so neither its
+    /// query nor its consensus storage holds any of it, and every earlier leaf, block and VID
+    /// common has to arrive over the lane. Only node 0 serves the lane, so the late node also has
+    /// to get past the validators that refuse it. Consensus keeps node 0's HTTP catchup API, which
+    /// a joining node needs for the epoch root leaf and which is not the query service.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_query_service_catchup_over_query_lane() {
+        const NUM_NODES: usize = 5;
+        const LATE: usize = NUM_NODES - 1;
+        let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
+        let late_port = reserve_tcp_port().expect("OS should have ephemeral ports available");
+
+        let dbs = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
+        let persistence: [_; NUM_NODES] = dbs
+            .iter()
+            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
+            .collect::<Vec<_>>()
+            .try_into()
+            .unwrap();
+        let mut api_config = SqlDataSource::options(&dbs[0], Options::with_port(port));
+        api_config
+            .query
+            .as_mut()
+            .expect("SQL test options include the query module")
+            .p2p = true;
+        let config = TestNetworkConfigBuilder::<NUM_NODES, _, _>::with_num_nodes()
+            .api_config(api_config)
+            .persistences(persistence)
+            .network_config(TestConfigBuilder::default().build())
+            .deferred_start(&[LATE])
+            .build();
+        let network = TestNetwork::new(config, TEST_UPGRADE).await;
+
+        let namespace = NamespaceId::from(7_u32);
+        let mut decided = network.server.event_stream().filter_map(|event| {
+            future::ready(match event {
+                CoordinatorEvent::NewDecide { leaf_infos, .. } => Some(leaf_infos[0].leaf.clone()),
+                _ => None,
+            })
+        });
+        let height = tokio::time::timeout(Duration::from_secs(180), async {
+            let mut height = 0;
+            for i in 0..3u8 {
+                network
+                    .server
+                    .submit_transaction(Transaction::new(namespace, vec![i; 8]))
+                    .await
+                    .unwrap();
+                loop {
+                    let leaf = decided.next().await.unwrap();
+                    height = leaf.height();
+                    if leaf
+                        .block_header()
+                        .ns_table()
+                        .find_ns_id(&namespace)
+                        .is_some()
+                    {
+                        break;
+                    }
+                }
+            }
+            // A finality proof for a leaf needs a QC two-chain above it, so leave the last
+            // non-empty block below the tip.
+            for _ in 0..3 {
+                height = decided.next().await.unwrap().height();
+            }
+            height
+        })
+        .await
+        .expect("network did not sequence the test transactions");
+        drop(decided);
+
+        let mut late_db = tmp_options(&dbs[LATE]);
+        late_db.proactive_scan_interval = Some(Duration::from_secs(1));
+        late_db.proactive_fetch_timeout = Some(Duration::from_secs(5));
+        // The sync status is cached for five minutes by default, which would hide the catch-up.
+        late_db.sync_status_ttl = Some(Duration::from_secs(1));
+        let api = Options::with_port(late_port).query_sql(
+            Query {
+                p2p: true,
+                ..Default::default()
+            },
+            late_db,
+        );
+        let cfg = network.cfg.clone();
+        let upgrades_map = cfg.upgrades();
+        let genesis_state = network.genesis_state(LATE);
+        let persistence =
+            <SqlDataSource as TestableSequencerDataSource>::persistence_options(&dbs[LATE]);
+        let late = api
+            .serve(|metrics, consumer, storage, query_handlers| {
+                async move {
+                    Ok(cfg
+                        .init_node(
+                            LATE,
+                            genesis_state,
+                            persistence,
+                            Some(StatePeers::<SequencerApiVersion>::from_urls(
+                                vec![format!("http://localhost:{port}").parse().unwrap()],
+                                Default::default(),
+                                Duration::from_secs(2),
+                                &NoMetrics,
+                            )),
+                            storage,
+                            query_handlers,
+                            &*metrics,
+                            STAKE_TABLE_CAPACITY_FOR_TEST,
+                            consumer,
+                            TEST_UPGRADE,
+                            upgrades_map,
+                        )
+                        .await)
+                }
+                .boxed()
+            })
+            .await
+            .unwrap();
+        // Decides from consensus are what give the late node a height to fill up to.
+        late.start_consensus().await;
+
+        let client: Client<ClientErr, SequencerApiVersion> =
+            Client::new(format!("http://localhost:{late_port}").parse().unwrap());
+        assert!(client.connect(Some(Duration::from_secs(60))).await);
+        let mut last = None;
+        let synced = tokio::time::timeout(Duration::from_secs(180), async {
+            loop {
+                // A node that has not seen a decide yet has nothing to be missing, so its sync
+                // status reads as complete before it fetched anything.
+                let known = client.get::<u64>("node/block-height").send().await;
+                let status = client
+                    .get::<SyncStatusQueryData>("node/sync-status")
+                    .send()
+                    .await;
+                if let (Ok(known), Ok(status)) = (known, status) {
+                    if known > height && status.is_fully_synced() {
+                        return;
+                    }
+                    tracing::info!(
+                        known,
+                        ?status,
+                        height,
+                        "waiting for the late node to catch up"
+                    );
+                    last = Some(status);
+                }
+                sleep(Duration::from_secs(1)).await;
+            }
+        })
+        .await;
+        assert!(
+            synced.is_ok(),
+            "late node did not fill its query service over the query lane; last status {last:#?}"
+        );
+
+        // Node 0's own API is the reference. The late node never had it as a peer.
+        let reference: Client<ClientErr, SequencerApiVersion> =
+            Client::new(format!("http://localhost:{port}").parse().unwrap());
+        for h in 0..=height {
+            let (ours, theirs) = try_join!(
+                client
+                    .get::<LeafQueryData<SeqTypes>>(&format!("availability/leaf/{h}"))
+                    .send(),
+                reference
+                    .get::<LeafQueryData<SeqTypes>>(&format!("availability/leaf/{h}"))
+                    .send(),
+            )
+            .unwrap();
+            assert_eq!(ours, theirs);
+            let (ours, theirs) = try_join!(
+                client
+                    .get::<BlockQueryData<SeqTypes>>(&format!("availability/block/{h}"))
+                    .send(),
+                reference
+                    .get::<BlockQueryData<SeqTypes>>(&format!("availability/block/{h}"))
+                    .send(),
+            )
+            .unwrap();
+            assert_eq!(ours, theirs);
+            let (ours, theirs) = try_join!(
+                client
+                    .get::<VidCommonQueryData<SeqTypes>>(&format!("availability/vid/common/{h}"))
+                    .send(),
+                reference
+                    .get::<VidCommonQueryData<SeqTypes>>(&format!("availability/vid/common/{h}"))
                     .send(),
             )
             .unwrap();
@@ -4502,6 +4698,7 @@ mod test {
                 network.genesis_state(LATE),
                 no_storage::Options,
                 Some(NullStateCatchup::default()),
+                None,
                 None,
                 &NoMetrics,
                 STAKE_TABLE_CAPACITY_FOR_TEST,
@@ -6864,6 +7061,7 @@ mod test {
                     &NoMetrics,
                 )),
                 None,
+                None,
                 &NoMetrics,
                 test_helpers::STAKE_TABLE_CAPACITY_FOR_TEST,
                 NullEventConsumer,
@@ -6989,6 +7187,7 @@ mod test {
                     Duration::from_secs(2),
                     &NoMetrics,
                 )),
+                None,
                 None,
                 &NoMetrics,
                 test_helpers::STAKE_TABLE_CAPACITY_FOR_TEST,
@@ -7127,6 +7326,7 @@ mod test {
                                 &NoMetrics,
                             )),
                             storage,
+                            None,
                             &*metrics,
                             test_helpers::STAKE_TABLE_CAPACITY_FOR_TEST,
                             consumer,
@@ -7170,6 +7370,7 @@ mod test {
                                 &NoMetrics,
                             )),
                             storage,
+                            None,
                             &*metrics,
                             test_helpers::STAKE_TABLE_CAPACITY_FOR_TEST,
                             consumer,
@@ -7871,6 +8072,7 @@ mod test {
                             node_persistence,
                             Some(state_peers),
                             storage,
+                            None,
                             &*metrics,
                             STAKE_TABLE_CAPACITY_FOR_TEST,
                             consumer,
@@ -8156,6 +8358,7 @@ mod test {
                                 &NoMetrics,
                             )),
                             storage,
+                            None,
                             &*metrics,
                             test_helpers::STAKE_TABLE_CAPACITY_FOR_TEST,
                             consumer,
@@ -12271,6 +12474,7 @@ mod test {
                                 &NoMetrics,
                             )),
                             storage,
+                            None,
                             &*metrics,
                             test_helpers::STAKE_TABLE_CAPACITY_FOR_TEST,
                             consumer,
