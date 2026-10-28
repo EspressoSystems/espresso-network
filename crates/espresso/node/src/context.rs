@@ -56,6 +56,7 @@ use versions::{NEW_PROTOCOL_VERSION, Version};
 
 use crate::{
     Node, SeqTypes, SequencerApiVersion,
+    api::query_p2p::QueryLane,
     catchup::ParallelStateCatchup,
     consensus_handle::ConsensusHandle,
     external_event_handler::ExternalEventHandler,
@@ -97,6 +98,10 @@ pub struct SequencerContext<P: SequencerPersistence> {
 
     /// Light client state signatures produced by the state signer task.
     state_signatures: Arc<RwLock<StateSignatureMemStorage>>,
+
+    /// The cliquenet query lane, until the query service takes it.
+    #[derivative(Debug = "ignore")]
+    query_lane: Arc<Mutex<Option<QueryLane>>>,
 
     /// An orchestrator to wait for before starting consensus, with the peer config this node
     /// registered there.
@@ -179,6 +184,9 @@ where
         seed_membership(&membership_coordinator, config, &upgrade_lock, &initializer).await;
 
         let mut coordinator_network = coordinator_network(upgrade_lock.clone()).await?;
+        // Taken before the network moves into the coordinator, so query traffic never passes
+        // through it.
+        let query_lane = coordinator_network.take_query_lane();
 
         let current_epoch = bootstrap_epoch_window(
             &membership_coordinator,
@@ -317,7 +325,7 @@ where
         .await
         .with_context(|| "Failed to create external event handler")?;
 
-        Ok(Self::new(
+        let ctx = Self::new(
             consensus_handle,
             persistence,
             state_signer,
@@ -330,8 +338,9 @@ where
             anchor_view,
             proposal_fetcher_cfg,
             metrics,
-        )
-        .with_task_list(tasks))
+        );
+        *ctx.query_lane.lock() = query_lane;
+        Ok(ctx.with_task_list(tasks))
     }
 
     /// Constructor
@@ -357,6 +366,7 @@ where
             consensus_handle,
             persistence: persistence.clone(),
             state_signatures: Arc::clone(&state_signer.signatures),
+            query_lane: Default::default(),
             request_response_protocol,
             tasks: Default::default(),
             detached: false,
@@ -438,6 +448,11 @@ where
     /// Return the light client state signatures this node has produced.
     pub fn state_signatures(&self) -> Arc<RwLock<StateSignatureMemStorage>> {
         self.state_signatures.clone()
+    }
+
+    /// Take the cliquenet query lane. Returns `None` once taken.
+    pub(crate) fn take_query_lane(&self) -> Option<QueryLane> {
+        self.query_lane.lock().take()
     }
 
     /// Stream consensus events.

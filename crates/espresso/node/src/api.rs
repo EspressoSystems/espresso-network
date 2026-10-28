@@ -90,6 +90,7 @@ pub mod data_source;
 pub mod fs;
 pub mod light_client;
 pub mod options;
+pub(crate) mod query_p2p;
 /// The query service over a SQL database, with one module per backend.
 pub mod sql {
     pub mod postgres;

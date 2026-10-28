@@ -30,8 +30,8 @@ use hotshot_types::{
 };
 
 use crate::{
-    SequencerContext, consensus_handle::ConsensusHandle, context::TaskList,
-    state_signature::StateSignatureMemStorage,
+    SequencerContext, api::query_p2p::QueryLane, consensus_handle::ConsensusHandle,
+    context::TaskList, state_signature::StateSignatureMemStorage,
 };
 
 pub type NodeLightClient = LightClient<SqlStorage, FallbackClient<QueryServiceClient>>;
@@ -74,6 +74,12 @@ pub trait ApiContext: Send + Sync + 'static {
 
     /// A light client the node already runs, for the query service to fetch through.
     fn light_client(&self) -> Option<Arc<NodeLightClient>>;
+
+    /// The cliquenet query lane, for a node that takes part in consensus. Returns `None` once
+    /// taken.
+    fn take_query_lane(&self) -> Option<QueryLane> {
+        None
+    }
     fn request_vid_shares(
         &self,
         block_number: u64,
@@ -192,6 +198,10 @@ where
 
     fn light_client(&self) -> Option<Arc<NodeLightClient>> {
         None
+    }
+
+    fn take_query_lane(&self) -> Option<QueryLane> {
+        SequencerContext::take_query_lane(self)
     }
 
     fn request_vid_shares(

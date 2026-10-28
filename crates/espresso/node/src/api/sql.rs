@@ -66,6 +66,7 @@ use crate::{
         RewardMerkleTreeV2Data,
         data_source::{DataSourceOptions, NodeStateDataSource as _, Provider, SequencerDataSource},
         options::{self, Query, get_public_env_vars, init_query_data_source},
+        query_p2p::{self, PeerClient, PeerProvider},
         state::NodeApiStateImpl,
         update::{ApiEventConsumer, ApiSink},
     },
@@ -165,6 +166,19 @@ pub(in crate::api) async fn init_query_module(
     provider = provider
         .with_block_provider(db_provider.clone())
         .with_vid_common_provider(db_provider);
+    // Then the scanner's ranges from staked peers, ahead of the HTTP peers.
+    let peer_client = query_opt.p2p.then(|| PeerClient::new(state.clone()));
+    if let Some(client) = &peer_client {
+        let peers = Arc::new(PeerProvider::new(
+            state.clone(),
+            client.clone(),
+            query_opt.light_client.clone(),
+        ));
+        provider = provider
+            .with_leaf_ranges_provider(Arc::clone(&peers))
+            .with_block_ranges_provider(Arc::clone(&peers))
+            .with_vid_common_ranges_provider(peers);
+    }
     // If that fails, fetch missing data from peers.
     let light_client_db = mod_opt.light_client_db(&query_opt)?;
     let light_client = Arc::new(LightClientProvider::new(
@@ -226,6 +240,12 @@ pub(in crate::api) async fn init_query_module(
         api_state = api_state.with_ranges_concurrency(ranges_concurrency);
     }
     let tonic_state = api_state.clone();
+    if let Some(client) = peer_client {
+        tasks.spawn(
+            "query p2p",
+            query_p2p::run(state.clone(), api_state.clone(), client),
+        );
+    }
     tasks.spawn("API server", async move {
         if let Err(e) = espresso_api::serve_axum(port, api_state, modules, max_connections).await {
             tracing::error!("Axum server error: {}", e);

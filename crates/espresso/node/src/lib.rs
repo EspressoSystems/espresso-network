@@ -137,6 +137,8 @@ pub struct NetworkParams {
     pub cliquenet_advertise_addr: Option<NetAddr>,
     /// X25519 secret key.
     pub x25519_secret_key: x25519::SecretKey,
+    /// Accept cliquenet query lanes, so peers can backfill their query service from ours.
+    pub query_p2p: bool,
 }
 
 pub struct L1Params {
@@ -429,6 +431,7 @@ where
             .max()
             .expect("genesis sets a block size");
         let max_message_size = Some(message_limit(largest));
+        let accept_query = network_params.query_p2p;
         let name = format!("espresso-{}", genesis.chain_config.chain_id);
         move |upgrade| {
             Cliquenet::create(
@@ -438,6 +441,7 @@ where
                 bind_addr,
                 [],
                 max_message_size,
+                accept_query,
                 upgrade,
                 metrics,
             )
@@ -1613,6 +1617,7 @@ pub mod testing {
                     coordinator_addr,
                     [],
                     Some(message_limit(max_block_size)),
+                    false,
                     upgrade,
                     Box::new(NoMetrics),
                 )

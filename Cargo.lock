@@ -5407,6 +5407,7 @@ dependencies = [
  "bincode",
  "bitvec 1.1.0",
  "bon",
+ "bytes",
  "cliquenet",
  "committable",
  "futures",
