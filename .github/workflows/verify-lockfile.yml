@@ -16,6 +16,8 @@ permissions:
 
 jobs:
   verify:
+    # The Development ruleset requires this check by name; rename both together.
+    name: verify-actions-lockfile
     runs-on: ubuntu-latest
     env:
       GH_TOKEN: ${{ github.token }}
