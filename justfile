@@ -129,7 +129,7 @@ demo-native-large-block-upgrade *args: (build "test" "--no-default-features")
 demo-native-ff *args: (build "test" "--no-default-features")
     ESPRESSO_NODE_GENESIS_FILE=data/genesis/demo-ff.toml scripts/demo-native -f process-compose.yaml {{args}}
 
-# A/B the leader block-build critical path between two git refs (see scripts/bench-block-build)
+# A/B the leader's block build and VID work between two git refs (see scripts/bench-block-build)
 [positional-arguments]
 [script("scripts/with-tools", "python", "uv")]
 bench-block-build *args:

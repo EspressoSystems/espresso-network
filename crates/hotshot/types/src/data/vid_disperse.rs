@@ -844,24 +844,7 @@ impl<TYPES: NodeType> AvidmGf2Disperse<TYPES> {
     ) -> Result<AvidmGf2DisperseParams<TYPES>> {
         let target_mem = membership.stake_table_for_epoch(target_epoch)?;
         let stake_table: Vec<_> = target_mem.stake_table().cloned().collect();
-        let Weights {
-            weights,
-            total_weight,
-        } = approximate_weights(&stake_table);
-        let recipients = stake_table
-            .iter()
-            .map(|entry| entry.stake_table_entry.public_key())
-            .collect();
-        let payload = payload.encode();
-        let ns_table = parse_ns_table(payload.len(), &metadata.encode());
-        let param = init_avidm_gf2_param(total_weight)?;
-        Ok(AvidmGf2DisperseParams {
-            param,
-            weights,
-            recipients,
-            ns_table,
-            payload,
-        })
+        AvidmGf2DisperseParams::new(&stake_table, payload.encode(), &metadata.encode())
     }
 }
 
@@ -1004,4 +987,28 @@ pub struct AvidmGf2DisperseParams<T: NodeType> {
     pub ns_table: Vec<Range<usize>>,
     /// The encoded payload.
     pub payload: Arc<[u8]>,
+}
+
+impl<T: NodeType> AvidmGf2DisperseParams<T> {
+    /// The parameters to disperse an encoded payload with encoded `metadata` to the nodes of
+    /// `stake_table`.
+    pub fn new(stake_table: &[PeerConfig<T>], payload: Arc<[u8]>, metadata: &[u8]) -> Result<Self> {
+        let Weights {
+            weights,
+            total_weight,
+        } = approximate_weights(stake_table);
+        let recipients = stake_table
+            .iter()
+            .map(|entry| entry.stake_table_entry.public_key())
+            .collect();
+        let ns_table = parse_ns_table(payload.len(), metadata);
+        let param = init_avidm_gf2_param(total_weight)?;
+        Ok(Self {
+            param,
+            weights,
+            recipients,
+            ns_table,
+            payload,
+        })
+    }
 }
