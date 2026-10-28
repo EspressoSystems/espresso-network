@@ -59,3 +59,13 @@ repos:
         language: system
         types: [nix]
         pass_filenames: true
+
+      - id: actions-lock
+        name: Update the GitHub Actions lockfile
+        # gh-actions-lock isn't in the nix shell; skip without it and let the CI check catch it.
+        entry: >-
+          bash -c 'if gh actions-lock --version >/dev/null 2>&1; then just lock-actions; else
+          echo "gh-actions-lock not installed, skipping (see justfile lock-actions)"; fi'
+        language: system
+        files: ^\.github/(workflows|actions)/
+        pass_filenames: false

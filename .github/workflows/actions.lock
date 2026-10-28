@@ -160,7 +160,7 @@ workflows:
         - 'taiki-e/install-action@v2.88.0'
     '.github/workflows/typos.yml':
         - 'actions/checkout@v7.0.1'
-        - 'crate-ci/typos@v1.50.2'
+        - 'crate-ci/typos@v1.50.1'
     '.github/workflows/ubuntu-install-without-nix.yml':
         - 'actions/checkout@v7.0.1'
         - 'swatinem/rust-cache@v2.9.3'
@@ -238,9 +238,9 @@ dependencies:
         commit: 'sha1-09b709cf6a16e30b0808ba050c7a6e8a5ef13f8d'
         owner_id: 16691566
         repo_id: 200696780
-    'crate-ci/typos@v1.50.2':
-        ref: 'v1.50.2'
-        commit: 'sha1-512fc24f32f44ab01972217aaaf3dc86ec234d53'
+    'crate-ci/typos@v1.50.1':
+        ref: 'v1.50.1'
+        commit: 'sha1-d43b6c087ac471e2ea7b8af622ff15f05c0c365b'
         owner_id: 36412122
         repo_id: 181782286
     'crazy-max/ghaction-import-gpg@e89d40939c28e39f97cf32126055eeae86ba74ec':
