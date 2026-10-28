@@ -1,22 +1,10 @@
 {
   description = "Espresso Decentralized Sequencer";
 
-  nixConfig = {
-    extra-substituters = [
-      "https://nixpkgs-cross-overlay.cachix.org"
-    ];
-    extra-trusted-public-keys = [
-      "nixpkgs-cross-overlay.cachix.org-1:TjKExGN4ys960TlsGqNOI/NBdoz2Jdr2ow1VybWV5JM="
-    ];
-  };
-
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
 
   inputs.rust-overlay.url = "github:oxalica/rust-overlay";
   inputs.rust-overlay.inputs.nixpkgs.follows = "nixpkgs";
-
-  inputs.nixpkgs-cross-overlay.url = "github:alekseysidorov/nixpkgs-cross-overlay";
-  inputs.nixpkgs-cross-overlay.inputs.nixpkgs.follows = "nixpkgs";
 
   inputs.flake-utils.url = "github:numtide/flake-utils";
 
@@ -37,7 +25,6 @@
     { self
     , nixpkgs
     , rust-overlay
-    , nixpkgs-cross-overlay
     , flake-utils
     , solc-bin
     , echidna-nixpkgs
@@ -75,23 +62,6 @@
         # mold linker, ~50% faster on Linux
         stdenv = pkgs.stdenvAdapters.useMoldLinker pkgs.clangStdenv;
       });
-      crossShell = { config }:
-        let
-          localSystem = system;
-          crossSystem = {
-            inherit config;
-            useLLVM = true;
-            isStatic = true;
-          };
-          pkgs = import "${nixpkgs-cross-overlay}/utils/nixpkgs.nix" {
-            inherit overlays localSystem crossSystem;
-          };
-        in
-        import ./cross-shell.nix
-          {
-            inherit pkgs rustShellHook;
-            envVars = rustEnvVars;
-          };
       stableToolchain = pkgs.rust-bin.fromRustupToolchainFile ./rust-toolchain.toml;
       stableChannel = (lib.importTOML ./rust-toolchain.toml).toolchain.channel;
       stableManifest = (if stableChannel == "stable" then pkgs.rust-bin.stable.latest else pkgs.rust-bin.stable.${stableChannel})._manifest;
@@ -201,10 +171,6 @@
           export DOCKER_HOST=unix://$XDG_RUNTIME_DIR/docker.sock
         '';
       };
-      devShells.crossShell =
-        crossShell { config = "x86_64-unknown-linux-musl"; };
-      devShells.armCrossShell =
-        crossShell { config = "aarch64-unknown-linux-musl"; };
       devShells.nightly =
         let
           toolchain = pkgs.rust-bin.nightly.latest.minimal.override {
