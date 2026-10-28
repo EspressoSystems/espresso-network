@@ -16,7 +16,7 @@ use espresso_types::{
     Leaf2, NodeState, PubKey, SeqTypes, Transaction, ValidatedState,
     v0::traits::{MembershipPersistence, SequencerPersistence, StateCertPersistence},
 };
-use futures::future::BoxFuture;
+use futures::future::{BoxFuture, Either};
 use hotshot_new_protocol::storage::NewProtocolStorage;
 use hotshot_query_service::availability::VidCommonQueryData;
 use hotshot_types::{
@@ -30,11 +30,15 @@ use hotshot_types::{
 };
 
 use crate::{
-    SequencerContext, consensus_handle::ConsensusHandle, context::TaskList,
-    query_peers::QueryRequest, state_signature::StateSignatureMemStorage,
+    SequencerContext, api::peer_client::PeerClient, consensus_handle::ConsensusHandle,
+    context::TaskList, query_peers::QueryRequest, state_signature::StateSignatureMemStorage,
 };
 
-pub type NodeLightClient = LightClient<SqlStorage, FallbackClient<QueryServiceClient>>;
+/// A source a node's light client fetches from: staked peers over the query lane, or an HTTP
+/// query service.
+pub type NodeClient = Either<PeerClient, QueryServiceClient>;
+
+pub type NodeLightClient = LightClient<SqlStorage, FallbackClient<NodeClient>>;
 
 pub type Delta = <ValidatedState as hotshot_types::traits::ValidatedState<SeqTypes>>::Delta;
 
@@ -78,14 +82,6 @@ pub trait ApiContext: Send + Sync + 'static {
     /// Ask staked peers over the cliquenet query lane.
     fn query_peers(&self, _request: QueryRequest) -> BoxFuture<'static, anyhow::Result<Vec<u8>>> {
         Box::pin(async { anyhow::bail!("this node does not query peers over cliquenet") })
-    }
-
-    /// Answer peers' query lane requests with these HTTP API handlers.
-    fn serve_queries_with(
-        &self,
-        _light_client: Arc<dyn espresso_api::DynLightClientApi>,
-        _availability: Arc<dyn espresso_api::DynHotShotAvailabilityApi>,
-    ) {
     }
 
     fn request_vid_shares(
@@ -210,14 +206,6 @@ where
 
     fn query_peers(&self, request: QueryRequest) -> BoxFuture<'static, anyhow::Result<Vec<u8>>> {
         SequencerContext::query_peers(self, request)
-    }
-
-    fn serve_queries_with(
-        &self,
-        light_client: Arc<dyn espresso_api::DynLightClientApi>,
-        availability: Arc<dyn espresso_api::DynHotShotAvailabilityApi>,
-    ) {
-        SequencerContext::serve_queries_with(self, light_client, availability)
     }
 
     fn request_vid_shares(

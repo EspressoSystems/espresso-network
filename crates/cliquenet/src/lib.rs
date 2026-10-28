@@ -21,8 +21,8 @@ pub use error::NetworkError;
 pub use metrics::Metrics;
 pub use msg::Slot;
 pub use net::{
-    Network, NetworkReceiver, NetworkSender, RetryPolicy, SendAction, SendCommand,
-    SendCommandBuilder,
+    Network, NetworkReceiver, NetworkSender, QueryEvent, QueryReceiver, RetryPolicy, SendAction,
+    SendCommand, SendCommandBuilder,
 };
 
 use crate::{

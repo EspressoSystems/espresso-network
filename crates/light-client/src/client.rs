@@ -315,6 +315,148 @@ fn fmt_block_id(id: BlockId<SeqTypes>) -> String {
     }
 }
 
+/// Either of two kinds of client, so one [`FallbackClient`] can try clients of both kinds.
+#[cfg(feature = "client")]
+impl<A, B> Client for Either<A, B>
+where
+    A: Client,
+    B: Client,
+{
+    fn block_height(&self) -> impl Send + Future<Output = Result<u64>> {
+        match self {
+            Either::Left(a) => Either::Left(a.block_height()),
+            Either::Right(b) => Either::Right(b.block_height()),
+        }
+    }
+
+    fn leaf_proof(
+        &self,
+        id: impl Into<LeafRequest> + Send,
+        finalized: Option<u64>,
+    ) -> impl Send + Future<Output = Result<LeafProof>> {
+        let id = id.into();
+        match self {
+            Either::Left(a) => Either::Left(a.leaf_proof(id, finalized)),
+            Either::Right(b) => Either::Right(b.leaf_proof(id, finalized)),
+        }
+    }
+
+    fn header_proof(
+        &self,
+        root: u64,
+        id: BlockId<SeqTypes>,
+    ) -> impl Send + Future<Output = Result<HeaderProof>> {
+        match self {
+            Either::Left(a) => Either::Left(a.header_proof(root, id)),
+            Either::Right(b) => Either::Right(b.header_proof(root, id)),
+        }
+    }
+
+    fn get_leaves_in_range(
+        &self,
+        start: usize,
+        end: usize,
+    ) -> impl Send + Future<Output = Result<Vec<LeafQueryData<SeqTypes>>>> {
+        match self {
+            Either::Left(a) => Either::Left(a.get_leaves_in_range(start, end)),
+            Either::Right(b) => Either::Right(b.get_leaves_in_range(start, end)),
+        }
+    }
+
+    fn get_leaves_for_ranges(
+        &self,
+        ranges: &[Range<u64>],
+    ) -> impl Send + Future<Output = Result<Vec<LeafQueryData<SeqTypes>>>> {
+        match self {
+            Either::Left(a) => Either::Left(a.get_leaves_for_ranges(ranges)),
+            Either::Right(b) => Either::Right(b.get_leaves_for_ranges(ranges)),
+        }
+    }
+
+    fn payload_proof(&self, height: u64) -> impl Send + Future<Output = Result<PayloadProof>> {
+        match self {
+            Either::Left(a) => Either::Left(a.payload_proof(height)),
+            Either::Right(b) => Either::Right(b.payload_proof(height)),
+        }
+    }
+
+    fn payload_proofs_in_range(
+        &self,
+        start: u64,
+        end: u64,
+    ) -> impl Send + Future<Output = Result<Vec<PayloadProof>>> {
+        match self {
+            Either::Left(a) => Either::Left(a.payload_proofs_in_range(start, end)),
+            Either::Right(b) => Either::Right(b.payload_proofs_in_range(start, end)),
+        }
+    }
+
+    fn payload_proofs_for_ranges(
+        &self,
+        ranges: &[Range<u64>],
+    ) -> impl Send + Future<Output = Result<Vec<PayloadProof>>> {
+        match self {
+            Either::Left(a) => Either::Left(a.payload_proofs_for_ranges(ranges)),
+            Either::Right(b) => Either::Right(b.payload_proofs_for_ranges(ranges)),
+        }
+    }
+
+    fn namespace_proof(
+        &self,
+        height: u64,
+        namespace: NamespaceId,
+    ) -> impl Send + Future<Output = Result<NamespaceProof>> {
+        match self {
+            Either::Left(a) => Either::Left(a.namespace_proof(height, namespace)),
+            Either::Right(b) => Either::Right(b.namespace_proof(height, namespace)),
+        }
+    }
+
+    fn namespace_proofs_in_range(
+        &self,
+        start: u64,
+        end: u64,
+        namespace: NamespaceId,
+    ) -> impl Send + Future<Output = Result<Vec<NamespaceProof>>> {
+        match self {
+            Either::Left(a) => Either::Left(a.namespace_proofs_in_range(start, end, namespace)),
+            Either::Right(b) => Either::Right(b.namespace_proofs_in_range(start, end, namespace)),
+        }
+    }
+
+    fn namespaces_proofs_in_range(
+        &self,
+        start: u64,
+        end: u64,
+        namespaces: &[NamespaceId],
+    ) -> impl Send + Future<Output = Result<Vec<HashMap<NamespaceId, NamespaceProof>>>> {
+        match self {
+            Either::Left(a) => Either::Left(a.namespaces_proofs_in_range(start, end, namespaces)),
+            Either::Right(b) => Either::Right(b.namespaces_proofs_in_range(start, end, namespaces)),
+        }
+    }
+
+    fn stake_table_events(
+        &self,
+        epoch: EpochNumber,
+    ) -> impl Send + Future<Output = Result<Vec<StakeTableEvent>>> {
+        match self {
+            Either::Left(a) => Either::Left(a.stake_table_events(epoch)),
+            Either::Right(b) => Either::Right(b.stake_table_events(epoch)),
+        }
+    }
+
+    fn cert2(
+        &self,
+        height: u64,
+    ) -> impl Send + Future<Output = Result<Option<Certificate2<SeqTypes>>>> {
+        match self {
+            Either::Left(a) => Either::Left(a.cert2(height)),
+            Either::Right(b) => Either::Right(b.cert2(height)),
+        }
+    }
+}
+
 #[cfg(feature = "client")]
 #[derive(Clone, Debug, Builder)]
 #[builder(pattern = "owned")]

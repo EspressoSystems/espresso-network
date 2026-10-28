@@ -29,13 +29,28 @@ type PeerMessage = (PublicKey, Bytes, Option<OwnedSemaphorePermit>);
 #[derive(Debug)]
 pub struct Network {
     recv: NetworkReceiver,
-    query_recv: Option<NetworkReceiver>,
+    query_recv: Option<QueryReceiver>,
     send: NetworkSender,
 }
 
 #[derive(Debug)]
 pub struct NetworkReceiver {
     rx: UnboundedReceiver<PeerMessage>,
+}
+
+/// Receives what happens on the query lanes.
+#[derive(Debug)]
+pub struct QueryReceiver {
+    rx: UnboundedReceiver<PeerMessage>,
+    unreachable: UnboundedReceiver<PublicKey>,
+}
+
+#[derive(Debug)]
+pub enum QueryEvent {
+    /// A message from the party.
+    Message(PublicKey, Bytes),
+    /// The party's query lane could not be opened, so nothing queued for it was sent.
+    Unreachable(PublicKey),
 }
 
 #[derive(Clone)]
@@ -132,6 +147,7 @@ impl Network {
         // Channels of messages from peers to the application, one per lane.
         let (itx, irx) = mpsc::unbounded_channel();
         let (qtx, qrx) = mpsc::unbounded_channel();
+        let (utx, urx) = mpsc::unbounded_channel();
 
         let (etx, erx) = watch::channel(Slot::MIN);
 
@@ -145,13 +161,17 @@ impl Network {
             Role::Active,
             itx,
             qtx,
+            utx,
             orx,
             erx,
             metr.clone(),
         );
 
         let recv = NetworkReceiver { rx: irx };
-        let query_recv = Some(NetworkReceiver { rx: qrx });
+        let query_recv = Some(QueryReceiver {
+            rx: qrx,
+            unreachable: urx,
+        });
         let send = NetworkSender {
             conf: conf.clone(),
             node,
@@ -173,10 +193,8 @@ impl Network {
     ///
     /// Returns `None` once taken. Replies to [`NetworkSender::send_query`]
     /// arrive here and never on the main receiver, as do the requests of
-    /// parties once [`NetworkSender::accept_query`] was called. An empty
-    /// message from a party means its query lane could not be opened, and
-    /// nothing queued for it was sent.
-    pub fn take_query_receiver(&mut self) -> Option<NetworkReceiver> {
+    /// parties once [`NetworkSender::accept_query`] was called.
+    pub fn take_query_receiver(&mut self) -> Option<QueryReceiver> {
         self.query_recv.take()
     }
 
@@ -217,6 +235,25 @@ impl NetworkReceiver {
         let (k, b, _) = self.rx.recv().await?;
         debug!(peer = %k, len = b.len(), "message received");
         Some((k, b))
+    }
+}
+
+impl QueryReceiver {
+    /// Receive the next query lane event.
+    ///
+    /// Returns `None` once the network is shut down.
+    ///
+    /// # Cancel safety
+    ///
+    /// This method is cancel safe.
+    pub async fn receive(&mut self) -> Option<QueryEvent> {
+        tokio::select! {
+            message = self.rx.recv() => {
+                let (key, bytes, _) = message?;
+                Some(QueryEvent::Message(key, bytes))
+            },
+            key = self.unreachable.recv() => key.map(QueryEvent::Unreachable),
+        }
     }
 }
 

@@ -40,6 +40,7 @@ pub struct Server {
     parties: HashMap<PublicKey, Party>,
     ibound: UnboundedSender<PeerMessage>,
     query_ibound: UnboundedSender<PeerMessage>,
+    query_unreachable: UnboundedSender<PublicKey>,
     obound: UnboundedReceiver<Command>,
     next_slot: watch::Receiver<Slot>,
     accept_tasks: JoinSet<Result<Connection, NetworkError>>,
@@ -123,6 +124,7 @@ impl Server {
         role: Role,
         tx: UnboundedSender<PeerMessage>,
         query_tx: UnboundedSender<PeerMessage>,
+        unreachable_tx: UnboundedSender<PublicKey>,
         rx: UnboundedReceiver<Command>,
         sx: watch::Receiver<Slot>,
         metrics: Arc<dyn Metrics>,
@@ -144,6 +146,7 @@ impl Server {
             role,
             ibound: tx,
             query_ibound: query_tx,
+            query_unreachable: unreachable_tx,
             obound: rx,
             parties,
             accept_tasks: JoinSet::new(),
@@ -326,8 +329,7 @@ impl Server {
                         if let Some(party) = self.parties.get_mut(&key) {
                             party.link_mut(lane).outbox.clear();
                         }
-                        // The empty message tells the application nothing queued for the party was sent.
-                        if self.query_ibound.send((key, Bytes::new(), None)).is_err() {
+                        if self.query_unreachable.send(key).is_err() {
                             debug!(name = %self.conf.name, node = %self.key, "query channel closed");
                         }
                     }

@@ -18,7 +18,7 @@ use espresso_types::{
     v0_4::{PermittedRewardMerkleTreeV2, RewardAccountV2, RewardMerkleTreeV2},
     v0_6::RewardAccountQueryDataV2,
 };
-use futures::future::Future;
+use futures::future::{Either, Future};
 use hotshot_query_service::{
     Resolvable,
     availability::LeafId,
@@ -43,7 +43,7 @@ use jf_merkle_tree_compat::{
     ForgetableMerkleTreeScheme, ForgetableUniversalMerkleTreeScheme, LookupResult,
     MerkleTreeScheme, prelude::MerkleNode,
 };
-use light_client::storage::LightClientDbOptions;
+use light_client::{client::QueryServiceClient, storage::LightClientDbOptions};
 use process_metrics::ProcessMetrics;
 use sqlx::{Encode, Row, Type};
 use tokio::time::sleep;
@@ -66,12 +66,14 @@ use crate::{
         RewardMerkleTreeV2Data,
         data_source::{DataSourceOptions, NodeStateDataSource as _, Provider, SequencerDataSource},
         options::{self, Query, get_public_env_vars, init_query_data_source},
+        peer_client::PeerClient,
         state::NodeApiStateImpl,
         update::{ApiEventConsumer, ApiSink},
     },
     catchup::{CatchupStorage, NullStateCatchup},
     context::TaskList,
     persistence::{ChainConfigPersistence, sql::Options as SqlOptions},
+    query_peers::QueryHandlers,
     request_response::data_source::Storage as RequestResponseStorage,
     state::{EmptyStateStart, compute_state_update, update_state_storage_loop},
     util::BoundedJoinSet,
@@ -156,6 +158,7 @@ pub(in crate::api) async fn init_query_module(
     Box<dyn Metrics>,
     Box<dyn ApiSink>,
     Option<RequestResponseStorage>,
+    Option<QueryHandlers>,
 )> {
     let mut provider = Provider::default();
 
@@ -166,16 +169,18 @@ pub(in crate::api) async fn init_query_module(
         .with_block_provider(db_provider.clone())
         .with_vid_common_provider(db_provider);
     // If that fails, fetch missing data from staked peers over cliquenet, then from the HTTP
-    // peers. Providers are tried in this order.
-    if query_opt.p2p {
-        provider = provider.with_provider(LightClientProvider::peers(
-            state.clone(),
-            query_opt.light_client.clone(),
-        ));
-    }
+    // peers, all through one light client.
+    let staked_peers = query_opt
+        .p2p
+        .then(|| Either::Left(PeerClient::new(state.clone())));
+    let http_peers = query_opt
+        .peers
+        .iter()
+        .cloned()
+        .map(|url| Either::Right(QueryServiceClient::new(url)));
     let light_client_db = mod_opt.light_client_db(&query_opt)?;
     let light_client = Arc::new(LightClientProvider::new(
-        query_opt.peers,
+        staked_peers.into_iter().chain(http_peers),
         state.clone(),
         query_opt.light_client,
         light_client_db,
@@ -233,16 +238,7 @@ pub(in crate::api) async fn init_query_module(
         api_state = api_state.with_ranges_concurrency(ranges_concurrency);
     }
     let tonic_state = api_state.clone();
-    if query_opt.p2p {
-        let handlers = Arc::new(api_state.clone());
-        let state = state.clone();
-        tasks.spawn("query lane handlers", async move {
-            state
-                .context()
-                .await
-                .serve_queries_with(handlers.clone(), handlers)
-        });
-    }
+    let query_handlers = query_opt.p2p.then(|| QueryHandlers::new(api_state.clone()));
     tasks.spawn("API server", async move {
         if let Err(e) = espresso_api::serve_axum(port, api_state, modules, max_connections).await {
             tracing::error!("Axum server error: {}", e);
@@ -262,6 +258,7 @@ pub(in crate::api) async fn init_query_module(
         metrics,
         Box::new(ApiEventConsumer::from(ds)),
         Some(RequestResponseStorage::Sql(inner_storage)),
+        query_handlers,
     ))
 }
 

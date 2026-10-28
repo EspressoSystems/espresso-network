@@ -60,7 +60,7 @@ use crate::{
     consensus_handle::ConsensusHandle,
     external_event_handler::ExternalEventHandler,
     proposal_fetcher::ProposalFetcherConfig,
-    query_peers::{QueryPeers, QueryRequest},
+    query_peers::{QueryHandlers, QueryPeers, QueryRequest},
     request_response::{
         RequestResponseProtocol,
         data_source::{DataSource, Storage as RequestResponseStorage},
@@ -135,7 +135,7 @@ where
         initializer: HotShotInitializer<SeqTypes>,
         anchor_view: Option<ViewNumber>,
         storage: Option<RequestResponseStorage>,
-        query_p2p: bool,
+        query_handlers: Option<QueryHandlers>,
         state_catchup: ParallelStateCatchup,
         persistence: Arc<P>,
         coordinator_network: F,
@@ -187,9 +187,8 @@ where
         let mut coordinator_network = coordinator_network(upgrade_lock.clone()).await?;
         // Taken before the network moves into the coordinator, so query traffic never passes
         // through it.
-        let query_lane = query_p2p
-            .then(|| coordinator_network.take_query_lane())
-            .flatten();
+        let query_lane = query_handlers
+            .and_then(|handlers| Some((coordinator_network.take_query_lane()?, handlers)));
 
         let current_epoch = bootstrap_epoch_window(
             &membership_coordinator,
@@ -328,8 +327,15 @@ where
         .await
         .with_context(|| "Failed to create external event handler")?;
 
-        let query_peers = query_lane
-            .map(|lane| QueryPeers::start(lane, consensus_handle.clone(), pub_key, &mut tasks));
+        let query_peers = query_lane.map(|(lane, handlers)| {
+            QueryPeers::start(
+                lane,
+                handlers,
+                consensus_handle.clone(),
+                pub_key,
+                &mut tasks,
+            )
+        });
 
         let ctx = Self::new(
             consensus_handle,
@@ -455,17 +461,6 @@ where
     /// Return the light client state signatures this node has produced.
     pub fn state_signatures(&self) -> Arc<RwLock<StateSignatureMemStorage>> {
         self.state_signatures.clone()
-    }
-
-    /// Answer peers' query lane requests with these HTTP API handlers.
-    pub(crate) fn serve_queries_with(
-        &self,
-        light_client: Arc<dyn espresso_api::DynLightClientApi>,
-        availability: Arc<dyn espresso_api::DynHotShotAvailabilityApi>,
-    ) {
-        if let Some(peers) = &self.query_peers {
-            peers.serve_with(light_client, availability);
-        }
     }
 
     /// Ask a staked peer over the cliquenet query lane. The response is unverified.

@@ -261,7 +261,6 @@ where
         cliquenet_bind_addr: opt.cliquenet_bind_address,
         cliquenet_advertise_addr: opt.cliquenet_advertise_address,
         x25519_secret_key: x25519,
-        query_p2p: modules.query.as_ref().is_some_and(|query| query.p2p),
         orchestrator_url: opt.orchestrator_url,
         builder_urls: opt.builder_urls,
         state_relay_server_url: opt.state_relay_server_url,
@@ -294,7 +293,7 @@ where
         Some(http_opt) => {
             let http_opt = api_options(http_opt, modules, &storage_opt, public_node_config);
             http_opt
-                .serve(move |metrics, consumer, storage| {
+                .serve(move |metrics, consumer, storage, query_handlers| {
                     async move {
                         init_node(
                             genesis,
@@ -303,6 +302,7 @@ where
                             persistence,
                             l1_params,
                             storage,
+                            query_handlers,
                             consumer,
                             opt.is_da,
                             opt.identity,
@@ -322,6 +322,7 @@ where
                 Box::new(NoMetrics),
                 persistence,
                 l1_params,
+                None,
                 None,
                 NullEventConsumer,
                 opt.is_da,
@@ -355,7 +356,7 @@ where
     let http_opt = api_options(http_opt, modules, &storage_opt, public_node_config);
     let persistence = storage_opt.create().await?;
     http_opt
-        .serve(move |metrics, sink, _storage| {
+        .serve(move |metrics, sink, _storage, _| {
             async move {
                 init_follower_node(genesis, params, metrics, persistence, l1_params, sink).await
             }

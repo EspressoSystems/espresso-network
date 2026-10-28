@@ -8,7 +8,7 @@ use std::{
     collections::{HashMap, HashSet},
     ops::Range,
     sync::{
-        Arc, OnceLock,
+        Arc,
         atomic::{AtomicU64, Ordering},
     },
 };
@@ -20,7 +20,7 @@ use espresso_api::{
     v1,
 };
 use espresso_types::{PubKey, SeqTypes};
-use hotshot_new_protocol::network::{QueryReceiver, QuerySender};
+use hotshot_new_protocol::network::{QueryEvent, QueryReceiver, QuerySender};
 use hotshot_query_service::Error;
 use http_client::{StatusCode, error::ClientError as _};
 use parking_lot::Mutex;
@@ -55,6 +55,26 @@ enum Message {
     Reply { id: u64, response: Reply },
 }
 
+/// The HTTP API handlers peers' requests run.
+#[derive(Clone)]
+pub struct QueryHandlers {
+    light_client: Arc<dyn DynLightClientApi>,
+    availability: Arc<dyn DynHotShotAvailabilityApi>,
+}
+
+impl QueryHandlers {
+    pub fn new<S>(api: S) -> QueryHandlers
+    where
+        S: DynLightClientApi + DynHotShotAvailabilityApi + 'static,
+    {
+        let api = Arc::new(api);
+        QueryHandlers {
+            light_client: api.clone(),
+            availability: api,
+        }
+    }
+}
+
 /// Asks staked peers over the query lane, and answers theirs with this node's API handlers.
 #[derive(Clone)]
 pub struct QueryPeers(Arc<Inner>);
@@ -63,12 +83,7 @@ struct Inner {
     sender: QuerySender<SeqTypes>,
     consensus: Arc<dyn ConsensusSource>,
     public_key: PubKey,
-    /// Attached by the query module once the node context exists. Requests before that fail
-    /// with 503.
-    handlers: OnceLock<(
-        Arc<dyn DynLightClientApi>,
-        Arc<dyn DynHotShotAvailabilityApi>,
-    )>,
+    handlers: QueryHandlers,
     pending: Mutex<HashMap<(PubKey, u64), oneshot::Sender<Reply>>>,
     next_id: AtomicU64,
     /// Peers whose last answer was a success. They are asked first, since most validators may
@@ -83,6 +98,7 @@ impl QueryPeers {
     /// Start answering peers and return the handle that asks them.
     pub fn start(
         (sender, receiver): (QuerySender<SeqTypes>, QueryReceiver<SeqTypes>),
+        handlers: QueryHandlers,
         consensus: Arc<dyn ConsensusSource>,
         public_key: PubKey,
         tasks: &mut TaskList,
@@ -91,7 +107,7 @@ impl QueryPeers {
             sender,
             consensus,
             public_key,
-            handlers: OnceLock::new(),
+            handlers,
             pending: Default::default(),
             next_id: AtomicU64::new(0),
             serving: Default::default(),
@@ -99,15 +115,6 @@ impl QueryPeers {
         }));
         tasks.spawn("query peers", peers.clone().run(receiver));
         peers
-    }
-
-    /// Answer peers with these HTTP API handlers from now on.
-    pub fn serve_with(
-        &self,
-        light_client: Arc<dyn DynLightClientApi>,
-        availability: Arc<dyn DynHotShotAvailabilityApi>,
-    ) {
-        _ = self.0.handlers.set((light_client, availability));
     }
 
     /// Ask one staked peer, returning the bincode encoded response of its handler. The response
@@ -177,13 +184,16 @@ impl QueryPeers {
         let mut answering = JoinSet::new();
         loop {
             select! {
-                received = receiver.receive() => {
-                    let Some((from, bytes)) = received else { break };
-                    // The network gave up on the peer's lane, so nothing asked of it gets answered.
-                    if bytes.is_empty() {
-                        self.0.pending.lock().retain(|(peer, _), _| *peer != from);
-                        continue;
-                    }
+                event = receiver.receive() => {
+                    let (from, bytes) = match event {
+                        Some(QueryEvent::Message(from, bytes)) => (from, bytes),
+                        // Nothing asked of the peer gets answered, so its calls fail now.
+                        Some(QueryEvent::Unreachable(peer)) => {
+                            self.0.pending.lock().retain(|(key, _), _| *key != peer);
+                            continue;
+                        },
+                        None => break,
+                    };
                     match bincode::deserialize(&bytes) {
                         Ok(Message::Request { id, request }) if answering.len() < budget => {
                             answering.spawn(self.clone().serve(from, id, request));
@@ -214,22 +224,14 @@ impl QueryPeers {
     }
 
     async fn serve(self, from: PubKey, id: u64, request: QueryRequest) {
-        let response = match self.0.handlers.get() {
-            Some((light_client, availability)) => {
-                match answer(&**light_client, &**availability, request).await {
-                    Ok(value) => bincode::serialize(&value).map_err(|err| {
-                        Error::catch_all(StatusCode::INTERNAL_SERVER_ERROR, err.to_string())
-                    }),
-                    Err(err) => {
-                        let err = classify(err);
-                        Err(Error::catch_all(err.status(), err.to_string()))
-                    },
-                }
+        let response = match answer(&self.0.handlers, request).await {
+            Ok(value) => bincode::serialize(&value).map_err(|err| {
+                Error::catch_all(StatusCode::INTERNAL_SERVER_ERROR, err.to_string())
+            }),
+            Err(err) => {
+                let err = classify(err);
+                Err(Error::catch_all(err.status(), err.to_string()))
             },
-            None => Err(Error::catch_all(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "query service is starting".to_owned(),
-            )),
         };
         self.reply(from, id, response);
     }
@@ -251,11 +253,11 @@ impl QueryPeers {
     }
 }
 
-async fn answer(
-    light_client: &dyn DynLightClientApi,
-    availability: &dyn DynHotShotAvailabilityApi,
-    request: QueryRequest,
-) -> Result<Erased> {
+async fn answer(handlers: &QueryHandlers, request: QueryRequest) -> Result<Erased> {
+    let QueryHandlers {
+        light_client,
+        availability,
+    } = handlers;
     match request {
         QueryRequest::LeafProof { leaf, finalized } => {
             light_client.get_leaf_proof(leaf, finalized).await

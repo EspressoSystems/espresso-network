@@ -87,7 +87,9 @@ use tracing::info;
 use url::Url;
 use vbs::version::StaticVersion;
 
-use crate::request_response::data_source::Storage as RequestResponseStorage;
+use crate::{
+    query_peers::QueryHandlers, request_response::data_source::Storage as RequestResponseStorage,
+};
 
 /// The node's `NodeImplementation`, generic over its persistence.
 #[derive(Derivative, Serialize, Deserialize)]
@@ -138,8 +140,6 @@ pub struct NetworkParams {
     pub cliquenet_advertise_addr: Option<NetAddr>,
     /// X25519 secret key.
     pub x25519_secret_key: x25519::SecretKey,
-    /// Accept cliquenet query lanes, so peers can backfill their query service from ours.
-    pub query_p2p: bool,
 }
 
 pub struct L1Params {
@@ -176,6 +176,7 @@ pub async fn init_node<P>(
     persistence: P,
     l1_params: L1Params,
     storage: Option<RequestResponseStorage>,
+    query_handlers: Option<QueryHandlers>,
     event_consumer: impl EventConsumer + 'static,
     is_da: bool,
     identity: Identity,
@@ -455,7 +456,7 @@ where
         initializer,
         anchor_view,
         storage,
-        network_params.query_p2p,
+        query_handlers,
         state_catchup_providers,
         persistence,
         cliquenet,
@@ -1640,7 +1641,7 @@ pub mod testing {
                 initializer,
                 anchor_view,
                 storage,
-                false,
+                None,
                 catchup_providers,
                 persistence,
                 coordinator_network,

@@ -27,7 +27,7 @@ use crate::query_peers::QueryRequest;
 /// Calls for data the lane does not carry fail, and the light client verifies whatever comes
 /// back.
 #[derive(Clone, Debug)]
-pub(crate) struct PeerClient {
+pub struct PeerClient {
     state: ApiState,
 }
 

@@ -1,10 +1,10 @@
-use std::{collections::HashMap, fmt::Debug, pin::Pin, sync::Arc, time::Duration};
+use std::{collections::HashMap, pin::Pin, sync::Arc, time::Duration};
 
 use ::light_client::{
     LightClient,
-    client::{Client, FallbackClient, QueryServiceClient},
+    client::FallbackClient,
     state::{Genesis, LightClientOptions},
-    storage::{LightClientDbOptions, SqlStorage},
+    storage::LightClientDbOptions,
 };
 use alloy::primitives::U256;
 use anyhow::{Context, bail, ensure};
@@ -67,9 +67,8 @@ use self::data_source::{
 use crate::{
     SeqTypes,
     api::{
-        context::{ApiContext, ConsensusSource},
+        context::{ApiContext, ConsensusSource, NodeClient, NodeLightClient},
         data_source::TokenDataSource,
-        peer_client::PeerClient,
     },
     catchup::{
         CatchupStorage, add_fee_accounts_to_state, add_v1_reward_accounts_to_state,
@@ -1735,65 +1734,34 @@ pub(crate) fn light_client_genesis(config: &NetworkConfig<SeqTypes>, chain_id: C
 /// is therefore opened lazily as well; if that fails, the fetch returns `None` and the next fetch
 /// tries again.
 #[derive(Derivative)]
-#[derivative(Debug(bound = "C: Debug"))]
-pub(crate) struct LightClientProvider<C = FallbackClient<QueryServiceClient>> {
-    light_client: OnceCell<Arc<LightClient<SqlStorage, C>>>,
+#[derivative(Debug(bound = ""))]
+pub(crate) struct LightClientProvider {
+    light_client: OnceCell<Arc<NodeLightClient>>,
     state: ApiState,
-    client: C,
+    client: FallbackClient<NodeClient>,
     opt: LightClientOptions,
     db_opt: LightClientDbOptions,
-    #[derivative(Debug = "ignore")]
-    shared: SharedLightClient<C>,
 }
 
-/// Finds a light client the node already runs, to fetch through instead of building one.
-///
-/// A function, since the context only knows the HTTP client's type and the peer provider has
-/// nothing to share.
-type SharedLightClient<C> = fn(&dyn ApiContext) -> Option<Arc<LightClient<SqlStorage, C>>>;
-
 impl LightClientProvider {
-    /// A provider fetching from the HTTP query service `peers`.
+    /// A provider fetching through `clients`, tried in order.
     fn new(
-        peers: impl IntoIterator<Item = Url>,
+        clients: impl IntoIterator<Item = NodeClient>,
         state: ApiState,
         opt: LightClientOptions,
         db_opt: LightClientDbOptions,
     ) -> anyhow::Result<Self> {
-        let client = FallbackClient::new(peers.into_iter().map(QueryServiceClient::new).collect())?;
-        Ok(LightClientProvider {
+        let client = FallbackClient::new(clients.into_iter().collect())?;
+        Ok(Self {
             light_client: OnceCell::new(),
             state,
             client,
             opt,
             db_opt,
-            shared: |ctx| ctx.light_client(),
         })
     }
-}
 
-impl LightClientProvider<PeerClient> {
-    /// A provider fetching from staked peers over the cliquenet query lane.
-    ///
-    /// Its light client keeps its own database, so it never contends with the HTTP one. That
-    /// database is temporary, since everything in it is rebuilt from this node's own storage.
-    fn peers(state: ApiState, opt: LightClientOptions) -> LightClientProvider<PeerClient> {
-        LightClientProvider {
-            light_client: OnceCell::new(),
-            client: PeerClient::new(state.clone()),
-            state,
-            opt,
-            db_opt: LightClientDbOptions::Sqlite(Default::default()),
-            shared: |_| None,
-        }
-    }
-}
-
-impl<C> LightClientProvider<C>
-where
-    C: Client + Clone,
-{
-    pub(crate) async fn light_client(&self) -> Option<&Arc<LightClient<SqlStorage, C>>> {
+    pub(crate) async fn light_client(&self) -> Option<&Arc<NodeLightClient>> {
         self.light_client
             .get_or_try_init(|| self.init())
             .await
@@ -1805,9 +1773,9 @@ where
             .ok()
     }
 
-    async fn init(&self) -> anyhow::Result<Arc<LightClient<SqlStorage, C>>> {
+    async fn init(&self) -> anyhow::Result<Arc<NodeLightClient>> {
         let ctx = self.state.context().await;
-        if let Some(light_client) = (self.shared)(ctx) {
+        if let Some(light_client) = ctx.light_client() {
             return Ok(light_client);
         }
         let db = self
@@ -1828,11 +1796,10 @@ where
 }
 
 #[async_trait]
-impl<T, C> Provider<SeqTypes, T> for LightClientProvider<C>
+impl<T> Provider<SeqTypes, T> for LightClientProvider
 where
     T: fetching::Request<SeqTypes> + 'static,
-    C: Client + Clone,
-    LightClient<SqlStorage, C>: Provider<SeqTypes, T>,
+    NodeLightClient: Provider<SeqTypes, T>,
 {
     async fn fetch(&self, req: T) -> Option<T::Response> {
         self.light_client().await?.fetch(req).await
@@ -2235,7 +2202,7 @@ pub mod test_helpers {
                         let upgrades_map = cfg.upgrades();
                         async move {
                             if i == 0 {
-                                opt.serve(|metrics, consumer, storage| {
+                                opt.serve(|metrics, consumer, storage, _| {
                                     let cfg = cfg.clone();
                                     async move {
                                         Ok(cfg
@@ -4317,7 +4284,7 @@ mod test {
             <SqlDataSource as TestableSequencerDataSource>::persistence_options(&dbs[LATE]);
         let catchup = state_peers();
         let _late = api
-            .serve(|metrics, consumer, storage| {
+            .serve(|metrics, consumer, storage, _| {
                 async move {
                     Ok(cfg
                         .init_node(
@@ -5939,7 +5906,7 @@ mod test {
             .catchup(Default::default())
             .config(Default::default())
             .submit(Default::default())
-            .serve(move |metrics, sink, _| {
+            .serve(move |metrics, sink, _, _| {
                 async move {
                     init_follower_node(genesis, params, metrics, persistence, l1_params, sink).await
                 }
@@ -7143,7 +7110,7 @@ mod test {
         // start the query node so that it builds the merklized state
         let mut node_0 = opt
             .clone()
-            .serve(|metrics, consumer, storage| {
+            .serve(|metrics, consumer, storage, _| {
                 let cfg = network.cfg.clone();
                 let node_0_persistence = node_0_persistence.clone();
                 let state = state.clone();
@@ -7188,7 +7155,7 @@ mod test {
         // start the node again.
         tracing::info!("restarting node");
         let node_0 = opt
-            .serve(|metrics, consumer, storage| {
+            .serve(|metrics, consumer, storage, _| {
                 let cfg = network.cfg.clone();
                 async move {
                     Ok(cfg
@@ -7895,7 +7862,7 @@ mod test {
         );
         let state_peers = api_state_peers(&api_url);
         let query_node = opt
-            .serve(move |metrics, consumer, storage| {
+            .serve(move |metrics, consumer, storage, _| {
                 async move {
                     Ok(cfg
                         .init_node(
@@ -8172,7 +8139,7 @@ mod test {
         );
         let node_0 = opt
             .clone()
-            .serve(|metrics, consumer, storage| {
+            .serve(|metrics, consumer, storage, _| {
                 let cfg = network.cfg.clone();
                 let node_0_persistence = node_0_persistence.clone();
                 let state = state.clone();
@@ -12287,7 +12254,7 @@ mod test {
         );
         let node_0 = opt
             .clone()
-            .serve(|metrics, consumer, storage| {
+            .serve(|metrics, consumer, storage, _| {
                 let cfg = network.cfg.clone();
                 let new_persistence = new_persistence.clone();
                 let state = state.clone();

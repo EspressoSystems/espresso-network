@@ -26,7 +26,7 @@ use super::{
 };
 use crate::{
     catchup::CatchupStorage, context::TaskList, options::PublicNodeConfig, persistence,
-    request_response::data_source::Storage as RequestResponseStorage,
+    query_peers::QueryHandlers, request_response::data_source::Storage as RequestResponseStorage,
 };
 
 #[derive(Clone, Debug)]
@@ -135,6 +135,7 @@ impl Options {
             Box<dyn Metrics>,
             Box<dyn ApiSink>,
             Option<RequestResponseStorage>,
+            Option<QueryHandlers>,
         ) -> BoxFuture<'static, anyhow::Result<C>>,
     {
         // Create a channel to send the context to the web server after it is initialized. This
@@ -151,10 +152,11 @@ impl Options {
         // The server state type depends on whether we are running a query or status API or not, so
         // we handle the two cases differently.
         #[allow(clippy::type_complexity)]
-        let (metrics, consumer, storage): (
+        let (metrics, consumer, storage, query_handlers): (
             Box<dyn Metrics>,
             Box<dyn ApiSink>,
             Option<RequestResponseStorage>,
+            Option<QueryHandlers>,
         ) = if let Some(query_opt) = self.query.take() {
             if let Some(opt) = self.storage_sql.take() {
                 match opt.into_backend() {
@@ -209,7 +211,7 @@ impl Options {
                 tracing::warn!("gRPC API not available in status-only mode");
             }
 
-            (metrics, Box::new(NullEventConsumer), None)
+            (metrics, Box::new(NullEventConsumer), None, None)
         } else {
             // If no status or availability API is requested, we don't need metrics or a query
             // service data source. The only app state is the HotShot handle, which we use to
@@ -240,10 +242,10 @@ impl Options {
                 anyhow::Ok(())
             });
 
-            (Box::new(NoMetrics), Box::new(NullEventConsumer), None)
+            (Box::new(NoMetrics), Box::new(NullEventConsumer), None, None)
         };
 
-        let ctx = init_context(metrics, consumer, storage.clone()).await?;
+        let ctx = init_context(metrics, consumer, storage.clone(), query_handlers).await?;
         send_ctx
             .send(Box::new(ctx.clone()))
             .ok()
@@ -261,6 +263,7 @@ impl Options {
         Box<dyn Metrics>,
         Box<dyn ApiSink>,
         Option<RequestResponseStorage>,
+        Option<QueryHandlers>,
     )> {
         // Nothing would drain the query lane, which accepts peers' requests.
         ensure!(!query_opt.p2p, "--query-p2p requires SQL storage");
@@ -314,6 +317,7 @@ impl Options {
             metrics,
             Box::new(ApiEventConsumer::from(ds)),
             Some(RequestResponseStorage::Fs(inner_storage)),
+            None,
         ))
     }
 }

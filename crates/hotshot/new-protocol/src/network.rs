@@ -34,7 +34,7 @@ pub type InboundFilter<T> = Box<dyn Fn(&Message<T, Unchecked>) -> bool + Send + 
 pub struct Cliquenet<T: NodeType> {
     inner: Sender<T>,
     receiver: NetworkReceiver,
-    query_receiver: Option<NetworkReceiver>,
+    query_receiver: Option<cliquenet::QueryReceiver>,
     #[cfg(any(test, feature = "testing"))]
     ifilter: InboundFilter<T>,
 }
@@ -539,7 +539,7 @@ impl<T: NodeType> QuerySender<T> {
 
 /// Receives raw bytes from peers over their query lane.
 pub struct QueryReceiver<T: NodeType> {
-    receiver: NetworkReceiver,
+    receiver: cliquenet::QueryReceiver,
     shared: Arc<RwLock<Shared<T::SignatureKey>>>,
 }
 
@@ -550,34 +550,48 @@ impl<T: NodeType> std::fmt::Debug for QueryReceiver<T> {
 }
 
 impl<T: NodeType> QueryReceiver<T> {
-    /// Receive the next query message with the signature key of its sender.
+    /// Receive the next query lane event, naming the peer by its signature key.
     ///
-    /// The sender is the peer whose x25519 key authenticated the connection.
-    /// Messages from keys that are no longer peers are dropped. An empty
-    /// message means the network could not open the peer's query lane, and
-    /// nothing sent to it since the last message from it was delivered.
-    /// Returns `None` once the network is shut down.
+    /// The peer is the one whose x25519 key authenticated the connection.
+    /// Events about keys that are no longer peers are dropped. Returns `None`
+    /// once the network is shut down.
     ///
     /// # Cancel safety
     ///
     /// This method is cancel safe.
-    pub async fn receive(&mut self) -> Option<(T::SignatureKey, Bytes)> {
+    pub async fn receive(&mut self) -> Option<QueryEvent<T::SignatureKey>> {
         loop {
-            let (src, bytes) = self.receiver.receive().await?;
-            let src = x25519::PublicKey::from(src);
-            let sender = self
+            let event = self.receiver.receive().await?;
+            let src = match &event {
+                cliquenet::QueryEvent::Message(src, _)
+                | cliquenet::QueryEvent::Unreachable(src) => x25519::PublicKey::from(*src),
+            };
+            let peer = self
                 .shared
                 .read()
                 .peers
                 .iter()
                 .find(|(_, info)| info.x25519_key == src)
                 .map(|(key, _)| key.clone());
-            match sender {
-                Some(sender) => return Some((sender, bytes)),
-                None => debug!(%src, "dropping query message from unknown peer"),
-            }
+            let Some(peer) = peer else {
+                debug!(%src, "dropping query event of unknown peer");
+                continue;
+            };
+            return Some(match event {
+                cliquenet::QueryEvent::Message(_, bytes) => QueryEvent::Message(peer, bytes),
+                cliquenet::QueryEvent::Unreachable(_) => QueryEvent::Unreachable(peer),
+            });
         }
     }
+}
+
+/// What happens on a peer's query lane.
+#[derive(Debug)]
+pub enum QueryEvent<K> {
+    /// A message from the peer.
+    Message(K, Bytes),
+    /// The peer's query lane could not be opened, so nothing queued for it was sent.
+    Unreachable(K),
 }
 
 #[derive(Debug, thiserror::Error)]
