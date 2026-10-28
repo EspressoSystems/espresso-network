@@ -20,7 +20,8 @@ jobs:
       - uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
-      # v0.4.0; the lockfile format (v0.0.3) needs at least this version.
-      - run: gh extension install github/gh-actions-lock --pin 759f9c2d44e8599fa5b29224e5a30c58b3555211
+      # A precompiled extension can only be pinned to a release tag. v0.4.0 is an immutable
+      # release, and the lockfile format (v0.0.3) needs at least this version.
+      - run: gh extension install github/gh-actions-lock --pin v0.4.0
       # The compile-metrics local actions call remote actions, which a `./` path can't lock.
       - run: gh actions-lock --verify --ignore-local-actions
