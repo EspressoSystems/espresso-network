@@ -24,7 +24,7 @@ jobs:
       (github.event.pull_request.merged &&
        !startsWith(github.event.pull_request.head.ref, 'backport-'))
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
         with:
           fetch-depth: 0
           filter: blob:none
@@ -36,7 +36,7 @@ jobs:
 
       - uses: taiki-e/install-action@just
 
-      - uses: taiki-e/install-action@v2
+      - uses: taiki-e/install-action@v2.88.0
         with:
           tool: mergiraf
 
@@ -63,7 +63,7 @@ jobs:
       - name: Create backport pull requests
         id: backport
         if: github.event_name == 'pull_request_target'
-        uses: korthout/backport-action@v4
+        uses: korthout/backport-action@v4.7.0
         with:
           experimental: '{"conflict_resolution":"draft_commit_conflicts"}'
 
@@ -113,7 +113,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y protobuf-compiler
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@v2.9.3
         if: steps.resolve.outputs.needs_claude != ''
         with:
           prefix-key: v3-rust

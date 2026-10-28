@@ -109,7 +109,7 @@ jobs:
           echo "message=$msg $bench_url. Results are in its step summary." >> "$GITHUB_OUTPUT"
 
       - name: Post the result
-        uses: marocchino/sticky-pull-request-comment@v3
+        uses: marocchino/sticky-pull-request-comment@v3.0.5
         with:
           number: ${{ github.event.issue.number }}
           header: network-bench-command
@@ -119,7 +119,7 @@ jobs:
       # unless it says so where the command was given.
       - name: Report a failure
         if: failure()
-        uses: marocchino/sticky-pull-request-comment@v3
+        uses: marocchino/sticky-pull-request-comment@v3.0.5
         with:
           number: ${{ github.event.issue.number }}
           header: network-bench-command

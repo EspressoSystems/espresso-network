@@ -26,7 +26,7 @@ jobs:
           - old-from-new-pg
     name: binary-upgrade-test (${{ matrix.scenario }})
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
         with:
           fetch-tags: true
       - uses: taiki-e/install-action@just
@@ -53,7 +53,7 @@ jobs:
 
       - name: Upload compose logs
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v7.0.2
         with:
           name: compose-logs-${{ matrix.scenario }}
           path: tmp/compose-logs/

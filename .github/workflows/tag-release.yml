@@ -36,7 +36,7 @@ jobs:
       # The release branch isn't known until the script resolves it from the
       # issue title, so checkout the default ref and let `scripts/release`
       # operate on `origin/<branch>`.
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
         with:
           fetch-depth: 0
           filter: blob:none
@@ -72,7 +72,7 @@ jobs:
       issues: write
       actions: write
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
 
       - name: Dispatch the backport
         env:
@@ -96,7 +96,7 @@ jobs:
       cancel-in-progress: false
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
         with:
           fetch-depth: 0
           filter: blob:none

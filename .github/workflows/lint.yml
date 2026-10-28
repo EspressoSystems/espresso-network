@@ -25,8 +25,8 @@ jobs:
     name: cargo sort
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: taiki-e/install-action@v2
+      - uses: actions/checkout@v7.0.1
+      - uses: taiki-e/install-action@v2.88.0
         with:
           tool: cargo-sort
 
@@ -37,7 +37,7 @@ jobs:
     name: rustfmt
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: nightly
@@ -51,14 +51,14 @@ jobs:
     name: clippy
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
 
       - name: Install Protoc
         run: |
           sudo apt-get update
           sudo apt-get install -y protobuf-compiler
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@v2.9.3
         with:
           save-if: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release-') }}
 
@@ -71,7 +71,7 @@ jobs:
     name: python
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
       - uses: taiki-e/install-action@just
 
       # `scripts/compile-metrics` and `scripts/nextest-ci` decide what CI reports and what it
@@ -89,7 +89,7 @@ jobs:
     name: claude-gh
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
       - uses: taiki-e/install-action@just
       - uses: astral-sh/setup-uv@v10.3.2
         with:
@@ -109,13 +109,13 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
         with:
           # The compatibility check diffs against the merge base with the PR's base branch.
           fetch-depth: 0
           filter: blob:none
       # Pinned by commit: a third-party action's tag can be moved.
-      - uses: bufbuild/buf-action@85aebf73123b5c15fd5528aaecbf9129cddf7fa7 # v1.6.0
+      - uses: bufbuild/buf-action@v1.6.0
         with:
           # Keep in step with the `buf` the nix dev shell provides, so `buf format` agrees
           # locally and in CI.
@@ -133,7 +133,7 @@ jobs:
     name: allocator patches
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
 
       # build-allocators.yml only triggers on changes to the patches themselves, so a PR editing
       # the files they patch breaks them silently and the failure surfaces on a release tag build.

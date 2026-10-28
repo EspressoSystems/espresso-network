@@ -31,7 +31,7 @@ jobs:
     name: Build test artifacts (postgres)
     runs-on: ubuntu-24.04-8core
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
       - uses: rui314/setup-mold@v1
 
       - name: Install Protoc
@@ -39,12 +39,12 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y protobuf-compiler
 
-      - uses: taiki-e/install-action@v2
+      - uses: taiki-e/install-action@v2.88.0
         with:
           tool: nextest,just
 
       - name: Enable Rust Caching
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@v2.9.3
         with:
           prefix-key: v1-rust
           save-if: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release-') }}
@@ -64,7 +64,7 @@ jobs:
           timing: target/cargo-timings/cargo-timing.html
 
       - name: Upload archive to workflow
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v7.0.2
         with:
           name: nextest-archive-postgres
           if-no-files-found: error
@@ -72,7 +72,7 @@ jobs:
           retention-days: 1
 
       - name: Upload cargo timings
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v7.0.2
         with:
           name: cargo-timings-test-postgres
           path: target/cargo-timings/cargo-timing.html
@@ -82,7 +82,7 @@ jobs:
     name: Build test binaries
     runs-on: ubuntu-24.04-8core
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
       - uses: rui314/setup-mold@v1
 
       - name: Install Protoc
@@ -91,7 +91,7 @@ jobs:
           sudo apt-get install -y protobuf-compiler
 
       - name: Enable Rust Caching
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@v2.9.3
         with:
           prefix-key: v1-rust
           save-if: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release-') }}
@@ -110,14 +110,14 @@ jobs:
           binaries-dir: target/debug
 
       - name: Upload cargo timings
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v7.0.2
         with:
           name: cargo-timings-test-bins
           path: target/cargo-timings/cargo-timing.html
           retention-days: ${{ github.ref == 'refs/heads/main' && 90 || 14 }}
 
       - name: Upload archive to workflow
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v7.0.2
         with:
           name: test-binaries
           if-no-files-found: error
@@ -144,7 +144,7 @@ jobs:
     name: Build espresso-dev-node test binary
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
       - uses: ./.github/actions/free-disk-space
       - uses: rui314/setup-mold@v1
       - uses: ./.github/actions/free-disk-space
@@ -155,7 +155,7 @@ jobs:
           sudo apt-get install -y protobuf-compiler
 
       - name: Enable Rust Caching
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@v2.9.3
         with:
           prefix-key: v1-rust
           save-if: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release-') }}
@@ -174,7 +174,7 @@ jobs:
           binaries-dir: target/debug
 
       - name: Upload archive to workflow
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v7.0.2
         with:
           name: test-binaries-dev-node
           if-no-files-found: error
@@ -186,7 +186,7 @@ jobs:
     name: Build integration test archive
     runs-on: ubuntu-24.04-8core
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
       - uses: rui314/setup-mold@v1
 
       - name: Install Protoc
@@ -194,12 +194,12 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y protobuf-compiler
 
-      - uses: taiki-e/install-action@v2
+      - uses: taiki-e/install-action@v2.88.0
         with:
           tool: nextest
 
       - name: Enable Rust Caching
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@v2.9.3
         with:
           prefix-key: v1-rust
           save-if: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release-') }}
@@ -220,7 +220,7 @@ jobs:
           timing: target/cargo-timings/cargo-timing.html
 
       - name: Upload archive to workflow
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v7.0.2
         with:
           name: nextest-archive-integration
           if-no-files-found: error
@@ -235,14 +235,14 @@ jobs:
         partition: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
       fail-fast: false
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
       - uses: ./.github/actions/free-disk-space
       - uses: ./.github/actions/install-foundry
       - uses: ./.github/actions/install-postgres
       - uses: taiki-e/install-action@nextest
 
       - name: Download archive
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@v8.0.2
         with:
           name: nextest-archive-postgres
 
@@ -255,7 +255,7 @@ jobs:
 
       - name: Upload nextest JUnit
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v7.0.2
         with:
           name: nextest-junit-postgres-${{ matrix.partition }}
           if-no-files-found: ignore
@@ -266,13 +266,13 @@ jobs:
     needs: build-test-bins-dev-node
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
       - uses: ./.github/actions/free-disk-space
-      - uses: cachix/install-nix-action@v31
+      - uses: cachix/install-nix-action@v31.11.3
       # TODO: this downloads all (available) artifacts, which is a bit wasteful but artifact
       # downloads always fail if I try to select a subset.
       - name: Download artifacts
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@v8.0.2
 
       - name: Make binary executable
         run: chmod +x test-binaries-dev-node/espresso-dev-node
@@ -299,7 +299,7 @@ jobs:
       fail-fast: false
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
       - uses: ./.github/actions/free-disk-space
       - uses: taiki-e/install-action@nextest
       - uses: ./.github/actions/install-process-compose
@@ -308,12 +308,12 @@ jobs:
       - uses: ./.github/actions/install-native-demo-deps
 
       - name: Download integration test archive
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@v8.0.2
         with:
           name: nextest-archive-integration
 
       - name: Download node binaries
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@v8.0.2
         with:
           name: test-binaries
           path: target/debug
@@ -338,7 +338,7 @@ jobs:
 
       - name: Upload nextest JUnit
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v7.0.2
         with:
           name: nextest-junit-integration-${{ matrix.test-name }}
           if-no-files-found: ignore
@@ -358,7 +358,7 @@ jobs:
 
       - name: Upload process compose logs
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v7.0.2
         with:
           name: process-compose-logs-integration-v${{ matrix.test-name  }}
           path: ${{ env.NATIVE_DEMO_LOGS }}
@@ -369,7 +369,7 @@ jobs:
     needs: [build-test-bins]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
       - uses: ./.github/actions/install-process-compose
         with:
           version: v1.75.2
@@ -379,7 +379,7 @@ jobs:
         # TODO: this downloads all (available) artifacts, which is a bit wasteful but artifact
         # downloads always fail if I try to select a subset.
       - name: Download archive
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@v8.0.2
 
       - name: Move files
         run: |
@@ -401,7 +401,7 @@ jobs:
 
       - name: Upload process compose logs
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v7.0.2
         with:
           name: process-compose-logs-test-demo-native
           path: ${{ env.PC_LOG_FILE }}
@@ -418,10 +418,10 @@ jobs:
       contents: read
       pull-requests: write
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
 
       - name: Download JUnit artifacts
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@v8.0.2
         with:
           pattern: nextest-junit-*
           path: junit-artifacts
@@ -453,7 +453,7 @@ jobs:
       - name: Post/update PR comment
         if: ${{ github.event_name == 'pull_request' }}
         continue-on-error: true
-        uses: marocchino/sticky-pull-request-comment@v3
+        uses: marocchino/sticky-pull-request-comment@v3.0.5
         with:
           header: nextest-test
           path: junit-artifacts/pr-comment.md
@@ -470,10 +470,10 @@ jobs:
       actions: read
       contents: read
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
 
       - name: Download JUnit artifacts
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@v8.0.2
         with:
           pattern: nextest-junit-*
           path: junit-artifacts
@@ -488,7 +488,7 @@ jobs:
             --timestamp "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
             --out test-stats.json
 
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@v7.0.2
         with:
           name: test-stats-test
           path: test-stats.json
@@ -510,7 +510,7 @@ jobs:
       actions: read
       contents: read
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
 
       - uses: ./.github/actions/compile-metrics-report
         with:
@@ -533,7 +533,7 @@ jobs:
       actions: read
       contents: read
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
 
       - uses: ./.github/actions/compile-metrics-publish
         with:

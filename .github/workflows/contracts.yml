@@ -26,12 +26,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@v7.0.1
         with:
           submodules: recursive
 
       - name: Install Nix
-        uses: cachix/install-nix-action@v31
+        uses: cachix/install-nix-action@v31.11.3
 
       - name: Check toolchain versions
         run: nix develop .#contracts --accept-flake-config -c ./scripts/show-toolchain-versions
@@ -85,11 +85,11 @@ jobs:
             nix-env: ".#contracts"
             with-diff-test: false
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
         with:
           submodules: recursive
       - uses: taiki-e/install-action@just
-      - uses: cachix/install-nix-action@v31
+      - uses: cachix/install-nix-action@v31.11.3
       # NOTE: no rust cache, it doesn't work out of the box our nix env
 
       - name: Check toolchain versions

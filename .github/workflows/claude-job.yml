@@ -46,7 +46,7 @@ jobs:
           fi
           echo "ref=$REF" >> "$GITHUB_OUTPUT"
 
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
         with:
           fetch-depth: 1
           ref: ${{ steps.ref.outputs.ref }}
@@ -81,7 +81,7 @@ jobs:
       pull-requests: read
       issues: read
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
         with:
           fetch-depth: 1
           ref: ${{ needs.start.outputs.ref }}
@@ -105,7 +105,7 @@ jobs:
           echo "head-ref=$ref" >> "$GITHUB_OUTPUT"
 
       # Claude's cwd for review: the PR head. The diff and inline lines are against it.
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
         if: inputs.job == 'review'
         with:
           fetch-depth: 1
@@ -114,7 +114,7 @@ jobs:
           persist-credentials: false
 
       # Claude's cwd for code-review: the PR head, possibly from a fork.
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
         if: inputs.job == 'code-review'
         with:
           fetch-depth: 1
@@ -215,7 +215,7 @@ jobs:
                 --head-sha "$HEAD_SHA" --base-sha "$BASE_SHA" ;;
           esac
 
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@v7.0.2
         if: always()
         with:
           overwrite: true
@@ -234,7 +234,7 @@ jobs:
       pull-requests: write
       issues: write
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
         with:
           fetch-depth: 1
           ref: ${{ needs.start.outputs.ref }}
@@ -245,7 +245,7 @@ jobs:
         with:
           cache-dependency-glob: .github/claude/uv.lock
 
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@v8.0.2
         continue-on-error: true # missing when run failed before writing the record
         with:
           name: claude-actions-${{ inputs.job }}

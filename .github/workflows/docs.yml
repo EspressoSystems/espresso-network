@@ -22,7 +22,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@v7.0.1
 
       - name: Install Protoc
         run: |
@@ -35,7 +35,7 @@ jobs:
         run: just doc
 
       - name: Upload Rust Docs
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v7.0.2
         with:
           name: rust-docs
           path: target/doc
@@ -46,7 +46,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@v7.0.1
         with:
           submodules: recursive
 
@@ -64,7 +64,7 @@ jobs:
         run: just doc-contracts
 
       - name: Upload Contract Docs
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v7.0.2
         with:
           name: contract-docs
           path: docs/book
@@ -76,13 +76,13 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - name: Download Rust Docs
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@v8.0.2
         with:
           name: rust-docs
           path: public
 
       - name: Download Contract Docs
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@v8.0.2
         with:
           name: contract-docs
           path: public/contracts
@@ -92,7 +92,7 @@ jobs:
 
       - name: Deploy
         if: ${{ github.ref == 'refs/heads/main' }}
-        uses: peaceiris/actions-gh-pages@v4
+        uses: peaceiris/actions-gh-pages@v4.1.0
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           publish_dir: ./public

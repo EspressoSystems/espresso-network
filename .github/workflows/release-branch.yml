@@ -30,7 +30,7 @@ jobs:
       # events on other workflows.
       actions: write
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
         with:
           fetch-depth: 0
           filter: blob:none
@@ -57,7 +57,7 @@ jobs:
       contents: read
       issues: write
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
         with:
           fetch-depth: 0
           filter: blob:none

@@ -20,7 +20,7 @@ jobs:
       contents: read
       pull-requests: write
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
         with:
           submodules: recursive
           fetch-depth: 0
@@ -34,7 +34,7 @@ jobs:
           sudo apt-get install -y protobuf-compiler
 
       - name: Enable Rust Caching
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@v2.9.3
         with:
           prefix-key: v3-rust
           shared-key: verify-proposals
@@ -98,7 +98,7 @@ jobs:
       - name: Post/update PR comment
         if: ${{ always() }}
         continue-on-error: true
-        uses: marocchino/sticky-pull-request-comment@v3
+        uses: marocchino/sticky-pull-request-comment@v3.0.5
         with:
           header: verify-proposals
           path: pr-comment.md

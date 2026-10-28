@@ -42,7 +42,7 @@ jobs:
             features: --features sqlite
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
       - uses: ./.github/actions/free-disk-space
 
       - name: Install Protoc
@@ -68,7 +68,7 @@ jobs:
           fi
 
       - name: Enable Rust Caching
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@v2.9.3
         with:
           shared-key: slow-tests-${{ matrix.db }}
           # All 8 shards share a key, so only one of them saves it.
@@ -103,7 +103,7 @@ jobs:
 
       - name: Upload nextest JUnit
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v7.0.2
         with:
           name: slow-test-junit-${{ matrix.db }}-${{ matrix.partition }}
           if-no-files-found: ignore
@@ -122,7 +122,7 @@ jobs:
       matrix:
         partition: [1, 2, 3]
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
       - uses: ./.github/actions/free-disk-space
 
       - name: Install Protoc
@@ -137,7 +137,7 @@ jobs:
       - uses: rui314/setup-mold@v1
 
       - name: Enable Rust Caching
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@v2.9.3
         with:
           shared-key: espresso-dev-node-tests
           # All shards share a key, so only one of them saves it.
@@ -167,7 +167,7 @@ jobs:
 
       - name: Upload nextest JUnit
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v7.0.2
         with:
           name: slow-test-junit-dev-node-${{ matrix.partition }}
           if-no-files-found: ignore
@@ -189,10 +189,10 @@ jobs:
       contents: read
       pull-requests: write
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
 
       - name: Download JUnit artifacts
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@v8.0.2
         with:
           pattern: slow-test-junit-*
           path: junit-artifacts
@@ -224,7 +224,7 @@ jobs:
       - name: Post/update PR comment
         if: ${{ github.event_name == 'pull_request' }}
         continue-on-error: true
-        uses: marocchino/sticky-pull-request-comment@v3
+        uses: marocchino/sticky-pull-request-comment@v3.0.5
         with:
           header: nextest-slow
           path: junit-artifacts/pr-comment.md
@@ -241,10 +241,10 @@ jobs:
       actions: read
       contents: read
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
 
       - name: Download JUnit artifacts
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@v8.0.2
         with:
           pattern: slow-test-junit-*
           path: junit-artifacts
@@ -259,7 +259,7 @@ jobs:
             --timestamp "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
             --out slow-test-stats.json
 
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@v7.0.2
         with:
           name: test-stats-slow
           path: slow-test-stats.json
@@ -277,7 +277,7 @@ jobs:
       actions: read
       contents: read
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
 
       - uses: ./.github/actions/compile-metrics-report
         with:
@@ -297,7 +297,7 @@ jobs:
       actions: read
       contents: read
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
 
       - uses: ./.github/actions/compile-metrics-publish
         with:
