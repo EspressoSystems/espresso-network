@@ -24,7 +24,7 @@ use crate::{
 
 /// A response value whose type has been erased. `Box<dyn erased_serde::Serialize>` serializes
 /// exactly like the value it holds, so JSON and VBS bodies are unchanged.
-pub(crate) type Erased = Box<dyn erased_serde::Serialize + Send + Sync>;
+pub type Erased = Box<dyn erased_serde::Serialize + Send + Sync>;
 
 fn erase<T: serde::Serialize + Send + Sync + 'static>(value: T) -> Erased {
     Box::new(value)
@@ -260,7 +260,7 @@ impl<T: v1::AvailabilityApi + Send + Sync> DynAvailabilityApi for T {
 }
 
 #[async_trait]
-pub(crate) trait DynHotShotAvailabilityApi: Send + Sync {
+pub trait DynHotShotAvailabilityApi: Send + Sync {
     async fn get_leaf(&self, id: v1::LeafId) -> anyhow::Result<Erased>;
     async fn get_leaf_range(&self, from: usize, until: usize) -> anyhow::Result<Erased>;
     async fn get_header(&self, id: v1::BlockId) -> anyhow::Result<Erased>;
@@ -852,7 +852,7 @@ impl<T: v1::StateSignatureApi + Send + Sync> DynStateSignatureApi for T {
 }
 
 #[async_trait]
-pub(crate) trait DynLightClientApi: Send + Sync {
+pub trait DynLightClientApi: Send + Sync {
     async fn get_leaf_proof(
         &self,
         query: v1::LeafQuery,

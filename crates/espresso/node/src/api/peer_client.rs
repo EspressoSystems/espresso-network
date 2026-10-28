@@ -9,20 +9,23 @@ use ::light_client::{
     },
     storage::LeafRequest,
 };
-use anyhow::{Context as _, Result, bail};
+use anyhow::{Result, bail};
+use espresso_api::v1;
 use espresso_types::{Certificate2, NamespaceId, SeqTypes, v0_3::StakeTableEvent};
 use futures::future::try_join_all;
 use hotshot_query_service::{
     availability::{LeafId, LeafQueryData},
     node::BlockId,
 };
-use hotshot_types::{data::EpochNumber, utils::epoch_from_block_number};
+use hotshot_types::data::EpochNumber;
+use serde::de::DeserializeOwned;
 
-use super::{ApiState, data_source::StakeTableDataSource, state::stake_table_l1_range};
-use crate::query_peers::{LeafRef, QueryRequest, QueryResponse};
+use super::ApiState;
+use crate::query_peers::QueryRequest;
 
-/// Each call asks one staked peer over the query lane. Calls for data the lane does not carry
-/// fail, and the light client verifies whatever comes back.
+/// Each call asks one staked peer over the query lane, which answers with its HTTP API handlers.
+/// Calls for data the lane does not carry fail, and the light client verifies whatever comes
+/// back.
 #[derive(Clone, Debug)]
 pub(crate) struct PeerClient {
     state: ApiState,
@@ -33,8 +36,9 @@ impl PeerClient {
         PeerClient { state }
     }
 
-    async fn ask(&self, request: QueryRequest) -> Result<QueryResponse> {
-        self.state.context().await.query_peers(request).await
+    async fn ask<T: DeserializeOwned>(&self, request: QueryRequest) -> Result<T> {
+        let response = self.state.context().await.query_peers(request).await?;
+        Ok(bincode::deserialize(&response)?)
     }
 }
 
@@ -50,19 +54,15 @@ impl Client for PeerClient {
     ) -> Result<LeafProof> {
         let leaf = match id.into() {
             LeafRequest::Leaf(LeafId::Number(n)) | LeafRequest::Header(BlockId::Number(n)) => {
-                LeafRef::Height(n as u64)
+                v1::LeafQuery::Height(n as u64)
             },
-            LeafRequest::Leaf(LeafId::Hash(hash)) => LeafRef::Hash(hash),
-            LeafRequest::Header(BlockId::Hash(hash)) => LeafRef::BlockHash(hash),
-            LeafRequest::Header(BlockId::PayloadHash(hash)) => LeafRef::PayloadHash(hash),
+            LeafRequest::Leaf(LeafId::Hash(hash)) => v1::LeafQuery::Hash(hash.to_string()),
+            LeafRequest::Header(BlockId::Hash(hash)) => v1::LeafQuery::BlockHash(hash.to_string()),
+            LeafRequest::Header(BlockId::PayloadHash(hash)) => {
+                v1::LeafQuery::PayloadHash(hash.to_string())
+            },
         };
-        match self
-            .ask(QueryRequest::LeafProof { leaf, finalized })
-            .await?
-        {
-            QueryResponse::LeafProof(proof) => Ok(proof),
-            response => bail!("unexpected response {response:?}"),
-        }
+        self.ask(QueryRequest::LeafProof { leaf, finalized }).await
     }
 
     async fn header_proof(&self, _root: u64, _id: BlockId<SeqTypes>) -> Result<HeaderProof> {
@@ -74,33 +74,20 @@ impl Client for PeerClient {
         start: usize,
         end: usize,
     ) -> Result<Vec<LeafQueryData<SeqTypes>>> {
-        match self
-            .ask(QueryRequest::Leaves(start as u64..end as u64))
-            .await?
-        {
-            QueryResponse::Leaves(leaves) => Ok(leaves),
-            response => bail!("unexpected response {response:?}"),
-        }
+        let range = start as u64..end as u64;
+        self.get_leaves_for_ranges(std::slice::from_ref(&range))
+            .await
     }
 
     async fn get_leaves_for_ranges(
         &self,
         ranges: &[Range<u64>],
     ) -> Result<Vec<LeafQueryData<SeqTypes>>> {
-        let leaves = try_join_all(
-            ranges
-                .iter()
-                .map(|range| self.get_leaves_in_range(range.start as usize, range.end as usize)),
-        )
-        .await?;
-        Ok(leaves.into_iter().flatten().collect())
+        self.ask(QueryRequest::Leaves(ranges.to_vec())).await
     }
 
     async fn payload_proof(&self, height: u64) -> Result<PayloadProof> {
-        match self.ask(QueryRequest::PayloadProof(height)).await? {
-            QueryResponse::PayloadProof(proof) => Ok(proof),
-            response => bail!("unexpected response {response:?}"),
-        }
+        self.ask(QueryRequest::PayloadProof(height)).await
     }
 
     async fn payload_proofs_in_range(&self, start: u64, end: u64) -> Result<Vec<PayloadProof>> {
@@ -138,29 +125,11 @@ impl Client for PeerClient {
         bail!("namespace proofs are not served over the query lane")
     }
 
-    /// Read from this node's own stake table events, the same way the light client API serves
-    /// them, so verifying a peer's answer never needs another peer.
     async fn stake_table_events(&self, epoch: EpochNumber) -> Result<Vec<StakeTableEvent>> {
-        let ctx = self.state.context().await;
-        let node_state = ctx.node_state();
-        let epoch_height = node_state.epoch_height.context("epoch height not set")?;
-        let first_epoch = epoch_from_block_number(node_state.epoch_start_block, epoch_height);
-        let membership = ctx.membership();
-        let membership = &membership;
-        let range = stake_table_l1_range(*epoch, first_epoch, move |epoch| async move {
-            membership
-                .load_epoch_root(EpochNumber::new(epoch))
-                .await?
-                .with_context(|| format!("missing epoch root for epoch {epoch}"))
-        })
-        .await?;
-        StakeTableDataSource::stake_table_events(&self.state, range.start, range.end).await
+        self.ask(QueryRequest::StakeTableEvents(*epoch)).await
     }
 
     async fn cert2(&self, height: u64) -> Result<Option<Certificate2<SeqTypes>>> {
-        match self.ask(QueryRequest::Cert2(height)).await? {
-            QueryResponse::Cert2(cert2) => Ok(Some(cert2)),
-            response => bail!("unexpected response {response:?}"),
-        }
+        self.ask(QueryRequest::Cert2(height)).await.map(Some)
     }
 }

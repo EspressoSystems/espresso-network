@@ -30,11 +30,8 @@ use hotshot_types::{
 };
 
 use crate::{
-    SequencerContext,
-    consensus_handle::ConsensusHandle,
-    context::TaskList,
-    query_peers::{QueryRequest, QueryResponse},
-    state_signature::StateSignatureMemStorage,
+    SequencerContext, consensus_handle::ConsensusHandle, context::TaskList,
+    query_peers::QueryRequest, state_signature::StateSignatureMemStorage,
 };
 
 pub type NodeLightClient = LightClient<SqlStorage, FallbackClient<QueryServiceClient>>;
@@ -79,12 +76,18 @@ pub trait ApiContext: Send + Sync + 'static {
     fn light_client(&self) -> Option<Arc<NodeLightClient>>;
 
     /// Ask staked peers over the cliquenet query lane.
-    fn query_peers(
-        &self,
-        _request: QueryRequest,
-    ) -> BoxFuture<'static, anyhow::Result<QueryResponse>> {
+    fn query_peers(&self, _request: QueryRequest) -> BoxFuture<'static, anyhow::Result<Vec<u8>>> {
         Box::pin(async { anyhow::bail!("this node does not query peers over cliquenet") })
     }
+
+    /// Answer peers' query lane requests with these HTTP API handlers.
+    fn serve_queries_with(
+        &self,
+        _light_client: Arc<dyn espresso_api::DynLightClientApi>,
+        _availability: Arc<dyn espresso_api::DynHotShotAvailabilityApi>,
+    ) {
+    }
+
     fn request_vid_shares(
         &self,
         block_number: u64,
@@ -205,11 +208,16 @@ where
         None
     }
 
-    fn query_peers(
-        &self,
-        request: QueryRequest,
-    ) -> BoxFuture<'static, anyhow::Result<QueryResponse>> {
+    fn query_peers(&self, request: QueryRequest) -> BoxFuture<'static, anyhow::Result<Vec<u8>>> {
         SequencerContext::query_peers(self, request)
+    }
+
+    fn serve_queries_with(
+        &self,
+        light_client: Arc<dyn espresso_api::DynLightClientApi>,
+        availability: Arc<dyn espresso_api::DynHotShotAvailabilityApi>,
+    ) {
+        SequencerContext::serve_queries_with(self, light_client, availability)
     }
 
     fn request_vid_shares(

@@ -42,8 +42,6 @@ pub const FILE_DESCRIPTOR_SET: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "
 
 use tower::Layer;
 
-// Re-exports
-pub use self::axum::{create_router_v1, routes};
 use self::proto::{
     availability_service_server::{AvailabilityService, AvailabilityServiceServer},
     catchup_service_server::{CatchupService, CatchupServiceServer},
@@ -58,6 +56,11 @@ use self::proto::{
     status_service_server::{StatusService, StatusServiceServer},
     submit_service_server::{SubmitService, SubmitServiceServer},
     token_service_server::{TokenService, TokenServiceServer},
+};
+// Re-exports
+pub use self::{
+    axum::{create_router_v1, routes},
+    dyn_api::{DynHotShotAvailabilityApi, DynLightClientApi, Erased},
 };
 
 /// Build a full request URL from a server base URL and a path produced by one of the

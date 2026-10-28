@@ -60,7 +60,7 @@ use crate::{
     consensus_handle::ConsensusHandle,
     external_event_handler::ExternalEventHandler,
     proposal_fetcher::ProposalFetcherConfig,
-    query_peers::{QueryPeers, QueryRequest, QueryResponse},
+    query_peers::{QueryPeers, QueryRequest},
     request_response::{
         RequestResponseProtocol,
         data_source::{DataSource, Storage as RequestResponseStorage},
@@ -287,11 +287,6 @@ where
             max_incoming_requests_per_key: 4,
         };
 
-        let query_storage = match &storage {
-            Some(RequestResponseStorage::Sql(storage)) => Some(Arc::clone(storage)),
-            Some(RequestResponseStorage::Fs(_)) | None => None,
-        };
-
         // Create the request-response protocol
         let request_response_protocol = RequestResponseProtocol::new(
             request_response_config,
@@ -333,9 +328,8 @@ where
         .await
         .with_context(|| "Failed to create external event handler")?;
 
-        let query_peers = query_lane.zip(query_storage).map(|(lane, storage)| {
-            QueryPeers::start(lane, storage, consensus_handle.clone(), pub_key, &mut tasks)
-        });
+        let query_peers = query_lane
+            .map(|lane| QueryPeers::start(lane, consensus_handle.clone(), pub_key, &mut tasks));
 
         let ctx = Self::new(
             consensus_handle,
@@ -463,11 +457,22 @@ where
         self.state_signatures.clone()
     }
 
+    /// Answer peers' query lane requests with these HTTP API handlers.
+    pub(crate) fn serve_queries_with(
+        &self,
+        light_client: Arc<dyn espresso_api::DynLightClientApi>,
+        availability: Arc<dyn espresso_api::DynHotShotAvailabilityApi>,
+    ) {
+        if let Some(peers) = &self.query_peers {
+            peers.serve_with(light_client, availability);
+        }
+    }
+
     /// Ask a staked peer over the cliquenet query lane. The response is unverified.
     pub(crate) fn query_peers(
         &self,
         request: QueryRequest,
-    ) -> BoxFuture<'static, anyhow::Result<QueryResponse>> {
+    ) -> BoxFuture<'static, anyhow::Result<Vec<u8>>> {
         let peers = self.query_peers.clone();
         Box::pin(async move { peers.context("query p2p is off")?.ask(request).await })
     }

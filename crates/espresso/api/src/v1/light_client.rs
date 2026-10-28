@@ -3,9 +3,9 @@
 use std::{collections::HashMap, ops::Range};
 
 use async_trait::async_trait;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum LeafQuery {
     Height(u64),
     Hash(String),
