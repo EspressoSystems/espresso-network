@@ -1444,7 +1444,7 @@ impl L1Client {
         }
     }
 
-    pub fn options(&self) -> &L1ClientOptions {
+    pub(crate) fn options(&self) -> &L1ClientOptions {
         self.transport.options()
     }
 
@@ -1452,7 +1452,8 @@ impl L1Client {
         self.transport.metrics()
     }
 
-    async fn retry_delay(&self) {
+    /// Sleeps for `l1_retry_delay`, the pause between attempts at a failed L1 operation.
+    pub async fn retry_delay(&self) {
         sleep(self.options().l1_retry_delay).await;
     }
 }

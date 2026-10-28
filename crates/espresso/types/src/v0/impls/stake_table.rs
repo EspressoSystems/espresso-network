@@ -14,7 +14,6 @@ use alloy::{
     providers::Provider,
     rpc::types::Filter,
     sol_types::{SolEvent, SolEventInterface},
-    transports::TransportErrorKind,
 };
 use alloy::{
     primitives::{Address, U256, address},
@@ -1367,7 +1366,7 @@ impl Fetcher {
         tracing::info!(%to_block, from_block = ?from_block, "Fetching events from contract");
 
         let generation = self.l1_client.transport.current_transport.read().generation;
-        self.ensure_provider_has_block(finalized).await?;
+        self.verify_l1_provider(finalized, generation).await?;
         let contract_events = Self::fetch_events_from_contract(
             self.l1_client.clone(),
             contract,
@@ -1375,8 +1374,7 @@ impl Fetcher {
             to_block,
         )
         .await?;
-        self.ensure_scan_provider_has_block(finalized, generation)
-            .await?;
+        self.verify_l1_provider(finalized, generation).await?;
 
         // Store only the new events fetched from L1 contract
         tracing::info!(
@@ -1424,56 +1422,19 @@ impl Fetcher {
         Ok(events)
     }
 
-    /// Checks `finalized` again once the scan is done. The logs are only as good as the provider
-    /// that served them, and after a failover since `generation` some chunks may have come from a
-    /// provider nobody checked, so the scan fails even when the provider answering now holds the
-    /// block.
+    /// Fails unless the provider holds `finalized` and is still the one the client used at
+    /// `generation`. The scan is stored as complete, and a provider behind that height, or past it
+    /// on another branch, answers the log queries with the wrong logs and no error. The hash
+    /// commits to every ancestor, so a match covers the scanned range only if no other provider
+    /// served part of it.
     #[cfg(feature = "node")]
-    async fn ensure_scan_provider_has_block(
+    async fn verify_l1_provider(
         &self,
         finalized: L1BlockInfo,
         generation: usize,
     ) -> Result<(), ProviderBlockError> {
-        let options = self.l1_client.options();
-        let check_start = Instant::now();
-        loop {
-            let result = self.ensure_provider_has_block(finalized).await;
-            let switched =
-                self.l1_client.transport.current_transport.read().generation != generation;
-            match result {
-                Ok(()) if switched => {
-                    return Err(ProviderBlockError::Switched {
-                        number: finalized.number,
-                    });
-                },
-                Ok(()) => return Ok(()),
-                // Only a failed fetch on the scan's own provider is retried. It says nothing about
-                // the logs, and giving up discards a scan that on a cold start took hours.
-                Err(err @ ProviderBlockError::Fetch { .. })
-                    if !switched
-                        && check_start.elapsed() < options.l1_events_max_retry_duration =>
-                {
-                    tracing::warn!(
-                        err = %format_args!("{err:#}"),
-                        "failed to check the L1 block after the stake table scan, retrying",
-                    );
-                    sleep(options.l1_retry_delay).await;
-                },
-                Err(err) => return Err(err),
-            }
-        }
-    }
-
-    /// The scan is stored as complete, so the provider answering it must hold `finalized` itself.
-    /// A provider behind that height, or past it on another branch, answers the log queries with
-    /// the wrong logs and no error. The hash commits to every ancestor, so one match covers the
-    /// whole scanned range.
-    #[cfg(feature = "node")]
-    async fn ensure_provider_has_block(
-        &self,
-        finalized: L1BlockInfo,
-    ) -> Result<(), ProviderBlockError> {
-        let generation = self.l1_client.transport.current_transport.read().generation;
+        let transport = &self.l1_client.transport;
+        let answering = transport.current_transport.read().generation;
         let block = tokio::time::timeout(
             self.l1_client.options().l1_request_timeout,
             self.l1_client
@@ -1481,7 +1442,9 @@ impl Fetcher {
                 .get_block_by_number(finalized.number.into()),
         )
         .await
-        .unwrap_or_else(|_| Err(TransportErrorKind::custom_str("L1 request timed out")))
+        .map_err(|_| ProviderBlockError::Timeout {
+            number: finalized.number,
+        })?
         .map_err(|source| ProviderBlockError::Fetch {
             number: finalized.number,
             source,
@@ -1495,11 +1458,16 @@ impl Fetcher {
                 expected: finalized.hash,
                 actual: block.header.hash,
             },
+            Some(_) if transport.current_transport.read().generation != generation => {
+                return Err(ProviderBlockError::Switched {
+                    number: finalized.number,
+                });
+            },
             Some(_) => return Ok(()),
         };
         // Without this every retry asks the same provider again, until the failover revert timer
         // happens to move it.
-        self.l1_client.transport.fail_over(generation);
+        transport.fail_over(answering);
         Err(err)
     }
 

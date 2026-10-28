@@ -776,7 +776,7 @@ pub(crate) async fn prefetch_stake_table_events(
                     err = %format_args!("{err:#}"),
                     "L1 provider cannot vouch for the finalized block yet, retrying stake table prefetch",
                 );
-                tokio::time::sleep(l1_client.options().l1_retry_delay).await;
+                l1_client.retry_delay().await;
             },
             Err(err) => return Err(err.context("prefetching stake table events")),
         }

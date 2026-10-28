@@ -2921,9 +2921,35 @@ mod tests {
         Ok(())
     }
 
-    /// Answers `eth_getBlockByNumber` with `block`, `eth_call` with zero, and `eth_getLogs` with
-    /// `logs`, or with a JSON-RPC error when `block` or `logs` is `None`.
-    async fn serve_provider(block: Option<Value>, logs: Option<Value>) -> Url {
+    fn fake_finalized() -> L1BlockInfo {
+        L1BlockInfo {
+            number: 16,
+            hash: B256::repeat_byte(1),
+            ..Default::default()
+        }
+    }
+
+    enum BlockReply {
+        Holds,
+        Missing,
+        Fails,
+    }
+
+    /// Answers `eth_getBlockByNumber` for [`fake_finalized`] as `block` says, `eth_call` with zero,
+    /// and `eth_getLogs` with `logs`, or with a JSON-RPC error when `logs` is `None`.
+    async fn serve_provider(block: BlockReply, logs: Option<Value>) -> Url {
+        let block = match block {
+            BlockReply::Holds => {
+                let finalized = fake_finalized();
+                let mut block =
+                    alloy::rpc::types::Block::<alloy::rpc::types::Transaction>::default();
+                block.header.hash = finalized.hash;
+                block.header.inner.number = finalized.number;
+                Some(json!(block))
+            },
+            BlockReply::Missing => Some(Value::Null),
+            BlockReply::Fails => None,
+        };
         let route = warp::post()
             .and(warp::body::json::<Value>())
             .map(move |req: Value| {
@@ -2949,42 +2975,42 @@ mod tests {
         test_server::serve_on_random_port(route).await
     }
 
+    fn fake_l1_fetcher<P: TestablePersistence>(
+        persistence: &P,
+        options: L1ClientOptions,
+        urls: [Url; 2],
+    ) -> Fetcher {
+        Fetcher::new(
+            Arc::new(NullStateCatchup::default()),
+            Arc::new(Mutex::new(persistence.clone())),
+            options.connect(Vec::from(urls)).unwrap(),
+            espresso_types::v0_3::ChainConfig::default(),
+        )
+    }
+
     #[rstest_reuse::apply(persistence_types)]
     pub async fn test_scan_refuses_a_lagging_provider_reached_by_failover<
         P: TestablePersistence,
     >(
         _p: PhantomData<P>,
     ) -> anyhow::Result<()> {
-        use espresso_types::v0_3::{ChainConfig, ProviderBlockError};
+        use espresso_types::v0_3::ProviderBlockError;
 
-        let finalized = L1BlockInfo {
-            number: 16,
-            hash: B256::repeat_byte(1),
-            ..Default::default()
-        };
-        let mut block = alloy::rpc::types::Block::<alloy::rpc::types::Transaction>::default();
-        block.header.hash = finalized.hash;
-        block.header.inner.number = finalized.number;
-
-        let ahead_but_failing_logs = serve_provider(Some(json!(block)), None).await;
-        let behind = serve_provider(Some(Value::Null), Some(json!([]))).await;
-        let l1_client = L1ClientOptions {
-            l1_retry_delay: Duration::from_millis(10),
-            l1_consecutive_failure_tolerance: 1,
-            l1_frequent_failure_tolerance: Duration::ZERO,
-            l1_events_max_retry_duration: Duration::from_secs(5),
-            ..Default::default()
-        }
-        .connect(Vec::from([ahead_but_failing_logs, behind]))
-        .unwrap();
-
+        let finalized = fake_finalized();
+        let ahead_but_failing_logs = serve_provider(BlockReply::Holds, None).await;
+        let behind = serve_provider(BlockReply::Missing, Some(json!([]))).await;
         let storage = P::tmp_storage().await;
         let persistence = P::options(&storage).create().await.unwrap();
-        let fetcher = Fetcher::new(
-            Arc::new(NullStateCatchup::default()),
-            Arc::new(Mutex::new(persistence.clone())),
-            l1_client,
-            ChainConfig::default(),
+        let fetcher = fake_l1_fetcher(
+            &persistence,
+            L1ClientOptions {
+                l1_retry_delay: Duration::from_millis(10),
+                l1_consecutive_failure_tolerance: 1,
+                l1_frequent_failure_tolerance: Duration::ZERO,
+                l1_events_max_retry_duration: Duration::from_secs(5),
+                ..Default::default()
+            },
+            [ahead_but_failing_logs, behind],
         );
 
         let err = fetcher
@@ -3011,38 +3037,25 @@ mod tests {
     >(
         _p: PhantomData<P>,
     ) -> anyhow::Result<()> {
-        use espresso_types::v0_3::{ChainConfig, ProviderBlockError};
+        use espresso_types::v0_3::ProviderBlockError;
 
-        let finalized = L1BlockInfo {
-            number: 16,
-            hash: B256::repeat_byte(1),
-            ..Default::default()
-        };
-        let mut block = alloy::rpc::types::Block::<alloy::rpc::types::Transaction>::default();
-        block.header.hash = finalized.hash;
-        block.header.inner.number = finalized.number;
-
+        let finalized = fake_finalized();
         // The scan fails over to `serving_logs`, whose failed block check fails back to
         // `holding_block`.
-        let holding_block = serve_provider(Some(json!(block)), None).await;
-        let serving_logs = serve_provider(None, Some(json!([]))).await;
-        let l1_client = L1ClientOptions {
-            l1_retry_delay: Duration::from_millis(10),
-            l1_consecutive_failure_tolerance: 1,
-            l1_frequent_failure_tolerance: Duration::ZERO,
-            l1_events_max_retry_duration: Duration::from_secs(5),
-            ..Default::default()
-        }
-        .connect(Vec::from([holding_block, serving_logs]))
-        .unwrap();
-
+        let holding_block = serve_provider(BlockReply::Holds, None).await;
+        let serving_logs = serve_provider(BlockReply::Fails, Some(json!([]))).await;
         let storage = P::tmp_storage().await;
         let persistence = P::options(&storage).create().await.unwrap();
-        let fetcher = Fetcher::new(
-            Arc::new(NullStateCatchup::default()),
-            Arc::new(Mutex::new(persistence.clone())),
-            l1_client,
-            ChainConfig::default(),
+        let fetcher = fake_l1_fetcher(
+            &persistence,
+            L1ClientOptions {
+                l1_retry_delay: Duration::from_millis(10),
+                l1_consecutive_failure_tolerance: 1,
+                l1_frequent_failure_tolerance: Duration::ZERO,
+                l1_events_max_retry_duration: Duration::from_secs(5),
+                ..Default::default()
+            },
+            [holding_block, serving_logs],
         );
 
         let result = fetcher
@@ -3066,33 +3079,20 @@ mod tests {
     >(
         _p: PhantomData<P>,
     ) -> anyhow::Result<()> {
-        use espresso_types::v0_3::{ChainConfig, ProviderBlockError};
+        use espresso_types::v0_3::ProviderBlockError;
 
-        let finalized = L1BlockInfo {
-            number: 16,
-            hash: B256::repeat_byte(1),
-            ..Default::default()
-        };
-        let mut block = alloy::rpc::types::Block::<alloy::rpc::types::Transaction>::default();
-        block.header.hash = finalized.hash;
-        block.header.inner.number = finalized.number;
-
-        let behind = serve_provider(Some(Value::Null), Some(json!([]))).await;
-        let holding_block = serve_provider(Some(json!(block)), Some(json!([]))).await;
-        let l1_client = L1ClientOptions {
-            l1_retry_delay: Duration::from_millis(10),
-            ..Default::default()
-        }
-        .connect(Vec::from([behind, holding_block]))
-        .unwrap();
-
+        let finalized = fake_finalized();
+        let behind = serve_provider(BlockReply::Missing, Some(json!([]))).await;
+        let holding_block = serve_provider(BlockReply::Holds, Some(json!([]))).await;
         let storage = P::tmp_storage().await;
         let persistence = P::options(&storage).create().await.unwrap();
-        let fetcher = Fetcher::new(
-            Arc::new(NullStateCatchup::default()),
-            Arc::new(Mutex::new(persistence.clone())),
-            l1_client,
-            ChainConfig::default(),
+        let fetcher = fake_l1_fetcher(
+            &persistence,
+            L1ClientOptions {
+                l1_retry_delay: Duration::from_millis(10),
+                ..Default::default()
+            },
+            [behind, holding_block],
         );
 
         let err = fetcher

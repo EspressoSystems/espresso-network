@@ -539,6 +539,8 @@ pub enum ProviderBlockError {
         #[source]
         source: RpcError<TransportErrorKind>,
     },
+    #[error("Timed out fetching L1 block {number}")]
+    Timeout { number: u64 },
     #[error("L1 provider changed during the stake table scan up to block {number}")]
     Switched { number: u64 },
 }
