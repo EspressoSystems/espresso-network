@@ -25,7 +25,6 @@ The default shell is the small, fast daily driver. Add-on shells contain everyth
 Standalone shells:
 
 - `nix develop .#echidna`: `slither`, `echidna`, `crytic-compile`
-- `nix develop .#crossShell`, `.#armCrossShell`: rust cross-compile (musl)
 - `nix develop .#nightly`, `.#coverage`, `.#rustShell`: minimal rust variants
 
 Recipes that need an add-on shell declare it with `[script("scripts/with-tools", "<devshell>", "<command>"...)]`. The
