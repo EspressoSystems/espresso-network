@@ -83,10 +83,8 @@ impl ErrorResponse {
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         let status = match &self {
-            ApiError::BadRequest(_) => StatusCode::BAD_REQUEST,
-            // v1 clients poll for the next block by retrying on the 404 a future height has
-            // always returned, so only v2 gets the distinct code.
-            ApiError::NotFound(_) | ApiError::OutOfRange(_) => StatusCode::NOT_FOUND,
+            ApiError::BadRequest(_) | ApiError::OutOfRange(_) => StatusCode::BAD_REQUEST,
+            ApiError::NotFound(_) => StatusCode::NOT_FOUND,
             ApiError::Gone(_) => StatusCode::GONE,
             ApiError::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
             ApiError::Unavailable(_) => StatusCode::SERVICE_UNAVAILABLE,
