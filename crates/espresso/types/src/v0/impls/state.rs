@@ -2555,6 +2555,37 @@ mod test {
     }
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_header_version_must_match_view_version() {
+        let instance = NodeState::mock().with_genesis_version(EPOCH_REWARD_VERSION);
+        let (payload, metadata) =
+            Payload::from_transactions(&[], &instance.genesis_state, &instance)
+                .await
+                .unwrap();
+        let v5_header = Header::genesis(&instance, payload, &metadata, EPOCH_REWARD_VERSION);
+
+        let err = ValidatedTransition::new(
+            ValidatedState::default(),
+            &v5_header,
+            Proposal::new(&v5_header, 0),
+            None,
+            NEW_PROTOCOL_VERSION,
+            OffsetDateTime::now_utc(),
+            None,
+            None,
+        )
+        .validate()
+        .unwrap_err();
+
+        assert_eq!(
+            err,
+            ProposalValidationError::HeaderVersionMismatch {
+                expected: NEW_PROTOCOL_VERSION,
+                proposal: EPOCH_REWARD_VERSION,
+            }
+        );
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_regression_slow_validation_timestamp_drift() {
         let instance = NodeState::mock_v2();
         let (parent, block_size) = Transaction::of_size(10).into_mock_header().await;
