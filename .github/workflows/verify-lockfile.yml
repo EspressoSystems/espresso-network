@@ -1,5 +1,8 @@
 # Fails when .github/workflows/actions.lock is out of sync with the workflows,
 # or a locked commit no longer verifies upstream.
+#
+# To fix: run `just lock-actions` and commit actions.lock. On a merge conflict in
+# actions.lock, take main's copy and re-run it rather than merging by hand.
 name: Verify actions lockfile
 
 on:

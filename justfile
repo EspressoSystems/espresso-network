@@ -107,6 +107,12 @@ proto-check $base="origin/main":
     git archive "$merge_base" crates/espresso/api/proto | tar -x -C "$dir"
     buf breaking crates/espresso/api/proto --against "$dir/crates/espresso/api/proto"
 
+# Needs `gh extension install github/gh-actions-lock --pin v0.4.0`. `--relock` advances
+# branch refs such as `@main`; `--verify` checks without writing.
+# Update .github/workflows/actions.lock after changing a `uses:` line or on a conflict in it
+lock-actions *args:
+    gh actions-lock --ignore-local-actions {{args}}
+
 # slow-tests picks its storage backend at compile time, so check its sqlite variant too
 clippy *args:
     cargo clippy --workspace --features testing --all-targets {{args}}
