@@ -384,20 +384,6 @@ impl<TYPES: NodeType> VoteParticipation<TYPES> {
                     self.epoch.saturating_sub(EPOCH_PARTICIPATION_HISTORY),
                 ));
 
-        self.previous_epoch_participation.insert(
-            self.epoch,
-            (
-                self.current_epoch_participation.clone(),
-                self.current_epoch_num_views,
-            ),
-        );
-
-        self.previous_epoch_participation =
-            self.previous_epoch_participation
-                .split_off(&EpochNumber::new(
-                    self.epoch.saturating_sub(EPOCH_PARTICIPATION_HISTORY),
-                ));
-
         self.epoch = epoch;
         self.current_epoch_num_views = 0;
         self.view_set = HashSet::new();
