@@ -907,9 +907,13 @@ mod test {
             PhantomData,
         );
 
-        quorum
+        let err = quorum
             .verify_cert2(&cert2, NEW_PROTOCOL_VERSION)
             .await
             .unwrap_err();
+        assert!(
+            err.to_string().contains("genesis view"),
+            "unexpected error: {err:#}"
+        );
     }
 }
