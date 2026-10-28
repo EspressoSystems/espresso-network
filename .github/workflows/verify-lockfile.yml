@@ -1,0 +1,26 @@
+# Fails when .github/workflows/actions.lock is out of sync with the workflows,
+# or a locked commit no longer verifies upstream.
+name: Verify actions lockfile
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      # v0.4.0; the lockfile format (v0.0.3) needs at least this version.
+      - run: gh extension install github/gh-actions-lock --pin 759f9c2d44e8599fa5b29224e5a30c58b3555211
+      # The compile-metrics local actions call remote actions, which a `./` path can't lock.
+      - run: gh actions-lock --verify --ignore-local-actions

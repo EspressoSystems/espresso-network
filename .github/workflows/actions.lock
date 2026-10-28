@@ -175,6 +175,8 @@ workflows:
         - 'actions/checkout@v7.0.1'
         - 'cachix/install-nix-action@v31.11.3'
         - 'determinatesystems/update-flake-lock@v28'
+    '.github/workflows/verify-lockfile.yml':
+        - 'actions/checkout@v7.0.1'
     '.github/workflows/verify-proposals.yml':
         - 'actions/checkout@v7.0.1'
         - 'marocchino/sticky-pull-request-comment@v3.0.5'
