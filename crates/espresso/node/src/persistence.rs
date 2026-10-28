@@ -305,9 +305,9 @@ mod tests {
 
     #[rstest_reuse::template]
     #[rstest::rstest]
-    #[case(PhantomData::<crate::persistence::sql::postgres::Persistence>)]
-    #[case(PhantomData::<crate::persistence::sql::sqlite::Persistence>)]
-    #[case(PhantomData::<crate::persistence::fs::Persistence>)]
+    #[case::postgres(PhantomData::<crate::persistence::sql::postgres::Persistence>)]
+    #[case::sqlite(PhantomData::<crate::persistence::sql::sqlite::Persistence>)]
+    #[case::fs(PhantomData::<crate::persistence::fs::Persistence>)]
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     pub fn persistence_types<P: TestablePersistence>(#[case] _p: PhantomData<P>) {}
 
@@ -1998,8 +1998,8 @@ mod tests {
     /// sql-only: the fs backend keeps the pop-oldest cursor and skips gaps (the consumer
     /// re-fetches missing blocks), trading gap-fill delivery for cheap decide passes.
     #[rstest::rstest]
-    #[case(PhantomData::<crate::persistence::sql::postgres::Persistence>)]
-    #[case(PhantomData::<crate::persistence::sql::sqlite::Persistence>)]
+    #[case::postgres(PhantomData::<crate::persistence::sql::postgres::Persistence>)]
+    #[case::sqlite(PhantomData::<crate::persistence::sql::sqlite::Persistence>)]
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     pub async fn test_decide_gap_holds_events<P: TestablePersistence>(#[case] _p: PhantomData<P>) {
         let tmp = P::tmp_storage().await;
@@ -2043,8 +2043,8 @@ mod tests {
     ///
     /// sql-only: see [`test_decide_gap_holds_events`].
     #[rstest::rstest]
-    #[case(PhantomData::<crate::persistence::sql::postgres::Persistence>)]
-    #[case(PhantomData::<crate::persistence::sql::sqlite::Persistence>)]
+    #[case::postgres(PhantomData::<crate::persistence::sql::postgres::Persistence>)]
+    #[case::sqlite(PhantomData::<crate::persistence::sql::sqlite::Persistence>)]
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     pub async fn test_decide_gap_fill_delivers_all<P: TestablePersistence>(
         #[case] _p: PhantomData<P>,

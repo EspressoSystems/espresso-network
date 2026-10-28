@@ -3026,9 +3026,9 @@ mod api_tests {
 
     #[rstest_reuse::template]
     #[rstest::rstest]
-    #[case(PhantomData::<crate::api::sql::postgres::DataSource>)]
-    #[case(PhantomData::<crate::api::sql::sqlite::DataSource>)]
-    #[case(PhantomData::<crate::api::fs::DataSource>)]
+    #[case::postgres(PhantomData::<crate::api::sql::postgres::DataSource>)]
+    #[case::sqlite(PhantomData::<crate::api::sql::sqlite::DataSource>)]
+    #[case::fs(PhantomData::<crate::api::fs::DataSource>)]
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     pub fn testable_sequencer_data_source<D: TestableSequencerDataSource>(
         #[case] _d: PhantomData<D>,
