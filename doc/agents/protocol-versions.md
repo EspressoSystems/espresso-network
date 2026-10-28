@@ -18,5 +18,6 @@
   `builder_commitment`; `LargeBlock` chain-config change raises `max_block_size`, run by the new protocol's upgrade
   sub-protocol (`crates/hotshot/new-protocol/src/upgrade.rs`)
 
-What a network runs: `base_version` and `upgrade_version` in `data/genesis/<network>.toml`. Live confirmation is
-`consensus_genesis{base_version,upgrade_version}` from `/v1/status/metrics`, see `doc/agents/live-chains.md`.
+What a network runs: `consensus_genesis{base_version,upgrade_version}` from `/v1/status/metrics`, see
+`doc/agents/live-chains.md`. `base_version` and `upgrade_version` in `data/genesis/<network>.toml` are what the next
+release configures and can be ahead of the deployed network.
