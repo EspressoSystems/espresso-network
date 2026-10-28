@@ -577,13 +577,13 @@ pub struct ConsensusPruningOptions {
     /// storage exceeds TARGET_USAGE. Disk use is this many views times this node's share size,
     /// which grows with block size and shrinks as the committee grows.
     ///
-    /// The default of 1728000 views equates to approximately 10 days (864000 seconds) at an average
+    /// The default of 1209600 views equates to approximately 7 days (604800 seconds) at an average
     /// view time of 0.5s, the mainnet view time.
     #[clap(
         name = "VID_SHARE_RETENTION",
         long = "consensus-storage-vid-share-retention",
         env = "ESPRESSO_NODE_CONSENSUS_STORAGE_VID_SHARE_RETENTION",
-        default_value = "1728000"
+        default_value = "1209600"
     )]
     pub(crate) vid_share_retention: u64,
 

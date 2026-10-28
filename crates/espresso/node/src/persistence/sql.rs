@@ -790,11 +790,8 @@ impl Persistence {
                 gc_opt = ?self.gc_opt,
                 "consensus storage is running out of space, pruning to minimum retention"
             );
-            self.prune_below(
-                cur_view.saturating_sub(self.gc_opt.minimum_retention),
-                vid_share_view,
-            )
-            .await?;
+            self.prune_below(cur_view.saturating_sub(self.gc_opt.minimum_retention), 0)
+                .await?;
         }
         Ok(())
     }

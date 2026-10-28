@@ -2327,6 +2327,7 @@ impl From<crate::options::SqlStorageConfig> for proto::SqlStorage {
                 target_retention: sql.consensus_pruning.target_retention,
                 minimum_retention: sql.consensus_pruning.minimum_retention,
                 target_usage: sql.consensus_pruning.target_usage,
+                vid_share_retention: sql.consensus_pruning.vid_share_retention,
             }),
         }
     }
@@ -6082,6 +6083,7 @@ mod tests {
                     target_retention: sql.consensus_pruning.target_retention,
                     minimum_retention: sql.consensus_pruning.minimum_retention,
                     target_usage: sql.consensus_pruning.target_usage,
+                    vid_share_retention: sql.consensus_pruning.vid_share_retention,
                 }),
             })
         );

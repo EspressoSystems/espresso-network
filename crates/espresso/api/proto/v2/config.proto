@@ -252,6 +252,9 @@ message ConsensusPruningConfig {
 
   // Bytes retained before garbage collection gets more aggressive
   uint64 target_usage = 3;
+
+  // Views of this node's VID shares retained, not counted toward `target_usage`
+  uint64 vid_share_retention = 4;
 }
 
 // Durations are whole milliseconds, rounded down

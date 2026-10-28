@@ -201,7 +201,7 @@ storage:
     consensus_pruning:
       target_retention: 302000
       minimum_retention: 130000
-      vid_share_retention: 1728000
+      vid_share_retention: 1209600
       target_usage: 1000000000
 modules:
   http:
