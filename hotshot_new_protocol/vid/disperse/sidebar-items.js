@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"enum":["VidDisperseError"],"fn":["bucketize","handle_vid_disperse_request"],"static":["NUM_THREADS"],"struct":["VidDisperseOutput","VidDisperseRequest","VidDisperser"]};
+window.SIDEBAR_ITEMS = {"enum":["VidDisperseError"],"fn":["bucketize","disperse_namespace","disperse_payload","fragments","handle_vid_disperse_request"],"static":["NUM_THREADS"],"struct":["VidDisperseOutput","VidDisperseRequest","VidDisperser"]};

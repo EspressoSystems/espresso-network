@@ -13,10 +13,11 @@
 <a href=#13 id=13 data-nosnippet>13</a><span class="kw">pub type </span>AvidmGf2Commitment = vid::avidm_gf2::namespaced::NsAvidmGf2Commit;
 <a href=#14 id=14 data-nosnippet>14</a><span class="kw">pub type </span>AvidmGf2Share = vid::avidm_gf2::namespaced::NsAvidmGf2Share;
 <a href=#15 id=15 data-nosnippet>15</a><span class="kw">pub type </span>AvidmGf2Common = vid::avidm_gf2::namespaced::NsAvidmGf2Common;
-<a href=#16 id=16 data-nosnippet>16</a>
-<a href=#17 id=17 data-nosnippet>17</a><span class="kw">pub fn </span>init_avidm_gf2_param(total_weight: usize) -&gt; <span class="prelude-ty">Result</span>&lt;AvidmGf2Param&gt; {
-<a href=#18 id=18 data-nosnippet>18</a>    <span class="kw">let </span>recovery_threshold = total_weight.div_ceil(<span class="number">3</span>);
-<a href=#19 id=19 data-nosnippet>19</a>    AvidmGf2Param::new(recovery_threshold, total_weight)
-<a href=#20 id=20 data-nosnippet>20</a>        .map_err(|err| <span class="macro">error!</span>(<span class="string">"Failed to initialize VID: {}"</span>, err.to_string()))
-<a href=#21 id=21 data-nosnippet>21</a>}
+<a href=#16 id=16 data-nosnippet>16</a><span class="kw">pub type </span>AvidmGf2NsDispersal = vid::avidm_gf2::namespaced::NsDispersal;
+<a href=#17 id=17 data-nosnippet>17</a>
+<a href=#18 id=18 data-nosnippet>18</a><span class="kw">pub fn </span>init_avidm_gf2_param(total_weight: usize) -&gt; <span class="prelude-ty">Result</span>&lt;AvidmGf2Param&gt; {
+<a href=#19 id=19 data-nosnippet>19</a>    <span class="kw">let </span>recovery_threshold = total_weight.div_ceil(<span class="number">3</span>);
+<a href=#20 id=20 data-nosnippet>20</a>    AvidmGf2Param::new(recovery_threshold, total_weight)
+<a href=#21 id=21 data-nosnippet>21</a>        .map_err(|err| <span class="macro">error!</span>(<span class="string">"Failed to initialize VID: {}"</span>, err.to_string()))
+<a href=#22 id=22 data-nosnippet>22</a>}
 </code></pre></div></section></main></body></html>
