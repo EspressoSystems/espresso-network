@@ -13737,9 +13737,18 @@ mod test {
 
             // HTTP status codes for common failure cases that clients depend on.
 
-            // Requesting a leaf far ahead of the chain tip times out and returns
-            // 404 Not Found.
-            assert_endpoint_status(&http, api_port, "availability/leaf/999999", 404).await?;
+            // A leaf above the node's block height is not yet available, which v2 reports as
+            // OUT_OF_RANGE so clients can tell it from a missing one.
+            assert_endpoint_status(&http, api_port, "availability/leaf/999999", 400).await?;
+            let body: serde_json::Value = http
+                .get(format!(
+                    "http://localhost:{api_port}/v2/availability/leaf?height=999999"
+                ))
+                .send()
+                .await?
+                .json()
+                .await?;
+            assert_eq!(body["error"]["status"], "OUT_OF_RANGE", "{body}");
 
             // Requesting a block range that exceeds the per-request limit
             // returns 400 Bad Request.

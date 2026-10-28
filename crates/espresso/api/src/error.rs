@@ -17,6 +17,9 @@ pub enum AvailabilityError {
     /// Pruned by this node (410).
     #[error("{0}")]
     Pruned(String),
+    /// At or above this node's block height, so retrying later can succeed (400 / OUT_OF_RANGE).
+    #[error("{0}")]
+    NotYetAvailable(String),
 }
 
 /// Why a node refused a transaction. Downcast by [`classify`] to pick the status code.
@@ -43,6 +46,8 @@ pub enum ApiError {
     Internal(anyhow::Error),
     /// The node cannot serve the request right now (maps to 503 Service Unavailable / UNAVAILABLE)
     Unavailable(anyhow::Error),
+    /// Past this node's block height (maps to 400 Bad Request / OUT_OF_RANGE)
+    OutOfRange(anyhow::Error),
 }
 
 impl fmt::Display for ApiError {
@@ -52,7 +57,8 @@ impl fmt::Display for ApiError {
             | ApiError::NotFound(err)
             | ApiError::Gone(err)
             | ApiError::Internal(err)
-            | ApiError::Unavailable(err) => {
+            | ApiError::Unavailable(err)
+            | ApiError::OutOfRange(err) => {
                 // Both transports render handler errors through this impl (v1 via the axum
                 // handlers, v2 via `to_status`), so a provider credential in the message is
                 // removed once, here.
@@ -69,7 +75,8 @@ impl std::error::Error for ApiError {
             | ApiError::NotFound(err)
             | ApiError::Gone(err)
             | ApiError::Internal(err)
-            | ApiError::Unavailable(err) => err.source(),
+            | ApiError::Unavailable(err)
+            | ApiError::OutOfRange(err) => err.source(),
         }
     }
 }
@@ -87,6 +94,7 @@ pub fn classify(err: anyhow::Error) -> ApiError {
     match err.downcast_ref::<AvailabilityError>() {
         Some(AvailabilityError::NotFound(_)) => ApiError::NotFound(err),
         Some(AvailabilityError::Pruned(_)) => ApiError::Gone(err),
+        Some(AvailabilityError::NotYetAvailable(_)) => ApiError::OutOfRange(err),
         Some(AvailabilityError::RangeExceeded(_) | AvailabilityError::BadRequest(_)) => {
             ApiError::BadRequest(err)
         },
@@ -105,6 +113,7 @@ pub fn to_status(err: anyhow::Error) -> tonic::Status {
         ApiError::BadRequest(_) => tonic::Status::invalid_argument(message),
         ApiError::Internal(_) => tonic::Status::internal(message),
         ApiError::Unavailable(_) => tonic::Status::unavailable(message),
+        ApiError::OutOfRange(_) => tonic::Status::out_of_range(message),
     }
 }
 
@@ -152,5 +161,13 @@ mod tests {
             "state at height 7".to_string(),
         )));
         assert!(matches!(err, ApiError::Gone(_)), "{err}");
+    }
+
+    #[test]
+    fn availability_not_yet_available_maps_to_out_of_range() {
+        let status = to_status(anyhow::Error::new(AvailabilityError::NotYetAvailable(
+            "leaf 7".to_string(),
+        )));
+        assert_eq!(status.code(), tonic::Code::OutOfRange);
     }
 }
