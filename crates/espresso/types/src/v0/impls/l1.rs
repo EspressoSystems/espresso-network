@@ -636,6 +636,25 @@ impl Service<RequestPacket> for SwitchingTransport {
 
 #[cfg(feature = "node")]
 impl SwitchingTransport {
+    /// Moves to the next provider, for an answer that is a healthy response but wrong, which the
+    /// transport never scores. Does nothing once the transport has left `generation`, so a stale
+    /// verdict cannot skip the provider that replaced the one it judged.
+    pub(crate) fn fail_over(&self, generation: usize) {
+        let current_transport = self.current_transport.read().clone();
+        if current_transport.generation != generation {
+            return;
+        }
+        {
+            let mut status = current_transport.status.write();
+            if status.shutting_down {
+                return;
+            }
+            status.shutting_down = true;
+        }
+        self.metrics.failovers.add(1);
+        self.switch_to(generation + 1, current_transport);
+    }
+
     fn switch_to(&self, next_gen: usize, current_transport: SingleTransport) -> SingleTransport {
         let next_index = next_gen % self.urls.len();
         let url = self.urls[next_index].clone();
@@ -1433,7 +1452,8 @@ impl L1Client {
         self.transport.metrics()
     }
 
-    async fn retry_delay(&self) {
+    /// Sleeps for `l1_retry_delay`, the pause between attempts at a failed L1 operation.
+    pub async fn retry_delay(&self) {
         sleep(self.options().l1_retry_delay).await;
     }
 }

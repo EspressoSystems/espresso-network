@@ -135,9 +135,11 @@ rstest_reuse = { workspace = true }
 staking-cli = { workspace = true }
 tempfile = { workspace = true }
 test-log = { workspace = true }
+test-server = { workspace = true }
 test-utils = { workspace = true }
 tokio = { workspace = true, features = ["io-util", "net", "test-util"] }
 tokio-tungstenite = { workspace = true }
+warp = { workspace = true }
 
 [lints]
 workspace = true
