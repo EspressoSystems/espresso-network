@@ -65,8 +65,13 @@ impl Client for PeerClient {
         self.ask(QueryRequest::LeafProof { leaf, finalized }).await
     }
 
-    async fn header_proof(&self, _root: u64, _id: BlockId<SeqTypes>) -> Result<HeaderProof> {
-        bail!("header proofs are not served over the query lane")
+    async fn header_proof(&self, root: u64, id: BlockId<SeqTypes>) -> Result<HeaderProof> {
+        let header = match id {
+            BlockId::Number(n) => v1::HeaderQuery::Height(n as u64),
+            BlockId::Hash(hash) => v1::HeaderQuery::Hash(hash.to_string()),
+            BlockId::PayloadHash(hash) => v1::HeaderQuery::PayloadHash(hash.to_string()),
+        };
+        self.ask(QueryRequest::HeaderProof { root, header }).await
     }
 
     async fn get_leaves_in_range(

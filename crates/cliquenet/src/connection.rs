@@ -78,8 +78,8 @@ impl Connection {
     /// Connect to `peer` at `addr` and open `lane`.
     ///
     /// A consensus connection is retried until it succeeds. A query
-    /// connection runs the connect retry schedule once and returns `None`
-    /// when the party refused the lane or could not be reached in time.
+    /// connection gets one attempt and returns `None` when the party refused
+    /// the lane or could not be reached.
     pub async fn connect(
         conf: Arc<Config>,
         peer: PublicKey,
@@ -110,11 +110,7 @@ impl Connection {
         loop {
             let delay = match backoff.take() {
                 Some(d) => d,
-                None => match (delays.next(), lane) {
-                    (Some(d), _) => d,
-                    (None, Lane::Consensus) => last_delay,
-                    (None, Lane::Query) => return None,
-                },
+                None => delays.next().unwrap_or(last_delay),
             };
             sleep(delay).await;
 
@@ -161,6 +157,10 @@ impl Connection {
                 Err(err) => {
                     warn!(name = %conf.name, %node, %peer, %addr, %err, "connect/handshake error")
                 },
+            }
+            // The next send redials a query lane, so retrying here would only hold a stale task.
+            if lane == Lane::Query {
+                return None;
             }
         }
     }

@@ -38,6 +38,10 @@ pub enum QueryRequest {
         leaf: v1::LeafQuery,
         finalized: Option<u64>,
     },
+    HeaderProof {
+        root: u64,
+        header: v1::HeaderQuery,
+    },
     Leaves(Vec<Range<u64>>),
     PayloadProof(u64),
     StakeTableEvents(u64),
@@ -261,6 +265,9 @@ async fn answer(handlers: &QueryHandlers, request: QueryRequest) -> Result<Erase
     match request {
         QueryRequest::LeafProof { leaf, finalized } => {
             light_client.get_leaf_proof(leaf, finalized).await
+        },
+        QueryRequest::HeaderProof { root, header } => {
+            light_client.get_header_proof(root, header).await
         },
         QueryRequest::Leaves(ranges) => availability.get_leaf_ranges(ranges).await,
         QueryRequest::PayloadProof(height) => light_client.get_payload_proof(height).await,

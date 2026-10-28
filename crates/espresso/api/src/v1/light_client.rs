@@ -13,7 +13,7 @@ pub enum LeafQuery {
     PayloadHash(String),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum HeaderQuery {
     Height(u64),
     Hash(String),
