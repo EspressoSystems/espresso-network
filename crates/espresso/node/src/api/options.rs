@@ -28,10 +28,13 @@ use super::{
     update::{ApiEventConsumer, ApiSink},
 };
 use crate::{
-    api::LightClientProvider, catchup::CatchupStorage, context::TaskList,
-    options::PublicNodeConfig, persistence,
+    api::LightClientProvider,
+    catchup::CatchupStorage,
+    context::TaskList,
+    options::PublicNodeConfig,
+    persistence,
     request_response::data_source::Storage as RequestResponseStorage,
-    state::update_state_storage_loop,
+    state::{EmptyStateStart, update_state_storage_loop},
 };
 
 #[derive(Clone, Debug)]
@@ -351,9 +354,14 @@ impl Options {
             let state = state.clone();
             async move { state.node_state().await }
         };
+        let empty_state_start = if mod_opt.prune {
+            EmptyStateStart::RecentBoundary
+        } else {
+            EmptyStateStart::Genesis
+        };
         tasks.spawn(
             "merklized state storage update loop",
-            update_state_storage_loop(ds.clone(), get_node_state, light_client),
+            update_state_storage_loop(ds.clone(), get_node_state, light_client, empty_state_start),
         );
 
         // Archive mode disables the pruner, so nothing else bounds the merklized state tables.

@@ -52,8 +52,11 @@ just demo-native                      # local network via process-compose
 - **Node** (`crates/espresso/node/src/lib.rs`): generic over `N: ConnectedNetwork`, `P: SequencerPersistence`.
 - **ValidatedState** (`crates/espresso/types/src/v0/impls/state.rs`): four merkle trees (block, fee, reward v1, reward
   v2) plus chain config; `validate_and_apply_header()` is the state transition. Persisting the merklized state is
-  `crates/espresso/node/src/state.rs`: a loop that replays every leaf from its newest snapshot. Leaves and snapshot
-  reads the data pruner has already deleted fall back to peers; the state pruner never passes that snapshot.
+  `crates/espresso/node/src/state.rs`: a loop that replays every leaf from its newest snapshot. With no state, it first
+  stores a snapshot at a recent epoch boundary, from peers, on a pruned node; archive nodes and nodes without a pruner
+  replay from genesis, which gives complete trees. A state that started at a boundary stays incomplete after a switch to
+  `--archive`, and the loop logs an error at start. Leaves the data pruner has already deleted, and state the local
+  snapshot lacks, come from peers; the state pruner never passes that snapshot.
 - **HotShot SystemContext** (`crates/hotshot/hotshot/src/lib.rs`): tasks via `ConsensusTaskRegistry`, broadcast channels
   with `HotShotEvent` variants. `EpochMembershipCoordinator` manages per-epoch stake tables.
 - **L1Client** (`crates/espresso/types/src/v0/impls/l1.rs`): tracks `head` and `finalized`; reads use

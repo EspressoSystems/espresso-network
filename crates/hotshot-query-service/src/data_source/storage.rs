@@ -505,4 +505,5 @@ where
 #[async_trait]
 pub trait MerklizedStateHeightStorage {
     async fn get_last_state_height(&mut self) -> QueryResult<usize>;
+    async fn load_state_start_height(&mut self) -> QueryResult<Option<u64>>;
 }
