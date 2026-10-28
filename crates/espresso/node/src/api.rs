@@ -13737,9 +13737,9 @@ mod test {
 
             // HTTP status codes for common failure cases that clients depend on.
 
-            // A leaf above the node's block height is not yet available, a 400 rather than the
-            // 404 of a missing one, and v2 names it OUT_OF_RANGE.
-            assert_endpoint_status(&http, api_port, "availability/leaf/999999", 400).await?;
+            // A leaf above the node's block height stays a 404 on v1, and v2 reports it as
+            // OUT_OF_RANGE so clients can tell it from a missing one.
+            assert_endpoint_status(&http, api_port, "availability/leaf/999999", 404).await?;
             let body: serde_json::Value = http
                 .get(format!(
                     "http://localhost:{api_port}/v2/availability/leaf?height=999999"
