@@ -9,7 +9,6 @@ use std::{
 };
 
 use committable::{Commitment, CommitmentBoundsArkless, Committable};
-use hotshot::traits::BlockPayload;
 use hotshot_contract_adapter::light_client::derive_signed_state_digest;
 use hotshot_types::{
     data::{
@@ -29,6 +28,7 @@ use hotshot_types::{
     },
     stake_table::HSStakeTable,
     traits::{
+        BlockPayload,
         block_contents::{BlockHeader, EncodeBytes},
         node_implementation::NodeType,
         signature_key::{
@@ -157,6 +157,12 @@ pub enum ConsensusOutput<T: NodeType> {
         proposal: SignedProposal<T, Proposal<T>>,
         sender: T::SignatureKey,
     },
+    /// A proposal taken in on a certificate's word rather than paired with
+    /// this node's VID share: fetched from a peer, or parked live until a
+    /// certificate vouched for it. The share the leader owed this node may
+    /// never arrive, so this is what lets the payload be rebuilt from the
+    /// shares the voters broadcast.
+    ProposalCertified(Proposal<T>),
     RequestMissingProposal {
         view: ViewNumber,
         leaf_commit: Commitment<Leaf2<T>>,
@@ -1310,6 +1316,7 @@ impl<T: NodeType> Consensus<T> {
         let payload_size = self.payload_size_for(&proposal);
         self.request_state(&proposal, payload_size, outbox);
         self.request_block_and_header_if_next_leader(&proposal, outbox);
+        outbox.push_back(ConsensusOutput::ProposalCertified(proposal));
     }
 
     /// Adopt the live proposal parked for `view` awaiting this node's VID
@@ -1980,6 +1987,9 @@ impl<T: NodeType> Consensus<T> {
             warn!("locked certificate is newer than epoch change certificate1");
             return Protocol::Continue;
         }
+        // Taken in on the certificates' word like a fetched proposal, and this
+        // node may hold no share of it.
+        outbox.push_back(ConsensusOutput::ProposalCertified(proposal.clone()));
 
         let curr_view = self.current_view;
         let next_view = boundary_view + 1;

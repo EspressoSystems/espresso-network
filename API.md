@@ -27,9 +27,10 @@ descriptor set is exported as `espresso_api::FILE_DESCRIPTOR_SET`).
 ### What is served today
 
 `StatusService`, `TokenService`, `NodeService`, `ConfigService`, `DatabaseService`, `AvailabilityService`,
-`MerklizedStateService`, `RewardStateService`, `StateSignatureService`, `SubmitService` and `ExplorerService`, served
-under `/v2/status/...`, `/v2/token/...`, `/v2/node/...`, `/v2/config/...`, `/v2/database/...`, `/v2/availability/...`,
-`/v2/merklized-state/...`, `/v2/state-signature/...`, `/v2/submit/...` and `/v2/explorer/...`.
+`MerklizedStateService`, `RewardStateService`, `StateSignatureService`, `SubmitService`, `ExplorerService` and
+`CatchupService`, served under `/v2/status/...`, `/v2/token/...`, `/v2/node/...`, `/v2/config/...`, `/v2/database/...`,
+`/v2/availability/...`, `/v2/merklized-state/...`, `/v2/state-signature/...`, `/v2/submit/...`, `/v2/explorer/...` and
+`/v2/catchup/...`.
 
 - `NodeService` carries over every v1 `node` endpoint except `oldest-block` and `oldest-leaf`. Where v1 has a route per
   epoch and a `current` route, v2 has one route with an optional `epoch` parameter, as it does for the block reward;
@@ -38,9 +39,9 @@ under `/v2/status/...`, `/v2/token/...`, `/v2/node/...`, `/v2/config/...`, `/v2/
 - `ConfigService` serves v1's config module as typed messages. `hotshot` carries every consensus parameter, including
   the genesis membership and the DA committee overrides. The comment on `HotshotConfigResponse` in `config.proto` says
   what it drops from v1's orchestrator wrapper. `runtime` carries the identity, endpoints, storage settings and enabled
-  modules. The genesis and the catchup, proposal-fetcher, libp2p and L1 tuning stay on v1, and the L1 URLs are reported
-  as a count because they can carry credentials. Nodes joining through `--config-peers` still fetch the full config from
-  v1. Like the v1 `config` module it is only mounted when the node enables that module, and a disabled node answers its
+  modules. The genesis and the catchup, proposal-fetcher and L1 tuning stay on v1, and the L1 URLs are reported as a
+  count because they can carry credentials. Nodes joining through `--config-peers` still fetch the full config from v1.
+  Like the v1 `config` module it is only mounted when the node enables that module, and a disabled node answers its
   routes with a 404 in the v2 error envelope.
 - `DatabaseService` mirrors v1's table sizes and migration status.
 - `AvailabilityService` carries over every v1 `availability` endpoint. A single lookup takes exactly one selector as a
@@ -87,6 +88,16 @@ under `/v2/status/...`, `/v2/token/...`, `/v2/node/...`, `/v2/config/...`, `/v2/
   proto `repeated` field cannot carry, so v2 serves one point per block instead. Amounts keep the rendered form v1
   writes, currency code and all. Like the v1 module it is mounted only when the node enables `explorer`, and a disabled
   node answers its routes with a 404 in the v2 error envelope.
+- `CatchupService` serves the module peers fetch state from when they fall behind, and like the v1 module it is always
+  mounted on a SQL node. The routes over the fee, block and reward trees name the state they want by the
+  `(height, view)` the asking node is replaying, which is why these are not the snapshot selectors `merklized-state`
+  takes. The routes that name a set of accounts are POSTs with the set in the body. A tree built for a set of accounts
+  is served as opaque bincode bytes, a `FeeMerkleTree` or a `RewardMerkleTreeV1`, since a peer feeds it straight back
+  into the tree type and `merklized-state` already gives a caller a typed way to read one node. The whole v2 reward tree
+  is the same bincode bytes the `merklized-state` reward tree route serves, so every tree in the module decodes the same
+  way. v1's `reward-accounts-v2` and `reward-amounts` are not carried over, since both answer every request with a
+  deprecation 404. Like the reward balances, the fee balance is a decimal string, where v1 serves it as `0x`-prefixed
+  hex. Accounts in proofs are lowercase `0x`-prefixed hex.
 
 Everything else a client needs is still on v1. Every route in the OpenAPI document is a route `serve_axum` mounts: the
 tests in `crates/espresso/api/src/axum.rs` pin the documented set to a reviewed route list and probe each documented

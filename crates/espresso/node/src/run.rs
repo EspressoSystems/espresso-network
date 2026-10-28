@@ -52,7 +52,7 @@ impl<P: SequencerPersistence> NodeContext<P> {
 
 pub async fn main(migrated_envs: Vec<(&str, &str)>) -> anyhow::Result<()> {
     espresso_types::assert_node_feature();
-    let (opt, ignored_network_options) = Options::parse_with_ignored();
+    let opt = <Options as clap::Parser>::parse();
     let mut modules = opt.modules();
 
     // Genesis carries the chain ID, which selects the default telemetry
@@ -115,13 +115,6 @@ pub async fn main(migrated_envs: Vec<(&str, &str)>) -> anyhow::Result<()> {
         tracing::error!("{e:#}; continuing without telemetry");
     }
     espresso_utils::env_compat::log_migrated_env_vars(&migrated_envs);
-    if !ignored_network_options.is_empty() {
-        tracing::warn!(
-            ?ignored_network_options,
-            "the CDN and libp2p options are deprecated and ignored: consensus has run over \
-             cliquenet since protocol 0.6. Remove them from the command line and environment."
-        );
-    }
     log_cpu_probe(genesis.drb_difficulty.max(genesis.drb_upgrade_difficulty)).await;
 
     tracing::warn!(?modules, "sequencer starting up");
@@ -151,15 +144,30 @@ pub async fn main(migrated_envs: Vec<(&str, &str)>) -> anyhow::Result<()> {
         )
         .await
     } else if let Some(storage) = modules.storage_sql.take() {
-        run_with_storage(
-            genesis,
-            modules,
-            opt,
-            storage,
-            public_node_config,
-            telemetry_handle.as_mut(),
-        )
-        .await
+        match storage.into_backend() {
+            persistence::sql::SqlBackendOptions::Sqlite(storage) => {
+                run_with_storage(
+                    genesis,
+                    modules,
+                    opt,
+                    storage,
+                    public_node_config,
+                    telemetry_handle.as_mut(),
+                )
+                .await
+            },
+            persistence::sql::SqlBackendOptions::Postgres(storage) => {
+                run_with_storage(
+                    genesis,
+                    modules,
+                    opt,
+                    storage,
+                    public_node_config,
+                    telemetry_handle.as_mut(),
+                )
+                .await
+            },
+        }
     } else {
         // Persistence is required. If none is provided, just use the local file system.
         run_with_storage(
@@ -220,7 +228,9 @@ where
     S: DataSourceOptions,
 {
     let follower_params = match (&modules.follower, &modules.query) {
-        (Some(follower), Some(query)) => Some(opt.follower_params(follower, query)?),
+        (Some(follower), Some(query)) => {
+            Some(opt.follower_params(follower, query, storage_opt.light_client_db(query)?)?)
+        },
         _ => None,
     };
     let l1_params = L1Params {
@@ -263,6 +273,7 @@ where
             backoff: opt.catchup_backoff,
             base_timeout: opt.catchup_base_timeout,
             local_timeout: opt.local_catchup_timeout,
+            http_delay: opt.http_catchup_delay,
         },
         bootstrap_epoch_catchup_timeout: opt.bootstrap_epoch_catchup_timeout,
     };
@@ -381,8 +392,11 @@ fn api_options<S: DataSourceOptions>(
     if let Some(explorer) = modules.explorer {
         http_opt = http_opt.explorer(explorer);
     }
-    if let Some(light_client) = modules.light_client {
-        http_opt = http_opt.light_client(light_client);
+    if modules.light_client.is_some() {
+        tracing::warn!(
+            "the light-client module is deprecated and ignored: every node with SQL storage and \
+             the query module serves /light-client. Remove it from the command line."
+        );
     }
     if let Some(config) = modules.config {
         http_opt = http_opt
@@ -487,11 +501,6 @@ mod test {
             &format!("127.0.0.1:{port2}"),
             "--cliquenet-advertise-address",
             &format!("127.0.0.1:{port2}"),
-            // Never bound: this test blocks at orchestrator before libp2p starts. Port 0 is a
-            // placeholder to satisfy the orchestrator-bootstrap requirement on the advertise
-            // address.
-            "--libp2p-advertise-address",
-            "127.0.0.1:0",
             "--genesis-file",
             &genesis_file.display().to_string(),
         ]);

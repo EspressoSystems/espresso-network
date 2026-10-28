@@ -526,6 +526,15 @@ def test_check_validity_aws(
     assert all(reason in r for r in got["reasons"])
 
 
+def test_a_busy_ctl_is_not_noisy_with_the_prover():
+    result = clean_result()
+    result["hosts"] |= {"ctl": host_sample(util=0.95)}
+    manifest = aws_manifest()
+    assert check_aws(result, manifest)["noisy"]
+    manifest["config"]["prover"] = True
+    assert not check_aws(result, manifest)["noisy"]
+
+
 def small_node0_manifest(query_db: str = "colocated") -> dict:
     manifest = aws_manifest()
     for host in manifest["hosts"]:
@@ -1073,6 +1082,18 @@ def test_report_has_hosts_deployment_and_summary_blocks(collected_run: Path) -> 
     summary = (collected_run / "summary.md").read_text()
     assert "Deployment" in summary
     assert "| node1 |" in summary
+    assert "slow_nodes" not in deployment
+
+
+def test_report_records_the_slow_nodes(collected_run: Path) -> None:
+    path = collected_run / "manifest.json"
+    manifest = netbench.read_json(path)
+    manifest["config"] |= {"slow_nodes": 1, "slow_cores": 4}
+    netbench.write_json(path, manifest)
+    deployment = awsb.write_report(collected_run)["deployment"]
+    assert (deployment["slow_nodes"], deployment["slow_cores"]) == (["node2"], 4)
+    summary = (collected_run / "summary.md").read_text()
+    assert "- slow nodes: node2 on 4 cores" in summary
 
 
 UP = ["up", "--tag", "old", "--nodes", "3", "--yes"]

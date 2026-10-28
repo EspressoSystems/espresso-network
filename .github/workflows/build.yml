@@ -35,7 +35,7 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
-  RUST_LOG: info,libp2p=off,node=error
+  RUST_LOG: info,node=error
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: "0"
 
@@ -49,7 +49,6 @@ jobs:
         include:
           - binary: espresso-node
           - binary: other
-          - binary: espresso-node-sqlite
           - binary: espresso-dev-node
 
     steps:
@@ -120,7 +119,6 @@ jobs:
         include:
           - binary: espresso-node
           - binary: other
-          - binary: espresso-node-sqlite
           - binary: espresso-dev-node
 
     steps:
@@ -255,9 +253,6 @@ jobs:
       matrix:
         service:
           - bridge
-          - cdn-broker
-          - cdn-marshal
-          - cdn-whitelist
           - deploy
           - espresso-dev-node
           - light-client-query-service
@@ -386,9 +381,6 @@ jobs:
       matrix:
         service:
           - bridge
-          - cdn-broker
-          - cdn-marshal
-          - cdn-whitelist
           - deploy
           - espresso-dev-node
           - light-client-query-service
@@ -486,9 +478,6 @@ jobs:
       matrix:
         service:
           - bridge
-          - cdn-broker
-          - cdn-marshal
-          - cdn-whitelist
           - deploy
           - espresso-dev-node
           - light-client-query-service

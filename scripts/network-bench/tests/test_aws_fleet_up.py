@@ -388,6 +388,26 @@ def test_max_block_size_belongs_to_one_run(harness, runner):
     assert cfg.max_block_size == "30mb"
 
 
+def test_protocol_version_belongs_to_one_run(harness, runner):
+    manifest = harness.fleet()
+    assert awsb.fleet_run_config(harness.run_args(), manifest).protocol_version == "0.6"
+    cfg = awsb.fleet_run_config(harness.run_args("--protocol-version", "0.8"), manifest)
+    assert cfg.protocol_version == "0.8"
+
+
+def test_slow_nodes_belong_to_one_run(harness, runner):
+    manifest = harness.fleet()
+    cfg = awsb.fleet_run_config(harness.run_args(), manifest)
+    assert (cfg.slow_nodes, cfg.slow_cores) == (0, None)
+    flags = ("--slow-nodes", "1", "--slow-cores", "4")
+    cfg = awsb.fleet_run_config(harness.run_args(*flags), manifest)
+    assert (cfg.slow_nodes, cfg.slow_cores) == (1, 4)
+    with pytest.raises(awsb.Refused, match="validator-only"):
+        awsb.fleet_run_config(
+            harness.run_args("--slow-nodes", "9", "--slow-cores", "4"), manifest
+        )
+
+
 def test_lock_held(harness, runner):
     awsb.take_fleet_lock(FakeSystem(), harness.fleet_dir, "other", False)
     mark = len(runner.calls)
@@ -896,3 +916,35 @@ def test_down_of_a_fleet_recorded_before_regions_uses_eu_west_1(harness):
     assert harness.down(runner, "--yes") == awsb.EXIT_LEFTOVER
     assert aws_regions(runner) == {"eu-west-1"}
     assert "region" not in netbench.read_json(tfvars_path(harness))
+
+
+def drop_image(harness: FleetHarness, name: str) -> None:
+    images = harness.fleet()["images"]
+    del images[name]
+    harness.set_fleet(images=images)
+
+
+# EDGE:fleet-old-images
+def test_staking_on_a_fleet_without_the_staking_cli_image_is_refused(harness, resolved):
+    runner = pull_fleet(harness, resolved)
+    drop_image(harness, "staking-cli")
+    mark = len(runner.calls)
+    with pytest.raises(awsb.Refused, match="staking-cli"):
+        harness.run(runner, "--epoch-height", "3000")
+    assert not ssh_calls(runner, mark)
+    assert not harness.lock().exists()
+
+
+def test_a_new_tag_resolves_the_staking_cli_image_of_an_old_fleet(harness, resolved):
+    runner = pull_fleet(harness, resolved)
+    drop_image(harness, "staking-cli")
+    assert (
+        harness.run(runner, "--tag", "other", "--epoch-height", "3000") == awsb.EXIT_OK
+    )
+    assert harness.fleet()["images"]["staking-cli"]["digest"] == NEW_DIGEST
+
+
+def test_a_run_without_staking_takes_an_old_fleet(harness, resolved):
+    runner = pull_fleet(harness, resolved)
+    drop_image(harness, "staking-cli")
+    assert harness.run(runner) == awsb.EXIT_OK

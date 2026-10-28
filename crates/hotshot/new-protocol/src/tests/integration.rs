@@ -1,12 +1,11 @@
 use std::{marker::PhantomData, time::Duration};
 
 use committable::{Commitment, CommitmentBoundsArkless, Committable};
-use hotshot::types::{BLSPrivKey, BLSPubKey};
 use hotshot_example_types::node_types::TestTypes;
-use hotshot_testing::helpers::build_cert;
 use hotshot_types::{
     data::{EpochNumber, VidCommitment2, ViewNumber},
     epoch_membership::EpochMembership,
+    signature_key::{BLSPrivKey, BLSPubKey},
     simple_certificate::{TimeoutCertificate3, TimeoutEvidence},
     simple_vote::{HasEpoch, QuorumData2, TimeoutData3, TimeoutVote3},
     stake_table::StakeTableEntries,
@@ -16,6 +15,7 @@ use hotshot_types::{
 use tokio::time::timeout;
 
 use super::common::{
+    certs::build_cert,
     harness::TestHarness,
     utils::{TestData, TestView, build_cert1, build_cert2, build_timeout_cert3},
 };
@@ -939,6 +939,72 @@ async fn test_multi_view_decide() {
     }
 
     assert!(count_matching(harness.outputs(), is_leaf_decided) >= 2);
+}
+
+/// A node whose own VID share never arrives still rebuilds the payload from
+/// the shares the voters broadcast, once a Cert2 certifies the proposal it
+/// parked without that share.
+///
+/// Before the certificate the broadcast shares sit in the reconstructor's
+/// pending set: nothing has pinned the view's commitment, so no
+/// reconstruction starts. Adopting the proposal on the Cert2 pins it, the
+/// held shares are admitted, and the payload follows the decide.
+#[tokio::test]
+async fn test_reconstructs_from_broadcast_shares_without_own_share() {
+    let test_data = TestData::new(2).await;
+    let mut harness = TestHarness::new(0).await;
+    let test_view = &test_data.views[0];
+
+    // No `vid_share_inputs`: the leader's unicast to this node is lost.
+    harness.message(test_view.proposal_input());
+    for i in 0..THRESHOLD {
+        harness.message(test_view.vote1_input(i));
+        harness.message(test_view.vid_share_broadcast_input(i));
+    }
+    // A parked proposal requests nothing, state validation included, until
+    // a certificate adopts it; only the cert1 the votes form is awaited.
+    harness
+        .process_until(|inputs| {
+            assert!(!any(inputs, is_timeout));
+            any(inputs, is_cert1)
+        })
+        .await;
+
+    // Negative control: the voters' shares alone rebuild nothing while the
+    // proposal is parked without a commitment to admit them against.
+    let inputs = harness.process_for(NO_CERT_WINDOW).await;
+    assert!(
+        !any(&inputs, is_block_reconstructed),
+        "no reconstruction before the proposal is certified"
+    );
+
+    send_vote2s(&mut harness, &test_data, 0).await;
+    harness
+        .process_until(|inputs| {
+            assert!(!any(inputs, is_timeout));
+            any(inputs, is_block_reconstructed)
+        })
+        .await;
+
+    assert!(
+        any(harness.outputs(), is_leaf_decided),
+        "the view decides on the cert2"
+    );
+    let reconstructed: Vec<_> = harness
+        .outputs()
+        .iter()
+        .filter_map(|output| match output {
+            ConsensusOutput::BlockPayloadReconstructed { view, payload, .. } => {
+                Some((*view, payload.as_ref().clone()))
+            },
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        reconstructed,
+        vec![(test_view.view_number, test_view.payload.clone())],
+        "the payload rebuilt from broadcast shares is announced for the decided view"
+    );
 }
 
 /// Timeout votes are collected by the CPU VoteCollector and form a

@@ -1,14 +1,19 @@
-# Espresso Confirmation Layer Architecture
+# Espresso Architecture
 
 ## Overview
 
-The diagram below shows how the Espresso Confirmation Layer fits into the rollup centric Ethereum ecosystem.
+Espresso finalizes transaction data for the chains and applications built on it. Each chain keeps its own sequencer and
+execution; Espresso orders and finalizes the blocks those chains submit, makes their data available, and publishes a
+proof of its finalized state to a light client contract so other chains can verify it.
+
+The walkthrough below uses the most common integration today as a concrete example: rollups that also settle their state
+to Ethereum. The same flow applies to any chain built on Espresso, with or without an L1.
 
 ![Overview](./espresso-overview.svg)
 
 1. Many clients submit transactions to each L2 simultaneously (for clarity only one rollup is depicted in detail).
 2. The rollup sequencer or block builder builds a block with L2 transactions.
-3. L2 forwards L2 block to the confirmation layer.
+3. L2 forwards L2 block to Espresso.
 4. Espresso produces Espresso blocks containing rollup namespaces with confirmed rollup blocks. L2 validators receive
    blocks and execute the state transition functions for their rollups.
 5. Espresso posts succinct commitment to block to L1. Contract verifies proof of Espresso state transition then stores
@@ -23,8 +28,8 @@ Below is sequence diagram to accompany the overview:
 
 1. User sends an L2 transaction to a chain's server (e.g. an RPC service).
 2. The rollup builds a block that includes the rollup's transaction.
-3. The rollup builds an Espress transaction containing the serialized L2 block, and an identifier for that rollup, and
-   sends it to the Espresso confirmation layer.
+3. The rollup builds an Espresso transaction containing the serialized L2 block, and an identifier for that rollup, and
+   sends it to Espresso.
 4. Clients, rollup validators and bridges are notified the L2 block is finalized by Espresso. Interested parties can now
    derive the new state of the rollup if desired. The zk proof or fraud proofs guarantee that the rollups canonical
    chain will be derived from the rollup block confirmed by Espresso.
@@ -35,12 +40,11 @@ Below is sequence diagram to accompany the overview:
 7. The L1 rollup contract verifies any proofs related to the state update, using the certified block commitment from the
    Espresso contract to check that the state update corresponds to the correct block.
 
-## Espresso Confirmation Layer
+## Espresso Network
 
-This diagram below depicts a simplified view of the current architecture of the Espresso Confirmation Layer. The diagram
-includes views of an Espresso node, the Espresso Network (nodes, CDN, builders, prover, state relay service), two
-rollups (one ZK rollup "Z", one optimistic rollup "O") that use Espresso Network for finalization and some important
-L1 contracts.
+This diagram below depicts a simplified view of the current architecture of Espresso. The diagram includes views of an
+Espresso node, the Espresso Network (nodes, CDN, builders, prover, state relay service), two rollups (one ZK rollup "Z",
+one optimistic rollup "O") that use Espresso Network for finalization and some important L1 contracts.
 
 - Glossary
   - Namespace: an identifier to distinguish rollups, akin to an Ethereum chain ID

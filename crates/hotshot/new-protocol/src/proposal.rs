@@ -2,7 +2,6 @@ use std::sync::Arc;
 
 use alloy::primitives::U256;
 use committable::Committable;
-use hotshot::types::SignatureKey;
 use hotshot_contract_adapter::light_client::validate_light_client_state_update_certificate;
 use hotshot_types::{
     data::{EpochNumber, Leaf2, VidDisperseShare2, ViewNumber, vid_disperse::vid_total_weight},
@@ -14,7 +13,9 @@ use hotshot_types::{
     },
     simple_vote::{HasEpoch, QuorumData2, QuorumMarker, Voteable},
     stake_table::StakeTableEntries,
-    traits::{block_contents::BlockHeader, node_implementation::NodeType},
+    traits::{
+        block_contents::BlockHeader, node_implementation::NodeType, signature_key::SignatureKey,
+    },
     utils::{epoch_from_block_number, is_epoch_root, is_last_block},
     vote::HasViewNumber,
 };

@@ -7,11 +7,8 @@ use espresso_types::{
     AuthenticatedValidatorMap, Header, Leaf2, NetworkConfig, PubKey, RegisteredValidatorMap,
     StakeTableHash,
     traits::{EventsPersistenceRead, MembershipPersistence, StakeTuple},
-    v0::traits::{EventConsumer, PersistenceOptions, SequencerPersistence},
+    v0::traits::{EventConsumer, PersistenceOptions, SequencerPersistence, StateCertPersistence},
     v0_3::{EventKey, IndexedStake, RegisteredValidator, RewardAmount, StakeTableEvent},
-};
-use hotshot_libp2p_networking::network::behaviours::dht::store::persistent::{
-    DhtPersistentStorage, SerializableRecord,
 };
 use hotshot_types::{
     data::{
@@ -236,6 +233,11 @@ impl SequencerPersistence for NoStorage {
         Ok(None)
     }
 
+    fn enable_metrics(&mut self, _metrics: &dyn Metrics) {}
+}
+
+#[async_trait]
+impl StateCertPersistence for NoStorage {
     async fn get_state_cert_by_epoch(
         &self,
         _epoch: u64,
@@ -250,8 +252,6 @@ impl SequencerPersistence for NoStorage {
     ) -> anyhow::Result<()> {
         Ok(())
     }
-
-    fn enable_metrics(&mut self, _metrics: &dyn Metrics) {}
 }
 
 #[async_trait]
@@ -327,18 +327,5 @@ impl MembershipPersistence for NoStorage {
         _limit: u64,
     ) -> anyhow::Result<Vec<RegisteredValidator<PubKey>>> {
         Ok(Default::default())
-    }
-}
-
-#[async_trait]
-impl DhtPersistentStorage for NoStorage {
-    /// Don't do anything
-    async fn save(&self, _records: Vec<SerializableRecord>) -> anyhow::Result<()> {
-        Ok(())
-    }
-
-    /// Don't do anything
-    async fn load(&self) -> anyhow::Result<Vec<SerializableRecord>> {
-        Ok(vec![])
     }
 }

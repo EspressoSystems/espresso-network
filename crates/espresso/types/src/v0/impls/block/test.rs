@@ -1,12 +1,11 @@
 #![cfg(test)]
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 
-use committable::Committable;
-use hotshot::traits::BlockPayload;
+use committable::{Commitment, Committable};
 use hotshot_query_service::availability::{QueryablePayload, VerifiableInclusion};
 use hotshot_types::{
     data::{VidCommitment, VidCommon},
-    traits::EncodeBytes,
+    traits::{BlockPayload, EncodeBytes},
     vid::advz::advz_scheme,
 };
 use jf_advz::VidScheme;
@@ -280,6 +279,71 @@ fn ns_limit_ignores_deferred_bytes() {
         has_final_tx,
         "tx for an already-admitted namespace must survive a deferred tx ahead of it"
     );
+}
+
+/// The new protocol's leader takes a block's transaction hashes from its pool
+/// when the payload kept as many transactions as it was given. An equal count
+/// means the same set only because building drops inputs and never changes or
+/// repeats one.
+#[test]
+fn built_payload_keeps_every_input_that_fits() {
+    let txs: Vec<Transaction> = (0..12u8)
+        .map(|i| Transaction::new(NamespaceId::from(u32::from(i % 3)), vec![i; 5]))
+        .collect();
+    let inputs: HashSet<_> = txs.iter().map(Committable::commit).collect();
+    assert_eq!(kept_hashes(&txs, ChainConfig::default()), inputs);
+}
+
+#[test]
+fn built_payload_drops_inputs_but_never_changes_one() {
+    let max_block_size = 10_000;
+    let chain_config = ChainConfig {
+        max_block_size: BlockSize::from(max_block_size),
+        ..Default::default()
+    };
+    let oversize = Transaction::new(NamespaceId::from(0u32), vec![0; max_block_size as usize]);
+    let mut txs = vec![oversize];
+    // Each round covers twice the namespaces a block opens: the first round
+    // opens `MAX_NAMESPACES_PER_BLOCK` of them, and in both rounds the rest are
+    // deferred.
+    let mut expected = HashSet::new();
+    for round in 1..=2u8 {
+        for ns in 0..2 * MAX_NAMESPACES_PER_BLOCK as u32 {
+            let tx = Transaction::new(NamespaceId::from(ns), vec![round; 3]);
+            if ns < MAX_NAMESPACES_PER_BLOCK as u32 {
+                expected.insert(tx.commit());
+            }
+            txs.push(tx);
+        }
+    }
+    // Fits a block alone but not after the rounds, so building stops here.
+    txs.push(Transaction::new(
+        NamespaceId::from(1u32),
+        vec![3; max_block_size as usize - 100],
+    ));
+    txs.push(Transaction::new(NamespaceId::from(1u32), vec![4]));
+
+    assert_eq!(kept_hashes(&txs, chain_config), expected);
+}
+
+/// Builds a payload from `txs`, checks that it holds distinct, unchanged
+/// inputs only and that `num_transactions` counts them, and returns their
+/// hashes.
+fn kept_hashes(txs: &[Transaction], chain_config: ChainConfig) -> HashSet<Commitment<Transaction>> {
+    let (block, ns_table) = Payload::from_transactions_sync(txs, chain_config).unwrap();
+    let kept: Vec<_> = block
+        .transactions(&ns_table)
+        .map(|tx| tx.commit())
+        .collect();
+    assert_eq!(block.num_transactions(&ns_table), kept.len());
+    let distinct: HashSet<_> = kept.iter().copied().collect();
+    assert_eq!(distinct.len(), kept.len(), "no input is kept twice");
+    let inputs: HashSet<_> = txs.iter().map(Committable::commit).collect();
+    assert!(
+        distinct.is_subset(&inputs),
+        "every kept transaction is an unchanged input"
+    );
+    distinct
 }
 
 // TODO lots of infra here that could be reused in other tests.

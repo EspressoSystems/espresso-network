@@ -2,9 +2,8 @@ use std::sync::Arc;
 
 use bitvec::vec::BitVec;
 use espresso_types::{SeqTypes, v0_3::AuthenticatedValidator};
-use hotshot::types::BLSPubKey;
 use hotshot_query_service::explorer::{BlockDetail, ExplorerHistograms};
-use hotshot_types::PeerConfig;
+use hotshot_types::{PeerConfig, signature_key::BLSPubKey};
 use serde::{Deserialize, Serialize};
 
 use super::{client_id::ClientId, data_state::NodeIdentity};

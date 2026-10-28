@@ -146,10 +146,9 @@ impl AvidMIncorrectEncodingNsProof {
 #[cfg(test)]
 mod tests {
     use futures::future;
-    use hotshot::traits::BlockPayload;
     use hotshot_types::{
         data::VidCommitment,
-        traits::EncodeBytes,
+        traits::{BlockPayload, EncodeBytes},
         vid::avidm::{AvidMParam, AvidMScheme},
     };
 

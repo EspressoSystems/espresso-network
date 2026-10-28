@@ -19,9 +19,8 @@
 //! They would each turn a trace into `out-of-scope`, which is neither evidence
 //! of conformance nor of its absence.
 
-use hotshot::types::BLSPubKey;
 use hotshot_example_types::node_types::TestTypes;
-use hotshot_types::traits::signature_key::SignatureKey;
+use hotshot_types::{signature_key::BLSPubKey, traits::signature_key::SignatureKey};
 use rand::{Rng, SeedableRng, rngs::StdRng, seq::SliceRandom};
 
 use crate::{

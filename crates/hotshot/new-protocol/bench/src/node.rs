@@ -1,7 +1,6 @@
 use std::{path::PathBuf, sync::Arc};
 
 use anyhow::Result;
-use hotshot::{traits::BlockPayload, types::BLSPubKey};
 use hotshot_example_types::{
     block_types::{TestBlockHeader, TestBlockPayload, TestMetadata, TestTransaction},
     node_types::{TEST_VERSIONS, TestTypes},
@@ -30,7 +29,11 @@ use hotshot_types::{
     data::{EpochNumber, Leaf2, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
     message::UpgradeLock,
-    traits::{metrics::NoMetrics, node_implementation::NodeType, signature_key::SignatureKey},
+    signature_key::BLSPubKey,
+    traits::{
+        BlockPayload, metrics::NoMetrics, node_implementation::NodeType,
+        signature_key::SignatureKey,
+    },
     upgrade_config::UpgradeConfig,
     x25519::Keypair,
 };

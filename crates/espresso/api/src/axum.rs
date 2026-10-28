@@ -186,17 +186,6 @@ pub(crate) async fn limit_requests(
     }
 }
 
-/// Wrapper so the v1 spec is looked up by a distinct type. v2 serves a build-time document
-/// rather than an `Extension<OpenApi>`, so nothing collides today, but the newtype keeps an
-/// `Extension<OpenApi>` added later from silently resolving to v1's.
-#[derive(Clone)]
-struct OpenApiV1(OpenApi);
-
-/// Serve the v1 OpenAPI spec (extracted from Extension)
-async fn serve_openapi_spec_v1(Extension(OpenApiV1(api)): Extension<OpenApiV1>) -> Json<OpenApi> {
-    Json(api)
-}
-
 /// Serve custom Swagger UI with collapsed defaults, pointed at the given OpenAPI spec route.
 fn swagger_html(spec_route: &str) -> Html<String> {
     Html(include_str!("../templates/swagger.html").replace("{{OPENAPI_SPEC_ROUTE}}", spec_route))
@@ -3629,8 +3618,14 @@ pub fn finish_v1_docs(router: ApiRouter) -> Router {
         }
     }
 
+    // Not an Extension layer: Router::layer clones it into every route.
+    let spec = Bytes::from(serde_json::to_vec(&api).expect("OpenAPI document serializes"));
+
     router
-        .route(routes::v1::OPENAPI_SPEC_ROUTE, get(serve_openapi_spec_v1))
+        .route(
+            routes::v1::OPENAPI_SPEC_ROUTE,
+            get(move || async move { ([(header::CONTENT_TYPE, "application/json")], spec) }),
+        )
         .route(
             routes::v1::SWAGGER_ROUTE,
             get(|| async { swagger_html(routes::v1::OPENAPI_SPEC_ROUTE) }),
@@ -3645,7 +3640,6 @@ pub fn finish_v1_docs(router: ApiRouter) -> Router {
                 .with_title("Espresso Node API v1")
                 .axum_handler()),
         )
-        .layer(Extension(OpenApiV1(api)))
 }
 
 /// Declare a path parameter for every `{name}` template segment of every operation.
@@ -4867,6 +4861,30 @@ mod tests {
         assert!(body.contains(routes::v1::OPENAPI_SPEC_ROUTE));
     }
 
+    /// The spec is served as JSON and is stable across requests.
+    #[tokio::test]
+    async fn v1_openapi_spec_served_as_json() {
+        let router = create_router_v1(MockState);
+        let get_spec = || async {
+            let req = Request::builder()
+                .uri(routes::v1::OPENAPI_SPEC_ROUTE)
+                .body(axum::body::Body::empty())
+                .unwrap();
+            let resp = tower::ServiceExt::oneshot(router.clone(), req)
+                .await
+                .unwrap();
+            assert_eq!(
+                resp.headers().get(header::CONTENT_TYPE).unwrap(),
+                "application/json"
+            );
+            axum::body::to_bytes(resp.into_body(), usize::MAX)
+                .await
+                .unwrap()
+        };
+        let (first, second) = (get_spec().await, get_spec().await);
+        assert_eq!(first, second);
+    }
+
     #[tokio::test]
     async fn v1_openapi_spec_contains_known_route() {
         let router = create_router_v1(MockState);
@@ -4986,6 +5004,17 @@ mod tests {
             "/v2/explorer/transactions",
             "/v2/explorer/summary",
             "/v2/explorer/search",
+            "/v2/catchup/fee-account",
+            "/v2/catchup/fee-accounts",
+            "/v2/catchup/blocks-frontier",
+            "/v2/catchup/chain-config",
+            "/v2/catchup/leaf-chain",
+            "/v2/catchup/cert2",
+            "/v2/catchup/reward-account",
+            "/v2/catchup/reward-accounts",
+            "/v2/catchup/reward-account-v2",
+            "/v2/catchup/reward-merkle-tree-v2",
+            "/v2/catchup/state-cert",
         ]
         .into_iter()
         .collect();
@@ -5532,6 +5561,92 @@ mod tests {
             &self,
             _request: tonic::Request<crate::proto::GetStateSignatureRequest>,
         ) -> Result<tonic::Response<crate::proto::StateSignatureResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+    }
+
+    #[tonic::async_trait]
+    impl crate::proto::catchup_service_server::CatchupService for MockV2State {
+        async fn get_catchup_fee_account(
+            &self,
+            _request: tonic::Request<crate::proto::GetCatchupFeeAccountRequest>,
+        ) -> Result<tonic::Response<crate::proto::FeeAccountProofResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_catchup_fee_accounts(
+            &self,
+            _request: tonic::Request<crate::proto::GetCatchupFeeAccountsRequest>,
+        ) -> Result<tonic::Response<crate::proto::FeeMerkleTreeResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_catchup_blocks_frontier(
+            &self,
+            _request: tonic::Request<crate::proto::GetCatchupBlocksFrontierRequest>,
+        ) -> Result<tonic::Response<crate::proto::MerklePathResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_catchup_chain_config(
+            &self,
+            _request: tonic::Request<crate::proto::GetCatchupChainConfigRequest>,
+        ) -> Result<tonic::Response<crate::proto::CatchupChainConfigResponse>, tonic::Status>
+        {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_catchup_leaf_chain(
+            &self,
+            _request: tonic::Request<crate::proto::GetCatchupLeafChainRequest>,
+        ) -> Result<tonic::Response<crate::proto::CatchupLeafChainResponse>, tonic::Status>
+        {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_catchup_cert2(
+            &self,
+            _request: tonic::Request<crate::proto::GetCatchupCert2Request>,
+        ) -> Result<tonic::Response<crate::proto::Cert2Response>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_catchup_reward_account(
+            &self,
+            _request: tonic::Request<crate::proto::GetCatchupRewardAccountRequest>,
+        ) -> Result<tonic::Response<crate::proto::RewardAccountProofResponse>, tonic::Status>
+        {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_catchup_reward_accounts(
+            &self,
+            _request: tonic::Request<crate::proto::GetCatchupRewardAccountsRequest>,
+        ) -> Result<tonic::Response<crate::proto::RewardMerkleTreeV1Response>, tonic::Status>
+        {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_catchup_reward_account_v2(
+            &self,
+            _request: tonic::Request<crate::proto::GetCatchupRewardAccountV2Request>,
+        ) -> Result<tonic::Response<crate::proto::RewardAccountProofResponse>, tonic::Status>
+        {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_catchup_reward_merkle_tree_v2(
+            &self,
+            _request: tonic::Request<crate::proto::GetCatchupRewardMerkleTreeV2Request>,
+        ) -> Result<tonic::Response<crate::proto::RewardMerkleTreeV2Response>, tonic::Status>
+        {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_catchup_state_cert(
+            &self,
+            _request: tonic::Request<crate::proto::GetCatchupStateCertRequest>,
+        ) -> Result<tonic::Response<crate::proto::StateCertV2Response>, tonic::Status> {
             Err(tonic::Status::internal("mock"))
         }
     }

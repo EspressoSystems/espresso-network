@@ -2181,12 +2181,8 @@ impl From<crate::options::PublicNodeConfig> for proto::RuntimeConfigResponse {
         // stops at this level, as the storage and module structs below are read field by field.
         let crate::options::PublicNodeConfig {
             orchestrator_url,
-            cdn_endpoint,
             cliquenet_bind_address,
             cliquenet_advertise_address,
-            libp2p_bind_address,
-            libp2p_advertise_address,
-            libp2p_bootstrap_nodes,
             public_api_url,
             builder_urls,
             state_relay_server_url,
@@ -2198,11 +2194,11 @@ impl From<crate::options::PublicNodeConfig> for proto::RuntimeConfigResponse {
             identity,
             catchup_base_timeout: _,
             local_catchup_timeout: _,
+            http_catchup_delay: _,
             bootstrap_epoch_catchup_timeout: _,
             catchup_backoff: _,
             follower,
             proposal_fetcher: _,
-            libp2p: _,
             l1: _,
             l1_provider_count,
             l1_ws_provider_count,
@@ -2259,19 +2255,11 @@ impl From<crate::options::PublicNodeConfig> for proto::RuntimeConfigResponse {
                 .map(ToString::to_string)
                 .collect(),
             orchestrator_url: orchestrator_url.to_string(),
-            cdn_endpoint,
             // `unbracketed_string` rather than `to_string`: NetAddr's Display brackets an IPv6
             // literal and its serde impl does not, so v1 serves the unbracketed form.
             cliquenet_bind_address: cliquenet_bind_address.unbracketed_string(),
             cliquenet_advertise_address: cliquenet_advertise_address
                 .map(|addr| addr.unbracketed_string()),
-            libp2p_bind_address,
-            libp2p_advertise_address,
-            libp2p_bootstrap_nodes: libp2p_bootstrap_nodes
-                .unwrap_or_default()
-                .iter()
-                .map(ToString::to_string)
-                .collect(),
             l1_provider_count: l1_provider_count as u64,
             l1_ws_provider_count: l1_ws_provider_count as u64,
             modules: Some(modules.into()),
@@ -2279,6 +2267,8 @@ impl From<crate::options::PublicNodeConfig> for proto::RuntimeConfigResponse {
                 poll_interval_ms: follower.poll_interval.as_millis() as u64,
                 max_blocks_per_poll: follower.max_blocks_per_poll,
             }),
+            // The deprecated CDN and libp2p fields stay at their empty defaults.
+            ..Default::default()
         }
     }
 }
@@ -2557,6 +2547,193 @@ where
     }
 }
 
+#[tonic::async_trait]
+impl<D> proto::catchup_service_server::CatchupService for NodeApiStateImpl<D>
+where
+    D: Deref + Clone + Send + Sync + 'static,
+    D::Target: CatchupDataSource + NodeStateDataSource + Send + Sync,
+{
+    async fn get_catchup_fee_account(
+        &self,
+        request: tonic::Request<proto::GetCatchupFeeAccountRequest>,
+    ) -> Result<tonic::Response<proto::FeeAccountProofResponse>, tonic::Status> {
+        let request = request.into_inner();
+        let (height, view) = catchup_at(request.height, request.view)?;
+        let address = required(request.address, "address")?;
+        let query = <Self as v1::CatchupApi>::get_account(self, height, view, address)
+            .await
+            .map_err(to_status)?;
+        Ok(tonic::Response::new(query.into()))
+    }
+
+    async fn get_catchup_fee_accounts(
+        &self,
+        request: tonic::Request<proto::GetCatchupFeeAccountsRequest>,
+    ) -> Result<tonic::Response<proto::FeeMerkleTreeResponse>, tonic::Status> {
+        let request = request.into_inner();
+        let (height, view) = catchup_at(request.height, request.view)?;
+        let accounts = request
+            .addresses
+            .iter()
+            .map(|account| {
+                account.parse().map_err(|err| {
+                    tonic::Status::invalid_argument(format!(
+                        "malformed fee account {account}: {err}"
+                    ))
+                })
+            })
+            .collect::<Result<Vec<espresso_types::FeeAccount>, _>>()?;
+        let tree = <Self as v1::CatchupApi>::get_accounts(self, height, view, accounts)
+            .await
+            .map_err(to_status)?;
+        Ok(tonic::Response::new(proto::FeeMerkleTreeResponse {
+            tree: serialize_tree(&tree)?,
+        }))
+    }
+
+    async fn get_catchup_blocks_frontier(
+        &self,
+        request: tonic::Request<proto::GetCatchupBlocksFrontierRequest>,
+    ) -> Result<tonic::Response<proto::MerklePathResponse>, tonic::Status> {
+        let request = request.into_inner();
+        let (height, view) = catchup_at(request.height, request.view)?;
+        let frontier = <Self as v1::CatchupApi>::get_blocks_frontier(self, height, view)
+            .await
+            .map_err(to_status)?;
+        Ok(tonic::Response::new((&frontier).into()))
+    }
+
+    async fn get_catchup_chain_config(
+        &self,
+        request: tonic::Request<proto::GetCatchupChainConfigRequest>,
+    ) -> Result<tonic::Response<proto::CatchupChainConfigResponse>, tonic::Status> {
+        let commitment = required(request.into_inner().commitment, "commitment")?;
+        let config = <Self as v1::CatchupApi>::get_chain_config(self, commitment)
+            .await
+            .map_err(to_status)?;
+        Ok(tonic::Response::new(proto::CatchupChainConfigResponse {
+            chain_config: Some((&config).into()),
+        }))
+    }
+
+    async fn get_catchup_leaf_chain(
+        &self,
+        request: tonic::Request<proto::GetCatchupLeafChainRequest>,
+    ) -> Result<tonic::Response<proto::CatchupLeafChainResponse>, tonic::Status> {
+        let height = required(request.into_inner().height, "height")?;
+        let leaves = <Self as v1::CatchupApi>::get_leaf_chain(self, height)
+            .await
+            .map_err(to_status)?;
+        Ok(tonic::Response::new(leaves.as_slice().into()))
+    }
+
+    async fn get_catchup_cert2(
+        &self,
+        request: tonic::Request<proto::GetCatchupCert2Request>,
+    ) -> Result<tonic::Response<proto::Cert2Response>, tonic::Status> {
+        let height = required(request.into_inner().height, "height")?;
+        let cert = <Self as v1::CatchupApi>::get_cert2(self, height)
+            .await
+            .map_err(to_status)?;
+        Ok(tonic::Response::new(proto::Cert2Response {
+            certificate: Some((&cert).into()),
+        }))
+    }
+
+    async fn get_catchup_reward_account(
+        &self,
+        request: tonic::Request<proto::GetCatchupRewardAccountRequest>,
+    ) -> Result<tonic::Response<proto::RewardAccountProofResponse>, tonic::Status> {
+        let request = request.into_inner();
+        let (height, view) = catchup_at(request.height, request.view)?;
+        let address = required(request.address, "address")?;
+        let query = <Self as v1::CatchupApi>::get_reward_account_v1(self, height, view, address)
+            .await
+            .map_err(to_status)?;
+        Ok(tonic::Response::new(query.into()))
+    }
+
+    async fn get_catchup_reward_accounts(
+        &self,
+        request: tonic::Request<proto::GetCatchupRewardAccountsRequest>,
+    ) -> Result<tonic::Response<proto::RewardMerkleTreeV1Response>, tonic::Status> {
+        let request = request.into_inner();
+        let (height, view) = catchup_at(request.height, request.view)?;
+        let accounts = request
+            .addresses
+            .iter()
+            .map(|account| {
+                account.parse().map_err(|err| {
+                    tonic::Status::invalid_argument(format!(
+                        "malformed reward account {account}: {err}"
+                    ))
+                })
+            })
+            .collect::<Result<Vec<RewardAccountV1>, _>>()?;
+        let tree = <Self as v1::CatchupApi>::get_reward_accounts_v1(self, height, view, accounts)
+            .await
+            .map_err(to_status)?;
+        Ok(tonic::Response::new(proto::RewardMerkleTreeV1Response {
+            tree: serialize_tree(&tree)?,
+        }))
+    }
+
+    async fn get_catchup_reward_account_v2(
+        &self,
+        request: tonic::Request<proto::GetCatchupRewardAccountV2Request>,
+    ) -> Result<tonic::Response<proto::RewardAccountProofResponse>, tonic::Status> {
+        let request = request.into_inner();
+        let (height, view) = catchup_at(request.height, request.view)?;
+        let address = required(request.address, "address")?;
+        let query = <Self as v1::CatchupApi>::get_reward_account_v2(self, height, view, address)
+            .await
+            .map_err(to_status)?;
+        Ok(tonic::Response::new(query.into()))
+    }
+
+    async fn get_catchup_reward_merkle_tree_v2(
+        &self,
+        request: tonic::Request<proto::GetCatchupRewardMerkleTreeV2Request>,
+    ) -> Result<tonic::Response<proto::RewardMerkleTreeV2Response>, tonic::Status> {
+        let request = request.into_inner();
+        let (height, view) = catchup_at(request.height, request.view)?;
+        // v1 wraps these bytes in a `serde_json::Value`, so take them from the source instead.
+        let tree = self
+            .data_source
+            .get_reward_merkle_tree_v2(height, hotshot_types::data::ViewNumber::new(view))
+            .await
+            .map_err(|err| to_status(not_found(format!("{err:#}"))))?;
+        Ok(tonic::Response::new(proto::RewardMerkleTreeV2Response {
+            tree,
+        }))
+    }
+
+    async fn get_catchup_state_cert(
+        &self,
+        request: tonic::Request<proto::GetCatchupStateCertRequest>,
+    ) -> Result<tonic::Response<proto::StateCertV2Response>, tonic::Status> {
+        let epoch = required(request.into_inner().epoch, "epoch")?;
+        let cert = <Self as v1::CatchupApi>::get_state_cert(self, epoch)
+            .await
+            .map_err(to_status)?;
+        Ok(tonic::Response::new(
+            (&espresso_types::v0_4::StateCertQueryDataV2(cert)).into(),
+        ))
+    }
+}
+
+/// A tree travels as bincode, the encoding peers already decode from v1 and from the v2
+/// reward tree route.
+fn serialize_tree<T: serde::Serialize>(tree: &T) -> Result<Vec<u8>, tonic::Status> {
+    bincode::serialize(tree)
+        .map_err(|err| tonic::Status::internal(format!("serializing tree: {err}")))
+}
+
+/// The `(height, view)` the catchup routes over a merkle tree are asked for.
+fn catchup_at(height: Option<u64>, view: Option<u64>) -> Result<(u64, u64), tonic::Status> {
+    Ok((required(height, "height")?, required(view, "view")?))
+}
+
 #[async_trait]
 impl<D> v1::SubmitApi for NodeApiStateImpl<D>
 where
@@ -2614,10 +2791,9 @@ pub(crate) trait SubmitDataSourceErased {
 }
 
 #[async_trait]
-impl<C, D> SubmitDataSourceErased
-    for hotshot_query_service::data_source::ExtensibleDataSource<D, crate::api::ApiState<C>>
+impl<D> SubmitDataSourceErased
+    for hotshot_query_service::data_source::ExtensibleDataSource<D, crate::api::ApiState>
 where
-    C: crate::api::context::ApiContext,
     D: Send + Sync,
 {
     async fn submit_erased(
@@ -2629,12 +2805,9 @@ where
 }
 
 // Bare mode (no query/status API) has no `ExtensibleDataSource` wrapper: the app state is
-// `ApiState<C>` directly, so it needs its own erased forwarding impl.
+// `ApiState` directly, so it needs its own erased forwarding impl.
 #[async_trait]
-impl<C> SubmitDataSourceErased for crate::api::ApiState<C>
-where
-    C: crate::api::context::ApiContext,
-{
+impl SubmitDataSourceErased for crate::api::ApiState {
     async fn submit_erased(
         &self,
         tx: espresso_types::Transaction,
@@ -2686,10 +2859,9 @@ pub(crate) trait StateSignatureDataSourceErased {
 }
 
 #[async_trait]
-impl<C, D> StateSignatureDataSourceErased
-    for hotshot_query_service::data_source::ExtensibleDataSource<D, crate::api::ApiState<C>>
+impl<D> StateSignatureDataSourceErased
+    for hotshot_query_service::data_source::ExtensibleDataSource<D, crate::api::ApiState>
 where
-    C: crate::api::context::ApiContext,
     D: Send + Sync,
 {
     async fn get_state_signature_erased(
@@ -2701,12 +2873,9 @@ where
 }
 
 // Bare mode (no query/status API) has no `ExtensibleDataSource` wrapper: the app state is
-// `ApiState<C>` directly, so it needs its own erased forwarding impl.
+// `ApiState` directly, so it needs its own erased forwarding impl.
 #[async_trait]
-impl<C> StateSignatureDataSourceErased for crate::api::ApiState<C>
-where
-    C: crate::api::context::ApiContext,
-{
+impl StateSignatureDataSourceErased for crate::api::ApiState {
     async fn get_state_signature_erased(
         &self,
         height: u64,
@@ -3205,6 +3374,7 @@ where
         let fetch_timeout = FETCH_TIMEOUT;
         let start = start as usize;
         let end = end as usize;
+        enforce_range(start, end, lc_large_object_range_limit())?;
 
         let payloads_stream = AvailabilityDataSource::get_payload_range(ds, start..end).await;
         let vid_stream = AvailabilityDataSource::get_vid_common_range(ds, start..end).await;
@@ -5831,7 +6001,7 @@ mod tests {
             "config",
         ]);
         let mut cfg = PublicNodeConfig::new(&opt, &opt.modules(), &test_genesis());
-        // Set directly: the follower module needs storage-sql, whose args differ under embedded-db.
+        // Set directly: the follower module needs storage-sql.
         cfg.follower = Some(FollowerConfig {
             poll_interval: Duration::from_millis(2500),
             max_blocks_per_poll: 17,
@@ -5906,19 +6076,11 @@ mod tests {
                 state_peers: strings(&cfg.state_peers),
                 config_peers: strings(cfg.config_peers.as_deref().unwrap()),
                 orchestrator_url: cfg.orchestrator_url.to_string(),
-                cdn_endpoint: cfg.cdn_endpoint.clone(),
                 cliquenet_bind_address: cfg.cliquenet_bind_address.unbracketed_string(),
                 cliquenet_advertise_address: cfg
                     .cliquenet_advertise_address
                     .as_ref()
                     .map(|addr| addr.unbracketed_string()),
-                libp2p_bind_address: cfg.libp2p_bind_address.clone(),
-                libp2p_advertise_address: cfg.libp2p_advertise_address.clone(),
-                libp2p_bootstrap_nodes: cfg
-                    .libp2p_bootstrap_nodes
-                    .as_deref()
-                    .map(strings)
-                    .unwrap_or_default(),
                 l1_provider_count: cfg.l1_provider_count as u64,
                 l1_ws_provider_count: cfg.l1_ws_provider_count as u64,
                 follower: Some(proto::FollowerModule {
@@ -5951,7 +6113,16 @@ mod tests {
                         light_client_db: Some(proto::LightClientDbOptions {
                             num_connections: 7,
                             num_leaves: 11,
-                            lc_path: None,
+                            // Not pinned to `None`: it defaults under ESPRESSO_NODE_STORAGE_PATH.
+                            lc_path: cfg
+                                .modules
+                                .query
+                                .as_ref()
+                                .unwrap()
+                                .light_client_db
+                                .lc_path
+                                .as_ref()
+                                .map(|path| path.display().to_string()),
                         }),
                     }),
                     submit: false,
@@ -5962,6 +6133,7 @@ mod tests {
                     explorer: false,
                     light_client: false,
                 }),
+                ..Default::default()
             }
         );
         // IPv6 because that is the only case where NetAddr's Display and its serde impl
@@ -5977,23 +6149,14 @@ mod tests {
         use espresso_types::config::PublicNetworkConfig;
         use hotshot_types::{
             PeerConfig, VersionedDaCommittee,
-            network::{BuilderType, CombinedNetworkConfig, Libp2pConfig, NetworkConfig},
+            network::{BuilderType, NetworkConfig},
         };
 
-        let peer_id = libp2p::PeerId::random();
-        let multiaddr: libp2p::Multiaddr = "/ip4/10.0.0.1/tcp/1769".parse().unwrap();
         let committee_member = PeerConfig::<SeqTypes>::test_default();
 
         let mut network_config = NetworkConfig::<SeqTypes> {
             commit_sha: "deadbeef".to_string(),
-            cdn_marshal_address: Some("marshal.test:8083".to_string()),
             builder: BuilderType::Random,
-            libp2p_config: Some(Libp2pConfig {
-                bootstrap_nodes: vec![(peer_id, multiaddr.clone())],
-            }),
-            combined_network_config: Some(CombinedNetworkConfig {
-                delay_duration: Duration::from_millis(1500),
-            }),
             ..Default::default()
         };
         network_config.config.da_committees = vec![VersionedDaCommittee {
@@ -6005,26 +6168,7 @@ mod tests {
         let served: proto::HotshotConfigResponse = PublicNetworkConfig::from(network_config).into();
 
         assert_eq!(served.commit_sha, "deadbeef");
-        assert_eq!(
-            served.cdn_marshal_address.as_deref(),
-            Some("marshal.test:8083")
-        );
         assert_eq!(served.builder, proto::BuilderType::Random as i32);
-        assert_eq!(
-            served.libp2p_config,
-            Some(proto::Libp2pNetworkConfig {
-                bootstrap_nodes: vec![proto::Libp2pBootstrapNode {
-                    peer_id: peer_id.to_string(),
-                    multiaddr: multiaddr.to_string(),
-                }],
-            })
-        );
-        assert_eq!(
-            served.combined_network_config,
-            Some(proto::CombinedNetworkConfig {
-                delay_duration_ms: 1500,
-            })
-        );
         // The version renders as v1's `version_ser` writes it, not as `Debug`.
         let da_committee = &served.da_committees[0];
         assert_eq!(served.da_committees.len(), 1);
@@ -6036,9 +6180,6 @@ mod tests {
         );
     }
 
-    // Postgres only, as in `options.rs`: storage-sql under embedded-db needs a `--path` that is
-    // irrelevant here.
-    #[cfg(not(feature = "embedded-db"))]
     #[tokio::test]
     async fn sql_storage_settings_are_served_in_full() {
         use proto::config_service_server::ConfigService as _;

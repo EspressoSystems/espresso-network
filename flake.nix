@@ -12,7 +12,7 @@
     ];
   };
 
-  inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+  inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
 
   inputs.rust-overlay.url = "github:oxalica/rust-overlay";
   inputs.rust-overlay.inputs.nixpkgs.follows = "nixpkgs";
@@ -26,12 +26,10 @@
   inputs.solc-bin.inputs.nixpkgs.follows = "nixpkgs";
 
   inputs.dregs.url = "github:EspressoSystems/dregs";
+  inputs.dregs.inputs.nixpkgs.follows = "nixpkgs";
 
   inputs.flake-compat.url = "github:edolstra/flake-compat";
   inputs.flake-compat.flake = false;
-
-  inputs.git-hooks.url = "github:cachix/git-hooks.nix";
-  inputs.git-hooks.inputs.nixpkgs.follows = "nixpkgs";
 
   # Pinned echidna version - current nixpkgs version fails to build
   # See https://hydra.nixos.org/job/nixos/trunk-combined/nixpkgs.echidna.x86_64-linux for build status
@@ -43,62 +41,40 @@
     , rust-overlay
     , nixpkgs-cross-overlay
     , flake-utils
-    , git-hooks
     , solc-bin
     , echidna-nixpkgs
     , dregs
     , ...
     }:
-    flake-utils.lib.eachDefaultSystem (system:
+    flake-utils.lib.eachSystem [ "x86_64-linux" "aarch64-linux" "aarch64-darwin" ] (system:
     let
       # node=error: disable noisy anvil output
-      RUST_LOG = "info,libp2p=off,node=error";
+      RUST_LOG = "info,node=error";
       RUST_BACKTRACE = 1;
       rustEnvVars = { inherit RUST_LOG RUST_BACKTRACE; };
 
       rustShellHook = ''
-        # on mac os `bin/pwd -P` returns the canonical path on case insensitive file-systems
+        # `bin/pwd -P` for macOS case-insensitive filesystems
         my_pwd=$(/bin/pwd -P 2> /dev/null || pwd)
 
-        # Use a distinct target dir for builds from within nix shells.
+        # Distinct from non-nix `target/` so they don't fight
         export CARGO_TARGET_DIR="$my_pwd/target/nix"
-
-        # Add rust binaries to PATH
         export PATH="$CARGO_TARGET_DIR/debug:$PATH"
       '';
 
       overlays = [
         (import rust-overlay)
         solc-bin.overlays.default
-        dregs.overlays.default
-        (final: prev: {
-          solhint = prev.callPackage ./nix/solhint { };
-        })
-
-        (final: prev: {
-          golangci-lint = prev.golangci-lint.overrideAttrs (old: rec {
-            version = "1.64.8";
-            src = prev.fetchFromGitHub {
-              owner = "golangci";
-              repo = "golangci-lint";
-              rev = "v${version}";
-              sha256 = "sha256-ODnNBwtfILD0Uy2AKDR/e76ZrdyaOGlCktVUcf9ujy8";
-            };
-            vendorHash = "sha256-/iq7Ju7c2gS7gZn3n+y0kLtPn2Nn8HY/YdqSDYjtEkI=";
-          });
-        })
-
-        (final: prev: {
-          prek-as-pre-commit = final.runCommand "prek-as-pre-commit" { } ''
-            mkdir -p $out/bin
-            ln -s ${final.prek}/bin/prek $out/bin/pre-commit
-          '';
-        })
       ];
       pkgs = import nixpkgs { inherit system overlays; };
-      keydb = pkgs.callPackage ./nix/keydb.nix { };
-      myShell = pkgs.mkShellNoCC.override (pkgs.lib.optionalAttrs pkgs.stdenv.isLinux {
-        # The mold linker is around 50% faster on Linux than the default linker.
+      inherit (pkgs) lib stdenv;
+
+      solhint = pkgs.callPackage ./nix/solhint { };
+      prek-as-pre-commit = pkgs.writeShellScriptBin "pre-commit" ''
+        exec ${pkgs.prek}/bin/prek "$@"
+      '';
+      myShell = pkgs.mkShellNoCC.override (lib.optionalAttrs stdenv.hostPlatform.isLinux {
+        # mold linker, ~50% faster on Linux
         stdenv = pkgs.stdenvAdapters.useMoldLinker pkgs.clangStdenv;
       });
       crossShell = { config }:
@@ -118,101 +94,29 @@
             inherit pkgs rustShellHook;
             envVars = rustEnvVars;
           };
-    in
-    with pkgs; {
-      checks = {
-        pre-commit-check = git-hooks.lib.${system}.run {
-          src = ./.;
-          # Use the rust pre-commit implementation `prek`
-          imports = [
-            ({ lib, ... }: {
-              config.package = lib.mkForce prek;
-            })
-          ];
-          hooks = {
-            doc = {
-              enable = true;
-              description = "Generate figures";
-              entry = "make doc";
-              types_or = [ "plantuml" ];
-              pass_filenames = false;
-            };
-            rustfmt = {
-              enable = true;
-              description = "Run rustfmt on changed files";
-              # cargo-fmt is slower, does not format all files, and doesn't allow passing file arguments
-              entry = "rustfmt";
-              types_or = [ "rust" ];
-              pass_filenames = true;
-            };
-            cargo-sort = {
-              enable = true;
-              description = "Ensure Cargo.toml are sorted";
-              entry = "cargo sort -g -w";
-              types_or = [ "toml" ];
-              pass_filenames = false;
-            };
-            cargo-lock = {
-              enable = true;
-              description = "Ensure Cargo.lock is compatible with Cargo.toml";
-              entry = "cargo update --workspace --verbose";
-              types_or = [ "toml" ];
-              pass_filenames = false;
-            };
-            forge-fmt = {
-              enable = true;
-              description = "Enforce forge fmt";
-              entry = "forge fmt";
-              types_or = [ "solidity" ];
-              pass_filenames = false;
-            };
-            solhint = {
-              enable = true;
-              description = "Solidity linter";
-              entry = "solhint 'contracts/{script,src,test}/**/*.sol'";
-              types_or = [ "solidity" ];
-              pass_filenames = true;
-            };
-            contract-bindings = {
-              enable = true;
-              description = "Generate contract bindings";
-              entry = "just gen-bindings";
-              types_or = [ "solidity" ];
-              pass_filenames = false;
-            };
-            prettier-fmt = {
-              enable = true;
-              description = "Enforce markdown formatting";
-              entry = "prettier -w";
-              types_or = [ "markdown" ];
-              pass_filenames = true;
-            };
-            spell-checking = {
-              enable = true;
-              description = "Spell checking";
-              # --force-exclude to exclude excluded files if they are passed as arguments
-              entry = "typos --force-exclude";
-              pass_filenames = true;
-              # Add excludes to the .typos.toml file instead
-            };
-            nixpkgs-fmt.enable = true;
-          };
-        };
+      stableToolchain = pkgs.rust-bin.fromRustupToolchainFile ./rust-toolchain.toml;
+      stableChannel = (lib.importTOML ./rust-toolchain.toml).toolchain.channel;
+      stableManifest = (if stableChannel == "stable" then pkgs.rust-bin.stable.latest else pkgs.rust-bin.stable.${stableChannel})._manifest;
+      # rustfmt.toml uses nightly-only options; newest nightly on or before the stable release date
+      # (some days have no nightly)
+      nightlyDate = lib.last (builtins.filter (d: d != "latest" && d <= stableManifest.date)
+        (builtins.attrNames pkgs.rust-bin.nightly));
+      nightlyToolchain = pkgs.rust-bin.nightly.${nightlyDate}.minimal.override {
+        extensions = [ "rust-analyzer" "rustfmt" ];
       };
-      packages.keydb = keydb;
-
+      rustDevEnv = rustEnvVars // {
+        RUST_SRC_PATH = "${stableToolchain}/lib/rustlib/src/rust/library";
+      };
+      solc = pkgs.solc-bin."0.8.35";
+      solcEnv = { FOUNDRY_SOLC = "${solc}/bin/solc"; };
+      # inputsFrom merges packages and shellHooks, not stdenv or env vars
+      addOnShell = { inputsFrom ? [ self.devShells.${system}.default ], ... }@attrs:
+        myShell (rustDevEnv // attrs // { inherit inputsFrom; });
+    in
+    {
       devShells.default =
-        let
-          stableToolchain = pkgs.rust-bin.fromRustupToolchainFile ./rust-toolchain.toml;
-          nightlyToolchain = pkgs.rust-bin.selectLatestNightlyWith (toolchain: toolchain.minimal.override {
-            extensions = [ "rust-analyzer" "rustfmt" ];
-          });
-          solc = pkgs.solc-bin."0.8.35";
-          pre-commit = self.checks.${system}.pre-commit-check;
-        in
-        myShell (rustEnvVars // {
-          packages = [
-            # Rust dependencies
+        myShell (rustDevEnv // {
+          packages = with pkgs; [
             pkg-config
             openssl
             curl
@@ -220,8 +124,6 @@
             buf # just proto-check
             stableToolchain
             jq
-
-            # Rust tools
             cargo-audit
             cargo-edit
             cargo-hack
@@ -231,78 +133,75 @@
             just
             nightlyToolchain.passthru.availableComponents.rust-analyzer
             nightlyToolchain.passthru.availableComponents.rustfmt
-
-            # Tools
             nixpkgs-fmt
             prek
-            prek-as-pre-commit # compat to allow running pre-commit
-            entr
-            datadog-pup
+            prek-as-pre-commit # `pre-commit` alias for muscle memory
             process-compose
-            lazydocker # a docker compose TUI
-            keydb
-            postgresql_18
-            opentofu # scripts/network-bench/aws
-            awscli2 # scripts/network-bench/aws
-
-            # Figures
-            graphviz
-            plantuml
-            coreutils
-
-            # Ethereum contracts, solidity, ...
-            foundry
-            solc
-            dregs-unwrapped
+            postgresql_18 # TmpDb in rust tests, scripts/run-postgres for demo-native
+            datadog-pup
+            lazydocker # used by `just demo`
+            foundry # need `anvil` in rust tests
             prettier
             solhint
-            libusb1
-            mdbook
-
-            # scripts
-            bc
-            python3
-            uv
-            ruff
-            ty
-            uv
-
-            go
-            golangci-lint
-            # provides abigen
-            go-ethereum
-          ] ++ lib.optionals stdenv.isDarwin [ darwin.libresolv ]
-          ++ lib.optionals (!stdenv.isDarwin) [ cargo-watch ] # broken on OSX
-          ++ pre-commit.enabledPackages;
+            libusb1 # link-time dep of `libusb1-sys` crate
+            coreutils # GNU timeout, realpath -m on macOS
+            bc # scripts/verify-pos-deployment.sh
+          ] ++ lib.optionals stdenv.hostPlatform.isDarwin [ pkgs.darwin.libresolv ];
           shellHook = ''
             ${rustShellHook}
 
-            # Add the local scripts to the PATH
             export PATH="$my_pwd/scripts:$PATH"
 
-            # Prevent cargo aliases from using programs in `~/.cargo` to avoid conflicts
-            # with rustup installations.
+            # Avoid clash with rustup's ~/.cargo
             export CARGO_HOME=$HOME/.cargo-nix
 
-            # Let uv-installed binary wheels (matplotlib/numpy/...) find libstdc++ on NixOS.
-            export LD_LIBRARY_PATH="${lib.makeLibraryPath [ pkgs.stdenv.cc.cc.lib pkgs.zlib ]}''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-
-            ${pre-commit.shellHook}
+            # Skipped for with-tools fallbacks: they may run inside a git hook.
+            if [ -f .pre-commit-config.yaml ] && [ -z "''${WITH_TOOLS:-}" ] && git rev-parse --git-dir >/dev/null 2>&1; then
+              hook=$(git rev-parse --git-path hooks/pre-commit)
+              if [ -f "$hook" ] && ! grep -q "File generated by prek" "$hook"; then
+                mv "$hook" "$hook.bak"
+                echo "warning: moved existing $hook to $hook.bak" >&2
+              fi
+              prek install -q
+            fi
           '';
-          RUST_SRC_PATH = "${stableToolchain}/lib/rustlib/src/rust/library";
-          FOUNDRY_SOLC = "${solc}/bin/solc";
         });
-      devShells.dockerShell = pkgs.mkShell {
-        inputsFrom = [ self.devShells.${system}.default ];
-        packages = [ pkgs.docker ];
-        shellHook = lib.concatStringsSep "\n" [
-          self.devShells.${system}.default
+      devShells.docs = addOnShell {
+        packages = with pkgs; [ graphviz plantuml mdbook ];
+      };
 
-          ''
-            # Required for demo-native to run with docker-rootless
-            export DOCKER_HOST=unix://$XDG_RUNTIME_DIR/docker.sock
-          ''
-        ];
+      devShells.go = addOnShell {
+        packages = [ pkgs.go_1_27 ];
+      };
+
+      devShells.contracts = addOnShell (solcEnv // {
+        packages = [ solc pkgs.go-ethereum pkgs.python3 ]; # python3: forge ffi storage-layout tests
+      });
+
+      devShells.mutation = addOnShell (solcEnv // {
+        inputsFrom = [ self.devShells.${system}.contracts ];
+        packages = [ dregs.packages.${system}.unwrapped ];
+      });
+
+      devShells.python = addOnShell {
+        packages = with pkgs; [ python3 uv ruff ty ];
+        # Let uv-installed binary wheels (matplotlib/numpy/...) find libstdc++ on NixOS.
+        shellHook = ''
+          export LD_LIBRARY_PATH="${lib.makeLibraryPath [ pkgs.stdenv.cc.cc.lib pkgs.zlib ]}''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+        '';
+      };
+
+      devShells.aws = addOnShell {
+        inputsFrom = [ self.devShells.${system}.python ];
+        packages = with pkgs; [ opentofu awscli2 ]; # scripts/network-bench/aws
+      };
+
+      devShells.dockerShell = addOnShell {
+        packages = [ pkgs.docker ];
+        # Required for demo-native to run with docker-rootless
+        shellHook = ''
+          export DOCKER_HOST=unix://$XDG_RUNTIME_DIR/docker.sock
+        '';
       };
       devShells.crossShell =
         crossShell { config = "x86_64-unknown-linux-musl"; };
@@ -315,8 +214,7 @@
           };
         in
         myShell (rustEnvVars // {
-          packages = [
-            # Rust dependencies
+          packages = with pkgs; [
             pkg-config
             openssl
             curl
@@ -330,8 +228,7 @@
           toolchain = pkgs.rust-bin.nightly.latest.minimal;
         in
         myShell (rustEnvVars // {
-          packages = [
-            # Rust dependencies
+          packages = with pkgs; [
             pkg-config
             openssl
             curl
@@ -356,8 +253,7 @@
           };
         in
         myShell (rustEnvVars // {
-          packages = [
-            # Rust dependencies
+          packages = with pkgs; [
             pkg-config
             openssl
             curl
@@ -367,7 +263,7 @@
           shellHook = rustShellHook;
         });
 
-      # A separate dev-shell due to large size of dependencies (incl. ghc)
+      # Separated due to ghc dep size.
       devShells.echidna =
         let
           solc = pkgs.solc-bin."0.8.28";
@@ -375,11 +271,8 @@
         in
         myShell {
           packages = [
-            # Foundry tools
-            foundry
+            pkgs.foundry
             solc
-
-            # Security analysis tools
             echidna-pkgs.slither-analyzer
             echidna-pkgs.echidna
             echidna-pkgs.python3.pkgs.crytic-compile

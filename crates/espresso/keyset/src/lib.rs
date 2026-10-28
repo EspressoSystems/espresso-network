@@ -4,9 +4,10 @@ use alloy::signers::local::coins_bip39::{English, Mnemonic};
 use anyhow::{Context, bail};
 use clap::Parser;
 use derivative::Derivative;
-use hotshot::types::{BLSPrivKey, BLSPubKey, SignatureKey};
 use hotshot_types::{
     light_client::{StateKeyPair, StateSignKey},
+    signature_key::{BLSPrivKey, BLSPubKey},
+    traits::signature_key::SignatureKey,
     x25519,
 };
 use tagged_base64::TaggedBase64;

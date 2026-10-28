@@ -4,11 +4,11 @@ use std::{
 };
 
 use committable::{Commitment, Committable};
-use hotshot::traits::{BlockPayload, ValidatedState};
 use hotshot_types::{
     data::{BlockNumber, EpochNumber, Leaf2, VidCommitment, ViewNumber},
     message::UpgradeLock,
     traits::{
+        BlockPayload, ValidatedState,
         block_contents::{BlockHeader, BuilderFee},
         metrics::Histogram,
         node_implementation::NodeType,

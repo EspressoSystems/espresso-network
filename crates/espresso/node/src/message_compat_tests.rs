@@ -165,7 +165,7 @@ where
     assert_eq!(&parsed, expected);
 }
 
-#[cfg(feature = "testing")]
+#[cfg(any(test, feature = "testing"))]
 async fn test_message_compat<Ver: StaticVersionType>(_ver: Ver) {
     let (sender, priv_key) = PubKey::generated_from_seed_indexed(Default::default(), 0);
     let signature = PubKey::sign(&priv_key, &[]).unwrap();
@@ -438,7 +438,7 @@ fn assemble_qc_signature(
 ///
 /// Optional fields are populated wherever a variant allows it, so the vector pins the encoding of
 /// the `Some` case rather than the cheaper `None` case.
-#[cfg(feature = "testing")]
+#[cfg(any(test, feature = "testing"))]
 async fn reference_new_protocol_messages(
     version: Version,
 ) -> Vec<NewProtocolMessage<SeqTypes, Validated>> {
@@ -784,7 +784,7 @@ async fn reference_new_protocol_messages(
         .collect()
 }
 
-#[cfg(feature = "testing")]
+#[cfg(any(test, feature = "testing"))]
 #[tokio::test(flavor = "multi_thread")]
 async fn test_v6_new_protocol_message_compat() {
     let messages =
@@ -810,7 +810,7 @@ async fn test_v6_new_protocol_message_compat() {
 /// diff against v6 is wider than the timeout forms alone: every message
 /// carrying a block header, a leaf commitment derived from one, or a signature
 /// over either differs too.
-#[cfg(feature = "testing")]
+#[cfg(any(test, feature = "testing"))]
 #[tokio::test(flavor = "multi_thread")]
 async fn test_v7_new_protocol_message_compat() {
     let messages =

@@ -46,6 +46,7 @@ use tower::Layer;
 pub use self::axum::{create_router_v1, routes};
 use self::proto::{
     availability_service_server::{AvailabilityService, AvailabilityServiceServer},
+    catchup_service_server::{CatchupService, CatchupServiceServer},
     config_service_server::{ConfigService, ConfigServiceServer},
     database_service_server::{DatabaseService, DatabaseServiceServer},
     explorer_service_server::{ExplorerService, ExplorerServiceServer},
@@ -75,9 +76,10 @@ pub fn url(base: &::url::Url, path: impl AsRef<str>) -> ::url::Url {
 ///
 /// `catchup`, like the query-service modules (`status`, `availability`, `node`, `token`,
 /// `block-state`, `fee-state`, `reward-state`, `database`) and `v2`, is always on: tide-disco's
-/// SQL mode registered it unconditionally. `submit`, `config`, `explorer`, and `light-client`
-/// follow `Options`, matching `Options::init_with_query_module_sql`, and v2's gated services follow
-/// the same flag as their v1 module.
+/// SQL mode registered it unconditionally. `light-client` is always on too, since peers fetch
+/// missing data from it. `submit`, `config`, and `explorer` follow `Options`, matching
+/// `Options::init_with_query_module_sql`, and v2's gated services follow the same flag as their
+/// v1 module.
 pub async fn serve_axum<S>(
     port: u16,
     state: S,
@@ -111,6 +113,7 @@ where
         + StateSignatureService
         + SubmitService
         + ExplorerService
+        + CatchupService
         + Send
         + Sync
         + 'static,
@@ -126,7 +129,8 @@ where
         .merge(axum::router_catchup(state.clone()))
         .merge(axum::router_state_signature(state.clone()))
         .merge(axum::router_token(state.clone()))
-        .merge(axum::router_database(state.clone()));
+        .merge(axum::router_database(state.clone()))
+        .merge(axum::router_light_client(state.clone()));
     if modules.submit {
         router = router.merge(axum::router_submit(state.clone()));
     }
@@ -135,9 +139,6 @@ where
     }
     if modules.explorer {
         router = router.merge(axum::router_explorer(state.clone()));
-    }
-    if modules.light_client {
-        router = router.merge(axum::router_light_client(state.clone()));
     }
 
     let router = axum::finish_v1_docs(router)
@@ -161,6 +162,7 @@ where
         + StateSignatureService
         + SubmitService
         + ExplorerService
+        + CatchupService
         + Send
         + Sync
         + 'static,
@@ -172,7 +174,8 @@ where
         .merge(rest::availability_service_rest_router(state.clone()))
         .merge(rest::merklized_state_service_rest_router(state.clone()))
         .merge(rest::reward_state_service_rest_router(state.clone()))
-        .merge(rest::state_signature_service_rest_router(state.clone()));
+        .merge(rest::state_signature_service_rest_router(state.clone()))
+        .merge(rest::catchup_service_rest_router(state.clone()));
     let router = if modules.submit {
         router.merge(rest::submit_service_rest_router(state.clone()))
     } else {
@@ -203,14 +206,13 @@ where
 }
 
 /// Which of the optional API modules to serve, for modes that make them conditional
-/// (mirroring `Options::submit`/`Options::config`/`Options::explorer`/`Options::light_client`).
+/// (mirroring `Options::submit`/`Options::config`/`Options::explorer`).
 #[derive(Default, Clone, Copy, Debug)]
 pub struct OptionalModules {
     pub submit: bool,
     pub catchup: bool,
     pub config: bool,
     pub explorer: bool,
-    pub light_client: bool,
 }
 
 /// Serve the query API used by the filesystem-backed storage mode: status, availability, node,
@@ -411,6 +413,7 @@ where
         + StateSignatureService
         + SubmitService
         + ExplorerService
+        + CatchupService
         + Clone,
 {
     use ::tonic::transport::Server;
@@ -431,6 +434,7 @@ where
         .add_service(MerklizedStateServiceServer::new(state.clone()))
         .add_service(RewardStateServiceServer::new(state.clone()))
         .add_service(StateSignatureServiceServer::new(state.clone()))
+        .add_service(CatchupServiceServer::new(state.clone()))
         .add_service(reflection_service)
         .add_optional_service(modules.submit.then(|| {
             // tonic's 4 MiB default would refuse a transaction the REST route and the block size

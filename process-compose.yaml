@@ -14,7 +14,6 @@ x-availability:
     restart: exit_on_failure
 
 environment:
-  - ESPRESSO_NODE_CDN_ENDPOINT=127.0.0.1:${ESPRESSO_CDN_SERVER_PORT}
   - ESPRESSO_NODE_ORCHESTRATOR_URL=http://localhost:${ESPRESSO_ORCHESTRATOR_PORT}
   - ESPRESSO_API_NODE_URL=http://localhost:${ESPRESSO_NODE_0_API_PORT}
   - ESPRESSO_API_NODE_URLS=http://localhost:${ESPRESSO_NODE_0_API_PORT},http://localhost:${ESPRESSO_NODE_1_API_PORT}
@@ -206,7 +205,7 @@ processes:
       backoff_seconds: ${ESPRESSO_STATE_PROVER_UPDATE_INTERVAL_SECS}
 
   espresso-node-0:
-    command: espresso-node -- storage-sql -- http -- query -- submit -- hotshot-events -- config -- catchup -- light-client
+    command: espresso-node -- storage-sql -- http -- query -- submit -- hotshot-events -- config -- catchup
     log_location: logs/sequencer0.log
     environment:
       - ESPRESSO_NODE_TELEMETRY_LOGS_ENABLE=true
@@ -215,8 +214,6 @@ processes:
       - ESPRESSO_NODE_TELEMETRY_LOG=info
       - ESPRESSO_NODE_API_PORT=${ESPRESSO_NODE_0_API_PORT}
       - ESPRESSO_NODE_TONIC_PORT=${ESPRESSO_NODE_0_TONIC_PORT}
-      - ESPRESSO_NODE_LIBP2P_BIND_ADDRESS=0.0.0.0:${ESPRESSO_DEMO_NODE_LIBP2P_PORT_0}
-      - ESPRESSO_NODE_LIBP2P_ADVERTISE_ADDRESS=localhost:${ESPRESSO_DEMO_NODE_LIBP2P_PORT_0}
       - ESPRESSO_NODE_CLIQUENET_BIND_ADDRESS=127.0.0.1:${ESPRESSO_DEMO_NODE_CLIQUENET_PORT_0}
       - ESPRESSO_NODE_CLIQUENET_ADVERTISE_ADDRESS=127.0.0.1:${ESPRESSO_DEMO_NODE_CLIQUENET_PORT_0}
       - ESPRESSO_NODE_API_PEERS=http://localhost:${ESPRESSO_NODE_1_API_PORT}
@@ -250,12 +247,6 @@ processes:
         condition: process_healthy
       espresso-node-db-0:
         condition: process_healthy
-      broker_0:
-        condition: process_healthy
-      broker_1:
-        condition: process_healthy
-      marshal_0:
-        condition: process_healthy
       stake-for-demo:
         condition: process_completed
       wait-for-l1-finalized:
@@ -278,8 +269,6 @@ processes:
       - ESPRESSO_NODE_TELEMETRY_ENDPOINT=http://intentionally-unreachable-telemetry-endpoint
       - ESPRESSO_NODE_API_PORT=${ESPRESSO_NODE_1_API_PORT}
       - ESPRESSO_NODE_TONIC_PORT=${ESPRESSO_NODE_1_TONIC_PORT}
-      - ESPRESSO_NODE_LIBP2P_BIND_ADDRESS=0.0.0.0:${ESPRESSO_DEMO_NODE_LIBP2P_PORT_1}
-      - ESPRESSO_NODE_LIBP2P_ADVERTISE_ADDRESS=localhost:${ESPRESSO_DEMO_NODE_LIBP2P_PORT_1}
       - ESPRESSO_NODE_CLIQUENET_BIND_ADDRESS=127.0.0.1:${ESPRESSO_DEMO_NODE_CLIQUENET_PORT_1}
       - ESPRESSO_NODE_CLIQUENET_ADVERTISE_ADDRESS=127.0.0.1:${ESPRESSO_DEMO_NODE_CLIQUENET_PORT_1}
       - ESPRESSO_NODE_API_PEERS=http://localhost:${ESPRESSO_NODE_0_API_PORT}
@@ -314,12 +303,6 @@ processes:
         condition: process_healthy
       espresso-node-db-1:
         condition: process_healthy
-      broker_0:
-        condition: process_healthy
-      broker_1:
-        condition: process_healthy
-      marshal_0:
-        condition: process_healthy
       stake-for-demo:
         condition: process_completed
       wait-for-l1-finalized:
@@ -339,8 +322,6 @@ processes:
     environment:
       - ESPRESSO_NODE_API_PORT=${ESPRESSO_NODE_2_API_PORT}
       - ESPRESSO_NODE_TONIC_PORT=${ESPRESSO_NODE_2_TONIC_PORT}
-      - ESPRESSO_NODE_LIBP2P_BIND_ADDRESS=0.0.0.0:${ESPRESSO_DEMO_NODE_LIBP2P_PORT_2}
-      - ESPRESSO_NODE_LIBP2P_ADVERTISE_ADDRESS=localhost:${ESPRESSO_DEMO_NODE_LIBP2P_PORT_2}
       - ESPRESSO_NODE_CLIQUENET_BIND_ADDRESS=127.0.0.1:${ESPRESSO_DEMO_NODE_CLIQUENET_PORT_2}
       - ESPRESSO_NODE_CLIQUENET_ADVERTISE_ADDRESS=127.0.0.1:${ESPRESSO_DEMO_NODE_CLIQUENET_PORT_2}
       - ESPRESSO_NODE_STATE_PEERS=http://localhost:${ESPRESSO_NODE_0_API_PORT},http://localhost:${ESPRESSO_NODE_1_API_PORT}
@@ -368,12 +349,6 @@ processes:
         condition: process_healthy
       state-relay-server:
         condition: process_healthy
-      broker_0:
-        condition: process_healthy
-      broker_1:
-        condition: process_healthy
-      marshal_0:
-        condition: process_healthy
       stake-for-demo:
         condition: process_completed
       wait-for-l1-finalized:
@@ -396,8 +371,6 @@ processes:
       - ESPRESSO_NODE_TELEMETRY_LOG=info
       - ESPRESSO_NODE_API_PORT=${ESPRESSO_NODE_3_API_PORT}
       - ESPRESSO_NODE_TONIC_PORT=${ESPRESSO_NODE_3_TONIC_PORT}
-      - ESPRESSO_NODE_LIBP2P_BIND_ADDRESS=0.0.0.0:${ESPRESSO_DEMO_NODE_LIBP2P_PORT_3}
-      - ESPRESSO_NODE_LIBP2P_ADVERTISE_ADDRESS=localhost:${ESPRESSO_DEMO_NODE_LIBP2P_PORT_3}
       - ESPRESSO_NODE_CLIQUENET_BIND_ADDRESS=127.0.0.1:${ESPRESSO_DEMO_NODE_CLIQUENET_PORT_3}
       - ESPRESSO_NODE_CLIQUENET_ADVERTISE_ADDRESS=127.0.0.1:${ESPRESSO_DEMO_NODE_CLIQUENET_PORT_3}
       - ESPRESSO_NODE_STATE_PEERS=http://localhost:${ESPRESSO_NODE_0_API_PORT},http://localhost:${ESPRESSO_NODE_1_API_PORT}
@@ -425,12 +398,6 @@ processes:
         condition: process_healthy
       state-relay-server:
         condition: process_healthy
-      broker_0:
-        condition: process_healthy
-      broker_1:
-        condition: process_healthy
-      marshal_0:
-        condition: process_healthy
       stake-for-demo:
         condition: process_completed
       wait-for-l1-finalized:
@@ -446,15 +413,14 @@ processes:
     availability: *run-forever
 
   espresso-node-4:
-    command: espresso-node-sqlite -- storage-sql -- http -- config -- query
+    command: espresso-node -- storage-sql -- http -- config -- query
     environment:
+      - ESPRESSO_NODE_EMBEDDED_DB=true
       - ESPRESSO_NODE_LIGHTWEIGHT=true
       - ESPRESSO_NODE_API_PORT=${ESPRESSO_NODE_4_API_PORT}
       - ESPRESSO_NODE_TONIC_PORT=${ESPRESSO_NODE_4_TONIC_PORT}
       - ESPRESSO_NODE_STATE_PEERS=http://localhost:${ESPRESSO_NODE_0_API_PORT},http://localhost:${ESPRESSO_NODE_1_API_PORT}
       - ESPRESSO_NODE_API_PEERS=http://localhost:${ESPRESSO_NODE_0_API_PORT}
-      - ESPRESSO_NODE_LIBP2P_BIND_ADDRESS=0.0.0.0:${ESPRESSO_DEMO_NODE_LIBP2P_PORT_4}
-      - ESPRESSO_NODE_LIBP2P_ADVERTISE_ADDRESS=localhost:${ESPRESSO_DEMO_NODE_LIBP2P_PORT_4}
       - ESPRESSO_NODE_CLIQUENET_BIND_ADDRESS=127.0.0.1:${ESPRESSO_DEMO_NODE_CLIQUENET_PORT_4}
       - ESPRESSO_NODE_CLIQUENET_ADVERTISE_ADDRESS=127.0.0.1:${ESPRESSO_DEMO_NODE_CLIQUENET_PORT_4}
       - ESPRESSO_NODE_STORAGE_PATH=${ESPRESSO_BASE_STORAGE_PATH}/seq4
@@ -480,12 +446,6 @@ processes:
         condition: process_healthy
       state-relay-server:
         condition: process_healthy
-      broker_0:
-        condition: process_healthy
-      broker_1:
-        condition: process_healthy
-      marshal_0:
-        condition: process_healthy
       stake-for-demo:
         condition: process_completed
       wait-for-l1-finalized:
@@ -507,10 +467,6 @@ processes:
       - ESPRESSO_NODE_VALIDATOR_LEAF_STREAM_SOURCE_BASE_URL=http://localhost:${ESPRESSO_NODE_0_API_PORT}/v1/
       - ESPRESSO_NODE_VALIDATOR_INITIAL_NODE_PUBLIC_BASE_URLS=http://localhost:${ESPRESSO_NODE_0_API_PORT}/,http://localhost:${ESPRESSO_NODE_1_API_PORT}/,http://localhost:${ESPRESSO_NODE_2_API_PORT}/,http://localhost:${ESPRESSO_NODE_3_API_PORT}/,http://localhost:${ESPRESSO_NODE_4_API_PORT}/
     depends_on:
-      broker_0:
-        condition: process_healthy
-      broker_1:
-        condition: process_healthy
       espresso-node-0:
         condition: process_healthy
       espresso-node-1:
@@ -530,78 +486,6 @@ processes:
       period_seconds: 1
       failure_threshold: 100
     availability: *run-forever
-
-  keydb:
-    command: keydb-server --bind 127.0.0.1 --port 6379 --requirepass 'changeme!'
-    readiness_probe:
-      exec:
-        command: nc -zv localhost 6379
-      period_seconds: 5
-      timeout_seconds: 4
-      failure_threshold: 20
-    availability: *run-forever
-
-  # The CDN system's main entry point; where users contact first.
-  marshal_0:
-    command: cdn-marshal -d "redis://:changeme!@localhost:6379" -b ${ESPRESSO_CDN_SERVER_PORT} -m 127.0.0.1:9093
-    depends_on:
-      keydb:
-        condition: process_healthy
-    readiness_probe:
-      http_get:
-        scheme: http
-        host: 127.0.0.1
-        port: 9093
-        path: /metrics
-      period_seconds: 1
-      failure_threshold: 100
-    availability: *run-forever
-
-  # A broker is the main message-routing unit of the CDN
-  broker_0:
-    command: cdn-broker -d "redis://:changeme!@localhost:6379" -m 127.0.0.1:9091 --public-advertise-endpoint local_ip:1738
-    depends_on:
-      keydb:
-        condition: process_healthy
-    readiness_probe:
-      http_get:
-        scheme: http
-        host: 127.0.0.1
-        port: 9091
-        path: /metrics
-      period_seconds: 1
-      failure_threshold: 100
-    availability: *run-forever
-
-  # A broker is the main message-routing unit of the CDN
-  # as we're running a local demo, we need to operate on different ports
-  broker_1:
-    command:
-      cdn-broker --public-bind-endpoint 0.0.0.0:1740 --public-advertise-endpoint local_ip:1740
-      --private-bind-endpoint 0.0.0.0:1741 --private-advertise-endpoint local_ip:1741 -d
-      "redis://:changeme!@localhost:6379" -m 127.0.0.1:9092
-    depends_on:
-      keydb:
-        condition: process_healthy
-    readiness_probe:
-      http_get:
-        scheme: http
-        host: 127.0.0.1
-        port: 9092
-        path: /metrics
-      period_seconds: 1
-      failure_threshold: 100
-    availability: *run-forever
-
-  cdn-whitelist:
-    command: cdn-whitelist -d redis://:changeme!@localhost:6379 -o http://localhost:${ESPRESSO_ORCHESTRATOR_PORT}
-    namespace: setup
-    depends_on:
-      orchestrator:
-        condition: process_healthy
-      keydb:
-        condition: process_healthy
-    availability: *exit-ok
 
   submit-transactions-public:
     command: submit-transactions

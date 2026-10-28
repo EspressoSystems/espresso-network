@@ -17,14 +17,11 @@ use espresso_types::{
     AuthenticatedValidatorMap, Header, Leaf2, NetworkConfig, Payload, PubKey,
     RegisteredValidatorMap, SeqTypes, StakeTableHash,
     traits::{EventsPersistenceRead, MembershipPersistence, StakeTuple},
-    v0::traits::{EventConsumer, PersistenceOptions, SequencerPersistence},
+    v0::traits::{EventConsumer, PersistenceOptions, SequencerPersistence, StateCertPersistence},
     v0_3::{
         AuthenticatedValidator, EventKey, IndexedStake, RegisteredValidator, RewardAmount,
         StakeTableEvent,
     },
-};
-use hotshot_libp2p_networking::network::behaviours::dht::store::persistent::{
-    DhtPersistentStorage, SerializableRecord,
 };
 use hotshot_new_protocol::message::Certificate2;
 use hotshot_types::{
@@ -289,9 +286,6 @@ impl Inner {
         self.path.join("high_qc2")
     }
 
-    fn libp2p_dht_path(&self) -> PathBuf {
-        self.path.join("libp2p_dht")
-    }
     fn epoch_drb_result_dir_path(&self) -> PathBuf {
         self.path.join("epoch_drb_result")
     }
@@ -1554,6 +1548,14 @@ impl SequencerPersistence for Persistence {
         Ok(result)
     }
 
+    fn enable_metrics(&mut self, metrics: &dyn Metrics) {
+        self.metrics = Arc::new(PersistenceMetricsValue::new(metrics));
+        self.probe.register(&*metrics.subgroup("disk".into()));
+    }
+}
+
+#[async_trait]
+impl StateCertPersistence for Persistence {
     async fn get_state_cert_by_epoch(
         &self,
         epoch: u64,
@@ -1614,11 +1616,6 @@ impl SequencerPersistence for Persistence {
         ))?;
 
         Ok(())
-    }
-
-    fn enable_metrics(&mut self, metrics: &dyn Metrics) {
-        self.metrics = Arc::new(PersistenceMetricsValue::new(metrics));
-        self.probe.register(&*metrics.subgroup("disk".into()));
     }
 }
 
@@ -2046,65 +2043,6 @@ impl MembershipPersistence for Persistence {
     }
 }
 
-#[async_trait]
-impl DhtPersistentStorage for Persistence {
-    /// Save the DHT to the file on disk
-    ///
-    /// # Errors
-    /// - If we fail to serialize the records
-    /// - If we fail to write the serialized records to the file
-    async fn save(&self, records: Vec<SerializableRecord>) -> anyhow::Result<()> {
-        // Bincode-serialize the records
-        let to_save =
-            bincode::serialize(&records).with_context(|| "failed to serialize records")?;
-
-        // Get the path to save the file to
-        let path = self.inner.read().await.libp2p_dht_path();
-
-        // Create the directory if it doesn't exist
-        fs::create_dir_all(path.parent().with_context(|| "directory had no parent")?)
-            .with_context(|| "failed to create directory")?;
-
-        // Get a write lock on the inner struct
-        let mut inner = self.inner.write().await;
-
-        // Save the file, replacing the previous one if it exists
-        inner
-            .replace(
-                &path,
-                |_| {
-                    // Always overwrite the previous file
-                    Ok(true)
-                },
-                |mut file| {
-                    file.write_all(&to_save)
-                        .with_context(|| "failed to write records to file")?;
-                    Ok(())
-                },
-            )
-            .with_context(|| "failed to save records to file")?;
-
-        Ok(())
-    }
-
-    /// Load the DHT from the file on disk
-    ///
-    /// # Errors
-    /// - If we fail to read the file
-    /// - If we fail to deserialize the records
-    async fn load(&self) -> anyhow::Result<Vec<SerializableRecord>> {
-        // Read the contents of the file
-        let contents = std::fs::read(self.inner.read().await.libp2p_dht_path())
-            .with_context(|| "Failed to read records from file")?;
-
-        // Deserialize the contents
-        let records: Vec<SerializableRecord> =
-            bincode::deserialize(&contents).with_context(|| "Failed to deserialize records")?;
-
-        Ok(records)
-    }
-}
-
 /// Get all paths under `dir` whose name is of the form <view number>.txt.
 fn view_files(
     dir: impl AsRef<Path>,
@@ -2164,10 +2102,11 @@ mod test {
 
     use committable::Committable;
     use espresso_types::{Leaf, NodeState, PubKey};
-    use hotshot::types::SignatureKey;
     use hotshot_example_types::node_types::TEST_VERSIONS;
     use hotshot_query_service::{metrics::PrometheusMetrics, testing::mocks::MOCK_UPGRADE};
-    use hotshot_types::{data::QuorumProposal2, simple_vote::Vote2Data};
+    use hotshot_types::{
+        data::QuorumProposal2, simple_vote::Vote2Data, traits::signature_key::SignatureKey,
+    };
     use serde_json::json;
     use tempfile::TempDir;
 

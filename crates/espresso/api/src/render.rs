@@ -4,12 +4,13 @@ use std::{borrow::Borrow, collections::HashMap};
 
 use ark_serialize::CanonicalSerialize;
 use espresso_types::{
-    BuilderSignature, FeeAccount, FeeInfo, Header, L1BlockInfo, NamespaceProofQueryData, NsProof,
-    Payload, PubKey, SeqTypes, Transaction, TxProof,
+    AccountQueryData, BuilderSignature, FeeAccount, FeeAccountProof, FeeInfo, FeeMerkleProof,
+    Header, L1BlockInfo, NamespaceProofQueryData, NsProof, Payload, PubKey, SeqTypes, Transaction,
+    TxProof,
     config::PublicNetworkConfig,
     v0_3::{
-        AvidMIncorrectEncodingNsProof, AvidMNsProof, RegisteredValidator, ResolvableChainConfig,
-        StateCertQueryDataV1,
+        self, AvidMIncorrectEncodingNsProof, AvidMNsProof, RegisteredValidator,
+        ResolvableChainConfig, StateCertQueryDataV1,
     },
     v0_4::{
         RewardAccountProofV2, RewardAccountQueryDataV2, RewardMerkleProofV2, StateCertQueryDataV2,
@@ -55,22 +56,28 @@ impl From<ResolvableChainConfig> for proto::ResolvableChainConfig {
     fn from(chain_config: ResolvableChainConfig) -> Self {
         // `commit` would hash a full config too; only `resolve` tells the two apart.
         let resolved = match chain_config.resolve() {
-            Some(config) => ChainConfig::Full(proto::ChainConfig {
-                chain_id: config.chain_id.to_string(),
-                max_block_size: *config.max_block_size,
-                base_fee: config.base_fee.to_string(),
-                // v1 renders addresses as lowercase hex through `ethers_core::H160` and
-                // `FixedBytes`; alloy's `Display` prints them EIP-55 checksummed instead.
-                fee_contract: config.fee_contract.map(|address| format!("{address:#x}")),
-                fee_recipient: format!("{:#x}", config.fee_recipient.0),
-                stake_table_contract: config
-                    .stake_table_contract
-                    .map(|address| format!("{address:#x}")),
-            }),
+            Some(config) => ChainConfig::Full((&config).into()),
             None => ChainConfig::Commitment(chain_config.commit().to_string()),
         };
         proto::ResolvableChainConfig {
             chain_config: Some(resolved),
+        }
+    }
+}
+
+impl From<&v0_3::ChainConfig> for proto::ChainConfig {
+    fn from(config: &v0_3::ChainConfig) -> Self {
+        proto::ChainConfig {
+            chain_id: config.chain_id.to_string(),
+            max_block_size: *config.max_block_size,
+            base_fee: config.base_fee.to_string(),
+            // v1 renders addresses as lowercase hex through `ethers_core::H160` and
+            // `FixedBytes`; alloy's `Display` prints them EIP-55 checksummed instead.
+            fee_contract: config.fee_contract.map(|address| format!("{address:#x}")),
+            fee_recipient: format!("{:#x}", config.fee_recipient.0),
+            stake_table_contract: config
+                .stake_table_contract
+                .map(|address| format!("{address:#x}")),
         }
     }
 }
@@ -534,6 +541,14 @@ impl From<&[BlockSummaryQueryData<SeqTypes>]> for proto::BlockSummaryRangeRespon
     }
 }
 
+impl From<&[Leaf2<SeqTypes>]> for proto::CatchupLeafChainResponse {
+    fn from(leaves: &[Leaf2<SeqTypes>]) -> Self {
+        proto::CatchupLeafChainResponse {
+            leaves: leaves.iter().map(Into::into).collect(),
+        }
+    }
+}
+
 impl TryFrom<&[NamespaceProofQueryData]> for proto::NamespaceProofRangeResponse {
     type Error = tonic::Status;
 
@@ -609,8 +624,58 @@ impl From<RewardAccountQueryDataV2> for proto::RewardAccountProofResponse {
         proto::RewardAccountProofResponse {
             balance: balance.to_string(),
             proof: Some(proto::RewardAccountProof {
-                account: account.to_string(),
+                account: format!("{account:#x}"),
                 proof: Some(proto::RewardMerkleProof { proof: Some(proof) }),
+            }),
+        }
+    }
+}
+
+/// As the [`RewardAccountQueryDataV2`] impl, for the v1 tree. The two proof types share no trait,
+/// so the match cannot be written once over both.
+impl From<v0_3::RewardAccountQueryDataV1> for proto::RewardAccountProofResponse {
+    fn from(query: v0_3::RewardAccountQueryDataV1) -> proto::RewardAccountProofResponse {
+        let v0_3::RewardAccountQueryDataV1 {
+            balance,
+            proof: v0_3::RewardAccountProofV1 { account, proof },
+        } = query;
+        let proof = match proof {
+            v0_3::RewardMerkleProofV1::Presence(proof) => {
+                proto::reward_merkle_proof::Proof::Presence(proto::MerklePathResponse::from(&proof))
+            },
+            v0_3::RewardMerkleProofV1::Absence(proof) => {
+                proto::reward_merkle_proof::Proof::Absence(proto::MerklePathResponse::from(&proof))
+            },
+        };
+        proto::RewardAccountProofResponse {
+            balance: balance.to_string(),
+            proof: Some(proto::RewardAccountProof {
+                account: format!("{account:#x}"),
+                proof: Some(proto::RewardMerkleProof { proof: Some(proof) }),
+            }),
+        }
+    }
+}
+
+impl From<AccountQueryData> for proto::FeeAccountProofResponse {
+    fn from(query: AccountQueryData) -> Self {
+        let AccountQueryData {
+            balance,
+            proof: FeeAccountProof { account, proof },
+        } = query;
+        let proof = match proof {
+            FeeMerkleProof::Presence(proof) => {
+                proto::fee_merkle_proof::Proof::Presence(proto::MerklePathResponse::from(&proof))
+            },
+            FeeMerkleProof::Absence(proof) => {
+                proto::fee_merkle_proof::Proof::Absence(proto::MerklePathResponse::from(&proof))
+            },
+        };
+        proto::FeeAccountProofResponse {
+            balance: balance.to_string(),
+            proof: Some(proto::FeeAccountProof {
+                account: format!("{account:#x}"),
+                proof: Some(proto::FeeMerkleProof { proof: Some(proof) }),
             }),
         }
     }
@@ -741,30 +806,14 @@ impl From<PublicNetworkConfig> for proto::HotshotConfigResponse {
             num_bootstrap: num_bootstrap as u64,
             commit_sha: public_config.commit_sha().to_string(),
             indexed_da: public_config.indexed_da(),
-            cdn_marshal_address: public_config.cdn_marshal_address().map(ToString::to_string),
-            libp2p_config: public_config
-                .libp2p_config()
-                .map(|libp2p| proto::Libp2pNetworkConfig {
-                    bootstrap_nodes: libp2p
-                        .bootstrap_nodes
-                        .iter()
-                        .map(|(peer_id, multiaddr)| proto::Libp2pBootstrapNode {
-                            peer_id: peer_id.to_string(),
-                            multiaddr: multiaddr.to_string(),
-                        })
-                        .collect(),
-                }),
-            combined_network_config: public_config.combined_network_config().map(|combined| {
-                proto::CombinedNetworkConfig {
-                    delay_duration_ms: combined.delay_duration.as_millis() as u64,
-                }
-            }),
             builder: match public_config.builder() {
                 BuilderType::External => proto::BuilderType::External,
                 BuilderType::Simple => proto::BuilderType::Simple,
                 BuilderType::Random => proto::BuilderType::Random,
             }
             .into(),
+            // The deprecated CDN and libp2p fields stay at their empty defaults.
+            ..Default::default()
         }
     }
 }

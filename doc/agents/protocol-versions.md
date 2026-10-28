@@ -10,7 +10,8 @@
 - V0_4, `DRB_AND_HEADER_UPGRADE_VERSION`: header adds timestamp_millis, total_reward_distributed, RewardMerkleTreeV2
 - V0_5, `EPOCH_REWARD_VERSION` (also `DRB_FIX_VERSION`): per-epoch rewards; header adds next_stake_table_hash,
   leader_counts
-- V0_6, `NEW_PROTOCOL_VERSION`: AvidmGf2 VID proofs, cliquenet, DA upgrade; reuses the V0_5 header
+- V0_6, `NEW_PROTOCOL_VERSION`: AvidmGf2 VID proofs, cliquenet, DA upgrade; reuses the V0_5 header; no fees, no L1
+  deposit reads, fee tree untouched
 - V0_7, `TIMEOUT_EPOCH_VERSION` (also `LARGE_BLOCK_VERSION`, `NO_BUILDER_COMMITMENT_VERSION`, `MAX_SUPPORTED_VERSION`):
   timeout votes and certificates bind the epoch (`TimeoutData3`, `TimeoutVote3`, `TimeoutCertificate3`,
   `CatchupEvidence::Tc3`; form chosen by `UpgradeLock::timeout_epoch_bound`); `Header::V7` is the V0_6 header without

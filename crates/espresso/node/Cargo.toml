@@ -4,11 +4,8 @@ version = "0.1.0"
 authors = ["Espresso Systems <hello@espressosys.com>"]
 edition.workspace = true
 
-[package.metadata.cargo-udeps.ignore]
-normal = ["hotshot-testing"]
-
 [package.metadata.cargo-machete]
-ignored = ["vergen", "vergen-gitcl", "include_dir", "hotshot_builder_api"]
+ignored = ["vergen", "vergen-gitcl", "include_dir"]
 
 [lib]
 name = "espresso_node"
@@ -16,7 +13,8 @@ path = "src/lib.rs"
 
 [features]
 testing = [
-    "hotshot-testing",
+    "staking-cli",
+    "test-utils",
     "espresso-types/testing",
     "light-client/testing",
     "espresso-utils/testing",
@@ -24,7 +22,6 @@ testing = [
     "hotshot-new-protocol/testing",
 ]
 benchmarking = []
-embedded-db = ["hotshot-query-service/embedded-db", "sqlx/sqlite"]
 
 [dependencies]
 alloy = { workspace = true }
@@ -42,8 +39,6 @@ base64-bytes = { workspace = true }
 bincode = { workspace = true }
 blake3 = { workspace = true }
 byteorder = { workspace = true }
-cdn-broker = { workspace = true }
-cdn-marshal = { workspace = true }
 chrono = { workspace = true }
 clap = { workspace = true }
 client = { workspace = true }
@@ -62,15 +57,10 @@ espresso-telemetry = { workspace = true }
 espresso-types = { workspace = true, features = ["node"] }
 espresso-utils = { workspace = true, features = ["full"] }
 futures = { workspace = true }
-generic-tests = { workspace = true }
-hotshot = { workspace = true }
 hotshot-contract-adapter = { workspace = true }
-hotshot-libp2p-networking = { workspace = true }
 hotshot-new-protocol = { workspace = true }
 hotshot-orchestrator = { workspace = true }
 hotshot-query-service = { workspace = true }
-hotshot-state-prover = { workspace = true }
-hotshot-testing = { workspace = true, optional = true }
 hotshot-types = { workspace = true }
 http-client = { workspace = true }
 http-wire = { workspace = true, features = ["server"] }
@@ -82,10 +72,8 @@ jf-crhf = { workspace = true }
 jf-merkle-tree-compat = { workspace = true }
 jf-rescue = { workspace = true }
 jf-signature = { workspace = true }
-libp2p = { workspace = true }
 light-client = { workspace = true, features = ["client", "rlp"] }
 moka = { workspace = true }
-num_enum = { workspace = true }
 parking_lot = { workspace = true }
 priority-queue = { workspace = true }
 process-metrics = { workspace = true }
@@ -95,20 +83,16 @@ rand_chacha = { workspace = true }
 rand_distr = { workspace = true }
 request-response = { workspace = true }
 reqwest = { workspace = true }
-rstest = { workspace = true }
-rstest_reuse = { workspace = true }
 serde = { workspace = true }
 serde_bytes = { workspace = true }
 serde_json = { workspace = true }
-sha2 = { workspace = true }
 snafu = { workspace = true }
-sqlx = { workspace = true }
-staking-cli = { workspace = true }
-static_assertions = { workspace = true }
+sqlx = { workspace = true, features = ["sqlite"] }
+staking-cli = { workspace = true, optional = true }
 strum = { workspace = true }
 tagged-base64 = { workspace = true }
 tempfile = { workspace = true }
-test-utils = { workspace = true }
+test-utils = { workspace = true, optional = true }
 thiserror = { workspace = true }
 time = { workspace = true }
 tokio = { workspace = true }
@@ -133,11 +117,12 @@ bitvec = { workspace = true }
 bs58 = { workspace = true }
 escargot = { workspace = true }
 espresso-macros = { workspace = true }
-# Enable "testing" feature when running tests
-espresso-node = { path = ".", features = ["testing"] }
+# Keep in sync with `[features] testing`.
+espresso-types = { workspace = true, features = ["testing"] }
+espresso-utils = { workspace = true, features = ["testing"] }
 hotshot-example-types = { workspace = true }
-hotshot-query-service = { workspace = true }
-hotshot-testing = { workspace = true }
+hotshot-new-protocol = { workspace = true, features = ["testing"] }
+hotshot-query-service = { workspace = true, features = ["testing"] }
 insta = { workspace = true }
 light-client = { workspace = true, features = ["rlp", "testing"] }
 pretty_assertions = { workspace = true }
@@ -145,10 +130,14 @@ prost = { workspace = true }
 prost-types = { workspace = true }
 rand = { workspace = true }
 reqwest = { workspace = true }
+rstest = { workspace = true }
+rstest_reuse = { workspace = true }
+staking-cli = { workspace = true }
 tempfile = { workspace = true }
 test-log = { workspace = true }
 test-server = { workspace = true }
-tokio = { workspace = true, features = ["io-util", "net"] }
+test-utils = { workspace = true }
+tokio = { workspace = true, features = ["io-util", "net", "test-util"] }
 tokio-tungstenite = { workspace = true }
 warp = { workspace = true }
 

@@ -4,8 +4,11 @@
 
 **MUST:**
 
+- Use `-p <package>` for all cargo commands (full workspace builds OOM)
+- Run `cargo test -p espresso-types reference` after modifying any serializable type
 - Run `cargo fmt` and `cargo check -p <package>` after changes
 - Update all three storage backends (PostgreSQL, SQLite, filesystem) when changing persistence
+- Add a `doc/operator-notes/` fragment when a change requires operator intervention (see its `README.md`)
 
 **NEVER:**
 
@@ -18,7 +21,8 @@
 ```bash
 cargo nextest run -p <package> -- <test_name>
 
-just check                            # postgres + embedded-db variants (pre-commit only)
+just check                            # whole workspace (pre-commit only)
+just lint                             # clippy with -D warnings
 just test-demo base                   # basic E2E; other cases in the `test-demo` recipe
 just test-slow                        # long-running tests
 just demo-native                      # local network via process-compose
@@ -50,11 +54,14 @@ just demo-native                      # local network via process-compose
 
 - **SequencerContext** (`crates/espresso/node/src/context.rs`): runs the new protocol's `Coordinator` behind
   `ConsensusHandle` (`consensus_handle.rs`), which is what the rest of the node reads consensus state from.
-- **Node** (`crates/espresso/node/src/lib.rs`): generic over `N: ConnectedNetwork`, `P: SequencerPersistence`.
+- **Node** (`crates/espresso/node/src/lib.rs`): generic over `P: SequencerPersistence`.
 - **ValidatedState** (`crates/espresso/types/src/v0/impls/state.rs`): four merkle trees (block, fee, reward v1, reward
   v2) plus chain config; `validate_and_apply_header()` is the state transition. Persisting the merklized state is
-  `crates/espresso/node/src/state.rs`: a loop that replays every leaf from its newest snapshot. Leaves and snapshot
-  reads the data pruner has already deleted fall back to peers; the state pruner never passes that snapshot.
+  `crates/espresso/node/src/state.rs`: a loop that replays every leaf from its newest snapshot. With no state, it first
+  stores a snapshot at a recent epoch boundary, from peers, on a pruned node; archive nodes and nodes without a pruner
+  replay from genesis, which gives complete trees. A state that started at a boundary stays incomplete after a switch to
+  `--archive`, and the loop logs an error at start. Leaves the data pruner has already deleted, and state the local
+  snapshot lacks, come from peers; the state pruner never passes that snapshot.
 - **Coordinator** (`crates/hotshot/new-protocol/src/coordinator.rs`): the consensus protocol.
   `EpochMembershipCoordinator` (`crates/hotshot/types/src/epoch_membership.rs`) manages per-epoch stake tables.
 - **L1Client** (`crates/espresso/types/src/v0/impls/l1.rs`): tracks `head` and `finalized`; reads use
@@ -62,8 +69,9 @@ just demo-native                      # local network via process-compose
 - **Stake table fetcher** (`crates/espresso/types/src/v0/impls/stake_table.rs`): polls finalized L1, builds
   `ValidatorMap`. Selection rules: `doc/agents/architecture.md`.
 - **Catchup** (`crates/espresso/node/src/catchup.rs`): `SqlStateCatchup` (local DB), `StatePeers` (HTTP, reliability
-  scored), `ParallelStateCatchup` (local first, peers fallback). Fetches fee/reward proofs, block frontier, chain
-  config, leaf chain, and `LightClientStateUpdateCertificateV2` state certs per epoch.
+  scored), `ParallelStateCatchup` (races all providers, first success wins; `StatePeers` is a fallback provider started
+  after `ESPRESSO_NODE_HTTP_CATCHUP_DELAY` when a request-response provider is present). Fetches fee/reward proofs,
+  block frontier, chain config, leaf chain, and `LightClientStateUpdateCertificateV2` state certs per epoch.
 
 ## Key crates
 
@@ -77,11 +85,6 @@ just demo-native                      # local network via process-compose
 - `http-client`: reqwest-based HTTP/WebSocket client for the node APIs
 - `staking-cli`: stake table contract interaction
 - `cliquenet`: fully-connected mesh network (fast finality)
-
-## Feature flags
-
-- `embedded-db` (off by default): SQLite. Requires different sqlx features than PostgreSQL; features are additive
-  globally, so use `espresso-node-sqlite` for SQLite builds.
 
 ## Testing
 
@@ -107,11 +110,17 @@ Backends:
 
 - PostgreSQL (`sql.rs`): production DA/archival, merklized, pruning supported
 - Filesystem (`fs.rs`): production non-DA validators, not merklized, limited pruning
-- SQLite (`sql.rs` + `embedded-db`): not yet production, merklized, pruning supported
+- SQLite (`sql.rs`, chosen at runtime with `ESPRESSO_NODE_EMBEDDED_DB=true`): not yet production, merklized, pruning
+  supported
+
+The SQL code is compiled once per database: each `sql.rs` is loaded by both a `postgres` and a `sqlite` module, each
+with its own `Db`. Branch on `Db::EMBEDDED` where both branches compile for either database, and put code that only
+compiles for one (Postgres array binds, connect options) in that backend's file. Tests in the shared files run on both.
 
 Migrations (all three backends required when adding storage):
 
-- SQL via Refinery. Naming `V{n}__{name}.sql`.
+- SQL via Refinery. Naming `V{n}__{name}.sql`. Refinery migrations run at startup before the node joins consensus:
+  schema-only, fast. Work that scales with database size uses `DataBackfill`; see `doc/agents/refinery-migrations.md`.
 - Locations: `crates/espresso/node/api/migrations/{postgres,sqlite}/`,
   `crates/hotshot-query-service/migrations/{postgres,sqlite}/`.
 - hotshot-query-service uses multiples of 100 (V100, V200...) leaving gaps for applications.

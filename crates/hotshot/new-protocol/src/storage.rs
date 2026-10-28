@@ -2,7 +2,6 @@ use std::{collections::BTreeMap, marker::PhantomData, sync::Arc, time::Duration}
 
 use async_trait::async_trait;
 use committable::Commitment;
-use hotshot::{traits::BlockPayload, types::SignatureKey};
 use hotshot_example_types::storage_types::TestStorage;
 use hotshot_types::{
     data::{
@@ -13,9 +12,10 @@ use hotshot_types::{
     message::Proposal as SignedProposal,
     simple_certificate::{LightClientStateUpdateCertificateV2, UpgradeCertificate},
     traits::{
-        EncodeBytes,
+        BlockPayload, EncodeBytes,
         metrics::{Histogram, Metrics},
         node_implementation::NodeType,
+        signature_key::SignatureKey,
         storage::Storage as StorageTrait,
     },
     utils::EpochTransitionIndicator,

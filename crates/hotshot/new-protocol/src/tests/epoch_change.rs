@@ -1,8 +1,8 @@
-use hotshot::types::BLSPubKey;
 use hotshot_example_types::node_types::TestTypes;
 use hotshot_types::{
     data::{EpochNumber, ViewNumber},
     message::Proposal as SignedProposal,
+    signature_key::BLSPubKey,
     traits::{block_contents::BlockHeader, signature_key::SignatureKey},
     utils::is_epoch_transition,
     vote::HasViewNumber,
@@ -115,6 +115,14 @@ async fn test_handle_epoch_change_valid() {
     assert!(
         any(harness.outputs(), is_view_changed),
         "Valid EpochChange should produce ViewChanged output"
+    );
+    assert!(
+        any(harness.outputs(), |output| matches!(
+            output,
+            ConsensusOutput::ProposalCertified(certified)
+                if certified.view_number == epoch_view.view_number
+        )),
+        "the boundary proposal is announced so the reconstructor can pin its view"
     );
 }
 

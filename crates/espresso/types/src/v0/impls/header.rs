@@ -1438,7 +1438,9 @@ impl BlockHeader<SeqTypes> for Header {
                 .await
                 .for_proposal(parent_leaf.block_header().l1_head());
             // Fetch the new L1 deposits between parent and current finalized L1 block.
-            let l1_deposits = if let (Some(addr), Some(block_info)) =
+            let l1_deposits = if version >= versions::NEW_PROTOCOL_VERSION {
+                Vec::new()
+            } else if let (Some(addr), Some(block_info)) =
                 (chain_config.fee_contract, l1_snapshot.finalized)
             {
                 instance_state

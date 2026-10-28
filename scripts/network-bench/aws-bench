@@ -251,7 +251,14 @@ NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]{2,39}$")
 UBUNTU_OWNER_ID = "099720109477"  # Canonical
 GHCR_ORG = "ghcr.io/espressosystems/espresso-network"
 # Rebuilt from --tag; these are the only components the tag under test controls.
-IMAGE_COMPONENTS = ("espresso-node", "orchestrator", "state-relay-server", "deploy")
+IMAGE_COMPONENTS = (
+    "espresso-node",
+    "orchestrator",
+    "state-relay-server",
+    "deploy",
+    "staking-cli",
+    "prover-service",
+)
 # `--allocator`: espresso-node images of `.github/workflows/build-allocators.yml`, tagged
 # `<tag>-<allocator>`: the published `espresso-node:main` image with the branch's binaries.
 ALLOCATORS = ("jemalloc", "mimalloc", "snmalloc", "tcmalloc")
@@ -263,7 +270,14 @@ SUPPORT_IMAGES = {
 }
 # Images each role's user-data pulls ahead of time and start.sh runs.
 ROLE_IMAGES: dict[str, tuple[str, ...]] = {
-    "ctl": ("deploy", "orchestrator", "state-relay-server", "foundry"),
+    "ctl": (
+        "deploy",
+        "orchestrator",
+        "state-relay-server",
+        "staking-cli",
+        "prover-service",
+        "foundry",
+    ),
     "validator": ("espresso-node",),
     "query": ("espresso-node", "postgres"),
 }
@@ -283,7 +297,6 @@ PROXY_ADDRESS_KEYS = (
 NODE_API_PORT = 8080
 NODE_TONIC_PORT = 8081
 CLIQUENET_PORT = 9000
-LIBP2P_PORT = 1769
 # From .env; render_ctl_env asserts these still match the parsed file.
 # The bench's own postgres container, independent of .env.
 POSTGRES_PORT = 5432
@@ -347,9 +360,42 @@ SHIPPED_HOST_FILES = (
     "node-rejoin.env",
     "recreate.sh",
     "ctl.env",
+    "stake.env",
+    "prover.sh",
     "start.sh",
     "agent.json",
     "pg.json",
+)
+
+# `--prover`: the light-client prover on ctl, deployed and started by prover.sh once node0 serves
+# its API (the deploy reads the stake table from it). Its log has one `<epoch s> <step>` line per
+# step reached, or `<epoch s> failed <step>`.
+PROVER_STEPS = ("node0-up", "lc-deployed", "lc-address-ok", "prover-started")
+PROVER_LOG = f"{BENCH_DIR}/prover.log"
+# Written at freeze, see `prover_state_script`.
+PROVER_STATE = f"{BENCH_DIR}/prover-state.json"
+# `finalizedState()` of the light client contract.
+FINALIZED_STATE_SELECTOR = "0x9fdb54a7"
+# Twice the default ctl: a proof takes every core, and the prover must keep up with the epochs.
+PROVER_CTL_TYPE = "c8g.4xlarge"
+# cgroup v2 cpu.weight minimum. The load driver runs in its own systemd unit cgroup and CFS weighs
+# sibling cgroups before nice values, so `nice` inside the container would not yield to it.
+PROVER_CPU_SHARES = 2
+# The proof circuit and its SRS need this much; below it the prover is killed by the OOM killer.
+PROVER_MIN_MIB = 12288
+# The circuit is sized for this many stake table entries: genesis, relay, deploy and prover agree.
+PROVER_STAKE_TABLE_CAPACITY = 200
+# The service sleeps this long after each successful sync; 0 proves back to back.
+PROVER_UPDATE_INTERVAL = "0s"
+# ark-srs downloads its parameters under the home of root in the container once; the host
+# directory keeps them across runs.
+SRS_HOST_DIR = "/data/ark-srs"
+SRS_CONTAINER_DIR = "/root/.local/share/ark-srs"
+# The V2 and V3 upgrades follow the deployment at once, near genesis; the real verifier stays.
+LC_DEPLOY_FLAGS = (
+    "--deploy-light-client-v1",
+    "--upgrade-light-client-v2",
+    "--upgrade-light-client-v3",
 )
 
 CGROUP_ROOT = Path("/sys/fs/cgroup")
@@ -497,6 +543,12 @@ GATE_RETRY_S = 2.0
 GATE_TIMEOUT_S = 120.0
 # Contract deployment: 7 deploy steps at anvil's 1 s block time, with margin.
 DEPLOY_TIMEOUT_S = 300
+# `stake-for-demo` registers and delegates every node on anvil, then the L1 finalized block
+# has to reach the head (anvil's finalized block is latest - 64, at 1 s per block) before the
+# nodes read the stake table.
+STAKE_EXPECTED_S = 120.0
+STAKE_TIMEOUT_S = 600
+L1_FINALIZED_TIMEOUT_S = 300.0
 # systemd-run returns before python writes its first agent-state.json.
 AGENT_START_GRACE_S = 30.0
 # Beyond ready timeout plus load duration, for the final drain and stake table fetch.
@@ -574,6 +626,8 @@ CHAOS_NODES = 22
 CHAOS_NODE_TYPE = "c8g.large"
 CHAOS_CTL_TYPE = "c8g.xlarge"
 CHAOS_LATENCY = "decaf-2025"
+# Short enough that a chaos run crosses several epoch changes, which needs the L1 stake table.
+SHORT_EPOCH_HEIGHT = 300
 CHAOS_FLAGS = (
     "--chaos-min",
     "--chaos-rate",
@@ -937,6 +991,8 @@ class Evidence(TypedDict):
     # rds runs: each `cloudwatch/rds.json` metric's minimum over the load window, None without
     # a datapoint; empty when the file was not collected.
     rds_min: NotRequired[dict[str, float | None]]
+    # `--prover` runs: the prover's outcome, see `prover_summary`.
+    prover: NotRequired[str]
 
 
 class MetricSeries(TypedDict):
@@ -981,6 +1037,9 @@ class RunConfig:
     node_env: tuple[str, ...] = ()
     # Genesis `max_block_size`, verbatim.
     max_block_size: str = "50mb"
+    # Genesis `base_version` and `upgrade_version`, verbatim: the protocol the network runs
+    # from genesis. The images must support it.
+    protocol_version: str = "0.6"
     # espresso-node writes leader_trace_node{N}.csv to /opt/bench/trace; `trace-plots` renders it.
     leader_trace: bool = False
     # `latency.PROFILES` name; `off` shapes nothing. `intra_latency` adds the same-location delay.
@@ -1007,6 +1066,12 @@ class RunConfig:
     chaos: ch.ChaosConfig | None = None
     # node0 prunes its data and state older than this many seconds; None for no pruning.
     prune: int | None = None
+    # The light-client prover runs on ctl; needs epochs and a ctl of PROVER_MIN_MIB.
+    prover: bool = False
+    # The last `slow_nodes` nodes, all validator-only, run espresso-node on `slow_cores` cores:
+    # a slower group on the same network.
+    slow_nodes: int = 0
+    slow_cores: int | None = None
 
 
 # Callers need the return code and stderr, unlike scripts/release's Runner, to report a
@@ -1309,7 +1374,12 @@ def plan_hosts(cfg: RunConfig) -> list[HostSpec]:
     check_chaos(cfg)
     if cfg.nodes < 2:
         raise Refused(f"--nodes must be at least 2: {cfg.nodes}")
+    if cfg.prover and cfg.nodes > PROVER_STAKE_TABLE_CAPACITY:
+        raise Refused(
+            f"--prover supports at most {PROVER_STAKE_TABLE_CAPACITY} nodes: {cfg.nodes}"
+        )
     check_submit_nodes(cfg)
+    check_slow_nodes(cfg)
     if not 1 <= cfg.query_nodes <= cfg.nodes:
         raise Refused(
             f"--query-nodes must be between 1 and nodes ({cfg.nodes}): {cfg.query_nodes}"
@@ -1437,9 +1507,19 @@ def _measure_seconds(cfg: RunConfig) -> tuple[float, float]:
     if cfg.chaos:
         expected_load += CHAOS_DRAIN_EXPECTED_S
         worst_load += cfg.chaos.recover_timeout_s
+    expected_stake, worst_stake = 0.0, 0.0
+    if staking(cfg):
+        expected_stake, worst_stake = (
+            STAKE_EXPECTED_S,
+            STAKE_TIMEOUT_S + L1_FINALIZED_TIMEOUT_S,
+        )
     return (
-        SERVICES_S + expected_load + READY_EXPECTED_S + COLLECT_EXPECTED_S,
-        SERVICES_S + worst_load + READY_TIMEOUT_S + COLLECT_MAX_S,
+        SERVICES_S
+        + expected_stake
+        + expected_load
+        + READY_EXPECTED_S
+        + COLLECT_EXPECTED_S,
+        SERVICES_S + worst_stake + worst_load + READY_TIMEOUT_S + COLLECT_MAX_S,
     )
 
 
@@ -1642,17 +1722,35 @@ def format_node_summary(cfg: RunConfig) -> list[str]:
         (
             f"nodes: {cfg.nodes} ({cfg.query_nodes} query, "
             f"{cfg.nodes - cfg.query_nodes} validator-only); max block {cfg.max_block_size}; "
+            f"protocol {cfg.protocol_version}; "
             f"submit {cfg.load.submit_nodes} nodes; "
             f"leader-trace {'on' if cfg.leader_trace else 'off'}"
         ),
         f"node-env: {' '.join(cfg.node_env) or 'none'}",
+        *([format_slow_nodes_summary(cfg)] if cfg.slow_nodes else []),
         *([format_chaos_summary(cfg.chaos, cfg.latency)] if cfg.chaos else []),
         *(
             [f"prune: data and state older than {cfg.prune}s, every {PRUNE_INTERVAL}"]
             if cfg.prune
             else []
         ),
+        *(
+            [
+                (
+                    "prover: light client on ctl, stake table capacity "
+                    f"{stake_table_capacity(cfg)}, update every {PROVER_UPDATE_INTERVAL}; "
+                    "the prover uses every ctl core at the lowest CPU weight, the load driver shares ctl"
+                )
+            ]
+            if cfg.prover
+            else []
+        ),
     ]
+
+
+def format_slow_nodes_summary(cfg: RunConfig) -> str:
+    names = ", ".join(slow_node_names(cfg))
+    return f"slow nodes: {names} on {cfg.slow_cores} cores (docker --cpuset-cpus)"
 
 
 def format_chaos_summary(chaos: ch.ChaosConfig, latency: str) -> str:
@@ -1753,6 +1851,7 @@ def append_event(directory: Path, phase: str, event: str, detail: str | None) ->
 def config_to_json(cfg: RunConfig) -> dict[str, Any]:
     data = dataclasses.asdict(cfg)
     data["fleet"] = None if cfg.fleet is None else str(cfg.fleet)
+    data["staking"] = staking(cfg)
     return data
 
 
@@ -2108,6 +2207,8 @@ def preflight(system: System, cfg: RunConfig, hosts: list[HostSpec]) -> Prefligh
     account = caller_account(run, cfg.region)
     types = {h["instance_type"] for h in hosts}
     arch, memory_mib = instance_specs(run, cfg.region, types)
+    if cfg.prover:
+        check_prover_ctl(memory_mib[cfg.ctl_type])
     if cfg.tcp_cc == "bbr3" and arch != "amd64":
         raise Refused("--tcp-cc bbr3 needs the XanMod kernel, which is x86_64 only")
     prices = fetch_prices(run, cfg.region, types)
@@ -2261,13 +2362,23 @@ def write_private_json(path: Path, data: Any) -> None:
     nb.write_json(path, data)
 
 
+def stake_table_capacity(cfg: RunConfig) -> int:
+    """`nodes` validators need a stake table at least as large."""
+    return PROVER_STAKE_TABLE_CAPACITY if cfg.prover else max(10, cfg.nodes)
+
+
 def render_genesis(
-    template: bytes, n: int, max_block_size: str, epoch_height: int | None = None
+    template: bytes,
+    capacity: int,
+    max_block_size: str,
+    protocol_version: str,
+    epoch_height: int | None = None,
 ) -> bytes:
-    """`n` validators need a stake table at least as large; contract addresses stay as the
-    template's, since they are deterministic from the deployer nonce. `max_block_size` goes
-    into both chain configs; `epoch_height` replaces the template's when given."""
-    capacity = max(10, n)
+    """`capacity` is the stake table capacity; contract addresses stay as the template's, since
+    they are deterministic from the deployer nonce. `max_block_size` goes into both chain
+    configs. `protocol_version` goes into `base_version` and `upgrade_version`, so the network
+    runs it from genesis; `genesis_version` stays the template's. `epoch_height` replaces the
+    template's when given."""
     text = template.decode()
     text, size_n = re.subn(
         r'(?m)^max_block_size = ".*"$', f'max_block_size = "{max_block_size}"', text
@@ -2275,6 +2386,17 @@ def render_genesis(
     if size_n != 2:
         raise ValueError(
             f"expected 2 max_block_size fields in genesis template, replaced {size_n}"
+        )
+    text, base_n = re.subn(
+        r'(?m)^base_version = ".*"$', f'base_version = "{protocol_version}"', text
+    )
+    text, upgrade_n = re.subn(
+        r'(?m)^upgrade_version = ".*"$', f'upgrade_version = "{protocol_version}"', text
+    )
+    if base_n != 1 or upgrade_n != 1:
+        raise ValueError(
+            "expected one base_version and one upgrade_version field in genesis template, "
+            f"replaced {base_n} and {upgrade_n}"
         )
     text, stake_n = re.subn(
         r"(?m)^stake_table_capacity = \d+$", f"stake_table_capacity = {capacity}", text
@@ -2371,8 +2493,6 @@ def render_node_env(
         "ESPRESSO_NODE_KEY_INDEX": str(KEY_INDEX_BASE + i),
         "ESPRESSO_NODE_CLIQUENET_BIND_ADDRESS": f"0.0.0.0:{CLIQUENET_PORT}",
         "ESPRESSO_NODE_CLIQUENET_ADVERTISE_ADDRESS": f"{self_info['private_ip']}:{CLIQUENET_PORT}",
-        "ESPRESSO_NODE_LIBP2P_BIND_ADDRESS": f"0.0.0.0:{LIBP2P_PORT}",
-        "ESPRESSO_NODE_LIBP2P_ADVERTISE_ADDRESS": f"{self_info['private_dns']}:{LIBP2P_PORT}",
         "ESPRESSO_NODE_API_PORT": str(NODE_API_PORT),
         "ESPRESSO_NODE_TONIC_PORT": str(NODE_TONIC_PORT),
         "ESPRESSO_NODE_ORCHESTRATOR_URL": f"http://{ctl_info['private_ip']}:{env_port('ESPRESSO_ORCHESTRATOR_PORT')}",
@@ -2383,7 +2503,7 @@ def render_node_env(
         "ESPRESSO_NODE_IS_DA": "true",
         "ESPRESSO_NODE_TELEMETRY_LOGS_ENABLE": "false",
         "ESPRESSO_NODE_TELEMETRY_METRICS_ENABLE": "false",
-        "RUST_LOG": "info,libp2p=off",
+        "RUST_LOG": "info",
         "RUST_LOG_FORMAT": "json",
         "ESPRESSO_NODE_STORAGE_PATH": "/store/espresso",
         "ESPRESSO_NODE_IDENTITY_NODE_NAME": host["name"],
@@ -2409,7 +2529,7 @@ def render_node_env(
             # The default 5 min cache would report a wiped node as synced from its empty DB.
             env["ESPRESSO_NODE_SYNC_STATUS_TTL"] = f"{ch.SYNC_STATUS_TTL_S:g}s"
     if host["role"] == "query" and query_engine == "sqlite":
-        # The entrypoint then execs espresso-node-sqlite, which prepends storage-sql itself.
+        # The entrypoint then starts the node on SQLite and prepends storage-sql itself.
         env["ESPRESSO_NODE_EMBEDDED_DB"] = "true"
         if consensus_storage == "journal":
             # The journal refuses to open next to an existing sqlite database until its first
@@ -2516,6 +2636,33 @@ def render_ctl_env(
     env["ESPRESSO_ORCHESTRATOR_BUILDER_URLS"] = "http://localhost:1"
     env["ESPRESSO_ORCHESTRATOR_BUILDER_TIMEOUT"] = "100ms"
     env["ESPRESSO_API_NODE_URL"] = _node_url(node0)
+    if cfg.prover:
+        env["ESPRESSO_STAKE_TABLE_CAPACITY"] = str(stake_table_capacity(cfg))
+    return "".join(f"{key}={value}\n" for key, value in env.items())
+
+
+def staking(cfg: RunConfig) -> bool:
+    """Epochs need a stake table on L1, so every node is staked before the nodes start."""
+    return cfg.epoch_height is not None
+
+
+def render_stake_env(hosts: dict[str, HostInfo], dotenv: dict[str, str]) -> str:
+    """Environment of `staking-cli stake-for-demo`: funded by the token grant recipient, with
+    the nodes' consensus keys derived from the mnemonic the nodes use. The per-node address
+    form is the one that does not touch .env's demo keys."""
+    env = {
+        "L1_PROVIDER": f"http://localhost:{dotenv['ESPRESSO_L1_PORT']}",
+        "MNEMONIC": dotenv["ESPRESSO_ETH_MNEMONIC"],
+        "ACCOUNT_INDEX": dotenv["ESP_TOKEN_INITIAL_GRANT_RECIPIENT_ACCOUNT_INDEX"],
+        "ESP_TOKEN_CONTRACT_ADDRESS": dotenv["ESP_TOKEN_PROXY_ADDRESS"],
+        "STAKE_TABLE_ADDRESS": dotenv["ESPRESSO_STAKE_TABLE_PROXY_ADDRESS"],
+        "ESPRESSO_NODE_KEY_MNEMONIC": BENCH_MNEMONIC,
+        "DELEGATION_CONFIG": "equal-amounts",
+        "RUST_LOG": "info",
+    }
+    for i, name in enumerate(_node_names(hosts)):
+        key = f"ESPRESSO_DEMO_NODE_CLIQUENET_ADVERTISE_ADDRESS_{i}"
+        env[key] = f"{hosts[name]['private_ip']}:{CLIQUENET_PORT}"
     return "".join(f"{key}={value}\n" for key, value in env.items())
 
 
@@ -2586,10 +2733,14 @@ def render_start_sh(
     leader_trace: bool = False,
     consensus_storage: ConsensusStorage = "fs",
     query_engine: QueryEngine = "postgres",
+    stake_nodes: int | None = None,
+    prover: bool = False,
+    cores: int | None = None,
 ) -> str:
     """Deviates from the plan signature (drops unused `hosts`, `cfg`): every value start.sh
     needs is already in `host`, `images` and the host's `memory_mib`, or in ctl.env/node.env
-    rendered separately. With `query_db` rds or `query_engine` sqlite there is no postgres container."""
+    rendered separately. With `query_db` rds or `query_engine` sqlite there is no postgres container.
+    `cores` limits espresso-node to that many cores; None leaves it the whole host."""
     script = (
         "#!/usr/bin/env bash\nset -eEu -o pipefail\n\n"
         f"echo '{{}}' > {BENCH_DIR}/containers.json\n\n"
@@ -2632,6 +2783,23 @@ def render_start_sh(
             if name == "deploy":
                 argv += list(DEPLOY_FLAGS)
             script += _docker_create(name, argv)
+        if stake_nodes is not None:
+            staker = images["staking-cli"]
+            script += _docker_create(
+                "stake",
+                [
+                    "--env-file",
+                    f"{BENCH_DIR}/stake.env",
+                    f"{staker['ref']}@{staker['digest']}",
+                    "/bin/staking-cli",
+                    "--no-config",
+                    "stake-for-demo",
+                    "--num-validators",
+                    str(stake_nodes),
+                ],
+            )
+        if prover:
+            script += render_prover_containers(images)
         return script
     if host["role"] == "query" and query_engine == "postgres" and query_db != "rds":
         pg = images["postgres"]
@@ -2669,9 +2837,116 @@ def render_start_sh(
         consensus_storage,
         query_engine,
         f"{BENCH_DIR}/node.env",
+        cores,
     )
     script += _docker_create("espresso-node", argv)
     return script
+
+
+def render_prover_containers(images: dict[str, ImageInfo]) -> str:
+    """`deploy-lc` puts the light client on L1 and `state-prover` updates it; prover.sh starts
+    them. The deploy runs without the light-client address of .env, which it would take for an
+    existing deployment."""
+    deploy, prover = images["deploy"], images["prover-service"]
+    flags = " ".join(LC_DEPLOY_FLAGS)
+    relay_port = env_port("ESPRESSO_STATE_RELAY_SERVER_PORT")
+    script = _docker_create(
+        "deploy-lc",
+        [
+            "--env-file",
+            f"{BENCH_DIR}/ctl.env",
+            f"{deploy['ref']}@{deploy['digest']}",
+            "-c",
+            f"unset ESPRESSO_LIGHT_CLIENT_PROXY_ADDRESS && exec /bin/deploy {flags}",
+        ],
+        entrypoint="sh",
+    )
+    return script + _docker_create(
+        "state-prover",
+        [
+            "--env-file",
+            f"{BENCH_DIR}/ctl.env",
+            "--cpu-shares",
+            str(PROVER_CPU_SHARES),
+            "-v",
+            f"{SRS_HOST_DIR}:{SRS_CONTAINER_DIR}",
+            "-e",
+            f"ESPRESSO_STATE_RELAY_SERVER_URL=http://localhost:{relay_port}",
+            "-e",
+            f"ESPRESSO_L1_PROVIDER=http://localhost:{env_port('ESPRESSO_L1_PORT')}",
+            "-e",
+            f"ESPRESSO_STATE_PROVER_UPDATE_INTERVAL={PROVER_UPDATE_INTERVAL}",
+            f"{prover['ref']}@{prover['digest']}",
+            "/usr/local/bin/state-prover",
+            "-d",
+        ],
+    )
+
+
+def render_prover_sh(lc_address: str, node0_url: str) -> str:
+    """Runs as root on ctl: deploys the light client once node0 serves its API, checks the
+    contract is where the prover looks for it, then starts the prover. Each step appends to
+    PROVER_LOG; a failing command appends `failed <step>` and ends the script."""
+    actions = {
+        "node0-up": f"until curl -sf --max-time 5 {node0_url}/v1/node/block-height > /dev/null; do sleep 2; done",
+        "lc-deployed": (
+            "docker start deploy-lc > /dev/null\n"
+            f'[ "$(timeout {DEPLOY_TIMEOUT_S} docker wait deploy-lc)" = 0 ]'
+        ),
+        "lc-address-ok": rpc_check(
+            "eth_getCode", [lc_address, "latest"], '.result != "0x"'
+        ),
+        "prover-started": "docker start state-prover > /dev/null",
+    }
+    script = (
+        "#!/usr/bin/env bash\nset -eEu -o pipefail\n\nstep=init\n"
+        f"trap 'echo \"$(date +%s.%N) failed $step\" >> {PROVER_LOG}' ERR\n\n"
+    )
+    for step in PROVER_STEPS:
+        script += (
+            f"step={step}\n{actions[step]}\n"
+            f'echo "$(date +%s.%N) $step" >> {PROVER_LOG}\n\n'
+        )
+    return script
+
+
+def prover_reached(log: str) -> str:
+    """The last step of PROVER_LOG, `failed <step>` if it failed there."""
+    lines = log.splitlines()
+    return lines[-1].partition(" ")[2] if lines else "not started"
+
+
+def prover_summary(log: str, state: dict[str, Any] | None) -> str:
+    """`prover_reached`, and once the prover started, its container state and the light client
+    height that `prover_state_script` recorded at freeze."""
+    reached = prover_reached(log)
+    if reached != "prover-started" or state is None:
+        return reached
+    height = state["lc_height"]
+    tail = f"LC height {'unavailable' if height is None else height}"
+    if state["status"] == "running":
+        return f"running, {tail}"
+    return f"{state['status']} {state['exit_code']} at {reached}, {tail}"
+
+
+def prover_state_script(lc_address: str) -> str:
+    """Writes PROVER_STATE: the state-prover container's status and exit code, and
+    `finalizedState().blockHeight` of the light client on local anvil (null if the call
+    fails). Must run before the containers are stopped."""
+    call = rpc_curl(
+        "eth_call", [{"to": lc_address, "data": FINALIZED_STATE_SELECTOR}, "latest"]
+    )
+    return (
+        "if state=$(docker inspect -f '{{.State.Status}} {{.State.ExitCode}}' state-prover); then\n"
+        'read -r status code <<< "$state"\n'
+        f"result=$({call} | jq -r .result) || result=\n"
+        "height=null\n"
+        # 0x, then three 32-byte words: viewNum, blockHeight, blockCommRoot.
+        '[ "${#result}" = 194 ] && height=$((16#${result:66:64}))\n'
+        'jq -n --arg status "$status" --argjson code "$code" --argjson height "$height" '
+        f"'{{status: $status, exit_code: $code, lc_height: $height}}' > {PROVER_STATE}\n"
+        "fi\n"
+    )
 
 
 def node_create_argv(
@@ -2682,8 +2957,11 @@ def node_create_argv(
     consensus_storage: ConsensusStorage,
     query_engine: QueryEngine,
     env_file: str,
+    cores: int | None = None,
 ) -> list[str]:
-    """`docker create` arguments of the espresso-node container."""
+    """`docker create` arguments of the espresso-node container. `cores` pins it to the first
+    that many cores: a smaller machine, without the stalls a `--cpus` quota adds when more
+    threads than that are runnable."""
     node = images["espresso-node"]
     role: NodeRole = "query" if host["role"] == "query" else "validator"
     storage = STORAGE_MODULES[consensus_storage, role]
@@ -2706,6 +2984,8 @@ def node_create_argv(
             argv += ["--tmpfs", f"{SQLITE_CONTAINER_DIR}:size={SQLITE_TMPFS_GB}g"]
     if leader_trace:
         argv += ["-v", f"{TRACE_HOST_DIR}:{TRACE_CONTAINER_DIR}"]
+    if cores is not None:
+        argv += ["--cpuset-cpus", f"0-{cores - 1}"]
     argv.append(f"{node['ref']}@{node['digest']}")
     argv.append("/bin/espresso-node")
     for module in modules:
@@ -2720,6 +3000,7 @@ def render_recreate_sh(
     leader_trace: bool = False,
     consensus_storage: ConsensusStorage = "fs",
     query_engine: QueryEngine = "postgres",
+    cores: int | None = None,
 ) -> str:
     """Recreates the espresso-node container from `node-rejoin.env`; same arguments as start.sh
     otherwise."""
@@ -2731,6 +3012,7 @@ def render_recreate_sh(
         consensus_storage,
         query_engine,
         f"{BENCH_DIR}/node-rejoin.env",
+        cores,
     )
     return "#!/usr/bin/env bash\nset -eEu -o pipefail\n\n" + _docker_create(
         "espresso-node", argv
@@ -3063,7 +3345,28 @@ def add_block_size_flag(parser: argparse.ArgumentParser) -> None:
         "--epoch-height",
         type=positive_int,
         default=RunConfig.epoch_height,
-        help="genesis epoch_height in blocks (default: the template's 1000000)",
+        help=f"genesis epoch_height in blocks; stakes every node on L1 (default: the "
+        f"template's 1000000, {SHORT_EPOCH_HEIGHT} with --chaos or --prover)",
+    )
+
+
+def add_prover_flag(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--prover",
+        action="store_true",
+        help="run the light-client prover on ctl (real verifier, stake table capacity "
+        f"{PROVER_STAKE_TABLE_CAPACITY}); needs a ctl of {PROVER_MIN_MIB} MiB, takes "
+        f"--epoch-height {SHORT_EPOCH_HEIGHT} and --ctl-type {PROVER_CTL_TYPE} unless given",
+    )
+
+
+def add_protocol_version_flag(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--protocol-version",
+        type=protocol_version,
+        default=RunConfig(tag="").protocol_version,
+        help="genesis base_version and upgrade_version, e.g. 0.8: the protocol the network "
+        "runs from genesis; the images must support it",
     )
 
 
@@ -3086,6 +3389,22 @@ def add_submit_nodes_flag(parser: argparse.ArgumentParser) -> None:
     )
 
 
+def add_slow_nodes_flags(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--slow-nodes",
+        type=positive_int,
+        default=RunConfig(tag="").slow_nodes,
+        help="the last N nodes, validator-only, run espresso-node on --slow-cores cores",
+    )
+    parser.add_argument(
+        "--slow-cores",
+        type=positive_int,
+        default=RunConfig(tag="").slow_cores,
+        help="cores of each --slow-nodes node (docker --cpuset-cpus 0-(C-1)); at most the "
+        "node type's vCPUs",
+    )
+
+
 def submit_nodes(args: argparse.Namespace, nodes: int) -> int:
     return nodes if args.submit_nodes is None else args.submit_nodes
 
@@ -3098,9 +3417,30 @@ def check_submit_nodes(cfg: RunConfig) -> None:
         )
 
 
+def check_slow_nodes(cfg: RunConfig) -> None:
+    if cfg.slow_cores is not None and not cfg.slow_nodes:
+        raise Refused("--slow-cores needs --slow-nodes")
+    if not cfg.slow_nodes:
+        return
+    if cfg.slow_cores is None:
+        raise Refused("--slow-nodes needs --slow-cores")
+    validators = cfg.nodes - cfg.query_nodes
+    if cfg.slow_nodes > validators:
+        raise Refused(
+            f"--slow-nodes must be at most the {validators} validator-only nodes: "
+            f"{cfg.slow_nodes}"
+        )
+
+
 def block_size(text: str) -> str:
     if re.fullmatch(r"[1-9]\d*(kb|mb|gb)", text, re.IGNORECASE) is None:
         raise argparse.ArgumentTypeError(f"not a size like 50mb: {text}")
+    return text
+
+
+def protocol_version(text: str) -> str:
+    if re.fullmatch(r"\d+\.\d+", text) is None:
+        raise argparse.ArgumentTypeError(f"not a version like 0.8: {text}")
     return text
 
 
@@ -3171,17 +3511,26 @@ def config_from_args(args: argparse.Namespace) -> RunConfig:
     load = load_from_args(args, search, nodes)
     if chaos is not None:
         load = chaos_load(load, chaos)
+    # The prover needs a larger ctl than the chaos shape's.
+    if args.prover and "--ctl-type" not in given_flags(args.argv):
+        ctl_type = PROVER_CTL_TYPE
+    else:
+        ctl_type = chaos_default(args, "--ctl-type", CHAOS_CTL_TYPE)
+    epoch_height = args.epoch_height
+    if (args.chaos or args.prover) and "--epoch-height" not in given_flags(args.argv):
+        epoch_height = SHORT_EPOCH_HEIGHT
     return RunConfig(
         tag=args.tag,
         allocator=args.allocator,
         nodes=nodes,
         query_nodes=chaos_default(args, "--query-nodes", nodes),
         node_type=chaos_default(args, "--node-type", CHAOS_NODE_TYPE),
-        ctl_type=chaos_default(args, "--ctl-type", CHAOS_CTL_TYPE),
+        ctl_type=ctl_type,
         chaos=chaos,
         load=load,
         node_env=tuple(args.node_env),
         max_block_size=args.max_block_size,
+        protocol_version=args.protocol_version,
         leader_trace=args.leader_trace,
         latency=profile,
         intra_latency=args.intra_latency,
@@ -3189,9 +3538,12 @@ def config_from_args(args: argparse.Namespace) -> RunConfig:
         mtu=args.mtu,
         netem=netem,
         jitter_ratio=args.jitter_ratio,
-        epoch_height=args.epoch_height,
+        epoch_height=epoch_height,
+        prover=args.prover,
         consensus_storage=args.consensus_storage,
         prune=args.prune,
+        slow_nodes=args.slow_nodes,
+        slow_cores=args.slow_cores,
         root_gb=args.root_gb,
         pg_iops=args.pg_iops,
         pg_mbps=args.pg_mbps,
@@ -3348,12 +3700,15 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     add_run_flags(plan_p)
     add_node_env_flag(plan_p)
     add_block_size_flag(plan_p)
+    add_protocol_version_flag(plan_p)
     add_leader_trace_flag(plan_p)
     add_latency_flags(plan_p)
     add_consensus_storage_flag(plan_p)
     add_prune_flag(plan_p)
     add_submit_nodes_flag(plan_p)
+    add_slow_nodes_flags(plan_p)
     add_chaos_flags(plan_p)
+    add_prover_flag(plan_p)
     add_ttl_flag(plan_p)
     plan_p.add_argument("--db-modes", type=parse_db_modes, default=defaults.db_modes)
     plan_p.set_defaults(func=cmd_plan, yes=False, max_usd=UP_MAX_USD)
@@ -3371,6 +3726,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         func=cmd_up,
         node_env=[],
         max_block_size=defaults.max_block_size,
+        protocol_version=defaults.protocol_version,
         leader_trace=defaults.leader_trace,
         latency=defaults.latency,
         intra_latency=defaults.intra_latency,
@@ -3379,9 +3735,12 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         netem=defaults.netem,
         jitter_ratio=defaults.jitter_ratio,
         epoch_height=defaults.epoch_height,
+        prover=defaults.prover,
         consensus_storage=defaults.consensus_storage,
         prune=defaults.prune,
         submit_nodes=None,
+        slow_nodes=defaults.slow_nodes,
+        slow_cores=defaults.slow_cores,
         chaos=False,
         fleet=None,
         force=False,
@@ -3401,12 +3760,15 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     add_run_flags(run_p, tag_required=False)
     add_node_env_flag(run_p)
     add_block_size_flag(run_p)
+    add_protocol_version_flag(run_p)
     add_leader_trace_flag(run_p)
     add_latency_flags(run_p)
     add_consensus_storage_flag(run_p)
     add_prune_flag(run_p)
     add_submit_nodes_flag(run_p)
+    add_slow_nodes_flags(run_p)
     add_chaos_flags(run_p)
+    add_prover_flag(run_p)
     add_ttl_flag(run_p)
     run_p.add_argument(
         "--fleet",
@@ -4002,7 +4364,8 @@ def measure_run(run: Run) -> None:
             fleet,
             run.manifest_path,
             "services",
-            f"anvil, deploy, orchestrator, relay, {run.cfg.query_engine}",
+            f"anvil, deploy, {'stake, ' if staking(run.cfg) else ''}orchestrator, relay, "
+            f"{run.cfg.query_engine}",
         )
         start_support(
             remote,
@@ -4011,12 +4374,15 @@ def measure_run(run: Run) -> None:
             run.cfg.query_db,
             run.cfg.query_engine,
             _query_names(remote.hosts),
+            staking(run.cfg),
         )
         enter_phase(fleet, run.manifest_path, "nodes", "synchronized docker start")
         at = fleet_time(remote) + DOCKER_START_LEAD_S
         spread = start_nodes(remote, node_hosts(remote.hosts), at)
         update_manifest(run.manifest_path, "measuring", start_spread_s=spread)
         log.info("measuring: nodes started within %.2f s of each other", spread)
+        if run.cfg.prover:
+            start_prover(remote)
         chaos = (
             ChaosRunner(
                 remote,
@@ -4112,7 +4478,15 @@ def finish_run(run: Run, cloudwatch: bool) -> None:
         log.info("collecting: stop, freeze, logs, host samples, final rsync")
         actions: dict[CollectStep, tuple[str, Callable[[], object]]] = {
             "stop_agent": ("stop agent", lambda: stop_agent(remote)),
-            "freeze": ("freeze", lambda: freeze(remote)),
+            "freeze": (
+                "freeze",
+                lambda: freeze(
+                    remote,
+                    dotenv()["ESPRESSO_LIGHT_CLIENT_PROXY_ADDRESS"]
+                    if run.cfg.prover
+                    else None,
+                ),
+            ),
             "collect_hosts": (
                 "collect",
                 lambda: collect_hosts(
@@ -4648,6 +5022,7 @@ def fleet_run_config(args: argparse.Namespace, saved: FleetManifest) -> RunConfi
         query_db=cli.query_db,
         node_env=cli.node_env,
         max_block_size=cli.max_block_size,
+        protocol_version=cli.protocol_version,
         leader_trace=cli.leader_trace,
         latency=cli.latency,
         intra_latency=cli.intra_latency,
@@ -4656,17 +5031,54 @@ def fleet_run_config(args: argparse.Namespace, saved: FleetManifest) -> RunConfi
         netem=cli.netem,
         jitter_ratio=cli.jitter_ratio,
         epoch_height=cli.epoch_height,
+        prover=cli.prover,
         consensus_storage=cli.consensus_storage,
         prune=cli.prune,
+        slow_nodes=cli.slow_nodes,
+        slow_cores=cli.slow_cores,
         fleet=cli.fleet,
         force=cli.force,
         search=cli.search,
     )
     check_submit_nodes(cfg)
+    check_slow_nodes(cfg)
     check_search(cfg)
     check_chaos(cfg)
     check_fleet_disks(saved, cfg)
+    check_fleet_images(saved, cfg)
+    if cfg.prover:
+        check_prover_ctl(saved["memory_mib"][cfg.ctl_type], fleet=True)
     return cfg
+
+
+def check_prover_ctl(memory_mib: int, fleet: bool = False) -> None:
+    if memory_mib < PROVER_MIN_MIB:
+        # `run --fleet` refuses --ctl-type: the fleet's ctl is fixed at `up`.
+        fix = (
+            f"bring the fleet up with `up --ctl-type {PROVER_CTL_TYPE}`"
+            if fleet
+            else "pass --ctl-type"
+        )
+        raise Refused(
+            f"--prover needs a ctl with at least {PROVER_MIN_MIB} MiB, this one has "
+            f"{memory_mib}: {fix}"
+        )
+
+
+def check_fleet_images(saved: FleetManifest, cfg: RunConfig) -> None:
+    """A fleet from before `staking-cli` or `prover-service` has neither image nor the digest
+    to pull; a new `--tag` resolves all images again."""
+    if tag_changed(saved, cfg):
+        return
+    for image, used, flag in (
+        ("staking-cli", staking(cfg), "--epoch-height"),
+        ("prover-service", cfg.prover, "--prover"),
+    ):
+        if used and image not in saved["images"]:
+            raise Refused(
+                f"the fleet has no {image} image: pass a new --tag to pull the images, or "
+                f"run without {flag}"
+            )
 
 
 def reject_fleet_flags(argv: list[str]) -> None:
@@ -4999,7 +5411,7 @@ def reset_script(role: str, pg_store: str = "") -> str:
     keep = " ".join(f"! -name {name}" for name in RESET_KEEP)
     script = (
         "set -eu\n"
-        "for unit in bench-agent bench-host; do "
+        "for unit in bench-agent bench-host bench-prover; do "
         "if systemctl is-active --quiet $unit; then systemctl stop $unit; fi; done\n"
         "ids=$(docker ps -aq)\n"
         f'if [ -n "$ids" ]; then docker stop -t {int(FREEZE_STOP_TIMEOUT_S)} $ids; '
@@ -5205,8 +5617,9 @@ def render_run(
     `run_estimate` this is the run of a single shot, which also provisions."""
     genesis = render_genesis(
         (SCRIPT_DIR / "genesis.toml").read_bytes(),
-        cfg.nodes,
+        stake_table_capacity(cfg),
         cfg.max_block_size,
+        cfg.protocol_version,
         cfg.epoch_height,
     )
     run_dir = new_run_dir(fleet_dir, name)
@@ -5270,7 +5683,14 @@ def run_config_hash(
 ) -> str:
     """Load config plus what else changes the measured system: image digests, the fleet's
     shape, the query database placement, the rendered genesis and the latency matrix."""
-    digests = {name: image["digest"] for name, image in sorted(images.items())}
+    # staking-cli and prover-service joined the images later; a digest counts only for runs
+    # that use it.
+    digests = {
+        name: image["digest"]
+        for name, image in sorted(images.items())
+        if (name != "staking-cli" or staking(cfg))
+        and (name != "prover-service" or cfg.prover)
+    }
     return nb.config_hash(
         cfg.load,
         [
@@ -5282,7 +5702,14 @@ def run_config_hash(
             cfg.query_engine.encode(),
             *([json.dumps(sorted(cfg.node_env)).encode()] if cfg.node_env else []),
             *([b"leader-trace"] if cfg.leader_trace else []),
+            *([b"staking"] if staking(cfg) else []),
+            *([b"prover"] if cfg.prover else []),
             f"prune={cfg.prune}".encode(),
+            *(
+                [f"slow-nodes={cfg.slow_nodes},cores={cfg.slow_cores}".encode()]
+                if cfg.slow_nodes
+                else []
+            ),
             *(
                 [json.dumps(dataclasses.asdict(cfg.chaos), sort_keys=True).encode()]
                 if cfg.chaos
@@ -5507,15 +5934,22 @@ def node_hosts(hosts: dict[str, HostInfo]) -> list[HostInfo]:
     return [hosts[name] for name in _node_names(hosts)]
 
 
+def slow_node_names(cfg: RunConfig) -> list[str]:
+    """The last `cfg.slow_nodes` nodes; `check_slow_nodes` keeps them validator-only."""
+    return [f"node{i}" for i in range(cfg.nodes - cfg.slow_nodes, cfg.nodes)]
+
+
 def render_host_files(
     run_dir: Path,
     cfg: RunConfig,
     manifest: FleetManifest,
     hosts: dict[str, HostInfo],
 ) -> None:
+    slow = slow_node_names(cfg)
     for spec in manifest["hosts"]:
         host_dir = run_dir / "hosts" / spec["name"]
         host_dir.mkdir(parents=True, exist_ok=True)
+        cores = cfg.slow_cores if spec["name"] in slow else None
         (host_dir / "start.sh").write_text(
             render_start_sh(
                 spec,
@@ -5525,10 +5959,22 @@ def render_host_files(
                 leader_trace=cfg.leader_trace,
                 consensus_storage=cfg.consensus_storage,
                 query_engine=cfg.query_engine,
+                stake_nodes=len(_node_names(hosts)) if staking(cfg) else None,
+                prover=cfg.prover,
+                cores=cores,
             )
         )
         if spec["role"] == "ctl":
             (host_dir / "ctl.env").write_text(render_ctl_env(hosts, cfg, dotenv()))
+            if staking(cfg):
+                (host_dir / "stake.env").write_text(render_stake_env(hosts, dotenv()))
+            if cfg.prover:
+                (host_dir / "prover.sh").write_text(
+                    render_prover_sh(
+                        dotenv()["ESPRESSO_LIGHT_CLIENT_PROXY_ADDRESS"],
+                        _node_url(hosts["node0"]),
+                    )
+                )
         else:
             pg = query_endpoint(cfg, run_dir) if spec["role"] == "query" else None
             node_env = host_dir / "node.env"
@@ -5558,6 +6004,7 @@ def render_host_files(
                         leader_trace=cfg.leader_trace,
                         consensus_storage=cfg.consensus_storage,
                         query_engine=cfg.query_engine,
+                        cores=cores,
                     )
                 )
             if pg is not None:
@@ -5708,8 +6155,8 @@ def digest_mismatches(
 
 
 def ship_agents(remote: Remote) -> str:
-    """The laptop's current `aws-bench`, `netbench.py`, `chaos.py`, `latency.py` and
-    `bbr-hold.sh` to every host, whatever `up` put there. Returns the git revision they were
+    """The laptop's current `aws-bench`, `netbench.py`, `chaos.py`, `latency.py`, `bbr-hold.sh`
+    and `wait-for-l1-finalized` to every host, whatever `up` put there. Returns the git revision they were
     shipped from."""
     files = [
         SCRIPT_DIR / "netbench.py",
@@ -5717,6 +6164,7 @@ def ship_agents(remote: Remote) -> str:
         SCRIPT_DIR / "latency.py",
         SCRIPT_DIR / "aws-bench",
         SCRIPT_DIR / "aws" / "bbr-hold.sh",
+        REPO_ROOT / "scripts" / "wait-for-l1-finalized",
     ]
     remote.parallel(
         lambda host: remote.rsync_to(host, files, f"{BENCH_DIR}/"), remote.hosts
@@ -5853,12 +6301,16 @@ def gate(
         interrupts.sleep(GATE_RETRY_S)
 
 
-def rpc_check(method: str, params: list[str], jq_filter: str) -> str:
+def rpc_curl(method: str, params: list[Any]) -> str:
     body = json.dumps({"jsonrpc": "2.0", "id": 1, "method": method, "params": params})
     return (
         f"curl -sf -X POST -H 'Content-Type: application/json' --data {shlex.quote(body)} "
-        f"http://localhost:{env_port('ESPRESSO_L1_PORT')} | jq -e {shlex.quote(jq_filter)}"
+        f"http://localhost:{env_port('ESPRESSO_L1_PORT')}"
     )
+
+
+def rpc_check(method: str, params: list[Any], jq_filter: str) -> str:
+    return f"{rpc_curl(method, params)} | jq -e {shlex.quote(jq_filter)}"
 
 
 class GateStart(TypedDict):
@@ -5889,9 +6341,11 @@ def support_plan(
     contracts: list[str],
     query_engine: QueryEngine = "postgres",
     query_hosts: Sequence[str] = ("node0",),
+    stake: bool = False,
 ) -> list[SupportStart]:
     """The support services in start order, each with the check that gates the next. The rds
-    instance is only checked: it is already running. SQLite has no database service."""
+    instance is only checked: it is already running. SQLite has no database service. With
+    `stake`, every node is staked and the L1 finalized before the orchestrator starts."""
     plan: list[SupportStart] = [
         GateStart(
             kind="gate",
@@ -5921,6 +6375,27 @@ def support_plan(
                 timeout_s=GATE_TIMEOUT_S,
             )
         )
+    if stake:
+        plan += [
+            DeployStart(
+                kind="deploy",
+                host="ctl",
+                container="stake",
+                what="stake",
+                timeout_s=STAKE_TIMEOUT_S,
+            ),
+            GateStart(
+                kind="gate",
+                host="ctl",
+                container=None,
+                what="wait-for-l1-finalized",
+                gate_cmd=(
+                    f"L1_PROVIDER=http://localhost:{env_port('ESPRESSO_L1_PORT')} "
+                    f"timeout {L1_FINALIZED_TIMEOUT_S:.0f} sh {BENCH_DIR}/wait-for-l1-finalized"
+                ),
+                timeout_s=L1_FINALIZED_TIMEOUT_S,
+            ),
+        ]
     plan += [
         GateStart(
             kind="gate",
@@ -5979,11 +6454,12 @@ def start_support(
     query_db: DbMode = "colocated",
     query_engine: QueryEngine = "postgres",
     query_hosts: Sequence[str] = ("node0",),
+    stake: bool = False,
 ) -> None:
-    """On ctl, in order and each gated on a check: anvil, contract deployment, orchestrator,
-    relay; then Postgres on each query host (the rds instance is only gated, it is already
+    """On ctl, in order and each gated on a check: anvil, contract deployment, staking (with
+    `stake`), orchestrator, relay; then Postgres on each query host (the rds instance is only gated, it is already
     running; SQLite has no such step)."""
-    for step in support_plan(query_db, contracts, query_engine, query_hosts):
+    for step in support_plan(query_db, contracts, query_engine, query_hosts, stake):
         host = step["host"]
         if step["container"] is not None:
             remote.ssh(host, f"sudo docker start {step['container']}")
@@ -6054,6 +6530,14 @@ def start_agent(remote: Remote) -> None:
         "ctl",
         f"sudo systemd-run --unit bench-agent --collect {AGENT_PYTHON} {BENCH_DIR}/aws-bench "
         f"agent-drive {BENCH_DIR}/agent.json {BENCH_DIR}/out",
+    )
+
+
+def start_prover(remote: Remote) -> None:
+    """In the background: the load never waits for the prover, whose outcome is in PROVER_LOG."""
+    remote.ssh(
+        "ctl",
+        f"sudo systemd-run --unit bench-prover --collect bash {BENCH_DIR}/prover.sh",
     )
 
 
@@ -6549,10 +7033,15 @@ def poll_agent(
 # Containers `render_start_sh` creates per role that write to the journal or answer queries;
 # postgres stays up so that `collect_hosts` can still ask it for statistics.
 FREEZE_CONTAINERS = {
-    "ctl": ("anvil", "orchestrator", "state-relay-server"),
+    "ctl": ("anvil", "orchestrator", "state-relay-server", "state-prover"),
     "query": ("espresso-node",),
     "validator": ("espresso-node",),
 }
+
+
+STOP_PROVER = (
+    "if systemctl is-active --quiet bench-prover; then systemctl stop bench-prover; fi"
+)
 
 
 def freeze_command(names: tuple[str, ...]) -> str:
@@ -6565,10 +7054,19 @@ def freeze_command(names: tuple[str, ...]) -> str:
     )
 
 
-def freeze(remote: Remote) -> None:
+def freeze(remote: Remote, lc_address: str | None = None) -> None:
+    """Stops the containers; with the light client's `lc_address` (`--prover`), ctl first
+    records the prover state."""
+
     def stop(host: str) -> None:
-        names = FREEZE_CONTAINERS[remote.hosts[host]["role"]]
-        remote.ssh(host, bounded(freeze_command(names)))
+        role = remote.hosts[host]["role"]
+        command = freeze_command(FREEZE_CONTAINERS[role])
+        if role == "ctl":
+            # Before the containers: a running prover.sh would start the prover again, and
+            # the prover state needs the running prover and anvil.
+            state = prover_state_script(lc_address) if lc_address else ""
+            command = f"{STOP_PROVER}\n{state}{command}"
+        remote.ssh(host, bounded(command))
 
     remote.parallel(stop, remote.hosts)
 
@@ -6654,6 +7152,7 @@ COLLECT_EXCLUDES = (
     "--exclude=/chaos.py",
     "--exclude=/latency.py",
     "--exclude=/bbr-hold.sh",
+    "--exclude=/wait-for-l1-finalized",
     "--exclude=/pg.json",
 )
 
@@ -7278,6 +7777,7 @@ def config_from_manifest(saved: dict[str, Any]) -> RunConfig:
     # Dirs from before the flag have no such key.
     if "node_env" in saved:
         fields["node_env"] = tuple(saved["node_env"])
+    fields.pop("staking", None)  # derived from epoch_height
     fields.setdefault("region", LEGACY_REGION)
     fields.setdefault("consensus_storage", LEGACY_CONSENSUS_STORAGE)
     fields["search"] = search_config(saved.get("search"))
@@ -8220,6 +8720,13 @@ def load_evidence(
     if manifest["query_db"] == "rds":
         metrics = run_dir / RDS_CLOUDWATCH_FILE
         evidence["rds_min"] = metric_min(metrics, t0, t1) if metrics.exists() else {}
+    if manifest["config"].get("prover"):
+        ctl_dir = run_dir / "hosts" / "ctl"
+        log_path, state_path = ctl_dir / "prover.log", ctl_dir / "prover-state.json"
+        evidence["prover"] = prover_summary(
+            log_path.read_text() if log_path.exists() else "",
+            nb.read_json(state_path) if state_path.exists() else None,
+        )
     for spec in manifest["hosts"]:
         name = spec["name"]
         host_dir = run_dir / "hosts" / name
@@ -8300,7 +8807,28 @@ def deployment_meta(manifest: Manifest, evidence: Evidence) -> nb.DeploymentMeta
             if "max_block_size" in config
             else {}
         ),
+        **(
+            {"protocol_version": config["protocol_version"]}
+            if "protocol_version" in config
+            else {}
+        ),
         **({"prune": f"{config['prune']} s"} if config.get("prune") else {}),
+        # Manifests from before epochs have no such key; a null one is the template's.
+        **(
+            {"epoch_height": config["epoch_height"]}
+            if config.get("epoch_height")
+            else {}
+        ),
+        **({"staking": True} if config.get("staking") else {}),
+        **({"prover": evidence["prover"]} if "prover" in evidence else {}),
+        **(
+            {
+                "slow_nodes": slow_node_names(config_from_manifest(config)),
+                "slow_cores": config["slow_cores"],
+            }
+            if config.get("slow_nodes")
+            else {}
+        ),
     }
 
 
@@ -8419,7 +8947,9 @@ def check_validity_aws(
     if spread >= START_SPREAD_NOISY_S:
         noisy.append(f"nodes started {spread:.1f} s apart")
     hosts = result["hosts"]
-    if "ctl" in hosts and hosts["ctl"]["util_mean"] > CTL_CPU_NOISY_FRAC:
+    # The prover saturates ctl by design.
+    prover = manifest["config"].get("prover", False)
+    if "ctl" in hosts and not prover and hosts["ctl"]["util_mean"] > CTL_CPU_NOISY_FRAC:
         noisy.append(f"ctl CPU busy {hosts['ctl']['util_mean']:.0%}")
     for name, stats in hosts.items():
         # node0's steal is already judged by netbench.check_validity through result["host"].
