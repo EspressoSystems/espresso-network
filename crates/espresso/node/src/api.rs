@@ -803,7 +803,7 @@ impl<D: CatchupStorage + Send + Sync> CatchupDataSource for StorageState<D> {
         // state.
 
         let handle = self.as_ref().consensus().await;
-        if let Err(err) = add_fee_accounts_to_state(&*handle, &view, accounts, &tree, leaf).await {
+        if let Err(err) = add_fee_accounts_to_state(&*handle, accounts, &tree, leaf).await {
             tracing::warn!(?view, "cannot update fetched account state: {err:#}");
         }
         tracing::info!(?view, "updated with fetched account state");
@@ -895,9 +895,7 @@ impl<D: CatchupStorage + Send + Sync> CatchupDataSource for StorageState<D> {
         // If we successfully fetched accounts from storage, try to add them back into the in-memory
         // state.
         let handle = self.as_ref().consensus().await;
-        if let Err(err) =
-            add_v2_reward_accounts_to_state(&*handle, &view, accounts, &tree, leaf).await
-        {
+        if let Err(err) = add_v2_reward_accounts_to_state(&*handle, accounts, &tree, leaf).await {
             tracing::warn!(?view, "cannot update fetched account state: {err:#}");
         }
         tracing::info!(?view, "updated with fetched account state");
@@ -935,9 +933,7 @@ impl<D: CatchupStorage + Send + Sync> CatchupDataSource for StorageState<D> {
         // If we successfully fetched accounts from storage, try to add them back into the in-memory
         // state.
         let handle = self.as_ref().consensus().await;
-        if let Err(err) =
-            add_v1_reward_accounts_to_state(&*handle, &view, accounts, &tree, leaf).await
-        {
+        if let Err(err) = add_v1_reward_accounts_to_state(&*handle, accounts, &tree, leaf).await {
             tracing::warn!(?view, "cannot update fetched account state: {err:#}");
         }
         tracing::info!(?view, "updated with fetched account state");
