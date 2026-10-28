@@ -59,7 +59,10 @@ async fn connection_pair(
         },
         Connection::connect(conf_a, pkb, addr, Lane::Consensus),
     );
-    (ca, cb)
+    (
+        ca.expect("a consensus connect only returns once it succeeds"),
+        cb,
+    )
 }
 
 /// Build a payload with the trailer appended.

@@ -9,8 +9,8 @@ use ::light_client::{
     },
     storage::LeafRequest,
 };
-use anyhow::{Context as _, Result, bail, ensure};
-use espresso_types::{Certificate2, Header, NamespaceId, SeqTypes, v0_3::StakeTableEvent};
+use anyhow::{Context as _, Result, bail};
+use espresso_types::{Certificate2, NamespaceId, SeqTypes, v0_3::StakeTableEvent};
 use futures::future::try_join_all;
 use hotshot_query_service::{
     availability::{LeafId, LeafQueryData},
@@ -18,11 +18,11 @@ use hotshot_query_service::{
 };
 use hotshot_types::{data::EpochNumber, utils::epoch_from_block_number};
 
-use super::{ApiState, data_source::StakeTableDataSource};
+use super::{ApiState, data_source::StakeTableDataSource, state::stake_table_l1_range};
 use crate::query_peers::{LeafRef, QueryRequest, QueryResponse};
 
-/// Each call is one request-response request, which picks the staked peers to ask. Calls the
-/// query lane does not carry fail, and the light client verifies whatever comes back.
+/// Each call asks one staked peer over the query lane. Calls for data the lane does not carry
+/// fail, and the light client verifies whatever comes back.
 #[derive(Clone, Debug)]
 pub(crate) struct PeerClient {
     state: ApiState,
@@ -141,38 +141,25 @@ impl Client for PeerClient {
     /// Read from this node's own stake table events, the same way the light client API serves
     /// them, so verifying a peer's answer never needs another peer.
     async fn stake_table_events(&self, epoch: EpochNumber) -> Result<Vec<StakeTableEvent>> {
-        fn l1_finalized(root: Option<Header>) -> Result<u64> {
-            Ok(root
-                .context("missing epoch root")?
-                .l1_finalized()
-                .context("epoch root has no L1 finalized block")?
-                .number())
-        }
-
         let ctx = self.state.context().await;
         let node_state = ctx.node_state();
         let epoch_height = node_state.epoch_height.context("epoch height not set")?;
         let first_epoch = epoch_from_block_number(node_state.epoch_start_block, epoch_height);
-        ensure!(
-            *epoch >= first_epoch + 2,
-            "no stake table events before epoch {}",
-            first_epoch + 2
-        );
-
-        // The root of epoch `e - 2` is stored under `e`.
         let membership = ctx.membership();
-        let to_l1_block = l1_finalized(membership.load_epoch_root(epoch).await?)?;
-        let from_l1_block = if *epoch >= first_epoch + 3 {
-            l1_finalized(membership.load_epoch_root(epoch - 1).await?)? + 1
-        } else {
-            0
-        };
-        StakeTableDataSource::stake_table_events(&self.state, from_l1_block, to_l1_block).await
+        let membership = &membership;
+        let range = stake_table_l1_range(*epoch, first_epoch, move |epoch| async move {
+            membership
+                .load_epoch_root(EpochNumber::new(epoch))
+                .await?
+                .with_context(|| format!("missing epoch root for epoch {epoch}"))
+        })
+        .await?;
+        StakeTableDataSource::stake_table_events(&self.state, range.start, range.end).await
     }
 
     async fn cert2(&self, height: u64) -> Result<Option<Certificate2<SeqTypes>>> {
         match self.ask(QueryRequest::Cert2(height)).await? {
-            QueryResponse::Cert2(cert2) => Ok(cert2),
+            QueryResponse::Cert2(cert2) => Ok(Some(cert2)),
             response => bail!("unexpected response {response:?}"),
         }
     }

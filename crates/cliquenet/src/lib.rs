@@ -118,13 +118,6 @@ pub struct Config {
     #[builder(default = 6)]
     keep_alive_retries: u8,
 
-    /// Accept query lane connections from parties.
-    ///
-    /// When false, a party opening a query lane is told to back off. The
-    /// consensus lane is unaffected.
-    #[builder(default = false)]
-    accept_query: bool,
-
     /// Max. number of concurrent accept tasks.
     #[builder(default = (3 * parties.len()).max(100))]
     max_accept_tasks: usize,
@@ -167,7 +160,6 @@ impl fmt::Debug for Config {
             .field("keepalive_after", &self.keep_alive_after)
             .field("keepalive_interval", &self.keep_alive_interval)
             .field("keepalive_retries", &self.keep_alive_retries)
-            .field("accept_query", &self.accept_query)
             .field("max_accept_tasks", &self.max_accept_tasks)
             .finish()
     }
@@ -186,6 +178,10 @@ impl Config {
         self.receive_timeout
     }
 
+    pub fn peer_budget(&self) -> NonZeroUsize {
+        self.peer_budget
+    }
+
     pub fn with_metrics<M: Metrics + 'static>(mut self, m: M) -> Self {
         self.metrics = Some(Arc::new(m));
         self
@@ -200,7 +196,8 @@ impl Config {
 pub enum Lane {
     /// Consensus messages, connected eagerly to every party.
     Consensus,
-    /// Query requests and replies, connected on first use and closed when idle.
+    /// Query requests and replies, connected on first use. Once the remote
+    /// closes it, the next send opens it again.
     Query,
 }
 

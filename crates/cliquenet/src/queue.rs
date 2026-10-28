@@ -44,6 +44,10 @@ impl<T> Queue<T> {
         *map = map.split_off(&(s, MsgId(0)))
     }
 
+    pub fn clear(&self) {
+        self.0.map.lock().clear()
+    }
+
     pub fn remove(&self, s: Slot, i: MsgId) {
         self.0.map.lock().remove(&(s, i));
     }

@@ -63,7 +63,6 @@ use jf_merkle_tree_compat::{
 use prometheus::Encoder as _;
 use serde_json;
 use tagged_base64::TaggedBase64;
-use versions::NEW_PROTOCOL_VERSION;
 
 use super::{
     RewardMerkleTreeDataSource, RewardMerkleTreeV2Data as InternalRewardTreeData,
@@ -74,6 +73,7 @@ use super::{
         StateCertDataSource, StateCertFetchingDataSource, StateSignatureDataSource,
         SubmitDataSource, TableSize, TokenDataSource,
     },
+    light_client::ProofError,
 };
 
 /// Timeout for failing requests due to missing data.
@@ -3255,8 +3255,6 @@ where
             .await
             .ok_or_else(|| not_found(format!("unknown leaf {requested}")))?;
 
-        let height = requested_leaf.height();
-        let new_protocol = requested_leaf.header().version() >= NEW_PROTOCOL_VERSION;
         let proof = crate::api::light_client::get_leaf_proof(
             ds,
             requested_leaf,
@@ -3264,16 +3262,18 @@ where
             lc_leaf_proof_chain_limit(),
         )
         .await;
-        // The proof may only lack a descendant's cert2, which peers can supply for next time.
-        if proof.is_err() && new_protocol {
+        // Peers can supply the missing cert2 for next time.
+        if let Err(ProofError::MissingCert2 { height, message: _ }) = &proof {
             crate::api::light_client::request_cert2s(
                 self.data_source.clone(),
-                height,
+                *height,
                 lc_leaf_proof_chain_limit(),
                 fetch_timeout,
             );
         }
-        proof.map_err(lc_error)
+        proof
+            .map_err(hotshot_query_service::Error::from)
+            .map_err(lc_error)
     }
 
     async fn get_header_proof(
@@ -3311,53 +3311,17 @@ where
             .epoch_height
             .ok_or_else(|| anyhow::anyhow!("epoch state not set"))?;
         let first_epoch = epoch_from_block_number(node_state.epoch_start_block, epoch_height);
-        if epoch < first_epoch + 2 {
-            return Err(bad_request(format!(
-                "epoch must be at least {}",
-                first_epoch + 2
-            )));
-        }
+        let range = stake_table_l1_range(epoch, first_epoch, move |epoch| async move {
+            let height = root_block_in_epoch(epoch - 2, epoch_height) as usize;
+            AvailabilityDataSource::get_header::<HsBlockId<SeqTypes>>(ds, HsBlockId::Number(height))
+                .await
+                .with_timeout(fetch_timeout)
+                .await
+                .ok_or_else(|| not_found(format!("missing epoch root header {height}")))
+        })
+        .await?;
 
-        let epoch_root_height = root_block_in_epoch(epoch - 2, epoch_height) as usize;
-        let epoch_root = AvailabilityDataSource::get_header::<HsBlockId<SeqTypes>>(
-            ds,
-            HsBlockId::Number(epoch_root_height),
-        )
-        .await
-        .with_timeout(fetch_timeout)
-        .await
-        .ok_or_else(|| not_found(format!("missing epoch root header {epoch_root_height}")))?;
-        let to_l1_block = epoch_root
-            .l1_finalized()
-            .ok_or_else(|| anyhow::anyhow!("epoch root header is missing L1 finalized block"))?
-            .number();
-
-        let from_l1_block = if epoch >= first_epoch + 3 {
-            let prev_epoch_root_height = root_block_in_epoch(epoch - 3, epoch_height) as usize;
-            let prev_epoch_root = AvailabilityDataSource::get_header::<HsBlockId<SeqTypes>>(
-                ds,
-                HsBlockId::Number(prev_epoch_root_height),
-            )
-            .await
-            .with_timeout(fetch_timeout)
-            .await
-            .ok_or_else(|| {
-                not_found(format!(
-                    "missing previous epoch root header {prev_epoch_root_height}"
-                ))
-            })?;
-            prev_epoch_root
-                .l1_finalized()
-                .ok_or_else(|| {
-                    anyhow::anyhow!("previous epoch root header is missing L1 finalized block")
-                })?
-                .number()
-                + 1
-        } else {
-            0
-        };
-
-        StakeTableDataSource::stake_table_events(ds, from_l1_block, to_l1_block).await
+        StakeTableDataSource::stake_table_events(ds, range.start, range.end).await
     }
 
     async fn get_payload_proof(&self, height: u64) -> anyhow::Result<Self::PayloadProof> {
@@ -3793,6 +3757,45 @@ pub(crate) fn lc_error(err: hotshot_query_service::Error) -> anyhow::Error {
 /// Like [`lc_error`], for explorer data source errors.
 fn explorer_error(err: ExplorerError) -> anyhow::Error {
     lc_error(hotshot_query_service::Error::Explorer { source: err })
+}
+
+/// The L1 blocks whose stake table events define `epoch`, from the epoch roots the chain stores.
+///
+/// `epoch_root` loads the root the chain stores under an epoch, which is the root block of the
+/// epoch two before it.
+pub(crate) async fn stake_table_l1_range<F, Fut>(
+    epoch: u64,
+    first_epoch: u64,
+    epoch_root: F,
+) -> anyhow::Result<Range<u64>>
+where
+    F: Fn(u64) -> Fut,
+    Fut: Future<Output = anyhow::Result<HsHeader<SeqTypes>>> + Send,
+{
+    if epoch < first_epoch + 2 {
+        return Err(bad_request(format!(
+            "epoch must be at least {}",
+            first_epoch + 2
+        )));
+    }
+    let to = epoch_root(epoch)
+        .await?
+        .l1_finalized()
+        .ok_or_else(|| anyhow::anyhow!("epoch root header is missing L1 finalized block"))?
+        .number();
+    let from = if epoch >= first_epoch + 3 {
+        epoch_root(epoch - 1)
+            .await?
+            .l1_finalized()
+            .ok_or_else(|| {
+                anyhow::anyhow!("previous epoch root header is missing L1 finalized block")
+            })?
+            .number()
+            + 1
+    } else {
+        0
+    };
+    Ok(from..to)
 }
 
 /// Bounds the leaves in a single leaf proof, and so the memory to build and serialize it.

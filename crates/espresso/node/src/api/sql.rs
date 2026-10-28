@@ -1209,10 +1209,9 @@ mod request_storage {
         v0_4::{RewardAccountV2, RewardMerkleTreeV2},
     };
     use hotshot_query_service::{
-        availability::{LeafId, LeafQueryData},
+        availability::{LeafId, LeafQueryData, PayloadQueryData, VidCommonQueryData},
         data_source::{VersionedDataSource, storage::AvailabilityStorage},
         node::BlockId,
-        types::HeightIndexed,
     };
     use hotshot_types::data::{VidShare, ViewNumber};
     use light_client::consensus::{leaf::LeafProof, payload::PayloadProof};
@@ -1300,18 +1299,20 @@ mod request_storage {
             finalized: Option<u64>,
         ) -> anyhow::Result<LeafProof> {
             let mut tx = self.read().await?;
-            let block = match leaf {
-                LeafRef::Height(height) => BlockId::Number(height as usize),
-                LeafRef::Hash(hash) => {
-                    let leaf =
-                        AvailabilityStorage::<SeqTypes>::get_leaf(&mut tx, LeafId::Hash(hash));
-                    BlockId::Number(leaf.await?.height() as usize)
+            let id = match leaf {
+                LeafRef::Height(height) => LeafId::Number(height as usize),
+                LeafRef::Hash(hash) => LeafId::Hash(hash),
+                LeafRef::BlockHash(hash) => {
+                    let block = BlockId::Hash(hash);
+                    let header = AvailabilityStorage::<SeqTypes>::get_header(&mut tx, block);
+                    LeafId::Number(header.await?.height() as usize)
                 },
-                LeafRef::BlockHash(hash) => BlockId::Hash(hash),
-                LeafRef::PayloadHash(hash) => BlockId::PayloadHash(hash),
+                LeafRef::PayloadHash(hash) => {
+                    let block = BlockId::PayloadHash(hash);
+                    let header = AvailabilityStorage::<SeqTypes>::get_header(&mut tx, block);
+                    LeafId::Number(header.await?.height() as usize)
+                },
             };
-            let header = AvailabilityStorage::<SeqTypes>::get_header(&mut tx, block).await?;
-            let id = LeafId::Number(header.height() as usize);
             let requested = AvailabilityStorage::<SeqTypes>::get_leaf(&mut tx, id).await?;
             drop(tx);
             Ok(get_leaf_proof(
@@ -1341,12 +1342,20 @@ mod request_storage {
         async fn get_payload_proof(&self, height: u64) -> anyhow::Result<PayloadProof> {
             let id = BlockId::Number(height as usize);
             let mut tx = self.read().await?;
-            let payload = AvailabilityStorage::<SeqTypes>::get_payload(&mut tx, id).await?;
-            let vid_common = AvailabilityStorage::<SeqTypes>::get_vid_common(&mut tx, id).await?;
-            Ok(PayloadProof::new(
-                payload.data().clone(),
-                vid_common.common().clone(),
-            ))
+            let PayloadQueryData {
+                data,
+                height: _,
+                block_hash: _,
+                hash: _,
+                size: _,
+            } = AvailabilityStorage::<SeqTypes>::get_payload(&mut tx, id).await?;
+            let VidCommonQueryData {
+                common,
+                height: _,
+                block_hash: _,
+                payload_hash: _,
+            } = AvailabilityStorage::<SeqTypes>::get_vid_common(&mut tx, id).await?;
+            Ok(PayloadProof::new(data, common))
         }
     }
 }

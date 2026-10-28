@@ -1,4 +1,10 @@
-use std::{collections::HashMap, mem, net::IpAddr, sync::Arc, time::Duration};
+use std::{
+    collections::{HashMap, VecDeque},
+    mem,
+    net::IpAddr,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use bytes::{Bytes, BytesMut};
 use tokio::{
@@ -18,7 +24,7 @@ use crate::{
     connection::Connection,
     delay::DelayQueue,
     error::NetworkError,
-    metrics::NoMetrics,
+    metrics::QueryMetrics,
     msg::{MsgId, Slot, Trailer, hello::Hello},
     net::{Command, PeerCommand, PeerMessage, RetryPolicy, SendAction, peer::Peer},
     queue::Queue,
@@ -42,8 +48,13 @@ pub struct Server {
     hello_tasks:
         JoinMap<(PublicKey, u64), Result<(Hello, Connection, Option<Hello>), NetworkError>>,
     next_hello_id: u64,
-    connect_tasks: JoinMap<(PublicKey, Lane), Connection>,
+    connect_tasks: JoinMap<(PublicKey, Lane), Option<Connection>>,
     peer_tasks: JoinMap<(PublicKey, Lane), Peer>,
+    accept_query: bool,
+    /// When each lower bound arrived. Query links are collected by age, not
+    /// by view, since a query message is useful for as long as its sender
+    /// waits for the reply.
+    bounds: VecDeque<(Instant, Slot)>,
     metrics: Arc<dyn Metrics>,
 }
 
@@ -105,7 +116,7 @@ enum PeerState {
 }
 
 impl Server {
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub(super) fn spawn(
         conf: Arc<Config>,
         listener: TcpListener,
@@ -140,6 +151,8 @@ impl Server {
             hello_tasks: JoinMap::new(),
             next_hello_id: 0,
             peer_tasks: JoinMap::new(),
+            accept_query: false,
+            bounds: VecDeque::new(),
             msgid: MsgId::new(0),
             next_slot: sx,
             lower_bound: Slot::MIN,
@@ -303,9 +316,20 @@ impl Server {
                 },
 
                 Some(x) = self.connect_tasks.join_next() => match x {
-                    ((key, lane), Ok(conn)) => {
+                    ((key, lane), Ok(Some(conn))) => {
                         self.metrics.set(&self.key, CONNECT_TASKS, self.connect_tasks.len());
                         self.on_connection(key, lane, conn, Origin::Connected);
+                    }
+                    ((key, lane), Ok(None)) => {
+                        self.metrics.set(&self.key, CONNECT_TASKS, self.connect_tasks.len());
+                        debug!(name = %self.conf.name, node = %self.key, peer = %key, ?lane, "lane unavailable");
+                        if let Some(party) = self.parties.get_mut(&key) {
+                            party.link_mut(lane).outbox.clear();
+                        }
+                        // The empty message tells the application nothing queued for the party was sent.
+                        if self.query_ibound.send((key, Bytes::new(), None)).is_err() {
+                            debug!(name = %self.conf.name, node = %self.key, "query channel closed");
+                        }
                     }
                     ((key, lane), Err(err)) => {
                         self.metrics.set(&self.key, CONNECT_TASKS, self.connect_tasks.len());
@@ -345,13 +369,18 @@ impl Server {
                         };
                         let addr = party.addr.clone();
                         let link = party.link_mut(lane);
-                        if let PeerState::Replace(conn) = link.peer.take() {
-                            let cancel = CancellationToken::new();
-                            link.peer = PeerState::Connected(cancel.clone());
-                            self.spawn_peer(key, lane, peer, conn, cancel);
-                        } else {
-                            link.peer = PeerState::Reconnect(peer);
-                            self.spawn_connect(key, lane, addr);
+                        match (lane, link.peer.take()) {
+                            (_, PeerState::Replace(conn)) => {
+                                let cancel = CancellationToken::new();
+                                link.peer = PeerState::Connected(cancel.clone());
+                                self.spawn_peer(key, lane, peer, conn, cancel);
+                            }
+                            (Lane::Consensus, PeerState::None | PeerState::Connected(_) | PeerState::Reconnect(_)) => {
+                                link.peer = PeerState::Reconnect(peer);
+                                self.spawn_connect(key, lane, addr);
+                            }
+                            // A query link is reopened by the next send, so nothing is kept.
+                            (Lane::Query, PeerState::None | PeerState::Connected(_) | PeerState::Reconnect(_)) => {}
                         }
                     }
                     ((key, lane), Err(err)) => {
@@ -385,10 +414,23 @@ impl Server {
                     debug_assert!(s > self.lower_bound); // ensured by `NetworkSender::gc`
                     self.lower_bound = s;
                     self.metrics.set(&self.key, LOWER_BOUND, u64::from(s) as usize);
+                    self.bounds.push_back((Instant::now(), s));
+                    // Everything tagged below a bound was queued before that bound arrived.
+                    let aged = self
+                        .bounds
+                        .iter()
+                        .rposition(|(at, _)| at.elapsed() >= self.conf.receive_timeout)
+                        .map(|i| {
+                            let (_, bound) = self.bounds[i];
+                            self.bounds.drain(..=i);
+                            bound
+                        });
                     for party in self.parties.values() {
-                        for link in [&party.consensus, &party.query] {
-                            link.outbox.gc(s);
-                            link.retry.gc(s);
+                        party.consensus.outbox.gc(s);
+                        party.consensus.retry.gc(s);
+                        if let Some(bound) = aged {
+                            party.query.outbox.gc(bound);
+                            party.query.retry.gc(bound);
                         }
                     }
                 }
@@ -416,13 +458,22 @@ impl Server {
                                         p.addr = a.clone();
                                         p.role = role;
                                         self.connect_tasks.abort_matching(|(key, _)| *key == k);
-                                        if let PeerState::Connected(cancel) = &p.query.peer {
-                                            cancel.cancel()
-                                        }
+                                        let redial_query = match &p.query.peer {
+                                            PeerState::Connected(cancel) => {
+                                                cancel.cancel();
+                                                false
+                                            }
+                                            PeerState::None | PeerState::Reconnect(_) | PeerState::Replace(_) => {
+                                                p.query.outbox.len() > 0
+                                            }
+                                        };
                                         if let PeerState::Connected(cancel) = &p.consensus.peer {
                                             cancel.cancel()
                                         } else {
-                                            self.spawn_connect(k, Lane::Consensus, a)
+                                            self.spawn_connect(k, Lane::Consensus, a.clone())
+                                        }
+                                        if redial_query {
+                                            self.spawn_connect(k, Lane::Query, a)
                                         }
                                     }
                                     continue
@@ -588,6 +639,7 @@ impl Server {
                             }
                         }
                         Some(Command::SendQuery(to, bytes)) => self.send_query(to, bytes),
+                        Some(Command::AcceptQuery) => self.accept_query = true,
                         Some(Command::Shutdown(tx)) => {
                             debug!(name = %self.conf.name, node = %self.key, "shutting down");
                             let _ = tx.send(());
@@ -618,10 +670,9 @@ impl Server {
             PeerState::None => {
                 let (inbound, metrics) = match lane {
                     Lane::Consensus => (self.ibound.clone(), Arc::clone(&self.metrics)),
-                    // Peer gauges are keyed by party, so the query link would overwrite them.
                     Lane::Query => (
                         self.query_ibound.clone(),
-                        Arc::new(NoMetrics) as Arc<dyn Metrics>,
+                        Arc::new(QueryMetrics(Arc::clone(&self.metrics))) as Arc<dyn Metrics>,
                     ),
                 };
                 Peer::builder()
@@ -691,14 +742,24 @@ impl Server {
             );
             return;
         };
-        // Queued under the current lower bound, so the next GC drops it if still unsent.
+        // The same budget the peer applies to its own messages in flight, so one party cannot
+        // pile up replies in memory.
+        if party.query.outbox.len() >= self.conf.peer_budget.get() {
+            debug!(name = %self.conf.name, node = %self.key, peer = %to, "query outbox full");
+            return;
+        }
+        // The tag is the queueing time as the age based GC of query links reads it.
         party
             .query
             .outbox
             .enqueue(self.lower_bound, msgid, (RetryPolicy::NoRetry, bytes));
-        if matches!(party.query.peer, PeerState::None)
-            && !self.connect_tasks.contains_key(&(to, Lane::Query))
-        {
+        let dial = match party.query.peer {
+            PeerState::None | PeerState::Reconnect(_) => {
+                !self.connect_tasks.contains_key(&(to, Lane::Query))
+            },
+            PeerState::Connected(_) | PeerState::Replace(_) => false,
+        };
+        if dial {
             let addr = party.addr.clone();
             self.spawn_connect(to, Lane::Query, addr);
         }
@@ -755,9 +816,22 @@ impl Server {
         // Each party may open one connection per lane, hence two hellos per party.
         let under_pressure = self.hello_tasks.len() > 4 * self.parties.len();
 
+        // A third pending hello of a party replaces its oldest, as a party reconnecting a lane
+        // would want, and caps what one party can hold open.
+        let mut pending = self
+            .hello_tasks
+            .keys()
+            .filter(|(key, _)| *key == conn.key)
+            .map(|(_, id)| *id)
+            .collect::<Vec<_>>();
+        if pending.len() >= 2 {
+            pending.sort_unstable();
+            self.hello_tasks.abort(&(conn.key, pending[0]));
+        }
+
         let id = self.next_hello_id;
         self.next_hello_id = self.next_hello_id.wrapping_add(1);
-        let accept_query = self.conf.accept_query;
+        let accept_query = self.accept_query;
         let backoff = self.conf.backoff_duration;
         self.hello_tasks.spawn(
             (conn.key, id),
@@ -810,7 +884,7 @@ impl Server {
                     warn!(%name, %node, peer = %key, %addr, %err, "peer failure");
                     metrics.add(&key, ERRORS, 1)
                 },
-                // The remote closing an idle query link ends up here.
+                // A query link closing is routine, unlike a consensus link.
                 (Lane::Query, err) => {
                     debug!(%name, %node, peer = %key, %addr, %err, "query peer ended")
                 },

@@ -135,6 +135,7 @@ where
         initializer: HotShotInitializer<SeqTypes>,
         anchor_view: Option<ViewNumber>,
         storage: Option<RequestResponseStorage>,
+        query_p2p: bool,
         state_catchup: ParallelStateCatchup,
         persistence: Arc<P>,
         coordinator_network: F,
@@ -186,7 +187,9 @@ where
         let mut coordinator_network = coordinator_network(upgrade_lock.clone()).await?;
         // Taken before the network moves into the coordinator, so query traffic never passes
         // through it.
-        let query_lane = coordinator_network.take_query_lane();
+        let query_lane = query_p2p
+            .then(|| coordinator_network.take_query_lane())
+            .flatten();
 
         let current_epoch = bootstrap_epoch_window(
             &membership_coordinator,
@@ -334,7 +337,7 @@ where
             QueryPeers::start(lane, storage, consensus_handle.clone(), pub_key, &mut tasks)
         });
 
-        let mut ctx = Self::new(
+        let ctx = Self::new(
             consensus_handle,
             persistence,
             state_signer,
@@ -346,9 +349,9 @@ where
             event_consumer,
             anchor_view,
             proposal_fetcher_cfg,
+            query_peers,
             metrics,
         );
-        ctx.query_peers = query_peers;
         Ok(ctx.with_task_list(tasks))
     }
 
@@ -366,6 +369,7 @@ where
         event_consumer: impl PersistenceEventConsumer + 'static,
         anchor_view: Option<ViewNumber>,
         proposal_fetcher_cfg: ProposalFetcherConfig,
+        query_peers: Option<QueryPeers>,
         metrics: &dyn Metrics,
     ) -> Self {
         let events = consensus_handle.event_stream();
@@ -375,7 +379,7 @@ where
             consensus_handle,
             persistence: persistence.clone(),
             state_signatures: Arc::clone(&state_signer.signatures),
-            query_peers: None,
+            query_peers,
             request_response_protocol,
             tasks: Default::default(),
             detached: false,

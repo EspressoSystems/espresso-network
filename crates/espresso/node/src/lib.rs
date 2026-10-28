@@ -432,7 +432,6 @@ where
             .max()
             .expect("genesis sets a block size");
         let max_message_size = Some(message_limit(largest));
-        let accept_query = network_params.query_p2p;
         let name = format!("espresso-{}", genesis.chain_config.chain_id);
         move |upgrade| {
             Cliquenet::create(
@@ -442,7 +441,6 @@ where
                 bind_addr,
                 [],
                 max_message_size,
-                accept_query,
                 upgrade,
                 metrics,
             )
@@ -457,6 +455,7 @@ where
         initializer,
         anchor_view,
         storage,
+        network_params.query_p2p,
         state_catchup_providers,
         persistence,
         cliquenet,
@@ -1618,7 +1617,6 @@ pub mod testing {
                     coordinator_addr,
                     [],
                     Some(message_limit(max_block_size)),
-                    false,
                     upgrade,
                     Box::new(NoMetrics),
                 )
@@ -1642,6 +1640,7 @@ pub mod testing {
                 initializer,
                 anchor_view,
                 storage,
+                false,
                 catchup_providers,
                 persistence,
                 coordinator_network,

@@ -1,11 +1,4 @@
-use std::{
-    cmp::min,
-    io,
-    iter::{once, repeat},
-    net::SocketAddr,
-    sync::Arc,
-    time::Duration,
-};
+use std::{cmp::min, io, iter::once, net::SocketAddr, sync::Arc, time::Duration};
 
 use rand::RngExt;
 use snow::{Builder, HandshakeState, TransportState, params::NoiseParams};
@@ -82,38 +75,48 @@ impl Connection {
         .await
     }
 
-    pub async fn connect(conf: Arc<Config>, peer: PublicKey, addr: NetAddr, lane: Lane) -> Self {
+    /// Connect to `peer` at `addr` and open `lane`.
+    ///
+    /// A consensus connection is retried until it succeeds. A query
+    /// connection runs the connect retry schedule once and returns `None`
+    /// when the party refused the lane or could not be reached in time.
+    pub async fn connect(
+        conf: Arc<Config>,
+        peer: PublicKey,
+        addr: NetAddr,
+        lane: Lane,
+    ) -> Option<Self> {
         let hello = match lane {
             Lane::Consensus => Hello::Ok,
             Lane::Query => Hello::OkQuery,
         };
-        let mut delays = once({
-            if conf.random_connect_delay {
-                Duration::from_millis(rand::rng().random_range(0..1000))
-            } else {
-                Duration::ZERO
-            }
-        })
-        .chain(
+        // Query lanes open one at a time on demand, so spreading their dials gains nothing.
+        let first_delay = if conf.random_connect_delay && lane == Lane::Consensus {
+            Duration::from_millis(rand::rng().random_range(0..1000))
+        } else {
+            Duration::ZERO
+        };
+        let last_delay = Duration::from_secs((*conf.connect_retry_delays.last()).into());
+        let mut delays = once(first_delay).chain(
             conf.connect_retry_delays
                 .iter()
                 .map(|&d| Duration::from_secs(d.into())),
-        )
-        .chain(repeat({
-            let d = *conf.connect_retry_delays.last();
-            Duration::from_secs(d.into())
-        }));
+        );
 
         let node = conf.keypair.public_key();
 
         let mut backoff = None;
 
         loop {
-            if let Some(d) = backoff.take() {
-                sleep(d).await;
-            } else {
-                sleep(delays.next().expect("delays iterator is infinite")).await;
-            }
+            let delay = match backoff.take() {
+                Some(d) => d,
+                None => match (delays.next(), lane) {
+                    (Some(d), _) => d,
+                    (None, Lane::Consensus) => last_delay,
+                    (None, Lane::Query) => return None,
+                },
+            };
+            sleep(delay).await;
 
             debug!(name = %conf.name, %node, %peer, %addr, ?lane, "connecting");
 
@@ -124,11 +127,11 @@ impl Connection {
                         conn.recv_hello().await
                     });
                     match hello_exchange.await {
-                        Ok(h) if h == hello => break conn,
+                        Ok(h) if h == hello => return Some(conn),
                         // Parties that do not serve queries refuse, which is expected.
                         Ok(h) if lane == Lane::Query => {
                             debug!(name = %conf.name, %node, %peer, %addr, ?h, "query lane refused");
-                            backoff = h.backoff_duration();
+                            return None;
                         },
                         Ok(h) => {
                             warn!(

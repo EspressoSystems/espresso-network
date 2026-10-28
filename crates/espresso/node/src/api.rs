@@ -1747,6 +1747,9 @@ pub(crate) struct LightClientProvider<C = FallbackClient<QueryServiceClient>> {
 }
 
 /// Finds a light client the node already runs, to fetch through instead of building one.
+///
+/// A function, since the context only knows the HTTP client's type and the peer provider has
+/// nothing to share.
 type SharedLightClient<C> = fn(&dyn ApiContext) -> Option<Arc<LightClient<SqlStorage, C>>>;
 
 impl LightClientProvider {
@@ -1772,7 +1775,8 @@ impl LightClientProvider {
 impl LightClientProvider<PeerClient> {
     /// A provider fetching from staked peers over the cliquenet query lane.
     ///
-    /// Its light client keeps its own database, so it never contends with the HTTP one.
+    /// Its light client keeps its own database, so it never contends with the HTTP one. That
+    /// database is temporary, since everything in it is rebuilt from this node's own storage.
     fn peers(state: ApiState, opt: LightClientOptions) -> LightClientProvider<PeerClient> {
         LightClientProvider {
             light_client: OnceCell::new(),

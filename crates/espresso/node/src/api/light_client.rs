@@ -1,7 +1,7 @@
 use std::{
     cmp::Ordering,
     collections::HashMap,
-    fmt::Display,
+    fmt::{self, Display},
     ops::{Deref, Range},
     sync::Arc,
     time::Duration,
@@ -14,7 +14,9 @@ use espresso_types::{BlockMerkleTree, Header, NsIndex, NsProof, SeqTypes};
 use futures::{TryStreamExt, future::try_join, stream::StreamExt};
 use hotshot_query_service::{
     Error, QueryError,
-    availability::{AvailabilityDataSource, LeafQueryData, PayloadQueryData, VidCommonQueryData},
+    availability::{
+        AvailabilityDataSource, LeafId, LeafQueryData, PayloadQueryData, VidCommonQueryData,
+    },
     data_source::{
         VersionedDataSource,
         storage::{AvailabilityStorage, NodeStorage},
@@ -38,17 +40,55 @@ use tagged_base64::TaggedBase64;
 use tokio::spawn;
 use versions::NEW_PROTOCOL_VERSION;
 
+/// Why a finality proof could not be built from storage.
+#[derive(Debug)]
+pub(crate) enum ProofError {
+    /// The proof needs the cert2 of a leaf at or after `height`, and none is stored within the
+    /// chain limit.
+    MissingCert2 {
+        height: u64,
+        message: String,
+    },
+    Failed(Error),
+}
+
+impl From<Error> for ProofError {
+    fn from(error: Error) -> ProofError {
+        ProofError::Failed(error)
+    }
+}
+
+impl From<ProofError> for Error {
+    fn from(error: ProofError) -> Error {
+        match error {
+            ProofError::MissingCert2 { height: _, message } => not_found(message),
+            ProofError::Failed(error) => error,
+        }
+    }
+}
+
+impl Display for ProofError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ProofError::MissingCert2 { height: _, message } => f.write_str(message),
+            ProofError::Failed(error) => error.fmt(f),
+        }
+    }
+}
+
+impl std::error::Error for ProofError {}
+
 /// Construct a proof that the requested leaf is finalized, from stored leaves and certificates.
 ///
-/// Nothing is fetched: a missing leaf or certificate is an error. The `finalized` hint is honored
-/// when it yields a bounded proof no longer than a direct finality proof, since the client can
-/// verify hint-based proofs without signature checks.
+/// Reads storage only: a missing leaf or certificate is an error, never a fetch. The `finalized`
+/// hint is honored when it yields a bounded proof no longer than a direct finality proof, since
+/// the client can verify hint-based proofs without signature checks.
 pub(crate) async fn get_leaf_proof<S>(
     storage: &S,
     requested_leaf: LeafQueryData<SeqTypes>,
     finalized: Option<usize>,
     chain_limit: usize,
-) -> Result<LeafProof, Error>
+) -> Result<LeafProof, ProofError>
 where
     S: VersionedDataSource,
     for<'a> S::ReadOnly<'a>: NodeStorage<SeqTypes> + AvailabilityStorage<SeqTypes>,
@@ -68,8 +108,14 @@ where
     }
 
     if let Some(finalized) = hint {
-        get_leaf_proof_with_finalized_assumption(storage, requested_leaf, finalized, chain_limit)
-            .await
+        let proof = get_leaf_proof_with_finalized_assumption(
+            storage,
+            requested_leaf,
+            finalized,
+            chain_limit,
+        )
+        .await?;
+        Ok(proof)
     } else if new_protocol {
         get_leaf_proof_with_cert2(storage, requested_leaf, chain_limit).await
     } else {
@@ -104,40 +150,51 @@ where
     for<'a> S::ReadOnly<'a>: AvailabilityStorage<SeqTypes>,
 {
     let mut tx = storage.read().await.map_err(internal)?;
-    let leaves = tx.get_leaf_range(range).await.map_err(internal)?;
-    Ok(leaves.into_iter().map_while(Result::ok).collect())
+    let mut stored = Vec::new();
+    for leaf in tx.get_leaf_range(range).await.map_err(internal)? {
+        match leaf {
+            Ok(leaf) => stored.push(leaf),
+            Err(QueryError::NotFound | QueryError::Missing) => break,
+            Err(err) => return Err(internal(err)),
+        }
+    }
+    Ok(stored)
 }
 
 /// Build a leaf proof for a legacy leaf from the justify QCs of the leaves that follow it.
+///
+/// Leaves are read one at a time, since a legacy chain usually closes within a few of them.
 pub(crate) async fn get_leaf_proof_with_leaf_chain<S>(
     storage: &S,
     requested_leaf: LeafQueryData<SeqTypes>,
     chain_limit: usize,
-) -> Result<LeafProof, Error>
+) -> Result<LeafProof, ProofError>
 where
     S: VersionedDataSource,
     for<'a> S::ReadOnly<'a>: NodeStorage<SeqTypes> + AvailabilityStorage<SeqTypes>,
 {
     let requested = requested_leaf.height() as usize;
-    let mut tx = storage.read().await.map_err(internal)?;
-    let latest_height = NodeStorage::block_height(&mut tx).await.map_err(internal)?;
-    drop(tx);
-
-    // One leaf past the limit, so a chain that is too long is told apart from a missing leaf.
-    let end = latest_height.min(requested + chain_limit + 2);
-    let leaves = stored_leaves(storage, requested + 1..end).await?;
     let mut proof = LeafProof::default();
     let requested_leaf_qc = requested_leaf.qc().clone();
     proof.push(requested_leaf);
 
-    let mut remaining = chain_limit;
-    for leaf in leaves {
-        remaining = remaining
-            .checked_sub(1)
-            .ok_or_else(|| chain_too_long(requested, chain_limit))?;
+    let mut tx = storage.read().await.map_err(internal)?;
+    for height in requested + 1..=requested + chain_limit {
+        let leaf = match tx.get_leaf(LeafId::Number(height)).await {
+            Ok(leaf) => leaf,
+            // There is no stored legacy QC chain to fall back on: it could only close a chain
+            // whose tip was legacy, and every network is past the 0.6 cutover, so running out of
+            // leaves is a 404.
+            Err(QueryError::NotFound | QueryError::Missing) => {
+                return Err(not_found("not enough leaves to prove finality").into());
+            },
+            Err(err) => return Err(internal(err).into()),
+        };
 
         // HotStuff commit rules cannot terminate a chain of new-protocol leaves; switch to cert2.
         if leaf.header().version() >= NEW_PROTOCOL_VERSION {
+            drop(tx);
+            let remaining = requested + chain_limit - height;
             complete_proof_with_cert2(storage, &mut proof, leaf, requested_leaf_qc, remaining)
                 .await?;
             return Ok(proof);
@@ -148,9 +205,7 @@ where
         }
     }
 
-    // There is no stored legacy QC chain to fall back on: it could only close a chain whose tip was
-    // legacy, and every network is past the 0.6 cutover, so running out of leaves is a 404.
-    Err(not_found("not enough leaves to prove finality"))
+    Err(chain_too_long(requested, chain_limit).into())
 }
 
 /// Build a leaf proof for the new protocol using certificate2 finality.
@@ -164,7 +219,7 @@ pub(crate) async fn get_leaf_proof_with_cert2<S>(
     storage: &S,
     requested_leaf: LeafQueryData<SeqTypes>,
     chain_limit: usize,
-) -> Result<LeafProof, Error>
+) -> Result<LeafProof, ProofError>
 where
     S: VersionedDataSource,
     for<'a> S::ReadOnly<'a>: NodeStorage<SeqTypes> + AvailabilityStorage<SeqTypes>,
@@ -190,7 +245,7 @@ async fn complete_proof_with_cert2<S>(
     leaf: LeafQueryData<SeqTypes>,
     requested_leaf_qc: QuorumCertificate2<SeqTypes>,
     chain_limit: usize,
-) -> Result<(), Error>
+) -> Result<(), ProofError>
 where
     S: VersionedDataSource,
     for<'a> S::ReadOnly<'a>: NodeStorage<SeqTypes> + AvailabilityStorage<SeqTypes>,
@@ -214,25 +269,28 @@ where
 
     let earliest = stored.as_ref().map(|cert2| cert2.data.block_number);
     let Some(cert2) = stored.filter(|cert2| cert2.data.block_number <= start_height + limit) else {
-        return Err(not_found(match earliest {
-            None => format!("no cert2 finality proof available at or after height {start_height}"),
-            Some(height) => format!(
-                "earliest cert2 finality proof (height {height}) is more than {chain_limit} \
-                 leaves past height {start_height}"
-            ),
-        }));
+        return Err(ProofError::MissingCert2 {
+            height: start_height,
+            message: match earliest {
+                None => {
+                    format!("no cert2 finality proof available at or after height {start_height}")
+                },
+                Some(height) => format!(
+                    "earliest cert2 finality proof (height {height}) is more than {chain_limit} \
+                     leaves past height {start_height}"
+                ),
+            },
+        });
     };
 
     let cert2_height = cert2.data.block_number;
     if cert2_height < start_height {
-        return Err(not_found(
-            "cert2 finality proof is older than requested leaf",
-        ));
+        return Err(not_found("cert2 finality proof is older than requested leaf").into());
     }
 
     if cert2_height == start_height {
         if start_commit != cert2.data.leaf_commit {
-            return Err(internal("stored cert2 does not finalize the expected leaf"));
+            return Err(internal("stored cert2 does not finalize the expected leaf").into());
         }
         proof.add_certificate(Arc::new(cert2), requested_leaf_qc);
         return Ok(());
@@ -249,7 +307,7 @@ where
     for leaf in leaves {
         if leaf.height() == cert2_height {
             if leaf.leaf().commit() != cert2.data.leaf_commit {
-                return Err(internal("stored cert2 does not finalize the expected leaf"));
+                return Err(internal("stored cert2 does not finalize the expected leaf").into());
             }
             if !proof.push(leaf) {
                 proof.add_certificate(Arc::new(cert2), requested_leaf_qc);
@@ -261,7 +319,7 @@ where
         }
     }
 
-    Err(not_found("missing cert2 leaf"))
+    Err(not_found("missing cert2 leaf").into())
 }
 
 /// Ask for the cert2s of the leaves following `height`, one at a time until one resolves.
@@ -972,7 +1030,10 @@ mod test {
         let err = get_leaf_proof_with_cert2(&ds, leaves[0].clone(), 2)
             .await
             .unwrap_err();
-        assert_eq!(err.status(), StatusCode::NOT_FOUND);
+        assert_eq!(
+            hotshot_query_service::Error::from(err).status(),
+            StatusCode::NOT_FOUND
+        );
 
         let proof = get_leaf_proof_with_cert2(&ds, leaves[0].clone(), 3)
             .await
@@ -1133,7 +1194,10 @@ mod test {
         let err = get_leaf_proof_with_leaf_chain(&ds, leaves[0].clone(), 1)
             .await
             .unwrap_err();
-        assert_eq!(err.status(), StatusCode::NOT_FOUND);
+        assert_eq!(
+            hotshot_query_service::Error::from(err).status(),
+            StatusCode::NOT_FOUND
+        );
 
         let proof = get_leaf_proof_with_leaf_chain(&ds, leaves[0].clone(), 2)
             .await
@@ -1572,7 +1636,10 @@ mod test {
         let err = get_leaf_proof_with_leaf_chain(&ds, leaves[0].clone(), CHAIN_LIMIT)
             .await
             .unwrap_err();
-        assert_eq!(err.status(), StatusCode::NOT_FOUND);
+        assert_eq!(
+            hotshot_query_service::Error::from(err).status(),
+            StatusCode::NOT_FOUND
+        );
 
         // Even if we start from a finalized leave that extends one of the leaves we do have (4,
         // extends 3) we fail to generate a proof because we can't generate a chain from the
@@ -1604,9 +1671,11 @@ mod test {
             tx.commit().await.unwrap();
         }
 
-        let err = get_leaf_proof_with_leaf_chain(&ds, leaves[0].clone(), CHAIN_LIMIT)
-            .await
-            .unwrap_err();
+        let err = hotshot_query_service::Error::from(
+            get_leaf_proof_with_leaf_chain(&ds, leaves[0].clone(), CHAIN_LIMIT)
+                .await
+                .unwrap_err(),
+        );
         assert_eq!(err.status(), StatusCode::NOT_FOUND);
         assert!(
             matches!(&err, hotshot_query_service::Error::Custom { message, .. } if message.contains("not enough leaves")),
@@ -2031,7 +2100,10 @@ mod test {
             let err = get_leaf_proof_with_cert2(&ds, leaves[0].clone(), 2)
                 .await
                 .unwrap_err();
-            assert_eq!(err.status(), StatusCode::NOT_FOUND);
+            assert_eq!(
+                hotshot_query_service::Error::from(err).status(),
+                StatusCode::NOT_FOUND
+            );
             request_cert2s(
                 Arc::new(ds.clone()),
                 leaves[0].height(),
@@ -2103,7 +2175,10 @@ mod test {
         let err = get_leaf_proof_with_cert2(&ds, leaves[0].clone(), 2)
             .await
             .unwrap_err();
-        assert_eq!(err.status(), StatusCode::NOT_FOUND);
+        assert_eq!(
+            hotshot_query_service::Error::from(err).status(),
+            StatusCode::NOT_FOUND
+        );
         request_cert2s(
             Arc::new(ds.clone()),
             leaves[0].height(),

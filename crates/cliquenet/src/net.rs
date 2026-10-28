@@ -64,6 +64,8 @@ enum Command {
     Send(SendCommand),
     /// A query lane message, with its trailer already appended.
     SendQuery(PublicKey, Bytes),
+    /// Start accepting the query lanes parties open.
+    AcceptQuery,
     Shutdown(oneshot::Sender<()>),
 }
 
@@ -149,7 +151,7 @@ impl Network {
         );
 
         let recv = NetworkReceiver { rx: irx };
-        let query_recv = conf.accept_query.then_some(NetworkReceiver { rx: qrx });
+        let query_recv = Some(NetworkReceiver { rx: qrx });
         let send = NetworkSender {
             conf: conf.clone(),
             node,
@@ -169,9 +171,11 @@ impl Network {
 
     /// Take the receiver of query lane messages.
     ///
-    /// Returns `None` once taken, or if the network does not accept query
-    /// lanes. Messages sent with [`NetworkSender::send_query`] arrive here and
-    /// never on the main receiver.
+    /// Returns `None` once taken. Replies to [`NetworkSender::send_query`]
+    /// arrive here and never on the main receiver, as do the requests of
+    /// parties once [`NetworkSender::accept_query`] was called. An empty
+    /// message from a party means its query lane could not be opened, and
+    /// nothing queued for it was sent.
     pub fn take_query_receiver(&mut self) -> Option<NetworkReceiver> {
         self.query_recv.take()
     }
@@ -289,8 +293,8 @@ impl NetworkSender {
     ///
     /// The query lane is a separate connection, so a busy query lane never
     /// delays consensus messages. It is opened on first use. Messages are
-    /// sent at most once, and dropped by the next [`NetworkSender::gc`] if
-    /// still queued, as when the party refuses the query lane.
+    /// sent at most once. A message still queued after the receive timeout
+    /// is dropped, and so is one queued behind a peer budget of others.
     pub fn send_query(&self, to: PublicKey, mut msg: Vec<u8>) -> Result<(), NetworkError> {
         debug!(%to, len = msg.len(), "send_query");
         self.length_check(&msg)?;
@@ -299,6 +303,18 @@ impl NetworkSender {
         msg.extend_from_slice(trailer.as_ref());
         self.tx
             .send(Command::SendQuery(to, msg.into()))
+            .map_err(|_| NetworkError::ChannelClosed)
+    }
+
+    /// Accept the query lanes parties open from now on.
+    ///
+    /// Until then a party opening one is told to back off. Call this once
+    /// something drains the receiver from [`Network::take_query_receiver`],
+    /// since accepted lanes deliver there.
+    pub fn accept_query(&self) -> Result<(), NetworkError> {
+        debug!(name = %self.conf.name, node = %self.node, "accept_query");
+        self.tx
+            .send(Command::AcceptQuery)
             .map_err(|_| NetworkError::ChannelClosed)
     }
 

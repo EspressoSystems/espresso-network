@@ -21,7 +21,7 @@ use hotshot_types::{
 };
 use hotshot_utils::anytrace;
 use parking_lot::RwLock;
-use tracing::{error, info, warn};
+use tracing::{debug, error, info};
 
 use crate::message::{Message, MessageType, Unchecked, Validated};
 
@@ -85,7 +85,6 @@ impl<T: NodeType> Cliquenet<T> {
         addr: A,
         parties: P,
         max_message_size: Option<NonZeroUsize>,
-        accept_query: bool,
         upgrade_lock: UpgradeLock<T>,
         metrics: Box<dyn Metrics>,
     ) -> Result<Self, NetworkError>
@@ -107,7 +106,6 @@ impl<T: NodeType> Cliquenet<T> {
             )
             .noise_protocols([(1.into(), Protocol::IK_25519_AesGcm_Blake2s)])
             .maybe_max_message_size(max_message_size)
-            .accept_query(accept_query)
             .build();
 
         Self::create_with_config(signing_key, upgrade_lock, cfg, parties, metrics).await
@@ -154,13 +152,16 @@ impl<T: NodeType> Cliquenet<T> {
         &self.inner
     }
 
-    /// Take both ends of the query lane.
+    /// Take both ends of the query lane and start accepting the query lanes
+    /// peers open.
     ///
-    /// Returns `None` once taken, or if this network does not accept query
-    /// lanes. Query messages are raw bytes addressed by signature key, and
-    /// never reach [`Cliquenet::receive`].
+    /// Returns `None` once taken. Take it only when the receiver will be
+    /// drained, since accepted lanes deliver there. Query messages are raw
+    /// bytes addressed by signature key, and never reach
+    /// [`Cliquenet::receive`].
     pub fn take_query_lane(&mut self) -> Option<(QuerySender<T>, QueryReceiver<T>)> {
         let receiver = self.query_receiver.take()?;
+        self.inner.sender.accept_query().ok()?;
         let sender = QuerySender {
             sender: self.inner.sender.clone(),
             shared: Arc::clone(&self.inner.shared),
@@ -529,6 +530,11 @@ impl<T: NodeType> QuerySender<T> {
     pub fn receive_timeout(&self) -> Duration {
         self.sender.config().receive_timeout()
     }
+
+    /// How many messages the network keeps queued or in flight for one peer.
+    pub fn peer_budget(&self) -> NonZeroUsize {
+        self.sender.config().peer_budget()
+    }
 }
 
 /// Receives raw bytes from peers over their query lane.
@@ -547,8 +553,10 @@ impl<T: NodeType> QueryReceiver<T> {
     /// Receive the next query message with the signature key of its sender.
     ///
     /// The sender is the peer whose x25519 key authenticated the connection.
-    /// Messages from keys that are no longer peers are dropped. Returns
-    /// `None` once the network is shut down.
+    /// Messages from keys that are no longer peers are dropped. An empty
+    /// message means the network could not open the peer's query lane, and
+    /// nothing sent to it since the last message from it was delivered.
+    /// Returns `None` once the network is shut down.
     ///
     /// # Cancel safety
     ///
@@ -566,7 +574,7 @@ impl<T: NodeType> QueryReceiver<T> {
                 .map(|(key, _)| key.clone());
             match sender {
                 Some(sender) => return Some((sender, bytes)),
-                None => warn!(%src, "dropping query message from unknown peer"),
+                None => debug!(%src, "dropping query message from unknown peer"),
             }
         }
     }

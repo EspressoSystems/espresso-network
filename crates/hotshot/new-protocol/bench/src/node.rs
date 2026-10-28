@@ -98,7 +98,6 @@ async fn create_network(
         bind_addr,
         parties,
         None,
-        false,
         upgrade_lock(),
         Box::new(NoMetrics),
     )
