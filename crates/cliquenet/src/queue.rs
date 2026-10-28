@@ -48,8 +48,16 @@ impl<T> Queue<T> {
         self.0.map.lock().remove(&(s, i));
     }
 
+    pub fn clear(&self) {
+        self.0.map.lock().clear();
+    }
+
     pub fn len(&self) -> usize {
         self.0.map.lock().len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.map.lock().is_empty()
     }
 }
 

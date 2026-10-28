@@ -120,7 +120,7 @@ impl Connection {
                         conn.recv_hello().await
                     });
                     match hello_exchange.await {
-                        Ok(h) if h.is_ok() => break conn,
+                        Ok(Hello::Ok) => break conn,
                         Ok(h) => {
                             warn!(
                                 name = %conf.name,
@@ -149,6 +149,20 @@ impl Connection {
                     warn!(name = %conf.name, %node, %peer, %addr, %err, "connect/handshake error")
                 },
             }
+        }
+    }
+
+    /// Make a single attempt to open a query lane connection.
+    pub async fn connect_query(conf: Arc<Config>, peer: PublicKey, addr: NetAddr) -> Result<Self> {
+        let mut conn = try_connect(&conf, &peer, &addr).await?;
+        let reply = until(conf.handshake_timeout, async {
+            conn.send_hello(Hello::OkQuery).await?;
+            conn.recv_hello().await
+        })
+        .await?;
+        match reply {
+            Hello::OkQuery => Ok(conn),
+            Hello::Ok | Hello::BackOff(_) | Hello::Unknown => Err(NetworkError::QueryLaneRefused),
         }
     }
 

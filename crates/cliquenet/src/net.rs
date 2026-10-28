@@ -16,8 +16,12 @@ use tokio::{
 use tracing::{debug, info, warn};
 
 use crate::{
-    Config, Metrics, NetAddr, Role, error::NetworkError, metrics::NoMetrics, msg::Slot,
-    net::server::Server, x25519::PublicKey,
+    Config, Metrics, NetAddr, Role,
+    error::NetworkError,
+    metrics::NoMetrics,
+    msg::{Slot, Trailer},
+    net::server::Server,
+    x25519::PublicKey,
 };
 
 type PeerMessage = (PublicKey, Bytes, Option<OwnedSemaphorePermit>);
@@ -25,6 +29,7 @@ type PeerMessage = (PublicKey, Bytes, Option<OwnedSemaphorePermit>);
 #[derive(Debug)]
 pub struct Network {
     recv: NetworkReceiver,
+    query_recv: Option<NetworkReceiver>,
     send: NetworkSender,
 }
 
@@ -57,6 +62,8 @@ impl fmt::Debug for NetworkSender {
 enum Command {
     Peer(PeerCommand),
     Send(SendCommand),
+    /// A query lane message, with its trailer already appended.
+    SendQuery(PublicKey, Bytes),
     Shutdown(oneshot::Sender<()>),
 }
 
@@ -120,8 +127,9 @@ impl Network {
         // Command channel from application to network.
         let (otx, orx) = mpsc::unbounded_channel();
 
-        // Channel of messages from peers to the application.
+        // Channels of messages from peers to the application, one per lane.
         let (itx, irx) = mpsc::unbounded_channel();
+        let (qtx, qrx) = mpsc::unbounded_channel();
 
         let (etx, erx) = watch::channel(Slot::MIN);
 
@@ -134,12 +142,14 @@ impl Network {
             listener,
             Role::Active,
             itx,
+            qtx,
             orx,
             erx,
             metr.clone(),
         );
 
         let recv = NetworkReceiver { rx: irx };
+        let query_recv = Some(NetworkReceiver { rx: qrx });
         let send = NetworkSender {
             conf: conf.clone(),
             node,
@@ -150,7 +160,19 @@ impl Network {
 
         info!(name = %conf.name, %node, %addr, max_message_size = %conf.max_message_size, "listening");
 
-        Ok(Self { recv, send })
+        Ok(Self {
+            recv,
+            query_recv,
+            send,
+        })
+    }
+
+    /// Take the receiver of query lane messages.
+    ///
+    /// Returns `None` once taken. Messages sent with
+    /// [`NetworkSender::send_query`] arrive here and never on the main receiver.
+    pub fn take_query_receiver(&mut self) -> Option<NetworkReceiver> {
+        self.query_recv.take()
     }
 
     pub fn sender(&self) -> &NetworkSender {
@@ -259,6 +281,23 @@ impl NetworkSender {
         }
         self.tx
             .send(Command::Send(cmd))
+            .map_err(|_| NetworkError::ChannelClosed)
+    }
+
+    /// Send a message to a party over its query lane.
+    ///
+    /// The query lane is a separate connection, so a busy query lane never
+    /// delays consensus messages. It is opened on first use and closed when
+    /// idle. Messages are sent at most once and dropped if they wait too long
+    /// in the queue, or if the party refuses the query lane.
+    pub fn send_query(&self, to: PublicKey, mut msg: Vec<u8>) -> Result<(), NetworkError> {
+        debug!(%to, len = msg.len(), "send_query");
+        self.length_check(&msg)?;
+        // Appending here keeps the copy off the server task.
+        let trailer = Trailer::NoAck { slot: Slot::MIN }.to_bytes();
+        msg.extend_from_slice(trailer.as_ref());
+        self.tx
+            .send(Command::SendQuery(to, msg.into()))
             .map_err(|_| NetworkError::ChannelClosed)
     }
 

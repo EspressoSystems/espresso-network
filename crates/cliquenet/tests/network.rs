@@ -2,7 +2,7 @@ use std::{net::Ipv4Addr, time::Duration};
 
 use bytes::Bytes;
 use cliquenet::{
-    Config, Network, Role, Slot,
+    Config, Network, NetworkReceiver, Role, Slot,
     error::NetworkError,
     noise::Protocol,
     x25519::{Keypair, PublicKey},
@@ -54,6 +54,48 @@ fn make_config(node: &Node, all: &[&Node]) -> Config {
         .send_retry_delays(vec![1, 3])
         .noise_protocols([(1.into(), Protocol::IK_25519_AesGcm_Blake2s)])
         .build()
+}
+
+/// Create a Config like `make_config`, choosing whether to accept query lanes.
+fn make_query_config(node: &Node, all: &[&Node], accept_query: bool) -> Config {
+    Config::builder()
+        .name("test")
+        .keypair(node.keypair.clone())
+        .bind(node.addr().into())
+        .parties(all.iter().map(|n| (n.key, n.addr().into())))
+        .receive_timeout(Duration::from_secs(5))
+        .connect_retry_delays(vec![1, 3])
+        .send_retry_delays(vec![1, 3])
+        .noise_protocols([(1.into(), Protocol::IK_25519_AesGcm_Blake2s)])
+        .accept_query(accept_query)
+        .build()
+}
+
+/// Create a two-node network where B may refuse query lanes, and wait for
+/// the consensus connections.
+async fn two_query_nodes(b_accepts_query: bool) -> (Network, Network, PublicKey, PublicKey) {
+    let a = Node::new(reserve_port());
+    let b = Node::new(reserve_port());
+    let pka = a.key;
+    let pkb = b.key;
+    let all = [&a, &b];
+
+    let net_a = Network::create(make_query_config(&a, &all, true))
+        .await
+        .unwrap();
+    let net_b = Network::create(make_query_config(&b, &all, b_accepts_query))
+        .await
+        .unwrap();
+
+    sleep(SETTLE).await;
+
+    (net_a, net_b, pka, pkb)
+}
+
+/// Assert nothing arrives on a receiver for a short while.
+async fn assert_silent(rx: &mut NetworkReceiver) {
+    let quiet = timeout(Duration::from_millis(500), rx.receive()).await;
+    assert!(quiet.is_err(), "unexpected message: {quiet:?}");
 }
 
 /// Create a two-node network and wait for connections.
@@ -811,4 +853,86 @@ async fn update_party_address_live_connection() {
         .expect("channel closed");
     assert_eq!(src, pka);
     assert_eq!(data, Bytes::from("after"));
+}
+
+/// A query request and its reply travel over the query lane and never reach
+/// the consensus receivers.
+#[tokio::test]
+async fn query_lane_round_trip() {
+    let (mut net_a, mut net_b, pka, pkb) = two_query_nodes(true).await;
+    let mut query_a = net_a.take_query_receiver().unwrap();
+    let mut query_b = net_b.take_query_receiver().unwrap();
+
+    net_a.send_query(pkb, b"request".to_vec()).unwrap();
+    let (src, data) = timeout(TIMEOUT, query_b.receive())
+        .await
+        .expect("timed out")
+        .expect("channel closed");
+    assert_eq!(src, pka);
+    assert_eq!(data, Bytes::from("request"));
+
+    net_b.send_query(pka, b"reply".to_vec()).unwrap();
+    let (src, data) = timeout(TIMEOUT, query_a.receive())
+        .await
+        .expect("timed out")
+        .expect("channel closed");
+    assert_eq!(src, pkb);
+    assert_eq!(data, Bytes::from("reply"));
+
+    assert_silent(net_a.receiver_mut()).await;
+    assert_silent(net_b.receiver_mut()).await;
+}
+
+/// A party that does not accept query lanes refuses them, and its consensus
+/// lane keeps working.
+#[tokio::test]
+async fn query_lane_refused_keeps_consensus_lane() {
+    let (net_a, mut net_b, pka, pkb) = two_query_nodes(false).await;
+    let mut query_b = net_b.take_query_receiver().unwrap();
+
+    net_a.send_query(pkb, b"request".to_vec()).unwrap();
+    assert_silent(&mut query_b).await;
+
+    net_a.unicast(Slot::MIN, pkb, b"vote".to_vec()).unwrap();
+    let (src, data) = timeout(TIMEOUT, net_b.receive())
+        .await
+        .expect("timed out")
+        .expect("channel closed");
+    assert_eq!(src, pka);
+    assert_eq!(data, Bytes::from("vote"));
+}
+
+/// Both sides opening a query lane at once settle on one connection, and
+/// messages flow both ways.
+#[tokio::test]
+async fn simultaneous_query_connect() {
+    let (mut net_a, mut net_b, pka, pkb) = two_query_nodes(true).await;
+    let mut query_a = net_a.take_query_receiver().unwrap();
+    let mut query_b = net_b.take_query_receiver().unwrap();
+
+    for i in 0..3u32 {
+        net_a
+            .send_query(pkb, format!("a-{i}").into_bytes())
+            .unwrap();
+        net_b
+            .send_query(pka, format!("b-{i}").into_bytes())
+            .unwrap();
+    }
+
+    for (rx, src, prefix) in [(&mut query_b, pka, "a"), (&mut query_a, pkb, "b")] {
+        let mut got = Vec::new();
+        for _ in 0..3 {
+            let (from, data) = timeout(TIMEOUT, rx.receive())
+                .await
+                .expect("timed out")
+                .expect("channel closed");
+            assert_eq!(from, src);
+            got.push(data);
+        }
+        got.sort();
+        let want = (0..3u32)
+            .map(|i| Bytes::from(format!("{prefix}-{i}")))
+            .collect::<Vec<_>>();
+        assert_eq!(got, want);
+    }
 }

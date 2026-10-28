@@ -118,6 +118,13 @@ pub struct Config {
     #[builder(default = 6)]
     keep_alive_retries: u8,
 
+    /// Accept query lane connections from parties.
+    ///
+    /// When false, a party opening a query lane is told to back off. The
+    /// consensus lane is unaffected.
+    #[builder(default = false)]
+    accept_query: bool,
+
     /// Max. number of concurrent accept tasks.
     #[builder(default = (3 * parties.len()).max(100))]
     max_accept_tasks: usize,
@@ -160,6 +167,7 @@ impl fmt::Debug for Config {
             .field("keepalive_after", &self.keep_alive_after)
             .field("keepalive_interval", &self.keep_alive_interval)
             .field("keepalive_retries", &self.keep_alive_retries)
+            .field("accept_query", &self.accept_query)
             .field("max_accept_tasks", &self.max_accept_tasks)
             .finish()
     }
@@ -178,6 +186,18 @@ impl Config {
         self.metrics = Some(Arc::new(m));
         self
     }
+}
+
+/// A connection to a party carries one lane of traffic.
+///
+/// Each lane has its own TCP connection, outbox and inbound channel, so
+/// query traffic never queues ahead of consensus traffic.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Lane {
+    /// Consensus messages, connected eagerly to every party.
+    Consensus,
+    /// Query requests and replies, connected on first use and closed when idle.
+    Query,
 }
 
 /// Network peer role.

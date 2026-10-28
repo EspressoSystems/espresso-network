@@ -53,7 +53,7 @@ async fn connection_pair(
             let (stream, _) = listener.accept().await.unwrap();
             let mut conn = Connection::accept(conf_b, stream).await.unwrap();
             let h = conn.recv_hello().await.unwrap();
-            assert!(h.is_ok());
+            assert_eq!(h, Hello::Ok);
             conn.send_hello(Hello::Ok).await.unwrap();
             conn
         },
