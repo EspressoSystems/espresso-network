@@ -36,7 +36,7 @@ use crate::{
     proposal::{ProposalValidator, VidShareValidator},
     state::StateManager,
     upgrade::UpgradeProtocol,
-    vid::{VidDisperser, VidReconstructor},
+    vid::{VidDisperser, VidFragmentAccumulator, VidReconstructor},
     vote::VoteCollector,
 };
 
@@ -260,6 +260,9 @@ pub async fn build_test_coordinator(
 
     let mut coordinator = Coordinator::builder()
         .consensus(consensus)
+        .vid_fragment_accumulator(VidFragmentAccumulator::new(
+            network.sender().max_message_size(),
+        ))
         .network(network)
         .state_manager(state_manager)
         .vote1_collector(vote1_collector)

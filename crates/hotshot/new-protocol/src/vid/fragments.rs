@@ -1,4 +1,7 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    num::NonZeroUsize,
+};
 
 use hotshot_types::{
     data::{
@@ -16,6 +19,7 @@ pub struct VidFragmentAccumulator<T: NodeType> {
     pending: BTreeMap<(ViewNumber, EpochNumber), BTreeMap<T::SignatureKey, PendingShare<T>>>,
     completed: BTreeMap<(ViewNumber, EpochNumber), BTreeSet<T::SignatureKey>>,
     lower_bound: ViewNumber,
+    max_share_bytes: u64,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -32,6 +36,9 @@ pub enum VidFragmentError {
     #[error("fragment contains no namespaces")]
     Empty,
 
+    #[error("share would exceed {max} bytes")]
+    TooLarge { max: u64 },
+
     #[error("fragment names no epoch")]
     MissingEpoch,
 
@@ -42,18 +49,18 @@ pub enum VidFragmentError {
     },
 }
 
-impl<T: NodeType> Default for VidFragmentAccumulator<T> {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl<T: NodeType> VidFragmentAccumulator<T> {
-    pub fn new() -> Self {
+    /// A share buffered for one disperser may grow to four times `max_message_size`. A fragment
+    /// that would take it past that is rejected with [`VidFragmentError::TooLarge`].
+    pub fn new(max_message_size: NonZeroUsize) -> Self {
+        // An honest share holds at most `total_weight / recovery_threshold`, under 3, times the
+        // payload, and a payload fits in one message. The fourth message covers Merkle proofs.
+        let max_share_bytes = (max_message_size.get() as u64).saturating_mul(4);
         Self {
             pending: BTreeMap::new(),
             completed: BTreeMap::new(),
             lower_bound: ViewNumber::genesis(),
+            max_share_bytes,
         }
     }
 
@@ -79,9 +86,10 @@ impl<T: NodeType> VidFragmentAccumulator<T> {
         if self.is_retired(view, epoch, disperser) {
             return Ok(None);
         }
+        let max_share_bytes = self.max_share_bytes;
         let complete = {
             let pending = self.pending_for(view, epoch, disperser, &fragment)?;
-            pending.insert_pieces(fragment.namespaces)?;
+            pending.insert_pieces(fragment.namespaces, max_share_bytes)?;
             pending.is_complete()
         };
         if !complete {
@@ -139,6 +147,7 @@ impl<T: NodeType> VidFragmentAccumulator<T> {
                 param: fragment.param.clone(),
                 num_namespaces: fragment.num_namespaces,
                 pieces: BTreeMap::new(),
+                bytes: 0,
             });
         if pending.num_namespaces != fragment.num_namespaces
             || pending.payload_commitment != fragment.payload_commitment
@@ -202,12 +211,14 @@ struct PendingShare<T: NodeType> {
     param: AvidmGf2Param,
     num_namespaces: usize,
     pieces: BTreeMap<usize, AvidmGf2NamespacePiece>,
+    bytes: u64,
 }
 
 impl<T: NodeType> PendingShare<T> {
     fn insert_pieces(
         &mut self,
         pieces: Vec<AvidmGf2NamespacePiece>,
+        max_bytes: u64,
     ) -> Result<(), VidFragmentError> {
         let mut incoming = BTreeSet::new();
         for piece in &pieces {
@@ -222,6 +233,14 @@ impl<T: NodeType> PendingShare<T> {
                 return Err(VidFragmentError::DuplicateIndex(ns_index));
             }
         }
+        let bytes = pieces
+            .iter()
+            .map(|piece| bincode::serialized_size(piece).unwrap_or(u64::MAX))
+            .fold(self.bytes, u64::saturating_add);
+        if bytes > max_bytes {
+            return Err(VidFragmentError::TooLarge { max: max_bytes });
+        }
+        self.bytes = bytes;
         for piece in pieces {
             self.pieces.insert(piece.ns_index, piece);
         }

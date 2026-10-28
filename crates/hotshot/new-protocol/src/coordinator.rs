@@ -114,7 +114,6 @@ pub struct Coordinator<T: NodeType, S> {
     client: CoordinatorClient<T>,
     vid_disperser: VidDisperser<T>,
     vid_reconstructor: VidReconstructor<T>,
-    #[builder(default)]
     vid_fragment_accumulator: VidFragmentAccumulator<T>,
     vote1_collector: VoteCollector<T, SimpleTally<T, QuorumVote2<T>, SuccessThreshold>>,
     vote2_collector: VoteCollector<T, SimpleTally<T, Vote2<T>, SuccessThreshold>>,
@@ -340,9 +339,13 @@ where
             lock.set_decided_upgrade_cert(cert.clone());
         }
 
+        let vid_fragment_accumulator =
+            VidFragmentAccumulator::new(network.sender().max_message_size());
+
         Self::builder()
             .consensus(consensus)
             .network(network)
+            .vid_fragment_accumulator(vid_fragment_accumulator)
             .state_manager(state_manager)
             .vid_disperser(vid_disperser)
             .vid_reconstructor(VidReconstructor::new())
