@@ -14,10 +14,11 @@ use tokio_util::{sync::CancellationToken, task::JoinMap};
 use tracing::{debug, error, info, trace, warn};
 
 use crate::{
-    Config, Metrics, NetAddr, PublicKey, Role,
+    Config, Lane, Metrics, NetAddr, PublicKey, Role,
     connection::Connection,
     delay::DelayQueue,
     error::NetworkError,
+    metrics::NoMetrics,
     msg::{MsgId, Slot, Trailer, hello::Hello},
     net::{Command, PeerCommand, PeerMessage, RetryPolicy, SendAction, peer::Peer},
     queue::Queue,
@@ -32,22 +33,40 @@ pub struct Server {
     lower_bound: Slot,
     parties: HashMap<PublicKey, Party>,
     ibound: UnboundedSender<PeerMessage>,
+    query_ibound: UnboundedSender<PeerMessage>,
     obound: UnboundedReceiver<Command>,
     next_slot: watch::Receiver<Slot>,
     accept_tasks: JoinSet<Result<Connection, NetworkError>>,
+    /// Keyed by a per-connection id because the lane is only known once the hello is read.
     #[allow(clippy::type_complexity)]
-    hello_tasks: JoinMap<PublicKey, Result<(Hello, Connection, Option<Hello>), NetworkError>>,
-    connect_tasks: JoinMap<PublicKey, Connection>,
-    peer_tasks: JoinMap<PublicKey, Peer>,
+    hello_tasks:
+        JoinMap<(PublicKey, u64), Result<(Hello, Connection, Option<Hello>), NetworkError>>,
+    next_hello_id: u64,
+    connect_tasks: JoinMap<(PublicKey, Lane), Connection>,
+    peer_tasks: JoinMap<(PublicKey, Lane), Peer>,
     metrics: Arc<dyn Metrics>,
 }
 
 struct Party {
     role: Role,
     addr: NetAddr,
+    consensus: Link,
+    query: Link,
+}
+
+/// The state of one connection to a party.
+struct Link {
     outbox: Queue<(RetryPolicy, Bytes)>,
     retry: DelayQueue,
     peer: PeerState,
+}
+
+/// Which side opened a connection. This decides which one is kept when both
+/// sides connect at once.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Origin {
+    Accepted,
+    Connected,
 }
 
 /// The states of a peer.
@@ -86,11 +105,13 @@ enum PeerState {
 }
 
 impl Server {
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn spawn(
         conf: Arc<Config>,
         listener: TcpListener,
         role: Role,
         tx: UnboundedSender<PeerMessage>,
+        query_tx: UnboundedSender<PeerMessage>,
         rx: UnboundedReceiver<Command>,
         sx: watch::Receiver<Slot>,
         metrics: Arc<dyn Metrics>,
@@ -111,11 +132,13 @@ impl Server {
             conf,
             role,
             ibound: tx,
+            query_ibound: query_tx,
             obound: rx,
             parties,
             accept_tasks: JoinSet::new(),
             connect_tasks: JoinMap::new(),
             hello_tasks: JoinMap::new(),
+            next_hello_id: 0,
             peer_tasks: JoinMap::new(),
             msgid: MsgId::new(0),
             next_slot: sx,
@@ -127,14 +150,14 @@ impl Server {
     }
 
     async fn run(mut self, listener: TcpListener) {
-        // Connect to all peers.
+        // Connect to all peers. Query links connect on first use.
         for (k, a) in self
             .parties
             .iter()
             .map(|(k, p)| (*k, p.addr.clone()))
             .collect::<Vec<_>>()
         {
-            self.spawn_connect(k, a)
+            self.spawn_connect(k, Lane::Consensus, a)
         }
 
         loop {
@@ -217,14 +240,14 @@ impl Server {
                 },
 
                 Some(r) = self.hello_tasks.join_next() => match r {
-                    (key, Ok(Ok((our_hello, conn, their_hello)))) => {
+                    ((key, _), Ok(Ok((our_hello, conn, their_hello)))) => {
                         self.metrics.set(&self.key, HELLO_TASKS, self.hello_tasks.len());
                         if key == self.key {
                             // This case has been addressed already by rejecting the peer,
                             // i.e. we told the peer to backoff forever.
                             continue
                         }
-                        let Some(party) = self.parties.get_mut(&key) else {
+                        if !self.parties.contains_key(&key) {
                             info!(
                                 name = %self.conf.name,
                                 node = %self.key,
@@ -233,61 +256,29 @@ impl Server {
                                 "unknown party"
                             );
                             continue
-                        };
-                        if !(our_hello.is_ok() && their_hello.is_some_and(|h| h.is_ok())) {
-                            warn!(
-                                name   = %self.conf.name,
-                                node   = %self.key,
-                                peer   = %key,
-                                addr   = %conn.addr,
-                                ours   = ?our_hello,
-                                theirs = ?their_hello,
-                                "hello failed"
-                            );
+                        }
+                        if their_hello == Some(Hello::OkQuery) && our_hello != Hello::OkQuery {
+                            debug!(name = %self.conf.name, node = %self.key, peer = %key, "refused query lane");
                             continue
                         }
-                        match party.peer.take() {
-                            PeerState::None => {
-                                self.connect_tasks.abort(&key);
-                                let peer = Peer::builder()
-                                    .config(self.conf.clone())
-                                    .budget(self.conf.peer_budget)
-                                    .inbound(self.ibound.clone())
-                                    .messages(party.outbox.clone())
-                                    .retry(party.retry.clone())
-                                    .metrics(self.metrics.clone())
-                                    .build();
-                                let cancel = CancellationToken::new();
-                                party.peer = PeerState::Connected(cancel.clone());
-                                self.spawn_peer(key, peer, conn, cancel);
+                        let lane = match our_hello.lane() {
+                            Some(lane) if their_hello == Some(our_hello) => lane,
+                            Some(_) | None => {
+                                warn!(
+                                    name   = %self.conf.name,
+                                    node   = %self.key,
+                                    peer   = %key,
+                                    addr   = %conn.addr,
+                                    ours   = ?our_hello,
+                                    theirs = ?their_hello,
+                                    "hello failed"
+                                );
+                                continue
                             }
-                            PeerState::Reconnect(peer) => {
-                                self.connect_tasks.abort(&key);
-                                let cancel = CancellationToken::new();
-                                party.peer = PeerState::Connected(cancel.clone());
-                                self.spawn_peer(key, peer, conn, cancel);
-                            }
-                            PeerState::Connected(cancel) => {
-                                if key > self.key {
-                                    info!(
-                                        name = %self.conf.name,
-                                        node = %self.key,
-                                        peer = %key,
-                                        addr = %conn.addr,
-                                        "replacing connection with accepted one"
-                                    );
-                                    cancel.cancel();
-                                    party.peer = PeerState::Replace(conn);
-                                } else {
-                                    party.peer = PeerState::Connected(cancel);
-                                }
-                            }
-                            PeerState::Replace(_) => {
-                                party.peer = PeerState::Replace(conn);
-                            }
-                        }
+                        };
+                        self.on_connection(key, lane, conn, Origin::Accepted);
                     }
-                    (key, Ok(Err(err))) => {
+                    ((key, _), Ok(Err(err))) => {
                         self.metrics.set(&self.key, HELLO_TASKS, self.hello_tasks.len());
                         warn!(
                             name = %self.conf.name,
@@ -297,7 +288,7 @@ impl Server {
                             "hello task error"
                         )
                     }
-                    (key, Err(err)) => {
+                    ((key, _), Err(err)) => {
                         self.metrics.set(&self.key, HELLO_TASKS, self.hello_tasks.len());
                         if err.is_panic() {
                             error!(
@@ -312,79 +303,33 @@ impl Server {
                 },
 
                 Some(x) = self.connect_tasks.join_next() => match x {
-                    (key, Ok(conn)) => {
+                    ((key, lane), Ok(conn)) => {
                         self.metrics.set(&self.key, CONNECT_TASKS, self.connect_tasks.len());
-                        let Some(party) = self.parties.get_mut(&key) else {
-                            debug!(
-                                name = %self.conf.name,
-                                node = %self.key,
-                                peer = %key,
-                                addr = %conn.addr,
-                                "party has been removed"
-                            );
-                            continue
-                        };
-                        match party.peer.take() {
-                            PeerState::None => {
-                                let peer = Peer::builder()
-                                    .config(self.conf.clone())
-                                    .budget(self.conf.peer_budget)
-                                    .inbound(self.ibound.clone())
-                                    .messages(party.outbox.clone())
-                                    .retry(party.retry.clone())
-                                    .metrics(self.metrics.clone())
-                                    .build();
-                                let cancel = CancellationToken::new();
-                                party.peer = PeerState::Connected(cancel.clone());
-                                self.spawn_peer(key, peer, conn, cancel);
-                            }
-                            PeerState::Reconnect(peer) => {
-                                let cancel = CancellationToken::new();
-                                party.peer = PeerState::Connected(cancel.clone());
-                                self.spawn_peer(key, peer, conn, cancel);
-                            }
-                            PeerState::Connected(cancel) => {
-                                if key < self.key {
-                                    info!(
-                                        name = %self.conf.name,
-                                        node = %self.key,
-                                        peer = %key,
-                                        addr = %conn.addr,
-                                        "replacing connection with outgoing one"
-                                    );
-                                    cancel.cancel();
-                                    party.peer = PeerState::Replace(conn);
-                                } else {
-                                    party.peer = PeerState::Connected(cancel);
-                                }
-                            }
-                            PeerState::Replace(_) => {
-                                party.peer = PeerState::Replace(conn);
-                            }
-                        }
+                        self.on_connection(key, lane, conn, Origin::Connected);
                     }
-                    (key, Err(err)) => {
+                    ((key, lane), Err(err)) => {
                         self.metrics.set(&self.key, CONNECT_TASKS, self.connect_tasks.len());
                         if err.is_panic() {
                             error!(
                                 name = %self.conf.name,
                                 node = %self.key,
                                 peer = %key,
+                                ?lane,
                                 %err,
                                 "connect task panic"
                             );
                             if let Some(party) = self.parties.get_mut(&key)
-                                && matches!(party.peer, PeerState::None | PeerState::Reconnect(_))
+                                && matches!(party.link_mut(lane).peer, PeerState::None | PeerState::Reconnect(_))
                             {
                                 let addr = party.addr.clone();
-                                self.spawn_connect(key, addr);
+                                self.spawn_connect(key, lane, addr);
                             }
                         }
                     }
                 },
 
                 Some(p) = self.peer_tasks.join_next() => match p {
-                    (key, Ok(peer)) => {
+                    ((key, lane), Ok(peer)) => {
                         self.metrics.set(&self.key, PEER_TASKS, self.peer_tasks.len());
                         if self.ibound.is_closed() {
                             return
@@ -398,23 +343,25 @@ impl Server {
                             );
                             continue
                         };
-                        if let PeerState::Replace(conn) = party.peer.take() {
+                        let addr = party.addr.clone();
+                        let link = party.link_mut(lane);
+                        if let PeerState::Replace(conn) = link.peer.take() {
                             let cancel = CancellationToken::new();
-                            party.peer = PeerState::Connected(cancel.clone());
-                            self.spawn_peer(key, peer, conn, cancel);
+                            link.peer = PeerState::Connected(cancel.clone());
+                            self.spawn_peer(key, lane, peer, conn, cancel);
                         } else {
-                            let addr = party.addr.clone();
-                            party.peer = PeerState::Reconnect(peer);
-                            self.spawn_connect(key, addr);
+                            link.peer = PeerState::Reconnect(peer);
+                            self.spawn_connect(key, lane, addr);
                         }
                     }
-                    (key, Err(err)) => {
+                    ((key, lane), Err(err)) => {
                         self.metrics.set(&self.key, PEER_TASKS, self.peer_tasks.len());
                         if err.is_panic() {
                             error!(
                                 name = %self.conf.name,
                                 node = %self.key,
                                 peer = %key,
+                                ?lane,
                                 %err,
                                 "peer task panic"
                             );
@@ -423,8 +370,8 @@ impl Server {
                             }
                             if let Some(party) = self.parties.get_mut(&key) {
                                 let addr = party.addr.clone();
-                                party.peer = PeerState::None;
-                                self.spawn_connect(key, addr);
+                                party.link_mut(lane).peer = PeerState::None;
+                                self.spawn_connect(key, lane, addr);
                             }
                         }
                     }
@@ -439,8 +386,10 @@ impl Server {
                     self.lower_bound = s;
                     self.metrics.set(&self.key, LOWER_BOUND, u64::from(s) as usize);
                     for party in self.parties.values() {
-                        party.outbox.gc(s);
-                        party.retry.gc(s);
+                        for link in [&party.consensus, &party.query] {
+                            link.outbox.gc(s);
+                            link.retry.gc(s);
+                        }
                     }
                 }
 
@@ -466,11 +415,14 @@ impl Server {
                                         );
                                         p.addr = a.clone();
                                         p.role = role;
-                                        self.connect_tasks.abort(&k);
-                                        if let PeerState::Connected(cancel) = &p.peer {
+                                        self.connect_tasks.abort_matching(|(key, _)| *key == k);
+                                        if let PeerState::Connected(cancel) = &p.query.peer {
+                                            cancel.cancel()
+                                        }
+                                        if let PeerState::Connected(cancel) = &p.consensus.peer {
                                             cancel.cancel()
                                         } else {
-                                            self.spawn_connect(k, a)
+                                            self.spawn_connect(k, Lane::Consensus, a)
                                         }
                                     }
                                     continue
@@ -483,7 +435,7 @@ impl Server {
                                     "adding new peer"
                                 );
                                 self.parties.insert(k, Party::new(self.conf.clone(), role, a.clone()));
-                                self.spawn_connect(k, a)
+                                self.spawn_connect(k, Lane::Consensus, a)
                             }
                         }
                         Some(Command::Peer(PeerCommand::Remove(peers))) => {
@@ -504,8 +456,8 @@ impl Server {
                                     "removing peer"
                                 );
                                 self.parties.remove(k);
-                                self.connect_tasks.abort(k);
-                                self.peer_tasks.abort(k);
+                                self.connect_tasks.abort_matching(|(key, _)| key == k);
+                                self.peer_tasks.abort_matching(|(key, _)| key == k);
                             }
                         }
                         Some(Command::Peer(PeerCommand::Assign(role, peers))) => {
@@ -559,7 +511,7 @@ impl Server {
                                 let bytes = append_trailer(cmd.retry, cmd.slot, msgid, m);
 
                                 if let Some(party) = self.parties.get(&to) {
-                                    party.outbox.enqueue(cmd.slot, msgid, (cmd.retry, bytes));
+                                    party.consensus.outbox.enqueue(cmd.slot, msgid, (cmd.retry, bytes));
                                 } else {
                                     warn!(
                                         name = %self.conf.name,
@@ -597,7 +549,7 @@ impl Server {
                                         continue
                                     }
                                     trace!(name = %self.conf.name, node = %self.key, %to, "sending message");
-                                    party.outbox.enqueue(cmd.slot, msgid, (cmd.retry, bytes.clone()));
+                                    party.consensus.outbox.enqueue(cmd.slot, msgid, (cmd.retry, bytes.clone()));
                                 }
                             }
                             SendAction::Broadcast(m) => {
@@ -630,11 +582,12 @@ impl Server {
                                             to    = %key,
                                             "sending message"
                                         );
-                                        party.outbox.enqueue(cmd.slot, msgid, (cmd.retry, bytes.clone()));
+                                        party.consensus.outbox.enqueue(cmd.slot, msgid, (cmd.retry, bytes.clone()));
                                     }
                                 }
                             }
                         }
+                        Some(Command::SendQuery(to, bytes)) => self.send_query(to, bytes),
                         Some(Command::Shutdown(tx)) => {
                             debug!(name = %self.conf.name, node = %self.key, "shutting down");
                             let _ = tx.send(());
@@ -647,7 +600,111 @@ impl Server {
         }
     }
 
-    fn spawn_connect(&mut self, key: PublicKey, addr: NetAddr) {
+    /// Run a newly opened connection on its link, or keep the existing one
+    /// when both sides connected at once.
+    fn on_connection(&mut self, key: PublicKey, lane: Lane, conn: Connection, origin: Origin) {
+        let Some(party) = self.parties.get_mut(&key) else {
+            debug!(
+                name = %self.conf.name,
+                node = %self.key,
+                peer = %key,
+                addr = %conn.addr,
+                "party has been removed"
+            );
+            return;
+        };
+        let link = party.link_mut(lane);
+        let peer = match link.peer.take() {
+            PeerState::None => {
+                let (inbound, metrics) = match lane {
+                    Lane::Consensus => (self.ibound.clone(), Arc::clone(&self.metrics)),
+                    // Peer gauges are keyed by party, so the query link would overwrite them.
+                    Lane::Query => (
+                        self.query_ibound.clone(),
+                        Arc::new(NoMetrics) as Arc<dyn Metrics>,
+                    ),
+                };
+                Peer::builder()
+                    .config(self.conf.clone())
+                    .budget(self.conf.peer_budget)
+                    .inbound(inbound)
+                    .messages(link.outbox.clone())
+                    .retry(link.retry.clone())
+                    .metrics(metrics)
+                    .build()
+            },
+            PeerState::Reconnect(peer) => peer,
+            PeerState::Connected(cancel) => {
+                // Both sides apply the same rule, so they keep the same connection.
+                let replace = match origin {
+                    Origin::Accepted => key > self.key,
+                    Origin::Connected => key < self.key,
+                };
+                if replace {
+                    info!(
+                        name = %self.conf.name,
+                        node = %self.key,
+                        peer = %key,
+                        addr = %conn.addr,
+                        ?lane,
+                        "replacing connection"
+                    );
+                    cancel.cancel();
+                    link.peer = PeerState::Replace(conn);
+                } else {
+                    link.peer = PeerState::Connected(cancel);
+                }
+                return;
+            },
+            PeerState::Replace(_) => {
+                link.peer = PeerState::Replace(conn);
+                return;
+            },
+        };
+        if origin == Origin::Accepted {
+            self.connect_tasks.abort(&(key, lane));
+        }
+        let cancel = CancellationToken::new();
+        link.peer = PeerState::Connected(cancel.clone());
+        self.spawn_peer(key, lane, peer, conn, cancel);
+    }
+
+    /// Queue a query message for a party, opening its query link if needed.
+    fn send_query(&mut self, to: PublicKey, bytes: Bytes) {
+        if to == self.key {
+            if self
+                .query_ibound
+                .send((self.key, remove_trailer(bytes), None))
+                .is_err()
+            {
+                warn!(name = %self.conf.name, node = %self.key, "query channel closed");
+            }
+            return;
+        }
+        let msgid = self.next_msgid();
+        let Some(party) = self.parties.get(&to) else {
+            warn!(
+                name = %self.conf.name,
+                node = %self.key,
+                peer = %to,
+                "query target not found"
+            );
+            return;
+        };
+        // Queued under the current lower bound, so the next GC drops it if still unsent.
+        party
+            .query
+            .outbox
+            .enqueue(self.lower_bound, msgid, (RetryPolicy::NoRetry, bytes));
+        if matches!(party.query.peer, PeerState::None)
+            && !self.connect_tasks.contains_key(&(to, Lane::Query))
+        {
+            let addr = party.addr.clone();
+            self.spawn_connect(to, Lane::Query, addr);
+        }
+    }
+
+    fn spawn_connect(&mut self, key: PublicKey, lane: Lane, addr: NetAddr) {
         if self.key == key {
             return;
         }
@@ -656,10 +713,11 @@ impl Server {
             node = %self.key,
             peer = %key,
             addr = %addr,
+            ?lane,
             "spawning connect task"
         );
-        let conn = Connection::connect(self.conf.clone(), key, addr);
-        self.connect_tasks.spawn(key, conn);
+        let conn = Connection::connect(self.conf.clone(), key, addr, lane);
+        self.connect_tasks.spawn((key, lane), conn);
         self.metrics.add(&key, CONNECT_ATTEMPTS, 1);
         self.metrics
             .set(&self.key, CONNECT_TASKS, self.connect_tasks.len());
@@ -693,16 +751,27 @@ impl Server {
         // bother with reading the remote's (unless it is a peer we want), but only
         // send our hello and drop the connection. NB that this may cause the remote
         // to see a connection reset.
-        let under_pressure = self.hello_tasks.len() > 2 * self.parties.len();
+        //
+        // Each party may open one connection per lane, hence two hellos per party.
+        let under_pressure = self.hello_tasks.len() > 4 * self.parties.len();
 
-        self.hello_tasks.abort(&conn.key);
+        let id = self.next_hello_id;
+        self.next_hello_id = self.next_hello_id.wrapping_add(1);
+        let accept_query = self.conf.accept_query;
+        let backoff = self.conf.backoff_duration;
         self.hello_tasks.spawn(
-            conn.key,
+            (conn.key, id),
             until(self.conf.handshake_timeout, async move {
-                let theirs = if ours.is_ok() || !under_pressure {
+                let theirs = if ours == Hello::Ok || !under_pressure {
                     Some(conn.recv_hello().await?)
                 } else {
                     None
+                };
+                // An accepted party opens the lane it asked for.
+                let ours = match (ours, theirs) {
+                    (Hello::Ok, Some(Hello::OkQuery)) if accept_query => Hello::OkQuery,
+                    (Hello::Ok, Some(Hello::OkQuery)) => Hello::BackOff(backoff),
+                    (ours, _) => ours,
                 };
                 conn.send_hello(ours).await?;
                 Ok::<_, NetworkError>((ours, conn, theirs))
@@ -716,6 +785,7 @@ impl Server {
     fn spawn_peer(
         &mut self,
         key: PublicKey,
+        lane: Lane,
         mut peer: Peer,
         conn: Connection,
         cancel: CancellationToken,
@@ -725,24 +795,25 @@ impl Server {
             node = %self.key,
             peer = %key,
             addr = %conn.addr,
+            ?lane,
             "spawning peer task"
         );
         let node = self.key;
         let name = self.conf.name.clone();
         let metrics = self.metrics.clone();
         let addr = conn.addr;
-        self.peer_tasks.spawn(key, async move {
+        self.peer_tasks.spawn((key, lane), async move {
             let Err(err) = peer.start(conn, cancel).await;
-            if !matches!(err, NetworkError::PeerInterrupt) {
-                warn!(
-                    %name,
-                    %node,
-                    peer = %key,
-                    %addr,
-                    %err,
-                    "peer failure"
-                );
-                metrics.add(&key, ERRORS, 1)
+            match (lane, err) {
+                (_, NetworkError::PeerInterrupt) => {},
+                (Lane::Consensus, err) => {
+                    warn!(%name, %node, peer = %key, %addr, %err, "peer failure");
+                    metrics.add(&key, ERRORS, 1)
+                },
+                // The remote closing an idle query link ends up here.
+                (Lane::Query, err) => {
+                    debug!(%name, %node, peer = %key, %addr, %err, "query peer ended")
+                },
             }
             peer
         });
@@ -762,9 +833,15 @@ impl Party {
         Self {
             addr: a,
             role: r,
-            outbox: Queue::new(),
-            retry: DelayQueue::new(c),
-            peer: PeerState::None,
+            consensus: Link::new(c.clone()),
+            query: Link::new(c),
+        }
+    }
+
+    fn link_mut(&mut self, lane: Lane) -> &mut Link {
+        match lane {
+            Lane::Consensus => &mut self.consensus,
+            Lane::Query => &mut self.query,
         }
     }
 
@@ -773,6 +850,16 @@ impl Party {
             return false;
         };
         ip.to_canonical() != addr.to_canonical()
+    }
+}
+
+impl Link {
+    fn new(c: Arc<Config>) -> Link {
+        Link {
+            outbox: Queue::new(),
+            retry: DelayQueue::new(c),
+            peer: PeerState::None,
+        }
     }
 }
 

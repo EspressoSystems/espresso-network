@@ -63,6 +63,7 @@ use jf_merkle_tree_compat::{
 use prometheus::Encoder as _;
 use serde_json;
 use tagged_base64::TaggedBase64;
+use versions::NEW_PROTOCOL_VERSION;
 
 use super::{
     RewardMerkleTreeDataSource, RewardMerkleTreeV2Data as InternalRewardTreeData,
@@ -3254,15 +3255,25 @@ where
             .await
             .ok_or_else(|| not_found(format!("unknown leaf {requested}")))?;
 
-        crate::api::light_client::get_leaf_proof(
+        let height = requested_leaf.height();
+        let new_protocol = requested_leaf.header().version() >= NEW_PROTOCOL_VERSION;
+        let proof = crate::api::light_client::get_leaf_proof(
             ds,
             requested_leaf,
             finalized.map(|f| f as usize),
-            fetch_timeout,
             lc_leaf_proof_chain_limit(),
         )
-        .await
-        .map_err(lc_error)
+        .await;
+        // The proof may only lack a descendant's cert2, which peers can supply for next time.
+        if proof.is_err() && new_protocol {
+            crate::api::light_client::request_cert2s(
+                self.data_source.clone(),
+                height,
+                lc_leaf_proof_chain_limit(),
+                fetch_timeout,
+            );
+        }
+        proof.map_err(lc_error)
     }
 
     async fn get_header_proof(
@@ -3788,7 +3799,7 @@ fn explorer_error(err: ExplorerError) -> anyhow::Error {
 ///
 /// Tracks the `hotshot_query_service` small-object range limit, so a dependency bump that
 /// changes that default changes this bound too.
-fn lc_leaf_proof_chain_limit() -> usize {
+pub(crate) fn lc_leaf_proof_chain_limit() -> usize {
     hotshot_query_service::availability::Options::default().small_object_range_limit
 }
 

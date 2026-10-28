@@ -1,10 +1,10 @@
-use std::{collections::HashMap, pin::Pin, sync::Arc, time::Duration};
+use std::{collections::HashMap, fmt::Debug, pin::Pin, sync::Arc, time::Duration};
 
 use ::light_client::{
     LightClient,
-    client::{FallbackClient, QueryServiceClient},
+    client::{Client, FallbackClient, QueryServiceClient},
     state::{Genesis, LightClientOptions},
-    storage::LightClientDbOptions,
+    storage::{LightClientDbOptions, SqlStorage},
 };
 use alloy::primitives::U256;
 use anyhow::{Context, bail, ensure};
@@ -67,8 +67,9 @@ use self::data_source::{
 use crate::{
     SeqTypes,
     api::{
-        context::{ApiContext, ConsensusSource, NodeLightClient},
+        context::{ApiContext, ConsensusSource},
         data_source::TokenDataSource,
+        peer_client::PeerClient,
     },
     catchup::{
         CatchupStorage, add_fee_accounts_to_state, add_v1_reward_accounts_to_state,
@@ -90,6 +91,7 @@ pub mod data_source;
 pub mod fs;
 pub mod light_client;
 pub mod options;
+pub(crate) mod peer_client;
 /// The query service over a SQL database, with one module per backend.
 pub mod sql {
     pub mod postgres;
@@ -1733,16 +1735,22 @@ pub(crate) fn light_client_genesis(config: &NetworkConfig<SeqTypes>, chain_id: C
 /// is therefore opened lazily as well; if that fails, the fetch returns `None` and the next fetch
 /// tries again.
 #[derive(Derivative)]
-#[derivative(Debug(bound = ""))]
-pub(crate) struct LightClientProvider {
-    light_client: OnceCell<Arc<NodeLightClient>>,
+#[derivative(Debug(bound = "C: Debug"))]
+pub(crate) struct LightClientProvider<C = FallbackClient<QueryServiceClient>> {
+    light_client: OnceCell<Arc<LightClient<SqlStorage, C>>>,
     state: ApiState,
-    client: FallbackClient<QueryServiceClient>,
+    client: C,
     opt: LightClientOptions,
     db_opt: LightClientDbOptions,
+    #[derivative(Debug = "ignore")]
+    shared: SharedLightClient<C>,
 }
 
+/// Finds a light client the node already runs, to fetch through instead of building one.
+type SharedLightClient<C> = fn(&dyn ApiContext) -> Option<Arc<LightClient<SqlStorage, C>>>;
+
 impl LightClientProvider {
+    /// A provider fetching from the HTTP query service `peers`.
     fn new(
         peers: impl IntoIterator<Item = Url>,
         state: ApiState,
@@ -1750,16 +1758,38 @@ impl LightClientProvider {
         db_opt: LightClientDbOptions,
     ) -> anyhow::Result<Self> {
         let client = FallbackClient::new(peers.into_iter().map(QueryServiceClient::new).collect())?;
-        Ok(Self {
+        Ok(LightClientProvider {
             light_client: OnceCell::new(),
             state,
             client,
             opt,
             db_opt,
+            shared: |ctx| ctx.light_client(),
         })
     }
+}
 
-    pub(crate) async fn light_client(&self) -> Option<&Arc<NodeLightClient>> {
+impl LightClientProvider<PeerClient> {
+    /// A provider fetching from staked peers over the cliquenet query lane.
+    ///
+    /// Its light client keeps its own database, so it never contends with the HTTP one.
+    fn peers(state: ApiState, opt: LightClientOptions) -> LightClientProvider<PeerClient> {
+        LightClientProvider {
+            light_client: OnceCell::new(),
+            client: PeerClient::new(state.clone()),
+            state,
+            opt,
+            db_opt: LightClientDbOptions::Sqlite(Default::default()),
+            shared: |_| None,
+        }
+    }
+}
+
+impl<C> LightClientProvider<C>
+where
+    C: Client + Clone,
+{
+    pub(crate) async fn light_client(&self) -> Option<&Arc<LightClient<SqlStorage, C>>> {
         self.light_client
             .get_or_try_init(|| self.init())
             .await
@@ -1771,9 +1801,9 @@ impl LightClientProvider {
             .ok()
     }
 
-    async fn init(&self) -> anyhow::Result<Arc<NodeLightClient>> {
+    async fn init(&self) -> anyhow::Result<Arc<LightClient<SqlStorage, C>>> {
         let ctx = self.state.context().await;
-        if let Some(light_client) = ctx.light_client() {
+        if let Some(light_client) = (self.shared)(ctx) {
             return Ok(light_client);
         }
         let db = self
@@ -1794,10 +1824,11 @@ impl LightClientProvider {
 }
 
 #[async_trait]
-impl<T> Provider<SeqTypes, T> for LightClientProvider
+impl<T, C> Provider<SeqTypes, T> for LightClientProvider<C>
 where
     T: fetching::Request<SeqTypes> + 'static,
-    NodeLightClient: Provider<SeqTypes, T>,
+    C: Client + Clone,
+    LightClient<SqlStorage, C>: Provider<SeqTypes, T>,
 {
     async fn fetch(&self, req: T) -> Option<T::Response> {
         self.light_client().await?.fetch(req).await

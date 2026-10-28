@@ -165,7 +165,14 @@ pub(in crate::api) async fn init_query_module(
     provider = provider
         .with_block_provider(db_provider.clone())
         .with_vid_common_provider(db_provider);
-    // If that fails, fetch missing data from peers.
+    // If that fails, fetch missing data from staked peers over cliquenet, then from the HTTP
+    // peers. Providers are tried in this order.
+    if query_opt.p2p {
+        provider = provider.with_provider(LightClientProvider::peers(
+            state.clone(),
+            query_opt.light_client.clone(),
+        ));
+    }
     let light_client_db = mod_opt.light_client_db(&query_opt)?;
     let light_client = Arc::new(LightClientProvider::new(
         query_opt.peers,
@@ -1192,19 +1199,33 @@ impl RewardMerkleTreeDataSource for DataSource {
 // A module of its own so `RequestStorage` is not in scope where `CatchupStorage` methods are
 // called by name on this type.
 mod request_storage {
+    use std::ops::Range;
+
+    use anyhow::ensure;
     use async_trait::async_trait;
     use espresso_types::{
         Certificate2, ChainConfig, FeeAccount, FeeMerkleTree, Leaf2, NodeState,
         v0_3::{RewardAccountV1, RewardMerkleTreeV1},
         v0_4::{RewardAccountV2, RewardMerkleTreeV2},
     };
+    use hotshot_query_service::{
+        availability::{LeafId, LeafQueryData},
+        data_source::{VersionedDataSource, storage::AvailabilityStorage},
+        node::BlockId,
+        types::HeightIndexed,
+    };
     use hotshot_types::data::{VidShare, ViewNumber};
+    use light_client::consensus::{leaf::LeafProof, payload::PayloadProof};
 
     use super::SqlStorage;
     use crate::{
         SeqTypes,
-        api::{BlocksFrontier, RewardMerkleTreeDataSource},
+        api::{
+            BlocksFrontier, RewardMerkleTreeDataSource, light_client::get_leaf_proof,
+            state::lc_leaf_proof_chain_limit,
+        },
         catchup::CatchupStorage,
+        query_peers::LeafRef,
         request_response::data_source::RequestStorage,
     };
 
@@ -1271,6 +1292,61 @@ mod request_storage {
         async fn get_vid_share(&self, block_number: u64) -> anyhow::Result<VidShare> {
             let id = hotshot_query_service::node::BlockId::Number(block_number as usize);
             Ok(SqlStorage::get_vid_share::<SeqTypes>(self, id).await?)
+        }
+
+        async fn get_leaf_proof(
+            &self,
+            leaf: LeafRef,
+            finalized: Option<u64>,
+        ) -> anyhow::Result<LeafProof> {
+            let mut tx = self.read().await?;
+            let block = match leaf {
+                LeafRef::Height(height) => BlockId::Number(height as usize),
+                LeafRef::Hash(hash) => {
+                    let leaf =
+                        AvailabilityStorage::<SeqTypes>::get_leaf(&mut tx, LeafId::Hash(hash));
+                    BlockId::Number(leaf.await?.height() as usize)
+                },
+                LeafRef::BlockHash(hash) => BlockId::Hash(hash),
+                LeafRef::PayloadHash(hash) => BlockId::PayloadHash(hash),
+            };
+            let header = AvailabilityStorage::<SeqTypes>::get_header(&mut tx, block).await?;
+            let id = LeafId::Number(header.height() as usize);
+            let requested = AvailabilityStorage::<SeqTypes>::get_leaf(&mut tx, id).await?;
+            drop(tx);
+            Ok(get_leaf_proof(
+                self,
+                requested,
+                finalized.map(|height| height as usize),
+                lc_leaf_proof_chain_limit(),
+            )
+            .await?)
+        }
+
+        async fn get_leaves(
+            &self,
+            range: Range<u64>,
+        ) -> anyhow::Result<Vec<LeafQueryData<SeqTypes>>> {
+            let limit = lc_leaf_proof_chain_limit();
+            ensure!(
+                range.end.saturating_sub(range.start) as usize <= limit,
+                "range {range:?} exceeds limit {limit}"
+            );
+            let range = range.start as usize..range.end as usize;
+            let mut tx = self.read().await?;
+            let leaves = AvailabilityStorage::<SeqTypes>::get_leaf_range(&mut tx, range).await?;
+            Ok(leaves.into_iter().collect::<Result<_, _>>()?)
+        }
+
+        async fn get_payload_proof(&self, height: u64) -> anyhow::Result<PayloadProof> {
+            let id = BlockId::Number(height as usize);
+            let mut tx = self.read().await?;
+            let payload = AvailabilityStorage::<SeqTypes>::get_payload(&mut tx, id).await?;
+            let vid_common = AvailabilityStorage::<SeqTypes>::get_vid_common(&mut tx, id).await?;
+            Ok(PayloadProof::new(
+                payload.data().clone(),
+                vid_common.common().clone(),
+            ))
         }
     }
 }

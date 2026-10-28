@@ -14,7 +14,7 @@ use espresso_types::{
     v0::traits::{EventConsumer as PersistenceEventConsumer, SequencerPersistence},
 };
 use futures::{
-    future::join_all,
+    future::{BoxFuture, join_all},
     stream::{BoxStream, Stream, StreamExt},
 };
 use hotshot_new_protocol::{
@@ -60,6 +60,7 @@ use crate::{
     consensus_handle::ConsensusHandle,
     external_event_handler::ExternalEventHandler,
     proposal_fetcher::ProposalFetcherConfig,
+    query_peers::{QueryPeers, QueryRequest, QueryResponse},
     request_response::{
         RequestResponseProtocol,
         data_source::{DataSource, Storage as RequestResponseStorage},
@@ -97,6 +98,10 @@ pub struct SequencerContext<P: SequencerPersistence> {
 
     /// Light client state signatures produced by the state signer task.
     state_signatures: Arc<RwLock<StateSignatureMemStorage>>,
+
+    /// Query service requests to and from staked peers, when this node serves them.
+    #[derivative(Debug = "ignore")]
+    query_peers: Option<QueryPeers>,
 
     /// An orchestrator to wait for before starting consensus, with the peer config this node
     /// registered there.
@@ -179,6 +184,9 @@ where
         seed_membership(&membership_coordinator, config, &upgrade_lock, &initializer).await;
 
         let mut coordinator_network = coordinator_network(upgrade_lock.clone()).await?;
+        // Taken before the network moves into the coordinator, so query traffic never passes
+        // through it.
+        let query_lane = coordinator_network.take_query_lane();
 
         let current_epoch = bootstrap_epoch_window(
             &membership_coordinator,
@@ -276,6 +284,11 @@ where
             max_incoming_requests_per_key: 4,
         };
 
+        let query_storage = match &storage {
+            Some(RequestResponseStorage::Sql(storage)) => Some(Arc::clone(storage)),
+            Some(RequestResponseStorage::Fs(_)) | None => None,
+        };
+
         // Create the request-response protocol
         let request_response_protocol = RequestResponseProtocol::new(
             request_response_config,
@@ -317,7 +330,11 @@ where
         .await
         .with_context(|| "Failed to create external event handler")?;
 
-        Ok(Self::new(
+        let query_peers = query_lane.zip(query_storage).map(|(lane, storage)| {
+            QueryPeers::start(lane, storage, consensus_handle.clone(), pub_key, &mut tasks)
+        });
+
+        let mut ctx = Self::new(
             consensus_handle,
             persistence,
             state_signer,
@@ -330,8 +347,9 @@ where
             anchor_view,
             proposal_fetcher_cfg,
             metrics,
-        )
-        .with_task_list(tasks))
+        );
+        ctx.query_peers = query_peers;
+        Ok(ctx.with_task_list(tasks))
     }
 
     /// Constructor
@@ -357,6 +375,7 @@ where
             consensus_handle,
             persistence: persistence.clone(),
             state_signatures: Arc::clone(&state_signer.signatures),
+            query_peers: None,
             request_response_protocol,
             tasks: Default::default(),
             detached: false,
@@ -438,6 +457,15 @@ where
     /// Return the light client state signatures this node has produced.
     pub fn state_signatures(&self) -> Arc<RwLock<StateSignatureMemStorage>> {
         self.state_signatures.clone()
+    }
+
+    /// Ask a staked peer over the cliquenet query lane. The response is unverified.
+    pub(crate) fn query_peers(
+        &self,
+        request: QueryRequest,
+    ) -> BoxFuture<'static, anyhow::Result<QueryResponse>> {
+        let peers = self.query_peers.clone();
+        Box::pin(async move { peers.context("query p2p is off")?.ask(request).await })
     }
 
     /// Stream consensus events.

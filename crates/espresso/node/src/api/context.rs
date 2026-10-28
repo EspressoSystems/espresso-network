@@ -30,7 +30,10 @@ use hotshot_types::{
 };
 
 use crate::{
-    SequencerContext, consensus_handle::ConsensusHandle, context::TaskList,
+    SequencerContext,
+    consensus_handle::ConsensusHandle,
+    context::TaskList,
+    query_peers::{QueryRequest, QueryResponse},
     state_signature::StateSignatureMemStorage,
 };
 
@@ -74,6 +77,14 @@ pub trait ApiContext: Send + Sync + 'static {
 
     /// A light client the node already runs, for the query service to fetch through.
     fn light_client(&self) -> Option<Arc<NodeLightClient>>;
+
+    /// Ask staked peers over the cliquenet query lane.
+    fn query_peers(
+        &self,
+        _request: QueryRequest,
+    ) -> BoxFuture<'static, anyhow::Result<QueryResponse>> {
+        Box::pin(async { anyhow::bail!("this node does not query peers over cliquenet") })
+    }
     fn request_vid_shares(
         &self,
         block_number: u64,
@@ -192,6 +203,13 @@ where
 
     fn light_client(&self) -> Option<Arc<NodeLightClient>> {
         None
+    }
+
+    fn query_peers(
+        &self,
+        request: QueryRequest,
+    ) -> BoxFuture<'static, anyhow::Result<QueryResponse>> {
+        SequencerContext::query_peers(self, request)
     }
 
     fn request_vid_shares(

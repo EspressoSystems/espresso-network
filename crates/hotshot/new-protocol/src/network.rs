@@ -2,8 +2,10 @@ use std::{
     collections::{HashMap, HashSet},
     num::NonZeroUsize,
     sync::Arc,
+    time::Duration,
 };
 
+use bytes::Bytes;
 pub use cliquenet::{Config as CliquenetConfig, NetAddr, Role};
 use cliquenet::{NetworkReceiver, NetworkSender, Slot, noise::Protocol, x25519::PublicKey};
 use hotshot_types::{
@@ -19,7 +21,7 @@ use hotshot_types::{
 };
 use hotshot_utils::anytrace;
 use parking_lot::RwLock;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 use crate::message::{Message, MessageType, Unchecked, Validated};
 
@@ -32,6 +34,7 @@ pub type InboundFilter<T> = Box<dyn Fn(&Message<T, Unchecked>) -> bool + Send + 
 pub struct Cliquenet<T: NodeType> {
     inner: Sender<T>,
     receiver: NetworkReceiver,
+    query_receiver: Option<NetworkReceiver>,
     #[cfg(any(test, feature = "testing"))]
     ifilter: InboundFilter<T>,
 }
@@ -82,6 +85,7 @@ impl<T: NodeType> Cliquenet<T> {
         addr: A,
         parties: P,
         max_message_size: Option<NonZeroUsize>,
+        accept_query: bool,
         upgrade_lock: UpgradeLock<T>,
         metrics: Box<dyn Metrics>,
     ) -> Result<Self, NetworkError>
@@ -103,6 +107,7 @@ impl<T: NodeType> Cliquenet<T> {
             )
             .noise_protocols([(1.into(), Protocol::IK_25519_AesGcm_Blake2s)])
             .maybe_max_message_size(max_message_size)
+            .accept_query(accept_query)
             .build();
 
         Self::create_with_config(signing_key, upgrade_lock, cfg, parties, metrics).await
@@ -120,11 +125,12 @@ impl<T: NodeType> Cliquenet<T> {
     {
         let public_key = config.public_key();
         let metrics = CliquenetMetrics::new(metrics);
-        let network = cliquenet::Network::create(config.with_metrics(metrics)).await?;
+        let mut network = cliquenet::Network::create(config.with_metrics(metrics)).await?;
         let peers: HashMap<_, _> = parties.into_iter().collect();
 
         info!(peers = %peers.len(), "cliquenet created");
 
+        let query_receiver = network.take_query_receiver();
         let (send, recv) = network.split_into();
 
         Ok(Self {
@@ -140,11 +146,30 @@ impl<T: NodeType> Cliquenet<T> {
                 upgrade_lock,
             },
             receiver: recv,
+            query_receiver,
         })
     }
 
     pub fn sender(&self) -> &Sender<T> {
         &self.inner
+    }
+
+    /// Take both ends of the query lane.
+    ///
+    /// Returns `None` once taken, or if this network does not accept query
+    /// lanes. Query messages are raw bytes addressed by signature key, and
+    /// never reach [`Cliquenet::receive`].
+    pub fn take_query_lane(&mut self) -> Option<(QuerySender<T>, QueryReceiver<T>)> {
+        let receiver = self.query_receiver.take()?;
+        let sender = QuerySender {
+            sender: self.inner.sender.clone(),
+            shared: Arc::clone(&self.inner.shared),
+        };
+        let receiver = QueryReceiver {
+            receiver,
+            shared: Arc::clone(&self.inner.shared),
+        };
+        Some((sender, receiver))
     }
 
     /// The epoch whose peer window is applied.
@@ -467,8 +492,91 @@ impl<T: NodeType> Sender<T> {
     }
 }
 
+/// Sends raw bytes to peers over their query lane.
+pub struct QuerySender<T: NodeType> {
+    sender: NetworkSender,
+    shared: Arc<RwLock<Shared<T::SignatureKey>>>,
+}
+
+impl<T: NodeType> Clone for QuerySender<T> {
+    fn clone(&self) -> QuerySender<T> {
+        QuerySender {
+            sender: self.sender.clone(),
+            shared: Arc::clone(&self.shared),
+        }
+    }
+}
+
+impl<T: NodeType> std::fmt::Debug for QuerySender<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("QuerySender").finish_non_exhaustive()
+    }
+}
+
+impl<T: NodeType> QuerySender<T> {
+    /// Send `bytes` to `to` over its query lane.
+    ///
+    /// Delivery is best effort. See [`cliquenet::NetworkSender::send_query`].
+    pub fn send(&self, to: &T::SignatureKey, bytes: Vec<u8>) -> Result<(), NetworkError> {
+        let Some(target) = self.shared.read().peers.get(to).map(|i| i.x25519_key) else {
+            return Err(NetworkError::UnknownPeer);
+        };
+        self.sender.send_query(target.into(), bytes)?;
+        Ok(())
+    }
+
+    /// How long to wait to hear back from a peer after sending to it.
+    pub fn receive_timeout(&self) -> Duration {
+        self.sender.config().receive_timeout()
+    }
+}
+
+/// Receives raw bytes from peers over their query lane.
+pub struct QueryReceiver<T: NodeType> {
+    receiver: NetworkReceiver,
+    shared: Arc<RwLock<Shared<T::SignatureKey>>>,
+}
+
+impl<T: NodeType> std::fmt::Debug for QueryReceiver<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("QueryReceiver").finish_non_exhaustive()
+    }
+}
+
+impl<T: NodeType> QueryReceiver<T> {
+    /// Receive the next query message with the signature key of its sender.
+    ///
+    /// The sender is the peer whose x25519 key authenticated the connection.
+    /// Messages from keys that are no longer peers are dropped. Returns
+    /// `None` once the network is shut down.
+    ///
+    /// # Cancel safety
+    ///
+    /// This method is cancel safe.
+    pub async fn receive(&mut self) -> Option<(T::SignatureKey, Bytes)> {
+        loop {
+            let (src, bytes) = self.receiver.receive().await?;
+            let src = x25519::PublicKey::from(src);
+            let sender = self
+                .shared
+                .read()
+                .peers
+                .iter()
+                .find(|(_, info)| info.x25519_key == src)
+                .map(|(key, _)| key.clone());
+            match sender {
+                Some(sender) => return Some((sender, bytes)),
+                None => warn!(%src, "dropping query message from unknown peer"),
+            }
+        }
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum NetworkError {
+    #[error("peer has no connection info")]
+    UnknownPeer,
+
     #[error("cliquenet: {0}")]
     Cliquenet(#[from] cliquenet::NetworkError),
 

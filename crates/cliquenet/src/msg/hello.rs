@@ -1,15 +1,23 @@
 use std::time::Duration;
 
+use crate::Lane;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Hello {
     Ok,
     BackOff(Duration),
+    OkQuery,
     Unknown,
 }
 
 impl Hello {
-    pub fn is_ok(&self) -> bool {
-        matches!(self, Self::Ok)
+    /// The lane an accepting hello opens, if any.
+    pub fn lane(self) -> Option<Lane> {
+        match self {
+            Hello::Ok => Some(Lane::Consensus),
+            Hello::OkQuery => Some(Lane::Query),
+            Hello::BackOff(_) | Hello::Unknown => None,
+        }
     }
 
     pub fn backoff_duration(&self) -> Option<Duration> {
@@ -29,6 +37,7 @@ impl Hello {
                 let d = u64::from_be_bytes(bytes.get(1..9)?.try_into().ok()?);
                 Some(Self::BackOff(Duration::from_secs(d)))
             },
+            2 => Some(Self::OkQuery),
             _ => Some(Self::Unknown),
         }
     }
@@ -36,6 +45,7 @@ impl Hello {
     pub fn to_bytes(self) -> HelloBytes {
         match self {
             Self::Ok => HelloBytes::Ok([0]),
+            Self::OkQuery => HelloBytes::Ok([2]),
             Self::BackOff(d) => {
                 let mut b = [1; 9];
                 b[1..].copy_from_slice(&d.as_secs().to_be_bytes());
@@ -70,9 +80,10 @@ mod tests {
 
     impl Arbitrary for Hello {
         fn arbitrary(g: &mut Gen) -> Self {
-            match bool::arbitrary(g) {
-                true => Self::Ok,
-                false => Self::BackOff(Duration::from_secs(u64::arbitrary(g))),
+            match u8::arbitrary(g) % 3 {
+                0 => Self::Ok,
+                1 => Self::OkQuery,
+                _ => Self::BackOff(Duration::from_secs(u64::arbitrary(g))),
             }
         }
     }

@@ -3,7 +3,7 @@
 use std::{collections::BTreeSet, env, path::PathBuf, sync::Arc};
 
 use ::light_client::{state::LightClientOptions, storage::LightClientSqliteOptions};
-use anyhow::{Context, bail};
+use anyhow::{Context, bail, ensure};
 use clap::Parser;
 use espresso_telemetry as telemetry;
 use espresso_types::v0::traits::NullEventConsumer;
@@ -262,6 +262,8 @@ impl Options {
         Box<dyn ApiSink>,
         Option<RequestResponseStorage>,
     )> {
+        // Nothing would drain the query lane, which accepts peers' requests.
+        ensure!(!query_opt.p2p, "--query-p2p requires SQL storage");
         let light_client_db = mod_opt.light_client_db(&query_opt)?;
         let ds = <fs::DataSource as SequencerDataSource>::create(
             mod_opt,
@@ -385,6 +387,11 @@ pub struct Query {
     /// is kept under it, so the stake tables it verified survive a restart.
     #[clap(long, env = "ESPRESSO_NODE_STORAGE_PATH")]
     pub storage_path: Option<PathBuf>,
+
+    /// Backfill missing leaves and blocks from staked peers over cliquenet before asking the
+    /// HTTP peers, and serve the same to peers. Takes effect only on a node in consensus.
+    #[clap(long, env = "ESPRESSO_NODE_QUERY_P2P")]
+    pub p2p: bool,
 }
 
 impl Query {
