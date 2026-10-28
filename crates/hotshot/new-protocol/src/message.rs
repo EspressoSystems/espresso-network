@@ -367,14 +367,6 @@ impl<T: NodeType> ProposalFetchRequest<T> {
         let signature = T::SignatureKey::sign(private_key, payload.commit().as_ref())?;
         Ok(Self { payload, signature })
     }
-
-    pub fn validate_sender(&self, sender: &T::SignatureKey) -> bool {
-        &self.payload.key == sender
-            && self
-                .payload
-                .key
-                .validate(&self.signature, self.payload.commit().as_ref())
-    }
 }
 
 impl<T: NodeType> HasViewNumber for ProposalFetchRequest<T> {

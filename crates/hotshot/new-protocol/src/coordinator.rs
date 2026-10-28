@@ -1609,12 +1609,14 @@ where
             MessageType::ProposalFetch(ProposalFetchMessage::Request(request)) => {
                 let view = request.view_number();
                 debug!(%node, %sender, %view, "recv proposal fetch request");
-                if !request.validate_sender(&message.sender) {
+                // The transport has already authenticated `message.sender`, so checking the
+                // request signature as well would only add a pairing on this loop per request.
+                if request.payload.key != message.sender {
                     warn!(
                         %node,
                         sender = %message.sender,
                         %view,
-                        "ignoring invalid proposal fetch request signature"
+                        "ignoring proposal fetch request for another key"
                     );
                     return None;
                 }
