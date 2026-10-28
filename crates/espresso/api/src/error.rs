@@ -17,7 +17,7 @@ pub enum AvailabilityError {
     /// Pruned by this node (410).
     #[error("{0}")]
     Pruned(String),
-    /// At or above this node's block height, so retrying later can succeed (400 / OUT_OF_RANGE).
+    /// At or above this node's block height, so retrying later can succeed (404 / OUT_OF_RANGE).
     #[error("{0}")]
     NotYetAvailable(String),
 }
@@ -46,7 +46,7 @@ pub enum ApiError {
     Internal(anyhow::Error),
     /// The node cannot serve the request right now (maps to 503 Service Unavailable / UNAVAILABLE)
     Unavailable(anyhow::Error),
-    /// Past this node's block height (maps to 400 Bad Request / OUT_OF_RANGE)
+    /// Past this node's block height (maps to 404 Not Found / OUT_OF_RANGE)
     OutOfRange(anyhow::Error),
 }
 
