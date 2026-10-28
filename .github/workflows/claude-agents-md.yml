@@ -114,6 +114,7 @@ jobs:
             doc/**
           title: "[Bot] Update AGENTS.md"
           commit-message: "docs(agents): update AGENTS.md and referenced docs"
+          author: github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>
           body-path: ./tmp/pr-body.md
           labels: |
             agent-generated
