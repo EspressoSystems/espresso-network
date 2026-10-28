@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, ensure};
 use committable::Commitment;
 use espresso_types::{
     Certificate2, FeeAccount, FeeMerkleTree, Leaf2,
@@ -9,7 +9,7 @@ use hotshot_types::{data::VidShare, simple_certificate::LightClientStateUpdateCe
 use request_response::{Serializable, request::Request as RequestTrait};
 use serde::{Deserialize, Serialize};
 
-use crate::{SeqTypes, api::BlocksFrontier};
+use crate::{SeqTypes, api::BlocksFrontier, catchup::MAX_CATCHUP_ACCOUNTS};
 
 // Some type aliases for readability
 type Height = u64;
@@ -74,7 +74,22 @@ impl RequestTrait for Request {
     type Response = Response;
 
     fn validate(&self) -> Result<()> {
-        // Right now, all requests are valid
+        let accounts = match self {
+            Request::Accounts(_, _, accounts) => accounts.len(),
+            Request::RewardAccountsV2(_, _, accounts) => accounts.len(),
+            Request::RewardAccountsV1(_, _, accounts) => accounts.len(),
+            Request::Leaf(_)
+            | Request::ChainConfig(_)
+            | Request::BlocksFrontier(..)
+            | Request::VidShare(..)
+            | Request::StateCert(_)
+            | Request::RewardMerkleTreeV2(..)
+            | Request::Cert2(_) => 0,
+        };
+        ensure!(
+            accounts <= MAX_CATCHUP_ACCOUNTS,
+            "cannot fetch {accounts} accounts, the limit is {MAX_CATCHUP_ACCOUNTS}"
+        );
         Ok(())
     }
 }
