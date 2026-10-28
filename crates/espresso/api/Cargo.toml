@@ -15,10 +15,12 @@ erased-serde = { workspace = true }
 espresso-types = { workspace = true }
 espresso-utils = { workspace = true }
 futures = { workspace = true }
+hotshot-contract-adapter = { workspace = true }
 hotshot-query-service-types = { workspace = true }
 hotshot-types = { workspace = true }
 http-wire = { workspace = true, features = ["server"] }
 jf-merkle-tree-compat = { workspace = true }
+light-client = { workspace = true }
 pbjson = { workspace = true }
 prost = { workspace = true }
 schemars = { workspace = true }
