@@ -152,16 +152,14 @@ impl<T: NodeType> Cliquenet<T> {
         &self.inner
     }
 
-    /// Take both ends of the query lane and start accepting the query lanes
-    /// peers open.
+    /// Take both ends of the query lane.
     ///
-    /// Returns `None` once taken. Take it only when the receiver will be
-    /// drained, since accepted lanes deliver there. Query messages are raw
+    /// Returns `None` once taken. Peers' query lanes are refused until
+    /// [`QuerySender::accept_query_lanes`] is called. Query messages are raw
     /// bytes addressed by signature key, and never reach
     /// [`Cliquenet::receive`].
     pub fn take_query_lane(&mut self) -> Option<(QuerySender<T>, QueryReceiver<T>)> {
         let receiver = self.query_receiver.take()?;
-        self.inner.sender.accept_query().ok()?;
         let sender = QuerySender {
             sender: self.inner.sender.clone(),
             shared: Arc::clone(&self.inner.shared),
@@ -526,6 +524,14 @@ impl<T: NodeType> QuerySender<T> {
         Ok(())
     }
 
+    /// Accept the query lanes peers open from now on.
+    ///
+    /// Call this once something drains the [`QueryReceiver`], since accepted
+    /// lanes deliver there.
+    pub fn accept_query_lanes(&self) -> Result<(), NetworkError> {
+        Ok(self.sender.accept_query()?)
+    }
+
     /// How long to wait to hear back from a peer after sending to it.
     pub fn receive_timeout(&self) -> Duration {
         self.sender.config().receive_timeout()
@@ -590,7 +596,8 @@ impl<T: NodeType> QueryReceiver<T> {
 pub enum QueryEvent<K> {
     /// A message from the peer.
     Message(K, Bytes),
-    /// The peer's query lane could not be opened, so nothing queued for it was sent.
+    /// The peer's query lane could not be opened or could not take a message, so something
+    /// queued for it was not sent.
     Unreachable(K),
 }
 

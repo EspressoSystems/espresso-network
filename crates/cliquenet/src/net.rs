@@ -49,7 +49,8 @@ pub struct QueryReceiver {
 pub enum QueryEvent {
     /// A message from the party.
     Message(PublicKey, Bytes),
-    /// The party's query lane could not be opened, so nothing queued for it was sent.
+    /// The party's query lane could not be opened or could not take a message, so something
+    /// queued for it was not sent.
     Unreachable(PublicKey),
 }
 

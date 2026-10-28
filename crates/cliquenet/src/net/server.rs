@@ -326,10 +326,18 @@ impl Server {
                     ((key, lane), Ok(None)) => {
                         self.metrics.set(&self.key, CONNECT_TASKS, self.connect_tasks.len());
                         debug!(name = %self.conf.name, node = %self.key, peer = %key, ?lane, "lane unavailable");
-                        if let Some(party) = self.parties.get_mut(&key) {
-                            party.link_mut(lane).outbox.clear();
-                        }
-                        if self.query_unreachable.send(key).is_err() {
+                        let unreachable = match self.parties.get_mut(&key).map(|party| party.link_mut(lane)) {
+                            Some(link) => match link.peer {
+                                PeerState::None => {
+                                    link.outbox.clear();
+                                    true
+                                }
+                                // A lane the party opened to us meanwhile carries the queue.
+                                PeerState::Connected(_) | PeerState::Replace(_) | PeerState::Reconnect(_) => false,
+                            },
+                            None => true,
+                        };
+                        if unreachable && self.query_unreachable.send(key).is_err() {
                             debug!(name = %self.conf.name, node = %self.key, "query channel closed");
                         }
                     }
@@ -381,8 +389,12 @@ impl Server {
                                 link.peer = PeerState::Reconnect(peer);
                                 self.spawn_connect(key, lane, addr);
                             }
-                            // A query link is reopened by the next send, so nothing is kept.
-                            (Lane::Query, PeerState::None | PeerState::Connected(_) | PeerState::Reconnect(_)) => {}
+                            // Nothing is kept, and the link is redialed only for messages still queued on it.
+                            (Lane::Query, PeerState::None | PeerState::Connected(_) | PeerState::Reconnect(_)) => {
+                                if link.outbox.len() > 0 && !self.connect_tasks.contains_key(&(key, lane)) {
+                                    self.spawn_connect(key, lane, addr);
+                                }
+                            }
                         }
                     }
                     ((key, lane), Err(err)) => {
@@ -735,21 +747,18 @@ impl Server {
             return;
         }
         let msgid = self.next_msgid();
-        let Some(party) = self.parties.get(&to) else {
-            warn!(
-                name = %self.conf.name,
-                node = %self.key,
-                peer = %to,
-                "query target not found"
-            );
-            return;
-        };
         // The same budget the peer applies to its own messages in flight, so one party cannot
         // pile up replies in memory.
-        if party.query.outbox.len() >= self.conf.peer_budget.get() {
-            debug!(name = %self.conf.name, node = %self.key, peer = %to, "query outbox full");
-            return;
-        }
+        let party = match self.parties.get(&to) {
+            Some(party) if party.query.outbox.len() < self.conf.peer_budget.get() => party,
+            Some(_) | None => {
+                debug!(name = %self.conf.name, node = %self.key, peer = %to, "query message dropped");
+                if self.query_unreachable.send(to).is_err() {
+                    debug!(name = %self.conf.name, node = %self.key, "query channel closed");
+                }
+                return;
+            },
+        };
         // The tag is the queueing time as the age based GC of query links reads it.
         party
             .query

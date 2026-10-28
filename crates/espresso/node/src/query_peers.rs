@@ -118,6 +118,9 @@ impl QueryPeers {
             silent: Default::default(),
         }));
         tasks.spawn("query peers", peers.clone().run(receiver));
+        if let Err(err) = peers.0.sender.accept_query_lanes() {
+            error!(err = %format_args!("{err:#}"), "cannot accept query lanes");
+        }
         peers
     }
 
@@ -127,28 +130,32 @@ impl QueryPeers {
         let peer = self.choose_peer().await.context("no staked peer to ask")?;
         let id = self.0.next_id.fetch_add(1, Ordering::Relaxed);
         let (waiter, reply) = oneshot::channel();
-        let _pending = Pending::new(self, (peer, id), waiter);
+        let mut pending = Pending::new(self, (peer, id), waiter);
         let message = Message::Request { id, request };
         if let Err(err) = self.0.sender.send(&peer, bincode::serialize(&message)?) {
-            self.0.serving.lock().remove(&peer);
             self.0.silent.lock().insert(peer);
             return Err(err.into());
         }
 
         let wait = self.0.sender.receive_timeout();
         let Ok(Ok(response)) = timeout(wait, reply).await else {
-            self.0.serving.lock().remove(&peer);
             self.0.silent.lock().insert(peer);
             bail!("peer {peer} did not answer");
         };
+        pending.answered = true;
         match response {
             Ok(response) => {
                 self.0.serving.lock().insert(peer);
                 Ok(response)
             },
             Err(err) => {
-                self.0.serving.lock().remove(&peer);
-                Err(err).with_context(|| format!("peer {peer} failed"))
+                // A peer that lacks the data is still serving, unlike one that fails.
+                if err.status() != StatusCode::NOT_FOUND {
+                    self.0.serving.lock().remove(&peer);
+                }
+                // As text, so one peer's miss does not read as the absence a not found means to
+                // `FallbackClient`, which would then stop asking.
+                bail!("peer {peer} failed: {err}")
             },
         }
     }
@@ -282,9 +289,13 @@ async fn answer(handlers: &QueryHandlers, request: QueryRequest) -> Result<Erase
 }
 
 /// Registers a call's waiter and removes it when the call ends, however it ends.
+///
+/// A call that ends before its reply, as when a faster source wins and the call is dropped, takes
+/// the peer out of the preferred set, since nothing else would record that the peer was slow.
 struct Pending<'a> {
     peers: &'a QueryPeers,
     key: (PubKey, u64),
+    answered: bool,
 }
 
 impl<'a> Pending<'a> {
@@ -294,12 +305,20 @@ impl<'a> Pending<'a> {
         waiter: oneshot::Sender<Reply>,
     ) -> Pending<'a> {
         peers.0.pending.lock().insert(key, waiter);
-        Pending { peers, key }
+        Pending {
+            peers,
+            key,
+            answered: false,
+        }
     }
 }
 
 impl Drop for Pending<'_> {
     fn drop(&mut self) {
         self.peers.0.pending.lock().remove(&self.key);
+        if !self.answered {
+            let (peer, _) = self.key;
+            self.peers.0.serving.lock().remove(&peer);
+        }
     }
 }
