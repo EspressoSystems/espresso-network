@@ -1,5 +1,7 @@
 # Espresso-audits
 
+For the latest audit reports, see [EspressoSystems/espresso-audits](https://github.com/EspressoSystems/espresso-audits).
+
 External audits
 
 | Team                                           | Scope & Delivery date                    | Report                                                           |

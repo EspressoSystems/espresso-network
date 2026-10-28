@@ -73,7 +73,7 @@ use crate::{
     context::TaskList,
     persistence::{ChainConfigPersistence, sql::Options as SqlOptions},
     request_response::data_source::Storage as RequestResponseStorage,
-    state::{compute_state_update, update_state_storage_loop},
+    state::{EmptyStateStart, compute_state_update, update_state_storage_loop},
     util::BoundedJoinSet,
 };
 
@@ -185,9 +185,14 @@ pub(in crate::api) async fn init_query_module(
         let state = state.clone();
         async move { state.node_state().await }
     };
+    let empty_state_start = if mod_opt.prune {
+        EmptyStateStart::RecentBoundary
+    } else {
+        EmptyStateStart::Genesis
+    };
     tasks.spawn(
         "merklized state storage update loop",
-        update_state_storage_loop(ds.clone(), get_node_state, light_client),
+        update_state_storage_loop(ds.clone(), get_node_state, light_client, empty_state_start),
     );
 
     // Archive mode disables the pruner, so nothing else bounds the merklized state tables.
@@ -209,7 +214,6 @@ pub(in crate::api) async fn init_query_module(
         submit: api.submit.is_some(),
         config: api.config.is_some(),
         explorer: api.explorer.is_some(),
-        light_client: api.light_client.is_some(),
         ..Default::default()
     };
     let max_connections = api.http.max_connections;
@@ -2212,6 +2216,21 @@ pub(crate) mod impl_testable_data_source {
             let pruned = tx.load_state_pruned_height().await.unwrap();
             let head = tx.get_last_state_height().await.unwrap() as u64;
             (pruned, head)
+        }
+
+        async fn state_start_height(db: &SqlStorage) -> anyhow::Result<Option<u64>> {
+            Ok(db.read().await?.load_state_start_height().await?)
+        }
+
+        async fn lowest_block_tree_node(db: &SqlStorage) -> anyhow::Result<u64> {
+            let mut tx = db.read().await?;
+            let lowest: Option<i64> =
+                sqlx::query_scalar("SELECT min(created) FROM block_merkle_tree")
+                    .fetch_one(tx.as_mut())
+                    .await?;
+            lowest
+                .map(|height| height as u64)
+                .context("no block tree nodes")
         }
 
         async fn insert_leaf(

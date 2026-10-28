@@ -127,7 +127,7 @@ pub struct Options {
     /// Store data in an embedded SQLite database instead of Postgres.
     ///
     /// The database lives under ESPRESSO_NODE_STORAGE_PATH, and the Postgres options are ignored.
-    #[clap(long, env = "ESPRESSO_NODE_EMBEDDED_DB", value_parser = clap::builder::FalseyValueParser::new())]
+    #[clap(long, env = "ESPRESSO_NODE_EMBEDDED_DB", value_parser = clap::builder::BoolishValueParser::new())]
     pub embedded_db: bool,
 
     #[clap(flatten)]
@@ -159,6 +159,11 @@ pub struct Options {
     /// - batch_size: 100
     /// - max_usage: 80%
     /// - interval: 1 hour
+    ///
+    /// A pruned node with no merklized state starts it from a recent epoch boundary. Its trees then
+    /// lack block proofs below that boundary, and fee accounts that no block after it touched. They
+    /// stay incomplete after a switch to `--archive`: complete trees need a replay from genesis,
+    /// which runs only on a database with no merklized state.
     #[clap(long, env = "ESPRESSO_NODE_DATABASE_PRUNE")]
     pub(crate) prune: bool,
 
@@ -677,26 +682,39 @@ mod test {
     use super::*;
 
     #[test]
-    fn embedded_db_accepts_the_usual_spellings_of_a_boolean() {
+    fn embedded_db_is_read_from_the_env_as_a_strict_boolean() {
         use clap::{CommandFactory as _, FromArgMatches as _};
 
-        // A variable no other test reads, so setting it cannot race them.
-        const VAR: &str = "ESPRESSO_NODE_EMBEDDED_DB_SPELLING_TEST";
-        let parse = |value: &str| {
-            unsafe { std::env::set_var(VAR, value) };
-            let matches = Options::command()
-                .mut_arg("embedded_db", |arg| arg.env(VAR))
-                .try_get_matches_from(["espresso-node"])
-                .unwrap();
-            Options::from_arg_matches(&matches).unwrap().embedded_db
-        };
-        for value in ["true", "TRUE", "1", "yes", "on"] {
-            assert!(parse(value), "{value:?}");
+        fn parse(command: &clap::Command, value: &str) -> Option<bool> {
+            let matches = command
+                .clone()
+                .try_get_matches_from(["espresso-node", "--embedded-db", value])
+                .ok()?;
+            Some(Options::from_arg_matches(&matches).unwrap().embedded_db)
         }
-        for value in ["false", "False", "0", "no", "off", ""] {
-            assert!(!parse(value), "{value:?}");
+
+        let command = Options::command();
+        let arg = command
+            .get_arguments()
+            .find(|arg| arg.get_id() == "embedded_db")
+            .unwrap();
+        assert_eq!(
+            arg.get_env(),
+            Some(std::ffi::OsStr::new("ESPRESSO_NODE_EMBEDDED_DB"))
+        );
+
+        // Feeds the value on the command line so the test runs the variable's parser without
+        // mutating the process environment that concurrent tests read.
+        let command = command.mut_arg("embedded_db", |arg| arg.action(clap::ArgAction::Set));
+        for value in ["true", "TRUE", "t", "1", "yes", "Y", "on"] {
+            assert_eq!(parse(&command, value), Some(true), "{value:?}");
         }
-        unsafe { std::env::remove_var(VAR) };
+        for value in ["false", "False", "f", "0", "no", "N", "off"] {
+            assert_eq!(parse(&command, value), Some(false), "{value:?}");
+        }
+        for value in ["maybe", "enabled", "2"] {
+            assert_eq!(parse(&command, value), None, "{value:?}");
+        }
     }
 
     #[test]

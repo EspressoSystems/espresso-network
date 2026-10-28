@@ -688,7 +688,7 @@ mod test {
             "espresso",
         ])
         .unwrap();
-        // The parsed default follows the build (and later the environment), not this test.
+        // The parsed default follows ESPRESSO_NODE_EMBEDDED_DB, not this test.
         opt.embedded_db = false;
         let opt = persistence::sql::postgres::Options::try_from(opt).unwrap();
         let LightClientDbOptions::Postgres(lc) = opt.light_client_db(&Query::default()).unwrap()
@@ -742,6 +742,13 @@ pub mod testing {
 
         /// The state pruned height, then the state head.
         async fn state_heights(db: &Self::SqlStorage) -> (Option<u64>, u64);
+
+        /// The height the state loop recorded as its start, if it started from a boundary.
+        async fn state_start_height(db: &Self::SqlStorage) -> anyhow::Result<Option<u64>>;
+
+        /// The lowest height with a block tree node, which is the first snapshot the state loop
+        /// stored.
+        async fn lowest_block_tree_node(db: &Self::SqlStorage) -> anyhow::Result<u64>;
 
         async fn insert_leaf(
             db: &Self::SqlStorage,

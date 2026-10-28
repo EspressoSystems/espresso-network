@@ -1227,14 +1227,7 @@ pub(crate) trait RewardMerkleTreeDataSource: Send + Sync + Clone + 'static {
         merkle_tree: &RewardMerkleTreeV2,
     ) -> impl Send + Future<Output = anyhow::Result<()>> {
         async move {
-            // The merklized state loop always applies full blocks, so an incomplete
-            // tree here indicates something is seriously wrong.
-            let tree_data = TryInto::<RewardMerkleTreeV2Data>::try_into(merkle_tree).inspect_err(
-                |err| tracing::error!(%err, height, "cannot persist incomplete RewardMerkleTreeV2"),
-            )?;
-            let serialization =
-                bincode::serialize(&tree_data).context("Merkle tree serialization failed")?;
-            self.persist_tree(height, serialization).await?;
+            self.save_reward_tree_v2(height, merkle_tree).await?;
 
             // Skip garbage collection in tests
             if cfg!(any(test, feature = "testing")) {
@@ -1287,6 +1280,25 @@ pub(crate) trait RewardMerkleTreeDataSource: Send + Sync + Clone + 'static {
             }
 
             Ok(())
+        }
+    }
+
+    /// Store `merkle_tree`, the whole reward tree at `height`, as key-value pairs.
+    fn save_reward_tree_v2(
+        &self,
+        height: u64,
+        merkle_tree: &RewardMerkleTreeV2,
+    ) -> impl Send + Future<Output = anyhow::Result<()>> {
+        async move {
+            // Every caller holds the whole tree: the merklized state loop always applies full
+            // blocks, and the trees it starts from are whole. So an incomplete tree here indicates
+            // something is seriously wrong.
+            let tree_data = TryInto::<RewardMerkleTreeV2Data>::try_into(merkle_tree).inspect_err(
+                |err| tracing::error!(%err, height, "cannot persist incomplete RewardMerkleTreeV2"),
+            )?;
+            let serialization =
+                bincode::serialize(&tree_data).context("Merkle tree serialization failed")?;
+            self.persist_tree(height, serialization).await
         }
     }
 
@@ -3545,6 +3557,7 @@ mod test {
         consensus::{
             header::HeaderProof,
             leaf::{LeafProof, LeafProofHint},
+            namespace::NamespaceProof,
             payload::PayloadProof,
         },
         testing::EpochChangeQuorum,
@@ -3681,6 +3694,7 @@ mod test {
         legacy_chain::LegacyChain,
         persistence,
         persistence::no_storage,
+        state::EmptyStateStart,
         testing::{
             TestConfig, TestConfigBuilder, decided_leaves, wait_for_decide_on_handle,
             wait_for_epochs,
@@ -3886,9 +3900,7 @@ mod test {
         let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
         let storage = D::create_storage().await;
         let config = TestNetworkConfigBuilder::default()
-            .api_config(
-                D::options(&storage, Options::with_port(port)).light_client(Default::default()),
-            )
+            .api_config(D::options(&storage, Options::with_port(port)))
             .network_config(TestConfigBuilder::default().build())
             .build();
         let _network = TestNetwork::new(config, TEST_UPGRADE).await;
@@ -4123,9 +4135,7 @@ mod test {
             .try_into()
             .unwrap();
         let config = TestNetworkConfigBuilder::<NUM_NODES, _, _>::with_num_nodes()
-            .api_config(
-                D::options(&dbs[0], Options::with_port(port)).light_client(Default::default()),
-            )
+            .api_config(D::options(&dbs[0], Options::with_port(port)))
             .persistences(persistence)
             .catchups(std::array::from_fn(|_| state_peers()))
             .network_config(TestConfigBuilder::default().build())
@@ -5687,7 +5697,6 @@ mod test {
             .api_config(
                 Options::with_port(api_port)
                     .catchup(Default::default())
-                    .light_client(Default::default())
                     .config(Default::default())
                     .submit(Default::default())
                     .query_sql(Query::default(), D::tmp_options(&storage[0])),
@@ -5887,7 +5896,6 @@ mod test {
                 D::tmp_options(storage),
             )
             .catchup(Default::default())
-            .light_client(Default::default())
             .config(Default::default())
             .submit(Default::default())
             .serve(move |metrics, sink, _| {
@@ -6131,7 +6139,6 @@ mod test {
             .api_config(
                 Options::with_port(api_port)
                     .catchup(Default::default())
-                    .light_client(Default::default())
                     .query_sql(
                         Query {
                             peers: vec![query_url.clone()],
@@ -6163,50 +6170,15 @@ mod test {
         let cfg = network.cfg.clone();
         let peer_url = api_url.clone();
         let start_query_node = move |db: persistence::sql::Options| {
-            let cfg = cfg.clone();
-            let genesis_state = genesis_state.clone();
-            let peer_url = peer_url.clone();
-            async move {
-                let opt = Options::with_port(query_port)
-                    .catchup(Default::default())
-                    .light_client(Default::default())
-                    .query_sql(
-                        Query {
-                            peers: vec![peer_url.clone()],
-                            ..Default::default()
-                        },
-                        db.clone(),
-                    );
-                let ctx = opt
-                    .serve(move |metrics, consumer, storage| {
-                        async move {
-                            Ok(cfg
-                                .init_node(
-                                    1,
-                                    genesis_state,
-                                    D::sql_persistence_options(db),
-                                    Some(StatePeers::<SequencerApiVersion>::from_urls(
-                                        vec![peer_url],
-                                        Default::default(),
-                                        Duration::from_secs(2),
-                                        &NoMetrics,
-                                    )),
-                                    storage,
-                                    &*metrics,
-                                    test_helpers::STAKE_TABLE_CAPACITY_FOR_TEST,
-                                    consumer,
-                                    TEST_UPGRADE,
-                                    Default::default(),
-                                )
-                                .await)
-                        }
-                        .boxed()
-                    })
-                    .await
-                    .expect("second query node should start");
-                ctx.start_consensus().await;
-                ctx
-            }
+            serve_query_node(
+                cfg.clone(),
+                genesis_state.clone(),
+                D::sql_persistence_options(db.clone()),
+                db,
+                Options::with_port(query_port).catchup(Default::default()),
+                vec![peer_url.clone()],
+                peer_url.clone(),
+            )
         };
 
         let mut query_node = start_query_node(D::tmp_options(&storage[1])).await;
@@ -7093,9 +7065,7 @@ mod test {
         let config = TestNetworkConfigBuilder::with_num_nodes()
             .api_config(D::options(
                 &storage[0],
-                Options::with_port(api_port)
-                    .catchup(Default::default())
-                    .light_client(Default::default()),
+                Options::with_port(api_port).catchup(Default::default()),
             ))
             .network_config(network_config)
             .persistences(persistence.clone())
@@ -7303,9 +7273,7 @@ mod test {
         let config = TestNetworkConfigBuilder::with_num_nodes()
             .api_config(D::options(
                 &storage[0],
-                Options::with_port(api_port)
-                    .catchup(Default::default())
-                    .light_client(Default::default()),
+                Options::with_port(api_port).catchup(Default::default()),
             ))
             .network_config(TestConfigBuilder::default().build())
             .persistences(persistence.clone())
@@ -7337,49 +7305,15 @@ mod test {
             let db_opt = db_opt.clone();
             let api_url = api_url.clone();
             move || {
-                let cfg = cfg.clone();
-                let genesis_state = genesis_state.clone();
-                let node_persistence = node_persistence.clone();
-                let db_opt = db_opt.clone();
-                let api_url = api_url.clone();
-                async move {
-                    let opt = Options::with_port(query_port).query_sql(
-                        Query {
-                            peers: vec![api_url.clone()],
-                            ..Default::default()
-                        },
-                        db_opt,
-                    );
-                    let ctx = opt
-                        .serve(move |metrics, consumer, storage| {
-                            async move {
-                                Ok(cfg
-                                    .init_node(
-                                        1,
-                                        genesis_state,
-                                        node_persistence,
-                                        Some(StatePeers::<StaticVersion<0, 1>>::from_urls(
-                                            vec![api_url],
-                                            Default::default(),
-                                            Duration::from_secs(2),
-                                            &NoMetrics,
-                                        )),
-                                        storage,
-                                        &*metrics,
-                                        STAKE_TABLE_CAPACITY_FOR_TEST,
-                                        consumer,
-                                        TEST_UPGRADE,
-                                        Default::default(),
-                                    )
-                                    .await)
-                            }
-                            .boxed()
-                        })
-                        .await
-                        .expect("query node should start");
-                    ctx.start_consensus().await;
-                    ctx
-                }
+                serve_query_node(
+                    cfg.clone(),
+                    genesis_state.clone(),
+                    node_persistence.clone(),
+                    db_opt.clone(),
+                    Options::with_port(query_port),
+                    vec![api_url.clone()],
+                    api_url.clone(),
+                )
             }
         };
 
@@ -7521,9 +7455,7 @@ mod test {
         let config = TestNetworkConfigBuilder::with_num_nodes()
             .api_config(D::options(
                 &storage[0],
-                Options::with_port(api_port)
-                    .catchup(Default::default())
-                    .light_client(Default::default()),
+                Options::with_port(api_port).catchup(Default::default()),
             ))
             .network_config(
                 TestConfigBuilder::default()
@@ -7561,49 +7493,15 @@ mod test {
             let db_opt = db_opt.clone();
             let api_url = api_url.clone();
             move |availability_peers: Vec<Url>| {
-                let cfg = cfg.clone();
-                let genesis_state = genesis_state.clone();
-                let node_persistence = node_persistence.clone();
-                let db_opt = db_opt.clone();
-                let api_url = api_url.clone();
-                async move {
-                    let opt = Options::with_port(query_port).query_sql(
-                        Query {
-                            peers: availability_peers,
-                            ..Default::default()
-                        },
-                        db_opt,
-                    );
-                    let ctx = opt
-                        .serve(move |metrics, consumer, storage| {
-                            async move {
-                                Ok(cfg
-                                    .init_node(
-                                        1,
-                                        genesis_state,
-                                        node_persistence,
-                                        Some(StatePeers::<StaticVersion<0, 1>>::from_urls(
-                                            vec![api_url],
-                                            Default::default(),
-                                            Duration::from_secs(2),
-                                            &NoMetrics,
-                                        )),
-                                        storage,
-                                        &*metrics,
-                                        STAKE_TABLE_CAPACITY_FOR_TEST,
-                                        consumer,
-                                        TEST_UPGRADE,
-                                        Default::default(),
-                                    )
-                                    .await)
-                            }
-                            .boxed()
-                        })
-                        .await
-                        .expect("query node should start");
-                    ctx.start_consensus().await;
-                    ctx
-                }
+                serve_query_node(
+                    cfg.clone(),
+                    genesis_state.clone(),
+                    node_persistence.clone(),
+                    db_opt.clone(),
+                    Options::with_port(query_port),
+                    availability_peers,
+                    api_url.clone(),
+                )
             }
         };
 
@@ -7714,6 +7612,348 @@ mod test {
         Ok(())
     }
 
+    /// A query node with no state of its own on a pruned database, as a fresh pruned node, starts
+    /// its state from a snapshot at a recent epoch boundary, from peers, instead of replaying the
+    /// chain from genesis. The loop gets past the next boundary only if the reward tree it fetched
+    /// is whole. The snapshot has no fee accounts, and from V0.6 on no block reads one, so the node
+    /// answers that the fee state is missing from the boundary on, and pruned below it. A
+    /// brand-new database, which the data pruner has not stamped yet, starts from a boundary too.
+    /// A node without a pruner, here one that pruned before and has turned pruning off, still
+    /// replays from genesis, on leaves from peers up to the data pruned height.
+    #[rstest]
+    #[case::recent_boundary(EmptyStateStart::RecentBoundary, true)]
+    #[case::fresh_database(EmptyStateStart::RecentBoundary, false)]
+    #[case::genesis(EmptyStateStart::Genesis, true)]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_state_loop_starts_on_pruned_data<D: TestableSqlDataSource>(
+        #[values(PhantomData::<Postgres>, PhantomData::<Sqlite>)] _d: PhantomData<D>,
+        #[case] expected: EmptyStateStart,
+        #[case] stamp_pruned_height: bool,
+    ) -> anyhow::Result<()> {
+        let network = PrunedStartNetwork::<D>::start().await?;
+        // Let the chain run an epoch past the data pruned height stamped below, so a recent
+        // boundary lies above it.
+        let stamp = 3 * PRUNED_START_EPOCH_HEIGHT + PRUNED_START_EPOCH_HEIGHT / 2;
+        wait_until_block_height(
+            &network.api_client,
+            "status/block-height",
+            stamp + PRUNED_START_EPOCH_HEIGHT,
+        )
+        .await;
+        let (db_opt, db) = network.query_database(expected).await?;
+        // Unless the database is brand new, stamp a data pruned height on it, as if the data
+        // pruner had run before the loop started.
+        let pruned = if stamp_pruned_height {
+            D::prune_data_to(&db, stamp).await?;
+            stamp
+        } else {
+            0
+        };
+        // `status/block-height` counts blocks, so the tip is one below it.
+        let tip = network
+            .api_client
+            .get::<u64>("status/block-height")
+            .send()
+            .await?
+            - 1;
+        let (_query_node, query_client) = network.start_query_node(db_opt).await;
+
+        let deadline = Instant::now() + Duration::from_secs(180);
+        let start = wait_for_state_start::<D>(&db, deadline).await?;
+        let state_start = D::state_start_height(&db).await?;
+        check_state_start(expected, start, state_start, pruned, tip)?;
+        let past = start.max(pruned) + PRUNED_START_EPOCH_HEIGHT;
+        wait_for_state_head_above::<D>(&db, past, start, deadline).await?;
+        let lowest = D::lowest_block_tree_node(&db).await?;
+        ensure!(
+            lowest == start,
+            "state below the start {start} was computed, from {lowest}"
+        );
+
+        wait_until_block_height(&network.api_client, "fee-state/block-height", past + 1).await;
+        match expected {
+            EmptyStateStart::RecentBoundary => {
+                check_fee_state_from_start(&query_client, start, past, network.fee_recipient)
+                    .await?
+            },
+            EmptyStateStart::Genesis => {
+                let fee_state = format!("fee-state/{past}/{}", network.fee_recipient);
+                assert_same_response(&network.api_client, &query_client, &fee_state).await?;
+            },
+        }
+        Ok(())
+    }
+
+    /// The epoch height of the network in [`test_state_loop_starts_on_pruned_data`].
+    const PRUNED_START_EPOCH_HEIGHT: u64 = 10;
+
+    /// The network of [`test_state_loop_starts_on_pruned_data`]. Node 0 is the API node, the only
+    /// peer the query node fetches the snapshot, leaves and accounts from. Node 1 is shut down, to
+    /// come back as the query node on its own database, with no query data.
+    struct PrunedStartNetwork<D: TestableSqlDataSource> {
+        network: TestNetwork<D::Options, 5>,
+        storage: Vec<D::Storage>,
+        /// Node 1's consensus persistence.
+        persistence: D::Options,
+        api_url: Url,
+        api_client: Client<ClientErr, StaticVersion<0, 1>>,
+        genesis_state: ValidatedState,
+        fee_recipient: FeeAccount,
+    }
+
+    impl<D: TestableSqlDataSource> PrunedStartNetwork<D> {
+        async fn start() -> anyhow::Result<Self> {
+            let storage = join_all((0..5).map(|_| D::create_storage())).await;
+            let persistence: [_; 5] = storage
+                .iter()
+                .map(D::persistence_options)
+                .collect::<Vec<_>>()
+                .try_into()
+                .unwrap();
+            let api_port = reserve_tcp_port().expect("OS should have ephemeral ports available");
+            let api_url: Url = format!("http://localhost:{api_port}").parse().unwrap();
+            let config = TestNetworkConfigBuilder::with_num_nodes()
+                .api_config(D::options(
+                    &storage[0],
+                    Options::with_port(api_port).catchup(Default::default()),
+                ))
+                .network_config(
+                    TestConfigBuilder::default()
+                        .epoch_height(PRUNED_START_EPOCH_HEIGHT)
+                        .build(),
+                )
+                .persistences(persistence.clone())
+                .catchups(std::array::from_fn(|_| api_state_peers(&api_url)))
+                .pos_hook(
+                    DelegationConfig::MultipleDelegators,
+                    StakeTableContractVersion::V3,
+                    TEST_UPGRADE,
+                )
+                .await?
+                .build();
+            let genesis_state = config.states()[0].clone();
+            let fee_recipient = genesis_state
+                .chain_config
+                .resolve()
+                .context("genesis chain config")?
+                .fee_recipient;
+            let mut network = TestNetwork::new(config, TEST_UPGRADE).await;
+            network.peers[0].shut_down().await;
+            network.peers.remove(0);
+            let api_client = Client::new(api_url.clone());
+            assert!(api_client.connect(Some(Duration::from_secs(60))).await);
+            Ok(Self {
+                network,
+                storage,
+                persistence: persistence[1].clone(),
+                api_url,
+                api_client,
+                genesis_state,
+                fee_recipient,
+            })
+        }
+
+        /// The options of node 1's database, with pruning on when `expected` is a recent boundary,
+        /// and a connection to it.
+        async fn query_database(
+            &self,
+            expected: EmptyStateStart,
+        ) -> anyhow::Result<(persistence::sql::Options, D::SqlStorage)> {
+            // When pruning is on, the pruner never runs within the test.
+            const RETENTION: &str = "1000000s";
+            let mut db_opt = D::tmp_options(&self.storage[1]);
+            db_opt.prune = expected == EmptyStateStart::RecentBoundary;
+            db_opt.pruning = <persistence::sql::PruningOptions as clap::Parser>::parse_from([
+                "pruning",
+                "--target-retention",
+                RETENTION,
+                "--state-target-retention",
+                RETENTION,
+                "--interval",
+                "3600s",
+            ]);
+            let db = D::connect(&db_opt, StorageConnectionType::Query).await?;
+            Ok((db_opt, db))
+        }
+
+        /// Start node 1 as a query node on `db_opt`, and a client for its API.
+        async fn start_query_node(
+            &self,
+            db_opt: persistence::sql::Options,
+        ) -> (
+            SequencerContext<<D::Options as PersistenceOptions>::Persistence>,
+            Client<ClientErr, StaticVersion<0, 1>>,
+        ) {
+            let query_port = reserve_tcp_port().expect("OS should have ephemeral ports available");
+            let query_node = serve_query_node(
+                self.network.cfg.clone(),
+                self.genesis_state.clone(),
+                self.persistence.clone(),
+                db_opt,
+                Options::with_port(query_port),
+                vec![self.api_url.clone()],
+                self.api_url.clone(),
+            )
+            .await;
+            let query_client =
+                Client::new(format!("http://localhost:{query_port}").parse().unwrap());
+            (query_node, query_client)
+        }
+    }
+
+    /// Start node 1 of the network `cfg` as a query node on `db_opt`. It serves the API `api`, plus
+    /// the query module. Its availability fetcher asks `availability_peers`, and its state catchup
+    /// the API node at `api_url` alone.
+    async fn serve_query_node<const N: usize, P: PersistenceOptions>(
+        cfg: TestConfig<N>,
+        genesis_state: ValidatedState,
+        node_persistence: P,
+        db_opt: persistence::sql::Options,
+        api: Options,
+        availability_peers: Vec<Url>,
+        api_url: Url,
+    ) -> SequencerContext<P::Persistence> {
+        let opt = api.query_sql(
+            Query {
+                peers: availability_peers,
+                ..Default::default()
+            },
+            db_opt,
+        );
+        let state_peers = api_state_peers(&api_url);
+        let query_node = opt
+            .serve(move |metrics, consumer, storage| {
+                async move {
+                    Ok(cfg
+                        .init_node(
+                            1,
+                            genesis_state,
+                            node_persistence,
+                            Some(state_peers),
+                            storage,
+                            &*metrics,
+                            STAKE_TABLE_CAPACITY_FOR_TEST,
+                            consumer,
+                            TEST_UPGRADE,
+                            Default::default(),
+                        )
+                        .await)
+                }
+                .boxed()
+            })
+            .await
+            .expect("query node should start");
+        query_node.start_consensus().await;
+        query_node
+    }
+
+    /// State peers that are just the API node at `api_url`.
+    fn api_state_peers(api_url: &Url) -> StatePeers<StaticVersion<0, 1>> {
+        StatePeers::from_urls(
+            vec![api_url.clone()],
+            Default::default(),
+            Duration::from_secs(2),
+            &NoMetrics,
+        )
+    }
+
+    /// The height the state loop started from, once it has stored its first snapshot, which holds
+    /// the lowest block tree nodes.
+    async fn wait_for_state_start<D: TestableSqlDataSource>(
+        db: &D::SqlStorage,
+        deadline: Instant,
+    ) -> anyhow::Result<u64> {
+        while D::state_heights(db).await.1 == 0 {
+            ensure!(Instant::now() < deadline, "state loop did not start");
+            sleep(Duration::from_millis(200)).await;
+        }
+        D::lowest_block_tree_node(db).await
+    }
+
+    /// Check that the state loop started where `expected` says, given the data pruned height and
+    /// the tip when the query node started, and that it recorded a start from a boundary.
+    fn check_state_start(
+        expected: EmptyStateStart,
+        start: u64,
+        state_start: Option<u64>,
+        pruned: u64,
+        tip: u64,
+    ) -> anyhow::Result<()> {
+        let recorded = (expected == EmptyStateStart::RecentBoundary).then_some(start);
+        ensure!(
+            state_start == recorded,
+            "the recorded state start is {state_start:?}, not {recorded:?}"
+        );
+        match expected {
+            // The boundary is recent only if the node's first local block was the consensus tip,
+            // not a lower block it filled in first.
+            EmptyStateStart::RecentBoundary => ensure!(
+                start > pruned
+                    && start.is_multiple_of(PRUNED_START_EPOCH_HEIGHT)
+                    && start + PRUNED_START_EPOCH_HEIGHT > tip,
+                "state loop started at {start}, not at an epoch boundary above the data pruned \
+                 height {pruned} and within an epoch of the tip {tip} when the node started"
+            ),
+            // The genesis tree has no blocks, so the first block tree nodes are at height 1.
+            EmptyStateStart::Genesis => {
+                ensure!(start == 1, "state loop started at {start}, not at genesis")
+            },
+        }
+        Ok(())
+    }
+
+    async fn wait_for_state_head_above<D: TestableSqlDataSource>(
+        db: &D::SqlStorage,
+        past: u64,
+        start: u64,
+        deadline: Instant,
+    ) -> anyhow::Result<()> {
+        loop {
+            let (_, head) = D::state_heights(db).await;
+            if head > past {
+                return Ok(());
+            }
+            ensure!(
+                Instant::now() < deadline,
+                "state loop did not get past {past}: head {head}, started at {start}"
+            );
+            sleep(Duration::from_millis(200)).await;
+        }
+    }
+
+    /// Check the fee state a node that started from the boundary `start` serves: the snapshot holds
+    /// no fee account, and no block since has read one, so the state is missing at the boundary and
+    /// at `past` above it, and pruned below it.
+    async fn check_fee_state_from_start(
+        client: &Client<ClientErr, StaticVersion<0, 1>>,
+        start: u64,
+        past: u64,
+        account: FeeAccount,
+    ) -> anyhow::Result<()> {
+        for (height, status) in [
+            (start, StatusCode::NOT_FOUND),
+            (past, StatusCode::NOT_FOUND),
+            (start - 1, StatusCode::GONE),
+        ] {
+            // The state query reads the header there, which the node may still be fetching.
+            client
+                .get::<serde_json::Value>(&format!("availability/header/{height}"))
+                .send()
+                .await?;
+            let path = format!("fee-state/{height}/{account}");
+            let answer = client
+                .get::<serde_json::Value>(&path)
+                .send()
+                .await
+                .map_err(|err| err.status);
+            ensure!(
+                answer == Err(status),
+                "{path}: answered {answer:?}, not {status}"
+            );
+        }
+        Ok(())
+    }
+
     /// Forward connections on `port` to `target`, so a peer's URL is dead until this runs and
     /// reachable from then on.
     async fn forward_tcp(port: u16, target: u16) {
@@ -7760,10 +8000,7 @@ mod test {
         let (storage, persistence) = node_storage::<D, NUM_NODES>().await;
 
         let config = TestNetworkConfigBuilder::with_num_nodes()
-            .api_config(D::options(
-                &storage[0],
-                Options::with_port(api_port).light_client(Default::default()),
-            ))
+            .api_config(D::options(&storage[0], Options::with_port(api_port)))
             .network_config(network_config)
             .persistences(persistence.clone())
             .build();
@@ -9662,6 +9899,319 @@ mod test {
             .unwrap();
         assert!(v2_search.blocks.is_empty());
 
+        // A catching-up peer names state by its parent leaf's (height, view). The decided leaf's
+        // state is always in memory, while the view after it may not have a proposal yet.
+        let leaf = network.server.decided_leaf().await;
+        let catchup_height = leaf.height();
+        let catchup_view = leaf.view_number().u64();
+        // The prefunded builder account, so the fee routes prove a presence. Its address has hex
+        // letters, so lowercase and EIP-55 renderings differ.
+        let account = format!(
+            "{:x}",
+            TestConfig::<5>::builder_key().fee_account().address()
+        );
+        let v1_account: crate::api::AccountQueryData = client
+            .get(&format!(
+                "catchup/{catchup_height}/{catchup_view}/account/{account}"
+            ))
+            .send()
+            .await
+            .unwrap();
+        let v2_account: espresso_api::proto::FeeAccountProofResponse = client
+            .get(&format!(
+                "v2/catchup/fee-account?height={catchup_height}&view={catchup_view}&\
+                 address=0x{account}"
+            ))
+            .send()
+            .await
+            .unwrap();
+        // Compared as a value rather than a string, since v1 serves this `U256` as `0x` hex and
+        // v2 as a decimal string.
+        assert_eq!(
+            v2_account.balance.parse::<U256>().unwrap(),
+            v1_account.balance
+        );
+        assert_eq!(v2_account, v1_account.clone().into());
+        let v2_proof = v2_account.proof.unwrap();
+        assert_eq!(
+            v2_proof.account,
+            format!("0x{account}"),
+            "the proof names the account in lowercase hex"
+        );
+        assert!(matches!(
+            v2_proof.proof.unwrap().proof,
+            Some(espresso_api::proto::fee_merkle_proof::Proof::Presence(_))
+        ));
+
+        // Some catchup routes may have nothing to serve this early in the chain, so a route both
+        // versions refuse must at least refuse with the same status.
+        fn both_or_same_status<A, B>(
+            route: &str,
+            v1: Result<A, ClientErr>,
+            v2: Result<B, ClientErr>,
+        ) -> Option<(A, B)> {
+            match (v1, v2) {
+                (Ok(v1), Ok(v2)) => Some((v1, v2)),
+                (Err(v1), Err(v2)) => {
+                    assert_eq!(v2.status, v1.status, "{route}");
+                    None
+                },
+                (v1, v2) => panic!("{route}: v1 ok {}, v2 ok {}", v1.is_ok(), v2.is_ok()),
+            }
+        }
+
+        let v1_frontier: crate::api::BlocksFrontier = client
+            .get(&format!("catchup/{catchup_height}/{catchup_view}/blocks"))
+            .send()
+            .await
+            .unwrap();
+        let v2_frontier: espresso_api::proto::MerklePathResponse = client
+            .get(&format!(
+                "v2/catchup/blocks-frontier?height={catchup_height}&view={catchup_view}"
+            ))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(
+            v2_frontier,
+            espresso_api::proto::MerklePathResponse::from(&v1_frontier)
+        );
+
+        // v2's bincode trees are decoded as their type and compared with v1's through serde.
+        let accounts = vec![format!("0x{account}")];
+        let v1: espresso_types::FeeMerkleTree = client
+            .post(&format!("catchup/{catchup_height}/{catchup_view}/accounts"))
+            .body_json(&accounts)
+            .unwrap()
+            .send()
+            .await
+            .unwrap();
+        let v2: espresso_api::proto::FeeMerkleTreeResponse = client
+            .post("v2/catchup/fee-accounts")
+            .body_json(&espresso_api::proto::GetCatchupFeeAccountsRequest {
+                height: Some(catchup_height),
+                view: Some(catchup_view),
+                addresses: accounts.clone(),
+            })
+            .unwrap()
+            .send()
+            .await
+            .unwrap();
+        let v2: espresso_types::FeeMerkleTree = bincode::deserialize(&v2.tree).unwrap();
+        assert_eq!(
+            serde_json::to_value(&v2).unwrap(),
+            serde_json::to_value(&v1).unwrap()
+        );
+        let v1 = client
+            .post::<espresso_types::v0_3::RewardMerkleTreeV1>(&format!(
+                "catchup/{catchup_height}/{catchup_view}/reward-accounts"
+            ))
+            .body_json(&accounts)
+            .unwrap()
+            .send()
+            .await;
+        let v2 = client
+            .post::<espresso_api::proto::RewardMerkleTreeV1Response>("v2/catchup/reward-accounts")
+            .body_json(&espresso_api::proto::GetCatchupRewardAccountsRequest {
+                height: Some(catchup_height),
+                view: Some(catchup_view),
+                addresses: accounts,
+            })
+            .unwrap()
+            .send()
+            .await;
+        if let Some((v1, v2)) = both_or_same_status("reward-accounts", v1, v2) {
+            let v2: espresso_types::v0_3::RewardMerkleTreeV1 =
+                bincode::deserialize(&v2.tree).unwrap();
+            assert_eq!(
+                serde_json::to_value(&v2).unwrap(),
+                serde_json::to_value(&v1).unwrap()
+            );
+        }
+
+        let v1 = client
+            .get::<espresso_types::v0_3::RewardAccountQueryDataV1>(&format!(
+                "catchup/{catchup_height}/{catchup_view}/reward-account/{account}"
+            ))
+            .send()
+            .await;
+        let v2 = client
+            .get::<espresso_api::proto::RewardAccountProofResponse>(&format!(
+                "v2/catchup/reward-account?height={catchup_height}&view={catchup_view}&\
+                 address=0x{account}"
+            ))
+            .send()
+            .await;
+        if let Some((v1, v2)) = both_or_same_status("reward-account", v1, v2) {
+            assert_eq!(v2, v1.into());
+        }
+
+        let v1 = client
+            .get::<espresso_types::v0_4::RewardAccountQueryDataV2>(&format!(
+                "catchup/{catchup_height}/{catchup_view}/reward-account-v2/{account}"
+            ))
+            .send()
+            .await;
+        let v2 = client
+            .get::<espresso_api::proto::RewardAccountProofResponse>(&format!(
+                "v2/catchup/reward-account-v2?height={catchup_height}&view={catchup_view}&\
+                 address=0x{account}"
+            ))
+            .send()
+            .await;
+        if let Some((v1, v2)) = both_or_same_status("reward-account-v2", v1, v2) {
+            assert_eq!(v2, v1.into());
+        }
+
+        let v1 = client
+            .get::<Vec<u8>>(&format!(
+                "catchup/reward-merkle-tree-v2/{catchup_height}/{catchup_view}"
+            ))
+            .send()
+            .await;
+        let v2 = client
+            .get::<espresso_api::proto::RewardMerkleTreeV2Response>(&format!(
+                "v2/catchup/reward-merkle-tree-v2?height={catchup_height}&view={catchup_view}"
+            ))
+            .send()
+            .await;
+        if let Some((v1, v2)) = both_or_same_status("reward-merkle-tree-v2", v1, v2) {
+            assert_eq!(v2.tree, v1);
+        }
+
+        let v1_chain: Vec<espresso_types::Leaf2> = client
+            .get(&format!("catchup/{catchup_height}/leafchain"))
+            .send()
+            .await
+            .unwrap();
+        let v2_chain: espresso_api::proto::CatchupLeafChainResponse = client
+            .get(&format!("v2/catchup/leaf-chain?height={catchup_height}"))
+            .send()
+            .await
+            .unwrap();
+        assert!(!v1_chain.is_empty());
+        assert_eq!(
+            v2_chain.leaves,
+            v1_chain.iter().map(Into::into).collect::<Vec<_>>()
+        );
+
+        let v1 = client
+            .get::<espresso_types::Certificate2<SeqTypes>>(&format!(
+                "catchup/{catchup_height}/cert2"
+            ))
+            .send()
+            .await;
+        let v2 = client
+            .get::<espresso_api::proto::Cert2Response>(&format!(
+                "v2/catchup/cert2?height={catchup_height}"
+            ))
+            .send()
+            .await;
+        if let Some((v1, v2)) = both_or_same_status("cert2", v1, v2) {
+            assert_eq!(v2.certificate, Some((&v1).into()));
+        }
+
+        let v1 = client
+            .get::<hotshot_types::simple_certificate::LightClientStateUpdateCertificateV2<SeqTypes>>(
+                "catchup/1/state-cert",
+            )
+            .send()
+            .await;
+        let v2 = client
+            .get::<espresso_api::proto::StateCertV2Response>("v2/catchup/state-cert?epoch=1")
+            .send()
+            .await;
+        if let Some((v1, v2)) = both_or_same_status("state-cert", v1, v2) {
+            assert_eq!(v2, (&espresso_types::v0_4::StateCertQueryDataV2(v1)).into());
+        }
+
+        let known = leaf.block_header().chain_config().commit();
+        let v1_config: espresso_types::v0_3::ChainConfig = client
+            .get(&format!("catchup/chain-config/{known}"))
+            .send()
+            .await
+            .unwrap();
+        let v2_config: espresso_api::proto::CatchupChainConfigResponse = client
+            .get(&format!("v2/catchup/chain-config?commitment={known}"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(v2_config.chain_config, Some((&v1_config).into()));
+        // A well-formed commitment of a config the node never saw, so both versions reach the
+        // lookup rather than refusing to parse it.
+        let unknown = espresso_types::v0_3::ChainConfig {
+            chain_id: 999u64.into(),
+            ..Default::default()
+        }
+        .commit();
+        let v1_status = client
+            .get::<serde_json::Value>(&format!("catchup/chain-config/{unknown}"))
+            .send()
+            .await
+            .unwrap_err()
+            .status;
+        let v2_status = client
+            .get::<serde_json::Value>(&format!("v2/catchup/chain-config?commitment={unknown}"))
+            .send()
+            .await
+            .unwrap_err()
+            .status;
+        assert_ne!(v1_status, StatusCode::BAD_REQUEST);
+        assert_eq!(v2_status, v1_status);
+
+        for query in [
+            format!("v2/catchup/fee-account?view=1&address=0x{account}").as_str(),
+            "v2/catchup/blocks-frontier?height=1",
+            "v2/catchup/leaf-chain",
+            "v2/catchup/cert2",
+            "v2/catchup/chain-config",
+            "v2/catchup/reward-account?height=1&view=1",
+            format!("v2/catchup/reward-account-v2?view=1&address=0x{account}").as_str(),
+            "v2/catchup/reward-merkle-tree-v2?height=1",
+            "v2/catchup/state-cert",
+        ] {
+            let err = client
+                .get::<serde_json::Value>(query)
+                .send()
+                .await
+                .unwrap_err();
+            assert_eq!(err.status, StatusCode::BAD_REQUEST, "{query}");
+        }
+        for (route, body) in [
+            (
+                "v2/catchup/fee-accounts",
+                serde_json::json!({ "height": 1, "addresses": [] }),
+            ),
+            (
+                "v2/catchup/fee-accounts",
+                serde_json::json!({ "height": 1, "view": 1, "addresses": ["0xnot-hex"] }),
+            ),
+            (
+                "v2/catchup/reward-accounts",
+                serde_json::json!({ "view": 1, "addresses": [] }),
+            ),
+            (
+                "v2/catchup/reward-accounts",
+                serde_json::json!({ "height": 1, "view": 1, "addresses": ["0xnot-hex"] }),
+            ),
+        ] {
+            let err = client
+                .post::<serde_json::Value>(route)
+                .body_json(&body)
+                .unwrap()
+                .send()
+                .await
+                .unwrap_err();
+            assert_eq!(err.status, StatusCode::BAD_REQUEST, "{route} {body}");
+        }
+
+        assert_v2_light_client_agrees_with_v1(
+            &client,
+            last_block,
+            u64::from(namespace_counts[1].0),
+        )
+        .await;
+
         let v1_config = client
             .get::<espresso_types::config::PublicNetworkConfig>("config/hotshot")
             .send()
@@ -10710,6 +11260,246 @@ mod test {
         }
     }
 
+    /// Asks both versions for each light-client proof of the block at `height`, where `namespace`
+    /// has transactions, and holds every v2 response to the v1 proof re-encoded.
+    async fn assert_v2_light_client_agrees_with_v1(
+        client: &Client<ClientErr, StaticVersion<0, 1>>,
+        height: u64,
+        namespace: u64,
+    ) {
+        use espresso_api::proto;
+
+        let payloads_to_proto = |proofs: &[PayloadProof]| {
+            proofs
+                .iter()
+                .map(|proof| proto::LightClientPayloadProofResponse::try_from(proof).unwrap())
+                .collect::<Vec<_>>()
+        };
+
+        let v1_leaf: LeafProof = client
+            .get(&format!("light-client/leaf/{height}"))
+            .send()
+            .await
+            .unwrap();
+        let v2_leaf: proto::LightClientLeafProofResponse = client
+            .get(&format!("v2/light-client/leaf?height={height}"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(v2_leaf, (&v1_leaf).into());
+
+        let root = height + 1;
+        let v1_assumed: LeafProof = client
+            .get(&format!("light-client/leaf/{height}/{root}"))
+            .send()
+            .await
+            .unwrap();
+        let v2_assumed: proto::LightClientLeafProofResponse = client
+            .get(&format!(
+                "v2/light-client/leaf?height={height}&finalized={root}"
+            ))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(v2_assumed, (&v1_assumed).into());
+
+        let v1_header: HeaderProof = client
+            .get(&format!("light-client/header/{root}/{height}"))
+            .send()
+            .await
+            .unwrap();
+        let v2_header: proto::LightClientHeaderProofResponse = client
+            .get(&format!(
+                "v2/light-client/header?root={root}&height={height}"
+            ))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(
+            v2_header,
+            proto::LightClientHeaderProofResponse {
+                header: Some(v1_header.header().into()),
+                proof: Some(v1_header.proof().into()),
+            }
+        );
+
+        let v1_payload: PayloadProof = client
+            .get(&format!("light-client/payload/{height}"))
+            .send()
+            .await
+            .unwrap();
+        let v2_payload: proto::LightClientPayloadProofResponse = client
+            .get(&format!("v2/light-client/payload?height={height}"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(v2_payload, (&v1_payload).try_into().unwrap());
+
+        let v1_payloads: Vec<PayloadProof> = client
+            .get(&format!("light-client/payload/{height}/{root}"))
+            .send()
+            .await
+            .unwrap();
+        let v2_payloads: proto::LightClientPayloadProofRangeResponse = client
+            .get(&format!(
+                "v2/light-client/payload-range?from={height}&until={root}"
+            ))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(v2_payloads.proofs, payloads_to_proto(&v1_payloads));
+
+        let v1_batch: Vec<PayloadProof> = client
+            .post("light-client/payload/ranges")
+            .body_json(&std::iter::once(height..root).collect::<Vec<_>>())
+            .unwrap()
+            .send()
+            .await
+            .unwrap();
+        let v2_batch: proto::LightClientPayloadProofRangeResponse = client
+            .post("v2/light-client/payload-ranges")
+            .body_json(&proto::GetLightClientPayloadProofRangesRequest {
+                ranges: vec![proto::HeightRange {
+                    from: Some(height),
+                    until: Some(root),
+                }],
+            })
+            .unwrap()
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(v2_batch.proofs, payloads_to_proto(&v1_batch));
+
+        let absent = 999;
+        for ns in [namespace, absent] {
+            let v1_ns: NamespaceProof = client
+                .get(&format!("light-client/namespace/{height}/{ns}"))
+                .send()
+                .await
+                .unwrap();
+            let v2_ns: proto::LightClientNamespaceProofResponse = client
+                .get(&format!(
+                    "v2/light-client/namespace?height={height}&namespace={ns}"
+                ))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(v1_ns.contents().is_some(), ns == namespace, "{ns}");
+            assert_eq!(v2_ns, (&v1_ns).try_into().unwrap(), "{ns}");
+        }
+
+        let v1_range: Vec<NamespaceProof> = client
+            .get(&format!(
+                "light-client/namespace/{height}/{root}/{namespace}"
+            ))
+            .send()
+            .await
+            .unwrap();
+        let v2_range: proto::LightClientNamespaceProofRangeResponse = client
+            .get(&format!(
+                "v2/light-client/namespace-range?from={height}&until={root}&namespace={namespace}"
+            ))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(
+            v2_range.proofs,
+            v1_range
+                .iter()
+                .map(|proof| proto::LightClientNamespaceProofResponse::try_from(proof).unwrap())
+                .collect::<Vec<_>>()
+        );
+
+        let encoded = tagged_base64::TaggedBase64::new(
+            ::light_client::client::NAMESPACES_PARAM_TAG,
+            &serde_json::to_vec(&[namespace, absent]).unwrap(),
+        )
+        .unwrap();
+        let v1_blocks: Vec<std::collections::HashMap<u64, NamespaceProof>> = client
+            .get(&format!(
+                "light-client/namespaces/{height}/{root}/{encoded}"
+            ))
+            .send()
+            .await
+            .unwrap();
+        let v2_blocks: proto::LightClientNamespacesProofRangeResponse = client
+            .post("v2/light-client/namespaces-range")
+            .body_json(&proto::GetLightClientNamespacesProofRangeRequest {
+                from: Some(height),
+                until: Some(root),
+                namespaces: Vec::from([namespace, absent]),
+            })
+            .unwrap()
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(
+            v2_blocks.blocks,
+            v1_blocks
+                .iter()
+                .map(|block| proto::LightClientNamespacesProof {
+                    proofs: block
+                        .iter()
+                        .filter_map(|(ns, proof)| {
+                            Some((*ns, proof.contents()?.try_into().unwrap()))
+                        })
+                        .collect(),
+                })
+                .collect::<Vec<_>>(),
+        );
+
+        for query in [
+            format!("light-client/namespace/{}/{namespace}", u64::MAX),
+            format!(
+                "v2/light-client/namespace?height={}&namespace={namespace}",
+                u64::MAX
+            ),
+        ] {
+            let err = client
+                .get::<serde_json::Value>(&query)
+                .send()
+                .await
+                .unwrap_err();
+            assert_eq!(err.status, StatusCode::NOT_FOUND, "{query}");
+        }
+
+        for query in [
+            "v2/light-client/leaf".to_owned(),
+            format!("v2/light-client/leaf?height={height}&block_hash=BLOCK~AA"),
+            format!("v2/light-client/header?height={height}"),
+            format!("v2/light-client/header?root={root}"),
+            "v2/light-client/stake-table".to_owned(),
+            format!("v2/light-client/namespace?height={height}"),
+            format!("v2/light-client/payload-range?from={height}"),
+            format!("v2/light-client/payload-range?from={root}&until={height}"),
+            format!("v2/light-client/namespace?height={height}&namespace=4294967296"),
+        ] {
+            let err = client
+                .get::<serde_json::Value>(&query)
+                .send()
+                .await
+                .unwrap_err();
+            assert_eq!(err.status, StatusCode::BAD_REQUEST, "{query}");
+        }
+
+        for namespaces in [(0..=100).collect::<Vec<u64>>(), vec![1 << 32]] {
+            let err = client
+                .post::<serde_json::Value>("v2/light-client/namespaces-range")
+                .body_json(
+                    &espresso_api::proto::GetLightClientNamespacesProofRangeRequest {
+                        from: Some(height),
+                        until: Some(root),
+                        namespaces,
+                    },
+                )
+                .unwrap()
+                .send()
+                .await
+                .unwrap_err();
+            assert_eq!(err.status, StatusCode::BAD_REQUEST);
+        }
+    }
+
     use rand::thread_rng;
 
     #[apply(sql_data_sources)]
@@ -11297,10 +12087,7 @@ mod test {
         let (storage, persistence) = node_storage::<D, NUM_NODES>().await;
 
         let config = TestNetworkConfigBuilder::with_num_nodes()
-            .api_config(D::options(
-                &storage[0],
-                Options::with_port(api_port).light_client(Default::default()),
-            ))
+            .api_config(D::options(&storage[0], Options::with_port(api_port)))
             .network_config(network_config)
             .persistences(persistence.clone())
             .build();
@@ -11876,8 +12663,7 @@ mod test {
             let api_opts = Options::with_port(api_port)
                 .catchup(Default::default())
                 .config(Default::default())
-                .explorer(Default::default())
-                .light_client(Default::default());
+                .explorer(Default::default());
 
             let config = TestNetworkConfigBuilder::with_num_nodes()
                 .api_config(D::options(&storage[0], api_opts))
@@ -13373,9 +14159,7 @@ mod test {
         let (storage, persistence) = node_storage::<D, NUM_NODES>().await;
 
         let config = TestNetworkConfigBuilder::<NUM_NODES, _, _>::with_num_nodes()
-            .api_config(
-                D::options(&storage[0], Options::with_port(port)).light_client(Default::default()),
-            )
+            .api_config(D::options(&storage[0], Options::with_port(port)))
             .persistences(persistence.clone())
             .catchups(std::array::from_fn(|_| {
                 StatePeers::<SequencerApiVersion>::from_urls(

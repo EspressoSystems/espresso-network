@@ -33,33 +33,23 @@ jobs:
       - name: Install Nix
         uses: cachix/install-nix-action@v31
 
-      - name: Enable Cachix
-        uses: cachix/cachix-action@v17
-        # If PR is from a non-collaborator (e. g. dependabot) the secrets are missing and the login to cachix fails.
-        continue-on-error: true
-        with:
-          name: espresso-systems-private
-          authToken: "${{ secrets.CACHIX_AUTH_TOKEN }}"
-          extraPullNames: nix-community
-          skipPush: ${{ github.actor == 'dependabot[bot]' }}
-
       - name: Check toolchain versions
-        run: nix develop --accept-flake-config -c ./scripts/show-toolchain-versions
+        run: nix develop .#contracts --accept-flake-config -c ./scripts/show-toolchain-versions
 
       - name: Format check
-        run: nix develop --accept-flake-config -c pre-commit run forge-fmt --all-files --show-diff-on-failure
+        run: nix develop .#contracts --accept-flake-config -c pre-commit run forge-fmt --all-files --show-diff-on-failure
 
       - name: Solhint solidity linter
-        run: nix develop --accept-flake-config -c pre-commit run solhint --all-files --show-diff-on-failure
+        run: nix develop .#contracts --accept-flake-config -c pre-commit run solhint --all-files --show-diff-on-failure
 
       - name: Build contracts
-        run: nix develop --accept-flake-config -c forge build --skip test
+        run: nix develop .#contracts --accept-flake-config -c forge build --skip test
 
       - name: Lint production contracts
-        run: nix develop --accept-flake-config -c forge lint --deny notes contracts/src/
+        run: nix develop .#contracts --accept-flake-config -c forge lint --deny notes contracts/src/
 
       - name: Check if bindings up to date (also forces a build)
-        run: nix develop --accept-flake-config -c pre-commit run contract-bindings --all-files --show-diff-on-failure
+        run: nix develop .#contracts --accept-flake-config -c just gen-bindings && git add -N . && git diff --exit-code
 
       - name: Print changes to bindings
         if: ${{ failure() }}
@@ -76,15 +66,15 @@ jobs:
         include:
           - test-type: forge
             command: "just contracts-test-forge"
-            nix-env: ""
+            nix-env: ".#contracts"
             with-diff-test: true
           - test-type: invariant
             command: "just contracts-test-invariant"
-            nix-env: ""
+            nix-env: ".#contracts"
             with-diff-test: true
           - test-type: fuzz
             command: "just contracts-test-fuzz"
-            nix-env: ""
+            nix-env: ".#contracts"
             with-diff-test: true
           - test-type: echidna
             command: "just contracts-test-echidna --format text"
@@ -92,7 +82,7 @@ jobs:
             with-diff-test: false
           - test-type: network
             command: "just contracts-test-network"
-            nix-env: ""
+            nix-env: ".#contracts"
             with-diff-test: false
     steps:
       - uses: actions/checkout@v7
@@ -100,15 +90,6 @@ jobs:
           submodules: recursive
       - uses: taiki-e/install-action@just
       - uses: cachix/install-nix-action@v31
-      - uses: cachix/cachix-action@v17
-        # If PR is from a non-collaborator (e. g. dependabot) the secrets are missing and the login to cachix fails.
-        continue-on-error: true
-        with:
-          name: espresso-systems-private
-          authToken: "${{ secrets.CACHIX_AUTH_TOKEN }}"
-          extraPullNames: nix-community
-          skipPush: ${{ github.actor == 'dependabot[bot]' }}
-
       # NOTE: no rust cache, it doesn't work out of the box our nix env
 
       - name: Check toolchain versions

@@ -11,9 +11,13 @@ doc *args:
     cargo doc --no-deps --document-private-items {{args}}
     echo "file://${CARGO_TARGET_DIR:-$PWD/target}/doc/espresso_node/index.html"
 
+# Render doc/*.puml figures to svg
+[script("scripts/with-tools", "docs", "plantuml", "dot")]
+doc-figures:
+    make doc
+
+[script("scripts/with-tools", "docs", "forge", "mdbook")]
 doc-contracts:
-    #!/usr/bin/env bash
-    set -e
     rm -rf docs
     forge doc
     # Flatten structure: remove nested contracts/ directory
@@ -29,8 +33,8 @@ doc-contracts:
     echo "file://$(pwd)/docs/book/index.html"
 
 # Preview all docs locally with the same structure as the published GitHub Pages site
+[script("scripts/with-tools", "python", "python3")]
 doc-all-serve: doc doc-contracts
-    #!/usr/bin/env bash
     rm -rf ./public
     mkdir -p ./public/contracts
     cp -r "${CARGO_TARGET_DIR:-target}"/doc/* ./public/
@@ -79,6 +83,7 @@ fix *args:
     just clippy --fix {{args}}
 
 # Every workflow's compile-metrics report, as CI renders it: --pr N, --rev REV, --run ID
+[script("scripts/with-tools", "python", "python3")]
 compile-metrics *args:
     scripts/compile-metrics local {{args}}
 
@@ -124,8 +129,9 @@ demo-native-large-block-upgrade *args: (build "test" "--no-default-features")
 demo-native-ff *args: (build "test" "--no-default-features")
     ESPRESSO_NODE_GENESIS_FILE=data/genesis/demo-ff.toml scripts/demo-native -f process-compose.yaml {{args}}
 
-# A/B the leader block-build critical path between two git refs (see scripts/bench-block-build)
+# A/B the leader's block build and VID work between two git refs (see scripts/bench-block-build)
 [positional-arguments]
+[script("scripts/with-tools", "python", "uv")]
 bench-block-build *args:
     scripts/bench-block-build "$@"
 
@@ -280,9 +286,8 @@ build-docker-images:
 # The empty lease (`<ref>:`) makes the push fail unless the branch does not exist yet;
 # a plain push would fast-forward an existing release branch onto the source ref.
 # Cut the next release branch (PHASE bump); pass a version for a protocol bump. See doc/software-releases.md.
+[script("scripts/with-tools", "python", "python3")]
 release-cut version="" source_ref="main":
-    #!/usr/bin/env bash
-    set -euo pipefail
     requested="{{version}}"
     version=$(scripts/release next-version ${requested:+--version "$requested"})
     git fetch origin "{{source_ref}}"
@@ -294,10 +299,12 @@ release-tag branch tag="":
     gh workflow run tag-release.yml --ref {{branch}} -f tag={{tag}}
 
 # Preview the release edits and tracker comment of `/publish <tag> <network>` without writing to GitHub.
+[script("scripts/with-tools", "python", "python3")]
 release-publish-preview tag network:
     scripts/release publish --dry-run --comment "/publish {{tag}} {{network}}"
 
 # Render the release tracker body for a version without writing to GitHub.
+[script("scripts/with-tools", "python", "python3")]
 release-body version:
     scripts/release refresh --dry-run --version {{version}}
 
@@ -305,6 +312,7 @@ release-body version:
 VERSIONED := "LightClient(V\\d+)?(Mock)?|PlonkVerifier(V\\d+)?|StakeTable(V\\d+)?|EspToken(V\\d+)?|RewardClaim(V\\d+)?"
 EXACT := "FeeContract|ERC1967Proxy|OpsTimelock|SafeExitTimelock|OwnableUpgradeable|AccessControlUpgradeable"
 REGEXP := "^(" + VERSIONED + "|" + EXACT + ")$"
+[script("scripts/with-tools", "contracts", "forge", "solc", "abigen", "jq")]
 gen-bindings:
     # Update the git submodules
     git submodule update --init --recursive
@@ -339,6 +347,7 @@ sol-lint:
 
 # Build diff-test binary and forge test
 # Note: we use an invalid etherscan api key in order to avoid annoying warnings. See https://github.com/EspressoSystems/espresso-network/issues/979
+[script("scripts/with-tools", "contracts", "forge", "solc", "python3")]
 sol-test *args:
     export CARGO_TARGET_DIR=${CARGO_TARGET_DIR:-target} &&\
     cargo build --release --bin diff-test &&\
@@ -357,10 +366,11 @@ lc-contract-profiling-sepolia:
     echo $LC_CONTRACT_ADDRESS
     forge script contracts/script/LightClientCallNewFinalizedState.s.sol --sig "run(uint32 numInitValidators, address lcContractAddress)" {{NUM_INIT_VALIDATORS}} $LC_CONTRACT_ADDRESS --fork-url ${SEPOLIA_RPC_URL}  --broadcast  --chain-id sepolia
 
+[script("scripts/with-tools", "contracts", "forge", "solc", "python3")]
 gas-benchmarks:
     cargo build --profile test --bin diff-test
     forge snapshot --mt "test_verify_succeeds|testCorrectUpdateBench"
-    @[ -n "$(git diff --name-only .gas-snapshot)" ] && echo "⚠️ Uncommitted gas benchmarks, please stage them before committing." && exit 1 || exit 0
+    [ -n "$(git diff --name-only .gas-snapshot)" ] && echo "⚠️ Uncommitted gas benchmarks, please stage them before committing." && exit 1 || exit 0
 
 # This is meant for local development and produces HTML output. In CI
 # the lcov output is pushed to coveralls.
@@ -382,42 +392,49 @@ dev-download-srs:
     @AZTEC_SRS_PATH="$PWD/data/aztec20/kzg10-aztec20-srs-65544.bin" ./scripts/download_srs_aztec.sh
     2>&1 | tee log.txt
 
+[script("scripts/with-tools", "contracts", "abigen")]
 gen-go-bindings:
 	abigen --abi contracts/artifacts/abi/LightClient.json --pkg lightclient --out sdks/go/light-client/lightclient.go
 	abigen --abi contracts/artifacts/abi/LightClientMock.json --pkg lightclientmock --out sdks/go/light-client-mock/lightclient.go
 
+[script("scripts/with-tools", "go", "cargo", "jq", "go")]
 build-go-crypto-helper *args:
     ./scripts/build-go-crypto-helper {{args}}
 
+[script("scripts/with-tools", "go", "gofmt")]
 fmt-go:
     gofmt -w sdks/go/
 
+[script("scripts/with-tools", "go", "go")]
 lint-go:
     cd sdks/go && go vet ./...
 
+[script("scripts/with-tools", "go", "go")]
 test-go *args:
-    #!/usr/bin/env bash
-    export LD_LIBRARY_PATH=$PWD/sdks/go/verification/target/lib:$LD_LIBRARY_PATH
+    export LD_LIBRARY_PATH=$PWD/sdks/go/verification/target/lib:${LD_LIBRARY_PATH:-}
     cd sdks/go && go test -v ./... {{args}}
 
 contracts-test-echidna *args:
     nix develop .#echidna -c echidna contracts/test/StakeTableV2.echidna.sol --contract StakeTableV2EchidnaTest --config contracts/echidna.yaml {{args}}
 
+[script("scripts/with-tools", "contracts", "forge", "solc", "python3")]
 contracts-test-forge *args='-vv':
     forge test --no-match-test "testFuzz_|invariant_|test_Network_" {{args}}
 
+[script("scripts/with-tools", "contracts", "forge", "solc", "python3")]
 contracts-test-fuzz *args='-vv':
     forge test --match-test testFuzz {{args}}
 
+[script("scripts/with-tools", "contracts", "forge", "solc", "python3")]
 contracts-test-invariant *args='-vv':
     forge test --match-test invariant_ {{args}}
 
+[script("scripts/with-tools", "mutation", "dregs")]
 contracts-mutation-test *args:
     dregs run --project . {{args}}
 
+[script("scripts/with-tools", "contracts", "forge", "solc", "python3")]
 contracts-test-network *args='-vv':
-    #!/usr/bin/env bash
-    set -euo pipefail
     if [ -z "${ETHERSCAN_API_KEY:-}" ]; then
         echo "Error: ETHERSCAN_API_KEY must be set to run network tests" >&2
         echo "Set it in your environment or in .env file" >&2

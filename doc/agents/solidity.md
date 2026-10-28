@@ -15,7 +15,7 @@
 ## Commands
 
 ```bash
-forge test                            # unit tests
+just contracts-test-forge             # unit tests (plain forge test needs .#contracts)
 just sol-test                         # full suite (unit, fuzz, invariant)
 just gen-bindings                     # regenerate Rust bindings after ABI changes
 ```
