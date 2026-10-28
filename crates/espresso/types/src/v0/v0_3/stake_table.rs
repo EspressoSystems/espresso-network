@@ -521,8 +521,8 @@ pub enum StakeTableError {
     EventSortingError(#[from] EventSortingError),
 }
 
-/// The L1 provider cannot vouch for the block a stake table scan stops at. Retryable once the
-/// provider catches up.
+/// The L1 provider cannot vouch for the block a stake table scan stops at. Retryable, since the
+/// client has moved to the next provider or the current one may catch up.
 #[derive(Debug, Error)]
 pub enum ProviderBlockError {
     #[error("L1 provider does not have block {number}")]
@@ -539,6 +539,8 @@ pub enum ProviderBlockError {
         #[source]
         source: RpcError<TransportErrorKind>,
     },
+    #[error("L1 provider changed during the stake table scan up to block {number}")]
+    Switched { number: u64 },
 }
 
 #[derive(Debug, Error)]

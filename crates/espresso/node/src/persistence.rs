@@ -2922,23 +2922,23 @@ mod tests {
     }
 
     /// Answers `eth_getBlockByNumber` with `block`, `eth_call` with zero, and `eth_getLogs` with
-    /// `logs`, or with a JSON-RPC error when `logs` is `None`.
+    /// `logs`, or with a JSON-RPC error when `block` or `logs` is `None`.
     async fn serve_provider(block: Option<Value>, logs: Option<Value>) -> Url {
         let route = warp::post()
             .and(warp::body::json::<Value>())
             .map(move |req: Value| {
                 let id = req["id"].clone();
-                let reply = match (req["method"].as_str(), &logs) {
-                    (Some("eth_getBlockByNumber"), _) => {
+                let reply = match (req["method"].as_str(), &block, &logs) {
+                    (Some("eth_getBlockByNumber"), Some(block), _) => {
                         json!({ "jsonrpc": "2.0", "id": id, "result": block })
                     },
-                    (Some("eth_call"), _) => {
+                    (Some("eth_call"), ..) => {
                         json!({ "jsonrpc": "2.0", "id": id, "result": B256::ZERO })
                     },
-                    (Some("eth_getLogs"), Some(logs)) => {
+                    (Some("eth_getLogs"), _, Some(logs)) => {
                         json!({ "jsonrpc": "2.0", "id": id, "result": logs })
                     },
-                    (method, _) => json!({
+                    (method, ..) => json!({
                         "jsonrpc": "2.0",
                         "id": id,
                         "error": { "code": -32000, "message": format!("internal error serving {method:?}") },
@@ -2967,7 +2967,7 @@ mod tests {
         block.header.inner.number = finalized.number;
 
         let ahead_but_failing_logs = serve_provider(Some(json!(block)), None).await;
-        let behind = serve_provider(None, Some(json!([]))).await;
+        let behind = serve_provider(Some(Value::Null), Some(json!([]))).await;
         let l1_client = L1ClientOptions {
             l1_retry_delay: Duration::from_millis(10),
             l1_consecutive_failure_tolerance: 1,
@@ -3001,6 +3001,116 @@ mod tests {
         let (offset, events) = persistence.load_events(0, finalized.number).await?;
         assert_eq!(offset, None);
         assert!(events.is_empty());
+
+        Ok(())
+    }
+
+    #[rstest_reuse::apply(persistence_types)]
+    pub async fn test_scan_refuses_a_block_check_answered_after_failing_back<
+        P: TestablePersistence,
+    >(
+        _p: PhantomData<P>,
+    ) -> anyhow::Result<()> {
+        use espresso_types::v0_3::{ChainConfig, ProviderBlockError};
+
+        let finalized = L1BlockInfo {
+            number: 16,
+            hash: B256::repeat_byte(1),
+            ..Default::default()
+        };
+        let mut block = alloy::rpc::types::Block::<alloy::rpc::types::Transaction>::default();
+        block.header.hash = finalized.hash;
+        block.header.inner.number = finalized.number;
+
+        // The scan fails over to `serving_logs`, whose failed block check fails back to
+        // `holding_block`.
+        let holding_block = serve_provider(Some(json!(block)), None).await;
+        let serving_logs = serve_provider(None, Some(json!([]))).await;
+        let l1_client = L1ClientOptions {
+            l1_retry_delay: Duration::from_millis(10),
+            l1_consecutive_failure_tolerance: 1,
+            l1_frequent_failure_tolerance: Duration::ZERO,
+            l1_events_max_retry_duration: Duration::from_secs(5),
+            ..Default::default()
+        }
+        .connect(Vec::from([holding_block, serving_logs]))
+        .unwrap();
+
+        let storage = P::tmp_storage().await;
+        let persistence = P::options(&storage).create().await.unwrap();
+        let fetcher = Fetcher::new(
+            Arc::new(NullStateCatchup::default()),
+            Arc::new(Mutex::new(persistence.clone())),
+            l1_client,
+            ChainConfig::default(),
+        );
+
+        let result = fetcher
+            .fetch_and_store_stake_table_events(Address::ZERO, finalized)
+            .await;
+        let (offset, events) = persistence.load_events(0, finalized.number).await?;
+        assert!(
+            matches!(&result, Err(err) if err.is::<ProviderBlockError>()),
+            "logs from a provider that never vouched for the block were accepted: {result:?}, \
+             stored offset {offset:?}"
+        );
+        assert_eq!(offset, None);
+        assert!(events.is_empty());
+
+        Ok(())
+    }
+
+    #[rstest_reuse::apply(persistence_types)]
+    pub async fn test_scan_fails_over_from_a_provider_without_the_finalized_block<
+        P: TestablePersistence,
+    >(
+        _p: PhantomData<P>,
+    ) -> anyhow::Result<()> {
+        use espresso_types::v0_3::{ChainConfig, ProviderBlockError};
+
+        let finalized = L1BlockInfo {
+            number: 16,
+            hash: B256::repeat_byte(1),
+            ..Default::default()
+        };
+        let mut block = alloy::rpc::types::Block::<alloy::rpc::types::Transaction>::default();
+        block.header.hash = finalized.hash;
+        block.header.inner.number = finalized.number;
+
+        let behind = serve_provider(Some(Value::Null), Some(json!([]))).await;
+        let holding_block = serve_provider(Some(json!(block)), Some(json!([]))).await;
+        let l1_client = L1ClientOptions {
+            l1_retry_delay: Duration::from_millis(10),
+            ..Default::default()
+        }
+        .connect(Vec::from([behind, holding_block]))
+        .unwrap();
+
+        let storage = P::tmp_storage().await;
+        let persistence = P::options(&storage).create().await.unwrap();
+        let fetcher = Fetcher::new(
+            Arc::new(NullStateCatchup::default()),
+            Arc::new(Mutex::new(persistence.clone())),
+            l1_client,
+            ChainConfig::default(),
+        );
+
+        let err = fetcher
+            .fetch_and_store_stake_table_events(Address::ZERO, finalized)
+            .await
+            .expect_err("the first provider does not hold the block");
+        assert!(
+            matches!(
+                err.downcast_ref::<ProviderBlockError>(),
+                Some(ProviderBlockError::Missing { .. })
+            ),
+            "{err:#}"
+        );
+        fetcher
+            .fetch_and_store_stake_table_events(Address::ZERO, finalized)
+            .await?;
+        let (offset, _) = persistence.load_events(0, finalized.number).await?;
+        assert_eq!(offset, Some(EventsPersistenceRead::Complete));
 
         Ok(())
     }
