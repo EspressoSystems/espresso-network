@@ -239,7 +239,9 @@ jobs:
       - uses: ./.github/actions/free-disk-space
       - uses: ./.github/actions/install-foundry
       - uses: ./.github/actions/install-postgres
-      - uses: taiki-e/install-action@nextest
+      - uses: taiki-e/install-action@v2.88.0
+        with:
+          tool: nextest
 
       - name: Download archive
         uses: actions/download-artifact@v8.0.2
@@ -301,7 +303,9 @@ jobs:
     steps:
       - uses: actions/checkout@v7.0.1
       - uses: ./.github/actions/free-disk-space
-      - uses: taiki-e/install-action@nextest
+      - uses: taiki-e/install-action@v2.88.0
+        with:
+          tool: nextest
       - uses: ./.github/actions/install-process-compose
         with:
           version: v1.75.2

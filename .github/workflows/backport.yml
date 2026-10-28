@@ -34,7 +34,9 @@ jobs:
           toolchain: nightly
           components: rustfmt
 
-      - uses: taiki-e/install-action@just
+      - uses: taiki-e/install-action@v2.88.0
+        with:
+          tool: just
 
       - uses: taiki-e/install-action@v2.88.0
         with:

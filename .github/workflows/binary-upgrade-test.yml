@@ -29,7 +29,9 @@ jobs:
       - uses: actions/checkout@v7.0.1
         with:
           fetch-tags: true
-      - uses: taiki-e/install-action@just
+      - uses: taiki-e/install-action@v2.88.0
+        with:
+          tool: just
       - uses: astral-sh/setup-uv@v10.0.1
 
       - name: Pull docker images
