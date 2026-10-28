@@ -116,6 +116,12 @@ impl SequencerDataSource for DataSource {
             builder = builder.leaf_only();
         }
 
+        // Transaction and payload totals count from genesis, and a pruned node never has those
+        // blocks.
+        if opt.prune {
+            builder = builder.disable_aggregator();
+        }
+
         if let Some(delay) = active_fetch_delay {
             builder = builder.with_active_fetch_delay(delay);
         }
@@ -2178,6 +2184,7 @@ mod tests {
         v0_4::{REWARD_MERKLE_TREE_V2_HEIGHT, RewardMerkleTreeV2},
     };
     use hotshot_query_service::{
+        QueryError,
         data_source::{
             Transaction, VersionedDataSource,
             storage::{
@@ -2185,6 +2192,7 @@ mod tests {
             },
         },
         merklized_state::{MerklizedState, UpdateStateData},
+        node::NodeDataSource,
     };
     use hotshot_types::data::ViewNumber;
     use jf_merkle_tree_compat::{
@@ -2201,7 +2209,7 @@ mod tests {
         query_as,
     };
     use crate::{
-        api::RewardMerkleTreeDataSource,
+        api::{RewardMerkleTreeDataSource, data_source::SequencerDataSource},
         catchup::{CatchupStorage, SqlStateCatchup},
     };
 
@@ -2594,5 +2602,29 @@ mod tests {
             !table_sizes.is_empty(),
             "should have at least one table in the database"
         );
+    }
+
+    /// A pruned node runs without an aggregator, so it has no transaction or payload totals.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_pruned_node_has_no_totals() {
+        for prune in [false, true] {
+            let storage = TmpDb::init().await;
+            let mut opt = tmp_options(&storage);
+            opt.prune = prune;
+            let ds = super::DataSource::create(
+                opt.try_into().unwrap(),
+                super::Provider::default(),
+                false,
+            )
+            .await
+            .unwrap();
+
+            let res = NodeDataSource::count_transactions_in_range(&ds, .., None).await;
+            if prune {
+                assert!(matches!(res, Err(QueryError::NotFound)), "{res:?}");
+            } else {
+                assert_eq!(res.unwrap(), 0);
+            }
+        }
     }
 }

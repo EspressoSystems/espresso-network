@@ -35,7 +35,10 @@ descriptor set is exported as `espresso_api::FILE_DESCRIPTOR_SET`).
 - `NodeService` carries over every v1 `node` endpoint except `oldest-block` and `oldest-leaf`. Where v1 has a route per
   epoch and a `current` route, v2 has one route with an optional `epoch` parameter, as it does for the block reward;
   where v1 has a route per way of naming a block, v2 has one route with an optional parameter per naming, of which
-  exactly one must be given. `/v2/node/block-height` duplicates `/v2/status/block-height` because v1 has both.
+  exactly one must be given. `/v2/node/block-height` duplicates `/v2/status/block-height` because v1 has both. The
+  transaction count and the payload size count from genesis, so only nodes that keep every block have them. A node
+  started with `--prune` has none: these routes are a 404 on v1 and v2, and so is the explorer summary, which counts
+  transactions from genesis.
 - `ConfigService` serves v1's config module as typed messages. `hotshot` carries every consensus parameter, including
   the genesis membership and the DA committee overrides. The comment on `HotshotConfigResponse` in `config.proto` says
   what it drops from v1's orchestrator wrapper. `runtime` carries the identity, endpoints, storage settings and enabled
