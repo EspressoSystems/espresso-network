@@ -61,11 +61,13 @@ repos:
         pass_filenames: true
 
       - id: actions-lock
-        name: Update the GitHub Actions lockfile
-        # gh-actions-lock isn't in the nix shell; skip without it and let the CI check catch it.
+        name: Check the GitHub Actions lockfile covers every workflow
+        # Offline and read-only, so it never needs network or auth. gh-actions-lock isn't in the
+        # nix shell; skip without it and let the CI check catch it.
         entry: >-
-          bash -c 'if gh actions-lock --version >/dev/null 2>&1; then just lock-actions; else
-          echo "gh-actions-lock not installed, skipping (see justfile lock-actions)"; fi'
+          bash -c 'if ! gh extension list 2>/dev/null | grep -q github/gh-actions-lock; then
+          echo "gh-actions-lock not installed, skipping (see justfile lock-actions)"; exit 0; fi;
+          just lock-actions --verify-local || { echo "Run: just lock-actions"; exit 1; }'
         language: system
-        files: ^\.github/(workflows|actions)/
+        files: ^\.github/workflows/
         pass_filenames: false
