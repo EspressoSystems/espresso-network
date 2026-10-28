@@ -11,8 +11,10 @@ use clap::{Parser, ValueEnum};
 use derive_more::Display;
 use espresso_node::keyset::{KeySet, KeySetOptions};
 use espresso_utils::logging;
-use hotshot::types::SignatureKey;
-use hotshot_types::{light_client::StateKeyPair, signature_key::BLSPubKey, x25519};
+use hotshot_types::{
+    light_client::StateKeyPair, signature_key::BLSPubKey, traits::signature_key::SignatureKey,
+    x25519,
+};
 use rand::{SeedableRng, rngs::StdRng};
 use tagged_base64::TaggedBase64;
 use tracing::info_span;

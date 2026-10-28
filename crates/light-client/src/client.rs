@@ -540,12 +540,12 @@ mod test {
         api::{
             Options,
             data_source::testing::TestableSequencerDataSource,
-            sql::DataSource,
+            sql::postgres::DataSource,
             test_helpers::{TestNetwork, TestNetworkConfigBuilder},
         },
         testing::{TestConfigBuilder, wait_for_decide_on_handle},
     };
-    use espresso_types::{Header, Transaction};
+    use espresso_types::{Header, TEST_UPGRADE, Transaction};
     use futures::{TryStreamExt, stream::StreamExt};
     use hotshot_query_service_types::{
         Resolvable,
@@ -555,7 +555,6 @@ mod test {
     use rand::RngCore;
     use test_utils;
     use tokio::time::sleep;
-    use versions::{EPOCH_VERSION, Upgrade};
 
     use super::*;
     use crate::{
@@ -586,15 +585,12 @@ mod test {
             <DataSource as TestableSequencerDataSource>::persistence_options(&storage);
 
         let config = TestNetworkConfigBuilder::<1, _, _>::with_num_nodes()
-            .api_config(
-                DataSource::options(&storage, Options::with_port(port))
-                    .light_client(Default::default()),
-            )
+            .api_config(DataSource::options(&storage, Options::with_port(port)))
             .persistences([persistence])
             .network_config(test_config)
             .build();
 
-        let _network = TestNetwork::new(config, Upgrade::trivial(EPOCH_VERSION)).await;
+        let _network = TestNetwork::new(config, TEST_UPGRADE).await;
         let client = client(url);
 
         // Check that the block height increases over time.
@@ -625,15 +621,12 @@ mod test {
             <DataSource as TestableSequencerDataSource>::persistence_options(&storage);
 
         let config = TestNetworkConfigBuilder::<1, _, _>::with_num_nodes()
-            .api_config(
-                DataSource::options(&storage, Options::with_port(port))
-                    .light_client(Default::default()),
-            )
+            .api_config(DataSource::options(&storage, Options::with_port(port)))
             .persistences([persistence])
             .network_config(test_config)
             .build();
 
-        let _network = TestNetwork::new(config, Upgrade::trivial(EPOCH_VERSION)).await;
+        let _network = TestNetwork::new(config, TEST_UPGRADE).await;
         let client = client(url.clone());
 
         // Wait for a chain of leaves to be produced.
@@ -666,7 +659,7 @@ mod test {
         ] {
             tracing::info!(?req, "get proof by alternative ID");
             let proof = client.leaf_proof(req, None).await.unwrap();
-            assert!(matches!(proof.proof(), FinalityProof::HotStuff2 { .. }));
+            assert!(matches!(proof.proof(), FinalityProof::NewProtocol { .. }));
             assert_eq!(
                 proof
                     .verify(LeafProofHint::Quorum(&AlwaysTrueQuorum))
@@ -708,15 +701,12 @@ mod test {
             <DataSource as TestableSequencerDataSource>::persistence_options(&storage);
 
         let config = TestNetworkConfigBuilder::<1, _, _>::with_num_nodes()
-            .api_config(
-                DataSource::options(&storage, Options::with_port(port))
-                    .light_client(Default::default()),
-            )
+            .api_config(DataSource::options(&storage, Options::with_port(port)))
             .persistences([persistence])
             .network_config(test_config)
             .build();
 
-        let _network = TestNetwork::new(config, Upgrade::trivial(EPOCH_VERSION)).await;
+        let _network = TestNetwork::new(config, TEST_UPGRADE).await;
         let client = client(url.clone());
         let http = HttpClient::new(url);
 
@@ -785,15 +775,12 @@ mod test {
             <DataSource as TestableSequencerDataSource>::persistence_options(&storage);
 
         let config = TestNetworkConfigBuilder::<1, _, _>::with_num_nodes()
-            .api_config(
-                DataSource::options(&storage, Options::with_port(port))
-                    .light_client(Default::default()),
-            )
+            .api_config(DataSource::options(&storage, Options::with_port(port)))
             .persistences([persistence])
             .network_config(test_config)
             .build();
 
-        let _network = TestNetwork::new(config, Upgrade::trivial(EPOCH_VERSION)).await;
+        let _network = TestNetwork::new(config, TEST_UPGRADE).await;
         let client = client(url.clone());
 
         // Wait for a few blocks to be produced.
@@ -840,15 +827,12 @@ mod test {
             <DataSource as TestableSequencerDataSource>::persistence_options(&storage);
 
         let config = TestNetworkConfigBuilder::<1, _, _>::with_num_nodes()
-            .api_config(
-                DataSource::options(&storage, Options::with_port(port))
-                    .light_client(Default::default()),
-            )
+            .api_config(DataSource::options(&storage, Options::with_port(port)))
             .persistences([persistence])
             .network_config(test_config)
             .build();
 
-        let network = TestNetwork::new(config, Upgrade::trivial(EPOCH_VERSION)).await;
+        let network = TestNetwork::new(config, TEST_UPGRADE).await;
         let client = client(url.clone());
         let http = HttpClient::new(url);
 

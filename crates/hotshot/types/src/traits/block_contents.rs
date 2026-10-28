@@ -92,10 +92,13 @@ pub trait BlockPayload<TYPES: NodeType>:
 
     /// Build a payload and associated metadata with the transactions.
     /// This function is asynchronous because it may need to request updated state from the peers via GET requests.
+    ///
+    /// The payload may leave out some of `transactions`, but must not change, repeat or add one:
+    /// when a payload kept them all, the new protocol's leader takes their hashes from its pool.
     /// # Errors
     /// If the transaction length conversion fails.
     async fn from_transactions(
-        transactions: impl IntoIterator<Item = Self::Transaction> + Send,
+        transactions: &[Self::Transaction],
         validated_state: &Self::ValidatedState,
         instance_state: &Self::Instance,
     ) -> Result<(Self, Self::Metadata), Self::Error>;

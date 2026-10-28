@@ -9,12 +9,15 @@ use std::{collections::HashSet, time::Duration};
 
 use alloy::primitives::{Address, U256, utils::parse_ether};
 use espresso_contract_deployer::Contract;
+#[cfg(not(feature = "sqlite"))]
+use espresso_node::api::sql::postgres::DataSource as SqlDataSource;
+#[cfg(feature = "sqlite")]
+use espresso_node::api::sql::sqlite::DataSource as SqlDataSource;
 use espresso_node::{
     SequencerApiVersion,
     api::{
         Options,
         data_source::{SequencerDataSource, testing::TestableSequencerDataSource},
-        sql::DataSource as SqlDataSource,
         test_helpers::{
             TestNetwork, TestNetworkConfigBuilder, assert_node_live, assert_nodes_agree,
             committee_is, delegate_new, deregister_validators, register_validators,
@@ -35,7 +38,6 @@ use hotshot_types::{
     x25519,
 };
 use http_client::{Client, error::ClientErr};
-use slow_tests::BUILDER_TIMEOUT;
 use staking_cli::{
     NodeSignatures, Transaction as StakingTransaction, demo::DelegationConfig,
     update_network_config,
@@ -43,6 +45,13 @@ use staking_cli::{
 use test_utils::reserve_tcp_port;
 use tokio::time::timeout;
 use versions::{NEW_PROTOCOL_VERSION, Upgrade};
+
+/// How long a leader waits for a block before proposing an empty one.
+///
+/// These tests submit no transactions, so this is their seconds per block. Set
+/// per test rather than on `TestConfigBuilder`, whose default the
+/// `espresso-dev-node` binary also runs on.
+const BUILDER_TIMEOUT: Duration = Duration::from_millis(250);
 
 const V6: Upgrade = Upgrade::trivial(NEW_PROTOCOL_VERSION);
 

@@ -9,3 +9,8 @@ path = "../new-protocol-spec"
 
 [[lean_lib]]
 name = "NewProtocolImpl"
+
+# An unknown name in a signature is an error, not a new implicit variable: a
+# missing import once turned a premise into an unconstrained variable here.
+[leanOptions]
+autoImplicit = false

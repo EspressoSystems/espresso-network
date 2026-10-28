@@ -31,15 +31,13 @@ use espresso_contract_deployer::{
     self as deployer, Contract, Contracts, DEFAULT_EXIT_ESCROW_PERIOD_SECONDS, DeployedContracts,
     HttpProviderWithWallet, network_config::light_client_genesis_from_stake_table,
 };
-use espresso_dev_node::{
-    AltChainInfo, DevInfo, DevNodeVersion, SetHotshotDownReqBody, SetHotshotUpReqBody,
-};
+use espresso_dev_node::{AltChainInfo, DevInfo, SetHotshotDownReqBody, SetHotshotUpReqBody};
 use espresso_node::{
     SequencerApiVersion,
     api::{
         data_source::testing::TestableSequencerDataSource,
         options,
-        sql::DataSource,
+        sql::sqlite::DataSource,
         test_helpers::{STAKE_TABLE_CAPACITY_FOR_TEST, TestNetwork, TestNetworkConfigBuilder},
     },
     persistence,
@@ -66,7 +64,24 @@ use test_utils::reserve_tcp_port;
 use tokio::spawn;
 use url::Url;
 use vbs::version::StaticVersionType;
-use versions::Upgrade;
+use versions::{Upgrade, Version};
+
+#[derive(Debug, Copy, Clone, ValueEnum)]
+enum DevNodeVersion {
+    #[value(name = "0.6")]
+    V0_6,
+    #[value(name = "0.7")]
+    V0_7,
+}
+
+impl DevNodeVersion {
+    fn protocol_version(self) -> Version {
+        match self {
+            DevNodeVersion::V0_6 => versions::NEW_PROTOCOL_VERSION,
+            DevNodeVersion::V0_7 => versions::TIMEOUT_EPOCH_VERSION,
+        }
+    }
+}
 
 #[derive(Default, Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
 enum L1Deployment {
@@ -226,8 +241,8 @@ struct Args {
     #[clap(flatten)]
     sql: persistence::sql::Options,
 
-    /// protocol version to run (V3, V4, V5, or V6)
-    #[clap(long, env = "ESPRESSO_DEV_NODE_VERSION", default_value = "0.3")]
+    /// protocol version to run
+    #[clap(long, env = "ESPRESSO_DEV_NODE_VERSION", default_value = "0.6")]
     version: DevNodeVersion,
 
     #[clap(flatten)]
@@ -270,7 +285,7 @@ async fn async_main(migrated_envs: Vec<(&str, &str)>) -> anyhow::Result<()> {
         tonic_port,
         prover_port,
         dev_node_port,
-        sql,
+        mut sql,
         logging,
         update_interval,
         retry_interval,
@@ -286,6 +301,8 @@ async fn async_main(migrated_envs: Vec<(&str, &str)>) -> anyhow::Result<()> {
         token_symbol,
         version,
     } = cli_params;
+    // The dev node always keeps its data in SQLite, under ESPRESSO_NODE_STORAGE_PATH.
+    sql.embedded_db = true;
 
     logging.init();
     espresso_utils::env_compat::log_migrated_env_vars(&migrated_envs);
@@ -522,12 +539,9 @@ async fn async_main(migrated_envs: Vec<(&str, &str)>) -> anyhow::Result<()> {
             )
             .await?;
 
-            if matches!(version, DevNodeVersion::V0_6) {
-                let l1_client = l1_opt.clone().connect(vec![l1_url.clone()])?;
-                deployer::upgrade_stake_table_v2(&provider, l1_client, contracts, admin, admin)
-                    .await?;
-                deployer::upgrade_stake_table_v3(&provider, contracts).await?;
-            }
+            let l1_client = l1_opt.clone().connect(vec![l1_url.clone()])?;
+            deployer::upgrade_stake_table_v2(&provider, l1_client, contracts, admin, admin).await?;
+            deployer::upgrade_stake_table_v3(&provider, contracts).await?;
 
             if let Some(multisig) = multisig_address {
                 deployer::transfer_ownership(
@@ -662,8 +676,7 @@ async fn async_main(migrated_envs: Vec<(&str, &str)>) -> anyhow::Result<()> {
     .submit(Default::default())
     .config(Default::default())
     .explorer(Default::default())
-    .query_sql(Default::default(), sql)
-    .light_client(Default::default());
+    .query_sql(Default::default(), sql);
     let consensus_dbs = join_all((0..NUM_NODES).map(|_| DataSource::create_storage())).await;
     let persistences: [_; NUM_NODES] = consensus_dbs
         .iter()
@@ -680,15 +693,8 @@ async fn async_main(migrated_envs: Vec<(&str, &str)>) -> anyhow::Result<()> {
         .build();
 
     // Start the nodes
-    let network = {
-        let u = match version {
-            DevNodeVersion::V0_3 => Upgrade::trivial(versions::version(0, 3)),
-            DevNodeVersion::V0_4 => Upgrade::trivial(versions::version(0, 4)),
-            DevNodeVersion::V0_5 => Upgrade::trivial(versions::version(0, 5)),
-            DevNodeVersion::V0_6 => Upgrade::trivial(versions::NEW_PROTOCOL_VERSION),
-        };
-        TestNetwork::new(config, u).await
-    };
+    let network = TestNetwork::new(config, Upgrade::trivial(version.protocol_version())).await;
+    tracing::info!("Espresso node API on http://0.0.0.0:{sequencer_api_port}");
 
     let relay_server_handle = spawn(async move {
         // using explicit relayer state will avoid it calling the dev-node on `/config/hotshot` for epoch info,
@@ -963,7 +969,7 @@ async fn run_dev_node_server<ApiVer: StaticVersionType + 'static>(
     let router = dev_node_router(state);
 
     let addr = format!("0.0.0.0:{port}");
-    tracing::info!("Starting dev-node API on http://{addr}");
+    tracing::info!("Starting dev-node debug API (/api/dev-info) on http://{addr}");
     let listener = tokio::net::TcpListener::bind(&addr).await.map_err(|err| {
         // If we get an "Address in use" during startup, make it a bit easier to find the cause.
         tracing::error!("Failed to start dev-node API on http://{addr} : {err}");

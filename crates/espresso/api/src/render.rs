@@ -4,23 +4,28 @@ use std::{borrow::Borrow, collections::HashMap};
 
 use ark_serialize::CanonicalSerialize;
 use espresso_types::{
-    BuilderSignature, FeeInfo, Header, L1BlockInfo, NamespaceProofQueryData, NsProof, Payload,
-    PubKey, SeqTypes, Transaction, TxProof,
+    AccountQueryData, BuilderSignature, FeeAccount, FeeAccountProof, FeeInfo, FeeMerkleProof,
+    Header, L1BlockInfo, NamespaceProofQueryData, NsProof, Payload, PubKey, SeqTypes, Transaction,
+    TxProof,
     config::PublicNetworkConfig,
     v0_3::{
-        AvidMIncorrectEncodingNsProof, AvidMNsProof, RegisteredValidator, ResolvableChainConfig,
-        StateCertQueryDataV1,
+        self, AvidMIncorrectEncodingNsProof, AvidMNsProof, RegisteredValidator,
+        ResolvableChainConfig, StakeTableEvent, StateCertQueryDataV1,
     },
     v0_4::{
         RewardAccountProofV2, RewardAccountQueryDataV2, RewardMerkleProofV2, StateCertQueryDataV2,
     },
     v0_6::AvidmGf2NsProof,
 };
+use hotshot_contract_adapter::sol_types::{
+    EdOnBN254PointSol, G2PointSol, stake_table_v3::BN254::G1Point as G1PointSol,
+};
 use hotshot_query_service_types::{
     availability::{
         BlockQueryData, BlockSummaryQueryData, LeafQueryData, PayloadQueryData,
         TransactionQueryData, TransactionWithProofQueryData, VidCommonQueryData,
     },
+    explorer,
     node::{
         Limits as NodeLimits, ResourceSyncStatus, SyncStatus, SyncStatusQueryData,
         TimeWindowQueryData,
@@ -29,10 +34,11 @@ use hotshot_query_service_types::{
 use hotshot_types::{
     HotShotConfig, PeerConfig,
     data::{Leaf2, VidCommon, VidShare, ViewChangeEvidence2},
+    light_client::LCV3StateSignatureRequestBody,
     network::BuilderType,
     simple_certificate::{
-        Certificate2, SimpleCertificate, SuccessThreshold, Threshold, TimeoutCertificate2,
-        TimeoutCertificate3, UpgradeCertificate, ViewSyncFinalizeCertificate2,
+        Certificate2, CertificatePair, SimpleCertificate, SuccessThreshold, Threshold,
+        TimeoutCertificate2, TimeoutCertificate3, UpgradeCertificate, ViewSyncFinalizeCertificate2,
     },
     simple_vote::{QuorumData2, Voteable},
     traits::EncodeBytes as _,
@@ -41,6 +47,11 @@ use hotshot_types::{
 use jf_merkle_tree_compat::{
     Element, Index, NodeValue,
     prelude::{MerkleNode, MerkleProof},
+};
+use light_client::consensus::{
+    leaf::{FinalityProof, LeafProof},
+    namespace::NamespaceProof,
+    payload::PayloadProof,
 };
 use tagged_base64::TaggedBase64;
 
@@ -53,22 +64,28 @@ impl From<ResolvableChainConfig> for proto::ResolvableChainConfig {
     fn from(chain_config: ResolvableChainConfig) -> Self {
         // `commit` would hash a full config too; only `resolve` tells the two apart.
         let resolved = match chain_config.resolve() {
-            Some(config) => ChainConfig::Full(proto::ChainConfig {
-                chain_id: config.chain_id.to_string(),
-                max_block_size: *config.max_block_size,
-                base_fee: config.base_fee.to_string(),
-                // v1 renders addresses as lowercase hex through `ethers_core::H160` and
-                // `FixedBytes`; alloy's `Display` prints them EIP-55 checksummed instead.
-                fee_contract: config.fee_contract.map(|address| format!("{address:#x}")),
-                fee_recipient: format!("{:#x}", config.fee_recipient.0),
-                stake_table_contract: config
-                    .stake_table_contract
-                    .map(|address| format!("{address:#x}")),
-            }),
+            Some(config) => ChainConfig::Full((&config).into()),
             None => ChainConfig::Commitment(chain_config.commit().to_string()),
         };
         proto::ResolvableChainConfig {
             chain_config: Some(resolved),
+        }
+    }
+}
+
+impl From<&v0_3::ChainConfig> for proto::ChainConfig {
+    fn from(config: &v0_3::ChainConfig) -> Self {
+        proto::ChainConfig {
+            chain_id: config.chain_id.to_string(),
+            max_block_size: *config.max_block_size,
+            base_fee: config.base_fee.to_string(),
+            // v1 renders addresses as lowercase hex through `ethers_core::H160` and
+            // `FixedBytes`; alloy's `Display` prints them EIP-55 checksummed instead.
+            fee_contract: config.fee_contract.map(|address| format!("{address:#x}")),
+            fee_recipient: format!("{:#x}", config.fee_recipient.0),
+            stake_table_contract: config
+                .stake_table_contract
+                .map(|address| format!("{address:#x}")),
         }
     }
 }
@@ -122,6 +139,14 @@ impl From<&Header> for proto::HeaderResponse {
     }
 }
 
+/// Empty from 0.7, when the header stopped carrying a builder commitment but kept the 0.5 shape.
+fn builder_commitment(header: &Header) -> String {
+    header
+        .builder_commitment()
+        .map(ToString::to_string)
+        .unwrap_or_default()
+}
+
 impl From<&Header> for proto::HeaderV1 {
     fn from(header: &Header) -> Self {
         proto::HeaderV1 {
@@ -131,7 +156,7 @@ impl From<&Header> for proto::HeaderV1 {
             l1_head: header.l1_head(),
             l1_finalized: header.l1_finalized().map(Into::into),
             payload_commitment: header.payload_commitment().to_string(),
-            builder_commitment: header.builder_commitment().to_string(),
+            builder_commitment: builder_commitment(header),
             ns_table: Some(proto::NsTable {
                 bytes: header.ns_table().encode().to_vec(),
             }),
@@ -153,7 +178,7 @@ impl From<&Header> for proto::HeaderV3 {
             l1_head: header.l1_head(),
             l1_finalized: header.l1_finalized().map(Into::into),
             payload_commitment: header.payload_commitment().to_string(),
-            builder_commitment: header.builder_commitment().to_string(),
+            builder_commitment: builder_commitment(header),
             ns_table: Some(proto::NsTable {
                 bytes: header.ns_table().encode().to_vec(),
             }),
@@ -178,7 +203,7 @@ fn header_v4(header: &Header) -> proto::HeaderV4 {
         l1_head: header.l1_head(),
         l1_finalized: header.l1_finalized().map(Into::into),
         payload_commitment: header.payload_commitment().to_string(),
-        builder_commitment: header.builder_commitment().to_string(),
+        builder_commitment: builder_commitment(header),
         ns_table: Some(proto::NsTable {
             bytes: header.ns_table().encode().to_vec(),
         }),
@@ -205,7 +230,7 @@ fn header_v5(header: &Header) -> proto::HeaderV5 {
         l1_head: header.l1_head(),
         l1_finalized: header.l1_finalized().map(Into::into),
         payload_commitment: header.payload_commitment().to_string(),
-        builder_commitment: header.builder_commitment().to_string(),
+        builder_commitment: builder_commitment(header),
         ns_table: Some(proto::NsTable {
             bytes: header.ns_table().encode().to_vec(),
         }),
@@ -524,6 +549,14 @@ impl From<&[BlockSummaryQueryData<SeqTypes>]> for proto::BlockSummaryRangeRespon
     }
 }
 
+impl From<&[Leaf2<SeqTypes>]> for proto::CatchupLeafChainResponse {
+    fn from(leaves: &[Leaf2<SeqTypes>]) -> Self {
+        proto::CatchupLeafChainResponse {
+            leaves: leaves.iter().map(Into::into).collect(),
+        }
+    }
+}
+
 impl TryFrom<&[NamespaceProofQueryData]> for proto::NamespaceProofRangeResponse {
     type Error = tonic::Status;
 
@@ -599,8 +632,58 @@ impl From<RewardAccountQueryDataV2> for proto::RewardAccountProofResponse {
         proto::RewardAccountProofResponse {
             balance: balance.to_string(),
             proof: Some(proto::RewardAccountProof {
-                account: account.to_string(),
+                account: format!("{account:#x}"),
                 proof: Some(proto::RewardMerkleProof { proof: Some(proof) }),
+            }),
+        }
+    }
+}
+
+/// As the [`RewardAccountQueryDataV2`] impl, for the v1 tree. The two proof types share no trait,
+/// so the match cannot be written once over both.
+impl From<v0_3::RewardAccountQueryDataV1> for proto::RewardAccountProofResponse {
+    fn from(query: v0_3::RewardAccountQueryDataV1) -> proto::RewardAccountProofResponse {
+        let v0_3::RewardAccountQueryDataV1 {
+            balance,
+            proof: v0_3::RewardAccountProofV1 { account, proof },
+        } = query;
+        let proof = match proof {
+            v0_3::RewardMerkleProofV1::Presence(proof) => {
+                proto::reward_merkle_proof::Proof::Presence(proto::MerklePathResponse::from(&proof))
+            },
+            v0_3::RewardMerkleProofV1::Absence(proof) => {
+                proto::reward_merkle_proof::Proof::Absence(proto::MerklePathResponse::from(&proof))
+            },
+        };
+        proto::RewardAccountProofResponse {
+            balance: balance.to_string(),
+            proof: Some(proto::RewardAccountProof {
+                account: format!("{account:#x}"),
+                proof: Some(proto::RewardMerkleProof { proof: Some(proof) }),
+            }),
+        }
+    }
+}
+
+impl From<AccountQueryData> for proto::FeeAccountProofResponse {
+    fn from(query: AccountQueryData) -> Self {
+        let AccountQueryData {
+            balance,
+            proof: FeeAccountProof { account, proof },
+        } = query;
+        let proof = match proof {
+            FeeMerkleProof::Presence(proof) => {
+                proto::fee_merkle_proof::Proof::Presence(proto::MerklePathResponse::from(&proof))
+            },
+            FeeMerkleProof::Absence(proof) => {
+                proto::fee_merkle_proof::Proof::Absence(proto::MerklePathResponse::from(&proof))
+            },
+        };
+        proto::FeeAccountProofResponse {
+            balance: balance.to_string(),
+            proof: Some(proto::FeeAccountProof {
+                account: format!("{account:#x}"),
+                proof: Some(proto::FeeMerkleProof { proof: Some(proof) }),
             }),
         }
     }
@@ -731,30 +814,14 @@ impl From<PublicNetworkConfig> for proto::HotshotConfigResponse {
             num_bootstrap: num_bootstrap as u64,
             commit_sha: public_config.commit_sha().to_string(),
             indexed_da: public_config.indexed_da(),
-            cdn_marshal_address: public_config.cdn_marshal_address().map(ToString::to_string),
-            libp2p_config: public_config
-                .libp2p_config()
-                .map(|libp2p| proto::Libp2pNetworkConfig {
-                    bootstrap_nodes: libp2p
-                        .bootstrap_nodes
-                        .iter()
-                        .map(|(peer_id, multiaddr)| proto::Libp2pBootstrapNode {
-                            peer_id: peer_id.to_string(),
-                            multiaddr: multiaddr.to_string(),
-                        })
-                        .collect(),
-                }),
-            combined_network_config: public_config.combined_network_config().map(|combined| {
-                proto::CombinedNetworkConfig {
-                    delay_duration_ms: combined.delay_duration.as_millis() as u64,
-                }
-            }),
             builder: match public_config.builder() {
                 BuilderType::External => proto::BuilderType::External,
                 BuilderType::Simple => proto::BuilderType::Simple,
                 BuilderType::Random => proto::BuilderType::Random,
             }
             .into(),
+            // The deprecated CDN and libp2p fields stay at their empty defaults.
+            ..Default::default()
         }
     }
 }
@@ -796,6 +863,15 @@ where
             vote_commitment: cert.vote_commitment().to_string(),
             view_number: cert.view_number.u64(),
             signatures: quorum_signatures(cert),
+        }
+    }
+}
+
+impl From<&CertificatePair<SeqTypes>> for proto::CertificatePair {
+    fn from(pair: &CertificatePair<SeqTypes>) -> Self {
+        proto::CertificatePair {
+            qc: Some(pair.qc().into()),
+            next_epoch_qc: pair.next_epoch_qc().map(Into::into),
         }
     }
 }
@@ -968,9 +1044,22 @@ impl TryFrom<&VidCommonQueryData<SeqTypes>> for proto::VidCommonResponse {
     type Error = tonic::Status;
 
     fn try_from(common: &VidCommonQueryData<SeqTypes>) -> Result<Self, Self::Error> {
-        use proto::vid_common_response::Common;
+        Ok(proto::VidCommonResponse {
+            height: common.height,
+            block_hash: common.block_hash().to_string(),
+            payload_hash: common.payload_hash().to_string(),
+            common: Some(common.common().try_into()?),
+        })
+    }
+}
 
-        let arm = match common.common() {
+impl TryFrom<&VidCommon> for proto::vid_common::Common {
+    type Error = tonic::Status;
+
+    fn try_from(common: &VidCommon) -> Result<Self, Self::Error> {
+        use proto::vid_common::Common;
+
+        Ok(match common {
             VidCommon::V0(advz) => {
                 let value = to_json(advz)?;
                 Common::V0(proto::AdvzCommon {
@@ -997,13 +1086,213 @@ impl TryFrom<&VidCommonQueryData<SeqTypes>> for proto::VidCommonResponse {
                     .collect(),
                 ns_lens: namespaced.ns_lens.iter().map(|len| *len as u64).collect(),
             }),
-        };
-        Ok(proto::VidCommonResponse {
-            height: common.height,
-            block_hash: common.block_hash().to_string(),
-            payload_hash: common.payload_hash().to_string(),
-            common: Some(arm),
         })
+    }
+}
+
+impl TryFrom<&VidCommon> for proto::VidCommon {
+    type Error = tonic::Status;
+
+    fn try_from(common: &VidCommon) -> Result<Self, Self::Error> {
+        Ok(proto::VidCommon {
+            common: Some(common.try_into()?),
+        })
+    }
+}
+
+impl From<&LeafProof> for proto::LightClientLeafProofResponse {
+    fn from(proof: &LeafProof) -> Self {
+        proto::LightClientLeafProofResponse {
+            leaves: proof.leaves().iter().map(Into::into).collect(),
+            proof: Some(proof.proof().into()),
+        }
+    }
+}
+
+impl From<&FinalityProof> for proto::FinalityProof {
+    fn from(proof: &FinalityProof) -> Self {
+        use proto::finality_proof::Proof;
+
+        let arm = match proof {
+            FinalityProof::Assumption => Proof::Assumption(proto::FinalityAssumption {}),
+            FinalityProof::HotStuff2 {
+                committing_qc,
+                deciding_qc,
+            } => Proof::HotStuff2(proto::HotStuff2Finality {
+                committing_qc: Some(committing_qc.as_ref().into()),
+                deciding_qc: Some(deciding_qc.as_ref().into()),
+            }),
+            FinalityProof::NewProtocol { cert2, leaf_qc } => {
+                Proof::NewProtocol(proto::NewProtocolFinality {
+                    cert2: Some(cert2.as_ref().into()),
+                    leaf_qc: Some(leaf_qc.as_ref().into()),
+                })
+            },
+            FinalityProof::HotStuff {
+                precommit_qc,
+                committing_qc,
+                deciding_qc,
+            } => Proof::HotStuff(proto::HotStuffFinality {
+                precommit_qc: Some(precommit_qc.as_ref().into()),
+                committing_qc: Some(committing_qc.as_ref().into()),
+                deciding_qc: Some(deciding_qc.as_ref().into()),
+            }),
+        };
+        proto::FinalityProof { proof: Some(arm) }
+    }
+}
+
+impl TryFrom<&PayloadProof> for proto::LightClientPayloadProofResponse {
+    type Error = tonic::Status;
+
+    fn try_from(proof: &PayloadProof) -> Result<Self, Self::Error> {
+        Ok(proto::LightClientPayloadProofResponse {
+            payload: Some(proof.payload().into()),
+            vid_common: Some(proof.vid_common().try_into()?),
+        })
+    }
+}
+
+impl TryFrom<&NamespaceProof> for proto::LightClientNamespaceProofResponse {
+    type Error = tonic::Status;
+
+    fn try_from(proof: &NamespaceProof) -> Result<Self, Self::Error> {
+        Ok(proto::LightClientNamespaceProofResponse {
+            contents: proof.contents().map(TryInto::try_into).transpose()?,
+        })
+    }
+}
+
+/// The pair [`NamespaceProof::contents`] returns.
+impl TryFrom<(&NsProof, &VidCommon)> for proto::LightClientNamespaceProofContents {
+    type Error = tonic::Status;
+
+    fn try_from((proof, common): (&NsProof, &VidCommon)) -> Result<Self, Self::Error> {
+        Ok(proto::LightClientNamespaceProofContents {
+            proof: Some(proof.try_into()?),
+            vid_common: Some(common.try_into()?),
+        })
+    }
+}
+
+impl From<&StakeTableEvent> for proto::StakeTableEvent {
+    fn from(event: &StakeTableEvent) -> Self {
+        use proto::stake_table_event::Event;
+
+        let arm = match event {
+            StakeTableEvent::Register(event) => Event::Register(proto::ValidatorRegistered {
+                account: format!("{:#x}", event.account),
+                bls_vk: Some((&event.blsVk).into()),
+                schnorr_vk: Some((&event.schnorrVk).into()),
+                commission: u32::from(event.commission),
+            }),
+            StakeTableEvent::RegisterV2(event) => Event::RegisterV2(proto::ValidatorRegisteredV2 {
+                account: format!("{:#x}", event.account),
+                bls_vk: Some((&event.blsVK).into()),
+                schnorr_vk: Some((&event.schnorrVK).into()),
+                commission: u32::from(event.commission),
+                bls_sig: Some((&event.blsSig).into()),
+                schnorr_sig: event.schnorrSig.to_vec(),
+                metadata_uri: event.metadataUri.clone(),
+            }),
+            StakeTableEvent::RegisterV3(event) => Event::RegisterV3(proto::ValidatorRegisteredV3 {
+                account: format!("{:#x}", event.account),
+                bls_vk: Some((&event.blsVK).into()),
+                schnorr_vk: Some((&event.schnorrVK).into()),
+                commission: u32::from(event.commission),
+                bls_sig: Some((&event.blsSig).into()),
+                schnorr_sig: event.schnorrSig.to_vec(),
+                metadata_uri: event.metadataUri.clone(),
+                x25519_key: event.x25519Key.to_vec(),
+                p2p_addr: event.p2pAddr.clone(),
+            }),
+            StakeTableEvent::Deregister(event) => Event::Deregister(proto::ValidatorExit {
+                validator: format!("{:#x}", event.validator),
+            }),
+            StakeTableEvent::DeregisterV2(event) => Event::DeregisterV2(proto::ValidatorExitV2 {
+                validator: format!("{:#x}", event.validator),
+                unlocks_at: event.unlocksAt.to_string(),
+            }),
+            StakeTableEvent::Delegate(event) => Event::Delegate(proto::Delegated {
+                delegator: format!("{:#x}", event.delegator),
+                validator: format!("{:#x}", event.validator),
+                amount: event.amount.to_string(),
+            }),
+            StakeTableEvent::Undelegate(event) => Event::Undelegate(proto::Undelegated {
+                delegator: format!("{:#x}", event.delegator),
+                validator: format!("{:#x}", event.validator),
+                amount: event.amount.to_string(),
+            }),
+            StakeTableEvent::UndelegateV2(event) => Event::UndelegateV2(proto::UndelegatedV2 {
+                delegator: format!("{:#x}", event.delegator),
+                validator: format!("{:#x}", event.validator),
+                undelegation_id: event.undelegationId,
+                amount: event.amount.to_string(),
+                unlocks_at: event.unlocksAt.to_string(),
+            }),
+            StakeTableEvent::KeyUpdate(event) => Event::KeyUpdate(proto::ConsensusKeysUpdated {
+                account: format!("{:#x}", event.account),
+                bls_vk: Some((&event.blsVK).into()),
+                schnorr_vk: Some((&event.schnorrVK).into()),
+            }),
+            StakeTableEvent::KeyUpdateV2(event) => {
+                Event::KeyUpdateV2(proto::ConsensusKeysUpdatedV2 {
+                    account: format!("{:#x}", event.account),
+                    bls_vk: Some((&event.blsVK).into()),
+                    schnorr_vk: Some((&event.schnorrVK).into()),
+                    bls_sig: Some((&event.blsSig).into()),
+                    schnorr_sig: event.schnorrSig.to_vec(),
+                })
+            },
+            StakeTableEvent::CommissionUpdate(event) => {
+                Event::CommissionUpdate(proto::CommissionUpdated {
+                    validator: format!("{:#x}", event.validator),
+                    timestamp: event.timestamp.to_string(),
+                    old_commission: u32::from(event.oldCommission),
+                    new_commission: u32::from(event.newCommission),
+                })
+            },
+            StakeTableEvent::X25519KeyUpdate(event) => {
+                Event::X25519KeyUpdate(proto::X25519KeyUpdated {
+                    validator: format!("{:#x}", event.validator),
+                    x25519_key: event.x25519Key.to_vec(),
+                })
+            },
+            StakeTableEvent::P2pAddrUpdate(event) => Event::P2pAddrUpdate(proto::P2pAddrUpdated {
+                validator: format!("{:#x}", event.validator),
+                p2p_addr: event.p2pAddr.clone(),
+            }),
+        };
+        proto::StakeTableEvent { event: Some(arm) }
+    }
+}
+
+impl From<&G1PointSol> for proto::Bn254G1Point {
+    fn from(point: &G1PointSol) -> Self {
+        proto::Bn254G1Point {
+            x: format!("{:#x}", point.x),
+            y: format!("{:#x}", point.y),
+        }
+    }
+}
+
+impl From<&G2PointSol> for proto::Bn254G2Point {
+    fn from(point: &G2PointSol) -> Self {
+        proto::Bn254G2Point {
+            x0: format!("{:#x}", point.x0),
+            x1: format!("{:#x}", point.x1),
+            y0: format!("{:#x}", point.y0),
+            y1: format!("{:#x}", point.y1),
+        }
+    }
+}
+
+impl From<&EdOnBN254PointSol> for proto::EdOnBn254Point {
+    fn from(point: &EdOnBN254PointSol) -> Self {
+        proto::EdOnBn254Point {
+            x: format!("{:#x}", point.x),
+            y: format!("{:#x}", point.y),
+        }
     }
 }
 
@@ -1235,4 +1524,155 @@ impl From<&StateCertQueryDataV2<SeqTypes>> for proto::StateCertV2Response {
             auth_root: format!("{:#x}", cert.auth_root),
         }
     }
+}
+
+impl From<&LCV3StateSignatureRequestBody> for proto::StateSignatureResponse {
+    fn from(body: &LCV3StateSignatureRequestBody) -> Self {
+        proto::StateSignatureResponse {
+            key: body.key.to_string(),
+            light_client_state: body.state.to_string(),
+            next_stake_table_state: body.next_stake.to_string(),
+            auth_root: format!("{:#x}", body.auth_root),
+            lcv3_signature: body.signature.to_string(),
+            lcv2_signature: body.v2_signature.to_string(),
+        }
+    }
+}
+
+impl From<&explorer::BlockDetail<SeqTypes>> for proto::ExplorerBlockDetail {
+    fn from(block: &explorer::BlockDetail<SeqTypes>) -> Self {
+        proto::ExplorerBlockDetail {
+            hash: block.hash.to_string(),
+            height: block.height,
+            time: explorer_time(block.time),
+            num_transactions: block.num_transactions,
+            proposer_id: explorer_accounts(&block.proposer_id),
+            fee_recipient: explorer_accounts(&block.fee_recipient),
+            size: block.size,
+            // `MonetaryValue`'s `Serialize` writes its `Display`.
+            block_reward: block.block_reward.iter().map(ToString::to_string).collect(),
+        }
+    }
+}
+
+impl From<&explorer::BlockSummary<SeqTypes>> for proto::ExplorerBlockSummary {
+    fn from(block: &explorer::BlockSummary<SeqTypes>) -> Self {
+        proto::ExplorerBlockSummary {
+            hash: block.hash.to_string(),
+            height: block.height,
+            proposer_id: explorer_accounts(&block.proposer_id),
+            num_transactions: block.num_transactions,
+            size: block.size,
+            time: explorer_time(block.time),
+        }
+    }
+}
+
+impl From<&explorer::TransactionSummary<SeqTypes>> for proto::ExplorerTransactionSummary {
+    fn from(transaction: &explorer::TransactionSummary<SeqTypes>) -> Self {
+        proto::ExplorerTransactionSummary {
+            hash: transaction.hash.to_string(),
+            rollups: transaction
+                .rollups
+                .iter()
+                .map(|namespace| u64::from(*namespace))
+                .collect(),
+            height: transaction.height,
+            offset: transaction.offset,
+            num_transactions: transaction.num_transactions,
+            time: explorer_time(transaction.time),
+        }
+    }
+}
+
+impl From<&explorer::TransactionDetail<SeqTypes>> for proto::ExplorerTransactionDetail {
+    fn from(details: &explorer::TransactionDetail<SeqTypes>) -> Self {
+        proto::ExplorerTransactionDetail {
+            hash: details.hash.to_string(),
+            height: details.height,
+            block_confirmed: details.block_confirmed,
+            offset: details.offset,
+            num_transactions: details.num_transactions,
+            size: details.size,
+            time: explorer_time(details.time),
+            sequencing_fees: details
+                .sequencing_fees
+                .iter()
+                .map(ToString::to_string)
+                .collect(),
+            fee_details: details.fee_details.iter().map(Into::into).collect(),
+        }
+    }
+}
+
+impl From<&explorer::FeeAttribution> for proto::ExplorerFeeAttribution {
+    fn from(attribution: &explorer::FeeAttribution) -> Self {
+        proto::ExplorerFeeAttribution {
+            target: attribution.target.clone(),
+            fees: attribution.fees.iter().map(ToString::to_string).collect(),
+        }
+    }
+}
+
+impl From<&explorer::ExplorerSummary<SeqTypes>> for proto::ExplorerSummaryResponse {
+    fn from(summary: &explorer::ExplorerSummary<SeqTypes>) -> Self {
+        let explorer::GenesisOverview {
+            rollups,
+            transactions,
+            blocks,
+        } = summary.genesis_overview;
+        // v1's four histogram arrays are parallel, built and trimmed together, so they zip into
+        // one point per block.
+        let histograms = &summary.histograms;
+        let histograms = histograms
+            .block_heights
+            .iter()
+            .zip(&histograms.block_time)
+            .zip(&histograms.block_size)
+            .zip(&histograms.block_transactions)
+            .map(|(((height, block_time), block_size), block_transactions)| {
+                proto::ExplorerHistogramPoint {
+                    height: *height,
+                    block_time: *block_time,
+                    block_size: *block_size,
+                    block_transactions: *block_transactions,
+                }
+            })
+            .collect();
+        proto::ExplorerSummaryResponse {
+            latest_block: Some((&summary.latest_block).into()),
+            genesis_overview: Some(proto::ExplorerGenesisOverview {
+                rollups,
+                transactions,
+                blocks,
+            }),
+            latest_blocks: summary.latest_blocks.iter().map(Into::into).collect(),
+            latest_transactions: summary.latest_transactions.iter().map(Into::into).collect(),
+            histograms,
+        }
+    }
+}
+
+impl From<&explorer::SearchResult<SeqTypes>> for proto::ExplorerSearchResponse {
+    fn from(results: &explorer::SearchResult<SeqTypes>) -> Self {
+        proto::ExplorerSearchResponse {
+            blocks: results.blocks.iter().map(Into::into).collect(),
+            transactions: results.transactions.iter().map(Into::into).collect(),
+        }
+    }
+}
+
+/// The same `Rfc3339` format `Timestamp`'s own `Serialize` uses, so v1 and v2 agree on the string.
+fn explorer_time(time: explorer::Timestamp) -> String {
+    time.0
+        .format(&time::format_description::well_known::Rfc3339)
+        .expect("a Timestamp is built from a unix time inside RFC 3339's year range")
+}
+
+/// `FeeAccount`'s `Display` drops the `0x` that its serde writes.
+fn explorer_accounts(accounts: &[FeeAccount]) -> Vec<String> {
+    accounts
+        .iter()
+        .map(|account| format!("{:#x}", account.0))
+        .collect()
 }

@@ -1,7 +1,6 @@
 use std::{path::PathBuf, sync::Arc};
 
 use anyhow::Result;
-use hotshot::{traits::BlockPayload, types::BLSPubKey};
 use hotshot_example_types::{
     block_types::{TestBlockHeader, TestBlockPayload, TestMetadata, TestTransaction},
     node_types::{TEST_VERSIONS, TestTypes},
@@ -30,10 +29,15 @@ use hotshot_types::{
     data::{EpochNumber, Leaf2, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
     message::UpgradeLock,
-    traits::{metrics::NoMetrics, node_implementation::NodeType, signature_key::SignatureKey},
+    signature_key::BLSPubKey,
+    traits::{
+        BlockPayload, metrics::NoMetrics, node_implementation::NodeType,
+        signature_key::SignatureKey,
+    },
     upgrade_config::UpgradeConfig,
     x25519::Keypair,
 };
+use tokio::sync::mpsc;
 use tracing::{error, info, warn};
 use versions::{NEW_PROTOCOL_VERSION, Upgrade};
 
@@ -231,6 +235,7 @@ async fn build_coordinator(
         .client(client)
         .membership_coordinator(membership)
         .outbox(Outbox::new())
+        .external_tx(mpsc::unbounded_channel().0)
         .timer(timer)
         .public_key(public_key)
         .build();

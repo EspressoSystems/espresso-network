@@ -5,7 +5,7 @@ authors = ["Espresso Systems <hello@espressosys.com>"]
 edition.workspace = true
 
 [package.metadata.cargo-machete]
-ignored = ["base64_bytes", "hotshot_testing"]
+ignored = ["base64_bytes"]
 
 # TODO: fix comments so doctests don't fail
 [lib]
@@ -22,8 +22,6 @@ node = [
     "alloy/node-bindings",
     "alloy/provider-ws",
     "alloy/signer-ledger",
-    "dep:hotshot",
-    "dep:hotshot-libp2p-networking",
     "dep:hotshot-new-protocol",
     "espresso-utils/full",
     "hotshot-query-service-types/sqlx",
@@ -72,10 +70,8 @@ either = { workspace = true }
 espresso-utils = { workspace = true }
 ethers-core = { workspace = true }
 futures = { workspace = true }
-hotshot = { workspace = true, optional = true }
 hotshot-contract-adapter = { workspace = true }
 hotshot-example-types = { workspace = true, optional = true }
-hotshot-libp2p-networking = { workspace = true, optional = true }
 hotshot-new-protocol = { workspace = true, optional = true }
 hotshot-query-service-types = { workspace = true }
 hotshot-types = { workspace = true }
@@ -110,6 +106,11 @@ vec1 = { workspace = true }
 versions = { workspace = true }
 vid = { workspace = true }
 
+# sha2 0.10 only uses the ARMv8 SHA-256 instructions with `asm`.
+# sha2 0.11 detects them at runtime, but upgrading is blocked by deps pinned to digest 0.10.
+[target.'cfg(target_arch = "aarch64")'.dependencies]
+sha2 = { workspace = true, features = ["asm"] }
+
 [dev-dependencies]
 # Tests depend on our own testing feature.
 espresso-types = { path = ".", features = ["testing"] }
@@ -123,16 +124,23 @@ insta = { workspace = true }
 pretty_assertions = { workspace = true }
 proptest = { workspace = true }
 rand_chacha = { workspace = true }
+rayon = { workspace = true }
 rstest = { workspace = true }
 rstest_reuse = { workspace = true }
+rustix = { workspace = true }
 test-log = { workspace = true }
 test-server = { workspace = true }
 test-utils = { workspace = true }
 toml = { workspace = true }
+tracing-subscriber = { workspace = true }
 warp = { workspace = true }
 
 [[bench]]
 name = "reward_mt"
+harness = false
+
+[[bench]]
+name = "block_build"
 harness = false
 
 [lints]

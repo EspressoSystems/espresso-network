@@ -9,7 +9,6 @@ use async_broadcast::Sender;
 use bon::Builder;
 use cliquenet::noise::Protocol;
 use committable::{Commitment, Committable};
-use hotshot::types::{BLSPubKey, Event, EventType};
 use hotshot_example_types::{
     block_types::TestTransaction, node_types::TestTypes, storage_types::TestStorage,
 };
@@ -18,7 +17,9 @@ use hotshot_types::{
     addr::NetAddr,
     data::ViewNumber,
     epoch_membership::EpochMembershipCoordinator,
+    event::{Event, EventType},
     message::UpgradeLock,
+    signature_key::BLSPubKey,
     simple_certificate::TimeoutEvidence,
     simple_vote::HasEpoch,
     traits::{metrics::NoMetrics, signature_key::SignatureKey},
@@ -34,6 +35,7 @@ use tokio::{
     task::JoinHandle,
     time::{Instant, sleep, timeout},
 };
+use tokio_util::task::AbortOnDropHandle;
 use tracing::{debug, info};
 
 use crate::{
@@ -41,7 +43,7 @@ use crate::{
     client::{ClientApi, CoordinatorClient},
     consensus::{ConsensusInput, ConsensusOutput},
     coordinator::{Coordinator, error::Severity},
-    message::{ConsensusMessage, Message, MessageType, Unchecked},
+    message::{ConsensusMessage, Message, MessageType, OpaqueMessage, Unchecked},
     network::Cliquenet,
     tests::common::{
         coordinator_builder::{UpgradeSetup, build_test_coordinator},
@@ -531,6 +533,7 @@ impl TestRunner {
                 self.make_membership(public_key, self.node_storages[i].clone(), &connect_infos);
             clients.push(client.handle().clone());
 
+            let (external_tx, external_rx) = mpsc::unbounded_channel();
             let mut coord = build_test_coordinator(
                 i as u64,
                 network,
@@ -543,6 +546,7 @@ impl TestRunner {
                     lock: upgrade_lock,
                     config: self.upgrade_config.clone(),
                 },
+                external_tx,
             )
             .await;
 
@@ -568,6 +572,7 @@ impl TestRunner {
             cancels.insert(i, cancel_tx);
             node_handles.push(Some(tokio::spawn(run_node(
                 coord,
+                external_rx,
                 self.node_storages[i].clone(),
                 tx,
                 i,
@@ -665,6 +670,7 @@ impl TestRunner {
                                         self.node_storages[change.idx].clone(),
                                         &connect_infos,
                                     );
+                                let (external_tx, external_rx) = mpsc::unbounded_channel();
                                 let coord = build_test_coordinator(
                                     change.idx as u64,
                                     net,
@@ -677,6 +683,7 @@ impl TestRunner {
                                         lock: upgrade_lock,
                                         config: self.upgrade_config.clone(),
                                     },
+                                    external_tx,
                                 )
                                 .await;
                                 // Bump the generation so stale events queued
@@ -688,6 +695,7 @@ impl TestRunner {
                                 cancels.insert(change.idx, cancel_tx);
                                 node_handles[change.idx] = Some(tokio::spawn(run_node(
                                     coord,
+                                    external_rx,
                                     self.node_storages[change.idx].clone(),
                                     tx,
                                     change.idx,
@@ -924,6 +932,7 @@ async fn submit_transactions(clients: Vec<ClientApi<TestTypes>>, count: usize) {
 #[allow(clippy::too_many_arguments)]
 async fn run_node(
     mut coord: Coordinator<TestTypes, TestStorage<TestTypes>>,
+    mut external_rx: mpsc::UnboundedReceiver<OpaqueMessage<BLSPubKey>>,
     storage: TestStorage<TestTypes>,
     output_tx: UnboundedSender<TaggedEvent>,
     idx: usize,
@@ -933,6 +942,20 @@ async fn run_node(
 ) {
     let mut commits: BTreeMap<ViewNumber, [u8; 32]> = BTreeMap::new();
     let mut last_view = ViewNumber::genesis();
+    let _forward = AbortOnDropHandle::new(tokio::spawn(async move {
+        while let Some(m) = external_rx.recv().await {
+            let _ = external_events_tx
+                .broadcast_direct(Event {
+                    // The test leaf fetcher ignores the view.
+                    view_number: ViewNumber::genesis(),
+                    event: EventType::ExternalMessageReceived {
+                        sender: m.sender,
+                        data: m.data,
+                    },
+                })
+                .await;
+        }
+    }));
     let send = |event: NodeEvent| {
         let _ = output_tx.send(TaggedEvent {
             idx,
@@ -958,12 +981,22 @@ async fn run_node(
         }
 
         while let Some(output) = coord.outbox_mut().pop_front() {
-            if let ConsensusOutput::LeafDecided { leaves, cert1, .. } = &output {
+            if let ConsensusOutput::LeafDecided {
+                leaves,
+                cert1,
+                cert2,
+                ..
+            } = &output
+            {
                 // Persist the decided anchor the way the application's
                 // persistence layer does in production: the newest decided
-                // leaf and the QC certifying it. A node restarted with
-                // persistent storage resumes consensus from this anchor.
+                // leaf, the QC certifying it, and the cert2 finalizing it. A
+                // node restarted with persistent storage resumes consensus
+                // from this anchor.
                 if let Some(newest) = leaves.first() {
+                    if let Some(cert2) = cert2 {
+                        storage.insert_cert2(cert2.view_number, cert2.clone()).await;
+                    }
                     storage
                         .update_anchor_leaf(newest.clone(), cert1.clone())
                         .await;
@@ -1013,18 +1046,6 @@ async fn run_node(
             {
                 tracing::error!(%err, node = %coord.node_id(), "critical error processing output");
                 return;
-            }
-
-            while let Some(output) = coord.coordinator_outbox_mut().pop_front() {
-                let _ = external_events_tx
-                    .broadcast_direct(Event {
-                        view_number: coord.current_view(),
-                        event: EventType::ExternalMessageReceived {
-                            sender: output.sender,
-                            data: output.data,
-                        },
-                    })
-                    .await;
             }
         }
     }

@@ -2,7 +2,7 @@
 //! data source this type wraps.
 
 use std::{
-    collections::HashMap,
+    collections::{BTreeSet, HashMap},
     num::NonZeroUsize,
     ops::{Bound, Deref, Range},
     time::Duration,
@@ -40,9 +40,9 @@ use hotshot_query_service::{
     },
     data_source::{VersionedDataSource as _, storage::AvailabilityStorage as _},
     explorer::{
-        BlockIdentifier, BlockRange, ExplorerDataSource as _, GetBlockSummariesRequest,
-        GetTransactionSummariesRequest, TransactionIdentifier, TransactionRange,
-        TransactionSummaryFilter,
+        BlockIdentifier, BlockRange, Error as ExplorerError, ExplorerDataSource as _,
+        GetBlockSummariesRequest, GetSearchResultsError, GetTransactionSummariesRequest,
+        TransactionIdentifier, TransactionRange, TransactionSummaryFilter,
     },
     merklized_state::{
         MerklizedStateDataSource, MerklizedStateHeightPersistence, Snapshot as HsSnapshot,
@@ -83,6 +83,10 @@ use super::{
 ///
 /// Matches the `hotshot_query_service` availability API default.
 const FETCH_TIMEOUT: Duration = Duration::from_millis(500);
+
+/// Bounds the namespace list of a v2 multi-namespace light-client request, as the URL length
+/// bounds v1's, since every namespace costs a lookup in every block of the range.
+const MAX_NAMESPACES_PER_REQUEST: usize = 100;
 
 /// Node API state implementation
 ///
@@ -572,13 +576,24 @@ where
         );
 
         let blocks: Vec<_> = blocks_stream
-            .then(|block| async move { block.resolve().await })
-            .collect()
-            .await;
+            .zip(futures::stream::iter(from..until))
+            .then(|(block, i)| async move {
+                block
+                    .with_timeout(FETCH_TIMEOUT)
+                    .await
+                    .ok_or_else(|| not_found(format!("block {i} not available")))
+            })
+            .try_collect()
+            .await?;
         let vids: Vec<_> = vids_stream
-            .then(|vid| async move { vid.resolve().await })
-            .collect()
-            .await;
+            .zip(futures::stream::iter(from..until))
+            .then(|(vid, i)| async move {
+                vid.with_timeout(FETCH_TIMEOUT)
+                    .await
+                    .ok_or_else(|| not_found(format!("VID common for block {i} not available")))
+            })
+            .try_collect()
+            .await?;
 
         if blocks.len() != vids.len() {
             return Err(anyhow::anyhow!(
@@ -1395,6 +1410,7 @@ fn payload_id_to_hs(id: v1::availability::PayloadId) -> anyhow::Result<HsBlockId
 fn classify_query_error(err: hotshot_query_service::QueryError) -> anyhow::Error {
     match err {
         QueryError::NotFound | QueryError::Missing => not_found(err.to_string()),
+        QueryError::Pruned { .. } => AvailabilityError::Pruned(err.to_string()).into(),
         QueryError::Error { .. } => anyhow::anyhow!(err.to_string()),
     }
 }
@@ -2169,12 +2185,8 @@ impl From<crate::options::PublicNodeConfig> for proto::RuntimeConfigResponse {
         // stops at this level, as the storage and module structs below are read field by field.
         let crate::options::PublicNodeConfig {
             orchestrator_url,
-            cdn_endpoint,
             cliquenet_bind_address,
             cliquenet_advertise_address,
-            libp2p_bind_address,
-            libp2p_advertise_address,
-            libp2p_bootstrap_nodes,
             public_api_url,
             builder_urls,
             state_relay_server_url,
@@ -2186,11 +2198,11 @@ impl From<crate::options::PublicNodeConfig> for proto::RuntimeConfigResponse {
             identity,
             catchup_base_timeout: _,
             local_catchup_timeout: _,
+            http_catchup_delay: _,
             bootstrap_epoch_catchup_timeout: _,
             catchup_backoff: _,
             follower,
             proposal_fetcher: _,
-            libp2p: _,
             l1: _,
             l1_provider_count,
             l1_ws_provider_count,
@@ -2247,19 +2259,11 @@ impl From<crate::options::PublicNodeConfig> for proto::RuntimeConfigResponse {
                 .map(ToString::to_string)
                 .collect(),
             orchestrator_url: orchestrator_url.to_string(),
-            cdn_endpoint,
             // `unbracketed_string` rather than `to_string`: NetAddr's Display brackets an IPv6
             // literal and its serde impl does not, so v1 serves the unbracketed form.
             cliquenet_bind_address: cliquenet_bind_address.unbracketed_string(),
             cliquenet_advertise_address: cliquenet_advertise_address
                 .map(|addr| addr.unbracketed_string()),
-            libp2p_bind_address,
-            libp2p_advertise_address,
-            libp2p_bootstrap_nodes: libp2p_bootstrap_nodes
-                .unwrap_or_default()
-                .iter()
-                .map(ToString::to_string)
-                .collect(),
             l1_provider_count: l1_provider_count as u64,
             l1_ws_provider_count: l1_ws_provider_count as u64,
             modules: Some(modules.into()),
@@ -2267,6 +2271,8 @@ impl From<crate::options::PublicNodeConfig> for proto::RuntimeConfigResponse {
                 poll_interval_ms: follower.poll_interval.as_millis() as u64,
                 max_blocks_per_poll: follower.max_blocks_per_poll,
             }),
+            // The deprecated CDN and libp2p fields stay at their empty defaults.
+            ..Default::default()
         }
     }
 }
@@ -2347,7 +2353,6 @@ impl From<crate::options::ApiModulesConfig> for proto::ApiModules {
                 light_client_db: Some(proto::LightClientDbOptions {
                     num_connections: query.light_client_db.num_connections,
                     num_leaves: query.light_client_db.num_leaves,
-                    num_stake_tables: query.light_client_db.num_stake_tables,
                     lc_path: query
                         .light_client_db
                         .lc_path
@@ -2546,6 +2551,193 @@ where
     }
 }
 
+#[tonic::async_trait]
+impl<D> proto::catchup_service_server::CatchupService for NodeApiStateImpl<D>
+where
+    D: Deref + Clone + Send + Sync + 'static,
+    D::Target: CatchupDataSource + NodeStateDataSource + Send + Sync,
+{
+    async fn get_catchup_fee_account(
+        &self,
+        request: tonic::Request<proto::GetCatchupFeeAccountRequest>,
+    ) -> Result<tonic::Response<proto::FeeAccountProofResponse>, tonic::Status> {
+        let request = request.into_inner();
+        let (height, view) = catchup_at(request.height, request.view)?;
+        let address = required(request.address, "address")?;
+        let query = <Self as v1::CatchupApi>::get_account(self, height, view, address)
+            .await
+            .map_err(to_status)?;
+        Ok(tonic::Response::new(query.into()))
+    }
+
+    async fn get_catchup_fee_accounts(
+        &self,
+        request: tonic::Request<proto::GetCatchupFeeAccountsRequest>,
+    ) -> Result<tonic::Response<proto::FeeMerkleTreeResponse>, tonic::Status> {
+        let request = request.into_inner();
+        let (height, view) = catchup_at(request.height, request.view)?;
+        let accounts = request
+            .addresses
+            .iter()
+            .map(|account| {
+                account.parse().map_err(|err| {
+                    tonic::Status::invalid_argument(format!(
+                        "malformed fee account {account}: {err}"
+                    ))
+                })
+            })
+            .collect::<Result<Vec<espresso_types::FeeAccount>, _>>()?;
+        let tree = <Self as v1::CatchupApi>::get_accounts(self, height, view, accounts)
+            .await
+            .map_err(to_status)?;
+        Ok(tonic::Response::new(proto::FeeMerkleTreeResponse {
+            tree: serialize_tree(&tree)?,
+        }))
+    }
+
+    async fn get_catchup_blocks_frontier(
+        &self,
+        request: tonic::Request<proto::GetCatchupBlocksFrontierRequest>,
+    ) -> Result<tonic::Response<proto::MerklePathResponse>, tonic::Status> {
+        let request = request.into_inner();
+        let (height, view) = catchup_at(request.height, request.view)?;
+        let frontier = <Self as v1::CatchupApi>::get_blocks_frontier(self, height, view)
+            .await
+            .map_err(to_status)?;
+        Ok(tonic::Response::new((&frontier).into()))
+    }
+
+    async fn get_catchup_chain_config(
+        &self,
+        request: tonic::Request<proto::GetCatchupChainConfigRequest>,
+    ) -> Result<tonic::Response<proto::CatchupChainConfigResponse>, tonic::Status> {
+        let commitment = required(request.into_inner().commitment, "commitment")?;
+        let config = <Self as v1::CatchupApi>::get_chain_config(self, commitment)
+            .await
+            .map_err(to_status)?;
+        Ok(tonic::Response::new(proto::CatchupChainConfigResponse {
+            chain_config: Some((&config).into()),
+        }))
+    }
+
+    async fn get_catchup_leaf_chain(
+        &self,
+        request: tonic::Request<proto::GetCatchupLeafChainRequest>,
+    ) -> Result<tonic::Response<proto::CatchupLeafChainResponse>, tonic::Status> {
+        let height = required(request.into_inner().height, "height")?;
+        let leaves = <Self as v1::CatchupApi>::get_leaf_chain(self, height)
+            .await
+            .map_err(to_status)?;
+        Ok(tonic::Response::new(leaves.as_slice().into()))
+    }
+
+    async fn get_catchup_cert2(
+        &self,
+        request: tonic::Request<proto::GetCatchupCert2Request>,
+    ) -> Result<tonic::Response<proto::Cert2Response>, tonic::Status> {
+        let height = required(request.into_inner().height, "height")?;
+        let cert = <Self as v1::CatchupApi>::get_cert2(self, height)
+            .await
+            .map_err(to_status)?;
+        Ok(tonic::Response::new(proto::Cert2Response {
+            certificate: Some((&cert).into()),
+        }))
+    }
+
+    async fn get_catchup_reward_account(
+        &self,
+        request: tonic::Request<proto::GetCatchupRewardAccountRequest>,
+    ) -> Result<tonic::Response<proto::RewardAccountProofResponse>, tonic::Status> {
+        let request = request.into_inner();
+        let (height, view) = catchup_at(request.height, request.view)?;
+        let address = required(request.address, "address")?;
+        let query = <Self as v1::CatchupApi>::get_reward_account_v1(self, height, view, address)
+            .await
+            .map_err(to_status)?;
+        Ok(tonic::Response::new(query.into()))
+    }
+
+    async fn get_catchup_reward_accounts(
+        &self,
+        request: tonic::Request<proto::GetCatchupRewardAccountsRequest>,
+    ) -> Result<tonic::Response<proto::RewardMerkleTreeV1Response>, tonic::Status> {
+        let request = request.into_inner();
+        let (height, view) = catchup_at(request.height, request.view)?;
+        let accounts = request
+            .addresses
+            .iter()
+            .map(|account| {
+                account.parse().map_err(|err| {
+                    tonic::Status::invalid_argument(format!(
+                        "malformed reward account {account}: {err}"
+                    ))
+                })
+            })
+            .collect::<Result<Vec<RewardAccountV1>, _>>()?;
+        let tree = <Self as v1::CatchupApi>::get_reward_accounts_v1(self, height, view, accounts)
+            .await
+            .map_err(to_status)?;
+        Ok(tonic::Response::new(proto::RewardMerkleTreeV1Response {
+            tree: serialize_tree(&tree)?,
+        }))
+    }
+
+    async fn get_catchup_reward_account_v2(
+        &self,
+        request: tonic::Request<proto::GetCatchupRewardAccountV2Request>,
+    ) -> Result<tonic::Response<proto::RewardAccountProofResponse>, tonic::Status> {
+        let request = request.into_inner();
+        let (height, view) = catchup_at(request.height, request.view)?;
+        let address = required(request.address, "address")?;
+        let query = <Self as v1::CatchupApi>::get_reward_account_v2(self, height, view, address)
+            .await
+            .map_err(to_status)?;
+        Ok(tonic::Response::new(query.into()))
+    }
+
+    async fn get_catchup_reward_merkle_tree_v2(
+        &self,
+        request: tonic::Request<proto::GetCatchupRewardMerkleTreeV2Request>,
+    ) -> Result<tonic::Response<proto::RewardMerkleTreeV2Response>, tonic::Status> {
+        let request = request.into_inner();
+        let (height, view) = catchup_at(request.height, request.view)?;
+        // v1 wraps these bytes in a `serde_json::Value`, so take them from the source instead.
+        let tree = self
+            .data_source
+            .get_reward_merkle_tree_v2(height, hotshot_types::data::ViewNumber::new(view))
+            .await
+            .map_err(|err| to_status(not_found(format!("{err:#}"))))?;
+        Ok(tonic::Response::new(proto::RewardMerkleTreeV2Response {
+            tree,
+        }))
+    }
+
+    async fn get_catchup_state_cert(
+        &self,
+        request: tonic::Request<proto::GetCatchupStateCertRequest>,
+    ) -> Result<tonic::Response<proto::StateCertV2Response>, tonic::Status> {
+        let epoch = required(request.into_inner().epoch, "epoch")?;
+        let cert = <Self as v1::CatchupApi>::get_state_cert(self, epoch)
+            .await
+            .map_err(to_status)?;
+        Ok(tonic::Response::new(
+            (&espresso_types::v0_4::StateCertQueryDataV2(cert)).into(),
+        ))
+    }
+}
+
+/// A tree travels as bincode, the encoding peers already decode from v1 and from the v2
+/// reward tree route.
+fn serialize_tree<T: serde::Serialize>(tree: &T) -> Result<Vec<u8>, tonic::Status> {
+    bincode::serialize(tree)
+        .map_err(|err| tonic::Status::internal(format!("serializing tree: {err}")))
+}
+
+/// The `(height, view)` the catchup routes over a merkle tree are asked for.
+fn catchup_at(height: Option<u64>, view: Option<u64>) -> Result<(u64, u64), tonic::Status> {
+    Ok((required(height, "height")?, required(view, "view")?))
+}
+
 #[async_trait]
 impl<D> v1::SubmitApi for NodeApiStateImpl<D>
 where
@@ -2568,6 +2760,29 @@ where
     }
 }
 
+#[tonic::async_trait]
+impl<D> proto::submit_service_server::SubmitService for NodeApiStateImpl<D>
+where
+    D: Deref + Clone + Send + Sync + 'static,
+    D::Target: SubmitDataSourceErased + Send + Sync,
+{
+    async fn submit_transaction(
+        &self,
+        request: tonic::Request<proto::SubmitTransactionRequest>,
+    ) -> Result<tonic::Response<proto::SubmitTransactionResponse>, tonic::Status> {
+        let request = request.into_inner();
+        let namespace = required(namespace_from_query(request.namespace)?, "namespace")?;
+        let payload = required(request.payload, "payload")?;
+        let transaction = espresso_types::Transaction::new(namespace.into(), payload);
+        let hash = v1::SubmitApi::submit(self, transaction)
+            .await
+            .map_err(to_status)?;
+        Ok(tonic::Response::new(proto::SubmitTransactionResponse {
+            hash: hash.to_string(),
+        }))
+    }
+}
+
 /// Network-agnostic submit hook used by the axum wrapper. The original
 /// `SubmitDataSource<N, P>` trait is parameterized by the network type; this
 /// erased trait lets `NodeApiStateImpl` avoid carrying those parameters.
@@ -2580,10 +2795,9 @@ pub(crate) trait SubmitDataSourceErased {
 }
 
 #[async_trait]
-impl<C, D> SubmitDataSourceErased
-    for hotshot_query_service::data_source::ExtensibleDataSource<D, crate::api::ApiState<C>>
+impl<D> SubmitDataSourceErased
+    for hotshot_query_service::data_source::ExtensibleDataSource<D, crate::api::ApiState>
 where
-    C: crate::api::context::ApiContext,
     D: Send + Sync,
 {
     async fn submit_erased(
@@ -2595,12 +2809,9 @@ where
 }
 
 // Bare mode (no query/status API) has no `ExtensibleDataSource` wrapper: the app state is
-// `ApiState<C>` directly, so it needs its own erased forwarding impl.
+// `ApiState` directly, so it needs its own erased forwarding impl.
 #[async_trait]
-impl<C> SubmitDataSourceErased for crate::api::ApiState<C>
-where
-    C: crate::api::context::ApiContext,
-{
+impl SubmitDataSourceErased for crate::api::ApiState {
     async fn submit_erased(
         &self,
         tx: espresso_types::Transaction,
@@ -2625,6 +2836,24 @@ where
     }
 }
 
+#[tonic::async_trait]
+impl<D> proto::state_signature_service_server::StateSignatureService for NodeApiStateImpl<D>
+where
+    D: Deref + Clone + Send + Sync + 'static,
+    D::Target: StateSignatureDataSourceErased + Send + Sync,
+{
+    async fn get_state_signature(
+        &self,
+        request: tonic::Request<proto::GetStateSignatureRequest>,
+    ) -> Result<tonic::Response<proto::StateSignatureResponse>, tonic::Status> {
+        let height = required(request.into_inner().height, "height")?;
+        let body = v1::StateSignatureApi::get_state_signature(self, height)
+            .await
+            .map_err(to_status)?;
+        Ok(tonic::Response::new((&body).into()))
+    }
+}
+
 #[async_trait]
 pub(crate) trait StateSignatureDataSourceErased {
     async fn get_state_signature_erased(
@@ -2634,10 +2863,9 @@ pub(crate) trait StateSignatureDataSourceErased {
 }
 
 #[async_trait]
-impl<C, D> StateSignatureDataSourceErased
-    for hotshot_query_service::data_source::ExtensibleDataSource<D, crate::api::ApiState<C>>
+impl<D> StateSignatureDataSourceErased
+    for hotshot_query_service::data_source::ExtensibleDataSource<D, crate::api::ApiState>
 where
-    C: crate::api::context::ApiContext,
     D: Send + Sync,
 {
     async fn get_state_signature_erased(
@@ -2649,12 +2877,9 @@ where
 }
 
 // Bare mode (no query/status API) has no `ExtensibleDataSource` wrapper: the app state is
-// `ApiState<C>` directly, so it needs its own erased forwarding impl.
+// `ApiState` directly, so it needs its own erased forwarding impl.
 #[async_trait]
-impl<C> StateSignatureDataSourceErased for crate::api::ApiState<C>
-where
-    C: crate::api::context::ApiContext,
-{
+impl StateSignatureDataSourceErased for crate::api::ApiState {
     async fn get_state_signature_erased(
         &self,
         height: u64,
@@ -2690,7 +2915,8 @@ where
         ds.get_block_detail(target)
             .await
             .map(Into::into)
-            .map_err(|err| anyhow::anyhow!("{err}"))
+            .map_err(ExplorerError::GetBlockDetail)
+            .map_err(explorer_error)
     }
 
     async fn get_block_summaries(
@@ -2715,7 +2941,8 @@ where
         ds.get_block_summaries(GetBlockSummariesRequest(BlockRange { target, num_blocks }))
             .await
             .map(Into::into)
-            .map_err(|err| anyhow::anyhow!("{err}"))
+            .map_err(ExplorerError::GetBlockSummaries)
+            .map_err(explorer_error)
     }
 
     async fn get_transaction_detail(
@@ -2736,7 +2963,8 @@ where
         ds.get_transaction_detail(target)
             .await
             .map(Into::into)
-            .map_err(|err| anyhow::anyhow!("{err}"))
+            .map_err(ExplorerError::GetTransactionDetail)
+            .map_err(explorer_error)
     }
 
     async fn get_transaction_summaries(
@@ -2753,6 +2981,11 @@ where
         }
         let target = match target {
             v1::TxIdent::HeightAndOffset(h, o) => {
+                // The query binds `limit + offset` as an i64 row count, which a larger offset
+                // would overflow into a negative or wrapped limit.
+                if limit.checked_add(o).is_none_or(|n| n > i64::MAX as u64) {
+                    return Err(bad_request(format!("offset {o} is too large")));
+                }
                 TransactionIdentifier::HeightAndOffset(h as usize, o as usize)
             },
             v1::TxIdent::Hash(h) => TransactionIdentifier::Hash(
@@ -2775,7 +3008,8 @@ where
         })
         .await
         .map(Into::into)
-        .map_err(|err| anyhow::anyhow!("{err}"))
+        .map_err(ExplorerError::GetTransactionSummaries)
+        .map_err(explorer_error)
     }
 
     async fn get_explorer_summary(&self) -> anyhow::Result<Self::ExplorerSummary> {
@@ -2783,7 +3017,8 @@ where
         ds.get_explorer_summary()
             .await
             .map(Into::into)
-            .map_err(|err| anyhow::anyhow!("{err}"))
+            .map_err(ExplorerError::GetExplorerSummary)
+            .map_err(explorer_error)
     }
 
     async fn get_search_result(&self, query: String) -> anyhow::Result<Self::SearchResult> {
@@ -2794,7 +3029,156 @@ where
         ds.get_search_results(parsed)
             .await
             .map(Into::into)
-            .map_err(|err| anyhow::anyhow!("{err}"))
+            .map_err(|err| match err {
+                GetSearchResultsError::InvalidQuery(_) => bad_request(format!(
+                    "unsupported search query {query}: expected a BLOCK~ or TX~ hash"
+                )),
+                err => explorer_error(ExplorerError::GetSearchResults(err)),
+            })
+    }
+}
+
+#[tonic::async_trait]
+impl<D> proto::explorer_service_server::ExplorerService for NodeApiStateImpl<D>
+where
+    D: Deref + Clone + Send + Sync + 'static,
+    D::Target: hotshot_query_service::explorer::ExplorerDataSource<SeqTypes> + Send + Sync,
+{
+    async fn get_explorer_block_detail(
+        &self,
+        request: tonic::Request<proto::GetExplorerBlockDetailRequest>,
+    ) -> Result<tonic::Response<proto::ExplorerBlockDetailResponse>, tonic::Status> {
+        let request = request.into_inner();
+        let ident = block_ident(request.height, request.hash)?;
+        let detail = <Self as v1::ExplorerApi>::get_block_detail(self, ident)
+            .await
+            .map_err(to_status)?;
+        Ok(tonic::Response::new(proto::ExplorerBlockDetailResponse {
+            block_detail: Some((&detail.block_detail).into()),
+        }))
+    }
+
+    async fn get_explorer_block_summaries(
+        &self,
+        request: tonic::Request<proto::GetExplorerBlockSummariesRequest>,
+    ) -> Result<tonic::Response<proto::ExplorerBlockSummariesResponse>, tonic::Status> {
+        let request = request.into_inner();
+        let limit = required(request.limit, "limit")?;
+        let ident = block_ident(request.height, request.hash)?;
+        let summaries = <Self as v1::ExplorerApi>::get_block_summaries(self, ident, limit)
+            .await
+            .map_err(to_status)?;
+        Ok(tonic::Response::new(
+            proto::ExplorerBlockSummariesResponse {
+                block_summaries: summaries.block_summaries.iter().map(Into::into).collect(),
+            },
+        ))
+    }
+
+    async fn get_explorer_transaction_detail(
+        &self,
+        request: tonic::Request<proto::GetExplorerTransactionDetailRequest>,
+    ) -> Result<tonic::Response<proto::ExplorerTransactionDetailResponse>, tonic::Status> {
+        let request = request.into_inner();
+        let ident = transaction_ident(request.height, request.offset, request.hash)?;
+        let detail = <Self as v1::ExplorerApi>::get_transaction_detail(self, ident)
+            .await
+            .map_err(to_status)?
+            .transaction_detail;
+        Ok(tonic::Response::new(
+            proto::ExplorerTransactionDetailResponse {
+                details: Some((&detail.details).into()),
+                data: detail.data.iter().map(Into::into).collect(),
+            },
+        ))
+    }
+
+    async fn get_explorer_transaction_summaries(
+        &self,
+        request: tonic::Request<proto::GetExplorerTransactionSummariesRequest>,
+    ) -> Result<tonic::Response<proto::ExplorerTransactionSummariesResponse>, tonic::Status> {
+        let request = request.into_inner();
+        let limit = required(request.limit, "limit")?;
+        let ident = transaction_ident(request.height, request.offset, request.hash)?;
+        let filter = match (request.block, namespace_from_query(request.namespace)?) {
+            (Some(_), Some(_)) => {
+                return Err(tonic::Status::invalid_argument(
+                    "block and namespace are mutually exclusive",
+                ));
+            },
+            (Some(block), None) => v1::TxSummaryFilter::Block(block),
+            (None, Some(namespace)) => v1::TxSummaryFilter::Namespace(namespace.into()),
+            (None, None) => v1::TxSummaryFilter::None,
+        };
+        let summaries =
+            <Self as v1::ExplorerApi>::get_transaction_summaries(self, ident, limit, filter)
+                .await
+                .map_err(to_status)?;
+        Ok(tonic::Response::new(
+            proto::ExplorerTransactionSummariesResponse {
+                transaction_summaries: summaries
+                    .transaction_summaries
+                    .iter()
+                    .map(Into::into)
+                    .collect(),
+            },
+        ))
+    }
+
+    async fn get_explorer_summary(
+        &self,
+        _request: tonic::Request<proto::GetExplorerSummaryRequest>,
+    ) -> Result<tonic::Response<proto::ExplorerSummaryResponse>, tonic::Status> {
+        let summary = <Self as v1::ExplorerApi>::get_explorer_summary(self)
+            .await
+            .map_err(to_status)?
+            .explorer_summary;
+        Ok(tonic::Response::new((&summary).into()))
+    }
+
+    async fn get_explorer_search(
+        &self,
+        request: tonic::Request<proto::GetExplorerSearchRequest>,
+    ) -> Result<tonic::Response<proto::ExplorerSearchResponse>, tonic::Status> {
+        let query = required(request.into_inner().query, "query")?;
+        let results = <Self as v1::ExplorerApi>::get_search_result(self, query)
+            .await
+            .map_err(to_status)?
+            .search_results;
+        Ok(tonic::Response::new((&results).into()))
+    }
+}
+
+/// v1 spells the three ways of naming a block as separate routes, so v2's optional parameters
+/// carry the same choice, with neither given meaning the latest block.
+fn block_ident(height: Option<u64>, hash: Option<String>) -> Result<v1::BlockIdent, tonic::Status> {
+    match (height, hash) {
+        (Some(_), Some(_)) => Err(tonic::Status::invalid_argument(
+            "height and hash are mutually exclusive",
+        )),
+        (Some(height), None) => Ok(v1::BlockIdent::Height(height)),
+        (None, Some(hash)) => Ok(v1::BlockIdent::Hash(hash)),
+        (None, None) => Ok(v1::BlockIdent::Latest),
+    }
+}
+
+/// As [`block_ident`], except that naming a transaction by position takes both `height` and
+/// `offset`, so half of that pair is a bad request rather than a fallback to the latest.
+fn transaction_ident(
+    height: Option<u64>,
+    offset: Option<u64>,
+    hash: Option<String>,
+) -> Result<v1::TxIdent, tonic::Status> {
+    match (height, offset, hash) {
+        (None, None, None) => Ok(v1::TxIdent::Latest),
+        (None, None, Some(hash)) => Ok(v1::TxIdent::Hash(hash)),
+        (Some(height), Some(offset), None) => Ok(v1::TxIdent::HeightAndOffset(height, offset)),
+        (Some(_), None, None) | (None, Some(_), None) => Err(tonic::Status::invalid_argument(
+            "height and offset must be given together",
+        )),
+        _ => Err(tonic::Status::invalid_argument(
+            "hash is exclusive with height and offset",
+        )),
     }
 }
 
@@ -2807,7 +3191,8 @@ where
             SeqTypes,
             espresso_types::BlockMerkleTree,
             3,
-        > + NodeStateDataSource
+        > + hotshot_query_service::merklized_state::MerklizedStateHeightPersistence
+        + NodeStateDataSource
         + StakeTableDataSource<SeqTypes>
         + hotshot_query_service::data_source::VersionedDataSource
         + Sized
@@ -2993,6 +3378,7 @@ where
         let fetch_timeout = FETCH_TIMEOUT;
         let start = start as usize;
         let end = end as usize;
+        enforce_range(start, end, lc_large_object_range_limit())?;
 
         let payloads_stream = AvailabilityDataSource::get_payload_range(ds, start..end).await;
         let vid_stream = AvailabilityDataSource::get_vid_common_range(ds, start..end).await;
@@ -3072,10 +3458,13 @@ where
     ) -> anyhow::Result<Self::NamespaceProof> {
         let ds = &*self.data_source;
         let fetch_timeout = FETCH_TIMEOUT;
+        let end = height
+            .checked_add(1)
+            .ok_or_else(|| not_found(format!("no block at height {height}")))?;
         let mut proofs = crate::api::light_client::get_namespace_proof_range(
             ds,
             height as usize,
-            (height + 1) as usize,
+            end as usize,
             namespace,
             fetch_timeout,
             lc_large_object_range_limit(),
@@ -3131,6 +3520,250 @@ where
     }
 }
 
+#[tonic::async_trait]
+impl<D> proto::light_client_service_server::LightClientService for NodeApiStateImpl<D>
+where
+    D: Deref + Clone + Send + Sync + 'static,
+    D::Target: AvailabilityDataSource<SeqTypes>
+        + hotshot_query_service::merklized_state::MerklizedStateDataSource<
+            SeqTypes,
+            espresso_types::BlockMerkleTree,
+            3,
+        > + hotshot_query_service::merklized_state::MerklizedStateHeightPersistence
+        + NodeStateDataSource
+        + StakeTableDataSource<SeqTypes>
+        + hotshot_query_service::data_source::VersionedDataSource
+        + Sized
+        + Clone
+        + Send
+        + Sync
+        + 'static,
+    for<'a> <D::Target as hotshot_query_service::data_source::VersionedDataSource>::ReadOnly<'a>:
+        hotshot_query_service::data_source::storage::NodeStorage<SeqTypes>
+            + hotshot_query_service::data_source::storage::AvailabilityStorage<SeqTypes>,
+{
+    async fn get_light_client_leaf_proof(
+        &self,
+        request: tonic::Request<proto::GetLightClientLeafProofRequest>,
+    ) -> Result<tonic::Response<proto::LightClientLeafProofResponse>, tonic::Status> {
+        let proto::GetLightClientLeafProofRequest {
+            height,
+            hash,
+            block_hash,
+            payload_hash,
+            finalized,
+        } = request.into_inner();
+        let query = leaf_query(height, hash, block_hash, payload_hash)?;
+        let proof = <Self as v1::LightClientApi>::get_leaf_proof(self, query, finalized)
+            .await
+            .map_err(to_status)?;
+        Ok(tonic::Response::new((&proof).into()))
+    }
+
+    async fn get_light_client_header_proof(
+        &self,
+        request: tonic::Request<proto::GetLightClientHeaderProofRequest>,
+    ) -> Result<tonic::Response<proto::LightClientHeaderProofResponse>, tonic::Status> {
+        let proto::GetLightClientHeaderProofRequest {
+            root,
+            height,
+            block_hash,
+            payload_hash,
+        } = request.into_inner();
+        let root = required(root, "root")?;
+        let query = header_query(height, block_hash, payload_hash)?;
+        let proof = <Self as v1::LightClientApi>::get_header_proof(self, root, query)
+            .await
+            .map_err(to_status)?;
+        Ok(tonic::Response::new(
+            proto::LightClientHeaderProofResponse {
+                header: Some(proof.header().into()),
+                proof: Some(proof.proof().into()),
+            },
+        ))
+    }
+
+    async fn get_light_client_stake_table(
+        &self,
+        request: tonic::Request<proto::GetLightClientStakeTableRequest>,
+    ) -> Result<tonic::Response<proto::LightClientStakeTableResponse>, tonic::Status> {
+        let epoch = required(request.into_inner().epoch, "epoch")?;
+        let events = <Self as v1::LightClientApi>::get_light_client_stake_table(self, epoch)
+            .await
+            .map_err(to_status)?;
+        Ok(tonic::Response::new(proto::LightClientStakeTableResponse {
+            events: events.iter().map(Into::into).collect(),
+        }))
+    }
+
+    async fn get_light_client_payload_proof(
+        &self,
+        request: tonic::Request<proto::GetLightClientPayloadProofRequest>,
+    ) -> Result<tonic::Response<proto::LightClientPayloadProofResponse>, tonic::Status> {
+        let height = required(request.into_inner().height, "height")?;
+        let proof = <Self as v1::LightClientApi>::get_payload_proof(self, height)
+            .await
+            .map_err(to_status)?;
+        Ok(tonic::Response::new((&proof).try_into()?))
+    }
+
+    async fn get_light_client_payload_proof_range(
+        &self,
+        request: tonic::Request<proto::GetLightClientPayloadProofRangeRequest>,
+    ) -> Result<tonic::Response<proto::LightClientPayloadProofRangeResponse>, tonic::Status> {
+        let request = request.into_inner();
+        let range = range_from_query(request.from, request.until)?;
+        let proofs = <Self as v1::LightClientApi>::get_payload_proof_ranges(self, vec![range])
+            .await
+            .map_err(to_status)?;
+        Ok(tonic::Response::new(
+            proto::LightClientPayloadProofRangeResponse {
+                proofs: proofs
+                    .iter()
+                    .map(TryInto::try_into)
+                    .collect::<Result<_, _>>()?,
+            },
+        ))
+    }
+
+    async fn get_light_client_payload_proof_ranges(
+        &self,
+        request: tonic::Request<proto::GetLightClientPayloadProofRangesRequest>,
+    ) -> Result<tonic::Response<proto::LightClientPayloadProofRangeResponse>, tonic::Status> {
+        let ranges = ranges_from_body(request.into_inner().ranges)?;
+        let proofs = <Self as v1::LightClientApi>::get_payload_proof_ranges(self, ranges)
+            .await
+            .map_err(to_status)?;
+        Ok(tonic::Response::new(
+            proto::LightClientPayloadProofRangeResponse {
+                proofs: proofs
+                    .iter()
+                    .map(TryInto::try_into)
+                    .collect::<Result<_, _>>()?,
+            },
+        ))
+    }
+
+    async fn get_light_client_namespace_proof(
+        &self,
+        request: tonic::Request<proto::GetLightClientNamespaceProofRequest>,
+    ) -> Result<tonic::Response<proto::LightClientNamespaceProofResponse>, tonic::Status> {
+        let request = request.into_inner();
+        let height = required(request.height, "height")?;
+        let namespace = required(namespace_from_query(request.namespace)?, "namespace")?.into();
+        let proof = <Self as v1::LightClientApi>::get_lc_namespace_proof(self, height, namespace)
+            .await
+            .map_err(to_status)?;
+        Ok(tonic::Response::new((&proof).try_into()?))
+    }
+
+    async fn get_light_client_namespace_proof_range(
+        &self,
+        request: tonic::Request<proto::GetLightClientNamespaceProofRangeRequest>,
+    ) -> Result<tonic::Response<proto::LightClientNamespaceProofRangeResponse>, tonic::Status> {
+        let request = request.into_inner();
+        let range = range_from_query(request.from, request.until)?;
+        let namespace = required(namespace_from_query(request.namespace)?, "namespace")?.into();
+        let proofs = <Self as v1::LightClientApi>::get_lc_namespace_proof_range(
+            self,
+            range.start,
+            range.end,
+            namespace,
+        )
+        .await
+        .map_err(to_status)?;
+        Ok(tonic::Response::new(
+            proto::LightClientNamespaceProofRangeResponse {
+                proofs: proofs
+                    .iter()
+                    .map(TryInto::try_into)
+                    .collect::<Result<_, _>>()?,
+            },
+        ))
+    }
+
+    async fn get_light_client_namespaces_proof_range(
+        &self,
+        request: tonic::Request<proto::GetLightClientNamespacesProofRangeRequest>,
+    ) -> Result<tonic::Response<proto::LightClientNamespacesProofRangeResponse>, tonic::Status>
+    {
+        let request = request.into_inner();
+        let range = range_from_query(request.from, request.until)?;
+        let namespaces = request
+            .namespaces
+            .into_iter()
+            .map(|namespace| namespace_id(namespace).map(u64::from))
+            .collect::<Result<BTreeSet<_>, _>>()?;
+        if namespaces.len() > MAX_NAMESPACES_PER_REQUEST {
+            return Err(tonic::Status::invalid_argument(format!(
+                "at most {MAX_NAMESPACES_PER_REQUEST} distinct namespaces per request"
+            )));
+        }
+        let namespaces: Vec<u64> = namespaces.into_iter().collect();
+        // v1's trait method takes the namespaces as its TaggedBase64 path segment, which this
+        // would only build to have it parsed straight back.
+        let blocks = crate::api::light_client::get_namespaces_proof_range(
+            &*self.data_source,
+            range.start as usize,
+            range.end as usize,
+            &namespaces,
+            FETCH_TIMEOUT,
+            lc_large_object_range_limit(),
+        )
+        .await
+        .map_err(|err| to_status(lc_error(err)))?;
+        let blocks = blocks
+            .iter()
+            .map(|block| {
+                Ok(proto::LightClientNamespacesProof {
+                    proofs: block
+                        .iter()
+                        .filter_map(|(namespace, proof)| {
+                            let contents = proof.contents()?.try_into();
+                            Some(contents.map(|contents| (*namespace, contents)))
+                        })
+                        .collect::<Result<_, tonic::Status>>()?,
+                })
+            })
+            .collect::<Result<_, tonic::Status>>()?;
+        Ok(tonic::Response::new(
+            proto::LightClientNamespacesProofRangeResponse { blocks },
+        ))
+    }
+}
+
+fn leaf_query(
+    height: Option<u64>,
+    hash: Option<String>,
+    block_hash: Option<String>,
+    payload_hash: Option<String>,
+) -> Result<v1::LeafQuery, tonic::Status> {
+    match (height, hash, block_hash, payload_hash) {
+        (Some(height), None, None, None) => Ok(v1::LeafQuery::Height(height)),
+        (None, Some(hash), None, None) => Ok(v1::LeafQuery::Hash(hash)),
+        (None, None, Some(block_hash), None) => Ok(v1::LeafQuery::BlockHash(block_hash)),
+        (None, None, None, Some(payload_hash)) => Ok(v1::LeafQuery::PayloadHash(payload_hash)),
+        _ => Err(tonic::Status::invalid_argument(
+            "set exactly one of height, hash, block_hash or payload_hash",
+        )),
+    }
+}
+
+fn header_query(
+    height: Option<u64>,
+    block_hash: Option<String>,
+    payload_hash: Option<String>,
+) -> Result<v1::HeaderQuery, tonic::Status> {
+    match (height, block_hash, payload_hash) {
+        (Some(height), None, None) => Ok(v1::HeaderQuery::Height(height)),
+        (None, Some(block_hash), None) => Ok(v1::HeaderQuery::Hash(block_hash)),
+        (None, None, Some(payload_hash)) => Ok(v1::HeaderQuery::PayloadHash(payload_hash)),
+        _ => Err(tonic::Status::invalid_argument(
+            "set exactly one of height, block_hash or payload_hash",
+        )),
+    }
+}
+
 fn lc_large_object_range_limit() -> usize {
     hotshot_query_service::availability::Options::default().large_object_range_limit
 }
@@ -3140,9 +3773,15 @@ fn lc_large_object_range_limit() -> usize {
 pub(crate) fn lc_error(err: hotshot_query_service::Error) -> anyhow::Error {
     match err.status() {
         StatusCode::NOT_FOUND => not_found(err.to_string()),
+        StatusCode::GONE => AvailabilityError::Pruned(err.to_string()).into(),
         StatusCode::BAD_REQUEST => bad_request(err.to_string()),
         _ => anyhow::anyhow!("{err}"),
     }
+}
+
+/// Like [`lc_error`], for explorer data source errors.
+fn explorer_error(err: ExplorerError) -> anyhow::Error {
+    lc_error(hotshot_query_service::Error::Explorer { source: err })
 }
 
 /// Bounds the leaves in a single leaf proof, and so the memory to build and serialize it.
@@ -3375,15 +4014,15 @@ fn block_id_from_query(
     }
 }
 
+fn namespace_from_query(namespace: Option<u64>) -> Result<Option<u32>, tonic::Status> {
+    namespace.map(namespace_id).transpose()
+}
+
 /// Namespace ids are 32 bits on chain but travel as uint64 so they round-trip with the
 /// responses' `namespace` fields. Anything wider is a client error, not a truncation.
-fn namespace_from_query(namespace: Option<u64>) -> Result<Option<u32>, tonic::Status> {
-    namespace
-        .map(|namespace| {
-            u32::try_from(namespace)
-                .map_err(|_| tonic::Status::invalid_argument("namespace does not fit in 32 bits"))
-        })
-        .transpose()
+fn namespace_id(namespace: u64) -> Result<u32, tonic::Status> {
+    u32::try_from(namespace)
+        .map_err(|_| tonic::Status::invalid_argument("namespace does not fit in 32 bits"))
 }
 
 fn required<T>(value: Option<T>, name: &str) -> Result<T, tonic::Status> {
@@ -4170,7 +4809,10 @@ mod tests {
     use base64::Engine as _;
     use committable::Committable as _;
     use espresso_types::{PubKey, v0_3::RegisteredValidator};
-    use hotshot_query_service::node::{ResourceSyncStatus, SyncStatus, SyncStatusRange};
+    use hotshot_query_service::{
+        explorer::errors::BadQuery,
+        node::{ResourceSyncStatus, SyncStatus, SyncStatusRange},
+    };
     use hotshot_types::{
         addr::NetAddr,
         vid::{
@@ -4258,19 +4900,25 @@ mod tests {
     /// Covers the four shapes and all seven arms: every version's vector must select the arm named
     /// after it, and the proto message must carry exactly the fields v1 serializes, so neither a
     /// new protocol version nor a proto edit can add or drop a header field without failing here.
+    /// A version may drop a field its shape still declares, which the shape then renders empty;
+    /// the table names that field so the check stays exact for the rest.
     #[test]
     fn every_header_version_maps_to_its_arm_and_fields() {
-        for (version, shape) in [
-            ("v1", "HeaderV1"),
-            ("v2", "HeaderV1"),
-            ("v3", "HeaderV3"),
-            ("v4", "HeaderV4"),
-            ("v5", "HeaderV5"),
-            ("v6", "HeaderV5"),
-            ("v7", "HeaderV5"),
+        for (version, shape, dropped) in [
+            ("v1", "HeaderV1", None),
+            ("v2", "HeaderV1", None),
+            ("v3", "HeaderV3", None),
+            ("v4", "HeaderV4", None),
+            ("v5", "HeaderV5", None),
+            ("v6", "HeaderV5", None),
+            ("v7", "HeaderV5", Some("builder_commitment")),
         ] {
             let (header, fields) = reference_header(version);
-            assert_same_fields(shape, &fields);
+            let mut expected = fields.clone();
+            if let Some(field) = dropped {
+                expected[field] = String::new().into();
+            }
+            assert_same_fields(shape, &expected);
 
             use proto::header_response::Header;
             let converted = proto::HeaderResponse::from(&header).header.unwrap();
@@ -4286,10 +4934,6 @@ mod tests {
                     assert_eq!(
                         header.payload_commitment,
                         fields["payload_commitment"].as_str().unwrap()
-                    );
-                    assert_eq!(
-                        header.builder_commitment,
-                        fields["builder_commitment"].as_str().unwrap()
                     );
                     assert_eq!(
                         header.block_merkle_tree_root,
@@ -4325,16 +4969,28 @@ mod tests {
                     assert!(header.chain_config.is_some());
                 }};
             }
+            // Every shape before 0.7 carries the builder commitment; 0.7 dropped the field.
+            macro_rules! assert_builder_commitment {
+                ($header:expr) => {
+                    assert_eq!(
+                        $header.builder_commitment,
+                        fields["builder_commitment"].as_str().unwrap()
+                    );
+                };
+            }
             let arm = match converted {
                 Header::V1(header) => {
+                    assert_builder_commitment!(&header);
                     assert_shared_fields!(header);
                     "v1"
                 },
                 Header::V2(header) => {
+                    assert_builder_commitment!(&header);
                     assert_shared_fields!(header);
                     "v2"
                 },
                 Header::V3(header) => {
+                    assert_builder_commitment!(&header);
                     assert_shared_fields!(&header);
                     assert_eq!(
                         header.reward_merkle_tree_root,
@@ -4343,6 +4999,7 @@ mod tests {
                     "v3"
                 },
                 Header::V4(header) => {
+                    assert_builder_commitment!(&header);
                     assert_shared_fields!(&header);
                     assert_eq!(
                         header.timestamp_millis,
@@ -4359,14 +5016,20 @@ mod tests {
                     "v4"
                 },
                 Header::V5(header) => {
+                    assert_builder_commitment!(&header);
                     assert_shared_fields!(&header);
                     "v5"
                 },
                 Header::V6(header) => {
+                    assert_builder_commitment!(&header);
                     assert_shared_fields!(&header);
                     "v6"
                 },
                 Header::V7(header) => {
+                    assert_eq!(
+                        header.builder_commitment, "",
+                        "0.7 carries no builder commitment"
+                    );
                     assert_shared_fields!(&header);
                     "v7"
                 },
@@ -4501,8 +5164,9 @@ mod tests {
         );
     }
 
-    // A test network only disperses with ADVZ, so the AvidM arms run only here, against the
-    // namespaced wrappers the node stores rather than the inner per-namespace shares.
+    // A test network only disperses with AvidmGf2, so the ADVZ and AvidM arms, which mainnet
+    // still serves for blocks from before 0.6, run only here, against the namespaced wrappers
+    // the node stores rather than the inner per-namespace shares.
     #[test]
     fn every_vid_share_arm_maps_to_its_own_shape() {
         let payload = b"two namespaces worth of payload bytes, dispersed";
@@ -4519,7 +5183,20 @@ mod tests {
             panic!("the V0 arm");
         };
         assert!(advz.aggregate_proofs.starts_with("FIELD~"));
-        assert!(!advz.evals_proof.unwrap().proof.is_empty());
+        let v1 = &serde_json::to_value(&share).unwrap()["V0"];
+        assert_eq!(
+            advz.aggregate_proofs,
+            v1["aggregate_proofs"].as_str().unwrap()
+        );
+        assert_eq!(advz.evals, v1["evals"].as_str().unwrap());
+        let proof = advz.evals_proof.unwrap();
+        assert_eq!(proof.pos, v1["evals_proof"]["pos"].as_str().unwrap());
+        let v1_nodes = v1["evals_proof"]["proof"].as_array().unwrap();
+        assert!(v1_nodes.len() > 1, "{v1}");
+        assert_eq!(proof.proof.len(), v1_nodes.len());
+        for (v1_node, node) in v1_nodes.iter().zip(&proof.proof) {
+            assert_advz_node_matches_v1(v1_node, node);
+        }
 
         let param = init_avidm_param(3).unwrap();
         let (_, mut shares) =
@@ -4552,6 +5229,35 @@ mod tests {
         assert_eq!(gf2.namespaces.len(), 2);
         assert!(!gf2.namespaces[0].payload.is_empty());
         assert!(gf2.namespaces[0].mt_proofs[0].starts_with("MERKLE_PROOF~"));
+    }
+
+    fn assert_advz_node_matches_v1(v1: &serde_json::Value, v2: &proto::AdvzMerkleNode) {
+        use proto::advz_merkle_node::Node;
+        match (v2.node.as_ref().unwrap(), v1) {
+            (Node::Leaf(leaf), v1) if v1.get("Leaf").is_some() => {
+                let v1 = &v1["Leaf"];
+                assert_eq!(leaf.elem, v1["elem"].as_str().unwrap());
+                assert_eq!(leaf.pos, v1["pos"].as_str().unwrap());
+                assert_eq!(leaf.value, v1["value"].as_str().unwrap());
+            },
+            (Node::Branch(branch), v1) if v1.get("Branch").is_some() => {
+                let v1 = &v1["Branch"];
+                assert_eq!(branch.value, v1["value"].as_str().unwrap());
+                let v1_children = v1["children"].as_array().unwrap();
+                assert_eq!(branch.children.len(), v1_children.len());
+                for (v1_child, v2_child) in v1_children.iter().zip(&branch.children) {
+                    assert_advz_node_matches_v1(v1_child, v2_child);
+                }
+            },
+            (Node::ForgottenSubtree(subtree), v1) if v1.get("ForgettenSubtree").is_some() => {
+                assert_eq!(
+                    subtree.value,
+                    v1["ForgettenSubtree"]["value"].as_str().unwrap()
+                );
+            },
+            (Node::Empty(_), v1) if v1.as_str() == Some("Empty") => {},
+            (v2, v1) => panic!("{v2:?} against {v1}"),
+        }
     }
 
     // No test network registers a validator, so this mapping is only exercised here.
@@ -5037,7 +5743,7 @@ mod tests {
 
     #[test]
     fn vid_common_mirrors_the_reference_vectors() {
-        use proto::vid_common_response::Common;
+        use proto::vid_common::Common;
 
         let (reference, json): (VidCommonQueryData<SeqTypes>, _) =
             load_vector("../../../data/v1/vid_common_v0.json");
@@ -5047,7 +5753,7 @@ mod tests {
         assert_eq!(converted.height, json["height"].as_u64().unwrap());
         assert_eq!(converted.block_hash, json["block_hash"]);
         assert_eq!(converted.payload_hash, json["payload_hash"]);
-        let Some(Common::V0(advz)) = converted.common else {
+        let Some(Common::V0(advz)) = converted.common.unwrap().common else {
             panic!("the ADVZ vector must select the v0 arm");
         };
         let expected = &json["common"]["V0"];
@@ -5072,6 +5778,8 @@ mod tests {
         let Some(Common::V1(avidm)) = proto::VidCommonResponse::try_from(&reference)
             .unwrap()
             .common
+            .unwrap()
+            .common
         else {
             panic!("the AvidM vector must select the v1 arm");
         };
@@ -5089,6 +5797,8 @@ mod tests {
             load_vector("../../../data/v2/vid_common_v2.json");
         assert_same_fields("AvidmGf2Common", &json["common"]["V2"]);
         let Some(Common::V2(gf2)) = proto::VidCommonResponse::try_from(&reference)
+            .unwrap()
+            .common
             .unwrap()
             .common
         else {
@@ -5392,9 +6102,39 @@ mod tests {
     }
 
     #[test]
+    fn lc_error_preserves_gone() {
+        let err = lc_error(custom(StatusCode::GONE));
+        assert!(matches!(
+            err.downcast_ref::<AvailabilityError>(),
+            Some(AvailabilityError::Pruned(_))
+        ));
+    }
+
+    #[test]
     fn lc_error_other_statuses_stay_internal() {
         let err = lc_error(custom(StatusCode::INTERNAL_SERVER_ERROR));
         assert!(err.downcast_ref::<AvailabilityError>().is_none());
+    }
+
+    // Regression: the explorer methods also erased the status, so a missing block was a 500.
+    #[test]
+    fn explorer_error_preserves_not_found() {
+        let err = explorer_error(ExplorerError::GetBlockDetail(QueryError::NotFound.into()));
+        assert!(matches!(
+            err.downcast_ref::<AvailabilityError>(),
+            Some(AvailabilityError::NotFound(_))
+        ));
+    }
+
+    #[test]
+    fn explorer_error_preserves_bad_request() {
+        let err = explorer_error(ExplorerError::GetSearchResults(
+            GetSearchResultsError::InvalidQuery(BadQuery {}),
+        ));
+        assert!(matches!(
+            err.downcast_ref::<AvailabilityError>(),
+            Some(AvailabilityError::BadRequest(_))
+        ));
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -5417,7 +6157,7 @@ mod tests {
             .map(|byte| espresso_types::Transaction::new(namespace, vec![byte; 8]))
             .collect();
         let (payload, _) = espresso_types::Payload::from_transactions(
-            transactions,
+            &transactions,
             &Default::default(),
             &Default::default(),
         )
@@ -5512,13 +6252,11 @@ mod tests {
             "7",
             "--light-client-db-num-leaves",
             "11",
-            "--light-client-db-num-stake-tables",
-            "13",
             "--",
             "config",
         ]);
         let mut cfg = PublicNodeConfig::new(&opt, &opt.modules(), &test_genesis());
-        // Set directly: the follower module needs storage-sql, whose args differ under embedded-db.
+        // Set directly: the follower module needs storage-sql.
         cfg.follower = Some(FollowerConfig {
             poll_interval: Duration::from_millis(2500),
             max_blocks_per_poll: 17,
@@ -5593,19 +6331,11 @@ mod tests {
                 state_peers: strings(&cfg.state_peers),
                 config_peers: strings(cfg.config_peers.as_deref().unwrap()),
                 orchestrator_url: cfg.orchestrator_url.to_string(),
-                cdn_endpoint: cfg.cdn_endpoint.clone(),
                 cliquenet_bind_address: cfg.cliquenet_bind_address.unbracketed_string(),
                 cliquenet_advertise_address: cfg
                     .cliquenet_advertise_address
                     .as_ref()
                     .map(|addr| addr.unbracketed_string()),
-                libp2p_bind_address: cfg.libp2p_bind_address.clone(),
-                libp2p_advertise_address: cfg.libp2p_advertise_address.clone(),
-                libp2p_bootstrap_nodes: cfg
-                    .libp2p_bootstrap_nodes
-                    .as_deref()
-                    .map(strings)
-                    .unwrap_or_default(),
                 l1_provider_count: cfg.l1_provider_count as u64,
                 l1_ws_provider_count: cfg.l1_ws_provider_count as u64,
                 follower: Some(proto::FollowerModule {
@@ -5633,13 +6363,21 @@ mod tests {
                                 .num_stake_tables_in_memory
                                 as u64,
                         }),
-                        // Three same-typed fields whose defaults are 5/100/100, so the flags above
-                        // give each a distinct value: a crossed pair would pass otherwise.
+                        // Two same-typed fields whose defaults are 5/100, so the flags above give
+                        // each a distinct value: a crossed pair would pass otherwise.
                         light_client_db: Some(proto::LightClientDbOptions {
                             num_connections: 7,
                             num_leaves: 11,
-                            num_stake_tables: 13,
-                            lc_path: None,
+                            // Not pinned to `None`: it defaults under ESPRESSO_NODE_STORAGE_PATH.
+                            lc_path: cfg
+                                .modules
+                                .query
+                                .as_ref()
+                                .unwrap()
+                                .light_client_db
+                                .lc_path
+                                .as_ref()
+                                .map(|path| path.display().to_string()),
                         }),
                     }),
                     submit: false,
@@ -5650,6 +6388,7 @@ mod tests {
                     explorer: false,
                     light_client: false,
                 }),
+                ..Default::default()
             }
         );
         // IPv6 because that is the only case where NetAddr's Display and its serde impl
@@ -5665,23 +6404,14 @@ mod tests {
         use espresso_types::config::PublicNetworkConfig;
         use hotshot_types::{
             PeerConfig, VersionedDaCommittee,
-            network::{BuilderType, CombinedNetworkConfig, Libp2pConfig, NetworkConfig},
+            network::{BuilderType, NetworkConfig},
         };
 
-        let peer_id = libp2p::PeerId::random();
-        let multiaddr: libp2p::Multiaddr = "/ip4/10.0.0.1/tcp/1769".parse().unwrap();
         let committee_member = PeerConfig::<SeqTypes>::test_default();
 
         let mut network_config = NetworkConfig::<SeqTypes> {
             commit_sha: "deadbeef".to_string(),
-            cdn_marshal_address: Some("marshal.test:8083".to_string()),
             builder: BuilderType::Random,
-            libp2p_config: Some(Libp2pConfig {
-                bootstrap_nodes: vec![(peer_id, multiaddr.clone())],
-            }),
-            combined_network_config: Some(CombinedNetworkConfig {
-                delay_duration: Duration::from_millis(1500),
-            }),
             ..Default::default()
         };
         network_config.config.da_committees = vec![VersionedDaCommittee {
@@ -5693,26 +6423,7 @@ mod tests {
         let served: proto::HotshotConfigResponse = PublicNetworkConfig::from(network_config).into();
 
         assert_eq!(served.commit_sha, "deadbeef");
-        assert_eq!(
-            served.cdn_marshal_address.as_deref(),
-            Some("marshal.test:8083")
-        );
         assert_eq!(served.builder, proto::BuilderType::Random as i32);
-        assert_eq!(
-            served.libp2p_config,
-            Some(proto::Libp2pNetworkConfig {
-                bootstrap_nodes: vec![proto::Libp2pBootstrapNode {
-                    peer_id: peer_id.to_string(),
-                    multiaddr: multiaddr.to_string(),
-                }],
-            })
-        );
-        assert_eq!(
-            served.combined_network_config,
-            Some(proto::CombinedNetworkConfig {
-                delay_duration_ms: 1500,
-            })
-        );
         // The version renders as v1's `version_ser` writes it, not as `Debug`.
         let da_committee = &served.da_committees[0];
         assert_eq!(served.da_committees.len(), 1);
@@ -5724,9 +6435,6 @@ mod tests {
         );
     }
 
-    // Postgres only, as in `options.rs`: storage-sql under embedded-db needs a `--path` that is
-    // irrelevant here.
-    #[cfg(not(feature = "embedded-db"))]
     #[tokio::test]
     async fn sql_storage_settings_are_served_in_full() {
         use proto::config_service_server::ConfigService as _;
@@ -5925,5 +6633,122 @@ mod tests {
                 tonic::Code::InvalidArgument
             );
         }
+    }
+
+    /// Every stake table event, compared field by field with the JSON v1 serves for it. The two
+    /// spell a field differently (`blsVK` against `blsVk`) and encode amounts, timestamps and
+    /// bytes differently, so each pair of values is compared as the quantity or bytes it holds.
+    #[test]
+    fn stake_table_events_carry_every_v1_field() {
+        use espresso_types::{testing::TestValidator, v0_3::StakeTableEvent};
+        use hotshot_contract_adapter::sol_types::StakeTableV3::{
+            CommissionUpdated, Delegated, Undelegated, UndelegatedV2, ValidatorExitV2,
+        };
+
+        let validator = TestValidator::random();
+        let delegator = Address::repeat_byte(7);
+        let events = [
+            StakeTableEvent::Register((&validator).into()),
+            StakeTableEvent::RegisterV2((&validator).into()),
+            StakeTableEvent::RegisterV3((&validator).into()),
+            StakeTableEvent::Deregister((&validator).into()),
+            StakeTableEvent::DeregisterV2(ValidatorExitV2 {
+                validator: validator.account,
+                unlocksAt: U256::from(1_700_000_000u64),
+            }),
+            StakeTableEvent::Delegate(Delegated {
+                delegator,
+                validator: validator.account,
+                amount: U256::from(10u64).pow(U256::from(20u64)),
+            }),
+            StakeTableEvent::Undelegate(Undelegated {
+                delegator,
+                validator: validator.account,
+                amount: U256::from(12_345u64),
+            }),
+            StakeTableEvent::UndelegateV2(UndelegatedV2 {
+                delegator,
+                validator: validator.account,
+                undelegationId: 7,
+                amount: U256::from(54_321u64),
+                unlocksAt: U256::from(1_700_000_001u64),
+            }),
+            StakeTableEvent::KeyUpdate((&validator).into()),
+            StakeTableEvent::KeyUpdateV2((&validator).into()),
+            StakeTableEvent::CommissionUpdate(CommissionUpdated {
+                validator: validator.account,
+                timestamp: U256::from(1_700_000_002u64),
+                oldCommission: 100,
+                newCommission: 250,
+            }),
+            validator.x25519_update([9; 32]),
+            validator.p2p_update("10.0.0.1:9000"),
+        ];
+        for event in &events {
+            let v1 = serde_json::to_value(event).unwrap();
+            let (variant, v1) = v1.as_object().unwrap().iter().next().unwrap();
+            let v2 = serde_json::to_value(proto::StakeTableEvent::from(event)).unwrap();
+            let v2 = v2.as_object().unwrap().values().next().unwrap();
+            assert_same_event_value(variant, v1, v2);
+        }
+    }
+
+    /// protoJSON omits a zero value, so a field v2 leaves out must be zero on v1.
+    fn assert_same_event_value(path: &str, v1: &serde_json::Value, v2: &serde_json::Value) {
+        use serde_json::Value;
+
+        let normalize = |key: &str| key.replace('_', "").to_lowercase();
+        match (v1, v2) {
+            (Value::Object(v1), Value::Object(v2)) => {
+                let v2: HashMap<String, &Value> = v2
+                    .iter()
+                    .map(|(key, value)| (normalize(key), value))
+                    .collect();
+                assert!(
+                    v2.keys()
+                        .all(|key| v1.keys().any(|v1_key| normalize(v1_key) == *key)),
+                    "{path}: v2 has a field v1 does not"
+                );
+                for (key, v1_value) in v1 {
+                    let path = format!("{path}.{key}");
+                    match v2.get(&normalize(key)) {
+                        Some(v2_value) => assert_same_event_value(&path, v1_value, v2_value),
+                        None => assert!(
+                            is_zero(v1_value),
+                            "{path}: v1 has {v1_value}, which v2 does not carry"
+                        ),
+                    }
+                }
+            },
+            (Value::Number(v1), Value::Number(v2)) => assert_eq!(v1, v2, "{path}"),
+            (Value::Number(v1), Value::String(v2)) => assert_eq!(v1.to_string(), *v2, "{path}"),
+            (Value::String(v1), Value::String(v2)) => {
+                let same = v1.eq_ignore_ascii_case(v2)
+                    || hex_quantity(v1).is_some_and(|v1| v2.parse::<U256>().ok() == Some(v1))
+                    || hex_bytes(v1).is_some_and(|v1| {
+                        base64::engine::general_purpose::STANDARD.decode(v2).ok() == Some(v1)
+                    });
+                assert!(same, "{path}: v1 {v1:?}, v2 {v2:?}");
+            },
+            _ => panic!("{path}: v1 {v1}, v2 {v2}"),
+        }
+    }
+
+    fn is_zero(value: &serde_json::Value) -> bool {
+        match value {
+            serde_json::Value::Number(number) => number.as_u64() == Some(0),
+            serde_json::Value::String(string) => {
+                string.is_empty() || hex_quantity(string) == Some(U256::ZERO)
+            },
+            _ => false,
+        }
+    }
+
+    fn hex_quantity(value: &str) -> Option<U256> {
+        U256::from_str_radix(value.strip_prefix("0x")?, 16).ok()
+    }
+
+    fn hex_bytes(value: &str) -> Option<Vec<u8>> {
+        alloy::hex::decode(value.strip_prefix("0x")?).ok()
     }
 }

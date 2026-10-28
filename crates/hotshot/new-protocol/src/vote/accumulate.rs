@@ -1,14 +1,16 @@
 use std::{any::type_name, mem};
 
 use committable::Committable;
-use hotshot::types::SignatureKey;
 use hotshot_types::{
     epoch_membership::EpochMembership,
     message::UpgradeLock,
     simple_certificate::{SimpleCertificate, Threshold},
     simple_vote::{HasEpoch, VersionedVoteData},
     stake_table::StakeTableEntries,
-    traits::{node_implementation::NodeType, signature_key::StakeTableEntryType},
+    traits::{
+        node_implementation::NodeType,
+        signature_key::{SignatureKey, StakeTableEntryType},
+    },
     vote::{Certificate, HasViewNumber, Vote, VoteAccumulator},
 };
 use hotshot_utils::anytrace;

@@ -342,7 +342,7 @@ impl NodeState {
     #[cfg(any(test, feature = "testing"))]
     pub fn mock() -> Self {
         use hotshot_example_types::storage_types::TestStorage;
-        use versions::version;
+        use versions::NEW_PROTOCOL_VERSION;
 
         use crate::{EpochCommittees, v0_3::Fetcher};
 
@@ -360,9 +360,9 @@ impl NodeState {
             chain_config,
             l1,
             Arc::new(mock::MockStateCatchup::default()),
-            version(0, 1),
+            NEW_PROTOCOL_VERSION,
             coordinator,
-            version(0, 1),
+            NEW_PROTOCOL_VERSION,
         )
     }
 

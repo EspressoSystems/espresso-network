@@ -2,7 +2,6 @@ use std::sync::Arc;
 
 use alloy::primitives::U256;
 use committable::Committable;
-use hotshot::types::SignatureKey;
 use hotshot_contract_adapter::light_client::validate_light_client_state_update_certificate;
 use hotshot_types::{
     data::{EpochNumber, Leaf2, VidDisperseShare2, ViewNumber, vid_disperse::vid_total_weight},
@@ -14,7 +13,9 @@ use hotshot_types::{
     },
     simple_vote::{HasEpoch, QuorumData2, QuorumMarker, Voteable},
     stake_table::StakeTableEntries,
-    traits::{block_contents::BlockHeader, node_implementation::NodeType},
+    traits::{
+        block_contents::BlockHeader, node_implementation::NodeType, signature_key::SignatureKey,
+    },
     utils::{epoch_from_block_number, is_epoch_root, is_last_block},
     vote::HasViewNumber,
 };
@@ -362,7 +363,11 @@ pub(crate) fn next_epoch_justify_qc_matches_parent<T: NodeType>(
 /// certificate for the view immediately before it.
 ///
 /// Returns the certificate to verify the signatures on, or `None` when the
-/// proposal follows its parent directly and needs none.
+/// proposal follows its parent directly and carries none.
+///
+/// A proposal may carry a certificate it does not need: a leader holding one for
+/// the view before builds on its lock, which can be that view's own certificate.
+/// It is checked all the same, since it becomes part of the block.
 ///
 /// The parent view being earlier is what the walks over stored proposals
 /// descend on, and, like the rest of what a proposal says about its parent, it
@@ -375,10 +380,10 @@ pub(crate) fn view_change_evidence_matches_parent<T: NodeType>(
     if parent_view >= view {
         return Err(MalformedProposal::ParentNotEarlier { view, parent_view });
     }
-    if parent_view + 1 == view {
-        return Ok(None);
-    }
     let Some(tc) = proposal.view_change_evidence.as_ref() else {
+        if parent_view + 1 == view {
+            return Ok(None);
+        }
         return Err(MalformedProposal::ViewChangeEvidenceMissing(view));
     };
     // The timeout certificate must certify the immediately preceding view.

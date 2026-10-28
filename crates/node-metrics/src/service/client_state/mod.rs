@@ -7,9 +7,8 @@ use async_lock::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 use bitvec::vec::BitVec;
 use espresso_types::{SeqTypes, v0_3::AuthenticatedValidator};
 use futures::{Sink, SinkExt, Stream, StreamExt, channel::mpsc::SendError};
-use hotshot::types::BLSPubKey;
 use hotshot_query_service::explorer::{BlockDetail, ExplorerHistograms};
-use hotshot_types::PeerConfig;
+use hotshot_types::{PeerConfig, signature_key::BLSPubKey};
 use tokio::{spawn, task::JoinHandle};
 
 use super::{

@@ -149,16 +149,20 @@ where
 
 #[cfg(test)]
 mod test {
-    use std::{cmp::min, num::NonZeroUsize};
+    use std::{cmp::min, num::NonZeroUsize, time::Duration};
 
-    use futures::StreamExt;
+    use committable::Commitment;
+    use tagged_base64::{Tagged, TaggedBase64};
 
     use super::*;
     use crate::{
-        availability::AvailabilityDataSource,
+        QueryError,
+        node::NodeDataSource,
         testing::{
-            consensus::{MockNetwork, MockSqlDataSource},
+            chain::ChainNode,
+            consensus::MockSqlDataSource,
             mocks::{MockTypes, mock_transaction},
+            sleep,
         },
     };
 
@@ -282,6 +286,24 @@ mod test {
             .await
             .unwrap();
         assert!(!search_results.blocks.is_empty());
+
+        // Hashes that are not in the chain find nothing, for blocks and transactions alike.
+        for tag in [
+            Commitment::<Header<MockTypes>>::tag(),
+            Commitment::<Transaction<MockTypes>>::tag(),
+        ] {
+            let unknown = TaggedBase64::new(&tag, &[0; 32]).unwrap();
+            let search_results = ds.get_search_results(unknown).await.unwrap();
+            assert!(search_results.blocks.is_empty());
+            assert!(search_results.transactions.is_empty());
+        }
+
+        // Only block and transaction hashes are searchable.
+        let unsupported = TaggedBase64::new("COMMIT", &[0; 32]).unwrap();
+        assert!(matches!(
+            ds.get_search_results(unsupported).await,
+            Err(GetSearchResultsError::InvalidQuery(_))
+        ));
 
         if num_transactions > 0 {
             let last_transaction = latest_transactions.first().unwrap();
@@ -547,32 +569,31 @@ mod test {
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_api() {
-        // Create the consensus network.
-        let mut network = MockNetwork::<MockSqlDataSource>::init().await;
-        network.start().await;
-
-        let ds = network.data_source();
-        let mut blocks = ds.subscribe_blocks(0).await;
+        let mut node = ChainNode::<MockSqlDataSource>::new().await;
 
         let n_blocks = num_blocks();
         let n_txns = num_txns_per_block();
         for b in 0..n_blocks {
-            for t in 0..n_txns {
-                let nonce = b * n_txns + t;
-                network
-                    .submit_transaction(mock_transaction(vec![nonce as u8]))
-                    .await;
-            }
-
-            // Wait for the transactions to be finalized.
-            for _ in 0..10 {
-                if !blocks.next().await.unwrap().is_empty() {
-                    break;
-                }
-            }
+            node.push((0..n_txns).map(|t| mock_transaction(vec![(b * n_txns + t) as u8])))
+                .await;
         }
 
+        // The explorer's totals come from the aggregator, which catches up in the background.
+        let ds = node.data_source();
+        tokio::time::timeout(Duration::from_secs(60), async {
+            loop {
+                match ds.count_transactions().await {
+                    Ok(n) if n >= n_blocks * n_txns => break,
+                    Ok(_) | Err(QueryError::NotFound | QueryError::Missing) => {
+                        sleep(Duration::from_millis(100)).await
+                    },
+                    Err(err) => panic!("unexpected error: {err:#}"),
+                }
+            }
+        })
+        .await
+        .expect("aggregator did not count every transaction");
+
         validate(&ds).await;
-        network.shut_down().await;
     }
 }

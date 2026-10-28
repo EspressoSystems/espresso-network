@@ -35,6 +35,7 @@ jobs:
           # on the checked-out branch.
           ref: ${{ github.head_ref || github.ref_name }}
           fetch-depth: 0
+          filter: blob:none
           # Keep push credentials out of the audit step; create-pull-request
           # pushes with its own token.
           persist-credentials: false

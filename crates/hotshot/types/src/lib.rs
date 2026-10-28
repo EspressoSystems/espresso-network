@@ -7,7 +7,7 @@
 //! Types and Traits for the `HotShot` consensus module
 // False positive from displaydoc derive macro on struct fields
 #![allow(unused_assignments)]
-use std::{fmt::Debug, future::Future, num::NonZeroUsize, pin::Pin, time::Duration};
+use std::{fmt::Debug, num::NonZeroUsize, time::Duration};
 
 use alloy_primitives::U256;
 use bincode::Options;
@@ -38,6 +38,7 @@ pub mod error;
 pub mod event;
 /// Holds the configuration file specification for a HotShot node.
 pub mod hotshot_config_file;
+pub mod initializer;
 pub mod light_client;
 pub mod message;
 pub mod new_protocol;
@@ -59,24 +60,6 @@ pub mod utils;
 pub mod vid;
 pub mod vote;
 pub mod x25519;
-
-/// Pinned future that is Send and Sync
-pub type BoxSyncFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + Sync + 'a>>;
-
-/// yoinked from futures crate
-pub fn assert_future<T, F>(future: F) -> F
-where
-    F: Future<Output = T>,
-{
-    future
-}
-/// yoinked from futures crate, adds sync bound that we need
-pub fn boxed_sync<'a, F>(fut: F) -> BoxSyncFuture<'a, F::Output>
-where
-    F: Future + Sized + Send + Sync + 'a,
-{
-    assert_future::<F::Output, _>(Box::pin(fut))
-}
 
 /// config for validator, including public key, private key, stake value
 #[derive(Clone, Debug, Display)]

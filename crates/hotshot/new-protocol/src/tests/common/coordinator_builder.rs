@@ -1,7 +1,6 @@
 use std::{marker::PhantomData, sync::Arc, time::Duration};
 
 use committable::Committable;
-use hotshot::types::BLSPubKey;
 use hotshot_example_types::{
     node_types::{TEST_VERSIONS, TestTypes},
     state_types::{TestInstanceState, TestValidatedState},
@@ -14,11 +13,13 @@ use hotshot_types::{
     epoch_membership::EpochMembershipCoordinator,
     light_client::StateKeyPair,
     message::Proposal as SignedProposal,
+    signature_key::BLSPubKey,
     simple_certificate::UpgradeCertificate2,
     simple_vote::QuorumData2,
     traits::{signature_key::SignatureKey, storage::Storage as _},
     upgrade_config::UpgradeConfig,
 };
+use tokio::sync::mpsc;
 
 use super::utils::reconstructed_blocks;
 use crate::{
@@ -29,7 +30,7 @@ use crate::{
     coordinator::{Coordinator, timer::Timer},
     epoch::EpochManager,
     helpers::test_upgrade_lock,
-    message::{Certificate1, Proposal},
+    message::{Certificate1, OpaqueMessage, Proposal},
     network::Cliquenet,
     outbox::Outbox,
     proposal::{ProposalValidator, VidShareValidator},
@@ -65,6 +66,7 @@ pub async fn build_test_coordinator(
     epoch_height: u64,
     view_timeout: Duration,
     upgrade: UpgradeSetup,
+    external_tx: mpsc::UnboundedSender<OpaqueMessage<BLSPubKey>>,
 ) -> Coordinator<TestTypes, TestStorage<TestTypes>> {
     let (public_key, private_key) = BLSPubKey::generated_from_seed_indexed([0; 32], node_index);
     let state_key_pair = StateKeyPair::generate_from_seed_indexed([0u8; 32], node_index);
@@ -189,6 +191,9 @@ pub async fn build_test_coordinator(
                 .map(|p| Proposal::from(p.data.clone())),
         );
         consensus.seed_parent(anchor_cert, anchor_proposal, reconstructed);
+        if let Some(cert2) = storage.cert2(anchor_view).await {
+            consensus.seed_cert2(cert2);
+        }
         anchor_view
     } else {
         // The synthetic genesis proposal carries the genesis cert1 as its
@@ -282,6 +287,7 @@ pub async fn build_test_coordinator(
         .client(client)
         .membership_coordinator(membership)
         .outbox(Outbox::new())
+        .external_tx(external_tx)
         .timer(Timer::new(view_timeout, ViewNumber::genesis()))
         .public_key(public_key)
         .build();

@@ -13,8 +13,13 @@ use hotshot_contract_adapter::sol_types::StakeTableV3::{
     ValidatorRegisteredV2, ValidatorRegisteredV3, X25519KeyUpdated,
 };
 use hotshot_types::{
-    PeerConfig, addr::NetAddr, data::EpochNumber, light_client::StateVerKey,
-    network::PeerConfigKeys, traits::signature_key::SignatureKey, x25519,
+    PeerConfig,
+    addr::{InvalidNetAddr, NetAddr},
+    data::EpochNumber,
+    light_client::StateVerKey,
+    network::PeerConfigKeys,
+    traits::signature_key::SignatureKey,
+    x25519,
 };
 use itertools::Itertools;
 use jf_utils::to_bytes;
@@ -249,10 +254,13 @@ impl<KEY: SignatureKey> AuthenticatedValidator<KEY> {
         self.0
     }
 
-    /// Whether this validator can participate in consensus at `protocol_version`.
+    /// Checks that this validator can participate in consensus at `protocol_version`.
     ///
     /// Encodes only protocol-version-gated requirements; stake and delegation checks
     /// live in `select_active_validator_set`.
+    ///
+    /// The contract only checks the port of a p2p address, so the address is also
+    /// checked with [`NetAddr::validate`]: one that fails it cannot be dialed.
     ///
     /// # Liveness during the CLIQUENET upgrade transition
     ///
@@ -270,13 +278,22 @@ impl<KEY: SignatureKey> AuthenticatedValidator<KEY> {
     ///
     /// Operators are warned at startup on the version immediately preceding
     /// NEW_PROTOCOL if their on-chain entry is missing network info.
-    pub fn is_eligible(&self, protocol_version: Version) -> bool {
-        if protocol_version >= NEW_PROTOCOL_VERSION
-            && (self.x25519_key.is_none() || self.p2p_addr.is_none())
-        {
-            return false;
+    pub fn ensure_eligible(&self, protocol_version: Version) -> Result<(), IneligibleValidator> {
+        if protocol_version < NEW_PROTOCOL_VERSION {
+            return Ok(());
         }
-        true
+        if self.x25519_key.is_none() {
+            return Err(IneligibleValidator::MissingX25519Key);
+        }
+        let addr = self
+            .p2p_addr
+            .as_ref()
+            .ok_or(IneligibleValidator::MissingP2pAddr)?;
+        addr.validate()
+            .map_err(|source| IneligibleValidator::InvalidP2pAddr {
+                addr: addr.clone(),
+                source,
+            })
     }
 
     pub fn stake_table_key(&self) -> &KEY {
@@ -305,6 +322,20 @@ impl<KEY: SignatureKey> std::ops::Deref for AuthenticatedValidator<KEY> {
 #[derive(Debug, Error)]
 #[error("Validator {0:#x} not authenticated (invalid registration signature)")]
 pub struct UnauthenticatedValidatorError(pub Address);
+
+/// Why [`AuthenticatedValidator::ensure_eligible`] keeps a validator out of the active set.
+#[derive(Debug, Error)]
+pub enum IneligibleValidator {
+    #[error("missing x25519 key")]
+    MissingX25519Key,
+    #[error("missing p2p address")]
+    MissingP2pAddr,
+    #[error("invalid p2p address {addr:?}: {source}")]
+    InvalidP2pAddr {
+        addr: NetAddr,
+        source: InvalidNetAddr,
+    },
+}
 
 impl<KEY: SignatureKey + Clone> TryFrom<&RegisteredValidator<KEY>> for AuthenticatedValidator<KEY> {
     type Error = UnauthenticatedValidatorError;
@@ -480,8 +511,6 @@ pub enum StakeTableError {
     ValidatorAlreadyExited(Address),
     #[error("Validator {0:#x} has invalid commission {1}")]
     InvalidCommission(Address, u16),
-    #[error("Schnorr key already used: {0}")]
-    SchnorrKeyAlreadyUsed(String),
     #[error("x25519 key already used: {0}")]
     X25519KeyAlreadyUsed(String),
     #[error("Invalid x25519 key: {0}")]
@@ -562,8 +591,10 @@ mod tests {
 
     use alloy::primitives::{Address, U256};
     use committable::Committable;
-    use hotshot::types::{BLSPubKey, SignatureKey};
-    use hotshot_types::{addr::NetAddr, light_client::StateVerKey, x25519};
+    use hotshot_types::{
+        addr::NetAddr, light_client::StateVerKey, signature_key::BLSPubKey,
+        traits::signature_key::SignatureKey, x25519,
+    };
 
     use super::{AuthenticatedValidator, RegisteredValidator};
 
@@ -778,8 +809,7 @@ mod tests {
 #[cfg(all(test, feature = "rlp"))]
 mod rlp_tests {
     use alloy_rlp::{Decodable, Encodable};
-    use hotshot::types::BLSPubKey;
-    use hotshot_types::traits::signature_key::StateSignatureKey;
+    use hotshot_types::{signature_key::BLSPubKey, traits::signature_key::StateSignatureKey};
 
     use super::*;
 

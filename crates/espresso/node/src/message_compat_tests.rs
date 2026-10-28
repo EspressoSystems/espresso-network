@@ -20,7 +20,7 @@
 //! If this test is failing and you did not intend to change the consensus API, figure out what
 //! code changed caused the serialization change and revert it.
 
-use std::{fmt::Debug, path::Path};
+use std::{fmt::Debug, path::Path, slice};
 
 use alloy::primitives::U256;
 use bitvec::bitvec;
@@ -165,7 +165,7 @@ where
     assert_eq!(&parsed, expected);
 }
 
-#[cfg(feature = "testing")]
+#[cfg(any(test, feature = "testing"))]
 async fn test_message_compat<Ver: StaticVersionType>(_ver: Ver) {
     let (sender, priv_key) = PubKey::generated_from_seed_indexed(Default::default(), 0);
     let signature = PubKey::sign(&priv_key, &[]).unwrap();
@@ -209,7 +209,7 @@ async fn test_message_compat<Ver: StaticVersionType>(_ver: Ver) {
     let block_header = leaf.block_header().clone();
     let transaction = Transaction::new(1_u32.into(), vec![1, 2, 3]);
     let (payload, metadata) = Payload::from_transactions(
-        [transaction.clone()],
+        slice::from_ref(&transaction),
         &ValidatedState::default(),
         &node_state,
     )
@@ -438,7 +438,7 @@ fn assemble_qc_signature(
 ///
 /// Optional fields are populated wherever a variant allows it, so the vector pins the encoding of
 /// the `Some` case rather than the cheaper `None` case.
-#[cfg(feature = "testing")]
+#[cfg(any(test, feature = "testing"))]
 async fn reference_new_protocol_messages(
     version: Version,
 ) -> Vec<NewProtocolMessage<SeqTypes, Validated>> {
@@ -475,7 +475,7 @@ async fn reference_new_protocol_messages(
 
     let transaction = Transaction::new(1_u32.into(), vec![1, 2, 3]);
     let (payload, metadata) = Payload::from_transactions(
-        [transaction.clone()],
+        slice::from_ref(&transaction),
         &ValidatedState::default(),
         &node_state,
     )
@@ -784,7 +784,7 @@ async fn reference_new_protocol_messages(
         .collect()
 }
 
-#[cfg(feature = "testing")]
+#[cfg(any(test, feature = "testing"))]
 #[tokio::test(flavor = "multi_thread")]
 async fn test_v6_new_protocol_message_compat() {
     let messages =
@@ -806,10 +806,11 @@ async fn test_v6_new_protocol_message_compat() {
 
 /// The epoch binding timeout messages, which only this version sends.
 ///
-/// The vectors also pin the v7 header, so a diff against v6 is wider than the
-/// timeout forms alone: every message carrying a block header, a leaf
-/// commitment derived from one, or a signature over either differs too.
-#[cfg(feature = "testing")]
+/// The vectors also pin the v7 header, which drops the builder commitment, so a
+/// diff against v6 is wider than the timeout forms alone: every message
+/// carrying a block header, a leaf commitment derived from one, or a signature
+/// over either differs too.
+#[cfg(any(test, feature = "testing"))]
 #[tokio::test(flavor = "multi_thread")]
 async fn test_v7_new_protocol_message_compat() {
     let messages =

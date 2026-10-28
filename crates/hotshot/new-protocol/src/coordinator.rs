@@ -10,11 +10,11 @@ use std::{
 
 use bon::{Builder, bon};
 use committable::Commitment;
-use hotshot::{HotShotInitializer, traits::BlockPayload, types::SignatureKey};
 use hotshot_types::{
     consensus::{ConsensusMetricsValue, ParticipationTracker},
     data::{EpochNumber, Leaf2, VidCommitment, VidCommitment2, ViewChangeEvidence2, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
+    initializer::HotShotInitializer,
     message::{Proposal as SignedProposal, UpgradeLock},
     simple_certificate::{
         OneHonestThreshold, SuccessThreshold, TimeoutCertificate2, TimeoutCertificate3,
@@ -22,15 +22,21 @@ use hotshot_types::{
     },
     simple_vote::{HasEpoch, QuorumVote2, TimeoutVote2, TimeoutVote3},
     traits::{
-        block_contents::BlockHeader, metrics::Metrics, node_implementation::NodeType,
-        signature_key::StateSignatureKey,
+        BlockPayload,
+        block_contents::BlockHeader,
+        metrics::Metrics,
+        node_implementation::NodeType,
+        signature_key::{SignatureKey, StateSignatureKey},
     },
     upgrade_config::UpgradeConfig,
-    utils::is_epoch_root,
+    utils::{is_epoch_root, is_last_block},
     vote::{HasViewNumber, Vote},
 };
 use time::OffsetDateTime;
-use tokio::{select, sync::oneshot};
+use tokio::{
+    select,
+    sync::{mpsc, oneshot},
+};
 use tracing::{debug, error, info, warn};
 use versions::Version;
 
@@ -48,8 +54,8 @@ use crate::{
     helpers::{proposal_commitment, validated_state_cert},
     logging::KeyPrefix,
     message::{
-        self, BlockMessage, CatchupEvidence, Certificate1, ConsensusMessage, Message, MessageType,
-        OpaqueMessage, Proposal, ProposalFetchMessage, ProposalMessage, TimeoutVote,
+        self, BlockMessage, CatchupEvidence, Certificate1, Certificate2, ConsensusMessage, Message,
+        MessageType, OpaqueMessage, Proposal, ProposalFetchMessage, ProposalMessage, TimeoutVote,
         TransactionMessage, Unchecked, Validated, Vote2, payload::PayloadFetchMessage,
     },
     network::Cliquenet,
@@ -60,7 +66,7 @@ use crate::{
     storage::{NewProtocolStorage, Storage},
     upgrade::UpgradeProtocol,
     vid::{
-        ObtainedPayload, VidDisperseRequest, VidDisperser, VidFragmentAccumulator,
+        ObtainedPayload, PinnedBy, VidDisperseRequest, VidDisperser, VidFragmentAccumulator,
         VidReconstructor, expected_vid_param,
     },
     vote::{EpochRootTally, SimpleTally, UpgradeTally, VoteCollector},
@@ -129,8 +135,8 @@ pub struct Coordinator<T: NodeType, S> {
     storage: Storage<T, S>,
     #[builder(default)]
     outbox: Outbox<ConsensusOutput<T>>,
-    #[builder(default)]
-    coordinator_outbox: Outbox<OpaqueMessage<T::SignatureKey>>,
+    /// Forwards external messages on arrival, independent of consensus inputs.
+    external_tx: mpsc::UnboundedSender<OpaqueMessage<T::SignatureKey>>,
     public_key: T::SignatureKey,
     #[builder(default = KeyPrefix::from(&public_key))]
     node_id: KeyPrefix,
@@ -190,7 +196,10 @@ where
         consensus_metrics: ConsensusMetricsValue,
         /// Locked QC persisted on a prior run; restored so the lock survives restart.
         locked_qc: Option<Certificate1<T>>,
+        /// The anchor's cert2 persisted on a prior run.
+        anchor_cert2: Option<Certificate2<T>>,
         upgrade_config: UpgradeConfig,
+        external_tx: mpsc::UnboundedSender<OpaqueMessage<T::SignatureKey>>,
     ) -> Self {
         let mut consensus = Consensus::new(
             membership_coordinator.clone(),
@@ -271,7 +280,6 @@ where
                     VidCommitment::V2(commitment) => Some((view, commitment)),
                     _ => None,
                 });
-        // Seed every persisted proposal before `seed_parent` so its authoritative anchor wins.
         let saved_proposals = initializer
             .saved_proposals()
             .values()
@@ -286,6 +294,9 @@ where
         // this must run after `seed_parent`.
         if let Some(locked_qc) = locked_qc {
             consensus.seed_locked_cert(locked_qc);
+        }
+        if let Some(cert2) = anchor_cert2 {
+            consensus.seed_cert2(cert2);
         }
         consensus.resume_from_restart(
             anchor_view,
@@ -408,6 +419,7 @@ where
             .public_key(public_key)
             .maybe_metrics(coordinator_metrics)
             .participation(participation)
+            .external_tx(external_tx)
             .build()
     }
 
@@ -416,6 +428,9 @@ where
     pub fn start(&mut self) {
         let cur_view = self.consensus.current_view();
         let next_view = cur_view + 1;
+        // Client requests are served before the outbox reaches the builder, so it must know the
+        // view before that first `ViewChanged`.
+        self.block_builder.start_at(next_view);
         let epoch = self
             .consensus
             .current_epoch()
@@ -571,15 +586,22 @@ where
                     return Ok(ConsensusInput::Certificate2(cert2))
                 }
                 Some(cert1) = self.cert_verifiers.cert1.next() => {
+                    // The epoch-root collector keeps tallying: its state
+                    // certificate only forms locally, and consensus dedupes
+                    // the cert1 it carries.
+                    self.vote1_collector.mark_completed(cert1.view_number(), cert1.epoch());
                     return Ok(ConsensusInput::Certificate1(cert1))
                 }
                 Some(cert2) = self.cert_verifiers.cert2.next() => {
+                    self.vote2_collector.mark_completed(cert2.view_number(), cert2.epoch());
                     return Ok(ConsensusInput::Certificate2(cert2))
                 }
                 Some(tc) = self.cert_verifiers.timeout.next() => {
+                    self.timeout_collector.mark_completed(tc.view_number(), tc.epoch());
                     return Ok(ConsensusInput::TimeoutCertificate(tc.map(TimeoutEvidence::V2)))
                 }
                 Some(tc) = self.cert_verifiers.timeout3.next() => {
+                    self.timeout3_collector.mark_completed(tc.view_number(), tc.epoch());
                     return Ok(ConsensusInput::TimeoutCertificate(tc.map(TimeoutEvidence::V3)))
                 }
                 Some(cert1) = self.cert_verifiers.advance.next() => {
@@ -629,7 +651,6 @@ where
                 Some(item) = self.block_builder.next() => match item {
                     Ok(block) => {
                         self.state_manager.request_header(HeaderRequest::from(&block));
-                        let next_view = block.view + 1;
                         let epoch = block.epoch;
                         let manifest = block.manifest.clone();
                         // Retain the payload and persist it when consensus proposes this
@@ -641,6 +662,7 @@ where
                                     epoch: block.epoch,
                                     payload: block.payload.payload.clone(),
                                     metadata: block.payload.metadata.clone(),
+                                    hashes: manifest.hashes.clone(),
                                 },
                             );
                         } else {
@@ -648,11 +670,20 @@ where
                         }
                         // We built this block; skip reconstructing it from our own loopback share.
                         self.vid_reconstructor.retire_view(block.view);
-                        self.unicast_to_leader(
-                            next_view,
+                        // A leader of several views builds a copy sent for a later one into this
+                        // block, so a transaction here can be sent from `block.view - 1`, and its
+                        // other copies can sit with the leaders of the next `fanout` views.
+                        let holders = self.upcoming_leaders(
+                            block.view + 1,
+                            self.block_builder.fanout().get(),
                             epoch,
-                            BlockMessage::DedupManifest(manifest),
-                        )?;
+                        );
+                        for (_, leader) in holders {
+                            self.unicast_block(
+                                &leader,
+                                BlockMessage::DedupManifest(manifest.clone()),
+                            )?;
+                        }
                         return Ok(block.into())
                     }
                     Err(err) => {
@@ -728,27 +759,29 @@ where
             out.metadata.clone(),
             VidCommitment::V2(out.payload_commitment),
         );
-        if let Some(proposal) = self.consensus.proposal_at(out.view) {
-            // Only pair the payload with the header if the proposal commits to it
-            if proposal.block_header.payload_commitment()
-                == VidCommitment::V2(out.payload_commitment)
-            {
-                self.outbox
-                    .push_back(ConsensusOutput::BlockPayloadReconstructed {
-                        view: out.view,
-                        header: proposal.block_header.clone(),
-                        payload: Arc::new(out.payload),
-                    });
-            } else {
-                warn!(
-                    view = %out.view,
-                    header = %proposal.block_header.payload_commitment(),
-                    obtained = %out.payload_commitment,
-                    "payload commitment does not match proposal header"
-                );
-            }
+        // Only pair the payload with a header that commits to it.
+        if let Some(proposal) = self
+            .consensus
+            .proposal_with_payload(out.view, out.payload_commitment)
+        {
+            self.outbox
+                .push_back(ConsensusOutput::BlockPayloadReconstructed {
+                    view: out.view,
+                    header: proposal.block_header.clone(),
+                    payload: Arc::new(out.payload.clone()),
+                });
+        } else if self.consensus.proposal_at(out.view).is_some() {
+            warn!(
+                view = %out.view,
+                obtained = %out.payload_commitment,
+                "payload commitment does not match a proposal header"
+            );
         }
-        ConsensusInput::BlockReconstructed(out.view, out.payload_commitment)
+        ConsensusInput::BlockReconstructed {
+            view: out.view,
+            payload_commitment: out.payload_commitment,
+            payload: out.payload,
+        }
     }
 
     pub fn apply_consensus(&mut self, input: ConsensusInput<T>) {
@@ -791,12 +824,7 @@ where
                 debug!(%node, %epoch, "request drb result");
                 self.epoch_manager.request_drb_result(epoch);
             },
-            ConsensusOutput::LeafDecided {
-                leaves,
-                cert1,
-                cert2,
-                ..
-            } => {
+            ConsensusOutput::LeafDecided { leaves, cert1, .. } => {
                 info!(
                     %node,
                     view = %cert1.view_number(),
@@ -805,15 +833,16 @@ where
                     "leaves decided"
                 );
                 self.on_decide_metrics(&leaves);
-                if let Some(cert2) = cert2 {
-                    self.storage.append_cert2(cert2.view_number, cert2.clone());
-                }
                 // `leaves` is ordered newest first.
                 //  Garbage collect the data for views < decided view
                 if let Some(newest) = leaves.first() {
                     let gc_view = newest.view_number();
                     let gc_epoch = newest.justify_qc().epoch().unwrap_or_default();
                     self.gc(gc_epoch, GcScope::Decided(gc_view))?;
+                    // A gap-fill decide trails the decided view; gc already covered its leaves.
+                    if gc_view == self.consensus.last_decided_view() {
+                        self.state_manager.seed_decided(newest.clone());
+                    }
                 }
                 for leaf in leaves.into_iter().rev() {
                     self.participation
@@ -879,10 +908,7 @@ where
                         // A leader never reconstructs its own block, and a block it built
                         // but did not propose puts nothing on the chain, so this is where
                         // its transactions count as included.
-                        self.block_builder.on_block_reconstructed(
-                            view,
-                            da.payload.transaction_commitments(&da.metadata),
-                        );
+                        self.block_builder.on_block_reconstructed(view, da.hashes);
                         self.storage.append_da(
                             view,
                             da.epoch,
@@ -915,15 +941,7 @@ where
                     self.storage
                         .append_state_cert(state_cert.view_number(), state_cert.clone());
                 }
-                let expected_param =
-                    expected_vid_param(&self.membership_coordinator, proposal.data.epoch);
-                self.vid_reconstructor.handle_proposal(
-                    view,
-                    vid_share.payload_commitment,
-                    proposal.data.block_header.metadata().clone(),
-                    proposal.data.epoch,
-                    expected_param,
-                );
+                self.notify_vid_reconstructor(&proposal.data, PinnedBy::Leader);
                 self.vid_reconstructor
                     .handle_vid_share(self.public_key.clone(), vid_share);
             },
@@ -1097,20 +1115,11 @@ where
                 info!(%node, %view, %epoch, "view changed");
                 self.timer.reset_with(view);
                 self.gc(epoch, GcScope::Local(view))?;
-                let txns = self.block_builder.on_view_changed(view);
+                let resend = self.block_builder.on_view_changed(view);
                 self.participation.on_view_changed(epoch);
                 self.on_view_changed_metrics(view, epoch);
-                if !txns.is_empty() {
-                    let next_view = view + 1;
-                    self.unicast_to_leader(
-                        next_view,
-                        epoch,
-                        BlockMessage::Transactions(TransactionMessage {
-                            view: next_view,
-                            transactions: txns,
-                        }),
-                    )
-                    .map_err(|e| e.context("unicast transactions"))?;
+                if let Some(resend) = resend {
+                    self.send_transactions(resend, epoch)?;
                 }
 
                 // Proactively fetch the DRB for the next epoch so
@@ -1137,6 +1146,16 @@ where
                     .current_epoch()
                     .unwrap_or_else(EpochNumber::genesis);
                 self.gc(epoch, GcScope::Timeout(view))?;
+            },
+            ConsensusOutput::ProposalCertified(proposal) => {
+                // Without this node's own share nothing pairs, so pin the
+                // view here instead: the voters' broadcast shares are held
+                // until a commitment admits them, and the header carries it.
+                debug!(
+                    %node, view = %proposal.view_number,
+                    "pinning reconstructor from certified proposal"
+                );
+                self.notify_vid_reconstructor(&proposal, PinnedBy::Certificate);
             },
             ConsensusOutput::BlockPayloadReconstructed { .. } => {},
             ConsensusOutput::UpgradeDecided(cert) => {
@@ -1165,16 +1184,12 @@ where
         &mut self.outbox
     }
 
-    pub fn coordinator_outbox(&self) -> &Outbox<OpaqueMessage<T::SignatureKey>> {
-        &self.coordinator_outbox
-    }
-
-    pub fn coordinator_outbox_mut(&mut self) -> &mut Outbox<OpaqueMessage<T::SignatureKey>> {
-        &mut self.coordinator_outbox
-    }
-
     pub fn current_view(&self) -> ViewNumber {
         self.consensus.current_view()
+    }
+
+    pub fn last_decided_leaf(&self) -> &Leaf2<T> {
+        self.consensus.last_decided_leaf()
     }
 
     pub fn state(&self, v: ViewNumber) -> Option<&StateEntry<T>> {
@@ -1569,7 +1584,9 @@ where
                             count = msg.transactions.len(),
                             "recv transactions"
                         );
-                        self.block_builder.on_transactions(msg)
+                        if !self.is_view_too_far_ahead(msg.view) {
+                            self.block_builder.on_transactions(msg)
+                        }
                     },
                     BlockMessage::DedupManifest(manifest) => {
                         debug!(
@@ -1601,7 +1618,7 @@ where
                     );
                     return None;
                 }
-                if let Some(proposal) = self.consensus.signed_proposal(&view).cloned() {
+                if let Some(proposal) = self.consensus.signed_proposal_at(view).cloned() {
                     let response = Message {
                         sender: self.public_key.clone(),
                         message_type: MessageType::ProposalFetch(ProposalFetchMessage::Response(
@@ -1645,36 +1662,35 @@ where
             MessageType::PayloadFetch(PayloadFetchMessage::Res(response)) => {
                 let view = response.view_number();
                 debug!(%node, %sender, %view, "received payload fetch response");
-                let retry = self.fetcher.response(
+                let refused = self.fetcher.response(
                     response,
                     &message.sender,
                     &self.consensus,
                     &self.membership_coordinator,
                 );
-                if retry
-                    && let Some(proposal) = self.consensus.proposal_at(view)
-                    && let VidCommitment::V2(commit) = proposal.block_header.payload_commitment()
-                    && !self.consensus.is_reconstructed(view, commit)
-                    && let Some((peer, message)) = self.fetcher.request(
-                        view,
-                        commit,
-                        Retry::SameRound,
-                        &self.consensus,
-                        &self.membership_coordinator,
-                    )
-                    && let Err(err) = self.network.sender().unicast(
-                        self.consensus.current_view(),
-                        &peer,
-                        &message,
-                    )
-                {
-                    warn!(%node, %sender, %view, %err, "failed to send payload request");
+                for commit in refused {
+                    if !self.consensus.is_reconstructed(view, commit)
+                        && let Some((peer, message)) = self.fetcher.request(
+                            view,
+                            commit,
+                            Retry::SameRound,
+                            &self.consensus,
+                            &self.membership_coordinator,
+                        )
+                        && let Err(err) = self.network.sender().unicast(
+                            self.consensus.current_view(),
+                            &peer,
+                            &message,
+                        )
+                    {
+                        warn!(%node, %sender, %view, %err, "failed to send payload request");
+                    }
                 }
                 None
             },
             MessageType::External(data) => {
                 debug!(%node, %sender, bytes = data.len(), "recv external message");
-                self.coordinator_outbox.push_back(OpaqueMessage {
+                let _ = self.external_tx.send(OpaqueMessage {
                     sender: message.sender,
                     data,
                 });
@@ -1729,24 +1745,75 @@ where
             .map_err(|e| CoordinatorError::from(e).context(ctx))
     }
 
-    fn unicast_to_leader(
+    fn unicast_block(
         &mut self,
-        view: ViewNumber,
-        epoch: EpochNumber,
+        leader: &T::SignatureKey,
         msg: BlockMessage<T>,
     ) -> Result<(), CoordinatorError> {
-        let Some(leader) = self.leader(view, epoch) else {
-            warn!(%view, %epoch, "failed to resolve leader for unicast");
-            return Ok(());
-        };
         let message = Message {
             sender: self.public_key.clone(),
             message_type: MessageType::Block(msg),
         };
         self.network
             .sender()
-            .unicast(self.consensus.current_view(), &leader, &message)
+            .unicast(self.consensus.current_view(), leader, &message)
             .map_err(|e| CoordinatorError::from(e).context("leader unicast"))
+    }
+
+    /// Sends `forward` to the leaders of the `fanout` views from its own, each leader once with
+    /// the earliest of its views.
+    fn send_transactions(
+        &mut self,
+        forward: TransactionMessage<T>,
+        epoch: EpochNumber,
+    ) -> Result<(), CoordinatorError> {
+        let leaders = self.upcoming_leaders(forward.view, self.block_builder.fanout().get(), epoch);
+        for (view, leader) in leaders {
+            let message = TransactionMessage {
+                view,
+                transactions: forward.transactions.clone(),
+            };
+            self.unicast_block(&leader, BlockMessage::Transactions(message))
+                .map_err(|e| e.context("unicast transactions"))?;
+        }
+        Ok(())
+    }
+
+    /// The leaders of the `count` views from `first`, each once with the earliest of its views.
+    fn upcoming_leaders(
+        &mut self,
+        first: ViewNumber,
+        count: u64,
+        epoch: EpochNumber,
+    ) -> Vec<(ViewNumber, T::SignatureKey)> {
+        let mut leaders = Vec::<(ViewNumber, T::SignatureKey)>::new();
+        for view in (0..count).map(|ahead| first + ahead) {
+            let Some(leader) = self.upcoming_leader(view, epoch) else {
+                warn!(%view, %epoch, "failed to resolve an upcoming leader");
+                continue;
+            };
+            if leaders.iter().all(|(_, known)| *known != leader) {
+                leaders.push((view, leader));
+            }
+        }
+        leaders
+    }
+
+    /// The leader of an upcoming `view`. Consensus picks it with the epoch of the block it
+    /// proposes, which is the next epoch when that block builds on its epoch's last block. Timed
+    /// out views add no block, so the latest proposal is the best guess for that parent. `epoch`
+    /// is the fallback when there is no proposal yet or its epoch's stake table is unknown.
+    fn upcoming_leader(&mut self, view: ViewNumber, epoch: EpochNumber) -> Option<T::SignatureKey> {
+        let expected = self.consensus.last_proposal_before(view).map(|p| {
+            if is_last_block(p.block_header.block_number(), *self.consensus.epoch_height) {
+                p.epoch + 1
+            } else {
+                p.epoch
+            }
+        });
+        expected
+            .and_then(|e| self.leader(view, e))
+            .or_else(|| self.leader(view, epoch))
     }
 
     fn leader(&mut self, view: ViewNumber, epoch: EpochNumber) -> Option<T::SignatureKey> {
@@ -1797,7 +1864,19 @@ where
                 });
             },
             ClientRequest::SubmitTransaction { tx, respond } => {
-                let _ = respond.send(self.block_builder.on_submit_transaction(tx));
+                let forward = match self.block_builder.on_submit_transaction(tx) {
+                    Ok(forward) => forward,
+                    Err(err) => {
+                        let _ = respond.send(Err(err));
+                        return Ok(());
+                    },
+                };
+                // The transaction is queued, and the retry buffer resends it if no leader
+                // resolves now.
+                let _ = respond.send(Ok(()));
+                if let Some(forward) = forward {
+                    self.send_transactions(forward, self.epoch())?;
+                }
             },
             ClientRequest::UpdateLeaf { update, respond } => {
                 self.state_manager.update_state(update);
@@ -1808,9 +1887,7 @@ where
                 leaf_commitment,
                 respond,
             } => {
-                if let Some(proposal) = self.consensus.signed_proposal(&view)
-                    && proposal_commitment(&proposal.data) == leaf_commitment
-                {
+                if let Some(proposal) = self.consensus.signed_proposal(view, leaf_commitment) {
                     let _ = respond.send(Ok(proposal.clone()));
                     return Ok(());
                 }
@@ -1988,11 +2065,35 @@ where
         if !self.requested_missing_proposals.remove(&key) {
             return;
         }
-        if self.consensus.proposal_at(view).is_some() {
+        if self
+            .consensus
+            .proposals()
+            .contains(view, key.leaf_commitment)
+        {
             return;
         }
         self.proposal_validator
             .validate_fetched(ProposalMessage::unchecked(proposal));
+    }
+
+    /// Pin the reconstructor to `proposal`'s payload commitment, so the shares
+    /// the voters broadcast for its view can rebuild the payload.
+    fn notify_vid_reconstructor(&mut self, proposal: &Proposal<T>, pinned_by: PinnedBy) {
+        let view = proposal.view_number;
+        let VidCommitment::V2(payload_commitment) = proposal.block_header.payload_commitment()
+        else {
+            warn!(node = %self.node_id, %view, "proposal payload commitment is not V2");
+            return;
+        };
+        let expected_param = expected_vid_param(&self.membership_coordinator, proposal.epoch);
+        self.vid_reconstructor.handle_proposal(
+            view,
+            payload_commitment,
+            proposal.block_header.metadata().clone(),
+            proposal.epoch,
+            expected_param,
+            pinned_by,
+        );
     }
 
     fn gc(&mut self, epoch: EpochNumber, scope: GcScope) -> Result<(), CoordinatorError> {
@@ -2281,6 +2382,7 @@ struct PendingDa<T: NodeType> {
     epoch: EpochNumber,
     payload: T::BlockPayload,
     metadata: <T::BlockPayload as BlockPayload<T>>::Metadata,
+    hashes: Vec<Commitment<T::Transaction>>,
 }
 
 type ProposalFetchResponseSender<T> =

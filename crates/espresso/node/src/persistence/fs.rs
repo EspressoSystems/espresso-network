@@ -17,15 +17,11 @@ use espresso_types::{
     AuthenticatedValidatorMap, Header, Leaf2, NetworkConfig, Payload, PubKey,
     RegisteredValidatorMap, SeqTypes, StakeTableHash,
     traits::{EventsPersistenceRead, MembershipPersistence, StakeTuple},
-    v0::traits::{EventConsumer, PersistenceOptions, SequencerPersistence},
+    v0::traits::{EventConsumer, PersistenceOptions, SequencerPersistence, StateCertPersistence},
     v0_3::{
         AuthenticatedValidator, EventKey, IndexedStake, RegisteredValidator, RewardAmount,
         StakeTableEvent,
     },
-};
-use hotshot::InitializerEpochInfo;
-use hotshot_libp2p_networking::network::behaviours::dht::store::persistent::{
-    DhtPersistentStorage, SerializableRecord,
 };
 use hotshot_new_protocol::message::Certificate2;
 use hotshot_types::{
@@ -34,7 +30,8 @@ use hotshot_types::{
         VidCommitment, VidDisperseShare,
     },
     drb::{DrbInput, DrbResult},
-    event::{Event, EventType, HotShotAction, LeafInfo},
+    event::{HotShotAction, LeafInfo},
+    initializer::InitializerEpochInfo,
     message::{Proposal, convert_proposal},
     new_protocol::CoordinatorEvent,
     simple_certificate::{
@@ -289,9 +286,6 @@ impl Inner {
         self.path.join("high_qc2")
     }
 
-    fn libp2p_dht_path(&self) -> PathBuf {
-        self.path.join("libp2p_dht")
-    }
     fn epoch_drb_result_dir_path(&self) -> PathBuf {
         self.path.join("epoch_drb_result")
     }
@@ -328,6 +322,25 @@ impl Inner {
         Ok(Some(
             bincode::deserialize(&bytes).context("deserialize cert2")?,
         ))
+    }
+
+    fn append_cert2(
+        &mut self,
+        view: ViewNumber,
+        cert2: &Certificate2<SeqTypes>,
+    ) -> anyhow::Result<()> {
+        let dir_path = self.decided_cert2_dir_path();
+        fs::create_dir_all(&dir_path).context("failed to create decided_cert2 dir")?;
+        let file_path = dir_path.join(view.u64().to_string()).with_extension("bin");
+        self.replace(
+            &file_path,
+            |_| Ok(true),
+            |mut file| {
+                let bytes = bincode::serialize(cert2).context("serialize cert2")?;
+                file.write_all(&bytes)?;
+                Ok(())
+            },
+        )
     }
 
     /// Overwrite a file if a condition is met.
@@ -398,7 +411,7 @@ impl Inner {
         self.prune_files(
             self.decided_cert2_dir_path(),
             prune_view,
-            None,
+            Some(decided_view),
             prune_intervals,
         )?;
 
@@ -471,7 +484,6 @@ impl Inner {
     async fn generate_decide_events(
         &mut self,
         view: ViewNumber,
-        deciding_qc: Option<Arc<CertificatePair<SeqTypes>>>,
         consumer: &impl EventConsumer,
     ) -> anyhow::Result<Vec<RangeInclusive<ViewNumber>>> {
         // Generate a decide event for each leaf, to be processed by the event consumer. We make a
@@ -537,31 +549,12 @@ impl Inner {
         for (view, (leaf, cert)) in leaves {
             let height = leaf.leaf.block_header().block_number();
 
-            let event = if leaf.leaf.block_header().version() >= versions::NEW_PROTOCOL_VERSION {
-                let cert2 = self.load_cert2(view)?;
-                // One event per view. cert2 is only stored for the
-                // directly finalized view
-                // ancestors get `cert2: None`,
-                // which is what update() expects for indirectly decided leaves.
-                CoordinatorEvent::NewDecide {
-                    leaf_infos: vec![leaf],
-                    cert1: cert.qc().clone(),
-                    cert2,
-                }
-            } else {
-                let deciding_qc = deciding_qc
-                    .as_ref()
-                    .filter(|qc| qc.view_number() == cert.view_number() + 1)
-                    .cloned();
-                CoordinatorEvent::LegacyEvent(Event {
-                    view_number: view,
-                    event: EventType::Decide {
-                        committing_qc: Arc::new(cert),
-                        deciding_qc,
-                        leaf_chain: Arc::new(vec![leaf]),
-                        block_size: None,
-                    },
-                })
+            // cert2 is stored only for the directly finalized view; ancestors get `None`, which
+            // is what update() expects for indirectly decided leaves.
+            let event = CoordinatorEvent::NewDecide {
+                leaf_infos: vec![leaf],
+                cert1: cert.qc().clone(),
+                cert2: self.load_cert2(view)?,
             };
             consumer.handle_event(&event).await?;
 
@@ -791,12 +784,16 @@ impl SequencerPersistence for Persistence {
 
     async fn persist_decided_leaves(
         &self,
-        _view: ViewNumber,
         leaf_chain: impl IntoIterator<Item = (&LeafInfo<SeqTypes>, CertificatePair<SeqTypes>)> + Send,
-        _deciding_qc: Option<Arc<CertificatePair<SeqTypes>>>,
+        cert2: Option<&Certificate2<SeqTypes>>,
         _consumer: &(impl EventConsumer + 'static),
     ) -> anyhow::Result<()> {
         let mut inner = self.inner.write().await;
+        // Written before the leaves and under the same lock as the decide replay, so the replay
+        // can never find the newest leaf on disk without its cert2.
+        if let Some(cert2) = cert2 {
+            inner.append_cert2(cert2.view_number, cert2)?;
+        }
         let path = inner.decided_leaf2_path();
 
         // Ensure the anchor leaf directory exists.
@@ -855,7 +852,6 @@ impl SequencerPersistence for Persistence {
     async fn process_decided_events(
         &self,
         view: ViewNumber,
-        deciding_qc: Option<Arc<CertificatePair<SeqTypes>>>,
         consumer: &(impl EventConsumer + 'static),
     ) -> anyhow::Result<Option<ViewNumber>> {
         // Started before the lock acquisition: this pass holds the exclusive write lock, so the
@@ -867,9 +863,7 @@ impl SequencerPersistence for Persistence {
         let intervals = if self.consensus_only {
             inner.skip_decide_events(view)?
         } else {
-            inner
-                .generate_decide_events(view, deciding_qc, consumer)
-                .await?
+            inner.generate_decide_events(view, consumer).await?
         };
         drop(inner);
 
@@ -1058,19 +1052,7 @@ impl SequencerPersistence for Persistence {
         view: ViewNumber,
         cert2: Certificate2<SeqTypes>,
     ) -> anyhow::Result<()> {
-        let mut inner = self.inner.write().await;
-        let dir_path = inner.decided_cert2_dir_path();
-        fs::create_dir_all(dir_path.clone()).context("failed to create decided_cert2 dir")?;
-        let file_path = dir_path.join(view.u64().to_string()).with_extension("bin");
-        inner.replace(
-            &file_path,
-            |_| Ok(true),
-            |mut file| {
-                let bytes = bincode::serialize(&cert2).context("serialize cert2")?;
-                file.write_all(&bytes)?;
-                Ok(())
-            },
-        )
+        self.inner.write().await.append_cert2(view, &cert2)
     }
 
     async fn load_cert2(&self, view: ViewNumber) -> anyhow::Result<Option<Certificate2<SeqTypes>>> {
@@ -1566,6 +1548,14 @@ impl SequencerPersistence for Persistence {
         Ok(result)
     }
 
+    fn enable_metrics(&mut self, metrics: &dyn Metrics) {
+        self.metrics = Arc::new(PersistenceMetricsValue::new(metrics));
+        self.probe.register(&*metrics.subgroup("disk".into()));
+    }
+}
+
+#[async_trait]
+impl StateCertPersistence for Persistence {
     async fn get_state_cert_by_epoch(
         &self,
         epoch: u64,
@@ -1626,11 +1616,6 @@ impl SequencerPersistence for Persistence {
         ))?;
 
         Ok(())
-    }
-
-    fn enable_metrics(&mut self, metrics: &dyn Metrics) {
-        self.metrics = Arc::new(PersistenceMetricsValue::new(metrics));
-        self.probe.register(&*metrics.subgroup("disk".into()));
     }
 }
 
@@ -2058,65 +2043,6 @@ impl MembershipPersistence for Persistence {
     }
 }
 
-#[async_trait]
-impl DhtPersistentStorage for Persistence {
-    /// Save the DHT to the file on disk
-    ///
-    /// # Errors
-    /// - If we fail to serialize the records
-    /// - If we fail to write the serialized records to the file
-    async fn save(&self, records: Vec<SerializableRecord>) -> anyhow::Result<()> {
-        // Bincode-serialize the records
-        let to_save =
-            bincode::serialize(&records).with_context(|| "failed to serialize records")?;
-
-        // Get the path to save the file to
-        let path = self.inner.read().await.libp2p_dht_path();
-
-        // Create the directory if it doesn't exist
-        fs::create_dir_all(path.parent().with_context(|| "directory had no parent")?)
-            .with_context(|| "failed to create directory")?;
-
-        // Get a write lock on the inner struct
-        let mut inner = self.inner.write().await;
-
-        // Save the file, replacing the previous one if it exists
-        inner
-            .replace(
-                &path,
-                |_| {
-                    // Always overwrite the previous file
-                    Ok(true)
-                },
-                |mut file| {
-                    file.write_all(&to_save)
-                        .with_context(|| "failed to write records to file")?;
-                    Ok(())
-                },
-            )
-            .with_context(|| "failed to save records to file")?;
-
-        Ok(())
-    }
-
-    /// Load the DHT from the file on disk
-    ///
-    /// # Errors
-    /// - If we fail to read the file
-    /// - If we fail to deserialize the records
-    async fn load(&self) -> anyhow::Result<Vec<SerializableRecord>> {
-        // Read the contents of the file
-        let contents = std::fs::read(self.inner.read().await.libp2p_dht_path())
-            .with_context(|| "Failed to read records from file")?;
-
-        // Deserialize the contents
-        let records: Vec<SerializableRecord> =
-            bincode::deserialize(&contents).with_context(|| "Failed to deserialize records")?;
-
-        Ok(records)
-    }
-}
-
 /// Get all paths under `dir` whose name is of the form <view number>.txt.
 fn view_files(
     dir: impl AsRef<Path>,
@@ -2176,10 +2102,11 @@ mod test {
 
     use committable::Committable;
     use espresso_types::{Leaf, NodeState, PubKey};
-    use hotshot::types::SignatureKey;
     use hotshot_example_types::node_types::TEST_VERSIONS;
     use hotshot_query_service::{metrics::PrometheusMetrics, testing::mocks::MOCK_UPGRADE};
-    use hotshot_types::{data::QuorumProposal2, simple_vote::Vote2Data};
+    use hotshot_types::{
+        data::QuorumProposal2, simple_vote::Vote2Data, traits::signature_key::SignatureKey,
+    };
     use serde_json::json;
     use tempfile::TempDir;
 

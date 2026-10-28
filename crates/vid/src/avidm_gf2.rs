@@ -1,11 +1,12 @@
 //! This module implements the AVID-M scheme over GF2
 
-use std::{ops::Range, vec};
+use std::{borrow::Cow, ops::Range, vec};
 
 use anyhow::anyhow;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use jf_merkle_tree::{MerkleTreeScheme, append_only::MerkleTree as JfMerkleTree};
 use p3_maybe_rayon::prelude::*;
+use reed_solomon_simd::ReedSolomonEncoder;
 use serde::{Deserialize, Serialize};
 use tagged_base64::tagged;
 
@@ -115,6 +116,17 @@ impl AvidmGf2Share {
     pub fn validate(&self) -> bool {
         self.payload.len() == self.range.len() && self.mt_proofs.len() == self.range.len()
     }
+
+    /// The size every shard of this share has, or `None` if the share is
+    /// empty or its shards disagree. A dispersal gives all its shards the
+    /// size [`AvidmGf2Scheme::shard_bytes`] computes for its payload.
+    pub fn shard_bytes(&self) -> Option<usize> {
+        let first = self.payload.first()?.len();
+        self.payload
+            .iter()
+            .all(|shard| shard.len() == first)
+            .then_some(first)
+    }
 }
 
 /// VID Commitment type
@@ -158,68 +170,126 @@ impl AvidmGf2Scheme {
         AvidmGf2Param::new(recovery_threshold, total_weights)
     }
 
-    /// Build the `original_count` original shards directly from `payload`,
-    /// applying the AvidM-GF2 bit padding (one `0x01` byte at
-    /// `payload.len()` followed by zeros to fill the final shard).
+    /// Size in bytes of every shard of a `payload_byte_len`-byte payload
+    /// dispersed into `original_count` original shards: the fewest bytes that
+    /// hold the payload plus its pad byte, rounded up to the even size
+    /// `reed_solomon_simd` requires.
     ///
-    /// Writing the chunks straight out avoids allocating an intermediate
-    /// `shard_bytes * original_count`-byte buffer just to re-chunk it.
+    /// `None` if `original_count` is zero or the size overflows, so a verifier
+    /// can evaluate it on an untrusted length without panicking.
+    pub fn shard_bytes(payload_byte_len: usize, original_count: usize) -> Option<usize> {
+        if original_count == 0 {
+            return None;
+        }
+        payload_byte_len
+            .checked_add(1)?
+            .div_ceil(original_count)
+            .checked_next_multiple_of(2)
+    }
+
+    fn payload_shard_bytes(param: &AvidmGf2Param, payload_len: usize) -> VidResult<usize> {
+        Self::shard_bytes(payload_len, param.recovery_threshold).ok_or_else(|| {
+            VidError::Argument("Payload length is too large to disperse".to_string())
+        })
+    }
+
+    /// Build the `original_count` original shards from `payload`, applying
+    /// the AvidM-GF2 bit padding (one `0x01` byte at `payload.len()` followed
+    /// by zeros to fill the final shard).
+    ///
+    /// Full shards borrow from `payload`; only shards touching the padding are allocated.
     fn chunk_and_pad(
         payload: &[u8],
         shard_bytes: usize,
         original_count: usize,
-    ) -> VidResult<Vec<Vec<u8>>> {
+    ) -> VidResult<Vec<Cow<'_, [u8]>>> {
         let padded_len = shard_bytes * original_count;
         if padded_len < payload.len() + 1 {
             return Err(VidError::Argument(
                 "Payload length is too large to fit in the given payload length".to_string(),
             ));
         }
-        let mut original: Vec<Vec<u8>> = Vec::with_capacity(original_count);
+        let mut original: Vec<Cow<[u8]>> = Vec::with_capacity(original_count);
         for i in 0..original_count {
             let start = i * shard_bytes;
+            let end = start + shard_bytes;
+            if end <= payload.len() {
+                original.push(Cow::Borrowed(&payload[start..end]));
+                continue;
+            }
             let mut chunk = vec![0u8; shard_bytes];
             if start < payload.len() {
-                let end = ((i + 1) * shard_bytes).min(payload.len());
-                let take = end - start;
-                chunk[..take].copy_from_slice(&payload[start..end]);
-                if take < shard_bytes {
-                    // Pad byte falls inside this chunk.
-                    chunk[take] = 1u8;
-                }
+                let take = payload.len() - start;
+                chunk[..take].copy_from_slice(&payload[start..]);
+                // Pad byte falls inside this chunk.
+                chunk[take] = 1u8;
             } else if start == payload.len() {
-                // Payload ended exactly on a chunk boundary — pad byte is the
+                // Payload ended exactly on a chunk boundary, pad byte is the
                 // first byte of this all-zero chunk.
                 chunk[0] = 1u8;
             }
-            original.push(chunk);
+            original.push(Cow::Owned(chunk));
         }
         Ok(original)
+    }
+
+    /// Erasure-code the padded `original` shards, returning only the recovery shards.
+    fn encode_recovery(
+        param: &AvidmGf2Param,
+        original: &[Cow<'_, [u8]>],
+    ) -> VidResult<Vec<Vec<u8>>> {
+        let recovery_count = param.total_weights - param.recovery_threshold;
+        if recovery_count == 0 {
+            return Ok(vec![]);
+        }
+        Ok(reed_solomon_simd::encode(
+            param.recovery_threshold,
+            recovery_count,
+            original,
+        )?)
+    }
+
+    fn merkle_tree<T: AsRef<[u8]> + Sync>(shards: &[T]) -> VidResult<MerkleTree> {
+        let share_digests: Vec<Blake3Node> = shards
+            .par_iter()
+            .map(|share| Blake3Node::from(blake3::hash(share.as_ref())))
+            .collect();
+        Ok(MerkleTree::from_elems(None, &share_digests)?)
+    }
+
+    /// Merkle tree over all shards of `payload`, hashing recovery shards in place in the encoder.
+    fn raw_commit(param: &AvidmGf2Param, payload: &[u8]) -> VidResult<MerkleTree> {
+        let original_count = param.recovery_threshold;
+        let recovery_count = param.total_weights - original_count;
+        let shard_bytes = Self::payload_shard_bytes(param, payload.len())?;
+        let original = Self::chunk_and_pad(payload, shard_bytes, original_count)?;
+        if recovery_count == 0 {
+            return Self::merkle_tree(&original);
+        }
+        let mut encoder = ReedSolomonEncoder::new(original_count, recovery_count, shard_bytes)?;
+        for shard in &original {
+            encoder.add_original_shard(shard)?;
+        }
+        let result = encoder.encode()?;
+        let shards: Vec<&[u8]> = original
+            .iter()
+            .map(AsRef::as_ref)
+            .chain(result.recovery_iter())
+            .collect();
+        Self::merkle_tree(&shards)
     }
 
     fn raw_disperse(
         param: &AvidmGf2Param,
         payload: &[u8],
     ) -> VidResult<(MerkleTree, Vec<Vec<u8>>)> {
-        let original_count = param.recovery_threshold;
-        let recovery_count = param.total_weights - param.recovery_threshold;
-        let mut shard_bytes = (payload.len() + 1).div_ceil(original_count);
-        if shard_bytes % 2 == 1 {
-            shard_bytes += 1;
-        }
-        let original = Self::chunk_and_pad(payload, shard_bytes, original_count)?;
-        let recovery = if recovery_count == 0 {
-            vec![]
-        } else {
-            reed_solomon_simd::encode(original_count, recovery_count, &original)?
-        };
+        let shard_bytes = Self::payload_shard_bytes(param, payload.len())?;
+        let original = Self::chunk_and_pad(payload, shard_bytes, param.recovery_threshold)?;
+        let recovery = Self::encode_recovery(param, &original)?;
 
-        let shares = [original, recovery].concat();
-        let share_digests: Vec<Blake3Node> = shares
-            .par_iter()
-            .map(|share| Blake3Node::from(blake3::hash(share)))
-            .collect();
-        let mt = MerkleTree::from_elems(None, &share_digests)?;
+        let mut shares: Vec<Vec<u8>> = original.into_iter().map(Cow::into_owned).collect();
+        shares.extend(recovery);
+        let mt = Self::merkle_tree(&shares)?;
         Ok((mt, shares))
     }
 
@@ -311,7 +381,7 @@ impl VidScheme for AvidmGf2Scheme {
     type Commit = AvidmGf2Commit;
 
     fn commit(param: &Self::Param, payload: &[u8]) -> VidResult<Self::Commit> {
-        let (mt, _) = Self::raw_disperse(param, payload)?;
+        let mt = Self::raw_commit(param, payload)?;
         Ok(Self::Commit {
             commit: mt.commitment(),
         })
@@ -504,6 +574,42 @@ pub mod tests {
     use super::AvidmGf2Scheme;
     use crate::VidScheme;
 
+    /// Digest over the commitment and every share's range and shards.
+    fn output_digest(rt: usize, tw: usize, len: usize) -> String {
+        let payload: Vec<u8> = (0..len).map(|i| (i * 31 + 7) as u8).collect();
+        let param = AvidmGf2Scheme::setup(rt, tw).unwrap();
+        let commit = AvidmGf2Scheme::commit(&param, &payload).unwrap();
+        let distribution: Vec<u32> = (0..tw).map(|_| 1).collect();
+        let (dcommit, shares) = AvidmGf2Scheme::disperse(&param, &distribution, &payload).unwrap();
+        assert_eq!(commit, dcommit);
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(commit.as_ref());
+        for share in &shares {
+            hasher.update(&share.range().start.to_le_bytes());
+            hasher.update(&share.range().end.to_le_bytes());
+            for shard in share.payload() {
+                hasher.update(&(shard.len() as u64).to_le_bytes());
+                hasher.update(shard);
+            }
+        }
+        hasher.finalize().to_hex().to_string()
+    }
+
+    #[test]
+    fn outputs_are_pinned() {
+        let mut out = String::new();
+        for (rt, tw) in [(1, 1), (1, 3), (3, 10), (4, 12), (5, 5), (7, 20)] {
+            for len in [0, 1, 31, 32, 33, 63, 64, 65, 1000, 4097, 100_000] {
+                out += &format!("{rt} {tw} {len} {}\n", output_digest(rt, tw, len));
+            }
+        }
+        let got = blake3::hash(out.as_bytes()).to_hex().to_string();
+        assert_eq!(
+            got, "3c96b583adfdf90d15d80c117f9ab76625995e851743204c4e9c5725b5b7950a",
+            "{out}"
+        );
+    }
+
     #[test]
     fn round_trip() {
         // play with these items
@@ -602,6 +708,41 @@ pub mod tests {
                 assert_eq!(payload_recovered, payload);
             }
         }
+    }
+
+    /// `shard_bytes` is what dispersal actually produces, for every shard of
+    /// every share, across payload lengths on both sides of a shard boundary
+    /// and on both sides of the even rounding.
+    #[test]
+    fn shard_bytes_matches_dispersal() {
+        let total_weights = 10usize;
+        let recovery_threshold = 4;
+        let params = AvidmGf2Scheme::setup(recovery_threshold, total_weights).unwrap();
+        let weights = vec![2u32; 5];
+
+        for payload_byte_len in [0usize, 1, 3, 4, 7, 8, 31, 32, 100, 101] {
+            let payload = vec![1u8; payload_byte_len];
+            let expected =
+                AvidmGf2Scheme::shard_bytes(payload_byte_len, recovery_threshold).unwrap();
+            assert_eq!(expected % 2, 0, "{payload_byte_len}");
+            assert!(
+                expected * recovery_threshold > payload_byte_len,
+                "{payload_byte_len}: shards must hold the payload and its pad byte"
+            );
+            assert!(
+                (expected - 2) * recovery_threshold <= payload_byte_len,
+                "{payload_byte_len}: shards must not be larger than needed"
+            );
+            let (_, shares) = AvidmGf2Scheme::disperse(&params, &weights, &payload).unwrap();
+            for share in &shares {
+                assert_eq!(share.shard_bytes(), Some(expected), "{payload_byte_len}");
+            }
+        }
+
+        // Total on inputs dispersal never sees.
+        assert_eq!(AvidmGf2Scheme::shard_bytes(100, 0), None);
+        assert_eq!(AvidmGf2Scheme::shard_bytes(usize::MAX, 1), None);
+        assert_eq!(AvidmGf2Scheme::shard_bytes(usize::MAX - 1, 1), None);
     }
 
     #[test]
