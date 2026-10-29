@@ -1335,6 +1335,15 @@
         : (((2 * (cfg.n - 1)) / cfg.k) * 8) / cfg.gbps; // ms per MB of view at large blocks
       return { cfg, pts, q_ms: MODEL.pct(qs, 0.5), dll_ms: MODEL.pct(dl, 0.5), ceiling: 1000 / slope, regions: reg };
     }
+    function interp(pts, mb, key) {
+      if (mb <= pts[0].mb) return pts[0][key];
+      for (let i = 1; i < pts.length; i++)
+        if (mb <= pts[i].mb) {
+          const t = (mb - pts[i - 1].mb) / (pts[i].mb - pts[i - 1].mb);
+          return pts[i - 1][key] + t * (pts[i][key] - pts[i - 1][key]);
+        }
+      return pts[pts.length - 1][key];
+    }
     function metricOf(s, metric) {
       return metric === "fin" ? s.fin_p50 : s.tx_p50;
     }
@@ -1433,8 +1442,12 @@
         const alt = res[key] ? atCap(res[key]) : null;
         const v = alt && alt.status !== "below" ? alt.mbps : NaN;
         const gain = ok && Number.isFinite(v) ? v - at.mbps : NaN;
+        // Latency at the current cap's block size, same metric as the cap.
+        const latKey = res.cfg.metric === "fin" ? "fin_p50" : "tx_p50";
+        const less = ok && res[key] ? metricOf(at, res.cfg.metric) - interp(res[key].pts, at.mb, latKey) : NaN;
+        const sign = (x) => (x >= 0 ? "+" : "−");
         const note = Number.isFinite(gain)
-          ? `${gain >= 0 ? "+" : "−"}${fmt(Math.abs(gain))} MB/s against the current compute`
+          ? `${sign(gain)}${fmt(Math.abs(gain))} MB/s; ${Number.isFinite(less) ? `${sign(-less)}${fmt(Math.abs(less))} ms ${res.cfg.metric === "fin" ? "finality" : "transaction"} at ${fmt(at.mb)} MB` : ""}`
           : alt && alt.status === "above"
             ? "under the cap at every block size shown"
             : "";
