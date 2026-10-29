@@ -2,6 +2,7 @@ use anyhow::{Context, ensure};
 use espresso_telemetry as telemetry;
 use espresso_types::{traits::NullEventConsumer, v0::traits::SequencerPersistence};
 use futures::future::FutureExt;
+use hotshot_new_protocol::network::ControlLane;
 use hotshot_types::traits::metrics::NoMetrics;
 use process_metrics::log_cpu_probe;
 use url::Url;
@@ -257,6 +258,11 @@ where
     let network_params = NetworkParams {
         cliquenet_bind_addr: opt.cliquenet_bind_address,
         cliquenet_advertise_addr: opt.cliquenet_advertise_address,
+        cliquenet_control_lane: if opt.cliquenet_control_lane {
+            ControlLane::On
+        } else {
+            ControlLane::Off
+        },
         x25519_secret_key: x25519,
         orchestrator_url: opt.orchestrator_url,
         builder_urls: opt.builder_urls,

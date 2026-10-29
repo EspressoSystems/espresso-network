@@ -270,6 +270,14 @@ pub struct Options {
     #[clap(hide = true, long, env = "ESPRESSO_NODE_LIBP2P_DHT_PUT_QUORUM")]
     pub libp2p_dht_put_quorum: Option<std::num::NonZeroUsize>,
 
+    /// Send proposals on a second cliquenet network, one port above the cliquenet bind and
+    /// advertise addresses, so they pass the VID shares queued on the main connections.
+    ///
+    /// Experimental. Every node of the network must set it, since each expects the others'
+    /// control lane one port above their registered address.
+    #[clap(long, env = "ESPRESSO_NODE_CLIQUENET_CONTROL_LANE", action)]
+    pub cliquenet_control_lane: bool,
+
     /// The URL we advertise to other nodes as being for our public API.
     /// Should be supplied in `http://host:port` form.
     #[clap(long, env = "ESPRESSO_NODE_PUBLIC_API_URL")]
