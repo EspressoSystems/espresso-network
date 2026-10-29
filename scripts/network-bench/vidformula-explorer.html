@@ -347,6 +347,13 @@
     border-top-width: 1px;
     border-top-color: var(--fg-3);
   }
+  .legend span.sw::before {
+    content: none;
+  }
+  .legend span.sw svg {
+    vertical-align: -2px;
+    margin-right: 6px;
+  }
   .chart {
     position: relative;
     width: 100%;
@@ -1743,7 +1750,40 @@
       compute: ["var(--s1)", "compute"],
       storage: ["var(--s4)", "storage"],
       transfer: ["var(--s3)", "bytes leaving the interface"],
-      wait: ["url(#hatch)", "waiting on the network or on peers"],
+      wait: ["var(--fg-3)", "waiting on the network or on peers"],
+    };
+    const TL_SHORT = {
+      "verify proposal V−1": "verify",
+      "build + commit + encode V": "build V",
+      "wait for Cert1(V−1)": "Cert1(V−1) wait",
+      "sign + persist proposal V": "persist",
+      "proposal V queued behind shares": "proposal queued",
+      "rebroadcast share V−1": "rebroadcast V−1",
+      "egress busy": "busy",
+      "disperse V": "disperse V",
+      "rebroadcast share V": "rebroadcast V",
+      "proposal in flight": "in flight",
+      "verify proposal V": "verify",
+      "wait for own share": "share wait",
+      "validate state + persist vote": "validate",
+      "wait for block V−1": "block V−1 wait",
+      "vote1 queued behind shares": "vote1 queued",
+      "own share of V in flight": "share in flight",
+      "collect k shares of V": "k shares",
+      "decode V": "decode",
+      "collect vote1s": "vote1s",
+      Cert1: "Cert1",
+      "wait for block V": "block wait",
+      "sign + persist lock": "persist",
+      "vote2 queued behind shares": "vote2 queued",
+      "collect vote2s": "vote2s",
+      Cert2: "Cert2",
+      decide: "decide",
+      "build + commit + encode V+1": "build V+1",
+      "egress busy with the rebroadcast of V": "busy",
+      "disperse V+1": "disperse V+1",
+      "collect vote1s, the q-th gates": "vote1s",
+      "sign + persist proposal V+1": "persist",
     };
     let tlAuto = true;
     function tlLabel() {
@@ -1778,14 +1818,12 @@
       const r = MODEL.runViews(cfg.n, cfg.k, d, mb, cfg.gbps, leaders, views, cfg.compute, cfg.lane);
       const v = pickView(r, 20, views - 5, $("tl-which").value);
       renderTimeline($("ch-tl"), timelineLanes(r, v, cfg, mb), r, v);
-      legend(
-        "lg-tl",
-        Object.values(TL_CAT).map(([c, name]) => [
-          name,
-          c === "url(#hatch)" ? "var(--fg-3)" : c,
-          c === "url(#hatch)" ? "dash" : "",
-        ]),
-      );
+      $("lg-tl").innerHTML = Object.entries(TL_CAT)
+        .map(
+          ([cat, [c, name]]) =>
+            `<span class="sw"><svg width="18" height="12" aria-hidden="true">${cat === "wait" ? '<rect x="0.5" y="0.5" width="17" height="11" rx="2" fill="url(#hatch)" stroke="var(--line)"/>' : `<rect x="0.5" y="0.5" width="17" height="11" rx="2" fill="${c}" fill-opacity="0.25" stroke="${c}"/>`}</svg>${name}</span>`,
+        )
+        .join("");
     }
     function timelineLanes(r, v, cfg, mb) {
       const n = r.n,
@@ -1882,16 +1920,28 @@
           ? ""
           : ` · ${MODEL.delays(cfg.profile, n, 0, PROFILES).labels[j]}`;
       const lanes = [
-        { title: `Leader L of V`, sub: `node ${L}${reg(L)}`, rows: leaderRows() },
-        { title: `Next leader L′`, sub: `node ${Ln}${reg(Ln)} · builds and proposes V+1`, rows: nextRows() },
+        {
+          title: `Leader L of V`,
+          sub: `node ${L}${reg(L)}`,
+          names: ["proposal path", "shares out"],
+          rows: leaderRows(),
+        },
+        {
+          title: `Next leader L′`,
+          sub: `node ${Ln}${reg(Ln)}, proposes V+1`,
+          names: ["build V+1", "Cert1 → proposal", "its own vote"],
+          rows: nextRows(),
+        },
         {
           title: `Median voter`,
-          sub: `node ${median}${reg(median)} · vote1 arrives mid-pack`,
+          sub: `node ${median}${reg(median)}`,
+          names: ["vote path", "block V", "finality"],
           rows: [voteRow(median), blockRow(median), finalityRow(median)],
         },
         {
           title: `q-th voter`,
-          sub: `node ${critical}${reg(critical)} · its vote1 forms Cert1 at L′`,
+          sub: `node ${critical}${reg(critical)}, forms Cert1 at L′`,
+          names: ["vote path", "block V", "finality"],
           rows: [voteRow(critical), blockRow(critical), finalityRow(critical)],
         },
       ];
@@ -1902,60 +1952,68 @@
       const segs = tl.lanes.flatMap((l) => l.rows.flat());
       const tmin = Math.floor(Math.min(0, ...segs.map((s) => s.t0)) / 50) * 50,
         tmax = Math.ceil(Math.max(tl.view, tl.finality, ...segs.map((s) => s.t1)) / 50) * 50 + 10;
-      const left = 190,
+      const left = 250,
         right = 16,
-        top = 44,
-        rowH = 16,
-        gap = 4,
-        lanePad = 12,
-        titleH = 0;
-      const W = 1000;
+        top = 52,
+        rowH = 24,
+        gap = 6,
+        titleH = 22,
+        lanePad = 10;
+      const W = 1100;
       let y = top;
       const laneTop = tl.lanes.map((l) => {
         const t = y;
-        y += lanePad + l.rows.length * (rowH + gap) + lanePad;
+        y += lanePad + titleH + l.rows.length * (rowH + gap) + lanePad;
         return t;
       });
-      const H = y + 36;
+      const H = y + 40;
       const x = (t) => left + ((t - tmin) / (tmax - tmin)) * (W - left - right);
       const step = niceStep((tmax - tmin) / 10);
-      let g = `<defs><pattern id="hatch" patternUnits="userSpaceOnUse" width="6" height="6" patternTransform="rotate(45)"><line x1="0" y1="0" x2="0" y2="6" stroke="var(--fg-3)" stroke-width="1.2" opacity="0.7"/></pattern></defs>`;
+      const esc = (t) => t.replace(/&/g, "&amp;").replace(/</g, "&lt;");
+      let g = `<defs><pattern id="hatch" patternUnits="userSpaceOnUse" width="7" height="7" patternTransform="rotate(45)"><line x1="0" y1="0" x2="0" y2="7" stroke="var(--fg-3)" stroke-width="1.4" opacity="0.55"/></pattern></defs>`;
       for (let t = Math.ceil(tmin / step) * step; t <= tmax; t += step)
-        g += `<line class="grid" x1="${x(t)}" x2="${x(t)}" y1="${top}" y2="${H - 30}" stroke="var(--line-2)"/><text x="${x(t)}" y="${H - 14}" text-anchor="middle">${t}</text>`;
-      g += `<text x="${W - right}" y="${H - 2}" text-anchor="end">ms from the proposal of V</text>`;
+        g += `<line x1="${x(t)}" x2="${x(t)}" y1="${top}" y2="${H - 32}" stroke="var(--line-2)"/><text x="${x(t)}" y="${H - 16}" text-anchor="middle" font-size="12">${t}</text>`;
+      g += `<text x="${W - right}" y="${H - 2}" text-anchor="end" font-size="12">ms from the proposal of V</text>`;
       tl.lanes.forEach((l, i) => {
         const t0 = laneTop[i],
-          h = lanePad * 2 + l.rows.length * (rowH + gap);
-        if (i % 2) g += `<rect x="0" y="${t0}" width="${W}" height="${h}" fill="var(--line-2)" opacity="0.5"/>`;
-        g += `<text x="${left - 10}" y="${t0 + lanePad + 10}" text-anchor="end" font-weight="600" fill="var(--fg)">${l.title}</text><text x="${left - 10}" y="${t0 + lanePad + 24}" text-anchor="end">${l.sub}</text>`;
+          h = lanePad * 2 + titleH + l.rows.length * (rowH + gap);
+        if (i % 2) g += `<rect x="0" y="${t0}" width="${W}" height="${h}" fill="var(--line-2)" opacity="0.45"/>`;
+        g += `<text x="12" y="${t0 + lanePad + 15}" font-weight="600" font-size="13.5" fill="var(--fg)">${esc(l.title)}</text><text x="${left - 10}" y="${t0 + lanePad + 15}" text-anchor="end" font-size="11.5">${esc(l.sub)}</text>`;
         l.rows.forEach((row, ri) => {
-          const ry = t0 + lanePad + ri * (rowH + gap);
+          const ry = t0 + lanePad + titleH + ri * (rowH + gap);
+          g += `<text x="${left - 10}" y="${ry + 16}" text-anchor="end" font-size="12" fill="var(--fg-2)">${esc(l.names[ri] || "")}</text>`;
+          g += `<line x1="${left}" x2="${W - right}" y1="${ry + rowH + gap / 2}" y2="${ry + rowH + gap / 2}" stroke="var(--line-2)"/>`;
           for (const s of row) {
             const x0 = x(s.t0),
-              w = Math.max(1.5, x(s.t1) - x0),
-              dur = s.t1 - s.t0;
-            const fill = TL_CAT[s.cat][0];
-            g += `<g><title>${s.label}: ${fmt(dur)} ms (${fmt(s.t0)} to ${fmt(s.t1)})</title>`;
+              w = Math.max(2, x(s.t1) - x0),
+              dur = s.t1 - s.t0,
+              color = TL_CAT[s.cat][0];
+            g += `<g><title>${esc(s.label)}: ${fmt(dur)} ms, from ${fmt(s.t0)} to ${fmt(s.t1)} ms</title>`;
             if (s.cat === "wait")
-              g += `<rect x="${x0}" y="${ry}" width="${w}" height="${rowH}" fill="var(--panel)" stroke="var(--line)" rx="2"/>`;
-            g += `<rect x="${x0}" y="${ry}" width="${w}" height="${rowH}" fill="${fill}" rx="2"${s.cat === "wait" ? "" : ' opacity="0.92"'}/>`;
-            const text = `${s.label} ${fmt(dur)}`;
-            if (w > text.length * 5.6 + 8)
-              g += `<text x="${x0 + w / 2}" y="${ry + 12}" text-anchor="middle" fill="${s.cat === "wait" ? "var(--fg)" : "#fff"}" font-size="10.5">${text}</text>`;
+              g += `<rect x="${x0}" y="${ry}" width="${w}" height="${rowH}" rx="3" fill="var(--panel)"/><rect x="${x0}" y="${ry}" width="${w}" height="${rowH}" rx="3" fill="url(#hatch)" stroke="var(--line)"/>`;
+            else
+              g += `<rect x="${x0}" y="${ry}" width="${w}" height="${rowH}" rx="3" fill="${color}" fill-opacity="0.25" stroke="${color}" stroke-width="1.2"/>`;
+            const full = `${s.label} ${fmt(dur)}`,
+              short = `${TL_SHORT[s.label] || s.label} ${fmt(dur)}`,
+              tiny = fmt(dur);
+            const fits = (t) => w >= t.length * 6.4 + 10;
+            const text = fits(full) ? full : fits(short) ? short : fits(tiny) ? tiny : "";
+            if (text)
+              g += `<text x="${x0 + w / 2}" y="${ry + 16}" text-anchor="middle" font-size="11.5" fill="var(--fg)">${esc(text)}</text>`;
             g += `</g>`;
           }
         });
       });
       const bracket = (t1, yy, label, color) =>
-        `<g><line x1="${x(0)}" x2="${x(t1)}" y1="${yy}" y2="${yy}" stroke="${color}" stroke-width="1.5"/><line x1="${x(0)}" x2="${x(0)}" y1="${yy - 5}" y2="${yy + 5}" stroke="${color}" stroke-width="1.5"/><line x1="${x(t1)}" x2="${x(t1)}" y1="${yy - 5}" y2="${yy + 5}" stroke="${color}" stroke-width="1.5"/><text x="${(x(0) + x(t1)) / 2}" y="${yy - 4}" text-anchor="middle" fill="${color}" font-weight="600">${label}</text></g>`;
+        `<g><line x1="${x(0)}" x2="${x(t1)}" y1="${yy}" y2="${yy}" stroke="${color}" stroke-width="2"/><line x1="${x(0)}" x2="${x(0)}" y1="${yy - 5}" y2="${yy + 5}" stroke="${color}" stroke-width="2"/><line x1="${x(t1)}" x2="${x(t1)}" y1="${yy - 5}" y2="${yy + 5}" stroke="${color}" stroke-width="2"/><text x="${(x(0) + x(t1)) / 2}" y="${yy - 5}" text-anchor="middle" fill="${color}" font-weight="600" font-size="12.5">${label}</text></g>`;
       g +=
-        bracket(tl.view, 16, `view V: ${fmt(tl.view)} ms`, "var(--s2)") +
-        bracket(tl.finality, 36, `finality of V: ${fmt(tl.finality)} ms`, "var(--s1)");
+        bracket(tl.view, 20, `view V: ${fmt(tl.view)} ms`, "var(--s2)") +
+        bracket(tl.finality, 44, `finality of V: ${fmt(tl.finality)} ms`, "var(--s1)");
       for (const [t, label] of [
         [0, "proposal V"],
         [tl.view, "proposal V+1"],
       ])
-        g += `<line x1="${x(t)}" x2="${x(t)}" y1="${top}" y2="${H - 30}" stroke="var(--fg-3)" stroke-dasharray="3 3"/><text x="${x(t) + 3}" y="${H - 20}" font-size="10">${label}</text>`;
+        g += `<line x1="${x(t)}" x2="${x(t)}" y1="${top}" y2="${H - 32}" stroke="var(--fg-2)" stroke-dasharray="4 3"/><text x="${x(t) + 4}" y="${top + 12}" font-size="11" fill="var(--fg-2)">${label}</text>`;
       el.innerHTML = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="timeline of one view">${g}</svg>`;
     }
     $("tl-mb").addEventListener("input", () => {
