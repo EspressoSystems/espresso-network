@@ -1360,8 +1360,10 @@ mod test {
         // Either None or 0 is acceptable, depending on whether or not the prover has run yet.
         assert!(matches!(pruned_height, None | Some(0)), "{pruned_height:?}");
 
-        // Send the last leaf to the disconnected data source so it learns about the height and
-        // fetches the missing data.
+        // Send the first leaf, so the database is no longer fresh and keeps the blocks below the
+        // next one. Then send the last leaf so it learns about the height and fetches the missing
+        // data.
+        data_source.append(leaves[0].clone().into()).await.unwrap();
         let last_leaf = leaves.last().unwrap();
         data_source.append(last_leaf.clone().into()).await.unwrap();
 
@@ -1713,6 +1715,71 @@ mod test {
             !requested(pruned),
             "the leaf at the pruned height {pruned} was fetched: {requests:?}"
         );
+    }
+
+    /// A fresh pruned node starts at its first block above genesis: it marks the blocks below as
+    /// pruned before it stores that block, so neither the proactive scan nor the fetches of missing
+    /// parents download history the pruner would only delete. A pruned node whose first block is
+    /// at height 1 has nothing to skip, and neither has a node that does not prune.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_fresh_pruned_start() {
+        let network = peer().await;
+        let (port, _server) = serve_availability(network.data_source()).await;
+        let leaves = network
+            .data_source()
+            .subscribe_leaves(1)
+            .await
+            .take(4)
+            .collect::<Vec<_>>()
+            .await;
+
+        for (prune, first, pruned) in [(true, 4, Some(3)), (true, 1, None), (false, 4, None)] {
+            let db = TmpDb::init().await;
+            let provider = Provider::new(TrustedQueryServiceProvider::new(
+                format!("http://localhost:{port}").parse().unwrap(),
+            ));
+            let mut config = db.config();
+            if prune {
+                // The pruner itself never runs within the test.
+                config = config
+                    .pruner_cfg(PrunerCfg::new().with_interval(Duration::from_secs(3600)))
+                    .unwrap();
+            }
+            let data_source = config
+                .builder(provider.clone())
+                .await
+                .unwrap()
+                .with_proactive_interval(Duration::from_secs(1))
+                .build()
+                .await
+                .unwrap();
+
+            // Only the first block above genesis decides where the node starts.
+            data_source
+                .append(leaves[first - 1].clone().into())
+                .await
+                .unwrap();
+            data_source.append(leaves[3].clone().into()).await.unwrap();
+            let pruned_height = data_source
+                .read()
+                .await
+                .unwrap()
+                .load_pruned_height()
+                .await
+                .unwrap();
+            assert_eq!(pruned_height, pruned, "prune {prune}, first block {first}");
+
+            // Long enough for a parent fetch and a proactive scan. Storage would drop a pruned
+            // leaf, so check the requests instead.
+            if pruned.is_some() {
+                sleep(Duration::from_secs(3)).await;
+                let requests = provider.requests();
+                assert!(
+                    requests.iter().all(|req| !req.starts_with("Leaf")),
+                    "a fresh pruned node fetched leaves below its first block: {requests:?}"
+                );
+            }
+        }
     }
 
     /// Test that fetching a leaf also backfills the leaf's cert2.
