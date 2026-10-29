@@ -1750,6 +1750,7 @@ mod test {
                 .await
                 .unwrap()
                 .with_proactive_interval(Duration::from_secs(1))
+                .with_sync_status_ttl(Duration::from_secs(1))
                 .build()
                 .await
                 .unwrap();

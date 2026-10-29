@@ -7698,10 +7698,16 @@ mod test {
         let state_start = db.read().await?.load_state_start_height().await?;
         check_state_start(expected, start, state_start, pruned, tip)?;
         if expected == EmptyStateStart::RecentBoundary && !stamp_pruned_height {
-            let first_pruned = db.read().await?.load_pruned_height().await?;
+            let mut tx = db.read().await?;
+            let first_pruned = tx.load_pruned_height().await?;
+            let below_first: Option<i64> =
+                sqlx::query_scalar("SELECT min(height) - 1 FROM leaf2 WHERE height > 0")
+                    .fetch_one(tx.as_mut())
+                    .await?;
             ensure!(
-                first_pruned.is_some(),
-                "a fresh pruned database did not mark the blocks below its first block as pruned"
+                first_pruned.is_some() && first_pruned == below_first.map(|height| height as u64),
+                "a fresh pruned database marked {first_pruned:?} as pruned, not the height below \
+                 its first block, {below_first:?}"
             );
         }
         let past = start.max(pruned) + PRUNED_START_EPOCH_HEIGHT;
