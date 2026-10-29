@@ -1,41 +1,82 @@
-# The VID reconstruction window
+# The VID reconstruction window and the view
 
-How long a validator may take to reconstruct a block before consensus feels it, from a model with every computation
-instant, and what the October 2026 bench runs showed next to it. The model is `scripts/network-bench/vidwindow.py`; the
-comparison with runs is `vidwindow_runs.py` beside it.
+A model of one fast-finality view: a fluid network, the protocol's message order, and one compute cost per step where
+the code spends it. It gives the view time, the window a validator has to reconstruct a block before consensus feels it,
+and the time to finality, as closed forms and as a simulation, and it reads the same quantities and the compute costs
+out of a run's traces. The model is `scripts/network-bench/vidwindow.py`; the run side is `vidwindow_runs.py` beside it.
 
-## What reconstruction gates
+## The protocol as the code runs it
 
-A node validates proposal V+1 once it holds the proposal and its own share of block V+1, and casts vote1 on V+1 only
-once it has reconstructed block V (`maybe_vote_1` in `crates/hotshot/new-protocol/src/consensus.rs`). Nothing else waits
-for the payload: the next leader builds its block and disperses the shares as soon as it validates the current proposal,
-and proposes once it holds Cert1 (`maybe_propose` checks the certificate, the header and its own built block; the traces
-confirm the proposal leaves within a millisecond of Cert1 even when reconstruction ends 75 ms later).
+Checked against `crates/hotshot/new-protocol/src` and `crates/cliquenet`; the model encodes exactly this.
 
-So the window of a node is the time from its k-th share of block V to its validation of proposal V+1. Only the q-th
-vote1 to reach the next leader sets Cert1, so the window that matters per view is the largest reconstruction time,
-applied at every node, that leaves that q-th vote where it is. The critical voter is normally a far node that received
-the proposal late and had a long window; near nodes with short windows vote early and are not on the critical path.
+- **Build.** The next leader asks for its block as soon as proposal V arrives, before its own share of V (`consensus.rs`
+  `may_build_on_parked`, `request_block_and_header_if_next_leader`). The block is built from the pool and committed
+  (`block.rs` `request_block`, `block_commitments`), the header follows from the parent state (`state.rs`
+  `request_header`), the block is erasure-coded and unicast one fragment stream per node (`vid/disperse.rs`). Nothing
+  waits for the parent payload.
+- **Propose.** `maybe_propose` needs Cert1(V), the header and the block. The proposal and the Propose action are
+  persisted before the broadcast (`release_proposal`); that is the `outbox wait` of the leader path.
+- **Pair and vote1.** A node verifies the proposal's signatures and its share's proof (`proposal.rs`), pairs them
+  (`pair_vid_share`) and starts state validation (`request_state`). `maybe_vote_1` needs the validated state and block
+  V-1 reconstructed; the vote waits for the Vote action to persist (`release_vote1`), then the vote1 and the node's
+  share are broadcast to every node (`SendVote1`, `BroadcastVidShare`).
+- **Cert1.** Every node tallies the vote1 broadcasts; the tally sleeps until q votes are buffered, aggregates them and
+  checks the aggregate once (`vote.rs` `run_tally`, `CheckedAccumulator`). The leader of V+1 proposes on its own Cert1;
+  the others use theirs for vote2 and rebroadcast it.
+- **Vote2 and decide.** `maybe_vote_2_and_update_lock` needs Cert1 and the reconstructed block; the vote waits for the
+  lock to persist (`release_vote2`). Cert2 decides (`maybe_decide`).
+- **Reconstruction** starts at the k-th share (`vid/reconstruct.rs` `try_reconstruct`), k = ceil(n / 3)
+  (`init_avidm_gf2_param`); decode is parallel (`crates/vid` AVID-M GF2), `from_bytes` and the transaction commitments
+  after it are not.
+- **Network.** One connection per peer; a message is written to its end before the next is taken, lowest slot first
+  (`cliquenet/src/net/peer.rs` `Peer::start`, `queue.rs`). A proposal or vote queued behind a share waits for it.
+
+The earlier version of the model had the leader build at pairing rather than at the proposal's arrival, no compute, and
+no vote2. It did get the message order right, which turns out to be what sets the bandwidth-bound view.
 
 ## The model
 
 One interface per node of capacity B in each direction, flows sharing it fairly, in-order delivery per connection,
-one-way delays from `latency.py`. With T the share transfer time, (n - 1) / k × block ÷ bandwidth, the window for a
-given leader is
+one-way delays from `latency.py`. With T the share transfer time, (n - 1) / k × block ÷ bandwidth, Q the quorum round
+trip (the q-th smallest d(L, j) + d(j, L') over voters j for the leaders L of V and L' of V+1) and δ the latency left
+once transfers dominate, the view is the longer of two chains (`closed_form`):
 
-    window ≈ max(Q − T, T + δ)
+    latency chain  = Q + verify_proposal + vote1 + cert + propose + persist_proposal
+    transfer chain = 2 T + propose + persist_proposal + δ      shares and control messages in order
+                   = T + decode + δ                            control messages on their own lane
+    window         = max(latency chain − vote1 − T,  T + δ)   from the k-th share to the next pairing
 
-- Q is the quorum round trip, the q-th smallest d(L, j) + d(j, L') over voters j for the leader L of V and the leader L'
-  of V+1, read straight from the latency matrix. For 100 nodes placed as decaf-2025 places them it is about 153 ms from
-  eu-central-1 or ap-southeast-1, 182 ms from us-east-1, 312 ms from sa-east-1.
-- δ is the latency left once transfers dominate, the detour the proposal takes through the next leader relative to the
-  shares' direct paths: one intra-region hop (5 ms) for a leader in the majority region, 25 to 128 ms elsewhere. It
-  comes from the simulation.
-- The minimum over bandwidth is (Q + δ) / 2, independent of block size, at bandwidth 2 (n - 1) / k × block ÷ (Q − δ).
-  Below that bandwidth the view is transfer-bound (two share transfers per view) and the window is T + δ; above it the
-  window climbs back toward Q.
+**Two transfers a view.** Where bandwidth binds, the next leader's rebroadcast of its share of V and its dispersal of
+V+1 leave its interface back to back, and its proposal of V+1 sits behind both on every connection, so no node can pair
+V+1 before two share transfers have passed. The other compute hides under the transfers: build and encode finish during
+the rebroadcast, decode during the next dispersal. Consecutive views alternate around the mean, because the leader of
+V+1 gets proposal V late, behind L's rebroadcast, and builds late. `lane=True` models control messages passing the
+shares: the dispersal then overlaps the previous view and the view is one transfer plus the decode, with every vote
+waiting on the decode.
 
-For 100 nodes and the f+1 threshold (34 shares, each node moving 2.9 × the block per view, 23 ms per MB per Gbps):
+**Compute** is a `Compute` of `fixed + per_mb × block MB` costs. `vidwindow_runs.py fit` reads them from a run's traces;
+this is run brendon-20261028-180812/01-volume, c8g.4xlarge (16 vCPU Neoverse-V2), decaf-2025, 9 to 92 MB blocks, medians
+per load step, the preset `COMPUTE["c8g.4xlarge"]`:
+
+| step                   | trace segment                                                | fixed ms | ms/MB |
+| ---------------------- | ------------------------------------------------------------ | -------- | ----- |
+| build (+commit+header) | `request_block_header_queued` → `header_created_applied`     | 0        | 1.08  |
+| encode                 | `ns_disperse_start` → `ns_disperse_end`                      | 0.6      | 0.27  |
+| propose                | `leaf2_commit_computed` → `proposal_signed`                  | 0.5      |       |
+| persist_proposal       | `proposal_queued` → `proposal_broadcast_start`               | 7.9      |       |
+| verify_proposal        | `proposal_broadcast_end` → own `proposal_validated`          | 4.2      | 0.05  |
+| vote1                  | `proposal_validated` → `vote1_broadcast_start`, parent ready | 7.3      | 0.05  |
+| decode (+from_bytes)   | `recover_start` → `recover_end`                              | 0        | 0.71  |
+| cert                   | q-th `vote1_arrived` → `cert1_input_dispatched`              | 3.1      |       |
+| vote2                  | `vote2_queued` → `vote2_broadcast_start`                     | 4.2      |       |
+| decide                 | `cert2_input_dispatched` → `leaf_decided`                    | 0.6      |       |
+
+The latency chain carries 24 ms of fixed compute a view, 12 of them storage round trips (the proposal's and the Vote
+action's). The no-latency c8g.8xlarge run of the same day gives the same fixed costs within 10 percent; the steps that
+parallelize cost less per MB on its 32 vCPU, encode 0.16 and decode 0.61 ms/MB.
+
+Per leader region for 100 nodes placed as decaf-2025 places them, the f+1 threshold and no compute, the window's minimum
+over bandwidth is (Q + δ) / 2, at bandwidth 2 (n - 1) / k × block ÷ (Q − δ) (`best_case`):
 
 | leader region  | Q ms | δ ms | minimum window | at Gbps per MB of block |
 | -------------- | ---- | ---- | -------------- | ----------------------- |
@@ -45,49 +86,63 @@ For 100 nodes and the f+1 threshold (34 shares, each node moving 2.9 × the bloc
 | ap-southeast-2 | 157  | 53   | 105 ms         | 0.45                    |
 | sa-east-1      | 312  | 128  | 220 ms         | 0.25                    |
 
-Without latency everything collapses to one line: window = T, view = 2T, throughput = bandwidth ÷ 5.8 whatever the block
-size (417 MB/s with 10 nodes at 15 Gbps, where the bench measured a 335 MB/s cliff; the gap is TCP and message overhead
-the model leaves out).
-
 **2f+1 threshold** (67 shares of half the size, a quorum of shares to reconstruct): every node moves 1.5 × the block per
-view, so where bandwidth binds throughput doubles and the window halves with it; where latency binds the view floor is
-unchanged but the window shrinks from about 150 to about 80 ms and its tenth percentile from 80 ms to a few
-milliseconds, because the 67th share has to come from another region just as the 67th vote does. The right trade when
-decode stays well inside 80 ms.
+view instead of 2.9, so where bandwidth binds throughput doubles and the window halves with it; where latency binds the
+view floor is unchanged but the window shrinks from about 150 to about 80 ms and its tenth percentile from 80 ms to a
+few milliseconds, because the 67th share has to come from another region just as the 67th vote does.
 
 ## What the runs showed
 
-Base runs of 27 and 28 October 2026, 10 nodes, one 60 s step per point, against the 10-node model at the machine's
-nominal bandwidth:
+`vidwindow_runs.py` on the decaf-2025 run above, the model at the fitted compute (view and finality in ms, `late` the
+share of vote1s whose parent block was reconstructed after the proposal paired):
 
-- Compute adds a fixed 20 ms per view the model lacks: 1 to 9 MB blocks took 22 to 34 ms per view without latency where
-  the model gives 2 to 22, and the window has a 13 to 15 ms floor. Under decaf the window gains 22 to 62 ms over the
-  model because the next leader's block build and encode (about 1 ms per MB) delay the proposal but not the shares; that
-  compute is slack for reconstruction.
-- Where bandwidth binds, the effective link is 10 to 12 Gbps, not 15: 27 to 103 MB steps on c8g.8xlarge ran 1.2 to 1.5 ×
-  the model's view time, matching the ENA egress-allowance counters.
-- The burstable instances (2xlarge, xlarge, large) ran at burst bandwidth, not their 0.9 to 3.75 Gbps baselines; the CPU
-  bound them, never the interface.
-- Every departure from the model is decode: view times exceed the model by more than 30 percent only where the median
-  decode passes about 60 ms. Decode costs 0.6 ms/MB on 32 vCPU, 0.65 to 0.75 on 16, 1.05 on 8 (2.0 saturated), 1.8 to
-  2.4 on 4, 3.9 to 4.2 on 2. The share of votes that waited on decode is 1 to 8 percent while the p90 decode stays
-  within about 1.5 × the p10 window and 14 to 44 percent beyond it.
-- The model-equivalent critical window from real timestamps lands within 20 to 40 ms of the model on 16 vCPU under decaf
-  (medians 163, 156, 137, 125 ms at 9, 20, 36, 55 MB against 142, 129, 110, 87) and within 10 ms at the tenth percentile
-  below 36 MB.
+| MB/s | block MB | view run / model 15 / model 11 Gbps | finality run / model 15 / 11 | proposal transit run / model | late run / model |
+| ---- | -------- | ----------------------------------- | ---------------------------- | ---------------------------- | ---------------- |
+| 50   | 9        | 181 / 182 / 182                     | 272 / 266 / 273              | 91 / 51                      | 1% / 2%          |
+| 100  | 19       | 185 / 183 / 191                     | 283 / 286 / 302              | 62 / 71                      | 4% / 6%          |
+| 150  | 33       | 213 / 220 / 220                     | 328 / 301 / 309              | 92 / 79                      | 8% / 6%          |
+| 200  | 49       | 242 / 222 / 232                     | 384 / 323 / 347              | 109 / 79                     | 14% / 7%         |
+| 250  | 82       | 330 / 260 / 329                     | 493 / 421 / 527              | 138 / 91                     | 20% / 8%         |
+| 300  | 92       | 397 / 286 / 360                     | 562 / 466 / 592              | 161 / 106                    | 17% / 12%        |
 
-This is why a faster reconstruction path (the systematic concatenation, raced or waited for) bought little in those
-runs: decode fits inside the window except in its tail, the systematic set cannot arrive before the first k shares of
-any kind, waiting for it moved the leader's reconstruction a median 47 ms past its Cert1, and racing it spent CPU on the
-machines that lacked it. The lever on the window itself is bytes per node over bandwidth.
+- With the compute in, the view matches within 5 percent up to 33 MB blocks and finality within 10 percent. The fixed 20
+  ms a view the compute-free model lacked is the table above.
+- Above 50 MB the run is slower than the model at the nominal 15 Gbps and matches it at 11 Gbps, the effective link the
+  ENA egress-allowance counters showed before. Bandwidth is the knob to set from the run, not a model term.
+- The proposal's transit to the next leader (`proposal_queued` to its `request_block_header_queued`) is 60 to 160 ms
+  here and 13 to 100 ms on the no-latency run, for a message of a few kilobytes: the in-order connection, as modelled.
+- The run's late votes exceed the model's because its decode has a tail the model lacks (p90 decode is 1.4 × p50 at 9 MB
+  and 2.2 × at 92 MB). The model's `late` is the floor; the gap to it is the tail.
+- Halving the decode alone changes nothing today (the view stays at two transfers); it is worth 20 percent more once a
+  lane makes the decode the bound.
+
+## Levers the model ranks
+
+For 10 nodes at 15 Gbps and the c8g.4xlarge compute, mean view time in ms (`vidwindow.py point`):
+
+| block MB | in order (today) | control lane | lane, decode halved |
+| -------- | ---------------- | ------------ | ------------------- |
+| 20       | 61               | 47           | 44                  |
+| 49       | 126              | 95           | 77                  |
+| 92       | 229              | 178          | 144                 |
+
+- **A lane for control messages** (a second connection per peer, or interleaving a small message's frames into a
+  share's) takes the bandwidth-bound view from two transfers to one plus the decode: 1.3 × the throughput at 92 MB, and
+  the decode becomes the next bound. Under decaf-2025 latency at these sizes the view is latency-bound and the lane
+  changes nothing.
+- **Decode** then sets the view directly, so faster recovery or the 2f+1 threshold pays where it did not before.
+- **The latency chain** has 24 ms of compute, half of it two storage round trips; batching the Vote action write with
+  the proposal's, or acknowledging before fsync, is worth up to 12 ms a view where latency binds.
 
 ## Running it
 
 ```
 cd scripts/network-bench
 uv run --with numpy python vidwindow.py point --profile decaf-2025 --nodes 100 --gbps 15 --block 50
+uv run --with numpy python vidwindow.py point --profile off --nodes 10 --gbps 15 --block 50 --compute c8g.4xlarge --lane
 uv run --with numpy python vidwindow.py grid --profile off --nodes 10 --threshold 2f+1 --out grid.json
-uv run --with numpy python vidwindow_runs.py ../../bench-state/aws/<fleet>/runs/<run>
+uv run --with numpy python vidwindow_runs.py fit ../../bench-state/aws/<fleet>/runs/<run>
+uv run --with numpy python vidwindow_runs.py ../../bench-state/aws/<fleet>/runs/<run> [--gbps 11] [--compute off]
 ```
 
 A 100-node decaf grid of 75 points takes about 15 minutes; 10 nodes run in seconds.
