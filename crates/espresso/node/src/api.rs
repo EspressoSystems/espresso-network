@@ -3650,14 +3650,16 @@ mod test {
         Upgrade,
     };
 
-    use self::data_source::testing::{
-        DeferredMigration, TestableSequencerDataSource, TestableSqlDataSource,
+    use self::data_source::{
+        DataSourceOptions,
+        testing::{DeferredMigration, TestableSequencerDataSource, TestableSqlDataSource},
     };
     use super::*;
 
     type Postgres = sql::postgres::DataSource;
     type Sqlite = sql::sqlite::DataSource;
 
+    // CI runs the tests named with `sqlite` in their own job, so every SQLite case has to carry it.
     #[rstest_reuse::template]
     #[rstest]
     #[case::postgres(PhantomData::<Postgres>)]
@@ -5886,14 +5888,15 @@ mod test {
         Client<ClientErr, SequencerApiVersion>,
     )> {
         let port = reserve_tcp_port().expect("No ports free for query service");
-        let persistence = D::persistence_options(storage).create().await?;
-        let handle = Options::with_port(port)
-            .query_sql(
+        let mut db = D::persistence_options(storage);
+        let persistence = db.create().await?;
+        let handle = db
+            .enable_query_module(
+                Options::with_port(port),
                 Query {
                     peers: params.upstreams.clone(),
                     ..Default::default()
                 },
-                D::tmp_options(storage),
             )
             .catchup(Default::default())
             .config(Default::default())

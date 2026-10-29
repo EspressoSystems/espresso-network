@@ -43,7 +43,11 @@ use tokio::time::sleep;
 
 use crate::{
     CatchupParams, Genesis, L1Params, SequencerApiVersion,
-    api::{Options, data_source::testing::TestableSqlDataSource, options::Query},
+    api::{
+        Options,
+        data_source::{DataSourceOptions, testing::TestableSqlDataSource},
+        options::Query,
+    },
     follower::{
         ChainSource, FollowerContext, FollowerOptions, FollowerParams, VerifiedBlock,
         init_replay_node,
@@ -148,7 +152,8 @@ impl LegacyChain {
             .with_context(|| format!("replaying the {} chain's L1", self.name))?;
 
         let storage = D::create_storage().await;
-        let persistence = D::persistence_options(&storage).create().await?;
+        let mut db = D::persistence_options(&storage);
+        let persistence = db.create().await?;
         // There are no peers to fetch the config or state certs from.
         persistence.save_config(&self.network_config).await?;
         for (epoch, cert) in &self.state_certs {
@@ -166,8 +171,8 @@ impl LegacyChain {
         let port = reserve_tcp_port().context("no free port for the replayed query API")?;
         let url: url::Url = format!("http://localhost:{port}").parse()?;
         let params = replay_params(url.clone());
-        let handle = Options::with_port(port)
-            .query_sql(Query::default(), D::tmp_options(&storage))
+        let handle = db
+            .enable_query_module(Options::with_port(port), Query::default())
             .catchup(Default::default())
             .config(Default::default())
             .explorer(Default::default())

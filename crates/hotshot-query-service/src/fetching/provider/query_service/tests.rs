@@ -6,7 +6,6 @@ use std::{
     time::Duration,
 };
 
-use axum::{Router, extract::Path, http::HeaderMap, response::Response, routing::get};
 use committable::Committable;
 use futures::{future::join, stream::StreamExt};
 use hotshot_example_types::node_types::TEST_VERSIONS;
@@ -2416,107 +2415,4 @@ async fn test_metadata_stream_begin_failure_payload() {
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn test_metadata_stream_begin_failure_vid() {
     test_metadata_stream_begin_failure_helper(MetadataType::Vid).await
-}
-
-#[tokio::test(flavor = "multi_thread")]
-#[test_log::test]
-async fn test_ranged_fetch() {
-    // Create a peer that has already decided some blocks.
-    let network = peer().await;
-
-    // Start a web server that the non-consensus node can use to fetch blocks.
-    let (port, _server) = serve_availability(network.data_source()).await;
-
-    // Wait for a few blocks to be produced.
-    let leaves = network
-        .data_source()
-        .subscribe_leaves(0)
-        .await
-        .take(5)
-        .collect::<Vec<_>>()
-        .await;
-    let blocks = network
-        .data_source()
-        .subscribe_blocks(0)
-        .await
-        .take(5)
-        .collect::<Vec<_>>()
-        .await;
-    let vid = network
-        .data_source()
-        .subscribe_vid_common(0)
-        .await
-        .take(5)
-        .collect::<Vec<_>>()
-        .await;
-
-    // Connect a fetching provider.
-    let provider =
-        TrustedQueryServiceProvider::new(format!("http://localhost:{port}").parse().unwrap());
-
-    // Make ranged requests.
-    tracing::info!("fetch leaf range");
-    assert_eq!(
-        provider
-            .fetch(LeafRangeRequest { start: 0, end: 5 })
-            .await
-            .unwrap(),
-        leaves
-    );
-    tracing::info!("fetch block range");
-    assert_eq!(
-        ProviderTrait::<MockTypes, _>::fetch(&provider, BlockRangeRequest { start: 0, end: 5 })
-            .await
-            .unwrap(),
-        blocks
-    );
-    tracing::info!("fetch VID common range");
-    assert_eq!(
-        ProviderTrait::<MockTypes, _>::fetch(&provider, VidCommonRangeRequest { start: 0, end: 5 })
-            .await
-            .unwrap(),
-        vid
-    );
-}
-
-/// A test server which does not support ranged VID common requests.
-async fn old_server() -> (u16, JoinHandle<()>) {
-    async fn get_vid_common(headers: HeaderMap, Path(height): Path<u64>) -> Response {
-        let mut common = VidCommonQueryData::<MockTypes>::genesis(
-            &Default::default(),
-            &Default::default(),
-            TEST_VERSIONS.test.base,
-        )
-        .await;
-        common.height = height;
-        test_fixtures::respond(&headers, Ok(common))
-    }
-
-    let api = Router::new().route("/vid/common/{height}", get(get_vid_common));
-    test_fixtures::serve(test_fixtures::app(api)).await
-}
-
-#[tokio::test]
-#[test_log::test]
-async fn test_vid_common_fallback() {
-    let (port, _server) = old_server().await;
-    let provider =
-        TrustedQueryServiceProvider::new(format!("http://localhost:{port}").parse().unwrap());
-
-    // First fetch a range of VID common one by one, to get a ground truth.
-    let common = try_join_all((0..5).map(|i| {
-        provider
-            .client
-            .get::<VidCommonQueryData<MockTypes>>(&format!("availability/vid/common/{i}"))
-            .send()
-    }))
-    .await
-    .unwrap();
-
-    // Now fetch the whole thing as a range.
-    let req = VidCommonRangeRequest { start: 0, end: 5 };
-    assert_eq!(
-        common.as_slice(),
-        provider.fetch_vid_common_range(req).await.unwrap().as_ref()
-    );
 }

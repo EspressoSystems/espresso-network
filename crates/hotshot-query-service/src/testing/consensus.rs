@@ -26,6 +26,7 @@ pub type MockDataSource = FileSystemDataSource<MockTypes, NoFetching>;
 pub type MockPostgresDataSource = sql::postgres::SqlDataSource<MockTypes, NoFetching>;
 pub type MockSqliteDataSource = sql::sqlite::SqlDataSource<MockTypes, NoFetching>;
 
+// CI runs the tests named with `sqlite` in their own job, so every SQLite case has to carry it.
 #[cfg(test)]
 #[rstest_reuse::template]
 #[rstest::rstest]
