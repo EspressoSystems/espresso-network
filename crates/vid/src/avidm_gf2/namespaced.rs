@@ -335,19 +335,21 @@ impl NsAvidmGf2Scheme {
         if shares.is_empty() {
             return Err(VidError::InsufficientShares);
         }
-        if ns_index >= common.ns_lens.len()
-            || !shares.iter().all(|share| share.contains_ns(ns_index))
-        {
+        let (Some(ns_commit), Some(&ns_len)) = (
+            common.ns_commits.get(ns_index),
+            common.ns_lens.get(ns_index),
+        ) else {
+            return Err(VidError::IndexOutOfBound);
+        };
+        if !shares.iter().all(|share| share.contains_ns(ns_index)) {
             return Err(VidError::IndexOutOfBound);
         }
-        let ns_commit = &common.ns_commits[ns_index];
-        let ns_len = common.ns_lens[ns_index];
         let shares: Vec<_> = shares
             .iter()
             .filter_map(|share| share.inner_ns_share(ns_index))
             .collect();
-        // The decoder sizes its buffers from the first shard, so an oversized
-        // shard must be rejected before decoding starts.
+        // The commitment does not bind `ns_lens`, so shards sized for another
+        // namespace length must be rejected before decoding.
         if !shares.iter().all(|share| {
             share.payload.is_empty() || Self::ns_len_matches_shards(&common.param, ns_len, share)
         }) {
@@ -656,16 +658,24 @@ pub mod tests {
     }
 
     #[test]
-    fn ns_recover_rejects_shards_sized_for_another_ns_len() {
-        let (_commit, common, mut shares) = setup_test_data();
-        for share in &mut shares {
-            for shard in &mut share.0[0].payload {
-                shard.resize(shard.len() + 64, 0);
-            }
-        }
+    fn ns_recover_rejects_ns_len_the_shards_were_not_dispersed_from() {
+        let k = 4;
+        let (_commit, common, shares) = disperse_with_threshold(k, &[7u8; 100], &[0..30, 30..100]);
+        let mut shrunk = common.clone();
+        shrunk.ns_lens[1] -= 2 * k;
         assert!(matches!(
-            NsAvidmGf2Scheme::ns_recover(&common, 0, &shares),
+            NsAvidmGf2Scheme::ns_recover(&shrunk, 1, &shares),
             Err(VidError::InvalidShare)
+        ));
+    }
+
+    #[test]
+    fn ns_recover_rejects_common_with_fewer_commits_than_lens() {
+        let (_commit, mut common, shares) = setup_test_data();
+        common.ns_commits.pop();
+        assert!(matches!(
+            NsAvidmGf2Scheme::ns_recover(&common, 1, &shares),
+            Err(VidError::IndexOutOfBound)
         ));
     }
 

@@ -5,6 +5,7 @@ use hotshot_types::{
     traits::signature_key::SignatureKey,
     vid::avidm_gf2::{AvidmGf2Scheme, init_avidm_gf2_param},
 };
+use vid::VidError;
 
 use super::common::utils::{TestData, TestView};
 use crate::{
@@ -1150,6 +1151,10 @@ fn test_recommit_refuses_ns_table_sized_for_another_payload() {
     forged.ns_lens = vec![short];
     assert!(AvidmGf2Scheme::is_consistent(&commitment, &forged));
     assert!(ns_lens_match_metadata(&forged, &short_table));
+    assert!(matches!(
+        AvidmGf2Scheme::recover(&forged, &shares),
+        Err(VidError::InvalidShare)
+    ));
     let recovered = AvidmGf2Scheme::recover(&common, &shares).unwrap();
     assert_eq!(recovered, payload);
     assert!(!matches_commitment(
