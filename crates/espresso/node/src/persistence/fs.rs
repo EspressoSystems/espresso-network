@@ -2096,6 +2096,8 @@ mod test {
     impl TestablePersistence for Persistence {
         type Storage = TempDir;
 
+        const DELETES_VID_SHARES_ON_DECIDE: bool = true;
+
         async fn tmp_storage() -> Self::Storage {
             TempDir::new().unwrap()
         }
