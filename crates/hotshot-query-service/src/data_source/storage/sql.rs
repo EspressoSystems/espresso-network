@@ -818,13 +818,7 @@ impl SqlStorage {
     async fn prune_data_batch(&self, to: u64) -> anyhow::Result<()> {
         // Update pruned height first so the fetcher does not try to fetch data that we are about to
         // delete.
-        let mut tx = self
-            .write()
-            .await
-            .context("opening transaction for pruned height")?;
-        tx.save_pruned_height(to).await?;
-        tx.commit().await.context("committing pruned height")?;
-        self.pruned_heights.set(PruneCategory::Data, to);
+        self.set_pruned_height(to).await?;
 
         let mut tx = self
             .prune_write()
@@ -1095,6 +1089,17 @@ impl PruneStorage for SqlStorage {
         self.prune_batch(pruner, category, from, to).await?;
         self.vacuum(pruner.cfg.incremental_vacuum_pages()).await?;
         Ok(Some(to))
+    }
+
+    async fn set_pruned_height(&self, height: u64) -> anyhow::Result<()> {
+        let mut tx = self
+            .write()
+            .await
+            .context("opening transaction for pruned height")?;
+        tx.save_pruned_height(height).await?;
+        tx.commit().await.context("committing pruned height")?;
+        self.pruned_heights.set(PruneCategory::Data, height);
+        Ok(())
     }
 }
 
