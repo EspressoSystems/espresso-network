@@ -965,11 +965,11 @@ where
                         ProposalMessage::validated(proposal.clone()),
                     )),
                 };
-                if let Err(err) = self
-                    .network
-                    .sender()
-                    .broadcast(self.consensus.current_view(), &message)
-                {
+                // The proposal's view, not `current_view`: a leader proposes once it
+                // holds the parent's certificate but enters the view only after
+                // reconstructing the parent block, and that view change drops queued
+                // messages of older slots.
+                if let Err(err) = self.network.sender().broadcast(view, &message) {
                     let err = CoordinatorError::from(err).context("proposal broadcast");
                     if err.severity == Severity::Critical {
                         return Err(err);
@@ -1213,6 +1213,11 @@ where
     #[cfg(test)]
     pub(crate) fn network(&self) -> &Cliquenet<T> {
         &self.network
+    }
+
+    #[cfg(test)]
+    pub(crate) fn network_mut(&mut self) -> &mut Cliquenet<T> {
+        &mut self.network
     }
 
     /// Refresh the network's peer window for `epoch`.
