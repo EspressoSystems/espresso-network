@@ -22,14 +22,14 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v7.0.1
+        uses: actions/checkout@v7
 
       - name: Install Protoc
         run: |
           sudo apt-get update
           sudo apt-get install -y protobuf-compiler
 
-      - uses: taiki-e/install-action@v2.88.0
+      - uses: taiki-e/install-action@v2
         with:
           tool: just
 
@@ -37,7 +37,7 @@ jobs:
         run: just doc
 
       - name: Upload Rust Docs
-        uses: actions/upload-artifact@v7.0.2
+        uses: actions/upload-artifact@v7
         with:
           name: rust-docs
           path: target/doc
@@ -48,7 +48,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v7.0.1
+        uses: actions/checkout@v7
         with:
           submodules: recursive
 
@@ -59,10 +59,10 @@ jobs:
           # TODO: remove and migrate when nix dev shell is on 1.8
           version: v1.7.1
 
-      - uses: taiki-e/install-action@v2.88.0
+      - uses: taiki-e/install-action@v2
         with:
           tool: just
-      - uses: taiki-e/install-action@v2.88.0
+      - uses: taiki-e/install-action@v2
         with:
           tool: mdbook
 
@@ -70,7 +70,7 @@ jobs:
         run: just doc-contracts
 
       - name: Upload Contract Docs
-        uses: actions/upload-artifact@v7.0.2
+        uses: actions/upload-artifact@v7
         with:
           name: contract-docs
           path: docs/book
@@ -82,13 +82,13 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - name: Download Rust Docs
-        uses: actions/download-artifact@v8.0.2
+        uses: actions/download-artifact@v8
         with:
           name: rust-docs
           path: public
 
       - name: Download Contract Docs
-        uses: actions/download-artifact@v8.0.2
+        uses: actions/download-artifact@v8
         with:
           name: contract-docs
           path: public/contracts
@@ -98,7 +98,7 @@ jobs:
 
       - name: Deploy
         if: ${{ github.ref == 'refs/heads/main' }}
-        uses: peaceiris/actions-gh-pages@v4.1.0
+        uses: peaceiris/actions-gh-pages@v4
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           publish_dir: ./public

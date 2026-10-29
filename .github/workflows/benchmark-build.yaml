@@ -17,15 +17,15 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: taiki-e/install-action@v2.88.0
+      - uses: taiki-e/install-action@v2
         with:
           tool: just
 
       - name: Checkout Repository
-        uses: actions/checkout@v7.0.1
+        uses: actions/checkout@v7
 
       - name: Enable Rust Caching
-        uses: Swatinem/rust-cache@v2.9.3
+        uses: Swatinem/rust-cache@v2
         with:
           prefix-key: v1-bench
           save-if: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release-') }}
@@ -41,7 +41,7 @@ jobs:
           cargo build --locked --release --features benchmarking,testing --bin espresso-dev-node
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v7.0.2
+        uses: actions/upload-artifact@v7
         with:
           name: x86_64-unknown-linux-gnu-services-bench
           retention-days: 1
@@ -65,10 +65,10 @@ jobs:
     runs-on: buildjet-16vcpu-ubuntu-2204-arm
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v7.0.1
+        uses: actions/checkout@v7
 
       - name: Enable Rust Caching
-        uses: Swatinem/rust-cache@v2.9.3
+        uses: Swatinem/rust-cache@v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release-') }}
 
@@ -82,7 +82,7 @@ jobs:
           cargo build --locked --release --features benchmarking,testing --bin espresso-dev-node
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v7.0.2
+        uses: actions/upload-artifact@v7
         with:
           name: aarch64-unknown-linux-gnu-services-bench
           retention-days: 1
@@ -121,16 +121,16 @@ jobs:
       bridge-tag: ${{ steps.bridge.outputs.tags }}
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v7.0.1
+        uses: actions/checkout@v7
 
       - name: Download executables AMD
-        uses: actions/download-artifact@v8.0.2
+        uses: actions/download-artifact@v8
         with:
           name: x86_64-unknown-linux-gnu-services-bench
           path: target/amd64/release
 
       - name: Download executables ARM
-        uses: actions/download-artifact@v8.0.2
+        uses: actions/download-artifact@v8
         with:
           name: aarch64-unknown-linux-gnu-services-bench
           path: target/arm64/release
@@ -155,14 +155,14 @@ jobs:
             password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Generate espresso-node docker metadata
-        uses: docker/metadata-action@v6.2.0
+        uses: docker/metadata-action@v6
         id: espresso-node
         with:
           images: ghcr.io/espressosystems/espresso-network/espresso-node
           flavor: suffix=bench
 
       - name: Generate state-relay-server docker metadata
-        uses: docker/metadata-action@v6.2.0
+        uses: docker/metadata-action@v6
         id: state-relay-server
         with:
           images: |
@@ -171,7 +171,7 @@ jobs:
           flavor: suffix=bench
 
       - name: Generate prover-service docker metadata
-        uses: docker/metadata-action@v6.2.0
+        uses: docker/metadata-action@v6
         id: prover-service
         with:
           images: |
@@ -180,7 +180,7 @@ jobs:
           flavor: suffix=bench
 
       - name: Generate orchestrator docker metadata
-        uses: docker/metadata-action@v6.2.0
+        uses: docker/metadata-action@v6
         id: orchestrator
         with:
           images: |
@@ -189,7 +189,7 @@ jobs:
           flavor: suffix=bench
 
       - name: Generate submit-transactions docker metadata
-        uses: docker/metadata-action@v6.2.0
+        uses: docker/metadata-action@v6
         id: submit-transactions
         with:
           images: |
@@ -198,7 +198,7 @@ jobs:
           flavor: suffix=bench
 
       - name: Generate deploy metadata
-        uses: docker/metadata-action@v6.2.0
+        uses: docker/metadata-action@v6
         id: deploy
         with:
           images: |
@@ -207,7 +207,7 @@ jobs:
           flavor: suffix=bench
 
       - name: Generate nasty-client metadata
-        uses: docker/metadata-action@v6.2.0
+        uses: docker/metadata-action@v6
         id: nasty-client
         with:
           images: |
@@ -216,7 +216,7 @@ jobs:
           flavor: suffix=bench
 
       - name: Generate espresso-dev-node metadata
-        uses: docker/metadata-action@v6.2.0
+        uses: docker/metadata-action@v6
         id: espresso-dev-node
         with:
           images: |
@@ -225,7 +225,7 @@ jobs:
           flavor: suffix=bench
 
       - name: Generate bridge metadata
-        uses: docker/metadata-action@v6.2.0
+        uses: docker/metadata-action@v6
         id: bridge
         with:
           images: |
@@ -234,7 +234,7 @@ jobs:
           flavor: suffix=bench
 
       - name: Build and push espresso-node docker
-        uses: docker/build-push-action@v7.4.0
+        uses: docker/build-push-action@v7
         with:
           context: ./
           file: ./docker/espresso-node.Dockerfile
@@ -247,14 +247,14 @@ jobs:
       # sequencer-sqlite) as symlinks to the new names. This will be removed in a future release.
       # Consumers should migrate to ghcr.io/espressosystems/espresso-network/espresso-node.
       - name: Generate legacy sequencer docker metadata
-        uses: docker/metadata-action@v6.2.0
+        uses: docker/metadata-action@v6
         id: legacy-sequencer
         with:
           images: ghcr.io/espressosystems/espresso-sequencer/sequencer
           flavor: suffix=bench
 
       - name: Build and push legacy sequencer docker with old binary names
-        uses: docker/build-push-action@v7.4.0
+        uses: docker/build-push-action@v7
         with:
           context: ./
           file: ./docker/espresso-node-legacy.Dockerfile
@@ -266,7 +266,7 @@ jobs:
           labels: ${{ steps.legacy-sequencer.outputs.labels }}
 
       - name: Build and push state-relay-server docker
-        uses: docker/build-push-action@v7.4.0
+        uses: docker/build-push-action@v7
         with:
           context: ./
           file: ./docker/state-relay-server.Dockerfile
@@ -276,7 +276,7 @@ jobs:
           labels: ${{ steps.state-relay-server.outputs.labels }}
 
       - name: Build and push prover-service docker
-        uses: docker/build-push-action@v7.4.0
+        uses: docker/build-push-action@v7
         with:
           context: ./
           file: ./docker/prover-service.Dockerfile
@@ -286,7 +286,7 @@ jobs:
           labels: ${{ steps.prover-service.outputs.labels }}
 
       - name: Build and push orchestrator docker
-        uses: docker/build-push-action@v7.4.0
+        uses: docker/build-push-action@v7
         with:
           context: ./
           file: ./docker/orchestrator.Dockerfile
@@ -296,7 +296,7 @@ jobs:
           labels: ${{ steps.orchestrator.outputs.labels }}
 
       - name: Build and push submit-transactions docker
-        uses: docker/build-push-action@v7.4.0
+        uses: docker/build-push-action@v7
         with:
           context: ./
           file: ./docker/submit-transactions.Dockerfile
@@ -306,7 +306,7 @@ jobs:
           labels: ${{ steps.submit-transactions.outputs.labels }}
 
       - name: Build and push deploy docker
-        uses: docker/build-push-action@v7.4.0
+        uses: docker/build-push-action@v7
         with:
           context: ./
           file: ./docker/deploy.Dockerfile
@@ -316,7 +316,7 @@ jobs:
           labels: ${{ steps.deploy.outputs.labels }}
 
       - name: Build and push nasty-client docker
-        uses: docker/build-push-action@v7.4.0
+        uses: docker/build-push-action@v7
         with:
           context: ./
           file: ./docker/nasty-client.Dockerfile
@@ -326,7 +326,7 @@ jobs:
           labels: ${{ steps.nasty-client.outputs.labels }}
 
       - name: Build and push espresso-dev-node docker
-        uses: docker/build-push-action@v7.4.0
+        uses: docker/build-push-action@v7
         with:
           context: ./
           file: ./docker/espresso-dev-node.Dockerfile
@@ -335,7 +335,7 @@ jobs:
           tags: ${{ steps.espresso-dev-node.outputs.tags }}
           labels: ${{ steps.espresso-dev-node.outputs.labels }}
       - name: Build and push bridge docker
-        uses: docker/build-push-action@v7.4.0
+        uses: docker/build-push-action@v7
         with:
           context: ./
           file: ./docker/espresso-bridge.Dockerfile
@@ -349,12 +349,12 @@ jobs:
     runs-on: ubuntu-latest
     needs: [build-dockers]
     steps:
-      - uses: taiki-e/install-action@v2.88.0
+      - uses: taiki-e/install-action@v2
         with:
           tool: just
 
       - name: Checkout Repository
-        uses: actions/checkout@v7.0.1
+        uses: actions/checkout@v7
 
       - name: Pull docker images
         run: |

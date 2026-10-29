@@ -29,13 +29,13 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - name: Install Nix
-        uses: cachix/install-nix-action@v31.11.3
+        uses: cachix/install-nix-action@v31
 
-      - uses: taiki-e/install-action@v2.88.0
+      - uses: taiki-e/install-action@v2
         with:
           tool: just
 
-      - uses: actions/checkout@v7.0.1
+      - uses: actions/checkout@v7
 
       # One line per shell: "<shell> <command>...", collected from the with-tools [script] attributes,
       # plus the shells no recipe uses.

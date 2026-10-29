@@ -107,11 +107,12 @@ proto-check $base="origin/main":
     git archive "$merge_base" crates/espresso/api/proto | tar -x -C "$dir"
     buf breaking crates/espresso/api/proto --against "$dir/crates/espresso/api/proto"
 
-# Needs `gh extension install github/gh-actions-lock --pin v0.4.0`. `--relock` advances
-# branch refs such as `@main`; `--verify` checks without writing.
+# Needs `gh extension install github/gh-actions-lock --pin v0.4.0`. `--no-narrow` keeps
+# `@v4` as written instead of rewriting it to `@v4.2.1`. `--relock` advances refs such as
+# `@v4` and `@main` to their latest commit; `--verify` checks without writing.
 # Update .github/workflows/actions.lock after changing a `uses:` line or on a conflict in it
 lock-actions *args:
-    gh actions-lock --ignore-local-actions {{args}}
+    gh actions-lock --ignore-local-actions --no-narrow {{args}}
 
 # slow-tests picks its storage backend at compile time, so check its sqlite variant too
 clippy *args:

@@ -52,7 +52,7 @@ jobs:
           - binary: espresso-dev-node
 
     steps:
-      - uses: actions/checkout@v7.0.1
+      - uses: actions/checkout@v7
       - uses: rui314/setup-mold@v1
 
       - name: Install Protoc
@@ -61,7 +61,7 @@ jobs:
           sudo apt-get install -y protobuf-compiler
 
       - name: Enable Rust Caching
-        uses: Swatinem/rust-cache@v2.9.3
+        uses: Swatinem/rust-cache@v2
         with:
           prefix-key: v3-rust
           shared-key: build-${{ matrix.binary }}
@@ -84,7 +84,7 @@ jobs:
           binaries-dir: target/release
 
       - name: Upload cargo timings
-        uses: actions/upload-artifact@v7.0.2
+        uses: actions/upload-artifact@v7
         with:
           name: cargo-timings-build-amd-${{ matrix.binary }}
           path: target/cargo-timings/cargo-timing.html
@@ -102,7 +102,7 @@ jobs:
           done
 
       - name: Upload Artifacts
-        uses: actions/upload-artifact@v7.0.2
+        uses: actions/upload-artifact@v7
         with:
           name: amd-${{ matrix.binary }}
           retention-days: 1
@@ -122,7 +122,7 @@ jobs:
           - binary: espresso-dev-node
 
     steps:
-      - uses: actions/checkout@v7.0.1
+      - uses: actions/checkout@v7
       - uses: rui314/setup-mold@v1
 
       - name: Install Protoc
@@ -131,7 +131,7 @@ jobs:
           sudo apt-get install -y protobuf-compiler
 
       - name: Enable Rust Caching
-        uses: Swatinem/rust-cache@v2.9.3
+        uses: Swatinem/rust-cache@v2
         with:
           prefix-key: v3-rust
           shared-key: build-${{ matrix.binary }}
@@ -145,7 +145,7 @@ jobs:
           scripts/ci-build-binary ${{ matrix.binary }}
 
       - name: Upload cargo timings
-        uses: actions/upload-artifact@v7.0.2
+        uses: actions/upload-artifact@v7
         with:
           name: cargo-timings-build-arm-${{ matrix.binary }}
           path: target/cargo-timings/cargo-timing.html
@@ -162,7 +162,7 @@ jobs:
           done
 
       - name: Upload Artifacts
-        uses: actions/upload-artifact@v7.0.2
+        uses: actions/upload-artifact@v7
         with:
           name: arm-${{ matrix.binary }}
           retention-days: 1
@@ -180,7 +180,7 @@ jobs:
       actions: read
       contents: read
     steps:
-      - uses: actions/checkout@v7.0.1
+      - uses: actions/checkout@v7
 
       - uses: ./.github/actions/compile-metrics-report
         with:
@@ -200,7 +200,7 @@ jobs:
       actions: read
       contents: read
     steps:
-      - uses: actions/checkout@v7.0.1
+      - uses: actions/checkout@v7
 
       - uses: ./.github/actions/compile-metrics-publish
         with:
@@ -268,10 +268,10 @@ jobs:
 
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v7.0.1
+        uses: actions/checkout@v7
 
       - name: Download executables AMD
-        uses: actions/download-artifact@v8.0.2
+        uses: actions/download-artifact@v8
         with:
           pattern: amd-*
           path: target/amd64/release
@@ -297,7 +297,7 @@ jobs:
             password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Generate ${{ matrix.service }} docker metadata
-        uses: docker/metadata-action@v6.2.0
+        uses: docker/metadata-action@v6
         id: metadata
         with:
           images: ghcr.io/espressosystems/espresso-network/${{matrix.service}}
@@ -310,7 +310,7 @@ jobs:
       #   - On main: push to the registry and fetch from the registry to run the demo test.
       - name: Build docker image and export to file (on PRs)
         if: github.event_name == 'pull_request'
-        uses: nick-fields/retry@v4.0.0
+        uses: nick-fields/retry@v4
         env:
           LABELS: ${{ steps.metadata.outputs.labels }}
           TAGS: ${{ steps.metadata.outputs.tags }}
@@ -327,7 +327,7 @@ jobs:
 
       - name: Upload docker image artifact (on PRs)
         if: github.event_name == 'pull_request'
-        uses: actions/upload-artifact@v7.0.2
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.service }}-docker-image
           path: ${{ runner.temp }}/${{ matrix.service }}.tar
@@ -336,7 +336,7 @@ jobs:
 
       - name: Build and push docker (non-PR)
         if: github.event_name != 'pull_request'
-        uses: nick-fields/retry@v4.0.0
+        uses: nick-fields/retry@v4
         env:
           LABELS: ${{ steps.metadata.outputs.labels }}
         with:
@@ -364,7 +364,7 @@ jobs:
 
       - name: Upload digest
         if: github.event_name != 'pull_request'
-        uses: actions/upload-artifact@v7.0.2
+        uses: actions/upload-artifact@v7
         with:
           name: "digests-${{ matrix.service }}-amd64"
           path: "${{ runner.temp }}/digests/*"
@@ -396,10 +396,10 @@ jobs:
 
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v7.0.1
+        uses: actions/checkout@v7
 
       - name: Download executables ARM
-        uses: actions/download-artifact@v8.0.2
+        uses: actions/download-artifact@v8
         with:
           pattern: arm-*
           path: target/arm64/release
@@ -424,7 +424,7 @@ jobs:
             password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Generate ${{ matrix.service }} docker metadata
-        uses: docker/metadata-action@v6.2.0
+        uses: docker/metadata-action@v6
         id: metadata
         with:
           images: ghcr.io/espressosystems/espresso-network/${{ matrix.service }}
@@ -432,7 +432,7 @@ jobs:
           flavor: latest=false
 
       - name: Build and push docker
-        uses: nick-fields/retry@v4.0.0
+        uses: nick-fields/retry@v4
         env:
           LABELS: ${{ steps.metadata.outputs.labels }}
         with:
@@ -458,7 +458,7 @@ jobs:
           ls -lah "${digest_dir}"
 
       - name: Upload digest
-        uses: actions/upload-artifact@v7.0.2
+        uses: actions/upload-artifact@v7
         with:
           name: "digests-${{ matrix.service }}-arm64"
           path: "${{ runner.temp }}/digests/*"
@@ -493,7 +493,7 @@ jobs:
 
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v7.0.1
+        uses: actions/checkout@v7
 
       - name: Set up Docker Buildx
         uses: Wandalen/wretry.action@v3.8.0
@@ -514,7 +514,7 @@ jobs:
             password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Download digests
-        uses: actions/download-artifact@v8.0.2
+        uses: actions/download-artifact@v8
         with:
           pattern: "digests-${{ matrix.service }}-*"
           path: "${{ runner.temp }}/digests"
@@ -522,7 +522,7 @@ jobs:
 
       - name: Docker meta
         id: meta
-        uses: docker/metadata-action@v6.2.0
+        uses: docker/metadata-action@v6
         with:
           images: ghcr.io/espressosystems/espresso-network/${{ matrix.service }}
           # latest would otherwise follow whichever tag was built last; operators pin tags
@@ -563,7 +563,7 @@ jobs:
       # Consumers should migrate to ghcr.io/espressosystems/espresso-network/espresso-node.
       - name: Build and push legacy sequencer image with old binary names
         if: matrix.service == 'espresso-node'
-        uses: nick-fields/retry@v4.0.0
+        uses: nick-fields/retry@v4
         env:
           TAGS: ghcr.io/espressosystems/espresso-sequencer/sequencer:${{ steps.meta.outputs.version }}
         with:
@@ -583,13 +583,13 @@ jobs:
     runs-on: ubuntu-latest
     needs: [build-dockers-amd]
     steps:
-      - uses: actions/checkout@v7.0.1
-      - uses: taiki-e/install-action@v2.88.0
+      - uses: actions/checkout@v7
+      - uses: taiki-e/install-action@v2
         with:
           tool: just
 
       - name: Download artifacts
-        uses: actions/download-artifact@v8.0.2
+        uses: actions/download-artifact@v8
         with:
           path: ${{ runner.temp }}/docker-images
           pattern: "*-docker-image"
@@ -626,8 +626,8 @@ jobs:
     runs-on: ubuntu-latest
     needs: [build-dockers-amd, create-multiplatform-docker-image]
     steps:
-      - uses: actions/checkout@v7.0.1
-      - uses: taiki-e/install-action@v2.88.0
+      - uses: actions/checkout@v7
+      - uses: taiki-e/install-action@v2
         with:
           tool: just
 
@@ -684,16 +684,16 @@ jobs:
           - old-from-new-pg
     name: binary-upgrade-test-pr (${{ matrix.scenario }})
     steps:
-      - uses: actions/checkout@v7.0.1
+      - uses: actions/checkout@v7
         with:
           fetch-tags: true
-      - uses: taiki-e/install-action@v2.88.0
+      - uses: taiki-e/install-action@v2
         with:
           tool: just
       - uses: astral-sh/setup-uv@v10.0.1
 
       - name: Download artifacts
-        uses: actions/download-artifact@v8.0.2
+        uses: actions/download-artifact@v8
         with:
           path: ${{ runner.temp }}/docker-images
           pattern: "*-docker-image"
@@ -721,7 +721,7 @@ jobs:
 
       - name: Upload compose logs
         if: always()
-        uses: actions/upload-artifact@v7.0.2
+        uses: actions/upload-artifact@v7
         with:
           name: compose-logs-${{ github.job }}-${{ matrix.scenario }}
           path: tmp/compose-logs/
@@ -743,10 +743,10 @@ jobs:
           - old-from-new-pg
     name: binary-upgrade-test-non-pr (${{ matrix.scenario }})
     steps:
-      - uses: actions/checkout@v7.0.1
+      - uses: actions/checkout@v7
         with:
           fetch-tags: true
-      - uses: taiki-e/install-action@v2.88.0
+      - uses: taiki-e/install-action@v2
         with:
           tool: just
       - uses: astral-sh/setup-uv@v10.0.1
@@ -770,7 +770,7 @@ jobs:
 
       - name: Upload compose logs
         if: always()
-        uses: actions/upload-artifact@v7.0.2
+        uses: actions/upload-artifact@v7
         with:
           name: compose-logs-${{ github.job }}-${{ matrix.scenario }}
           path: tmp/compose-logs/
@@ -826,14 +826,14 @@ jobs:
       ESPRESSO_NODE_GENESIS_FILE: genesis/${{ matrix.genesis }}.toml
       DURATION_SECONDS: 3600
     steps:
-      - uses: actions/checkout@v7.0.1
+      - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v10.0.1
-      - uses: taiki-e/install-action@v2.88.0
+      - uses: taiki-e/install-action@v2
         with:
           tool: just
 
       - name: Download docker image artifacts
-        uses: actions/download-artifact@v8.0.2
+        uses: actions/download-artifact@v8
         with:
           path: ${{ runner.temp }}/docker-images
           pattern: "*-docker-image"
@@ -860,7 +860,7 @@ jobs:
 
       - name: Upload soak samples
         if: always()
-        uses: actions/upload-artifact@v7.0.2
+        uses: actions/upload-artifact@v7
         with:
           name: memory-soak-${{ matrix.genesis }}
           path: ./soak-samples
@@ -868,7 +868,7 @@ jobs:
 
       - name: Upload soak logs
         if: always()
-        uses: actions/upload-artifact@v7.0.2
+        uses: actions/upload-artifact@v7
         with:
           name: memory-soak-${{ matrix.genesis }}-logs
           path: ./soak-logs
@@ -889,9 +889,9 @@ jobs:
       ESPRESSO_NODE_GENESIS_FILE: genesis/${{ matrix.genesis }}.toml
       DURATION_SECONDS: 3600
     steps:
-      - uses: actions/checkout@v7.0.1
+      - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v10.0.1
-      - uses: taiki-e/install-action@v2.88.0
+      - uses: taiki-e/install-action@v2
         with:
           tool: just
 
@@ -914,7 +914,7 @@ jobs:
 
       - name: Upload soak samples
         if: always()
-        uses: actions/upload-artifact@v7.0.2
+        uses: actions/upload-artifact@v7
         with:
           name: memory-soak-${{ matrix.genesis }}
           path: ./soak-samples
@@ -922,7 +922,7 @@ jobs:
 
       - name: Upload soak logs
         if: always()
-        uses: actions/upload-artifact@v7.0.2
+        uses: actions/upload-artifact@v7
         with:
           name: memory-soak-${{ matrix.genesis }}-logs
           path: ./soak-logs

@@ -30,7 +30,7 @@ jobs:
           - just check-features-ci
           - just check-features-ci --tests
     steps:
-      - uses: actions/checkout@v7.0.1
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/free-disk-space
 
       - name: Install Protoc
@@ -38,10 +38,10 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y protobuf-compiler
 
-      - uses: taiki-e/install-action@v2.88.0
+      - uses: taiki-e/install-action@v2
         with:
           tool: cargo-hack
-      - uses: taiki-e/install-action@v2.88.0
+      - uses: taiki-e/install-action@v2
         with:
           tool: just
       # Note: this job doesn't use a cache on purpose because it mostly compiles
@@ -55,9 +55,9 @@ jobs:
   check-sp1-target:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7.0.1
+      - uses: actions/checkout@v7
 
-      - uses: taiki-e/install-action@v2.88.0
+      - uses: taiki-e/install-action@v2
         with:
           tool: just
       - uses: ./.github/actions/install-sp1

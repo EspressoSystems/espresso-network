@@ -13,7 +13,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v7.0.1
+        uses: actions/checkout@v7
 
       - name: Install Protoc
         run: |
@@ -28,7 +28,7 @@ jobs:
       # Set nightly as the default toolchain
       - run: rustup override set ${{steps.toolchain.outputs.name}}
 
-      - uses: Swatinem/rust-cache@v2.9.3
+      - uses: Swatinem/rust-cache@v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release-') }}
       
