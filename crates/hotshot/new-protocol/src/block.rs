@@ -31,7 +31,7 @@ use versions::{NEW_PROTOCOL_VERSION, NO_BUILDER_COMMITMENT_VERSION, Version};
 
 use crate::{
     consensus::ConsensusInput,
-    coordinator::metrics::{Measurement, finish_measurement},
+    coordinator::metrics::{Measurement, finish_measurement, ignore_measurement},
     helpers::proposal_commitment,
     message::{DedupManifest, Proposal, TransactionMessage},
     network::message_limit,
@@ -363,7 +363,10 @@ impl<T: NodeType> BlockBuilder<T> {
                 let measurement = duration_metric.map(Measurement::start);
                 let commitments =
                     block_commitments(&payload, &pooled_hashes, &stake_table, version);
-                finish_measurement(measurement);
+                match &commitments {
+                    Ok(_) => finish_measurement(measurement),
+                    Err(_) => ignore_measurement(measurement),
+                }
                 (payload, commitments)
             });
             let (payload, commitments) = match commitments.await {
