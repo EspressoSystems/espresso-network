@@ -109,6 +109,8 @@ pub struct NetworkParams {
     pub cliquenet_bind_addr: NetAddr,
     /// Cliquenet address to advertise to other nodes (registered in the stake table).
     pub cliquenet_advertise_addr: Option<NetAddr>,
+    /// Whether proposals get a cliquenet network of their own, one port above the main one.
+    pub cliquenet_control_lane: ControlLane,
     /// X25519 secret key.
     pub x25519_secret_key: x25519::SecretKey,
 }
@@ -398,6 +400,7 @@ where
         let metrics = clone_box(&*metrics);
         let secret_key = network_params.x25519_secret_key.into();
         let bind_addr = network_params.cliquenet_bind_addr.clone();
+        let control_lane = network_params.cliquenet_control_lane;
         // Accept the largest configured version's messages from startup.
         let largest = *block_sizes
             .values()
@@ -413,7 +416,7 @@ where
                 bind_addr,
                 [],
                 max_message_size,
-                ControlLane::Off,
+                control_lane,
                 upgrade,
                 metrics,
             )

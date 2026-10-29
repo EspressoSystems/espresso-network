@@ -87,6 +87,15 @@ pub struct Options {
     )]
     pub cliquenet_advertise_address: Option<NetAddr>,
 
+    /// Send proposals on a second cliquenet network, the control lane, so they pass the VID
+    /// shares queued on the main connections.
+    ///
+    /// Experimental. The lane listens one port above the cliquenet bind address and expects
+    /// every peer's lane one port above the address the peer registered, so every node of the
+    /// network must set it, and that port must be open between them.
+    #[clap(long, env = "ESPRESSO_NODE_CLIQUENET_CONTROL_LANE", action)]
+    pub cliquenet_control_lane: bool,
+
     /// The URL we advertise to other nodes as being for our public API.
     /// Should be supplied in `http://host:port` form.
     #[clap(long, env = "ESPRESSO_NODE_PUBLIC_API_URL")]
@@ -1118,6 +1127,12 @@ pub(crate) mod tests {
                 committee: vec![peer],
             }]),
         }
+    }
+
+    #[test]
+    fn cliquenet_control_lane_is_opt_in() {
+        assert!(!parse_options_with(&[]).cliquenet_control_lane);
+        assert!(parse_options_with(&["--cliquenet-control-lane"]).cliquenet_control_lane);
     }
 
     #[test]

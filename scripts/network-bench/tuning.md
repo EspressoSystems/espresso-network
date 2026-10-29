@@ -14,12 +14,18 @@
 | `GLIBC_TUNABLES=glibc.malloc.hugetlb=1`          | main                         |
 | `--allocator NAME`                               | `build-allocators.yml` image |
 | `--prune [RETENTION]`                            | main                         |
+| `ESPRESSO_NODE_CLIQUENET_CONTROL_LANE=true`      | main                         |
 
 With `--query-engine sqlite`, `--query-db volume` keeps SQLite and payloads off the root disk the journal uses; `tmpfs`
 drops SQLite disk I/O entirely (needs `ESPRESSO_QUERY_PAYLOAD_DIR`). `EXPERIMENTAL_SQLITE_PRAGMAS` takes comma-separated
 `key=value` pragmas applied after the defaults.
 
 With `--prune` and `--query-engine sqlite`, each prune batch holds the write lock, which shows as query lag.
+
+`ESPRESSO_NODE_CLIQUENET_CONTROL_LANE=true` sends proposals on a second cliquenet network, the control lane, on the port
+above the cliquenet port (9001), so they do not queue behind VID shares. Set it on every node or none. The fleet's
+security group passes all traffic between its hosts; the socket samples (`ss` on port 9000) leave out the lane's
+connections.
 
 ## Host (with `--latency`)
 
