@@ -57,7 +57,7 @@ pub(crate) fn default_telemetry_endpoint(chain_id: ChainId) -> Option<&'static s
 pub use espresso_types::RECENT_STAKE_TABLES_LIMIT;
 use genesis::L1Finalized;
 pub use genesis::{Genesis, GenesisSource};
-use hotshot_new_protocol::network::{Cliquenet, message_limit};
+use hotshot_new_protocol::network::{Cliquenet, ControlLane, message_limit};
 use hotshot_orchestrator::client::{OrchestratorClient, get_complete_config};
 use hotshot_types::{
     ValidatorConfig,
@@ -413,6 +413,7 @@ where
                 bind_addr,
                 [],
                 max_message_size,
+                ControlLane::Off,
                 upgrade,
                 metrics,
             )
@@ -1626,6 +1627,7 @@ pub mod testing {
                     coordinator_addr,
                     [],
                     Some(message_limit(max_block_size)),
+                    ControlLane::Off,
                     upgrade,
                     Box::new(NoMetrics),
                 )
