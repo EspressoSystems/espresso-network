@@ -2420,19 +2420,17 @@ mod test {
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_quorum_proposals_leaf_hash_migration() {
-        // Create some quorum proposals to test with.
-        let leaf: Leaf2 = Leaf::genesis(
+        // Create some legacy quorum proposals to test with, as a pre-migration node wrote them.
+        let leaf = Leaf::genesis(
             &ValidatedState::default(),
             &NodeState::mock(),
             TEST_VERSIONS.test.base,
         )
-        .await
-        .into();
+        .await;
         let privkey = BLSPubKey::generated_from_seed_indexed([0; 32], 1).1;
         let signature = PubKey::sign(&privkey, &[]).unwrap();
-        let mut quorum_proposal = Proposal {
-            data: QuorumProposal2::<SeqTypes> {
-                epoch: None,
+        let mut quorum_proposal: Proposal<SeqTypes, QuorumProposal<SeqTypes>> = Proposal {
+            data: QuorumProposal {
                 block_header: leaf.block_header().clone(),
                 view_number: ViewNumber::genesis(),
                 justify_qc: QuorumCertificate::genesis(
@@ -2440,25 +2438,17 @@ mod test {
                     &NodeState::mock(),
                     TEST_VERSIONS.test,
                 )
-                .await
-                .to_qc2(),
+                .await,
                 upgrade_certificate: None,
-                view_change_evidence: None,
-                next_drb_result: None,
-                next_epoch_justify_qc: None,
-                state_cert: None,
+                proposal_certificate: None,
             },
             signature,
             _pd: Default::default(),
         };
 
-        let qp1: Proposal<SeqTypes, QuorumProposal<SeqTypes>> =
-            convert_proposal(quorum_proposal.clone());
-
+        let qp1 = quorum_proposal.clone();
         quorum_proposal.data.view_number = ViewNumber::new(1);
-
-        let qp2: Proposal<SeqTypes, QuorumProposal<SeqTypes>> =
-            convert_proposal(quorum_proposal.clone());
+        let qp2 = quorum_proposal;
         let qps = [qp1, qp2];
 
         // Create persistence and add the quorum proposals with NULL leaf hash.
