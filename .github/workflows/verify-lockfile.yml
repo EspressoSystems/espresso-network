@@ -28,5 +28,6 @@ jobs:
       # A precompiled extension can only be pinned to a release tag. v0.4.0 is an immutable
       # release; `--ignore-local-actions` needs at least v0.3.0.
       - run: gh extension install github/gh-actions-lock --pin v0.4.0
+      # Same flags as `just lock-actions`, so CI checks the lockfile under the rules that wrote it.
       # The compile-metrics local actions call remote actions, which a `./` path can't lock.
-      - run: gh actions-lock --verify --ignore-local-actions
+      - run: gh actions-lock --verify --ignore-local-actions --no-narrow
