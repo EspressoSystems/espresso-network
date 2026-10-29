@@ -137,11 +137,12 @@ def line(pts: list[tuple[float, float]]) -> Cost:
 class Run:
     """A run's traces, block sizes, steps and geography."""
 
-    def __init__(self, node_type, trace, v2h, by_h, steps, region):
+    def __init__(self, node_type, trace, v2h, by_h, steps, region, two_thirds=False):
         self.node_type, self.trace, self.steps = node_type, trace, steps
         self.profile = "decaf-2025" if region else "off"
         self.n = len(trace)
-        self.k, self.q = -(-self.n // 3), -(-2 * self.n // 3)
+        self.k = vidwindow.threshold(self.n, "2f+1" if two_thirds else "f+1")
+        self.q = -(-2 * self.n // 3)
         self.d = delay_matrix(self.profile, region, self.n)
         self.leader_of = {
             v: nid
@@ -197,7 +198,12 @@ class Run:
         region = {
             nid: region_of_host[h] for nid, h in host_of.items() if h in region_of_host
         }
-        return cls(node_type, trace, v2h, by_h, steps, region)
+        # The bench-only 2/3 decode threshold, set on the nodes by `--node-env`.
+        two_thirds = any(
+            pair.startswith("ESPRESSO_BENCH_VID_TWO_THIRDS=")
+            for pair in man["config"].get("node_env") or []
+        )
+        return cls(node_type, trace, v2h, by_h, steps, region, two_thirds)
 
     def events(self, node: int, view: int) -> dict[str, list[int]]:
         return self.trace.get(node, {}).get(view, {})
