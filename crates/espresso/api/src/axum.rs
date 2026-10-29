@@ -85,6 +85,9 @@ impl IntoResponse for ApiError {
         let status = match &self {
             ApiError::BadRequest(_) => StatusCode::BAD_REQUEST,
             ApiError::NotFound(_) => StatusCode::NOT_FOUND,
+            // v1 has no status field, so a distinct code is how a client tells a height it can
+            // retry later from a missing one.
+            ApiError::OutOfRange(_) => StatusCode::TOO_EARLY,
             ApiError::Gone(_) => StatusCode::GONE,
             ApiError::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
             ApiError::Unavailable(_) => StatusCode::SERVICE_UNAVAILABLE,
