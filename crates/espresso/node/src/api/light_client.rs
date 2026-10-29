@@ -751,7 +751,6 @@ mod test {
         availability::{BlockQueryData, TransactionIndex, VidCommonQueryData},
         data_source::{
             Transaction,
-            sql::postgres::{Config, SqlStorage},
             storage::{AvailabilityStorage, UpdateAvailabilityStorage, pruning::PrunerCfg},
         },
         fetching::provider::TrustedQueryServiceProvider,
@@ -770,6 +769,7 @@ mod test {
             custom_leaf_chain_with_upgrades, leaf_chain, leaf_chain_with_upgrade,
         },
     };
+    use rstest_reuse::apply;
     use tokio::{
         net::TcpListener,
         time::{sleep, timeout},
@@ -782,8 +782,8 @@ mod test {
 
     use super::*;
     use crate::api::{
-        data_source::{Provider, SequencerDataSource, testing::TestableSequencerDataSource},
-        sql::postgres::DataSource,
+        data_source::{Provider, testing::TestableSqlDataSource},
+        test::sql_data_sources,
     };
 
     const CHAIN_LIMIT: usize = 500;
@@ -803,16 +803,12 @@ mod test {
         )
     }
 
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_two_chain() {
-        let storage = <DataSource as TestableSequencerDataSource>::create_storage().await;
-        let ds = DataSource::create(
-            DataSource::persistence_options(&storage),
-            Default::default(),
-            false,
-        )
-        .await
-        .unwrap();
+    #[apply(sql_data_sources)]
+    async fn test_two_chain<D: TestableSqlDataSource>(_d: PhantomData<D>) {
+        let storage = D::create_storage().await;
+        let ds = D::create(D::persistence_options(&storage), Default::default(), false)
+            .await
+            .unwrap();
 
         // Insert some leaves, forming a chain.
         let leaves = leaf_chain(1..=3, EPOCH_VERSION).await;
@@ -838,16 +834,12 @@ mod test {
         );
     }
 
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_finalized() {
-        let storage = <DataSource as TestableSequencerDataSource>::create_storage().await;
-        let ds = DataSource::create(
-            DataSource::persistence_options(&storage),
-            Default::default(),
-            false,
-        )
-        .await
-        .unwrap();
+    #[apply(sql_data_sources)]
+    async fn test_finalized<D: TestableSqlDataSource>(_d: PhantomData<D>) {
+        let storage = D::create_storage().await;
+        let ds = D::create(D::persistence_options(&storage), Default::default(), false)
+            .await
+            .unwrap();
 
         // Insert a single leaf. We will not be able to provide proofs ending in a leaf chain, but
         // we can return a leaf if the leaf after it is already known to be finalized.
@@ -876,16 +868,12 @@ mod test {
         );
     }
 
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_new_protocol_finalized_assumption() {
-        let storage = <DataSource as TestableSequencerDataSource>::create_storage().await;
-        let ds = DataSource::create(
-            DataSource::persistence_options(&storage),
-            Default::default(),
-            false,
-        )
-        .await
-        .unwrap();
+    #[apply(sql_data_sources)]
+    async fn test_new_protocol_finalized_assumption<D: TestableSqlDataSource>(_d: PhantomData<D>) {
+        let storage = D::create_storage().await;
+        let ds = D::create(D::persistence_options(&storage), Default::default(), false)
+            .await
+            .unwrap();
 
         let leaves = leaf_chain(1..=2, NEW_PROTOCOL_VERSION).await;
         {
@@ -913,16 +901,12 @@ mod test {
         );
     }
 
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_new_protocol_cert2() {
-        let storage = <DataSource as TestableSequencerDataSource>::create_storage().await;
-        let ds = DataSource::create(
-            DataSource::persistence_options(&storage),
-            Default::default(),
-            false,
-        )
-        .await
-        .unwrap();
+    #[apply(sql_data_sources)]
+    async fn test_new_protocol_cert2<D: TestableSqlDataSource>(_d: PhantomData<D>) {
+        let storage = D::create_storage().await;
+        let ds = D::create(D::persistence_options(&storage), Default::default(), false)
+            .await
+            .unwrap();
 
         let leaves = leaf_chain(1..=2, NEW_PROTOCOL_VERSION).await;
         let cert2_leaf = &leaves[1];
@@ -949,16 +933,12 @@ mod test {
         );
     }
 
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_new_protocol_cert2_chain_limit() {
-        let storage = <DataSource as TestableSequencerDataSource>::create_storage().await;
-        let ds = DataSource::create(
-            DataSource::persistence_options(&storage),
-            Default::default(),
-            false,
-        )
-        .await
-        .unwrap();
+    #[apply(sql_data_sources)]
+    async fn test_new_protocol_cert2_chain_limit<D: TestableSqlDataSource>(_d: PhantomData<D>) {
+        let storage = D::create_storage().await;
+        let ds = D::create(D::persistence_options(&storage), Default::default(), false)
+            .await
+            .unwrap();
 
         // A proof for the first leaf must extend to the nearest cert2, three leaves away.
         let leaves = leaf_chain(1..=4, NEW_PROTOCOL_VERSION).await;
@@ -992,16 +972,12 @@ mod test {
         );
     }
 
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_new_protocol_hint_vs_cert2() {
-        let storage = <DataSource as TestableSequencerDataSource>::create_storage().await;
-        let ds = DataSource::create(
-            DataSource::persistence_options(&storage),
-            Default::default(),
-            false,
-        )
-        .await
-        .unwrap();
+    #[apply(sql_data_sources)]
+    async fn test_new_protocol_hint_vs_cert2<D: TestableSqlDataSource>(_d: PhantomData<D>) {
+        let storage = D::create_storage().await;
+        let ds = D::create(D::persistence_options(&storage), Default::default(), false)
+            .await
+            .unwrap();
 
         let leaves = leaf_chain(1..=5, NEW_PROTOCOL_VERSION).await;
         let cert2_leaf = &leaves[1];
@@ -1056,16 +1032,12 @@ mod test {
         );
     }
 
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_distant_hint_falls_through() {
-        let storage = <DataSource as TestableSequencerDataSource>::create_storage().await;
-        let ds = DataSource::create(
-            DataSource::persistence_options(&storage),
-            Default::default(),
-            false,
-        )
-        .await
-        .unwrap();
+    #[apply(sql_data_sources)]
+    async fn test_distant_hint_falls_through<D: TestableSqlDataSource>(_d: PhantomData<D>) {
+        let storage = D::create_storage().await;
+        let ds = D::create(D::persistence_options(&storage), Default::default(), false)
+            .await
+            .unwrap();
 
         // Legacy leaves 1-3 upgrade to the new protocol at height 4, with a cert2 at height 5, so
         // both fall-through paths have a bounded proof available.
@@ -1126,16 +1098,12 @@ mod test {
         );
     }
 
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_qc_chain_chain_limit() {
-        let storage = <DataSource as TestableSequencerDataSource>::create_storage().await;
-        let ds = DataSource::create(
-            DataSource::persistence_options(&storage),
-            Default::default(),
-            false,
-        )
-        .await
-        .unwrap();
+    #[apply(sql_data_sources)]
+    async fn test_qc_chain_chain_limit<D: TestableSqlDataSource>(_d: PhantomData<D>) {
+        let storage = D::create_storage().await;
+        let ds = D::create(D::persistence_options(&storage), Default::default(), false)
+            .await
+            .unwrap();
 
         // Proving the first leaf finalized requires walking the two subsequent leaves.
         let leaves = leaf_chain(1..=3, EPOCH_VERSION).await;
@@ -1164,16 +1132,12 @@ mod test {
         );
     }
 
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_finalized_hint_too_far() {
-        let storage = <DataSource as TestableSequencerDataSource>::create_storage().await;
-        let ds = DataSource::create(
-            DataSource::persistence_options(&storage),
-            Default::default(),
-            false,
-        )
-        .await
-        .unwrap();
+    #[apply(sql_data_sources)]
+    async fn test_finalized_hint_too_far<D: TestableSqlDataSource>(_d: PhantomData<D>) {
+        let storage = D::create_storage().await;
+        let ds = D::create(D::persistence_options(&storage), Default::default(), false)
+            .await
+            .unwrap();
 
         let leaves = leaf_chain(1..=2, EPOCH_VERSION).await;
         {
@@ -1194,16 +1158,12 @@ mod test {
         assert_eq!(err.status(), StatusCode::BAD_REQUEST);
     }
 
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_qc_chain_new_protocol_cutover() {
-        let storage = <DataSource as TestableSequencerDataSource>::create_storage().await;
-        let ds = DataSource::create(
-            DataSource::persistence_options(&storage),
-            Default::default(),
-            false,
-        )
-        .await
-        .unwrap();
+    #[apply(sql_data_sources)]
+    async fn test_qc_chain_new_protocol_cutover<D: TestableSqlDataSource>(_d: PhantomData<D>) {
+        let storage = D::create_storage().await;
+        let ds = D::create(D::persistence_options(&storage), Default::default(), false)
+            .await
+            .unwrap();
 
         // Upgrade mid-chain and skew view numbers so no HotStuff 2-chain ever forms; the proof
         // for the first (pre-upgrade) leaf must fall through to cert2 finality.
@@ -1244,16 +1204,14 @@ mod test {
         );
     }
 
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_qc_chain_new_protocol_cutover_two_chain() {
-        let storage = <DataSource as TestableSequencerDataSource>::create_storage().await;
-        let ds = DataSource::create(
-            DataSource::persistence_options(&storage),
-            Default::default(),
-            false,
-        )
-        .await
-        .unwrap();
+    #[apply(sql_data_sources)]
+    async fn test_qc_chain_new_protocol_cutover_two_chain<D: TestableSqlDataSource>(
+        _d: PhantomData<D>,
+    ) {
+        let storage = D::create_storage().await;
+        let ds = D::create(D::persistence_options(&storage), Default::default(), false)
+            .await
+            .unwrap();
 
         // Upgrade at height 3: the HotStuff2 chain begun before the cutover completes without
         // needing a cert2 (none is stored).
@@ -1290,16 +1248,14 @@ mod test {
         );
     }
 
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_qc_chain_last_legacy_leaf_uses_cert2() {
-        let storage = <DataSource as TestableSequencerDataSource>::create_storage().await;
-        let ds = DataSource::create(
-            DataSource::persistence_options(&storage),
-            Default::default(),
-            false,
-        )
-        .await
-        .unwrap();
+    #[apply(sql_data_sources)]
+    async fn test_qc_chain_last_legacy_leaf_uses_cert2<D: TestableSqlDataSource>(
+        _d: PhantomData<D>,
+    ) {
+        let storage = D::create_storage().await;
+        let ds = D::create(D::persistence_options(&storage), Default::default(), false)
+            .await
+            .unwrap();
 
         // Upgrade at height 2: any 2-chain proving the last legacy leaf spans the cutover, so the
         // prover must fall through to the cert2 at height 3 instead.
@@ -1344,16 +1300,12 @@ mod test {
     /// - 2`) is finalized by the old protocol: its HotStuff2 2-chain completes
     /// within pre-cutover leaves (deciding QC belongs to `upgrade_height - 1`,
     /// still V5), so no cert2 is needed.
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_leaf_before_cutover_uses_hotstuff2() {
-        let storage = <DataSource as TestableSequencerDataSource>::create_storage().await;
-        let ds = DataSource::create(
-            DataSource::persistence_options(&storage),
-            Default::default(),
-            false,
-        )
-        .await
-        .unwrap();
+    #[apply(sql_data_sources)]
+    async fn test_leaf_before_cutover_uses_hotstuff2<D: TestableSqlDataSource>(_d: PhantomData<D>) {
+        let storage = D::create_storage().await;
+        let ds = D::create(D::persistence_options(&storage), Default::default(), false)
+            .await
+            .unwrap();
 
         // Cutover at height 4, so `upgrade_height - 2` is height 2 (leaves[1]).
         let leaves = leaf_chain_with_upgrade(
@@ -1394,16 +1346,12 @@ mod test {
     /// (`upgrade_height - 2`) instead falls through to cert2 finality. Skewing
     /// the view numbers breaks the consecutive-view requirement, so no 2-chain
     /// forms and the proof terminates at the first cert2.
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_leaf_before_cutover_uses_cert2() {
-        let storage = <DataSource as TestableSequencerDataSource>::create_storage().await;
-        let ds = DataSource::create(
-            DataSource::persistence_options(&storage),
-            Default::default(),
-            false,
-        )
-        .await
-        .unwrap();
+    #[apply(sql_data_sources)]
+    async fn test_leaf_before_cutover_uses_cert2<D: TestableSqlDataSource>(_d: PhantomData<D>) {
+        let storage = D::create_storage().await;
+        let ds = D::create(D::persistence_options(&storage), Default::default(), false)
+            .await
+            .unwrap();
 
         // Cutover at height 4, so `upgrade_height - 2` is height 2 (leaves[1]).
         // Skewed views mean no HotStuff2 2-chain ever forms.
@@ -1446,8 +1394,8 @@ mod test {
 
     /// Every leaf of a history whose tip is past the 0.6 cutover is proved from stored leaves and
     /// cert2s alone, with no legacy QC chain stored.
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_leaf_proofs_across_history() {
+    #[apply(sql_data_sources)]
+    async fn test_leaf_proofs_across_history<D: TestableSqlDataSource>(_d: PhantomData<D>) {
         // Every protocol version from mainnet's 0.2 genesis on, with the height it took effect.
         const UPGRADES: [(u64, Version); 4] = [
             (6, EPOCH_VERSION),
@@ -1479,14 +1427,10 @@ mod test {
         .await;
         let leaf_at = |height: u64| &leaves[height as usize - 1];
 
-        let storage = <DataSource as TestableSequencerDataSource>::create_storage().await;
-        let ds = DataSource::create(
-            DataSource::persistence_options(&storage),
-            Default::default(),
-            false,
-        )
-        .await
-        .unwrap();
+        let storage = D::create_storage().await;
+        let ds = D::create(D::persistence_options(&storage), Default::default(), false)
+            .await
+            .unwrap();
         {
             let mut tx = ds.write().await.unwrap();
             for leaf in &leaves {
@@ -1550,16 +1494,12 @@ mod test {
         }
     }
 
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_bad_finalized() {
-        let storage = <DataSource as TestableSequencerDataSource>::create_storage().await;
-        let ds = DataSource::create(
-            DataSource::persistence_options(&storage),
-            Default::default(),
-            false,
-        )
-        .await
-        .unwrap();
+    #[apply(sql_data_sources)]
+    async fn test_bad_finalized<D: TestableSqlDataSource>(_d: PhantomData<D>) {
+        let storage = D::create_storage().await;
+        let ds = D::create(D::persistence_options(&storage), Default::default(), false)
+            .await
+            .unwrap();
 
         // Insert a single leaf. If we request this leaf but provide a finalized leaf which is
         // earlier, we should fail.
@@ -1582,16 +1522,12 @@ mod test {
         assert_eq!(err.status(), StatusCode::BAD_REQUEST);
     }
 
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_no_chain() {
-        let storage = <DataSource as TestableSequencerDataSource>::create_storage().await;
-        let ds = DataSource::create(
-            DataSource::persistence_options(&storage),
-            Default::default(),
-            false,
-        )
-        .await
-        .unwrap();
+    #[apply(sql_data_sources)]
+    async fn test_no_chain<D: TestableSqlDataSource>(_d: PhantomData<D>) {
+        let storage = D::create_storage().await;
+        let ds = D::create(D::persistence_options(&storage), Default::default(), false)
+            .await
+            .unwrap();
 
         // Insert multiple leaves that don't chain. We will not be able to prove these are
         // finalized.
@@ -1629,16 +1565,12 @@ mod test {
         assert_eq!(err.status(), StatusCode::NOT_FOUND);
     }
 
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_chain_ends_before_finality() {
-        let storage = <DataSource as TestableSequencerDataSource>::create_storage().await;
-        let ds = DataSource::create(
-            DataSource::persistence_options(&storage),
-            Default::default(),
-            false,
-        )
-        .await
-        .unwrap();
+    #[apply(sql_data_sources)]
+    async fn test_chain_ends_before_finality<D: TestableSqlDataSource>(_d: PhantomData<D>) {
+        let storage = D::create_storage().await;
+        let ds = D::create(D::persistence_options(&storage), Default::default(), false)
+            .await
+            .unwrap();
 
         // A legacy tip, as every replayed pre-0.6 chain has: the next leaf chains onto the
         // requested one, but no deciding QC has arrived and no cert2 ever will.
@@ -1683,17 +1615,12 @@ mod test {
         );
     }
 
-    #[tokio::test]
-    #[test_log::test]
-    async fn test_header_proof() {
-        let storage = <DataSource as TestableSequencerDataSource>::create_storage().await;
-        let ds = DataSource::create(
-            DataSource::persistence_options(&storage),
-            Default::default(),
-            false,
-        )
-        .await
-        .unwrap();
+    #[apply(sql_data_sources)]
+    async fn test_header_proof<D: TestableSqlDataSource>(_d: PhantomData<D>) {
+        let storage = D::create_storage().await;
+        let ds = D::create(D::persistence_options(&storage), Default::default(), false)
+            .await
+            .unwrap();
 
         // Construct a chain of leaves, plus the corresponding block Merkle tree at each leaf.
         let leaves = leaf_chain(0..=2, EPOCH_VERSION).await;
@@ -1831,18 +1758,14 @@ mod test {
     /// A data source with `num_leaves` headers, state at every height, and state below `pruned`
     /// collected. Returns the data source and the block tree at each height. The storage guard
     /// keeps the database alive.
-    async fn pruned_data_source(
+    async fn pruned_data_source<D: TestableSqlDataSource>(
         num_leaves: usize,
         pruned: u64,
-    ) -> (impl Sized, DataSource, Vec<BlockMerkleTree>) {
-        let storage = <DataSource as TestableSequencerDataSource>::create_storage().await;
-        let ds = DataSource::create(
-            DataSource::persistence_options(&storage),
-            Default::default(),
-            false,
-        )
-        .await
-        .unwrap();
+    ) -> (impl Sized, D, Vec<BlockMerkleTree>) {
+        let storage = D::create_storage().await;
+        let ds = D::create(D::persistence_options(&storage), Default::default(), false)
+            .await
+            .unwrap();
 
         let leaves = leaf_chain(0..num_leaves as u64, EPOCH_VERSION).await;
         let mts = leaves
@@ -1885,16 +1808,14 @@ mod test {
 
         let cfg =
             PrunerCfg::default().with_state_tables(vec![BlockMerkleTree::state_type().into()]);
-        let sql: &SqlStorage = ds.as_ref();
-        sql.prune_state_below(pruned, 0, &cfg).await.unwrap();
+        D::prune_state_below(&ds, pruned, &cfg).await.unwrap();
         (storage, ds, mts)
     }
 
-    #[tokio::test]
-    #[test_log::test]
-    async fn test_header_proof_pruned_root() {
+    #[apply(sql_data_sources)]
+    async fn test_header_proof_pruned_root<D: TestableSqlDataSource>(_d: PhantomData<D>) {
         let num_leaves = 40;
-        let (_storage, ds, mts) = pruned_data_source(num_leaves, 30).await;
+        let (_storage, ds, mts) = pruned_data_source::<D>(num_leaves, 30).await;
 
         // Roots below the pruned height are rebuilt from the newest snapshot.
         for root in [1, 2, 4, 10, 13, 27, 28] {
@@ -1912,10 +1833,11 @@ mod test {
         }
     }
 
-    #[tokio::test]
-    #[test_log::test]
-    async fn test_header_proof_root_beyond_head_fails() {
-        let (_storage, ds, _) = pruned_data_source(10, 5).await;
+    #[apply(sql_data_sources)]
+    async fn test_header_proof_root_beyond_head_fails<D: TestableSqlDataSource>(
+        _d: PhantomData<D>,
+    ) {
+        let (_storage, ds, _) = pruned_data_source::<D>(10, 5).await;
         // The state at the head height is stored; beyond it there is no snapshot to rebuild from.
         let err = get_header_proof(&ds, 20, BlockId::Number(3), Duration::from_secs(10))
             .await
@@ -1923,17 +1845,12 @@ mod test {
         assert_eq!(err.status(), StatusCode::NOT_FOUND);
     }
 
-    #[tokio::test]
-    #[test_log::test]
-    async fn test_namespace_proof() {
-        let storage = <DataSource as TestableSequencerDataSource>::create_storage().await;
-        let ds = DataSource::create(
-            DataSource::persistence_options(&storage),
-            Default::default(),
-            false,
-        )
-        .await
-        .unwrap();
+    #[apply(sql_data_sources)]
+    async fn test_namespace_proof<D: TestableSqlDataSource>(_d: PhantomData<D>) {
+        let storage = D::create_storage().await;
+        let ds = D::create(D::persistence_options(&storage), Default::default(), false)
+            .await
+            .unwrap();
 
         // Construct a chain of blocks.
         let client = TestClient::default();
@@ -2048,25 +1965,21 @@ mod test {
 
     /// A proof no stored cert2 can complete asks the peers for one. The peer 404s the requested
     /// height itself, so recovery has to reach a descendant.
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_cert2_recovery_from_peer() {
+    #[apply(sql_data_sources)]
+    async fn test_cert2_recovery_from_peer<D: TestableSqlDataSource>(_d: PhantomData<D>) {
         let leaves = leaf_chain(1..=4, NEW_PROTOCOL_VERSION).await;
         let (peer, requested) = serve_cert2(cert2_for_leaf(&leaves[1])).await;
 
         // Once with no cert2 stored, once with one stored too far past the requested leaf.
         for stored_out_of_limit in [false, true] {
             requested.lock().unwrap().clear();
-            let storage = <DataSource as TestableSequencerDataSource>::create_storage().await;
-            let ds = Config::try_from(&*DataSource::persistence_options(&storage))
-                .unwrap()
-                .builder(Provider::default().with_cert2_provider(peer.clone()))
-                .await
-                .unwrap()
-                .disable_proactive_fetching()
-                .disable_aggregator()
-                .build()
-                .await
-                .unwrap();
+            let storage = D::create_storage().await;
+            let ds = D::on_request_data_source(
+                &storage,
+                Provider::default().with_cert2_provider(peer.clone()),
+            )
+            .await
+            .unwrap();
             {
                 let mut tx = ds.write().await.unwrap();
                 for leaf in &leaves {
@@ -2122,21 +2035,14 @@ mod test {
     }
 
     /// Recovery stops at `chain_limit` past the requested leaf, even with a cert2 just beyond.
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_cert2_recovery_stops_at_the_window() {
+    #[apply(sql_data_sources)]
+    async fn test_cert2_recovery_stops_at_the_window<D: TestableSqlDataSource>(_d: PhantomData<D>) {
         let leaves = leaf_chain(1..=4, NEW_PROTOCOL_VERSION).await;
         // The only cert2 the peer has is one leaf beyond what a `chain_limit` of 2 may reach.
         let (peer, requested) = serve_cert2(cert2_for_leaf(&leaves[3])).await;
 
-        let storage = <DataSource as TestableSequencerDataSource>::create_storage().await;
-        let ds = Config::try_from(&*DataSource::persistence_options(&storage))
-            .unwrap()
-            .builder(Provider::default().with_cert2_provider(peer))
-            .await
-            .unwrap()
-            .disable_proactive_fetching()
-            .disable_aggregator()
-            .build()
+        let storage = D::create_storage().await;
+        let ds = D::on_request_data_source(&storage, Provider::default().with_cert2_provider(peer))
             .await
             .unwrap();
         {

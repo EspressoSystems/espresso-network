@@ -5033,6 +5033,8 @@ dependencies = [
  "rand 0.8.6",
  "refinery",
  "refinery-core",
+ "rstest",
+ "rstest_reuse",
  "serde",
  "serde_json",
  "snafu 0.8.9",

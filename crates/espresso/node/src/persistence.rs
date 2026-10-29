@@ -281,6 +281,7 @@ mod tests {
         RECENT_STAKE_TABLES_LIMIT, SequencerApiVersion,
         api::{
             Options,
+            data_source::testing::TestableSqlDataSource,
             test_helpers::{STAKE_TABLE_CAPACITY_FOR_TEST, TestNetwork, TestNetworkConfigBuilder},
         },
         catchup::NullStateCatchup,
@@ -304,9 +305,9 @@ mod tests {
 
     #[rstest_reuse::template]
     #[rstest::rstest]
-    #[case(PhantomData::<crate::persistence::sql::postgres::Persistence>)]
-    #[case(PhantomData::<crate::persistence::sql::sqlite::Persistence>)]
-    #[case(PhantomData::<crate::persistence::fs::Persistence>)]
+    #[case::postgres(PhantomData::<crate::persistence::sql::postgres::Persistence>)]
+    #[case::sqlite(PhantomData::<crate::persistence::sql::sqlite::Persistence>)]
+    #[case::fs(PhantomData::<crate::persistence::fs::Persistence>)]
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     pub fn persistence_types<P: TestablePersistence>(#[case] _p: PhantomData<P>) {}
 
@@ -1769,8 +1770,8 @@ mod tests {
     /// sql-only: the fs backend keeps the pop-oldest cursor and skips gaps (the consumer
     /// re-fetches missing blocks), trading gap-fill delivery for cheap decide passes.
     #[rstest::rstest]
-    #[case(PhantomData::<crate::persistence::sql::postgres::Persistence>)]
-    #[case(PhantomData::<crate::persistence::sql::sqlite::Persistence>)]
+    #[case::postgres(PhantomData::<crate::persistence::sql::postgres::Persistence>)]
+    #[case::sqlite(PhantomData::<crate::persistence::sql::sqlite::Persistence>)]
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     pub async fn test_decide_gap_holds_events<P: TestablePersistence>(#[case] _p: PhantomData<P>) {
         let tmp = P::tmp_storage().await;
@@ -1814,8 +1815,8 @@ mod tests {
     ///
     /// sql-only: see [`test_decide_gap_holds_events`].
     #[rstest::rstest]
-    #[case(PhantomData::<crate::persistence::sql::postgres::Persistence>)]
-    #[case(PhantomData::<crate::persistence::sql::sqlite::Persistence>)]
+    #[case::postgres(PhantomData::<crate::persistence::sql::postgres::Persistence>)]
+    #[case::sqlite(PhantomData::<crate::persistence::sql::sqlite::Persistence>)]
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     pub async fn test_decide_gap_fill_delivers_all<P: TestablePersistence>(
         #[case] _p: PhantomData<P>,
@@ -2257,10 +2258,17 @@ mod tests {
 
     /// Nodes still read the whole event history of mainnet's stake table contract, which went from
     /// V1 to V2 to V3 as the v4 chain's did.
+    #[rstest::rstest]
+    #[case::postgres(PhantomData::<crate::api::sql::postgres::DataSource>)]
+    #[case::sqlite(PhantomData::<crate::api::sql::sqlite::DataSource>)]
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_legacy_stake_table_events() -> anyhow::Result<()> {
+    async fn test_legacy_stake_table_events<D>(#[case] _d: PhantomData<D>) -> anyhow::Result<()>
+    where
+        D: TestableSqlDataSource,
+        <D::Options as PersistenceOptions>::Persistence: TestablePersistence,
+    {
         let chain = LegacyChain::load("v4")?;
-        let replay = chain.replay().await?;
+        let replay = chain.replay::<D>().await?;
         let node_state = replay.node.node_state();
         let contract = node_state.chain_config.stake_table_contract.unwrap();
         let l1_client = L1Client::new(vec![replay.l1.endpoint_url()])?;

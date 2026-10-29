@@ -3016,6 +3016,8 @@ async fn select_some<T>(
 
 #[cfg(test)]
 mod test {
+    use std::marker::PhantomData;
+
     use hotshot_example_types::{
         block_types::{TestBlockHeader, TestMetadata},
         node_types::TEST_VERSIONS,
@@ -3026,18 +3028,12 @@ mod test {
         traits::{BlockPayload, block_contents::EncodeBytes},
         utils::BuilderCommitment,
     };
+    use rstest_reuse::apply;
 
     use super::{leaf::RangeRequest, *};
-    use crate::{
-        data_source::{
-            sql::postgres::{SqlStorage, testing::TmpDb},
-            storage::StorageConnectionType,
-        },
-        fetching::provider::NoFetching,
-        testing::{
-            consensus::MockSqlDataSource,
-            mocks::{MockPayload, MockTypes, mock_transaction},
-        },
+    use crate::testing::{
+        consensus::{SavePrunedHeight, TestableDataSource, sql_data_sources},
+        mocks::{MockPayload, MockTypes, mock_transaction},
     };
 
     #[test]
@@ -3205,18 +3201,19 @@ mod test {
         );
     }
 
-    async fn test_sync_status(chunk_size: usize, present_ranges: &[(usize, usize)]) {
+    async fn test_sync_status<D>(chunk_size: usize, present_ranges: &[(usize, usize)])
+    where
+        D: TestableDataSource,
+        for<'a> D::Transaction<'a>: UpdateAvailabilityStorage<MockTypes> + SavePrunedHeight,
+    {
         let block_height = present_ranges.last().unwrap().1;
-        let storage = TmpDb::init().await;
-        let db = SqlStorage::connect(storage.config(), StorageConnectionType::Query)
-            .await
-            .unwrap();
-        let ds = MockSqlDataSource::builder(db, NoFetching)
-            .with_sync_status_chunk_size(chunk_size)
-            .with_sync_status_ttl(Duration::ZERO)
-            .build()
-            .await
-            .unwrap();
+        let storage = D::create(0).await;
+        let ds = D::build(&storage, |builder| {
+            builder
+                .with_sync_status_chunk_size(chunk_size)
+                .with_sync_status_ttl(Duration::ZERO)
+        })
+        .await;
 
         // Generate some mock leaves to insert.
         let mut leaves: Vec<LeafQueryData<MockTypes>> = vec![
@@ -3308,31 +3305,42 @@ mod test {
         assert_eq!(ranges.next(), None);
     }
 
-    #[tokio::test]
-    #[test_log::test]
-    async fn test_sync_status_multiple_chunks() {
-        test_sync_status(10, &[(0, 1), (3, 5), (8, 10)]).await;
+    #[apply(sql_data_sources)]
+    async fn test_sync_status_multiple_chunks<D>(_d: PhantomData<D>)
+    where
+        D: TestableDataSource,
+        for<'a> D::Transaction<'a>: UpdateAvailabilityStorage<MockTypes> + SavePrunedHeight,
+    {
+        test_sync_status::<D>(10, &[(0, 1), (3, 5), (8, 10)]).await;
     }
 
-    #[tokio::test]
-    #[test_log::test]
-    async fn test_sync_status_multiple_chunks_present_range_overlapping_chunk() {
-        test_sync_status(5, &[(1, 4)]).await;
+    #[apply(sql_data_sources)]
+    async fn test_sync_status_multiple_chunks_present_range_overlapping_chunk<D>(_d: PhantomData<D>)
+    where
+        D: TestableDataSource,
+        for<'a> D::Transaction<'a>: UpdateAvailabilityStorage<MockTypes> + SavePrunedHeight,
+    {
+        test_sync_status::<D>(5, &[(1, 4)]).await;
     }
 
-    #[tokio::test]
-    #[test_log::test]
-    async fn test_sync_status_multiple_chunks_missing_range_overlapping_chunk() {
-        test_sync_status(5, &[(0, 1), (4, 5)]).await;
+    #[apply(sql_data_sources)]
+    async fn test_sync_status_multiple_chunks_missing_range_overlapping_chunk<D>(_d: PhantomData<D>)
+    where
+        D: TestableDataSource,
+        for<'a> D::Transaction<'a>: UpdateAvailabilityStorage<MockTypes> + SavePrunedHeight,
+    {
+        test_sync_status::<D>(5, &[(0, 1), (4, 5)]).await;
     }
 
-    #[tokio::test]
-    #[test_log::test]
-    async fn test_load_range_incomplete() {
-        let storage = TmpDb::init().await;
-        let db = SqlStorage::connect(storage.config(), StorageConnectionType::Query)
-            .await
-            .unwrap();
+    #[apply(sql_data_sources)]
+    async fn test_load_range_incomplete<D>(_d: PhantomData<D>)
+    where
+        D: TestableDataSource,
+        for<'a> D::Transaction<'a>: UpdateAvailabilityStorage<MockTypes>,
+        for<'a> D::ReadOnly<'a>: AvailabilityStorage<MockTypes>,
+    {
+        let storage = D::create(0).await;
+        let db = D::connect(&storage).await;
         {
             let mut tx = db.write().await.unwrap();
             tx.insert_leaf(
@@ -3425,18 +3433,15 @@ mod test {
     /// `n * (n + 1) / 2`. A double-count or skip would fail the final assertion.
     ///
     /// This test is slow because it must wait for `AGGREGATOR_RETRY_INTERVAL` (30 s) to elapse.
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    #[apply(sql_data_sources)]
     #[cfg(not(target_os = "windows"))]
-    async fn test_aggregator_recovery_after_missed_notification() {
-        let storage = TmpDb::init().await;
-        let db = SqlStorage::connect(storage.config(), StorageConnectionType::Query)
-            .await
-            .unwrap();
-
-        let ds = MockSqlDataSource::builder(db, NoFetching)
-            .build()
-            .await
-            .unwrap();
+    async fn test_aggregator_recovery_after_missed_notification<D>(_d: PhantomData<D>)
+    where
+        D: TestableDataSource,
+        for<'a> D::Transaction<'a>: UpdateAvailabilityStorage<MockTypes>,
+    {
+        let storage = D::create(0).await;
+        let ds = D::connect(&storage).await;
 
         // Build N blocks: block at height i has i+1 transactions.
         // Each block gets a distinct payload (and thus a distinct payload_commitment),
@@ -3494,8 +3499,7 @@ mod test {
         // `store_and_notify`. The aggregator task has already started and is waiting on a
         // notification for height 0 that will never arrive via this path.
         {
-            let inner = ds.inner();
-            let mut tx = inner.write().await.unwrap();
+            let mut tx = ds.write().await.unwrap();
             for leaf in &leaves {
                 tx.insert_leaf(leaf).await.unwrap();
             }
