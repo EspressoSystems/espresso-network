@@ -434,6 +434,7 @@ where
             .expect("genesis sets a block size");
         let max_message_size = Some(message_limit(largest));
         let name = format!("espresso-{}", genesis.chain_config.chain_id);
+        let lanes = query_handlers.is_some().then_some(query_peers::QUERY_LANE);
         move |upgrade| {
             Cliquenet::create(
                 name,
@@ -442,6 +443,7 @@ where
                 bind_addr,
                 [],
                 max_message_size,
+                lanes,
                 upgrade,
                 metrics,
             )
@@ -1618,6 +1620,7 @@ pub mod testing {
                     coordinator_addr,
                     [],
                     Some(message_limit(max_block_size)),
+                    [query_peers::QUERY_LANE],
                     upgrade,
                     Box::new(NoMetrics),
                 )

@@ -20,7 +20,7 @@ use espresso_api::{
     v1,
 };
 use espresso_types::{PubKey, SeqTypes};
-use hotshot_new_protocol::network::{QueryEvent, QueryReceiver, QuerySender};
+use hotshot_new_protocol::network::{LaneEvent, LaneId, LaneReceiver, LaneSender};
 use hotshot_query_service::Error;
 use http_client::{StatusCode, error::ClientError as _};
 use parking_lot::Mutex;
@@ -30,6 +30,9 @@ use tokio::{select, sync::oneshot, task::JoinSet, time::timeout};
 use tracing::{debug, error};
 
 use crate::{api::context::ConsensusSource, context::TaskList};
+
+/// The cliquenet lane query requests and replies travel on. Every node must use the same id.
+pub(crate) const QUERY_LANE: LaneId = LaneId::new(1);
 
 /// What a light client asks a peer for, one variant per HTTP API handler it runs.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -84,7 +87,7 @@ impl QueryHandlers {
 pub struct QueryPeers(Arc<Inner>);
 
 struct Inner {
-    sender: QuerySender<SeqTypes>,
+    sender: LaneSender<SeqTypes>,
     consensus: Arc<dyn ConsensusSource>,
     public_key: PubKey,
     handlers: QueryHandlers,
@@ -98,7 +101,7 @@ struct Inner {
 impl QueryPeers {
     /// Start answering peers and return the handle that asks them.
     pub fn start(
-        (sender, receiver): (QuerySender<SeqTypes>, QueryReceiver<SeqTypes>),
+        (sender, receiver): (LaneSender<SeqTypes>, LaneReceiver<SeqTypes>),
         handlers: QueryHandlers,
         consensus: Arc<dyn ConsensusSource>,
         public_key: PubKey,
@@ -114,7 +117,7 @@ impl QueryPeers {
             silent: Default::default(),
         }));
         tasks.spawn("query peers", peers.clone().run(receiver));
-        if let Err(err) = peers.0.sender.accept_query_lanes() {
+        if let Err(err) = peers.0.sender.accept() {
             error!(err = %format_args!("{err:#}"), "cannot accept query lanes");
         }
         peers
@@ -170,7 +173,7 @@ impl QueryPeers {
     }
 
     /// Route replies and answer requests until the network shuts down.
-    async fn run(self, mut receiver: QueryReceiver<SeqTypes>) {
+    async fn run(self, mut receiver: LaneReceiver<SeqTypes>) {
         // Capped by the network's per peer budget, so a burst of requests can neither pile up
         // handler work nor hold back the replies this node is waiting for. Each peer gets an
         // equal share of it, so one peer catching up cannot take every answer.
@@ -182,9 +185,9 @@ impl QueryPeers {
             select! {
                 event = receiver.receive() => {
                     let (from, bytes) = match event {
-                        Some(QueryEvent::Message(from, bytes)) => (from, bytes),
+                        Some(LaneEvent::Message(from, bytes)) => (from, bytes),
                         // Nothing asked of the peer gets answered, so its calls fail now.
-                        Some(QueryEvent::Unreachable(peer)) => {
+                        Some(LaneEvent::Unreachable(peer)) => {
                             self.0.pending.lock().retain(|(key, _), _| *key != peer);
                             continue;
                         },

@@ -57,10 +57,10 @@ async fn connection_pair(
             conn.send_hello(Hello::Ok).await.unwrap();
             conn
         },
-        Connection::connect(conf_a, pkb, addr, Lane::Consensus),
+        Connection::connect(conf_a, pkb, addr, Lane::Main),
     );
     (
-        ca.expect("a consensus connect only returns once it succeeds"),
+        ca.expect("a main connect only returns once it succeeds"),
         cb,
     )
 }

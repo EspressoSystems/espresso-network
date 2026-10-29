@@ -77,9 +77,9 @@ impl Connection {
 
     /// Connect to `peer` at `addr` and open `lane`.
     ///
-    /// A consensus connection is retried until it succeeds. A query
-    /// connection gets one attempt and returns `None` when the party refused
-    /// the lane or could not be reached.
+    /// The main connection is retried until it succeeds. An extra lane gets
+    /// one attempt and returns `None` when the party refused the lane or
+    /// could not be reached.
     pub async fn connect(
         conf: Arc<Config>,
         peer: PublicKey,
@@ -87,11 +87,11 @@ impl Connection {
         lane: Lane,
     ) -> Option<Self> {
         let hello = match lane {
-            Lane::Consensus => Hello::Ok,
-            Lane::Query => Hello::OkQuery,
+            Lane::Main => Hello::Ok,
+            Lane::Extra(id) => Hello::OkLane(id),
         };
-        // Query lanes open one at a time on demand, so spreading their dials gains nothing.
-        let first_delay = if conf.random_connect_delay && lane == Lane::Consensus {
+        // Extra lanes open one at a time on demand, so spreading their dials gains nothing.
+        let first_delay = if conf.random_connect_delay && lane == Lane::Main {
             Duration::from_millis(rand::rng().random_range(0..1000))
         } else {
             Duration::ZERO
@@ -124,9 +124,9 @@ impl Connection {
                     });
                     match hello_exchange.await {
                         Ok(h) if h == hello => return Some(conn),
-                        // Parties that do not serve queries refuse, which is expected.
-                        Ok(h) if lane == Lane::Query => {
-                            debug!(name = %conf.name, %node, %peer, %addr, ?h, "query lane refused");
+                        // Parties that do not accept the lane refuse, which is expected.
+                        Ok(h) if lane != Lane::Main => {
+                            debug!(name = %conf.name, %node, %peer, %addr, ?lane, ?h, "lane refused");
                             return None;
                         },
                         Ok(h) => {
@@ -158,8 +158,8 @@ impl Connection {
                     warn!(name = %conf.name, %node, %peer, %addr, %err, "connect/handshake error")
                 },
             }
-            // The next send redials a query lane, so retrying here would only hold a stale task.
-            if lane == Lane::Query {
+            // The next send redials an extra lane, so retrying here would only hold a stale task.
+            if lane != Lane::Main {
                 return None;
             }
         }

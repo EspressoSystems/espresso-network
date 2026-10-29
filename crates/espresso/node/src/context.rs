@@ -60,7 +60,7 @@ use crate::{
     consensus_handle::ConsensusHandle,
     external_event_handler::ExternalEventHandler,
     proposal_fetcher::ProposalFetcherConfig,
-    query_peers::{QueryHandlers, QueryPeers, QueryRequest},
+    query_peers::{QUERY_LANE, QueryHandlers, QueryPeers, QueryRequest},
     request_response::{
         RequestResponseProtocol,
         data_source::{DataSource, Storage as RequestResponseStorage},
@@ -188,7 +188,7 @@ where
         // Taken before the network moves into the coordinator, so query traffic never passes
         // through it.
         let query_lane = query_handlers
-            .and_then(|handlers| Some((coordinator_network.take_query_lane()?, handlers)));
+            .and_then(|handlers| Some((coordinator_network.take_lane(QUERY_LANE)?, handlers)));
 
         let current_epoch = bootstrap_epoch_window(
             &membership_coordinator,
