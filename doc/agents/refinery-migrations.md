@@ -14,8 +14,8 @@ tables).
 ## Deferred backfill pattern for large data migrations
 
 When a migration requires transforming or copying a significant amount of existing data, use the `DataBackfill` trait
-(`crates/hotshot-query-service/src/migration.rs`) instead of doing the work in Refinery. This runs the data work in a
-background task after the node has started and joined consensus.
+(`crates/hotshot-query-service/src/data_source/storage/sql/migration.rs`) instead of doing the work in Refinery. This
+runs the data work in a background task after the node has started and joined consensus.
 
 **When to use this pattern:** any migration where the amount of work is proportional to the size of the existing
 database (e.g. copying rows to a new table, recomputing a column, reformatting data).
@@ -27,7 +27,7 @@ database (e.g. copying rows to a new table, recomputing a column, reformatting d
    fully-migrated states serve correct data.
 3. **Update write paths** to write only to the new table going forward.
 4. **Implement `DataBackfill`** (the trait, its registry and their tests live in
-   `crates/hotshot-query-service/src/migration.rs`):
+   `crates/hotshot-query-service/src/data_source/storage/sql/migration.rs`):
    - `name()` must be globally unique and stable (it is persisted in `deferred_migrations`).
    - `run_batch()` receives a cursor `offset` and returns `Some(next_offset)` to continue or `None` when done. Use
      keyset pagination (not OFFSET) to avoid O(n²) query cost.
