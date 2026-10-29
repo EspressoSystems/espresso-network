@@ -669,11 +669,22 @@
         </select>
       </div>
       <div class="chart" id="ch-tl"></div>
+      <p class="note" id="tl-verdict" style="margin-top: 8px; color: var(--fg)"></p>
       <p class="note" style="margin-top: 8px">
         One view V at the current settings and this block size, t = 0 at the proposal of V. Hatched spans wait on the
         network or on peers; solid spans are the node's own compute, storage, or bytes leaving its interface. Hover a
         span for its duration. The next leader's rows drive the view; the q-th voter's vote1 is the one that forms
         Cert1.
+      </p>
+      <p class="note" style="margin-top: 6px">
+        <b>Reading the decode.</b> A node may vote1 on V only once it holds block V−1, so look at the q-th voter's "vote
+        path" row: a hatched "wait for block V−1" span between "validate" and "rebroadcast" means its decode of V−1
+        ended after the proposal paired, the vote left late, and Cert1 and the next proposal moved with it. That is
+        decode on the view's critical path. No such span means the decode finished inside the window: the gap between
+        the end of "decode" on the previous view's "block V" row and the vote is slack, and only bandwidth or latency
+        bind. The "finality" row tells the second story: a "wait for block V" span between "Cert1" and "persist" means
+        vote2 waited on the decode of V, which delays finality but not the view. The latency and window charts above say
+        the same at every block size: decode sits on the critical path where the decode line crosses above the window.
       </p>
     </section>
   </div>
@@ -1817,7 +1828,16 @@
       const { d } = MODEL.delays(cfg.profile, cfg.n, cfg.uniformMs, PROFILES);
       const r = MODEL.runViews(cfg.n, cfg.k, d, mb, cfg.gbps, leaders, views, cfg.compute, cfg.lane);
       const v = pickView(r, 20, views - 5, $("tl-which").value);
-      renderTimeline($("ch-tl"), timelineLanes(r, v, cfg, mb), r, v);
+      const tl = timelineLanes(r, v, cfg, mb);
+      renderTimeline($("ch-tl"), tl, r, v);
+      const verdict =
+        tl.decodeWait > 0.5
+          ? `In this view the decode is on the critical path: the q-th voter (node ${tl.critical}) finished decoding V−1 ${fmt(tl.decodeWait)} ms after it was otherwise ready to vote1, so Cert1 and the proposal of V+1 came that much later.`
+          : `In this view the decode is not the bottleneck: the q-th voter (node ${tl.critical}) finished decoding V−1 ${fmt(tl.decodeSlack)} ms before it was ready to vote1, so a decode up to ${fmt(tl.decodeMs + tl.decodeSlack)} ms (${fmt(tl.decodeMs)} now) would still leave the view where it is.` +
+            (tl.blockWait > 0.5
+              ? ` Its vote2 did wait ${fmt(tl.blockWait)} ms for block V, which lands on finality, not on the view.`
+              : " Its vote2 did not wait for block V either.");
+      $("tl-verdict").textContent = verdict;
       $("lg-tl").innerHTML = Object.entries(TL_CAT)
         .map(
           ([cat, [c, name]]) =>
@@ -1946,7 +1966,21 @@
         },
       ];
       const dec = Float64Array.from(r.decided[v]).sort();
-      return { lanes, view: ms(r.proposed[v + 1]), finality: ms(dec[q - 1]) };
+      // Where the q-th voter's decode sat: ahead of its vote1 on V (slack) or behind it (a wait).
+      const j = critical;
+      const decodeWait = ms(r.vote1Out[v][j]) - ms(r.ready[v][j]);
+      const decodeSlack = ms(r.ready[v][j]) - ms(r.recovered[v - 1][j]);
+      const blockWait = ms(r.vote2[v][j]) - vote2 - ms(r.cert1[v][j]);
+      return {
+        lanes,
+        view: ms(r.proposed[v + 1]),
+        finality: ms(dec[q - 1]),
+        critical,
+        decodeWait,
+        decodeSlack,
+        blockWait,
+        decodeMs: cost("decode"),
+      };
     }
     function renderTimeline(el, tl, r, v) {
       const segs = tl.lanes.flatMap((l) => l.rows.flat());
