@@ -518,16 +518,9 @@ impl TestRunner {
                 continue;
             }
             let upgrade_lock = self.make_upgrade_lock(i).await;
-            let network = create_network(
-                i,
-                &parties,
-                &self.blocked_pairs,
-                self.starved_of_shares.get(&i).cloned().unwrap_or_default(),
-                &unreachable_addr,
-                &upgrade_lock,
-                self.drop_inbound.clone(),
-            )
-            .await;
+            let network = self
+                .create_network(i, &parties, &unreachable_addr, &upgrade_lock)
+                .await;
 
             let (membership, storage, client, external_events_tx) =
                 self.make_membership(public_key, self.node_storages[i].clone(), &connect_infos);
@@ -651,19 +644,14 @@ impl TestRunner {
                                     self.node_storages[change.idx] = TestStorage::default();
                                 }
                                 let upgrade_lock = self.make_upgrade_lock(change.idx).await;
-                                let net = create_network(
-                                    change.idx,
-                                    &parties,
-                                    &self.blocked_pairs,
-                                    self.starved_of_shares
-                                        .get(&change.idx)
-                                        .cloned()
-                                        .unwrap_or_default(),
-                                    &unreachable_addr,
-                                    &upgrade_lock,
-                                    self.drop_inbound.clone(),
-                                )
-                                .await;
+                                let net = self
+                                    .create_network(
+                                        change.idx,
+                                        &parties,
+                                        &unreachable_addr,
+                                        &upgrade_lock,
+                                    )
+                                    .await;
                                 let (membership, storage, client, external_events_tx) = self
                                     .make_membership(
                                         parties[change.idx].1,
@@ -850,72 +838,80 @@ impl TestRunner {
     }
 }
 
-async fn create_network(
-    i: usize,
-    parties: &[(Keypair, BLSPubKey, NetAddr)],
-    blocked_pairs: &BTreeSet<(usize, usize)>,
-    starved_views: BTreeSet<ViewNumber>,
-    unreachable_addr: &NetAddr,
-    lock: &UpgradeLock<TestTypes>,
-    drop_inbound: Option<DropInbound>,
-) -> Cliquenet<TestTypes> {
-    let peer_infos: Vec<(BLSPubKey, PeerConnectInfo)> = parties
-        .iter()
-        .enumerate()
-        .map(|(j, (kp, pk, addr))| {
-            let blocked = blocked_pairs.contains(&(i, j)) || blocked_pairs.contains(&(j, i));
-            (
-                *pk,
-                PeerConnectInfo {
-                    x25519_key: kp.public_key(),
-                    p2p_addr: if blocked {
-                        unreachable_addr.clone()
-                    } else {
-                        addr.clone()
+impl TestRunner {
+    async fn create_network(
+        &self,
+        i: usize,
+        parties: &[(Keypair, BLSPubKey, NetAddr)],
+        unreachable_addr: &NetAddr,
+        lock: &UpgradeLock<TestTypes>,
+    ) -> Cliquenet<TestTypes> {
+        let blocked_pairs = &self.blocked_pairs;
+        let starved_views = self.starved_of_shares.get(&i).cloned().unwrap_or_default();
+        let drop_inbound = self.drop_inbound.clone();
+        let peer_infos: Vec<(BLSPubKey, PeerConnectInfo)> = parties
+            .iter()
+            .enumerate()
+            .map(|(j, (kp, pk, addr))| {
+                let blocked = blocked_pairs.contains(&(i, j)) || blocked_pairs.contains(&(j, i));
+                (
+                    *pk,
+                    PeerConnectInfo {
+                        x25519_key: kp.public_key(),
+                        p2p_addr: if blocked {
+                            unreachable_addr.clone()
+                        } else {
+                            addr.clone()
+                        },
                     },
-                },
+                )
+            })
+            .collect();
+
+        let config = cliquenet::Config::builder()
+            .name("test")
+            .keypair(parties[i].0.clone().into())
+            .bind(parties[i].2.clone())
+            .random_connect_delay(false)
+            // Keep redials dense: a peer that dials a rebinding node's address
+            // before its listener is up must retry within ~1s, not back off to
+            // the default 15-30s tail, or the node misses its next leader slot.
+            .connect_retry_delays([1, 1, 1, 2, 3, 5])
+            .parties(
+                peer_infos
+                    .iter()
+                    .map(|(_, info)| (info.x25519_key.into(), info.p2p_addr.clone())),
             )
-        })
-        .collect();
+            .noise_protocols([(1.into(), Protocol::IK_25519_AesGcm_Blake2s)])
+            .build();
 
-    let config = cliquenet::Config::builder()
-        .name("test")
-        .keypair(parties[i].0.clone().into())
-        .bind(parties[i].2.clone())
-        .random_connect_delay(false)
-        // Keep redials dense: a peer that dials a rebinding node's address
-        // before its listener is up must retry within ~1s, not back off to
-        // the default 15-30s tail, or the node misses its next leader slot.
-        .connect_retry_delays([1, 1, 1, 2, 3, 5])
-        .parties(
-            peer_infos
-                .iter()
-                .map(|(_, info)| (info.x25519_key.into(), info.p2p_addr.clone())),
+        let met = Box::new(NoMetrics);
+
+        let mut network = Cliquenet::create_with_config(
+            parties[i].1,
+            lock.clone(),
+            config,
+            peer_infos.clone(),
+            met,
         )
-        .noise_protocols([(1.into(), Protocol::IK_25519_AesGcm_Blake2s)])
-        .build();
+        .await
+        .unwrap();
 
-    let met = Box::new(NoMetrics);
+        if !starved_views.is_empty() || drop_inbound.is_some() {
+            network.drop_inbound(Box::new(move |message| {
+                if matches!(
+                    &message.message_type,
+                    MessageType::Consensus(ConsensusMessage::VidShareBroadcast(share))
+                        if starved_views.contains(&share.view_number())
+                ) {
+                    return true;
+                }
+                drop_inbound.as_ref().is_some_and(|drop| drop(i, message))
+            }));
+        }
 
-    let mut network =
-        Cliquenet::create_with_config(parties[i].1, lock.clone(), config, peer_infos.clone(), met)
-            .await
-            .unwrap();
-
-    if !starved_views.is_empty() || drop_inbound.is_some() {
-        network.drop_inbound(Box::new(move |message| {
-            if matches!(
-                &message.message_type,
-                MessageType::Consensus(ConsensusMessage::VidShareBroadcast(share))
-                    if starved_views.contains(&share.view_number())
-            ) {
-                return true;
-            }
-            drop_inbound.as_ref().is_some_and(|drop| drop(i, message))
-        }));
+        network
     }
-
-    network
 }
 
 /// Submits `count` unique transactions round-robin over `clients`, spaced out so that they
