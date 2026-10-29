@@ -526,6 +526,15 @@ def test_check_validity_aws(
     assert all(reason in r for r in got["reasons"])
 
 
+def test_a_busy_ctl_is_not_noisy_with_the_prover():
+    result = clean_result()
+    result["hosts"] |= {"ctl": host_sample(util=0.95)}
+    manifest = aws_manifest()
+    assert check_aws(result, manifest)["noisy"]
+    manifest["config"]["prover"] = True
+    assert not check_aws(result, manifest)["noisy"]
+
+
 def small_node0_manifest(query_db: str = "colocated") -> dict:
     manifest = aws_manifest()
     for host in manifest["hosts"]:

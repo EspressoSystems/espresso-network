@@ -3,8 +3,8 @@
 WARNING: This CLI is intended for testing as well as validator registrations purposes only. Stakers should use the
 staking UI:
 
-- decaf testnet staking UI: https://staking.decaf.testnet.espresso.network/
-- mainnet staking UI: not yet available
+- decaf testnet staking UI: https://stake.decaf.espresso.network/
+- mainnet staking UI: https://stake.espresso.network/
 
 This CLI helps users interact with the Espresso staking contract, either as a delegator or a node operator.
 

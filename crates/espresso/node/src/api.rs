@@ -3026,9 +3026,9 @@ mod api_tests {
 
     #[rstest_reuse::template]
     #[rstest::rstest]
-    #[case(PhantomData::<crate::api::sql::postgres::DataSource>)]
-    #[case(PhantomData::<crate::api::sql::sqlite::DataSource>)]
-    #[case(PhantomData::<crate::api::fs::DataSource>)]
+    #[case::postgres(PhantomData::<crate::api::sql::postgres::DataSource>)]
+    #[case::sqlite(PhantomData::<crate::api::sql::sqlite::DataSource>)]
+    #[case::fs(PhantomData::<crate::api::fs::DataSource>)]
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     pub fn testable_sequencer_data_source<D: TestableSequencerDataSource>(
         #[case] _d: PhantomData<D>,
@@ -3549,6 +3549,7 @@ mod api_tests {
 mod test {
     use std::{
         collections::{BTreeSet, HashMap, HashSet},
+        marker::PhantomData,
         time::{Duration, Instant},
     };
 
@@ -3556,6 +3557,7 @@ mod test {
         consensus::{
             header::HeaderProof,
             leaf::{LeafProof, LeafProofHint},
+            namespace::NamespaceProof,
             payload::PayloadProof,
         },
         testing::EpochChangeQuorum,
@@ -3599,16 +3601,10 @@ mod test {
         },
         data_source::{
             Transaction as _, VersionedDataSource,
-            sql::postgres::{Config, SqlStorage},
-            storage::{
-                MerklizedStateHeightStorage, NodeStorage, SerializableRetry, StorageConnectionType,
-                UpdateAvailabilityStorage, pruning::PrunedHeightStorage,
-            },
+            storage::{StorageConnectionType, UpdateAvailabilityStorage},
         },
         explorer::TransactionSummariesResponse,
-        merklized_state::UpdateStateData,
-        node::{NodeDataSource as _, SyncStatus, SyncStatusQueryData},
-        serializable_retry,
+        node::{SyncStatus, SyncStatusQueryData},
         types::HeightIndexed,
     };
     use hotshot_types::{
@@ -3634,6 +3630,7 @@ mod test {
     use pretty_assertions::assert_matches;
     use rand::seq::SliceRandom;
     use rstest::rstest;
+    use rstest_reuse::apply;
     use staking_cli::{
         Transaction as StakingTransaction, demo::DelegationConfig, fetch_commission,
         update_commission, update_network_config,
@@ -3653,11 +3650,24 @@ mod test {
         Upgrade,
     };
 
-    use self::{
-        data_source::{SequencerDataSource, testing::TestableSequencerDataSource},
-        sql::postgres::DataSource as SqlDataSource,
+    use self::data_source::{
+        DataSourceOptions,
+        testing::{DeferredMigration, TestableSequencerDataSource, TestableSqlDataSource},
     };
     use super::*;
+
+    type Postgres = sql::postgres::DataSource;
+    type Sqlite = sql::sqlite::DataSource;
+
+    #[rstest_reuse::template]
+    #[rstest::rstest]
+    #[case::postgres(std::marker::PhantomData::<crate::api::sql::postgres::DataSource>)]
+    #[case::sqlite(std::marker::PhantomData::<crate::api::sql::sqlite::DataSource>)]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    pub(crate) fn sql_data_sources<D: TestableSqlDataSource>(
+        #[case] _d: std::marker::PhantomData<D>,
+    ) {
+    }
 
     async fn wait_until_block_height(
         client: &Client<ClientErr, StaticVersion<0, 1>>,
@@ -3681,11 +3691,7 @@ mod test {
 
     use crate::{
         CatchupParams, L1Params,
-        api::{
-            options::Query,
-            sql::postgres::{impl_testable_data_source::tmp_options, reconstruct_state},
-            test_helpers::STAKE_TABLE_CAPACITY_FOR_TEST,
-        },
+        api::{options::Query, test_helpers::STAKE_TABLE_CAPACITY_FOR_TEST},
         catchup::{NullStateCatchup, StatePeers},
         follower::{FollowerContext, FollowerOptions, FollowerParams, init_follower_node},
         genesis::{Genesis as NodeGenesis, L1Finalized, StakeTableConfig},
@@ -3737,13 +3743,12 @@ mod test {
         catchup_test_helper(|opt| opt).await
     }
 
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_leaf_only_data_source() {
+    #[apply(sql_data_sources)]
+    async fn test_leaf_only_data_source<D: TestableSqlDataSource>(_d: PhantomData<D>) {
         let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
 
-        let storage = SqlDataSource::create_storage().await;
-        let options =
-            SqlDataSource::leaf_only_ds_options(&storage, Options::with_port(port)).unwrap();
+        let storage = D::create_storage().await;
+        let options = D::leaf_only_ds_options(&storage, Options::with_port(port)).unwrap();
 
         let network_config = TestConfigBuilder::default().build();
         let config = TestNetworkConfigBuilder::default()
@@ -3824,12 +3829,12 @@ mod test {
             .unwrap_err();
     }
 
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_database_metadata_endpoints() {
+    #[apply(sql_data_sources)]
+    async fn test_database_metadata_endpoints<D: TestableSqlDataSource>(_d: PhantomData<D>) {
         let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
 
-        let storage = SqlDataSource::create_storage().await;
-        let options = SqlDataSource::options(&storage, Options::with_port(port));
+        let storage = D::create_storage().await;
+        let options = D::options(&storage, Options::with_port(port));
 
         let network_config = TestConfigBuilder::default().build();
         let config = TestNetworkConfigBuilder::default()
@@ -3860,11 +3865,13 @@ mod test {
 
     /// A namespace proof range ahead of the chain tip gives up like the other range endpoints,
     /// instead of holding one of the server's request slots until the chain gets there.
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_namespace_proof_range_ahead_of_tip_is_not_found() {
+    #[apply(sql_data_sources)]
+    async fn test_namespace_proof_range_ahead_of_tip_is_not_found<D: TestableSqlDataSource>(
+        _d: PhantomData<D>,
+    ) {
         let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
-        let storage = SqlDataSource::create_storage().await;
-        let options = SqlDataSource::options(&storage, Options::with_port(port));
+        let storage = D::create_storage().await;
+        let options = D::options(&storage, Options::with_port(port));
         let config = TestNetworkConfigBuilder::default()
             .api_config(options)
             .network_config(TestConfigBuilder::default().build())
@@ -3890,15 +3897,14 @@ mod test {
     }
 
     /// Typed light client errors reach the HTTP client with their own status, not as a 500.
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_light_client_proof_errors_keep_their_status() {
+    #[apply(sql_data_sources)]
+    async fn test_light_client_proof_errors_keep_their_status<D: TestableSqlDataSource>(
+        _d: PhantomData<D>,
+    ) {
         let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
-        let storage = SqlDataSource::create_storage().await;
+        let storage = D::create_storage().await;
         let config = TestNetworkConfigBuilder::default()
-            .api_config(
-                SqlDataSource::options(&storage, Options::with_port(port))
-                    .light_client(Default::default()),
-            )
+            .api_config(D::options(&storage, Options::with_port(port)))
             .network_config(TestConfigBuilder::default().build())
             .build();
         let _network = TestNetwork::new(config, TEST_UPGRADE).await;
@@ -3937,7 +3943,7 @@ mod test {
         }
     }
 
-    async fn run_catchup_test(url_suffix: &str) {
+    async fn run_catchup_test<D: TestableSqlDataSource>(url_suffix: &str) {
         // Start a sequencer network, using the query service for catchup. Node 0 keeps merklized
         // state in SQL: in memory it holds only the states from its decided view up, and a node
         // restarted under load handles proposals behind the network, so by the time it asks for
@@ -3945,14 +3951,14 @@ mod test {
         // retries forever.
         let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
         const NUM_NODES: usize = 5;
-        let storage = SqlDataSource::create_storage().await;
+        let storage = D::create_storage().await;
 
         let url: url::Url = format!("http://localhost:{port}{url_suffix}")
             .parse()
             .unwrap();
 
         let config = TestNetworkConfigBuilder::<NUM_NODES, _, _>::with_num_nodes()
-            .api_config(SqlDataSource::options(&storage, Options::with_port(port)))
+            .api_config(D::options(&storage, Options::with_port(port)))
             .network_config(TestConfigBuilder::default().build())
             .without_api_catchup()
             .catchups(std::array::from_fn(|_| {
@@ -4059,19 +4065,19 @@ mod test {
         decided
     }
 
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_catchup() {
-        run_catchup_test("").await;
+    #[apply(sql_data_sources)]
+    async fn test_catchup<D: TestableSqlDataSource>(_d: PhantomData<D>) {
+        run_catchup_test::<D>("").await;
     }
 
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_catchup_v0() {
-        run_catchup_test("/v0").await;
+    #[apply(sql_data_sources)]
+    async fn test_catchup_v0<D: TestableSqlDataSource>(_d: PhantomData<D>) {
+        run_catchup_test::<D>("/v0").await;
     }
 
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_catchup_v1() {
-        run_catchup_test("/v1").await;
+    #[apply(sql_data_sources)]
+    async fn test_catchup_v1<D: TestableSqlDataSource>(_d: PhantomData<D>) {
+        run_catchup_test::<D>("/v1").await;
     }
 
     /// Without HTTP state peers, a node restarted from genesis seeds a stub for its first decided
@@ -4105,8 +4111,12 @@ mod test {
     /// fetches by hash. Both are bounded and neither uses a ranges request, so they cost the test
     /// its claim on the route rather than its result;
     /// `test_scanner_backfills_over_ranges_endpoints_only` is what covers the route.
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_query_service_catchup_from_peer() {
+    #[apply(sql_data_sources)]
+    async fn test_query_service_catchup_from_peer<D>(_d: PhantomData<D>)
+    where
+        D: TestableSqlDataSource,
+        for<'a> <D as VersionedDataSource>::Transaction<'a>: UpdateAvailabilityStorage<SeqTypes>,
+    {
         const NUM_NODES: usize = 5;
         const LATE: usize = NUM_NODES - 1;
         let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
@@ -4121,18 +4131,15 @@ mod test {
             )
         };
 
-        let dbs = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
+        let dbs = join_all((0..NUM_NODES).map(|_| D::create_storage())).await;
         let persistence: [_; NUM_NODES] = dbs
             .iter()
-            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
+            .map(<D as TestableSequencerDataSource>::persistence_options)
             .collect::<Vec<_>>()
             .try_into()
             .unwrap();
         let config = TestNetworkConfigBuilder::<NUM_NODES, _, _>::with_num_nodes()
-            .api_config(
-                SqlDataSource::options(&dbs[0], Options::with_port(port))
-                    .light_client(Default::default()),
-            )
+            .api_config(D::options(&dbs[0], Options::with_port(port)))
             .persistences(persistence)
             .catchups(std::array::from_fn(|_| state_peers()))
             .network_config(TestConfigBuilder::default().build())
@@ -4223,15 +4230,11 @@ mod test {
         {
             // No proactive fetching: this handle only seeds, and a scanner of its own would race
             // the late node for the same database.
-            let mut opt = tmp_options(&dbs[LATE]);
+            let mut opt = D::tmp_options(&dbs[LATE]);
             opt.disable_proactive_fetching = true;
-            let ds = SqlDataSource::create(
-                persistence::sql::postgres::Options::try_from(opt).unwrap(),
-                Default::default(),
-                false,
-            )
-            .await
-            .unwrap();
+            let ds = D::create(D::sql_persistence_options(opt), Default::default(), false)
+                .await
+                .unwrap();
             let mut tx = ds.write().await.unwrap();
             for leaf in &leaves {
                 tx.insert_leaf(leaf).await.unwrap();
@@ -4264,7 +4267,7 @@ mod test {
         // Back as a query node whose service fetches from node 0 the way a production node fetches
         // from its configured peers. Consensus is not restarted: a decided leaf would have the node
         // chase parents one at a time, and that is not the path under test.
-        let mut late_db = tmp_options(&dbs[LATE]);
+        let mut late_db = D::tmp_options(&dbs[LATE]);
         late_db.proactive_scan_interval = Some(Duration::from_secs(1));
         // A ranges request that cannot be served costs this much before the per-chunk fallback, and the
         // 120 second default would not fit in the budget below.
@@ -4283,8 +4286,7 @@ mod test {
         );
         let cfg = network.cfg.clone();
         let upgrades_map = cfg.upgrades();
-        let persistence =
-            <SqlDataSource as TestableSequencerDataSource>::persistence_options(&dbs[LATE]);
+        let persistence = <D as TestableSequencerDataSource>::persistence_options(&dbs[LATE]);
         let catchup = state_peers();
         let _late = api
             .serve(|metrics, consumer, storage| {
@@ -4530,23 +4532,20 @@ mod test {
         );
     }
 
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    pub(crate) async fn test_restart() {
+    #[apply(sql_data_sources)]
+    pub(crate) async fn test_restart<D: TestableSqlDataSource>(_d: PhantomData<D>) {
         const NUM_NODES: usize = 5;
         // Initialize nodes.
-        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
+        let storage = join_all((0..NUM_NODES).map(|_| D::create_storage())).await;
         let persistence: [_; NUM_NODES] = storage
             .iter()
-            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
+            .map(<D as TestableSequencerDataSource>::persistence_options)
             .collect::<Vec<_>>()
             .try_into()
             .unwrap();
         let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
         let config = TestNetworkConfigBuilder::default()
-            .api_config(SqlDataSource::options(
-                &storage[0],
-                Options::with_port(port),
-            ))
+            .api_config(D::options(&storage[0], Options::with_port(port)))
             .persistences(persistence.clone())
             .network_config(TestConfigBuilder::default().build())
             .build();
@@ -4604,10 +4603,7 @@ mod test {
         let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
 
         let config = TestNetworkConfigBuilder::default()
-            .api_config(SqlDataSource::options(
-                &storage[0],
-                Options::with_port(port),
-            ))
+            .api_config(D::options(&storage[0], Options::with_port(port)))
             .persistences(persistence)
             .catchups(std::array::from_fn(|_| {
                 // Catchup using node 0 as a peer. Node 0 was running the archival state service
@@ -4701,8 +4697,10 @@ mod test {
         );
     }
 
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_pos_rewards_basic() -> anyhow::Result<()> {
+    #[apply(sql_data_sources)]
+    async fn test_pos_rewards_basic<D: TestableSqlDataSource>(
+        _d: PhantomData<D>,
+    ) -> anyhow::Result<()> {
         // A single validator that is also its only delegator leads every block, so the rewards
         // for an epoch, applied at the last block of the next one, all go to it.
         const EPOCH_HEIGHT: u64 = 10;
@@ -4712,13 +4710,10 @@ mod test {
             .epoch_height(EPOCH_HEIGHT)
             .build();
         let api_port = reserve_tcp_port().expect("OS should have ephemeral ports available");
-        let (storage, persistence) = node_storage::<SqlDataSource, NUM_NODES>().await;
+        let (storage, persistence) = node_storage::<D, NUM_NODES>().await;
 
         let config = TestNetworkConfigBuilder::with_num_nodes()
-            .api_config(SqlDataSource::options(
-                &storage[0],
-                Options::with_port(api_port),
-            ))
+            .api_config(D::options(&storage[0], Options::with_port(api_port)))
             .network_config(network_config.clone())
             .persistences(persistence.clone())
             .pos_hook(
@@ -4761,8 +4756,10 @@ mod test {
         Ok(())
     }
 
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_cumulative_pos_rewards() -> anyhow::Result<()> {
+    #[apply(sql_data_sources)]
+    async fn test_cumulative_pos_rewards<D: TestableSqlDataSource>(
+        _d: PhantomData<D>,
+    ) -> anyhow::Result<()> {
         // Five validators with several delegators each, one of which is also a validator. Across
         // every account, the balances grow only at an epoch's last block, and there by exactly
         // the previous epoch's total: its block reward for each of its blocks.
@@ -4773,13 +4770,10 @@ mod test {
             .epoch_height(EPOCH_HEIGHT)
             .build();
         let api_port = reserve_tcp_port().expect("OS should have ephemeral ports available");
-        let (storage, persistence) = node_storage::<SqlDataSource, NUM_NODES>().await;
+        let (storage, persistence) = node_storage::<D, NUM_NODES>().await;
 
         let config = TestNetworkConfigBuilder::with_num_nodes()
-            .api_config(SqlDataSource::options(
-                &storage[0],
-                Options::with_port(api_port),
-            ))
+            .api_config(D::options(&storage[0], Options::with_port(api_port)))
             .network_config(network_config)
             .persistences(persistence.clone())
             .build();
@@ -4817,8 +4811,10 @@ mod test {
         Ok(())
     }
 
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_epoch_rewards_per_account() -> anyhow::Result<()> {
+    #[apply(sql_data_sources)]
+    async fn test_epoch_rewards_per_account<D: TestableSqlDataSource>(
+        _d: PhantomData<D>,
+    ) -> anyhow::Result<()> {
         // Every account's balance matches the epoch's rewards computed from the leader counts
         // in the header of the epoch's last block: each leader gets its count times the block
         // reward, split between its commission and its delegators by stake. Also checks that
@@ -4831,13 +4827,10 @@ mod test {
             .epoch_height(EPOCH_HEIGHT)
             .build();
         let api_port = reserve_tcp_port().expect("OS should have ephemeral ports available");
-        let (storage, persistence) = node_storage::<SqlDataSource, NUM_NODES>().await;
+        let (storage, persistence) = node_storage::<D, NUM_NODES>().await;
 
         let config = TestNetworkConfigBuilder::with_num_nodes()
-            .api_config(SqlDataSource::options(
-                &storage[0],
-                Options::with_port(api_port),
-            ))
+            .api_config(D::options(&storage[0], Options::with_port(api_port)))
             .network_config(network_config)
             .persistences(persistence.clone())
             .build();
@@ -4921,8 +4914,10 @@ mod test {
         Ok(())
     }
 
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_stake_table_duplicate_events_from_contract() -> anyhow::Result<()> {
+    #[apply(sql_data_sources)]
+    async fn test_stake_table_duplicate_events_from_contract<D: TestableSqlDataSource>(
+        _d: PhantomData<D>,
+    ) -> anyhow::Result<()> {
         // TODO(abdul): This test currently uses TestNetwork only for contract deployment and for L1 block number.
         // Once the stake table deployment logic is refactored and isolated, TestNetwork here will be unnecessary
 
@@ -4936,14 +4931,11 @@ mod test {
 
         const NUM_NODES: usize = 5;
         // Initialize nodes.
-        let (storage, persistence) = node_storage::<SqlDataSource, NUM_NODES>().await;
+        let (storage, persistence) = node_storage::<D, NUM_NODES>().await;
 
         let l1_url = network_config.l1_url();
         let config = TestNetworkConfigBuilder::with_num_nodes()
-            .api_config(SqlDataSource::options(
-                &storage[0],
-                Options::with_port(api_port),
-            ))
+            .api_config(D::options(&storage[0], Options::with_port(api_port)))
             .network_config(network_config)
             .persistences(persistence.clone())
             .build();
@@ -5055,10 +5047,12 @@ mod test {
 
     /// From 0.3 to 0.5 every block paid its leader's commission and delegators, which only legacy
     /// consensus produced; the v4 chain's commissions change in epoch 2.
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_legacy_block_rewards() -> anyhow::Result<()> {
+    #[apply(sql_data_sources)]
+    async fn test_legacy_block_rewards<D: TestableSqlDataSource>(
+        _d: PhantomData<D>,
+    ) -> anyhow::Result<()> {
         let chain = LegacyChain::load("v4")?;
-        let replay = chain.replay().await?;
+        let replay = chain.replay::<D>().await?;
         let client = &replay.client;
         let epoch_height = chain.epoch_height();
         let coordinator = replay.node.node_state().coordinator;
@@ -5184,10 +5178,12 @@ mod test {
     }
 
     /// Stakers claim rewards earned before 0.5 with proofs against those blocks' v2 reward roots.
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_legacy_reward_queries() -> anyhow::Result<()> {
+    #[apply(sql_data_sources)]
+    async fn test_legacy_reward_queries<D: TestableSqlDataSource>(
+        _d: PhantomData<D>,
+    ) -> anyhow::Result<()> {
         let chain = LegacyChain::load("v4")?;
-        let replay = chain.replay().await?;
+        let replay = chain.replay::<D>().await?;
         let client = &replay.client;
         let tip = chain.tip();
         let root = chain
@@ -5273,8 +5269,10 @@ mod test {
         Ok(stakers)
     }
 
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_epoch_reward_distribution_basic() -> anyhow::Result<()> {
+    #[apply(sql_data_sources)]
+    async fn test_epoch_reward_distribution_basic<D: TestableSqlDataSource>(
+        _d: PhantomData<D>,
+    ) -> anyhow::Result<()> {
         const EPOCH_HEIGHT: u64 = 10;
         const NUM_NODES: usize = 5;
 
@@ -5284,13 +5282,10 @@ mod test {
 
         let api_port = reserve_tcp_port().expect("No ports free for query service");
 
-        let (storage, persistence) = node_storage::<SqlDataSource, NUM_NODES>().await;
+        let (storage, persistence) = node_storage::<D, NUM_NODES>().await;
 
         let config = TestNetworkConfigBuilder::with_num_nodes()
-            .api_config(SqlDataSource::options(
-                &storage[0],
-                Options::with_port(api_port),
-            ))
+            .api_config(D::options(&storage[0], Options::with_port(api_port)))
             .network_config(network_config)
             .persistences(persistence.clone())
             .build();
@@ -5357,8 +5352,10 @@ mod test {
 
     /// Run a `TestNetwork` based directly on the new protocol version (V0_6,
     /// no upgrade/cutover) and verify it produces blocks from genesis.
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_new_protocol_produces_blocks() -> anyhow::Result<()> {
+    #[apply(sql_data_sources)]
+    async fn test_new_protocol_produces_blocks<D: TestableSqlDataSource>(
+        _d: PhantomData<D>,
+    ) -> anyhow::Result<()> {
         const EPOCH_HEIGHT: u64 = 100;
         const NUM_NODES: usize = 5;
         const TARGET_BLOCK_HEIGHT: u64 = 100;
@@ -5370,13 +5367,10 @@ mod test {
 
         let api_port = reserve_tcp_port().expect("No ports free for query service");
 
-        let (storage, persistence) = node_storage::<SqlDataSource, NUM_NODES>().await;
+        let (storage, persistence) = node_storage::<D, NUM_NODES>().await;
 
         let config = TestNetworkConfigBuilder::<NUM_NODES, _, _>::with_num_nodes()
-            .api_config(SqlDataSource::options(
-                &storage[0],
-                Options::with_port(api_port),
-            ))
+            .api_config(D::options(&storage[0], Options::with_port(api_port)))
             .network_config(network_config)
             .persistences(persistence)
             .build();
@@ -5424,8 +5418,10 @@ mod test {
     /// Run a network on the new protocol from genesis (V0_6) through the
     /// LargeBlock (V0_7) upgrade, whose chain config takes effect with the
     /// version bump.
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_new_protocol_large_block_upgrade() -> anyhow::Result<()> {
+    #[apply(sql_data_sources)]
+    async fn test_new_protocol_large_block_upgrade<D: TestableSqlDataSource>(
+        _d: PhantomData<D>,
+    ) -> anyhow::Result<()> {
         const EPOCH_HEIGHT: u64 = 10;
         const NUM_NODES: usize = 5;
         const UPGRADE_START_PROPOSING_VIEW: u64 = 30;
@@ -5467,13 +5463,10 @@ mod test {
             ..Default::default()
         };
 
-        let (storage, persistence) = node_storage::<SqlDataSource, NUM_NODES>().await;
+        let (storage, persistence) = node_storage::<D, NUM_NODES>().await;
 
         let config = TestNetworkConfigBuilder::<NUM_NODES, _, _>::with_num_nodes()
-            .api_config(SqlDataSource::options(
-                &storage[0],
-                Options::with_port(api_port),
-            ))
+            .api_config(D::options(&storage[0], Options::with_port(api_port)))
             .persistences(persistence)
             .states(std::array::from_fn(|_| genesis_state.clone()))
             .catchups(std::array::from_fn(|_| {
@@ -5566,8 +5559,10 @@ mod test {
     /// `hotshot-new-protocol/src/tests/stake_table_changes.rs` mock out:
     /// L1 event fetching, `select_active_validator_set`, and epoch-root-driven
     /// membership updates.
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_new_protocol_validator_exit_at_epoch_boundary() -> anyhow::Result<()> {
+    #[apply(sql_data_sources)]
+    async fn test_new_protocol_validator_exit_at_epoch_boundary<D: TestableSqlDataSource>(
+        _d: PhantomData<D>,
+    ) -> anyhow::Result<()> {
         const NUM_NODES: usize = 5;
         const EPOCH_HEIGHT: u64 = 10;
         /// How many epochs after the exit transaction we allow for the event
@@ -5581,13 +5576,10 @@ mod test {
 
         let api_port = reserve_tcp_port().expect("No ports free for query service");
 
-        let (storage, persistence) = node_storage::<SqlDataSource, NUM_NODES>().await;
+        let (storage, persistence) = node_storage::<D, NUM_NODES>().await;
 
         let config = TestNetworkConfigBuilder::<NUM_NODES, _, _>::with_num_nodes()
-            .api_config(SqlDataSource::options(
-                &storage[0],
-                Options::with_port(api_port),
-            ))
+            .api_config(D::options(&storage[0], Options::with_port(api_port)))
             .network_config(network_config.clone())
             .persistences(persistence)
             .build();
@@ -5679,8 +5671,10 @@ mod test {
     /// Node 0 is the follower's only upstream. The query service only stores new heights through
     /// the follow loop, so the follower's archive reaching the validators' tip proves it follows
     /// live; then the endpoints a staked query node serves are compared with node 0's.
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_light_client_follower_query_node() -> anyhow::Result<()> {
+    #[apply(sql_data_sources)]
+    async fn test_light_client_follower_query_node<D: TestableSqlDataSource>(
+        _d: PhantomData<D>,
+    ) -> anyhow::Result<()> {
         const NUM_NODES: usize = 5;
         const EPOCH_HEIGHT: u64 = 10;
         const EPOCHS_TO_FOLLOW: u64 = 4;
@@ -5694,23 +5688,22 @@ mod test {
         let api_port = reserve_tcp_port().expect("No ports free for query service");
         let api_url: Url = format!("http://localhost:{api_port}").parse()?;
 
-        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
+        let storage = join_all((0..NUM_NODES).map(|_| D::create_storage())).await;
         let persistence: [_; NUM_NODES] = storage
             .iter()
-            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
+            .map(<D as TestableSequencerDataSource>::persistence_options)
             .collect::<Vec<_>>()
             .try_into()
             .unwrap();
-        let follower_storage = SqlDataSource::create_storage().await;
+        let follower_storage = D::create_storage().await;
 
         let config = TestNetworkConfigBuilder::<NUM_NODES, _, _>::with_num_nodes()
             .api_config(
                 Options::with_port(api_port)
                     .catchup(Default::default())
-                    .light_client(Default::default())
                     .config(Default::default())
                     .submit(Default::default())
-                    .query_sql(Query::default(), tmp_options(&storage[0])),
+                    .query_sql(Query::default(), D::tmp_options(&storage[0])),
             )
             .network_config(network_config)
             .persistences(persistence)
@@ -5766,7 +5759,7 @@ mod test {
             urls: vec![network.cfg.l1_url()],
             options: network.cfg.l1_opt(),
         };
-        let (mut follower, follower_client) = start_follower(
+        let (mut follower, follower_client) = start_follower::<D>(
             &follower_storage,
             genesis.clone(),
             params.clone(),
@@ -5834,7 +5827,7 @@ mod test {
         follower.shut_down().await;
         drop(follower);
         let (_follower, follower_client) =
-            start_follower(&follower_storage, genesis, params, l1_params()).await?;
+            start_follower::<D>(&follower_storage, genesis, params, l1_params()).await?;
         wait_for_epochs(&mut events, EPOCH_HEIGHT, EPOCHS_TO_FOLLOW + 1).await;
         let tip = network.server.decided_leaf().await.height();
         timeout(
@@ -5887,28 +5880,27 @@ mod test {
         }
     }
 
-    async fn start_follower(
-        storage: &<SqlDataSource as TestableSequencerDataSource>::Storage,
+    async fn start_follower<D: TestableSqlDataSource>(
+        storage: &<D as TestableSequencerDataSource>::Storage,
         genesis: NodeGenesis,
         params: FollowerParams,
         l1_params: L1Params,
     ) -> anyhow::Result<(
-        FollowerContext<persistence::sql::postgres::Persistence>,
+        FollowerContext<<D::Options as PersistenceOptions>::Persistence>,
         Client<ClientErr, SequencerApiVersion>,
     )> {
         let port = reserve_tcp_port().expect("No ports free for query service");
-        let mut db = persistence::sql::postgres::Options::try_from(tmp_options(storage))?;
+        let mut db = D::persistence_options(storage);
         let persistence = db.create().await?;
-        let handle = Options::with_port(port)
-            .query_sql(
+        let handle = db
+            .enable_query_module(
+                Options::with_port(port),
                 Query {
                     peers: params.upstreams.clone(),
                     ..Default::default()
                 },
-                db.into_inner(),
             )
             .catchup(Default::default())
-            .light_client(Default::default())
             .config(Default::default())
             .submit(Default::default())
             .serve(move |metrics, sink, _| {
@@ -5930,8 +5922,8 @@ mod test {
         Ok((follower, client))
     }
 
-    async fn assert_follows_to(
-        follower: &FollowerContext<persistence::sql::postgres::Persistence>,
+    async fn assert_follows_to<P: SequencerPersistence>(
+        follower: &FollowerContext<P>,
         follower_client: &Client<ClientErr, SequencerApiVersion>,
         tip: u64,
     ) -> anyhow::Result<()> {
@@ -6120,8 +6112,10 @@ mod test {
     /// it has to bootstrap its stake-table window, resync consensus, backfill
     /// the chain it lost from node 0 (including the new protocol's cert2
     /// finality certificates), and resume proposing.
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_new_protocol_query_node_restart_with_fresh_storage() -> anyhow::Result<()> {
+    #[apply(sql_data_sources)]
+    async fn test_new_protocol_query_node_restart_with_fresh_storage<D: TestableSqlDataSource>(
+        _d: PhantomData<D>,
+    ) -> anyhow::Result<()> {
         const NUM_NODES: usize = 6;
         const EPOCH_HEIGHT: u64 = 10;
         const EPOCHS_BEFORE_RESTART: u64 = 7;
@@ -6139,7 +6133,7 @@ mod test {
         let api_url: Url = format!("http://localhost:{api_port}").parse()?;
         let query_url: Url = format!("http://localhost:{query_port}").parse()?;
 
-        let (storage, persistence) = node_storage::<SqlDataSource, NUM_NODES>().await;
+        let (storage, persistence) = node_storage::<D, NUM_NODES>().await;
 
         // Both query nodes need the catchup and light client modules: state
         // catchup is served over the former, and the query service validates
@@ -6150,13 +6144,12 @@ mod test {
             .api_config(
                 Options::with_port(api_port)
                     .catchup(Default::default())
-                    .light_client(Default::default())
                     .query_sql(
                         Query {
                             peers: vec![query_url.clone()],
                             ..Default::default()
                         },
-                        tmp_options(&storage[0]),
+                        D::tmp_options(&storage[0]),
                     ),
             )
             .network_config(network_config)
@@ -6185,17 +6178,15 @@ mod test {
             serve_query_node(
                 cfg.clone(),
                 genesis_state.clone(),
-                persistence::sql::postgres::Options::try_from(db.clone()).unwrap(),
+                D::sql_persistence_options(db.clone()),
                 db,
-                Options::with_port(query_port)
-                    .catchup(Default::default())
-                    .light_client(Default::default()),
+                Options::with_port(query_port).catchup(Default::default()),
                 vec![peer_url.clone()],
                 peer_url.clone(),
             )
         };
 
-        let mut query_node = start_query_node(tmp_options(&storage[1])).await;
+        let mut query_node = start_query_node(D::tmp_options(&storage[1])).await;
 
         let api_client: Client<ClientErr, SequencerApiVersion> = Client::new(api_url);
         let query_client: Client<ClientErr, SequencerApiVersion> = Client::new(query_url);
@@ -6274,8 +6265,8 @@ mod test {
         .await
         .context("shut-down node did not release its ports")?;
 
-        let fresh_storage = SqlDataSource::create_storage().await;
-        let query_node = start_query_node(tmp_options(&fresh_storage)).await;
+        let fresh_storage = D::create_storage().await;
+        let query_node = start_query_node(D::tmp_options(&fresh_storage)).await;
         assert!(
             query_client.connect(Some(Duration::from_secs(60))).await,
             "restarted query API did not come up"
@@ -6423,8 +6414,10 @@ mod test {
         Ok(())
     }
 
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_epoch_reward_total_distributed_rewards() -> anyhow::Result<()> {
+    #[apply(sql_data_sources)]
+    async fn test_epoch_reward_total_distributed_rewards<D: TestableSqlDataSource>(
+        _d: PhantomData<D>,
+    ) -> anyhow::Result<()> {
         // Epochs 1-3: No rewards distributed (total_reward_distributed = 0)
         // Epoch 4: Rewards only distributed in the LAST block
         // Epoch 5: All blocks before last have same total as epoch 4 last block,
@@ -6438,13 +6431,10 @@ mod test {
 
         let api_port = reserve_tcp_port().expect("No ports free for query service");
 
-        let (storage, persistence) = node_storage::<SqlDataSource, NUM_NODES>().await;
+        let (storage, persistence) = node_storage::<D, NUM_NODES>().await;
 
         let config = TestNetworkConfigBuilder::with_num_nodes()
-            .api_config(SqlDataSource::options(
-                &storage[0],
-                Options::with_port(api_port),
-            ))
+            .api_config(D::options(&storage[0], Options::with_port(api_port)))
             .network_config(network_config)
             .persistences(persistence.clone())
             .build();
@@ -6525,8 +6515,10 @@ mod test {
 
     // test actual rewards
     // todo: test each account rewards by querying merklized state api
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_reward_state_v2_epoch_distribution() -> anyhow::Result<()> {
+    #[apply(sql_data_sources)]
+    async fn test_reward_state_v2_epoch_distribution<D: TestableSqlDataSource>(
+        _d: PhantomData<D>,
+    ) -> anyhow::Result<()> {
         const EPOCH_HEIGHT: u64 = 10;
         const NUM_NODES: usize = 5;
         const NUM_EPOCHS: u64 = 6;
@@ -6537,13 +6529,10 @@ mod test {
 
         let api_port = reserve_tcp_port().expect("No ports free for query service");
 
-        let (storage, persistence) = node_storage::<SqlDataSource, NUM_NODES>().await;
+        let (storage, persistence) = node_storage::<D, NUM_NODES>().await;
 
         let config = TestNetworkConfigBuilder::with_num_nodes()
-            .api_config(SqlDataSource::options(
-                &storage[0],
-                Options::with_port(api_port),
-            ))
+            .api_config(D::options(&storage[0], Options::with_port(api_port)))
             .network_config(network_config)
             .persistences(persistence.clone())
             .build();
@@ -6565,8 +6554,10 @@ mod test {
     }
 
     /// Verifies that the `leader_counts` array in V5+ headers is correct.
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_epoch_leader_counts() -> anyhow::Result<()> {
+    #[apply(sql_data_sources)]
+    async fn test_epoch_leader_counts<D: TestableSqlDataSource>(
+        _d: PhantomData<D>,
+    ) -> anyhow::Result<()> {
         const EPOCH_HEIGHT: u64 = 10;
         const NUM_NODES: usize = 5;
         const NUM_EPOCHS: u64 = 6;
@@ -6577,13 +6568,10 @@ mod test {
 
         let api_port = reserve_tcp_port().expect("No ports free for query service");
 
-        let (storage, persistence) = node_storage::<SqlDataSource, NUM_NODES>().await;
+        let (storage, persistence) = node_storage::<D, NUM_NODES>().await;
 
         let config = TestNetworkConfigBuilder::with_num_nodes()
-            .api_config(SqlDataSource::options(
-                &storage[0],
-                Options::with_port(api_port),
-            ))
+            .api_config(D::options(&storage[0], Options::with_port(api_port)))
             .network_config(network_config)
             .persistences(persistence.clone())
             .build();
@@ -6606,10 +6594,12 @@ mod test {
 
     /// Mainnet's 0.5 blocks were produced by legacy consensus, so a replayed 0.5 chain is what
     /// keeps checking their reward totals and leader counts.
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_legacy_epoch_rewards_and_leader_counts() -> anyhow::Result<()> {
+    #[apply(sql_data_sources)]
+    async fn test_legacy_epoch_rewards_and_leader_counts<D: TestableSqlDataSource>(
+        _d: PhantomData<D>,
+    ) -> anyhow::Result<()> {
         let chain = LegacyChain::load("v5")?;
-        let replay = chain.replay().await?;
+        let replay = chain.replay::<D>().await?;
         let epoch_height = chain.epoch_height();
         let coordinator = replay.node.node_state().coordinator;
 
@@ -6731,8 +6721,8 @@ mod test {
         }
     }
 
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_node_stake_table_api() {
+    #[apply(sql_data_sources)]
+    async fn test_node_stake_table_api<D: TestableSqlDataSource>(_d: PhantomData<D>) {
         let epoch_height = 20;
 
         let network_config = TestConfigBuilder::default()
@@ -6743,13 +6733,10 @@ mod test {
 
         const NUM_NODES: usize = 2;
         // Initialize nodes.
-        let (storage, persistence) = node_storage::<SqlDataSource, NUM_NODES>().await;
+        let (storage, persistence) = node_storage::<D, NUM_NODES>().await;
 
         let config = TestNetworkConfigBuilder::with_num_nodes()
-            .api_config(SqlDataSource::options(
-                &storage[0],
-                Options::with_port(api_port),
-            ))
+            .api_config(D::options(&storage[0], Options::with_port(api_port)))
             .network_config(network_config)
             .persistences(persistence.clone())
             .build();
@@ -6785,8 +6772,8 @@ mod test {
             .expect("failed to get stake table");
     }
 
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_epoch_stake_table_catchup() {
+    #[apply(sql_data_sources)]
+    async fn test_epoch_stake_table_catchup<D: TestableSqlDataSource>(_d: PhantomData<D>) {
         const EPOCH_HEIGHT: u64 = 10;
         const NUM_NODES: usize = 6;
 
@@ -6797,7 +6784,7 @@ mod test {
             .build();
 
         // Initialize storage for each node
-        let (storage, persistence_options) = node_storage::<SqlDataSource, NUM_NODES>().await;
+        let (storage, persistence_options) = node_storage::<D, NUM_NODES>().await;
 
         // setup catchup peers
         let catchup_peers = std::array::from_fn(|_| {
@@ -6809,10 +6796,7 @@ mod test {
             )
         });
         let config = TestNetworkConfigBuilder::<NUM_NODES, _, _>::with_num_nodes()
-            .api_config(SqlDataSource::options(
-                &storage[0],
-                Options::with_port(port),
-            ))
+            .api_config(D::options(&storage[0], Options::with_port(port)))
             .network_config(network_config)
             .persistences(persistence_options.clone())
             .catchups(catchup_peers)
@@ -6856,8 +6840,8 @@ mod test {
         }
 
         // add node 1 to the network with fresh storage
-        let storage = SqlDataSource::create_storage().await;
-        let options = <SqlDataSource as TestableSequencerDataSource>::persistence_options(&storage);
+        let storage = D::create_storage().await;
+        let options = <D as TestableSequencerDataSource>::persistence_options(&storage);
         tracing::info!("Restarting peer 0");
         let node = network
             .cfg
@@ -6908,8 +6892,8 @@ mod test {
         }
     }
 
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_epoch_stake_table_catchup_stress() {
+    #[apply(sql_data_sources)]
+    async fn test_epoch_stake_table_catchup_stress<D: TestableSqlDataSource>(_d: PhantomData<D>) {
         const EPOCH_HEIGHT: u64 = 10;
         const NUM_NODES: usize = 6;
 
@@ -6920,7 +6904,7 @@ mod test {
             .build();
 
         // Initialize storage for each node
-        let (storage, persistence_options) = node_storage::<SqlDataSource, NUM_NODES>().await;
+        let (storage, persistence_options) = node_storage::<D, NUM_NODES>().await;
 
         // setup catchup peers
         let catchup_peers = std::array::from_fn(|_| {
@@ -6932,10 +6916,7 @@ mod test {
             )
         });
         let config = TestNetworkConfigBuilder::<NUM_NODES, _, _>::with_num_nodes()
-            .api_config(SqlDataSource::options(
-                &storage[0],
-                Options::with_port(port),
-            ))
+            .api_config(D::options(&storage[0], Options::with_port(port)))
             .network_config(network_config)
             .persistences(persistence_options.clone())
             .catchups(catchup_peers)
@@ -6981,8 +6962,8 @@ mod test {
         }
 
         // add node 1 to the network with fresh storage
-        let storage = SqlDataSource::create_storage().await;
-        let options = <SqlDataSource as TestableSequencerDataSource>::persistence_options(&storage);
+        let storage = D::create_storage().await;
+        let options = <D as TestableSequencerDataSource>::persistence_options(&storage);
 
         tracing::info!("Restarting peer 0");
         let node = network
@@ -7044,8 +7025,10 @@ mod test {
         }
     }
 
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_merklized_state_catchup_on_restart() -> anyhow::Result<()> {
+    #[apply(sql_data_sources)]
+    async fn test_merklized_state_catchup_on_restart<D: TestableSqlDataSource>(
+        _d: PhantomData<D>,
+    ) -> anyhow::Result<()> {
         // This test verifies that a query node can catch up on
         // merklized state after being offline for multiple epochs.
         //
@@ -7070,7 +7053,7 @@ mod test {
         tracing::info!("API PORT = {api_port}");
         const NUM_NODES: usize = 5;
 
-        let (storage, persistence) = node_storage::<SqlDataSource, NUM_NODES>().await;
+        let (storage, persistence) = node_storage::<D, NUM_NODES>().await;
 
         // The light client skips epoch-root stake-table-hash verification for pre-DRB headers only
         // on the Decaf chain id, so use it to keep the V3->V4 catchup path covered. The stake
@@ -7085,11 +7068,9 @@ mod test {
         };
 
         let config = TestNetworkConfigBuilder::with_num_nodes()
-            .api_config(SqlDataSource::options(
+            .api_config(D::options(
                 &storage[0],
-                Options::with_port(api_port)
-                    .catchup(Default::default())
-                    .light_client(Default::default()),
+                Options::with_port(api_port).catchup(Default::default()),
             ))
             .network_config(network_config)
             .persistences(persistence.clone())
@@ -7114,7 +7095,7 @@ mod test {
                 peers: vec![format!("http://localhost:{api_port}").parse().unwrap()],
                 ..Default::default()
             },
-            tmp_options(node_0_storage),
+            D::tmp_options(node_0_storage),
         );
 
         // start the query node so that it builds the merklized state
@@ -7280,24 +7261,24 @@ mod test {
     /// an unbounded pruner run has already stamped past its state head, and check that the loop
     /// still resumes and reaches the tip, and that every pruner run from then on stamps below the
     /// state head.
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_state_pruner_stays_below_state_head() -> anyhow::Result<()> {
+    #[apply(sql_data_sources)]
+    async fn test_state_pruner_stays_below_state_head<D: TestableSqlDataSource>(
+        _d: PhantomData<D>,
+    ) -> anyhow::Result<()> {
         const NUM_NODES: usize = 5;
         // Blocks the chain moves on by while the query node is down, and the margin by which the
         // loop has to get past the stale pruned height before the check ends.
         const GAP: u64 = 10;
 
-        let (storage, persistence) = node_storage::<SqlDataSource, NUM_NODES>().await;
+        let (storage, persistence) = node_storage::<D, NUM_NODES>().await;
         let api_port = reserve_tcp_port().expect("OS should have ephemeral ports available");
         let api_url: Url = format!("http://localhost:{api_port}").parse().unwrap();
         // The query node fetches what it missed from the API node, so the API node serves catchup
         // and light client proofs.
         let config = TestNetworkConfigBuilder::with_num_nodes()
-            .api_config(SqlDataSource::options(
+            .api_config(D::options(
                 &storage[0],
-                Options::with_port(api_port)
-                    .catchup(Default::default())
-                    .light_client(Default::default()),
+                Options::with_port(api_port).catchup(Default::default()),
             ))
             .network_config(TestConfigBuilder::default().build())
             .persistences(persistence.clone())
@@ -7312,7 +7293,7 @@ mod test {
         network.peers[0].shut_down().await;
         network.peers.remove(0);
         let query_port = reserve_tcp_port().expect("OS should have ephemeral ports available");
-        let mut db_opt = tmp_options(&storage[1]);
+        let mut db_opt = D::tmp_options(&storage[1]);
         db_opt.prune = true;
         db_opt.pruning = <persistence::sql::PruningOptions as clap::Parser>::parse_from([
             "pruning",
@@ -7362,9 +7343,8 @@ mod test {
         })
         .await
         .context("shut-down query node did not release its port")?;
-        let db =
-            SqlStorage::connect(Config::try_from(&db_opt)?, StorageConnectionType::Query).await?;
-        let (_, head_at_shutdown) = state_heights(&db).await;
+        let db = D::connect(&db_opt, StorageConnectionType::Query).await?;
+        let (_, head_at_shutdown) = D::state_heights(&db).await?;
         wait_until_block_height(&api_client, "status/block-height", head_at_shutdown + GAP).await;
         // `status/block-height` counts blocks, so the tip is one below it.
         let stale_cursor = api_client.get::<u64>("status/block-height").send().await? - 1;
@@ -7375,21 +7355,10 @@ mod test {
         );
 
         // A pruner from before the state pruner was bounded by the state head could have stamped
-        // past the loop while it was behind. Stamp the tip as such a run would have; id 2 is the
-        // state cursor.
-        {
-            let mut tx = db.write().await?;
-            tx.upsert(
-                "pruned_height",
-                ["id", "last_height"],
-                ["id"],
-                [(2i32, stale_cursor as i64)],
-            )
-            .await?;
-            tx.commit().await?;
-        }
+        // past the loop while it was behind. Stamp the tip as such a run would have.
+        D::stamp_state_pruned_height(&db, stale_cursor).await?;
         ensure!(
-            state_heights(&db).await.0 == Some(stale_cursor),
+            D::state_heights(&db).await?.0 == Some(stale_cursor),
             "the stale cursor was not stamped"
         );
 
@@ -7398,7 +7367,7 @@ mod test {
         let _query_node = start_query_node().await;
         let deadline = Instant::now() + Duration::from_secs(120);
         loop {
-            let (pruned, head) = state_heights(&db).await;
+            let (pruned, head) = D::state_heights(&db).await?;
             let pruned = pruned.context("state pruned height is stamped")?;
             tracing::info!(pruned, head, stale_cursor, "state loop progress");
             if pruned > stale_cursor {
@@ -7421,7 +7390,7 @@ mod test {
         // The head snapshot is served. The loop and the pruner keep moving, so a head read just
         // before a pruner run can be below the cursor by the time the query runs; read it again.
         for attempt in 1.. {
-            let (_, head) = state_heights(&db).await;
+            let (_, head) = D::state_heights(&db).await?;
             let frontier = query_client
                 .get::<MerkleProof<Commitment<Header>, u64, Sha3Node, 3>>(&format!(
                     "block-state/{head}/{}",
@@ -7464,7 +7433,9 @@ mod test {
     #[case::before_restart(DataPruned::BeforeRestart)]
     #[case::while_waiting(DataPruned::WhileWaiting)]
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_state_loop_fetches_pruned_leaves_from_peers(
+    async fn test_state_loop_fetches_pruned_leaves_from_peers<D: TestableSqlDataSource>(
+        #[values(PhantomData::<Postgres>, PhantomData::<Sqlite>)] _d: PhantomData<D>,
+
         #[case] pruned_when: DataPruned,
     ) -> anyhow::Result<()> {
         const NUM_NODES: usize = 5;
@@ -7476,10 +7447,10 @@ mod test {
         const GAP: u64 = 10;
         const BEHIND: u64 = 2;
 
-        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
+        let storage = join_all((0..NUM_NODES).map(|_| D::create_storage())).await;
         let persistence: [_; NUM_NODES] = storage
             .iter()
-            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
+            .map(<D as TestableSequencerDataSource>::persistence_options)
             .collect::<Vec<_>>()
             .try_into()
             .unwrap();
@@ -7487,11 +7458,9 @@ mod test {
         let api_url: Url = format!("http://localhost:{api_port}").parse().unwrap();
         // The API node is the peer the query node fetches leaves from.
         let config = TestNetworkConfigBuilder::with_num_nodes()
-            .api_config(SqlDataSource::options(
+            .api_config(D::options(
                 &storage[0],
-                Options::with_port(api_port)
-                    .catchup(Default::default())
-                    .light_client(Default::default()),
+                Options::with_port(api_port).catchup(Default::default()),
             ))
             .network_config(
                 TestConfigBuilder::default()
@@ -7522,7 +7491,7 @@ mod test {
         network.peers[0].shut_down().await;
         network.peers.remove(0);
         let query_port = reserve_tcp_port().expect("OS should have ephemeral ports available");
-        let db_opt = tmp_options(&storage[1]);
+        let db_opt = D::tmp_options(&storage[1]);
         let start_query_node = {
             let cfg = network.cfg.clone();
             let node_persistence = persistence[1].clone();
@@ -7561,10 +7530,9 @@ mod test {
         })
         .await
         .context("shut-down query node did not release its port")?;
-        let db =
-            SqlStorage::connect(Config::try_from(&db_opt)?, StorageConnectionType::Query).await?;
-        let (_, head_at_shutdown) = state_heights(&db).await;
-        let local_tip = local_block_height(&db).await? - 1;
+        let db = D::connect(&db_opt, StorageConnectionType::Query).await?;
+        let (_, head_at_shutdown) = D::state_heights(&db).await?;
+        let local_tip = D::local_block_height(&db).await? - 1;
 
         let _restarted;
         let pruned = match pruned_when {
@@ -7580,10 +7548,8 @@ mod test {
                     .get::<LeafQueryData<SeqTypes>>(&format!("availability/leaf/{synced_tip}"))
                     .send()
                     .await?;
-                let mut tx = db.write().await?;
-                tx.insert_leaf(&synced_leaf).await?;
-                tx.commit().await?;
-                prune_data_to(&db, pruned).await?;
+                D::insert_leaf(&db, &synced_leaf).await?;
+                D::prune_data_to(&db, pruned).await?;
                 _restarted = start_query_node(vec![api_url.clone()]).await;
                 pruned
             },
@@ -7594,21 +7560,13 @@ mod test {
                 // for the leaf above its head while consensus moves the tip on.
                 let proxy_port =
                     reserve_tcp_port().expect("OS should have ephemeral ports available");
-                {
-                    let mut tx = db.write().await?;
-                    UpdateStateData::<SeqTypes, BlockMerkleTree, { BlockMerkleTree::ARITY }>::set_last_state_height(
-                        &mut tx,
-                        BEHIND as usize,
-                    )
-                    .await?;
-                    tx.commit().await?;
-                }
-                delete_data_between(&db, BEHIND, head_at_shutdown).await?;
+                D::set_last_state_height(&db, BEHIND).await?;
+                D::delete_data_between(&db, BEHIND, head_at_shutdown).await?;
                 _restarted =
                     start_query_node(vec![format!("http://localhost:{proxy_port}").parse()?]).await;
                 let deadline = Instant::now() + Duration::from_secs(120);
                 loop {
-                    if local_block_height(&db).await? > local_tip + GAP {
+                    if D::local_block_height(&db).await? > local_tip + GAP {
                         break;
                     }
                     ensure!(
@@ -7618,7 +7576,7 @@ mod test {
                     );
                     sleep(Duration::from_millis(200)).await;
                 }
-                let (_, head) = state_heights(&db).await;
+                let (_, head) = D::state_heights(&db).await?;
                 ensure!(
                     head == BEHIND,
                     "the loop moved to {head} without the leaf above {BEHIND}"
@@ -7627,7 +7585,7 @@ mod test {
                 // the tip as a real run leaves it, and let the peers through. The fetcher no
                 // longer asks them for heights at or below the stamp, so the loop has to.
                 let pruned = head_at_shutdown;
-                prune_data_to(&db, pruned).await?;
+                D::prune_data_to(&db, pruned).await?;
                 tokio::spawn(forward_tcp(proxy_port, api_port));
                 pruned
             },
@@ -7637,7 +7595,7 @@ mod test {
         // the local stream.
         let deadline = Instant::now() + Duration::from_secs(180);
         loop {
-            let (_, head) = state_heights(&db).await;
+            let (_, head) = D::state_heights(&db).await?;
             if head > pruned + GAP {
                 break;
             }
@@ -7651,11 +7609,7 @@ mod test {
 
         // The leaves the loop fetched from peers were not stored: the pruner would only delete
         // them again.
-        let mut tx = db.read().await?;
-        let stored: i64 = sqlx::query_scalar("SELECT count(*) FROM leaf2 WHERE height <= $1")
-            .bind(pruned as i64)
-            .fetch_one(tx.as_mut())
-            .await?;
+        let stored = D::count_leaves_up_to(&db, pruned).await?;
         ensure!(
             stored == 0,
             "{stored} leaves at or below the data pruned height {pruned} were stored"
@@ -7676,11 +7630,12 @@ mod test {
     #[case::fresh_database(EmptyStateStart::RecentBoundary, false)]
     #[case::genesis(EmptyStateStart::Genesis, true)]
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_state_loop_starts_on_pruned_data(
+    async fn test_state_loop_starts_on_pruned_data<D: TestableSqlDataSource>(
+        #[values(PhantomData::<Postgres>, PhantomData::<Sqlite>)] _d: PhantomData<D>,
         #[case] expected: EmptyStateStart,
         #[case] stamp_pruned_height: bool,
     ) -> anyhow::Result<()> {
-        let network = PrunedStartNetwork::start().await?;
+        let network = PrunedStartNetwork::<D>::start().await?;
         // Let the chain run an epoch past the data pruned height stamped below, so a recent
         // boundary lies above it.
         let stamp = 3 * PRUNED_START_EPOCH_HEIGHT + PRUNED_START_EPOCH_HEIGHT / 2;
@@ -7694,7 +7649,7 @@ mod test {
         // Unless the database is brand new, stamp a data pruned height on it, as if the data
         // pruner had run before the loop started.
         let pruned = if stamp_pruned_height {
-            prune_data_to(&db, stamp).await?;
+            D::prune_data_to(&db, stamp).await?;
             stamp
         } else {
             0
@@ -7709,12 +7664,12 @@ mod test {
         let (_query_node, query_client) = network.start_query_node(db_opt).await;
 
         let deadline = Instant::now() + Duration::from_secs(180);
-        let start = wait_for_state_start(&db, deadline).await?;
-        let state_start = db.read().await?.load_state_start_height().await?;
+        let start = wait_for_state_start::<D>(&db, deadline).await?;
+        let state_start = D::state_start_height(&db).await?;
         check_state_start(expected, start, state_start, pruned, tip)?;
         let past = start.max(pruned) + PRUNED_START_EPOCH_HEIGHT;
-        wait_for_state_head_above(&db, past, start, deadline).await?;
-        let lowest = lowest_block_tree_node(&db).await?;
+        wait_for_state_head_above::<D>(&db, past, start, deadline).await?;
+        let lowest = D::lowest_block_tree_node(&db).await?;
         ensure!(
             lowest == start,
             "state below the start {start} was computed, from {lowest}"
@@ -7740,34 +7695,32 @@ mod test {
     /// The network of [`test_state_loop_starts_on_pruned_data`]. Node 0 is the API node, the only
     /// peer the query node fetches the snapshot, leaves and accounts from. Node 1 is shut down, to
     /// come back as the query node on its own database, with no query data.
-    struct PrunedStartNetwork {
-        network: TestNetwork<persistence::sql::postgres::Options, 5>,
-        storage: Vec<<SqlDataSource as TestableSequencerDataSource>::Storage>,
+    struct PrunedStartNetwork<D: TestableSqlDataSource> {
+        network: TestNetwork<D::Options, 5>,
+        storage: Vec<D::Storage>,
         /// Node 1's consensus persistence.
-        persistence: persistence::sql::postgres::Options,
+        persistence: D::Options,
         api_url: Url,
         api_client: Client<ClientErr, StaticVersion<0, 1>>,
         genesis_state: ValidatedState,
         fee_recipient: FeeAccount,
     }
 
-    impl PrunedStartNetwork {
+    impl<D: TestableSqlDataSource> PrunedStartNetwork<D> {
         async fn start() -> anyhow::Result<Self> {
-            let storage = join_all((0..5).map(|_| SqlDataSource::create_storage())).await;
+            let storage = join_all((0..5).map(|_| D::create_storage())).await;
             let persistence: [_; 5] = storage
                 .iter()
-                .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
+                .map(D::persistence_options)
                 .collect::<Vec<_>>()
                 .try_into()
                 .unwrap();
             let api_port = reserve_tcp_port().expect("OS should have ephemeral ports available");
             let api_url: Url = format!("http://localhost:{api_port}").parse().unwrap();
             let config = TestNetworkConfigBuilder::with_num_nodes()
-                .api_config(SqlDataSource::options(
+                .api_config(D::options(
                     &storage[0],
-                    Options::with_port(api_port)
-                        .catchup(Default::default())
-                        .light_client(Default::default()),
+                    Options::with_port(api_port).catchup(Default::default()),
                 ))
                 .network_config(
                     TestConfigBuilder::default()
@@ -7810,10 +7763,10 @@ mod test {
         async fn query_database(
             &self,
             expected: EmptyStateStart,
-        ) -> anyhow::Result<(persistence::sql::Options, SqlStorage)> {
+        ) -> anyhow::Result<(persistence::sql::Options, D::SqlStorage)> {
             // When pruning is on, the pruner never runs within the test.
             const RETENTION: &str = "1000000s";
-            let mut db_opt = tmp_options(&self.storage[1]);
+            let mut db_opt = D::tmp_options(&self.storage[1]);
             db_opt.prune = expected == EmptyStateStart::RecentBoundary;
             db_opt.pruning = <persistence::sql::PruningOptions as clap::Parser>::parse_from([
                 "pruning",
@@ -7824,8 +7777,7 @@ mod test {
                 "--interval",
                 "3600s",
             ]);
-            let db = SqlStorage::connect(Config::try_from(&db_opt)?, StorageConnectionType::Query)
-                .await?;
+            let db = D::connect(&db_opt, StorageConnectionType::Query).await?;
             Ok((db_opt, db))
         }
 
@@ -7834,9 +7786,7 @@ mod test {
             &self,
             db_opt: persistence::sql::Options,
         ) -> (
-            SequencerContext<
-                <persistence::sql::postgres::Options as PersistenceOptions>::Persistence,
-            >,
+            SequencerContext<<D::Options as PersistenceOptions>::Persistence>,
             Client<ClientErr, StaticVersion<0, 1>>,
         ) {
             let query_port = reserve_tcp_port().expect("OS should have ephemeral ports available");
@@ -7859,16 +7809,15 @@ mod test {
     /// Start node 1 of the network `cfg` as a query node on `db_opt`. It serves the API `api`, plus
     /// the query module. Its availability fetcher asks `availability_peers`, and its state catchup
     /// the API node at `api_url` alone.
-    async fn serve_query_node<const N: usize>(
+    async fn serve_query_node<const N: usize, P: PersistenceOptions>(
         cfg: TestConfig<N>,
         genesis_state: ValidatedState,
-        node_persistence: persistence::sql::postgres::Options,
+        node_persistence: P,
         db_opt: persistence::sql::Options,
         api: Options,
         availability_peers: Vec<Url>,
         api_url: Url,
-    ) -> SequencerContext<<persistence::sql::postgres::Options as PersistenceOptions>::Persistence>
-    {
+    ) -> SequencerContext<P::Persistence> {
         let opt = api.query_sql(
             Query {
                 peers: availability_peers,
@@ -7915,12 +7864,15 @@ mod test {
 
     /// The height the state loop started from, once it has stored its first snapshot, which holds
     /// the lowest block tree nodes.
-    async fn wait_for_state_start(db: &SqlStorage, deadline: Instant) -> anyhow::Result<u64> {
-        while state_heights(db).await.1 == 0 {
+    async fn wait_for_state_start<D: TestableSqlDataSource>(
+        db: &D::SqlStorage,
+        deadline: Instant,
+    ) -> anyhow::Result<u64> {
+        while D::state_heights(db).await?.1 == 0 {
             ensure!(Instant::now() < deadline, "state loop did not start");
             sleep(Duration::from_millis(200)).await;
         }
-        lowest_block_tree_node(db).await
+        D::lowest_block_tree_node(db).await
     }
 
     /// Check that the state loop started where `expected` says, given the data pruned height and
@@ -7955,14 +7907,14 @@ mod test {
         Ok(())
     }
 
-    async fn wait_for_state_head_above(
-        db: &SqlStorage,
+    async fn wait_for_state_head_above<D: TestableSqlDataSource>(
+        db: &D::SqlStorage,
         past: u64,
         start: u64,
         deadline: Instant,
     ) -> anyhow::Result<()> {
         loop {
-            let (_, head) = state_heights(db).await;
+            let (_, head) = D::state_heights(db).await?;
             if head > past {
                 return Ok(());
             }
@@ -8007,17 +7959,6 @@ mod test {
         Ok(())
     }
 
-    /// The lowest height with a block tree node, which is the first snapshot the state loop stored.
-    async fn lowest_block_tree_node(db: &SqlStorage) -> anyhow::Result<u64> {
-        let mut tx = db.read().await?;
-        let lowest: Option<i64> = sqlx::query_scalar("SELECT min(created) FROM block_merkle_tree")
-            .fetch_one(tx.as_mut())
-            .await?;
-        lowest
-            .map(|height| height as u64)
-            .context("no block tree nodes")
-    }
-
     /// Forward connections on `port` to `target`, so a peer's URL is dead until this runs and
     /// reachable from then on.
     async fn forward_tcp(port: u16, target: u16) {
@@ -8031,70 +7972,10 @@ mod test {
         }
     }
 
-    /// The number of blocks in the node's own availability storage.
-    async fn local_block_height(db: &SqlStorage) -> anyhow::Result<u64> {
-        let mut tx = db.read().await?;
-        Ok(NodeStorage::<SeqTypes>::block_height(&mut tx).await? as u64)
-    }
-
-    /// Prune consensus data to `pruned` as a pruner batch would: stamp the data cursor, id 1,
-    /// then delete what `delete_batch` deletes. The node may be writing new blocks meanwhile, so
-    /// a serialization conflict is retried.
-    async fn prune_data_to(db: &SqlStorage, pruned: u64) -> anyhow::Result<()> {
-        serializable_retry!(db, || async {
-            let mut tx = db.write().await?;
-            tx.upsert(
-                "pruned_height",
-                ["id", "last_height"],
-                ["id"],
-                [(1i32, pruned as i64)],
-            )
-            .await?;
-            for statement in [
-                "DELETE FROM transactions WHERE block_height <= $1",
-                "DELETE FROM leaf2 WHERE height <= $1",
-                "DELETE FROM header WHERE height <= $1",
-            ] {
-                sqlx::query(statement)
-                    .bind(pruned as i64)
-                    .execute(tx.as_mut())
-                    .await?;
-            }
-            tx.commit().await
-        })
-        .await
-    }
-
-    /// Delete consensus data above `from` up to and including `to` without moving the data
-    /// cursor, as if the node had never had it.
-    async fn delete_data_between(db: &SqlStorage, from: u64, to: u64) -> anyhow::Result<()> {
-        let mut tx = db.write().await?;
-        for statement in [
-            "DELETE FROM transactions WHERE block_height > $1 AND block_height <= $2",
-            "DELETE FROM leaf2 WHERE height > $1 AND height <= $2",
-            "DELETE FROM header WHERE height > $1 AND height <= $2",
-        ] {
-            sqlx::query(statement)
-                .bind(from as i64)
-                .bind(to as i64)
-                .execute(tx.as_mut())
-                .await?;
-        }
-        tx.commit().await
-    }
-
-    /// The state pruned height, then the state head. Read in that order: every move of the
-    /// cursor, up by a batch or down by the startup repair, lands below the head, and the head
-    /// only grows, so a head read after the cursor is always above it.
-    async fn state_heights(db: &SqlStorage) -> (Option<u64>, u64) {
-        let mut tx = db.read().await.unwrap();
-        let pruned = tx.load_state_pruned_height().await.unwrap();
-        let head = tx.get_last_state_height().await.unwrap() as u64;
-        (pruned, head)
-    }
-
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_state_reconstruction() -> anyhow::Result<()> {
+    #[apply(sql_data_sources)]
+    async fn test_state_reconstruction<D: TestableSqlDataSource>(
+        _d: PhantomData<D>,
+    ) -> anyhow::Result<()> {
         // This test verifies that a query node can successfully reconstruct its state
         // after being shut down from the database
         //
@@ -8121,13 +8002,10 @@ mod test {
         tracing::info!("API PORT = {api_port}");
         const NUM_NODES: usize = 5;
 
-        let (storage, persistence) = node_storage::<SqlDataSource, NUM_NODES>().await;
+        let (storage, persistence) = node_storage::<D, NUM_NODES>().await;
 
         let config = TestNetworkConfigBuilder::with_num_nodes()
-            .api_config(SqlDataSource::options(
-                &storage[0],
-                Options::with_port(api_port).light_client(Default::default()),
-            ))
+            .api_config(D::options(&storage[0], Options::with_port(api_port)))
             .network_config(network_config)
             .persistences(persistence.clone())
             .build();
@@ -8151,7 +8029,7 @@ mod test {
                 peers: vec![format!("http://localhost:{api_port}").parse().unwrap()],
                 ..Query::test()
             },
-            tmp_options(node_0_storage),
+            D::tmp_options(node_0_storage),
         );
         let node_0 = opt
             .clone()
@@ -8264,18 +8142,16 @@ mod test {
         // separate loop writes after the block is indexed.
         wait_until_block_height(&client, "fee-state/block-height", from_height).await;
 
-        let ds = SqlStorage::connect(
-            Config::try_from(&*node_0_persistence).unwrap(),
+        let ds = D::connect(
+            &D::tmp_options(node_0_storage),
             StorageConnectionType::Sequencer,
         )
         .await
         .unwrap();
-        let mut tx = ds.read().await?;
 
-        let (state, leaf) =
-            reconstruct_state(&instance, &ds, &mut tx, from_height, to_view, &[], &[])
-                .await
-                .unwrap();
+        let (state, leaf) = D::reconstruct_state(&ds, &instance, from_height, to_view, &[], &[])
+            .await
+            .unwrap();
         assert_eq!(leaf.view_number(), to_view);
         assert!(
             state
@@ -8287,17 +8163,10 @@ mod test {
         );
 
         // Reconstruct fee state
-        let (state, leaf) = reconstruct_state(
-            &instance,
-            &ds,
-            &mut tx,
-            from_height,
-            to_view,
-            &fee_accounts,
-            &[],
-        )
-        .await
-        .unwrap();
+        let (state, leaf) =
+            D::reconstruct_state(&ds, &instance, from_height, to_view, &fee_accounts, &[])
+                .await
+                .unwrap();
 
         assert_eq!(leaf.view_number(), to_view);
         assert!(
@@ -8315,17 +8184,10 @@ mod test {
 
         // Reconstruct reward state
 
-        let (state, leaf) = reconstruct_state(
-            &instance,
-            &ds,
-            &mut tx,
-            from_height,
-            to_view,
-            &[],
-            &reward_accounts,
-        )
-        .await
-        .unwrap();
+        let (state, leaf) =
+            D::reconstruct_state(&ds, &instance, from_height, to_view, &[], &reward_accounts)
+                .await
+                .unwrap();
 
         for account in &reward_accounts {
             state
@@ -8346,10 +8208,9 @@ mod test {
         );
         // Reconstruct reward and fee state
 
-        let (state, leaf) = reconstruct_state(
-            &instance,
+        let (state, leaf) = D::reconstruct_state(
             &ds,
-            &mut tx,
+            &instance,
             from_height,
             to_view,
             &fee_accounts,
@@ -8383,8 +8244,10 @@ mod test {
         Ok(())
     }
 
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_block_reward_api() -> anyhow::Result<()> {
+    #[apply(sql_data_sources)]
+    async fn test_block_reward_api<D: TestableSqlDataSource>(
+        _d: PhantomData<D>,
+    ) -> anyhow::Result<()> {
         let epoch_height = 10;
 
         let network_config = TestConfigBuilder::default()
@@ -8395,13 +8258,10 @@ mod test {
 
         const NUM_NODES: usize = 1;
         // Initialize nodes.
-        let (storage, persistence) = node_storage::<SqlDataSource, NUM_NODES>().await;
+        let (storage, persistence) = node_storage::<D, NUM_NODES>().await;
 
         let config = TestNetworkConfigBuilder::with_num_nodes()
-            .api_config(SqlDataSource::options(
-                &storage[0],
-                Options::with_port(api_port),
-            ))
+            .api_config(D::options(&storage[0], Options::with_port(api_port)))
             .network_config(network_config.clone())
             .persistences(persistence.clone())
             .pos_hook(
@@ -8609,7 +8469,10 @@ mod test {
     #[case(None)]
     #[case(Some(1u64))]
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_token_supply_api(#[case] chain_id: Option<u64>) -> anyhow::Result<()> {
+    async fn test_token_supply_api<D: TestableSqlDataSource>(
+        #[values(PhantomData::<Postgres>, PhantomData::<Sqlite>)] _d: PhantomData<D>,
+        #[case] chain_id: Option<u64>,
+    ) -> anyhow::Result<()> {
         use alloy::primitives::utils::parse_ether;
         use espresso_types::v0_3::ChainConfig;
 
@@ -8621,7 +8484,7 @@ mod test {
         let api_port = reserve_tcp_port().expect("OS should have ephemeral ports available");
 
         const NUM_NODES: usize = 1;
-        let (storage, persistence) = node_storage::<SqlDataSource, NUM_NODES>().await;
+        let (storage, persistence) = node_storage::<D, NUM_NODES>().await;
 
         // Use the real initial supply (3.59B tokens) so the unlock schedule
         // produces realistic locked/unlocked values in the supply calculations.
@@ -8629,10 +8492,7 @@ mod test {
         let initial_supply_wei = parse_ether("3590000000").unwrap();
 
         let mut builder = TestNetworkConfigBuilder::with_num_nodes()
-            .api_config(SqlDataSource::options(
-                &storage[0],
-                Options::with_port(api_port),
-            ))
+            .api_config(D::options(&storage[0], Options::with_port(api_port)))
             .network_config(network_config.clone())
             .persistences(persistence.clone())
             .initial_token_supply(initial_supply_tokens);
@@ -8709,8 +8569,10 @@ mod test {
         Ok(())
     }
 
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_scanning_token_contract_initialized_event() -> anyhow::Result<()> {
+    #[apply(sql_data_sources)]
+    async fn test_scanning_token_contract_initialized_event<D: TestableSqlDataSource>(
+        _d: PhantomData<D>,
+    ) -> anyhow::Result<()> {
         use espresso_types::v0_3::ChainConfig;
 
         let blocks_per_epoch = 10;
@@ -8761,8 +8623,8 @@ mod test {
 
         let l1_url = network_config.l1_url().clone();
 
-        let storage = SqlDataSource::create_storage().await;
-        let mut opt = <SqlDataSource as TestableSequencerDataSource>::persistence_options(&storage);
+        let storage = D::create_storage().await;
+        let mut opt = <D as TestableSequencerDataSource>::persistence_options(&storage);
         let persistence = opt.create().await.unwrap();
 
         let l1_client = L1ClientOptions {
@@ -8837,18 +8699,18 @@ mod test {
         Ok(())
     }
 
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_tx_metadata() {
+    #[apply(sql_data_sources)]
+    async fn test_tx_metadata<D: TestableSqlDataSource>(_d: PhantomData<D>) {
         let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
 
         let url = format!("http://localhost:{port}").parse().unwrap();
         let client: Client<ClientErr, StaticVersion<0, 1>> = Client::new(url);
 
-        let storage = SqlDataSource::create_storage().await;
+        let storage = D::create_storage().await;
         let network_config = TestConfigBuilder::default().build();
         let config = TestNetworkConfigBuilder::default()
             .api_config(
-                SqlDataSource::options(&storage, Options::with_port(port))
+                D::options(&storage, Options::with_port(port))
                     .submit(Default::default())
                     .explorer(Default::default()),
             )
@@ -8925,8 +8787,8 @@ mod test {
 
     /// The v2 endpoints adapt the v1 handlers, so on one node both versions must report the same
     /// values, with v2's query parameters selecting what v1's path parameters do.
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_v2_api_agrees_with_v1() {
+    #[apply(sql_data_sources)]
+    async fn test_v2_api_agrees_with_v1<D: TestableSqlDataSource>(_d: PhantomData<D>) {
         let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
 
         let url = format!("http://localhost:{port}").parse().unwrap();
@@ -8934,9 +8796,9 @@ mod test {
 
         // At 0.6 the query service gets decided payloads from the DA proposals in consensus
         // storage, and proactive fetching is off, so the nodes need real persistence.
-        let (storage, persistence) = node_storage::<SqlDataSource, 5>().await;
+        let (storage, persistence) = node_storage::<D, 5>().await;
         let network_config = TestConfigBuilder::default().build();
-        let mut ds_opts = tmp_options(&storage[0]);
+        let mut ds_opts = D::tmp_options(&storage[0]);
         ds_opts.disable_proactive_fetching = true;
         let config = TestNetworkConfigBuilder::default()
             .api_config(
@@ -10042,6 +9904,319 @@ mod test {
             .unwrap();
         assert!(v2_search.blocks.is_empty());
 
+        // A catching-up peer names state by its parent leaf's (height, view). The decided leaf's
+        // state is always in memory, while the view after it may not have a proposal yet.
+        let leaf = network.server.decided_leaf().await;
+        let catchup_height = leaf.height();
+        let catchup_view = leaf.view_number().u64();
+        // The prefunded builder account, so the fee routes prove a presence. Its address has hex
+        // letters, so lowercase and EIP-55 renderings differ.
+        let account = format!(
+            "{:x}",
+            TestConfig::<5>::builder_key().fee_account().address()
+        );
+        let v1_account: crate::api::AccountQueryData = client
+            .get(&format!(
+                "catchup/{catchup_height}/{catchup_view}/account/{account}"
+            ))
+            .send()
+            .await
+            .unwrap();
+        let v2_account: espresso_api::proto::FeeAccountProofResponse = client
+            .get(&format!(
+                "v2/catchup/fee-account?height={catchup_height}&view={catchup_view}&\
+                 address=0x{account}"
+            ))
+            .send()
+            .await
+            .unwrap();
+        // Compared as a value rather than a string, since v1 serves this `U256` as `0x` hex and
+        // v2 as a decimal string.
+        assert_eq!(
+            v2_account.balance.parse::<U256>().unwrap(),
+            v1_account.balance
+        );
+        assert_eq!(v2_account, v1_account.clone().into());
+        let v2_proof = v2_account.proof.unwrap();
+        assert_eq!(
+            v2_proof.account,
+            format!("0x{account}"),
+            "the proof names the account in lowercase hex"
+        );
+        assert!(matches!(
+            v2_proof.proof.unwrap().proof,
+            Some(espresso_api::proto::fee_merkle_proof::Proof::Presence(_))
+        ));
+
+        // Some catchup routes may have nothing to serve this early in the chain, so a route both
+        // versions refuse must at least refuse with the same status.
+        fn both_or_same_status<A, B>(
+            route: &str,
+            v1: Result<A, ClientErr>,
+            v2: Result<B, ClientErr>,
+        ) -> Option<(A, B)> {
+            match (v1, v2) {
+                (Ok(v1), Ok(v2)) => Some((v1, v2)),
+                (Err(v1), Err(v2)) => {
+                    assert_eq!(v2.status, v1.status, "{route}");
+                    None
+                },
+                (v1, v2) => panic!("{route}: v1 ok {}, v2 ok {}", v1.is_ok(), v2.is_ok()),
+            }
+        }
+
+        let v1_frontier: crate::api::BlocksFrontier = client
+            .get(&format!("catchup/{catchup_height}/{catchup_view}/blocks"))
+            .send()
+            .await
+            .unwrap();
+        let v2_frontier: espresso_api::proto::MerklePathResponse = client
+            .get(&format!(
+                "v2/catchup/blocks-frontier?height={catchup_height}&view={catchup_view}"
+            ))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(
+            v2_frontier,
+            espresso_api::proto::MerklePathResponse::from(&v1_frontier)
+        );
+
+        // v2's bincode trees are decoded as their type and compared with v1's through serde.
+        let accounts = vec![format!("0x{account}")];
+        let v1: espresso_types::FeeMerkleTree = client
+            .post(&format!("catchup/{catchup_height}/{catchup_view}/accounts"))
+            .body_json(&accounts)
+            .unwrap()
+            .send()
+            .await
+            .unwrap();
+        let v2: espresso_api::proto::FeeMerkleTreeResponse = client
+            .post("v2/catchup/fee-accounts")
+            .body_json(&espresso_api::proto::GetCatchupFeeAccountsRequest {
+                height: Some(catchup_height),
+                view: Some(catchup_view),
+                addresses: accounts.clone(),
+            })
+            .unwrap()
+            .send()
+            .await
+            .unwrap();
+        let v2: espresso_types::FeeMerkleTree = bincode::deserialize(&v2.tree).unwrap();
+        assert_eq!(
+            serde_json::to_value(&v2).unwrap(),
+            serde_json::to_value(&v1).unwrap()
+        );
+        let v1 = client
+            .post::<espresso_types::v0_3::RewardMerkleTreeV1>(&format!(
+                "catchup/{catchup_height}/{catchup_view}/reward-accounts"
+            ))
+            .body_json(&accounts)
+            .unwrap()
+            .send()
+            .await;
+        let v2 = client
+            .post::<espresso_api::proto::RewardMerkleTreeV1Response>("v2/catchup/reward-accounts")
+            .body_json(&espresso_api::proto::GetCatchupRewardAccountsRequest {
+                height: Some(catchup_height),
+                view: Some(catchup_view),
+                addresses: accounts,
+            })
+            .unwrap()
+            .send()
+            .await;
+        if let Some((v1, v2)) = both_or_same_status("reward-accounts", v1, v2) {
+            let v2: espresso_types::v0_3::RewardMerkleTreeV1 =
+                bincode::deserialize(&v2.tree).unwrap();
+            assert_eq!(
+                serde_json::to_value(&v2).unwrap(),
+                serde_json::to_value(&v1).unwrap()
+            );
+        }
+
+        let v1 = client
+            .get::<espresso_types::v0_3::RewardAccountQueryDataV1>(&format!(
+                "catchup/{catchup_height}/{catchup_view}/reward-account/{account}"
+            ))
+            .send()
+            .await;
+        let v2 = client
+            .get::<espresso_api::proto::RewardAccountProofResponse>(&format!(
+                "v2/catchup/reward-account?height={catchup_height}&view={catchup_view}&\
+                 address=0x{account}"
+            ))
+            .send()
+            .await;
+        if let Some((v1, v2)) = both_or_same_status("reward-account", v1, v2) {
+            assert_eq!(v2, v1.into());
+        }
+
+        let v1 = client
+            .get::<espresso_types::v0_4::RewardAccountQueryDataV2>(&format!(
+                "catchup/{catchup_height}/{catchup_view}/reward-account-v2/{account}"
+            ))
+            .send()
+            .await;
+        let v2 = client
+            .get::<espresso_api::proto::RewardAccountProofResponse>(&format!(
+                "v2/catchup/reward-account-v2?height={catchup_height}&view={catchup_view}&\
+                 address=0x{account}"
+            ))
+            .send()
+            .await;
+        if let Some((v1, v2)) = both_or_same_status("reward-account-v2", v1, v2) {
+            assert_eq!(v2, v1.into());
+        }
+
+        let v1 = client
+            .get::<Vec<u8>>(&format!(
+                "catchup/reward-merkle-tree-v2/{catchup_height}/{catchup_view}"
+            ))
+            .send()
+            .await;
+        let v2 = client
+            .get::<espresso_api::proto::RewardMerkleTreeV2Response>(&format!(
+                "v2/catchup/reward-merkle-tree-v2?height={catchup_height}&view={catchup_view}"
+            ))
+            .send()
+            .await;
+        if let Some((v1, v2)) = both_or_same_status("reward-merkle-tree-v2", v1, v2) {
+            assert_eq!(v2.tree, v1);
+        }
+
+        let v1_chain: Vec<espresso_types::Leaf2> = client
+            .get(&format!("catchup/{catchup_height}/leafchain"))
+            .send()
+            .await
+            .unwrap();
+        let v2_chain: espresso_api::proto::CatchupLeafChainResponse = client
+            .get(&format!("v2/catchup/leaf-chain?height={catchup_height}"))
+            .send()
+            .await
+            .unwrap();
+        assert!(!v1_chain.is_empty());
+        assert_eq!(
+            v2_chain.leaves,
+            v1_chain.iter().map(Into::into).collect::<Vec<_>>()
+        );
+
+        let v1 = client
+            .get::<espresso_types::Certificate2<SeqTypes>>(&format!(
+                "catchup/{catchup_height}/cert2"
+            ))
+            .send()
+            .await;
+        let v2 = client
+            .get::<espresso_api::proto::Cert2Response>(&format!(
+                "v2/catchup/cert2?height={catchup_height}"
+            ))
+            .send()
+            .await;
+        if let Some((v1, v2)) = both_or_same_status("cert2", v1, v2) {
+            assert_eq!(v2.certificate, Some((&v1).into()));
+        }
+
+        let v1 = client
+            .get::<hotshot_types::simple_certificate::LightClientStateUpdateCertificateV2<SeqTypes>>(
+                "catchup/1/state-cert",
+            )
+            .send()
+            .await;
+        let v2 = client
+            .get::<espresso_api::proto::StateCertV2Response>("v2/catchup/state-cert?epoch=1")
+            .send()
+            .await;
+        if let Some((v1, v2)) = both_or_same_status("state-cert", v1, v2) {
+            assert_eq!(v2, (&espresso_types::v0_4::StateCertQueryDataV2(v1)).into());
+        }
+
+        let known = leaf.block_header().chain_config().commit();
+        let v1_config: espresso_types::v0_3::ChainConfig = client
+            .get(&format!("catchup/chain-config/{known}"))
+            .send()
+            .await
+            .unwrap();
+        let v2_config: espresso_api::proto::CatchupChainConfigResponse = client
+            .get(&format!("v2/catchup/chain-config?commitment={known}"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(v2_config.chain_config, Some((&v1_config).into()));
+        // A well-formed commitment of a config the node never saw, so both versions reach the
+        // lookup rather than refusing to parse it.
+        let unknown = espresso_types::v0_3::ChainConfig {
+            chain_id: 999u64.into(),
+            ..Default::default()
+        }
+        .commit();
+        let v1_status = client
+            .get::<serde_json::Value>(&format!("catchup/chain-config/{unknown}"))
+            .send()
+            .await
+            .unwrap_err()
+            .status;
+        let v2_status = client
+            .get::<serde_json::Value>(&format!("v2/catchup/chain-config?commitment={unknown}"))
+            .send()
+            .await
+            .unwrap_err()
+            .status;
+        assert_ne!(v1_status, StatusCode::BAD_REQUEST);
+        assert_eq!(v2_status, v1_status);
+
+        for query in [
+            format!("v2/catchup/fee-account?view=1&address=0x{account}").as_str(),
+            "v2/catchup/blocks-frontier?height=1",
+            "v2/catchup/leaf-chain",
+            "v2/catchup/cert2",
+            "v2/catchup/chain-config",
+            "v2/catchup/reward-account?height=1&view=1",
+            format!("v2/catchup/reward-account-v2?view=1&address=0x{account}").as_str(),
+            "v2/catchup/reward-merkle-tree-v2?height=1",
+            "v2/catchup/state-cert",
+        ] {
+            let err = client
+                .get::<serde_json::Value>(query)
+                .send()
+                .await
+                .unwrap_err();
+            assert_eq!(err.status, StatusCode::BAD_REQUEST, "{query}");
+        }
+        for (route, body) in [
+            (
+                "v2/catchup/fee-accounts",
+                serde_json::json!({ "height": 1, "addresses": [] }),
+            ),
+            (
+                "v2/catchup/fee-accounts",
+                serde_json::json!({ "height": 1, "view": 1, "addresses": ["0xnot-hex"] }),
+            ),
+            (
+                "v2/catchup/reward-accounts",
+                serde_json::json!({ "view": 1, "addresses": [] }),
+            ),
+            (
+                "v2/catchup/reward-accounts",
+                serde_json::json!({ "height": 1, "view": 1, "addresses": ["0xnot-hex"] }),
+            ),
+        ] {
+            let err = client
+                .post::<serde_json::Value>(route)
+                .body_json(&body)
+                .unwrap()
+                .send()
+                .await
+                .unwrap_err();
+            assert_eq!(err.status, StatusCode::BAD_REQUEST, "{route} {body}");
+        }
+
+        assert_v2_light_client_agrees_with_v1(
+            &client,
+            last_block,
+            u64::from(namespace_counts[1].0),
+        )
+        .await;
+
         let v1_config = client
             .get::<espresso_types::config::PublicNetworkConfig>("config/hotshot")
             .send()
@@ -10222,11 +10397,9 @@ mod test {
         // Nothing in the repository runs a deferred migration yet, so without these rows both
         // versions report an empty list and agree vacuously.
         {
-            let cfg = Config::try_from(&tmp_options(&storage[0])).unwrap();
-            let db = SqlStorage::connect(cfg, StorageConnectionType::Query)
+            let db = D::connect(&D::tmp_options(&storage[0]), StorageConnectionType::Query)
                 .await
                 .unwrap();
-            let mut tx = db.write().await.unwrap();
             for (name, started_at, completed_at, last_offset) in [
                 (
                     "backfill_done",
@@ -10241,21 +10414,14 @@ mod test {
                         .unwrap()
                         .with_timezone(&chrono::Utc)
                 };
-                sqlx::query(
-                    "INSERT INTO deferred_migrations (name, started_at, completed_at, last_offset)
-                     VALUES ($1, $2, $3, $4)",
-                )
-                .bind(name)
-                .bind(parse(started_at))
-                .bind(completed_at.map(parse))
-                .bind(last_offset)
-                .execute(tx.as_mut())
-                .await
-                .unwrap();
+                let migration = DeferredMigration {
+                    name,
+                    started_at: parse(started_at),
+                    completed_at: completed_at.map(parse),
+                    last_offset,
+                };
+                D::insert_deferred_migration(&db, migration).await.unwrap();
             }
-            hotshot_query_service::data_source::Transaction::commit(tx)
-                .await
-                .unwrap();
         }
 
         // As raw JSON, so the timestamp strings are compared as v1 actually serves them.
@@ -11099,10 +11265,250 @@ mod test {
         }
     }
 
+    /// Asks both versions for each light-client proof of the block at `height`, where `namespace`
+    /// has transactions, and holds every v2 response to the v1 proof re-encoded.
+    async fn assert_v2_light_client_agrees_with_v1(
+        client: &Client<ClientErr, StaticVersion<0, 1>>,
+        height: u64,
+        namespace: u64,
+    ) {
+        use espresso_api::proto;
+
+        let payloads_to_proto = |proofs: &[PayloadProof]| {
+            proofs
+                .iter()
+                .map(|proof| proto::LightClientPayloadProofResponse::try_from(proof).unwrap())
+                .collect::<Vec<_>>()
+        };
+
+        let v1_leaf: LeafProof = client
+            .get(&format!("light-client/leaf/{height}"))
+            .send()
+            .await
+            .unwrap();
+        let v2_leaf: proto::LightClientLeafProofResponse = client
+            .get(&format!("v2/light-client/leaf?height={height}"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(v2_leaf, (&v1_leaf).into());
+
+        let root = height + 1;
+        let v1_assumed: LeafProof = client
+            .get(&format!("light-client/leaf/{height}/{root}"))
+            .send()
+            .await
+            .unwrap();
+        let v2_assumed: proto::LightClientLeafProofResponse = client
+            .get(&format!(
+                "v2/light-client/leaf?height={height}&finalized={root}"
+            ))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(v2_assumed, (&v1_assumed).into());
+
+        let v1_header: HeaderProof = client
+            .get(&format!("light-client/header/{root}/{height}"))
+            .send()
+            .await
+            .unwrap();
+        let v2_header: proto::LightClientHeaderProofResponse = client
+            .get(&format!(
+                "v2/light-client/header?root={root}&height={height}"
+            ))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(
+            v2_header,
+            proto::LightClientHeaderProofResponse {
+                header: Some(v1_header.header().into()),
+                proof: Some(v1_header.proof().into()),
+            }
+        );
+
+        let v1_payload: PayloadProof = client
+            .get(&format!("light-client/payload/{height}"))
+            .send()
+            .await
+            .unwrap();
+        let v2_payload: proto::LightClientPayloadProofResponse = client
+            .get(&format!("v2/light-client/payload?height={height}"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(v2_payload, (&v1_payload).try_into().unwrap());
+
+        let v1_payloads: Vec<PayloadProof> = client
+            .get(&format!("light-client/payload/{height}/{root}"))
+            .send()
+            .await
+            .unwrap();
+        let v2_payloads: proto::LightClientPayloadProofRangeResponse = client
+            .get(&format!(
+                "v2/light-client/payload-range?from={height}&until={root}"
+            ))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(v2_payloads.proofs, payloads_to_proto(&v1_payloads));
+
+        let v1_batch: Vec<PayloadProof> = client
+            .post("light-client/payload/ranges")
+            .body_json(&std::iter::once(height..root).collect::<Vec<_>>())
+            .unwrap()
+            .send()
+            .await
+            .unwrap();
+        let v2_batch: proto::LightClientPayloadProofRangeResponse = client
+            .post("v2/light-client/payload-ranges")
+            .body_json(&proto::GetLightClientPayloadProofRangesRequest {
+                ranges: vec![proto::HeightRange {
+                    from: Some(height),
+                    until: Some(root),
+                }],
+            })
+            .unwrap()
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(v2_batch.proofs, payloads_to_proto(&v1_batch));
+
+        let absent = 999;
+        for ns in [namespace, absent] {
+            let v1_ns: NamespaceProof = client
+                .get(&format!("light-client/namespace/{height}/{ns}"))
+                .send()
+                .await
+                .unwrap();
+            let v2_ns: proto::LightClientNamespaceProofResponse = client
+                .get(&format!(
+                    "v2/light-client/namespace?height={height}&namespace={ns}"
+                ))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(v1_ns.contents().is_some(), ns == namespace, "{ns}");
+            assert_eq!(v2_ns, (&v1_ns).try_into().unwrap(), "{ns}");
+        }
+
+        let v1_range: Vec<NamespaceProof> = client
+            .get(&format!(
+                "light-client/namespace/{height}/{root}/{namespace}"
+            ))
+            .send()
+            .await
+            .unwrap();
+        let v2_range: proto::LightClientNamespaceProofRangeResponse = client
+            .get(&format!(
+                "v2/light-client/namespace-range?from={height}&until={root}&namespace={namespace}"
+            ))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(
+            v2_range.proofs,
+            v1_range
+                .iter()
+                .map(|proof| proto::LightClientNamespaceProofResponse::try_from(proof).unwrap())
+                .collect::<Vec<_>>()
+        );
+
+        let encoded = tagged_base64::TaggedBase64::new(
+            ::light_client::client::NAMESPACES_PARAM_TAG,
+            &serde_json::to_vec(&[namespace, absent]).unwrap(),
+        )
+        .unwrap();
+        let v1_blocks: Vec<std::collections::HashMap<u64, NamespaceProof>> = client
+            .get(&format!(
+                "light-client/namespaces/{height}/{root}/{encoded}"
+            ))
+            .send()
+            .await
+            .unwrap();
+        let v2_blocks: proto::LightClientNamespacesProofRangeResponse = client
+            .post("v2/light-client/namespaces-range")
+            .body_json(&proto::GetLightClientNamespacesProofRangeRequest {
+                from: Some(height),
+                until: Some(root),
+                namespaces: Vec::from([namespace, absent]),
+            })
+            .unwrap()
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(
+            v2_blocks.blocks,
+            v1_blocks
+                .iter()
+                .map(|block| proto::LightClientNamespacesProof {
+                    proofs: block
+                        .iter()
+                        .filter_map(|(ns, proof)| {
+                            Some((*ns, proof.contents()?.try_into().unwrap()))
+                        })
+                        .collect(),
+                })
+                .collect::<Vec<_>>(),
+        );
+
+        for query in [
+            format!("light-client/namespace/{}/{namespace}", u64::MAX),
+            format!(
+                "v2/light-client/namespace?height={}&namespace={namespace}",
+                u64::MAX
+            ),
+        ] {
+            let err = client
+                .get::<serde_json::Value>(&query)
+                .send()
+                .await
+                .unwrap_err();
+            assert_eq!(err.status, StatusCode::NOT_FOUND, "{query}");
+        }
+
+        for query in [
+            "v2/light-client/leaf".to_owned(),
+            format!("v2/light-client/leaf?height={height}&block_hash=BLOCK~AA"),
+            format!("v2/light-client/header?height={height}"),
+            format!("v2/light-client/header?root={root}"),
+            "v2/light-client/stake-table".to_owned(),
+            format!("v2/light-client/namespace?height={height}"),
+            format!("v2/light-client/payload-range?from={height}"),
+            format!("v2/light-client/payload-range?from={root}&until={height}"),
+            format!("v2/light-client/namespace?height={height}&namespace=4294967296"),
+        ] {
+            let err = client
+                .get::<serde_json::Value>(&query)
+                .send()
+                .await
+                .unwrap_err();
+            assert_eq!(err.status, StatusCode::BAD_REQUEST, "{query}");
+        }
+
+        for namespaces in [(0..=100).collect::<Vec<u64>>(), vec![1 << 32]] {
+            let err = client
+                .post::<serde_json::Value>("v2/light-client/namespaces-range")
+                .body_json(
+                    &espresso_api::proto::GetLightClientNamespacesProofRangeRequest {
+                        from: Some(height),
+                        until: Some(root),
+                        namespaces,
+                    },
+                )
+                .unwrap()
+                .send()
+                .await
+                .unwrap_err();
+            assert_eq!(err.status, StatusCode::BAD_REQUEST);
+        }
+    }
+
     use rand::thread_rng;
 
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_aggregator_namespace_endpoints() {
+    #[apply(sql_data_sources)]
+    async fn test_aggregator_namespace_endpoints<D: TestableSqlDataSource>(_d: PhantomData<D>) {
         let mut rng = thread_rng();
 
         let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
@@ -11114,11 +11520,11 @@ mod test {
         let options = Options::with_port(port).submit(Default::default());
         const NUM_NODES: usize = 2;
         // Initialize storage for each node
-        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
+        let storage = join_all((0..NUM_NODES).map(|_| D::create_storage())).await;
 
         let persistence_options: [_; NUM_NODES] = storage
             .iter()
-            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
+            .map(<D as TestableSequencerDataSource>::persistence_options)
             .collect::<Vec<_>>()
             .try_into()
             .unwrap();
@@ -11126,7 +11532,7 @@ mod test {
         let network_config = TestConfigBuilder::default().build();
 
         let config = TestNetworkConfigBuilder::<NUM_NODES, _, _>::with_num_nodes()
-            .api_config(SqlDataSource::options(&storage[0], options))
+            .api_config(D::options(&storage[0], options))
             .network_config(network_config)
             .persistences(persistence_options.clone())
             .build();
@@ -11298,8 +11704,8 @@ mod test {
         );
     }
 
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_stream_transactions_endpoint() {
+    #[apply(sql_data_sources)]
+    async fn test_stream_transactions_endpoint<D: TestableSqlDataSource>(_d: PhantomData<D>) {
         // This test submits transactions to a sequencer for multiple namespaces,
         // waits for them to be decided, and then verifies that:
         // 1. All transactions appear in the transaction stream.
@@ -11316,11 +11722,11 @@ mod test {
         let options = Options::with_port(port).submit(Default::default());
         const NUM_NODES: usize = 2;
         // Initialize storage for each node
-        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
+        let storage = join_all((0..NUM_NODES).map(|_| D::create_storage())).await;
 
         let persistence_options: [_; NUM_NODES] = storage
             .iter()
-            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
+            .map(<D as TestableSequencerDataSource>::persistence_options)
             .collect::<Vec<_>>()
             .try_into()
             .unwrap();
@@ -11328,7 +11734,7 @@ mod test {
         let network_config = TestConfigBuilder::default().build();
 
         let config = TestNetworkConfigBuilder::<NUM_NODES, _, _>::with_num_nodes()
-            .api_config(SqlDataSource::options(&storage[0], options))
+            .api_config(D::options(&storage[0], options))
             .network_config(network_config)
             .persistences(persistence_options.clone())
             .build();
@@ -11424,12 +11830,14 @@ mod test {
     #[case::v3("v3", false)]
     #[case::v4("v4", true)]
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_legacy_reward_tree_updates(
+    async fn test_legacy_reward_tree_updates<D: TestableSqlDataSource>(
+        #[values(PhantomData::<Postgres>, PhantomData::<Sqlite>)] _d: PhantomData<D>,
+
         #[case] chain: &str,
         #[case] fills_v2: bool,
     ) -> anyhow::Result<()> {
         let chain = LegacyChain::load(chain)?;
-        let replay = chain.replay().await?;
+        let replay = chain.replay::<D>().await?;
         let client = &replay.client;
         let tip = chain.tip();
 
@@ -11477,8 +11885,10 @@ mod test {
         Ok(())
     }
 
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_only_v2_reward_tree_updates() -> anyhow::Result<()> {
+    #[apply(sql_data_sources)]
+    async fn test_only_v2_reward_tree_updates<D: TestableSqlDataSource>(
+        _d: PhantomData<D>,
+    ) -> anyhow::Result<()> {
         // Rewards accrue in the v2 reward Merkle tree, and the v1 tree stays empty.
         const EPOCH_HEIGHT: u64 = 10;
 
@@ -11491,10 +11901,10 @@ mod test {
         tracing::info!("API PORT = {api_port}");
         const NUM_NODES: usize = 5;
 
-        let (storage, persistence) = node_storage::<SqlDataSource, NUM_NODES>().await;
+        let (storage, persistence) = node_storage::<D, NUM_NODES>().await;
 
         let config = TestNetworkConfigBuilder::with_num_nodes()
-            .api_config(SqlDataSource::options(
+            .api_config(D::options(
                 &storage[0],
                 Options::with_port(api_port).catchup(Default::default()),
             ))
@@ -11520,8 +11930,8 @@ mod test {
         Ok(())
     }
 
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    pub(crate) async fn test_state_cert_query() {
+    #[apply(sql_data_sources)]
+    pub(crate) async fn test_state_cert_query<D: TestableSqlDataSource>(_d: PhantomData<D>) {
         const TEST_EPOCH_HEIGHT: u64 = 10;
         const TEST_EPOCHS: u64 = 5;
 
@@ -11534,10 +11944,10 @@ mod test {
         tracing::info!("API PORT = {api_port}");
         const NUM_NODES: usize = 2;
 
-        let (storage, persistence) = node_storage::<SqlDataSource, NUM_NODES>().await;
+        let (storage, persistence) = node_storage::<D, NUM_NODES>().await;
 
         let config = TestNetworkConfigBuilder::with_num_nodes()
-            .api_config(SqlDataSource::options(
+            .api_config(D::options(
                 &storage[0],
                 Options::with_port(api_port).catchup(Default::default()),
             ))
@@ -11587,9 +11997,12 @@ mod test {
     #[case::v3("v3")]
     #[case::v4("v4")]
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_legacy_state_certs(#[case] chain: &str) -> anyhow::Result<()> {
+    async fn test_legacy_state_certs<D: TestableSqlDataSource>(
+        #[values(PhantomData::<Postgres>, PhantomData::<Sqlite>)] _d: PhantomData<D>,
+        #[case] chain: &str,
+    ) -> anyhow::Result<()> {
         let chain = LegacyChain::load(chain)?;
-        let replay = chain.replay().await?;
+        let replay = chain.replay::<D>().await?;
         let (last_epoch, _) = chain.state_certs.last().unwrap();
         assert_state_certs(&replay.client, 3..=*last_epoch, chain.epoch_height()).await;
 
@@ -11663,8 +12076,8 @@ mod test {
     /// to catch up. This test starts a 5-node network with epoch height 10, waits for 3 epochs to
     /// pass, then removes and restarts node 0 with a fresh storage. The
     /// restarted node catches up for the missing state certificates.
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    pub(crate) async fn test_state_cert_catchup() {
+    #[apply(sql_data_sources)]
+    pub(crate) async fn test_state_cert_catchup<D: TestableSqlDataSource>(_d: PhantomData<D>) {
         const EPOCH_HEIGHT: u64 = 10;
 
         let network_config = TestConfigBuilder::default()
@@ -11676,13 +12089,10 @@ mod test {
         tracing::info!("API PORT = {api_port}");
         const NUM_NODES: usize = 5;
 
-        let (storage, persistence) = node_storage::<SqlDataSource, NUM_NODES>().await;
+        let (storage, persistence) = node_storage::<D, NUM_NODES>().await;
 
         let config = TestNetworkConfigBuilder::with_num_nodes()
-            .api_config(SqlDataSource::options(
-                &storage[0],
-                Options::with_port(api_port).light_client(Default::default()),
-            ))
+            .api_config(D::options(&storage[0], Options::with_port(api_port)))
             .network_config(network_config)
             .persistences(persistence.clone())
             .build();
@@ -11701,10 +12111,8 @@ mod test {
         // port before the replacement node binds the same address.
         network.peers.remove(0).shut_down().await;
 
-        let new_storage: hotshot_query_service::data_source::sql::postgres::testing::TmpDb =
-            SqlDataSource::create_storage().await;
-        let new_persistence: persistence::sql::postgres::Options =
-            <SqlDataSource as TestableSequencerDataSource>::persistence_options(&new_storage);
+        let new_storage = D::create_storage().await;
+        let new_persistence = <D as TestableSequencerDataSource>::persistence_options(&new_storage);
 
         let node_0_port = reserve_tcp_port().expect("OS should have ephemeral ports available");
         tracing::info!("node_0_port {node_0_port}");
@@ -11713,7 +12121,7 @@ mod test {
                 peers: vec![format!("http://localhost:{api_port}").parse().unwrap()],
                 ..Query::test()
             },
-            tmp_options(&new_storage),
+            D::tmp_options(&new_storage),
         );
         let node_0 = opt
             .clone()
@@ -11768,8 +12176,10 @@ mod test {
         }
     }
 
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_integration_commission_updates() -> anyhow::Result<()> {
+    #[apply(sql_data_sources)]
+    async fn test_integration_commission_updates<D: TestableSqlDataSource>(
+        _d: PhantomData<D>,
+    ) -> anyhow::Result<()> {
         const NUM_NODES: usize = 3;
         const EPOCH_HEIGHT: u64 = 10;
 
@@ -11778,7 +12188,7 @@ mod test {
         let api_port = reserve_tcp_port().expect("OS should have ephemeral ports available");
 
         // Initialize storage for nodes
-        let (storage, persistence) = node_storage::<SqlDataSource, NUM_NODES>().await;
+        let (storage, persistence) = node_storage::<D, NUM_NODES>().await;
 
         // Configure test network with epochs
         let network_config = TestConfigBuilder::default()
@@ -11788,10 +12198,7 @@ mod test {
         // At 0.6 only validators with a registered x25519 key and p2p address are eligible, and
         // only the V3 contract registers them.
         let config = TestNetworkConfigBuilder::<NUM_NODES, _, _>::with_num_nodes()
-            .api_config(SqlDataSource::options(
-                &storage[0],
-                Options::with_port(api_port),
-            ))
+            .api_config(D::options(&storage[0], Options::with_port(api_port)))
             .network_config(network_config.clone())
             .persistences(persistence.clone())
             .pos_hook(
@@ -11912,8 +12319,10 @@ mod test {
 
     /// Call `updateNetworkConfig` on one validator and verify the indexer surfaces the new x25519
     /// key and p2p address in the validator map.
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_integration_update_fast_finality_network_config() -> anyhow::Result<()> {
+    #[apply(sql_data_sources)]
+    async fn test_integration_update_fast_finality_network_config<D: TestableSqlDataSource>(
+        _d: PhantomData<D>,
+    ) -> anyhow::Result<()> {
         // Peers switch to a validator's new key and address as soon as the update lands, and none
         // can reach the updated one at its made-up address, so the others must keep a quorum.
         const NUM_NODES: usize = 4;
@@ -11921,17 +12330,14 @@ mod test {
 
         let api_port = reserve_tcp_port().expect("OS should have ephemeral ports available");
 
-        let (storage, persistence) = node_storage::<SqlDataSource, NUM_NODES>().await;
+        let (storage, persistence) = node_storage::<D, NUM_NODES>().await;
 
         let network_config = TestConfigBuilder::default()
             .epoch_height(EPOCH_HEIGHT)
             .build();
 
         let config = TestNetworkConfigBuilder::<NUM_NODES, _, _>::with_num_nodes()
-            .api_config(SqlDataSource::options(
-                &storage[0],
-                Options::with_port(api_port),
-            ))
+            .api_config(D::options(&storage[0], Options::with_port(api_port)))
             .network_config(network_config.clone())
             .persistences(persistence.clone())
             .pos_hook(
@@ -11984,14 +12390,16 @@ mod test {
 
     /// Mainnet's validators set their x25519 keys and p2p addresses with the V3 stake table
     /// contract, after epochs run on V1 and V2.
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_legacy_network_config_update() -> anyhow::Result<()> {
+    #[apply(sql_data_sources)]
+    async fn test_legacy_network_config_update<D: TestableSqlDataSource>(
+        _d: PhantomData<D>,
+    ) -> anyhow::Result<()> {
         let chain = LegacyChain::load("v4")?;
         let update = chain
             .network_config_update
             .clone()
             .context("the v4 recording registered a network config")?;
-        let replay = chain.replay().await?;
+        let replay = chain.replay::<D>().await?;
         let last_epoch = chain.last_epoch();
         let validators = |epoch: u64| {
             let client = replay.client.clone();
@@ -12239,8 +12647,11 @@ mod test {
         Ok(())
     }
 
+    #[rstest]
+    #[case::postgres(PhantomData::<Postgres>)]
+    #[case::sqlite(PhantomData::<Sqlite>)]
     #[test_log::test]
-    fn test_reward_proof_endpoint() {
+    fn test_reward_proof_endpoint<D: TestableSqlDataSource>(#[case] _d: PhantomData<D>) {
         let test = async move {
             const EPOCH_HEIGHT: u64 = 10;
             const NUM_NODES: usize = 5;
@@ -12252,16 +12663,15 @@ mod test {
             let api_port = reserve_tcp_port().expect("OS should have ephemeral ports available");
             println!("API PORT = {api_port}");
 
-            let (storage, persistence) = node_storage::<SqlDataSource, NUM_NODES>().await;
+            let (storage, persistence) = node_storage::<D, NUM_NODES>().await;
 
             let api_opts = Options::with_port(api_port)
                 .catchup(Default::default())
                 .config(Default::default())
-                .explorer(Default::default())
-                .light_client(Default::default());
+                .explorer(Default::default());
 
             let config = TestNetworkConfigBuilder::with_num_nodes()
-                .api_config(SqlDataSource::options(&storage[0], api_opts))
+                .api_config(D::options(&storage[0], api_opts))
                 .network_config(network_config.clone())
                 .persistences(persistence.clone())
                 .build();
@@ -13251,8 +13661,10 @@ mod test {
             .unwrap()
     }
 
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_all_validators_endpoint() -> anyhow::Result<()> {
+    #[apply(sql_data_sources)]
+    async fn test_all_validators_endpoint<D: TestableSqlDataSource>(
+        _d: PhantomData<D>,
+    ) -> anyhow::Result<()> {
         const EPOCH_HEIGHT: u64 = 20;
 
         let network_config = TestConfigBuilder::default()
@@ -13263,13 +13675,10 @@ mod test {
 
         const NUM_NODES: usize = 5;
 
-        let (storage, persistence) = node_storage::<SqlDataSource, NUM_NODES>().await;
+        let (storage, persistence) = node_storage::<D, NUM_NODES>().await;
 
         let config = TestNetworkConfigBuilder::with_num_nodes()
-            .api_config(SqlDataSource::options(
-                &storage[0],
-                Options::with_port(api_port),
-            ))
+            .api_config(D::options(&storage[0], Options::with_port(api_port)))
             .network_config(network_config)
             .persistences(persistence.clone())
             .build();
@@ -13323,8 +13732,10 @@ mod test {
         Ok(())
     }
 
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_reward_accounts_catchup_endpoint() -> anyhow::Result<()> {
+    #[apply(sql_data_sources)]
+    async fn test_reward_accounts_catchup_endpoint<D: TestableSqlDataSource>(
+        _d: PhantomData<D>,
+    ) -> anyhow::Result<()> {
         const EPOCH_HEIGHT: u64 = 10;
         const NUM_NODES: usize = 3;
 
@@ -13335,10 +13746,10 @@ mod test {
         let api_port = reserve_tcp_port().expect("OS should have ephemeral ports available");
         println!("API PORT = {api_port}");
 
-        let (storage, persistence) = node_storage::<SqlDataSource, NUM_NODES>().await;
+        let (storage, persistence) = node_storage::<D, NUM_NODES>().await;
 
         let config = TestNetworkConfigBuilder::with_num_nodes()
-            .api_config(SqlDataSource::options(
+            .api_config(D::options(
                 &storage[0],
                 Options::with_port(api_port).catchup(Default::default()),
             ))
@@ -13404,8 +13815,8 @@ mod test {
         Ok(())
     }
 
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_namespace_query_compat() {
+    #[apply(sql_data_sources)]
+    async fn test_namespace_query_compat<D: TestableSqlDataSource>(_d: PhantomData<D>) {
         // Number of nodes running in the test network.
         const NUM_NODES: usize = 5;
 
@@ -13414,14 +13825,11 @@ mod test {
 
         // At 0.6 the query service gets decided payloads and VID from the DA proposals and VID
         // shares in consensus storage, so the nodes need real persistence.
-        let (storage, persistence) = node_storage::<SqlDataSource, NUM_NODES>().await;
+        let (storage, persistence) = node_storage::<D, NUM_NODES>().await;
 
         let test_config = TestConfigBuilder::default().build();
         let config = TestNetworkConfigBuilder::<NUM_NODES, _, _>::with_num_nodes()
-            .api_config(SqlDataSource::options(
-                &storage[0],
-                Options::with_port(port),
-            ))
+            .api_config(D::options(&storage[0], Options::with_port(port)))
             .persistences(persistence)
             .catchups(std::array::from_fn(|_| {
                 StatePeers::<SequencerApiVersion>::from_urls(
@@ -13534,9 +13942,12 @@ mod test {
     #[case::v4("v4")]
     #[case::v5("v5")]
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_legacy_namespace_proofs(#[case] chain: &str) -> anyhow::Result<()> {
+    async fn test_legacy_namespace_proofs<D: TestableSqlDataSource>(
+        #[values(PhantomData::<Postgres>, PhantomData::<Sqlite>)] _d: PhantomData<D>,
+        #[case] chain: &str,
+    ) -> anyhow::Result<()> {
         let chain = LegacyChain::load(chain)?;
-        let replay = chain.replay().await?;
+        let replay = chain.replay::<D>().await?;
         let versions = chain.blocks[1..]
             .iter()
             .map(|block| block.leaf.header().version())
@@ -13731,8 +14142,8 @@ mod test {
         assert_eq!(err.status, StatusCode::BAD_REQUEST);
     }
 
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_light_client_completeness() {
+    #[apply(sql_data_sources)]
+    async fn test_light_client_completeness<D: TestableSqlDataSource>(_d: PhantomData<D>) {
         // Run through two epoch changes, then check that we are able to get a correct light client
         // proof for every finalized leaf.
 
@@ -13750,13 +14161,10 @@ mod test {
             .builder_timeout(Duration::from_millis(250))
             .build();
 
-        let (storage, persistence) = node_storage::<SqlDataSource, NUM_NODES>().await;
+        let (storage, persistence) = node_storage::<D, NUM_NODES>().await;
 
         let config = TestNetworkConfigBuilder::<NUM_NODES, _, _>::with_num_nodes()
-            .api_config(
-                SqlDataSource::options(&storage[0], Options::with_port(port))
-                    .light_client(Default::default()),
-            )
+            .api_config(D::options(&storage[0], Options::with_port(port)))
             .persistences(persistence.clone())
             .catchups(std::array::from_fn(|_| {
                 StatePeers::<SequencerApiVersion>::from_urls(
@@ -13865,10 +14273,12 @@ mod test {
 
     /// Light clients still prove mainnet's leaves from before its 0.3 upgrade, across it and across
     /// the first epoch on the stake table, all produced by legacy consensus.
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_legacy_light_client_completeness() -> anyhow::Result<()> {
+    #[apply(sql_data_sources)]
+    async fn test_legacy_light_client_completeness<D: TestableSqlDataSource>(
+        _d: PhantomData<D>,
+    ) -> anyhow::Result<()> {
         let chain = LegacyChain::load("v2-v3")?;
-        let replay = chain.replay().await?;
+        let replay = chain.replay::<D>().await?;
         let epoch_height = chain.epoch_height();
         let leaves: Vec<_> = chain.blocks.iter().map(|b| b.leaf.clone()).collect();
         let blocks: Vec<_> = chain.blocks.iter().map(|b| b.block.clone()).collect();
@@ -13907,8 +14317,10 @@ mod test {
     }
 
     /// Test that `fetch_leaf` returns a leaf with exactly the requested block height.
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_fetch_leaf_returns_exact_height() -> anyhow::Result<()> {
+    #[apply(sql_data_sources)]
+    async fn test_fetch_leaf_returns_exact_height<D: TestableSqlDataSource>(
+        _d: PhantomData<D>,
+    ) -> anyhow::Result<()> {
         const EPOCH_HEIGHT: u64 = 10;
         const NUM_NODES: usize = 5;
         const TARGET_HEIGHT: u64 = EPOCH_HEIGHT * 3 + 2;
@@ -13919,7 +14331,7 @@ mod test {
 
         let port = reserve_tcp_port().expect("No ports free for query service");
 
-        let (storage, persistence) = node_storage::<SqlDataSource, NUM_NODES>().await;
+        let (storage, persistence) = node_storage::<D, NUM_NODES>().await;
 
         let catchup_peers = std::array::from_fn(|_| {
             StatePeers::<StaticVersion<0, 1>>::from_urls(
@@ -13931,10 +14343,7 @@ mod test {
         });
 
         let config = TestNetworkConfigBuilder::with_num_nodes()
-            .api_config(SqlDataSource::options(
-                &storage[0],
-                Options::with_port(port),
-            ))
+            .api_config(D::options(&storage[0], Options::with_port(port)))
             .network_config(network_config)
             .persistences(persistence)
             .catchups(catchup_peers)
@@ -13970,8 +14379,8 @@ mod test {
 
     /// Start a network at V5 from genesis, restart ALL nodes just before an epoch transition block
     /// (`boundary - 3`), and confirm the chain keeps producing blocks afterward.
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_v5_restart_before_epoch_boundary() {
+    #[apply(sql_data_sources)]
+    async fn test_v5_restart_before_epoch_boundary<D: TestableSqlDataSource>(_d: PhantomData<D>) {
         const NUM_NODES: usize = 3;
         const EPOCH_HEIGHT: u64 = 10;
         // Rewards start in epoch 4. Restart 3 blocks before the boundary that closes epoch 4, so
@@ -13993,13 +14402,10 @@ mod test {
             .next_view_timeout(Duration::from_secs(10))
             .build();
 
-        let (storage, persistence) = node_storage::<SqlDataSource, NUM_NODES>().await;
+        let (storage, persistence) = node_storage::<D, NUM_NODES>().await;
 
         let config = TestNetworkConfigBuilder::<NUM_NODES, _, _>::with_num_nodes()
-            .api_config(SqlDataSource::options(
-                &storage[0],
-                Options::with_port(port),
-            ))
+            .api_config(D::options(&storage[0], Options::with_port(port)))
             .persistences(persistence.clone())
             .network_config(network_config)
             .build();
@@ -14053,10 +14459,7 @@ mod test {
         // Rebuild reusing the same persistence so nodes resume from stored state.
         let port2 = reserve_tcp_port().expect("OS should have ephemeral ports available");
         let config2 = TestNetworkConfigBuilder::<NUM_NODES, _, _>::with_num_nodes()
-            .api_config(SqlDataSource::options(
-                &storage[0],
-                Options::with_port(port2),
-            ))
+            .api_config(D::options(&storage[0], Options::with_port(port2)))
             .persistences(persistence)
             .network_config(saved_cfg)
             .states(genesis_states)

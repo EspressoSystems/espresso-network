@@ -8,32 +8,13 @@
 //!
 //! Contains types and traits used by `HotShot` to abstract over network access
 
-use std::{collections::HashMap, fmt::Display, hash::Hash};
+use std::hash::Hash;
 
-use async_trait::async_trait;
-use futures::future::join_all;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use tokio::sync::mpsc::error::TrySendError;
 
 use super::{node_implementation::NodeType, signature_key::SignatureKey};
-use crate::{
-    BoxSyncFuture,
-    data::{EpochNumber, ViewNumber},
-    epoch_membership::EpochMembershipCoordinator,
-    message::SequencingMessage,
-};
-
-/// the type of transmission
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum TransmitType<TYPES: NodeType> {
-    /// directly transmit
-    Direct(TYPES::SignatureKey),
-    /// broadcast the message to all
-    Broadcast,
-    /// broadcast to DA committee
-    DaCommitteeBroadcast,
-}
+use crate::{data::ViewNumber, message::SequencingMessage};
 
 /// Errors that can occur in the network
 #[derive(Debug, Error)]
@@ -157,123 +138,6 @@ pub enum ResponseMessage<TYPES: NodeType> {
     Denied,
 }
 
-/// When a message should be broadcast to the network.
-///
-/// Network implementations may or may not respect this, at their discretion.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum BroadcastDelay {
-    /// Broadcast the message immediately
-    None,
-    /// Delay the broadcast to a given view.
-    View(u64),
-}
-
-/// represents a networking implmentration
-/// exposes low level API for interacting with a network
-/// intended to be implemented for a message transport,
-/// and memory network
-#[async_trait]
-pub trait ConnectedNetwork<K: SignatureKey + 'static>: Clone + Send + Sync + 'static {
-    /// Pauses the underlying network
-    fn pause(&self);
-
-    /// Resumes the underlying network
-    fn resume(&self);
-
-    /// Blocks until the network is successfully initialized
-    async fn wait_for_ready(&self);
-
-    /// Blocks until the network is shut down
-    fn shut_down<'a, 'b>(&'a self) -> BoxSyncFuture<'b, ()>
-    where
-        'a: 'b,
-        Self: 'b;
-
-    /// broadcast message to some subset of nodes
-    /// blocking
-    async fn broadcast_message(
-        &self,
-        view: ViewNumber,
-        message: Vec<u8>,
-        topic: Topic,
-        broadcast_delay: BroadcastDelay,
-    ) -> Result<(), NetworkError>;
-
-    /// broadcast a message only to a DA committee
-    /// blocking
-    async fn da_broadcast_message(
-        &self,
-        view: ViewNumber,
-        message: Vec<u8>,
-        recipients: Vec<K>,
-        broadcast_delay: BroadcastDelay,
-    ) -> Result<(), NetworkError>;
-
-    /// send messages with vid shares to its recipients
-    /// blocking
-    async fn vid_broadcast_message(
-        &self,
-        messages: HashMap<K, (ViewNumber, Vec<u8>)>,
-    ) -> Result<(), NetworkError> {
-        let future_results = messages
-            .into_iter()
-            .map(|(recipient_key, (v, m))| self.direct_message(v, m, recipient_key));
-        let results = join_all(future_results).await;
-
-        let errors: Vec<_> = results.into_iter().filter_map(|r| r.err()).collect();
-
-        if errors.is_empty() {
-            Ok(())
-        } else {
-            Err(NetworkError::Multiple(errors))
-        }
-    }
-
-    /// Sends a direct message to a specific node
-    /// blocking
-    async fn direct_message(
-        &self,
-        view: ViewNumber,
-        message: Vec<u8>,
-        recipient: K,
-    ) -> Result<(), NetworkError>;
-
-    /// Receive one or many messages from the underlying network.
-    ///
-    /// # Errors
-    /// If there is a network-related failure.
-    async fn recv_message(&self) -> Result<Vec<u8>, NetworkError>;
-
-    /// queues lookup of a node
-    ///
-    /// # Errors
-    /// Does not error.
-    fn queue_node_lookup(
-        &self,
-        _: ViewNumber,
-        _: K,
-    ) -> Result<(), TrySendError<Option<(ViewNumber, K)>>> {
-        Ok(())
-    }
-
-    /// Update view can be used for any reason, but mostly it's for canceling tasks,
-    /// and looking up the address of the leader of a future view.
-    async fn update_view<TYPES>(
-        &self,
-        _: ViewNumber,
-        _: Option<EpochNumber>,
-        _: EpochMembershipCoordinator<TYPES>,
-    ) where
-        TYPES: NodeType<SignatureKey = K>,
-    {
-    }
-
-    /// Is primary network down? Makes sense only for combined network
-    fn is_primary_down(&self) -> bool {
-        false
-    }
-}
-
 /// Changes that can occur in the network
 #[derive(Debug)]
 pub enum NetworkChange<P: SignatureKey> {
@@ -282,23 +146,4 @@ pub enum NetworkChange<P: SignatureKey> {
 
     /// A node is disconnected
     NodeDisconnected(P),
-}
-
-/// Used when broadcasting messages
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Copy)]
-pub enum Topic {
-    /// The `Global` topic goes out to all nodes
-    Global,
-    /// The `Da` topic goes out to only the DA committee
-    Da,
-}
-
-/// Topics travel as strings, so we need to convert our enum to a string
-impl Display for Topic {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Topic::Global => write!(f, "global"),
-            Topic::Da => write!(f, "DA"),
-        }
-    }
 }

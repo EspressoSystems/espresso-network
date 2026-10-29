@@ -26,6 +26,7 @@ previous version, preserving storage layout and ensuring upgrade safety.
 - [SafeExitTimelock](src/SafeExitTimelock.sol)
 - [StakeTable](src/StakeTable.sol)
 - [StakeTableV2](src/StakeTableV2.sol)
+- [StakeTableV3](src/StakeTableV3.sol)
 
 ### Interfaces
 
