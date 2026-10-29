@@ -626,6 +626,49 @@
         wait.
       </p>
     </section>
+    <section class="panel">
+      <div class="chart-head">
+        <h3>View timeline</h3>
+        <div class="legend" id="lg-tl"></div>
+      </div>
+      <div class="row" style="margin: 4px 0 8px">
+        <label for="tl-mb" class="note">Block size</label>
+        <input
+          type="range"
+          id="tl-mb"
+          min="1"
+          max="300"
+          step="1"
+          value="50"
+          style="width: 160px; accent-color: var(--accent)"
+        />
+        <span class="val" id="tl-mb-v" style="font-family: var(--mono); font-size: 13px"></span>
+        <button type="button" class="btn" id="tl-cap">Use the cap's block size</button>
+        <label for="tl-which" class="note">View</label>
+        <select
+          id="tl-which"
+          style="
+            font: inherit;
+            color: var(--fg);
+            background: var(--bg);
+            border: 1px solid var(--line);
+            border-radius: 5px;
+            padding: 3px 6px;
+          "
+        >
+          <option value="typical">typical, closest to the mean</option>
+          <option value="fastest">fastest</option>
+          <option value="slowest">slowest</option>
+        </select>
+      </div>
+      <div class="chart" id="ch-tl"></div>
+      <p class="note" style="margin-top: 8px">
+        One view V at the current settings and this block size, t = 0 at the proposal of V. Hatched spans wait on the
+        network or on peers; solid spans are the node's own compute, storage, or bytes leaving its interface. Hover a
+        span for its duration. The next leader's rows drive the view; the q-th voter's vote1 is the one that forms
+        Cert1.
+      </p>
+    </section>
   </div>
 </div>
 
@@ -1012,39 +1055,52 @@
       const V = views + 2;
       const proposed = new Float64Array(V),
         transit = new Float64Array(V),
-        disperse = new Float64Array(V);
-      const pair = [],
-        kth = [],
-        recovered = [],
-        cert1 = [],
-        decided = [];
-      for (let v = 0; v < V; v++) {
-        pair.push(new Float64Array(n));
-        kth.push(new Float64Array(n));
-        recovered.push(new Float64Array(n));
-        cert1.push(new Float64Array(n));
-        decided.push(new Float64Array(n));
+        disperse = new Float64Array(V),
+        built = new Float64Array(V),
+        propLeave = new Float64Array(V);
+      const per = {}; // [view][node] timestamps
+      for (const key of [
+        "pair",
+        "kth",
+        "recovered",
+        "cert1",
+        "decided",
+        "propArr",
+        "ready",
+        "vote1Out",
+        "vote1Leave",
+        "rbStart",
+        "rbDone",
+        "vote2",
+        "vote2Leave",
+        "cert2",
+      ]) {
+        per[key] = [];
+        for (let v = 0; v < V; v++) per[key].push(new Float64Array(n));
       }
+      const { pair, kth, recovered, cert1, decided } = per;
       let free = new Float64Array(n);
       const m = new Float64Array(n * n),
         scratch = new Float64Array(n);
-      const ready = new Float64Array(n),
-        vote1Out = new Float64Array(n),
-        vote1Leave = new Float64Array(n),
-        rbDone = new Float64Array(n),
-        propArr = new Float64Array(n),
-        vote2 = new Float64Array(n);
       proposed[1] = proposal;
       disperse[1] = build;
+      built[1] = build;
       free[leaders[1]] = build + T;
       for (let v = 1; v <= views; v++) {
         const lead = leaders[v],
           nxt = leaders[v + 1];
         const p = proposed[v],
           disp = disperse[v];
-        const propLeave = lane ? p : Math.max(p, free[lead]);
+        propLeave[v] = lane ? p : Math.max(p, free[lead]);
+        const propArr = per.propArr[v],
+          ready = per.ready[v],
+          vote1Out = per.vote1Out[v],
+          vote1Leave = per.vote1Leave[v],
+          rbStart = per.rbStart[v],
+          rbDone = per.rbDone[v],
+          vote2 = per.vote2[v];
         for (let j = 0; j < n; j++) {
-          propArr[j] = propLeave + d[lead * n + j];
+          propArr[j] = propLeave[v] + d[lead * n + j];
           pair[v][j] = Math.max(propArr[j], disp + T + d[lead * n + j]) + verify;
         }
         pair[v][lead] = Math.max(p, disp) + verify;
@@ -1053,19 +1109,20 @@
           ready[j] = pair[v][j] + vote1;
           vote1Out[j] = Math.max(ready[j], recovered[v - 1][j]);
         }
-        const built = propArr[nxt] + verify + build;
-        const disperseFirst = built < vote1Out[nxt];
+        built[v + 1] = propArr[nxt] + verify + build;
+        const disperseFirst = built[v + 1] < vote1Out[nxt];
         if (disperseFirst) {
-          disperse[v + 1] = Math.max(built, free[nxt]);
+          disperse[v + 1] = Math.max(built[v + 1], free[nxt]);
           free[nxt] = disperse[v + 1] + T;
         }
         for (let x = 0; x < n; x++) {
           vote1Leave[x] = lane ? vote1Out[x] : Math.max(vote1Out[x], free[x]);
-          rbDone[x] = Math.max(vote1Out[x], free[x]) + T;
+          rbStart[x] = Math.max(vote1Out[x], free[x]);
+          rbDone[x] = rbStart[x] + T;
         }
         free = Float64Array.from(rbDone);
         if (!disperseFirst) {
-          disperse[v + 1] = Math.max(built, free[nxt]);
+          disperse[v + 1] = Math.max(built[v + 1], free[nxt]);
           free[nxt] = disperse[v + 1] + T;
         }
         // cert1 at i: q-th smallest over x of vote1Leave[x] + d[x][i]
@@ -1079,14 +1136,18 @@
         kth[v][lead] = disp;
         for (let j = 0; j < n; j++) recovered[v][j] = kth[v][j] + decode;
         recovered[v][lead] = disp;
+        const vote2Leave = per.vote2Leave[v];
         for (let j = 0; j < n; j++) {
-          const t = Math.max(cert1[v][j], recovered[v][j]) + vote2c;
-          vote2[j] = lane ? t : Math.max(t, rbDone[j]);
+          vote2[j] = Math.max(cert1[v][j], recovered[v][j]) + vote2c;
+          vote2Leave[j] = lane ? vote2[j] : Math.max(vote2[j], rbDone[j]);
         }
-        for (let x = 0; x < n; x++) for (let i = 0; i < n; i++) m[x * n + i] = vote2[x] + d[x * n + i];
-        for (let i = 0; i < n; i++) decided[v][i] = kthOfColumn(m, n, i, q, scratch, -1) + cert + decide;
+        for (let x = 0; x < n; x++) for (let i = 0; i < n; i++) m[x * n + i] = vote2Leave[x] + d[x * n + i];
+        for (let i = 0; i < n; i++) {
+          per.cert2[v][i] = kthOfColumn(m, n, i, q, scratch, -1) + cert;
+          decided[v][i] = per.cert2[v][i] + decide;
+        }
       }
-      return { proposed, transit, pair, kth, recovered, cert1, decided, q, leaders, n };
+      return { proposed, transit, disperse, built, propLeave, ...per, q, leaders, n, T, d };
     }
     function pct(xs, p) {
       if (!xs.length) return NaN;
@@ -1389,6 +1450,7 @@
       current.decodeOnly = sweep({ ...cfg, compute: { ...zero, decode: cfg.compute.decode } });
       tiles(current, state.baseline);
       charts(current, state.baseline);
+      drawTimeline(current);
     }
     function delta(a, b, unit, d = 0, invert = false) {
       if (!b || !Number.isFinite(a) || !Number.isFinite(b)) return ["", ""];
@@ -1675,6 +1737,235 @@
       $("unpin").disabled = true;
       $("baseline-chip").textContent = "No baseline pinned.";
       render();
+    });
+    // ---- view timeline: every span of work and waiting in one view, for four roles ----
+    const TL_CAT = {
+      compute: ["var(--s1)", "compute"],
+      storage: ["var(--s4)", "storage"],
+      transfer: ["var(--s3)", "bytes leaving the interface"],
+      wait: ["url(#hatch)", "waiting on the network or on peers"],
+    };
+    let tlAuto = true;
+    function tlLabel() {
+      $("tl-mb-v").textContent = $("tl-mb").value + " MB";
+    }
+    function pickView(r, lo, hi, which) {
+      const cands = [];
+      for (let v = lo; v < hi; v++)
+        if (
+          r.leaders[v] !== r.leaders[v + 1] &&
+          r.leaders[v] !== r.leaders[v - 1] &&
+          r.leaders[v + 1] !== r.leaders[v + 2]
+        )
+          cands.push([v, (r.proposed[v + 1] - r.proposed[v]) * 1000]);
+      if (!cands.length) return lo;
+      if (which === "fastest") return cands.reduce((a, b) => (b[1] < a[1] ? b : a))[0];
+      if (which === "slowest") return cands.reduce((a, b) => (b[1] > a[1] ? b : a))[0];
+      const mean = cands.reduce((s, c) => s + c[1], 0) / cands.length;
+      return cands.reduce((a, b) => (Math.abs(b[1] - mean) < Math.abs(a[1] - mean) ? b : a))[0];
+    }
+    function drawTimeline(res) {
+      if (!res) return;
+      const at = atCap(res);
+      $("tl-mb").max = res.cfg.maxmb;
+      if (tlAuto && at.status === "ok") $("tl-mb").value = Math.max(1, Math.round(at.mb));
+      tlLabel();
+      const mb = +$("tl-mb").value,
+        cfg = res.cfg,
+        views = 80;
+      const leaders = MODEL.leaders(cfg.n, views, 1);
+      const { d } = MODEL.delays(cfg.profile, cfg.n, cfg.uniformMs, PROFILES);
+      const r = MODEL.runViews(cfg.n, cfg.k, d, mb, cfg.gbps, leaders, views, cfg.compute, cfg.lane);
+      const v = pickView(r, 20, views - 5, $("tl-which").value);
+      renderTimeline($("ch-tl"), timelineLanes(r, v, cfg, mb), r, v);
+      legend(
+        "lg-tl",
+        Object.values(TL_CAT).map(([c, name]) => [
+          name,
+          c === "url(#hatch)" ? "var(--fg-3)" : c,
+          c === "url(#hatch)" ? "dash" : "",
+        ]),
+      );
+    }
+    function timelineLanes(r, v, cfg, mb) {
+      const n = r.n,
+        L = r.leaders[v],
+        Ln = r.leaders[v + 1],
+        p = r.proposed[v],
+        T = r.T * 1000,
+        c = cfg.compute;
+      const ms = (t) => (t - p) * 1000,
+        cost = (s) => c[s][0] + c[s][1] * mb,
+        dd = (x, j) => r.d[x * n + j] * 1000;
+      const seg = (t0, t1, cat, label) => (t1 - t0 > 0.3 ? [{ t0, t1, cat, label }] : []);
+      const verify = cost("verify_proposal"),
+        cert = cost("cert"),
+        vote2 = cost("vote2");
+      const q = r.q;
+      const leaderRows = () => {
+        const prev = ms(r.propArr[v - 1][L]),
+          built = ms(r.built[v]),
+          c1 = ms(r.cert1[v - 1][L]);
+        return [
+          [
+            ...seg(prev, prev + verify, "compute", "verify proposal V−1"),
+            ...seg(prev + verify, built, "compute", "build + commit + encode V"),
+            ...seg(built, c1, "wait", "wait for Cert1(V−1)"),
+            ...seg(c1, 0, "storage", "sign + persist proposal V"),
+            ...seg(0, ms(r.propLeave[v]), "wait", "proposal V queued behind shares"),
+          ],
+          [
+            ...seg(ms(r.rbStart[v - 1][L]), ms(r.rbDone[v - 1][L]), "transfer", "rebroadcast share V−1"),
+            ...seg(built, ms(r.disperse[v]), "wait", "egress busy"),
+            ...seg(ms(r.disperse[v]), ms(r.disperse[v]) + T, "transfer", "disperse V"),
+            ...seg(ms(r.rbStart[v][L]), ms(r.rbDone[v][L]), "transfer", "rebroadcast share V"),
+          ],
+        ];
+      };
+      const voteRow = (j) => [
+        ...seg(ms(r.propLeave[v]), ms(r.propArr[v][j]), "wait", "proposal in flight"),
+        ...seg(ms(r.propArr[v][j]), ms(r.propArr[v][j]) + verify, "compute", "verify proposal V"),
+        ...seg(ms(r.propArr[v][j]) + verify, ms(r.pair[v][j]), "wait", "wait for own share"),
+        ...seg(ms(r.pair[v][j]), ms(r.ready[v][j]), "compute", "validate state + persist vote"),
+        ...seg(ms(r.ready[v][j]), ms(r.vote1Out[v][j]), "wait", "wait for block V−1"),
+        ...seg(ms(r.vote1Out[v][j]), ms(r.vote1Leave[v][j]), "wait", "vote1 queued behind shares"),
+        ...seg(ms(r.rbStart[v][j]), ms(r.rbDone[v][j]), "transfer", "rebroadcast share V"),
+      ];
+      const blockRow = (j) => {
+        const share = ms(r.disperse[v]) + T + dd(L, j);
+        return [
+          ...seg(ms(r.disperse[v]), share, "wait", "own share of V in flight"),
+          ...seg(share, ms(r.kth[v][j]), "wait", "collect k shares of V"),
+          ...seg(ms(r.kth[v][j]), ms(r.recovered[v][j]), "compute", "decode V"),
+        ];
+      };
+      const finalityRow = (j) => [
+        ...seg(ms(r.vote1Leave[v][j]), ms(r.cert1[v][j]) - cert, "wait", "collect vote1s"),
+        ...seg(ms(r.cert1[v][j]) - cert, ms(r.cert1[v][j]), "compute", "Cert1"),
+        ...seg(ms(r.cert1[v][j]), ms(r.vote2[v][j]) - vote2, "wait", "wait for block V"),
+        ...seg(ms(r.vote2[v][j]) - vote2, ms(r.vote2[v][j]), "storage", "sign + persist lock"),
+        ...seg(ms(r.vote2[v][j]), ms(r.vote2Leave[v][j]), "wait", "vote2 queued behind shares"),
+        ...seg(ms(r.vote2Leave[v][j]), ms(r.cert2[v][j]) - cert, "wait", "collect vote2s"),
+        ...seg(ms(r.cert2[v][j]) - cert, ms(r.cert2[v][j]), "compute", "Cert2"),
+        ...seg(ms(r.cert2[v][j]), ms(r.decided[v][j]), "compute", "decide"),
+      ];
+      const nextRows = () => {
+        const arr = ms(r.propArr[v][Ln]),
+          built = ms(r.built[v + 1]),
+          c1 = ms(r.cert1[v][Ln]);
+        let first = Infinity;
+        for (let x = 0; x < n; x++) first = Math.min(first, ms(r.vote1Leave[v][x]) + dd(x, Ln));
+        return [
+          [
+            ...seg(ms(r.propLeave[v]), arr, "wait", "proposal in flight"),
+            ...seg(arr, arr + verify, "compute", "verify proposal V"),
+            ...seg(arr + verify, built, "compute", "build + commit + encode V+1"),
+            ...seg(built, ms(r.disperse[v + 1]), "wait", "egress busy with the rebroadcast of V"),
+            ...seg(ms(r.disperse[v + 1]), ms(r.disperse[v + 1]) + T, "transfer", "disperse V+1"),
+          ],
+          [
+            ...seg(first, c1 - cert, "wait", "collect vote1s, the q-th gates"),
+            ...seg(c1 - cert, c1, "compute", "Cert1"),
+            ...seg(c1, ms(r.proposed[v + 1]), "storage", "sign + persist proposal V+1"),
+          ],
+          voteRow(Ln),
+        ];
+      };
+      // voters ranked by their vote1's arrival at L'
+      const arrivals = [];
+      for (let x = 0; x < n; x++) arrivals.push([r.vote1Leave[v][x] + r.d[x * n + Ln], x]);
+      arrivals.sort((a, b) => a[0] - b[0]);
+      const median = arrivals[Math.floor(n / 2)][1],
+        critical = arrivals[q - 1][1];
+      const reg = (j) =>
+        cfg.profile === "off" || cfg.profile === "uniform"
+          ? ""
+          : ` · ${MODEL.delays(cfg.profile, n, 0, PROFILES).labels[j]}`;
+      const lanes = [
+        { title: `Leader L of V`, sub: `node ${L}${reg(L)}`, rows: leaderRows() },
+        { title: `Next leader L′`, sub: `node ${Ln}${reg(Ln)} · builds and proposes V+1`, rows: nextRows() },
+        {
+          title: `Median voter`,
+          sub: `node ${median}${reg(median)} · vote1 arrives mid-pack`,
+          rows: [voteRow(median), blockRow(median), finalityRow(median)],
+        },
+        {
+          title: `q-th voter`,
+          sub: `node ${critical}${reg(critical)} · its vote1 forms Cert1 at L′`,
+          rows: [voteRow(critical), blockRow(critical), finalityRow(critical)],
+        },
+      ];
+      const dec = Float64Array.from(r.decided[v]).sort();
+      return { lanes, view: ms(r.proposed[v + 1]), finality: ms(dec[q - 1]) };
+    }
+    function renderTimeline(el, tl, r, v) {
+      const segs = tl.lanes.flatMap((l) => l.rows.flat());
+      const tmin = Math.floor(Math.min(0, ...segs.map((s) => s.t0)) / 50) * 50,
+        tmax = Math.ceil(Math.max(tl.view, tl.finality, ...segs.map((s) => s.t1)) / 50) * 50 + 10;
+      const left = 190,
+        right = 16,
+        top = 44,
+        rowH = 16,
+        gap = 4,
+        lanePad = 12,
+        titleH = 0;
+      const W = 1000;
+      let y = top;
+      const laneTop = tl.lanes.map((l) => {
+        const t = y;
+        y += lanePad + l.rows.length * (rowH + gap) + lanePad;
+        return t;
+      });
+      const H = y + 36;
+      const x = (t) => left + ((t - tmin) / (tmax - tmin)) * (W - left - right);
+      const step = niceStep((tmax - tmin) / 10);
+      let g = `<defs><pattern id="hatch" patternUnits="userSpaceOnUse" width="6" height="6" patternTransform="rotate(45)"><line x1="0" y1="0" x2="0" y2="6" stroke="var(--fg-3)" stroke-width="1.2" opacity="0.7"/></pattern></defs>`;
+      for (let t = Math.ceil(tmin / step) * step; t <= tmax; t += step)
+        g += `<line class="grid" x1="${x(t)}" x2="${x(t)}" y1="${top}" y2="${H - 30}" stroke="var(--line-2)"/><text x="${x(t)}" y="${H - 14}" text-anchor="middle">${t}</text>`;
+      g += `<text x="${W - right}" y="${H - 2}" text-anchor="end">ms from the proposal of V</text>`;
+      tl.lanes.forEach((l, i) => {
+        const t0 = laneTop[i],
+          h = lanePad * 2 + l.rows.length * (rowH + gap);
+        if (i % 2) g += `<rect x="0" y="${t0}" width="${W}" height="${h}" fill="var(--line-2)" opacity="0.5"/>`;
+        g += `<text x="${left - 10}" y="${t0 + lanePad + 10}" text-anchor="end" font-weight="600" fill="var(--fg)">${l.title}</text><text x="${left - 10}" y="${t0 + lanePad + 24}" text-anchor="end">${l.sub}</text>`;
+        l.rows.forEach((row, ri) => {
+          const ry = t0 + lanePad + ri * (rowH + gap);
+          for (const s of row) {
+            const x0 = x(s.t0),
+              w = Math.max(1.5, x(s.t1) - x0),
+              dur = s.t1 - s.t0;
+            const fill = TL_CAT[s.cat][0];
+            g += `<g><title>${s.label}: ${fmt(dur)} ms (${fmt(s.t0)} to ${fmt(s.t1)})</title>`;
+            if (s.cat === "wait")
+              g += `<rect x="${x0}" y="${ry}" width="${w}" height="${rowH}" fill="var(--panel)" stroke="var(--line)" rx="2"/>`;
+            g += `<rect x="${x0}" y="${ry}" width="${w}" height="${rowH}" fill="${fill}" rx="2"${s.cat === "wait" ? "" : ' opacity="0.92"'}/>`;
+            const text = `${s.label} ${fmt(dur)}`;
+            if (w > text.length * 5.6 + 8)
+              g += `<text x="${x0 + w / 2}" y="${ry + 12}" text-anchor="middle" fill="${s.cat === "wait" ? "var(--fg)" : "#fff"}" font-size="10.5">${text}</text>`;
+            g += `</g>`;
+          }
+        });
+      });
+      const bracket = (t1, yy, label, color) =>
+        `<g><line x1="${x(0)}" x2="${x(t1)}" y1="${yy}" y2="${yy}" stroke="${color}" stroke-width="1.5"/><line x1="${x(0)}" x2="${x(0)}" y1="${yy - 5}" y2="${yy + 5}" stroke="${color}" stroke-width="1.5"/><line x1="${x(t1)}" x2="${x(t1)}" y1="${yy - 5}" y2="${yy + 5}" stroke="${color}" stroke-width="1.5"/><text x="${(x(0) + x(t1)) / 2}" y="${yy - 4}" text-anchor="middle" fill="${color}" font-weight="600">${label}</text></g>`;
+      g +=
+        bracket(tl.view, 16, `view V: ${fmt(tl.view)} ms`, "var(--s2)") +
+        bracket(tl.finality, 36, `finality of V: ${fmt(tl.finality)} ms`, "var(--s1)");
+      for (const [t, label] of [
+        [0, "proposal V"],
+        [tl.view, "proposal V+1"],
+      ])
+        g += `<line x1="${x(t)}" x2="${x(t)}" y1="${top}" y2="${H - 30}" stroke="var(--fg-3)" stroke-dasharray="3 3"/><text x="${x(t) + 3}" y="${H - 20}" font-size="10">${label}</text>`;
+      el.innerHTML = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="timeline of one view">${g}</svg>`;
+    }
+    $("tl-mb").addEventListener("input", () => {
+      tlAuto = false;
+      drawTimeline(current);
+    });
+    $("tl-which").addEventListener("change", () => drawTimeline(current));
+    $("tl-cap").addEventListener("click", () => {
+      tlAuto = true;
+      drawTimeline(current);
     });
     advRows();
     keyFromCompute();
