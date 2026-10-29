@@ -496,303 +496,305 @@
 <a href=#496 id=496 data-nosnippet>496</a>            <span class="kw">return </span><span class="prelude-val">Err</span>(VidError::InsufficientShares);
 <a href=#497 id=497 data-nosnippet>497</a>        };
 <a href=#498 id=498 data-nosnippet>498</a>        <span class="kw">let </span>shard_bytes = first_share.payload[<span class="number">0</span>].len();
-<a href=#499 id=499 data-nosnippet>499</a>
-<a href=#500 id=500 data-nosnippet>500</a>        <span class="comment">// Track references to input original shards; avoids the per-shard
-<a href=#501 id=501 data-nosnippet>501</a>        // `.clone()` the previous version did to populate a
-<a href=#502 id=502 data-nosnippet>502</a>        // `Vec&lt;Option&lt;Vec&lt;u8&gt;&gt;&gt;`. Reconstructed shards come from the decoder
-<a href=#503 id=503 data-nosnippet>503</a>        // and are copied directly into the output buffer below.
-<a href=#504 id=504 data-nosnippet>504</a>        </span><span class="kw">let </span><span class="kw-2">mut </span>input_orig: Vec&lt;<span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>[u8]&gt;&gt; = <span class="macro">vec!</span>[<span class="prelude-val">None</span>; original_count];
-<a href=#505 id=505 data-nosnippet>505</a>
-<a href=#506 id=506 data-nosnippet>506</a>        <span class="kw">let </span><span class="kw-2">mut </span>recovered: Vec&lt;u8&gt; = Vec::with_capacity(original_count * shard_bytes);
-<a href=#507 id=507 data-nosnippet>507</a>        <span class="kw">if </span>recovery_count == <span class="number">0 </span>{
-<a href=#508 id=508 data-nosnippet>508</a>            <span class="comment">// Edge case where there are no recovery shares: every original must
-<a href=#509 id=509 data-nosnippet>509</a>            // be supplied as input.
-<a href=#510 id=510 data-nosnippet>510</a>            </span><span class="kw">for </span>share <span class="kw">in </span>shares {
-<a href=#511 id=511 data-nosnippet>511</a>                <span class="kw">if </span>!share.validate() || share.payload.iter().any(|p| p.len() != shard_bytes) {
-<a href=#512 id=512 data-nosnippet>512</a>                    <span class="kw">return </span><span class="prelude-val">Err</span>(VidError::InvalidShare);
-<a href=#513 id=513 data-nosnippet>513</a>                }
-<a href=#514 id=514 data-nosnippet>514</a>                <span class="kw">for </span>(i, index) <span class="kw">in </span>share.range.clone().enumerate() {
-<a href=#515 id=515 data-nosnippet>515</a>                    <span class="kw">if </span>index &lt; original_count {
-<a href=#516 id=516 data-nosnippet>516</a>                        input_orig[index] = <span class="prelude-val">Some</span>(<span class="kw-2">&amp;</span>share.payload[i]);
-<a href=#517 id=517 data-nosnippet>517</a>                    }
-<a href=#518 id=518 data-nosnippet>518</a>                }
-<a href=#519 id=519 data-nosnippet>519</a>            }
-<a href=#520 id=520 data-nosnippet>520</a>            <span class="kw">for </span>slot <span class="kw">in </span><span class="kw-2">&amp;</span>input_orig {
-<a href=#521 id=521 data-nosnippet>521</a>                <span class="kw">let </span>shard = slot
-<a href=#522 id=522 data-nosnippet>522</a>                    .ok_or_else(|| VidError::Internal(<span class="macro">anyhow!</span>(<span class="string">"Failed to recover the payload."</span>)))<span class="question-mark">?</span>;
-<a href=#523 id=523 data-nosnippet>523</a>                recovered.extend_from_slice(shard);
+<a href=#499 id=499 data-nosnippet>499</a>        <span class="comment">// The buffers below are sized from `shard_bytes`, so every share must
+<a href=#500 id=500 data-nosnippet>500</a>        // agree with it before anything is allocated.
+<a href=#501 id=501 data-nosnippet>501</a>        </span><span class="kw">if </span>shares
+<a href=#502 id=502 data-nosnippet>502</a>            .iter()
+<a href=#503 id=503 data-nosnippet>503</a>            .any(|share| !share.validate() || share.payload.iter().any(|p| p.len() != shard_bytes))
+<a href=#504 id=504 data-nosnippet>504</a>        {
+<a href=#505 id=505 data-nosnippet>505</a>            <span class="kw">return </span><span class="prelude-val">Err</span>(VidError::InvalidShare);
+<a href=#506 id=506 data-nosnippet>506</a>        }
+<a href=#507 id=507 data-nosnippet>507</a>
+<a href=#508 id=508 data-nosnippet>508</a>        <span class="comment">// Track references to input original shards; avoids the per-shard
+<a href=#509 id=509 data-nosnippet>509</a>        // `.clone()` the previous version did to populate a
+<a href=#510 id=510 data-nosnippet>510</a>        // `Vec&lt;Option&lt;Vec&lt;u8&gt;&gt;&gt;`. Reconstructed shards come from the decoder
+<a href=#511 id=511 data-nosnippet>511</a>        // and are copied directly into the output buffer below.
+<a href=#512 id=512 data-nosnippet>512</a>        </span><span class="kw">let </span><span class="kw-2">mut </span>input_orig: Vec&lt;<span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>[u8]&gt;&gt; = <span class="macro">vec!</span>[<span class="prelude-val">None</span>; original_count];
+<a href=#513 id=513 data-nosnippet>513</a>
+<a href=#514 id=514 data-nosnippet>514</a>        <span class="kw">let </span><span class="kw-2">mut </span>recovered: Vec&lt;u8&gt; = Vec::with_capacity(original_count * shard_bytes);
+<a href=#515 id=515 data-nosnippet>515</a>        <span class="kw">if </span>recovery_count == <span class="number">0 </span>{
+<a href=#516 id=516 data-nosnippet>516</a>            <span class="comment">// Edge case where there are no recovery shares: every original must
+<a href=#517 id=517 data-nosnippet>517</a>            // be supplied as input.
+<a href=#518 id=518 data-nosnippet>518</a>            </span><span class="kw">for </span>share <span class="kw">in </span>shares {
+<a href=#519 id=519 data-nosnippet>519</a>                <span class="kw">for </span>(i, index) <span class="kw">in </span>share.range.clone().enumerate() {
+<a href=#520 id=520 data-nosnippet>520</a>                    <span class="kw">if </span>index &lt; original_count {
+<a href=#521 id=521 data-nosnippet>521</a>                        input_orig[index] = <span class="prelude-val">Some</span>(<span class="kw-2">&amp;</span>share.payload[i]);
+<a href=#522 id=522 data-nosnippet>522</a>                    }
+<a href=#523 id=523 data-nosnippet>523</a>                }
 <a href=#524 id=524 data-nosnippet>524</a>            }
-<a href=#525 id=525 data-nosnippet>525</a>        } <span class="kw">else </span>{
-<a href=#526 id=526 data-nosnippet>526</a>            <span class="kw">let </span><span class="kw-2">mut </span>decoder = reed_solomon_simd::ReedSolomonDecoder::new(
-<a href=#527 id=527 data-nosnippet>527</a>                original_count,
-<a href=#528 id=528 data-nosnippet>528</a>                recovery_count,
-<a href=#529 id=529 data-nosnippet>529</a>                shard_bytes,
-<a href=#530 id=530 data-nosnippet>530</a>            )<span class="question-mark">?</span>;
-<a href=#531 id=531 data-nosnippet>531</a>            <span class="kw">for </span>share <span class="kw">in </span>shares {
-<a href=#532 id=532 data-nosnippet>532</a>                <span class="kw">if </span>!share.validate() || share.payload.iter().any(|p| p.len() != shard_bytes) {
-<a href=#533 id=533 data-nosnippet>533</a>                    <span class="kw">return </span><span class="prelude-val">Err</span>(VidError::InvalidShare);
-<a href=#534 id=534 data-nosnippet>534</a>                }
-<a href=#535 id=535 data-nosnippet>535</a>                <span class="kw">for </span>(i, index) <span class="kw">in </span>share.range.clone().enumerate() {
-<a href=#536 id=536 data-nosnippet>536</a>                    <span class="kw">let </span>shard = <span class="kw-2">&amp;</span>share.payload[i];
-<a href=#537 id=537 data-nosnippet>537</a>                    <span class="kw">if </span>index &lt; original_count {
-<a href=#538 id=538 data-nosnippet>538</a>                        input_orig[index] = <span class="prelude-val">Some</span>(shard);
-<a href=#539 id=539 data-nosnippet>539</a>                        decoder.add_original_shard(index, shard)<span class="question-mark">?</span>;
-<a href=#540 id=540 data-nosnippet>540</a>                    } <span class="kw">else </span>{
-<a href=#541 id=541 data-nosnippet>541</a>                        decoder.add_recovery_shard(index - original_count, shard)<span class="question-mark">?</span>;
-<a href=#542 id=542 data-nosnippet>542</a>                    }
-<a href=#543 id=543 data-nosnippet>543</a>                }
-<a href=#544 id=544 data-nosnippet>544</a>            }
-<a href=#545 id=545 data-nosnippet>545</a>
-<a href=#546 id=546 data-nosnippet>546</a>            <span class="kw">let </span>result = decoder.decode()<span class="question-mark">?</span>;
-<a href=#547 id=547 data-nosnippet>547</a>            <span class="kw">for </span>(i, shard) <span class="kw">in </span>input_orig.iter().enumerate().take(original_count) {
-<a href=#548 id=548 data-nosnippet>548</a>                <span class="kw">let </span>shard: <span class="kw-2">&amp;</span>[u8] = <span class="kw">match </span>shard {
-<a href=#549 id=549 data-nosnippet>549</a>                    <span class="prelude-val">Some</span>(data) =&gt; data,
-<a href=#550 id=550 data-nosnippet>550</a>                    <span class="prelude-val">None </span>=&gt; result.restored_original(i).ok_or_else(|| {
-<a href=#551 id=551 data-nosnippet>551</a>                        VidError::Internal(<span class="macro">anyhow!</span>(<span class="string">"Failed to recover the payload."</span>))
-<a href=#552 id=552 data-nosnippet>552</a>                    })<span class="question-mark">?</span>,
-<a href=#553 id=553 data-nosnippet>553</a>                };
-<a href=#554 id=554 data-nosnippet>554</a>                recovered.extend_from_slice(shard);
-<a href=#555 id=555 data-nosnippet>555</a>            }
-<a href=#556 id=556 data-nosnippet>556</a>        }
-<a href=#557 id=557 data-nosnippet>557</a>        <span class="kw">match </span>recovered.iter().rposition(|<span class="kw-2">&amp;</span>b| b != <span class="number">0</span>) {
-<a href=#558 id=558 data-nosnippet>558</a>            <span class="prelude-val">Some</span>(pad_index) <span class="kw">if </span>recovered[pad_index] == <span class="number">1u8 </span>=&gt; {
-<a href=#559 id=559 data-nosnippet>559</a>                recovered.truncate(pad_index);
-<a href=#560 id=560 data-nosnippet>560</a>                <span class="prelude-val">Ok</span>(recovered)
-<a href=#561 id=561 data-nosnippet>561</a>            },
-<a href=#562 id=562 data-nosnippet>562</a>            <span class="kw">_ </span>=&gt; <span class="prelude-val">Err</span>(VidError::Argument(
-<a href=#563 id=563 data-nosnippet>563</a>                <span class="string">"Malformed payload, cannot find the padding position"</span>.to_string(),
-<a href=#564 id=564 data-nosnippet>564</a>            )),
-<a href=#565 id=565 data-nosnippet>565</a>        }
-<a href=#566 id=566 data-nosnippet>566</a>    }
-<a href=#567 id=567 data-nosnippet>567</a>}
-<a href=#568 id=568 data-nosnippet>568</a>
-<a href=#569 id=569 data-nosnippet>569</a><span class="doccomment">/// Unit tests
-<a href=#570 id=570 data-nosnippet>570</a></span><span class="attr">#[cfg(test)]
-<a href=#571 id=571 data-nosnippet>571</a></span><span class="kw">pub mod </span>tests {
-<a href=#572 id=572 data-nosnippet>572</a>    <span class="kw">use </span>rand::{RngCore, seq::SliceRandom};
-<a href=#573 id=573 data-nosnippet>573</a>
-<a href=#574 id=574 data-nosnippet>574</a>    <span class="kw">use </span><span class="kw">super</span>::AvidmGf2Scheme;
-<a href=#575 id=575 data-nosnippet>575</a>    <span class="kw">use </span><span class="kw">crate</span>::VidScheme;
-<a href=#576 id=576 data-nosnippet>576</a>
-<a href=#577 id=577 data-nosnippet>577</a>    <span class="doccomment">/// Digest over the commitment and every share's range and shards.
-<a href=#578 id=578 data-nosnippet>578</a>    </span><span class="kw">fn </span>output_digest(rt: usize, tw: usize, len: usize) -&gt; String {
-<a href=#579 id=579 data-nosnippet>579</a>        <span class="kw">let </span>payload: Vec&lt;u8&gt; = (<span class="number">0</span>..len).map(|i| (i * <span class="number">31 </span>+ <span class="number">7</span>) <span class="kw">as </span>u8).collect();
-<a href=#580 id=580 data-nosnippet>580</a>        <span class="kw">let </span>param = AvidmGf2Scheme::setup(rt, tw).unwrap();
-<a href=#581 id=581 data-nosnippet>581</a>        <span class="kw">let </span>commit = AvidmGf2Scheme::commit(<span class="kw-2">&amp;</span>param, <span class="kw-2">&amp;</span>payload).unwrap();
-<a href=#582 id=582 data-nosnippet>582</a>        <span class="kw">let </span>distribution: Vec&lt;u32&gt; = (<span class="number">0</span>..tw).map(|<span class="kw">_</span>| <span class="number">1</span>).collect();
-<a href=#583 id=583 data-nosnippet>583</a>        <span class="kw">let </span>(dcommit, shares) = AvidmGf2Scheme::disperse(<span class="kw-2">&amp;</span>param, <span class="kw-2">&amp;</span>distribution, <span class="kw-2">&amp;</span>payload).unwrap();
-<a href=#584 id=584 data-nosnippet>584</a>        <span class="macro">assert_eq!</span>(commit, dcommit);
-<a href=#585 id=585 data-nosnippet>585</a>        <span class="kw">let </span><span class="kw-2">mut </span>hasher = blake3::Hasher::new();
-<a href=#586 id=586 data-nosnippet>586</a>        hasher.update(commit.as_ref());
-<a href=#587 id=587 data-nosnippet>587</a>        <span class="kw">for </span>share <span class="kw">in </span><span class="kw-2">&amp;</span>shares {
-<a href=#588 id=588 data-nosnippet>588</a>            hasher.update(<span class="kw-2">&amp;</span>share.range().start.to_le_bytes());
-<a href=#589 id=589 data-nosnippet>589</a>            hasher.update(<span class="kw-2">&amp;</span>share.range().end.to_le_bytes());
-<a href=#590 id=590 data-nosnippet>590</a>            <span class="kw">for </span>shard <span class="kw">in </span>share.payload() {
-<a href=#591 id=591 data-nosnippet>591</a>                hasher.update(<span class="kw-2">&amp;</span>(shard.len() <span class="kw">as </span>u64).to_le_bytes());
-<a href=#592 id=592 data-nosnippet>592</a>                hasher.update(shard);
-<a href=#593 id=593 data-nosnippet>593</a>            }
-<a href=#594 id=594 data-nosnippet>594</a>        }
-<a href=#595 id=595 data-nosnippet>595</a>        hasher.finalize().to_hex().to_string()
-<a href=#596 id=596 data-nosnippet>596</a>    }
-<a href=#597 id=597 data-nosnippet>597</a>
-<a href=#598 id=598 data-nosnippet>598</a>    <span class="attr">#[test]
-<a href=#599 id=599 data-nosnippet>599</a>    </span><span class="kw">fn </span>outputs_are_pinned() {
-<a href=#600 id=600 data-nosnippet>600</a>        <span class="kw">let </span><span class="kw-2">mut </span>out = String::new();
-<a href=#601 id=601 data-nosnippet>601</a>        <span class="kw">for </span>(rt, tw) <span class="kw">in </span>[(<span class="number">1</span>, <span class="number">1</span>), (<span class="number">1</span>, <span class="number">3</span>), (<span class="number">3</span>, <span class="number">10</span>), (<span class="number">4</span>, <span class="number">12</span>), (<span class="number">5</span>, <span class="number">5</span>), (<span class="number">7</span>, <span class="number">20</span>)] {
-<a href=#602 id=602 data-nosnippet>602</a>            <span class="kw">for </span>len <span class="kw">in </span>[<span class="number">0</span>, <span class="number">1</span>, <span class="number">31</span>, <span class="number">32</span>, <span class="number">33</span>, <span class="number">63</span>, <span class="number">64</span>, <span class="number">65</span>, <span class="number">1000</span>, <span class="number">4097</span>, <span class="number">100_000</span>] {
-<a href=#603 id=603 data-nosnippet>603</a>                out += <span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{rt} {tw} {len} {}\n"</span>, output_digest(rt, tw, len));
-<a href=#604 id=604 data-nosnippet>604</a>            }
-<a href=#605 id=605 data-nosnippet>605</a>        }
-<a href=#606 id=606 data-nosnippet>606</a>        <span class="kw">let </span>got = blake3::hash(out.as_bytes()).to_hex().to_string();
-<a href=#607 id=607 data-nosnippet>607</a>        <span class="macro">assert_eq!</span>(
-<a href=#608 id=608 data-nosnippet>608</a>            got, <span class="string">"3c96b583adfdf90d15d80c117f9ab76625995e851743204c4e9c5725b5b7950a"</span>,
-<a href=#609 id=609 data-nosnippet>609</a>            <span class="string">"{out}"
-<a href=#610 id=610 data-nosnippet>610</a>        </span>);
-<a href=#611 id=611 data-nosnippet>611</a>    }
-<a href=#612 id=612 data-nosnippet>612</a>
-<a href=#613 id=613 data-nosnippet>613</a>    <span class="attr">#[test]
-<a href=#614 id=614 data-nosnippet>614</a>    </span><span class="kw">fn </span>round_trip() {
-<a href=#615 id=615 data-nosnippet>615</a>        <span class="comment">// play with these items
-<a href=#616 id=616 data-nosnippet>616</a>        </span><span class="kw">let </span>num_storage_nodes_list = [<span class="number">4</span>, <span class="number">9</span>, <span class="number">16</span>];
-<a href=#617 id=617 data-nosnippet>617</a>        <span class="kw">let </span>payload_byte_lens = [<span class="number">1</span>, <span class="number">31</span>, <span class="number">32</span>, <span class="number">500</span>];
-<a href=#618 id=618 data-nosnippet>618</a>
-<a href=#619 id=619 data-nosnippet>619</a>        <span class="comment">// more items as a function of the above
+<a href=#525 id=525 data-nosnippet>525</a>            <span class="kw">for </span>slot <span class="kw">in </span><span class="kw-2">&amp;</span>input_orig {
+<a href=#526 id=526 data-nosnippet>526</a>                <span class="kw">let </span>shard = slot
+<a href=#527 id=527 data-nosnippet>527</a>                    .ok_or_else(|| VidError::Internal(<span class="macro">anyhow!</span>(<span class="string">"Failed to recover the payload."</span>)))<span class="question-mark">?</span>;
+<a href=#528 id=528 data-nosnippet>528</a>                recovered.extend_from_slice(shard);
+<a href=#529 id=529 data-nosnippet>529</a>            }
+<a href=#530 id=530 data-nosnippet>530</a>        } <span class="kw">else </span>{
+<a href=#531 id=531 data-nosnippet>531</a>            <span class="kw">let </span><span class="kw-2">mut </span>decoder = reed_solomon_simd::ReedSolomonDecoder::new(
+<a href=#532 id=532 data-nosnippet>532</a>                original_count,
+<a href=#533 id=533 data-nosnippet>533</a>                recovery_count,
+<a href=#534 id=534 data-nosnippet>534</a>                shard_bytes,
+<a href=#535 id=535 data-nosnippet>535</a>            )<span class="question-mark">?</span>;
+<a href=#536 id=536 data-nosnippet>536</a>            <span class="kw">for </span>share <span class="kw">in </span>shares {
+<a href=#537 id=537 data-nosnippet>537</a>                <span class="kw">for </span>(i, index) <span class="kw">in </span>share.range.clone().enumerate() {
+<a href=#538 id=538 data-nosnippet>538</a>                    <span class="kw">let </span>shard = <span class="kw-2">&amp;</span>share.payload[i];
+<a href=#539 id=539 data-nosnippet>539</a>                    <span class="kw">if </span>index &lt; original_count {
+<a href=#540 id=540 data-nosnippet>540</a>                        input_orig[index] = <span class="prelude-val">Some</span>(shard);
+<a href=#541 id=541 data-nosnippet>541</a>                        decoder.add_original_shard(index, shard)<span class="question-mark">?</span>;
+<a href=#542 id=542 data-nosnippet>542</a>                    } <span class="kw">else </span>{
+<a href=#543 id=543 data-nosnippet>543</a>                        decoder.add_recovery_shard(index - original_count, shard)<span class="question-mark">?</span>;
+<a href=#544 id=544 data-nosnippet>544</a>                    }
+<a href=#545 id=545 data-nosnippet>545</a>                }
+<a href=#546 id=546 data-nosnippet>546</a>            }
+<a href=#547 id=547 data-nosnippet>547</a>
+<a href=#548 id=548 data-nosnippet>548</a>            <span class="kw">let </span>result = decoder.decode()<span class="question-mark">?</span>;
+<a href=#549 id=549 data-nosnippet>549</a>            <span class="kw">for </span>(i, shard) <span class="kw">in </span>input_orig.iter().enumerate().take(original_count) {
+<a href=#550 id=550 data-nosnippet>550</a>                <span class="kw">let </span>shard: <span class="kw-2">&amp;</span>[u8] = <span class="kw">match </span>shard {
+<a href=#551 id=551 data-nosnippet>551</a>                    <span class="prelude-val">Some</span>(data) =&gt; data,
+<a href=#552 id=552 data-nosnippet>552</a>                    <span class="prelude-val">None </span>=&gt; result.restored_original(i).ok_or_else(|| {
+<a href=#553 id=553 data-nosnippet>553</a>                        VidError::Internal(<span class="macro">anyhow!</span>(<span class="string">"Failed to recover the payload."</span>))
+<a href=#554 id=554 data-nosnippet>554</a>                    })<span class="question-mark">?</span>,
+<a href=#555 id=555 data-nosnippet>555</a>                };
+<a href=#556 id=556 data-nosnippet>556</a>                recovered.extend_from_slice(shard);
+<a href=#557 id=557 data-nosnippet>557</a>            }
+<a href=#558 id=558 data-nosnippet>558</a>        }
+<a href=#559 id=559 data-nosnippet>559</a>        <span class="kw">match </span>recovered.iter().rposition(|<span class="kw-2">&amp;</span>b| b != <span class="number">0</span>) {
+<a href=#560 id=560 data-nosnippet>560</a>            <span class="prelude-val">Some</span>(pad_index) <span class="kw">if </span>recovered[pad_index] == <span class="number">1u8 </span>=&gt; {
+<a href=#561 id=561 data-nosnippet>561</a>                recovered.truncate(pad_index);
+<a href=#562 id=562 data-nosnippet>562</a>                <span class="prelude-val">Ok</span>(recovered)
+<a href=#563 id=563 data-nosnippet>563</a>            },
+<a href=#564 id=564 data-nosnippet>564</a>            <span class="kw">_ </span>=&gt; <span class="prelude-val">Err</span>(VidError::Argument(
+<a href=#565 id=565 data-nosnippet>565</a>                <span class="string">"Malformed payload, cannot find the padding position"</span>.to_string(),
+<a href=#566 id=566 data-nosnippet>566</a>            )),
+<a href=#567 id=567 data-nosnippet>567</a>        }
+<a href=#568 id=568 data-nosnippet>568</a>    }
+<a href=#569 id=569 data-nosnippet>569</a>}
+<a href=#570 id=570 data-nosnippet>570</a>
+<a href=#571 id=571 data-nosnippet>571</a><span class="doccomment">/// Unit tests
+<a href=#572 id=572 data-nosnippet>572</a></span><span class="attr">#[cfg(test)]
+<a href=#573 id=573 data-nosnippet>573</a></span><span class="kw">pub mod </span>tests {
+<a href=#574 id=574 data-nosnippet>574</a>    <span class="kw">use </span>rand::{RngCore, seq::SliceRandom};
+<a href=#575 id=575 data-nosnippet>575</a>
+<a href=#576 id=576 data-nosnippet>576</a>    <span class="kw">use </span><span class="kw">super</span>::AvidmGf2Scheme;
+<a href=#577 id=577 data-nosnippet>577</a>    <span class="kw">use </span><span class="kw">crate</span>::VidScheme;
+<a href=#578 id=578 data-nosnippet>578</a>
+<a href=#579 id=579 data-nosnippet>579</a>    <span class="doccomment">/// Digest over the commitment and every share's range and shards.
+<a href=#580 id=580 data-nosnippet>580</a>    </span><span class="kw">fn </span>output_digest(rt: usize, tw: usize, len: usize) -&gt; String {
+<a href=#581 id=581 data-nosnippet>581</a>        <span class="kw">let </span>payload: Vec&lt;u8&gt; = (<span class="number">0</span>..len).map(|i| (i * <span class="number">31 </span>+ <span class="number">7</span>) <span class="kw">as </span>u8).collect();
+<a href=#582 id=582 data-nosnippet>582</a>        <span class="kw">let </span>param = AvidmGf2Scheme::setup(rt, tw).unwrap();
+<a href=#583 id=583 data-nosnippet>583</a>        <span class="kw">let </span>commit = AvidmGf2Scheme::commit(<span class="kw-2">&amp;</span>param, <span class="kw-2">&amp;</span>payload).unwrap();
+<a href=#584 id=584 data-nosnippet>584</a>        <span class="kw">let </span>distribution: Vec&lt;u32&gt; = (<span class="number">0</span>..tw).map(|<span class="kw">_</span>| <span class="number">1</span>).collect();
+<a href=#585 id=585 data-nosnippet>585</a>        <span class="kw">let </span>(dcommit, shares) = AvidmGf2Scheme::disperse(<span class="kw-2">&amp;</span>param, <span class="kw-2">&amp;</span>distribution, <span class="kw-2">&amp;</span>payload).unwrap();
+<a href=#586 id=586 data-nosnippet>586</a>        <span class="macro">assert_eq!</span>(commit, dcommit);
+<a href=#587 id=587 data-nosnippet>587</a>        <span class="kw">let </span><span class="kw-2">mut </span>hasher = blake3::Hasher::new();
+<a href=#588 id=588 data-nosnippet>588</a>        hasher.update(commit.as_ref());
+<a href=#589 id=589 data-nosnippet>589</a>        <span class="kw">for </span>share <span class="kw">in </span><span class="kw-2">&amp;</span>shares {
+<a href=#590 id=590 data-nosnippet>590</a>            hasher.update(<span class="kw-2">&amp;</span>share.range().start.to_le_bytes());
+<a href=#591 id=591 data-nosnippet>591</a>            hasher.update(<span class="kw-2">&amp;</span>share.range().end.to_le_bytes());
+<a href=#592 id=592 data-nosnippet>592</a>            <span class="kw">for </span>shard <span class="kw">in </span>share.payload() {
+<a href=#593 id=593 data-nosnippet>593</a>                hasher.update(<span class="kw-2">&amp;</span>(shard.len() <span class="kw">as </span>u64).to_le_bytes());
+<a href=#594 id=594 data-nosnippet>594</a>                hasher.update(shard);
+<a href=#595 id=595 data-nosnippet>595</a>            }
+<a href=#596 id=596 data-nosnippet>596</a>        }
+<a href=#597 id=597 data-nosnippet>597</a>        hasher.finalize().to_hex().to_string()
+<a href=#598 id=598 data-nosnippet>598</a>    }
+<a href=#599 id=599 data-nosnippet>599</a>
+<a href=#600 id=600 data-nosnippet>600</a>    <span class="attr">#[test]
+<a href=#601 id=601 data-nosnippet>601</a>    </span><span class="kw">fn </span>outputs_are_pinned() {
+<a href=#602 id=602 data-nosnippet>602</a>        <span class="kw">let </span><span class="kw-2">mut </span>out = String::new();
+<a href=#603 id=603 data-nosnippet>603</a>        <span class="kw">for </span>(rt, tw) <span class="kw">in </span>[(<span class="number">1</span>, <span class="number">1</span>), (<span class="number">1</span>, <span class="number">3</span>), (<span class="number">3</span>, <span class="number">10</span>), (<span class="number">4</span>, <span class="number">12</span>), (<span class="number">5</span>, <span class="number">5</span>), (<span class="number">7</span>, <span class="number">20</span>)] {
+<a href=#604 id=604 data-nosnippet>604</a>            <span class="kw">for </span>len <span class="kw">in </span>[<span class="number">0</span>, <span class="number">1</span>, <span class="number">31</span>, <span class="number">32</span>, <span class="number">33</span>, <span class="number">63</span>, <span class="number">64</span>, <span class="number">65</span>, <span class="number">1000</span>, <span class="number">4097</span>, <span class="number">100_000</span>] {
+<a href=#605 id=605 data-nosnippet>605</a>                out += <span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{rt} {tw} {len} {}\n"</span>, output_digest(rt, tw, len));
+<a href=#606 id=606 data-nosnippet>606</a>            }
+<a href=#607 id=607 data-nosnippet>607</a>        }
+<a href=#608 id=608 data-nosnippet>608</a>        <span class="kw">let </span>got = blake3::hash(out.as_bytes()).to_hex().to_string();
+<a href=#609 id=609 data-nosnippet>609</a>        <span class="macro">assert_eq!</span>(
+<a href=#610 id=610 data-nosnippet>610</a>            got, <span class="string">"3c96b583adfdf90d15d80c117f9ab76625995e851743204c4e9c5725b5b7950a"</span>,
+<a href=#611 id=611 data-nosnippet>611</a>            <span class="string">"{out}"
+<a href=#612 id=612 data-nosnippet>612</a>        </span>);
+<a href=#613 id=613 data-nosnippet>613</a>    }
+<a href=#614 id=614 data-nosnippet>614</a>
+<a href=#615 id=615 data-nosnippet>615</a>    <span class="attr">#[test]
+<a href=#616 id=616 data-nosnippet>616</a>    </span><span class="kw">fn </span>round_trip() {
+<a href=#617 id=617 data-nosnippet>617</a>        <span class="comment">// play with these items
+<a href=#618 id=618 data-nosnippet>618</a>        </span><span class="kw">let </span>num_storage_nodes_list = [<span class="number">4</span>, <span class="number">9</span>, <span class="number">16</span>];
+<a href=#619 id=619 data-nosnippet>619</a>        <span class="kw">let </span>payload_byte_lens = [<span class="number">1</span>, <span class="number">31</span>, <span class="number">32</span>, <span class="number">500</span>];
 <a href=#620 id=620 data-nosnippet>620</a>
-<a href=#621 id=621 data-nosnippet>621</a>        </span><span class="kw">let </span><span class="kw-2">mut </span>rng = jf_utils::test_rng();
+<a href=#621 id=621 data-nosnippet>621</a>        <span class="comment">// more items as a function of the above
 <a href=#622 id=622 data-nosnippet>622</a>
-<a href=#623 id=623 data-nosnippet>623</a>        <span class="kw">for </span>num_storage_nodes <span class="kw">in </span>num_storage_nodes_list {
-<a href=#624 id=624 data-nosnippet>624</a>            <span class="kw">let </span>weights: Vec&lt;u32&gt; = (<span class="number">0</span>..num_storage_nodes)
-<a href=#625 id=625 data-nosnippet>625</a>                .map(|<span class="kw">_</span>| rng.next_u32() % <span class="number">5 </span>+ <span class="number">1</span>)
-<a href=#626 id=626 data-nosnippet>626</a>                .collect();
-<a href=#627 id=627 data-nosnippet>627</a>            <span class="kw">let </span>total_weights: u32 = weights.iter().sum();
-<a href=#628 id=628 data-nosnippet>628</a>            <span class="kw">let </span>recovery_threshold = total_weights.div_ceil(<span class="number">3</span>) <span class="kw">as </span>usize;
-<a href=#629 id=629 data-nosnippet>629</a>            <span class="kw">let </span>params = AvidmGf2Scheme::setup(recovery_threshold, total_weights <span class="kw">as </span>usize).unwrap();
-<a href=#630 id=630 data-nosnippet>630</a>
-<a href=#631 id=631 data-nosnippet>631</a>            <span class="kw">for </span>payload_byte_len <span class="kw">in </span>payload_byte_lens {
-<a href=#632 id=632 data-nosnippet>632</a>                <span class="kw">let </span>payload = {
-<a href=#633 id=633 data-nosnippet>633</a>                    <span class="kw">let </span><span class="kw-2">mut </span>bytes_random = <span class="macro">vec!</span>[<span class="number">0u8</span>; payload_byte_len];
-<a href=#634 id=634 data-nosnippet>634</a>                    rng.fill_bytes(<span class="kw-2">&amp;mut </span>bytes_random);
-<a href=#635 id=635 data-nosnippet>635</a>                    bytes_random
-<a href=#636 id=636 data-nosnippet>636</a>                };
-<a href=#637 id=637 data-nosnippet>637</a>
-<a href=#638 id=638 data-nosnippet>638</a>                <span class="kw">let </span>(commit, <span class="kw-2">mut </span>shares) =
-<a href=#639 id=639 data-nosnippet>639</a>                    AvidmGf2Scheme::disperse(<span class="kw-2">&amp;</span>params, <span class="kw-2">&amp;</span>weights, <span class="kw-2">&amp;</span>payload).unwrap();
-<a href=#640 id=640 data-nosnippet>640</a>
-<a href=#641 id=641 data-nosnippet>641</a>                <span class="macro">assert_eq!</span>(shares.len(), num_storage_nodes);
+<a href=#623 id=623 data-nosnippet>623</a>        </span><span class="kw">let </span><span class="kw-2">mut </span>rng = jf_utils::test_rng();
+<a href=#624 id=624 data-nosnippet>624</a>
+<a href=#625 id=625 data-nosnippet>625</a>        <span class="kw">for </span>num_storage_nodes <span class="kw">in </span>num_storage_nodes_list {
+<a href=#626 id=626 data-nosnippet>626</a>            <span class="kw">let </span>weights: Vec&lt;u32&gt; = (<span class="number">0</span>..num_storage_nodes)
+<a href=#627 id=627 data-nosnippet>627</a>                .map(|<span class="kw">_</span>| rng.next_u32() % <span class="number">5 </span>+ <span class="number">1</span>)
+<a href=#628 id=628 data-nosnippet>628</a>                .collect();
+<a href=#629 id=629 data-nosnippet>629</a>            <span class="kw">let </span>total_weights: u32 = weights.iter().sum();
+<a href=#630 id=630 data-nosnippet>630</a>            <span class="kw">let </span>recovery_threshold = total_weights.div_ceil(<span class="number">3</span>) <span class="kw">as </span>usize;
+<a href=#631 id=631 data-nosnippet>631</a>            <span class="kw">let </span>params = AvidmGf2Scheme::setup(recovery_threshold, total_weights <span class="kw">as </span>usize).unwrap();
+<a href=#632 id=632 data-nosnippet>632</a>
+<a href=#633 id=633 data-nosnippet>633</a>            <span class="kw">for </span>payload_byte_len <span class="kw">in </span>payload_byte_lens {
+<a href=#634 id=634 data-nosnippet>634</a>                <span class="kw">let </span>payload = {
+<a href=#635 id=635 data-nosnippet>635</a>                    <span class="kw">let </span><span class="kw-2">mut </span>bytes_random = <span class="macro">vec!</span>[<span class="number">0u8</span>; payload_byte_len];
+<a href=#636 id=636 data-nosnippet>636</a>                    rng.fill_bytes(<span class="kw-2">&amp;mut </span>bytes_random);
+<a href=#637 id=637 data-nosnippet>637</a>                    bytes_random
+<a href=#638 id=638 data-nosnippet>638</a>                };
+<a href=#639 id=639 data-nosnippet>639</a>
+<a href=#640 id=640 data-nosnippet>640</a>                <span class="kw">let </span>(commit, <span class="kw-2">mut </span>shares) =
+<a href=#641 id=641 data-nosnippet>641</a>                    AvidmGf2Scheme::disperse(<span class="kw-2">&amp;</span>params, <span class="kw-2">&amp;</span>weights, <span class="kw-2">&amp;</span>payload).unwrap();
 <a href=#642 id=642 data-nosnippet>642</a>
-<a href=#643 id=643 data-nosnippet>643</a>                <span class="comment">// verify shares
-<a href=#644 id=644 data-nosnippet>644</a>                </span>shares.iter().for_each(|share| {
-<a href=#645 id=645 data-nosnippet>645</a>                    <span class="macro">assert!</span>(
-<a href=#646 id=646 data-nosnippet>646</a>                        AvidmGf2Scheme::verify_share(<span class="kw-2">&amp;</span>params, <span class="kw-2">&amp;</span>commit, share)
-<a href=#647 id=647 data-nosnippet>647</a>                            .is_ok_and(|r| r.is_ok())
-<a href=#648 id=648 data-nosnippet>648</a>                    )
-<a href=#649 id=649 data-nosnippet>649</a>                });
-<a href=#650 id=650 data-nosnippet>650</a>
-<a href=#651 id=651 data-nosnippet>651</a>                <span class="comment">// test payload recovery on a random subset of shares
-<a href=#652 id=652 data-nosnippet>652</a>                </span>shares.shuffle(<span class="kw-2">&amp;mut </span>rng);
-<a href=#653 id=653 data-nosnippet>653</a>                <span class="kw">let </span><span class="kw-2">mut </span>cumulated_weights = <span class="number">0</span>;
-<a href=#654 id=654 data-nosnippet>654</a>                <span class="kw">let </span><span class="kw-2">mut </span>cut_index = <span class="number">0</span>;
-<a href=#655 id=655 data-nosnippet>655</a>                <span class="kw">while </span>cumulated_weights &lt; recovery_threshold {
-<a href=#656 id=656 data-nosnippet>656</a>                    cumulated_weights += shares[cut_index].weight();
-<a href=#657 id=657 data-nosnippet>657</a>                    cut_index += <span class="number">1</span>;
-<a href=#658 id=658 data-nosnippet>658</a>                }
-<a href=#659 id=659 data-nosnippet>659</a>                <span class="kw">let </span>payload_recovered =
-<a href=#660 id=660 data-nosnippet>660</a>                    AvidmGf2Scheme::recover(<span class="kw-2">&amp;</span>params, <span class="kw-2">&amp;</span>commit, <span class="kw-2">&amp;</span>shares[..cut_index]).unwrap();
-<a href=#661 id=661 data-nosnippet>661</a>                <span class="macro">assert_eq!</span>(payload_recovered, payload);
-<a href=#662 id=662 data-nosnippet>662</a>            }
-<a href=#663 id=663 data-nosnippet>663</a>        }
-<a href=#664 id=664 data-nosnippet>664</a>    }
-<a href=#665 id=665 data-nosnippet>665</a>
-<a href=#666 id=666 data-nosnippet>666</a>    <span class="attr">#[test]
-<a href=#667 id=667 data-nosnippet>667</a>    </span><span class="kw">fn </span>round_trip_edge_case() {
-<a href=#668 id=668 data-nosnippet>668</a>        <span class="comment">// play with these items
-<a href=#669 id=669 data-nosnippet>669</a>        </span><span class="kw">let </span>num_storage_nodes_list = [<span class="number">4</span>, <span class="number">9</span>, <span class="number">16</span>];
-<a href=#670 id=670 data-nosnippet>670</a>        <span class="kw">let </span>payload_byte_lens = [<span class="number">1</span>, <span class="number">31</span>, <span class="number">32</span>, <span class="number">500</span>];
-<a href=#671 id=671 data-nosnippet>671</a>
-<a href=#672 id=672 data-nosnippet>672</a>        <span class="comment">// more items as a function of the above
+<a href=#643 id=643 data-nosnippet>643</a>                <span class="macro">assert_eq!</span>(shares.len(), num_storage_nodes);
+<a href=#644 id=644 data-nosnippet>644</a>
+<a href=#645 id=645 data-nosnippet>645</a>                <span class="comment">// verify shares
+<a href=#646 id=646 data-nosnippet>646</a>                </span>shares.iter().for_each(|share| {
+<a href=#647 id=647 data-nosnippet>647</a>                    <span class="macro">assert!</span>(
+<a href=#648 id=648 data-nosnippet>648</a>                        AvidmGf2Scheme::verify_share(<span class="kw-2">&amp;</span>params, <span class="kw-2">&amp;</span>commit, share)
+<a href=#649 id=649 data-nosnippet>649</a>                            .is_ok_and(|r| r.is_ok())
+<a href=#650 id=650 data-nosnippet>650</a>                    )
+<a href=#651 id=651 data-nosnippet>651</a>                });
+<a href=#652 id=652 data-nosnippet>652</a>
+<a href=#653 id=653 data-nosnippet>653</a>                <span class="comment">// test payload recovery on a random subset of shares
+<a href=#654 id=654 data-nosnippet>654</a>                </span>shares.shuffle(<span class="kw-2">&amp;mut </span>rng);
+<a href=#655 id=655 data-nosnippet>655</a>                <span class="kw">let </span><span class="kw-2">mut </span>cumulated_weights = <span class="number">0</span>;
+<a href=#656 id=656 data-nosnippet>656</a>                <span class="kw">let </span><span class="kw-2">mut </span>cut_index = <span class="number">0</span>;
+<a href=#657 id=657 data-nosnippet>657</a>                <span class="kw">while </span>cumulated_weights &lt; recovery_threshold {
+<a href=#658 id=658 data-nosnippet>658</a>                    cumulated_weights += shares[cut_index].weight();
+<a href=#659 id=659 data-nosnippet>659</a>                    cut_index += <span class="number">1</span>;
+<a href=#660 id=660 data-nosnippet>660</a>                }
+<a href=#661 id=661 data-nosnippet>661</a>                <span class="kw">let </span>payload_recovered =
+<a href=#662 id=662 data-nosnippet>662</a>                    AvidmGf2Scheme::recover(<span class="kw-2">&amp;</span>params, <span class="kw-2">&amp;</span>commit, <span class="kw-2">&amp;</span>shares[..cut_index]).unwrap();
+<a href=#663 id=663 data-nosnippet>663</a>                <span class="macro">assert_eq!</span>(payload_recovered, payload);
+<a href=#664 id=664 data-nosnippet>664</a>            }
+<a href=#665 id=665 data-nosnippet>665</a>        }
+<a href=#666 id=666 data-nosnippet>666</a>    }
+<a href=#667 id=667 data-nosnippet>667</a>
+<a href=#668 id=668 data-nosnippet>668</a>    <span class="attr">#[test]
+<a href=#669 id=669 data-nosnippet>669</a>    </span><span class="kw">fn </span>round_trip_edge_case() {
+<a href=#670 id=670 data-nosnippet>670</a>        <span class="comment">// play with these items
+<a href=#671 id=671 data-nosnippet>671</a>        </span><span class="kw">let </span>num_storage_nodes_list = [<span class="number">4</span>, <span class="number">9</span>, <span class="number">16</span>];
+<a href=#672 id=672 data-nosnippet>672</a>        <span class="kw">let </span>payload_byte_lens = [<span class="number">1</span>, <span class="number">31</span>, <span class="number">32</span>, <span class="number">500</span>];
 <a href=#673 id=673 data-nosnippet>673</a>
-<a href=#674 id=674 data-nosnippet>674</a>        </span><span class="kw">let </span><span class="kw-2">mut </span>rng = jf_utils::test_rng();
+<a href=#674 id=674 data-nosnippet>674</a>        <span class="comment">// more items as a function of the above
 <a href=#675 id=675 data-nosnippet>675</a>
-<a href=#676 id=676 data-nosnippet>676</a>        <span class="kw">for </span>num_storage_nodes <span class="kw">in </span>num_storage_nodes_list {
-<a href=#677 id=677 data-nosnippet>677</a>            <span class="kw">let </span>weights: Vec&lt;u32&gt; = (<span class="number">0</span>..num_storage_nodes)
-<a href=#678 id=678 data-nosnippet>678</a>                .map(|<span class="kw">_</span>| rng.next_u32() % <span class="number">5 </span>+ <span class="number">1</span>)
-<a href=#679 id=679 data-nosnippet>679</a>                .collect();
-<a href=#680 id=680 data-nosnippet>680</a>            <span class="kw">let </span>total_weights: u32 = weights.iter().sum();
-<a href=#681 id=681 data-nosnippet>681</a>            <span class="kw">let </span>recovery_threshold = total_weights <span class="kw">as </span>usize;
-<a href=#682 id=682 data-nosnippet>682</a>            <span class="kw">let </span>params = AvidmGf2Scheme::setup(recovery_threshold, total_weights <span class="kw">as </span>usize).unwrap();
-<a href=#683 id=683 data-nosnippet>683</a>
-<a href=#684 id=684 data-nosnippet>684</a>            <span class="kw">for </span>payload_byte_len <span class="kw">in </span>payload_byte_lens {
-<a href=#685 id=685 data-nosnippet>685</a>                <span class="kw">let </span>payload = {
-<a href=#686 id=686 data-nosnippet>686</a>                    <span class="kw">let </span><span class="kw-2">mut </span>bytes_random = <span class="macro">vec!</span>[<span class="number">0u8</span>; payload_byte_len];
-<a href=#687 id=687 data-nosnippet>687</a>                    rng.fill_bytes(<span class="kw-2">&amp;mut </span>bytes_random);
-<a href=#688 id=688 data-nosnippet>688</a>                    bytes_random
-<a href=#689 id=689 data-nosnippet>689</a>                };
-<a href=#690 id=690 data-nosnippet>690</a>
-<a href=#691 id=691 data-nosnippet>691</a>                <span class="kw">let </span>(commit, <span class="kw-2">mut </span>shares) =
-<a href=#692 id=692 data-nosnippet>692</a>                    AvidmGf2Scheme::disperse(<span class="kw-2">&amp;</span>params, <span class="kw-2">&amp;</span>weights, <span class="kw-2">&amp;</span>payload).unwrap();
-<a href=#693 id=693 data-nosnippet>693</a>
-<a href=#694 id=694 data-nosnippet>694</a>                <span class="macro">assert_eq!</span>(shares.len(), num_storage_nodes);
+<a href=#676 id=676 data-nosnippet>676</a>        </span><span class="kw">let </span><span class="kw-2">mut </span>rng = jf_utils::test_rng();
+<a href=#677 id=677 data-nosnippet>677</a>
+<a href=#678 id=678 data-nosnippet>678</a>        <span class="kw">for </span>num_storage_nodes <span class="kw">in </span>num_storage_nodes_list {
+<a href=#679 id=679 data-nosnippet>679</a>            <span class="kw">let </span>weights: Vec&lt;u32&gt; = (<span class="number">0</span>..num_storage_nodes)
+<a href=#680 id=680 data-nosnippet>680</a>                .map(|<span class="kw">_</span>| rng.next_u32() % <span class="number">5 </span>+ <span class="number">1</span>)
+<a href=#681 id=681 data-nosnippet>681</a>                .collect();
+<a href=#682 id=682 data-nosnippet>682</a>            <span class="kw">let </span>total_weights: u32 = weights.iter().sum();
+<a href=#683 id=683 data-nosnippet>683</a>            <span class="kw">let </span>recovery_threshold = total_weights <span class="kw">as </span>usize;
+<a href=#684 id=684 data-nosnippet>684</a>            <span class="kw">let </span>params = AvidmGf2Scheme::setup(recovery_threshold, total_weights <span class="kw">as </span>usize).unwrap();
+<a href=#685 id=685 data-nosnippet>685</a>
+<a href=#686 id=686 data-nosnippet>686</a>            <span class="kw">for </span>payload_byte_len <span class="kw">in </span>payload_byte_lens {
+<a href=#687 id=687 data-nosnippet>687</a>                <span class="kw">let </span>payload = {
+<a href=#688 id=688 data-nosnippet>688</a>                    <span class="kw">let </span><span class="kw-2">mut </span>bytes_random = <span class="macro">vec!</span>[<span class="number">0u8</span>; payload_byte_len];
+<a href=#689 id=689 data-nosnippet>689</a>                    rng.fill_bytes(<span class="kw-2">&amp;mut </span>bytes_random);
+<a href=#690 id=690 data-nosnippet>690</a>                    bytes_random
+<a href=#691 id=691 data-nosnippet>691</a>                };
+<a href=#692 id=692 data-nosnippet>692</a>
+<a href=#693 id=693 data-nosnippet>693</a>                <span class="kw">let </span>(commit, <span class="kw-2">mut </span>shares) =
+<a href=#694 id=694 data-nosnippet>694</a>                    AvidmGf2Scheme::disperse(<span class="kw-2">&amp;</span>params, <span class="kw-2">&amp;</span>weights, <span class="kw-2">&amp;</span>payload).unwrap();
 <a href=#695 id=695 data-nosnippet>695</a>
-<a href=#696 id=696 data-nosnippet>696</a>                <span class="comment">// verify shares
-<a href=#697 id=697 data-nosnippet>697</a>                </span>shares.iter().for_each(|share| {
-<a href=#698 id=698 data-nosnippet>698</a>                    <span class="macro">assert!</span>(
-<a href=#699 id=699 data-nosnippet>699</a>                        AvidmGf2Scheme::verify_share(<span class="kw-2">&amp;</span>params, <span class="kw-2">&amp;</span>commit, share)
-<a href=#700 id=700 data-nosnippet>700</a>                            .is_ok_and(|r| r.is_ok())
-<a href=#701 id=701 data-nosnippet>701</a>                    )
-<a href=#702 id=702 data-nosnippet>702</a>                });
-<a href=#703 id=703 data-nosnippet>703</a>
-<a href=#704 id=704 data-nosnippet>704</a>                <span class="comment">// test payload recovery on a random subset of shares
-<a href=#705 id=705 data-nosnippet>705</a>                </span>shares.shuffle(<span class="kw-2">&amp;mut </span>rng);
-<a href=#706 id=706 data-nosnippet>706</a>                <span class="kw">let </span>payload_recovered =
-<a href=#707 id=707 data-nosnippet>707</a>                    AvidmGf2Scheme::recover(<span class="kw-2">&amp;</span>params, <span class="kw-2">&amp;</span>commit, <span class="kw-2">&amp;</span>shares[..]).unwrap();
-<a href=#708 id=708 data-nosnippet>708</a>                <span class="macro">assert_eq!</span>(payload_recovered, payload);
-<a href=#709 id=709 data-nosnippet>709</a>            }
-<a href=#710 id=710 data-nosnippet>710</a>        }
-<a href=#711 id=711 data-nosnippet>711</a>    }
-<a href=#712 id=712 data-nosnippet>712</a>
-<a href=#713 id=713 data-nosnippet>713</a>    <span class="doccomment">/// `shard_bytes` is what dispersal actually produces, for every shard of
-<a href=#714 id=714 data-nosnippet>714</a>    /// every share, across payload lengths on both sides of a shard boundary
-<a href=#715 id=715 data-nosnippet>715</a>    /// and on both sides of the even rounding.
-<a href=#716 id=716 data-nosnippet>716</a>    </span><span class="attr">#[test]
-<a href=#717 id=717 data-nosnippet>717</a>    </span><span class="kw">fn </span>shard_bytes_matches_dispersal() {
-<a href=#718 id=718 data-nosnippet>718</a>        <span class="kw">let </span>total_weights = <span class="number">10usize</span>;
-<a href=#719 id=719 data-nosnippet>719</a>        <span class="kw">let </span>recovery_threshold = <span class="number">4</span>;
-<a href=#720 id=720 data-nosnippet>720</a>        <span class="kw">let </span>params = AvidmGf2Scheme::setup(recovery_threshold, total_weights).unwrap();
-<a href=#721 id=721 data-nosnippet>721</a>        <span class="kw">let </span>weights = <span class="macro">vec!</span>[<span class="number">2u32</span>; <span class="number">5</span>];
-<a href=#722 id=722 data-nosnippet>722</a>
-<a href=#723 id=723 data-nosnippet>723</a>        <span class="kw">for </span>payload_byte_len <span class="kw">in </span>[<span class="number">0usize</span>, <span class="number">1</span>, <span class="number">3</span>, <span class="number">4</span>, <span class="number">7</span>, <span class="number">8</span>, <span class="number">31</span>, <span class="number">32</span>, <span class="number">100</span>, <span class="number">101</span>] {
-<a href=#724 id=724 data-nosnippet>724</a>            <span class="kw">let </span>payload = <span class="macro">vec!</span>[<span class="number">1u8</span>; payload_byte_len];
-<a href=#725 id=725 data-nosnippet>725</a>            <span class="kw">let </span>expected =
-<a href=#726 id=726 data-nosnippet>726</a>                AvidmGf2Scheme::shard_bytes(payload_byte_len, recovery_threshold).unwrap();
-<a href=#727 id=727 data-nosnippet>727</a>            <span class="macro">assert_eq!</span>(expected % <span class="number">2</span>, <span class="number">0</span>, <span class="string">"{payload_byte_len}"</span>);
-<a href=#728 id=728 data-nosnippet>728</a>            <span class="macro">assert!</span>(
-<a href=#729 id=729 data-nosnippet>729</a>                expected * recovery_threshold &gt; payload_byte_len,
-<a href=#730 id=730 data-nosnippet>730</a>                <span class="string">"{payload_byte_len}: shards must hold the payload and its pad byte"
-<a href=#731 id=731 data-nosnippet>731</a>            </span>);
-<a href=#732 id=732 data-nosnippet>732</a>            <span class="macro">assert!</span>(
-<a href=#733 id=733 data-nosnippet>733</a>                (expected - <span class="number">2</span>) * recovery_threshold &lt;= payload_byte_len,
-<a href=#734 id=734 data-nosnippet>734</a>                <span class="string">"{payload_byte_len}: shards must not be larger than needed"
-<a href=#735 id=735 data-nosnippet>735</a>            </span>);
-<a href=#736 id=736 data-nosnippet>736</a>            <span class="kw">let </span>(<span class="kw">_</span>, shares) = AvidmGf2Scheme::disperse(<span class="kw-2">&amp;</span>params, <span class="kw-2">&amp;</span>weights, <span class="kw-2">&amp;</span>payload).unwrap();
-<a href=#737 id=737 data-nosnippet>737</a>            <span class="kw">for </span>share <span class="kw">in </span><span class="kw-2">&amp;</span>shares {
-<a href=#738 id=738 data-nosnippet>738</a>                <span class="macro">assert_eq!</span>(share.shard_bytes(), <span class="prelude-val">Some</span>(expected), <span class="string">"{payload_byte_len}"</span>);
-<a href=#739 id=739 data-nosnippet>739</a>            }
-<a href=#740 id=740 data-nosnippet>740</a>        }
-<a href=#741 id=741 data-nosnippet>741</a>
-<a href=#742 id=742 data-nosnippet>742</a>        <span class="comment">// Total on inputs dispersal never sees.
-<a href=#743 id=743 data-nosnippet>743</a>        </span><span class="macro">assert_eq!</span>(AvidmGf2Scheme::shard_bytes(<span class="number">100</span>, <span class="number">0</span>), <span class="prelude-val">None</span>);
-<a href=#744 id=744 data-nosnippet>744</a>        <span class="macro">assert_eq!</span>(AvidmGf2Scheme::shard_bytes(usize::MAX, <span class="number">1</span>), <span class="prelude-val">None</span>);
-<a href=#745 id=745 data-nosnippet>745</a>        <span class="macro">assert_eq!</span>(AvidmGf2Scheme::shard_bytes(usize::MAX - <span class="number">1</span>, <span class="number">1</span>), <span class="prelude-val">None</span>);
-<a href=#746 id=746 data-nosnippet>746</a>    }
-<a href=#747 id=747 data-nosnippet>747</a>
-<a href=#748 id=748 data-nosnippet>748</a>    <span class="attr">#[test]
-<a href=#749 id=749 data-nosnippet>749</a>    </span><span class="kw">fn </span>disperse_rejects_inconsistent_distribution() {
-<a href=#750 id=750 data-nosnippet>750</a>        <span class="kw">let </span>total_weights = <span class="number">10usize</span>;
-<a href=#751 id=751 data-nosnippet>751</a>        <span class="kw">let </span>recovery_threshold = <span class="number">4</span>;
-<a href=#752 id=752 data-nosnippet>752</a>        <span class="kw">let </span>params = AvidmGf2Scheme::setup(recovery_threshold, total_weights).unwrap();
-<a href=#753 id=753 data-nosnippet>753</a>        <span class="kw">let </span>payload = <span class="macro">vec!</span>[<span class="number">1u8</span>; <span class="number">100</span>];
-<a href=#754 id=754 data-nosnippet>754</a>
-<a href=#755 id=755 data-nosnippet>755</a>        <span class="comment">// distribution sums to 12, but param says total_weights=10
-<a href=#756 id=756 data-nosnippet>756</a>        </span><span class="kw">let </span>bad_weights = <span class="macro">vec!</span>[<span class="number">3u32</span>; <span class="number">4</span>];
-<a href=#757 id=757 data-nosnippet>757</a>        <span class="macro">assert!</span>(
-<a href=#758 id=758 data-nosnippet>758</a>            AvidmGf2Scheme::disperse(<span class="kw-2">&amp;</span>params, <span class="kw-2">&amp;</span>bad_weights, <span class="kw-2">&amp;</span>payload).is_err(),
-<a href=#759 id=759 data-nosnippet>759</a>            <span class="string">"disperse should reject distribution that doesn't sum to total_weights"
-<a href=#760 id=760 data-nosnippet>760</a>        </span>);
-<a href=#761 id=761 data-nosnippet>761</a>
-<a href=#762 id=762 data-nosnippet>762</a>        <span class="comment">// distribution contains a zero weight
-<a href=#763 id=763 data-nosnippet>763</a>        </span><span class="kw">let </span>zero_weight = <span class="macro">vec!</span>[<span class="number">0u32</span>, <span class="number">5</span>, <span class="number">5</span>];
-<a href=#764 id=764 data-nosnippet>764</a>        <span class="macro">assert!</span>(
-<a href=#765 id=765 data-nosnippet>765</a>            AvidmGf2Scheme::disperse(<span class="kw-2">&amp;</span>params, <span class="kw-2">&amp;</span>zero_weight, <span class="kw-2">&amp;</span>payload).is_err(),
-<a href=#766 id=766 data-nosnippet>766</a>            <span class="string">"disperse should reject zero-weight entries"
-<a href=#767 id=767 data-nosnippet>767</a>        </span>);
-<a href=#768 id=768 data-nosnippet>768</a>
-<a href=#769 id=769 data-nosnippet>769</a>        <span class="comment">// correct distribution should succeed
-<a href=#770 id=770 data-nosnippet>770</a>        </span><span class="kw">let </span>good_weights = <span class="macro">vec!</span>[<span class="number">2u32</span>; <span class="number">5</span>];
-<a href=#771 id=771 data-nosnippet>771</a>        <span class="macro">assert!</span>(AvidmGf2Scheme::disperse(<span class="kw-2">&amp;</span>params, <span class="kw-2">&amp;</span>good_weights, <span class="kw-2">&amp;</span>payload).is_ok());
-<a href=#772 id=772 data-nosnippet>772</a>    }
-<a href=#773 id=773 data-nosnippet>773</a>
-<a href=#774 id=774 data-nosnippet>774</a>    <span class="attr">#[test]
-<a href=#775 id=775 data-nosnippet>775</a>    </span><span class="kw">fn </span>verify_share_rejects_out_of_range() {
-<a href=#776 id=776 data-nosnippet>776</a>        <span class="kw">let </span>total_weights = <span class="number">10usize</span>;
-<a href=#777 id=777 data-nosnippet>777</a>        <span class="kw">let </span>recovery_threshold = <span class="number">4</span>;
-<a href=#778 id=778 data-nosnippet>778</a>        <span class="kw">let </span>params = AvidmGf2Scheme::setup(recovery_threshold, total_weights).unwrap();
-<a href=#779 id=779 data-nosnippet>779</a>        <span class="kw">let </span>payload = <span class="macro">vec!</span>[<span class="number">1u8</span>; <span class="number">100</span>];
-<a href=#780 id=780 data-nosnippet>780</a>        <span class="kw">let </span>weights = <span class="macro">vec!</span>[<span class="number">2u32</span>; <span class="number">5</span>];
-<a href=#781 id=781 data-nosnippet>781</a>
-<a href=#782 id=782 data-nosnippet>782</a>        <span class="kw">let </span>(commit, shares) = AvidmGf2Scheme::disperse(<span class="kw-2">&amp;</span>params, <span class="kw-2">&amp;</span>weights, <span class="kw-2">&amp;</span>payload).unwrap();
+<a href=#696 id=696 data-nosnippet>696</a>                <span class="macro">assert_eq!</span>(shares.len(), num_storage_nodes);
+<a href=#697 id=697 data-nosnippet>697</a>
+<a href=#698 id=698 data-nosnippet>698</a>                <span class="comment">// verify shares
+<a href=#699 id=699 data-nosnippet>699</a>                </span>shares.iter().for_each(|share| {
+<a href=#700 id=700 data-nosnippet>700</a>                    <span class="macro">assert!</span>(
+<a href=#701 id=701 data-nosnippet>701</a>                        AvidmGf2Scheme::verify_share(<span class="kw-2">&amp;</span>params, <span class="kw-2">&amp;</span>commit, share)
+<a href=#702 id=702 data-nosnippet>702</a>                            .is_ok_and(|r| r.is_ok())
+<a href=#703 id=703 data-nosnippet>703</a>                    )
+<a href=#704 id=704 data-nosnippet>704</a>                });
+<a href=#705 id=705 data-nosnippet>705</a>
+<a href=#706 id=706 data-nosnippet>706</a>                <span class="comment">// test payload recovery on a random subset of shares
+<a href=#707 id=707 data-nosnippet>707</a>                </span>shares.shuffle(<span class="kw-2">&amp;mut </span>rng);
+<a href=#708 id=708 data-nosnippet>708</a>                <span class="kw">let </span>payload_recovered =
+<a href=#709 id=709 data-nosnippet>709</a>                    AvidmGf2Scheme::recover(<span class="kw-2">&amp;</span>params, <span class="kw-2">&amp;</span>commit, <span class="kw-2">&amp;</span>shares[..]).unwrap();
+<a href=#710 id=710 data-nosnippet>710</a>                <span class="macro">assert_eq!</span>(payload_recovered, payload);
+<a href=#711 id=711 data-nosnippet>711</a>            }
+<a href=#712 id=712 data-nosnippet>712</a>        }
+<a href=#713 id=713 data-nosnippet>713</a>    }
+<a href=#714 id=714 data-nosnippet>714</a>
+<a href=#715 id=715 data-nosnippet>715</a>    <span class="doccomment">/// `shard_bytes` is what dispersal actually produces, for every shard of
+<a href=#716 id=716 data-nosnippet>716</a>    /// every share, across payload lengths on both sides of a shard boundary
+<a href=#717 id=717 data-nosnippet>717</a>    /// and on both sides of the even rounding.
+<a href=#718 id=718 data-nosnippet>718</a>    </span><span class="attr">#[test]
+<a href=#719 id=719 data-nosnippet>719</a>    </span><span class="kw">fn </span>shard_bytes_matches_dispersal() {
+<a href=#720 id=720 data-nosnippet>720</a>        <span class="kw">let </span>total_weights = <span class="number">10usize</span>;
+<a href=#721 id=721 data-nosnippet>721</a>        <span class="kw">let </span>recovery_threshold = <span class="number">4</span>;
+<a href=#722 id=722 data-nosnippet>722</a>        <span class="kw">let </span>params = AvidmGf2Scheme::setup(recovery_threshold, total_weights).unwrap();
+<a href=#723 id=723 data-nosnippet>723</a>        <span class="kw">let </span>weights = <span class="macro">vec!</span>[<span class="number">2u32</span>; <span class="number">5</span>];
+<a href=#724 id=724 data-nosnippet>724</a>
+<a href=#725 id=725 data-nosnippet>725</a>        <span class="kw">for </span>payload_byte_len <span class="kw">in </span>[<span class="number">0usize</span>, <span class="number">1</span>, <span class="number">3</span>, <span class="number">4</span>, <span class="number">7</span>, <span class="number">8</span>, <span class="number">31</span>, <span class="number">32</span>, <span class="number">100</span>, <span class="number">101</span>] {
+<a href=#726 id=726 data-nosnippet>726</a>            <span class="kw">let </span>payload = <span class="macro">vec!</span>[<span class="number">1u8</span>; payload_byte_len];
+<a href=#727 id=727 data-nosnippet>727</a>            <span class="kw">let </span>expected =
+<a href=#728 id=728 data-nosnippet>728</a>                AvidmGf2Scheme::shard_bytes(payload_byte_len, recovery_threshold).unwrap();
+<a href=#729 id=729 data-nosnippet>729</a>            <span class="macro">assert_eq!</span>(expected % <span class="number">2</span>, <span class="number">0</span>, <span class="string">"{payload_byte_len}"</span>);
+<a href=#730 id=730 data-nosnippet>730</a>            <span class="macro">assert!</span>(
+<a href=#731 id=731 data-nosnippet>731</a>                expected * recovery_threshold &gt; payload_byte_len,
+<a href=#732 id=732 data-nosnippet>732</a>                <span class="string">"{payload_byte_len}: shards must hold the payload and its pad byte"
+<a href=#733 id=733 data-nosnippet>733</a>            </span>);
+<a href=#734 id=734 data-nosnippet>734</a>            <span class="macro">assert!</span>(
+<a href=#735 id=735 data-nosnippet>735</a>                (expected - <span class="number">2</span>) * recovery_threshold &lt;= payload_byte_len,
+<a href=#736 id=736 data-nosnippet>736</a>                <span class="string">"{payload_byte_len}: shards must not be larger than needed"
+<a href=#737 id=737 data-nosnippet>737</a>            </span>);
+<a href=#738 id=738 data-nosnippet>738</a>            <span class="kw">let </span>(<span class="kw">_</span>, shares) = AvidmGf2Scheme::disperse(<span class="kw-2">&amp;</span>params, <span class="kw-2">&amp;</span>weights, <span class="kw-2">&amp;</span>payload).unwrap();
+<a href=#739 id=739 data-nosnippet>739</a>            <span class="kw">for </span>share <span class="kw">in </span><span class="kw-2">&amp;</span>shares {
+<a href=#740 id=740 data-nosnippet>740</a>                <span class="macro">assert_eq!</span>(share.shard_bytes(), <span class="prelude-val">Some</span>(expected), <span class="string">"{payload_byte_len}"</span>);
+<a href=#741 id=741 data-nosnippet>741</a>            }
+<a href=#742 id=742 data-nosnippet>742</a>        }
+<a href=#743 id=743 data-nosnippet>743</a>
+<a href=#744 id=744 data-nosnippet>744</a>        <span class="comment">// Total on inputs dispersal never sees.
+<a href=#745 id=745 data-nosnippet>745</a>        </span><span class="macro">assert_eq!</span>(AvidmGf2Scheme::shard_bytes(<span class="number">100</span>, <span class="number">0</span>), <span class="prelude-val">None</span>);
+<a href=#746 id=746 data-nosnippet>746</a>        <span class="macro">assert_eq!</span>(AvidmGf2Scheme::shard_bytes(usize::MAX, <span class="number">1</span>), <span class="prelude-val">None</span>);
+<a href=#747 id=747 data-nosnippet>747</a>        <span class="macro">assert_eq!</span>(AvidmGf2Scheme::shard_bytes(usize::MAX - <span class="number">1</span>, <span class="number">1</span>), <span class="prelude-val">None</span>);
+<a href=#748 id=748 data-nosnippet>748</a>    }
+<a href=#749 id=749 data-nosnippet>749</a>
+<a href=#750 id=750 data-nosnippet>750</a>    <span class="attr">#[test]
+<a href=#751 id=751 data-nosnippet>751</a>    </span><span class="kw">fn </span>disperse_rejects_inconsistent_distribution() {
+<a href=#752 id=752 data-nosnippet>752</a>        <span class="kw">let </span>total_weights = <span class="number">10usize</span>;
+<a href=#753 id=753 data-nosnippet>753</a>        <span class="kw">let </span>recovery_threshold = <span class="number">4</span>;
+<a href=#754 id=754 data-nosnippet>754</a>        <span class="kw">let </span>params = AvidmGf2Scheme::setup(recovery_threshold, total_weights).unwrap();
+<a href=#755 id=755 data-nosnippet>755</a>        <span class="kw">let </span>payload = <span class="macro">vec!</span>[<span class="number">1u8</span>; <span class="number">100</span>];
+<a href=#756 id=756 data-nosnippet>756</a>
+<a href=#757 id=757 data-nosnippet>757</a>        <span class="comment">// distribution sums to 12, but param says total_weights=10
+<a href=#758 id=758 data-nosnippet>758</a>        </span><span class="kw">let </span>bad_weights = <span class="macro">vec!</span>[<span class="number">3u32</span>; <span class="number">4</span>];
+<a href=#759 id=759 data-nosnippet>759</a>        <span class="macro">assert!</span>(
+<a href=#760 id=760 data-nosnippet>760</a>            AvidmGf2Scheme::disperse(<span class="kw-2">&amp;</span>params, <span class="kw-2">&amp;</span>bad_weights, <span class="kw-2">&amp;</span>payload).is_err(),
+<a href=#761 id=761 data-nosnippet>761</a>            <span class="string">"disperse should reject distribution that doesn't sum to total_weights"
+<a href=#762 id=762 data-nosnippet>762</a>        </span>);
+<a href=#763 id=763 data-nosnippet>763</a>
+<a href=#764 id=764 data-nosnippet>764</a>        <span class="comment">// distribution contains a zero weight
+<a href=#765 id=765 data-nosnippet>765</a>        </span><span class="kw">let </span>zero_weight = <span class="macro">vec!</span>[<span class="number">0u32</span>, <span class="number">5</span>, <span class="number">5</span>];
+<a href=#766 id=766 data-nosnippet>766</a>        <span class="macro">assert!</span>(
+<a href=#767 id=767 data-nosnippet>767</a>            AvidmGf2Scheme::disperse(<span class="kw-2">&amp;</span>params, <span class="kw-2">&amp;</span>zero_weight, <span class="kw-2">&amp;</span>payload).is_err(),
+<a href=#768 id=768 data-nosnippet>768</a>            <span class="string">"disperse should reject zero-weight entries"
+<a href=#769 id=769 data-nosnippet>769</a>        </span>);
+<a href=#770 id=770 data-nosnippet>770</a>
+<a href=#771 id=771 data-nosnippet>771</a>        <span class="comment">// correct distribution should succeed
+<a href=#772 id=772 data-nosnippet>772</a>        </span><span class="kw">let </span>good_weights = <span class="macro">vec!</span>[<span class="number">2u32</span>; <span class="number">5</span>];
+<a href=#773 id=773 data-nosnippet>773</a>        <span class="macro">assert!</span>(AvidmGf2Scheme::disperse(<span class="kw-2">&amp;</span>params, <span class="kw-2">&amp;</span>good_weights, <span class="kw-2">&amp;</span>payload).is_ok());
+<a href=#774 id=774 data-nosnippet>774</a>    }
+<a href=#775 id=775 data-nosnippet>775</a>
+<a href=#776 id=776 data-nosnippet>776</a>    <span class="attr">#[test]
+<a href=#777 id=777 data-nosnippet>777</a>    </span><span class="kw">fn </span>verify_share_rejects_out_of_range() {
+<a href=#778 id=778 data-nosnippet>778</a>        <span class="kw">let </span>total_weights = <span class="number">10usize</span>;
+<a href=#779 id=779 data-nosnippet>779</a>        <span class="kw">let </span>recovery_threshold = <span class="number">4</span>;
+<a href=#780 id=780 data-nosnippet>780</a>        <span class="kw">let </span>params = AvidmGf2Scheme::setup(recovery_threshold, total_weights).unwrap();
+<a href=#781 id=781 data-nosnippet>781</a>        <span class="kw">let </span>payload = <span class="macro">vec!</span>[<span class="number">1u8</span>; <span class="number">100</span>];
+<a href=#782 id=782 data-nosnippet>782</a>        <span class="kw">let </span>weights = <span class="macro">vec!</span>[<span class="number">2u32</span>; <span class="number">5</span>];
 <a href=#783 id=783 data-nosnippet>783</a>
-<a href=#784 id=784 data-nosnippet>784</a>        <span class="comment">// valid shares pass
-<a href=#785 id=785 data-nosnippet>785</a>        </span><span class="kw">for </span>share <span class="kw">in </span><span class="kw-2">&amp;</span>shares {
-<a href=#786 id=786 data-nosnippet>786</a>            <span class="macro">assert!</span>(AvidmGf2Scheme::verify_share(<span class="kw-2">&amp;</span>params, <span class="kw-2">&amp;</span>commit, share).is_ok_and(|r| r.is_ok()));
-<a href=#787 id=787 data-nosnippet>787</a>        }
-<a href=#788 id=788 data-nosnippet>788</a>
-<a href=#789 id=789 data-nosnippet>789</a>        <span class="comment">// a share verified against a smaller param should be rejected
-<a href=#790 id=790 data-nosnippet>790</a>        </span><span class="kw">let </span>smaller_params = AvidmGf2Scheme::setup(<span class="number">2</span>, <span class="number">5</span>).unwrap();
-<a href=#791 id=791 data-nosnippet>791</a>        <span class="kw">let </span>last_share = shares.last().unwrap();
-<a href=#792 id=792 data-nosnippet>792</a>        <span class="macro">assert!</span>(
-<a href=#793 id=793 data-nosnippet>793</a>            AvidmGf2Scheme::verify_share(<span class="kw-2">&amp;</span>smaller_params, <span class="kw-2">&amp;</span>commit, last_share).is_err(),
-<a href=#794 id=794 data-nosnippet>794</a>            <span class="string">"verify_share should reject share with range.end &gt; param.total_weights"
-<a href=#795 id=795 data-nosnippet>795</a>        </span>);
-<a href=#796 id=796 data-nosnippet>796</a>    }
-<a href=#797 id=797 data-nosnippet>797</a>}
+<a href=#784 id=784 data-nosnippet>784</a>        <span class="kw">let </span>(commit, shares) = AvidmGf2Scheme::disperse(<span class="kw-2">&amp;</span>params, <span class="kw-2">&amp;</span>weights, <span class="kw-2">&amp;</span>payload).unwrap();
+<a href=#785 id=785 data-nosnippet>785</a>
+<a href=#786 id=786 data-nosnippet>786</a>        <span class="comment">// valid shares pass
+<a href=#787 id=787 data-nosnippet>787</a>        </span><span class="kw">for </span>share <span class="kw">in </span><span class="kw-2">&amp;</span>shares {
+<a href=#788 id=788 data-nosnippet>788</a>            <span class="macro">assert!</span>(AvidmGf2Scheme::verify_share(<span class="kw-2">&amp;</span>params, <span class="kw-2">&amp;</span>commit, share).is_ok_and(|r| r.is_ok()));
+<a href=#789 id=789 data-nosnippet>789</a>        }
+<a href=#790 id=790 data-nosnippet>790</a>
+<a href=#791 id=791 data-nosnippet>791</a>        <span class="comment">// a share verified against a smaller param should be rejected
+<a href=#792 id=792 data-nosnippet>792</a>        </span><span class="kw">let </span>smaller_params = AvidmGf2Scheme::setup(<span class="number">2</span>, <span class="number">5</span>).unwrap();
+<a href=#793 id=793 data-nosnippet>793</a>        <span class="kw">let </span>last_share = shares.last().unwrap();
+<a href=#794 id=794 data-nosnippet>794</a>        <span class="macro">assert!</span>(
+<a href=#795 id=795 data-nosnippet>795</a>            AvidmGf2Scheme::verify_share(<span class="kw-2">&amp;</span>smaller_params, <span class="kw-2">&amp;</span>commit, last_share).is_err(),
+<a href=#796 id=796 data-nosnippet>796</a>            <span class="string">"verify_share should reject share with range.end &gt; param.total_weights"
+<a href=#797 id=797 data-nosnippet>797</a>        </span>);
+<a href=#798 id=798 data-nosnippet>798</a>    }
+<a href=#799 id=799 data-nosnippet>799</a>}
 </code></pre></div></section></main></body></html>
