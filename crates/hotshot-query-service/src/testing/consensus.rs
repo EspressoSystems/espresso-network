@@ -21,6 +21,15 @@ use crate::{
     node::NodeDataSource,
     status::StatusDataSource,
 };
+#[cfg(test)]
+use crate::{
+    data_source::storage::{
+        AggregatesStorage, AvailabilityStorage, NodeStorage, SerializableRetry,
+        UpdateAggregatesStorage, UpdateAvailabilityStorage,
+        pruning::{PruneStorage, PrunedHeightStorage},
+    },
+    status::HasMetrics,
+};
 
 pub type MockDataSource = FileSystemDataSource<MockTypes, NoFetching>;
 pub type MockPostgresDataSource = sql::postgres::SqlDataSource<MockTypes, NoFetching>;
@@ -85,6 +94,45 @@ impl<T> TestableDataSource for T where
         + StatusDataSource
         + VersionedDataSource
 {
+}
+
+/// The same SQL databases as [`sql_data_sources`], for tests that build their own data source on
+/// the storage, with a provider of their choosing.
+#[cfg(test)]
+#[rstest_reuse::template]
+#[rstest::rstest]
+#[case::postgres(std::marker::PhantomData::<crate::data_source::sql::postgres::testing::TmpDb>)]
+#[case::sqlite(std::marker::PhantomData::<crate::data_source::sql::sqlite::testing::TmpDb>)]
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
+pub fn sql_dbs<Db: TestSqlDb>(#[case] _db: std::marker::PhantomData<Db>) {}
+
+/// A temporary database of one SQL backend, and the storage a data source on it reads and writes.
+#[cfg(test)]
+#[async_trait]
+pub trait TestSqlDb: Send + Sync + Sized + 'static {
+    type Storage: PruneStorage
+        + HasMetrics
+        + SerializableRetry
+        + Send
+        + Sync
+        + 'static
+        + for<'a> VersionedDataSource<
+            Transaction<'a>: UpdateAvailabilityStorage<MockTypes>
+                                 + UpdateAggregatesStorage<MockTypes>,
+            ReadOnly<'a>: AvailabilityStorage<MockTypes>
+                              + NodeStorage<MockTypes>
+                              + PrunedHeightStorage
+                              + AggregatesStorage<MockTypes>,
+        >;
+
+    async fn init() -> Self;
+    async fn storage(&self) -> anyhow::Result<Self::Storage>;
+    async fn pruning_storage(
+        &self,
+        cfg: crate::data_source::storage::pruning::PrunerCfg,
+    ) -> anyhow::Result<Self::Storage>;
+    /// Storage that recovers pruned data, as a node restarted as an archive does.
+    async fn archive_storage(&self) -> anyhow::Result<Self::Storage>;
 }
 
 /// Write access a test needs that no storage trait offers.

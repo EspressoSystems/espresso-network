@@ -3661,11 +3661,14 @@ mod test {
 
     // CI runs the tests named with `sqlite` in their own job, so every SQLite case has to carry it.
     #[rstest_reuse::template]
-    #[rstest]
-    #[case::postgres(PhantomData::<Postgres>)]
-    #[case::sqlite(PhantomData::<Sqlite>)]
+    #[rstest::rstest]
+    #[case::postgres(std::marker::PhantomData::<crate::api::sql::postgres::DataSource>)]
+    #[case::sqlite(std::marker::PhantomData::<crate::api::sql::sqlite::DataSource>)]
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    fn sql_data_sources<D: TestableSqlDataSource>(#[case] _d: PhantomData<D>) {}
+    pub(crate) fn sql_data_sources<D: TestableSqlDataSource>(
+        #[case] _d: std::marker::PhantomData<D>,
+    ) {
+    }
 
     async fn wait_until_block_height(
         client: &Client<ClientErr, StaticVersion<0, 1>>,

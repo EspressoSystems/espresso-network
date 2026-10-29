@@ -703,7 +703,16 @@ mod test {
 
 #[cfg(any(test, feature = "testing"))]
 pub mod testing {
-    use hotshot_query_service::data_source::storage::sql::StorageConnectionType;
+    use espresso_types::BlockMerkleTree;
+    use hotshot_query_service::{
+        data_source::storage::{
+            AvailabilityStorage, NodeStorage, UpdateAvailabilityStorage, sql::StorageConnectionType,
+        },
+        merklized_state::{
+            MerklizedStateDataSource, MerklizedStateHeightPersistence, UpdateStateData,
+        },
+    };
+    use jf_merkle_tree_compat::MerkleTreeScheme as _;
 
     use super::{super::Options, *};
     use crate::persistence::sql::Options as SqlOptions;
@@ -726,7 +735,24 @@ pub mod testing {
     /// A [`TestableSequencerDataSource`] on a SQL database, with the direct access to its rows
     /// that some tests need to set up or inspect a node's state.
     #[async_trait]
-    pub trait TestableSqlDataSource: TestableSequencerDataSource<Storage: Send> {
+    pub trait TestableSqlDataSource:
+        TestableSequencerDataSource<Storage: Send>
+        + Clone
+        + Send
+        + Sync
+        + 'static
+        + MerklizedStateDataSource<SeqTypes, BlockMerkleTree, { BlockMerkleTree::ARITY }>
+        + MerklizedStateHeightPersistence
+        + for<'a> VersionedDataSource<
+            ReadOnly<'a>: AvailabilityStorage<SeqTypes> + NodeStorage<SeqTypes>,
+            Transaction<'a>: UpdateAvailabilityStorage<SeqTypes>
+                                 + UpdateStateData<
+                SeqTypes,
+                BlockMerkleTree,
+                { BlockMerkleTree::ARITY },
+            >,
+        >
+    {
         /// A connection to the database, outside any node.
         type SqlStorage: Send + Sync;
 
@@ -736,6 +762,19 @@ pub mod testing {
             opt: &SqlOptions,
             connection_type: StorageConnectionType,
         ) -> anyhow::Result<Self::SqlStorage>;
+
+        /// A data source on `storage` with `provider` that fetches only what is asked for, with
+        /// neither proactive fetching nor the aggregator running.
+        async fn on_request_data_source(
+            storage: &Self::Storage,
+            provider: super::Provider,
+        ) -> anyhow::Result<Self>;
+
+        async fn prune_state_below(
+            ds: &Self,
+            height: u64,
+            cfg: &hotshot_query_service::data_source::storage::pruning::PrunerCfg,
+        ) -> anyhow::Result<()>;
 
         /// The number of blocks in availability storage.
         async fn local_block_height(db: &Self::SqlStorage) -> anyhow::Result<u64>;

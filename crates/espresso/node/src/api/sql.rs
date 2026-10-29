@@ -2196,6 +2196,24 @@ pub(crate) mod impl_testable_data_source {
             Options::try_from(opt).unwrap()
         }
 
+        async fn on_request_data_source(
+            storage: &Self::Storage,
+            provider: Provider,
+        ) -> anyhow::Result<Self> {
+            Config::try_from(&tmp_options(storage))?
+                .builder(provider)
+                .await?
+                .disable_proactive_fetching()
+                .disable_aggregator()
+                .build()
+                .await
+        }
+
+        async fn prune_state_below(ds: &Self, height: u64, cfg: &PrunerCfg) -> anyhow::Result<()> {
+            let sql: &SqlStorage = ds.as_ref();
+            sql.prune_state_below(height, 0, cfg).await
+        }
+
         async fn connect(
             opt: &SqlOptions,
             connection_type: StorageConnectionType,
