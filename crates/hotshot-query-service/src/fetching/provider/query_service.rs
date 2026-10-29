@@ -501,7 +501,7 @@ mod test {
     use crate::{
         availability::{
             AvailabilityDataSource, BlockId, BlockInfo, BlockQueryData, BlockWithTransaction,
-            Certificate2, Fetch, UpdateAvailabilityData, VidCommonQueryData,
+            Certificate2, Fetch, LeafId, UpdateAvailabilityData, VidCommonQueryData,
         },
         data_source::{
             AvailabilityProvider, FetchingDataSource, Transaction, VersionedDataSource,
@@ -1659,6 +1659,60 @@ mod test {
 
         assert_eq!(block.hash(), leaf.block_hash());
         assert_eq!(vid.block_hash(), leaf.block_hash());
+    }
+
+    /// A leaf whose parent is at the pruned height does not fetch that parent: the pruner would only
+    /// delete it again. Parents above the pruned height are still fetched.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_no_parent_fetch_at_pruned_height() {
+        let network = peer().await;
+        let (port, _server) = serve_availability(network.data_source()).await;
+        let db = TmpDb::init().await;
+        let provider = Provider::new(TrustedQueryServiceProvider::new(
+            format!("http://localhost:{port}").parse().unwrap(),
+        ));
+        let data_source = builder(&db, &provider)
+            .await
+            .disable_proactive_fetching()
+            .build()
+            .await
+            .unwrap();
+
+        let leaves = network
+            .data_source()
+            .subscribe_leaves(1)
+            .await
+            .take(4)
+            .collect::<Vec<_>>()
+            .await;
+        let pruned = 2;
+        {
+            let mut tx = data_source.write().await.unwrap();
+            tx.save_pruned_height(pruned).await.unwrap();
+            tx.commit().await.unwrap();
+        }
+
+        // Leaf 4 fetches its missing parent, leaf 3, whose parent is at the pruned height.
+        data_source.append(leaves[3].clone().into()).await.unwrap();
+        while data_source
+            .read()
+            .await
+            .unwrap()
+            .get_leaf(LeafId::<MockTypes>::from(3))
+            .await
+            .is_err()
+        {
+            sleep(Duration::from_millis(100)).await;
+        }
+        // Storage would drop a pruned leaf, so check the requests instead.
+        sleep(Duration::from_secs(2)).await;
+        let requests = provider.requests();
+        let requested = |height| requests.contains(&format!("{:?}", LeafRequest::new(height)));
+        assert!(requested(3), "{requests:?}");
+        assert!(
+            !requested(pruned),
+            "the leaf at the pruned height {pruned} was fetched: {requests:?}"
+        );
     }
 
     /// Test that fetching a leaf also backfills the leaf's cert2.
