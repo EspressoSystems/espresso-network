@@ -149,11 +149,12 @@ impl<T: NodeType> VidDisperser<T> {
         let public_key = self.public_key.clone();
         let private_key = self.private_key.clone();
         let duration_metric = self.duration_metric.clone();
+        let view = vid_disperse_request.view;
         let handle = self.tasks.spawn_blocking(move || {
             let measurement = duration_metric.map(Measurement::start);
             let result = handle_vid_disperse_request(
                 membership,
-                network,
+                move |recipient, message| network.unicast(view, recipient, message),
                 public_key,
                 private_key,
                 vid_disperse_request,
@@ -193,14 +194,18 @@ impl<T: NodeType> VidDisperser<T> {
     }
 }
 
-fn handle_vid_disperse_request<T: NodeType>(
+fn handle_vid_disperse_request<T, S>(
     epoch_membership_coordinator: EpochMembershipCoordinator<T>,
-    network: Sender<T>,
+    send: S,
     public_key: T::SignatureKey,
     private_key: <T::SignatureKey as SignatureKey>::PrivateKey,
     vid_disperse_request: VidDisperseRequest<T>,
     built: Option<BuiltDispersal<T>>,
-) -> Result<VidDisperseOutput, VidDisperseError> {
+) -> Result<VidDisperseOutput, VidDisperseError>
+where
+    T: NodeType,
+    S: Fn(&T::SignatureKey, &Message<T, Validated>) -> Result<(), NetworkError> + Clone + Send,
+{
     let view = vid_disperse_request.view;
     let epoch = vid_disperse_request.epoch;
     let payload_commitment = vid_disperse_request.payload_commitment;
@@ -225,7 +230,7 @@ fn handle_vid_disperse_request<T: NodeType>(
         payload_commitment,
         &public_key,
         &private_key,
-        move |recipient, message| network.unicast(view, recipient, message),
+        send,
     )?;
 
     Ok(VidDisperseOutput {
@@ -462,6 +467,7 @@ mod tests {
 
     use alloy::primitives::U256;
     use hotshot_example_types::{
+        block_types::{TestBlockPayload, TestMetadata},
         node_stake::{TestNodeStakes, gen_node_lists},
         node_types::TestTypes,
     };
@@ -480,13 +486,13 @@ mod tests {
     use versions::NEW_PROTOCOL_VERSION;
 
     use super::{
-        Bucket, BuiltDispersal, Dispersal, VidDisperseError, bucketize, disperse_payload,
-        fragments, into_buckets,
+        Bucket, BuiltDispersal, Dispersal, VidDisperseError, VidDisperseRequest, bucketize,
+        disperse_payload, fragments, handle_vid_disperse_request, into_buckets,
     };
     use crate::{
         message::{ConsensusMessage, Message, MessageType, Validated},
         network::NetworkError,
-        tests::common::utils::ns_table,
+        tests::common::utils::{mock_membership, ns_table},
     };
 
     /// Build a contiguous namespace table from per-namespace byte lengths.
@@ -772,5 +778,53 @@ mod tests {
             stake_table().len(),
             "every recipient is still sent to"
         );
+    }
+
+    /// The request names an epoch before the first, which has no stake table: encoding the
+    /// payload fails, so only sending the built dispersal can succeed.
+    #[tokio::test]
+    async fn a_disperse_request_sends_its_built_dispersal() {
+        let (leader, private_key) = BLSPubKey::generated_from_seed_indexed([1; 32], 0);
+        let (built, commitment) = built_dispersal(payload());
+        let request = VidDisperseRequest {
+            view: ViewNumber::new(7),
+            epoch: EpochNumber::new(0),
+            block: TestBlockPayload {
+                transactions: vec![],
+            },
+            metadata: TestMetadata {
+                num_transactions: 0,
+            },
+            payload_commitment: commitment,
+        };
+        let recipients = Arc::new(Mutex::new(BTreeSet::new()));
+        let send = {
+            let recipients = Arc::clone(&recipients);
+            move |recipient: &BLSPubKey, _: &Message<TestTypes, Validated>| {
+                recipients.lock().unwrap().insert(*recipient);
+                Ok(())
+            }
+        };
+        let disperse = |built| {
+            handle_vid_disperse_request(
+                mock_membership(),
+                send.clone(),
+                leader,
+                private_key.clone(),
+                request.clone(),
+                built,
+            )
+        };
+
+        assert!(
+            disperse(None).is_err(),
+            "encoding needs the epoch's stake table"
+        );
+        disperse(Some(built)).unwrap();
+        let expected: BTreeSet<_> = stake_table()
+            .iter()
+            .map(|peer| peer.stake_table_entry.public_key())
+            .collect();
+        assert_eq!(*recipients.lock().unwrap(), expected);
     }
 }
