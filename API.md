@@ -179,7 +179,8 @@ path against the mounted v2 router.
    `serve_tonic`.
 5. Update the tests in `crates/espresso/api/src/axum.rs`: implement the new trait on `MockV2State`, and add the new
    routes to the expected set in `v2_openapi_spec_documents_the_proto_routes`. That test is the tripwire keeping the
-   OpenAPI document and the mounted routes in step, so it fails on purpose until the list is updated.
+   OpenAPI document and the mounted routes in step, so it fails on purpose until the list is updated. Both are edits to
+   an existing test, so ask the user first (`AGENTS.md`, step 4).
 
 A service gated on an `OptionalModules` flag, as `ConfigService` is on `config`: mount it behind that flag in
 `router_v2` and `serve_tonic` (`add_optional_service`), register its paths when the flag is off as

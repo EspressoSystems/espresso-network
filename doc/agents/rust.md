@@ -101,8 +101,8 @@ Test layers:
 - Integration (`cargo nextest run -p tests`): full system E2E in `tests/`
 - Slow (`just test-slow`): in `slow-tests/`
 
-When a `reference` test fails after a type change: if intentional, regenerate `/data/` reference files and commitment
-constants. If unintentional, revert.
+When a `reference` test fails after a type change: if intentional, ask the user, then regenerate `/data/` reference
+files and commitment constants (`AGENTS.md`, step 4). If unintentional, revert.
 
 ## Storage
 

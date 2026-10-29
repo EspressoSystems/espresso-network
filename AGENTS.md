@@ -24,26 +24,40 @@ the generic BFT consensus library it is built on, `contracts/` the Solidity L1 s
 ## Test-first workflow
 
 Every code change follows these steps. The tests describe the planned behavior before any code exists. Only the user can
-change them.
+change them. Formatting a test with `cargo fmt` does not count as a change to it.
+
+- When no test can check the change, skip step 1 and say so in the report. For example: a dependency bump, CI config, or
+  a log message.
+- When the user asks for an edit to a test, that request is the approval for that edit.
 
 ### 1. A subagent writes the tests first
 
-- Before you write any implementation code, spawn a subagent to write the tests.
-- Brief it with the planned behavior: inputs, expected results, edge cases, and error cases. Do not give it the planned
-  implementation, so the tests check what the change must do, not how it does it.
+- When the change adds public items, the main agent first adds them as stubs: the planned signatures, with `todo!()`
+  bodies. Then each new test compiles and fails on its own.
+- Then the main agent spawns a subagent to write the tests. No other implementation code exists yet.
+- Brief it with the planned behavior: the public signatures, inputs, expected results, edge cases, and error cases. Do
+  not give it the planned implementation, so the tests check what the change must do, not how it does it.
 - Tests use the public API of the module, not private details. Then the implementation can change without changing the
-  tests.
+  tests. When a bug is in a private function that no focused test can reach through the public API, test that function
+  in the module's `#[cfg(test)]` block.
 - For a bug fix, the first test reproduces the bug.
-- For a pure refactor, the subagent checks that existing tests cover the code, and adds tests where they do not.
-- Run the new tests before you implement. Each must fail, or fail to compile, because the behavior is missing. A test
-  that already passes does not test the change.
+- For a pure refactor, the subagent checks that existing tests cover the code, and adds tests where they do not. These
+  tests pass before the refactor and must still pass after it.
+- For any other change, run the new tests before you implement. Each must fail for the reason the change addresses: the
+  missing behavior or the bug. A typo or a missing import does not count. Read the failure message to check. A test that
+  already passes does not test the change: send it back to the subagent to fix.
+- Then stop and show the user the new tests: the name of each and one line on what it checks. Start step 2 only after
+  the user answers.
 
 ### 2. Implement without changing the tests
 
 - The tests from step 1 are fixed. Do not edit, delete, rename, or `#[ignore]` them. Do not weaken them: no changes to
   assertions, expected values, inputs, or timeouts.
-- When a test fails, fix the implementation, not the test.
-- The change is done when the new tests pass and all existing tests still pass.
+- When a new test fails, fix the implementation, not the test.
+- The change is done when the new tests pass and the existing tests of the changed packages still pass
+  (`cargo nextest run -p <package>`). CI runs the rest.
+- A test that also fails on `main` does not block the change. Say so in the report. Issue #4585 lists flaky and failing
+  tests on `main`.
 
 ### 3. Changing the new tests needs the user
 
@@ -55,7 +69,9 @@ change them.
 ### 4. Changing existing tests needs the user
 
 - An existing test is any test code or test data that existed before the task started: `#[cfg(test)]` modules, `tests/`,
-  `slow-tests/`, `contracts/test/`, test helpers and fixtures, and the `reference` vectors in `data/`.
+  `slow-tests/`, `contracts/test/`, the crates `crates/test-utils`, `crates/test-server` and
+  `crates/hotshot/example-types`, test helpers and fixtures (also those behind `feature = "testing"`), the `reference`
+  vectors in `data/`, `data/insta_snapshots/`, and `.gas-snapshot`.
 - If the change needs an edit to an existing test, flag it and let the user decide. Do not edit the test until the user
   answers.
 - Tell the user the test name and `file:line`, why the change breaks it, and the options. Usually: change the
@@ -63,6 +79,7 @@ change them.
 - This includes small mechanical edits, such as a renamed function or a new argument. List them all in one message, so
   the user can decide once.
 - This includes regenerating `reference` files and commitment constants after a type change (see `doc/agents/rust.md`).
+- A subagent that needs an edit to an existing test reports it to the main agent. It does not edit the test.
 
 ### Subagents and reports
 
