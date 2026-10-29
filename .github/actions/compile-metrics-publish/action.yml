@@ -11,7 +11,7 @@ runs:
     # so a job labelled `build`, `test` or `slowtest` would collide with its own workflow's
     # baseline. Pick a job label that is not the workflow's name.
     - name: Download compile metrics
-      uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+      uses: actions/download-artifact@v8
       with:
         pattern: compile-metrics-*
         path: metrics-artifacts
@@ -25,7 +25,7 @@ runs:
           --out compile-metrics.json
 
     - name: Upload baseline
-      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      uses: actions/upload-artifact@v7
       with:
         name: ${{ inputs.artifact }}
         path: compile-metrics.json

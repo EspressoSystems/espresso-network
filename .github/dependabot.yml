@@ -3,7 +3,8 @@ updates:
   - package-ecosystem: "github-actions"
     directories:
       - "/"
-      # Local composite actions pin by SHA, which the lockfile can't cover.
+      # The runner looks up a local action's `uses:` in actions.lock, but the lockfile only has
+      # entries for refs the workflows use. Bump these with the workflows so the refs stay equal.
       - "/.github/actions/*"
     # Group all updates together
     groups:
