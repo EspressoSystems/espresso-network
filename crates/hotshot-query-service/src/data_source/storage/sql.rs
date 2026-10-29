@@ -1096,9 +1096,9 @@ impl PruneStorage for SqlStorage {
             .write()
             .await
             .context("opening transaction for pruned height")?;
-        tx.save_pruned_height(height).await?;
+        let stored = tx.save_pruned_height(height).await?;
         tx.commit().await.context("committing pruned height")?;
-        self.pruned_heights.set(PruneCategory::Data, height);
+        self.pruned_heights.set(PruneCategory::Data, stored);
         Ok(())
     }
 }
@@ -1915,9 +1915,11 @@ mod test {
                 .unwrap()
                 .is_none()
         );
-        for height in [10, 20, 30] {
+        // The last height is lower: a pruner run that started before a fresh pruned start must not
+        // move the marker back down.
+        for (height, stored) in [(10, 10), (20, 20), (30, 30), (15, 30)] {
             let mut tx = storage.write().await.unwrap();
-            tx.save_pruned_height(height).await.unwrap();
+            assert_eq!(tx.save_pruned_height(height).await.unwrap(), stored);
             tx.commit().await.unwrap();
             assert_eq!(
                 storage
@@ -1927,7 +1929,7 @@ mod test {
                     .load_pruned_height()
                     .await
                     .unwrap(),
-                Some(height)
+                Some(stored)
             );
         }
     }

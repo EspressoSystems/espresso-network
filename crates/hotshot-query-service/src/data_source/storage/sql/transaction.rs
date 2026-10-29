@@ -686,16 +686,25 @@ impl<Mode> Transaction<Mode> {
 
 /// Query service specific mutations.
 impl Transaction<Write> {
-    /// Record the height of the latest pruned header.
-    pub(crate) async fn save_pruned_height(&mut self, height: u64) -> anyhow::Result<()> {
-        self.upsert(
-            "pruned_height",
-            ["id", "last_height"],
-            ["id"],
-            [(Self::PRUNED_HEIGHT_ID, height as i64)],
-        )
-        .await
-        .context("updating pruned height")
+    /// Record the height of the latest pruned header, and return the height now stored.
+    ///
+    /// The pruner and a fresh pruned start both write it, so a lower height than the stored one
+    /// leaves it as is.
+    pub(crate) async fn save_pruned_height(&mut self, height: u64) -> anyhow::Result<u64> {
+        let stmt = format!(
+            "INSERT INTO pruned_height (id, last_height) VALUES ($1, $2)
+             ON CONFLICT (id) DO UPDATE SET last_height = {MAX_FN}(pruned_height.last_height, \
+             excluded.last_height)
+             RETURNING last_height",
+            MAX_FN = Db::MAX_FN,
+        );
+        let (stored,) = query_as::<(i64,)>(&stmt)
+            .bind(Self::PRUNED_HEIGHT_ID)
+            .bind(height as i64)
+            .fetch_one(self.as_mut())
+            .await
+            .context("updating pruned height")?;
+        Ok(stored as u64)
     }
 }
 

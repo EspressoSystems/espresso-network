@@ -40,7 +40,7 @@ pub trait PruneStorage: PrunerConfig {
     }
 
     /// Record `height` as the data pruned height, without deleting anything: data at or below it
-    /// counts as pruned, and is never fetched.
+    /// counts as pruned, and is never fetched. A height below the recorded one leaves it as is.
     async fn set_pruned_height(&self, _height: u64) -> anyhow::Result<()> {
         Ok(())
     }
