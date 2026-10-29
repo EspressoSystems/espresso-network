@@ -602,8 +602,8 @@ where
         return Ok(false);
     }
     let mut tx = storage.read().await.context("opening transaction")?;
-    Ok(tx.load_pruned_height().await?.is_none()
-        && NodeStorage::<Types>::block_height(&mut tx).await? <= 1)
+    let heights = Heights::load::<Types, _>(&mut tx).await?;
+    Ok(heights.pruned_height.is_none() && heights.height <= 1)
 }
 
 impl<Types, S, P> AsRef<S> for FetchingDataSource<Types, S, P>
