@@ -44,9 +44,12 @@ StakeTable contract for peer discovery.
 
 Mechanism and configuration: `doc/upgrades.md`.
 
-1. `UpgradeProposal` broadcast several views before the upgrade
-2. Validators vote; enough votes form an `UpgradeCertificate`
-3. Certificate attached to subsequent `QuorumProposal`s until the network upgrades
+Sub-protocol: `crates/hotshot/new-protocol/src/upgrade.rs`.
+
+1. The leader broadcasts an `UpgradeProposal2` while the proposing window is open
+2. Validators vote (`UpgradeVote2`) while the voting window is open; enough votes form an `UpgradeCertificate2`
+3. Leaders attach the certificate to proposals until one decides, within `DECIDE_BY_OFFSET` views; the new version
+   takes effect `FINISH_OFFSET` views after the upgrade proposal
 
 Configured in the genesis TOML, view-based (`start_proposing_view`, `stop_proposing_view`, `start_voting_view`,
 `stop_voting_view`) or time-based (same fields as Unix timestamps).

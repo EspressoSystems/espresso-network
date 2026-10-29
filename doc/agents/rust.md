@@ -77,7 +77,7 @@ just demo-native                      # local network via process-compose
 
 - `espresso-node`: main node binary, API, persistence
 - `espresso-types`: domain types (Header, Payload, Transaction, ValidatedState)
-- `hotshot`: BFT consensus implementation
+- `hotshot-new-protocol`: BFT consensus implementation
 - `hotshot-query-service`: query APIs for blocks/availability
 - `hotshot-state-prover`: ZK proof generation for light client updates
 - `hotshot-contract-adapter`: Rust <-> Solidity type bridge
@@ -89,7 +89,7 @@ just demo-native                      # local network via process-compose
 ## Testing
 
 **Blockchain infrastructure: bugs can cause irreversible financial losses.** Write tests that prove correctness, not
-just exercise code paths. Regression test first when fixing bugs.
+just exercise code paths.
 
 Test layers:
 
