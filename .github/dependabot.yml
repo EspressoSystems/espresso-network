@@ -1,7 +1,10 @@
 version: 2
 updates:
   - package-ecosystem: "github-actions"
-    directory: "/"
+    directories:
+      - "/"
+      # Local composite actions pin by SHA, which the lockfile can't cover.
+      - "/.github/actions/*"
     # Group all updates together
     groups:
       all:
