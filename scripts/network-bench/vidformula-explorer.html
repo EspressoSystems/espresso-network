@@ -1957,7 +1957,7 @@
         top = 52,
         rowH = 24,
         gap = 6,
-        titleH = 22,
+        titleH = 40,
         lanePad = 10;
       const W = 1100;
       let y = top;
@@ -1978,7 +1978,7 @@
         const t0 = laneTop[i],
           h = lanePad * 2 + titleH + l.rows.length * (rowH + gap);
         if (i % 2) g += `<rect x="0" y="${t0}" width="${W}" height="${h}" fill="var(--line-2)" opacity="0.45"/>`;
-        g += `<text x="12" y="${t0 + lanePad + 15}" font-weight="600" font-size="13.5" fill="var(--fg)">${esc(l.title)}</text><text x="${left - 10}" y="${t0 + lanePad + 15}" text-anchor="end" font-size="11.5">${esc(l.sub)}</text>`;
+        g += `<text x="12" y="${t0 + lanePad + 15}" font-weight="600" font-size="13.5" fill="var(--fg)">${esc(l.title)}</text><text x="12" y="${t0 + lanePad + 31}" font-size="11.5">${esc(l.sub)}</text>`;
         l.rows.forEach((row, ri) => {
           const ry = t0 + lanePad + titleH + ri * (rowH + gap);
           g += `<text x="${left - 10}" y="${ry + 16}" text-anchor="end" font-size="12" fill="var(--fg-2)">${esc(l.names[ri] || "")}</text>`;
