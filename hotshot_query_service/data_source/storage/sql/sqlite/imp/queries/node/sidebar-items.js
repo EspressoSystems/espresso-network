@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"fn":["aggregate_range_bounds"]};
+window.SIDEBAR_ITEMS = {"fn":["aggregate_range_bounds","cumulative_totals"]};

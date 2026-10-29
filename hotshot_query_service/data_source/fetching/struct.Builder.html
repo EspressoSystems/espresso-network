@@ -73,8 +73,8 @@ to run with rare proactive fetching (see
 <a href="Self::with_minor_scan_interval"><code>with_minor_scan_interval</code></a>), rather than disabling it
 entirely.</p>
 </div></details><details class="toggle method-toggle" open><summary><section id="method.disable_aggregator" class="method"><a class="src rightside" href="../../../src/hotshot_query_service/data_source/fetching.rs.html#348-351">Source</a><h4 class="code-header">pub fn <a href="#method.disable_aggregator" class="fn">disable_aggregator</a>(self) -&gt; Self</h4></section></summary><div class="docblock"><p>Run without an aggregator.</p>
-<p>This can reduce load on the CPU and the database, but it will cause aggregate statistics
-(such as transaction counts) not to update.</p>
+<p>This can reduce load on the CPU and the database, but transaction counts, payload sizes and
+the explorer summary then return <a href="../../enum.QueryError.html#variant.NotFound" title="variant hotshot_query_service::QueryError::NotFound"><code>QueryError::NotFound</code></a>.</p>
 </div></details><details class="toggle method-toggle" open><summary><section id="method.with_aggregator_chunk_size" class="method"><a class="src rightside" href="../../../src/hotshot_query_service/data_source/fetching.rs.html#361-364">Source</a><h4 class="code-header">pub fn <a href="#method.with_aggregator_chunk_size" class="fn">with_aggregator_chunk_size</a>(self, chunk_size: <a class="primitive" href="https://doc.rust-lang.org/1.99.1/std/primitive.usize.html">usize</a>) -&gt; Self</h4></section></summary><div class="docblock"><p>Set the number of items to process at a time when computing aggregate statistics.</p>
 <p>This is similar to <a href="struct.Builder.html#method.with_range_chunk_size" title="method hotshot_query_service::data_source::fetching::Builder::with_range_chunk_size"><code>Self::with_range_chunk_size</code></a>, but only affects the chunk size for
 the aggregator task, not for normal subscription streams. This can be useful to tune
