@@ -2248,21 +2248,6 @@ where
     }
 }
 
-impl<Types, S, P> FetchingDataSource<Types, S, P>
-where
-    Types: NodeType,
-{
-    /// Transaction counts and payload sizes come from the aggregator. Without one, this data source
-    /// has none: rows an earlier run left in storage stop where that run did, and a node without an
-    /// aggregator, such as a pruned one, never has the blocks to count from genesis.
-    fn check_aggregator(&self) -> QueryResult<()> {
-        if self.aggregator.is_none() {
-            return Err(QueryError::NotFound);
-        }
-        Ok(())
-    }
-}
-
 #[async_trait]
 impl<Types, S, P> NodeDataSource<Types> for FetchingDataSource<Types, S, P>
 where
@@ -2457,6 +2442,21 @@ where
             tx.get_search_results(query.clone()).await
         })
         .await
+    }
+}
+
+impl<Types, S, P> FetchingDataSource<Types, S, P>
+where
+    Types: NodeType,
+{
+    /// Transaction counts and payload sizes come from the aggregator. Without one, this data source
+    /// has none: rows an earlier run left in storage stop where that run did, and a node without an
+    /// aggregator, such as a pruned one, never has the blocks to count from genesis.
+    fn check_aggregator(&self) -> QueryResult<()> {
+        if self.aggregator.is_none() {
+            return Err(QueryError::NotFound);
+        }
+        Ok(())
     }
 }
 
