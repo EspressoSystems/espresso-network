@@ -111,7 +111,7 @@ workflows:
     '.github/workflows/lint.yml':
         - 'actions/checkout@v7'
         - 'astral-sh/setup-uv@v10.3.2'
-        - 'bufbuild/buf-action@v1.6.0'
+        - 'bufbuild/buf-action@85aebf73123b5c15fd5528aaecbf9129cddf7fa7'
         - 'dtolnay/rust-toolchain@master'
         - 'swatinem/rust-cache@v2'
         - 'taiki-e/install-action@v2'
@@ -217,7 +217,7 @@ dependencies:
         commit: 'sha1-07a047e608db84b3d8c06cd9a7c7dcc9c355c18e'
         owner_id: 115962839
         repo_id: 846733598
-    'bufbuild/buf-action@v1.6.0':
+    'bufbuild/buf-action@85aebf73123b5c15fd5528aaecbf9129cddf7fa7':
         ref: 'v1.6.0'
         commit: 'sha1-85aebf73123b5c15fd5528aaecbf9129cddf7fa7'
         owner_id: 54191850

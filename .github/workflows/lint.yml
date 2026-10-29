@@ -120,7 +120,8 @@ jobs:
           # The compatibility check diffs against the merge base with the PR's base branch.
           fetch-depth: 0
           filter: blob:none
-      - uses: bufbuild/buf-action@v1.6.0
+      # Pinned by commit: a third-party action's tag can be moved.
+      - uses: bufbuild/buf-action@85aebf73123b5c15fd5528aaecbf9129cddf7fa7 # v1.6.0
         with:
           # Keep in step with the `buf` the nix dev shell provides, so `buf format` agrees
           # locally and in CI.
