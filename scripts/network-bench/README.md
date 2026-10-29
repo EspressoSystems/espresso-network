@@ -1035,6 +1035,8 @@ scripts/network-bench/
   leadertrace.py         leader critical-path breakdown and trace/sample readers used by trace-plots
   finalization_timeline.py timeline.svg of trace-plots
   leader_window.py       leader_window.png of trace-plots
+  vidwindow.py           reconstruction window model: fluid network, every computation instant (doc/vid-reconstruction-window.md)
+  vidwindow_runs.py      a run's reconstruction window and decode per step, next to the model
   instance-types.md      leader block-build time and cost per block per instance type
   genesis.toml           0.6, 100 MB blocks, 1 wei base fee
   process-compose.yaml   local 3-node network
