@@ -588,6 +588,16 @@
         <div class="v" id="t-ceil">–</div>
         <div class="d" id="t-ceil-d"></div>
       </div>
+      <div class="tile">
+        <div class="k">Max under the cap, no compute</div>
+        <div class="v" id="t-free">–</div>
+        <div class="d" id="t-free-d"></div>
+      </div>
+      <div class="tile">
+        <div class="k">Max under the cap, reconstruction only</div>
+        <div class="v" id="t-decode">–</div>
+        <div class="d" id="t-decode-d"></div>
+      </div>
     </div>
     <p class="status" id="status"></p>
     <section class="panel">
@@ -1363,7 +1373,11 @@
       timer = setTimeout(render, 60);
     }
     function render() {
-      current = sweep(config());
+      const cfg = config();
+      current = sweep(cfg);
+      const zero = Object.fromEntries(STEPS.map((s) => [s, [0, 0]]));
+      current.free = sweep({ ...cfg, compute: zero });
+      current.decodeOnly = sweep({ ...cfg, compute: { ...zero, decode: cfg.compute.decode } });
       tiles(current, state.baseline);
       charts(current, state.baseline);
     }
@@ -1412,6 +1426,20 @@
         d || (res.cfg.lane ? "one transfer plus the decode per MB" : "two transfers per MB: B·k / 2(n−1)"),
         cls,
       );
+      for (const [id, key] of [
+        ["t-free", "free"],
+        ["t-decode", "decodeOnly"],
+      ]) {
+        const alt = res[key] ? atCap(res[key]) : null;
+        const v = alt && alt.status !== "below" ? alt.mbps : NaN;
+        const gain = ok && Number.isFinite(v) ? v - at.mbps : NaN;
+        const note = Number.isFinite(gain)
+          ? `${gain >= 0 ? "+" : "−"}${fmt(Math.abs(gain))} MB/s against the current compute`
+          : alt && alt.status === "above"
+            ? "under the cap at every block size shown"
+            : "";
+        setTile(id, Number.isFinite(v) ? fmt(v) : "–", Number.isFinite(v) ? "MB/s" : "", note, "");
+      }
     }
     const C = {
       fin: "var(--s1)",
