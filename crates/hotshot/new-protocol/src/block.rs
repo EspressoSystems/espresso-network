@@ -27,7 +27,7 @@ use tokio::{
     time::sleep,
 };
 use tracing::{debug_span, error, warn};
-use versions::{NO_BUILDER_COMMITMENT_VERSION, Version};
+use versions::{NEW_PROTOCOL_VERSION, NO_BUILDER_COMMITMENT_VERSION, Version};
 
 use crate::{
     consensus::ConsensusInput,
@@ -52,6 +52,9 @@ pub enum BlockError {
 
     #[error("vid dispersal failed: {0}")]
     Vid(#[from] VidDisperseError),
+
+    #[error("version {0} predates the new protocol")]
+    UnsupportedVersion(Version),
 
     #[error("block builder task cancelled")]
     Cancelled,
@@ -104,13 +107,17 @@ pub struct BlockCommitments<T: NodeType> {
 /// `pooled_hashes` are the pool's hashes of the transactions the payload was built from, and
 /// `stake_table` the nodes of the block's epoch. The payload commitment is folded from the
 /// block's dispersal, so the leader encodes the payload once for both. The new protocol runs
-/// from `NEW_PROTOCOL_VERSION`, whose VID scheme is always AvidmGf2.
+/// from `NEW_PROTOCOL_VERSION`, whose VID scheme is always AvidmGf2, so an earlier `version` is
+/// refused.
 pub fn block_commitments<T: NodeType>(
     payload: &PayloadWithMetadata<T>,
     pooled_hashes: &[Commitment<T::Transaction>],
     stake_table: &[PeerConfig<T>],
     version: Version,
 ) -> Result<BlockCommitments<T>, BlockError> {
+    if version < NEW_PROTOCOL_VERSION {
+        return Err(BlockError::UnsupportedVersion(version));
+    }
     let _span = debug_span!("block_commitments").entered();
     let (payload_bytes, metadata_bytes) =
         debug_span!("encode").in_scope(|| (payload.payload.encode(), payload.metadata.encode()));

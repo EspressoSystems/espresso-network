@@ -18,7 +18,10 @@ use hotshot_types::{
 use versions::{NEW_PROTOCOL_VERSION, TIMEOUT_EPOCH_VERSION, Upgrade, Version};
 
 use crate::{
-    block::{BlockBuilder, BlockBuilderConfig, forward_budget, transaction_hashes},
+    block::{
+        BlockBuilder, BlockBuilderConfig, BlockError, block_commitments, forward_budget,
+        transaction_hashes,
+    },
     helpers::test_upgrade_lock,
     message::{BlockMessage, DedupManifest, Message, MessageType, TransactionMessage, Validated},
     network::{MIN_MESSAGE_LIMIT, message_limit},
@@ -599,6 +602,15 @@ async fn test_payload_commitment_comes_from_the_built_dispersal() {
     }
     num_transactions.sort();
     assert_eq!(num_transactions, [0, 2], "one block is empty");
+}
+
+/// The new protocol commits with AvidmGf2 only, so the leader refuses an earlier version rather
+/// than commit to its block under the wrong scheme.
+#[test]
+fn block_commitments_refuses_a_version_before_the_new_protocol() {
+    let old = versions::version(0, 5);
+    let result = block_commitments(&test_payload(vec![tx(1)]), &[tx(1).commit()], &[], old);
+    assert!(matches!(result, Err(BlockError::UnsupportedVersion(version)) if version == old));
 }
 
 #[test]
