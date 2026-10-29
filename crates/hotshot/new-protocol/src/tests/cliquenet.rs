@@ -2,11 +2,37 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use hotshot_types::data::ViewNumber;
 
-use crate::tests::common::runner::TestRunner;
+use crate::{network::ControlLane, tests::common::runner::TestRunner};
 
 #[tokio::test(flavor = "multi_thread")]
 async fn five_nodes_decide_same_chain_over_cliquenet() {
     TestRunner::builder().build().run().await.unwrap();
+}
+
+/// Proposals travel on the control lane alone, so the network only decides if every node's
+/// lane is bound, its peers' lanes derived from their main addresses, and the inbound merge
+/// of the two networks delivers both.
+#[tokio::test(flavor = "multi_thread")]
+async fn five_nodes_decide_over_the_control_lane() {
+    TestRunner::builder()
+        .control_lane(ControlLane::On)
+        .build()
+        .run()
+        .await
+        .unwrap();
+}
+
+/// Each epoch's peer update goes to both networks, and epoch changes travel the main one.
+#[tokio::test(flavor = "multi_thread")]
+async fn epoch_changes_over_the_control_lane() {
+    TestRunner::builder()
+        .control_lane(ControlLane::On)
+        .epoch_height(10)
+        .target_decisions(50)
+        .build()
+        .run()
+        .await
+        .unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread")]

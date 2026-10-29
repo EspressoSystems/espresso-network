@@ -21,7 +21,7 @@ use hotshot_utils::anytrace;
 use parking_lot::RwLock;
 use tracing::{error, info};
 
-use crate::message::{Message, MessageType, Unchecked, Validated};
+use crate::message::{ConsensusMessage, Message, MessageType, Unchecked, Validated};
 
 /// A predicate that discards inbound messages.
 ///
@@ -29,9 +29,61 @@ use crate::message::{Message, MessageType, Unchecked, Validated};
 #[cfg(any(test, feature = "testing"))]
 pub type InboundFilter<T> = Box<dyn Fn(&Message<T, Unchecked>) -> bool + Send + Sync>;
 
+/// Whether proposals travel on a second cliquenet network of their own.
+///
+/// cliquenet writes one message per connection at a time, lowest view first, so a proposal
+/// queued behind a VID share waits for the whole share to leave. On the control lane the
+/// proposal has its own TCP connection to every peer and passes the shares. The lane listens
+/// one port above the main network and expects every peer's lane at the same offset from its
+/// registered address, so a network runs it on all nodes or none.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ControlLane {
+    #[default]
+    Off,
+    On,
+}
+
+/// The control lane's port, relative to the main network's.
+pub const CONTROL_LANE_PORT_OFFSET: u16 = 1;
+
+/// The network a message travels on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Lane {
+    /// Shares, votes, certificates and everything else.
+    Main,
+    /// Proposals, when the control lane is on.
+    Control,
+}
+
+impl Lane {
+    fn of<T: NodeType, S>(m: &Message<T, S>) -> Self {
+        match &m.message_type {
+            MessageType::Consensus(ConsensusMessage::Proposal(_)) => Self::Control,
+            _ => Self::Main,
+        }
+    }
+
+    /// Where this lane listens, given the main network's address.
+    fn addr(self, main: NetAddr) -> NetAddr {
+        match self {
+            Self::Main => main,
+            Self::Control => main.with_offset(CONTROL_LANE_PORT_OFFSET),
+        }
+    }
+
+    fn name_suffix(self) -> &'static str {
+        match self {
+            Self::Main => "",
+            Self::Control => "-control",
+        }
+    }
+}
+
 pub struct Cliquenet<T: NodeType> {
     inner: Sender<T>,
     receiver: NetworkReceiver,
+    /// Polled before `receiver`, so a proposal also passes the shares queued inbound.
+    control_receiver: Option<NetworkReceiver>,
     #[cfg(any(test, feature = "testing"))]
     ifilter: InboundFilter<T>,
 }
@@ -49,6 +101,7 @@ impl<T: NodeType> std::fmt::Debug for Cliquenet<T> {
 pub struct Sender<T: NodeType> {
     my_keys: (T::SignatureKey, PublicKey),
     sender: NetworkSender,
+    control: Option<NetworkSender>,
     shared: Arc<RwLock<Shared<T::SignatureKey>>>,
     upgrade_lock: UpgradeLock<T>,
 }
@@ -82,6 +135,7 @@ impl<T: NodeType> Cliquenet<T> {
         addr: A,
         parties: P,
         max_message_size: Option<NonZeroUsize>,
+        control_lane: ControlLane,
         upgrade_lock: UpgradeLock<T>,
         metrics: Box<dyn Metrics>,
     ) -> Result<Self, NetworkError>
@@ -91,27 +145,48 @@ impl<T: NodeType> Cliquenet<T> {
         S: Into<String>,
     {
         let parties: HashMap<T::SignatureKey, PeerConnectInfo> = parties.into_iter().collect();
+        let name = name.into();
+        let addr = addr.into();
+        let keypair: cliquenet::x25519::Keypair = keypair.into();
 
-        let cfg = cliquenet::Config::builder()
-            .name(name)
-            .keypair(keypair.into())
-            .bind(addr.into())
-            .parties(
-                parties
-                    .values()
-                    .map(|info| (info.x25519_key.into(), info.p2p_addr.clone())),
-            )
-            .noise_protocols([(1.into(), Protocol::IK_25519_AesGcm_Blake2s)])
-            .maybe_max_message_size(max_message_size)
-            .build();
+        let config = |lane: Lane| {
+            cliquenet::Config::builder()
+                .name(format!("{name}{}", lane.name_suffix()))
+                .keypair(keypair.clone())
+                .bind(lane.addr(addr.clone()))
+                .parties(
+                    parties
+                        .values()
+                        .map(|info| (info.x25519_key.into(), lane.addr(info.p2p_addr.clone()))),
+                )
+                .noise_protocols([(1.into(), Protocol::IK_25519_AesGcm_Blake2s)])
+                .maybe_max_message_size(max_message_size)
+                .build()
+        };
 
-        Self::create_with_config(signing_key, upgrade_lock, cfg, parties, metrics).await
+        let control = match control_lane {
+            ControlLane::Off => None,
+            ControlLane::On => Some(config(Lane::Control)),
+        };
+
+        Self::create_with_config(
+            signing_key,
+            upgrade_lock,
+            config(Lane::Main),
+            control,
+            parties,
+            metrics,
+        )
+        .await
     }
 
+    /// `control`, when given, is the control lane's configuration: the same keypair as
+    /// `config`, bound and connecting at [`CONTROL_LANE_PORT_OFFSET`] above it.
     pub(crate) async fn create_with_config<P>(
         signing_key: T::SignatureKey,
         upgrade_lock: UpgradeLock<T>,
         config: cliquenet::Config,
+        control: Option<cliquenet::Config>,
         parties: P,
         metrics: Box<dyn Metrics>,
     ) -> Result<Self, NetworkError>
@@ -119,13 +194,22 @@ impl<T: NodeType> Cliquenet<T> {
         P: IntoIterator<Item = (T::SignatureKey, PeerConnectInfo)>,
     {
         let public_key = config.public_key();
+        let control_metrics = metrics.subgroup("control_lane".to_string());
         let metrics = CliquenetMetrics::new(metrics);
         let network = cliquenet::Network::create(config.with_metrics(metrics)).await?;
+        let control = match control {
+            Some(config) => {
+                let metrics = CliquenetMetrics::new(control_metrics);
+                Some(cliquenet::Network::create(config.with_metrics(metrics)).await?)
+            },
+            None => None,
+        };
         let peers: HashMap<_, _> = parties.into_iter().collect();
 
-        info!(peers = %peers.len(), "cliquenet created");
+        info!(peers = %peers.len(), control_lane = control.is_some(), "cliquenet created");
 
         let (send, recv) = network.split_into();
+        let (control_send, control_recv) = control.map(|n| n.split_into()).unzip();
 
         Ok(Self {
             #[cfg(any(test, feature = "testing"))]
@@ -133,6 +217,7 @@ impl<T: NodeType> Cliquenet<T> {
             inner: Sender {
                 my_keys: (signing_key, public_key),
                 sender: send,
+                control: control_send,
                 shared: Arc::new(RwLock::new(Shared {
                     peers,
                     epoch: EpochNumber::new(0),
@@ -140,6 +225,7 @@ impl<T: NodeType> Cliquenet<T> {
                 upgrade_lock,
             },
             receiver: recv,
+            control_receiver: control_recv,
         })
     }
 
@@ -161,11 +247,15 @@ impl<T: NodeType> Cliquenet<T> {
 
     pub async fn receive(&mut self) -> Result<Message<T, Unchecked>, NetworkError> {
         loop {
-            let (src, bytes) = self
-                .receiver
-                .receive()
-                .await
-                .ok_or(cliquenet::NetworkError::ChannelClosed)?;
+            let received = match &mut self.control_receiver {
+                Some(control) => tokio::select! {
+                    biased;
+                    r = control.receive() => r,
+                    r = self.receiver.receive() => r,
+                },
+                None => self.receiver.receive().await,
+            };
+            let (src, bytes) = received.ok_or(cliquenet::NetworkError::ChannelClosed)?;
             let msg = self.deserialize(&bytes)?;
             let key = self
                 .inner
@@ -192,13 +282,17 @@ impl<T: NodeType> Cliquenet<T> {
     }
 
     pub async fn shutdown(&mut self) {
-        if let Ok(done) = self.inner.sender.shutdown() {
-            done.await
+        for sender in self.inner.senders() {
+            if let Ok(done) = sender.shutdown() {
+                done.await
+            }
         }
     }
 
     pub fn gc(&mut self, v: ViewNumber) -> Result<(), NetworkError> {
-        self.inner.sender.gc(Slot::new(*v))?;
+        for sender in self.inner.senders() {
+            sender.gc(Slot::new(*v))?;
+        }
         Ok(())
     }
 
@@ -221,7 +315,7 @@ impl<T: NodeType> Cliquenet<T> {
                 targets.push((x, a))
             }
         }
-        self.inner.sender.add_peers(r, targets)?;
+        self.inner.add_peers(r, targets)?;
         Ok(())
     }
 
@@ -235,7 +329,9 @@ impl<T: NodeType> Cliquenet<T> {
                 }
             }
         }
-        self.inner.sender.remove_peers(targets)?;
+        for sender in self.inner.senders() {
+            sender.remove_peers(targets.clone())?;
+        }
         Ok(())
     }
 
@@ -249,7 +345,9 @@ impl<T: NodeType> Cliquenet<T> {
                 }
             }
         }
-        self.inner.sender.assign_peers(r, targets)?;
+        for sender in self.inner.senders() {
+            sender.assign_peers(r, targets.clone())?;
+        }
         Ok(())
     }
 
@@ -352,14 +450,16 @@ impl<T: NodeType> Cliquenet<T> {
             .collect();
         let del_targets: Vec<PublicKey> = to_del.iter().map(|(_, i)| i.x25519_key.into()).collect();
 
-        if let Err(err) = self.inner.sender.add_peers(Role::Active, add_targets) {
+        if let Err(err) = self.inner.add_peers(Role::Active, add_targets) {
             error!(%epoch, %err, "network down; could not add peers to network");
-            return Err(err.into());
+            return Err(err);
         }
 
-        if let Err(err) = self.inner.sender.remove_peers(del_targets) {
-            error!(%epoch, %err, "network down; could not remove peers from network");
-            return Err(err.into());
+        for sender in self.inner.senders() {
+            if let Err(err) = sender.remove_peers(del_targets.clone()) {
+                error!(%epoch, %err, "network down; could not remove peers from network");
+                return Err(err.into());
+            }
         }
 
         info!(%epoch, peers = %self.inner.shared.read().peers.len());
@@ -420,7 +520,7 @@ impl<T: NodeType> Sender<T> {
             return Ok(());
         };
         let bytes = self.serialize(m)?;
-        self.sender.unicast(Slot::new(*v), target, bytes)?;
+        self.sender_for(m).unicast(Slot::new(*v), target, bytes)?;
         Ok(())
     }
 
@@ -444,18 +544,44 @@ impl<T: NodeType> Sender<T> {
                 }
             }
         }
-        self.sender.multicast(Slot::new(*v), targets, bytes)?;
+        self.sender_for(m)
+            .multicast(Slot::new(*v), targets, bytes)?;
         Ok(())
     }
 
     pub fn broadcast(&self, v: ViewNumber, m: &Message<T, Validated>) -> Result<(), NetworkError> {
         let bytes = self.serialize(m)?;
-        self.sender.broadcast(Slot::new(*v), bytes)?;
+        self.sender_for(m).broadcast(Slot::new(*v), bytes)?;
         Ok(())
     }
 
     pub fn max_message_size(&self) -> NonZeroUsize {
         self.sender.config().max_message_size()
+    }
+
+    /// The network `m` travels on: the control lane for a proposal when the lane is on.
+    fn sender_for(&self, m: &Message<T, Validated>) -> &NetworkSender {
+        match (Lane::of(m), &self.control) {
+            (Lane::Control, Some(control)) => control,
+            _ => &self.sender,
+        }
+    }
+
+    /// The main network and, when on, the control lane.
+    fn senders(&self) -> impl Iterator<Item = &NetworkSender> {
+        std::iter::once(&self.sender).chain(self.control.as_ref())
+    }
+
+    /// Adds the peers to every network, each lane at its own port.
+    fn add_peers(&self, r: Role, peers: Vec<(PublicKey, NetAddr)>) -> Result<(), NetworkError> {
+        if let Some(control) = &self.control {
+            let at_lane = peers
+                .iter()
+                .map(|(k, a)| (*k, Lane::Control.addr(a.clone())));
+            control.add_peers(r, at_lane)?;
+        }
+        self.sender.add_peers(r, peers)?;
+        Ok(())
     }
 
     fn serialize(&self, m: &Message<T, Validated>) -> Result<Vec<u8>, NetworkError> {

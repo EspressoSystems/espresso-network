@@ -16,7 +16,7 @@ use hotshot_new_protocol::{
     epoch::EpochManager,
     helpers::proposal_commitment,
     leader_trace::{CsvLeaderTracer, LeaderTracerHandle},
-    network::Cliquenet,
+    network::{Cliquenet, ControlLane},
     outbox::Outbox,
     proposal::{ProposalValidator, VidShareValidator},
     state::StateManager,
@@ -115,6 +115,7 @@ async fn create_network(
         bind_addr,
         parties,
         None,
+        ControlLane::Off,
         upgrade_lock(),
         Box::new(NoMetrics),
     )
