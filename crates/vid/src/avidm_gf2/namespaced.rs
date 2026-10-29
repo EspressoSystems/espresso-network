@@ -341,10 +341,18 @@ impl NsAvidmGf2Scheme {
             return Err(VidError::IndexOutOfBound);
         }
         let ns_commit = &common.ns_commits[ns_index];
+        let ns_len = common.ns_lens[ns_index];
         let shares: Vec<_> = shares
             .iter()
             .filter_map(|share| share.inner_ns_share(ns_index))
             .collect();
+        // The decoder sizes its buffers from the first shard, so an oversized
+        // shard must be rejected before decoding starts.
+        if !shares.iter().all(|share| {
+            share.payload.is_empty() || Self::ns_len_matches_shards(&common.param, ns_len, share)
+        }) {
+            return Err(VidError::InvalidShare);
+        }
         AvidmGf2Scheme::recover(&common.param, ns_commit, &shares)
     }
 
@@ -380,7 +388,7 @@ pub struct NsDispersal {
 pub mod tests {
     use rand::{RngCore, seq::SliceRandom};
 
-    use crate::avidm_gf2::namespaced::NsAvidmGf2Scheme;
+    use crate::{VidError, avidm_gf2::namespaced::NsAvidmGf2Scheme};
 
     fn disperse_with_payload(
         payload: &[u8],
@@ -645,6 +653,20 @@ pub mod tests {
         assert_eq!(ns1_payload_recovered[..], payload[ns_table[1].clone()]);
         let payload_recovered = NsAvidmGf2Scheme::recover(&common, &shares[..cut_index]).unwrap();
         assert_eq!(payload_recovered, payload);
+    }
+
+    #[test]
+    fn ns_recover_rejects_shards_sized_for_another_ns_len() {
+        let (_commit, common, mut shares) = setup_test_data();
+        for share in &mut shares {
+            for shard in &mut share.0[0].payload {
+                shard.resize(shard.len() + 64, 0);
+            }
+        }
+        assert!(matches!(
+            NsAvidmGf2Scheme::ns_recover(&common, 0, &shares),
+            Err(VidError::InvalidShare)
+        ));
     }
 
     /// A caller that encodes each namespace with `ns_disperse_one` and folds the
