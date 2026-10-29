@@ -1082,16 +1082,17 @@ mod tests {
         assert_eq!(view_number, new_view_number_for_certificate);
     }
 
-    /// The `Storage<SeqTypes>` impl on `Arc<P>` (the object the consensus tasks actually hold) used
-    /// to no-op `update_high_qc2`, the persist-before-vote hook. It must now durably route to the
-    /// `high_qc2` table and stay monotonic.
+    /// The `NewProtocolStorage` impl on `Arc<P>` (the object the coordinator actually holds) is the
+    /// persist-before-vote hook. It must durably route to the `high_qc2` table and stay monotonic.
     #[rstest_reuse::apply(persistence_types)]
-    pub async fn test_storage_update_high_qc2_persists<P: TestablePersistence>(_p: PhantomData<P>) {
-        use hotshot_types::traits::storage::Storage;
+    pub async fn test_arc_storage_append_high_qc2_persists<P: TestablePersistence>(
+        _p: PhantomData<P>,
+    ) {
+        use hotshot_new_protocol::storage::NewProtocolStorage;
 
         let tmp = P::tmp_storage().await;
         let storage = P::connect(&tmp).await;
-        // Production wraps the persistence as `Arc<P>`; that is the `Storage<SeqTypes>` impl we fixed.
+        // Production wraps the persistence as `Arc<P>`; that is the impl under test.
         let arc = Arc::new(storage.clone());
 
         assert_eq!(storage.load_high_qc2().await.unwrap(), None);
@@ -1103,7 +1104,7 @@ mod tests {
         )
         .await;
         high_qc.view_number = ViewNumber::new(7);
-        Storage::update_high_qc2(&arc, high_qc.clone())
+        NewProtocolStorage::append_high_qc2(&arc, high_qc.clone())
             .await
             .unwrap();
         assert_eq!(
@@ -1111,17 +1112,19 @@ mod tests {
             ViewNumber::new(7)
         );
 
-        // A stale write through the Storage trait must not regress the persisted view.
+        // A stale write through the wrapper must not regress the persisted view.
         let mut stale = high_qc.clone();
         stale.view_number = ViewNumber::new(3);
-        Storage::update_high_qc2(&arc, stale).await.unwrap();
+        NewProtocolStorage::append_high_qc2(&arc, stale)
+            .await
+            .unwrap();
         assert_eq!(
             storage.load_high_qc2().await.unwrap().unwrap().view_number,
             ViewNumber::new(7)
         );
     }
 
-    /// `load_consensus_state` must fold the running high QC persisted via `update_high_qc2` back into
+    /// `load_consensus_state` must fold the running high QC persisted via `append_high_qc2` back into
     /// the recovered `high_qc` (which `Consensus::new` then uses to restore `locked_view` past the
     /// decided anchor). With no decided anchor, recovery starts from the genesis QC at view 0 and
     /// must pick up a persisted high QC at a higher view.
