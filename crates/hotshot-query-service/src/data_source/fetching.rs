@@ -343,8 +343,8 @@ impl<Types, S, P> Builder<Types, S, P> {
 
     /// Run without an aggregator.
     ///
-    /// This can reduce load on the CPU and the database, but it will cause aggregate statistics
-    /// (such as transaction counts) not to update.
+    /// This can reduce load on the CPU and the database, but transaction counts, payload sizes and
+    /// the explorer summary then return [`QueryError::NotFound`].
     pub fn disable_aggregator(mut self) -> Self {
         self.aggregator = false;
         self
