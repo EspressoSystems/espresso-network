@@ -3896,6 +3896,54 @@ mod test {
         }
     }
 
+    /// A pruned node keeps no totals from genesis, so every route that serves them is a 404 on v1
+    /// and v2, even for a range of blocks the node stores.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_pruned_node_totals_are_not_found() {
+        let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
+        let storage = SqlDataSource::create_storage().await;
+        let mut db_opt = tmp_options(&storage);
+        db_opt.prune = true;
+        let config = TestNetworkConfigBuilder::default()
+            .api_config(Options::with_port(port).query_sql(Query::default(), db_opt))
+            .network_config(TestConfigBuilder::default().build())
+            .build();
+        let _network = TestNetwork::new(config, TEST_UPGRADE).await;
+        let client: Client<ClientErr, StaticVersion<0, 1>> =
+            Client::new(format!("http://localhost:{port}").parse().unwrap());
+        assert!(client.connect(Some(Duration::from_secs(60))).await);
+        tokio::time::timeout(
+            Duration::from_secs(120),
+            wait_until_block_height(&client, "status/block-height", 2),
+        )
+        .await
+        .expect("network did not reach block height 2");
+
+        for route in [
+            "node/transactions/count",
+            "node/transactions/count/0/1",
+            "node/transactions/count/namespace/0",
+            "node/payloads/size",
+            "node/payloads/size/0/1",
+            "node/payloads/size/namespace/0",
+            "explorer/explorer-summary",
+            "v2/node/transaction-count",
+            "v2/node/transaction-count?from=0&to=1",
+            "v2/node/transaction-count?namespace=0",
+            "v2/node/payload-size",
+            "v2/node/payload-size?from=0&to=1",
+            "v2/node/payload-size?namespace=0",
+            "v2/explorer/summary",
+        ] {
+            let err = client
+                .get::<serde_json::Value>(route)
+                .send()
+                .await
+                .expect_err(route);
+            assert_eq!(err.status, StatusCode::NOT_FOUND, "{route}");
+        }
+    }
+
     /// Typed light client errors reach the HTTP client with their own status, not as a 500.
     #[apply(sql_data_sources)]
     async fn test_light_client_proof_errors_keep_their_status<D: TestableSqlDataSource>(
