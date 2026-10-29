@@ -1037,6 +1037,7 @@ scripts/network-bench/
   leader_window.py       leader_window.png of trace-plots
   vidwindow.py           one view as a fluid network plus the protocol's compute steps (doc/vid-reconstruction-window.md)
   vidwindow_runs.py      a run's compute per step fitted from its traces, and its window, view and finality next to the model
+  vidformula.py          the same view as closed forms over the latency matrix, bandwidth and compute, checked against vidwindow
   instance-types.md      leader block-build time and cost per block per instance type
   genesis.toml           0.6, 100 MB blocks, 1 wei base fee
   process-compose.yaml   local 3-node network
