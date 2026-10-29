@@ -44,7 +44,6 @@ jf-merkle-tree-compat = { workspace = true }
 rand = { workspace = true }
 rstest = { workspace = true }
 test-log = { workspace = true }
-tide-disco = { workspace = true }
 tokio = { workspace = true }
 
 [lints]
