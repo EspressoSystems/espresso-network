@@ -666,10 +666,6 @@ where
                         // Retain the payload and persist it when consensus proposes this
                         // exact block (cf. SendProposal):
                         if let VidCommitment::V2(commit) = block.payload_commitment {
-                            if let Some(dispersal) = block.dispersal.take() {
-                                self.built_dispersals
-                                    .insert((block.view, epoch, commit), dispersal);
-                            }
                             self.da_payloads.insert(
                                 (block.view, commit),
                                 PendingDa {
@@ -697,6 +693,14 @@ where
                                 &leader,
                                 BlockMessage::DedupManifest(manifest.clone()),
                             )?;
+                        }
+                        // Held only now, as an error above drops the block: consensus asks to
+                        // disperse every block it is given, and that request takes it back.
+                        if let VidCommitment::V2(commit) = block.payload_commitment
+                            && let Some(dispersal) = block.dispersal.take()
+                        {
+                            self.built_dispersals
+                                .insert((block.view, epoch, commit), dispersal);
                         }
                         return Ok(block.into())
                     }
