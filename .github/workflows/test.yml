@@ -27,7 +27,7 @@ env:
   PC_LOG_FILE: /tmp/pc-logs.log
 
 jobs:
-  build-test-artifacts-postgres:
+  build-test-artifacts:
     name: Build test artifacts
     runs-on: ubuntu-24.04-8core
     steps:
@@ -60,7 +60,7 @@ jobs:
       - uses: ./.github/actions/compile-metrics
         continue-on-error: true
         with:
-          job: test-archive-postgres
+          job: test-archive
           timing: target/cargo-timings/cargo-timing.html
 
       - name: Upload archive to workflow
@@ -74,7 +74,7 @@ jobs:
       - name: Upload cargo timings
         uses: actions/upload-artifact@v7
         with:
-          name: cargo-timings-test-postgres
+          name: cargo-timings-test
           path: target/cargo-timings/cargo-timing.html
           retention-days: ${{ github.ref == 'refs/heads/main' && 90 || 14 }}
 
@@ -96,7 +96,7 @@ jobs:
           prefix-key: v1-rust
           save-if: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release-') }}
 
-      - name: Build all binaries (postgres)
+      - name: Build all binaries
         run: |
           python3 scripts/compile-metrics sample-rss --out peak-rss.json -- \
             cargo build --locked --profile test --bins --timings
@@ -227,8 +227,8 @@ jobs:
           path: nextest-archive-integration.tar.zst
           retention-days: 1
 
-  test-postgres:
-    needs: build-test-artifacts-postgres
+  test:
+    needs: build-test-artifacts
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -246,12 +246,10 @@ jobs:
         with:
           name: nextest-archive
 
-      # Tests whose names mention sqlite run in `test-sqlite`.
       - name: Test
         run: |
           cargo nextest run --archive-file nextest-archive.tar.zst  --verbose --no-fail-fast \
           --workspace-remap $PWD \
-          -E 'not test(/(?i)sqlite/)' \
           --partition hash:${{ matrix.partition }}/20
         timeout-minutes: 30
 
@@ -259,46 +257,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: nextest-junit-postgres-${{ matrix.partition }}
-          if-no-files-found: ignore
-          path: target/nextest/*/junit.xml
-          retention-days: 1
-
-  # The SQL tests run once per backend from the same archive, told apart by name, so each backend
-  # reports as its own job.
-  test-sqlite:
-    needs: build-test-artifacts-postgres
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        partition: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
-      fail-fast: false
-    steps:
-      - uses: actions/checkout@v7
-      - uses: ./.github/actions/free-disk-space
-      - uses: ./.github/actions/install-foundry
-      # Some Postgres tests mention sqlite in their names, so they run here.
-      - uses: ./.github/actions/install-postgres
-      - uses: taiki-e/install-action@nextest
-
-      - name: Download archive
-        uses: actions/download-artifact@v8
-        with:
-          name: nextest-archive
-
-      - name: Test
-        run: |
-          cargo nextest run --archive-file nextest-archive.tar.zst  --verbose --no-fail-fast \
-          --workspace-remap $PWD \
-          -E 'test(/(?i)sqlite/)' \
-          --partition hash:${{ matrix.partition }}/10
-        timeout-minutes: 30
-
-      - name: Upload nextest JUnit
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: nextest-junit-sqlite-${{ matrix.partition }}
+          name: nextest-junit-${{ matrix.partition }}
           if-no-files-found: ignore
           path: target/nextest/*/junit.xml
           retention-days: 1
@@ -449,7 +408,7 @@ jobs:
           retention-days: 3
 
   nextest-report:
-    needs: [test-postgres, test-sqlite, test-integration]
+    needs: [test, test-integration]
     runs-on: ubuntu-latest
     if: ${{ always() && !cancelled() }}
     # Reporter only: failures here must not fail the workflow.
@@ -501,7 +460,7 @@ jobs:
           delete: ${{ hashFiles('junit-artifacts/pr-comment.md') == '' }}
 
   publish-test-stats:
-    needs: [test-postgres, test-sqlite, test-integration]
+    needs: [test, test-integration]
     # always() so a single flaky shard on main does not freeze the history artifact.
     if: ${{ always() && !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-latest
@@ -539,7 +498,7 @@ jobs:
   compile-metrics-report:
     name: Compile metrics
     needs:
-      - build-test-artifacts-postgres
+      - build-test-artifacts
       - build-test-bins
       - build-test-bins-dev-node
       - build-test-archive-integration
@@ -562,7 +521,7 @@ jobs:
   publish-compile-metrics:
     name: Publish compile metrics
     needs:
-      - build-test-artifacts-postgres
+      - build-test-artifacts
       - build-test-bins
       - build-test-bins-dev-node
     # !cancelled() so one failed build job on main does not freeze the baseline artifact.
@@ -582,7 +541,7 @@ jobs:
 
   # This job enables having a single required status check in github for all GCL tests.
   aggregate-gcl-tests:
-    needs: [test-postgres, test-sqlite, test-go-sdk, demo-native, test-integration]
+    needs: [test, test-go-sdk, demo-native, test-integration]
     runs-on: ubuntu-latest
     # explicitly run and fail the job if dependencies failed
     if: ${{ always() && !cancelled() }}

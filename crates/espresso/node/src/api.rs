@@ -3659,7 +3659,6 @@ mod test {
     type Postgres = sql::postgres::DataSource;
     type Sqlite = sql::sqlite::DataSource;
 
-    // CI runs the tests named with `sqlite` in their own job, so every SQLite case has to carry it.
     #[rstest_reuse::template]
     #[rstest::rstest]
     #[case::postgres(std::marker::PhantomData::<crate::api::sql::postgres::DataSource>)]
