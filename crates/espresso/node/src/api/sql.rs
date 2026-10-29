@@ -1193,18 +1193,36 @@ impl RewardMerkleTreeDataSource for DataSource {
 // called by name on this type.
 mod request_storage {
     use async_trait::async_trait;
+    use disco_types::status::StatusCode;
     use espresso_types::{
-        Certificate2, ChainConfig, FeeAccount, FeeMerkleTree, Leaf2, NodeState,
+        BlockMerkleTree, Certificate2, ChainConfig, FeeAccount, FeeMerkleTree, Header, Leaf2,
+        NodeState,
         v0_3::{RewardAccountV1, RewardMerkleTreeV1},
         v0_4::{RewardAccountV2, RewardMerkleTreeV2},
     };
+    use hotshot_query_service::{
+        Error, QueryError, QueryResult,
+        data_source::{
+            VersionedDataSource as _,
+            storage::{
+                AvailabilityStorage as _, MerklizedStateHeightStorage as _,
+                MerklizedStateStorage as _,
+            },
+        },
+        merklized_state::Snapshot,
+        node::BlockId,
+    };
     use hotshot_types::data::{VidShare, ViewNumber};
+    use jf_merkle_tree_compat::MerkleTreeScheme as _;
     use light_client::consensus::header::HeaderProof;
 
     use super::SqlStorage;
     use crate::{
         SeqTypes,
-        api::{BlocksFrontier, RewardMerkleTreeDataSource},
+        api::{
+            BlocksFrontier, RewardMerkleTreeDataSource,
+            light_client::{BlockMerkleProof, HeaderProofReads, header_proof},
+        },
         catchup::CatchupStorage,
         request_response::data_source::RequestStorage,
     };
@@ -1275,8 +1293,48 @@ mod request_storage {
         }
 
         async fn get_header_proof(&self, root: u64, height: u64) -> anyhow::Result<HeaderProof> {
-            let _ = (root, height);
-            todo!()
+            Ok(header_proof(self, root, BlockId::Number(height as usize)).await?)
+        }
+    }
+
+    /// Local reads only: a header missing from storage is an error, never fetched from peers.
+    #[async_trait]
+    impl HeaderProofReads for SqlStorage {
+        async fn header(&self, id: BlockId<SeqTypes>) -> Result<Header, Error> {
+            let mut tx = self.read().await.map_err(storage_error)?;
+            tx.get_header(id).await.map_err(query_error)
+        }
+
+        async fn block_path(&self, index: u64, height: u64) -> QueryResult<BlockMerkleProof> {
+            let mut tx = self.read().await.map_err(|err| QueryError::Error {
+                message: err.to_string(),
+            })?;
+            tx.get_path(
+                Snapshot::<SeqTypes, BlockMerkleTree, { BlockMerkleTree::ARITY }>::Index(index),
+                height,
+            )
+            .await
+        }
+
+        async fn last_state_height(&self) -> QueryResult<usize> {
+            let mut tx = self.read().await.map_err(|err| QueryError::Error {
+                message: err.to_string(),
+            })?;
+            tx.get_last_state_height().await
+        }
+    }
+
+    fn storage_error(err: impl std::fmt::Display) -> Error {
+        Error::Custom {
+            message: err.to_string(),
+            status: StatusCode::INTERNAL_SERVER_ERROR,
+        }
+    }
+
+    fn query_error(err: QueryError) -> Error {
+        Error::Custom {
+            message: err.to_string(),
+            status: err.status(),
         }
     }
 }

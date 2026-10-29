@@ -107,3 +107,37 @@ impl Serializable for Response {
         bincode::deserialize(bytes).with_context(|| "failed to deserialize")
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use hotshot_query_service::node::BlockId;
+    use light_client::{client::Client, testing::TestClient};
+
+    use super::*;
+
+    /// The appended variants round-trip through bincode and keep the tags of the older ones.
+    #[tokio::test]
+    async fn header_proof_variants_round_trip() {
+        let request = Request::HeaderProof { root: 7, height: 3 };
+        let decoded = Request::from_bytes(&request.to_bytes().unwrap()).unwrap();
+        assert!(matches!(
+            decoded,
+            Request::HeaderProof { root: 7, height: 3 }
+        ));
+
+        let client = TestClient::default();
+        client.leaf(7).await;
+        let proof = client.header_proof(7, BlockId::Number(3)).await.unwrap();
+        let response = Response::HeaderProof(Box::new(proof.clone()));
+        let decoded = Response::from_bytes(&response.to_bytes().unwrap()).unwrap();
+        let Response::HeaderProof(decoded) = decoded else {
+            panic!("expected a header proof");
+        };
+        assert_eq!(*decoded, proof);
+
+        // The variant is appended: `Cert2` keeps its tag and `HeaderProof` follows it.
+        let tag = |request: &Request| bincode::serialize(request).unwrap()[0];
+        assert_eq!(tag(&Request::Cert2(1)), 9);
+        assert_eq!(tag(&request), 10);
+    }
+}

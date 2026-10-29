@@ -29,7 +29,8 @@ pub use impls::{
     BuilderValidationError, EpochCommittees, EpochCommitteesError, EpochSnapshot, FeeError,
     LcContractCandidateStakeTable, LcContractStakeTableMatchError, LcContractVotingStakeTable,
     ProposalValidationError, RECENT_STAKE_TABLES_LIMIT, StakeTableCommitment, StateValidationError,
-    ValidatorSet, get_l1_deposits, retain_accounts, validators_from_l1_events,
+    ValidatorSet, get_l1_deposits, installed_stake_table, retain_accounts,
+    validators_from_l1_events,
 };
 pub use nsproof::*;
 pub use txproof::*;

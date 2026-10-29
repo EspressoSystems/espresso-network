@@ -9,7 +9,7 @@ use anyhow::{Context, bail};
 use async_lock::Mutex;
 use async_trait::async_trait;
 #[cfg(feature = "node")]
-use hotshot_contract_adapter::sol_types::{LightClientV3, StakeTableV3};
+use hotshot_contract_adapter::sol_types::{LightClientV3, StakeTableStateSol, StakeTableV3};
 use hotshot_types::{
     HotShotConfig, data::EpochNumber, drb::DrbResult, epoch_membership::EpochMembershipCoordinator,
     traits::states::InstanceState,
@@ -177,8 +177,39 @@ impl NodeState {
         &self,
         l1_block: u64,
     ) -> anyhow::Result<LcContractVotingStakeTable> {
-        let _ = l1_block;
-        todo!()
+        let block = BlockId::number(l1_block);
+        let light_client_contract = LightClientV3::new(
+            self.light_client_contract_address().await?,
+            self.l1_client.provider.clone(),
+        );
+        let finalized_block_height = light_client_contract
+            .finalizedState()
+            .block(block)
+            .call()
+            .await
+            .context("failed to read finalizedState")?
+            .blockHeight;
+        let voting_stake_table_state = light_client_contract
+            .votingStakeTableState()
+            .block(block)
+            .call()
+            .await
+            .context("failed to read votingStakeTableState")?;
+        let first_epoch = self
+            .coordinator
+            .membership()
+            .first_epoch()
+            .context("first epoch not seeded; genesis stake table missing")?;
+        Ok(LcContractVotingStakeTable {
+            l1_block,
+            finalized_block_height,
+            voting_epoch: LcContractVotingStakeTable::voting_epoch(
+                finalized_block_height,
+                *self.coordinator.epoch_height(),
+                first_epoch,
+            ),
+            commitment: StakeTableStateSol::from(voting_stake_table_state).into(),
+        })
     }
 
     /// The oldest HotShot block height the light client contract still holds a commitment for, or

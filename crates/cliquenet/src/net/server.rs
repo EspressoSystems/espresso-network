@@ -1,4 +1,13 @@
-use std::{collections::HashMap, mem, net::IpAddr, sync::Arc, time::Duration};
+use std::{
+    collections::HashMap,
+    mem,
+    net::IpAddr,
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
+    time::Duration,
+};
 
 use bytes::{Bytes, BytesMut};
 use tokio::{
@@ -40,6 +49,7 @@ pub struct Server {
     connect_tasks: JoinMap<PublicKey, Connection>,
     peer_tasks: JoinMap<PublicKey, Peer>,
     metrics: Arc<dyn Metrics>,
+    accepted_inbound: Arc<AtomicUsize>,
 }
 
 struct Party {
@@ -94,7 +104,7 @@ impl Server {
         rx: UnboundedReceiver<Command>,
         sx: watch::Receiver<Slot>,
         metrics: Arc<dyn Metrics>,
-    ) -> JoinHandle<()> {
+    ) -> (JoinHandle<()>, Arc<AtomicUsize>) {
         let our_key = conf.keypair.public_key();
         let parties = conf
             .parties
@@ -106,6 +116,7 @@ impl Server {
             })
             .collect();
 
+        let accepted_inbound = Arc::new(AtomicUsize::new(0));
         let this = Self {
             key: our_key,
             conf,
@@ -121,9 +132,10 @@ impl Server {
             next_slot: sx,
             lower_bound: Slot::MIN,
             metrics,
+            accepted_inbound: accepted_inbound.clone(),
         };
 
-        spawn(this.run(listener))
+        (spawn(this.run(listener)), accepted_inbound)
     }
 
     async fn run(mut self, listener: TcpListener) {
@@ -197,6 +209,7 @@ impl Server {
                             self.spawn_hello(conn, Hello::BackOff(self.conf.backoff_duration));
                             continue
                         }
+                        self.accepted_inbound.fetch_add(1, Ordering::Relaxed);
                         self.spawn_hello(conn, Hello::Ok);
                     }
                     Ok(Err(err)) => {

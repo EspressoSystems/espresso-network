@@ -6772,6 +6772,150 @@ mod test {
             .expect("failed to get stake table");
     }
 
+    /// A validator that starts with the LC contract at the voting epoch `lc_voting_epoch` while the
+    /// network is at epoch `NETWORK_EPOCH`, joins over cliquenet and votes.
+    ///
+    /// Six validators run to `STOPPED_AT_EPOCH`, node 1 is stopped, the network runs on to
+    /// `NETWORK_EPOCH`, the mock LC contract is set to the table of `lc_voting_epoch`, and node 1
+    /// starts again from `storage`: empty, or its own stale storage. It has no HTTP state peers.
+    async fn validator_joins_over_cliquenet<D: TestableSqlDataSource>(
+        lc_voting_epoch: u64,
+        fresh_storage: bool,
+    ) {
+        const EPOCH_HEIGHT: u64 = 10;
+        const NUM_NODES: usize = 6;
+        const STOPPED_AT_EPOCH: u64 = 2;
+        const NETWORK_EPOCH: u64 = 7;
+        const JOIN_TIMEOUT: Duration = Duration::from_secs(240);
+
+        let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
+        let network_config = TestConfigBuilder::default()
+            .epoch_height(EPOCH_HEIGHT)
+            .build();
+        let (storage, persistence_options) = node_storage::<D, NUM_NODES>().await;
+        let catchup_peers = std::array::from_fn(|_| {
+            StatePeers::<StaticVersion<0, 1>>::from_urls(
+                vec![format!("http://localhost:{port}").parse().unwrap()],
+                Default::default(),
+                Duration::from_secs(2),
+                &NoMetrics,
+            )
+        });
+        let config = TestNetworkConfigBuilder::<NUM_NODES, _, _>::with_num_nodes()
+            .api_config(D::options(&storage[0], Options::with_port(port)))
+            .network_config(network_config)
+            .persistences(persistence_options.clone())
+            .catchups(catchup_peers)
+            .build();
+        let mut network = TestNetwork::new(config, TEST_UPGRADE).await;
+        let state = network.genesis_state(0);
+
+        let mut events = network.peers[0].event_stream();
+        wait_for_epochs(&mut events, EPOCH_HEIGHT, STOPPED_AT_EPOCH).await;
+        network.peers.remove(0);
+
+        let mut events = network.server.event_stream();
+        wait_for_epochs(&mut events, EPOCH_HEIGHT, NETWORK_EPOCH).await;
+
+        // The LC contract commits to the table of `lc_voting_epoch`, as after a prover update
+        // at a non-root block of that epoch.
+        let server_coordinator = network.server.node_state().coordinator;
+        let committed = HSStakeTable::from_iter(
+            server_coordinator
+                .stake_table_for_epoch(Some(EpochNumber::new(lc_voting_epoch)))
+                .unwrap()
+                .stake_table(),
+        );
+        network
+            .cfg
+            .set_lc_contract_voting_state(
+                network
+                    .contracts
+                    .as_ref()
+                    .expect("the network deploys contracts"),
+                (lc_voting_epoch - 1) * EPOCH_HEIGHT + 2,
+                committed.commitment(STAKE_TABLE_CAPACITY_FOR_TEST).unwrap(),
+            )
+            .await
+            .unwrap();
+
+        let options = if fresh_storage {
+            let storage = D::create_storage().await;
+            <D as TestableSequencerDataSource>::persistence_options(&storage)
+        } else {
+            persistence_options[1].clone()
+        };
+        let node = network
+            .cfg
+            .init_node(
+                1,
+                state,
+                options,
+                None::<NullStateCatchup>,
+                None,
+                &NoMetrics,
+                test_helpers::STAKE_TABLE_CAPACITY_FOR_TEST,
+                NullEventConsumer,
+                TEST_UPGRADE,
+                Default::default(),
+            )
+            .await;
+
+        // The tables of the window are installed and the node decides with the network.
+        let coordinator = node.node_state().coordinator;
+        // `C` is `NETWORK_EPOCH` or one or two epochs later, so its window holds `NETWORK_EPOCH`.
+        assert!(
+            coordinator
+                .membership()
+                .snapshot(EpochNumber::new(NETWORK_EPOCH))
+                .is_some(),
+            "no stake table for epoch {NETWORK_EPOCH} after startup"
+        );
+        let mut events = node.event_stream();
+        node.start_consensus().await;
+        let height = network.server.decided_leaf().await.height();
+        timeout(JOIN_TIMEOUT, async {
+            while let Some(event) = events.next().await {
+                if let CoordinatorEvent::NewDecide { leaf_infos, .. } = event
+                    && leaf_infos[0].leaf.height() > height
+                {
+                    return;
+                }
+            }
+            panic!("event stream ended before the node decided past height {height}");
+        })
+        .await
+        .expect("the joined node did not decide with the network");
+    }
+
+    /// Covers `TEST:fill-before-coordinator-ok`: fresh storage, LC contract one epoch behind.
+    #[apply(sql_data_sources)]
+    async fn test_new_protocol_fresh_validator_joins_over_cliquenet<D: TestableSqlDataSource>(
+        _d: PhantomData<D>,
+    ) {
+        validator_joins_over_cliquenet::<D>(6, true).await;
+    }
+
+    /// Prover lag: the LC contract is at epoch 3 while the network is at epoch 7, so the fill
+    /// walks from epoch 3.
+    #[apply(sql_data_sources)]
+    async fn test_new_protocol_fresh_validator_joins_with_prover_lag<D: TestableSqlDataSource>(
+        _d: PhantomData<D>,
+    ) {
+        validator_joins_over_cliquenet::<D>(3, true).await;
+    }
+
+    /// `TEST:restart-more-than-lookahead-behind-reaches-current-ok`: stored anchor in epoch 2, the
+    /// network in epoch 7: the restart takes the fill and reaches the current epoch.
+    #[apply(sql_data_sources)]
+    async fn test_new_protocol_restart_more_than_lookahead_behind_reaches_current<
+        D: TestableSqlDataSource,
+    >(
+        _d: PhantomData<D>,
+    ) {
+        validator_joins_over_cliquenet::<D>(7, false).await;
+    }
+
     #[apply(sql_data_sources)]
     async fn test_epoch_stake_table_catchup<D: TestableSqlDataSource>(_d: PhantomData<D>) {
         const EPOCH_HEIGHT: u64 = 10;

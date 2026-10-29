@@ -22,7 +22,7 @@ pub mod state_cert;
 pub mod state_signature;
 pub mod util;
 
-use std::{fmt::Debug, marker::PhantomData, sync::Arc, time::Duration};
+use std::{collections::BTreeSet, fmt::Debug, marker::PhantomData, sync::Arc, time::Duration};
 
 use alloy::primitives::U256;
 use anyhow::Context;
@@ -64,7 +64,7 @@ use hotshot_orchestrator::client::{OrchestratorClient, get_complete_config};
 use hotshot_types::{
     ValidatorConfig,
     addr::NetAddr,
-    data::ViewNumber,
+    data::{EpochNumber, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
     light_client::{StateKeyPair, StateSignKey},
     network::NetworkConfig,
@@ -83,6 +83,7 @@ pub use options::Options;
 use proposal_fetcher::ProposalFetcherConfig;
 pub use run::main;
 use serde::{Deserialize, Serialize};
+use startup_catchup::{STARTUP_CATCHUP_DEADLINE, StartupCatchupParams};
 use tracing::info;
 use url::Url;
 use vbs::version::StaticVersion;
@@ -127,7 +128,7 @@ pub struct NetworkParams {
     pub private_state_key: StateSignKey,
     pub config_peers: Option<Vec<Url>>,
     pub catchup: CatchupParams,
-    /// Per-step timeout for the startup stake-table catchup walk
+    /// Per-step bound of the validator startup catchup and of the follower epoch walk
     /// (`bootstrap_epoch_window`).
     pub bootstrap_epoch_catchup_timeout: Duration,
     /// The address to advertise as our public API's URL
@@ -445,6 +446,20 @@ where
         }
     };
 
+    let startup_catchup = StartupCatchupParams {
+        own_key: validator_config.public_key,
+        stake_table_capacity: genesis.stake_table.capacity,
+        candidate_versions: BTreeSet::from([version_upgrade.base, version_upgrade.target])
+            .into_iter()
+            .collect(),
+        step_timeout: network_params.bootstrap_epoch_catchup_timeout,
+        anchor_epoch: initializer
+            .anchor_leaf()
+            .epoch(initializer.epoch_height())
+            .unwrap_or_else(EpochNumber::genesis),
+        deadline: STARTUP_CATCHUP_DEADLINE,
+    };
+
     let mut ctx = SequencerContext::init(
         network_config,
         version_upgrade,
@@ -461,7 +476,7 @@ where
         genesis.stake_table.capacity,
         event_consumer,
         proposal_fetcher_config,
-        network_params.bootstrap_epoch_catchup_timeout,
+        startup_catchup,
         empty_block_delay,
         block_sizes,
     )
@@ -735,11 +750,10 @@ where
     })
 }
 
-/// Scans the whole L1 contract history when nothing is persisted yet, keeping every
-/// `bootstrap_epoch_window` step bounded to one epoch instead of loading that scan onto
-/// the first step, which silently downgrades the node to a stale epoch window when it
-/// exceeds its timeout. Untimed: an unreachable L1 panics after
-/// `l1_events_max_retry_duration`.
+/// Scans the whole L1 contract history when nothing is persisted yet, so the startup catchup's
+/// event read (`catch_up_over_cliquenet`) and the `bootstrap_epoch_window` steps find the events in
+/// storage instead of loading that scan onto their first step. Untimed: an unreachable L1 panics
+/// after `l1_events_max_retry_duration`.
 pub(crate) async fn prefetch_stake_table_events(
     fetcher: &Fetcher,
     l1_client: &espresso_types::v0::L1Client,
@@ -843,7 +857,7 @@ async fn check_cliquenet_info_registered(
 pub mod testing {
     use std::{
         cmp::max,
-        collections::{BTreeMap, HashMap, HashSet},
+        collections::{BTreeMap, BTreeSet, HashMap, HashSet},
         net::Ipv4Addr,
         time::Duration,
     };
@@ -878,7 +892,10 @@ pub mod testing {
         future::join_all,
         stream::{Stream, StreamExt},
     };
-    use hotshot_contract_adapter::stake_table::StakeTableContractVersion;
+    use hotshot_contract_adapter::{
+        sol_types::{LightClientStateSol, LightClientV3Mock, StakeTableStateSol},
+        stake_table::StakeTableContractVersion,
+    };
     use hotshot_types::{
         HotShotConfig, PeerConfig, PeerConnectInfo,
         data::EpochNumber,
@@ -1427,6 +1444,40 @@ pub mod testing {
             self.contracts.clone()
         }
 
+        /// Sets `finalizedState.blockHeight` and `votingStakeTableState` of the mock LC contract
+        /// the way a prover would after proving epoch roots. A `TestNetwork` has no prover, so
+        /// the LC contract otherwise stays at genesis. `contracts` are those the network deployed.
+        pub async fn set_lc_contract_voting_state(
+            &self,
+            contracts: &Contracts,
+            finalized_block_height: u64,
+            commitment: espresso_types::StakeTableCommitment,
+        ) -> anyhow::Result<()> {
+            let address = contracts
+                .address(Contract::LightClientProxy)
+                .context("no LightClientProxy deployed")?;
+            let provider = ProviderBuilder::new()
+                .wallet(EthereumWallet::from(self.signer.clone()))
+                .connect_http(self.l1_url.clone());
+            let lc = LightClientV3Mock::new(address, &provider);
+            let current = lc.finalizedState().call().await?;
+            let state = LightClientStateSol {
+                blockHeight: finalized_block_height,
+                ..LightClientStateSol::from(current)
+            };
+            lc.setFinalizedState(state.into())
+                .send()
+                .await?
+                .watch()
+                .await?;
+            lc.setVotingStakeTableState(StakeTableStateSol::from(commitment).into())
+                .send()
+                .await?
+                .watch()
+                .await?;
+            Ok(())
+        }
+
         pub fn validator_providers(
             &self,
         ) -> Vec<(Address, impl Provider + Clone + use<NUM_NODES>)> {
@@ -1623,6 +1674,8 @@ pub mod testing {
                 .load_consensus_state(node_state, upgrade)
                 .await
                 .unwrap();
+            let anchor_epoch = initializer.anchor_leaf().epoch(config.epoch_height);
+            let own_key = validator_config.public_key;
 
             SequencerContext::init(
                 NetworkConfig {
@@ -1645,7 +1698,16 @@ pub mod testing {
                 stake_table_capacity,
                 event_consumer,
                 Default::default(),
-                Duration::from_secs(2),
+                StartupCatchupParams {
+                    own_key,
+                    stake_table_capacity,
+                    candidate_versions: BTreeSet::from([upgrade.base, upgrade.target])
+                        .into_iter()
+                        .collect(),
+                    step_timeout: Duration::from_secs(2),
+                    anchor_epoch: anchor_epoch.unwrap_or_else(EpochNumber::genesis),
+                    deadline: Duration::from_secs(60),
+                },
                 Duration::from_millis(500),
                 BTreeMap::from([(upgrade.base, max_block_size)]),
             )

@@ -1636,6 +1636,7 @@ mod tests {
     use hotshot_query_service::testing::mocks::MOCK_UPGRADE;
     use hotshot_types::{
         ValidatorConfig,
+        stake_table::HSStakeTable,
         traits::{BlockPayload, block_contents::BlockHeader},
     };
     use rstest::rstest;
@@ -1868,6 +1869,26 @@ mod tests {
             "load_stake_table returned false for an epoch whose snapshot was loaded while it \
              queued for the persistence lock: catchup would re-fetch from peers what is already \
              in memory"
+        );
+    }
+
+    /// A committee's stake table is in `committee_peer_configs` order, which the LC contract
+    /// commitment depends on.
+    #[test]
+    fn match_commitment_order_ok() {
+        let validators: AuthenticatedValidatorMap = (0..5)
+            .map(|_| AuthenticatedValidator::mock())
+            .map(|v| (v.account, v))
+            .collect();
+        let committee = EpochCommittee::new(validators.clone(), None, None, None);
+
+        let from_committee = HSStakeTable::<SeqTypes>::from_iter(committee.stake_table.values());
+        let from_validators =
+            HSStakeTable::<SeqTypes>::from_iter(committee_peer_configs(&validators).values());
+        assert_eq!(from_committee, from_validators);
+        assert_eq!(
+            from_committee.commitment(10).unwrap(),
+            from_validators.commitment(10).unwrap()
         );
     }
 
