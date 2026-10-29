@@ -1199,6 +1199,7 @@ mod request_storage {
         v0_4::{RewardAccountV2, RewardMerkleTreeV2},
     };
     use hotshot_types::data::{VidShare, ViewNumber};
+    use light_client::consensus::header::HeaderProof;
 
     use super::SqlStorage;
     use crate::{
@@ -1271,6 +1272,11 @@ mod request_storage {
         async fn get_vid_share(&self, block_number: u64) -> anyhow::Result<VidShare> {
             let id = hotshot_query_service::node::BlockId::Number(block_number as usize);
             Ok(SqlStorage::get_vid_share::<SeqTypes>(self, id).await?)
+        }
+
+        async fn get_header_proof(&self, root: u64, height: u64) -> anyhow::Result<HeaderProof> {
+            let _ = (root, height);
+            todo!()
         }
     }
 }

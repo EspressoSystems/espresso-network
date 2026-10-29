@@ -6,6 +6,7 @@ use espresso_types::{
     v0_4::{RewardAccountV2, RewardMerkleTreeV2},
 };
 use hotshot_types::{data::VidShare, simple_certificate::LightClientStateUpdateCertificateV2};
+use light_client::consensus::header::HeaderProof;
 use request_response::{Serializable, request::Request as RequestTrait};
 use serde::{Deserialize, Serialize};
 
@@ -40,6 +41,8 @@ pub enum Request {
     RewardMerkleTreeV2(u64, ViewNumber),
     /// A request for the cert2 at or above the given height
     Cert2(Height),
+    /// Header at `height` with its block Merkle path at snapshot `root`; `height < root`.
+    HeaderProof { root: Height, height: Height },
 }
 
 /// The outermost response type. This an enum that contains all the possible responses that the
@@ -66,6 +69,8 @@ pub enum Response {
     RewardMerkleTreeV2(#[serde(with = "serde_bytes")] Vec<u8>),
     /// A response with the earliest cert2 (fast finality protocol)
     Cert2(Certificate2<SeqTypes>),
+    /// A response with a header and its block Merkle path
+    HeaderProof(Box<HeaderProof>),
 }
 
 /// Implement the `RequestTrait` trait for the `Request` type. This tells the request response

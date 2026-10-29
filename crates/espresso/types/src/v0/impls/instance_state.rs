@@ -17,6 +17,8 @@ use hotshot_types::{
 use moka::future::Cache;
 use vbs::version::Version;
 
+#[cfg(feature = "node")]
+use super::LcContractVotingStakeTable;
 use super::{
     SeqTypes, UpgradeType, ViewBasedUpgrade,
     state::ValidatedState,
@@ -167,6 +169,16 @@ impl NodeState {
                 Ok(finalized_hotshot_height)
             },
         }
+    }
+
+    /// `finalizedState` and `votingStakeTableState` at `l1_block`.
+    #[cfg(feature = "node")]
+    pub async fn lc_contract_voting_stake_table(
+        &self,
+        l1_block: u64,
+    ) -> anyhow::Result<LcContractVotingStakeTable> {
+        let _ = l1_block;
+        todo!()
     }
 
     /// The oldest HotShot block height the light client contract still holds a commitment for, or

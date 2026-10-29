@@ -3,6 +3,7 @@ mod message_compat_tests;
 mod proposal_fetcher;
 mod request_response;
 mod startup_catchup;
+mod startup_cliquenet;
 
 pub mod api;
 pub mod catchup;

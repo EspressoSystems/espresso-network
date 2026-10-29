@@ -37,7 +37,8 @@ pub struct ExternalEventHandler {
 
 #[derive(Debug)]
 pub enum OutboundMessage {
-    Direct(MessageKind<SeqTypes>, PubKey),
+    /// A request-response payload for one recipient.
+    Direct(Vec<u8>, PubKey),
 }
 
 impl ExternalEventHandler {
@@ -120,19 +121,14 @@ impl ExternalEventHandler {
         public_key: PubKey,
     ) {
         match message {
-            OutboundMessage::Direct(kind @ MessageKind::External(_), recipient) => {
-                let message = Message {
-                    sender: public_key,
-                    kind,
+            OutboundMessage::Direct(payload, recipient) => {
+                let message_bytes = match frame_external_message(public_key, payload) {
+                    Ok(message_bytes) => message_bytes,
+                    Err(err) => {
+                        tracing::warn!("Failed to serialize direct message: {}", err);
+                        return;
+                    },
                 };
-                let message_bytes =
-                    match BincodeSerializer::<StaticVersion<0, 0>>::serialize(&message) {
-                        Ok(message_bytes) => message_bytes,
-                        Err(err) => {
-                            tracing::warn!("Failed to serialize direct message: {}", err);
-                            return;
-                        },
-                    };
                 if let Err(err) = client_api
                     .send_external_message(message_bytes, recipient)
                     .await
@@ -140,9 +136,19 @@ impl ExternalEventHandler {
                     tracing::warn!(%err, "failed to send external message via coordinator");
                 }
             },
-            other => {
-                tracing::warn!(message = ?other, "dropping a non-external outbound message");
-            },
         }
     }
+}
+
+/// Frames a request-response `payload` for the wire: encoded as `ExternalMessage::RequestResponse`, then
+/// wrapped in the versioned `Message` envelope the receiving side's fallback decoder unwraps. The
+/// coordinator's network sends external payloads verbatim.
+pub(crate) fn frame_external_message(sender: PubKey, payload: Vec<u8>) -> anyhow::Result<Vec<u8>> {
+    let inner = bincode::serialize(&ExternalMessage::RequestResponse(payload))
+        .context("failed to serialize message")?;
+    let message = Message::<SeqTypes> {
+        sender,
+        kind: MessageKind::External(inner),
+    };
+    BincodeSerializer::<StaticVersion<0, 0>>::serialize(&message)
 }

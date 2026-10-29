@@ -149,6 +149,32 @@ struct EpochCommittee {
     header: Option<Header>,
 }
 
+/// Committee entries of `validators`, in the order `EpochCommittee` and the LC contract commitment use.
+pub(crate) fn committee_peer_configs(
+    validators: &AuthenticatedValidatorMap,
+) -> IndexMap<PubKey, PeerConfig<SeqTypes>> {
+    validators
+        .values()
+        .map(|v| {
+            let key = *v.stake_table_key();
+            (
+                key,
+                PeerConfig {
+                    stake_table_entry: BLSPubKey::stake_table_entry(&key, v.stake),
+                    state_ver_key: v.state_ver_key().clone(),
+                    connect_info: v.x25519_key.and_then(|p| {
+                        let a = v.p2p_addr.clone()?;
+                        Some(PeerConnectInfo {
+                            x25519_key: p,
+                            p2p_addr: a,
+                        })
+                    }),
+                },
+            )
+        })
+        .collect()
+}
+
 impl EpochCommittee {
     fn new(
         validators: AuthenticatedValidatorMap,
@@ -156,28 +182,11 @@ impl EpochCommittee {
         hash: Option<StakeTableHash>,
         header: Option<Header>,
     ) -> Self {
-        let mut address_mapping = HashMap::new();
-        let stake_table: IndexMap<PubKey, PeerConfig<SeqTypes>> = validators
+        let address_mapping = validators
             .values()
-            .map(|v| {
-                let key = *v.stake_table_key();
-                address_mapping.insert(key, v.account);
-                (
-                    key,
-                    PeerConfig {
-                        stake_table_entry: BLSPubKey::stake_table_entry(&key, v.stake),
-                        state_ver_key: v.state_ver_key().clone(),
-                        connect_info: v.x25519_key.and_then(|p| {
-                            let a = v.p2p_addr.clone()?;
-                            Some(PeerConnectInfo {
-                                x25519_key: p,
-                                p2p_addr: a,
-                            })
-                        }),
-                    },
-                )
-            })
+            .map(|v| (*v.stake_table_key(), v.account))
             .collect();
+        let stake_table = committee_peer_configs(&validators);
 
         let eligible_leaders: Vec<PeerConfig<SeqTypes>> =
             stake_table.iter().map(|(_, l)| l.clone()).collect();

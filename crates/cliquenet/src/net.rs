@@ -198,6 +198,12 @@ impl NetworkSender {
         &self.conf
     }
 
+    /// Inbound connections from known parties accepted since `create`: an `Arc<AtomicUsize>` made in
+    /// `Network::create`, passed to `Server::spawn`, incremented where `Hello::Ok` is sent.
+    pub fn accepted_inbound_connections(&self) -> usize {
+        todo!()
+    }
+
     /// Send a message to a party, identified by the given public key.
     pub fn unicast(&self, s: Slot, to: PublicKey, msg: Vec<u8>) -> Result<(), NetworkError> {
         debug!(slot = %s, %to, len = msg.len(), "unicast");

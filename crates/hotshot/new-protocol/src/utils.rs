@@ -4,13 +4,39 @@ use hotshot_types::{
     data::{EpochNumber, Leaf2, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
     message::UpgradeLock,
-    stake_table::StakeTableEntries,
+    stake_table::{HSStakeTable, StakeTableEntries},
     traits::node_implementation::NodeType,
     utils::epoch_from_block_number,
     vote::{Certificate, HasViewNumber},
 };
 
 use crate::message::Certificate2;
+
+/// A leaf range and the cert2 finalizing its newest leaf.
+#[derive(Clone, Debug)]
+pub struct CertifiedLeafChain<T: NodeType> {
+    /// Leaves in any order; ancestors of the cert2 leaf are found by parent links.
+    pub leaves: Vec<Leaf2<T>>,
+    /// Certificate finalizing the newest leaf.
+    pub cert2: Certificate2<T>,
+}
+
+impl<T: NodeType> CertifiedLeafChain<T> {
+    /// The leaf at `expected_height`, verified with `quorum_for` per certificate epoch. Pure.
+    ///
+    /// Entries come from `StakeTableEntries::from` and the threshold from
+    /// `supermajority_threshold(table.total_stakes())`.
+    pub fn verify(
+        self,
+        expected_height: u64,
+        epoch_height: u64,
+        upgrade_lock: &UpgradeLock<T>,
+        quorum_for: impl Fn(EpochNumber) -> Option<HSStakeTable<T>>,
+    ) -> anyhow::Result<Leaf2<T>> {
+        let _ = (expected_height, epoch_height, upgrade_lock, quorum_for);
+        todo!()
+    }
+}
 
 /// Verify that a leaf is finalized by a new-protocol Certificate2.
 ///
