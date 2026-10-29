@@ -400,12 +400,11 @@
 <a href=#400 id=400 data-nosnippet>400</a><span class="attr">#[async_trait]
 <a href=#401 id=401 data-nosnippet>401</a></span><span class="kw">impl</span>&lt;T: NodeType&gt; NewProtocolStorage&lt;T&gt; <span class="kw">for </span>TestStorage&lt;T&gt; {
 <a href=#402 id=402 data-nosnippet>402</a>    <span class="kw">async fn </span>append_high_qc2(<span class="kw-2">&amp;</span><span class="self">self</span>, high_qc: Certificate1&lt;T&gt;) -&gt; anyhow::Result&lt;()&gt; {
-<a href=#403 id=403 data-nosnippet>403</a>        <span class="comment">// `Certificate1&lt;T&gt;` is a `QuorumCertificate2&lt;T&gt;`; reuse the monotonic legacy slot.
-<a href=#404 id=404 data-nosnippet>404</a>        </span>StorageTrait::update_high_qc2(<span class="self">self</span>, high_qc).<span class="kw">await
-<a href=#405 id=405 data-nosnippet>405</a>    </span>}
-<a href=#406 id=406 data-nosnippet>406</a>
-<a href=#407 id=407 data-nosnippet>407</a>    <span class="kw">async fn </span>load_high_qc2(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; anyhow::Result&lt;<span class="prelude-ty">Option</span>&lt;Certificate1&lt;T&gt;&gt;&gt; {
-<a href=#408 id=408 data-nosnippet>408</a>        <span class="prelude-val">Ok</span>(<span class="self">self</span>.high_qc_cloned().<span class="kw">await</span>)
-<a href=#409 id=409 data-nosnippet>409</a>    }
-<a href=#410 id=410 data-nosnippet>410</a>}
+<a href=#403 id=403 data-nosnippet>403</a>        <span class="self">self</span>.store_high_qc2(high_qc).<span class="kw">await
+<a href=#404 id=404 data-nosnippet>404</a>    </span>}
+<a href=#405 id=405 data-nosnippet>405</a>
+<a href=#406 id=406 data-nosnippet>406</a>    <span class="kw">async fn </span>load_high_qc2(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; anyhow::Result&lt;<span class="prelude-ty">Option</span>&lt;Certificate1&lt;T&gt;&gt;&gt; {
+<a href=#407 id=407 data-nosnippet>407</a>        <span class="prelude-val">Ok</span>(<span class="self">self</span>.high_qc_cloned().<span class="kw">await</span>)
+<a href=#408 id=408 data-nosnippet>408</a>    }
+<a href=#409 id=409 data-nosnippet>409</a>}
 </code></pre></div></section></main></body></html>
