@@ -196,6 +196,11 @@ A service gated on an `OptionalModules` flag, as `ConfigService` is on `config`:
   `buf format -w crates/espresso/api/proto`. The rules compare a field's message type by name, so renaming a message a
   field refers to counts as a break even though the wire bytes are unchanged. buf does not read the `google.api.http`
   annotation, so a changed route is not caught by it.
+- A rename is therefore an addition. Add the new name as a new field, or a new rpc, and mark the old one
+  `[deprecated = true]` (`option deprecated = true` on an rpc), which the OpenAPI document flags. Serve both until
+  clients have moved: fill in both in responses and accept either in requests. prost marks the old Rust field
+  `#[deprecated]`, so each handler that still touches it needs `#[expect(deprecated, reason = "...")]` to pass
+  `just lint`. Then delete the old field and `reserved` its number and name, so neither is ever reused.
 - An rpc is a GET, or a POST when it changes state or its input cannot be flat. A POST binds the whole request message
   as its protoJSON body (`body: "*"`) and refuses a query string with a 400.
 - v2 addresses resources with flat query parameters, not v1-style path parameters: one static route per rpc, with every
