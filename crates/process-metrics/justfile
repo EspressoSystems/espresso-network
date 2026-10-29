@@ -29,8 +29,8 @@ up:
     timeout -v {{smoke_timeout}} scripts/smoke-test-demo | sed -e 's/^/smoke-test: /;'
 
 # Sample docker stats + each node's /v0/status/metrics into $output for $duration seconds.
+[script("../../scripts/with-tools", "python", "uv")]
 sample *args:
-    #!/usr/bin/env bash
     set -euo pipefail
     cd {{repo_root}}
     export DURATION_SECONDS={{duration}}
@@ -38,8 +38,8 @@ sample *args:
     uv run {{script_dir}}/soak.py sample {{args}}
 
 # Render summary.md + rss-over-time.png + Mermaid chart from $output.
+[script("../../scripts/with-tools", "python", "uv")]
 render *args:
-    #!/usr/bin/env bash
     set -euo pipefail
     cd {{repo_root}}
     export ESPRESSO_NODE_GENESIS_FILE={{genesis}}
@@ -64,17 +64,19 @@ down *args:
 run: up sample render
 
 # Unit tests for render_summary.
+[script("../../scripts/with-tools", "python", "uv")]
 test *args:
-    #!/usr/bin/env bash
     set -euo pipefail
     cd {{script_dir}}
     uv run --with click --with humanize --with matplotlib --with pandas --with prometheus-client --with python-dotenv \
         python3 -m unittest {{ if args == "" { "test_soak" } else { args } }}
 
 # Format Python sources with ruff.
+[script("../../scripts/with-tools", "python", "ruff")]
 fmt *args:
     ruff format {{script_dir}} {{args}}
 
 # Lint Python sources with ruff.
+[script("../../scripts/with-tools", "python", "ruff")]
 lint *args:
     ruff check {{script_dir}} {{args}}

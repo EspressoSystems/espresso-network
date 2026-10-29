@@ -283,6 +283,12 @@ impl BlockPayload<SeqTypes> for Payload {
         indices.par_iter().map(commit).collect()
     }
 
+    /// Counts the indices `iter` yields. The default builds every transaction, copying its
+    /// bytes, only to count it.
+    fn num_transactions(&self, metadata: &Self::Metadata) -> usize {
+        QueryablePayload::len(self, metadata)
+    }
+
     fn txn_bytes(&self) -> usize {
         self.raw_payload.len()
     }

@@ -269,16 +269,8 @@ jobs:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/free-disk-space
       - uses: cachix/install-nix-action@v31
-      - uses: cachix/cachix-action@v17
-        continue-on-error: true
-        with:
-          name: espresso-systems-private
-          authToken: "${{ secrets.CACHIX_AUTH_TOKEN }}"
-          extraPullNames: nix-community
-          skipPush: ${{ github.actor == 'dependabot[bot]' }}
-
-        # TODO: this downloads all (available) artifacts, which is a bit wasteful but artifact
-        # downloads always fail if I try to select a subset.
+      # TODO: this downloads all (available) artifacts, which is a bit wasteful but artifact
+      # downloads always fail if I try to select a subset.
       - name: Download artifacts
         uses: actions/download-artifact@v8
 
@@ -287,11 +279,11 @@ jobs:
 
       - name: Build verification module
         run: |
-          nix develop --accept-flake-config -c just build-go-crypto-helper
+          nix develop .#go --accept-flake-config -c just build-go-crypto-helper
 
       - name: Test
         run: |
-          nix develop --accept-flake-config -c just test-go
+          nix develop .#go --accept-flake-config -c just test-go
         env:
           ESPRESSO_DEV_NODE_BIN: ${{ github.workspace }}/test-binaries-dev-node/espresso-dev-node
 

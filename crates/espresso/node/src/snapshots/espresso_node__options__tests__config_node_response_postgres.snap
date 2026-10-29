@@ -222,4 +222,4 @@ modules:
   config: true
   hotshot_events: false
   explorer: false
-  light_client: false
+  light_client: true

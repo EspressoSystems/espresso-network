@@ -32,6 +32,16 @@ impl NamespaceProof {
         Self { proof: None }
     }
 
+    /// Inspect the namespace proof and the VID common data it is checked against, without
+    /// verifying them.
+    ///
+    /// [`None`] for a trivial proof, which claims the namespace is not present in the block.
+    pub fn contents(&self) -> Option<(&NsProof, &VidCommon)> {
+        self.proof
+            .as_ref()
+            .map(|proof| (&proof.proof, &proof.common))
+    }
+
     /// Verify a [`NamespaceProof`].
     ///
     /// If the data in this proof matches the expected `header` and belongs to `namespace`, the list

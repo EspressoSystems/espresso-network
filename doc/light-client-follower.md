@@ -14,7 +14,7 @@ espresso-node \
   -- storage-sql --postgres-host ... \
   -- http --port 24000 \
   -- query --peers https://query.decaf.testnet.espresso.network \
-  -- follower -- catchup -- config -- submit -- light-client -- explorer
+  -- follower -- catchup -- config -- submit -- explorer
 ```
 
 The `follower` module selects follower mode. Its upstreams are the query module's `--peers` (`ESPRESSO_NODE_API_PEERS`),
@@ -22,7 +22,8 @@ which must be set. The follower needs:
 
 - the `storage-sql`, `http` and `query` modules: merklized state, rewards and the explorer need SQL storage;
 - an L1 RPC, for fee deposits and the stake table, like any node;
-- upstream query nodes that serve the `light-client`, `catchup`, `config` and (for `submit`) `submit` modules.
+- upstream query nodes with SQL storage that serve the `catchup`, `config` and (for `submit`) `submit` modules. Every
+  such node serves the light client API, though upstreams on older releases also need the `light-client` module.
 
 It does not need staking keys, an orchestrator or cliquenet; those options are ignored. `--state-peers` and
 `--config-peers` default to the upstreams. Telemetry is disabled with a warning: a follower has no staking key to

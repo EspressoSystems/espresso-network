@@ -25,6 +25,7 @@ from fakes import (
     FakeRegistry,
     FakeRunner,
     FakeSystem,
+    Scripted,
     awsb,
     completed,
     fake_image,
@@ -36,6 +37,7 @@ from fakes import (
     price_item,
     price_list,
     pricing,
+    remote,
     shot_estimate,
     sts_response,
 )
@@ -1076,22 +1078,10 @@ def test_tofu_validate(tmp_path):
         assert result.returncode == 0, result.stderr
 
 
-@pytest.mark.parametrize(("n", "capacity"), [(3, 10), (50, 50)])
-def test_genesis_capacity_at_least_ten(n, capacity):
-    rendered = awsb.render_genesis(
-        (HERE / "genesis.toml").read_bytes(),
-        n=n,
-        max_block_size="50mb",
-        protocol_version="0.6",
-    ).decode()
-    assert f"stake_table_capacity = {capacity}" in rendered
-    assert re.search(rf"^capacity = {capacity}$", rendered, re.MULTILINE)
-
-
 def test_genesis_max_block_size_replaces_both_chain_configs():
     template = (HERE / "genesis.toml").read_bytes()
     rendered = awsb.render_genesis(
-        template, n=5, max_block_size="30mb", protocol_version="0.6"
+        template, capacity=10, max_block_size="30mb", protocol_version="0.6"
     ).decode()
     assert (
         re.findall(r"^max_block_size = (.*)$", rendered, re.MULTILINE) == ['"30mb"'] * 2
@@ -1117,7 +1107,10 @@ def test_max_block_size_flag_defaults_and_differs_in_the_config_hash():
     hosts = awsb.plan_hosts(cfg)
     hashes = {
         awsb.run_config_hash(
-            cfg, hosts, {}, awsb.render_genesis(template, cfg.nodes, size, "0.6")
+            cfg,
+            hosts,
+            {},
+            awsb.render_genesis(template, awsb.stake_table_capacity(cfg), size, "0.6"),
         )
         for size in ("30mb", "50mb")
     }
@@ -1127,7 +1120,7 @@ def test_max_block_size_flag_defaults_and_differs_in_the_config_hash():
 def test_genesis_protocol_version_replaces_base_and_upgrade_versions():
     template = (HERE / "genesis.toml").read_bytes()
     rendered = awsb.render_genesis(
-        template, n=5, max_block_size="50mb", protocol_version="0.8"
+        template, capacity=10, max_block_size="50mb", protocol_version="0.8"
     ).decode()
     assert re.findall(r"^base_version = (.*)$", rendered, re.MULTILINE) == ['"0.8"']
     assert re.findall(r"^upgrade_version = (.*)$", rendered, re.MULTILINE) == ['"0.8"']
@@ -1137,7 +1130,7 @@ def test_genesis_protocol_version_replaces_base_and_upgrade_versions():
         b'max_block_size = "1mb"\nmax_block_size = "1mb"\n'
     )
     with pytest.raises(ValueError, match="one base_version"):
-        awsb.render_genesis(no_versions, 5, "30mb", "0.8")
+        awsb.render_genesis(no_versions, 10, "30mb", "0.8")
 
 
 @pytest.mark.parametrize("bad", ["8", "0.8.0", "v0.8", "0.x", ""])
@@ -1154,7 +1147,12 @@ def test_protocol_version_flag_defaults_and_differs_in_the_config_hash():
     hosts = awsb.plan_hosts(cfg)
     hashes = {
         awsb.run_config_hash(
-            cfg, hosts, {}, awsb.render_genesis(template, cfg.nodes, "50mb", version)
+            cfg,
+            hosts,
+            {},
+            awsb.render_genesis(
+                template, awsb.stake_table_capacity(cfg), "50mb", version
+            ),
         )
         for version in ("0.6", "0.8")
     }
@@ -1249,7 +1247,7 @@ def test_genesis_raises_if_template_shape_changes():
     with pytest.raises(ValueError):
         awsb.render_genesis(
             b"no capacity fields here",
-            n=5,
+            capacity=10,
             max_block_size="50mb",
             protocol_version="0.6",
         )
@@ -1623,6 +1621,7 @@ def test_anvil_uses_entrypoint_and_binds_every_interface():
 START_SH_GOLDEN_DIR = Path(__file__).parent / "golden"
 START_SH_GOLDEN_CASES = {
     "ctl": (host("ctl", "ctl"), {}),
+    "ctl-stake": (host("ctl", "ctl"), {"stake_nodes": 5}),
     "validator": (host("node1", "validator"), {}),
     "validator-journal": (host("node1", "validator"), {"consensus_storage": "journal"}),
     "validator-trace": (host("node1", "validator"), {"leader_trace": True}),
@@ -2129,9 +2128,9 @@ def test_search_node0_journal_holds_the_offer_below_the_noisy_mark(db_modes, nod
 def test_genesis_epoch_height_replaces_the_template_value():
     template = (HERE / "genesis.toml").read_bytes()
     assert b"epoch_height = 1000000\n" in awsb.render_genesis(
-        template, 5, "50mb", "0.6"
+        template, 10, "50mb", "0.6"
     )
-    rendered = awsb.render_genesis(template, 5, "50mb", "0.6", epoch_height=3000)
+    rendered = awsb.render_genesis(template, 10, "50mb", "0.6", epoch_height=3000)
     assert b"epoch_height = 3000\n" in rendered
     with pytest.raises(ValueError, match="1 epoch_height"):
         awsb.render_genesis(
@@ -2142,3 +2141,114 @@ def test_genesis_epoch_height_replaces_the_template_value():
             "0.6",
             3000,
         )
+
+
+def stake_env(nodes: int = 3) -> dict[str, str]:
+    text = awsb.render_stake_env(fleet(nodes), awsb.parse_dotenv(DOTENV_TEXT))
+    return parse_env(text)
+
+
+def test_staking_follows_epoch_height():
+    assert not awsb.staking(small_cfg())
+    assert awsb.staking(small_cfg(epoch_height=3000))
+    assert (
+        awsb.config_from_args(
+            awsb.parse_args(["run", "--tag", "x", "--epoch-height", "3000"])
+        ).epoch_height
+        == 3000
+    )
+
+
+def test_stake_env_points_stake_for_demo_at_the_deployed_contracts():
+    env = stake_env()
+    assert env["L1_PROVIDER"] == f"http://localhost:{awsb.env_port('ESPRESSO_L1_PORT')}"
+    assert env["MNEMONIC"] == awsb.BENCH_MNEMONIC
+    assert env["ACCOUNT_INDEX"] == "18"
+    assert env["ESP_TOKEN_CONTRACT_ADDRESS"] == "0x" + "0" * 39 + "2"
+    assert env["STAKE_TABLE_ADDRESS"] == "0x" + "0" * 39 + "3"
+    assert env["DELEGATION_CONFIG"] == "equal-amounts"
+
+
+def test_stake_env_derives_node_keys_and_advertises_each_nodes_cliquenet_address():
+    env = stake_env(3)
+    assert env["ESPRESSO_NODE_KEY_MNEMONIC"] == awsb.BENCH_MNEMONIC
+    assert [
+        env[f"ESPRESSO_DEMO_NODE_CLIQUENET_ADVERTISE_ADDRESS_{i}"] for i in range(3)
+    ] == [f"10.0.0.{i + 2}:{awsb.CLIQUENET_PORT}" for i in range(3)]
+    assert "ESPRESSO_DEMO_NODE_CLIQUENET_ADVERTISE_ADDRESS_3" not in env
+    assert not [key for key in env if key.endswith("ADVERTISE_HOSTNAME")]
+
+
+def test_stake_container_runs_stake_for_demo_for_every_node():
+    script = awsb.render_start_sh(
+        host("ctl", "ctl"), fake_images(), 32768, stake_nodes=5
+    )
+    assert (
+        "--name stake --network host --restart no --env-file /opt/bench/stake.env"
+        in script
+    )
+    assert "/bin/staking-cli --no-config stake-for-demo --num-validators 5" in script
+    assert "--name stake" not in awsb.render_start_sh(
+        host("ctl", "ctl"), fake_images(), 32768
+    )
+
+
+def test_ctl_start_sh_without_staking_is_the_golden_one():
+    assert (
+        awsb.render_start_sh(host("ctl", "ctl"), fake_images(), 32768)
+        == (START_SH_GOLDEN_DIR / "start-ctl.sh").read_text()
+    )
+
+
+def test_host_files_ship_stake_env_only_with_epochs(tmp_path: Path):
+    for name, cfg in (
+        ("plain", small_cfg()),
+        ("epochs", small_cfg(epoch_height=3000)),
+    ):
+        run_dir = tmp_path / name
+        hosts = awsb.plan_hosts(cfg)
+        for spec in hosts:
+            (run_dir / "hosts" / spec["name"]).mkdir(parents=True)
+        manifest = {"hosts": hosts, "images": fake_images(), "memory_mib": MEMORY_MIB}
+        awsb.render_host_files(run_dir, cfg, manifest, fleet(2))
+    assert not (tmp_path / "plain/hosts/ctl/stake.env").exists()
+    assert (tmp_path / "epochs/hosts/ctl/stake.env").exists()
+    assert "--name stake" in (tmp_path / "epochs/hosts/ctl/start.sh").read_text()
+    assert "stake.env" in awsb.SHIPPED_HOST_FILES
+
+
+def test_staking_is_in_the_config_hash_and_its_image_only_when_on():
+    hosts = awsb.plan_hosts(small_cfg())
+    template = (HERE / "genesis.toml").read_bytes()
+    genesis = awsb.render_genesis(template, 10, "50mb", "0.6")
+    without = {k: v for k, v in fake_images().items() if k != "staking-cli"}
+
+    def digest(cfg, images) -> str:
+        return awsb.run_config_hash(cfg, hosts, images, genesis)
+
+    assert digest(small_cfg(), fake_images()) == digest(small_cfg(), without)
+    assert digest(small_cfg(epoch_height=3000), fake_images()) != digest(
+        small_cfg(epoch_height=3000), without
+    )
+
+
+def test_staking_adds_its_time_to_the_estimate():
+    plain = awsb.shot_seconds(small_cfg())
+    staked = awsb.shot_seconds(small_cfg(epoch_height=3000))
+    assert staked[0] - plain[0] == awsb.STAKE_EXPECTED_S
+    assert staked[1] - plain[1] == awsb.STAKE_TIMEOUT_S + awsb.L1_FINALIZED_TIMEOUT_S
+
+
+def test_staking_cli_is_pulled_on_ctl_only():
+    assert "staking-cli" in awsb.IMAGE_COMPONENTS
+    assert "staking-cli" in awsb.ROLE_IMAGES["ctl"]
+    assert "staking-cli" not in awsb.ROLE_IMAGES["validator"]
+
+
+def test_wait_for_l1_finalized_is_shipped_and_not_collected(isolated: Path):
+    runner = Scripted({})
+    awsb.ship_agents(remote(runner, isolated))
+    assert any(
+        "scripts/wait-for-l1-finalized" in " ".join(call) for call in runner.calls
+    )
+    assert "--exclude=/wait-for-l1-finalized" in awsb.COLLECT_EXCLUDES

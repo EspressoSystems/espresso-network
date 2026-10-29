@@ -3556,6 +3556,7 @@ mod test {
         consensus::{
             header::HeaderProof,
             leaf::{LeafProof, LeafProofHint},
+            namespace::NamespaceProof,
             payload::PayloadProof,
         },
         testing::EpochChangeQuorum,
@@ -3895,10 +3896,7 @@ mod test {
         let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
         let storage = SqlDataSource::create_storage().await;
         let config = TestNetworkConfigBuilder::default()
-            .api_config(
-                SqlDataSource::options(&storage, Options::with_port(port))
-                    .light_client(Default::default()),
-            )
+            .api_config(SqlDataSource::options(&storage, Options::with_port(port)))
             .network_config(TestConfigBuilder::default().build())
             .build();
         let _network = TestNetwork::new(config, TEST_UPGRADE).await;
@@ -4129,10 +4127,7 @@ mod test {
             .try_into()
             .unwrap();
         let config = TestNetworkConfigBuilder::<NUM_NODES, _, _>::with_num_nodes()
-            .api_config(
-                SqlDataSource::options(&dbs[0], Options::with_port(port))
-                    .light_client(Default::default()),
-            )
+            .api_config(SqlDataSource::options(&dbs[0], Options::with_port(port)))
             .persistences(persistence)
             .catchups(std::array::from_fn(|_| state_peers()))
             .network_config(TestConfigBuilder::default().build())
@@ -5707,7 +5702,6 @@ mod test {
             .api_config(
                 Options::with_port(api_port)
                     .catchup(Default::default())
-                    .light_client(Default::default())
                     .config(Default::default())
                     .submit(Default::default())
                     .query_sql(Query::default(), tmp_options(&storage[0])),
@@ -5908,7 +5902,6 @@ mod test {
                 db.into_inner(),
             )
             .catchup(Default::default())
-            .light_client(Default::default())
             .config(Default::default())
             .submit(Default::default())
             .serve(move |metrics, sink, _| {
@@ -6150,7 +6143,6 @@ mod test {
             .api_config(
                 Options::with_port(api_port)
                     .catchup(Default::default())
-                    .light_client(Default::default())
                     .query_sql(
                         Query {
                             peers: vec![query_url.clone()],
@@ -6187,9 +6179,7 @@ mod test {
                 genesis_state.clone(),
                 persistence::sql::postgres::Options::try_from(db.clone()).unwrap(),
                 db,
-                Options::with_port(query_port)
-                    .catchup(Default::default())
-                    .light_client(Default::default()),
+                Options::with_port(query_port).catchup(Default::default()),
                 vec![peer_url.clone()],
                 peer_url.clone(),
             )
@@ -7087,9 +7077,7 @@ mod test {
         let config = TestNetworkConfigBuilder::with_num_nodes()
             .api_config(SqlDataSource::options(
                 &storage[0],
-                Options::with_port(api_port)
-                    .catchup(Default::default())
-                    .light_client(Default::default()),
+                Options::with_port(api_port).catchup(Default::default()),
             ))
             .network_config(network_config)
             .persistences(persistence.clone())
@@ -7295,9 +7283,7 @@ mod test {
         let config = TestNetworkConfigBuilder::with_num_nodes()
             .api_config(SqlDataSource::options(
                 &storage[0],
-                Options::with_port(api_port)
-                    .catchup(Default::default())
-                    .light_client(Default::default()),
+                Options::with_port(api_port).catchup(Default::default()),
             ))
             .network_config(TestConfigBuilder::default().build())
             .persistences(persistence.clone())
@@ -7489,9 +7475,7 @@ mod test {
         let config = TestNetworkConfigBuilder::with_num_nodes()
             .api_config(SqlDataSource::options(
                 &storage[0],
-                Options::with_port(api_port)
-                    .catchup(Default::default())
-                    .light_client(Default::default()),
+                Options::with_port(api_port).catchup(Default::default()),
             ))
             .network_config(
                 TestConfigBuilder::default()
@@ -7765,9 +7749,7 @@ mod test {
             let config = TestNetworkConfigBuilder::with_num_nodes()
                 .api_config(SqlDataSource::options(
                     &storage[0],
-                    Options::with_port(api_port)
-                        .catchup(Default::default())
-                        .light_client(Default::default()),
+                    Options::with_port(api_port).catchup(Default::default()),
                 ))
                 .network_config(
                     TestConfigBuilder::default()
@@ -8126,7 +8108,7 @@ mod test {
         let config = TestNetworkConfigBuilder::with_num_nodes()
             .api_config(SqlDataSource::options(
                 &storage[0],
-                Options::with_port(api_port).light_client(Default::default()),
+                Options::with_port(api_port),
             ))
             .network_config(network_config)
             .persistences(persistence.clone())
@@ -10042,6 +10024,319 @@ mod test {
             .unwrap();
         assert!(v2_search.blocks.is_empty());
 
+        // A catching-up peer names state by its parent leaf's (height, view). The decided leaf's
+        // state is always in memory, while the view after it may not have a proposal yet.
+        let leaf = network.server.decided_leaf().await;
+        let catchup_height = leaf.height();
+        let catchup_view = leaf.view_number().u64();
+        // The prefunded builder account, so the fee routes prove a presence. Its address has hex
+        // letters, so lowercase and EIP-55 renderings differ.
+        let account = format!(
+            "{:x}",
+            TestConfig::<5>::builder_key().fee_account().address()
+        );
+        let v1_account: crate::api::AccountQueryData = client
+            .get(&format!(
+                "catchup/{catchup_height}/{catchup_view}/account/{account}"
+            ))
+            .send()
+            .await
+            .unwrap();
+        let v2_account: espresso_api::proto::FeeAccountProofResponse = client
+            .get(&format!(
+                "v2/catchup/fee-account?height={catchup_height}&view={catchup_view}&\
+                 address=0x{account}"
+            ))
+            .send()
+            .await
+            .unwrap();
+        // Compared as a value rather than a string, since v1 serves this `U256` as `0x` hex and
+        // v2 as a decimal string.
+        assert_eq!(
+            v2_account.balance.parse::<U256>().unwrap(),
+            v1_account.balance
+        );
+        assert_eq!(v2_account, v1_account.clone().into());
+        let v2_proof = v2_account.proof.unwrap();
+        assert_eq!(
+            v2_proof.account,
+            format!("0x{account}"),
+            "the proof names the account in lowercase hex"
+        );
+        assert!(matches!(
+            v2_proof.proof.unwrap().proof,
+            Some(espresso_api::proto::fee_merkle_proof::Proof::Presence(_))
+        ));
+
+        // Some catchup routes may have nothing to serve this early in the chain, so a route both
+        // versions refuse must at least refuse with the same status.
+        fn both_or_same_status<A, B>(
+            route: &str,
+            v1: Result<A, ClientErr>,
+            v2: Result<B, ClientErr>,
+        ) -> Option<(A, B)> {
+            match (v1, v2) {
+                (Ok(v1), Ok(v2)) => Some((v1, v2)),
+                (Err(v1), Err(v2)) => {
+                    assert_eq!(v2.status, v1.status, "{route}");
+                    None
+                },
+                (v1, v2) => panic!("{route}: v1 ok {}, v2 ok {}", v1.is_ok(), v2.is_ok()),
+            }
+        }
+
+        let v1_frontier: crate::api::BlocksFrontier = client
+            .get(&format!("catchup/{catchup_height}/{catchup_view}/blocks"))
+            .send()
+            .await
+            .unwrap();
+        let v2_frontier: espresso_api::proto::MerklePathResponse = client
+            .get(&format!(
+                "v2/catchup/blocks-frontier?height={catchup_height}&view={catchup_view}"
+            ))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(
+            v2_frontier,
+            espresso_api::proto::MerklePathResponse::from(&v1_frontier)
+        );
+
+        // v2's bincode trees are decoded as their type and compared with v1's through serde.
+        let accounts = vec![format!("0x{account}")];
+        let v1: espresso_types::FeeMerkleTree = client
+            .post(&format!("catchup/{catchup_height}/{catchup_view}/accounts"))
+            .body_json(&accounts)
+            .unwrap()
+            .send()
+            .await
+            .unwrap();
+        let v2: espresso_api::proto::FeeMerkleTreeResponse = client
+            .post("v2/catchup/fee-accounts")
+            .body_json(&espresso_api::proto::GetCatchupFeeAccountsRequest {
+                height: Some(catchup_height),
+                view: Some(catchup_view),
+                addresses: accounts.clone(),
+            })
+            .unwrap()
+            .send()
+            .await
+            .unwrap();
+        let v2: espresso_types::FeeMerkleTree = bincode::deserialize(&v2.tree).unwrap();
+        assert_eq!(
+            serde_json::to_value(&v2).unwrap(),
+            serde_json::to_value(&v1).unwrap()
+        );
+        let v1 = client
+            .post::<espresso_types::v0_3::RewardMerkleTreeV1>(&format!(
+                "catchup/{catchup_height}/{catchup_view}/reward-accounts"
+            ))
+            .body_json(&accounts)
+            .unwrap()
+            .send()
+            .await;
+        let v2 = client
+            .post::<espresso_api::proto::RewardMerkleTreeV1Response>("v2/catchup/reward-accounts")
+            .body_json(&espresso_api::proto::GetCatchupRewardAccountsRequest {
+                height: Some(catchup_height),
+                view: Some(catchup_view),
+                addresses: accounts,
+            })
+            .unwrap()
+            .send()
+            .await;
+        if let Some((v1, v2)) = both_or_same_status("reward-accounts", v1, v2) {
+            let v2: espresso_types::v0_3::RewardMerkleTreeV1 =
+                bincode::deserialize(&v2.tree).unwrap();
+            assert_eq!(
+                serde_json::to_value(&v2).unwrap(),
+                serde_json::to_value(&v1).unwrap()
+            );
+        }
+
+        let v1 = client
+            .get::<espresso_types::v0_3::RewardAccountQueryDataV1>(&format!(
+                "catchup/{catchup_height}/{catchup_view}/reward-account/{account}"
+            ))
+            .send()
+            .await;
+        let v2 = client
+            .get::<espresso_api::proto::RewardAccountProofResponse>(&format!(
+                "v2/catchup/reward-account?height={catchup_height}&view={catchup_view}&\
+                 address=0x{account}"
+            ))
+            .send()
+            .await;
+        if let Some((v1, v2)) = both_or_same_status("reward-account", v1, v2) {
+            assert_eq!(v2, v1.into());
+        }
+
+        let v1 = client
+            .get::<espresso_types::v0_4::RewardAccountQueryDataV2>(&format!(
+                "catchup/{catchup_height}/{catchup_view}/reward-account-v2/{account}"
+            ))
+            .send()
+            .await;
+        let v2 = client
+            .get::<espresso_api::proto::RewardAccountProofResponse>(&format!(
+                "v2/catchup/reward-account-v2?height={catchup_height}&view={catchup_view}&\
+                 address=0x{account}"
+            ))
+            .send()
+            .await;
+        if let Some((v1, v2)) = both_or_same_status("reward-account-v2", v1, v2) {
+            assert_eq!(v2, v1.into());
+        }
+
+        let v1 = client
+            .get::<Vec<u8>>(&format!(
+                "catchup/reward-merkle-tree-v2/{catchup_height}/{catchup_view}"
+            ))
+            .send()
+            .await;
+        let v2 = client
+            .get::<espresso_api::proto::RewardMerkleTreeV2Response>(&format!(
+                "v2/catchup/reward-merkle-tree-v2?height={catchup_height}&view={catchup_view}"
+            ))
+            .send()
+            .await;
+        if let Some((v1, v2)) = both_or_same_status("reward-merkle-tree-v2", v1, v2) {
+            assert_eq!(v2.tree, v1);
+        }
+
+        let v1_chain: Vec<espresso_types::Leaf2> = client
+            .get(&format!("catchup/{catchup_height}/leafchain"))
+            .send()
+            .await
+            .unwrap();
+        let v2_chain: espresso_api::proto::CatchupLeafChainResponse = client
+            .get(&format!("v2/catchup/leaf-chain?height={catchup_height}"))
+            .send()
+            .await
+            .unwrap();
+        assert!(!v1_chain.is_empty());
+        assert_eq!(
+            v2_chain.leaves,
+            v1_chain.iter().map(Into::into).collect::<Vec<_>>()
+        );
+
+        let v1 = client
+            .get::<espresso_types::Certificate2<SeqTypes>>(&format!(
+                "catchup/{catchup_height}/cert2"
+            ))
+            .send()
+            .await;
+        let v2 = client
+            .get::<espresso_api::proto::Cert2Response>(&format!(
+                "v2/catchup/cert2?height={catchup_height}"
+            ))
+            .send()
+            .await;
+        if let Some((v1, v2)) = both_or_same_status("cert2", v1, v2) {
+            assert_eq!(v2.certificate, Some((&v1).into()));
+        }
+
+        let v1 = client
+            .get::<hotshot_types::simple_certificate::LightClientStateUpdateCertificateV2<SeqTypes>>(
+                "catchup/1/state-cert",
+            )
+            .send()
+            .await;
+        let v2 = client
+            .get::<espresso_api::proto::StateCertV2Response>("v2/catchup/state-cert?epoch=1")
+            .send()
+            .await;
+        if let Some((v1, v2)) = both_or_same_status("state-cert", v1, v2) {
+            assert_eq!(v2, (&espresso_types::v0_4::StateCertQueryDataV2(v1)).into());
+        }
+
+        let known = leaf.block_header().chain_config().commit();
+        let v1_config: espresso_types::v0_3::ChainConfig = client
+            .get(&format!("catchup/chain-config/{known}"))
+            .send()
+            .await
+            .unwrap();
+        let v2_config: espresso_api::proto::CatchupChainConfigResponse = client
+            .get(&format!("v2/catchup/chain-config?commitment={known}"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(v2_config.chain_config, Some((&v1_config).into()));
+        // A well-formed commitment of a config the node never saw, so both versions reach the
+        // lookup rather than refusing to parse it.
+        let unknown = espresso_types::v0_3::ChainConfig {
+            chain_id: 999u64.into(),
+            ..Default::default()
+        }
+        .commit();
+        let v1_status = client
+            .get::<serde_json::Value>(&format!("catchup/chain-config/{unknown}"))
+            .send()
+            .await
+            .unwrap_err()
+            .status;
+        let v2_status = client
+            .get::<serde_json::Value>(&format!("v2/catchup/chain-config?commitment={unknown}"))
+            .send()
+            .await
+            .unwrap_err()
+            .status;
+        assert_ne!(v1_status, StatusCode::BAD_REQUEST);
+        assert_eq!(v2_status, v1_status);
+
+        for query in [
+            format!("v2/catchup/fee-account?view=1&address=0x{account}").as_str(),
+            "v2/catchup/blocks-frontier?height=1",
+            "v2/catchup/leaf-chain",
+            "v2/catchup/cert2",
+            "v2/catchup/chain-config",
+            "v2/catchup/reward-account?height=1&view=1",
+            format!("v2/catchup/reward-account-v2?view=1&address=0x{account}").as_str(),
+            "v2/catchup/reward-merkle-tree-v2?height=1",
+            "v2/catchup/state-cert",
+        ] {
+            let err = client
+                .get::<serde_json::Value>(query)
+                .send()
+                .await
+                .unwrap_err();
+            assert_eq!(err.status, StatusCode::BAD_REQUEST, "{query}");
+        }
+        for (route, body) in [
+            (
+                "v2/catchup/fee-accounts",
+                serde_json::json!({ "height": 1, "addresses": [] }),
+            ),
+            (
+                "v2/catchup/fee-accounts",
+                serde_json::json!({ "height": 1, "view": 1, "addresses": ["0xnot-hex"] }),
+            ),
+            (
+                "v2/catchup/reward-accounts",
+                serde_json::json!({ "view": 1, "addresses": [] }),
+            ),
+            (
+                "v2/catchup/reward-accounts",
+                serde_json::json!({ "height": 1, "view": 1, "addresses": ["0xnot-hex"] }),
+            ),
+        ] {
+            let err = client
+                .post::<serde_json::Value>(route)
+                .body_json(&body)
+                .unwrap()
+                .send()
+                .await
+                .unwrap_err();
+            assert_eq!(err.status, StatusCode::BAD_REQUEST, "{route} {body}");
+        }
+
+        assert_v2_light_client_agrees_with_v1(
+            &client,
+            last_block,
+            u64::from(namespace_counts[1].0),
+        )
+        .await;
+
         let v1_config = client
             .get::<espresso_types::config::PublicNetworkConfig>("config/hotshot")
             .send()
@@ -11099,6 +11394,246 @@ mod test {
         }
     }
 
+    /// Asks both versions for each light-client proof of the block at `height`, where `namespace`
+    /// has transactions, and holds every v2 response to the v1 proof re-encoded.
+    async fn assert_v2_light_client_agrees_with_v1(
+        client: &Client<ClientErr, StaticVersion<0, 1>>,
+        height: u64,
+        namespace: u64,
+    ) {
+        use espresso_api::proto;
+
+        let payloads_to_proto = |proofs: &[PayloadProof]| {
+            proofs
+                .iter()
+                .map(|proof| proto::LightClientPayloadProofResponse::try_from(proof).unwrap())
+                .collect::<Vec<_>>()
+        };
+
+        let v1_leaf: LeafProof = client
+            .get(&format!("light-client/leaf/{height}"))
+            .send()
+            .await
+            .unwrap();
+        let v2_leaf: proto::LightClientLeafProofResponse = client
+            .get(&format!("v2/light-client/leaf?height={height}"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(v2_leaf, (&v1_leaf).into());
+
+        let root = height + 1;
+        let v1_assumed: LeafProof = client
+            .get(&format!("light-client/leaf/{height}/{root}"))
+            .send()
+            .await
+            .unwrap();
+        let v2_assumed: proto::LightClientLeafProofResponse = client
+            .get(&format!(
+                "v2/light-client/leaf?height={height}&finalized={root}"
+            ))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(v2_assumed, (&v1_assumed).into());
+
+        let v1_header: HeaderProof = client
+            .get(&format!("light-client/header/{root}/{height}"))
+            .send()
+            .await
+            .unwrap();
+        let v2_header: proto::LightClientHeaderProofResponse = client
+            .get(&format!(
+                "v2/light-client/header?root={root}&height={height}"
+            ))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(
+            v2_header,
+            proto::LightClientHeaderProofResponse {
+                header: Some(v1_header.header().into()),
+                proof: Some(v1_header.proof().into()),
+            }
+        );
+
+        let v1_payload: PayloadProof = client
+            .get(&format!("light-client/payload/{height}"))
+            .send()
+            .await
+            .unwrap();
+        let v2_payload: proto::LightClientPayloadProofResponse = client
+            .get(&format!("v2/light-client/payload?height={height}"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(v2_payload, (&v1_payload).try_into().unwrap());
+
+        let v1_payloads: Vec<PayloadProof> = client
+            .get(&format!("light-client/payload/{height}/{root}"))
+            .send()
+            .await
+            .unwrap();
+        let v2_payloads: proto::LightClientPayloadProofRangeResponse = client
+            .get(&format!(
+                "v2/light-client/payload-range?from={height}&until={root}"
+            ))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(v2_payloads.proofs, payloads_to_proto(&v1_payloads));
+
+        let v1_batch: Vec<PayloadProof> = client
+            .post("light-client/payload/ranges")
+            .body_json(&std::iter::once(height..root).collect::<Vec<_>>())
+            .unwrap()
+            .send()
+            .await
+            .unwrap();
+        let v2_batch: proto::LightClientPayloadProofRangeResponse = client
+            .post("v2/light-client/payload-ranges")
+            .body_json(&proto::GetLightClientPayloadProofRangesRequest {
+                ranges: vec![proto::HeightRange {
+                    from: Some(height),
+                    until: Some(root),
+                }],
+            })
+            .unwrap()
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(v2_batch.proofs, payloads_to_proto(&v1_batch));
+
+        let absent = 999;
+        for ns in [namespace, absent] {
+            let v1_ns: NamespaceProof = client
+                .get(&format!("light-client/namespace/{height}/{ns}"))
+                .send()
+                .await
+                .unwrap();
+            let v2_ns: proto::LightClientNamespaceProofResponse = client
+                .get(&format!(
+                    "v2/light-client/namespace?height={height}&namespace={ns}"
+                ))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(v1_ns.contents().is_some(), ns == namespace, "{ns}");
+            assert_eq!(v2_ns, (&v1_ns).try_into().unwrap(), "{ns}");
+        }
+
+        let v1_range: Vec<NamespaceProof> = client
+            .get(&format!(
+                "light-client/namespace/{height}/{root}/{namespace}"
+            ))
+            .send()
+            .await
+            .unwrap();
+        let v2_range: proto::LightClientNamespaceProofRangeResponse = client
+            .get(&format!(
+                "v2/light-client/namespace-range?from={height}&until={root}&namespace={namespace}"
+            ))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(
+            v2_range.proofs,
+            v1_range
+                .iter()
+                .map(|proof| proto::LightClientNamespaceProofResponse::try_from(proof).unwrap())
+                .collect::<Vec<_>>()
+        );
+
+        let encoded = tagged_base64::TaggedBase64::new(
+            ::light_client::client::NAMESPACES_PARAM_TAG,
+            &serde_json::to_vec(&[namespace, absent]).unwrap(),
+        )
+        .unwrap();
+        let v1_blocks: Vec<std::collections::HashMap<u64, NamespaceProof>> = client
+            .get(&format!(
+                "light-client/namespaces/{height}/{root}/{encoded}"
+            ))
+            .send()
+            .await
+            .unwrap();
+        let v2_blocks: proto::LightClientNamespacesProofRangeResponse = client
+            .post("v2/light-client/namespaces-range")
+            .body_json(&proto::GetLightClientNamespacesProofRangeRequest {
+                from: Some(height),
+                until: Some(root),
+                namespaces: Vec::from([namespace, absent]),
+            })
+            .unwrap()
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(
+            v2_blocks.blocks,
+            v1_blocks
+                .iter()
+                .map(|block| proto::LightClientNamespacesProof {
+                    proofs: block
+                        .iter()
+                        .filter_map(|(ns, proof)| {
+                            Some((*ns, proof.contents()?.try_into().unwrap()))
+                        })
+                        .collect(),
+                })
+                .collect::<Vec<_>>(),
+        );
+
+        for query in [
+            format!("light-client/namespace/{}/{namespace}", u64::MAX),
+            format!(
+                "v2/light-client/namespace?height={}&namespace={namespace}",
+                u64::MAX
+            ),
+        ] {
+            let err = client
+                .get::<serde_json::Value>(&query)
+                .send()
+                .await
+                .unwrap_err();
+            assert_eq!(err.status, StatusCode::NOT_FOUND, "{query}");
+        }
+
+        for query in [
+            "v2/light-client/leaf".to_owned(),
+            format!("v2/light-client/leaf?height={height}&block_hash=BLOCK~AA"),
+            format!("v2/light-client/header?height={height}"),
+            format!("v2/light-client/header?root={root}"),
+            "v2/light-client/stake-table".to_owned(),
+            format!("v2/light-client/namespace?height={height}"),
+            format!("v2/light-client/payload-range?from={height}"),
+            format!("v2/light-client/payload-range?from={root}&until={height}"),
+            format!("v2/light-client/namespace?height={height}&namespace=4294967296"),
+        ] {
+            let err = client
+                .get::<serde_json::Value>(&query)
+                .send()
+                .await
+                .unwrap_err();
+            assert_eq!(err.status, StatusCode::BAD_REQUEST, "{query}");
+        }
+
+        for namespaces in [(0..=100).collect::<Vec<u64>>(), vec![1 << 32]] {
+            let err = client
+                .post::<serde_json::Value>("v2/light-client/namespaces-range")
+                .body_json(
+                    &espresso_api::proto::GetLightClientNamespacesProofRangeRequest {
+                        from: Some(height),
+                        until: Some(root),
+                        namespaces,
+                    },
+                )
+                .unwrap()
+                .send()
+                .await
+                .unwrap_err();
+            assert_eq!(err.status, StatusCode::BAD_REQUEST);
+        }
+    }
+
     use rand::thread_rng;
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
@@ -11681,7 +12216,7 @@ mod test {
         let config = TestNetworkConfigBuilder::with_num_nodes()
             .api_config(SqlDataSource::options(
                 &storage[0],
-                Options::with_port(api_port).light_client(Default::default()),
+                Options::with_port(api_port),
             ))
             .network_config(network_config)
             .persistences(persistence.clone())
@@ -12257,8 +12792,7 @@ mod test {
             let api_opts = Options::with_port(api_port)
                 .catchup(Default::default())
                 .config(Default::default())
-                .explorer(Default::default())
-                .light_client(Default::default());
+                .explorer(Default::default());
 
             let config = TestNetworkConfigBuilder::with_num_nodes()
                 .api_config(SqlDataSource::options(&storage[0], api_opts))
@@ -13753,10 +14287,10 @@ mod test {
         let (storage, persistence) = node_storage::<SqlDataSource, NUM_NODES>().await;
 
         let config = TestNetworkConfigBuilder::<NUM_NODES, _, _>::with_num_nodes()
-            .api_config(
-                SqlDataSource::options(&storage[0], Options::with_port(port))
-                    .light_client(Default::default()),
-            )
+            .api_config(SqlDataSource::options(
+                &storage[0],
+                Options::with_port(port),
+            ))
             .persistences(persistence.clone())
             .catchups(std::array::from_fn(|_| {
                 StatePeers::<SequencerApiVersion>::from_urls(

@@ -27,9 +27,10 @@ descriptor set is exported as `espresso_api::FILE_DESCRIPTOR_SET`).
 ### What is served today
 
 `StatusService`, `TokenService`, `NodeService`, `ConfigService`, `DatabaseService`, `AvailabilityService`,
-`MerklizedStateService`, `RewardStateService`, `StateSignatureService`, `SubmitService` and `ExplorerService`, served
-under `/v2/status/...`, `/v2/token/...`, `/v2/node/...`, `/v2/config/...`, `/v2/database/...`, `/v2/availability/...`,
-`/v2/merklized-state/...`, `/v2/state-signature/...`, `/v2/submit/...` and `/v2/explorer/...`.
+`MerklizedStateService`, `RewardStateService`, `StateSignatureService`, `SubmitService`, `ExplorerService`,
+`CatchupService` and `LightClientService`, served under `/v2/status/...`, `/v2/token/...`, `/v2/node/...`,
+`/v2/config/...`, `/v2/database/...`, `/v2/availability/...`, `/v2/merklized-state/...`, `/v2/state-signature/...`,
+`/v2/submit/...`, `/v2/explorer/...`, `/v2/catchup/...` and `/v2/light-client/...`.
 
 - `NodeService` carries over every v1 `node` endpoint except `oldest-block` and `oldest-leaf`. Where v1 has a route per
   epoch and a `current` route, v2 has one route with an optional `epoch` parameter, as it does for the block reward;
@@ -87,6 +88,28 @@ under `/v2/status/...`, `/v2/token/...`, `/v2/node/...`, `/v2/config/...`, `/v2/
   proto `repeated` field cannot carry, so v2 serves one point per block instead. Amounts keep the rendered form v1
   writes, currency code and all. Like the v1 module it is mounted only when the node enables `explorer`, and a disabled
   node answers its routes with a 404 in the v2 error envelope.
+- `CatchupService` serves the module peers fetch state from when they fall behind, and like the v1 module it is always
+  mounted on a SQL node. The routes over the fee, block and reward trees name the state they want by the
+  `(height, view)` the asking node is replaying, which is why these are not the snapshot selectors `merklized-state`
+  takes. The routes that name a set of accounts are POSTs with the set in the body. A tree built for a set of accounts
+  is served as opaque bincode bytes, a `FeeMerkleTree` or a `RewardMerkleTreeV1`, since a peer feeds it straight back
+  into the tree type and `merklized-state` already gives a caller a typed way to read one node. The whole v2 reward tree
+  is the same bincode bytes the `merklized-state` reward tree route serves, so every tree in the module decodes the same
+  way. v1's `reward-accounts-v2` and `reward-amounts` are not carried over, since both answer every request with a
+  deprecation 404. Like the reward balances, the fee balance is a decimal string, where v1 serves it as `0x`-prefixed
+  hex. Accounts in proofs are lowercase `0x`-prefixed hex.
+- `LightClientService` serves the proofs a light client checks against state it already trusts. Where v1 has a route per
+  way of naming a leaf or header, v2 has one request with alternative fields, and a known-finalized height is an
+  optional field rather than a second route. Every proof is typed, built from the messages `availability` and
+  `merklized-state` already publish, so a leaf proof is its leaf chain plus a `FinalityProof` whose arm names the commit
+  rule. Stake table events carry the contract's fields under their proto names (`bls_vk`, so `blsVk` in JSON, where the
+  contract writes `blsVK`), with curve coordinates as `0x`-prefixed hex, amounts and timestamps as decimal strings, and
+  signature and key bytes as `bytes`, base64 in JSON, where v1 writes `0x` hex. `undelegation_id` is a `uint64`, which
+  JSON also writes as a decimal string. The multi-namespace route takes its namespace list in a body rather than v1's
+  TaggedBase64 path segment, so it caps the list at 100 distinct namespaces where v1 is capped by the URL length. v1's
+  batch `payload/ranges` is `POST /v2/light-client/payload-ranges`. A range of payloads or namespace proofs is one
+  response message, so a large one can exceed a gRPC client's default 4 MB decode limit. Like the v1 module it is served
+  on every SQL query node.
 
 Everything else a client needs is still on v1. Every route in the OpenAPI document is a route `serve_axum` mounts: the
 tests in `crates/espresso/api/src/axum.rs` pin the documented set to a reviewed route list and probe each documented

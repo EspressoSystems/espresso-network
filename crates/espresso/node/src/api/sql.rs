@@ -214,7 +214,6 @@ pub(in crate::api) async fn init_query_module(
         submit: api.submit.is_some(),
         config: api.config.is_some(),
         explorer: api.explorer.is_some(),
-        light_client: api.light_client.is_some(),
         ..Default::default()
     };
     let max_connections = api.http.max_connections;
