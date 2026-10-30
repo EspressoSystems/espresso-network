@@ -3552,12 +3552,14 @@ mod test {
 
     /// A data source without an aggregator has no totals, also when an earlier run with one left
     /// aggregate rows in storage: those stop where that run did.
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_no_totals_without_aggregator() {
-        let storage = TmpDb::init().await;
-        let db = SqlStorage::connect(storage.config(), StorageConnectionType::Query)
-            .await
-            .unwrap();
+    #[apply(sql_data_sources)]
+    async fn test_no_totals_without_aggregator<D>(_d: PhantomData<D>)
+    where
+        D: TestableDataSource + ExplorerDataSource<MockTypes>,
+        for<'a> D::Transaction<'a>: UpdateAggregatesStorage<MockTypes>,
+    {
+        let storage = D::create(0).await;
+        let ds = D::build(&storage, |builder| builder.disable_aggregator()).await;
         let genesis = BlockQueryData::<MockTypes>::genesis(
             &Default::default(),
             &Default::default(),
@@ -3565,17 +3567,12 @@ mod test {
         )
         .await;
         {
-            let mut tx = db.write().await.unwrap();
+            let mut tx = ds.write().await.unwrap();
             tx.update_aggregates(Aggregate::default(), &[PayloadMetadata::from(genesis)])
                 .await
                 .unwrap();
             tx.commit().await.unwrap();
         }
-        let ds = MockSqlDataSource::builder(db, NoFetching)
-            .disable_aggregator()
-            .build()
-            .await
-            .unwrap();
 
         for res in [
             ds.count_transactions_in_range(.., None).await,
