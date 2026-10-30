@@ -586,7 +586,7 @@ async fn test_locking_the_boundary_block_keeps_the_new_epoch() {
     );
     assert_eq!(
         harness.consensus.current_epoch(),
-        Some(boundary.epoch_number + 1),
+        boundary.epoch_number + 1,
         "and the node stays in the epoch the epoch change entered"
     );
 }

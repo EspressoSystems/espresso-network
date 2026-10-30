@@ -1,7 +1,11 @@
 version: 2
 updates:
   - package-ecosystem: "github-actions"
-    directory: "/"
+    directories:
+      - "/"
+      # The runner looks up a local action's `uses:` in actions.lock, but the lockfile only has
+      # entries for refs the workflows use. Bump these with the workflows so the refs stay equal.
+      - "/.github/actions/*"
     # Group all updates together
     groups:
       all:

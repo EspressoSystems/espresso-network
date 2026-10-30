@@ -20,8 +20,10 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y protobuf-compiler
 
-      - uses: dtolnay/rust-toolchain@nightly
+      - uses: dtolnay/rust-toolchain@master
         id: toolchain
+        with:
+          toolchain: nightly
 
       # Set nightly as the default toolchain
       - run: rustup override set ${{steps.toolchain.outputs.name}}

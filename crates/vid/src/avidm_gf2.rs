@@ -496,6 +496,14 @@ impl VidScheme for AvidmGf2Scheme {
             return Err(VidError::InsufficientShares);
         };
         let shard_bytes = first_share.payload[0].len();
+        // The buffers below are sized from `shard_bytes`, so every share must
+        // agree with it before anything is allocated.
+        if shares
+            .iter()
+            .any(|share| !share.validate() || share.payload.iter().any(|p| p.len() != shard_bytes))
+        {
+            return Err(VidError::InvalidShare);
+        }
 
         // Track references to input original shards; avoids the per-shard
         // `.clone()` the previous version did to populate a
@@ -508,9 +516,6 @@ impl VidScheme for AvidmGf2Scheme {
             // Edge case where there are no recovery shares: every original must
             // be supplied as input.
             for share in shares {
-                if !share.validate() || share.payload.iter().any(|p| p.len() != shard_bytes) {
-                    return Err(VidError::InvalidShare);
-                }
                 for (i, index) in share.range.clone().enumerate() {
                     if index < original_count {
                         input_orig[index] = Some(&share.payload[i]);
@@ -529,9 +534,6 @@ impl VidScheme for AvidmGf2Scheme {
                 shard_bytes,
             )?;
             for share in shares {
-                if !share.validate() || share.payload.iter().any(|p| p.len() != shard_bytes) {
-                    return Err(VidError::InvalidShare);
-                }
                 for (i, index) in share.range.clone().enumerate() {
                     let shard = &share.payload[i];
                     if index < original_count {
