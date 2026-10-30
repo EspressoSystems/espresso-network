@@ -183,6 +183,114 @@ For 10 nodes at 15 Gbps and the c8g.4xlarge compute, mean view time in ms (`vidw
 - **The latency chain** has 24 ms of compute, half of it two storage round trips; batching the Vote action write with
   the proposal's, or acknowledging before fsync, is worth up to 12 ms a view where latency binds.
 
+## Blocks that follow a rate
+
+A run offers a rate, not a block size: the leader takes what is in its pool, so the block is the rate times the view,
+and a slower view makes a bigger block. `vidformula.Load` closes that loop, `sweep` evaluates a list of offered rates
+with blocks following the rate under a maximum block, and `vidwindow_runs.py --closed-loop` compares a run step by step
+at its offered rate rather than at its measured block. **Capacity** in the explorer and in `capacity` is the peak of
+throughput over block size under the cap: the rate at which the view, growing with the block, stops delivering more
+bytes per second. It is a steady-state figure, and the runs below show the network tips before it.
+
+## The October 2026 runs
+
+Fleets of 5 to 20 nodes under `bench-state/aws/brendon-202610{29,30}-*`, the new protocol with f+1 reconstruction
+(`ESPRESSO_BENCH_VID_TWO_THIRDS` for 2f+1), 400 MB blocks unless a cap is named, the single-region topology (`off`) and
+decaf-2025 latency. Fits and comparisons are `vidwindow_runs.py fit` and `--closed-loop`.
+
+**2f+1 against f+1** (10 × c8g.8xlarge, eu-west-1). At 15 Gbps the share transfer T falls from 1.2 to 0.69 ms per MB of
+block, but the next leader's build and encode, 1.36 ms/MB on this instance, then outlast the rebroadcast they hid under:
+the view is verify + max(vote1 + T, build + encode) + T, and the compute term binds. Measured capacity: f+1 300 to 332
+MB/s, 2f+1 370 ± 10; decaf f+1 230 ± 10, 2f+1 300 ± 10. The model says taking build and encode off the critical path,
+not the decode, is what releases the other half of the 2f+1 gain.
+
+**The matrix** (us-east-1, 12 fleets, c8g.2xlarge to c8g.16xlarge, 5, 10 and 20 nodes, about 100 USD). Measured capacity
+in MB/s, the model's capacity in brackets at the run's fitted compute and the instance's nominal bandwidth (15 Gbps, 30
+for the 16xlarge):
+
+| nodes, latency | c8g.2xlarge | c8g.4xlarge | c8g.8xlarge | c8g.16xlarge |
+| -------------- | ----------- | ----------- | ----------- | ------------ |
+| 5, off         | 250 (495)   | 295 (388)   | 260 (427)   | 510 (449)    |
+| 10, off        | 220 (342)   | 300 (388)   | 285 (394)   | 415 (672)    |
+| 20, off        | 220 (235)   | 285 (324)   | 245 (327)   | 345 (596)    |
+| 5, decaf       | 210 (293)   | 230 (360)   | 260 (394)   | 320 (582)    |
+| 10, decaf      | 230 (282)   | 170 (371)   | 250 (375)   | 270 (614)    |
+| 20, decaf      | 190 (256)   | 220 (316)   | 205 (316)   | 300 (510)    |
+
+Below capacity the model holds: per-step medians of view and finality are within 2 to 9 percent on decaf and 10 to 30
+percent on the single-region topology, where a 20 ms view leaves no room for the few milliseconds the model lacks.
+Capacity itself is overpredicted everywhere but the 5-node 16xlarge cell, because the runs do not reach the steady state
+the model computes. The compute per instance type fitted from these runs, in ms per MB of block:
+
+| instance     | build + encode | decode |
+| ------------ | -------------- | ------ |
+| c8g.2xlarge  | 2.00           | 1.18   |
+| c8g.4xlarge  | 1.43           | 0.69   |
+| c8g.8xlarge  | 1.04           | 0.51   |
+| c8g.16xlarge | 0.91           | 0.47   |
+
+The fixed costs, 7 ms each for the proposal's persistence and the vote, are the same on every type.
+
+**Why a run tips.** Above capacity a slow view leaves more transactions in the next leader's pool, the bigger block
+makes a longer view, and the loop runs to the 400 MB cap in a few views, with 100 to 400 MB sweeps, the builder's 500 ms
+`empty_block_delay` once the pool runs dry, and the submitter's 5 s in-flight window starving. The trigger is not CPU,
+NIC, disk or retries (at most 22 transactions were outstanding at the tipping point on the 16xlarge). It is the submit
+path: transactions are forwarded as 1 MB messages to the leaders of views v+2 and v+3 (`block.rs` `SEND_LEAD`, fanout 2)
+over the same in-order cliquenet connections that carry proposals and votes, and the coordinator hashes every forward
+(0.56 ms each). Proposal arrival by receiver role shows it, at 390 MB/s on 10 × c8g.16xlarge: 24 to 26 ms at the leaders
+of v+1 to v+3 against 19 ms elsewhere and 11 ms at 100 MB/s. Control messages into the upcoming leaders queue behind
+forwards, which is the same mechanism the model has for shares, one hop earlier.
+
+**The maximum block** (10 × c8g.8xlarge, off, 100 and 150 MB caps against 400). The model's capacity barely moves with
+the cap, 364 MB/s at 50 MB to 379 at 400, while finality at capacity goes from 224 ms to 1.8 s. The runs: at 100 MB the
+oscillation is gone, past capacity the network keeps deciding 261 to 275 MB/s with no empty views, blocks pinned at 99
+MB and 335 ms views, where the 400 MB cap decided 155 to 207. At 150 MB the oscillation returns, 200 to 226 MB/s
+decided, 2 to 20 percent empty views, bimodal view times (p50 34 ms, p90 315). Decaf at 150 MB decided 242 to 262 but
+with p50 latency of 1.5 to 4 s. The rule that fits: keep the view at the cap under a third of the submitter's in-flight
+window, which puts the cap near 100 MB for this hardware, 200 MB if a 1 s finality bound is the only constraint.
+
+**Where the model is short at large blocks.** The real 99 MB view is 318 to 335 ms against the model's 264. Two costs
+the traces do not isolate grow with the block: the next leader verifies its own share before voting, about 0.3 ms/MB at
+f+1, so its vote1 leaves 35 ms later and the dispersal falls behind the rebroadcast instead of beside it (+26 ms); and
+the proposal crosses about 33 ms after the dispersal's nominal end, a per-connection drain tail of about a quarter of T
+that the fluid model's simultaneous finish does not have. Both scale with block size, so the model is right at small
+blocks and under by a quarter at the cap, and its capacities above are optimistic by about that much.
+
+**Intel against Graviton** (10 × c8i.8xlarge against c8g.8xlarge, 100 MB cap). Capacity is the same place, 325 ± 25
+against 300 single-region and 250 ± 25 against 230 to 250 on decaf, because at these rates the view is mostly transfer;
+the compute difference shows as larger blocks for the same throughput. Per MB of block at matched sizes, Granite Rapids
+decodes 1.9 to 2.0 × slower (1.0 to 1.16 ms/MB against 0.54 to 0.58), builds 1.2 to 1.3 × slower, encodes 1.4 × slower,
+and its proposal verification grows with the block where Graviton's stays at 5 to 6 ms. The ratios being the same at
+every block size points at the erasure-code kernel rather than memory or hashing.
+
+## Next steps
+
+Model:
+
+- **Own-share verification** as a traced step and a per-MB cost on the pairing path, and a **per-connection tail** on
+  the proposal's crossing, the two quarter-of-T terms above; then re-fit the matrix and the capacity table should close.
+- **An ingestion ceiling**: the forward path (two 1 MB forwards per transaction, hashed on the coordinator) as a term
+  that grows with rate, so the model predicts the tipping point, not only the steady state it never reaches.
+- **The recurrence's finality** is conservative against the fluid simulation by up to a third at large blocks (one
+  transfer time for every flow); worth either accepting in the doc or giving the recurrence the fluid finish.
+- **Rate-mode tests** for `sweep` and `capacity` against the matrix's per-step tables, so the closed loop stays checked.
+
+Protocol, in the order the model ranks them:
+
+- **A control lane**, or forwards and shares off the in-order connections, or forward hashing off the coordinator:
+  removes the submit-path queueing that tips the runs and is the lane the model already values at 1.3 × throughput.
+- **Build and encode off the proposal's critical path** (encode in the builder task, or propose before the dispersal
+  ends): the other half of the 2f+1 gain.
+- **A 100 MB default maximum block** on this hardware, revisited with the lane in.
+- **A `recover` microbenchmark** on c8i and c8g to confirm the erasure kernel is the Intel gap; minutes, no fleet.
+
+Measurement:
+
+- Decaf at the 100 MB cap, and runs with a higher driver in-flight cap (`--cap-s`) to measure the plateau past capacity
+  rather than the tipping point.
+- The matrix scripts (`cell.sh`, `analyze.py`, `summary.py`) live outside the repo; they belong under
+  `scripts/network-bench` with the harness so the table can be rerun on a new image.
+
 ## Running it
 
 ```
@@ -194,6 +302,9 @@ uv run --with numpy python vidwindow_runs.py fit ../../bench-state/aws/<fleet>/r
 uv run --with numpy python vidwindow_runs.py ../../bench-state/aws/<fleet>/runs/<run> [--gbps 11] [--compute off] [--model formula]
 uv run --with numpy python vidformula.py point --profile off --nodes 10 --gbps 15 --block 92 --compute c8g.4xlarge --check
 uv run --with numpy python vidformula.py pairs --profile decaf-2025 --nodes 100 --gbps 15 --block 50 --compute c8g.4xlarge
+uv run --with numpy python vidformula.py sweep --profile off --nodes 10 --gbps 15 --compute c8g.8xlarge --max-block 100 --rates 100,200,300,350
+uv run --with numpy python vidwindow_runs.py ../../bench-state/aws/<fleet>/runs/<run> --closed-loop
 ```
 
-A 100-node decaf grid of 75 points takes about 15 minutes; 10 nodes run in seconds.
+A 100-node decaf grid of 75 points takes about 15 minutes; 10 nodes run in seconds. `vidformula-explorer.html` is the
+closed forms in a browser, with a rate mode and the capacity tile; open it from a checkout, it has no dependencies.
