@@ -690,7 +690,7 @@ jobs:
       - uses: taiki-e/install-action@v2
         with:
           tool: just
-      - uses: astral-sh/setup-uv@v10.0.1
+      - uses: astral-sh/setup-uv@v10.3.2
 
       - name: Download artifacts
         uses: actions/download-artifact@v8
@@ -749,7 +749,7 @@ jobs:
       - uses: taiki-e/install-action@v2
         with:
           tool: just
-      - uses: astral-sh/setup-uv@v10.0.1
+      - uses: astral-sh/setup-uv@v10.3.2
 
       - name: Set upgrade tag
         run: |
@@ -827,7 +827,7 @@ jobs:
       DURATION_SECONDS: 3600
     steps:
       - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v10.0.1
+      - uses: astral-sh/setup-uv@v10.3.2
       - uses: taiki-e/install-action@v2
         with:
           tool: just
@@ -890,7 +890,7 @@ jobs:
       DURATION_SECONDS: 3600
     steps:
       - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v10.0.1
+      - uses: astral-sh/setup-uv@v10.3.2
       - uses: taiki-e/install-action@v2
         with:
           tool: just
