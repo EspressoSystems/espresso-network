@@ -943,6 +943,14 @@ async fn test_lagging_leader_proposal_survives_view_change() {
     // The peer is not listening yet, so everything sent to it stays queued.
     let peer = LatePeer::new();
     harness.add_peer(peer.key, peer.info.clone());
+    let harness_node = harness.connect_info();
+    let marker = Message {
+        sender: harness_node.0,
+        message_type: MessageType::Consensus(ConsensusMessage::Certificate1(
+            test_view.cert1.clone(),
+            harness_node.0,
+        )),
+    };
 
     let coordinator = harness.coordinator_mut();
     coordinator
@@ -956,10 +964,10 @@ async fn test_lagging_leader_proposal_survives_view_change() {
     coordinator
         .network()
         .sender()
-        .broadcast(view, &test_view.cert1_message(0))
+        .broadcast(view, &marker)
         .unwrap();
 
-    let mut network = peer.start(harness.connect_info()).await;
+    let mut network = peer.start(harness_node).await;
     assert_eq!(proposal_views_before_cert1(&mut network).await, [view]);
 }
 
@@ -1000,7 +1008,8 @@ impl LatePeer {
     }
 }
 
-/// Views of the proposals `network` receives before the first Certificate1.
+/// Views of the proposals `network` receives before the first Certificate1,
+/// each listed once.
 async fn proposal_views_before_cert1(network: &mut Cliquenet<TestTypes>) -> Vec<ViewNumber> {
     let mut views = Vec::new();
     loop {
@@ -1010,7 +1019,12 @@ async fn proposal_views_before_cert1(network: &mut Cliquenet<TestTypes>) -> Vec<
             .unwrap();
         match message.message_type {
             MessageType::Consensus(ConsensusMessage::Proposal(p)) => views.push(p.view_number()),
-            MessageType::Consensus(ConsensusMessage::Certificate1(..)) => return views,
+            MessageType::Consensus(ConsensusMessage::Certificate1(..)) => {
+                // Delivery is at least once: a replaced connection resends
+                // every message the peer has not acknowledged yet.
+                views.dedup();
+                return views;
+            },
             _ => {},
         }
     }

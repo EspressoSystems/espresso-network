@@ -50,7 +50,6 @@ const PROCESS_DEADLINE: Duration = Duration::from_secs(60);
 /// helpers to send events and collect results.
 pub(crate) struct TestHarness {
     coordinator: MockCoordinator,
-    public_key: BLSPubKey,
     connect_info: PeerConnectInfo,
     membership: EpochMembershipCoordinator<TestTypes>,
     outputs: Outbox<ConsensusOutput<TestTypes>>,
@@ -218,7 +217,6 @@ impl TestHarness {
             .build();
         Self {
             coordinator,
-            public_key,
             connect_info,
             membership: membership_handle,
             outputs: Outbox::new(),
@@ -397,7 +395,10 @@ impl TestHarness {
 
     /// This node's key and how a peer reaches it over the network.
     pub fn connect_info(&self) -> (BLSPubKey, PeerConnectInfo) {
-        (self.public_key, self.connect_info.clone())
+        (
+            *self.coordinator.consensus().public_key(),
+            self.connect_info.clone(),
+        )
     }
 
     /// Add a peer that receives this node's broadcasts. The harness starts
