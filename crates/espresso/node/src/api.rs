@@ -3898,11 +3898,11 @@ mod test {
 
     /// A pruned node keeps no totals from genesis, so every route that serves them is a 404 on v1
     /// and v2, even for a range of blocks the node stores.
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_pruned_node_totals_are_not_found() {
+    #[apply(sql_data_sources)]
+    async fn test_pruned_node_totals_are_not_found<D: TestableSqlDataSource>(_d: PhantomData<D>) {
         let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
-        let storage = SqlDataSource::create_storage().await;
-        let mut db_opt = tmp_options(&storage);
+        let storage = D::create_storage().await;
+        let mut db_opt = D::tmp_options(&storage);
         db_opt.prune = true;
         let config = TestNetworkConfigBuilder::default()
             .api_config(Options::with_port(port).query_sql(Query::default(), db_opt))
@@ -7670,7 +7670,8 @@ mod test {
     /// chain from genesis. The loop gets past the next boundary only if the reward tree it fetched
     /// is whole. The snapshot has no fee accounts, and from V0.6 on no block reads one, so the node
     /// answers that the fee state is missing from the boundary on, and pruned below it. A
-    /// brand-new database, which the data pruner has not stamped yet, starts from a boundary too.
+    /// brand-new database, which the data pruner has not stamped yet, starts from a boundary too,
+    /// and marks the blocks below its first block as pruned, so it never fetches them.
     /// A node without a pruner, here one that pruned before and has turned pruning off, still
     /// replays from genesis, on leaves from peers up to the data pruned height.
     #[rstest]
@@ -7715,6 +7716,14 @@ mod test {
         let start = wait_for_state_start::<D>(&db, deadline).await?;
         let state_start = D::state_start_height(&db).await?;
         check_state_start(expected, start, state_start, pruned, tip)?;
+        if expected == EmptyStateStart::RecentBoundary && !stamp_pruned_height {
+            let (first_pruned, first_block) = D::data_heights(&db).await?;
+            ensure!(
+                first_pruned.is_some() && first_pruned == first_block.map(|height| height - 1),
+                "a fresh pruned database marked {first_pruned:?} as pruned, but its first block \
+                 is {first_block:?}"
+            );
+        }
         let past = start.max(pruned) + PRUNED_START_EPOCH_HEIGHT;
         wait_for_state_head_above::<D>(&db, past, start, deadline).await?;
         let lowest = D::lowest_block_tree_node(&db).await?;

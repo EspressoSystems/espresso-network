@@ -58,7 +58,10 @@ use std::{
     marker::PhantomData,
     ops::{Bound, Range, RangeBounds},
     pin::pin,
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
     time::{Duration, Instant},
 };
 
@@ -98,7 +101,7 @@ use super::{
         Aggregate, AggregatesStorage, AvailabilityStorage, ExplorerStorage,
         MerklizedStateHeightStorage, MerklizedStateStorage, NodeStorage, SerializableRetry,
         UpdateAggregatesStorage, UpdateAvailabilityStorage,
-        pruning::{PruneStorage, PrunedHeightDataSource, PrunedHeightStorage},
+        pruning::{PruneStorage, PrunedHeightDataSource, PrunedHeightStorage, PrunerConfig},
     },
 };
 use crate::{
@@ -540,7 +543,8 @@ where
         let scanner_metrics = ScannerMetrics::new(builder.storage.metrics());
         let aggregator_metrics = AggregatorMetrics::new(builder.storage.metrics());
 
-        let fetcher = Arc::new(Fetcher::new(builder).await?);
+        let fresh_pruned_start = is_fresh_pruned::<Types, _>(&builder.storage).await?;
+        let fetcher = Arc::new(Fetcher::new(builder, fresh_pruned_start).await?);
         let scanner = if proactive_fetching && !leaf_only {
             Some(BackgroundTask::spawn(
                 "proactive scanner",
@@ -583,6 +587,23 @@ where
     pub fn inner(&self) -> Arc<S> {
         self.fetcher.storage.clone()
     }
+}
+
+/// Whether `storage` prunes but has neither pruned anything nor stored a block above genesis: a
+/// fresh pruned database.
+async fn is_fresh_pruned<Types, S>(storage: &S) -> anyhow::Result<bool>
+where
+    Types: NodeType,
+    Header<Types>: QueryableHeader<Types>,
+    S: VersionedDataSource + PrunerConfig,
+    for<'a> S::ReadOnly<'a>: NodeStorage<Types> + PrunedHeightStorage,
+{
+    if storage.get_pruning_config().is_none() {
+        return Ok(false);
+    }
+    let mut tx = storage.read().await.context("opening transaction")?;
+    let heights = Heights::load::<Types, _>(&mut tx).await?;
+    Ok(heights.pruned_height.is_none() && heights.height <= 1)
 }
 
 impl<Types, S, P> AsRef<S> for FetchingDataSource<Types, S, P>
@@ -867,13 +888,14 @@ where
     Types: NodeType,
     Header<Types>: QueryableHeader<Types>,
     Payload<Types>: QueryablePayload<Types>,
-    S: VersionedDataSource + 'static,
+    S: VersionedDataSource + PruneStorage + 'static,
     for<'a> S::Transaction<'a>: UpdateAvailabilityStorage<Types>,
     for<'a> S::ReadOnly<'a>: AvailabilityStorage<Types> + NodeStorage<Types> + PrunedHeightStorage,
     P: AvailabilityProvider<Types>,
 {
     async fn append(&self, info: BlockInfo<Types>) -> anyhow::Result<()> {
         let height = info.height() as usize;
+        self.fetcher.prune_below_first_block(info.height()).await?;
 
         // Save the new decided leaf.
         self.fetcher
@@ -963,6 +985,31 @@ where
     }
 }
 
+impl<Types, S, P> Fetcher<Types, S, P>
+where
+    Types: NodeType,
+    S: PruneStorage + Sync,
+{
+    /// On a fresh pruned database, mark the blocks below the first block above genesis as pruned,
+    /// before that block is stored. A pruned node only keeps recent blocks, and otherwise the
+    /// proactive scan and the fetches of missing parents would download the whole history, only for
+    /// the pruner to delete it.
+    async fn prune_below_first_block(&self, height: u64) -> anyhow::Result<()> {
+        if height == 0 || !self.fresh_pruned_start.load(Ordering::Acquire) {
+            return Ok(());
+        }
+        if height > 1 {
+            self.storage
+                .set_pruned_height(height - 1)
+                .await
+                .context("marking the blocks below the first block as pruned")?;
+            tracing::info!(height, "fresh pruned database starts at its first block");
+        }
+        self.fresh_pruned_start.store(false, Ordering::Release);
+        Ok(())
+    }
+}
+
 impl<Types, S, P> VersionedDataSource for FetchingDataSource<Types, S, P>
 where
     Types: NodeType,
@@ -1020,6 +1067,8 @@ where
     leaf_only: bool,
     sync_status_metrics: SyncStatusMetrics,
     sync_status: Mutex<CachedSyncStatus>,
+    // Set while the storage is a fresh pruned database, until the first block above genesis.
+    fresh_pruned_start: AtomicBool,
 }
 
 impl<Types, S, P> VersionedDataSource for Fetcher<Types, S, P>
@@ -1053,7 +1102,10 @@ where
     S: VersionedDataSource + HasMetrics + Sync,
     for<'a> S::ReadOnly<'a>: PrunedHeightStorage + NodeStorage<Types>,
 {
-    pub async fn new(builder: Builder<Types, S, P>) -> anyhow::Result<Self> {
+    pub async fn new(
+        builder: Builder<Types, S, P>,
+        fresh_pruned_start: bool,
+    ) -> anyhow::Result<Self> {
         let retry_semaphore = Arc::new(Semaphore::new(builder.rate_limit));
         let backoff = builder.backoff;
 
@@ -1127,6 +1179,7 @@ where
             leaf_only,
             sync_status_metrics,
             sync_status: Mutex::new(CachedSyncStatus::new(builder.sync_status_ttl)),
+            fresh_pruned_start: AtomicBool::new(fresh_pruned_start),
         })
     }
 }
@@ -3552,12 +3605,14 @@ mod test {
 
     /// A data source without an aggregator has no totals, also when an earlier run with one left
     /// aggregate rows in storage: those stop where that run did.
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_no_totals_without_aggregator() {
-        let storage = TmpDb::init().await;
-        let db = SqlStorage::connect(storage.config(), StorageConnectionType::Query)
-            .await
-            .unwrap();
+    #[apply(sql_data_sources)]
+    async fn test_no_totals_without_aggregator<D>(_d: PhantomData<D>)
+    where
+        D: TestableDataSource + ExplorerDataSource<MockTypes>,
+        for<'a> D::Transaction<'a>: UpdateAggregatesStorage<MockTypes>,
+    {
+        let storage = D::create(0).await;
+        let ds = D::build(&storage, |builder| builder.disable_aggregator()).await;
         let genesis = BlockQueryData::<MockTypes>::genesis(
             &Default::default(),
             &Default::default(),
@@ -3565,17 +3620,12 @@ mod test {
         )
         .await;
         {
-            let mut tx = db.write().await.unwrap();
+            let mut tx = ds.write().await.unwrap();
             tx.update_aggregates(Aggregate::default(), &[PayloadMetadata::from(genesis)])
                 .await
                 .unwrap();
             tx.commit().await.unwrap();
         }
-        let ds = MockSqlDataSource::builder(db, NoFetching)
-            .disable_aggregator()
-            .build()
-            .await
-            .unwrap();
 
         for res in [
             ds.count_transactions_in_range(.., None).await,

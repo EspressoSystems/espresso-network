@@ -817,6 +817,9 @@ pub mod testing {
         /// The number of stored leaves at or below `height`.
         async fn count_leaves_up_to(db: &Self::SqlStorage, height: u64) -> anyhow::Result<i64>;
 
+        /// The data pruned height, then the lowest stored leaf above genesis.
+        async fn data_heights(db: &Self::SqlStorage) -> anyhow::Result<(Option<u64>, Option<u64>)>;
+
         /// Record a deferred migration, as the migration runner does when it starts one.
         async fn insert_deferred_migration(
             db: &Self::SqlStorage,

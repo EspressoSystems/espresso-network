@@ -502,7 +502,7 @@ mod test {
     use crate::{
         availability::{
             AvailabilityDataSource, BlockId, BlockInfo, BlockQueryData, BlockWithTransaction,
-            Certificate2, Fetch, UpdateAvailabilityData, VidCommonQueryData,
+            Certificate2, Fetch, LeafId, UpdateAvailabilityData, VidCommonQueryData,
         },
         data_source::{
             AvailabilityProvider, FetchingDataSource, Transaction, VersionedDataSource,
@@ -521,7 +521,7 @@ mod test {
         node::data_source::NodeDataSource,
         testing::{
             chain::{ChainNode, genesis_vid},
-            consensus::{MockDataSource, TestSqlDb, sql_dbs},
+            consensus::{MockDataSource, SavePrunedHeight, TestSqlDb, sql_dbs},
             mocks::{MockPayload, MockTransaction, MockTypes, mock_transaction},
             sleep,
         },
@@ -1355,8 +1355,10 @@ mod test {
         // Either None or 0 is acceptable, depending on whether or not the prover has run yet.
         assert!(matches!(pruned_height, None | Some(0)), "{pruned_height:?}");
 
-        // Send the last leaf to the disconnected data source so it learns about the height and
-        // fetches the missing data.
+        // Send the first leaf, so the database is no longer fresh and keeps the blocks below the
+        // next one. Then send the last leaf so it learns about the height and fetches the missing
+        // data.
+        data_source.append(leaves[0].clone().into()).await.unwrap();
         let last_leaf = leaves.last().unwrap();
         data_source.append(last_leaf.clone().into()).await.unwrap();
 
@@ -1642,6 +1644,122 @@ mod test {
 
         assert_eq!(block.hash(), leaf.block_hash());
         assert_eq!(vid.block_hash(), leaf.block_hash());
+    }
+
+    /// A leaf whose parent is at the pruned height does not fetch that parent: the pruner would only
+    /// delete it again. Parents above the pruned height are still fetched.
+    #[apply(sql_dbs)]
+    async fn test_no_parent_fetch_at_pruned_height<Db: TestSqlDb>(_db: PhantomData<Db>)
+    where
+        for<'a> <Db::Storage as VersionedDataSource>::Transaction<'a>: SavePrunedHeight,
+    {
+        let network = peer().await;
+        let (port, _server) = serve_availability(network.data_source()).await;
+        let db = Db::init().await;
+        let provider = Provider::new(trusted_provider(port));
+        let data_source = builder(&db, &provider)
+            .await
+            .disable_proactive_fetching()
+            .build()
+            .await
+            .unwrap();
+
+        let leaves = network
+            .data_source()
+            .subscribe_leaves(1)
+            .await
+            .take(4)
+            .collect::<Vec<_>>()
+            .await;
+        let pruned = 2;
+        {
+            let mut tx = data_source.write().await.unwrap();
+            tx.save_pruned_height(pruned).await.unwrap();
+            tx.commit().await.unwrap();
+        }
+
+        // Leaf 4 fetches its missing parent, leaf 3, whose parent is at the pruned height.
+        data_source.append(leaves[3].clone().into()).await.unwrap();
+        while data_source
+            .read()
+            .await
+            .unwrap()
+            .get_leaf(LeafId::<MockTypes>::from(3))
+            .await
+            .is_err()
+        {
+            sleep(Duration::from_millis(100)).await;
+        }
+        // Storage would drop a pruned leaf, so check the requests instead.
+        sleep(Duration::from_secs(2)).await;
+        let requests = provider.requests();
+        let requested = |height| requests.contains(&format!("{:?}", LeafRequest::new(height)));
+        assert!(requested(3), "{requests:?}");
+        assert!(
+            !requested(pruned),
+            "the leaf at the pruned height {pruned} was fetched: {requests:?}"
+        );
+    }
+
+    /// A fresh pruned node starts at its first block above genesis: it marks the blocks below as
+    /// pruned before it stores that block, so neither the proactive scan nor the fetches of missing
+    /// parents download history the pruner would only delete. A pruned node whose first block is
+    /// at height 1 has nothing to skip, and neither has a node that does not prune.
+    #[apply(sql_dbs)]
+    async fn test_fresh_pruned_start<Db: TestSqlDb>(_db: PhantomData<Db>) {
+        let network = peer().await;
+        let (port, _server) = serve_availability(network.data_source()).await;
+        let leaves = network
+            .data_source()
+            .subscribe_leaves(1)
+            .await
+            .take(4)
+            .collect::<Vec<_>>()
+            .await;
+
+        for (prune, first, pruned) in [(true, 4, Some(3)), (true, 1, None), (false, 4, None)] {
+            let db = Db::init().await;
+            let provider = Provider::new(trusted_provider(port));
+            let storage = if prune {
+                // The pruner itself never runs within the test.
+                db.pruning_storage(PrunerCfg::new().with_interval(Duration::from_secs(3600)))
+                    .await
+            } else {
+                db.storage().await
+            };
+            let data_source = FetchingDataSource::builder(storage.unwrap(), provider.clone())
+                .with_proactive_interval(Duration::from_secs(1))
+                .with_sync_status_ttl(Duration::from_secs(1))
+                .build()
+                .await
+                .unwrap();
+
+            // Only the first block above genesis decides where the node starts.
+            data_source
+                .append(leaves[first - 1].clone().into())
+                .await
+                .unwrap();
+            data_source.append(leaves[3].clone().into()).await.unwrap();
+            let pruned_height = data_source
+                .read()
+                .await
+                .unwrap()
+                .load_pruned_height()
+                .await
+                .unwrap();
+            assert_eq!(pruned_height, pruned, "prune {prune}, first block {first}");
+
+            // Long enough for a parent fetch and a proactive scan. Storage would drop a pruned
+            // leaf, so check the requests instead.
+            if pruned.is_some() {
+                sleep(Duration::from_secs(3)).await;
+                let requests = provider.requests();
+                assert!(
+                    requests.iter().all(|req| !req.starts_with("Leaf")),
+                    "a fresh pruned node fetched leaves below its first block: {requests:?}"
+                );
+            }
+        }
     }
 
     /// Test that fetching a leaf also backfills the leaf's cert2.

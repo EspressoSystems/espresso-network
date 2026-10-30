@@ -15,7 +15,7 @@
 use std::{
     fmt::Debug,
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicBool, Ordering},
     },
 };
@@ -39,6 +39,7 @@ pub struct TestProvider<P> {
     inner: Arc<P>,
     unblock: Arc<RwLock<Option<broadcast::Sender<()>>>>,
     fail: Arc<AtomicBool>,
+    requests: Arc<Mutex<Vec<String>>>,
 }
 
 impl<P> TestProvider<P> {
@@ -47,7 +48,13 @@ impl<P> TestProvider<P> {
             inner: Arc::new(inner),
             unblock: Default::default(),
             fail: Arc::new(AtomicBool::new(false)),
+            requests: Default::default(),
         }
+    }
+
+    /// The requests made to this provider so far, oldest first, in their `Debug` form.
+    pub fn requests(&self) -> Vec<String> {
+        self.requests.lock().unwrap().clone()
     }
 
     /// Delay fetch requests until [`unblock`](Self::unblock).
@@ -96,6 +103,8 @@ where
     P: Provider<Types, T> + Sync,
 {
     async fn fetch(&self, req: T) -> Option<T::Response> {
+        self.requests.lock().unwrap().push(format!("{req:?}"));
+
         // Fail the request if the user has called `fail`.
         if self.fail.load(Ordering::SeqCst) {
             return None;
