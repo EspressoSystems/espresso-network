@@ -3,7 +3,7 @@ use std::{marker::PhantomData, time::Duration};
 use committable::{Commitment, CommitmentBoundsArkless, Committable};
 use hotshot_example_types::node_types::TestTypes;
 use hotshot_types::{
-    data::{EpochNumber, VidCommitment2, ViewNumber},
+    data::{EpochNumber, VidCommitment, VidCommitment2, ViewNumber},
     epoch_membership::EpochMembership,
     signature_key::{BLSPrivKey, BLSPubKey},
     simple_certificate::{TimeoutCertificate3, TimeoutEvidence},
@@ -919,6 +919,69 @@ async fn test_leader_proposal() {
     // disperse — consensus cannot send a proposal without it.
     harness
         .process_until_output(|outputs| any(outputs, is_proposal))
+        .await;
+}
+
+/// The leader encodes a block once: the coordinator holds the dispersal its block builder
+/// computed under the key consensus then asks to disperse, so the disperser sends those shares
+/// instead of encoding the payload again.
+#[tokio::test]
+async fn test_leader_disperses_the_built_dispersal() {
+    let test_data = TestData::new(4).await;
+    let leader_for_view_2 = test_data.views[1].leader_public_key;
+    let mut harness = TestHarness::new(node_index_for_key(&leader_for_view_2)).await;
+
+    let test_view = &test_data.views[0];
+    for fragment in test_view.vid_share_inputs(&leader_for_view_2) {
+        harness.message(fragment);
+    }
+    harness.message(test_view.proposal_input());
+    for i in 0..THRESHOLD {
+        harness.message(test_view.vote1_input(i));
+        harness.message(test_view.vid_share_broadcast_input(i))
+    }
+
+    // Hold the built block back, to look at the coordinator before consensus asks to disperse it.
+    let block_built = timeout(Duration::from_secs(60), async {
+        loop {
+            match harness.coordinator_mut().next_consensus_input().await {
+                Ok(input) if is_block_built(&input) => break input,
+                Ok(input) => harness.apply_and_process(input),
+                Err(err) if err.severity == Severity::Critical => {
+                    panic!("critical coordinator error: {err}")
+                },
+                Err(_) => {},
+            }
+        }
+    })
+    .await
+    .expect("the leader builds a block");
+    let ConsensusInput::BlockBuilt {
+        view,
+        epoch,
+        payload_commitment: VidCommitment::V2(commit),
+        ..
+    } = block_built
+    else {
+        panic!("expected a block with a V2 payload commitment");
+    };
+    assert!(
+        harness
+            .coordinator()
+            .holds_built_dispersal(view, epoch, commit),
+        "the coordinator holds the block's dispersal"
+    );
+
+    harness.apply_and_process(block_built);
+    assert!(any(harness.outputs(), is_request_vid_disperse));
+    assert!(
+        !harness
+            .coordinator()
+            .holds_built_dispersal(view, epoch, commit),
+        "the disperse request took the dispersal"
+    );
+    harness
+        .process_until(|inputs| any(inputs, is_vid_disperse))
         .await;
 }
 

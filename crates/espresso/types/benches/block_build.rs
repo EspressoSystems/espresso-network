@@ -39,17 +39,13 @@ use criterion::{BenchmarkId, Criterion, SamplingMode};
 use espresso_types::{ChainConfig, NamespaceId, NsTable, Payload, SeqTypes, Transaction};
 use hotshot_new_protocol::{
     block::{BlockCommitments, block_commitments},
-    vid::disperse_payload,
+    vid::{BuiltDispersal, Dispersal, disperse_payload},
 };
 use hotshot_types::{
     PeerConfig, ValidatorConfig,
     consensus::PayloadWithMetadata,
-    data::{
-        EpochNumber, VidCommitment, VidCommitment2, ViewNumber,
-        vid_disperse::{AvidmGf2DisperseParams, vid_total_weight},
-    },
+    data::{EpochNumber, VidCommitment, VidCommitment2, ViewNumber},
     message::UpgradeLock,
-    traits::EncodeBytes,
 };
 use rand::{RngCore, SeedableRng};
 use rand_chacha::ChaCha20Rng;
@@ -108,9 +104,10 @@ fn request_block(
     let commitments = block_commitments(
         &payload,
         pooled_hashes,
-        committee.total_weight,
+        &committee.stake_table,
         NEW_PROTOCOL_VERSION,
-    );
+    )
+    .expect("block commitments");
     (payload, commitments)
 }
 
@@ -122,39 +119,36 @@ fn leader_vid(
     committee: &Committee,
 ) -> (
     PayloadWithMetadata<SeqTypes>,
-    BlockCommitments<SeqTypes>,
+    Vec<Commitment<Transaction>>,
     Vec<Vec<u8>>,
 ) {
     let _span = tracing::debug_span!("leader_vid").entered();
     let (payload, commitments) = request_block(txs, pooled_hashes, committee);
-    let VidCommitment::V2(payload_commitment) = commitments.payload_commitment else {
+    let BlockCommitments {
+        payload_commitment,
+        hashes,
+        dispersal,
+        ..
+    } = commitments;
+    let VidCommitment::V2(payload_commitment) = payload_commitment else {
         panic!("protocol 0.6 commits with AvidmGf2");
     };
     let fragments = tracing::debug_span!("vid_disperse")
-        .in_scope(|| disperse(&payload, payload_commitment, committee));
-    (payload, commitments, fragments)
+        .in_scope(|| disperse(dispersal, payload_commitment, committee));
+    (payload, hashes, fragments)
 }
 
 /// The disperser's work for a built block, until every fragment is serialized as the network
 /// does. The serialized fragments are kept, as the network takes them.
 fn disperse(
-    payload: &PayloadWithMetadata<SeqTypes>,
+    dispersal: BuiltDispersal<SeqTypes>,
     payload_commitment: VidCommitment2,
     committee: &Committee,
 ) -> Vec<Vec<u8>> {
-    let params = tracing::debug_span!("disperse_params")
-        .in_scope(|| {
-            AvidmGf2DisperseParams::new(
-                &committee.stake_table,
-                payload.payload.encode(),
-                &payload.metadata.encode(),
-            )
-        })
-        .expect("disperse params");
     let fragments = Mutex::new(Vec::new());
     let upgrade_lock = &committee.upgrade_lock;
     disperse_payload(
-        &params,
+        Dispersal::Built(dispersal),
         ViewNumber::new(1),
         EpochNumber::genesis(),
         payload_commitment,
@@ -175,7 +169,6 @@ fn disperse(
 /// The block's epoch committee as the leader sees it, the leader being its first node.
 struct Committee {
     stake_table: Vec<PeerConfig<SeqTypes>>,
-    total_weight: usize,
     leader: ValidatorConfig<SeqTypes>,
     upgrade_lock: UpgradeLock<SeqTypes>,
 }
@@ -194,10 +187,8 @@ impl Committee {
         let stake_table: Vec<_> = iter::once(leader.public_config())
             .chain((1..NODES as u64).map(|i| node(i).public_config()))
             .collect();
-        let total_weight = vid_total_weight(stake_table.iter(), Some(EpochNumber::genesis()));
         Self {
             stake_table,
-            total_weight,
             leader,
             upgrade_lock: UpgradeLock::new(Upgrade::trivial(NEW_PROTOCOL_VERSION)),
         }
@@ -225,13 +216,13 @@ fn chain_config() -> ChainConfig {
 /// `[start, completion - start, cpu]` in ms per step and iteration, by step name; start is
 /// relative to the iteration's root span, `request_block` or `leader_vid`. The CPU kind depends
 /// on the step:
-/// - thread CPU: `from_transactions`, `encode`, `builder_commitment`, `disperse_params`, `sign`
+/// - thread CPU: `from_transactions`, `encode`, `builder_commitment`, `sign`
 /// - process CPU, including rayon workers spinning for work: `leader_vid`, `request_block`,
 ///   `block_commitments`, `vid_disperse`
 /// - sum of the leaves' thread CPU: `transaction_hashes` (its `tx_hash` leaves), absent while the
 ///   pool's hashes are reused; `fragments` and `serialize`
-/// - residual upper bound, process CPU of the enclosing step minus its other steps:
-///   `vid_commitment` in `block_commitments`, `ns_encode` in `vid_disperse`
+/// - residual upper bound, process CPU of `block_commitments` minus its other steps:
+///   `vid_commitment`, which disperses every namespace and folds the commitment from them
 static STEPS: Mutex<BTreeMap<&'static str, Vec<[f64; 3]>>> = Mutex::new(BTreeMap::new());
 
 /// The running iteration. Steps on rayon threads have no parent span, and iterations run one at
@@ -265,9 +256,9 @@ struct Iteration {
 
 /// Times each step by its own work. A rayon worker that waits inside a step span steals unrelated
 /// jobs, so a step's span can last as long as the VID work. Leaf spans run once per transaction,
-/// bucket or fragment. Those making no rayon calls (`tx_hash`, `fragments`, `serialize`) cost
-/// their summed thread CPU; the VID steps (`vid_commitment`, `ns_encode`) cost what the process
-/// spent in the enclosing step beyond its other steps.
+/// bucket or fragment, make no rayon calls (`tx_hash`, `fragments`, `serialize`) and cost their
+/// summed thread CPU. The VID step (`vid_commitment`) costs what the process spent in
+/// `block_commitments` beyond its other steps.
 struct StepTimer;
 
 impl<S: Subscriber + for<'a> LookupSpan<'a>> Layer<S> for StepTimer {
@@ -316,7 +307,7 @@ impl<S: Subscriber + for<'a> LookupSpan<'a>> Layer<S> for StepTimer {
                 None => thread_cpu - start_cpu,
             },
         };
-        if matches!(name, "tx_hash" | "ns_encode" | "fragments" | "serialize") {
+        if matches!(name, "tx_hash" | "fragments" | "serialize") {
             iteration
                 .leaves
                 .entry(name)
@@ -360,13 +351,6 @@ fn record(iteration: Iteration) {
         - tx_hashes.map_or(0.0, |leaves| leaves.cpu)
         - builder_cpu
         - cpu_of("encode").expect("encode ran");
-    let encode_cpu = cpu_of("vid_disperse").map(|disperse| {
-        disperse
-            - cpu_of("disperse_params").expect("disperse_params ran")
-            - cpu_of("sign").expect("sign ran")
-            - cpu_of("fragments").expect("fragments ran")
-            - cpu_of("serialize").expect("serialize ran")
-    });
     let mut steps = STEPS.lock().expect("steps lock");
     let leaves = iteration
         .leaves
@@ -379,7 +363,6 @@ fn record(iteration: Iteration) {
                 (leaves.end, leaves.cpu)
             },
             "vid_commitment" => (step.end, vid_cpu),
-            "ns_encode" => (step.end, encode_cpu.expect("vid_disperse ran")),
             _ => (step.end, step.cpu),
         };
         steps

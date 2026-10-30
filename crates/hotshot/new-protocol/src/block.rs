@@ -8,16 +8,15 @@ use std::{
 
 use committable::{Commitment, Committable};
 use hotshot_types::{
+    PeerConfig,
     consensus::PayloadWithMetadata,
-    data::{
-        EpochNumber, Leaf2, VidCommitment, ViewNumber, vid_commitment,
-        vid_disperse::vid_total_weight,
-    },
+    data::{EpochNumber, Leaf2, VidCommitment, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
     message::UpgradeLock,
     traits::{
         BlockPayload, EncodeBytes, ValidatedState as _,
         block_contents::{BuilderFee, Transaction},
+        metrics::Histogram,
         node_implementation::NodeType,
         signature_key::BuilderSignatureKey,
     },
@@ -28,14 +27,16 @@ use tokio::{
     time::sleep,
 };
 use tracing::{debug_span, error, warn};
-use versions::{NO_BUILDER_COMMITMENT_VERSION, Version};
+use versions::{NEW_PROTOCOL_VERSION, NO_BUILDER_COMMITMENT_VERSION, Version};
 
 use crate::{
     consensus::ConsensusInput,
+    coordinator::metrics::{Measurement, finish_measurement, ignore_measurement},
     helpers::proposal_commitment,
     message::{DedupManifest, Proposal, TransactionMessage},
     network::message_limit,
     state::HeaderRequest,
+    vid::{BuiltDispersal, VidDisperseError},
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -48,6 +49,12 @@ pub enum BlockError {
 
     #[error("builder signature failed")]
     BuilderSignature,
+
+    #[error("vid dispersal failed: {0}")]
+    Vid(#[from] VidDisperseError),
+
+    #[error("version {0} predates the new protocol")]
+    UnsupportedVersion(Version),
 
     #[error("block builder task cancelled")]
     Cancelled,
@@ -80,6 +87,9 @@ pub struct BlockBuilderOutput<T: NodeType> {
     pub builder_fee: BuilderFee<T>,
     pub payload_commitment: VidCommitment,
     pub manifest: DedupManifest<T>,
+    /// The shares behind `payload_commitment`, until the coordinator takes them for the
+    /// disperser.
+    pub dispersal: Option<BuiltDispersal<T>>,
 }
 
 /// Commitments the leader computes for a block it built.
@@ -88,35 +98,40 @@ pub struct BlockCommitments<T: NodeType> {
     pub payload_commitment: VidCommitment,
     pub builder_commitment: BuilderCommitment,
     pub hashes: Vec<Commitment<T::Transaction>>,
+    pub dispersal: BuiltDispersal<T>,
 }
 
 /// The leader's commitment work for a built block, on the proposal's critical path. The
 /// `block_build` bench in espresso-types calls this; its spans time each step.
 ///
-/// `pooled_hashes` are the pool's hashes of the transactions the payload was built from.
+/// `pooled_hashes` are the pool's hashes of the transactions the payload was built from, and
+/// `stake_table` the nodes of the block's epoch. The payload commitment is folded from the
+/// block's dispersal, so the leader encodes the payload once for both. The new protocol runs
+/// from `NEW_PROTOCOL_VERSION`, whose VID scheme is always AvidmGf2, so an earlier `version` is
+/// refused.
 pub fn block_commitments<T: NodeType>(
     payload: &PayloadWithMetadata<T>,
     pooled_hashes: &[Commitment<T::Transaction>],
-    total_weight: usize,
+    stake_table: &[PeerConfig<T>],
     version: Version,
-) -> BlockCommitments<T> {
+) -> Result<BlockCommitments<T>, BlockError> {
+    if version < NEW_PROTOCOL_VERSION {
+        return Err(BlockError::UnsupportedVersion(version));
+    }
     let _span = debug_span!("block_commitments").entered();
     let (payload_bytes, metadata_bytes) =
         debug_span!("encode").in_scope(|| (payload.payload.encode(), payload.metadata.encode()));
+    let block_size = payload_bytes.len() as u64;
     // Independent work, run in parallel rather than paid for in turn on the leader's proposal
     // path.
-    let (hashes, (payload_commitment, builder_commitment)) = rayon::join(
+    let (hashes, (dispersal, builder_commitment)) = rayon::join(
         || transaction_hashes(payload, pooled_hashes),
         || {
             rayon::join(
+                // Named after the step it replaced, so the `block_build` bench compares refs.
                 || {
                     debug_span!("vid_commitment").in_scope(|| {
-                        vid_commitment(
-                            payload_bytes.as_ref(),
-                            metadata_bytes.as_ref(),
-                            total_weight,
-                            version,
-                        )
+                        BuiltDispersal::new(stake_table, payload_bytes, &metadata_bytes)
                     })
                 },
                 // From 0.7 the header carries no builder commitment, so the leader skips the
@@ -132,12 +147,14 @@ pub fn block_commitments<T: NodeType>(
             )
         },
     );
-    BlockCommitments {
-        block_size: payload_bytes.len() as u64,
-        payload_commitment,
+    let dispersal = dispersal?;
+    Ok(BlockCommitments {
+        block_size,
+        payload_commitment: VidCommitment::V2(dispersal.payload_commitment()?),
         builder_commitment,
         hashes,
-    }
+        dispersal,
+    })
 }
 
 /// The payload's transaction hashes, in any order: every consumer uses them as a set.
@@ -265,6 +282,7 @@ pub struct BlockBuilder<T: NodeType> {
     /// change how the payload is built.
     view_transactions: BTreeMap<ViewNumber, PooledBlock<T>>,
     tasks: JoinSet<Result<BlockBuilderOutput<T>, BlockError>>,
+    commitments_duration_metric: Option<Arc<dyn Histogram>>,
 }
 
 impl<T: NodeType> BlockBuilder<T> {
@@ -290,7 +308,13 @@ impl<T: NodeType> BlockBuilder<T> {
             calculations: BTreeMap::new(),
             view_transactions: BTreeMap::new(),
             tasks: JoinSet::new(),
+            commitments_duration_metric: None,
         }
+    }
+
+    pub fn with_metrics(mut self, commitments_duration: Option<Arc<dyn Histogram>>) -> Self {
+        self.commitments_duration_metric = commitments_duration;
+        self
     }
 
     pub fn request_block(&mut self, request: BlockAndHeaderRequest<T>) {
@@ -312,6 +336,7 @@ impl<T: NodeType> BlockBuilder<T> {
         let membership = self.membership.clone();
 
         let empty_block_delay = self.config.empty_block_delay;
+        let duration_metric = self.commitments_duration_metric.clone();
 
         let handle = self.tasks.spawn(async move {
             // Without this an idle network produces empty blocks as fast as consensus can run
@@ -328,30 +353,34 @@ impl<T: NodeType> BlockBuilder<T> {
                     .map_err(|e| BlockError::PayloadConstruction(e.to_string()))?;
             let payload: PayloadWithMetadata<T> = PayloadWithMetadata { payload, metadata };
 
-            let total_weight = {
-                let target_mem = membership
-                    .stake_table_for_epoch(Some(epoch))
-                    .map_err(|_| BlockError::StakeTableUnavailable)?;
-                vid_total_weight(target_mem.stake_table(), Some(epoch))
-            };
+            let stake_table: Vec<_> = membership
+                .stake_table_for_epoch(Some(epoch))
+                .map_err(|_| BlockError::StakeTableUnavailable)?
+                .stake_table()
+                .cloned()
+                .collect();
             let commitments = spawn_blocking(move || {
+                let measurement = duration_metric.map(Measurement::start);
                 let commitments =
-                    block_commitments(&payload, &pooled_hashes, total_weight, version);
+                    block_commitments(&payload, &pooled_hashes, &stake_table, version);
+                match &commitments {
+                    Ok(_) => finish_measurement(measurement),
+                    Err(_) => ignore_measurement(measurement),
+                }
                 (payload, commitments)
             });
-            let (
-                payload,
-                BlockCommitments {
-                    block_size,
-                    payload_commitment,
-                    builder_commitment,
-                    hashes,
-                },
-            ) = match commitments.await {
+            let (payload, commitments) = match commitments.await {
                 Ok(out) => out,
                 Err(e) if e.is_panic() => resume_unwind(e.into_panic()),
                 Err(_) => return Err(BlockError::Cancelled),
             };
+            let BlockCommitments {
+                block_size,
+                payload_commitment,
+                builder_commitment,
+                hashes,
+                dispersal,
+            } = commitments?;
             let manifest = DedupManifest {
                 view,
                 epoch,
@@ -379,6 +408,7 @@ impl<T: NodeType> BlockBuilder<T> {
                 builder_fee,
                 payload_commitment,
                 manifest,
+                dispersal: Some(dispersal),
             })
         });
         self.calculations.insert((view, parent_commitment), handle);

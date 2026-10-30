@@ -66,8 +66,8 @@ use crate::{
     storage::{NewProtocolStorage, Storage},
     upgrade::UpgradeProtocol,
     vid::{
-        ObtainedPayload, PinnedBy, VidDisperseRequest, VidDisperser, VidFragmentAccumulator,
-        VidReconstructor, expected_vid_param,
+        BuiltDispersal, ObtainedPayload, PinnedBy, VidDisperseRequest, VidDisperser,
+        VidFragmentAccumulator, VidReconstructor, expected_vid_param,
     },
     vote::{EpochRootTally, SimpleTally, UpgradeTally, VoteCollector},
 };
@@ -151,6 +151,9 @@ pub struct Coordinator<T: NodeType, S> {
     server: Server<T>,
     #[builder(skip)]
     da_payloads: BTreeMap<(ViewNumber, VidCommitment2), PendingDa<T>>,
+    /// Dispersals the block builder computed, until consensus asks to disperse their block.
+    #[builder(skip)]
+    built_dispersals: BTreeMap<(ViewNumber, EpochNumber, VidCommitment2), BuiltDispersal<T>>,
     metrics: Option<metrics::Metrics>,
     #[builder(default)]
     participation: ParticipationTracker<T>,
@@ -392,16 +395,23 @@ where
                 initializer.epoch_height(),
                 membership_coordinator.clone(),
             ))
-            .block_builder(BlockBuilder::new(
-                Arc::new(initializer.instance_state().clone()),
-                membership_coordinator.clone(),
-                BlockBuilderConfig {
-                    empty_block_delay,
-                    block_sizes,
-                    ..BlockBuilderConfig::default()
-                },
-                upgrade_lock.clone(),
-            ))
+            .block_builder(
+                BlockBuilder::new(
+                    Arc::new(initializer.instance_state().clone()),
+                    membership_coordinator.clone(),
+                    BlockBuilderConfig {
+                        empty_block_delay,
+                        block_sizes,
+                        ..BlockBuilderConfig::default()
+                    },
+                    upgrade_lock.clone(),
+                )
+                .with_metrics(
+                    coordinator_metrics
+                        .as_ref()
+                        .map(|m| m.consensus.block_commitments_duration.clone().into()),
+                ),
+            )
             .proposal_validator(ProposalValidator::new(
                 membership_coordinator.clone(),
                 initializer.epoch_height(),
@@ -649,7 +659,7 @@ where
                     }
                 },
                 Some(item) = self.block_builder.next() => match item {
-                    Ok(block) => {
+                    Ok(mut block) => {
                         self.state_manager.request_header(HeaderRequest::from(&block));
                         let epoch = block.epoch;
                         let manifest = block.manifest.clone();
@@ -683,6 +693,14 @@ where
                                 &leader,
                                 BlockMessage::DedupManifest(manifest.clone()),
                             )?;
+                        }
+                        // Held only now, as an error above drops the block: consensus asks to
+                        // disperse every block it is given, and that request takes it back.
+                        if let VidCommitment::V2(commit) = block.payload_commitment
+                            && let Some(dispersal) = block.dispersal.take()
+                        {
+                            self.built_dispersals
+                                .insert((block.view, epoch, commit), dispersal);
                         }
                         return Ok(block.into())
                     }
@@ -812,13 +830,19 @@ where
                 payload_commitment,
             } => {
                 debug!(%node, %view, %epoch, "request vid disperse");
-                self.vid_disperser.request_vid_disperse(VidDisperseRequest {
-                    view,
-                    epoch,
-                    block: payload,
-                    metadata,
-                    payload_commitment,
-                });
+                let built = self
+                    .built_dispersals
+                    .remove(&(view, epoch, payload_commitment));
+                self.vid_disperser.request_vid_disperse(
+                    VidDisperseRequest {
+                        view,
+                        epoch,
+                        block: payload,
+                        metadata,
+                        payload_commitment,
+                    },
+                    built,
+                );
             },
             ConsensusOutput::RequestDrbResult(epoch) => {
                 debug!(%node, %epoch, "request drb result");
@@ -1208,6 +1232,16 @@ where
     #[cfg(test)]
     pub(crate) fn consensus_mut(&mut self) -> &mut Consensus<T> {
         &mut self.consensus
+    }
+
+    #[cfg(test)]
+    pub(crate) fn holds_built_dispersal(
+        &self,
+        view: ViewNumber,
+        epoch: EpochNumber,
+        commit: VidCommitment2,
+    ) -> bool {
+        self.built_dispersals.contains_key(&(view, epoch, commit))
     }
 
     #[cfg(test)]
@@ -2132,6 +2166,9 @@ where
                     .gc(view.saturating_sub(VID_RECONSTRUCT_GC_MARGIN).into());
                 let vc = VidCommitment2::default();
                 self.da_payloads = self.da_payloads.split_off(&(view, vc));
+                self.built_dispersals =
+                    self.built_dispersals
+                        .split_off(&(view, EpochNumber::new(0), vc));
                 self.payload_txn_bytes = self.payload_txn_bytes.split_off(&(decide_floor + 1));
             },
             GcScope::Timeout(view) => {
@@ -2147,6 +2184,10 @@ where
                 let vc = VidCommitment2::default();
                 self.da_payloads
                     .extract_if((view, vc)..(view + 1, vc), |_, _| true)
+                    .for_each(drop);
+                let e = EpochNumber::new(0);
+                self.built_dispersals
+                    .extract_if((view, e, vc)..(view + 1, e, vc), |_, _| true)
                     .for_each(drop);
             },
         }

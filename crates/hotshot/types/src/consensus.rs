@@ -576,7 +576,11 @@ pub struct ConsensusMetricsValue {
     pub validate_and_apply_header_duration: Box<dyn Histogram>,
     /// The duration of update leaf
     pub update_leaf_duration: Box<dyn Histogram>,
-    /// The time it took to calculate the disperse
+    /// The time a leader took for a built block's commitments, mostly erasure-coding the payload
+    /// into the shares it later disperses
+    pub block_commitments_duration: Box<dyn Histogram>,
+    /// The time a leader took to disperse a block: signing and sending the shares, plus
+    /// erasure-coding the payload when the block builder had not
     pub vid_disperse_duration: Box<dyn Histogram>,
 }
 
@@ -620,6 +624,10 @@ impl ConsensusMetricsValue {
             ),
             update_leaf_duration: metrics.create_histogram(
                 String::from("update_leaf_duration"),
+                Some("seconds".to_string()),
+            ),
+            block_commitments_duration: metrics.create_histogram(
+                String::from("block_commitments_duration"),
                 Some("seconds".to_string()),
             ),
             vid_disperse_duration: metrics.create_histogram(

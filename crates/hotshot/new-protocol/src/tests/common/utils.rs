@@ -1124,6 +1124,16 @@ pub(crate) fn vid_fragments(
     })
 }
 
+/// Encode a namespace table whose namespaces end at `offsets`.
+pub(crate) fn ns_table(offsets: &[u32]) -> Vec<u8> {
+    let mut bytes = (offsets.len() as u32).to_le_bytes().to_vec();
+    for (id, offset) in offsets.iter().enumerate() {
+        bytes.extend_from_slice(&(id as u32).to_le_bytes());
+        bytes.extend_from_slice(&offset.to_le_bytes());
+    }
+    bytes
+}
+
 /// The `(view, VID commitment)` pairs a restarted node seeds as
 /// already-reconstructed blocks, mirroring `Coordinator::maker`.
 pub fn reconstructed_blocks(

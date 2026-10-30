@@ -6,6 +6,7 @@ use std::{
 };
 
 use hotshot_types::{
+    PeerConfig,
     data::{
         EpochNumber, VidCommitment2, VidDisperse2, ViewNumber,
         vid_disperse::{
@@ -40,6 +41,52 @@ pub struct VidDisperseRequest<T: NodeType> {
     pub block: T::BlockPayload,
     pub metadata: <T::BlockPayload as BlockPayload<T>>::Metadata,
     pub payload_commitment: VidCommitment2,
+}
+
+/// A block's dispersal, computed by the block builder together with its commitment, so the
+/// disperser only signs and sends it.
+pub struct BuiltDispersal<T: NodeType> {
+    params: AvidmGf2DisperseParams<T>,
+    /// One per namespace, in namespace-table order.
+    dispersals: Vec<AvidmGf2NsDispersal>,
+}
+
+impl<T: NodeType> BuiltDispersal<T> {
+    /// Erasure-codes every namespace of an encoded payload for the nodes of `stake_table`.
+    pub fn new(
+        stake_table: &[PeerConfig<T>],
+        payload: Arc<[u8]>,
+        metadata: &[u8],
+    ) -> Result<Self, VidDisperseError> {
+        let params = AvidmGf2DisperseParams::new(stake_table, payload, metadata)
+            .map_err(VidDisperseError::Vid)?;
+        let dispersals = (0..params.ns_table.len())
+            .into_par_iter()
+            .map(|ns_index| disperse_namespace(&params, ns_index))
+            .collect::<Result<_, _>>()?;
+        Ok(Self { params, dispersals })
+    }
+
+    /// The payload commitment, folded from the namespaces' commits as
+    /// [`AvidmGf2Scheme::commit`] folds them.
+    pub fn payload_commitment(&self) -> Result<VidCommitment2, VidDisperseError> {
+        let commits: Vec<_> = self
+            .dispersals
+            .iter()
+            .map(|dispersal| dispersal.commit)
+            .collect();
+        AvidmGf2Scheme::aggregate_commit(&commits)
+            .wrap()
+            .map_err(VidDisperseError::Vid)
+    }
+}
+
+/// A block for [`disperse_payload`] to send.
+pub enum Dispersal<T: NodeType> {
+    /// Encoded by the block builder, so it is only signed and sent.
+    Built(BuiltDispersal<T>),
+    /// Encoded bucket by bucket while it is sent.
+    Encode(AvidmGf2DisperseParams<T>),
 }
 
 pub struct VidDisperseOutput {
@@ -80,7 +127,15 @@ impl<T: NodeType> VidDisperser<T> {
         self
     }
 
-    pub fn request_vid_disperse(&mut self, vid_disperse_request: VidDisperseRequest<T>) {
+    /// Disperses a block: sends `built` if the block builder computed it, else encodes the
+    /// payload first. The coordinator always hands over its block builder's dispersal; only the
+    /// bench node, which skips the block builder, and tests that feed `BlockBuilt` directly pass
+    /// `None`. A repeated request is dropped, `built` with it.
+    pub fn request_vid_disperse(
+        &mut self,
+        vid_disperse_request: VidDisperseRequest<T>,
+        built: Option<BuiltDispersal<T>>,
+    ) {
         let key = (
             vid_disperse_request.view,
             vid_disperse_request.epoch,
@@ -94,14 +149,16 @@ impl<T: NodeType> VidDisperser<T> {
         let public_key = self.public_key.clone();
         let private_key = self.private_key.clone();
         let duration_metric = self.duration_metric.clone();
+        let view = vid_disperse_request.view;
         let handle = self.tasks.spawn_blocking(move || {
             let measurement = duration_metric.map(Measurement::start);
             let result = handle_vid_disperse_request(
                 membership,
-                network,
+                move |recipient, message| network.unicast(view, recipient, message),
                 public_key,
                 private_key,
                 vid_disperse_request,
+                built,
             );
             finish_measurement(measurement);
             result
@@ -137,33 +194,43 @@ impl<T: NodeType> VidDisperser<T> {
     }
 }
 
-fn handle_vid_disperse_request<T: NodeType>(
+fn handle_vid_disperse_request<T, S>(
     epoch_membership_coordinator: EpochMembershipCoordinator<T>,
-    network: Sender<T>,
+    send: S,
     public_key: T::SignatureKey,
     private_key: <T::SignatureKey as SignatureKey>::PrivateKey,
     vid_disperse_request: VidDisperseRequest<T>,
-) -> Result<VidDisperseOutput, VidDisperseError> {
+    built: Option<BuiltDispersal<T>>,
+) -> Result<VidDisperseOutput, VidDisperseError>
+where
+    T: NodeType,
+    S: Fn(&T::SignatureKey, &Message<T, Validated>) -> Result<(), NetworkError> + Clone + Send,
+{
     let view = vid_disperse_request.view;
     let epoch = vid_disperse_request.epoch;
     let payload_commitment = vid_disperse_request.payload_commitment;
 
-    let params = VidDisperse2::<T>::disperse_params(
-        &vid_disperse_request.block,
-        &epoch_membership_coordinator,
-        Some(epoch),
-        &vid_disperse_request.metadata,
-    )
-    .map_err(VidDisperseError::Vid)?;
+    let dispersal = match built {
+        Some(built) => Dispersal::Built(built),
+        None => Dispersal::Encode(
+            VidDisperse2::<T>::disperse_params(
+                &vid_disperse_request.block,
+                &epoch_membership_coordinator,
+                Some(epoch),
+                &vid_disperse_request.metadata,
+            )
+            .map_err(VidDisperseError::Vid)?,
+        ),
+    };
 
     disperse_payload(
-        &params,
+        dispersal,
         view,
         epoch,
         payload_commitment,
         &public_key,
         &private_key,
-        move |recipient, message| network.unicast(view, recipient, message),
+        send,
     )?;
 
     Ok(VidDisperseOutput {
@@ -172,11 +239,12 @@ fn handle_vid_disperse_request<T: NodeType>(
     })
 }
 
-/// Erasure-codes the payload in `params` and hands every recipient's fragment of each bucket of
-/// namespaces to `send`, which the disperser points at the network. The `block_build` bench in
-/// espresso-types passes a `send` that only serializes; the spans time each step.
+/// Signs a block's dispersal and hands every recipient's fragment of each bucket of namespaces to
+/// `send`, which the disperser points at the network. A [`Dispersal::Encode`] is erasure-coded
+/// bucket by bucket first. The `block_build` bench in espresso-types passes a `send` that only
+/// serializes; the spans time each step.
 pub fn disperse_payload<T, S>(
-    params: &AvidmGf2DisperseParams<T>,
+    dispersal: Dispersal<T>,
     view: ViewNumber,
     epoch: EpochNumber,
     payload_commitment: VidCommitment2,
@@ -188,6 +256,11 @@ where
     T: NodeType,
     S: Fn(&T::SignatureKey, &Message<T, Validated>) -> Result<(), NetworkError> + Clone + Send,
 {
+    let (params, dispersals) = match dispersal {
+        Dispersal::Built(BuiltDispersal { params, dispersals }) => (params, Some(dispersals)),
+        Dispersal::Encode(params) => (params, None),
+    };
+
     let signature = debug_span!("sign")
         .in_scope(|| T::SignatureKey::sign(private_key, payload_commitment.as_ref()))
         .map_err(|err| VidDisperseError::Sign(err.into()))?;
@@ -197,25 +270,27 @@ where
     // goes out as a few balanced messages per recipient instead of one tiny
     // message each. Each bucket is one parallel unit and one message per
     // recipient.
-    let buckets: Vec<Vec<usize>> = {
+    let ns_buckets: Vec<Vec<usize>> = {
         // We want buckets to be at least 256 KiB, otherwise the per-message
         // overhead is too large. Larger payloads are divided by the number
         // of available threads to fully utilise rayon.
         let threshold = params.payload.len().div_ceil(*NUM_THREADS).max(256 * 1024);
         bucketize(&params.ns_table, threshold)
     };
+    let buckets: Vec<Bucket> = match dispersals {
+        Some(dispersals) => into_buckets(dispersals, &ns_buckets)
+            .into_iter()
+            .map(Bucket::Built)
+            .collect(),
+        None => ns_buckets.into_iter().map(Bucket::Encode).collect(),
+    };
 
-    buckets
-        .par_iter()
-        .try_for_each_with(send, |send, bucket| -> Result<(), VidDisperseError> {
-            let dispersals = debug_span!("ns_encode").in_scope(|| {
-                bucket
-                    .iter()
-                    .map(|&ns_index| disperse_namespace(params, ns_index))
-                    .collect::<Result<_, _>>()
-            })?;
+    buckets.into_par_iter().try_for_each_with(
+        send,
+        |send, bucket| -> Result<(), VidDisperseError> {
+            let dispersals = bucket.dispersals(&params)?;
             let bucket_fragments = debug_span!("fragments")
-                .in_scope(|| fragments(view, epoch, payload_commitment, params, dispersals));
+                .in_scope(|| fragments(view, epoch, payload_commitment, &params, dispersals));
             for fragment in bucket_fragments {
                 let recipient = fragment.recipient_key.clone();
                 let message = Message {
@@ -232,7 +307,55 @@ where
                 }
             }
             Ok(())
+        },
+    )
+}
+
+/// The namespace dispersals of one bucket, which go out as one fragment per recipient.
+enum Bucket {
+    /// Computed by the block builder.
+    Built(Vec<AvidmGf2NsDispersal>),
+    /// Still to encode, for these namespace indices.
+    Encode(Vec<usize>),
+}
+
+impl Bucket {
+    fn dispersals<T: NodeType>(
+        self,
+        params: &AvidmGf2DisperseParams<T>,
+    ) -> Result<Vec<AvidmGf2NsDispersal>, VidDisperseError> {
+        match self {
+            Self::Built(dispersals) => Ok(dispersals),
+            Self::Encode(ns_indices) => debug_span!("ns_encode").in_scope(|| {
+                ns_indices
+                    .into_iter()
+                    .map(|ns_index| disperse_namespace(params, ns_index))
+                    .collect()
+            }),
+        }
+    }
+}
+
+/// Moves each namespace's dispersal into its bucket. `dispersals` holds one per namespace, in
+/// namespace-table order, and `ns_buckets` partitions the namespace indices.
+fn into_buckets(
+    dispersals: Vec<AvidmGf2NsDispersal>,
+    ns_buckets: &[Vec<usize>],
+) -> Vec<Vec<AvidmGf2NsDispersal>> {
+    let mut dispersals: Vec<_> = dispersals.into_iter().map(Some).collect();
+    ns_buckets
+        .iter()
+        .map(|bucket| {
+            bucket
+                .iter()
+                .map(|&ns_index| {
+                    dispersals[ns_index]
+                        .take()
+                        .expect("buckets partition the namespaces")
+                })
+                .collect()
         })
+        .collect()
 }
 
 /// Erasure-codes the namespace at `ns_index` of the payload in `params`.
@@ -335,11 +458,42 @@ impl VidDisperseError {
 
 #[cfg(test)]
 mod tests {
-    use std::ops::Range;
+    use std::{
+        collections::{BTreeMap, BTreeSet},
+        mem,
+        ops::Range,
+        sync::{Arc, Mutex},
+    };
 
+    use alloy::primitives::U256;
+    use hotshot_example_types::{
+        block_types::{TestBlockPayload, TestMetadata},
+        node_stake::{TestNodeStakes, gen_node_lists},
+        node_types::TestTypes,
+    };
+    use hotshot_types::{
+        PeerConfig,
+        data::{
+            EpochNumber, VidCommitment, VidCommitment2, ViewNumber, vid_commitment,
+            vid_disperse::{
+                AvidmGf2DisperseParams, AvidmGf2DisperseShareFragment, vid_total_weight,
+            },
+        },
+        signature_key::BLSPubKey,
+        traits::signature_key::{SignatureKey, StakeTableEntryType},
+    };
     use quickcheck::{TestResult, quickcheck};
+    use versions::NEW_PROTOCOL_VERSION;
 
-    use super::bucketize;
+    use super::{
+        Bucket, BuiltDispersal, Dispersal, VidDisperseError, VidDisperseRequest, bucketize,
+        disperse_payload, fragments, handle_vid_disperse_request, into_buckets,
+    };
+    use crate::{
+        message::{ConsensusMessage, Message, MessageType, Validated},
+        network::NetworkError,
+        tests::common::utils::{mock_membership, ns_table},
+    };
 
     /// Build a contiguous namespace table from per-namespace byte lengths.
     /// Only the lengths matter to `bucketize`; the offsets are incidental.
@@ -406,5 +560,271 @@ mod tests {
                 bytes(&bucket[..bucket.len() - 1], &ns_table) < usize::from(threshold)
             }))
         }
+    }
+
+    /// Nodes with unequal stakes, so their VID weights differ.
+    fn stake_table() -> Vec<PeerConfig<TestTypes>> {
+        let stakes = (0..5).fold(TestNodeStakes::default(), |stakes, i| {
+            stakes.with_stake(i, U256::from(i + 1))
+        });
+        gen_node_lists(5, 0, &stakes).0
+    }
+
+    /// A payload with three namespaces of different sizes.
+    fn payload() -> (Vec<u8>, Vec<u8>) {
+        let payload = (0..6000).map(|i| (i % 251) as u8).collect();
+        (payload, ns_table(&[1000, 3000, 6000]))
+    }
+
+    #[test]
+    fn built_dispersal_commits_like_vid_commitment() {
+        let stake_table = stake_table();
+        // How the builder weighted the commitment before it took it from the dispersal.
+        let total_weight = vid_total_weight(stake_table.iter(), Some(EpochNumber::genesis()));
+        for ((payload, metadata), num_namespaces) in [(payload(), 3), ((vec![], ns_table(&[])), 1)]
+        {
+            let built =
+                BuiltDispersal::new(&stake_table, payload.clone().into(), &metadata).unwrap();
+            assert_eq!(built.dispersals.len(), num_namespaces);
+            assert_eq!(
+                VidCommitment::V2(built.payload_commitment().unwrap()),
+                vid_commitment(&payload, &metadata, total_weight, NEW_PROTOCOL_VERSION),
+            );
+        }
+    }
+
+    #[test]
+    fn built_fragments_equal_encoded_fragments() {
+        let (payload, metadata) = payload();
+        let built = BuiltDispersal::new(&stake_table(), payload.into(), &metadata).unwrap();
+        let commitment = built.payload_commitment().unwrap();
+        // The first two namespaces share a bucket.
+        let ns_buckets = bucketize(&built.params.ns_table, 2500);
+        assert_eq!(ns_buckets, vec![vec![0, 1], vec![2]]);
+        let BuiltDispersal { params, dispersals } = built;
+        let fragments = |dispersals| {
+            fragments(
+                ViewNumber::new(7),
+                EpochNumber::new(3),
+                commitment,
+                &params,
+                dispersals,
+            )
+        };
+        for (ns_bucket, built) in ns_buckets.iter().zip(into_buckets(dispersals, &ns_buckets)) {
+            let encoded = Bucket::Encode(ns_bucket.clone())
+                .dispersals(&params)
+                .unwrap();
+            assert_eq!(fragments(built), fragments(encoded));
+        }
+    }
+
+    /// A payload with three namespaces of 256 KiB, so each fills a bucket of its own on a machine
+    /// with at least three cores, and fewer cores coalesce them.
+    fn large_payload() -> (Vec<u8>, Vec<u8>) {
+        const NS: u32 = 256 * 1024;
+        let payload = (0..3 * NS).map(|i| (i % 251) as u8).collect();
+        (payload, ns_table(&[NS, 2 * NS, 3 * NS]))
+    }
+
+    /// The built dispersal of `payload` to [`stake_table`], with its commitment.
+    fn built_dispersal(
+        (payload, metadata): (Vec<u8>, Vec<u8>),
+    ) -> (BuiltDispersal<TestTypes>, VidCommitment2) {
+        let built = BuiltDispersal::new(&stake_table(), payload.into(), &metadata).unwrap();
+        let commitment = built.payload_commitment().unwrap();
+        (built, commitment)
+    }
+
+    /// Runs [`disperse_payload`] with a `send` that checks each message is the leader's signed
+    /// fragment for its recipient, records the fragment, and returns `reply()`.
+    fn disperse_recording<R>(
+        dispersal: Dispersal<TestTypes>,
+        commitment: VidCommitment2,
+        reply: R,
+    ) -> (
+        Result<(), VidDisperseError>,
+        Vec<AvidmGf2DisperseShareFragment<TestTypes>>,
+    )
+    where
+        R: Fn() -> Result<(), NetworkError> + Clone + Send,
+    {
+        let (leader, private_key) = BLSPubKey::generated_from_seed_indexed([1; 32], 0);
+        let sent = Arc::new(Mutex::new(Vec::new()));
+        let send = {
+            let (leader, sent) = (leader, Arc::clone(&sent));
+            move |recipient: &BLSPubKey, message: &Message<TestTypes, Validated>| {
+                let MessageType::Consensus(ConsensusMessage::VidShareFragment(fragment)) =
+                    &message.message_type
+                else {
+                    panic!("the disperser sends only VID share fragments");
+                };
+                assert_eq!(message.sender, leader);
+                assert!(leader.validate(&fragment.signature, commitment.as_ref()));
+                assert_eq!(&fragment.data.recipient_key, recipient);
+                sent.lock().unwrap().push(fragment.data.clone());
+                reply()
+            }
+        };
+        let result = disperse_payload(
+            dispersal,
+            ViewNumber::new(7),
+            EpochNumber::new(3),
+            commitment,
+            &leader,
+            &private_key,
+            send,
+        );
+        let sent = mem::take(&mut *sent.lock().unwrap());
+        (result, sent)
+    }
+
+    /// Each recipient's fragments, ordered by their first namespace.
+    fn by_recipient(
+        sent: Vec<AvidmGf2DisperseShareFragment<TestTypes>>,
+    ) -> BTreeMap<BLSPubKey, Vec<AvidmGf2DisperseShareFragment<TestTypes>>> {
+        let mut by_recipient: BTreeMap<_, Vec<_>> = BTreeMap::new();
+        for fragment in sent {
+            by_recipient
+                .entry(fragment.recipient_key)
+                .or_default()
+                .push(fragment);
+        }
+        for fragments in by_recipient.values_mut() {
+            fragments.sort_by_key(|fragment| fragment.namespaces[0].ns_index);
+        }
+        by_recipient
+    }
+
+    /// The namespace indices each fragment carries: one list per bucket.
+    fn buckets(fragments: &[AvidmGf2DisperseShareFragment<TestTypes>]) -> Vec<Vec<usize>> {
+        fragments
+            .iter()
+            .map(|fragment| {
+                fragment
+                    .namespaces
+                    .iter()
+                    .map(|piece| piece.ns_index)
+                    .collect()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn disperse_payload_sends_one_fragment_per_recipient_and_bucket() {
+        let (payload, metadata) = large_payload();
+        let params =
+            AvidmGf2DisperseParams::new(&stake_table(), payload.clone().into(), &metadata).unwrap();
+        let (built, commitment) = built_dispersal((payload, metadata));
+
+        let (result, sent) = disperse_recording(Dispersal::Built(built), commitment, || Ok(()));
+        result.unwrap();
+        let sent = by_recipient(sent);
+        let (result, encoded) =
+            disperse_recording(Dispersal::Encode(params), commitment, || Ok(()));
+        result.unwrap();
+        assert_eq!(
+            sent,
+            by_recipient(encoded),
+            "a built dispersal sends what encoding while sending does"
+        );
+
+        let recipients: BTreeSet<_> = stake_table()
+            .iter()
+            .map(|peer| peer.stake_table_entry.public_key())
+            .collect();
+        assert_eq!(sent.keys().cloned().collect::<BTreeSet<_>>(), recipients);
+        let first = buckets(sent.values().next().unwrap());
+        assert!(
+            first.concat().into_iter().eq(0..3),
+            "the buckets hold every namespace once"
+        );
+        for fragments in sent.values() {
+            assert_eq!(
+                buckets(fragments),
+                first,
+                "every recipient gets each bucket once"
+            );
+            assert!(
+                fragments
+                    .iter()
+                    .all(|fragment| fragment.num_namespaces == 3)
+            );
+        }
+    }
+
+    /// The small payload fits one bucket, so nothing else is sent after the first error.
+    #[test]
+    fn disperse_payload_stops_at_a_critical_network_error() {
+        let (built, commitment) = built_dispersal(payload());
+        let (result, sent) = disperse_recording(Dispersal::Built(built), commitment, || {
+            Err(NetworkError::Cliquenet(
+                cliquenet::NetworkError::ChannelClosed,
+            ))
+        });
+        assert!(matches!(result, Err(VidDisperseError::Net(err)) if err.is_critical()));
+        assert_eq!(sent.len(), 1);
+    }
+
+    #[test]
+    fn disperse_payload_goes_on_after_a_non_critical_network_error() {
+        let (built, commitment) = built_dispersal(payload());
+        let (result, sent) = disperse_recording(Dispersal::Built(built), commitment, || {
+            Err(NetworkError::Cliquenet(cliquenet::NetworkError::Timeout))
+        });
+        result.unwrap();
+        assert_eq!(
+            sent.len(),
+            stake_table().len(),
+            "every recipient is still sent to"
+        );
+    }
+
+    /// The request names an epoch before the first, which has no stake table: encoding the
+    /// payload fails, so only sending the built dispersal can succeed.
+    #[tokio::test]
+    async fn a_disperse_request_sends_its_built_dispersal() {
+        let (leader, private_key) = BLSPubKey::generated_from_seed_indexed([1; 32], 0);
+        let (built, commitment) = built_dispersal(payload());
+        let request = VidDisperseRequest {
+            view: ViewNumber::new(7),
+            epoch: EpochNumber::new(0),
+            block: TestBlockPayload {
+                transactions: vec![],
+            },
+            metadata: TestMetadata {
+                num_transactions: 0,
+            },
+            payload_commitment: commitment,
+        };
+        let recipients = Arc::new(Mutex::new(BTreeSet::new()));
+        let send = {
+            let recipients = Arc::clone(&recipients);
+            move |recipient: &BLSPubKey, _: &Message<TestTypes, Validated>| {
+                recipients.lock().unwrap().insert(*recipient);
+                Ok(())
+            }
+        };
+        let disperse = |built| {
+            handle_vid_disperse_request(
+                mock_membership(),
+                send.clone(),
+                leader,
+                private_key.clone(),
+                request.clone(),
+                built,
+            )
+        };
+
+        assert!(
+            disperse(None).is_err(),
+            "encoding needs the epoch's stake table"
+        );
+        disperse(Some(built)).unwrap();
+        let expected: BTreeSet<_> = stake_table()
+            .iter()
+            .map(|peer| peer.stake_table_entry.public_key())
+            .collect();
+        assert_eq!(*recipients.lock().unwrap(), expected);
     }
 }
