@@ -40,7 +40,14 @@ Goal: find every real defect in the PR. Recall over precision.
      claim, before they are stored, cached, forwarded, or used to pick a branch. Check thresholds, empty signer sets,
      and view or epoch 0. A certificate's epoch may differ from its data's in two valid cases: no epoch before epochs
      activate, and the next epoch's dual-signed QC on the last leaf of an epoch. Any other mismatch: candidate.
+   - Every field used from signed or committed data is inside what the signature or commitment covers. A version tag,
+     length, key or metadata field beside it is attacker controlled: candidate if it picks a branch, sizes a buffer, or
+     keys a cache.
+   - Data fetched from one of several peers is verified before the fetch returns, so a bad peer is retried past. Checked
+     only after the fetch succeeds: candidate.
+   - L1 events: any registrant chooses the keys and values. Duplicate, zero, or colliding keys handled.
    - Deserialization without a size or depth limit. Allocations, loops, maps, channels or retries sized by the sender.
+     Requests cheap to send and expensive to serve, with no bound or cost to the sender.
    - SQL text containing values from outside the process instead of bind parameters.
    - A new route or gRPC method that writes or exposes internal state without the gate its siblings have.
    - `contracts/`: reentrancy, missing access modifiers, unchecked external calls, signature replay across chains or
