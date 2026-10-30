@@ -314,12 +314,10 @@ where
         // the request-response protocol will now retroactively be used anywhere we passed in the original struct (e.g. in consensus
         // itself)
         state_catchup.add_provider(Arc::new(request_response_protocol.clone()));
-        if seed_requests
-            .set(request_response_protocol.clone())
-            .is_err()
-        {
-            tracing::warn!("seed request-response protocol already set");
-        }
+        assert!(
+            seed_requests.set(request_response_protocol.clone()).is_ok(),
+            "the seed's request-response protocol is set once"
+        );
 
         // Create the external event handler
         let mut tasks = TaskList::default();

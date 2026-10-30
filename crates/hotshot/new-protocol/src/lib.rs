@@ -13,8 +13,6 @@ pub mod outbox;
 pub mod serve;
 pub mod state;
 pub mod storage;
-#[cfg(any(test, feature = "testing"))]
-pub mod testing;
 pub mod upgrade;
 pub mod utils;
 pub mod vid;

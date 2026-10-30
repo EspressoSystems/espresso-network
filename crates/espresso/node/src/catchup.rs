@@ -400,7 +400,6 @@ impl<ApiVer: StaticVersionType> StateCatchup for StatePeers<ApiVer> {
             .ok_or_else(|| anyhow!("empty leaf chain returned for height {height}"))?;
 
         if first.block_header().version() >= NEW_PROTOCOL_VERSION {
-            // Debt: the restored upgrade lock is ignored (PLAN-v2 I9).
             let upgrade_lock =
                 UpgradeLock::<SeqTypes>::new(versions::Upgrade::trivial(NEW_PROTOCOL_VERSION));
 

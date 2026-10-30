@@ -1949,11 +1949,6 @@ impl Fetcher {
         Ok(committee_peer_configs(set.active_validators()))
     }
 
-    /// The chain config this node holds: the genesis one, or the newest adopted from an epoch root.
-    pub async fn known_chain_config(&self) -> ChainConfig {
-        *self.chain_config.lock().await
-    }
-
     /// Retrieve and verify `ChainConfig`
     // TODO move to appropriate object (Header?)
     pub(crate) async fn get_chain_config(&self, header: &Header) -> anyhow::Result<ChainConfig> {

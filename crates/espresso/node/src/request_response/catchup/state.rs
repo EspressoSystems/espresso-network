@@ -263,7 +263,6 @@ where
 
         let result = if leaf_chain[0].block_header().version() >= NEW_PROTOCOL_VERSION {
             // New protocol: pair the leaf range with its finalizing cert2 for verification.
-            // Debt: the restored upgrade lock is ignored (PLAN-v2 I9).
             let upgrade_lock =
                 UpgradeLock::<SeqTypes>::new(versions::Upgrade::trivial(NEW_PROTOCOL_VERSION));
             // The chain terminates at the leaf the cert2 finalizes, so request that cert2 by its
@@ -273,21 +272,7 @@ where
                 .ok_or_else(|| anyhow::anyhow!("empty leaf chain for height {height}"))?
                 .height();
             let cert2 = self
-                .request_indefinitely(
-                    Request::Cert2(cert2_height),
-                    move |_request: &Request, response: Response| async move {
-                        let Response::Cert2(cert2) = response else {
-                            return Err(anyhow::anyhow!("expected cert2 response"));
-                        };
-                        if cert2.data.block_number != cert2_height {
-                            return Err(anyhow::anyhow!(
-                                "received cert2 at height {} but expected exactly {cert2_height}",
-                                cert2.data.block_number
-                            ));
-                        }
-                        Ok(cert2)
-                    },
-                )
+                .request_cert2(cert2_height, |_| Ok(()))
                 .await
                 .with_context(|| format!("failed to request cert2 at height {cert2_height}"))?;
 

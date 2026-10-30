@@ -14,8 +14,8 @@ mod state;
 mod transaction;
 
 pub use committee::{
-    EpochCommittees, EpochCommitteesError, EpochRootInstallError, EpochSnapshot,
-    RECENT_STAKE_TABLES_LIMIT, fetch_and_calculate_block_reward,
+    EpochCommittees, EpochCommitteesError, EpochSnapshot, RECENT_STAKE_TABLES_LIMIT,
+    fetch_and_calculate_block_reward,
 };
 pub use fee_info::{FeeError, retain_accounts};
 #[cfg(any(test, feature = "testing"))]

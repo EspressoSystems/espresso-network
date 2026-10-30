@@ -26,10 +26,10 @@ pub use impls::reward::{
 #[cfg(any(test, feature = "testing"))]
 pub use impls::testing;
 pub use impls::{
-    BuilderValidationError, EpochCommittees, EpochCommitteesError, EpochRootInstallError,
-    EpochSnapshot, FeeError, LcContractVotingStakeTable, ProposalValidationError,
-    RECENT_STAKE_TABLES_LIMIT, StakeTableCommitment, StateValidationError, ValidatorSet,
-    get_l1_deposits, retain_accounts, validators_from_l1_events,
+    BuilderValidationError, EpochCommittees, EpochCommitteesError, EpochSnapshot, FeeError,
+    LcContractVotingStakeTable, ProposalValidationError, RECENT_STAKE_TABLES_LIMIT,
+    StateValidationError, ValidatorSet, get_l1_deposits, retain_accounts,
+    validators_from_l1_events,
 };
 pub use nsproof::*;
 pub use txproof::*;

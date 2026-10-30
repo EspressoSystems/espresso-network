@@ -1,6 +1,4 @@
-use std::collections::HashMap;
-
-use anyhow::{Context, anyhow, ensure};
+use anyhow::{anyhow, ensure};
 use committable::Committable;
 use hotshot_types::{
     data::{EpochNumber, Leaf2, ViewNumber},
@@ -14,61 +12,23 @@ use hotshot_types::{
 
 use crate::message::Certificate2;
 
-/// A leaf range and the cert2 finalizing its newest leaf.
-#[derive(Clone, Debug)]
-pub struct CertifiedLeafChain<T: NodeType> {
-    /// Leaves in any order, possibly with extras; ancestors of the cert2 leaf are found by parent
-    /// links.
-    pub leaves: Vec<Leaf2<T>>,
-    /// Certificate finalizing the newest leaf.
-    pub cert2: Certificate2<T>,
-}
-
-impl<T: NodeType> CertifiedLeafChain<T> {
-    /// Leaves from the cert2 leaf down to `lowest_height`, ascending. `cert2` is checked under
-    /// `quorum` with `upgrade_lock`; a genesis-view cert2 is rejected. The cert2 leaf is the one
-    /// `cert2` commits to, so extra leaves (even of a higher view) are ignored; each step down
-    /// follows the parent commitment and must drop one height. Justify QCs are not checked: cert2
-    /// plus the hash links authenticate the ancestors. Pure.
-    pub fn verify_ancestors(
-        self,
-        lowest_height: u64,
-        epoch_height: u64,
-        upgrade_lock: &UpgradeLock<T>,
-        quorum: &HSStakeTable<T>,
-    ) -> anyhow::Result<Vec<Leaf2<T>>> {
-        let Self { leaves, cert2 } = self;
-        let by_commit: HashMap<_, _> = leaves.iter().map(|leaf| (leaf.commit(), leaf)).collect();
-        let newest = by_commit
-            .get(&cert2.data.leaf_commit)
-            .context("the leaves do not contain the leaf cert2 commits to")?;
-        check_cert2_finalizes(&cert2, newest, epoch_height)?;
-        let entries = StakeTableEntries::<T>::from(quorum.clone()).0;
-        cert2.is_valid_cert(
-            &entries,
-            supermajority_threshold(quorum.total_stakes()),
-            upgrade_lock,
-        )?;
-
-        let mut path = vec![(*newest).clone()];
-        while path.last().map(Leaf2::height) > Some(lowest_height) {
-            let child = path.last().expect("path starts with the newest leaf");
-            let parent = by_commit
-                .get(&child.parent_commitment())
-                .with_context(|| format!("no parent of the leaf at height {}", child.height()))?;
-            ensure!(
-                parent.height().checked_add(1) == Some(child.height()),
-                "leaf heights do not chain"
-            );
-            path.push((*parent).clone());
-        }
-        ensure!(
-            path.last().map(Leaf2::height) == Some(lowest_height),
-            "height {lowest_height} is above the cert2 leaf or skipped"
-        );
-        path.reverse();
-        Ok(path)
-    }
+/// Checks `cert2` finalizes `newest` and is signed by `quorum`; a genesis-view cert2 is rejected.
+/// The ancestors of `newest` are then authenticated by their parent commitments.
+pub fn verify_cert2<T: NodeType>(
+    cert2: &Certificate2<T>,
+    newest: &Leaf2<T>,
+    epoch_height: u64,
+    upgrade_lock: &UpgradeLock<T>,
+    quorum: &HSStakeTable<T>,
+) -> anyhow::Result<()> {
+    check_cert2_finalizes(cert2, newest, epoch_height)?;
+    let entries = StakeTableEntries::<T>::from(quorum.clone()).0;
+    cert2.is_valid_cert(
+        &entries,
+        supermajority_threshold(quorum.total_stakes()),
+        upgrade_lock,
+    )?;
+    Ok(())
 }
 
 /// Checks that `cert2` is not of the genesis view and finalizes `newest` with a consistent
@@ -673,5 +633,66 @@ mod test {
             err.to_string().contains("no stake table available"),
             "{err:#}"
         );
+    }
+
+    fn table(quorum: &Quorum) -> HSStakeTable<TestTypes> {
+        HSStakeTable::from_iter(quorum.1.iter())
+    }
+
+    #[test]
+    fn verify_cert2_ok() {
+        let (quorum1, quorum2) = (quorum(0..5), quorum(5..10));
+        let lock = UpgradeLock::<TestTypes>::new(Upgrade::trivial(NEW_PROTOCOL_VERSION));
+        let (chain, cert2) = boundary_cert2_chain(1, &quorum1, &quorum2, &lock);
+
+        verify_cert2(&cert2, &chain[1], EPOCH_HEIGHT, &lock, &table(&quorum2)).unwrap();
+    }
+
+    #[test]
+    fn verify_cert2_wrong_quorum_fails() {
+        let (quorum1, quorum2) = (quorum(0..5), quorum(5..10));
+        let lock = UpgradeLock::<TestTypes>::new(Upgrade::trivial(NEW_PROTOCOL_VERSION));
+        let (chain, cert2) = boundary_cert2_chain(1, &quorum1, &quorum2, &lock);
+
+        verify_cert2(&cert2, &chain[1], EPOCH_HEIGHT, &lock, &table(&quorum1)).unwrap_err();
+    }
+
+    #[test]
+    fn verify_cert2_of_another_leaf_fails() {
+        let (quorum1, quorum2) = (quorum(0..5), quorum(5..10));
+        let lock = UpgradeLock::<TestTypes>::new(Upgrade::trivial(NEW_PROTOCOL_VERSION));
+        let (chain, cert2) = boundary_cert2_chain(1, &quorum1, &quorum2, &lock);
+
+        verify_cert2(&cert2, &chain[0], EPOCH_HEIGHT, &lock, &table(&quorum2)).unwrap_err();
+    }
+
+    #[test]
+    fn verify_cert2_genesis_view_fails() {
+        let quorum = quorum(0..5);
+        let lock = UpgradeLock::<TestTypes>::new(Upgrade::trivial(NEW_PROTOCOL_VERSION));
+        let qc = signed_qc(
+            QuorumData2 {
+                leaf_commit: Commitment::from_raw([9; 32]),
+                epoch: Some(EpochNumber::new(1)),
+                block_number: Some(4),
+            },
+            0,
+            &quorum,
+            &lock,
+        );
+        let leaf = make_leaf(5, 0, 1, qc, NEW_PROTOCOL_VERSION);
+        let cert2 = signed_cert2(
+            Vote2Data {
+                leaf_commit: Committable::commit(&leaf),
+                epoch: EpochNumber::new(1),
+                block_number: 5,
+            },
+            0,
+            &quorum,
+            &lock,
+        );
+
+        let err = verify_cert2(&cert2, &leaf, EPOCH_HEIGHT, &lock, &table(&quorum)).unwrap_err();
+        assert!(err.to_string().contains("genesis view"), "{err:#}");
     }
 }

@@ -60,38 +60,18 @@ type Snapshot<T> = <<T as NodeType>::Membership as Membership<T>>::Snapshot;
 type SnapshotStakeTableHash<T> = <Snapshot<T> as MembershipSnapshot<T>>::StakeTableHash;
 
 /// Seeds `catchup(target)` from the LC contract when the held pair `(start-1, start)` is more than
-/// one epoch below `target`. Called with `(target, start, coordinator)`. Returns the new walk
-/// start, or `NotNeeded`. An error ends the catchup attempt, without a walk from genesis.
+/// one epoch below `target`. Called with `(target, start, coordinator)`. Returns the walk start:
+/// `start`, or higher once tables through it are installed. An error ends the catchup attempt,
+/// without a walk from genesis.
 pub type LcContractSeedFn<TYPES> = Arc<
     dyn Fn(
             EpochNumber,
             EpochNumber,
             EpochMembershipCoordinator<TYPES>,
-        ) -> BoxFuture<'static, anyhow::Result<LcContractSeedOutcome>>
+        ) -> BoxFuture<'static, anyhow::Result<EpochNumber>>
         + Send
         + Sync,
 >;
-
-/// Result of a seed attempt.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum LcContractSeedOutcome {
-    /// The LC contract epoch is at most `start + 1`; the walk runs unchanged, as a restart with
-    /// recent storage does.
-    NotNeeded,
-    /// Tables through `start` and `start - 1` are installed; the walk continues from `start + 1`.
-    Seeded { start: EpochNumber },
-}
-
-/// The catchup target is below the LC contract epoch: the epochs between the held tables and the
-/// LC contract epoch are not seeded, so the attempt fails fast instead of walking from them.
-#[derive(Clone, Copy, Debug, thiserror::Error)]
-#[error("catchup target {target} is below the LC contract epoch {voting_epoch}")]
-pub struct TargetBelowLcContractEpoch {
-    /// The catchup target.
-    pub target: EpochNumber,
-    /// `E'`: the epoch of the LC contract's voting stake table.
-    pub voting_epoch: EpochNumber,
-}
 
 /// Struct to Coordinate membership catchup
 pub struct EpochMembershipCoordinator<TYPES: NodeType> {
@@ -164,7 +144,8 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
         self
     }
 
-    /// Override the bound on one seed. Mostly for tests.
+    /// Override the bound on one seed. For tests.
+    #[cfg(any(test, feature = "testing"))]
     pub fn with_seed_timeout(mut self, timeout: Duration) -> Self {
         self.seed_timeout = timeout;
         self
@@ -176,11 +157,12 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
         self
     }
 
-    /// Sets the hook once; all clones share it. Later calls are ignored with a warn.
+    /// Sets the hook once; all clones share it.
     pub fn set_lc_contract_seed(&self, f: LcContractSeedFn<TYPES>) {
-        if self.lc_contract_seed.set(f).is_err() {
-            warn!("lc contract seed already set; ignoring");
-        }
+        assert!(
+            self.lc_contract_seed.set(f).is_ok(),
+            "lc contract seed set twice"
+        );
     }
 
     /// Get a reference to the membership
@@ -401,10 +383,6 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
     /// costs one fetch attempt at the first gap rather than a probe of every
     /// earlier epoch.
     ///
-    /// When the held pair is more than one epoch below `epoch` (`start + 1 < epoch`) and an
-    /// `LcContractSeedFn` is set, it runs after the pair search: `Seeded { start }` moves the walk
-    /// start, `NotNeeded` leaves it, an error ends the attempt without a walk from genesis.
-    ///
     /// Concurrent catchups walk the same epochs and share one attempt per
     /// epoch, so whichever reaches an epoch first fetches it while the others
     /// wait for its result. Every walk awaits attempts in increasing epoch
@@ -480,29 +458,17 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
         Ok(start)
     }
 
-    /// Runs `seed` under the seed timeout and returns the walk start: the seeded start, or `start`
-    /// when the seed was not needed. A failed or timed-out seed ends the catchup attempt.
+    /// Runs `seed` under the seed timeout and returns the walk start.
     async fn seed_from_lc_contract(
         &self,
         seed: &LcContractSeedFn<TYPES>,
         epoch: EpochNumber,
         start: EpochNumber,
     ) -> Result<EpochNumber> {
-        let result = timeout(self.seed_timeout, seed(epoch, start, self.clone()))
+        timeout(self.seed_timeout, seed(epoch, start, self.clone()))
             .await
-            .unwrap_or_else(|_| Err(anyhow!("exceeded {:?}", self.seed_timeout)));
-        let outcome = result.map_err(|err| {
-            if err.is::<TargetBelowLcContractEpoch>() {
-                debug!(target: "announce::catchup", %epoch, %err, "lc contract seed skipped");
-            } else {
-                warn!(target: "announce::catchup", %epoch, %err, "lc contract seed failed");
-            }
-            anytrace::error!("lc contract seed for epoch {epoch} failed: {err:#}")
-        })?;
-        Ok(match outcome {
-            LcContractSeedOutcome::NotNeeded => start,
-            LcContractSeedOutcome::Seeded { start } => start,
-        })
+            .unwrap_or_else(|_| Err(anyhow!("exceeded {:?}", self.seed_timeout)))
+            .map_err(|err| anytrace::error!("lc contract seed for epoch {epoch} failed: {err:#}"))
     }
 
     /// The membership for `epoch`, if its stake table is in memory.

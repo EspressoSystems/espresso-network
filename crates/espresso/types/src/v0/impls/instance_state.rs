@@ -217,42 +217,29 @@ impl NodeState {
             .call()
             .await
             .context("failed to read votingStakeTableState")?;
-        let first_epoch = self
-            .coordinator
-            .membership()
-            .first_epoch()
-            .context("first epoch not seeded; genesis stake table missing")?;
         Ok(LcContractVotingStakeTable {
             l1_block,
-            finalized_block_height,
             voting_epoch: LcContractVotingStakeTable::voting_epoch(
                 finalized_block_height,
                 *self.coordinator.epoch_height(),
-                first_epoch,
             ),
             commitment: StakeTableStateSol::from(voting_stake_table_state).into(),
         })
     }
 
     /// `ST(now)`: the active set from stake-table events up to the L1 finalized block, at
-    /// `version`, in `committee_peer_configs` order, with connect info. Empty without a stake
-    /// table contract.
+    /// `version`, in `committee_peer_configs` order, with connect info.
     #[cfg(feature = "node")]
     pub async fn l1_finalized_peers(
         &self,
         version: Version,
     ) -> anyhow::Result<IndexMap<PubKey, PeerConfig<SeqTypes>>> {
-        let fetcher = self.coordinator.membership().fetcher();
-        if fetcher
-            .known_chain_config()
-            .await
-            .stake_table_contract
-            .is_none()
-        {
-            return Ok(IndexMap::new());
-        }
         let l1_block = self.l1_finalized_block().await?;
-        fetcher.active_peers_at(l1_block, version).await
+        self.coordinator
+            .membership()
+            .fetcher()
+            .active_peers_at(l1_block, version)
+            .await
     }
 
     /// The oldest HotShot block height the light client contract still holds a commitment for, or

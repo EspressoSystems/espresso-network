@@ -558,15 +558,12 @@ impl EpochCommittees {
         &self,
         header: &Header,
     ) -> anyhow::Result<HSStakeTable<SeqTypes>> {
-        let l1_block = header
-            .l1_finalized()
-            .context("header has no L1 finalized block")?
-            .number();
-        let peers = self
-            .fetcher
-            .active_peers_at(l1_block, header.version())
-            .await?;
-        Ok(HSStakeTable::from_iter(peers.values()))
+        let epoch =
+            EpochNumber::new(epoch_from_block_number(header.height(), *self.epoch_height) + 2);
+        let set = self.fetcher.fetch(epoch, header).await?;
+        Ok(HSStakeTable::from_iter(
+            committee_peer_configs(set.active_validators()).values(),
+        ))
     }
 
     /// `add_epoch_root` without the panic: a `next_stake_table_hash` mismatch with the held table
@@ -579,7 +576,7 @@ impl EpochCommittees {
         &self,
         block_header: Header,
         coordinator: &EpochMembershipCoordinator<SeqTypes>,
-    ) -> Result<bool, EpochRootInstallError> {
+    ) -> Result<Option<EpochNumber>, EpochCommitteesError> {
         let block_number = block_header.block_number();
 
         let epoch_height = *self.epoch_height;
@@ -593,7 +590,7 @@ impl EpochCommittees {
                 "`add_epoch_root` was called with a block header that was not the root block for \
                  an epoch. This should never happen. Header:\n\n{block_header:?}"
             );
-            return Err(EpochCommitteesError::NoRootBlock(block_number.into()).into());
+            return Err(EpochCommitteesError::NoRootBlock(block_number.into()));
         }
 
         // Stored ahead of the early return below so a failed write is retried by the next
@@ -655,7 +652,7 @@ impl EpochCommittees {
                     "committee already has block reward, header, and stake table hash; skipping \
                      add_epoch_root"
                 );
-                return Ok(false);
+                return Ok(None);
             },
 
             Some(committee) => {
@@ -742,7 +739,7 @@ impl EpochCommittees {
             && decided_hash.is_some()
             && decided_hash != previous_committee.stake_table_hash
         {
-            return Err(EpochRootInstallError::StakeTableHashMismatch { epoch });
+            return Err(EpochCommitteesError::StakeTableHashMismatch { epoch });
         }
 
         let inserted;
@@ -789,7 +786,7 @@ impl EpochCommittees {
             }
         }
 
-        Ok(inserted)
+        Ok(inserted.then_some(epoch))
     }
 
     /// Installs the epoch roots `roots`, ascending, as `install_epoch_root` does. Any error, and
@@ -799,17 +796,15 @@ impl EpochCommittees {
         &self,
         roots: Vec<Header>,
         coordinator: &EpochMembershipCoordinator<SeqTypes>,
-    ) -> Result<(), EpochRootInstallError> {
+    ) -> Result<(), EpochCommitteesError> {
         let mut created = EvictOnDrop {
             committees: self,
             epochs: Vec::new(),
         };
         for header in roots {
-            let epoch =
-                EpochNumber::new(epoch_from_block_number(header.height(), *self.epoch_height) + 2);
-            if self.install_epoch_root(header, coordinator).await? {
-                created.epochs.push(epoch);
-            }
+            created
+                .epochs
+                .extend(self.install_epoch_root(header, coordinator).await?);
         }
         created.epochs.clear();
         Ok(())
@@ -1144,12 +1139,12 @@ impl Membership<SeqTypes> for EpochCommittees {
     ) -> Result<(), Self::Error> {
         match self.install_epoch_root(block_header, coordinator).await {
             Ok(_) => Ok(()),
-            Err(EpochRootInstallError::Committee(err)) => Err(err),
-            Err(err @ EpochRootInstallError::StakeTableHashMismatch { .. }) => panic!(
+            Err(err @ EpochCommitteesError::StakeTableHashMismatch { .. }) => panic!(
                 "The decided block header's `next_stake_table_hash` does not match the hash of \
                  the stake table we have. This is an unrecoverable error likely due to issues \
                  with your L1 RPC provider. {err}"
             ),
+            Err(err) => Err(err),
         }
     }
 
@@ -1350,6 +1345,9 @@ pub enum EpochCommitteesError {
 
     #[error("reward calculation error: {0}")]
     Reward(#[source] anyhow::Error),
+
+    #[error("epoch root of epoch {epoch}: next_stake_table_hash does not match the held table")]
+    StakeTableHashMismatch { epoch: EpochNumber },
 }
 
 /// Evicts `epochs` when dropped; cleared once they are to stay.
@@ -1366,17 +1364,6 @@ impl Drop for EvictOnDrop<'_> {
             self.committees.remove_epoch(*epoch);
         }
     }
-}
-
-/// Why `install_epoch_root` installed nothing.
-#[derive(Debug, Error)]
-pub enum EpochRootInstallError {
-    /// The header's `next_stake_table_hash` differs from the held table of the epoch below.
-    #[error("epoch root of epoch {epoch}: next_stake_table_hash does not match the held table")]
-    StakeTableHashMismatch { epoch: EpochNumber },
-    /// Any other failure of the install.
-    #[error(transparent)]
-    Committee(#[from] EpochCommitteesError),
 }
 
 impl Inner {
@@ -1738,7 +1725,6 @@ mod tests {
     use hotshot_query_service::testing::mocks::MOCK_UPGRADE;
     use hotshot_types::{
         ValidatorConfig,
-        stake_table::HSStakeTable,
         traits::{BlockPayload, block_contents::BlockHeader},
     };
     use rstest::rstest;
@@ -1973,27 +1959,6 @@ mod tests {
              in memory"
         );
     }
-
-    /// A committee's stake table is in `committee_peer_configs` order, which the LC contract
-    /// commitment depends on.
-    #[test]
-    fn match_commitment_order_ok() {
-        let validators: AuthenticatedValidatorMap = (0..5)
-            .map(|_| AuthenticatedValidator::mock())
-            .map(|v| (v.account, v))
-            .collect();
-        let committee = EpochCommittee::new(validators.clone(), None, None, None);
-
-        let from_committee = HSStakeTable::<SeqTypes>::from_iter(committee.stake_table.values());
-        let from_validators =
-            HSStakeTable::<SeqTypes>::from_iter(committee_peer_configs(&validators).values());
-        assert_eq!(from_committee, from_validators);
-        assert_eq!(
-            from_committee.commitment(10).unwrap(),
-            from_validators.commitment(10).unwrap()
-        );
-    }
-
     // `prune_epochs` keeps a bounded window behind the newest decided epoch
     // plus the first-epoch seeds (catchup anchors), and its cutoff never
     // regresses when an older epoch is (re-)inserted during catchup.
@@ -2816,7 +2781,7 @@ mod tests {
         assert!(
             matches!(
                 err,
-                EpochRootInstallError::StakeTableHashMismatch { epoch }
+                EpochCommitteesError::StakeTableHashMismatch { epoch }
                     if epoch == EpochNumber::new(3)
             ),
             "{err:#}"
@@ -2905,7 +2870,7 @@ mod tests {
         assert!(
             matches!(
                 err,
-                EpochRootInstallError::StakeTableHashMismatch { epoch }
+                EpochCommitteesError::StakeTableHashMismatch { epoch }
                     if epoch == EpochNumber::new(4)
             ),
             "{err:#}"

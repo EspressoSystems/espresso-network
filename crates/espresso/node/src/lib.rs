@@ -867,8 +867,8 @@ pub mod testing {
         network_config::light_client_genesis_from_stake_table,
     };
     use espresso_types::{
-        ChainConfig, FeeAccount, L1Client, NetworkConfig, PubKey, SeqTypes, StakeTableCommitment,
-        Transaction, Upgrade, UpgradeMap, UpgradeMode,
+        ChainConfig, FeeAccount, L1Client, NetworkConfig, PubKey, SeqTypes, Transaction, Upgrade,
+        UpgradeMap, UpgradeMode,
         eth_signature_key::EthKeyPair,
         v0::traits::{EventConsumer, NullEventConsumer, PersistenceOptions, StateCatchup},
     };
@@ -884,7 +884,7 @@ pub mod testing {
         HotShotConfig, PeerConfig, PeerConnectInfo,
         data::EpochNumber,
         event::LeafInfo,
-        light_client::StateKeyPair,
+        light_client::{StakeTableState as StakeTableCommitment, StateKeyPair},
         new_protocol::CoordinatorEvent,
         traits::{
             BlockPayload, EncodeBytes, block_contents::BlockHeader, metrics::NoMetrics,

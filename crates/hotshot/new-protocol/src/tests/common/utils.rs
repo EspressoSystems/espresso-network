@@ -1586,7 +1586,7 @@ where
     CERT: hotshot_types::vote::Certificate<TestTypes, DATA, Voteable = DATA>,
 {
     use bitvec::bitvec;
-    use hotshot_types::stake_table::StakeTableEntries;
+    use hotshot_types::{simple_vote::VersionedVoteData, stake_table::StakeTableEntries};
 
     let upgrade_lock = test_upgrade_lock::<TestTypes>();
     let stake_table = CERT::stake_table(epoch_membership);
@@ -1597,6 +1597,8 @@ where
         "{} signers is below the threshold of {threshold}",
         shares.len()
     );
+    let qc_pp = <BLSPubKey as SignatureKey>::public_parameter(&entries, threshold);
+
     let mut signer_bits = bitvec![0; stake_table.len()];
     let mut signatures = Vec::new();
     for (node, signature) in shares {
@@ -1604,15 +1606,12 @@ where
         signatures.push(signature.clone());
     }
 
-    crate::testing::assemble_certificate(
-        data,
-        view_number,
-        &entries,
-        threshold,
-        signer_bits.as_bitslice(),
-        &signatures,
-        &upgrade_lock,
-    )
+    let assembled =
+        <BLSPubKey as SignatureKey>::assemble(&qc_pp, signer_bits.as_bitslice(), &signatures[..]);
+    let vote_commitment = VersionedVoteData::new(data.clone(), view_number, &upgrade_lock)
+        .expect("versioned vote data")
+        .commit();
+    CERT::create_signed_certificate(vote_commitment, data, assembled, view_number)
 }
 
 /// Sign `data` as `node` would, and return the signature tagged with `node`.

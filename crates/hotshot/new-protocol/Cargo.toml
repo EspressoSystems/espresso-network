@@ -7,7 +7,7 @@ edition = { workspace = true }
 version = { workspace = true }
 
 [features]
-testing = ["dep:bitvec"]
+testing = []
 trace = []
 
 [dependencies]
@@ -16,7 +16,6 @@ anyhow = { workspace = true }
 async-broadcast = { workspace = true }
 async-trait = { workspace = true }
 bincode = { workspace = true }
-bitvec = { workspace = true, optional = true }
 bon = { workspace = true }
 cliquenet = { workspace = true }
 committable = { workspace = true }

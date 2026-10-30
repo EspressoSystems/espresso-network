@@ -60,7 +60,7 @@ use hotshot_types::{
     PeerConfig, ValidatorConfig,
     data::EpochNumber,
     drb::DrbResult,
-    epoch_membership::{EpochMembershipCoordinator, LcContractSeedFn, LcContractSeedOutcome},
+    epoch_membership::{EpochMembershipCoordinator, LcContractSeedFn},
     signature_key::BLSPubKey,
     traits::election::Membership,
 };
@@ -491,7 +491,7 @@ type SeedCalls = Arc<Mutex<Vec<(u64, u64)>>>;
 /// A seed hook that records its arguments and the peak number of concurrent calls, then answers
 /// `answer`.
 fn recording_seed(
-    answer: impl Fn() -> anyhow::Result<LcContractSeedOutcome> + Send + Sync + 'static,
+    answer: impl Fn(EpochNumber) -> anyhow::Result<EpochNumber> + Send + Sync + 'static,
 ) -> (LcContractSeedFn<SeqTypes>, SeedCalls, Arc<AtomicUsize>) {
     let calls = Arc::new(Mutex::new(Vec::new()));
     let peak = Arc::new(AtomicUsize::new(0));
@@ -512,7 +512,7 @@ fn recording_seed(
                 peak.fetch_max(now, Ordering::SeqCst);
                 tokio::time::sleep(Duration::from_millis(100)).await;
                 running.fetch_sub(1, Ordering::SeqCst);
-                answer()
+                answer(start)
             })
         })
     };
@@ -523,7 +523,7 @@ fn recording_seed(
 #[test_log::test(tokio::test(flavor = "multi_thread", worker_threads = 4))]
 async fn catchup_calls_seed_when_far_ok() {
     let (_store, coordinator) = setup();
-    let (seed, calls, _) = recording_seed(|| Ok(LcContractSeedOutcome::NotNeeded));
+    let (seed, calls, _) = recording_seed(Ok);
     coordinator.set_lc_contract_seed(seed);
 
     assert!(
@@ -539,7 +539,7 @@ async fn catchup_calls_seed_when_far_ok() {
 #[test_log::test(tokio::test(flavor = "multi_thread", worker_threads = 4))]
 async fn catchup_skips_seed_when_adjacent_ok() {
     let (store, coordinator) = setup();
-    let (seed, calls, _) = recording_seed(|| Ok(LcContractSeedOutcome::NotNeeded));
+    let (seed, calls, _) = recording_seed(Ok);
     coordinator.set_lc_contract_seed(seed);
 
     // Epoch 3 is one beyond the held pair; the walk starts, the seed does not.
@@ -557,7 +557,7 @@ async fn catchup_skips_seed_when_adjacent_ok() {
 #[test_log::test(tokio::test(flavor = "multi_thread", worker_threads = 4))]
 async fn seed_error_ends_catchup() {
     let (store, coordinator) = setup();
-    let (seed, calls, _) = recording_seed(|| Err(anyhow::anyhow!("no peer answered")));
+    let (seed, calls, _) = recording_seed(|_| Err(anyhow::anyhow!("no peer answered")));
     coordinator.set_lc_contract_seed(seed);
     let target = EpochNumber::new(TARGET_EPOCH);
 
@@ -583,7 +583,7 @@ async fn seed_error_ends_catchup() {
 #[test_log::test(tokio::test(flavor = "multi_thread", worker_threads = 4))]
 async fn seeds_do_not_overlap_ok() {
     let (_store, coordinator) = setup();
-    let (seed, calls, peak) = recording_seed(|| Err(anyhow::anyhow!("not yet")));
+    let (seed, calls, peak) = recording_seed(|_| Err(anyhow::anyhow!("not yet")));
     coordinator.set_lc_contract_seed(seed);
 
     for target in [TARGET_EPOCH, TARGET_EPOCH + 1, TARGET_EPOCH + 2] {
@@ -632,7 +632,7 @@ async fn seed_timeout_ends_catchup() {
 async fn seeded_start_resumes_the_walk_ok() {
     let (store, coordinator) = setup();
     let seeded = EpochNumber::new(TARGET_EPOCH - 1);
-    let (seed, ..) = recording_seed(move || Ok(LcContractSeedOutcome::Seeded { start: seeded }));
+    let (seed, ..) = recording_seed(move |_| Ok(seeded));
     coordinator.set_lc_contract_seed(seed);
 
     assert!(
