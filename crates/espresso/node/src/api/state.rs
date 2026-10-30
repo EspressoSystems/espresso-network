@@ -4897,7 +4897,7 @@ mod tests {
         );
     }
 
-    /// Covers the four shapes and all seven arms: every version's vector must select the arm named
+    /// Covers the four shapes and all eight arms: every version's vector must select the arm named
     /// after it, and the proto message must carry exactly the fields v1 serializes, so neither a
     /// new protocol version nor a proto edit can add or drop a header field without failing here.
     /// A version may drop a field its shape still declares, which the shape then renders empty;
@@ -4912,6 +4912,7 @@ mod tests {
             ("v5", "HeaderV5", None),
             ("v6", "HeaderV5", None),
             ("v7", "HeaderV5", Some("builder_commitment")),
+            ("v8", "HeaderV5", Some("builder_commitment")),
         ] {
             let (header, fields) = reference_header(version);
             let mut expected = fields.clone();
@@ -5032,6 +5033,14 @@ mod tests {
                     );
                     assert_shared_fields!(&header);
                     "v7"
+                },
+                Header::V8(header) => {
+                    assert_eq!(
+                        header.builder_commitment, "",
+                        "0.8 carries no builder commitment"
+                    );
+                    assert_shared_fields!(&header);
+                    "v8"
                 },
             };
             assert_eq!(arm, version, "{version} header selected the {arm} arm");

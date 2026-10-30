@@ -1203,6 +1203,7 @@ impl ValidatedState {
             UpgradeType::NewProtocol { chain_config } => chain_config,
             UpgradeType::EpochReward { chain_config } => chain_config,
             UpgradeType::LargeBlock { chain_config } => chain_config,
+            UpgradeType::AsyncVid { chain_config } => chain_config,
         };
 
         self.chain_config = cf.into();
@@ -1637,7 +1638,7 @@ mod test {
         UpgradeMode, UpgradeType, ViewBasedUpgrade,
         eth_signature_key::{BuilderSignature, EthKeyPair},
         mock::MockStateCatchup,
-        v0_1, v0_2, v0_3, v0_4, v0_5, v0_6, v0_7,
+        v0_1, v0_2, v0_3, v0_4, v0_5, v0_6, v0_7, v0_8,
     };
 
     impl Transaction {
@@ -1703,6 +1704,12 @@ mod test {
                     timestamp_millis,
                     ..parent.clone()
                 }),
+                Header::V8(parent) => Header::V8(v0_8::Header {
+                    height: parent.height + 1,
+                    timestamp,
+                    timestamp_millis,
+                    ..parent.clone()
+                }),
             }
         }
         /// Replaces builder signature w/ invalid one.
@@ -1745,6 +1752,11 @@ mod test {
                     ..header.clone()
                 }),
                 Header::V7(header) => Header::V7(v0_7::Header {
+                    fee_info,
+                    builder_signature: Some(sig),
+                    ..header.clone()
+                }),
+                Header::V8(header) => Header::V8(v0_8::Header {
                     fee_info,
                     builder_signature: Some(sig),
                     ..header.clone()
@@ -1799,6 +1811,11 @@ mod test {
                     ..parent.clone()
                 }),
                 Header::V7(parent) => Header::V7(v0_7::Header {
+                    fee_info,
+                    builder_signature,
+                    ..parent.clone()
+                }),
+                Header::V8(parent) => Header::V8(v0_8::Header {
                     fee_info,
                     builder_signature,
                     ..parent.clone()
@@ -2469,6 +2486,11 @@ mod test {
                 ..header
             }),
             Header::V7(header) => Header::V7(v0_7::Header {
+                builder_signature: Some(sig),
+                fee_info: FeeInfo::new(account, data),
+                ..header
+            }),
+            Header::V8(header) => Header::V8(v0_8::Header {
                 builder_signature: Some(sig),
                 fee_info: FeeInfo::new(account, data),
                 ..header
