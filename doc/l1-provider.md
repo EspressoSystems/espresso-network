@@ -7,15 +7,18 @@ for mainnet and decaf with the genesis files in `data/genesis/`.
 
 - Archive state is not needed. No `eth_call` or `eth_getStorageAt` targets a block older than the latest finalized one.
 - Old block headers are not needed. The genesis L1 block is pinned in the genesis file.
-- Historical logs are needed:
-  - Validators and all nodes: StakeTable logs from the contract deployment block, on a fresh store.
-  - Archive or unpruned query nodes: FeeContract `Deposit` logs from the genesis L1 block up to the 0.6 upgrade, on an
-    empty state store.
+- Historical logs of two contracts are needed:
 
-| Network | StakeTable deployment block (`initializedAtBlock()`) | Genesis L1 block |
-| ------- | ---------------------------------------------------- | ---------------- |
-| mainnet | 24348377                                             | 21116303         |
-| decaf   | 8077808                                              | 6758037          |
+| Network | Contract    | Address                                      | Logs from L1 block | Logs to L1 block | Needed by                         |
+| ------- | ----------- | -------------------------------------------- | ------------------ | ---------------- | --------------------------------- |
+| mainnet | StakeTable  | `0xcef474d372b5b09defe2af187bf17338dc704451` | 24348377           | finalized        | all nodes, fresh store            |
+| mainnet | FeeContract | `0x9fce21c3f7600aa63392a5f5713986b39bb98884` | 21116304           | 0.6 upgrade      | unpruned query nodes, empty state |
+| decaf   | StakeTable  | `0x40304fbe94d5e7d1492dd90c53a2d63e8506a037` | 8077808            | finalized        | all nodes, fresh store            |
+| decaf   | FeeContract | `0x42835083fd1d3fc5d799b5f6815ae4bf2623e6d0` | 6758038            | 0.6 upgrade      | unpruned query nodes, empty state |
+
+- StakeTable start: `initializedAtBlock()` on the contract.
+- FeeContract start: the block after the genesis `[l1_finalized]` block. The range ends at the `l1_finalized` of the
+  last header before the 0.6 upgrade.
 
 ## Requirements by path
 
