@@ -40,10 +40,9 @@ merge commit for PR-open reviews, the default branch head for `claude.yml` (incl
 
 - GitHub read access: `GH_TOKEN` if set, else `gh auth token`, else unauthenticated (60 requests per hour, enough for a
   few PRs).
-- `claude` on `PATH`. The recipe sets `CLAUDE_CLI_PATH` to it unless set; the SDK's bundled CLI does not run on NixOS.
-- Claude login: the recipe sets `CLAUDE_CONFIG_DIR` to `tmp/claude-eval/config` in the main worktree, shared by all
-  worktrees, so no personal settings or CLAUDE.md reach the review. The first run calls `claude auth login`.
-  `ANTHROPIC_API_KEY` is used if set.
+- Claude: `ANTHROPIC_API_KEY`, or an existing `claude` login. User settings, CLAUDE.md and auto-memory are not loaded,
+  as in CI.
+- Optional `CLAUDE_CLI_PATH`: path to a `claude` binary. Needed on NixOS, where the SDK's bundled CLI does not run.
 
 ### Commands
 
