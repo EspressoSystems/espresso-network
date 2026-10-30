@@ -267,7 +267,7 @@
 <a href=#267 id=267 data-nosnippet>267</a>            <span class="kw">return </span><span class="self">self</span>.resting.read().leaf.epoch(<span class="kw-2">*</span><span class="self">self</span>.epoch_height);
 <a href=#268 id=268 data-nosnippet>268</a>        };
 <a href=#269 id=269 data-nosnippet>269</a>        <span class="kw">match </span>client_api.current_epoch().<span class="kw">await </span>{
-<a href=#270 id=270 data-nosnippet>270</a>            <span class="prelude-val">Ok</span>(epoch) =&gt; epoch,
+<a href=#270 id=270 data-nosnippet>270</a>            <span class="prelude-val">Ok</span>(epoch) =&gt; <span class="prelude-val">Some</span>(epoch),
 <a href=#271 id=271 data-nosnippet>271</a>            <span class="prelude-val">Err</span>(err) =&gt; {
 <a href=#272 id=272 data-nosnippet>272</a>                <span class="macro">warn!</span>(%err, <span class="string">"coordinator unavailable for current_epoch"</span>);
 <a href=#273 id=273 data-nosnippet>273</a>                <span class="prelude-val">None

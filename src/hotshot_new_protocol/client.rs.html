@@ -28,7 +28,7 @@
 <a href=#28 id=28 data-nosnippet>28</a>        <span class="self">self</span>.call(ClientRequest::CurrentView(tx), rx).<span class="kw">await
 <a href=#29 id=29 data-nosnippet>29</a>    </span>}
 <a href=#30 id=30 data-nosnippet>30</a>
-<a href=#31 id=31 data-nosnippet>31</a>    <span class="kw">pub async fn </span>current_epoch(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="prelude-ty">Option</span>&lt;EpochNumber&gt;, QueryError&gt; {
+<a href=#31 id=31 data-nosnippet>31</a>    <span class="kw">pub async fn </span>current_epoch(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;EpochNumber, QueryError&gt; {
 <a href=#32 id=32 data-nosnippet>32</a>        <span class="kw">let </span>(tx, rx) = oneshot::channel();
 <a href=#33 id=33 data-nosnippet>33</a>        <span class="self">self</span>.call(ClientRequest::CurrentEpoch(tx), rx).<span class="kw">await
 <a href=#34 id=34 data-nosnippet>34</a>    </span>}
@@ -186,7 +186,7 @@
 <a href=#186 id=186 data-nosnippet>186</a><span class="attr">#[allow(clippy::large_enum_variant)]
 <a href=#187 id=187 data-nosnippet>187</a></span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">enum </span>ClientRequest&lt;T: NodeType&gt; {
 <a href=#188 id=188 data-nosnippet>188</a>    CurrentView(oneshot::Sender&lt;ViewNumber&gt;),
-<a href=#189 id=189 data-nosnippet>189</a>    CurrentEpoch(oneshot::Sender&lt;<span class="prelude-ty">Option</span>&lt;EpochNumber&gt;&gt;),
+<a href=#189 id=189 data-nosnippet>189</a>    CurrentEpoch(oneshot::Sender&lt;EpochNumber&gt;),
 <a href=#190 id=190 data-nosnippet>190</a>    DecidedLeaf(oneshot::Sender&lt;Leaf2&lt;T&gt;&gt;),
 <a href=#191 id=191 data-nosnippet>191</a>    DecidedState(oneshot::Sender&lt;<span class="prelude-ty">Option</span>&lt;Arc&lt;T::ValidatedState&gt;&gt;&gt;),
 <a href=#192 id=192 data-nosnippet>192</a>    UndecidedLeaves(oneshot::Sender&lt;Vec&lt;Leaf2&lt;T&gt;&gt;&gt;),
