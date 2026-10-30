@@ -270,8 +270,9 @@ pub struct Options {
     #[clap(hide = true, long, env = "ESPRESSO_NODE_LIBP2P_DHT_PUT_QUORUM")]
     pub libp2p_dht_put_quorum: Option<std::num::NonZeroUsize>,
 
-    /// Send proposals on a second cliquenet network, one port above the cliquenet bind and
-    /// advertise addresses, so they pass the VID shares queued on the main connections.
+    /// Send proposals, votes, certificates and every other control message on a second
+    /// cliquenet network, one port above the cliquenet bind and advertise addresses, so they
+    /// pass the VID shares and transaction forwards queued on the main connections.
     ///
     /// Experimental. Every node of the network must set it, since each expects the others'
     /// control lane one port above their registered address.

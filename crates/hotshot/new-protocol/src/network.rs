@@ -21,7 +21,10 @@ use hotshot_utils::anytrace;
 use parking_lot::RwLock;
 use tracing::{error, info};
 
-use crate::message::{ConsensusMessage, Message, MessageType, Unchecked, Validated};
+use crate::message::{
+    BlockMessage, ConsensusMessage, Message, MessageType, Unchecked, Validated,
+    payload::PayloadFetchMessage,
+};
 
 /// A predicate that discards inbound messages.
 ///
@@ -29,13 +32,14 @@ use crate::message::{ConsensusMessage, Message, MessageType, Unchecked, Validate
 #[cfg(any(test, feature = "testing"))]
 pub type InboundFilter<T> = Box<dyn Fn(&Message<T, Unchecked>) -> bool + Send + Sync>;
 
-/// Whether proposals travel on a second cliquenet network of their own.
+/// Whether control messages travel on a second cliquenet network of their own.
 ///
 /// cliquenet writes one message per connection at a time, lowest view first, so a proposal
-/// queued behind a VID share waits for the whole share to leave. On the control lane the
-/// proposal has its own TCP connection to every peer and passes the shares. The lane listens
-/// one port above the main network and expects every peer's lane at the same offset from its
-/// registered address, so a network runs it on all nodes or none.
+/// or vote queued behind a VID share waits for the whole share to leave. On the control lane
+/// everything but the bulk messages, the shares, the transaction forwards and the payload
+/// fetch responses, has its own TCP connection to every peer and passes them. The lane
+/// listens one port above the main network and expects every peer's lane at the same offset
+/// from its registered address, so a network runs it on all nodes or none.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum ControlLane {
     #[default]
@@ -49,17 +53,21 @@ pub const CONTROL_LANE_PORT_OFFSET: u16 = 1;
 /// The network a message travels on.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Lane {
-    /// Shares, votes, certificates and everything else.
+    /// The bulk: VID shares and fragments, transaction forwards, payload fetch responses.
     Main,
-    /// Proposals, when the control lane is on.
+    /// Everything else, when the control lane is on.
     Control,
 }
 
 impl Lane {
     fn of<T: NodeType, S>(m: &Message<T, S>) -> Self {
         match &m.message_type {
-            MessageType::Consensus(ConsensusMessage::Proposal(_)) => Self::Control,
-            _ => Self::Main,
+            MessageType::Consensus(
+                ConsensusMessage::VidShareFragment(_) | ConsensusMessage::VidShareBroadcast(_),
+            )
+            | MessageType::Block(BlockMessage::Transactions(_))
+            | MessageType::PayloadFetch(PayloadFetchMessage::Res(_)) => Self::Main,
+            _ => Self::Control,
         }
     }
 
@@ -559,7 +567,7 @@ impl<T: NodeType> Sender<T> {
         self.sender.config().max_message_size()
     }
 
-    /// The network `m` travels on: the control lane for a proposal when the lane is on.
+    /// The network `m` travels on: the control lane for a control message when the lane is on.
     fn sender_for(&self, m: &Message<T, Validated>) -> &NetworkSender {
         match (Lane::of(m), &self.control) {
             (Lane::Control, Some(control)) => control,

@@ -140,7 +140,7 @@ pub struct NetworkParams {
     pub cliquenet_bind_addr: NetAddr,
     /// Cliquenet address to advertise to other nodes (registered in the stake table).
     pub cliquenet_advertise_addr: Option<NetAddr>,
-    /// Whether proposals get a cliquenet network of their own, one port above the main one.
+    /// Whether control messages get a cliquenet network of their own, one port above the main one.
     pub cliquenet_control_lane: ControlLane,
     /// X25519 secret key.
     pub x25519_secret_key: x25519::SecretKey,

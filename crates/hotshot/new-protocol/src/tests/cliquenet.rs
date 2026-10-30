@@ -9,9 +9,9 @@ async fn five_nodes_decide_same_chain_over_cliquenet() {
     TestRunner::builder().build().run().await.unwrap();
 }
 
-/// Proposals travel on the control lane alone, so the network only decides if every node's
-/// lane is bound, its peers' lanes derived from their main addresses, and the inbound merge
-/// of the two networks delivers both.
+/// Proposals, votes and certificates travel on the control lane alone and the shares on the
+/// main one, so the network only decides if every node's lane is bound, its peers' lanes
+/// derived from their main addresses, and the inbound merge of the two networks delivers both.
 #[tokio::test(flavor = "multi_thread")]
 async fn five_nodes_decide_over_the_control_lane() {
     TestRunner::builder()
