@@ -42,7 +42,10 @@ with a preset fitted to a run (`COMPUTE`). Each step sits where the code spends 
 is the longer of two chains, which `closed_form` states:
 
     latency chain  = Q + verify_proposal + vote1 + cert + propose + persist_proposal
-    transfer chain = 2 T + propose + persist_proposal + delta        (shares and control in order)
+    transfer chain = verify_proposal + max(vote1 + T, build + encode) + T + delta
+                     (shares and control in order: the next leader's rebroadcast of share V
+                      leaves once its vote1 is out, its dispersal of V+1 once built, and the
+                      proposal behind both; its persist hides under them)
                    = T + decode + delta                               (control on its own lane)
 
 with T the share transfer (n - 1) / k × P / B, Q the quorum round trip (the q-th smallest
@@ -306,7 +309,9 @@ def closed_form(
         xfer = t_ms + c.decode.ms(block_mb) + delta_ms
         window = slack
     else:
-        xfer = 2 * t_ms + proposal + delta_ms
+        rebroadcast = c.vote1.ms(block_mb) + t_ms
+        build = c.build.ms(block_mb) + c.encode.ms(block_mb)
+        xfer = c.verify_proposal.ms(block_mb) + max(rebroadcast, build) + t_ms + delta_ms
         window = max(slack, t_ms + delta_ms)
     return {
         "share_ms": round(t_ms, 1),
@@ -592,14 +597,18 @@ class Sim:
         if v in self.building:
             return
         self.building.add(v)
-        self.after(self.c.build, leader, ("built", v, leader))
+        # The encode overlaps the header; the traces show the first share leaving before
+        # `ns_disperse_end`, so the shares are queued as soon as the block is built and the
+        # proposal follows after its persist, behind them on the wire.
+        cost = Cost(self.c.build.ms(self.mb) + self.c.encode.ms(self.mb))
+        self.after(cost, leader, ("built", v, leader))
 
     def on_built(self, leader, v):
         self.built[v] = self.t
         self.kth[(leader, v)] = self.t
         self.got_share[leader].add(v)
         self.nshares[(leader, v)] += 1
-        self.after(self.c.encode, leader, ("disperse", v, leader))
+        self.deliver(leader, ("disperse", v, leader))
         self.try_pair(leader, v)
         self.try_propose(leader, v)
 

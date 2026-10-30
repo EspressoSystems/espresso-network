@@ -13,7 +13,7 @@ one-way delays:
                = Q + cert + propose + persist_proposal + verify_proposal
                  + d(L', j) - kth_j                                        where latency binds
     view       = max(Q + verify_proposal + vote1 + cert + propose + persist_proposal,
-                     2 T + propose + persist_proposal + d(L, L'))
+                     verify_proposal + max(vote1 + T, build + encode) + T + d(L, L'))
     finality   = q-th_i [ q-th_j [ cert1_j + vote2 + d(j, i) ] + cert + decide ]
     cert1_j    = q-th_x [ d(L, x) + verify_proposal + vote1 + d(x, j) ] + cert
 
@@ -26,7 +26,7 @@ mean and `run_views` evaluates the actual sequence: a recurrence over views, eac
 timestamps from the previous view's, every node at once. It takes every flow of a transfer to
 finish together, T after it starts; the fluid model of `vidwindow` lets flows to idle receivers
 finish first, so where bandwidth binds its k-th shares arrive earlier and its windows and
-finality come out shorter, by up to a fifth, and its proposals cross while the shares still
+finality come out shorter, by up to a third at large blocks, and its proposals cross while the shares still
 drain (its `transit` is shorter). The view's mean agrees within a few percent.
 
     vidformula.py point --profile decaf-2025 --nodes 100 --gbps 15 --block 50 --compute c8g.4xlarge
@@ -103,7 +103,9 @@ def pair(
     xfer_view = (
         t_ms + c.decode.ms(mb)
         if lane
-        else 2 * t_ms + c.propose.ms(mb) + c.persist_proposal.ms(mb)
+        else c.verify_proposal.ms(mb)
+        + max(c.vote1.ms(mb) + t_ms, c.build.ms(mb) + c.encode.ms(mb))
+        + t_ms
     ) + d[lead, nxt] * 1000.0
     return {
         "q_ms": round(q_ms, 1),

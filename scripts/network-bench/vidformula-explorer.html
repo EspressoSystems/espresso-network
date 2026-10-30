@@ -1557,7 +1557,10 @@
       const T = (((res.cfg.n - 1) / res.cfg.k) * mb * 8) / res.cfg.gbps;
       const proposal = ms("propose") + ms("persist_proposal");
       const lat = res.q_ms + ms("verify_proposal") + ms("vote1") + ms("cert") + proposal;
-      const xfer = (res.cfg.lane ? T + ms("decode") : 2 * T + proposal) + res.dll_ms;
+      const xfer =
+        (res.cfg.lane
+          ? T + ms("decode")
+          : ms("verify_proposal") + Math.max(ms("vote1") + T, ms("build") + ms("encode")) + T) + res.dll_ms;
       return { lat, xfer };
     }
 

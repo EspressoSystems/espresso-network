@@ -70,13 +70,14 @@ def test_compute_adds_to_the_latency_chain():
 
 
 def test_in_order_delivery_costs_two_transfers_a_view():
-    # 92 MB at 15 Gbps: T = 110 ms. The proposal queues behind the leader's rebroadcast and its
-    # dispersal, so a view is two transfers plus the proposal's own path; the rest of the compute
-    # hides under the transfers. Consecutive views alternate around the mean.
+    # 92 MB at 15 Gbps: T = 110 ms. The next leader's rebroadcast leaves once its vote1 is
+    # out (verify 5 + vote1 11.9 ms), its dispersal behind that, and the proposal behind both,
+    # so a view is two transfers plus the vote1 path; the build (103.6 ms) and the proposal's
+    # persist hide under the transfers. Consecutive views alternate around the mean.
     s, lo, hi = sim("off", 92.0, 15.0, ROUND_ROBIN, C8G_4XLARGE)
     form = vidwindow.closed_form(10, 4, 92.0, 15.0, 0.0, 0.0, C8G_4XLARGE)
     assert abs(form["share_ms"] - 110.4) < 0.1
-    assert abs(form["view_ms"] - (220.8 + 8.9)) < 0.2
+    assert abs(form["view_ms"] - (5.0 + 11.9 + 2 * 110.4)) < 0.2
     assert abs(statistics.mean(s.view_times(lo, hi)) - form["view_ms"]) < 3.0
     assert abs(vidwindow.pct(s.windows(lo, hi), 0.5) - form["window_ms"]) < 10.0
     # The proposal crosses a 0.1 ms link in a share's time.

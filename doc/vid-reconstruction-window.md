@@ -43,7 +43,7 @@ trip (the q-th smallest d(L, j) + d(j, L') over voters j for the leaders L of V 
 once transfers dominate, the view is the longer of two chains (`closed_form`):
 
     latency chain  = Q + verify_proposal + vote1 + cert + propose + persist_proposal
-    transfer chain = 2 T + propose + persist_proposal + δ      shares and control messages in order
+    transfer chain = verify + max(vote1 + T, build + encode) + T + δ   shares and control messages in order
                    = T + decode + δ                            control messages on their own lane
     window         = max(latency chain − vote1 − T,  T + δ)   from the k-th share to the next pairing
 
