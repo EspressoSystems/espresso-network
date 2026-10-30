@@ -248,6 +248,7 @@ pub struct BlockBuilder<T: NodeType> {
     /// Requests waiting for the pool to fill, by view.
     deferred: BTreeMap<ViewNumber, DeferredBuild<T>>,
     tasks: JoinSet<Result<BlockBuilderOutput<T>, BlockError>>,
+    tracer: Option<crate::leader_trace::LeaderTracerHandle>,
 }
 
 impl<T: NodeType> BlockBuilder<T> {
@@ -274,7 +275,12 @@ impl<T: NodeType> BlockBuilder<T> {
             view_transactions: BTreeMap::new(),
             deferred: BTreeMap::new(),
             tasks: JoinSet::new(),
+            tracer: None,
         }
+    }
+
+    pub fn set_tracer(&mut self, tracer: Option<crate::leader_trace::LeaderTracerHandle>) {
+        self.tracer = tracer;
     }
 
     /// Builds a block for `request` from the pool, or when the pool holds less than
@@ -426,6 +432,11 @@ impl<T: NodeType> BlockBuilder<T> {
             return Arc::clone(txs);
         }
         let txs = Arc::new(self.take_block(view));
+        crate::trace_leader_event!(
+            self.tracer,
+            view,
+            crate::leader_trace::LeaderEvent::BlockTaken
+        );
         self.view_transactions.insert(view, Arc::clone(&txs));
         txs
     }

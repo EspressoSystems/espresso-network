@@ -31,6 +31,8 @@ pub enum LeaderEvent {
     // V-1 events that trigger V duty.
     ProposalValidatedVMinus1,
     RequestBlockHeaderQueued,
+    /// The leader took the block's transactions from its pool, after any wait for them.
+    BlockTaken,
     HeaderCreatedApplied,
     BlockBuiltApplied,
 
@@ -81,6 +83,7 @@ impl LeaderEvent {
         match self {
             ProposalValidatedVMinus1 => "proposal_validated_v_minus_1",
             RequestBlockHeaderQueued => "request_block_header_queued",
+            BlockTaken => "block_taken",
             HeaderCreatedApplied => "header_created_applied",
             BlockBuiltApplied => "block_built_applied",
             NsDisperseStart => "ns_disperse_start",

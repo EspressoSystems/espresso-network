@@ -325,7 +325,18 @@ where
         );
         vid_disperser.set_tracer(leader_tracer.clone());
         let mut vid_reconstructor = VidReconstructor::new();
-        vid_reconstructor.set_tracer(leader_tracer);
+        vid_reconstructor.set_tracer(leader_tracer.clone());
+        let mut block_builder = BlockBuilder::new(
+            Arc::new(initializer.instance_state().clone()),
+            membership_coordinator.clone(),
+            BlockBuilderConfig {
+                empty_block_delay,
+                block_sizes,
+                ..BlockBuilderConfig::default()
+            },
+            upgrade_lock.clone(),
+        );
+        block_builder.set_tracer(leader_tracer);
 
         let lock = upgrade_lock.clone();
         let genesis_qc = consensus.cert1_at(ViewNumber::genesis()).cloned();
@@ -398,16 +409,7 @@ where
                 initializer.epoch_height(),
                 membership_coordinator.clone(),
             ))
-            .block_builder(BlockBuilder::new(
-                Arc::new(initializer.instance_state().clone()),
-                membership_coordinator.clone(),
-                BlockBuilderConfig {
-                    empty_block_delay,
-                    block_sizes,
-                    ..BlockBuilderConfig::default()
-                },
-                upgrade_lock.clone(),
-            ))
+            .block_builder(block_builder)
             .proposal_validator(ProposalValidator::new(
                 membership_coordinator.clone(),
                 initializer.epoch_height(),
