@@ -36,11 +36,12 @@ Goal: find every real defect in the PR. Recall over precision.
    - Secrets: can anything secret (keys, tokens, passwords, credentials in URLs) leave the process or reach a less
      trusted reader through this change? Follow error rendering and struct dumps, not only explicit fields.
 7. Untrusted input: values from peers, HTTP or gRPC clients, L1, or files.
-   - Certificates, votes, signatures and proofs: verified against the stake table or key of their own epoch and view
-     before they are stored, cached, forwarded, or used to pick a branch. Check thresholds, empty signer sets, view or
-     epoch 0, and a certificate from another epoch than the data it certifies.
+   - Certificates, votes, signatures and proofs: verified against the stake table or key of the epoch and view they
+     claim, before they are stored, cached, forwarded, or used to pick a branch. Check thresholds, empty signer sets,
+     and view or epoch 0. A certificate's epoch may differ from its data's in two valid cases: no epoch before epochs
+     activate, and the next epoch's dual-signed QC on the last leaf of an epoch. Any other mismatch: candidate.
    - Deserialization without a size or depth limit. Allocations, loops, maps, channels or retries sized by the sender.
-   - SQL built from strings instead of bind parameters.
+   - SQL text containing values from outside the process instead of bind parameters.
    - A new route or gRPC method that writes or exposes internal state without the gate its siblings have.
    - `contracts/`: reentrancy, missing access modifiers, unchecked external calls, signature replay across chains or
      upgrades, storage layout changes in upgradeable contracts.
