@@ -812,23 +812,3 @@ async fn update_party_address_live_connection() {
     assert_eq!(src, pka);
     assert_eq!(data, Bytes::from("after"));
 }
-
-/// Only connections from known parties count as accepted inbound.
-#[tokio::test]
-async fn accepted_inbound_counts_known_parties() {
-    let a = Node::new(reserve_port());
-    let b = Node::new(reserve_port());
-    let c = Node::new(reserve_port());
-
-    // `a` knows `b` but not `c`; both dial `a`.
-    let net_a = Network::create(make_config(&a, &[&a, &b])).await.unwrap();
-    let net_b = Network::create(make_config(&b, &[&a, &b])).await.unwrap();
-    let net_c = Network::create(make_config(&c, &[&a, &c])).await.unwrap();
-
-    sleep(SETTLE).await;
-
-    assert!(net_a.accepted_inbound_connections() + net_b.accepted_inbound_connections() >= 1);
-    assert_eq!(net_c.accepted_inbound_connections(), 0);
-    let accepted_at_a = net_a.accepted_inbound_connections();
-    assert!(accepted_at_a <= 1, "unknown party counted: {accepted_at_a}");
-}

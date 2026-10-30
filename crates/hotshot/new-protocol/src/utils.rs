@@ -165,7 +165,10 @@ pub async fn verify_new_protocol_leaf_chain<T: NodeType>(
         *coordinator.epoch_height(),
         upgrade_lock,
         |epoch| {
-            let membership = coordinator.stake_table_for_epoch(Some(epoch)).ok()?;
+            let membership = coordinator
+                .stake_table_for_epoch(Some(epoch))
+                .inspect_err(|err| tracing::debug!(%epoch, "no stake table: {err:?}"))
+                .ok()?;
             Some(HSStakeTable::from_iter(membership.stake_table()))
         },
     )

@@ -1,14 +1,7 @@
 pub mod peer;
 pub mod server;
 
-use std::{
-    fmt,
-    ops::Deref,
-    sync::{
-        Arc,
-        atomic::{AtomicUsize, Ordering},
-    },
-};
+use std::{fmt, ops::Deref, sync::Arc};
 
 use bon::Builder;
 use bytes::Bytes;
@@ -47,7 +40,6 @@ pub struct NetworkSender {
     tx: UnboundedSender<Command>,
     next_slot: watch::Sender<Slot>,
     metrics: Arc<dyn Metrics>,
-    accepted_inbound: Arc<AtomicUsize>,
 }
 
 impl fmt::Debug for NetworkSender {
@@ -137,7 +129,7 @@ impl Network {
         let conf = Arc::new(conf);
 
         // The server ends when all `NetworkSender`s are dropped.
-        let (_, accepted_inbound) = Server::spawn(
+        Server::spawn(
             conf.clone(),
             listener,
             Role::Active,
@@ -154,7 +146,6 @@ impl Network {
             tx: otx,
             next_slot: etx,
             metrics: metr,
-            accepted_inbound,
         };
 
         info!(name = %conf.name, %node, %addr, max_message_size = %conf.max_message_size, "listening");
@@ -205,12 +196,6 @@ impl NetworkReceiver {
 impl NetworkSender {
     pub fn config(&self) -> &Config {
         &self.conf
-    }
-
-    /// Inbound connections from known parties accepted since `create`: an `Arc<AtomicUsize>` made in
-    /// `Server::spawn`, incremented where `Hello::Ok` is sent.
-    pub fn accepted_inbound_connections(&self) -> usize {
-        self.accepted_inbound.load(Ordering::Relaxed)
     }
 
     /// Send a message to a party, identified by the given public key.

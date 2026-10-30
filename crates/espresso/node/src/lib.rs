@@ -457,6 +457,7 @@ where
             .anchor_leaf()
             .epoch(initializer.epoch_height())
             .unwrap_or_else(EpochNumber::genesis),
+        upgrade_lock: context::restored_upgrade_lock(version_upgrade, &initializer),
         deadline: STARTUP_CATCHUP_DEADLINE,
     };
 
@@ -883,8 +884,8 @@ pub mod testing {
         network_config::light_client_genesis_from_stake_table,
     };
     use espresso_types::{
-        ChainConfig, FeeAccount, L1Client, NetworkConfig, PubKey, SeqTypes, Transaction, Upgrade,
-        UpgradeMap, UpgradeMode,
+        ChainConfig, FeeAccount, L1Client, NetworkConfig, PubKey, SeqTypes, StakeTableCommitment,
+        Transaction, Upgrade, UpgradeMap, UpgradeMode,
         eth_signature_key::EthKeyPair,
         v0::traits::{EventConsumer, NullEventConsumer, PersistenceOptions, StateCatchup},
     };
@@ -1451,7 +1452,7 @@ pub mod testing {
             &self,
             contracts: &Contracts,
             finalized_block_height: u64,
-            commitment: espresso_types::StakeTableCommitment,
+            commitment: StakeTableCommitment,
         ) -> anyhow::Result<()> {
             let address = contracts
                 .address(Contract::LightClientProxy)
@@ -1675,6 +1676,7 @@ pub mod testing {
                 .await
                 .unwrap();
             let anchor_epoch = initializer.anchor_leaf().epoch(config.epoch_height);
+            let upgrade_lock = crate::context::restored_upgrade_lock(upgrade, &initializer);
             let own_key = validator_config.public_key;
 
             SequencerContext::init(
@@ -1706,6 +1708,7 @@ pub mod testing {
                         .collect(),
                     step_timeout: Duration::from_secs(2),
                     anchor_epoch: anchor_epoch.unwrap_or_else(EpochNumber::genesis),
+                    upgrade_lock,
                     deadline: Duration::from_secs(60),
                 },
                 Duration::from_millis(500),

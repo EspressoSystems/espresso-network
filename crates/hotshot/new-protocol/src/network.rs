@@ -143,11 +143,6 @@ impl<T: NodeType> Cliquenet<T> {
         })
     }
 
-    /// Inbound connections accepted since `create`; reads `NetworkSender::accepted_inbound_connections`.
-    pub fn accepted_inbound_connections(&self) -> usize {
-        self.inner.sender.accepted_inbound_connections()
-    }
-
     pub fn sender(&self) -> &Sender<T> {
         &self.inner
     }

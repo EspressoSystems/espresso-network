@@ -1,10 +1,11 @@
 //! Fixtures for tests that need signed leaf chains.
 
 use alloy::primitives::U256;
-use bitvec::vec::BitVec;
+use bitvec::{slice::BitSlice, vec::BitVec};
 use committable::Committable;
 use hotshot_types::{
-    data::{EpochNumber, Leaf2, QuorumProposal2, QuorumProposalWrapper},
+    data::{EpochNumber, Leaf2, QuorumProposal2, QuorumProposalWrapper, ViewNumber},
+    drb::DrbResult,
     message::UpgradeLock,
     simple_certificate::QuorumCertificate2,
     simple_vote::{QuorumData2, VersionedVoteData, Vote2Data, Voteable},
@@ -51,7 +52,7 @@ pub fn sign_leaf_chain<T: NodeType>(
                     signers,
                     upgrade_lock,
                 );
-                with_justify_qc(&leaf, qc)
+                rebuild(&leaf, qc, leaf.next_drb_result)
             },
         };
         chain.push(leaf);
@@ -75,8 +76,13 @@ pub fn sign_leaf_chain<T: NodeType>(
     }
 }
 
-/// `leaf` with `justify_qc` replaced; the parent commitment follows from the QC.
-fn with_justify_qc<T: NodeType>(leaf: &Leaf2<T>, justify_qc: QuorumCertificate2<T>) -> Leaf2<T> {
+/// `leaf` with `justify_qc` and `next_drb_result` replaced; the parent commitment follows from the
+/// QC.
+fn rebuild<T: NodeType>(
+    leaf: &Leaf2<T>,
+    justify_qc: QuorumCertificate2<T>,
+    next_drb_result: Option<DrbResult>,
+) -> Leaf2<T> {
     Leaf2::from_quorum_proposal(&QuorumProposalWrapper {
         proposal: QuorumProposal2 {
             block_header: leaf.block_header().clone(),
@@ -87,16 +93,21 @@ fn with_justify_qc<T: NodeType>(leaf: &Leaf2<T>, justify_qc: QuorumCertificate2<
             next_epoch_justify_qc: leaf.next_epoch_justify_qc().cloned(),
             upgrade_certificate: leaf.upgrade_certificate().cloned(),
             view_change_evidence: leaf.view_change_evidence.clone(),
-            next_drb_result: leaf.next_drb_result,
+            next_drb_result,
             state_cert: None,
         },
     })
 }
 
+/// `leaf` carrying `drb`, as the transition leaf of an epoch does.
+pub fn with_next_drb_result<T: NodeType>(leaf: &Leaf2<T>, drb: DrbResult) -> Leaf2<T> {
+    rebuild(leaf, leaf.justify_qc().clone(), Some(drb))
+}
+
 /// A certificate over `data` at `view` signed by every signer, in table order.
 pub fn sign_certificate<T, D, C>(
     data: D,
-    view: hotshot_types::data::ViewNumber,
+    view: ViewNumber,
     signers: &[Signer<T>],
     upgrade_lock: &UpgradeLock<T>,
 ) -> C
@@ -109,17 +120,42 @@ where
         .iter()
         .map(|(key, _)| key.stake_table_entry(U256::ONE))
         .collect();
-    let params = T::SignatureKey::public_parameter(
-        &entries,
-        supermajority_threshold(U256::from(entries.len())),
-    );
     let commit = VersionedVoteData::new_infallible(data.clone(), view, upgrade_lock).commit();
     let signatures: Vec<_> = signers
         .iter()
         .map(|(_, private)| T::SignatureKey::sign(private, commit.as_ref()).expect("sign"))
         .collect();
     let bits: BitVec = std::iter::repeat_n(true, signers.len()).collect();
-    let assembled = T::SignatureKey::assemble(&params, &bits, &signatures);
+    assemble_certificate(
+        data,
+        view,
+        &entries,
+        supermajority_threshold(U256::from(entries.len())),
+        &bits,
+        &signatures,
+        upgrade_lock,
+    )
+}
+
+/// A certificate over `data` at `view` aggregating `signatures` of the table positions set in
+/// `signer_bits`.
+pub fn assemble_certificate<T, D, C>(
+    data: D,
+    view: ViewNumber,
+    entries: &[<T::SignatureKey as SignatureKey>::StakeTableEntry],
+    threshold: U256,
+    signer_bits: &BitSlice,
+    signatures: &[<T::SignatureKey as SignatureKey>::PureAssembledSignatureType],
+    upgrade_lock: &UpgradeLock<T>,
+) -> C
+where
+    T: NodeType,
+    D: Voteable<T> + 'static,
+    C: Certificate<T, D, Voteable = D>,
+{
+    let params = T::SignatureKey::public_parameter(entries, threshold);
+    let assembled = T::SignatureKey::assemble(&params, signer_bits, signatures);
+    let commit = VersionedVoteData::new_infallible(data.clone(), view, upgrade_lock).commit();
     C::create_signed_certificate(commit, data, assembled, view)
 }
 

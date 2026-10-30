@@ -571,7 +571,7 @@ where
 
 /// A decided certificate at or below the configured base is from a completed upgrade; kept, it
 /// would make `UpgradeLock::version` fail once the target moves on.
-fn restored_upgrade_lock(
+pub(crate) fn restored_upgrade_lock(
     upgrade: versions::Upgrade,
     initializer: &HotShotInitializer<SeqTypes>,
 ) -> UpgradeLock<SeqTypes> {

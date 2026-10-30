@@ -1192,8 +1192,9 @@ impl RewardMerkleTreeDataSource for DataSource {
 // A module of its own so `RequestStorage` is not in scope where `CatchupStorage` methods are
 // called by name on this type.
 mod request_storage {
+    use std::fmt;
+
     use async_trait::async_trait;
-    use disco_types::status::StatusCode;
     use espresso_types::{
         BlockMerkleTree, Certificate2, ChainConfig, FeeAccount, FeeMerkleTree, Header, Leaf2,
         NodeState,
@@ -1301,14 +1302,15 @@ mod request_storage {
     #[async_trait]
     impl HeaderProofReads for SqlStorage {
         async fn header(&self, id: BlockId<SeqTypes>) -> Result<Header, Error> {
-            let mut tx = self.read().await.map_err(storage_error)?;
+            let mut tx = self
+                .read()
+                .await
+                .map_err(|err| query_error(storage_query_error(err)))?;
             tx.get_header(id).await.map_err(query_error)
         }
 
         async fn block_path(&self, index: u64, height: u64) -> QueryResult<BlockMerkleProof> {
-            let mut tx = self.read().await.map_err(|err| QueryError::Error {
-                message: err.to_string(),
-            })?;
+            let mut tx = self.read().await.map_err(storage_query_error)?;
             tx.get_path(
                 Snapshot::<SeqTypes, BlockMerkleTree, { BlockMerkleTree::ARITY }>::Index(index),
                 height,
@@ -1317,17 +1319,15 @@ mod request_storage {
         }
 
         async fn last_state_height(&self) -> QueryResult<usize> {
-            let mut tx = self.read().await.map_err(|err| QueryError::Error {
-                message: err.to_string(),
-            })?;
+            let mut tx = self.read().await.map_err(storage_query_error)?;
             tx.get_last_state_height().await
         }
     }
 
-    fn storage_error(err: impl std::fmt::Display) -> Error {
-        Error::Custom {
+    /// A failure to open a read transaction.
+    fn storage_query_error(err: impl fmt::Display) -> QueryError {
+        QueryError::Error {
             message: err.to_string(),
-            status: StatusCode::INTERNAL_SERVER_ERROR,
         }
     }
 

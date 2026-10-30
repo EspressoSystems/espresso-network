@@ -1,7 +1,7 @@
 //! The node's cliquenet during the startup fill.
 
 use std::{
-    collections::{HashMap, HashSet, VecDeque},
+    collections::{HashMap, VecDeque},
     time::Duration,
 };
 
@@ -40,8 +40,8 @@ const BUFFERED_CERTIFICATES_LIMIT: usize = 256;
 ///
 /// Sends with `Sender::unicast` and reads with `receive()` only. It never calls `client_api()`,
 /// `apply_epoch`, or touches `shared.epoch`. Messages it consumes never reach the coordinator, and
-/// inbound requests from other peers are dropped. Each request fans out to `k = 5` bootstrap peers
-/// not yet asked, peers that answered before first.
+/// inbound requests from other peers are dropped. Each request goes to `STARTUP_FAN_OUT` random
+/// bootstrap peers per attempt.
 pub(crate) struct CliquenetBeforeConsensus<'a> {
     net: &'a mut Cliquenet<SeqTypes>,
     peers: Vec<PubKey>,
@@ -49,10 +49,6 @@ pub(crate) struct CliquenetBeforeConsensus<'a> {
     private_key: BLSPrivKey,
     /// Certificates read while waiting for answers.
     buffered: VecDeque<ObservedCertificate>,
-    /// Peers that gave a valid answer before; asked first.
-    answered: HashSet<PubKey>,
-    /// Peers asked per wire request, so a retry goes to others first.
-    asked: HashMap<RequestHash, HashSet<PubKey>>,
 }
 
 impl<'a> CliquenetBeforeConsensus<'a> {
@@ -66,29 +62,7 @@ impl<'a> CliquenetBeforeConsensus<'a> {
             public_key: PubKey::from_private(&private_key),
             private_key,
             buffered: VecDeque::new(),
-            answered: HashSet::new(),
-            asked: HashMap::new(),
         }
-    }
-
-    /// Up to `STARTUP_FAN_OUT` peers not yet asked `hash`, those that answered before first. Once
-    /// every peer was asked, the round starts over.
-    fn pick_peers(&mut self, hash: RequestHash) -> Vec<PubKey> {
-        let asked = self.asked.entry(hash).or_default();
-        let mut fresh: Vec<_> = self
-            .peers
-            .iter()
-            .filter(|peer| !asked.contains(peer))
-            .copied()
-            .collect();
-        if fresh.is_empty() {
-            asked.clear();
-            fresh = self.peers.clone();
-        }
-        fresh.sort_by_key(|peer| !self.answered.contains(peer));
-        fresh.truncate(STARTUP_FAN_OUT);
-        asked.extend(fresh.iter().copied());
-        fresh
     }
 
     /// Signs `wire`, frames it as `external_event_handler` frames request-response payloads and
@@ -106,12 +80,13 @@ impl<'a> CliquenetBeforeConsensus<'a> {
         Ok(())
     }
 
-    /// Fans `wire` out to the next peers. Identical wire requests share one send per batch: the
-    /// caller only sends the first time it registers a hash.
-    fn fan_out(&mut self, wire: &Request) {
-        let hash = wire_hash(wire);
-        for peer in self.pick_peers(hash) {
-            if let Err(err) = self.send(&peer, wire) {
+    /// Sends `wire` to `STARTUP_FAN_OUT` random peers.
+    fn fan_out(&self, wire: &Request) {
+        let peers = self
+            .peers
+            .choose_multiple(&mut rand::thread_rng(), STARTUP_FAN_OUT);
+        for peer in peers {
+            if let Err(err) = self.send(peer, wire) {
                 tracing::debug!(%peer, "failed to send a startup request: {err:#}");
             }
         }
@@ -182,7 +157,6 @@ impl<'a> CliquenetBeforeConsensus<'a> {
             }
             match slots[index].accept(&response) {
                 Ok(next) => {
-                    self.answered.insert(sender);
                     if next {
                         self.start(index, slots, waiting);
                     }
@@ -191,19 +165,6 @@ impl<'a> CliquenetBeforeConsensus<'a> {
                     tracing::debug!(%sender, "startup response not accepted: {err:#}");
                 },
             }
-        }
-    }
-
-    /// Peers asked for an unanswered request that never gave a valid answer, at DEBUG only.
-    fn log_silent_peers(&self, slots: &[Slot]) {
-        for slot in slots.iter().filter(|slot| !slot.is_done()) {
-            let asked = slot.wire_hash.and_then(|hash| self.asked.get(&hash));
-            let silent: Vec<_> = asked
-                .into_iter()
-                .flatten()
-                .filter(|peer| !self.answered.contains(peer))
-                .collect();
-            tracing::debug!(request = ?slot.request, ?silent, "no valid answer");
         }
     }
 
@@ -231,16 +192,11 @@ impl StartupCliquenet for CliquenetBeforeConsensus<'_> {
             .map(|(key, info)| (*key, (info.x25519_key.into(), info.p2p_addr.clone())))
             .collect::<Vec<_>>();
         self.peers = targets.iter().map(|(key, _)| *key).collect();
-        self.peers.shuffle(&mut rand::thread_rng());
         self.net.add_peers(Role::Active, targets)?;
         Ok(())
     }
 
-    fn accepted_inbound_connections(&self) -> usize {
-        self.net.accepted_inbound_connections()
-    }
-
-    /// See the trait. Peers with no answer, an error answer, or an answer failing verification log
+    /// See the trait. Peers with no answer, an error answer, or an answer of the wrong shape log
     /// at DEBUG; per-stage answered and unanswered counts go to `startup catchup done`.
     async fn fetch_concurrently(
         &mut self,
@@ -266,7 +222,9 @@ impl StartupCliquenet for CliquenetBeforeConsensus<'_> {
             }
         }
 
-        self.log_silent_peers(&slots);
+        for slot in slots.iter().filter(|slot| !slot.is_done()) {
+            tracing::debug!(request = ?slot.request, "no valid answer");
+        }
         slots.into_iter().map(Slot::finish).collect()
     }
 

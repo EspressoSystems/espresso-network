@@ -5,9 +5,7 @@ use std::ops::RangeInclusive;
 use hotshot_types::{
     PeerConfig,
     data::EpochNumber,
-    epoch_membership::EpochMembershipCoordinator,
     stake_table::HSStakeTable,
-    traits::election::{Membership, MembershipSnapshot},
     utils::{epoch_from_block_number, is_epoch_root},
 };
 use indexmap::IndexMap;
@@ -15,8 +13,8 @@ use thiserror::Error;
 use vbs::version::Version;
 
 use super::{
-    AuthenticatedValidatorMap, RegisteredValidatorMap, StakeTableState,
-    committee::committee_peer_configs, select_active_validator_set,
+    AuthenticatedValidatorMap, StakeTableState, committee::committee_peer_configs,
+    select_active_validator_set,
 };
 use crate::{
     PubKey, SeqTypes,
@@ -52,6 +50,15 @@ impl LcContractVotingStakeTable {
             + u64::from(is_epoch_root(finalized_block_height, epoch_height));
         first_epoch.max(EpochNumber::new(epoch))
     }
+
+    /// Whether `table` is the table this commitment is of. Errors when `table` is over `capacity`.
+    pub fn commits_to(
+        &self,
+        table: &HSStakeTable<SeqTypes>,
+        capacity: usize,
+    ) -> anyhow::Result<bool> {
+        Ok(table.commitment(capacity)? == self.commitment)
+    }
 }
 
 /// Candidate: active set whose commitment equals the LC contract's for `epoch`. Used only to verify
@@ -70,43 +77,75 @@ pub struct LcContractCandidateStakeTable {
 
 impl LcContractCandidateStakeTable {
     /// The latest event block at or below `lc_contract.l1_block` whose active set, under one of
-    /// `candidate_versions`, commits to `lc_contract.commitment`. Pure. Uses
-    /// `StakeTableState::apply_event` and `select_active_validator_set`, both visible here.
+    /// `candidate_versions`, commits to `lc_contract.commitment`; with the validator state after
+    /// the last event, which gives `ST(now)` and the registry. Pure.
     ///
-    /// One forward fold over `events` keeps the validator map of each L1 block that carries events;
-    /// the search then walks those snapshots from the newest down. `events` are sorted by key.
+    /// One forward fold over `events` (sorted by key). At each block that carries events the
+    /// active set of every version is selected, and its commitment computed only when it differs
+    /// from the previous block's. A version earlier in `candidate_versions` wins a tie.
     pub fn find(
         lc_contract: &LcContractVotingStakeTable,
         events: &[(EventKey, StakeTableEvent)],
         candidate_versions: &[Version],
         stake_table_capacity: usize,
-    ) -> Result<Self, LcContractStakeTableMatchError> {
-        let snapshots = event_block_snapshots(events, lc_contract.l1_block)?;
-        for (l1_block, registered) in snapshots.iter().rev() {
-            for &version in candidate_versions {
-                let validators = match select_active_validator_set(registered, version) {
-                    Ok(validators) => validators,
-                    Err(StakeTableError::NoValidValidators) => continue,
+    ) -> Result<(Self, StakeTableState), LcContractStakeTableMatchError> {
+        let mut state = StakeTableState::default();
+        let mut found = None;
+        // Per version: its active set at the previous block, and whether that set matches.
+        let mut previous: Vec<(Option<AuthenticatedValidatorMap>, bool)> =
+            vec![(None, false); candidate_versions.len()];
+        let mut first_block = None;
+        let mut events = events
+            .iter()
+            .take_while(|((l1_block, _), _)| *l1_block <= lc_contract.l1_block)
+            .peekable();
+        while let Some(((l1_block, _), event)) = events.next() {
+            first_block.get_or_insert(*l1_block);
+            if let Err(expected) = state.apply_event(event.clone())? {
+                tracing::debug!(%expected, "stake table event skipped");
+            }
+            if events.peek().is_some_and(|((next, _), _)| next == l1_block) {
+                continue;
+            }
+            for (version, (active, matches)) in candidate_versions.iter().zip(&mut previous) {
+                let selected = match select_active_validator_set(state.validators(), *version) {
+                    Ok(selected) => selected,
+                    Err(StakeTableError::NoValidValidators) => {
+                        (*active, *matches) = (None, false);
+                        continue;
+                    },
                     Err(err) => return Err(err.into()),
                 };
-                let commitment = peer_configs_of(&validators)
-                    .commitment(stake_table_capacity)
-                    .map_err(|source| LcContractStakeTableMatchError::Commitment { source })?;
-                if commitment == lc_contract.commitment {
-                    return Ok(Self {
-                        epoch: lc_contract.voting_epoch,
-                        l1_block: *l1_block,
-                        version,
-                        validators,
-                    });
+                if active.as_ref() != Some(&selected) {
+                    let commitment = peer_configs_of(&selected)
+                        .commitment(stake_table_capacity)
+                        .map_err(|source| LcContractStakeTableMatchError::Commitment { source })?;
+                    *matches = commitment == lc_contract.commitment;
+                    *active = Some(selected);
                 }
             }
+            let matching = candidate_versions.iter().zip(&previous).find_map(
+                |(version, (active, matches))| {
+                    active
+                        .clone()
+                        .filter(|_| *matches)
+                        .map(|validators| (*version, validators))
+                },
+            );
+            if let Some((version, validators)) = matching {
+                found = Some(Self {
+                    epoch: lc_contract.voting_epoch,
+                    l1_block: *l1_block,
+                    version,
+                    validators,
+                });
+            }
         }
-        let first_searched = snapshots.first().map_or(lc_contract.l1_block, |s| s.0);
-        Err(
+        let searched_l1_blocks = first_block.unwrap_or(lc_contract.l1_block)..=lc_contract.l1_block;
+        found.map(|found| (found, state)).ok_or(
             LcContractStakeTableMatchError::NoLcContractCommitmentMatch {
                 epoch: lc_contract.voting_epoch,
-                searched_l1_blocks: first_searched..=lc_contract.l1_block,
+                searched_l1_blocks,
             },
         )
     }
@@ -116,31 +155,20 @@ impl LcContractCandidateStakeTable {
         committee_peer_configs(&self.validators)
     }
 
-    /// Stake table of `epoch` that verifies its certificates: the installed table, else this
-    /// candidate when `epoch == self.epoch`. Pure given its inputs.
+    /// Stake table of `epoch` that verifies its certificates: `installed`, else this candidate when
+    /// `epoch == self.epoch`. Pure.
     ///
-    /// Reads installed tables through `membership().snapshot(epoch)`, which is public and never
-    /// starts catchup; never `stake_table_for_epoch` or `membership_for_epoch`, which start HTTP
-    /// catchup. The caller derives entries with `StakeTableEntries::from` and the threshold with
+    /// The caller reads `installed` through `membership().snapshot(epoch)`, public and never
+    /// starting catchup; never `stake_table_for_epoch` or `membership_for_epoch`, which start HTTP
+    /// catchup. It derives entries with `StakeTableEntries::from` and the threshold with
     /// `supermajority_threshold(total_stakes())`.
     pub fn quorum_for(
         &self,
         epoch: EpochNumber,
-        membership: &EpochMembershipCoordinator<SeqTypes>,
+        installed: Option<HSStakeTable<SeqTypes>>,
     ) -> Option<HSStakeTable<SeqTypes>> {
-        installed_stake_table(membership, epoch)
-            .or_else(|| (epoch == self.epoch).then(|| peer_configs_of(&self.validators)))
+        installed.or_else(|| (epoch == self.epoch).then(|| peer_configs_of(&self.validators)))
     }
-}
-
-/// The installed stake table of `epoch`, read through `membership().snapshot(epoch)`: public and
-/// never starts catchup, unlike `stake_table_for_epoch`.
-pub fn installed_stake_table(
-    membership: &EpochMembershipCoordinator<SeqTypes>,
-    epoch: EpochNumber,
-) -> Option<HSStakeTable<SeqTypes>> {
-    let snapshot = membership.membership().snapshot(epoch)?;
-    Some(HSStakeTable::from_iter(snapshot.stake_table()))
 }
 
 /// The committee-ordered entries of `validators` as a stake table.
@@ -148,26 +176,21 @@ fn peer_configs_of(validators: &AuthenticatedValidatorMap) -> HSStakeTable<SeqTy
     HSStakeTable::from_iter(committee_peer_configs(validators).values())
 }
 
-/// The registered validators after each L1 block that carries events, up to `to_l1_block`.
-fn event_block_snapshots(
+/// The validator state after all `events` up to `to_l1_block`.
+pub fn stake_table_state_at(
     events: &[(EventKey, StakeTableEvent)],
     to_l1_block: u64,
-) -> Result<Vec<(u64, RegisteredValidatorMap)>, StakeTableError> {
+) -> Result<StakeTableState, StakeTableError> {
     let mut state = StakeTableState::default();
-    let mut snapshots = Vec::new();
-    let mut events = events
+    for (_, event) in events
         .iter()
         .take_while(|((l1_block, _), _)| *l1_block <= to_l1_block)
-        .peekable();
-    while let Some(((l1_block, _), event)) = events.next() {
+    {
         if let Err(expected) = state.apply_event(event.clone())? {
             tracing::debug!(%expected, "stake table event skipped");
         }
-        if events.peek().is_none_or(|((next, _), _)| next != l1_block) {
-            snapshots.push((*l1_block, state.validators().clone()));
-        }
     }
-    Ok(snapshots)
+    Ok(state)
 }
 
 /// Why `find` produced no candidate.
@@ -314,7 +337,7 @@ mod tests {
         let target = events.iter().take(4).cloned().collect::<Vec<_>>();
         let lc = lc_contract(20, commitment_of(&target, EPOCH_VERSION));
 
-        let found = LcContractCandidateStakeTable::find(
+        let (found, _) = LcContractCandidateStakeTable::find(
             &lc,
             &events[..4],
             &[NEW_PROTOCOL_VERSION, EPOCH_VERSION],
@@ -335,8 +358,9 @@ mod tests {
         events.extend(at_block(12, [ValidatorRegisteredV3::from(&idle).into()]));
         let lc = lc_contract(20, commitment_of(&events, EPOCH_VERSION));
 
-        let found =
-            LcContractCandidateStakeTable::find(&lc, &events, &[EPOCH_VERSION], CAPACITY).unwrap();
+        let found = LcContractCandidateStakeTable::find(&lc, &events, &[EPOCH_VERSION], CAPACITY)
+            .unwrap()
+            .0;
 
         assert_eq!(found.l1_block, 12);
         assert_eq!(found.epoch, EpochNumber::new(5));
@@ -348,8 +372,9 @@ mod tests {
         let lc = lc_contract(11, commitment_of(&events, EPOCH_VERSION));
         events.extend(at_block(15, v3_events(8)));
 
-        let found =
-            LcContractCandidateStakeTable::find(&lc, &events, &[EPOCH_VERSION], CAPACITY).unwrap();
+        let found = LcContractCandidateStakeTable::find(&lc, &events, &[EPOCH_VERSION], CAPACITY)
+            .unwrap()
+            .0;
 
         assert_eq!(found.l1_block, 10);
     }
@@ -380,17 +405,18 @@ mod tests {
     fn quorum_for_falls_back_to_candidate() {
         let events = at_block(10, v3_events(5));
         let lc = lc_contract(20, commitment_of(&events, EPOCH_VERSION));
-        let candidate =
+        let (candidate, _) =
             LcContractCandidateStakeTable::find(&lc, &events, &[EPOCH_VERSION], CAPACITY).unwrap();
-        let coordinator = crate::NodeState::mock().coordinator;
 
-        let table = candidate.quorum_for(candidate.epoch, &coordinator).unwrap();
+        let table = candidate.quorum_for(candidate.epoch, None).unwrap();
 
         assert_eq!(table.len(), candidate.validators.len());
-        assert!(
-            candidate
-                .quorum_for(EpochNumber::new(6), &coordinator)
-                .is_none()
+        assert!(candidate.quorum_for(EpochNumber::new(6), None).is_none());
+        // An installed table takes precedence.
+        let installed = HSStakeTable::<SeqTypes>::default();
+        assert_eq!(
+            candidate.quorum_for(candidate.epoch, Some(installed.clone())),
+            Some(installed)
         );
     }
 }
