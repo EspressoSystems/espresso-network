@@ -402,9 +402,16 @@ pub struct Options {
     #[clap(long, env = "ESPRESSO_NODE_BOOTSTRAP_EPOCH_CATCHUP_TIMEOUT", default_value = "30s", value_parser = parse_duration)]
     pub bootstrap_epoch_catchup_timeout: Duration,
 
-    /// How long a leader waits before proposing a block with no transactions in it.
+    /// How long a leader waits for transactions before proposing a block with none, or with
+    /// less than `--min-pool-fraction` of a block.
     #[clap(long, env = "ESPRESSO_NODE_EMPTY_BLOCK_DELAY", default_value = "500ms", value_parser = parse_duration)]
     pub empty_block_delay: Duration,
+
+    /// The share of a block the leader's pool must hold for it to build at once. Under it the
+    /// leader waits `--empty-block-delay` for forwarded transactions and builds with what
+    /// arrived. 0 waits only when the pool is empty.
+    #[clap(long, env = "ESPRESSO_NODE_MIN_POOL_FRACTION", default_value = "0", value_parser = parse_fraction)]
+    pub min_pool_fraction: f64,
 
     /// Directory for the leader-event trace `leader_trace_node{N}.csv`. Disabled when unset.
     /// Use local disk: a slow flush blocks consensus.
@@ -503,6 +510,15 @@ fn ignored_network_options(cmd: &Command, matches: &ArgMatches) -> Vec<String> {
 
 /// Parse an address to bind to, and check that it is well-formed, so that a mistyped
 /// host fails at startup rather than when the first peer cannot reach us.
+fn parse_fraction(s: &str) -> Result<f64, String> {
+    let fraction: f64 = s.parse().map_err(|e| format!("{e}"))?;
+    if (0.0..=1.0).contains(&fraction) {
+        Ok(fraction)
+    } else {
+        Err(format!("{s} is not between 0 and 1"))
+    }
+}
+
 fn parse_bind_addr(s: &str) -> Result<NetAddr, String> {
     let addr = s.parse::<NetAddr>().map_err(|e| e.to_string())?;
     addr.validate().map_err(|e| e.to_string())?;

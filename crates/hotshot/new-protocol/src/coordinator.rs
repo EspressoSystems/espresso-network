@@ -191,6 +191,7 @@ where
         stake_table_capacity: usize,
         timeout_duration: Duration,
         empty_block_delay: Duration,
+        #[builder(default)] min_pool_fraction: f64,
         block_sizes: BTreeMap<Version, u64>,
         storage: S,
         metrics: &dyn Metrics,
@@ -331,6 +332,7 @@ where
             membership_coordinator.clone(),
             BlockBuilderConfig {
                 empty_block_delay,
+                min_pool_fraction,
                 block_sizes,
                 ..BlockBuilderConfig::default()
             },

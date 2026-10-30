@@ -282,6 +282,7 @@ where
 
     let proposal_fetcher_config = opt.proposal_fetcher_config;
     let empty_block_delay = opt.empty_block_delay;
+    let min_pool_fraction = opt.min_pool_fraction;
     let leader_trace_dir = opt.leader_trace_dir.clone();
 
     if modules.query.is_none() {
@@ -310,6 +311,7 @@ where
                             opt.identity,
                             proposal_fetcher_config,
                             empty_block_delay,
+                            min_pool_fraction,
                             leader_trace_dir,
                         )
                         .await
@@ -331,6 +333,7 @@ where
                 opt.identity,
                 proposal_fetcher_config,
                 empty_block_delay,
+                min_pool_fraction,
                 leader_trace_dir,
             )
             .await?

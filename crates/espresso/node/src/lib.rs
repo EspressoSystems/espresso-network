@@ -184,6 +184,7 @@ pub async fn init_node<P>(
     identity: Identity,
     proposal_fetcher_config: ProposalFetcherConfig,
     empty_block_delay: Duration,
+    min_pool_fraction: f64,
     leader_trace_dir: Option<PathBuf>,
 ) -> anyhow::Result<SequencerContext<P>>
 where
@@ -472,6 +473,7 @@ where
         proposal_fetcher_config,
         network_params.bootstrap_epoch_catchup_timeout,
         empty_block_delay,
+        min_pool_fraction,
         block_sizes,
         leader_trace_dir,
     )
@@ -1652,6 +1654,7 @@ pub mod testing {
                 Default::default(),
                 Duration::from_secs(2),
                 Duration::from_millis(500),
+                0.0,
                 BTreeMap::from([(upgrade.base, max_block_size)]),
                 None,
             )

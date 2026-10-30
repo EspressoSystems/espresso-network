@@ -142,6 +142,7 @@ where
         proposal_fetcher_cfg: ProposalFetcherConfig,
         bootstrap_epoch_catchup_timeout: Duration,
         empty_block_delay: Duration,
+        min_pool_fraction: f64,
         block_sizes: BTreeMap<Version, u64>,
         leader_trace_dir: Option<PathBuf>,
     ) -> anyhow::Result<Self>
@@ -230,6 +231,7 @@ where
             .stake_table_capacity(stake_table_capacity)
             .timeout_duration(Duration::from_secs(10))
             .empty_block_delay(empty_block_delay)
+            .min_pool_fraction(min_pool_fraction)
             .block_sizes(block_sizes)
             .storage(Arc::clone(&persistence))
             .metrics(metrics)
