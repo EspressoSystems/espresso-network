@@ -1245,12 +1245,7 @@ impl SequencerPersistence for Persistence {
         res
     }
 
-    async fn record_action(
-        &self,
-        view: ViewNumber,
-        _epoch: Option<EpochNumber>,
-        action: HotShotAction,
-    ) -> anyhow::Result<()> {
+    async fn record_action(&self, view: ViewNumber, action: HotShotAction) -> anyhow::Result<()> {
         // Todo Remove this after https://github.com/EspressoSystems/espresso-network/issues/1931
         if !matches!(action, HotShotAction::Propose | HotShotAction::Vote) {
             return Ok(());

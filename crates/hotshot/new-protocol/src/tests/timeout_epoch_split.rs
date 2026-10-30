@@ -126,10 +126,7 @@ async fn boundary_timeout_vote(
     );
     // Not the last `ViewChanged`: an `EpochChange` that arrives after Cert1
     // moved the node into the view relabels it without emitting another one.
-    let label = harness
-        .consensus
-        .current_epoch()
-        .expect("the node holds an epoch past the boundary");
+    let label = harness.consensus.current_epoch();
 
     harness
         .apply(ConsensusInput::Timeout(ViewNumber::new(NEXT_VIEW)))

@@ -335,12 +335,7 @@ impl<T: NodeType, S: NewProtocolStorage<T>> Storage<T, S> {
         self.handles.entry(view).or_default().push(handle);
     }
 
-    pub fn record_action(
-        &mut self,
-        view: ViewNumber,
-        epoch: Option<EpochNumber>,
-        kind: ActionKind,
-    ) {
+    pub fn record_action(&mut self, view: ViewNumber, kind: ActionKind) {
         let storage = self.storage.clone();
         let timer = self
             .metrics
@@ -348,7 +343,7 @@ impl<T: NodeType, S: NewProtocolStorage<T>> Storage<T, S> {
             .map(|m| Measurement::start(m.record_action.clone()));
         let handle = self.tasks.spawn(async move {
             loop {
-                match storage.record_action(view, epoch, kind.into()).await {
+                match storage.record_action(view, kind.into()).await {
                     Ok(()) => {
                         finish_measurement(timer);
                         return Some(StorageOutput::Action(view, kind));

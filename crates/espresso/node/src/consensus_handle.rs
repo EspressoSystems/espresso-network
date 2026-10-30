@@ -267,7 +267,7 @@ where
             return self.resting.read().leaf.epoch(*self.epoch_height);
         };
         match client_api.current_epoch().await {
-            Ok(epoch) => epoch,
+            Ok(epoch) => Some(epoch),
             Err(err) => {
                 warn!(%err, "coordinator unavailable for current_epoch");
                 None
