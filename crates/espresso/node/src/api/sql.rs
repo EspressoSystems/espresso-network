@@ -2391,13 +2391,14 @@ pub(crate) mod impl_testable_data_source {
 
 #[cfg(test)]
 mod tests {
-    use std::{sync::Arc, time::Duration};
+    use std::{collections::HashSet, sync::Arc, time::Duration};
 
     use alloy::primitives::{Address, U256};
     use espresso_types::{
         BLOCK_MERKLE_TREE_HEIGHT, BackoffParams, BlockMerkleTree, FEE_MERKLE_TREE_HEIGHT,
         FeeAccount, FeeAmount, FeeMerkleTree, L1BlockInfo, Leaf2, NodeState,
         v0::traits::StateCatchup,
+        v0_1::IterableFeeInfo,
         v0_4::{REWARD_MERKLE_TREE_V2_HEIGHT, RewardMerkleTreeV2},
     };
     use hotshot_query_service::{
@@ -2848,9 +2849,8 @@ mod tests {
         }
     }
 
-    /// The STF credits L1 deposits only below `NEW_PROTOCOL_VERSION`, so the dependencies of later
-    /// headers must not query the L1. The mock L1 client points at a port that never answers and
-    /// the deposit fetch retries forever.
+    /// Fee dependencies of `NEW_PROTOCOL_VERSION` headers must not fetch L1 deposits.
+    /// The mock L1 never answers, so a fetch hangs.
     #[tokio::test]
     #[test_log::test]
     async fn test_fee_dependencies_skip_l1_deposits_from_new_protocol() {
@@ -2867,7 +2867,10 @@ mod tests {
         instance.genesis_header.chain_config = instance.chain_config;
         let parent = Leaf2::genesis(&Default::default(), &instance, NEW_PROTOCOL_VERSION).await;
         let mut leaf = parent.clone();
-        *leaf.block_header_mut().l1_finalized_mut() = Some(L1BlockInfo::default());
+        *leaf.block_header_mut().l1_finalized_mut() = Some(L1BlockInfo {
+            number: 1,
+            ..Default::default()
+        });
         assert!(leaf.block_header().version() >= NEW_PROTOCOL_VERSION);
 
         let mut tx = storage.read().await.unwrap();
@@ -2884,6 +2887,16 @@ mod tests {
         .await
         .expect("fee dependencies queried the L1 for deposits")
         .unwrap();
-        assert!(accounts.contains(&instance.chain_config.fee_recipient));
+        let mut expected: HashSet<_> = leaf
+            .block_header()
+            .fee_info()
+            .accounts()
+            .into_iter()
+            .collect();
+        expected.insert(instance.chain_config.fee_recipient);
+        assert_eq!(
+            accounts, expected,
+            "only the fee recipient and header fee accounts are expected"
+        );
     }
 }
