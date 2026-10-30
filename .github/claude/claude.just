@@ -19,4 +19,10 @@ test *args:
 # Replay the review on cases in eval/cases.toml; see README.md.
 [script("../../scripts/with-tools", "python", "uv")]
 eval *args:
-    cd ../.. && PYTHONPATH=.github/claude uv run --locked --project .github/claude python .github/claude/eval/eval.py {{args}}
+    cd ../..
+    # Shared by all worktrees; no personal settings or CLAUDE.md, like CI.
+    export CLAUDE_CONFIG_DIR="$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")/tmp/claude-eval/config"
+    export CLAUDE_CLI_PATH="${CLAUDE_CLI_PATH:-$(command -v claude)}"
+    mkdir -p "$CLAUDE_CONFIG_DIR"
+    claude auth status >/dev/null || claude auth login
+    PYTHONPATH=.github/claude uv run --locked --project .github/claude python .github/claude/eval/eval.py {{args}}
