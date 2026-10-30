@@ -29,6 +29,8 @@ fee_contract = '0x42835083fd1d3fc5d799b5f6815ae4bf2623e6d0'
 
 [l1_finalized]
 number = 6758037 # Block where fee contract is deployed
+timestamp = "0x66f43a1c"
+hash = "0x7063208185b352ec9732ee8eda32fa997dffa3a7abac945b9d91b21d85b173e2"
 
 [[upgrade]]
 version = "0.7"

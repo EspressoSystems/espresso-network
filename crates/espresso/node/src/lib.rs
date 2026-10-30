@@ -749,14 +749,11 @@ pub(crate) async fn prefetch_stake_table_events(
         return Ok(());
     };
 
-    // Not redundant: a genesis pinning a complete L1 block never waits on the L1 client,
-    // so it reaches this with an empty snapshot.
-    l1_client.wait_for_finalized_block(l1_genesis.number).await;
+    // A pinned genesis block never waits on the L1 client, so the snapshot may be empty here.
+    // Does not fetch the genesis block itself: RPCs that prune old history no longer serve it.
     let finalized = l1_client
-        .snapshot()
-        .await
-        .finalized
-        .context("no finalized L1 block after waiting for the genesis block")?;
+        .wait_for_latest_finalized_at_least(l1_genesis.number)
+        .await;
 
     tracing::info!(
         target: "announce",
