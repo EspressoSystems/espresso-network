@@ -445,7 +445,9 @@
 <p class="lede">
   One fast-finality view, from the formula model in <code>scripts/network-bench/vidformula.py</code>: the latency
   matrix, the share transfer and the compute of each step give the view time, the reconstruction window and finality for
-  every block size. Move a slider and the curves recompute.
+  every block size, or for every offered rate when blocks follow the load: each leader's block is what arrived since the
+  previous leader pulled the pool, so the view sets the next block and the block the next view. Move a slider and the
+  curves recompute.
 </p>
 
 <div class="app">
@@ -502,10 +504,29 @@
         <label for="cap">Latency cap, p50</label><span class="val" id="cap-v"></span
         ><input type="range" id="cap" min="100" max="3000" step="10" value="1000" />
       </div>
+    </section>
+    <section class="panel">
+      <h2>Load</h2>
       <div class="ctl">
-        <label for="maxmb">Block sizes up to</label><span class="val" id="maxmb-v"></span
+        <label>Blocks</label
+        ><span class="seg" role="group" aria-label="Load mode"
+          ><button type="button" id="mode-block" aria-pressed="true">fixed sizes</button
+          ><button type="button" id="mode-rate" aria-pressed="false">follow a rate</button></span
+        >
+      </div>
+      <div class="ctl" id="maxrate-row" hidden>
+        <label for="maxrate">Offered rates up to</label><span class="val" id="maxrate-v"></span
+        ><input type="range" id="maxrate" min="50" max="2000" step="10" value="600" />
+      </div>
+      <div class="ctl">
+        <label for="maxmb" id="maxmb-l">Block sizes up to</label><span class="val" id="maxmb-v"></span
         ><input type="range" id="maxmb" min="20" max="1000" step="10" value="300" />
       </div>
+      <p class="note" id="mode-note" style="margin-top: 6px" hidden>
+        Transactions arrive at the offered rate and a leader takes the whole pool, up to the max block. Below the
+        capacity the blocks settle; above it each view's block outgrows the last until the cap, and the decided rate
+        flattens. Real networks tip before the model does: one slow view near the boundary is enough.
+      </p>
     </section>
     <section class="panel">
       <h2>Compute</h2>
@@ -546,7 +567,8 @@
           <tbody id="adv-body"></tbody>
         </table>
         <p class="note" style="margin-top: 6px">
-          Fitted from the 28 October c8g.4xlarge run; the sliders above move these, and edits here move the sliders.
+          Fitted from the 28 October c8g.4xlarge run and the 29 October c8g.8xlarge runs; the sliders above move these,
+          and edits here move the sliders.
         </p>
       </details>
     </section>
@@ -1059,18 +1081,16 @@
       return (c[0] + c[1] * mb) / 1000;
     }
     // compute: {build, encode, propose, persist_proposal, verify_proposal, vote1, decode, cert, vote2, decide} each [fixed ms, ms per MB]
-    function runViews(n, k, d, mb, gbps, leaders, views, c, lane) {
+    // load: {rate MB/s, maxMb, seedMb} makes each block what arrived since the previous leader
+    // pulled the pool (vidformula.Load); without it every block is mb.
+    function runViews(n, k, d, mb, gbps, leaders, views, c, lane, load) {
       const q = Math.ceil((2 * n) / 3);
-      const T = (((n - 1) / k) * mb * 8) / gbps / 1000;
-      const verify = cost(c.verify_proposal, mb),
-        vote1 = cost(c.vote1, mb),
-        cert = cost(c.cert, mb);
-      const proposal = cost(c.propose, mb) + cost(c.persist_proposal, mb);
-      const build = cost(c.build, mb) + cost(c.encode, mb),
-        decode = cost(c.decode, mb);
-      const vote2c = cost(c.vote2, mb),
-        decide = cost(c.decide, mb);
+      const tShare = (mb) => (((n - 1) / k) * mb * 8) / gbps / 1000;
+      const proposalOf = (mb) => cost(c.propose, mb) + cost(c.persist_proposal, mb);
+      const buildOf = (mb) => cost(c.build, mb) + cost(c.encode, mb);
       const V = views + 2;
+      const mbs = new Float64Array(V).fill(load ? load.seedMb : mb);
+      const pull = new Float64Array(V);
       const proposed = new Float64Array(V),
         transit = new Float64Array(V),
         disperse = new Float64Array(V),
@@ -1100,13 +1120,21 @@
       let free = new Float64Array(n);
       const m = new Float64Array(n * n),
         scratch = new Float64Array(n);
-      proposed[1] = proposal;
-      disperse[1] = build;
-      built[1] = build;
-      free[leaders[1]] = build + T;
+      proposed[1] = proposalOf(mbs[1]);
+      disperse[1] = buildOf(mbs[1]);
+      built[1] = buildOf(mbs[1]);
+      free[leaders[1]] = buildOf(mbs[1]) + tShare(mbs[1]);
       for (let v = 1; v <= views; v++) {
         const lead = leaders[v],
           nxt = leaders[v + 1];
+        const mbv = mbs[v],
+          T = tShare(mbv);
+        const verify = cost(c.verify_proposal, mbv),
+          vote1 = cost(c.vote1, mbv),
+          cert = cost(c.cert, mbv),
+          decode = cost(c.decode, mbv),
+          vote2c = cost(c.vote2, mbv),
+          decide = cost(c.decide, mbv);
         const p = proposed[v],
           disp = disperse[v];
         propLeave[v] = lane ? p : Math.max(p, free[lead]);
@@ -1127,11 +1155,17 @@
           ready[j] = pair[v][j] + vote1;
           vote1Out[j] = Math.max(ready[j], recovered[v - 1][j]);
         }
-        built[v + 1] = propArr[nxt] + verify + build;
+        // The next leader pulls the pool when the proposal is verified; with a load, what arrived
+        // since the previous pull is its block.
+        pull[v + 1] = propArr[nxt] + verify;
+        if (load) mbs[v + 1] = Math.min(load.maxMb, load.rate * (pull[v + 1] - pull[v]));
+        const mbn = mbs[v + 1],
+          Tn = tShare(mbn);
+        built[v + 1] = pull[v + 1] + buildOf(mbn);
         const disperseFirst = built[v + 1] < vote1Out[nxt];
         if (disperseFirst) {
           disperse[v + 1] = Math.max(built[v + 1], free[nxt]);
-          free[nxt] = disperse[v + 1] + T;
+          free[nxt] = disperse[v + 1] + Tn;
         }
         for (let x = 0; x < n; x++) {
           vote1Leave[x] = lane ? vote1Out[x] : Math.max(vote1Out[x], free[x]);
@@ -1141,12 +1175,12 @@
         free = Float64Array.from(rbDone);
         if (!disperseFirst) {
           disperse[v + 1] = Math.max(built[v + 1], free[nxt]);
-          free[nxt] = disperse[v + 1] + T;
+          free[nxt] = disperse[v + 1] + Tn;
         }
         // cert1 at i: q-th smallest over x of vote1Leave[x] + d[x][i]
         for (let x = 0; x < n; x++) for (let i = 0; i < n; i++) m[x * n + i] = vote1Leave[x] + d[x * n + i];
         for (let i = 0; i < n; i++) cert1[v][i] = kthOfColumn(m, n, i, q, scratch, -1) + cert;
-        proposed[v + 1] = cert1[v][nxt] + proposal;
+        proposed[v + 1] = cert1[v][nxt] + proposalOf(mbn);
         // k-th share of block v at j
         for (let x = 0; x < n; x++) for (let j = 0; j < n; j++) m[x * n + j] = rbDone[x] + d[x * n + j];
         for (let j = 0; j < n; j++) m[lead * n + j] = Math.min(m[lead * n + j], disp + T + d[lead * n + j]);
@@ -1165,14 +1199,15 @@
           decided[v][i] = per.cert2[v][i] + decide;
         }
       }
-      return { proposed, transit, disperse, built, propLeave, ...per, q, leaders, n, T, d };
+      return { proposed, transit, disperse, built, propLeave, ...per, q, leaders, n, T: tShare(mbs[1]), d, mbs };
     }
     function pct(xs, p) {
       if (!xs.length) return NaN;
       const s = Float64Array.from(xs).sort();
       return s[Math.min(s.length - 1, Math.floor(p * s.length))];
     }
-    function summarize(r, lo, hi) {
+    // load: with the blocks following a rate, also whether they settled (vidformula.point).
+    function summarize(r, lo, hi, load) {
       const vt = [],
         fin = [],
         win = [],
@@ -1193,7 +1228,18 @@
         }
       }
       const mean = vt.reduce((a, b) => a + b, 0) / vt.length;
+      const mbs = Array.from(r.mbs.subarray(lo, hi));
+      const mid = (lo + hi) >> 1;
+      const grown = pct(Array.from(r.mbs.subarray(mid, hi)), 0.5) / Math.max(pct(Array.from(r.mbs.subarray(lo, mid)), 0.5), 1e-9) - 1;
+      const blocks = {
+        mb_p50: pct(mbs, 0.5),
+        mb_p90: pct(mbs, 0.9),
+        capped_pct: load ? (100 * mbs.filter((x) => x >= load.maxMb - 1e-9).length) / mbs.length : 0,
+        growth_pct: 100 * grown,
+        decided: mbs.reduce((a, b) => a + b, 0) / (r.proposed[hi] - r.proposed[lo]),
+      };
       return {
+        ...blocks,
         view_mean: mean,
         view_p50: pct(vt, 0.5),
         view_p90: pct(vt, 0.9),
@@ -1211,15 +1257,15 @@
       for (let i = 0; i < views + 2; i++) out.push(Math.floor(rnd() * n));
       return out;
     }
-    function point(cfg, mb, profiles) {
+    function point(cfg, mb, profiles, load) {
       const { n, k, gbps, views, compute, lane } = cfg;
       const { d } = delays(cfg.profile, n, cfg.uniformMs, profiles);
-      const r = runViews(n, k, d, mb, gbps, cfg.leaders, views, compute, lane);
+      const r = runViews(n, k, d, mb, gbps, cfg.leaders, views, compute, lane, load);
       const lo = Math.floor(views / 4),
         hi = views - 5;
-      const s = summarize(r, lo, hi);
-      s.mb = mb;
-      s.mbps = (mb / s.view_mean) * 1000;
+      const s = summarize(r, lo, hi, load);
+      s.mb = load ? s.mb_p50 : mb;
+      s.mbps = load ? s.decided : (mb / s.view_mean) * 1000;
       s.share_ms = (((n - 1) / k) * mb * 8) / gbps;
       return s;
     }
@@ -1273,6 +1319,7 @@
       threshold: "f+1",
       lane: false,
       metric: "fin",
+      mode: "block",
       compute: structuredClone(PRESETS["c8g.4xlarge"]),
       baseline: null,
     };
@@ -1349,6 +1396,10 @@
       $("uniform-v").textContent = $("uniform").value + " ms";
       $("cap-v").textContent = $("cap").value + " ms";
       $("maxmb-v").textContent = $("maxmb").value + " MB";
+      $("maxrate-v").textContent = $("maxrate").value + " MB/s";
+      $("maxrate-row").hidden = state.mode !== "rate";
+      $("mode-note").hidden = state.mode !== "rate";
+      $("maxmb-l").textContent = state.mode === "rate" ? "Max block" : "Block sizes up to";
       $("decode-v").textContent = fmt(+$("decode").value, 2) + " ms/MB";
       $("buildenc-v").textContent = fmt(+$("buildenc").value, 2) + " ms/MB";
       $("storage-v").textContent = fmt(+$("storage").value, 1) + " ms";
@@ -1371,7 +1422,14 @@
         cap: +$("cap").value,
         metric: state.metric,
         maxmb: +$("maxmb").value,
+        mode: state.mode,
+        maxrate: +$("maxrate").value,
       };
+    }
+    function rates(max) {
+      const xs = [];
+      for (let i = 1; i <= 24; i++) xs.push(Math.round((max * i) / 24));
+      return xs;
     }
     function blockSizes(max) {
       const xs = [1, 2, 5, 10];
@@ -1383,20 +1441,44 @@
       return xs;
     }
     function sweep(cfg) {
-      const views = cfg.n > 120 ? 50 : cfg.n > 60 ? 70 : 120;
+      const rateMode = cfg.mode === "rate";
+      // Blocks that follow a rate need the transient to settle before the measured views.
+      const views = rateMode ? (cfg.n > 120 ? 60 : cfg.n > 60 ? 90 : 200) : cfg.n > 120 ? 50 : cfg.n > 60 ? 70 : 120;
       cfg.views = views;
       cfg.leaders = MODEL.leaders(cfg.n, views, 1);
       const { d, labels: reg } = MODEL.delays(cfg.profile, cfg.n, cfg.uniformMs, PROFILES);
-      const pts = blockSizes(cfg.maxmb).map((mb) => {
-        const r = MODEL.runViews(cfg.n, cfg.k, d, mb, cfg.gbps, cfg.leaders, views, cfg.compute, cfg.lane);
-        const s = MODEL.summarize(r, Math.floor(views / 4), views - 5);
-        s.mb = mb;
-        s.mbps = (mb / s.view_mean) * 1000;
+      const lo = Math.floor(views / 4),
+        hi = views - 5;
+      const finish = (s, x) => {
+        s.x = x;
         s.tx_p50 = s.fin_p50 + 1.5 * s.view_mean;
-        s.decode = cfg.compute.decode[0] + cfg.compute.decode[1] * mb;
-        s.share_ms = (((cfg.n - 1) / cfg.k) * mb * 8) / cfg.gbps;
+        s.decode = cfg.compute.decode[0] + cfg.compute.decode[1] * s.mb;
+        s.share_ms = (((cfg.n - 1) / cfg.k) * s.mb * 8) / cfg.gbps;
         return s;
-      });
+      };
+      let pts, capacity;
+      if (rateMode) {
+        pts = rates(cfg.maxrate).map((rate) => {
+          const load = { rate, maxMb: cfg.maxmb, seedMb: 10 };
+          const r = MODEL.runViews(cfg.n, cfg.k, d, 0, cfg.gbps, cfg.leaders, views, cfg.compute, cfg.lane, load);
+          const s = MODEL.summarize(r, lo, hi, load);
+          s.rate = rate;
+          s.mb = s.mb_p50;
+          s.mbps = s.decided;
+          s.steady = s.capped_pct === 0 && s.growth_pct < 5;
+          return finish(s, rate);
+        });
+        capacity = pts.reduce((acc, s) => (s.steady ? s.rate : acc), NaN);
+      } else {
+        pts = blockSizes(cfg.maxmb).map((mb) => {
+          const r = MODEL.runViews(cfg.n, cfg.k, d, mb, cfg.gbps, cfg.leaders, views, cfg.compute, cfg.lane);
+          const s = MODEL.summarize(r, lo, hi);
+          s.mb = mb;
+          s.mbps = (mb / s.view_mean) * 1000;
+          s.steady = true;
+          return finish(s, mb);
+        });
+      }
       // quorum round trip and leader-pair delay, medians over the sequence, for the chain readout
       const qs = [],
         dl = [];
@@ -1412,13 +1494,16 @@
       const slope = cfg.lane
         ? (((cfg.n - 1) / cfg.k) * 8) / cfg.gbps + cfg.compute.decode[1]
         : (((2 * (cfg.n - 1)) / cfg.k) * 8) / cfg.gbps; // ms per MB of view at large blocks
-      return { cfg, pts, q_ms: MODEL.pct(qs, 0.5), dll_ms: MODEL.pct(dl, 0.5), ceiling: 1000 / slope, regions: reg };
+      return { cfg, pts, capacity, q_ms: MODEL.pct(qs, 0.5), dll_ms: MODEL.pct(dl, 0.5), ceiling: 1000 / slope, regions: reg };
     }
-    function interp(pts, mb, key) {
-      if (mb <= pts[0].mb) return pts[0][key];
+    // Steady points only: past the capacity the blocks are still growing when measured.
+    const steady = (res) => res.pts.filter((s) => s.steady);
+    function interp(pts, x, key) {
+      if (!pts.length) return NaN;
+      if (x <= pts[0].x) return pts[0][key];
       for (let i = 1; i < pts.length; i++)
-        if (mb <= pts[i].mb) {
-          const t = (mb - pts[i - 1].mb) / (pts[i].mb - pts[i - 1].mb);
+        if (x <= pts[i].x) {
+          const t = (x - pts[i - 1].x) / (pts[i].x - pts[i - 1].x);
           return pts[i - 1][key] + t * (pts[i][key] - pts[i - 1][key]);
         }
       return pts[pts.length - 1][key];
@@ -1427,9 +1512,11 @@
       return metric === "fin" ? s.fin_p50 : s.tx_p50;
     }
     function atCap(res) {
-      const { pts, cfg } = res;
+      const { cfg } = res;
+      const pts = steady(res);
+      if (!pts.length) return { status: "below", mb: NaN, x: NaN };
       const m = pts.map((s) => metricOf(s, cfg.metric));
-      if (m[0] > cfg.cap) return { status: "below", mb: NaN };
+      if (m[0] > cfg.cap) return { status: "below", mb: NaN, x: NaN };
       let i = pts.length - 1;
       if (m[i] <= cfg.cap) return { status: "above", ...pts[i] };
       while (i > 0 && m[i] > cfg.cap) i--;
@@ -1438,10 +1525,13 @@
         t = (cfg.cap - m[i]) / (m[i + 1] - m[i]);
       const lerp = (key) => a[key] + t * (b[key] - a[key]);
       const out = { status: "ok" };
-      for (const key of ["mb", "mbps", "view_mean", "fin_p50", "tx_p50", "late_pct", "win_p50", "decode"])
+      for (const key of ["x", "mb", "mbps", "view_mean", "fin_p50", "tx_p50", "late_pct", "win_p50", "decode"])
         out[key] = lerp(key);
       return out;
     }
+    // A pinned baseline compares only within the same load mode.
+    const sameMode = (res, base) => (base && base.cfg.mode === res.cfg.mode ? base : null);
+    const labelOf = (id, text) => ($(id).parentElement.querySelector(".k").textContent = text);
     function chains(res, mb) {
       const c = res.cfg.compute,
         ms = (s) => c[s][0] + c[s][1] * mb;
@@ -1484,15 +1574,28 @@
       e.className = "d " + (dclass || "");
     }
     function tiles(res, base) {
+      base = sameMode(res, base);
+      const rateMode = res.cfg.mode === "rate";
       const at = atCap(res),
         bat = base ? atCap(base) : null;
       const cap = res.cfg.cap;
+      const atCapacity = rateMode && Number.isFinite(res.capacity) ? res.pts.find((s) => s.rate === res.capacity) : null;
       let status = "";
       if (at.status === "below")
-        status = `Even 1 MB blocks exceed the ${cap} ms cap here: the latency chain alone is above it. Raise the cap or cut the fixed costs.`;
+        status = rateMode
+          ? `Even the lowest offered rate exceeds the ${cap} ms cap here, or no rate settles. Raise the cap or cut the fixed costs.`
+          : `Even 1 MB blocks exceed the ${cap} ms cap here: the latency chain alone is above it. Raise the cap or cut the fixed costs.`;
       if (at.status === "above")
-        status = `Finality stays under the cap up to ${res.cfg.maxmb} MB blocks; raise "block sizes up to" to find the limit.`;
+        status = rateMode
+          ? Number.isFinite(res.capacity) && res.capacity < res.cfg.maxrate
+            ? `Latency stays under the cap at every steady rate; the capacity binds first, at ${fmt(res.capacity)} MB/s.`
+            : `Every offered rate up to ${res.cfg.maxrate} MB/s settles under the cap; raise "offered rates up to" to find the limit.`
+          : `Finality stays under the cap up to ${res.cfg.maxmb} MB blocks; raise "block sizes up to" to find the limit.`;
       $("status").textContent = status;
+      labelOf("t-mbps", rateMode ? "Max offered rate under the cap" : "Max throughput under the cap");
+      labelOf("t-ceil", rateMode ? "Capacity: blocks stop growing" : "Ceiling, unconstrained");
+      labelOf("t-free", rateMode ? "Max rate under the cap, no compute" : "Max under the cap, no compute");
+      labelOf("t-decode", rateMode ? "Max rate under the cap, reconstruction only" : "Max under the cap, reconstruction only");
       const ok = at.status !== "below";
       let [d, cls] = delta(at.mbps, bat && bat.mbps, "MB/s");
       setTile("t-mbps", ok ? fmt(at.mbps) : "–", ok ? "MB/s" : "", d, cls);
@@ -1507,14 +1610,28 @@
       } else setTile("t-chain", "–", "", "", "");
       [d, cls] = delta(at.late_pct, bat && bat.late_pct, "pts", 0, true);
       setTile("t-late", ok ? fmt(at.late_pct) : "–", ok ? "%" : "", d, cls);
-      [d, cls] = delta(res.ceiling, base && base.ceiling, "MB/s");
-      setTile(
-        "t-ceil",
-        fmt(res.ceiling),
-        "MB/s",
-        d || (res.cfg.lane ? "one transfer plus the decode per MB" : "two transfers per MB: B·k / 2(n−1)"),
-        cls,
-      );
+      if (rateMode) {
+        [d, cls] = delta(res.capacity, base && base.capacity, "MB/s");
+        setTile(
+          "t-ceil",
+          Number.isFinite(res.capacity) ? fmt(res.capacity) : "–",
+          Number.isFinite(res.capacity) ? "MB/s" : "",
+          d ||
+            (atCapacity
+              ? `${fmt(atCapacity.mb)} MB blocks, ${fmt(atCapacity.view_mean)} ms views; above it the pool outgrows the view`
+              : "no offered rate settles"),
+          cls,
+        );
+      } else {
+        [d, cls] = delta(res.ceiling, base && base.ceiling, "MB/s");
+        setTile(
+          "t-ceil",
+          fmt(res.ceiling),
+          "MB/s",
+          d || (res.cfg.lane ? "one transfer plus the decode per MB" : "two transfers per MB: B·k / 2(n−1)"),
+          cls,
+        );
+      }
       for (const [id, key] of [
         ["t-free", "free"],
         ["t-decode", "decodeOnly"],
@@ -1524,12 +1641,14 @@
         const gain = ok && Number.isFinite(v) ? v - at.mbps : NaN;
         // Latency at the current cap's block size, same metric as the cap.
         const latKey = res.cfg.metric === "fin" ? "fin_p50" : "tx_p50";
-        const less = ok && res[key] ? metricOf(at, res.cfg.metric) - interp(res[key].pts, at.mb, latKey) : NaN;
+        const less = ok && res[key] ? metricOf(at, res.cfg.metric) - interp(steady(res[key]), at.x, latKey) : NaN;
         const sign = (x) => (x >= 0 ? "+" : "−");
         const note = Number.isFinite(gain)
           ? `${sign(gain)}${fmt(Math.abs(gain))} MB/s; ${Number.isFinite(less) ? `${sign(-less)}${fmt(Math.abs(less))} ms ${res.cfg.metric === "fin" ? "finality" : "transaction"} at ${fmt(at.mb)} MB` : ""}`
           : alt && alt.status === "above"
-            ? "under the cap at every block size shown"
+            ? rateMode
+              ? "under the cap at every steady rate"
+              : "under the cap at every block size shown"
             : "";
         setTile(id, Number.isFinite(v) ? fmt(v) : "–", Number.isFinite(v) ? "MB/s" : "", note, "");
       }
@@ -1548,28 +1667,65 @@
         .map(([name, color, cls]) => `<span class="${cls || ""}" style="--c:${color}">${name}</span>`)
         .join("");
     }
+    // Up to and including the first point past the capacity, so the cliff shows without the cap
+    // dominating the scale.
+    function shown(res) {
+      const i = res.pts.findIndex((s) => !s.steady);
+      return i < 0 ? res.pts : res.pts.slice(0, Math.max(2, i + 1));
+    }
     function charts(res, base) {
+      base = sameMode(res, base);
+      const rateMode = res.cfg.mode === "rate";
       const at = atCap(res);
-      const x = (s) => s.mb;
-      const series = (pts, key, color, dash, name) => ({ name, color, dash, points: pts.map((s) => [x(s), s[key]]) });
-      const bl = base ? base.pts : null;
+      const xlabel = rateMode ? "offered MB/s" : "block MB";
+      const xunit = rateMode ? "MB/s" : "MB";
+      const series = (pts, key, color, dash, name) => ({ name, color, dash, points: pts.map((s) => [s.x, s[key]]) });
+      const pts = shown(res);
+      const bl = base ? shown(base) : null;
       const mark = at.status === "ok" ? at : null;
-      legend("lg-tp", [
-        ["throughput", C.tp],
-        ...(bl ? [["baseline", C.tp, "dash"]] : []),
-        ["ceiling", "var(--fg-3)", "thin"],
-      ]);
-      chart($("ch-tp"), {
-        ylabel: "MB/s",
-        xlabel: "block MB",
-        series: [
-          series(res.pts, "mbps", C.tp, false, "throughput"),
-          ...(bl ? [series(bl, "mbps", C.tp, true, "baseline")] : []),
-        ],
-        hlines: [{ y: res.ceiling, label: "ceiling " + fmt(res.ceiling), cls: "cap" }],
-        mark: mark && { x: mark.mb, y: mark.mbps, label: `${fmt(mark.mbps)} MB/s at ${fmt(mark.mb)} MB` },
-        fmtY: (v) => fmt(v),
-      });
+      const capAt = rateMode && Number.isFinite(res.capacity) ? res.pts.find((s) => s.rate === res.capacity) : null;
+      $("ch-tp").parentElement.querySelector("h3").textContent = rateMode
+        ? "Block size by offered rate"
+        : "Throughput by block size";
+      $("ch-lat").parentElement.querySelector("h3").textContent = rateMode
+        ? "Latency by offered rate, p50"
+        : "Latency by block size, p50";
+      $("ch-win").parentElement.querySelector("h3").textContent = rateMode
+        ? "Reconstruction window by offered rate"
+        : "Reconstruction window by block size";
+      if (rateMode) {
+        legend("lg-tp", [
+          ["block size", C.tp],
+          ...(bl ? [["baseline", C.tp, "dash"]] : []),
+          ["max block", "var(--fg-3)", "thin"],
+        ]);
+        chart($("ch-tp"), {
+          ylabel: "MB",
+          xlabel,
+          series: [series(pts, "mb", C.tp, false, "block"), ...(bl ? [series(bl, "mb", C.tp, true, "baseline")] : [])],
+          hlines: [{ y: res.cfg.maxmb, label: "max block " + fmt(res.cfg.maxmb), cls: "cap" }],
+          mark: capAt && { x: capAt.rate, y: capAt.mb, label: `capacity ${fmt(capAt.rate)} MB/s, ${fmt(capAt.mb)} MB` },
+          fmtY: (v) => fmt(v),
+          zero: true,
+        });
+      } else {
+        legend("lg-tp", [
+          ["throughput", C.tp],
+          ...(bl ? [["baseline", C.tp, "dash"]] : []),
+          ["ceiling", "var(--fg-3)", "thin"],
+        ]);
+        chart($("ch-tp"), {
+          ylabel: "MB/s",
+          xlabel,
+          series: [
+            series(pts, "mbps", C.tp, false, "throughput"),
+            ...(bl ? [series(bl, "mbps", C.tp, true, "baseline")] : []),
+          ],
+          hlines: [{ y: res.ceiling, label: "ceiling " + fmt(res.ceiling), cls: "cap" }],
+          mark: mark && { x: mark.x, y: mark.mbps, label: `${fmt(mark.mbps)} MB/s at ${fmt(mark.mb)} MB` },
+          fmtY: (v) => fmt(v),
+        });
+      }
       const met = res.cfg.metric;
       legend("lg-lat", [
         ["finality", C.fin],
@@ -1580,11 +1736,11 @@
       ]);
       chart($("ch-lat"), {
         ylabel: "ms",
-        xlabel: "block MB",
+        xlabel,
         series: [
-          series(res.pts, "fin_p50", C.fin, false, "finality"),
-          series(res.pts, "view_mean", C.view, false, "view"),
-          series(res.pts, "tx_p50", C.tx, false, "transaction"),
+          series(pts, "fin_p50", C.fin, false, "finality"),
+          series(pts, "view_mean", C.view, false, "view"),
+          series(pts, "tx_p50", C.tx, false, "transaction"),
           ...(bl
             ? [
                 series(bl, "fin_p50", C.fin, true, "finality, baseline"),
@@ -1600,7 +1756,11 @@
             cls: "cap",
           },
         ],
-        mark: mark && { x: mark.mb, y: met === "fin" ? mark.fin_p50 : mark.tx_p50, label: `${fmt(mark.mb)} MB` },
+        mark: mark && {
+          x: mark.x,
+          y: met === "fin" ? mark.fin_p50 : mark.tx_p50,
+          label: rateMode ? `${fmt(mark.x)} ${xunit}, ${fmt(mark.mb)} MB blocks` : `${fmt(mark.mb)} MB`,
+        },
         fmtY: (v) => fmt(v),
       });
       legend("lg-win", [
@@ -1611,11 +1771,11 @@
       ]);
       chart($("ch-win"), {
         ylabel: "ms",
-        xlabel: "block MB",
+        xlabel,
         series: [
-          series(res.pts, "win_p50", C.win, false, "window p50"),
-          series(res.pts, "win_p10", C.win10, false, "window p10"),
-          series(res.pts, "decode", C.dec, false, "decode"),
+          series(pts, "win_p50", C.win, false, "window p50"),
+          series(pts, "win_p10", C.win10, false, "window p10"),
+          series(pts, "decode", C.dec, false, "decode"),
           ...(bl
             ? [
                 series(bl, "win_p50", C.win, true, "window p50, baseline"),
@@ -1712,7 +1872,7 @@
     }
 
     // ---- wiring ----
-    for (const id of ["nodes", "gbps", "profile", "uniform", "cap", "maxmb"]) $(id).addEventListener("input", schedule);
+    for (const id of ["nodes", "gbps", "profile", "uniform", "cap", "maxmb", "maxrate"]) $(id).addEventListener("input", schedule);
     for (const id of ["decode", "buildenc", "storage", "votepath"])
       $(id).addEventListener("input", () => {
         computeFromKey(id);
@@ -1735,6 +1895,7 @@
     seg("threshold-f1", "threshold-2f1", (v) => (state.threshold = v ? "f+1" : "2f+1"));
     seg("lane-off", "lane-on", (v) => (state.lane = !v));
     seg("met-fin", "met-tx", (v) => (state.metric = v ? "fin" : "tx"));
+    seg("mode-block", "mode-rate", (v) => (state.mode = v ? "block" : "rate"));
     for (const b of document.querySelectorAll("[data-preset]"))
       b.addEventListener("click", () => {
         state.compute = structuredClone(PRESETS[b.dataset.preset]);
@@ -1747,7 +1908,7 @@
       $("unpin").disabled = false;
       const c = current.cfg;
       $("baseline-chip").innerHTML =
-        `Baseline: <b>${c.n} nodes, ${fmt(c.gbps, 1)} Gbps, ${c.profile}${c.profile === "uniform" ? " " + c.uniformMs + " ms" : ""}, ${c.threshold}, ${c.lane ? "own lane" : "in order"}</b>, decode ${fmt(c.compute.decode[1], 2)} ms/MB.`;
+        `Baseline: <b>${c.n} nodes, ${fmt(c.gbps, 1)} Gbps, ${c.profile}${c.profile === "uniform" ? " " + c.uniformMs + " ms" : ""}, ${c.threshold}, ${c.lane ? "own lane" : "in order"}, ${c.mode === "rate" ? "blocks follow a rate" : "fixed blocks"}</b>, decode ${fmt(c.compute.decode[1], 2)} ms/MB.`;
       render();
     });
     $("unpin").addEventListener("click", () => {
