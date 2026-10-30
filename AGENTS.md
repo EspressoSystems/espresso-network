@@ -24,7 +24,7 @@ the generic BFT consensus library it is built on, `contracts/` the Solidity L1 s
 ## Test-first workflow
 
 Every code change follows these steps. The tests describe the planned behavior before any code exists. Only the user can
-change them. Formatting a test with `cargo fmt` does not count as a change to it.
+change them. Formatting a test with `cargo fmt` or `forge fmt` does not count as a change to it.
 
 - When no test can check the change, skip step 1 and say so in the report. For example: a dependency bump, CI config, or
   a log message.
@@ -55,9 +55,9 @@ change them. Formatting a test with `cargo fmt` does not count as a change to it
   assertions, expected values, inputs, or timeouts.
 - When a new test fails, fix the implementation, not the test.
 - The change is done when the new tests pass and the existing tests of the changed packages still pass
-  (`cargo nextest run -p <package>`). CI runs the rest.
-- A test that also fails on `main` does not block the change. Say so in the report. Issue #4585 lists flaky and failing
-  tests on `main`.
+  (`cargo nextest run -p <package>`, or `just contracts-test-forge` for `contracts/`). CI runs the rest.
+- A test that also fails on `main` does not block the change. Say so in the report. This command shows the issue that
+  lists flaky and failing tests on `main`: `gh issue list -R EspressoSystems/espresso-network -l flaky-tests`.
 
 ### 3. Changing the new tests needs the user
 
