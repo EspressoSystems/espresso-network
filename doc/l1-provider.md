@@ -18,7 +18,8 @@ StakeTable, needed by all nodes on a fresh store. Logs from `initializedAtBlock(
 | mainnet | `0xcef474d372b5b09defe2af187bf17338dc704451` | 24348377      |
 | decaf   | `0x40304fbe94d5e7d1492dd90c53a2d63e8506a037` | 8077808       |
 
-FeeContract, needed by unpruned query nodes with an empty state store. `Deposit` logs from the block after the genesis
+FeeContract, needed by unpruned query nodes with an empty state store. Protocol 0.6 and later no longer query fee
+deposits, so only the replay of pre-0.6 headers reads them: `Deposit` logs from the block after the genesis
 `[l1_finalized]` block to the `l1_finalized` of the last header before the 0.6 upgrade:
 
 | Network | Address                                      | From L1 block |
@@ -36,8 +37,8 @@ FeeContract, needed by unpruned query nodes with an empty state store. `Deposit`
 - Stake table events, every start and every 60 min: `eth_getLogs` from the last stored L1 block to finalized.
 - Proposal validation: `eth_getBlockByHash`, `eth_getBlockByNumber` on recent finalized blocks.
 - Light client state, query nodes: `eth_call` at `latest` or at the finalized block number, about 100 blocks of state.
-- Fee deposits, unpruned query nodes replaying state from genesis: `eth_getLogs Deposit` in chunks over the FeeContract
-  range above.
+- Fee deposits, unpruned query nodes replaying pre-0.6 state from genesis: `eth_getLogs Deposit` in chunks over the
+  FeeContract range above. Consensus on 0.6 and later does not read deposits.
 
 ## Behavior when history is missing
 
