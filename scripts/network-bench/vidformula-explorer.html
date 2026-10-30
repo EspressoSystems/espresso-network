@@ -1,0 +1,2251 @@
+<title>Finality Model Explorer</title>
+<meta name="claude:viewport-fit-sides" content="cover" />
+<link
+  rel="stylesheet"
+  href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap"
+/>
+<style>
+  /* Layout: a fixed-width control rail on the left, results on the right; the rail stacks above on phones. */
+  :root {
+    --bg: #f6f7f9;
+    --panel: #ffffff;
+    --fg: #15202b;
+    --fg-2: #4e5a66;
+    --fg-3: #7d8792;
+    --line: #dde2e8;
+    --line-2: #eef1f4;
+    --accent: #2a78d6;
+    --accent-soft: #e4eefb;
+    --s1: #2a78d6;
+    --s2: #1baf7a;
+    --s3: #eb6834;
+    --s4: #6250d6;
+    --warn: #b45309;
+    --font: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+    --mono: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #141a21;
+      --panel: #1b232c;
+      --fg: #eef2f6;
+      --fg-2: #b4bec8;
+      --fg-3: #7f8b97;
+      --line: #2d3843;
+      --line-2: #222c36;
+      --accent: #3987e5;
+      --accent-soft: #1f2f45;
+      --s1: #3987e5;
+      --s2: #199e70;
+      --s3: #d95926;
+      --s4: #9085e9;
+      --warn: #f59e0b;
+      color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #141a21;
+    --panel: #1b232c;
+    --fg: #eef2f6;
+    --fg-2: #b4bec8;
+    --fg-3: #7f8b97;
+    --line: #2d3843;
+    --line-2: #222c36;
+    --accent: #3987e5;
+    --accent-soft: #1f2f45;
+    --s1: #3987e5;
+    --s2: #199e70;
+    --s3: #d95926;
+    --s4: #9085e9;
+    --warn: #f59e0b;
+    color-scheme: dark;
+  }
+  * {
+    box-sizing: border-box;
+  }
+  body {
+    background: var(--bg);
+    color: var(--fg);
+    font-family: var(--font);
+    font-size: 14px;
+    line-height: 1.45;
+    padding-left: max(16px, env(safe-area-inset-left, 0px));
+    padding-right: max(16px, env(safe-area-inset-right, 0px));
+    padding-block: 20px 40px;
+  }
+  h1 {
+    font-size: 20px;
+    font-weight: 600;
+    margin: 0 0 4px;
+    letter-spacing: -0.01em;
+    text-wrap: balance;
+  }
+  h2 {
+    font-size: 12px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--fg-3);
+    margin: 0 0 10px;
+  }
+  p {
+    margin: 0;
+  }
+  .lede {
+    color: var(--fg-2);
+    max-width: 70ch;
+  }
+  .app {
+    display: grid;
+    grid-template-columns: 320px minmax(0, 1fr);
+    gap: 20px;
+    margin-top: 20px;
+    max-width: 1400px;
+  }
+  @media (max-width: 860px) {
+    .app {
+      grid-template-columns: 1fr;
+    }
+  }
+  .rail {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    min-width: 0;
+  }
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 14px 16px;
+    min-width: 0;
+  }
+  .ctl {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    align-items: center;
+    gap: 2px 10px;
+    padding: 7px 0;
+    border-top: 1px solid var(--line-2);
+  }
+  .ctl:first-of-type {
+    border-top: 0;
+  }
+  .ctl label {
+    color: var(--fg-2);
+  }
+  .ctl .val {
+    font-family: var(--mono);
+    font-variant-numeric: tabular-nums;
+    font-size: 13px;
+    text-align: right;
+    min-width: 7ch;
+  }
+  .ctl input[type="range"] {
+    grid-column: 1 / -1;
+    width: 100%;
+    accent-color: var(--accent);
+    margin: 2px 0 0;
+  }
+  .ctl select,
+  .ctl input[type="number"] {
+    font: inherit;
+    color: var(--fg);
+    background: var(--bg);
+    border: 1px solid var(--line);
+    border-radius: 5px;
+    padding: 4px 6px;
+  }
+  .ctl select {
+    grid-column: 1 / -1;
+    width: 100%;
+  }
+  .seg {
+    display: inline-flex;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    overflow: hidden;
+  }
+  .seg button {
+    font: inherit;
+    font-size: 13px;
+    padding: 4px 10px;
+    border: 0;
+    background: transparent;
+    color: var(--fg-2);
+    cursor: pointer;
+  }
+  .seg button[aria-pressed="true"] {
+    background: var(--accent-soft);
+    color: var(--fg);
+    font-weight: 500;
+  }
+  .seg button:focus-visible,
+  button:focus-visible,
+  input:focus-visible,
+  select:focus-visible,
+  details summary:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
+  }
+  .row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    align-items: center;
+  }
+  .btn {
+    font: inherit;
+    font-size: 13px;
+    padding: 5px 11px;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    background: var(--panel);
+    color: var(--fg);
+    cursor: pointer;
+  }
+  .btn.primary {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #fff;
+  }
+  .btn:disabled {
+    opacity: 0.5;
+    cursor: default;
+  }
+  details.adv summary {
+    cursor: pointer;
+    color: var(--fg-2);
+    font-size: 13px;
+    padding: 6px 0;
+    list-style: none;
+  }
+  details.adv summary::before {
+    content: "▸ ";
+  }
+  details.adv[open] summary::before {
+    content: "▾ ";
+  }
+  table.adv {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12.5px;
+    margin-top: 4px;
+  }
+  table.adv th {
+    text-align: left;
+    font-weight: 500;
+    color: var(--fg-3);
+    padding: 2px 4px;
+  }
+  table.adv td {
+    padding: 2px 4px;
+    border-top: 1px solid var(--line-2);
+  }
+  table.adv input {
+    width: 6.5ch;
+    font: inherit;
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--fg);
+    background: var(--bg);
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    padding: 2px 4px;
+  }
+  .note {
+    color: var(--fg-3);
+    font-size: 12.5px;
+  }
+  .results {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    min-width: 0;
+  }
+  .tiles {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 10px;
+  }
+  .tile {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 12px 14px;
+    min-width: 0;
+  }
+  .tile .k {
+    font-size: 12px;
+    color: var(--fg-3);
+  }
+  .tile .v {
+    font-family: var(--mono);
+    font-variant-numeric: tabular-nums;
+    font-size: 24px;
+    font-weight: 500;
+    line-height: 1.2;
+    margin-top: 2px;
+  }
+  .tile .v small {
+    font-size: 13px;
+    color: var(--fg-2);
+    font-weight: 400;
+    margin-left: 2px;
+  }
+  .tile .d {
+    font-family: var(--mono);
+    font-variant-numeric: tabular-nums;
+    font-size: 12px;
+    color: var(--fg-2);
+    margin-top: 3px;
+    min-height: 1.2em;
+  }
+  .tile .d.up {
+    color: var(--s2);
+  }
+  .tile .d.down {
+    color: var(--s3);
+  }
+  .tile.hero {
+    border-color: var(--accent);
+    background: var(--accent-soft);
+  }
+  .chart-head {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 6px 14px;
+    margin-bottom: 4px;
+  }
+  .chart-head h3 {
+    font-size: 14px;
+    font-weight: 600;
+    margin: 0;
+  }
+  .legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 14px;
+    font-size: 12px;
+    color: var(--fg-2);
+  }
+  .legend span::before {
+    content: "";
+    display: inline-block;
+    width: 18px;
+    height: 0;
+    border-top: 2px solid var(--c);
+    vertical-align: middle;
+    margin-right: 6px;
+  }
+  .legend span.dash::before {
+    border-top-style: dashed;
+  }
+  .legend span.thin::before {
+    border-top-width: 1px;
+    border-top-color: var(--fg-3);
+  }
+  .legend span.sw::before {
+    content: none;
+  }
+  .legend span.sw svg {
+    vertical-align: -2px;
+    margin-right: 6px;
+  }
+  .chart {
+    position: relative;
+    width: 100%;
+  }
+  .chart svg {
+    width: 100%;
+    height: auto;
+    display: block;
+  }
+  .chart .tip {
+    position: absolute;
+    pointer-events: none;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: 6px 8px;
+    font-size: 12px;
+    font-family: var(--mono);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
+  }
+  .chart .tip b {
+    font-family: var(--font);
+    font-weight: 600;
+  }
+  .chart .tip .r {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+  }
+  .chart .tip .r i {
+    display: inline-block;
+    width: 10px;
+    height: 2px;
+    vertical-align: middle;
+    margin-right: 5px;
+  }
+  svg text {
+    font-family: var(--font);
+    font-size: 11px;
+    fill: var(--fg-3);
+  }
+  svg .axis line,
+  svg .axis path {
+    stroke: var(--line);
+  }
+  svg .grid line {
+    stroke: var(--line-2);
+  }
+  svg .cap line {
+    stroke: var(--fg-3);
+    stroke-dasharray: 2 3;
+  }
+  svg .cap text {
+    fill: var(--fg-2);
+    font-weight: 500;
+  }
+  svg .mark circle {
+    fill: var(--accent);
+    stroke: var(--panel);
+    stroke-width: 2;
+  }
+  svg .hover line {
+    stroke: var(--fg-3);
+    stroke-width: 1;
+  }
+  .baseline-chip {
+    font-size: 12.5px;
+    color: var(--fg-2);
+  }
+  .baseline-chip b {
+    color: var(--fg);
+    font-weight: 500;
+  }
+  .status {
+    font-size: 12.5px;
+    color: var(--warn);
+    min-height: 1.2em;
+  }
+  @media (prefers-reduced-motion: no-preference) {
+    .tile .v {
+      transition: color 0.2s;
+    }
+  }
+</style>
+
+<h1>Finality Model Explorer</h1>
+<p class="lede">
+  One fast-finality view, from the formula model in <code>scripts/network-bench/vidformula.py</code>: the latency
+  matrix, the share transfer and the compute of each step give the view time, the reconstruction window and finality for
+  every block size, or for every offered rate when blocks follow the load: each leader's block is what arrived since the
+  previous leader pulled the pool, so the view sets the next block and the block the next view. Move a slider and the
+  curves recompute.
+</p>
+
+<div class="app">
+  <div class="rail">
+    <section class="panel">
+      <h2>Network</h2>
+      <div class="ctl">
+        <label for="nodes">Nodes</label><span class="val" id="nodes-v"></span
+        ><input type="range" id="nodes" min="4" max="200" step="1" value="100" />
+      </div>
+      <div class="ctl">
+        <label for="gbps">Bandwidth per node, each direction</label><span class="val" id="gbps-v"></span
+        ><input type="range" id="gbps" min="0" max="100" step="1" value="59" />
+      </div>
+      <div class="ctl">
+        <label for="profile">Latency</label><span class="val" id="profile-v"></span>
+        <select id="profile">
+          <option value="decaf-2025">decaf-2025 (5 regions, measured)</option>
+          <option value="decaf-2026">decaf-2026 (18 locations)</option>
+          <option value="mainnet">mainnet (34 locations)</option>
+          <option value="uniform">uniform one-way delay</option>
+          <option value="off">none (one AZ, 0.1 ms)</option>
+        </select>
+      </div>
+      <div class="ctl" id="uniform-row" hidden>
+        <label for="uniform">One-way delay, every pair</label><span class="val" id="uniform-v"></span
+        ><input type="range" id="uniform" min="0" max="200" step="1" value="40" />
+      </div>
+    </section>
+    <section class="panel">
+      <h2>Protocol</h2>
+      <div class="ctl">
+        <label>Shares to reconstruct</label
+        ><span class="seg" role="group" aria-label="VID threshold"
+          ><button type="button" id="threshold-f1" aria-pressed="true">f+1</button
+          ><button type="button" id="threshold-2f1" aria-pressed="false">2f+1</button></span
+        >
+      </div>
+      <div class="ctl">
+        <label>Control messages</label
+        ><span class="seg" role="group" aria-label="Control lane"
+          ><button type="button" id="lane-off" aria-pressed="true">in order</button
+          ><button type="button" id="lane-on" aria-pressed="false">own lane</button></span
+        >
+      </div>
+      <div class="ctl">
+        <label>Latency cap applies to</label
+        ><span class="seg" role="group" aria-label="Latency metric"
+          ><button type="button" id="met-fin" aria-pressed="true">finality</button
+          ><button type="button" id="met-tx" aria-pressed="false">transaction</button></span
+        >
+      </div>
+      <div class="ctl">
+        <label for="cap">Latency cap, p50</label><span class="val" id="cap-v"></span
+        ><input type="range" id="cap" min="100" max="3000" step="10" value="1000" />
+      </div>
+    </section>
+    <section class="panel">
+      <h2>Load</h2>
+      <div class="ctl">
+        <label>Blocks</label
+        ><span class="seg" role="group" aria-label="Load mode"
+          ><button type="button" id="mode-block" aria-pressed="true">fixed sizes</button
+          ><button type="button" id="mode-rate" aria-pressed="false">follow a rate</button></span
+        >
+      </div>
+      <div class="ctl" id="maxrate-row" hidden>
+        <label for="maxrate">Offered rates up to</label><span class="val" id="maxrate-v"></span
+        ><input type="range" id="maxrate" min="50" max="2000" step="10" value="600" />
+      </div>
+      <div class="ctl">
+        <label for="maxmb" id="maxmb-l">Block sizes up to</label><span class="val" id="maxmb-v"></span
+        ><input type="range" id="maxmb" min="20" max="1000" step="10" value="300" />
+      </div>
+      <p class="note" id="mode-note" style="margin-top: 6px" hidden>
+        Transactions arrive at the offered rate and a leader takes the whole pool, up to the max block. Below the
+        capacity, the peak of throughput by block size within the max block, the blocks settle; above it each view's
+        block outgrows the last until the cap, and the decided rate flattens. Real networks tip before the model does:
+        one slow view near the boundary is enough.
+      </p>
+    </section>
+    <section class="panel">
+      <h2>Compute</h2>
+      <div class="row" style="margin-bottom: 6px">
+        <span class="note">Preset</span
+        ><span class="seg" role="group" aria-label="Compute preset"
+          ><button type="button" data-preset="c8g.4xlarge" aria-pressed="true">c8g.4xlarge</button
+          ><button type="button" data-preset="c8g.8xlarge" aria-pressed="false">c8g.8xlarge</button
+          ><button type="button" data-preset="off" aria-pressed="false">none</button></span
+        >
+      </div>
+      <div class="ctl">
+        <label for="decode">Decode, per MB</label><span class="val" id="decode-v"></span
+        ><input type="range" id="decode" min="0" max="5" step="0.05" value="0.73" />
+      </div>
+      <div class="ctl">
+        <label for="buildenc">Build + commit + encode, per MB</label><span class="val" id="buildenc-v"></span
+        ><input type="range" id="buildenc" min="0" max="5" step="0.05" value="1.12" />
+      </div>
+      <div class="ctl">
+        <label for="storage">Storage round trip</label><span class="val" id="storage-v"></span
+        ><input type="range" id="storage" min="0" max="40" step="0.5" value="7.9" />
+      </div>
+      <div class="ctl">
+        <label for="votepath">Fixed vote path (verify + vote1 + cert)</label><span class="val" id="votepath-v"></span
+        ><input type="range" id="votepath" min="0" max="80" step="0.5" value="15.4" />
+      </div>
+      <details class="adv">
+        <summary>Every step</summary>
+        <table class="adv">
+          <thead>
+            <tr>
+              <th>step</th>
+              <th>fixed ms</th>
+              <th>ms / MB</th>
+            </tr>
+          </thead>
+          <tbody id="adv-body"></tbody>
+        </table>
+        <p class="note" style="margin-top: 6px">
+          Fitted from the 28 October c8g.4xlarge run and the 29 October c8g.8xlarge runs; the sliders above move these,
+          and edits here move the sliders.
+        </p>
+      </details>
+    </section>
+    <section class="panel">
+      <h2>Compare</h2>
+      <div class="row">
+        <button type="button" class="btn primary" id="pin">Pin as baseline</button
+        ><button type="button" class="btn" id="unpin" disabled>Clear</button>
+      </div>
+      <p class="baseline-chip" id="baseline-chip" style="margin-top: 8px">
+        No baseline pinned. Pin the current settings, then change something: the pinned curves stay as dashed lines and
+        the tiles show the difference.
+      </p>
+    </section>
+  </div>
+
+  <div class="results">
+    <div class="tiles">
+      <div class="tile hero">
+        <div class="k">Max throughput under the cap</div>
+        <div class="v" id="t-mbps">–</div>
+        <div class="d" id="t-mbps-d"></div>
+      </div>
+      <div class="tile">
+        <div class="k">Block size at the cap</div>
+        <div class="v" id="t-mb">–</div>
+        <div class="d" id="t-mb-d"></div>
+      </div>
+      <div class="tile">
+        <div class="k">View time at the cap, mean</div>
+        <div class="v" id="t-view">–</div>
+        <div class="d" id="t-view-d"></div>
+      </div>
+      <div class="tile">
+        <div class="k">Binding chain at the cap</div>
+        <div class="v" id="t-chain" style="font-size: 18px">–</div>
+        <div class="d" id="t-chain-d"></div>
+      </div>
+      <div class="tile">
+        <div class="k">Votes waiting on decode at the cap</div>
+        <div class="v" id="t-late">–</div>
+        <div class="d" id="t-late-d"></div>
+      </div>
+      <div class="tile">
+        <div class="k">Ceiling, unconstrained</div>
+        <div class="v" id="t-ceil">–</div>
+        <div class="d" id="t-ceil-d"></div>
+      </div>
+      <div class="tile">
+        <div class="k">Max under the cap, no compute</div>
+        <div class="v" id="t-free">–</div>
+        <div class="d" id="t-free-d"></div>
+      </div>
+      <div class="tile">
+        <div class="k">Max under the cap, reconstruction only</div>
+        <div class="v" id="t-decode">–</div>
+        <div class="d" id="t-decode-d"></div>
+      </div>
+    </div>
+    <p class="status" id="status"></p>
+    <section class="panel">
+      <div class="chart-head">
+        <h3>Throughput by block size</h3>
+        <div class="legend" id="lg-tp"></div>
+      </div>
+      <div class="chart" id="ch-tp"></div>
+    </section>
+    <section class="panel">
+      <div class="chart-head">
+        <h3>Latency by block size, p50</h3>
+        <div class="legend" id="lg-lat"></div>
+      </div>
+      <div class="chart" id="ch-lat"></div>
+    </section>
+    <section class="panel">
+      <div class="chart-head">
+        <h3>Reconstruction window by block size</h3>
+        <div class="legend" id="lg-win"></div>
+      </div>
+      <div class="chart" id="ch-win"></div>
+      <p class="note" style="margin-top: 8px">
+        The window is the time from a node's k-th share of block V to its pairing of proposal V+1. Where the decode line
+        crosses above it, votes wait on reconstruction. Transaction latency is finality plus 1.5 views of inclusion
+        wait.
+      </p>
+    </section>
+    <section class="panel">
+      <div class="chart-head">
+        <h3>View timeline</h3>
+        <div class="legend" id="lg-tl"></div>
+      </div>
+      <div class="row" style="margin: 4px 0 8px">
+        <label for="tl-mb" class="note">Block size</label>
+        <input
+          type="range"
+          id="tl-mb"
+          min="1"
+          max="300"
+          step="1"
+          value="50"
+          style="width: 160px; accent-color: var(--accent)"
+        />
+        <span class="val" id="tl-mb-v" style="font-family: var(--mono); font-size: 13px"></span>
+        <button type="button" class="btn" id="tl-cap">Use the cap's block size</button>
+        <label for="tl-which" class="note">View</label>
+        <select
+          id="tl-which"
+          style="
+            font: inherit;
+            color: var(--fg);
+            background: var(--bg);
+            border: 1px solid var(--line);
+            border-radius: 5px;
+            padding: 3px 6px;
+          "
+        >
+          <option value="typical">typical, closest to the mean</option>
+          <option value="fastest">fastest</option>
+          <option value="slowest">slowest</option>
+        </select>
+      </div>
+      <div class="chart" id="ch-tl"></div>
+      <p class="note" id="tl-verdict" style="margin-top: 8px; color: var(--fg)"></p>
+      <p class="note" style="margin-top: 8px">
+        One view V at the current settings and this block size, t = 0 at the proposal of V. Hatched spans wait on the
+        network or on peers; solid spans are the node's own compute, storage, or bytes leaving its interface. Hover a
+        span for its duration. The next leader's rows drive the view; the q-th voter's vote1 is the one that forms
+        Cert1.
+      </p>
+      <p class="note" style="margin-top: 6px">
+        <b>Reading the decode.</b> A node may vote1 on V only once it holds block V−1, so look at the q-th voter's "vote
+        path" row: a hatched "wait for block V−1" span between "validate" and "rebroadcast" means its decode of V−1
+        ended after the proposal paired, the vote left late, and Cert1 and the next proposal moved with it. That is
+        decode on the view's critical path. No such span means the decode finished inside the window: the gap between
+        the end of "decode" on the previous view's "block V" row and the vote is slack, and only bandwidth or latency
+        bind. The "finality" row tells the second story: a "wait for block V" span between "Cert1" and "persist" means
+        vote2 waited on the decode of V, which delays finality but not the view. The latency and window charts above say
+        the same at every block size: decode sits on the critical path where the decode line crosses above the window.
+      </p>
+    </section>
+  </div>
+</div>
+
+<script id="profiles" type="application/json">
+  {
+    "decaf-2025": {
+      "labels": ["eu-central-1", "ap-southeast-1", "us-east-1", "ap-southeast-2", "sa-east-1"],
+      "weights": [38, 28, 22, 8, 4],
+      "intra": 10.0,
+      "rtt": [
+        [0.0, 158.0, 91.2, 249.0, 202.0],
+        [158.0, 0.0, 230.0, 92.6, 333.0],
+        [91.3, 230.0, 0.0, 217.0, 113.0],
+        [249.0, 92.6, 217.0, 0.0, 313.0],
+        [202.0, 333.0, 113.0, 313.0, 0.0]
+      ]
+    },
+    "decaf-2026": {
+      "labels": [
+        "helsinki-fi",
+        "bucharest-ro",
+        "columbus-us",
+        "falkenstein-de",
+        "amsterdam-nl",
+        "limburg-an-der-lahn-de",
+        "singapore-sg",
+        "berlin-de",
+        "buenos-aires-ar",
+        "dublin-ie",
+        "incheon-kr",
+        "johannesburg-za",
+        "manchester-gb",
+        "minamishinagawa-jp",
+        "ponte-san-pietro-it",
+        "riga-lv",
+        "strasbourg-fr",
+        "sydney-au"
+      ],
+      "weights": [5, 4, 3, 3, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+      "intra": 1.0,
+      "rtt": [
+        [
+          0.0, 27.5, 111.6, 21.0, 23.6, 23.8, 145.6, 17.4, 203.3, 31.8, 110.8, 150.8, 28.2, 122.9, 29.8, 5.7, 26.6,
+          238.7
+        ],
+        [
+          27.5, 0.0, 129.7, 19.3, 28.0, 23.6, 140.3, 20.3, 191.9, 39.8, 124.4, 123.3, 35.8, 139.5, 20.4, 22.0, 23.2,
+          239.1
+        ],
+        [
+          111.6, 129.7, 0.0, 110.4, 101.8, 106.4, 241.4, 109.6, 136.1, 90.2, 170.9, 213.1, 94.1, 165.5, 112.0, 114.3,
+          107.6, 239.0
+        ],
+        [21.0, 19.3, 110.4, 0.0, 8.7, 4.8, 157.0, 3.7, 184.0, 20.6, 130.7, 136.0, 16.5, 143.6, 8.9, 16.5, 6.2, 254.6],
+        [23.6, 28.0, 101.8, 8.7, 0.0, 4.8, 164.8, 9.0, 179.7, 11.9, 134.3, 141.6, 7.8, 146.0, 12.7, 20.9, 7.3, 261.3],
+        [23.8, 23.6, 106.4, 4.8, 4.8, 0.0, 161.8, 6.9, 180.1, 16.2, 134.3, 137.2, 12.3, 146.7, 8.4, 20.1, 3.2, 259.3],
+        [
+          145.6, 140.3, 241.4, 157.0, 164.8, 161.8, 0.0, 155.8, 249.3, 176.0, 73.1, 135.9, 171.9, 83.5, 160.7, 145.5,
+          162.5, 98.9
+        ],
+        [17.4, 20.3, 109.6, 3.7, 9.0, 6.9, 155.8, 0.0, 187.0, 20.7, 127.5, 139.2, 16.5, 140.1, 12.6, 13.3, 9.3, 252.7],
+        [
+          203.3, 191.9, 136.1, 184.0, 179.7, 180.1, 249.3, 187.0, 0.0, 172.6, 305.5, 127.0, 175.6, 288.3, 176.3, 200.2,
+          177.8, 185.3
+        ],
+        [
+          31.8, 39.8, 90.2, 20.6, 11.9, 16.2, 176.0, 20.7, 172.6, 0.0, 140.6, 148.3, 4.2, 150.6, 22.3, 30.7, 17.4, 270.3
+        ],
+        [
+          110.8, 124.4, 170.9, 130.7, 134.3, 134.3, 73.1, 127.5, 305.5, 140.6, 0.0, 195.7, 137.8, 18.5, 138.7, 114.3,
+          136.8, 130.7
+        ],
+        [
+          150.8, 123.3, 213.1, 136.0, 141.6, 137.2, 135.9, 139.2, 127.0, 148.3, 195.7, 0.0, 146.5, 212.6, 128.9, 145.3,
+          134.4, 173.3
+        ],
+        [28.2, 35.8, 94.1, 16.5, 7.8, 12.3, 171.9, 16.5, 175.6, 4.2, 137.8, 146.5, 0.0, 148.4, 19.0, 26.7, 13.9, 266.8],
+        [
+          122.9, 139.5, 165.5, 143.6, 146.0, 146.7, 83.5, 140.1, 288.3, 150.6, 18.5, 212.6, 148.4, 0.0, 152.0, 127.0,
+          149.4, 122.7
+        ],
+        [29.8, 20.4, 112.0, 8.9, 12.7, 8.4, 160.7, 12.6, 176.3, 22.3, 138.7, 128.9, 19.0, 152.0, 0.0, 25.1, 5.5, 259.4],
+        [
+          5.7, 22.0, 114.3, 16.5, 20.9, 20.1, 145.5, 13.3, 200.2, 30.7, 114.3, 145.3, 26.7, 127.0, 25.1, 0.0, 22.5,
+          240.5
+        ],
+        [26.6, 23.2, 107.6, 6.2, 7.3, 3.2, 162.5, 9.3, 177.8, 17.4, 136.8, 134.4, 13.9, 149.4, 5.5, 22.5, 0.0, 260.5],
+        [
+          238.7, 239.1, 239.0, 254.6, 261.3, 259.3, 98.9, 252.7, 185.3, 270.3, 130.7, 173.3, 266.8, 122.7, 259.4, 240.5,
+          260.5, 0.0
+        ]
+      ]
+    },
+    "mainnet": {
+      "labels": [
+        "helsinki-fi",
+        "falkenstein-de",
+        "nuremberg-de",
+        "warsaw-pl",
+        "columbus-us",
+        "new-york-us",
+        "vienna-at",
+        "beauharnois-ca",
+        "bengaluru-in",
+        "berlin-de",
+        "boardman-us",
+        "brussels-be",
+        "bucharest-ro",
+        "cedar-knolls-us",
+        "chicago-us",
+        "dublin-ie",
+        "frankfurt-am-main-de",
+        "gravelines-fr",
+        "hillsboro-us",
+        "limburg-an-der-lahn-de",
+        "london-gb",
+        "manassas-us",
+        "manchester-gb",
+        "minamishinagawa-jp",
+        "montreal-ca",
+        "nijar-es",
+        "pittsburgh-us",
+        "riga-lv",
+        "roubaix-fr",
+        "san-jose-us",
+        "singapore-sg",
+        "strasbourg-fr",
+        "titusville-us",
+        "waldbrunn-de"
+      ],
+      "weights": [
+        26, 19, 8, 5, 3, 2, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1
+      ],
+      "intra": 1.0,
+      "rtt": [
+        [
+          0.0, 21.0, 23.2, 14.4, 111.6, 103.9, 22.6, 97.3, 106.0, 17.4, 122.4, 25.7, 27.5, 104.1, 111.9, 31.8, 23.8,
+          27.4, 124.1, 23.8, 28.6, 109.4, 28.2, 122.9, 96.8, 50.5, 108.7, 5.7, 26.9, 137.5, 145.6, 26.6, 127.0, 23.5
+        ],
+        [
+          21.0, 0.0, 2.3, 9.9, 110.4, 100.8, 6.1, 95.5, 112.3, 3.7, 131.2, 8.7, 19.3, 101.1, 112.4, 20.6, 4.2, 11.3,
+          133.6, 4.8, 13.8, 106.6, 16.5, 143.6, 95.0, 29.8, 107.0, 16.5, 10.2, 145.6, 157.0, 6.2, 122.6, 3.1
+        ],
+        [
+          23.2, 2.3, 0.0, 12.0, 110.1, 100.3, 6.5, 95.2, 113.4, 5.9, 131.9, 7.8, 19.9, 100.7, 112.3, 20.0, 2.9, 10.3,
+          134.4, 3.8, 12.9, 106.1, 16.1, 145.9, 94.7, 27.5, 106.6, 18.8, 9.1, 146.2, 158.6, 4.1, 121.9, 1.5
+        ],
+        [
+          14.4, 9.9, 12.0, 0.0, 116.6, 107.6, 8.7, 101.8, 104.0, 8.1, 133.2, 18.0, 14.8, 107.9, 118.0, 28.7, 14.0, 20.5,
+          135.2, 14.4, 22.7, 113.3, 24.5, 134.8, 101.3, 39.0, 113.4, 8.8, 19.5, 148.0, 147.7, 16.1, 130.0, 13.0
+        ],
+        [
+          111.6, 110.4, 110.1, 116.6, 0.0, 12.0, 116.4, 15.0, 216.6, 109.6, 47.6, 102.5, 129.7, 11.4, 7.0, 90.2, 107.2,
+          100.1, 51.6, 106.4, 97.4, 7.7, 94.1, 165.5, 15.5, 106.6, 4.1, 114.3, 101.3, 52.8, 241.4, 107.6, 20.1, 108.6
+        ],
+        [
+          103.9, 100.8, 100.3, 107.6, 12.0, 0.0, 106.7, 8.0, 209.9, 100.3, 58.0, 92.6, 120.1, 1.0, 18.0, 80.3, 97.4,
+          90.1, 62.0, 96.6, 87.5, 5.8, 84.3, 170.4, 8.4, 95.1, 8.0, 106.1, 91.4, 64.4, 240.9, 97.5, 23.3, 98.8
+        ],
+        [
+          22.6, 6.1, 6.5, 8.7, 116.4, 106.7, 0.0, 101.5, 107.0, 8.2, 136.9, 14.2, 13.4, 107.0, 118.4, 26.4, 9.4, 16.8,
+          139.3, 10.2, 19.4, 112.5, 22.4, 143.5, 101.0, 30.8, 113.0, 17.3, 15.5, 151.4, 152.5, 10.0, 128.4, 8.0
+        ],
+        [
+          97.3, 95.5, 95.2, 101.8, 15.0, 8.0, 101.5, 0.0, 203.0, 94.7, 55.2, 87.5, 114.8, 7.9, 18.4, 75.3, 92.3, 85.1,
+          59.2, 91.4, 82.5, 12.4, 79.1, 163.3, 1.0, 92.2, 11.6, 99.7, 86.4, 63.5, 232.8, 92.6, 30.8, 93.7
+        ],
+        [
+          106.0, 112.3, 113.4, 104.0, 216.6, 209.9, 107.0, 203.0, 0.0, 111.9, 208.0, 121.0, 93.9, 210.0, 215.6, 132.6,
+          116.3, 123.6, 207.1, 117.0, 126.1, 215.2, 128.4, 104.6, 202.5, 129.5, 214.2, 104.2, 122.4, 220.8, 49.8, 117.0,
+          233.1, 114.9
+        ],
+        [
+          17.4, 3.7, 5.9, 8.1, 109.6, 100.3, 8.2, 94.7, 111.9, 0.0, 128.8, 10.0, 20.3, 100.6, 111.3, 20.7, 6.6, 12.5,
+          131.1, 6.9, 14.6, 106.0, 16.5, 140.1, 94.2, 33.2, 106.2, 13.3, 11.5, 143.3, 155.8, 9.3, 122.4, 6.2
+        ],
+        [
+          122.4, 131.2, 131.9, 133.2, 47.6, 58.0, 136.9, 55.2, 208.0, 128.8, 0.0, 125.6, 148.0, 57.3, 40.7, 114.9,
+          129.4, 123.9, 4.0, 128.7, 121.6, 55.2, 117.5, 125.2, 55.4, 139.6, 50.9, 127.2, 125.0, 15.1, 208.2, 131.0,
+          61.1, 130.7
+        ],
+        [
+          25.7, 8.7, 7.8, 18.0, 102.5, 92.6, 14.2, 87.5, 121.0, 10.0, 125.6, 0.0, 27.7, 92.9, 104.7, 12.3, 4.8, 2.6,
+          128.2, 4.1, 5.2, 98.3, 8.5, 148.3, 87.0, 25.7, 98.9, 22.6, 1.5, 139.7, 165.7, 5.5, 114.2, 6.3
+        ],
+        [
+          27.5, 19.3, 19.9, 14.8, 129.7, 120.1, 13.4, 114.8, 93.9, 20.3, 148.0, 27.7, 0.0, 120.4, 131.6, 39.8, 22.8,
+          30.2, 150.1, 23.6, 32.8, 125.9, 35.8, 139.5, 114.3, 39.4, 126.3, 22.0, 29.0, 162.8, 140.3, 23.2, 141.8, 21.4
+        ],
+        [
+          104.1, 101.1, 100.7, 107.9, 11.4, 1.0, 107.0, 7.9, 210.0, 100.6, 57.3, 92.9, 120.4, 0.0, 17.4, 80.7, 97.7,
+          90.4, 61.4, 96.9, 87.8, 5.4, 84.6, 170.0, 8.3, 95.5, 7.4, 106.3, 91.7, 63.8, 240.7, 97.9, 23.2, 99.1
+        ],
+        [
+          111.9, 112.4, 112.3, 118.0, 7.0, 18.0, 118.4, 18.4, 215.6, 111.3, 40.7, 104.7, 131.6, 17.4, 0.0, 92.5, 109.4,
+          102.4, 44.7, 108.6, 99.8, 14.6, 96.3, 159.3, 18.8, 110.6, 10.3, 115.0, 103.7, 46.4, 236.8, 110.0, 25.1, 110.8
+        ],
+        [
+          31.8, 20.6, 20.0, 28.7, 90.2, 80.3, 26.4, 75.3, 132.6, 20.7, 114.9, 12.3, 39.8, 80.7, 92.5, 0.0, 17.1, 9.9,
+          117.7, 16.2, 7.2, 86.1, 4.2, 150.6, 74.8, 29.0, 86.7, 30.7, 11.1, 128.6, 176.0, 17.4, 102.1, 18.5
+        ],
+        [
+          23.8, 4.2, 2.9, 14.0, 107.2, 97.4, 9.4, 92.3, 116.3, 6.6, 129.4, 4.8, 22.8, 97.7, 109.4, 17.1, 0.0, 7.4,
+          131.9, 1.0, 10.0, 103.2, 13.1, 146.6, 91.8, 26.7, 103.7, 19.9, 6.2, 143.7, 161.2, 2.9, 119.0, 1.4
+        ],
+        [
+          27.4, 11.3, 10.3, 20.5, 100.1, 90.1, 16.8, 85.1, 123.6, 12.5, 123.9, 2.6, 30.2, 90.4, 102.4, 9.9, 7.4, 0.0,
+          126.6, 6.7, 2.6, 95.9, 6.4, 149.6, 84.6, 25.1, 96.5, 24.7, 1.3, 137.9, 168.2, 7.6, 111.6, 8.8
+        ],
+        [
+          124.1, 133.6, 134.4, 135.2, 51.6, 62.0, 139.3, 59.2, 207.1, 131.1, 4.0, 128.2, 150.1, 61.4, 44.7, 117.7,
+          131.9, 126.6, 0.0, 131.2, 124.3, 59.3, 120.2, 122.0, 59.4, 142.8, 54.9, 129.0, 127.7, 14.4, 205.3, 133.6,
+          64.8, 133.2
+        ],
+        [
+          23.8, 4.8, 3.8, 14.4, 106.4, 96.6, 10.2, 91.4, 117.0, 6.9, 128.7, 4.1, 23.6, 96.9, 108.6, 16.2, 1.0, 6.7,
+          131.2, 0.0, 9.2, 102.3, 12.3, 146.7, 90.9, 26.7, 102.9, 20.1, 5.4, 142.9, 161.8, 3.2, 118.2, 2.2
+        ],
+        [
+          28.6, 13.8, 12.9, 22.7, 97.4, 87.5, 19.4, 82.5, 126.1, 14.6, 121.6, 5.2, 32.8, 87.8, 99.8, 7.2, 10.0, 2.6,
+          124.3, 9.2, 0.0, 93.2, 4.1, 150.2, 82.0, 25.5, 93.9, 26.3, 3.9, 135.5, 170.4, 10.2, 109.0, 11.4
+        ],
+        [
+          109.4, 106.6, 106.1, 113.3, 7.7, 5.8, 112.5, 12.4, 215.2, 106.0, 55.2, 98.3, 125.9, 5.4, 14.6, 86.1, 103.2,
+          95.9, 59.3, 102.3, 93.2, 0.0, 90.1, 171.2, 12.8, 100.7, 4.5, 111.6, 97.2, 60.5, 244.3, 103.3, 18.4, 104.6
+        ],
+        [
+          28.2, 16.5, 16.1, 24.5, 94.1, 84.3, 22.4, 79.1, 128.4, 16.5, 117.5, 8.5, 35.8, 84.6, 96.3, 4.2, 13.1, 6.4,
+          120.2, 12.3, 4.1, 90.1, 0.0, 148.4, 78.6, 28.8, 90.6, 26.7, 7.6, 131.5, 171.9, 13.9, 106.1, 14.6
+        ],
+        [
+          122.9, 143.6, 145.9, 134.8, 165.5, 170.4, 143.5, 163.3, 104.6, 140.1, 125.2, 148.3, 139.5, 170.0, 159.3,
+          150.6, 146.6, 149.6, 122.0, 146.7, 150.2, 171.2, 148.4, 0.0, 163.2, 173.3, 166.9, 127.0, 149.4, 130.9, 83.5,
+          149.4, 183.8, 146.3
+        ],
+        [
+          96.8, 95.0, 94.7, 101.3, 15.5, 8.4, 101.0, 1.0, 202.5, 94.2, 55.4, 87.0, 114.3, 8.3, 18.8, 74.8, 91.8, 84.6,
+          59.4, 90.9, 82.0, 12.8, 78.6, 163.2, 0.0, 91.8, 12.0, 99.2, 85.9, 63.8, 232.5, 92.1, 31.2, 93.2
+        ],
+        [
+          50.5, 29.8, 27.5, 39.0, 106.6, 95.1, 30.8, 92.2, 129.5, 33.2, 139.6, 25.7, 39.4, 95.5, 110.6, 29.0, 26.7,
+          25.1, 142.8, 26.7, 25.5, 100.7, 28.8, 173.3, 91.8, 0.0, 102.6, 46.3, 24.9, 152.1, 178.0, 23.9, 113.1, 27.0
+        ],
+        [
+          108.7, 107.0, 106.6, 113.4, 4.1, 8.0, 113.0, 11.6, 214.2, 106.2, 50.9, 98.9, 126.3, 7.4, 10.3, 86.7, 103.7,
+          96.5, 54.9, 102.9, 93.9, 4.5, 90.6, 166.9, 12.0, 102.6, 0.0, 111.3, 97.8, 56.6, 241.1, 104.0, 20.8, 105.1
+        ],
+        [
+          5.7, 16.5, 18.8, 8.8, 114.3, 106.1, 17.3, 99.7, 104.2, 13.3, 127.2, 22.6, 22.0, 106.3, 115.0, 30.7, 19.9,
+          24.7, 129.0, 20.1, 26.3, 111.6, 26.7, 127.0, 99.2, 46.3, 111.3, 0.0, 24.0, 142.2, 145.5, 22.5, 129.0, 19.4
+        ],
+        [
+          26.9, 10.2, 9.1, 19.5, 101.3, 91.4, 15.5, 86.4, 122.4, 11.5, 125.0, 1.5, 29.0, 91.7, 103.7, 11.1, 6.2, 1.3,
+          127.7, 5.4, 3.9, 97.2, 7.6, 149.4, 85.9, 24.9, 97.8, 24.0, 0.0, 139.0, 167.1, 6.3, 112.9, 7.6
+        ],
+        [
+          137.5, 145.6, 146.2, 148.0, 52.8, 64.4, 151.4, 63.5, 220.8, 143.3, 15.1, 139.7, 162.8, 63.8, 46.4, 128.6,
+          143.7, 137.9, 14.4, 142.9, 135.5, 60.5, 131.5, 130.9, 63.8, 152.1, 56.6, 142.2, 139.0, 0.0, 214.3, 145.2,
+          61.6, 145.0
+        ],
+        [
+          145.6, 157.0, 158.6, 147.7, 241.4, 240.9, 152.5, 232.8, 49.8, 155.8, 208.2, 165.7, 140.3, 240.7, 236.8, 176.0,
+          161.2, 168.2, 205.3, 161.8, 170.4, 244.3, 171.9, 83.5, 232.5, 178.0, 241.1, 145.5, 167.1, 214.3, 0.0, 162.5,
+          261.5, 160.0
+        ],
+        [
+          26.6, 6.2, 4.1, 16.1, 107.6, 97.5, 10.0, 92.6, 117.0, 9.3, 131.0, 5.5, 23.2, 97.9, 110.0, 17.4, 2.9, 7.6,
+          133.6, 3.2, 10.2, 103.3, 13.9, 149.4, 92.1, 23.9, 104.0, 22.5, 6.3, 145.2, 162.5, 0.0, 118.9, 3.1
+        ],
+        [
+          127.0, 122.6, 121.9, 130.0, 20.1, 23.3, 128.4, 30.8, 233.1, 122.4, 61.1, 114.2, 141.8, 23.2, 25.1, 102.1,
+          119.0, 111.6, 64.8, 118.2, 109.0, 18.4, 106.1, 183.8, 31.2, 113.1, 20.8, 129.0, 112.9, 61.6, 261.5, 118.9,
+          0.0, 120.4
+        ],
+        [
+          23.5, 3.1, 1.5, 13.0, 108.6, 98.8, 8.0, 93.7, 114.9, 6.2, 130.7, 6.3, 21.4, 99.1, 110.8, 18.5, 1.4, 8.8,
+          133.2, 2.2, 11.4, 104.6, 14.6, 146.3, 93.2, 27.0, 105.1, 19.4, 7.6, 145.0, 160.0, 3.1, 120.4, 0.0
+        ]
+      ]
+    }
+  }
+</script>
+<script>
+  // The view model of scripts/network-bench/vidformula.py, in JavaScript. Times in seconds.
+  const MODEL = (() => {
+    function mulberry32(a) {
+      return () => {
+        a |= 0;
+        a = (a + 0x6d2b79f5) | 0;
+        let t = Math.imul(a ^ (a >>> 15), 1 | a);
+        t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+        return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+      };
+    }
+    // Largest remainder, ties to the earlier label (latency.apportion).
+    function apportion(n, weights) {
+      const total = weights.reduce((a, b) => a + b, 0);
+      const counts = weights.map((w) => Math.floor((n * w) / total));
+      const rem = weights.map((w, i) => [(n * w) % total, i]).sort((a, b) => b[0] - a[0] || a[1] - b[1]);
+      let left = n - counts.reduce((a, b) => a + b, 0);
+      for (const [, i] of rem) {
+        if (left <= 0) break;
+        counts[i]++;
+        left--;
+      }
+      return counts;
+    }
+    // One-way delays d[i*n+j] in seconds, and each node's region label.
+    function delays(profile, n, uniformMs, profiles) {
+      const d = new Float64Array(n * n);
+      if (profile === "off" || profile === "uniform") {
+        const ms = profile === "off" ? 0.1 : uniformMs;
+        for (let i = 0; i < n; i++) for (let j = 0; j < n; j++) d[i * n + j] = i === j ? 0 : ms / 1000;
+        return { d, labels: new Array(n).fill(profile === "off" ? "one-az" : "uniform") };
+      }
+      const p = profiles[profile];
+      const counts = apportion(n, p.weights);
+      const region = [];
+      const labels = [];
+      counts.forEach((c, r) => {
+        for (let x = 0; x < c; x++) {
+          region.push(r);
+          labels.push(p.labels[r]);
+        }
+      });
+      for (let i = 0; i < n; i++)
+        for (let j = 0; j < n; j++) {
+          if (i === j) continue;
+          const a = region[i],
+            b = region[j];
+          d[i * n + j] = (a === b ? p.intra : p.rtt[a][b]) / 2000;
+        }
+      return { d, labels };
+    }
+    // k-th smallest (1-based) of a column of a matrix stored row-major: m[x*n + j] over x.
+    function kthOfColumn(m, n, j, k, scratch, skip) {
+      let len = 0;
+      for (let x = 0; x < n; x++) {
+        if (x === skip) continue;
+        scratch[len++] = m[x * n + j];
+      }
+      return select(scratch, len, k - 1);
+    }
+    function select(a, len, k) {
+      // quickselect on a[0..len)
+      let lo = 0,
+        hi = len - 1;
+      while (hi > lo) {
+        const pivot = a[(lo + hi) >> 1];
+        let i = lo,
+          j = hi;
+        while (i <= j) {
+          while (a[i] < pivot) i++;
+          while (a[j] > pivot) j--;
+          if (i <= j) {
+            const t = a[i];
+            a[i] = a[j];
+            a[j] = t;
+            i++;
+            j--;
+          }
+        }
+        if (k <= j) hi = j;
+        else if (k >= i) lo = i;
+        else break;
+      }
+      return a[k];
+    }
+    function cost(c, mb) {
+      return (c[0] + c[1] * mb) / 1000;
+    }
+    // compute: {build, encode, propose, persist_proposal, verify_proposal, vote1, decode, cert, vote2, decide} each [fixed ms, ms per MB]
+    // load: {rate MB/s, maxMb, seedMb} makes each block what arrived since the previous leader
+    // pulled the pool (vidformula.Load); without it every block is mb.
+    function runViews(n, k, d, mb, gbps, leaders, views, c, lane, load) {
+      const q = Math.ceil((2 * n) / 3);
+      const tShare = (mb) => (((n - 1) / k) * mb * 8) / gbps / 1000;
+      const proposalOf = (mb) => cost(c.propose, mb) + cost(c.persist_proposal, mb);
+      const buildOf = (mb) => cost(c.build, mb) + cost(c.encode, mb);
+      const V = views + 2;
+      const mbs = new Float64Array(V).fill(load ? load.seedMb : mb);
+      const pull = new Float64Array(V);
+      const proposed = new Float64Array(V),
+        transit = new Float64Array(V),
+        disperse = new Float64Array(V),
+        built = new Float64Array(V),
+        propLeave = new Float64Array(V);
+      const per = {}; // [view][node] timestamps
+      for (const key of [
+        "pair",
+        "kth",
+        "recovered",
+        "cert1",
+        "decided",
+        "propArr",
+        "ready",
+        "vote1Out",
+        "vote1Leave",
+        "rbStart",
+        "rbDone",
+        "vote2",
+        "vote2Leave",
+        "cert2",
+      ]) {
+        per[key] = [];
+        for (let v = 0; v < V; v++) per[key].push(new Float64Array(n));
+      }
+      const { pair, kth, recovered, cert1, decided } = per;
+      let free = new Float64Array(n);
+      const m = new Float64Array(n * n),
+        scratch = new Float64Array(n);
+      proposed[1] = proposalOf(mbs[1]);
+      disperse[1] = buildOf(mbs[1]);
+      built[1] = buildOf(mbs[1]);
+      free[leaders[1]] = buildOf(mbs[1]) + tShare(mbs[1]);
+      for (let v = 1; v <= views; v++) {
+        const lead = leaders[v],
+          nxt = leaders[v + 1];
+        const mbv = mbs[v],
+          T = tShare(mbv);
+        const verify = cost(c.verify_proposal, mbv),
+          vote1 = cost(c.vote1, mbv),
+          cert = cost(c.cert, mbv),
+          decode = cost(c.decode, mbv),
+          vote2c = cost(c.vote2, mbv),
+          decide = cost(c.decide, mbv);
+        const p = proposed[v],
+          disp = disperse[v];
+        propLeave[v] = lane ? p : Math.max(p, free[lead]);
+        const propArr = per.propArr[v],
+          ready = per.ready[v],
+          vote1Out = per.vote1Out[v],
+          vote1Leave = per.vote1Leave[v],
+          rbStart = per.rbStart[v],
+          rbDone = per.rbDone[v],
+          vote2 = per.vote2[v];
+        for (let j = 0; j < n; j++) {
+          propArr[j] = propLeave[v] + d[lead * n + j];
+          pair[v][j] = Math.max(propArr[j], disp + T + d[lead * n + j]) + verify;
+        }
+        pair[v][lead] = Math.max(p, disp) + verify;
+        transit[v] = propArr[nxt];
+        for (let j = 0; j < n; j++) {
+          ready[j] = pair[v][j] + vote1;
+          vote1Out[j] = Math.max(ready[j], recovered[v - 1][j]);
+        }
+        // The next leader pulls the pool when the proposal is verified; with a load, what arrived
+        // since the previous pull is its block.
+        pull[v + 1] = propArr[nxt] + verify;
+        if (load) mbs[v + 1] = Math.min(load.maxMb, load.rate * (pull[v + 1] - pull[v]));
+        const mbn = mbs[v + 1],
+          Tn = tShare(mbn);
+        built[v + 1] = pull[v + 1] + buildOf(mbn);
+        const disperseFirst = built[v + 1] < vote1Out[nxt];
+        if (disperseFirst) {
+          disperse[v + 1] = Math.max(built[v + 1], free[nxt]);
+          free[nxt] = disperse[v + 1] + Tn;
+        }
+        for (let x = 0; x < n; x++) {
+          vote1Leave[x] = lane ? vote1Out[x] : Math.max(vote1Out[x], free[x]);
+          rbStart[x] = Math.max(vote1Out[x], free[x]);
+          rbDone[x] = rbStart[x] + T;
+        }
+        free = Float64Array.from(rbDone);
+        if (!disperseFirst) {
+          disperse[v + 1] = Math.max(built[v + 1], free[nxt]);
+          free[nxt] = disperse[v + 1] + Tn;
+        }
+        // cert1 at i: q-th smallest over x of vote1Leave[x] + d[x][i]
+        for (let x = 0; x < n; x++) for (let i = 0; i < n; i++) m[x * n + i] = vote1Leave[x] + d[x * n + i];
+        for (let i = 0; i < n; i++) cert1[v][i] = kthOfColumn(m, n, i, q, scratch, -1) + cert;
+        // The proposal carries the header, so it waits for the build as well as Cert1.
+        proposed[v + 1] = Math.max(cert1[v][nxt], built[v + 1]) + proposalOf(mbn);
+        // k-th share of block v at j
+        for (let x = 0; x < n; x++) for (let j = 0; j < n; j++) m[x * n + j] = rbDone[x] + d[x * n + j];
+        for (let j = 0; j < n; j++) m[lead * n + j] = Math.min(m[lead * n + j], disp + T + d[lead * n + j]);
+        for (let j = 0; j < n; j++) kth[v][j] = kthOfColumn(m, n, j, k, scratch, j);
+        kth[v][lead] = disp;
+        for (let j = 0; j < n; j++) recovered[v][j] = kth[v][j] + decode;
+        recovered[v][lead] = disp;
+        const vote2Leave = per.vote2Leave[v];
+        for (let j = 0; j < n; j++) {
+          vote2[j] = Math.max(cert1[v][j], recovered[v][j]) + vote2c;
+          vote2Leave[j] = lane ? vote2[j] : Math.max(vote2[j], rbDone[j]);
+        }
+        for (let x = 0; x < n; x++) for (let i = 0; i < n; i++) m[x * n + i] = vote2Leave[x] + d[x * n + i];
+        for (let i = 0; i < n; i++) {
+          per.cert2[v][i] = kthOfColumn(m, n, i, q, scratch, -1) + cert;
+          decided[v][i] = per.cert2[v][i] + decide;
+        }
+      }
+      return { proposed, transit, disperse, built, propLeave, ...per, q, leaders, n, T: tShare(mbs[1]), d, mbs };
+    }
+    function pct(xs, p) {
+      if (!xs.length) return NaN;
+      const s = Float64Array.from(xs).sort();
+      return s[Math.min(s.length - 1, Math.floor(p * s.length))];
+    }
+    // load: with the blocks following a rate, also whether they settled (vidformula.point).
+    function summarize(r, lo, hi, load) {
+      const vt = [],
+        fin = [],
+        win = [],
+        tr = [];
+      let late = 0,
+        total = 0;
+      const tmp = new Float64Array(r.n);
+      for (let v = lo; v < hi; v++) {
+        vt.push((r.proposed[v + 1] - r.proposed[v]) * 1000);
+        tr.push((r.transit[v] - r.proposed[v]) * 1000);
+        for (let i = 0; i < r.n; i++) tmp[i] = r.decided[v][i];
+        fin.push((select(tmp, r.n, r.q - 1) - r.proposed[v]) * 1000);
+        for (let j = 0; j < r.n; j++) {
+          if (j === r.leaders[v]) continue;
+          win.push((r.pair[v + 1][j] - r.kth[v][j]) * 1000);
+          total++;
+          if (r.recovered[v][j] > r.pair[v + 1][j] + 1e-9) late++;
+        }
+      }
+      const mean = vt.reduce((a, b) => a + b, 0) / vt.length;
+      const mbs = Array.from(r.mbs.subarray(lo, hi));
+      const mid = (lo + hi) >> 1;
+      const grown = pct(Array.from(r.mbs.subarray(mid, hi)), 0.5) / Math.max(pct(Array.from(r.mbs.subarray(lo, mid)), 0.5), 1e-9) - 1;
+      const blocks = {
+        mb_p50: pct(mbs, 0.5),
+        mb_p90: pct(mbs, 0.9),
+        capped_pct: load ? (100 * mbs.filter((x) => x >= load.maxMb - 1e-9).length) / mbs.length : 0,
+        growth_pct: 100 * grown,
+        decided: mbs.reduce((a, b) => a + b, 0) / (r.proposed[hi] - r.proposed[lo]),
+      };
+      return {
+        ...blocks,
+        view_mean: mean,
+        view_p50: pct(vt, 0.5),
+        view_p90: pct(vt, 0.9),
+        fin_p50: pct(fin, 0.5),
+        fin_p90: pct(fin, 0.9),
+        win_p10: pct(win, 0.1),
+        win_p50: pct(win, 0.5),
+        late_pct: (100 * late) / total,
+        transit_p50: pct(tr, 0.5),
+      };
+    }
+    function leaders(n, views, seed) {
+      const rnd = mulberry32(seed);
+      const out = [0];
+      for (let i = 0; i < views + 2; i++) out.push(Math.floor(rnd() * n));
+      return out;
+    }
+    function point(cfg, mb, profiles, load) {
+      const { n, k, gbps, views, compute, lane } = cfg;
+      const { d } = delays(cfg.profile, n, cfg.uniformMs, profiles);
+      const r = runViews(n, k, d, mb, gbps, cfg.leaders, views, compute, lane, load);
+      const lo = Math.floor(views / 4),
+        hi = views - 5;
+      const s = summarize(r, lo, hi, load);
+      s.mb = load ? s.mb_p50 : mb;
+      s.mbps = load ? s.decided : (mb / s.view_mean) * 1000;
+      s.share_ms = (((n - 1) / k) * mb * 8) / gbps;
+      return s;
+    }
+    return { delays, runViews, summarize, leaders, point, apportion, pct };
+  })();
+</script>
+<script>
+  (() => {
+    const PROFILES = JSON.parse(document.getElementById("profiles").textContent);
+    const STEPS = [
+      "build",
+      "encode",
+      "propose",
+      "persist_proposal",
+      "verify_proposal",
+      "vote1",
+      "decode",
+      "cert",
+      "vote2",
+      "decide",
+    ];
+    const PRESETS = {
+      "c8g.4xlarge": {
+        build: [0, 0.85],
+        encode: [0.6, 0.27],
+        propose: [1, 0],
+        persist_proposal: [7.9, 0],
+        verify_proposal: [5, 0],
+        vote1: [7.3, 0.05],
+        decode: [0, 0.73],
+        cert: [3.1, 0],
+        vote2: [4.7, 0],
+        decide: [0.6, 0],
+      },
+      "c8g.8xlarge": {
+        build: [0, 1.2],
+        encode: [0.35, 0.16],
+        propose: [0.5, 0],
+        persist_proposal: [7.6, 0.02],
+        verify_proposal: [3.7, 0.07],
+        vote1: [7.1, 0.06],
+        decode: [0, 0.61],
+        cert: [3.1, 0],
+        vote2: [4.0, 0.01],
+        decide: [0.5, 0.01],
+      },
+      off: Object.fromEntries(STEPS.map((s) => [s, [0, 0]])),
+    };
+    const $ = (id) => document.getElementById(id);
+    const state = {
+      threshold: "f+1",
+      lane: false,
+      metric: "fin",
+      mode: "block",
+      compute: structuredClone(PRESETS["c8g.4xlarge"]),
+      baseline: null,
+    };
+    const GBPS = (v) => Math.round(Math.pow(10, v / 50) * 10) / 10; // slider 0..100 -> 1..100 Gbps, log
+    const fmt = (x, d = 0) =>
+      Number.isFinite(x) ? x.toLocaleString(undefined, { maximumFractionDigits: d, minimumFractionDigits: d }) : "–";
+
+    // ---- compute editing: key sliders <-> every step ----
+    function advRows() {
+      const tb = $("adv-body");
+      tb.innerHTML = "";
+      for (const s of STEPS) {
+        const tr = document.createElement("tr");
+        tr.innerHTML = `<td>${s.replace(/_/g, " ")}</td><td><input type="number" step="0.1" min="0" id="adv-${s}-0" aria-label="${s} fixed ms"></td><td><input type="number" step="0.01" min="0" id="adv-${s}-1" aria-label="${s} ms per MB"></td>`;
+        tb.appendChild(tr);
+        for (const i of [0, 1])
+          $(`adv-${s}-${i}`).addEventListener("change", (e) => {
+            state.compute[s][i] = Math.max(0, +e.target.value || 0);
+            keyFromCompute();
+            markPreset(null);
+            schedule();
+          });
+      }
+    }
+    function advFromCompute() {
+      for (const s of STEPS) for (const i of [0, 1]) $(`adv-${s}-${i}`).value = +state.compute[s][i].toFixed(3);
+    }
+    function keyFromCompute() {
+      const c = state.compute;
+      $("decode").value = c.decode[1];
+      $("buildenc").value = (c.build[1] + c.encode[1]).toFixed(2);
+      $("storage").value = c.persist_proposal[0];
+      $("votepath").value = (c.verify_proposal[0] + c.vote1[0] + c.cert[0]).toFixed(1);
+      advFromCompute();
+      labels();
+    }
+    function computeFromKey(which) {
+      const c = state.compute;
+      if (which === "decode") c.decode[1] = +$("decode").value;
+      if (which === "buildenc") {
+        const v = +$("buildenc").value,
+          tot = c.build[1] + c.encode[1];
+        const fb = tot > 0 ? c.build[1] / tot : 0.76;
+        c.build[1] = v * fb;
+        c.encode[1] = v * (1 - fb);
+      }
+      if (which === "storage") {
+        const v = +$("storage").value,
+          old = c.persist_proposal[0];
+        c.persist_proposal[0] = v;
+        c.vote2[0] = old > 0 ? (c.vote2[0] * v) / old : v * 0.6;
+      }
+      if (which === "votepath") {
+        const v = +$("votepath").value,
+          tot = c.verify_proposal[0] + c.vote1[0] + c.cert[0];
+        const w = tot > 0 ? [c.verify_proposal[0], c.vote1[0], c.cert[0]].map((x) => x / tot) : [0.32, 0.48, 0.2];
+        c.verify_proposal[0] = v * w[0];
+        c.vote1[0] = v * w[1];
+        c.cert[0] = v * w[2];
+      }
+      advFromCompute();
+      markPreset(null);
+    }
+    function markPreset(name) {
+      for (const b of document.querySelectorAll("[data-preset]"))
+        b.setAttribute("aria-pressed", String(b.dataset.preset === name));
+    }
+
+    // ---- labels ----
+    function labels() {
+      $("nodes-v").textContent = $("nodes").value;
+      $("gbps-v").textContent = fmt(GBPS(+$("gbps").value), 1) + " Gbps";
+      $("profile-v").textContent = "";
+      $("uniform-v").textContent = $("uniform").value + " ms";
+      $("cap-v").textContent = $("cap").value + " ms";
+      $("maxmb-v").textContent = $("maxmb").value + " MB";
+      $("maxrate-v").textContent = $("maxrate").value + " MB/s";
+      $("maxrate-row").hidden = state.mode !== "rate";
+      $("mode-note").hidden = state.mode !== "rate";
+      $("maxmb-l").textContent = state.mode === "rate" ? "Max block" : "Block sizes up to";
+      $("decode-v").textContent = fmt(+$("decode").value, 2) + " ms/MB";
+      $("buildenc-v").textContent = fmt(+$("buildenc").value, 2) + " ms/MB";
+      $("storage-v").textContent = fmt(+$("storage").value, 1) + " ms";
+      $("votepath-v").textContent = fmt(+$("votepath").value, 1) + " ms";
+      $("uniform-row").hidden = $("profile").value !== "uniform";
+    }
+
+    // ---- the sweep ----
+    function config() {
+      const n = +$("nodes").value;
+      return {
+        n,
+        k: state.threshold === "f+1" ? Math.ceil(n / 3) : Math.ceil((2 * n) / 3),
+        gbps: GBPS(+$("gbps").value),
+        profile: $("profile").value,
+        uniformMs: +$("uniform").value,
+        lane: state.lane,
+        compute: structuredClone(state.compute),
+        threshold: state.threshold,
+        cap: +$("cap").value,
+        metric: state.metric,
+        maxmb: +$("maxmb").value,
+        mode: state.mode,
+        maxrate: +$("maxrate").value,
+      };
+    }
+    function rates(max) {
+      const xs = [];
+      for (let i = 1; i <= 24; i++) xs.push(Math.round((max * i) / 24));
+      return xs;
+    }
+    function blockSizes(max) {
+      const xs = [1, 2, 5, 10];
+      const steps = 14;
+      for (let i = 1; i <= steps; i++) {
+        const x = Math.round(10 + ((max - 10) * i) / steps);
+        if (x > 10) xs.push(x);
+      }
+      return xs;
+    }
+    function sweep(cfg) {
+      const rateMode = cfg.mode === "rate";
+      // Blocks that follow a rate need the transient to settle before the measured views.
+      const views = rateMode ? (cfg.n > 120 ? 60 : cfg.n > 60 ? 90 : 200) : cfg.n > 120 ? 50 : cfg.n > 60 ? 70 : 120;
+      cfg.views = views;
+      cfg.leaders = MODEL.leaders(cfg.n, views, 1);
+      const { d, labels: reg } = MODEL.delays(cfg.profile, cfg.n, cfg.uniformMs, PROFILES);
+      const lo = Math.floor(views / 4),
+        hi = views - 5;
+      const finish = (s, x) => {
+        s.x = x;
+        s.tx_p50 = s.fin_p50 + 1.5 * s.view_mean;
+        s.decode = cfg.compute.decode[0] + cfg.compute.decode[1] * s.mb;
+        s.share_ms = (((cfg.n - 1) / cfg.k) * s.mb * 8) / cfg.gbps;
+        return s;
+      };
+      let pts, capacity, peak;
+      if (rateMode) {
+        // A rate settles when it is below the peak of the fixed-block throughput curve within the
+        // max block: below it the loop has a stable fixed point, above it none. Measured growth
+        // cannot tell, since the leader sequence alone moves block medians by a fifth.
+        const blocks = blockSizes(cfg.maxmb).map((mb) => {
+          const r = MODEL.runViews(cfg.n, cfg.k, d, mb, cfg.gbps, cfg.leaders, views, cfg.compute, cfg.lane);
+          const s = MODEL.summarize(r, lo, hi);
+          s.mb = mb;
+          s.mbps = (mb / s.view_mean) * 1000;
+          return s;
+        });
+        peak = blocks.reduce((a, b) => (b.mbps > a.mbps ? b : a));
+        capacity = peak.mbps;
+        pts = rates(cfg.maxrate).map((rate) => {
+          const load = { rate, maxMb: cfg.maxmb, seedMb: 10 };
+          const r = MODEL.runViews(cfg.n, cfg.k, d, 0, cfg.gbps, cfg.leaders, views, cfg.compute, cfg.lane, load);
+          const s = MODEL.summarize(r, lo, hi, load);
+          s.rate = rate;
+          s.mb = s.mb_p50;
+          s.mbps = s.decided;
+          s.steady = rate <= capacity && s.capped_pct === 0;
+          return finish(s, rate);
+        });
+        // The peak itself is the last point that settles, at x = capacity: the cap crossing and
+        // the hero tile then reach it instead of stopping at the rate grid below it.
+        if (capacity <= cfg.maxrate) {
+          const edge = finish({ ...peak, rate: capacity, steady: true }, capacity);
+          const i = pts.findIndex((s) => s.x > capacity);
+          pts.splice(i < 0 ? pts.length : i, 0, edge);
+        }
+      } else {
+        pts = blockSizes(cfg.maxmb).map((mb) => {
+          const r = MODEL.runViews(cfg.n, cfg.k, d, mb, cfg.gbps, cfg.leaders, views, cfg.compute, cfg.lane);
+          const s = MODEL.summarize(r, lo, hi);
+          s.mb = mb;
+          s.mbps = (mb / s.view_mean) * 1000;
+          s.steady = true;
+          return finish(s, mb);
+        });
+      }
+      // quorum round trip and leader-pair delay, medians over the sequence, for the chain readout
+      const qs = [],
+        dl = [];
+      const q = Math.ceil((2 * cfg.n) / 3);
+      const col = new Float64Array(cfg.n);
+      for (let v = 1; v < Math.min(60, views); v++) {
+        const L = cfg.leaders[v],
+          Ln = cfg.leaders[v + 1];
+        for (let x = 0; x < cfg.n; x++) col[x] = d[L * cfg.n + x] + d[x * cfg.n + Ln];
+        qs.push(Float64Array.from(col).sort()[q - 1] * 1000);
+        dl.push(d[L * cfg.n + Ln] * 1000);
+      }
+      const slope = cfg.lane
+        ? (((cfg.n - 1) / cfg.k) * 8) / cfg.gbps + cfg.compute.decode[1]
+        : (((2 * (cfg.n - 1)) / cfg.k) * 8) / cfg.gbps; // ms per MB of view at large blocks
+      return { cfg, pts, capacity, peak, q_ms: MODEL.pct(qs, 0.5), dll_ms: MODEL.pct(dl, 0.5), ceiling: 1000 / slope, regions: reg };
+    }
+    // Steady points only: past the capacity the blocks are still growing when measured.
+    const steady = (res) => res.pts.filter((s) => s.steady);
+    function interp(pts, x, key) {
+      if (!pts.length) return NaN;
+      if (x <= pts[0].x) return pts[0][key];
+      for (let i = 1; i < pts.length; i++)
+        if (x <= pts[i].x) {
+          const t = (x - pts[i - 1].x) / (pts[i].x - pts[i - 1].x);
+          return pts[i - 1][key] + t * (pts[i][key] - pts[i - 1][key]);
+        }
+      return pts[pts.length - 1][key];
+    }
+    function metricOf(s, metric) {
+      return metric === "fin" ? s.fin_p50 : s.tx_p50;
+    }
+    function atCap(res) {
+      const { cfg } = res;
+      const pts = steady(res);
+      if (!pts.length) return { status: "below", mb: NaN, x: NaN };
+      const m = pts.map((s) => metricOf(s, cfg.metric));
+      if (m[0] > cfg.cap) return { status: "below", mb: NaN, x: NaN };
+      let i = pts.length - 1;
+      if (m[i] <= cfg.cap) return { status: "above", ...pts[i] };
+      while (i > 0 && m[i] > cfg.cap) i--;
+      const a = pts[i],
+        b = pts[i + 1],
+        t = (cfg.cap - m[i]) / (m[i + 1] - m[i]);
+      const lerp = (key) => a[key] + t * (b[key] - a[key]);
+      const out = { status: "ok" };
+      for (const key of ["x", "mb", "mbps", "view_mean", "fin_p50", "tx_p50", "late_pct", "win_p50", "decode"])
+        out[key] = lerp(key);
+      return out;
+    }
+    // A pinned baseline compares only within the same load mode.
+    const sameMode = (res, base) => (base && base.cfg.mode === res.cfg.mode ? base : null);
+    const labelOf = (id, text) => ($(id).parentElement.querySelector(".k").textContent = text);
+    function chains(res, mb) {
+      const c = res.cfg.compute,
+        ms = (s) => c[s][0] + c[s][1] * mb;
+      const T = (((res.cfg.n - 1) / res.cfg.k) * mb * 8) / res.cfg.gbps;
+      const proposal = ms("propose") + ms("persist_proposal");
+      const lat = res.q_ms + ms("verify_proposal") + ms("vote1") + ms("cert") + proposal;
+      const xfer =
+        (res.cfg.lane
+          ? T + ms("decode")
+          : ms("verify_proposal") + Math.max(ms("vote1") + T, ms("build") + ms("encode")) + T) + res.dll_ms;
+      return { lat, xfer };
+    }
+
+    // ---- rendering ----
+    let current = null,
+      timer = null;
+    function schedule() {
+      labels();
+      clearTimeout(timer);
+      timer = setTimeout(render, 60);
+    }
+    function render() {
+      const cfg = config();
+      current = sweep(cfg);
+      const zero = Object.fromEntries(STEPS.map((s) => [s, [0, 0]]));
+      current.free = sweep({ ...cfg, compute: zero });
+      current.decodeOnly = sweep({ ...cfg, compute: { ...zero, decode: cfg.compute.decode } });
+      tiles(current, state.baseline);
+      charts(current, state.baseline);
+      drawTimeline(current);
+    }
+    function delta(a, b, unit, d = 0, invert = false) {
+      if (!b || !Number.isFinite(a) || !Number.isFinite(b)) return ["", ""];
+      const x = a - b;
+      if (Math.abs(x) < 0.05) return ["same as baseline", ""];
+      const good = invert ? x < 0 : x > 0;
+      return [`${x > 0 ? "+" : "−"}${fmt(Math.abs(x), d)} ${unit} vs baseline`, good ? "up" : "down"];
+    }
+    function setTile(id, value, unit, dtext, dclass) {
+      $(id).innerHTML = value + (unit ? `<small>${unit}</small>` : "");
+      const e = $(id + "-d");
+      e.textContent = dtext;
+      e.className = "d " + (dclass || "");
+    }
+    function tiles(res, base) {
+      base = sameMode(res, base);
+      const rateMode = res.cfg.mode === "rate";
+      const at = atCap(res),
+        bat = base ? atCap(base) : null;
+      const cap = res.cfg.cap;
+      const atCapacity = rateMode ? res.peak : null;
+      let status = "";
+      if (at.status === "below")
+        status = rateMode
+          ? `Even the lowest offered rate exceeds the ${cap} ms cap here, or no rate settles. Raise the cap or cut the fixed costs.`
+          : `Even 1 MB blocks exceed the ${cap} ms cap here: the latency chain alone is above it. Raise the cap or cut the fixed costs.`;
+      if (at.status === "above")
+        status = rateMode
+          ? res.capacity < res.cfg.maxrate
+            ? `Latency stays under the cap at every rate that settles; the capacity binds first, at ${fmt(res.capacity)} MB/s.`
+            : `Every offered rate up to ${res.cfg.maxrate} MB/s settles under the cap; raise "offered rates up to" to find the limit.`
+          : `Finality stays under the cap up to ${res.cfg.maxmb} MB blocks; raise "block sizes up to" to find the limit.`;
+      $("status").textContent = status;
+      labelOf("t-mbps", rateMode ? "Max offered rate under the cap" : "Max throughput under the cap");
+      labelOf("t-ceil", rateMode ? "Capacity at this max block" : "Ceiling, unconstrained");
+      labelOf("t-free", rateMode ? "Max rate under the cap, no compute" : "Max under the cap, no compute");
+      labelOf("t-decode", rateMode ? "Max rate under the cap, reconstruction only" : "Max under the cap, reconstruction only");
+      const ok = at.status !== "below";
+      let [d, cls] = delta(at.mbps, bat && bat.mbps, "MB/s");
+      setTile("t-mbps", ok ? fmt(at.mbps) : "–", ok ? "MB/s" : "", d, cls);
+      [d, cls] = delta(at.mb, bat && bat.mb, "MB");
+      setTile("t-mb", ok ? fmt(at.mb) : "–", ok ? "MB" : "", d, cls);
+      [d, cls] = delta(at.view_mean, bat && bat.view_mean, "ms", 0, true);
+      setTile("t-view", ok ? fmt(at.view_mean) : "–", ok ? "ms" : "", d, cls);
+      if (ok) {
+        const ch = chains(res, at.mb);
+        const bind = ch.lat >= ch.xfer ? "latency" : "bandwidth";
+        setTile("t-chain", bind, "", `latency chain ${fmt(ch.lat)} ms, transfer chain ${fmt(ch.xfer)} ms`, "");
+      } else setTile("t-chain", "–", "", "", "");
+      [d, cls] = delta(at.late_pct, bat && bat.late_pct, "pts", 0, true);
+      setTile("t-late", ok ? fmt(at.late_pct) : "–", ok ? "%" : "", d, cls);
+      if (rateMode) {
+        [d, cls] = delta(res.capacity, base && base.capacity, "MB/s");
+        setTile(
+          "t-ceil",
+          Number.isFinite(res.capacity) ? fmt(res.capacity) : "–",
+          Number.isFinite(res.capacity) ? "MB/s" : "",
+          d ||
+            (atCapacity.mb >= res.cfg.maxmb
+              ? `the max block binds: ${fmt(atCapacity.mb)} MB blocks, ${fmt(atCapacity.view_mean)} ms views; raise it for more`
+              : `peak at ${fmt(atCapacity.mb)} MB blocks, ${fmt(atCapacity.view_mean)} ms views; above it the pool outgrows the view`),
+          cls,
+        );
+      } else {
+        [d, cls] = delta(res.ceiling, base && base.ceiling, "MB/s");
+        setTile(
+          "t-ceil",
+          fmt(res.ceiling),
+          "MB/s",
+          d || (res.cfg.lane ? "one transfer plus the decode per MB" : "two transfers per MB: B·k / 2(n−1)"),
+          cls,
+        );
+      }
+      for (const [id, key] of [
+        ["t-free", "free"],
+        ["t-decode", "decodeOnly"],
+      ]) {
+        const alt = res[key] ? atCap(res[key]) : null;
+        const v = alt && alt.status !== "below" ? alt.mbps : NaN;
+        const gain = ok && Number.isFinite(v) ? v - at.mbps : NaN;
+        // Latency at the current cap's block size, same metric as the cap.
+        const latKey = res.cfg.metric === "fin" ? "fin_p50" : "tx_p50";
+        const less = ok && res[key] ? metricOf(at, res.cfg.metric) - interp(steady(res[key]), at.x, latKey) : NaN;
+        const sign = (x) => (x >= 0 ? "+" : "−");
+        const note = Number.isFinite(gain)
+          ? `${sign(gain)}${fmt(Math.abs(gain))} MB/s; ${Number.isFinite(less) ? `${sign(-less)}${fmt(Math.abs(less))} ms ${res.cfg.metric === "fin" ? "finality" : "transaction"} at ${fmt(at.mb)} MB` : ""}`
+          : alt && alt.status === "above"
+            ? rateMode
+              ? "under the cap at every steady rate"
+              : "under the cap at every block size shown"
+            : "";
+        setTile(id, Number.isFinite(v) ? fmt(v) : "–", Number.isFinite(v) ? "MB/s" : "", note, "");
+      }
+    }
+    const C = {
+      fin: "var(--s1)",
+      view: "var(--s2)",
+      tx: "var(--s4)",
+      tp: "var(--s1)",
+      win: "var(--s1)",
+      win10: "var(--s2)",
+      dec: "var(--s3)",
+    };
+    function legend(id, items) {
+      $(id).innerHTML = items
+        .map(([name, color, cls]) => `<span class="${cls || ""}" style="--c:${color}">${name}</span>`)
+        .join("");
+    }
+    // Up to and including the first point past the capacity, so the cliff shows without the cap
+    // dominating the scale.
+    function shown(res) {
+      const i = res.pts.findIndex((s) => !s.steady);
+      return i < 0 ? res.pts : res.pts.slice(0, Math.max(2, i + 1));
+    }
+    function charts(res, base) {
+      base = sameMode(res, base);
+      const rateMode = res.cfg.mode === "rate";
+      const at = atCap(res);
+      const xlabel = rateMode ? "offered MB/s" : "block MB";
+      const xunit = rateMode ? "MB/s" : "MB";
+      const series = (pts, key, color, dash, name) => ({ name, color, dash, points: pts.map((s) => [s.x, s[key]]) });
+      const pts = shown(res);
+      const bl = base ? shown(base) : null;
+      const mark = at.status === "ok" ? at : null;
+      const capAt = rateMode && Number.isFinite(res.capacity) ? { rate: res.capacity, mb: res.peak.mb } : null;
+      $("ch-tp").parentElement.querySelector("h3").textContent = rateMode
+        ? "Block size by offered rate"
+        : "Throughput by block size";
+      $("ch-lat").parentElement.querySelector("h3").textContent = rateMode
+        ? "Latency by offered rate, p50"
+        : "Latency by block size, p50";
+      $("ch-win").parentElement.querySelector("h3").textContent = rateMode
+        ? "Reconstruction window by offered rate"
+        : "Reconstruction window by block size";
+      if (rateMode) {
+        legend("lg-tp", [
+          ["block size", C.tp],
+          ...(bl ? [["baseline", C.tp, "dash"]] : []),
+          ["max block", "var(--fg-3)", "thin"],
+        ]);
+        chart($("ch-tp"), {
+          ylabel: "MB",
+          xlabel,
+          series: [series(pts, "mb", C.tp, false, "block"), ...(bl ? [series(bl, "mb", C.tp, true, "baseline")] : [])],
+          hlines: [{ y: res.cfg.maxmb, label: "max block " + fmt(res.cfg.maxmb), cls: "cap" }],
+          mark: capAt && { x: capAt.rate, y: capAt.mb, label: `capacity ${fmt(capAt.rate)} MB/s, ${fmt(capAt.mb)} MB` },
+          fmtY: (v) => fmt(v),
+          zero: true,
+        });
+      } else {
+        legend("lg-tp", [
+          ["throughput", C.tp],
+          ...(bl ? [["baseline", C.tp, "dash"]] : []),
+          ["ceiling", "var(--fg-3)", "thin"],
+        ]);
+        chart($("ch-tp"), {
+          ylabel: "MB/s",
+          xlabel,
+          series: [
+            series(pts, "mbps", C.tp, false, "throughput"),
+            ...(bl ? [series(bl, "mbps", C.tp, true, "baseline")] : []),
+          ],
+          hlines: [{ y: res.ceiling, label: "ceiling " + fmt(res.ceiling), cls: "cap" }],
+          mark: mark && { x: mark.x, y: mark.mbps, label: `${fmt(mark.mbps)} MB/s at ${fmt(mark.mb)} MB` },
+          fmtY: (v) => fmt(v),
+        });
+      }
+      const met = res.cfg.metric;
+      legend("lg-lat", [
+        ["finality", C.fin],
+        ["view, mean", C.view],
+        ["transaction", C.tx],
+        ...(bl ? [["baseline", "var(--fg-3)", "dash"]] : []),
+        ["cap", "var(--fg-3)", "thin"],
+      ]);
+      chart($("ch-lat"), {
+        ylabel: "ms",
+        xlabel,
+        series: [
+          series(pts, "fin_p50", C.fin, false, "finality"),
+          series(pts, "view_mean", C.view, false, "view"),
+          series(pts, "tx_p50", C.tx, false, "transaction"),
+          ...(bl
+            ? [
+                series(bl, "fin_p50", C.fin, true, "finality, baseline"),
+                series(bl, "view_mean", C.view, true, "view, baseline"),
+                series(bl, "tx_p50", C.tx, true, "transaction, baseline"),
+              ]
+            : []),
+        ],
+        hlines: [
+          {
+            y: res.cfg.cap,
+            label: `cap ${res.cfg.cap} ms on ${met === "fin" ? "finality" : "transaction"}`,
+            cls: "cap",
+          },
+        ],
+        mark: mark && {
+          x: mark.x,
+          y: met === "fin" ? mark.fin_p50 : mark.tx_p50,
+          label: rateMode ? `${fmt(mark.x)} ${xunit}, ${fmt(mark.mb)} MB blocks` : `${fmt(mark.mb)} MB`,
+        },
+        fmtY: (v) => fmt(v),
+      });
+      legend("lg-win", [
+        ["window p50", C.win],
+        ["window p10", C.win10],
+        ["decode", C.dec],
+        ...(bl ? [["baseline", "var(--fg-3)", "dash"]] : []),
+      ]);
+      chart($("ch-win"), {
+        ylabel: "ms",
+        xlabel,
+        series: [
+          series(pts, "win_p50", C.win, false, "window p50"),
+          series(pts, "win_p10", C.win10, false, "window p10"),
+          series(pts, "decode", C.dec, false, "decode"),
+          ...(bl
+            ? [
+                series(bl, "win_p50", C.win, true, "window p50, baseline"),
+                series(bl, "decode", C.dec, true, "decode, baseline"),
+              ]
+            : []),
+        ],
+        hlines: [{ y: 0, label: "", cls: "cap" }],
+        mark: null,
+        fmtY: (v) => fmt(v),
+        zero: true,
+      });
+    }
+
+    // A line chart as inline SVG: one x scale, one y scale, hover crosshair with a tooltip.
+    function chart(el, o) {
+      const W = 720,
+        H = 260,
+        m = { l: 52, r: 16, t: 14, b: 34 };
+      const xs = o.series.flatMap((s) => s.points.map((p) => p[0])),
+        ys = o.series
+          .flatMap((s) => s.points.map((p) => p[1]))
+          .concat((o.hlines || []).map((h) => h.y))
+          .filter(Number.isFinite);
+      const x0 = 0,
+        x1 = Math.max(...xs);
+      let y0 = Math.min(0, ...ys),
+        y1 = Math.max(...ys) * 1.06 || 1;
+      if (o.zero) y0 = Math.min(y0, 0);
+      const sx = (v) => m.l + ((v - x0) / (x1 - x0 || 1)) * (W - m.l - m.r),
+        sy = (v) => H - m.b - ((v - y0) / (y1 - y0 || 1)) * (H - m.t - m.b);
+      const ticks = (a, b, n) => {
+        const step = niceStep((b - a) / n);
+        const out = [];
+        for (let v = Math.ceil(a / step) * step; v <= b + 1e-9; v += step) out.push(+v.toFixed(6));
+        return out;
+      };
+      const xt = ticks(x0, x1, 6),
+        yt = ticks(y0, y1, 5);
+      let g = `<g class="grid">${yt.map((v) => `<line x1="${m.l}" x2="${W - m.r}" y1="${sy(v)}" y2="${sy(v)}"/>`).join("")}</g>`;
+      g += `<g class="axis"><path d="M${m.l},${sy(y0)}H${W - m.r}" fill="none"/>${xt.map((v) => `<text x="${sx(v)}" y="${H - m.b + 16}" text-anchor="middle">${v}</text>`).join("")}${yt.map((v) => `<text x="${m.l - 6}" y="${sy(v) + 4}" text-anchor="end">${o.fmtY(v)}</text>`).join("")}</g>`;
+      g += `<text x="${W - m.r}" y="${H - 4}" text-anchor="end">${o.xlabel}</text><text x="${m.l}" y="${m.t - 3}" text-anchor="start">${o.ylabel}</text>`;
+      for (const h of o.hlines || [])
+        if (Number.isFinite(h.y) && h.y <= y1 && h.y >= y0)
+          g += `<g class="${h.cls}"><line x1="${m.l}" x2="${W - m.r}" y1="${sy(h.y)}" y2="${sy(h.y)}"/><text x="${W - m.r}" y="${sy(h.y) - 4}" text-anchor="end">${h.label}</text></g>`;
+      for (const s of o.series) {
+        const d = s.points
+          .filter((p) => Number.isFinite(p[1]))
+          .map((p, i) => `${i ? "L" : "M"}${sx(p[0]).toFixed(1)},${sy(Math.max(y0, Math.min(y1, p[1]))).toFixed(1)}`)
+          .join("");
+        g += `<path d="${d}" fill="none" stroke="${s.color}" stroke-width="${s.dash ? 1.5 : 2}" ${s.dash ? 'stroke-dasharray="5 4" opacity="0.8"' : ""} stroke-linejoin="round"/>`;
+      }
+      if (o.mark)
+        g += `<g class="mark"><circle cx="${sx(o.mark.x)}" cy="${sy(o.mark.y)}" r="5"/><text x="${sx(o.mark.x) + 8}" y="${sy(o.mark.y) - 8}">${o.mark.label}</text></g>`;
+      g += `<g class="hover" hidden><line y1="${m.t}" y2="${H - m.b}"/></g>`;
+      el.innerHTML = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${o.ylabel} by ${o.xlabel}">${g}</svg><div class="tip" hidden></div>`;
+      const svg = el.querySelector("svg"),
+        hover = svg.querySelector(".hover"),
+        line = hover.querySelector("line"),
+        tip = el.querySelector(".tip");
+      const xsAll = [...new Set(xs)].sort((a, b) => a - b);
+      svg.addEventListener("mousemove", (ev) => {
+        const r = svg.getBoundingClientRect();
+        const px = ((ev.clientX - r.left) / r.width) * W;
+        const xv = x0 + ((px - m.l) / (W - m.l - m.r)) * (x1 - x0);
+        let best = xsAll[0];
+        for (const v of xsAll) if (Math.abs(v - xv) < Math.abs(best - xv)) best = v;
+        hover.hidden = false;
+        line.setAttribute("x1", sx(best));
+        line.setAttribute("x2", sx(best));
+        const rows = o.series
+          .map((s) => {
+            const p = s.points.find((q) => q[0] === best);
+            return p
+              ? `<div class="r"><span><i style="background:${s.color}"></i>${s.name}</span><span>${o.fmtY(p[1])}</span></div>`
+              : "";
+          })
+          .join("");
+        tip.innerHTML = `<b>${best} MB</b>${rows}`;
+        tip.hidden = false;
+        const left = (sx(best) / W) * r.width;
+        tip.style.left = Math.min(r.width - tip.offsetWidth - 4, left + 12) + "px";
+        tip.style.top = "8px";
+      });
+      svg.addEventListener("mouseleave", () => {
+        hover.hidden = true;
+        tip.hidden = true;
+      });
+    }
+    function niceStep(raw) {
+      const p = Math.pow(10, Math.floor(Math.log10(raw)));
+      const f = raw / p;
+      return (f <= 1 ? 1 : f <= 2 ? 2 : f <= 5 ? 5 : 10) * p;
+    }
+
+    // ---- wiring ----
+    for (const id of ["nodes", "gbps", "profile", "uniform", "cap", "maxmb", "maxrate"]) $(id).addEventListener("input", schedule);
+    for (const id of ["decode", "buildenc", "storage", "votepath"])
+      $(id).addEventListener("input", () => {
+        computeFromKey(id);
+        schedule();
+      });
+    const seg = (a, b, set) => {
+      $(a).addEventListener("click", () => {
+        $(a).setAttribute("aria-pressed", "true");
+        $(b).setAttribute("aria-pressed", "false");
+        set(true);
+        schedule();
+      });
+      $(b).addEventListener("click", () => {
+        $(b).setAttribute("aria-pressed", "true");
+        $(a).setAttribute("aria-pressed", "false");
+        set(false);
+        schedule();
+      });
+    };
+    seg("threshold-f1", "threshold-2f1", (v) => (state.threshold = v ? "f+1" : "2f+1"));
+    seg("lane-off", "lane-on", (v) => (state.lane = !v));
+    seg("met-fin", "met-tx", (v) => (state.metric = v ? "fin" : "tx"));
+    seg("mode-block", "mode-rate", (v) => (state.mode = v ? "block" : "rate"));
+    for (const b of document.querySelectorAll("[data-preset]"))
+      b.addEventListener("click", () => {
+        state.compute = structuredClone(PRESETS[b.dataset.preset]);
+        markPreset(b.dataset.preset);
+        keyFromCompute();
+        schedule();
+      });
+    $("pin").addEventListener("click", () => {
+      state.baseline = current;
+      $("unpin").disabled = false;
+      const c = current.cfg;
+      $("baseline-chip").innerHTML =
+        `Baseline: <b>${c.n} nodes, ${fmt(c.gbps, 1)} Gbps, ${c.profile}${c.profile === "uniform" ? " " + c.uniformMs + " ms" : ""}, ${c.threshold}, ${c.lane ? "own lane" : "in order"}, ${c.mode === "rate" ? "blocks follow a rate" : "fixed blocks"}</b>, decode ${fmt(c.compute.decode[1], 2)} ms/MB.`;
+      render();
+    });
+    $("unpin").addEventListener("click", () => {
+      state.baseline = null;
+      $("unpin").disabled = true;
+      $("baseline-chip").textContent = "No baseline pinned.";
+      render();
+    });
+    // ---- view timeline: every span of work and waiting in one view, for four roles ----
+    const TL_CAT = {
+      compute: ["var(--s1)", "compute"],
+      storage: ["var(--s4)", "storage"],
+      transfer: ["var(--s3)", "bytes leaving the interface"],
+      wait: ["var(--fg-3)", "waiting on the network or on peers"],
+    };
+    const TL_SHORT = {
+      "verify proposal V−1": "verify",
+      "build + commit + encode V": "build V",
+      "wait for Cert1(V−1)": "Cert1(V−1) wait",
+      "sign + persist proposal V": "persist",
+      "proposal V queued behind shares": "proposal queued",
+      "rebroadcast share V−1": "rebroadcast V−1",
+      "egress busy": "busy",
+      "disperse V": "disperse V",
+      "rebroadcast share V": "rebroadcast V",
+      "proposal in flight": "in flight",
+      "verify proposal V": "verify",
+      "wait for own share": "share wait",
+      "validate state + persist vote": "validate",
+      "wait for block V−1": "block V−1 wait",
+      "vote1 queued behind shares": "vote1 queued",
+      "own share of V in flight": "share in flight",
+      "collect k shares of V": "k shares",
+      "decode V": "decode",
+      "collect vote1s": "vote1s",
+      Cert1: "Cert1",
+      "wait for block V": "block wait",
+      "sign + persist lock": "persist",
+      "vote2 queued behind shares": "vote2 queued",
+      "collect vote2s": "vote2s",
+      Cert2: "Cert2",
+      decide: "decide",
+      "build + commit + encode V+1": "build V+1",
+      "egress busy with the rebroadcast of V": "busy",
+      "disperse V+1": "disperse V+1",
+      "collect vote1s, the q-th gates": "vote1s",
+      "sign + persist proposal V+1": "persist",
+    };
+    let tlAuto = true;
+    function tlLabel() {
+      $("tl-mb-v").textContent = $("tl-mb").value + " MB";
+    }
+    function pickView(r, lo, hi, which) {
+      const cands = [];
+      for (let v = lo; v < hi; v++)
+        if (
+          r.leaders[v] !== r.leaders[v + 1] &&
+          r.leaders[v] !== r.leaders[v - 1] &&
+          r.leaders[v + 1] !== r.leaders[v + 2]
+        )
+          cands.push([v, (r.proposed[v + 1] - r.proposed[v]) * 1000]);
+      if (!cands.length) return lo;
+      if (which === "fastest") return cands.reduce((a, b) => (b[1] < a[1] ? b : a))[0];
+      if (which === "slowest") return cands.reduce((a, b) => (b[1] > a[1] ? b : a))[0];
+      const mean = cands.reduce((s, c) => s + c[1], 0) / cands.length;
+      return cands.reduce((a, b) => (Math.abs(b[1] - mean) < Math.abs(a[1] - mean) ? b : a))[0];
+    }
+    function drawTimeline(res) {
+      if (!res) return;
+      const at = atCap(res);
+      $("tl-mb").max = res.cfg.maxmb;
+      if (tlAuto && at.status === "ok") $("tl-mb").value = Math.max(1, Math.round(at.mb));
+      tlLabel();
+      const mb = +$("tl-mb").value,
+        cfg = res.cfg,
+        views = 80;
+      const leaders = MODEL.leaders(cfg.n, views, 1);
+      const { d } = MODEL.delays(cfg.profile, cfg.n, cfg.uniformMs, PROFILES);
+      const r = MODEL.runViews(cfg.n, cfg.k, d, mb, cfg.gbps, leaders, views, cfg.compute, cfg.lane);
+      const v = pickView(r, 20, views - 5, $("tl-which").value);
+      const tl = timelineLanes(r, v, cfg, mb);
+      renderTimeline($("ch-tl"), tl, r, v);
+      const verdict =
+        tl.decodeWait > 0.5
+          ? `In this view the decode is on the critical path: the q-th voter (node ${tl.critical}) finished decoding V−1 ${fmt(tl.decodeWait)} ms after it was otherwise ready to vote1, so Cert1 and the proposal of V+1 came that much later.`
+          : `In this view the decode is not the bottleneck: the q-th voter (node ${tl.critical}) finished decoding V−1 ${fmt(tl.decodeSlack)} ms before it was ready to vote1, so a decode up to ${fmt(tl.decodeMs + tl.decodeSlack)} ms (${fmt(tl.decodeMs)} now) would still leave the view where it is.` +
+            (tl.blockWait > 0.5
+              ? ` Its vote2 did wait ${fmt(tl.blockWait)} ms for block V, which lands on finality, not on the view.`
+              : " Its vote2 did not wait for block V either.");
+      $("tl-verdict").textContent = verdict;
+      $("lg-tl").innerHTML = Object.entries(TL_CAT)
+        .map(
+          ([cat, [c, name]]) =>
+            `<span class="sw"><svg width="18" height="12" aria-hidden="true">${cat === "wait" ? '<rect x="0.5" y="0.5" width="17" height="11" rx="2" fill="url(#hatch)" stroke="var(--line)"/>' : `<rect x="0.5" y="0.5" width="17" height="11" rx="2" fill="${c}" fill-opacity="0.25" stroke="${c}"/>`}</svg>${name}</span>`,
+        )
+        .join("");
+    }
+    function timelineLanes(r, v, cfg, mb) {
+      const n = r.n,
+        L = r.leaders[v],
+        Ln = r.leaders[v + 1],
+        p = r.proposed[v],
+        T = r.T * 1000,
+        c = cfg.compute;
+      const ms = (t) => (t - p) * 1000,
+        cost = (s) => c[s][0] + c[s][1] * mb,
+        dd = (x, j) => r.d[x * n + j] * 1000;
+      const seg = (t0, t1, cat, label) => (t1 - t0 > 0.3 ? [{ t0, t1, cat, label }] : []);
+      const verify = cost("verify_proposal"),
+        cert = cost("cert"),
+        vote2 = cost("vote2");
+      const q = r.q;
+      const leaderRows = () => {
+        const prev = ms(r.propArr[v - 1][L]),
+          built = ms(r.built[v]),
+          c1 = ms(r.cert1[v - 1][L]);
+        return [
+          [
+            ...seg(prev, prev + verify, "compute", "verify proposal V−1"),
+            ...seg(prev + verify, built, "compute", "build + commit + encode V"),
+            ...seg(built, c1, "wait", "wait for Cert1(V−1)"),
+            ...seg(c1, 0, "storage", "sign + persist proposal V"),
+            ...seg(0, ms(r.propLeave[v]), "wait", "proposal V queued behind shares"),
+          ],
+          [
+            ...seg(ms(r.rbStart[v - 1][L]), ms(r.rbDone[v - 1][L]), "transfer", "rebroadcast share V−1"),
+            ...seg(built, ms(r.disperse[v]), "wait", "egress busy"),
+            ...seg(ms(r.disperse[v]), ms(r.disperse[v]) + T, "transfer", "disperse V"),
+            ...seg(ms(r.rbStart[v][L]), ms(r.rbDone[v][L]), "transfer", "rebroadcast share V"),
+          ],
+        ];
+      };
+      const voteRow = (j) => [
+        ...seg(ms(r.propLeave[v]), ms(r.propArr[v][j]), "wait", "proposal in flight"),
+        ...seg(ms(r.propArr[v][j]), ms(r.propArr[v][j]) + verify, "compute", "verify proposal V"),
+        ...seg(ms(r.propArr[v][j]) + verify, ms(r.pair[v][j]), "wait", "wait for own share"),
+        ...seg(ms(r.pair[v][j]), ms(r.ready[v][j]), "compute", "validate state + persist vote"),
+        ...seg(ms(r.ready[v][j]), ms(r.vote1Out[v][j]), "wait", "wait for block V−1"),
+        ...seg(ms(r.vote1Out[v][j]), ms(r.vote1Leave[v][j]), "wait", "vote1 queued behind shares"),
+        ...seg(ms(r.rbStart[v][j]), ms(r.rbDone[v][j]), "transfer", "rebroadcast share V"),
+      ];
+      const blockRow = (j) => {
+        const share = ms(r.disperse[v]) + T + dd(L, j);
+        return [
+          ...seg(ms(r.disperse[v]), share, "wait", "own share of V in flight"),
+          ...seg(share, ms(r.kth[v][j]), "wait", "collect k shares of V"),
+          ...seg(ms(r.kth[v][j]), ms(r.recovered[v][j]), "compute", "decode V"),
+        ];
+      };
+      const finalityRow = (j) => [
+        ...seg(ms(r.vote1Leave[v][j]), ms(r.cert1[v][j]) - cert, "wait", "collect vote1s"),
+        ...seg(ms(r.cert1[v][j]) - cert, ms(r.cert1[v][j]), "compute", "Cert1"),
+        ...seg(ms(r.cert1[v][j]), ms(r.vote2[v][j]) - vote2, "wait", "wait for block V"),
+        ...seg(ms(r.vote2[v][j]) - vote2, ms(r.vote2[v][j]), "storage", "sign + persist lock"),
+        ...seg(ms(r.vote2[v][j]), ms(r.vote2Leave[v][j]), "wait", "vote2 queued behind shares"),
+        ...seg(ms(r.vote2Leave[v][j]), ms(r.cert2[v][j]) - cert, "wait", "collect vote2s"),
+        ...seg(ms(r.cert2[v][j]) - cert, ms(r.cert2[v][j]), "compute", "Cert2"),
+        ...seg(ms(r.cert2[v][j]), ms(r.decided[v][j]), "compute", "decide"),
+      ];
+      const nextRows = () => {
+        const arr = ms(r.propArr[v][Ln]),
+          built = ms(r.built[v + 1]),
+          c1 = ms(r.cert1[v][Ln]);
+        let first = Infinity;
+        for (let x = 0; x < n; x++) first = Math.min(first, ms(r.vote1Leave[v][x]) + dd(x, Ln));
+        return [
+          [
+            ...seg(ms(r.propLeave[v]), arr, "wait", "proposal in flight"),
+            ...seg(arr, arr + verify, "compute", "verify proposal V"),
+            ...seg(arr + verify, built, "compute", "build + commit + encode V+1"),
+            ...seg(built, ms(r.disperse[v + 1]), "wait", "egress busy with the rebroadcast of V"),
+            ...seg(ms(r.disperse[v + 1]), ms(r.disperse[v + 1]) + T, "transfer", "disperse V+1"),
+          ],
+          [
+            ...seg(first, c1 - cert, "wait", "collect vote1s, the q-th gates"),
+            ...seg(c1 - cert, c1, "compute", "Cert1"),
+            ...seg(c1, ms(r.proposed[v + 1]), "storage", "sign + persist proposal V+1"),
+          ],
+          voteRow(Ln),
+        ];
+      };
+      // voters ranked by their vote1's arrival at L'
+      const arrivals = [];
+      for (let x = 0; x < n; x++) arrivals.push([r.vote1Leave[v][x] + r.d[x * n + Ln], x]);
+      arrivals.sort((a, b) => a[0] - b[0]);
+      const median = arrivals[Math.floor(n / 2)][1],
+        critical = arrivals[q - 1][1];
+      const reg = (j) =>
+        cfg.profile === "off" || cfg.profile === "uniform"
+          ? ""
+          : ` · ${MODEL.delays(cfg.profile, n, 0, PROFILES).labels[j]}`;
+      const lanes = [
+        {
+          title: `Leader L of V`,
+          sub: `node ${L}${reg(L)}`,
+          names: ["proposal path", "shares out"],
+          rows: leaderRows(),
+        },
+        {
+          title: `Next leader L′`,
+          sub: `node ${Ln}${reg(Ln)}, proposes V+1`,
+          names: ["build V+1", "Cert1 → proposal", "its own vote"],
+          rows: nextRows(),
+        },
+        {
+          title: `Median voter`,
+          sub: `node ${median}${reg(median)}`,
+          names: ["vote path", "block V", "finality"],
+          rows: [voteRow(median), blockRow(median), finalityRow(median)],
+        },
+        {
+          title: `q-th voter`,
+          sub: `node ${critical}${reg(critical)}, forms Cert1 at L′`,
+          names: ["vote path", "block V", "finality"],
+          rows: [voteRow(critical), blockRow(critical), finalityRow(critical)],
+        },
+      ];
+      const dec = Float64Array.from(r.decided[v]).sort();
+      // Where the q-th voter's decode sat: ahead of its vote1 on V (slack) or behind it (a wait).
+      const j = critical;
+      const decodeWait = ms(r.vote1Out[v][j]) - ms(r.ready[v][j]);
+      const decodeSlack = ms(r.ready[v][j]) - ms(r.recovered[v - 1][j]);
+      const blockWait = ms(r.vote2[v][j]) - vote2 - ms(r.cert1[v][j]);
+      return {
+        lanes,
+        view: ms(r.proposed[v + 1]),
+        finality: ms(dec[q - 1]),
+        critical,
+        decodeWait,
+        decodeSlack,
+        blockWait,
+        decodeMs: cost("decode"),
+      };
+    }
+    function renderTimeline(el, tl, r, v) {
+      const segs = tl.lanes.flatMap((l) => l.rows.flat());
+      const tmin = Math.floor(Math.min(0, ...segs.map((s) => s.t0)) / 50) * 50,
+        tmax = Math.ceil(Math.max(tl.view, tl.finality, ...segs.map((s) => s.t1)) / 50) * 50 + 10;
+      const left = 250,
+        right = 16,
+        top = 52,
+        rowH = 24,
+        gap = 6,
+        titleH = 40,
+        lanePad = 10;
+      const W = 1100;
+      let y = top;
+      const laneTop = tl.lanes.map((l) => {
+        const t = y;
+        y += lanePad + titleH + l.rows.length * (rowH + gap) + lanePad;
+        return t;
+      });
+      const H = y + 40;
+      const x = (t) => left + ((t - tmin) / (tmax - tmin)) * (W - left - right);
+      const step = niceStep((tmax - tmin) / 10);
+      const esc = (t) => t.replace(/&/g, "&amp;").replace(/</g, "&lt;");
+      let g = `<defs><pattern id="hatch" patternUnits="userSpaceOnUse" width="7" height="7" patternTransform="rotate(45)"><line x1="0" y1="0" x2="0" y2="7" stroke="var(--fg-3)" stroke-width="1.4" opacity="0.55"/></pattern></defs>`;
+      for (let t = Math.ceil(tmin / step) * step; t <= tmax; t += step)
+        g += `<line x1="${x(t)}" x2="${x(t)}" y1="${top}" y2="${H - 32}" stroke="var(--line-2)"/><text x="${x(t)}" y="${H - 16}" text-anchor="middle" font-size="12">${t}</text>`;
+      g += `<text x="${W - right}" y="${H - 2}" text-anchor="end" font-size="12">ms from the proposal of V</text>`;
+      tl.lanes.forEach((l, i) => {
+        const t0 = laneTop[i],
+          h = lanePad * 2 + titleH + l.rows.length * (rowH + gap);
+        if (i % 2) g += `<rect x="0" y="${t0}" width="${W}" height="${h}" fill="var(--line-2)" opacity="0.45"/>`;
+        g += `<text x="12" y="${t0 + lanePad + 15}" font-weight="600" font-size="13.5" fill="var(--fg)">${esc(l.title)}</text><text x="12" y="${t0 + lanePad + 31}" font-size="11.5">${esc(l.sub)}</text>`;
+        l.rows.forEach((row, ri) => {
+          const ry = t0 + lanePad + titleH + ri * (rowH + gap);
+          g += `<text x="${left - 10}" y="${ry + 16}" text-anchor="end" font-size="12" fill="var(--fg-2)">${esc(l.names[ri] || "")}</text>`;
+          g += `<line x1="${left}" x2="${W - right}" y1="${ry + rowH + gap / 2}" y2="${ry + rowH + gap / 2}" stroke="var(--line-2)"/>`;
+          for (const s of row) {
+            const x0 = x(s.t0),
+              w = Math.max(2, x(s.t1) - x0),
+              dur = s.t1 - s.t0,
+              color = TL_CAT[s.cat][0];
+            g += `<g><title>${esc(s.label)}: ${fmt(dur)} ms, from ${fmt(s.t0)} to ${fmt(s.t1)} ms</title>`;
+            if (s.cat === "wait")
+              g += `<rect x="${x0}" y="${ry}" width="${w}" height="${rowH}" rx="3" fill="var(--panel)"/><rect x="${x0}" y="${ry}" width="${w}" height="${rowH}" rx="3" fill="url(#hatch)" stroke="var(--line)"/>`;
+            else
+              g += `<rect x="${x0}" y="${ry}" width="${w}" height="${rowH}" rx="3" fill="${color}" fill-opacity="0.25" stroke="${color}" stroke-width="1.2"/>`;
+            const full = `${s.label} ${fmt(dur)}`,
+              short = `${TL_SHORT[s.label] || s.label} ${fmt(dur)}`,
+              tiny = fmt(dur);
+            const fits = (t) => w >= t.length * 6.4 + 10;
+            const text = fits(full) ? full : fits(short) ? short : fits(tiny) ? tiny : "";
+            if (text)
+              g += `<text x="${x0 + w / 2}" y="${ry + 16}" text-anchor="middle" font-size="11.5" fill="var(--fg)">${esc(text)}</text>`;
+            g += `</g>`;
+          }
+        });
+      });
+      const bracket = (t1, yy, label, color) =>
+        `<g><line x1="${x(0)}" x2="${x(t1)}" y1="${yy}" y2="${yy}" stroke="${color}" stroke-width="2"/><line x1="${x(0)}" x2="${x(0)}" y1="${yy - 5}" y2="${yy + 5}" stroke="${color}" stroke-width="2"/><line x1="${x(t1)}" x2="${x(t1)}" y1="${yy - 5}" y2="${yy + 5}" stroke="${color}" stroke-width="2"/><text x="${(x(0) + x(t1)) / 2}" y="${yy - 5}" text-anchor="middle" fill="${color}" font-weight="600" font-size="12.5">${label}</text></g>`;
+      g +=
+        bracket(tl.view, 20, `view V: ${fmt(tl.view)} ms`, "var(--s2)") +
+        bracket(tl.finality, 44, `finality of V: ${fmt(tl.finality)} ms`, "var(--s1)");
+      for (const [t, label] of [
+        [0, "proposal V"],
+        [tl.view, "proposal V+1"],
+      ])
+        g += `<line x1="${x(t)}" x2="${x(t)}" y1="${top}" y2="${H - 32}" stroke="var(--fg-2)" stroke-dasharray="4 3"/><text x="${x(t) + 4}" y="${top + 12}" font-size="11" fill="var(--fg-2)">${label}</text>`;
+      el.innerHTML = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="timeline of one view">${g}</svg>`;
+    }
+    $("tl-mb").addEventListener("input", () => {
+      tlAuto = false;
+      drawTimeline(current);
+    });
+    $("tl-which").addEventListener("change", () => drawTimeline(current));
+    $("tl-cap").addEventListener("click", () => {
+      tlAuto = true;
+      drawTimeline(current);
+    });
+    advRows();
+    keyFromCompute();
+    labels();
+    render();
+  })();
+</script>
