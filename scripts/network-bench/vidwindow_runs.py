@@ -43,6 +43,7 @@ from vidwindow import Compute, Cost
 MODELS = {"sim": vidwindow.point, "formula": vidformula.point}
 
 NOMINAL_GBPS = {
+    "c8g.16xlarge": 30.0,
     "c8g.8xlarge": 15.0,
     "c8g.4xlarge": 15.0,
     "c8g.2xlarge": 15.0,
