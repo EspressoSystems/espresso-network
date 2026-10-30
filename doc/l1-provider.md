@@ -12,6 +12,11 @@ for mainnet and decaf with the genesis files in `data/genesis/`.
   - Archive or unpruned query nodes: FeeContract `Deposit` logs from the genesis L1 block up to the 0.6 upgrade, on an
     empty state store.
 
+| Network | StakeTable deployment block (`initializedAtBlock()`) | Genesis L1 block |
+| ------- | ---------------------------------------------------- | ---------------- |
+| mainnet | 24348377                                             | 21116303         |
+| decaf   | 8077808                                              | 6758037          |
+
 ## Requirements by path
 
 | Path                                    | RPC methods                                                                                                              | History                                     | When                                   |
