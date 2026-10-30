@@ -149,7 +149,21 @@ C8G_4XLARGE = Compute(
     vote2=Cost(4.7),
     decide=Cost(0.6),
 )
-COMPUTE = {"off": ZERO, "c8g.4xlarge": C8G_4XLARGE}
+# Per-step medians of run brendon-20261029-193318/01-volume (c8g.8xlarge, 32 vCPU, no latency),
+# the same fit; the explorer page carries the same numbers.
+C8G_8XLARGE = Compute(
+    build=Cost(0.0, 1.2),
+    encode=Cost(0.35, 0.16),
+    propose=Cost(0.5),
+    persist_proposal=Cost(7.6, 0.02),
+    verify_proposal=Cost(3.7, 0.07),
+    vote1=Cost(7.1, 0.06),
+    decode=Cost(0.0, 0.61),
+    cert=Cost(3.1),
+    vote2=Cost(4.0, 0.01),
+    decide=Cost(0.5, 0.01),
+)
+COMPUTE = {"off": ZERO, "c8g.4xlarge": C8G_4XLARGE, "c8g.8xlarge": C8G_8XLARGE}
 
 
 def threshold(n: int, name: str) -> int:

@@ -70,8 +70,14 @@ SEGMENTS = [s[0] for s in LEADER_SEGMENTS + NODE_SEGMENTS] + ["vote1", "cert"]
 
 
 def compare(
-    run: Path, gbps: float | None, compute_name: str, model: str = "sim"
+    run: Path,
+    gbps: float | None,
+    compute_name: str,
+    model: str = "sim",
+    closed_loop: bool = False,
 ) -> list[dict]:
+    """Each step of the run next to the model at the step's block size, or with `closed_loop`
+    at the step's offered rate, the blocks following the rate (`vidformula.Load`)."""
     r = Run.load(run)
     steps = [s for s in (r.step_stats(st) for st in r.steps) if s is not None]
     if compute_name == "fit":
@@ -89,14 +95,29 @@ def compare(
             **s,
         }
         g = gbps or NOMINAL_GBPS.get(r.node_type, 15.0)
-        if s["mb_p50"] > 0:
+        if closed_loop:
+            m = vidformula.point(
+                r.profile,
+                r.n,
+                g,
+                0.0,
+                r.k,
+                MODEL_VIEWS,
+                compute=compute,
+                load=vidformula.Load(s["step_mb_s"]),
+            )
+        elif s["mb_p50"] > 0:
             m = MODELS[model](
                 r.profile, r.n, g, s["mb_p50"], r.k, MODEL_VIEWS, compute=compute
             )
+        else:
+            m = None
+        if m is not None:
             row["model"] = {
                 key: m[key]
                 for key in (
                     "gbps",
+                    "mb",
                     "win_p50",
                     "crit_p10",
                     "crit_p50",
@@ -376,7 +397,7 @@ def print_rows(rows):
             f" window p10/p50 {r['win_p10']:5.0f}/{r['win_p50']:5.0f} late {r['late_pct']:4.0f}%"
             f" critical p10/p50 {r['crit_p10']:5.0f}/{r['crit_p50']:5.0f}"
             + (
-                f" | {r['engine']} {m['gbps']:g} Gbps {r['compute']}: view {m['view_p50']:5.0f} fin {m['fin_p50']:5.0f} transit {m['transit_p50']:4.0f}"
+                f" | {r['engine']} {m['gbps']:g} Gbps {r['compute']}: blk {m['mb']:5.0f} view {m['view_p50']:5.0f} fin {m['fin_p50']:5.0f} transit {m['transit_p50']:4.0f}"
                 f" window {m['win_p50']:5.0f} late {m['late_pct']:3.0f}% critical {m['crit_p10']:4.0f}/{m['crit_p50']:4.0f}"
                 if m
                 else ""
@@ -420,6 +441,11 @@ def main(argv=None):
         choices=sorted(MODELS),
         help="the fluid simulation of vidwindow, or the formulas of vidformula",
     )
+    ap.add_argument(
+        "--closed-loop",
+        action="store_true",
+        help="the formula model at each step's offered rate, blocks following the rate",
+    )
     ap.add_argument("--out", type=Path)
     args = ap.parse_args(argv)
     if args.args[0] == "fit":
@@ -429,7 +455,9 @@ def main(argv=None):
     rows = [
         r
         for run in args.args
-        for r in compare(Path(run), args.gbps, args.compute, args.model)
+        for r in compare(
+            Path(run), args.gbps, args.compute, args.model, args.closed_loop
+        )
     ]
     print_rows(rows)
     if args.out:

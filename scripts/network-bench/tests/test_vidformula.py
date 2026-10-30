@@ -129,3 +129,27 @@ def test_pairs_table_covers_every_region_pair():
     eu = next(r for r in rows if r["leader"] == r["next"] == "eu-central-1")
     assert eu["q_ms"] == 158.0 and eu["delta_p50"] == 0.0
     assert all(np.isfinite(r["view_ms"]) for r in rows)
+
+
+def test_closed_loop_blocks_are_the_rate_times_the_view():
+    load = vidformula.Load(rate=200.0, max_mb=400.0)
+    r = vidformula.point("off", N, 15.0, 0.0, K, 200, compute=C8G_4XLARGE, load=load)
+    # Steady: what arrives during a view is the next block, and nothing is capped.
+    assert abs(r["mb_p50"] - load.rate * r["view_p50"] / 1000.0) < 0.1 * r["mb_p50"]
+    assert r["capped_pct"] == 0 and abs(r["growth_pct"]) < 5
+    assert abs(r["mbps"] - load.rate) < 0.02 * load.rate
+
+
+def test_closed_loop_blocks_grow_to_the_cap_past_the_ceiling():
+    load = vidformula.Load(rate=1000.0, max_mb=100.0)
+    r = vidformula.point("off", N, 15.0, 0.0, K, 200, compute=C8G_4XLARGE, load=load)
+    assert r["capped_pct"] > 90
+    assert r["mbps"] < 0.6 * load.rate
+
+
+def test_fixed_blocks_are_unchanged_by_the_load_option():
+    d, _ = vidwindow.delays("off", N)
+    leaders = [0] + [i % N for i in range(62)]
+    a = vidformula.run_views(N, K, d, 20.0, 15.0, leaders, 60, C8G_4XLARGE)
+    assert np.all(a.mb[1:] == 20.0)
+    assert vidformula.point("off", N, 15.0, 20.0, K, 60, compute=C8G_4XLARGE)["mb"] == 20.0

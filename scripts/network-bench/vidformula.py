@@ -30,6 +30,8 @@ finality come out shorter, by up to a fifth, and its proposals cross while the s
 drain (its `transit` is shorter). The view's mean agrees within a few percent.
 
     vidformula.py point --profile decaf-2025 --nodes 100 --gbps 15 --block 50 --compute c8g.4xlarge
+    vidformula.py point --profile off --nodes 10 --gbps 15 --rate 300 --compute c8g.4xlarge
+    vidformula.py sweep --profile off --nodes 10 --gbps 15 --rates 200,250,300,350 --compute c8g.4xlarge
     vidformula.py point --profile off --nodes 10 --gbps 15 --block 92 --check     # next to the sim
     vidformula.py pairs --profile decaf-2025 --nodes 100 --gbps 15 --block 50
 """
@@ -139,6 +141,17 @@ def pairs(
 # ---- the recurrence over a leader sequence ----
 
 
+@dataclass(frozen=True)
+class Load:
+    """Transactions arriving at `rate` MB/s. A leader's block is what arrived since the previous
+    leader pulled the pool, at most `max_mb`; the view then sets the next block and the block the
+    next view. `seed_mb` is the first block, forgotten by the measured views."""
+
+    rate: float
+    max_mb: float = 400.0
+    seed_mb: float = 10.0
+
+
 @dataclass
 class Views:
     """Timestamps in seconds, [view, node] unless scalar per view; view 0 is the seed."""
@@ -152,10 +165,18 @@ class Views:
     cert1: np.ndarray
     decided: np.ndarray
     critical: np.ndarray  # per view, the largest decode that leaves Cert1 where it is
+    mb: np.ndarray  # per view, the block's size
     q: int
 
     def view_times(self, lo, hi):
         return list((self.proposed[lo + 1 : hi + 1] - self.proposed[lo:hi]) * 1000.0)
+
+    def blocks(self, lo, hi):
+        return list(self.mb[lo:hi])
+
+    def decided_rate(self, lo, hi) -> float:
+        """MB/s over the views, the blocks against the time their proposals span."""
+        return float(self.mb[lo:hi].sum() / (self.proposed[hi] - self.proposed[lo]))
 
     def windows(self, lo, hi):
         out = []
@@ -194,14 +215,15 @@ def run_views(
     views: int,
     c: Compute = ZERO,
     lane: bool = False,
+    load: Load | None = None,
 ) -> Views:
-    """Every node's timestamps for `views` views, each from the previous view's."""
+    """Every node's timestamps for `views` views, each from the previous view's. Blocks are
+    `mb` each, or with `load` what arrived since the previous leader pulled the pool."""
     q = -(-2 * n // 3)
-    t_share = (n - 1) / k * mb * 8 / gbps / 1000.0
-    ms = lambda cost: cost.ms(mb) / 1000.0
-    verify, vote1 = ms(c.verify_proposal), ms(c.vote1)
-    cert, proposal = ms(c.cert), ms(c.propose) + ms(c.persist_proposal)
-    build = ms(c.build) + ms(c.encode)
+    t_share = lambda mb: (n - 1) / k * mb * 8 / gbps / 1000.0
+    ms = lambda cost, mb: cost.ms(mb) / 1000.0
+    proposal = lambda mb: ms(c.propose, mb) + ms(c.persist_proposal, mb)
+    build = lambda mb: ms(c.build, mb) + ms(c.encode, mb)
     shape = (views + 2, n)
     out = Views(
         leaders,
@@ -213,57 +235,66 @@ def run_views(
         np.zeros(shape),
         np.zeros(shape),
         np.full(views + 2, np.nan),
+        np.full(views + 2, load.seed_mb if load else mb),
         q,
     )
     disperse = np.zeros(views + 2)  # the leader's shares start leaving
+    pull = np.zeros(views + 2)  # the leader takes the pool into its block
     vote1_out = np.zeros(shape)
     ready = np.zeros(shape)
     rb_done = np.zeros(shape)  # a node's rebroadcast of the view's share has left
     free = np.zeros(n)  # each egress is busy with shares until then
     eye = np.arange(n)
-    out.proposed[1] = proposal
-    disperse[1] = build
-    free[leaders[1]] = build + t_share
+    out.proposed[1] = proposal(out.mb[1])
+    disperse[1] = build(out.mb[1])
+    free[leaders[1]] = build(out.mb[1]) + t_share(out.mb[1])
     for v in range(1, views + 1):
         lead, nxt = leaders[v], leaders[v + 1]
+        mbv = out.mb[v]
         p, disp = out.proposed[v], disperse[v]
         # The proposal leaves behind the shares still leaving L, unless on a lane.
         prop_arr = (p if lane else max(p, free[lead])) + d[lead]
         out.transit[v] = prop_arr[nxt]
-        paired = np.maximum(prop_arr, disp + t_share + d[lead]) + verify
+        verify = ms(c.verify_proposal, mbv)
+        paired = np.maximum(prop_arr, disp + t_share(mbv) + d[lead]) + verify
         paired[lead] = max(p, disp) + verify
         out.pair[v] = paired
-        ready[v] = paired + vote1
+        ready[v] = paired + ms(c.vote1, mbv)
         vote1_out[v] = np.maximum(ready[v], out.recovered[v - 1])
-        # The next leader builds on the proposal's arrival; its dispersal of V+1 goes out
-        # before its rebroadcast of V if it was queued first.
-        built = prop_arr[nxt] + verify + build
+        # The next leader builds on the proposal's arrival, from what reached the pool since
+        # the last pull; its dispersal of V+1 goes out before its rebroadcast of V if it was
+        # queued first.
+        pull[v + 1] = prop_arr[nxt] + verify
+        if load:
+            out.mb[v + 1] = min(load.max_mb, load.rate * (pull[v + 1] - pull[v]))
+        mbn = out.mb[v + 1]
+        built = pull[v + 1] + build(mbn)
         disperse_first = built < vote1_out[v][nxt]
         if disperse_first:
             disperse[v + 1] = max(built, free[nxt])
-            free[nxt] = disperse[v + 1] + t_share
+            free[nxt] = disperse[v + 1] + t_share(mbn)
         vote1_leave = vote1_out[v] if lane else np.maximum(vote1_out[v], free)
-        rb_done[v] = np.maximum(vote1_out[v], free) + t_share
+        rb_done[v] = np.maximum(vote1_out[v], free) + t_share(mbv)
         free = rb_done[v].copy()
         if not disperse_first:
             disperse[v + 1] = max(built, free[nxt])
-            free[nxt] = disperse[v + 1] + t_share
+            free[nxt] = disperse[v + 1] + t_share(mbn)
         arrivals = vote1_leave[:, None] + d  # [x, i]
-        out.cert1[v] = np.sort(arrivals, axis=0)[q - 1] + cert
-        out.proposed[v + 1] = out.cert1[v][nxt] + proposal
+        out.cert1[v] = np.sort(arrivals, axis=0)[q - 1] + ms(c.cert, mbv)
+        out.proposed[v + 1] = out.cert1[v][nxt] + proposal(mbn)
         # The k-th share of block V at j: the dispersal from L or a rebroadcast.
         shares = rb_done[v][:, None] + d  # [x, j]
-        shares[lead] = np.minimum(shares[lead], disp + t_share + d[lead])
+        shares[lead] = np.minimum(shares[lead], disp + t_share(mbv) + d[lead])
         shares[eye, eye] = np.inf
         out.kth[v] = np.sort(shares, axis=0)[k - 1]
         out.kth[v][lead] = disp
-        out.recovered[v] = out.kth[v] + ms(c.decode)
+        out.recovered[v] = out.kth[v] + ms(c.decode, mbv)
         out.recovered[v][lead] = disp
         # Vote2 behind the node's rebroadcast of V, Cert2, decide.
-        vote2 = np.maximum(out.cert1[v], out.recovered[v]) + ms(c.vote2)
+        vote2 = np.maximum(out.cert1[v], out.recovered[v]) + ms(c.vote2, mbv)
         vote2_leave = vote2 if lane else np.maximum(vote2, rb_done[v])
-        cert2 = np.sort(vote2_leave[:, None] + d, axis=0)[q - 1] + cert
-        out.decided[v] = cert2 + ms(c.decide)
+        cert2 = np.sort(vote2_leave[:, None] + d, axis=0)[q - 1] + ms(c.cert, mbv)
+        out.decided[v] = cert2 + ms(c.decide, mbv)
         if v >= 2:
             out.critical[v - 1] = critical(
                 out, ready[v], vote1_leave, vote1_out[v], d, v - 1, leaders[v + 1], q
@@ -294,12 +325,15 @@ def point(
     seed: int = 1,
     compute: Compute = ZERO,
     lane: bool = False,
+    load: Load | None = None,
 ) -> dict:
-    """`vidwindow.point` from the recurrence: the same keys, the same leader sequence."""
+    """`vidwindow.point` from the recurrence: the same keys, the same leader sequence. With
+    `load` the blocks follow the offered rate (`block_mb` is ignored) and the result adds the
+    block sizes, the decided rate and whether the blocks still grew over the measured views."""
     d, assignment = delays(profile, n)
     rng = random.Random(seed)
     leaders = [0] + [rng.randrange(n) for _ in range(views + 2)]
-    r = run_views(n, k, d, block_mb, gbps, leaders, views, compute, lane)
+    r = run_views(n, k, d, block_mb, gbps, leaders, views, compute, lane, load)
     lo, hi = views // 4, views - 5
     crit = [(v, r.critical[v]) for v in range(lo, hi) if not np.isnan(r.critical[v])]
     vt = r.view_times(lo, hi)
@@ -308,14 +342,29 @@ def point(
     for v, c in crit:
         by_region[assignment[leaders[v + 1]]].append(c)
     view_p50 = pct(vt, 0.5)
+    mbs = r.blocks(lo, hi)
+    mb_p50 = pct(mbs, 0.5)
+    if load:
+        mid = (lo + hi) // 2
+        growth = pct(r.blocks(mid, hi), 0.5) / max(pct(r.blocks(lo, mid), 0.5), 1e-9) - 1
+        rate = {
+            "rate": load.rate,
+            "mb_p50": mb_p50,
+            "mb_p90": pct(mbs, 0.9),
+            "capped_pct": round(100.0 * np.mean(np.array(mbs) >= load.max_mb - 1e-9), 1),
+            "growth_pct": round(100.0 * growth, 1),
+            "mbps": round(r.decided_rate(lo, hi), 1),
+        }
+    else:
+        rate = {"mbps": round(block_mb / view_p50 * 1000, 1) if view_p50 else float("nan")}
     return {
         "profile": profile,
         "nodes": n,
         "k": k,
         "gbps": gbps,
-        "mb": block_mb,
+        "mb": mb_p50,
         "lane": lane,
-        "share_ms": round((n - 1) / k * block_mb * 8 / gbps, 1),
+        "share_ms": round((n - 1) / k * mb_p50 * 8 / gbps, 1),
         "views": len(crit),
         "win_p10": pct(win, 0.1),
         "win_p50": pct(win, 0.5),
@@ -327,8 +376,8 @@ def point(
         "view_mean": round(float(np.mean(vt)), 1),
         "transit_p50": pct(r.transits(lo, hi), 0.5),
         "fin_p50": pct(r.finality(lo, hi), 0.5),
-        "mbps": round(block_mb / view_p50 * 1000, 1) if view_p50 else float("nan"),
-        "compute": compute.table(block_mb),
+        **rate,
+        "compute": compute.table(mb_p50),
         "regions": {
             reg: {
                 "n": len(v),
@@ -341,10 +390,42 @@ def point(
     }
 
 
+def print_sweep(args, k: int, compute: Compute) -> None:
+    """Blocks, view, finality and the decided rate at each offered rate, and the last rate
+    whose blocks stopped growing: the model's capacity."""
+    print(
+        f"{'rate':>6}{'block p50':>10}{'p90':>6}{'view':>7}{'fin':>7}{'late%':>7}"
+        f"{'decided':>9}{'capped%':>9}{'growth%':>9}  verdict"
+    )
+    capacity = None
+    for rate in (float(x) for x in args.rates.split(",")):
+        r = point(
+            args.profile,
+            args.nodes,
+            args.gbps,
+            0.0,
+            k,
+            args.views,
+            1,
+            compute,
+            args.lane,
+            Load(rate, args.max_block),
+        )
+        stable = r["capped_pct"] == 0 and r["growth_pct"] < 5
+        if stable:
+            capacity = rate
+        print(
+            f"{rate:6g}{r['mb_p50']:10.1f}{r['mb_p90']:6.0f}{r['view_mean']:7.0f}{r['fin_p50']:7.0f}"
+            f"{r['late_pct']:7.1f}{r['mbps']:9.0f}{r['capped_pct']:9.0f}{r['growth_pct']:9.1f}"
+            f"  {'steady' if stable else 'blocks grow'}"
+        )
+    print(f"capacity: {capacity:g} MB/s" if capacity else "capacity: below the first rate")
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
-    for name in ("point", "pairs"):
+    for name in ("point", "pairs", "sweep"):
         p = sub.add_parser(name)
         p.add_argument(
             "--profile", default="decaf-2025", help="latency profile, or off"
@@ -354,14 +435,26 @@ def main(argv=None):
         p.add_argument("--compute", default="off", choices=sorted(COMPUTE))
         p.add_argument("--lane", action="store_true")
         p.add_argument("--gbps", type=float, required=True)
-        p.add_argument("--block", type=float, required=True, help="MB")
-    sub.choices["point"].add_argument("--views", type=int, default=400)
+        p.add_argument("--max-block", type=float, default=400.0, help="MB")
+    for name in ("point", "pairs"):
+        sub.choices[name].add_argument("--block", type=float, help="MB, fixed blocks")
+    sub.choices["point"].add_argument(
+        "--rate", type=float, help="MB/s offered; blocks follow the rate"
+    )
+    sub.choices["sweep"].add_argument(
+        "--rates", required=True, help="MB/s offered, comma separated"
+    )
+    for name in ("point", "sweep"):
+        sub.choices[name].add_argument("--views", type=int, default=400)
     sub.choices["point"].add_argument(
         "--check", action="store_true", help="also run the simulation and print both"
     )
     args = ap.parse_args(argv)
     k = threshold(args.nodes, args.threshold)
     compute = COMPUTE[args.compute]
+    if args.cmd == "sweep":
+        print_sweep(args, k, compute)
+        return
     if args.cmd == "pairs":
         rows = pairs(
             args.profile, args.nodes, k, args.block, args.gbps, compute, args.lane
@@ -374,19 +467,23 @@ def main(argv=None):
                 + "".join(f"{row[key]:18g}" for key in keys)
             )
         return
+    if (args.block is None) == (args.rate is None):
+        ap.error("point takes --block or --rate")
+    load = Load(args.rate, args.max_block) if args.rate else None
     formula = point(
         args.profile,
         args.nodes,
         args.gbps,
-        args.block,
+        args.block or 0.0,
         k,
         args.views,
         1,
         compute,
         args.lane,
+        load,
     )
     print(json.dumps(formula, indent=1))
-    if args.check:
+    if args.check and args.block is not None:
         sim = vidwindow.point(
             args.profile,
             args.nodes,
