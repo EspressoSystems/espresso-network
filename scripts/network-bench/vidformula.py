@@ -283,7 +283,8 @@ def run_views(
             free[nxt] = disperse[v + 1] + t_share(mbn)
         arrivals = vote1_leave[:, None] + d  # [x, i]
         out.cert1[v] = np.sort(arrivals, axis=0)[q - 1] + ms(c.cert, mbv)
-        out.proposed[v + 1] = out.cert1[v][nxt] + proposal(mbn)
+        # The proposal carries the header, so it waits for the build as well as Cert1.
+        out.proposed[v + 1] = max(out.cert1[v][nxt], built) + proposal(mbn)
         # The k-th share of block V at j: the dispersal from L or a rebroadcast.
         shares = rb_done[v][:, None] + d  # [x, j]
         shares[lead] = np.minimum(shares[lead], disp + t_share(mbv) + d[lead])

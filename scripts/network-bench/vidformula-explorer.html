@@ -1181,7 +1181,8 @@
         // cert1 at i: q-th smallest over x of vote1Leave[x] + d[x][i]
         for (let x = 0; x < n; x++) for (let i = 0; i < n; i++) m[x * n + i] = vote1Leave[x] + d[x * n + i];
         for (let i = 0; i < n; i++) cert1[v][i] = kthOfColumn(m, n, i, q, scratch, -1) + cert;
-        proposed[v + 1] = cert1[v][nxt] + proposalOf(mbn);
+        // The proposal carries the header, so it waits for the build as well as Cert1.
+        proposed[v + 1] = Math.max(cert1[v][nxt], built[v + 1]) + proposalOf(mbn);
         // k-th share of block v at j
         for (let x = 0; x < n; x++) for (let j = 0; j < n; j++) m[x * n + j] = rbDone[x] + d[x * n + j];
         for (let j = 0; j < n; j++) m[lead * n + j] = Math.min(m[lead * n + j], disp + T + d[lead * n + j]);
