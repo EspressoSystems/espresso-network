@@ -1,15 +1,23 @@
 use std::time::Duration;
 
+use crate::{Lane, LaneId};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Hello {
     Ok,
     BackOff(Duration),
+    OkLane(LaneId),
     Unknown,
 }
 
 impl Hello {
-    pub fn is_ok(&self) -> bool {
-        matches!(self, Self::Ok)
+    /// The lane an accepting hello opens, if any.
+    pub fn lane(self) -> Option<Lane> {
+        match self {
+            Hello::Ok => Some(Lane::Main),
+            Hello::OkLane(id) => Some(Lane::Extra(id)),
+            Hello::BackOff(_) | Hello::Unknown => None,
+        }
     }
 
     pub fn backoff_duration(&self) -> Option<Duration> {
@@ -29,6 +37,7 @@ impl Hello {
                 let d = u64::from_be_bytes(bytes.get(1..9)?.try_into().ok()?);
                 Some(Self::BackOff(Duration::from_secs(d)))
             },
+            2 => Some(Self::OkLane(LaneId(*bytes.get(1)?))),
             _ => Some(Self::Unknown),
         }
     }
@@ -36,6 +45,7 @@ impl Hello {
     pub fn to_bytes(self) -> HelloBytes {
         match self {
             Self::Ok => HelloBytes::Ok([0]),
+            Self::OkLane(id) => HelloBytes::Lane([2, id.0]),
             Self::BackOff(d) => {
                 let mut b = [1; 9];
                 b[1..].copy_from_slice(&d.as_secs().to_be_bytes());
@@ -48,6 +58,7 @@ impl Hello {
 
 pub(crate) enum HelloBytes {
     Ok([u8; 1]),
+    Lane([u8; 2]),
     BackOff([u8; 9]),
 }
 
@@ -55,6 +66,7 @@ impl AsRef<[u8]> for HelloBytes {
     fn as_ref(&self) -> &[u8] {
         match self {
             Self::Ok(a) => &a[..],
+            Self::Lane(a) => &a[..],
             Self::BackOff(a) => &a[..],
         }
     }
@@ -67,12 +79,14 @@ mod tests {
     use quickcheck::{Arbitrary, Gen, quickcheck};
 
     use super::Hello;
+    use crate::LaneId;
 
     impl Arbitrary for Hello {
         fn arbitrary(g: &mut Gen) -> Self {
-            match bool::arbitrary(g) {
-                true => Self::Ok,
-                false => Self::BackOff(Duration::from_secs(u64::arbitrary(g))),
+            match u8::arbitrary(g) % 3 {
+                0 => Self::Ok,
+                1 => Self::OkLane(LaneId(u8::arbitrary(g))),
+                _ => Self::BackOff(Duration::from_secs(u64::arbitrary(g))),
             }
         }
     }

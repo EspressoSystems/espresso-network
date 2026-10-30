@@ -45,6 +45,19 @@ pub enum ApiError {
     Unavailable(anyhow::Error),
 }
 
+impl ApiError {
+    /// The HTTP status the v1 API answers this error with.
+    pub fn status(&self) -> axum::http::StatusCode {
+        match self {
+            ApiError::BadRequest(_) => axum::http::StatusCode::BAD_REQUEST,
+            ApiError::NotFound(_) => axum::http::StatusCode::NOT_FOUND,
+            ApiError::Gone(_) => axum::http::StatusCode::GONE,
+            ApiError::Internal(_) => axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            ApiError::Unavailable(_) => axum::http::StatusCode::SERVICE_UNAVAILABLE,
+        }
+    }
+}
+
 impl fmt::Display for ApiError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {

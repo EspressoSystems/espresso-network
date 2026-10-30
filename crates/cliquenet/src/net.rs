@@ -1,7 +1,7 @@
 pub mod peer;
 pub mod server;
 
-use std::{fmt, ops::Deref, sync::Arc};
+use std::{collections::HashMap, fmt, ops::Deref, sync::Arc};
 
 use bon::Builder;
 use bytes::Bytes;
@@ -16,8 +16,12 @@ use tokio::{
 use tracing::{debug, info, warn};
 
 use crate::{
-    Config, Metrics, NetAddr, Role, error::NetworkError, metrics::NoMetrics, msg::Slot,
-    net::server::Server, x25519::PublicKey,
+    Config, LaneId, Metrics, NetAddr, Role,
+    error::NetworkError,
+    metrics::NoMetrics,
+    msg::{Slot, Trailer},
+    net::server::{LaneSenders, Server},
+    x25519::PublicKey,
 };
 
 type PeerMessage = (PublicKey, Bytes, Option<OwnedSemaphorePermit>);
@@ -25,12 +29,29 @@ type PeerMessage = (PublicKey, Bytes, Option<OwnedSemaphorePermit>);
 #[derive(Debug)]
 pub struct Network {
     recv: NetworkReceiver,
+    lanes: HashMap<LaneId, LaneReceiver>,
     send: NetworkSender,
 }
 
 #[derive(Debug)]
 pub struct NetworkReceiver {
     rx: UnboundedReceiver<PeerMessage>,
+}
+
+/// Receives what happens on one extra lane.
+#[derive(Debug)]
+pub struct LaneReceiver {
+    rx: UnboundedReceiver<PeerMessage>,
+    unreachable: UnboundedReceiver<PublicKey>,
+}
+
+#[derive(Debug)]
+pub enum LaneEvent {
+    /// A message from the party.
+    Message(PublicKey, Bytes),
+    /// The party's lane could not be opened or could not take a message, so something
+    /// queued for it was not sent.
+    Unreachable(PublicKey),
 }
 
 #[derive(Clone)]
@@ -57,6 +78,10 @@ impl fmt::Debug for NetworkSender {
 enum Command {
     Peer(PeerCommand),
     Send(SendCommand),
+    /// An extra lane message, with its trailer already appended.
+    SendLane(LaneId, PublicKey, Bytes),
+    /// Start accepting the lane when parties open it.
+    AcceptLane(LaneId),
     Shutdown(oneshot::Sender<()>),
 }
 
@@ -123,6 +148,28 @@ impl Network {
         // Channel of messages from peers to the application.
         let (itx, irx) = mpsc::unbounded_channel();
 
+        // Channels of each extra lane to the application.
+        let mut lane_senders = HashMap::new();
+        let mut lanes = HashMap::new();
+        for &id in &conf.lanes {
+            let (ibound, rx) = mpsc::unbounded_channel();
+            let (unreachable, urx) = mpsc::unbounded_channel();
+            lane_senders.insert(
+                id,
+                LaneSenders {
+                    ibound,
+                    unreachable,
+                },
+            );
+            lanes.insert(
+                id,
+                LaneReceiver {
+                    rx,
+                    unreachable: urx,
+                },
+            );
+        }
+
         let (etx, erx) = watch::channel(Slot::MIN);
 
         let metr = conf.metrics.clone().unwrap_or_else(|| Arc::new(NoMetrics));
@@ -134,6 +181,7 @@ impl Network {
             listener,
             Role::Active,
             itx,
+            lane_senders,
             orx,
             erx,
             metr.clone(),
@@ -150,7 +198,16 @@ impl Network {
 
         info!(name = %conf.name, %node, %addr, max_message_size = %conf.max_message_size, "listening");
 
-        Ok(Self { recv, send })
+        Ok(Self { recv, lanes, send })
+    }
+
+    /// Take the receiver of a lane's messages.
+    ///
+    /// Returns `None` once taken or when the lane is not configured. What
+    /// parties send on the lane arrives here and never on the main receiver,
+    /// once [`NetworkSender::accept_lane`] was called.
+    pub fn take_lane(&mut self, id: LaneId) -> Option<LaneReceiver> {
+        self.lanes.remove(&id)
     }
 
     pub fn sender(&self) -> &NetworkSender {
@@ -190,6 +247,25 @@ impl NetworkReceiver {
         let (k, b, _) = self.rx.recv().await?;
         debug!(peer = %k, len = b.len(), "message received");
         Some((k, b))
+    }
+}
+
+impl LaneReceiver {
+    /// Receive the next lane event.
+    ///
+    /// Returns `None` once the network is shut down.
+    ///
+    /// # Cancel safety
+    ///
+    /// This method is cancel safe.
+    pub async fn receive(&mut self) -> Option<LaneEvent> {
+        tokio::select! {
+            message = self.rx.recv() => {
+                let (key, bytes, _) = message?;
+                Some(LaneEvent::Message(key, bytes))
+            },
+            key = self.unreachable.recv() => key.map(LaneEvent::Unreachable),
+        }
     }
 }
 
@@ -259,6 +335,42 @@ impl NetworkSender {
         }
         self.tx
             .send(Command::Send(cmd))
+            .map_err(|_| NetworkError::ChannelClosed)
+    }
+
+    /// Send a message to a party over an extra lane.
+    ///
+    /// The lane is a separate connection, so a busy lane never delays
+    /// messages on the main one. It is opened on first use. Messages are
+    /// sent at most once. A message still queued after the receive timeout
+    /// is dropped, and so is one queued behind a peer budget of others.
+    pub fn send_lane(
+        &self,
+        id: LaneId,
+        to: PublicKey,
+        mut msg: Vec<u8>,
+    ) -> Result<(), NetworkError> {
+        debug!(lane = %id, %to, len = msg.len(), "send_lane");
+        self.lane_check(id)?;
+        self.length_check(&msg)?;
+        // Appending here keeps the copy off the server task.
+        let trailer = Trailer::NoAck { slot: Slot::MIN }.to_bytes();
+        msg.extend_from_slice(trailer.as_ref());
+        self.tx
+            .send(Command::SendLane(id, to, msg.into()))
+            .map_err(|_| NetworkError::ChannelClosed)
+    }
+
+    /// Accept the lane when parties open it from now on.
+    ///
+    /// Until then a party opening it is told to back off. Call this once
+    /// something drains the receiver from [`Network::take_lane`], since
+    /// accepted lanes deliver there.
+    pub fn accept_lane(&self, id: LaneId) -> Result<(), NetworkError> {
+        debug!(name = %self.conf.name, node = %self.node, lane = %id, "accept_lane");
+        self.lane_check(id)?;
+        self.tx
+            .send(Command::AcceptLane(id))
             .map_err(|_| NetworkError::ChannelClosed)
     }
 
@@ -343,6 +455,13 @@ impl NetworkSender {
                 "message too large to send"
             );
             return Err(NetworkError::MessageTooLarge);
+        }
+        Ok(())
+    }
+
+    fn lane_check(&self, id: LaneId) -> Result<(), NetworkError> {
+        if !self.conf.lanes.contains(&id) {
+            return Err(NetworkError::UnknownLane(id));
         }
         Ok(())
     }

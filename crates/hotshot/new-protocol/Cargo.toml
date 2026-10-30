@@ -17,6 +17,7 @@ async-broadcast = { workspace = true }
 async-trait = { workspace = true }
 bincode = { workspace = true }
 bon = { workspace = true }
+bytes = { workspace = true }
 cliquenet = { workspace = true }
 committable = { workspace = true }
 futures = { workspace = true }

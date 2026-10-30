@@ -2,9 +2,11 @@ use std::{
     collections::{HashMap, HashSet},
     num::NonZeroUsize,
     sync::Arc,
+    time::Duration,
 };
 
-pub use cliquenet::{Config as CliquenetConfig, NetAddr, Role};
+use bytes::Bytes;
+pub use cliquenet::{Config as CliquenetConfig, LaneId, NetAddr, Role};
 use cliquenet::{NetworkReceiver, NetworkSender, Slot, noise::Protocol, x25519::PublicKey};
 use hotshot_types::{
     PeerConnectInfo,
@@ -19,7 +21,7 @@ use hotshot_types::{
 };
 use hotshot_utils::anytrace;
 use parking_lot::RwLock;
-use tracing::{error, info};
+use tracing::{debug, error, info};
 
 use crate::message::{Message, MessageType, Unchecked, Validated};
 
@@ -32,6 +34,7 @@ pub type InboundFilter<T> = Box<dyn Fn(&Message<T, Unchecked>) -> bool + Send + 
 pub struct Cliquenet<T: NodeType> {
     inner: Sender<T>,
     receiver: NetworkReceiver,
+    lanes: HashMap<LaneId, cliquenet::LaneReceiver>,
     #[cfg(any(test, feature = "testing"))]
     ifilter: InboundFilter<T>,
 }
@@ -75,19 +78,21 @@ pub fn message_limit(max_block_size: u64) -> NonZeroUsize {
 
 impl<T: NodeType> Cliquenet<T> {
     #[expect(clippy::too_many_arguments)]
-    pub async fn create<A, P, S>(
+    pub async fn create<A, P, L, S>(
         name: S,
         signing_key: T::SignatureKey,
         keypair: Keypair,
         addr: A,
         parties: P,
         max_message_size: Option<NonZeroUsize>,
+        lanes: L,
         upgrade_lock: UpgradeLock<T>,
         metrics: Box<dyn Metrics>,
     ) -> Result<Self, NetworkError>
     where
         A: Into<cliquenet::NetAddr>,
         P: IntoIterator<Item = (T::SignatureKey, PeerConnectInfo)>,
+        L: IntoIterator<Item = LaneId>,
         S: Into<String>,
     {
         let parties: HashMap<T::SignatureKey, PeerConnectInfo> = parties.into_iter().collect();
@@ -103,6 +108,7 @@ impl<T: NodeType> Cliquenet<T> {
             )
             .noise_protocols([(1.into(), Protocol::IK_25519_AesGcm_Blake2s)])
             .maybe_max_message_size(max_message_size)
+            .lanes(lanes)
             .build();
 
         Self::create_with_config(signing_key, upgrade_lock, cfg, parties, metrics).await
@@ -119,12 +125,17 @@ impl<T: NodeType> Cliquenet<T> {
         P: IntoIterator<Item = (T::SignatureKey, PeerConnectInfo)>,
     {
         let public_key = config.public_key();
+        let lane_ids = config.lanes().to_vec();
         let metrics = CliquenetMetrics::new(metrics);
-        let network = cliquenet::Network::create(config.with_metrics(metrics)).await?;
+        let mut network = cliquenet::Network::create(config.with_metrics(metrics)).await?;
         let peers: HashMap<_, _> = parties.into_iter().collect();
 
         info!(peers = %peers.len(), "cliquenet created");
 
+        let lanes = lane_ids
+            .into_iter()
+            .filter_map(|id| Some((id, network.take_lane(id)?)))
+            .collect();
         let (send, recv) = network.split_into();
 
         Ok(Self {
@@ -140,11 +151,31 @@ impl<T: NodeType> Cliquenet<T> {
                 upgrade_lock,
             },
             receiver: recv,
+            lanes,
         })
     }
 
     pub fn sender(&self) -> &Sender<T> {
         &self.inner
+    }
+
+    /// Take both ends of a lane passed to [`Cliquenet::create`].
+    ///
+    /// Returns `None` once taken. Peers opening the lane are refused until
+    /// [`LaneSender::accept`] is called. Lane messages are raw bytes
+    /// addressed by signature key, and never reach [`Cliquenet::receive`].
+    pub fn take_lane(&mut self, id: LaneId) -> Option<(LaneSender<T>, LaneReceiver<T>)> {
+        let receiver = self.lanes.remove(&id)?;
+        let sender = LaneSender {
+            id,
+            sender: self.inner.sender.clone(),
+            shared: Arc::clone(&self.inner.shared),
+        };
+        let receiver = LaneReceiver {
+            receiver,
+            shared: Arc::clone(&self.inner.shared),
+        };
+        Some((sender, receiver))
     }
 
     /// The epoch whose peer window is applied.
@@ -467,8 +498,126 @@ impl<T: NodeType> Sender<T> {
     }
 }
 
+/// Sends raw bytes to peers over a lane.
+pub struct LaneSender<T: NodeType> {
+    id: LaneId,
+    sender: NetworkSender,
+    shared: Arc<RwLock<Shared<T::SignatureKey>>>,
+}
+
+impl<T: NodeType> Clone for LaneSender<T> {
+    fn clone(&self) -> LaneSender<T> {
+        LaneSender {
+            id: self.id,
+            sender: self.sender.clone(),
+            shared: Arc::clone(&self.shared),
+        }
+    }
+}
+
+impl<T: NodeType> std::fmt::Debug for LaneSender<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LaneSender")
+            .field("id", &self.id)
+            .finish_non_exhaustive()
+    }
+}
+
+impl<T: NodeType> LaneSender<T> {
+    /// Send `bytes` to `to` over the lane.
+    ///
+    /// Delivery is best effort. See [`cliquenet::NetworkSender::send_lane`].
+    pub fn send(&self, to: &T::SignatureKey, bytes: Vec<u8>) -> Result<(), NetworkError> {
+        let Some(target) = self.shared.read().peers.get(to).map(|i| i.x25519_key) else {
+            return Err(NetworkError::UnknownPeer);
+        };
+        self.sender.send_lane(self.id, target.into(), bytes)?;
+        Ok(())
+    }
+
+    /// Accept the lane when peers open it from now on.
+    ///
+    /// Call this once something drains the [`LaneReceiver`], since accepted
+    /// lanes deliver there.
+    pub fn accept(&self) -> Result<(), NetworkError> {
+        Ok(self.sender.accept_lane(self.id)?)
+    }
+
+    /// How long to wait to hear back from a peer after sending to it.
+    pub fn receive_timeout(&self) -> Duration {
+        self.sender.config().receive_timeout()
+    }
+
+    /// How many messages the network keeps queued or in flight for one peer.
+    pub fn peer_budget(&self) -> NonZeroUsize {
+        self.sender.config().peer_budget()
+    }
+}
+
+/// Receives raw bytes from peers over a lane.
+pub struct LaneReceiver<T: NodeType> {
+    receiver: cliquenet::LaneReceiver,
+    shared: Arc<RwLock<Shared<T::SignatureKey>>>,
+}
+
+impl<T: NodeType> std::fmt::Debug for LaneReceiver<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LaneReceiver").finish_non_exhaustive()
+    }
+}
+
+impl<T: NodeType> LaneReceiver<T> {
+    /// Receive the next lane event, naming the peer by its signature key.
+    ///
+    /// The peer is the one whose x25519 key authenticated the connection.
+    /// Events about keys that are no longer peers are dropped. Returns `None`
+    /// once the network is shut down.
+    ///
+    /// # Cancel safety
+    ///
+    /// This method is cancel safe.
+    pub async fn receive(&mut self) -> Option<LaneEvent<T::SignatureKey>> {
+        loop {
+            let event = self.receiver.receive().await?;
+            let src = match &event {
+                cliquenet::LaneEvent::Message(src, _) | cliquenet::LaneEvent::Unreachable(src) => {
+                    x25519::PublicKey::from(*src)
+                },
+            };
+            let peer = self
+                .shared
+                .read()
+                .peers
+                .iter()
+                .find(|(_, info)| info.x25519_key == src)
+                .map(|(key, _)| key.clone());
+            let Some(peer) = peer else {
+                debug!(%src, "dropping lane event of unknown peer");
+                continue;
+            };
+            return Some(match event {
+                cliquenet::LaneEvent::Message(_, bytes) => LaneEvent::Message(peer, bytes),
+                cliquenet::LaneEvent::Unreachable(_) => LaneEvent::Unreachable(peer),
+            });
+        }
+    }
+}
+
+/// What happens on a peer's lane.
+#[derive(Debug)]
+pub enum LaneEvent<K> {
+    /// A message from the peer.
+    Message(K, Bytes),
+    /// The peer's lane could not be opened or could not take a message, so something
+    /// queued for it was not sent.
+    Unreachable(K),
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum NetworkError {
+    #[error("peer has no connection info")]
+    UnknownPeer,
+
     #[error("cliquenet: {0}")]
     Cliquenet(#[from] cliquenet::NetworkError),
 

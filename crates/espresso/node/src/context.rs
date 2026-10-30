@@ -14,7 +14,7 @@ use espresso_types::{
     v0::traits::{EventConsumer as PersistenceEventConsumer, SequencerPersistence},
 };
 use futures::{
-    future::join_all,
+    future::{BoxFuture, join_all},
     stream::{BoxStream, Stream, StreamExt},
 };
 use hotshot_new_protocol::{
@@ -60,6 +60,7 @@ use crate::{
     consensus_handle::ConsensusHandle,
     external_event_handler::ExternalEventHandler,
     proposal_fetcher::ProposalFetcherConfig,
+    query_peers::{QUERY_LANE, QueryHandlers, QueryPeers, QueryRequest},
     request_response::{
         RequestResponseProtocol,
         data_source::{DataSource, Storage as RequestResponseStorage},
@@ -98,6 +99,10 @@ pub struct SequencerContext<P: SequencerPersistence> {
     /// Light client state signatures produced by the state signer task.
     state_signatures: Arc<RwLock<StateSignatureMemStorage>>,
 
+    /// Query service requests to and from staked peers, when this node serves them.
+    #[derivative(Debug = "ignore")]
+    query_peers: Option<QueryPeers>,
+
     /// An orchestrator to wait for before starting consensus, with the peer config this node
     /// registered there.
     #[derivative(Debug = "ignore")]
@@ -130,6 +135,7 @@ where
         initializer: HotShotInitializer<SeqTypes>,
         anchor_view: Option<ViewNumber>,
         storage: Option<RequestResponseStorage>,
+        query_handlers: Option<QueryHandlers>,
         state_catchup: ParallelStateCatchup,
         persistence: Arc<P>,
         coordinator_network: F,
@@ -179,6 +185,10 @@ where
         seed_membership(&membership_coordinator, config, &upgrade_lock, &initializer).await;
 
         let mut coordinator_network = coordinator_network(upgrade_lock.clone()).await?;
+        // Taken before the network moves into the coordinator, so query traffic never passes
+        // through it.
+        let query_lane = query_handlers
+            .and_then(|handlers| Some((coordinator_network.take_lane(QUERY_LANE)?, handlers)));
 
         let current_epoch = bootstrap_epoch_window(
             &membership_coordinator,
@@ -317,7 +327,17 @@ where
         .await
         .with_context(|| "Failed to create external event handler")?;
 
-        Ok(Self::new(
+        let query_peers = query_lane.map(|(lane, handlers)| {
+            QueryPeers::start(
+                lane,
+                handlers,
+                consensus_handle.clone(),
+                pub_key,
+                &mut tasks,
+            )
+        });
+
+        let ctx = Self::new(
             consensus_handle,
             persistence,
             state_signer,
@@ -329,9 +349,10 @@ where
             event_consumer,
             anchor_view,
             proposal_fetcher_cfg,
+            query_peers,
             metrics,
-        )
-        .with_task_list(tasks))
+        );
+        Ok(ctx.with_task_list(tasks))
     }
 
     /// Constructor
@@ -348,6 +369,7 @@ where
         event_consumer: impl PersistenceEventConsumer + 'static,
         anchor_view: Option<ViewNumber>,
         proposal_fetcher_cfg: ProposalFetcherConfig,
+        query_peers: Option<QueryPeers>,
         metrics: &dyn Metrics,
     ) -> Self {
         let events = consensus_handle.event_stream();
@@ -357,6 +379,7 @@ where
             consensus_handle,
             persistence: persistence.clone(),
             state_signatures: Arc::clone(&state_signer.signatures),
+            query_peers,
             request_response_protocol,
             tasks: Default::default(),
             detached: false,
@@ -438,6 +461,15 @@ where
     /// Return the light client state signatures this node has produced.
     pub fn state_signatures(&self) -> Arc<RwLock<StateSignatureMemStorage>> {
         self.state_signatures.clone()
+    }
+
+    /// Ask a staked peer over the cliquenet query lane. The response is unverified.
+    pub(crate) fn query_peers(
+        &self,
+        request: QueryRequest,
+    ) -> BoxFuture<'static, anyhow::Result<Vec<u8>>> {
+        let peers = self.query_peers.clone();
+        Box::pin(async move { peers.context("query p2p is off")?.ask(request).await })
     }
 
     /// Stream consensus events.

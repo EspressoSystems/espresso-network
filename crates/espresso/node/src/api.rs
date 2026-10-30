@@ -2,7 +2,7 @@ use std::{collections::HashMap, pin::Pin, sync::Arc, time::Duration};
 
 use ::light_client::{
     LightClient,
-    client::{FallbackClient, QueryServiceClient},
+    client::FallbackClient,
     state::{Genesis, LightClientOptions},
     storage::LightClientDbOptions,
 };
@@ -67,7 +67,7 @@ use self::data_source::{
 use crate::{
     SeqTypes,
     api::{
-        context::{ApiContext, ConsensusSource, NodeLightClient},
+        context::{ApiContext, ConsensusSource, NodeClient, NodeLightClient},
         data_source::TokenDataSource,
     },
     catchup::{
@@ -90,6 +90,7 @@ pub mod data_source;
 pub mod fs;
 pub mod light_client;
 pub mod options;
+pub(crate) mod peer_client;
 /// The query service over a SQL database, with one module per backend.
 pub mod sql {
     pub mod postgres;
@@ -1737,19 +1738,20 @@ pub(crate) fn light_client_genesis(config: &NetworkConfig<SeqTypes>, chain_id: C
 pub(crate) struct LightClientProvider {
     light_client: OnceCell<Arc<NodeLightClient>>,
     state: ApiState,
-    client: FallbackClient<QueryServiceClient>,
+    client: FallbackClient<NodeClient>,
     opt: LightClientOptions,
     db_opt: LightClientDbOptions,
 }
 
 impl LightClientProvider {
+    /// A provider fetching through `clients`, tried in order.
     fn new(
-        peers: impl IntoIterator<Item = Url>,
+        clients: impl IntoIterator<Item = NodeClient>,
         state: ApiState,
         opt: LightClientOptions,
         db_opt: LightClientDbOptions,
     ) -> anyhow::Result<Self> {
-        let client = FallbackClient::new(peers.into_iter().map(QueryServiceClient::new).collect())?;
+        let client = FallbackClient::new(clients.into_iter().collect())?;
         Ok(Self {
             light_client: OnceCell::new(),
             state,
@@ -2200,7 +2202,7 @@ pub mod test_helpers {
                         let upgrades_map = cfg.upgrades();
                         async move {
                             if i == 0 {
-                                opt.serve(|metrics, consumer, storage| {
+                                opt.serve(|metrics, consumer, storage, _| {
                                     let cfg = cfg.clone();
                                     async move {
                                         Ok(cfg
@@ -4337,7 +4339,7 @@ mod test {
         let persistence = <D as TestableSequencerDataSource>::persistence_options(&dbs[LATE]);
         let catchup = state_peers();
         let _late = api
-            .serve(|metrics, consumer, storage| {
+            .serve(|metrics, consumer, storage, _| {
                 async move {
                     Ok(cfg
                         .init_node(
@@ -5951,7 +5953,7 @@ mod test {
             .catchup(Default::default())
             .config(Default::default())
             .submit(Default::default())
-            .serve(move |metrics, sink, _| {
+            .serve(move |metrics, sink, _, _| {
                 async move {
                     init_follower_node(genesis, params, metrics, persistence, l1_params, sink).await
                 }
@@ -7149,7 +7151,7 @@ mod test {
         // start the query node so that it builds the merklized state
         let mut node_0 = opt
             .clone()
-            .serve(|metrics, consumer, storage| {
+            .serve(|metrics, consumer, storage, _| {
                 let cfg = network.cfg.clone();
                 let node_0_persistence = node_0_persistence.clone();
                 let state = state.clone();
@@ -7194,7 +7196,7 @@ mod test {
         // start the node again.
         tracing::info!("restarting node");
         let node_0 = opt
-            .serve(|metrics, consumer, storage| {
+            .serve(|metrics, consumer, storage, _| {
                 let cfg = network.cfg.clone();
                 async move {
                     Ok(cfg
@@ -7875,7 +7877,7 @@ mod test {
         );
         let state_peers = api_state_peers(&api_url);
         let query_node = opt
-            .serve(move |metrics, consumer, storage| {
+            .serve(move |metrics, consumer, storage, _| {
                 async move {
                     Ok(cfg
                         .init_node(
@@ -8081,7 +8083,7 @@ mod test {
         );
         let node_0 = opt
             .clone()
-            .serve(|metrics, consumer, storage| {
+            .serve(|metrics, consumer, storage, _| {
                 let cfg = network.cfg.clone();
                 let node_0_persistence = node_0_persistence.clone();
                 let state = state.clone();
@@ -12173,7 +12175,7 @@ mod test {
         );
         let node_0 = opt
             .clone()
-            .serve(|metrics, consumer, storage| {
+            .serve(|metrics, consumer, storage, _| {
                 let cfg = network.cfg.clone();
                 let new_persistence = new_persistence.clone();
                 let state = state.clone();

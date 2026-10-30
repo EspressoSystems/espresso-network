@@ -1,6 +1,7 @@
 mod external_event_handler;
 mod message_compat_tests;
 mod proposal_fetcher;
+mod query_peers;
 mod request_response;
 mod startup_catchup;
 
@@ -86,7 +87,9 @@ use tracing::info;
 use url::Url;
 use vbs::version::StaticVersion;
 
-use crate::request_response::data_source::Storage as RequestResponseStorage;
+use crate::{
+    query_peers::QueryHandlers, request_response::data_source::Storage as RequestResponseStorage,
+};
 
 /// The node's `NodeImplementation`, generic over its persistence.
 #[derive(Derivative, Serialize, Deserialize)]
@@ -173,6 +176,7 @@ pub async fn init_node<P>(
     persistence: P,
     l1_params: L1Params,
     storage: Option<RequestResponseStorage>,
+    query_handlers: Option<QueryHandlers>,
     event_consumer: impl EventConsumer + 'static,
     is_da: bool,
     identity: Identity,
@@ -430,6 +434,7 @@ where
             .expect("genesis sets a block size");
         let max_message_size = Some(message_limit(largest));
         let name = format!("espresso-{}", genesis.chain_config.chain_id);
+        let lanes = query_handlers.is_some().then_some(query_peers::QUERY_LANE);
         move |upgrade| {
             Cliquenet::create(
                 name,
@@ -438,6 +443,7 @@ where
                 bind_addr,
                 [],
                 max_message_size,
+                lanes,
                 upgrade,
                 metrics,
             )
@@ -452,6 +458,7 @@ where
         initializer,
         anchor_view,
         storage,
+        query_handlers,
         state_catchup_providers,
         persistence,
         cliquenet,
@@ -1613,6 +1620,7 @@ pub mod testing {
                     coordinator_addr,
                     [],
                     Some(message_limit(max_block_size)),
+                    [query_peers::QUERY_LANE],
                     upgrade,
                     Box::new(NoMetrics),
                 )
@@ -1636,6 +1644,7 @@ pub mod testing {
                 initializer,
                 anchor_view,
                 storage,
+                None,
                 catchup_providers,
                 persistence,
                 coordinator_network,

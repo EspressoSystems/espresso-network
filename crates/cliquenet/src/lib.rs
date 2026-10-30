@@ -21,8 +21,8 @@ pub use error::NetworkError;
 pub use metrics::Metrics;
 pub use msg::Slot;
 pub use net::{
-    Network, NetworkReceiver, NetworkSender, RetryPolicy, SendAction, SendCommand,
-    SendCommandBuilder,
+    LaneEvent, LaneReceiver, Network, NetworkReceiver, NetworkSender, RetryPolicy, SendAction,
+    SendCommand, SendCommandBuilder,
 };
 
 use crate::{
@@ -122,6 +122,12 @@ pub struct Config {
     #[builder(default = (3 * parties.len()).max(100))]
     max_accept_tasks: usize,
 
+    /// Extra lanes, each a separate connection to a party next to the main one.
+    ///
+    /// See [`NetworkSender::send_lane`].
+    #[builder(default, with = <_>::from_iter)]
+    lanes: Vec<LaneId>,
+
     /// Optional metrics implementation.
     metrics: Option<Arc<dyn Metrics>>,
 }
@@ -161,6 +167,7 @@ impl fmt::Debug for Config {
             .field("keepalive_interval", &self.keep_alive_interval)
             .field("keepalive_retries", &self.keep_alive_retries)
             .field("max_accept_tasks", &self.max_accept_tasks)
+            .field("lanes", &self.lanes)
             .finish()
     }
 }
@@ -174,10 +181,52 @@ impl Config {
         self.max_message_size
     }
 
+    pub fn lanes(&self) -> &[LaneId] {
+        &self.lanes
+    }
+
+    pub fn receive_timeout(&self) -> Duration {
+        self.receive_timeout
+    }
+
+    pub fn peer_budget(&self) -> NonZeroUsize {
+        self.peer_budget
+    }
+
     pub fn with_metrics<M: Metrics + 'static>(mut self, m: M) -> Self {
         self.metrics = Some(Arc::new(m));
         self
     }
+}
+
+/// Identifies an extra lane.
+///
+/// An extra lane is a separate connection to a party, with its own outbox
+/// and inbound channel, so its traffic never queues ahead of the main
+/// connection's. Parties must agree on what each id carries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct LaneId(u8);
+
+impl LaneId {
+    pub const fn new(id: u8) -> Self {
+        Self(id)
+    }
+}
+
+impl fmt::Display for LaneId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+/// The connection to a party a message travels on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) enum Lane {
+    /// Connected eagerly to every party.
+    Main,
+    /// Connected on first use. Once the remote closes it, the next send
+    /// opens it again.
+    Extra(LaneId),
 }
 
 /// Network peer role.

@@ -606,7 +606,7 @@ where
             Ok(proof) => proof,
             // Archive nodes prune old merklized state, which a leaf proof doesn't need.
             Err(err) => {
-                tracing::info!(
+                tracing::debug!(
                     %id,
                     root = upper_bound.height(),
                     err = %format_args!("{err:#}"),
