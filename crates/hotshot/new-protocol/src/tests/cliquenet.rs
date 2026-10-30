@@ -5,7 +5,7 @@ use std::{
 };
 
 use cliquenet::noise::Protocol;
-use hotshot_example_types::node_types::TestTypes;
+use hotshot_example_types::{block_types::TestTransaction, node_types::TestTypes};
 use hotshot_types::{
     PeerConnectInfo,
     addr::NetAddr,
@@ -18,7 +18,9 @@ use tokio::time::timeout;
 
 use crate::{
     helpers::test_upgrade_lock,
-    message::{ConsensusMessage, Message, MessageType, Unchecked},
+    message::{
+        BlockMessage, ConsensusMessage, Message, MessageType, TransactionMessage, Unchecked,
+    },
     network::{CONTROL_LANE_PORT_OFFSET, Cliquenet, ControlLane, NetworkError},
     tests::common::{
         runner::{TestRunner, reserve_ports},
@@ -31,9 +33,9 @@ async fn five_nodes_decide_same_chain_over_cliquenet() {
     TestRunner::builder().build().run().await.unwrap();
 }
 
-/// Proposals travel on the control lane alone, so the network only decides if every node's
-/// lane is bound, its peers' lanes derived from their main addresses, and the inbound merge
-/// of the two networks delivers both.
+/// Proposals, votes and certificates travel on the control lane alone and the shares on the
+/// main one, so the network only decides if every node's lane is bound, its peers' lanes
+/// derived from their main addresses, and the inbound merge of the two networks delivers both.
 #[tokio::test(flavor = "multi_thread")]
 async fn five_nodes_decide_over_the_control_lane() {
     TestRunner::builder()
@@ -44,7 +46,7 @@ async fn five_nodes_decide_over_the_control_lane() {
         .unwrap();
 }
 
-/// Each epoch's peer update goes to both networks, and epoch changes travel the main one.
+/// Each epoch's peer update goes to both networks, and epoch changes travel the lane.
 #[tokio::test(flavor = "multi_thread")]
 async fn epoch_changes_over_the_control_lane() {
     TestRunner::builder()
@@ -57,16 +59,30 @@ async fn epoch_changes_over_the_control_lane() {
         .unwrap();
 }
 
-/// With the lane on, a proposal travels the control lane and a VID share the main network,
-/// each to the peer's lane at the port above its registered address.
+/// With the lane on, a proposal, a vote and a certificate travel the control lane, and a VID
+/// share and a transaction forward the main network, each to the peer's lane at the port
+/// above its registered address.
 #[tokio::test(flavor = "multi_thread")]
-async fn control_lane_carries_proposals_apart_from_shares() {
+async fn control_lane_carries_control_messages_apart_from_bulk() {
     let data = TestData::new(1).await;
     let view = &data.views[0];
     let (network, mut peer) = lane_pair().await;
+    let transactions = Message {
+        sender: view.leader_public_key,
+        message_type: MessageType::Block(BlockMessage::Transactions(TransactionMessage {
+            view: view.view_number,
+            transactions: vec![TestTransaction::new(vec![1])],
+        })),
+    };
 
-    // The share goes first: on one network the proposal would queue behind it.
-    for message in [view.vid_share_broadcast_input(0), view.proposal_input()] {
+    // The bulk goes first: on one network the control messages would queue behind it.
+    for message in [
+        view.vid_share_broadcast_input(0),
+        transactions,
+        view.proposal_input(),
+        view.vote1_input(0),
+        view.cert1_message(0),
+    ] {
         network
             .sender()
             .broadcast(view.view_number, &message)
@@ -78,8 +94,20 @@ async fn control_lane_carries_proposals_apart_from_shares() {
         MessageType::Consensus(ConsensusMessage::Proposal(_))
     ));
     assert!(matches!(
+        next_message(&mut peer.control).await,
+        MessageType::Consensus(ConsensusMessage::Vote1(_))
+    ));
+    assert!(matches!(
+        next_message(&mut peer.control).await,
+        MessageType::Consensus(ConsensusMessage::Certificate1(..))
+    ));
+    assert!(matches!(
         next_message(&mut peer.main).await,
         MessageType::Consensus(ConsensusMessage::VidShareBroadcast(_))
+    ));
+    assert!(matches!(
+        next_message(&mut peer.main).await,
+        MessageType::Block(BlockMessage::Transactions(_))
     ));
 }
 
@@ -191,6 +219,24 @@ async fn share_starved_node_recovers_over_cliquenet() {
         .tolerated_failed_views((2..=8).map(ViewNumber::new).collect())
         .target_decisions(12)
         .view_timeout(std::time::Duration::from_secs(2))
+        .build()
+        .run()
+        .await
+        .unwrap();
+}
+
+/// As [`share_starved_node_recovers_over_cliquenet`], with the payload fetch request on the
+/// control lane and its response on the main network.
+#[tokio::test(flavor = "multi_thread")]
+async fn share_starved_node_recovers_over_the_control_lane() {
+    TestRunner::builder()
+        .num_nodes(7)
+        .down_nodes(BTreeSet::from([5, 6]))
+        .starved_of_shares(BTreeMap::from([(1, BTreeSet::from([ViewNumber::new(2)]))]))
+        .tolerated_failed_views((2..=8).map(ViewNumber::new).collect())
+        .target_decisions(12)
+        .view_timeout(std::time::Duration::from_secs(2))
+        .control_lane(ControlLane::On)
         .build()
         .run()
         .await

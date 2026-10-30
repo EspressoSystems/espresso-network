@@ -87,8 +87,9 @@ pub struct Options {
     )]
     pub cliquenet_advertise_address: Option<NetAddr>,
 
-    /// Send proposals on a second cliquenet network, the control lane, so they pass the VID
-    /// shares queued on the main connections.
+    /// Send proposals, votes, certificates and every other control message on a second
+    /// cliquenet network, the control lane, so they pass the VID shares and transaction
+    /// forwards queued on the main connections.
     ///
     /// Experimental. The lane listens one port above the cliquenet bind address and expects
     /// every peer's lane one port above the address the peer registered, so every node of the

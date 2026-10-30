@@ -213,7 +213,7 @@ pub struct TestRunner {
     /// network, combined with `starved_of_shares`.
     drop_inbound: Option<DropInbound>,
 
-    /// Proposals on their own cliquenet network, one port above each node's.
+    /// Control messages on their own cliquenet network, one port above each node's.
     #[builder(default)]
     control_lane: ControlLane,
 

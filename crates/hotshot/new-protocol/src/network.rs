@@ -21,7 +21,10 @@ use hotshot_utils::anytrace;
 use parking_lot::RwLock;
 use tracing::{error, info, warn};
 
-use crate::message::{ConsensusMessage, Message, MessageType, Unchecked, Validated};
+use crate::message::{
+    BlockMessage, ConsensusMessage, Message, MessageType, Unchecked, Validated,
+    payload::PayloadFetchMessage,
+};
 
 /// A predicate that discards inbound messages.
 ///
@@ -29,19 +32,20 @@ use crate::message::{ConsensusMessage, Message, MessageType, Unchecked, Validate
 #[cfg(any(test, feature = "testing"))]
 pub type InboundFilter<T> = Box<dyn Fn(&Message<T, Unchecked>) -> bool + Send + Sync>;
 
-/// Whether proposals travel on a second cliquenet network of their own.
+/// Whether control messages travel on a second cliquenet network of their own.
 ///
 /// cliquenet writes one message at a time on each connection, lowest view first, so a
-/// proposal queued behind a VID share waits for the whole share to leave. With the lane on,
-/// proposals have a connection of their own to every peer and pass the shares. The lane
-/// listens one port above the main network and expects each peer's lane one port above the
-/// peer's registered address, so a network runs it on all nodes or none.
+/// proposal or vote queued behind a VID share waits for the whole share to leave. With the
+/// lane on, everything but the bulk messages has a connection of its own to every peer and
+/// passes the shares. The lane listens one port above the main network and expects each
+/// peer's lane one port above the peer's registered address, so a network runs it on all
+/// nodes or none.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum ControlLane {
     /// One network for every message.
     #[default]
     Off,
-    /// Proposals on a second network, [`CONTROL_LANE_PORT_OFFSET`] above the main one.
+    /// Control messages on a second network, [`CONTROL_LANE_PORT_OFFSET`] above the main one.
     On,
 }
 
@@ -51,17 +55,43 @@ pub const CONTROL_LANE_PORT_OFFSET: u16 = 1;
 /// The network a message travels on.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Lane {
-    /// Shares, votes, certificates and everything else.
+    /// The bulk, whose size grows with the block, and everything when the lane is off.
     Main,
-    /// Proposals, when the control lane is on.
+    /// Everything else, when the control lane is on.
     Control,
 }
 
 impl Lane {
+    /// Exhaustive, so that a new kind of message picks its lane.
     fn of<T: NodeType, S>(m: &Message<T, S>) -> Self {
         match &m.message_type {
-            MessageType::Consensus(ConsensusMessage::Proposal(_)) => Self::Control,
-            _ => Self::Main,
+            MessageType::Consensus(message) => match message {
+                ConsensusMessage::VidShareFragment(_) | ConsensusMessage::VidShareBroadcast(_) => {
+                    Self::Main
+                },
+                ConsensusMessage::Proposal(_)
+                | ConsensusMessage::Vote1(_)
+                | ConsensusMessage::Vote2(_)
+                | ConsensusMessage::Certificate1(..)
+                | ConsensusMessage::Certificate2(..)
+                | ConsensusMessage::TimeoutVote(_)
+                | ConsensusMessage::TimeoutCertificate(_)
+                | ConsensusMessage::EpochChange(_)
+                | ConsensusMessage::HighQc(_)
+                | ConsensusMessage::TimeoutVote3(_)
+                | ConsensusMessage::TimeoutCertificate3(_)
+                | ConsensusMessage::UpgradeProposal(_)
+                | ConsensusMessage::UpgradeVote(_)
+                | ConsensusMessage::ReVote(_) => Self::Control,
+            },
+            MessageType::Block(BlockMessage::Transactions(_)) => Self::Main,
+            // 32 bytes a transaction, and the next leaders want it before they build.
+            MessageType::Block(BlockMessage::DedupManifest(_)) => Self::Control,
+            MessageType::ProposalFetch(_) => Self::Control,
+            MessageType::PayloadFetch(PayloadFetchMessage::Req(_)) => Self::Control,
+            MessageType::PayloadFetch(PayloadFetchMessage::Res(_)) => Self::Main,
+            // Opaque request-response catchup, which can carry a VID share or a leaf chain.
+            MessageType::External(_) => Self::Main,
         }
     }
 
@@ -106,7 +136,7 @@ impl Lane {
 pub struct Cliquenet<T: NodeType> {
     inner: Sender<T>,
     receiver: NetworkReceiver,
-    /// Polled before `receiver`, so a proposal also passes the shares queued inbound.
+    /// Polled before `receiver`, so a control message also passes the shares queued inbound.
     control_receiver: Option<NetworkReceiver>,
     #[cfg(any(test, feature = "testing"))]
     ifilter: InboundFilter<T>,
@@ -588,7 +618,7 @@ impl<T: NodeType> Sender<T> {
         self.sender.config().max_message_size()
     }
 
-    /// The network `m` travels on: the control lane for a proposal when the lane is on.
+    /// The network `m` travels on: the control lane for a control message when the lane is on.
     fn sender_for(&self, m: &Message<T, Validated>) -> &NetworkSender {
         match &self.control {
             Some(control) if Lane::of(m) == Lane::Control => control,

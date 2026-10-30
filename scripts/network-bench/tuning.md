@@ -22,10 +22,10 @@ drops SQLite disk I/O entirely (needs `ESPRESSO_QUERY_PAYLOAD_DIR`). `EXPERIMENT
 
 With `--prune` and `--query-engine sqlite`, each prune batch holds the write lock, which shows as query lag.
 
-`ESPRESSO_NODE_CLIQUENET_CONTROL_LANE=true` sends proposals on a second cliquenet network, the control lane, on the port
-above the cliquenet port (9001), so they do not queue behind VID shares. Set it on every node or none. The fleet's
-security group passes all traffic between its hosts; the socket samples (`ss` on port 9000) leave out the lane's
-connections.
+`ESPRESSO_NODE_CLIQUENET_CONTROL_LANE=true` sends proposals, votes and certificates on a second cliquenet network, the
+control lane, on the port above the cliquenet port (9001), so they do not queue behind VID shares. Set it on every node
+or none. The fleet's security group passes all traffic between its hosts; the socket samples (`ss` on port 9000) leave
+out the lane's connections.
 
 ## Host (with `--latency`)
 
