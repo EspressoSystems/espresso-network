@@ -1130,6 +1130,36 @@ pub mod testing {
     pub use super::super::tmp_db::TmpDb;
     use super::{Backend as _, Db, DbKind};
 
+    #[cfg(test)]
+    #[async_trait::async_trait]
+    impl crate::testing::consensus::TestSqlDb for TmpDb {
+        type Storage = super::SqlStorage;
+
+        async fn init() -> Self {
+            TmpDb::init().await
+        }
+
+        async fn storage(&self) -> anyhow::Result<super::SqlStorage> {
+            super::SqlStorage::connect(self.config(), super::StorageConnectionType::Query).await
+        }
+
+        async fn pruning_storage(
+            &self,
+            cfg: super::PrunerCfg,
+        ) -> anyhow::Result<super::SqlStorage> {
+            super::SqlStorage::connect(
+                self.config().pruner_cfg(cfg)?,
+                super::StorageConnectionType::Query,
+            )
+            .await
+        }
+
+        async fn archive_storage(&self) -> anyhow::Result<super::SqlStorage> {
+            super::SqlStorage::connect(self.config().archive(), super::StorageConnectionType::Query)
+                .await
+        }
+    }
+
     /// The migrations a [`TmpDb`] applies on top of the default schema.
     pub(crate) fn test_migrations() -> Vec<Migration> {
         Vec::from([Migration::unapplied(

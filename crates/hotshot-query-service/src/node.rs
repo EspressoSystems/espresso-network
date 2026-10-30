@@ -39,10 +39,11 @@ impl Default for Options {
 
 #[cfg(test)]
 mod test {
-    use std::time::Duration;
+    use std::{marker::PhantomData, time::Duration};
 
     use committable::Committable;
     use hotshot_types::traits::EncodeBytes;
+    use rstest_reuse::apply;
     use tokio::time::sleep;
 
     use super::*;
@@ -51,7 +52,7 @@ mod test {
         availability::BlockId,
         testing::{
             chain::ChainNode,
-            consensus::{MockDataSource, MockSqlDataSource},
+            consensus::{MockDataSource, TestableDataSource, sql_data_sources},
             mocks::{MockTypes, mock_transaction},
         },
     };
@@ -145,9 +146,9 @@ mod test {
         assert!(sync_status.is_fully_synced(), "{sync_status:#?}");
     }
 
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_aggregate_ranges() {
-        let mut node = ChainNode::<MockSqlDataSource>::new().await;
+    #[apply(sql_data_sources)]
+    async fn test_aggregate_ranges<D: TestableDataSource>(_d: PhantomData<D>) {
+        let mut node = ChainNode::<D>::new().await;
         let ds = node.data_source();
 
         // Decide two transactions, each in its own block after some empty ones.

@@ -679,8 +679,8 @@ impl Transaction<Prune> {
 }
 
 impl<Mode> Transaction<Mode> {
-    pub(super) const PRUNED_HEIGHT_ID: i32 = 1;
-    pub(super) const STATE_PRUNED_HEIGHT_ID: i32 = 2;
+    pub const PRUNED_HEIGHT_ID: i32 = 1;
+    pub const STATE_PRUNED_HEIGHT_ID: i32 = 2;
     pub(super) const STATE_START_HEIGHT_ID: i32 = 3;
 }
 
@@ -705,6 +705,15 @@ impl Transaction<Write> {
             .await
             .context("updating pruned height")?;
         Ok(stored as u64)
+    }
+}
+
+#[cfg(test)]
+#[async_trait]
+impl crate::testing::consensus::SavePrunedHeight for Transaction<Write> {
+    async fn save_pruned_height(&mut self, height: u64) -> anyhow::Result<()> {
+        Transaction::<Write>::save_pruned_height(self, height).await?;
+        Ok(())
     }
 }
 

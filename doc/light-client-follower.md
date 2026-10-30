@@ -95,5 +95,6 @@ Without it, the follower backfills history like any fresh query node, and the me
 so state, reward and catchup endpoints lag until the backfill completes; restore the database from a snapshot to skip
 it. With it, the follower marks the heights below its first block as pruned and never fetches them, and the loop starts
 from a snapshot at a recent epoch boundary, from peers, and skips the replay. Its trees then stay incomplete: lookups of
-block proofs below that boundary, and of fee accounts that no block since then has touched, fail. A restart resumes from
-the height the database has reached.
+block proofs below that boundary, and of fee accounts that no block since then has touched, fail. `--prune` also drops
+the totals that count from genesis: the transaction count, the payload size and the explorer summary are a 404. A
+restart resumes from the height the database has reached.

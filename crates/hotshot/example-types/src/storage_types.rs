@@ -17,15 +17,14 @@ use async_lock::RwLock;
 use async_trait::async_trait;
 use hotshot_types::{
     data::{
-        DaProposal, DaProposal2, EpochNumber, Leaf2, QuorumProposal, QuorumProposal2,
-        QuorumProposalWrapper, VidCommitment, VidDisperseShare, ViewNumber,
+        DaProposal, DaProposal2, EpochNumber, Leaf2, QuorumProposalWrapper, VidCommitment,
+        VidDisperseShare, ViewNumber,
     },
     drb::{DrbInput, DrbResult},
     event::HotShotAction,
     message::Proposal,
     simple_certificate::{
-        Certificate2, LightClientStateUpdateCertificateV2, NextEpochQuorumCertificate2,
-        QuorumCertificate2, UpgradeCertificate,
+        Certificate2, LightClientStateUpdateCertificateV2, QuorumCertificate2, UpgradeCertificate,
     },
     traits::{node_implementation::NodeType, storage::Storage},
     vote::HasViewNumber,
@@ -42,17 +41,8 @@ pub struct TestStorageState<TYPES: NodeType> {
     vids: VidShares<TYPES>,
     das: HashMap<ViewNumber, Proposal<TYPES, DaProposal<TYPES>>>,
     da2s: HashMap<ViewNumber, Proposal<TYPES, DaProposal2<TYPES>>>,
-    pub proposals: BTreeMap<ViewNumber, Proposal<TYPES, QuorumProposal<TYPES>>>,
-    pub proposals2: BTreeMap<ViewNumber, Proposal<TYPES, QuorumProposal2<TYPES>>>,
     pub proposals_wrapper: BTreeMap<ViewNumber, Proposal<TYPES, QuorumProposalWrapper<TYPES>>>,
-    high_qc: Option<hotshot_types::simple_certificate::QuorumCertificate<TYPES>>,
-    high_qc2: Option<hotshot_types::simple_certificate::QuorumCertificate2<TYPES>>,
-    eqc: Option<(
-        hotshot_types::simple_certificate::QuorumCertificate2<TYPES>,
-        hotshot_types::simple_certificate::NextEpochQuorumCertificate2<TYPES>,
-    )>,
-    next_epoch_high_qc2:
-        Option<hotshot_types::simple_certificate::NextEpochQuorumCertificate2<TYPES>>,
+    high_qc2: Option<QuorumCertificate2<TYPES>>,
     action: ViewNumber,
     action_log: Vec<(ViewNumber, HotShotAction)>,
     epoch: Option<EpochNumber>,
@@ -71,13 +61,8 @@ impl<TYPES: NodeType> Default for TestStorageState<TYPES> {
             vids: BTreeMap::new(),
             das: HashMap::new(),
             da2s: HashMap::new(),
-            proposals: BTreeMap::new(),
-            proposals2: BTreeMap::new(),
             proposals_wrapper: BTreeMap::new(),
-            high_qc: None,
             high_qc2: None,
-            eqc: None,
-            next_epoch_high_qc2: None,
             action: ViewNumber::genesis(),
             action_log: Vec::new(),
             epoch: None,
@@ -133,8 +118,22 @@ impl<TYPES: NodeType> TestStorage<TYPES> {
         self.inner.read().await.high_qc2.clone()
     }
 
-    pub async fn next_epoch_high_qc_cloned(&self) -> Option<NextEpochQuorumCertificate2<TYPES>> {
-        self.inner.read().await.next_epoch_high_qc2.clone()
+    /// Persist the locked QC, keeping the one with the highest view: a stale
+    /// write is a no-op, like the sequencer's `append_high_qc2`.
+    pub async fn store_high_qc2(&self, new_high_qc: QuorumCertificate2<TYPES>) -> Result<()> {
+        if self.should_return_err.load(Ordering::Relaxed) {
+            bail!("Failed to update high qc to storage");
+        }
+        Self::run_delay_settings_from_config(&self.delay_config).await;
+        let mut inner = self.inner.write().await;
+        if inner
+            .high_qc2
+            .as_ref()
+            .is_none_or(|current| new_high_qc.view_number() > current.view_number())
+        {
+            inner.high_qc2 = Some(new_high_qc);
+        }
+        Ok(())
     }
 
     pub async fn decided_upgrade_certificate(&self) -> Option<UpgradeCertificate<TYPES>> {
@@ -247,36 +246,6 @@ impl<TYPES: NodeType> Storage<TYPES> for TestStorage<TYPES> {
         Ok(())
     }
 
-    async fn append_proposal(
-        &self,
-        proposal: &Proposal<TYPES, QuorumProposal<TYPES>>,
-    ) -> Result<()> {
-        if self.should_return_err.load(Ordering::Relaxed) {
-            bail!("Failed to append Quorum proposal (1) to storage");
-        }
-        Self::run_delay_settings_from_config(&self.delay_config).await;
-        let mut inner = self.inner.write().await;
-        inner
-            .proposals
-            .insert(proposal.data.view_number, proposal.clone());
-        Ok(())
-    }
-
-    async fn append_proposal2(
-        &self,
-        proposal: &Proposal<TYPES, QuorumProposal2<TYPES>>,
-    ) -> Result<()> {
-        if self.should_return_err.load(Ordering::Relaxed) {
-            bail!("Failed to append Quorum proposal (2) to storage");
-        }
-        Self::run_delay_settings_from_config(&self.delay_config).await;
-        let mut inner = self.inner.write().await;
-        inner
-            .proposals2
-            .insert(proposal.data.view_number, proposal.clone());
-        Ok(())
-    }
-
     async fn append_proposal_wrapper(
         &self,
         proposal: &Proposal<TYPES, QuorumProposalWrapper<TYPES>>,
@@ -321,65 +290,6 @@ impl<TYPES: NodeType> Storage<TYPES> for TestStorage<TYPES> {
         Ok(())
     }
 
-    async fn update_high_qc(
-        &self,
-        new_high_qc: hotshot_types::simple_certificate::QuorumCertificate<TYPES>,
-    ) -> Result<()> {
-        if self.should_return_err.load(Ordering::Relaxed) {
-            bail!("Failed to update high qc to storage");
-        }
-        Self::run_delay_settings_from_config(&self.delay_config).await;
-        let mut inner = self.inner.write().await;
-        if let Some(ref current_high_qc) = inner.high_qc {
-            if new_high_qc.view_number() > current_high_qc.view_number() {
-                inner.high_qc = Some(new_high_qc);
-            }
-        } else {
-            inner.high_qc = Some(new_high_qc);
-        }
-        Ok(())
-    }
-
-    /// Update the current high QC in storage.
-    async fn update_eqc(
-        &self,
-        high_qc: QuorumCertificate2<TYPES>,
-        next_epoch_high_qc: NextEpochQuorumCertificate2<TYPES>,
-    ) -> Result<()> {
-        if self.should_return_err.load(Ordering::Relaxed) {
-            bail!("Failed to update eqc in storage");
-        }
-        Self::run_delay_settings_from_config(&self.delay_config).await;
-        let mut inner = self.inner.write().await;
-        if let Some((ref current_high_qc, _)) = inner.eqc {
-            if high_qc.view_number() > current_high_qc.view_number() {
-                inner.eqc = Some((high_qc, next_epoch_high_qc));
-            }
-        } else {
-            inner.eqc = Some((high_qc, next_epoch_high_qc));
-        }
-        Ok(())
-    }
-
-    async fn update_high_qc2(
-        &self,
-        new_high_qc: hotshot_types::simple_certificate::QuorumCertificate2<TYPES>,
-    ) -> Result<()> {
-        if self.should_return_err.load(Ordering::Relaxed) {
-            bail!("Failed to update high qc to storage");
-        }
-        Self::run_delay_settings_from_config(&self.delay_config).await;
-        let mut inner = self.inner.write().await;
-        if let Some(ref current_high_qc) = inner.high_qc2 {
-            if new_high_qc.view_number() > current_high_qc.view_number() {
-                inner.high_qc2 = Some(new_high_qc);
-            }
-        } else {
-            inner.high_qc2 = Some(new_high_qc);
-        }
-        Ok(())
-    }
-
     async fn update_state_cert(
         &self,
         state_cert: LightClientStateUpdateCertificateV2<TYPES>,
@@ -393,27 +303,6 @@ impl<TYPES: NodeType> Storage<TYPES> for TestStorage<TYPES> {
             .await
             .state_certs
             .insert(state_cert.epoch, state_cert);
-        Ok(())
-    }
-
-    async fn update_next_epoch_high_qc2(
-        &self,
-        new_next_epoch_high_qc: hotshot_types::simple_certificate::NextEpochQuorumCertificate2<
-            TYPES,
-        >,
-    ) -> Result<()> {
-        if self.should_return_err.load(Ordering::Relaxed) {
-            bail!("Failed to update next epoch high qc to storage");
-        }
-        Self::run_delay_settings_from_config(&self.delay_config).await;
-        let mut inner = self.inner.write().await;
-        if let Some(ref current_next_epoch_high_qc) = inner.next_epoch_high_qc2 {
-            if new_next_epoch_high_qc.view_number() > current_next_epoch_high_qc.view_number() {
-                inner.next_epoch_high_qc2 = Some(new_next_epoch_high_qc);
-            }
-        } else {
-            inner.next_epoch_high_qc2 = Some(new_next_epoch_high_qc);
-        }
         Ok(())
     }
 

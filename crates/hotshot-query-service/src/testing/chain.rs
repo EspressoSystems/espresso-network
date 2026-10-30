@@ -393,14 +393,14 @@ fn disperse(
 
 #[cfg(test)]
 mod test {
+    use std::marker::PhantomData;
+
+    use rstest_reuse::apply;
+
     use super::*;
-    use crate::{
-        availability::{AvailabilityDataSource, UpdateAvailabilityData},
-        node::NodeDataSource,
-        testing::{
-            consensus::{DataSourceLifeCycle, MockSqlDataSource},
-            mocks::mock_transaction,
-        },
+    use crate::testing::{
+        consensus::{DataSourceLifeCycle, TestableDataSource, sql_data_sources},
+        mocks::mock_transaction,
     };
 
     #[tokio::test]
@@ -422,10 +422,10 @@ mod test {
         assert_eq!(chain.tip().leaf.header().timestamp, 100);
     }
 
-    #[tokio::test]
-    async fn test_chain_round_trips_through_storage() {
-        let storage = MockSqlDataSource::create(0).await;
-        let ds = <MockSqlDataSource as DataSourceLifeCycle>::connect(&storage).await;
+    #[apply(sql_data_sources)]
+    async fn test_chain_round_trips_through_storage<D: TestableDataSource>(_d: PhantomData<D>) {
+        let storage = D::create(0).await;
+        let ds = <D as DataSourceLifeCycle>::connect(&storage).await;
 
         let mut chain = MockChain::new(2, 10).await;
         chain.push([mock_transaction(vec![1, 2, 3])]).await;

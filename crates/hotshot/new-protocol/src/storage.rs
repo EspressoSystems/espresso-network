@@ -400,8 +400,7 @@ impl<T: NodeType, S: NewProtocolStorage<T>> Storage<T, S> {
 #[async_trait]
 impl<T: NodeType> NewProtocolStorage<T> for TestStorage<T> {
     async fn append_high_qc2(&self, high_qc: Certificate1<T>) -> anyhow::Result<()> {
-        // `Certificate1<T>` is a `QuorumCertificate2<T>`; reuse the monotonic legacy slot.
-        StorageTrait::update_high_qc2(self, high_qc).await
+        self.store_high_qc2(high_qc).await
     }
 
     async fn load_high_qc2(&self) -> anyhow::Result<Option<Certificate1<T>>> {

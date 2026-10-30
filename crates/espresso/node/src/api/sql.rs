@@ -116,6 +116,12 @@ impl SequencerDataSource for DataSource {
             builder = builder.leaf_only();
         }
 
+        // Transaction and payload totals count from genesis, and a pruned node never has those
+        // blocks.
+        if opt.prune {
+            builder = builder.disable_aggregator();
+        }
+
         if let Some(delay) = active_fetch_delay {
             builder = builder.with_active_fetch_delay(delay);
         }
@@ -2135,9 +2141,28 @@ where
 #[cfg(any(test, feature = "testing"))]
 pub(crate) mod impl_testable_data_source {
 
+    use hotshot_query_service::{
+        availability::LeafQueryData,
+        data_source::{
+            Transaction as _,
+            storage::{
+                MerklizedStateHeightStorage as _, SerializableRetry as _,
+                UpdateAvailabilityStorage as _, pruning::PrunedHeightStorage as _,
+                sql::StorageConnectionType,
+            },
+        },
+        merklized_state::UpdateStateData,
+        serializable_retry,
+    };
+
     pub(crate) use super::super::persistence::tmp_options;
     use super::{super::qs::testing::TmpDb, *};
-    use crate::api::{self, data_source::testing::TestableSequencerDataSource};
+    use crate::api::{
+        self,
+        data_source::testing::{
+            DeferredMigration, TestableSequencerDataSource, TestableSqlDataSource,
+        },
+    };
 
     #[async_trait]
     impl TestableSequencerDataSource for DataSource {
@@ -2164,6 +2189,212 @@ pub(crate) mod impl_testable_data_source {
             opt.query_sql(Query::default(), tmp_options(storage))
         }
     }
+
+    #[async_trait]
+    impl TestableSqlDataSource for DataSource {
+        type SqlStorage = SqlStorage;
+
+        fn tmp_options(storage: &Self::Storage) -> SqlOptions {
+            tmp_options(storage)
+        }
+
+        fn sql_persistence_options(opt: SqlOptions) -> Self::Options {
+            Options::try_from(opt).unwrap()
+        }
+
+        async fn on_request_data_source(
+            storage: &Self::Storage,
+            provider: Provider,
+        ) -> anyhow::Result<Self> {
+            Config::try_from(&tmp_options(storage))?
+                .builder(provider)
+                .await?
+                .disable_proactive_fetching()
+                .disable_aggregator()
+                .build()
+                .await
+        }
+
+        async fn prune_state_below(ds: &Self, height: u64, cfg: &PrunerCfg) -> anyhow::Result<()> {
+            let sql: &SqlStorage = ds.as_ref();
+            sql.prune_state_below(height, 0, cfg).await
+        }
+
+        async fn connect(
+            opt: &SqlOptions,
+            connection_type: StorageConnectionType,
+        ) -> anyhow::Result<SqlStorage> {
+            Ok(SqlStorage::connect(Config::try_from(opt)?, connection_type).await?)
+        }
+
+        async fn local_block_height(db: &SqlStorage) -> anyhow::Result<u64> {
+            let mut tx = db.read().await?;
+            Ok(NodeStorage::<SeqTypes>::block_height(&mut tx).await? as u64)
+        }
+
+        // Read in this order because every move of the pruned height, up by a batch or down by
+        // the startup repair, lands below the head, and the head only grows, so a head read
+        // after the pruned height is always above it.
+        async fn state_heights(db: &SqlStorage) -> anyhow::Result<(Option<u64>, u64)> {
+            let mut tx = db.read().await?;
+            let pruned = tx.load_state_pruned_height().await?;
+            let head = tx.get_last_state_height().await? as u64;
+            Ok((pruned, head))
+        }
+
+        async fn state_start_height(db: &SqlStorage) -> anyhow::Result<Option<u64>> {
+            Ok(db.read().await?.load_state_start_height().await?)
+        }
+
+        async fn lowest_block_tree_node(db: &SqlStorage) -> anyhow::Result<u64> {
+            let mut tx = db.read().await?;
+            let lowest: Option<i64> =
+                sqlx::query_scalar("SELECT min(created) FROM block_merkle_tree")
+                    .fetch_one(tx.as_mut())
+                    .await?;
+            lowest
+                .map(|height| height as u64)
+                .context("no block tree nodes")
+        }
+
+        async fn insert_leaf(
+            db: &SqlStorage,
+            leaf: &LeafQueryData<SeqTypes>,
+        ) -> anyhow::Result<()> {
+            let mut tx = db.write().await?;
+            tx.insert_leaf(leaf).await?;
+            tx.commit().await
+        }
+
+        async fn set_last_state_height(db: &SqlStorage, height: u64) -> anyhow::Result<()> {
+            let mut tx = db.write().await?;
+            UpdateStateData::<SeqTypes, BlockMerkleTree, { BlockMerkleTree::ARITY }>::set_last_state_height(
+                &mut tx,
+                height as usize,
+            )
+            .await?;
+            tx.commit().await
+        }
+
+        async fn stamp_state_pruned_height(db: &SqlStorage, height: u64) -> anyhow::Result<()> {
+            let mut tx = db.write().await?;
+            tx.upsert(
+                "pruned_height",
+                ["id", "last_height"],
+                ["id"],
+                [(Transaction::<Write>::STATE_PRUNED_HEIGHT_ID, height as i64)],
+            )
+            .await?;
+            tx.commit().await
+        }
+
+        // The node may be writing new blocks meanwhile, so a serialization conflict is retried.
+        async fn prune_data_to(db: &SqlStorage, pruned: u64) -> anyhow::Result<()> {
+            serializable_retry!(db, || async {
+                let mut tx = db.write().await?;
+                tx.upsert(
+                    "pruned_height",
+                    ["id", "last_height"],
+                    ["id"],
+                    [(Transaction::<Write>::PRUNED_HEIGHT_ID, pruned as i64)],
+                )
+                .await?;
+                for statement in [
+                    "DELETE FROM transactions WHERE block_height <= $1",
+                    "DELETE FROM leaf2 WHERE height <= $1",
+                    "DELETE FROM header WHERE height <= $1",
+                ] {
+                    sqlx::query(statement)
+                        .bind(pruned as i64)
+                        .execute(tx.as_mut())
+                        .await?;
+                }
+                tx.commit().await
+            })
+            .await
+        }
+
+        async fn delete_data_between(db: &SqlStorage, from: u64, to: u64) -> anyhow::Result<()> {
+            let mut tx = db.write().await?;
+            for statement in [
+                "DELETE FROM transactions WHERE block_height > $1 AND block_height <= $2",
+                "DELETE FROM leaf2 WHERE height > $1 AND height <= $2",
+                "DELETE FROM header WHERE height > $1 AND height <= $2",
+            ] {
+                sqlx::query(statement)
+                    .bind(from as i64)
+                    .bind(to as i64)
+                    .execute(tx.as_mut())
+                    .await?;
+            }
+            tx.commit().await
+        }
+
+        async fn count_leaves_up_to(db: &SqlStorage, height: u64) -> anyhow::Result<i64> {
+            let mut tx = db.read().await?;
+            Ok(
+                sqlx::query_scalar("SELECT count(*) FROM leaf2 WHERE height <= $1")
+                    .bind(height as i64)
+                    .fetch_one(tx.as_mut())
+                    .await?,
+            )
+        }
+
+        async fn data_heights(db: &SqlStorage) -> anyhow::Result<(Option<u64>, Option<u64>)> {
+            let mut tx = db.read().await?;
+            let pruned = tx.load_pruned_height().await?;
+            let lowest: Option<i64> =
+                sqlx::query_scalar("SELECT min(height) FROM leaf2 WHERE height > 0")
+                    .fetch_one(tx.as_mut())
+                    .await?;
+            Ok((pruned, lowest.map(|height| height as u64)))
+        }
+
+        async fn insert_deferred_migration(
+            db: &SqlStorage,
+            migration: DeferredMigration,
+        ) -> anyhow::Result<()> {
+            let DeferredMigration {
+                name,
+                started_at,
+                completed_at,
+                last_offset,
+            } = migration;
+            let mut tx = db.write().await?;
+            sqlx::query(
+                "INSERT INTO deferred_migrations (name, started_at, completed_at, last_offset)
+                 VALUES ($1, $2, $3, $4)",
+            )
+            .bind(name)
+            .bind(started_at)
+            .bind(completed_at)
+            .bind(last_offset)
+            .execute(tx.as_mut())
+            .await?;
+            tx.commit().await
+        }
+
+        async fn reconstruct_state(
+            db: &SqlStorage,
+            instance: &NodeState,
+            from_height: u64,
+            to_view: ViewNumber,
+            fee_accounts: &[FeeAccount],
+            reward_accounts: &[RewardAccountV2],
+        ) -> anyhow::Result<(ValidatedState, Leaf2)> {
+            let mut tx = db.read().await?;
+            reconstruct_state(
+                instance,
+                db,
+                &mut tx,
+                from_height,
+                to_view,
+                fee_accounts,
+                reward_accounts,
+            )
+            .await
+        }
+    }
 }
 
 #[cfg(test)]
@@ -2178,6 +2409,7 @@ mod tests {
         v0_4::{REWARD_MERKLE_TREE_V2_HEIGHT, RewardMerkleTreeV2},
     };
     use hotshot_query_service::{
+        QueryError,
         data_source::{
             Transaction, VersionedDataSource,
             storage::{
@@ -2185,6 +2417,7 @@ mod tests {
             },
         },
         merklized_state::{MerklizedState, UpdateStateData},
+        node::NodeDataSource,
     };
     use hotshot_types::data::ViewNumber;
     use jf_merkle_tree_compat::{
@@ -2201,7 +2434,7 @@ mod tests {
         query_as,
     };
     use crate::{
-        api::RewardMerkleTreeDataSource,
+        api::{RewardMerkleTreeDataSource, data_source::SequencerDataSource},
         catchup::{CatchupStorage, SqlStateCatchup},
     };
 
@@ -2594,5 +2827,29 @@ mod tests {
             !table_sizes.is_empty(),
             "should have at least one table in the database"
         );
+    }
+
+    /// A pruned node runs without an aggregator, so it has no transaction or payload totals.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_pruned_node_has_no_totals() {
+        for prune in [false, true] {
+            let storage = TmpDb::init().await;
+            let mut opt = tmp_options(&storage);
+            opt.prune = prune;
+            let ds = super::DataSource::create(
+                opt.try_into().unwrap(),
+                super::Provider::default(),
+                false,
+            )
+            .await
+            .unwrap();
+
+            let res = NodeDataSource::count_transactions_in_range(&ds, .., None).await;
+            if prune {
+                assert!(matches!(res, Err(QueryError::NotFound)), "{res:?}");
+            } else {
+                assert_eq!(res.unwrap(), 0);
+            }
+        }
     }
 }

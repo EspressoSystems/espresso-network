@@ -205,3 +205,47 @@ def test_cluster_finality_counts_decisions_of_views_without_a_leader():
     trace[0][99] = {"leaf_decided": 5}
     _, skipped = leadertrace.cluster_finality_ms(trace, warmup=0)
     assert skipped == Counter({"no leader": 1})
+
+
+def test_read_cpu_and_net_difference_the_cumulative_counters(tmp_path: Path):
+    cpu = tmp_path / "cpu_node0.csv"
+    cpu.write_text("t_ns,usage_usec\n20,30\n10,10\n40,35\n")
+    assert leadertrace.read_cpu(cpu) == [(20, 10, 20), (40, 20, 5)]
+    net = tmp_path / "net_node0.csv"
+    net.write_text("t_ns,rx_bytes,tx_bytes\n2,5,9\n1,1,2\n")
+    assert leadertrace.read_net(net) == [(2, 1, 4, 7)]
+
+
+def test_read_cpu_drops_the_interval_of_a_counter_reset(tmp_path: Path):
+    cpu = tmp_path / "cpu_node0.csv"
+    cpu.write_text("t_ns,usage_usec\n10,100\n20,150\n30,5\n40,15\n")
+    assert leadertrace.read_cpu(cpu) == [(20, 10, 50), (40, 10, 10)]
+
+
+def test_read_net_drops_intervals_where_time_does_not_advance(tmp_path: Path):
+    net = tmp_path / "net_node0.csv"
+    net.write_text("t_ns,rx_bytes,tx_bytes\n10,0,0\n10,5,5\n20,9,9\n")
+    assert leadertrace.read_net(net) == [(20, 10, 4, 4)]
+
+
+def test_read_cpu_rejects_a_foreign_header(tmp_path: Path):
+    cpu = tmp_path / "cpu_node0.csv"
+    cpu.write_text("t,kind\n")
+    with pytest.raises(ValueError, match="header is not t_ns,usage_usec"):
+        leadertrace.read_cpu(cpu)
+
+
+def test_read_cpu_stops_at_a_truncated_final_row(tmp_path: Path):
+    cpu = tmp_path / "cpu_node0.csv"
+    cpu.write_text("t_ns,usage_usec\n10,10\n20,30\n30,")
+    assert leadertrace.read_cpu(cpu) == [(20, 10, 20)]
+    net = tmp_path / "net_node0.csv"
+    net.write_text("t_ns,rx_bytes,tx_bytes\n1,1,2\n2,5,9\n3,7")
+    assert leadertrace.read_net(net) == [(2, 1, 4, 7)]
+
+
+def test_read_cpu_rejects_a_broken_row_in_the_middle(tmp_path: Path):
+    cpu = tmp_path / "cpu_node0.csv"
+    cpu.write_text("t_ns,usage_usec\n10,10\n20\n30,40\n")
+    with pytest.raises(ValueError):
+        leadertrace.read_cpu(cpu)

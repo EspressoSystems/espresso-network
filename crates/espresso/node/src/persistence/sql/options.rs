@@ -164,6 +164,9 @@ pub struct Options {
     /// lack block proofs below that boundary, and fee accounts that no block after it touched. They
     /// stay incomplete after a switch to `--archive`: complete trees need a replay from genesis,
     /// which runs only on a database with no merklized state.
+    ///
+    /// A pruned node keeps no transaction or payload totals, which count from genesis: it does not
+    /// run the aggregator, and the routes that serve the totals return 404.
     #[clap(long, env = "ESPRESSO_NODE_DATABASE_PRUNE")]
     pub(crate) prune: bool,
 
@@ -252,6 +255,9 @@ pub struct Options {
     pub(crate) archive_full_state: bool,
 
     /// Turns on leaf only data storage
+    ///
+    /// A lightweight node keeps no transaction or payload totals: it does not run the aggregator,
+    /// and the routes that serve the totals return 404.
     #[clap(
         long,
         env = "ESPRESSO_NODE_LIGHTWEIGHT",

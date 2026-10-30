@@ -19,16 +19,13 @@ use tokio::time::sleep;
 use super::node_implementation::NodeType;
 use crate::{
     data::{
-        DaProposal, DaProposal2, EpochNumber, QuorumProposal, QuorumProposal2,
-        QuorumProposalWrapper, VidCommitment, VidDisperseShare, ViewNumber,
+        DaProposal, DaProposal2, EpochNumber, QuorumProposalWrapper, VidCommitment,
+        VidDisperseShare, ViewNumber,
     },
     drb::{DrbInput, DrbResult},
     event::HotShotAction,
     message::{Proposal, convert_proposal},
-    simple_certificate::{
-        LightClientStateUpdateCertificateV2, NextEpochQuorumCertificate2, QuorumCertificate,
-        QuorumCertificate2, UpgradeCertificate,
-    },
+    simple_certificate::{LightClientStateUpdateCertificateV2, UpgradeCertificate},
 };
 
 /// Abstraction for storing a variety of consensus payload datum.
@@ -53,23 +50,10 @@ pub trait Storage<TYPES: NodeType>: Send + Sync + Clone + 'static {
             .await
     }
     /// Add a proposal we sent to the store
-    async fn append_proposal(
-        &self,
-        proposal: &Proposal<TYPES, QuorumProposal<TYPES>>,
-    ) -> Result<()>;
-    /// Add a proposal we sent to the store
-    async fn append_proposal2(
-        &self,
-        proposal: &Proposal<TYPES, QuorumProposal2<TYPES>>,
-    ) -> Result<()>;
-    /// Add a proposal we sent to the store
     async fn append_proposal_wrapper(
         &self,
         proposal: &Proposal<TYPES, QuorumProposalWrapper<TYPES>>,
-    ) -> Result<()> {
-        self.append_proposal2(&convert_proposal(proposal.clone()))
-            .await
-    }
+    ) -> Result<()>;
     /// Record a HotShotAction taken.
     async fn record_action(
         &self,
@@ -77,39 +61,11 @@ pub trait Storage<TYPES: NodeType>: Send + Sync + Clone + 'static {
         epoch: Option<EpochNumber>,
         action: HotShotAction,
     ) -> Result<()>;
-    /// Update the current high QC in storage.
-    async fn update_high_qc(&self, high_qc: QuorumCertificate<TYPES>) -> Result<()>;
-    /// Update the current high QC in storage.
-    async fn update_high_qc2(&self, high_qc: QuorumCertificate2<TYPES>) -> Result<()> {
-        self.update_high_qc(high_qc.to_qc()).await
-    }
     /// Update the light client state update certificate in storage.
     async fn update_state_cert(
         &self,
         state_cert: LightClientStateUpdateCertificateV2<TYPES>,
     ) -> Result<()>;
-
-    async fn update_high_qc2_and_state_cert(
-        &self,
-        high_qc: QuorumCertificate2<TYPES>,
-        state_cert: LightClientStateUpdateCertificateV2<TYPES>,
-    ) -> Result<()> {
-        self.update_high_qc2(high_qc).await?;
-        self.update_state_cert(state_cert).await
-    }
-    /// Update the current high QC in storage.
-    async fn update_next_epoch_high_qc2(
-        &self,
-        _next_epoch_high_qc: NextEpochQuorumCertificate2<TYPES>,
-    ) -> Result<()>;
-
-    /// Update the current eQC in storage.
-    async fn update_eqc(
-        &self,
-        _high_qc: QuorumCertificate2<TYPES>,
-        _next_epoch_high_qc: NextEpochQuorumCertificate2<TYPES>,
-    ) -> Result<()>;
-
     /// Upgrade the current decided upgrade certificate in storage.
     async fn update_decided_upgrade_certificate(
         &self,
