@@ -26,7 +26,7 @@ use hotshot_types::{
 use rayon::prelude::{IntoParallelRefIterator as _, ParallelIterator as _};
 use tokio::{
     task::{AbortHandle, JoinSet, spawn_blocking},
-    time::sleep,
+    time::{Instant, sleep_until},
 };
 use tracing::{debug_span, error, warn};
 use versions::{NO_BUILDER_COMMITMENT_VERSION, Version};
@@ -157,6 +157,7 @@ pub struct BlockBuilderConfig {
     /// Views a leader remembers included transactions. Keep it at least `ttl`, or a node still
     /// resending a transaction gets it included again once leaders have forgotten it.
     pub dedup_window_size: u64,
+    /// How long a leader with an empty pool waits for transactions before it builds.
     pub empty_block_delay: Duration,
     /// How many upcoming leaders each transaction is sent to. A leader holds up to
     /// `fanout + 1` blocks of transactions for its later views.
@@ -198,6 +199,12 @@ struct PoolEntry<T: NodeType> {
     view: ViewNumber,
 }
 
+/// Block requests for one view, parked until the pool has transactions or `deadline` passes.
+struct DeferredBuild<T: NodeType> {
+    deadline: Instant,
+    requests: Vec<BlockAndHeaderRequest<T>>,
+}
+
 /// Memory charged per retry entry on top of its block size, so tiny
 /// transactions cannot outgrow `max_retry_bytes`. Doubled for table slack.
 const fn retry_entry_overhead<T: NodeType>() -> u64 {
@@ -232,6 +239,8 @@ pub struct BlockBuilder<T: NodeType> {
     /// payload is the same. It is the same whenever the new parent does not
     /// change how the payload is built.
     view_transactions: BTreeMap<ViewNumber, Arc<Vec<T::Transaction>>>,
+    /// Requests waiting for the pool to fill, by view.
+    deferred: BTreeMap<ViewNumber, DeferredBuild<T>>,
     tasks: JoinSet<Result<BlockBuilderOutput<T>, BlockError>>,
 }
 
@@ -257,11 +266,73 @@ impl<T: NodeType> BlockBuilder<T> {
             current_view: ViewNumber::genesis(),
             calculations: BTreeMap::new(),
             view_transactions: BTreeMap::new(),
+            deferred: BTreeMap::new(),
             tasks: JoinSet::new(),
         }
     }
 
+    /// Builds a block for `request` from the pool, or when the pool is empty, waits up to
+    /// `empty_block_delay` for transactions to arrive and builds from those. Without the
+    /// wait an idle network produces empty blocks as fast as consensus can run them,
+    /// flooding the coordinator's event queue, and a leader whose forwards are a moment
+    /// late proposes an empty block instead of them.
     pub fn request_block(&mut self, request: BlockAndHeaderRequest<T>) {
+        let view = request.view;
+        if let Some(deferred) = self.deferred.get_mut(&view) {
+            deferred.requests.push(request);
+            return;
+        }
+        if self.view_transactions.contains_key(&view) || self.pool_is_ready() {
+            self.build(request);
+            return;
+        }
+        self.deferred.insert(
+            view,
+            DeferredBuild {
+                deadline: Instant::now() + self.config.empty_block_delay,
+                requests: Vec::from([request]),
+            },
+        );
+    }
+
+    fn pool_is_ready(&self) -> bool {
+        self.leader_total_bytes > 0
+    }
+
+    /// Builds the parked requests of every view whose pool is ready.
+    fn build_ready(&mut self) {
+        while self.pool_is_ready() {
+            let Some(view) = self.deferred.keys().next().copied() else {
+                return;
+            };
+            self.build_deferred(view);
+        }
+    }
+
+    /// Builds the parked requests of every view whose wait is over.
+    fn build_due(&mut self) {
+        let now = Instant::now();
+        let due: Vec<ViewNumber> = self
+            .deferred
+            .iter()
+            .filter(|(_, d)| d.deadline <= now)
+            .map(|(view, _)| *view)
+            .collect();
+        for view in due {
+            self.build_deferred(view);
+        }
+    }
+
+    fn build_deferred(&mut self, view: ViewNumber) {
+        let Some(deferred) = self.deferred.remove(&view) else {
+            return;
+        };
+        for request in deferred.requests {
+            self.build(request);
+        }
+    }
+
+    fn build(&mut self, request: BlockAndHeaderRequest<T>) {
         let view = request.view;
         let parent_commitment = proposal_commitment(&request.parent_proposal);
         if self.calculations.contains_key(&(view, parent_commitment)) {
@@ -276,15 +347,7 @@ impl<T: NodeType> BlockBuilder<T> {
         let instance = self.instance.clone();
         let membership = self.membership.clone();
 
-        let empty_block_delay = self.config.empty_block_delay;
-
         let handle = self.tasks.spawn(async move {
-            // Without this an idle network produces empty blocks as fast as consensus can run
-            // them, flooding the coordinator's event queue.
-            if txs.is_empty() {
-                sleep(empty_block_delay).await;
-            }
-
             let validated_state =
                 T::ValidatedState::from_header(&request.parent_proposal.block_header);
             let (payload, metadata) =
@@ -386,16 +449,23 @@ impl<T: NodeType> BlockBuilder<T> {
         Some(entry.tx)
     }
 
+    /// The next built block. Resolves to `None` once nothing is building or waiting.
     pub async fn next(&mut self) -> Option<Result<BlockBuilderOutput<T>, BlockError>> {
         loop {
-            match self.tasks.join_next().await {
-                Some(Ok(result)) => return Some(result),
-                Some(Err(err)) => {
-                    if err.is_panic() {
+            let deadline = self.deferred.values().map(|d| d.deadline).min();
+            tokio::select! {
+                biased;
+                joined = self.tasks.join_next(), if !self.tasks.is_empty() => match joined {
+                    Some(Ok(result)) => return Some(result),
+                    Some(Err(err)) if err.is_panic() => {
                         error!(%err, "block builder task panicked");
-                    }
+                    },
+                    Some(Err(_)) | None => {},
                 },
-                None => return None,
+                _ = sleep_until(deadline.unwrap_or_else(Instant::now)), if deadline.is_some() => {
+                    self.build_due();
+                },
+                else => return None,
             }
         }
     }
@@ -410,6 +480,7 @@ impl<T: NodeType> BlockBuilder<T> {
             }
         });
         self.view_transactions = self.view_transactions.split_off(&view_number);
+        self.deferred = self.deferred.split_off(&view_number);
     }
 
     pub fn fanout(&self) -> NonZeroU64 {
@@ -524,6 +595,7 @@ impl<T: NodeType> BlockBuilder<T> {
             self.leader_order.insert((view, hash));
             self.leader_buffer.insert(hash, PoolEntry { tx, view });
         }
+        self.build_ready();
     }
 
     pub fn on_dedup_manifest(&mut self, manifest: DedupManifest<T>) {

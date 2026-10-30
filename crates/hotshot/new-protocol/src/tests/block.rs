@@ -15,11 +15,13 @@ use hotshot_types::{
 use versions::{NEW_PROTOCOL_VERSION, TIMEOUT_EPOCH_VERSION, Upgrade, Version};
 
 use crate::{
-    block::{BlockBuilder, BlockBuilderConfig, forward_budget},
+    block::{BlockAndHeaderRequest, BlockBuilder, BlockBuilderConfig, forward_budget},
     helpers::test_upgrade_lock,
-    message::{BlockMessage, DedupManifest, Message, MessageType, TransactionMessage, Validated},
+    message::{
+        BlockMessage, DedupManifest, Message, MessageType, Proposal, TransactionMessage, Validated,
+    },
     network::{MIN_MESSAGE_LIMIT, message_limit},
-    tests::common::utils::mock_membership,
+    tests::common::utils::{TestData, mock_membership},
 };
 
 fn tx(n: u8) -> TestTransaction {
@@ -660,4 +662,91 @@ async fn reconstructed_block_drops_later_copies_of_its_transactions() {
     b.on_transactions(tx_msg(view(2), Vec::from([tx(1)])));
     let txns = b.drain(view(2));
     assert!(txns.is_empty());
+}
+
+fn request(view: u64, parent: &Proposal<TestTypes>) -> BlockAndHeaderRequest<TestTypes> {
+    BlockAndHeaderRequest {
+        view: ViewNumber::new(view),
+        epoch: epoch(),
+        parent_proposal: parent.clone(),
+    }
+}
+
+/// A leader whose pool is empty builds from the transactions that reach it during the wait,
+/// as soon as they do.
+#[tokio::test]
+async fn empty_pool_builds_what_arrives_during_the_wait() {
+    let mut b = builder();
+    let test_data = TestData::new(2).await;
+    let start = std::time::Instant::now();
+    b.request_block(request(5, &test_data.views[0].proposal.data));
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    b.on_transactions(tx_msg(view(5), vec![tx(1), tx(2)]));
+
+    let Some(Ok(output)) = b.next().await else {
+        panic!("expected a block");
+    };
+    let elapsed = start.elapsed();
+    assert!(
+        elapsed < Duration::from_millis(400),
+        "built only after {elapsed:?}"
+    );
+    let mut hashes = output.manifest.hashes.clone();
+    hashes.sort();
+    let mut expected = vec![tx(1).commit(), tx(2).commit()];
+    expected.sort();
+    assert_eq!(hashes, expected);
+    assert!(b.next().await.is_none());
+}
+
+/// With nothing arriving, the empty block comes after the delay, not before.
+#[tokio::test]
+async fn empty_pool_builds_an_empty_block_after_the_delay() {
+    let mut b = builder();
+    let test_data = TestData::new(2).await;
+    let start = std::time::Instant::now();
+    b.request_block(request(5, &test_data.views[0].proposal.data));
+
+    let Some(Ok(output)) = b.next().await else {
+        panic!("expected a block");
+    };
+    let elapsed = start.elapsed();
+    assert!(
+        elapsed >= Duration::from_millis(450),
+        "built after only {elapsed:?}"
+    );
+    assert!(output.manifest.hashes.is_empty());
+}
+
+/// Requests for the same view that arrive during the wait are built from one take.
+#[tokio::test]
+async fn requests_parked_for_a_view_share_its_transactions() {
+    let mut b = builder();
+    let test_data = TestData::new(2).await;
+    b.request_block(request(5, &test_data.views[0].proposal.data));
+    b.request_block(request(5, &test_data.views[1].proposal.data));
+    b.on_transactions(tx_msg(view(5), vec![tx(1)]));
+
+    let mut outputs = Vec::new();
+    for _ in 0..2 {
+        let Some(Ok(output)) = b.next().await else {
+            panic!("expected a block");
+        };
+        outputs.push(output);
+    }
+    assert_eq!(outputs[0].payload_commitment, outputs[1].payload_commitment);
+    assert_eq!(outputs[0].manifest.hashes, vec![tx(1).commit()]);
+    assert!(b.next().await.is_none());
+}
+
+/// Garbage collection drops the parked requests of past views.
+#[tokio::test]
+async fn gc_drops_parked_requests() {
+    let mut b = builder();
+    let test_data = TestData::new(2).await;
+    b.request_block(request(5, &test_data.views[0].proposal.data));
+    b.gc(view(6));
+    b.on_transactions(tx_msg(view(6), vec![tx(1)]));
+    assert!(b.next().await.is_none());
+    assert_eq!(b.drain(view(6)), vec![tx(1)]);
 }
