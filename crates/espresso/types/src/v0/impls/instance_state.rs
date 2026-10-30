@@ -10,10 +10,14 @@ use async_lock::Mutex;
 use async_trait::async_trait;
 #[cfg(feature = "node")]
 use hotshot_contract_adapter::sol_types::{LightClientV3, StakeTableStateSol, StakeTableV3};
+#[cfg(feature = "node")]
+use hotshot_types::PeerConfig;
 use hotshot_types::{
     HotShotConfig, data::EpochNumber, drb::DrbResult, epoch_membership::EpochMembershipCoordinator,
     traits::states::InstanceState,
 };
+#[cfg(feature = "node")]
+use indexmap::IndexMap;
 use moka::future::Cache;
 use vbs::version::Version;
 
@@ -210,6 +214,22 @@ impl NodeState {
             ),
             commitment: StakeTableStateSol::from(voting_stake_table_state).into(),
         })
+    }
+
+    /// `ST(now)`: the active set from stake-table events up to the L1 finalized block, at
+    /// `version`, in `committee_peer_configs` order, with connect info.
+    #[cfg(feature = "node")]
+    pub async fn l1_finalized_peers(
+        &self,
+        version: Version,
+    ) -> anyhow::Result<IndexMap<PubKey, PeerConfig<SeqTypes>>> {
+        let finalized = self.l1_client.snapshot().await.finalized;
+        let l1_block = finalized.context("no L1 finalized block yet")?.number;
+        self.coordinator
+            .membership()
+            .fetcher()
+            .active_peers_at(l1_block, version)
+            .await
     }
 
     /// The oldest HotShot block height the light client contract still holds a commitment for, or

@@ -6773,7 +6773,7 @@ mod test {
     }
 
     /// A validator that starts with the LC contract at the voting epoch `lc_voting_epoch` while the
-    /// network is at epoch `NETWORK_EPOCH`, joins over cliquenet and votes.
+    /// network is at epoch `NETWORK_EPOCH`, is seeded by its post-start catchup and votes.
     ///
     /// Six validators run to `STOPPED_AT_EPOCH`, node 1 is stopped, the network runs on to
     /// `NETWORK_EPOCH`, the mock LC contract is set to the table of `lc_voting_epoch`, and node 1
@@ -6861,16 +6861,7 @@ mod test {
             )
             .await;
 
-        // The tables of the window are installed and the node decides with the network.
-        let coordinator = node.node_state().coordinator;
-        // `C` is `NETWORK_EPOCH` or one or two epochs later, so its window holds `NETWORK_EPOCH`.
-        assert!(
-            coordinator
-                .membership()
-                .snapshot(EpochNumber::new(NETWORK_EPOCH))
-                .is_some(),
-            "no stake table for epoch {NETWORK_EPOCH} after startup"
-        );
+        // The post-start catchup seeds the window from the LC contract.
         let mut events = node.event_stream();
         node.start_consensus().await;
         let height = network.server.decided_leaf().await.height();
@@ -6888,7 +6879,8 @@ mod test {
         .expect("the joined node did not decide with the network");
     }
 
-    /// Covers `TEST:fill-before-coordinator-ok`: fresh storage, LC contract one epoch behind.
+    /// Covers `TEST:fresh-validator-joins-over-cliquenet-ok`: fresh storage, LC contract one epoch
+    /// behind.
     #[apply(sql_data_sources)]
     async fn test_new_protocol_fresh_validator_joins_over_cliquenet<D: TestableSqlDataSource>(
         _d: PhantomData<D>,
@@ -6896,8 +6888,8 @@ mod test {
         validator_joins_over_cliquenet::<D>(6, true).await;
     }
 
-    /// Prover lag: the LC contract is at epoch 3 while the network is at epoch 7, so the fill
-    /// walks from epoch 3.
+    /// Prover lag: the LC contract is at epoch 3 while the network is at epoch 7, so the seed
+    /// at epoch 3 is followed by the walk.
     #[apply(sql_data_sources)]
     async fn test_new_protocol_fresh_validator_joins_with_prover_lag<D: TestableSqlDataSource>(
         _d: PhantomData<D>,
@@ -6906,7 +6898,7 @@ mod test {
     }
 
     /// `TEST:restart-more-than-lookahead-behind-reaches-current-ok`: stored anchor in epoch 2, the
-    /// network in epoch 7: the restart takes the fill and reaches the current epoch.
+    /// network in epoch 7: the restart is seeded and reaches the current epoch.
     #[apply(sql_data_sources)]
     async fn test_new_protocol_restart_more_than_lookahead_behind_reaches_current<
         D: TestableSqlDataSource,

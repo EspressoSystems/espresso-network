@@ -350,8 +350,8 @@ where
 
 /// The reads behind a header proof.
 ///
-/// Implemented over a fetching data source (the HTTP endpoint, which may fetch a missing header from
-/// peers) and over `SqlStorage` (the request responder, local reads only).
+/// Implemented over a fetching data source (the HTTP endpoint, which may fetch a missing header
+/// from peers) and over `SqlStorage` (the request responder, local reads only).
 #[async_trait]
 pub(crate) trait HeaderProofReads: Send + Sync {
     /// The header with `id`.

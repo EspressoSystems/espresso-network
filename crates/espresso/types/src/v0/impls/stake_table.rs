@@ -45,6 +45,8 @@ use hotshot_contract_adapter::{
     },
     stake_table::StakeTableSolError,
 };
+#[cfg(feature = "node")]
+use hotshot_types::PeerConfig;
 use hotshot_types::{
     addr::NetAddr,
     data::{EpochNumber, vid_disperse::VID_TARGET_TOTAL_STAKE},
@@ -66,6 +68,8 @@ use vbs::version::Version;
 
 #[cfg(feature = "node")]
 use super::L1Client;
+#[cfg(feature = "node")]
+use super::committee::committee_peer_configs;
 #[cfg(any(test, feature = "testing"))]
 use super::v0_3::DAMembers;
 use super::{
@@ -84,6 +88,8 @@ use crate::traits::EventsPersistenceRead;
 use crate::v0_1::L1Provider;
 #[cfg(feature = "node")]
 use crate::v0_3::{BLOCKS_PER_YEAR, INFLATION_RATE};
+#[cfg(feature = "node")]
+use crate::{PubKey, SeqTypes};
 use crate::{
     v0_1::{ChainId, DECAF_CHAIN_ID, MAINNET_CHAIN_ID},
     v0_3::{
@@ -1885,11 +1891,6 @@ impl Fetcher {
 
     #[cfg(feature = "node")]
     pub async fn fetch(&self, epoch: EpochNumber, header: &Header) -> anyhow::Result<ValidatorSet> {
-        let chain_config = *self.chain_config.lock().await;
-        let Some(address) = chain_config.stake_table_contract else {
-            bail!("No stake table contract address found in Chain config");
-        };
-
         let Some(l1_finalized_block_info) = header.l1_finalized() else {
             bail!(
                 "The epoch root for epoch {epoch} is missing the L1 finalized block info. This is \
@@ -1897,8 +1898,28 @@ impl Fetcher {
             );
         };
 
+        // Selection runs at the epoch root header's protocol version: that header's
+        // `next_stake_table_hash` was computed under the active-set rules in effect at the root,
+        // so events spanning an upgrade are intentionally evaluated under the root's rules rather
+        // than each event's wall-clock version.
+        self.validator_set_at(l1_finalized_block_info.number(), header.version())
+            .await
+    }
+
+    /// The validator set from stake table events up to `l1_block`, selected under `version`.
+    #[cfg(feature = "node")]
+    async fn validator_set_at(
+        &self,
+        l1_block: u64,
+        version: Version,
+    ) -> anyhow::Result<ValidatorSet> {
+        let chain_config = *self.chain_config.lock().await;
+        let Some(address) = chain_config.stake_table_contract else {
+            bail!("No stake table contract address found in Chain config");
+        };
+
         let events = match self
-            .fetch_and_store_stake_table_events(address, l1_finalized_block_info.number())
+            .fetch_and_store_stake_table_events(address, l1_block)
             .await
             .map_err(GetStakeTablesError::L1ClientFetchError)
         {
@@ -1908,16 +1929,29 @@ impl Fetcher {
             },
         };
 
-        // Selection runs at the epoch root header's protocol version: that header's
-        // `next_stake_table_hash` was computed under the active-set rules in effect at the root,
-        // so events spanning an upgrade are intentionally evaluated under the root's rules rather
-        // than each event's wall-clock version.
-        match ValidatorSet::from_l1_events(events.into_iter().map(|(_, e)| e), header.version()) {
+        match ValidatorSet::from_l1_events(events.into_iter().map(|(_, e)| e), version) {
             Ok(res) => Ok(res),
             Err(e) => {
                 bail!("failed to construct stake table {e:?}");
             },
         }
+    }
+
+    /// The active set from stake table events up to `l1_block`, selected under `version`, in
+    /// `committee_peer_configs` order.
+    #[cfg(feature = "node")]
+    pub async fn active_peers_at(
+        &self,
+        l1_block: u64,
+        version: Version,
+    ) -> anyhow::Result<IndexMap<PubKey, PeerConfig<SeqTypes>>> {
+        let set = self.validator_set_at(l1_block, version).await?;
+        Ok(committee_peer_configs(set.active_validators()))
+    }
+
+    /// The chain config this node holds: the genesis one, or the newest adopted from an epoch root.
+    pub async fn known_chain_config(&self) -> ChainConfig {
+        *self.chain_config.lock().await
     }
 
     /// Retrieve and verify `ChainConfig`

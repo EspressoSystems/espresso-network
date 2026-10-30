@@ -23,7 +23,7 @@ type Signer<T> = (
 );
 
 /// `leaves` re-signed by `signers`: every justify QC and a closing cert2, so
-/// `CertifiedLeafChain::verify` accepts it.
+/// `CertifiedLeafChain::verify_ancestors` accepts it.
 ///
 /// `leaves` must be consecutive blocks of one epoch (`epoch_height` blocks per epoch). The signers
 /// act as a quorum of unit stakes in the given order, and all of them sign. The oldest leaf keeps
@@ -190,6 +190,14 @@ mod tests {
 
     /// Consecutive unsigned leaves at `heights`.
     fn leaves(heights: std::ops::Range<u64>) -> Vec<Leaf2<TestTypes>> {
+        leaves_at_views(heights, |height| height)
+    }
+
+    /// Like `leaves`, with the view of each leaf given by `view`.
+    fn leaves_at_views(
+        heights: std::ops::Range<u64>,
+        view: impl Fn(u64) -> u64,
+    ) -> Vec<Leaf2<TestTypes>> {
         use hotshot_example_types::block_types::{TestBlockHeader, TestMetadata};
         use hotshot_types::{
             data::VidCommitment, simple_certificate::QuorumCertificate2, utils::BuilderCommitment,
@@ -221,7 +229,7 @@ mod tests {
                         random: 0,
                         version: EPOCH_VERSION,
                     },
-                    view_number: hotshot_types::data::ViewNumber::new(height),
+                    view_number: hotshot_types::data::ViewNumber::new(view(height)),
                     epoch: Some(EpochNumber::new(2)),
                     justify_qc,
                     next_epoch_justify_qc: None,
@@ -261,31 +269,42 @@ mod tests {
     }
 
     #[test]
-    fn certified_chain_verifies_with_given_quorum() {
+    fn verify_ancestors_ok() {
         let signers = signers(0..4);
         let table = table(&signers);
-        let leaf = chain(&signers)
-            .verify(21, EPOCH_HEIGHT, &lock(), |epoch| {
-                (epoch == EpochNumber::new(3)).then(|| table.clone())
-            })
+        let leaves = chain(&signers)
+            .verify_ancestors(22, EPOCH_HEIGHT, &lock(), &table)
             .unwrap();
-        assert_eq!(leaf.height(), 21);
+        let heights: Vec<_> = leaves.iter().map(|leaf| leaf.height()).collect();
+        assert_eq!(heights, vec![22, 23, 24]);
     }
 
     #[test]
-    fn certified_chain_rejects_missing_quorum() {
+    fn verify_ancestors_broken_link_fails() {
         let signers = signers(0..4);
-        let err = chain(&signers)
-            .verify(21, EPOCH_HEIGHT, &lock(), |_| None)
+        let mut chain = chain(&signers);
+        chain.leaves.retain(|leaf| leaf.height() != 23);
+        chain
+            .verify_ancestors(21, EPOCH_HEIGHT, &lock(), &table(&signers))
             .unwrap_err();
-        assert!(err.to_string().contains("no stake table"), "{err:#}");
     }
 
     #[test]
-    fn certified_chain_rejects_other_quorum() {
+    fn verify_ancestors_wrong_quorum_fails() {
         let other = table(&signers(10..14));
         chain(&signers(0..4))
-            .verify(21, EPOCH_HEIGHT, &lock(), |_| Some(other.clone()))
+            .verify_ancestors(21, EPOCH_HEIGHT, &lock(), &other)
             .unwrap_err();
+    }
+
+    #[test]
+    fn verify_ancestors_genesis_cert2_fails() {
+        let signers = signers(0..4);
+        let leaves = leaves_at_views(1..2, |_| 0);
+        let chain = sign_leaf_chain(leaves, EPOCH_HEIGHT, &signers, &lock());
+        let err = chain
+            .verify_ancestors(1, EPOCH_HEIGHT, &lock(), &table(&signers))
+            .unwrap_err();
+        assert!(err.to_string().contains("genesis view"), "{err:#}");
     }
 }

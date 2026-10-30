@@ -22,156 +22,177 @@ pub struct CertifiedLeafChain<T: NodeType> {
 }
 
 impl<T: NodeType> CertifiedLeafChain<T> {
-    /// The leaf at `expected_height`, verified with `quorum_for` per certificate epoch. Pure.
-    ///
-    /// `cert2` directly commits the newest leaf. By the indirect commit rule, every ancestor of
-    /// that leaf is finalized as well. This verifies `cert2`, then walks backward through the
-    /// certified leaf's parent links until it finds `expected_height`.
-    ///
-    /// View numbers are allowed to skip after timeouts, so the input may contain leaves that are
-    /// not on the certified ancestry path. Those leaves are ignored; every accepted step must
-    /// match the current leaf's justify QC, parent commitment, and block height.
-    ///
-    /// Entries come from `StakeTableEntries::from` and the threshold from
-    /// `supermajority_threshold(table.total_stakes())`.
-    pub fn verify(
+    /// Leaves from the cert2 leaf down to `lowest_height`, ascending. `cert2` is checked under
+    /// `quorum` with `upgrade_lock`; a genesis-view cert2 is rejected; each step down must match
+    /// the parent commitment and height. Justify QCs are not checked: cert2 plus the hash links
+    /// authenticate the ancestors. Pure.
+    pub fn verify_ancestors(
         self,
-        expected_height: u64,
+        lowest_height: u64,
         epoch_height: u64,
         upgrade_lock: &UpgradeLock<T>,
-        quorum_for: impl Fn(EpochNumber) -> Option<HSStakeTable<T>>,
-    ) -> anyhow::Result<Leaf2<T>> {
+        quorum: &HSStakeTable<T>,
+    ) -> anyhow::Result<Vec<Leaf2<T>>> {
         let Self { mut leaves, cert2 } = self;
-        leaves.sort_by_key(|l| l.view_number());
-        leaves.reverse();
-
+        leaves.sort_by_key(|leaf| std::cmp::Reverse(leaf.view_number()));
         ensure!(!leaves.is_empty(), "empty leaf chain");
-        let newest = &leaves[0];
-
-        ensure!(
-            cert2.view_number() > ViewNumber::genesis(),
-            "cert2 must not be the genesis view"
-        );
-        ensure!(
-            cert2.data.leaf_commit == newest.commit(),
-            "cert2 does not match the newest leaf in the chain"
-        );
-        ensure!(
-            cert2.data.block_number == newest.height(),
-            "cert2 block number does not match the newest leaf"
-        );
-        ensure!(
-            cert2.view_number() == newest.view_number(),
-            "cert2 view does not match the newest leaf"
-        );
-        let epoch = EpochNumber::new(epoch_from_block_number(
-            cert2.data.block_number,
-            epoch_height,
-        ));
-        ensure!(
-            cert2.data.epoch == epoch,
-            "cert2 epoch {} does not match epoch {epoch} derived from its block number {}",
-            cert2.data.epoch,
-            cert2.data.block_number
-        );
-
-        let table = quorum_for(epoch)
-            .ok_or_else(|| anyhow!("no stake table available for epoch {epoch}"))?;
-        let entries = StakeTableEntries::<T>::from(table.clone()).0;
+        check_cert2_finalizes(&cert2, &leaves[0], epoch_height)?;
+        let entries = StakeTableEntries::<T>::from(quorum.clone()).0;
         cert2.is_valid_cert(
             &entries,
-            supermajority_threshold(table.total_stakes()),
+            supermajority_threshold(quorum.total_stakes()),
             upgrade_lock,
         )?;
 
-        if newest.height() == expected_height {
-            return Ok(newest.clone());
-        }
-
-        let mut current = newest;
-        for leaf in leaves[1..].iter() {
-            let justify_qc = current.justify_qc();
-            if justify_qc.view_number() != leaf.view_number()
-                || justify_qc.data().leaf_commit != leaf.commit()
-            {
-                tracing::warn!(
-                    view = ?leaf.view_number(),
-                    expected_view = ?justify_qc.view_number(),
-                    "leaf is off the leafchain path; expected only after a view timeout"
-                );
+        let mut path = vec![leaves[0].clone()];
+        for leaf in &leaves[1..] {
+            let current = path.last().expect("path starts with the newest leaf");
+            if current.height() == lowest_height {
+                break;
+            }
+            if current.parent_commitment() != leaf.commit() {
                 continue;
             }
-            ensure!(
-                current.parent_commitment() == leaf.commit(),
-                "current leaf parent commitment does not match parent leaf"
-            );
             ensure!(
                 leaf.height().checked_add(1) == Some(current.height()),
                 "leaf heights do not chain"
             );
-            let qc_epoch = EpochNumber::new(epoch_from_block_number(leaf.height(), epoch_height));
-            ensure!(
-                justify_qc.data().epoch == Some(qc_epoch),
-                "justify QC claims epoch {:?} but certifies the leaf at height {} in epoch \
-                 {qc_epoch}",
-                justify_qc.data().epoch,
-                leaf.height()
-            );
-            if let Some(block_number) = justify_qc.data().block_number {
-                ensure!(
-                    block_number == leaf.height(),
-                    "justify QC claims block number {block_number} but certifies the leaf at \
-                     height {}",
-                    leaf.height()
-                );
-            }
-            let table = quorum_for(qc_epoch)
-                .ok_or_else(|| anyhow!("no stake table available for epoch {qc_epoch}"))?;
-            let entries = StakeTableEntries::<T>::from(table.clone()).0;
-            justify_qc.is_valid_cert(
-                &entries,
-                supermajority_threshold(table.total_stakes()),
-                upgrade_lock,
-            )?;
-            if leaf.height() == expected_height {
-                return Ok(leaf.clone());
-            }
-            current = leaf;
+            path.push(leaf.clone());
         }
-
-        Err(anyhow!(
-            "expected height was not found in the cert2-finalized chain"
-        ))
+        ensure!(
+            path.last().map(Leaf2::height) == Some(lowest_height),
+            "height {lowest_height} was not found in the cert2-finalized chain"
+        );
+        path.reverse();
+        Ok(path)
     }
 }
 
-/// Verify that a leaf is finalized by a new-protocol Certificate2, reading each epoch's stake
-/// table from `coordinator` (which starts catchup for a missing one).
+/// Checks that `cert2` is not of the genesis view and finalizes `newest` with a consistent
+/// epoch; returns that epoch. Signatures are not checked.
+fn check_cert2_finalizes<T: NodeType>(
+    cert2: &Certificate2<T>,
+    newest: &Leaf2<T>,
+    epoch_height: u64,
+) -> anyhow::Result<EpochNumber> {
+    ensure!(
+        cert2.view_number() > ViewNumber::genesis(),
+        "cert2 must not be the genesis view"
+    );
+    ensure!(
+        cert2.data.leaf_commit == newest.commit(),
+        "cert2 does not match the newest leaf in the chain"
+    );
+    ensure!(
+        cert2.data.block_number == newest.height(),
+        "cert2 block number does not match the newest leaf"
+    );
+    ensure!(
+        cert2.view_number() == newest.view_number(),
+        "cert2 view does not match the newest leaf"
+    );
+    let epoch = EpochNumber::new(epoch_from_block_number(
+        cert2.data.block_number,
+        epoch_height,
+    ));
+    ensure!(
+        cert2.data.epoch == epoch,
+        "cert2 epoch {} does not match epoch {epoch} derived from its block number {}",
+        cert2.data.epoch,
+        cert2.data.block_number
+    );
+    Ok(epoch)
+}
+
+/// Verify that a leaf is finalized by a new-protocol Certificate2.
 ///
-/// See [`CertifiedLeafChain::verify`] for the checks.
+/// `cert2` directly commits the newest leaf in `leaf_chain`. By the indirect
+/// commit rule, every ancestor of that leaf is finalized as well. This verifier
+/// validates `cert2`, then walks backward through the certified leaf's parent
+/// links until it finds `expected_height`.
+///
+/// View numbers are allowed to skip after timeouts, so the input may contain
+/// leaves that are not on the certified ancestry path. Those leaves are ignored;
+/// every accepted step must match the current leaf's justify QC, parent
+/// commitment, and block height.
 pub async fn verify_new_protocol_leaf_chain<T: NodeType>(
-    leaf_chain: Vec<Leaf2<T>>,
+    mut leaf_chain: Vec<Leaf2<T>>,
     coordinator: &EpochMembershipCoordinator<T>,
     expected_height: u64,
     upgrade_lock: &UpgradeLock<T>,
     cert2: Certificate2<T>,
 ) -> anyhow::Result<Leaf2<T>> {
-    CertifiedLeafChain {
-        leaves: leaf_chain,
-        cert2,
+    leaf_chain.sort_by_key(|l| l.view_number());
+    leaf_chain.reverse();
+
+    ensure!(!leaf_chain.is_empty(), "empty leaf chain");
+    let newest = &leaf_chain[0];
+
+    // Verify cert2 against the leaf chain before spawning a catchup request for its stake table.
+    let epoch = check_cert2_finalizes(&cert2, newest, *coordinator.epoch_height())?;
+
+    let membership = coordinator
+        .stake_table_for_epoch(Some(epoch))
+        .map_err(|err| anyhow!("no stake table available for epoch {epoch}: {err:?}"))?;
+    let entries = StakeTableEntries::<T>::from_iter(membership.stake_table()).0;
+    cert2.is_valid_cert(&entries, membership.success_threshold(), upgrade_lock)?;
+
+    if newest.height() == expected_height {
+        return Ok(newest.clone());
     }
-    .verify(
-        expected_height,
-        *coordinator.epoch_height(),
-        upgrade_lock,
-        |epoch| {
-            let membership = coordinator
-                .stake_table_for_epoch(Some(epoch))
-                .inspect_err(|err| tracing::debug!(%epoch, "no stake table: {err:?}"))
-                .ok()?;
-            Some(HSStakeTable::from_iter(membership.stake_table()))
-        },
-    )
+
+    let mut current = newest;
+    for leaf in leaf_chain[1..].iter() {
+        let justify_qc = current.justify_qc();
+        if justify_qc.view_number() != leaf.view_number()
+            || justify_qc.data().leaf_commit != leaf.commit()
+        {
+            tracing::warn!(
+                view = ?leaf.view_number(),
+                expected_view = ?justify_qc.view_number(),
+                "leaf is off the leafchain path; expected only after a view timeout"
+            );
+            continue;
+        }
+        ensure!(
+            current.parent_commitment() == leaf.commit(),
+            "current leaf parent commitment does not match parent leaf"
+        );
+        ensure!(
+            leaf.height().checked_add(1) == Some(current.height()),
+            "leaf heights do not chain"
+        );
+        let qc_epoch = EpochNumber::new(epoch_from_block_number(
+            leaf.height(),
+            *coordinator.epoch_height(),
+        ));
+        ensure!(
+            justify_qc.data().epoch == Some(qc_epoch),
+            "justify QC claims epoch {:?} but certifies the leaf at height {} in epoch {qc_epoch}",
+            justify_qc.data().epoch,
+            leaf.height()
+        );
+        if let Some(block_number) = justify_qc.data().block_number {
+            ensure!(
+                block_number == leaf.height(),
+                "justify QC claims block number {block_number} but certifies the leaf at height {}",
+                leaf.height()
+            );
+        }
+        let membership = coordinator
+            .stake_table_for_epoch(Some(qc_epoch))
+            .map_err(|err| anyhow!("no stake table available for epoch {qc_epoch}: {err:?}"))?;
+        let entries = StakeTableEntries::<T>::from_iter(membership.stake_table()).0;
+        justify_qc.is_valid_cert(&entries, membership.success_threshold(), upgrade_lock)?;
+        if leaf.height() == expected_height {
+            return Ok(leaf.clone());
+        }
+        current = leaf;
+    }
+
+    Err(anyhow!(
+        "expected height was not found in the cert2-finalized chain"
+    ))
 }
 
 #[cfg(test)]

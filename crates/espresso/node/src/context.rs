@@ -1,5 +1,5 @@
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, HashSet},
     fmt::{Debug, Display},
     future::Future,
     sync::Arc,
@@ -10,7 +10,7 @@ use anyhow::{Context, ensure};
 use async_lock::RwLock;
 use derivative::Derivative;
 use espresso_types::{
-    NodeState, Transaction, ValidatedState,
+    NodeState, PubKey, Transaction, ValidatedState,
     v0::traits::{EventConsumer as PersistenceEventConsumer, SequencerPersistence},
 };
 use futures::{
@@ -19,14 +19,14 @@ use futures::{
 };
 use hotshot_new_protocol::{
     coordinator::Coordinator,
-    network::{Cliquenet, NetworkError},
+    network::{Cliquenet, NetworkError, Role},
 };
 use hotshot_orchestrator::client::OrchestratorClient;
 use hotshot_types::{
     HotShotConfig, PeerConfig, ValidatorConfig,
     consensus::ConsensusMetricsValue,
     constants::EXTERNAL_EVENT_CHANNEL_SIZE,
-    data::{Leaf2, ViewNumber},
+    data::{EpochNumber, Leaf2, ViewNumber},
     drb::drb_difficulty_selector,
     epoch_membership::EpochMembershipCoordinator,
     initializer::{HotShotInitializer, load_start_epoch_info},
@@ -59,6 +59,7 @@ use crate::{
     catchup::ParallelStateCatchup,
     consensus_handle::ConsensusHandle,
     external_event_handler::ExternalEventHandler,
+    lc_contract_seed::LcContractSeed,
     proposal_fetcher::ProposalFetcherConfig,
     request_response::{
         RequestResponseProtocol,
@@ -66,8 +67,6 @@ use crate::{
         network::Sender as RequestResponseSender,
         recipient_source::RecipientSource,
     },
-    startup_catchup::{StartupCatchupParams, catch_up_over_cliquenet},
-    startup_cliquenet::CliquenetBeforeConsensus,
     state_signature::{self, DecidedLeaf, StateSignatureMemStorage, StateSigner},
 };
 pub(crate) type ConsensusNode<P> = Node<P>;
@@ -139,7 +138,6 @@ where
         stake_table_capacity: usize,
         event_consumer: impl PersistenceEventConsumer + 'static,
         proposal_fetcher_cfg: ProposalFetcherConfig,
-        startup_catchup: StartupCatchupParams,
         empty_block_delay: Duration,
         block_sizes: BTreeMap<Version, u64>,
     ) -> anyhow::Result<Self>
@@ -179,23 +177,37 @@ where
 
         let mut coordinator_network = coordinator_network(upgrade_lock.clone()).await?;
 
-        let current_epoch = catch_up_over_cliquenet(
-            &instance_state,
-            &mut CliquenetBeforeConsensus::new(
-                &mut coordinator_network,
-                validator_config.private_key.clone(),
-            ),
-            &membership_coordinator,
-            &startup_catchup,
-        )
-        .await
-        .context("startup catchup failed")?;
-        tracing::info!(%current_epoch, "Startup catchup complete");
-        // For cliquenet this dials the N-1/N/N+1 epoch window before consensus starts.
-        if let Err(err) = coordinator_network.apply_epoch(current_epoch, &membership_coordinator) {
-            tracing::warn!(%current_epoch, %err, "coordinator network apply_epoch failed at startup");
-        }
+        let seed = LcContractSeed::<ConsensusNode<P>, P>::new(
+            instance_state.clone(),
+            upgrade_lock.clone(),
+            stake_table_capacity,
+        );
+        let seed_requests = seed.requests_cell();
+        membership_coordinator.set_lc_contract_seed(seed.into_seed_fn());
 
+        // Dials the N-1/N/N+1 window of the stored anchor; a node behind it is seeded after start.
+        let anchor_epoch = initializer
+            .anchor_leaf()
+            .epoch(initializer.epoch_height())
+            .unwrap_or_else(EpochNumber::genesis);
+        if let Err(err) = coordinator_network.apply_epoch(anchor_epoch, &membership_coordinator) {
+            tracing::warn!(%anchor_epoch, %err, "coordinator apply_epoch failed at startup");
+        }
+        let l1_finalized_peers = dial_l1_finalized_peers(
+            &mut coordinator_network,
+            &instance_state,
+            &membership_coordinator,
+            anchor_epoch,
+            running_version(&upgrade_lock),
+            &validator_config.public_key,
+        )
+        .await?;
+        info!(
+            target: "announce::catchup",
+            %anchor_epoch,
+            l1_finalized_peers = l1_finalized_peers.len(),
+            "startup peers"
+        );
         // Restore the persisted lock so the new protocol resumes with the lock
         // it actually held, not the older decided-anchor QC.
         let locked_qc = persistence
@@ -287,6 +299,7 @@ where
                 memberships: membership_coordinator,
                 consensus_handle: consensus_handle.clone(),
                 public_key: validator_config.public_key,
+                l1_finalized_peers,
             },
             DataSource {
                 node_state: instance_state.clone(),
@@ -302,6 +315,12 @@ where
         // the request-response protocol will now retroactively be used anywhere we passed in the original struct (e.g. in consensus
         // itself)
         state_catchup.add_provider(Arc::new(request_response_protocol.clone()));
+        if seed_requests
+            .set(request_response_protocol.clone())
+            .is_err()
+        {
+            tracing::warn!("seed request-response protocol already set");
+        }
 
         // Create the external event handler
         let mut tasks = TaskList::default();
@@ -571,7 +590,7 @@ where
 
 /// A decided certificate at or below the configured base is from a completed upgrade; kept, it
 /// would make `UpgradeLock::version` fail once the target moves on.
-pub(crate) fn restored_upgrade_lock(
+fn restored_upgrade_lock(
     upgrade: versions::Upgrade,
     initializer: &HotShotInitializer<SeqTypes>,
 ) -> UpgradeLock<SeqTypes> {
@@ -583,6 +602,44 @@ pub(crate) fn restored_upgrade_lock(
     UpgradeLock::from_certificate(upgrade, &decided_upgrade_certificate)
 }
 
+/// Version the network runs: the decided upgrade's target, else the base.
+fn running_version(upgrade_lock: &UpgradeLock<SeqTypes>) -> Version {
+    upgrade_lock
+        .decided_upgrade_cert()
+        .map(|cert| cert.data.new_version)
+        .unwrap_or(upgrade_lock.upgrade().base)
+}
+
+/// Dials `ST(now)` (`NodeState::l1_finalized_peers`) and returns the dialed keys, without the own
+/// key, those with no connect info and those of the window of `anchor_epoch`, which `apply_epoch`
+/// dialed with the addresses of their held tables. The first `apply_epoch` of consensus drops the
+/// dialed peers outside its window.
+async fn dial_l1_finalized_peers(
+    network: &mut Cliquenet<SeqTypes>,
+    node_state: &NodeState,
+    coordinator: &EpochMembershipCoordinator<SeqTypes>,
+    anchor_epoch: EpochNumber,
+    version: Version,
+    own_key: &PubKey,
+) -> anyhow::Result<Vec<PubKey>> {
+    let peers = node_state.l1_finalized_peers(version).await?;
+    let window: HashSet<PubKey> = (anchor_epoch.saturating_sub(1)..=*anchor_epoch + 1)
+        .filter_map(|epoch| coordinator.epoch_peers(Some(EpochNumber::new(epoch))))
+        .flat_map(|infos| infos.into_keys())
+        .collect();
+    let targets = peers
+        .iter()
+        .filter(|(key, _)| *key != own_key && !window.contains(*key))
+        .filter_map(|(key, peer)| {
+            let info = peer.connect_info.clone()?;
+            Some((*key, (info.x25519_key.into(), info.p2p_addr)))
+        })
+        .collect::<Vec<_>>();
+    let dialed = targets.iter().map(|(key, _)| *key).collect();
+    network.add_peers(Role::Active, targets)?;
+    Ok(dialed)
+}
+
 async fn seed_membership(
     membership_coordinator: &EpochMembershipCoordinator<SeqTypes>,
     config: &HotShotConfig<SeqTypes>,
@@ -591,10 +648,7 @@ async fn seed_membership(
 ) {
     membership_coordinator.set_drb_difficulty_selector(drb_difficulty_selector(config));
 
-    let running_version = upgrade_lock
-        .decided_upgrade_cert()
-        .map(|cert| cert.data.new_version)
-        .unwrap_or(upgrade_lock.upgrade().base);
+    let running_version = running_version(upgrade_lock);
     let membership = membership_coordinator.membership();
     for da_committee in &config.da_committees {
         if running_version >= da_committee.start_version {

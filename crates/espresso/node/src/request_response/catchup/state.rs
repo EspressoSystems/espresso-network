@@ -263,6 +263,7 @@ where
 
         let result = if leaf_chain[0].block_header().version() >= NEW_PROTOCOL_VERSION {
             // New protocol: pair the leaf range with its finalizing cert2 for verification.
+            // Debt: the restored upgrade lock is ignored (PLAN-v2 I9).
             let upgrade_lock =
                 UpgradeLock::<SeqTypes>::new(versions::Upgrade::trivial(NEW_PROTOCOL_VERSION));
             // The chain terminates at the leaf the cert2 finalizes, so request that cert2 by its

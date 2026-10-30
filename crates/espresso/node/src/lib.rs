@@ -1,9 +1,9 @@
 mod external_event_handler;
+mod lc_contract_seed;
 mod message_compat_tests;
 mod proposal_fetcher;
 mod request_response;
 mod startup_catchup;
-mod startup_cliquenet;
 
 pub mod api;
 pub mod catchup;
@@ -22,7 +22,7 @@ pub mod state_cert;
 pub mod state_signature;
 pub mod util;
 
-use std::{collections::BTreeSet, fmt::Debug, marker::PhantomData, sync::Arc, time::Duration};
+use std::{fmt::Debug, marker::PhantomData, sync::Arc, time::Duration};
 
 use alloy::primitives::U256;
 use anyhow::Context;
@@ -64,7 +64,7 @@ use hotshot_orchestrator::client::{OrchestratorClient, get_complete_config};
 use hotshot_types::{
     ValidatorConfig,
     addr::NetAddr,
-    data::{EpochNumber, ViewNumber},
+    data::ViewNumber,
     epoch_membership::EpochMembershipCoordinator,
     light_client::{StateKeyPair, StateSignKey},
     network::NetworkConfig,
@@ -83,7 +83,6 @@ pub use options::Options;
 use proposal_fetcher::ProposalFetcherConfig;
 pub use run::main;
 use serde::{Deserialize, Serialize};
-use startup_catchup::{STARTUP_CATCHUP_DEADLINE, StartupCatchupParams};
 use tracing::info;
 use url::Url;
 use vbs::version::StaticVersion;
@@ -128,9 +127,6 @@ pub struct NetworkParams {
     pub private_state_key: StateSignKey,
     pub config_peers: Option<Vec<Url>>,
     pub catchup: CatchupParams,
-    /// Per-step bound of the validator startup catchup and of the follower epoch walk
-    /// (`bootstrap_epoch_window`).
-    pub bootstrap_epoch_catchup_timeout: Duration,
     /// The address to advertise as our public API's URL
     pub public_api_url: Option<Url>,
     /// Cliquenet network address.
@@ -446,21 +442,6 @@ where
         }
     };
 
-    let startup_catchup = StartupCatchupParams {
-        own_key: validator_config.public_key,
-        stake_table_capacity: genesis.stake_table.capacity,
-        candidate_versions: BTreeSet::from([version_upgrade.base, version_upgrade.target])
-            .into_iter()
-            .collect(),
-        step_timeout: network_params.bootstrap_epoch_catchup_timeout,
-        anchor_epoch: initializer
-            .anchor_leaf()
-            .epoch(initializer.epoch_height())
-            .unwrap_or_else(EpochNumber::genesis),
-        upgrade_lock: context::restored_upgrade_lock(version_upgrade, &initializer),
-        deadline: STARTUP_CATCHUP_DEADLINE,
-    };
-
     let mut ctx = SequencerContext::init(
         network_config,
         version_upgrade,
@@ -477,7 +458,6 @@ where
         genesis.stake_table.capacity,
         event_consumer,
         proposal_fetcher_config,
-        startup_catchup,
         empty_block_delay,
         block_sizes,
     )
@@ -656,13 +636,15 @@ where
 
     let state_catchup_providers = ParallelStateCatchup::new(&[], catchup.local_timeout)
         .with_fallback_delay(catchup.http_delay);
-    let state_peers = StatePeers::<SequencerApiVersion>::from_urls(
-        catchup.state_peers,
-        catchup.backoff,
-        catchup.base_timeout,
-        metrics,
-    );
-    state_catchup_providers.add_fallback_provider(Arc::new(state_peers));
+    if !catchup.state_peers.is_empty() {
+        let state_peers = StatePeers::<SequencerApiVersion>::from_urls(
+            catchup.state_peers,
+            catchup.backoff,
+            catchup.base_timeout,
+            metrics,
+        );
+        state_catchup_providers.add_fallback_provider(Arc::new(state_peers));
+    }
     // Local is a single attempt per call; remote providers retry.
     match persistence
         .clone()
@@ -751,10 +733,11 @@ where
     })
 }
 
-/// Scans the whole L1 contract history when nothing is persisted yet, so the startup catchup's
-/// event read (`catch_up_over_cliquenet`) and the `bootstrap_epoch_window` steps find the events in
-/// storage instead of loading that scan onto their first step. Untimed: an unreachable L1 panics
-/// after `l1_events_max_retry_duration`.
+/// Scans the whole L1 contract history when nothing is persisted yet, keeping every
+/// `bootstrap_epoch_window` step bounded to one epoch instead of loading that scan onto
+/// the first step, which silently downgrades the node to a stale epoch window when it
+/// exceeds its timeout. Untimed: an unreachable L1 panics after
+/// `l1_events_max_retry_duration`.
 pub(crate) async fn prefetch_stake_table_events(
     fetcher: &Fetcher,
     l1_client: &espresso_types::v0::L1Client,
@@ -858,7 +841,7 @@ async fn check_cliquenet_info_registered(
 pub mod testing {
     use std::{
         cmp::max,
-        collections::{BTreeMap, BTreeSet, HashMap, HashSet},
+        collections::{BTreeMap, HashMap, HashSet},
         net::Ipv4Addr,
         time::Duration,
     };
@@ -1675,9 +1658,6 @@ pub mod testing {
                 .load_consensus_state(node_state, upgrade)
                 .await
                 .unwrap();
-            let anchor_epoch = initializer.anchor_leaf().epoch(config.epoch_height);
-            let upgrade_lock = crate::context::restored_upgrade_lock(upgrade, &initializer);
-            let own_key = validator_config.public_key;
 
             SequencerContext::init(
                 NetworkConfig {
@@ -1700,17 +1680,6 @@ pub mod testing {
                 stake_table_capacity,
                 event_consumer,
                 Default::default(),
-                StartupCatchupParams {
-                    own_key,
-                    stake_table_capacity,
-                    candidate_versions: BTreeSet::from([upgrade.base, upgrade.target])
-                        .into_iter()
-                        .collect(),
-                    step_timeout: Duration::from_secs(2),
-                    anchor_epoch: anchor_epoch.unwrap_or_else(EpochNumber::genesis),
-                    upgrade_lock,
-                    deadline: Duration::from_secs(60),
-                },
                 Duration::from_millis(500),
                 BTreeMap::from([(upgrade.base, max_block_size)]),
             )
