@@ -2034,12 +2034,14 @@ async fn fee_header_dependencies<Mode: TransactionMode>(
         };
 
         accounts.insert(chain_config.fee_recipient);
-        accounts.extend(
-            get_l1_deposits(instance, header, parent, chain_config.fee_contract)
-                .await
-                .into_iter()
-                .map(|fee| fee.account()),
-        );
+        if header.version() < NEW_PROTOCOL_VERSION {
+            accounts.extend(
+                get_l1_deposits(instance, header, parent, chain_config.fee_contract)
+                    .await
+                    .into_iter()
+                    .map(|fee| fee.account()),
+            );
+        }
         accounts.extend(header.fee_info().accounts());
         parent = proposal;
     }
@@ -2389,12 +2391,12 @@ pub(crate) mod impl_testable_data_source {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
+    use std::{sync::Arc, time::Duration};
 
     use alloy::primitives::{Address, U256};
     use espresso_types::{
         BLOCK_MERKLE_TREE_HEIGHT, BackoffParams, BlockMerkleTree, FEE_MERKLE_TREE_HEIGHT,
-        FeeAccount, FeeAmount, FeeMerkleTree, NodeState,
+        FeeAccount, FeeAmount, FeeMerkleTree, L1BlockInfo, Leaf2, NodeState,
         v0::traits::StateCatchup,
         v0_4::{REWARD_MERKLE_TREE_V2_HEIGHT, RewardMerkleTreeV2},
     };
@@ -2415,17 +2417,20 @@ mod tests {
         ToTraversalPath, UniversalMerkleTreeScheme,
     };
     use light_client::testing::{leaf_chain, leaf_chain_with_upgrade};
-    use versions::{DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_REWARD_VERSION, Upgrade};
+    use tokio::time::timeout;
+    use versions::{
+        DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_REWARD_VERSION, NEW_PROTOCOL_VERSION, Upgrade,
+    };
 
     use super::{
         super::qs::{Config, SqlStorage, Transaction as SqlTransaction, Write, testing::TmpDb},
-        ArchiveStateGc, SeqTypes,
+        ArchiveStateGc, SeqTypes, fee_header_dependencies,
         impl_testable_data_source::tmp_options,
         query_as,
     };
     use crate::{
         api::{RewardMerkleTreeDataSource, data_source::SequencerDataSource},
-        catchup::{CatchupStorage, SqlStateCatchup},
+        catchup::{CatchupStorage, NullStateCatchup, SqlStateCatchup},
     };
 
     async fn write_fee_state(storage: &SqlStorage, account: FeeAccount, balance: u64, height: u64) {
@@ -2841,5 +2846,44 @@ mod tests {
                 assert_eq!(res.unwrap(), 0);
             }
         }
+    }
+
+    /// The STF credits L1 deposits only below `NEW_PROTOCOL_VERSION`, so the dependencies of later
+    /// headers must not query the L1. The mock L1 client points at a port that never answers and
+    /// the deposit fetch retries forever.
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_fee_dependencies_skip_l1_deposits_from_new_protocol() {
+        let db = TmpDb::init().await;
+        let storage = SqlStorage::connect(
+            Config::try_from(&tmp_options(&db)).unwrap(),
+            StorageConnectionType::Query,
+        )
+        .await
+        .unwrap();
+
+        let mut instance = NodeState::mock();
+        instance.chain_config.fee_contract = Some(Address::repeat_byte(0x42));
+        instance.genesis_header.chain_config = instance.chain_config;
+        let parent = Leaf2::genesis(&Default::default(), &instance, NEW_PROTOCOL_VERSION).await;
+        let mut leaf = parent.clone();
+        *leaf.block_header_mut().l1_finalized_mut() = Some(L1BlockInfo::default());
+        assert!(leaf.block_header().version() >= NEW_PROTOCOL_VERSION);
+
+        let mut tx = storage.read().await.unwrap();
+        let accounts = timeout(
+            Duration::from_secs(10),
+            fee_header_dependencies(
+                &mut NullStateCatchup::default(),
+                &mut tx,
+                &instance,
+                &parent,
+                [&leaf],
+            ),
+        )
+        .await
+        .expect("fee dependencies queried the L1 for deposits")
+        .unwrap();
+        assert!(accounts.contains(&instance.chain_config.fee_recipient));
     }
 }
