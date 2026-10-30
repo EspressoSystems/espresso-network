@@ -157,8 +157,13 @@ pub struct BlockBuilderConfig {
     /// Views a leader remembers included transactions. Keep it at least `ttl`, or a node still
     /// resending a transaction gets it included again once leaders have forgotten it.
     pub dedup_window_size: u64,
-    /// How long a leader with an empty pool waits for transactions before it builds.
+    /// How long a leader whose pool is under `min_pool_fraction` of a block, or empty, waits
+    /// for transactions before it builds.
     pub empty_block_delay: Duration,
+    /// The share of a block the pool must hold for a leader to build at once. Under it the
+    /// leader waits `empty_block_delay` for forwards and builds with what arrived. 0 waits
+    /// only on an empty pool.
+    pub min_pool_fraction: f64,
     /// How many upcoming leaders each transaction is sent to. A leader holds up to
     /// `fanout + 1` blocks of transactions for its later views.
     pub fanout: NonZeroU64,
@@ -173,6 +178,7 @@ impl Default for BlockBuilderConfig {
             ttl,
             dedup_window_size: ttl,
             empty_block_delay: Duration::from_millis(500),
+            min_pool_fraction: 0.0,
             fanout: NonZeroU64::new(2).expect("2 is non-zero"),
         }
     }
@@ -271,18 +277,18 @@ impl<T: NodeType> BlockBuilder<T> {
         }
     }
 
-    /// Builds a block for `request` from the pool, or when the pool is empty, waits up to
-    /// `empty_block_delay` for transactions to arrive and builds from those. Without the
-    /// wait an idle network produces empty blocks as fast as consensus can run them,
-    /// flooding the coordinator's event queue, and a leader whose forwards are a moment
-    /// late proposes an empty block instead of them.
+    /// Builds a block for `request` from the pool, or when the pool holds less than
+    /// `min_pool_fraction` of a block, waits up to `empty_block_delay` for transactions to
+    /// arrive and builds from those. Without the wait an idle network produces empty blocks
+    /// as fast as consensus can run them, flooding the coordinator's event queue, and a
+    /// leader whose forwards are a moment late proposes a near-empty block instead of them.
     pub fn request_block(&mut self, request: BlockAndHeaderRequest<T>) {
         let view = request.view;
         if let Some(deferred) = self.deferred.get_mut(&view) {
             deferred.requests.push(request);
             return;
         }
-        if self.view_transactions.contains_key(&view) || self.pool_is_ready() {
+        if self.view_transactions.contains_key(&view) || self.pool_is_ready(view) {
             self.build(request);
             return;
         }
@@ -295,16 +301,20 @@ impl<T: NodeType> BlockBuilder<T> {
         );
     }
 
-    fn pool_is_ready(&self) -> bool {
-        self.leader_total_bytes > 0
+    /// Whether the pool holds enough for a block of `view` to be built at once.
+    fn pool_is_ready(&self, view: ViewNumber) -> bool {
+        let min_bytes = (self.block_size(view) as f64 * self.config.min_pool_fraction) as u64;
+        self.leader_total_bytes > 0 && self.leader_total_bytes >= min_bytes
     }
 
-    /// Builds the parked requests of every view whose pool is ready.
+    /// Builds the parked requests of every view whose pool is ready, earliest view first.
     fn build_ready(&mut self) {
-        while self.pool_is_ready() {
-            let Some(view) = self.deferred.keys().next().copied() else {
-                return;
-            };
+        while let Some(view) = self
+            .deferred
+            .keys()
+            .find(|view| self.pool_is_ready(**view))
+            .copied()
+        {
             self.build_deferred(view);
         }
     }

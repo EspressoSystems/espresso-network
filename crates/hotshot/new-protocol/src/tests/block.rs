@@ -55,6 +55,7 @@ fn small_config() -> BlockBuilderConfig {
         ttl: 5,
         dedup_window_size: 3,
         empty_block_delay: Duration::from_millis(500),
+        min_pool_fraction: 0.0,
         fanout: NonZeroU64::MIN,
     }
 }
@@ -749,4 +750,60 @@ async fn gc_drops_parked_requests() {
     b.on_transactions(tx_msg(view(6), vec![tx(1)]));
     assert!(b.next().await.is_none());
     assert_eq!(b.drain(view(6)), vec![tx(1)]);
+}
+
+/// With a pool threshold, a leader holding less than that share of a block waits for more
+/// and builds as soon as the pool reaches it.
+#[tokio::test]
+async fn thin_pool_waits_for_the_threshold() {
+    let mut b = builder_with(BlockBuilderConfig {
+        min_pool_fraction: 0.5,
+        ..small_config()
+    });
+    let test_data = TestData::new(2).await;
+    let small = TestTransaction::new(vec![0; 64]);
+    let large = TestTransaction::new(vec![1; 256]);
+    b.on_transactions(tx_msg(view(5), vec![small.clone()]));
+    let start = std::time::Instant::now();
+    b.request_block(request(5, &test_data.views[0].proposal.data));
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    b.on_transactions(tx_msg(view(5), vec![large.clone()]));
+
+    let Some(Ok(output)) = b.next().await else {
+        panic!("expected a block");
+    };
+    let elapsed = start.elapsed();
+    assert!(
+        elapsed < Duration::from_millis(400),
+        "built only after {elapsed:?}"
+    );
+    let mut hashes = output.manifest.hashes.clone();
+    hashes.sort();
+    let mut expected = vec![small.commit(), large.commit()];
+    expected.sort();
+    assert_eq!(hashes, expected);
+}
+
+/// A pool still under the threshold when the delay passes is built as it is.
+#[tokio::test]
+async fn thin_pool_is_built_after_the_delay() {
+    let mut b = builder_with(BlockBuilderConfig {
+        min_pool_fraction: 0.5,
+        empty_block_delay: Duration::from_millis(100),
+        ..small_config()
+    });
+    let test_data = TestData::new(2).await;
+    b.on_transactions(tx_msg(view(5), vec![tx(1)]));
+    let start = std::time::Instant::now();
+    b.request_block(request(5, &test_data.views[0].proposal.data));
+
+    let Some(Ok(output)) = b.next().await else {
+        panic!("expected a block");
+    };
+    let elapsed = start.elapsed();
+    assert!(
+        elapsed >= Duration::from_millis(90),
+        "built after only {elapsed:?}"
+    );
+    assert_eq!(output.manifest.hashes, vec![tx(1).commit()]);
 }
