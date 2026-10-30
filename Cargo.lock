@@ -167,7 +167,7 @@ dependencies = [
  "alloy",
  "bincode",
  "ethers-core",
- "rand 0.8.6",
+ "rand 0.8.8",
  "serde",
 ]
 
@@ -190,7 +190,7 @@ dependencies = [
  "either",
  "k256",
  "once_cell",
- "rand 0.8.6",
+ "rand 0.8.8",
  "secp256k1 0.30.0",
  "serde",
  "serde_json",
@@ -464,7 +464,7 @@ dependencies = [
  "alloy-signer-local",
  "k256",
  "libc",
- "rand 0.8.6",
+ "rand 0.8.8",
  "serde_json",
  "tempfile",
  "thiserror 2.0.18",
@@ -732,7 +732,7 @@ dependencies = [
  "coins-bip32",
  "coins-bip39",
  "k256",
- "rand 0.8.6",
+ "rand 0.8.8",
  "thiserror 2.0.18",
  "zeroize",
 ]
@@ -1000,6 +1000,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "ark-bls12-381"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "be2ede2c0c96fa37d5d3484e8a59fec566c4a52b8c84bf993eaa6c67d7225a4c"
+dependencies = [
+ "ark-ec 0.6.0",
+ "ark-ff 0.6.0",
+ "ark-serialize 0.6.0",
+ "ark-std 0.6.0",
+]
+
+[[package]]
 name = "ark-bn254"
 version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1020,6 +1032,17 @@ dependencies = [
  "ark-ff 0.5.0",
  "ark-r1cs-std",
  "ark-std 0.5.0",
+]
+
+[[package]]
+name = "ark-bn254"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6bc66f96ebe2a17a499475b4f94791d379817592ef494171586967ffdc6f95db"
+dependencies = [
+ "ark-ec 0.6.0",
+ "ark-ff 0.6.0",
+ "ark-std 0.6.0",
 ]
 
 [[package]]
@@ -1109,6 +1132,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "ark-ec"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8352a2b2aedf6ba2cc38f7520fc51191d518dde96175c729af19f2d059f191c4"
+dependencies = [
+ "ahash 0.8.12",
+ "ark-ff 0.6.0",
+ "ark-poly 0.6.0",
+ "ark-serialize 0.6.0",
+ "ark-std 0.6.0",
+ "educe",
+ "fnv",
+ "hashbrown 0.17.1",
+ "itertools 0.14.0",
+ "num-bigint",
+ "num-integer",
+ "num-traits",
+ "zeroize",
+]
+
+[[package]]
 name = "ark-ed-on-bls12-377"
 version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1126,7 +1170,7 @@ version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ba93ca6e75e5f589c139e5a41ebd783ebf2153de0025cd2b00da2963929c92ec"
 dependencies = [
- "ark-bls12-381",
+ "ark-bls12-381 0.5.0",
  "ark-ec 0.5.0",
  "ark-ff 0.5.0",
  "ark-std 0.5.0",
@@ -1142,6 +1186,18 @@ dependencies = [
  "ark-ec 0.5.0",
  "ark-ff 0.5.0",
  "ark-std 0.5.0",
+]
+
+[[package]]
+name = "ark-ed-on-bn254"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a4585ccc828ac1a1c0973a6d859b8cd9ae6055a0ee943139c8e254dfd87d6f38"
+dependencies = [
+ "ark-bn254 0.6.0",
+ "ark-ec 0.6.0",
+ "ark-ff 0.6.0",
+ "ark-std 0.6.0",
 ]
 
 [[package]]
@@ -1217,6 +1273,7 @@ dependencies = [
  "educe",
  "num-bigint",
  "num-traits",
+ "rayon",
  "zeroize",
 ]
 
@@ -1341,6 +1398,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "ark-poly"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "75f55af10b672002b8d953e230282c51206842e20e5791a94432219b4201de5c"
+dependencies = [
+ "ahash 0.8.12",
+ "ark-ff 0.6.0",
+ "ark-serialize 0.6.0",
+ "ark-std 0.6.0",
+ "educe",
+ "fnv",
+ "hashbrown 0.17.1",
+]
+
+[[package]]
 name = "ark-poly-commit"
 version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1360,7 +1432,7 @@ dependencies = [
  "fnv",
  "merlin",
  "num-traits",
- "rand 0.8.6",
+ "rand 0.8.8",
  "rayon",
 ]
 
@@ -1439,6 +1511,7 @@ dependencies = [
  "ark-std 0.6.0",
  "digest 0.10.7",
  "num-bigint",
+ "rayon",
  "serde_with",
 ]
 
@@ -1489,9 +1562,9 @@ dependencies = [
 
 [[package]]
 name = "ark-srs"
-version = "0.3.4"
+version = "0.3.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "313bc6b77413d4c2ca1943ba310e8b1eff5fce6dbc3bfb37cf0484adcbcbfe69"
+checksum = "59706adf555372088e9acf99218a6c74503dec55581fae5952a59eaa67d35338"
 dependencies = [
  "anyhow",
  "ark-bn254 0.5.0",
@@ -1503,7 +1576,7 @@ dependencies = [
  "directories 5.0.1",
  "fs2",
  "hex-literal",
- "rand 0.8.6",
+ "rand 0.8.8",
  "sha2 0.10.9",
  "tracing",
  "tracing-subscriber 0.3.23",
@@ -1517,7 +1590,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1df2c09229cbc5a028b1d70e00fdb2acee28b1055dfb5ca73eea49c5a25c4e7c"
 dependencies = [
  "num-traits",
- "rand 0.8.6",
+ "rand 0.8.8",
 ]
 
 [[package]]
@@ -1527,7 +1600,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "94893f1e0c6eeab764ade8dc4c0db24caf4fe7cbbaafc0eba0a9030f447b5185"
 dependencies = [
  "num-traits",
- "rand 0.8.6",
+ "rand 0.8.8",
  "rayon",
 ]
 
@@ -1537,9 +1610,8 @@ version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "246a225cc6131e9ee4f24619af0f19d67761fff15d7ccc22e42b80846e69449a"
 dependencies = [
- "colored",
  "num-traits",
- "rand 0.8.6",
+ "rand 0.8.8",
  "rayon",
 ]
 
@@ -1549,8 +1621,10 @@ version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "367c9c827ed431bff6868b7aa926e05b16eb46603cc8b6e768e4a5553fa1d155"
 dependencies = [
+ "colored",
  "num-traits",
- "rand 0.8.6",
+ "rand 0.8.8",
+ "rayon",
 ]
 
 [[package]]
@@ -1908,7 +1982,7 @@ dependencies = [
  "bitflags 2.13.0",
  "cexpr",
  "clang-sys",
- "itertools 0.12.1",
+ "itertools 0.10.5",
  "log",
  "prettyplease",
  "proc-macro2",
@@ -2064,7 +2138,7 @@ version = "3.9.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6dee98b0db6a962de883bf5d20362dee4d7ca0d12fe39a7c6c73c844e1cd7c1f"
 dependencies = [
- "darling 0.20.11",
+ "darling 0.23.0",
  "ident_case",
  "prettyplease",
  "proc-macro2",
@@ -2468,7 +2542,7 @@ dependencies = [
  "quickcheck",
  "rand 0.10.1",
  "snow",
- "socket2 0.6.4",
+ "socket2",
  "thiserror 2.0.18",
  "tokio",
  "tokio-util",
@@ -2529,7 +2603,7 @@ dependencies = [
  "hmac 0.12.1",
  "once_cell",
  "pbkdf2",
- "rand 0.8.6",
+ "rand 0.8.8",
  "sha2 0.10.9",
  "thiserror 1.0.69",
 ]
@@ -3334,12 +3408,12 @@ name = "diff-test-hotshot"
 version = "0.1.0"
 dependencies = [
  "alloy",
- "ark-bn254 0.5.0",
- "ark-ec 0.5.0",
- "ark-ed-on-bn254",
- "ark-ff 0.5.0",
- "ark-poly 0.5.0",
- "ark-std 0.5.0",
+ "ark-bn254 0.6.0",
+ "ark-ec 0.6.0",
+ "ark-ed-on-bn254 0.6.0",
+ "ark-ff 0.6.0",
+ "ark-poly 0.6.0",
+ "ark-std 0.6.0",
  "clap 4.6.1",
  "espresso-types",
  "hotshot-contract-adapter",
@@ -3669,7 +3743,7 @@ version = "0.1.0"
 dependencies = [
  "aide",
  "anyhow",
- "ark-serialize 0.5.0",
+ "ark-serialize 0.6.0",
  "async-trait",
  "axum",
  "base64 0.22.1",
@@ -3725,7 +3799,7 @@ dependencies = [
  "hotshot-contract-adapter",
  "hotshot-types",
  "http-client",
- "rand 0.8.6",
+ "rand 0.8.8",
  "serde",
  "serde_json",
  "tempfile",
@@ -3741,9 +3815,9 @@ dependencies = [
 name = "espresso-crypto-helper"
 version = "0.1.0"
 dependencies = [
- "ark-ed-on-bn254",
- "ark-ff 0.5.0",
- "ark-serialize 0.5.0",
+ "ark-ed-on-bn254 0.6.0",
+ "ark-ff 0.6.0",
+ "ark-serialize 0.6.0",
  "committable",
  "espresso-types",
  "hotshot-types",
@@ -3796,7 +3870,7 @@ dependencies = [
  "http-wire",
  "itertools 0.14.0",
  "jf-merkle-tree-compat",
- "rand 0.8.6",
+ "rand 0.8.8",
  "rstest",
  "serde",
  "serde_json",
@@ -3822,7 +3896,7 @@ dependencies = [
  "derivative",
  "dotenvy",
  "hotshot-types",
- "rand 0.8.6",
+ "rand 0.8.8",
  "tagged-base64",
  "tempfile",
  "tracing",
@@ -3844,8 +3918,8 @@ version = "0.1.0"
 dependencies = [
  "alloy",
  "anyhow",
- "ark-ff 0.5.0",
- "ark-serialize 0.5.0",
+ "ark-ff 0.6.0",
+ "ark-serialize 0.6.0",
  "async-broadcast",
  "async-channel",
  "async-lock",
@@ -3905,7 +3979,7 @@ dependencies = [
  "prometheus",
  "prost",
  "prost-types",
- "rand 0.8.6",
+ "rand 0.8.8",
  "rand_chacha 0.3.1",
  "rand_distr",
  "request-response",
@@ -3963,7 +4037,7 @@ name = "espresso-telemetry"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "ark-serialize 0.5.0",
+ "ark-serialize 0.6.0",
  "axum",
  "base64 0.22.1",
  "clap 4.6.1",
@@ -3978,7 +4052,7 @@ dependencies = [
  "prometheus",
  "prost",
  "prost-build",
- "rand 0.8.6",
+ "rand 0.8.8",
  "reqwest 0.12.28",
  "serde",
  "serde_json",
@@ -4000,9 +4074,9 @@ dependencies = [
  "alloy-compat",
  "alloy-rlp",
  "anyhow",
- "ark-ec 0.5.0",
- "ark-serialize 0.5.0",
- "ark-std 0.5.0",
+ "ark-ec 0.6.0",
+ "ark-serialize 0.6.0",
+ "ark-std 0.6.0",
  "async-broadcast",
  "async-lock",
  "async-trait",
@@ -4045,7 +4119,7 @@ dependencies = [
  "paste",
  "pretty_assertions",
  "proptest",
- "rand 0.8.6",
+ "rand 0.8.8",
  "rand_chacha 0.3.1",
  "rayon",
  "rstest",
@@ -4082,7 +4156,7 @@ version = "0.1.0"
 dependencies = [
  "alloy",
  "anyhow",
- "ark-serialize 0.5.0",
+ "ark-serialize 0.6.0",
  "clap 4.6.1",
  "committable",
  "log-panics",
@@ -4172,7 +4246,7 @@ dependencies = [
  "k256",
  "num_enum",
  "open-fastrlp",
- "rand 0.8.6",
+ "rand 0.8.8",
  "rlp",
  "serde",
  "serde_json",
@@ -4276,7 +4350,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "835c052cb0c08c1acf6ffd71c022172e18723949c8282f2b9f27efbc51e64534"
 dependencies = [
  "byteorder",
- "rand 0.8.6",
+ "rand 0.8.8",
  "rustc-hex",
  "static_assertions",
 ]
@@ -4849,13 +4923,13 @@ version = "0.1.0"
 dependencies = [
  "alloy",
  "anyhow",
- "ark-bn254 0.5.0",
- "ark-ec 0.5.0",
- "ark-ed-on-bn254",
- "ark-ff 0.5.0",
- "ark-poly 0.5.0",
- "ark-serialize 0.5.0",
- "ark-std 0.5.0",
+ "ark-bn254 0.6.0",
+ "ark-ec 0.6.0",
+ "ark-ed-on-bn254 0.6.0",
+ "ark-ff 0.6.0",
+ "ark-poly 0.6.0",
+ "ark-serialize 0.6.0",
+ "ark-std 0.6.0",
  "bincode",
  "derive_more 2.1.1",
  "hotshot-types",
@@ -4868,7 +4942,7 @@ dependencies = [
  "num-bigint",
  "num-traits",
  "proptest",
- "rand 0.8.6",
+ "rand 0.8.8",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
@@ -4892,7 +4966,7 @@ dependencies = [
  "hotshot-utils",
  "jf-advz",
  "parking_lot",
- "rand 0.8.6",
+ "rand 0.8.8",
  "reqwest 0.12.28",
  "serde",
  "serde_json",
@@ -4927,7 +5001,7 @@ dependencies = [
  "hotshot-utils",
  "parking_lot",
  "quickcheck",
- "rand 0.8.6",
+ "rand 0.8.8",
  "rayon",
  "serde",
  "serde_bytes",
@@ -4997,7 +5071,7 @@ version = "0.1.76"
 dependencies = [
  "alloy",
  "anyhow",
- "ark-serialize 0.5.0",
+ "ark-serialize 0.6.0",
  "async-lock",
  "async-trait",
  "atomic_store",
@@ -5030,7 +5104,7 @@ dependencies = [
  "log",
  "pretty_assertions",
  "prometheus",
- "rand 0.8.6",
+ "rand 0.8.8",
  "refinery",
  "refinery-core",
  "rstest",
@@ -5057,7 +5131,7 @@ name = "hotshot-query-service-types"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "ark-serialize 0.5.0",
+ "ark-serialize 0.6.0",
  "bincode",
  "committable",
  "derivative",
@@ -5086,13 +5160,13 @@ version = "0.1.0"
 dependencies = [
  "alloy",
  "anyhow",
- "ark-bn254 0.5.0",
- "ark-ec 0.5.0",
- "ark-ed-on-bn254",
- "ark-ff 0.5.0",
- "ark-serialize 0.5.0",
+ "ark-bn254 0.6.0",
+ "ark-ec 0.6.0",
+ "ark-ed-on-bn254 0.6.0",
+ "ark-ff 0.6.0",
+ "ark-serialize 0.6.0",
  "ark-srs",
- "ark-std 0.5.0",
+ "ark-std 0.6.0",
  "axum",
  "clap 4.6.1",
  "displaydoc",
@@ -5137,12 +5211,12 @@ dependencies = [
  "alloy-primitives",
  "alloy-rlp",
  "anyhow",
- "ark-bn254 0.5.0",
- "ark-ed-on-bn254",
- "ark-ff 0.5.0",
- "ark-serialize 0.5.0",
+ "ark-bn254 0.6.0",
+ "ark-ed-on-bn254 0.6.0",
+ "ark-ff 0.6.0",
+ "ark-serialize 0.6.0",
  "ark-srs",
- "ark-std 0.5.0",
+ "ark-std 0.6.0",
  "async-broadcast",
  "async-trait",
  "bincode",
@@ -5171,7 +5245,7 @@ dependencies = [
  "mnemonic",
  "parking_lot",
  "quickcheck",
- "rand 0.8.6",
+ "rand 0.8.8",
  "rand_chacha 0.3.1",
  "serde",
  "serde-inline-default",
@@ -5391,7 +5465,7 @@ dependencies = [
  "libc",
  "percent-encoding",
  "pin-project-lite",
- "socket2 0.5.10",
+ "socket2",
  "system-configuration",
  "tokio",
  "tower-service",
@@ -5789,7 +5863,7 @@ version = "0.4.2"
 source = "git+https://github.com/EspressoSystems/jellyfish?tag=jf-merkle-tree-v0.4.2#0d86d16d47e07cf9fe8934dfda4865a5c37d648f"
 dependencies = [
  "ark-bls12-377",
- "ark-bls12-381",
+ "ark-bls12-381 0.5.0",
  "ark-bn254 0.5.0",
  "ark-ec 0.5.0",
  "ark-ff 0.5.0",
@@ -5820,7 +5894,7 @@ version = "0.3.1"
 source = "git+https://github.com/EspressoSystems/jellyfish-compat?tag=jf-merkle-tree-compat-v0.3.1#4b935eeb59e404b38f823694eb488c1377468f36"
 dependencies = [
  "ark-bls12-377",
- "ark-bls12-381",
+ "ark-bls12-381 0.5.0",
  "ark-bn254 0.5.0",
  "ark-ec 0.5.0",
  "ark-ff 0.5.0",
@@ -5932,7 +6006,7 @@ name = "jf-poseidon2"
 version = "0.2.0"
 source = "git+https://github.com/EspressoSystems/jellyfish?tag=jf-poseidon2-v0.2.0#f1538793f7f0e391495cb17bbb0c8703ec5f689d"
 dependencies = [
- "ark-bls12-381",
+ "ark-bls12-381 0.5.0",
  "ark-bn254 0.5.0",
  "ark-ff 0.5.0",
  "ark-std 0.5.0",
@@ -5959,7 +6033,7 @@ version = "0.5.0"
 source = "git+https://github.com/EspressoSystems/jellyfish?tag=jf-relation-v0.5.0#b33995b68641a2742e4ad2c05ee4e15621ff43b0"
 dependencies = [
  "ark-bls12-377",
- "ark-bls12-381",
+ "ark-bls12-381 0.5.0",
  "ark-bn254 0.5.0",
  "ark-bw6-761",
  "ark-ec 0.5.0",
@@ -5985,7 +6059,7 @@ version = "0.5.0"
 source = "git+https://github.com/EspressoSystems/jellyfish?branch=jf-relation-v0.5.0-compat#11e54d4e97858610d5f423bac2603a331c0046f6"
 dependencies = [
  "ark-bls12-377",
- "ark-bls12-381",
+ "ark-bls12-381 0.5.0",
  "ark-bn254 0.5.0",
  "ark-bw6-761",
  "ark-ec 0.5.0",
@@ -6011,13 +6085,13 @@ version = "0.3.0"
 source = "git+https://github.com/EspressoSystems/jellyfish?tag=jf-rescue-v0.3.0#e6cc2704a91bca87152e39bd4bc01288f0c5f265"
 dependencies = [
  "ark-bls12-377",
- "ark-bls12-381",
+ "ark-bls12-381 0.5.0",
  "ark-bn254 0.5.0",
  "ark-bw6-761",
  "ark-crypto-primitives",
  "ark-ed-on-bls12-377",
  "ark-ed-on-bls12-381",
- "ark-ed-on-bn254",
+ "ark-ed-on-bn254 0.5.0",
  "ark-ff 0.5.0",
  "ark-std 0.5.0",
  "displaydoc",
@@ -6037,13 +6111,13 @@ version = "0.3.0"
 source = "git+https://github.com/EspressoSystems/jellyfish?branch=jf-relation-v0.5.0-compat#11e54d4e97858610d5f423bac2603a331c0046f6"
 dependencies = [
  "ark-bls12-377",
- "ark-bls12-381",
+ "ark-bls12-381 0.5.0",
  "ark-bn254 0.5.0",
  "ark-bw6-761",
  "ark-crypto-primitives",
  "ark-ed-on-bls12-377",
  "ark-ed-on-bls12-381",
- "ark-ed-on-bn254",
+ "ark-ed-on-bn254 0.5.0",
  "ark-ff 0.5.0",
  "ark-std 0.5.0",
  "displaydoc",
@@ -6062,7 +6136,7 @@ name = "jf-signature"
 version = "0.4.0"
 source = "git+https://github.com/EspressoSystems/jellyfish?branch=jf-relation-v0.5.0-compat#11e54d4e97858610d5f423bac2603a331c0046f6"
 dependencies = [
- "ark-bls12-381",
+ "ark-bls12-381 0.5.0",
  "ark-bn254 0.5.0",
  "ark-ec 0.5.0",
  "ark-ff 0.5.0",
@@ -6092,7 +6166,7 @@ name = "jf-signature"
 version = "0.4.2"
 source = "git+https://github.com/EspressoSystems/jellyfish?tag=jf-signature-v0.4.2#b1581c26f7195962d17fc5ff3768ac55db610ca1"
 dependencies = [
- "ark-bls12-381",
+ "ark-bls12-381 0.5.0",
  "ark-bn254 0.5.0",
  "ark-ec 0.5.0",
  "ark-ff 0.5.0",
@@ -6371,7 +6445,7 @@ dependencies = [
  "jf-merkle-tree-compat",
  "light-client",
  "pretty_assertions",
- "rand 0.8.6",
+ "rand 0.8.8",
  "rstest",
  "rstest_reuse",
  "serde",
@@ -6805,7 +6879,7 @@ dependencies = [
  "num-integer",
  "num-iter",
  "num-traits",
- "rand 0.8.6",
+ "rand 0.8.8",
  "smallvec",
  "zeroize",
 ]
@@ -7776,7 +7850,7 @@ version = "0.14.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "03da047801ff44bb6a4d407d4860c05fd70bb81714e6b2f3812603d5b145b042"
 dependencies = [
- "heck 0.4.1",
+ "heck 0.5.0",
  "itertools 0.14.0",
  "log",
  "multimap",
@@ -7863,7 +7937,7 @@ dependencies = [
  "quinn-udp",
  "rustc-hash",
  "rustls",
- "socket2 0.5.10",
+ "socket2",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
@@ -7902,7 +7976,7 @@ dependencies = [
  "cfg_aliases",
  "libc",
  "once_cell",
- "socket2 0.5.10",
+ "socket2",
  "tracing",
  "windows-sys 0.52.0",
 ]
@@ -7936,9 +8010,9 @@ checksum = "dc33ff2d4973d518d823d61aa239014831e521c75da58e3df4840d3f47749d09"
 
 [[package]]
 name = "rand"
-version = "0.8.6"
+version = "0.8.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5ca0ecfa931c29007047d1bc58e623ab12e5590e8c7cc53200d5202b69266d8a"
+checksum = "e058c7de0b26af77780c769414d6257830bb240f3c38477dbc2c16e5f54d6d4c"
 dependencies = [
  "libc",
  "rand_chacha 0.3.1",
@@ -8020,7 +8094,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32cb0b9bc82b0a0876c2dd994a7e7a2683d3e7390ca40e6886785ef0c7e3ee31"
 dependencies = [
  "num-traits",
- "rand 0.8.6",
+ "rand 0.8.8",
 ]
 
 [[package]]
@@ -8240,7 +8314,7 @@ dependencies = [
  "derive_more 2.1.1",
  "hotshot-types",
  "parking_lot",
- "rand 0.8.6",
+ "rand 0.8.8",
  "serde",
  "thiserror 2.0.18",
  "tokio",
@@ -8455,7 +8529,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b3a8fb4672e840a587a66fc577a5491375df51ddb88f2a2c2a792598c326fe14"
 dependencies = [
  "quote",
- "rand 0.8.6",
+ "rand 0.8.8",
  "syn 2.0.118",
 ]
 
@@ -8479,7 +8553,7 @@ dependencies = [
  "parity-scale-codec",
  "primitive-types 0.12.2",
  "proptest",
- "rand 0.8.6",
+ "rand 0.8.8",
  "rand 0.9.4",
  "rlp",
  "ruint-macro",
@@ -8524,7 +8598,7 @@ dependencies = [
  "borsh",
  "bytes",
  "num-traits",
- "rand 0.8.6",
+ "rand 0.8.8",
  "rand 0.9.4",
  "serde",
  "serde_json",
@@ -8795,7 +8869,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b50c5943d326858130af85e049f2661ba3c78b26589b8ab98e65e80ae44a1252"
 dependencies = [
  "bitcoin_hashes",
- "rand 0.8.6",
+ "rand 0.8.8",
  "secp256k1-sys 0.10.1",
  "serde",
 ]
@@ -9223,7 +9297,7 @@ dependencies = [
  "http-client",
  "itertools 0.14.0",
  "jf-merkle-tree-compat",
- "rand 0.8.6",
+ "rand 0.8.8",
  "reqwest 0.12.28",
  "rstest",
  "serde",
@@ -9288,7 +9362,7 @@ version = "0.8.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c1c97747dbf44bb1ca44a561ece23508e99cb592e862f22222dcf42f51d1e451"
 dependencies = [
- "heck 0.4.1",
+ "heck 0.5.0",
  "proc-macro2",
  "quote",
  "syn 2.0.118",
@@ -9315,16 +9389,6 @@ dependencies = [
  "rustc_version 0.4.1",
  "sha2 0.10.9",
  "subtle",
-]
-
-[[package]]
-name = "socket2"
-version = "0.5.10"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e22376abed350d73dd1cd119b57ffccad95b4e585a7cda43e286245ce23c0678"
-dependencies = [
- "libc",
- "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -9376,7 +9440,7 @@ dependencies = [
  "digest 0.10.7",
  "hex",
  "keccak 0.1.6",
- "rand 0.8.6",
+ "rand 0.8.8",
  "sha3 0.10.9",
  "thiserror 2.0.18",
  "zerocopy",
@@ -9501,7 +9565,7 @@ dependencies = [
  "memchr",
  "once_cell",
  "percent-encoding",
- "rand 0.8.6",
+ "rand 0.8.8",
  "rsa",
  "serde",
  "sha1",
@@ -9541,7 +9605,7 @@ dependencies = [
  "md-5 0.10.6",
  "memchr",
  "once_cell",
- "rand 0.8.6",
+ "rand 0.8.8",
  "serde",
  "serde_json",
  "sha2 0.10.9",
@@ -9590,7 +9654,7 @@ version = "0.1.0"
 dependencies = [
  "alloy",
  "anyhow",
- "ark-serialize 0.5.0",
+ "ark-serialize 0.6.0",
  "assert_cmd",
  "chrono",
  "clap 4.6.1",
@@ -9613,7 +9677,7 @@ dependencies = [
  "predicates",
  "pretty_assertions",
  "prometheus-parse",
- "rand 0.8.6",
+ "rand 0.8.8",
  "rand_chacha 0.3.1",
  "reqwest 0.12.28",
  "rstest",
@@ -9853,7 +9917,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "once_cell",
  "rustix",
  "windows-sys 0.61.2",
@@ -9928,7 +9992,7 @@ dependencies = [
  "hotshot-state-prover",
  "hotshot-types",
  "jf-signature 0.4.2",
- "rand 0.8.6",
+ "rand 0.8.8",
  "reqwest 0.12.28",
  "serde_json",
  "staking-cli",
@@ -10096,7 +10160,7 @@ dependencies = [
  "parking_lot",
  "pin-project-lite",
  "signal-hook-registry",
- "socket2 0.6.4",
+ "socket2",
  "tokio-macros",
  "windows-sys 0.61.2",
 ]
@@ -10142,7 +10206,7 @@ dependencies = [
  "postgres-protocol",
  "postgres-types",
  "rand 0.10.1",
- "socket2 0.6.4",
+ "socket2",
  "tokio",
  "tokio-util",
  "whoami 2.1.2",
@@ -10307,7 +10371,7 @@ dependencies = [
  "hyper-util",
  "percent-encoding",
  "pin-project",
- "socket2 0.6.4",
+ "socket2",
  "sync_wrapper",
  "tokio",
  "tokio-stream",
@@ -10873,12 +10937,12 @@ name = "vid"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "ark-bls12-381",
- "ark-bn254 0.5.0",
- "ark-ff 0.5.0",
- "ark-poly 0.5.0",
- "ark-serialize 0.5.0",
- "ark-std 0.5.0",
+ "ark-bls12-381 0.6.0",
+ "ark-bn254 0.6.0",
+ "ark-ff 0.6.0",
+ "ark-poly 0.6.0",
+ "ark-serialize 0.6.0",
+ "ark-std 0.6.0",
  "base64-bytes",
  "blake3",
  "criterion 0.8.2",
@@ -10888,7 +10952,7 @@ dependencies = [
  "jf-poseidon2",
  "jf-utils",
  "p3-maybe-rayon",
- "rand 0.8.6",
+ "rand 0.8.8",
  "reed-solomon-simd",
  "serde",
  "serde_bytes",
@@ -11156,7 +11220,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.48.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

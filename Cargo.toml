@@ -117,15 +117,15 @@ alloy-compat = { path = "crates/alloy-compat" }
 alloy-primitives = { version = "1", features = ["serde"] }
 alloy-rlp = "0.3"
 anyhow = "1.0"
-ark-bls12-381 = "0.5"
-ark-bn254 = "0.5"
-ark-ec = "0.5"
-ark-ed-on-bn254 = "0.5"
-ark-ff = { version = "0.5", features = ["asm"] }
-ark-poly = "0.5"
-ark-serialize = { version = "0.5", features = ["derive"] }
+ark-bls12-381 = "0.6"
+ark-bn254 = "0.6"
+ark-ec = "0.6"
+ark-ed-on-bn254 = "0.6"
+ark-ff = { version = "0.6", features = ["asm"] }
+ark-poly = "0.6"
+ark-serialize = { version = "0.6", features = ["derive"] }
 ark-srs = "0.3.3"
-ark-std = "0.5"
+ark-std = "0.6"
 assert_cmd = "2.0.17"
 async-broadcast = "0.7.0"
 async-channel = "2"
