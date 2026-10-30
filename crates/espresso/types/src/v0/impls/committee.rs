@@ -1,6 +1,6 @@
 use std::{
     collections::{BTreeMap, HashMap},
-    ops::{Bound, RangeInclusive},
+    ops::Bound,
     sync::Arc,
     time::Duration,
 };
@@ -570,14 +570,16 @@ impl EpochCommittees {
     }
 
     /// `add_epoch_root` without the panic: a `next_stake_table_hash` mismatch with the held table
-    /// of the epoch below is `StakeTableHashMismatch`, returned before anything of that epoch is
-    /// installed. `add_epoch_root` calls it and keeps its panic.
+    /// of the epoch below is `StakeTableHashMismatch`, returned before the epoch is put in memory.
+    /// `add_epoch_root` calls it and keeps its panic. Returns whether this call created the
+    /// epoch's committee (decided under the same lock as the insert), so a caller can undo only
+    /// its own installs.
     #[cfg(feature = "node")]
     pub async fn install_epoch_root(
         &self,
         block_header: Header,
         coordinator: &EpochMembershipCoordinator<SeqTypes>,
-    ) -> Result<(), EpochRootInstallError> {
+    ) -> Result<bool, EpochRootInstallError> {
         let block_number = block_header.block_number();
 
         let epoch_height = *self.epoch_height;
@@ -653,7 +655,7 @@ impl EpochCommittees {
                     "committee already has block reward, header, and stake table hash; skipping \
                      add_epoch_root"
                 );
-                return Ok(());
+                return Ok(false);
             },
 
             Some(committee) => {
@@ -743,10 +745,12 @@ impl EpochCommittees {
             return Err(EpochRootInstallError::StakeTableHashMismatch { epoch });
         }
 
+        let inserted;
         let previous_committee;
         let previous_validators;
         {
             let mut inner = self.inner.write();
+            inserted = inner.epoch_committee(epoch).is_none();
             inner.put_epoch_committee(epoch, Arc::new(committee));
             previous_committee = inner.epoch_committee(previous_epoch).cloned();
             // garbage collect the validator set
@@ -785,17 +789,38 @@ impl EpochCommittees {
             }
         }
 
+        Ok(inserted)
+    }
+
+    /// Installs the epoch roots `roots`, ascending, as `install_epoch_root` does. Any error, and
+    /// the future being dropped, evicts the epochs this call created; epochs held before stay.
+    #[cfg(feature = "node")]
+    pub async fn install_epoch_roots(
+        &self,
+        roots: Vec<Header>,
+        coordinator: &EpochMembershipCoordinator<SeqTypes>,
+    ) -> Result<(), EpochRootInstallError> {
+        let mut created = EvictOnDrop {
+            committees: self,
+            epochs: Vec::new(),
+        };
+        for header in roots {
+            let epoch =
+                EpochNumber::new(epoch_from_block_number(header.height(), *self.epoch_height) + 2);
+            if self.install_epoch_root(header, coordinator).await? {
+                created.epochs.push(epoch);
+            }
+        }
+        created.epochs.clear();
         Ok(())
     }
 
-    /// Drops the committees, validators and randomized committees of `epochs` from memory. For
-    /// seed failure.
-    pub fn remove_epochs(&self, epochs: RangeInclusive<EpochNumber>) {
+    /// Drops the committee, randomized committee and validators of `epoch` from memory.
+    #[cfg(feature = "node")]
+    fn remove_epoch(&self, epoch: EpochNumber) {
         let mut inner = self.inner.write();
-        inner.snapshots.retain(|epoch, _| !epochs.contains(epoch));
-        inner
-            .all_validators
-            .retain(|epoch, _| !epochs.contains(epoch));
+        inner.snapshots.remove(&epoch);
+        inner.all_validators.remove(&epoch);
     }
 
     #[cfg(feature = "node")]
@@ -1118,7 +1143,7 @@ impl Membership<SeqTypes> for EpochCommittees {
         coordinator: &EpochMembershipCoordinator<SeqTypes>,
     ) -> Result<(), Self::Error> {
         match self.install_epoch_root(block_header, coordinator).await {
-            Ok(()) => Ok(()),
+            Ok(_) => Ok(()),
             Err(EpochRootInstallError::Committee(err)) => Err(err),
             Err(err @ EpochRootInstallError::StakeTableHashMismatch { .. }) => panic!(
                 "The decided block header's `next_stake_table_hash` does not match the hash of \
@@ -1325,6 +1350,22 @@ pub enum EpochCommitteesError {
 
     #[error("reward calculation error: {0}")]
     Reward(#[source] anyhow::Error),
+}
+
+/// Evicts `epochs` when dropped; cleared once they are to stay.
+#[cfg(feature = "node")]
+struct EvictOnDrop<'a> {
+    committees: &'a EpochCommittees,
+    epochs: Vec<EpochNumber>,
+}
+
+#[cfg(feature = "node")]
+impl Drop for EvictOnDrop<'_> {
+    fn drop(&mut self) {
+        for epoch in &self.epochs {
+            self.committees.remove_epoch(*epoch);
+        }
+    }
 }
 
 /// Why `install_epoch_root` installed nothing.
@@ -2727,8 +2768,8 @@ mod tests {
         inner.put_epoch_committee(EpochNumber::new(epoch), Arc::new(prefilled));
     }
 
-    /// An epoch root header of epoch 3 whose `next_stake_table_hash` is `decided`.
-    async fn header_deciding(decided: StakeTableHash) -> Header {
+    /// An epoch root header at `height` whose `next_stake_table_hash` is `decided`.
+    async fn header_deciding(height: u64, decided: StakeTableHash) -> Header {
         let mut instance = NodeState::mock_v2();
         instance.genesis_version = versions::version(0, 4);
         let (payload, metadata) =
@@ -2737,7 +2778,7 @@ mod tests {
                 .expect("payload");
         match Header::genesis(&instance, payload, &metadata, MOCK_UPGRADE.base) {
             Header::V4(mut h) => {
-                h.height = 95;
+                h.height = height;
                 h.next_stake_table_hash = Some(decided);
                 Header::V4(h)
             },
@@ -2765,7 +2806,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn install_epoch_root_hash_mismatch_fails() {
         let (committees, coordinator) = mismatch_setup();
-        let header = header_deciding(other_hash()).await;
+        let header = header_deciding(95, other_hash()).await;
 
         let err = committees
             .install_epoch_root(header, &coordinator)
@@ -2773,7 +2814,11 @@ mod tests {
             .unwrap_err();
 
         assert!(
-            matches!(err, EpochRootInstallError::StakeTableHashMismatch { epoch } if epoch == EpochNumber::new(3)),
+            matches!(
+                err,
+                EpochRootInstallError::StakeTableHashMismatch { epoch }
+                    if epoch == EpochNumber::new(3)
+            ),
             "{err:#}"
         );
         let inner = committees.inner.read();
@@ -2789,7 +2834,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn install_epoch_root_matching_hash_ok() {
         let (committees, coordinator) = mismatch_setup();
-        let header = header_deciding(StakeTableState::default().commit()).await;
+        let header = header_deciding(95, StakeTableState::default().commit()).await;
 
         committees
             .install_epoch_root(header, &coordinator)
@@ -2806,13 +2851,14 @@ mod tests {
     #[should_panic(expected = "unrecoverable")]
     async fn add_epoch_root_panics_on_hash_mismatch() {
         let (committees, coordinator) = mismatch_setup();
-        let header = header_deciding(other_hash()).await;
+        let header = header_deciding(95, other_hash()).await;
 
         let _ = committees.add_epoch_root(header, &coordinator).await;
     }
 
+    /// The epochs a dropped guard lists are evicted; a cleared guard evicts nothing.
     #[test]
-    fn remove_epochs_drops_only_the_range() {
+    fn evict_on_drop_removes_only_listed_epochs() {
         let committees = build_committees(4);
         for epoch in 3..=5 {
             put_prefilled(&committees, epoch, StakeTableState::default().commit());
@@ -2823,12 +2869,50 @@ mod tests {
             .all_validators
             .insert(EpochNumber::new(4), Default::default());
 
-        committees.remove_epochs(EpochNumber::new(4)..=EpochNumber::new(4));
+        drop(EvictOnDrop {
+            committees: &committees,
+            epochs: vec![EpochNumber::new(4)],
+        });
+        let mut kept = EvictOnDrop {
+            committees: &committees,
+            epochs: vec![EpochNumber::new(5)],
+        };
+        kept.epochs.clear();
+        drop(kept);
 
         let inner = committees.inner.read();
         assert!(inner.epoch_committee(EpochNumber::new(3)).is_some());
         assert!(inner.epoch_committee(EpochNumber::new(4)).is_none());
         assert!(inner.epoch_committee(EpochNumber::new(5)).is_some());
         assert!(!inner.all_validators.contains_key(&EpochNumber::new(4)));
+    }
+
+    /// A mismatch on the second root errors and the epochs held before stay, whether or not the
+    /// first root was already installed.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn install_epoch_roots_mismatch_keeps_held_epochs() {
+        let (committees, coordinator) = mismatch_setup();
+        put_prefilled(&committees, 4, other_hash());
+        let matching = header_deciding(95, StakeTableState::default().commit()).await;
+        // Epoch 4's previous table (epoch 3) holds the default hash, not this one.
+        let mismatching = header_deciding(195, other_hash()).await;
+
+        let err = committees
+            .install_epoch_roots(vec![matching, mismatching], &coordinator)
+            .await
+            .unwrap_err();
+
+        assert!(
+            matches!(
+                err,
+                EpochRootInstallError::StakeTableHashMismatch { epoch }
+                    if epoch == EpochNumber::new(4)
+            ),
+            "{err:#}"
+        );
+        let inner = committees.inner.read();
+        for epoch in [2, 3, 4] {
+            assert!(inner.epoch_committee(EpochNumber::new(epoch)).is_some());
+        }
     }
 }

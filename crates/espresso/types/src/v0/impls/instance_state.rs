@@ -42,6 +42,9 @@ use crate::{
     },
     v0_3::{RegisteredValidator, RewardAmount},
 };
+/// How long `NodeState::l1_finalized_block` waits for the L1 client to see a finalized block.
+#[cfg(feature = "node")]
+const L1_FINALIZED_WAIT: Duration = Duration::from_secs(30);
 
 /// Represents the immutable state of a node.
 ///
@@ -175,12 +178,27 @@ impl NodeState {
         }
     }
 
-    /// `finalizedState` and `votingStakeTableState` at `l1_block`.
+    /// The number of the L1 finalized block, waiting up to `L1_FINALIZED_WAIT` for the first one.
+    #[cfg(feature = "node")]
+    async fn l1_finalized_block(&self) -> anyhow::Result<u64> {
+        tokio::time::timeout(L1_FINALIZED_WAIT, async {
+            loop {
+                if let Some(finalized) = self.l1_client.snapshot().await.finalized {
+                    return finalized.number;
+                }
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+        })
+        .await
+        .context("no L1 finalized block yet")
+    }
+
+    /// `finalizedState` and `votingStakeTableState` at the L1 finalized block.
     #[cfg(feature = "node")]
     pub async fn lc_contract_voting_stake_table(
         &self,
-        l1_block: u64,
     ) -> anyhow::Result<LcContractVotingStakeTable> {
+        let l1_block = self.l1_finalized_block().await?;
         let block = BlockId::number(l1_block);
         let light_client_contract = LightClientV3::new(
             self.light_client_contract_address().await?,
@@ -217,19 +235,24 @@ impl NodeState {
     }
 
     /// `ST(now)`: the active set from stake-table events up to the L1 finalized block, at
-    /// `version`, in `committee_peer_configs` order, with connect info.
+    /// `version`, in `committee_peer_configs` order, with connect info. Empty without a stake
+    /// table contract.
     #[cfg(feature = "node")]
     pub async fn l1_finalized_peers(
         &self,
         version: Version,
     ) -> anyhow::Result<IndexMap<PubKey, PeerConfig<SeqTypes>>> {
-        let finalized = self.l1_client.snapshot().await.finalized;
-        let l1_block = finalized.context("no L1 finalized block yet")?.number;
-        self.coordinator
-            .membership()
-            .fetcher()
-            .active_peers_at(l1_block, version)
+        let fetcher = self.coordinator.membership().fetcher();
+        if fetcher
+            .known_chain_config()
             .await
+            .stake_table_contract
+            .is_none()
+        {
+            return Ok(IndexMap::new());
+        }
+        let l1_block = self.l1_finalized_block().await?;
+        fetcher.active_peers_at(l1_block, version).await
     }
 
     /// The oldest HotShot block height the light client contract still holds a commitment for, or

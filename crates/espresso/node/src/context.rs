@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     fmt::{Debug, Display},
     future::Future,
     sync::Arc,
@@ -199,9 +199,8 @@ where
             &membership_coordinator,
             anchor_epoch,
             running_version(&upgrade_lock),
-            &validator_config.public_key,
         )
-        .await?;
+        .await;
         info!(
             target: "announce::catchup",
             %anchor_epoch,
@@ -610,34 +609,42 @@ fn running_version(upgrade_lock: &UpgradeLock<SeqTypes>) -> Version {
         .unwrap_or(upgrade_lock.upgrade().base)
 }
 
-/// Dials `ST(now)` (`NodeState::l1_finalized_peers`) and returns the dialed keys, without the own
-/// key, those with no connect info and those of the window of `anchor_epoch`, which `apply_epoch`
-/// dialed with the addresses of their held tables. The first `apply_epoch` of consensus drops the
-/// dialed peers outside its window.
+/// Dials `ST(now)` (`NodeState::l1_finalized_peers`) and returns the dialed keys, those with
+/// connect info and outside the window of `anchor_epoch`. The window peers keep the addresses of
+/// the node's held tables, which `apply_epoch` set: re-adding one at another address, as L1 may
+/// register a stale one, redials it there. The first `apply_epoch` of consensus drops the dialed
+/// peers outside its window. A failure is logged and leaves no extra peers: the node still boots
+/// with the window of its stored anchor.
 async fn dial_l1_finalized_peers(
     network: &mut Cliquenet<SeqTypes>,
     node_state: &NodeState,
     coordinator: &EpochMembershipCoordinator<SeqTypes>,
     anchor_epoch: EpochNumber,
     version: Version,
-    own_key: &PubKey,
-) -> anyhow::Result<Vec<PubKey>> {
-    let peers = node_state.l1_finalized_peers(version).await?;
-    let window: HashSet<PubKey> = (anchor_epoch.saturating_sub(1)..=*anchor_epoch + 1)
-        .filter_map(|epoch| coordinator.epoch_peers(Some(EpochNumber::new(epoch))))
-        .flat_map(|infos| infos.into_keys())
-        .collect();
-    let targets = peers
-        .iter()
-        .filter(|(key, _)| *key != own_key && !window.contains(*key))
-        .filter_map(|(key, peer)| {
-            let info = peer.connect_info.clone()?;
-            Some((*key, (info.x25519_key.into(), info.p2p_addr)))
-        })
-        .collect::<Vec<_>>();
-    let dialed = targets.iter().map(|(key, _)| *key).collect();
-    network.add_peers(Role::Active, targets)?;
-    Ok(dialed)
+) -> Vec<PubKey> {
+    let dial = async {
+        let window: HashSet<PubKey> = (anchor_epoch.saturating_sub(1)..=*anchor_epoch + 1)
+            .filter_map(|epoch| coordinator.epoch_peers(Some(EpochNumber::new(epoch))))
+            .flat_map(HashMap::into_keys)
+            .collect();
+        let targets = node_state
+            .l1_finalized_peers(version)
+            .await?
+            .into_iter()
+            .filter(|(key, _)| !window.contains(key))
+            .filter_map(|(key, peer)| {
+                let info = peer.connect_info?;
+                Some((key, (info.x25519_key.into(), info.p2p_addr)))
+            })
+            .collect::<Vec<_>>();
+        let dialed = targets.iter().map(|(key, _)| *key).collect();
+        network.add_peers(Role::Active, targets)?;
+        anyhow::Ok(dialed)
+    };
+    dial.await.unwrap_or_else(|err| {
+        tracing::warn!(%err, "failed to dial the L1 finalized validators");
+        Vec::new()
+    })
 }
 
 async fn seed_membership(

@@ -1342,7 +1342,7 @@ impl Fetcher {
             persistence_lock.load_events(0, to_block).await?
         };
 
-        tracing::info!("loaded events from storage to_block={to_block:?}");
+        tracing::debug!("loaded events from storage to_block={to_block:?}");
 
         // No need to fetch from contract
         // if persistence returns all the events that we need
@@ -1364,7 +1364,7 @@ impl Fetcher {
             "to_block {to_block:?} is less than from_block {from_block:?}"
         );
 
-        tracing::info!(%to_block, from_block = ?from_block, "Fetching events from contract");
+        tracing::debug!(%to_block, from_block = ?from_block, "Fetching events from contract");
 
         let contract_events = Self::fetch_events_from_contract(
             self.l1_client.clone(),
@@ -1375,7 +1375,7 @@ impl Fetcher {
         .await?;
 
         // Store only the new events fetched from L1 contract
-        tracing::info!(
+        tracing::debug!(
             "storing {} new events in storage to_block={to_block:?}",
             contract_events.len()
         );

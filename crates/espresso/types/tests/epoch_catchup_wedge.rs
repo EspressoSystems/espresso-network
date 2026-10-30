@@ -593,3 +593,58 @@ async fn seeds_do_not_overlap_ok() {
     assert!(wait_until(RECOVERY_BUDGET, || calls.lock().len() >= 3).await);
     assert_eq!(peak.load(Ordering::SeqCst), 1);
 }
+
+/// A seed that outlives its bound ends the attempt without a walk, and the next request retries.
+#[test_log::test(tokio::test(flavor = "multi_thread", worker_threads = 4))]
+async fn seed_timeout_ends_catchup() {
+    let (store, coordinator) = setup();
+    let coordinator = coordinator.with_seed_timeout(Duration::from_millis(200));
+    let calls = Arc::new(AtomicUsize::new(0));
+    let seed: LcContractSeedFn<SeqTypes> = {
+        let calls = Arc::clone(&calls);
+        Arc::new(move |_, _, _| {
+            calls.fetch_add(1, Ordering::SeqCst);
+            Box::pin(std::future::pending())
+        })
+    };
+    coordinator.set_lc_contract_seed(seed);
+    let target = EpochNumber::new(TARGET_EPOCH);
+
+    assert!(coordinator.stake_table_for_epoch(Some(target)).is_err());
+    assert!(wait_until(RECOVERY_BUDGET, || calls.load(Ordering::SeqCst) == 1).await);
+    tokio::time::sleep(Duration::from_millis(600)).await;
+
+    assert_eq!(
+        store.calls(),
+        0,
+        "a timed-out seed must not fall back to a walk"
+    );
+    let retried = wait_until(RECOVERY_BUDGET, || {
+        let _ = coordinator.stake_table_for_epoch(Some(target));
+        calls.load(Ordering::SeqCst) >= 2
+    })
+    .await;
+    assert!(retried, "the claim was not released");
+}
+
+/// `Seeded { start }` moves the walk: it starts above `start`, not above the held pair.
+#[test_log::test(tokio::test(flavor = "multi_thread", worker_threads = 4))]
+async fn seeded_start_resumes_the_walk_ok() {
+    let (store, coordinator) = setup();
+    let seeded = EpochNumber::new(TARGET_EPOCH - 1);
+    let (seed, ..) = recording_seed(move || Ok(LcContractSeedOutcome::Seeded { start: seeded }));
+    coordinator.set_lc_contract_seed(seed);
+
+    assert!(
+        coordinator
+            .stake_table_for_epoch(Some(EpochNumber::new(TARGET_EPOCH)))
+            .is_err()
+    );
+
+    assert!(wait_until(RECOVERY_BUDGET, || store.loads_of(TARGET_EPOCH) >= 1).await);
+    assert_eq!(
+        store.loads_of(WALK_EPOCH),
+        0,
+        "the walk began at the held pair"
+    );
+}

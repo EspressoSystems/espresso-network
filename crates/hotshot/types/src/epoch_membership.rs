@@ -5,13 +5,14 @@ use std::{
 };
 
 use alloy_primitives::U256;
+use anyhow::anyhow;
 use committable::Commitment;
 use either::Either;
 use futures::future::{BoxFuture, FutureExt, Shared};
 use hotshot_utils::anytrace::{self, Wrap};
 use parking_lot::{Mutex, RwLock};
 use sha2::{Digest, Sha256};
-use tokio::{spawn, time::timeout};
+use tokio::{spawn, sync::Mutex as AsyncMutex, time::timeout};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 use versions::DRB_FIX_VERSION;
@@ -81,6 +82,17 @@ pub enum LcContractSeedOutcome {
     Seeded { start: EpochNumber },
 }
 
+/// The catchup target is below the LC contract epoch: the epochs between the held tables and the
+/// LC contract epoch are not seeded, so the attempt fails fast instead of walking from them.
+#[derive(Clone, Copy, Debug, thiserror::Error)]
+#[error("catchup target {target} is below the LC contract epoch {voting_epoch}")]
+pub struct TargetBelowLcContractEpoch {
+    /// The catchup target.
+    pub target: EpochNumber,
+    /// `E'`: the epoch of the LC contract's voting stake table.
+    pub voting_epoch: EpochNumber,
+}
+
 /// Struct to Coordinate membership catchup
 pub struct EpochMembershipCoordinator<TYPES: NodeType> {
     membership: Arc<TYPES::Membership>,
@@ -93,7 +105,8 @@ pub struct EpochMembershipCoordinator<TYPES: NodeType> {
     load_drb_progress_fn: LoadDrbProgressFn,
     store_drb_result_fn: StoreDrbResultFn,
     lc_contract_seed: Arc<OnceLock<LcContractSeedFn<TYPES>>>,
-    seed_lock: Arc<tokio::sync::Mutex<()>>,
+    seed_lock: Arc<AsyncMutex<()>>,
+    seed_timeout: Duration,
     drb_difficulty_selector: Arc<RwLock<Option<DrbDifficultySelectorFn>>>,
 }
 
@@ -112,6 +125,7 @@ impl<TYPES: NodeType> Clone for EpochMembershipCoordinator<TYPES> {
             drb_difficulty_selector: Arc::clone(&self.drb_difficulty_selector),
             lc_contract_seed: Arc::clone(&self.lc_contract_seed),
             seed_lock: Arc::clone(&self.seed_lock),
+            seed_timeout: self.seed_timeout,
         }
     }
 }
@@ -136,6 +150,7 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
             drb_difficulty_selector: Arc::new(RwLock::new(None)),
             lc_contract_seed: Arc::default(),
             seed_lock: Arc::default(),
+            seed_timeout: SEED_TIMEOUT,
         }
     }
 
@@ -146,6 +161,12 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
     /// Override the bound on a single catchup step. Mostly for tests.
     pub fn with_catchup_timeout(mut self, timeout: Duration) -> Self {
         self.catchup_timeout = timeout;
+        self
+    }
+
+    /// Override the bound on one seed. Mostly for tests.
+    pub fn with_seed_timeout(mut self, timeout: Duration) -> Self {
+        self.seed_timeout = timeout;
         self
     }
 
@@ -459,7 +480,7 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
         Ok(start)
     }
 
-    /// Runs `seed` under `SEED_TIMEOUT` and returns the walk start: the seeded start, or `start`
+    /// Runs `seed` under the seed timeout and returns the walk start: the seeded start, or `start`
     /// when the seed was not needed. A failed or timed-out seed ends the catchup attempt.
     async fn seed_from_lc_contract(
         &self,
@@ -467,11 +488,15 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
         epoch: EpochNumber,
         start: EpochNumber,
     ) -> Result<EpochNumber> {
-        let result = timeout(SEED_TIMEOUT, seed(epoch, start, self.clone()))
+        let result = timeout(self.seed_timeout, seed(epoch, start, self.clone()))
             .await
-            .unwrap_or_else(|_| Err(anyhow::anyhow!("exceeded {SEED_TIMEOUT:?}")));
+            .unwrap_or_else(|_| Err(anyhow!("exceeded {:?}", self.seed_timeout)));
         let outcome = result.map_err(|err| {
-            warn!(target: "announce::catchup", %epoch, %err, "lc contract seed failed");
+            if err.is::<TargetBelowLcContractEpoch>() {
+                debug!(target: "announce::catchup", %epoch, %err, "lc contract seed skipped");
+            } else {
+                warn!(target: "announce::catchup", %epoch, %err, "lc contract seed failed");
+            }
             anytrace::error!("lc contract seed for epoch {epoch} failed: {err:#}")
         })?;
         Ok(match outcome {

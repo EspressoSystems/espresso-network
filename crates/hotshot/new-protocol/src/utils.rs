@@ -1,4 +1,6 @@
-use anyhow::{anyhow, ensure};
+use std::collections::HashMap;
+
+use anyhow::{Context, anyhow, ensure};
 use committable::Committable;
 use hotshot_types::{
     data::{EpochNumber, Leaf2, ViewNumber},
@@ -15,7 +17,8 @@ use crate::message::Certificate2;
 /// A leaf range and the cert2 finalizing its newest leaf.
 #[derive(Clone, Debug)]
 pub struct CertifiedLeafChain<T: NodeType> {
-    /// Leaves in any order; ancestors of the cert2 leaf are found by parent links.
+    /// Leaves in any order, possibly with extras; ancestors of the cert2 leaf are found by parent
+    /// links.
     pub leaves: Vec<Leaf2<T>>,
     /// Certificate finalizing the newest leaf.
     pub cert2: Certificate2<T>,
@@ -23,9 +26,10 @@ pub struct CertifiedLeafChain<T: NodeType> {
 
 impl<T: NodeType> CertifiedLeafChain<T> {
     /// Leaves from the cert2 leaf down to `lowest_height`, ascending. `cert2` is checked under
-    /// `quorum` with `upgrade_lock`; a genesis-view cert2 is rejected; each step down must match
-    /// the parent commitment and height. Justify QCs are not checked: cert2 plus the hash links
-    /// authenticate the ancestors. Pure.
+    /// `quorum` with `upgrade_lock`; a genesis-view cert2 is rejected. The cert2 leaf is the one
+    /// `cert2` commits to, so extra leaves (even of a higher view) are ignored; each step down
+    /// follows the parent commitment and must drop one height. Justify QCs are not checked: cert2
+    /// plus the hash links authenticate the ancestors. Pure.
     pub fn verify_ancestors(
         self,
         lowest_height: u64,
@@ -33,10 +37,12 @@ impl<T: NodeType> CertifiedLeafChain<T> {
         upgrade_lock: &UpgradeLock<T>,
         quorum: &HSStakeTable<T>,
     ) -> anyhow::Result<Vec<Leaf2<T>>> {
-        let Self { mut leaves, cert2 } = self;
-        leaves.sort_by_key(|leaf| std::cmp::Reverse(leaf.view_number()));
-        ensure!(!leaves.is_empty(), "empty leaf chain");
-        check_cert2_finalizes(&cert2, &leaves[0], epoch_height)?;
+        let Self { leaves, cert2 } = self;
+        let by_commit: HashMap<_, _> = leaves.iter().map(|leaf| (leaf.commit(), leaf)).collect();
+        let newest = by_commit
+            .get(&cert2.data.leaf_commit)
+            .context("the leaves do not contain the leaf cert2 commits to")?;
+        check_cert2_finalizes(&cert2, newest, epoch_height)?;
         let entries = StakeTableEntries::<T>::from(quorum.clone()).0;
         cert2.is_valid_cert(
             &entries,
@@ -44,24 +50,21 @@ impl<T: NodeType> CertifiedLeafChain<T> {
             upgrade_lock,
         )?;
 
-        let mut path = vec![leaves[0].clone()];
-        for leaf in &leaves[1..] {
-            let current = path.last().expect("path starts with the newest leaf");
-            if current.height() == lowest_height {
-                break;
-            }
-            if current.parent_commitment() != leaf.commit() {
-                continue;
-            }
+        let mut path = vec![(*newest).clone()];
+        while path.last().map(Leaf2::height) > Some(lowest_height) {
+            let child = path.last().expect("path starts with the newest leaf");
+            let parent = by_commit
+                .get(&child.parent_commitment())
+                .with_context(|| format!("no parent of the leaf at height {}", child.height()))?;
             ensure!(
-                leaf.height().checked_add(1) == Some(current.height()),
+                parent.height().checked_add(1) == Some(child.height()),
                 "leaf heights do not chain"
             );
-            path.push(leaf.clone());
+            path.push((*parent).clone());
         }
         ensure!(
             path.last().map(Leaf2::height) == Some(lowest_height),
-            "height {lowest_height} was not found in the cert2-finalized chain"
+            "height {lowest_height} is above the cert2 leaf or skipped"
         );
         path.reverse();
         Ok(path)

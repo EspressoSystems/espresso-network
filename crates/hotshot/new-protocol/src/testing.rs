@@ -1,5 +1,7 @@
 //! Fixtures for tests that need signed leaf chains.
 
+use std::marker::PhantomData;
+
 use alloy::primitives::U256;
 use bitvec::{slice::BitSlice, vec::BitVec};
 use committable::Committable;
@@ -22,12 +24,12 @@ type Signer<T> = (
     <<T as NodeType>::SignatureKey as SignatureKey>::PrivateKey,
 );
 
-/// `leaves` re-signed by `signers`: every justify QC and a closing cert2, so
+/// `leaves` linked by parent commitments and closed by a cert2 of `signers`, so
 /// `CertifiedLeafChain::verify_ancestors` accepts it.
 ///
 /// `leaves` must be consecutive blocks of one epoch (`epoch_height` blocks per epoch). The signers
-/// act as a quorum of unit stakes in the given order, and all of them sign. The oldest leaf keeps
-/// its own justify QC, which the verifier never checks.
+/// act as a quorum of unit stakes in the given order, and all of them sign the cert2. Justify QCs
+/// are unsigned and the oldest leaf keeps its own, since the verifier checks no QC.
 pub fn sign_leaf_chain<T: NodeType>(
     mut leaves: Vec<Leaf2<T>>,
     epoch_height: u64,
@@ -46,11 +48,13 @@ pub fn sign_leaf_chain<T: NodeType>(
                     epoch: parent.epoch(epoch_height),
                     block_number: Some(parent.height()),
                 };
-                let qc = sign_certificate::<T, _, QuorumCertificate2<T>>(
+                // Unsigned: `verify_ancestors` checks no justify QC, only the parent link.
+                let qc = QuorumCertificate2::new(
                     data,
+                    data.commit(),
                     parent.view_number(),
-                    signers,
-                    upgrade_lock,
+                    None,
+                    PhantomData,
                 );
                 rebuild(&leaf, qc, leaf.next_drb_result)
             },
@@ -306,5 +310,17 @@ mod tests {
             .verify_ancestors(1, EPOCH_HEIGHT, &lock(), &table(&signers))
             .unwrap_err();
         assert!(err.to_string().contains("genesis view"), "{err:#}");
+    }
+
+    #[test]
+    fn verify_ancestors_ignores_junk_high_view_leaf() {
+        let signers = signers(0..4);
+        let mut chain = chain(&signers);
+        chain.leaves.extend(leaves(99..100));
+        let leaves = chain
+            .verify_ancestors(22, EPOCH_HEIGHT, &lock(), &table(&signers))
+            .unwrap();
+        let heights: Vec<_> = leaves.iter().map(|leaf| leaf.height()).collect();
+        assert_eq!(heights, vec![22, 23, 24]);
     }
 }

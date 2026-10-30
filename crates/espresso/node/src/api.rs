@@ -6877,24 +6877,38 @@ mod test {
         })
         .await
         .expect("the joined node did not decide with the network");
+
+        // A fresh node holds the seeded window only: the epochs between its genesis pair and the
+        // window are not walked.
+        let skipped = lc_voting_epoch - 4;
+        if fresh_storage && skipped > 2 {
+            let coordinator = node.node_state().coordinator;
+            assert!(
+                coordinator
+                    .membership()
+                    .snapshot(EpochNumber::new(skipped))
+                    .is_none(),
+                "epoch {skipped} below the seeded window was walked"
+            );
+        }
     }
 
-    /// Covers `TEST:fresh-validator-joins-over-cliquenet-ok`: fresh storage, LC contract one epoch
-    /// behind.
+    /// Covers `TEST:fresh-validator-joins-over-cliquenet-ok`: fresh storage, LC contract at the
+    /// network epoch.
     #[apply(sql_data_sources)]
     async fn test_new_protocol_fresh_validator_joins_over_cliquenet<D: TestableSqlDataSource>(
         _d: PhantomData<D>,
     ) {
-        validator_joins_over_cliquenet::<D>(6, true).await;
+        validator_joins_over_cliquenet::<D>(7, true).await;
     }
 
-    /// Prover lag: the LC contract is at epoch 3 while the network is at epoch 7, so the seed
-    /// at epoch 3 is followed by the walk.
+    /// Prover lag: the LC contract is at epoch 4 while the network is at epoch 7, so the seed at
+    /// epoch 4 is followed by the walk.
     #[apply(sql_data_sources)]
     async fn test_new_protocol_fresh_validator_joins_with_prover_lag<D: TestableSqlDataSource>(
         _d: PhantomData<D>,
     ) {
-        validator_joins_over_cliquenet::<D>(3, true).await;
+        validator_joins_over_cliquenet::<D>(4, true).await;
     }
 
     /// `TEST:restart-more-than-lookahead-behind-reaches-current-ok`: stored anchor in epoch 2, the
