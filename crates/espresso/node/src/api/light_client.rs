@@ -1,12 +1,13 @@
 use std::{cmp::Ordering, collections::HashMap, fmt::Display, sync::Arc, time::Duration};
 
 use anyhow::{Result, bail, ensure};
+use async_trait::async_trait;
 use committable::{Commitment, Committable};
 use disco_types::status::StatusCode;
 use espresso_types::{BlockMerkleTree, Header, NsIndex, NsProof, SeqTypes};
 use futures::{TryStreamExt, future::try_join, stream::StreamExt};
 use hotshot_query_service::{
-    Error, QueryError,
+    Error, QueryError, QueryResult,
     availability::{AvailabilityDataSource, LeafQueryData, PayloadQueryData, VidCommonQueryData},
     data_source::{VersionedDataSource, storage::NodeStorage},
     merklized_state::{MerklizedStateDataSource, MerklizedStateHeightPersistence, Snapshot},
@@ -347,6 +348,60 @@ where
     Ok(proof)
 }
 
+/// The reads behind a header proof.
+///
+/// Implemented over a fetching data source (the HTTP endpoint, which may fetch a missing header
+/// from peers) and over `SqlStorage` (the request responder, local reads only).
+#[async_trait]
+pub(crate) trait HeaderProofReads: Send + Sync {
+    /// The header with `id`.
+    async fn header(&self, id: BlockId<SeqTypes>) -> Result<Header, Error>;
+
+    /// The path to `height` in the block Merkle tree at the snapshot of `index`.
+    async fn block_path(&self, index: u64, height: u64) -> QueryResult<BlockMerkleProof>;
+
+    /// The height of the newest block Merkle tree snapshot.
+    async fn last_state_height(&self) -> QueryResult<usize>;
+}
+
+/// `HeaderProofReads` over a data source; a missing header is fetched for up to `fetch_timeout`.
+struct DataSourceReads<'a, State> {
+    state: &'a State,
+    fetch_timeout: Duration,
+}
+
+#[async_trait]
+impl<State> HeaderProofReads for DataSourceReads<'_, State>
+where
+    State: AvailabilityDataSource<SeqTypes>
+        + MerklizedStateDataSource<SeqTypes, BlockMerkleTree, { BlockMerkleTree::ARITY }>
+        + MerklizedStateHeightPersistence
+        + VersionedDataSource
+        + Sync,
+{
+    async fn header(&self, id: BlockId<SeqTypes>) -> Result<Header, Error> {
+        self.state
+            .get_header(id)
+            .await
+            .with_timeout(self.fetch_timeout)
+            .await
+            .ok_or_else(|| not_found(format!("unknown header {id}")))
+    }
+
+    async fn block_path(&self, index: u64, height: u64) -> QueryResult<BlockMerkleProof> {
+        MerklizedStateDataSource::<SeqTypes, BlockMerkleTree, _>::get_path(
+            self.state,
+            Snapshot::Index(index),
+            height,
+        )
+        .await
+    }
+
+    async fn last_state_height(&self) -> QueryResult<usize> {
+        self.state.get_last_state_height().await
+    }
+}
+
 pub(crate) async fn get_header_proof<State>(
     state: &State,
     root: u64,
@@ -357,14 +412,29 @@ where
     State: AvailabilityDataSource<SeqTypes>
         + MerklizedStateDataSource<SeqTypes, BlockMerkleTree, { BlockMerkleTree::ARITY }>
         + MerklizedStateHeightPersistence
-        + VersionedDataSource,
+        + VersionedDataSource
+        + Sync,
 {
-    let header = state
-        .get_header(requested)
-        .await
-        .with_timeout(fetch_timeout)
-        .await
-        .ok_or_else(|| not_found(format!("unknown header {requested}")))?;
+    header_proof(
+        &DataSourceReads {
+            state,
+            fetch_timeout,
+        },
+        root,
+        requested,
+    )
+    .await
+}
+
+/// The header `requested` with its block Merkle path at snapshot `root`.
+///
+/// Falls back to a path rebuilt from the newest snapshot when the state at `root` is pruned.
+pub(crate) async fn header_proof(
+    reads: &impl HeaderProofReads,
+    root: u64,
+    requested: BlockId<SeqTypes>,
+) -> Result<HeaderProof, Error> {
+    let header = reads.header(requested).await?;
     if header.height() >= root {
         return Err(Error::Custom {
             message: format!(
@@ -374,21 +444,15 @@ where
             status: StatusCode::BAD_REQUEST,
         });
     }
-    let path = MerklizedStateDataSource::<SeqTypes, BlockMerkleTree, _>::get_path(
-        state,
-        Snapshot::Index(root),
-        header.height(),
-    )
-    .await;
-    let path = match path {
+    let path = match reads.block_path(root, header.height()).await {
         Ok(path) => path,
         Err(err) if matches!(err.status(), StatusCode::NOT_FOUND | StatusCode::GONE) => {
             // No usable snapshot at `root` (pruned or missing): rebuild from the newest one.
-            let head = state.get_last_state_height().await.map_err(merkle_error)? as u64;
+            let head = reads.last_state_height().await.map_err(merkle_error)? as u64;
             if head <= root {
                 return Err(merkle_error(err));
             }
-            return rebuild_header_path(state, root, header, head, fetch_timeout).await;
+            return rebuild_header_path(reads, root, header, head).await;
         },
         Err(err) => return Err(merkle_error(err)),
     };
@@ -405,32 +469,21 @@ fn merkle_error(source: QueryError) -> Error {
 /// Prove `header` against `root` using the snapshot at `head`, when the state at `root` is pruned.
 ///
 /// The result is verified against the commitment in header `root`.
-async fn rebuild_header_path<State>(
-    state: &State,
+async fn rebuild_header_path(
+    reads: &impl HeaderProofReads,
     root: u64,
     header: Header,
     head: u64,
-    fetch_timeout: Duration,
-) -> Result<HeaderProof, Error>
-where
-    State: AvailabilityDataSource<SeqTypes>
-        + MerklizedStateDataSource<SeqTypes, BlockMerkleTree, { BlockMerkleTree::ARITY }>,
-{
-    let get_path = |height| {
-        MerklizedStateDataSource::<SeqTypes, BlockMerkleTree, _>::get_path(
-            state,
-            Snapshot::Index(head),
-            height,
-        )
-    };
-    let frontier = get_path(root - 1).await.map_err(merkle_error)?;
-    let target = get_path(header.height()).await.map_err(merkle_error)?;
-    let root_header = state
-        .get_header(BlockId::Number(root as usize))
+) -> Result<HeaderProof, Error> {
+    let frontier = reads
+        .block_path(head, root - 1)
         .await
-        .with_timeout(fetch_timeout)
+        .map_err(merkle_error)?;
+    let target = reads
+        .block_path(head, header.height())
         .await
-        .ok_or_else(|| not_found(format!("unknown header {root}")))?;
+        .map_err(merkle_error)?;
+    let root_header = reads.header(BlockId::Number(root as usize)).await?;
 
     let proof = rebuild_block_proof(root, &frontier, &target).map_err(internal)?;
     let proof = HeaderProof::new(header, proof);
@@ -444,7 +497,7 @@ where
     Ok(proof)
 }
 
-type BlockMerkleProof = <BlockMerkleTree as MerkleTreeScheme>::MembershipProof;
+pub(crate) type BlockMerkleProof = <BlockMerkleTree as MerkleTreeScheme>::MembershipProof;
 type BlockMerkleNode = MerkleNode<Commitment<Header>, u64, Sha3Node>;
 
 /// The path to `target.pos` in the block tree of the first `num_leaves` leaves.
@@ -781,9 +834,12 @@ mod test {
     };
 
     use super::*;
-    use crate::api::{
-        data_source::{Provider, testing::TestableSqlDataSource},
-        test::sql_data_sources,
+    use crate::{
+        api::{
+            data_source::{Provider, testing::TestableSqlDataSource},
+            test::sql_data_sources,
+        },
+        request_response::data_source::RequestStorage,
     };
 
     const CHAIN_LIMIT: usize = 500;
@@ -1831,6 +1887,41 @@ mod test {
                 proof.verify(mts[root].commitment()).unwrap();
             }
         }
+    }
+
+    #[apply(sql_data_sources)]
+    async fn test_header_proof_request_matches_http<D>(_d: PhantomData<D>)
+    where
+        D: TestableSqlDataSource + AsRef<D::SqlStorage>,
+        D::SqlStorage: RequestStorage,
+    {
+        let (_storage, ds, mts) = pruned_data_source::<D>(40, 30).await;
+        let storage: &D::SqlStorage = ds.as_ref();
+
+        // Roots below the pruned height are rebuilt; roots at or above it have a stored snapshot.
+        for root in [3, 27, 31, 39] {
+            for height in 0..root {
+                let http = get_header_proof(
+                    &ds,
+                    root as u64,
+                    BlockId::Number(height),
+                    Duration::from_secs(10),
+                )
+                .await
+                .unwrap();
+                let requested = storage
+                    .get_header_proof(root as u64, height as u64)
+                    .await
+                    .unwrap();
+                assert_eq!(requested, http, "root {root}, height {height}");
+                requested.verify(mts[root].commitment()).unwrap();
+            }
+        }
+
+        // The responder never fetches: an unknown header is an error.
+        storage.get_header_proof(100, 50).await.unwrap_err();
+        // A height at or above the root is an error.
+        storage.get_header_proof(5, 5).await.unwrap_err();
     }
 
     #[apply(sql_data_sources)]

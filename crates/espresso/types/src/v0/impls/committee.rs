@@ -26,7 +26,9 @@ use hotshot_types::{
     utils::{epoch_from_block_number, root_block_in_epoch, transition_block_for_epoch},
 };
 #[cfg(feature = "node")]
-use hotshot_types::{traits::block_contents::BlockHeader, utils::is_epoch_root};
+use hotshot_types::{
+    stake_table::HSStakeTable, traits::block_contents::BlockHeader, utils::is_epoch_root,
+};
 use indexmap::IndexMap;
 use parking_lot::RwLock;
 use thiserror::Error;
@@ -149,6 +151,33 @@ struct EpochCommittee {
     header: Option<Header>,
 }
 
+/// Committee entries of `validators`, in the order `EpochCommittee` and the LC contract commitment
+/// use.
+pub(crate) fn committee_peer_configs(
+    validators: &AuthenticatedValidatorMap,
+) -> IndexMap<PubKey, PeerConfig<SeqTypes>> {
+    validators
+        .values()
+        .map(|v| {
+            let key = *v.stake_table_key();
+            (
+                key,
+                PeerConfig {
+                    stake_table_entry: BLSPubKey::stake_table_entry(&key, v.stake),
+                    state_ver_key: v.state_ver_key().clone(),
+                    connect_info: v.x25519_key.and_then(|p| {
+                        let a = v.p2p_addr.clone()?;
+                        Some(PeerConnectInfo {
+                            x25519_key: p,
+                            p2p_addr: a,
+                        })
+                    }),
+                },
+            )
+        })
+        .collect()
+}
+
 impl EpochCommittee {
     fn new(
         validators: AuthenticatedValidatorMap,
@@ -156,28 +185,11 @@ impl EpochCommittee {
         hash: Option<StakeTableHash>,
         header: Option<Header>,
     ) -> Self {
-        let mut address_mapping = HashMap::new();
-        let stake_table: IndexMap<PubKey, PeerConfig<SeqTypes>> = validators
+        let address_mapping = validators
             .values()
-            .map(|v| {
-                let key = *v.stake_table_key();
-                address_mapping.insert(key, v.account);
-                (
-                    key,
-                    PeerConfig {
-                        stake_table_entry: BLSPubKey::stake_table_entry(&key, v.stake),
-                        state_ver_key: v.state_ver_key().clone(),
-                        connect_info: v.x25519_key.and_then(|p| {
-                            let a = v.p2p_addr.clone()?;
-                            Some(PeerConnectInfo {
-                                x25519_key: p,
-                                p2p_addr: a,
-                            })
-                        }),
-                    },
-                )
-            })
+            .map(|v| (*v.stake_table_key(), v.account))
             .collect();
+        let stake_table = committee_peer_configs(&validators);
 
         let eligible_leaders: Vec<PeerConfig<SeqTypes>> =
             stake_table.iter().map(|(_, l)| l.clone()).collect();
@@ -304,7 +316,7 @@ impl EpochCommittees {
         // Return early if previous epoch is not the first two epochs
         // and we don't have the stake table.
         if previous_epoch > first_epoch + 1 && self.snapshot(previous_epoch.into()).is_none() {
-            warn!(?previous_epoch, "missing stake table for previous epoch");
+            debug!(?previous_epoch, "missing stake table for previous epoch");
             return Ok(None);
         }
 
@@ -537,6 +549,273 @@ impl EpochCommittees {
     pub fn with_storage_read_timeout(mut self, timeout: Duration) -> Self {
         self.storage_read_timeout = timeout;
         self
+    }
+
+    /// The table `header` defines, derived from L1 events at `header.l1_finalized` under
+    /// `header.version()`, in `committee_peer_configs` order. Installs nothing.
+    #[cfg(feature = "node")]
+    pub async fn l1_derived_stake_table(
+        &self,
+        header: &Header,
+    ) -> anyhow::Result<HSStakeTable<SeqTypes>> {
+        let epoch =
+            EpochNumber::new(epoch_from_block_number(header.height(), *self.epoch_height) + 2);
+        let set = self.fetcher.fetch(epoch, header).await?;
+        Ok(HSStakeTable::from_iter(
+            committee_peer_configs(set.active_validators()).values(),
+        ))
+    }
+
+    /// `add_epoch_root` without the panic: a `next_stake_table_hash` mismatch with the held table
+    /// of the epoch below is `StakeTableHashMismatch`, returned before the epoch is put in memory.
+    /// `add_epoch_root` calls it and keeps its panic. Returns whether this call created the
+    /// epoch's committee (decided under the same lock as the insert), so a caller can undo only
+    /// its own installs.
+    #[cfg(feature = "node")]
+    pub async fn install_epoch_root(
+        &self,
+        block_header: Header,
+        coordinator: &EpochMembershipCoordinator<SeqTypes>,
+    ) -> Result<Option<EpochNumber>, EpochCommitteesError> {
+        let block_number = block_header.block_number();
+
+        let epoch_height = *self.epoch_height;
+
+        let epoch = EpochNumber::new(epoch_from_block_number(block_number, epoch_height) + 2);
+
+        info!(?epoch, "adding epoch root. height={:?}", block_number);
+
+        if !is_epoch_root(block_number, epoch_height) {
+            error!(
+                "`add_epoch_root` was called with a block header that was not the root block for \
+                 an epoch. This should never happen. Header:\n\n{block_header:?}"
+            );
+            return Err(EpochCommitteesError::NoRootBlock(block_number.into()));
+        }
+
+        // Stored ahead of the early return below so a failed write is retried by the next
+        // `add_epoch_root` for this epoch. Downstream of `put_epoch_committee` the committee
+        // is complete, which arms that early return and also stops catchup from re-entering
+        // `fetch_stake_table`, so one dropped error would leave the header unpersisted.
+        //
+        // Keyed by `epoch`, unlike the previous-epoch stake table stored further down, and
+        // not gated behind the stake table consistency check, which doesn't apply here.
+        if let Err(e) = self
+            .fetcher
+            .persistence
+            .lock()
+            .await
+            .store_epoch_root(epoch, block_header.clone())
+            .await
+        {
+            error!(?e, ?epoch, "`add_epoch_root`, error storing epoch root");
+        }
+
+        let version = block_header.version();
+        // Update the chain config if the block header contains a newer one.
+        self.fetcher
+            .update_chain_config(&block_header)
+            .await
+            .map_err(EpochCommitteesError::Fetcher)?;
+
+        let mut block_reward = None;
+        // Even if the current header is the root of the epoch which falls in the post upgrade
+        // we use the fixed block reward
+        if version == EPOCH_VERSION {
+            let reward = self
+                .fetch_and_update_fixed_block_reward(epoch)
+                .await
+                .map_err(EpochCommitteesError::Fetcher)?;
+            block_reward = Some(reward);
+        }
+
+        self.load_stake_table(epoch).await;
+
+        let epoch_committee = self.inner.read().epoch_committee(epoch).cloned();
+
+        // TODO: If the stake table is missing should it be fetched by an unbounded
+        // number of tasks?
+
+        // If the epoch committee:
+        // - exists and has a header stake table hash and block reward, return early.
+        // - exists without a reward, reuse validators and update reward.
+        // and fetch from L1 if the stake table hash is missing.
+        // - doesn't exist, fetch it from L1.
+        let (active_validators, all_validators, stake_table_hash) = match epoch_committee {
+            Some(committee)
+                if committee.block_reward.is_some()
+                    && committee.header.is_some()
+                    && committee.stake_table_hash.is_some() =>
+            {
+                info!(
+                    ?epoch,
+                    "committee already has block reward, header, and stake table hash; skipping \
+                     add_epoch_root"
+                );
+                return Ok(None);
+            },
+
+            Some(committee) => {
+                if let Some(reward) = committee.block_reward {
+                    block_reward = Some(reward);
+                }
+
+                if let Some(hash) = committee.stake_table_hash {
+                    (committee.validators.clone(), Default::default(), Some(hash))
+                } else {
+                    // if stake table hash is missing then recalculate from events
+                    info!(
+                        "Stake table hash missing for epoch {epoch}. recalculating by fetching \
+                         from l1."
+                    );
+                    let set = self
+                        .fetcher
+                        .fetch(epoch, &block_header)
+                        .await
+                        .map_err(EpochCommitteesError::Fetcher)?;
+                    (
+                        set.active_validators,
+                        set.all_validators,
+                        set.stake_table_hash,
+                    )
+                }
+            },
+
+            None => {
+                info!("Stake table missing for epoch {epoch}. Fetching from L1.");
+                let set = self
+                    .fetcher
+                    .fetch(epoch, &block_header)
+                    .await
+                    .map_err(EpochCommitteesError::Fetcher)?;
+                (
+                    set.active_validators,
+                    set.all_validators,
+                    set.stake_table_hash,
+                )
+            },
+        };
+
+        // If we are past the DRB+Header upgrade point,
+        // and don't have block reward
+        // calculate the dynamic block reward based on validator info and block header.
+        if block_reward.is_none() && version >= DRB_AND_HEADER_UPGRADE_VERSION {
+            info!(?epoch, "calculating dynamic block reward");
+            let reward = self
+                .calculate_dynamic_block_reward(
+                    epoch,
+                    &block_header,
+                    &active_validators,
+                    coordinator,
+                )
+                .await
+                .map_err(EpochCommitteesError::Reward)?;
+
+            info!(?epoch, "calculated dynamic block reward = {reward:?}");
+            block_reward = reward;
+        }
+
+        let committee = EpochCommittee::new(
+            active_validators.clone(),
+            block_reward,
+            stake_table_hash,
+            Some(block_header.clone()),
+        );
+
+        // previous_epoch is the epoch prior to `epoch`,
+        // or the epoch immediately succeeding the block header
+        let previous_epoch = EpochNumber::new(epoch.saturating_sub(1));
+        let decided_hash = block_header.next_stake_table_hash();
+
+        // The previous epoch's stake table is stored below only if the decided
+        // stake_table_hash is consistent with what we get.
+        //
+        // in principle this is unnecessary and we could've stored these right away,
+        // without offsetting the epoch. but the intention is to catch L1 provider issues
+        // if there is a mismatch
+        //
+        // Checked before anything of `epoch` is put in memory, so a mismatch installs nothing.
+        if let Some(previous_committee) = self.inner.read().epoch_committee(previous_epoch)
+            && decided_hash.is_some()
+            && decided_hash != previous_committee.stake_table_hash
+        {
+            return Err(EpochCommitteesError::StakeTableHashMismatch { epoch });
+        }
+
+        let inserted;
+        let previous_committee;
+        let previous_validators;
+        {
+            let mut inner = self.inner.write();
+            inserted = inner.epoch_committee(epoch).is_none();
+            inner.put_epoch_committee(epoch, Arc::new(committee));
+            previous_committee = inner.epoch_committee(previous_epoch).cloned();
+            // garbage collect the validator set
+            inner.all_validators = inner.all_validators.split_off(&previous_epoch);
+            // extract `all_validators` for the previous epoch
+            previous_validators = inner.all_validators.remove(&previous_epoch);
+            inner.all_validators.insert(epoch, all_validators.clone());
+            inner.prune_epochs(epoch);
+        }
+
+        let persistence_lock = self.fetcher.persistence.lock().await;
+
+        if let Some(previous_committee) = previous_committee {
+            if let Err(e) = persistence_lock
+                .store_stake(
+                    previous_epoch,
+                    previous_committee.validators.clone(),
+                    previous_committee.block_reward,
+                    previous_committee.stake_table_hash,
+                )
+                .await
+            {
+                error!(
+                    ?e,
+                    ?previous_epoch,
+                    "`add_epoch_root`, error storing stake table"
+                );
+            }
+
+            if let Some(previous_validators) = previous_validators
+                && let Err(e) = persistence_lock
+                    .store_all_validators(previous_epoch, previous_validators)
+                    .await
+            {
+                error!(?e, ?epoch, "`add_epoch_root`, error storing all validators");
+            }
+        }
+
+        Ok(inserted.then_some(epoch))
+    }
+
+    /// Installs the epoch roots `roots`, ascending, as `install_epoch_root` does. Any error, and
+    /// the future being dropped, evicts the epochs this call created; epochs held before stay.
+    #[cfg(feature = "node")]
+    pub async fn install_epoch_roots(
+        &self,
+        roots: Vec<Header>,
+        coordinator: &EpochMembershipCoordinator<SeqTypes>,
+    ) -> Result<(), EpochCommitteesError> {
+        let mut created = EvictOnDrop {
+            committees: self,
+            epochs: Vec::new(),
+        };
+        for header in roots {
+            created
+                .epochs
+                .extend(self.install_epoch_root(header, coordinator).await?);
+        }
+        created.epochs.clear();
+        Ok(())
+    }
+
+    /// Drops the committee, randomized committee and validators of `epoch` from memory.
+    #[cfg(feature = "node")]
+    fn remove_epoch(&self, epoch: EpochNumber) {
+        let mut inner = self.inner.write();
+        inner.snapshots.remove(&epoch);
+        inner.all_validators.remove(&epoch);
     }
 
     #[cfg(feature = "node")]
@@ -858,215 +1137,15 @@ impl Membership<SeqTypes> for EpochCommittees {
         block_header: Header,
         coordinator: &EpochMembershipCoordinator<SeqTypes>,
     ) -> Result<(), Self::Error> {
-        let block_number = block_header.block_number();
-
-        let epoch_height = *self.epoch_height;
-
-        let epoch = EpochNumber::new(epoch_from_block_number(block_number, epoch_height) + 2);
-
-        info!(?epoch, "adding epoch root. height={:?}", block_number);
-
-        if !is_epoch_root(block_number, epoch_height) {
-            error!(
-                "`add_epoch_root` was called with a block header that was not the root block for \
-                 an epoch. This should never happen. Header:\n\n{block_header:?}"
-            );
-            return Err(Self::Error::NoRootBlock(block_number.into()));
+        match self.install_epoch_root(block_header, coordinator).await {
+            Ok(_) => Ok(()),
+            Err(err @ EpochCommitteesError::StakeTableHashMismatch { .. }) => panic!(
+                "The decided block header's `next_stake_table_hash` does not match the hash of \
+                 the stake table we have. This is an unrecoverable error likely due to issues \
+                 with your L1 RPC provider. {err}"
+            ),
+            Err(err) => Err(err),
         }
-
-        // Stored ahead of the early return below so a failed write is retried by the next
-        // `add_epoch_root` for this epoch. Downstream of `put_epoch_committee` the committee
-        // is complete, which arms that early return and also stops catchup from re-entering
-        // `fetch_stake_table`, so one dropped error would leave the header unpersisted.
-        //
-        // Keyed by `epoch`, unlike the previous-epoch stake table stored further down, and
-        // not gated behind the stake table consistency check, which doesn't apply here.
-        if let Err(e) = self
-            .fetcher
-            .persistence
-            .lock()
-            .await
-            .store_epoch_root(epoch, block_header.clone())
-            .await
-        {
-            error!(?e, ?epoch, "`add_epoch_root`, error storing epoch root");
-        }
-
-        let version = block_header.version();
-        // Update the chain config if the block header contains a newer one.
-        self.fetcher
-            .update_chain_config(&block_header)
-            .await
-            .map_err(Self::Error::Fetcher)?;
-
-        let mut block_reward = None;
-        // Even if the current header is the root of the epoch which falls in the post upgrade
-        // we use the fixed block reward
-        if version == EPOCH_VERSION {
-            let reward = self
-                .fetch_and_update_fixed_block_reward(epoch)
-                .await
-                .map_err(Self::Error::Fetcher)?;
-            block_reward = Some(reward);
-        }
-
-        self.load_stake_table(epoch).await;
-
-        let epoch_committee = self.inner.read().epoch_committee(epoch).cloned();
-
-        // TODO: If the stake table is missing should it be fetched by an unbounded
-        // number of tasks?
-
-        // If the epoch committee:
-        // - exists and has a header stake table hash and block reward, return early.
-        // - exists without a reward, reuse validators and update reward.
-        // and fetch from L1 if the stake table hash is missing.
-        // - doesn't exist, fetch it from L1.
-        let (active_validators, all_validators, stake_table_hash) = match epoch_committee {
-            Some(committee)
-                if committee.block_reward.is_some()
-                    && committee.header.is_some()
-                    && committee.stake_table_hash.is_some() =>
-            {
-                info!(
-                    ?epoch,
-                    "committee already has block reward, header, and stake table hash; skipping \
-                     add_epoch_root"
-                );
-                return Ok(());
-            },
-
-            Some(committee) => {
-                if let Some(reward) = committee.block_reward {
-                    block_reward = Some(reward);
-                }
-
-                if let Some(hash) = committee.stake_table_hash {
-                    (committee.validators.clone(), Default::default(), Some(hash))
-                } else {
-                    // if stake table hash is missing then recalculate from events
-                    info!(
-                        "Stake table hash missing for epoch {epoch}. recalculating by fetching \
-                         from l1."
-                    );
-                    let set = self
-                        .fetcher
-                        .fetch(epoch, &block_header)
-                        .await
-                        .map_err(Self::Error::Fetcher)?;
-                    (
-                        set.active_validators,
-                        set.all_validators,
-                        set.stake_table_hash,
-                    )
-                }
-            },
-
-            None => {
-                info!("Stake table missing for epoch {epoch}. Fetching from L1.");
-                let set = self
-                    .fetcher
-                    .fetch(epoch, &block_header)
-                    .await
-                    .map_err(Self::Error::Fetcher)?;
-                (
-                    set.active_validators,
-                    set.all_validators,
-                    set.stake_table_hash,
-                )
-            },
-        };
-
-        // If we are past the DRB+Header upgrade point,
-        // and don't have block reward
-        // calculate the dynamic block reward based on validator info and block header.
-        if block_reward.is_none() && version >= DRB_AND_HEADER_UPGRADE_VERSION {
-            info!(?epoch, "calculating dynamic block reward");
-            let reward = self
-                .calculate_dynamic_block_reward(
-                    epoch,
-                    &block_header,
-                    &active_validators,
-                    coordinator,
-                )
-                .await
-                .map_err(Self::Error::Reward)?;
-
-            info!(?epoch, "calculated dynamic block reward = {reward:?}");
-            block_reward = reward;
-        }
-
-        let committee = EpochCommittee::new(
-            active_validators.clone(),
-            block_reward,
-            stake_table_hash,
-            Some(block_header.clone()),
-        );
-
-        let previous_epoch;
-        let previous_committee;
-        let previous_validators;
-        {
-            let mut inner = self.inner.write();
-            inner.put_epoch_committee(epoch, Arc::new(committee));
-            // previous_epoch is the epoch prior to `epoch`,
-            // or the epoch immediately succeeding the block header
-            previous_epoch = EpochNumber::new(epoch.saturating_sub(1));
-            previous_committee = inner.epoch_committee(previous_epoch).cloned();
-            // garbage collect the validator set
-            inner.all_validators = inner.all_validators.split_off(&previous_epoch);
-            // extract `all_validators` for the previous epoch
-            previous_validators = inner.all_validators.remove(&previous_epoch);
-            inner.all_validators.insert(epoch, all_validators.clone());
-            inner.prune_epochs(epoch);
-        }
-
-        let persistence_lock = self.fetcher.persistence.lock().await;
-
-        let decided_hash = block_header.next_stake_table_hash();
-
-        // we store the information from the previous epoch's in-memory committeee
-        // if the decided stake_table_hash is consistent with what we get
-        //
-        // in principle this is unnecessary and we could've stored these right away,
-        // without offsetting the epoch. but the intention is to catch L1 provider issues
-        // if there is a mismatch
-        if let Some(previous_committee) = previous_committee {
-            if decided_hash.is_none() || decided_hash == previous_committee.stake_table_hash {
-                if let Err(e) = persistence_lock
-                    .store_stake(
-                        previous_epoch,
-                        previous_committee.validators.clone(),
-                        previous_committee.block_reward,
-                        previous_committee.stake_table_hash,
-                    )
-                    .await
-                {
-                    error!(
-                        ?e,
-                        ?previous_epoch,
-                        "`add_epoch_root`, error storing stake table"
-                    );
-                }
-
-                if let Some(previous_validators) = previous_validators
-                    && let Err(e) = persistence_lock
-                        .store_all_validators(previous_epoch, previous_validators)
-                        .await
-                {
-                    error!(?e, ?epoch, "`add_epoch_root`, error storing all validators");
-                }
-            } else {
-                panic!(
-                    "The decided block header's `next_stake_table_hash` does not match the hash \
-                     of the stake table we have. This is an unrecoverable error likely due to \
-                     issues with your L1 RPC provider. Decided:\n\n{:?}Actual:\n\n{:?}",
-                    decided_hash, previous_committee.stake_table_hash
-                );
-            }
-        }
-
-        Ok(())
     }
 
     async fn get_epoch_root(
@@ -1266,6 +1345,25 @@ pub enum EpochCommitteesError {
 
     #[error("reward calculation error: {0}")]
     Reward(#[source] anyhow::Error),
+
+    #[error("epoch root of epoch {epoch}: next_stake_table_hash does not match the held table")]
+    StakeTableHashMismatch { epoch: EpochNumber },
+}
+
+/// Evicts `epochs` when dropped; cleared once they are to stay.
+#[cfg(feature = "node")]
+struct EvictOnDrop<'a> {
+    committees: &'a EpochCommittees,
+    epochs: Vec<EpochNumber>,
+}
+
+#[cfg(feature = "node")]
+impl Drop for EvictOnDrop<'_> {
+    fn drop(&mut self) {
+        for epoch in &self.epochs {
+            self.committees.remove_epoch(*epoch);
+        }
+    }
 }
 
 impl Inner {
@@ -1861,7 +1959,6 @@ mod tests {
              in memory"
         );
     }
-
     // `prune_epochs` keeps a bounded window behind the newest decided epoch
     // plus the first-epoch seeds (catchup anchors), and its cutoff never
     // regresses when an older epoch is (re-)inserted during catchup.
@@ -2614,5 +2711,173 @@ mod tests {
             da_c_keys,
             "epoch 5 must keep C — it is outside B's range",
         );
+    }
+
+    /// Puts a committee for `epoch` carrying a reward and `hash`, so `install_epoch_root` skips the
+    /// L1 fetch.
+    fn put_prefilled(committees: &EpochCommittees, epoch: u64, hash: StakeTableHash) {
+        let mut inner = committees.inner.write();
+        let template = inner
+            .epoch_committee(EpochNumber::genesis())
+            .expect("genesis committee exists")
+            .clone();
+        let prefilled = EpochCommittee {
+            block_reward: Some(RewardAmount::default()),
+            stake_table_hash: Some(hash),
+            header: None,
+            eligible_leaders: template.eligible_leaders.clone(),
+            stake_table: template.stake_table.clone(),
+            validators: template.validators.clone(),
+            address_mapping: template.address_mapping.clone(),
+        };
+        inner.put_epoch_committee(EpochNumber::new(epoch), Arc::new(prefilled));
+    }
+
+    /// An epoch root header at `height` whose `next_stake_table_hash` is `decided`.
+    async fn header_deciding(height: u64, decided: StakeTableHash) -> Header {
+        let mut instance = NodeState::mock_v2();
+        instance.genesis_version = versions::version(0, 4);
+        let (payload, metadata) =
+            Payload::from_transactions(&[], &instance.genesis_state, &instance)
+                .await
+                .expect("payload");
+        match Header::genesis(&instance, payload, &metadata, MOCK_UPGRADE.base) {
+            Header::V4(mut h) => {
+                h.height = height;
+                h.next_stake_table_hash = Some(decided);
+                Header::V4(h)
+            },
+            other => panic!("expected a V4 header, got {other:?}"),
+        }
+    }
+
+    fn mismatch_setup() -> (EpochCommittees, EpochMembershipCoordinator<SeqTypes>) {
+        let committees = build_committees(4);
+        put_prefilled(&committees, 2, StakeTableState::default().commit());
+        put_prefilled(&committees, 3, StakeTableState::default().commit());
+        let coordinator = EpochMembershipCoordinator::<SeqTypes>::new(
+            committees.clone(),
+            *committees.epoch_height(),
+            &hotshot_example_types::storage_types::TestStorage::default(),
+        );
+        (committees, coordinator)
+    }
+
+    fn other_hash() -> StakeTableHash {
+        Commitment::from_raw([7; 32])
+    }
+
+    /// A mismatch with the held table of the epoch below is an error and installs nothing.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn install_epoch_root_hash_mismatch_fails() {
+        let (committees, coordinator) = mismatch_setup();
+        let header = header_deciding(95, other_hash()).await;
+
+        let err = committees
+            .install_epoch_root(header, &coordinator)
+            .await
+            .unwrap_err();
+
+        assert!(
+            matches!(
+                err,
+                EpochCommitteesError::StakeTableHashMismatch { epoch }
+                    if epoch == EpochNumber::new(3)
+            ),
+            "{err:#}"
+        );
+        let inner = committees.inner.read();
+        let committee = inner.epoch_committee(EpochNumber::new(3)).unwrap();
+        assert!(
+            committee.header.is_none(),
+            "nothing of epoch 3 is installed"
+        );
+        assert!(!inner.all_validators.contains_key(&EpochNumber::new(3)));
+    }
+
+    /// A matching hash installs the root.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn install_epoch_root_matching_hash_ok() {
+        let (committees, coordinator) = mismatch_setup();
+        let header = header_deciding(95, StakeTableState::default().commit()).await;
+
+        committees
+            .install_epoch_root(header, &coordinator)
+            .await
+            .unwrap();
+
+        let inner = committees.inner.read();
+        let committee = inner.epoch_committee(EpochNumber::new(3)).unwrap();
+        assert!(committee.header.is_some());
+    }
+
+    /// `add_epoch_root` keeps its panic on a mismatch.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[should_panic(expected = "unrecoverable")]
+    async fn add_epoch_root_panics_on_hash_mismatch() {
+        let (committees, coordinator) = mismatch_setup();
+        let header = header_deciding(95, other_hash()).await;
+
+        let _ = committees.add_epoch_root(header, &coordinator).await;
+    }
+
+    /// The epochs a dropped guard lists are evicted; a cleared guard evicts nothing.
+    #[test]
+    fn evict_on_drop_removes_only_listed_epochs() {
+        let committees = build_committees(4);
+        for epoch in 3..=5 {
+            put_prefilled(&committees, epoch, StakeTableState::default().commit());
+        }
+        committees
+            .inner
+            .write()
+            .all_validators
+            .insert(EpochNumber::new(4), Default::default());
+
+        drop(EvictOnDrop {
+            committees: &committees,
+            epochs: vec![EpochNumber::new(4)],
+        });
+        let mut kept = EvictOnDrop {
+            committees: &committees,
+            epochs: vec![EpochNumber::new(5)],
+        };
+        kept.epochs.clear();
+        drop(kept);
+
+        let inner = committees.inner.read();
+        assert!(inner.epoch_committee(EpochNumber::new(3)).is_some());
+        assert!(inner.epoch_committee(EpochNumber::new(4)).is_none());
+        assert!(inner.epoch_committee(EpochNumber::new(5)).is_some());
+        assert!(!inner.all_validators.contains_key(&EpochNumber::new(4)));
+    }
+
+    /// A mismatch on the second root errors and the epochs held before stay, whether or not the
+    /// first root was already installed.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn install_epoch_roots_mismatch_keeps_held_epochs() {
+        let (committees, coordinator) = mismatch_setup();
+        put_prefilled(&committees, 4, other_hash());
+        let matching = header_deciding(95, StakeTableState::default().commit()).await;
+        // Epoch 4's previous table (epoch 3) holds the default hash, not this one.
+        let mismatching = header_deciding(195, other_hash()).await;
+
+        let err = committees
+            .install_epoch_roots(vec![matching, mismatching], &coordinator)
+            .await
+            .unwrap_err();
+
+        assert!(
+            matches!(
+                err,
+                EpochCommitteesError::StakeTableHashMismatch { epoch }
+                    if epoch == EpochNumber::new(4)
+            ),
+            "{err:#}"
+        );
+        let inner = committees.inner.read();
+        for epoch in [2, 3, 4] {
+            assert!(inner.epoch_committee(EpochNumber::new(epoch)).is_some());
+        }
     }
 }

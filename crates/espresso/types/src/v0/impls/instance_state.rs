@@ -9,14 +9,20 @@ use anyhow::{Context, bail};
 use async_lock::Mutex;
 use async_trait::async_trait;
 #[cfg(feature = "node")]
-use hotshot_contract_adapter::sol_types::{LightClientV3, StakeTableV3};
+use hotshot_contract_adapter::sol_types::{LightClientV3, StakeTableStateSol, StakeTableV3};
+#[cfg(feature = "node")]
+use hotshot_types::PeerConfig;
 use hotshot_types::{
     HotShotConfig, data::EpochNumber, drb::DrbResult, epoch_membership::EpochMembershipCoordinator,
     traits::states::InstanceState,
 };
+#[cfg(feature = "node")]
+use indexmap::IndexMap;
 use moka::future::Cache;
 use vbs::version::Version;
 
+#[cfg(feature = "node")]
+use super::LcContractVotingStakeTable;
 use super::{
     SeqTypes, UpgradeType, ViewBasedUpgrade,
     state::ValidatedState,
@@ -36,6 +42,9 @@ use crate::{
     },
     v0_3::{RegisteredValidator, RewardAmount},
 };
+/// How long `NodeState::l1_finalized_block` waits for the L1 client to see a finalized block.
+#[cfg(feature = "node")]
+const L1_FINALIZED_WAIT: Duration = Duration::from_secs(30);
 
 /// Represents the immutable state of a node.
 ///
@@ -167,6 +176,70 @@ impl NodeState {
                 Ok(finalized_hotshot_height)
             },
         }
+    }
+
+    /// The number of the L1 finalized block, waiting up to `L1_FINALIZED_WAIT` for the first one.
+    #[cfg(feature = "node")]
+    async fn l1_finalized_block(&self) -> anyhow::Result<u64> {
+        tokio::time::timeout(L1_FINALIZED_WAIT, async {
+            loop {
+                if let Some(finalized) = self.l1_client.snapshot().await.finalized {
+                    return finalized.number;
+                }
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+        })
+        .await
+        .context("no L1 finalized block yet")
+    }
+
+    /// `finalizedState` and `votingStakeTableState` at the L1 finalized block.
+    #[cfg(feature = "node")]
+    pub async fn lc_contract_voting_stake_table(
+        &self,
+    ) -> anyhow::Result<LcContractVotingStakeTable> {
+        let l1_block = self.l1_finalized_block().await?;
+        let block = BlockId::number(l1_block);
+        let light_client_contract = LightClientV3::new(
+            self.light_client_contract_address().await?,
+            self.l1_client.provider.clone(),
+        );
+        let finalized_block_height = light_client_contract
+            .finalizedState()
+            .block(block)
+            .call()
+            .await
+            .context("failed to read finalizedState")?
+            .blockHeight;
+        let voting_stake_table_state = light_client_contract
+            .votingStakeTableState()
+            .block(block)
+            .call()
+            .await
+            .context("failed to read votingStakeTableState")?;
+        Ok(LcContractVotingStakeTable {
+            l1_block,
+            voting_epoch: LcContractVotingStakeTable::voting_epoch(
+                finalized_block_height,
+                *self.coordinator.epoch_height(),
+            ),
+            commitment: StakeTableStateSol::from(voting_stake_table_state).into(),
+        })
+    }
+
+    /// `ST(now)`: the active set from stake-table events up to the L1 finalized block, at
+    /// `version`, in `committee_peer_configs` order, with connect info.
+    #[cfg(feature = "node")]
+    pub async fn l1_finalized_peers(
+        &self,
+        version: Version,
+    ) -> anyhow::Result<IndexMap<PubKey, PeerConfig<SeqTypes>>> {
+        let l1_block = self.l1_finalized_block().await?;
+        self.coordinator
+            .membership()
+            .fetcher()
+            .active_peers_at(l1_block, version)
+            .await
     }
 
     /// The oldest HotShot block height the light client contract still holds a commitment for, or

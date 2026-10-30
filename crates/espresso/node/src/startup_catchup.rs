@@ -1,16 +1,13 @@
-//! Startup stake-table catchup for new-protocol nodes.
+//! Follower startup stake-table catchup for new-protocol nodes.
 //!
 //! Cliquenet only connects to validators in the current epoch's stake table
-//! window (`N-1`, `N`, `N+1`). On a fresh-join or cold-restart node, no
-//! consensus messages can be received until those stake tables are populated,
-//! so the existing reactive catchup (triggered by an unknown-epoch proposal)
-//! never fires.
-//!
+//! window (`N-1`, `N`, `N+1`), and a follower is in no validator's window, so
 //! [`bootstrap_epoch_window`] drives the existing catchup machinery
 //! synchronously at startup: it walks forward one epoch at a time from the
 //! highest already-known epoch (loaded from persistence by `reload_stake`)
-//! until peers can no longer serve the next epoch root leaf — which is the
-//! point at which the live network currently is.
+//! until peers can no longer serve the next epoch root leaf. Validators do not
+//! walk at startup; their post-start catchup is seeded from the LC contract
+//! (`lc_contract_seed.rs`).
 
 use std::time::Duration;
 

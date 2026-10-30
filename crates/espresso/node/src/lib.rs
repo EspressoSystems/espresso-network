@@ -1,4 +1,5 @@
 mod external_event_handler;
+mod lc_contract_seed;
 mod message_compat_tests;
 mod proposal_fetcher;
 mod request_response;
@@ -126,9 +127,6 @@ pub struct NetworkParams {
     pub private_state_key: StateSignKey,
     pub config_peers: Option<Vec<Url>>,
     pub catchup: CatchupParams,
-    /// Per-step timeout for the startup stake-table catchup walk
-    /// (`bootstrap_epoch_window`).
-    pub bootstrap_epoch_catchup_timeout: Duration,
     /// The address to advertise as our public API's URL
     pub public_api_url: Option<Url>,
     /// Cliquenet network address.
@@ -460,7 +458,6 @@ where
         genesis.stake_table.capacity,
         event_consumer,
         proposal_fetcher_config,
-        network_params.bootstrap_epoch_catchup_timeout,
         empty_block_delay,
         block_sizes,
     )
@@ -639,13 +636,15 @@ where
 
     let state_catchup_providers = ParallelStateCatchup::new(&[], catchup.local_timeout)
         .with_fallback_delay(catchup.http_delay);
-    let state_peers = StatePeers::<SequencerApiVersion>::from_urls(
-        catchup.state_peers,
-        catchup.backoff,
-        catchup.base_timeout,
-        metrics,
-    );
-    state_catchup_providers.add_fallback_provider(Arc::new(state_peers));
+    if !catchup.state_peers.is_empty() {
+        let state_peers = StatePeers::<SequencerApiVersion>::from_urls(
+            catchup.state_peers,
+            catchup.backoff,
+            catchup.base_timeout,
+            metrics,
+        );
+        state_catchup_providers.add_fallback_provider(Arc::new(state_peers));
+    }
     // Local is a single attempt per call; remote providers retry.
     match persistence
         .clone()
@@ -877,12 +876,15 @@ pub mod testing {
         future::join_all,
         stream::{Stream, StreamExt},
     };
-    use hotshot_contract_adapter::stake_table::StakeTableContractVersion;
+    use hotshot_contract_adapter::{
+        sol_types::{LightClientStateSol, LightClientV3Mock, StakeTableStateSol},
+        stake_table::StakeTableContractVersion,
+    };
     use hotshot_types::{
         HotShotConfig, PeerConfig, PeerConnectInfo,
         data::EpochNumber,
         event::LeafInfo,
-        light_client::StateKeyPair,
+        light_client::{StakeTableState as StakeTableCommitment, StateKeyPair},
         new_protocol::CoordinatorEvent,
         traits::{
             BlockPayload, EncodeBytes, block_contents::BlockHeader, metrics::NoMetrics,
@@ -1426,6 +1428,40 @@ pub mod testing {
             self.contracts.clone()
         }
 
+        /// Sets `finalizedState.blockHeight` and `votingStakeTableState` of the mock LC contract
+        /// the way a prover would after proving epoch roots. A `TestNetwork` has no prover, so
+        /// the LC contract otherwise stays at genesis. `contracts` are those the network deployed.
+        pub async fn set_lc_contract_voting_state(
+            &self,
+            contracts: &Contracts,
+            finalized_block_height: u64,
+            commitment: StakeTableCommitment,
+        ) -> anyhow::Result<()> {
+            let address = contracts
+                .address(Contract::LightClientProxy)
+                .context("no LightClientProxy deployed")?;
+            let provider = ProviderBuilder::new()
+                .wallet(EthereumWallet::from(self.signer.clone()))
+                .connect_http(self.l1_url.clone());
+            let lc = LightClientV3Mock::new(address, &provider);
+            let current = lc.finalizedState().call().await?;
+            let state = LightClientStateSol {
+                blockHeight: finalized_block_height,
+                ..LightClientStateSol::from(current)
+            };
+            lc.setFinalizedState(state.into())
+                .send()
+                .await?
+                .watch()
+                .await?;
+            lc.setVotingStakeTableState(StakeTableStateSol::from(commitment).into())
+                .send()
+                .await?
+                .watch()
+                .await?;
+            Ok(())
+        }
+
         pub fn validator_providers(
             &self,
         ) -> Vec<(Address, impl Provider + Clone + use<NUM_NODES>)> {
@@ -1644,7 +1680,6 @@ pub mod testing {
                 stake_table_capacity,
                 event_consumer,
                 Default::default(),
-                Duration::from_secs(2),
                 Duration::from_millis(500),
                 BTreeMap::from([(upgrade.base, max_block_size)]),
             )
