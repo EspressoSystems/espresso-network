@@ -390,14 +390,30 @@ def point(
     }
 
 
+def capacity(
+    profile: str, n: int, gbps: float, k: int, views: int, c: Compute, lane: bool, max_mb: float
+) -> tuple[float, float]:
+    """(MB/s, block MB) at the peak of throughput by block size up to `max_mb`: the largest
+    offered rate whose blocks settle. Below the peak the loop mb -> rate × view(mb) has a stable
+    fixed point, above it none; the growth of measured blocks cannot tell, since the leader
+    sequence alone moves their medians by a fifth under geography."""
+    best = (0.0, 0.0)
+    for i in range(1, 31):
+        mb = max_mb * i / 30
+        r = point(profile, n, gbps, mb, k, views, 1, c, lane)
+        best = max(best, (r["mbps"], mb))
+    return best
+
+
 def print_sweep(args, k: int, compute: Compute) -> None:
-    """Blocks, view, finality and the decided rate at each offered rate, and the last rate
-    whose blocks stopped growing: the model's capacity."""
+    """Blocks, view, finality and the decided rate at each offered rate, and the capacity."""
+    cap_mbps, cap_mb = capacity(
+        args.profile, args.nodes, args.gbps, k, args.views, compute, args.lane, args.max_block
+    )
     print(
         f"{'rate':>6}{'block p50':>10}{'p90':>6}{'view':>7}{'fin':>7}{'late%':>7}"
         f"{'decided':>9}{'capped%':>9}{'growth%':>9}  verdict"
     )
-    capacity = None
     for rate in (float(x) for x in args.rates.split(",")):
         r = point(
             args.profile,
@@ -411,15 +427,14 @@ def print_sweep(args, k: int, compute: Compute) -> None:
             args.lane,
             Load(rate, args.max_block),
         )
-        stable = r["capped_pct"] == 0 and r["growth_pct"] < 5
-        if stable:
-            capacity = rate
+        stable = rate <= cap_mbps and r["capped_pct"] == 0
         print(
             f"{rate:6g}{r['mb_p50']:10.1f}{r['mb_p90']:6.0f}{r['view_mean']:7.0f}{r['fin_p50']:7.0f}"
             f"{r['late_pct']:7.1f}{r['mbps']:9.0f}{r['capped_pct']:9.0f}{r['growth_pct']:9.1f}"
             f"  {'steady' if stable else 'blocks grow'}"
         )
-    print(f"capacity: {capacity:g} MB/s" if capacity else "capacity: below the first rate")
+    bound = " (the max block binds)" if cap_mb >= args.max_block - 1e-9 else ""
+    print(f"capacity: {cap_mbps:.0f} MB/s at {cap_mb:.0f} MB blocks{bound}")
 
 
 def main(argv=None):

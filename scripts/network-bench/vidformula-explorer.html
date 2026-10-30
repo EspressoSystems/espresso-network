@@ -524,8 +524,9 @@
       </div>
       <p class="note" id="mode-note" style="margin-top: 6px" hidden>
         Transactions arrive at the offered rate and a leader takes the whole pool, up to the max block. Below the
-        capacity the blocks settle; above it each view's block outgrows the last until the cap, and the decided rate
-        flattens. Real networks tip before the model does: one slow view near the boundary is enough.
+        capacity, the peak of throughput by block size within the max block, the blocks settle; above it each view's
+        block outgrows the last until the cap, and the decided rate flattens. Real networks tip before the model does:
+        one slow view near the boundary is enough.
       </p>
     </section>
     <section class="panel">
@@ -1456,8 +1457,20 @@
         s.share_ms = (((cfg.n - 1) / cfg.k) * s.mb * 8) / cfg.gbps;
         return s;
       };
-      let pts, capacity;
+      let pts, capacity, peak;
       if (rateMode) {
+        // A rate settles when it is below the peak of the fixed-block throughput curve within the
+        // max block: below it the loop has a stable fixed point, above it none. Measured growth
+        // cannot tell, since the leader sequence alone moves block medians by a fifth.
+        const blocks = blockSizes(cfg.maxmb).map((mb) => {
+          const r = MODEL.runViews(cfg.n, cfg.k, d, mb, cfg.gbps, cfg.leaders, views, cfg.compute, cfg.lane);
+          const s = MODEL.summarize(r, lo, hi);
+          s.mb = mb;
+          s.mbps = (mb / s.view_mean) * 1000;
+          return s;
+        });
+        peak = blocks.reduce((a, b) => (b.mbps > a.mbps ? b : a));
+        capacity = peak.mbps;
         pts = rates(cfg.maxrate).map((rate) => {
           const load = { rate, maxMb: cfg.maxmb, seedMb: 10 };
           const r = MODEL.runViews(cfg.n, cfg.k, d, 0, cfg.gbps, cfg.leaders, views, cfg.compute, cfg.lane, load);
@@ -1465,10 +1478,16 @@
           s.rate = rate;
           s.mb = s.mb_p50;
           s.mbps = s.decided;
-          s.steady = s.capped_pct === 0 && s.growth_pct < 5;
+          s.steady = rate <= capacity && s.capped_pct === 0;
           return finish(s, rate);
         });
-        capacity = pts.reduce((acc, s) => (s.steady ? s.rate : acc), NaN);
+        // The peak itself is the last point that settles, at x = capacity: the cap crossing and
+        // the hero tile then reach it instead of stopping at the rate grid below it.
+        if (capacity <= cfg.maxrate) {
+          const edge = finish({ ...peak, rate: capacity, steady: true }, capacity);
+          const i = pts.findIndex((s) => s.x > capacity);
+          pts.splice(i < 0 ? pts.length : i, 0, edge);
+        }
       } else {
         pts = blockSizes(cfg.maxmb).map((mb) => {
           const r = MODEL.runViews(cfg.n, cfg.k, d, mb, cfg.gbps, cfg.leaders, views, cfg.compute, cfg.lane);
@@ -1494,7 +1513,7 @@
       const slope = cfg.lane
         ? (((cfg.n - 1) / cfg.k) * 8) / cfg.gbps + cfg.compute.decode[1]
         : (((2 * (cfg.n - 1)) / cfg.k) * 8) / cfg.gbps; // ms per MB of view at large blocks
-      return { cfg, pts, capacity, q_ms: MODEL.pct(qs, 0.5), dll_ms: MODEL.pct(dl, 0.5), ceiling: 1000 / slope, regions: reg };
+      return { cfg, pts, capacity, peak, q_ms: MODEL.pct(qs, 0.5), dll_ms: MODEL.pct(dl, 0.5), ceiling: 1000 / slope, regions: reg };
     }
     // Steady points only: past the capacity the blocks are still growing when measured.
     const steady = (res) => res.pts.filter((s) => s.steady);
@@ -1579,7 +1598,7 @@
       const at = atCap(res),
         bat = base ? atCap(base) : null;
       const cap = res.cfg.cap;
-      const atCapacity = rateMode && Number.isFinite(res.capacity) ? res.pts.find((s) => s.rate === res.capacity) : null;
+      const atCapacity = rateMode ? res.peak : null;
       let status = "";
       if (at.status === "below")
         status = rateMode
@@ -1587,13 +1606,13 @@
           : `Even 1 MB blocks exceed the ${cap} ms cap here: the latency chain alone is above it. Raise the cap or cut the fixed costs.`;
       if (at.status === "above")
         status = rateMode
-          ? Number.isFinite(res.capacity) && res.capacity < res.cfg.maxrate
-            ? `Latency stays under the cap at every steady rate; the capacity binds first, at ${fmt(res.capacity)} MB/s.`
+          ? res.capacity < res.cfg.maxrate
+            ? `Latency stays under the cap at every rate that settles; the capacity binds first, at ${fmt(res.capacity)} MB/s.`
             : `Every offered rate up to ${res.cfg.maxrate} MB/s settles under the cap; raise "offered rates up to" to find the limit.`
           : `Finality stays under the cap up to ${res.cfg.maxmb} MB blocks; raise "block sizes up to" to find the limit.`;
       $("status").textContent = status;
       labelOf("t-mbps", rateMode ? "Max offered rate under the cap" : "Max throughput under the cap");
-      labelOf("t-ceil", rateMode ? "Capacity: blocks stop growing" : "Ceiling, unconstrained");
+      labelOf("t-ceil", rateMode ? "Capacity at this max block" : "Ceiling, unconstrained");
       labelOf("t-free", rateMode ? "Max rate under the cap, no compute" : "Max under the cap, no compute");
       labelOf("t-decode", rateMode ? "Max rate under the cap, reconstruction only" : "Max under the cap, reconstruction only");
       const ok = at.status !== "below";
@@ -1617,9 +1636,9 @@
           Number.isFinite(res.capacity) ? fmt(res.capacity) : "–",
           Number.isFinite(res.capacity) ? "MB/s" : "",
           d ||
-            (atCapacity
-              ? `${fmt(atCapacity.mb)} MB blocks, ${fmt(atCapacity.view_mean)} ms views; above it the pool outgrows the view`
-              : "no offered rate settles"),
+            (atCapacity.mb >= res.cfg.maxmb
+              ? `the max block binds: ${fmt(atCapacity.mb)} MB blocks, ${fmt(atCapacity.view_mean)} ms views; raise it for more`
+              : `peak at ${fmt(atCapacity.mb)} MB blocks, ${fmt(atCapacity.view_mean)} ms views; above it the pool outgrows the view`),
           cls,
         );
       } else {
@@ -1683,7 +1702,7 @@
       const pts = shown(res);
       const bl = base ? shown(base) : null;
       const mark = at.status === "ok" ? at : null;
-      const capAt = rateMode && Number.isFinite(res.capacity) ? res.pts.find((s) => s.rate === res.capacity) : null;
+      const capAt = rateMode && Number.isFinite(res.capacity) ? { rate: res.capacity, mb: res.peak.mb } : null;
       $("ch-tp").parentElement.querySelector("h3").textContent = rateMode
         ? "Block size by offered rate"
         : "Throughput by block size";
