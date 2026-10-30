@@ -45,7 +45,6 @@ pub struct TestStorageState<TYPES: NodeType> {
     high_qc2: Option<QuorumCertificate2<TYPES>>,
     action: ViewNumber,
     action_log: Vec<(ViewNumber, HotShotAction)>,
-    epoch: Option<EpochNumber>,
     state_certs: BTreeMap<EpochNumber, LightClientStateUpdateCertificateV2<TYPES>>,
     drb_results: BTreeMap<EpochNumber, DrbResult>,
     drb_inputs: BTreeMap<u64, DrbInput>,
@@ -65,7 +64,6 @@ impl<TYPES: NodeType> Default for TestStorageState<TYPES> {
             high_qc2: None,
             action: ViewNumber::genesis(),
             action_log: Vec::new(),
-            epoch: None,
             state_certs: BTreeMap::new(),
             drb_results: BTreeMap::new(),
             drb_inputs: BTreeMap::new(),
@@ -180,9 +178,6 @@ impl<TYPES: NodeType> TestStorage<TYPES> {
         self.inner.read().await.cert2s.get(&view).cloned()
     }
 
-    pub async fn last_actioned_epoch(&self) -> Option<EpochNumber> {
-        self.inner.read().await.epoch
-    }
     pub async fn vids_cloned(&self) -> VidShares<TYPES> {
         self.inner.read().await.vids.clone()
     }
@@ -264,7 +259,6 @@ impl<TYPES: NodeType> Storage<TYPES> for TestStorage<TYPES> {
     async fn record_action(
         &self,
         view: ViewNumber,
-        epoch: Option<EpochNumber>,
         action: hotshot_types::event::HotShotAction,
     ) -> Result<()> {
         if self.should_return_err.load(Ordering::Relaxed) {
@@ -275,13 +269,9 @@ impl<TYPES: NodeType> Storage<TYPES> for TestStorage<TYPES> {
         if matches!(
             action,
             HotShotAction::Vote | HotShotAction::Propose | HotShotAction::TimeoutVote
-        ) {
-            if view > inner.action {
-                inner.action = view;
-            }
-            if epoch > inner.epoch {
-                inner.epoch = epoch;
-            }
+        ) && view > inner.action
+        {
+            inner.action = view;
         }
         if matches!(action, HotShotAction::Vote) {
             inner.restart_view = view + 1;

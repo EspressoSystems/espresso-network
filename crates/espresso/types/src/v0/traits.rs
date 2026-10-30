@@ -962,12 +962,7 @@ pub trait SequencerPersistence:
         proposal: &Proposal<SeqTypes, DaProposal<SeqTypes>>,
         vid_commit: VidCommitment,
     ) -> anyhow::Result<()>;
-    async fn record_action(
-        &self,
-        view: ViewNumber,
-        epoch: Option<EpochNumber>,
-        action: HotShotAction,
-    ) -> anyhow::Result<()>;
+    async fn record_action(&self, view: ViewNumber, action: HotShotAction) -> anyhow::Result<()>;
 
     async fn append_quorum_proposal2(
         &self,
@@ -1111,13 +1106,8 @@ impl<P: SequencerPersistence> Storage<SeqTypes> for Arc<P> {
         (**self).append_da2(proposal, vid_commit).await
     }
 
-    async fn record_action(
-        &self,
-        view: ViewNumber,
-        epoch: Option<EpochNumber>,
-        action: HotShotAction,
-    ) -> anyhow::Result<()> {
-        (**self).record_action(view, epoch, action).await
+    async fn record_action(&self, view: ViewNumber, action: HotShotAction) -> anyhow::Result<()> {
+        (**self).record_action(view, action).await
     }
 
     async fn append_proposal_wrapper(

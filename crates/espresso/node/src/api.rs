@@ -3898,11 +3898,11 @@ mod test {
 
     /// A pruned node keeps no totals from genesis, so every route that serves them is a 404 on v1
     /// and v2, even for a range of blocks the node stores.
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_pruned_node_totals_are_not_found() {
+    #[apply(sql_data_sources)]
+    async fn test_pruned_node_totals_are_not_found<D: TestableSqlDataSource>(_d: PhantomData<D>) {
         let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
-        let storage = SqlDataSource::create_storage().await;
-        let mut db_opt = tmp_options(&storage);
+        let storage = D::create_storage().await;
+        let mut db_opt = D::tmp_options(&storage);
         db_opt.prune = true;
         let config = TestNetworkConfigBuilder::default()
             .api_config(Options::with_port(port).query_sql(Query::default(), db_opt))

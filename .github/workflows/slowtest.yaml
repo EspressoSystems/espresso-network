@@ -52,8 +52,12 @@ jobs:
 
       - uses: ./.github/actions/install-foundry
       - uses: ./.github/actions/install-postgres
-      - uses: taiki-e/install-action@just
-      - uses: taiki-e/install-action@nextest
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: just
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: nextest
       - uses: rui314/setup-mold@v1
 
       # Before the cache restore so a stale value fails in seconds. GitHub
@@ -132,8 +136,12 @@ jobs:
 
       - uses: ./.github/actions/install-foundry
       - uses: ./.github/actions/install-postgres
-      - uses: taiki-e/install-action@just
-      - uses: taiki-e/install-action@nextest
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: just
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: nextest
       - uses: rui314/setup-mold@v1
 
       - name: Enable Rust Caching
