@@ -335,16 +335,26 @@ impl NsAvidmGf2Scheme {
         if shares.is_empty() {
             return Err(VidError::InsufficientShares);
         }
-        if ns_index >= common.ns_lens.len()
-            || !shares.iter().all(|share| share.contains_ns(ns_index))
-        {
+        let (Some(ns_commit), Some(&ns_len)) = (
+            common.ns_commits.get(ns_index),
+            common.ns_lens.get(ns_index),
+        ) else {
+            return Err(VidError::IndexOutOfBound);
+        };
+        if !shares.iter().all(|share| share.contains_ns(ns_index)) {
             return Err(VidError::IndexOutOfBound);
         }
-        let ns_commit = &common.ns_commits[ns_index];
         let shares: Vec<_> = shares
             .iter()
             .filter_map(|share| share.inner_ns_share(ns_index))
             .collect();
+        // The commitment does not bind `ns_lens`, so shards sized for another
+        // namespace length must be rejected before decoding.
+        if !shares.iter().all(|share| {
+            share.payload.is_empty() || Self::ns_len_matches_shards(&common.param, ns_len, share)
+        }) {
+            return Err(VidError::InvalidShare);
+        }
         AvidmGf2Scheme::recover(&common.param, ns_commit, &shares)
     }
 
@@ -380,7 +390,7 @@ pub struct NsDispersal {
 pub mod tests {
     use rand::{RngCore, seq::SliceRandom};
 
-    use crate::avidm_gf2::namespaced::NsAvidmGf2Scheme;
+    use crate::{VidError, avidm_gf2::namespaced::NsAvidmGf2Scheme};
 
     fn disperse_with_payload(
         payload: &[u8],
@@ -645,6 +655,28 @@ pub mod tests {
         assert_eq!(ns1_payload_recovered[..], payload[ns_table[1].clone()]);
         let payload_recovered = NsAvidmGf2Scheme::recover(&common, &shares[..cut_index]).unwrap();
         assert_eq!(payload_recovered, payload);
+    }
+
+    #[test]
+    fn ns_recover_rejects_ns_len_the_shards_were_not_dispersed_from() {
+        let k = 4;
+        let (_commit, common, shares) = disperse_with_threshold(k, &[7u8; 100], &[0..30, 30..100]);
+        let mut shrunk = common.clone();
+        shrunk.ns_lens[1] -= 2 * k;
+        assert!(matches!(
+            NsAvidmGf2Scheme::ns_recover(&shrunk, 1, &shares),
+            Err(VidError::InvalidShare)
+        ));
+    }
+
+    #[test]
+    fn ns_recover_rejects_common_with_fewer_commits_than_lens() {
+        let (_commit, mut common, shares) = setup_test_data();
+        common.ns_commits.pop();
+        assert!(matches!(
+            NsAvidmGf2Scheme::ns_recover(&common, 1, &shares),
+            Err(VidError::IndexOutOfBound)
+        ));
     }
 
     /// A caller that encodes each namespace with `ns_disperse_one` and folds the

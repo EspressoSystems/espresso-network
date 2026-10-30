@@ -158,12 +158,6 @@ impl SequencerPersistence for NoStorage {
         Ok(())
     }
 
-    async fn load_next_epoch_quorum_certificate(
-        &self,
-    ) -> anyhow::Result<Option<NextEpochQuorumCertificate2<SeqTypes>>> {
-        Ok(None)
-    }
-
     async fn store_eqc(
         &self,
         _high_qc: QuorumCertificate2<SeqTypes>,
@@ -185,13 +179,6 @@ impl SequencerPersistence for NoStorage {
         &self,
         _proposal: &Proposal<SeqTypes, DaProposal2<SeqTypes>>,
         _vid_commit: VidCommitment,
-    ) -> anyhow::Result<()> {
-        Ok(())
-    }
-
-    async fn append_proposal2(
-        &self,
-        _proposal: &Proposal<SeqTypes, QuorumProposalWrapper<SeqTypes>>,
     ) -> anyhow::Result<()> {
         Ok(())
     }

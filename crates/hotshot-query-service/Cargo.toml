@@ -126,6 +126,8 @@ generic-array = "0.14"
 # Enable our own `testing` feature when building tests.
 hotshot-query-service = { path = ".", features = ["testing"] }
 http-wire = { workspace = true, features = ["server"] }
+rstest = { workspace = true }
+rstest_reuse = { workspace = true }
 test-log = { workspace = true }
 
 [lints]

@@ -149,18 +149,18 @@ where
 
 #[cfg(test)]
 mod test {
-    use std::{cmp::min, num::NonZeroUsize, time::Duration};
+    use std::{cmp::min, marker::PhantomData, num::NonZeroUsize, time::Duration};
 
     use committable::Commitment;
+    use rstest_reuse::apply;
     use tagged_base64::{Tagged, TaggedBase64};
 
     use super::*;
     use crate::{
         QueryError,
-        node::NodeDataSource,
         testing::{
             chain::ChainNode,
-            consensus::MockSqlDataSource,
+            consensus::{TestableDataSource, sql_data_sources},
             mocks::{MockTypes, mock_transaction},
             sleep,
         },
@@ -198,7 +198,10 @@ mod test {
         }
     }
 
-    async fn validate(ds: &MockSqlDataSource) {
+    async fn validate<D>(ds: &D)
+    where
+        D: TestableDataSource + ExplorerDataSource<MockTypes>,
+    {
         let ExplorerSummary {
             histograms,
             latest_block,
@@ -567,9 +570,12 @@ mod test {
         }
     }
 
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_api() {
-        let mut node = ChainNode::<MockSqlDataSource>::new().await;
+    #[apply(sql_data_sources)]
+    async fn test_api<D>(_d: PhantomData<D>)
+    where
+        D: TestableDataSource + ExplorerDataSource<MockTypes>,
+    {
+        let mut node = ChainNode::<D>::new().await;
 
         let n_blocks = num_blocks();
         let n_txns = num_txns_per_block();

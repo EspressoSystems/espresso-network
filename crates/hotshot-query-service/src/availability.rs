@@ -102,15 +102,18 @@ impl<Types: NodeType> Leaf1QueryData<Types> {
 
 #[cfg(test)]
 mod test {
+    use std::marker::PhantomData;
+
     use futures::StreamExt;
+    use rstest_reuse::apply;
 
     use super::*;
     use crate::{
-        data_source::{VersionedDataSource, storage::AvailabilityStorage},
+        data_source::storage::AvailabilityStorage,
         status::StatusDataSource,
         testing::{
             chain::{ChainNode, EPOCH_HEIGHT},
-            consensus::{MockDataSource, MockSqlDataSource},
+            consensus::{MockDataSource, TestableDataSource, sql_data_sources},
             mocks::MockTypes,
         },
         types::HeightIndexed,
@@ -132,16 +135,16 @@ mod test {
         }
     }
 
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_header_endpoint() {
-        let mut node = ChainNode::<MockSqlDataSource>::new().await;
+    #[apply(sql_data_sources)]
+    async fn test_header_endpoint<D: TestableDataSource>(_d: PhantomData<D>) {
+        let mut node = ChainNode::<D>::new().await;
         node.push_empty(5).await;
 
         let ds = node.data_source();
 
         // Get the current block height and fetch header for some later block height
         // This fetch will only resolve when we receive a leaf or block for that block height
-        let block_height = ds.block_height().await.unwrap();
+        let block_height = StatusDataSource::block_height(&ds).await.unwrap();
         let fetch = ds
             .get_header(BlockId::<MockTypes>::Number(block_height + 25))
             .await;
@@ -153,9 +156,13 @@ mod test {
         assert_eq!(header.height() as usize, block_height + 25);
     }
 
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_leaf_only_ds() {
-        let mut node = ChainNode::<MockSqlDataSource>::leaf_only().await;
+    #[apply(sql_data_sources)]
+    async fn test_leaf_only_ds<D>(_d: PhantomData<D>)
+    where
+        D: TestableDataSource,
+        for<'a> D::ReadOnly<'a>: AvailabilityStorage<MockTypes>,
+    {
+        let mut node = ChainNode::<D>::leaf_only().await;
         node.push_empty(10).await;
 
         let ds = node.data_source();
@@ -175,7 +182,7 @@ mod test {
         // Get the current block height and fetch a block at some later block height
         // This fetch will only resolve if we get a block notification
         // However, this block will never be stored
-        let block_height = ds.block_height().await.unwrap();
+        let block_height = StatusDataSource::block_height(&ds).await.unwrap();
         let target_block_height = block_height + 20;
         let fetch = ds
             .get_block(BlockId::<MockTypes>::Number(target_block_height))

@@ -1,5 +1,6 @@
 """Leader critical-path breakdown of consensus views from the per-node `leader_trace_node{N}.csv` files that
-espresso-node writes under `ESPRESSO_NODE_LEADER_TRACE_DIR`. Pure functions, stdlib only.
+espresso-node writes under `ESPRESSO_NODE_LEADER_TRACE_DIR`, and readers of the `cpu_node{N}.csv` and
+`net_node{N}.csv` samples aws-bench writes beside them. Pure functions, stdlib only.
 
 Every row is keyed by the subject view the event is about. The leader of view V is the node
 whose trace has `proposal_queued` for V. Values that span hosts (wait to propose, finality, and
@@ -10,11 +11,18 @@ import itertools
 from collections import Counter
 from collections.abc import Iterable
 from pathlib import Path
+from typing import cast
 
 # node -> view -> event -> first ts_ns
 Trace = dict[int, dict[int, dict[str, int]]]
+# (t_ns, dt_ns, cpu_us) per sampling interval, t_ns its end
+Cpu = list[tuple[int, int, int]]
+# (t_ns, dt_ns, rx_bytes, tx_bytes) per sampling interval, t_ns its end
+Net = list[tuple[int, int, int, int]]
 
 HEADER = ["view", "node_id", "event", "ts_ns"]
+CPU_HEADER = ["t_ns", "usage_usec"]
+NET_HEADER = ["t_ns", "rx_bytes", "tx_bytes"]
 # (segment, end event on the leader of V); each segment starts where the previous one ends
 LEADER_PATH = (
     ("wait to propose", "request_block_header_queued"),
@@ -53,6 +61,48 @@ def read_traces(paths: Iterable[Path]) -> Trace:
                 except ValueError as exc:
                     raise ValueError(f"{path}:{reader.line_num}: {row}: {exc}") from exc
     return trace
+
+
+def read_csv_rows(path: Path, header: list[str]) -> list[list[str]]:
+    with path.open(newline="") as f:
+        reader = csv.reader(f)
+        if next(reader, None) != header:
+            raise ValueError(f"{path}:1: header is not {','.join(header)}")
+        rows = list(reader)
+    # The sampler may be killed mid-write: only the final row can be truncated.
+    if rows and (len(rows[-1]) != len(header) or not all(rows[-1])):
+        rows.pop()
+    return rows
+
+
+def intervals(samples: list[tuple[int, ...]]) -> list[tuple[int, ...]]:
+    """(t_ns, dt_ns, *deltas) per pair of consecutive cumulative samples (t_ns, *counters). An
+    interval is dropped when time does not advance (clock step) or a counter decreased (the
+    container was recreated)."""
+    out = []
+    for prev, cur in itertools.pairwise(sorted(samples)):
+        dt = cur[0] - prev[0]
+        deltas = [c - p for c, p in zip(cur[1:], prev[1:], strict=True)]
+        if dt > 0 and min(deltas) >= 0:
+            out.append((cur[0], dt, *deltas))
+    return out
+
+
+def read_cpu(path: Path) -> Cpu:
+    """`cpu_node{N}.csv` of aws-bench's sampler, cumulative `usage_usec` of the node container,
+    as the CPU time of each interval."""
+    rows = [(int(t_ns), int(usage)) for t_ns, usage in read_csv_rows(path, CPU_HEADER)]
+    return cast(Cpu, intervals(rows))
+
+
+def read_net(path: Path) -> Net:
+    """`net_node{N}.csv`, cumulative rx and tx bytes of the primary interface, as the bytes of
+    each interval."""
+    rows = [
+        (int(t_ns), int(rx), int(tx))
+        for t_ns, rx, tx in read_csv_rows(path, NET_HEADER)
+    ]
+    return cast(Net, intervals(rows))
 
 
 def leaders(trace: Trace) -> dict[int, tuple[int, int]]:

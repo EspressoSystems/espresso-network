@@ -594,27 +594,6 @@ impl<TYPES: NodeType> ViewSyncPreCommitCertificate<TYPES> {
     }
 }
 
-impl<TYPES: NodeType> ViewSyncPreCommitCertificate2<TYPES> {
-    /// Convert a `DaCertificate` into a `DaCertificate2`
-    pub fn to_vsc(self) -> ViewSyncPreCommitCertificate<TYPES> {
-        let data = ViewSyncPreCommitData {
-            relay: self.data.relay,
-            round: self.data.round,
-        };
-
-        let bytes: [u8; 32] = self.vote_commitment.into();
-        let vote_commitment = Commitment::from_raw(bytes);
-
-        SimpleCertificate {
-            data,
-            vote_commitment,
-            view_number: self.view_number,
-            signatures: self.signatures.clone(),
-            _pd: PhantomData,
-        }
-    }
-}
-
 impl<TYPES: NodeType> ViewSyncCommitCertificate<TYPES> {
     /// Convert a `DaCertificate` into a `DaCertificate2`
     pub fn to_vsc2(self) -> ViewSyncCommitCertificate2<TYPES> {
@@ -622,27 +601,6 @@ impl<TYPES: NodeType> ViewSyncCommitCertificate<TYPES> {
             relay: self.data.relay,
             round: self.data.round,
             epoch: None,
-        };
-
-        let bytes: [u8; 32] = self.vote_commitment.into();
-        let vote_commitment = Commitment::from_raw(bytes);
-
-        SimpleCertificate {
-            data,
-            vote_commitment,
-            view_number: self.view_number,
-            signatures: self.signatures.clone(),
-            _pd: PhantomData,
-        }
-    }
-}
-
-impl<TYPES: NodeType> ViewSyncCommitCertificate2<TYPES> {
-    /// Convert a `DaCertificate` into a `DaCertificate2`
-    pub fn to_vsc(self) -> ViewSyncCommitCertificate<TYPES> {
-        let data = ViewSyncCommitData {
-            relay: self.data.relay,
-            round: self.data.round,
         };
 
         let bytes: [u8; 32] = self.vote_commitment.into();
@@ -680,53 +638,12 @@ impl<TYPES: NodeType> ViewSyncFinalizeCertificate<TYPES> {
     }
 }
 
-impl<TYPES: NodeType> ViewSyncFinalizeCertificate2<TYPES> {
-    /// Convert a `DaCertificate` into a `DaCertificate2`
-    pub fn to_vsc(self) -> ViewSyncFinalizeCertificate<TYPES> {
-        let data = ViewSyncFinalizeData {
-            relay: self.data.relay,
-            round: self.data.round,
-        };
-
-        let bytes: [u8; 32] = self.vote_commitment.into();
-        let vote_commitment = Commitment::from_raw(bytes);
-
-        SimpleCertificate {
-            data,
-            vote_commitment,
-            view_number: self.view_number,
-            signatures: self.signatures.clone(),
-            _pd: PhantomData,
-        }
-    }
-}
-
 impl<TYPES: NodeType> TimeoutCertificate<TYPES> {
     /// Convert a `DaCertificate` into a `DaCertificate2`
     pub fn to_tc2(self) -> TimeoutCertificate2<TYPES> {
         let data = TimeoutData2 {
             view: self.data.view,
             epoch: None,
-        };
-
-        let bytes: [u8; 32] = self.vote_commitment.into();
-        let vote_commitment = Commitment::from_raw(bytes);
-
-        SimpleCertificate {
-            data,
-            vote_commitment,
-            view_number: self.view_number,
-            signatures: self.signatures.clone(),
-            _pd: PhantomData,
-        }
-    }
-}
-
-impl<TYPES: NodeType> TimeoutCertificate2<TYPES> {
-    /// Convert a `DaCertificate` into a `DaCertificate2`
-    pub fn to_tc(self) -> TimeoutCertificate<TYPES> {
-        let data = TimeoutData {
-            view: self.data.view,
         };
 
         let bytes: [u8; 32] = self.vote_commitment.into();
