@@ -3898,11 +3898,11 @@
 <a href=#3898 id=3898 data-nosnippet>3898</a>
 <a href=#3899 id=3899 data-nosnippet>3899</a>    <span class="doccomment">/// A pruned node keeps no totals from genesis, so every route that serves them is a 404 on v1
 <a href=#3900 id=3900 data-nosnippet>3900</a>    /// and v2, even for a range of blocks the node stores.
-<a href=#3901 id=3901 data-nosnippet>3901</a>    </span><span class="attr">#[test_log::test(tokio::test(flavor = <span class="string">"multi_thread"</span>))]
-<a href=#3902 id=3902 data-nosnippet>3902</a>    </span><span class="kw">async fn </span>test_pruned_node_totals_are_not_found() {
+<a href=#3901 id=3901 data-nosnippet>3901</a>    </span><span class="attr">#[apply(sql_data_sources)]
+<a href=#3902 id=3902 data-nosnippet>3902</a>    </span><span class="kw">async fn </span>test_pruned_node_totals_are_not_found&lt;D: TestableSqlDataSource&gt;(_d: PhantomData&lt;D&gt;) {
 <a href=#3903 id=3903 data-nosnippet>3903</a>        <span class="kw">let </span>port = reserve_tcp_port().expect(<span class="string">"OS should have ephemeral ports available"</span>);
-<a href=#3904 id=3904 data-nosnippet>3904</a>        <span class="kw">let </span>storage = SqlDataSource::create_storage().<span class="kw">await</span>;
-<a href=#3905 id=3905 data-nosnippet>3905</a>        <span class="kw">let </span><span class="kw-2">mut </span>db_opt = tmp_options(<span class="kw-2">&amp;</span>storage);
+<a href=#3904 id=3904 data-nosnippet>3904</a>        <span class="kw">let </span>storage = D::create_storage().<span class="kw">await</span>;
+<a href=#3905 id=3905 data-nosnippet>3905</a>        <span class="kw">let </span><span class="kw-2">mut </span>db_opt = D::tmp_options(<span class="kw-2">&amp;</span>storage);
 <a href=#3906 id=3906 data-nosnippet>3906</a>        db_opt.prune = <span class="bool-val">true</span>;
 <a href=#3907 id=3907 data-nosnippet>3907</a>        <span class="kw">let </span>config = TestNetworkConfigBuilder::default()
 <a href=#3908 id=3908 data-nosnippet>3908</a>            .api_config(Options::with_port(port).query_sql(Query::default(), db_opt))
