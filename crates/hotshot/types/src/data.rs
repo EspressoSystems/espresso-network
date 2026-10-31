@@ -945,7 +945,7 @@ impl<TYPES: NodeType> ViewChangeEvidence2<TYPES> {
         match self {
             ViewChangeEvidence2::Timeout(timeout_cert) => timeout_cert.data().view == *view - 1,
             ViewChangeEvidence2::ViewSync(view_sync_cert) => view_sync_cert.view_number == *view,
-            ViewChangeEvidence2::Timeout3(timeout_cert) => timeout_cert.data().view == *view - 1,
+            ViewChangeEvidence2::Timeout3(timeout_cert) => timeout_cert.view_number == *view - 1,
         }
     }
 

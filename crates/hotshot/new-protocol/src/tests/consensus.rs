@@ -11,7 +11,7 @@ use hotshot_types::{
     message::Proposal as SignedProposal,
     signature_key::BLSPubKey,
     simple_certificate::{LightClientStateUpdateCertificateV2, TimeoutEvidence},
-    simple_vote::{HasEpoch, QuorumData2, SimpleVote, TimeoutData2, TimeoutData3, Vote2Data},
+    simple_vote::{HasEpoch, QuorumData2, SimpleVote, TimeoutData2, Vote2Data},
     traits::{ValidatedState, block_contents::BlockHeader, signature_key::SignatureKey},
     utils::is_epoch_root,
     vote::HasViewNumber,
@@ -26,7 +26,7 @@ use crate::{
     consensus::{ConsensusInput, ConsensusOutput},
     coordinator::GcScope,
     helpers::{proposal_commitment, test_timeout_epoch_lock, test_upgrade_lock},
-    message::{Proposal, ProposalMessage, TimeoutVote},
+    message::{Proposal, ProposalMessage, TimeoutBallot, TimeoutVote},
     outbox::Outbox,
     proposal::{ProposalValidator, ValidationError},
     state::StateResponse,
@@ -113,8 +113,8 @@ async fn test_timeout_vote_binds_the_local_epoch_when_upgraded() {
     let [TimeoutVote::V3(vote)] = votes.as_slice() else {
         panic!("expected one epoch binding timeout vote, got {votes:?}");
     };
-    assert_eq!(vote.data.view, view);
-    assert_eq!(vote.data.epoch, local);
+    assert_eq!(vote.vote().data.view, view);
+    assert_eq!(vote.vote().data.epoch, local);
 }
 
 /// A timeout certificate from an epoch the node has left does not pull it back.
@@ -411,23 +411,23 @@ fn test_timeout_vote_naming_another_view_is_not_well_formed() {
             .expect("signs"),
         )
     };
-    let bound = |named: ViewNumber| {
-        TimeoutVote::V3(
-            SimpleVote::<TestTypes, TimeoutData3>::create_signed_vote(
-                TimeoutData3 { view: named, epoch },
-                view,
-                &public_key,
-                &private_key,
-                &test_timeout_epoch_lock::<TestTypes>(),
-            )
-            .expect("signs"),
+    // An epoch binding vote's data is built from its view, so it cannot name
+    // another one.
+    let bound = TimeoutVote::V3(
+        TimeoutBallot::sign(
+            view,
+            epoch,
+            None,
+            &public_key,
+            &private_key,
+            &test_timeout_epoch_lock::<TestTypes>(),
         )
-    };
+        .expect("signs"),
+    );
 
     assert!(unbound(view).is_well_formed());
     assert!(!unbound(view + 1).is_well_formed());
-    assert!(bound(view).is_well_formed());
-    assert!(!bound(view + 1).is_well_formed());
+    assert!(bound.is_well_formed());
 }
 
 /// A timeout certificate for view 0 does not stop the view-1 leader proposing.

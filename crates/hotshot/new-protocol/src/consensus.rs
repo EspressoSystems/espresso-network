@@ -23,8 +23,7 @@ use hotshot_types::{
         UpgradeCertificate2, check_qc_state_cert_correspondence,
     },
     simple_vote::{
-        HasEpoch, LightClientStateUpdateVote2, QuorumData2, SimpleVote, TimeoutData2, TimeoutData3,
-        Vote2Data,
+        HasEpoch, LightClientStateUpdateVote2, QuorumData2, SimpleVote, TimeoutData2, Vote2Data,
     },
     stake_table::HSStakeTable,
     traits::{
@@ -50,7 +49,7 @@ use crate::{
     logging::KeyPrefix,
     message::{
         CatchupEvidence, Certificate1, Certificate2, EpochChangeMessage, Proposal,
-        ProposalFetchRequest, ProposalMessage, TimeoutVote, Validated, Vote1, Vote2,
+        ProposalFetchRequest, ProposalMessage, TimeoutBallot, TimeoutVote, Validated, Vote1, Vote2,
     },
     outbox::Outbox,
     state::{StateRequest, StateResponse},
@@ -1820,14 +1819,21 @@ impl<T: NodeType> Consensus<T> {
         self.request_missing_payloads(outbox);
 
         let vote = if self.upgrade_lock.timeout_epoch_bound(view) {
-            SimpleVote::create_signed_vote(
-                TimeoutData3 { view, epoch },
+            // The genesis QC is no lock: nothing earlier could be skipped.
+            let lock = self
+                .locked_cert
+                .clone()
+                .filter(|cert| cert.view_number() != ViewNumber::genesis());
+            TimeoutBallot::sign(
                 view,
+                epoch,
+                lock,
                 &self.public_key,
                 &self.private_key,
                 &self.upgrade_lock,
             )
             .map(TimeoutVote::V3)
+            .map_err(|err| err.to_string())
         } else {
             SimpleVote::create_signed_vote(
                 TimeoutData2 {
@@ -1840,6 +1846,7 @@ impl<T: NodeType> Consensus<T> {
                 &self.upgrade_lock,
             )
             .map(TimeoutVote::V2)
+            .map_err(|err| err.to_string())
         };
 
         let vote = match vote {

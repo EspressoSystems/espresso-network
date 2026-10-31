@@ -7,7 +7,7 @@ use hotshot_types::{
     epoch_membership::EpochMembership,
     signature_key::{BLSPrivKey, BLSPubKey},
     simple_certificate::{TimeoutCertificate3, TimeoutEvidence},
-    simple_vote::{HasEpoch, QuorumData2, TimeoutData3, TimeoutVote3},
+    simple_vote::{HasEpoch, QuorumData2},
     stake_table::StakeTableEntries,
     traits::signature_key::SignatureKey,
     vote::HasViewNumber,
@@ -15,9 +15,11 @@ use hotshot_types::{
 use tokio::time::timeout;
 
 use super::common::{
-    certs::build_cert,
     harness::TestHarness,
-    utils::{TestData, TestView, build_cert1, build_cert2, build_timeout_cert3},
+    utils::{
+        TestData, TestView, build_cert1, build_cert2, build_timeout_cert3,
+        build_timeout_cert3_with_lock,
+    },
 };
 use crate::{
     consensus::{ConsensusInput, ConsensusOutput},
@@ -389,17 +391,18 @@ async fn test_unsigned_view_zero_timeout_certificate_does_not_move_the_epoch() {
         .membership()
         .membership()
         .register_epoch(forged, [0u8; 32]);
-    let data = TimeoutData3 {
-        view: ViewNumber::genesis(),
-        epoch: forged,
-    };
-    let cert = TimeoutCertificate3::<TestTypes>::new(
-        data.clone(),
-        data.commit(),
+    // Signed under another epoch, and relabelled to the forged one.
+    let genesis = harness
+        .membership()
+        .membership_for_epoch(Some(EpochNumber::genesis()))
+        .expect("the genesis epoch resolves");
+    let mut cert = build_timeout_cert3_with_lock(
         ViewNumber::genesis(),
+        EpochNumber::genesis(),
         None,
-        PhantomData,
+        &genesis,
     );
+    cert.epoch = forged;
     harness.message(Message::<TestTypes, Validated> {
         sender: BLSPubKey::generated_from_seed_indexed([0u8; 32], 1).0,
         message_type: MessageType::Consensus(ConsensusMessage::TimeoutCertificate3(cert)),
@@ -619,12 +622,12 @@ async fn test_signed_view_zero_timeout_certificate_is_delivered() {
     );
 }
 
-/// A timeout certificate a quorum really signed, for `view`, whose data names
+/// A timeout certificate for `view` whose signers, a real quorum, signed
 /// `named`.
 ///
-/// `build_timeout_cert3` always sets the two equal. These tests need them
-/// apart with the signatures still valid, so that the view check is the only
-/// thing that can reject the certificate.
+/// `build_timeout_cert3` always sets the two equal. A lock-carrying
+/// certificate derives the data its signers signed from its own view, so with
+/// the two apart its signatures are for another view than the one it is for.
 fn timeout_cert_naming(
     view: ViewNumber,
     named: ViewNumber,
@@ -633,14 +636,10 @@ fn timeout_cert_naming(
     public_key: &BLSPubKey,
     private_key: &BLSPrivKey,
 ) -> TimeoutCertificate3<TestTypes> {
-    build_cert::<TestTypes, TimeoutData3, TimeoutVote3<TestTypes>, TimeoutCertificate3<TestTypes>>(
-        TimeoutData3 { view: named, epoch },
-        membership,
-        view,
-        public_key,
-        private_key,
-        &test_timeout_epoch_lock(),
-    )
+    let _ = (public_key, private_key);
+    let mut cert = build_timeout_cert3_with_lock(named, epoch, None, membership);
+    cert.view_number = view;
+    cert
 }
 
 /// Timeout votes that do not bind their epoch are tallied together, whatever
