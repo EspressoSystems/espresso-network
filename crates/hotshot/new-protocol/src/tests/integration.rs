@@ -1,16 +1,19 @@
-use std::{marker::PhantomData, time::Duration};
+use std::{marker::PhantomData, net::Ipv4Addr, time::Duration};
 
 use committable::{Commitment, CommitmentBoundsArkless, Committable};
 use hotshot_example_types::node_types::TestTypes;
 use hotshot_types::{
+    PeerConnectInfo,
+    addr::NetAddr,
     data::{EpochNumber, VidCommitment2, ViewNumber},
     epoch_membership::EpochMembership,
     signature_key::{BLSPrivKey, BLSPubKey},
     simple_certificate::{TimeoutCertificate3, TimeoutEvidence},
     simple_vote::{HasEpoch, QuorumData2, TimeoutData3, TimeoutVote3},
     stake_table::StakeTableEntries,
-    traits::signature_key::SignatureKey,
+    traits::{metrics::NoMetrics, signature_key::SignatureKey},
     vote::HasViewNumber,
+    x25519::Keypair,
 };
 use tokio::time::timeout;
 
@@ -22,11 +25,12 @@ use super::common::{
 use crate::{
     consensus::{ConsensusInput, ConsensusOutput},
     coordinator::{EPOCH_CHANGE_LOOKAHEAD, error::Severity},
-    helpers::test_timeout_epoch_lock,
+    helpers::{test_timeout_epoch_lock, test_upgrade_lock},
     message::{
         CatchupEvidence, Certificate1, ConsensusMessage, EpochChangeMessage, Message, MessageType,
         Proposal, Validated,
     },
+    network::Cliquenet,
     tests::common::assertions::{
         any, count_matching, is_block_built, is_block_reconstructed, is_cert1, is_cert2,
         is_drb_result, is_header_created, is_header_created_for_view, is_leaf_decided, is_proposal,
@@ -920,6 +924,110 @@ async fn test_leader_proposal() {
     harness
         .process_until_output(|outputs| any(outputs, is_proposal))
         .await;
+}
+
+/// A leader proposes once it holds the parent's Certificate1 but enters the
+/// view only after reconstructing the parent block, so a slow leader can send
+/// its proposal two views behind. The view change that follows
+/// garbage-collects network messages below the previous view; copies of the
+/// proposal not yet sent must survive it.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_lagging_leader_proposal_survives_view_change() {
+    let test_data = TestData::new(3).await;
+    let test_view = &test_data.views[2];
+    let proposal = test_view.proposal.clone();
+    let (view, epoch) = (proposal.data.view_number, proposal.data.epoch);
+    let mut harness = TestHarness::new(0).await;
+    assert!(*harness.current_view() + 2 <= *view);
+
+    // The peer is not listening yet, so everything sent to it stays queued.
+    let peer = LatePeer::new();
+    harness.add_peer(peer.key, peer.info.clone());
+    let harness_node = harness.connect_info();
+    let marker = Message {
+        sender: harness_node.0,
+        message_type: MessageType::Consensus(ConsensusMessage::Certificate1(
+            test_view.cert1.clone(),
+            harness_node.0,
+        )),
+    };
+
+    let coordinator = harness.coordinator_mut();
+    coordinator
+        .process_consensus_output(ConsensusOutput::SendProposal(proposal))
+        .unwrap();
+    coordinator
+        .process_consensus_output(ConsensusOutput::ViewChanged(view, epoch))
+        .unwrap();
+    // A marker sent after the view change at the same slot: it arrives after
+    // any copy of the proposal that is still queued.
+    coordinator
+        .network()
+        .sender()
+        .broadcast(view, &marker)
+        .unwrap();
+
+    let mut network = peer.start(harness_node).await;
+    assert_eq!(proposal_views_before_cert1(&mut network).await, [view]);
+}
+
+/// A node outside the stake table that starts listening only when told to.
+struct LatePeer {
+    key: BLSPubKey,
+    keypair: Keypair,
+    info: PeerConnectInfo,
+}
+
+impl LatePeer {
+    fn new() -> Self {
+        let (key, private_key) = BLSPubKey::generated_from_seed_indexed([1; 32], 0);
+        let keypair = Keypair::derive_from::<BLSPubKey>(&private_key).unwrap();
+        let port = test_utils::reserve_tcp_port().unwrap();
+        let info = PeerConnectInfo {
+            x25519_key: keypair.public_key(),
+            p2p_addr: NetAddr::Inet(Ipv4Addr::LOCALHOST.into(), port),
+        };
+        Self { key, keypair, info }
+    }
+
+    /// Start listening, with `harness_node` as the only party.
+    async fn start(self, harness_node: (BLSPubKey, PeerConnectInfo)) -> Cliquenet<TestTypes> {
+        // Same name as the harness's network: it is part of the handshake.
+        Cliquenet::create(
+            "test-harness",
+            self.key,
+            self.keypair,
+            self.info.p2p_addr,
+            [harness_node],
+            None,
+            test_upgrade_lock(),
+            Box::new(NoMetrics),
+        )
+        .await
+        .unwrap()
+    }
+}
+
+/// Views of the proposals `network` receives before the first Certificate1,
+/// each listed once.
+async fn proposal_views_before_cert1(network: &mut Cliquenet<TestTypes>) -> Vec<ViewNumber> {
+    let mut views = Vec::new();
+    loop {
+        let message = timeout(Duration::from_secs(30), network.receive())
+            .await
+            .expect("a Certificate1 should arrive")
+            .unwrap();
+        match message.message_type {
+            MessageType::Consensus(ConsensusMessage::Proposal(p)) => views.push(p.view_number()),
+            MessageType::Consensus(ConsensusMessage::Certificate1(..)) => {
+                // Delivery is at least once: a replaced connection resends
+                // every message the peer has not acknowledged yet.
+                views.dedup();
+                return views;
+            },
+            _ => {},
+        }
+    }
 }
 
 /// Multi-view chain: certificates are formed for each view, leading to
