@@ -77,7 +77,8 @@ just demo-native                      # local network via process-compose
 
 - `espresso-node`: main node binary, API, persistence
 - `espresso-types`: domain types (Header, Payload, Transaction, ValidatedState)
-- `hotshot`: BFT consensus implementation
+- `hotshot-new-protocol`: BFT consensus implementation
+- `hotshot-types`: consensus types (certificates, votes, epoch membership)
 - `hotshot-query-service`: query APIs for blocks/availability
 - `hotshot-state-prover`: ZK proof generation for light client updates
 - `hotshot-contract-adapter`: Rust <-> Solidity type bridge
@@ -114,8 +115,11 @@ Backends:
   supported
 
 The SQL code is compiled once per database: each `sql.rs` is loaded by both a `postgres` and a `sqlite` module, each
-with its own `Db`. Branch on `Db::EMBEDDED` where both branches compile for either database, and put code that only
-compiles for one (Postgres array binds, connect options) in that backend's file. Tests in the shared files run on both.
+with its own `Db`. Match on `Db::KIND` (`DbKind`) where both arms compile for either database; code that only compiles
+for one (Postgres array binds, connect options) is a method of `Backend`
+(`crates/hotshot-query-service/src/data_source/storage/sql/db.rs`) or `BackendOptions`
+(`crates/espresso/node/src/persistence/sql.rs`), implemented in each backend's `postgres.rs`/`sqlite.rs`. Tests in the
+shared files run on both.
 
 Migrations (all three backends required when adding storage):
 
