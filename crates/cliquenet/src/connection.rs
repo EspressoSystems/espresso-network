@@ -1,4 +1,11 @@
-use std::{cmp::min, io, iter::once, net::SocketAddr, sync::Arc, time::Duration};
+use std::{
+    cmp::min,
+    io,
+    iter::{once, repeat},
+    net::SocketAddr,
+    sync::Arc,
+    time::Duration,
+};
 
 use rand::RngExt;
 use snow::{Builder, HandshakeState, TransportState, params::NoiseParams};
@@ -12,7 +19,7 @@ use tokio::{
 use tracing::{debug, warn};
 
 use crate::{
-    Config, Lane, NetAddr, Version,
+    Config, LaneId, NetAddr, Version,
     error::NetworkError,
     msg::{Header, MAX_NOISE_MESSAGE_SIZE, hello::Hello},
     util::until,
@@ -75,60 +82,45 @@ impl Connection {
         .await
     }
 
-    /// Connect to `peer` at `addr` and open `lane`.
-    ///
-    /// The main connection is retried until it succeeds. An extra lane gets
-    /// one attempt and returns `None` when the party refused the lane or
-    /// could not be reached.
-    pub async fn connect(
-        conf: Arc<Config>,
-        peer: PublicKey,
-        addr: NetAddr,
-        lane: Lane,
-    ) -> Option<Self> {
-        let hello = match lane {
-            Lane::Main => Hello::Ok,
-            Lane::Extra(id) => Hello::OkLane(id),
-        };
-        // Extra lanes open one at a time on demand, so spreading their dials gains nothing.
-        let first_delay = if conf.random_connect_delay && lane == Lane::Main {
-            Duration::from_millis(rand::rng().random_range(0..1000))
-        } else {
-            Duration::ZERO
-        };
-        let last_delay = Duration::from_secs((*conf.connect_retry_delays.last()).into());
-        let mut delays = once(first_delay).chain(
+    pub async fn connect(conf: Arc<Config>, peer: PublicKey, addr: NetAddr) -> Self {
+        let mut delays = once({
+            if conf.random_connect_delay {
+                Duration::from_millis(rand::rng().random_range(0..1000))
+            } else {
+                Duration::ZERO
+            }
+        })
+        .chain(
             conf.connect_retry_delays
                 .iter()
                 .map(|&d| Duration::from_secs(d.into())),
-        );
+        )
+        .chain(repeat({
+            let d = *conf.connect_retry_delays.last();
+            Duration::from_secs(d.into())
+        }));
 
         let node = conf.keypair.public_key();
 
         let mut backoff = None;
 
         loop {
-            let delay = match backoff.take() {
-                Some(d) => d,
-                None => delays.next().unwrap_or(last_delay),
-            };
-            sleep(delay).await;
+            if let Some(d) = backoff.take() {
+                sleep(d).await;
+            } else {
+                sleep(delays.next().expect("delays iterator is infinite")).await;
+            }
 
-            debug!(name = %conf.name, %node, %peer, %addr, ?lane, "connecting");
+            debug!(name = %conf.name, %node, %peer, %addr, "connecting");
 
             match try_connect(&conf, &peer, &addr).await {
                 Ok(mut conn) => {
                     let hello_exchange = until(conf.handshake_timeout, async {
-                        conn.send_hello(hello).await?;
+                        conn.send_hello(Hello::Ok).await?;
                         conn.recv_hello().await
                     });
                     match hello_exchange.await {
-                        Ok(h) if h == hello => return Some(conn),
-                        // Parties that do not accept the lane refuse, which is expected.
-                        Ok(h) if lane != Lane::Main => {
-                            debug!(name = %conf.name, %node, %peer, %addr, ?lane, ?h, "lane refused");
-                            return None;
-                        },
+                        Ok(h) if h.is_ok() => break conn,
                         Ok(h) => {
                             warn!(
                                 name = %conf.name,
@@ -136,7 +128,6 @@ impl Connection {
                                 %peer,
                                 remote = %conn.key,
                                 %addr,
-                                ?lane,
                                 "hello response was not ok"
                             );
                             backoff = h.backoff_duration();
@@ -158,10 +149,42 @@ impl Connection {
                     warn!(name = %conf.name, %node, %peer, %addr, %err, "connect/handshake error")
                 },
             }
-            // The next send redials an extra lane, so retrying here would only hold a stale task.
-            if lane != Lane::Main {
+        }
+    }
+
+    /// Connect to `peer` at `addr` and open lane `id`, in one attempt.
+    ///
+    /// Returns `None` when the party could not be reached or refused the lane.
+    pub async fn connect_lane(
+        conf: Arc<Config>,
+        peer: PublicKey,
+        addr: NetAddr,
+        id: LaneId,
+    ) -> Option<Self> {
+        let node = conf.keypair.public_key();
+        debug!(name = %conf.name, %node, %peer, %addr, lane = %id, "connecting lane");
+        let mut conn = match try_connect(&conf, &peer, &addr).await {
+            Ok(conn) => conn,
+            Err(err) => {
+                debug!(name = %conf.name, %node, %peer, %addr, lane = %id, %err, "lane connect error");
                 return None;
-            }
+            },
+        };
+        let hello = Hello::OkLane(id);
+        let hello_exchange = until(conf.handshake_timeout, async {
+            conn.send_hello(hello).await?;
+            conn.recv_hello().await
+        });
+        match hello_exchange.await {
+            Ok(h) if h == hello => Some(conn),
+            Ok(h) => {
+                debug!(name = %conf.name, %node, %peer, %addr, lane = %id, ?h, "lane refused");
+                None
+            },
+            Err(err) => {
+                debug!(name = %conf.name, %node, %peer, %addr, lane = %id, %err, "lane hello failed");
+                None
+            },
         }
     }
 

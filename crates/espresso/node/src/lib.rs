@@ -1,7 +1,7 @@
 mod external_event_handler;
 mod message_compat_tests;
 mod proposal_fetcher;
-mod query_peers;
+mod query_lane;
 mod request_response;
 mod startup_catchup;
 
@@ -88,7 +88,7 @@ use url::Url;
 use vbs::version::StaticVersion;
 
 use crate::{
-    query_peers::QueryHandlers, request_response::data_source::Storage as RequestResponseStorage,
+    query_lane::QueryHandlers, request_response::data_source::Storage as RequestResponseStorage,
 };
 
 /// The node's `NodeImplementation`, generic over its persistence.
@@ -434,7 +434,7 @@ where
             .expect("genesis sets a block size");
         let max_message_size = Some(message_limit(largest));
         let name = format!("espresso-{}", genesis.chain_config.chain_id);
-        let lanes = query_handlers.is_some().then_some(query_peers::QUERY_LANE);
+        let lanes = query_handlers.is_some().then_some(query_lane::QUERY_LANE);
         move |upgrade| {
             Cliquenet::create(
                 name,
@@ -1620,7 +1620,7 @@ pub mod testing {
                     coordinator_addr,
                     [],
                     Some(message_limit(max_block_size)),
-                    [query_peers::QUERY_LANE],
+                    [],
                     upgrade,
                     Box::new(NoMetrics),
                 )

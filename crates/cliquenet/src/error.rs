@@ -2,7 +2,7 @@ use std::io;
 
 use thiserror::Error;
 
-use crate::{LaneId, NetAddr, x25519::PublicKey};
+use crate::{NetAddr, x25519::PublicKey};
 pub use crate::{addr::InvalidNetAddr, msg::InvalidHeader};
 
 /// The empty type has no values.
@@ -63,10 +63,6 @@ pub enum NetworkError {
     /// A receive budget has unexpectedly closed.
     #[error("receive budget closed")]
     BudgetClosed,
-
-    /// The lane is not in the network's configuration.
-    #[error("unknown lane {0}")]
-    UnknownLane(LaneId),
 
     /// An operation timed out.
     #[error("timeout")]

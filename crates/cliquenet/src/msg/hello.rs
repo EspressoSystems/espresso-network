@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use crate::{Lane, LaneId};
+use crate::LaneId;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Hello {
@@ -11,13 +11,8 @@ pub enum Hello {
 }
 
 impl Hello {
-    /// The lane an accepting hello opens, if any.
-    pub fn lane(self) -> Option<Lane> {
-        match self {
-            Hello::Ok => Some(Lane::Main),
-            Hello::OkLane(id) => Some(Lane::Extra(id)),
-            Hello::BackOff(_) | Hello::Unknown => None,
-        }
+    pub fn is_ok(&self) -> bool {
+        matches!(self, Self::Ok)
     }
 
     pub fn backoff_duration(&self) -> Option<Duration> {
@@ -25,6 +20,19 @@ impl Hello {
             Some(*d)
         } else {
             None
+        }
+    }
+
+    /// The answer to `theirs` from a party that would otherwise answer `self`
+    /// and serves `lanes`.
+    ///
+    /// A party accepts a lane by echoing the hello that asked for it, which is
+    /// what the connecting side checks for.
+    pub fn answer(self, theirs: Option<Hello>, lanes: &[LaneId], backoff: Duration) -> Hello {
+        match (self, theirs) {
+            (Hello::Ok, Some(Hello::OkLane(id))) if lanes.contains(&id) => Hello::OkLane(id),
+            (Hello::Ok, Some(Hello::OkLane(_))) => Hello::BackOff(backoff),
+            (ours, _) => ours,
         }
     }
 }

@@ -34,7 +34,7 @@ pub type InboundFilter<T> = Box<dyn Fn(&Message<T, Unchecked>) -> bool + Send + 
 pub struct Cliquenet<T: NodeType> {
     inner: Sender<T>,
     receiver: NetworkReceiver,
-    lanes: HashMap<LaneId, cliquenet::LaneReceiver>,
+    lanes: HashMap<LaneId, (cliquenet::LaneSender, cliquenet::LaneReceiver)>,
     #[cfg(any(test, feature = "testing"))]
     ifilter: InboundFilter<T>,
 }
@@ -161,14 +161,14 @@ impl<T: NodeType> Cliquenet<T> {
 
     /// Take both ends of a lane passed to [`Cliquenet::create`].
     ///
-    /// Returns `None` once taken. Peers opening the lane are refused until
-    /// [`LaneSender::accept`] is called. Lane messages are raw bytes
+    /// Returns `None` once taken. Peers may open the lane from the start, and
+    /// what they send waits for the receiver. Lane messages are raw bytes
     /// addressed by signature key, and never reach [`Cliquenet::receive`].
     pub fn take_lane(&mut self, id: LaneId) -> Option<(LaneSender<T>, LaneReceiver<T>)> {
-        let receiver = self.lanes.remove(&id)?;
+        let (sender, receiver) = self.lanes.remove(&id)?;
         let sender = LaneSender {
-            id,
-            sender: self.inner.sender.clone(),
+            sender,
+            me: self.inner.my_keys.0.clone(),
             shared: Arc::clone(&self.inner.shared),
         };
         let receiver = LaneReceiver {
@@ -500,16 +500,16 @@ impl<T: NodeType> Sender<T> {
 
 /// Sends raw bytes to peers over a lane.
 pub struct LaneSender<T: NodeType> {
-    id: LaneId,
-    sender: NetworkSender,
+    sender: cliquenet::LaneSender,
+    me: T::SignatureKey,
     shared: Arc<RwLock<Shared<T::SignatureKey>>>,
 }
 
 impl<T: NodeType> Clone for LaneSender<T> {
     fn clone(&self) -> LaneSender<T> {
         LaneSender {
-            id: self.id,
             sender: self.sender.clone(),
+            me: self.me.clone(),
             shared: Arc::clone(&self.shared),
         }
     }
@@ -518,7 +518,7 @@ impl<T: NodeType> Clone for LaneSender<T> {
 impl<T: NodeType> std::fmt::Debug for LaneSender<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("LaneSender")
-            .field("id", &self.id)
+            .field("sender", &self.sender)
             .finish_non_exhaustive()
     }
 }
@@ -526,21 +526,27 @@ impl<T: NodeType> std::fmt::Debug for LaneSender<T> {
 impl<T: NodeType> LaneSender<T> {
     /// Send `bytes` to `to` over the lane.
     ///
-    /// Delivery is best effort. See [`cliquenet::NetworkSender::send_lane`].
+    /// Delivery is best effort. See [`cliquenet::LaneSender::send`].
     pub fn send(&self, to: &T::SignatureKey, bytes: Vec<u8>) -> Result<(), NetworkError> {
         let Some(target) = self.shared.read().peers.get(to).map(|i| i.x25519_key) else {
             return Err(NetworkError::UnknownPeer);
         };
-        self.sender.send_lane(self.id, target.into(), bytes)?;
+        self.sender.send(target.into(), bytes)?;
         Ok(())
     }
 
-    /// Accept the lane when peers open it from now on.
+    /// The peers the lane can reach, other than this node.
     ///
-    /// Call this once something drains the [`LaneReceiver`], since accepted
-    /// lanes deliver there.
-    pub fn accept(&self) -> Result<(), NetworkError> {
-        Ok(self.sender.accept_lane(self.id)?)
+    /// They follow the network's epoch window: the current epoch's validators,
+    /// those leaving until the next epoch, and those joining in it.
+    pub fn peers(&self) -> Vec<T::SignatureKey> {
+        self.shared
+            .read()
+            .peers
+            .keys()
+            .filter(|key| **key != self.me)
+            .cloned()
+            .collect()
     }
 
     /// How long to wait to hear back from a peer after sending to it.
@@ -608,8 +614,8 @@ impl<T: NodeType> LaneReceiver<T> {
 pub enum LaneEvent<K> {
     /// A message from the peer.
     Message(K, Bytes),
-    /// The peer's lane could not be opened or could not take a message, so something
-    /// queued for it was not sent.
+    /// The peer's lane could not be opened or lost its connection, so what was queued or sent on
+    /// it may be lost.
     Unreachable(K),
 }
 

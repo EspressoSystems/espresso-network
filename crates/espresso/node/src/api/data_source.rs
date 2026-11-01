@@ -16,7 +16,7 @@ use espresso_types::{
     },
     v0_4::{RewardAccountProofV2, RewardAccountQueryDataV2, RewardAccountV2, RewardMerkleTreeV2},
 };
-use futures::future::{BoxFuture, Either, Future};
+use futures::future::{BoxFuture, Future};
 use hotshot_query_service::{
     availability::{AvailabilityDataSource, BlockQueryData, LeafQueryData, VidCommonQueryData},
     data_source::{UpdateDataSource, VersionedDataSource},
@@ -35,9 +35,7 @@ use hotshot_types::{
     x25519,
 };
 use indexmap::IndexMap;
-use light_client::{
-    client::QueryServiceClient, state::LightClientOptions, storage::LightClientDbOptions,
-};
+use light_client::{state::LightClientOptions, storage::LightClientDbOptions};
 use serde::{Deserialize, Serialize};
 use url::Url;
 
@@ -103,9 +101,8 @@ pub(super) async fn provider(
     db_opt: LightClientDbOptions,
 ) -> anyhow::Result<Provider> {
     Ok(Provider::default().with_provider(LightClientProvider::new(
-        peers
-            .into_iter()
-            .map(|url| Either::Right(QueryServiceClient::new(url))),
+        None,
+        peers,
         state.clone(),
         opt,
         db_opt,

@@ -24,7 +24,7 @@ use crate::{
 
 /// A response value whose type has been erased. `Box<dyn erased_serde::Serialize>` serializes
 /// exactly like the value it holds, so JSON and VBS bodies are unchanged.
-pub type Erased = Box<dyn erased_serde::Serialize + Send + Sync>;
+pub(crate) type Erased = Box<dyn erased_serde::Serialize + Send + Sync>;
 
 fn erase<T: serde::Serialize + Send + Sync + 'static>(value: T) -> Erased {
     Box::new(value)
@@ -699,7 +699,7 @@ impl<T: v1::NodeApi + Send + Sync> DynNodeApi for T {
 }
 
 #[async_trait]
-pub(crate) trait DynCatchupApi: Send + Sync {
+pub trait DynCatchupApi: Send + Sync {
     async fn get_account(&self, height: u64, view: u64, address: String) -> anyhow::Result<Erased>;
     /// The account list is decoded from the request body and its element type is erased, so the
     /// decode happens behind the trait object. Errors match the typed path: a bad body is the

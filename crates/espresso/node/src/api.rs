@@ -2,7 +2,7 @@ use std::{collections::HashMap, pin::Pin, sync::Arc, time::Duration};
 
 use ::light_client::{
     LightClient,
-    client::FallbackClient,
+    client::{FallbackClient, QueryServiceClient},
     state::{Genesis, LightClientOptions},
     storage::LightClientDbOptions,
 };
@@ -67,8 +67,9 @@ use self::data_source::{
 use crate::{
     SeqTypes,
     api::{
-        context::{ApiContext, ConsensusSource, NodeClient, NodeLightClient},
+        context::{ApiContext, ConsensusSource, NodeLightClient},
         data_source::TokenDataSource,
+        peer_client::{NodeClient, PeerClient},
     },
     catchup::{
         CatchupStorage, add_fee_accounts_to_state, add_v1_reward_accounts_to_state,
@@ -1744,14 +1745,20 @@ pub(crate) struct LightClientProvider {
 }
 
 impl LightClientProvider {
-    /// A provider fetching through `clients`, tried in order.
+    /// A provider fetching from peers over the query lane, when `lane_peers` is given, and
+    /// then from the HTTP `peers`.
     fn new(
-        clients: impl IntoIterator<Item = NodeClient>,
+        lane_peers: Option<PeerClient>,
+        peers: impl IntoIterator<Item = Url>,
         state: ApiState,
         opt: LightClientOptions,
         db_opt: LightClientDbOptions,
     ) -> anyhow::Result<Self> {
-        let client = FallbackClient::new(clients.into_iter().collect())?;
+        let http = peers
+            .into_iter()
+            .map(|url| NodeClient::Http(QueryServiceClient::new(url)));
+        let clients = lane_peers.map(NodeClient::Peers).into_iter().chain(http);
+        let client = FallbackClient::new(clients.collect())?;
         Ok(Self {
             light_client: OnceCell::new(),
             state,

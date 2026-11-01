@@ -26,7 +26,7 @@ use super::{
 };
 use crate::{
     catchup::CatchupStorage, context::TaskList, options::PublicNodeConfig, persistence,
-    query_peers::QueryHandlers, request_response::data_source::Storage as RequestResponseStorage,
+    query_lane::QueryHandlers, request_response::data_source::Storage as RequestResponseStorage,
 };
 
 #[derive(Clone, Debug)]
@@ -394,7 +394,8 @@ pub struct Query {
     /// HTTP peers, and serve the same to peers.
     ///
     /// On by default. Takes effect only on a node in consensus with SQL storage. Set to false to
-    /// fetch from the HTTP peers alone and refuse peers' query lanes.
+    /// fetch from the HTTP peers alone and refuse peers' query lanes. Peers' requests run at
+    /// most `ESPRESSO_NODE_API_MAX_CONNECTIONS` at a time, like HTTP requests.
     #[clap(long, env = "ESPRESSO_NODE_QUERY_P2P", default_value_t = true)]
     pub p2p: bool,
 }

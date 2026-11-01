@@ -21,8 +21,8 @@ pub use error::NetworkError;
 pub use metrics::Metrics;
 pub use msg::Slot;
 pub use net::{
-    LaneEvent, LaneReceiver, Network, NetworkReceiver, NetworkSender, RetryPolicy, SendAction,
-    SendCommand, SendCommandBuilder,
+    LaneEvent, LaneReceiver, LaneSender, Network, NetworkReceiver, NetworkSender, RetryPolicy,
+    SendAction, SendCommand, SendCommandBuilder,
 };
 
 use crate::{
@@ -124,7 +124,7 @@ pub struct Config {
 
     /// Extra lanes, each a separate connection to a party next to the main one.
     ///
-    /// See [`NetworkSender::send_lane`].
+    /// Parties may open these lanes from the start. See [`Network::take_lane`].
     #[builder(default, with = <_>::from_iter)]
     lanes: Vec<LaneId>,
 
@@ -217,16 +217,6 @@ impl fmt::Display for LaneId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.0.fmt(f)
     }
-}
-
-/// The connection to a party a message travels on.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub(crate) enum Lane {
-    /// Connected eagerly to every party.
-    Main,
-    /// Connected on first use. Once the remote closes it, the next send
-    /// opens it again.
-    Extra(LaneId),
 }
 
 /// Network peer role.

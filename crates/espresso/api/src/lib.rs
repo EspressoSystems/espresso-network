@@ -60,7 +60,7 @@ use self::proto::{
 // Re-exports
 pub use self::{
     axum::{create_router_v1, routes},
-    dyn_api::{DynHotShotAvailabilityApi, DynLightClientApi, Erased},
+    dyn_api::{DynCatchupApi, DynHotShotAvailabilityApi, DynLightClientApi},
 };
 
 /// Build a full request URL from a server base URL and a path produced by one of the

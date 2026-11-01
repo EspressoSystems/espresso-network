@@ -4,11 +4,7 @@
 
 use std::{collections::HashMap, sync::Arc, time::Duration};
 
-use ::light_client::{
-    LightClient,
-    client::{FallbackClient, QueryServiceClient},
-    storage::SqlStorage,
-};
+use ::light_client::{LightClient, client::FallbackClient, storage::SqlStorage};
 use async_lock::RwLock;
 use async_trait::async_trait;
 use committable::{Commitment, Committable};
@@ -16,7 +12,7 @@ use espresso_types::{
     Leaf2, NodeState, PubKey, SeqTypes, Transaction, ValidatedState,
     v0::traits::{MembershipPersistence, SequencerPersistence, StateCertPersistence},
 };
-use futures::future::{BoxFuture, Either};
+use futures::future::BoxFuture;
 use hotshot_new_protocol::storage::NewProtocolStorage;
 use hotshot_query_service::availability::VidCommonQueryData;
 use hotshot_types::{
@@ -30,13 +26,9 @@ use hotshot_types::{
 };
 
 use crate::{
-    SequencerContext, api::peer_client::PeerClient, consensus_handle::ConsensusHandle,
-    context::TaskList, query_peers::QueryRequest, state_signature::StateSignatureMemStorage,
+    SequencerContext, api::peer_client::NodeClient, consensus_handle::ConsensusHandle,
+    context::TaskList, query_lane::QueryLane, state_signature::StateSignatureMemStorage,
 };
-
-/// A source a node's light client fetches from: staked peers over the query lane, or an HTTP
-/// query service.
-pub type NodeClient = Either<PeerClient, QueryServiceClient>;
 
 pub type NodeLightClient = LightClient<SqlStorage, FallbackClient<NodeClient>>;
 
@@ -79,9 +71,9 @@ pub trait ApiContext: Send + Sync + 'static {
     /// A light client the node already runs, for the query service to fetch through.
     fn light_client(&self) -> Option<Arc<NodeLightClient>>;
 
-    /// Ask staked peers over the cliquenet query lane.
-    fn query_peers(&self, _request: QueryRequest) -> BoxFuture<'static, anyhow::Result<Vec<u8>>> {
-        Box::pin(async { anyhow::bail!("this node does not query peers over cliquenet") })
+    /// The query lane, when the node serves it.
+    fn query_lane(&self) -> Option<QueryLane> {
+        None
     }
 
     fn request_vid_shares(
@@ -204,8 +196,8 @@ where
         None
     }
 
-    fn query_peers(&self, request: QueryRequest) -> BoxFuture<'static, anyhow::Result<Vec<u8>>> {
-        SequencerContext::query_peers(self, request)
+    fn query_lane(&self) -> Option<QueryLane> {
+        SequencerContext::query_lane(self)
     }
 
     fn request_vid_shares(

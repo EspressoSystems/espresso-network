@@ -1,9 +1,13 @@
 use std::{collections::BTreeMap, sync::Arc};
 
+use bytes::Bytes;
 use parking_lot::Mutex;
 use tokio::sync::Notify;
 
-use crate::msg::{MsgId, Slot};
+use crate::{
+    msg::{MsgId, Slot},
+    net::RetryPolicy,
+};
 
 #[derive(Debug)]
 pub struct Queue<T>(Arc<Inner<T>>);
@@ -54,6 +58,12 @@ impl<T> Queue<T> {
 
     pub fn len(&self) -> usize {
         self.0.map.lock().len()
+    }
+}
+
+impl Queue<(RetryPolicy, Bytes)> {
+    pub fn bytes(&self) -> usize {
+        self.0.map.lock().values().map(|(_, b)| b.len()).sum()
     }
 }
 

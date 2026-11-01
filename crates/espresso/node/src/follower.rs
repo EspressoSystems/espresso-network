@@ -30,10 +30,7 @@ use espresso_types::{
     v0::traits::{SequencerPersistence, StateCatchup, StateCertPersistence},
     v0_1::ChainId,
 };
-use futures::{
-    FutureExt,
-    future::{BoxFuture, Either},
-};
+use futures::{FutureExt, future::BoxFuture};
 use hotshot_query_service::{
     availability::{BlockInfo, BlockQueryData, LeafQueryData, VidCommonQueryData},
     types::HeightIndexed,
@@ -68,6 +65,7 @@ use crate::{
         DecideSink,
         context::{ApiContext, ConsensusSource, Delta, NodeLightClient},
         light_client_genesis,
+        peer_client::NodeClient,
     },
     apply_genesis_overrides,
     context::TaskList,
@@ -857,7 +855,7 @@ async fn connect_light_client(
         upstreams
             .iter()
             .cloned()
-            .map(|url| Either::Right(QueryServiceClient::new(url)))
+            .map(|url| NodeClient::Http(QueryServiceClient::new(url)))
             .collect(),
     )?;
     let genesis = match options.light_client_genesis.clone() {

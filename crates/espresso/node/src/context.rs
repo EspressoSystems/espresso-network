@@ -14,7 +14,7 @@ use espresso_types::{
     v0::traits::{EventConsumer as PersistenceEventConsumer, SequencerPersistence},
 };
 use futures::{
-    future::{BoxFuture, join_all},
+    future::join_all,
     stream::{BoxStream, Stream, StreamExt},
 };
 use hotshot_new_protocol::{
@@ -60,7 +60,7 @@ use crate::{
     consensus_handle::ConsensusHandle,
     external_event_handler::ExternalEventHandler,
     proposal_fetcher::ProposalFetcherConfig,
-    query_peers::{QUERY_LANE, QueryHandlers, QueryPeers, QueryRequest},
+    query_lane::{QueryHandlers, QueryLane},
     request_response::{
         RequestResponseProtocol,
         data_source::{DataSource, Storage as RequestResponseStorage},
@@ -99,9 +99,8 @@ pub struct SequencerContext<P: SequencerPersistence> {
     /// Light client state signatures produced by the state signer task.
     state_signatures: Arc<RwLock<StateSignatureMemStorage>>,
 
-    /// Query service requests to and from staked peers, when this node serves them.
     #[derivative(Debug = "ignore")]
-    query_peers: Option<QueryPeers>,
+    query_lane: Option<QueryLane>,
 
     /// An orchestrator to wait for before starting consensus, with the peer config this node
     /// registered there.
@@ -185,10 +184,11 @@ where
         seed_membership(&membership_coordinator, config, &upgrade_lock, &initializer).await;
 
         let mut coordinator_network = coordinator_network(upgrade_lock.clone()).await?;
-        // Taken before the network moves into the coordinator, so query traffic never passes
+        // Started before the network moves into the coordinator, so query traffic never passes
         // through it.
+        let mut tasks = TaskList::default();
         let query_lane = query_handlers
-            .and_then(|handlers| Some((coordinator_network.take_lane(QUERY_LANE)?, handlers)));
+            .and_then(|handlers| QueryLane::start(&mut coordinator_network, handlers, &mut tasks));
 
         let current_epoch = bootstrap_epoch_window(
             &membership_coordinator,
@@ -312,7 +312,6 @@ where
         state_catchup.add_provider(Arc::new(request_response_protocol.clone()));
 
         // Create the external event handler
-        let mut tasks = TaskList::default();
         let external_event_handler = ExternalEventHandler::new(
             &mut tasks,
             request_response_sender,
@@ -327,16 +326,6 @@ where
         .await
         .with_context(|| "Failed to create external event handler")?;
 
-        let query_peers = query_lane.map(|(lane, handlers)| {
-            QueryPeers::start(
-                lane,
-                handlers,
-                consensus_handle.clone(),
-                pub_key,
-                &mut tasks,
-            )
-        });
-
         let ctx = Self::new(
             consensus_handle,
             persistence,
@@ -349,7 +338,7 @@ where
             event_consumer,
             anchor_view,
             proposal_fetcher_cfg,
-            query_peers,
+            query_lane,
             metrics,
         );
         Ok(ctx.with_task_list(tasks))
@@ -369,7 +358,7 @@ where
         event_consumer: impl PersistenceEventConsumer + 'static,
         anchor_view: Option<ViewNumber>,
         proposal_fetcher_cfg: ProposalFetcherConfig,
-        query_peers: Option<QueryPeers>,
+        query_lane: Option<QueryLane>,
         metrics: &dyn Metrics,
     ) -> Self {
         let events = consensus_handle.event_stream();
@@ -379,7 +368,7 @@ where
             consensus_handle,
             persistence: persistence.clone(),
             state_signatures: Arc::clone(&state_signer.signatures),
-            query_peers,
+            query_lane,
             request_response_protocol,
             tasks: Default::default(),
             detached: false,
@@ -463,13 +452,9 @@ where
         self.state_signatures.clone()
     }
 
-    /// Ask a staked peer over the cliquenet query lane. The response is unverified.
-    pub(crate) fn query_peers(
-        &self,
-        request: QueryRequest,
-    ) -> BoxFuture<'static, anyhow::Result<Vec<u8>>> {
-        let peers = self.query_peers.clone();
-        Box::pin(async move { peers.context("query p2p is off")?.ask(request).await })
+    /// The query lane, when this node serves it.
+    pub(crate) fn query_lane(&self) -> Option<QueryLane> {
+        self.query_lane.clone()
     }
 
     /// Stream consensus events.

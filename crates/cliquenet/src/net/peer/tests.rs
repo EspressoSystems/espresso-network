@@ -9,7 +9,7 @@ use tokio::{
 use tokio_util::sync::CancellationToken;
 
 use crate::{
-    Config, Keypair, Lane, NetAddr, PublicKey,
+    Config, Keypair, NetAddr, PublicKey,
     connection::Connection,
     delay::DelayQueue,
     error::NetworkError,
@@ -53,16 +53,13 @@ async fn connection_pair(
             let (stream, _) = listener.accept().await.unwrap();
             let mut conn = Connection::accept(conf_b, stream).await.unwrap();
             let h = conn.recv_hello().await.unwrap();
-            assert_eq!(h, Hello::Ok);
+            assert!(h.is_ok());
             conn.send_hello(Hello::Ok).await.unwrap();
             conn
         },
-        Connection::connect(conf_a, pkb, addr, Lane::Main),
+        Connection::connect(conf_a, pkb, addr),
     );
-    (
-        ca.expect("a main connect only returns once it succeeds"),
-        cb,
-    )
+    (ca, cb)
 }
 
 /// Build a payload with the trailer appended.
