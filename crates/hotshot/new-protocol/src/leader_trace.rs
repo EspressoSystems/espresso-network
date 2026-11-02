@@ -208,7 +208,7 @@ impl LeaderTracer for CsvLeaderTracer {
         if event == LeaderEvent::MaybeProposeEntered
             && self
                 .propose_high_water
-                .fetch_max(view + 1, Ordering::Relaxed)
+                .fetch_max(view.saturating_add(1), Ordering::Relaxed)
                 > view
         {
             return;
