@@ -124,10 +124,6 @@ structure SafeHistory (honestIn : EpochNumber → Prop) (h : History) : Prop whe
         ∧ (h.upTo (n + 1)).HasPayload cfg b.viewNumber b.payloadCommit
         ∧ vote.view = c.view ∧ vote.data = c.data.toVote2
 
-  /-- At most one vote2 per epoch and view. -/
-  vote2Once : ∀ vote vote', h.Sent (.vote2 vote) → h.Sent (.vote2 vote') →
-    honestIn vote.data.epoch → vote.data.epoch = vote'.data.epoch → vote.view = vote'.view → vote = vote'
-
   /--
   No vote2 at a view the node has timed out, or at an earlier one.
 

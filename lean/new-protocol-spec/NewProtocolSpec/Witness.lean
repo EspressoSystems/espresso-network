@@ -271,10 +271,6 @@ theorem safeMe (n : Nat) (hv : ∀ b, BlockValid b) :
       · exact Or.inr ((Trace.received_history _).mpr ⟨3, by omega, rfl⟩)
     | 0, hmem | 1, hmem | 2, hmem | 5, hmem | 6, hmem | _ + 7, hmem => simp [script] at hmem
     | 4, hmem => simp [script] at hmem
-  vote2Once v v' hs hs' _ _ _ := by
-    obtain ⟨i, -, hi⟩ := (Trace.sent_history _).mp hs
-    obtain ⟨j, -, hj⟩ := (Trace.sent_history _).mp hs'
-    rw [vote2s_sent hi, vote2s_sent hj]
   vote2BeforeTimeout := fun i vote ⟨st, hst, _⟩ _ tv hs => by
     obtain ⟨hi, -⟩ := getElem?_history hst
     rw [Trace.history_upTo _ (Nat.succ_le_of_lt hi)] at hs
@@ -354,12 +350,6 @@ theorem safeYou (P : EpochNumber → Prop) (n : Nat) (hv : ∀ b, BlockValid b) 
     · exact Or.inr (Or.inl ((Trace.received_history _).mpr ⟨4, by omega, rfl⟩))
     · exact Or.inr (Or.inl ⟨other, some share2, (Trace.received_history _).mpr ⟨2, by omega, rfl⟩⟩)
     · exact Or.inr ((Trace.received_history _).mpr ⟨5, by omega, rfl⟩)
-  vote2Once v v' hs hs' _ _ _ := by
-    obtain ⟨i, -, hi⟩ := (Trace.sent_history _).mp hs
-    obtain ⟨j, -, hj⟩ := (Trace.sent_history _).mp hs'
-    rcases yours_output hi with ⟨-, hi⟩ | ⟨-, hi⟩ | ⟨-, hi⟩ <;> cases hi
-    rcases yours_output hj with ⟨-, hj⟩ | ⟨-, hj⟩ | ⟨-, hj⟩ <;> cases hj
-    rfl
   vote2BeforeTimeout := fun i vote ⟨st, hst, _⟩ _ tv hs => by
     obtain ⟨hi, -⟩ := getElem?_history hst
     rw [Trace.history_upTo _ (Nat.succ_le_of_lt hi)] at hs

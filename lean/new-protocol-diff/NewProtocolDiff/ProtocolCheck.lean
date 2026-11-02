@@ -244,8 +244,8 @@ theorem checkProtocol_sound (hs : checkSafe cfg node h = true) (hvalid : Validit
   · rintro n r ⟨st, hst, hmem⟩ _
     exact revoteJustified_of
       ((stepFault_none (hstep n st hst)).2.2.2 r (mem_revotesOf_iff.mpr hmem))
-  · refine NewProtocolImpl.global_once ⟨fun v v' a b => hsafe.vote1Once v v' a b trivial,
-      fun v v' a b => hsafe.vote2Once v v' a b trivial, ?_, ?_⟩ m m' v e hs hs' hv hv' he he'
+  · refine NewProtocolImpl.global_once ⟨fun v v' a b => hsafe.vote1Once v v' a b trivial, ?_, ?_⟩
+      m m' v e hs hs' hv hv' he he'
     · rintro p p' ⟨st, hst, hm⟩ ⟨st', hst', hm'⟩ he hv
       exact honce p (List.mem_flatMap.mpr ⟨st, hst, mem_proposalsOf hm⟩)
         p' (List.mem_flatMap.mpr ⟨st', hst', mem_proposalsOf hm'⟩) he hv

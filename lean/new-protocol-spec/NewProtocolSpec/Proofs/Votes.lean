@@ -23,7 +23,6 @@ theorem SafeHistory.of_every {node : PubKey} {P : EpochNumber → Prop} {h : His
   vote1Justified := fun n vote ⟨st, hn, hm⟩ _ => hs.vote1Justified n vote ⟨st, hn, hm⟩ trivial
   vote1Once v v' a b _ he hv := hs.vote1Once v v' a b trivial he hv
   vote2Justified := fun n vote ⟨st, hn, hm⟩ _ => hs.vote2Justified n vote ⟨st, hn, hm⟩ trivial
-  vote2Once v v' a b _ he hv := hs.vote2Once v v' a b trivial he hv
   vote2BeforeTimeout := fun n vote ⟨st, hn, hm⟩ _ tv htv _ => hs.vote2BeforeTimeout n vote ⟨st, hn, hm⟩ trivial tv htv trivial
   timeoutLock := fun n vote ⟨st, hn, hm⟩ _ v2 hv2 _ hle =>
     hs.timeoutLock n vote ⟨st, hn, hm⟩ trivial v2 hv2 trivial hle

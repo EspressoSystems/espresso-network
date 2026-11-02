@@ -1037,7 +1037,12 @@ tag := "signing"
 
 When a node may sign, and what a decide must show, for the epochs the node is honest
 in. Each rule applies when the node is honest in the epoch of every message the rule
-relates. This is all the no-fork result reads of a node.
+relates. The rules on votes and timeout votes are all that {name NewProtocol.NoFork}`NoFork`
+reads of a node; {name NewProtocol.DecideAgreement}`DecideAgreement` and
+{name NewProtocol.DecidesValid}`DecidesValid` also read
+{name NewProtocol.SafeHistory.decideJustified}`SafeHistory.decideJustified`.
+{name NewProtocol.SafeHistory.decideOnce}`SafeHistory.decideOnce` is read by no result: it is
+what the application relies on, that a decide delivers each view once.
 
 Within a view, at most one {name NewProtocol.Cert1}`Cert1` of an epoch forms: an honest node votes1
 at most once per epoch and view ({name NewProtocol.SafeHistory.vote1Once}`SafeHistory.vote1Once`),
@@ -2348,8 +2353,7 @@ kind is where an audit should spend its doubt.
   ({name NewProtocol.Prompt}`Prompt`).
 * _Crashes and restarts._ Nodes are honest or faulty, and an honest node never loses
   its history. Restarts are out of scope.
-  {name NewProtocol.SafeHistory.vote1Once}`SafeHistory.vote1Once`,
-  {name NewProtocol.SafeHistory.vote2Once}`SafeHistory.vote2Once` and
+  {name NewProtocol.SafeHistory.vote1Once}`SafeHistory.vote1Once` and
   {name NewProtocol.SafeHistory.timeoutLock}`SafeHistory.timeoutLock` read every vote the
   node ever sent, so an implementation meets them across a restart only if it
   persists what it signed.

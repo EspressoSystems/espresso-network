@@ -80,7 +80,7 @@ meta def checkFields (parent : Name) (expected : List Name) : MetaM Unit := do
 
 /-! The signing rules: what safety rests on. -/
 run_meta (checkFields `NewProtocol.SafeHistory
-  [`vote1Justified, `vote1Once, `vote2Justified, `vote2Once, `vote2BeforeTimeout, `timeoutLock,
+  [`vote1Justified, `vote1Once, `vote2Justified, `vote2BeforeTimeout, `timeoutLock,
    `decideJustified, `decideOnce])
 
 /-! The rest of the protocol: what liveness reads of a node beyond safety. -/

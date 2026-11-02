@@ -284,15 +284,7 @@ theorem late_cert_data {c c' : Cert1} (hc : Cert1Backed N.trace c) (hc' : Cert1B
     (hv : c.view = c'.view) (hl : Late N t0 c.view) : c.data = c'.data := by
   have he : c.data.epoch = c'.data.epoch := by
     rw [late_cert_epoch hcfg hcf hs hst hc hl, late_cert_epoch hcfg hcf hs hst hc' (hv ▸ hl)]
-  have hh := cert1_unique cfg N.toNetwork hc hc' he hv
-  obtain ⟨b, -, hb⟩ := cert1_data_eq hc
-  obtain ⟨b', -, hb'⟩ := cert1_data_eq hc'
-  have hbb : b = b' := hcf b b' (by
-    have h1 := congrArg Vote1Data.blockHash hb
-    have h2 := congrArg Vote1Data.blockHash hb'
-    simp only at h1 h2
-    rw [← h1, ← h2, hh])
-  rw [hb, hb', hbb]
+  exact cert1_unique cfg N.toNetwork hc hc' he hv
 
 /--
 A block an honest node holds a `Cert2` over, at a late view, is not the last of its
