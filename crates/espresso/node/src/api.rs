@@ -74,7 +74,6 @@ use crate::{
         CatchupStorage, add_fee_accounts_to_state, add_v1_reward_accounts_to_state,
         add_v2_reward_accounts_to_state,
     },
-    context::ConsensusNode,
     request_response::{
         RequestResponseProtocol,
         data_source::{retain_v1_reward_accounts, retain_v2_reward_accounts},
@@ -496,7 +495,7 @@ impl RequestResponseDataSource<SeqTypes> for ApiState {
 }
 
 pub(super) fn request_vid_shares<P>(
-    request_response_protocol: RequestResponseProtocol<ConsensusNode<P>, P>,
+    request_response_protocol: RequestResponseProtocol<P>,
     block_number: u64,
     vid_common_data: VidCommonQueryData<SeqTypes>,
     duration: Duration,

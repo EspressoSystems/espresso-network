@@ -14,10 +14,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc::{Receiver, Sender, error::TrySendError};
 use vbs::{BinarySerializer, bincode_serializer::BincodeSerializer, version::StaticVersion};
 
-use crate::{
-    consensus_handle::ConsensusHandle,
-    context::{ConsensusNode, TaskList},
-};
+use crate::{consensus_handle::ConsensusHandle, context::TaskList};
 
 /// An external message that can be sent to or received from a node
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -45,7 +42,7 @@ impl ExternalEventHandler {
         tasks: &mut TaskList,
         request_response_sender: Sender<Bytes>,
         outbound_message_receiver: Receiver<OutboundMessage>,
-        consensus_handle: Arc<ConsensusHandle<SeqTypes, ConsensusNode<P>>>,
+        consensus_handle: Arc<ConsensusHandle<SeqTypes, Arc<P>>>,
         public_key: PubKey,
         dropped_messages: Arc<dyn Counter>,
     ) -> Result<Self>
@@ -94,7 +91,7 @@ impl ExternalEventHandler {
     /// The main loop for sending outbound messages.
     async fn outbound_message_loop<P>(
         mut receiver: Receiver<OutboundMessage>,
-        consensus_handle: Arc<ConsensusHandle<SeqTypes, ConsensusNode<P>>>,
+        consensus_handle: Arc<ConsensusHandle<SeqTypes, Arc<P>>>,
         public_key: PubKey,
     ) where
         P: SequencerPersistence,
