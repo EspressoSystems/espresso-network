@@ -10888,6 +10888,7 @@ dependencies = [
  "jf-poseidon2",
  "jf-utils",
  "p3-maybe-rayon",
+ "proptest",
  "rand 0.8.6",
  "reed-solomon-simd",
  "serde",
