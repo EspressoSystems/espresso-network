@@ -414,6 +414,11 @@ class DeploymentMeta(TypedDict):
     max_block_size: NotRequired[str]
     # `--prune` retention of the query node's data and state; absent without pruning.
     prune: NotRequired[str]
+    # `--epoch-height` and whether every node was staked on L1 for it; absent for the template's.
+    epoch_height: NotRequired[int]
+    staking: NotRequired[bool]
+    # How far the light-client prover got on ctl; absent without `--prover`.
+    prover: NotRequired[str]
     # `--slow-nodes`: the nodes whose espresso-node ran on `slow_cores` cores; absent without.
     slow_nodes: NotRequired[list[str]]
     slow_cores: NotRequired[int]
@@ -821,17 +826,23 @@ def read(pool: Http, url: str) -> tuple[int, bytes]:
     pool is closed."""
     deadline = pool.clock.time() + READ_DEADLINE_S
     for attempt in itertools.count():
+        # Chaos faults drop and refuse connections; the deadline still reports a node that
+        # stays down.
+        quiet = attempt > 0
         try:
             status, body = pool.request("GET", url)
         except OSError as err:
             problem = str(err)
+            quiet |= isinstance(err, ConnectionError) or isinstance(
+                err.__cause__, ConnectionError
+            )
         else:
             if status < 500:
                 return status, body
             problem = f"GET {url}: HTTP {status}"
         if pool.clock.time() >= deadline:
             raise NetworkError(f"{problem}, retried for {READ_DEADLINE_S:.0f} s")
-        log.log(logging.DEBUG if attempt else logging.WARNING, "%s, retrying", problem)
+        log.log(logging.DEBUG if quiet else logging.WARNING, "%s, retrying", problem)
         if pool.clock.wait(pool.closed, READ_RETRY_S):
             raise NetworkError(f"{problem}, stopped retrying")
     raise AssertionError("unreachable")
@@ -3582,6 +3593,12 @@ def deployment_lines(result: BenchResult) -> list[str]:
             else []
         ),
         *prune_lines(result),
+        *(
+            [f"- epoch height: {d['epoch_height']}, every node staked on L1"]
+            if d.get("staking")
+            else []
+        ),
+        *([f"- light-client prover: {d['prover']}"] if "prover" in d else []),
     ]
 
 

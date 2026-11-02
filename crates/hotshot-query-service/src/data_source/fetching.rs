@@ -343,8 +343,8 @@ impl<Types, S, P> Builder<Types, S, P> {
 
     /// Run without an aggregator.
     ///
-    /// This can reduce load on the CPU and the database, but it will cause aggregate statistics
-    /// (such as transaction counts) not to update.
+    /// This can reduce load on the CPU and the database, but transaction counts, payload sizes and
+    /// the explorer summary then return [`QueryError::NotFound`].
     pub fn disable_aggregator(mut self) -> Self {
         self.aggregator = false;
         self
@@ -2272,6 +2272,7 @@ where
         range: impl RangeBounds<usize> + Send + Sync + Clone,
         namespace: Option<NamespaceId<Types>>,
     ) -> QueryResult<usize> {
+        self.check_aggregator()?;
         serializable_retry!(self.fetcher.storage, || async {
             let mut tx = self.read().await.map_err(|err| QueryError::Error {
                 message: err.to_string(),
@@ -2287,6 +2288,7 @@ where
         range: impl RangeBounds<usize> + Send + Sync + Clone,
         namespace: Option<NamespaceId<Types>>,
     ) -> QueryResult<usize> {
+        self.check_aggregator()?;
         serializable_retry!(self.fetcher.storage, || async {
             let mut tx = self.read().await.map_err(|err| QueryError::Error {
                 message: err.to_string(),
@@ -2415,6 +2417,8 @@ where
         explorer::query_data::ExplorerSummary<Types>,
         explorer::query_data::GetExplorerSummaryError,
     > {
+        // The summary counts transactions from genesis.
+        self.check_aggregator()?;
         serializable_retry!(self.fetcher.storage, || async {
             let mut tx = self.read().await.map_err(|err| QueryError::Error {
                 message: err.to_string(),
@@ -2438,6 +2442,21 @@ where
             tx.get_search_results(query.clone()).await
         })
         .await
+    }
+}
+
+impl<Types, S, P> FetchingDataSource<Types, S, P>
+where
+    Types: NodeType,
+{
+    /// Transaction counts and payload sizes come from the aggregator. Without one, this data source
+    /// has none: rows an earlier run left in storage stop where that run did, and a node without an
+    /// aggregator, such as a pruned one, never has the blocks to count from genesis.
+    fn check_aggregator(&self) -> QueryResult<()> {
+        if self.aggregator.is_none() {
+            return Err(QueryError::NotFound);
+        }
+        Ok(())
     }
 }
 
@@ -3016,6 +3035,8 @@ async fn select_some<T>(
 
 #[cfg(test)]
 mod test {
+    use std::marker::PhantomData;
+
     use hotshot_example_types::{
         block_types::{TestBlockHeader, TestMetadata},
         node_types::TEST_VERSIONS,
@@ -3026,16 +3047,15 @@ mod test {
         traits::{BlockPayload, block_contents::EncodeBytes},
         utils::BuilderCommitment,
     };
+    use rstest_reuse::apply;
 
     use super::{leaf::RangeRequest, *};
     use crate::{
-        data_source::{
-            sql::postgres::{SqlStorage, testing::TmpDb},
-            storage::StorageConnectionType,
-        },
         fetching::provider::NoFetching,
         testing::{
-            consensus::MockSqlDataSource,
+            consensus::{
+                SavePrunedHeight, TestSqlDb, TestableDataSource, sql_data_sources, sql_dbs,
+            },
             mocks::{MockPayload, MockTypes, mock_transaction},
         },
     };
@@ -3205,18 +3225,19 @@ mod test {
         );
     }
 
-    async fn test_sync_status(chunk_size: usize, present_ranges: &[(usize, usize)]) {
+    async fn test_sync_status<D>(chunk_size: usize, present_ranges: &[(usize, usize)])
+    where
+        D: TestableDataSource,
+        for<'a> D::Transaction<'a>: UpdateAvailabilityStorage<MockTypes> + SavePrunedHeight,
+    {
         let block_height = present_ranges.last().unwrap().1;
-        let storage = TmpDb::init().await;
-        let db = SqlStorage::connect(storage.config(), StorageConnectionType::Query)
-            .await
-            .unwrap();
-        let ds = MockSqlDataSource::builder(db, NoFetching)
-            .with_sync_status_chunk_size(chunk_size)
-            .with_sync_status_ttl(Duration::ZERO)
-            .build()
-            .await
-            .unwrap();
+        let storage = D::create(0).await;
+        let ds = D::build(&storage, |builder| {
+            builder
+                .with_sync_status_chunk_size(chunk_size)
+                .with_sync_status_ttl(Duration::ZERO)
+        })
+        .await;
 
         // Generate some mock leaves to insert.
         let mut leaves: Vec<LeafQueryData<MockTypes>> = vec![
@@ -3308,31 +3329,42 @@ mod test {
         assert_eq!(ranges.next(), None);
     }
 
-    #[tokio::test]
-    #[test_log::test]
-    async fn test_sync_status_multiple_chunks() {
-        test_sync_status(10, &[(0, 1), (3, 5), (8, 10)]).await;
+    #[apply(sql_data_sources)]
+    async fn test_sync_status_multiple_chunks<D>(_d: PhantomData<D>)
+    where
+        D: TestableDataSource,
+        for<'a> D::Transaction<'a>: UpdateAvailabilityStorage<MockTypes> + SavePrunedHeight,
+    {
+        test_sync_status::<D>(10, &[(0, 1), (3, 5), (8, 10)]).await;
     }
 
-    #[tokio::test]
-    #[test_log::test]
-    async fn test_sync_status_multiple_chunks_present_range_overlapping_chunk() {
-        test_sync_status(5, &[(1, 4)]).await;
+    #[apply(sql_data_sources)]
+    async fn test_sync_status_multiple_chunks_present_range_overlapping_chunk<D>(_d: PhantomData<D>)
+    where
+        D: TestableDataSource,
+        for<'a> D::Transaction<'a>: UpdateAvailabilityStorage<MockTypes> + SavePrunedHeight,
+    {
+        test_sync_status::<D>(5, &[(1, 4)]).await;
     }
 
-    #[tokio::test]
-    #[test_log::test]
-    async fn test_sync_status_multiple_chunks_missing_range_overlapping_chunk() {
-        test_sync_status(5, &[(0, 1), (4, 5)]).await;
+    #[apply(sql_data_sources)]
+    async fn test_sync_status_multiple_chunks_missing_range_overlapping_chunk<D>(_d: PhantomData<D>)
+    where
+        D: TestableDataSource,
+        for<'a> D::Transaction<'a>: UpdateAvailabilityStorage<MockTypes> + SavePrunedHeight,
+    {
+        test_sync_status::<D>(5, &[(0, 1), (4, 5)]).await;
     }
 
-    #[tokio::test]
-    #[test_log::test]
-    async fn test_load_range_incomplete() {
-        let storage = TmpDb::init().await;
-        let db = SqlStorage::connect(storage.config(), StorageConnectionType::Query)
-            .await
-            .unwrap();
+    #[apply(sql_data_sources)]
+    async fn test_load_range_incomplete<D>(_d: PhantomData<D>)
+    where
+        D: TestableDataSource,
+        for<'a> D::Transaction<'a>: UpdateAvailabilityStorage<MockTypes>,
+        for<'a> D::ReadOnly<'a>: AvailabilityStorage<MockTypes>,
+    {
+        let storage = D::create(0).await;
+        let db = D::connect(&storage).await;
         {
             let mut tx = db.write().await.unwrap();
             tx.insert_leaf(
@@ -3425,18 +3457,15 @@ mod test {
     /// `n * (n + 1) / 2`. A double-count or skip would fail the final assertion.
     ///
     /// This test is slow because it must wait for `AGGREGATOR_RETRY_INTERVAL` (30 s) to elapse.
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    #[apply(sql_data_sources)]
     #[cfg(not(target_os = "windows"))]
-    async fn test_aggregator_recovery_after_missed_notification() {
-        let storage = TmpDb::init().await;
-        let db = SqlStorage::connect(storage.config(), StorageConnectionType::Query)
-            .await
-            .unwrap();
-
-        let ds = MockSqlDataSource::builder(db, NoFetching)
-            .build()
-            .await
-            .unwrap();
+    async fn test_aggregator_recovery_after_missed_notification<D>(_d: PhantomData<D>)
+    where
+        D: TestableDataSource,
+        for<'a> D::Transaction<'a>: UpdateAvailabilityStorage<MockTypes>,
+    {
+        let storage = D::create(0).await;
+        let ds = D::connect(&storage).await;
 
         // Build N blocks: block at height i has i+1 transactions.
         // Each block gets a distinct payload (and thus a distinct payload_commitment),
@@ -3494,8 +3523,7 @@ mod test {
         // `store_and_notify`. The aggregator task has already started and is waiting on a
         // notification for height 0 that will never arrive via this path.
         {
-            let inner = ds.inner();
-            let mut tx = inner.write().await.unwrap();
+            let mut tx = ds.write().await.unwrap();
             for leaf in &leaves {
                 tx.insert_leaf(leaf).await.unwrap();
             }
@@ -3525,5 +3553,54 @@ mod test {
             .await
             .expect("aggregate should be available after recovery");
         assert_eq!(total, expected_total);
+    }
+
+    /// A data source without an aggregator has no totals, also when an earlier run with one left
+    /// aggregate rows in storage: those stop where that run did.
+    #[apply(sql_dbs)]
+    async fn test_no_totals_without_aggregator<Db: TestSqlDb>(_db: PhantomData<Db>)
+    where
+        for<'a> <Db::Storage as VersionedDataSource>::ReadOnly<'a>: ExplorerStorage<MockTypes>,
+    {
+        let tmp = Db::init().await;
+        let db = tmp.storage().await.unwrap();
+        let genesis = BlockQueryData::<MockTypes>::genesis(
+            &Default::default(),
+            &Default::default(),
+            TEST_VERSIONS.test.base,
+        )
+        .await;
+        {
+            let mut tx = db.write().await.unwrap();
+            tx.update_aggregates(Aggregate::default(), &[PayloadMetadata::from(genesis)])
+                .await
+                .unwrap();
+            tx.commit().await.unwrap();
+        }
+        let ds = FetchingDataSource::<MockTypes, _, _>::builder(db, NoFetching)
+            .disable_aggregator()
+            .build()
+            .await
+            .unwrap();
+
+        for res in [
+            ds.count_transactions_in_range(.., None).await,
+            ds.count_transactions_in_range(..=0, None).await,
+            ds.payload_size_in_range(.., None).await,
+        ] {
+            assert!(matches!(res, Err(QueryError::NotFound)), "{res:?}");
+        }
+        let err = ds.get_explorer_summary().await.unwrap_err();
+        assert!(
+            matches!(
+                err,
+                explorer::query_data::GetExplorerSummaryError::QueryError(
+                    explorer::errors::QueryError {
+                        error: QueryError::NotFound
+                    }
+                )
+            ),
+            "{err:?}"
+        );
     }
 }
