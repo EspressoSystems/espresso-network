@@ -3,6 +3,9 @@
 #
 # To fix: run `just lock-actions` and commit actions.lock. On a merge conflict in
 # actions.lock, take main's copy and re-run it rather than merging by hand.
+#
+# If a Dependabot PR fails with "doesn't match locked manifest", run
+# `just lock-actions <failing workflow> --relock` on its branch and push.
 name: Verify actions lockfile
 
 on:
