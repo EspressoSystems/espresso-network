@@ -647,7 +647,9 @@ impl TestRunner {
                                 // Create a fresh coordinator; it resumes
                                 // from the persisted anchor when storage is
                                 // persistent, from genesis otherwise.
-                                if !self.persistent_storage {
+                                if self.persistent_storage {
+                                    self.node_storages[change.idx].mark_restart().await;
+                                } else {
                                     self.node_storages[change.idx] = TestStorage::default();
                                 }
                                 let upgrade_lock = self.make_upgrade_lock(change.idx).await;
