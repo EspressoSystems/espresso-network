@@ -27,7 +27,7 @@ workflows:
     '.github/workflows/binary-upgrade-test.yml':
         - 'actions/checkout@v7'
         - 'actions/upload-artifact@v7'
-        - 'astral-sh/setup-uv@v10.0.1'
+        - 'astral-sh/setup-uv@v10.3.2'
         - 'taiki-e/install-action@v2'
     '.github/workflows/build-allocators.yml':
         - 'actions/checkout@v7'
@@ -50,7 +50,7 @@ workflows:
         - 'actions/checkout@v7'
         - 'actions/download-artifact@v8'
         - 'actions/upload-artifact@v7'
-        - 'astral-sh/setup-uv@v10.0.1'
+        - 'astral-sh/setup-uv@v10.3.2'
         - 'docker/metadata-action@v6'
         - 'nick-fields/retry@v4'
         - 'rui314/setup-mold@v1'
@@ -121,7 +121,7 @@ workflows:
         - 'actions/checkout@v7'
         - 'actions/download-artifact@v8'
         - 'actions/upload-artifact@v7'
-        - 'astral-sh/setup-uv@v10.0.1'
+        - 'astral-sh/setup-uv@v10.3.2'
         - 'marocchino/sticky-pull-request-comment@v3'
         - 'taiki-e/install-action@v2'
     '.github/workflows/nix-env-macos-arm.yml':
@@ -154,7 +154,7 @@ workflows:
         - 'taiki-e/install-action@v2'
     '.github/workflows/typos.yml':
         - 'actions/checkout@v7'
-        - 'crate-ci/typos@v1.50.1'
+        - 'crate-ci/typos@v1.51.1'
     '.github/workflows/ubuntu-install-without-nix.yml':
         - 'actions/checkout@v7'
         - 'swatinem/rust-cache@v2'
@@ -168,7 +168,7 @@ workflows:
     '.github/workflows/update_nix.yml':
         - 'actions/checkout@v7'
         - 'cachix/install-nix-action@v31'
-        - 'determinatesystems/update-flake-lock@v28'
+        - 'determinatesystems/update-flake-lock@v29'
     '.github/workflows/verify-lockfile.yml':
         - 'actions/checkout@v7'
     '.github/workflows/verify-proposals.yml':
@@ -207,11 +207,6 @@ dependencies:
         commit: 'sha1-a35287df135f3ad96ac80260c38ef78b71bdb8df'
         owner_id: 1257206
         repo_id: 641672205
-    'astral-sh/setup-uv@v10.0.1':
-        ref: 'v10.0.1'
-        commit: 'sha1-20cfd1bf945f4377ade1205e4dbc17946fc9a30d'
-        owner_id: 115962839
-        repo_id: 846733598
     'astral-sh/setup-uv@v10.3.2':
         ref: 'v10.3.2'
         commit: 'sha1-07a047e608db84b3d8c06cd9a7c7dcc9c355c18e'
@@ -232,37 +227,31 @@ dependencies:
         commit: 'sha1-09b709cf6a16e30b0808ba050c7a6e8a5ef13f8d'
         owner_id: 16691566
         repo_id: 200696780
-    'crate-ci/typos@v1.50.1':
-        ref: 'v1.50.1'
-        commit: 'sha1-d43b6c087ac471e2ea7b8af622ff15f05c0c365b'
+    'crate-ci/typos@v1.51.1':
+        ref: 'v1.51.1'
+        commit: 'sha1-7f9d0819ca1c008ade73f4b41fa9d258d48f605b'
         owner_id: 36412122
         repo_id: 181782286
-    'crazy-max/ghaction-import-gpg@e89d40939c28e39f97cf32126055eeae86ba74ec':
-        ref: 'v6.3.0'
-        commit: 'sha1-e89d40939c28e39f97cf32126055eeae86ba74ec'
+    'crazy-max/ghaction-import-gpg@2dc316deee8e90f13e1a351ab510b4d5bc0c82cd':
+        ref: 'v7.0.0'
+        commit: 'sha1-2dc316deee8e90f13e1a351ab510b4d5bc0c82cd'
         owner_id: 1951866
         repo_id: 260488959
-    'damianreeves/write-file-action@6929a9a6d1807689191dcc8bbe62b54d70a32b42':
-        ref: 'v1.3'
-        commit: 'sha1-6929a9a6d1807689191dcc8bbe62b54d70a32b42'
-        owner_id: 957246
-        repo_id: 258052107
     'dependabot/fetch-metadata@v3.1.0':
         ref: 'v3.1.0'
         commit: 'sha1-25dd0e34f4fe68f24cc83900b1fe3fe149efef98'
         owner_id: 27347476
         repo_id: 371068214
-    'determinatesystems/update-flake-lock@v28':
-        ref: 'v28'
-        commit: 'sha1-834c491b2ece4de0bbd00d85214bb5e83b4da5c6'
+    'determinatesystems/update-flake-lock@v29':
+        ref: 'v29'
+        commit: 'sha1-da03c0f078bc4b2c37ee4f7e072d34bf8f188bb3'
         owner_id: 80991770
         repo_id: 418625766
         uses:
-            - 'crazy-max/ghaction-import-gpg@e89d40939c28e39f97cf32126055eeae86ba74ec'
-            - 'damianreeves/write-file-action@6929a9a6d1807689191dcc8bbe62b54d70a32b42'
-            - 'juliangruber/read-file-action@b549046febe0fe86f8cb4f93c24e284433f9ab58'
+            - 'crazy-max/ghaction-import-gpg@2dc316deee8e90f13e1a351ab510b4d5bc0c82cd'
+            - 'juliangruber/read-file-action@271ff311a4947af354c6abcd696a306553b9ec18'
             - 'pedrolamas/handlebars-action@2995d7eadacbc8f2f6ab8431a01d84a5fa3b8bb4'
-            - 'peter-evans/create-pull-request@84ae59a2cdc2258d6fa0732dd66352dddae2a412'
+            - 'peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1'
     'docker/build-push-action@v7':
         ref: 'v7'
         commit: 'sha1-c3c9e263c25d99ce0380d002d59b67737d91b0dc'
@@ -278,9 +267,9 @@ dependencies:
         commit: 'sha1-683b588c487a69d01f6c6ddf40f036ff682cc2c8'
         owner_id: 1940490
         repo_id: 260749683
-    'juliangruber/read-file-action@b549046febe0fe86f8cb4f93c24e284433f9ab58':
-        ref: 'v1.1.7'
-        commit: 'sha1-b549046febe0fe86f8cb4f93c24e284433f9ab58'
+    'juliangruber/read-file-action@271ff311a4947af354c6abcd696a306553b9ec18':
+        ref: 'v1.1.8'
+        commit: 'sha1-271ff311a4947af354c6abcd696a306553b9ec18'
         owner_id: 10247
         repo_id: 244608449
     'korthout/backport-action@v4':
@@ -308,9 +297,9 @@ dependencies:
         commit: 'sha1-2995d7eadacbc8f2f6ab8431a01d84a5fa3b8bb4'
         owner_id: 85504
         repo_id: 304154389
-    'peter-evans/create-pull-request@84ae59a2cdc2258d6fa0732dd66352dddae2a412':
-        ref: 'v7.0.9'
-        commit: 'sha1-84ae59a2cdc2258d6fa0732dd66352dddae2a412'
+    'peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1':
+        ref: 'v8.1.1'
+        commit: 'sha1-5f6978faf089d4d20b00c7766989d076bb2fc7f1'
         owner_id: 18365890
         repo_id: 197176365
     'peter-evans/create-pull-request@v8':
