@@ -99,10 +99,14 @@ READ_RETRY_S = 1.0
 # Payload scans run in this many processes when the caller asks for them (a block of 100 MB
 # costs about a core-second of JSON, base64 and search, which in the load process would
 # compete with the pacer for the GIL); this many blocks are scanned at once.
-SCAN_PROCESSES = 4
+# Payload scans of the load's marker, each fetching a whole block from the query node and
+# decoding it. At 4 the scan fell behind consensus near 250 MB/s under decaf latency with the
+# controller's CPU mostly idle: the fetch is the wait, so more of them run at once.
+SCAN_PROCESSES = 12
 JSON = "application/json"
-# The API's versioned binary encoding: a payload's bytes appear in it verbatim, so a scan
-# needs neither the base64 nor the JSON decode of the JSON form.
+# The API's versioned binary encoding, in which a payload's bytes appear verbatim. The v1
+# payload routes answer JSON whatever the request accepts; asking for binary costs nothing
+# and takes effect once they negotiate.
 BINARY = "application/octet-stream"
 SCAN_BATCH = 4
 # Light clients of `BenchConfig.clients` run as threads of one more process, for the same
@@ -888,12 +892,21 @@ def block_payload(pool: Http, query_urls: Sequence[str], height: int) -> bytes |
     return None if body is None else payload_bytes(body)
 
 
+# The JSON form's payload field, decoded without parsing the document around it (a tenth of
+# a second per 100 MB; the fetch itself is the scan's wait).
+RAW_PAYLOAD = re.compile(rb'"raw_payload"\s*:\s*"')
+
+
 def payload_bytes(body: bytes) -> bytes:
-    if body[:1] == b"{":
-        try:
-            return base64.b64decode(json.loads(body)["data"]["raw_payload"])
-        except (ValueError, KeyError, TypeError):
-            pass
+    """The payload's bytes out of a payload answer: decoded from the JSON form's base64 field,
+    or the binary answer itself, which carries them verbatim."""
+    if body[:1] == b"{" and (m := RAW_PAYLOAD.search(body)):
+        end = body.find(b'"', m.end())
+        if end > 0:
+            try:
+                return base64.b64decode(body[m.end() : end], validate=True)
+            except ValueError:
+                pass
     return body
 
 
