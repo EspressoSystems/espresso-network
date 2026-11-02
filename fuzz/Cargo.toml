@@ -17,6 +17,8 @@ bincode = "1.3.3"
 espresso-types = { path = "../crates/espresso/types" }
 hotshot-query-service-types = { path = "../crates/hotshot-query-service-types" }
 hotshot-types = { path = "../crates/hotshot/types" }
+# Must match the root Cargo.toml's jf-advz, or `ADVZScheme` and its `VidScheme` trait come from
+# two copies and the targets stop compiling.
 jf-advz = { git = "https://github.com/EspressoSystems/jellyfish-compat", tag = "jf-advz-v0.2.4", features = [
     "std",
     "parallel",
