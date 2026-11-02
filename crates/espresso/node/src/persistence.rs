@@ -362,7 +362,7 @@ mod tests {
         // Store a view.
         let view1 = ViewNumber::genesis();
         storage
-            .record_action(view1, None, HotShotAction::Vote)
+            .record_action(view1, HotShotAction::Vote)
             .await
             .unwrap();
         assert_eq!(
@@ -373,7 +373,7 @@ mod tests {
         // Store a newer view, make sure storage gets updated.
         let view2 = view1 + 1;
         storage
-            .record_action(view2, None, HotShotAction::Vote)
+            .record_action(view2, HotShotAction::Vote)
             .await
             .unwrap();
         assert_eq!(
@@ -383,7 +383,7 @@ mod tests {
 
         // Store an old view, make sure storage is unchanged.
         storage
-            .record_action(view1, None, HotShotAction::Vote)
+            .record_action(view1, HotShotAction::Vote)
             .await
             .unwrap();
         assert_eq!(
@@ -444,7 +444,7 @@ mod tests {
         // Store a view.
         let view1 = ViewNumber::genesis();
         storage
-            .record_action(view1, None, HotShotAction::Vote)
+            .record_action(view1, HotShotAction::Vote)
             .await
             .unwrap();
         assert_eq!(
@@ -455,7 +455,7 @@ mod tests {
         // Store a newer view, make sure storage gets updated.
         let view2 = view1 + 1;
         storage
-            .record_action(view2, None, HotShotAction::Vote)
+            .record_action(view2, HotShotAction::Vote)
             .await
             .unwrap();
         assert_eq!(
@@ -465,7 +465,7 @@ mod tests {
 
         // Store an old view, make sure storage is unchanged.
         storage
-            .record_action(view1, None, HotShotAction::Vote)
+            .record_action(view1, HotShotAction::Vote)
             .await
             .unwrap();
         assert_eq!(
@@ -475,7 +475,7 @@ mod tests {
 
         // store a higher proposed view, make sure storage is unchanged.
         storage
-            .record_action(view2 + 1, None, HotShotAction::Propose)
+            .record_action(view2 + 1, HotShotAction::Propose)
             .await
             .unwrap();
         assert_eq!(
@@ -485,7 +485,7 @@ mod tests {
 
         // store a higher timeout vote view, make sure storage is unchanged.
         storage
-            .record_action(view2 + 1, None, HotShotAction::TimeoutVote)
+            .record_action(view2 + 1, HotShotAction::TimeoutVote)
             .await
             .unwrap();
         assert_eq!(

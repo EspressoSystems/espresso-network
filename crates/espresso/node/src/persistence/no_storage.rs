@@ -142,12 +142,7 @@ impl SequencerPersistence for NoStorage {
     ) -> anyhow::Result<()> {
         Ok(())
     }
-    async fn record_action(
-        &self,
-        _view: ViewNumber,
-        _epoch: Option<EpochNumber>,
-        _action: HotShotAction,
-    ) -> anyhow::Result<()> {
+    async fn record_action(&self, _view: ViewNumber, _action: HotShotAction) -> anyhow::Result<()> {
         Ok(())
     }
     async fn append_quorum_proposal2(

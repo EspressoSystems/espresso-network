@@ -3103,9 +3103,14 @@ mod test {
     use rstest_reuse::apply;
 
     use super::{leaf::RangeRequest, *};
-    use crate::testing::{
-        consensus::{SavePrunedHeight, TestableDataSource, sql_data_sources},
-        mocks::{MockPayload, MockTypes, mock_transaction},
+    use crate::{
+        fetching::provider::NoFetching,
+        testing::{
+            consensus::{
+                SavePrunedHeight, TestSqlDb, TestableDataSource, sql_data_sources, sql_dbs,
+            },
+            mocks::{MockPayload, MockTypes, mock_transaction},
+        },
     };
 
     #[test]
@@ -3605,14 +3610,13 @@ mod test {
 
     /// A data source without an aggregator has no totals, also when an earlier run with one left
     /// aggregate rows in storage: those stop where that run did.
-    #[apply(sql_data_sources)]
-    async fn test_no_totals_without_aggregator<D>(_d: PhantomData<D>)
+    #[apply(sql_dbs)]
+    async fn test_no_totals_without_aggregator<Db: TestSqlDb>(_db: PhantomData<Db>)
     where
-        D: TestableDataSource + ExplorerDataSource<MockTypes>,
-        for<'a> D::Transaction<'a>: UpdateAggregatesStorage<MockTypes>,
+        for<'a> <Db::Storage as VersionedDataSource>::ReadOnly<'a>: ExplorerStorage<MockTypes>,
     {
-        let storage = D::create(0).await;
-        let ds = D::build(&storage, |builder| builder.disable_aggregator()).await;
+        let tmp = Db::init().await;
+        let db = tmp.storage().await.unwrap();
         let genesis = BlockQueryData::<MockTypes>::genesis(
             &Default::default(),
             &Default::default(),
@@ -3620,12 +3624,17 @@ mod test {
         )
         .await;
         {
-            let mut tx = ds.write().await.unwrap();
+            let mut tx = db.write().await.unwrap();
             tx.update_aggregates(Aggregate::default(), &[PayloadMetadata::from(genesis)])
                 .await
                 .unwrap();
             tx.commit().await.unwrap();
         }
+        let ds = FetchingDataSource::<MockTypes, _, _>::builder(db, NoFetching)
+            .disable_aggregator()
+            .build()
+            .await
+            .unwrap();
 
         for res in [
             ds.count_transactions_in_range(.., None).await,

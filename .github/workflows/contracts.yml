@@ -88,7 +88,9 @@ jobs:
       - uses: actions/checkout@v7
         with:
           submodules: recursive
-      - uses: taiki-e/install-action@just
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: just
       - uses: cachix/install-nix-action@v31
       # NOTE: no rust cache, it doesn't work out of the box our nix env
 
