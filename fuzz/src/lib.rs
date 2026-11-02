@@ -16,8 +16,10 @@ pub enum Edit {
 }
 
 /// Apply `edits` in order. Offsets wrap around the current length, so every
-/// edit lands somewhere in the message.
+/// edit lands somewhere in the message. Inserts stop growing the message at
+/// four times its original length or 64 KiB, whichever is larger.
 pub fn apply_edits(mut bytes: Vec<u8>, edits: &[Edit]) -> Vec<u8> {
+    let max_len = (4 * bytes.len()).max(1 << 16);
     for edit in edits {
         let at = |at: u16| usize::from(at) % (bytes.len() + 1);
         match edit {
@@ -31,7 +33,8 @@ pub fn apply_edits(mut bytes: Vec<u8>, edits: &[Edit]) -> Vec<u8> {
             },
             Edit::Insert { at: pos, len, fill } => {
                 let start = at(*pos);
-                bytes.splice(start..start, std::iter::repeat_n(*fill, usize::from(*len)));
+                let len = usize::from(*len).min(max_len.saturating_sub(bytes.len()));
+                bytes.splice(start..start, std::iter::repeat_n(*fill, len));
             },
             Edit::Truncate { at: pos } => bytes.truncate(at(*pos)),
         }
