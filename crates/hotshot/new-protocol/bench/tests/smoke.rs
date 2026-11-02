@@ -97,6 +97,7 @@ async fn run_benchmark(
             .unwrap_or_else(|e| panic!("node {i} failed: {e:#}"));
     }
 
+    let mut all_traces = String::new();
     // Verify each node produced a CSV with decided views.
     for i in 0..NUM_NODES as u64 {
         let csv_path = output_dir.join(format!("node_{i}.csv"));
@@ -160,6 +161,14 @@ async fn run_benchmark(
                 trace.contains(event),
                 "node {i} leader trace has no `{event}` rows"
             );
+        }
+        all_traces.push_str(&trace);
+    }
+
+    // Only leaders disperse, and empty blocks have no buckets.
+    if block_size > 0 {
+        for event in ["ns_disperse_end", "vid_shares_unicast_start"] {
+            assert!(all_traces.contains(event), "no node traced `{event}`");
         }
     }
 
