@@ -160,6 +160,7 @@ fn disperse(
         payload_commitment,
         &committee.leader.public_key,
         &committee.leader.private_key,
+        None,
         |_, message| {
             let bytes = tracing::debug_span!("serialize")
                 .in_scope(|| upgrade_lock.serialize(message))

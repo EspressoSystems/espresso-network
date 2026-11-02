@@ -2,7 +2,10 @@ use std::{
     collections::BTreeMap,
     mem,
     ops::Range,
-    sync::{Arc, LazyLock},
+    sync::{
+        Arc, LazyLock,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+    },
 };
 
 use hotshot_types::{
@@ -27,6 +30,7 @@ use tracing::{debug_span, error, warn};
 
 use crate::{
     coordinator::metrics::{Measurement, finish_measurement},
+    leader_trace::{LeaderEvent, LeaderTracerHandle, now_ns},
     message::{ConsensusMessage, Message, MessageType, Validated},
     network::{NetworkError, Sender},
 };
@@ -157,8 +161,8 @@ fn handle_vid_disperse_request<T: NodeType>(
     let epoch = vid_disperse_request.epoch;
     let payload_commitment = vid_disperse_request.payload_commitment;
 
-    // Encoding and unicast are interleaved per bucket, so `NsDisperseStart` to
-    // `VidSharesUnicastEnd` brackets the whole dispersal.
+    // Encoding and unicast overlap across buckets, so `NsDisperseEnd` (last encode)
+    // can come after `VidSharesUnicastStart` (first send).
     crate::trace_leader_event!(
         tracer,
         view,
@@ -180,6 +184,7 @@ fn handle_vid_disperse_request<T: NodeType>(
         payload_commitment,
         &public_key,
         &private_key,
+        tracer.as_ref(),
         move |recipient, message| network.unicast(view, recipient, message),
     )?;
 
@@ -198,6 +203,7 @@ fn handle_vid_disperse_request<T: NodeType>(
 /// Erasure-codes the payload in `params` and hands every recipient's fragment of each bucket of
 /// namespaces to `send`, which the disperser points at the network. The `block_build` bench in
 /// espresso-types passes a `send` that only serializes; the spans time each step.
+#[allow(clippy::too_many_arguments)]
 pub fn disperse_payload<T, S>(
     params: &AvidmGf2DisperseParams<T>,
     view: ViewNumber,
@@ -205,6 +211,7 @@ pub fn disperse_payload<T, S>(
     payload_commitment: VidCommitment2,
     public_key: &T::SignatureKey,
     private_key: &<T::SignatureKey as SignatureKey>::PrivateKey,
+    tracer: Option<&LeaderTracerHandle>,
     send: S,
 ) -> Result<(), VidDisperseError>
 where
@@ -228,6 +235,8 @@ where
         bucketize(&params.ns_table, threshold)
     };
 
+    let bucket_trace = tracer.map(|tracer| BucketTrace::new(tracer, view, buckets.len()));
+
     buckets
         .par_iter()
         .try_for_each_with(send, |send, bucket| -> Result<(), VidDisperseError> {
@@ -237,8 +246,14 @@ where
                     .map(|&ns_index| disperse_namespace(params, ns_index))
                     .collect::<Result<_, _>>()
             })?;
+            if let Some(trace) = &bucket_trace {
+                trace.encode_done();
+            }
             let bucket_fragments = debug_span!("fragments")
                 .in_scope(|| fragments(view, epoch, payload_commitment, params, dispersals));
+            if let Some(trace) = &bucket_trace {
+                trace.send_starting();
+            }
             for fragment in bucket_fragments {
                 let recipient = fragment.recipient_key.clone();
                 let message = Message {
@@ -256,6 +271,45 @@ where
             }
             Ok(())
         })
+}
+
+/// Emits `NsDisperseEnd` when the last bucket finishes encoding and `VidSharesUnicastStart`
+/// when the first bucket starts sending. Built only when a tracer is registered.
+struct BucketTrace<'a> {
+    tracer: &'a LeaderTracerHandle,
+    view: ViewNumber,
+    buckets_left: AtomicUsize,
+    unicast_started: AtomicBool,
+}
+
+impl<'a> BucketTrace<'a> {
+    /// Trace for a dispersal of `buckets` buckets.
+    fn new(tracer: &'a LeaderTracerHandle, view: ViewNumber, buckets: usize) -> Self {
+        Self {
+            tracer,
+            view,
+            buckets_left: AtomicUsize::new(buckets),
+            unicast_started: AtomicBool::new(false),
+        }
+    }
+
+    /// Called once per bucket after its encode; emits for the last one.
+    fn encode_done(&self) {
+        if self.buckets_left.fetch_sub(1, Ordering::AcqRel) == 1 {
+            self.record(LeaderEvent::NsDisperseEnd);
+        }
+    }
+
+    /// Called per bucket before its sends; emits for the first one.
+    fn send_starting(&self) {
+        if !self.unicast_started.swap(true, Ordering::AcqRel) {
+            self.record(LeaderEvent::VidSharesUnicastStart);
+        }
+    }
+
+    fn record(&self, event: LeaderEvent) {
+        self.tracer.record(*self.view, event, now_ns());
+    }
 }
 
 /// Erasure-codes the namespace at `ns_index` of the payload in `params`.
