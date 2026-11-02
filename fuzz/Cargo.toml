@@ -1,0 +1,48 @@
+[package]
+name = "espresso-fuzz"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+# Kept out of the root workspace so normal builds never compile libFuzzer.
+[workspace]
+members = ["."]
+
+[dependencies]
+arbitrary = { version = "1", features = ["derive"] }
+bincode = "1.3.3"
+espresso-types = { path = "../crates/espresso/types" }
+hotshot-query-service-types = { path = "../crates/hotshot-query-service-types" }
+hotshot-types = { path = "../crates/hotshot/types" }
+jf-advz = { git = "https://github.com/EspressoSystems/jellyfish-compat", tag = "jf-advz-v0.2.4", features = [
+    "std",
+    "parallel",
+] }
+libfuzzer-sys = "0.4"
+serde = "1.0"
+serde_json = "1.0.113"
+vid = { path = "../crates/vid" }
+
+[[bin]]
+name = "vid_ns_shares"
+path = "fuzz_targets/vid_ns_shares.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "ns_table"
+path = "fuzz_targets/ns_table.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "inclusion_proofs"
+path = "fuzz_targets/inclusion_proofs.rs"
+test = false
+doc = false
+bench = false
