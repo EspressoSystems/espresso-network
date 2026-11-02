@@ -8,6 +8,9 @@
 # `just lock-actions <failing workflow> --relock` on its branch. `--relock` also advances
 # that workflow's other floating refs (`@v4`, `@main`), so commit only the changes to the
 # bumped action's entry (`git add -p`), check with `just lock-actions --verify`, and push.
+#
+# `just lock-actions .github/workflows/<workflow Dependabot bumped>.yml --relock`
+# on its branch and push.
 name: Verify actions lockfile
 
 on:
