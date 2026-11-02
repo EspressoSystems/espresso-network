@@ -39,6 +39,7 @@ fn node_config(
             .to_string_lossy()
             .into_owned(),
         block_size,
+        leader_trace: true,
     }
 }
 

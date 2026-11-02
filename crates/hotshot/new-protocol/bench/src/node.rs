@@ -54,7 +54,11 @@ pub async fn run(cfg: NodeConfig) -> Result<()> {
     let (membership, client) = make_membership(cfg.total_nodes, public_key).await;
     let network = create_network(cfg.node_id, &public_key, &private_key, &cfg).await?;
 
-    let tracer = Arc::new(CsvLeaderTracer::new(cfg.node_id, leader_trace_path(&cfg))?);
+    let tracer = cfg
+        .leader_trace
+        .then(|| CsvLeaderTracer::new(cfg.node_id, leader_trace_path(&cfg)))
+        .transpose()?
+        .map(|tracer| Arc::new(tracer) as LeaderTracerHandle);
 
     let coordinator = build_coordinator(
         public_key,
@@ -63,7 +67,7 @@ pub async fn run(cfg: NodeConfig) -> Result<()> {
         network,
         client,
         &cfg,
-        tracer.clone() as LeaderTracerHandle,
+        tracer.clone(),
     )
     .await;
 
@@ -131,7 +135,7 @@ async fn build_coordinator(
     network: Cliquenet<TestTypes>,
     client: CoordinatorClient<TestTypes>,
     cfg: &NodeConfig,
-    tracer: LeaderTracerHandle,
+    tracer: Option<LeaderTracerHandle>,
 ) -> BenchCoordinator {
     let instance = Arc::new(TestInstanceState::default());
     let epoch_height = u64::MAX;
@@ -157,7 +161,7 @@ async fn build_coordinator(
         genesis_leaf.clone(),
         epoch_height,
     );
-    consensus.set_tracer(Some(tracer.clone()));
+    consensus.set_tracer(tracer.clone());
 
     let vote1_collector = VoteCollector::new(membership.clone(), upgrade_lock.clone());
     let vote2_collector = VoteCollector::new(membership.clone(), upgrade_lock.clone());
@@ -176,10 +180,10 @@ async fn build_coordinator(
         public_key,
         private_key.clone(),
     );
-    vid_disperser.set_tracer(Some(tracer.clone()));
+    vid_disperser.set_tracer(tracer.clone());
 
     let mut vid_reconstructor = VidReconstructor::new();
-    vid_reconstructor.set_tracer(Some(tracer));
+    vid_reconstructor.set_tracer(tracer);
 
     let block_config = BlockBuilderConfig::default();
     let block_builder = BlockBuilder::new(
