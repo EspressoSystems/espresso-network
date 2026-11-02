@@ -237,6 +237,11 @@ dependencies:
         commit: 'sha1-2dc316deee8e90f13e1a351ab510b4d5bc0c82cd'
         owner_id: 1951866
         repo_id: 260488959
+    'damianreeves/write-file-action@6929a9a6d1807689191dcc8bbe62b54d70a32b42':
+        ref: 'v1.3'
+        commit: 'sha1-6929a9a6d1807689191dcc8bbe62b54d70a32b42'
+        owner_id: 957246
+        repo_id: 258052107
     'dependabot/fetch-metadata@v3.1.0':
         ref: 'v3.1.0'
         commit: 'sha1-25dd0e34f4fe68f24cc83900b1fe3fe149efef98'
@@ -249,6 +254,7 @@ dependencies:
         repo_id: 418625766
         uses:
             - 'crazy-max/ghaction-import-gpg@2dc316deee8e90f13e1a351ab510b4d5bc0c82cd'
+            - 'damianreeves/write-file-action@6929a9a6d1807689191dcc8bbe62b54d70a32b42'
             - 'juliangruber/read-file-action@271ff311a4947af354c6abcd696a306553b9ec18'
             - 'pedrolamas/handlebars-action@2995d7eadacbc8f2f6ab8431a01d84a5fa3b8bb4'
             - 'peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1'
