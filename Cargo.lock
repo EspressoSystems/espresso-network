@@ -3706,6 +3706,7 @@ dependencies = [
  "tracing",
  "url",
  "vbs",
+ "vid",
 ]
 
 [[package]]
