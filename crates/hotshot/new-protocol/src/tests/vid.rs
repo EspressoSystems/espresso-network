@@ -5,6 +5,7 @@ use hotshot_types::{
     traits::signature_key::SignatureKey,
     vid::avidm_gf2::{AvidmGf2Scheme, init_avidm_gf2_param},
 };
+use vid::VidError;
 
 use super::common::utils::{TestData, TestView};
 use crate::{
@@ -1127,7 +1128,7 @@ fn ns_table(offsets: &[u32]) -> Vec<u8> {
 /// The commitment covers neither the namespace table nor `ns_lens`, and for a
 /// one-namespace block a table sized for another payload parses to the honest
 /// table. A leader claiming a shorter block than it dispersed passes every
-/// pairing check and recovers the dispersed bytes; the recommit must refuse
+/// pairing check and its block decodes to the dispersed bytes; the recommit must refuse
 /// the table rather than accept the fallback, or the block decides with a
 /// header that misdescribes its payload.
 #[test]
@@ -1150,7 +1151,11 @@ fn test_recommit_refuses_ns_table_sized_for_another_payload() {
     forged.ns_lens = vec![short];
     assert!(AvidmGf2Scheme::is_consistent(&commitment, &forged));
     assert!(ns_lens_match_metadata(&forged, &short_table));
-    let recovered = AvidmGf2Scheme::recover(&forged, &shares).unwrap();
+    assert!(matches!(
+        AvidmGf2Scheme::recover(&forged, &shares),
+        Err(VidError::InvalidShare)
+    ));
+    let recovered = AvidmGf2Scheme::recover(&common, &shares).unwrap();
     assert_eq!(recovered, payload);
     assert!(!matches_commitment(
         view,
