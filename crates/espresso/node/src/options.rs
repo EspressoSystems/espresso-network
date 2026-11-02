@@ -206,7 +206,7 @@ pub struct Options {
 
     /// Directory for the leader-event trace `leader_trace_node{N}.csv`. Disabled when unset.
     /// Use local disk: a slow flush blocks consensus.
-    #[clap(long, env = "ESPRESSO_NODE_LEADER_TRACE_DIR")]
+    #[clap(long, env = "ESPRESSO_NODE_LEADER_TRACE_DIR", hide = true)]
     pub leader_trace_dir: Option<PathBuf>,
 
     #[clap(flatten)]
