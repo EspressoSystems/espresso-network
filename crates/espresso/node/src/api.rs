@@ -56,9 +56,7 @@ use hotshot_types::{
     traits::election::{Membership, MembershipSnapshot, NonEpochMembershipSnapshot},
     utils::epoch_from_block_number,
     vid::avidm::{AvidMScheme, init_avidm_param},
-    vote::HasViewNumber,
 };
-use itertools::Itertools;
 use jf_merkle_tree_compat::MerkleTreeScheme;
 use moka::future::Cache;
 use rand::Rng;
@@ -851,15 +849,6 @@ impl<D: CatchupStorage + Send + Sync> CatchupDataSource for StorageState<D> {
         self.inner().get_chain_config(commitment).await
     }
     async fn get_leaf_chain(&self, height: u64) -> anyhow::Result<Vec<Leaf2>> {
-        // Check if we have the desired state in memory.
-        match self.as_ref().get_leaf_chain(height).await {
-            Ok(cf) => return Ok(cf),
-            Err(err) => {
-                tracing::info!("leaf chain is not in memory, trying storage: {err:#}");
-            },
-        }
-
-        // Try storage.
         self.inner().get_leaf_chain(height).await
     }
 
@@ -1033,42 +1022,6 @@ impl CatchupDataSource for ApiState {
         } else {
             bail!("chain config not found")
         }
-    }
-
-    async fn get_leaf_chain(&self, height: u64) -> anyhow::Result<Vec<Leaf2>> {
-        // Builds a legacy 3-chain from undecided leaves in memory. New-protocol heights fall
-        // through to the storage path.
-        let mut leaves = self.consensus().await.undecided_leaves().await;
-        leaves.sort_by_key(|l| l.view_number());
-        let (position, mut last_leaf) = leaves
-            .iter()
-            .find_position(|l| l.height() == height)
-            .context(format!("leaf chain not available for {height}"))?;
-        let mut chain = vec![last_leaf.clone()];
-        for leaf in leaves.iter().skip(position + 1) {
-            if leaf.justify_qc().view_number() == last_leaf.view_number() {
-                chain.push(leaf.clone());
-            } else {
-                continue;
-            }
-            if leaf.view_number() == last_leaf.view_number() + 1 {
-                // one away from decide
-                last_leaf = leaf;
-                break;
-            }
-            last_leaf = leaf;
-        }
-        // Make sure we got one more leaf to confirm the decide
-        for leaf in leaves
-            .iter()
-            .skip_while(|l| l.view_number() <= last_leaf.view_number())
-        {
-            if leaf.justify_qc().view_number() == last_leaf.view_number() {
-                chain.push(leaf.clone());
-                return Ok(chain);
-            }
-        }
-        bail!(format!("leaf chain not available for {height}"))
     }
 
     #[tracing::instrument(skip(self, _instance))]
