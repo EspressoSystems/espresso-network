@@ -532,7 +532,7 @@ impl EpochCommittees {
             storage_read_timeout: DEFAULT_STORAGE_READ_TIMEOUT,
             epoch_height: epoch_height.into(),
         };
-        committees.seed_first_epoch(first_epoch, INITIAL_DRB_RESULT);
+        committees.seed_first_epoch(first_epoch);
         committees
     }
 
@@ -600,10 +600,10 @@ impl EpochCommittees {
             .and_then(|committee| committee.header.as_ref().map(f))
     }
 
-    /// Run `epoch` and `epoch + 1` on the genesis stake table with `initial_drb_result`.
-    fn seed_first_epoch(&self, epoch: EpochNumber, initial_drb_result: DrbResult) {
+    /// Run `epoch` and `epoch + 1` on the genesis stake table with the initial DRB result.
+    fn seed_first_epoch(&self, epoch: EpochNumber) {
         let rand_comm = Arc::new(
-            self.randomized_committee(EpochNumber::genesis(), initial_drb_result)
+            self.randomized_committee(EpochNumber::genesis(), INITIAL_DRB_RESULT)
                 .expect("committee exist at genesis"),
         );
 
@@ -1190,10 +1190,6 @@ impl Membership<SeqTypes> for EpochCommittees {
                 .write()
                 .put_randomized_committee(epoch, Arc::new(committee));
         }
-    }
-
-    fn set_first_epoch(&self, epoch: EpochNumber, initial_drb_result: DrbResult) {
-        self.seed_first_epoch(epoch, initial_drb_result);
     }
 
     fn first_epoch(&self) -> Option<EpochNumber> {

@@ -86,7 +86,7 @@ where
             })),
             epoch_height: epoch_height.into(),
         };
-        membership.seed_first_epoch(first_epoch, INITIAL_DRB_RESULT);
+        membership.seed_first_epoch(first_epoch);
         membership
     }
 
@@ -129,8 +129,8 @@ where
         inner.table.add_drb_result(*epoch, drb);
     }
 
-    /// Run `e` and `e + 1` on the genesis stake table with `initial_drb_result`.
-    fn seed_first_epoch(&self, e: EpochNumber, initial_drb_result: DrbResult) {
+    /// Run `e` and `e + 1` on the genesis stake table with the initial DRB result.
+    fn seed_first_epoch(&self, e: EpochNumber) {
         let mut inner = self.inner.write();
         inner.epochs.insert(e);
         inner.epochs.insert(e + 1);
@@ -138,7 +138,7 @@ where
         inner.drbs.insert(e);
         inner.drbs.insert(e + 1);
 
-        inner.table.set_first_epoch(*e, initial_drb_result);
+        inner.table.set_first_epoch(*e, INITIAL_DRB_RESULT);
     }
 }
 
@@ -195,10 +195,6 @@ where
 
     fn highest_known_epoch(&self) -> Option<EpochNumber> {
         self.inner.read().epochs.iter().max().copied()
-    }
-
-    fn set_first_epoch(&self, e: EpochNumber, initial_drb_result: DrbResult) {
-        self.seed_first_epoch(e, initial_drb_result);
     }
 
     async fn add_epoch_root(

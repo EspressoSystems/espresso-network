@@ -318,12 +318,6 @@ pub trait Membership<T: NodeType>: Debug + Send + Sync {
     /// Returns `true` if a snapshot for `epoch` is available afterwards.
     fn load_stake_table(&self, epoch: EpochNumber) -> impl Future<Output = bool> + Send;
 
-    /// Called to notify the Membership that Epochs are enabled.
-    /// Implementations should copy the pre-epoch stake table into epoch and epoch+1
-    /// when this is called. The value of initial_drb_result should be used for DRB
-    /// calculations for epochs (epoch+1) and earlier.
-    fn set_first_epoch(&self, e: EpochNumber, r: DrbResult);
-
     /// Register a DA committee that takes effect starting at `first_epoch`.
     fn add_da_committee(&self, first_epoch: EpochNumber, da_committee: Vec<PeerConfig<T>>);
 }
