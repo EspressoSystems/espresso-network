@@ -123,9 +123,10 @@ just bench aws run --tag release-x
 
 - `--keep-going` runs every step with no refine step, then stops the load and drains for up to
   `max(300 s, --tx-timeout-s)`. The summary reports this as the backlog drain time.
-- Inclusion is read from the query node. A query lag above `--cap-s` throttles the load. A lag above `--tx-timeout-s`
-  times transactions out. Both need to exceed the expected lag (e.g. 600).
-- Consensus latency of a step with query lag above `--cap-s` is not comparable across runs.
+- Inclusion is read from the query node: each block's payload is fetched in the API's binary encoding and scanned for
+  the load's marker. The in-flight cap (`--cap-s`) counts transactions submitted and not yet decided by the validators'
+  counters, so a query node or a scan that falls behind does not throttle the load; a lag above `--tx-timeout-s` still
+  times transactions out, so it needs to exceed the expected lag (e.g. 600).
 - A long `--tx-timeout-s` raises the TTL bound; raise `--max-usd` when `plan` reports it over 10.
 - Transactions of a lost payload stay pending until `--tx-timeout-s`, and the end of the run waits for them.
 - The CI job does not fit this mode: its step timeout is 15 min.
