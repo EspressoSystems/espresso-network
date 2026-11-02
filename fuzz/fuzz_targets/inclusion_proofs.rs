@@ -53,7 +53,7 @@ enum Format {
 }
 
 struct Block {
-    payload: Payload,
+    txs: Vec<Transaction>,
     ns_table: NsTable,
     vids: Vec<Vid>,
 }
@@ -77,11 +77,12 @@ fuzz_target!(init: { LazyLock::force(&BLOCK); }, |input: Input| {
                 return;
             };
             proof.verify(&block.ns_table, tx, &vid.commit, &vid.common);
-            let forged = Transaction::new(tx.namespace(), [tx.payload(), b"x"].concat());
-            assert!(
-                !proof.verify(&block.ns_table, &forged, &vid.commit, &vid.common),
-                "proved a transaction that is not in the block"
-            );
+            for forged in block.forgeries_of(tx) {
+                assert!(
+                    !proof.verify(&block.ns_table, &forged, &vid.commit, &vid.common),
+                    "proved {forged:?}, which is not in the block"
+                );
+            }
         },
         ProofKind::Ns => {
             let proof = &vid.ns_proofs[usize::from(input.proof_index) % vid.ns_proofs.len()];
@@ -160,18 +161,57 @@ impl Block {
             common,
         })
         .collect();
-        Self {
-            payload,
+        let block = Self {
+            txs: payload
+                .iter(&ns_table)
+                .filter_map(|index| payload.transaction(&index))
+                .collect(),
             ns_table,
             vids,
+        };
+        block.assert_honest_proofs_verify();
+        block
+    }
+
+    /// The forgery checks only mean something if the untouched proofs verify
+    /// against this block's commitments.
+    fn assert_honest_proofs_verify(&self) {
+        for vid in &self.vids {
+            for (tx, proof) in &vid.tx_proofs {
+                assert!(proof.verify(&self.ns_table, tx, &vid.commit, &vid.common));
+            }
+            for proof in &vid.ns_proofs {
+                let (txs, ns_id) = proof
+                    .verify(&self.ns_table, &vid.commit, &vid.common)
+                    .expect("honest namespace proof verifies");
+                assert_eq!(txs, self.namespace_txs(ns_id));
+            }
         }
     }
 
+    /// Transactions close to `tx` that are not in the block: its payload
+    /// extended, cut short, and moved to each other namespace.
+    fn forgeries_of(&self, tx: &Transaction) -> Vec<Transaction> {
+        let payload = tx.payload();
+        let mut forgeries = vec![Transaction::new(tx.namespace(), [payload, b"x"].concat())];
+        if let Some((_, shorter)) = payload.split_last() {
+            forgeries.push(Transaction::new(tx.namespace(), shorter.to_vec()));
+        }
+        let other_namespaces = self
+            .txs
+            .iter()
+            .map(Transaction::namespace)
+            .filter(|ns_id| *ns_id != tx.namespace());
+        forgeries.extend(other_namespaces.map(|ns_id| Transaction::new(ns_id, payload.to_vec())));
+        forgeries.retain(|forged| !self.txs.contains(forged));
+        forgeries
+    }
+
     fn namespace_txs(&self, ns_id: NamespaceId) -> Vec<Transaction> {
-        self.payload
-            .iter(&self.ns_table)
-            .filter_map(|index| self.payload.transaction(&index))
+        self.txs
+            .iter()
             .filter(|tx| tx.namespace() == ns_id)
+            .cloned()
             .collect()
     }
 }
