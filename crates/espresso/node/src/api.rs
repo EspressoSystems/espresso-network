@@ -6839,11 +6839,15 @@ mod test {
             .await
             .unwrap();
 
-        let options = if fresh_storage {
-            let storage = D::create_storage().await;
-            <D as TestableSequencerDataSource>::persistence_options(&storage)
+        // Dropping it stops the temporary database, so it lives to the end of the test.
+        let fresh_db = if fresh_storage {
+            Some(D::create_storage().await)
         } else {
-            persistence_options[1].clone()
+            None
+        };
+        let options = match &fresh_db {
+            Some(storage) => <D as TestableSequencerDataSource>::persistence_options(storage),
+            None => persistence_options[1].clone(),
         };
         let node = network
             .cfg
