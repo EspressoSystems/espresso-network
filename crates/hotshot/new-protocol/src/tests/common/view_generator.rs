@@ -17,7 +17,6 @@ use hotshot_types::{
     simple_certificate::QuorumCertificate2,
     simple_vote::{QuorumData2, QuorumVote2},
     traits::{BlockPayload, EncodeBytes, signature_key::SignatureKey},
-    utils::genesis_epoch_from_version,
 };
 use rand::{Rng, thread_rng};
 use vbs::version::Version;
@@ -32,7 +31,6 @@ pub struct GeneratedView {
     /// The proposal's leaf, with its (empty) payload filled in.
     pub leaf: Leaf2<TestTypes>,
     pub view_number: ViewNumber,
-    pub epoch_number: Option<EpochNumber>,
     pub leader_public_key: BLSPubKey,
     pub vid_disperse: VidDisperse<TestTypes>,
 }
@@ -45,7 +43,6 @@ pub struct TestViewGenerator {
     node_key_map: Arc<TestNodeKeyMap>,
     upgrade: Upgrade,
     upgrade_lock: UpgradeLock<TestTypes>,
-    epoch: Option<EpochNumber>,
     last: Option<GeneratedView>,
 }
 
@@ -60,7 +57,6 @@ impl TestViewGenerator {
             node_key_map,
             upgrade,
             upgrade_lock: UpgradeLock::new(upgrade),
-            epoch: genesis_epoch_from_version(upgrade.base),
             last: None,
         }
     }
@@ -122,8 +118,8 @@ impl TestViewGenerator {
         >(
             QuorumData2 {
                 leaf_commit: last.leaf.commit(),
-                epoch: self.epoch,
-                block_number: self.epoch.is_some().then(|| last.leaf.height()),
+                epoch: Some(EpochNumber::genesis()),
+                block_number: Some(last.leaf.height()),
             },
             &membership,
             last.view_number,
@@ -172,8 +168,8 @@ impl TestViewGenerator {
             &payload,
             &membership.coordinator,
             view_number,
-            self.epoch,
-            self.epoch,
+            Some(EpochNumber::genesis()),
+            Some(EpochNumber::genesis()),
             &metadata,
             &self.upgrade_lock,
         )
@@ -185,7 +181,7 @@ impl TestViewGenerator {
             proposal: QuorumProposal2::<TestTypes> {
                 block_header,
                 view_number,
-                epoch: self.epoch,
+                epoch: Some(EpochNumber::genesis()),
                 justify_qc,
                 next_epoch_justify_qc: None,
                 upgrade_certificate: None,
@@ -207,14 +203,15 @@ impl TestViewGenerator {
             },
             leaf,
             view_number,
-            epoch_number: self.epoch,
             leader_public_key,
             vid_disperse,
         }
     }
 
     fn epoch_membership(&self) -> EpochMembership<TestTypes> {
-        self.membership.membership_for_epoch(self.epoch).unwrap()
+        self.membership
+            .membership_for_epoch(Some(EpochNumber::genesis()))
+            .unwrap()
     }
 
     fn leader_key_pair(
