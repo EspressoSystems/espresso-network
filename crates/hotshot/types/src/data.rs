@@ -957,22 +957,6 @@ impl<TYPES: NodeType> ViewChangeEvidence2<TYPES> {
             Self::ViewSync(_) => None,
         }
     }
-
-    /// Convert to [`ViewChangeEvidence`].
-    ///
-    /// `None` for [`Self::Timeout3`]: the legacy types have no epoch binding
-    /// form.
-    pub fn to_evidence(self) -> Option<ViewChangeEvidence<TYPES>> {
-        match self {
-            ViewChangeEvidence2::Timeout(timeout_cert) => {
-                Some(ViewChangeEvidence::Timeout(timeout_cert.to_tc()))
-            },
-            ViewChangeEvidence2::ViewSync(view_sync_cert) => {
-                Some(ViewChangeEvidence::ViewSync(view_sync_cert.to_vsc()))
-            },
-            ViewChangeEvidence2::Timeout3(_) => None,
-        }
-    }
 }
 
 impl<TYPES: NodeType> From<TimeoutEvidence<TYPES>> for ViewChangeEvidence2<TYPES> {
@@ -1285,20 +1269,6 @@ impl<TYPES: NodeType> From<QuorumProposal<TYPES>> for QuorumProposal2<TYPES> {
                 .map(ViewChangeEvidence::to_evidence2),
             next_drb_result: None,
             state_cert: None,
-        }
-    }
-}
-
-impl<TYPES: NodeType> From<QuorumProposal2<TYPES>> for QuorumProposal<TYPES> {
-    fn from(quorum_proposal2: QuorumProposal2<TYPES>) -> Self {
-        Self {
-            block_header: quorum_proposal2.block_header,
-            view_number: quorum_proposal2.view_number,
-            justify_qc: quorum_proposal2.justify_qc.to_qc(),
-            upgrade_certificate: quorum_proposal2.upgrade_certificate,
-            proposal_certificate: quorum_proposal2
-                .view_change_evidence
-                .and_then(ViewChangeEvidence2::to_evidence),
         }
     }
 }

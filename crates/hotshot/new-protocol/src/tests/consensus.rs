@@ -151,7 +151,7 @@ async fn test_timeout_certificate_does_not_lower_the_epoch() {
         )))
         .await;
 
-    assert_eq!(harness.consensus.current_epoch(), Some(entered));
+    assert_eq!(harness.consensus.current_epoch(), entered);
     let changes: Vec<_> = harness
         .outputs()
         .iter()
@@ -183,7 +183,7 @@ async fn test_unbound_timeout_certificate_does_not_move_the_epoch() {
         )))
         .await;
 
-    assert_eq!(harness.consensus.current_epoch(), Some(here));
+    assert_eq!(harness.consensus.current_epoch(), here);
     assert_eq!(
         *harness.consensus.current_view(),
         *timed_out.view_number + 1
@@ -236,7 +236,7 @@ async fn test_timeout_certificate_raises_the_epoch() {
         )))
         .await;
 
-    assert_eq!(harness.consensus.current_epoch(), Some(ahead));
+    assert_eq!(harness.consensus.current_epoch(), ahead);
     let changes: Vec<_> = harness
         .outputs()
         .iter()
@@ -287,11 +287,11 @@ async fn test_later_timeout_certificate_is_kept_for_its_epoch() {
     };
 
     harness.apply(certificate(behind)).await;
-    assert_eq!(harness.consensus.current_epoch(), Some(behind));
+    assert_eq!(harness.consensus.current_epoch(), behind);
 
     harness.apply(certificate(ahead)).await;
 
-    assert_eq!(harness.consensus.current_epoch(), Some(ahead));
+    assert_eq!(harness.consensus.current_epoch(), ahead);
     let entered = timed_out.view_number + 1;
     assert_eq!(
         harness
@@ -2416,7 +2416,7 @@ async fn test_proposal_release_follows_storage() {
         .expect("proposal persisted");
     let action = outputs
         .iter()
-        .position(|o| matches!(o, ConsensusOutput::RecordAction(_, _, ActionKind::Propose)))
+        .position(|o| matches!(o, ConsensusOutput::RecordAction(_, ActionKind::Propose)))
         .expect("propose action recorded");
     assert!(persist < send, "proposal must be persisted before sending");
     assert!(
@@ -2634,7 +2634,7 @@ async fn test_no_fork_votes_from_one_node() {
     // action can only be the phase-1 vote, since no `Certificate1` for view 6 is
     // ever supplied.
     let voted_fork = harness.outputs().iter().any(|o| {
-        matches!(o, ConsensusOutput::RecordAction(v, _, ActionKind::Vote)
+        matches!(o, ConsensusOutput::RecordAction(v, ActionKind::Vote)
             if *v == ViewNumber::new(6))
     });
     assert!(
@@ -2727,7 +2727,7 @@ async fn test_no_fork_votes_from_one_node_reversed() {
         .await;
     let acted_at_6 = |harness: &ConsensusHarness| {
         harness.outputs().iter().any(|o| {
-            matches!(o, ConsensusOutput::RecordAction(v, _, ActionKind::Vote)
+            matches!(o, ConsensusOutput::RecordAction(v, ActionKind::Vote)
                 if *v == ViewNumber::new(6))
         })
     };
