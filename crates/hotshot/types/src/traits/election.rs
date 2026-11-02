@@ -45,8 +45,8 @@ pub trait MembershipSnapshot<T: NodeType>: Clone + Send + Sync {
     /// The epoch this snapshot is bound to.
     fn epoch(&self) -> EpochNumber;
 
-    /// The first epoch known to the membership (cached at snapshot creation).
-    fn first_epoch(&self) -> Option<EpochNumber>;
+    /// The first epoch of the membership.
+    fn first_epoch(&self) -> EpochNumber;
 
     /// Whether a randomized stake table (DRB result) was available for this
     /// epoch at the time the snapshot was captured.
@@ -279,8 +279,8 @@ pub trait Membership<T: NodeType>: Debug + Send + Sync {
     /// Capture a consistent pre-epoch view.
     fn non_epoch_snapshot(&self) -> Self::NonEpochSnapshot;
 
-    /// Get first epoch if epochs are enabled, `None` otherwise.
-    fn first_epoch(&self) -> Option<EpochNumber>;
+    /// The first epoch, which runs on the genesis stake table.
+    fn first_epoch(&self) -> EpochNumber;
 
     /// Get the highest epoch for which a stake table is currently in memory,
     /// or `None` if no stake tables are loaded. It is where catchup resumes

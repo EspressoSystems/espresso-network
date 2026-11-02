@@ -724,9 +724,7 @@ impl<P: SequencerPersistence> Follower<P> {
         if skipped.is_empty() {
             return Ok(());
         }
-        let Some(first_epoch) = self.coordinator.membership().first_epoch() else {
-            return Ok(());
-        };
+        let first_epoch = self.coordinator.membership().first_epoch();
         let first = max(
             epoch_from_block_number(skipped.start, self.epoch_height),
             first_epoch.u64(),

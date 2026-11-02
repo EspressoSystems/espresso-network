@@ -174,11 +174,7 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
                 snapshot: EpochMembershipSnapshot::NonEpoch(self.membership.non_epoch_snapshot()),
             });
         };
-        let Some(first_epoch) = self.membership.first_epoch() else {
-            return Err(anytrace::error!(
-                "membership_for_epoch called with epoch {epoch:?} but first_epoch is unset"
-            ));
-        };
+        let first_epoch = self.membership.first_epoch();
         if epoch < first_epoch {
             return Err(anytrace::error!(
                 "membership_for_epoch called with epoch {epoch:?} before first_epoch {first_epoch}"
@@ -213,11 +209,7 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
                 snapshot: EpochMembershipSnapshot::NonEpoch(self.membership.non_epoch_snapshot()),
             });
         };
-        let Some(first_epoch) = self.membership.first_epoch() else {
-            return Err(anytrace::error!(
-                "stake_table_for_epoch called with epoch {epoch:?} but first_epoch is unset"
-            ));
-        };
+        let first_epoch = self.membership.first_epoch();
         if epoch < first_epoch {
             return Err(anytrace::error!(
                 "stake_table_for_epoch called with epoch {epoch:?} before first_epoch \
@@ -349,13 +341,7 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
     /// wait for its result. Every walk awaits attempts in increasing epoch
     /// order and an attempt awaits none, so no two can wait on each other.
     async fn catchup(&self, epoch: EpochNumber) -> Result<()> {
-        let Some(first_epoch) = self.membership.first_epoch() else {
-            return Err(anytrace::error!(
-                "catchup requested for epoch {epoch} but the first epoch is not set"
-            ));
-        };
-
-        let seeded = first_epoch + 1;
+        let seeded = self.membership.first_epoch() + 1;
 
         if epoch <= seeded {
             return Err(anytrace::error!(

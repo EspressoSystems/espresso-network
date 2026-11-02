@@ -102,7 +102,7 @@ struct Inner {
     /// Only ever moves forward.
     prune_cutoff: EpochNumber,
 
-    first_epoch: Option<EpochNumber>,
+    first_epoch: EpochNumber,
 
     /// Fixed block reward (used only in V3).
     ///
@@ -199,7 +199,7 @@ impl EpochCommittees {
         self.epoch_height
     }
 
-    pub fn first_epoch(&self) -> Option<EpochNumber> {
+    pub fn first_epoch(&self) -> EpochNumber {
         self.inner.read().first_epoch
     }
 
@@ -299,7 +299,7 @@ impl EpochCommittees {
             .context("underflow: cannot get previous epoch when current_epoch is 0")?;
         debug!(?epoch, "previous_epoch={previous_epoch:?}");
 
-        let first_epoch = *self.first_epoch().context("first epoch is None")?;
+        let first_epoch = *self.first_epoch();
 
         // Return early if previous epoch is not the first two epochs
         // and we don't have the stake table.
@@ -498,7 +498,7 @@ impl EpochCommittees {
             EpochNumber::genesis(),
             EpochSnapshot::new(
                 EpochNumber::genesis(),
-                Some(first_epoch),
+                first_epoch,
                 epoch_committee.clone(),
                 None,
                 da_committee.clone(),
@@ -509,7 +509,7 @@ impl EpochCommittees {
             EpochNumber::genesis() + 1u64,
             EpochSnapshot::new(
                 EpochNumber::genesis() + 1u64,
-                Some(first_epoch),
+                first_epoch,
                 epoch_committee,
                 None,
                 da_committee,
@@ -523,7 +523,7 @@ impl EpochCommittees {
                 snapshots,
                 all_validators: BTreeMap::new(),
                 prune_cutoff: EpochNumber::genesis(),
-                first_epoch: Some(first_epoch),
+                first_epoch,
                 fixed_block_reward,
             })),
             fetcher: Arc::new(fetcher),
@@ -578,7 +578,7 @@ impl EpochCommittees {
         let first_epoch = self.inner.read().first_epoch;
         for (epoch, (validators, block_reward), stake_table_hash) in loaded_stake {
             // `new` seeded the epochs up to `first_epoch + 1` with the genesis stake table.
-            if first_epoch.is_some_and(|first| epoch <= first + 1) {
+            if epoch <= first_epoch + 1 {
                 continue;
             }
             let committee = EpochCommittee::new(validators, block_reward, stake_table_hash, None);
@@ -608,8 +608,6 @@ impl EpochCommittees {
         );
 
         let mut inner = self.inner.write();
-        inner.first_epoch = Some(epoch);
-
         let epoch_committee = inner
             .epoch_committee(EpochNumber::genesis())
             .expect("committee exists at genesis")
@@ -678,9 +676,7 @@ pub async fn fetch_and_calculate_block_reward(
             return Ok(reward);
         }
 
-        first_epoch = membership.first_epoch.context(format!(
-            "First epoch not initialized (current_epoch={current_epoch})"
-        ))?;
+        first_epoch = membership.first_epoch;
     }
 
     if *current_epoch <= *first_epoch + 1 {
@@ -1192,7 +1188,7 @@ impl Membership<SeqTypes> for EpochCommittees {
         }
     }
 
-    fn first_epoch(&self) -> Option<EpochNumber> {
+    fn first_epoch(&self) -> EpochNumber {
         self.inner.read().first_epoch
     }
 
@@ -1379,7 +1375,7 @@ impl Inner {
         self.prune_cutoff = cutoff;
         // The snapshots for `first_epoch` and `first_epoch + 1` (seeded by
         // `new`) are never evicted:
-        let keep = self.first_epoch.unwrap_or_else(EpochNumber::genesis) + 1u64;
+        let keep = self.first_epoch + 1u64;
         self.snapshots.retain(|e, _| *e <= keep || *e >= cutoff);
     }
 }
@@ -1395,7 +1391,7 @@ pub struct EpochSnapshot {
 #[derive(Debug)]
 struct EpochSnapshotInner {
     epoch: EpochNumber,
-    first_epoch: Option<EpochNumber>,
+    first_epoch: EpochNumber,
     committee: Arc<EpochCommittee>,
     randomized: Option<Arc<RandomizedCommittee<StakeTableEntry<PubKey>>>>,
     da_committee: Arc<DaCommittee>,
@@ -1404,7 +1400,7 @@ struct EpochSnapshotInner {
 impl EpochSnapshot {
     fn new(
         epoch: EpochNumber,
-        first_epoch: Option<EpochNumber>,
+        first_epoch: EpochNumber,
         committee: Arc<EpochCommittee>,
         randomized: Option<Arc<RandomizedCommittee<StakeTableEntry<PubKey>>>>,
         da_committee: Arc<DaCommittee>,
@@ -1465,7 +1461,7 @@ impl MembershipSnapshot<SeqTypes> for EpochSnapshot {
         self.inner.epoch
     }
 
-    fn first_epoch(&self) -> Option<EpochNumber> {
+    fn first_epoch(&self) -> EpochNumber {
         self.inner.first_epoch
     }
 
@@ -1513,17 +1509,11 @@ impl MembershipSnapshot<SeqTypes> for EpochSnapshot {
     ///
     /// # Errors
     ///
-    /// Returns `LeaderLookupError` if `first_epoch` is unset, the snapshot's
-    /// epoch is before `first_epoch`, or the randomized committee is missing.
+    /// Returns `LeaderLookupError` if the snapshot's epoch is before
+    /// `first_epoch`, or the randomized committee is missing.
     fn lookup_leader(&self, view: ViewNumber) -> Result<PubKey, Self::Error> {
         let inner = &self.inner;
-        let Some(first_epoch) = inner.first_epoch else {
-            error!(
-                "leader requested for epoch {} but first_epoch is unset",
-                inner.epoch,
-            );
-            return Err(EpochCommitteesError::LeaderLookupError);
-        };
+        let first_epoch = inner.first_epoch;
         if inner.epoch < first_epoch {
             error!(
                 "leader requested for epoch {} before first epoch {first_epoch}",
@@ -1883,7 +1873,7 @@ mod tests {
     fn prune_epochs_keeps_recent_window() {
         let committees = build_committees(4);
         let mut inner = committees.inner.write();
-        inner.first_epoch = Some(EpochNumber::new(1));
+        inner.first_epoch = EpochNumber::new(1);
         let template = inner
             .epoch_committee(EpochNumber::genesis())
             .expect("genesis committee exists")
@@ -1972,7 +1962,7 @@ mod tests {
                         stable_snap.committee_members(view).any(|p| p == &leader),
                         "leader {leader:?} not in committee_members for stable epoch",
                     );
-                    assert_eq!(c.first_epoch(), Some(stable));
+                    assert_eq!(c.first_epoch(), stable);
 
                     // Mutating epoch — the writer churns
                     // `randomized_committees[3]`. Just exercise the API

@@ -42,6 +42,7 @@ where
 
 struct Inner<T: NodeType, S> {
     table: S,
+    first_epoch: EpochNumber,
     epochs: HashSet<EpochNumber>,
     drbs: HashSet<EpochNumber>,
     fetcher: Option<Arc<AsyncRwLock<Leaf2Fetcher<T>>>>,
@@ -80,6 +81,7 @@ where
                     quorum_members.into_iter().map(Into::into).collect(),
                     da_members.into_iter().map(Into::into).collect(),
                 ),
+                first_epoch,
                 epochs: HashSet::new(),
                 drbs: HashSet::new(),
                 fetcher: None,
@@ -169,10 +171,9 @@ where
             return None;
         }
         let has_drb = inner.drbs.contains(&epoch);
-        let first_epoch = inner.table.first_epoch().map(EpochNumber::new);
         Some(StrictEpochSnapshot::build(
             epoch,
-            first_epoch,
+            inner.first_epoch,
             has_drb,
             inner.table.clone(),
         ))
@@ -189,8 +190,8 @@ where
         inner.table.add_drb_result(*e, drb);
     }
 
-    fn first_epoch(&self) -> Option<EpochNumber> {
-        self.inner.read().table.first_epoch().map(EpochNumber::new)
+    fn first_epoch(&self) -> EpochNumber {
+        self.inner.read().first_epoch
     }
 
     fn highest_known_epoch(&self) -> Option<EpochNumber> {
@@ -322,7 +323,7 @@ where
     S: TestStakeTable<T::SignatureKey, T::StateSignatureKey>,
 {
     epoch: EpochNumber,
-    first_epoch: Option<EpochNumber>,
+    first_epoch: EpochNumber,
     has_drb: bool,
     stake_table: Vec<PeerConfig<T>>,
     da_stake_table: Vec<PeerConfig<T>>,
@@ -337,12 +338,7 @@ where
     T: NodeType,
     S: TestStakeTable<T::SignatureKey, T::StateSignatureKey>,
 {
-    fn build(
-        epoch: EpochNumber,
-        first_epoch: Option<EpochNumber>,
-        has_drb: bool,
-        table: S,
-    ) -> Self {
+    fn build(epoch: EpochNumber, first_epoch: EpochNumber, has_drb: bool, table: S) -> Self {
         let stake_entries = table.stake_table(Some(*epoch));
         let da_entries = table.da_stake_table(Some(*epoch));
         let committee_keys = stake_entries
@@ -413,7 +409,7 @@ where
         self.epoch
     }
 
-    fn first_epoch(&self) -> Option<EpochNumber> {
+    fn first_epoch(&self) -> EpochNumber {
         self.first_epoch
     }
 
