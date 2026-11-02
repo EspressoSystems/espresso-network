@@ -527,7 +527,7 @@ impl TestData {
             let epoch = if epoch_height > 0 && block_number > 0 {
                 EpochNumber::new(epoch_from_block_number(block_number, epoch_height))
             } else {
-                gen_view.epoch_number.unwrap_or(EpochNumber::genesis())
+                EpochNumber::genesis()
             };
             // Use genesis membership for signing — same committee in tests.
             let epoch_membership = membership
@@ -555,8 +555,7 @@ impl TestData {
                 proposal.next_drb_result = computed_drbs.get(&next_epoch).copied();
             }
             // Always set epoch (may differ from generator output).
-            let gen_epoch = gen_view.epoch_number.unwrap_or(EpochNumber::genesis());
-            let epoch_patched = epoch != gen_epoch;
+            let epoch_patched = epoch != EpochNumber::genesis();
             proposal.epoch = epoch;
             // The dispersal carries the proposal's epoch, as `VidDisperser`
             // gives it: the two must agree for the share to pair with the
@@ -1376,7 +1375,7 @@ impl ConsensusHarness {
                     self.apply_recorded(input, outbox);
                 }
             },
-            ConsensusOutput::RecordAction(view, _, kind) => {
+            ConsensusOutput::RecordAction(view, kind) => {
                 self.apply_recorded(
                     ConsensusInput::Stored(StorageOutput::Action(*view, *kind)),
                     outbox,
@@ -1741,9 +1740,6 @@ pub(crate) fn record_leader(
         return;
     }
     let view = input.view_number();
-    let epoch = input
-        .epoch()
-        .or_else(|| consensus.current_epoch())
-        .unwrap_or_else(EpochNumber::genesis);
+    let epoch = input.epoch().unwrap_or_else(|| consensus.current_epoch());
     trace.leader::<TestTypes>(view, epoch, consensus.leader_of(view, epoch).as_ref());
 }

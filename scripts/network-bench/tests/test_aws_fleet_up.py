@@ -916,3 +916,35 @@ def test_down_of_a_fleet_recorded_before_regions_uses_eu_west_1(harness):
     assert harness.down(runner, "--yes") == awsb.EXIT_LEFTOVER
     assert aws_regions(runner) == {"eu-west-1"}
     assert "region" not in netbench.read_json(tfvars_path(harness))
+
+
+def drop_image(harness: FleetHarness, name: str) -> None:
+    images = harness.fleet()["images"]
+    del images[name]
+    harness.set_fleet(images=images)
+
+
+# EDGE:fleet-old-images
+def test_staking_on_a_fleet_without_the_staking_cli_image_is_refused(harness, resolved):
+    runner = pull_fleet(harness, resolved)
+    drop_image(harness, "staking-cli")
+    mark = len(runner.calls)
+    with pytest.raises(awsb.Refused, match="staking-cli"):
+        harness.run(runner, "--epoch-height", "3000")
+    assert not ssh_calls(runner, mark)
+    assert not harness.lock().exists()
+
+
+def test_a_new_tag_resolves_the_staking_cli_image_of_an_old_fleet(harness, resolved):
+    runner = pull_fleet(harness, resolved)
+    drop_image(harness, "staking-cli")
+    assert (
+        harness.run(runner, "--tag", "other", "--epoch-height", "3000") == awsb.EXIT_OK
+    )
+    assert harness.fleet()["images"]["staking-cli"]["digest"] == NEW_DIGEST
+
+
+def test_a_run_without_staking_takes_an_old_fleet(harness, resolved):
+    runner = pull_fleet(harness, resolved)
+    drop_image(harness, "staking-cli")
+    assert harness.run(runner) == awsb.EXIT_OK

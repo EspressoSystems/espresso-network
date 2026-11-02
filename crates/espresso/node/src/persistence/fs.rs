@@ -962,12 +962,7 @@ impl SequencerPersistence for Persistence {
             },
         )
     }
-    async fn record_action(
-        &self,
-        view: ViewNumber,
-        _epoch: Option<EpochNumber>,
-        action: HotShotAction,
-    ) -> anyhow::Result<()> {
+    async fn record_action(&self, view: ViewNumber, action: HotShotAction) -> anyhow::Result<()> {
         // Todo Remove this after https://github.com/EspressoSystems/espresso-network/issues/1931
         if !matches!(action, HotShotAction::Propose | HotShotAction::Vote) {
             return Ok(());
@@ -1180,20 +1175,6 @@ impl SequencerPersistence for Persistence {
         )
     }
 
-    async fn load_next_epoch_quorum_certificate(
-        &self,
-    ) -> anyhow::Result<Option<NextEpochQuorumCertificate2<SeqTypes>>> {
-        let inner = self.inner.read().await;
-        let path = inner.next_epoch_qc();
-        if !path.is_file() {
-            return Ok(None);
-        }
-        let bytes = fs::read(&path).context("read")?;
-        Ok(Some(
-            bincode::deserialize(&bytes).context("deserialize next epoch qc")?,
-        ))
-    }
-
     async fn append_next_epoch_high_qc2(
         &self,
         next_epoch_high_qc: NextEpochQuorumCertificate2<SeqTypes>,
@@ -1330,13 +1311,6 @@ impl SequencerPersistence for Persistence {
                 Ok(())
             },
         )
-    }
-
-    async fn append_proposal2(
-        &self,
-        proposal: &Proposal<SeqTypes, QuorumProposalWrapper<SeqTypes>>,
-    ) -> anyhow::Result<()> {
-        self.append_quorum_proposal2(proposal).await
     }
 
     async fn store_drb_input(&self, drb_input: DrbInput) -> anyhow::Result<()> {
