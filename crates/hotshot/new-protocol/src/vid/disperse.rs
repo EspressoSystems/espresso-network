@@ -246,12 +246,10 @@ where
                     .map(|&ns_index| disperse_namespace(params, ns_index))
                     .collect::<Result<_, _>>()
             })?;
-            if let Some(trace) = &bucket_trace {
-                trace.encode_done();
-            }
             let bucket_fragments = debug_span!("fragments")
                 .in_scope(|| fragments(view, epoch, payload_commitment, params, dispersals));
             if let Some(trace) = &bucket_trace {
+                trace.encode_done();
                 trace.send_starting();
             }
             for fragment in bucket_fragments {
@@ -293,7 +291,7 @@ impl<'a> BucketTrace<'a> {
         }
     }
 
-    /// Called once per bucket after its encode; emits for the last one.
+    /// Called once per bucket after its encode and fragment assembly; emits for the last one.
     fn encode_done(&self) {
         if self.buckets_left.fetch_sub(1, Ordering::AcqRel) == 1 {
             self.record(LeaderEvent::NsDisperseEnd);
