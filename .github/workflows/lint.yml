@@ -42,7 +42,9 @@ jobs:
         with:
           toolchain: nightly
           components: rustfmt
-      - uses: taiki-e/install-action@just
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: just
 
       - name: Check formatting
         run: just fmt && git diff --exit-code
@@ -72,7 +74,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: taiki-e/install-action@just
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: just
 
       # `scripts/compile-metrics` and `scripts/nextest-ci` decide what CI reports and what it
       # alerts on, and no workflow ran their tests. `py::lint` and `py::check` still do not run
@@ -90,7 +94,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: taiki-e/install-action@just
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: just
       - uses: astral-sh/setup-uv@v10.3.2
         with:
           python-version: "3.14"
@@ -121,7 +127,9 @@ jobs:
           # locally and in CI.
           version: 1.72.0
           setup_only: true
-      - uses: taiki-e/install-action@just
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: just
 
       # A changed proto must keep the wire and protoJSON encoding of what it replaces.
       - name: Check the v2 protos' formatting and backward compatibility
