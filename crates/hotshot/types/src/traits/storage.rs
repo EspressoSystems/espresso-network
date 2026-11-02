@@ -55,12 +55,7 @@ pub trait Storage<TYPES: NodeType>: Send + Sync + Clone + 'static {
         proposal: &Proposal<TYPES, QuorumProposalWrapper<TYPES>>,
     ) -> Result<()>;
     /// Record a HotShotAction taken.
-    async fn record_action(
-        &self,
-        view: ViewNumber,
-        epoch: Option<EpochNumber>,
-        action: HotShotAction,
-    ) -> Result<()>;
+    async fn record_action(&self, view: ViewNumber, action: HotShotAction) -> Result<()>;
     /// Update the light client state update certificate in storage.
     async fn update_state_cert(
         &self,

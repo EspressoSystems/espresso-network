@@ -23,7 +23,7 @@ async fn test_record_action_completion() {
     let (mut storage, inner) = test_storage();
     let view = ViewNumber::new(7);
 
-    storage.record_action(view, None, ActionKind::Vote);
+    storage.record_action(view, ActionKind::Vote);
 
     let stored = storage.next().await.expect("completion");
     assert_eq!(stored, StorageOutput::Action(view, ActionKind::Vote));
@@ -39,7 +39,7 @@ async fn test_record_action_retries_until_success() {
     let view = ViewNumber::new(3);
 
     inner.should_return_err.store(true, Ordering::Relaxed);
-    storage.record_action(view, None, ActionKind::Propose);
+    storage.record_action(view, ActionKind::Propose);
     assert!(
         timeout(Duration::from_millis(100), storage.next())
             .await
@@ -62,7 +62,7 @@ async fn test_gc_aborts_pending_writes() {
     let (mut storage, inner) = test_storage();
 
     inner.should_return_err.store(true, Ordering::Relaxed);
-    storage.record_action(ViewNumber::new(2), None, ActionKind::Vote);
+    storage.record_action(ViewNumber::new(2), ActionKind::Vote);
     storage.gc(ViewNumber::new(5));
     inner.should_return_err.store(false, Ordering::Relaxed);
 

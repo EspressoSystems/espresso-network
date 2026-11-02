@@ -3050,9 +3050,14 @@ mod test {
     use rstest_reuse::apply;
 
     use super::{leaf::RangeRequest, *};
-    use crate::testing::{
-        consensus::{SavePrunedHeight, TestableDataSource, sql_data_sources},
-        mocks::{MockPayload, MockTypes, mock_transaction},
+    use crate::{
+        fetching::provider::NoFetching,
+        testing::{
+            consensus::{
+                SavePrunedHeight, TestSqlDb, TestableDataSource, sql_data_sources, sql_dbs,
+            },
+            mocks::{MockPayload, MockTypes, mock_transaction},
+        },
     };
 
     #[test]
@@ -3552,12 +3557,13 @@ mod test {
 
     /// A data source without an aggregator has no totals, also when an earlier run with one left
     /// aggregate rows in storage: those stop where that run did.
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_no_totals_without_aggregator() {
-        let storage = TmpDb::init().await;
-        let db = SqlStorage::connect(storage.config(), StorageConnectionType::Query)
-            .await
-            .unwrap();
+    #[apply(sql_dbs)]
+    async fn test_no_totals_without_aggregator<Db: TestSqlDb>(_db: PhantomData<Db>)
+    where
+        for<'a> <Db::Storage as VersionedDataSource>::ReadOnly<'a>: ExplorerStorage<MockTypes>,
+    {
+        let tmp = Db::init().await;
+        let db = tmp.storage().await.unwrap();
         let genesis = BlockQueryData::<MockTypes>::genesis(
             &Default::default(),
             &Default::default(),
@@ -3571,7 +3577,7 @@ mod test {
                 .unwrap();
             tx.commit().await.unwrap();
         }
-        let ds = MockSqlDataSource::builder(db, NoFetching)
+        let ds = FetchingDataSource::<MockTypes, _, _>::builder(db, NoFetching)
             .disable_aggregator()
             .build()
             .await
