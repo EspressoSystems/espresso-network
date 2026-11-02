@@ -97,7 +97,9 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release-') }}
           prefix-key: v2-hotshot
 
-      - uses: taiki-e/install-action@just
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: just
 
       - uses: leanprover/lean-action@v1
         name: Install Lean and Build the Checker
