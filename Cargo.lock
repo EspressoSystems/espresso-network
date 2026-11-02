@@ -9922,6 +9922,7 @@ dependencies = [
  "anyhow",
  "client",
  "dotenvy",
+ "espresso-api",
  "espresso-contract-deployer",
  "espresso-node",
  "espresso-types",
