@@ -315,7 +315,12 @@ class ScriptedPool:
         self.calls = 0
 
     def request(
-        self, method: str, url: str, body: bytes | None = None, timeout: float = 10.0
+        self,
+        method: str,
+        url: str,
+        body: bytes | None = None,
+        timeout: float = 10.0,
+        accept: str = netbench.JSON,
     ) -> tuple[int, bytes]:
         reply = self.replies[min(self.calls, len(self.replies) - 1)]
         self.calls += 1
@@ -512,6 +517,15 @@ def test_post_tx_stamps_t_done_when_the_request_fails():
     assert netbench.post_tx(pool, state, tx, ["http://x"], lambda: b"") == 0
     assert tx.t_done is not None
     assert tx.t_done >= tx.t_submit
+
+
+def test_cap_frees_with_decided_blocks_while_the_scan_lags(load):
+    """Every payload takes 5 s to fetch, so the scan frees nothing within the step; the
+    validators' decided bytes free the room instead and the pacer never waits."""
+    run = load(3.0, include=True, cap_txs=50, tx_timeout_s=10, payload_delay=5.0)
+    assert len(run.node.submits) >= 55
+    assert run.meta["cap_waits"] == 0
+    assert run.meta["max_in_flight"] < 50
 
 
 def test_cap_blocks_until_timeout(load):
@@ -2324,13 +2338,36 @@ def test_a_payload_comes_from_the_next_query_node_on_404_or_refusal():
     urls = [cluster.urls["node0"], cluster.urls["node1"]]
     cluster.wipe("node0")
     cluster.start("node0")
-    assert netbench.block_payload(pool, urls, 10) == b""
+    assert netbench.block_payload(pool, urls, 10) is not None
     cluster.kill("node0")
-    assert netbench.block_payload(pool, urls, 10) == b""
+    assert netbench.block_payload(pool, urls, 10) is not None
     assert netbench.block_payload(pool, urls, 10_000) is None
     cluster.kill("node1")
     with pytest.raises(netbench.NoAnswer):
         netbench.block_payload(pool, urls, 10)
+
+
+def test_a_payload_is_asked_for_in_binary_and_scanned_as_it_comes():
+    clock = fakes.FakeClock()
+    node = fakes.FakeNode(clock, include=True)
+    marker = b"m" * 16
+    tx = {
+        "namespace": 1,
+        "payload": base64.b64encode(marker + (7).to_bytes(8, "big")).decode(),
+    }
+    pool = node.connect(clock)
+    pool.request("POST", node.url + "/v1/submit/submit", json.dumps(tx).encode())
+    clock.advance(1.0)
+    assert netbench.scan_block(pool, [node.url], marker, 1) == [7]
+    assert node.accepts == [netbench.BINARY]
+
+
+def test_a_json_payload_answer_is_decoded_and_a_binary_one_kept():
+    raw = b"\x7b" + bytes(range(256))
+    doc = {"data": {"raw_payload": base64.b64encode(raw).decode(), "ns_table": {}}}
+    assert netbench.payload_bytes(json.dumps(doc).encode()) == raw
+    assert netbench.payload_bytes(raw) == raw
+    assert netbench.payload_bytes(b"{not json") == b"{not json"
 
 
 def test_scan_block_finds_ids_on_the_second_query_node():
@@ -2672,7 +2709,12 @@ class QueryNode:
         self.paths: list[str] = []
 
     def request(
-        self, method: str, url: str, body: bytes | None = None, timeout: float = 10.0
+        self,
+        method: str,
+        url: str,
+        body: bytes | None = None,
+        timeout: float = 10.0,
+        accept: str = netbench.JSON,
     ) -> tuple[int, bytes]:
         if self.down:
             raise ConnectionRefusedError("down")
@@ -2797,10 +2839,10 @@ def test_an_unexpected_status_fails_the_reader():
 
 def test_a_range_the_node_answers_too_slowly_is_recorded_missing_not_fatal():
     class Slow(QueryNode):
-        def request(self, method, url, body=None, timeout=10.0):
+        def request(self, method, url, body=None, timeout=10.0, accept=netbench.JSON):
             if "/v1/light-client/" in url:
                 raise TimeoutError("timed out")
-            return super().request(method, url, body, timeout)
+            return super().request(method, url, body, timeout, accept)
 
     clock = fakes.FakeClock()
     node = Slow(clock, 12)
@@ -2819,7 +2861,7 @@ class BehindDown(QueryNode):
         super().__init__(clock, height)
         self.first = first
 
-    def request(self, method, url, body=None, timeout=10.0):
+    def request(self, method, url, body=None, timeout=10.0, accept=netbench.JSON):
         if url.startswith("http://a"):
             if isinstance(self.first, OSError):
                 raise self.first
@@ -2839,7 +2881,7 @@ class Stale(QueryNode):
     """`http://a` answers a height below the readers' cursor, as a node catching up after a
     wipe does, and 503 to the rest; `http://q` is the QueryNode."""
 
-    def request(self, method, url, body=None, timeout=10.0):
+    def request(self, method, url, body=None, timeout=10.0, accept=netbench.JSON):
         if url.startswith("http://a"):
             if url.endswith("/v1/node/block-height"):
                 return 200, b"5"

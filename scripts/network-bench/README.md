@@ -123,9 +123,11 @@ just bench aws run --tag release-x
 
 - `--keep-going` runs every step with no refine step, then stops the load and drains for up to
   `max(300 s, --tx-timeout-s)`. The summary reports this as the backlog drain time.
-- Inclusion is read from the query node. A query lag above `--cap-s` throttles the load. A lag above `--tx-timeout-s`
-  times transactions out. Both need to exceed the expected lag (e.g. 600).
-- Consensus latency of a step with query lag above `--cap-s` is not comparable across runs.
+- Inclusion is read from the query node: each block's payload is fetched and scanned for the load's marker. The
+  in-flight cap (`--cap-s`) counts transactions submitted and not yet decided by the validators' counters, so a query
+  node or a scan that falls behind does not throttle the load. A query lag above `--tx-timeout-s` still times
+  transactions out, and the scans get at most `--tx-timeout-s` after the load ended to catch up, so it needs to exceed
+  the expected lag (e.g. 600).
 - A long `--tx-timeout-s` raises the TTL bound; raise `--max-usd` when `plan` reports it over 10.
 - Transactions of a lost payload stay pending until `--tx-timeout-s`, and the end of the run waits for them.
 - The CI job does not fit this mode: its step timeout is 15 min.
@@ -773,7 +775,12 @@ Progress: one fixed-width line every 10 s, totals at the end.
 - With `--clients`, readers fetch each new range of blocks from the query node as a light client does, see `--clients`
   above.
 - Pacer: one tx every `tx_size / rate`. A late pacer sends every tx that came due, up to 1 s of load (`CATCHUP_S`);
-  schedule lost beyond that stays lost. The in-flight cap applies. Txs are sent only before the step's end.
+  schedule lost beyond that stays lost. Txs are sent only before the step's end.
+- In-flight cap: `--cap-s` of the step's load, counted as txs submitted and not yet decided by the validators'
+  `consensus_finalized_bytes_sum` (polled every second, divided by `--tx-size`), and at most the txs not yet included or
+  timed out. A tx the network dropped stops counting at its timeout. Earlier runs counted a tx until a scan found it, so
+  a scan behind consensus throttled the load and leaders built empty blocks: their capacities above about 250 MB/s
+  measured the scan.
 
 ### Step rules
 

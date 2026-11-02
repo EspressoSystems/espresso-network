@@ -402,9 +402,14 @@ class FakePool:
         self.closed = threading.Event()
 
     def request(
-        self, method: str, url: str, body: bytes | None = None, timeout: float = 10.0
+        self,
+        method: str,
+        url: str,
+        body: bytes | None = None,
+        timeout: float = 10.0,
+        accept: str = netbench.JSON,
     ) -> tuple[int, bytes]:
-        return self.node.request(method, url, body)
+        return self.node.request(method, url, body, accept)
 
     def close(self) -> None:
         self.closed.set()
@@ -446,6 +451,8 @@ class FakeNode:
         self.decided = 0
         self.made = [clock.time()]
         self.submits: list[float] = []
+        # The Accept header of every payload request.
+        self.accepts: list[str] = []
 
     @property
     def url(self) -> str:
@@ -455,14 +462,18 @@ class FakeNode:
         return FakePool(self, clock)
 
     def request(
-        self, method: str, url: str, body: bytes | None = None
+        self,
+        method: str,
+        url: str,
+        body: bytes | None = None,
+        accept: str = netbench.JSON,
     ) -> tuple[int, bytes]:
         path = urlsplit(url).path
         if method == "POST" and path == "/v1/submit/submit":
             assert body is not None
             return self.submit(body)
         if method == "GET":
-            return self.get(path)
+            return self.get(path, accept)
         raise ValueError(f"FakeNode: unexpected {method} {path}")
 
     def submit(self, body: bytes) -> tuple[int, bytes]:
@@ -475,9 +486,10 @@ class FakeNode:
         self.clock.sleep(self.reply_delay)
         return 200, json.dumps("TX~fake").encode()
 
-    def get(self, path: str) -> tuple[int, bytes]:
+    def get(self, path: str, accept: str = netbench.JSON) -> tuple[int, bytes]:
         prefix = "/v1/availability/payload/"
         if path.startswith(prefix):
+            self.accepts.append(accept)
             self.clock.sleep(self.payload_delay)
         with self.lock:
             self.produce()
@@ -499,9 +511,7 @@ class FakeNode:
                 return 404, json.dumps("not found").encode()
             if self.clock.time() - self.made[height] < self.late.get(height, 0.0):
                 return 404, json.dumps("not found").encode()
-            raw = base64.b64encode(self.blocks[height]).decode()
-        payload = {"data": {"raw_payload": raw, "ns_table": {"bytes": ""}}}
-        return 200, json.dumps(payload).encode()
+            return payload_answer(self.blocks[height], height, accept)
 
     def produce(self) -> None:
         """Makes the blocks due since the last request. Callers hold `lock`."""
@@ -532,6 +542,16 @@ class FakeMember:
     submits: list[float] = field(default_factory=list)
 
 
+def payload_answer(block: bytes, height: int, accept: str) -> tuple[int, bytes]:
+    """A payload as the API answers it: the binary envelope with the bytes verbatim, or the
+    JSON form with them in base64."""
+    if accept == netbench.BINARY:
+        return 200, height.to_bytes(8, "little") + block + bytes(8)
+    raw = base64.b64encode(block).decode()
+    payload = {"data": {"raw_payload": raw, "ns_table": {"bytes": ""}}}
+    return 200, json.dumps(payload).encode()
+
+
 class FakeClusterPool:
     """One client's view of a `FakeCluster`, with the `closed` flag of its own."""
 
@@ -541,9 +561,14 @@ class FakeClusterPool:
         self.closed = threading.Event()
 
     def request(
-        self, method: str, url: str, body: bytes | None = None, timeout: float = 10.0
+        self,
+        method: str,
+        url: str,
+        body: bytes | None = None,
+        timeout: float = 10.0,
+        accept: str = netbench.JSON,
     ) -> tuple[int, bytes]:
-        return self.cluster.request(method, url, body)
+        return self.cluster.request(method, url, body, accept)
 
     def close(self) -> None:
         self.closed.set()
@@ -672,7 +697,11 @@ class FakeCluster:
         return completed()
 
     def request(
-        self, method: str, url: str, body: bytes | None = None
+        self,
+        method: str,
+        url: str,
+        body: bytes | None = None,
+        accept: str = netbench.JSON,
     ) -> tuple[int, bytes]:
         parts = urlsplit(url)
         m = self.members[parts.netloc]
@@ -683,7 +712,7 @@ class FakeCluster:
                 assert body is not None
                 return self.submit(m, body)
             if method == "GET":
-                return self.get(m, parts.path)
+                return self.get(m, parts.path, accept)
         raise ValueError(f"FakeCluster: unexpected {method} {parts.path}")
 
     def submit(self, m: FakeMember, body: bytes) -> tuple[int, bytes]:
@@ -692,7 +721,9 @@ class FakeCluster:
         m.submits.append(self.clock.time())
         return 200, json.dumps("TX~fake").encode()
 
-    def get(self, m: FakeMember, path: str) -> tuple[int, bytes]:
+    def get(
+        self, m: FakeMember, path: str, accept: str = netbench.JSON
+    ) -> tuple[int, bytes]:
         height = self.height_of(m)
         if path == "/v1/status/block-height":
             return 200, json.dumps(height).encode()
@@ -719,9 +750,7 @@ class FakeCluster:
         at = int(path.removeprefix(prefix))
         if at > height:
             return 404, json.dumps("not found").encode()
-        raw = base64.b64encode(self.blocks[at]).decode()
-        payload = {"data": {"raw_payload": raw, "ns_table": {"bytes": ""}}}
-        return 200, json.dumps(payload).encode()
+        return payload_answer(self.blocks[at], at, accept)
 
     def produce(self) -> None:
         """Makes the blocks due since the last request. Callers hold `lock`."""
