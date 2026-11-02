@@ -39,7 +39,6 @@ use hotshot_types::{
     ValidatorConfig,
     data::{EpochNumber, VidShare, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
-    initializer::load_start_epoch_info,
     message::UpgradeLock,
     network::NetworkConfig,
     traits::{
@@ -252,13 +251,6 @@ where
     .await?;
     let coordinator = node_state.coordinator.clone();
 
-    load_start_epoch_info(
-        &coordinator,
-        &[],
-        epoch_height,
-        genesis.epoch_start_block.unwrap_or_default(),
-    )
-    .await;
     let current_epoch = bootstrap_epoch_window(
         &coordinator,
         epoch_height,

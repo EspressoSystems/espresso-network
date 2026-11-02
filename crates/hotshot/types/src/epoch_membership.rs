@@ -359,8 +359,8 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
 
         if epoch <= seeded {
             return Err(anytrace::error!(
-                "catchup requested for epoch {epoch}, which `set_first_epoch` seeds rather than \
-                 deriving it from an epoch root"
+                "catchup requested for epoch {epoch}, which the membership seeds at construction \
+                 rather than deriving it from an epoch root"
             ));
         }
 

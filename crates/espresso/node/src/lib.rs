@@ -687,12 +687,13 @@ where
     let block_reward = fetcher.fetch_fixed_block_reward().await.ok();
     info!("Block reward fetched: {:?}", block_reward);
     let epoch_height = genesis.epoch_height.unwrap_or_default();
-    let mut membership = EpochCommittees::new_stake(
+    let mut membership = EpochCommittees::new(
         network_config.config.known_nodes_with_stake.clone(),
         network_config.config.known_da_nodes.clone(),
         block_reward,
         fetcher,
         epoch_height,
+        genesis.first_epoch()?,
     );
     info!("Membership created. Reloading stake");
     membership.reload_stake(RECENT_STAKE_TABLES_LIMIT).await;
@@ -888,6 +889,7 @@ pub mod testing {
             BlockPayload, EncodeBytes, block_contents::BlockHeader, metrics::NoMetrics,
             signature_key::BuilderSignatureKey,
         },
+        utils::epoch_from_block_number,
     };
     use rand::SeedableRng as _;
     use rand_chacha::ChaCha20Rng;
@@ -1558,12 +1560,16 @@ pub mod testing {
             fetcher.spawn_update_loop().await;
 
             let block_reward = fetcher.fetch_fixed_block_reward().await.ok();
-            let mut membership = EpochCommittees::new_stake(
+            let mut membership = EpochCommittees::new(
                 config.known_nodes_with_stake.clone(),
                 config.known_da_nodes.clone(),
                 block_reward,
                 fetcher,
                 config.epoch_height,
+                EpochNumber::new(epoch_from_block_number(
+                    config.epoch_start_block,
+                    config.epoch_height,
+                )),
             );
             membership.reload_stake(50).await;
 

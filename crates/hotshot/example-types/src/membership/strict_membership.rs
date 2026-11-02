@@ -11,7 +11,7 @@ use async_lock::RwLock as AsyncRwLock;
 use hotshot_types::{
     PeerConfig,
     data::{BlockNumber, EpochNumber, Leaf2, ViewNumber},
-    drb::DrbResult,
+    drb::{DrbResult, INITIAL_DRB_RESULT},
     epoch_membership::EpochMembershipCoordinator,
     event::Event,
     traits::{
@@ -72,8 +72,9 @@ where
         da_members: Vec<PeerConfig<T>>,
         _public_key: T::SignatureKey,
         epoch_height: u64,
+        first_epoch: EpochNumber,
     ) -> Self {
-        Self {
+        let membership = Self {
             inner: Arc::new(RwLock::new(Inner {
                 table: TestStakeTable::new(
                     quorum_members.into_iter().map(Into::into).collect(),
@@ -84,7 +85,9 @@ where
                 fetcher: None,
             })),
             epoch_height: epoch_height.into(),
-        }
+        };
+        membership.seed_first_epoch(first_epoch, INITIAL_DRB_RESULT);
+        membership
     }
 
     fn set_leaf_fetcher(
@@ -124,6 +127,18 @@ where
         inner.drbs.insert(epoch);
         inner.table.add_epoch_root(*epoch);
         inner.table.add_drb_result(*epoch, drb);
+    }
+
+    /// Run `e` and `e + 1` on the genesis stake table with `initial_drb_result`.
+    fn seed_first_epoch(&self, e: EpochNumber, initial_drb_result: DrbResult) {
+        let mut inner = self.inner.write();
+        inner.epochs.insert(e);
+        inner.epochs.insert(e + 1);
+
+        inner.drbs.insert(e);
+        inner.drbs.insert(e + 1);
+
+        inner.table.set_first_epoch(*e, initial_drb_result);
     }
 }
 
@@ -183,14 +198,7 @@ where
     }
 
     fn set_first_epoch(&self, e: EpochNumber, initial_drb_result: DrbResult) {
-        let mut inner = self.inner.write();
-        inner.epochs.insert(e);
-        inner.epochs.insert(e + 1);
-
-        inner.drbs.insert(e);
-        inner.drbs.insert(e + 1);
-
-        inner.table.set_first_epoch(*e, initial_drb_result);
+        self.seed_first_epoch(e, initial_drb_result);
     }
 
     async fn add_epoch_root(

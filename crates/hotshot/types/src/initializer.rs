@@ -13,7 +13,7 @@ use versions::Upgrade;
 
 use crate::{
     data::{EpochNumber, Leaf2, QuorumProposalWrapper, ViewNumber},
-    drb::{DrbResult, INITIAL_DRB_RESULT},
+    drb::DrbResult,
     epoch_membership::EpochMembershipCoordinator,
     error::HotShotError,
     message::Proposal,
@@ -21,7 +21,6 @@ use crate::{
         LightClientStateUpdateCertificateV2, QuorumCertificate2, UpgradeCertificate,
     },
     traits::{election::Membership, node_implementation::NodeType, states::ValidatedState},
-    utils::epoch_from_block_number,
 };
 
 #[derive(Clone, Debug, PartialEq)]
@@ -203,21 +202,12 @@ impl<TYPES: NodeType> HotShotInitializer<TYPES> {
     }
 }
 
-/// Seed `coordinator` with the first epoch, and with the epoch roots and DRB results in
-/// `start_epoch_info`.
+/// Seed `coordinator` with the epoch roots and DRB results in `start_epoch_info`.
 pub async fn load_start_epoch_info<TYPES: NodeType>(
     coordinator: &EpochMembershipCoordinator<TYPES>,
     start_epoch_info: &[InitializerEpochInfo<TYPES>],
-    epoch_height: u64,
-    epoch_start_block: u64,
 ) {
     let membership = coordinator.membership();
-    let first_epoch_number =
-        EpochNumber::new(epoch_from_block_number(epoch_start_block, epoch_height));
-
-    tracing::warn!("Calling set_first_epoch for epoch {first_epoch_number}");
-    membership.set_first_epoch(first_epoch_number, INITIAL_DRB_RESULT);
-
     let mut sorted_epoch_info = start_epoch_info.to_vec();
     sorted_epoch_info.sort_by_key(|info| info.epoch);
     for epoch_info in sorted_epoch_info {

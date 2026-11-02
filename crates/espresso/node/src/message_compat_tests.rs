@@ -68,7 +68,6 @@ use hotshot_types::{
     traits::{
         BlockPayload, EncodeBytes,
         block_contents::BlockHeader,
-        election::Membership,
         node_implementation::NodeType,
         signature_key::{LCV2StateSignatureKey, LCV3StateSignatureKey, SignatureKey},
     },
@@ -174,19 +173,17 @@ async fn test_message_compat<Ver: StaticVersionType>(_ver: Ver) {
     let epoch_height = 10;
 
     let membership = EpochMembershipCoordinator::new(
-        EpochCommittees::new_stake(
+        EpochCommittees::new(
             committee.clone(),
             committee,
             None,
             Fetcher::mock(),
             epoch_height,
+            1.into(),
         ),
         epoch_height,
         &storage,
     );
-
-    EpochMembershipCoordinator::<SeqTypes>::membership(&membership)
-        .set_first_epoch(1.into(), [0u8; 32]);
 
     let upgrade_data = UpgradeProposalData {
         old_version: Version { major: 0, minor: 1 },
@@ -453,18 +450,17 @@ async fn reference_new_protocol_messages(
     let committee = vec![PeerConfig::test_default()];
     let storage = TestStorage::default();
     let membership = EpochMembershipCoordinator::new(
-        EpochCommittees::new_stake(
+        EpochCommittees::new(
             committee.clone(),
             committee,
             None,
             Fetcher::mock(),
             epoch_height,
+            1.into(),
         ),
         epoch_height,
         &storage,
     );
-    EpochMembershipCoordinator::<SeqTypes>::membership(&membership)
-        .set_first_epoch(1.into(), [0u8; 32]);
 
     let node_state = NodeState::mock()
         .with_current_version(version)

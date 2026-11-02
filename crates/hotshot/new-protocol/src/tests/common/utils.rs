@@ -764,7 +764,7 @@ pub struct StakeTableSchedule {
     pub initial: Vec<usize>,
     /// `(first_epoch, committee)` overrides, applied to both the quorum and
     /// DA tables. `first_epoch` must be >= 3: epochs 1 and 2 are fixed at
-    /// genesis by `set_first_epoch`.
+    /// genesis by `StrictMembership::new`.
     pub changes: Vec<(u64, Vec<usize>)>,
     /// `(first_epoch, node, addr)` p2p address rotations applied to the
     /// committees registered via `changes` for epochs >= `first_epoch`.
@@ -859,6 +859,7 @@ fn mock_membership_core(
         initial,
         public_key,
         epoch_height,
+        EpochNumber::genesis(),
     );
     if let Some((s, _)) = schedule {
         for (first_epoch, committee) in &s.changes {
@@ -898,8 +899,6 @@ fn mock_membership_core(
         public_key,
         external_events_rx,
     );
-    // Initialize epoch data so membership works with epoch-aware versions (VID2 etc.)
-    membership.set_first_epoch(EpochNumber::genesis(), [0u8; 32]);
 
     let coordinator =
         EpochMembershipCoordinator::new(membership, epoch_height, &TestStorage::default());
