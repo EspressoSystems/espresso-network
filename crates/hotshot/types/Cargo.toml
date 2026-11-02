@@ -14,6 +14,7 @@ path = "bin/mnemonic.rs"
 gpu-vid = ["jf-advz/gpu-vid"]
 rlp = ["alloy-primitives/rlp", "alloy-rlp"]
 test-srs = ["jf-advz/test-srs"]
+testing = []
 
 [dependencies]
 alloy-primitives.workspace = true

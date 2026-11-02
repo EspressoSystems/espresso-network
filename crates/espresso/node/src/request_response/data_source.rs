@@ -32,6 +32,7 @@ use jf_merkle_tree_compat::{
     ForgetableMerkleTreeScheme, ForgetableUniversalMerkleTreeScheme, LookupResult,
     MerkleTreeScheme, UniversalMerkleTreeScheme,
 };
+use light_client::consensus::header::HeaderProof;
 use request_response::data_source::DataSource as DataSourceTrait;
 
 use super::request::{Request, Response};
@@ -93,6 +94,9 @@ pub trait RequestStorage: Send + Sync {
     async fn load_tree(&self, height: u64) -> Result<Vec<u8>>;
 
     async fn get_vid_share(&self, block_number: u64) -> Result<VidShare>;
+
+    /// Header at `height` and its path in the block Merkle tree at `root`.
+    async fn get_header_proof(&self, root: u64, height: u64) -> Result<HeaderProof>;
 }
 
 #[derive(Clone)]
@@ -353,6 +357,12 @@ where
                     None => bail!("no cert2 available at height {height}"),
                 }
             },
+            Request::HeaderProof { root, height } => Ok(Response::HeaderProof(Box::new(
+                self.sql_storage("header proof")?
+                    .get_header_proof(*root, *height)
+                    .await
+                    .context("failed to get header proof from sql storage")?,
+            ))),
             Request::RewardMerkleTreeV2(height, view) => {
                 // Try to get the reward merkle tree from memory first, then fall back to storage
                 if let Some(state) = self.consensus_handle.state(ViewNumber::new(*view)).await {

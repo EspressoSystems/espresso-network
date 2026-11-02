@@ -6,6 +6,7 @@ use espresso_types::{
     v0_4::{RewardAccountV2, RewardMerkleTreeV2},
 };
 use hotshot_types::{data::VidShare, simple_certificate::LightClientStateUpdateCertificateV2};
+use light_client::consensus::header::HeaderProof;
 use request_response::{Serializable, request::Request as RequestTrait};
 use serde::{Deserialize, Serialize};
 
@@ -40,6 +41,8 @@ pub enum Request {
     RewardMerkleTreeV2(u64, ViewNumber),
     /// A request for the cert2 at or above the given height
     Cert2(Height),
+    /// Header at `height` with its block Merkle path at snapshot `root`; `height < root`.
+    HeaderProof { root: Height, height: Height },
 }
 
 /// The outermost response type. This an enum that contains all the possible responses that the
@@ -66,6 +69,8 @@ pub enum Response {
     RewardMerkleTreeV2(#[serde(with = "serde_bytes")] Vec<u8>),
     /// A response with the earliest cert2 (fast finality protocol)
     Cert2(Certificate2<SeqTypes>),
+    /// A response with a header and its block Merkle path
+    HeaderProof(Box<HeaderProof>),
 }
 
 /// Implement the `RequestTrait` trait for the `Request` type. This tells the request response
@@ -100,5 +105,39 @@ impl Serializable for Response {
 
     fn from_bytes(bytes: &[u8]) -> Result<Self> {
         bincode::deserialize(bytes).with_context(|| "failed to deserialize")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use hotshot_query_service::node::BlockId;
+    use light_client::{client::Client, testing::TestClient};
+
+    use super::*;
+
+    /// The appended variants round-trip through bincode and keep the tags of the older ones.
+    #[tokio::test]
+    async fn header_proof_variants_round_trip() {
+        let request = Request::HeaderProof { root: 7, height: 3 };
+        let decoded = Request::from_bytes(&request.to_bytes().unwrap()).unwrap();
+        assert!(matches!(
+            decoded,
+            Request::HeaderProof { root: 7, height: 3 }
+        ));
+
+        let client = TestClient::default();
+        client.leaf(7).await;
+        let proof = client.header_proof(7, BlockId::Number(3)).await.unwrap();
+        let response = Response::HeaderProof(Box::new(proof.clone()));
+        let decoded = Response::from_bytes(&response.to_bytes().unwrap()).unwrap();
+        let Response::HeaderProof(decoded) = decoded else {
+            panic!("expected a header proof");
+        };
+        assert_eq!(*decoded, proof);
+
+        // The variant is appended: `Cert2` keeps its tag and `HeaderProof` follows it.
+        let tag = |request: &Request| bincode::serialize(request).unwrap()[0];
+        assert_eq!(tag(&Request::Cert2(1)), 9);
+        assert_eq!(tag(&request), 10);
     }
 }

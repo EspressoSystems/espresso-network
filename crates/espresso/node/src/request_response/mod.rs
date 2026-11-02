@@ -2,7 +2,7 @@ use std::future::Future;
 
 use data_source::DataSource;
 use derive_more::derive::Deref;
-use espresso_types::{PubKey, SeqTypes, traits::SequencerPersistence};
+use espresso_types::{Certificate2, PubKey, SeqTypes, traits::SequencerPersistence};
 use hotshot_new_protocol::storage::NewProtocolStorage;
 use hotshot_types::{signature_key::BLSPrivKey, traits::node_implementation::NodeImplementation};
 use network::Sender;
@@ -110,5 +110,33 @@ where
                 response_validation_fn,
             )
             .await
+    }
+
+    /// The cert2 at exactly `height` that passes `check`, which also runs on every answer of a peer
+    /// before it is accepted.
+    pub async fn request_cert2(
+        &self,
+        height: u64,
+        check: impl Fn(&Certificate2<SeqTypes>) -> anyhow::Result<()> + Clone + Send + Sync + 'static,
+    ) -> std::result::Result<Certificate2<SeqTypes>, RequestError> {
+        self.request_indefinitely(
+            Request::Cert2(height),
+            move |_: &Request, response: Response| {
+                let check = check.clone();
+                async move {
+                    let Response::Cert2(cert2) = response else {
+                        anyhow::bail!("expected cert2 response");
+                    };
+                    anyhow::ensure!(
+                        cert2.data.block_number == height,
+                        "received cert2 at height {} but expected exactly {height}",
+                        cert2.data.block_number
+                    );
+                    check(&cert2)?;
+                    Ok(cert2)
+                }
+            },
+        )
+        .await
     }
 }

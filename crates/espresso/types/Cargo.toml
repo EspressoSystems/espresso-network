@@ -30,6 +30,7 @@ node = [
 testing = [
     "dep:hotshot-example-types",
     "hotshot-query-service-types/testing",
+    "hotshot-types/testing",
     "node",
     "rlp",
 ]

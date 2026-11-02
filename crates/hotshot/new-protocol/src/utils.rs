@@ -4,13 +4,68 @@ use hotshot_types::{
     data::{EpochNumber, Leaf2, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
     message::UpgradeLock,
-    stake_table::StakeTableEntries,
+    stake_table::{HSStakeTable, StakeTableEntries, supermajority_threshold},
     traits::node_implementation::NodeType,
     utils::epoch_from_block_number,
     vote::{Certificate, HasViewNumber},
 };
 
 use crate::message::Certificate2;
+
+/// Checks `cert2` finalizes `newest` and is signed by `quorum`; a genesis-view cert2 is rejected.
+/// The ancestors of `newest` are then authenticated by their parent commitments.
+pub fn verify_cert2<T: NodeType>(
+    cert2: &Certificate2<T>,
+    newest: &Leaf2<T>,
+    epoch_height: u64,
+    upgrade_lock: &UpgradeLock<T>,
+    quorum: &HSStakeTable<T>,
+) -> anyhow::Result<()> {
+    check_cert2_finalizes(cert2, newest, epoch_height)?;
+    let entries = StakeTableEntries::<T>::from(quorum.clone()).0;
+    cert2.is_valid_cert(
+        &entries,
+        supermajority_threshold(quorum.total_stakes()),
+        upgrade_lock,
+    )?;
+    Ok(())
+}
+
+/// Checks that `cert2` is not of the genesis view and finalizes `newest` with a consistent
+/// epoch; returns that epoch. Signatures are not checked.
+fn check_cert2_finalizes<T: NodeType>(
+    cert2: &Certificate2<T>,
+    newest: &Leaf2<T>,
+    epoch_height: u64,
+) -> anyhow::Result<EpochNumber> {
+    ensure!(
+        cert2.view_number() > ViewNumber::genesis(),
+        "cert2 must not be the genesis view"
+    );
+    ensure!(
+        cert2.data.leaf_commit == newest.commit(),
+        "cert2 does not match the newest leaf in the chain"
+    );
+    ensure!(
+        cert2.data.block_number == newest.height(),
+        "cert2 block number does not match the newest leaf"
+    );
+    ensure!(
+        cert2.view_number() == newest.view_number(),
+        "cert2 view does not match the newest leaf"
+    );
+    let epoch = EpochNumber::new(epoch_from_block_number(
+        cert2.data.block_number,
+        epoch_height,
+    ));
+    ensure!(
+        cert2.data.epoch == epoch,
+        "cert2 epoch {} does not match epoch {epoch} derived from its block number {}",
+        cert2.data.epoch,
+        cert2.data.block_number
+    );
+    Ok(epoch)
+}
 
 /// Verify that a leaf is finalized by a new-protocol Certificate2.
 ///
@@ -36,33 +91,8 @@ pub async fn verify_new_protocol_leaf_chain<T: NodeType>(
     ensure!(!leaf_chain.is_empty(), "empty leaf chain");
     let newest = &leaf_chain[0];
 
-    ensure!(
-        cert2.view_number() > ViewNumber::genesis(),
-        "cert2 must not be the genesis view"
-    );
     // Verify cert2 against the leaf chain before spawning a catchup request for its stake table.
-    ensure!(
-        cert2.data.leaf_commit == newest.commit(),
-        "cert2 does not match the newest leaf in the chain"
-    );
-    ensure!(
-        cert2.data.block_number == newest.height(),
-        "cert2 block number does not match the newest leaf"
-    );
-    ensure!(
-        cert2.view_number() == newest.view_number(),
-        "cert2 view does not match the newest leaf"
-    );
-    let epoch = EpochNumber::new(epoch_from_block_number(
-        cert2.data.block_number,
-        *coordinator.epoch_height(),
-    ));
-    ensure!(
-        cert2.data.epoch == epoch,
-        "cert2 epoch {} does not match epoch {epoch} derived from its block number {}",
-        cert2.data.epoch,
-        cert2.data.block_number
-    );
+    let epoch = check_cert2_finalizes(&cert2, newest, *coordinator.epoch_height())?;
 
     let membership = coordinator
         .stake_table_for_epoch(Some(epoch))
@@ -603,5 +633,66 @@ mod test {
             err.to_string().contains("no stake table available"),
             "{err:#}"
         );
+    }
+
+    fn table(quorum: &Quorum) -> HSStakeTable<TestTypes> {
+        HSStakeTable::from_iter(quorum.1.iter())
+    }
+
+    #[test]
+    fn verify_cert2_ok() {
+        let (quorum1, quorum2) = (quorum(0..5), quorum(5..10));
+        let lock = UpgradeLock::<TestTypes>::new(Upgrade::trivial(NEW_PROTOCOL_VERSION));
+        let (chain, cert2) = boundary_cert2_chain(1, &quorum1, &quorum2, &lock);
+
+        verify_cert2(&cert2, &chain[1], EPOCH_HEIGHT, &lock, &table(&quorum2)).unwrap();
+    }
+
+    #[test]
+    fn verify_cert2_wrong_quorum_fails() {
+        let (quorum1, quorum2) = (quorum(0..5), quorum(5..10));
+        let lock = UpgradeLock::<TestTypes>::new(Upgrade::trivial(NEW_PROTOCOL_VERSION));
+        let (chain, cert2) = boundary_cert2_chain(1, &quorum1, &quorum2, &lock);
+
+        verify_cert2(&cert2, &chain[1], EPOCH_HEIGHT, &lock, &table(&quorum1)).unwrap_err();
+    }
+
+    #[test]
+    fn verify_cert2_of_another_leaf_fails() {
+        let (quorum1, quorum2) = (quorum(0..5), quorum(5..10));
+        let lock = UpgradeLock::<TestTypes>::new(Upgrade::trivial(NEW_PROTOCOL_VERSION));
+        let (chain, cert2) = boundary_cert2_chain(1, &quorum1, &quorum2, &lock);
+
+        verify_cert2(&cert2, &chain[0], EPOCH_HEIGHT, &lock, &table(&quorum2)).unwrap_err();
+    }
+
+    #[test]
+    fn verify_cert2_genesis_view_fails() {
+        let quorum = quorum(0..5);
+        let lock = UpgradeLock::<TestTypes>::new(Upgrade::trivial(NEW_PROTOCOL_VERSION));
+        let qc = signed_qc(
+            QuorumData2 {
+                leaf_commit: Commitment::from_raw([9; 32]),
+                epoch: Some(EpochNumber::new(1)),
+                block_number: Some(4),
+            },
+            0,
+            &quorum,
+            &lock,
+        );
+        let leaf = make_leaf(5, 0, 1, qc, NEW_PROTOCOL_VERSION);
+        let cert2 = signed_cert2(
+            Vote2Data {
+                leaf_commit: Committable::commit(&leaf),
+                epoch: EpochNumber::new(1),
+                block_number: 5,
+            },
+            0,
+            &quorum,
+            &lock,
+        );
+
+        let err = verify_cert2(&cert2, &leaf, EPOCH_HEIGHT, &lock, &table(&quorum)).unwrap_err();
+        assert!(err.to_string().contains("genesis view"), "{err:#}");
     }
 }

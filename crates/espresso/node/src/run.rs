@@ -275,7 +275,6 @@ where
             local_timeout: opt.local_catchup_timeout,
             http_delay: opt.http_catchup_delay,
         },
-        bootstrap_epoch_catchup_timeout: opt.bootstrap_epoch_catchup_timeout,
     };
 
     let proposal_fetcher_config = opt.proposal_fetcher_config;

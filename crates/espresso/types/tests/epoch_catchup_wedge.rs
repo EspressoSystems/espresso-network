@@ -57,8 +57,11 @@ use espresso_types::{
 };
 use hotshot_example_types::storage_types::TestStorage;
 use hotshot_types::{
-    PeerConfig, ValidatorConfig, data::EpochNumber, drb::DrbResult,
-    epoch_membership::EpochMembershipCoordinator, signature_key::BLSPubKey,
+    PeerConfig, ValidatorConfig,
+    data::EpochNumber,
+    drb::DrbResult,
+    epoch_membership::{EpochMembershipCoordinator, LcContractSeedFn},
+    signature_key::BLSPubKey,
     traits::election::Membership,
 };
 use indexmap::IndexMap;
@@ -479,5 +482,169 @@ async fn step_timeout_recovers_catchup_when_storage_bound_cannot() {
         recovered,
         "a step timeout never abandoned the parked attempt: with the storage reads effectively \
          unbounded no retry can ever be started, and the node stays wedged until restart"
+    );
+}
+
+/// Seed calls `(target, start)` in order.
+type SeedCalls = Arc<Mutex<Vec<(u64, u64)>>>;
+
+/// A seed hook that records its arguments and the peak number of concurrent calls, then answers
+/// `answer`.
+fn recording_seed(
+    answer: impl Fn(EpochNumber) -> anyhow::Result<EpochNumber> + Send + Sync + 'static,
+) -> (LcContractSeedFn<SeqTypes>, SeedCalls, Arc<AtomicUsize>) {
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    let peak = Arc::new(AtomicUsize::new(0));
+    let running = Arc::new(AtomicUsize::new(0));
+    let answer = Arc::new(answer);
+    let seed: LcContractSeedFn<SeqTypes> = {
+        let (calls, peak) = (Arc::clone(&calls), Arc::clone(&peak));
+        Arc::new(move |target, start, _coordinator| {
+            let (calls, peak, running, answer) = (
+                Arc::clone(&calls),
+                Arc::clone(&peak),
+                Arc::clone(&running),
+                Arc::clone(&answer),
+            );
+            Box::pin(async move {
+                calls.lock().push((*target, *start));
+                let now = running.fetch_add(1, Ordering::SeqCst) + 1;
+                peak.fetch_max(now, Ordering::SeqCst);
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                running.fetch_sub(1, Ordering::SeqCst);
+                answer(start)
+            })
+        })
+    };
+    (seed, calls, peak)
+}
+
+/// The held pair is epochs 1 and 2; a target above 3 is more than one epoch beyond it.
+#[test_log::test(tokio::test(flavor = "multi_thread", worker_threads = 4))]
+async fn catchup_calls_seed_when_far_ok() {
+    let (_store, coordinator) = setup();
+    let (seed, calls, _) = recording_seed(Ok);
+    coordinator.set_lc_contract_seed(seed);
+
+    assert!(
+        coordinator
+            .stake_table_for_epoch(Some(EpochNumber::new(TARGET_EPOCH)))
+            .is_err()
+    );
+
+    assert!(wait_until(RECOVERY_BUDGET, || !calls.lock().is_empty()).await);
+    assert_eq!(*calls.lock(), vec![(TARGET_EPOCH, FIRST_EPOCH + 1)]);
+}
+
+#[test_log::test(tokio::test(flavor = "multi_thread", worker_threads = 4))]
+async fn catchup_skips_seed_when_adjacent_ok() {
+    let (store, coordinator) = setup();
+    let (seed, calls, _) = recording_seed(Ok);
+    coordinator.set_lc_contract_seed(seed);
+
+    // Epoch 3 is one beyond the held pair; the walk starts, the seed does not.
+    assert!(
+        coordinator
+            .stake_table_for_epoch(Some(EpochNumber::new(WALK_EPOCH)))
+            .is_err()
+    );
+
+    assert!(wait_until(RECOVERY_BUDGET, || store.calls() >= 1).await);
+    assert!(calls.lock().is_empty());
+}
+
+/// A seed error ends the attempt: no walk, so storage is never read.
+#[test_log::test(tokio::test(flavor = "multi_thread", worker_threads = 4))]
+async fn seed_error_ends_catchup() {
+    let (store, coordinator) = setup();
+    let (seed, calls, _) = recording_seed(|_| Err(anyhow::anyhow!("no peer answered")));
+    coordinator.set_lc_contract_seed(seed);
+    let target = EpochNumber::new(TARGET_EPOCH);
+
+    assert!(coordinator.stake_table_for_epoch(Some(target)).is_err());
+
+    assert!(wait_until(RECOVERY_BUDGET, || !calls.lock().is_empty()).await);
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(
+        store.calls(),
+        0,
+        "a failed seed must not fall back to a walk"
+    );
+    // The claim is released: the next request starts a new attempt.
+    let again = wait_until(RECOVERY_BUDGET, || {
+        let _ = coordinator.stake_table_for_epoch(Some(target));
+        calls.lock().len() >= 2
+    })
+    .await;
+    assert!(again, "the failed seed was not retried");
+}
+
+/// Catchups for different targets seed one after the other.
+#[test_log::test(tokio::test(flavor = "multi_thread", worker_threads = 4))]
+async fn seeds_do_not_overlap_ok() {
+    let (_store, coordinator) = setup();
+    let (seed, calls, peak) = recording_seed(|_| Err(anyhow::anyhow!("not yet")));
+    coordinator.set_lc_contract_seed(seed);
+
+    for target in [TARGET_EPOCH, TARGET_EPOCH + 1, TARGET_EPOCH + 2] {
+        let _ = coordinator.stake_table_for_epoch(Some(EpochNumber::new(target)));
+    }
+
+    assert!(wait_until(RECOVERY_BUDGET, || calls.lock().len() >= 3).await);
+    assert_eq!(peak.load(Ordering::SeqCst), 1);
+}
+
+/// A seed that outlives its bound ends the attempt without a walk, and the next request retries.
+#[test_log::test(tokio::test(flavor = "multi_thread", worker_threads = 4))]
+async fn seed_timeout_ends_catchup() {
+    let (store, coordinator) = setup();
+    let coordinator = coordinator.with_seed_timeout(Duration::from_millis(200));
+    let calls = Arc::new(AtomicUsize::new(0));
+    let seed: LcContractSeedFn<SeqTypes> = {
+        let calls = Arc::clone(&calls);
+        Arc::new(move |_, _, _| {
+            calls.fetch_add(1, Ordering::SeqCst);
+            Box::pin(std::future::pending())
+        })
+    };
+    coordinator.set_lc_contract_seed(seed);
+    let target = EpochNumber::new(TARGET_EPOCH);
+
+    assert!(coordinator.stake_table_for_epoch(Some(target)).is_err());
+    assert!(wait_until(RECOVERY_BUDGET, || calls.load(Ordering::SeqCst) == 1).await);
+    tokio::time::sleep(Duration::from_millis(600)).await;
+
+    assert_eq!(
+        store.calls(),
+        0,
+        "a timed-out seed must not fall back to a walk"
+    );
+    let retried = wait_until(RECOVERY_BUDGET, || {
+        let _ = coordinator.stake_table_for_epoch(Some(target));
+        calls.load(Ordering::SeqCst) >= 2
+    })
+    .await;
+    assert!(retried, "the claim was not released");
+}
+
+/// `Seeded { start }` moves the walk: it starts above `start`, not above the held pair.
+#[test_log::test(tokio::test(flavor = "multi_thread", worker_threads = 4))]
+async fn seeded_start_resumes_the_walk_ok() {
+    let (store, coordinator) = setup();
+    let seeded = EpochNumber::new(TARGET_EPOCH - 1);
+    let (seed, ..) = recording_seed(move |_| Ok(seeded));
+    coordinator.set_lc_contract_seed(seed);
+
+    assert!(
+        coordinator
+            .stake_table_for_epoch(Some(EpochNumber::new(TARGET_EPOCH)))
+            .is_err()
+    );
+
+    assert!(wait_until(RECOVERY_BUDGET, || store.loads_of(TARGET_EPOCH) >= 1).await);
+    assert_eq!(
+        store.loads_of(WALK_EPOCH),
+        0,
+        "the walk began at the held pair"
     );
 }
