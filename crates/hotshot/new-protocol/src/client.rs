@@ -28,7 +28,7 @@ impl<T: NodeType> ClientApi<T> {
         self.call(ClientRequest::CurrentView(tx), rx).await
     }
 
-    pub async fn current_epoch(&self) -> Result<Option<EpochNumber>, QueryError> {
+    pub async fn current_epoch(&self) -> Result<EpochNumber, QueryError> {
         let (tx, rx) = oneshot::channel();
         self.call(ClientRequest::CurrentEpoch(tx), rx).await
     }
@@ -186,7 +186,7 @@ impl<T: NodeType> CoordinatorClient<T> {
 #[allow(clippy::large_enum_variant)]
 pub(crate) enum ClientRequest<T: NodeType> {
     CurrentView(oneshot::Sender<ViewNumber>),
-    CurrentEpoch(oneshot::Sender<Option<EpochNumber>>),
+    CurrentEpoch(oneshot::Sender<EpochNumber>),
     DecidedLeaf(oneshot::Sender<Leaf2<T>>),
     DecidedState(oneshot::Sender<Option<Arc<T::ValidatedState>>>),
     UndecidedLeaves(oneshot::Sender<Vec<Leaf2<T>>>),
@@ -248,7 +248,7 @@ pub enum QueryError {
 ///
 /// The membership layer gets a clone of this so it does not need its own
 /// network handle — the `Coordinator` is the only owner of the underlying
-/// `ConnectedNetwork`.
+/// network.
 pub struct ClientLeafFetcherNetwork<T: NodeType> {
     client: ClientApi<T>,
 }

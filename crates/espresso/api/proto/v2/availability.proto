@@ -401,7 +401,17 @@ message AvidmGf2Common {
   repeated uint64 ns_lens = 3;
 }
 
-// The arm names the VID scheme the block was disseminated with
+message VidCommon {
+  // The arm names the VID scheme the block was disseminated with
+  oneof common {
+    AdvzCommon v0 = 1;
+
+    AvidmCommon v1 = 2;
+
+    AvidmGf2Common v2 = 3;
+  }
+}
+
 message VidCommonResponse {
   uint64 height = 1;
 
@@ -411,13 +421,7 @@ message VidCommonResponse {
   // VID commitment to the payload, the TaggedBase64 tag names the scheme
   string payload_hash = 3;
 
-  oneof common {
-    AdvzCommon v0 = 4;
-
-    AvidmCommon v1 = 5;
-
-    AvidmGf2Common v2 = 6;
-  }
+  VidCommon common = 4;
 }
 
 message GetVidCommonRequest {

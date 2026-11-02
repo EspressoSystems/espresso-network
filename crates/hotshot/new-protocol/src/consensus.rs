@@ -115,7 +115,7 @@ pub enum ConsensusOutput<T: NodeType> {
     RequestBlockAndHeader(BlockAndHeaderRequest<T>),
     RequestState(StateRequest<T>),
     RequestDrbResult(EpochNumber),
-    RecordAction(ViewNumber, Option<EpochNumber>, ActionKind),
+    RecordAction(ViewNumber, ActionKind),
     PersistProposal(SignedProposal<T, Proposal<T>>),
     SendProposal(SignedProposal<T, Proposal<T>>),
     SendTimeoutVote(TimeoutVote<T>, Option<CatchupEvidence<T>>),
@@ -917,8 +917,8 @@ impl<T: NodeType> Consensus<T> {
         &self.upgrade_lock
     }
 
-    pub fn current_epoch(&self) -> Option<EpochNumber> {
-        Some(self.current_epoch)
+    pub fn current_epoch(&self) -> EpochNumber {
+        self.current_epoch
     }
 
     #[cfg(test)]
@@ -2268,7 +2268,7 @@ impl<T: NodeType> Consensus<T> {
 
         self.proposed_views.insert(view);
         outbox.push_back(ConsensusOutput::PersistProposal(message.clone()));
-        self.request_action(view, Some(proposal_epoch), ActionKind::Propose, outbox);
+        self.request_action(view, ActionKind::Propose, outbox);
         self.pending_proposal.insert(view, message);
     }
 
@@ -2542,12 +2542,11 @@ impl<T: NodeType> Consensus<T> {
     fn request_action(
         &mut self,
         view: ViewNumber,
-        epoch: Option<EpochNumber>,
         kind: ActionKind,
         outbox: &mut Outbox<ConsensusOutput<T>>,
     ) {
         if self.requested_actions.insert((view, kind)) {
-            outbox.push_back(ConsensusOutput::RecordAction(view, epoch, kind));
+            outbox.push_back(ConsensusOutput::RecordAction(view, kind));
         }
     }
 
@@ -2688,7 +2687,7 @@ impl<T: NodeType> Consensus<T> {
             outbox.push_back(ConsensusOutput::SendVote1(vote));
             outbox.push_back(ConsensusOutput::BroadcastVidShare(vid_share));
         } else {
-            self.request_action(view, Some(epoch), ActionKind::Vote, outbox);
+            self.request_action(view, ActionKind::Vote, outbox);
             self.pending_vote1.insert(view, vote);
         }
     }
@@ -2785,7 +2784,7 @@ impl<T: NodeType> Consensus<T> {
             outbox.push_back(ConsensusOutput::SendVote2(vote));
         } else {
             if view > self.restart_barred_view {
-                self.request_action(view, Some(proposal_epoch), ActionKind::Vote, outbox);
+                self.request_action(view, ActionKind::Vote, outbox);
             }
             self.pending_vote2.insert(view, (vote, required));
         }

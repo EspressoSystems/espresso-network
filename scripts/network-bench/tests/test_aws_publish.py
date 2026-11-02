@@ -86,6 +86,8 @@ def make_run_dir(root: Path, with_row: bool = True, run: str = "01-run") -> Path
         "trace/leader_path.md": "m",
         "trace/stats.json": "{}",
         "trace/finality.png": "p",
+        "trace/timeline.svg": "<svg/>",
+        "trace/cpu_node0.csv": "big",
         "trace/leader_trace_node0.csv": "big",
         "pg.json": "secret",
         "ssh/id_ed25519": "secret",
@@ -135,6 +137,7 @@ def test_allowlist_excludes_secrets_and_big_files(tmp_path: Path):
         "trace/leader_path.md",
         "trace/stats.json",
         "trace/finality.png",
+        "trace/timeline.svg",
     }
 
 
@@ -147,6 +150,7 @@ def test_failed_run_has_no_result_or_trace(tmp_path: Path):
         "trace/leader_path.md",
         "trace/stats.json",
         "trace/finality.png",
+        "trace/timeline.svg",
     ):
         (run_dir / name).unlink()
     assert awsb.publish_files(run_dir) == [Path("summary.md")]
