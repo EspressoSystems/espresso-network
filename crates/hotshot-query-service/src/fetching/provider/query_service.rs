@@ -1762,6 +1762,57 @@ mod test {
         }
     }
 
+    /// A pruned node whose first pruner run deleted the genesis block before its first decide, and
+    /// that then restarted, is still a fresh pruned node: a data pruned height of 0 with no block
+    /// above genesis has pruned nothing above genesis. It starts at its first block above genesis,
+    /// as a brand-new database does, so it fetches no leaf below that block.
+    #[apply(sql_dbs)]
+    async fn test_fresh_pruned_start_at_pruned_height_zero<Db: TestSqlDb>(_db: PhantomData<Db>)
+    where
+        for<'a> <Db::Storage as VersionedDataSource>::Transaction<'a>: SavePrunedHeight,
+    {
+        let network = peer().await;
+        let (port, _server) = serve_availability(network.data_source()).await;
+        let leaves = network
+            .data_source()
+            .subscribe_leaves(1)
+            .await
+            .take(4)
+            .collect::<Vec<_>>()
+            .await;
+
+        let db = Db::init().await;
+        let storage = idle_pruning_storage(&db).await;
+        {
+            let mut tx = storage.write().await.unwrap();
+            tx.save_pruned_height(0).await.unwrap();
+            tx.commit().await.unwrap();
+        }
+        let provider = Provider::new(trusted_provider(port));
+        let data_source = FetchingDataSource::builder(storage, provider.clone())
+            .with_proactive_interval(Duration::from_secs(1))
+            .with_sync_status_ttl(Duration::from_secs(1))
+            .build()
+            .await
+            .unwrap();
+
+        let first = &leaves[3];
+        data_source.append(first.clone().into()).await.unwrap();
+        assert_eq!(
+            stored_pruned_height(&data_source).await,
+            Some(first.height() - 1)
+        );
+
+        // Long enough for a parent fetch and a proactive scan. Storage would drop a pruned leaf, so
+        // check the requests instead.
+        sleep(Duration::from_secs(3)).await;
+        let requests = provider.requests();
+        assert!(
+            requests.iter().all(|req| !req.starts_with("Leaf")),
+            "a fresh pruned node fetched leaves below its first block: {requests:?}"
+        );
+    }
+
     /// Only the first block above genesis decides where a fresh pruned node starts: a later block
     /// leaves the data pruned height as the first block set it.
     #[apply(sql_dbs)]

@@ -589,8 +589,9 @@ where
     }
 }
 
-/// Whether `storage` prunes but has neither pruned anything nor stored a block above genesis: a
-/// fresh pruned database.
+/// Whether `storage` prunes but has neither pruned nor stored a block above genesis: a fresh pruned
+/// database. A pruned height of 0 still counts: the first pruner run can delete the genesis block
+/// before the first decide.
 async fn is_fresh_pruned<Types, S>(storage: &S) -> anyhow::Result<bool>
 where
     Types: NodeType,
@@ -603,7 +604,7 @@ where
     }
     let mut tx = storage.read().await.context("opening transaction")?;
     let heights = Heights::load::<Types, _>(&mut tx).await?;
-    Ok(heights.pruned_height.is_none() && heights.height <= 1)
+    Ok(heights.pruned_height.is_none_or(|pruned| pruned == 0) && heights.height <= 1)
 }
 
 impl<Types, S, P> AsRef<S> for FetchingDataSource<Types, S, P>
