@@ -703,9 +703,11 @@ impl<T: NodeType> Consensus<T> {
                     .map(|p| p.view_number)
                     .collect();
                 for child in children.into_iter().rev() {
-                    if self.certs1.contains_key(&child) {
+                    if child < self.current_view || self.certs1.contains_key(&child) {
                         // Certified without our vote while the parent was still
-                        // reconstructing; a vote1 now adds nothing to it.
+                        // reconstructing: the view moved on, or the certificate is
+                        // here. A vote1 now adds nothing, and the view change has
+                        // discarded the state it would need.
                         debug!(%view, %child, "parent reconstructed after the child was certified");
                         continue;
                     }
