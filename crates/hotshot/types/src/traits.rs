@@ -6,7 +6,6 @@
 
 //! Common traits for the `HotShot` protocol
 pub mod block_contents;
-pub mod consensus_api;
 pub mod election;
 pub mod leaf_fetcher_network;
 pub mod metrics;

@@ -56,6 +56,9 @@ pub trait ValidatedState<TYPES: NodeType>:
     ///
     /// # Arguments
     /// * `instance` - Immutable instance-level state.
+    /// * `payload_byte_len` - Size of the block payload, or `None` when the caller does not
+    ///   hold it. Pass `None` only for a proposal a quorum has already certified: the
+    ///   implementation skips the checks that depend on the payload size.
     ///
     /// # Errors
     ///
@@ -65,7 +68,7 @@ pub trait ValidatedState<TYPES: NodeType>:
         instance: &Self::Instance,
         parent_leaf: &Leaf2<TYPES>,
         proposed_header: &TYPES::BlockHeader,
-        payload_byte_len: u32,
+        payload_byte_len: Option<u32>,
         version: Version,
         view_number: u64,
     ) -> impl Future<Output = Result<(Self, Self::Delta), Self::Error>> + Send;

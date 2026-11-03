@@ -1,6 +1,8 @@
+use std::sync::Arc;
+
 use crate::{
     data::ViewNumber,
-    event::{Event, LeafInfo},
+    event::LeafInfo,
     message::Proposal as SignedProposal,
     new_protocol::Proposal,
     simple_certificate::{SimpleCertificate, SuccessThreshold},
@@ -8,11 +10,9 @@ use crate::{
     traits::node_implementation::NodeType,
 };
 
-/// High-level event emitted by the coordinator adapter. Covers both legacy HotShot
-/// events and new-protocol coordinator events.
+/// What the coordinator reports to the node.
 #[derive(Clone, Debug)]
 pub enum CoordinatorEvent<TYPES: NodeType> {
-    LegacyEvent(Event<TYPES>),
     NewDecide {
         leaf_infos: Vec<LeafInfo<TYPES>>,
         /// Certificate1 that certifies the most recent (first) leaf in the chain.
@@ -22,7 +22,7 @@ pub enum CoordinatorEvent<TYPES: NodeType> {
         cert2: Option<SimpleCertificate<TYPES, Vote2Data<TYPES>, SuccessThreshold>>,
     },
     QuorumProposal {
-        proposal: SignedProposal<TYPES, Proposal<TYPES>>,
+        proposal: Box<SignedProposal<TYPES, Proposal<TYPES>>>,
         sender: TYPES::SignatureKey,
     },
     ExternalMessageReceived {
@@ -30,21 +30,19 @@ pub enum CoordinatorEvent<TYPES: NodeType> {
         data: Vec<u8>,
     },
     /// Emitted when a node has reconstructed a block payload from VID shares.
-    /// Lets downstream consumers (e.g. query service) fill in a payload that
-    /// was missing when the corresponding view was decided.
+    /// A payload obtained before its view decides rides along in `NewDecide`;
+    /// this lets downstream consumers (e.g. the query service) fill in a
+    /// payload that was still missing when the view decided.
     BlockPayloadReconstructed {
         view: ViewNumber,
         header: TYPES::BlockHeader,
-        payload: TYPES::BlockPayload,
+        payload: Arc<TYPES::BlockPayload>,
     },
 }
 
 impl<TYPES: NodeType> std::fmt::Display for CoordinatorEvent<TYPES> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::LegacyEvent(event) => {
-                write!(f, "Legacy: {} view={}", event.event, event.view_number)
-            },
             Self::NewDecide { leaf_infos, .. } => {
                 let view = leaf_infos
                     .first()

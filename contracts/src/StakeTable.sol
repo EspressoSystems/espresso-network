@@ -14,6 +14,8 @@ import { ILightClient } from "./interfaces/ILightClient.sol";
 import { EdOnBN254 } from "./libraries/EdOnBn254.sol";
 import { InitializedAt } from "./InitializedAt.sol";
 
+// forge-lint: disable-start(reentrancy-events)
+
 using EdOnBN254 for EdOnBN254.EdOnBN254Point;
 
 /// @title Ethereum L1 component of the Espresso Global Confirmation Layer (GCL) stake table.
@@ -397,6 +399,8 @@ contract StakeTable is Initializable, InitializedAt, OwnableUpgradeable, UUPSUpg
             revert InsufficientAllowance(allowance, amount);
         }
 
+        // token is the ESP token, fixed at initialisation.
+        // forge-lint: disable-next-line(solmate-safe-transfer-lib)
         SafeTransferLib.safeTransferFrom(token, delegator, address(this), amount);
 
         validators[validator].delegatedAmount += amount;
@@ -426,6 +430,8 @@ contract StakeTable is Initializable, InitializedAt, OwnableUpgradeable, UUPSUpg
         }
 
         delegations[validator][delegator] -= amount;
+        // Undelegated is emitted with both keys and the amount.
+        // forge-lint: disable-next-line(missing-events-access-control)
         undelegations[validator][delegator] =
             Undelegation({ amount: amount, unlocksAt: block.timestamp + exitEscrowPeriod });
         validators[validator].delegatedAmount -= amount;
@@ -448,8 +454,12 @@ contract StakeTable is Initializable, InitializedAt, OwnableUpgradeable, UUPSUpg
         }
 
         // Mark funds as spent
+        // Withdrawal is emitted with the delegator and the amount.
+        // forge-lint: disable-next-line(missing-events-access-control)
         delete undelegations[validator][delegator];
 
+        // token is the ESP token, fixed at initialisation.
+        // forge-lint: disable-next-line(solmate-safe-transfer-lib)
         SafeTransferLib.safeTransfer(token, delegator, amount);
 
         emit Withdrawal(delegator, amount);
@@ -476,6 +486,8 @@ contract StakeTable is Initializable, InitializedAt, OwnableUpgradeable, UUPSUpg
         // Mark funds as spent
         delegations[validator][delegator] = 0;
 
+        // token is the ESP token, fixed at initialisation.
+        // forge-lint: disable-next-line(solmate-safe-transfer-lib)
         SafeTransferLib.safeTransfer(token, delegator, amount);
 
         emit Withdrawal(delegator, amount);

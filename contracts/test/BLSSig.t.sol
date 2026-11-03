@@ -145,11 +145,11 @@ contract BLSSig_Test is Test {
 
         BN254.G1Point memory invalidPoint =
             BN254.G1Point(BN254.BaseField.wrap(invalidX), BN254.BaseField.wrap(2));
-        vm.expectRevert("InvalidG1()");
+        vm.expectRevert(BN254.InvalidG1.selector);
         this.wrapVerifyBlsSig(message, invalidPoint, vk);
 
         invalidPoint = BN254.G1Point(BN254.BaseField.wrap(10), BN254.BaseField.wrap(invalidY));
-        vm.expectRevert("InvalidG1()");
+        vm.expectRevert(BN254.InvalidG1.selector);
         this.wrapVerifyBlsSig(message, invalidPoint, vk);
     }
 }

@@ -1,0 +1,314 @@
+{
+  "measured_at": "2026-10-05",
+  "source": "https://query.main.net.espresso.network/v0/node/stake-table/current",
+  "epoch": 648,
+  "validators": 92,
+  "locations": [
+    {
+      "label": "helsinki-fi",
+      "city": "Helsinki",
+      "country": "FI",
+      "lat": 60.17,
+      "lon": 24.93,
+      "nodes": 26,
+      "stake_share": 0.10335596988990789
+    },
+    {
+      "label": "falkenstein-de",
+      "city": "Falkenstein",
+      "country": "DE",
+      "lat": 50.48,
+      "lon": 12.36,
+      "nodes": 19,
+      "stake_share": 0.11446104260296606
+    },
+    {
+      "label": "nuremberg-de",
+      "city": "Nuremberg",
+      "country": "DE",
+      "lat": 49.45,
+      "lon": 11.08,
+      "nodes": 8,
+      "stake_share": 0.08591736144892748
+    },
+    {
+      "label": "warsaw-pl",
+      "city": "Warsaw",
+      "country": "PL",
+      "lat": 52.23,
+      "lon": 21.01,
+      "nodes": 5,
+      "stake_share": 0.016096514275806387
+    },
+    {
+      "label": "columbus-us",
+      "city": "Columbus",
+      "country": "US",
+      "lat": 39.96,
+      "lon": -83.0,
+      "nodes": 3,
+      "stake_share": 0.005041369907980174
+    },
+    {
+      "label": "new-york-us",
+      "city": "New York",
+      "country": "US",
+      "lat": 40.71,
+      "lon": -74.01,
+      "nodes": 2,
+      "stake_share": 0.008731094577908887
+    },
+    {
+      "label": "vienna-at",
+      "city": "Vienna",
+      "country": "AT",
+      "lat": 48.2,
+      "lon": 16.37,
+      "nodes": 2,
+      "stake_share": 0.0038631172233115425
+    },
+    {
+      "label": "beauharnois-ca",
+      "city": "Beauharnois",
+      "country": "CA",
+      "lat": 45.31,
+      "lon": -73.88,
+      "nodes": 1,
+      "stake_share": 0.041737252223043884
+    },
+    {
+      "label": "bengaluru-in",
+      "city": "Bengaluru",
+      "country": "IN",
+      "lat": 12.98,
+      "lon": 77.59,
+      "nodes": 1,
+      "stake_share": 0.004828915844725544
+    },
+    {
+      "label": "berlin-de",
+      "city": "Berlin",
+      "country": "DE",
+      "lat": 52.51,
+      "lon": 13.4,
+      "nodes": 1,
+      "stake_share": 0.05167030485491154
+    },
+    {
+      "label": "boardman-us",
+      "city": "Boardman",
+      "country": "US",
+      "lat": 45.84,
+      "lon": -119.7,
+      "nodes": 1,
+      "stake_share": 0.03088535500048756
+    },
+    {
+      "label": "brussels-be",
+      "city": "Brussels",
+      "country": "BE",
+      "lat": 50.9,
+      "lon": 4.49,
+      "nodes": 1,
+      "stake_share": 0.0009657978454450979
+    },
+    {
+      "label": "bucharest-ro",
+      "city": "Bucharest",
+      "country": "RO",
+      "lat": 44.43,
+      "lon": 26.1,
+      "nodes": 1,
+      "stake_share": 0.041343394077852494
+    },
+    {
+      "label": "cedar-knolls-us",
+      "city": "Cedar Knolls",
+      "country": "US",
+      "lat": 40.82,
+      "lon": -74.46,
+      "nodes": 1,
+      "stake_share": 0.00483136543912022
+    },
+    {
+      "label": "chicago-us",
+      "city": "Chicago",
+      "country": "US",
+      "lat": 41.85,
+      "lon": -87.65,
+      "nodes": 1,
+      "stake_share": 0.0009658758837584684
+    },
+    {
+      "label": "dublin-ie",
+      "city": "Dublin",
+      "country": "IE",
+      "lat": 53.33,
+      "lon": -6.25,
+      "nodes": 1,
+      "stake_share": 0.04126368340770286
+    },
+    {
+      "label": "frankfurt-am-main-de",
+      "city": "Frankfurt am Main",
+      "country": "DE",
+      "lat": 50.12,
+      "lon": 8.68,
+      "nodes": 1,
+      "stake_share": 0.041263037544537404
+    },
+    {
+      "label": "gravelines-fr",
+      "city": "Gravelines",
+      "country": "FR",
+      "lat": 50.99,
+      "lon": 2.13,
+      "nodes": 1,
+      "stake_share": 0.04127414171765445
+    },
+    {
+      "label": "hillsboro-us",
+      "city": "Hillsboro",
+      "country": "US",
+      "lat": 45.53,
+      "lon": -122.99,
+      "nodes": 1,
+      "stake_share": 0.004828896529139428
+    },
+    {
+      "label": "limburg-an-der-lahn-de",
+      "city": "Limburg an der Lahn",
+      "country": "DE",
+      "lat": 50.4,
+      "lon": 8.08,
+      "nodes": 1,
+      "stake_share": 0.004837112645580287
+    },
+    {
+      "label": "london-gb",
+      "city": "London",
+      "country": "GB",
+      "lat": 51.51,
+      "lon": -0.13,
+      "nodes": 1,
+      "stake_share": 0.07446359431661027
+    },
+    {
+      "label": "manassas-us",
+      "city": "Manassas",
+      "country": "US",
+      "lat": 38.75,
+      "lon": -77.49,
+      "nodes": 1,
+      "stake_share": 0.0038631172233115425
+    },
+    {
+      "label": "manchester-gb",
+      "city": "Manchester",
+      "country": "GB",
+      "lat": 53.48,
+      "lon": -2.24,
+      "nodes": 1,
+      "stake_share": 0.06036996622584191
+    },
+    {
+      "label": "minamishinagawa-jp",
+      "city": "Minamishinagawa",
+      "country": "JP",
+      "lat": 35.62,
+      "lon": 139.74,
+      "nodes": 1,
+      "stake_share": 0.06172716541961791
+    },
+    {
+      "label": "montreal-ca",
+      "city": "Montreal",
+      "country": "CA",
+      "lat": 45.51,
+      "lon": -73.59,
+      "nodes": 1,
+      "stake_share": 0.0038631172233115425
+    },
+    {
+      "label": "nijar-es",
+      "city": "N\u00edjar",
+      "country": "ES",
+      "lat": 36.97,
+      "lon": -2.21,
+      "nodes": 1,
+      "stake_share": 0.0019413423615874616
+    },
+    {
+      "label": "pittsburgh-us",
+      "city": "Pittsburgh",
+      "country": "US",
+      "lat": 40.44,
+      "lon": -80.0,
+      "nodes": 1,
+      "stake_share": 0.08208897197038328
+    },
+    {
+      "label": "riga-lv",
+      "city": "Riga",
+      "country": "LV",
+      "lat": 56.95,
+      "lon": 24.1,
+      "nodes": 1,
+      "stake_share": 0.0028973379174836566
+    },
+    {
+      "label": "roubaix-fr",
+      "city": "Roubaix",
+      "country": "FR",
+      "lat": 50.69,
+      "lon": 3.2,
+      "nodes": 1,
+      "stake_share": 0.0019315586116557713
+    },
+    {
+      "label": "san-jose-us",
+      "city": "San Jose",
+      "country": "US",
+      "lat": 37.34,
+      "lon": -121.89,
+      "nodes": 1,
+      "stake_share": 0.0038777132763229676
+    },
+    {
+      "label": "singapore-sg",
+      "city": "Singapore",
+      "country": "SG",
+      "lat": 1.28,
+      "lon": 103.85,
+      "nodes": 1,
+      "stake_share": 0.04128509651949693
+    },
+    {
+      "label": "strasbourg-fr",
+      "city": "Strasbourg",
+      "country": "FR",
+      "lat": 48.58,
+      "lon": 7.74,
+      "nodes": 1,
+      "stake_share": 0.004829101274352264
+    },
+    {
+      "label": "titusville-us",
+      "city": "Titusville",
+      "country": "US",
+      "lat": 28.57,
+      "lon": -80.82,
+      "nodes": 1,
+      "stake_share": 0.004835574020932187
+    },
+    {
+      "label": "waldbrunn-de",
+      "city": "Waldbrunn",
+      "country": "DE",
+      "lat": 49.76,
+      "lon": 9.81,
+      "nodes": 1,
+      "stake_share": 0.003864740698324639
+    }
+  ]
+}

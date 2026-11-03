@@ -3,13 +3,15 @@ use std::time::Duration;
 use std::{collections::BTreeMap, sync::Arc};
 
 use alloy::primitives::Address;
+#[cfg(feature = "node")]
+use alloy::{eips::BlockId, primitives::U256};
 use anyhow::{Context, bail};
 use async_lock::Mutex;
 use async_trait::async_trait;
 #[cfg(feature = "node")]
 use hotshot_contract_adapter::sol_types::{LightClientV3, StakeTableV3};
 use hotshot_types::{
-    HotShotConfig, data::EpochNumber, epoch_membership::EpochMembershipCoordinator,
+    HotShotConfig, data::EpochNumber, drb::DrbResult, epoch_membership::EpochMembershipCoordinator,
     traits::states::InstanceState,
 };
 use moka::future::Cache;
@@ -25,7 +27,7 @@ use super::{
 #[cfg(feature = "node")]
 use crate::v0::L1Client;
 use crate::{
-    AuthenticatedValidatorMap, PubKey, RegisteredValidatorMap,
+    AuthenticatedValidatorMap, Header, PubKey, RegisteredValidatorMap,
     v0::{
         GenesisHeader, L1BlockInfo, Timestamp, Upgrade, UpgradeMode,
         impls::{StakeTableHash, fetch_and_calculate_block_reward, reward::EpochRewardsCalculator},
@@ -166,6 +168,49 @@ impl NodeState {
             },
         }
     }
+
+    /// The oldest HotShot block height the light client contract still holds a commitment for, or
+    /// `None` when L1 finality or the contract's history is unreadable. `Some(0)` means it still
+    /// vouches for genesis. Never decreases for a given contract.
+    ///
+    /// The window is set by prover cadence, not `stateHistoryRetentionPeriod`: one entry is evicted
+    /// per update, so it can reach far further back than that setting suggests.
+    #[cfg(feature = "node")]
+    pub async fn light_client_history_start(&self) -> anyhow::Result<Option<u64>> {
+        let Some(finalized) = self.l1_client.snapshot().await.finalized else {
+            return Ok(None);
+        };
+        // One block for all three reads. By number, not hash: hash is EIP-1898, which some
+        // providers reject, and a finalized block cannot reorg.
+        let block = BlockId::number(finalized.number);
+        let light_client_contract = LightClientV3::new(
+            self.light_client_contract_address().await?,
+            self.l1_client.provider.clone(),
+        );
+        let count = light_client_contract
+            .getStateHistoryCount()
+            .block(block)
+            .call()
+            .await?;
+        let first = light_client_contract
+            .stateHistoryFirstIndex()
+            .block(block)
+            .call()
+            .await?;
+        // The length counts zeroed tombstones, so only `first >= count` means nothing live. Only a
+        // mock that resets the history without the index gets here; reading `first` would revert.
+        if U256::from(first) >= count {
+            return Ok(None);
+        }
+        Ok(Some(
+            light_client_contract
+                .stateHistoryCommitments(U256::from(first))
+                .block(block)
+                .call()
+                .await?
+                .hotShotBlockHeight,
+        ))
+    }
 }
 
 #[async_trait]
@@ -176,6 +221,22 @@ impl MembershipPersistence for NoStorage {
 
     async fn load_latest_stake(&self, _limit: u64) -> anyhow::Result<Option<Vec<IndexedStake>>> {
         Ok(None)
+    }
+
+    async fn load_drb_result(&self, _epoch: EpochNumber) -> anyhow::Result<Option<DrbResult>> {
+        Ok(None)
+    }
+
+    async fn load_epoch_root(&self, _epoch: EpochNumber) -> anyhow::Result<Option<Header>> {
+        Ok(None)
+    }
+
+    async fn store_epoch_root(
+        &self,
+        _epoch: EpochNumber,
+        _block_header: Header,
+    ) -> anyhow::Result<()> {
+        Ok(())
     }
 
     async fn store_stake(
@@ -281,7 +342,7 @@ impl NodeState {
     #[cfg(any(test, feature = "testing"))]
     pub fn mock() -> Self {
         use hotshot_example_types::storage_types::TestStorage;
-        use versions::version;
+        use versions::NEW_PROTOCOL_VERSION;
 
         use crate::{EpochCommittees, v0_3::Fetcher};
 
@@ -299,9 +360,9 @@ impl NodeState {
             chain_config,
             l1,
             Arc::new(mock::MockStateCatchup::default()),
-            version(0, 1),
+            NEW_PROTOCOL_VERSION,
             coordinator,
-            version(0, 1),
+            NEW_PROTOCOL_VERSION,
         )
     }
 
@@ -494,6 +555,25 @@ impl Upgrade {
         });
 
         let upgrade_type = UpgradeType::Epoch { chain_config };
+        Upgrade { mode, upgrade_type }
+    }
+
+    pub fn large_block_view_based(address: Address) -> Upgrade {
+        let chain_config = ChainConfig {
+            base_fee: 0.into(),
+            stake_table_contract: Some(address),
+            max_block_size: (10 * 1024 * 1024).into(),
+            ..Default::default()
+        };
+
+        let mode = UpgradeMode::View(ViewBasedUpgrade {
+            start_voting_view: None,
+            stop_voting_view: None,
+            start_proposing_view: 200,
+            stop_proposing_view: 1000,
+        });
+
+        let upgrade_type = UpgradeType::LargeBlock { chain_config };
         Upgrade { mode, upgrade_type }
     }
 }

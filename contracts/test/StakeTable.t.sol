@@ -2110,7 +2110,8 @@ contract StakeTableUpgradeV2Test is Test {
         vm.stopPrank();
 
         vm.startPrank(delegator);
-        stakeTableRegisterTest.stakeTable().token()
+        stakeTableRegisterTest.stakeTable()
+            .token()
             .approve(address(stakeTableRegisterTest.stakeTable()), initialBalance / 2);
         stakeTableRegisterTest.stakeTable().delegate(validator, initialBalance / 2);
         vm.stopPrank();
@@ -2157,7 +2158,8 @@ contract StakeTableUpgradeV2Test is Test {
         vm.stopPrank();
 
         vm.startPrank(delegator);
-        stakeTableRegisterTest.stakeTable().token()
+        stakeTableRegisterTest.stakeTable()
+            .token()
             .approve(address(stakeTableRegisterTest.stakeTable()), initialBalance / 2);
         stakeTableRegisterTest.stakeTable().delegate(validator, initialBalance / 2);
         vm.stopPrank();

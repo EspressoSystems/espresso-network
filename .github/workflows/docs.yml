@@ -22,14 +22,16 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Install Protoc
         run: |
           sudo apt-get update
           sudo apt-get install -y protobuf-compiler
 
-      - uses: taiki-e/install-action@just
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: just
 
       - name: Build Rust Docs
         run: just doc
@@ -46,15 +48,23 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           submodules: recursive
 
       - name: Install Foundry
         uses: ./.github/actions/install-foundry
+        with:
+          # forge doc emits a vocs site instead of mdbook sources since v1.8.0
+          # TODO: remove and migrate when nix dev shell is on 1.8
+          version: v1.7.1
 
-      - uses: taiki-e/install-action@just
-      - uses: taiki-e/install-action@mdbook
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: just
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: mdbook
 
       - name: Build Contract Docs
         run: just doc-contracts

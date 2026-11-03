@@ -4,11 +4,16 @@ use alloy::primitives::Address;
 use anyhow::Context;
 use async_trait::async_trait;
 use committable::Commitment;
+use espresso_api::v1::{
+    database::{MigrationStatus, TableSize},
+    node::StakeTableWithEpochNumber,
+    status::NodePublicKeys,
+};
 use espresso_types::{
     Certificate2, FeeAccount, FeeAccountProof, FeeMerkleTree, Leaf2, NodeState, PubKey,
     Transaction,
     config::PublicNetworkConfig,
-    v0::traits::{PersistenceOptions, SequencerPersistence},
+    v0::traits::PersistenceOptions,
     v0_3::{
         AuthenticatedValidator, ChainConfig, RegisteredValidator, RewardAccountProofV1,
         RewardAccountQueryDataV1, RewardAccountV1, RewardAmount, RewardMerkleTreeV1,
@@ -17,7 +22,6 @@ use espresso_types::{
     v0_4::{RewardAccountProofV2, RewardAccountQueryDataV2, RewardAccountV2, RewardMerkleTreeV2},
 };
 use futures::future::{BoxFuture, Future};
-use hotshot::types::BLSPubKey;
 use hotshot_query_service::{
     availability::{AvailabilityDataSource, BlockQueryData, LeafQueryData, VidCommonQueryData},
     data_source::{UpdateDataSource, VersionedDataSource},
@@ -29,18 +33,17 @@ use hotshot_types::{
     PeerConfig,
     data::{EpochNumber, VidShare, ViewNumber},
     light_client::LCV3StateSignatureRequestBody,
+    signature_key::BLSPubKey,
     simple_certificate::LightClientStateUpdateCertificateV2,
-    traits::{network::ConnectedNetwork, node_implementation::NodeType},
+    traits::node_implementation::NodeType,
 };
 use indexmap::IndexMap;
-use light_client::{state::LightClientOptions, storage::LightClientSqliteOptions};
-use serde::{Deserialize, Serialize};
-use tide_disco::Url;
+use light_client::{state::LightClientOptions, storage::LightClientDbOptions};
+use url::Url;
 
 use super::{
     AccountQueryData, BlocksFrontier, fs,
     options::{Options, Query},
-    sql,
 };
 use crate::{
     SeqTypes, U256,
@@ -53,14 +56,9 @@ pub trait DataSourceOptions: PersistenceOptions {
     type DataSource: SequencerDataSource<Options = Self>;
 
     fn enable_query_module(&self, opt: Options, query: Query) -> Options;
-}
 
-impl DataSourceOptions for persistence::sql::Options {
-    type DataSource = sql::DataSource;
-
-    fn enable_query_module(&self, opt: Options, query: Query) -> Options {
-        opt.query_sql(query, self.clone())
-    }
+    /// Where a node on this storage keeps its light client database.
+    fn light_client_db(&self, query: &Query) -> anyhow::Result<LightClientDbOptions>;
 }
 
 impl DataSourceOptions for persistence::fs::Options {
@@ -68,6 +66,10 @@ impl DataSourceOptions for persistence::fs::Options {
 
     fn enable_query_module(&self, opt: Options, query: Query) -> Options {
         opt.query_fs(query, self.clone())
+    }
+
+    fn light_client_db(&self, query: &Query) -> anyhow::Result<LightClientDbOptions> {
+        Ok(LightClientDbOptions::Sqlite(query.sqlite_light_client_db()))
     }
 }
 
@@ -94,22 +96,25 @@ pub trait SequencerDataSource:
 pub type Provider = AnyProvider<SeqTypes>;
 
 /// Create a provider for fetching missing data from a list of peer query services.
-pub(super) async fn provider<N, P>(
+pub(super) async fn provider(
     peers: impl IntoIterator<Item = Url>,
-    state: &ApiState<N, P>,
+    state: &ApiState,
     opt: LightClientOptions,
-    db_opt: LightClientSqliteOptions,
-) -> anyhow::Result<Provider>
-where
-    N: ConnectedNetwork<PubKey>,
-    P: SequencerPersistence,
-{
-    Ok(Provider::default()
-        .with_provider(LightClientProvider::new(peers, state.clone(), opt, db_opt).await?))
+    db_opt: LightClientDbOptions,
+) -> anyhow::Result<Provider> {
+    Ok(Provider::default().with_provider(LightClientProvider::new(
+        peers,
+        state.clone(),
+        opt,
+        db_opt,
+    )?))
 }
 
-pub(crate) trait SubmitDataSource<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> {
-    fn submit(&self, tx: Transaction) -> impl Send + Future<Output = anyhow::Result<()>>;
+pub(crate) trait SubmitDataSource {
+    fn submit(
+        &self,
+        tx: Transaction,
+    ) -> impl Send + Future<Output = anyhow::Result<Commitment<Transaction>>>;
 }
 
 pub(crate) trait HotShotConfigDataSource {
@@ -117,7 +122,7 @@ pub(crate) trait HotShotConfigDataSource {
 }
 
 #[async_trait]
-pub(crate) trait StateSignatureDataSource<N: ConnectedNetwork<PubKey>> {
+pub(crate) trait StateSignatureDataSource {
     async fn get_state_signature(&self, height: u64) -> Option<LCV3StateSignatureRequestBody>;
 }
 
@@ -125,17 +130,14 @@ pub(crate) trait NodeStateDataSource {
     fn node_state(&self) -> impl Send + Future<Output = NodeState>;
 }
 
+pub(crate) trait NodeKeysDataSource {
+    fn node_public_keys(&self) -> impl Send + Future<Output = Option<NodePublicKeys>>;
+}
+
 pub(crate) trait TokenDataSource<T: NodeType> {
     fn get_initial_supply_l1(&self) -> impl Send + Future<Output = anyhow::Result<U256>>;
     fn get_total_supply_l1(&self) -> impl Send + Future<Output = anyhow::Result<U256>>;
     fn get_decided_header(&self) -> impl Send + Future<Output = espresso_types::Header>;
-}
-
-#[derive(Serialize, Deserialize)]
-#[serde(bound = "T: NodeType")]
-pub struct StakeTableWithEpochNumber<T: NodeType> {
-    pub epoch: Option<EpochNumber>,
-    pub stake_table: Vec<PeerConfig<T>>,
 }
 
 pub(crate) trait StakeTableDataSource<T: NodeType> {
@@ -380,23 +382,6 @@ pub trait StateCertFetchingDataSource<Types: NodeType> {
     ) -> Result<LightClientStateUpdateCertificateV2<Types>, StateCertFetchError>;
 }
 
-/// Database table size information.
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct TableSize {
-    pub table_name: String,
-    pub row_count: i64,
-    pub total_size_bytes: Option<i64>,
-}
-
-/// Status of a single deferred background migration.
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct MigrationStatus {
-    pub name: String,
-    pub started_at: chrono::DateTime<chrono::Utc>,
-    pub completed_at: Option<chrono::DateTime<chrono::Utc>>,
-    pub last_offset: Option<i64>,
-}
-
 /// Data source for database metadata and statistics.
 ///
 /// This trait is only implemented by SQL-based storage backends (PostgreSQL and SQLite).
@@ -589,9 +574,96 @@ pub(crate) trait PruningDataSource {
     ) -> impl Send + Future<Output = anyhow::Result<Option<LeafQueryData<SeqTypes>>>>;
 }
 
+#[cfg(test)]
+mod test {
+    use hotshot_types::{
+        addr::NetAddr, light_client::StateKeyPair, traits::signature_key::SignatureKey as _, x25519,
+    };
+
+    use super::*;
+
+    #[test]
+    fn test_node_public_keys_serialize_like_stake_table() {
+        let account = Address::random();
+        let consensus_key = BLSPubKey::generated_from_seed_indexed([1; 32], 0).0;
+        let state_ver_key = StateKeyPair::generate_from_seed_indexed([2; 32], 0).ver_key();
+        let x25519_key = x25519::Keypair::generated_from_seed_indexed([3; 32], 0)
+            .unwrap()
+            .public_key();
+        let p2p_addr: NetAddr = "node.example.com:9977".parse().unwrap();
+
+        let validator = serde_json::to_value(RegisteredValidator::<BLSPubKey> {
+            account,
+            stake_table_key: Some(consensus_key),
+            state_ver_key: Some(state_ver_key.clone()),
+            stake: U256::from(1u64),
+            commission: 0,
+            delegators: HashMap::new(),
+            authenticated: true,
+            x25519_key: Some(x25519_key),
+            p2p_addr: Some(p2p_addr.clone()),
+        })
+        .unwrap();
+
+        let keys = serde_json::to_value(NodePublicKeys {
+            eth_account: Some(account),
+            consensus_key,
+            state_ver_key,
+            x25519_key: Some(x25519_key),
+            p2p_addr: Some(p2p_addr),
+        })
+        .unwrap();
+
+        assert_eq!(keys["eth_account"], validator["account"]);
+        assert_eq!(keys["consensus_key"], validator["stake_table_key"]);
+        assert_eq!(keys["state_ver_key"], validator["state_ver_key"]);
+        assert_eq!(keys["x25519_key"], x25519_key.to_string());
+        assert_eq!(keys["p2p_addr"], validator["p2p_addr"]);
+        assert_eq!(keys["p2p_addr"], "node.example.com:9977");
+    }
+
+    #[test]
+    fn sql_storage_keeps_light_client_in_postgres() {
+        use clap::Parser as _;
+
+        let mut opt = persistence::sql::Options::try_parse_from([
+            "espresso-node",
+            "--host",
+            "db.example",
+            "--port",
+            "6543",
+            "--database",
+            "espresso",
+        ])
+        .unwrap();
+        // The parsed default follows ESPRESSO_NODE_EMBEDDED_DB, not this test.
+        opt.embedded_db = false;
+        let opt = persistence::sql::postgres::Options::try_from(opt).unwrap();
+        let LightClientDbOptions::Postgres(lc) = opt.light_client_db(&Query::default()).unwrap()
+        else {
+            panic!("expected the light client in Postgres");
+        };
+        assert_eq!(lc.connect.get_host(), "db.example");
+        assert_eq!(lc.connect.get_port(), 6543);
+        assert_eq!(lc.connect.get_database(), Some("espresso"));
+    }
+}
+
 #[cfg(any(test, feature = "testing"))]
 pub mod testing {
+    use espresso_types::BlockMerkleTree;
+    use hotshot_query_service::{
+        data_source::storage::{
+            AvailabilityStorage, NodeStorage, UpdateAvailabilityStorage, sql::StorageConnectionType,
+        },
+        merklized_state::{
+            MerklizedStateDataSource, MerklizedStateHeightPersistence, UpdateStateData,
+        },
+    };
+    use jf_merkle_tree_compat::MerkleTreeScheme as _;
+
     use super::{super::Options, *};
+    use crate::persistence::sql::Options as SqlOptions;
 
     #[async_trait]
     pub trait TestableSequencerDataSource: SequencerDataSource {
@@ -606,5 +678,114 @@ pub mod testing {
             anyhow::bail!("not supported")
         }
         fn options(storage: &Self::Storage, opt: Options) -> Options;
+    }
+
+    /// A [`TestableSequencerDataSource`] on a SQL database, with the direct access to its rows
+    /// that some tests need to set up or inspect a node's state.
+    #[async_trait]
+    pub trait TestableSqlDataSource:
+        TestableSequencerDataSource<Storage: Send>
+        + Clone
+        + Send
+        + Sync
+        + 'static
+        + MerklizedStateDataSource<SeqTypes, BlockMerkleTree, { BlockMerkleTree::ARITY }>
+        + MerklizedStateHeightPersistence
+        + for<'a> VersionedDataSource<
+            ReadOnly<'a>: AvailabilityStorage<SeqTypes> + NodeStorage<SeqTypes>,
+            Transaction<'a>: UpdateAvailabilityStorage<SeqTypes>
+                                 + UpdateStateData<
+                SeqTypes,
+                BlockMerkleTree,
+                { BlockMerkleTree::ARITY },
+            >,
+        >
+    {
+        /// A connection to the database, outside any node.
+        type SqlStorage: Send + Sync;
+
+        fn tmp_options(storage: &Self::Storage) -> SqlOptions;
+        fn sql_persistence_options(opt: SqlOptions) -> Self::Options;
+        async fn connect(
+            opt: &SqlOptions,
+            connection_type: StorageConnectionType,
+        ) -> anyhow::Result<Self::SqlStorage>;
+
+        /// A data source on `storage` with `provider` that fetches only what is asked for, with
+        /// neither proactive fetching nor the aggregator running.
+        async fn on_request_data_source(
+            storage: &Self::Storage,
+            provider: super::Provider,
+        ) -> anyhow::Result<Self>;
+
+        async fn prune_state_below(
+            ds: &Self,
+            height: u64,
+            cfg: &hotshot_query_service::data_source::storage::pruning::PrunerCfg,
+        ) -> anyhow::Result<()>;
+
+        /// The number of blocks in availability storage.
+        async fn local_block_height(db: &Self::SqlStorage) -> anyhow::Result<u64>;
+
+        /// The state pruned height, then the state head.
+        async fn state_heights(db: &Self::SqlStorage) -> anyhow::Result<(Option<u64>, u64)>;
+
+        /// The height the state loop recorded as its start, if it started from a boundary.
+        async fn state_start_height(db: &Self::SqlStorage) -> anyhow::Result<Option<u64>>;
+
+        /// The lowest height with a block tree node, which is the first snapshot the state loop
+        /// stored.
+        async fn lowest_block_tree_node(db: &Self::SqlStorage) -> anyhow::Result<u64>;
+
+        async fn insert_leaf(
+            db: &Self::SqlStorage,
+            leaf: &LeafQueryData<SeqTypes>,
+        ) -> anyhow::Result<()>;
+
+        async fn set_last_state_height(db: &Self::SqlStorage, height: u64) -> anyhow::Result<()>;
+
+        /// Stamp the state pruned height without pruning anything.
+        async fn stamp_state_pruned_height(
+            db: &Self::SqlStorage,
+            height: u64,
+        ) -> anyhow::Result<()>;
+
+        /// Prune consensus data to `pruned` as a pruner batch would, stamping the data pruned
+        /// height and then deleting the height-keyed rows `delete_batch` deletes.
+        async fn prune_data_to(db: &Self::SqlStorage, pruned: u64) -> anyhow::Result<()>;
+
+        /// Delete consensus data above `from` up to and including `to` without moving the data
+        /// pruned height, as if the node had never had it.
+        async fn delete_data_between(
+            db: &Self::SqlStorage,
+            from: u64,
+            to: u64,
+        ) -> anyhow::Result<()>;
+
+        /// The number of stored leaves at or below `height`.
+        async fn count_leaves_up_to(db: &Self::SqlStorage, height: u64) -> anyhow::Result<i64>;
+
+        /// Record a deferred migration, as the migration runner does when it starts one.
+        async fn insert_deferred_migration(
+            db: &Self::SqlStorage,
+            migration: DeferredMigration,
+        ) -> anyhow::Result<()>;
+
+        async fn reconstruct_state(
+            db: &Self::SqlStorage,
+            instance: &NodeState,
+            from_height: u64,
+            to_view: ViewNumber,
+            fee_accounts: &[FeeAccount],
+            reward_accounts: &[RewardAccountV2],
+        ) -> anyhow::Result<(espresso_types::ValidatedState, Leaf2)>;
+    }
+
+    /// A row of the `deferred_migrations` table.
+    pub struct DeferredMigration {
+        pub name: &'static str,
+        pub started_at: chrono::DateTime<chrono::Utc>,
+        pub completed_at: Option<chrono::DateTime<chrono::Utc>>,
+        pub last_offset: Option<i64>,
     }
 }

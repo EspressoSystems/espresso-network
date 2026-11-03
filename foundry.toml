@@ -37,12 +37,26 @@ local = "http://localhost:8545"
 
 
 [lint]
+# Rules accepted repo-wide. literal-instead-of-constant, inline-assembly and
+# internal-function-used-once are pervasive by design in the verifier libraries.
+# The rest are naming and file-layout conventions this repo does not follow.
+# Findings that need a per-site reason are suppressed inline instead.
 exclude_lints = [
     "mixed-case-variable",
     "named-struct-fields",
     "asm-keccak256",
     "pascal-case-struct",
     "block-timestamp",
+    "literal-instead-of-constant",
+    "inline-assembly",
+    "internal-function-used-once",
+    "multi-contract-file",
+    "todo-comment",
+    "unused-error",
+    "interface-naming",
+    "event-fields",
+    "pragma-inconsistent",
+    "missing-inheritance",
 ]
 
 [fmt]

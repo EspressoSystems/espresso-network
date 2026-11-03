@@ -146,10 +146,9 @@ impl AvidMIncorrectEncodingNsProof {
 #[cfg(test)]
 mod tests {
     use futures::future;
-    use hotshot::traits::BlockPayload;
     use hotshot_types::{
         data::VidCommitment,
-        traits::EncodeBytes,
+        traits::{BlockPayload, EncodeBytes},
         vid::avidm::{AvidMParam, AvidMScheme},
     };
 
@@ -182,7 +181,7 @@ mod tests {
 
         let blocks: Vec<BlockInfo> = future::join_all(tests.iter().map(|t| async {
             let block =
-                Payload::from_transactions(t.all_txs(), &Default::default(), &Default::default())
+                Payload::from_transactions(&t.all_txs(), &Default::default(), &Default::default())
                     .await
                     .unwrap()
                     .0;

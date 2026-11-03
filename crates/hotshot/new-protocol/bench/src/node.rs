@@ -1,7 +1,6 @@
 use std::{path::PathBuf, sync::Arc};
 
 use anyhow::Result;
-use hotshot::{traits::BlockPayload, types::BLSPubKey};
 use hotshot_example_types::{
     block_types::{TestBlockHeader, TestBlockPayload, TestMetadata, TestTransaction},
     node_types::{TEST_VERSIONS, TestTypes},
@@ -10,6 +9,7 @@ use hotshot_example_types::{
 };
 use hotshot_new_protocol::{
     block::{BlockBuilder, BlockBuilderConfig},
+    cert_verifier::CertVerifiers,
     client::CoordinatorClient,
     consensus::{Consensus, ConsensusInput, ConsensusOutput},
     coordinator::{Coordinator, timer::Timer},
@@ -19,6 +19,7 @@ use hotshot_new_protocol::{
     outbox::Outbox,
     proposal::{ProposalValidator, VidShareValidator},
     state::StateManager,
+    upgrade::UpgradeProtocol,
     vid::{VidDisperser, VidReconstructor},
     vote::VoteCollector,
 };
@@ -28,9 +29,15 @@ use hotshot_types::{
     data::{EpochNumber, Leaf2, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
     message::UpgradeLock,
-    traits::{metrics::NoMetrics, node_implementation::NodeType, signature_key::SignatureKey},
+    signature_key::BLSPubKey,
+    traits::{
+        BlockPayload, metrics::NoMetrics, node_implementation::NodeType,
+        signature_key::SignatureKey,
+    },
+    upgrade_config::UpgradeConfig,
     x25519::Keypair,
 };
+use tokio::sync::mpsc;
 use tracing::{error, info, warn};
 use versions::{NEW_PROTOCOL_VERSION, Upgrade};
 
@@ -90,6 +97,7 @@ async fn create_network(
         keypair,
         bind_addr,
         parties,
+        None,
         upgrade_lock(),
         Box::new(NoMetrics),
     )
@@ -136,6 +144,9 @@ async fn build_coordinator(
     let vote2_collector = VoteCollector::new(membership.clone(), upgrade_lock.clone());
     let timeout_collector = VoteCollector::new(membership.clone(), upgrade_lock.clone());
     let timeout_one_honest_collector = VoteCollector::new(membership.clone(), upgrade_lock.clone());
+    let timeout3_collector = VoteCollector::new(membership.clone(), upgrade_lock.clone());
+    let timeout_one_honest3_collector =
+        VoteCollector::new(membership.clone(), upgrade_lock.clone());
     let epoch_root_collector = VoteCollector::new(membership.clone(), upgrade_lock.clone());
 
     let epoch_manager = EpochManager::new(epoch_height, membership.clone());
@@ -181,16 +192,16 @@ async fn build_coordinator(
     );
     consensus.seed_parent(genesis_cert1, genesis_proposal, std::iter::empty());
 
-    let proposal_validator =
-        ProposalValidator::new(membership.clone(), epoch_height, upgrade_lock.clone());
+    let proposal_validator = ProposalValidator::new(
+        membership.clone(),
+        epoch_height,
+        upgrade_lock.clone(),
+        consensus.cert1_at(ViewNumber::genesis()),
+    );
     let share_validator =
         VidShareValidator::new(membership.clone(), epoch_height, upgrade_lock.clone());
 
-    let timer = Timer::new(
-        cfg.timeout_duration(),
-        ViewNumber::genesis(),
-        EpochNumber::genesis(),
-    );
+    let timer = Timer::new(cfg.timeout_duration(), ViewNumber::genesis());
 
     let mut coordinator = Coordinator::builder()
         .consensus(consensus)
@@ -200,7 +211,17 @@ async fn build_coordinator(
         .vote2_collector(vote2_collector)
         .timeout_collector(timeout_collector)
         .timeout_one_honest_collector(timeout_one_honest_collector)
+        .timeout3_collector(timeout3_collector)
+        .timeout_one_honest3_collector(timeout_one_honest3_collector)
         .epoch_root_collector(epoch_root_collector)
+        .upgrade_vote_collector(VoteCollector::new(membership.clone(), upgrade_lock.clone()))
+        .upgrade_protocol(UpgradeProtocol::new(
+            UpgradeConfig::default(),
+            upgrade_lock.clone(),
+            public_key,
+            private_key.clone(),
+        ))
+        .cert_verifiers(CertVerifiers::new(membership.clone(), upgrade_lock.clone()))
         .vid_disperser(vid_disperser)
         .vid_reconstructor(vid_reconstructor)
         .epoch_manager(epoch_manager)
@@ -214,12 +235,13 @@ async fn build_coordinator(
         .client(client)
         .membership_coordinator(membership)
         .outbox(Outbox::new())
+        .external_tx(mpsc::unbounded_channel().0)
         .timer(timer)
         .public_key(public_key)
         .build();
 
     // Emit initial ViewChanged and (for the leader) RequestBlockAndHeader.
-    coordinator.start(None);
+    coordinator.start();
 
     // Process initial outputs so the timer resets before the event loop.
     while let Some(output) = coordinator.outbox_mut().pop_front() {

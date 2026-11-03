@@ -1,0 +1,26 @@
+# Registers espresso-node-5 as a sixth validator, for the scenarios that join
+# it partway through.
+#
+# From NEW_PROTOCOL_VERSION consensus runs over cliquenet, whose peer set is the
+# union of the quorum and DA stake tables. A node absent from both is nobody's
+# peer: every node rejects its hello, it never receives a proposal, and it sits
+# at view 1 until the join times out. Registering it at genesis is what makes it
+# dialable when it finally starts.
+#
+# The keys and the port match compose.node-5-{fs,pg}.yaml, and the advertise
+# address must match what that node advertises or its peers reject the hello.
+# BASE_TAG's .env only defines indices 0-4, so these are spelled out rather than
+# interpolated.
+#
+# Applied only to scenarios containing a JoinNode: node 5 takes its turn in the
+# leader rotation from genesis, so every scenario carrying this overlay pays a
+# view timeout on the views it leads while it is not yet running.
+
+services:
+  stake-for-demo:
+    command: staking-cli stake-for-demo --num-validators 6
+    environment:
+      ESPRESSO_DEMO_NODE_STAKING_PRIVATE_KEY_5: BLS_SIGNING_KEY~qJQf73vfpZiz6U0f_rhDgduyV2khu1sHwNZHsB5L4wqa
+      ESPRESSO_DEMO_NODE_STATE_PRIVATE_KEY_5: SCHNORR_SIGNING_KEY~jIlrrINecOhfjG8HGjBbC8d4_64vZSpiJ_9JCZQ0UgKr
+      ESPRESSO_DEMO_NODE_X25519_PRIVATE_KEY_5: X25519_SK~q_pcuDpesVQ61nzEzREzRY-s0JWfe0Kb_f-wmkXAJObB
+      ESPRESSO_DEMO_NODE_CLIQUENET_ADVERTISE_ADDRESS_5: espresso-node-5:11005

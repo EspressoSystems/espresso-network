@@ -2,20 +2,20 @@ use std::{collections::BTreeMap, marker::PhantomData, sync::Arc, time::Duration}
 
 use async_trait::async_trait;
 use committable::Commitment;
-use hotshot::{traits::BlockPayload, types::SignatureKey};
 use hotshot_example_types::storage_types::TestStorage;
 use hotshot_types::{
     data::{
-        DaProposal2, EpochNumber, Leaf2, QuorumProposal2, QuorumProposalWrapper, VidCommitment,
-        VidDisperseShare, VidDisperseShare2, ViewChangeEvidence2, ViewNumber,
+        DaProposal2, EpochNumber, Leaf2, QuorumProposalWrapper, VidCommitment, VidDisperseShare,
+        VidDisperseShare2, ViewNumber,
     },
     event::HotShotAction,
     message::Proposal as SignedProposal,
-    simple_certificate::LightClientStateUpdateCertificateV2,
+    simple_certificate::{LightClientStateUpdateCertificateV2, UpgradeCertificate},
     traits::{
-        EncodeBytes,
+        BlockPayload, EncodeBytes,
         metrics::{Histogram, Metrics},
         node_implementation::NodeType,
+        signature_key::SignatureKey,
         storage::Storage as StorageTrait,
     },
     utils::EpochTransitionIndicator,
@@ -30,7 +30,7 @@ use tracing::{error, info, warn};
 use crate::{
     coordinator::metrics::{Measurement, finish_measurement},
     helpers::proposal_commitment,
-    message::{Certificate1, Certificate2, Proposal},
+    message::{Certificate1, Proposal},
 };
 
 const RETRY_DELAY: Duration = Duration::from_millis(300);
@@ -38,8 +38,6 @@ const RETRY_DELAY: Duration = Duration::from_millis(300);
 /// New protocol storage extension for data that is not part of the legacy HotShot storage trait.
 #[async_trait]
 pub trait NewProtocolStorage<T: NodeType>: StorageTrait<T> {
-    async fn append_cert2(&self, view: ViewNumber, cert: Certificate2<T>) -> anyhow::Result<()>;
-
     /// Persist the locked QC, written before each phase-2 vote so the lock
     /// survives a restart instead of regressing to the decided-anchor QC.
     async fn append_high_qc2(&self, high_qc: Certificate1<T>) -> anyhow::Result<()>;
@@ -94,7 +92,6 @@ impl<T: NodeType> StorageOutput<T> {
 pub struct StorageMetrics {
     append_vid: Arc<dyn Histogram>,
     append_da: Arc<dyn Histogram>,
-    append_cert2: Arc<dyn Histogram>,
     append_high_qc: Arc<dyn Histogram>,
     append_state_cert: Arc<dyn Histogram>,
     append_proposal: Arc<dyn Histogram>,
@@ -110,7 +107,6 @@ impl StorageMetrics {
         Self {
             append_vid: histogram("append_vid"),
             append_da: histogram("append_da"),
-            append_cert2: histogram("append_cert2"),
             append_high_qc: histogram("append_high_qc"),
             append_state_cert: histogram("append_state_cert"),
             append_proposal: histogram("append_proposal"),
@@ -222,29 +218,6 @@ impl<T: NodeType, S: NewProtocolStorage<T>> Storage<T, S> {
         self.handles.entry(view_number).or_default().push(handle);
     }
 
-    pub fn append_cert2(&mut self, view: ViewNumber, cert2: Certificate2<T>) {
-        let storage = self.storage.clone();
-        let timer = self
-            .metrics
-            .as_ref()
-            .map(|m| Measurement::start(m.append_cert2.clone()));
-        let handle = self.tasks.spawn(async move {
-            loop {
-                match storage.append_cert2(view, cert2.clone()).await {
-                    Ok(()) => {
-                        finish_measurement(timer);
-                        return None;
-                    },
-                    Err(err) => {
-                        warn!(%err, %view, "failed to append cert2, retrying");
-                        sleep(RETRY_DELAY).await;
-                    },
-                }
-            }
-        });
-        self.handles.entry(view).or_default().push(handle);
-    }
-
     /// Persist the locked QC; on success emits [`StorageOutput::HighQc`], which
     /// gates the matching phase-2 vote.
     pub fn append_high_qc2(&mut self, high_qc: Certificate1<T>) {
@@ -298,6 +271,34 @@ impl<T: NodeType, S: NewProtocolStorage<T>> Storage<T, S> {
         self.handles.entry(view).or_default().push(handle);
     }
 
+    /// Persist a decided upgrade certificate. Keyed at
+    /// `new_version_first_view` so the decided-view GC cannot abort the write
+    /// before the certificate takes effect.
+    pub fn update_decided_upgrade_certificate(&mut self, cert: UpgradeCertificate<T>) {
+        let view = cert.data.new_version_first_view;
+        let storage = self.storage.clone();
+        let handle = self.tasks.spawn(async move {
+            loop {
+                match storage
+                    .update_decided_upgrade_certificate(Some(cert.clone()))
+                    .await
+                {
+                    Ok(()) => return None,
+                    Err(err) => {
+                        warn!(%err, "failed to persist decided upgrade certificate, retrying");
+                        sleep(RETRY_DELAY).await;
+                    },
+                }
+            }
+        });
+        self.handles.entry(view).or_default().push(handle);
+    }
+
+    /// `proposal` must already be validated: `state_cert`'s presence is not
+    /// re-checked here, only gated at write time by `state_cert_matches_parent`
+    /// (received proposals) and `maybe_propose` (self-proposed ones).
+    /// `seed_proposals` reads persisted rows back on restart without
+    /// re-checking, so that write-time gate is the only thing enforcing this.
     pub fn append_proposal(&mut self, proposal: Proposal<T>) {
         let view = proposal.view_number;
         let commitment = proposal_commitment(&proposal);
@@ -308,21 +309,7 @@ impl<T: NodeType, S: NewProtocolStorage<T>> Storage<T, S> {
             .as_ref()
             .map(|m| Measurement::start(m.append_proposal.clone()));
         let handle = self.tasks.spawn(async move {
-            let data = QuorumProposalWrapper {
-                proposal: QuorumProposal2 {
-                    block_header: proposal.block_header,
-                    view_number: proposal.view_number,
-                    epoch: Some(proposal.epoch),
-                    justify_qc: proposal.justify_qc,
-                    next_epoch_justify_qc: None,
-                    upgrade_certificate: proposal.upgrade_certificate,
-                    view_change_evidence: proposal
-                        .view_change_evidence
-                        .map(ViewChangeEvidence2::Timeout),
-                    next_drb_result: proposal.next_drb_result,
-                    state_cert: proposal.state_cert,
-                },
-            };
+            let data = QuorumProposalWrapper::from(proposal);
             let Ok(signature) = T::SignatureKey::sign(&private_key, &[]) else {
                 error!("failed to sign quorum proposal for storage");
                 return None;
@@ -348,12 +335,7 @@ impl<T: NodeType, S: NewProtocolStorage<T>> Storage<T, S> {
         self.handles.entry(view).or_default().push(handle);
     }
 
-    pub fn record_action(
-        &mut self,
-        view: ViewNumber,
-        epoch: Option<EpochNumber>,
-        kind: ActionKind,
-    ) {
+    pub fn record_action(&mut self, view: ViewNumber, kind: ActionKind) {
         let storage = self.storage.clone();
         let timer = self
             .metrics
@@ -361,7 +343,7 @@ impl<T: NodeType, S: NewProtocolStorage<T>> Storage<T, S> {
             .map(|m| Measurement::start(m.record_action.clone()));
         let handle = self.tasks.spawn(async move {
             loop {
-                match storage.record_action(view, epoch, kind.into()).await {
+                match storage.record_action(view, kind.into()).await {
                     Ok(()) => {
                         finish_measurement(timer);
                         return Some(StorageOutput::Action(view, kind));
@@ -412,13 +394,8 @@ impl<T: NodeType, S: NewProtocolStorage<T>> Storage<T, S> {
 
 #[async_trait]
 impl<T: NodeType> NewProtocolStorage<T> for TestStorage<T> {
-    async fn append_cert2(&self, _view: ViewNumber, _cert: Certificate2<T>) -> anyhow::Result<()> {
-        Ok(())
-    }
-
     async fn append_high_qc2(&self, high_qc: Certificate1<T>) -> anyhow::Result<()> {
-        // `Certificate1<T>` is a `QuorumCertificate2<T>`; reuse the monotonic legacy slot.
-        StorageTrait::update_high_qc2(self, high_qc).await
+        self.store_high_qc2(high_qc).await
     }
 
     async fn load_high_qc2(&self) -> anyhow::Result<Option<Certificate1<T>>> {

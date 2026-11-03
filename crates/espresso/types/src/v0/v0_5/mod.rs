@@ -8,7 +8,7 @@ pub use super::v0_4::{
     AvidMTxProof, BLOCK_MERKLE_TREE_HEIGHT, BlockMerkleCommitment, BlockMerkleTree, BlockSize,
     BuilderSignature, ChainConfig, ChainId, Delta, FEE_MERKLE_TREE_HEIGHT, FeeAccount,
     FeeAccountProof, FeeAmount, FeeInfo, FeeMerkleCommitment, FeeMerkleProof, FeeMerkleTree, Index,
-    Iter, L1BlockInfo, L1ClientOptions, L1Snapshot, MAX_VALIDATORS, NS_ID_BYTE_LEN,
+    Iter, L1BlockInfo, L1ClientOptions, L1SafetyMargin, L1Snapshot, MAX_VALIDATORS, NS_ID_BYTE_LEN,
     NS_OFFSET_BYTE_LEN, NUM_NSS_BYTE_LEN, NUM_TXS_BYTE_LEN, NamespaceId, NsIndex, NsIter,
     NsPayload, NsPayloadBuilder, NsPayloadByteLen, NsPayloadOwned, NsPayloadRange, NsTable,
     NsTableBuilder, NsTableValidationError, NumNss, NumTxs, NumTxsRange, NumTxsUnchecked, Payload,
@@ -24,4 +24,5 @@ pub const VERSION: Version = Version { major: 0, minor: 5 };
 pub type LeaderCounts = [u16; MAX_VALIDATORS];
 
 mod header;
+pub(crate) use header::leader_counts_serde;
 pub use header::*;

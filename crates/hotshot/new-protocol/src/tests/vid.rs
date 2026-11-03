@@ -1,15 +1,19 @@
-use hotshot::types::BLSPubKey;
-use hotshot_example_types::node_types::TestTypes;
+use hotshot_example_types::{block_types::TestTransaction, node_types::TestTypes};
 use hotshot_types::{
-    data::{VidCommitment2, VidDisperseShare2},
+    data::{VidCommitment2, VidDisperseShare2, ViewNumber, ns_table::parse_ns_table},
+    signature_key::BLSPubKey,
     traits::signature_key::SignatureKey,
-    vid::avidm_gf2::AvidmGf2Scheme,
+    vid::avidm_gf2::{AvidmGf2Scheme, init_avidm_gf2_param},
 };
+use vid::VidError;
 
 use super::common::utils::{TestData, TestView};
 use crate::{
     tests::common::utils::vid_fragments,
-    vid::{VidFragmentAccumulator, VidFragmentError, VidReconstructErrorKind, VidReconstructor},
+    vid::{
+        PinnedBy, VidFragmentAccumulator, VidFragmentError, VidReconstructErrorKind,
+        VidReconstructor, matches_commitment, ns_lens_match_metadata,
+    },
 };
 
 /// Threshold for SuccessThreshold with 10 nodes of stake 1: (10*2)/3 + 1 = 7.
@@ -30,6 +34,13 @@ fn recovery_threshold(view: &TestView) -> u64 {
 /// the attacker / poison / squatter / replayer key.
 fn attacker_key() -> BLSPubKey {
     BLSPubKey::generated_from_seed_indexed([0u8; 32], 9).0
+}
+
+/// The disperser a fragment arrived from: the authenticated message sender,
+/// which the accumulator keys its per-view buffers by. Stands in for the view's
+/// honest leader.
+fn disperser_key() -> BLSPubKey {
+    BLSPubKey::generated_from_seed_indexed([0u8; 32], 1).0
 }
 
 /// A share claiming the view's commitment and common but carrying a different
@@ -105,6 +116,41 @@ fn non_codeword_shares(view: &TestView) -> (VidCommitment2, Vec<VidDisperseShare
     (payload_commitment, shares)
 }
 
+/// A real dispersal of another payload over the view's committee: the shares
+/// the voters broadcast when the leader sent the quorum a proposal other than
+/// this node's. Addressed to the same voter keys `honest_share` uses.
+fn rival_shares(view: &TestView) -> (VidCommitment2, Vec<VidDisperseShare2<TestTypes>>) {
+    let template = &view.vid_shares[0];
+    let param = template.common.param.clone();
+    let weights: Vec<u32> = view
+        .vid_shares
+        .iter()
+        .map(|s| s.share.weight() as u32)
+        .collect();
+    let payload = TestTransaction::encode(&[TestTransaction::new(vec![0xc4u8; 32])]);
+    let (payload_commitment, common, shares) = AvidmGf2Scheme::ns_disperse(
+        &param,
+        &weights,
+        &payload,
+        std::iter::once(0..payload.len()),
+    )
+    .expect("rival dispersal");
+    let shares = shares
+        .into_iter()
+        .enumerate()
+        .map(|(i, share)| VidDisperseShare2::<TestTypes> {
+            view_number: template.view_number,
+            epoch: template.epoch,
+            target_epoch: template.target_epoch,
+            payload_commitment,
+            share,
+            recipient_key: BLSPubKey::generated_from_seed_indexed([0u8; 32], i as u64).0,
+            common: common.clone(),
+        })
+        .collect();
+    (payload_commitment, shares)
+}
+
 /// Feed a share as if it arrived from the voter it is addressed to (the
 /// honest case: the authenticated sender equals the share's `recipient_key`).
 fn feed(reconstructor: &mut VidReconstructor<TestTypes>, share: VidDisperseShare2<TestTypes>) {
@@ -113,7 +159,7 @@ fn feed(reconstructor: &mut VidReconstructor<TestTypes>, share: VidDisperseShare
 }
 
 /// Pin the reconstructor to the view's proposal, as the coordinator does
-/// when the validated proposal arrives.
+/// when the validated proposal pairs with this node's share.
 fn handle_proposal(reconstructor: &mut VidReconstructor<TestTypes>, view: &TestView) {
     reconstructor.handle_proposal(
         view.view_number,
@@ -123,6 +169,24 @@ fn handle_proposal(reconstructor: &mut VidReconstructor<TestTypes>, view: &TestV
         // The committee-fixed param the coordinator derives; equals the honest
         // shares' `common.param`.
         Some(view.vid_shares[0].common.param.clone()),
+        PinnedBy::Leader,
+    );
+}
+
+/// Pin the reconstructor to another proposal for the view on a certificate's
+/// word, as the coordinator does when consensus adopts a certified proposal.
+fn pin_certified(
+    reconstructor: &mut VidReconstructor<TestTypes>,
+    view: &TestView,
+    payload_commitment: VidCommitment2,
+) {
+    reconstructor.handle_proposal(
+        view.view_number,
+        payload_commitment,
+        view.proposal.data.block_header.metadata,
+        view.proposal.data.epoch,
+        Some(view.vid_shares[0].common.param.clone()),
+        PinnedBy::Certificate,
     );
 }
 
@@ -169,16 +233,28 @@ async fn assert_no_duplicate_success(
 /// Drive the reconstructor to a single successful reconstruction and assert it
 /// matches `view`'s commitment.
 async fn expect_reconstruction(reconstructor: &mut VidReconstructor<TestTypes>, view: &TestView) {
+    expect_reconstruction_of(
+        reconstructor,
+        view.view_number,
+        view.vid_shares[0].payload_commitment,
+    )
+    .await;
+}
+
+/// Drive the reconstructor to a single successful reconstruction and assert it
+/// is `payload_commitment`'s payload for `view`.
+async fn expect_reconstruction_of(
+    reconstructor: &mut VidReconstructor<TestTypes>,
+    view: ViewNumber,
+    payload_commitment: VidCommitment2,
+) {
     let out = tokio::time::timeout(std::time::Duration::from_secs(5), reconstructor.next())
         .await
         .expect("reconstruction should complete in time")
         .expect("should produce a result")
         .expect("reconstruction should succeed");
-    assert_eq!(out.view, view.view_number);
-    assert_eq!(
-        out.payload_commitment,
-        view.vid_shares[0].payload_commitment
-    );
+    assert_eq!(out.view, view);
+    assert_eq!(out.payload_commitment, payload_commitment);
 }
 
 /// Feeding shares beyond the threshold produces exactly one reconstruction
@@ -269,6 +345,95 @@ async fn test_shares_before_proposal_reconstruct_on_proposal() {
     // The proposal admits the pending shares; no further input is needed.
     handle_proposal(&mut reconstructor, view);
     expect_reconstruction(&mut reconstructor, view).await;
+}
+
+/// An equivocating leader paired this node with a proposal the quorum did not
+/// vote for. The voters' shares are for the certified one, so under the
+/// leader's pin they are held rather than dropped, and the certificate's pin
+/// replaces the leader's and admits them.
+#[tokio::test]
+async fn test_certified_proposal_replaces_the_leaders_pin() {
+    let test_data = TestData::new(1).await;
+    let view = &test_data.views[0];
+    let (rival_commitment, rival_shares) = rival_shares(view);
+    let mut reconstructor = VidReconstructor::<TestTypes>::new();
+
+    handle_proposal(&mut reconstructor, view);
+    feed(&mut reconstructor, honest_share(view, 0));
+    for share in &rival_shares[1..=THRESHOLD as usize] {
+        feed(&mut reconstructor, share.clone());
+    }
+    assert_no_reconstruction(
+        &mut reconstructor,
+        "the voters' shares under the leader's pin",
+    )
+    .await;
+
+    pin_certified(&mut reconstructor, view, rival_commitment);
+    expect_reconstruction_of(&mut reconstructor, view.view_number, rival_commitment).await;
+}
+
+/// The voters' shares may arrive before either proposal. The leader's pin
+/// admits only the shares for its commitment and keeps the rest held for the
+/// certificate's.
+#[tokio::test]
+async fn test_shares_held_before_any_pin_survive_the_leaders_pin() {
+    let test_data = TestData::new(1).await;
+    let view = &test_data.views[0];
+    let (rival_commitment, rival_shares) = rival_shares(view);
+    let mut reconstructor = VidReconstructor::<TestTypes>::new();
+
+    for share in &rival_shares[1..=THRESHOLD as usize] {
+        feed(&mut reconstructor, share.clone());
+    }
+    handle_proposal(&mut reconstructor, view);
+    feed(&mut reconstructor, honest_share(view, 0));
+    assert_no_reconstruction(&mut reconstructor, "the held shares under the leader's pin").await;
+
+    pin_certified(&mut reconstructor, view, rival_commitment);
+    expect_reconstruction_of(&mut reconstructor, view.view_number, rival_commitment).await;
+}
+
+/// A certificate's pin is final: the leader's proposal arriving after it,
+/// paired with this node's share, neither re-pins the view nor gets that share
+/// admitted.
+#[tokio::test]
+async fn test_leaders_proposal_does_not_replace_a_certified_pin() {
+    let test_data = TestData::new(1).await;
+    let view = &test_data.views[0];
+    let (rival_commitment, rival_shares) = rival_shares(view);
+    let mut reconstructor = VidReconstructor::<TestTypes>::new();
+
+    pin_certified(&mut reconstructor, view, rival_commitment);
+    handle_proposal(&mut reconstructor, view);
+    feed(&mut reconstructor, honest_share(view, 0));
+    for share in &rival_shares[1..=THRESHOLD as usize] {
+        feed(&mut reconstructor, share.clone());
+    }
+    expect_reconstruction_of(&mut reconstructor, view.view_number, rival_commitment).await;
+}
+
+/// A reconstruction of the leader's payload still running when the
+/// certificate re-pins the view neither retires the view nor stands in for
+/// the certified payload: only the certified one is reported.
+#[tokio::test]
+async fn test_superseded_reconstruction_is_dropped() {
+    let test_data = TestData::new(1).await;
+    let view = &test_data.views[0];
+    let (rival_commitment, rival_shares) = rival_shares(view);
+    let mut reconstructor = VidReconstructor::<TestTypes>::new();
+
+    handle_proposal(&mut reconstructor, view);
+    for i in 0..THRESHOLD {
+        feed(&mut reconstructor, honest_share(view, i));
+    }
+    for share in &rival_shares[1..=THRESHOLD as usize] {
+        feed(&mut reconstructor, share.clone());
+    }
+    pin_certified(&mut reconstructor, view, rival_commitment);
+
+    expect_reconstruction_of(&mut reconstructor, view.view_number, rival_commitment).await;
+    assert_no_duplicate_success(&mut reconstructor, "after the certified payload").await;
 }
 
 /// Shares whose common is not hash-bound to the proposal's commitment are
@@ -387,6 +552,7 @@ async fn test_non_codeword_payload_is_unrecoverable() {
         view.proposal.data.block_header.metadata,
         view.proposal.data.epoch,
         Some(shares[0].common.param.clone()),
+        PinnedBy::Leader,
     );
 
     // Feed just enough verifying shares to cover the recovery threshold.
@@ -560,6 +726,31 @@ async fn test_poisoned_common_param_does_not_block_reconstruction() {
     expect_reconstruction(&mut reconstructor, view).await;
 }
 
+/// A Byzantine voter forwards its real share with `ns_lens` that disagree with
+/// the proposal's namespace table. The common still passes `is_consistent`,
+/// since the commitment covers `ns_commits` only, so admitted first it would
+/// pin a common every honest share differs from. The accumulator checks the
+/// lengths against the table before pinning and reconstructs from the honest
+/// shares.
+#[tokio::test]
+async fn test_mismatched_ns_lens_common_does_not_block_reconstruction() {
+    let test_data = TestData::new(1).await;
+    let view = &test_data.views[0];
+    let mut reconstructor = VidReconstructor::<TestTypes>::new();
+
+    let mut poison = honest_share(view, 9);
+    let len = poison.common.payload_byte_len();
+    poison.common.ns_lens = vec![0, len];
+
+    handle_proposal(&mut reconstructor, view);
+    feed(&mut reconstructor, poison);
+    for i in 0..9u64 {
+        feed(&mut reconstructor, honest_share(view, i));
+    }
+
+    expect_reconstruction(&mut reconstructor, view).await;
+}
+
 /// A squatter occupies an honest voter's shard range with garbage under its own
 /// key (admitted on the crypto-free fast path). When the genuine owner's share
 /// arrives, the collision triggers verification: the garbage is evicted and the
@@ -614,7 +805,9 @@ async fn fragment_accumulator_reassembles_share() {
     let mut accumulator = VidFragmentAccumulator::<TestTypes>::new();
     let mut reassembled = None;
     for (i, fragment) in fragments.into_iter().enumerate() {
-        let out = accumulator.accept(fragment).expect("fragment accepted");
+        let out = accumulator
+            .accept(&disperser_key(), fragment)
+            .expect("fragment accepted");
         if i == last {
             reassembled = out;
         } else {
@@ -644,7 +837,7 @@ async fn fragment_accumulator_rejects_malformed_fragments() {
     out_of_range.num_namespaces = 2;
     out_of_range.namespaces[0].ns_index = 2;
     assert!(matches!(
-        accumulator.accept(out_of_range),
+        accumulator.accept(&disperser_key(), out_of_range),
         Err(VidFragmentError::IndexOutOfRange {
             index: 2,
             num_namespaces: 2
@@ -657,14 +850,14 @@ async fn fragment_accumulator_rejects_malformed_fragments() {
     first.namespaces[0].ns_index = 0;
     assert!(
         accumulator
-            .accept(first.clone())
+            .accept(&disperser_key(), first.clone())
             .expect("accepted")
             .is_none()
     );
 
     // A second fragment for the same index is a duplicate.
     assert!(matches!(
-        accumulator.accept(first),
+        accumulator.accept(&disperser_key(), first),
         Err(VidFragmentError::DuplicateIndex(0))
     ));
 
@@ -674,7 +867,7 @@ async fn fragment_accumulator_rejects_malformed_fragments() {
     wrong_commitment.namespaces[0].ns_index = 1;
     wrong_commitment.payload_commitment = VidCommitment2::default();
     assert!(matches!(
-        accumulator.accept(wrong_commitment),
+        accumulator.accept(&disperser_key(), wrong_commitment),
         Err(VidFragmentError::Inconsistent)
     ));
 }
@@ -728,7 +921,9 @@ async fn fragment_accumulator_reassembles_multi_piece_fragments() {
         .collect();
     let mut accumulator = VidFragmentAccumulator::<TestTypes>::new();
     assert_eq!(
-        accumulator.accept(whole).expect("accepted"),
+        accumulator
+            .accept(&disperser_key(), whole)
+            .expect("accepted"),
         Some(original.clone())
     );
 
@@ -744,8 +939,18 @@ async fn fragment_accumulator_reassembles_multi_piece_fragments() {
     second.namespaces = pieces[2..].to_vec();
 
     let mut accumulator = VidFragmentAccumulator::<TestTypes>::new();
-    assert!(accumulator.accept(second).expect("accepted").is_none());
-    assert_eq!(accumulator.accept(first).expect("accepted"), Some(original));
+    assert!(
+        accumulator
+            .accept(&disperser_key(), second)
+            .expect("accepted")
+            .is_none()
+    );
+    assert_eq!(
+        accumulator
+            .accept(&disperser_key(), first)
+            .expect("accepted"),
+        Some(original)
+    );
 }
 
 /// Two pieces for the same namespace index within a single fragment are
@@ -765,7 +970,252 @@ async fn fragment_accumulator_rejects_intra_fragment_duplicate() {
 
     let mut accumulator = VidFragmentAccumulator::<TestTypes>::new();
     assert!(matches!(
-        accumulator.accept(fragment),
+        accumulator.accept(&disperser_key(), fragment),
         Err(VidFragmentError::DuplicateIndex(0))
     ));
+}
+
+/// A fragment's `epoch` and `target_epoch` are both chosen by its sender and
+/// covered by no signature, yet they select committees on different paths: the
+/// leader lookup and share verification for `epoch`, the erasure parameters the
+/// reconstructor holds every peer's share to for `target_epoch`. An honest
+/// disperser sends them equal, so a fragment that lets them diverge is
+/// malformed — as is one that names no epoch at all.
+#[tokio::test]
+async fn fragment_accumulator_rejects_diverging_epochs() {
+    let test_data = TestData::new(1).await;
+    let view = &test_data.views[0];
+    let template = vid_fragments(&honest_share(view, 0))
+        .next()
+        .expect("at least one piece");
+
+    let mut accumulator = VidFragmentAccumulator::<TestTypes>::new();
+
+    let mut diverging = template.clone();
+    diverging.target_epoch = diverging.epoch.map(|e| e + 1);
+    assert!(matches!(
+        accumulator.accept(&disperser_key(), diverging),
+        Err(VidFragmentError::TargetEpochMismatch { .. })
+    ));
+
+    let mut no_epoch = template;
+    no_epoch.epoch = None;
+    no_epoch.target_epoch = None;
+    assert!(matches!(
+        accumulator.accept(&disperser_key(), no_epoch),
+        Err(VidFragmentError::MissingEpoch)
+    ));
+}
+
+/// A fragment stream is buffered per disperser, so one sender cannot lock a
+/// view. Here an attacker completes the view first with a one-namespace
+/// fragment carrying the real commitment — under a single per-view buffer this
+/// would pin the metadata and mark the view done, dropping everything the
+/// honest leader sent afterwards. The honest share must still reassemble.
+#[tokio::test]
+async fn fragment_accumulator_isolates_dispersers() {
+    let test_data = TestData::new(1).await;
+    let view = &test_data.views[0];
+    let original = multi_namespace_share(view, 0, 4);
+
+    // The attacker replays the view's commitment but claims a single namespace,
+    // so its "share" completes on the first fragment.
+    let mut squat = vid_fragments(&original).next().expect("at least one piece");
+    squat.num_namespaces = 1;
+    let mut accumulator = VidFragmentAccumulator::<TestTypes>::new();
+    assert!(
+        accumulator
+            .accept(&attacker_key(), squat)
+            .expect("accepted")
+            .is_some(),
+        "the squatting stream should complete on its own buffer",
+    );
+
+    // The honest leader's four fragments still reassemble the real share.
+    let fragments = vid_fragments(&original).collect::<Vec<_>>();
+    let last = fragments.len() - 1;
+    let mut reassembled = None;
+    for (i, fragment) in fragments.into_iter().enumerate() {
+        let out = accumulator
+            .accept(&disperser_key(), fragment)
+            .expect("fragment accepted");
+        if i == last {
+            reassembled = out;
+        } else {
+            assert!(out.is_none(), "share completed before its last fragment");
+        }
+    }
+    assert_eq!(reassembled, Some(original));
+}
+
+/// The same payload dispersed under two epochs in one view yields two shares:
+/// neither stream may pin, complete, or retire the other.
+#[tokio::test]
+async fn fragment_accumulator_keeps_epochs_apart() {
+    let test_data = TestData::new(1).await;
+    let view = &test_data.views[0];
+    let share = multi_namespace_share(view, 0, 2);
+    let mut next_epoch_share = share.clone();
+    next_epoch_share.epoch = share.epoch.map(|e| e + 1);
+    next_epoch_share.target_epoch = next_epoch_share.epoch;
+    let mut fragments = vid_fragments(&share).collect::<Vec<_>>().into_iter();
+    let mut next_epoch_fragments = vid_fragments(&next_epoch_share)
+        .collect::<Vec<_>>()
+        .into_iter();
+
+    let mut accumulator = VidFragmentAccumulator::<TestTypes>::new();
+    let mut feed = |fragment| {
+        accumulator
+            .accept(&disperser_key(), fragment)
+            .expect("accepted")
+    };
+    assert!(feed(next_epoch_fragments.next().unwrap()).is_none());
+    assert!(feed(fragments.next().unwrap()).is_none());
+    assert_eq!(
+        feed(next_epoch_fragments.next().unwrap()),
+        Some(next_epoch_share)
+    );
+    assert_eq!(feed(fragments.next().unwrap()), Some(share));
+}
+
+/// The epoch window is inclusive on both sides and must not overflow on an
+/// epoch chosen by whoever sent the message.
+///
+/// Fragments and votes are both admitted through it.
+#[test]
+fn epoch_window_bounds() {
+    use hotshot_types::data::EpochNumber;
+
+    use crate::coordinator::is_epoch_admissible;
+
+    let current = EpochNumber::new(10);
+    for (epoch, admissible) in [
+        (8, false),
+        (9, true),
+        (10, true),
+        (13, true),
+        (14, false),
+        (u64::MAX, false),
+    ] {
+        assert_eq!(
+            is_epoch_admissible(EpochNumber::new(epoch), current),
+            admissible,
+            "epoch {epoch} against current {current}",
+        );
+    }
+
+    // Genesis: the lower bound saturates rather than wrapping to the top.
+    assert!(is_epoch_admissible(
+        EpochNumber::genesis(),
+        EpochNumber::genesis()
+    ));
+    assert!(!is_epoch_admissible(
+        EpochNumber::new(u64::MAX),
+        EpochNumber::genesis()
+    ));
+}
+
+/// Encode a namespace table whose namespaces end at `offsets`.
+fn ns_table(offsets: &[u32]) -> Vec<u8> {
+    let mut bytes = (offsets.len() as u32).to_le_bytes().to_vec();
+    for (id, offset) in offsets.iter().enumerate() {
+        bytes.extend_from_slice(&(id as u32).to_le_bytes());
+        bytes.extend_from_slice(&offset.to_le_bytes());
+    }
+    bytes
+}
+
+/// The commitment covers neither the namespace table nor `ns_lens`, and for a
+/// one-namespace block a table sized for another payload parses to the honest
+/// table. A leader claiming a shorter block than it dispersed passes every
+/// pairing check and its block decodes to the dispersed bytes; the recommit must refuse
+/// the table rather than accept the fallback, or the block decides with a
+/// header that misdescribes its payload.
+#[test]
+fn test_recommit_refuses_ns_table_sized_for_another_payload() {
+    let param = init_avidm_gf2_param(1000).unwrap();
+    let payload = vec![0xabu8; 20_000];
+    let table = ns_table(&[20_000]);
+    let (commitment, common, shares) = AvidmGf2Scheme::ns_disperse(
+        &param,
+        &[100; 10],
+        &payload,
+        parse_ns_table(payload.len(), &table),
+    )
+    .unwrap();
+    let view = ViewNumber::new(1);
+
+    let short = 20_000 - 10 * 1024;
+    let short_table = ns_table(&[short as u32]);
+    let mut forged = common.clone();
+    forged.ns_lens = vec![short];
+    assert!(AvidmGf2Scheme::is_consistent(&commitment, &forged));
+    assert!(ns_lens_match_metadata(&forged, &short_table));
+    assert!(matches!(
+        AvidmGf2Scheme::recover(&forged, &shares),
+        Err(VidError::InvalidShare)
+    ));
+    let recovered = AvidmGf2Scheme::recover(&common, &shares).unwrap();
+    assert_eq!(recovered, payload);
+    assert!(!matches_commitment(
+        view,
+        &param,
+        &short_table,
+        &recovered,
+        &commitment
+    ));
+
+    assert!(matches_commitment(
+        view,
+        &param,
+        &table,
+        &recovered,
+        &commitment
+    ));
+    // Metadata that is no table reads as one namespace, as it does for the disperser.
+    assert!(matches_commitment(
+        view,
+        &param,
+        &[],
+        &recovered,
+        &commitment
+    ));
+    for claimed in [20_000 - 1, 20_000 + 1] {
+        assert!(
+            !matches_commitment(view, &param, &ns_table(&[claimed]), &recovered, &commitment),
+            "{claimed}"
+        );
+    }
+}
+
+/// `ns_lens` must be what the header's table gives at the total they claim,
+/// and the table must be sized for that total: a one-entry `ns_lens` would
+/// otherwise match the single-namespace fallback at any total.
+#[test]
+fn test_ns_lens_must_match_a_table_sized_for_their_total() {
+    let param = init_avidm_gf2_param(1000).unwrap();
+    let payload = vec![1u8; 100];
+    let table = ns_table(&[30, 100]);
+    let (_, common) =
+        AvidmGf2Scheme::commit(&param, &payload, parse_ns_table(payload.len(), &table)).unwrap();
+    assert_eq!(common.ns_lens, vec![30, 70]);
+    assert!(ns_lens_match_metadata(&common, &table));
+
+    let mut shuffled = common.clone();
+    shuffled.ns_lens = vec![40, 60];
+    assert!(!ns_lens_match_metadata(&shuffled, &table));
+
+    let mut shrunk = common.clone();
+    shrunk.ns_lens = vec![90];
+    assert!(!ns_lens_match_metadata(&shrunk, &table));
+
+    let mut fewer = common.clone();
+    fewer.ns_lens = vec![100];
+    assert!(!ns_lens_match_metadata(&fewer, &table));
+
+    // Metadata that is no table reads as one namespace spanning the total.
+    let (_, single) =
+        AvidmGf2Scheme::commit(&param, &payload, parse_ns_table(payload.len(), &[])).unwrap();
+    assert_eq!(single.ns_lens, vec![100]);
+    assert!(ns_lens_match_metadata(&single, &[]));
 }

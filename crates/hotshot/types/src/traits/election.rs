@@ -283,11 +283,10 @@ pub trait Membership<T: NodeType>: Debug + Send + Sync {
     fn first_epoch(&self) -> Option<EpochNumber>;
 
     /// Get the highest epoch for which a stake table is currently in memory,
-    /// or `None` if no stake tables are loaded. Used at startup to find the
-    /// point from which to walk forward catching up missing epochs.
-    fn highest_known_epoch(&self) -> Option<EpochNumber> {
-        None
-    }
+    /// or `None` if no stake tables are loaded. It is where catchup resumes
+    /// from, so an implementation that leaves it at `None` makes catchup
+    /// rediscover that point one epoch at a time.
+    fn highest_known_epoch(&self) -> Option<EpochNumber>;
 
     /// Gets the validated block header and epoch number of the epoch root
     /// at the given block height.
@@ -313,6 +312,11 @@ pub trait Membership<T: NodeType>: Debug + Send + Sync {
 
     /// Called to notify the Membership when a new DRB result has been calculated.
     fn add_drb_result(&self, e: EpochNumber, d: DrbResult);
+
+    /// Load the committee for `epoch` from local storage.
+    ///
+    /// Returns `true` if a snapshot for `epoch` is available afterwards.
+    fn load_stake_table(&self, epoch: EpochNumber) -> impl Future<Output = bool> + Send;
 
     /// Called to notify the Membership that Epochs are enabled.
     /// Implementations should copy the pre-epoch stake table into epoch and epoch+1

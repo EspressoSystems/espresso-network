@@ -1,0 +1,206 @@
+// Copyright (c) 2022 Espresso Systems (espressosys.com)
+// This file is part of the HotShot Query Service library.
+//
+// This program is free software: you can redistribute it and/or modify it under the terms of the GNU
+// General Public License as published by the Free Software Foundation, either version 3 of the
+// License, or (at your option) any later version.
+// This program is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without
+// even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
+// General Public License for more details.
+// You should have received a copy of the GNU General Public License along with this program. If not,
+// see <https://www.gnu.org/licenses/>.
+
+use hotshot_example_types::{
+    block_types::{TestBlockHeader, TestBlockPayload, TestMetadata, TestTransaction},
+    membership::{static_committee::StaticStakeTable, strict_membership::StrictMembership},
+    state_types::{TestInstanceState, TestValidatedState},
+};
+use hotshot_types::{
+    data::{VidCommitment, VidCommon},
+    signature_key::{BLSPubKey, SchnorrPubKey},
+    traits::node_implementation::NodeType,
+};
+use jf_merkle_tree_compat::{
+    ForgetableMerkleTreeScheme, ForgetableUniversalMerkleTreeScheme,
+    prelude::{MerkleProof, Sha3Digest, Sha3Node},
+    universal_merkle_tree::UniversalMerkleTree,
+};
+use serde::{Deserialize, Serialize};
+use versions::{Upgrade, version};
+
+use crate::{
+    availability::{
+        QueryableHeader, QueryablePayload, TransactionIndex, VerifiableInclusion,
+        VidCommonQueryData,
+    },
+    explorer::traits::{ExplorerHeader, ExplorerTransaction},
+    merklized_state::MerklizedState,
+};
+
+pub type MockHeader = TestBlockHeader;
+pub type MockPayload = TestBlockPayload;
+pub type MockTransaction = TestTransaction;
+
+pub fn mock_transaction(payload: Vec<u8>) -> MockTransaction {
+    TestTransaction::new(payload)
+}
+
+impl QueryableHeader<MockTypes> for MockHeader {
+    type NamespaceId = i64;
+    type NamespaceIndex = i64;
+
+    fn namespace_id(&self, i: &i64) -> Option<i64> {
+        // Test types only support a single namespace.
+        if *i == 0 { Some(0) } else { None }
+    }
+
+    fn namespace_size(&self, i: &i64, payload_size: usize) -> u64 {
+        // Test types only support a single namespace.
+        if *i == 0 { payload_size as u64 } else { 0 }
+    }
+
+    fn ns_table(&self) -> String {
+        self.metadata.to_string()
+    }
+}
+
+impl ExplorerHeader<MockTypes> for MockHeader {
+    type BalanceAmount = i128;
+    type WalletAddress = [u8; 32];
+    type ProposerId = [u8; 32];
+
+    fn proposer_id(&self) -> Self::ProposerId {
+        [0; 32]
+    }
+
+    fn fee_info_account(&self) -> Self::WalletAddress {
+        [0; 32]
+    }
+
+    fn fee_info_balance(&self) -> Self::BalanceAmount {
+        0
+    }
+
+    fn reward_balance(&self) -> Self::BalanceAmount {
+        0
+    }
+
+    fn namespace_ids(&self) -> Vec<i64> {
+        vec![0]
+    }
+}
+
+impl ExplorerTransaction<MockTypes> for MockTransaction {
+    fn namespace_id(&self) -> i64 {
+        0
+    }
+
+    fn payload_size(&self) -> u64 {
+        self.bytes().len() as u64
+    }
+}
+
+/// A naive inclusion proof for `MockPayload` and `MockTransaction`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MockInclusionProof(MockPayload);
+
+impl VerifiableInclusion<MockTypes> for MockInclusionProof {
+    fn verify(
+        &self,
+        _metadata: &TestMetadata,
+        tx: &MockTransaction,
+        _payload_commitment: &VidCommitment,
+        _common: &VidCommon,
+    ) -> bool {
+        self.0.transactions.contains(tx)
+    }
+}
+
+impl QueryablePayload<MockTypes> for MockPayload {
+    type Iter<'a> = <Vec<TransactionIndex<MockTypes>> as IntoIterator>::IntoIter;
+    type InclusionProof = MockInclusionProof;
+
+    fn len(&self, _meta: &Self::Metadata) -> usize {
+        self.transactions.len()
+    }
+
+    fn iter(&self, meta: &Self::Metadata) -> Self::Iter<'_> {
+        (0..<TestBlockPayload as QueryablePayload<MockTypes>>::len(self, meta))
+            .map(|i| TransactionIndex {
+                ns_index: 0,
+                position: i as u32,
+            })
+            .collect::<Vec<_>>()
+            .into_iter()
+    }
+
+    fn transaction(
+        &self,
+        _meta: &Self::Metadata,
+        index: &TransactionIndex<MockTypes>,
+    ) -> Option<Self::Transaction> {
+        self.transactions.get(index.position as usize).cloned()
+    }
+
+    fn transaction_proof(
+        &self,
+        _meta: &Self::Metadata,
+        _vid: &VidCommonQueryData<MockTypes>,
+        _index: &TransactionIndex<MockTypes>,
+    ) -> Option<Self::InclusionProof> {
+        Some(MockInclusionProof(self.clone()))
+    }
+}
+
+#[derive(
+    Copy, Clone, Debug, Default, Hash, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize,
+)]
+pub struct MockTypes;
+
+impl NodeType for MockTypes {
+    type BlockHeader = MockHeader;
+    type BlockPayload = MockPayload;
+    type SignatureKey = BLSPubKey;
+    type Transaction = MockTransaction;
+    type InstanceState = TestInstanceState;
+    type ValidatedState = TestValidatedState;
+    type Membership = StrictMembership<MockTypes, StaticStakeTable<BLSPubKey, SchnorrPubKey>>;
+    type BuilderSignatureKey = BLSPubKey;
+    type StateSignatureKey = SchnorrPubKey;
+}
+
+pub const MOCK_UPGRADE: Upgrade = Upgrade::new(version(0, 1), version(0, 2));
+
+pub type MockMerkleTree = UniversalMerkleTree<usize, Sha3Digest, usize, 8, Sha3Node>;
+
+impl MerklizedState<MockTypes, 8> for MockMerkleTree {
+    type Key = usize;
+    type Entry = usize;
+    type T = Sha3Node;
+    type Commit = Self::Commitment;
+    type Digest = Sha3Digest;
+
+    fn state_type() -> &'static str {
+        "test_tree"
+    }
+
+    fn header_state_commitment_field() -> &'static str {
+        "test_merkle_tree_root"
+    }
+
+    fn tree_height() -> usize {
+        12
+    }
+
+    fn insert_path(
+        &mut self,
+        key: Self::Key,
+        proof: &MerkleProof<Self::Entry, Self::Key, Self::T, 8>,
+    ) -> anyhow::Result<()> {
+        match proof.elem() {
+            Some(elem) => self.remember(key, elem, proof)?,
+            None => self.non_membership_remember(key, proof)?,
+        }
+        Ok(())
+    }
+}

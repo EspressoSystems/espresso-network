@@ -1,0 +1,263 @@
+name: Claude job
+
+# One start/run/apply triple for every Claude job; claude-review.yml and claude.yml call it.
+# start and apply hold the write token and never run Claude. run holds ANTHROPIC_API_KEY and
+# a read token and only records actions. All three run .github/claude from the same commit,
+# so the record run writes is the one apply reads.
+on:
+  workflow_call:
+    inputs:
+      job:
+        description: review, mention or code-review
+        type: string
+        required: true
+      ref:
+        description: Commit to run .github/claude from. Empty means the default branch head.
+        type: string
+        default: ""
+    secrets:
+      ANTHROPIC_API_KEY:
+        required: true
+
+env:
+  CLAUDE_GH: uv run --locked --project .github/claude .github/claude/claude_gh.py
+
+jobs:
+  start:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      pull-requests: write
+      issues: write
+    outputs:
+      comment-id: ${{ steps.start.outputs.comment-id }}
+      ref: ${{ steps.ref.outputs.ref }}
+    steps:
+      - name: Resolve ref
+        id: ref
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REF: ${{ inputs.ref }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$REF" ]]; then
+            REF=$(gh api "repos/$GITHUB_REPOSITORY/branches/$DEFAULT_BRANCH" --jq .commit.sha)
+          fi
+          echo "ref=$REF" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 1
+          ref: ${{ steps.ref.outputs.ref }}
+          sparse-checkout: .github/claude
+          persist-credentials: false
+
+      - uses: astral-sh/setup-uv@v10.3.2
+        with:
+          cache-dependency-glob: .github/claude/uv.lock
+
+      - name: Post status comment
+        id: start
+        env:
+          GH_TOKEN: ${{ github.token }}
+          JOB: ${{ inputs.job }}
+        run: |
+          set -euo pipefail
+          id=$($CLAUDE_GH start "$JOB")
+          echo "comment-id=$id" >> "$GITHUB_OUTPUT"
+
+  run:
+    needs: start
+    # Only run is cancelled: apply (if: always()) still marks a cancelled run's status comment.
+    # Other jobs get one group per run: GitHub cancels a group's pending job when another queues.
+    concurrency:
+      group: claude-${{ inputs.job }}-${{ inputs.job == 'review' && (github.event.pull_request.number || github.event.issue.number) || github.run_id }}
+      cancel-in-progress: ${{ inputs.job == 'review' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      pull-requests: read
+      issues: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 1
+          ref: ${{ needs.start.outputs.ref }}
+          persist-credentials: false
+
+      # One head and base for the checkout, the diff and the record. Comment-triggered review and
+      # code-review have no pull_request payload.
+      - name: Resolve PR shas
+        if: inputs.job == 'code-review' || (inputs.job == 'review' && github.event_name == 'issue_comment')
+        id: pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.issue.number }}
+        run: |
+          set -euo pipefail
+          pr=$(gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" \
+            --json headRefOid,baseRefOid,headRefName -q '"\(.headRefOid) \(.baseRefOid) \(.headRefName)"')
+          read -r head base ref <<< "$pr"
+          echo "head-sha=$head" >> "$GITHUB_OUTPUT"
+          echo "base-sha=$base" >> "$GITHUB_OUTPUT"
+          echo "head-ref=$ref" >> "$GITHUB_OUTPUT"
+
+      # Claude's cwd for review: the PR head. The diff and inline lines are against it.
+      - uses: actions/checkout@v7
+        if: inputs.job == 'review'
+        with:
+          fetch-depth: 1
+          ref: ${{ steps.pr.outputs.head-sha || github.event.pull_request.head.sha }}
+          path: pr
+          persist-credentials: false
+
+      # Claude's cwd for code-review: the PR head, possibly from a fork.
+      - uses: actions/checkout@v7
+        if: inputs.job == 'code-review'
+        with:
+          fetch-depth: 1
+          ref: ${{ steps.pr.outputs.head-sha }}
+          path: pr
+          persist-credentials: false
+
+      # No path under pr/ may point outside the checkout; a committed tmp/ must not steer the writes below.
+      - name: Drop symlinks and committed tmp
+        if: inputs.job != 'mention'
+        run: find pr -type l -delete && rm -rf pr/tmp
+
+      - name: Fetch team review comments
+        if: inputs.job == 'review'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p pr/tmp
+          scripts/fetch-pr-team-comments \
+            "${{ github.repository_owner }}" \
+            "${{ github.event.repository.name }}" \
+            "${{ github.event.pull_request.number || github.event.issue.number }}" \
+            > pr/tmp/pr-review-comments.json
+
+      - name: Prepare backport context
+        if: inputs.job == 'review'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_REF: ${{ steps.pr.outputs.head-ref || github.head_ref }}
+          OWNER: ${{ github.repository_owner }}
+          REPO: ${{ github.event.repository.name }}
+          PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
+        run: |
+          set -euo pipefail
+          # Backport PRs use the branch name backport-<original>-to-<target>,
+          # created by both scripts/backport-dispatch and korthout/backport-action.
+          if [[ ! "$HEAD_REF" =~ ^backport-([0-9]+)-to- ]]; then
+            echo "not a backport branch ($HEAD_REF); skipping"
+            exit 0
+          fi
+          orig="${BASH_REMATCH[1]}"
+          echo "$orig" > pr/tmp/is-backport
+          scripts/fetch-pr-team-comments "$OWNER" "$REPO" "$orig" \
+            > pr/tmp/original-pr-comments.json
+          gh pr diff "$orig" > pr/tmp/original.diff
+          gh pr diff "$PR_NUMBER" > pr/tmp/backport.diff
+
+      - name: Parse arguments
+        if: inputs.job == 'code-review'
+        id: args
+        env:
+          BODY: ${{ github.event.comment.body }}
+        run: |
+          set -euo pipefail
+          effort=high
+          model=opus
+          read -r -a words <<< "$(head -n1 <<< "$BODY" | tr -d '\r')"
+          if [[ "${words[0]}" != /code-review ]]; then
+            echo "::error::expected /code-review, got ${words[0]}"
+            exit 1
+          fi
+          for w in "${words[@]:1}"; do
+            if [[ "$w" =~ ^(low|medium|high|xhigh|max)$ ]]; then
+              effort=$w
+            elif [[ "$w" =~ ^(opus|sonnet|haiku|fable|claude-[a-z0-9.-]+)$ ]]; then
+              model=$w
+            else
+              echo "::error::unknown /code-review argument: $w"
+              exit 1
+            fi
+          done
+          echo "effort=$effort" >> "$GITHUB_OUTPUT"
+          echo "model=$model" >> "$GITHUB_OUTPUT"
+
+      - uses: astral-sh/setup-uv@v10.3.2
+        with:
+          cache-dependency-glob: .github/claude/uv.lock
+
+      - name: Claude
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GH_TOKEN: ${{ github.token }}
+          JOB: ${{ inputs.job }}
+          EFFORT: ${{ steps.args.outputs.effort }}
+          MODEL: ${{ steps.args.outputs.model }}
+          HEAD_SHA: ${{ steps.pr.outputs.head-sha }}
+          BASE_SHA: ${{ steps.pr.outputs.base-sha }}
+        run: |
+          set -euo pipefail
+          case "$JOB" in
+            review)
+              shas=()
+              if [[ -n "$HEAD_SHA" ]]; then shas=(--head-sha "$HEAD_SHA" --base-sha "$BASE_SHA"); fi
+              $CLAUDE_GH run review --workdir pr "${shas[@]}" ;;
+            mention) $CLAUDE_GH run mention ;;
+            code-review)
+              $CLAUDE_GH run code-review --model "$MODEL" --effort "$EFFORT" --workdir pr \
+                --head-sha "$HEAD_SHA" --base-sha "$BASE_SHA" ;;
+          esac
+
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          overwrite: true
+          name: claude-actions-${{ inputs.job }}
+          path: tmp/actions.json
+          retention-days: 7
+          if-no-files-found: ignore
+
+  apply:
+    needs: [start, run]
+    if: always() && needs.start.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write # review: resolveReviewThread is refused with contents: read
+      pull-requests: write
+      issues: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 1
+          ref: ${{ needs.start.outputs.ref }}
+          sparse-checkout: .github/claude
+          persist-credentials: false
+
+      - uses: astral-sh/setup-uv@v10.3.2
+        with:
+          cache-dependency-glob: .github/claude/uv.lock
+
+      - uses: actions/download-artifact@v8
+        continue-on-error: true # missing when run failed before writing the record
+        with:
+          name: claude-actions-${{ inputs.job }}
+          path: tmp/actions
+
+      - name: Apply actions
+        env:
+          GH_TOKEN: ${{ github.token }}
+          JOB: ${{ inputs.job }}
+          STATUS_ID: ${{ needs.start.outputs.comment-id }}
+          RUN_RESULT: ${{ needs.run.result }}
+        run: |
+          set -euo pipefail
+          $CLAUDE_GH apply "$JOB" --status-id "$STATUS_ID" --run-result "$RUN_RESULT" \
+            --record tmp/actions/actions.json

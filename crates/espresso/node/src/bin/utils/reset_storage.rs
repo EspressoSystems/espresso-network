@@ -32,7 +32,10 @@ pub async fn run(opt: Commands) -> anyhow::Result<()> {
             },
             SequencerStorage::Sql(opt) => {
                 tracing::warn!("resetting sequencer SQL storage {opt:?}");
-                reset_storage(*opt).await
+                match opt.into_backend() {
+                    persistence::sql::SqlBackendOptions::Sqlite(opt) => reset_storage(opt).await,
+                    persistence::sql::SqlBackendOptions::Postgres(opt) => reset_storage(opt).await,
+                }
             },
         },
     }

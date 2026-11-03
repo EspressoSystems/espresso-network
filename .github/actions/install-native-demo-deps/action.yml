@@ -1,0 +1,8 @@
+name: Install native demo deps
+description: Install anvil (foundry) and the postgres server for the native demo
+
+runs:
+  using: composite
+  steps:
+    - uses: ./.github/actions/install-foundry
+    - uses: ./.github/actions/install-postgres

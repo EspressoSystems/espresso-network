@@ -1,30 +1,23 @@
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::{BTreeMap, BTreeSet, HashMap},
     sync::Arc,
 };
 
 use committable::{Commitment, Committable};
-use futures::StreamExt;
-use hotshot::{
-    traits::{BlockPayload, ValidatedState},
-    types::{BLSPrivKey, BLSPubKey, SchnorrPubKey},
-};
 use hotshot_contract_adapter::light_client::derive_signed_state_digest;
 use hotshot_example_types::{
     block_types::{TestBlockHeader, TestBlockPayload, TestMetadata},
     membership::{
         TestableMembership, static_committee::StaticStakeTable, strict_membership::StrictMembership,
     },
+    node_stake::{TestNodeStakes, gen_node_lists},
     node_types::{TEST_VERSIONS, TestTypes},
     state_types::{TestInstanceState, TestValidatedState},
     storage_types::TestStorage,
 };
-use hotshot_testing::{
-    helpers::build_cert, node_stake::TestNodeStakes, test_builder::gen_node_lists,
-    view_generator::TestViewGenerator,
-};
 use hotshot_types::{
     PeerConnectInfo,
+    addr::NetAddr,
     data::{
         EpochNumber, Leaf2, VidCommitment, VidCommitment2, VidDisperse, VidDisperse2,
         VidDisperseShare2, ViewNumber, vid_commitment,
@@ -32,15 +25,19 @@ use hotshot_types::{
     },
     epoch_membership::EpochMembershipCoordinator,
     light_client::{StakeTableState, StateKeyPair},
-    message::Proposal as SignedProposal,
-    simple_certificate::{TimeoutCertificate2, UpgradeCertificate},
+    message::{Proposal as SignedProposal, UpgradeLock},
+    signature_key::{BLSPrivKey, BLSPubKey, SchnorrPubKey},
+    simple_certificate::{
+        TimeoutCertificate2, TimeoutCertificate3, TimeoutEvidence, UpgradeCertificate,
+        UpgradeCertificate2,
+    },
     simple_vote::{
-        LightClientStateUpdateVote2, QuorumVote2, TimeoutData2, TimeoutVote2, UpgradeProposalData,
-        UpgradeVote, Vote2Data,
+        LightClientStateUpdateVote2, QuorumVote2, TimeoutData2, TimeoutData3, TimeoutVote2,
+        TimeoutVote3, UpgradeProposalData, UpgradeVote, Vote2Data,
     },
     stake_table::HSStakeTable,
     traits::{
-        EncodeBytes,
+        BlockPayload, EncodeBytes, ValidatedState,
         block_contents::{BlockHeader, BuilderFee},
         election::Membership,
         signature_key::{LCV2StateSignatureKey, LCV3StateSignatureKey, SignatureKey},
@@ -52,17 +49,25 @@ use hotshot_types::{
     vote::HasViewNumber,
 };
 
+use super::{
+    certs::build_cert,
+    view_generator::{GeneratedView, TestViewGenerator},
+};
 use crate::{
+    cert_verifier::ValidCert,
     client::{ClientLeafFetcherNetwork, CoordinatorClient},
     consensus::{Consensus, ConsensusInput, ConsensusOutput},
-    helpers::{proposal_commitment, test_upgrade_lock},
+    helpers::{proposal_commitment, test_timeout_epoch_lock, test_upgrade_lock},
     message::{
         CatchupEvidence, Certificate1, Certificate2, ConsensusMessage, Message, MessageType,
-        Proposal, ProposalMessage, TimeoutVoteMessage, Validated, Vote1, Vote2,
+        Proposal, ProposalMessage, TimeoutVoteMessage, TimeoutVoteMessage3, Validated, Vote1,
+        Vote2,
     },
     outbox::Outbox,
     state::StateResponse,
     storage::StorageOutput,
+    trace,
+    upgrade::expected_upgrade_data,
 };
 
 /// DRB result used by `TestData` for epoch transition proposals.
@@ -76,11 +81,12 @@ pub struct TestView {
     pub leader_private_key: <BLSPubKey as SignatureKey>::PrivateKey,
     pub proposal: SignedProposal<TestTypes, Proposal<TestTypes>>,
     pub leaf: Leaf2<TestTypes>,
+    pub payload: TestBlockPayload,
     pub vid_disperse: VidDisperse2<TestTypes>,
     pub vid_shares: Vec<VidDisperseShare2<TestTypes>>,
     pub cert1: Certificate1<TestTypes>,
     pub cert2: Certificate2<TestTypes>,
-    pub timeout_cert: TimeoutCertificate2<TestTypes>,
+    pub timeout_cert: TimeoutEvidence<TestTypes>,
     pub epoch_height: u64,
     pub stake_table_state: hotshot_types::light_client::StakeTableState,
 }
@@ -147,27 +153,63 @@ impl TestView {
             )),
         }
     }
-    pub fn proposal_input_consensus(&self, recipient_key: &BLSPubKey) -> ConsensusInput<TestTypes> {
-        ConsensusInput::ProposalWithVidShare(
-            self.leader_public_key,
-            self.proposal_message(),
-            self.vid_share_for(recipient_key),
+    /// Build the proposal and VID share inputs a node receives for this view.
+    ///
+    /// Consensus pairs the two internally, so both must be applied
+    /// (cf. [`ConsensusHarness::apply_pair`]).
+    pub fn proposal_input_consensus(
+        &self,
+        recipient_key: &BLSPubKey,
+    ) -> (ConsensusInput<TestTypes>, ConsensusInput<TestTypes>) {
+        (
+            ConsensusInput::Proposal(self.leader_public_key, self.proposal_message()),
+            ConsensusInput::VidShare(self.vid_share_for(recipient_key)),
         )
     }
 
     /// Build an Event for block reconstructed.
     pub fn block_reconstructed_input(&self) -> ConsensusInput<TestTypes> {
-        ConsensusInput::BlockReconstructed(self.view_number, self.vid_commitment())
+        ConsensusInput::BlockReconstructed {
+            view: self.view_number,
+            payload_commitment: self.vid_commitment(),
+            payload: self.payload.clone(),
+        }
     }
 
     /// Build an Event for Certificate1.
     pub fn cert1_input(&self) -> ConsensusInput<TestTypes> {
-        ConsensusInput::Certificate1(self.cert1.clone())
+        ConsensusInput::Certificate1(ValidCert::new(self.cert1.clone(), self.epoch_number))
     }
 
     /// Build an Event for Certificate2.
     pub fn cert2_input(&self) -> ConsensusInput<TestTypes> {
-        ConsensusInput::Certificate2(self.cert2.clone())
+        ConsensusInput::Certificate2(ValidCert::new(self.cert2.clone(), self.epoch_number))
+    }
+
+    /// Build a network Message carrying this view's Certificate1, as a peer
+    /// sends it once the certificate forms.
+    pub fn cert1_message(&self, node_index: u64) -> Message<TestTypes, Validated> {
+        let (pub_key, _) = BLSPubKey::generated_from_seed_indexed([0u8; 32], node_index);
+        Message {
+            sender: pub_key,
+            message_type: MessageType::Consensus(ConsensusMessage::Certificate1(
+                self.cert1.clone(),
+                pub_key,
+            )),
+        }
+    }
+
+    /// Build a network Message carrying this view's Certificate2, as a peer
+    /// relays it when applying the certificate.
+    pub fn cert2_message(&self, node_index: u64) -> Message<TestTypes, Validated> {
+        let (pub_key, _) = BLSPubKey::generated_from_seed_indexed([0u8; 32], node_index);
+        Message {
+            sender: pub_key,
+            message_type: MessageType::Consensus(ConsensusMessage::Certificate2(
+                self.cert2.clone(),
+                pub_key,
+            )),
+        }
     }
 
     /// Build a Vote1 Event from a specific validator, carrying that validator's
@@ -256,10 +298,21 @@ impl TestView {
         node_index: u64,
         evidence: Option<CatchupEvidence<TestTypes>>,
     ) -> Message<TestTypes, Validated> {
+        self.timeout_vote_input_for_epoch(node_index, self.epoch_number, evidence)
+    }
+
+    /// A timeout vote naming `epoch` rather than the view's own, for the
+    /// checks that bound which epochs a vote may name.
+    pub fn timeout_vote_input_for_epoch(
+        &self,
+        node_index: u64,
+        epoch: EpochNumber,
+        evidence: Option<CatchupEvidence<TestTypes>>,
+    ) -> Message<TestTypes, Validated> {
         let (pub_key, priv_key) = BLSPubKey::generated_from_seed_indexed([0u8; 32], node_index);
         let data = TimeoutData2 {
             view: self.view_number,
-            epoch: Some(self.epoch_number),
+            epoch: Some(epoch),
         };
         let vote = hotshot_types::simple_vote::SimpleVote::create_signed_vote(
             data,
@@ -277,10 +330,89 @@ impl TestView {
         }
     }
 
+    /// Build a network Message carrying this view's timeout certificate,
+    /// as a peer rebroadcasts it when applying the certificate.
+    pub fn timeout_cert_message(&self, node_index: u64) -> Message<TestTypes, Validated> {
+        let (pub_key, _) = BLSPubKey::generated_from_seed_indexed([0u8; 32], node_index);
+        let message = match self.timeout_cert.clone() {
+            TimeoutEvidence::V2(tc) => ConsensusMessage::TimeoutCertificate(tc),
+            TimeoutEvidence::V3(tc) => ConsensusMessage::TimeoutCertificate3(tc),
+        };
+        Message {
+            sender: pub_key,
+            message_type: MessageType::Consensus(message),
+        }
+    }
+
+    /// Build an epoch binding timeout vote from a specific validator, for a
+    /// node running under [`test_timeout_epoch_lock`].
+    pub fn timeout_vote3_input(
+        &self,
+        node_index: u64,
+        evidence: Option<CatchupEvidence<TestTypes>>,
+    ) -> Message<TestTypes, Validated> {
+        self.timeout_vote3_input_for_epoch(node_index, self.epoch_number, evidence)
+    }
+
+    /// An epoch binding timeout vote naming `epoch` rather than the view's own.
+    pub fn timeout_vote3_input_for_epoch(
+        &self,
+        node_index: u64,
+        epoch: EpochNumber,
+        evidence: Option<CatchupEvidence<TestTypes>>,
+    ) -> Message<TestTypes, Validated> {
+        let (pub_key, priv_key) = BLSPubKey::generated_from_seed_indexed([0u8; 32], node_index);
+        let data = TimeoutData3 {
+            view: self.view_number,
+            epoch,
+        };
+        let vote = hotshot_types::simple_vote::SimpleVote::create_signed_vote(
+            data,
+            self.view_number,
+            &pub_key,
+            &priv_key,
+            &test_timeout_epoch_lock(),
+        )
+        .expect("Failed to sign TimeoutVote3");
+        Message {
+            sender: pub_key,
+            message_type: MessageType::Consensus(ConsensusMessage::TimeoutVote3(
+                TimeoutVoteMessage3 { vote, evidence },
+            )),
+        }
+    }
+
+    /// An upgrade vote from a specific validator binding `epoch`, for the
+    /// checks that bound which epochs a vote may name.
+    pub fn upgrade_vote_input_for_epoch(
+        &self,
+        node_index: u64,
+        epoch: EpochNumber,
+    ) -> Message<TestTypes, Validated> {
+        let (pub_key, priv_key) = BLSPubKey::generated_from_seed_indexed([0u8; 32], node_index);
+        let upgrade = test_upgrade_lock::<TestTypes>().upgrade();
+        let data = expected_upgrade_data(&upgrade, self.view_number, epoch)
+            .expect("test views are far from overflowing");
+        let vote = hotshot_types::simple_vote::SimpleVote::create_signed_vote(
+            data,
+            self.view_number,
+            &pub_key,
+            &priv_key,
+            &test_upgrade_lock(),
+        )
+        .expect("Failed to sign UpgradeVote2");
+        Message {
+            sender: pub_key,
+            message_type: MessageType::Consensus(ConsensusMessage::UpgradeVote(vote)),
+        }
+    }
+
     /// Build an Event for a timeout certificate.
-    #[allow(dead_code)]
     pub fn timeout_cert_input(&self) -> ConsensusInput<TestTypes> {
-        ConsensusInput::TimeoutCertificate(self.timeout_cert.clone())
+        ConsensusInput::TimeoutCertificate(ValidCert::new(
+            self.timeout_cert.clone(),
+            self.epoch_number,
+        ))
     }
 }
 
@@ -327,8 +459,7 @@ impl TestData {
         // byte-identical across harnesses.
         let upgrade = versions::Upgrade::trivial(versions::NEW_PROTOCOL_VERSION);
 
-        let mut generator =
-            TestViewGenerator::generate(membership.clone(), node_key_map.clone(), upgrade);
+        let mut generator = TestViewGenerator::new(membership.clone(), node_key_map, upgrade);
 
         let upgrade_cert: Option<(ViewNumber, UpgradeCertificate<TestTypes>)> =
             if let Some((target_view, ref data)) = upgrade_at_view {
@@ -355,7 +486,10 @@ impl TestData {
                 None
             };
 
-        let gen_views: Vec<_> = (&mut generator).take(num_views).collect::<Vec<_>>().await;
+        let mut gen_views = Vec::with_capacity(num_views);
+        for _ in 0..num_views {
+            gen_views.push(generator.next_view().await);
+        }
 
         let mut views = Vec::new();
         // When we patch a view's proposal (DRB or justify_qc update) the leaf
@@ -381,7 +515,11 @@ impl TestData {
                 .get(&leader_public_key)
                 .expect("Leader key not found in key map");
 
-            let (vid_disperse, vid_shares) = extract_vid_disperse(gen_view);
+            let (mut vid_disperse, mut vid_shares) = extract_vid_disperse(gen_view);
+            let payload = gen_view
+                .leaf
+                .block_payload()
+                .expect("the generator fills the leaf's payload");
             let block_number = BlockHeader::<TestTypes>::block_number(&proposal.block_header);
 
             // Compute epoch from block number (generator doesn't know about
@@ -389,7 +527,7 @@ impl TestData {
             let epoch = if epoch_height > 0 && block_number > 0 {
                 EpochNumber::new(epoch_from_block_number(block_number, epoch_height))
             } else {
-                gen_view.epoch_number.unwrap_or(EpochNumber::genesis())
+                EpochNumber::genesis()
             };
             // Use genesis membership for signing — same committee in tests.
             let epoch_membership = membership
@@ -417,9 +555,18 @@ impl TestData {
                 proposal.next_drb_result = computed_drbs.get(&next_epoch).copied();
             }
             // Always set epoch (may differ from generator output).
-            let gen_epoch = gen_view.epoch_number.unwrap_or(EpochNumber::genesis());
-            let epoch_patched = epoch != gen_epoch;
+            let epoch_patched = epoch != EpochNumber::genesis();
             proposal.epoch = epoch;
+            // The dispersal carries the proposal's epoch, as `VidDisperser`
+            // gives it: the two must agree for the share to pair with the
+            // proposal. The epoch is not an input to the commitment, so
+            // patching it does not invalidate the shares.
+            vid_disperse.epoch = Some(epoch);
+            vid_disperse.target_epoch = Some(epoch);
+            for share in &mut vid_shares {
+                share.epoch = Some(epoch);
+                share.target_epoch = Some(epoch);
+            }
 
             let needs_new_epoch = is_last_block(block_number.saturating_sub(1), epoch_height);
             if needs_new_epoch {
@@ -428,7 +575,8 @@ impl TestData {
 
             let upgrade_attached = upgrade_cert.as_ref().is_some_and(|(target_view, cert)| {
                 if *target_view == view_number {
-                    proposal.upgrade_certificate = Some(cert.clone());
+                    proposal.upgrade_certificate =
+                        Some(UpgradeCertificate2::restore_epoch(cert.clone(), epoch));
                     true
                 } else {
                     false
@@ -551,6 +699,7 @@ impl TestData {
                 leader_private_key: leader_private_key.clone(),
                 proposal: signed_proposal,
                 leaf,
+                payload,
                 vid_disperse,
                 vid_shares,
                 cert1,
@@ -609,7 +758,7 @@ pub fn mock_membership_with_client(
 
 /// Per-epoch stake table schedule, by node index into the seed-indexed key
 /// space (`BLSPubKey::generated_from_seed_indexed([0u8; 32], i)`).
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct StakeTableSchedule {
     /// Committee for the genesis epochs (1 and 2 at minimum).
     pub initial: Vec<usize>,
@@ -617,6 +766,11 @@ pub struct StakeTableSchedule {
     /// DA tables. `first_epoch` must be >= 3: epochs 1 and 2 are fixed at
     /// genesis by `set_first_epoch`.
     pub changes: Vec<(u64, Vec<usize>)>,
+    /// `(first_epoch, node, addr)` p2p address rotations applied to the
+    /// committees registered via `changes` for epochs >= `first_epoch`.
+    /// An override does not register a committee by itself, so `first_epoch`
+    /// must appear in `changes`.
+    pub addr_overrides: Vec<(u64, usize, NetAddr)>,
 }
 
 /// Like `mock_membership_with_client`, but with a per-epoch stake table
@@ -708,7 +862,25 @@ fn mock_membership_core(
     );
     if let Some((s, _)) = schedule {
         for (first_epoch, committee) in &s.changes {
-            let committee: Vec<_> = committee.iter().map(|&i| members[i].clone()).collect();
+            let committee: Vec<_> = committee
+                .iter()
+                .map(|&i| {
+                    let mut member = members[i].clone();
+                    if let Some((_, _, addr)) = s
+                        .addr_overrides
+                        .iter()
+                        .filter(|(e, n, _)| *n == i && e <= first_epoch)
+                        .max_by_key(|(e, ..)| *e)
+                    {
+                        member
+                            .connect_info
+                            .as_mut()
+                            .expect("scheduled members carry connect info")
+                            .p2p_addr = addr.clone();
+                    }
+                    member
+                })
+                .collect();
             membership.add_quorum_committee(EpochNumber::new(*first_epoch), committee.clone());
             membership.add_da_committee(EpochNumber::new(*first_epoch), committee);
         }
@@ -918,10 +1090,9 @@ fn extract_vid_shares(disperse: &VidDisperse2<TestTypes>) -> Vec<VidDisperseShar
 }
 
 fn extract_vid_disperse(
-    gen_view: &hotshot_testing::view_generator::TestView,
+    gen_view: &GeneratedView,
 ) -> (VidDisperse2<TestTypes>, Vec<VidDisperseShare2<TestTypes>>) {
-    let hotshot_types::data::VidDisperse::V2(vid_disperse) = gen_view.vid_disperse.data.clone()
-    else {
+    let hotshot_types::data::VidDisperse::V2(vid_disperse) = gen_view.vid_disperse.clone() else {
         panic!("Expected V2 VID disperse");
     };
     let vid_shares = extract_vid_shares(&vid_disperse);
@@ -976,6 +1147,29 @@ pub(crate) struct ConsensusHarness {
     pub consensus: Consensus<TestTypes>,
     pub membership_coordinator: EpochMembershipCoordinator<TestTypes>,
     pub collected: Outbox<ConsensusOutput<TestTypes>>,
+    deferred_states: BTreeMap<ViewNumber, ConsensusInput<TestTypes>>,
+    defer_state_for: BTreeSet<ViewNumber>,
+    trace: trace::Recorder,
+}
+
+impl ConsensusHarness {
+    /// Apply one input, recording it and the outputs it drew.
+    fn apply_recorded(
+        &mut self,
+        input: ConsensusInput<TestTypes>,
+        outbox: &mut Outbox<ConsensusOutput<TestTypes>>,
+    ) {
+        self.trace.preamble(
+            self.consensus.public_key(),
+            self.consensus.last_decided_leaf(),
+            self.consensus.cert1_at(ViewNumber::genesis()),
+            *self.consensus.epoch_height,
+        );
+        record_leader(&mut self.trace, &self.consensus, &input);
+        let before = outbox.len();
+        self.consensus.apply(input.clone(), outbox);
+        self.trace.record(&input, outbox.iter().skip(before));
+    }
 }
 
 impl ConsensusHarness {
@@ -984,6 +1178,16 @@ impl ConsensusHarness {
     }
 
     pub async fn new_with_epoch_height(node_index: u64, epoch_height: u64) -> Self {
+        Self::new_with_upgrade_lock(node_index, epoch_height, test_upgrade_lock()).await
+    }
+
+    /// A harness whose consensus runs under `lock` rather than the fixed
+    /// version of [`test_upgrade_lock`].
+    pub async fn new_with_upgrade_lock(
+        node_index: u64,
+        epoch_height: u64,
+        lock: UpgradeLock<TestTypes>,
+    ) -> Self {
         let (public_key, private_key) = BLSPubKey::generated_from_seed_indexed([0; 32], node_index);
         let state_key_pair = hotshot_types::light_client::StateKeyPair::generate_from_seed_indexed(
             [0u8; 32], node_index,
@@ -1003,7 +1207,7 @@ impl ConsensusHarness {
             private_key,
             state_private_key,
             10,
-            test_upgrade_lock(),
+            lock,
             genesis_leaf,
             epoch_height,
         );
@@ -1011,6 +1215,9 @@ impl ConsensusHarness {
             consensus,
             membership_coordinator: membership,
             collected: Outbox::new(),
+            deferred_states: BTreeMap::new(),
+            defer_state_for: BTreeSet::new(),
+            trace: trace::Recorder::for_current_test(),
         }
     }
 
@@ -1060,29 +1267,91 @@ impl ConsensusHarness {
             consensus,
             membership_coordinator: membership,
             collected: Outbox::new(),
+            deferred_states: BTreeMap::new(),
+            defer_state_for: BTreeSet::new(),
+            trace: trace::Recorder::for_current_test(),
         }
+    }
+
+    /// Place the node at `view` in `epoch`, as `Consensus::set_view` does, and
+    /// note the placement in the trace.
+    pub fn set_view(&mut self, view: ViewNumber, epoch: EpochNumber) {
+        self.trace.preamble(
+            self.consensus.public_key(),
+            self.consensus.last_decided_leaf(),
+            self.consensus.cert1_at(ViewNumber::genesis()),
+            *self.consensus.epoch_height,
+        );
+        self.trace.placed(view, epoch);
+        self.consensus.set_view(view, epoch);
+    }
+
+    /// Replace the node's proposal for `view`, as `Consensus::force_set_proposal`
+    /// does, and note the replacement in the trace.
+    pub fn force_set_proposal(&mut self, view: ViewNumber, proposal: Proposal<TestTypes>) {
+        self.trace.preamble(
+            self.consensus.public_key(),
+            self.consensus.last_decided_leaf(),
+            self.consensus.cert1_at(ViewNumber::genesis()),
+            *self.consensus.epoch_height,
+        );
+        self.trace.forced(view);
+        self.consensus.force_set_proposal(view, proposal);
+    }
+
+    /// Seed proposals the node holds without having received them, and record
+    /// each as a block it holds, so the trace does not show it deciding a block
+    /// it never had.
+    pub fn seed_proposals(&mut self, proposals: impl IntoIterator<Item = Proposal<TestTypes>>) {
+        let proposals: Vec<_> = proposals.into_iter().collect();
+        self.trace.preamble(
+            self.consensus.public_key(),
+            self.consensus.last_decided_leaf(),
+            self.consensus.cert1_at(ViewNumber::genesis()),
+            *self.consensus.epoch_height,
+        );
+        for proposal in &proposals {
+            self.trace.held(proposal);
+        }
+        self.consensus.seed_proposals(proposals);
+    }
+
+    /// Withhold `view`'s state-validation response until [`Self::release_state`].
+    ///
+    /// The harness answers `RequestState` inline, which a real node cannot do:
+    /// validation runs asynchronously and may finish long after the proposal
+    /// was admitted. Tests that turn on that delay need to place it themselves.
+    /// Must be called before the proposal for `view` is applied.
+    pub fn defer_state(&mut self, view: ViewNumber) {
+        self.defer_state_for.insert(view);
+    }
+
+    /// Deliver the response withheld by [`Self::defer_state`].
+    pub async fn release_state(&mut self, view: ViewNumber) {
+        self.defer_state_for.remove(&view);
+        let input = self
+            .deferred_states
+            .remove(&view)
+            .expect("a state request for this view was deferred");
+        self.apply(input).await;
     }
 
     /// Apply a [`ConsensusInput`] and drain outputs, auto-responding to
     /// actions that consensus expects feedback for.
     pub async fn apply(&mut self, input: ConsensusInput<TestTypes>) {
         let mut outbox = Outbox::new();
-        // The coordinator persists incoming proposals and VID shares before
-        // consensus sees them; simulate those storage confirmations.
-        if let ConsensusInput::ProposalWithVidShare(_, msg, vid_share) = &input {
-            let view = msg.proposal.data.view_number;
-            let commitment = proposal_commitment(&msg.proposal.data);
-            self.consensus.apply(
-                ConsensusInput::Stored(StorageOutput::Proposal(view, commitment)),
-                &mut outbox,
-            );
-            self.consensus.apply(
-                ConsensusInput::Stored(StorageOutput::Vid(vid_share.view_number)),
-                &mut outbox,
-            );
-        }
-        self.consensus.apply(input, &mut outbox);
+        self.apply_recorded(input, &mut outbox);
         self.drain_outbox(&mut outbox).await;
+    }
+
+    /// Apply a proposal/VID-share input pair
+    /// (cf. `TestView::proposal_input_consensus`).
+    pub async fn apply_pair(
+        &mut self,
+        (proposal, vid_share): (ConsensusInput<TestTypes>, ConsensusInput<TestTypes>),
+    ) {
+        self.apply(proposal).await;
+        self.apply(vid_share).await;
     }
 
     async fn drain_outbox(&mut self, outbox: &mut Outbox<ConsensusOutput<TestTypes>>) {
@@ -1100,16 +1369,20 @@ impl ConsensusHarness {
         match output {
             ConsensusOutput::RequestState(req) => {
                 let input = state_verified_input(&req.proposal, req.view);
-                self.consensus.apply(input, outbox);
+                if self.defer_state_for.contains(&req.view) {
+                    self.deferred_states.insert(req.view, input);
+                } else {
+                    self.apply_recorded(input, outbox);
+                }
             },
-            ConsensusOutput::RecordAction(view, _, kind) => {
-                self.consensus.apply(
+            ConsensusOutput::RecordAction(view, kind) => {
+                self.apply_recorded(
                     ConsensusInput::Stored(StorageOutput::Action(*view, *kind)),
                     outbox,
                 );
             },
             ConsensusOutput::PersistHighQc(high_qc) => {
-                self.consensus.apply(
+                self.apply_recorded(
                     ConsensusInput::Stored(StorageOutput::HighQc(high_qc.view_number())),
                     outbox,
                 );
@@ -1117,8 +1390,25 @@ impl ConsensusHarness {
             ConsensusOutput::PersistProposal(proposal) => {
                 let view = proposal.data.view_number;
                 let commitment = proposal_commitment(&proposal.data);
-                self.consensus.apply(
+                self.apply_recorded(
                     ConsensusInput::Stored(StorageOutput::Proposal(view, commitment)),
+                    outbox,
+                );
+            },
+            // The coordinator persists a paired proposal and VID share;
+            // simulate the storage confirmations.
+            ConsensusOutput::ProposalPaired {
+                proposal,
+                vid_share,
+            } => {
+                let view = proposal.data.view_number;
+                let commitment = proposal_commitment(&proposal.data);
+                self.apply_recorded(
+                    ConsensusInput::Stored(StorageOutput::Proposal(view, commitment)),
+                    outbox,
+                );
+                self.apply_recorded(
+                    ConsensusInput::Stored(StorageOutput::Vid(vid_share.view_number)),
                     outbox,
                 );
             },
@@ -1132,11 +1422,11 @@ impl ConsensusHarness {
                     mock_block.metadata,
                     TEST_VERSIONS.test.base,
                 );
-                self.consensus.apply(
+                self.apply_recorded(
                     ConsensusInput::HeaderCreated(req.view, parent_leaf.commit(), header),
                     outbox,
                 );
-                self.consensus.apply(
+                self.apply_recorded(
                     ConsensusInput::BlockBuilt {
                         view: req.view,
                         epoch: req.epoch,
@@ -1169,7 +1459,7 @@ impl ConsensusHarness {
                     panic!("VidDisperse is not a V2");
                 };
                 let input = ConsensusInput::VidDisperseCreated(*view, vid.payload_commitment);
-                self.consensus.apply(input, outbox);
+                self.apply_recorded(input, outbox);
             },
             ConsensusOutput::RequestDrbResult(epoch) => {
                 self.consensus
@@ -1263,23 +1553,193 @@ pub(crate) fn build_cert2(
     )
 }
 
+/// A single node's signature over some vote data, tagged with who produced it.
+pub(crate) type SignerShare = (u64, <BLSPubKey as SignatureKey>::PureAssembledSignatureType);
+
+/// Aggregate `shares` into a certificate over `data`.
+///
+/// The counterpart of [`build_cert`], which marks *every* committee member as a
+/// signer. That is fine when a test needs only *a* valid certificate, and wrong
+/// when the claim depends on who signed. This records exactly the given signers
+/// in the certificate's bit vector, so the result verifies only if they truly
+/// meet the threshold — and it accepts signatures produced elsewhere, which is
+/// what lets a test aggregate the votes real nodes emitted.
+///
+/// A share's `u64` is the seed index its key was generated from, and doubles as
+/// the position in the stake table's bit vector — the correspondence
+/// [`build_assembled_sig`] relies on too. Order within `shares` does not matter;
+/// BLS aggregation is a sum.
+///
+/// Panics if `shares` is below the success threshold, since such a certificate
+/// would not verify and the caller almost certainly meant otherwise. That count
+/// is compared against a stake-weighted threshold, which only holds while every
+/// member has unit stake, as under [`mock_membership`].
+pub(crate) fn assemble_cert<DATA, CERT>(
+    data: DATA,
+    view_number: ViewNumber,
+    epoch_membership: &hotshot_types::epoch_membership::EpochMembership<TestTypes>,
+    shares: &[SignerShare],
+) -> CERT
+where
+    DATA: hotshot_types::simple_vote::Voteable<TestTypes> + 'static,
+    CERT: hotshot_types::vote::Certificate<TestTypes, DATA, Voteable = DATA>,
+{
+    use bitvec::bitvec;
+    use hotshot_types::{simple_vote::VersionedVoteData, stake_table::StakeTableEntries};
+
+    let upgrade_lock = test_upgrade_lock::<TestTypes>();
+    let stake_table = CERT::stake_table(epoch_membership);
+    let entries = StakeTableEntries::from_iter(stake_table.iter()).0;
+    let threshold = CERT::threshold(epoch_membership);
+    assert!(
+        alloy::primitives::U256::from(shares.len()) >= threshold,
+        "{} signers is below the threshold of {threshold}",
+        shares.len()
+    );
+    let qc_pp = <BLSPubKey as SignatureKey>::public_parameter(&entries, threshold);
+
+    let mut signer_bits = bitvec![0; stake_table.len()];
+    let mut signatures = Vec::new();
+    for (node, signature) in shares {
+        signer_bits.set(*node as usize, true);
+        signatures.push(signature.clone());
+    }
+
+    let assembled =
+        <BLSPubKey as SignatureKey>::assemble(&qc_pp, signer_bits.as_bitslice(), &signatures[..]);
+    let vote_commitment = VersionedVoteData::new(data.clone(), view_number, &upgrade_lock)
+        .expect("versioned vote data")
+        .commit();
+    CERT::create_signed_certificate(vote_commitment, data, assembled, view_number)
+}
+
+/// Sign `data` as `node` would, and return the signature tagged with `node`.
+///
+/// For votes a test must fabricate — an adversary's, or a node it does not run.
+pub(crate) fn sign_vote_as<DATA>(node: u64, data: DATA, view_number: ViewNumber) -> SignerShare
+where
+    DATA: hotshot_types::simple_vote::Voteable<TestTypes> + 'static,
+{
+    use hotshot_types::{simple_vote::SimpleVote, vote::Vote};
+
+    let (public_key, private_key) = BLSPubKey::generated_from_seed_indexed([0u8; 32], node);
+    let vote = SimpleVote::<TestTypes, DATA>::create_signed_vote(
+        data,
+        view_number,
+        &public_key,
+        &private_key,
+        &test_upgrade_lock::<TestTypes>(),
+    )
+    .expect("sign vote");
+    (node, vote.signature())
+}
+
+/// Build a timeout certificate signed by exactly `signers`.
+///
+/// The signer set carries meaning: a node that sent a timeout vote for
+/// `view_number` has raised its `timeout_view` to it, which constrains what it
+/// may do afterwards.
+pub(crate) fn build_timeout_cert_signed_by(
+    view_number: ViewNumber,
+    epoch: EpochNumber,
+    epoch_membership: &hotshot_types::epoch_membership::EpochMembership<TestTypes>,
+    signers: &[u64],
+) -> TimeoutEvidence<TestTypes> {
+    let data = TimeoutData2 {
+        view: view_number,
+        epoch: Some(epoch),
+    };
+    let shares: Vec<SignerShare> = signers
+        .iter()
+        .map(|node| sign_vote_as(*node, data.clone(), view_number))
+        .collect();
+    TimeoutEvidence::V2(assemble_cert(data, view_number, epoch_membership, &shares))
+}
+
 pub(crate) fn build_timeout_cert(
     view_number: ViewNumber,
     epoch: EpochNumber,
     epoch_membership: &hotshot_types::epoch_membership::EpochMembership<TestTypes>,
     public_key: &BLSPubKey,
     private_key: &BLSPrivKey,
-) -> TimeoutCertificate2<TestTypes> {
+) -> TimeoutEvidence<TestTypes> {
+    // The tests run at `test_upgrade_lock`, i.e. before the epoch binding
+    // upgrade, so the form that does not bind the epoch is the admissible one.
     let data = TimeoutData2 {
         view: view_number,
         epoch: Some(epoch),
     };
-    build_cert::<TestTypes, TimeoutData2, TimeoutVote2<TestTypes>, TimeoutCertificate2<TestTypes>>(
+    TimeoutEvidence::V2(build_cert::<
+        TestTypes,
+        TimeoutData2,
+        TimeoutVote2<TestTypes>,
+        TimeoutCertificate2<TestTypes>,
+    >(
         data,
         epoch_membership,
         view_number,
         public_key,
         private_key,
         &test_upgrade_lock::<TestTypes>(),
-    )
+    ))
+}
+
+/// Build an epoch binding timeout certificate, for the tests that run under
+/// [`test_timeout_epoch_lock`].
+pub(crate) fn build_timeout_cert3(
+    view_number: ViewNumber,
+    epoch: EpochNumber,
+    epoch_membership: &hotshot_types::epoch_membership::EpochMembership<TestTypes>,
+    public_key: &BLSPubKey,
+    private_key: &BLSPrivKey,
+) -> TimeoutEvidence<TestTypes> {
+    let data = TimeoutData3 {
+        view: view_number,
+        epoch,
+    };
+    TimeoutEvidence::V3(build_cert::<
+        TestTypes,
+        TimeoutData3,
+        TimeoutVote3<TestTypes>,
+        TimeoutCertificate3<TestTypes>,
+    >(
+        data,
+        epoch_membership,
+        view_number,
+        public_key,
+        private_key,
+        &test_timeout_epoch_lock::<TestTypes>(),
+    ))
+}
+
+/// Name the leader of the view a step is about, for the trace checker.
+///
+/// Every view has one, and the model takes the schedule as a parameter, so a
+/// trace that does not say who leads leaves the checker unable to tell a proposal
+/// this node was entitled to make from one it was not. Asked of the stake table
+/// here rather than taken from the propose path, so a propose path that forgets
+/// to check leadership is caught rather than confirmed.
+///
+/// The epoch comes from the input, not from `current_epoch`. `apply` checks
+/// leadership against the epoch of the input in hand, so this has to read it from
+/// the same place: across a boundary the two differ, and a leader from the wrong
+/// membership is a wrong answer that looks like a right one.
+///
+/// A stake table that cannot answer is recorded as `unknown` rather than skipped:
+/// silence would not say whether a view's leader was unknown or merely unrecorded,
+/// and the two mean different things to a reader. It is not a failure — an epoch
+/// the membership does not have leaves consensus unable to claim leadership
+/// either, and the rules, which then find no leader, agree with it. Only reached
+/// while recording, so an ordinary test run is unaffected.
+pub(crate) fn record_leader(
+    trace: &mut trace::Recorder,
+    consensus: &Consensus<TestTypes>,
+    input: &ConsensusInput<TestTypes>,
+) {
+    if !trace.recording() {
+        return;
+    }
+    let view = input.view_number();
+    let epoch = input.epoch().unwrap_or_else(|| consensus.current_epoch());
+    trace.leader::<TestTypes>(view, epoch, consensus.leader_of(view, epoch).as_ref());
 }

@@ -1,9 +1,14 @@
 //! V1 explorer API.
 //!
-//! Mirrors the tide-disco endpoints defined in `hotshot-query-service/api/explorer.toml`.
+//! Mirrors the endpoints of the legacy `hotshot-query-service` explorer API (its tide-disco
+//! `explorer.toml`, since removed).
 
 use async_trait::async_trait;
-use serde::Serialize;
+use espresso_types::SeqTypes;
+use hotshot_query_service_types::explorer::response::{
+    BlockDetailResponse, BlockSummaryResponse, ExplorerSummaryResponse, SearchResultResponse,
+    TransactionDetailResponse, TransactionSummariesResponse,
+};
 
 #[derive(Debug, Clone)]
 pub enum BlockIdent {
@@ -28,34 +33,33 @@ pub enum TxSummaryFilter {
 
 #[async_trait]
 pub trait ExplorerApi {
-    type BlockDetail: Serialize + Send + Sync + 'static;
-    type BlockSummaries: Serialize + Send + Sync + 'static;
-    type TransactionDetail: Serialize + Send + Sync + 'static;
-    type TransactionSummaries: Serialize + Send + Sync + 'static;
-    type ExplorerSummary: Serialize + Send + Sync + 'static;
-    type SearchResult: Serialize + Send + Sync + 'static;
-
-    async fn get_block_detail(&self, ident: BlockIdent) -> anyhow::Result<Self::BlockDetail>;
+    async fn get_block_detail(
+        &self,
+        ident: BlockIdent,
+    ) -> anyhow::Result<BlockDetailResponse<SeqTypes>>;
 
     async fn get_block_summaries(
         &self,
         target: BlockIdent,
         limit: u64,
-    ) -> anyhow::Result<Self::BlockSummaries>;
+    ) -> anyhow::Result<BlockSummaryResponse<SeqTypes>>;
 
     async fn get_transaction_detail(
         &self,
         ident: TxIdent,
-    ) -> anyhow::Result<Self::TransactionDetail>;
+    ) -> anyhow::Result<TransactionDetailResponse<SeqTypes>>;
 
     async fn get_transaction_summaries(
         &self,
         target: TxIdent,
         limit: u64,
         filter: TxSummaryFilter,
-    ) -> anyhow::Result<Self::TransactionSummaries>;
+    ) -> anyhow::Result<TransactionSummariesResponse<SeqTypes>>;
 
-    async fn get_explorer_summary(&self) -> anyhow::Result<Self::ExplorerSummary>;
+    async fn get_explorer_summary(&self) -> anyhow::Result<ExplorerSummaryResponse<SeqTypes>>;
 
-    async fn get_search_result(&self, query: String) -> anyhow::Result<Self::SearchResult>;
+    async fn get_search_result(
+        &self,
+        query: String,
+    ) -> anyhow::Result<SearchResultResponse<SeqTypes>>;
 }

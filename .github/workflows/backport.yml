@@ -19,18 +19,24 @@ jobs:
   backport:
     name: Backport pull request
     runs-on: ubuntu-latest
-    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.merged
+    if: |
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.pull_request.merged &&
+       !startsWith(github.event.pull_request.head.ref, 'backport-'))
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
+          filter: blob:none
 
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: nightly
           components: rustfmt
 
-      - uses: taiki-e/install-action@just
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: just
 
       - uses: taiki-e/install-action@v2
         with:
@@ -59,7 +65,7 @@ jobs:
       - name: Create backport pull requests
         id: backport
         if: github.event_name == 'pull_request_target'
-        uses: korthout/backport-action@v3
+        uses: korthout/backport-action@v4
         with:
           experimental: '{"conflict_resolution":"draft_commit_conflicts"}'
 
@@ -157,7 +163,9 @@ jobs:
             git push origin "$branch"
             gh pr ready "$pr"
             if [ -f "claude-summaries/$pr.md" ]; then
-              gh pr comment "$pr" --body-file "claude-summaries/$pr.md"
+              # Fixed first line: a model-written body must not start with the claude-gh trust marker.
+              { printf '### Conflict resolution summary\n\n'; cat "claude-summaries/$pr.md"; } \
+                | gh pr comment "$pr" --body-file -
             else
               gh pr comment "$pr" --body "⚠️ No resolution summary was produced for this backport. Claude may not have completed the resolution as expected; please review carefully." || true
             fi

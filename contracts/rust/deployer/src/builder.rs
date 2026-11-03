@@ -17,6 +17,7 @@ use crate::{
     Contract, Contracts, OwnableContract, encode_function_call,
     output::output_safe_tx_builder,
     proposals::{
+        deployment_info::Multisig,
         multisig::{
             LightClientV2UpgradeParams, MultisigOwnerCheck, StakeTableV2UpgradeParams,
             StakeTableV3UpgradeParams, TransferOwnershipParams, encode_generic_calldata,
@@ -162,6 +163,14 @@ pub struct DeployerArgs<P: Provider + WalletProvider> {
     /// Root for `contracts/deployments/proposals/` tree.
     #[builder(default)]
     proposals_root: Option<PathBuf>,
+    /// Multisig submitting the timelock `schedule` phase (required when the timelock
+    /// has several proposers).
+    #[builder(default)]
+    schedule_safe: Option<Multisig>,
+    /// Multisig submitting the timelock `execute` phase (required when the timelock
+    /// has several executors).
+    #[builder(default)]
+    execute_safe: Option<Multisig>,
 }
 
 impl<P: Provider + WalletProvider> DeployerArgs<P> {
@@ -569,7 +578,8 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
                             delay,
                             schedule_calldata: proposal.schedule.data.clone(),
                             execute_calldata: proposal.execute.data.clone(),
-                            safe_override: None,
+                            schedule_safe: self.schedule_safe,
+                            execute_safe: self.execute_safe,
                         },
                         provider,
                     )

@@ -62,13 +62,6 @@ pub async fn assert_native_demo_works(requirements: TestRequirements) -> Result<
             blocks_without_tx = 0;
         }
 
-        if requirements.requires_builder
-            && initial.builder_balance + initial.recipient_balance
-                != new.builder_balance + new.recipient_balance
-        {
-            panic!("Balance not conserved");
-        }
-
         if start.elapsed() > requirements.global_timeout {
             if let Some(first_reward_block) = requirements.first_reward_block
                 && new.rewards_claimed == U256::ZERO

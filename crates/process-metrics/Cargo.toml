@@ -3,10 +3,12 @@ name = "process-metrics"
 version = { workspace = true }
 authors = { workspace = true }
 edition = { workspace = true }
-description = "Process-level Prometheus metrics (RSS, virtual memory, FDs, threads, uptime) and CI soak tooling."
+description = "Process-level Prometheus metrics (RSS, virtual memory, FDs, threads, uptime, tokio runtime) and CI soak tooling."
 
 [dependencies]
 hotshot-types = { workspace = true }
+humantime = { workspace = true }
+sha2 = { workspace = true }
 sysinfo = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }

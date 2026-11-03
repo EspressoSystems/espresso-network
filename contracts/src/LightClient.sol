@@ -15,6 +15,8 @@ import { IPlonkVerifier } from "./interfaces/IPlonkVerifier.sol";
 import { PlonkVerifier } from "./libraries/PlonkVerifier.sol";
 import { LightClientStateUpdateVK as VkLib } from "./libraries/LightClientStateUpdateVK.sol";
 
+// forge-lint: disable-start(reentrancy-events)
+
 /// @title Light Client Contract
 /// @notice This contract serves as an always-on client
 /// that verifies HotShot's state (Espresso's consensus state) which can be used by
@@ -184,6 +186,8 @@ contract LightClient is Initializable, OwnableUpgradeable, UUPSUpgradeable {
 
     /// @notice only the owner can authorize an upgrade
     function _authorizeUpgrade(address newImplementation) internal virtual override onlyOwner {
+        // Owner-gated upgrade authorisation; no external call precedes the event.
+        // forge-lint: disable-next-line(reentrancy-events)
         emit Upgrade(newImplementation);
     }
 
@@ -266,6 +270,7 @@ contract LightClient is Initializable, OwnableUpgradeable, UUPSUpgradeable {
         // upon successful verification, update the latest finalized state
         finalizedState = newState;
 
+        // forge-lint: disable-next-line(unsafe-typecast)
         updateStateHistory(uint64(currentBlockNumber()), uint64(block.timestamp), newState);
 
         emit NewState(newState.viewNum, newState.blockHeight, newState.blockCommRoot);
@@ -311,7 +316,11 @@ contract LightClient is Initializable, OwnableUpgradeable, UUPSUpgradeable {
         if (prover == permissionedProver) {
             revert NoChangeRequired();
         }
+        // PermissionedProverRequired is emitted with the new value below.
+        // forge-lint: disable-next-line(missing-events-access-control)
         permissionedProver = prover;
+        // Owner-gated setter; no external call precedes the event.
+        // forge-lint: disable-next-line(reentrancy-events)
         emit PermissionedProverRequired(permissionedProver);
     }
 
@@ -320,6 +329,8 @@ contract LightClient is Initializable, OwnableUpgradeable, UUPSUpgradeable {
     function disablePermissionedProverMode() public virtual onlyOwner {
         if (isPermissionedProverEnabled()) {
             permissionedProver = address(0);
+            // Owner-gated setter; no external call precedes the event.
+            // forge-lint: disable-next-line(reentrancy-events)
             emit PermissionedProverNotRequired();
         } else {
             revert NoChangeRequired();
@@ -405,6 +416,8 @@ contract LightClient is Initializable, OwnableUpgradeable, UUPSUpgradeable {
 
         // Search from the most recent state update back to find the first update <= blockNumber
         uint256 i = updatesCount - 1;
+        // stateUpdateFound is zero-initialised and used as the loop condition.
+        // forge-lint: disable-next-line(uninitialized-local)
         while (!stateUpdateFound) {
             // Stop searching if we've exhausted the recorded state history
             if (i < stateHistoryFirstIndex) {
@@ -427,6 +440,9 @@ contract LightClient is Initializable, OwnableUpgradeable, UUPSUpgradeable {
             revert InsufficientSnapshotHistory();
         }
 
+        // eligibleStateUpdateBlockNumber is assigned in the same branch that sets
+        // stateUpdateFound, and the revert above rejects every other path.
+        // forge-lint: disable-next-line(uninitialized-local)
         return blockNumber - eligibleStateUpdateBlockNumber > blockThreshold;
     }
 

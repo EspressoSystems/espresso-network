@@ -4,11 +4,11 @@ use std::{
 };
 
 use committable::{Commitment, Committable};
-use hotshot::traits::{BlockPayload, ValidatedState};
 use hotshot_types::{
     data::{BlockNumber, EpochNumber, Leaf2, VidCommitment, ViewNumber},
     message::UpgradeLock,
     traits::{
+        BlockPayload, ValidatedState,
         block_contents::{BlockHeader, BuilderFee},
         metrics::Histogram,
         node_implementation::NodeType,
@@ -17,13 +17,16 @@ use hotshot_types::{
     vote::HasViewNumber,
 };
 use tokio::task::{AbortHandle, JoinSet};
-use tracing::{error, warn};
+use tracing::{debug, error, warn};
 
 use crate::{
     coordinator::metrics::{Measurement, finish_measurement, ignore_measurement},
     helpers::proposal_commitment,
     message::Proposal,
 };
+
+/// Validated states stay this many views below the decided view so peers can serve catchup.
+const STATE_GC_MARGIN: u64 = 8;
 
 pub struct UpdateLeaf<T: NodeType> {
     pub view: ViewNumber,
@@ -40,7 +43,7 @@ pub struct StateRequest<T: NodeType> {
     pub block: BlockNumber,
     pub proposal: Proposal<T>,
     pub parent_commitment: Commitment<Leaf2<T>>,
-    pub payload_size: u32,
+    pub payload_size: Option<u32>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -94,13 +97,23 @@ pub struct StateEntry<T: NodeType> {
 pub struct StateManager<T: NodeType> {
     instance: Arc<T::InstanceState>,
     validated_states: BTreeMap<Commitment<Leaf2<T>>, StateEntry<T>>,
-    state_requests: HashMap<Commitment<Leaf2<T>>, (AbortHandle, ViewNumber)>,
+    state_requests: HashMap<Commitment<Leaf2<T>>, InFlight<T>>,
     header_requests: HashMap<(ViewNumber, Commitment<Leaf2<T>>), AbortHandle>,
     pending_requests: HashMap<Commitment<Leaf2<T>>, Vec<Pending<T>>>,
+    /// Newest decided leaf whose in-flight validation made `seed_decided` skip it.
+    /// Cleared by gc below the gc view.
+    decided_in_flight: Option<Leaf2<T>>,
     upgrade_lock: UpgradeLock<T>,
     tasks: JoinSet<Completed<T>>,
     validate_duration_metric: Option<Arc<dyn Histogram>>,
     update_leaf_duration_metric: Option<Arc<dyn Histogram>>,
+}
+
+/// The proposal lets `gc` seed a stub for a validation it aborts.
+struct InFlight<T: NodeType> {
+    handle: AbortHandle,
+    view: ViewNumber,
+    proposal: Proposal<T>,
 }
 
 enum Pending<T: NodeType> {
@@ -136,6 +149,7 @@ impl<T: NodeType> StateManager<T> {
             state_requests: HashMap::new(),
             header_requests: HashMap::new(),
             pending_requests: HashMap::new(),
+            decided_in_flight: None,
             upgrade_lock,
             tasks: JoinSet::new(),
             validate_duration_metric: None,
@@ -154,6 +168,8 @@ impl<T: NodeType> StateManager<T> {
     }
 
     /// Get the validated state for a given view.
+    ///
+    /// Lookup is by view, so below the decided view this may return a state from an undecided fork.
     pub fn get_state(&self, view: ViewNumber) -> Option<&StateEntry<T>> {
         self.validated_states
             .iter()
@@ -175,8 +191,39 @@ impl<T: NodeType> StateManager<T> {
 
     /// Seed a commitment-only (`from_header`) state so a child proposal can be
     /// validated against this leaf via catchup instead of being dropped.
+    ///
+    /// A real (validated) state for the leaf is never displaced, and any
+    /// header/state requests queued on this leaf are restarted, or re-queued while
+    /// its validation is in flight.
     pub(crate) fn seed_from_header(&mut self, proposal: Proposal<T>) {
-        self.insert_empty_state(proposal);
+        let commitment = proposal_commitment(&proposal);
+        if !self.validated_states.contains_key(&commitment) {
+            self.insert_empty_state(proposal);
+        }
+        self.start_pending(commitment);
+    }
+
+    /// Seed a stub for a decided leaf so work queued on it runs via catchup.
+    /// No-op when the leaf is validated. When it is being validated, the stub is
+    /// seeded only if that validation fails. An older leaf never replaces a newer one.
+    pub(crate) fn seed_decided(&mut self, leaf: Leaf2<T>) {
+        let commitment = leaf.commit();
+        if self.validated_states.contains_key(&commitment) {
+            return;
+        }
+        if self.state_requests.contains_key(&commitment) {
+            let newest = self
+                .decided_in_flight
+                .as_ref()
+                .is_none_or(|held| held.view_number() <= leaf.view_number());
+            if newest {
+                self.decided_in_flight = Some(leaf);
+            }
+            return;
+        }
+        let state = T::ValidatedState::from_header(leaf.block_header());
+        self.insert_state(leaf.view_number(), Arc::new(state), None, leaf);
+        self.start_pending(commitment);
     }
 
     pub fn request_state(&mut self, request: StateRequest<T>) {
@@ -204,16 +251,25 @@ impl<T: NodeType> StateManager<T> {
                 epoch = %request.epoch,
                 block = %request.block,
                 parent_commitment = %request.parent_commitment,
-                "parent state unavailable; deferring state validation (from_header stub inserted). \
-                 If this persists, the node cannot vote until the parent state is recovered."
+                "parent state unavailable; queued on parent for retry. \
+                 If this persists, the parent state never arrived and the node cannot vote."
             );
-            self.insert_empty_state(request.proposal);
-            self.start_pending(commitment);
+            let queued = self
+                .pending_requests
+                .entry(request.parent_commitment)
+                .or_default();
+            if !queued
+                .iter()
+                .any(|p| matches!(p, Pending::State(r) if r.view == request.view))
+            {
+                queued.push(Pending::State(request));
+            }
             return;
         };
 
         let instance = self.instance.clone();
         let header = request.proposal.block_header.clone();
+        let proposal = request.proposal.clone();
         let view = request.view;
         let payload_size = request.payload_size;
 
@@ -265,7 +321,14 @@ impl<T: NodeType> StateManager<T> {
             }
         });
 
-        self.state_requests.insert(commitment, (handle, view));
+        self.state_requests.insert(
+            commitment,
+            InFlight {
+                handle,
+                view,
+                proposal,
+            },
+        );
     }
 
     pub fn request_header(&mut self, request: HeaderRequest<T>) {
@@ -347,6 +410,9 @@ impl<T: NodeType> StateManager<T> {
     }
 
     /// Provide an externally-obtained validated state.
+    ///
+    /// An update without a delta only enriches an existing entry and is
+    /// otherwise dropped.
     pub fn update_state(&mut self, update: UpdateLeaf<T>) {
         let UpdateLeaf {
             view,
@@ -355,9 +421,17 @@ impl<T: NodeType> StateManager<T> {
             delta,
         } = update;
         let commitment = leaf.commit();
+        if delta.is_none() {
+            if self.validated_states.contains_key(&commitment) {
+                self.insert_state(view, state, delta, leaf);
+            } else {
+                debug!(%view, %commitment, "dropping delta-less update: no entry for leaf");
+            }
+            return;
+        }
         self.insert_state(view, state, delta, leaf);
-        if let Some((task, _)) = self.state_requests.remove(&commitment) {
-            task.abort();
+        if let Some(in_flight) = self.state_requests.remove(&commitment) {
+            in_flight.handle.abort();
         }
         self.start_pending(commitment);
     }
@@ -374,6 +448,9 @@ impl<T: NodeType> StateManager<T> {
                         if self.state_requests.remove(&response.commitment).is_none() {
                             continue;
                         }
+                        let decided = self
+                            .decided_in_flight
+                            .take_if(|leaf| leaf.commit() == response.commitment);
                         if let Some(leaf) = leaf2 {
                             let measurement = self
                                 .update_leaf_duration_metric
@@ -392,7 +469,11 @@ impl<T: NodeType> StateManager<T> {
                                 validated: true,
                             });
                         } else {
-                            self.pending_requests.remove(&response.commitment);
+                            if self.validated_states.contains_key(&response.commitment) {
+                                self.start_pending(response.commitment);
+                            } else if let Some(leaf) = decided {
+                                self.seed_decided(leaf);
+                            }
                             return Some(StateManagerOutput::State {
                                 response,
                                 validated: false,
@@ -420,18 +501,18 @@ impl<T: NodeType> StateManager<T> {
         }
     }
 
+    /// The decided view's own validation, or a header this node needs to
+    /// propose, may be queued behind a validation aborted here. A stub for the
+    /// aborted proposal lets them proceed via catchup instead of hanging.
     pub fn gc(&mut self, view_number: ViewNumber) {
-        self.validated_states
-            .retain(|_, entry| entry.leaf.view_number() >= view_number);
+        let margin_view = ViewNumber::new(view_number.saturating_sub(STATE_GC_MARGIN));
+        self.validated_states.retain(|_, entry| {
+            let view = entry.leaf.view_number();
+            view >= view_number || (entry.delta.is_some() && view >= margin_view)
+        });
 
-        for (task, view) in self.state_requests.values() {
-            if *view < view_number {
-                task.abort();
-            }
-        }
-
-        self.state_requests
-            .retain(|_, (_, view)| *view >= view_number);
+        self.decided_in_flight
+            .take_if(|leaf| leaf.view_number() < view_number);
 
         self.header_requests.retain(|(view, _), handle| {
             let keep = *view >= view_number;
@@ -445,6 +526,17 @@ impl<T: NodeType> StateManager<T> {
             pending.retain(|p| p.view() >= view_number);
             !pending.is_empty()
         });
+
+        let stale: Vec<_> = self
+            .state_requests
+            .extract_if(|_, in_flight| in_flight.view < view_number)
+            .collect();
+        for (commitment, in_flight) in stale {
+            in_flight.handle.abort();
+            if self.pending_requests.contains_key(&commitment) {
+                self.seed_from_header(in_flight.proposal);
+            }
+        }
     }
 
     fn start_pending(&mut self, finished_commitment: Commitment<Leaf2<T>>) {
@@ -501,10 +593,5 @@ impl<T: NodeType> StateManager<T> {
         self.validated_states
             .iter()
             .any(|(_, entry)| entry.leaf.view_number() == v)
-    }
-
-    #[cfg(test)]
-    pub(crate) fn pending_contains_commitment(&self, c: &Commitment<Leaf2<T>>) -> bool {
-        self.pending_requests.contains_key(c)
     }
 }

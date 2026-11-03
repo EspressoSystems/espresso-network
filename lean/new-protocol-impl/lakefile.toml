@@ -1,0 +1,16 @@
+name = "new-protocol-impl"
+defaultTargets = ["NewProtocolImpl"]
+
+# The specification is a dependency, never a sibling directory: this package
+# can read it, and it cannot read this one.
+[[require]]
+name = "new-protocol-spec"
+path = "../new-protocol-spec"
+
+[[lean_lib]]
+name = "NewProtocolImpl"
+
+# An unknown name in a signature is an error, not a new implicit variable: a
+# missing import once turned a premise into an unconstrained variable here.
+[leanOptions]
+autoImplicit = false

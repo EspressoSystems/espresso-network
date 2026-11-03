@@ -1,0 +1,392 @@
+// Copyright (c) 2022 Espresso Systems (espressosys.com)
+// This file is part of the HotShot Query Service library.
+//
+// This program is free software: you can redistribute it and/or modify it under the terms of the GNU
+// General Public License as published by the Free Software Foundation, either version 3 of the
+// License, or (at your option) any later version.
+// This program is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without
+// even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
+// General Public License for more details.
+// You should have received a copy of the GNU General Public License along with this program. If not,
+// see <https://www.gnu.org/licenses/>.
+
+//! Header fetching.
+
+use std::{cmp::Ordering, future::IntoFuture, iter::once, sync::Arc};
+
+use anyhow::bail;
+use async_trait::async_trait;
+use committable::Committable;
+use derivative::Derivative;
+use futures::{FutureExt, future::BoxFuture};
+use hotshot_types::traits::{block_contents::BlockHeader, node_implementation::NodeType};
+
+use super::{
+    AvailabilityProvider, Fetcher, block::fetch_block_with_header, cert2::fetch_cert2_with_header,
+    leaf::fetch_leaf_with_callbacks, vid::fetch_vid_common_with_header,
+};
+use crate::{
+    Header, Payload, QueryError, QueryResult,
+    availability::{BlockId, QueryableHeader, QueryablePayload},
+    data_source::{
+        fetching::{
+            Fetchable, HeaderQueryData, LeafQueryData, Notifiers,
+            block::fetch_block_range,
+            leaf::{RangeRequest, fetch_leaf_range_with_callbacks},
+            vid::fetch_vid_common_range,
+        },
+        storage::{
+            AvailabilityStorage, NodeStorage, UpdateAvailabilityStorage,
+            pruning::PrunedHeightStorage,
+        },
+        update::VersionedDataSource,
+    },
+    fetching::NonEmptyRange,
+};
+
+fn satisfies_header_req_from_leaf<Types>(leaf: &LeafQueryData<Types>, req: BlockId<Types>) -> bool
+where
+    Types: NodeType,
+    Header<Types>: QueryableHeader<Types>,
+    Payload<Types>: QueryablePayload<Types>,
+{
+    HeaderQueryData::satisfies(&HeaderQueryData::new(leaf.header().clone()), req)
+}
+
+#[async_trait]
+impl<Types> Fetchable<Types> for HeaderQueryData<Types>
+where
+    Types: NodeType,
+    Header<Types>: QueryableHeader<Types>,
+    Payload<Types>: QueryablePayload<Types>,
+{
+    type Request = BlockId<Types>;
+
+    fn satisfies(&self, req: Self::Request) -> bool {
+        let header = self.header();
+        match req {
+            BlockId::Number(n) => header.block_number() as usize == n,
+            BlockId::Hash(h) => header.commit() == h,
+            BlockId::PayloadHash(h) => header.payload_commitment() == h,
+        }
+    }
+
+    async fn passive_fetch(
+        notifiers: &Notifiers<Types>,
+        req: Self::Request,
+    ) -> BoxFuture<'static, Option<Self>> {
+        notifiers
+            .leaf
+            .wait_for(move |leaf| satisfies_header_req_from_leaf(leaf, req))
+            .await
+            .into_future()
+            .map(|leaf| leaf.map(HeaderQueryData::from))
+            .boxed()
+    }
+
+    async fn active_fetch<S, P>(
+        tx: &mut impl AvailabilityStorage<Types>,
+        fetcher: Arc<Fetcher<Types, S, P>>,
+        req: Self::Request,
+    ) -> anyhow::Result<()>
+    where
+        S: VersionedDataSource + 'static,
+        for<'a> S::Transaction<'a>: UpdateAvailabilityStorage<Types>,
+        for<'a> S::ReadOnly<'a>:
+            AvailabilityStorage<Types> + NodeStorage<Types> + PrunedHeightStorage,
+        P: AvailabilityProvider<Types>,
+    {
+        // Note: if leaf only mode is enabled
+        // the payload callback will not do any active fetching and just return
+        // This is because we don't have payload fetcher for leaf only mode
+        fetch_header_and_then(
+            tx,
+            req,
+            [
+                HeaderCallback::Payload {
+                    fetcher: fetcher.clone(),
+                },
+                HeaderCallback::VidCommon {
+                    fetcher: fetcher.clone(),
+                },
+            ],
+        )
+        .await
+    }
+
+    async fn load<S>(storage: &mut S, req: Self::Request) -> QueryResult<Self>
+    where
+        S: AvailabilityStorage<Types>,
+    {
+        storage.get_header(req).await.map(|header| Self { header })
+    }
+}
+
+#[derive(Derivative)]
+#[derivative(Debug(bound = ""))]
+pub(super) enum HeaderCallback<Types, S, P>
+where
+    Types: NodeType,
+{
+    /// Callback when fetching the leaf in order to then look up the corresponding block.
+    Payload {
+        #[derivative(Debug = "ignore")]
+        fetcher: Arc<Fetcher<Types, S, P>>,
+    },
+    /// Callback when fetching the leaf in order to then look up the corresponding VID common data.
+    VidCommon {
+        #[derivative(Debug = "ignore")]
+        fetcher: Arc<Fetcher<Types, S, P>>,
+    },
+    /// Callback when fetching the leaf in order to then backfill the corresponding cert2.
+    Cert2 {
+        #[derivative(Debug = "ignore")]
+        fetcher: Arc<Fetcher<Types, S, P>>,
+    },
+}
+
+impl<Types: NodeType, S, P> PartialEq for HeaderCallback<Types, S, P> {
+    fn eq(&self, other: &Self) -> bool {
+        self.cmp(other).is_eq()
+    }
+}
+
+impl<Types: NodeType, S, P> Eq for HeaderCallback<Types, S, P> {}
+
+impl<Types: NodeType, S, P> PartialOrd for HeaderCallback<Types, S, P> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl<Types: NodeType, S, P> Ord for HeaderCallback<Types, S, P> {
+    fn cmp(&self, other: &Self) -> Ordering {
+        // Arbitrarily, we order the callbacks payload < VID < cert2.
+        fn rank<Types: NodeType, S, P>(cb: &HeaderCallback<Types, S, P>) -> u8 {
+            match cb {
+                HeaderCallback::Payload { .. } => 0,
+                HeaderCallback::VidCommon { .. } => 1,
+                HeaderCallback::Cert2 { .. } => 2,
+            }
+        }
+        rank(self).cmp(&rank(other))
+    }
+}
+
+impl<Types, S, P> HeaderCallback<Types, S, P>
+where
+    Types: NodeType,
+    Header<Types>: QueryableHeader<Types>,
+    Payload<Types>: QueryablePayload<Types>,
+    S: VersionedDataSource + 'static,
+    for<'a> S::Transaction<'a>: UpdateAvailabilityStorage<Types>,
+    for<'a> S::ReadOnly<'a>: AvailabilityStorage<Types> + NodeStorage<Types> + PrunedHeightStorage,
+    P: AvailabilityProvider<Types>,
+{
+    fn fetcher(&self) -> Arc<Fetcher<Types, S, P>> {
+        match self {
+            Self::Payload { fetcher } => fetcher.clone(),
+            Self::VidCommon { fetcher } => fetcher.clone(),
+            Self::Cert2 { fetcher } => fetcher.clone(),
+        }
+    }
+
+    pub(super) fn run(self, header: Header<Types>) {
+        match self {
+            Self::Payload { fetcher } => {
+                tracing::debug!(
+                    "fetched leaf {}, will now fetch payload",
+                    header.block_number()
+                );
+                fetch_block_with_header(fetcher, header);
+            },
+            Self::VidCommon { fetcher } => {
+                tracing::debug!(
+                    "fetched leaf {}, will now fetch VID common",
+                    header.block_number()
+                );
+                fetch_vid_common_with_header(fetcher, header);
+            },
+            Self::Cert2 { fetcher } => {
+                fetch_cert2_with_header(&fetcher, &header);
+            },
+        }
+    }
+
+    pub(super) fn run_range(self, leaves: &NonEmptyRange<LeafQueryData<Types>>) {
+        let (start, end) = (leaves.start(), leaves.end());
+        match self {
+            Self::Payload { fetcher } => {
+                tracing::info!("fetched leaves {start}..{end}, will now fetch payload",);
+                fetch_block_range(fetcher, start, end);
+            },
+            Self::VidCommon { fetcher } => {
+                tracing::info!("fetched leaves {start}..{end}, will now fetch VID common",);
+                fetch_vid_common_range(fetcher, start, end);
+            },
+            Self::Cert2 { fetcher } => {
+                for leaf in leaves.iter() {
+                    fetch_cert2_with_header(&fetcher, leaf.leaf().block_header());
+                }
+            },
+        }
+    }
+}
+
+pub(super) async fn fetch_header_and_then<Types, S, P, I>(
+    tx: &mut impl AvailabilityStorage<Types>,
+    req: BlockId<Types>,
+    callbacks: I,
+) -> anyhow::Result<()>
+where
+    Types: NodeType,
+    Header<Types>: QueryableHeader<Types>,
+    Payload<Types>: QueryablePayload<Types>,
+    S: VersionedDataSource + 'static,
+    for<'a> S::Transaction<'a>: UpdateAvailabilityStorage<Types>,
+    for<'a> S::ReadOnly<'a>: AvailabilityStorage<Types> + NodeStorage<Types> + PrunedHeightStorage,
+    P: AvailabilityProvider<Types>,
+    I: IntoIterator<Item = HeaderCallback<Types, S, P>> + Send,
+    I::IntoIter: Send,
+{
+    let mut callbacks = callbacks.into_iter().peekable();
+    let Some(first) = callbacks.peek() else {
+        return Ok(());
+    };
+    let fetcher = first.fetcher();
+
+    let callbacks = callbacks.chain(once(HeaderCallback::Cert2 {
+        fetcher: fetcher.clone(),
+    }));
+
+    // Check if at least the header is available in local storage. If it is, we benefit two ways:
+    // 1. We know for sure the corresponding block exists, so we can unconditionally trigger an
+    //    active fetch without unnecessarily bothering our peers.
+    // 2. We only need to fetch the missing data (e.g. payload or VID common), not the full block.
+    //    Not only is this marginally less data to download, there are some providers that may only
+    //    be able to provide certain data. For example, the HotShot DA committee members may be able
+    //    to provide payloads, but not full blocks. Or, in the case where VID recovery is needed,
+    //    the VID common data may be available but the full block may not exist anywhere.
+    match tx.get_header(req).await {
+        Ok(header) => {
+            for callback in callbacks {
+                // Only a stored header can have stored VID common, as when just its payload is
+                // missing, so this is the one branch that can skip fetching it.
+                if matches!(callback, HeaderCallback::VidCommon { .. })
+                    && tx.get_vid_common_metadata(req).await.is_ok()
+                {
+                    continue;
+                }
+                callback.run(header.clone());
+            }
+            return Ok(());
+        },
+        Err(QueryError::Missing | QueryError::NotFound) => {
+            // We successfully queried the database, but the header wasn't there. Fall through to
+            // fetching it.
+            tracing::debug!(?req, "header not available locally; trying fetch");
+        },
+        Err(QueryError::Error { message }) => {
+            // An error occurred while querying the database. We don't know if we need to fetch the
+            // header or not. Return an error so we can try again.
+            bail!("failed to fetch header for block {req:?}: {message}");
+        },
+        Err(err @ QueryError::Pruned { .. }) => {
+            bail!("failed to fetch header for block {req:?}: {err}")
+        },
+    }
+
+    // If the header is _not_ present, we may still be able to fetch the request, but we need to
+    // fetch the header (in fact, the entire leaf) first. This is because we have an invariant that
+    // we should not store derived objects in the database unless we already have the corresponding
+    // header and leaf.
+    match req {
+        BlockId::Number(n) => {
+            fetch_leaf_with_callbacks(
+                fetcher,
+                n.into(),
+                callbacks.map(Into::into).collect::<Vec<_>>(),
+            )
+            .await?;
+        },
+        BlockId::Hash(h) => {
+            // Given only the hash, we cannot tell if the corresponding leaf actually exists, since
+            // we don't have a corresponding header. Therefore, we will not spawn an active fetch.
+            tracing::debug!("not fetching unknown block {h}");
+        },
+        BlockId::PayloadHash(h) => {
+            // Same as above, we don't fetch a block with a payload that is not known to exist.
+            tracing::debug!("not fetching block with unknown payload {h}");
+        },
+    }
+
+    Ok(())
+}
+
+pub(super) async fn fetch_header_range_and_then<Types, S, P, I>(
+    tx: &mut impl AvailabilityStorage<Types>,
+    req: RangeRequest,
+    callbacks: I,
+) -> anyhow::Result<()>
+where
+    Types: NodeType,
+    Header<Types>: QueryableHeader<Types>,
+    Payload<Types>: QueryablePayload<Types>,
+    S: VersionedDataSource + 'static,
+    for<'a> S::Transaction<'a>: UpdateAvailabilityStorage<Types>,
+    for<'a> S::ReadOnly<'a>: AvailabilityStorage<Types> + NodeStorage<Types> + PrunedHeightStorage,
+    P: AvailabilityProvider<Types>,
+    I: IntoIterator<Item = HeaderCallback<Types, S, P>> + Send,
+    I::IntoIter: Send,
+{
+    let mut callbacks = callbacks.into_iter().peekable();
+    let Some(first) = callbacks.peek() else {
+        return Ok(());
+    };
+    let fetcher = first.fetcher();
+
+    let callbacks = callbacks.chain(once(HeaderCallback::Cert2 {
+        fetcher: fetcher.clone(),
+    }));
+
+    // Check if the headers are already available in local storage; then we only need to fetch the
+    // payload data.
+    match <NonEmptyRange<LeafQueryData<Types>>>::load(tx, req).await {
+        Ok(leaves) => {
+            let range = req.start as usize..req.end as usize;
+            for callback in callbacks {
+                if matches!(callback, HeaderCallback::VidCommon { .. })
+                    && tx
+                        .get_vid_common_metadata_range(range.clone())
+                        .await
+                        .is_ok_and(|common| {
+                            common.iter().filter(|c| c.is_ok()).count() == range.len()
+                        })
+                {
+                    continue;
+                }
+                callback.run_range(&leaves);
+            }
+            return Ok(());
+        },
+        Err(QueryError::Missing | QueryError::NotFound) => {
+            // We successfully queried the database, but at least one header wasn't there. Fall
+            // through to fetching it.
+            tracing::debug!(?req, "headers not available locally; trying fetch");
+        },
+        Err(QueryError::Error { message }) => {
+            // An error occurred while querying the database. We don't know if we need to fetch the
+            // headers or not. Return an error so we can try again.
+            bail!("failed to fetch headers for range {req:?}: {message}");
+        },
+        Err(err @ QueryError::Pruned { .. }) => {
+            bail!("failed to fetch headers for range {req:?}: {err}")
+        },
+    }
+
+    // Fetch the headers (in fact, the entire leaves) first, then fetch the remaining payload data.
+    fetch_leaf_range_with_callbacks(fetcher, req, callbacks.map(Into::into).collect::<Vec<_>>())
+        .await?;
+
+    Ok(())
+}

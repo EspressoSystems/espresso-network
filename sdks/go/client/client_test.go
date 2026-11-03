@@ -13,8 +13,7 @@ import (
 )
 
 type devNodeInfo struct {
-	nodeURL    string
-	builderURL string
+	nodeURL string
 }
 
 func setupDevNode(t *testing.T) (context.Context, devNodeInfo) {
@@ -31,7 +30,7 @@ func setupDevNode(t *testing.T) (context.Context, devNodeInfo) {
 	err = waitForEspressoNode(ctx, ports.NodeURL())
 	require.NoError(t, err, "failed to start espresso dev node")
 
-	return ctx, devNodeInfo{nodeURL: ports.NodeURL(), builderURL: ports.BuilderURL()}
+	return ctx, devNodeInfo{nodeURL: ports.NodeURL()}
 }
 
 func testNamespaceTransactionsInRange(t *testing.T, ctx context.Context, client EspressoClient, txPayload string) {
@@ -70,30 +69,11 @@ func TestApiWithEspressoDevNode(t *testing.T) {
 	ClientTestHelper(ctx, client, t)
 
 	var clientOptions []EspressoClientConfigOption
-	builderSubmitter, err := NewBuilderSubmitter([]string{info.builderURL})
-	if err != nil {
-		t.Fatal("failed to create builder submitter", err)
-	}
-
-	clientOptions = append(clientOptions, WithTransactionSubmitter(builderSubmitter))
-	clientOptions = append(clientOptions, WithBaseUrl(info.nodeURL))
-
-	client, err = NewClientFromOptions(clientOptions...)
-	if err != nil {
-		t.Fatal("failed to create espresso client with builder submitter")
-	}
-
-	ClientTestHelper(ctx, client, t)
-
-	clientOptions = []EspressoClientConfigOption{}
 	querySubmitter := NewQuerySubmitter(info.nodeURL)
-	if err != nil {
-		t.Fatal("failed to create builder submitter", err)
-	}
 	clientOptions = append(clientOptions, WithTransactionSubmitter(querySubmitter))
 	clientOptions = append(clientOptions, WithBaseUrl(info.nodeURL))
 
-	client, err = NewClientFromOptions(clientOptions...)
+	client, err := NewClientFromOptions(clientOptions...)
 	if err != nil {
 		t.Fatal("Failed to create query submitter based client")
 	}

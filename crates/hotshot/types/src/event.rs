@@ -8,20 +8,15 @@
 
 use std::sync::Arc;
 
-use hotshot_utils::anytrace::*;
 use serde::{Deserialize, Serialize};
 
 use crate::{
     data::{
-        DaProposal, DaProposal2, Leaf, Leaf2, QuorumProposal, QuorumProposalWrapper,
-        UpgradeProposal, VidDisperseShare, VidDisperseShare0, ViewNumber,
+        DaProposal2, Leaf2, QuorumProposalWrapper, UpgradeProposal, VidDisperseShare, ViewNumber,
     },
     error::HotShotError,
-    message::{Proposal, convert_proposal},
-    simple_certificate::{
-        CertificatePair, LightClientStateUpdateCertificateV2, QuorumCertificate, QuorumCertificate2,
-    },
-    simple_vote::TimeoutVote2,
+    message::Proposal,
+    simple_certificate::{CertificatePair, LightClientStateUpdateCertificateV2},
     traits::{ValidatedState, node_implementation::NodeType},
     vote::HasViewNumber,
 };
@@ -37,25 +32,6 @@ pub struct Event<TYPES: NodeType> {
     pub view_number: ViewNumber,
     /// The underlying event
     pub event: EventType<TYPES>,
-}
-
-impl<TYPES: NodeType> Event<TYPES> {
-    pub fn to_legacy(self) -> anyhow::Result<LegacyEvent<TYPES>> {
-        Ok(LegacyEvent {
-            view_number: self.view_number,
-            event: self.event.to_legacy()?,
-        })
-    }
-}
-
-/// The pre-epoch version of an Event
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(bound(deserialize = "TYPES: NodeType"))]
-pub struct LegacyEvent<TYPES: NodeType> {
-    /// The view number that this event originates from
-    pub view_number: ViewNumber,
-    /// The underlying event
-    pub event: LegacyEventType<TYPES>,
 }
 
 /// Decided leaf with the corresponding state and VID info.
@@ -91,59 +67,10 @@ impl<TYPES: NodeType> LeafInfo<TYPES> {
             state_cert,
         }
     }
-
-    pub fn to_legacy_unsafe(self) -> anyhow::Result<LegacyLeafInfo<TYPES>> {
-        Ok(LegacyLeafInfo {
-            leaf: self.leaf.to_leaf_unsafe(),
-            state: self.state,
-            delta: self.delta,
-            vid_share: self
-                .vid_share
-                .map(|share| match share {
-                    VidDisperseShare::V0(share) => Ok(share),
-                    _ => Err(error!("VID share is post-epoch")),
-                })
-                .transpose()?,
-        })
-    }
-}
-
-/// Pre-epoch version of `LeafInfo`
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(bound(deserialize = "TYPES: NodeType"))]
-pub struct LegacyLeafInfo<TYPES: NodeType> {
-    /// Decided leaf.
-    pub leaf: Leaf<TYPES>,
-    /// Validated state.
-    pub state: Arc<<TYPES as NodeType>::ValidatedState>,
-    /// Optional application-specific state delta.
-    pub delta: Option<Arc<<<TYPES as NodeType>::ValidatedState as ValidatedState<TYPES>>::Delta>>,
-    /// Optional VID share data.
-    pub vid_share: Option<VidDisperseShare0<TYPES>>,
-}
-
-impl<TYPES: NodeType> LegacyLeafInfo<TYPES> {
-    /// Constructor.
-    pub fn new(
-        leaf: Leaf<TYPES>,
-        state: Arc<<TYPES as NodeType>::ValidatedState>,
-        delta: Option<Arc<<<TYPES as NodeType>::ValidatedState as ValidatedState<TYPES>>::Delta>>,
-        vid_share: Option<VidDisperseShare0<TYPES>>,
-    ) -> Self {
-        Self {
-            leaf,
-            state,
-            delta,
-            vid_share,
-        }
-    }
 }
 
 /// The chain of decided leaves with its corresponding state and VID info.
 pub type LeafChain<TYPES> = Vec<LeafInfo<TYPES>>;
-
-/// Pre-epoch version of `LeafChain`
-pub type LegacyLeafChain<TYPES> = Vec<LegacyLeafInfo<TYPES>>;
 
 /// Utilities for converting between HotShotError and a string.
 pub mod error_adaptor {
@@ -265,26 +192,6 @@ pub enum EventType<TYPES: NodeType> {
         /// Serialized data of the message
         data: Vec<u8>,
     },
-
-    /// Emitted by the legacy consensus task whenever it signs and broadcasts a
-    /// `TimeoutVote2`. Used at the legacy → new-protocol upgrade boundary so
-    /// the espresso bridge can forward the same vote into the new-protocol
-    /// coordinator's vote collectors. The wire-level protocols differ but the
-    /// underlying `TimeoutVote2` type and its version-tagged signature
-    /// commitment are shared, so the same vote is valid in both systems.
-    LegacyTimeoutVoteEmitted {
-        /// The vote that was signed and broadcast on the legacy wire.
-        vote: TimeoutVote2<TYPES>,
-    },
-
-    /// QC for the last legacy view, formed by the cutover-view leader at the
-    /// legacy -> new-protocol boundary. Lets the espresso bridge forward it to the
-    /// new-protocol coordinator if the cutover seed was snapshotted before this QC
-    /// finished assembling.
-    LegacyHighQcFormed {
-        /// The QC for the last legacy view (`cutover_view - 1`).
-        qc: QuorumCertificate2<TYPES>,
-    },
 }
 
 impl<TYPES: NodeType> std::fmt::Display for Event<TYPES> {
@@ -338,161 +245,8 @@ impl<TYPES: NodeType> std::fmt::Display for EventType<TYPES> {
             Self::ExternalMessageReceived { .. } => {
                 write!(f, "ExternalMessageReceived")
             },
-            Self::LegacyTimeoutVoteEmitted { vote } => {
-                write!(f, "LegacyTimeoutVoteEmitted: view={}", vote.view_number())
-            },
-            Self::LegacyHighQcFormed { qc } => {
-                write!(f, "LegacyHighQcFormed: view={}", qc.view_number())
-            },
         }
     }
-}
-
-impl<TYPES: NodeType> EventType<TYPES> {
-    pub fn to_legacy(self) -> anyhow::Result<LegacyEventType<TYPES>> {
-        Ok(match self {
-            EventType::Error { error } => LegacyEventType::Error { error },
-            EventType::Decide {
-                leaf_chain,
-                committing_qc: qc,
-                block_size,
-                ..
-            } => LegacyEventType::Decide {
-                leaf_chain: Arc::new(
-                    leaf_chain
-                        .iter()
-                        .cloned()
-                        .map(LeafInfo::to_legacy_unsafe)
-                        .collect::<anyhow::Result<_, _>>()?,
-                ),
-                qc: Arc::new(qc.qc().clone().to_qc()),
-                block_size,
-            },
-            EventType::ReplicaViewTimeout { view_number } => {
-                LegacyEventType::ReplicaViewTimeout { view_number }
-            },
-            EventType::ViewFinished { view_number } => {
-                LegacyEventType::ViewFinished { view_number }
-            },
-            EventType::ViewTimeout { view_number } => LegacyEventType::ViewTimeout { view_number },
-            EventType::Transactions { transactions } => {
-                LegacyEventType::Transactions { transactions }
-            },
-            EventType::DaProposal { proposal, sender } => LegacyEventType::DaProposal {
-                proposal: convert_proposal(proposal),
-                sender,
-            },
-            EventType::QuorumProposal { proposal, sender } => LegacyEventType::QuorumProposal {
-                proposal: convert_proposal(proposal),
-                sender,
-            },
-            EventType::UpgradeProposal { proposal, sender } => {
-                LegacyEventType::UpgradeProposal { proposal, sender }
-            },
-            EventType::ExternalMessageReceived { sender, data } => {
-                LegacyEventType::ExternalMessageReceived { sender, data }
-            },
-            // Upgrade-bridging event: doesn't exist in the pre-epoch event
-            // surface. Convert to a no-op equivalent (drop) since legacy
-            // consumers wouldn't know what to do with it.
-            EventType::LegacyTimeoutVoteEmitted { .. } => {
-                anyhow::bail!(
-                    "LegacyTimeoutVoteEmitted is upgrade-bridging only and has no legacy \
-                     equivalent"
-                )
-            },
-            EventType::LegacyHighQcFormed { .. } => {
-                anyhow::bail!(
-                    "LegacyHighQcFormed is upgrade-bridging only and has no legacy equivalent"
-                )
-            },
-        })
-    }
-}
-
-/// Pre-epoch version of the `EventType` enum.
-#[non_exhaustive]
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(bound(deserialize = "TYPES: NodeType"))]
-#[allow(clippy::large_enum_variant)]
-pub enum LegacyEventType<TYPES: NodeType> {
-    /// A view encountered an error and was interrupted
-    Error {
-        /// The underlying error
-        #[serde(with = "error_adaptor")]
-        error: Arc<HotShotError<TYPES>>,
-    },
-    /// A new decision event was issued
-    Decide {
-        /// The chain of Leaves that were committed by this decision
-        ///
-        /// This list is sorted in reverse view number order, with the newest (highest view number)
-        /// block first in the list.
-        ///
-        /// This list may be incomplete if the node is currently performing catchup.
-        /// Vid Info for a decided view may be missing if this node never saw it's share.
-        leaf_chain: Arc<LegacyLeafChain<TYPES>>,
-        /// The QC signing the most recent leaf in `leaf_chain`.
-        ///
-        /// Note that the QC for each additional leaf in the chain can be obtained from the leaf
-        /// before it using
-        qc: Arc<QuorumCertificate<TYPES>>,
-        /// Optional information of the number of transactions in the block, for logging purposes.
-        block_size: Option<u64>,
-    },
-    /// A replica task was canceled by a timeout interrupt
-    ReplicaViewTimeout {
-        /// The view that timed out
-        view_number: ViewNumber,
-    },
-    /// The view has finished.  If values were decided on, a `Decide` event will also be emitted.
-    ViewFinished {
-        /// The view number that has just finished
-        view_number: ViewNumber,
-    },
-    /// The view timed out
-    ViewTimeout {
-        /// The view that timed out
-        view_number: ViewNumber,
-    },
-    /// New transactions were received from the network
-    /// or submitted to the network by us
-    Transactions {
-        /// The list of transactions
-        transactions: Vec<TYPES::Transaction>,
-    },
-    /// DA proposal was received from the network
-    /// or submitted to the network by us
-    DaProposal {
-        /// Contents of the proposal
-        proposal: Proposal<TYPES, DaProposal<TYPES>>,
-        /// Public key of the leader submitting the proposal
-        sender: TYPES::SignatureKey,
-    },
-    /// Quorum proposal was received from the network
-    /// or submitted to the network by us
-    QuorumProposal {
-        /// Contents of the proposal
-        proposal: Proposal<TYPES, QuorumProposal<TYPES>>,
-        /// Public key of the leader submitting the proposal
-        sender: TYPES::SignatureKey,
-    },
-    /// Upgrade proposal was received from the network
-    /// or submitted to the network by us
-    UpgradeProposal {
-        /// Contents of the proposal
-        proposal: Proposal<TYPES, UpgradeProposal>,
-        /// Public key of the leader submitting the proposal
-        sender: TYPES::SignatureKey,
-    },
-
-    /// A message destined for external listeners was received
-    ExternalMessageReceived {
-        /// Public Key of the message sender
-        sender: TYPES::SignatureKey,
-        /// Serialized data of the message
-        data: Vec<u8>,
-    },
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Hash)]

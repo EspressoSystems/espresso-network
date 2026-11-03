@@ -1,0 +1,33 @@
+name: Publish compile metrics
+description: Merge this run's compile metrics and publish them as the baseline pull requests compare against
+inputs:
+  artifact:
+    description: Baseline artifact name, matching the report action's baseline-artifact
+    required: true
+runs:
+  using: composite
+  steps:
+    # `artifact` shares a namespace with the per-job compile-metrics-<job> artifacts this globs,
+    # so a job labelled `build`, `test` or `slowtest` would collide with its own workflow's
+    # baseline. Pick a job label that is not the workflow's name.
+    - name: Download compile metrics
+      uses: actions/download-artifact@v8
+      with:
+        pattern: compile-metrics-*
+        path: metrics-artifacts
+
+    - name: Merge compile metrics
+      shell: bash
+      run: |
+        python3 scripts/compile-metrics merge metrics-artifacts \
+          --sha "${{ github.sha }}" \
+          --run-url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+          --out compile-metrics.json
+
+    - name: Upload baseline
+      uses: actions/upload-artifact@v7
+      with:
+        name: ${{ inputs.artifact }}
+        path: compile-metrics.json
+        if-no-files-found: error
+        retention-days: 90

@@ -12,8 +12,8 @@ use espresso_types::{Header, L1BlockInfo};
 use espresso_utils::logging;
 use futures::future::join_all;
 use hotshot_types::traits::block_contents::BlockHeader;
+use http_client::Url;
 use itertools::Itertools;
-use surf_disco::Url;
 use tokio::time::sleep;
 use vbs::version::StaticVersionType;
 
@@ -58,7 +58,7 @@ struct Options {
     logging: logging::Config,
 }
 
-type SequencerClient<ApiVer> = surf_disco::Client<hotshot_query_service::Error, ApiVer>;
+type SequencerClient<ApiVer> = http_client::Client<hotshot_query_service::Error, ApiVer>;
 
 async fn verify_header<ApiVer: StaticVersionType>(
     opt: &Options,

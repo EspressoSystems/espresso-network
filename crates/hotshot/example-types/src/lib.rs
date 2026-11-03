@@ -13,6 +13,9 @@ pub mod state_types;
 /// node types
 pub mod node_types;
 
+/// stake and committee lists for test nodes
+pub mod node_stake;
+
 /// storage types for hotshot storage
 pub mod storage_types;
 

@@ -5,8 +5,6 @@ use committable::Commitment;
 use hotshot_types::{
     data::{EpochNumber, Leaf2, ViewNumber},
     message::Proposal as SignedProposal,
-    simple_certificate::QuorumCertificate2,
-    simple_vote::TimeoutVote2,
     traits::{
         leaf_fetcher_network::LeafFetcherNetwork, node_implementation::NodeType,
         signature_key::SignatureKey,
@@ -15,7 +13,9 @@ use hotshot_types::{
 };
 use tokio::sync::{mpsc, oneshot};
 
-use crate::{coordinator::error::CoordinatorError, message::Proposal, state::UpdateLeaf};
+use crate::{
+    block::SubmitError, coordinator::error::CoordinatorError, message::Proposal, state::UpdateLeaf,
+};
 
 #[derive(Clone)]
 pub struct ClientApi<T: NodeType> {
@@ -28,7 +28,7 @@ impl<T: NodeType> ClientApi<T> {
         self.call(ClientRequest::CurrentView(tx), rx).await
     }
 
-    pub async fn current_epoch(&self) -> Result<Option<EpochNumber>, QueryError> {
+    pub async fn current_epoch(&self) -> Result<EpochNumber, QueryError> {
         let (tx, rx) = oneshot::channel();
         self.call(ClientRequest::CurrentEpoch(tx), rx).await
     }
@@ -78,7 +78,8 @@ impl<T: NodeType> ClientApi<T> {
     pub async fn submit_transaction(&self, tx: T::Transaction) -> Result<(), QueryError> {
         let (respond, rx) = oneshot::channel();
         self.call(ClientRequest::SubmitTransaction { tx, respond }, rx)
-            .await
+            .await?
+            .map_err(QueryError::from)
     }
 
     pub async fn request_proposal(
@@ -136,28 +137,6 @@ impl<T: NodeType> ClientApi<T> {
             .await
     }
 
-    /// Forward a legacy `TimeoutVote2` into the new-protocol timeout collectors.
-    pub async fn submit_timeout_vote(&self, vote: TimeoutVote2<T>) -> Result<(), QueryError> {
-        let (respond, rx) = oneshot::channel();
-        self.call(ClientRequest::SubmitTimeoutVote { vote, respond }, rx)
-            .await
-    }
-
-    /// Forward the last legacy view's QC so the first new-protocol leader can
-    /// propose on it even if the cutover seed was snapshotted before it formed.
-    pub async fn submit_legacy_high_qc(&self, qc: QuorumCertificate2<T>) -> Result<(), QueryError> {
-        let (respond, rx) = oneshot::channel();
-        self.call(ClientRequest::SubmitLegacyHighQc { qc, respond }, rx)
-            .await
-    }
-
-    /// Refresh the coordinator network's peer set for `epoch`.
-    pub async fn bump_network_epoch(&self, epoch: EpochNumber) -> Result<(), QueryError> {
-        let (respond, rx) = oneshot::channel();
-        self.call(ClientRequest::BumpNetworkEpoch { epoch, respond }, rx)
-            .await
-    }
-
     async fn call<A>(
         &self,
         request: ClientRequest<T>,
@@ -207,7 +186,7 @@ impl<T: NodeType> CoordinatorClient<T> {
 #[allow(clippy::large_enum_variant)]
 pub(crate) enum ClientRequest<T: NodeType> {
     CurrentView(oneshot::Sender<ViewNumber>),
-    CurrentEpoch(oneshot::Sender<Option<EpochNumber>>),
+    CurrentEpoch(oneshot::Sender<EpochNumber>),
     DecidedLeaf(oneshot::Sender<Leaf2<T>>),
     DecidedState(oneshot::Sender<Option<Arc<T::ValidatedState>>>),
     UndecidedLeaves(oneshot::Sender<Vec<Leaf2<T>>>),
@@ -234,7 +213,7 @@ pub(crate) enum ClientRequest<T: NodeType> {
     },
     SubmitTransaction {
         tx: T::Transaction,
-        respond: oneshot::Sender<()>,
+        respond: oneshot::Sender<Result<(), SubmitError>>,
     },
     RequestProposal {
         view: ViewNumber,
@@ -245,18 +224,6 @@ pub(crate) enum ClientRequest<T: NodeType> {
         payload: Vec<u8>,
         recipient: T::SignatureKey,
         respond: oneshot::Sender<Result<(), QueryError>>,
-    },
-    SubmitTimeoutVote {
-        vote: TimeoutVote2<T>,
-        respond: oneshot::Sender<()>,
-    },
-    SubmitLegacyHighQc {
-        qc: QuorumCertificate2<T>,
-        respond: oneshot::Sender<()>,
-    },
-    BumpNetworkEpoch {
-        epoch: EpochNumber,
-        respond: oneshot::Sender<()>,
     },
 }
 
@@ -271,6 +238,9 @@ pub enum QueryError {
 
     #[error("coordinator error: {0}")]
     Coordinator(#[from] CoordinatorError),
+
+    #[error("transaction rejected: {0}")]
+    Rejected(#[from] SubmitError),
 }
 
 /// `LeafFetcherNetwork` impl that routes catchup direct-messages through
@@ -278,7 +248,7 @@ pub enum QueryError {
 ///
 /// The membership layer gets a clone of this so it does not need its own
 /// network handle — the `Coordinator` is the only owner of the underlying
-/// `ConnectedNetwork`.
+/// network.
 pub struct ClientLeafFetcherNetwork<T: NodeType> {
     client: ClientApi<T>,
 }

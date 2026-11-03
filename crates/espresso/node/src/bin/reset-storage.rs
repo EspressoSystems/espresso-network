@@ -50,14 +50,29 @@ async fn main() -> anyhow::Result<()> {
                 reset_storage(persistence_opt).await
             }
         },
-        Command::Sql(persistence_opt) => {
-            if opt.stake_table_only {
-                tracing::warn!("clearing stake table events from SQL storage {persistence_opt:?}");
-                clear_stake_table_events(*persistence_opt).await
-            } else {
-                tracing::warn!("resetting SQL storage {persistence_opt:?}");
-                reset_storage(*persistence_opt).await
-            }
+        Command::Sql(persistence_opt) => match persistence_opt.into_backend() {
+            persistence::sql::SqlBackendOptions::Sqlite(persistence_opt) => {
+                if opt.stake_table_only {
+                    tracing::warn!(
+                        "clearing stake table events from SQL storage {persistence_opt:?}"
+                    );
+                    clear_stake_table_events(persistence_opt).await
+                } else {
+                    tracing::warn!("resetting SQL storage {persistence_opt:?}");
+                    reset_storage(persistence_opt).await
+                }
+            },
+            persistence::sql::SqlBackendOptions::Postgres(persistence_opt) => {
+                if opt.stake_table_only {
+                    tracing::warn!(
+                        "clearing stake table events from SQL storage {persistence_opt:?}"
+                    );
+                    clear_stake_table_events(persistence_opt).await
+                } else {
+                    tracing::warn!("resetting SQL storage {persistence_opt:?}");
+                    reset_storage(persistence_opt).await
+                }
+            },
         },
     }
 }

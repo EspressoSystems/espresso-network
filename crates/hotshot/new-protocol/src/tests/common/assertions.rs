@@ -1,6 +1,7 @@
-use hotshot::types::BLSPubKey;
 use hotshot_example_types::node_types::TestTypes;
-use hotshot_types::traits::signature_key::SignatureKey;
+use hotshot_types::{
+    signature_key::BLSPubKey, traits::signature_key::SignatureKey, vote::HasViewNumber,
+};
 
 use crate::consensus::{ConsensusInput, ConsensusOutput};
 
@@ -10,6 +11,14 @@ pub(crate) fn is_vote1(output: &ConsensusOutput<TestTypes>) -> bool {
 
 pub(crate) fn is_vote2(output: &ConsensusOutput<TestTypes>) -> bool {
     matches!(output, ConsensusOutput::SendVote2(_))
+}
+
+pub(crate) fn is_vote1_for_view(output: &ConsensusOutput<TestTypes>, view: u64) -> bool {
+    matches!(output, ConsensusOutput::SendVote1(v) if *v.view_number() == view)
+}
+
+pub(crate) fn is_vote2_for_view(output: &ConsensusOutput<TestTypes>, view: u64) -> bool {
+    matches!(output, ConsensusOutput::SendVote2(v) if *v.view_number() == view)
 }
 
 pub(crate) fn is_leaf_decided(output: &ConsensusOutput<TestTypes>) -> bool {
@@ -23,6 +32,14 @@ pub(crate) fn decides_view(output: &ConsensusOutput<TestTypes>, view: u64) -> bo
         ConsensusOutput::LeafDecided { leaves, .. }
             if leaves.iter().any(|l| *l.view_number() == view)
     )
+}
+
+pub(crate) fn is_proposal_paired(output: &ConsensusOutput<TestTypes>) -> bool {
+    matches!(output, ConsensusOutput::ProposalPaired { .. })
+}
+
+pub(crate) fn is_proposal_certified(output: &ConsensusOutput<TestTypes>) -> bool {
+    matches!(output, ConsensusOutput::ProposalCertified(_))
 }
 
 pub(crate) fn is_request_state(output: &ConsensusOutput<TestTypes>) -> bool {
@@ -99,7 +116,7 @@ pub(crate) fn is_vid_disperse(input: &ConsensusInput<TestTypes>) -> bool {
 }
 
 pub(crate) fn is_block_reconstructed(input: &ConsensusInput<TestTypes>) -> bool {
-    matches!(input, ConsensusInput::BlockReconstructed(..))
+    matches!(input, ConsensusInput::BlockReconstructed { .. })
 }
 
 pub(crate) fn is_state_validated(input: &ConsensusInput<TestTypes>) -> bool {
@@ -116,6 +133,10 @@ pub(crate) fn is_timeout_one_honest(input: &ConsensusInput<TestTypes>) -> bool {
 
 pub(crate) fn is_timeout_cert(input: &ConsensusInput<TestTypes>) -> bool {
     matches!(input, ConsensusInput::TimeoutCertificate(_))
+}
+
+pub(crate) fn is_upgrade_cert_formed(input: &ConsensusInput<TestTypes>) -> bool {
+    matches!(input, ConsensusInput::UpgradeCertificateFormed(_))
 }
 
 pub(crate) fn is_drb_result(input: &ConsensusInput<TestTypes>) -> bool {

@@ -68,11 +68,11 @@ REPO_ROOT = Path(
 
 
 def scrape_node(idx: int, port: int) -> list[dict]:
-    """Scrape one node's /v0/status/metrics endpoint."""
+    """Scrape one node's /v1/status/metrics endpoint."""
     name = f"espresso-node-{idx}"
     try:
         with urllib.request.urlopen(
-            f"http://localhost:{port}/v0/status/metrics", timeout=2.0
+            f"http://localhost:{port}/v1/status/metrics", timeout=2.0
         ) as resp:
             body = resp.read().decode()
     except OSError as e:
@@ -361,7 +361,7 @@ def cli(log_level: str) -> None:
     type=PathOpt,
 )
 def sample(duration_seconds: int, output_dir: Path) -> None:
-    """Scrape docker stats + each node's /v0/status/metrics into JSONL."""
+    """Scrape docker stats + each node's /v1/status/metrics into JSONL."""
     output_dir.mkdir(parents=True, exist_ok=True)
     env_path = REPO_ROOT / ".env"
     if not env_path.exists():

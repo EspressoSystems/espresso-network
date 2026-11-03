@@ -1,0 +1,41 @@
+[package]
+name = "light-client-query-service"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+default-run = "light-client-query-service"
+
+[[bin]]
+name = "light-client-genesis"
+path = "src/bin/genesis.rs"
+required-features = ["genesis"]
+
+[features]
+default = ["genesis"]
+genesis = []
+
+[dependencies]
+anyhow = { workspace = true }
+axum = { workspace = true }
+clap = { workspace = true }
+disco-types = { workspace = true }
+espresso-node = { workspace = true, default-features = false }
+espresso-types = { workspace = true }
+futures = { workspace = true }
+hotshot-query-service = { workspace = true }
+hotshot-types = { workspace = true }
+http-client = { workspace = true }
+http-wire = { workspace = true, features = ["server"] }
+light-client = { workspace = true, features = ["client"] }
+log-panics = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+toml = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+url = { workspace = true }
+vbs = { workspace = true }
+
+[lints]
+workspace = true

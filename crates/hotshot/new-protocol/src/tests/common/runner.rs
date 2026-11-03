@@ -1,22 +1,27 @@
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap},
     fmt,
+    net::IpAddr,
     time::Duration,
 };
 
 use async_broadcast::Sender;
 use bon::Builder;
 use cliquenet::noise::Protocol;
-use committable::Committable;
-use hotshot::types::{BLSPubKey, Event, EventType};
-use hotshot_example_types::{node_types::TestTypes, storage_types::TestStorage};
+use committable::{Commitment, Committable};
+use hotshot_example_types::{
+    block_types::TestTransaction, node_types::TestTypes, storage_types::TestStorage,
+};
 use hotshot_types::{
     PeerConnectInfo,
     addr::NetAddr,
     data::ViewNumber,
     epoch_membership::EpochMembershipCoordinator,
+    event::{Event, EventType},
     message::UpgradeLock,
-    simple_certificate::TimeoutCertificate2,
+    signature_key::BLSPubKey,
+    simple_certificate::TimeoutEvidence,
+    simple_vote::HasEpoch,
     traits::{metrics::NoMetrics, signature_key::SignatureKey},
     vote::HasViewNumber,
     x25519::Keypair,
@@ -28,24 +33,31 @@ use tokio::{
         oneshot,
     },
     task::JoinHandle,
-    time::{Instant, timeout},
+    time::{Instant, sleep, timeout},
 };
+use tokio_util::task::AbortOnDropHandle;
 use tracing::{debug, info};
 
 use crate::{
-    client::CoordinatorClient,
-    consensus::{ConsensusInput, ConsensusOutput, PreCutoverSeed},
+    cert_verifier::ValidCert,
+    client::{ClientApi, CoordinatorClient},
+    consensus::{ConsensusInput, ConsensusOutput},
     coordinator::{Coordinator, error::Severity},
-    helpers::test_upgrade_lock,
+    message::{ConsensusMessage, Message, MessageType, OpaqueMessage, Unchecked},
     network::Cliquenet,
     tests::common::{
-        coordinator_builder::build_test_coordinator,
+        coordinator_builder::{UpgradeSetup, build_test_coordinator},
         utils::{
             StakeTableSchedule, mock_membership_with_client,
             mock_membership_with_client_and_schedule,
         },
     },
 };
+
+/// Extra inbound-message drop predicate for every node's network:
+/// `(node index, message) -> drop?`.
+pub type DropInbound =
+    std::sync::Arc<dyn Fn(usize, &Message<TestTypes, Unchecked>) -> bool + Send + Sync>;
 
 /// Action to apply to a node at a specific view.
 #[derive(Clone, Debug)]
@@ -64,12 +76,18 @@ pub enum NodeAction {
     /// anchor and action records; otherwise it starts from genesis
     /// (blank state).
     Restart,
+    /// Like `Restart`, but rebind the node's cliquenet listener to the
+    /// given address. Other nodes must learn the new address through the
+    /// stake table (`StakeTableSchedule::addr_overrides`).
+    RestartAt(NetAddr),
     /// Start: bring a node that was initially offline into the network
     /// with a fresh coordinator from genesis.
     Start,
-    // TODO: Fix the shutdown test and add this back.
-    // /// Shutdown: take the node offline.
-    // Shutdown,
+    /// Shutdown: take the node offline for the rest of the run. Views it
+    /// leads afterwards are not predicted from `down_nodes`; list them in
+    /// `expected_failed_views`, or the run fails with `NotEnoughDecided`
+    /// for the first such view.
+    Shutdown,
 }
 
 /// Configuration for a multi-node integration test.
@@ -128,6 +146,34 @@ pub struct TestRunner {
     /// `down_nodes`: failed-view prediction assumes the full committee leads.
     stake_table_schedule: Option<StakeTableSchedule>,
 
+    /// Pairs of nodes that cannot connect to each other: both sides get an
+    /// unreachable address for their counterpart.  Order within a pair does
+    /// not matter.  Incompatible with `stake_table_schedule`, whose connect
+    /// infos would heal the partition.
+    #[builder(default)]
+    blocked_pairs: BTreeSet<(usize, usize)>,
+
+    /// Views whose VID share broadcasts a node never receives, per node.
+    ///
+    /// The node still gets the proposal, its own share fragments and every
+    /// vote, so it takes full part in the view and simply cannot reconstruct
+    /// its block: the deficit the payload fetch exists for, which breaking a
+    /// link cannot reproduce.
+    #[builder(default)]
+    starved_of_shares: BTreeMap<usize, BTreeSet<ViewNumber>>,
+
+    /// Per-node listener IP overrides (default `127.0.0.1`).  Cliquenet
+    /// validates inbound connections by source IP only, and loopback dials
+    /// always originate from `127.0.0.1` regardless of the dialer's bind
+    /// address.  A node registered on a distinct loopback IP (Linux only;
+    /// macOS does not alias `127.0.0.0/8`) therefore has its own outbound
+    /// dials rejected by its peers and is reachable only when peers dial
+    /// the address registered for it — which makes address propagation
+    /// through the stake table load-bearing instead of being papered over
+    /// by the node's own dials.
+    #[builder(default)]
+    node_ips: BTreeMap<usize, IpAddr>,
+
     /// Per-node overrides of `target_decisions` for the completion check.
     /// A validator removed from the stake table stops deciding once its
     /// membership ends and only needs to reach its smaller target.
@@ -145,17 +191,72 @@ pub struct TestRunner {
     /// Simulates certificates that formed while other nodes were down (the
     /// certs are not forwarded, so only the seeded nodes know them).
     #[builder(default)]
-    initial_timeout_certs: BTreeMap<usize, Vec<TimeoutCertificate2<TestTypes>>>,
+    initial_timeout_certs: BTreeMap<usize, Vec<TimeoutEvidence<TestTypes>>>,
 
-    pre_cutover_seed: Option<PreCutoverSeed<TestTypes>>,
+    /// Unique transactions submitted while the network runs, round-robin over the live nodes.
+    #[builder(default)]
+    transactions: usize,
 
-    #[builder(skip = test_upgrade_lock())]
-    upgrade_lock: UpgradeLock<TestTypes>,
+    /// Transaction commitments of each decided block, by view. Filled in by `run()`.
+    #[builder(skip)]
+    decided_transactions: BTreeMap<ViewNumber, Vec<Commitment<TestTransaction>>>,
+
+    /// The version upgrade every node is configured for. Trivial by default.
+    #[builder(default = versions::Upgrade::trivial(versions::NEW_PROTOCOL_VERSION))]
+    upgrade: versions::Upgrade,
+
+    /// Windows for the upgrade sub-protocol. Disabled by default.
+    #[builder(default)]
+    upgrade_config: hotshot_types::upgrade_config::UpgradeConfig,
+
+    /// Extra inbound-message drop predicate installed on every node's
+    /// network, combined with `starved_of_shares`.
+    drop_inbound: Option<DropInbound>,
+
+    /// Each node's `UpgradeLock`, exposed so tests can assert on decided
+    /// upgrades after a run.
+    #[builder(skip)]
+    node_locks: Vec<Option<UpgradeLock<TestTypes>>>,
+}
+
+#[derive(Debug)]
+pub struct NodeProgress {
+    pub idx: usize,
+    pub decided: usize,
+    pub target: usize,
+    pub highest_view: Option<ViewNumber>,
+    pub timed_out_views: BTreeSet<ViewNumber>,
+    pub down: bool,
+}
+
+fn format_progress(progress: &[NodeProgress]) -> String {
+    progress
+        .iter()
+        .map(|p| {
+            let highest = p
+                .highest_view
+                .map_or_else(|| "none".to_string(), |v| v.to_string());
+            let down = if p.down { " down" } else { "" };
+            let timed_out = p
+                .timed_out_views
+                .iter()
+                .map(|v| v.to_string())
+                .collect::<Vec<_>>()
+                .join(",");
+            format!(
+                "node {} decided={}/{} highest={highest} timed_out=[{timed_out}]{down}",
+                p.idx, p.decided, p.target
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 #[derive(Debug)]
 pub enum TestError {
-    Timeout,
+    Timeout {
+        progress: Vec<NodeProgress>,
+    },
     ChainDivergence {
         node: usize,
     },
@@ -178,7 +279,11 @@ pub enum TestError {
 impl fmt::Display for TestError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Timeout => write!(f, "timed out waiting for all nodes to decide"),
+            Self::Timeout { progress } => write!(
+                f,
+                "timed out waiting for all nodes to decide: {}",
+                format_progress(progress)
+            ),
             Self::ChainDivergence { node } => {
                 write!(f, "node {node} decided a different chain prefix")
             },
@@ -216,6 +321,7 @@ impl fmt::Display for TestError {
 
 enum NodeEvent {
     Decided(BTreeMap<ViewNumber, [u8; 32]>),
+    DecidedTransactions(ViewNumber, Vec<Commitment<TestTransaction>>),
     TimedOut(ViewNumber),
 }
 
@@ -269,11 +375,49 @@ impl TestRunner {
         &self.node_storages
     }
 
+    pub fn decided_transactions(&self) -> &BTreeMap<ViewNumber, Vec<Commitment<TestTransaction>>> {
+        &self.decided_transactions
+    }
+
+    pub fn node_locks(&self) -> &[Option<UpgradeLock<TestTypes>>] {
+        &self.node_locks
+    }
+
+    /// A node's upgrade lock, restored from its (possibly persisted) storage.
+    async fn make_upgrade_lock(&mut self, idx: usize) -> UpgradeLock<TestTypes> {
+        let decided_cert = self.node_storages[idx].decided_upgrade_certificate().await;
+        let lock = UpgradeLock::from_certificate(self.upgrade, &decided_cert);
+        self.node_locks[idx] = Some(lock.clone());
+        lock
+    }
+
     fn target_for(&self, idx: usize) -> usize {
         self.node_decision_targets
             .get(&idx)
             .copied()
             .unwrap_or(self.target_decisions)
+    }
+
+    fn timeout_error(
+        &self,
+        node_commits: &[BTreeMap<ViewNumber, [u8; 32]>],
+        node_timeouts: &[BTreeSet<ViewNumber>],
+        currently_down: &BTreeSet<usize>,
+    ) -> TestError {
+        TestError::Timeout {
+            progress: node_commits
+                .iter()
+                .enumerate()
+                .map(|(idx, commits)| NodeProgress {
+                    idx,
+                    decided: commits.len(),
+                    target: self.target_for(idx),
+                    highest_view: commits.keys().last().copied(),
+                    timed_out_views: node_timeouts[idx].clone(),
+                    down: currently_down.contains(&idx),
+                })
+                .collect(),
+        }
     }
 
     /// Build a node's membership, honoring the stake table schedule if set.
@@ -311,12 +455,19 @@ impl TestRunner {
             "stake table schedules are incompatible with down_nodes: failed_views_from_down_nodes \
              assumes the full committee leads"
         );
+        assert!(
+            self.stake_table_schedule.is_none() || self.blocked_pairs.is_empty(),
+            "stake table schedules are incompatible with blocked_pairs: scheduled connect infos \
+             are applied at epoch changes and would heal the partition"
+        );
 
         self.node_storages = (0..self.num_nodes)
             .map(|_| TestStorage::default())
             .collect();
+        self.node_locks = vec![None; self.num_nodes];
         let initially_down = self.initially_down_nodes();
         let mut node_handles: Vec<Option<JoinHandle<()>>> = Vec::with_capacity(self.num_nodes);
+        let mut clients = Vec::new();
         let mut generations: Vec<u64> = vec![0; self.num_nodes];
         let (event_tx, mut event_rx) = mpsc::unbounded_channel::<TaggedEvent>();
         let mut currently_down = initially_down;
@@ -324,14 +475,19 @@ impl TestRunner {
         let mut cancels = HashMap::new();
 
         // Generate keys and addresses for all nodes.
-        let parties = (0..self.num_nodes)
+        let mut parties = (0..self.num_nodes)
             .map(|i| {
                 let (public_key, private_key) =
                     BLSPubKey::generated_from_seed_indexed([0u8; 32], i as u64);
                 let keypair = Keypair::derive_from::<BLSPubKey>(&private_key).unwrap();
                 let port = test_utils::reserve_tcp_port()
                     .expect("OS should have ephemeral ports available");
-                let addr = NetAddr::Inet(std::net::Ipv4Addr::LOCALHOST.into(), port);
+                let ip = self
+                    .node_ips
+                    .get(&i)
+                    .copied()
+                    .unwrap_or_else(|| std::net::Ipv4Addr::LOCALHOST.into());
+                let addr = NetAddr::Inet(ip, port);
                 (keypair, public_key, addr)
             })
             .collect::<Vec<_>>();
@@ -343,9 +499,17 @@ impl TestRunner {
             })
             .collect();
 
+        // Nothing ever listens here; even if another test later reuses the
+        // port, the handshake fails on the unexpected peer key.
+        let unreachable_addr = NetAddr::Inet(
+            std::net::Ipv4Addr::LOCALHOST.into(),
+            test_utils::reserve_tcp_port().expect("OS should have ephemeral ports available"),
+        );
+
         // Spawn one coordinator task per live node.  Each node gets its
         // own membership instance so they don't share internal state.
-        for (i, (_, public_key, _)) in parties.iter().enumerate() {
+        for i in 0..parties.len() {
+            let public_key = parties[i].1;
             // Down nodes get their network when `NodeAction::Start` fires. Binding
             // the port here would leave it held until the discarded instance's server
             // task exits (release is asynchronous), racing the later rebind.
@@ -353,11 +517,23 @@ impl TestRunner {
                 node_handles.push(None);
                 continue;
             }
-            let network = create_network(i, &parties, &self.upgrade_lock).await;
+            let upgrade_lock = self.make_upgrade_lock(i).await;
+            let network = create_network(
+                i,
+                &parties,
+                &self.blocked_pairs,
+                self.starved_of_shares.get(&i).cloned().unwrap_or_default(),
+                &unreachable_addr,
+                &upgrade_lock,
+                self.drop_inbound.clone(),
+            )
+            .await;
 
             let (membership, storage, client, external_events_tx) =
-                self.make_membership(*public_key, self.node_storages[i].clone(), &connect_infos);
+                self.make_membership(public_key, self.node_storages[i].clone(), &connect_infos);
+            clients.push(client.handle().clone());
 
+            let (external_tx, external_rx) = mpsc::unbounded_channel();
             let mut coord = build_test_coordinator(
                 i as u64,
                 network,
@@ -366,13 +542,19 @@ impl TestRunner {
                 client,
                 self.epoch_height,
                 self.view_timeout,
-                self.pre_cutover_seed.clone(),
+                UpgradeSetup {
+                    lock: upgrade_lock,
+                    config: self.upgrade_config.clone(),
+                },
+                external_tx,
             )
             .await;
 
             if let Some(certs) = self.initial_timeout_certs.get(&i) {
                 for tc in certs {
-                    coord.apply_consensus(ConsensusInput::TimeoutCertificate(tc.clone()));
+                    let epoch = tc.epoch().expect("seeded timeout cert has an epoch");
+                    let tc = ValidCert::new(tc.clone(), epoch);
+                    coord.apply_consensus(ConsensusInput::TimeoutCertificate(tc));
                     for output in coord.outbox_mut().take() {
                         // Keep the seeded certs local to this node; the
                         // real network never delivered them to the others.
@@ -388,28 +570,20 @@ impl TestRunner {
             let generation = generations[i];
             let (cancel_tx, cancel_rx) = oneshot::channel();
             cancels.insert(i, cancel_tx);
-            let mut initial_commits: BTreeMap<ViewNumber, [u8; 32]> = BTreeMap::new();
-            if let Some(seed) = &self.pre_cutover_seed {
-                let anchor_view = seed.decided_anchor.view_number();
-                let anchor_commit: [u8; 32] = seed.decided_anchor.commit().into();
-                for v in 1..*anchor_view {
-                    initial_commits.insert(ViewNumber::new(v), anchor_commit);
-                }
-                initial_commits.insert(anchor_view, anchor_commit);
-                for leaf in &seed.undecided {
-                    initial_commits.insert(leaf.view_number(), leaf.commit().into());
-                }
-            }
             node_handles.push(Some(tokio::spawn(run_node(
                 coord,
+                external_rx,
                 self.node_storages[i].clone(),
                 tx,
                 i,
                 generation,
                 external_events_tx,
                 cancel_rx,
-                initial_commits,
             ))));
+        }
+
+        if self.transactions > 0 {
+            tokio::spawn(submit_transactions(clients, self.transactions));
         }
 
         // Build pending changes sorted by view.
@@ -429,30 +603,15 @@ impl TestRunner {
         let mut node_timeouts: Vec<BTreeSet<ViewNumber>> = vec![BTreeSet::new(); self.num_nodes];
         let mut max_decided_view: u64 = 0;
 
-        // Seeded leaves never fire `LeafDecided`; pre-populate them.
-        if let Some(seed) = &self.pre_cutover_seed {
-            let anchor_view = seed.decided_anchor.view_number();
-            let anchor_commit: [u8; 32] = seed.decided_anchor.commit().into();
-            for commits in &mut node_commits {
-                for v in 1..*anchor_view {
-                    commits.insert(ViewNumber::new(v), anchor_commit);
-                }
-                commits.insert(anchor_view, anchor_commit);
-                for leaf in &seed.undecided {
-                    commits.insert(leaf.view_number(), leaf.commit().into());
-                }
-            }
-        }
-
         let deadline = Instant::now() + self.max_runtime;
         while node_commits
             .iter()
             .enumerate()
             .any(|(i, s)| !currently_down.contains(&i) && s.len() < self.target_for(i))
         {
-            let remaining = deadline
-                .checked_duration_since(Instant::now())
-                .ok_or(TestError::Timeout)?;
+            let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
+                return Err(self.timeout_error(&node_commits, &node_timeouts, &currently_down));
+            };
 
             // Apply pending node changes when progress reaches their view.
             if !self.node_changes.is_empty() {
@@ -469,8 +628,8 @@ impl TestRunner {
                             action = ?change.action,
                             "applying node change"
                         );
-                        match change.action {
-                            NodeAction::Restart | NodeAction::Start => {
+                        match &change.action {
+                            NodeAction::Restart | NodeAction::RestartAt(_) | NodeAction::Start => {
                                 if let Some(tx) = cancels.remove(&change.idx) {
                                     let (a, b) = oneshot::channel();
                                     if tx.send(a).is_ok() {
@@ -482,20 +641,36 @@ impl TestRunner {
                                     handle.abort();
                                     let _ = handle.await;
                                 }
+                                if let NodeAction::RestartAt(addr) = &change.action {
+                                    parties[change.idx].2 = addr.clone();
+                                }
                                 // Create a fresh coordinator; it resumes
                                 // from the persisted anchor when storage is
                                 // persistent, from genesis otherwise.
-                                let net =
-                                    create_network(change.idx, &parties, &self.upgrade_lock).await;
                                 if !self.persistent_storage {
                                     self.node_storages[change.idx] = TestStorage::default();
                                 }
+                                let upgrade_lock = self.make_upgrade_lock(change.idx).await;
+                                let net = create_network(
+                                    change.idx,
+                                    &parties,
+                                    &self.blocked_pairs,
+                                    self.starved_of_shares
+                                        .get(&change.idx)
+                                        .cloned()
+                                        .unwrap_or_default(),
+                                    &unreachable_addr,
+                                    &upgrade_lock,
+                                    self.drop_inbound.clone(),
+                                )
+                                .await;
                                 let (membership, storage, client, external_events_tx) = self
                                     .make_membership(
                                         parties[change.idx].1,
                                         self.node_storages[change.idx].clone(),
                                         &connect_infos,
                                     );
+                                let (external_tx, external_rx) = mpsc::unbounded_channel();
                                 let coord = build_test_coordinator(
                                     change.idx as u64,
                                     net,
@@ -504,7 +679,11 @@ impl TestRunner {
                                     client,
                                     self.epoch_height,
                                     self.view_timeout,
-                                    self.pre_cutover_seed.clone(),
+                                    UpgradeSetup {
+                                        lock: upgrade_lock,
+                                        config: self.upgrade_config.clone(),
+                                    },
+                                    external_tx,
                                 )
                                 .await;
                                 // Bump the generation so stale events queued
@@ -514,30 +693,37 @@ impl TestRunner {
                                 let generation = generations[change.idx];
                                 let (cancel_tx, cancel_rx) = oneshot::channel();
                                 cancels.insert(change.idx, cancel_tx);
-                                // Restarted nodes start with a fresh commits
-                                // map (mirroring the wipe at line ~404 below).
-                                let initial_commits = BTreeMap::new();
                                 node_handles[change.idx] = Some(tokio::spawn(run_node(
                                     coord,
+                                    external_rx,
                                     self.node_storages[change.idx].clone(),
                                     tx,
                                     change.idx,
                                     generation,
                                     external_events_tx,
                                     cancel_rx,
-                                    initial_commits,
                                 )));
                                 currently_down.remove(&change.idx);
                                 node_commits[change.idx] = BTreeMap::new();
                             },
-                            // NodeAction::Shutdown => {
-                            //     if let Some(handle) = node_handles[change.idx].take() {
-                            //         handle.abort();
-                            //     }
-                            //     network_state.shutdown_node(change.idx).await;
-                            //     generations[change.idx] += 1;
-                            //     currently_down.insert(change.idx);
-                            // },
+                            NodeAction::Shutdown => {
+                                // Stop the coordinator gracefully so it closes
+                                // its cliquenet listener and flushes storage.
+                                if let Some(tx) = cancels.remove(&change.idx) {
+                                    let (a, b) = oneshot::channel();
+                                    if tx.send(a).is_ok() {
+                                        let _ = b.await;
+                                    }
+                                }
+                                if let Some(handle) = node_handles[change.idx].take() {
+                                    handle.abort();
+                                    let _ = handle.await;
+                                }
+                                // Stale events queued by the stopped task are
+                                // ignored from here on.
+                                generations[change.idx] += 1;
+                                currently_down.insert(change.idx);
+                            },
                         }
                     }
                 }
@@ -546,8 +732,12 @@ impl TestRunner {
             // Get the next event from any node, rather than polling each
             // node in sequence.  Stale events (from tasks aborted by a
             // restart) are filtered out via the generation counter.
-            let Ok(Some(tagged)) = timeout(remaining, event_rx.recv()).await else {
-                return Err(TestError::Timeout);
+            let tagged = match timeout(remaining, event_rx.recv()).await {
+                Ok(Some(tagged)) => tagged,
+                Ok(None) => unreachable!("run() holds event_tx for the whole loop"),
+                Err(_) => {
+                    return Err(self.timeout_error(&node_commits, &node_timeouts, &currently_down));
+                },
             };
             if tagged.generation != generations[tagged.idx] {
                 continue;
@@ -564,6 +754,9 @@ impl TestRunner {
                         }
                     }
                     node_commits[tagged.idx] = commits;
+                },
+                NodeEvent::DecidedTransactions(view, commitments) => {
+                    self.decided_transactions.entry(view).or_insert(commitments);
                 },
                 NodeEvent::TimedOut(view) => {
                     node_timeouts[tagged.idx].insert(view);
@@ -660,16 +853,26 @@ impl TestRunner {
 async fn create_network(
     i: usize,
     parties: &[(Keypair, BLSPubKey, NetAddr)],
+    blocked_pairs: &BTreeSet<(usize, usize)>,
+    starved_views: BTreeSet<ViewNumber>,
+    unreachable_addr: &NetAddr,
     lock: &UpgradeLock<TestTypes>,
+    drop_inbound: Option<DropInbound>,
 ) -> Cliquenet<TestTypes> {
     let peer_infos: Vec<(BLSPubKey, PeerConnectInfo)> = parties
         .iter()
-        .map(|(kp, pk, addr)| {
+        .enumerate()
+        .map(|(j, (kp, pk, addr))| {
+            let blocked = blocked_pairs.contains(&(i, j)) || blocked_pairs.contains(&(j, i));
             (
                 *pk,
                 PeerConnectInfo {
                     x25519_key: kp.public_key(),
-                    p2p_addr: addr.clone(),
+                    p2p_addr: if blocked {
+                        unreachable_addr.clone()
+                    } else {
+                        addr.clone()
+                    },
                 },
             )
         })
@@ -680,6 +883,10 @@ async fn create_network(
         .keypair(parties[i].0.clone().into())
         .bind(parties[i].2.clone())
         .random_connect_delay(false)
+        // Keep redials dense: a peer that dials a rebinding node's address
+        // before its listener is up must retry within ~1s, not back off to
+        // the default 15-30s tail, or the node misses its next leader slot.
+        .connect_retry_delays([1, 1, 1, 2, 3, 5])
         .parties(
             peer_infos
                 .iter()
@@ -690,24 +897,65 @@ async fn create_network(
 
     let met = Box::new(NoMetrics);
 
-    Cliquenet::create_with_config(parties[i].1, lock.clone(), config, peer_infos.clone(), met)
-        .await
-        .unwrap()
+    let mut network =
+        Cliquenet::create_with_config(parties[i].1, lock.clone(), config, peer_infos.clone(), met)
+            .await
+            .unwrap();
+
+    if !starved_views.is_empty() || drop_inbound.is_some() {
+        network.drop_inbound(Box::new(move |message| {
+            if matches!(
+                &message.message_type,
+                MessageType::Consensus(ConsensusMessage::VidShareBroadcast(share))
+                    if starved_views.contains(&share.view_number())
+            ) {
+                return true;
+            }
+            drop_inbound.as_ref().is_some_and(|drop| drop(i, message))
+        }));
+    }
+
+    network
+}
+
+/// Submits `count` unique transactions round-robin over `clients`, spaced out so that they
+/// spread over many views.
+async fn submit_transactions(clients: Vec<ClientApi<TestTypes>>, count: usize) {
+    for (i, client) in (0..count).zip(clients.iter().cycle()) {
+        _ = client
+            .submit_transaction(TestTransaction::new(i.to_le_bytes().to_vec()))
+            .await;
+        sleep(Duration::from_millis(20)).await;
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
 async fn run_node(
     mut coord: Coordinator<TestTypes, TestStorage<TestTypes>>,
+    mut external_rx: mpsc::UnboundedReceiver<OpaqueMessage<BLSPubKey>>,
     storage: TestStorage<TestTypes>,
     output_tx: UnboundedSender<TaggedEvent>,
     idx: usize,
     generation: u64,
     external_events_tx: Sender<Event<TestTypes>>,
     mut cancel: oneshot::Receiver<oneshot::Sender<()>>,
-    initial_commits: BTreeMap<ViewNumber, [u8; 32]>,
 ) {
-    let mut commits: BTreeMap<ViewNumber, [u8; 32]> = initial_commits;
+    let mut commits: BTreeMap<ViewNumber, [u8; 32]> = BTreeMap::new();
     let mut last_view = ViewNumber::genesis();
+    let _forward = AbortOnDropHandle::new(tokio::spawn(async move {
+        while let Some(m) = external_rx.recv().await {
+            let _ = external_events_tx
+                .broadcast_direct(Event {
+                    // The test leaf fetcher ignores the view.
+                    view_number: ViewNumber::genesis(),
+                    event: EventType::ExternalMessageReceived {
+                        sender: m.sender,
+                        data: m.data,
+                    },
+                })
+                .await;
+        }
+    }));
     let send = |event: NodeEvent| {
         let _ = output_tx.send(TaggedEvent {
             idx,
@@ -733,12 +981,22 @@ async fn run_node(
         }
 
         while let Some(output) = coord.outbox_mut().pop_front() {
-            if let ConsensusOutput::LeafDecided { leaves, cert1, .. } = &output {
+            if let ConsensusOutput::LeafDecided {
+                leaves,
+                cert1,
+                cert2,
+                ..
+            } = &output
+            {
                 // Persist the decided anchor the way the application's
                 // persistence layer does in production: the newest decided
-                // leaf and the QC certifying it. A node restarted with
-                // persistent storage resumes consensus from this anchor.
+                // leaf, the QC certifying it, and the cert2 finalizing it. A
+                // node restarted with persistent storage resumes consensus
+                // from this anchor.
                 if let Some(newest) = leaves.first() {
+                    if let Some(cert2) = cert2 {
+                        storage.insert_cert2(cert2.view_number, cert2.clone()).await;
+                    }
                     storage
                         .update_anchor_leaf(newest.clone(), cert1.clone())
                         .await;
@@ -746,6 +1004,16 @@ async fn run_node(
                 for leaf in leaves {
                     let commit: [u8; 32] = leaf.commit().into();
                     let view = leaf.view_number();
+                    if let Some(payload) = leaf.block_payload() {
+                        send(NodeEvent::DecidedTransactions(
+                            view,
+                            payload
+                                .transactions
+                                .iter()
+                                .map(Committable::commit)
+                                .collect(),
+                        ));
+                    }
                     if let std::collections::btree_map::Entry::Vacant(e) = commits.entry(view) {
                         e.insert(commit);
                         info!(
@@ -778,18 +1046,6 @@ async fn run_node(
             {
                 tracing::error!(%err, node = %coord.node_id(), "critical error processing output");
                 return;
-            }
-
-            while let Some(output) = coord.coordinator_outbox_mut().pop_front() {
-                let _ = external_events_tx
-                    .broadcast_direct(Event {
-                        view_number: coord.current_view(),
-                        event: EventType::ExternalMessageReceived {
-                            sender: output.sender,
-                            data: output.data,
-                        },
-                    })
-                    .await;
             }
         }
     }

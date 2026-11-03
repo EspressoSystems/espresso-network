@@ -1,3 +1,5 @@
+# Backport review
+
 This PR is a backport. The original PR number is in `./tmp/is-backport`.
 
 Perform a BACKPORT-CORRECTNESS review. Do not perform a general code review.
@@ -7,3 +9,6 @@ Perform a BACKPORT-CORRECTNESS review. Do not perform a general code review.
   between branches, conflict-resolution edits, dropped or extra hunks).
 - `./tmp/original-pr-comments.json` holds the original PR's review comments. Do NOT re-flag anything already raised
   there. Only flag problems introduced by the backport itself (bad merge, lost hunk, wrong adaptation).
+- If the original PR adds a `doc/operator-notes/*.md` fragment, the backport must carry the same file. Flag it if
+  missing.
+- Call `candidate` for each problem found while comparing.

@@ -5,7 +5,7 @@ ARG TARGETARCH
 COPY target/$TARGETARCH/release/espresso-node /bin/espresso-node-postgres
 RUN chmod +x /bin/espresso-node-postgres
 
-COPY target/$TARGETARCH/release/espresso-node-sqlite /bin/espresso-node-sqlite
+COPY scripts/espresso-node-sqlite /bin/espresso-node-sqlite
 RUN chmod +x /bin/espresso-node-sqlite
 
 COPY target/$TARGETARCH/release/utils /bin/utils
@@ -39,10 +39,6 @@ RUN chmod +x /bin/espresso-node
 # progress. The user should connect this path to a Docker volume to ensure persistence of the
 # configuration beyond the lifetime of the Docker container itself.
 ENV ESPRESSO_NODE_STORAGE_PATH=/store/espresso
-
-# Set an L1 safety margin by default. This enables fast startup on chains where the L1 genesis block
-# is very old.
-ENV ESPRESSO_L1_FINALIZED_SAFETY_MARGIN=100
 
 CMD ["/bin/espresso-node", "--", "http"]
 HEALTHCHECK --interval=1s --timeout=1s --retries=100 CMD curl --fail http://localhost:${ESPRESSO_NODE_API_PORT}/healthcheck  || exit 1

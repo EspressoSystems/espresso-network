@@ -5,25 +5,29 @@ use std::{
     sync::{Arc, LazyLock},
 };
 
-use hotshot::traits::BlockPayload;
 use hotshot_types::{
     data::{
         EpochNumber, VidCommitment2, VidDisperse2, ViewNumber,
-        vid_disperse::{AvidmGf2DisperseShareFragment, AvidmGf2NamespacePiece},
+        vid_disperse::{
+            AvidmGf2DisperseParams, AvidmGf2DisperseShareFragment, AvidmGf2NamespacePiece,
+        },
     },
     epoch_membership::EpochMembershipCoordinator,
     message::Proposal as SignedProposal,
-    traits::{metrics::Histogram, node_implementation::NodeType, signature_key::SignatureKey},
-    vid::avidm_gf2::AvidmGf2Scheme,
+    traits::{
+        BlockPayload, metrics::Histogram, node_implementation::NodeType,
+        signature_key::SignatureKey,
+    },
+    vid::avidm_gf2::{AvidmGf2NsDispersal, AvidmGf2Scheme},
 };
 use hotshot_utils::anytrace::{self, Wrap};
 use rayon::prelude::*;
 use tokio::task::{AbortHandle, JoinSet};
-use tracing::{error, warn};
+use tracing::{debug_span, error, warn};
 
 use crate::{
     coordinator::metrics::{Measurement, finish_measurement},
-    message::{ConsensusMessage, Message, MessageType},
+    message::{ConsensusMessage, Message, MessageType, Validated},
     network::{NetworkError, Sender},
 };
 
@@ -44,7 +48,7 @@ pub struct VidDisperseOutput {
 }
 
 pub struct VidDisperser<T: NodeType> {
-    calculations: BTreeMap<(ViewNumber, VidCommitment2), AbortHandle>,
+    calculations: BTreeMap<(ViewNumber, EpochNumber, VidCommitment2), AbortHandle>,
     epoch_membership_coordinator: EpochMembershipCoordinator<T>,
     network: Sender<T>,
     public_key: T::SignatureKey,
@@ -79,6 +83,7 @@ impl<T: NodeType> VidDisperser<T> {
     pub fn request_vid_disperse(&mut self, vid_disperse_request: VidDisperseRequest<T>) {
         let key = (
             vid_disperse_request.view,
+            vid_disperse_request.epoch,
             vid_disperse_request.payload_commitment,
         );
         if self.calculations.contains_key(&key) {
@@ -120,9 +125,11 @@ impl<T: NodeType> VidDisperser<T> {
     }
 
     pub fn gc(&mut self, view_number: ViewNumber) {
-        let keep = self
-            .calculations
-            .split_off(&(view_number, VidCommitment2::default()));
+        let keep = self.calculations.split_off(&(
+            view_number,
+            EpochNumber::new(0),
+            VidCommitment2::default(),
+        ));
         for handle in self.calculations.values_mut() {
             handle.abort();
         }
@@ -149,10 +156,41 @@ fn handle_vid_disperse_request<T: NodeType>(
     )
     .map_err(VidDisperseError::Vid)?;
 
-    let signature = T::SignatureKey::sign(&private_key, payload_commitment.as_ref())
-        .map_err(|err| VidDisperseError::Sign(err.into()))?;
+    disperse_payload(
+        &params,
+        view,
+        epoch,
+        payload_commitment,
+        &public_key,
+        &private_key,
+        move |recipient, message| network.unicast(view, recipient, message),
+    )?;
 
-    let num_namespaces = params.ns_table.len();
+    Ok(VidDisperseOutput {
+        view,
+        payload_commitment,
+    })
+}
+
+/// Erasure-codes the payload in `params` and hands every recipient's fragment of each bucket of
+/// namespaces to `send`, which the disperser points at the network. The `block_build` bench in
+/// espresso-types passes a `send` that only serializes; the spans time each step.
+pub fn disperse_payload<T, S>(
+    params: &AvidmGf2DisperseParams<T>,
+    view: ViewNumber,
+    epoch: EpochNumber,
+    payload_commitment: VidCommitment2,
+    public_key: &T::SignatureKey,
+    private_key: &<T::SignatureKey as SignatureKey>::PrivateKey,
+    send: S,
+) -> Result<(), VidDisperseError>
+where
+    T: NodeType,
+    S: Fn(&T::SignatureKey, &Message<T, Validated>) -> Result<(), NetworkError> + Clone + Send,
+{
+    let signature = debug_span!("sign")
+        .in_scope(|| T::SignatureKey::sign(private_key, payload_commitment.as_ref()))
+        .map_err(|err| VidDisperseError::Sign(err.into()))?;
 
     // Coalesce namespaces into size-balanced buckets, roughly one per core,
     // but never below the minimum size, so a block of many tiny namespaces
@@ -167,51 +205,26 @@ fn handle_vid_disperse_request<T: NodeType>(
         bucketize(&params.ns_table, threshold)
     };
 
-    buckets.par_iter().try_for_each_with(
-        network,
-        |network, bucket| -> Result<(), VidDisperseError> {
-            let mut pieces = vec![Vec::new(); params.recipients.len()];
-
-            for &ns_index in bucket {
-                let dispersal = AvidmGf2Scheme::ns_disperse_one(
-                    &params.param,
-                    &params.weights,
-                    &params.payload[params.ns_table[ns_index].clone()],
-                    ns_index,
-                )
-                .wrap()
-                .map_err(VidDisperseError::Vid)?;
-
-                let ns_payload_byte_len = dispersal.payload_byte_len;
-                let ns_commit = dispersal.commit;
-                for (pieces, ns_share) in pieces.iter_mut().zip(dispersal.shares) {
-                    pieces.push(AvidmGf2NamespacePiece {
-                        ns_index: dispersal.ns_index,
-                        ns_payload_byte_len,
-                        ns_commit,
-                        ns_share,
-                    });
-                }
-            }
-
-            for (recipient, pieces) in params.recipients.iter().zip(pieces) {
-                let fragment = AvidmGf2DisperseShareFragment {
-                    view_number: view,
-                    epoch: Some(epoch),
-                    target_epoch: Some(epoch),
-                    payload_commitment,
-                    recipient_key: recipient.clone(),
-                    param: params.param.clone(),
-                    num_namespaces,
-                    namespaces: pieces,
-                };
+    buckets
+        .par_iter()
+        .try_for_each_with(send, |send, bucket| -> Result<(), VidDisperseError> {
+            let dispersals = debug_span!("ns_encode").in_scope(|| {
+                bucket
+                    .iter()
+                    .map(|&ns_index| disperse_namespace(params, ns_index))
+                    .collect::<Result<_, _>>()
+            })?;
+            let bucket_fragments = debug_span!("fragments")
+                .in_scope(|| fragments(view, epoch, payload_commitment, params, dispersals));
+            for fragment in bucket_fragments {
+                let recipient = fragment.recipient_key.clone();
                 let message = Message {
                     sender: public_key.clone(),
                     message_type: MessageType::Consensus(ConsensusMessage::VidShareFragment(
                         SignedProposal::new(fragment, signature.clone()),
                     )),
                 };
-                if let Err(err) = network.unicast(view, recipient, &message) {
+                if let Err(err) = send(&recipient, &message) {
                     if err.is_critical() {
                         return Err(err.into());
                     }
@@ -219,13 +232,58 @@ fn handle_vid_disperse_request<T: NodeType>(
                 }
             }
             Ok(())
-        },
-    )?;
+        })
+}
 
-    Ok(VidDisperseOutput {
-        view,
-        payload_commitment,
-    })
+/// Erasure-codes the namespace at `ns_index` of the payload in `params`.
+fn disperse_namespace<T: NodeType>(
+    params: &AvidmGf2DisperseParams<T>,
+    ns_index: usize,
+) -> Result<AvidmGf2NsDispersal, VidDisperseError> {
+    AvidmGf2Scheme::ns_disperse_one(
+        &params.param,
+        &params.weights,
+        &params.payload[params.ns_table[ns_index].clone()],
+        ns_index,
+    )
+    .wrap()
+    .map_err(VidDisperseError::Vid)
+}
+
+/// One fragment per recipient in `params`, carrying its shares of `dispersals`.
+fn fragments<T: NodeType>(
+    view: ViewNumber,
+    epoch: EpochNumber,
+    payload_commitment: VidCommitment2,
+    params: &AvidmGf2DisperseParams<T>,
+    dispersals: Vec<AvidmGf2NsDispersal>,
+) -> Vec<AvidmGf2DisperseShareFragment<T>> {
+    let mut pieces = vec![Vec::new(); params.recipients.len()];
+    for dispersal in dispersals {
+        for (pieces, ns_share) in pieces.iter_mut().zip(dispersal.shares) {
+            pieces.push(AvidmGf2NamespacePiece {
+                ns_index: dispersal.ns_index,
+                ns_payload_byte_len: dispersal.payload_byte_len,
+                ns_commit: dispersal.commit,
+                ns_share,
+            });
+        }
+    }
+    params
+        .recipients
+        .iter()
+        .zip(pieces)
+        .map(|(recipient, pieces)| AvidmGf2DisperseShareFragment {
+            view_number: view,
+            epoch: Some(epoch),
+            target_epoch: Some(epoch),
+            payload_commitment,
+            recipient_key: recipient.clone(),
+            param: params.param.clone(),
+            num_namespaces: params.ns_table.len(),
+            namespaces: pieces,
+        })
+        .collect()
 }
 
 /// Group namespace indices into buckets whose payload sizes are each at least

@@ -39,7 +39,7 @@ func TestFetchDevInfo(t *testing.T) {
 	if err != nil {
 		t.Fatal("failed to fetch dev info", err)
 	}
-	assert.Equal(t, fmt.Sprintf("http://localhost:%d/", ports.Builder), devInfo.BuilderUrl)
+	assert.Regexp(t, `^http://localhost:\d+/$`, devInfo.BuilderUrl)
 	assert.Equal(t, ports.SequencerAPI, int(devInfo.SequencerApiPort))
 	// This serves as a reminder that the L1 light client address has changed when it breaks.
 	assert.Equal(t, "0x9fe46736679d2d9a65f0992f2272de9f3c7fa6e0", devInfo.L1LightClientAddress)

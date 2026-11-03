@@ -4,11 +4,20 @@
 // You should have received a copy of the MIT License
 // along with the HotShot repository. If not, see <https://mit-license.org/>.
 
-use std::{collections::BTreeMap, sync::Arc, time::Instant};
+use std::{
+    collections::BTreeMap,
+    pin::pin,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
+    time::{Duration, Instant},
+};
 
 use futures::future::BoxFuture;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 use vbs::version::Version;
@@ -70,9 +79,10 @@ pub const DIFFICULTY_LEVEL: u64 = 10;
 /// Interval at which to store the results
 pub const DRB_CHECKPOINT_INTERVAL: u64 = 1_000_000_000;
 
-/// Hashes between cancellation checks. Bounds how long hashing continues after `cancel`
-/// fires; independent of the `DRB_CHECKPOINT_INTERVAL` persistence cadence.
-const DRB_CANCEL_BATCH: u64 = 1_000_000;
+/// Hashes between cancellation checks. Bounds both how long hashing continues after
+/// `cancel` fires and how stale a supervisor's view of [`Heartbeat`] can be; independent
+/// of the `DRB_CHECKPOINT_INTERVAL` persistence cadence.
+const DRB_CANCEL_BATCH: u64 = 100_000;
 
 /// DRB seed input for epoch 1 and 2.
 pub const INITIAL_DRB_SEED_INPUT: [u8; 32] = [0; 32];
@@ -99,10 +109,60 @@ pub fn difficulty_level() -> u64 {
     unimplemented!("Use an arbitrary `DIFFICULTY_LEVEL` for now before we bench the hash time.");
 }
 
-/// Hash `hash` repeatedly `count` times, checking `cancel` between batches.
+/// A counter a long computation bumps as it makes progress.
+///
+/// Lets a supervisor tell a slow computation apart from a stalled one without
+/// knowing anything about the work: a computation that is running moves the
+/// counter, one parked in an `.await` or queued behind a saturated thread pool
+/// does not. Bumped every `DRB_CANCEL_BATCH` hashes, so a reader that sees no
+/// change over a window longer than one batch can conclude the chain is stuck.
+#[derive(Clone, Debug, Default)]
+pub struct Heartbeat(Arc<AtomicU64>);
+
+impl Heartbeat {
+    /// Report that progress was made.
+    pub fn beat(&self) {
+        self.0.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// The current count. Only ever compared against an earlier reading of the
+    /// same `Heartbeat`; the absolute value carries no meaning.
+    pub fn count(&self) -> u64 {
+        self.0.load(Ordering::Relaxed)
+    }
+
+    /// Await `f`, giving up once this heartbeat did not move for `deadline`.
+    pub async fn while_alive<T, F>(&self, deadline: Duration, f: F) -> Option<T>
+    where
+        F: Future<Output = T>,
+    {
+        let mut f = pin!(f);
+        let mut ticks = self.count();
+        loop {
+            match timeout(deadline, &mut f).await {
+                Ok(val) => return Some(val),
+                Err(_) => {
+                    let observed = self.count();
+                    if observed == ticks {
+                        return None;
+                    }
+                    ticks = observed;
+                },
+            }
+        }
+    }
+}
+
+/// Hash `hash` repeatedly `count` times, checking `cancel` and bumping `heartbeat`
+/// between batches.
 ///
 /// Returns `None` if cancelled, `Some(hash)` otherwise.
-fn hash_batches(mut hash: [u8; 32], count: u64, cancel: CancellationToken) -> Option<[u8; 32]> {
+fn hash_batches(
+    mut hash: [u8; 32],
+    count: u64,
+    cancel: CancellationToken,
+    heartbeat: Heartbeat,
+) -> Option<[u8; 32]> {
     let mut done = 0u64;
     while done < count {
         if cancel.is_cancelled() {
@@ -113,9 +173,15 @@ fn hash_batches(mut hash: [u8; 32], count: u64, cancel: CancellationToken) -> Op
             hash = Sha256::digest(hash).into();
         }
         done += n;
+        heartbeat.beat();
     }
     Some(hash)
 }
+
+/// Default upper bound on loading previously stored DRB progress at the
+/// start of a computation. Sized like the stake-table storage bound
+/// (espresso's `DEFAULT_STORAGE_READ_TIMEOUT`).
+pub const DRB_PROGRESS_LOAD_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// Compute the DRB result for the leader rotation.
 ///
@@ -124,30 +190,56 @@ fn hash_batches(mut hash: [u8; 32], count: u64, cancel: CancellationToken) -> Op
 ///
 /// # Arguments
 /// * `drb_seed_input` - Serialized QC signature.
+/// * `progress_load_timeout` - Bound on the initial stored-progress load
+///   (see [`DRB_PROGRESS_LOAD_TIMEOUT`]).
+/// * `heartbeat` - Bumped as the hash chain advances, so a supervisor can tell
+///   a long computation apart from a stalled one. Pass `Heartbeat::default()`
+///   when nobody is watching.
 /// * `cancel` - Token that stops the hash loop when fired.
 #[must_use]
 pub async fn compute_drb_result(
     drb_input: DrbInput,
     store_drb_progress: StoreDrbProgressFn,
     load_drb_progress: LoadDrbProgressFn,
+    progress_load_timeout: Duration,
+    heartbeat: Heartbeat,
     cancel: CancellationToken,
 ) -> Option<DrbResult> {
     info!(target: "announce::drb", ?drb_input, "beginning drb calculation");
     let mut drb_input = drb_input;
 
-    if let Ok(loaded_drb_input) = load_drb_progress(drb_input.epoch).await {
-        if loaded_drb_input.difficulty_level != drb_input.difficulty_level {
-            error!(
-                ?drb_input,
-                ?loaded_drb_input,
-                "we are calculating the drb result with input that has a different difficulty \
-                 level for this epoch than a previously stored one => discarding the value from \
-                 storage"
+    match tokio::time::timeout(progress_load_timeout, load_drb_progress(drb_input.epoch)).await {
+        Ok(Ok(loaded_drb_input)) => {
+            if loaded_drb_input.difficulty_level != drb_input.difficulty_level {
+                error!(
+                    ?drb_input,
+                    ?loaded_drb_input,
+                    "we are calculating the drb result with input that has a different difficulty \
+                     level for this epoch than a previously stored one => discarding the value \
+                     from storage"
+                );
+            } else if loaded_drb_input.iteration >= drb_input.iteration {
+                drb_input = loaded_drb_input;
+            }
+        },
+        Ok(Err(e)) => {
+            warn!(
+                epoch = drb_input.epoch,
+                "loading stored drb progress failed; computing from the given input: {e}"
             );
-        } else if loaded_drb_input.iteration >= drb_input.iteration {
-            drb_input = loaded_drb_input;
-        }
+        },
+        Err(_) => {
+            warn!(
+                epoch = drb_input.epoch,
+                ?progress_load_timeout,
+                "loading stored drb progress timed out; computing from the given input"
+            );
+        },
     }
+
+    // The stored-progress load above can block for its whole timeout without the
+    // chain having started; report progress only now that it has.
+    heartbeat.beat();
 
     let mut hash: [u8; 32] = drb_input.value;
     let mut iteration = drb_input.iteration;
@@ -170,9 +262,11 @@ pub async fn compute_drb_result(
     // loop up to, but not including, the `final_checkpoint`
     for _ in 0..final_checkpoint {
         let c = cancel.clone();
-        hash = tokio::task::spawn_blocking(move || hash_batches(hash, DRB_CHECKPOINT_INTERVAL, c))
-            .await
-            .expect("completes")?;
+        let h = heartbeat.clone();
+        hash =
+            tokio::task::spawn_blocking(move || hash_batches(hash, DRB_CHECKPOINT_INTERVAL, c, h))
+                .await
+                .expect("completes")?;
 
         iteration += DRB_CHECKPOINT_INTERVAL;
 
@@ -213,7 +307,8 @@ pub async fn compute_drb_result(
 
     // perform the remaining iterations
     let c = cancel.clone();
-    let drb_result = tokio::task::spawn_blocking(move || hash_batches(hash, remainder, c))
+    let h = heartbeat.clone();
+    let drb_result = tokio::task::spawn_blocking(move || hash_batches(hash, remainder, c, h))
         .await
         .expect("DRB spawn_blocking panicked")?;
 
@@ -406,7 +501,7 @@ pub mod election {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
+    use std::{collections::HashMap, time::Duration};
 
     use alloy_primitives::U256;
     use rand::RngCore;
@@ -414,7 +509,8 @@ mod tests {
     use tokio_util::sync::CancellationToken;
 
     use super::{
-        DRB_CANCEL_BATCH, DRB_CHECKPOINT_INTERVAL, DrbInput, compute_drb_result,
+        DRB_CANCEL_BATCH, DRB_CHECKPOINT_INTERVAL, DRB_PROGRESS_LOAD_TIMEOUT, DrbInput, Heartbeat,
+        compute_drb_result,
         election::{generate_stake_cdf, select_randomized_leader},
         hash_batches,
     };
@@ -423,7 +519,7 @@ mod tests {
         stake_table::StakeTableEntry,
         traits::{
             signature_key::{BuilderSignatureKey, StakeTableEntryType},
-            storage::{null_load_drb_progress_fn, null_store_drb_progress_fn},
+            storage::{LoadDrbProgressFn, null_load_drb_progress_fn, null_store_drb_progress_fn},
         },
     };
 
@@ -431,13 +527,16 @@ mod tests {
     fn test_hash_batches_pre_cancelled() {
         let cancel = CancellationToken::new();
         cancel.cancel();
-        assert_eq!(hash_batches([0u8; 32], 10, cancel), None);
+        assert_eq!(
+            hash_batches([0u8; 32], 10, cancel, Heartbeat::default()),
+            None
+        );
     }
 
     #[test]
     fn test_hash_batches_count_zero() {
         let input = [42u8; 32];
-        let result = hash_batches(input, 0, CancellationToken::new());
+        let result = hash_batches(input, 0, CancellationToken::new(), Heartbeat::default());
         assert_eq!(result, Some(input));
     }
 
@@ -450,7 +549,7 @@ mod tests {
         for _ in 0..count {
             expected = Sha256::digest(expected).into();
         }
-        let result = hash_batches(input, count, CancellationToken::new());
+        let result = hash_batches(input, count, CancellationToken::new(), Heartbeat::default());
         assert_eq!(result, Some(expected));
     }
 
@@ -461,11 +560,21 @@ mod tests {
         let cancel = CancellationToken::new();
 
         // Compute one full batch, then cancel, then try to hash the remainder
-        let intermediate = hash_batches([0u8; 32], DRB_CANCEL_BATCH, CancellationToken::new())
-            .expect("first batch must complete");
+        let intermediate = hash_batches(
+            [0u8; 32],
+            DRB_CANCEL_BATCH,
+            CancellationToken::new(),
+            Heartbeat::default(),
+        )
+        .expect("first batch must complete");
         cancel.cancel();
         // The remaining 1 iteration sees cancelled token on first check
-        let result = hash_batches(intermediate, count - DRB_CANCEL_BATCH, cancel);
+        let result = hash_batches(
+            intermediate,
+            count - DRB_CANCEL_BATCH,
+            cancel,
+            Heartbeat::default(),
+        );
         assert_eq!(result, None);
     }
 
@@ -485,10 +594,45 @@ mod tests {
             drb_input,
             null_store_drb_progress_fn(),
             null_load_drb_progress_fn(),
+            DRB_PROGRESS_LOAD_TIMEOUT,
+            Heartbeat::default(),
             cancel,
         )
         .await;
         assert_eq!(result, None);
+    }
+
+    // A stalled progress-load query must not park the computation: the caller
+    // holds its `drb_computations` claim across this call, and no heartbeat is
+    // reported until the chain itself starts, so a supervisor would abandon the
+    // attempt. Past the bound, the chain is computed from the given input.
+    #[tokio::test]
+    async fn test_compute_drb_result_hung_progress_load() {
+        let hung_load: LoadDrbProgressFn =
+            std::sync::Arc::new(|_| Box::pin(std::future::pending()));
+        let drb_input = DrbInput {
+            epoch: 1,
+            iteration: 0,
+            value: [0u8; 32],
+            difficulty_level: 10,
+        };
+        let result = tokio::time::timeout(
+            Duration::from_secs(5),
+            compute_drb_result(
+                drb_input,
+                null_store_drb_progress_fn(),
+                hung_load,
+                Duration::from_millis(100),
+                Heartbeat::default(),
+                CancellationToken::new(),
+            ),
+        )
+        .await
+        .expect("the computation parked on the hung progress load instead of bounding it");
+        assert!(
+            result.is_some(),
+            "computation with a hung progress load returned no result"
+        );
     }
 
     #[test]

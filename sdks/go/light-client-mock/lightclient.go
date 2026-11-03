@@ -4,9 +4,11 @@
 package lightclientmock
 
 import (
+	"context"
 	"errors"
 	"math/big"
 	"strings"
+	"time"
 
 	ethereum "github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/accounts/abi"
@@ -27,6 +29,8 @@ var (
 	_ = types.BloomLookup
 	_ = event.NewSubscription
 	_ = abi.ConvertType
+	_ = time.Tick
+	_ = context.Background
 )
 
 // BN254G1Point is an auto generated low-level Go binding around an user-defined struct.
@@ -1262,6 +1266,10 @@ func (_Lightclientmock *LightclientmockFilterer) WatchInitialized(opts *bind.Wat
 				// New log arrived, parse the event and forward to the user
 				event := new(LightclientmockInitialized)
 				if err := _Lightclientmock.contract.UnpackLog(event, "Initialized", log); err != nil {
+					// If the signature doesn't match, skip this log.
+					if errors.Is(err, bind.ErrEventSignatureMismatch) {
+						continue
+					}
 					return err
 				}
 				event.Raw = log
@@ -1416,6 +1424,10 @@ func (_Lightclientmock *LightclientmockFilterer) WatchNewState(opts *bind.WatchO
 				// New log arrived, parse the event and forward to the user
 				event := new(LightclientmockNewState)
 				if err := _Lightclientmock.contract.UnpackLog(event, "NewState", log); err != nil {
+					// If the signature doesn't match, skip this log.
+					if errors.Is(err, bind.ErrEventSignatureMismatch) {
+						continue
+					}
 					return err
 				}
 				event.Raw = log
@@ -1569,6 +1581,10 @@ func (_Lightclientmock *LightclientmockFilterer) WatchOwnershipTransferred(opts 
 				// New log arrived, parse the event and forward to the user
 				event := new(LightclientmockOwnershipTransferred)
 				if err := _Lightclientmock.contract.UnpackLog(event, "OwnershipTransferred", log); err != nil {
+					// If the signature doesn't match, skip this log.
+					if errors.Is(err, bind.ErrEventSignatureMismatch) {
+						continue
+					}
 					return err
 				}
 				event.Raw = log
@@ -1702,6 +1718,10 @@ func (_Lightclientmock *LightclientmockFilterer) WatchPermissionedProverNotRequi
 				// New log arrived, parse the event and forward to the user
 				event := new(LightclientmockPermissionedProverNotRequired)
 				if err := _Lightclientmock.contract.UnpackLog(event, "PermissionedProverNotRequired", log); err != nil {
+					// If the signature doesn't match, skip this log.
+					if errors.Is(err, bind.ErrEventSignatureMismatch) {
+						continue
+					}
 					return err
 				}
 				event.Raw = log
@@ -1836,6 +1856,10 @@ func (_Lightclientmock *LightclientmockFilterer) WatchPermissionedProverRequired
 				// New log arrived, parse the event and forward to the user
 				event := new(LightclientmockPermissionedProverRequired)
 				if err := _Lightclientmock.contract.UnpackLog(event, "PermissionedProverRequired", log); err != nil {
+					// If the signature doesn't match, skip this log.
+					if errors.Is(err, bind.ErrEventSignatureMismatch) {
+						continue
+					}
 					return err
 				}
 				event.Raw = log
@@ -1970,6 +1994,10 @@ func (_Lightclientmock *LightclientmockFilterer) WatchUpgrade(opts *bind.WatchOp
 				// New log arrived, parse the event and forward to the user
 				event := new(LightclientmockUpgrade)
 				if err := _Lightclientmock.contract.UnpackLog(event, "Upgrade", log); err != nil {
+					// If the signature doesn't match, skip this log.
+					if errors.Is(err, bind.ErrEventSignatureMismatch) {
+						continue
+					}
 					return err
 				}
 				event.Raw = log
@@ -2114,6 +2142,10 @@ func (_Lightclientmock *LightclientmockFilterer) WatchUpgraded(opts *bind.WatchO
 				// New log arrived, parse the event and forward to the user
 				event := new(LightclientmockUpgraded)
 				if err := _Lightclientmock.contract.UnpackLog(event, "Upgraded", log); err != nil {
+					// If the signature doesn't match, skip this log.
+					if errors.Is(err, bind.ErrEventSignatureMismatch) {
+						continue
+					}
 					return err
 				}
 				event.Raw = log

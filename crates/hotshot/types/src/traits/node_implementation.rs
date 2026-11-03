@@ -9,28 +9,21 @@
 //! This module defines the [`NodeImplementation`] trait, which is a composite trait used for
 //! describing the overall behavior of a node, as a composition of implementations of the node trait.
 
-use std::{collections::HashMap, fmt::Debug, hash::Hash, sync::Arc, time::Duration};
+use std::{fmt::Debug, hash::Hash};
 
-use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
 use super::{
     ValidatedState,
-    block_contents::{BlockHeader, TestableBlock, Transaction},
-    network::{
-        AsyncGenerator, ConnectedNetwork, NetworkReliability, TestableNetworkingImplementation,
-    },
+    block_contents::{BlockHeader, Transaction},
     signature_key::{
         BuilderSignatureKey, LCV1StateSignatureKey, LCV2StateSignatureKey, LCV3StateSignatureKey,
         StateSignatureKey,
     },
-    states::TestableState,
     storage::Storage,
 };
 use crate::{
-    PeerConnectInfo,
     constants::DEFAULT_UPGRADE_CONSTANTS,
-    data::{Leaf2, TestableLeaf},
     traits::{
         BlockPayload, election::Membership, signature_key::SignatureKey, states::InstanceState,
     },
@@ -47,103 +40,8 @@ use crate::{
 pub trait NodeImplementation<TYPES: NodeType>:
     Send + Sync + Clone + Eq + Hash + 'static + Serialize + for<'de> Deserialize<'de>
 {
-    /// The underlying network type
-    type Network: ConnectedNetwork<TYPES::SignatureKey>;
-
     /// Storage for DA layer interactions
     type Storage: Storage<TYPES>;
-}
-
-/// extra functions required on a node implementation to be usable by hotshot-testing
-#[allow(clippy::type_complexity)]
-#[async_trait]
-pub trait TestableNodeImplementation<TYPES: NodeType>: NodeImplementation<TYPES> {
-    /// Creates random transaction if possible
-    /// otherwise panics
-    /// `padding` is the bytes of padding to add to the transaction
-    fn state_create_random_transaction(
-        state: Option<&TYPES::ValidatedState>,
-        rng: &mut dyn rand::RngCore,
-        padding: u64,
-    ) -> <TYPES::BlockPayload as BlockPayload<TYPES>>::Transaction;
-
-    /// Creates random transaction if possible
-    /// otherwise panics
-    /// `padding` is the bytes of padding to add to the transaction
-    fn leaf_create_random_transaction(
-        leaf: &Leaf2<TYPES>,
-        rng: &mut dyn rand::RngCore,
-        padding: u64,
-    ) -> <TYPES::BlockPayload as BlockPayload<TYPES>>::Transaction;
-
-    /// generate a genesis block
-    fn block_genesis() -> TYPES::BlockPayload;
-
-    /// the number of transactions in a block
-    fn txn_count(block: &TYPES::BlockPayload) -> u64;
-
-    /// Generate the communication channels for testing
-    fn gen_networks(
-        expected_node_count: usize,
-        num_bootstrap: usize,
-        da_committee_size: usize,
-        reliability_config: Option<Box<dyn NetworkReliability>>,
-        secondary_network_delay: Duration,
-        connect_infos: &mut HashMap<TYPES::SignatureKey, PeerConnectInfo>,
-    ) -> AsyncGenerator<Arc<Self::Network>>;
-}
-
-#[async_trait]
-impl<TYPES: NodeType, I: NodeImplementation<TYPES>> TestableNodeImplementation<TYPES> for I
-where
-    TYPES::ValidatedState: TestableState<TYPES>,
-    TYPES::BlockPayload: TestableBlock<TYPES>,
-    I::Network: TestableNetworkingImplementation<TYPES>,
-{
-    fn state_create_random_transaction(
-        state: Option<&TYPES::ValidatedState>,
-        rng: &mut dyn rand::RngCore,
-        padding: u64,
-    ) -> <TYPES::BlockPayload as BlockPayload<TYPES>>::Transaction {
-        <TYPES::ValidatedState as TestableState<TYPES>>::create_random_transaction(
-            state, rng, padding,
-        )
-    }
-
-    fn leaf_create_random_transaction(
-        leaf: &Leaf2<TYPES>,
-        rng: &mut dyn rand::RngCore,
-        padding: u64,
-    ) -> <TYPES::BlockPayload as BlockPayload<TYPES>>::Transaction {
-        Leaf2::create_random_transaction(leaf, rng, padding)
-    }
-
-    fn block_genesis() -> TYPES::BlockPayload {
-        <TYPES::BlockPayload as TestableBlock<TYPES>>::genesis()
-    }
-
-    fn txn_count(block: &TYPES::BlockPayload) -> u64 {
-        <TYPES::BlockPayload as TestableBlock<TYPES>>::txn_count(block)
-    }
-
-    fn gen_networks(
-        expected_node_count: usize,
-        num_bootstrap: usize,
-        da_committee_size: usize,
-        reliability_config: Option<Box<dyn NetworkReliability>>,
-        secondary_network_delay: Duration,
-        connect_infos: &mut HashMap<TYPES::SignatureKey, PeerConnectInfo>,
-    ) -> AsyncGenerator<Arc<Self::Network>> {
-        <I::Network as TestableNetworkingImplementation<TYPES>>::generator(
-            expected_node_count,
-            num_bootstrap,
-            0,
-            da_committee_size,
-            reliability_config.clone(),
-            secondary_network_delay,
-            connect_infos,
-        )
-    }
 }
 
 /// Trait with all the type definitions that are used in the current hotshot setup.

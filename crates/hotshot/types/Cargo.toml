@@ -25,7 +25,6 @@ ark-ff = { workspace = true }
 ark-serialize = { workspace = true }
 ark-std = { workspace = true }
 async-broadcast = { workspace = true }
-async-lock = { workspace = true }
 async-trait = { workspace = true }
 bincode = { workspace = true }
 bitvec = { workspace = true }
@@ -49,10 +48,8 @@ jf-rescue = { workspace = true }
 jf-signature = { workspace = true }
 jf-utils = { workspace = true }
 lazy_static = { workspace = true }
-libp2p-identity = { workspace = true }
 memoize = { workspace = true }
 mnemonic = { workspace = true }
-multiaddr = { workspace = true }
 parking_lot = { workspace = true }
 rand = { workspace = true }
 rand_chacha = { workspace = true }

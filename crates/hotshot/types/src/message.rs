@@ -20,7 +20,10 @@ use hotshot_utils::anytrace::*;
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use vbs::version::Version;
-use versions::{DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_VERSION, NEW_PROTOCOL_VERSION, Upgrade};
+use versions::{
+    DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_VERSION, NEW_PROTOCOL_VERSION, TIMEOUT_EPOCH_VERSION,
+    Upgrade,
+};
 
 /// The version we should expect for external messages
 pub const EXTERNAL_MESSAGE_VERSION: Version = Version { major: 0, minor: 0 };
@@ -773,14 +776,10 @@ impl<TYPES: NodeType> UpgradeLock<TYPES> {
         self.version_infallible(view) >= NEW_PROTOCOL_VERSION
     }
 
-    /// Return whether the new protocol (HotShot 0.8) is active for the given view.
-    ///
-    /// Once true for any view, all consensus messages tagged with versions strictly
-    /// less than `NEW_PROTOCOL_VERSION` should be ignored at the legacy task layer
-    /// for that view onward. The wire-level deserialize already rejects
-    /// version-mismatched messages via [`Self::version`].
-    pub fn new_protocol_active(&self, view: ViewNumber) -> bool {
-        self.version_infallible(view) >= NEW_PROTOCOL_VERSION
+    /// Whether a timeout certificate must be a `TimeoutEvidence::V3`.
+    pub fn timeout_epoch_bound(&self, timed_out_view: ViewNumber) -> bool {
+        let v = ViewNumber::new(timed_out_view.u64().saturating_add(1));
+        self.version_infallible(v) >= TIMEOUT_EPOCH_VERSION
     }
 
     /// Serialize a message with a version number, using `message.view_number()`

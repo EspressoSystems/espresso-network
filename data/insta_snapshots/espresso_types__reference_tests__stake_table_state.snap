@@ -1,0 +1,7 @@
+---
+source: crates/espresso/types/src/reference_tests.rs
+assertion_line: 890
+expression: bytes
+extension: bin
+snapshot_kind: binary
+---

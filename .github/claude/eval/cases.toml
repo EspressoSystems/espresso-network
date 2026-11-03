@@ -1,0 +1,32 @@
+# PRs that introduced a bug later fixed by `fixed_by`. `bug` states what a reviewer of `pr`
+# should notice; eval.py copies it into report.md for scoring.
+
+[[case]]
+pr = 4456
+fixed_by = [4825]
+bug = "The new-protocol epoch root path adds the epoch root in memory but never persists it the way the legacy path does, so the stored epoch root header stays empty."
+
+[[case]]
+pr = 4825
+fixed_by = [4844]
+bug = "The epoch root header write sits after an early return and after the committee write, so a failed or skipped write is never retried."
+
+[[case]]
+pr = 4740
+fixed_by = [5245]
+bug = "QC validation requires the QC epoch to equal the epoch of the block height, so QCs from before epochs start (no epoch) never verify and catchup retries forever."
+
+[[case]]
+pr = 4670
+fixed_by = [4694, 4681]
+bug = "Two bugs: (1) the parked coordinator never services client requests, so a caller awaiting a reply blocks the legacy event forwarder and decide events pile up in memory; (2) the parked coordinator owns the network listener and is dropped only after legacy shutdown, so the port stays bound."
+
+[[case]]
+pr = 4281
+fixed_by = [4783]
+bug = "Log export ships node logs to telemetry, and L1 RPC API keys embedded in provider URLs appear in those logs (transport errors and config dumps print the URL), so operator credentials leave the host."
+
+[[case]]
+pr = 4231
+fixed_by = [4716]
+bug = "Leaf proof construction walks and collects an unbounded number of leaves (chain detection never terminates for new-protocol leaves), so a request far from the tip runs the serving node out of memory."

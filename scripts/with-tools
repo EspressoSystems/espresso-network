@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+# Runner for just `[script]` recipes: runs the body directly if all commands are on PATH,
+# otherwise inside the given nix dev shell.
+#
+# usage: with-tools <devshell> <command>... <script> [args...]
+# The script is the first absolute path; just passes recipe args after it with `set positional-arguments`.
+set -euo pipefail
+
+shell=$1
+shift
+cmds=()
+while [[ ${1:-} != /* ]]; do
+    if [ $# -eq 0 ]; then
+        echo "usage: with-tools <devshell> <command>... <script> [args...] (script must be an absolute path)" >&2
+        exit 2
+    fi
+    cmds+=("$1")
+    shift
+done
+script=$1
+shift
+
+missing=()
+for cmd in ${cmds[@]+"${cmds[@]}"}; do
+    command -v "$cmd" >/dev/null || missing+=("$cmd")
+done
+
+if [ ${#missing[@]} -eq 0 ]; then
+    exec bash -euo pipefail "$script" "$@"
+fi
+
+if ! command -v nix >/dev/null; then
+    echo "error: not on PATH: ${missing[*]} (provided by nix devShell .#$shell)" >&2
+    exit 127
+fi
+
+# Enter the shell from the repo root so its shellHook sets repo-relative paths (CARGO_TARGET_DIR).
+cwd=$PWD
+root=$(CDPATH='' cd -- "$(dirname "$0")/.." && pwd)
+cd "$root"
+export WITH_TOOLS=1
+# shellcheck disable=SC2016 # expanded by the inner bash
+exec nix --extra-experimental-features 'nix-command flakes' develop "$root#$shell" --quiet --accept-flake-config -c \
+    bash -c 'cd "$1" && shift && exec bash -euo pipefail "$@"' _ "$cwd" "$script" "$@"
