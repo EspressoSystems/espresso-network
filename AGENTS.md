@@ -14,6 +14,7 @@ the generic BFT consensus library it is built on, `contracts/` the Solidity L1 s
 - `doc/agents/protocol-versions.md` - what each version changed, and what a network runs
 - `doc/agents/live-chains.md` - querying mainnet or decaf over the query-service API
 - `doc/agents/rewards.md` - reward accumulation and the L1 claim path
+- `doc/agents/experiments.md` - before adding a bench-branch node feature or benchmark-only switch
 - `doc/cargo-features.md` - feature gates for zkVM builds and which functions panic without them
 - `doc/upgrades.md` - configuring and running a consensus upgrade
 - `doc/software-releases.md` - release branches, `MAJOR.MINOR.PHASE.PATCH` tags, the tracker issue and its commands
