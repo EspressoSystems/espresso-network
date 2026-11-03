@@ -19,6 +19,10 @@ With `--query-engine sqlite`, `--query-db volume` keeps SQLite and payloads off 
 drops SQLite disk I/O entirely (needs an image with the `blob-dir` experiment). `EXPERIMENTAL_SQLITE_PRAGMAS` takes
 comma-separated `key=value` pragmas applied after the defaults.
 
+With `ESPRESSO_NODE_EXPERIMENTS=all` (the harness default), `--consensus-storage fs` runs the journal on images with the
+`journal` experiment; the summary's experiments line shows it. A real `fs` run on such an image needs
+`--node-env ESPRESSO_NODE_EXPERIMENTS=<names without journal>`.
+
 With `--prune` and `--query-engine sqlite`, each prune batch holds the write lock, which shows as query lag.
 
 ## Host (shaped runs, the default)

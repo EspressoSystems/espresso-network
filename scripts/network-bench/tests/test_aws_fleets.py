@@ -507,7 +507,7 @@ def test_a_host_agent_runs_outside_the_repo_root(
 def test_run_fleet_records_the_harness_state_in_the_run_manifest(
     harness, runner, status, dirty
 ):
-    runner.respond("git status", lambda _: completed(stdout=status))
+    runner.respond("status --porcelain", lambda _: completed(stdout=status))
     args = harness.run_args()
     assert awsb.cmd_run(args, FakeSystem(run=runner)) == awsb.EXIT_OK
     manifest = netbench.read_json(

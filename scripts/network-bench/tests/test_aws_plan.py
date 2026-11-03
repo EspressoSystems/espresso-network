@@ -2014,6 +2014,38 @@ def test_search_sizes_disks_from_the_offered_gb(db_modes, validator_gb, query_gb
     assert awsb.node_root_gb(cfg, query=True) == query_gb
 
 
+def test_pg_mbps_defaults_to_rds_mbps_when_rds_is_a_db_mode():
+    args = plan_args("--db-modes", "colocated,rds")
+    cfg = awsb.with_db_modes(awsb.config_from_args(args), args, args.db_modes)
+    assert cfg.pg_mbps == awsb.RDS_MBPS
+    awsb.check_rds_config(cfg)
+
+
+def test_an_explicit_pg_mbps_is_kept_with_rds():
+    args = plan_args("--db-modes", "rds", "--pg-mbps", "1500")
+    cfg = awsb.with_db_modes(awsb.config_from_args(args), args, args.db_modes)
+    assert cfg.pg_mbps == 1500
+    with pytest.raises(awsb.Refused, match="--pg-mbps 500"):
+        awsb.check_rds_config(cfg)
+
+
+def test_pg_mbps_stays_1500_without_rds():
+    args = plan_args("--db-modes", "colocated,volume")
+    cfg = awsb.with_db_modes(awsb.config_from_args(args), args, args.db_modes)
+    assert cfg.pg_mbps == 1500
+
+
+@pytest.mark.parametrize("root_gb", ["20", "10", "0"])
+def test_a_root_gb_within_the_reserve_is_refused(root_gb):
+    with pytest.raises(awsb.Refused, match="--root-gb"):
+        awsb.config_from_args(plan_args("--root-gb", root_gb))
+
+
+def test_a_root_gb_above_the_reserve_is_accepted():
+    cfg = awsb.config_from_args(plan_args("--root-gb", "21"))
+    assert cfg.root_gb == "21"
+
+
 def test_payload_factor():
     assert awsb.payload_factor(3) == 2.0
     assert awsb.payload_factor(5) == pytest.approx(1.6)
@@ -2343,7 +2375,11 @@ def test_an_image_without_the_flag_lists_nothing(caplog):
     server = listing_registry()
     image = resolve_with(server, "linux/arm64")
     runner = listing_runner(
-        "linux/arm64", lambda _: completed(returncode=2, stderr="unexpected argument")
+        "linux/arm64",
+        lambda _: completed(
+            returncode=2,
+            stderr="unexpected argument '--list-experiments'",
+        ),
     )
     with caplog.at_level("INFO"):
         assert awsb.list_experiments(FakeSystem(run=runner), image, "arm64") == []
@@ -2359,6 +2395,18 @@ def test_a_failed_listing_is_refused_with_the_stderr(returncode):
     result = completed(returncode=returncode, stderr="pull access denied")
     with pytest.raises(awsb.Refused, match="pull access denied"):
         awsb.parse_experiments(result)
+
+
+# TEST:harness-listing-other-usage-error-fails
+def test_a_usage_error_not_naming_the_flag_is_refused_with_the_stderr():
+    result = completed(returncode=2, stderr="error: unexpected argument '--bogus'")
+    with pytest.raises(awsb.Refused, match="--bogus"):
+        awsb.parse_experiments(result)
+
+
+def test_a_usage_error_naming_the_flag_lists_nothing():
+    stderr = "error: unexpected argument '--list-experiments' found"
+    assert awsb.parse_experiments(completed(returncode=2, stderr=stderr)) == []
 
 
 # TEST:harness-listing-bad-json-fails
@@ -2466,7 +2514,7 @@ DIRTY = " M scripts/network-bench/aws-bench\n?? scripts/network-bench/new.py\n"
 
 def status_runner(status: str, **kwargs: Any) -> FakeRunner:
     runner = FakeRunner(**kwargs)
-    runner.respond("git status", lambda _: completed(stdout=status))
+    runner.respond("status --porcelain", lambda _: completed(stdout=status))
     return runner
 
 
@@ -2475,6 +2523,7 @@ def test_harness_changes_lists_the_porcelain_lines_under_the_harness_paths():
     runner = status_runner(DIRTY)
     assert len(awsb.harness_changes(runner)) == 2
     assert runner.ran("git", "status", "--porcelain", "--", "scripts/network-bench")
+    assert runner.calls[0][:3] == ["git", "-C", str(awsb.REPO_ROOT)]
     assert awsb.harness_changes(status_runner("")) == []
 
 
@@ -2482,7 +2531,7 @@ def test_harness_changes_lists_the_porcelain_lines_under_the_harness_paths():
 def test_a_failed_git_status_is_refused_with_gits_stderr():
     runner = FakeRunner()
     runner.respond(
-        "git status",
+        "status --porcelain",
         lambda _: completed(returncode=128, stderr="fatal: not a git repository"),
     )
     with pytest.raises(awsb.Refused, match="not a git repository"):
@@ -2527,7 +2576,9 @@ def test_plan_records_the_harness_state_in_the_run_manifest(fleet_dir, status, d
 @pytest.mark.usefixtures("preflighted")
 def test_plan_reads_the_harness_state_before_rendering_anything(fleet_dir):
     runner = FakeRunner(states=[])
-    runner.respond("git status", lambda _: completed(returncode=128, stderr="fatal"))
+    runner.respond(
+        "status --porcelain", lambda _: completed(returncode=128, stderr="fatal")
+    )
     with pytest.raises(awsb.Refused, match="git status failed"):
         awsb.cmd_plan(plan_args(), FakeSystem(run=runner))
     assert not (fleet_dir / "fleet.json").exists()

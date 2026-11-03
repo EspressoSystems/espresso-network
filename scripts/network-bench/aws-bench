@@ -2321,9 +2321,10 @@ def experiments_argv(image: ImageInfo) -> list[str]:
 
 
 def parse_experiments(result: subprocess.CompletedProcess[str]) -> list[str]:
-    """The JSON array of names on rc 0; [] on rc 2 (clap's usage error: the image predates the
-    flag); Refused on any other rc, or on rc 0 with anything but a JSON array of strings."""
-    if result.returncode == 2:
+    """The JSON array of names on rc 0; [] on rc 2 when stderr names `--list-experiments` (clap's
+    usage error: the image predates the flag); Refused on any other rc, or on rc 0 with anything
+    but a JSON array of strings."""
+    if result.returncode == 2 and "--list-experiments" in result.stderr:
         return []
     if result.returncode != 0:
         raise Refused(
@@ -3655,6 +3656,24 @@ def chaos_load(load: nb.BenchConfig, chaos: ch.ChaosConfig) -> nb.BenchConfig:
     )
 
 
+def check_root_gb(root_gb: str) -> None:
+    """Refuses an explicit `--root-gb` with no room after RESERVED_GB for the journal cap."""
+    if root_gb != "auto" and int(root_gb) <= RESERVED_GB:
+        raise Refused(
+            f"--root-gb {root_gb} leaves no room for the journal: it must exceed "
+            f"{RESERVED_GB} GB reserved for the OS and images"
+        )
+
+
+def with_db_modes(
+    cfg: RunConfig, args: argparse.Namespace, db_modes: tuple[DbMode, ...]
+) -> RunConfig:
+    """`cfg` with `db_modes`; `--pg-mbps` not given takes RDS_MBPS when `rds` is among them."""
+    if "rds" in db_modes and "--pg-mbps" not in given_flags(args.argv):
+        cfg = dataclasses.replace(cfg, pg_mbps=RDS_MBPS)
+    return dataclasses.replace(cfg, db_modes=db_modes)
+
+
 def config_from_args(args: argparse.Namespace) -> RunConfig:
     keys = [pair.partition("=")[0] for pair in args.node_env]
     for key in keys:
@@ -3665,6 +3684,7 @@ def config_from_args(args: argparse.Namespace) -> RunConfig:
     check_latency_flags(
         profile, args.intra_latency, args.tcp_cc, args.mtu, netem, args.jitter_ratio
     )
+    check_root_gb(args.root_gb)
     chaos = chaos_from_args(args)
     nodes = chaos_default(args, "--nodes", CHAOS_NODES)
     search = search_from_args(args)
@@ -4037,7 +4057,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 
 def cmd_plan(args: argparse.Namespace, system: System) -> int:
     cfg = dataclasses.replace(
-        config_from_args(args), db_modes=args.db_modes, ttl_min=args.ttl_min
+        with_db_modes(config_from_args(args), args, args.db_modes),
+        ttl_min=args.ttl_min,
     )
     fleet_dir, *_ = plan_fleet(args, cfg, system)
     log.info("rendered %s (phase=planned)", fleet_dir)
@@ -4290,7 +4311,7 @@ def cmd_run(args: argparse.Namespace, system: System) -> int:
         raise Refused(
             "run needs --tag, or --fleet [FLEET] to measure on a fleet from `up`"
         )
-    cfg = dataclasses.replace(fleet_config_from_args(args), db_modes=(args.query_db,))
+    cfg = with_db_modes(fleet_config_from_args(args), args, (args.query_db,))
     interrupts = Interrupts(system.clock, system.forward)
     try:
         fleet_dir, run_dir, tf = prepare_run(args, cfg, system)
@@ -5169,8 +5190,7 @@ def fleet_config_from_args(args: argparse.Namespace) -> RunConfig:
     query_engine = chaos_default(args, "--query-engine", CHAOS_QUERY_ENGINE)
     check_query_store(query_engine, args.query_db)
     return dataclasses.replace(
-        config_from_args(args),
-        db_modes=args.db_modes,
+        with_db_modes(config_from_args(args), args, args.db_modes),
         query_engine=query_engine,
         query_db=args.query_db,
         ttl_min=args.ttl_min,
@@ -5793,7 +5813,9 @@ def render_fleet_dir(
 def harness_changes(run: Runner) -> list[str]:
     """`git status --porcelain` lines under HARNESS_PATHS, tracked and untracked; empty for a
     clean checkout. Read before anything is rendered, because git can still fail."""
-    result = run(["git", "status", "--porcelain", "--", *HARNESS_PATHS])
+    result = run(
+        ["git", "-C", str(REPO_ROOT), "status", "--porcelain", "--", *HARNESS_PATHS]
+    )
     if result.returncode != 0:
         raise Refused(f"git status failed: {result.stderr.strip()}")
     return result.stdout.splitlines()

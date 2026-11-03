@@ -1360,7 +1360,7 @@ class AskSpy(FakeSystem):
 @pytest.mark.usefixtures("valid")
 def test_the_dirty_warning_comes_before_the_cost_prompt(run_harness):
     runner = FakeRunner(states=[DONE_STATE], describe=DESCRIBE)
-    runner.respond("git status", lambda _: completed(stdout=" M scripts/x\n"))
+    runner.respond("status --porcelain", lambda _: completed(stdout=" M scripts/x\n"))
     system = AskSpy(
         run=runner,
         answer=True,
