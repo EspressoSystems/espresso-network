@@ -1,10 +1,8 @@
-#[cfg(feature = "embedded-db")]
-use std::path::Path;
 use std::{
     collections::{BTreeMap, btree_map},
     future::Future,
     num::NonZeroUsize,
-    path::PathBuf,
+    path::{Path, PathBuf},
     str::FromStr,
     sync::Arc,
     time::{Duration, Instant},
@@ -28,6 +26,7 @@ use espresso_types::{
         StakeTableEvent,
     },
 };
+use espresso_utils::experiment::Experiment;
 use futures::stream::StreamExt;
 use hotshot_libp2p_networking::network::behaviours::dht::store::persistent::{
     DhtPersistentStorage, SerializableRecord,
@@ -386,7 +385,7 @@ pub struct Options {
     /// When unset, payloads and shares stay in the database. A database that already references
     /// blob records fails to start without this directory.
     #[clap(long, env = "ESPRESSO_NODE_BLOB_DIR")]
-    pub(crate) blob_dir: Option<PathBuf>,
+    blob_dir: Option<PathBuf>,
 
     /// How long VID shares in the blob directory are kept. Expiry is by segment age.
     #[clap(long, env = "ESPRESSO_NODE_SHARE_RETENTION", value_parser = parse_duration, default_value = "7d")]
@@ -439,6 +438,24 @@ pub struct Options {
 
     #[clap(skip)]
     pub(crate) consensus_only: bool,
+}
+
+impl Options {
+    /// `blob_dir` when `Experiment::BlobDir` is enabled; the database keeps payloads otherwise.
+    pub(crate) fn blob_dir(&self) -> Option<&Path> {
+        if Experiment::BlobDir.enabled() {
+            self.blob_dir.as_deref()
+        } else {
+            None
+        }
+    }
+
+    /// Sets `blob_dir`, which takes effect only with `Experiment::BlobDir`.
+    #[cfg(test)]
+    pub(crate) fn with_blob_dir(mut self, dir: PathBuf) -> Self {
+        self.blob_dir = Some(dir);
+        self
+    }
 }
 
 impl Default for Options {
@@ -642,9 +659,9 @@ impl TryFrom<&Options> for Config {
 
         cfg = cfg.serializable_retry(opt.serializable_retry.to_retry_config());
 
-        if let Some(dir) = &opt.blob_dir {
+        if let Some(dir) = opt.blob_dir() {
             cfg = cfg.blob(BlobCfg {
-                dir: dir.clone(),
+                dir: dir.to_path_buf(),
                 share_retention: opt.share_retention,
             });
         }
@@ -3406,6 +3423,7 @@ mod testing {
 #[cfg(test)]
 mod test {
     use espresso_types::{Leaf, NodeState, ValidatedState, traits::NullEventConsumer};
+    use espresso_utils::experiment::EnabledExperiments;
     use futures::stream::TryStreamExt;
     use hotshot_example_types::node_types::TEST_VERSIONS;
     #[cfg(feature = "embedded-db")]
@@ -3449,6 +3467,22 @@ mod test {
         assert_eq!(opt.blob_dir, Some(PathBuf::from("/var/blob")));
         assert_eq!(opt.share_retention, Duration::from_secs(36 * 3600));
         Config::try_from(&opt).unwrap();
+    }
+
+    #[test]
+    fn blob_dir_hidden_without_experiment_ok() {
+        let opt = parse_sql_options(&["--blob-dir", "/var/blob"]);
+
+        assert_eq!(opt.blob_dir(), None);
+    }
+
+    #[test]
+    fn blob_dir_enabled_by_experiment_ok() {
+        "blob-dir".parse::<EnabledExperiments>().unwrap().install();
+        let opt = parse_sql_options(&["--blob-dir", "/var/blob"]);
+
+        assert_eq!(opt.blob_dir(), Some(Path::new("/var/blob")));
+        assert_eq!(parse_sql_options(&[]).blob_dir(), None);
     }
 
     #[test]

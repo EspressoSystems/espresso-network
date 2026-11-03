@@ -379,7 +379,7 @@ PG_JSON = f"{BENCH_DIR}/pg.json"
 # Self-signed cert made by user-data on the query role, mounted read-only into the container.
 PG_TLS_DIR = "/data/pg-tls"
 # Query payloads and VID shares (blob segments) of the query node live next to the Postgres data so they use the
-# same volume; node image reads ESPRESSO_NODE_BLOB_DIR, which `--node-env` sets to
+# same volume; node image reads ESPRESSO_QUERY_PAYLOAD_DIR, which `--node-env` sets to
 # PAYLOAD_CONTAINER_DIR (experimental, so not a default).
 PAYLOAD_HOST_DIR = "/data/pg/payload"
 TRACE_HOST_DIR = f"{BENCH_DIR}/trace"
@@ -4610,10 +4610,10 @@ def check_query_store(
             f"choose from {', '.join(QUERY_PLACEMENTS[engine])}"
         )
     if placement == "tmpfs" and not any(
-        pair.startswith("ESPRESSO_NODE_BLOB_DIR=") for pair in node_env
+        pair.startswith("ESPRESSO_QUERY_PAYLOAD_DIR=") for pair in node_env
     ):
         raise Refused(
-            "--query-db tmpfs needs --node-env ESPRESSO_NODE_BLOB_DIR=...: "
+            "--query-db tmpfs needs --node-env ESPRESSO_QUERY_PAYLOAD_DIR=...: "
             "payloads in SQLite would fill the tmpfs"
         )
 

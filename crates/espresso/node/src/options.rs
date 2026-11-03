@@ -19,7 +19,10 @@ use clap::{
 use derivative::Derivative;
 use espresso_telemetry::TelemetryOptions;
 use espresso_types::{BackoffParams, L1ClientOptions, parse_duration};
-use espresso_utils::{experiment::EnabledExperiments, logging};
+use espresso_utils::{
+    experiment::{EnabledExperiments, Experiment},
+    logging,
+};
 use hotshot_types::addr::NetAddr;
 use libp2p::Multiaddr;
 use light_client::{state::LightClientOptions, storage::LightClientSqliteOptions};
@@ -1092,7 +1095,7 @@ impl From<&persistence::sql::Options> for SqlStorageConfig {
             query_max_connections: o.query_max_connections,
             #[cfg(feature = "embedded-db")]
             query_max_connections: None,
-            blob_dir: o.blob_dir.clone(),
+            blob_dir: o.blob_dir().map(ToOwned::to_owned),
             share_retention: o.share_retention,
             pruning: PruningView::from(&o.pruning),
             consensus_pruning: ConsensusPruningView::from(&o.consensus_pruning),
@@ -1251,29 +1254,73 @@ impl From<&L1ClientOptions> for L1Tuning {
     }
 }
 
+impl Modules {
+    /// Journal when the storage-journal module is given or `experiments` holds `Experiment::Journal`; else storage-fs, storage-sql, default fs as on `main`.
+    pub fn consensus_backend(&self, experiments: &EnabledExperiments) -> StorageBackend {
+        if self.storage_journal.is_some() || experiments.contains(Experiment::Journal) {
+            StorageBackend::Journal
+        } else if self.storage_fs.is_some() {
+            StorageBackend::Fs
+        } else if self.storage_sql.is_some() {
+            StorageBackend::Sql
+        } else {
+            StorageBackend::FsDefault
+        }
+    }
+}
+
+impl StorageConfig {
+    /// The storage section of the config API for `backend`.
+    fn new(backend: StorageBackend, modules: &Modules) -> Self {
+        let fs = modules.storage_fs.as_ref().map(FsStorageConfig::from);
+        let sql = modules.storage_sql.as_ref().map(SqlStorageConfig::from);
+        match backend {
+            StorageBackend::Journal => Self {
+                backend,
+                // storage-fs, else storage-sql, backs the query service when the query module is
+                // on, and both are ignored otherwise. Same choice as `run.rs`.
+                fs: fs.filter(|_| modules.query.is_some()),
+                sql: if modules.query.is_some() && modules.storage_fs.is_none() {
+                    sql
+                } else {
+                    None
+                },
+                journal: match &modules.storage_journal {
+                    Some(journal) => Some(JournalStorageConfig::from(journal)),
+                    None => persistence::journal::Options::from_env()
+                        .ok()
+                        .as_ref()
+                        .map(JournalStorageConfig::from),
+                },
+            },
+            StorageBackend::Fs => Self {
+                backend,
+                fs,
+                sql: None,
+                journal: None,
+            },
+            StorageBackend::Sql => Self {
+                backend,
+                fs: None,
+                sql,
+                journal: None,
+            },
+            StorageBackend::FsDefault => Self {
+                backend,
+                fs: persistence::fs::Options::try_parse_from(std::iter::empty::<String>())
+                    .ok()
+                    .as_ref()
+                    .map(FsStorageConfig::from),
+                sql: None,
+                journal: None,
+            },
+        }
+    }
+}
+
 impl PublicNodeConfig {
     pub fn new(opt: &Options, modules: &Modules, genesis: &Genesis) -> Self {
-        // Consensus always runs on the journal. storage-fs, else storage-sql, backs the query
-        // service when the query module is on, and both are ignored otherwise. Same choice as
-        // `run.rs`.
-        let journal = match &modules.storage_journal {
-            Some(journal) => Some(JournalStorageConfig::from(journal)),
-            None => persistence::journal::Options::from_env()
-                .ok()
-                .as_ref()
-                .map(JournalStorageConfig::from),
-        };
-        let (fs, sql) = match (&modules.query, &modules.storage_fs, &modules.storage_sql) {
-            (None, ..) => (None, None),
-            (Some(_), Some(fs), _) => (Some(FsStorageConfig::from(fs)), None),
-            (Some(_), None, sql) => (None, sql.as_ref().map(SqlStorageConfig::from)),
-        };
-        let storage = StorageConfig {
-            backend: StorageBackend::Journal,
-            fs,
-            sql,
-            journal,
-        };
+        let storage = StorageConfig::new(modules.consensus_backend(&opt.experiments), modules);
 
         Self {
             orchestrator_url: opt.orchestrator_url.clone(),
@@ -1320,7 +1367,7 @@ pub(crate) mod tests {
         FeeAccount, GenesisHeader, L1BlockInfo, PubKey, SeqTypes, Timestamp, Upgrade, UpgradeMode,
         UpgradeType, ViewBasedUpgrade, v0_3::ChainConfig,
     };
-    use espresso_utils::{experiment::Experiment, ser::FromStringOrInteger};
+    use espresso_utils::ser::FromStringOrInteger;
     use hotshot_types::{
         PeerConfig, VersionedDaCommittee, light_client::StateKeyPair, stake_table::StakeTableEntry,
         traits::signature_key::SignatureKey, x25519,
@@ -1330,6 +1377,46 @@ pub(crate) mod tests {
 
     use super::*;
     use crate::genesis::{L1Finalized, StakeTableConfig};
+
+    fn backend(experiments: &str, modules: &[&str]) -> StorageBackend {
+        let mut args = vec!["--"];
+        args.extend(modules);
+        let opt = parse_options_with(&args);
+        let experiments: EnabledExperiments = experiments.parse().unwrap();
+        opt.modules().consensus_backend(&experiments)
+    }
+
+    const FS: [&str; 3] = ["storage-fs", "--path", "/tmp/fs-test"];
+
+    #[test]
+    fn consensus_backend_journal_enabled_ok() {
+        for modules in [&[][..], &FS[..]] {
+            assert_eq!(backend("journal", modules), StorageBackend::Journal);
+        }
+        assert_eq!(backend("all", &FS), StorageBackend::Journal);
+    }
+
+    #[test]
+    fn consensus_backend_journal_disabled_ok() {
+        assert_eq!(backend("", &[]), StorageBackend::FsDefault);
+        assert_eq!(backend("blake3-tx-hash", &[]), StorageBackend::FsDefault);
+        assert_eq!(backend("", &FS), StorageBackend::Fs);
+    }
+
+    // storage-sql under embedded-db requires a --path arg.
+    #[cfg(not(feature = "embedded-db"))]
+    #[test]
+    fn consensus_backend_sql_and_fs_order_ok() {
+        assert_eq!(backend("", &["storage-sql"]), StorageBackend::Sql);
+        let both = ["storage-fs", "--path", "/tmp/fs-test", "--", "storage-sql"];
+        assert_eq!(backend("", &both), StorageBackend::Fs);
+    }
+
+    #[test]
+    fn consensus_backend_journal_module_override_ok() {
+        let journal = ["storage-journal", "--path", "/tmp/journal-test"];
+        assert_eq!(backend("", &journal), StorageBackend::Journal);
+    }
 
     #[test]
     fn experiment_options_unknown_fails() {
@@ -1600,7 +1687,7 @@ pub(crate) mod tests {
             cfg.config_peers
         );
         assert_eq!(cfg.l1_ws_provider_count, 0);
-        assert_eq!(cfg.storage.backend, StorageBackend::Journal);
+        assert_eq!(cfg.storage.backend, StorageBackend::FsDefault);
         assert!(cfg.storage.fs.is_none());
         assert!(cfg.storage.sql.is_none());
         assert!(!cfg.modules.submit);
@@ -1824,7 +1911,7 @@ pub(crate) mod tests {
         let cfg = PublicNodeConfig::new(&opt, &modules, &test_genesis());
         let json = serde_json::to_string(&cfg).unwrap();
 
-        assert_eq!(cfg.storage.backend, StorageBackend::Journal);
+        assert_eq!(cfg.storage.backend, StorageBackend::Sql);
         assert!(
             json.contains("\"prune\":true"),
             "expected prune:true in JSON: {json}"

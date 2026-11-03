@@ -13,7 +13,7 @@ use super::{
     api::{self, data_source::QueryModuleOptions},
     context::SequencerContext,
     init_node,
-    options::{Modules, Options, PublicNodeConfig},
+    options::{Modules, Options, PublicNodeConfig, StorageBackend},
     persistence,
 };
 use crate::{
@@ -151,7 +151,75 @@ pub async fn main(migrated_envs: Vec<(&str, &str)>) -> anyhow::Result<()> {
 
     tracing::warn!(?genesis, "genesis");
 
-    // Consensus always runs on the journal. storage-sql and storage-fs only back the query service.
+    let result = match modules.consensus_backend(&opt.experiments) {
+        StorageBackend::Journal => {
+            let storage = journal_storage(&mut modules, &genesis)?;
+            run_with_storage(
+                genesis,
+                modules,
+                opt,
+                storage,
+                public_node_config,
+                telemetry_handle.as_mut(),
+            )
+            .await
+        },
+        StorageBackend::Fs => {
+            let storage = modules
+                .storage_fs
+                .take()
+                .expect("backend Fs has storage-fs");
+            run_with_storage(
+                genesis,
+                modules,
+                opt,
+                storage,
+                public_node_config,
+                telemetry_handle.as_mut(),
+            )
+            .await
+        },
+        StorageBackend::Sql => {
+            let storage = modules
+                .storage_sql
+                .take()
+                .expect("backend Sql has storage-sql");
+            run_with_storage(
+                genesis,
+                modules,
+                opt,
+                storage,
+                public_node_config,
+                telemetry_handle.as_mut(),
+            )
+            .await
+        },
+        // Persistence is required. If none is provided, just use the local file system.
+        StorageBackend::FsDefault => {
+            run_with_storage(
+                genesis,
+                modules,
+                opt,
+                persistence::fs::Options::default(),
+                public_node_config,
+                telemetry_handle.as_mut(),
+            )
+            .await
+        },
+    };
+
+    if let Some(h) = telemetry_handle {
+        h.shutdown();
+    }
+    result
+}
+
+/// Journal options for consensus. storage-fs, else storage-sql, backs the query service when the
+/// query module is on; both are ignored otherwise.
+fn journal_storage(
+    modules: &mut Modules,
+    genesis: &Genesis,
+) -> anyhow::Result<persistence::journal::Options> {
     let mut storage = match modules.storage_journal.take() {
         Some(storage) => storage,
         None => persistence::journal::Options::from_env()?,
@@ -180,20 +248,7 @@ pub async fn main(migrated_envs: Vec<(&str, &str)>) -> anyhow::Result<()> {
         ),
         None => {},
     }
-    let result = run_with_storage(
-        genesis,
-        modules,
-        opt,
-        storage,
-        public_node_config,
-        telemetry_handle.as_mut(),
-    )
-    .await;
-
-    if let Some(h) = telemetry_handle {
-        h.shutdown();
-    }
-    result
+    Ok(storage)
 }
 
 async fn run_with_storage<S>(

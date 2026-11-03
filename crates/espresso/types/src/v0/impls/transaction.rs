@@ -1,6 +1,5 @@
-use std::sync::LazyLock;
-
 use committable::{Commitment, Committable};
+use espresso_utils::experiment::Experiment;
 use hotshot_query_service_types::explorer::traits::ExplorerTransaction;
 use hotshot_types::traits::block_contents::Transaction as HotShotTransaction;
 use serde::{Deserialize, Deserializer, de::Error};
@@ -121,15 +120,11 @@ impl HotShotTransaction for Transaction {
     }
 }
 
-/// Benchmark only: incompatible with nodes that run without it.
-static BLAKE3_TX_HASH: LazyLock<bool> =
-    LazyLock::new(|| std::env::var_os("ESPRESSO_BENCH_BLAKE3_TX_HASH").is_some());
-
 impl Committable for Transaction {
     fn commit(&self) -> Commitment<Self> {
         let builder = committable::RawCommitmentBuilder::new("Transaction")
             .u64_field("namespace", self.namespace.0);
-        if *BLAKE3_TX_HASH {
+        if Experiment::Blake3TxHash.enabled() {
             builder.fixed_size_bytes(blake3::hash(&self.payload).as_bytes())
         } else {
             builder.var_size_bytes(&self.payload)
@@ -149,5 +144,44 @@ impl ExplorerTransaction<SeqTypes> for Transaction {
 
     fn payload_size(&self) -> u64 {
         self.payload.len() as u64
+    }
+}
+
+#[cfg(test)]
+mod bench_experiment_tests {
+    use committable::RawCommitmentBuilder;
+    use espresso_utils::experiment::EnabledExperiments;
+
+    use super::*;
+
+    fn tx() -> Transaction {
+        Transaction::new(NamespaceId::from(7u32), vec![1, 2, 3])
+    }
+
+    fn commit_with(
+        payload_hash: impl FnOnce(
+            RawCommitmentBuilder<Transaction>,
+            &[u8],
+        ) -> RawCommitmentBuilder<Transaction>,
+    ) -> Commitment<Transaction> {
+        let tx = tx();
+        let builder = RawCommitmentBuilder::new("Transaction").u64_field("namespace", 7);
+        payload_hash(builder, tx.payload()).finalize()
+    }
+
+    #[test]
+    fn bench_blake3_commit_enabled_ok() {
+        "blake3-tx-hash"
+            .parse::<EnabledExperiments>()
+            .unwrap()
+            .install();
+        let expected = commit_with(|b, p| b.fixed_size_bytes(blake3::hash(p).as_bytes()));
+        assert_eq!(tx().commit(), expected);
+    }
+
+    #[test]
+    fn bench_blake3_commit_disabled_ok() {
+        let expected = commit_with(|b, p| b.var_size_bytes(p));
+        assert_eq!(tx().commit(), expected);
     }
 }

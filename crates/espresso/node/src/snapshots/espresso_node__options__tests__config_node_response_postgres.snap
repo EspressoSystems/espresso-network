@@ -194,7 +194,7 @@ l1:
 l1_provider_count: 1
 l1_ws_provider_count: 0
 storage:
-  backend: journal
+  backend: sql
   fs: ~
   sql:
     prune: true
@@ -226,7 +226,7 @@ storage:
     max_connections: 25
     query_min_connections: ~
     query_max_connections: ~
-    blob_dir: /var/lib/espresso/blob
+    blob_dir: ~
     share_retention:
       secs: 604800
       nanos: 0

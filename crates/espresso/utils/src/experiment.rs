@@ -17,7 +17,14 @@ use strum::{EnumString, IntoStaticStr, VariantArray};
     EnumString,
 )]
 #[strum(serialize_all = "kebab-case")]
-pub enum Experiment {}
+pub enum Experiment {
+    /// Consensus storage on the append-only journal whatever storage module is given.
+    Journal,
+    /// Transaction commitments hash the payload with BLAKE3 first; every node of a network must agree.
+    Blake3TxHash,
+    /// Block payloads and VID shares in `ESPRESSO_NODE_BLOB_DIR`; without it the option is ignored.
+    BlobDir,
+}
 
 impl Experiment {
     /// Whether this process enabled the experiment; false before `EnabledExperiments::install`.
@@ -108,6 +115,26 @@ static ENABLED: OnceLock<EnabledExperiments> = OnceLock::new();
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn experiment_names_in_declaration_order_ok() {
+        assert_eq!(
+            Experiment::names(),
+            ["journal", "blake3-tx-hash", "blob-dir"]
+        );
+    }
+
+    #[test]
+    fn experiment_uninstalled_disabled_ok() {
+        assert!(!Experiment::Journal.enabled());
+    }
+
+    #[test]
+    #[should_panic(expected = "installed more than once")]
+    fn experiment_install_twice_fails() {
+        "".parse::<EnabledExperiments>().unwrap().install();
+        "".parse::<EnabledExperiments>().unwrap().install();
+    }
 
     #[test]
     fn experiment_parse_empty_ok() {
