@@ -55,9 +55,12 @@ use light_client::consensus::{
 };
 use tagged_base64::TaggedBase64;
 
-use crate::proto::{
-    self, advz_merkle_node::Node, header_response::Header as Shape,
-    resolvable_chain_config::ChainConfig,
+use crate::{
+    proto::{
+        self, advz_merkle_node::Node, header_response::Header as Shape,
+        resolvable_chain_config::ChainConfig,
+    },
+    v1::node::StakeTableWithEpochNumber,
 };
 
 impl From<ResolvableChainConfig> for proto::ResolvableChainConfig {
@@ -329,6 +332,15 @@ impl From<PeerConfig<SeqTypes>> for proto::PeerConfig {
                 p2p_addr: info.p2p_addr.unbracketed_string(),
                 x25519_key: info.x25519_key.to_string(),
             }),
+        }
+    }
+}
+
+impl From<StakeTableWithEpochNumber<SeqTypes>> for proto::StakeTableResponse {
+    fn from(table: StakeTableWithEpochNumber<SeqTypes>) -> Self {
+        Self {
+            epoch: table.epoch.map(|epoch| *epoch),
+            stake_table: table.stake_table.into_iter().map(Into::into).collect(),
         }
     }
 }
