@@ -260,13 +260,14 @@ impl NodeStore {
         Ok(query.build().execute(&self.pool).await?.rows_affected())
     }
 
-    /// One entry per `DataKind::VARIANTS`: `SUM(end - start)`, and the range with
-    /// `MIN(first_missing_at)` with its age at `now`.
+    /// One entry per `DataKind::VARIANTS`: `SUM(end - start)`, and the range with the earliest
+    /// `first_missing_at` (lowest `range_start` on a tie) with its age at `now`.
     pub async fn missing_summary(&self, now: DateTime<Utc>) -> anyhow::Result<Vec<KindSummary>> {
-        // Bare columns of a query with one `MIN` come from the row holding the minimum.
         let rows: Vec<(String, u64, DateTime<Utc>, u64, u64)> = sqlx::query_as(
-            "SELECT kind, SUM(range_end - range_start), MIN(first_missing_at), range_start, \
-             range_end FROM missing_chunk WHERE node = ? GROUP BY kind",
+            "SELECT kind, total, first_missing_at, range_start, range_end FROM ( SELECT kind, \
+             first_missing_at, range_start, range_end, SUM(range_end - range_start) OVER \
+             (PARTITION BY kind) AS total, ROW_NUMBER() OVER (PARTITION BY kind ORDER BY \
+             first_missing_at, range_start) AS rn FROM missing_chunk WHERE node = ?) WHERE rn = 1",
         )
         .bind(&self.node)
         .fetch_all(&self.pool)
@@ -342,7 +343,7 @@ pub enum SweepState {
     Running(SweepProgress),
 }
 
-/// A sweep in progress over `[0, until_height)`.
+/// A sweep in progress over `[next_height, until_height)`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct SweepProgress {
     pub until_height: u64,
@@ -369,7 +370,6 @@ pub struct OldestMissing {
 
 #[cfg(test)]
 mod tests {
-    use chrono::TimeDelta;
     use pretty_assertions::assert_eq;
 
     use super::*;
@@ -435,11 +435,37 @@ mod tests {
             leaf_summary.oldest,
             Some(OldestMissing {
                 range: 0..100,
-                age: TimeDelta::seconds(100).to_std().unwrap(),
+                age: Duration::from_secs(100),
             })
         );
         assert_eq!(count(&summary, DataKind::Leaf), 100);
         assert_eq!(count(&summary, DataKind::StakeTable), 1);
+
+        // A later row does not displace the oldest; a tie takes the lowest `range_start`.
+        for (kind, range, secs) in [
+            (DataKind::Leaf, 100..200, 20),
+            (DataKind::Block, 300..400, 30),
+            (DataKind::Block, 200..300, 30),
+        ] {
+            node.record_missing(&probe(kind, range), at(T0 + secs))
+                .await
+                .unwrap();
+        }
+        let summary = node.missing_summary(at(T0 + 100)).await.unwrap();
+        let oldest = |kind| {
+            summary
+                .iter()
+                .find(|k| k.kind == kind)
+                .unwrap()
+                .oldest
+                .clone()
+                .unwrap()
+        };
+        assert_eq!(count(&summary, DataKind::Leaf), 200);
+        assert_eq!(oldest(DataKind::Leaf).range, 0..100);
+        assert_eq!(count(&summary, DataKind::Block), 200);
+        assert_eq!(oldest(DataKind::Block).range, 200..300);
+        assert_eq!(oldest(DataKind::Block).age, Duration::from_secs(70));
 
         let other = node_store("b:2").await;
         let summary = other.missing_summary(at(T0)).await.unwrap();

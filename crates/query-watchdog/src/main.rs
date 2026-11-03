@@ -1,19 +1,19 @@
-//! Watches archive query nodes for data they fail to serve.
+//! Datadog recipes. JSON logs (`RUST_LOG_FORMAT=json`) put event fields under `fields`.
 //!
-//! Datadog recipes. JSON logs (`RUST_LOG_FORMAT=json`) put event fields under `fields`, so the
-//! attributes are `@fields.node`, `@fields.kind` and so on.
-//!
-//! 1. Log monitor, multi alert grouped by `@fields.node,@fields.kind`:
-//!    - Query: `service:<svc> status:warn @fields.message:"missing data"`.
-//!    - Message: `{{[@fields.node].name}} {{[@fields.kind].name}} missing for
+//! 1. Log setup: facets on `@fields.node` and `@fields.kind`, and a message remapper on
+//!    `fields.message`.
+//! 2. Either a log monitor or a metric monitor for missing data:
+//!    - Log monitor, multi alert grouped by `@fields.node,@fields.kind`. Query:
+//!      `service:<svc> status:warn "missing data"`. Message:
+//!      `{{[@fields.node].name}} {{[@fields.kind].name}} missing for
 //!      {{log.attributes.[fields.oldest_age_seconds]}} s: {{log.attributes.[fields.url]}}`.
-//!    - One WARN per node and kind per minute while the oldest missing range is older than
-//!      `--warn-missing-after`. The `url` field is the GET URL of that range.
-//!    - Syntax from docs.datadoghq.com/monitors/notify/variables/: no `@` in `log.attributes`,
-//!      brackets around dotted keys. The docs do not cover nested JSON, so check one rendered alert.
-//! 2. Metric monitor on age:
-//!    `max(last_5m):max:query_watchdog_oldest_missing_age_seconds{*} by {node,kind} > 600`.
-//!    The metric name carries the namespace of the Datadog openmetrics check config.
+//!      One WARN per node and kind per minute while the oldest missing range is older than
+//!      `--warn-missing-after`; `url` is the GET URL of that range. Syntax:
+//!      docs.datadoghq.com/monitors/notify/variables/ (no `@` in `log.attributes`, brackets
+//!      around dotted keys).
+//!    - Metric monitor, no link:
+//!      `max(last_5m):max:query_watchdog_oldest_missing_age_seconds{*} by {node,kind} > 600`.
+//!      The metric name carries the namespace of the Datadog openmetrics check config.
 //! 3. Metric monitors on lag and liveness:
 //!    - `max(last_5m):max:query_watchdog_follow_lag_blocks{*} by {node} > <blocks>`, and the same
 //!      for `query_watchdog_merklized_state_lag_blocks`.
@@ -127,7 +127,7 @@ async fn main() -> anyhow::Result<()> {
 
     tokio::select! {
         result = try_join_all(watches.into_iter().map(NodeWatch::run)) => result.map(drop),
-        result = tip_poller.run() => result,
+        result = tip_poller.run() => match result {},
         result = server => result?,
         signal = shutdown_signal() => {
             tracing::debug!(signal = signal?, "shutting down");

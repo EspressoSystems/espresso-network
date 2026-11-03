@@ -1,4 +1,7 @@
-use std::{collections::BTreeMap, error::Error, fmt, ops::Range, sync::Arc, time::Duration};
+use std::{
+    collections::BTreeMap, convert::Infallible, error::Error, fmt, ops::Range, sync::Arc,
+    time::Duration,
+};
 
 use anyhow::{Context, anyhow, bail, ensure};
 use chrono::{DateTime, SubsecRound, TimeDelta, Utc};
@@ -25,7 +28,7 @@ pub struct WatchOptions {
         default_value = "24h"
     )]
     pub sweep_interval: Duration,
-    /// Minimum gap between two requests to one node.
+    /// Wait before each request of one node watch.
     #[arg(
         long,
         env = "ESPRESSO_QUERY_WATCHDOG_REQUEST_INTERVAL",
@@ -219,7 +222,8 @@ impl Watchdog {
         })
     }
 
-    /// Loads or creates the node's progress, logs `watching` or `resumed`.
+    /// Loads or creates the node's progress, clamped to the sweep window start on resume, and logs
+    /// `watching` or `resumed`.
     pub async fn start_node(
         &self,
         node: WatchedNode,
@@ -314,12 +318,11 @@ impl Watchdog {
         )
     }
 
-    /// Max `v1/node/block-height` across `nodes`, queried in turn with `request_interval` before
-    /// each; counts each failure under the node's label; `None` when none answers.
+    /// Max `v1/node/block-height` across `nodes`, queried in turn; counts each failure under the
+    /// node's label; `None` when none answers.
     async fn fetch_tip(&self, nodes: &[WatchedNode]) -> Option<u64> {
         let mut tip = None;
         for node in nodes {
-            tokio::time::sleep(self.options.request_interval).await;
             match self.get_json::<u64>(node, "v1/node/block-height").await {
                 Ok(height) => tip = tip.max(Some(height)),
                 Err(error) => {
@@ -369,8 +372,8 @@ pub struct TipPoller {
 }
 
 impl TipPoller {
-    /// Polls forever; a round where no node answers keeps the previous tip.
-    pub async fn run(self) -> anyhow::Result<()> {
+    /// Polls forever, never returning; a round where no node answers keeps the previous tip.
+    pub async fn run(self) -> Infallible {
         loop {
             tokio::time::sleep(TIP_POLL_INTERVAL).await;
             if let Some(tip) = self.watchdog.fetch_tip(&self.nodes).await {
@@ -406,14 +409,17 @@ impl NodeWatch {
     /// Runs the loop until a store error.
     pub async fn run(mut self) -> anyhow::Result<()> {
         loop {
-            self.tip_height = *self.tip.borrow();
+            self.tip_height = *self.tip.borrow_and_update();
             self.poll_state_height(Instant::now()).await;
             let mut sent = self.follow_step().await?;
             sent += self.retry_step().await?;
             sent += self.sweep_step().await?;
             self.summarize_if_due(Instant::now()).await?;
             if sent == 0 {
-                tokio::time::sleep_until(self.next_state_poll_at).await;
+                tokio::select! {
+                    () = tokio::time::sleep_until(self.next_state_poll_at) => {},
+                    changed = self.tip.changed() => changed?,
+                }
             }
         }
     }
@@ -585,7 +591,7 @@ impl NodeWatch {
 
     /// Counts a failed request of the watched node in the metrics and the summary window.
     fn record_error(&mut self, target: FetchTarget, error: &FetchError) {
-        tracing::debug!(node = %self.node.label, target = target.label(), ?error, "request failed");
+        tracing::debug!(node = %self.node.label, target = target.label(), %error, "request failed");
         self.watchdog
             .metrics
             .count_fetch_error(&self.node.label, target, error);
@@ -609,7 +615,7 @@ impl NodeWatch {
         })
     }
 
-    /// After `SUMMARY_INTERVAL`: forgets rows below the sweep window, logs one INFO line, one WARN
+    /// After `SUMMARY_INTERVAL`: trims to the sweep window (retention only), logs one INFO line, one WARN
     /// per kind missing longer than `warn_missing_after`, exports gauges, resets
     /// `errors_since_summary`.
     async fn summarize_if_due(&mut self, now: Instant) -> anyhow::Result<()> {
@@ -617,12 +623,7 @@ impl NodeWatch {
             return Ok(());
         }
         self.last_summary_at = now;
-        let window_start = self
-            .watchdog
-            .options
-            .sweep_window()
-            .start_height(self.tip_height);
-        let forgotten = self.store.forget_below(window_start, self.epochs).await?;
+        let forgotten = self.trim_to_window().await?;
         let summary = self.summary().await?;
         tracing::info!(
             node = %self.node.label,
@@ -639,6 +640,23 @@ impl NodeWatch {
         Ok(())
     }
 
+    /// With a retention window, clamps progress to the window start and forgets missing rows below
+    /// it; returns the forgotten count. `None` in archive mode.
+    async fn trim_to_window(&mut self) -> anyhow::Result<Option<u64>> {
+        let window = self.watchdog.options.sweep_window();
+        if window == SweepWindow::Archive {
+            return Ok(None);
+        }
+        let window_start = window.start_height(self.tip_height);
+        let clamped = self.progress.clone().clamped_to(window_start);
+        if clamped != self.progress {
+            self.progress = clamped;
+            self.store.save_progress(&self.progress).await?;
+        }
+        let forgotten = self.store.forget_below(window_start, self.epochs).await?;
+        Ok(Some(forgotten))
+    }
+
     /// One WARN per kind whose oldest missing range is at least `warn_missing_after` old; `url` is
     /// the GET of that range.
     fn warn_missing(&self, summary: &NodeSummary) {
@@ -653,6 +671,7 @@ impl NodeWatch {
                 kind: kind.kind,
                 range: oldest.range.clone(),
             };
+            // Node URLs are internal and carry no credentials.
             tracing::warn!(
                 node = %self.node.label,
                 kind = <&str>::from(kind.kind),
