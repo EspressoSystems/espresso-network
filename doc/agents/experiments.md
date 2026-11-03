@@ -35,10 +35,10 @@ Changes to the switch itself land on `main` first and are cherry-picked to bench
 ## Listing
 
 `--list-experiments` prints the binary's experiments as a JSON array and exits 0, before module parsing and genesis
-load. In the image, call the binary directly; the entrypoint script prints to stdout:
+load:
 
 ```bash
-docker run --rm --entrypoint /bin/espresso-node-postgres <image> --list-experiments
+docker run --rm <image> espresso-node --list-experiments
 ```
 
 Binaries older than the switch exit 2 (unknown flag).

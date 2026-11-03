@@ -13,10 +13,10 @@ fi
 # and the node would be force killed on `docker stop`.
 # Only the exact value `true` selects SQLite here, as before the node read the variable itself.
 if [ "${ESPRESSO_NODE_EMBEDDED_DB:-}" = "true" ]; then
-    echo "Starting Espresso node with sqlite..."
+    echo "Starting Espresso node with sqlite..." >&2
     exec /bin/espresso-node-postgres -- storage-sql "$@"
 else
     export ESPRESSO_NODE_EMBEDDED_DB=false
-    echo "Starting Espresso node..."
+    echo "Starting Espresso node..." >&2
     exec /bin/espresso-node-postgres "$@"
 fi
