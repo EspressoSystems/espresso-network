@@ -1,7 +1,7 @@
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
-use espresso_node::api::data_source::StakeTableWithEpochNumber;
+use espresso_api::v1::node::StakeTableWithEpochNumber;
 use espresso_types::SeqTypes;
 use hotshot_types::PeerConfig;
 use url::Url;
