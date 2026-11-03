@@ -863,11 +863,25 @@ def read(pool: Http, url: str) -> tuple[int, bytes]:
     raise AssertionError("unreachable")
 
 
-def block_count(pool: Http, url: str, source: "HeightSource") -> int:
-    """Blocks decided as `source` sees them. A validator's status API reports the newest
-    decided height, one less than the count."""
-    path, extra = HEIGHT_API[source]
-    return int(get_ok(pool, url + path)) + extra
+def status_height_urls(
+    validator_urls: Sequence[str], query_urls: Sequence[str]
+) -> list[tuple[str, int]]:
+    """Where the decided height is polled, with what to add to make it a block count. The
+    status API of a validator without query storage reports the newest decided height, one
+    less than the count. On a query node the same route is answered by its storage and returns
+    the count itself, so polled like the others it shows every height one block early; query
+    nodes are polled only when no other validator exists."""
+    plain = [(url, 1) for url in validator_urls if url not in query_urls]
+    return plain or [(url, 0) for url in validator_urls]
+
+
+def block_count(
+    pool: Http, url: str, source: "HeightSource", extra: int | None = None
+) -> int:
+    """Blocks decided as `source` sees them. `extra` is what the node's answer lacks to be a
+    count, `HEIGHT_API`'s default unless `status_height_urls` says otherwise."""
+    path, default = HEIGHT_API[source]
+    return int(get_ok(pool, url + path)) + (default if extra is None else extra)
 
 
 def get_first(
@@ -1348,9 +1362,9 @@ async def generate_load(
                 ),
                 *(
                     group.create_task(
-                        poll_heights(polling, url, heights, "validator", clock)
+                        poll_heights(polling, url, heights, "validator", clock, extra)
                     )
-                    for url in validator_urls
+                    for url, extra in status_height_urls(validator_urls, query_urls)
                 ),
                 group.create_task(
                     poll_counters(
@@ -2226,12 +2240,13 @@ async def poll_heights(
     heights: Heights,
     source: HeightSource,
     clock: Clock,
+    extra: int | None = None,
 ) -> None:
     """On its own thread, so block times never wait for payload scans. A node that stays down
     past `read`'s deadline is polled again until it returns."""
     while True:
         try:
-            count = await client.call(block_count, url, source)
+            count = await client.call(block_count, url, source, extra)
         except NetworkError as err:
             log.debug("height poll of %s: %s", url, err)
         else:

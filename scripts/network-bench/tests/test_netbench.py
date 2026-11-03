@@ -592,6 +592,17 @@ def test_slow_payloads_do_not_delay_block_times(load):
     assert max_latency(run.txs) < 0.4
 
 
+def test_status_heights_come_from_validators_without_query_storage():
+    """A query node's status route returns the block count, so it is left out, or polled
+    without the +1 when every node is a query node."""
+    nodes = ["http://n0", "http://n1", "http://n2"]
+    assert netbench.status_height_urls(nodes, ["http://n0"]) == [
+        ("http://n1", 1),
+        ("http://n2", 1),
+    ]
+    assert netbench.status_height_urls(nodes[:1], nodes[:1]) == [("http://n0", 0)]
+
+
 def test_heights_on_validators_and_query_node(load):
     run = load(0.5, include=True, query_lag=0.3, cap_txs=100, tx_timeout_s=5)
     assert included(run.txs)

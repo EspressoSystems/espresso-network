@@ -497,7 +497,9 @@ class FakeNode:
                 shown = self.clock.time() - self.query_lag
                 return 200, json.dumps(bisect.bisect_right(self.made, shown)).encode()
             if path == "/v1/status/block-height":
-                return 200, json.dumps(len(self.blocks) - 1).encode()
+                # Like the real query node: its storage answers this route with the block
+                # count, not the newest decided height.
+                return 200, json.dumps(len(self.blocks)).encode()
             if path == "/v1/node/stake-table/current":
                 return 200, json.dumps({"stake_table": []}).encode()
             if path == "/v1/status/metrics":
