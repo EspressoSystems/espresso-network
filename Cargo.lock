@@ -3926,6 +3926,7 @@ dependencies = [
  "tagged-base64",
  "tempfile",
  "test-log",
+ "test-server",
  "test-utils",
  "thiserror 2.0.18",
  "time",
@@ -3943,6 +3944,7 @@ dependencies = [
  "vergen-gitcl",
  "versions",
  "vid",
+ "warp",
 ]
 
 [[package]]

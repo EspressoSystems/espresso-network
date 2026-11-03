@@ -81,9 +81,9 @@ use super::{traits::MembershipPersistence, v0_3::StakeTableUpdateTask};
 #[cfg(feature = "node")]
 use crate::traits::EventsPersistenceRead;
 #[cfg(feature = "node")]
-use crate::v0_1::L1Provider;
+use crate::v0_1::{L1BlockInfo, L1Provider};
 #[cfg(feature = "node")]
-use crate::v0_3::{BLOCKS_PER_YEAR, INFLATION_RATE};
+use crate::v0_3::{BLOCKS_PER_YEAR, INFLATION_RATE, ProviderBlockError};
 use crate::{
     v0_1::{ChainId, DECAF_CHAIN_ID, MAINNET_CHAIN_ID},
     v0_3::{
@@ -1281,7 +1281,7 @@ impl Fetcher {
                 let finalized_block = loop {
                     let last_finalized = state.lock().await.last_finalized;
                     if let Some(block) = last_finalized {
-                        break block;
+                        break self_clone.l1_client.wait_for_finalized_block(block).await;
                     }
                     tracing::debug!("Finalized block not yet available. Retrying in {l1_retry:?}",);
                     sleep(l1_retry).await;
@@ -1325,12 +1325,17 @@ impl Fetcher {
     /// contract's initialization block to the provided `to_block` value.
     /// Events are fetched in chunks and retries are implemented for failed requests.
     /// Only new events fetched from L1 are stored in persistence.
+    ///
+    /// Fails with [`ProviderBlockError`] when the provider does not hold `finalized`, because it
+    /// is behind, on another branch, or unreachable, or when the client failed over during the
+    /// scan. The call is worth retrying.
     #[cfg(feature = "node")]
     pub async fn fetch_and_store_stake_table_events(
         &self,
         contract: Address,
-        to_block: u64,
+        finalized: L1BlockInfo,
     ) -> anyhow::Result<Vec<(EventKey, StakeTableEvent)>> {
+        let to_block = finalized.number;
         let (read_l1_offset, persistence_events) = {
             let persistence_lock = self.persistence.lock().await;
             persistence_lock.load_events(0, to_block).await?
@@ -1360,6 +1365,8 @@ impl Fetcher {
 
         tracing::info!(%to_block, from_block = ?from_block, "Fetching events from contract");
 
+        let generation = self.l1_client.transport.current_transport.read().generation;
+        self.verify_l1_provider(finalized, generation).await?;
         let contract_events = Self::fetch_events_from_contract(
             self.l1_client.clone(),
             contract,
@@ -1367,6 +1374,7 @@ impl Fetcher {
             to_block,
         )
         .await?;
+        self.verify_l1_provider(finalized, generation).await?;
 
         // Store only the new events fetched from L1 contract
         tracing::info!(
@@ -1412,6 +1420,55 @@ impl Fetcher {
         }
 
         Ok(events)
+    }
+
+    /// Fails unless the provider holds `finalized` and is still the one the client used at
+    /// `generation`. The scan is stored as complete, and a provider behind that height, or past it
+    /// on another branch, answers the log queries with the wrong logs and no error. The hash
+    /// commits to every ancestor, so a match covers the scanned range only if no other provider
+    /// served part of it.
+    #[cfg(feature = "node")]
+    async fn verify_l1_provider(
+        &self,
+        finalized: L1BlockInfo,
+        generation: usize,
+    ) -> Result<(), ProviderBlockError> {
+        let transport = &self.l1_client.transport;
+        let answering = transport.current_transport.read().generation;
+        let block = tokio::time::timeout(
+            self.l1_client.options().l1_request_timeout,
+            self.l1_client
+                .provider
+                .get_block_by_number(finalized.number.into()),
+        )
+        .await
+        .map_err(|_| ProviderBlockError::Timeout {
+            number: finalized.number,
+        })?
+        .map_err(|source| ProviderBlockError::Fetch {
+            number: finalized.number,
+            source,
+        })?;
+        let err = match block {
+            None => ProviderBlockError::Missing {
+                number: finalized.number,
+            },
+            Some(block) if block.header.hash != finalized.hash => ProviderBlockError::Mismatch {
+                number: finalized.number,
+                expected: finalized.hash,
+                actual: block.header.hash,
+            },
+            Some(_) if transport.current_transport.read().generation != generation => {
+                return Err(ProviderBlockError::Switched {
+                    number: finalized.number,
+                });
+            },
+            Some(_) => return Ok(()),
+        };
+        // Without this every retry asks the same provider again, until the failover revert timer
+        // happens to move it.
+        transport.fail_over(answering);
+        Err(err)
     }
 
     /// Validate a stake table event.
@@ -1898,7 +1955,7 @@ impl Fetcher {
         };
 
         let events = match self
-            .fetch_and_store_stake_table_events(address, l1_finalized_block_info.number())
+            .fetch_and_store_stake_table_events(address, l1_finalized_block_info)
             .await
             .map_err(GetStakeTablesError::L1ClientFetchError)
         {
