@@ -130,6 +130,9 @@ just bench aws run --tag release-x
 - Inclusion is read from the query node: each block's payload is fetched (12 fetches at a time, `SCAN_PROCESSES`) and
   scanned for the load's marker. The in-flight cap (`--cap-s`) counts transactions submitted and not yet decided by the
   validators' counters, so a query node or a scan that falls behind does not throttle the load.
+- The consensus latency the step rule judges runs from the driver's submit until a validator's `/v1/status/block-height`
+  reaches the including block, which a validator does once it holds Cert1 for the block, about 140 ms before its decide
+  on decaf latency; the height is polled every 100 ms.
 - A transaction times out once every block the query node showed within `--tx-timeout-s` of its submit has been scanned
   without it; a scan behind the chain defers the timeout, it never causes one. Once a step's backlog drained and the scan
   caught up, what is still pending is lost and times out at once. A payload no query node serves for 10 s after its
