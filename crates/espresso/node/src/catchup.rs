@@ -1673,12 +1673,12 @@ impl StateCatchup for ParallelStateCatchup {
 /// We use this during catchup after receiving verified accounts.
 pub async fn add_fee_accounts_to_state(
     consensus_handle: &dyn ConsensusSource,
-    view: &ViewNumber,
     accounts: &[FeeAccount],
     tree: &FeeMerkleTree,
     leaf: Leaf2,
 ) -> anyhow::Result<()> {
-    let (existing_state, delta) = consensus_handle.state_and_delta(*view).await;
+    let view = leaf.view_number();
+    let (existing_state, delta) = consensus_handle.state_and_delta(view).await;
     let (state, delta) = match existing_state {
         Some(existing) => {
             let mut state = (*existing).clone();
@@ -1720,12 +1720,12 @@ pub async fn add_fee_accounts_to_state(
 /// We use this during catchup after receiving verified accounts.
 pub async fn add_v2_reward_accounts_to_state(
     consensus_handle: &dyn ConsensusSource,
-    view: &ViewNumber,
     accounts: &[RewardAccountV2],
     tree: &RewardMerkleTreeV2,
     leaf: Leaf2,
 ) -> anyhow::Result<()> {
-    let (existing_state, delta) = consensus_handle.state_and_delta(*view).await;
+    let view = leaf.view_number();
+    let (existing_state, delta) = consensus_handle.state_and_delta(view).await;
     let (state, delta) = match existing_state {
         Some(existing) => {
             let mut state = (*existing).clone();
@@ -1767,12 +1767,12 @@ pub async fn add_v2_reward_accounts_to_state(
 /// We use this during catchup after receiving verified accounts.
 pub async fn add_v1_reward_accounts_to_state(
     consensus_handle: &dyn ConsensusSource,
-    view: &ViewNumber,
     accounts: &[RewardAccountV1],
     tree: &RewardMerkleTreeV1,
     leaf: Leaf2,
 ) -> anyhow::Result<()> {
-    let (existing_state, delta) = consensus_handle.state_and_delta(*view).await;
+    let view = leaf.view_number();
+    let (existing_state, delta) = consensus_handle.state_and_delta(view).await;
     let (state, delta) = match existing_state {
         Some(existing) => {
             let mut state = (*existing).clone();

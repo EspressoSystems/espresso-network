@@ -144,14 +144,9 @@ where
 
                 // If we successfully fetched accounts from storage, try to add them back into the in-memory
                 // state.
-                if let Err(err) = add_fee_accounts_to_state(
-                    &*self.consensus_handle,
-                    &ViewNumber::new(*view),
-                    accounts,
-                    &merkle_tree,
-                    leaf,
-                )
-                .await
+                if let Err(err) =
+                    add_fee_accounts_to_state(&*self.consensus_handle, accounts, &merkle_tree, leaf)
+                        .await
                 {
                     tracing::warn!(?view, "Cannot update fetched account state: {err:#}");
                 }
@@ -247,7 +242,6 @@ where
                 // state.
                 if let Err(err) = add_v2_reward_accounts_to_state(
                     &*self.consensus_handle,
-                    &ViewNumber::new(*view),
                     accounts,
                     &merkle_tree,
                     leaf,
@@ -287,7 +281,6 @@ where
                 // state.
                 if let Err(err) = add_v1_reward_accounts_to_state(
                     &*self.consensus_handle,
-                    &ViewNumber::new(*view),
                     accounts,
                     &merkle_tree,
                     leaf,
