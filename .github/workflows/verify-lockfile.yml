@@ -3,6 +3,16 @@
 #
 # To fix: run `just lock-actions` and commit actions.lock. On a merge conflict in
 # actions.lock, take main's copy and re-run it rather than merging by hand.
+#
+# If a Dependabot PR fails with "doesn't match locked manifest", run
+# `just lock-actions <failing workflow> --relock` on its branch. `--relock` also advances
+# that workflow's other floating refs (`@v4`, `@main`), so commit only the changes to the
+# bumped action's entry (`git add -p`), check with `just lock-actions --verify`, and push.
+# Dependabot then stops rebasing the PR; on a conflict, comment `@dependabot recreate` and
+# re-run the relock.
+#
+# `just lock-actions .github/workflows/<workflow Dependabot bumped>.yml --relock`
+# on its branch and push.
 name: Verify actions lockfile
 
 on:
