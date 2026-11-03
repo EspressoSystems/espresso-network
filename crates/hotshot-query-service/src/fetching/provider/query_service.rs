@@ -1762,6 +1762,153 @@ mod test {
         }
     }
 
+    /// Only the first block above genesis decides where a fresh pruned node starts: a later block
+    /// leaves the data pruned height as the first block set it.
+    #[apply(sql_dbs)]
+    async fn test_fresh_pruned_start_only_first_block<Db: TestSqlDb>(_db: PhantomData<Db>) {
+        let network = peer().await;
+        let leaves = network
+            .data_source()
+            .subscribe_leaves(1)
+            .await
+            .take(4)
+            .collect::<Vec<_>>()
+            .await;
+        let db = Db::init().await;
+        let data_source = FetchingDataSource::builder(idle_pruning_storage(&db).await, NoFetching)
+            .disable_proactive_fetching()
+            .build()
+            .await
+            .unwrap();
+
+        let (first, later) = (&leaves[1], &leaves[3]);
+        data_source.append(first.clone().into()).await.unwrap();
+        assert_eq!(
+            stored_pruned_height(&data_source).await,
+            Some(first.height() - 1)
+        );
+        data_source.append(later.clone().into()).await.unwrap();
+        assert_eq!(
+            stored_pruned_height(&data_source).await,
+            Some(first.height() - 1)
+        );
+    }
+
+    /// A genesis block does not decide where a fresh pruned node starts: the first block above
+    /// genesis, appended after it, still marks the blocks below it as pruned.
+    #[apply(sql_dbs)]
+    async fn test_fresh_pruned_start_after_genesis<Db: TestSqlDb>(_db: PhantomData<Db>) {
+        let network = peer().await;
+        let leaves = network
+            .data_source()
+            .subscribe_leaves(0)
+            .await
+            .take(5)
+            .collect::<Vec<_>>()
+            .await;
+        let db = Db::init().await;
+        let data_source = FetchingDataSource::builder(idle_pruning_storage(&db).await, NoFetching)
+            .disable_proactive_fetching()
+            .build()
+            .await
+            .unwrap();
+
+        let (genesis, first) = (&leaves[0], &leaves[4]);
+        data_source.append(genesis.clone().into()).await.unwrap();
+        assert_eq!(stored_pruned_height(&data_source).await, None);
+        data_source.append(first.clone().into()).await.unwrap();
+        assert_eq!(
+            stored_pruned_height(&data_source).await,
+            Some(first.height() - 1)
+        );
+    }
+
+    /// A pruned node that already holds blocks above genesis when it starts is not fresh, for
+    /// example a node that ran without pruning and then turns it on: its next block marks nothing
+    /// as pruned.
+    #[apply(sql_dbs)]
+    async fn test_no_fresh_pruned_start_with_blocks<Db: TestSqlDb>(_db: PhantomData<Db>) {
+        let network = peer().await;
+        let leaves = network
+            .data_source()
+            .subscribe_leaves(1)
+            .await
+            .take(4)
+            .collect::<Vec<_>>()
+            .await;
+        let db = Db::init().await;
+        {
+            // A first run, which neither prunes nor fetches, stores the first blocks.
+            let data_source = data_source(&db, &NoFetching).await;
+            for leaf in &leaves[..2] {
+                data_source.append(leaf.clone().into()).await.unwrap();
+            }
+        }
+        let data_source = FetchingDataSource::builder(idle_pruning_storage(&db).await, NoFetching)
+            .disable_proactive_fetching()
+            .build()
+            .await
+            .unwrap();
+
+        data_source.append(leaves[3].clone().into()).await.unwrap();
+        assert_eq!(stored_pruned_height(&data_source).await, None);
+    }
+
+    /// A pruned node whose data pruned height is above 0 is not fresh, even when it holds no block:
+    /// it has pruned blocks above genesis before. Its next block leaves the pruned height as it is.
+    #[apply(sql_dbs)]
+    async fn test_no_fresh_pruned_start_after_pruning<Db: TestSqlDb>(_db: PhantomData<Db>)
+    where
+        for<'a> <Db::Storage as VersionedDataSource>::Transaction<'a>: SavePrunedHeight,
+    {
+        let network = peer().await;
+        let leaves = network
+            .data_source()
+            .subscribe_leaves(1)
+            .await
+            .take(4)
+            .collect::<Vec<_>>()
+            .await;
+        let db = Db::init().await;
+        let storage = idle_pruning_storage(&db).await;
+        let pruned = 2;
+        {
+            let mut tx = storage.write().await.unwrap();
+            tx.save_pruned_height(pruned).await.unwrap();
+            tx.commit().await.unwrap();
+        }
+        let data_source = FetchingDataSource::builder(storage, NoFetching)
+            .disable_proactive_fetching()
+            .build()
+            .await
+            .unwrap();
+
+        data_source.append(leaves[3].clone().into()).await.unwrap();
+        assert_eq!(stored_pruned_height(&data_source).await, Some(pruned));
+    }
+
+    /// Pruning storage on `db` whose pruner never runs within a test.
+    async fn idle_pruning_storage<Db: TestSqlDb>(db: &Db) -> Db::Storage {
+        db.pruning_storage(PrunerCfg::new().with_interval(Duration::from_secs(3600)))
+            .await
+            .unwrap()
+    }
+
+    /// The data pruned height stored under `data_source`.
+    async fn stored_pruned_height<D>(data_source: &D) -> Option<u64>
+    where
+        D: VersionedDataSource,
+        for<'a> D::ReadOnly<'a>: PrunedHeightStorage,
+    {
+        data_source
+            .read()
+            .await
+            .unwrap()
+            .load_pruned_height()
+            .await
+            .unwrap()
+    }
+
     /// Test that fetching a leaf also backfills the leaf's cert2.
     ///
     /// A server node stores three V6 leaves and a cert2 for the first one. A client node fetches
