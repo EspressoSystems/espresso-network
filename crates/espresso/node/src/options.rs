@@ -19,7 +19,10 @@ use clap::{
 use derivative::Derivative;
 use espresso_telemetry::TelemetryOptions;
 use espresso_types::{BackoffParams, L1ClientOptions, parse_duration};
-use espresso_utils::logging;
+use espresso_utils::{
+    experiment::{EnabledExperiments, Experiment},
+    logging,
+};
 use hotshot_types::addr::NetAddr;
 use libp2p::Multiaddr;
 use light_client::{state::LightClientOptions, storage::LightClientSqliteOptions};
@@ -315,6 +318,15 @@ pub struct Options {
 
     #[clap(flatten)]
     pub key_set: KeySetOptions,
+
+    /// Bench-branch features to enable: comma list of names, or `all`; `--list-experiments` shows
+    /// the names.
+    #[clap(long, env = "ESPRESSO_NODE_EXPERIMENTS", default_value = "")]
+    pub experiments: EnabledExperiments,
+
+    /// Print the experiments this binary has as a JSON array and exit.
+    #[clap(long)]
+    pub list_experiments: bool,
 
     /// Add optional modules to the service.
     ///
@@ -854,6 +866,14 @@ pub struct Modules {
     pub follower: Option<Follower>,
 }
 
+impl Modules {
+    /// Whether consensus runs on the journal: the storage-journal module is given, or
+    /// `experiments` holds `Experiment::Journal`.
+    pub fn journal_consensus(&self, experiments: &EnabledExperiments) -> bool {
+        self.storage_journal.is_some() || experiments.contains(Experiment::Journal)
+    }
+}
+
 /// Options for the follower module.
 #[derive(Parser, Clone, Debug)]
 pub struct Follower {
@@ -1084,7 +1104,7 @@ impl From<&persistence::sql::Options> for SqlStorageConfig {
             query_max_connections: o.query_max_connections,
             #[cfg(feature = "embedded-db")]
             query_max_connections: None,
-            blob_dir: o.blob_dir.clone(),
+            blob_dir: o.blob_dir().map(ToOwned::to_owned),
             share_retention: o.share_retention,
             pruning: PruningView::from(&o.pruning),
             consensus_pruning: ConsensusPruningView::from(&o.consensus_pruning),
@@ -1245,26 +1265,49 @@ impl From<&L1ClientOptions> for L1Tuning {
 
 impl PublicNodeConfig {
     pub fn new(opt: &Options, modules: &Modules, genesis: &Genesis) -> Self {
-        // Consensus always runs on the journal. storage-fs, else storage-sql, backs the query
-        // service when the query module is on, and both are ignored otherwise. Same choice as
-        // `run.rs`.
-        let journal = match &modules.storage_journal {
-            Some(journal) => Some(JournalStorageConfig::from(journal)),
-            None => persistence::journal::Options::from_env()
-                .ok()
-                .as_ref()
-                .map(JournalStorageConfig::from),
-        };
-        let (fs, sql) = match (&modules.query, &modules.storage_fs, &modules.storage_sql) {
-            (None, ..) => (None, None),
-            (Some(_), Some(fs), _) => (Some(FsStorageConfig::from(fs)), None),
-            (Some(_), None, sql) => (None, sql.as_ref().map(SqlStorageConfig::from)),
-        };
-        let storage = StorageConfig {
-            backend: StorageBackend::Journal,
-            fs,
-            sql,
-            journal,
+        let storage = if modules.journal_consensus(&opt.experiments) {
+            // storage-fs, else storage-sql, backs the query service when the query module is on,
+            // and both are ignored otherwise. Same choice as `run.rs`.
+            let journal = match &modules.storage_journal {
+                Some(journal) => Some(JournalStorageConfig::from(journal)),
+                None => persistence::journal::Options::from_env()
+                    .ok()
+                    .as_ref()
+                    .map(JournalStorageConfig::from),
+            };
+            let (fs, sql) = match (&modules.query, &modules.storage_fs, &modules.storage_sql) {
+                (None, ..) => (None, None),
+                (Some(_), Some(fs), _) => (Some(FsStorageConfig::from(fs)), None),
+                (Some(_), None, sql) => (None, sql.as_ref().map(SqlStorageConfig::from)),
+            };
+            StorageConfig {
+                backend: StorageBackend::Journal,
+                fs,
+                sql,
+                journal,
+            }
+        } else if let Some(sql) = modules.storage_sql.as_ref() {
+            StorageConfig {
+                backend: StorageBackend::Sql,
+                fs: None,
+                sql: Some(SqlStorageConfig::from(sql)),
+                journal: None,
+            }
+        } else if let Some(fs) = modules.storage_fs.as_ref() {
+            StorageConfig {
+                backend: StorageBackend::Fs,
+                fs: Some(FsStorageConfig::from(fs)),
+                sql: None,
+                journal: None,
+            }
+        } else {
+            let fs = persistence::fs::Options::try_parse_from(std::iter::empty::<String>()).ok();
+            StorageConfig {
+                backend: StorageBackend::FsDefault,
+                fs: fs.as_ref().map(FsStorageConfig::from),
+                sql: None,
+                journal: None,
+            }
         };
 
         Self {
@@ -1322,6 +1365,106 @@ pub(crate) mod tests {
 
     use super::*;
     use crate::genesis::{L1Finalized, StakeTableConfig};
+
+    fn journal_consensus(experiments: &str, modules: &[&str]) -> bool {
+        let mut args = vec!["--"];
+        args.extend(modules);
+        let opt = parse_options_with(&args);
+        let experiments: EnabledExperiments = experiments.parse().unwrap();
+        opt.modules().journal_consensus(&experiments)
+    }
+
+    const FS: [&str; 3] = ["storage-fs", "--path", "/tmp/fs-test"];
+
+    #[test]
+    fn journal_consensus_enabled_ok() {
+        for modules in [&[][..], &FS[..]] {
+            assert!(journal_consensus("journal", modules));
+        }
+        assert!(journal_consensus("all", &FS));
+    }
+
+    #[test]
+    fn journal_consensus_disabled_ok() {
+        assert!(!journal_consensus("", &[]));
+        assert!(!journal_consensus("blake3-tx-hash", &[]));
+        assert!(!journal_consensus("", &FS));
+    }
+
+    #[test]
+    fn journal_consensus_module_override_ok() {
+        let journal = ["storage-journal", "--path", "/tmp/journal-test"];
+        assert!(journal_consensus("", &journal));
+    }
+
+    #[test]
+    fn journal_consensus_public_config_reports_journal_ok() {
+        let opt = parse_options_with(&[
+            "--experiments",
+            "journal",
+            "--",
+            "storage-fs",
+            "--path",
+            "/tmp/fs-test",
+        ]);
+        let cfg = PublicNodeConfig::new(&opt, &opt.modules(), &test_genesis());
+        assert_eq!(cfg.storage.backend, StorageBackend::Journal);
+    }
+
+    #[test]
+    fn blob_dir_public_config_hidden_without_experiment_ok() {
+        let opt = persistence::sql::Options::try_parse_from(sql_args(&["--blob-dir", "/var/blob"]))
+            .unwrap();
+        assert_eq!(SqlStorageConfig::from(&opt).blob_dir, None);
+    }
+
+    #[test]
+    fn blob_dir_public_config_enabled_by_experiment_ok() {
+        "blob-dir".parse::<EnabledExperiments>().unwrap().install();
+        let opt = persistence::sql::Options::try_parse_from(sql_args(&["--blob-dir", "/var/blob"]))
+            .unwrap();
+        assert_eq!(
+            SqlStorageConfig::from(&opt).blob_dir,
+            Some(PathBuf::from("/var/blob"))
+        );
+    }
+
+    fn sql_args<'a>(extra: &[&'a str]) -> Vec<&'a str> {
+        let mut args = vec!["storage-sql"];
+        #[cfg(feature = "embedded-db")]
+        args.extend(["--path", "./tmp/blob-options-test"]);
+        args.extend(extra);
+        args
+    }
+
+    #[test]
+    fn experiment_options_unknown_fails() {
+        let err = Options::try_parse_from(["n", "--experiments", "nope"]).unwrap_err();
+        let msg = err.to_string();
+        assert_eq!(err.kind(), ErrorKind::ValueValidation);
+        assert!(msg.contains("--experiments"), "{msg}");
+        assert!(msg.contains("nope"), "{msg}");
+        assert!(
+            msg.contains(&format!("this binary has {:?}", Experiment::names())),
+            "{msg}"
+        );
+    }
+
+    #[test]
+    fn experiment_options_list_json_ok() {
+        let opt =
+            Options::try_parse_from(["n", "--list-experiments", "--", "bad", "module"]).unwrap();
+        assert!(opt.list_experiments);
+        assert!(opt.experiments.is_empty());
+        let quoted: Vec<String> = Experiment::names()
+            .iter()
+            .map(|n| format!("{n:?}"))
+            .collect();
+        assert_eq!(
+            serde_json::to_string(&Experiment::names()).unwrap(),
+            format!("[{}]", quoted.join(","))
+        );
+    }
 
     #[test]
     fn test_build_version() {
@@ -1563,7 +1706,7 @@ pub(crate) mod tests {
             cfg.config_peers
         );
         assert_eq!(cfg.l1_ws_provider_count, 0);
-        assert_eq!(cfg.storage.backend, StorageBackend::Journal);
+        assert_eq!(cfg.storage.backend, StorageBackend::FsDefault);
         assert!(cfg.storage.fs.is_none());
         assert!(cfg.storage.sql.is_none());
         assert!(!cfg.modules.submit);
@@ -1694,12 +1837,13 @@ pub(crate) mod tests {
         assert_eq!(lc_path(None, None), None);
     }
 
-    // Document the JSON shape of GET /config/runtime. Runs under Postgres builds only;
+    // Document the JSON shape of GET /config/runtime with no experiment enabled. Runs under
+    // Postgres builds only;
     // the embedded-db variant produces a near-identical shape and the duplication isn't
     // worth the test complexity.
     #[cfg(not(feature = "embedded-db"))]
     #[test]
-    fn config_node_response_snapshot() {
+    fn config_node_response_snapshot_experiments_off() {
         let opt = parse_options_with(&[
             "--orchestrator-url",
             "http://orchestrator.example:8080",
@@ -1787,7 +1931,7 @@ pub(crate) mod tests {
         let cfg = PublicNodeConfig::new(&opt, &modules, &test_genesis());
         let json = serde_json::to_string(&cfg).unwrap();
 
-        assert_eq!(cfg.storage.backend, StorageBackend::Journal);
+        assert_eq!(cfg.storage.backend, StorageBackend::Sql);
         assert!(
             json.contains("\"prune\":true"),
             "expected prune:true in JSON: {json}"

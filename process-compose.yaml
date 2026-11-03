@@ -20,6 +20,7 @@ environment:
   - ESPRESSO_API_NODE_URLS=http://localhost:${ESPRESSO_NODE_0_API_PORT},http://localhost:${ESPRESSO_NODE_1_API_PORT}
   - ESPRESSO_L1_PROVIDER=http://localhost:${ESPRESSO_L1_PORT}
   - ESPRESSO_NODE_GENESIS_FILE=${ESPRESSO_NODE_GENESIS_FILE:-data/genesis/demo-ff.toml}
+  - ESPRESSO_NODE_EXPERIMENTS=all
   - ESPRESSO_STATE_RELAY_SERVER_URL=http://localhost:${ESPRESSO_STATE_RELAY_SERVER_PORT}
 processes:
   demo-l1-network:

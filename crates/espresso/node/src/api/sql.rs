@@ -1985,9 +1985,10 @@ mod tests {
     use espresso_types::{
         BLOCK_MERKLE_TREE_HEIGHT, BackoffParams, BlockMerkleTree, FEE_MERKLE_TREE_HEIGHT,
         FeeAccount, FeeAmount, FeeMerkleTree, NodeState,
-        v0::traits::StateCatchup,
+        v0::traits::{PersistenceOptions, StateCatchup},
         v0_4::{REWARD_MERKLE_TREE_V2_HEIGHT, RewardMerkleTreeV2},
     };
+    use espresso_utils::experiment::EnabledExperiments;
     use hotshot_query_service::{
         data_source::{
             Transaction, VersionedDataSource,
@@ -2413,8 +2414,8 @@ mod tests {
         let db = TmpDb::init().await;
         let blob_dir = tempfile::tempdir().unwrap();
 
-        let mut opt = tmp_options(&db);
-        opt.blob_dir = Some(blob_dir.path().to_path_buf());
+        "blob-dir".parse::<EnabledExperiments>().unwrap().install();
+        let mut opt = tmp_options(&db).with_blob_dir(blob_dir.path().to_path_buf());
         opt.share_retention = std::time::Duration::from_secs(3600);
         let cfg = Config::try_from(&opt).expect("failed to create config from options");
         let storage = SqlStorage::connect(cfg, StorageConnectionType::Query)
@@ -2425,6 +2426,38 @@ mod tests {
         assert!(blob_dir.path().join("LOCK").exists());
         assert!(blob_dir.path().join("payload").is_dir());
         assert!(blob_dir.path().join("share").is_dir());
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_blob_dir_option_without_experiment_keeps_payloads_in_database() {
+        let db = TmpDb::init().await;
+        let blob_dir = tempfile::tempdir().unwrap();
+
+        let opt = tmp_options(&db).with_blob_dir(blob_dir.path().to_path_buf());
+        let cfg = Config::try_from(&opt).unwrap();
+        let storage = SqlStorage::connect(cfg, StorageConnectionType::Query)
+            .await
+            .unwrap();
+
+        assert!(storage.blob_store().is_none());
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_reset_wipes_blob_dir_without_experiment() {
+        let db = TmpDb::init().await;
+        let blob_dir = tempfile::tempdir().unwrap();
+        for lane in ["payload", "share"] {
+            std::fs::create_dir(blob_dir.path().join(lane)).unwrap();
+        }
+
+        tmp_options(&db)
+            .with_blob_dir(blob_dir.path().to_path_buf())
+            .reset()
+            .await
+            .unwrap();
+
+        assert!(!blob_dir.path().join("payload").exists());
+        assert!(!blob_dir.path().join("share").exists());
     }
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]

@@ -1,6 +1,7 @@
 use anyhow::{Context, ensure};
 use espresso_telemetry as telemetry;
 use espresso_types::{traits::NullEventConsumer, v0::traits::SequencerPersistence};
+use espresso_utils::experiment::Experiment;
 use futures::future::FutureExt;
 use hotshot_types::traits::metrics::NoMetrics;
 use process_metrics::log_cpu_probe;
@@ -51,9 +52,16 @@ impl<P: SequencerPersistence> NodeContext<P> {
     }
 }
 
+/// Parses options; answers `--list-experiments` and returns, else installs the experiments and
+/// runs the node.
 pub async fn main(migrated_envs: Vec<(&str, &str)>) -> anyhow::Result<()> {
     espresso_types::assert_node_feature();
     let (opt, ignored_network_options) = Options::parse_with_ignored();
+    if opt.list_experiments {
+        println!("{}", serde_json::to_string(&Experiment::names())?);
+        return Ok(());
+    }
+    opt.experiments.clone().install();
     let mut modules = opt.modules();
 
     // Genesis carries the chain ID, which selects the default telemetry
@@ -115,6 +123,9 @@ pub async fn main(migrated_envs: Vec<(&str, &str)>) -> anyhow::Result<()> {
     if let Some(e) = telemetry_init_error {
         tracing::error!("{e:#}; continuing without telemetry");
     }
+    if !opt.experiments.is_empty() {
+        tracing::warn!(experiments = ?opt.experiments.names(), "experiments enabled");
+    }
     espresso_utils::env_compat::log_migrated_env_vars(&migrated_envs);
     if !ignored_network_options.is_empty() {
         tracing::warn!(
@@ -141,7 +152,62 @@ pub async fn main(migrated_envs: Vec<(&str, &str)>) -> anyhow::Result<()> {
 
     tracing::warn!(?genesis, "genesis");
 
-    // Consensus always runs on the journal. storage-sql and storage-fs only back the query service.
+    let result = if modules.journal_consensus(&opt.experiments) {
+        let storage = journal_storage(&mut modules, &genesis)?;
+        run_with_storage(
+            genesis,
+            modules,
+            opt,
+            storage,
+            public_node_config,
+            telemetry_handle.as_mut(),
+        )
+        .await
+    } else if let Some(storage) = modules.storage_fs.take() {
+        run_with_storage(
+            genesis,
+            modules,
+            opt,
+            storage,
+            public_node_config,
+            telemetry_handle.as_mut(),
+        )
+        .await
+    } else if let Some(storage) = modules.storage_sql.take() {
+        run_with_storage(
+            genesis,
+            modules,
+            opt,
+            storage,
+            public_node_config,
+            telemetry_handle.as_mut(),
+        )
+        .await
+    } else {
+        // Persistence is required. If none is provided, just use the local file system.
+        run_with_storage(
+            genesis,
+            modules,
+            opt,
+            persistence::fs::Options::default(),
+            public_node_config,
+            telemetry_handle.as_mut(),
+        )
+        .await
+    };
+
+    if let Some(h) = telemetry_handle {
+        h.shutdown();
+    }
+    result
+}
+
+/// Journal options for consensus. storage-fs, else storage-sql, backs the query service when the
+/// query module is on; both are ignored otherwise.
+fn journal_storage(
+    modules: &mut Modules,
+    genesis: &Genesis,
+) -> anyhow::Result<persistence::journal::Options> {
     let mut storage = match modules.storage_journal.take() {
         Some(storage) => storage,
         None => persistence::journal::Options::from_env()?,
@@ -170,20 +236,7 @@ pub async fn main(migrated_envs: Vec<(&str, &str)>) -> anyhow::Result<()> {
         ),
         None => {},
     }
-    let result = run_with_storage(
-        genesis,
-        modules,
-        opt,
-        storage,
-        public_node_config,
-        telemetry_handle.as_mut(),
-    )
-    .await;
-
-    if let Some(h) = telemetry_handle {
-        h.shutdown();
-    }
-    result
+    Ok(storage)
 }
 
 async fn run_with_storage<S>(
