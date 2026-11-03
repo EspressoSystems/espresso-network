@@ -16,6 +16,7 @@ one-way delays:
                      verify_proposal + max(vote1 + T, build + encode) + T + d(L, L'))
     finality   = q-th_i [ q-th_j [ cert1_j + vote2 + d(j, i) ] + cert + decide ]
     cert1_j    = q-th_x [ d(L, x) + verify_proposal + vote1 + d(x, j) ] + cert
+    verdict    = min_i cert1_i(V) - t      t the submit, V the block that took the transaction
 
 delta_j is the detour the proposal of V+1 takes through L' against the k shares of V that
 reach j directly or by rebroadcast; `vidwindow` found it by simulation, here it is read off the
@@ -23,7 +24,12 @@ matrix. It is the window's floor: three quarters of the node-views sit on it, th
 it by whole hops, when the proposal crossed behind more of the leader's queue. Consecutive views alternate around the pair's view, because the next leader gets the
 proposal behind the previous rebroadcast and builds late, so the pair formulas hold for the
 mean and `run_views` evaluates the actual sequence: a recurrence over views, each view's
-timestamps from the previous view's, every node at once. It takes every flow of a transfer to
+timestamps from the previous view's, every node at once. `verdict` is what the benchmark's
+pass rule measures, submit to a validator's block height showing the block, which advances
+with the node's Cert1: a transaction submitted at t to a node in view W is forwarded to the
+leaders of W+2 and W+3, pooled, and taken by the first of them to build after it arrived, in
+block V; four views later the node resends it to the next two if neither took it
+(`Views.inclusion`). It takes every flow of a transfer to
 finish together, T after it starts; the fluid model of `vidwindow` lets flows to idle receivers
 finish first, so where bandwidth binds its k-th shares arrive earlier and its windows and
 finality come out shorter, by up to a third at large blocks, and its proposals cross while the shares still
@@ -41,7 +47,7 @@ import json
 import random
 import sys
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import numpy as np
@@ -169,6 +175,9 @@ class Views:
     critical: np.ndarray  # per view, the largest decode that leaves Cert1 where it is
     mb: np.ndarray  # per view, the block's size
     q: int
+    pull: np.ndarray = field(
+        default_factory=lambda: np.zeros(0)
+    )  # the leader takes its pool
 
     def view_times(self, lo, hi):
         return list((self.proposed[lo + 1 : hi + 1] - self.proposed[lo:hi]) * 1000.0)
@@ -205,6 +214,55 @@ class Views:
 
     def transits(self, lo, hi):
         return list((self.transit[lo:hi] - self.proposed[lo:hi]) * 1000.0)
+
+    def inclusion(
+        self, lo, hi, d: np.ndarray, samples: int = 8
+    ) -> dict[str, list[float]]:
+        """Per transaction submitted while the views `lo` to `hi` were current at its node,
+        `samples` per node and view spread over the view: the wait in the leaders' pools
+        until the block that takes it is pulled (`pool`), the first node's Cert1 of that
+        block from its proposal (`first_cert1`), and submit to that Cert1 (`verdict`), ms.
+        A transaction goes to the leaders of W+2 and W+3, W the node's view when it was
+        submitted, and the first of them to pull its pool after the forward arrived takes it;
+        the node resends it at W+4, to W+6 and W+7, if neither did, and so on."""
+        led: dict[int, list[int]] = defaultdict(list)
+        for v, lead in enumerate(self.leader):
+            led[lead].append(v)
+        first = np.min(self.cert1, axis=1)
+        last = len(self.leader) - 1
+        out: dict[str, list[float]] = {"pool": [], "first_cert1": [], "verdict": []}
+        for w in range(lo, hi):
+            for s in range(len(d)):
+                starts = np.linspace(
+                    self.pair[w][s], self.pair[w + 1][s], samples, endpoint=False
+                )
+                for t in starts:
+                    taken = None
+                    for send_view in range(w, last, 4):
+                        sent = t if send_view == w else self.pair[send_view][s]
+                        for target in (send_view + 2, send_view + 3):
+                            if target > last:
+                                continue
+                            lead = self.leader[target]
+                            arrival = sent + d[s, lead]
+                            for v in led[lead]:
+                                if (
+                                    v > send_view
+                                    and self.pull[v] >= arrival
+                                    and v <= last
+                                ):
+                                    taken = v if taken is None else min(taken, v)
+                                    break
+                        if taken is not None:
+                            break
+                    if taken is None or taken > last:
+                        continue
+                    out["pool"].append((self.pull[taken] - t) * 1000.0)
+                    out["first_cert1"].append(
+                        (first[taken] - self.proposed[taken]) * 1000.0
+                    )
+                    out["verdict"].append((first[taken] - t) * 1000.0)
+        return out
 
 
 def run_views(
@@ -302,6 +360,7 @@ def run_views(
             out.critical[v - 1] = critical(
                 out, ready[v], vote1_leave, vote1_out[v], d, v - 1, leaders[v + 1], q
             )
+    out.pull = pull
     return out
 
 
@@ -347,19 +406,26 @@ def point(
     view_p50 = pct(vt, 0.5)
     mbs = r.blocks(lo, hi)
     mb_p50 = pct(mbs, 0.5)
+    incl = r.inclusion(lo, hi, d)
     if load:
         mid = (lo + hi) // 2
-        growth = pct(r.blocks(mid, hi), 0.5) / max(pct(r.blocks(lo, mid), 0.5), 1e-9) - 1
+        growth = (
+            pct(r.blocks(mid, hi), 0.5) / max(pct(r.blocks(lo, mid), 0.5), 1e-9) - 1
+        )
         rate = {
             "rate": load.rate,
             "mb_p50": mb_p50,
             "mb_p90": pct(mbs, 0.9),
-            "capped_pct": round(100.0 * np.mean(np.array(mbs) >= load.max_mb - 1e-9), 1),
+            "capped_pct": round(
+                100.0 * np.mean(np.array(mbs) >= load.max_mb - 1e-9), 1
+            ),
             "growth_pct": round(100.0 * growth, 1),
             "mbps": round(r.decided_rate(lo, hi), 1),
         }
     else:
-        rate = {"mbps": round(block_mb / view_p50 * 1000, 1) if view_p50 else float("nan")}
+        rate = {
+            "mbps": round(block_mb / view_p50 * 1000, 1) if view_p50 else float("nan")
+        }
     return {
         "profile": profile,
         "nodes": n,
@@ -379,6 +445,10 @@ def point(
         "view_mean": round(float(np.mean(vt)), 1),
         "transit_p50": pct(r.transits(lo, hi), 0.5),
         "fin_p50": pct(r.finality(lo, hi), 0.5),
+        "pool_p50": pct(incl["pool"], 0.5),
+        "first_cert1_p50": pct(incl["first_cert1"], 0.5),
+        "verdict_p50": pct(incl["verdict"], 0.5),
+        "verdict_p90": pct(incl["verdict"], 0.9),
         **rate,
         "compute": compute.table(mb_p50),
         "regions": {
@@ -394,7 +464,14 @@ def point(
 
 
 def capacity(
-    profile: str, n: int, gbps: float, k: int, views: int, c: Compute, lane: bool, max_mb: float
+    profile: str,
+    n: int,
+    gbps: float,
+    k: int,
+    views: int,
+    c: Compute,
+    lane: bool,
+    max_mb: float,
 ) -> tuple[float, float]:
     """(MB/s, block MB) at the peak of throughput by block size up to `max_mb`: the largest
     offered rate whose blocks settle. Below the peak the loop mb -> rate × view(mb) has a stable
@@ -408,14 +485,27 @@ def capacity(
     return best
 
 
+# What the benchmark adds to a transaction's time: half its submit round trip before the
+# node has it, and half the 100 ms height poll after the first validator decided its block.
+HARNESS_MS = 10.0 + 50.0
+
+
 def print_sweep(args, k: int, compute: Compute) -> None:
-    """Blocks, view, finality and the decided rate at each offered rate, and the capacity."""
+    """Blocks, view, finality, the decided rate and the benchmark's latency at each offered
+    rate, with its verdict against `--latency-target`, and the capacity."""
     cap_mbps, cap_mb = capacity(
-        args.profile, args.nodes, args.gbps, k, args.views, compute, args.lane, args.max_block
+        args.profile,
+        args.nodes,
+        args.gbps,
+        k,
+        args.views,
+        compute,
+        args.lane,
+        args.max_block,
     )
     print(
         f"{'rate':>6}{'block p50':>10}{'p90':>6}{'view':>7}{'fin':>7}{'late%':>7}"
-        f"{'decided':>9}{'capped%':>9}{'growth%':>9}  verdict"
+        f"{'decided':>9}{'capped%':>9}{'growth%':>9}{'pool':>7}{'verdict':>9}  rule"
     )
     for rate in (float(x) for x in args.rates.split(",")):
         r = point(
@@ -431,10 +521,13 @@ def print_sweep(args, k: int, compute: Compute) -> None:
             Load(rate, args.max_block),
         )
         stable = rate <= cap_mbps and r["capped_pct"] == 0
+        latency = r["verdict_p50"] + HARNESS_MS
+        passes = stable and latency <= args.latency_target
         print(
             f"{rate:6g}{r['mb_p50']:10.1f}{r['mb_p90']:6.0f}{r['view_mean']:7.0f}{r['fin_p50']:7.0f}"
             f"{r['late_pct']:7.1f}{r['mbps']:9.0f}{r['capped_pct']:9.0f}{r['growth_pct']:9.1f}"
-            f"  {'steady' if stable else 'blocks grow'}"
+            f"{r['pool_p50']:7.0f}{latency:9.0f}"
+            f"  {'pass' if passes else 'blocks grow' if not stable else 'latency'}"
         )
     bound = " (the max block binds)" if cap_mb >= args.max_block - 1e-9 else ""
     print(f"capacity: {cap_mbps:.0f} MB/s at {cap_mb:.0f} MB blocks{bound}")
@@ -461,6 +554,12 @@ def main(argv=None):
     )
     sub.choices["sweep"].add_argument(
         "--rates", required=True, help="MB/s offered, comma separated"
+    )
+    sub.choices["sweep"].add_argument(
+        "--latency-target",
+        type=float,
+        default=1000.0,
+        help="ms; the benchmark's pass rule on the submit-to-decide p50",
     )
     for name in ("point", "sweep"):
         sub.choices[name].add_argument("--views", type=int, default=400)

@@ -126,8 +126,15 @@ def compare(
                     "view_p50",
                     "transit_p50",
                     "fin_p50",
+                    "pool_p50",
+                    "first_cert1_p50",
+                    "verdict_p50",
                 )
             }
+            # The benchmark's clock: half the submit round trip, half the height poll.
+            row["model"]["verdict_p50"] = round(
+                m["verdict_p50"] + (s["submit_rtt_p50"] or 0.0) / 2 + 50.0, 1
+            )
         rows.append(row)
     return rows
 
@@ -159,8 +166,23 @@ def line(pts: list[tuple[float, float]]) -> Cost:
 class Run:
     """A run's traces, block sizes, steps and geography."""
 
-    def __init__(self, node_type, trace, v2h, by_h, steps, region, two_thirds=False):
+    def __init__(
+        self,
+        node_type,
+        trace,
+        v2h,
+        by_h,
+        steps,
+        region,
+        two_thirds=False,
+        txs=(),
+        validator_seen=None,
+    ):
         self.node_type, self.trace, self.steps = node_type, trace, steps
+        # Included transactions as (submit s, height), and when a validator first showed
+        # each height, which it does once it holds Cert1 for the block: what the benchmark's
+        # latency rule is computed from.
+        self.txs, self.validator_seen = list(txs), validator_seen or {}
         self.profile = "decaf-2025" if region else "off"
         self.n = len(trace)
         self.k = vidwindow.threshold(self.n, "2f+1" if two_thirds else "f+1")
@@ -176,6 +198,8 @@ class Run:
         offs = sorted(h - v for v, h in v2h.items())
         off = offs[len(offs) // 2] if offs else 0
         self.block_mb = lambda v: by_h.get(v2h.get(v, v + off), 0)
+        h2v = {h: v for v, h in v2h.items()}
+        self.view_of = lambda h: h2v.get(h, h - off)
 
     @classmethod
     def load(cls, run: Path) -> "Run":
@@ -212,10 +236,18 @@ class Run:
                     except (ValueError, KeyError):
                         pass
         by_h = collections.Counter()
+        txs = []
         for line_ in (run / "load.jsonl").read_text().splitlines():
             t = json.loads(line_)
             if t.get("status") == "included":
                 by_h[t["height"]] += 1
+                txs.append((t["t_submit"], t["height"]))
+        validator_seen = {}
+        if (run / "heights.jsonl").exists():
+            for line_ in (run / "heights.jsonl").read_text().splitlines():
+                h = json.loads(line_)
+                if h.get("validator") is not None:
+                    validator_seen[h["height"]] = h["validator"]
         steps = json.loads((run / "steps.json").read_text())
         region = {
             nid: region_of_host[h] for nid, h in host_of.items() if h in region_of_host
@@ -225,7 +257,9 @@ class Run:
             pair.startswith("ESPRESSO_BENCH_VID_TWO_THIRDS=")
             for pair in man["config"].get("node_env") or []
         )
-        return cls(node_type, trace, v2h, by_h, steps, region, two_thirds)
+        return cls(
+            node_type, trace, v2h, by_h, steps, region, two_thirds, txs, validator_seen
+        )
 
     def events(self, node: int, view: int) -> dict[str, list[int]]:
         return self.trace.get(node, {}).get(view, {})
@@ -280,11 +314,20 @@ class Run:
         if not win:
             return None
         pct = vidwindow.pct
+        incl = self.inclusion(st)
+        latency = st.get("consensus_latency_ms") or {}
+        rtt = st.get("submit_rtt_ms") or {}
         return {
             "step_mb_s": st["rate_mb_s"],
             "passed": not st.get("consensus_fails") and not st.get("query_fails"),
             "decided_mb_s": round(st.get("decided_mb_s", 0.0), 1),
             "views": len(vts),
+            # The benchmark's latency rule, and its parts from the traces.
+            "verdict_p50": latency.get("p50"),
+            "verdict_trace_p50": pct(incl["verdict"], 0.5),
+            "pool_p50": pct(incl["pool"], 0.5),
+            "first_cert1_p50": pct(incl["first_cert1"], 0.5),
+            "submit_rtt_p50": rtt.get("p50"),
             "mb_p50": pct(mbs, 0.5),
             "view_p50": pct(vts, 0.5),
             "fin_p50": pct(fins, 0.5),
@@ -360,6 +403,39 @@ class Run:
         cs.sort(reverse=True)
         return cs[self.q - 1] * 1000.0
 
+    def inclusion(self, st: dict) -> dict[str, list[float]]:
+        """Per transaction submitted in the step's measured half: its wait until the leader
+        of its block took its pool (`pool`), the first node's Cert1 of that block from its
+        proposal (`first_cert1`), and submit to the first validator showing the block
+        (`verdict`, what the benchmark's rule measures; a validator's height advances with
+        its Cert1), ms."""
+        t0, t1 = st["t_mid"], st["t_end"]
+        out: dict[str, list[float]] = {"pool": [], "first_cert1": [], "verdict": []}
+        for t, h in self.txs:
+            if not t0 <= t <= t1:
+                continue
+            v = self.view_of(h)
+            lead = self.leader_of.get(v)
+            ev = self.events(lead, v) if lead is not None else {}
+            seen = self.validator_seen.get(h)
+            if seen is not None:
+                out["verdict"].append((seen - t) * 1000.0)
+            if "request_block_header_queued" in ev:
+                out["pool"].append(
+                    (ev["request_block_header_queued"][0] / 1e9 - t) * 1000.0
+                )
+            if "proposal_queued" in ev:
+                certs = [
+                    self.events(i, v)["cert1_v_minus_1_input_dispatched"][0]
+                    for i in range(self.n)
+                    if "cert1_v_minus_1_input_dispatched" in self.events(i, v)
+                ]
+                if certs:
+                    out["first_cert1"].append(
+                        (min(certs) - ev["proposal_queued"][0]) / MS
+                    )
+        return out
+
     def finality(self, v: int, pq: int) -> float | None:
         """From the proposal leaving to the q-th node's decide of it."""
         decided = sorted(
@@ -397,9 +473,11 @@ def print_rows(rows):
             f" decode {r['decode_p50']:5.1f}/{r['decode_p90']:5.1f}"
             f" window p10/p50 {r['win_p10']:5.0f}/{r['win_p50']:5.0f} late {r['late_pct']:4.0f}%"
             f" critical p10/p50 {r['crit_p10']:5.0f}/{r['crit_p50']:5.0f}"
+            f" verdict {r['verdict_p50'] or float('nan'):5.0f} (pool {r['pool_p50']:4.0f} cert1 {r['first_cert1_p50']:4.0f})"
             + (
                 f" | {r['engine']} {m['gbps']:g} Gbps {r['compute']}: blk {m['mb']:5.0f} view {m['view_p50']:5.0f} fin {m['fin_p50']:5.0f} transit {m['transit_p50']:4.0f}"
                 f" window {m['win_p50']:5.0f} late {m['late_pct']:3.0f}% critical {m['crit_p10']:4.0f}/{m['crit_p50']:4.0f}"
+                f" verdict {m['verdict_p50']:5.0f} (pool {m['pool_p50']:4.0f} cert1 {m['first_cert1_p50']:4.0f})"
                 if m
                 else ""
             )

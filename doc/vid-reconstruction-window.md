@@ -105,6 +105,7 @@ of V+1:
                      2T + propose + persist_proposal + d(L, L'))
     finality   = q-th_i [ q-th_j [ cert1_j + vote2 + d(j, i) ] + cert + decide ]
     cert1_j    = q-th_x [ d(L, x) + verify_proposal + vote1 + d(x, j) ] + cert
+    verdict    = min_i cert1_i(V) − t          t the submit, V the block that took the transaction
 
 δ_j is the window's floor: in the transfer-bound simulation no window is below T + δ_j, three quarters sit on it to the
 millisecond and the rest above it by whole cross-region hops, when the proposal of V+1 crossed behind more of the
@@ -133,6 +134,17 @@ and finality within 12 percent at every step, in under a second:
 | 200  | 49       | 242 / 245          | 384 / 401              |
 | 250  | 82       | 330 / 356          | 493 / 554              |
 | 300  | 92       | 397 / 390          | 562 / 614              |
+
+`verdict` is the quantity the benchmark's pass rule judges, which none of the others is: the driver times a transaction
+from its submit until the first validator's block height shows the block, and a validator's height advances once it
+holds Cert1 for the block, 140 ms before its decide event on decaf (the traces place the driver's observation 38 ms
+after the earliest Cert1, half its 100 ms poll). The rule is p50 ≤ 1000 ms. A transaction submitted at t to a node in
+view W is forwarded to the leaders of W+2 and W+3 (`block.rs` `SEND_LEAD`, fanout 2), pooled there, and taken by the
+first of them to pull its pool after the forward arrived; the node resends it four views later if neither did.
+`Views.inclusion` samples submits over every node and view of the recurrence and reports the pool wait, the block's
+first Cert1 from its proposal, and the verdict; `vidwindow_runs.py` reads the same three off a run, the verdict from
+`heights.jsonl` and the parts from the traces. The driver's half round trip and half poll, about 60 ms, go on top of the
+model's number when the two are compared.
 
 `vidformula.py pairs` tabulates the closed forms per region pair; for 100 nodes placed as decaf-2025 at 15 Gbps and 50
 MB blocks it takes a second. Where the two leaders share a region the latency chain binds at 185 ms (eu-central-1,
@@ -266,6 +278,15 @@ decodes 1.9 to 2.0 × slower (1.0 to 1.16 ms/MB against 0.54 to 0.58), builds 1.
 and its proposal verification grows with the block where Graviton's stays at 5 to 6 ms. The ratios being the same at
 every block size points at the erasure-code kernel rather than memory or hashing.
 
+**The verdict against the model** (the nine decaf runs of 2 and 3 November, `vidwindow_runs.py --closed-loop`). While
+the network keeps up, the model's verdict is 10 to 20 percent under the run's: at 250 to 400 MB/s on the 2f+1 lane run
+of 3 November the run reads 564, 616, 707 and 818 ms against the model's 496, 530, 573 and 664, the model's pool wait 40
+to 80 ms short of the run's 210 to 304 and its first Cert1 30 ms short of the run's 170 to 234. The pool wait is the
+larger part of the verdict's growth with rate, as the model has it. Past the tipping point the model is far under,
+because its blocks settle where the run's run to the cap: on the f+1 lane-off run the run's pool wait at 300 MB/s is 767
+ms against the model's 235. So the model predicts the pass rule's latency where a step passes, and the ramp's failing
+step comes from throughput, the gap the matrix table already showed.
+
 **The 2 November runs** (10 × c8g.8xlarge, us-east-1, decaf-2025, 400 MB cap, `bench-state/aws/brendon-20261102-*`, the
 driver of `bf/bench-decided-cap`). With the in-flight window counted against the nodes' decided bytes there are no cap
 waits and no empty views at the failing steps and the harness submits what it offers. Capacity moves up a step: f+1 250
@@ -287,10 +308,20 @@ the cap. Inclusion latency p50 is worse with the lane at those rates (12 to 16 s
 accepted into a pool that cannot drain. The f+1 step gained over the earlier f+1 run on the other image has no lane-off
 f+1 control on this image, so it cannot be put on the lane.
 
+**The 3 November runs** (the same fleet shape and image, the driver settling every step before its verdict: the load
+stops, the backlog drains, the scan catches up, and the step is judged on every transaction's block). The settled
+verdicts move: lane on, 2f+1 400 ± 50 (450 fails at p50 1255 ms with decided 446 of 450), lane on, f+1 300 (350 fails at
+1592), lane off, 2f+1 350 (400 fails at 1150 with decided 404 of 400), lane off, f+1 250 (300 fails at 1536, blocks 169
+MB; 350 collapses to the cap). The lane is worth one step at either threshold once the verdict is honest, and the 2
+November verdict at 400 MB/s on 2f+1 was the scan's lag counted as latency. Timeouts are now only the query node's lost
+blocks, 565 to 633 on the f+1 runs, none on 2f+1.
+
 ## Next steps
 
 Model:
 
+- **The pool wait** is 40 to 80 ms short in the model: the forward's own transfer and the coordinator's hashing, and the
+  node's view lagging its proposal, would close it; then the verdict should hold within 10 percent where a step passes.
 - **Own-share verification** as a traced step and a per-MB cost on the pairing path, and a **per-connection tail** on
   the proposal's crossing, the two quarter-of-T terms above; then re-fit the matrix and the capacity table should close.
 - **The closed loop past capacity**: with the driver fixed, the step above capacity is decided just under offered with a
@@ -302,9 +333,10 @@ Model:
 
 Protocol, in the order the model ranks them:
 
-- **A control lane** is measured: it keeps vote collection at its latency floor past capacity but does not raise the
-  2f+1 capacity, because the failing step is throughput-bound on build + encode + transfer; the model's 1.3 × for the
-  lane assumed the control messages were queueing at capacity, which they are not with the driver fixed.
+- **A control lane** is measured: one step (50 MB/s) at either threshold with settled verdicts, 400 against 350 at 2f+1
+  and 300 against 250 at f+1, and vote collection stays at its latency floor past capacity. The model's 1.3 × assumed
+  the control messages were queueing at capacity; the gain is smaller because the failing step is throughput-bound on
+  build + encode + transfer.
 - **Build and encode off the proposal's critical path** (encode in the builder task, or propose before the dispersal
   ends): the other half of the 2f+1 gain.
 - **A 100 MB default maximum block** on this hardware, revisited with the lane in.

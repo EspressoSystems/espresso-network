@@ -154,4 +154,25 @@ def test_fixed_blocks_are_unchanged_by_the_load_option():
     leaders = [0] + [i % N for i in range(62)]
     a = vidformula.run_views(N, K, d, 20.0, 15.0, leaders, 60, C8G_4XLARGE)
     assert np.all(a.mb[1:] == 20.0)
-    assert vidformula.point("off", N, 15.0, 20.0, K, 60, compute=C8G_4XLARGE)["mb"] == 20.0
+    assert (
+        vidformula.point("off", N, 15.0, 20.0, K, 60, compute=C8G_4XLARGE)["mb"] == 20.0
+    )
+
+
+def test_verdict_is_the_pool_wait_then_the_first_cert1():
+    """A transaction waits in the pools of the leaders of W+2 and W+3 until one builds, then
+    the benchmark sees its block once a node holds Cert1: every sampled wait is positive, the
+    verdict is the pool wait plus the block's proposal path plus its first Cert1, and the
+    median verdict is a view or two."""
+    d, _ = vidwindow.delays("off", N)
+    leaders = [0] + [i % N for i in range(102)]
+    r = vidformula.run_views(N, K, d, 20.0, 15.0, leaders, 100, C8G_4XLARGE)
+    incl = r.inclusion(25, 95, d)
+    assert len(incl["verdict"]) == 70 * N * 8
+    assert min(incl["pool"]) >= 0 and min(incl["first_cert1"]) > 0
+    for pool, cert1, verdict in zip(incl["pool"], incl["first_cert1"], incl["verdict"]):
+        assert verdict >= pool + cert1 - 1e-6
+    view = statistics.median(r.view_times(25, 95))
+    assert view < statistics.median(incl["verdict"]) < 3 * view
+    point = vidformula.point("off", N, 15.0, 20.0, K, 100, compute=C8G_4XLARGE)
+    assert point["verdict_p50"] >= point["pool_p50"] + point["first_cert1_p50"]
