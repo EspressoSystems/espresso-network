@@ -229,7 +229,7 @@ class Views:
         for v, lead in enumerate(self.leader):
             led[lead].append(v)
         first = np.min(self.cert1, axis=1)
-        last = len(self.leader) - 1
+        last = len(self.pull) - 1  # one fewer than the leaders: the last view has no pull
         out: dict[str, list[float]] = {"pool": [], "first_cert1": [], "verdict": []}
         for w in range(lo, hi):
             for s in range(len(d)):
@@ -247,9 +247,8 @@ class Views:
                             arrival = sent + d[s, lead]
                             for v in led[lead]:
                                 if (
-                                    v > send_view
+                                    send_view < v <= last
                                     and self.pull[v] >= arrival
-                                    and v <= last
                                 ):
                                     taken = v if taken is None else min(taken, v)
                                     break
