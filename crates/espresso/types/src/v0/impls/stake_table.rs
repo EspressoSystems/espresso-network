@@ -1014,11 +1014,10 @@ pub(crate) fn select_active_validator_set(
                         tracing::debug!("Validator {address:?} does not have any stake");
                         return None;
                     }
-                    if !cv.is_eligible(protocol_version) {
+                    if let Err(err) = cv.ensure_eligible(protocol_version) {
                         tracing::debug!(
                             ?address,
-                            has_x25519 = cv.x25519_key.is_some(),
-                            has_p2p = cv.p2p_addr.is_some(),
+                            %err,
                             "Validator not eligible at protocol version {protocol_version}"
                         );
                         return None;
@@ -4429,6 +4428,27 @@ mod tests {
         let active = select_active_validator_set(&map, NEW_PROTOCOL_VERSION).unwrap();
         assert!(!active.contains_key(&missing_p2p.account));
         assert!(active.contains_key(&complete.account));
+    }
+
+    /// Post-upgrade: a p2p address nobody can dial counts as missing, before the upgrade it
+    /// doesn't matter.
+    #[test]
+    fn test_select_post_upgrade_excludes_invalid_p2p() {
+        let mut map = RegisteredValidatorMap::new();
+
+        let mut invalid_p2p = complete_mock_validator();
+        invalid_p2p.p2p_addr = Some("[[a]:b]:80".parse().unwrap());
+        map.insert(invalid_p2p.account, invalid_p2p.clone());
+
+        let complete = complete_mock_validator();
+        map.insert(complete.account, complete.clone());
+
+        let active = select_active_validator_set(&map, NEW_PROTOCOL_VERSION).unwrap();
+        assert!(!active.contains_key(&invalid_p2p.account));
+        assert!(active.contains_key(&complete.account));
+
+        let active = select_active_validator_set(&map, EPOCH_VERSION).unwrap();
+        assert!(active.contains_key(&invalid_p2p.account));
     }
 
     /// Post-upgrade: a single complete validator is kept.
