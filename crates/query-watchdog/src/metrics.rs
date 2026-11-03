@@ -63,27 +63,28 @@ impl WatchdogMetrics {
     }
 
     /// Sets the gauges of `node_label` from `summary`; `None` age exports 0.
-    pub fn export_summary(&self, node_label: &str, summary: &NodeSummary) {
+    pub fn export_summary(&self, node_label: &str, summary: &NodeSummary) -> anyhow::Result<()> {
         self.follow_lag_blocks
             .with_label_values(&[node_label])
-            .set(to_gauge(summary.follow_lag_blocks));
+            .set(i64::try_from(summary.follow_lag_blocks)?);
         if let Some(lag) = summary.merklized_state_lag_blocks {
             self.merklized_state_lag_blocks
                 .with_label_values(&[node_label])
-                .set(to_gauge(lag));
+                .set(i64::try_from(lag)?);
         }
         for kind in &summary.kinds {
             let labels = [node_label, kind.kind.into()];
             self.missing
                 .with_label_values(&labels)
-                .set(to_gauge(kind.missing_count));
+                .set(i64::try_from(kind.missing_count)?);
+            let age = kind
+                .oldest_missing_age
+                .map_or(Ok(0), |age| i64::try_from(age.as_secs()))?;
             self.oldest_missing_age_seconds
                 .with_label_values(&labels)
-                .set(
-                    kind.oldest_missing_age
-                        .map_or(0, |age| to_gauge(age.as_secs())),
-                );
+                .set(age);
         }
+        Ok(())
     }
 
     /// Counts one failure under `{node_label, target.label(), error.status_label()}`.
@@ -111,9 +112,4 @@ fn gauge(
     let gauge = IntGaugeVec::new(Opts::new(format!("query_watchdog_{name}"), help), labels)?;
     registry.register(Box::new(gauge.clone()))?;
     Ok(gauge)
-}
-
-/// Saturates at `i64::MAX`.
-fn to_gauge(value: u64) -> i64 {
-    i64::try_from(value).unwrap_or(i64::MAX)
 }

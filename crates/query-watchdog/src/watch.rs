@@ -1,7 +1,7 @@
-use std::{collections::BTreeMap, fmt, ops::Range, sync::Arc, time::Duration};
+use std::{collections::BTreeMap, error::Error, fmt, ops::Range, sync::Arc, time::Duration};
 
-use anyhow::{anyhow, bail};
-use chrono::{TimeDelta, Utc};
+use anyhow::{anyhow, bail, ensure};
+use chrono::{DateTime, SubsecRound, TimeDelta, Utc};
 use clap::Args;
 use futures::future::join_all;
 use reqwest::StatusCode;
@@ -34,6 +34,38 @@ pub struct WatchOptions {
         default_value = "200ms"
     )]
     pub request_interval: Duration,
+    /// Heights below the tip each sweep checks; absent means the whole chain.
+    #[arg(long, env = "ESPRESSO_QUERY_WATCHDOG_RETENTION_BLOCKS")]
+    pub retention_blocks: Option<u64>,
+}
+
+impl WatchOptions {
+    /// `Archive` when `retention_blocks` is absent.
+    pub fn sweep_window(&self) -> SweepWindow {
+        self.retention_blocks
+            .map_or(SweepWindow::Archive, |blocks| SweepWindow::Retention {
+                blocks,
+            })
+    }
+}
+
+/// Heights a sweep covers.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SweepWindow {
+    /// `[0, tip_height)`.
+    Archive,
+    /// `[tip_height - blocks, tip_height)`, saturating.
+    Retention { blocks: u64 },
+}
+
+impl SweepWindow {
+    /// First height of the window for `tip_height`.
+    pub fn start_height(self, tip_height: u64) -> u64 {
+        match self {
+            Self::Archive => 0,
+            Self::Retention { blocks } => tip_height.saturating_sub(blocks),
+        }
+    }
 }
 
 /// A query node's base URL and label.
@@ -44,12 +76,24 @@ pub struct WatchedNode {
 }
 
 impl WatchedNode {
-    /// Labelled `url.authority()`.
-    pub fn new(base_url: Url) -> Self {
-        Self {
-            label: base_url.authority().to_owned(),
+    /// Labelled `host:port` (never the authority, which can carry credentials); errors on a base
+    /// path without a trailing slash, which `Url::join` would truncate.
+    pub fn new(base_url: Url) -> anyhow::Result<Self> {
+        let host = base_url
+            .host_str()
+            .ok_or_else(|| anyhow!("node URL {base_url} has no host"))?;
+        let port = base_url
+            .port_or_known_default()
+            .ok_or_else(|| anyhow!("node URL {base_url} has no port"))?;
+        ensure!(
+            base_url.path().ends_with('/'),
+            "node URL path must end with '/': {}",
+            base_url.path()
+        );
+        Ok(Self {
+            label: format!("{host}:{port}"),
             base_url,
-        }
+        })
     }
 
     /// `route` below the base URL.
@@ -77,7 +121,7 @@ impl FetchError {
     }
 
     /// `Ok` for a 2xx status.
-    fn check(status: StatusCode) -> Result<(), Self> {
+    fn from_status(status: StatusCode) -> Result<(), Self> {
         status
             .is_success()
             .then_some(())
@@ -90,7 +134,15 @@ impl fmt::Display for FetchError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Status(status) => write!(f, "status {status}"),
-            Self::Transport(error) => write!(f, "transport error: {error:#}"),
+            Self::Transport(error) => {
+                write!(f, "transport error: {error}")?;
+                let mut cause = error.source();
+                while let Some(source) = cause {
+                    write!(f, ": {source}")?;
+                    cause = source.source();
+                }
+                Ok(())
+            },
         }
     }
 }
@@ -132,15 +184,11 @@ const HTTP_TIMEOUT: Duration = Duration::from_secs(60);
 /// The part of `v1/config/hotshot` the watchdog reads.
 #[derive(Deserialize)]
 struct NetworkConfig {
-    config: HotShotConfig,
+    config: EpochConfig,
 }
 
-/// Epoch fields of `NetworkConfig::config`.
-#[derive(Deserialize)]
-struct HotShotConfig {
-    epoch_height: u64,
-    epoch_start_block: u64,
-}
+/// Total time of a GET that is decoded (tip, state height, config).
+const JSON_TIMEOUT: Duration = Duration::from_secs(5);
 
 impl Watchdog {
     /// Builds the HTTP client with `HTTP_TIMEOUT`.
@@ -171,12 +219,17 @@ impl Watchdog {
         let store = self.store.node(&node.label);
         let loaded = store.load_progress().await?;
         let progress = match &loaded {
-            Some(progress) => progress.clone(),
+            Some(progress) => NodeProgress {
+                follow_next_height: progress
+                    .follow_next_height
+                    .max(self.options.sweep_window().start_height(tip_height)),
+                ..progress.clone()
+            },
             None => {
                 let progress = NodeProgress {
                     follow_next_height: tip_height,
                     sweep: SweepState::Waiting {
-                        start_at: Utc::now(),
+                        start_at: utc_now(),
                     },
                     last_sweep_completed_at: None,
                 };
@@ -201,7 +254,9 @@ impl Watchdog {
             errors_since_summary: BTreeMap::new(),
             node,
         };
-        watch.log_started(loaded.is_some()).await?;
+        let summary = watch.summary().await?;
+        watch.log_started(loaded.is_some(), &summary);
+        self.metrics.export_summary(&watch.node.label, &summary)?;
         Ok(watch)
     }
 
@@ -218,10 +273,7 @@ impl Watchdog {
                 .await
             {
                 Ok(NetworkConfig { config }) => {
-                    return Ok((config.epoch_height != 0).then_some(EpochConfig {
-                        epoch_height: config.epoch_height,
-                        epoch_start_block: config.epoch_start_block,
-                    }));
+                    return Ok((config.epoch_height != 0).then_some(config));
                 },
                 Err(error) => {
                     self.metrics
@@ -268,10 +320,11 @@ impl Watchdog {
         let response = self
             .http
             .get(node.route_url(route))
+            .timeout(JSON_TIMEOUT)
             .send()
             .await
             .map_err(FetchError::Transport)?;
-        FetchError::check(response.status())?;
+        FetchError::from_status(response.status())?;
         response.json().await.map_err(FetchError::Transport)
     }
 
@@ -283,7 +336,7 @@ impl Watchdog {
             .send()
             .await
             .map_err(FetchError::Transport)?;
-        FetchError::check(response.status())
+        FetchError::from_status(response.status())
     }
 }
 
@@ -325,22 +378,33 @@ impl NodeWatch {
     }
 
     /// Logs the `watching` or `resumed` line of `start_node`.
-    async fn log_started(&self, resumed: bool) -> anyhow::Result<()> {
+    fn log_started(&self, resumed: bool, summary: &NodeSummary) {
         let node = &self.node.label;
-        if resumed {
-            let summary = self.summary().await?;
-            tracing::info!(
-                %node,
-                follow_next_height = self.progress.follow_next_height,
-                sweep = ?self.progress.sweep,
-                %summary,
-                "resumed"
-            );
-        } else {
-            let tip_sources: Vec<_> = self.tip_sources.iter().map(|s| &s.label).collect();
-            tracing::info!(%node, tip_height = self.tip_height, ?tip_sources, "watching");
+        if !resumed {
+            tracing::info!(%node, tip_height = self.tip_height, %summary, "watching");
+            return;
         }
-        Ok(())
+        let (sweep, next_height, until_height, start_at) = match &self.progress.sweep {
+            SweepState::Running(sweep) => (
+                "running",
+                Some(sweep.next_height),
+                Some(sweep.until_height),
+                None,
+            ),
+            SweepState::Waiting { start_at } => {
+                ("waiting", None, None, Some(start_at.to_rfc3339()))
+            },
+        };
+        tracing::info!(
+            %node,
+            follow_next_height = self.progress.follow_next_height,
+            sweep,
+            next_height,
+            until_height,
+            start_at,
+            %summary,
+            "resumed"
+        );
     }
 
     /// Refreshes `tip_height` (`Watchdog::fetch_tip`) and the node's `v1/block-state/block-height`
@@ -353,6 +417,7 @@ impl NodeWatch {
         if let Some(tip) = self.watchdog.fetch_tip(&self.tip_sources).await {
             self.tip_height = tip;
         }
+        tokio::time::sleep(self.watchdog.options.request_interval).await;
         match self
             .watchdog
             .get_json::<u64>(&self.node, "v1/block-state/block-height")
@@ -376,7 +441,7 @@ impl NodeWatch {
 
     /// Re-checks due missing chunks; returns requests sent.
     async fn retry_step(&mut self) -> anyhow::Result<usize> {
-        let due = self.store.due_retries(Utc::now(), RETRIES_PER_STEP).await?;
+        let due = self.store.due_retries(utc_now(), RETRIES_PER_STEP).await?;
         for probe in &due {
             self.check_probe(probe).await?;
         }
@@ -386,7 +451,7 @@ impl NodeWatch {
     /// Starts a due sweep or checks its next chunk for every kind; logs start and end; saves progress.
     async fn sweep_step(&mut self) -> anyhow::Result<usize> {
         if let SweepState::Waiting { start_at } = self.progress.sweep {
-            if Utc::now() < start_at {
+            if utc_now() < start_at {
                 return Ok(0);
             }
             self.start_sweep().await?;
@@ -407,22 +472,35 @@ impl NodeWatch {
         Ok(sent)
     }
 
-    /// Begins a sweep over `[0, tip_height)`.
+    /// Begins a sweep over the window below the tip, forgetting missing rows below it.
     async fn start_sweep(&mut self) -> anyhow::Result<()> {
+        let start_height = self
+            .watchdog
+            .options
+            .sweep_window()
+            .start_height(self.tip_height);
+        let forgotten = self.store.forget_below(start_height, self.epochs).await?;
         self.progress.sweep = SweepState::Running(SweepProgress {
             until_height: self.tip_height,
-            next_height: 0,
-            started_at: Utc::now(),
+            next_height: start_height,
+            started_at: utc_now(),
         });
         self.store.save_progress(&self.progress).await?;
-        tracing::info!(node = %self.node.label, until_height = self.tip_height, "sweep started");
+        tracing::info!(
+            node = %self.node.label,
+            start_height,
+            until_height = self.tip_height,
+            forgotten,
+            "sweep started"
+        );
         Ok(())
     }
 
     /// Schedules the next sweep, then logs the end line and sets the gauge.
     async fn finish_sweep(&mut self, sweep: &SweepProgress) -> anyhow::Result<()> {
-        let completed_at = Utc::now();
+        let completed_at = utc_now();
         let interval = TimeDelta::from_std(self.watchdog.options.sweep_interval)?;
+        let duration = (completed_at - sweep.started_at).to_std()?;
         self.progress.last_sweep_completed_at = Some(completed_at);
         self.progress.sweep = SweepState::Waiting {
             start_at: sweep.started_at + interval,
@@ -431,12 +509,6 @@ impl NodeWatch {
         self.watchdog
             .metrics
             .mark_sweep_completed(&self.node.label, completed_at);
-        let duration = Duration::from_secs(
-            (completed_at - sweep.started_at)
-                .num_seconds()
-                .max(0)
-                .unsigned_abs(),
-        );
         let summary = self.summary().await?;
         tracing::info!(
             node = %self.node.label,
@@ -464,7 +536,7 @@ impl NodeWatch {
             Ok(()) => self.store.record_found(probe).await,
             Err(error) => {
                 self.record_error(FetchTarget::Data(probe.kind), &error);
-                self.store.record_missing(probe, Utc::now()).await
+                self.store.record_missing(probe, utc_now()).await
             },
         }
     }
@@ -491,7 +563,7 @@ impl NodeWatch {
             merklized_state_lag_blocks: self
                 .merklized_state_height
                 .map(|height| self.tip_height.saturating_sub(height)),
-            kinds: self.store.missing_summary(Utc::now()).await?,
+            kinds: self.store.missing_summary(utc_now()).await?,
         })
     }
 
@@ -510,7 +582,7 @@ impl NodeWatch {
         );
         self.watchdog
             .metrics
-            .export_summary(&self.node.label, &summary);
+            .export_summary(&self.node.label, &summary)?;
         self.errors_since_summary.clear();
         Ok(())
     }
@@ -538,23 +610,37 @@ impl fmt::Display for NodeSummary {
             None => f.write_str("-")?,
         }
         for (i, kind) in self.kinds.iter().enumerate() {
-            let unit = if kind.kind.is_per_epoch() {
-                "missing_epochs"
-            } else {
-                "missing"
-            };
             let label: &str = kind.kind.into();
             f.write_str(if i == 0 { " " } else { ", " })?;
-            write!(f, "{label} {unit}={} oldest_age=", kind.missing_count)?;
+            write!(f, "{label} missing={} oldest_age=", kind.missing_count)?;
             match kind.oldest_missing_age {
-                Some(age) => write!(
-                    f,
-                    "{}",
-                    humantime::format_duration(Duration::from_secs(age.as_secs()))
-                )?,
+                Some(age) => write!(f, "{}", humantime::format_duration(age))?,
                 None => f.write_str("-")?,
             }
         }
         Ok(())
+    }
+}
+
+/// Current time at whole-second precision, the precision of persisted times.
+fn utc_now() -> DateTime<Utc> {
+    Utc::now().trunc_subsecs(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sweep_window_start_height() {
+        assert_eq!(SweepWindow::Archive.start_height(5000), 0);
+        assert_eq!(
+            SweepWindow::Retention { blocks: 2000 }.start_height(5000),
+            3000
+        );
+        assert_eq!(
+            SweepWindow::Retention { blocks: 2000 }.start_height(1500),
+            0
+        );
     }
 }

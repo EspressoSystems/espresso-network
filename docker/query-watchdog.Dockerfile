@@ -8,9 +8,13 @@ RUN case "${TARGETARCH}" in \
       arm64) litestream_arch=arm64 ;; \
       *) echo "unsupported arch: ${TARGETARCH}" >&2; exit 1 ;; \
     esac \
-    && curl --fail --silent --show-error --location \
-      "https://github.com/benbjohnson/litestream/releases/download/v${LITESTREAM_VERSION}/litestream-${LITESTREAM_VERSION}-linux-${litestream_arch}.tar.gz" \
-    | tar --extract --gzip --directory /usr/local/bin litestream
+    && release="https://github.com/benbjohnson/litestream/releases/download/v${LITESTREAM_VERSION}" \
+    && tarball="litestream-${LITESTREAM_VERSION}-linux-${litestream_arch}.tar.gz" \
+    && cd "$(mktemp --directory)" \
+    && curl --fail --silent --show-error --location --remote-name "${release}/checksums.txt" \
+    && curl --fail --silent --show-error --location --remote-name "${release}/${tarball}" \
+    && grep " ${tarball}\$" checksums.txt | sha256sum --check - \
+    && tar --extract --gzip --file "${tarball}" --directory /usr/local/bin litestream
 
 COPY target/$TARGETARCH/release/query-watchdog /bin/query-watchdog
 RUN chmod +x /bin/query-watchdog

@@ -53,53 +53,59 @@ async fn main() -> anyhow::Result<()> {
     let options = Options::parse();
     init_logging();
 
-    let nodes: Vec<_> = options.nodes.into_iter().map(WatchedNode::new).collect();
+    let nodes = options
+        .nodes
+        .into_iter()
+        .map(WatchedNode::new)
+        .collect::<anyhow::Result<Vec<_>>>()?;
     let labels: Vec<_> = nodes.iter().map(|node| node.label.clone()).collect();
     ensure!(
         labels.iter().collect::<BTreeSet<_>>().len() == labels.len(),
         "duplicate node labels in {labels:?}"
     );
+    let retention_blocks = options.watch.retention_blocks;
+    tracing::info!(
+        nodes = ?labels,
+        db_path = %options.db_path.display(),
+        sweep_interval = %humantime::format_duration(options.watch.sweep_interval),
+        request_interval = %humantime::format_duration(options.watch.request_interval),
+        retention_blocks,
+        retention = retention_blocks.is_none().then_some("archive"),
+        "config"
+    );
 
     let store = Store::open(&options.db_path).await?;
     let forgotten = store.forget_other_nodes(&labels).await?;
+    tracing::info!(count = forgotten, "forgot nodes");
 
     let registry = Registry::new();
     let metrics = Arc::new(WatchdogMetrics::new(&registry)?);
     let listener = TcpListener::bind(("0.0.0.0", options.port))
         .await
         .with_context(|| format!("binding port {}", options.port))?;
+    let mut server = tokio::spawn(serve_metrics(listener, registry));
 
-    let watchdog = Watchdog::new(options.watch.clone(), metrics, store)?;
+    let watchdog = Watchdog::new(options.watch, metrics, store)?;
     let epochs = watchdog.fetch_epoch_config(&nodes).await?;
     tracing::info!(
-        nodes = ?labels,
-        db_path = %options.db_path.display(),
-        sweep_interval = %humantime::format_duration(options.watch.sweep_interval),
-        request_interval = %humantime::format_duration(options.watch.request_interval),
-        tip_source = if nodes.len() == 1 { "self" } else { "others" },
-        epochs = ?epochs,
-        "config"
+        epoch_height = epochs.map(|e| e.epoch_height),
+        epoch_start_block = epochs.map(|e| e.epoch_start_block),
+        epochs = epochs.is_none().then_some("off"),
+        "epochs"
     );
-    tracing::info!(count = forgotten, "forgot nodes");
 
-    let watches = try_join_all(nodes.iter().map(|node| {
-        let tip_sources = match nodes.len() {
-            1 => nodes.clone(),
-            _ => nodes
-                .iter()
-                .filter(|n| n.label != node.label)
-                .cloned()
-                .collect(),
-        };
-        watchdog.start_node(node.clone(), tip_sources, epochs)
-    }))
+    let watches = try_join_all(
+        nodes
+            .iter()
+            .map(|node| watchdog.start_node(node.clone(), nodes.clone(), epochs)),
+    )
     .await?;
 
     tokio::select! {
         result = try_join_all(watches.into_iter().map(NodeWatch::run)) => result.map(drop),
-        result = serve_metrics(listener, registry) => result,
+        result = &mut server => result?,
         signal = shutdown_signal() => {
-            tracing::info!(signal = signal?, "shutting down");
+            tracing::debug!(signal = signal?, "shutting down");
             Ok(())
         },
     }

@@ -1,14 +1,14 @@
-use std::{path::Path, str::FromStr, time::Duration};
+use std::{fs, path::Path, str::FromStr, time::Duration};
 
 use anyhow::{Context, bail};
 use chrono::{DateTime, Utc};
 use sqlx::{
-    QueryBuilder,
+    QueryBuilder, Sqlite,
     sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePool, SqlitePoolOptions},
 };
 use strum::VariantArray;
 
-use crate::chunk::{DataKind, Probe};
+use crate::chunk::{DataKind, EpochConfig, Probe};
 
 /// SQLite state of all node watches; WAL, so litestream can replicate it.
 #[derive(Clone, Debug)]
@@ -17,8 +17,13 @@ pub struct Store {
 }
 
 impl Store {
-    /// `connect` on `path` with WAL, `busy_timeout` 30 s, `create_if_missing`.
+    /// `connect` on `path` (parent directory created) with WAL, `busy_timeout` 30 s,
+    /// `create_if_missing`.
     pub async fn open(path: &Path) -> anyhow::Result<Self> {
+        if let Some(dir) = path.parent() {
+            fs::create_dir_all(dir)
+                .with_context(|| format!("creating directory {}", dir.display()))?;
+        }
         let options = SqliteConnectOptions::new()
             .filename(path)
             .create_if_missing(true)
@@ -46,16 +51,15 @@ impl Store {
     /// `NOT IN`); returns `rows_affected` of the `node_progress` delete.
     pub async fn forget_other_nodes(&self, node_labels: &[String]) -> anyhow::Result<u64> {
         let mut tx = self.pool.begin().await?;
-        let mut forgotten = 0;
-        for table in ["missing_chunk", "node_progress"] {
-            let mut query = QueryBuilder::new(format!("DELETE FROM {table} WHERE node NOT IN ("));
-            let mut labels = query.separated(", ");
-            for label in node_labels {
-                labels.push_bind(label);
-            }
-            query.push(")");
-            forgotten = query.build().execute(&mut *tx).await?.rows_affected();
-        }
+        delete_other_nodes("missing_chunk", node_labels)
+            .build()
+            .execute(&mut *tx)
+            .await?;
+        let forgotten = delete_other_nodes("node_progress", node_labels)
+            .build()
+            .execute(&mut *tx)
+            .await?
+            .rows_affected();
         tx.commit().await?;
         Ok(forgotten)
     }
@@ -81,14 +85,27 @@ const RETRY_DELAY_MIN_SECS: i64 = 10;
 /// Cap of the doubling retry delay.
 const RETRY_DELAY_MAX_SECS: i64 = 600;
 
-type ProgressRow = (
-    u64,
-    Option<DateTime<Utc>>,
-    Option<u64>,
-    Option<u64>,
-    Option<DateTime<Utc>>,
-    Option<DateTime<Utc>>,
-);
+/// A `node_progress` row.
+#[derive(sqlx::FromRow)]
+struct ProgressRow {
+    follow_next_height: u64,
+    next_sweep_at: Option<DateTime<Utc>>,
+    sweep_until_height: Option<u64>,
+    sweep_next_height: Option<u64>,
+    sweep_started_at: Option<DateTime<Utc>>,
+    last_sweep_completed_at: Option<DateTime<Utc>>,
+}
+
+/// `DELETE` of the rows of `table` whose node is not in `labels`.
+fn delete_other_nodes<'a>(table: &str, labels: &'a [String]) -> QueryBuilder<'a, Sqlite> {
+    let mut query = QueryBuilder::new(format!("DELETE FROM {table} WHERE node NOT IN ("));
+    let mut separated = query.separated(", ");
+    for label in labels {
+        separated.push_bind(label);
+    }
+    query.push(")");
+    query
+}
 
 impl NodeStore {
     /// The node's progress; `None` on first run.
@@ -100,26 +117,29 @@ impl NodeStore {
         .bind(&self.node)
         .fetch_optional(&self.pool)
         .await?;
-        row.map(
-            |(follow_next_height, waiting, until, next, started, completed)| {
-                let sweep = match (waiting, until, next, started) {
-                    (Some(start_at), None, None, None) => SweepState::Waiting { start_at },
-                    (None, Some(until_height), Some(next_height), Some(started_at)) => {
-                        SweepState::Running(SweepProgress {
-                            until_height,
-                            next_height,
-                            started_at,
-                        })
-                    },
-                    _ => bail!("inconsistent node_progress row for {}", self.node),
-                };
-                Ok(NodeProgress {
-                    follow_next_height,
-                    sweep,
-                    last_sweep_completed_at: completed,
-                })
-            },
-        )
+        row.map(|row| {
+            let sweep = match (
+                row.next_sweep_at,
+                row.sweep_until_height,
+                row.sweep_next_height,
+                row.sweep_started_at,
+            ) {
+                (Some(start_at), None, None, None) => SweepState::Waiting { start_at },
+                (None, Some(until_height), Some(next_height), Some(started_at)) => {
+                    SweepState::Running(SweepProgress {
+                        until_height,
+                        next_height,
+                        started_at,
+                    })
+                },
+                _ => bail!("inconsistent node_progress row for {}", self.node),
+            };
+            Ok(NodeProgress {
+                follow_next_height: row.follow_next_height,
+                sweep,
+                last_sweep_completed_at: row.last_sweep_completed_at,
+            })
+        })
         .transpose()
     }
 
@@ -156,15 +176,15 @@ impl NodeStore {
     }
 
     /// Upsert: new row retries after `RETRY_DELAY_MIN_SECS`; known row keeps `first_missing_at`,
-    /// sets `range_end`, doubles the delay up to `RETRY_DELAY_MAX_SECS`.
+    /// raises `range_end`, doubles the delay up to `RETRY_DELAY_MAX_SECS`.
     pub async fn record_missing(&self, probe: &Probe, now: DateTime<Utc>) -> anyhow::Result<()> {
         // In `DO UPDATE`, unqualified columns are the old row, so both columns see the old delay.
         sqlx::query(
             "INSERT INTO missing_chunk (node, kind, range_start, range_end, first_missing_at, \
              retry_delay_secs, next_retry_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?5 + ?6) ON \
-             CONFLICT (node, kind, range_start) DO UPDATE SET range_end = excluded.range_end, \
-             retry_delay_secs = MIN(retry_delay_secs * 2, ?7), next_retry_at = ?5 + \
-             MIN(retry_delay_secs * 2, ?7)",
+             CONFLICT (node, kind, range_start) DO UPDATE SET range_end = MAX(range_end, \
+             excluded.range_end), retry_delay_secs = MIN(retry_delay_secs * 2, ?7), next_retry_at \
+             = ?5 + MIN(retry_delay_secs * 2, ?7)",
         )
         .bind(&self.node)
         .bind(<&'static str>::from(probe.kind))
@@ -178,14 +198,18 @@ impl NodeStore {
         Ok(())
     }
 
-    /// Deletes the row after a 200.
+    /// Deletes the row after a 200, unless it spans more than `probe.range`.
     pub async fn record_found(&self, probe: &Probe) -> anyhow::Result<()> {
-        sqlx::query("DELETE FROM missing_chunk WHERE node = ? AND kind = ? AND range_start = ?")
-            .bind(&self.node)
-            .bind(<&'static str>::from(probe.kind))
-            .bind(i64::try_from(probe.range.start)?)
-            .execute(&self.pool)
-            .await?;
+        sqlx::query(
+            "DELETE FROM missing_chunk WHERE node = ? AND kind = ? AND range_start = ? AND \
+             range_end <= ?",
+        )
+        .bind(&self.node)
+        .bind(<&'static str>::from(probe.kind))
+        .bind(i64::try_from(probe.range.start)?)
+        .bind(i64::try_from(probe.range.end)?)
+        .execute(&self.pool)
+        .await?;
         Ok(())
     }
 
@@ -210,6 +234,45 @@ impl NodeStore {
             .collect()
     }
 
+    /// Deletes rows below `start_height`: per-height kinds with `range_end <= start_height`,
+    /// per-epoch kinds whose last block `epoch * epoch_height` is below it; returns the count.
+    pub async fn forget_below(
+        &self,
+        start_height: u64,
+        epochs: Option<EpochConfig>,
+    ) -> anyhow::Result<u64> {
+        let kinds = |per_epoch: bool| {
+            DataKind::VARIANTS
+                .iter()
+                .filter(|kind| kind.is_per_epoch() == per_epoch)
+                .map(|&kind| format!("'{}'", <&'static str>::from(kind)))
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        let mut forgotten = sqlx::query(&format!(
+            "DELETE FROM missing_chunk WHERE node = ? AND range_end <= ? AND kind IN ({})",
+            kinds(false)
+        ))
+        .bind(&self.node)
+        .bind(i64::try_from(start_height)?)
+        .execute(&self.pool)
+        .await?
+        .rows_affected();
+        if let Some(epochs) = epochs {
+            forgotten += sqlx::query(&format!(
+                "DELETE FROM missing_chunk WHERE node = ? AND range_start * ? < ? AND kind IN ({})",
+                kinds(true)
+            ))
+            .bind(&self.node)
+            .bind(i64::try_from(epochs.epoch_height)?)
+            .bind(i64::try_from(start_height)?)
+            .execute(&self.pool)
+            .await?
+            .rows_affected();
+        }
+        Ok(forgotten)
+    }
+
     /// One entry per `DataKind::VARIANTS`: `SUM(end - start)`, `now - MIN(first_missing_at)`.
     pub async fn missing_summary(&self, now: DateTime<Utc>) -> anyhow::Result<Vec<KindSummary>> {
         let rows: Vec<(String, u64, DateTime<Utc>)> = sqlx::query_as(
@@ -223,19 +286,23 @@ impl NodeStore {
             .into_iter()
             .map(|(kind, count, first)| Ok((DataKind::from_str(&kind)?, (count, first))))
             .collect::<anyhow::Result<Vec<_>>>()?;
-        Ok(DataKind::VARIANTS
+        DataKind::VARIANTS
             .iter()
             .map(|&kind| {
                 let found = by_kind.iter().find(|(k, _)| *k == kind).map(|(_, v)| v);
-                KindSummary {
+                Ok(KindSummary {
                     kind,
                     missing_count: found.map_or(0, |&(count, _)| count),
-                    // A clock step back clamps the age to zero.
                     oldest_missing_age: found
-                        .map(|&(_, first)| (now - first).to_std().unwrap_or(Duration::ZERO)),
-                }
+                        .map(|&(_, first)| {
+                            let secs = u64::try_from(now.timestamp() - first.timestamp())
+                                .context("first_missing_at is in the future")?;
+                            anyhow::Ok(Duration::from_secs(secs))
+                        })
+                        .transpose()?,
+                })
             })
-            .collect())
+            .collect()
     }
 }
 
@@ -274,6 +341,8 @@ pub struct KindSummary {
 
 #[cfg(test)]
 mod tests {
+    use std::ops::Range;
+
     use chrono::TimeDelta;
     use pretty_assertions::assert_eq;
 
@@ -283,7 +352,7 @@ mod tests {
         DateTime::from_timestamp(secs, 0).unwrap()
     }
 
-    fn probe(kind: DataKind, range: std::ops::Range<u64>) -> Probe {
+    fn probe(kind: DataKind, range: Range<u64>) -> Probe {
         Probe { kind, range }
     }
 
@@ -348,6 +417,45 @@ mod tests {
         node.record_found(&leaf).await.unwrap();
         let summary = node.missing_summary(at(t0 + 100)).await.unwrap();
         assert_eq!(summary.iter().map(|k| k.missing_count).sum::<u64>(), 1);
+
+        // Window starts at 100: leaf 0..100 and epoch 3 (last block 90) go; leaf 100..200 and
+        // epoch 5 (last block 150) stay.
+        let epochs = EpochConfig {
+            epoch_height: 30,
+            epoch_start_block: 61,
+        };
+        for p in [
+            probe(DataKind::Leaf, 0..100),
+            probe(DataKind::Leaf, 100..200),
+            probe(DataKind::StateCert, 3..4),
+        ] {
+            node.record_missing(&p, at(t0)).await.unwrap();
+        }
+        assert_eq!(node.forget_below(100, Some(epochs)).await.unwrap(), 2);
+        let now = at(t0 + 100);
+        let count = |summary: &[KindSummary], kind| {
+            summary
+                .iter()
+                .find(|k| k.kind == kind)
+                .unwrap()
+                .missing_count
+        };
+        let summary = node.missing_summary(now).await.unwrap();
+        assert_eq!(count(&summary, DataKind::Leaf), 100);
+        assert_eq!(count(&summary, DataKind::StateCert), 0);
+        assert_eq!(count(&summary, DataKind::StakeTable), 1);
+
+        // A shorter found probe leaves the longer row; a covering one deletes it.
+        node.record_found(&probe(DataKind::Leaf, 100..150))
+            .await
+            .unwrap();
+        let summary = node.missing_summary(now).await.unwrap();
+        assert_eq!(count(&summary, DataKind::Leaf), 100);
+        node.record_found(&probe(DataKind::Leaf, 100..200))
+            .await
+            .unwrap();
+        let summary = node.missing_summary(now).await.unwrap();
+        assert_eq!(count(&summary, DataKind::Leaf), 0);
         assert_eq!(
             store.node("b:2").missing_summary(at(t0)).await.unwrap()[0].missing_count,
             0

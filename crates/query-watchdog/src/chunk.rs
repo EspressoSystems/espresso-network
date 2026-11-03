@@ -1,5 +1,6 @@
 use std::ops::Range;
 
+use serde::Deserialize;
 use strum::{EnumString, IntoStaticStr, VariantArray};
 
 /// Heights per request for every kind; the block range limit (`availability.rs:76`).
@@ -65,7 +66,7 @@ impl Probe {
 }
 
 /// Epoch parameters of the network, from `v1/config/hotshot`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
 pub struct EpochConfig {
     pub epoch_height: u64,
     pub epoch_start_block: u64,
@@ -125,19 +126,19 @@ mod tests {
         epoch_start_block: 61,
     };
 
+    type KindRange = (DataKind, Range<u64>);
     type Case = (
         &'static str,
         Range<u64>,
         Option<EpochConfig>,
         Vec<KindRange>,
     );
-    type KindRange = (DataKind, Range<u64>);
 
-    fn kinds_and_ranges(probes: Vec<Probe>) -> Vec<(DataKind, Range<u64>)> {
+    fn kinds_and_ranges(probes: Vec<Probe>) -> Vec<KindRange> {
         probes.into_iter().map(|p| (p.kind, p.range)).collect()
     }
 
-    fn per_height(chunk: Range<u64>) -> Vec<(DataKind, Range<u64>)> {
+    fn per_height(chunk: Range<u64>) -> Vec<KindRange> {
         [
             DataKind::Leaf,
             DataKind::Block,
@@ -153,7 +154,7 @@ mod tests {
     fn probes_epochs() {
         use DataKind::*;
         // first epoch = ceil(61 / 30) = 3; lc_stake_table starts at 5
-        let with = |kinds: &[(DataKind, u64)]| {
+        let epoch_probes = |kinds: &[(DataKind, u64)]| {
             kinds
                 .iter()
                 .map(|&(k, e)| (k, e..e + 1))
@@ -168,7 +169,7 @@ mod tests {
                 Some(EPOCHS),
                 [
                     per_height(60..100),
-                    with(&[(StakeTable, 3), (StateCert, 3)]),
+                    epoch_probes(&[(StakeTable, 3), (StateCert, 3)]),
                 ]
                 .concat(),
             ),
@@ -178,19 +179,29 @@ mod tests {
                 Some(EPOCHS),
                 [
                     per_height(100..220),
-                    with(&[
+                    epoch_probes(&[
                         (StakeTable, 4),
                         (StakeTable, 5),
                         (StakeTable, 6),
                         (StakeTable, 7),
                     ]),
-                    with(&[
+                    epoch_probes(&[
                         (StateCert, 4),
                         (StateCert, 5),
                         (StateCert, 6),
                         (StateCert, 7),
                     ]),
-                    with(&[(LcStakeTable, 5), (LcStakeTable, 6), (LcStakeTable, 7)]),
+                    epoch_probes(&[(LcStakeTable, 5), (LcStakeTable, 6), (LcStakeTable, 7)]),
+                ]
+                .concat(),
+            ),
+            (
+                "epoch end at chunk start",
+                90..100,
+                Some(EPOCHS),
+                [
+                    per_height(90..100),
+                    epoch_probes(&[(StakeTable, 3), (StateCert, 3)]),
                 ]
                 .concat(),
             ),
