@@ -235,7 +235,7 @@ message HeaderV4 {
 }
 
 // The header shape introduced in protocol version 0.5, which added leader counts. Also used by
-// 0.6 and 0.7
+// 0.6 through 0.8
 message HeaderV5 {
   ResolvableChainConfig chain_config = 1;
 
@@ -254,7 +254,7 @@ message HeaderV5 {
   // Latest L1 block finalized when the block was proposed, absent when none was
   optional L1BlockInfo l1_finalized = 6;
 
-  // TaggedBase64. `AvidMCommit~` on 0.5 and `AvidmGf2Commit~` on 0.6 and 0.7, which share
+  // TaggedBase64. `AvidMCommit~` on 0.5 and `AvidmGf2Commit~` on 0.6 through 0.8, which share
   // this message
   string payload_commitment = 7;
 
@@ -293,7 +293,7 @@ message HeaderV5 {
 }
 
 // The arm names the protocol version that produced the header. Versions sharing a shape share a
-// message: 0.2 uses the 0.1 shape and 0.6 and 0.7 the 0.5 shape
+// message: 0.2 uses the 0.1 shape and 0.6 through 0.8 the 0.5 shape
 message HeaderResponse {
   oneof header {
     HeaderV1 v1 = 1;
@@ -303,5 +303,6 @@ message HeaderResponse {
     HeaderV5 v5 = 5;
     HeaderV5 v6 = 6;
     HeaderV5 v7 = 7;
+    HeaderV5 v8 = 8;
   }
 }

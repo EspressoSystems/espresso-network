@@ -576,6 +576,27 @@ impl Upgrade {
         let upgrade_type = UpgradeType::LargeBlock { chain_config };
         Upgrade { mode, upgrade_type }
     }
+
+    /// The 0.8 upgrade carries no chain-config change: it repeats the large
+    /// block configuration so the header keeps committing to it.
+    pub fn async_vid_view_based(address: Address) -> Upgrade {
+        let chain_config = ChainConfig {
+            base_fee: 0.into(),
+            stake_table_contract: Some(address),
+            max_block_size: (10 * 1024 * 1024).into(),
+            ..Default::default()
+        };
+
+        let mode = UpgradeMode::View(ViewBasedUpgrade {
+            start_voting_view: None,
+            stop_voting_view: None,
+            start_proposing_view: 200,
+            stop_proposing_view: 1000,
+        });
+
+        let upgrade_type = UpgradeType::AsyncVid { chain_config };
+        Upgrade { mode, upgrade_type }
+    }
 }
 
 #[cfg(any(test, feature = "testing"))]

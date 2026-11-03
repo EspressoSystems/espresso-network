@@ -895,7 +895,7 @@ pub mod testing {
     use test_utils::reserve_tcp_port;
     use tokio::time::timeout;
     use vbs::version::Version;
-    use versions::{EPOCH_VERSION, LARGE_BLOCK_VERSION};
+    use versions::{ASYNC_VID_VERSION, EPOCH_VERSION, LARGE_BLOCK_VERSION};
 
     use super::*;
     use crate::{
@@ -1126,7 +1126,9 @@ pub mod testing {
 
                     self.contracts = Some(contracts);
 
-                    if version >= LARGE_BLOCK_VERSION {
+                    if version >= ASYNC_VID_VERSION {
+                        Upgrade::async_vid_view_based(st_addr)
+                    } else if version >= LARGE_BLOCK_VERSION {
                         Upgrade::large_block_view_based(st_addr)
                     } else {
                         Upgrade::pos_view_based(st_addr)
