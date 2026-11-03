@@ -69,22 +69,6 @@ jobs:
           cargo clippy --workspace --features testing --all-targets --keep-going -- -D warnings
           cargo clippy -p slow-tests --features sqlite --all-targets --keep-going -- -D warnings
 
-  fuzz-targets:
-    name: fuzz targets
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: fuzz
-          save-if: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release-') }}
-
-      # `fuzz/` is its own workspace, so no other job builds it and an API change in `vid` or
-      # `espresso-types` would break the targets unnoticed. Running them needs nightly, this does not.
-      - name: Check the fuzz targets compile
-        run: cargo check --manifest-path fuzz/Cargo.toml --bins
-
   python:
     name: python
     runs-on: ubuntu-latest

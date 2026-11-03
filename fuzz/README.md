@@ -1,8 +1,8 @@
 # Fuzz targets
 
 Coverage-guided fuzzing with [cargo-fuzz](https://github.com/rust-fuzz/cargo-fuzz) for code that decodes or verifies
-bytes from peers and query servers. This crate has its own workspace and lockfile, so normal builds never compile
-libFuzzer.
+bytes from peers and query servers. The crate is a workspace member but not a default member, so a plain `cargo build`
+never compiles libFuzzer.
 
 | Target             | Input                                                      | Checks                                                                                    |
 | ------------------ | ---------------------------------------------------------- | ----------------------------------------------------------------------------------------- |

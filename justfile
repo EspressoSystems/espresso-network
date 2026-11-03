@@ -162,7 +162,8 @@ anvil *args:
 # slow-tests: slow and serial tests
 # espresso-dev-node: tested by test-dev-node
 # espresso-crypto-helper: vendored openssl leaks to workspace via feature unification
-nextest_excludes := "--exclude hotshot-new-protocol --exclude slow-tests --exclude espresso-dev-node --exclude espresso-crypto-helper"
+# espresso-fuzz: `--bins` builds the fuzz targets, whose `main` is libFuzzer's, not the test harness
+nextest_excludes := "--exclude hotshot-new-protocol --exclude slow-tests --exclude espresso-dev-node --exclude espresso-crypto-helper --exclude espresso-fuzz"
 
 nextest *args:
     cargo nextest run --locked --workspace {{nextest_excludes}} --lib --bins --tests --verbose {{args}}
