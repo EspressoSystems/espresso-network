@@ -790,11 +790,16 @@ Each step is judged over its second half. A step stopped early is judged over it
 | ----------------- | ------------------------------------------------------------ | ----------------------------------- |
 | decided MB/s      | validators' `consensus_finalized_bytes_sum`, Theil-Sen slope | < 80% of submitted                  |
 | view timeouts     | `consensus_number_of_timeouts`                               | > 0                                 |
-| consensus latency | submit until header on a validator                           | p50 > 1000 ms                       |
+| consensus latency | submit until a validator decides the including block         | p50 > 1000 ms                       |
 | query lag         | header on query node minus header on a validator             | p50 > 1000 ms, or growing > 50 ms/s |
 
 - Early stop (not with `--keep-going`): from 10 s into a step, decided < 80% of submitted over the last 10 s stops the
   step, which fails on the decided rule.
+- A validator's decide is when its `/v1/status/block-height` reaches the including block, polled every 100 ms on the
+  validators without query storage. On a query node that route is answered by its storage with the block count, one more
+  than the decided height, so it is left out, or polled without the +1 when every node is a query node. Polled with the
+  others, it showed every height one block early and the latency ended at the decide of the block before the including
+  one.
 - Without `--keep-going` the ramp stops at the first failing step, then runs one refine step halfway back.
 - A tx not yet matched to a block counts as late only as far as the scans prove: until the first height decided after it
   was sent whose scan is not finished reached a validator, or until now when there is none. A tx that timed out and was
