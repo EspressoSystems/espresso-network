@@ -10,7 +10,8 @@ Experiments are node features that are off unless switched on at startup. The sw
    `ESPRESSO_NODE_EXPERIMENTS` and in `--list-experiments`.
 2. Gate the code on `Experiment::X.enabled()`. Where `Options` is in scope, pass `&opt.experiments` and call
    `contains(Experiment::X)` instead, so tests need no global install.
-3. A setting that carries a value (a path, a size) stays an ordinary clap option; the variant gates whether it applies.
+3. A setting that carries a value (a path, a size) stays an ordinary clap option. The enabled set is the source of
+   truth: while the experiment is off, its settings are inert.
 4. Do not add ad-hoc env vars (`std::env::var` reads) for experiment switches.
 
 ## Off means unchanged
