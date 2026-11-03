@@ -201,8 +201,9 @@ decaf-2025 latency. Fits and comparisons are `vidwindow_runs.py fit` and `--clos
 **2f+1 against f+1** (10 × c8g.8xlarge, eu-west-1). At 15 Gbps the share transfer T falls from 1.2 to 0.69 ms per MB of
 block, but the next leader's build and encode, 1.36 ms/MB on this instance, then outlast the rebroadcast they hid under:
 the view is verify + max(vote1 + T, build + encode) + T, and the compute term binds. Measured capacity: f+1 300 to 332
-MB/s, 2f+1 370 ± 10; decaf f+1 230 ± 10, 2f+1 300 ± 10. The model says taking build and encode off the critical path,
-not the decode, is what releases the other half of the 2f+1 gain.
+MB/s, 2f+1 370 ± 10; decaf f+1 230 ± 10, 2f+1 300 ± 10 with the October driver, 250 and 350 ± 50 with the fixed one
+(below). The model says taking build and encode off the critical path, not the decode, is what releases the other half
+of the 2f+1 gain.
 
 **The matrix** (us-east-1, 12 fleets, c8g.2xlarge to c8g.16xlarge, 5, 10 and 20 nodes, about 100 USD). Measured capacity
 in MB/s, the model's capacity in brackets at the run's fitted compute and the instance's nominal bandwidth (15 Gbps, 30
@@ -234,12 +235,14 @@ The fixed costs, 7 ms each for the proposal's persistence and the vote, are the 
 **Why a run tips.** Above capacity a slow view leaves more transactions in the next leader's pool, the bigger block
 makes a longer view, and the loop runs to the 400 MB cap in a few views, with 100 to 400 MB sweeps, the builder's 500 ms
 `empty_block_delay` once the pool runs dry, and the submitter's 5 s in-flight window starving. The trigger is not CPU,
-NIC, disk or retries (at most 22 transactions were outstanding at the tipping point on the 16xlarge). It is the submit
-path: transactions are forwarded as 1 MB messages to the leaders of views v+2 and v+3 (`block.rs` `SEND_LEAD`, fanout 2)
-over the same in-order cliquenet connections that carry proposals and votes, and the coordinator hashes every forward
-(0.56 ms each). Proposal arrival by receiver role shows it, at 390 MB/s on 10 × c8g.16xlarge: 24 to 26 ms at the leaders
-of v+1 to v+3 against 19 ms elsewhere and 11 ms at 100 MB/s. Control messages into the upcoming leaders queue behind
-forwards, which is the same mechanism the model has for shares, one hop earlier.
+NIC, disk or retries (at most 22 transactions were outstanding at the tipping point on the 16xlarge). In these October
+runs it was the harness itself: the driver freed an in-flight slot only once it had fetched and scanned the including
+block from the query node, that scan path tops out near 250 MB/s under decaf latency, and once its lag (2.6 s at 300
+MB/s, 6 to 10 s at 350) filled the 5 s window the pacer stalled, the next leaders found empty pools, and the blocks
+alternated between empty and several times the steady size. The submit path does show load, proposals arriving 24 to 26
+ms at the leaders of v+1 to v+3 against 19 ms elsewhere at 390 MB/s on 10 × c8g.16xlarge, but the submit round trip
+rises the same at every node role, so it is not what tipped the runs. The 2 November runs below repeat the decaf pair
+with the driver counting its window against decided bytes instead.
 
 **The maximum block** (10 × c8g.8xlarge, off, 100 and 150 MB caps against 400). The model's capacity barely moves with
 the cap, 364 MB/s at 50 MB to 379 at 400, while finality at capacity goes from 224 ms to 1.8 s. The runs: at 100 MB the
@@ -263,22 +266,45 @@ decodes 1.9 to 2.0 × slower (1.0 to 1.16 ms/MB against 0.54 to 0.58), builds 1.
 and its proposal verification grows with the block where Graviton's stays at 5 to 6 ms. The ratios being the same at
 every block size points at the erasure-code kernel rather than memory or hashing.
 
+**The 2 November runs** (10 × c8g.8xlarge, us-east-1, decaf-2025, 400 MB cap, `bench-state/aws/brendon-20261102-*`, the
+driver of `bf/bench-decided-cap`). With the in-flight window counted against the nodes' decided bytes there are no cap
+waits and no empty views at the failing steps and the harness submits what it offers. Capacity moves up a step: f+1 250
+± 50 (300 fails with blocks run to the cap and p50 latency 1.9 s), 2f+1 350 ± 50 (400 fails on p50 latency 1.7 s with
+150 to 250 MB blocks and 300 to 500 ms views, decided 408 of 400 offered). The step above capacity now fails the way the
+model says it should, decided just under offered and the pool backlog growing, rather than by oscillation. The driver's
+scan still lags, 8 to 10 s at the failing steps and 25 s at 500 MB/s, which the harness reports as `noisy`; the fix for
+that is a binary payload route on the node (`crates/espresso/api/src/axum.rs` serves the v1 payload as JSON only).
+
+The same fleet then ran the image of `bench-control-lane-two-thirds`, `bench-control-lane` plus the 2f+1 switch, with
+every control message on its own cliquenet lane and shares, forwards and payload fetches on the other
+(`ESPRESSO_NODE_CLIQUENET_CONTROL_LANE=true`). Three runs: lane on at 2f+1, lane on at f+1, lane off at 2f+1 as the
+control, since that image also changes how a leader with an empty pool builds. Capacity: 350, 300 and 350 ± 50. The lane
+does not move the 2f+1 capacity, because the failing step is bound by throughput, decided 392 against 400 offered with
+the view at build + encode + transfer, which the lane does not shorten. It changes what happens past capacity: the next
+leader's vote1 collection stays at 133 to 160 ms at 450 and 500 MB/s with the lane where it reaches 330 to 340 without,
+and the lane run decides 440 to 465 MB/s with 178 to 198 MB blocks where the control decides 407 to 416 with blocks at
+the cap. Inclusion latency p50 is worse with the lane at those rates (12 to 16 s against 9 to 16), since more is
+accepted into a pool that cannot drain. The f+1 step gained over the earlier f+1 run on the other image has no lane-off
+f+1 control on this image, so it cannot be put on the lane.
+
 ## Next steps
 
 Model:
 
 - **Own-share verification** as a traced step and a per-MB cost on the pairing path, and a **per-connection tail** on
   the proposal's crossing, the two quarter-of-T terms above; then re-fit the matrix and the capacity table should close.
-- **An ingestion ceiling**: the forward path (two 1 MB forwards per transaction, hashed on the coordinator) as a term
-  that grows with rate, so the model predicts the tipping point, not only the steady state it never reaches.
+- **The closed loop past capacity**: with the driver fixed, the step above capacity is decided just under offered with a
+  growing pool, so the sweep's steady state is now what the runs reach; re-fit the capacity table from the 2 November
+  runs before adding any ingestion term.
 - **The recurrence's finality** is conservative against the fluid simulation by up to a third at large blocks (one
   transfer time for every flow); worth either accepting in the doc or giving the recurrence the fluid finish.
 - **Rate-mode tests** for `sweep` and `capacity` against the matrix's per-step tables, so the closed loop stays checked.
 
 Protocol, in the order the model ranks them:
 
-- **A control lane**, or forwards and shares off the in-order connections, or forward hashing off the coordinator:
-  removes the submit-path queueing that tips the runs and is the lane the model already values at 1.3 × throughput.
+- **A control lane** is measured: it keeps vote collection at its latency floor past capacity but does not raise the
+  2f+1 capacity, because the failing step is throughput-bound on build + encode + transfer; the model's 1.3 × for the
+  lane assumed the control messages were queueing at capacity, which they are not with the driver fixed.
 - **Build and encode off the proposal's critical path** (encode in the builder task, or propose before the dispersal
   ends): the other half of the 2f+1 gain.
 - **A 100 MB default maximum block** on this hardware, revisited with the lane in.
@@ -286,8 +312,8 @@ Protocol, in the order the model ranks them:
 
 Measurement:
 
-- Decaf at the 100 MB cap, and runs with a higher driver in-flight cap (`--cap-s`) to measure the plateau past capacity
-  rather than the tipping point.
+- Decaf at the 100 MB cap with the fixed driver, and an f+1 lane-off run on the lane image to settle the f+1 step.
+- The node's binary payload route, so the driver's scan keeps up past 350 MB/s and the runs stop reporting `noisy`.
 - The matrix scripts (`cell.sh`, `analyze.py`, `summary.py`) live outside the repo; they belong under
   `scripts/network-bench` with the harness so the table can be rerun on a new image.
 
