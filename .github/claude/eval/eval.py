@@ -24,6 +24,8 @@ import shutil
 import subprocess
 import sys
 import tomllib
+from collections.abc import AsyncIterator
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -53,6 +55,7 @@ def main() -> None:
     out = args.out or ROOT / f"{datetime.now(UTC):%Y%m%dT%H%M%SZ}-{args.model}"
     out.mkdir(parents=True)  # FileExistsError: never overwrite an earlier run
     logging.getLogger().setLevel(logging.INFO)
+    os.environ["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] = "1"  # the CLI inherits it
     prs = args.pr or list(cases)
     asyncio.run(evaluate(prs, args.model, args.prepare_only, args.jobs, out))
     if not args.prepare_only:
@@ -268,7 +271,7 @@ async def review(
     root = logging.getLogger()
     root.addHandler(handler)
     try:
-        code = await cg.amain(args, gh, env, cg.sdk_runner, wt / "tmp")
+        code = await cg.amain(args, gh, env, clean_runner, wt / "tmp")
     except Exception as e:  # one broken case must not cancel the others
         log.exception("review raised")
         code = f"error: {e!r}"
@@ -279,6 +282,11 @@ async def review(
     record = wt / "tmp" / "actions.json"
     if record.exists():
         shutil.copy(record, pr_out / "actions.json")
+
+
+def clean_runner(job: cg.Job) -> AsyncIterator[cg.Message]:
+    """No user settings or CLAUDE.md: CI has none."""
+    return cg.sdk_runner(replace(job, settings=[]))
 
 
 def exit_code(pr_out: Path) -> str:

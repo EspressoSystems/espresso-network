@@ -40,9 +40,8 @@ merge commit for PR-open reviews, the default branch head for `claude.yml` (incl
 
 - GitHub read access: `GH_TOKEN` if set, else `gh auth token`, else unauthenticated (60 requests per hour, enough for a
   few PRs).
-- Claude: `ANTHROPIC_API_KEY`, or an existing `claude` login.
-- Optional `CLAUDE_CONFIG_DIR`: a login without personal settings and CLAUDE.md:
-  `CLAUDE_CONFIG_DIR=$PWD/tmp/claude-config claude /login`, then `export CLAUDE_CONFIG_DIR=$PWD/tmp/claude-config`.
+- Claude: `ANTHROPIC_API_KEY`, or an existing `claude` login. User settings, CLAUDE.md and auto-memory are not loaded,
+  as in CI.
 - Optional `CLAUDE_CLI_PATH`: path to a `claude` binary. Needed on NixOS, where the SDK's bundled CLI does not run.
 
 ### Commands
