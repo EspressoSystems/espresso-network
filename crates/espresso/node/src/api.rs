@@ -12,11 +12,18 @@ use async_once_cell::Lazy;
 use async_trait::async_trait;
 use committable::Commitment;
 use data_source::{
-    CatchupDataSource, RequestResponseDataSource, StakeTableDataSource, StakeTableWithEpochNumber,
-    StateCertDataSource, StateCertFetchingDataSource, SubmitDataSource,
+    CatchupDataSource, RequestResponseDataSource, StakeTableDataSource, StateCertDataSource,
+    StateCertFetchingDataSource, SubmitDataSource,
 };
 use derivative::Derivative;
-use espresso_api::error::SubmitError;
+use espresso_api::{
+    error::SubmitError,
+    v1::{
+        database::{MigrationStatus, TableSize},
+        node::StakeTableWithEpochNumber,
+        status::NodePublicKeys,
+    },
+};
 use espresso_types::{
     AccountQueryData, AuthenticatedValidatorMap, BlockMerkleTree, ChainId, FeeAccount,
     FeeMerkleTree, Leaf2, NodeState, PubKey, Transaction,
@@ -61,8 +68,7 @@ use url::Url;
 use vbs::version::Version;
 
 use self::data_source::{
-    HotShotConfigDataSource, NodeKeysDataSource, NodePublicKeys, NodeStateDataSource,
-    StateSignatureDataSource,
+    HotShotConfigDataSource, NodeKeysDataSource, NodeStateDataSource, StateSignatureDataSource,
 };
 use crate::{
     SeqTypes,
@@ -744,11 +750,11 @@ impl<D: CatchupStorage + Send + Sync> data_source::DatabaseMetadataSource for St
 where
     D: data_source::DatabaseMetadataSource + Send + Sync,
 {
-    async fn get_table_sizes(&self) -> anyhow::Result<Vec<data_source::TableSize>> {
+    async fn get_table_sizes(&self) -> anyhow::Result<Vec<TableSize>> {
         self.inner().get_table_sizes().await
     }
 
-    async fn get_migration_status(&self) -> anyhow::Result<Vec<data_source::MigrationStatus>> {
+    async fn get_migration_status(&self) -> anyhow::Result<Vec<MigrationStatus>> {
         self.inner().get_migration_status().await
     }
 }
@@ -3849,7 +3855,7 @@ mod test {
         client.connect(Some(Duration::from_secs(15))).await;
 
         let table_sizes = client
-            .get::<Vec<data_source::TableSize>>("database/table-sizes")
+            .get::<Vec<TableSize>>("database/table-sizes")
             .send()
             .await
             .unwrap();
@@ -3858,7 +3864,7 @@ mod test {
         // Deferred backfill migrations register tracking rows at node startup, so the list may
         // be non-empty; just check the entries are well-formed.
         let migration_status = client
-            .get::<Vec<data_source::MigrationStatus>>("database/migration-status")
+            .get::<Vec<MigrationStatus>>("database/migration-status")
             .send()
             .await
             .unwrap();
@@ -10498,8 +10504,7 @@ mod test {
             .unwrap_err();
         assert_eq!(err.status, StatusCode::NOT_FOUND);
 
-        let v1_tables: Vec<crate::api::data_source::TableSize> =
-            client.get("database/table-sizes").send().await.unwrap();
+        let v1_tables: Vec<TableSize> = client.get("database/table-sizes").send().await.unwrap();
         let v2_tables: espresso_api::proto::TableSizesResponse =
             client.get("v2/database/table-sizes").send().await.unwrap();
         // Names are stable; row counts and byte sizes are not, since the network keeps deciding
