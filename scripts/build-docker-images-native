@@ -143,6 +143,7 @@ else
       node-validator
       orchestrator
       prover-service
+      query-watchdog
       espresso-node
       state-relay-server
       staking-cli
@@ -255,6 +256,9 @@ done
 
 mkdir -p "${workdir}/docker/scripts"
 cp -v docker/scripts/espresso-node-awssecretsmanager.sh "${workdir}/docker/scripts"
+
+mkdir -p "${workdir}/docker/query-watchdog"
+cp -v docker/query-watchdog/* "${workdir}/docker/query-watchdog/"
 
 # Copy the dev-node and espresso-node-entrypoint scripts, and the espresso-node-sqlite wrapper
 mkdir -p "${workdir}/scripts"

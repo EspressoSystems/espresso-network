@@ -7838,6 +7838,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "query-watchdog"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "chrono",
+ "clap 4.6.1",
+ "futures",
+ "humantime",
+ "pretty_assertions",
+ "prometheus",
+ "reqwest 0.12.28",
+ "serde",
+ "sqlx",
+ "strum 0.26.3",
+ "tokio",
+ "tracing",
+ "tracing-subscriber 0.3.23",
+ "url",
+]
+
+[[package]]
 name = "quick-error"
 version = "1.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
