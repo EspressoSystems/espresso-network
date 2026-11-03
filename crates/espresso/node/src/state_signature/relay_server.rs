@@ -382,12 +382,12 @@ mod test {
     type TestApiVer = StaticVersion<0, 1>;
 
     /// Fake sequencer serving just enough of `config/hotshot` for the relay's
-    /// [`stake_table_tracker::StakeTableTracker`] to bootstrap a genesis stake table with a
-    /// single validator, with `epoch_height: 0` so every lookup takes the genesis path.
-    async fn spawn_fake_sequencer(peer: PeerConfig<SeqTypes>) -> Url {
+    /// [`stake_table_tracker::StakeTableTracker`] to bootstrap a genesis stake table with
+    /// `peers`, with `epoch_height: 0` so every lookup takes the genesis path.
+    async fn spawn_fake_sequencer(peers: Vec<PeerConfig<SeqTypes>>) -> Url {
         let config = serde_json::json!({
             "config": {
-                "known_nodes_with_stake": [peer],
+                "known_nodes_with_stake": peers,
                 "epoch_height": 0,
                 "epoch_start_block": 0,
             }
@@ -419,6 +419,35 @@ mod test {
         format!("http://{addr}").parse().unwrap()
     }
 
+    /// A signature request from `validator` over `state` and `auth_root`, as a node signs it.
+    fn lcv3_request(
+        validator: &ValidatorConfig<SeqTypes>,
+        state: LightClientState,
+        auth_root: FixedBytes<32>,
+    ) -> LCV3StateSignatureRequestBody {
+        let next_stake = StakeTableState::default();
+        let digest = derive_signed_state_digest(&state, &next_stake, &auth_root);
+        let signature = <SchnorrPubKey as LCV3StateSignatureKey>::sign_state(
+            &validator.state_private_key,
+            digest,
+        )
+        .unwrap();
+        let v2_signature = <SchnorrPubKey as LCV2StateSignatureKey>::sign_state(
+            &validator.state_private_key,
+            &state,
+            &next_stake,
+        )
+        .unwrap();
+        LCV3StateSignatureRequestBody {
+            key: validator.state_public_key.clone(),
+            state,
+            next_stake,
+            auth_root,
+            signature,
+            v2_signature,
+        }
+    }
+
     /// Posts a signature the way `state_signature.rs` does (unversioned path, VBS-binary body),
     /// then fetches it back the way `hotshot-state-prover`'s v3 service does (unversioned path,
     /// default VBS-binary `Accept`).
@@ -430,7 +459,7 @@ mod test {
             U256::from(1),
             true,
         );
-        let sequencer_url = spawn_fake_sequencer(validator.public_config()).await;
+        let sequencer_url = spawn_fake_sequencer(vec![validator.public_config()]).await;
         let relay_url = spawn_relay(StateRelayServerState::new(sequencer_url)).await;
 
         let light_client_state = LightClientState {
@@ -438,28 +467,8 @@ mod test {
             block_height: 1,
             block_comm_root: Default::default(),
         };
-        let next_stake = StakeTableState::default();
-        let auth_root = FixedBytes::<32>::default();
-        let digest = derive_signed_state_digest(&light_client_state, &next_stake, &auth_root);
-        let signature = <SchnorrPubKey as LCV3StateSignatureKey>::sign_state(
-            &validator.state_private_key,
-            digest,
-        )
-        .unwrap();
-        let v2_signature = <SchnorrPubKey as LCV2StateSignatureKey>::sign_state(
-            &validator.state_private_key,
-            &light_client_state,
-            &next_stake,
-        )
-        .unwrap();
-        let request_body = LCV3StateSignatureRequestBody {
-            key: validator.state_public_key.clone(),
-            state: light_client_state,
-            next_stake,
-            auth_root,
-            signature,
-            v2_signature,
-        };
+        let request_body =
+            lcv3_request(&validator, light_client_state, FixedBytes::<32>::default());
 
         let client = Client::<ClientErr, TestApiVer>::new(relay_url);
         client
@@ -478,6 +487,61 @@ mod test {
         assert_eq!(bundle.state, light_client_state);
         assert_eq!(bundle.signatures.len(), 1);
         assert!(bundle.signatures.contains_key(&validator.state_public_key));
+    }
+
+    /// A signer posting the same state with another `auth_root` must not take over the bundle
+    /// the others sign into, or the served bundle carries signatures that do not verify against
+    /// it.
+    #[tokio::test]
+    async fn lcv3_bundle_holds_only_signatures_over_its_auth_root() {
+        let validators: Vec<_> = (0..3)
+            .map(|i| {
+                ValidatorConfig::<SeqTypes>::generated_from_seed_indexed(
+                    [7u8; 32],
+                    i,
+                    U256::from(1),
+                    true,
+                )
+            })
+            .collect();
+        let sequencer_url =
+            spawn_fake_sequencer(validators.iter().map(|v| v.public_config()).collect()).await;
+        let relay_url = spawn_relay(StateRelayServerState::new(sequencer_url)).await;
+        let client = Client::<ClientErr, TestApiVer>::new(relay_url);
+
+        let state = LightClientState {
+            view_number: 1,
+            block_height: 1,
+            block_comm_root: Default::default(),
+        };
+        let auth_root = FixedBytes::<32>::repeat_byte(1);
+        let forged_auth_root = FixedBytes::<32>::repeat_byte(2);
+        for (validator, root) in validators
+            .iter()
+            .zip([forged_auth_root, auth_root, auth_root])
+        {
+            client
+                .post::<()>("api/state")
+                .body_binary(&lcv3_request(validator, state, root))
+                .unwrap()
+                .send()
+                .await
+                .unwrap();
+        }
+
+        let bundle = client
+            .get::<LCV3StateSignaturesBundle>("api/lateststate")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(bundle.auth_root, auth_root);
+        let digest =
+            derive_signed_state_digest(&bundle.state, &bundle.next_stake, &bundle.auth_root);
+        for (key, signature) in &bundle.signatures {
+            assert!(<SchnorrPubKey as LCV3StateSignatureKey>::verify_state_sig(
+                key, signature, digest
+            ));
+        }
     }
 
     /// Like tide-disco, every response carries permissive CORS headers. The light client prover
