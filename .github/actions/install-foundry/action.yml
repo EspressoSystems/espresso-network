@@ -5,7 +5,11 @@ inputs:
   version:
     description: foundryup release to install (e.g. stable, v1.4.0, nightly)
     required: false
-    default: stable
+    # Anvil 1.9 mines each transaction into its own block with strictly increasing timestamps,
+    # so test setup bursts push L1 time ahead of the wall clock and fail the timestamp drift check.
+    # TODO: move to 1.9 once nixpkgs packages it, together with the nix bump and passing
+    # `--transaction-coalescing-window 5` to the test Anvil.
+    default: v1.8.7
 
 runs:
   using: composite
