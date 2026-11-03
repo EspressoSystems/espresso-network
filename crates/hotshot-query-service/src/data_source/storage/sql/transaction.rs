@@ -688,8 +688,11 @@ impl<Mode> Transaction<Mode> {
 impl Transaction<Write> {
     /// Record the height of the latest pruned header, and return the height now stored.
     ///
-    /// The pruner and a fresh pruned start both write it, so a lower height than the stored one
-    /// leaves it as is.
+    /// A lower height than the stored one leaves it as is. The pruner and a fresh pruned start both
+    /// write it, and a pruner run reads its starting height long before it writes. If a fresh
+    /// pruned start saves its height in between, a plain overwrite would move the height back down,
+    /// and the fetches of missing parents would then download the whole history. The plain
+    /// `upsert` helper can neither keep the larger value nor return the stored one.
     pub(crate) async fn save_pruned_height(&mut self, height: u64) -> anyhow::Result<u64> {
         let stmt = format!(
             "INSERT INTO pruned_height (id, last_height) VALUES ($1, $2)
