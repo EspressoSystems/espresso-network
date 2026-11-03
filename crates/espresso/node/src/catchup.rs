@@ -61,6 +61,9 @@ use crate::api::{
     BlocksFrontier, RewardMerkleTreeDataSource, RewardMerkleTreeV2Data, context::ConsensusSource,
 };
 
+/// The most accounts a peer may ask for in one catchup request.
+pub const MAX_CATCHUP_ACCOUNTS: usize = 10_000;
+
 // This newtype is probably not worth having. It's only used to be able to log
 // URLs before doing requests.
 #[derive(Debug, Clone)]
