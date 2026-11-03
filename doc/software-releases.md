@@ -196,9 +196,10 @@ gh workflow run release-branch.yml -f version=X.Y.Z -f source_ref=$(git rev-pars
 
 ## Protection
 
-- Tracker commands and `workflow_dispatch` require write access (`admin`, `maintain` or `write`). The workflow `if:`
-  filters on `author_association` to skip runs cheaply; `scripts/release` checks the commenter's permission via the
-  collaborators API, and mark replay ignores commands by users without write access.
+- Tracker commands require org membership and write access (`admin`, `maintain` or `write`); `workflow_dispatch`
+  requires write access. The workflow `if:` accepts only `author_association` OWNER or MEMBER to skip runs cheaply;
+  `scripts/release` checks the commenter's permission via the collaborators API, and mark replay ignores commands by
+  users without write access.
 - Trackers are only recognized when opened by `github-actions[bot]`. They are not locked: the workflow token cannot
   comment on locked issues.
 - Concurrency groups are job-level, so skipped runs from outside comments or fork PRs never cancel a pending run.

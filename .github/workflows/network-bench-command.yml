@@ -5,7 +5,7 @@ name: Network benchmark command
 #
 # Security model:
 # - This workflow runs main's code with a writable token and never checks out the pull request.
-# - Comments by OWNER, MEMBER and COLLABORATOR are accepted. MEMBER includes organization members
+# - Comments by OWNER and MEMBER are accepted. MEMBER includes organization members
 #   with read access only, so the check limits who can start a run, not what the run can do.
 # - Only same-repo pull requests are dispatched; their branch was pushed by someone with write
 #   access. Fork pull requests are refused, so no outside code runs.
@@ -34,7 +34,7 @@ jobs:
       startsWith(github.event.comment.body, '/benchmark ') ||
       startsWith(github.event.comment.body, format('/benchmark{0}', fromJSON('"\n"'))) ||
       startsWith(github.event.comment.body, format('/benchmark{0}', fromJSON('"\r"')))) &&
-      contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.comment.author_association)
+      contains(fromJSON('["OWNER", "MEMBER"]'), github.event.comment.author_association)
     runs-on: ubuntu-latest
     timeout-minutes: 5
     env:
