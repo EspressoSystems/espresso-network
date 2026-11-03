@@ -316,6 +316,17 @@ MB; 350 collapses to the cap). The lane is worth one step at either threshold on
 November verdict at 400 MB/s on 2f+1 was the scan's lag counted as latency. Timeouts are now only the query node's lost
 blocks, 565 to 633 on the f+1 runs, none on 2f+1.
 
+**The block-building changes** (17:02 UTC, 3 November: the same lane image with #5382 reuse of the pool's hashes, #5401
+timing of the leader's dispersal, #5392 encode once in the builder and #5432 the proposal's view tag cherry-picked on;
+the same four runs). Capacity does not move: lane on 400 and 300, lane off 350 and 250. Against the 15:01 runs the
+passing steps' verdicts read 559, 609, 702 and 755 ms on lane 2f+1 against 564, 616, 707 and 818, and 562, 674 and 735
+on lane-off 2f+1 against 560, 683 and 729; the failing step above capacity lands at 1155 against 1255 (lane) and 1066
+against 1150 (lane off). On the leader's path the builder now erasure-codes the block before `block_built_applied`, so
+the encode leaves the dispersal step (5 to 17 ms p50 at 250 to 400 MB/s, now under 1 ms) and the build segment that
+absorbed it still shrinks by 2 to 7 ms; request to shares-out is 6 to 18 ms shorter per view at the passing rates and 25
+ms at 450. The verdict moves by that much or less, so the changes are worth about one leader's encode per view and do
+not reach the next step: the pool wait and the first Cert1, not the leader's build, set the verdict here.
+
 ## Next steps
 
 Model:
