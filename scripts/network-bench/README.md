@@ -121,14 +121,20 @@ just bench aws run --tag release-x --nodes 3 --search 120 --resolution-mb-s 2 --
 just bench aws run --tag release-x
 ```
 
-- `--keep-going` runs every step with no refine step, then stops the load and drains for up to
-  `max(300 s, --tx-timeout-s)`. The summary reports this as the backlog drain time.
+- `--keep-going` runs every step with no refine step.
+- After every step the load stops and the step settles before its verdict: the backlog drains (consensus idle, then
+  `IDLE_BLOCKS` more blocks on the query node, up to `max(300 s, --tx-timeout-s)`), then the scan catches up with every
+  block the query node shows. The verdict is then over everything the scan found, so a scan behind the chain only makes
+  the run longer. The summary reports what the settles took; a step whose backlog did not drain is named. Without
+  `--keep-going` a failed step whose backlog did not drain skips the refine step.
 - Inclusion is read from the query node: each block's payload is fetched (12 fetches at a time, `SCAN_PROCESSES`) and
-  scanned for the load's marker. The in-flight cap (`--cap-s`) counts transactions submitted and not yet decided by the validators'
-  counters, so a query node or a scan that falls behind does not throttle the load; a lag above `--tx-timeout-s` still
-  times transactions out, so it needs to exceed the expected lag (e.g. 600).
-- A long `--tx-timeout-s` raises the TTL bound; raise `--max-usd` when `plan` reports it over 10.
-- Transactions of a lost payload stay pending until `--tx-timeout-s`, and the end of the run waits for them.
+  scanned for the load's marker. The in-flight cap (`--cap-s`) counts transactions submitted and not yet decided by the
+  validators' counters, so a query node or a scan that falls behind does not throttle the load.
+- A transaction times out once every block the query node showed within `--tx-timeout-s` of its submit has been scanned
+  without it; a scan behind the chain defers the timeout, it never causes one. Once a step's backlog drained and the scan
+  caught up, what is still pending is lost and times out at once. A payload no query node serves for 10 s after its
+  block appeared (`MISSING_PAYLOAD_S`) counts as lost with its transactions.
+- `--tx-timeout-s` is also how long a settle waits on a scan that makes no progress before giving it up.
 - The CI job does not fit this mode: its step timeout is 15 min.
 
 ### Local

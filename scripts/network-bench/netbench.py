@@ -73,8 +73,6 @@ DRAIN_IDLE_S = 5.0
 IDLE_BLOCKS = 3
 # Decided bytes per heartbeat: an 8-byte payload plus its 4-byte offset in the tx table.
 HEARTBEAT_TX_BYTES = 12
-# After that, the wait for sent transactions to resolve; the tracker scans a block behind.
-DRAIN_GRACE_S = 10.0
 # A drain gives up after this long without a new validator height, or in total.
 DRAIN_STALL_S = 30.0
 DRAIN_MAX_S = 300.0
@@ -277,7 +275,7 @@ class LoadStats(TypedDict):
     # Per height: the bench finished scanning its payload after it could start.
     tracker_lag_ms: Quantiles | None
     # Before the refine step; skipped if the failed step's backlog did not drain in time.
-    # With keep_going: after the last step, None past `final_drain_max_s`.
+    # Of the last step's settle; None if the backlog did not drain (see `settle`).
     drain_s: float | None
     refine_skipped: bool
     # Why the staircase ended; None for runs recorded before it existed.
@@ -335,6 +333,9 @@ class StepResult(StepWindow, StepMeasures):
     passed: bool
     # Present only on a step that `pace_while_keeping_up` stopped.
     stopped_early: NotRequired[bool]
+    # The step's settle (see `settle`); absent from runs recorded before it.
+    drain_s: NotRequired[float | None]
+    catch_up_s: NotRequired[float]
 
 
 class Limit(TypedDict):
@@ -459,6 +460,8 @@ class BenchConfig:
     # Safety cap on transactions in flight, submitted and not yet decided by the validators'
     # counters: this many seconds of the current step's load.
     cap_s: float = 5.0
+    # A transaction not found in any block the query node showed within this many seconds of
+    # its submit is lost. Also how long a settle waits on a scan that makes no progress.
     tx_timeout_s: int = 30
     # At the first step's rate.
     warmup_s: int = 60
@@ -466,8 +469,7 @@ class BenchConfig:
     # A step fails above either target, see step_fails.
     latency_target_ms: int = 1000
     query_lag_target_ms: int = 1000
-    # Every step runs whatever its verdict, no refine step; then the backlog drains, see
-    # run_staircase. In flight and tx timeouts stay bound by `cap_s` and `tx_timeout_s`.
+    # Every step runs whatever its verdict, no refine step; see run_staircase.
     keep_going: bool = False
     # Unmarked 8-byte transactions per second for the whole run, so a leader never builds from
     # an empty buffer and sleeps its empty block delay, as after a drain; 0 for none.
@@ -509,6 +511,14 @@ class Probe(TypedDict):
     rate_mb_s: float
     kind: ProbeKind
     duration_s: int
+
+
+class Settle(TypedDict):
+    """What a step's settle took: the backlog's drain, None if it did not drain, then the
+    scan's catch-up."""
+
+    drain_s: float | None
+    catch_up_s: float
 
 
 class StaircaseEnd(TypedDict):
@@ -1284,8 +1294,8 @@ async def generate_load(
     scan_processes: int = 0,
     search: SearchConfig | None = None,
 ) -> tuple[float, float]:
-    """The load staircase, then up to `tx_timeout_s` for the stragglers. Returns when the
-    steps started and ended. Writes one line per transaction to load.jsonl, per block height
+    """The load staircase, each step settled before its verdict. Returns when the steps
+    started and ended. Writes one line per transaction to load.jsonl, per block height
     to heights.jsonl, per consensus counter sample (the highest over the validators) to
     consensus.jsonl, per step to steps.json, and the counters to load-meta.json. Payload scans
     run in `scan_processes` processes, or on a thread of this one if 0. With `cfg.clients`,
@@ -1524,9 +1534,9 @@ async def run_staircase(
     out: Path,
     search: SearchConfig | None = None,
 ) -> StaircaseEnd:
-    """Warmup, then the ramp or, with `search`, the capacity search. Each step is judged on
-    what is known at its end; the report keeps that verdict. Appends to `steps` as they end and
-    rewrites `out`/steps.json each time, so a run cut short keeps them."""
+    """Warmup, then the ramp or, with `search`, the capacity search. Each step is judged
+    once the load stopped and the scan caught up with it (see `run_probe`); the report keeps
+    that verdict."""
     cfg = load.cfg
     warmup_mb_s = search.start_mb_s if search else cfg.steps[0]
     async with asyncio.TaskGroup() as submits:
@@ -1548,48 +1558,33 @@ async def ramp_steps(
     steps: list[dict[str, Any]],
     out: Path,
 ) -> StaircaseEnd:
-    """Steps up the ramp until one fails, then one refine step once the failed step's backlog
-    drained. The drain timing out skips the refine step. With `keep_going` every step of the
-    ramp runs, without a refine step, and the drain follows the last step."""
+    """Steps up the ramp until one fails, then one refine step. A failed step whose backlog
+    did not drain in its settle skips the refine step. With `keep_going` every step of the
+    ramp runs, without a refine step."""
     cfg = load.cfg
     passed: list[bool] = []
-    drained, skipped = None, False
+    skipped = False
     while (rate := next_rate(cfg.steps, passed, cfg.keep_going)) is not None:
         refine = not cfg.keep_going and not all(passed)
-        if refine:
-            drained = await cooldown(load, heights, counters)
-            if drained is None:
-                log.warning("backlog did not drain, skipping the refine step")
-                skipped = True
-                break
         judged = await run_probe(
             load,
             submits,
             heights,
             counters,
+            steps,
+            out,
             rate,
             cfg.step_s,
             "refine" if refine else "ramp",
             f"step {len(steps) + 1}" + (" refine" if refine else ""),
         )
         passed.append(not side_fails(judged, "overall"))
-        steps.append(judged)
-        write_json(out / "steps.json", steps)
-    if cfg.keep_going:
-        drained = await drain(
-            load.state,
-            counters,
-            heights,
-            load.clock,
-            cfg.tx_size,
-            final_drain_max_s(cfg.tx_timeout_s),
-        )
-        if drained is None:
-            log.warning("backlog did not drain")
-        else:
-            log.info("backlog drained in %.1f s", drained)
+        if judged["drain_s"] is None and not (passed[-1] or refine or cfg.keep_going):
+            log.warning("backlog did not drain, skipping the refine step")
+            skipped = True
+            break
     return {
-        "drain_s": drained,
+        "drain_s": steps[-1]["drain_s"] if steps else None,
         "refine_skipped": skipped,
         "stop_reason": ramp_stop_reason(passed, skipped, cfg.keep_going),
     }
@@ -1612,11 +1607,11 @@ async def search_probes(
     out: Path,
     search: SearchConfig,
 ) -> StaircaseEnd:
-    """Probes chosen by `next_probe` until it names a stop reason. A resolved search whose
-    only limit is the query service goes on to search the consensus limit."""
+    """Probes chosen by `next_probe` until it names a stop reason, or a failed probe's
+    backlog does not drain. A resolved search whose only limit is the query service goes on
+    to search the consensus limit."""
     cfg = load.cfg
     side: Side = "overall"
-    drained = None
     while True:
         found = next_probe(steps, search, cfg, side)
         if side == "overall" and found == "resolved" and search_sides(steps):
@@ -1626,28 +1621,30 @@ async def search_probes(
         if isinstance(found, str):
             reason = found
             break
-        if steps and side_fails(steps[-1], "overall"):
-            drained = await cooldown(load, heights, counters)
-            if drained is None:
-                log.warning("backlog did not drain, stopping the search")
-                reason = "drain timeout"
-                break
         label = search_log_prefix(steps, found, side)
         judged = await run_probe(
             load,
             submits,
             heights,
             counters,
+            steps,
+            out,
             found["rate_mb_s"],
             found["duration_s"],
             found["kind"],
             f"probe {len(steps) + 1} {found['kind']}",
             label,
         )
-        steps.append(judged)
-        write_json(out / "steps.json", steps)
+        if judged["drain_s"] is None and side_fails(judged, "overall"):
+            log.warning("backlog did not drain, stopping the search")
+            reason = "drain timeout"
+            break
     log.info("search: %s after %d probes", reason, len(steps))
-    return {"drain_s": drained, "refine_skipped": False, "stop_reason": reason}
+    return {
+        "drain_s": steps[-1]["drain_s"] if steps else None,
+        "refine_skipped": False,
+        "stop_reason": reason,
+    }
 
 
 async def run_probe(
@@ -1655,15 +1652,20 @@ async def run_probe(
     submits: asyncio.TaskGroup,
     heights: "Heights",
     counters: list[dict[str, Any]],
+    steps: list[dict[str, Any]],
+    out: Path,
     rate: float,
     duration_s: float,
     kind: ProbeKind,
     name: str,
     label: str | None = None,
 ) -> dict[str, Any]:
-    """One step at `rate` for `duration_s`, measured over its second half, and its verdict.
-    Without `keep_going` a step falling behind stops early and is measured over its last
-    BEHIND_WINDOW_S."""
+    """One step at `rate` for `duration_s`, measured over its second half; then the load
+    stops until the backlog drained and the scan caught up (see `settle`), and the step is
+    judged on everything the scan found. Appends the step to `steps` and `out`/steps.json
+    with a provisional verdict as soon as the load stops, so a settle cut short keeps it,
+    and with the verdict once settled. Without `keep_going` a step falling behind stops
+    early and is measured over its last BEHIND_WINDOW_S."""
     start = load.clock.time()
     cap_waits = load.state.cap_waits
     load.state.phase = Phase(name, rate, start, duration_s)
@@ -1683,16 +1685,73 @@ async def run_probe(
     }
     if stopped is not None:
         step["t_mid"], step["t_end"] = stopped - BEHIND_WINDOW_S, stopped
+    extra: dict[str, Any] = {"cap_waits": load.state.cap_waits - cap_waits}
+    if stopped is not None:
+        extra["stopped_early"] = True
+    steps.append(judge(load, step, heights, counters) | extra)
+    write_json(out / "steps.json", steps)
+    settled = await settle(load, heights, counters)
+    judged = judge(load, step, heights, counters) | extra | settled
+    log_step(judged, side_fails(judged, "overall"), label)
+    steps[-1] = judged
+    write_json(out / "steps.json", steps)
+    return judged
+
+
+def judge(
+    load: Load,
+    step: StepWindow,
+    heights: "Heights",
+    counters: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """The step's verdict on what the scan has found so far."""
     # Only what the judge reads: copying every tx of the run stalls the pacer as the run grows.
     txs = [vars(tx).copy() for tx in load.state.txs if tx.t_submit >= step["t_mid"]]
-    judged = judge_step(
+    return judge_step(
         step, load.cfg, txs, list(heights.records()), counters, load.clock.time()
     )
-    judged["cap_waits"] = load.state.cap_waits - cap_waits
-    if stopped is not None:
-        judged["stopped_early"] = True
-    log_step(judged, side_fails(judged, "overall"), label)
-    return judged
+
+
+async def settle(
+    load: Load, heights: "Heights", counters: list[dict[str, Any]]
+) -> Settle:
+    """Stops the load and waits for what a verdict needs: the backlog decided (see `drain`),
+    then every block the query node shows scanned, or given up on, and every transaction
+    included or timed out. Once drained and caught up a pending transaction is lost, so it
+    times out at once. A scan that makes no progress for `tx_timeout_s` is given up on, and
+    what it has not found times out."""
+    cfg, state, clock = load.cfg, load.state, load.clock
+    drained = await drain(
+        state,
+        counters,
+        heights,
+        clock,
+        cfg.tx_size,
+        final_drain_max_s(cfg.tx_timeout_s),
+    )
+    if drained is None:
+        log.warning("backlog did not drain")
+    else:
+        log.info("backlog drained in %.1f s", drained)
+    start = clock.time()
+    state.phase = Phase("catch-up", None, start, 0.0)
+    moved, progress = start, (heights.front(), heights.fetches)
+    while state.pending:
+        now = clock.time()
+        if (heights.front(), heights.fetches) != progress:
+            moved, progress = now, (heights.front(), heights.fetches)
+        lost = drained is not None and heights.caught_up()
+        if not lost and now - moved <= cfg.tx_timeout_s:
+            await clock.asleep(0.1)
+            continue
+        if not lost:
+            log.warning(
+                "scan stalled at height %d for %.0f s", heights.front(), now - moved
+            )
+        log.info("%d transactions lost", len(state.pending))
+        for tx_id in list(state.pending):
+            state.resolve(tx_id, "timeout", now)
+    return {"drain_s": drained, "catch_up_s": clock.time() - start}
 
 
 async def pace_while_keeping_up(
@@ -1754,16 +1813,6 @@ def keep_up(
     if decided is None or not submitted:
         return None
     return decided / submitted
-
-
-async def cooldown(
-    load: Load, heights: "Heights", counters: list[dict[str, Any]]
-) -> float | None:
-    """Drain after a failed step; None if it timed out."""
-    drained = await drain(load.state, counters, heights, load.clock, load.cfg.tx_size)
-    if drained is not None:
-        log.info("backlog drained in %.1f s", drained)
-    return drained
 
 
 def next_probe(
@@ -1910,19 +1959,12 @@ async def drain(
 ) -> float | None:
     """Drops the transactions never sent and submits nothing more. Drained once consensus is
     idle (see `is_idle`) and the query node shows IDLE_BLOCKS validator heights past the idle
-    point, with a counter sample taken after the last of them; then waits up to DRAIN_GRACE_S
-    for pending transactions. Seconds that took, or None if no validator height appeared for
-    DRAIN_STALL_S or after `max_s`."""
+    point, with a counter sample taken after the last of them. Seconds that took, or None if
+    no validator height appeared for DRAIN_STALL_S or after `max_s`."""
     drop_unsent(state)
     start = clock.time()
     state.phase = Phase("drain", None, start, max_s)
     drained = await wait_drained(counters, heights, clock, tx_size, max_s)
-    if drained:
-        grace = clock.time() + DRAIN_GRACE_S
-        while state.pending and clock.time() < grace:
-            await clock.asleep(0.1)
-    if state.pending:
-        log.info("%d sent transactions still pending", len(state.pending))
     return clock.time() - start if drained else None
 
 
@@ -2139,6 +2181,26 @@ class Heights:
             "validator": {},
         }
         self.scanned: dict[int, float] = {}
+        # The next height the scan takes, in order, and the heights it passed over for want
+        # of a payload, with when each was last tried (see `retry_missing`).
+        self.next_scan = start
+        self.missing: dict[int, float] = {}
+        # Payload fetches a query node answered: the scan's progress within a batch.
+        self.fetches = 0
+
+    def front(self) -> int:
+        """The lowest height neither scanned nor given up on: every block below is final."""
+        return min(self.missing, default=self.next_scan)
+
+    def final_until(self, now: float) -> float:
+        """Blocks the query node showed before this time are all scanned or given up on, so
+        a transaction submitted `tx_timeout_s` before it and not found by now is lost."""
+        return self.seen["query"].get(self.front(), now)
+
+    def caught_up(self) -> bool:
+        """Whether the scan has every block the query node shows but the last
+        PAYLOAD_LAG_BLOCKS, which it takes once the next appears."""
+        return self.front() >= self.top("query") - PAYLOAD_LAG_BLOCKS
 
     def top(self, source: HeightSource) -> int:
         return self.start + len(self.seen[source])
@@ -2234,14 +2296,14 @@ async def track_inclusion(
     done: asyncio.Event,
     clock: Clock,
 ) -> None:
-    """Scan every new block's payload for our marker; time out transactions that never show.
-    A transaction counts as included when its block's header appeared on the query node. A
-    payload no query node has is retried after each scan until MISSING_PAYLOAD_S."""
-    deadline = None
+    """Scan every new block's payload for our marker. A transaction counts as included when
+    its block's header appeared on the query node. It times out once every block the query
+    node showed within `tx_timeout_s` of its submit is scanned, or given up on, without it:
+    a scan that runs behind defers the timeout and never causes one. A payload no query node
+    has is retried after each scan until MISSING_PAYLOAD_S. Whatever is still pending at
+    `done` times out."""
     report = clock.time() + PROGRESS_S
     reported_timeouts = 0
-    height = heights.start
-    missing: dict[int, float] = {}
     while True:
         now = clock.time()
         if now >= report:
@@ -2255,29 +2317,33 @@ async def track_inclusion(
             )
             report, reported_timeouts = now + PROGRESS_S, state.timeouts
         if done.is_set():
-            if deadline is None:
-                deadline = now + cfg.tx_timeout_s
-                state.phase = Phase("done", None, now, cfg.tx_timeout_s)
-            if not state.pending or (now > deadline and not missing):
-                for tx_id in list(state.pending):
-                    state.resolve(tx_id, "timeout", now)
-                log_totals(state)
-                return
+            for tx_id in list(state.pending):
+                state.resolve(tx_id, "timeout", now)
+            log_totals(state)
+            return
+        final = heights.final_until(now)
         for tx in [
-            tx for tx in state.pending.values() if now - tx.t_submit > cfg.tx_timeout_s
+            tx
+            for tx in state.pending.values()
+            if tx.t_submit + cfg.tx_timeout_s < final
         ]:
             state.resolve(tx.id, "timeout", now)
         top = heights.top("query")
-        while height < top - PAYLOAD_LAG_BLOCKS:
-            batch = range(height, min(top - PAYLOAD_LAG_BLOCKS, height + SCAN_BATCH))
-            scans = await asyncio.gather(*(scan_stamped(scan, h, clock) for h in batch))
+        while heights.next_scan < top - PAYLOAD_LAG_BLOCKS:
+            batch = range(
+                heights.next_scan,
+                min(top - PAYLOAD_LAG_BLOCKS, heights.next_scan + SCAN_BATCH),
+            )
+            scans = await asyncio.gather(
+                *(scan_stamped(scan, h, heights, clock) for h in batch)
+            )
             for h, (ids, at, answered) in zip(batch, scans):
                 if ids is None:
-                    missing[h] = heights.seen["query"][h] if answered else at
+                    heights.missing[h] = heights.seen["query"][h] if answered else at
                 else:
                     record_inclusions(state, ids, heights, h, at)
-            height = batch.stop
-        await retry_missing(state, scan, heights, missing, clock)
+            heights.next_scan = batch.stop
+        await retry_missing(state, scan, heights, clock)
         await clock.asleep(0.1)
 
 
@@ -2285,20 +2351,19 @@ async def retry_missing(
     state: LoadState,
     scan: Scan,
     heights: Heights,
-    missing: dict[int, float],
     clock: Clock,
 ) -> None:
     """One fetch per missing payload. Past MISSING_PAYLOAD_S after its block appeared a
     payload counts as lost; its transactions, which cannot be told apart, time out. The
     time restarts while every query node refuses."""
-    for height, at_height in list(missing.items()):
-        ids, at, answered = await scan_stamped(scan, height, clock)
+    for height, at_height in list(heights.missing.items()):
+        ids, at, answered = await scan_stamped(scan, height, heights, clock)
         if not answered:
-            missing[height] = at
+            heights.missing[height] = at
             continue
         if ids is None and at - at_height < MISSING_PAYLOAD_S:
             continue
-        del missing[height]
+        del heights.missing[height]
         if ids is None:
             log.warning("payload %d missing on every query node, skipping", height)
             state.missing_payloads.append(height)
@@ -2307,7 +2372,7 @@ async def retry_missing(
 
 
 async def scan_stamped(
-    scan: Scan, height: int, clock: Clock
+    scan: Scan, height: int, heights: Heights, clock: Clock
 ) -> tuple[list[int] | None, float, bool]:
     """The scan, when it finished (so blocks scanned together are not stamped alike) and
     whether a query node answered."""
@@ -2315,6 +2380,7 @@ async def scan_stamped(
         ids, answered = await scan(height), True
     except NoAnswer:
         ids, answered = None, False
+    heights.fetches += answered
     return ids, clock.time(), answered
 
 
@@ -2816,6 +2882,11 @@ def step_result(
     }
     if "stopped_early" in judged:
         result["stopped_early"] = True
+    # steps.json of runs before the settle lacks these.
+    if "drain_s" in judged:
+        result["drain_s"] = judged["drain_s"]
+    if "catch_up_s" in judged:
+        result["catch_up_s"] = judged["catch_up_s"]
     return result
 
 
@@ -3994,7 +4065,8 @@ def load_lines(result: BenchResult) -> list[str]:
             if load["refine_skipped"]
             else []
         ),
-        *drain_lines(
+        *settle_lines(
+            result["steps"],
             load["drain_s"],
             cfg["keep_going"],
             final_drain_max_s(cfg["tx_timeout_s"]),
@@ -4011,6 +4083,35 @@ def client_lines(c: ClientStats) -> list[str]:
         f"- reader lag behind a validator: {spread(c['lag_ms'])}",
         f"- reader fetch time per range: {spread(c['fetch_ms'])}",
     ]
+
+
+def settle_lines(
+    steps: Sequence[StepResult], drain_s: float | None, keep_going: bool, max_s: float
+) -> list[str]:
+    """The settles after the steps; a run recorded before them has only its last drain."""
+    settled = [s for s in steps if "drain_s" in s]
+    if not settled:
+        return drain_lines(drain_s, keep_going, max_s)
+    drains = [s["drain_s"] for s in settled if s["drain_s"] is not None]
+    catch_ups = [s["catch_up_s"] for s in settled if "catch_up_s" in s]
+    undrained = [fmt_num(s["rate_mb_s"]) for s in settled if s["drain_s"] is None]
+    settled_line = (
+        "- each step settled before its verdict: the backlog drained in "
+        f"{fmt_seconds(drains)}, then the scan caught up in {fmt_seconds(catch_ups)}"
+    )
+    lines = [settled_line]
+    if undrained:
+        lines.append(
+            f"- backlog did not drain (chain stalled or cap of {max_s:.0f} s) after "
+            f"{', '.join(undrained)} MB/s"
+        )
+    return lines
+
+
+def fmt_seconds(values: Sequence[float]) -> str:
+    if not values:
+        return "n/a"
+    return f"p50 {statistics.median(values):.1f} s, max {max(values):.1f} s"
 
 
 def drain_lines(drain_s: float | None, keep_going: bool, max_s: float) -> list[str]:

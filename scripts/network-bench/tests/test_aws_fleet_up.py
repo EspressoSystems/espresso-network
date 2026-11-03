@@ -306,7 +306,7 @@ def expires_in(minutes: int) -> dict:
     ("changes", "flags", "pattern"),
     [
         ({"phase": "destroying"}, (), "is destroying, not idle"),
-        (expires_in(10), (), r"\d\d min left.*needs up to \d\d: up a new fleet"),
+        (expires_in(10), (), r"\d\d min left.*needs up to \d+: up a new fleet"),
         # EDGE:fleet-ttl-expired
         (expires_in(-5), (), r"expired at .*status.*destroy --orphans"),
         ({}, ("--nodes", "3"), "shape the fleet"),

@@ -497,6 +497,41 @@ def test_cap_frees_with_decided_blocks_while_the_scan_lags(load):
     assert run.meta["max_in_flight"] < 50
 
 
+def test_a_scan_behind_the_chain_defers_timeouts_and_the_verdict(load):
+    """Every payload takes 2 s to fetch against 50 ms blocks, so within the step the scan
+    finds next to nothing; the step settles until it has, nothing times out, and the verdict
+    sees the real latency."""
+    run = load(3.0, include=True, cap_txs=100, tx_timeout_s=3, payload_delay=2.0)
+    assert included(run.txs)
+    assert max_latency(run.txs) < 0.3
+    (step,) = run.steps
+    assert not step["consensus_fails"]
+    assert step["drain_s"] is not None
+    assert step["catch_up_s"] > 10.0
+
+
+def test_a_query_node_that_stops_serving_payloads_is_given_up_on(
+    load, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+):
+    """Payload fetches are refused from 0.3 s on: the settle waits `tx_timeout_s` for the
+    scan to move, then the transactions it has not found time out."""
+
+    class Gone(fakes.FakeNode):
+        def get(self, path: str, accept: str = netbench.JSON) -> tuple[int, bytes]:
+            if path.startswith("/v1/availability/payload/") and self.clock.time() > 0.3:
+                raise ConnectionRefusedError("gone")
+            return super().get(path, accept)
+
+    monkeypatch.setattr(fakes, "FakeNode", Gone)
+    run = load(0.5, include=True, cap_txs=100, tx_timeout_s=2)
+    statuses = collections.Counter(tx["status"] for tx in run.txs)
+    assert statuses["included"] > 0 and statuses["timeout"] > 0
+    (step,) = run.steps
+    assert step["catch_up_s"] == pytest.approx(2.0, abs=0.3)
+    assert run.meta["missing_payloads"] == []
+    assert "scan stalled" in caplog.text
+
+
 def test_cap_blocks_until_timeout(load):
     """Room under the cap frees only on timeout, the first 1 s after the first submit."""
     run = load(2.5, include=False, rate=1.0, cap_txs=4, tx_timeout_s=1)
@@ -663,17 +698,20 @@ def test_backlog_not_drained(
     assert run.meta["refine_skipped"] == refine_skipped
 
 
-def test_steps_survive_a_failure_in_the_last_drain(
+def test_a_step_survives_a_failure_in_its_settle(
     staircase, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
+    """The step keeps the verdict it got when its load stopped."""
+
     async def gone(*_: Any, **__: Any) -> None:
         raise OSError("gone")
 
     monkeypatch.setattr(netbench, "drain", gone)
     with pytest.raises(netbench.NetworkError):
         staircase(steps=(0.1, 0.12), tx_timeout_s=1, keep_going=True)
-    steps = netbench.read_json(tmp_path / "steps.json")
-    assert [s["rate_mb_s"] for s in steps] == [0.1, 0.12]
+    (step,) = netbench.read_json(tmp_path / "steps.json")
+    assert step["rate_mb_s"] == 0.1
+    assert "drain_s" not in step
 
 
 def test_step_ends_on_time_while_waiting_for_room(load):
@@ -913,14 +951,6 @@ def test_drain_drops_transactions_never_sent():
     assert queued.t_submit == math.inf
 
 
-def test_drain_returns_after_the_grace_with_a_sent_transaction_pending():
-    state = netbench.LoadState()
-    sent_tx(state, 0, True)
-    clock = fakes.FakeClock()
-    elapsed = drain(state, heights_at(5, 8), clock)
-    assert elapsed == pytest.approx(netbench.DRAIN_GRACE_S, abs=0.5)
-
-
 def test_drain_gives_up_when_the_validator_height_stalls(caplog):
     clock = fakes.FakeClock()
     assert drain(netbench.LoadState(), heights_at(5, 5), clock) is None
@@ -945,6 +975,24 @@ def test_drain_gives_up_when_the_validator_height_stalls(caplog):
 )
 def test_drain_lines(drain_s, keep_going, lines):
     assert netbench.drain_lines(drain_s, keep_going, 600.0) == lines
+    # A run from before the settle has no settle in its steps: the last drain's line.
+    steps: Any = [{"rate_mb_s": 4.0}]
+    assert netbench.settle_lines(steps, drain_s, keep_going, 600.0) == lines
+
+
+def test_settle_lines():
+    steps: Any = [
+        {"rate_mb_s": 4.0, "drain_s": 2.0, "catch_up_s": 1.0},
+        {"rate_mb_s": 8.0, "drain_s": None, "catch_up_s": 3.0},
+    ]
+    settled = (
+        "- each step settled before its verdict: the backlog drained in p50 2.0 s, max "
+        "2.0 s, then the scan caught up in p50 2.0 s, max 3.0 s"
+    )
+    assert netbench.settle_lines(steps, None, True, 300.0) == [
+        settled,
+        "- backlog did not drain (chain stalled or cap of 300 s) after 8 MB/s",
+    ]
 
 
 def test_theil_sen_ignores_an_outlier():
@@ -1899,7 +1947,7 @@ def test_search_writes_steps_json_after_every_probe(tmp_path: Path):
     assert seen[:2] == [1, 2]
 
 
-def test_search_drains_only_after_failing_probes(staircase, monkeypatch):
+def test_search_settles_after_every_probe(staircase, monkeypatch):
     drained: list[int] = []
     real = netbench.drain
 
@@ -1910,8 +1958,8 @@ def test_search_drains_only_after_failing_probes(staircase, monkeypatch):
     monkeypatch.setattr(netbench, "drain", spy)
     search = netbench.SearchConfig(0.05, 0.01, 12, 1.0)
     run = staircase(steps=(0.05,), tx_timeout_s=1, search=search)
-    failing = sum(bool(s["consensus_fails"] + s["query_fails"]) for s in run.steps[:-1])
-    assert len(drained) == failing
+    assert len(drained) == len(run.steps)
+    assert all(s["drain_s"] is not None and s["catch_up_s"] >= 0 for s in run.steps)
 
 
 def test_search_stops_when_the_backlog_does_not_drain(staircase, monkeypatch):
@@ -2803,14 +2851,15 @@ def test_a_missing_payload_is_not_aged_while_every_query_node_refuses():
     clock = fakes.FakeClock()
     node = QueryNode(clock, 12)
     node.down = True
-    state, missing = netbench.LoadState(), {10: 0.0}
+    state, heights = netbench.LoadState(), netbench.Heights(10)
+    heights.missing = {10: 0.0}
 
     async def scan(height: int) -> list[int] | None:
         return netbench.scan_block(node, ["http://q"], b"m", height)
 
     clock.advance(2 * netbench.MISSING_PAYLOAD_S)
-    clock.run(netbench.retry_missing(state, scan, netbench.Heights(10), missing, clock))
-    assert missing == {10: clock.now}
+    clock.run(netbench.retry_missing(state, scan, heights, clock))
+    assert heights.missing == {10: clock.now}
     assert not state.missing_payloads
 
 

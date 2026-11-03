@@ -312,15 +312,21 @@ def test_node_root_gb_scales_with_offered_payload(steps, validator_gb, query_gb)
     assert awsb.node_root_gb(cfg, query=True) == query_gb
 
 
+SETTLE_EXPECTED_S = awsb.DRAIN_EXPECTED_S + awsb.CATCH_UP_EXPECTED_S
+
+
 @pytest.mark.parametrize(
-    ("keep_going", "tx_timeout_s", "expected"),
+    ("keep_going", "tx_timeout_s", "worst", "expected"),
     [
-        (False, 30, 60 + 3 * 30 + awsb.DRAIN_EXPECTED_S + 30),
-        (True, 30, 60 + 2 * 30 + netbench.DRAIN_MAX_S + netbench.DRAIN_GRACE_S + 30),
-        (True, 600, 60 + 2 * 30 + 600 + netbench.DRAIN_GRACE_S + 600),
+        (False, 30, False, 60 + 3 * (30 + SETTLE_EXPECTED_S)),
+        (True, 30, False, 60 + 2 * (30 + SETTLE_EXPECTED_S)),
+        (True, 30, True, 60 + 2 * (30 + netbench.DRAIN_MAX_S + 30 + 30)),
+        (True, 600, True, 60 + 2 * (30 + 600 + 30 + 600)),
     ],
 )
-def test_load_seconds(keep_going, tx_timeout_s, expected):
+def test_load_seconds(keep_going, tx_timeout_s, worst, expected):
+    """Every step and its settle; the worst case drains at the cap and scans at half the
+    step's rate, then waits out a stalled scan."""
     load = netbench.BenchConfig(
         steps=(4.0, 8.0),
         step_s=30,
@@ -328,7 +334,7 @@ def test_load_seconds(keep_going, tx_timeout_s, expected):
         tx_timeout_s=tx_timeout_s,
         keep_going=keep_going,
     )
-    assert awsb.load_seconds(load) == expected
+    assert awsb.load_seconds(load, worst=worst) == expected
 
 
 @pytest.mark.parametrize(
@@ -340,15 +346,18 @@ def test_keep_going_flag(flags, keep_going):
 
 
 def test_worst_uses_ready_timeout_and_collect_max():
-    expected_s, worst_s = awsb.shot_seconds(awsb.RunConfig(tag="x"))
+    cfg = awsb.RunConfig(tag="x")
+    expected_s, worst_s = awsb.shot_seconds(cfg)
+    load = cfg.load
+    settle_worst_s = (
+        netbench.final_drain_max_s(load.tx_timeout_s) + load.step_s + load.tx_timeout_s
+    )
     assert worst_s - expected_s == (
         awsb.READY_TIMEOUT_S
         - awsb.READY_EXPECTED_S
         + awsb.COLLECT_MAX_S
         - awsb.COLLECT_EXPECTED_S
-        + netbench.DRAIN_MAX_S
-        + netbench.DRAIN_GRACE_S
-        - awsb.DRAIN_EXPECTED_S
+        + (len(load.steps) + 1) * (settle_worst_s - SETTLE_EXPECTED_S)
     )
 
 
@@ -368,10 +377,11 @@ def test_estimate_matches_hand_computed_totals():
     # of cost_estimate's formula, so a formula regression trips this test.
     cfg = small_cfg(pg_iops=6000, pg_mbps=500)
     estimate = shot_estimate(awsb.plan_hosts(cfg), cfg)
-    assert estimate["expected_s"] == 1670.0
-    assert estimate["ttl_s"] == 3580.0
-    assert estimate["expected_usd"] == pytest.approx(0.865536, abs=1e-5)
-    assert estimate["bound_usd"] == pytest.approx(1.928954, abs=1e-5)
+    # 8 steps (7 plus the refine) of 30 s and a settle of 25 s expected, 360 s worst.
+    assert estimate["expected_s"] == 1820.0
+    assert estimate["ttl_s"] == 6120.0
+    assert estimate["expected_usd"] == pytest.approx(0.941858, abs=1e-5)
+    assert estimate["bound_usd"] == pytest.approx(3.221336, abs=1e-5)
 
 
 def test_bound_is_cost_at_ttl():
@@ -1909,13 +1919,11 @@ def test_explicit_root_gb_wins_over_the_search_sizing():
 def test_search_load_seconds():
     load = netbench.BenchConfig(step_s=60, warmup_s=60, tx_timeout_s=60)
     search = netbench.SearchConfig()
-    assert (
-        awsb.load_seconds(load, search, worst=True)
-        == 60 + 12 * (2 * 60 + netbench.DRAIN_MAX_S + netbench.DRAIN_GRACE_S) + 60
+    assert awsb.load_seconds(load, search, worst=True) == 60 + 12 * (
+        2 * 60 + netbench.DRAIN_MAX_S + 60 + 60
     )
-    assert (
-        awsb.load_seconds(load, search, worst=False)
-        == 60 + 11 * 60 + 3 * awsb.DRAIN_EXPECTED_S + 60
+    assert awsb.load_seconds(load, search, worst=False) == 60 + 11 * (
+        60 + SETTLE_EXPECTED_S
     )
 
 

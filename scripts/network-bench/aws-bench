@@ -151,12 +151,12 @@ STEP_TOP_MB_S = 200.0
 SEARCH_STEP_S = 60
 SEARCH_CAP_S = 60.0
 SEARCH_TX_TIMEOUT_S = 60
-# A typical search from the default start: 10 probes plus the confirm's second step, with a
-# drain after each of three failing probes.
+# A typical search from the default start: 10 probes plus the confirm's second step.
 SEARCH_EXPECTED_PROBES = 11
-SEARCH_EXPECTED_DRAINS = 3
-# A drain's idle window and grace, plus the blocks after it and the backlog of a typical probe.
-DRAIN_EXPECTED_S = nb.DRAIN_IDLE_S + nb.DRAIN_GRACE_S + 5
+# A drain's idle window plus the blocks after it and the backlog of a typical step; then the
+# scan's catch-up with the step's last blocks.
+DRAIN_EXPECTED_S = nb.DRAIN_IDLE_S + 10
+CATCH_UP_EXPECTED_S = 10.0
 # Share of the Postgres volume `--offered-gb` may fill.
 PG_FILL_MAX = 0.9
 # Submit threads: a 1 MB POST takes tens of ms on the private network; 200 tx/s needs this many.
@@ -1375,32 +1375,21 @@ def plan_peers(hosts: list[HostSpec]) -> dict[str, list[str]]:
 def load_seconds(
     load: nb.BenchConfig, search: nb.SearchConfig | None = None, worst: bool = False
 ) -> float:
-    """warmup, every step, the refine step, the drain before it and the wait for the last
-    transactions. With keep_going: no refine step, the drain after the last step at its cap.
-    With `search`: `max_probes` probes of the longest kind each followed by a drain.
-    `worst` sizes a drain at its cap plus the grace; else at its expected time."""
-    drain_s = nb.DRAIN_MAX_S + nb.DRAIN_GRACE_S if worst else DRAIN_EXPECTED_S
+    """warmup, then every step and its settle: the drain and the scan's catch-up. Without
+    keep_going a refine step more; with `search`, `max_probes` probes of the longest kind,
+    SEARCH_EXPECTED_PROBES in the expected case. `worst` sizes a drain at its cap and a
+    catch-up at a scan half as fast as the step's load plus the wait on a stalled one; else
+    both at their expected times."""
+    if worst:
+        settle_s = nb.final_drain_max_s(load.tx_timeout_s) + load.step_s + load.tx_timeout_s
+    else:
+        settle_s = DRAIN_EXPECTED_S + CATCH_UP_EXPECTED_S
     if search:
         if worst:
-            probe_s = 2 * load.step_s + drain_s
-            return load.warmup_s + search.max_probes * probe_s + load.tx_timeout_s
-        return (
-            load.warmup_s
-            + SEARCH_EXPECTED_PROBES * load.step_s
-            + SEARCH_EXPECTED_DRAINS * drain_s
-            + load.tx_timeout_s
-        )
-    if load.keep_going:
-        final_s = nb.final_drain_max_s(load.tx_timeout_s) + nb.DRAIN_GRACE_S
-        return (
-            load.warmup_s + len(load.steps) * load.step_s + final_s + load.tx_timeout_s
-        )
-    return (
-        load.warmup_s
-        + (len(load.steps) + 1) * load.step_s
-        + drain_s
-        + load.tx_timeout_s
-    )
+            return load.warmup_s + search.max_probes * (2 * load.step_s + settle_s)
+        return load.warmup_s + SEARCH_EXPECTED_PROBES * (load.step_s + settle_s)
+    steps = len(load.steps) + (0 if load.keep_going else 1)
+    return load.warmup_s + steps * (load.step_s + settle_s)
 
 
 def shot_seconds(cfg: RunConfig) -> tuple[float, float]:
