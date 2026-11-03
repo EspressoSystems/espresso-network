@@ -1,7 +1,4 @@
-use std::{
-    collections::{BTreeSet, HashMap, hash_map::Entry},
-    sync::Arc,
-};
+use std::collections::{BTreeSet, HashMap, hash_map::Entry};
 
 use alloy::primitives::U256;
 use axum::http::StatusCode;
@@ -12,9 +9,8 @@ use hotshot_types::{
     traits::signature_key::LCV2StateSignatureKey,
 };
 
-use super::{RelayError, stake_table_tracker::StakeTableTracker};
+use super::{RelayError, stake_table_tracker::StakeTableInfo};
 
-#[async_trait::async_trait]
 pub trait LCV2StateRelayServerDataSource {
     /// Get the latest available signatures bundle.
     /// # Errors
@@ -24,13 +20,15 @@ pub trait LCV2StateRelayServerDataSource {
     /// Post a signature to the relay server
     /// # Errors
     /// Errors if the signature is invalid, already posted, or no longer needed.
-    async fn post_signature(
+    fn post_signature(
         &mut self,
         req: LCV2StateSignatureRequestBody,
+        stake_table: &StakeTableInfo,
     ) -> Result<(), RelayError>;
 }
 
 /// Server state that tracks the light client V2 state and signatures
+#[derive(Default)]
 pub struct LCV2StateRelayServerState {
     /// Bundles for light client V2
     bundles: HashMap<u64, HashMap<LightClientState, LCV2StateSignaturesBundle>>,
@@ -42,12 +40,8 @@ pub struct LCV2StateRelayServerState {
 
     /// A ordered queue of block heights for V2 light client state, used for garbage collection.
     gc_queue: BTreeSet<u64>,
-
-    /// Stake table tracker
-    stake_table_tracker: Arc<StakeTableTracker>,
 }
 
-#[async_trait::async_trait]
 impl LCV2StateRelayServerDataSource for LCV2StateRelayServerState {
     fn get_latest_signature_bundle(&self) -> Result<LCV2StateSignaturesBundle, RelayError> {
         self.latest_available_bundle
@@ -58,20 +52,16 @@ impl LCV2StateRelayServerDataSource for LCV2StateRelayServerState {
             ))
     }
 
-    async fn post_signature(
+    fn post_signature(
         &mut self,
         req: LCV2StateSignatureRequestBody,
+        stake_table: &StakeTableInfo,
     ) -> Result<(), RelayError> {
         let block_height = req.state.block_height;
         if block_height <= self.latest_block_height.unwrap_or(0) {
             // This signature is no longer needed
             return Ok(());
         }
-        let stake_table = self
-            .stake_table_tracker
-            .stake_table_info_for_block(block_height)
-            .await
-            .map_err(|e| RelayError::catch_all(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
         let Some(weight) = stake_table.known_nodes.get(&req.key) else {
             tracing::warn!("Received LCV2 signature from unknown node: {req}");
             return Err(RelayError::catch_all(
@@ -153,16 +143,6 @@ impl LCV2StateRelayServerState {
             self.bundles.remove(&height);
             self.gc_queue.pop_first();
             tracing::debug!(%height, "garbage collected for ");
-        }
-    }
-
-    pub fn new(stake_table_tracker: Arc<StakeTableTracker>) -> Self {
-        Self {
-            bundles: HashMap::new(),
-            latest_available_bundle: None,
-            latest_block_height: None,
-            gc_queue: BTreeSet::new(),
-            stake_table_tracker,
         }
     }
 }
