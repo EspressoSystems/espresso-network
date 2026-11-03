@@ -382,8 +382,9 @@ pub struct Options {
 
     /// Directory for block payloads and VID shares, kept outside the database.
     ///
-    /// When unset, payloads and shares stay in the database. A database that already references
-    /// blob records fails to start without this directory.
+    /// Applies only when the `blob-dir` experiment is enabled (`ESPRESSO_NODE_EXPERIMENTS`); otherwise
+    /// the option is ignored. When unset, payloads and shares stay in the database. A database that
+    /// already references blob records fails to start without this directory.
     #[clap(long, env = "ESPRESSO_NODE_BLOB_DIR")]
     blob_dir: Option<PathBuf>,
 
@@ -984,11 +985,15 @@ impl PersistenceOptions for Options {
     }
 
     async fn reset(self) -> anyhow::Result<()> {
-        SqlStorage::connect(
-            Config::try_from(&self)?.reset_schema(),
-            StorageConnectionType::Sequencer,
-        )
-        .await?;
+        let mut cfg = Config::try_from(&self)?.reset_schema();
+        // Cleanup wipes a configured blob dir whether or not `Experiment::BlobDir` is enabled.
+        if let Some(dir) = &self.blob_dir {
+            cfg = cfg.blob(BlobCfg {
+                dir: dir.clone(),
+                share_retention: self.share_retention,
+            });
+        }
+        SqlStorage::connect(cfg, StorageConnectionType::Sequencer).await?;
         Ok(())
     }
 }

@@ -13,7 +13,7 @@ use super::{
     api::{self, data_source::QueryModuleOptions},
     context::SequencerContext,
     init_node,
-    options::{Modules, Options, PublicNodeConfig, StorageBackend},
+    options::{Modules, Options, PublicNodeConfig},
     persistence,
 };
 use crate::{
@@ -52,7 +52,8 @@ impl<P: SequencerPersistence> NodeContext<P> {
     }
 }
 
-/// Parses options; answers `--list-experiments` and returns, else installs the experiments and runs the node.
+/// Parses options; answers `--list-experiments` and returns, else installs the experiments and
+/// runs the node.
 pub async fn main(migrated_envs: Vec<(&str, &str)>) -> anyhow::Result<()> {
     espresso_types::assert_node_feature();
     let (opt, ignored_network_options) = Options::parse_with_ignored();
@@ -151,61 +152,48 @@ pub async fn main(migrated_envs: Vec<(&str, &str)>) -> anyhow::Result<()> {
 
     tracing::warn!(?genesis, "genesis");
 
-    let result = match modules.consensus_backend(&opt.experiments) {
-        StorageBackend::Journal => {
-            let storage = journal_storage(&mut modules, &genesis)?;
-            run_with_storage(
-                genesis,
-                modules,
-                opt,
-                storage,
-                public_node_config,
-                telemetry_handle.as_mut(),
-            )
-            .await
-        },
-        StorageBackend::Fs => {
-            let storage = modules
-                .storage_fs
-                .take()
-                .expect("backend Fs has storage-fs");
-            run_with_storage(
-                genesis,
-                modules,
-                opt,
-                storage,
-                public_node_config,
-                telemetry_handle.as_mut(),
-            )
-            .await
-        },
-        StorageBackend::Sql => {
-            let storage = modules
-                .storage_sql
-                .take()
-                .expect("backend Sql has storage-sql");
-            run_with_storage(
-                genesis,
-                modules,
-                opt,
-                storage,
-                public_node_config,
-                telemetry_handle.as_mut(),
-            )
-            .await
-        },
+    let result = if modules.journal_consensus(&opt.experiments) {
+        let storage = journal_storage(&mut modules, &genesis)?;
+        run_with_storage(
+            genesis,
+            modules,
+            opt,
+            storage,
+            public_node_config,
+            telemetry_handle.as_mut(),
+        )
+        .await
+    } else if let Some(storage) = modules.storage_fs.take() {
+        run_with_storage(
+            genesis,
+            modules,
+            opt,
+            storage,
+            public_node_config,
+            telemetry_handle.as_mut(),
+        )
+        .await
+    } else if let Some(storage) = modules.storage_sql.take() {
+        run_with_storage(
+            genesis,
+            modules,
+            opt,
+            storage,
+            public_node_config,
+            telemetry_handle.as_mut(),
+        )
+        .await
+    } else {
         // Persistence is required. If none is provided, just use the local file system.
-        StorageBackend::FsDefault => {
-            run_with_storage(
-                genesis,
-                modules,
-                opt,
-                persistence::fs::Options::default(),
-                public_node_config,
-                telemetry_handle.as_mut(),
-            )
-            .await
-        },
+        run_with_storage(
+            genesis,
+            modules,
+            opt,
+            persistence::fs::Options::default(),
+            public_node_config,
+            telemetry_handle.as_mut(),
+        )
+        .await
     };
 
     if let Some(h) = telemetry_handle {

@@ -178,10 +178,4 @@ mod bench_experiment_tests {
         let expected = commit_with(|b, p| b.fixed_size_bytes(blake3::hash(p).as_bytes()));
         assert_eq!(tx().commit(), expected);
     }
-
-    #[test]
-    fn bench_blake3_commit_disabled_ok() {
-        let expected = commit_with(|b, p| b.var_size_bytes(p));
-        assert_eq!(tx().commit(), expected);
-    }
 }

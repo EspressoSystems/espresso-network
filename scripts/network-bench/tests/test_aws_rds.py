@@ -384,7 +384,7 @@ def test_a_sqlite_tmpfs_run_needs_no_provisioned_mode_and_starts_no_postgres(
     harness.run(
         runner,
         *("--query-engine", "sqlite", "--query-db", "tmpfs"),
-        *("--node-env", "ESPRESSO_QUERY_PAYLOAD_DIR=/payload"),
+        *("--node-env", "ESPRESSO_NODE_BLOB_DIR=/payload"),
     )
     assert not any("docker start postgres" in c for c in ssh_calls(runner, mark))
     run_dir = harness.run_dir("01-sqlite-tmpfs")

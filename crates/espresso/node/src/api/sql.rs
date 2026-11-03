@@ -1985,7 +1985,7 @@ mod tests {
     use espresso_types::{
         BLOCK_MERKLE_TREE_HEIGHT, BackoffParams, BlockMerkleTree, FEE_MERKLE_TREE_HEIGHT,
         FeeAccount, FeeAmount, FeeMerkleTree, NodeState,
-        v0::traits::StateCatchup,
+        v0::traits::{PersistenceOptions, StateCatchup},
         v0_4::{REWARD_MERKLE_TREE_V2_HEIGHT, RewardMerkleTreeV2},
     };
     use espresso_utils::experiment::EnabledExperiments;
@@ -2440,6 +2440,24 @@ mod tests {
             .unwrap();
 
         assert!(storage.blob_store().is_none());
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_reset_wipes_blob_dir_without_experiment() {
+        let db = TmpDb::init().await;
+        let blob_dir = tempfile::tempdir().unwrap();
+        for lane in ["payload", "share"] {
+            std::fs::create_dir(blob_dir.path().join(lane)).unwrap();
+        }
+
+        tmp_options(&db)
+            .with_blob_dir(blob_dir.path().to_path_buf())
+            .reset()
+            .await
+            .unwrap();
+
+        assert!(!blob_dir.path().join("payload").exists());
+        assert!(!blob_dir.path().join("share").exists());
     }
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]

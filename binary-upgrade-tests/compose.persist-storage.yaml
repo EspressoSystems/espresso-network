@@ -18,6 +18,7 @@ services:
     environment:
       ESPRESSO_NODE_CLIQUENET_ADVERTISE_ADDRESS: espresso-node-0:${ESPRESSO_DEMO_NODE_CLIQUENET_PORT_0}
       ESPRESSO_NODE_JOURNAL_IGNORE_EXISTING: "true"
+      ESPRESSO_NODE_EXPERIMENTS: all
       ESPRESSO_NODE_STORAGE_PATH: /store/consensus
       # Without this the light-client SQLite is :memory: per connection and
       # serves empty results, so wiped peers can't fetch historical leaves.
@@ -29,6 +30,7 @@ services:
     environment:
       ESPRESSO_NODE_CLIQUENET_ADVERTISE_ADDRESS: espresso-node-1:${ESPRESSO_DEMO_NODE_CLIQUENET_PORT_1}
       ESPRESSO_NODE_JOURNAL_IGNORE_EXISTING: "true"
+      ESPRESSO_NODE_EXPERIMENTS: all
       ESPRESSO_NODE_STORAGE_PATH: /store/consensus
       LIGHT_CLIENT_DB_PATH: /store/lc
       ESPRESSO_NODE_BOOTSTRAP_EPOCH_CATCHUP_TIMEOUT: ${ESPRESSO_NODE_BOOTSTRAP_EPOCH_CATCHUP_TIMEOUT}
@@ -45,6 +47,7 @@ services:
     environment:
       ESPRESSO_NODE_CLIQUENET_ADVERTISE_ADDRESS: espresso-node-2:${ESPRESSO_DEMO_NODE_CLIQUENET_PORT_2}
       ESPRESSO_NODE_JOURNAL_IGNORE_EXISTING: "true"
+      ESPRESSO_NODE_EXPERIMENTS: all
       ESPRESSO_NODE_STORAGE_PATH: /var/lib/espresso
       ESPRESSO_NODE_STATE_PEERS: http://espresso-node-0:$ESPRESSO_NODE_0_API_PORT,http://espresso-node-1:$ESPRESSO_NODE_1_API_PORT
       ESPRESSO_NODE_BOOTSTRAP_EPOCH_CATCHUP_TIMEOUT: ${ESPRESSO_NODE_BOOTSTRAP_EPOCH_CATCHUP_TIMEOUT}
@@ -55,6 +58,7 @@ services:
     environment:
       ESPRESSO_NODE_CLIQUENET_ADVERTISE_ADDRESS: espresso-node-3:${ESPRESSO_DEMO_NODE_CLIQUENET_PORT_3}
       ESPRESSO_NODE_JOURNAL_IGNORE_EXISTING: "true"
+      ESPRESSO_NODE_EXPERIMENTS: all
       ESPRESSO_NODE_STORAGE_PATH: /var/lib/espresso
       ESPRESSO_NODE_STATE_PEERS: http://espresso-node-0:$ESPRESSO_NODE_0_API_PORT,http://espresso-node-1:$ESPRESSO_NODE_1_API_PORT
       ESPRESSO_NODE_API_PEERS: http://espresso-node-0:$ESPRESSO_NODE_0_API_PORT,http://espresso-node-1:$ESPRESSO_NODE_1_API_PORT
@@ -66,6 +70,7 @@ services:
     environment:
       ESPRESSO_NODE_CLIQUENET_ADVERTISE_ADDRESS: espresso-node-4:${ESPRESSO_DEMO_NODE_CLIQUENET_PORT_4}
       ESPRESSO_NODE_JOURNAL_IGNORE_EXISTING: "true"
+      ESPRESSO_NODE_EXPERIMENTS: all
       ESPRESSO_NODE_STORAGE_PATH: /var/lib/espresso
       ESPRESSO_NODE_STATE_PEERS: http://espresso-node-0:$ESPRESSO_NODE_0_API_PORT,http://espresso-node-1:$ESPRESSO_NODE_1_API_PORT
       ESPRESSO_NODE_API_PEERS: http://espresso-node-0:$ESPRESSO_NODE_0_API_PORT,http://espresso-node-1:$ESPRESSO_NODE_1_API_PORT

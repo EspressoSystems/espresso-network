@@ -612,7 +612,7 @@ def test_query_db_line_omits_tls_for_sqlite() -> None:
     ],
 )
 def test_query_store_combinations(engine: str, placement: str, ok: bool) -> None:
-    env = ["ESPRESSO_QUERY_PAYLOAD_DIR=/payload"]
+    env = ["ESPRESSO_NODE_BLOB_DIR=/payload"]
     if ok:
         awsb.check_query_store(engine, placement, env)
     else:
@@ -636,7 +636,7 @@ def test_sqlite_on_a_volume_reports_the_volume_store() -> None:
 
 
 def test_tmpfs_needs_the_payload_dir_outside_sqlite() -> None:
-    with pytest.raises(awsb.Refused, match="ESPRESSO_QUERY_PAYLOAD_DIR"):
+    with pytest.raises(awsb.Refused, match="ESPRESSO_NODE_BLOB_DIR"):
         awsb.check_query_store("sqlite", "tmpfs", ["RUST_LOG=debug"])
     awsb.check_query_store("sqlite", "colocated", [])
 

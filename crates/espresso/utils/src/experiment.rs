@@ -20,7 +20,8 @@ use strum::{EnumString, IntoStaticStr, VariantArray};
 pub enum Experiment {
     /// Consensus storage on the append-only journal whatever storage module is given.
     Journal,
-    /// Transaction commitments hash the payload with BLAKE3 first; every node of a network must agree.
+    /// Transaction commitments hash the payload with BLAKE3 first; every node of a network must
+    /// agree.
     Blake3TxHash,
     /// Block payloads and VID shares in `ESPRESSO_NODE_BLOB_DIR`; without it the option is ignored.
     BlobDir,
@@ -60,13 +61,15 @@ impl EnabledExperiments {
         self.0.iter().copied().map(Into::into).collect()
     }
 
-    /// Whether `experiment` is in this set; `Experiment::enabled` reads the installed set through it.
+    /// Whether `experiment` is in this set; `Experiment::enabled` reads the installed set through
+    /// it.
     pub fn contains(&self, experiment: Experiment) -> bool {
         self.0.contains(&experiment)
     }
 }
 
-/// Parses a comma list of names, `all`, or the empty string; entries are trimmed, empty entries skipped, duplicates collapse.
+/// Parses a comma list of names, `all`, or the empty string; entries are trimmed, empty entries
+/// skipped, duplicates collapse.
 impl FromStr for EnabledExperiments {
     type Err = ParseExperimentsError;
 
