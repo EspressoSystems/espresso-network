@@ -87,7 +87,7 @@ impl Serializable for Request {
     }
 
     fn from_bytes(bytes: &[u8]) -> Result<Self> {
-        bincode::deserialize(bytes).with_context(|| "failed to deserialize")
+        versions::deserialize_limited(bytes).with_context(|| "failed to deserialize")
     }
 }
 
@@ -99,6 +99,52 @@ impl Serializable for Response {
     }
 
     fn from_bytes(bytes: &[u8]) -> Result<Self> {
-        bincode::deserialize(bytes).with_context(|| "failed to deserialize")
+        versions::deserialize_limited(bytes).with_context(|| "failed to deserialize")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use alloy::primitives::{Address, U256};
+    use espresso_types::{
+        FEE_MERKLE_TREE_HEIGHT, FeeAccount, FeeAmount,
+        v0_3::RewardAmount,
+        v0_4::{REWARD_MERKLE_TREE_V2_HEIGHT, RewardAccountV2},
+    };
+    use jf_merkle_tree_compat::{MerkleTreeScheme as _, UniversalMerkleTreeScheme as _};
+
+    use super::*;
+
+    fn round_trip(response: &Response) -> Response {
+        Response::from_bytes(&response.to_bytes().unwrap()).unwrap()
+    }
+
+    #[test]
+    fn fee_tree_response_decodes_at_full_depth() {
+        let mut tree = FeeMerkleTree::new(FEE_MERKLE_TREE_HEIGHT);
+        tree.update(FeeAccount(Address::repeat_byte(1)), FeeAmount::from(10u64))
+            .unwrap();
+
+        let Response::Accounts(decoded) = round_trip(&Response::Accounts(tree.clone())) else {
+            panic!("expected an accounts response");
+        };
+        assert_eq!(decoded.commitment(), tree.commitment());
+    }
+
+    #[test]
+    fn reward_tree_response_decodes_at_full_depth() {
+        let mut tree = RewardMerkleTreeV2::new(REWARD_MERKLE_TREE_V2_HEIGHT);
+        tree.update(
+            RewardAccountV2::from(Address::repeat_byte(1)),
+            RewardAmount(U256::from(10)),
+        )
+        .unwrap();
+
+        let Response::RewardAccountsV2(decoded) =
+            round_trip(&Response::RewardAccountsV2(tree.clone()))
+        else {
+            panic!("expected a reward accounts response");
+        };
+        assert_eq!(decoded.commitment(), tree.commitment());
     }
 }
