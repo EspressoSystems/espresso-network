@@ -49,18 +49,8 @@ upgrade hash:
   different proposals of the same version upgrade, ensuring nodes vote and execute the correct one. It consists of a
   sequence of 32 bytes.
 
-These are defined in [Versions implementation](../types/src/v0/mod.rs) for the Type (`SequencerVersions` in our case).
-
-```rust
-impl Versions for SequencerVersions {
-	type Base = StaticVersion<0, 1>;
-	type Upgrade = StaticVersion<0, 2>;
-	const UPGRADE_HASH: [u8; 32] = [
-		1, 0, 1, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0,
-	],
-	..
-}
-```
+The base and upgrade versions are `base_version` and `upgrade_version` in the genesis TOML. The upgrade hash is
+`Upgrade::hash()` in `crates/versions/src/lib.rs`.
 
 Hotshot provides two modes for upgrades: view-based and time-based.
 
@@ -99,37 +89,10 @@ file. For an example with upgrades enabled, refer to
 
 ### Example TOML Configuration
 
-```toml
-[[upgrade]]
-version = "0.2"
-start_proposing_view = 5
-stop_proposing_view = 15
+`[[upgrade]]` in `data/genesis/demo-large-block-upgrade.toml`. The table after `version` names the upgrade type, one of
+the `UpgradeType` variants in snake case (`crates/espresso/types/src/v0/v0_1/instance_state.rs`).
 
-[upgrade.fee]
-
-[upgrade.fee.chain_config]
-chain_id = 999999999
-base_fee = '1 wei'
-max_block_size = '1mb'
-fee_recipient = '0x0000000000000000000000000000000000000000'
-fee_contract = '0xa15bb66138824a1c7167f5e85b957d04dd34e468'
-
-[[upgrade]]
-version = "0.3"
-start_proposing_view = 5
-stop_proposing_view = 15
-
-[upgrade.marketplace]
-```
-
-In the TOML configuration example above, the `upgrade` section defines an array of tables, each specifying upgrade
-parameters
-
-- **Version:** the new version after an upgrade is successful.
-- **start_proposing_view:** Represents the `start_proposing_view` value at which the upgrade is proposed.
-- **stop_proposing_view:** Refers to the view view after which the node stops proposing an upgrade.
-
-The `upgrade.fee.chain_config` table contains the complete set of chain config parameters, which can be used, for
+The `upgrade.<type>.chain_config` table contains the complete set of chain config parameters, which can be used, for
 example, to enable protocol fees or modify other parameters.
 
 ## Fee upgrade
