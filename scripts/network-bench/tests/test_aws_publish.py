@@ -561,3 +561,13 @@ def test_append_index_rebuilds_a_file_with_the_old_header(tmp_path: Path):
     chaos = list(awsb.INDEX_COLUMNS).index("chaos")
     assert migrated[0] == f"{FLEET}/01-run" and migrated[chaos] == "-"
     assert migrated[chaos + 1] == "x"
+
+
+# TEST:harness-dirty-published-ok
+def test_the_harness_dirty_flag_is_published(tmp_path: Path):
+    run_dir = make_run_dir(tmp_path)
+    assert "harness_dirty" not in awsb.published_manifest(run_dir)
+    (run_dir / "manifest.json").write_text(
+        json.dumps({**MANIFEST, "harness_dirty": True})
+    )
+    assert awsb.published_manifest(run_dir)["harness_dirty"] is True

@@ -19,7 +19,7 @@ import signal
 import stat
 import subprocess
 import threading
-from collections.abc import Awaitable, Callable, Coroutine, Iterable
+from collections.abc import Awaitable, Callable, Coroutine, Iterable, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from importlib.machinery import SourceFileLoader
@@ -875,7 +875,9 @@ class FakeRunner:
         if self.states is None:
             raise AssertionError("FakeRunner: `default` needs `states`")
         if argv[0] == "git":
-            return completed(stdout="a" * 40 + "\n")
+            return self.git(argv)
+        if argv[0] == "docker":
+            return self.docker(argv)
         if argv[0] == "tofu":
             return self.tofu(argv[2])
         if argv[0] == "ssh":
@@ -883,6 +885,21 @@ class FakeRunner:
         if argv[0] == "rsync":
             return completed()
         return self.aws(argv)
+
+    def git(self, argv: list[str]) -> subprocess.CompletedProcess:
+        """A sha for every publish call (`git_run` always passes `-c`, and its clone has
+        changes to commit). A clean harness checkout otherwise: a sha for `rev-parse`, nothing
+        else."""
+        if "-c" in argv or argv[1] == "rev-parse":
+            return completed(stdout="a" * 40 + "\n")
+        return completed()
+
+    def docker(self, argv: list[str]) -> subprocess.CompletedProcess:
+        """The fleet's arch is arm64 and the image lists no experiments."""
+        if argv[1] == "version":
+            return completed(stdout="linux/arm64\n")
+        assert argv[1] == "run" and argv[-1] == "--list-experiments", argv
+        return completed(stdout="[]\n")
 
     def tofu(self, verb: str) -> subprocess.CompletedProcess:
         if verb == "apply":
@@ -916,7 +933,7 @@ class FakeRunner:
                 self.on_poll(self.polls)
             return completed(stdout=json.dumps(self.states[index]))
         if "/sys/class/net/" in command:
-            return completed(stdout=f"{awsb.INTERNET_MTU}\n")
+            return completed(stdout=f"{awsb.VPC_MTU}\n")
         if "date +%s.%N" in command:
             return completed(stdout="1000.5\n")
         if ".State.Status" in command:
@@ -1516,8 +1533,17 @@ def isolated_env(monkeypatch: pytest.MonkeyPatch, root: Path, name: str) -> Path
     return cwd / awsb.OUT_ROOT
 
 
+def unshaped(extra: tuple[str, ...]) -> tuple[str, ...]:
+    """`--latency off` ahead of `extra` unless `extra` names `--latency` or `--chaos`: tests
+    not about shaping stay unshaped. `--chaos` is excluded because `chaos_default` must see
+    `--latency` as absent."""
+    if "--latency" in extra or "--chaos" in extra:
+        return extra
+    return ("--latency", "off", *extra)
+
+
 def plan_args(*extra: str, nodes: str = "2") -> argparse.Namespace:
-    return parse_plan_args(["--tag", "x", "--nodes", nodes, *extra])
+    return parse_plan_args(["--tag", "x", "--nodes", nodes, *unshaped(extra)])
 
 
 def fleet(n: int, query_nodes: int = 1) -> dict:
@@ -1658,7 +1684,7 @@ def pricing(argv: list[str]) -> subprocess.CompletedProcess:
     return price_list(price_item(instance_type, INSTANCE_PRICES[instance_type]))
 
 
-def fake_preflight(arch: str = "arm64") -> dict:
+def fake_preflight(arch: str = "arm64", experiments: Sequence[str] = ()) -> dict:
     return {
         "account": "027574771971",
         "az": "eu-west-1b",
@@ -1667,7 +1693,7 @@ def fake_preflight(arch: str = "arm64") -> dict:
         "instance_prices": INSTANCE_PRICES,
         "ami_id": "ami-0abc",
         "images": fake_images(),
-        "git_diff": None,
+        "experiments": list(experiments),
     }
 
 
@@ -1727,7 +1753,7 @@ class RunHarness:
 
     def args(self, *extra: str, nodes: int = 2) -> argparse.Namespace:
         return awsb.parse_args(
-            ["run", "--tag", "t", "--nodes", str(nodes), "--yes", *extra]
+            ["run", "--tag", "t", "--nodes", str(nodes), "--yes", *unshaped(extra)]
         )
 
     def run(self, runner: FakeRunner, *extra: str, nodes: int = 2) -> int:
@@ -2067,7 +2093,7 @@ class FleetHarness:
         return self.parse("up", *self.fleet_flags(), *extra)
 
     def single_shot_args(self) -> argparse.Namespace:
-        return self.parse("run", *self.fleet_flags())
+        return self.parse("run", *self.fleet_flags(), *unshaped(()))
 
     def run_args(self, *extra: str) -> argparse.Namespace:
         return self.parse(
@@ -2075,7 +2101,7 @@ class FleetHarness:
             "--fleet",
             str(self.fleet_dir),
             "--yes",
-            *extra,
+            *unshaped(extra),
         )
 
     def up(self, runner, *extra: str) -> int:
@@ -2246,14 +2272,20 @@ class RdsRunner(FakeRunner):
 class RdsHarness(FleetHarness):
     """`FleetHarness` for an rds fleet: preflight resolved the engine minor 18.2."""
 
-    def __init__(self, monkeypatch: pytest.MonkeyPatch, root: Path, modes: str):
+    def __init__(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        root: Path,
+        modes: str,
+        experiments: Sequence[str] = (),
+    ):
         super().__init__(monkeypatch, root)
         self.modes = modes
-        pre = {**fake_preflight(), "rds_engine_version": "18.2"}
+        pre = {**fake_preflight(experiments=experiments), "rds_engine_version": "18.2"}
         monkeypatch.setattr(awsb, "preflight", lambda *_: pre)
 
     def up_args(self, *extra: str) -> argparse.Namespace:
-        return super().up_args("--db-modes", self.modes, *extra)
+        return super().up_args("--db-modes", self.modes, "--pg-mbps", "500", *extra)
 
     def up_rds(self, **kwargs) -> RdsRunner:
         runner = RdsRunner([DONE_STATE], describe=DESCRIBE, **kwargs)

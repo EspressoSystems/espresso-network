@@ -32,14 +32,14 @@ limit and the query-node limit.
 **Capacity search (AWS)**
 
 ```
-just bench aws run --tag release-x --latency decaf-2025 --search --max-usd 30
-just bench aws run --tag release-x --latency decaf-2025 --search 150 --max-usd 30   # start rate in MB/s
+just bench aws run --tag release-x --search --max-usd 30
+just bench aws run --tag release-x --search 150 --max-usd 30   # start rate in MB/s
 ```
 
 **Fixed steps (AWS)**
 
 ```
-just bench aws run --tag release-x --latency decaf-2025 --steps 50,60,80 --keep-going --max-usd 30
+just bench aws run --tag release-x --steps 50,60,80 --keep-going --max-usd 30
 ```
 
 **Local (3 nodes, this machine)**
@@ -50,8 +50,9 @@ just bench run
 just bench run --steps 4,8,12,16 --keep-going
 ```
 
-- `--latency decaf-2025` is the reference geography for comparable AWS runs. Without `--latency` all nodes share one AZ
-  with no added delay, an upper bound far above a geo-distributed network. Profiles: [Latency model](#latency-model).
+- `decaf-2025` is the default geography (`--latency`), the reference for comparable AWS runs. `--latency off` puts all
+  nodes in one AZ with no added delay, an upper bound far above a geo-distributed network. Profiles:
+  [Latency model](#latency-model).
 - `plan` takes the same flags as `run`: cost estimate and fleet dir, no AWS writes. `plan` checks against 60 USD unless
   `--max-usd` is given; pass the same `--max-usd` as the intended `run`.
 - `run` prints the cost estimate and prompts; `--yes` skips the prompt (required without a tty).
@@ -89,6 +90,7 @@ laptop                       EC2, one AZ, private IPs
 | `node1..`   | espresso-node `-- storage-fs -- http -- status -- submit -- catchup -- config`, `agent-host`           |
 
 Modules shown are for `--consensus-storage fs` (default). With `journal`, both roles also get `storage-journal` first.
+Images with the `journal` experiment run consensus on the journal under `fs` too.
 
 ## Requirements
 
@@ -96,6 +98,8 @@ Modules shown are for `--consensus-storage fs` (default). With `journal`, both r
 - AWS profile `timeboost-dev` (account 027574771971). Region eu-west-1 unless `--region` is given. Constants live in
   `aws-bench` and `aws/terraform/main.tf`.
 - `ssh-keygen`.
+- `docker` on the dev machine: `plan` and `run` list the image's experiments locally (`docker run`, no AWS) and pull
+  each listed tag once, about 1 GB.
 - The rev is pushed as a `release-*` branch, so CI publishes the ghcr images.
 - Local runs need `just bench build` first.
 
@@ -183,39 +187,42 @@ Other combinations are refused. The default is `postgres` on `colocated`.
 
 ```
 just bench aws run --tag release-x --nodes 4 --query-db volume --pg-mbps 1000 --yes
-just bench aws run --fleet --query-db volume --node-env ESPRESSO_QUERY_PAYLOAD_DIR=/payload
+just bench aws run --fleet --query-db volume
 ```
 
 - `--db-modes` (`plan`, `up`) lists the placements a fleet prepares. `--query-db` (`run`) picks one; `tmpfs` needs no
-  preparation and runs on any fleet; it requires `--node-env ESPRESSO_QUERY_PAYLOAD_DIR=...` so payloads stay out of the
-  tmpfs.
-- A fleet with `rds` refuses `--pg-iops` and `--pg-mbps` values other than the defaults.
+  preparation and runs on any fleet; it requires an image with the `blob-dir` experiment, so payloads stay out of the
+  tmpfs. Refused at plan time otherwise.
+- A fleet with `rds` needs `--pg-iops 12000 --pg-mbps 500`; other values are refused. The default `--pg-mbps` is 1500.
 - `rds` needs IAM rights `iam:CreateRole`, `iam:PutRolePolicy`, `iam:PassRole`, `scheduler:CreateSchedule`. Without them
   apply fails, the fleet is destroyed, exit 3.
-- The query node mounts `/data/pg/payload` as `/payload`. `ESPRESSO_QUERY_PAYLOAD_DIR=/payload` (experimental image
-  feature, off by default) puts payload and VID share files there: on the `volume` store in `volume` mode, on node0's
-  root disk otherwise. Size collected as `du-payload.txt`.
+- The query node mounts `/data/pg/payload` as `/payload`. When the image enables the `blob-dir` experiment, the harness
+  sets `ESPRESSO_NODE_BLOB_DIR=/payload` on query nodes: payload and VID share files go there, on the `volume` store in
+  `volume` mode, on node0's root disk otherwise. Size collected as `du-payload.txt`.
 
 ### Latency
 
 ```
-just bench aws run --tag release-x --nodes 5 --latency decaf-2025
-just bench aws run --tag release-x --nodes 5 --latency decaf-2025 --no-intra-latency   # cross-region delay only
+just bench aws run --tag release-x --nodes 5
+just bench aws run --tag release-x --nodes 5 --no-intra-latency   # cross-region delay only
 just bench aws run --fleet --latency mainnet
-just bench aws run --tag release-x --latency decaf-2025 --tcp-cc cubic   # cubic instead of bbr
+just bench aws run --tag release-x --latency off   # unshaped, one AZ
+just bench aws run --tag release-x --tcp-cc cubic   # cubic instead of bbr_hold
 just bench aws run --tag release-x --latency decaf-2026 --netem full     # per-pair jitter and loss
 ```
 
 - Shaped: node-to-node traffic, including catchup on 8080.
-- `--tcp-cc` (default `bbr`, or `cubic`): congestion control of the nodes.
+- `--tcp-cc` (default `bbr_hold`; `bbr`, `cubic`, `bbr3`): congestion control of the nodes, applied with shaping only.
   - bbr stays in its startup mode while traffic is bursty and leaves it for good at the first overload; cross-region
     sockets then send 3-5x slower for the rest of the run.
   - cubic keeps small windows on the 158 ms links and backs off on rare losses: a 70 MB block run failed 150 MB/s.
-  - `bbr_hold` (experiment): BBR held in its startup mode, built and loaded on each node by `aws/bbr-hold.sh` (kernel
-    headers, mainline `tcp_bbr.c` of the kernel's version, ~1 min). Not a stock congestion control.
+  - `bbr_hold`: BBR held in its startup mode, built and loaded on each node by `aws/bbr-hold.sh` (kernel headers,
+    mainline `tcp_bbr.c` of the kernel's version, ~1 min, needs `raw.githubusercontent.com`). Not a stock congestion
+    control.
   - `bbr3`: BBR v3 of the XanMod kernel, installed on the node hosts with a reboot (~5 min, x86_64 only).
-- `--mtu` (default 1500): interface MTU of the nodes. Traffic between AWS regions or over the internet carries at most
-  1500 bytes; only one VPC gets jumbo frames (9001). Checked on every node after shaping.
+- `--mtu` (default 9001): interface MTU of the nodes. Traffic between AWS regions or over the internet carries at most
+  1500 bytes; only one VPC gets jumbo frames (9001), so the default is optimistic for inter-region paths. `--mtu 1500`
+  gives internet-sized packets. Checked on every node after shaping.
   [AWS: network MTU](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/network_mtu.html).
 - `--netem` (default `delay`; `full` with `--chaos`): `full` adds per-pair jitter and loss to the delay. Model:
   [Latency model](#latency-model).
@@ -460,12 +467,17 @@ just bench aws run --tag release-x --leader-trace
     `gh workflow run build-allocators.yml --repo EspressoSystems/espresso-network --ref <branch>`. The tag is then
     `<branch>-<allocator>`.
   - Each image is `espresso-node:main` with the branch's two binaries, so its revision label is main's.
-- `--max-block-size`: genesis `max_block_size` of both chain configs; part of the config hash, shown in the summary.
+- `--max-block-size` (default `70mb`): genesis `max_block_size` of both chain configs; part of the config hash, shown in
+  the summary.
 - `--protocol-version`: genesis `base_version` and `upgrade_version`, the protocol the network runs from genesis; the
   images must support it. Part of the config hash, shown in the summary.
   - Mainnet uses `10mb`. Local `genesis.toml` uses `100mb`.
   - On 5 x c8g.4xlarge the block interval grows superlinearly above about 60 MB blocks. Blocks at a 100 MB cap decide at
     about 93 MB/s, 45 to 60 MB blocks at about 160 MB/s.
+- Harness node env: every node gets `GLIBC_TUNABLES=glibc.malloc.hugetlb=1` and `ESPRESSO_NODE_EXPERIMENTS=all` (images
+  without the variable ignore it), and query nodes get `ESPRESSO_NODE_BLOB_DIR=/payload` when the image enables
+  `blob-dir`. Listed in the summary; not part of the config hash. `--node-env ESPRESSO_NODE_EXPERIMENTS=a,b` enables
+  only those experiments; a name the image does not list is refused at plan time.
 - `--node-env KEY=VALUE`: repeatable; added last to every node's environment, overriding the harness's value. Taken
   verbatim and listed in the summary, so not for secrets. Part of the config hash.
 - `--submit-nodes N`: nodes receiving txs, validators first, then `node0`. Default: all nodes, `node0` included;
@@ -486,7 +498,7 @@ just bench aws run --tag release-x --leader-trace
   `ESPRESSO_NODE_PRUNER_STATE_TARGET_RETENTION`, `ESPRESSO_NODE_PRUNER_INTERVAL`). Part of the config hash.
   - The warmup grows by RETENTION, so the pruner runs before the first measured step.
   - `--node-env` overrides these variables, e.g. `ESPRESSO_NODE_PRUNER_PRUNING_THRESHOLD` for the usage-triggered path.
-  - Payload files (`ESPRESSO_QUERY_PAYLOAD_DIR`) are not pruned: the node keeps them after their rows go.
+  - Payload files (`ESPRESSO_NODE_BLOB_DIR`) are not pruned: the node keeps them after their rows go.
   - Scan or reader lag beyond RETENTION shows as missing payloads (noisy run) and missing reader ranges.
   - The summary lists the retention and the `pruner_data_height` and `pruner_state_height` gauges at the window end.
 - `--clients N`: N light-client readers per namespace (default 2, a stack chain's sequencer and follower; 0 for none),
@@ -600,63 +612,63 @@ Where:
 - **per run**: `plan`, `run`, `run --fleet`; refused by `up`.
 - **run**: `run` only.
 
-| Flag                                  | Default                        | Where        | Meaning                                                                                       |
-| ------------------------------------- | ------------------------------ | ------------ | --------------------------------------------------------------------------------------------- |
-| `--tag`                               | required; fleet's on `--fleet` | all          | ghcr image tag pushed by CI                                                                   |
-| `--allocator`                         | none                           | all          | `jemalloc`, `mimalloc`, `snmalloc`, `tcmalloc`                                                |
-| `--nodes`                             | 5                              | provision    | validator count, `node0` included                                                             |
-| `--query-nodes`                       | 1                              | provision    | query service nodes, the first `K` of `--nodes`; above 1 needs `--query-db colocated`         |
-| `--node-type`                         | `c8g.4xlarge`                  | provision    | node instance type                                                                            |
-| `--ctl-type`                          | `c8g.2xlarge`                  | provision    | `ctl` instance type (`c8g.4xlarge` with `--prover`)                                           |
-| `--root-gb`                           | `auto`                         | provision    | root volume GB; `auto` sizes from the ramp, or from `--offered-gb` with `--search`            |
-| `--pg-iops`, `--pg-mbps`              | 12000, 500                     | provision    | node0 root volume and `volume` store                                                          |
-| `--region`                            | eu-west-1                      | provision    | AWS region                                                                                    |
-| `--max-usd`                           | `run` 10; `plan`, `up` 60      | provision    | refuse when the cost bound exceeds it                                                         |
-| `--ttl-min`                           | `plan`, `run` auto; `up` 180   | provision    | minutes until hosts terminate; `auto`: worst case plus margin                                 |
-| `--db-modes`                          | `colocated`                    | `plan`, `up` | stores the fleet prepares                                                                     |
-| `--steps`                             | x1.5 from 4 to 200             | all          | MB/s per step, increasing                                                                     |
-| `--step-s`                            | 30; `--search` 60              | all          | seconds per step                                                                              |
-| `--cap-s`                             | 5; `--search` 60               | all          | in-flight cap, in seconds of the step's load                                                  |
-| `--tx-timeout-s`                      | 30; `--search` 60              | all          | tx timeout                                                                                    |
-| `--warmup-s`                          | 60                             | all          | warmup at the first step's rate; `--prune` adds its retention                                 |
-| `--clients`                           | 2                              | all          | light-client readers per namespace, on `ctl`                                                  |
-| `--submit-workers`                    | 32                             | all          | submit threads; part of the config hash                                                       |
-| `--namespaces`                        | 16                             | all          | namespaces the load spreads over, round robin from 10000; part of the config hash             |
-| `--heartbeat-tx-s`                    | 50                             | all          | 8-byte txs per second for the whole run, 0 for none                                           |
-| `--keep-going`                        | off                            | all          | run every step, then drain                                                                    |
-| `--chaos`                             | off                            | per run      | fault nodes during the load; see [Chaos](#chaos)                                              |
-| `--chaos-min`                         | 10                             | per run      | minutes of load, one 60 s step each                                                           |
-| `--chaos-rate`                        | 4                              | per run      | MB/s of every step                                                                            |
-| `--chaos-seed`                        | 42                             | per run      | seed of the order nodes are faulted in                                                        |
-| `--chaos-kinds`                       | `restart,kill,wipe`            | per run      | comma separated, used in turn, repeats weight; adds `mass-restart`, `mass-kill`; `none`       |
-| `--chaos-gap`                         | 45                             | per run      | seconds between single faults                                                                 |
-| `--chaos-kill-down`                   | 60                             | per run      | seconds a killed node stays down                                                              |
-| `--chaos-recover-timeout`             | 300                            | per run      | seconds a node has to recover; must exceed `--chaos-kill-down`                                |
-| `--chaos-query-floor`                 | 2                              | per run      | query nodes kept up; below `--query-nodes`                                                    |
-| `--chaos-mass-nodes`                  | all nodes                      | per run      | nodes per mass fault; needs a mass kind, at most `--nodes`                                    |
-| `--max-block-size`                    | `50mb`                         | per run      | genesis `max_block_size`                                                                      |
-| `--protocol-version`                  | `0.6`                          | per run      | genesis `base_version` and `upgrade_version`; the images must support it                      |
-| `--node-env KEY=VALUE`                | none                           | per run      | repeatable; node environment                                                                  |
-| `--leader-trace`, `--no-leader-trace` | off                            | per run      | leader trace CSVs and plots                                                                   |
-| `--submit-nodes`                      | nodes                          | per run      | nodes receiving txs, 1..nodes                                                                 |
-| `--slow-nodes`, `--slow-cores`        | off                            | per run      | the last N validator-only nodes run espresso-node on C cores                                  |
-| `--latency`                           | `off`                          | per run      | `off`, `decaf-2025`, `decaf-2026`, `mainnet`; `decaf-2025` with `--chaos`                     |
-| `--no-intra-latency`                  | off                            | per run      | with `--latency`: no same-location delay                                                      |
-| `--tcp-cc`                            | bbr                            | per run      | with `--latency`: TCP congestion control, `bbr`, `cubic`, `bbr_hold` or `bbr3`                |
-| `--mtu`                               | 1500                           | per run      | with `--latency`: interface MTU of the nodes                                                  |
-| `--netem`                             | `delay`; `full` with `--chaos` | per run      | with `--latency`: `full` adds per-pair jitter and loss to the delay                           |
-| `--jitter-ratio`                      | 0.0065                         | per run      | with `--netem full`: floor of the jitter half-width as a ratio of the one-way delay           |
-| `--prover`                            | off                            | per run      | light-client prover on `ctl`; see [Light client prover](#light-client-prover)                 |
-| `--epoch-height`                      | `1000000`; 300 w. `--chaos`    | per run      | genesis `epoch_height`, in blocks; any value stakes every node on L1                          |
-| `--consensus-storage`                 | `fs`                           | per run      | `fs`, `journal` (experimental, not in `main` images); query node uses `storage-sql` with `fs` |
-| `--prune [RETENTION]`                 | off; bare `1m`                 | per run      | node0 prunes data and state older than RETENTION every 30 s; part of the config hash          |
-| `--fleet [FLEET]`                     | none                           | run          | measure on a fleet from `up`                                                                  |
-| `--query-engine`                      | `postgres`                     | run          | `postgres`, `sqlite`                                                                          |
-| `--query-db`                          | `colocated`                    | run          | `colocated`, `volume`, `rds`, `tmpfs` (sqlite: not `rds`)                                     |
-| `--force`                             | off                            | run          | with `--fleet`: reset a dirty fleet, replace a stale lock                                     |
-| `--yes`                               | off                            | run          | skip the prompt, required without a tty; also on `up`, `down`, `destroy`, `prune`             |
-| `--no-publish`                        | off                            | run          | skip publishing                                                                               |
-| `--results-remote`                    | results repo                   | run          | git remote, also on `publish`; env `BENCH_RESULTS_REMOTE`                                     |
+| Flag                                  | Default                        | Where        | Meaning                                                                                 |
+| ------------------------------------- | ------------------------------ | ------------ | --------------------------------------------------------------------------------------- |
+| `--tag`                               | required; fleet's on `--fleet` | all          | ghcr image tag pushed by CI                                                             |
+| `--allocator`                         | none                           | all          | `jemalloc`, `mimalloc`, `snmalloc`, `tcmalloc`                                          |
+| `--nodes`                             | 5                              | provision    | validator count, `node0` included                                                       |
+| `--query-nodes`                       | 1                              | provision    | query service nodes, the first `K` of `--nodes`; above 1 needs `--query-db colocated`   |
+| `--node-type`                         | `c8g.4xlarge`                  | provision    | node instance type                                                                      |
+| `--ctl-type`                          | `c8g.2xlarge`                  | provision    | `ctl` instance type (`c8g.4xlarge` with `--prover`)                                     |
+| `--root-gb`                           | `auto`                         | provision    | root volume GB; `auto` sizes from the ramp, or from `--offered-gb` with `--search`      |
+| `--pg-iops`, `--pg-mbps`              | 12000, 1500                    | provision    | node0 root volume and `volume` store; rds needs `--pg-mbps 500`                         |
+| `--region`                            | eu-west-1                      | provision    | AWS region                                                                              |
+| `--max-usd`                           | `run` 10; `plan`, `up` 60      | provision    | refuse when the cost bound exceeds it                                                   |
+| `--ttl-min`                           | `plan`, `run` auto; `up` 180   | provision    | minutes until hosts terminate; `auto`: worst case plus margin                           |
+| `--db-modes`                          | `colocated`                    | `plan`, `up` | stores the fleet prepares                                                               |
+| `--steps`                             | x1.5 from 4 to 200             | all          | MB/s per step, increasing                                                               |
+| `--step-s`                            | 30; `--search` 60              | all          | seconds per step                                                                        |
+| `--cap-s`                             | 5; `--search` 60               | all          | in-flight cap, in seconds of the step's load                                            |
+| `--tx-timeout-s`                      | 30; `--search` 60              | all          | tx timeout                                                                              |
+| `--warmup-s`                          | 60                             | all          | warmup at the first step's rate; `--prune` adds its retention                           |
+| `--clients`                           | 2                              | all          | light-client readers per namespace, on `ctl`                                            |
+| `--submit-workers`                    | 32                             | all          | submit threads; part of the config hash                                                 |
+| `--namespaces`                        | 16                             | all          | namespaces the load spreads over, round robin from 10000; part of the config hash       |
+| `--heartbeat-tx-s`                    | 50                             | all          | 8-byte txs per second for the whole run, 0 for none                                     |
+| `--keep-going`                        | off                            | all          | run every step, then drain                                                              |
+| `--chaos`                             | off                            | per run      | fault nodes during the load; see [Chaos](#chaos)                                        |
+| `--chaos-min`                         | 10                             | per run      | minutes of load, one 60 s step each                                                     |
+| `--chaos-rate`                        | 4                              | per run      | MB/s of every step                                                                      |
+| `--chaos-seed`                        | 42                             | per run      | seed of the order nodes are faulted in                                                  |
+| `--chaos-kinds`                       | `restart,kill,wipe`            | per run      | comma separated, used in turn, repeats weight; adds `mass-restart`, `mass-kill`; `none` |
+| `--chaos-gap`                         | 45                             | per run      | seconds between single faults                                                           |
+| `--chaos-kill-down`                   | 60                             | per run      | seconds a killed node stays down                                                        |
+| `--chaos-recover-timeout`             | 300                            | per run      | seconds a node has to recover; must exceed `--chaos-kill-down`                          |
+| `--chaos-query-floor`                 | 2                              | per run      | query nodes kept up; below `--query-nodes`                                              |
+| `--chaos-mass-nodes`                  | all nodes                      | per run      | nodes per mass fault; needs a mass kind, at most `--nodes`                              |
+| `--max-block-size`                    | `70mb`                         | per run      | genesis `max_block_size`                                                                |
+| `--protocol-version`                  | `0.6`                          | per run      | genesis `base_version` and `upgrade_version`; the images must support it                |
+| `--node-env KEY=VALUE`                | none                           | per run      | repeatable; node environment                                                            |
+| `--leader-trace`, `--no-leader-trace` | off                            | per run      | leader trace CSVs and plots                                                             |
+| `--submit-nodes`                      | nodes                          | per run      | nodes receiving txs, 1..nodes                                                           |
+| `--slow-nodes`, `--slow-cores`        | off                            | per run      | the last N validator-only nodes run espresso-node on C cores                            |
+| `--latency`                           | `decaf-2025`                   | per run      | `off`, `decaf-2025`, `decaf-2026`, `mainnet`; `off` shapes nothing                      |
+| `--no-intra-latency`                  | off                            | per run      | on shaped runs: no same-location delay                                                  |
+| `--tcp-cc`                            | `bbr_hold`                     | per run      | on shaped runs: TCP congestion control, `bbr_hold`, `bbr`, `cubic` or `bbr3`            |
+| `--mtu`                               | 9001                           | per run      | on shaped runs: interface MTU of the nodes                                              |
+| `--netem`                             | `delay`; `full` with `--chaos` | per run      | on shaped runs: `full` adds per-pair jitter and loss to the delay                       |
+| `--jitter-ratio`                      | 0.0065                         | per run      | with `--netem full`: floor of the jitter half-width as a ratio of the one-way delay     |
+| `--prover`                            | off                            | per run      | light-client prover on `ctl`; see [Light client prover](#light-client-prover)           |
+| `--epoch-height`                      | `1000000`; 300 w. `--chaos`    | per run      | genesis `epoch_height`, in blocks; any value stakes every node on L1                    |
+| `--consensus-storage`                 | `fs`                           | per run      | `fs`, `journal`; `fs` runs the journal on images with that experiment                   |
+| `--prune [RETENTION]`                 | off; bare `1m`                 | per run      | node0 prunes data and state older than RETENTION every 30 s; part of the config hash    |
+| `--fleet [FLEET]`                     | none                           | run          | measure on a fleet from `up`                                                            |
+| `--query-engine`                      | `postgres`                     | run          | `postgres`, `sqlite`                                                                    |
+| `--query-db`                          | `colocated`                    | run          | `colocated`, `volume`, `rds`, `tmpfs` (sqlite: not `rds`)                               |
+| `--force`                             | off                            | run          | with `--fleet`: reset a dirty fleet, replace a stale lock                               |
+| `--yes`                               | off                            | run          | skip the prompt, required without a tty; also on `up`, `down`, `destroy`, `prune`       |
+| `--no-publish`                        | off                            | run          | skip publishing                                                                         |
+| `--results-remote`                    | results repo                   | run          | git remote, also on `publish`; env `BENCH_RESULTS_REMOTE`                               |
 
 ### Search flags
 
@@ -707,6 +719,12 @@ Progress: one fixed-width line every 10 s, totals at the end.
 | `qry`   | MB/s scanned from the query node, its height, lag behind the validators                                 |
 | `vto N` | view timeouts, shown only when nonzero                                                                  |
 
+- Preflight logs `experiments of <image>: ...` (or `none`) after listing the node image locally. Run start logs one
+  WARNING `harness checkout has uncommitted changes in N files under ...` when tracked or untracked files under
+  `scripts/network-bench` or `scripts/wait-for-l1-finalized` are uncommitted; it comes before the cost prompt.
+- `summary.md` lists, right below the headline: `experiments` the nodes enabled (with the image's full list when it
+  differs), `node env, harness` per role, `node env, --node-env`, and `revisions` (image, harness commit, `dirty` when
+  the checkout had uncommitted changes). Reproduce the harness with `git checkout <git_rev>`.
 - AWS `run` prints each new phase with its detail, and every line of `agent.log` prefixed with the agent's phase, read
   from `ctl` every 5 s.
 - Step details report `queued` (pacer output, MB/s), `queue wait` (queued until a thread sends) and `submit rtt` (send
@@ -872,7 +890,7 @@ preflight -> plan -> confirm $ -> apply -> provisioned -> [shaping] -> services 
 - Postgres memory settings (`shared_buffers`, `effective_cache_size`, `maintenance_work_mem`, `autovacuum_work_mem`)
   scale with node0's memory, read by preflight. rds keeps fixed 32 GiB values.
 - `run --fleet` clears any previous qdisc during reset and restores the TCP sysctls and MTU that shaping changed, so a
-  run without `--latency` measures an unshaped fleet.
+  run with `--latency off` measures an unshaped fleet.
 - Cost bound: rate x (TTL + destroy + rds delete).
 
 ### Latency model
@@ -961,7 +979,8 @@ fleet.lock               pid, hostname, run name; present while a run holds the 
 rds.json (0600)          rds fleets: endpoint, identifier, password
 cost.json                expected, bound, actual USD of the fleet (instances, volume, rds)
 runs/01-run/             one measurement
-  manifest.json          fleet.json copy plus fleet, start_spread_s, config_hash, latency (profile, probes)
+  manifest.json          fleet.json copy plus fleet, start_spread_s, config_hash, latency (profile, probes), experiments,
+                         experiments_enabled, harness_node_env, harness_dirty
   genesis.toml topology.json config.json
   hosts/<host>/          node.env|ctl.env, start.sh, agent.json, <container>.log.gz, collect-<k>/ (`collect`),
                          cloud-init-output.log, chrony.txt, host.jsonl, sockets.jsonl (nodes), ena-allowance.txt,
@@ -1003,8 +1022,9 @@ runs/01-run/             one measurement
   `trace/leader_path.md`, `trace/stats.json`, `index-row.json`, a reduced `manifest.json`. Other files stay local.
   Symlinks are refused.
 - A workflow in the results repo rebuilds its `INDEX.md` and `README.md` (leaderboard, recent runs, totals).
-- The reduced `manifest.json` keeps `fleet`, `created_at`, `git_rev`, `query_db`, `images`, `config` without `node_env`,
-  and each host's name, role and instance type. `summary.md` is published as written and lists `--node-env` values.
+- The reduced `manifest.json` keeps `fleet`, `created_at`, `git_rev`, `query_db`, `images`, `harness_dirty`, `config`
+  without `node_env`, and each host's name, role and instance type. `summary.md` is published as written and lists
+  `--node-env` values.
 - A failed publish logs a warning with the retry command. The exit code stays the run's.
 - `publish`: a run dir without `index-row.json` takes its row from `bench-state/aws/INDEX.md`; none there is an error.
   Unchanged content commits nothing. Every dir is tried; exit non-zero if any failed.

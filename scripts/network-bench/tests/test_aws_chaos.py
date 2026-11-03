@@ -62,7 +62,7 @@ def test_wipe_script_steps():
 # TEST:rejoin-env-config-peers-ok
 def test_rejoin_env_config_peers():
     hosts = fleet(8, 2)
-    spec = {"name": "node4", "role": "validator"}
+    spec = {"name": "node4", "role": "validator", "root_gb": 100}
 
     def env(**kw):
         text = awsb.render_node_env(spec, hosts, None, query_engine="sqlite", **kw)
@@ -145,8 +145,9 @@ def test_chaos_latency_off_refuses_latency_flags():
         awsb.config_from_args(parse("--chaos", "--latency", "off", "--mtu", "9000"))
 
 
-def test_latency_stays_off_without_chaos():
-    assert awsb.config_from_args(parse()).latency == "off"
+def test_latency_defaults_to_the_reference_profile_and_off_unshapes():
+    assert awsb.config_from_args(parse()).latency == "decaf-2025"
+    assert awsb.config_from_args(parse("--latency", "off")).latency == "off"
 
 
 def test_chaos_summary_has_the_latency_profile():
@@ -460,7 +461,12 @@ def render(run_dir: Path, cfg: Any) -> None:
     hosts = awsb.plan_hosts(cfg)
     for host in hosts:
         (run_dir / "hosts" / host["name"]).mkdir(parents=True)
-    manifest = {"hosts": hosts, "images": fake_images(), "memory_mib": MEMORY_MIB}
+    manifest = {
+        "hosts": hosts,
+        "images": fake_images(),
+        "memory_mib": MEMORY_MIB,
+        "experiments_enabled": [],
+    }
     awsb.render_host_files(run_dir, cfg, manifest, fleet(7, 3))
 
 
@@ -1143,7 +1149,7 @@ def test_netem_is_full_under_chaos_only_by_default():
 
 def test_netem_needs_a_latency_profile():
     with pytest.raises(awsb.Refused, match="--netem"):
-        awsb.config_from_args(parse("--netem", "full"))
+        awsb.config_from_args(parse("--latency", "off", "--netem", "full"))
 
 
 def test_jitter_ratio_flag_needs_netem_full():

@@ -41,6 +41,7 @@ from fakes import (
     run_cmd,
     ssh_calls,
     two_node_hosts_info,
+    unshaped,
     valid_result,
     write_collected_run,
 )
@@ -133,7 +134,14 @@ def test_an_unorderable_rds_is_refused(runner, pattern):
 # REQ:fleet-cost
 def test_the_fleet_bound_bills_rds_until_its_delete_finishes():
     load = netbench.BenchConfig(submit_nodes=1)
-    cfg = awsb.RunConfig(tag="x", nodes=2, ttl_min="150", db_modes=("rds",), load=load)
+    cfg = awsb.RunConfig(
+        tag="x",
+        nodes=2,
+        ttl_min="150",
+        db_modes=("rds",),
+        pg_mbps=awsb.RDS_MBPS,
+        load=load,
+    )
     hosts = awsb.plan_hosts(cfg)
     ttl_s = 150 * 60.0
     without = awsb.cost_estimate(hosts, cfg, None, ttl_s, ttl_s, INSTANCE_PRICES)
@@ -221,6 +229,7 @@ def test_a_single_shot_deletes_the_rds_before_its_hosts_end(tmp_path):
 def test_plan_renders_the_rds_variables_and_prices_them(isolated, monkeypatch):
     out = isolated_env(monkeypatch, isolated, "planned")
     argv = ["plan", "--nodes", "2", "--tag", "x", "--db-modes", "colocated,rds"]
+    argv += ["--pg-mbps", "500"]
     args = awsb.parse_args(argv)
     args.argv = argv
     pre = {**fake_preflight(), "rds_engine_version": "18"}
@@ -248,7 +257,12 @@ def test_node0_env_points_at_the_endpoint(harness):
     harness.up_rds()
     rds = netbench.read_json(harness.fleet_dir / "rds.json")
     run_dir, cfg = rds_run_dir(harness)
-    awsb.render_host_files(run_dir, cfg, harness.fleet(), two_node_hosts_info())
+    awsb.render_host_files(
+        run_dir,
+        cfg,
+        {**harness.fleet(), "experiments_enabled": []},
+        two_node_hosts_info(),
+    )
     node0 = run_dir / "hosts/node0"
     env = dict(
         line.split("=", 1) for line in (node0 / "node.env").read_text().splitlines()
@@ -278,7 +292,12 @@ def test_the_password_files_are_private_before_they_are_written(harness, monkeyp
 
     monkeypatch.setattr(Path, "write_text", spy(Path.write_text))
     monkeypatch.setattr(netbench, "write_json", spy(netbench.write_json))
-    awsb.render_host_files(run_dir, cfg, harness.fleet(), two_node_hosts_info())
+    awsb.render_host_files(
+        run_dir,
+        cfg,
+        {**harness.fleet(), "experiments_enabled": []},
+        two_node_hosts_info(),
+    )
     assert modes["node0/node.env"] == 0o600
     assert modes["node0/pg.json"] == 0o600
 
@@ -378,14 +397,10 @@ def test_a_colocated_run_after_an_rds_run_starts_its_own_postgres(
 def test_a_sqlite_tmpfs_run_needs_no_provisioned_mode_and_starts_no_postgres(
     isolated, monkeypatch
 ):
-    harness = RdsHarness(monkeypatch, isolated, "colocated")
+    harness = RdsHarness(monkeypatch, isolated, "colocated", ["blob-dir"])
     runner = harness.up_fleet()
     mark = len(runner.calls)
-    harness.run(
-        runner,
-        *("--query-engine", "sqlite", "--query-db", "tmpfs"),
-        *("--node-env", "ESPRESSO_QUERY_PAYLOAD_DIR=/payload"),
-    )
+    harness.run(runner, *("--query-engine", "sqlite", "--query-db", "tmpfs"))
     assert not any("docker start postgres" in c for c in ssh_calls(runner, mark))
     run_dir = harness.run_dir("01-sqlite-tmpfs")
     assert netbench.read_json(run_dir / "manifest.json")["query_engine"] == "sqlite"
@@ -395,6 +410,21 @@ def test_a_sqlite_tmpfs_run_needs_no_provisioned_mode_and_starts_no_postgres(
     assert "--tmpfs /store/espresso/sqlite:size=8g" in start
     assert "ESPRESSO_NODE_EMBEDDED_DB=true" in (host_dir / "node.env").read_text()
     assert not (host_dir / "pg.json").exists()
+    assert "ESPRESSO_NODE_BLOB_DIR=/payload\n" in (host_dir / "node.env").read_text()
+
+
+# TEST:harness-tmpfs-needs-blob-fails
+def test_a_tmpfs_run_without_the_blob_dir_experiment_is_refused_and_unlocked(
+    isolated, monkeypatch
+):
+    harness = RdsHarness(monkeypatch, isolated, "colocated")
+    runner = harness.up_fleet()
+    mark = len(runner.calls)
+    with pytest.raises(awsb.Refused, match="blob-dir"):
+        harness.run(runner, *("--query-engine", "sqlite", "--query-db", "tmpfs"))
+    assert not ssh_calls(runner, mark)
+    assert not (harness.fleet_dir / awsb.FLEET_LOCK).exists()
+    assert not harness.run_dir("01-sqlite-tmpfs").exists()
 
 
 def test_a_sqlite_run_on_rds_is_refused_before_any_ssh(isolated, monkeypatch):
@@ -425,7 +455,15 @@ def test_a_failed_database_drop_leaves_the_fleet_dirty(harness):
 
 def test_a_single_shot_creates_the_instance_measures_and_destroys(harness):
     runner = RdsRunner([DONE_STATE], describe=DESCRIBE)
-    args = harness.parse("run", *harness.fleet_flags(), "--query-db", "rds")
+    args = harness.parse(
+        "run",
+        *harness.fleet_flags(),
+        "--query-db",
+        "rds",
+        "--pg-mbps",
+        "500",
+        *unshaped(()),
+    )
     assert awsb.cmd_run(args, FakeSystem(run=runner)) == awsb.EXIT_OK
     assert harness.fleet()["db_modes"] == ["rds"]
     assert "rds" in harness.tfvars()

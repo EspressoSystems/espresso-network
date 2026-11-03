@@ -68,7 +68,8 @@ def tcp_sysctls(tcp_cc: str) -> tuple[tuple[str, str], ...]:
 
 
 # Traffic between AWS regions, over inter-region peering or an internet gateway carries at most
-# 1500 bytes; only traffic inside one VPC gets jumbo frames (9001). `--mtu` sets the interface MTU.
+# 1500 bytes; only traffic inside one VPC gets jumbo frames (9001). `--mtu` sets the interface MTU;
+# the harness defaults to 9001 (VPC_MTU in aws-bench) and `--mtu 1500` gives internet-sized packets.
 # https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/network_mtu.html
 INTERNET_MTU = 1500
 TC_CLEAR = 'if tc qdisc show dev "$IFACE" | grep -q "htb 1:"; then tc qdisc del dev "$IFACE" root; fi'

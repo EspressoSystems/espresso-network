@@ -2980,3 +2980,44 @@ def test_summary_names_how_far_the_prover_got(tmp_path: Path):
     assert "prover" not in netbench.render(result, None)
     result["deployment"] = deployment() | {"prover": "prover-started"}
     assert "- light-client prover: prover-started" in netbench.render(result, None)
+
+
+def setup_result() -> netbench.BenchResult:
+    current = make_result()
+    current["deployment"] = {
+        **deployment(),
+        "experiments": ["journal", "blob-dir"],
+        "experiments_enabled": ["journal"],
+        "harness_node_env": {"validator": ["A=1"], "query": ["A=1", "B=2"]},
+        "node_env": ["X=y"],
+        "harness_dirty": True,
+    }
+    return current
+
+
+# TEST:harness-summary-setup-ok
+def test_setup_lines_show_experiments_env_and_revisions():
+    current = setup_result()
+    assert netbench.setup_lines(current) == [
+        "- experiments: journal (image lists: journal, blob-dir)",
+        "- node env, harness: validators `A=1`; query nodes `A=1`, `B=2`",
+        "- node env, --node-env: `X=y`",
+        ("- revisions: image bd2ad6e1dc, harness 0123456789, dirty"),
+    ]
+    summary = netbench.render(current, None, chart="![chart](c.png)")
+    assert summary.index("- experiments:") < summary.index("![chart](c.png)")
+
+
+def test_setup_lines_show_none_and_omit_what_is_not_recorded():
+    current = make_result()
+    assert netbench.setup_lines(current) == []
+    current["deployment"] = {
+        **deployment(),
+        "experiments": [],
+        "experiments_enabled": [],
+    }
+    assert netbench.setup_lines(current)[0] == "- experiments: none"
+    current["deployment"] = deployment()
+    assert netbench.setup_lines(current) == [
+        "- revisions: image bd2ad6e1dc, harness 0123456789"
+    ]
