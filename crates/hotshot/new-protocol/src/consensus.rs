@@ -703,6 +703,12 @@ impl<T: NodeType> Consensus<T> {
                     .map(|p| p.view_number)
                     .collect();
                 for child in children.into_iter().rev() {
+                    if self.certs1.contains_key(&child) {
+                        // Certified without our vote while the parent was still
+                        // reconstructing; a vote1 now adds nothing to it.
+                        debug!(%view, %child, "parent reconstructed after the child was certified");
+                        continue;
+                    }
                     self.maybe_vote_1(child, outbox);
                     if self.voted_1_views.contains(&child) {
                         break;
@@ -2563,7 +2569,12 @@ impl<T: NodeType> Consensus<T> {
             .states_verified
             .contains(&(view, proposal_commitment(proposal)))
         {
-            debug!(%view, "state commitment not available");
+            if view < self.current_view {
+                // The view change discarded it; this vote1 can no longer be cast.
+                warn!(%view, current_view = %self.current_view, "state commitment discarded before a late vote1");
+            } else {
+                debug!(%view, "state commitment not available");
+            }
             return;
         }
         if !self.vid_shares.contains_key(&view) {
