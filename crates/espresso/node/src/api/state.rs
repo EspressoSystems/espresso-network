@@ -800,6 +800,25 @@ fn not_found(msg: impl Into<String>) -> anyhow::Error {
     AvailabilityError::NotFound(msg.into()).into()
 }
 
+/// The error for an object that did not arrive within the fetch timeout. Checked only after the
+/// wait, rather than refusing future heights up front, so a block that lands while the request
+/// waits is still served to a client polling for the next one.
+async fn missing<D>(ds: &D, height: Option<usize>, msg: String) -> anyhow::Error
+where
+    D: hotshot_query_service::node::NodeDataSource<SeqTypes> + ?Sized,
+{
+    if let Some(height) = height
+        && let Ok(block_height) = ds.block_height().await
+        && height >= block_height
+    {
+        return AvailabilityError::NotYetAvailable(format!(
+            "{msg}, block height is {block_height}"
+        ))
+        .into();
+    }
+    not_found(msg)
+}
+
 fn bad_request(msg: impl Into<String>) -> anyhow::Error {
     AvailabilityError::BadRequest(msg.into()).into()
 }
@@ -873,6 +892,7 @@ impl<D> HotShotAvailabilityApi for NodeApiStateImpl<D>
 where
     D: Deref + Clone + Send + Sync + 'static,
     D::Target: AvailabilityDataSource<SeqTypes>
+        + hotshot_query_service::node::NodeDataSource<SeqTypes>
         + hotshot_query_service::data_source::VersionedDataSource
         + Send
         + Sync,
@@ -890,11 +910,14 @@ where
             },
         };
         let ds = &*self.data_source;
-        ds.get_leaf(hs_id)
-            .await
-            .with_timeout(FETCH_TIMEOUT)
-            .await
-            .ok_or_else(|| not_found("leaf not found"))
+        let Some(item) = ds.get_leaf(hs_id).await.with_timeout(FETCH_TIMEOUT).await else {
+            let height = match hs_id {
+                HsLeafId::Number(height) => Some(height),
+                _ => None,
+            };
+            return Err(missing(ds, height, "leaf not found".to_string()).await);
+        };
+        Ok(item)
     }
 
     async fn get_leaf_range(
@@ -910,10 +933,9 @@ where
         futures::pin_mut!(stream);
         let mut i = from;
         while let Some(fetch) = stream.next().await {
-            let item = fetch
-                .with_timeout(timeout)
-                .await
-                .ok_or_else(|| not_found(format!("leaf {} not found", i)))?;
+            let Some(item) = fetch.with_timeout(timeout).await else {
+                return Err(missing(ds, Some(i), format!("leaf {} not found", i)).await);
+            };
             results.push(item);
             i += 1;
         }
@@ -926,11 +948,14 @@ where
     ) -> anyhow::Result<HsHeader<SeqTypes>> {
         let hs_id = block_id_to_hs(id)?;
         let ds = &*self.data_source;
-        ds.get_header(hs_id)
-            .await
-            .with_timeout(FETCH_TIMEOUT)
-            .await
-            .ok_or_else(|| not_found(format!("header not found for {}", hs_id)))
+        let Some(item) = ds.get_header(hs_id).await.with_timeout(FETCH_TIMEOUT).await else {
+            let height = match hs_id {
+                HsBlockId::Number(height) => Some(height),
+                _ => None,
+            };
+            return Err(missing(ds, height, format!("header not found for {}", hs_id)).await);
+        };
+        Ok(item)
     }
 
     async fn get_header_range(
@@ -946,10 +971,9 @@ where
         futures::pin_mut!(stream);
         let mut i = from;
         while let Some(fetch) = stream.next().await {
-            let item = fetch
-                .with_timeout(timeout)
-                .await
-                .ok_or_else(|| not_found(format!("header {} not found", i)))?;
+            let Some(item) = fetch.with_timeout(timeout).await else {
+                return Err(missing(ds, Some(i), format!("header {} not found", i)).await);
+            };
             results.push(item);
             i += 1;
         }
@@ -962,11 +986,14 @@ where
     ) -> anyhow::Result<BlockQueryData<SeqTypes>> {
         let hs_id = block_id_to_hs(id)?;
         let ds = &*self.data_source;
-        ds.get_block(hs_id)
-            .await
-            .with_timeout(FETCH_TIMEOUT)
-            .await
-            .ok_or_else(|| not_found(format!("block not found for {}", hs_id)))
+        let Some(item) = ds.get_block(hs_id).await.with_timeout(FETCH_TIMEOUT).await else {
+            let height = match hs_id {
+                HsBlockId::Number(height) => Some(height),
+                _ => None,
+            };
+            return Err(missing(ds, height, format!("block not found for {}", hs_id)).await);
+        };
+        Ok(item)
     }
 
     async fn get_block_range(
@@ -982,10 +1009,9 @@ where
         futures::pin_mut!(stream);
         let mut i = from;
         while let Some(fetch) = stream.next().await {
-            let item = fetch
-                .with_timeout(timeout)
-                .await
-                .ok_or_else(|| not_found(format!("block {} not found", i)))?;
+            let Some(item) = fetch.with_timeout(timeout).await else {
+                return Err(missing(ds, Some(i), format!("block {} not found", i)).await);
+            };
             results.push(item);
             i += 1;
         }
@@ -998,11 +1024,19 @@ where
     ) -> anyhow::Result<PayloadQueryData<SeqTypes>> {
         let hs_id = payload_id_to_hs(id)?;
         let ds = &*self.data_source;
-        ds.get_payload(hs_id)
+        let Some(item) = ds
+            .get_payload(hs_id)
             .await
             .with_timeout(FETCH_TIMEOUT)
             .await
-            .ok_or_else(|| not_found(format!("payload not found for {}", hs_id)))
+        else {
+            let height = match hs_id {
+                HsBlockId::Number(height) => Some(height),
+                _ => None,
+            };
+            return Err(missing(ds, height, format!("payload not found for {}", hs_id)).await);
+        };
+        Ok(item)
     }
 
     async fn get_payload_range(
@@ -1018,10 +1052,9 @@ where
         futures::pin_mut!(stream);
         let mut i = from;
         while let Some(fetch) = stream.next().await {
-            let item = fetch
-                .with_timeout(timeout)
-                .await
-                .ok_or_else(|| not_found(format!("payload {} not found", i)))?;
+            let Some(item) = fetch.with_timeout(timeout).await else {
+                return Err(missing(ds, Some(i), format!("payload {} not found", i)).await);
+            };
             results.push(item);
             i += 1;
         }
@@ -1034,11 +1067,19 @@ where
     ) -> anyhow::Result<VidCommonQueryData<SeqTypes>> {
         let hs_id = block_id_to_hs(id)?;
         let ds = &*self.data_source;
-        ds.get_vid_common(hs_id)
+        let Some(item) = ds
+            .get_vid_common(hs_id)
             .await
             .with_timeout(FETCH_TIMEOUT)
             .await
-            .ok_or_else(|| not_found(format!("VID common not found for {}", hs_id)))
+        else {
+            let height = match hs_id {
+                HsBlockId::Number(height) => Some(height),
+                _ => None,
+            };
+            return Err(missing(ds, height, format!("VID common not found for {}", hs_id)).await);
+        };
+        Ok(item)
     }
 
     async fn get_vid_common_range(
@@ -1054,10 +1095,9 @@ where
         futures::pin_mut!(stream);
         let mut i = from;
         while let Some(fetch) = stream.next().await {
-            let item = fetch
-                .with_timeout(timeout)
-                .await
-                .ok_or_else(|| not_found(format!("VID common {} not found", i)))?;
+            let Some(item) = fetch.with_timeout(timeout).await else {
+                return Err(missing(ds, Some(i), format!("VID common {} not found", i)).await);
+            };
             results.push(item);
             i += 1;
         }
