@@ -11,7 +11,17 @@
 // see <https://www.gnu.org/licenses/>.
 
 #![cfg(feature = "sql-data-source")]
-use std::{cmp::min, fmt::Debug, future::Future, str::FromStr, time::Duration};
+use std::{
+    cmp::min,
+    fmt::Debug,
+    future::Future,
+    str::FromStr,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::Duration,
+};
 
 use anyhow::Context;
 use async_trait::async_trait;
@@ -343,6 +353,8 @@ pub struct SqlStorage {
     pruned_heights: PrunedHeightMetrics,
     pruner_cfg: Option<PrunerCfg>,
     serializable_retry_config: SerializableRetryConfig,
+    // Set by the first `init_pruned_height` above genesis. Clones share it.
+    pruned_height_initialized: Arc<AtomicBool>,
 }
 
 #[derive(Debug)]
@@ -503,6 +515,7 @@ impl SqlStorage {
                     pool,
                     pruner_cfg,
                     serializable_retry_config,
+                    pruned_height_initialized: Default::default(),
                 });
             }
         } else if config.pool.is_some() {
@@ -591,6 +604,7 @@ impl SqlStorage {
             metrics,
             pruner_cfg,
             serializable_retry_config,
+            pruned_height_initialized: Default::default(),
         };
         // Before the state writer can start: it resumes from the head, and the heights it rewrites
         // have to come under a pruning batch again. The pruner's first run is an interval away.
@@ -826,6 +840,33 @@ impl SqlStorage {
             .context("opening pruning transaction")?;
         tx.delete_batch(to).await?;
         tx.commit().await.context("committing deleted batch")
+    }
+
+    /// Record `height` as the data pruned height, without deleting anything: data at or below it
+    /// counts as pruned, and is never fetched. A height below the recorded one leaves it as is.
+    async fn set_pruned_height(&self, height: u64) -> anyhow::Result<()> {
+        let mut tx = self
+            .write()
+            .await
+            .context("opening transaction for pruned height")?;
+        let stored = tx.save_pruned_height(height).await?;
+        tx.commit().await.context("committing pruned height")?;
+        self.pruned_heights.set(PruneCategory::Data, stored);
+        Ok(())
+    }
+
+    /// Whether the database has neither pruned nor stored a block above genesis. A pruned height of
+    /// 0 still counts: the first pruner run can delete the genesis block before the first decide.
+    async fn is_fresh(&self) -> anyhow::Result<bool> {
+        let mut tx = self.read().await.context("opening transaction")?;
+        let pruned = self
+            .load_pruned_height(&mut tx, PruneCategory::Data)
+            .await?;
+        let (highest,) = query_as::<(Option<i64>,)>("SELECT max(height) FROM header")
+            .fetch_one(tx.as_mut())
+            .await
+            .context("loading the highest block")?;
+        Ok(pruned.is_none_or(|pruned| pruned == 0) && highest.is_none_or(|height| height == 0))
     }
 
     /// State is never fetched from peers, so unlike data the marker need not commit first.
@@ -1091,14 +1132,21 @@ impl PruneStorage for SqlStorage {
         Ok(Some(to))
     }
 
-    async fn set_pruned_height(&self, height: u64) -> anyhow::Result<()> {
-        let mut tx = self
-            .write()
-            .await
-            .context("opening transaction for pruned height")?;
-        let stored = tx.save_pruned_height(height).await?;
-        tx.commit().await.context("committing pruned height")?;
-        self.pruned_heights.set(PruneCategory::Data, stored);
+    async fn init_pruned_height(&self, height: u64) -> anyhow::Result<()> {
+        if height == 0
+            || self.pruner_cfg.is_none()
+            || self.pruned_height_initialized.load(Ordering::Acquire)
+        {
+            return Ok(());
+        }
+        if height > 1 && self.is_fresh().await? {
+            self.set_pruned_height(height - 1)
+                .await
+                .context("marking the blocks below the first block as pruned")?;
+            tracing::info!(height, "fresh pruned database starts at its first block");
+        }
+        self.pruned_height_initialized
+            .store(true, Ordering::Release);
         Ok(())
     }
 }

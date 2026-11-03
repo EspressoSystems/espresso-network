@@ -273,8 +273,8 @@ where
         self.inner.prune(pruner).await
     }
 
-    async fn set_pruned_height(&self, height: u64) -> anyhow::Result<()> {
-        self.inner.set_pruned_height(height).await
+    async fn init_pruned_height(&self, height: u64) -> anyhow::Result<()> {
+        self.inner.init_pruned_height(height).await
     }
 }
 
