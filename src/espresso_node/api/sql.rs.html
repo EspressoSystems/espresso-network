@@ -1440,7 +1440,7 @@
 <a href=#1440 id=1440 data-nosnippet>1440</a>}
 <a href=#1441 id=1441 data-nosnippet>1441</a>
 <a href=#1442 id=1442 data-nosnippet>1442</a><span class="kw">impl </span><span class="kw">crate</span>::api::data_source::DatabaseMetadataSource <span class="kw">for </span>SqlStorage {
-<a href=#1443 id=1443 data-nosnippet>1443</a>    <span class="kw">async fn </span>get_table_sizes(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; anyhow::Result&lt;Vec&lt;<span class="kw">crate</span>::api::data_source::TableSize&gt;&gt; {
+<a href=#1443 id=1443 data-nosnippet>1443</a>    <span class="kw">async fn </span>get_table_sizes(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; anyhow::Result&lt;Vec&lt;espresso_api::v1::database::TableSize&gt;&gt; {
 <a href=#1444 id=1444 data-nosnippet>1444</a>        <span class="kw">let </span><span class="kw-2">mut </span>tx = <span class="self">self
 <a href=#1445 id=1445 data-nosnippet>1445</a>            </span>.read()
 <a href=#1446 id=1446 data-nosnippet>1446</a>            .<span class="kw">await
@@ -1467,7 +1467,7 @@
 <a href=#1467 id=1467 data-nosnippet>1467</a>                <span class="kw">let </span>row_count: i64 = row.try_get(<span class="string">"row_count"</span>).unwrap_or(-<span class="number">1</span>);
 <a href=#1468 id=1468 data-nosnippet>1468</a>                <span class="kw">let </span>total_size_bytes: <span class="prelude-ty">Option</span>&lt;i64&gt; = row.try_get(<span class="string">"total_size_bytes"</span>).ok();
 <a href=#1469 id=1469 data-nosnippet>1469</a>
-<a href=#1470 id=1470 data-nosnippet>1470</a>                table_sizes.push(<span class="kw">crate</span>::api::data_source::TableSize {
+<a href=#1470 id=1470 data-nosnippet>1470</a>                table_sizes.push(espresso_api::v1::database::TableSize {
 <a href=#1471 id=1471 data-nosnippet>1471</a>                    table_name,
 <a href=#1472 id=1472 data-nosnippet>1472</a>                    row_count,
 <a href=#1473 id=1473 data-nosnippet>1473</a>                    total_size_bytes,
@@ -1509,7 +1509,7 @@
 <a href=#1509 id=1509 data-nosnippet>1509</a>
 <a href=#1510 id=1510 data-nosnippet>1510</a>                <span class="kw">let </span>row_count: i64 = count_row.try_get(<span class="string">"count"</span>).unwrap_or(<span class="number">0</span>);
 <a href=#1511 id=1511 data-nosnippet>1511</a>
-<a href=#1512 id=1512 data-nosnippet>1512</a>                table_sizes.push(<span class="kw">crate</span>::api::data_source::TableSize {
+<a href=#1512 id=1512 data-nosnippet>1512</a>                table_sizes.push(espresso_api::v1::database::TableSize {
 <a href=#1513 id=1513 data-nosnippet>1513</a>                    table_name,
 <a href=#1514 id=1514 data-nosnippet>1514</a>                    row_count,
 <a href=#1515 id=1515 data-nosnippet>1515</a>                    total_size_bytes: <span class="prelude-val">None</span>,
@@ -1522,7 +1522,7 @@
 <a href=#1522 id=1522 data-nosnippet>1522</a>
 <a href=#1523 id=1523 data-nosnippet>1523</a>    <span class="kw">async fn </span>get_migration_status(
 <a href=#1524 id=1524 data-nosnippet>1524</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
-<a href=#1525 id=1525 data-nosnippet>1525</a>    ) -&gt; anyhow::Result&lt;Vec&lt;<span class="kw">crate</span>::api::data_source::MigrationStatus&gt;&gt; {
+<a href=#1525 id=1525 data-nosnippet>1525</a>    ) -&gt; anyhow::Result&lt;Vec&lt;espresso_api::v1::database::MigrationStatus&gt;&gt; {
 <a href=#1526 id=1526 data-nosnippet>1526</a>        <span class="kw">let </span><span class="kw-2">mut </span>tx = <span class="self">self
 <a href=#1527 id=1527 data-nosnippet>1527</a>            </span>.read()
 <a href=#1528 id=1528 data-nosnippet>1528</a>            .<span class="kw">await
@@ -1546,7 +1546,7 @@
 <a href=#1546 id=1546 data-nosnippet>1546</a>        <span class="prelude-val">Ok</span>(rows
 <a href=#1547 id=1547 data-nosnippet>1547</a>            .into_iter()
 <a href=#1548 id=1548 data-nosnippet>1548</a>            .map(|(name, started_at, completed_at, last_offset)| {
-<a href=#1549 id=1549 data-nosnippet>1549</a>                <span class="kw">crate</span>::api::data_source::MigrationStatus {
+<a href=#1549 id=1549 data-nosnippet>1549</a>                espresso_api::v1::database::MigrationStatus {
 <a href=#1550 id=1550 data-nosnippet>1550</a>                    name,
 <a href=#1551 id=1551 data-nosnippet>1551</a>                    started_at,
 <a href=#1552 id=1552 data-nosnippet>1552</a>                    completed_at,
@@ -1558,13 +1558,13 @@
 <a href=#1558 id=1558 data-nosnippet>1558</a>}
 <a href=#1559 id=1559 data-nosnippet>1559</a>
 <a href=#1560 id=1560 data-nosnippet>1560</a><span class="kw">impl </span><span class="kw">crate</span>::api::data_source::DatabaseMetadataSource <span class="kw">for </span>DataSource {
-<a href=#1561 id=1561 data-nosnippet>1561</a>    <span class="kw">async fn </span>get_table_sizes(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; anyhow::Result&lt;Vec&lt;<span class="kw">crate</span>::api::data_source::TableSize&gt;&gt; {
+<a href=#1561 id=1561 data-nosnippet>1561</a>    <span class="kw">async fn </span>get_table_sizes(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; anyhow::Result&lt;Vec&lt;espresso_api::v1::database::TableSize&gt;&gt; {
 <a href=#1562 id=1562 data-nosnippet>1562</a>        <span class="self">self</span>.as_ref().get_table_sizes().<span class="kw">await
 <a href=#1563 id=1563 data-nosnippet>1563</a>    </span>}
 <a href=#1564 id=1564 data-nosnippet>1564</a>
 <a href=#1565 id=1565 data-nosnippet>1565</a>    <span class="kw">async fn </span>get_migration_status(
 <a href=#1566 id=1566 data-nosnippet>1566</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
-<a href=#1567 id=1567 data-nosnippet>1567</a>    ) -&gt; anyhow::Result&lt;Vec&lt;<span class="kw">crate</span>::api::data_source::MigrationStatus&gt;&gt; {
+<a href=#1567 id=1567 data-nosnippet>1567</a>    ) -&gt; anyhow::Result&lt;Vec&lt;espresso_api::v1::database::MigrationStatus&gt;&gt; {
 <a href=#1568 id=1568 data-nosnippet>1568</a>        <span class="self">self</span>.as_ref().get_migration_status().<span class="kw">await
 <a href=#1569 id=1569 data-nosnippet>1569</a>    </span>}
 <a href=#1570 id=1570 data-nosnippet>1570</a>}

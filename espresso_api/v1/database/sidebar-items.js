@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"trait":["DatabaseApi"]};
+window.SIDEBAR_ITEMS = {"struct":["MigrationStatus","TableSize"],"trait":["DatabaseApi"]};

@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"trait":["StatusApi"]};
+window.SIDEBAR_ITEMS = {"mod":["x25519_tagged"],"struct":["NodePublicKeys"],"trait":["StatusApi"]};

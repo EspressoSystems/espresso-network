@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"enum":["HeaderWindowStart","VidShareId"],"trait":["NodeApi"]};
+window.SIDEBAR_ITEMS = {"enum":["HeaderWindowStart","VidShareId"],"struct":["StakeTableWithEpochNumber"],"trait":["NodeApi"]};

@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"trait":["RewardApi"]};
+window.SIDEBAR_ITEMS = {"trait":["RewardApi"],"type":["RewardStatePathV1","RewardStatePathV2"]};

@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"enum":["Snapshot"],"trait":["BlockStateApi","FeeStateApi"]};
+window.SIDEBAR_ITEMS = {"enum":["Snapshot"],"trait":["BlockStateApi","FeeStateApi"],"type":["BlockStatePath","FeeStatePath"]};
