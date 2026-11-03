@@ -78,8 +78,9 @@ impl WatchdogMetrics {
                 .with_label_values(&labels)
                 .set(i64::try_from(kind.missing_count)?);
             let age = kind
-                .oldest_missing_age
-                .map_or(Ok(0), |age| i64::try_from(age.as_secs()))?;
+                .oldest
+                .as_ref()
+                .map_or(Ok(0), |oldest| i64::try_from(oldest.age.as_secs()))?;
             self.oldest_missing_age_seconds
                 .with_label_values(&labels)
                 .set(age);

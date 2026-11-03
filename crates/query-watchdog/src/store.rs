@@ -1,4 +1,4 @@
-use std::{fs, path::Path, str::FromStr, time::Duration};
+use std::{fs, ops::Range, path::Path, str::FromStr, time::Duration};
 
 use anyhow::{Context, bail};
 use chrono::{DateTime, Utc};
@@ -234,75 +234,78 @@ impl NodeStore {
             .collect()
     }
 
-    /// Deletes rows below `start_height`: per-height kinds with `range_end <= start_height`,
-    /// per-epoch kinds whose last block `epoch * epoch_height` is below it; returns the count.
+    /// Deletes rows below `start_height` in one statement: per-height kinds with
+    /// `range_start < start_height`, per-epoch kinds whose last block `epoch * epoch_height` is
+    /// below it; returns the count.
     pub async fn forget_below(
         &self,
         start_height: u64,
         epochs: Option<EpochConfig>,
     ) -> anyhow::Result<u64> {
-        let kinds = |per_epoch: bool| {
-            DataKind::VARIANTS
-                .iter()
-                .filter(|kind| kind.is_per_epoch() == per_epoch)
-                .map(|&kind| format!("'{}'", <&'static str>::from(kind)))
-                .collect::<Vec<_>>()
-                .join(", ")
-        };
-        let mut forgotten = sqlx::query(&format!(
-            "DELETE FROM missing_chunk WHERE node = ? AND range_end <= ? AND kind IN ({})",
-            kinds(false)
-        ))
-        .bind(&self.node)
-        .bind(i64::try_from(start_height)?)
-        .execute(&self.pool)
-        .await?
-        .rows_affected();
+        let start_height = i64::try_from(start_height)?;
+        let mut query = QueryBuilder::new("DELETE FROM missing_chunk WHERE node = ");
+        query.push_bind(&self.node).push(" AND ((kind IN (");
+        push_kinds(&mut query, false);
+        query.push(") AND range_start < ").push_bind(start_height);
         if let Some(epochs) = epochs {
-            forgotten += sqlx::query(&format!(
-                "DELETE FROM missing_chunk WHERE node = ? AND range_start * ? < ? AND kind IN ({})",
-                kinds(true)
-            ))
-            .bind(&self.node)
-            .bind(i64::try_from(epochs.epoch_height)?)
-            .bind(i64::try_from(start_height)?)
-            .execute(&self.pool)
-            .await?
-            .rows_affected();
+            query.push(") OR (kind IN (");
+            push_kinds(&mut query, true);
+            query
+                .push(") AND range_start * ")
+                .push_bind(i64::try_from(epochs.epoch_height)?)
+                .push(" < ")
+                .push_bind(start_height);
         }
-        Ok(forgotten)
+        query.push("))");
+        Ok(query.build().execute(&self.pool).await?.rows_affected())
     }
 
-    /// One entry per `DataKind::VARIANTS`: `SUM(end - start)`, `now - MIN(first_missing_at)`.
+    /// One entry per `DataKind::VARIANTS`: `SUM(end - start)`, and the range with
+    /// `MIN(first_missing_at)` with its age at `now`.
     pub async fn missing_summary(&self, now: DateTime<Utc>) -> anyhow::Result<Vec<KindSummary>> {
-        let rows: Vec<(String, u64, DateTime<Utc>)> = sqlx::query_as(
-            "SELECT kind, SUM(range_end - range_start), MIN(first_missing_at) FROM missing_chunk \
-             WHERE node = ? GROUP BY kind",
+        // Bare columns of a query with one `MIN` come from the row holding the minimum.
+        let rows: Vec<(String, u64, DateTime<Utc>, u64, u64)> = sqlx::query_as(
+            "SELECT kind, SUM(range_end - range_start), MIN(first_missing_at), range_start, \
+             range_end FROM missing_chunk WHERE node = ? GROUP BY kind",
         )
         .bind(&self.node)
         .fetch_all(&self.pool)
         .await?;
         let by_kind = rows
             .into_iter()
-            .map(|(kind, count, first)| Ok((DataKind::from_str(&kind)?, (count, first))))
+            .map(|(kind, count, first, start, end)| {
+                let age = (now - first).to_std().with_context(|| {
+                    format!("{}: first_missing_at {first} is after {now}", self.node)
+                })?;
+                let oldest = OldestMissing {
+                    range: start..end,
+                    age,
+                };
+                Ok((DataKind::from_str(&kind)?, count, oldest))
+            })
             .collect::<anyhow::Result<Vec<_>>>()?;
-        DataKind::VARIANTS
+        Ok(DataKind::VARIANTS
             .iter()
             .map(|&kind| {
-                let found = by_kind.iter().find(|(k, _)| *k == kind).map(|(_, v)| v);
-                Ok(KindSummary {
+                let found = by_kind.iter().find(|(k, ..)| *k == kind);
+                KindSummary {
                     kind,
-                    missing_count: found.map_or(0, |&(count, _)| count),
-                    oldest_missing_age: found
-                        .map(|&(_, first)| {
-                            let secs = u64::try_from(now.timestamp() - first.timestamp())
-                                .context("first_missing_at is in the future")?;
-                            anyhow::Ok(Duration::from_secs(secs))
-                        })
-                        .transpose()?,
-                })
+                    missing_count: found.map_or(0, |(_, count, _)| *count),
+                    oldest: found.map(|(.., oldest)| oldest.clone()),
+                }
             })
-            .collect()
+            .collect())
+    }
+}
+
+/// Pushes the quoted-bind list of the kinds with `is_per_epoch() == per_epoch`.
+fn push_kinds(query: &mut QueryBuilder<'_, Sqlite>, per_epoch: bool) {
+    let mut kinds = query.separated(", ");
+    for kind in DataKind::VARIANTS
+        .iter()
+        .filter(|kind| kind.is_per_epoch() == per_epoch)
+    {
+        kinds.push_bind(<&'static str>::from(*kind));
     }
 }
 
@@ -312,6 +315,24 @@ pub struct NodeProgress {
     pub follow_next_height: u64,
     pub sweep: SweepState,
     pub last_sweep_completed_at: Option<DateTime<Utc>>,
+}
+
+impl NodeProgress {
+    /// Raises the follow height and a running sweep's next height to `window_start`.
+    pub fn clamped_to(self, window_start: u64) -> Self {
+        let sweep = match self.sweep {
+            SweepState::Running(sweep) => SweepState::Running(SweepProgress {
+                next_height: sweep.next_height.max(window_start),
+                ..sweep
+            }),
+            waiting @ SweepState::Waiting { .. } => waiting,
+        };
+        Self {
+            follow_next_height: self.follow_next_height.max(window_start),
+            sweep,
+            ..self
+        }
+    }
 }
 
 /// Sweep schedule of one node.
@@ -336,17 +357,24 @@ pub struct KindSummary {
     /// Heights, or epochs for a per-epoch kind.
     pub missing_count: u64,
     /// `None` when nothing is missing.
-    pub oldest_missing_age: Option<Duration>,
+    pub oldest: Option<OldestMissing>,
+}
+
+/// The missing range with the earliest `first_missing_at`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct OldestMissing {
+    pub range: Range<u64>,
+    pub age: Duration,
 }
 
 #[cfg(test)]
 mod tests {
-    use std::ops::Range;
-
     use chrono::TimeDelta;
     use pretty_assertions::assert_eq;
 
     use super::*;
+
+    const T0: i64 = 1_000;
 
     fn at(secs: i64) -> DateTime<Utc> {
         DateTime::from_timestamp(secs, 0).unwrap()
@@ -356,109 +384,143 @@ mod tests {
         Probe { kind, range }
     }
 
-    #[tokio::test]
-    async fn missing_lifecycle() {
-        let store = Store::connect(SqliteConnectOptions::from_str("sqlite::memory:").unwrap())
-            .await
-            .unwrap();
-        let node = store.node("a:1");
-        let t0 = 1_000;
-        let leaf = probe(DataKind::Leaf, 0..100);
-        let table = probe(DataKind::StakeTable, 5..6);
+    async fn node_store(label: &str) -> NodeStore {
+        let options = SqliteConnectOptions::from_str("sqlite::memory:").unwrap();
+        Store::connect(options).await.unwrap().node(label)
+    }
 
-        let summary = node.missing_summary(at(t0)).await.unwrap();
+    fn count(summary: &[KindSummary], kind: DataKind) -> u64 {
+        summary
+            .iter()
+            .find(|k| k.kind == kind)
+            .unwrap()
+            .missing_count
+    }
+
+    #[tokio::test]
+    async fn missing_backoff_and_summary() {
+        let node = node_store("a:1").await;
+        let leaf = probe(DataKind::Leaf, 0..100);
+
+        let summary = node.missing_summary(at(T0)).await.unwrap();
         assert_eq!(summary.len(), DataKind::VARIANTS.len());
         assert!(
             summary
                 .iter()
-                .all(|k| k.missing_count == 0 && k.oldest_missing_age.is_none())
+                .all(|k| k.missing_count == 0 && k.oldest.is_none())
         );
 
-        node.record_missing(&leaf, at(t0)).await.unwrap();
-        node.record_missing(&table, at(t0 + 50)).await.unwrap();
-        assert!(node.due_retries(at(t0 + 9), 10).await.unwrap().is_empty());
-        assert_eq!(
-            node.due_retries(at(t0 + 10), 10).await.unwrap(),
-            std::slice::from_ref(&leaf)
-        );
+        node.record_missing(&leaf, at(T0)).await.unwrap();
+        node.record_missing(&probe(DataKind::StakeTable, 5..6), at(T0 + 50))
+            .await
+            .unwrap();
+        assert!(node.due_retries(at(T0 + 9), 10).await.unwrap().is_empty());
+        let due = node.due_retries(at(T0 + 10), 10).await.unwrap();
+        assert_eq!(due, std::slice::from_ref(&leaf));
 
-        // Delay doubles from 10 s: next retry at +20, +40, +80, ..., capped at 600.
-        let mut now = t0 + 10;
+        // The delay doubles from 10 s to the 600 s cap.
+        let mut now = T0 + 10;
         for delay in [20, 40, 80, 160, 320, 600, 600] {
             node.record_missing(&leaf, at(now)).await.unwrap();
-            assert!(
-                node.due_retries(at(now + delay - 1), 10)
-                    .await
-                    .unwrap()
-                    .iter()
-                    .all(|p| *p != leaf)
-            );
-            assert!(
-                node.due_retries(at(now + delay), 10)
-                    .await
-                    .unwrap()
-                    .contains(&leaf)
-            );
+            let before = node.due_retries(at(now + delay - 1), 10).await.unwrap();
+            assert!(!before.contains(&leaf));
+            let after = node.due_retries(at(now + delay), 10).await.unwrap();
+            assert!(after.contains(&leaf));
             now += delay;
         }
 
-        let summary = node.missing_summary(at(t0 + 100)).await.unwrap();
-        let find = |kind| summary.iter().find(|k| k.kind == kind).unwrap().clone();
+        let summary = node.missing_summary(at(T0 + 100)).await.unwrap();
+        let leaf_summary = summary.iter().find(|k| k.kind == DataKind::Leaf).unwrap();
         assert_eq!(
-            find(DataKind::Leaf),
-            KindSummary {
-                kind: DataKind::Leaf,
-                missing_count: 100,
-                oldest_missing_age: Some(TimeDelta::seconds(100).to_std().unwrap()),
-            }
+            leaf_summary.oldest,
+            Some(OldestMissing {
+                range: 0..100,
+                age: TimeDelta::seconds(100).to_std().unwrap(),
+            })
         );
-        assert_eq!(find(DataKind::StakeTable).missing_count, 1);
-
-        node.record_found(&leaf).await.unwrap();
-        let summary = node.missing_summary(at(t0 + 100)).await.unwrap();
-        assert_eq!(summary.iter().map(|k| k.missing_count).sum::<u64>(), 1);
-
-        // Window starts at 100: leaf 0..100 and epoch 3 (last block 90) go; leaf 100..200 and
-        // epoch 5 (last block 150) stay.
-        let epochs = EpochConfig {
-            epoch_height: 30,
-            epoch_start_block: 61,
-        };
-        for p in [
-            probe(DataKind::Leaf, 0..100),
-            probe(DataKind::Leaf, 100..200),
-            probe(DataKind::StateCert, 3..4),
-        ] {
-            node.record_missing(&p, at(t0)).await.unwrap();
-        }
-        assert_eq!(node.forget_below(100, Some(epochs)).await.unwrap(), 2);
-        let now = at(t0 + 100);
-        let count = |summary: &[KindSummary], kind| {
-            summary
-                .iter()
-                .find(|k| k.kind == kind)
-                .unwrap()
-                .missing_count
-        };
-        let summary = node.missing_summary(now).await.unwrap();
         assert_eq!(count(&summary, DataKind::Leaf), 100);
-        assert_eq!(count(&summary, DataKind::StateCert), 0);
         assert_eq!(count(&summary, DataKind::StakeTable), 1);
 
-        // A shorter found probe leaves the longer row; a covering one deletes it.
-        node.record_found(&probe(DataKind::Leaf, 100..150))
-            .await
-            .unwrap();
-        let summary = node.missing_summary(now).await.unwrap();
-        assert_eq!(count(&summary, DataKind::Leaf), 100);
-        node.record_found(&probe(DataKind::Leaf, 100..200))
-            .await
-            .unwrap();
-        let summary = node.missing_summary(now).await.unwrap();
-        assert_eq!(count(&summary, DataKind::Leaf), 0);
+        let other = node_store("b:2").await;
+        let summary = other.missing_summary(at(T0)).await.unwrap();
+        assert_eq!(summary.iter().map(|k| k.missing_count).sum::<u64>(), 0);
+    }
+
+    #[tokio::test]
+    async fn record_found_keeps_longer_range() {
+        let node = node_store("a:1").await;
+        let long = probe(DataKind::Leaf, 100..200);
+        let short = probe(DataKind::Leaf, 100..150);
+
+        node.record_missing(&long, at(T0)).await.unwrap();
+        node.record_missing(&short, at(T0 + 1)).await.unwrap();
+        let summary = node.missing_summary(at(T0 + 2)).await.unwrap();
         assert_eq!(
-            store.node("b:2").missing_summary(at(t0)).await.unwrap()[0].missing_count,
-            0
+            count(&summary, DataKind::Leaf),
+            100,
+            "range_end keeps the max"
         );
+
+        node.record_found(&short).await.unwrap();
+        let summary = node.missing_summary(at(T0 + 2)).await.unwrap();
+        assert_eq!(
+            count(&summary, DataKind::Leaf),
+            100,
+            "short probe cannot clear it"
+        );
+
+        node.record_found(&long).await.unwrap();
+        let summary = node.missing_summary(at(T0 + 2)).await.unwrap();
+        assert_eq!(count(&summary, DataKind::Leaf), 0);
+    }
+
+    #[tokio::test]
+    async fn forget_below_window_start() {
+        let node = node_store("a:1").await;
+        let epochs = EpochConfig {
+            epoch_height: 25,
+            epoch_start_block: 1,
+        };
+        let rows = [
+            (DataKind::Leaf, 0..100),
+            (DataKind::Leaf, 50..150),
+            (DataKind::Leaf, 100..200),
+            (DataKind::StateCert, 3..4),
+            (DataKind::StateCert, 4..5),
+            (DataKind::StakeTable, 5..6),
+        ];
+        for (kind, range) in rows {
+            node.record_missing(&probe(kind, range), at(T0))
+                .await
+                .unwrap();
+        }
+
+        // Window starts at 100: leaf rows starting below it go, including the one crossing it.
+        // Epoch 3 ends at block 75 and goes; epoch 4 ends exactly at 100 and stays.
+        assert_eq!(node.forget_below(100, Some(epochs)).await.unwrap(), 3);
+        let summary = node.missing_summary(at(T0)).await.unwrap();
+        assert_eq!(count(&summary, DataKind::Leaf), 100);
+        assert_eq!(count(&summary, DataKind::StateCert), 1);
+        assert_eq!(count(&summary, DataKind::StakeTable), 1);
+    }
+
+    #[test]
+    fn progress_clamps_to_window_start() {
+        let progress = NodeProgress {
+            follow_next_height: 50,
+            sweep: SweepState::Running(SweepProgress {
+                until_height: 500,
+                next_height: 80,
+                started_at: at(T0),
+            }),
+            last_sweep_completed_at: None,
+        };
+        let clamped = progress.clone().clamped_to(100);
+        assert_eq!(clamped.follow_next_height, 100);
+        let SweepState::Running(sweep) = clamped.sweep else {
+            panic!("sweep stays running");
+        };
+        assert_eq!(sweep.next_height, 100);
+        assert_eq!(progress.clamped_to(0).follow_next_height, 50);
     }
 }

@@ -1,3 +1,25 @@
+//! Watches archive query nodes for data they fail to serve.
+//!
+//! Datadog recipes. JSON logs (`RUST_LOG_FORMAT=json`) put event fields under `fields`, so the
+//! attributes are `@fields.node`, `@fields.kind` and so on.
+//!
+//! 1. Log monitor, multi alert grouped by `@fields.node,@fields.kind`:
+//!    - Query: `service:<svc> status:warn @fields.message:"missing data"`.
+//!    - Message: `{{[@fields.node].name}} {{[@fields.kind].name}} missing for
+//!      {{log.attributes.[fields.oldest_age_seconds]}} s: {{log.attributes.[fields.url]}}`.
+//!    - One WARN per node and kind per minute while the oldest missing range is older than
+//!      `--warn-missing-after`. The `url` field is the GET URL of that range.
+//!    - Syntax from docs.datadoghq.com/monitors/notify/variables/: no `@` in `log.attributes`,
+//!      brackets around dotted keys. The docs do not cover nested JSON, so check one rendered alert.
+//! 2. Metric monitor on age:
+//!    `max(last_5m):max:query_watchdog_oldest_missing_age_seconds{*} by {node,kind} > 600`.
+//!    The metric name carries the namespace of the Datadog openmetrics check config.
+//! 3. Metric monitors on lag and liveness:
+//!    - `max(last_5m):max:query_watchdog_follow_lag_blocks{*} by {node} > <blocks>`, and the same
+//!      for `query_watchdog_merklized_state_lag_blocks`.
+//!    - No-data monitor on any series, for example `query_watchdog_follow_lag_blocks`, notifying
+//!      on no data: the watchdog is down.
+
 mod chunk;
 mod metrics;
 mod store;
@@ -45,9 +67,9 @@ struct Options {
     watch: WatchOptions,
 }
 
-/// Parses options, opens the store, forgets other nodes, fetches the epoch config, starts each node,
-/// and runs every `NodeWatch::run` (`try_join_all`) with `serve_metrics` in one `select!` against
-/// `shutdown_signal()`.
+/// Parses options, opens the store, forgets other nodes, spawns `serve_metrics`, fetches the epoch
+/// config and the first tip, starts each node, and runs `TipPoller::run` and every `NodeWatch::run`
+/// in one `select!` with the server and `shutdown_signal()`.
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let options = Options::parse();
@@ -69,6 +91,7 @@ async fn main() -> anyhow::Result<()> {
         db_path = %options.db_path.display(),
         sweep_interval = %humantime::format_duration(options.watch.sweep_interval),
         request_interval = %humantime::format_duration(options.watch.request_interval),
+        warn_missing_after = %humantime::format_duration(options.watch.warn_missing_after),
         retention_blocks,
         retention = retention_blocks.is_none().then_some("archive"),
         "config"
@@ -83,7 +106,7 @@ async fn main() -> anyhow::Result<()> {
     let listener = TcpListener::bind(("0.0.0.0", options.port))
         .await
         .with_context(|| format!("binding port {}", options.port))?;
-    let mut server = tokio::spawn(serve_metrics(listener, registry));
+    let server = tokio::spawn(serve_metrics(listener, registry));
 
     let watchdog = Watchdog::new(options.watch, metrics, store)?;
     let epochs = watchdog.fetch_epoch_config(&nodes).await?;
@@ -94,16 +117,18 @@ async fn main() -> anyhow::Result<()> {
         "epochs"
     );
 
+    let (tip_poller, tip) = watchdog.start_tip_poller(nodes.clone()).await?;
     let watches = try_join_all(
         nodes
             .iter()
-            .map(|node| watchdog.start_node(node.clone(), nodes.clone(), epochs)),
+            .map(|node| watchdog.start_node(node.clone(), tip.clone(), epochs)),
     )
     .await?;
 
     tokio::select! {
         result = try_join_all(watches.into_iter().map(NodeWatch::run)) => result.map(drop),
-        result = &mut server => result?,
+        result = tip_poller.run() => result,
+        result = server => result?,
         signal = shutdown_signal() => {
             tracing::debug!(signal = signal?, "shutting down");
             Ok(())

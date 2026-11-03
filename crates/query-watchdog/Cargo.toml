@@ -21,7 +21,7 @@ reqwest = { workspace = true }
 serde = { workspace = true }
 sqlx = { workspace = true, features = ["sqlite"] }
 strum = { workspace = true }
-tokio = { workspace = true, features = ["signal", "net"] }
+tokio = { workspace = true, features = ["signal", "net", "sync"] }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["env-filter", "json"] }
 url = { workspace = true }

@@ -10,11 +10,14 @@ RUN case "${TARGETARCH}" in \
     esac \
     && release="https://github.com/benbjohnson/litestream/releases/download/v${LITESTREAM_VERSION}" \
     && tarball="litestream-${LITESTREAM_VERSION}-linux-${litestream_arch}.tar.gz" \
-    && cd "$(mktemp --directory)" \
+    && workdir="$(mktemp --directory)" \
+    && cd "${workdir}" \
     && curl --fail --silent --show-error --location --remote-name "${release}/checksums.txt" \
     && curl --fail --silent --show-error --location --remote-name "${release}/${tarball}" \
     && grep " ${tarball}\$" checksums.txt | sha256sum --check - \
-    && tar --extract --gzip --file "${tarball}" --directory /usr/local/bin litestream
+    && tar --extract --gzip --file "${tarball}" --directory /usr/local/bin litestream \
+    && cd / \
+    && rm -rf "${workdir}"
 
 COPY target/$TARGETARCH/release/query-watchdog /bin/query-watchdog
 RUN chmod +x /bin/query-watchdog
