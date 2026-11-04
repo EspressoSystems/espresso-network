@@ -32,8 +32,9 @@ type MerkleCommit = <MerkleTree as MerkleTreeScheme>::Commitment;
 /// Dummy struct for AVID-M scheme over GF2
 pub struct AvidmGf2Scheme;
 
-// Every shard is at least two bytes whatever the payload size, so a forged
-// param could otherwise demand terabytes. Node VID weights are about a thousand.
+// reed_solomon_simd encodes at most this many shards. Every shard is at least
+// two bytes whatever the payload size, so a forged param could otherwise demand
+// terabytes. Node VID weights are about a thousand.
 const MAX_TOTAL_WEIGHTS: usize = 1 << 16;
 
 // Nodes set the threshold to a third of the total weight. A forged lower one
@@ -307,7 +308,6 @@ impl AvidmGf2Scheme {
         param: &AvidmGf2Param,
         payload: &[u8],
     ) -> VidResult<(MerkleTree, Vec<Vec<u8>>)> {
-        param.validate()?;
         let shard_bytes = Self::payload_shard_bytes(param, payload.len())?;
         let original = Self::chunk_and_pad(payload, shard_bytes, param.recovery_threshold)?;
         let recovery = Self::encode_recovery(param, &original)?;
@@ -334,6 +334,7 @@ impl AvidmGf2Scheme {
         distribution: &[u32],
         payload: &[u8],
     ) -> VidResult<(AvidmGf2Commit, Vec<AvidmGf2Share>)> {
+        param.validate()?;
         let total_weights = distribution.iter().map(|&w| w as usize).sum::<usize>();
         if total_weights != param.total_weights {
             return Err(VidError::Argument(
@@ -417,6 +418,7 @@ impl VidScheme for AvidmGf2Scheme {
         distribution: &[u32],
         payload: &[u8],
     ) -> VidResult<(Self::Commit, Vec<Self::Share>)> {
+        param.validate()?;
         let total_weights = distribution.iter().map(|&w| w as usize).sum::<usize>();
         if total_weights != param.total_weights {
             return Err(VidError::Argument(
@@ -883,7 +885,7 @@ pub mod tests {
             );
             assert!(
                 matches!(
-                    AvidmGf2Scheme::disperse(&forged, &[total_weights as u32], &payload),
+                    AvidmGf2Scheme::disperse(&forged, &[1], &payload),
                     Err(VidError::InvalidParam)
                 ),
                 "disperse {forged:?}"
