@@ -1,5 +1,10 @@
 use std::{
-    collections::BTreeMap, convert::Infallible, error::Error, fmt, ops::Range, sync::Arc,
+    collections::BTreeMap,
+    convert::Infallible,
+    error::Error,
+    fmt,
+    ops::Range,
+    sync::{Arc, Mutex, PoisonError},
     time::Duration,
 };
 
@@ -43,7 +48,8 @@ pub struct WatchOptions {
         value_parser = clap::value_parser!(u64).range(1..)
     )]
     pub retention_blocks: Option<u64>,
-    /// Missing data older than this is logged as a WARN once a minute per node and kind.
+    /// Missing data older than this is logged as a WARN once a minute per node and kind. 60s
+    /// leaves room for retries at about 5, 15 and 35 s first.
     #[arg(
         long,
         env = "ESPRESSO_QUERY_WATCHDOG_WARN_MISSING_AFTER",
@@ -93,7 +99,7 @@ pub struct WatchedNode {
 }
 
 impl WatchedNode {
-    /// Labelled `host:port` (never the authority, which can carry credentials); errors on a base
+    /// Labelled `host:port`; node URLs are internal and carry no credentials. Errors on a base
     /// path without a trailing slash, which `Url::join` would truncate.
     pub fn new(base_url: Url) -> anyhow::Result<Self> {
         let host = base_url
@@ -186,6 +192,9 @@ impl FetchTarget {
     }
 }
 
+/// Latest sweep ETA per node label, read by the page; a node with no ETA has no entry.
+pub type SweepEtas = Arc<Mutex<BTreeMap<String, Duration>>>;
+
 /// Parts shared by all node watches; every field is a cheap clone.
 #[derive(Clone)]
 pub struct Watchdog {
@@ -193,6 +202,7 @@ pub struct Watchdog {
     options: WatchOptions,
     metrics: Arc<WatchdogMetrics>,
     store: Store,
+    sweep_etas: SweepEtas,
 }
 
 /// Total time of one request, including server-side range waits (`state.rs:85`).
@@ -213,12 +223,14 @@ impl Watchdog {
         options: WatchOptions,
         metrics: Arc<WatchdogMetrics>,
         store: Store,
+        sweep_etas: SweepEtas,
     ) -> anyhow::Result<Self> {
         Ok(Self {
             http: reqwest::Client::builder().timeout(HTTP_TIMEOUT).build()?,
             options,
             metrics,
             store,
+            sweep_etas,
         })
     }
 
@@ -252,7 +264,7 @@ impl Watchdog {
             self.metrics.mark_sweep_completed(&node.label, completed_at);
         }
         let now = Instant::now();
-        let watch = NodeWatch {
+        let mut watch = NodeWatch {
             watchdog: self.clone(),
             tip,
             store,
@@ -263,12 +275,14 @@ impl Watchdog {
             next_state_poll_at: now,
             last_summary_at: now,
             errors_since_summary: BTreeMap::new(),
+            eta_origin: None,
             node,
         };
+        watch.reset_eta_origin();
         let summary = watch.summary().await?;
         watch.log_started(loaded.is_some(), &summary);
         self.metrics.export_summary(&watch.node.label, &summary)?;
-        watch.export_progress()?;
+        watch.publish_progress()?;
         Ok(watch)
     }
 
@@ -400,6 +414,14 @@ pub struct NodeWatch {
     next_state_poll_at: Instant,
     last_summary_at: Instant,
     errors_since_summary: BTreeMap<String, u64>,
+    eta_origin: Option<EtaOrigin>,
+}
+
+/// Where the ETA rate starts: when this process began or resumed the running sweep.
+#[derive(Clone, Copy, Debug)]
+struct EtaOrigin {
+    at: Instant,
+    next_height: u64,
 }
 
 /// Missing chunks re-checked per iteration; small so sweep and follow keep their share.
@@ -419,7 +441,7 @@ impl NodeWatch {
             sent += self.retry_step().await?;
             sent += self.sweep_step().await?;
             self.summarize_if_due(Instant::now()).await?;
-            self.export_progress()?;
+            self.publish_progress()?;
             if sent == 0 {
                 tokio::select! {
                     () = tokio::time::sleep_until(self.next_state_poll_at) => {},
@@ -532,6 +554,7 @@ impl NodeWatch {
             next_height: start_height,
             started_at: utc_now(),
         });
+        self.reset_eta_origin();
         self.store.save_progress(&self.progress).await?;
         tracing::info!(
             node = %self.node.label,
@@ -558,6 +581,7 @@ impl NodeWatch {
         self.progress.sweep = SweepState::Waiting {
             start_at: sweep.started_at + interval,
         };
+        self.reset_eta_origin();
         self.store.save_progress(&self.progress).await?;
         self.watchdog
             .metrics
@@ -597,11 +621,49 @@ impl NodeWatch {
         }
     }
 
-    /// Sets the follow and sweep progress gauges.
-    fn export_progress(&self) -> anyhow::Result<()> {
+    /// Shares the sweep ETA with the page and sets the follow and sweep gauges.
+    fn publish_progress(&self) -> anyhow::Result<()> {
+        let eta = self.sweep_eta();
+        let label = &self.node.label;
+        {
+            let mut etas = self
+                .watchdog
+                .sweep_etas
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            match eta {
+                Some(eta) => etas.insert(label.clone(), eta),
+                None => etas.remove(label),
+            };
+        }
         self.watchdog
             .metrics
-            .export_progress(&self.node.label, &self.progress)
+            .export_progress(label, &self.progress, eta)
+    }
+
+    /// ETA of the running sweep at the pace since `eta_origin`.
+    fn sweep_eta(&self) -> Option<Duration> {
+        let SweepState::Running(sweep) = &self.progress.sweep else {
+            return None;
+        };
+        let origin = self.eta_origin?;
+        eta_at_pace(
+            origin.next_height,
+            origin.at.elapsed(),
+            sweep.next_height,
+            sweep.until_height,
+        )
+    }
+
+    /// Restarts the ETA rate from now at the running sweep's next height; none while waiting.
+    fn reset_eta_origin(&mut self) {
+        self.eta_origin = match &self.progress.sweep {
+            SweepState::Running(sweep) => Some(EtaOrigin {
+                at: Instant::now(),
+                next_height: sweep.next_height,
+            }),
+            SweepState::Waiting { .. } => None,
+        };
     }
 
     /// Counts a failed request of the watched node in the metrics and the summary window.
@@ -644,6 +706,9 @@ impl NodeWatch {
             node = %self.node.label,
             errors = ?self.errors_since_summary,
             forgotten,
+            sweep_eta = self
+                .sweep_eta()
+                .map(|eta| humantime::format_duration(eta).to_string()),
             %summary,
             "summary"
         );
@@ -666,6 +731,7 @@ impl NodeWatch {
         let clamped = self.progress.clone().clamped_to(window_start);
         if clamped != self.progress {
             self.progress = clamped;
+            self.reset_eta_origin();
             self.store.save_progress(&self.progress).await?;
         }
         let forgotten = self.store.forget_below(window_start, self.epochs).await?;
@@ -735,6 +801,25 @@ impl fmt::Display for NodeSummary {
     }
 }
 
+/// Time left at the pace since the origin: `remaining * elapsed / done`, in whole seconds; `None`
+/// before a height is done.
+fn eta_at_pace(
+    origin_height: u64,
+    elapsed: Duration,
+    next_height: u64,
+    until_height: u64,
+) -> Option<Duration> {
+    let done = next_height.saturating_sub(origin_height);
+    if done == 0 {
+        return None;
+    }
+    let remaining = until_height.saturating_sub(next_height);
+    let secs = elapsed.as_secs_f64() * remaining as f64 / done as f64;
+    Duration::try_from_secs_f64(secs)
+        .ok()
+        .map(|eta| Duration::from_secs(eta.as_secs()))
+}
+
 /// Current time at whole-second precision, the precision of persisted times.
 pub(crate) fn utc_now() -> DateTime<Utc> {
     Utc::now().trunc_subsecs(0)
@@ -743,6 +828,21 @@ pub(crate) fn utc_now() -> DateTime<Utc> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn eta_at_pace_table() {
+        let secs = |s| Some(Duration::from_secs(s));
+        let cases = [
+            ("nothing done", (0, 100, 0, 1000), None),
+            ("quarter done in 100 s", (0, 100, 250, 1000), secs(300)),
+            ("origin offset", (500, 100, 750, 1000), secs(100)),
+            ("finished", (0, 100, 1000, 1000), secs(0)),
+        ];
+        for (name, (origin, elapsed, next, until), expected) in cases {
+            let eta = eta_at_pace(origin, Duration::from_secs(elapsed), next, until);
+            assert_eq!(eta, expected, "{name}");
+        }
+    }
 
     #[test]
     fn sweep_window_start_height() {

@@ -316,15 +316,18 @@ impl NodeStore {
     }
 
     /// One entry per `DataKind::VARIANTS`: `SUM(end - start)`, and the range with the earliest
-    /// `first_missing_at` (lowest `range_start` on a tie) with its age at `now`.
+    /// `first_missing_at` (lowest `range_start` on a tie) with its age at `now`; rows first missing
+    /// after `now` are ignored.
     pub async fn missing_summary(&self, now: DateTime<Utc>) -> anyhow::Result<Vec<KindSummary>> {
         let rows: Vec<(String, u64, DateTime<Utc>, u64, u64)> = sqlx::query_as(
             "SELECT kind, total, first_missing_at, range_start, range_end FROM ( SELECT kind, \
              first_missing_at, range_start, range_end, SUM(range_end - range_start) OVER \
              (PARTITION BY kind) AS total, ROW_NUMBER() OVER (PARTITION BY kind ORDER BY \
-             first_missing_at, range_start) AS rn FROM missing_chunk WHERE node = ?) WHERE rn = 1",
+             first_missing_at, range_start) AS rn FROM missing_chunk WHERE node = ? AND \
+             first_missing_at <= ?) WHERE rn = 1",
         )
         .bind(&self.node)
+        .bind(now.timestamp())
         .fetch_all(&self.pool)
         .await?;
         let by_kind = rows
@@ -532,6 +535,13 @@ mod tests {
         assert_eq!(count(&summary, DataKind::Block), 200);
         assert_eq!(oldest(DataKind::Block).range, 200..300);
         assert_eq!(oldest(DataKind::Block).age, Duration::from_secs(70));
+
+        // A row first missing after `now` is ignored instead of failing the age.
+        node.record_missing(&probe(DataKind::Leaf, 900..1000), at(T0 + 500))
+            .await
+            .unwrap();
+        let summary = node.missing_summary(at(T0 + 100)).await.unwrap();
+        assert_eq!(count(&summary, DataKind::Leaf), 200);
 
         let listed = node.missing_ranges(at(T0 + 100), 3).await.unwrap();
         let order: Vec<_> = listed.shown.iter().map(|r| r.probe.clone()).collect();

@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use chrono::{DateTime, Utc};
 use prometheus::{IntCounterVec, IntGauge, IntGaugeVec, Opts, Registry};
 
@@ -31,6 +33,8 @@ pub struct WatchdogMetrics {
     sweep_next_height: IntGaugeVec,
     /// `{node}`, end height of the running sweep; 0 while waiting.
     sweep_until_height: IntGaugeVec,
+    /// `{node}`, estimated time to finish the running sweep; 0 while waiting or unknown.
+    sweep_eta_seconds: IntGaugeVec,
     /// `{node,kind}`, every probe sent.
     probes_total: IntCounterVec,
 }
@@ -101,6 +105,12 @@ impl WatchdogMetrics {
                 "End height of the running sweep, 0 while waiting",
                 &["node"],
             )?,
+            sweep_eta_seconds: gauge(
+                registry,
+                "sweep_eta_seconds",
+                "Estimated seconds to finish the running sweep, 0 while waiting or unknown",
+                &["node"],
+            )?,
             probes_total: counter(registry, "probes_total", "Probes sent", &["node", "kind"])?,
         })
     }
@@ -133,7 +143,12 @@ impl WatchdogMetrics {
 
     /// Sets the follow and sweep progress gauges of `node_label`; the sweep gauges read 0 while
     /// the sweep waits.
-    pub fn export_progress(&self, node_label: &str, progress: &NodeProgress) -> anyhow::Result<()> {
+    pub fn export_progress(
+        &self,
+        node_label: &str,
+        progress: &NodeProgress,
+        sweep_eta: Option<Duration>,
+    ) -> anyhow::Result<()> {
         let (running, next, until) = match &progress.sweep {
             SweepState::Running(sweep) => (1, sweep.next_height, sweep.until_height),
             SweepState::Waiting { .. } => (0, 0, 0),
@@ -143,6 +158,9 @@ impl WatchdogMetrics {
             .with_label_values(&labels)
             .set(i64::try_from(progress.follow_next_height)?);
         self.sweep_running.with_label_values(&labels).set(running);
+        self.sweep_eta_seconds
+            .with_label_values(&labels)
+            .set(i64::try_from(sweep_eta.map_or(0, |eta| eta.as_secs()))?);
         self.sweep_next_height
             .with_label_values(&labels)
             .set(i64::try_from(next)?);

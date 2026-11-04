@@ -23,7 +23,7 @@ use crate::{
     http::AppState,
     metrics::WatchdogMetrics,
     store::Store,
-    watch::{NodeWatch, WatchOptions, Watchdog, WatchedNode},
+    watch::{NodeWatch, SweepEtas, WatchOptions, Watchdog, WatchedNode},
 };
 
 /// Watches archive query nodes for heights they fail to serve.
@@ -48,8 +48,8 @@ struct Options {
     watch: WatchOptions,
 }
 
-/// Parses options, opens the store, forgets other nodes, spawns `http::serve`, fetches the epoch
-/// config and the first tip, starts each node, and runs `TipPoller::run` and every `NodeWatch::run`
+/// Parses options, opens the store, forgets other nodes, opens the read-only pool of the page,
+/// spawns `http::serve`, fetches the epoch config and the first tip, starts each node, and runs `TipPoller::run` and every `NodeWatch::run`
 /// in one `select!` with the server and `shutdown_signal()`.
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -78,17 +78,14 @@ async fn main() -> anyhow::Result<()> {
     let listener = TcpListener::bind(("0.0.0.0", options.port))
         .await
         .with_context(|| format!("binding port {}", options.port))?;
-    log_serving(options.port);
     let reader = Store::open_read_only(&options.db_path).await?;
-    let app = AppState::new(
-        registry,
-        reader,
-        nodes.clone(),
-        options.watch.sweep_window(),
-    );
+    let sweep_etas = SweepEtas::default();
+    let window = options.watch.sweep_window();
+    let app = AppState::new(registry, reader, nodes.clone(), window, sweep_etas.clone());
     let server = tokio::spawn(http::serve(listener, app.clone()));
+    log_serving(options.port);
 
-    let watchdog = Watchdog::new(options.watch, metrics, store)?;
+    let watchdog = Watchdog::new(options.watch, metrics, store, sweep_etas)?;
     let epochs = watchdog.fetch_epoch_config(&nodes).await?;
     tracing::info!(
         epoch_height = epochs.map(|e| e.epoch_height),
