@@ -42,7 +42,7 @@ cargo run -p query-watchdog -- --nodes https://query.decaf.testnet.espresso.netw
 
 ## Checked
 
-Per 100-height chunk (follow from the tip, sweep over the window). Probes are HEAD requests.
+Per 100-height chunk (follow stays 10 blocks behind the tip, sweep over the window). Probes are HEAD requests.
 
 | Kind                          | Unit    | Route                                                   |
 | ----------------------------- | ------- | ------------------------------------------------------- |
@@ -55,7 +55,8 @@ Per 100-height chunk (follow from the tip, sweep over the window). Probes are HE
 
 - A 404 on a `leaf`, `block` or `vid_common` range is refined to the exact missing heights: GET reads the first missing
   height from the 404 message, then galloping and binary search over single heights find the end of the gap, repeated to
-  the end of the range. `lc_leaf_proof` and `aggregate` count one height per missing chunk, per-epoch kinds one epoch.
+  the end of the range. `lc_leaf_proof` and `aggregate` probe the last height of the chunk and count one height per
+  missing row, per-epoch kinds one epoch.
 - Missing ranges are re-probed with a delay doubling from 5 s up to 600 s. A range that qualifies for alerting (last
   failure a 404, at least 3 failed probes) is capped at 60 s, so a refilled range is noticed within a minute.
 - Gauges for the merklized state head lag and follow lag are exported.
@@ -130,9 +131,11 @@ task resumes where the old one stopped.
 - One database per node set: reusing a path with a different `--nodes` list deletes the other set's rows at startup, so
   use `--db-path` per network.
 - Without `LITESTREAM_REPLICA_URL` the state is lost when the task restarts.
-- Node URLs are assumed internal, without credentials.
+- Node URLs must not carry credentials (a startup error): the URL appears in alerts, on the page and in debug logs.
 - Route paths and the 100-height chunk are hard-coded copies of the server's routes and limits.
 - The sweep ETA uses the rate since this process started sweeping and resets on restart.
+- A restart loop at startup can mean every watched node is unreachable; once running, an outage shows as
+  `node unhealthy` and missing data instead.
 - The tip is the max over all watched nodes. A single node that is stuck but answering keeps the tip flat: no probes
   above it, no missing ranges, no lag; only `tip_height` stays flat. With several nodes, the stuck node's follow probes
   above its height go missing and the follow lag grows.

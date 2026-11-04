@@ -86,7 +86,8 @@ impl EpochConfig {
     }
 }
 
-/// Every probe for `chunk`: each per-height kind over `chunk`, and each per-epoch kind for every
+/// Every probe for `chunk`: each range kind over `chunk`, each single-height kind over its last
+/// height, and each per-epoch kind for every
 /// epoch `e` with `e * epoch_height` in `chunk`, `e >= epoch(epoch_start_block)`
 /// (`+ 2` for `LcStakeTable`), as `[e, e + 1)`. `None` epochs: per-height kinds only.
 pub fn probes(chunk: &Range<u64>, epochs: Option<EpochConfig>) -> Vec<Probe> {
@@ -95,7 +96,11 @@ pub fn probes(chunk: &Range<u64>, epochs: Option<EpochConfig>) -> Vec<Probe> {
         .filter(|kind| !kind.is_per_epoch())
         .map(|&kind| Probe {
             kind,
-            range: chunk.clone(),
+            range: if kind.is_range() {
+                chunk.clone()
+            } else {
+                chunk.end.saturating_sub(1)..chunk.end
+            },
         });
     let per_epoch = epochs.into_iter().flat_map(|config| {
         let first = config.epoch(config.epoch_start_block);
@@ -145,16 +150,16 @@ mod tests {
         probes.into_iter().map(|p| (p.kind, p.range)).collect()
     }
 
+    /// The range kinds cover the chunk; the single-height kinds only its last height.
     fn per_height(chunk: Range<u64>) -> Vec<KindRange> {
-        [
-            DataKind::Leaf,
-            DataKind::Block,
-            DataKind::VidCommon,
-            DataKind::LcLeafProof,
-            DataKind::Aggregate,
+        let last = chunk.end - 1..chunk.end;
+        vec![
+            (DataKind::Leaf, chunk.clone()),
+            (DataKind::Block, chunk.clone()),
+            (DataKind::VidCommon, chunk),
+            (DataKind::LcLeafProof, last.clone()),
+            (DataKind::Aggregate, last),
         ]
-        .map(|kind| (kind, chunk.clone()))
-        .to_vec()
     }
 
     #[test]

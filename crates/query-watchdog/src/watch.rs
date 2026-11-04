@@ -21,8 +21,8 @@ use crate::{
     gaps::{Known, Presence, Unrefined, find_gaps, parse_missing_height},
     metrics::WatchdogMetrics,
     store::{
-        ALERT_MIN_FAILED_PROBES, KindSummary, NodeProgress, NodeStore, Store, SweepProgress,
-        SweepState,
+        ALERT_MIN_FAILED_PROBES, AlertCandidate, KindSummary, NodeProgress, NodeStore, Store,
+        SweepProgress, SweepState,
     },
 };
 
@@ -112,6 +112,10 @@ impl WatchedNode {
         let port = base_url
             .port_or_known_default()
             .ok_or_else(|| anyhow!("node URL of {host} has no port"))?;
+        ensure!(
+            base_url.username().is_empty() && base_url.password().is_none(),
+            "node URL of {host} must not carry credentials"
+        );
         ensure!(
             base_url.path().ends_with('/'),
             "node URL path must end with '/': {}",
@@ -480,11 +484,14 @@ struct EtaOrigin {
     next_height: u64,
 }
 
-/// Missing chunks re-checked per iteration; small so sweep and follow keep their share.
-const RETRIES_PER_STEP: u32 = 4;
+/// Due missing ranges fetched per batch of retries.
+const RETRIES_PER_BATCH: u32 = 20;
+/// Time one iteration spends on retries; sweep and follow keep the rest.
+const RETRY_BUDGET: Duration = Duration::from_secs(5);
 /// Time between tip polls and between polls of a node's merklized state height.
 const TIP_POLL_INTERVAL: Duration = Duration::from_secs(10);
-/// Blocks below the tip within which missing data is not alerted: nodes lag the tip a little.
+/// Blocks below the tip within which missing data is not alerted and follow does not probe yet:
+/// nodes lag the tip a little, and proofs need the blocks after them.
 const ALERT_TIP_MARGIN: u64 = 10;
 /// Time between summary lines of one node.
 const SUMMARY_INTERVAL: Duration = Duration::from_secs(60);
@@ -556,9 +563,11 @@ impl NodeWatch {
         }
     }
 
-    /// Checks the next follow chunk for every kind and saves progress; returns requests sent.
+    /// Checks the next follow chunk, which ends at least `ALERT_TIP_MARGIN` below the tip, for every
+    /// kind and saves progress; returns requests sent.
     async fn follow_step(&mut self) -> anyhow::Result<usize> {
-        let Some(chunk) = next_chunk(self.progress.follow_next_height, self.tip_height) else {
+        let follow_until = self.tip_height.saturating_sub(ALERT_TIP_MARGIN);
+        let Some(chunk) = next_chunk(self.progress.follow_next_height, follow_until) else {
             return Ok(0);
         };
         let sent = self.check_chunk(&chunk).await?;
@@ -567,13 +576,22 @@ impl NodeWatch {
         Ok(sent)
     }
 
-    /// Re-checks due missing chunks; returns requests sent.
+    /// Re-checks due missing ranges in batches until none is due or `RETRY_BUDGET` is spent;
+    /// returns the number of ranges re-checked.
     async fn retry_step(&mut self) -> anyhow::Result<usize> {
-        let due = self.store.due_retries(utc_now(), RETRIES_PER_STEP).await?;
-        for probe in &due {
-            self.check_probe(probe).await?;
+        let deadline = Instant::now() + RETRY_BUDGET;
+        let mut checked = 0;
+        while Instant::now() < deadline {
+            let due = self.store.due_retries(utc_now(), RETRIES_PER_BATCH).await?;
+            if due.is_empty() {
+                break;
+            }
+            for probe in &due {
+                self.check_probe(probe).await?;
+            }
+            checked += due.len();
         }
-        Ok(due.len())
+        Ok(checked)
     }
 
     /// Starts a due sweep or checks its next chunk for every kind; logs start and end; saves progress.
@@ -882,11 +900,9 @@ impl NodeWatch {
         Ok(Some(forgotten))
     }
 
-    /// One ERROR on target `query_watchdog::alert` per kind whose oldest qualifying range passes
-    /// `alert_candidates`; `url` is the GET of that range.
-    async fn alert_missing(&self, summary: &NodeSummary) -> anyhow::Result<()> {
-        let candidates = self
-            .store
+    /// The oldest qualifying missing range of every kind that should alert now.
+    async fn alerts(&self) -> anyhow::Result<Vec<AlertCandidate>> {
+        self.store
             .alert_candidates(
                 utc_now(),
                 self.watchdog.options.alert_missing_after,
@@ -894,8 +910,13 @@ impl NodeWatch {
                 self.tip_height.saturating_sub(ALERT_TIP_MARGIN),
                 self.epochs,
             )
-            .await?;
-        for candidate in candidates {
+            .await
+    }
+
+    /// One ERROR on target `query_watchdog::alert` per kind from `alerts`; `url` is the GET of the
+    /// range.
+    async fn alert_missing(&self, summary: &NodeSummary) -> anyhow::Result<()> {
+        for candidate in self.alerts().await? {
             let probe = Probe {
                 kind: candidate.kind,
                 range: candidate.range.clone(),
@@ -1085,6 +1106,7 @@ mod tests {
         };
         let app = Router::new()
             .route("/v1/availability/leaf/{from}/{until}", get(fake_leaf_range))
+            .fallback(|| async { StatusCode::OK })
             .with_state(fake.clone());
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let base_url = Url::parse(&format!("http://{}/", listener.local_addr().unwrap())).unwrap();
@@ -1092,15 +1114,14 @@ mod tests {
         (WatchedNode::new(base_url).unwrap(), fake)
     }
 
-    #[tokio::test]
-    async fn a_failed_range_probe_is_refined_with_one_head_per_range() {
-        let (node, fake) = serve_fake(103..106).await;
+    /// A watchdog over an in-memory store with no pacing; its registry shows the metrics.
+    async fn test_watchdog(retention_blocks: Option<u64>) -> (Watchdog, Store, Registry) {
         let registry = Registry::new();
         let options = WatchOptions {
             sweep_interval: Duration::from_secs(1),
             request_interval: Duration::ZERO,
-            retention_blocks: None,
-            alert_missing_after: Duration::from_secs(60),
+            retention_blocks,
+            alert_missing_after: Duration::ZERO,
         };
         let store = Store::connect(SqliteConnectOptions::from_str("sqlite::memory:").unwrap())
             .await
@@ -1112,6 +1133,13 @@ mod tests {
             SweepEtas::default(),
         )
         .unwrap();
+        (watchdog, store, registry)
+    }
+
+    #[tokio::test]
+    async fn a_failed_range_probe_is_refined_with_one_head_per_range() {
+        let (node, fake) = serve_fake(103..106).await;
+        let (watchdog, store, registry) = test_watchdog(None).await;
         let (_tip_sender, tip) = watch::channel(1_000);
         let label = node.label.clone();
         let mut node_watch = watchdog.start_node(node, tip, None).await.unwrap();
@@ -1156,6 +1184,72 @@ mod tests {
             .map(|metric| metric.get_counter().get_value() as u64)
             .sum();
         assert_eq!(probes_total, 7, "six HEADs and one GET");
+    }
+
+    #[tokio::test]
+    async fn the_watch_loop_follows_sweeps_alerts_and_trims() {
+        let (node, _fake) = serve_fake(750..760).await;
+        let (watchdog, store, _registry) = test_watchdog(Some(300)).await;
+        let (_tip_sender, tip) = watch::channel(1_000);
+        let label = node.label.clone();
+        let mut watch = watchdog.start_node(node, tip, None).await.unwrap();
+        let node_store = store.node(&label);
+        let progress = || node_store.load_progress();
+
+        // Follow stays the margin behind the tip, so nothing is probed yet.
+        assert_eq!(watch.follow_step().await.unwrap(), 0);
+
+        // The sweep covers `[700, 1000)` in chunks, finds the gap exactly, then waits.
+        for _ in 0..5 {
+            watch.sweep_step().await.unwrap();
+        }
+        let stored = progress().await.unwrap().unwrap();
+        assert!(
+            matches!(stored.sweep, SweepState::Waiting { .. }),
+            "{stored:?}"
+        );
+        assert!(stored.last_sweep_completed_at.is_some());
+        let summary = watch.summary().await.unwrap();
+        let leaf = &summary.kinds[0];
+        assert_eq!((leaf.kind, leaf.missing_count), (DataKind::Leaf, 10));
+        assert_eq!(leaf.oldest.as_ref().unwrap().range, 750..760);
+
+        // Two more failed 404 probes make the row alert: 3 probes, old enough, below the margin.
+        let gap = Probe {
+            kind: DataKind::Leaf,
+            range: 750..760,
+        };
+        for _ in 0..2 {
+            node_store
+                .record_missing(&gap, "404", utc_now())
+                .await
+                .unwrap();
+        }
+        let alerts = watch.alerts().await.unwrap();
+        let alerting: Vec<_> = alerts.iter().map(|a| (a.kind, a.range.clone())).collect();
+        assert_eq!(alerting, [(DataKind::Leaf, 750..760)]);
+        watch.tip_height = 755;
+        assert!(
+            watch.alerts().await.unwrap().is_empty(),
+            "inside the tip margin"
+        );
+
+        // A later tip moves follow and the window; rows below the window are forgotten.
+        watch.tip_height = 1_500;
+        assert_eq!(watch.follow_step().await.unwrap(), 5);
+        assert_eq!(watch.progress.follow_next_height, 1_100);
+        assert_eq!(watch.trim_to_window().await.unwrap(), Some(1));
+        assert_eq!(watch.progress.follow_next_height, 1_200);
+        assert_eq!(progress().await.unwrap().unwrap(), watch.progress);
+        assert_eq!(watch.summary().await.unwrap().kinds[0].missing_count, 0);
+    }
+
+    #[test]
+    fn urls_with_credentials_are_rejected() {
+        let url = |s: &str| Url::parse(s).unwrap();
+        assert!(WatchedNode::new(url("http://host:1/")).is_ok());
+        assert!(WatchedNode::new(url("http://user:token@host:1/")).is_err());
+        assert!(WatchedNode::new(url("http://user@host:1/")).is_err());
     }
 
     #[test]

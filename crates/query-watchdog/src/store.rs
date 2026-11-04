@@ -540,30 +540,45 @@ impl NodeStore {
             .collect()
     }
 
-    /// Deletes rows below `start_height` in one statement: per-height kinds with
-    /// `range_start < start_height`, per-epoch kinds whose last block `epoch * epoch_height` is
-    /// below it; returns the count.
+    /// Forgets what is below `start_height`: per-height rows ending at or below it are deleted,
+    /// range-kind rows crossing it are trimmed to start there, and per-epoch rows whose last block
+    /// `epoch * epoch_height` is below it are deleted; returns the number of deleted rows.
     pub async fn forget_below(
         &self,
         start_height: u64,
         epochs: Option<EpochConfig>,
     ) -> anyhow::Result<u64> {
         let start_height = i64::try_from(start_height)?;
-        let mut query = QueryBuilder::new("DELETE FROM missing_chunk WHERE node = ");
-        query.push_bind(&self.node).push(" AND ((kind IN (");
-        push_kinds(&mut query, |kind| !kind.is_per_epoch());
-        query.push(") AND range_start < ").push_bind(start_height);
+        let mut tx = self.pool.begin().await?;
+        let mut delete = QueryBuilder::new("DELETE FROM missing_chunk WHERE node = ");
+        delete.push_bind(&self.node).push(" AND ((kind IN (");
+        push_kinds(&mut delete, |kind| !kind.is_per_epoch());
+        delete.push(") AND range_end <= ").push_bind(start_height);
         if let Some(epochs) = epochs {
-            query.push(") OR (kind IN (");
-            push_kinds(&mut query, DataKind::is_per_epoch);
-            query
+            delete.push(") OR (kind IN (");
+            push_kinds(&mut delete, DataKind::is_per_epoch);
+            delete
                 .push(") AND range_start * ")
                 .push_bind(i64::try_from(epochs.epoch_height)?)
                 .push(" < ")
                 .push_bind(start_height);
         }
-        query.push("))");
-        Ok(query.build().execute(&self.pool).await?.rows_affected())
+        delete.push("))");
+        let forgotten = delete.build().execute(&mut *tx).await?.rows_affected();
+        // Rows are disjoint, so no other row starts at `start_height`.
+        let mut trim = QueryBuilder::new("UPDATE missing_chunk SET range_start = ");
+        trim.push_bind(start_height)
+            .push(" WHERE node = ")
+            .push_bind(&self.node)
+            .push(" AND kind IN (");
+        push_kinds(&mut trim, DataKind::is_range);
+        trim.push(") AND range_start < ")
+            .push_bind(start_height)
+            .push(" AND range_end > ")
+            .push_bind(start_height);
+        trim.build().execute(&mut *tx).await?;
+        tx.commit().await?;
+        Ok(forgotten)
     }
 
     /// Up to `limit` missing ranges first missing at or before `now`, oldest first (then
@@ -1000,9 +1015,11 @@ mod tests {
             epoch_start_block: 1,
         };
         let rows = [
-            (DataKind::Leaf, 0..100),
-            (DataKind::Leaf, 50..150),
-            (DataKind::Leaf, 100..200),
+            (DataKind::Leaf, 0..60),
+            (DataKind::Leaf, 80..140),
+            (DataKind::Leaf, 150..200),
+            (DataKind::LcLeafProof, 99..100),
+            (DataKind::LcLeafProof, 150..151),
             (DataKind::StateCert, 3..4),
             (DataKind::StateCert, 4..5),
             (DataKind::StakeTable, 5..6),
@@ -1013,11 +1030,14 @@ mod tests {
                 .unwrap();
         }
 
-        // Window starts at 100: leaf rows starting below it go, including the one crossing it.
-        // Epoch 3 ends at block 75 and goes; epoch 4 ends exactly at 100 and stays.
+        // Window starts at 100. Leaf 0..60 and lc_leaf_proof 99 end below it and go; leaf 80..140
+        // crosses it and is trimmed to 100..140. Epoch 3 ends at block 75 and goes; epoch 4 ends
+        // exactly at 100 and stays.
         assert_eq!(node.forget_below(100, Some(epochs)).await.unwrap(), 3);
         let summary = node.missing_summary(at(T0)).await.unwrap();
-        assert_eq!(count(&summary, DataKind::Leaf), 100);
+        assert_eq!(count(&summary, DataKind::Leaf), 90);
+        assert_eq!(summary[0].oldest.as_ref().unwrap().range, 100..140);
+        assert_eq!(count(&summary, DataKind::LcLeafProof), 1);
         assert_eq!(count(&summary, DataKind::StateCert), 1);
         assert_eq!(count(&summary, DataKind::StakeTable), 1);
     }
