@@ -1,39 +1,47 @@
-use std::{marker::PhantomData, time::Duration};
+use std::{marker::PhantomData, net::Ipv4Addr, time::Duration};
 
 use committable::{Commitment, CommitmentBoundsArkless, Committable};
-use hotshot_example_types::node_types::TestTypes;
+use hotshot_example_types::{block_types::TestTransaction, node_types::TestTypes};
 use hotshot_types::{
-    data::{EpochNumber, VidCommitment2, ViewNumber},
+    PeerConnectInfo,
+    addr::NetAddr,
+    data::{EpochNumber, VidCommitment, VidCommitment2, ViewNumber},
     epoch_membership::EpochMembership,
     signature_key::{BLSPrivKey, BLSPubKey},
     simple_certificate::{TimeoutCertificate3, TimeoutEvidence},
     simple_vote::{HasEpoch, QuorumData2, TimeoutData3, TimeoutVote3},
     stake_table::StakeTableEntries,
-    traits::signature_key::SignatureKey,
+    traits::{metrics::NoMetrics, signature_key::SignatureKey},
     vote::HasViewNumber,
+    x25519::Keypair,
 };
 use tokio::time::timeout;
 
 use super::common::{
     certs::build_cert,
+    coordinator_builder::build_genesis_cert1,
     harness::TestHarness,
     utils::{TestData, TestView, build_cert1, build_cert2, build_timeout_cert3},
 };
 use crate::{
+    block::BlockAndHeaderRequest,
     consensus::{ConsensusInput, ConsensusOutput},
     coordinator::{EPOCH_CHANGE_LOOKAHEAD, error::Severity},
-    helpers::test_timeout_epoch_lock,
+    helpers::{test_timeout_epoch_lock, test_upgrade_lock},
     message::{
-        CatchupEvidence, Certificate1, ConsensusMessage, EpochChangeMessage, Message, MessageType,
-        Proposal, Validated,
+        BlockMessage, CatchupEvidence, Certificate1, ConsensusMessage, EpochChangeMessage, Message,
+        MessageType, Proposal, ProposalFetchMessage, ProposalFetchRequest, TimeoutVote, Unchecked,
+        Validated,
     },
+    network::Cliquenet,
     tests::common::assertions::{
         any, count_matching, is_block_built, is_block_reconstructed, is_cert1, is_cert2,
         is_drb_result, is_header_created, is_header_created_for_view, is_leaf_decided, is_proposal,
-        is_proposal_for_view, is_request_block_and_header, is_request_vid_disperse, is_send_cert1,
-        is_send_epoch_change, is_send_timeout_vote, is_state_validated, is_timeout,
-        is_timeout_cert, is_timeout_one_honest, is_upgrade_cert_formed, is_vid_disperse,
-        is_view_changed, is_vote1, is_vote2, node_index_for_key,
+        is_proposal_for_view, is_proposal_paired, is_request_block_and_header,
+        is_request_vid_disperse, is_send_cert1, is_send_epoch_change, is_send_timeout_vote,
+        is_state_validated, is_timeout, is_timeout_cert, is_timeout_one_honest,
+        is_upgrade_cert_formed, is_vid_disperse, is_view_changed, is_vote1, is_vote2,
+        node_index_for_key,
     },
 };
 
@@ -920,6 +928,173 @@ async fn test_leader_proposal() {
     harness
         .process_until_output(|outputs| any(outputs, is_proposal))
         .await;
+}
+
+/// The leader encodes a block once: the coordinator holds the dispersal its block builder
+/// computed under the key consensus then asks to disperse, so the disperser sends those shares
+/// instead of encoding the payload again.
+#[tokio::test]
+async fn test_leader_disperses_the_built_dispersal() {
+    let test_data = TestData::new(4).await;
+    let leader_for_view_2 = test_data.views[1].leader_public_key;
+    let mut harness = TestHarness::new(node_index_for_key(&leader_for_view_2)).await;
+
+    let test_view = &test_data.views[0];
+    for fragment in test_view.vid_share_inputs(&leader_for_view_2) {
+        harness.message(fragment);
+    }
+    harness.message(test_view.proposal_input());
+    for i in 0..THRESHOLD {
+        harness.message(test_view.vote1_input(i));
+        harness.message(test_view.vid_share_broadcast_input(i))
+    }
+
+    // Hold the built block back, to look at the coordinator before consensus asks to disperse it.
+    let block_built = timeout(Duration::from_secs(60), async {
+        loop {
+            match harness.coordinator_mut().next_consensus_input().await {
+                Ok(input) if is_block_built(&input) => break input,
+                Ok(input) => harness.apply_and_process(input),
+                Err(err) if err.severity == Severity::Critical => {
+                    panic!("critical coordinator error: {err}")
+                },
+                Err(_) => {},
+            }
+        }
+    })
+    .await
+    .expect("the leader builds a block");
+    let ConsensusInput::BlockBuilt {
+        view,
+        epoch,
+        payload_commitment: VidCommitment::V2(commit),
+        ..
+    } = block_built
+    else {
+        panic!("expected a block with a V2 payload commitment");
+    };
+    assert!(
+        harness
+            .coordinator()
+            .holds_built_dispersal(view, epoch, commit),
+        "the coordinator holds the block's dispersal"
+    );
+
+    harness.apply_and_process(block_built);
+    assert!(any(harness.outputs(), is_request_vid_disperse));
+    assert!(
+        !harness
+            .coordinator()
+            .holds_built_dispersal(view, epoch, commit),
+        "the disperse request took the dispersal"
+    );
+    harness
+        .process_until(|inputs| any(inputs, is_vid_disperse))
+        .await;
+}
+
+/// A leader proposes once it holds the parent's Certificate1 but enters the
+/// view only after reconstructing the parent block, so a slow leader can send
+/// its proposal two views behind. The view change that follows
+/// garbage-collects network messages below the previous view; copies of the
+/// proposal not yet sent must survive it.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_lagging_leader_proposal_survives_view_change() {
+    let test_data = TestData::new(3).await;
+    let test_view = &test_data.views[2];
+    let proposal = test_view.proposal.clone();
+    let (view, epoch) = (proposal.data.view_number, proposal.data.epoch);
+    let mut harness = TestHarness::new(0).await;
+    assert!(*harness.current_view() + 2 <= *view);
+
+    // The peer is not listening yet, so everything sent to it stays queued.
+    let peer = LatePeer::new();
+    harness.add_peer(peer.key, peer.info.clone());
+    let harness_node = harness.connect_info();
+    let marker = Message {
+        sender: harness_node.0,
+        message_type: MessageType::Consensus(ConsensusMessage::Certificate1(
+            test_view.cert1.clone(),
+            harness_node.0,
+        )),
+    };
+
+    let coordinator = harness.coordinator_mut();
+    coordinator
+        .process_consensus_output(ConsensusOutput::SendProposal(proposal))
+        .unwrap();
+    coordinator
+        .process_consensus_output(ConsensusOutput::ViewChanged(view, epoch))
+        .unwrap();
+    // A marker sent after the view change at the same slot: it arrives after
+    // any copy of the proposal that is still queued.
+    coordinator
+        .network()
+        .sender()
+        .broadcast(view, &marker)
+        .unwrap();
+
+    let mut network = peer.start(harness_node).await;
+    assert_eq!(proposal_views_before_cert1(&mut network).await, [view]);
+}
+
+/// A node that starts listening only when told to.
+struct LatePeer {
+    key: BLSPubKey,
+    keypair: Keypair,
+    info: PeerConnectInfo,
+}
+
+impl LatePeer {
+    fn new() -> Self {
+        let (key, private_key) = BLSPubKey::generated_from_seed_indexed([1; 32], 0);
+        let keypair = Keypair::derive_from::<BLSPubKey>(&private_key).unwrap();
+        let port = test_utils::reserve_tcp_port().unwrap();
+        let info = PeerConnectInfo {
+            x25519_key: keypair.public_key(),
+            p2p_addr: NetAddr::Inet(Ipv4Addr::LOCALHOST.into(), port),
+        };
+        Self { key, keypair, info }
+    }
+
+    /// Start listening, with `harness_node` as the only party.
+    async fn start(self, harness_node: (BLSPubKey, PeerConnectInfo)) -> Cliquenet<TestTypes> {
+        // Same name as the harness's network: it is part of the handshake.
+        Cliquenet::create(
+            "test-harness",
+            self.key,
+            self.keypair,
+            self.info.p2p_addr,
+            [harness_node],
+            None,
+            test_upgrade_lock(),
+            Box::new(NoMetrics),
+        )
+        .await
+        .unwrap()
+    }
+}
+
+/// Views of the proposals `network` receives before the first Certificate1,
+/// each listed once.
+async fn proposal_views_before_cert1(network: &mut Cliquenet<TestTypes>) -> Vec<ViewNumber> {
+    let mut views = Vec::new();
+    loop {
+        let message = timeout(Duration::from_secs(30), network.receive())
+            .await
+            .expect("a Certificate1 should arrive")
+            .unwrap();
+        match message.message_type {
+            MessageType::Consensus(ConsensusMessage::Proposal(p)) => views.push(p.view_number()),
+            MessageType::Consensus(ConsensusMessage::Certificate1(..)) => {
+                // Delivery is at least once: a replaced connection resends
+                // every message the peer has not acknowledged yet.
+                views.dedup();
+                return views;
+            },
+            _ => {},
+        }
+    }
 }
 
 /// Multi-view chain: certificates are formed for each view, leading to
@@ -1925,3 +2100,478 @@ const MALFORMED_BLOCK: u64 = 11;
 
 /// A block in the genesis epoch.
 const WELL_FORMED_BLOCK: u64 = 2;
+
+/// A node can vote for a view two ahead of its own: it enters a view only
+/// after rebuilding the parent block. The view change that follows must not
+/// drop the queued Vote1.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_vote1_ahead_of_view_survives_view_change() {
+    let test_data = TestData::new(3).await;
+    let test_view = &test_data.views[2];
+    let MessageType::Consensus(ConsensusMessage::Vote1(vote1)) =
+        test_view.vote1_input(0).message_type
+    else {
+        unreachable!("vote1_input builds a Vote1")
+    };
+    let views = views_received_sent_ahead(ConsensusOutput::SendVote1(vote1), test_view, |m| {
+        matches!(m, MessageType::Consensus(ConsensusMessage::Vote1(_)))
+    })
+    .await;
+    assert_eq!(views, [test_view.view_number]);
+}
+
+/// The VID share a node broadcasts with its Vote1 can be for a view two ahead
+/// of its own. The view change that follows must not drop it.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_vid_share_ahead_of_view_survives_view_change() {
+    let test_data = TestData::new(3).await;
+    let test_view = &test_data.views[2];
+    let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
+    let share = test_view.vid_share_for(&node_key);
+    let views =
+        views_received_sent_ahead(ConsensusOutput::BroadcastVidShare(share), test_view, |m| {
+            matches!(
+                m,
+                MessageType::Consensus(ConsensusMessage::VidShareBroadcast(_))
+            )
+        })
+        .await;
+    assert_eq!(views, [test_view.view_number]);
+}
+
+/// A Vote2 for a view two ahead of the voter's own must survive the view
+/// change that follows.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_vote2_ahead_of_view_survives_view_change() {
+    let test_data = TestData::new(3).await;
+    let test_view = &test_data.views[2];
+    let MessageType::Consensus(ConsensusMessage::Vote2(vote2)) =
+        test_view.vote2_input(0).message_type
+    else {
+        unreachable!("vote2_input builds a Vote2")
+    };
+    let views = views_received_sent_ahead(ConsensusOutput::SendVote2(vote2), test_view, |m| {
+        matches!(m, MessageType::Consensus(ConsensusMessage::Vote2(_)))
+    })
+    .await;
+    assert_eq!(views, [test_view.view_number]);
+}
+
+/// A Certificate1 for a view two ahead of the sender's own must survive the
+/// view change that follows.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_cert1_ahead_of_view_survives_view_change() {
+    let test_data = TestData::new(3).await;
+    let test_view = &test_data.views[2];
+    let output = ConsensusOutput::SendCertificate1(test_view.cert1.clone());
+    let views = views_received_sent_ahead(output, test_view, |m| {
+        matches!(
+            m,
+            MessageType::Consensus(ConsensusMessage::Certificate1(..))
+        )
+    })
+    .await;
+    assert_eq!(views, [test_view.view_number]);
+}
+
+/// A Certificate2 for a view two ahead of the sender's own must survive the
+/// view change that follows.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_cert2_ahead_of_view_survives_view_change() {
+    let test_data = TestData::new(3).await;
+    let test_view = &test_data.views[2];
+    let output = ConsensusOutput::SendCertificate2(test_view.cert2.clone());
+    let views = views_received_sent_ahead(output, test_view, |m| {
+        matches!(
+            m,
+            MessageType::Consensus(ConsensusMessage::Certificate2(..))
+        )
+    })
+    .await;
+    assert_eq!(views, [test_view.view_number]);
+}
+
+/// A timeout vote for a view two ahead of the voter's own must survive the
+/// view change that follows.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_timeout_vote_ahead_of_view_survives_view_change() {
+    let test_data = TestData::new(3).await;
+    let test_view = &test_data.views[2];
+    let MessageType::Consensus(ConsensusMessage::TimeoutVote(message)) =
+        test_view.timeout_vote_input(0, None).message_type
+    else {
+        unreachable!("timeout_vote_input builds a TimeoutVote")
+    };
+    let output = ConsensusOutput::SendTimeoutVote(TimeoutVote::V2(message.vote), message.evidence);
+    let views = views_received_sent_ahead(output, test_view, |m| {
+        matches!(
+            m,
+            MessageType::Consensus(
+                ConsensusMessage::TimeoutVote(_) | ConsensusMessage::TimeoutVote3(_)
+            )
+        )
+    })
+    .await;
+    assert_eq!(views, [test_view.view_number]);
+}
+
+/// Guard: a message about a view below the bound of the node's last view
+/// change still goes out, at the node's own view. An epoch change names the
+/// boundary Certificate1's view, and a node can be well past that view when
+/// it sends one.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_epoch_change_behind_gc_bound_is_delivered() {
+    let test_data = TestData::new(1).await;
+    let test_view = &test_data.views[0];
+    let epoch_change = EpochChangeMessage::validated(
+        test_view.cert1.clone(),
+        test_view.cert2.clone(),
+        test_view.proposal.data.clone(),
+    );
+    let output = ConsensusOutput::SendEpochChange(epoch_change);
+    let views = views_received_sent_behind(test_view.view_number + 2, output, |m| {
+        matches!(m, MessageType::Consensus(ConsensusMessage::EpochChange(_)))
+    })
+    .await;
+    assert_eq!(views, [test_view.view_number]);
+}
+
+/// A leader can release its proposal after it has moved two views past it.
+/// The proposal's view is then below the network's bound, so it must go out
+/// at the leader's own view.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_proposal_behind_gc_bound_is_delivered() {
+    let test_data = TestData::new(1).await;
+    let proposal = test_data.views[0].proposal.clone();
+    let view = proposal.data.view_number;
+    let output = ConsensusOutput::SendProposal(proposal);
+    let views = views_received_sent_behind(view + 2, output, |m| {
+        matches!(m, MessageType::Consensus(ConsensusMessage::Proposal(_)))
+    })
+    .await;
+    assert_eq!(views, [view]);
+}
+
+/// A timeout certificate goes to the leader of the view after the one that
+/// timed out. A node two views behind that view, which then changes to it,
+/// must not drop the queued unicast.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_timeout_cert_ahead_of_view_reaches_leader() {
+    let test_data = TestData::new(2).await;
+    let test_view = &test_data.views[1];
+    let (timed_out, epoch) = (test_view.view_number, test_view.epoch_number);
+    let view = timed_out + 1;
+    let mut harness = TestHarness::new(0).await;
+    assert!(*harness.current_view() + 2 <= *view);
+    let peer = late_member(&leader_of(&harness, view));
+    harness.add_peer(peer.key, peer.info.clone());
+
+    let output =
+        ConsensusOutput::SendTimeoutCertificate(test_view.timeout_cert.clone(), view, epoch);
+    let coordinator = harness.coordinator_mut();
+    coordinator.process_consensus_output(output).unwrap();
+    coordinator
+        .process_consensus_output(ConsensusOutput::ViewChanged(view, epoch))
+        .unwrap();
+
+    let received = received_before_marker(&harness, peer, view).await;
+    let views = views_of(&received, |m| {
+        matches!(
+            m,
+            MessageType::Consensus(
+                ConsensusMessage::TimeoutCertificate(_) | ConsensusMessage::TimeoutCertificate3(_)
+            )
+        )
+    });
+    assert_eq!(views, [timed_out]);
+}
+
+/// A submitted transaction goes to the leaders of the views from two ahead
+/// of the node's own. A view change that skips to the first of them must not
+/// drop the queued unicast to its leader.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_forwarded_transaction_ahead_of_view_reaches_leader() {
+    let mut harness = TestHarness::new(0).await;
+    let (view, epoch) = (harness.current_view(), EpochNumber::genesis());
+    // The block builder counts the views it forwards to from the last view
+    // change it saw.
+    harness
+        .coordinator_mut()
+        .process_consensus_output(ConsensusOutput::ViewChanged(view, epoch))
+        .unwrap();
+    let target = view + 2;
+    let peer = late_member(&leader_of(&harness, target));
+    harness.add_peer(peer.key, peer.info.clone());
+
+    submit_transaction(&mut harness, TestTransaction::new(vec![1])).await;
+    harness
+        .coordinator_mut()
+        .process_consensus_output(ConsensusOutput::ViewChanged(target, epoch))
+        .unwrap();
+
+    let received = received_before_marker(&harness, peer, target).await;
+    let views = views_of(&received, |m| {
+        matches!(m, MessageType::Block(BlockMessage::Transactions(_)))
+    });
+    assert_eq!(views, [target]);
+}
+
+/// A leader can build its block two views ahead of its own, and sends the
+/// block's dedup manifest to the leaders of the views after it. The view
+/// change that follows must not drop the queued unicast.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_dedup_manifest_ahead_of_view_reaches_leader() {
+    let test_data = TestData::new(3).await;
+    let (parent, test_view) = (&test_data.views[1], &test_data.views[2]);
+    let (view, epoch) = (test_view.view_number, test_view.epoch_number);
+    let mut harness = TestHarness::new(0).await;
+    assert!(*harness.current_view() + 2 <= *view);
+    let peer = late_member(&leader_of(&harness, view + 1));
+    harness.add_peer(peer.key, peer.info.clone());
+
+    let request = BlockAndHeaderRequest {
+        view,
+        epoch,
+        parent_proposal: parent.proposal.data.clone(),
+    };
+    harness
+        .coordinator_mut()
+        .process_consensus_output(ConsensusOutput::RequestBlockAndHeader(request))
+        .unwrap();
+    // The coordinator sends the manifest as it yields the built block.
+    drive_until(&mut harness, is_block_built).await;
+    harness
+        .coordinator_mut()
+        .process_consensus_output(ConsensusOutput::ViewChanged(view, epoch))
+        .unwrap();
+
+    // Past every view the manifest's recipients lead.
+    let received = received_before_marker(&harness, peer, view + 2).await;
+    let views = views_of(&received, |m| {
+        matches!(m, MessageType::Block(BlockMessage::DedupManifest(_)))
+    });
+    assert_eq!(views, [view]);
+}
+
+/// A node can hold the proposal for a view two ahead of its own, and answers
+/// a peer's fetch for it. The view change that follows must not drop the
+/// queued answer.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_proposal_fetch_response_ahead_of_view_survives_view_change() {
+    let test_data = TestData::new(3).await;
+    let test_view = &test_data.views[2];
+    let (view, epoch) = (test_view.view_number, test_view.epoch_number);
+    let mut harness = TestHarness::new(0).await;
+    let node_key = harness.connect_info().0;
+    for fragment in test_view.vid_share_inputs(&node_key) {
+        harness.message(fragment);
+    }
+    harness.message(test_view.proposal_input());
+    harness
+        .process_until_output(|outputs| any(outputs, is_proposal_paired))
+        .await;
+    assert!(*harness.current_view() + 2 <= *view);
+
+    let (requester, requester_private_key) = BLSPubKey::generated_from_seed_indexed([0; 32], 1);
+    let peer = late_member(&requester);
+    harness.add_peer(peer.key, peer.info.clone());
+    let request = ProposalFetchRequest::new(view, requester, &requester_private_key).unwrap();
+    harness.message(Message::<TestTypes, Validated> {
+        sender: requester,
+        message_type: MessageType::ProposalFetch(ProposalFetchMessage::Request(request)),
+    });
+    harness
+        .coordinator_mut()
+        .process_consensus_output(ConsensusOutput::ViewChanged(view, epoch))
+        .unwrap();
+
+    let received = received_before_marker(&harness, peer, view).await;
+    let views = views_of(&received, |m| {
+        matches!(
+            m,
+            MessageType::ProposalFetch(ProposalFetchMessage::Response(_))
+        )
+    });
+    assert_eq!(views, [view]);
+}
+
+/// A node fetches a missing proposal with a broadcast request for its view,
+/// which can be two ahead of the node's own: the parent of a proposal that
+/// arrived early. The view change that follows must not drop the request.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_proposal_fetch_request_ahead_of_view_survives_view_change() {
+    let test_data = TestData::new(3).await;
+    let test_view = &test_data.views[2];
+    let output = ConsensusOutput::RequestMissingProposal {
+        view: test_view.view_number,
+        leaf_commit: test_view.leaf.commit(),
+    };
+    let views = views_received_sent_ahead(output, test_view, |m| {
+        matches!(
+            m,
+            MessageType::ProposalFetch(ProposalFetchMessage::Request(_))
+        )
+    })
+    .await;
+    assert_eq!(views, [test_view.view_number]);
+}
+
+/// The views of `output`'s messages a peer receives when the node sends them
+/// from its start view and then changes to `test_view`'s view.
+async fn views_received_sent_ahead(
+    output: ConsensusOutput<TestTypes>,
+    test_view: &TestView,
+    is_kind: fn(&MessageType<TestTypes, Unchecked>) -> bool,
+) -> Vec<ViewNumber> {
+    let (view, epoch) = (test_view.view_number, test_view.epoch_number);
+    let mut harness = TestHarness::new(0).await;
+    assert!(*harness.current_view() + 2 <= *view);
+    let peer = LatePeer::new();
+    harness.add_peer(peer.key, peer.info.clone());
+
+    let coordinator = harness.coordinator_mut();
+    coordinator.process_consensus_output(output).unwrap();
+    coordinator
+        .process_consensus_output(ConsensusOutput::ViewChanged(view, epoch))
+        .unwrap();
+
+    views_of(&received_before_marker(&harness, peer, view).await, is_kind)
+}
+
+/// The views of `output`'s messages a peer receives when the node sends them
+/// after it changed to `view`.
+async fn views_received_sent_behind(
+    view: ViewNumber,
+    output: ConsensusOutput<TestTypes>,
+    is_kind: fn(&MessageType<TestTypes, Unchecked>) -> bool,
+) -> Vec<ViewNumber> {
+    let epoch = EpochNumber::genesis();
+    let mut harness = TestHarness::new(0).await;
+    harness.set_view(view, epoch);
+    let peer = LatePeer::new();
+    harness.add_peer(peer.key, peer.info.clone());
+
+    let coordinator = harness.coordinator_mut();
+    coordinator
+        .process_consensus_output(ConsensusOutput::ViewChanged(view, epoch))
+        .unwrap();
+    coordinator.process_consensus_output(output).unwrap();
+
+    views_of(&received_before_marker(&harness, peer, view).await, is_kind)
+}
+
+/// Broadcast a marker from `harness` at `slot`, start `peer`, and return what
+/// the peer receives before the marker: every message still queued for it at
+/// a lower slot, and those sent to it earlier at `slot`.
+async fn received_before_marker(
+    harness: &TestHarness,
+    peer: LatePeer,
+    slot: ViewNumber,
+) -> Vec<Message<TestTypes, Unchecked>> {
+    let harness_node = harness.connect_info();
+    // No message under test is a HighQc, which only catchup evidence sends.
+    let genesis_cert1 = build_genesis_cert1(harness.coordinator().last_decided_leaf());
+    let marker = Message {
+        sender: harness_node.0,
+        message_type: MessageType::Consensus(ConsensusMessage::HighQc(genesis_cert1)),
+    };
+    harness
+        .coordinator()
+        .network()
+        .sender()
+        .broadcast(slot, &marker)
+        .unwrap();
+
+    let mut network = peer.start(harness_node).await;
+    let mut received = Vec::new();
+    loop {
+        let message = timeout(Duration::from_secs(30), network.receive())
+            .await
+            .expect("the marker should arrive")
+            .unwrap();
+        if matches!(
+            message.message_type,
+            MessageType::Consensus(ConsensusMessage::HighQc(_))
+        ) {
+            return received;
+        }
+        received.push(message);
+    }
+}
+
+/// The views of the `received` messages that `is_kind` selects, each listed
+/// once: delivery is at least once.
+fn views_of(
+    received: &[Message<TestTypes, Unchecked>],
+    is_kind: fn(&MessageType<TestTypes, Unchecked>) -> bool,
+) -> Vec<ViewNumber> {
+    let mut views: Vec<_> = received
+        .iter()
+        .filter(|m| is_kind(&m.message_type))
+        .map(HasViewNumber::view_number)
+        .collect();
+    views.sort();
+    views.dedup();
+    views
+}
+
+/// The stake-table member with `key`, as a peer that starts listening only
+/// when told to. Unicasts to a member, such as a view's leader, reach it.
+fn late_member(key: &BLSPubKey) -> LatePeer {
+    let (key, private_key) =
+        BLSPubKey::generated_from_seed_indexed([0; 32], node_index_for_key(key));
+    let keypair = Keypair::derive_from::<BLSPubKey>(&private_key).unwrap();
+    let port = test_utils::reserve_tcp_port().unwrap();
+    let info = PeerConnectInfo {
+        x25519_key: keypair.public_key(),
+        p2p_addr: NetAddr::Inet(Ipv4Addr::LOCALHOST.into(), port),
+    };
+    LatePeer { key, keypair, info }
+}
+
+/// The leader of `view` in the genesis epoch, which must not be the harness
+/// node itself: a unicast to it would never leave the node.
+fn leader_of(harness: &TestHarness, view: ViewNumber) -> BLSPubKey {
+    let leader = harness
+        .membership()
+        .membership_for_epoch(Some(EpochNumber::genesis()))
+        .expect("the genesis epoch resolves")
+        .leader(view)
+        .expect("the view has a leader");
+    assert_ne!(
+        leader,
+        harness.connect_info().0,
+        "the leader must be a peer"
+    );
+    leader
+}
+
+/// Submit `tx` through the client API, driving the coordinator until it
+/// accepts it. The coordinator forwards it before it answers.
+async fn submit_transaction(harness: &mut TestHarness, tx: TestTransaction) {
+    let client = harness.coordinator().client_api().clone();
+    let submitted = client.submit_transaction(tx);
+    tokio::pin!(submitted);
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    loop {
+        tokio::select! {
+            result = &mut submitted => return result.expect("the transaction is accepted"),
+            _ = harness.coordinator_mut().next_consensus_input() => {},
+            _ = tokio::time::sleep_until(deadline) => panic!("the transaction was not accepted"),
+        }
+    }
+}
+
+/// Drive the coordinator, without applying what it yields, until it yields
+/// an input that `pred` matches.
+async fn drive_until(harness: &mut TestHarness, pred: fn(&ConsensusInput<TestTypes>) -> bool) {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    loop {
+        let next =
+            tokio::time::timeout_at(deadline, harness.coordinator_mut().next_consensus_input());
+        let input = next.await.expect("the input should arrive");
+        if input.as_ref().is_ok_and(pred) {
+            return;
+        }
+    }
+}

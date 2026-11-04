@@ -2,7 +2,6 @@
 
 // Module declarations
 mod axum;
-mod dyn_api;
 pub mod error;
 mod render;
 pub mod v1;

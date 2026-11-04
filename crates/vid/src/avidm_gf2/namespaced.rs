@@ -269,6 +269,7 @@ impl NsAvidmGf2Scheme {
         common: &NsAvidmGf2Common,
         share: &NsAvidmGf2Share,
     ) -> VidResult<crate::VerificationResult> {
+        common.param.validate()?;
         if !(common.ns_commits.len() == common.ns_lens.len()
             && common.ns_commits.len() == share.num_nss()
             && share.validate())
@@ -332,6 +333,7 @@ impl NsAvidmGf2Scheme {
         ns_index: usize,
         shares: &[NsAvidmGf2Share],
     ) -> VidResult<Vec<u8>> {
+        common.param.validate()?;
         if shares.is_empty() {
             return Err(VidError::InsufficientShares);
         }
@@ -388,9 +390,12 @@ pub struct NsDispersal {
 /// Unit tests
 #[cfg(test)]
 pub mod tests {
-    use rand::{RngCore, seq::SliceRandom};
+    use rand::{RngCore, SeedableRng, rngs::StdRng, seq::SliceRandom};
 
-    use crate::{VidError, avidm_gf2::namespaced::NsAvidmGf2Scheme};
+    use crate::{
+        VidError,
+        avidm_gf2::{AvidmGf2Param, namespaced::NsAvidmGf2Scheme},
+    };
 
     fn disperse_with_payload(
         payload: &[u8],
@@ -657,6 +662,56 @@ pub mod tests {
         assert_eq!(payload_recovered, payload);
     }
 
+    proptest::proptest! {
+        #[test]
+        fn any_threshold_covering_subset_recovers_the_payload(
+            weights in proptest::collection::vec(1u32..=5, 1..=9),
+            payload in proptest::collection::vec(proptest::num::u8::ANY, 0..2048),
+            ns_ends in proptest::collection::vec(proptest::num::usize::ANY, 0..4),
+            shuffle_seed: u64,
+        ) {
+            let total_weights: u32 = weights.iter().sum();
+            let recovery_threshold = total_weights.div_ceil(3) as usize;
+            let params =
+                NsAvidmGf2Scheme::setup(recovery_threshold, total_weights as usize).unwrap();
+            let mut ends: Vec<usize> = ns_ends
+                .iter()
+                .map(|end| end % (payload.len() + 1))
+                .chain([payload.len()])
+                .collect();
+            ends.sort_unstable();
+            ends.dedup();
+            let ns_table: Vec<_> = std::iter::once(0)
+                .chain(ends.iter().copied())
+                .zip(ends.iter().copied())
+                .map(|(start, end)| start..end)
+                .filter(|range| !range.is_empty() || payload.is_empty())
+                .collect();
+
+            let (_commit, common, mut shares) =
+                NsAvidmGf2Scheme::ns_disperse(&params, &weights, &payload, ns_table.clone())
+                    .unwrap();
+            shares.shuffle(&mut StdRng::seed_from_u64(shuffle_seed));
+            let mut weight = 0;
+            let subset: Vec<_> = shares
+                .into_iter()
+                .take_while(|share| {
+                    let needed = weight < recovery_threshold;
+                    weight += share.weight();
+                    needed
+                })
+                .collect();
+
+            proptest::prop_assert_eq!(NsAvidmGf2Scheme::recover(&common, &subset).unwrap(), payload.clone());
+            for (ns_index, range) in ns_table.into_iter().enumerate() {
+                proptest::prop_assert_eq!(
+                    NsAvidmGf2Scheme::ns_recover(&common, ns_index, &subset).unwrap(),
+                    payload[range].to_vec()
+                );
+            }
+        }
+    }
+
     #[test]
     fn ns_recover_rejects_ns_len_the_shards_were_not_dispersed_from() {
         let k = 4;
@@ -677,6 +732,34 @@ pub mod tests {
             NsAvidmGf2Scheme::ns_recover(&common, 1, &shares),
             Err(VidError::IndexOutOfBound)
         ));
+    }
+
+    #[test]
+    fn forged_common_param_is_rejected() {
+        let (_commit, common, shares) = setup_test_data();
+        for (recovery_threshold, total_weights) in [(0, 4), (1, 1 << 16)] {
+            let mut forged = common.clone();
+            forged.param = AvidmGf2Param {
+                total_weights,
+                recovery_threshold,
+            };
+            assert!(
+                matches!(
+                    NsAvidmGf2Scheme::verify_share_with_verified_common(&forged, &shares[0]),
+                    Err(VidError::InvalidParam)
+                ),
+                "verify_share_with_verified_common {:?}",
+                forged.param
+            );
+            assert!(
+                matches!(
+                    NsAvidmGf2Scheme::ns_recover(&forged, 0, &shares),
+                    Err(VidError::InvalidParam)
+                ),
+                "ns_recover {:?}",
+                forged.param
+            );
+        }
     }
 
     /// A caller that encodes each namespace with `ns_disperse_one` and folds the

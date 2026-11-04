@@ -723,14 +723,11 @@ pub(crate) async fn prefetch_stake_table_events(
         return Ok(());
     };
 
-    // Not redundant: a genesis pinning a complete L1 block never waits on the L1 client,
-    // so it reaches this with an empty snapshot.
-    l1_client.wait_for_finalized_block(l1_genesis.number).await;
+    // A pinned genesis block never waits on the L1 client, so the snapshot may be empty here.
+    // Does not fetch the genesis block itself: RPCs that prune old history no longer serve it.
     let finalized = l1_client
-        .snapshot()
-        .await
-        .finalized
-        .context("no finalized L1 block after waiting for the genesis block")?;
+        .wait_for_latest_finalized_at_least(l1_genesis.number)
+        .await;
 
     tracing::info!(
         target: "announce",
@@ -1446,6 +1443,37 @@ pub mod testing {
         pub async fn init_node<P: PersistenceOptions>(
             &self,
             i: usize,
+            state: ValidatedState,
+            persistence_opt: P,
+            state_peers: Option<impl StateCatchup + 'static>,
+            storage: Option<RequestResponseStorage>,
+            metrics: &dyn Metrics,
+            stake_table_capacity: usize,
+            event_consumer: impl EventConsumer + 'static,
+            upgrade: versions::Upgrade,
+            upgrades: BTreeMap<Version, Upgrade>,
+        ) -> SequencerContext<P::Persistence> {
+            self.try_init_node(
+                i,
+                state,
+                persistence_opt,
+                state_peers,
+                storage,
+                metrics,
+                stake_table_capacity,
+                event_consumer,
+                upgrade,
+                upgrades,
+            )
+            .await
+            .expect("node initializes")
+        }
+
+        /// [`Self::init_node`], returning the error `SequencerContext::init` refuses with.
+        #[allow(clippy::too_many_arguments)]
+        pub async fn try_init_node<P: PersistenceOptions>(
+            &self,
+            i: usize,
             mut state: ValidatedState,
             mut persistence_opt: P,
             state_peers: Option<impl StateCatchup + 'static>,
@@ -1455,7 +1483,7 @@ pub mod testing {
             event_consumer: impl EventConsumer + 'static,
             upgrade: versions::Upgrade,
             upgrades: BTreeMap<Version, Upgrade>,
-        ) -> SequencerContext<P::Persistence> {
+        ) -> anyhow::Result<SequencerContext<P::Persistence>> {
             let config = self.config.clone();
             let my_peer_config = &config.known_nodes_with_stake[i];
             let is_da = config.known_da_nodes.contains(my_peer_config);
@@ -1623,7 +1651,6 @@ pub mod testing {
                 BTreeMap::from([(upgrade.base, max_block_size)]),
             )
             .await
-            .unwrap()
         }
 
         pub fn builder_key() -> EthKeyPair {
