@@ -1,6 +1,7 @@
 //! Watches archive query nodes for data they fail to serve; see `README.md`.
 
 mod chunk;
+mod gaps;
 mod http;
 mod metrics;
 mod store;
@@ -49,8 +50,9 @@ struct Options {
 }
 
 /// Parses options, opens the store, forgets other nodes, opens the read-only pool of the page,
-/// spawns `http::serve`, fetches the epoch config and the first tip, starts each node, and runs `TipPoller::run` and every `NodeWatch::run`
-/// in one `select!` with the server and `shutdown_signal()`.
+/// spawns `http::serve`, fetches the epoch config and the first tip, starts each node, and runs
+/// `TipPoller::run` and every `NodeWatch::run` in one `select!` with the server and
+/// `shutdown_signal()`.
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let options = Options::parse();
@@ -122,7 +124,7 @@ fn log_config(options: &Options, labels: &[String]) {
         db_path = %options.db_path.display(),
         sweep_interval = %humantime::format_duration(watch.sweep_interval),
         request_interval = %humantime::format_duration(watch.request_interval),
-        warn_missing_after = %humantime::format_duration(watch.warn_missing_after),
+        alert_missing_after = %humantime::format_duration(watch.alert_missing_after),
         retention_blocks = watch.retention_blocks,
         retention = watch.retention_blocks.is_none().then_some("archive"),
         "config"

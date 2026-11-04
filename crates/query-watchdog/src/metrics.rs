@@ -33,7 +33,7 @@ pub struct WatchdogMetrics {
     sweep_next_height: IntGaugeVec,
     /// `{node}`, end height of the running sweep; 0 while waiting.
     sweep_until_height: IntGaugeVec,
-    /// `{node}`, estimated time to finish the running sweep; 0 while waiting or unknown.
+    /// `{node}`, estimated time to finish the running sweep; absent while waiting or unknown.
     sweep_eta_seconds: IntGaugeVec,
     /// `{node,kind}`, every probe sent.
     probes_total: IntCounterVec,
@@ -108,7 +108,7 @@ impl WatchdogMetrics {
             sweep_eta_seconds: gauge(
                 registry,
                 "sweep_eta_seconds",
-                "Estimated seconds to finish the running sweep, 0 while waiting or unknown",
+                "Estimated seconds to finish the running sweep, absent while waiting or unknown",
                 &["node"],
             )?,
             probes_total: counter(registry, "probes_total", "Probes sent", &["node", "kind"])?,
@@ -141,8 +141,8 @@ impl WatchdogMetrics {
         Ok(())
     }
 
-    /// Sets the follow and sweep progress gauges of `node_label`; the sweep gauges read 0 while
-    /// the sweep waits.
+    /// Sets the follow and sweep progress gauges of `node_label`; the sweep height gauges read 0
+    /// while the sweep waits, and the ETA gauge is removed while waiting or unknown.
     pub fn export_progress(
         &self,
         node_label: &str,
@@ -158,9 +158,16 @@ impl WatchdogMetrics {
             .with_label_values(&labels)
             .set(i64::try_from(progress.follow_next_height)?);
         self.sweep_running.with_label_values(&labels).set(running);
-        self.sweep_eta_seconds
-            .with_label_values(&labels)
-            .set(i64::try_from(sweep_eta.map_or(0, |eta| eta.as_secs()))?);
+        match sweep_eta {
+            Some(eta) => self
+                .sweep_eta_seconds
+                .with_label_values(&labels)
+                .set(i64::try_from(eta.as_secs())?),
+            None => {
+                // Fails only when the series does not exist yet.
+                self.sweep_eta_seconds.remove_label_values(&labels).ok();
+            },
+        }
         self.sweep_next_height
             .with_label_values(&labels)
             .set(i64::try_from(next)?);

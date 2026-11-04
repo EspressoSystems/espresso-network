@@ -1,7 +1,7 @@
 use std::{fs, ops::Range, path::Path, str::FromStr, time::Duration};
 
 use anyhow::{Context, bail};
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, TimeDelta, Utc};
 use sqlx::{
     QueryBuilder, Sqlite,
     sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePool, SqlitePoolOptions},
@@ -100,6 +100,67 @@ const RETRY_DELAY_MIN_SECS: i64 = 5;
 /// Cap of the doubling retry delay.
 const RETRY_DELAY_MAX_SECS: i64 = 600;
 
+/// `last_status` of a row refined from a 404 that named a height.
+const STATUS_NOT_FOUND: &str = "404";
+/// `last_status` of the tail of a refinement that stopped early; it never alerts.
+const STATUS_UNREFINED: &str = "unrefined";
+
+/// Selects the rows of a kind inside a range: starting in it and not ending after it.
+const SELECT_INSIDE: &str = "SELECT range_start, range_end, first_missing_at, retry_delay_secs, \
+                             failed_probes FROM missing_chunk WHERE node = ? AND kind = ? AND \
+                             range_start >= ? AND range_start < ? AND range_end <= ?";
+/// Deletes the rows `SELECT_INSIDE` selects.
+const DELETE_INSIDE: &str = "DELETE FROM missing_chunk WHERE node = ? AND kind = ? AND \
+                             range_start >= ? AND range_start < ? AND range_end <= ?";
+
+/// The retry state of a missing range.
+#[derive(Clone, Debug, PartialEq)]
+struct MissingRow {
+    range: Range<u64>,
+    first_missing_at: DateTime<Utc>,
+    retry_delay_secs: i64,
+    failed_probes: i64,
+}
+
+/// Rows for the `new` ranges with their status: each takes the oldest `first_missing_at`, the
+/// doubled largest delay (capped) and the largest failed probe count plus one of the `old` rows it
+/// overlaps, or starts fresh at `now` with the minimum delay and one failed probe.
+fn merge_rows<'a>(
+    old: &[MissingRow],
+    new: &[(Range<u64>, &'a str)],
+    now: DateTime<Utc>,
+) -> Vec<(MissingRow, &'a str)> {
+    new.iter()
+        .map(|(range, status)| {
+            let overlapping: Vec<_> = old
+                .iter()
+                .filter(|row| row.range.start < range.end && row.range.end > range.start)
+                .collect();
+            let row = MissingRow {
+                range: range.clone(),
+                first_missing_at: overlapping
+                    .iter()
+                    .map(|row| row.first_missing_at)
+                    .min()
+                    .unwrap_or(now),
+                retry_delay_secs: overlapping
+                    .iter()
+                    .map(|row| row.retry_delay_secs)
+                    .max()
+                    .map_or(RETRY_DELAY_MIN_SECS, |delay| {
+                        (delay * 2).min(RETRY_DELAY_MAX_SECS)
+                    }),
+                failed_probes: overlapping
+                    .iter()
+                    .map(|row| row.failed_probes)
+                    .max()
+                    .map_or(1, |failed| failed + 1),
+            };
+            (row, *status)
+        })
+        .collect()
+}
+
 /// A `node_progress` row.
 #[derive(sqlx::FromRow)]
 struct ProgressRow {
@@ -190,16 +251,24 @@ impl NodeStore {
         Ok(())
     }
 
-    /// Upsert: new row retries after `RETRY_DELAY_MIN_SECS`; known row keeps `first_missing_at`,
-    /// raises `range_end`, doubles the delay up to `RETRY_DELAY_MAX_SECS`.
-    pub async fn record_missing(&self, probe: &Probe, now: DateTime<Utc>) -> anyhow::Result<()> {
+    /// Upsert: new row retries after `RETRY_DELAY_MIN_SECS` with one failed probe; known row keeps
+    /// `first_missing_at`, raises `range_end`, doubles the delay up to `RETRY_DELAY_MAX_SECS`,
+    /// counts another failed probe. `status` is the label of the failure (`"404"`, `"500"`,
+    /// `"transport"`).
+    pub async fn record_missing(
+        &self,
+        probe: &Probe,
+        status: &str,
+        now: DateTime<Utc>,
+    ) -> anyhow::Result<()> {
         // In `DO UPDATE`, unqualified columns are the old row, so both columns see the old delay.
         sqlx::query(
             "INSERT INTO missing_chunk (node, kind, range_start, range_end, first_missing_at, \
-             retry_delay_secs, next_retry_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?5 + ?6) ON \
-             CONFLICT (node, kind, range_start) DO UPDATE SET range_end = MAX(range_end, \
-             excluded.range_end), retry_delay_secs = MIN(retry_delay_secs * 2, ?7), next_retry_at \
-             = ?5 + MIN(retry_delay_secs * 2, ?7)",
+             retry_delay_secs, next_retry_at, last_status) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?5 + \
+             ?6, ?8) ON CONFLICT (node, kind, range_start) DO UPDATE SET range_end = \
+             MAX(range_end, excluded.range_end), retry_delay_secs = MIN(retry_delay_secs * 2, \
+             ?7), next_retry_at = ?5 + MIN(retry_delay_secs * 2, ?7), failed_probes = \
+             failed_probes + 1, last_status = ?8",
         )
         .bind(&self.node)
         .bind(<&'static str>::from(probe.kind))
@@ -208,23 +277,93 @@ impl NodeStore {
         .bind(now.timestamp())
         .bind(RETRY_DELAY_MIN_SECS)
         .bind(RETRY_DELAY_MAX_SECS)
+        .bind(status)
         .execute(&self.pool)
         .await?;
         Ok(())
     }
 
-    /// Deletes the row after a 200, unless it spans more than `probe.range`.
+    /// Deletes the rows of the kind inside `probe.range` after a 200: those starting in it and
+    /// not ending after it.
     pub async fn record_found(&self, probe: &Probe) -> anyhow::Result<()> {
-        sqlx::query(
-            "DELETE FROM missing_chunk WHERE node = ? AND kind = ? AND range_start = ? AND \
-             range_end <= ?",
-        )
-        .bind(&self.node)
-        .bind(<&'static str>::from(probe.kind))
-        .bind(i64::try_from(probe.range.start)?)
-        .bind(i64::try_from(probe.range.end)?)
-        .execute(&self.pool)
-        .await?;
+        sqlx::query(DELETE_INSIDE)
+            .bind(&self.node)
+            .bind(<&'static str>::from(probe.kind))
+            .bind(i64::try_from(probe.range.start)?)
+            .bind(i64::try_from(probe.range.end)?)
+            .bind(i64::try_from(probe.range.end)?)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    /// Replaces the rows of `kind` inside `within` (as `record_found` selects them) by the exact
+    /// `gaps` (status `"404"`) and the `unrefined` tail (status `STATUS_UNREFINED`) in one
+    /// transaction. A new row inherits the oldest `first_missing_at`, the doubled largest delay and
+    /// the largest failed probe count plus one of the old rows it overlaps; one with no overlap
+    /// starts fresh.
+    pub async fn replace_missing(
+        &self,
+        kind: DataKind,
+        within: &Range<u64>,
+        gaps: &[Range<u64>],
+        unrefined: Option<&Range<u64>>,
+        now: DateTime<Utc>,
+    ) -> anyhow::Result<()> {
+        let mut tx = self.pool.begin().await?;
+        let kind_label = <&'static str>::from(kind);
+        let (start, end) = (i64::try_from(within.start)?, i64::try_from(within.end)?);
+        let old: Vec<(u64, u64, DateTime<Utc>, i64, i64)> = sqlx::query_as(SELECT_INSIDE)
+            .bind(&self.node)
+            .bind(kind_label)
+            .bind(start)
+            .bind(end)
+            .bind(end)
+            .fetch_all(&mut *tx)
+            .await?;
+        let old: Vec<_> = old
+            .into_iter()
+            .map(
+                |(start, end, first_missing_at, retry_delay_secs, failed_probes)| MissingRow {
+                    range: start..end,
+                    first_missing_at,
+                    retry_delay_secs,
+                    failed_probes,
+                },
+            )
+            .collect();
+        sqlx::query(DELETE_INSIDE)
+            .bind(&self.node)
+            .bind(kind_label)
+            .bind(start)
+            .bind(end)
+            .bind(end)
+            .execute(&mut *tx)
+            .await?;
+        let new: Vec<_> = gaps
+            .iter()
+            .map(|gap| (gap.clone(), STATUS_NOT_FOUND))
+            .chain(unrefined.map(|rest| (rest.clone(), STATUS_UNREFINED)))
+            .collect();
+        for (row, status) in merge_rows(&old, &new, now) {
+            sqlx::query(
+                "INSERT OR REPLACE INTO missing_chunk (node, kind, range_start, range_end, \
+                 first_missing_at, retry_delay_secs, next_retry_at, failed_probes, last_status) \
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            )
+            .bind(&self.node)
+            .bind(kind_label)
+            .bind(i64::try_from(row.range.start)?)
+            .bind(i64::try_from(row.range.end)?)
+            .bind(row.first_missing_at.timestamp())
+            .bind(row.retry_delay_secs)
+            .bind((now + TimeDelta::seconds(row.retry_delay_secs)).timestamp())
+            .bind(row.failed_probes)
+            .bind(status)
+            .execute(&mut *tx)
+            .await?;
+        }
+        tx.commit().await?;
         Ok(())
     }
 
@@ -260,11 +399,11 @@ impl NodeStore {
         let start_height = i64::try_from(start_height)?;
         let mut query = QueryBuilder::new("DELETE FROM missing_chunk WHERE node = ");
         query.push_bind(&self.node).push(" AND ((kind IN (");
-        push_kinds(&mut query, false);
+        push_kinds(&mut query, |kind| !kind.is_per_epoch());
         query.push(") AND range_start < ").push_bind(start_height);
         if let Some(epochs) = epochs {
             query.push(") OR (kind IN (");
-            push_kinds(&mut query, true);
+            push_kinds(&mut query, DataKind::is_per_epoch);
             query
                 .push(") AND range_start * ")
                 .push_bind(i64::try_from(epochs.epoch_height)?)
@@ -315,21 +454,28 @@ impl NodeStore {
             .with_context(|| format!("{}: first_missing_at {first} is after {now}", self.node))
     }
 
-    /// One entry per `DataKind::VARIANTS`: `SUM(end - start)`, and the range with the earliest
+    /// One entry per `DataKind::VARIANTS`: the missing count (heights for range kinds, rows for the
+    /// others), and the range with the earliest
     /// `first_missing_at` (lowest `range_start` on a tie) with its age at `now`; rows first missing
     /// after `now` are ignored.
     pub async fn missing_summary(&self, now: DateTime<Utc>) -> anyhow::Result<Vec<KindSummary>> {
-        let rows: Vec<(String, u64, DateTime<Utc>, u64, u64)> = sqlx::query_as(
-            "SELECT kind, total, first_missing_at, range_start, range_end FROM ( SELECT kind, \
-             first_missing_at, range_start, range_end, SUM(range_end - range_start) OVER \
-             (PARTITION BY kind) AS total, ROW_NUMBER() OVER (PARTITION BY kind ORDER BY \
-             first_missing_at, range_start) AS rn FROM missing_chunk WHERE node = ? AND \
-             first_missing_at <= ?) WHERE rn = 1",
-        )
-        .bind(&self.node)
-        .bind(now.timestamp())
-        .fetch_all(&self.pool)
-        .await?;
+        let mut query = QueryBuilder::new(
+            "SELECT kind, total, first_missing_at, range_start, range_end FROM (SELECT kind, \
+             first_missing_at, range_start, range_end, SUM(CASE WHEN kind IN (",
+        );
+        push_kinds(&mut query, DataKind::is_range);
+        query
+            .push(
+                ") THEN range_end - range_start ELSE 1 END) OVER (PARTITION BY kind) AS total, \
+                 ROW_NUMBER() OVER (PARTITION BY kind ORDER BY first_missing_at, range_start) AS \
+                 rn FROM missing_chunk WHERE node = ",
+            )
+            .push_bind(&self.node)
+            .push(" AND first_missing_at <= ")
+            .push_bind(now.timestamp())
+            .push(") WHERE rn = 1");
+        let rows: Vec<(String, u64, DateTime<Utc>, u64, u64)> =
+            query.build_query_as().fetch_all(&self.pool).await?;
         let by_kind = rows
             .into_iter()
             .map(|(kind, count, first, start, end)| {
@@ -354,13 +500,67 @@ impl NodeStore {
     }
 }
 
-/// Pushes the quoted-bind list of the kinds with `is_per_epoch() == per_epoch`.
-fn push_kinds(query: &mut QueryBuilder<'_, Sqlite>, per_epoch: bool) {
+impl NodeStore {
+    /// The oldest qualifying row per kind: last failure a 404 that named a height (`"404"`), at
+    /// least `min_failed` failed probes, first missing at least `min_age` before `now`, and below
+    /// the tip margin: per-height kinds end at or below `max_end_height`, per-epoch kinds have
+    /// their last block `epoch * epoch_height` at or below it. Ties go to the lowest `range_start`.
+    pub async fn alert_candidates(
+        &self,
+        now: DateTime<Utc>,
+        min_age: Duration,
+        min_failed: u32,
+        max_end_height: u64,
+        epochs: Option<EpochConfig>,
+    ) -> anyhow::Result<Vec<AlertCandidate>> {
+        let max_first_missing = now - TimeDelta::from_std(min_age)?;
+        let max_end_height = i64::try_from(max_end_height)?;
+        let mut query = QueryBuilder::new(
+            "SELECT kind, range_start, range_end, first_missing_at, failed_probes FROM (SELECT \
+             kind, range_start, range_end, first_missing_at, failed_probes, ROW_NUMBER() OVER \
+             (PARTITION BY kind ORDER BY first_missing_at, range_start) AS rn FROM missing_chunk \
+             WHERE node = ",
+        );
+        query
+            .push_bind(&self.node)
+            .push(" AND last_status = ")
+            .push_bind(STATUS_NOT_FOUND)
+            .push(" AND failed_probes >= ")
+            .push_bind(min_failed)
+            .push(" AND first_missing_at <= ")
+            .push_bind(max_first_missing.timestamp())
+            .push(" AND ((kind IN (");
+        push_kinds(&mut query, |kind| !kind.is_per_epoch());
+        query.push(") AND range_end <= ").push_bind(max_end_height);
+        if let Some(epochs) = epochs {
+            query.push(") OR (kind IN (");
+            push_kinds(&mut query, DataKind::is_per_epoch);
+            query
+                .push(") AND range_start * ")
+                .push_bind(i64::try_from(epochs.epoch_height)?)
+                .push(" <= ")
+                .push_bind(max_end_height);
+        }
+        query.push("))) WHERE rn = 1");
+        let rows: Vec<(String, u64, u64, DateTime<Utc>, u32)> =
+            query.build_query_as().fetch_all(&self.pool).await?;
+        rows.into_iter()
+            .map(|(kind, start, end, first, failed_probes)| {
+                Ok(AlertCandidate {
+                    kind: DataKind::from_str(&kind)?,
+                    range: start..end,
+                    age: self.age(now, first)?,
+                    failed_probes,
+                })
+            })
+            .collect()
+    }
+}
+
+/// Pushes the bind list of the kinds for which `filter` holds.
+fn push_kinds(query: &mut QueryBuilder<'_, Sqlite>, filter: impl Fn(DataKind) -> bool) {
     let mut kinds = query.separated(", ");
-    for kind in DataKind::VARIANTS
-        .iter()
-        .filter(|kind| kind.is_per_epoch() == per_epoch)
-    {
+    for kind in DataKind::VARIANTS.iter().filter(|kind| filter(**kind)) {
         kinds.push_bind(<&'static str>::from(*kind));
     }
 }
@@ -416,6 +616,15 @@ pub struct KindSummary {
     pub oldest: Option<OldestMissing>,
 }
 
+/// The oldest missing range of a kind that qualifies for an alert.
+#[derive(Clone, Debug, PartialEq)]
+pub struct AlertCandidate {
+    pub kind: DataKind,
+    pub range: Range<u64>,
+    pub age: Duration,
+    pub failed_probes: u32,
+}
+
 /// A missing range and how long it has been missing.
 #[derive(Clone, Debug, PartialEq)]
 pub struct MissingRange {
@@ -458,6 +667,22 @@ mod tests {
         Store::connect(options).await.unwrap().node(label)
     }
 
+    async fn fail_probes(
+        node: &NodeStore,
+        kind: DataKind,
+        range: Range<u64>,
+        status: &str,
+        times: i64,
+        first: i64,
+    ) {
+        for i in 0..times {
+            let probe = probe(kind, range.clone());
+            node.record_missing(&probe, status, at(first + i))
+                .await
+                .unwrap();
+        }
+    }
+
     fn count(summary: &[KindSummary], kind: DataKind) -> u64 {
         summary
             .iter()
@@ -479,8 +704,8 @@ mod tests {
                 .all(|k| k.missing_count == 0 && k.oldest.is_none())
         );
 
-        node.record_missing(&leaf, at(T0)).await.unwrap();
-        node.record_missing(&probe(DataKind::StakeTable, 5..6), at(T0 + 50))
+        node.record_missing(&leaf, "404", at(T0)).await.unwrap();
+        node.record_missing(&probe(DataKind::StakeTable, 5..6), "404", at(T0 + 50))
             .await
             .unwrap();
         assert!(node.due_retries(at(T0 + 4), 10).await.unwrap().is_empty());
@@ -490,7 +715,7 @@ mod tests {
         // The delay doubles from 5 s to the 600 s cap.
         let mut now = T0 + 5;
         for delay in [10, 20, 40, 80, 160, 320, 600, 600] {
-            node.record_missing(&leaf, at(now)).await.unwrap();
+            node.record_missing(&leaf, "404", at(now)).await.unwrap();
             let before = node.due_retries(at(now + delay - 1), 10).await.unwrap();
             assert!(!before.contains(&leaf));
             let after = node.due_retries(at(now + delay), 10).await.unwrap();
@@ -516,7 +741,7 @@ mod tests {
             (DataKind::Block, 300..400, 30),
             (DataKind::Block, 200..300, 30),
         ] {
-            node.record_missing(&probe(kind, range), at(T0 + secs))
+            node.record_missing(&probe(kind, range), "404", at(T0 + secs))
                 .await
                 .unwrap();
         }
@@ -537,7 +762,7 @@ mod tests {
         assert_eq!(oldest(DataKind::Block).age, Duration::from_secs(70));
 
         // A row first missing after `now` is ignored instead of failing the age.
-        node.record_missing(&probe(DataKind::Leaf, 900..1000), at(T0 + 500))
+        node.record_missing(&probe(DataKind::Leaf, 900..1000), "404", at(T0 + 500))
             .await
             .unwrap();
         let summary = node.missing_summary(at(T0 + 100)).await.unwrap();
@@ -564,8 +789,10 @@ mod tests {
         let long = probe(DataKind::Leaf, 100..200);
         let short = probe(DataKind::Leaf, 100..150);
 
-        node.record_missing(&long, at(T0)).await.unwrap();
-        node.record_missing(&short, at(T0 + 1)).await.unwrap();
+        node.record_missing(&long, "404", at(T0)).await.unwrap();
+        node.record_missing(&short, "404", at(T0 + 1))
+            .await
+            .unwrap();
         let summary = node.missing_summary(at(T0 + 2)).await.unwrap();
         assert_eq!(
             count(&summary, DataKind::Leaf),
@@ -602,7 +829,7 @@ mod tests {
             (DataKind::StakeTable, 5..6),
         ];
         for (kind, range) in rows {
-            node.record_missing(&probe(kind, range), at(T0))
+            node.record_missing(&probe(kind, range), "404", at(T0))
                 .await
                 .unwrap();
         }
@@ -614,6 +841,140 @@ mod tests {
         assert_eq!(count(&summary, DataKind::Leaf), 100);
         assert_eq!(count(&summary, DataKind::StateCert), 1);
         assert_eq!(count(&summary, DataKind::StakeTable), 1);
+    }
+
+    #[tokio::test]
+    async fn replace_missing_inherits_age_and_backoff() {
+        let node = node_store("a:1").await;
+        let chunk = 0..100;
+        let leaf = probe(DataKind::Leaf, chunk.clone());
+        node.record_missing(&leaf, "404", at(T0)).await.unwrap();
+        node.record_missing(&leaf, "404", at(T0 + 5)).await.unwrap();
+
+        let gaps = [10..20, 50..60];
+        node.replace_missing(DataKind::Leaf, &chunk, &gaps, None, at(T0 + 30))
+            .await
+            .unwrap();
+        let summary = node.missing_summary(at(T0 + 100)).await.unwrap();
+        assert_eq!(count(&summary, DataKind::Leaf), 20);
+        let oldest = summary[0].oldest.as_ref().unwrap();
+        assert_eq!(
+            (oldest.range.clone(), oldest.age),
+            (10..20, Duration::from_secs(100))
+        );
+        // The old delay was 10 s, so the new rows retry 20 s after the replacement.
+        assert!(node.due_retries(at(T0 + 49), 10).await.unwrap().is_empty());
+        assert_eq!(node.due_retries(at(T0 + 50), 10).await.unwrap().len(), 2);
+
+        let other = 100..200;
+        let fresh = Range {
+            start: 120,
+            end: 130,
+        };
+        node.replace_missing(DataKind::Leaf, &other, &[fresh], None, at(T0 + 40))
+            .await
+            .unwrap();
+        assert_eq!(node.due_retries(at(T0 + 45), 10).await.unwrap().len(), 1);
+
+        node.record_found(&leaf).await.unwrap();
+        let summary = node.missing_summary(at(T0 + 100)).await.unwrap();
+        assert_eq!(
+            count(&summary, DataKind::Leaf),
+            10,
+            "rows inside the found range go"
+        );
+    }
+
+    #[tokio::test]
+    async fn single_height_kinds_count_one_per_row() {
+        let node = node_store("a:1").await;
+        for kind in [DataKind::LcLeafProof, DataKind::Aggregate] {
+            node.record_missing(&probe(kind, 0..100), "404", at(T0))
+                .await
+                .unwrap();
+        }
+        let summary = node.missing_summary(at(T0)).await.unwrap();
+        assert_eq!(count(&summary, DataKind::LcLeafProof), 1);
+        assert_eq!(count(&summary, DataKind::Aggregate), 1);
+    }
+
+    #[tokio::test]
+    async fn alert_candidates_apply_every_condition() {
+        let node = node_store("a:1").await;
+        let epochs = Some(EpochConfig {
+            epoch_height: 100,
+            epoch_start_block: 1,
+        });
+        let fail = |kind, range, status, times, first| {
+            fail_probes(&node, kind, range, status, times, first)
+        };
+        fail(DataKind::Leaf, 100..200, "404", 3, T0).await;
+        fail(DataKind::Leaf, 50..100, "404", 3, T0 + 10).await;
+        fail(DataKind::Block, 100..200, "500", 3, T0).await;
+        fail(DataKind::VidCommon, 100..200, "404", 2, T0).await;
+        fail(DataKind::LcLeafProof, 100..200, "404", 3, T0 + 50).await;
+        fail(DataKind::Aggregate, 900..1000, "404", 3, T0).await;
+        fail(DataKind::StateCert, 3..4, "404", 3, T0).await;
+        fail(DataKind::StakeTable, 6..7, "404", 3, T0).await;
+
+        let now = at(T0 + 60);
+        let min_age = Duration::from_secs(60);
+        let found = node
+            .alert_candidates(now, min_age, 3, 500, epochs)
+            .await
+            .unwrap();
+        let summary: Vec<_> = found
+            .iter()
+            .map(|c| (c.kind, c.range.clone(), c.age.as_secs(), c.failed_probes))
+            .collect();
+        // Not alerting: block (500), vid_common (2 probes), lc_leaf_proof (too young), aggregate
+        // and stake_table (too close to the tip). Leaf takes the older of its two rows.
+        let expected = [
+            (DataKind::Leaf, 100..200, 60, 3),
+            (DataKind::StateCert, 3..4, 60, 3),
+        ];
+        assert_eq!(summary, expected);
+
+        // A later 404 sets the status again and counts another probe.
+        node.record_missing(&probe(DataKind::Block, 100..200), "404", at(T0 + 3))
+            .await
+            .unwrap();
+        let found = node
+            .alert_candidates(now, min_age, 3, 500, epochs)
+            .await
+            .unwrap();
+        let block = found.iter().find(|c| c.kind == DataKind::Block).unwrap();
+        assert_eq!(block.failed_probes, 4);
+    }
+
+    #[tokio::test]
+    async fn refinement_inherits_failed_probes_and_unrefined_never_alerts() {
+        let node = node_store("a:1").await;
+        let chunk = 0..100;
+        for secs in [0, 5] {
+            node.record_missing(&probe(DataKind::Leaf, chunk.clone()), "404", at(T0 + secs))
+                .await
+                .unwrap();
+        }
+        let unrefined = 50..100;
+        let gap = Range { start: 10, end: 20 };
+        let gaps = [gap];
+        node.replace_missing(DataKind::Leaf, &chunk, &gaps, Some(&unrefined), at(T0 + 30))
+            .await
+            .unwrap();
+        let found = node
+            .alert_candidates(at(T0 + 100), Duration::from_secs(60), 3, 1000, None)
+            .await
+            .unwrap();
+        let ranges: Vec<_> = found
+            .iter()
+            .map(|c| (c.range.clone(), c.failed_probes))
+            .collect();
+        assert_eq!(
+            ranges,
+            [(10..20, 3)],
+            "the unrefined tail has status unrefined"
+        );
     }
 
     #[test]

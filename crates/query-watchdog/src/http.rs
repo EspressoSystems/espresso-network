@@ -2,13 +2,14 @@
 
 use std::{
     fmt::Write,
-    sync::{Arc, OnceLock, PoisonError},
+    sync::{Arc, OnceLock},
     time::Duration,
 };
 
-use axum::{Router, extract::State, http::StatusCode, response::Html, routing::get};
-use chrono::{DateTime, TimeDelta, Utc};
+use axum::{Json, Router, extract::State, http::StatusCode, response::Html, routing::get};
+use chrono::{DateTime, Utc};
 use prometheus::{Registry, TextEncoder};
+use serde::Serialize;
 use tokio::{net::TcpListener, sync::watch::Receiver};
 
 use crate::{
@@ -55,17 +56,31 @@ impl AppState {
     }
 }
 
-/// `axum::serve` of a `Router` with `/healthcheck` (unit handler, 200), `/status/metrics`
+/// `axum::serve` of a `Router` with `/healthcheck` (`{"status":"available"}`, 200),
+/// `/status/metrics`
 /// (`TextEncoder::encode_to_string(&registry.gather())`, 500 on encode error) and `/`, the page of
 /// missing ranges per node (500 with the error text on a store error).
 pub async fn serve(listener: TcpListener, app: AppState) -> anyhow::Result<()> {
     let router = Router::new()
         .route("/", get(missing_page))
-        .route("/healthcheck", get(|| async {}))
+        .route("/healthcheck", get(healthcheck))
         .route("/status/metrics", get(encode_metrics))
         .with_state(app);
     axum::serve(listener, router).await?;
     Ok(())
+}
+
+/// Body of `/healthcheck`.
+#[derive(Serialize)]
+struct Health {
+    status: &'static str,
+}
+
+/// Always available while the process serves.
+async fn healthcheck() -> Json<Health> {
+    Json(Health {
+        status: "available",
+    })
 }
 
 /// Text exposition of the registry.
@@ -92,7 +107,13 @@ async fn missing_page(State(app): State<AppState>) -> Result<Html<String>, (Stat
             })?;
         pages.push(page);
     }
-    Ok(Html(render_page(app.window, now, &pages)))
+    Ok(Html(render_page(app.window, &pages)))
+}
+
+/// Time left of the running sweep and when it ends.
+struct SweepEta {
+    remaining: Duration,
+    finish: DateTime<Utc>,
 }
 
 /// What the page shows for one node.
@@ -101,7 +122,7 @@ struct NodePage<'a> {
     /// `None` until the tip poller has started.
     tip_height: Option<u64>,
     /// `None` until this process has swept a height of the running sweep.
-    sweep_eta: Option<Duration>,
+    sweep_eta: Option<SweepEta>,
     /// `None` before the node watch started.
     progress: Option<NodeProgress>,
     /// One entry per kind.
@@ -117,12 +138,17 @@ async fn load_node_page<'a>(
     now: DateTime<Utc>,
 ) -> anyhow::Result<NodePage<'a>> {
     let store = app.store.node(&node.label);
-    let sweep_eta = app
+    let finish = app
         .sweep_etas
         .lock()
-        .unwrap_or_else(PoisonError::into_inner)
+        .expect("sweep_etas lock poisoned")
         .get(&node.label)
         .copied();
+    // A finish time already passed reads as no time left.
+    let sweep_eta = finish.map(|finish| SweepEta {
+        remaining: (finish - now).to_std().unwrap_or(Duration::ZERO),
+        finish,
+    });
     Ok(NodePage {
         node,
         tip_height,
@@ -134,14 +160,14 @@ async fn load_node_page<'a>(
 }
 
 /// Page with the endpoint links, then one heading, progress line and table per node.
-fn render_page(window: SweepWindow, now: DateTime<Utc>, nodes: &[NodePage<'_>]) -> String {
+fn render_page(window: SweepWindow, nodes: &[NodePage<'_>]) -> String {
     let mut page = String::from(
         "<!DOCTYPE html><html><head><title>query-watchdog</title></head><body><h1>query-watchdog</\
          h1><ul><li><a href=\"/status/metrics\">/status/metrics</a></li><li><a \
          href=\"/healthcheck\">/healthcheck</a></li></ul>",
     );
     for node in nodes {
-        write_node(&mut page, window, now, node).expect("writing to a String");
+        write_node(&mut page, window, node).expect("writing to a String");
     }
     page.push_str("</body></html>");
     page
@@ -151,7 +177,6 @@ fn render_page(window: SweepWindow, now: DateTime<Utc>, nodes: &[NodePage<'_>]) 
 fn write_node(
     page: &mut String,
     window: SweepWindow,
-    now: DateTime<Utc>,
     node_page: &NodePage<'_>,
 ) -> std::fmt::Result {
     let NodePage {
@@ -172,7 +197,7 @@ fn write_node(
     write_line(page, &format!("tip: {tip}"))?;
     match progress {
         Some(progress) => {
-            for line in progress_lines(window, now, *tip_height, progress, *sweep_eta) {
+            for line in progress_lines(window, *tip_height, progress, sweep_eta.as_ref()) {
                 write_line(page, &line)?;
             }
         },
@@ -193,17 +218,16 @@ fn write_line(page: &mut String, text: &str) -> std::fmt::Result {
 /// Follow, sweep and last-sweep lines of a started node.
 fn progress_lines(
     window: SweepWindow,
-    now: DateTime<Utc>,
     tip: Option<u64>,
     progress: &NodeProgress,
-    eta: Option<Duration>,
+    eta: Option<&SweepEta>,
 ) -> Vec<String> {
     let follow = progress.follow_next_height;
     let lag = tip.map_or_else(String::new, |tip| {
         format!(" (lag {})", tip.saturating_sub(follow))
     });
     let mut lines = vec![format!("follow next height: {follow}{lag}")];
-    lines.extend(sweep_lines(window, now, &progress.sweep, eta));
+    lines.extend(sweep_lines(window, &progress.sweep, eta));
     let completed = progress
         .last_sweep_completed_at
         .map_or_else(|| "never".to_owned(), |t| t.to_rfc3339());
@@ -212,14 +236,9 @@ fn progress_lines(
 }
 
 /// The sweep lines: running (see `running_lines`) or `sweep: waiting until <time>`.
-fn sweep_lines(
-    window: SweepWindow,
-    now: DateTime<Utc>,
-    sweep: &SweepState,
-    eta: Option<Duration>,
-) -> Vec<String> {
+fn sweep_lines(window: SweepWindow, sweep: &SweepState, eta: Option<&SweepEta>) -> Vec<String> {
     match sweep {
-        SweepState::Running(sweep) => running_lines(window, now, sweep, eta),
+        SweepState::Running(sweep) => running_lines(window, sweep, eta),
         SweepState::Waiting { start_at } => {
             vec![format!("sweep: waiting until {}", start_at.to_rfc3339())]
         },
@@ -229,9 +248,8 @@ fn sweep_lines(
 /// `sweep: running 45.0000%` with its ETA, next and until heights; an empty window reads 100%.
 fn running_lines(
     window: SweepWindow,
-    now: DateTime<Utc>,
     sweep: &SweepProgress,
-    eta: Option<Duration>,
+    eta: Option<&SweepEta>,
 ) -> Vec<String> {
     // The sweep started at `window.start_height` of its tip, which is `until_height`.
     let start = window.start_height(sweep.until_height);
@@ -242,7 +260,7 @@ fn running_lines(
     } else {
         done as f64 * 100.0 / total as f64
     };
-    let eta = eta.map_or_else(|| "unknown".to_owned(), |eta| format_eta(eta, now));
+    let eta = eta.map_or_else(|| "unknown".to_owned(), format_eta);
     vec![
         format!("sweep: running {percent:.4}%"),
         format!("sweep eta: {eta}"),
@@ -252,12 +270,12 @@ fn running_lines(
 }
 
 /// `12m 3s (<finish time>)`.
-fn format_eta(eta: Duration, now: DateTime<Utc>) -> String {
-    let finish = TimeDelta::from_std(eta).map_or_else(
-        |_| "out of range".to_owned(),
-        |delta| (now + delta).to_rfc3339(),
-    );
-    format!("{} ({finish})", humantime::format_duration(eta))
+fn format_eta(eta: &SweepEta) -> String {
+    format!(
+        "{} ({})",
+        humantime::format_duration(eta.remaining),
+        eta.finish.to_rfc3339()
+    )
 }
 
 /// One line per kind with missing data, or `missing: none`.
@@ -362,13 +380,16 @@ mod tests {
             (SweepWindow::Archive, running(1200, 1000), "100.0000"),
         ];
         for (window, sweep, percent) in cases {
-            let lines = sweep_lines(window, at(100), &sweep, None);
+            let lines = sweep_lines(window, &sweep, None);
             assert_eq!(lines[0], format!("sweep: running {percent}%"));
             assert_eq!(lines.len(), 4);
             assert_eq!(lines[1], "sweep eta: unknown");
         }
-        let eta = Some(Duration::from_secs(300));
-        let lines = sweep_lines(SweepWindow::Archive, at(0), &running(250, 1000), eta);
+        let eta = SweepEta {
+            remaining: Duration::from_secs(300),
+            finish: at(300),
+        };
+        let lines = sweep_lines(SweepWindow::Archive, &running(250, 1000), Some(&eta));
         assert_eq!(lines[1], "sweep eta: 5m (1970-01-01T00:05:00+00:00)");
     }
 
@@ -389,7 +410,7 @@ mod tests {
                 total: 0,
             },
         };
-        let html = render_page(SweepWindow::Archive, at(0), &[page]);
+        let html = render_page(SweepWindow::Archive, &[page]);
         assert!(html.contains("&lt;&amp;&quot;&gt;</a></h2>"), "{html}");
         assert!(!html.contains("<&\">"));
         assert!(

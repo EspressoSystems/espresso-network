@@ -4,7 +4,7 @@ use std::{
     error::Error,
     fmt,
     ops::Range,
-    sync::{Arc, Mutex, PoisonError},
+    sync::{Arc, Mutex},
     time::Duration,
 };
 
@@ -18,6 +18,7 @@ use url::Url;
 
 use crate::{
     chunk::{CHUNK_LEN, DataKind, EpochConfig, Probe, next_chunk, probes},
+    gaps::{Presence, Unrefined, find_gaps, parse_missing_height},
     metrics::WatchdogMetrics,
     store::{KindSummary, NodeProgress, NodeStore, Store, SweepProgress, SweepState},
 };
@@ -48,15 +49,15 @@ pub struct WatchOptions {
         value_parser = clap::value_parser!(u64).range(1..)
     )]
     pub retention_blocks: Option<u64>,
-    /// Missing data older than this is logged as a WARN once a minute per node and kind. 60s
-    /// leaves room for retries at about 5, 15 and 35 s first.
+    /// Minimum age of missing data for the alert (ERROR on target `query_watchdog::alert`, once a
+    /// minute per node and kind). 60s leaves room for retries at about 5, 15 and 35 s first.
     #[arg(
         long,
-        env = "ESPRESSO_QUERY_WATCHDOG_WARN_MISSING_AFTER",
+        env = "ESPRESSO_QUERY_WATCHDOG_ALERT_MISSING_AFTER",
         value_parser = humantime::parse_duration,
         default_value = "60s"
     )]
-    pub warn_missing_after: Duration,
+    pub alert_missing_after: Duration,
 }
 
 impl WatchOptions {
@@ -192,8 +193,9 @@ impl FetchTarget {
     }
 }
 
-/// Latest sweep ETA per node label, read by the page; a node with no ETA has no entry.
-pub type SweepEtas = Arc<Mutex<BTreeMap<String, Duration>>>;
+/// Estimated finish time of the running sweep per node label, read by the page; a node with no ETA
+/// has no entry.
+pub type SweepEtas = Arc<Mutex<BTreeMap<String, DateTime<Utc>>>>;
 
 /// Parts shared by all node watches; every field is a cheap clone.
 #[derive(Clone)]
@@ -378,6 +380,39 @@ impl Watchdog {
             .map_err(FetchError::Transport)?;
         FetchError::from_status(response.status())
     }
+
+    /// GET `route`, expected to be a 404 naming the first missing height in its JSON message;
+    /// `None` when the message does not parse, an error for any other status.
+    async fn missing_height(
+        &self,
+        node: &WatchedNode,
+        route: &str,
+    ) -> Result<Option<u64>, FetchError> {
+        let response = self
+            .http
+            .get(node.route_url(route))
+            .send()
+            .await
+            .map_err(FetchError::Transport)?;
+        if response.status() != StatusCode::NOT_FOUND {
+            return Err(FetchError::Status(response.status()));
+        }
+        let body: ErrorBody = response.json().await.map_err(FetchError::Transport)?;
+        Ok(parse_missing_height(&body.custom.message))
+    }
+}
+
+/// The 404 body of the availability routes.
+#[derive(Deserialize)]
+struct ErrorBody {
+    #[serde(rename = "Custom")]
+    custom: ErrorMessage,
+}
+
+/// The message of an `ErrorBody`.
+#[derive(Deserialize)]
+struct ErrorMessage {
+    message: String,
 }
 
 /// Publishes the max block height of all watched nodes, polled every `TIP_POLL_INTERVAL`.
@@ -428,6 +463,10 @@ struct EtaOrigin {
 const RETRIES_PER_STEP: u32 = 4;
 /// Time between tip polls and between polls of a node's merklized state height.
 const TIP_POLL_INTERVAL: Duration = Duration::from_secs(10);
+/// Blocks below the tip within which missing data is not alerted: nodes lag the tip a little.
+const ALERT_TIP_MARGIN: u64 = 10;
+/// Consecutive failed probes of a missing range before it is alerted.
+const ALERT_MIN_FAILED_PROBES: u32 = 3;
 /// Time between summary lines of one node.
 const SUMMARY_INTERVAL: Duration = Duration::from_secs(60);
 
@@ -605,34 +644,67 @@ impl NodeWatch {
         Ok(to_check.len())
     }
 
-    /// Waits `request_interval`, sends HEAD to `probe.route()`, counts and DEBUG-logs a failure,
-    /// then `record_found` on a 200 or `record_missing` otherwise.
+    /// Sends the probe, then `record_found` on a 200 or `record_failure` otherwise.
     async fn check_probe(&mut self, probe: &Probe) -> anyhow::Result<()> {
-        tokio::time::sleep(self.watchdog.options.request_interval).await;
-        self.watchdog
-            .metrics
-            .count_probe(&self.node.label, probe.kind);
-        match self.watchdog.head(&self.node, &probe.route()).await {
+        match self.send_probe(probe).await {
             Ok(()) => self.store.record_found(probe).await,
             Err(error) => {
                 self.record_error(FetchTarget::Data(probe.kind), &error);
-                self.store.record_missing(probe, utc_now()).await
+                self.record_failure(probe, &error).await
             },
         }
     }
 
-    /// Shares the sweep ETA with the page and sets the follow and sweep gauges.
+    /// Waits `request_interval`, counts the probe and sends HEAD to `probe.route()`.
+    async fn send_probe(&self, probe: &Probe) -> Result<(), FetchError> {
+        tokio::time::sleep(self.watchdog.options.request_interval).await;
+        self.watchdog
+            .metrics
+            .count_probe(&self.node.label, probe.kind);
+        self.watchdog.head(&self.node, &probe.route()).await
+    }
+
+    /// Stores a failed probe: a 404 of a range kind is refined to its exact gaps (the tail that
+    /// cannot be refined stays chunk level), anything else is missing as a whole.
+    async fn record_failure(&mut self, probe: &Probe, error: &FetchError) -> anyhow::Result<()> {
+        let is_not_found = matches!(error, FetchError::Status(StatusCode::NOT_FOUND));
+        if !(probe.kind.is_range() && is_not_found) {
+            return self
+                .store
+                .record_missing(probe, error.status_label(), utc_now())
+                .await;
+        }
+        let mut prober = RangeProber {
+            watch: self,
+            kind: probe.kind,
+        };
+        let search = find_gaps(&mut prober, probe.range.clone()).await;
+        self.store
+            .replace_missing(
+                probe.kind,
+                &probe.range,
+                &search.gaps,
+                search.unrefined.as_ref(),
+                utc_now(),
+            )
+            .await
+    }
+
+    /// Shares the sweep finish time with the page and sets the follow and sweep gauges.
     fn publish_progress(&self) -> anyhow::Result<()> {
         let eta = self.sweep_eta();
         let label = &self.node.label;
+        let finish = eta
+            .and_then(|eta| TimeDelta::from_std(eta).ok())
+            .and_then(|delta| utc_now().checked_add_signed(delta));
         {
             let mut etas = self
                 .watchdog
                 .sweep_etas
                 .lock()
-                .unwrap_or_else(PoisonError::into_inner);
-            match eta {
-                Some(eta) => etas.insert(label.clone(), eta),
+                .expect("sweep_etas lock poisoned");
+            match finish {
+                Some(finish) => etas.insert(label.clone(), finish),
                 None => etas.remove(label),
             };
         }
@@ -666,6 +738,26 @@ impl NodeWatch {
         };
     }
 
+    /// GETs the 404 of `probe` and reads the first missing height from its message.
+    async fn missing_height(&mut self, probe: &Probe) -> Result<Option<u64>, Unrefined> {
+        tokio::time::sleep(self.watchdog.options.request_interval).await;
+        let route = probe.route();
+        match self.watchdog.missing_height(&self.node, &route).await {
+            Ok(Some(height)) => Ok(Some(height)),
+            Ok(None) => {
+                tracing::debug!(node = %self.node.label, route, "404 message names no height");
+                Err(Unrefined)
+            },
+            Err(error) => Err(self.refinement_failed(probe.kind, &error)),
+        }
+    }
+
+    /// Counts a failed refinement request; the range stays chunk level.
+    fn refinement_failed(&mut self, kind: DataKind, error: &FetchError) -> Unrefined {
+        self.record_error(FetchTarget::Data(kind), error);
+        Unrefined
+    }
+
     /// Counts a failed request of the watched node in the metrics and the summary window.
     fn record_error(&mut self, target: FetchTarget, error: &FetchError) {
         tracing::debug!(node = %self.node.label, target = target.label(), %error, "request failed");
@@ -692,9 +784,9 @@ impl NodeWatch {
         })
     }
 
-    /// After `SUMMARY_INTERVAL`: trims to the sweep window (retention only), logs one INFO line, one WARN
-    /// per kind missing longer than `warn_missing_after`, exports gauges, resets
-    /// `errors_since_summary`.
+    /// After `SUMMARY_INTERVAL`: trims to the sweep window (retention only), logs one INFO line,
+    /// one alert per qualifying kind (`alert_missing`), a WARN when the node answered with other
+    /// failures than 404 (`warn_unhealthy`), exports gauges, resets `errors_since_summary`.
     async fn summarize_if_due(&mut self, now: Instant) -> anyhow::Result<()> {
         if now.duration_since(self.last_summary_at) < SUMMARY_INTERVAL {
             return Ok(());
@@ -712,7 +804,8 @@ impl NodeWatch {
             %summary,
             "summary"
         );
-        self.warn_missing(&summary);
+        self.alert_missing(&summary).await?;
+        self.warn_unhealthy();
         self.watchdog
             .metrics
             .export_summary(&self.node.label, &summary)?;
@@ -730,39 +823,100 @@ impl NodeWatch {
         let window_start = window.start_height(self.tip_height);
         let clamped = self.progress.clone().clamped_to(window_start);
         if clamped != self.progress {
+            let sweep_changed = clamped.sweep != self.progress.sweep;
             self.progress = clamped;
-            self.reset_eta_origin();
+            if sweep_changed {
+                self.reset_eta_origin();
+            }
             self.store.save_progress(&self.progress).await?;
         }
         let forgotten = self.store.forget_below(window_start, self.epochs).await?;
         Ok(Some(forgotten))
     }
 
-    /// One WARN per kind whose oldest missing range is at least `warn_missing_after` old; `url` is
-    /// the GET of that range.
-    fn warn_missing(&self, summary: &NodeSummary) {
-        for kind in &summary.kinds {
-            let Some(oldest) = &kind.oldest else {
-                continue;
-            };
-            if oldest.age < self.watchdog.options.warn_missing_after {
-                continue;
-            }
+    /// One ERROR on target `query_watchdog::alert` per kind whose oldest qualifying range passes
+    /// `alert_candidates`; `url` is the GET of that range.
+    async fn alert_missing(&self, summary: &NodeSummary) -> anyhow::Result<()> {
+        let candidates = self
+            .store
+            .alert_candidates(
+                utc_now(),
+                self.watchdog.options.alert_missing_after,
+                ALERT_MIN_FAILED_PROBES,
+                self.tip_height.saturating_sub(ALERT_TIP_MARGIN),
+                self.epochs,
+            )
+            .await?;
+        for candidate in candidates {
             let probe = Probe {
-                kind: kind.kind,
-                range: oldest.range.clone(),
+                kind: candidate.kind,
+                range: candidate.range.clone(),
             };
+            let missing = summary
+                .kinds
+                .iter()
+                .find(|kind| kind.kind == candidate.kind)
+                .map_or(0, |kind| kind.missing_count);
             // Node URLs are internal and carry no credentials.
-            tracing::warn!(
+            tracing::error!(
+                target: "query_watchdog::alert",
                 node = %self.node.label,
-                kind = <&str>::from(kind.kind),
-                missing = kind.missing_count,
-                oldest_age_seconds = oldest.age.as_secs(),
-                range_start = oldest.range.start,
-                range_end = oldest.range.end,
+                kind = <&str>::from(candidate.kind),
+                missing,
+                oldest_age_seconds = candidate.age.as_secs(),
+                failed_probes = candidate.failed_probes,
+                range_start = candidate.range.start,
+                range_end = candidate.range.end,
                 url = %self.node.route_url(&probe.route()),
                 "missing data"
             );
+        }
+        Ok(())
+    }
+
+    /// One WARN when requests of the last minute failed other than with 404; not an alert.
+    fn warn_unhealthy(&self) {
+        let failures: BTreeMap<_, _> = self
+            .errors_since_summary
+            .iter()
+            .filter(|(status, _)| status.as_str() != "404")
+            .collect();
+        if !failures.is_empty() {
+            tracing::warn!(node = %self.node.label, errors = ?failures, "node unhealthy");
+        }
+    }
+}
+
+/// Asks one node which heights of one range kind it serves, for `find_gaps`.
+struct RangeProber<'a> {
+    watch: &'a mut NodeWatch,
+    kind: DataKind,
+}
+
+impl Presence for RangeProber<'_> {
+    async fn first_missing(&mut self, range: Range<u64>) -> Result<Option<u64>, Unrefined> {
+        let probe = Probe {
+            kind: self.kind,
+            range,
+        };
+        match self.watch.send_probe(&probe).await {
+            Ok(()) => Ok(None),
+            Err(FetchError::Status(StatusCode::NOT_FOUND)) => {
+                self.watch.missing_height(&probe).await
+            },
+            Err(error) => Err(self.watch.refinement_failed(self.kind, &error)),
+        }
+    }
+
+    async fn is_present(&mut self, height: u64) -> Result<bool, Unrefined> {
+        let probe = Probe {
+            kind: self.kind,
+            range: height..height + 1,
+        };
+        match self.watch.send_probe(&probe).await {
+            Ok(()) => Ok(true),
+            Err(FetchError::Status(StatusCode::NOT_FOUND)) => Ok(false),
+            Err(error) => Err(self.watch.refinement_failed(self.kind, &error)),
         }
     }
 }

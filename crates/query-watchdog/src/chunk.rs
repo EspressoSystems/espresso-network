@@ -29,6 +29,12 @@ pub enum DataKind {
 }
 
 impl DataKind {
+    /// True for `Leaf`, `Block`, `VidCommon`: their ranges count heights and a failed range probe
+    /// can be refined to the exact missing heights.
+    pub fn is_range(self) -> bool {
+        matches!(self, Self::Leaf | Self::Block | Self::VidCommon)
+    }
+
     /// True for `StakeTable`, `StateCert`, `LcStakeTable`; their ranges count epochs.
     pub fn is_per_epoch(self) -> bool {
         matches!(
