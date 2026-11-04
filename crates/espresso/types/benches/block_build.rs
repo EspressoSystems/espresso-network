@@ -222,7 +222,7 @@ fn chain_config() -> ChainConfig {
 /// - sum of the leaves' thread CPU: `transaction_hashes` (its `tx_hash` leaves), absent while the
 ///   pool's hashes are reused; `fragments` and `serialize`
 /// - residual upper bound, process CPU of `block_commitments` minus its other steps:
-///   `vid_commitment`, which disperses every namespace and folds the commitment from them
+///   `vid_encode`, which disperses every namespace and folds the commitment from them
 static STEPS: Mutex<BTreeMap<&'static str, Vec<[f64; 3]>>> = Mutex::new(BTreeMap::new());
 
 /// The running iteration. Steps on rayon threads have no parent span, and iterations run one at
@@ -257,7 +257,7 @@ struct Iteration {
 /// Times each step by its own work. A rayon worker that waits inside a step span steals unrelated
 /// jobs, so a step's span can last as long as the VID work. Leaf spans run once per transaction,
 /// bucket or fragment, make no rayon calls (`tx_hash`, `fragments`, `serialize`) and cost their
-/// summed thread CPU. The VID step (`vid_commitment`) costs what the process spent in
+/// summed thread CPU. The VID step (`vid_encode`) costs what the process spent in
 /// `block_commitments` beyond its other steps.
 struct StepTimer;
 
@@ -362,7 +362,7 @@ fn record(iteration: Iteration) {
                 let leaves = tx_hashes.expect("a tx_hash span ran");
                 (leaves.end, leaves.cpu)
             },
-            "vid_commitment" => (step.end, vid_cpu),
+            "vid_encode" => (step.end, vid_cpu),
             _ => (step.end, step.cpu),
         };
         steps

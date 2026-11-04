@@ -128,9 +128,8 @@ pub fn block_commitments<T: NodeType>(
         || transaction_hashes(payload, pooled_hashes),
         || {
             rayon::join(
-                // Named after the step it replaced, so the `block_build` bench compares refs.
                 || {
-                    debug_span!("vid_commitment").in_scope(|| {
+                    debug_span!("vid_encode").in_scope(|| {
                         BuiltDispersal::new(stake_table, payload_bytes, &metadata_bytes)
                     })
                 },
