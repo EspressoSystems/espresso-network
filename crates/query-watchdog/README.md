@@ -87,6 +87,8 @@ task resumes where the old one stopped.
 - Credentials: AWS SDK default chain, on Fargate the task role. The role needs read and write on the replica prefix.
 - One writer per replica path. Run the ECS service with `minimumHealthyPercent=0` and `maximumPercent=100`; two writers
   corrupt the replica.
+- More than one watchdog (for redundancy): run separate ECS services, each with its own `LITESTREAM_REPLICA_URL`. They
+  are independent; the Datadog monitor groups by node and kind, so they raise one alert.
 - Local test: `-e LITESTREAM_REPLICA_URL=file:///replica -v <dir>:/replica`.
 - Litestream is installed from the pinned release `.deb` (`LITESTREAM_VERSION` in the Dockerfile).
 
