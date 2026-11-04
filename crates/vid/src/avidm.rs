@@ -135,8 +135,8 @@ const MAX_EXPANSION: usize = 4;
 ///
 /// Valid when `0 < recovery_threshold <= total_weights <= 2^16` and
 /// `total_weights <= 4 * recovery_threshold`. The fields are public and
-/// deserialized unchecked, so [`Self::new`] and every scheme entry point
-/// return [`VidError::InvalidParam`] for an invalid param.
+/// deserialized unchecked, so [`Self::new`] and every [`AvidMScheme`] entry
+/// point return [`VidError::InvalidParam`] for an invalid param.
 #[derive(Clone, Debug, Hash, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AvidMParam {
     /// Total weights of all storage nodes
@@ -160,7 +160,7 @@ impl AvidMParam {
         if self.recovery_threshold == 0
             || self.total_weights < self.recovery_threshold
             || self.total_weights > MAX_TOTAL_WEIGHTS
-            || self.total_weights.div_ceil(MAX_EXPANSION) > self.recovery_threshold
+            || self.total_weights > self.recovery_threshold.saturating_mul(MAX_EXPANSION)
         {
             return Err(VidError::InvalidParam);
         }
@@ -340,6 +340,7 @@ impl AvidMScheme {
         commit: &AvidMCommit,
         share: &RawAvidMShare,
     ) -> VidResult<crate::VerificationResult> {
+        param.validate()?;
         if share.range.is_empty()
             || share.range.end > param.total_weights
             || share.range.len() != share.payload.len()
@@ -596,19 +597,35 @@ pub mod tests {
     }
 
     #[test]
+    fn param_bounds_are_inclusive() {
+        for (recovery_threshold, total_weights) in [(1, 1), (1 << 14, 1 << 16), (2, 8)] {
+            assert!(
+                AvidMParam::new(recovery_threshold, total_weights).is_ok(),
+                "({recovery_threshold}, {total_weights})"
+            );
+        }
+        for (recovery_threshold, total_weights) in
+            [(0, 4), (3, 2), ((1 << 14) + 1, (1 << 16) + 1), (2, 9)]
+        {
+            assert!(
+                matches!(
+                    AvidMParam::new(recovery_threshold, total_weights),
+                    Err(VidError::InvalidParam)
+                ),
+                "({recovery_threshold}, {total_weights})"
+            );
+        }
+    }
+
+    #[test]
     fn invalid_param_is_rejected() {
         let param = AvidMScheme::setup(3, 9).unwrap();
         let payload = [7u8; 100];
         let (commit, shares) = AvidMScheme::disperse(&param, &[3, 3, 3], &payload).unwrap();
 
-        for (recovery_threshold, total_weights) in [
-            (0, 4),
-            (3, 2),
-            (1 << 40, 2),
-            (usize::MAX / 4, usize::MAX / 4),
-            (1 << 15, 1 << 17),
-            (1, 1 << 16),
-        ] {
+        for (recovery_threshold, total_weights) in
+            [(0, 4), (3, 2), (1 << 15, 1 << 17), (1, 1 << 16)]
+        {
             let forged = AvidMParam {
                 total_weights,
                 recovery_threshold,
@@ -627,15 +644,20 @@ pub mod tests {
                 ),
                 "commit {forged:?}"
             );
-            if let Ok(weight) = u32::try_from(total_weights) {
-                assert!(
-                    matches!(
-                        AvidMScheme::disperse(&forged, &[weight], &payload),
-                        Err(VidError::InvalidParam)
-                    ),
-                    "disperse {forged:?}"
-                );
-            }
+            assert!(
+                matches!(
+                    AvidMScheme::disperse(&forged, &[total_weights as u32], &payload),
+                    Err(VidError::InvalidParam)
+                ),
+                "disperse {forged:?}"
+            );
+            assert!(
+                matches!(
+                    AvidMScheme::verify_share(&forged, &commit, &shares[0]),
+                    Err(VidError::InvalidParam)
+                ),
+                "verify_share {forged:?}"
+            );
         }
     }
 }
