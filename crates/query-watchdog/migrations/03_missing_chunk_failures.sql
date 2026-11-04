@@ -1,2 +1,0 @@
-ALTER TABLE missing_chunk ADD COLUMN failed_probes INTEGER NOT NULL DEFAULT 1;
-ALTER TABLE missing_chunk ADD COLUMN last_status TEXT NOT NULL DEFAULT '';

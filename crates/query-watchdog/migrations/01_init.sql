@@ -7,10 +7,14 @@ CREATE TABLE missing_chunk (
     first_missing_at INTEGER NOT NULL,
     retry_delay_secs INTEGER NOT NULL,
     next_retry_at INTEGER NOT NULL,
+    failed_probes INTEGER NOT NULL DEFAULT 1,
+    last_status TEXT NOT NULL,
     PRIMARY KEY (node, kind, range_start)
 );
 
 CREATE INDEX missing_chunk_due ON missing_chunk (node, next_retry_at);
+
+CREATE INDEX missing_chunk_age ON missing_chunk (node, first_missing_at, range_start, kind);
 
 CREATE TABLE node_progress (
     node TEXT PRIMARY KEY,
