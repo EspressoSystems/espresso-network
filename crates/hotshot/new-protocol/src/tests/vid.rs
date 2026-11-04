@@ -285,10 +285,10 @@ async fn test_bad_systematic_share_falls_back_to_decoding() {
     assert_eq!(out.source, PayloadSource::Decoded);
 }
 
-/// A decode attempt in flight when the systematic set completes races a
-/// systematic attempt; exactly one payload comes out.
+/// Completing the systematic set after decoding starts leaves that attempt
+/// in charge; exactly one decoded payload comes out.
 #[tokio::test]
-async fn test_racing_paths_reconstruct_once() {
+async fn test_late_systematic_shares_do_not_race_decoding() {
     let test_data = TestData::new(1).await;
     let view = &test_data.views[0];
     let mut reconstructor = VidReconstructor::<TestTypes>::new();
@@ -302,8 +302,13 @@ async fn test_racing_paths_reconstruct_once() {
         feed(&mut reconstructor, honest_share(view, i));
     }
 
-    expect_reconstruction(&mut reconstructor, view).await;
-    assert_no_duplicate_success(&mut reconstructor, "both paths completed").await;
+    let out = expect_reconstruction(&mut reconstructor, view).await;
+    assert_eq!(out.source, PayloadSource::Decoded);
+    assert_no_duplicate_success(
+        &mut reconstructor,
+        "systematic shares arrived during decoding",
+    )
+    .await;
 }
 
 /// With a systematic wait, a threshold of recovery shares does not start a

@@ -155,9 +155,9 @@ impl VidReconstructMetrics {
 ///
 /// The code is systematic, so the shares holding the shard positions below
 /// the recovery threshold hold the payload itself. That set is specific, so
-/// it may complete after any threshold of mixed shares has: the paths race,
-/// and a decode attempt started on mixed shares keeps running when the
-/// systematic set completes behind it.
+/// it may complete after any threshold of mixed shares has. Choose from the
+/// shares already available when an attempt starts; later arrivals do not
+/// launch a competing attempt.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ReconstructPath {
     /// Every systematic shard in hand; the payload is their concatenation.
@@ -480,7 +480,7 @@ impl<T: NodeType> VidReconstructor<T> {
             return;
         };
         let attempts = self.calculations.entry(view).or_default();
-        if attempts.slot(path).is_some() {
+        if !attempts.is_empty() {
             return;
         }
         // A ready path implies an admitted share, which pinned the common.
