@@ -192,7 +192,8 @@ impl MissingRow {
 
 /// Rows for the `new` ranges with their status: each takes the oldest `first_missing_at`, the
 /// doubled largest delay (capped) and the largest failed probe count plus one of the `old` rows it
-/// overlaps, or starts fresh at `now` with the minimum delay and one failed probe.
+/// overlaps (for a 404 row only the overlapping 404 rows count), or starts fresh at `now` with the
+/// minimum delay and one failed probe.
 fn merge_rows(
     kind: DataKind,
     old: &[MissingRow],
@@ -201,9 +202,12 @@ fn merge_rows(
 ) -> Vec<MissingRow> {
     new.iter()
         .map(|(range, status)| {
+            // A new 404 row continues only the state of 404 rows: what a wide unrefined row (500,
+            // transport, no height) accumulated says nothing about the exact gap found now.
             let overlapping: Vec<_> = old
                 .iter()
                 .filter(|row| row.range_start < range.end && row.range_end > range.start)
+                .filter(|row| *status != STATUS_NOT_FOUND || row.last_status == STATUS_NOT_FOUND)
                 .collect();
             let failed_probes = overlapping
                 .iter()
@@ -1100,6 +1104,55 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn an_exact_gap_found_in_a_failed_row_starts_fresh() {
+        let node = node_store("a:1").await;
+        let wide = probe(DataKind::Leaf, 0..100);
+        for secs in 0..3 {
+            fail_probe(&node, &wide, "500", at(T0 + secs))
+                .await
+                .unwrap();
+        }
+
+        // Refining the wide row finds a gap: it is a new 404 row, not a continuation of the 500s.
+        node.replace_missing(
+            DataKind::Leaf,
+            &(0..100),
+            &[Range { start: 10, end: 20 }],
+            None,
+            at(T0 + 100),
+        )
+        .await
+        .unwrap();
+        let found = node
+            .alert_candidates(at(T0 + 100), Duration::ZERO, 1, 1_000, None)
+            .await
+            .unwrap();
+        let rows: Vec<_> = found
+            .iter()
+            .map(|c| (c.range.clone(), c.age.as_secs(), c.failed_probes))
+            .collect();
+        assert_eq!(rows, [(10..20, 0, 1)]);
+        let alerting = node
+            .alert_candidates(at(T0 + 100), Duration::ZERO, 3, 1_000, None)
+            .await
+            .unwrap();
+        assert!(alerting.is_empty(), "no alert before 3 probes of its own");
+
+        // Two more 404 probes of the gap bring it to 3 and it alerts, with its own age.
+        for secs in [101, 102] {
+            fail_probe(&node, &probe(DataKind::Leaf, 10..20), "404", at(T0 + secs))
+                .await
+                .unwrap();
+        }
+        let alerting = node
+            .alert_candidates(at(T0 + 102), Duration::ZERO, 3, 1_000, None)
+            .await
+            .unwrap();
+        assert_eq!(alerting.len(), 1);
+        assert_eq!(alerting[0].age.as_secs(), 2);
+    }
+
+    #[tokio::test]
     async fn epoch_rows_before_the_root_lag_depend_on_block_zero() {
         let node = node_store("a:1").await;
         let epochs = EpochConfig {
@@ -1293,16 +1346,27 @@ mod tests {
         ];
         assert_eq!(summary, expected);
 
-        // A later 404 sets the status again and counts another probe.
-        node.record_range_failure(&probe(DataKind::Block, 100..200), "404", at(T0 + 3))
+        // A 404 after 500s starts the row afresh: the 500s do not count toward the alert.
+        let block_probe = probe(DataKind::Block, 100..200);
+        node.record_range_failure(&block_probe, "404", at(T0 + 3))
             .await
             .unwrap();
         let found = node
             .alert_candidates(now, min_age, 3, 500, epochs)
             .await
             .unwrap();
+        assert!(found.iter().all(|c| c.kind != DataKind::Block));
+        for secs in [4, 5] {
+            node.record_range_failure(&block_probe, "404", at(T0 + secs))
+                .await
+                .unwrap();
+        }
+        let found = node
+            .alert_candidates(at(T0 + 70), min_age, 3, 500, epochs)
+            .await
+            .unwrap();
         let block = found.iter().find(|c| c.kind == DataKind::Block).unwrap();
-        assert_eq!(block.failed_probes, 4);
+        assert_eq!(block.failed_probes, 3);
     }
 
     #[tokio::test]

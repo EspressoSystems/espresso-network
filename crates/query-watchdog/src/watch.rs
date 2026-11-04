@@ -316,6 +316,7 @@ impl Watchdog {
             tip_height,
             merklized_state_height: None,
             next_state_poll_at: now,
+            next_sweep_recheck_at: now,
             last_summary_at: now,
             errors_since_summary: BTreeMap::new(),
             eta_origin: None,
@@ -515,11 +516,13 @@ pub struct NodeWatch {
     tip_height: u64,
     merklized_state_height: Option<u64>,
     next_state_poll_at: Instant,
+    /// While the sweep is paused, when the next chunk tests the node again.
+    next_sweep_recheck_at: Instant,
     last_summary_at: Instant,
     errors_since_summary: BTreeMap<String, u64>,
     eta_origin: Option<EtaOrigin>,
-    /// The last probe of follow or sweep failed with other than 404; the sweep pauses until one
-    /// answers. Retries neither set nor clear it.
+    /// A probe of the latest follow or sweep chunk failed with other than 404; the sweep is paused
+    /// until a chunk is fully answered. Retries neither set nor clear it.
     node_unhealthy: bool,
     /// A request of the current probe failed with other than 404.
     probe_failed: bool,
@@ -534,6 +537,8 @@ struct EtaOrigin {
 
 /// Due missing ranges fetched per batch of retries.
 const RETRIES_PER_BATCH: u32 = 20;
+/// Time between chunks sent to test a paused sweep for recovery.
+const SWEEP_RECHECK_INTERVAL: Duration = Duration::from_secs(60);
 /// Time one iteration spends on retries; sweep and follow keep the rest.
 const RETRY_BUDGET: Duration = Duration::from_secs(5);
 /// Time between tip polls and between polls of a node's merklized state height.
@@ -648,10 +653,14 @@ impl NodeWatch {
     }
 
     /// Starts a due sweep or checks its next chunk for every kind; logs start and end; saves
-    /// progress. Does nothing while the node's last probe failed with other than 404.
+    /// progress. While a probe of the latest chunk failed with other than 404 it sends one chunk
+    /// per `SWEEP_RECHECK_INTERVAL` to test for recovery.
     async fn sweep_step(&mut self) -> anyhow::Result<usize> {
         if self.node_unhealthy {
-            return Ok(0);
+            if Instant::now() < self.next_sweep_recheck_at {
+                return Ok(0);
+            }
+            self.next_sweep_recheck_at = Instant::now() + SWEEP_RECHECK_INTERVAL;
         }
         if self.progress.sweep == SweepState::Done && !self.watchdog.options.sweep_once {
             self.progress.sweep = SweepState::Waiting;
@@ -752,11 +761,18 @@ impl NodeWatch {
     }
 
     /// Runs `check_probe` for every entry of `probes(chunk, self.epochs)`; returns requests sent.
+    /// Any probe that failed with other than 404 (refinement included) pauses the sweep; it is
+    /// resumed when every probe of a chunk was answered.
     async fn check_chunk(&mut self, chunk: &Range<u64>) -> anyhow::Result<usize> {
         let to_check = probes(chunk, self.epochs);
+        let mut all_answered = true;
         for probe in &to_check {
-            self.node_unhealthy = !self.check_probe(probe).await?;
+            all_answered &= self.check_probe(probe).await?;
         }
+        if self.node_unhealthy != !all_answered {
+            self.next_sweep_recheck_at = Instant::now() + SWEEP_RECHECK_INTERVAL;
+        }
+        self.node_unhealthy = !all_answered;
         Ok(to_check.len())
     }
 
@@ -1166,6 +1182,8 @@ mod tests {
         missing: Arc<Mutex<BTreeSet<u64>>>,
         /// Every request answers 500 while set.
         failing: Arc<AtomicBool>,
+        /// The leaf route answers 500 while set; other routes still answer.
+        failing_leaf: Arc<AtomicBool>,
         /// GET requests answer 500 while set; HEAD still answers.
         failing_gets: Arc<AtomicBool>,
         requests: Arc<Mutex<Vec<(Method, String)>>>,
@@ -1184,6 +1202,7 @@ mod tests {
             .unwrap()
             .push((method, uri.path().to_owned()));
         if node.failing.load(Ordering::SeqCst)
+            || node.failing_leaf.load(Ordering::SeqCst)
             || (is_get && node.failing_gets.load(Ordering::SeqCst))
         {
             return (StatusCode::INTERNAL_SERVER_ERROR, String::new());
@@ -1217,6 +1236,7 @@ mod tests {
         let fake = FakeNode {
             missing: Arc::new(Mutex::new(missing.into_iter().collect())),
             failing: Arc::default(),
+            failing_leaf: Arc::default(),
             failing_gets: Arc::default(),
             requests: Arc::default(),
         };
@@ -1347,11 +1367,20 @@ mod tests {
         assert_eq!(watch.errors_since_summary.get("500"), Some(&1));
         fake.failing.store(false, Ordering::SeqCst);
 
-        // Half of the gap is filled: the next retry shrinks the row and it alerts again.
+        // Half of the gap is filled: the next retry shrinks the row. The 500 broke the run of 404s,
+        // so the shrunk row starts afresh and alerts again after 3 probes of its own.
         fake.missing.lock().unwrap().retain(|height| *height < 755);
         watch.check_probe(&gap).await.unwrap();
         assert_eq!(missing().await, 5);
         let shrunk = 750..755;
+        let rest = Probe {
+            kind: DataKind::Leaf,
+            range: shrunk.clone(),
+        };
+        assert!(watch.alerts().await.unwrap().is_empty());
+        for _ in 0..2 {
+            watch.check_probe(&rest).await.unwrap();
+        }
         assert_eq!(
             alerting(watch.alerts().await.unwrap()),
             std::slice::from_ref(&shrunk)
@@ -1359,10 +1388,6 @@ mod tests {
 
         // The rest is filled: the retry clears the row and the alert.
         fake.missing.lock().unwrap().clear();
-        let rest = Probe {
-            kind: DataKind::Leaf,
-            range: shrunk,
-        };
         watch.check_probe(&rest).await.unwrap();
         assert_eq!(missing().await, 0);
         assert!(watch.alerts().await.unwrap().is_empty());
@@ -1464,6 +1489,56 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn one_failed_probe_in_a_chunk_pauses_the_sweep_until_a_chunk_is_fully_answered() {
+        let (node, fake) = serve_fake([]).await;
+        let (watchdog, _store, _registry) = test_watchdog(Some(200)).await;
+        let (_tip_sender, tip) = watch::channel(1_000);
+        let mut watch = watchdog.start_node(node, tip, None).await.unwrap();
+        let chunk = 900..910;
+
+        // The leaf probe, first of five, fails; the four after it answer.
+        fake.failing_leaf.store(true, Ordering::SeqCst);
+        watch.check_chunk(&chunk).await.unwrap();
+        assert!(watch.node_unhealthy, "any failed probe pauses");
+        assert_eq!(watch.sweep_step().await.unwrap(), 0);
+
+        fake.failing_leaf.store(false, Ordering::SeqCst);
+        watch.check_chunk(&chunk).await.unwrap();
+        assert!(!watch.node_unhealthy);
+    }
+
+    #[tokio::test]
+    async fn a_paused_sweep_rechecks_the_node_once_a_minute_and_resumes() {
+        let (node, fake) = serve_fake([]).await;
+        let (watchdog, _store, _registry) = test_watchdog(Some(400)).await;
+        let (_tip_sender, tip) = watch::channel(1_000);
+        let mut watch = watchdog.start_node(node, tip, None).await.unwrap();
+
+        // A flat tip gives follow nothing to probe, so only the recheck can clear the pause.
+        fake.failing.store(true, Ordering::SeqCst);
+        watch.check_chunk(&(900..910)).await.unwrap();
+        assert!(watch.node_unhealthy);
+        assert_eq!(watch.sweep_step().await.unwrap(), 0, "within the minute");
+
+        // After the minute one chunk goes out; the node still fails, so the pause stays.
+        watch.next_sweep_recheck_at = Instant::now();
+        assert!(watch.sweep_step().await.unwrap() > 0);
+        assert!(watch.node_unhealthy);
+        assert_eq!(
+            watch.sweep_step().await.unwrap(),
+            0,
+            "the next recheck is a minute away"
+        );
+
+        // The node recovers; the next recheck chunk clears the pause and the sweep goes on.
+        fake.failing.store(false, Ordering::SeqCst);
+        watch.next_sweep_recheck_at = Instant::now();
+        assert!(watch.sweep_step().await.unwrap() > 0);
+        assert!(!watch.node_unhealthy);
+        assert!(watch.sweep_step().await.unwrap() > 0);
+    }
+
+    #[tokio::test]
     async fn a_failed_refinement_pauses_the_sweep() {
         let (node, fake) = serve_fake([905]).await;
         let (watchdog, _store, _registry) = test_watchdog(Some(200)).await;
@@ -1478,13 +1553,9 @@ mod tests {
         };
         assert!(!watch.check_probe(&probe).await.unwrap());
         assert_eq!(watch.errors_since_summary.get("500"), Some(&1));
-        // The chunk of a sweep or follow pauses the sweep when its last probe fails this way.
-        watch.node_unhealthy = false;
+        // A chunk of follow or sweep with such a probe pauses the sweep.
         watch.check_chunk(&(900..910)).await.unwrap();
-        assert!(
-            !watch.node_unhealthy,
-            "the later probes of the chunk answered"
-        );
+        assert!(watch.node_unhealthy);
     }
 
     #[tokio::test]
