@@ -13,7 +13,7 @@ them. Today it does not, so this external watchdog fills the role:
 Remove the watchdog once the node reports and repairs its own gaps.
 
 The watchdog checks that archive query nodes serve every height, epoch object and aggregate they should, keeps the
-missing set in SQLite, and reports it through logs, metrics and a page.
+missing set in memory (SQLite holds its image), and reports it through logs, metrics and a page.
 
 ## Run locally
 
@@ -119,6 +119,12 @@ task resumes where the old one stopped.
 
 ## Known limitations
 
+- The missing set lives in memory and SQLite is its write-through image, loaded once at startup. Adjacent missing ranges
+  of one kind with equal state show as one row on the page and in the alert `range_start`/`range_end`. The link and the
+  alert `url` probe the first 100 heights of the row.
+- The page shows what each node watch last published, so its ages are as of that publish, at most one loop iteration
+  old. Before a node has started it reads `not started`.
+
 - Archive full sweep is slow: about 100 / (5 x (`request_interval` + response time)) heights/s, about 46/s at 200 ms.
   The rate holds for clean chunks. Each gap in a range kind adds a HEAD, a GET and about 2 x log2(gap length)
   single-height probes. Sweeps then run back to back. The tip is covered by follow in real time. The page ETA and
@@ -187,4 +193,10 @@ Companion monitors (Monitors > New Monitor > Metric):
 ## Schema
 
 - Migrations are in `migrations/` and run at startup (`sqlx::migrate!`).
-- Add a new `NN_name.sql`. Never edit an applied migration.
+- Add a new `NN_name.sql`. Never edit an applied migration. `01_init.sql` was edited in place before the first deploy;
+  from the first deploy on this rule holds.
+- `missing_chunk` holds one row per range of a range kind (`leaf`, `block`, `vid_common`) and one row per height or
+  epoch for the other kinds (`range_end = range_start + 1`). CHECK constraints reject unknown kinds, empty ranges and
+  retry delays outside 5 to 600 s.
+- `node_progress` holds `sweep_start_height` with the other sweep heights; CHECK constraints keep the sweep columns
+  consistent.

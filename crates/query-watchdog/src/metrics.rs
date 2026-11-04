@@ -4,9 +4,10 @@ use chrono::{DateTime, Utc};
 use prometheus::{IntCounterVec, IntGauge, IntGaugeVec, Opts, Registry};
 
 use crate::{
-    chunk::DataKind,
-    store::{NodeProgress, SweepState},
-    watch::{FetchError, FetchTarget, NodeSummary},
+    kind::{DataKind, Height},
+    node::{FetchError, FetchTarget},
+    schedule::{NodeProgress, SweepState},
+    view::NodeSummary,
 };
 
 /// `query_watchdog_*` families on the process `Registry`.
@@ -141,8 +142,8 @@ impl WatchdogMetrics {
         Ok(())
     }
 
-    /// Sets the follow and sweep progress gauges of `node_label`; the sweep height gauges read 0
-    /// while the sweep waits, and the ETA gauge is removed while waiting or unknown.
+    /// Follow and sweep gauges; sweep heights read 0 unless `Running`; ETA series removed when
+    /// `None`.
     pub fn export_progress(
         &self,
         node_label: &str,
@@ -150,13 +151,13 @@ impl WatchdogMetrics {
         sweep_eta: Option<Duration>,
     ) -> anyhow::Result<()> {
         let (running, next, until) = match &progress.sweep {
-            SweepState::Running(sweep) => (1, sweep.next_height, sweep.until_height),
-            SweepState::Waiting | SweepState::Done => (0, 0, 0),
+            SweepState::Running { sweep, .. } => (1, sweep.next_height, sweep.until_height),
+            _ => (0, Height(0), Height(0)),
         };
         let labels = [node_label];
         self.follow_next_height
             .with_label_values(&labels)
-            .set(i64::try_from(progress.follow_next_height)?);
+            .set(i64::try_from(progress.follow_next_height.0)?);
         self.sweep_running.with_label_values(&labels).set(running);
         match sweep_eta {
             Some(eta) => self
@@ -170,16 +171,16 @@ impl WatchdogMetrics {
         }
         self.sweep_next_height
             .with_label_values(&labels)
-            .set(i64::try_from(next)?);
+            .set(i64::try_from(next.0)?);
         self.sweep_until_height
             .with_label_values(&labels)
-            .set(i64::try_from(until)?);
+            .set(i64::try_from(until.0)?);
         Ok(())
     }
 
     /// Sets the tip height.
-    pub fn set_tip_height(&self, tip_height: u64) -> anyhow::Result<()> {
-        self.tip_height.set(i64::try_from(tip_height)?);
+    pub fn set_tip_height(&self, tip: Height) -> anyhow::Result<()> {
+        self.tip_height.set(i64::try_from(tip.0)?);
         Ok(())
     }
 

@@ -1,10 +1,16 @@
 //! Watches archive query nodes for data they fail to serve; see `README.md`.
 
-mod chunk;
 mod gaps;
 mod http;
+mod kind;
 mod metrics;
+mod missing;
+mod node;
+mod outcome;
+mod schedule;
 mod store;
+mod system;
+mod view;
 mod watch;
 
 use std::{
@@ -26,10 +32,12 @@ use tracing_subscriber::{EnvFilter, filter::LevelFilter};
 use url::Url;
 
 use crate::{
-    http::AppState,
+    http::{AppState, NodeViewSlot},
     metrics::WatchdogMetrics,
+    node::{NodeHttp, WatchedNode},
     store::Store,
-    watch::{NodeWatch, SweepEtas, WatchOptions, Watchdog, WatchedNode},
+    system::{System, WallClock},
+    watch::{NodeWatch, WatchOptions, Watchdog},
 };
 
 /// Watches archive query nodes for heights they fail to serve.
@@ -83,10 +91,10 @@ async fn main() -> anyhow::Result<()> {
     result
 }
 
-/// Opens the store, forgets other nodes, opens the read-only pool of the page, spawns
-/// `http::serve`, fetches the epoch config and the first tip, starts each node, and runs
-/// `TipPoller::run` and every `NodeWatch::run` in one `select!` with the server and
-/// `shutdown_signal()`.
+/// Opens the store, forgets other nodes, creates one view channel per node, spawns
+/// `http::serve`, builds the `System` (`WallClock`, `NodeHttp`), fetches the epoch config and
+/// first tip, applies `--reset`, starts each node, and runs the poller and every
+/// `NodeWatch::run` in one `select!` with the server and `shutdown_signal()`.
 async fn run(options: Options) -> anyhow::Result<()> {
     let nodes = options
         .nodes
@@ -111,21 +119,25 @@ async fn run(options: Options) -> anyhow::Result<()> {
     let listener = TcpListener::bind(("0.0.0.0", options.port))
         .await
         .with_context(|| format!("binding port {}", options.port))?;
-    let reader = Store::open_read_only(&db_path).await?;
-    let sweep_etas = SweepEtas::default();
-    let window = options.watch.sweep_window();
-    let app = AppState::new(
-        registry,
-        reader,
-        nodes.clone(),
-        window,
-        sweep_etas.clone(),
-        options.watch.sweep_interval,
-    )?;
-    let server = tokio::spawn(http::serve(listener, app.clone()));
+    let (senders, slots): (Vec<_>, Vec<_>) = nodes
+        .iter()
+        .map(|node| {
+            let (sender, view) = view::channel();
+            let slot = NodeViewSlot {
+                node: node.clone(),
+                view,
+            };
+            (sender, slot)
+        })
+        .unzip();
+    let server = tokio::spawn(http::serve(listener, AppState::new(registry, slots)));
     log_serving(options.port);
 
-    let watchdog = Watchdog::new(options.watch, metrics, store, sweep_etas)?;
+    let system = System {
+        clock: WallClock,
+        http: NodeHttp::new()?,
+    };
+    let watchdog = Watchdog::new(system, options.watch, metrics, store);
     let epochs = watchdog.fetch_epoch_config(&nodes).await?;
     tracing::info!(
         epoch_height = epochs.map(|e| e.epoch_height),
@@ -138,11 +150,11 @@ async fn run(options: Options) -> anyhow::Result<()> {
     if options.reset {
         watchdog.reset_state().await?;
     }
-    app.set_tip(tip.clone());
     let watches = try_join_all(
         nodes
-            .iter()
-            .map(|node| watchdog.start_node(node.clone(), tip.clone(), epochs)),
+            .into_iter()
+            .zip(senders)
+            .map(|(node, view)| watchdog.start_node(node, tip.clone(), epochs, view)),
     )
     .await?;
 
