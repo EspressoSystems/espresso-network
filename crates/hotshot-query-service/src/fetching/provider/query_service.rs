@@ -479,7 +479,7 @@ where
     Ok(objs)
 }
 
-// These tests run the `postgres` Docker image, which doesn't work on Windows.
+// The SQL test databases (`TmpDb`) are not built on Windows.
 #[cfg(all(test, not(target_os = "windows")))]
 mod test {
     use std::{
@@ -495,19 +495,19 @@ mod test {
     use futures::{future::join, stream::StreamExt};
     use hotshot_example_types::node_types::TEST_VERSIONS;
     use hotshot_types::data::{VidCommon, ViewNumber};
+    use rstest_reuse::apply;
     use tokio::{task::JoinHandle, time::timeout};
 
     use super::*;
     use crate::{
         availability::{
             AvailabilityDataSource, BlockId, BlockInfo, BlockQueryData, BlockWithTransaction,
-            Certificate2, Fetch, UpdateAvailabilityData, VidCommonQueryData,
+            Certificate2, Fetch, LeafId, UpdateAvailabilityData, VidCommonQueryData,
         },
         data_source::{
             AvailabilityProvider, FetchingDataSource, Transaction, VersionedDataSource,
-            sql::postgres::{self as sql, SqlDataSource, SqlStorage, testing::TmpDb},
             storage::{
-                AvailabilityStorage, StorageConnectionType, UpdateAvailabilityStorage,
+                AvailabilityStorage, UpdateAvailabilityStorage,
                 fail_storage::{FailStorage, FailableAction},
                 pruning::{PrunedHeightStorage, PrunerCfg},
             },
@@ -521,7 +521,7 @@ mod test {
         node::data_source::NodeDataSource,
         testing::{
             chain::{ChainNode, genesis_vid},
-            consensus::MockDataSource,
+            consensus::{MockDataSource, SavePrunedHeight, TestSqlDb, sql_dbs},
             mocks::{MockPayload, MockTransaction, MockTypes, mock_transaction},
             sleep,
         },
@@ -607,31 +607,28 @@ mod test {
     }
 
     /// Build a data source suitable for this suite of tests.
-    async fn builder<P: AvailabilityProvider<MockTypes> + Clone>(
-        db: &TmpDb,
+    async fn builder<Db: TestSqlDb, P: AvailabilityProvider<MockTypes> + Clone>(
+        db: &Db,
         provider: &P,
-    ) -> sql::Builder<MockTypes, P> {
-        db.config()
-            .builder((*provider).clone())
-            .await
-            .unwrap()
+    ) -> crate::data_source::fetching::Builder<MockTypes, Db::Storage, P> {
+        FetchingDataSource::builder(db.storage().await.unwrap(), (*provider).clone())
             // We disable proactive fetching for these tests, since we are intending to test on
             // demand fetching, and proactive fetching could lead to false successes.
             .disable_proactive_fetching()
     }
 
     /// A data source suitable for this suite of tests, with the default options.
-    async fn data_source<P: AvailabilityProvider<MockTypes> + Clone>(
-        db: &TmpDb,
+    async fn data_source<Db: TestSqlDb, P: AvailabilityProvider<MockTypes> + Clone>(
+        db: &Db,
         provider: &P,
-    ) -> SqlDataSource<MockTypes, P> {
+    ) -> FetchingDataSource<MockTypes, Db::Storage, P> {
         builder(db, provider).await.build().await.unwrap()
     }
 
     /// Store leaves `0..=height`, each with an empty block and VID common, and return them with
     /// the VID common every block shares, for seeding another node with a subset.
-    async fn seed_chain<P: AvailabilityProvider<MockTypes> + Clone>(
-        ds: &SqlDataSource<MockTypes, P>,
+    async fn seed_chain<Db: TestSqlDb, P: AvailabilityProvider<MockTypes> + Clone>(
+        ds: &FetchingDataSource<MockTypes, Db::Storage, P>,
         height: u64,
     ) -> (Vec<LeafQueryData<MockTypes>>, VidCommon) {
         let mut leaves = Vec::new();
@@ -652,8 +649,8 @@ mod test {
         (leaves, common)
     }
 
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_fetch_on_request() {
+    #[apply(sql_dbs)]
+    async fn test_fetch_on_request<Db: TestSqlDb>(_db: PhantomData<Db>) {
         // Create a peer that has already decided some blocks.
         let network = peer().await;
 
@@ -661,7 +658,7 @@ mod test {
         let (port, _server) = serve_availability(network.data_source()).await;
 
         // Start a data source which is not receiving events from consensus, only from a peer.
-        let db = TmpDb::init().await;
+        let db = Db::init().await;
         let provider = Provider::new(TrustedQueryServiceProvider::new(
             format!("http://localhost:{port}").parse().unwrap(),
         ));
@@ -859,8 +856,8 @@ mod test {
         }
     }
 
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_fetch_block_and_leaf_concurrently() {
+    #[apply(sql_dbs)]
+    async fn test_fetch_block_and_leaf_concurrently<Db: TestSqlDb>(_db: PhantomData<Db>) {
         // Create a peer that has already decided some blocks.
         let network = peer().await;
 
@@ -868,7 +865,7 @@ mod test {
         let (port, _server) = serve_availability(network.data_source()).await;
 
         // Start a data source which is not receiving events from consensus, only from a peer.
-        let db = TmpDb::init().await;
+        let db = Db::init().await;
         let provider = Provider::new(TrustedQueryServiceProvider::new(
             format!("http://localhost:{port}").parse().unwrap(),
         ));
@@ -921,17 +918,17 @@ mod test {
     }
 
     /// A node that knows the chain height but stores none of the leaves below it.
-    struct MissingBlocks {
+    struct MissingBlocks<Db: TestSqlDb> {
         network: ChainNode<MockDataSource>,
         _server: JoinHandle<()>,
-        _db: TmpDb,
+        _db: Db,
         provider: Recorder,
-        data_source: SqlDataSource<MockTypes, Recorder>,
+        data_source: FetchingDataSource<MockTypes, Db::Storage, Recorder>,
         tx_heights: Vec<u64>,
         end: u64,
     }
 
-    impl MissingBlocks {
+    impl<Db: TestSqlDb> MissingBlocks<Db> {
         async fn init() -> Self {
             let mut network = ChainNode::<MockDataSource>::new().await;
             // Distinct payloads, so one VID common row cannot cover several heights.
@@ -943,7 +940,7 @@ mod test {
             }
             network.push_empty(1).await;
             let (port, server) = serve_availability(network.data_source()).await;
-            let db = TmpDb::init().await;
+            let db = Db::init().await;
             let provider = Recorder {
                 inner: trusted_provider(port),
                 requests: Default::default(),
@@ -1006,9 +1003,9 @@ mod test {
     }
 
     /// Blocks fetched in height order, each with a missing leaf, also get their VID common.
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_fetch_block_backfills_vid_common() {
-        let node = MissingBlocks::init().await;
+    #[apply(sql_dbs)]
+    async fn test_fetch_block_backfills_vid_common<Db: TestSqlDb>(_db: PhantomData<Db>) {
+        let node = MissingBlocks::<Db>::init().await;
         for h in 1..node.end {
             node.data_source.get_block(h as usize).await.await;
         }
@@ -1017,9 +1014,9 @@ mod test {
 
     /// Leaves fetched first, as a leaf stream does, then their blocks: the block fetch finds the
     /// header present and must still request VID common.
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_fetch_block_after_leaf_backfills_vid_common() {
-        let node = MissingBlocks::init().await;
+    #[apply(sql_dbs)]
+    async fn test_fetch_block_after_leaf_backfills_vid_common<Db: TestSqlDb>(_db: PhantomData<Db>) {
+        let node = MissingBlocks::<Db>::init().await;
         node.data_source
             .get_leaf_range(1..node.end as usize)
             .await
@@ -1032,9 +1029,9 @@ mod test {
         node.wait_for_vid_common().await;
     }
 
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_fetch_block_range_backfills_vid_common() {
-        let node = MissingBlocks::init().await;
+    #[apply(sql_dbs)]
+    async fn test_fetch_block_range_backfills_vid_common<Db: TestSqlDb>(_db: PhantomData<Db>) {
+        let node = MissingBlocks::<Db>::init().await;
         node.data_source
             .get_block_range(1..node.end as usize)
             .await
@@ -1044,9 +1041,9 @@ mod test {
         node.wait_for_vid_common().await;
     }
 
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_fetch_leaf_fetches_only_leaf() {
-        let node = MissingBlocks::init().await;
+    #[apply(sql_dbs)]
+    async fn test_fetch_leaf_fetches_only_leaf<Db: TestSqlDb>(_db: PhantomData<Db>) {
+        let node = MissingBlocks::<Db>::init().await;
         let h = node.tx_heights[0];
         // A stored parent leaves nothing for the parent recovery to fetch.
         node.insert_leaf(h - 1).await;
@@ -1064,8 +1061,8 @@ mod test {
         );
     }
 
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_fetch_different_blocks_same_payload() {
+    #[apply(sql_dbs)]
+    async fn test_fetch_different_blocks_same_payload<Db: TestSqlDb>(_db: PhantomData<Db>) {
         // Create a peer that has already decided some blocks.
         let network = peer().await;
 
@@ -1073,7 +1070,7 @@ mod test {
         let (port, _server) = serve_availability(network.data_source()).await;
 
         // Start a data source which is not receiving events from consensus, only from a peer.
-        let db = TmpDb::init().await;
+        let db = Db::init().await;
         let provider = Provider::new(TrustedQueryServiceProvider::new(
             format!("http://localhost:{port}").parse().unwrap(),
         ));
@@ -1110,8 +1107,8 @@ mod test {
         assert_eq!(block2.header(), leaves[1].header());
     }
 
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_fetch_stream() {
+    #[apply(sql_dbs)]
+    async fn test_fetch_stream<Db: TestSqlDb>(_db: PhantomData<Db>) {
         // Create a peer that has already decided some blocks.
         let network = peer().await;
 
@@ -1119,7 +1116,7 @@ mod test {
         let (port, _server) = serve_availability(network.data_source()).await;
 
         // Start a data source which is not receiving events from consensus, only from a peer.
-        let db = TmpDb::init().await;
+        let db = Db::init().await;
         let provider = Provider::new(TrustedQueryServiceProvider::new(
             format!("http://localhost:{port}").parse().unwrap(),
         ));
@@ -1153,8 +1150,8 @@ mod test {
         }
     }
 
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_fetch_range_start() {
+    #[apply(sql_dbs)]
+    async fn test_fetch_range_start<Db: TestSqlDb>(_db: PhantomData<Db>) {
         // Create a peer that has already decided some blocks.
         let network = peer().await;
 
@@ -1162,7 +1159,7 @@ mod test {
         let (port, _server) = serve_availability(network.data_source()).await;
 
         // Start a data source which is not receiving events from consensus, only from a peer.
-        let db = TmpDb::init().await;
+        let db = Db::init().await;
         let provider = Provider::new(TrustedQueryServiceProvider::new(
             format!("http://localhost:{port}").parse().unwrap(),
         ));
@@ -1193,8 +1190,8 @@ mod test {
         }
     }
 
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn fetch_transaction() {
+    #[apply(sql_dbs)]
+    async fn fetch_transaction<Db: TestSqlDb>(_db: PhantomData<Db>) {
         // Create a peer that has already decided a block containing the transaction.
         let tx = mock_transaction(vec![1, 2, 3]);
         let network = peer_with_transaction(tx.clone()).await;
@@ -1206,7 +1203,7 @@ mod test {
 
         // Start a data source which is not receiving events from consensus. We don't give it a
         // fetcher since transactions are always fetched passively anyways.
-        let db = TmpDb::init().await;
+        let db = Db::init().await;
         let data_source = data_source(&db, &NoFetching).await;
 
         // Subscribe to blocks.
@@ -1253,8 +1250,8 @@ mod test {
         );
     }
 
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_retry() {
+    #[apply(sql_dbs)]
+    async fn test_retry<Db: TestSqlDb>(_db: PhantomData<Db>) {
         // Create a peer that has already decided some blocks.
         let network = peer().await;
 
@@ -1262,7 +1259,7 @@ mod test {
         let (port, _server) = serve_availability(network.data_source()).await;
 
         // Start a data source which is not receiving events from consensus.
-        let db = TmpDb::init().await;
+        let db = Db::init().await;
         let provider = Provider::new(TrustedQueryServiceProvider::new(
             format!("http://localhost:{port}").parse().unwrap(),
         ));
@@ -1308,8 +1305,8 @@ mod test {
         );
     }
 
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_archive_recovery() {
+    #[apply(sql_dbs)]
+    async fn test_archive_recovery<Db: TestSqlDb>(_db: PhantomData<Db>) {
         // Create a peer that has already decided some blocks.
         let network = peer().await;
 
@@ -1318,21 +1315,19 @@ mod test {
 
         // Start a data source which is not receiving events from consensus, only from a peer. The
         // data source is at first configured to aggressively prune data.
-        let db = TmpDb::init().await;
+        let db = Db::init().await;
         let provider = Provider::new(TrustedQueryServiceProvider::new(
             format!("http://localhost:{port}").parse().unwrap(),
         ));
-        let mut data_source = db
-            .config()
-            .pruner_cfg(
+        let storage = db
+            .pruning_storage(
                 PrunerCfg::new()
                     .with_target_retention(Duration::from_secs(0))
                     .with_interval(Duration::from_secs(5)),
             )
-            .unwrap()
-            .builder(provider.clone())
             .await
-            .unwrap()
+            .unwrap();
+        let mut data_source = FetchingDataSource::builder(storage, provider.clone())
             // Set a fast retry for failed operations. Occasionally storage operations will fail due
             // to conflicting write-mode transactions running concurrently. This is ok as they will
             // be retried. Having a fast retry interval speeds up the test.
@@ -1360,8 +1355,10 @@ mod test {
         // Either None or 0 is acceptable, depending on whether or not the prover has run yet.
         assert!(matches!(pruned_height, None | Some(0)), "{pruned_height:?}");
 
-        // Send the last leaf to the disconnected data source so it learns about the height and
-        // fetches the missing data.
+        // Send the first leaf, so the database is no longer fresh and keeps the blocks below the
+        // next one. Then send the last leaf so it learns about the height and fetches the missing
+        // data.
+        data_source.append(leaves[0].clone().into()).await.unwrap();
         let last_leaf = leaves.last().unwrap();
         data_source.append(last_leaf.clone().into()).await.unwrap();
 
@@ -1395,17 +1392,13 @@ mod test {
         }
 
         // Now close the data source and restart it with archive recovery.
-        data_source = db
-            .config()
-            .archive()
-            .builder(provider.clone())
-            .await
-            .unwrap()
-            .with_proactive_interval(Duration::from_secs(1))
-            .with_sync_status_ttl(Duration::from_secs(1))
-            .build()
-            .await
-            .unwrap();
+        data_source =
+            FetchingDataSource::builder(db.archive_storage().await.unwrap(), provider.clone())
+                .with_proactive_interval(Duration::from_secs(1))
+                .with_sync_status_ttl(Duration::from_secs(1))
+                .build()
+                .await
+                .unwrap();
 
         // Pruned height should be reset.
         let pruned_height = data_source
@@ -1445,7 +1438,7 @@ mod test {
         Commit,
     }
 
-    async fn test_fetch_storage_failure_helper(failure: FailureType) {
+    async fn test_fetch_storage_failure_helper<Db: TestSqlDb>(failure: FailureType) {
         // Create a peer that has already decided some blocks.
         let network = peer().await;
 
@@ -1456,12 +1449,8 @@ mod test {
         let provider = Provider::new(TrustedQueryServiceProvider::new(
             format!("http://localhost:{port}").parse().unwrap(),
         ));
-        let db = TmpDb::init().await;
-        let storage = FailStorage::from(
-            SqlStorage::connect(db.config(), StorageConnectionType::Query)
-                .await
-                .unwrap(),
-        );
+        let db = Db::init().await;
+        let storage = FailStorage::from(db.storage().await.unwrap());
         let data_source = FetchingDataSource::builder(storage, provider)
             .disable_proactive_fetching()
             .disable_aggregator()
@@ -1517,22 +1506,22 @@ mod test {
         assert_eq!(leaves[0], fetch.try_resolve().ok().unwrap());
     }
 
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_fetch_storage_failure_on_begin() {
-        test_fetch_storage_failure_helper(FailureType::Begin).await;
+    #[apply(sql_dbs)]
+    async fn test_fetch_storage_failure_on_begin<Db: TestSqlDb>(_db: PhantomData<Db>) {
+        test_fetch_storage_failure_helper::<Db>(FailureType::Begin).await;
     }
 
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_fetch_storage_failure_on_write() {
-        test_fetch_storage_failure_helper(FailureType::Write).await;
+    #[apply(sql_dbs)]
+    async fn test_fetch_storage_failure_on_write<Db: TestSqlDb>(_db: PhantomData<Db>) {
+        test_fetch_storage_failure_helper::<Db>(FailureType::Write).await;
     }
 
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_fetch_storage_failure_on_commit() {
-        test_fetch_storage_failure_helper(FailureType::Commit).await;
+    #[apply(sql_dbs)]
+    async fn test_fetch_storage_failure_on_commit<Db: TestSqlDb>(_db: PhantomData<Db>) {
+        test_fetch_storage_failure_helper::<Db>(FailureType::Commit).await;
     }
 
-    async fn test_fetch_storage_failure_retry_helper(failure: FailureType) {
+    async fn test_fetch_storage_failure_retry_helper<Db: TestSqlDb>(failure: FailureType) {
         // Create a peer that has already decided some blocks.
         let network = peer().await;
 
@@ -1543,12 +1532,8 @@ mod test {
         let provider = Provider::new(TrustedQueryServiceProvider::new(
             format!("http://localhost:{port}").parse().unwrap(),
         ));
-        let db = TmpDb::init().await;
-        let storage = FailStorage::from(
-            SqlStorage::connect(db.config(), StorageConnectionType::Query)
-                .await
-                .unwrap(),
-        );
+        let db = Db::init().await;
+        let storage = FailStorage::from(db.storage().await.unwrap());
         let data_source = FetchingDataSource::builder(storage, provider)
             .disable_proactive_fetching()
             .disable_aggregator()
@@ -1596,23 +1581,23 @@ mod test {
         assert_eq!(leaves[0], tx.get_leaf(1.into()).await.unwrap());
     }
 
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_fetch_storage_failure_retry_on_begin() {
-        test_fetch_storage_failure_retry_helper(FailureType::Begin).await;
+    #[apply(sql_dbs)]
+    async fn test_fetch_storage_failure_retry_on_begin<Db: TestSqlDb>(_db: PhantomData<Db>) {
+        test_fetch_storage_failure_retry_helper::<Db>(FailureType::Begin).await;
     }
 
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_fetch_storage_failure_retry_on_write() {
-        test_fetch_storage_failure_retry_helper(FailureType::Write).await;
+    #[apply(sql_dbs)]
+    async fn test_fetch_storage_failure_retry_on_write<Db: TestSqlDb>(_db: PhantomData<Db>) {
+        test_fetch_storage_failure_retry_helper::<Db>(FailureType::Write).await;
     }
 
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_fetch_storage_failure_retry_on_commit() {
-        test_fetch_storage_failure_retry_helper(FailureType::Commit).await;
+    #[apply(sql_dbs)]
+    async fn test_fetch_storage_failure_retry_on_commit<Db: TestSqlDb>(_db: PhantomData<Db>) {
+        test_fetch_storage_failure_retry_helper::<Db>(FailureType::Commit).await;
     }
 
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_fetch_on_decide() {
+    #[apply(sql_dbs)]
+    async fn test_fetch_on_decide<Db: TestSqlDb>(_db: PhantomData<Db>) {
         // Create a peer that has already decided some blocks.
         let network = peer().await;
 
@@ -1620,7 +1605,7 @@ mod test {
         let (port, _server) = serve_availability(network.data_source()).await;
 
         // Start a data source which is not receiving events from consensus.
-        let db = TmpDb::init().await;
+        let db = Db::init().await;
         let provider = Provider::new(TrustedQueryServiceProvider::new(
             format!("http://localhost:{port}").parse().unwrap(),
         ));
@@ -1661,6 +1646,320 @@ mod test {
         assert_eq!(vid.block_hash(), leaf.block_hash());
     }
 
+    /// A leaf whose parent is at the pruned height does not fetch that parent: the pruner would only
+    /// delete it again. Parents above the pruned height are still fetched.
+    #[apply(sql_dbs)]
+    async fn test_no_parent_fetch_at_pruned_height<Db: TestSqlDb>(_db: PhantomData<Db>)
+    where
+        for<'a> <Db::Storage as VersionedDataSource>::Transaction<'a>: SavePrunedHeight,
+    {
+        let network = peer().await;
+        let (port, _server) = serve_availability(network.data_source()).await;
+        let db = Db::init().await;
+        let provider = Provider::new(trusted_provider(port));
+        let data_source = builder(&db, &provider)
+            .await
+            .disable_proactive_fetching()
+            .build()
+            .await
+            .unwrap();
+
+        let leaves = network
+            .data_source()
+            .subscribe_leaves(1)
+            .await
+            .take(4)
+            .collect::<Vec<_>>()
+            .await;
+        let pruned = 2;
+        {
+            let mut tx = data_source.write().await.unwrap();
+            tx.save_pruned_height(pruned).await.unwrap();
+            tx.commit().await.unwrap();
+        }
+
+        // Leaf 4 fetches its missing parent, leaf 3, whose parent is at the pruned height.
+        data_source.append(leaves[3].clone().into()).await.unwrap();
+        while data_source
+            .read()
+            .await
+            .unwrap()
+            .get_leaf(LeafId::<MockTypes>::from(3))
+            .await
+            .is_err()
+        {
+            sleep(Duration::from_millis(100)).await;
+        }
+        // Storage would drop a pruned leaf, so check the requests instead.
+        sleep(Duration::from_secs(2)).await;
+        let requests = provider.requests();
+        let requested = |height| requests.contains(&format!("{:?}", LeafRequest::new(height)));
+        assert!(requested(3), "{requests:?}");
+        assert!(
+            !requested(pruned),
+            "the leaf at the pruned height {pruned} was fetched: {requests:?}"
+        );
+    }
+
+    /// A fresh pruned node starts at its first block above genesis: it marks the blocks below as
+    /// pruned before it stores that block, so neither the proactive scan nor the fetches of missing
+    /// parents download history the pruner would only delete. A pruned node whose first block is
+    /// at height 1 has nothing to skip, and neither has a node that does not prune.
+    #[apply(sql_dbs)]
+    async fn test_fresh_pruned_start<Db: TestSqlDb>(_db: PhantomData<Db>) {
+        let network = peer().await;
+        let (port, _server) = serve_availability(network.data_source()).await;
+        let leaves = network
+            .data_source()
+            .subscribe_leaves(1)
+            .await
+            .take(4)
+            .collect::<Vec<_>>()
+            .await;
+
+        for (prune, first, pruned) in [(true, 4, Some(3)), (true, 1, None), (false, 4, None)] {
+            let db = Db::init().await;
+            let provider = Provider::new(trusted_provider(port));
+            let storage = if prune {
+                // The pruner itself never runs within the test.
+                db.pruning_storage(PrunerCfg::new().with_interval(Duration::from_secs(3600)))
+                    .await
+            } else {
+                db.storage().await
+            };
+            let data_source = FetchingDataSource::builder(storage.unwrap(), provider.clone())
+                .with_proactive_interval(Duration::from_secs(1))
+                .with_sync_status_ttl(Duration::from_secs(1))
+                .build()
+                .await
+                .unwrap();
+
+            // Only the first block above genesis decides where the node starts.
+            data_source
+                .append(leaves[first - 1].clone().into())
+                .await
+                .unwrap();
+            data_source.append(leaves[3].clone().into()).await.unwrap();
+            let pruned_height = data_source
+                .read()
+                .await
+                .unwrap()
+                .load_pruned_height()
+                .await
+                .unwrap();
+            assert_eq!(pruned_height, pruned, "prune {prune}, first block {first}");
+
+            // Long enough for a parent fetch and a proactive scan. Storage would drop a pruned
+            // leaf, so check the requests instead.
+            if pruned.is_some() {
+                sleep(Duration::from_secs(3)).await;
+                let requests = provider.requests();
+                assert!(
+                    requests.iter().all(|req| !req.starts_with("Leaf")),
+                    "a fresh pruned node fetched leaves below its first block: {requests:?}"
+                );
+            }
+        }
+    }
+
+    /// A pruned node whose first pruner run deleted the genesis block before its first decide, and
+    /// that then restarted, is still a fresh pruned node: a data pruned height of 0 with no block
+    /// above genesis has pruned nothing above genesis. It starts at its first block above genesis,
+    /// as a brand-new database does, so it fetches no leaf below that block.
+    #[apply(sql_dbs)]
+    async fn test_fresh_pruned_start_at_pruned_height_zero<Db: TestSqlDb>(_db: PhantomData<Db>)
+    where
+        for<'a> <Db::Storage as VersionedDataSource>::Transaction<'a>: SavePrunedHeight,
+    {
+        let network = peer().await;
+        let (port, _server) = serve_availability(network.data_source()).await;
+        let leaves = network
+            .data_source()
+            .subscribe_leaves(1)
+            .await
+            .take(4)
+            .collect::<Vec<_>>()
+            .await;
+
+        let db = Db::init().await;
+        let storage = idle_pruning_storage(&db).await;
+        {
+            let mut tx = storage.write().await.unwrap();
+            tx.save_pruned_height(0).await.unwrap();
+            tx.commit().await.unwrap();
+        }
+        let provider = Provider::new(trusted_provider(port));
+        let data_source = FetchingDataSource::builder(storage, provider.clone())
+            .with_proactive_interval(Duration::from_secs(1))
+            .with_sync_status_ttl(Duration::from_secs(1))
+            .build()
+            .await
+            .unwrap();
+
+        let first = &leaves[3];
+        data_source.append(first.clone().into()).await.unwrap();
+        assert_eq!(
+            stored_pruned_height(&data_source).await,
+            Some(first.height() - 1)
+        );
+
+        // Long enough for a parent fetch and a proactive scan. Storage would drop a pruned leaf, so
+        // check the requests instead.
+        sleep(Duration::from_secs(3)).await;
+        let requests = provider.requests();
+        assert!(
+            requests.iter().all(|req| !req.starts_with("Leaf")),
+            "a fresh pruned node fetched leaves below its first block: {requests:?}"
+        );
+    }
+
+    /// Only the first block above genesis decides where a fresh pruned node starts: a later block
+    /// leaves the data pruned height as the first block set it.
+    #[apply(sql_dbs)]
+    async fn test_fresh_pruned_start_only_first_block<Db: TestSqlDb>(_db: PhantomData<Db>) {
+        let network = peer().await;
+        let leaves = network
+            .data_source()
+            .subscribe_leaves(1)
+            .await
+            .take(4)
+            .collect::<Vec<_>>()
+            .await;
+        let db = Db::init().await;
+        let data_source = FetchingDataSource::builder(idle_pruning_storage(&db).await, NoFetching)
+            .disable_proactive_fetching()
+            .build()
+            .await
+            .unwrap();
+
+        let (first, later) = (&leaves[1], &leaves[3]);
+        data_source.append(first.clone().into()).await.unwrap();
+        assert_eq!(
+            stored_pruned_height(&data_source).await,
+            Some(first.height() - 1)
+        );
+        data_source.append(later.clone().into()).await.unwrap();
+        assert_eq!(
+            stored_pruned_height(&data_source).await,
+            Some(first.height() - 1)
+        );
+    }
+
+    /// A genesis block does not decide where a fresh pruned node starts: the first block above
+    /// genesis, appended after it, still marks the blocks below it as pruned.
+    #[apply(sql_dbs)]
+    async fn test_fresh_pruned_start_after_genesis<Db: TestSqlDb>(_db: PhantomData<Db>) {
+        let network = peer().await;
+        let leaves = network
+            .data_source()
+            .subscribe_leaves(0)
+            .await
+            .take(5)
+            .collect::<Vec<_>>()
+            .await;
+        let db = Db::init().await;
+        let data_source = FetchingDataSource::builder(idle_pruning_storage(&db).await, NoFetching)
+            .disable_proactive_fetching()
+            .build()
+            .await
+            .unwrap();
+
+        let (genesis, first) = (&leaves[0], &leaves[4]);
+        data_source.append(genesis.clone().into()).await.unwrap();
+        assert_eq!(stored_pruned_height(&data_source).await, None);
+        data_source.append(first.clone().into()).await.unwrap();
+        assert_eq!(
+            stored_pruned_height(&data_source).await,
+            Some(first.height() - 1)
+        );
+    }
+
+    /// A pruned node that already holds blocks above genesis when it starts is not fresh, for
+    /// example a node that ran without pruning and then turns it on: its next block marks nothing
+    /// as pruned.
+    #[apply(sql_dbs)]
+    async fn test_no_fresh_pruned_start_with_blocks<Db: TestSqlDb>(_db: PhantomData<Db>) {
+        let network = peer().await;
+        let leaves = network
+            .data_source()
+            .subscribe_leaves(1)
+            .await
+            .take(4)
+            .collect::<Vec<_>>()
+            .await;
+        let db = Db::init().await;
+        {
+            // A first run, which neither prunes nor fetches, stores the first blocks.
+            let data_source = data_source(&db, &NoFetching).await;
+            for leaf in &leaves[..2] {
+                data_source.append(leaf.clone().into()).await.unwrap();
+            }
+        }
+        let data_source = FetchingDataSource::builder(idle_pruning_storage(&db).await, NoFetching)
+            .disable_proactive_fetching()
+            .build()
+            .await
+            .unwrap();
+
+        data_source.append(leaves[3].clone().into()).await.unwrap();
+        assert_eq!(stored_pruned_height(&data_source).await, None);
+    }
+
+    /// A pruned node whose data pruned height is above 0 is not fresh, even when it holds no block:
+    /// it has pruned blocks above genesis before. Its next block leaves the pruned height as it is.
+    #[apply(sql_dbs)]
+    async fn test_no_fresh_pruned_start_after_pruning<Db: TestSqlDb>(_db: PhantomData<Db>)
+    where
+        for<'a> <Db::Storage as VersionedDataSource>::Transaction<'a>: SavePrunedHeight,
+    {
+        let network = peer().await;
+        let leaves = network
+            .data_source()
+            .subscribe_leaves(1)
+            .await
+            .take(4)
+            .collect::<Vec<_>>()
+            .await;
+        let db = Db::init().await;
+        let storage = idle_pruning_storage(&db).await;
+        let pruned = 2;
+        {
+            let mut tx = storage.write().await.unwrap();
+            tx.save_pruned_height(pruned).await.unwrap();
+            tx.commit().await.unwrap();
+        }
+        let data_source = FetchingDataSource::builder(storage, NoFetching)
+            .disable_proactive_fetching()
+            .build()
+            .await
+            .unwrap();
+
+        data_source.append(leaves[3].clone().into()).await.unwrap();
+        assert_eq!(stored_pruned_height(&data_source).await, Some(pruned));
+    }
+
+    /// Pruning storage on `db` whose pruner never runs within a test.
+    async fn idle_pruning_storage<Db: TestSqlDb>(db: &Db) -> Db::Storage {
+        db.pruning_storage(PrunerCfg::new().with_interval(Duration::from_secs(3600)))
+            .await
+            .unwrap()
+    }
+
+    /// The data pruned height stored under `data_source`.
+    async fn stored_pruned_height<D>(data_source: &D) -> Option<u64>
+    where
+        D: VersionedDataSource,
+        for<'a> D::ReadOnly<'a>: PrunedHeightStorage,
+    {
+        data_source
+            .read()
+            .await
+            .unwrap()
+            .load_pruned_height()
+            .await
+            .unwrap()
+    }
+
     /// Test that fetching a leaf also backfills the leaf's cert2.
     ///
     /// A server node stores three V6 leaves and a cert2 for the first one. A client node fetches
@@ -1668,10 +1967,10 @@ mod test {
     /// explicit cert2 request. Fetching the second leaf, which has no cert2 (the common case,
     /// since only the newest leaf of each decide batch carries one), must resolve as "absent"
     /// and store nothing, rather than retrying forever.
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_backfill_cert2_with_leaf() {
+    #[apply(sql_dbs)]
+    async fn test_backfill_cert2_with_leaf<Db: TestSqlDb>(_db: PhantomData<Db>) {
         // A server that has V6 leaves and, at height 1, a cert2 in storage.
-        let server_db = TmpDb::init().await;
+        let server_db = Db::init().await;
         let server = data_source(&server_db, &NoFetching).await;
 
         // The leaf at `height` is a decide head and carries a cert2. The leaf at `sparse_height`
@@ -1696,7 +1995,7 @@ mod test {
         let (port, _server_task) = serve_availability(server).await;
 
         // A client with no cert2, fetching leaves from the server.
-        let client_db = TmpDb::init().await;
+        let client_db = Db::init().await;
         let provider = Provider::new(trusted_provider(port));
         let client = builder(&client_db, &provider)
             .await
@@ -1757,12 +2056,12 @@ mod test {
         }
     }
 
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_backfill_cert2_with_scanner() {
+    #[apply(sql_dbs)]
+    async fn test_backfill_cert2_with_scanner<Db: TestSqlDb>(_db: PhantomData<Db>) {
         // A server holding full blocks (so the scanner's block fetch succeeds) and, at height 1, a
         // cert2. The scanner fetches missing blocks, which triggers the leaf fetch and hence the
         // cert2 backfill.
-        let server_db = TmpDb::init().await;
+        let server_db = Db::init().await;
         let server = data_source(&server_db, &NoFetching).await;
 
         // The scanner scans the whole range `[0, block_height)`, so the server needs a contiguous
@@ -1792,13 +2091,9 @@ mod test {
         // A client that fetches from the server and runs the proactive scanner frequently. We do
         // NOT call get_leaf/get_cert2 ourselves: the scanner alone should discover the missing
         // history and backfill the cert2 as a side effect of fetching the leaf.
-        let client_db = TmpDb::init().await;
+        let client_db = Db::init().await;
         let provider = Provider::new(trusted_provider(port));
-        let client = client_db
-            .config()
-            .builder::<MockTypes, _>(provider)
-            .await
-            .unwrap()
+        let client = FetchingDataSource::builder(client_db.storage().await.unwrap(), provider)
             .with_proactive_interval(Duration::from_secs(1))
             .with_sync_status_ttl(Duration::from_secs(1))
             .with_max_retry_interval(Duration::from_secs(1))
@@ -1834,9 +2129,9 @@ mod test {
 
     /// A cert2 from consensus must wake anyone already waiting on it; only the peer-fetch path
     /// used to notify, so a `get_cert2` issued before the decide stayed pending forever.
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_append_notifies_cert2_waiters() {
-        let db = TmpDb::init().await;
+    #[apply(sql_dbs)]
+    async fn test_append_notifies_cert2_waiters<Db: TestSqlDb>(_db: PhantomData<Db>) {
+        let db = Db::init().await;
         let ds = data_source(&db, &NoFetching).await;
 
         // Height 1 is unknown, so the request waits purely on a notification, as a client
@@ -1863,15 +2158,17 @@ mod test {
 
     /// `append` fetches a decided leaf's missing block and VID common and drops the handles. A
     /// handle is only a notifier subscription; the fetch is detached and must still finish.
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_append_fetches_missing_objects_after_dropping_handles() {
-        let server_db = TmpDb::init().await;
+    #[apply(sql_dbs)]
+    async fn test_append_fetches_missing_objects_after_dropping_handles<Db: TestSqlDb>(
+        _db: PhantomData<Db>,
+    ) {
+        let server_db = Db::init().await;
         let server = data_source(&server_db, &NoFetching).await;
-        let (leaves, _common) = seed_chain(&server, 1).await;
+        let (leaves, _common) = seed_chain::<Db, _>(&server, 1).await;
         let (port, _server_task) = serve_availability(server).await;
 
         // Proactive fetching and the aggregator are off, so only `append` can fetch these.
-        let client_db = TmpDb::init().await;
+        let client_db = Db::init().await;
         let provider = Provider::new(trusted_provider(port));
         let client = builder(&client_db, &provider)
             .await
@@ -1904,13 +2201,13 @@ mod test {
 
     /// Consensus attaches a cert2 only to the newest leaf of a decide batch, and `append` is not
     /// a fetch, so an older leaf's cert2 has to be asked for there.
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_backfill_cert2_for_appended_leaf() {
+    #[apply(sql_dbs)]
+    async fn test_backfill_cert2_for_appended_leaf<Db: TestSqlDb>(_db: PhantomData<Db>) {
         let leaves = [v6_leaf(0).await, v6_leaf(1).await, v6_leaf(2).await];
         let cert2 = cert2_for(&leaves[1]);
 
         // The server holds only the cert2, so nothing but a cert2 request can deliver it.
-        let server_db = TmpDb::init().await;
+        let server_db = Db::init().await;
         let server = data_source(&server_db, &NoFetching).await;
         {
             let mut tx = server.write().await.unwrap();
@@ -1921,7 +2218,7 @@ mod test {
         }
         let (port, _server_task) = serve_availability(server).await;
 
-        let client_db = TmpDb::init().await;
+        let client_db = Db::init().await;
         let provider = Provider::new(trusted_provider(port));
         let client = builder(&client_db, &provider)
             .await
@@ -1972,23 +2269,19 @@ mod test {
         assert_eq!(backfilled.data.leaf_commit, cert2.data.leaf_commit);
     }
 
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_scanner_backfills_fragmented_range() {
+    #[apply(sql_dbs)]
+    async fn test_scanner_backfills_fragmented_range<Db: TestSqlDb>(_db: PhantomData<Db>) {
         // A server holding the full history 0..=20: leaves, blocks, and VID common.
-        let server_db = TmpDb::init().await;
+        let server_db = Db::init().await;
         let server = data_source(&server_db, &NoFetching).await;
 
-        let (leaves, common) = seed_chain(&server, 20).await;
+        let (leaves, common) = seed_chain::<Db, _>(&server, 20).await;
 
         let (port, _server_task) = serve_availability(server).await;
 
-        let client_db = TmpDb::init().await;
+        let client_db = Db::init().await;
         let provider = Provider::new(trusted_provider(port));
-        let client = client_db
-            .config()
-            .builder::<MockTypes, _>(provider)
-            .await
-            .unwrap()
+        let client = FetchingDataSource::builder(client_db.storage().await.unwrap(), provider)
             .with_proactive_interval(Duration::from_secs(1))
             .with_sync_status_ttl(Duration::from_secs(1))
             .with_max_retry_interval(Duration::from_secs(1))
@@ -2041,23 +2334,19 @@ mod test {
 
     /// A peer that predates the ranges endpoints must still be usable: the ranges fetch falls back
     /// to the per-range endpoints, so catchup completes anyway.
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_scanner_falls_back_without_ranges_endpoints() {
-        let server_db = TmpDb::init().await;
+    #[apply(sql_dbs)]
+    async fn test_scanner_falls_back_without_ranges_endpoints<Db: TestSqlDb>(_db: PhantomData<Db>) {
+        let server_db = Db::init().await;
         let server = data_source(&server_db, &NoFetching).await;
 
-        let (leaves, common) = seed_chain(&server, 20).await;
+        let (leaves, common) = seed_chain::<Db, _>(&server, 20).await;
 
         // No ranges routes, so every ranges request 404s or 405s and has to fall back.
         let (port, _server_task) = test_fixtures::serve_availability_without_ranges(server).await;
 
-        let client_db = TmpDb::init().await;
+        let client_db = Db::init().await;
         let provider = Provider::new(trusted_provider(port));
-        let client = client_db
-            .config()
-            .builder::<MockTypes, _>(provider)
-            .await
-            .unwrap()
+        let client = FetchingDataSource::builder(client_db.storage().await.unwrap(), provider)
             .with_proactive_interval(Duration::from_secs(1))
             .with_sync_status_ttl(Duration::from_secs(1))
             .with_max_retry_interval(Duration::from_secs(1))
@@ -2098,15 +2387,15 @@ mod test {
 
     /// The data source's ranges methods fetch what storage lacks from a peer, and resolve only
     /// once every requested height is present, in height order.
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_ranges_fetch_on_miss() {
-        let server_db = TmpDb::init().await;
+    #[apply(sql_dbs)]
+    async fn test_ranges_fetch_on_miss<Db: TestSqlDb>(_db: PhantomData<Db>) {
+        let server_db = Db::init().await;
         let server = data_source(&server_db, &NoFetching).await;
 
-        let (leaves, _) = seed_chain(&server, 20).await;
+        let (leaves, _) = seed_chain::<Db, _>(&server, 20).await;
         let (port, _server_task) = serve_availability(server).await;
 
-        let client_db = TmpDb::init().await;
+        let client_db = Db::init().await;
         let provider = Provider::new(trusted_provider(port));
         let client = data_source(&client_db, &provider).await;
         // The client only fetches heights it knows the chain has reached.
@@ -2152,12 +2441,12 @@ mod test {
     /// A provider that cannot serve ranges requests at all must not stall the scanner: it falls back to
     /// fetching each chunk, and gets there as soon as the ranges fetch gives up rather than after
     /// the whole timeout.
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_scanner_falls_back_without_ranges_providers() {
-        let server_db = TmpDb::init().await;
+    #[apply(sql_dbs)]
+    async fn test_scanner_falls_back_without_ranges_providers<Db: TestSqlDb>(_db: PhantomData<Db>) {
+        let server_db = Db::init().await;
         let server = data_source(&server_db, &NoFetching).await;
 
-        let (leaves, common) = seed_chain(&server, 20).await;
+        let (leaves, common) = seed_chain::<Db, _>(&server, 20).await;
         let (port, _server_task) = serve_availability(server).await;
 
         // Range providers only: a ranges request finds no provider and gives up at once.
@@ -2167,12 +2456,8 @@ mod test {
             .with_block_range_provider(trusted_provider(port))
             .with_vid_common_range_provider(trusted_provider(port));
 
-        let client_db = TmpDb::init().await;
-        let client = client_db
-            .config()
-            .builder::<MockTypes, _>(provider)
-            .await
-            .unwrap()
+        let client_db = Db::init().await;
+        let client = FetchingDataSource::builder(client_db.storage().await.unwrap(), provider)
             .with_proactive_interval(Duration::from_secs(1))
             .with_sync_status_ttl(Duration::from_secs(1))
             .with_max_retry_interval(Duration::from_secs(1))
@@ -2218,25 +2503,23 @@ mod test {
     ///
     /// The server here serves no per-height or per-range route, so every object the client ends up
     /// with came from a ranges request.
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_scanner_backfills_over_ranges_endpoints_only() {
-        let server_db = TmpDb::init().await;
+    #[apply(sql_dbs)]
+    async fn test_scanner_backfills_over_ranges_endpoints_only<Db: TestSqlDb>(
+        _db: PhantomData<Db>,
+    ) {
+        let server_db = Db::init().await;
         let server = data_source(&server_db, &NoFetching).await;
 
-        let (leaves, common) = seed_chain(&server, 20).await;
+        let (leaves, common) = seed_chain::<Db, _>(&server, 20).await;
 
         let (port, _server_task) = test_fixtures::serve(test_fixtures::app(
             test_fixtures::ranges_routes(std::sync::Arc::new(server)),
         ))
         .await;
 
-        let client_db = TmpDb::init().await;
+        let client_db = Db::init().await;
         let provider = Provider::new(trusted_provider(port));
-        let client = client_db
-            .config()
-            .builder::<MockTypes, _>(provider)
-            .await
-            .unwrap()
+        let client = FetchingDataSource::builder(client_db.storage().await.unwrap(), provider)
             .with_proactive_interval(Duration::from_secs(1))
             .with_sync_status_ttl(Duration::from_secs(1))
             .with_max_retry_interval(Duration::from_secs(1))
@@ -2303,23 +2586,19 @@ mod test {
     /// VID-before-blocks store order is not pinned by this test; it only avoids redundant fetch
     /// attempts, since a VID scan that races the writes still converges through the passive
     /// per-height waits.
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_block_ranges_backfill_vid() {
-        let server_db = TmpDb::init().await;
+    #[apply(sql_dbs)]
+    async fn test_block_ranges_backfill_vid<Db: TestSqlDb>(_db: PhantomData<Db>) {
+        let server_db = Db::init().await;
         let server = data_source(&server_db, &NoFetching).await;
 
-        let (leaves, common) = seed_chain(&server, 20).await;
+        let (leaves, common) = seed_chain::<Db, _>(&server, 20).await;
         let (port, _server_task) = serve_availability(server).await;
 
         let provider = AnyProvider::<MockTypes>::default()
             .with_block_ranges_provider(VidPiggybackProvider(trusted_provider(port)));
 
-        let client_db = TmpDb::init().await;
-        let client = client_db
-            .config()
-            .builder::<MockTypes, _>(provider)
-            .await
-            .unwrap()
+        let client_db = Db::init().await;
+        let client = FetchingDataSource::builder(client_db.storage().await.unwrap(), provider)
             .with_proactive_interval(Duration::from_secs(1))
             .with_sync_status_ttl(Duration::from_secs(1))
             .with_max_retry_interval(Duration::from_secs(1))
@@ -2375,9 +2654,9 @@ mod test {
     // walks past it to a provider that has it. This covers both ways a provider fails to supply a
     // cert2: since a peer that responds "absent" 404s, `fetch_cert2` errors and the provider
     // returns `None`, the same outer-`None` a transport failure (`fail()`) produces here.
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_cert2_fetch_walks_past_failing_peers() {
-        let server_db = TmpDb::init().await;
+    #[apply(sql_dbs)]
+    async fn test_cert2_fetch_walks_past_failing_peers<Db: TestSqlDb>(_db: PhantomData<Db>) {
+        let server_db = Db::init().await;
         let server = data_source(&server_db, &NoFetching).await;
         let leaf = v6_leaf(1).await;
         let tip = v6_leaf(2).await;
@@ -2403,7 +2682,7 @@ mod test {
             .with_cert2_provider(failing_b)
             .with_cert2_provider(TestProvider::new(trusted_provider(port)));
 
-        let client_db = TmpDb::init().await;
+        let client_db = Db::init().await;
         let client = builder(&client_db, &provider)
             .await
             .with_max_retry_interval(Duration::from_secs(1))
@@ -2441,9 +2720,9 @@ mod test {
     // When no cert2 provider can answer, the backfill resolves and
     // stores nothing. The leaf is fetched from a healthy provider so its backfill callback fires
     // while the cert2 providers all fail.
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_cert2_fetch_resolves_when_no_peer_has_it() {
-        let server_db = TmpDb::init().await;
+    #[apply(sql_dbs)]
+    async fn test_cert2_fetch_resolves_when_no_peer_has_it<Db: TestSqlDb>(_db: PhantomData<Db>) {
+        let server_db = Db::init().await;
         let server = data_source(&server_db, &NoFetching).await;
         let leaf = v6_leaf(1).await;
         let tip = v6_leaf(2).await;
@@ -2464,7 +2743,7 @@ mod test {
             .with_leaf_provider(TestProvider::new(trusted_provider(port)))
             .with_cert2_provider(failing_cert2);
 
-        let client_db = TmpDb::init().await;
+        let client_db = Db::init().await;
         let client = builder(&client_db, &provider)
             .await
             .with_max_retry_interval(Duration::from_secs(1))
@@ -2505,8 +2784,8 @@ mod test {
         );
     }
 
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_fetch_begin_failure() {
+    #[apply(sql_dbs)]
+    async fn test_fetch_begin_failure<Db: TestSqlDb>(_db: PhantomData<Db>) {
         // Create a peer that has already decided some blocks.
         let network = peer().await;
 
@@ -2517,12 +2796,8 @@ mod test {
         let provider = Provider::new(TrustedQueryServiceProvider::new(
             format!("http://localhost:{port}").parse().unwrap(),
         ));
-        let db = TmpDb::init().await;
-        let storage = FailStorage::from(
-            SqlStorage::connect(db.config(), StorageConnectionType::Query)
-                .await
-                .unwrap(),
-        );
+        let db = Db::init().await;
+        let storage = FailStorage::from(db.storage().await.unwrap());
         let data_source = FetchingDataSource::builder(storage, provider)
             .disable_proactive_fetching()
             .disable_aggregator()
@@ -2551,8 +2826,8 @@ mod test {
         assert_eq!(leaves[0], data_source.get_leaf(1).await.await);
     }
 
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_fetch_load_failure_block() {
+    #[apply(sql_dbs)]
+    async fn test_fetch_load_failure_block<Db: TestSqlDb>(_db: PhantomData<Db>) {
         // Create a peer that has already decided some blocks.
         let network = peer().await;
 
@@ -2563,12 +2838,8 @@ mod test {
         let provider = Provider::new(TrustedQueryServiceProvider::new(
             format!("http://localhost:{port}").parse().unwrap(),
         ));
-        let db = TmpDb::init().await;
-        let storage = FailStorage::from(
-            SqlStorage::connect(db.config(), StorageConnectionType::Query)
-                .await
-                .unwrap(),
-        );
+        let db = Db::init().await;
+        let storage = FailStorage::from(db.storage().await.unwrap());
         let data_source = FetchingDataSource::builder(storage, provider)
             .disable_proactive_fetching()
             .disable_aggregator()
@@ -2615,8 +2886,8 @@ mod test {
         assert_eq!(block.hash(), leaf.block_hash());
     }
 
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_fetch_load_failure_tx() {
+    #[apply(sql_dbs)]
+    async fn test_fetch_load_failure_tx<Db: TestSqlDb>(_db: PhantomData<Db>) {
         // Create a peer that has already decided a block containing the transaction.
         let tx = mock_transaction(vec![1, 2, 3]);
         let network = peer_with_transaction(tx.clone()).await;
@@ -2628,12 +2899,8 @@ mod test {
         let provider = Provider::new(TrustedQueryServiceProvider::new(
             format!("http://localhost:{port}").parse().unwrap(),
         ));
-        let db = TmpDb::init().await;
-        let storage = FailStorage::from(
-            SqlStorage::connect(db.config(), StorageConnectionType::Query)
-                .await
-                .unwrap(),
-        );
+        let db = Db::init().await;
+        let storage = FailStorage::from(db.storage().await.unwrap());
         let data_source = FetchingDataSource::builder(storage, provider)
             .disable_proactive_fetching()
             .disable_aggregator()
@@ -2700,8 +2967,8 @@ mod test {
         assert_eq!(tx, fetch.await);
     }
 
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_stream_begin_failure() {
+    #[apply(sql_dbs)]
+    async fn test_stream_begin_failure<Db: TestSqlDb>(_db: PhantomData<Db>) {
         // Create a peer that has already decided some blocks.
         let network = peer().await;
 
@@ -2712,12 +2979,8 @@ mod test {
         let provider = Provider::new(TrustedQueryServiceProvider::new(
             format!("http://localhost:{port}").parse().unwrap(),
         ));
-        let db = TmpDb::init().await;
-        let storage = FailStorage::from(
-            SqlStorage::connect(db.config(), StorageConnectionType::Query)
-                .await
-                .unwrap(),
-        );
+        let db = Db::init().await;
+        let storage = FailStorage::from(db.storage().await.unwrap());
         let data_source = FetchingDataSource::builder(storage, provider)
             .disable_proactive_fetching()
             .disable_aggregator()
@@ -2755,8 +3018,8 @@ mod test {
         );
     }
 
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_stream_load_failure() {
+    #[apply(sql_dbs)]
+    async fn test_stream_load_failure<Db: TestSqlDb>(_db: PhantomData<Db>) {
         // Create a peer that has already decided some blocks.
         let network = peer().await;
 
@@ -2767,12 +3030,8 @@ mod test {
         let provider = Provider::new(TrustedQueryServiceProvider::new(
             format!("http://localhost:{port}").parse().unwrap(),
         ));
-        let db = TmpDb::init().await;
-        let storage = FailStorage::from(
-            SqlStorage::connect(db.config(), StorageConnectionType::Query)
-                .await
-                .unwrap(),
-        );
+        let db = Db::init().await;
+        let storage = FailStorage::from(db.storage().await.unwrap());
         let data_source = FetchingDataSource::builder(storage, provider)
             .disable_proactive_fetching()
             .disable_aggregator()
@@ -2816,7 +3075,7 @@ mod test {
         Vid,
     }
 
-    async fn test_metadata_stream_begin_failure_helper(stream: MetadataType) {
+    async fn test_metadata_stream_begin_failure_helper<Db: TestSqlDb>(stream: MetadataType) {
         // Create a peer that has already decided some blocks.
         let network = peer().await;
 
@@ -2827,12 +3086,8 @@ mod test {
         let provider = Provider::new(TrustedQueryServiceProvider::new(
             format!("http://localhost:{port}").parse().unwrap(),
         ));
-        let db = TmpDb::init().await;
-        let storage = FailStorage::from(
-            SqlStorage::connect(db.config(), StorageConnectionType::Query)
-                .await
-                .unwrap(),
-        );
+        let db = Db::init().await;
+        let storage = FailStorage::from(db.storage().await.unwrap());
         let data_source = FetchingDataSource::builder(storage, provider)
             .disable_proactive_fetching()
             .disable_aggregator()
@@ -2900,14 +3155,14 @@ mod test {
         }
     }
 
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_metadata_stream_begin_failure_payload() {
-        test_metadata_stream_begin_failure_helper(MetadataType::Payload).await
+    #[apply(sql_dbs)]
+    async fn test_metadata_stream_begin_failure_payload<Db: TestSqlDb>(_db: PhantomData<Db>) {
+        test_metadata_stream_begin_failure_helper::<Db>(MetadataType::Payload).await
     }
 
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_metadata_stream_begin_failure_vid() {
-        test_metadata_stream_begin_failure_helper(MetadataType::Vid).await
+    #[apply(sql_dbs)]
+    async fn test_metadata_stream_begin_failure_vid<Db: TestSqlDb>(_db: PhantomData<Db>) {
+        test_metadata_stream_begin_failure_helper::<Db>(MetadataType::Vid).await
     }
 
     #[tokio::test(flavor = "multi_thread")]

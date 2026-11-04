@@ -300,7 +300,11 @@ impl Client for QueryServiceClient {
         // A peer that lacks the cert2 responds 404. We surface that as an error rather than
         // `Ok(None)` so `FallbackClient` keeps trying other peers instead of stopping at the first
         // one that lacks it; it resolves absent only once every peer has 404'd.
-        self.fetch::<Certificate2<SeqTypes>>(&format!("/availability/cert2/{height}"))
+        //
+        // Catchup reads only the peer's storage. `/availability/cert2` would start a fetch on a
+        // peer that lacks the cert2, and query nodes peered at each other then keep re-triggering
+        // one another's fetches for heights that never had a cert2.
+        self.fetch::<Certificate2<SeqTypes>>(&format!("/catchup/{height}/cert2"))
             .await
             .map(Some)
     }
@@ -533,14 +537,14 @@ impl<T> FallbackClient<T> {
 
 #[cfg(test)]
 mod test {
-    use std::time::Duration;
+    use std::{marker::PhantomData, time::Duration};
 
     use committable::Committable;
     use espresso_node::{
         api::{
             Options,
             data_source::testing::TestableSequencerDataSource,
-            sql::postgres::DataSource,
+            sql,
             test_helpers::{TestNetwork, TestNetworkConfigBuilder},
         },
         testing::{TestConfigBuilder, wait_for_decide_on_handle},
@@ -553,6 +557,7 @@ mod test {
     };
     use pretty_assertions::assert_eq;
     use rand::RngCore;
+    use rstest_reuse::apply;
     use test_utils;
     use tokio::time::sleep;
 
@@ -561,6 +566,14 @@ mod test {
         consensus::leaf::{FinalityProof, LeafProofHint},
         testing::AlwaysTrueQuorum,
     };
+
+    #[rstest_reuse::template]
+    #[rstest::rstest]
+    #[case::postgres(PhantomData::<sql::postgres::DataSource>)]
+    #[case::sqlite(PhantomData::<sql::sqlite::DataSource>)]
+    #[tokio::test]
+    #[test_log::test]
+    fn sql_data_sources<D: TestableSequencerDataSource>(#[case] _d: PhantomData<D>) {}
 
     fn client(url: Url) -> impl Client {
         // Run all tests with a fallback client where the first client is an invalid URL, to stress
@@ -572,20 +585,18 @@ mod test {
         .unwrap()
     }
 
-    #[tokio::test]
-    #[test_log::test]
-    async fn test_block_height() {
+    #[apply(sql_data_sources)]
+    async fn test_block_height<D: TestableSequencerDataSource>(_d: PhantomData<D>) {
         let port =
             test_utils::reserve_tcp_port().expect("OS should have ephemeral ports available");
         let url: Url = format!("http://localhost:{port}").parse().unwrap();
 
         let test_config = TestConfigBuilder::default().build();
-        let storage = DataSource::create_storage().await;
-        let persistence =
-            <DataSource as TestableSequencerDataSource>::persistence_options(&storage);
+        let storage = D::create_storage().await;
+        let persistence = <D as TestableSequencerDataSource>::persistence_options(&storage);
 
         let config = TestNetworkConfigBuilder::<1, _, _>::with_num_nodes()
-            .api_config(DataSource::options(&storage, Options::with_port(port)))
+            .api_config(D::options(&storage, Options::with_port(port)))
             .persistences([persistence])
             .network_config(test_config)
             .build();
@@ -608,20 +619,18 @@ mod test {
         }
     }
 
-    #[tokio::test]
-    #[test_log::test]
-    async fn test_leaf_proof() {
+    #[apply(sql_data_sources)]
+    async fn test_leaf_proof<D: TestableSequencerDataSource>(_d: PhantomData<D>) {
         let port =
             test_utils::reserve_tcp_port().expect("OS should have ephemeral ports available");
         let url: Url = format!("http://localhost:{port}").parse().unwrap();
 
         let test_config = TestConfigBuilder::default().build();
-        let storage = DataSource::create_storage().await;
-        let persistence =
-            <DataSource as TestableSequencerDataSource>::persistence_options(&storage);
+        let storage = D::create_storage().await;
+        let persistence = <D as TestableSequencerDataSource>::persistence_options(&storage);
 
         let config = TestNetworkConfigBuilder::<1, _, _>::with_num_nodes()
-            .api_config(DataSource::options(&storage, Options::with_port(port)))
+            .api_config(D::options(&storage, Options::with_port(port)))
             .persistences([persistence])
             .network_config(test_config)
             .build();
@@ -688,20 +697,18 @@ mod test {
         assert_eq!(client.get_leaves_in_range(1, 3).await.unwrap(), leaves);
     }
 
-    #[tokio::test]
-    #[test_log::test]
-    async fn test_header_proof() {
+    #[apply(sql_data_sources)]
+    async fn test_header_proof<D: TestableSequencerDataSource>(_d: PhantomData<D>) {
         let port =
             test_utils::reserve_tcp_port().expect("OS should have ephemeral ports available");
         let url: Url = format!("http://localhost:{port}").parse().unwrap();
 
         let test_config = TestConfigBuilder::default().build();
-        let storage = DataSource::create_storage().await;
-        let persistence =
-            <DataSource as TestableSequencerDataSource>::persistence_options(&storage);
+        let storage = D::create_storage().await;
+        let persistence = <D as TestableSequencerDataSource>::persistence_options(&storage);
 
         let config = TestNetworkConfigBuilder::<1, _, _>::with_num_nodes()
-            .api_config(DataSource::options(&storage, Options::with_port(port)))
+            .api_config(D::options(&storage, Options::with_port(port)))
             .persistences([persistence])
             .network_config(test_config)
             .build();
@@ -762,20 +769,18 @@ mod test {
         );
     }
 
-    #[tokio::test]
-    #[test_log::test]
-    async fn test_payload_proof() {
+    #[apply(sql_data_sources)]
+    async fn test_payload_proof<D: TestableSequencerDataSource>(_d: PhantomData<D>) {
         let port =
             test_utils::reserve_tcp_port().expect("OS should have ephemeral ports available");
         let url: Url = format!("http://localhost:{port}").parse().unwrap();
 
         let test_config = TestConfigBuilder::default().build();
-        let storage = DataSource::create_storage().await;
-        let persistence =
-            <DataSource as TestableSequencerDataSource>::persistence_options(&storage);
+        let storage = D::create_storage().await;
+        let persistence = <D as TestableSequencerDataSource>::persistence_options(&storage);
 
         let config = TestNetworkConfigBuilder::<1, _, _>::with_num_nodes()
-            .api_config(DataSource::options(&storage, Options::with_port(port)))
+            .api_config(D::options(&storage, Options::with_port(port)))
             .persistences([persistence])
             .network_config(test_config)
             .build();
@@ -814,20 +819,18 @@ mod test {
         }
     }
 
-    #[tokio::test]
-    #[test_log::test]
-    async fn test_namespace_proof() {
+    #[apply(sql_data_sources)]
+    async fn test_namespace_proof<D: TestableSequencerDataSource>(_d: PhantomData<D>) {
         let port =
             test_utils::reserve_tcp_port().expect("OS should have ephemeral ports available");
         let url: Url = format!("http://localhost:{port}").parse().unwrap();
 
         let test_config = TestConfigBuilder::default().build();
-        let storage = DataSource::create_storage().await;
-        let persistence =
-            <DataSource as TestableSequencerDataSource>::persistence_options(&storage);
+        let storage = D::create_storage().await;
+        let persistence = <D as TestableSequencerDataSource>::persistence_options(&storage);
 
         let config = TestNetworkConfigBuilder::<1, _, _>::with_num_nodes()
-            .api_config(DataSource::options(&storage, Options::with_port(port)))
+            .api_config(D::options(&storage, Options::with_port(port)))
             .persistences([persistence])
             .network_config(test_config)
             .build();

@@ -441,10 +441,7 @@ where
         // Client requests are served before the outbox reaches the builder, so it must know the
         // view before that first `ViewChanged`.
         self.block_builder.start_at(next_view);
-        let epoch = self
-            .consensus
-            .current_epoch()
-            .unwrap_or(EpochNumber::genesis());
+        let epoch = self.consensus.current_epoch();
 
         if self.consensus.last_decided_leaf().view_number() == ViewNumber::genesis() {
             // Genesis DA never flows through the normal block-builder path.
@@ -512,10 +509,7 @@ where
                 },
                 () = &mut self.timer => {
                     let view = self.timer.view();
-                    let epoch = self
-                        .consensus
-                        .current_epoch()
-                        .unwrap_or(EpochNumber::genesis());
+                    let epoch = self.consensus.current_epoch();
                     // Re-arm for the same view: a node stuck exactly at TC2
                     // threshold can lose its only timeout-vote broadcast, so
                     // the vote is re-sent every timeout period until the
@@ -689,9 +683,11 @@ where
                             epoch,
                         );
                         for (_, leader) in holders {
-                            self.unicast_block(
+                            self.unicast_in(
+                                self.slot_for(block.view),
                                 &leader,
-                                BlockMessage::DedupManifest(manifest.clone()),
+                                MessageType::Block(BlockMessage::DedupManifest(manifest.clone())),
+                                "leader unicast",
                             )?;
                         }
                         // Held only now, as an error above drops the block: consensus asks to
@@ -768,8 +764,11 @@ where
             .retain(out.view, out.payload_commitment, &out.payload);
         self.payload_txn_bytes
             .insert(out.view, out.payload.txn_bytes());
-        self.block_builder
-            .on_block_reconstructed(out.view, out.tx_commitments);
+        self.block_builder.on_block_reconstructed(
+            out.view,
+            out.payload_commitment,
+            out.tx_commitments,
+        );
         self.storage.append_da(
             out.view,
             out.epoch,
@@ -857,6 +856,14 @@ where
                     "leaves decided"
                 );
                 self.on_decide_metrics(&leaves);
+                self.block_builder
+                    .on_blocks_decided(leaves.iter().filter_map(|leaf| {
+                        // New-protocol headers always carry a V2 commitment.
+                        match leaf.block_header().payload_commitment() {
+                            VidCommitment::V2(commit) => Some((leaf.view_number(), commit)),
+                            VidCommitment::V0(_) | VidCommitment::V1(_) => None,
+                        }
+                    }));
                 // `leaves` is ordered newest first.
                 //  Garbage collect the data for views < decided view
                 if let Some(newest) = leaves.first() {
@@ -896,10 +903,12 @@ where
                     &self.consensus,
                     &self.membership_coordinator,
                 ) {
-                    self.network
-                        .sender()
-                        .unicast(self.consensus.current_view(), &peer, &message)
-                        .map_err(|e| CoordinatorError::from(e).context("payload request"))?;
+                    self.unicast_in(
+                        self.slot_for(view),
+                        &peer,
+                        message.message_type,
+                        "payload request",
+                    )?;
                 }
             },
             ConsensusOutput::RequestBlockAndHeader(request) => {
@@ -911,9 +920,9 @@ where
                 );
                 self.block_builder.request_block(request);
             },
-            ConsensusOutput::RecordAction(view, epoch, kind) => {
+            ConsensusOutput::RecordAction(view, kind) => {
                 debug!(%node, %view, ?kind, "record action");
-                self.storage.record_action(view, epoch, kind);
+                self.storage.record_action(view, kind);
             },
             ConsensusOutput::PersistProposal(proposal) => {
                 let view = proposal.data.view_number;
@@ -931,8 +940,9 @@ where
                         }
                         // A leader never reconstructs its own block, and a block it built
                         // but did not propose puts nothing on the chain, so this is where
-                        // its transactions count as included.
-                        self.block_builder.on_block_reconstructed(view, da.hashes);
+                        // it records the block's transactions.
+                        self.block_builder
+                            .on_block_reconstructed(view, commit, da.hashes);
                         self.storage.append_da(
                             view,
                             da.epoch,
@@ -983,18 +993,11 @@ where
                         .previous_proposal_to_proposal_time
                         .add_point(received_at.elapsed().as_millis() as f64);
                 }
-                let message = Message {
-                    sender: self.public_key.clone(),
-                    message_type: MessageType::Consensus(ConsensusMessage::Proposal(
-                        ProposalMessage::validated(proposal.clone()),
-                    )),
-                };
-                if let Err(err) = self
-                    .network
-                    .sender()
-                    .broadcast(self.consensus.current_view(), &message)
-                {
-                    let err = CoordinatorError::from(err).context("proposal broadcast");
+                if let Err(err) = self.broadcast_in(
+                    self.slot_for(view),
+                    ConsensusMessage::Proposal(ProposalMessage::validated(proposal.clone())),
+                    "proposal broadcast",
+                ) {
                     if err.severity == Severity::Critical {
                         return Err(err);
                     } else {
@@ -1023,7 +1026,7 @@ where
                         })
                     },
                 };
-                self.broadcast(message, "broadcast timeout vote")?
+                self.broadcast_in(self.slot_for(view), message, "broadcast timeout vote")?
             },
             ConsensusOutput::SendTimeoutCertificate(tc, view, epoch) => {
                 debug!(
@@ -1036,14 +1039,12 @@ where
                     TimeoutEvidence::V3(cert) => ConsensusMessage::TimeoutCertificate3(cert),
                 };
                 if let Some(leader) = self.leader(view, epoch) {
-                    let message = Message {
-                        sender: self.public_key.clone(),
-                        message_type: MessageType::Consensus(consensus_message),
-                    };
-                    self.network
-                        .sender()
-                        .unicast(self.consensus.current_view(), &leader, &message)
-                        .map_err(|e| CoordinatorError::from(e).context("timeout certificate"))?;
+                    self.unicast_in(
+                        self.slot_for(view),
+                        &leader,
+                        consensus_message,
+                        "timeout certificate",
+                    )?;
                 }
             },
             ConsensusOutput::SendVote1(vote1) => {
@@ -1059,11 +1060,17 @@ where
                 {
                     self.participation.leader_proposed(leader, epoch);
                 }
-                self.broadcast(ConsensusMessage::Vote1(vote1), "broadcast vote1")?
+                self.broadcast_in(
+                    self.slot_for(view),
+                    ConsensusMessage::Vote1(vote1),
+                    "broadcast vote1",
+                )?
             },
             ConsensusOutput::BroadcastVidShare(share) => {
-                debug!(%node, view = %share.view_number(), "send vid share");
-                self.broadcast(
+                let view = share.view_number();
+                debug!(%node, %view, "send vid share");
+                self.broadcast_in(
+                    self.slot_for(view),
                     ConsensusMessage::VidShareBroadcast(share),
                     "broadcast vid share",
                 )?
@@ -1072,16 +1079,21 @@ where
                 let view = vote2.view_number();
                 debug!(%node, %view, "send vote2");
                 self.record_voted_view(view);
-                self.broadcast(ConsensusMessage::Vote2(vote2), "broadcast vote2")?
+                self.broadcast_in(
+                    self.slot_for(view),
+                    ConsensusMessage::Vote2(vote2),
+                    "broadcast vote2",
+                )?
             },
             ConsensusOutput::PersistHighQc(high_qc) => {
                 debug!(%node, view = %high_qc.view_number(), "persist high qc");
                 self.storage.append_high_qc2(high_qc);
             },
             ConsensusOutput::SendEpochChange(epoch_change) => {
+                let view = epoch_change.cert1.view_number();
                 info!(
                     %node,
-                    view = %epoch_change.cert1.view_number(),
+                    %view,
                     epoch = ?epoch_change.cert1.epoch().map(|e| *e),
                     "send epoch change"
                 );
@@ -1090,31 +1102,36 @@ where
                 // EpochChangeMessage; for members this is a no-op.
                 self.state_manager
                     .seed_from_header(epoch_change.proposal.clone());
-                self.broadcast(
+                self.broadcast_in(
+                    self.slot_for(view),
                     ConsensusMessage::EpochChange(epoch_change),
                     "broadcast epoch change",
                 )?
             },
             ConsensusOutput::SendCertificate1(cert1) => {
+                let view = cert1.view_number();
                 debug!(
                     %node,
-                    view = %cert1.view_number(),
+                    %view,
                     epoch = ?cert1.epoch().map(|e| *e),
                     "send certificate1"
                 );
-                self.broadcast(
+                self.broadcast_in(
+                    self.slot_for(view),
                     ConsensusMessage::Certificate1(cert1, self.public_key.clone()),
                     "broadcast certificate1",
                 )?
             },
             ConsensusOutput::SendCertificate2(cert2) => {
+                let view = cert2.view_number();
                 debug!(
                     %node,
-                    view = %cert2.view_number(),
+                    %view,
                     epoch = ?cert2.epoch().map(|e| *e),
                     "send certificate2"
                 );
-                self.broadcast(
+                self.broadcast_in(
+                    self.slot_for(view),
                     ConsensusMessage::Certificate2(cert2, self.public_key.clone()),
                     "broadcast certificate2",
                 )?
@@ -1156,7 +1173,8 @@ where
                 if self.leader(view, epoch).as_ref() == Some(&self.public_key)
                     && let Some(upgrade_proposal) = self.upgrade_protocol.maybe_propose(view, epoch)
                 {
-                    self.broadcast(
+                    self.broadcast_in(
+                        self.slot_for(view),
                         ConsensusMessage::UpgradeProposal(upgrade_proposal),
                         "broadcast upgrade proposal",
                     )?;
@@ -1165,10 +1183,7 @@ where
             ConsensusOutput::ViewTimedOut(view) => {
                 debug!(%node, %view, "view timed out");
                 self.server.view_timed_out(view);
-                let epoch = self
-                    .consensus
-                    .current_epoch()
-                    .unwrap_or_else(EpochNumber::genesis);
+                let epoch = self.consensus.current_epoch();
                 self.gc(epoch, GcScope::Timeout(view))?;
             },
             ConsensusOutput::ProposalCertified(proposal) => {
@@ -1247,6 +1262,11 @@ where
     #[cfg(test)]
     pub(crate) fn network(&self) -> &Cliquenet<T> {
         &self.network
+    }
+
+    #[cfg(test)]
+    pub(crate) fn network_mut(&mut self) -> &mut Cliquenet<T> {
+        &mut self.network
     }
 
     /// Refresh the network's peer window for `epoch`.
@@ -1566,10 +1586,7 @@ where
                         return None;
                     }
                     let current_view = self.consensus.current_view();
-                    let current_epoch = self
-                        .consensus
-                        .current_epoch()
-                        .unwrap_or(EpochNumber::genesis());
+                    let current_epoch = self.consensus.current_epoch();
                     let leader = self.leader(view, current_epoch);
                     if let Some(vote) = self.upgrade_protocol.maybe_vote(
                         &upgrade_proposal,
@@ -1577,9 +1594,11 @@ where
                         leader.as_ref(),
                         current_view,
                         current_epoch,
-                    ) && let Err(err) =
-                        self.broadcast(ConsensusMessage::UpgradeVote(vote), "upgrade vote")
-                    {
+                    ) && let Err(err) = self.broadcast_in(
+                        self.slot_for(view),
+                        ConsensusMessage::UpgradeVote(vote),
+                        "upgrade vote",
+                    ) {
                         warn!(%node, %err, "network error while broadcasting upgrade vote");
                     }
                     None
@@ -1652,21 +1671,17 @@ where
                     );
                     return None;
                 }
-                if let Some(proposal) = self.consensus.signed_proposal_at(view).cloned() {
-                    let response = Message {
-                        sender: self.public_key.clone(),
-                        message_type: MessageType::ProposalFetch(ProposalFetchMessage::Response(
-                            Box::new(proposal),
-                        )),
-                    };
-                    if let Err(err) = self.network.sender().unicast(
-                        self.consensus.current_view(),
+                if let Some(proposal) = self.consensus.signed_proposal_at(view).cloned()
+                    && let Err(err) = self.unicast_in(
+                        self.slot_for(view),
                         &message.sender,
-                        &response,
-                    ) {
-                        let err = CoordinatorError::from(err).context("proposal response");
-                        warn!(%node, %err, "network error while sending proposal response");
-                    }
+                        MessageType::ProposalFetch(ProposalFetchMessage::Response(Box::new(
+                            proposal,
+                        ))),
+                        "proposal response",
+                    )
+                {
+                    warn!(%node, %err, "network error while sending proposal response");
                 }
                 None
             },
@@ -1711,10 +1726,11 @@ where
                             &self.consensus,
                             &self.membership_coordinator,
                         )
-                        && let Err(err) = self.network.sender().unicast(
-                            self.consensus.current_view(),
+                        && let Err(err) = self.unicast_in(
+                            self.slot_for(view),
                             &peer,
-                            &message,
+                            message.message_type,
+                            "payload request",
                         )
                     {
                         warn!(%node, %sender, %view, %err, "failed to send payload request");
@@ -1764,34 +1780,48 @@ where
         }
     }
 
-    fn broadcast(
+    /// The slot for a message about `view`.
+    ///
+    /// A node can send a message about a later view than its own: it enters a view only after
+    /// rebuilding the parent block. Every view change drops queued messages more than one slot
+    /// below the new view, so such a message takes its own view to survive the view changes the
+    /// node still has to make. A message about an earlier view takes the current view, which is
+    /// never below that bound.
+    fn slot_for(&self, view: ViewNumber) -> ViewNumber {
+        view.max(self.consensus.current_view())
+    }
+
+    fn broadcast_in(
         &self,
-        message_type: ConsensusMessage<T, Validated>,
+        slot: ViewNumber,
+        message_type: impl Into<MessageType<T, Validated>>,
         ctx: &'static str,
     ) -> Result<(), CoordinatorError> {
         let message = Message {
             sender: self.public_key.clone(),
-            message_type: MessageType::Consensus(message_type),
+            message_type: message_type.into(),
         };
         self.network
             .sender()
-            .broadcast(self.consensus.current_view(), &message)
+            .broadcast(slot, &message)
             .map_err(|e| CoordinatorError::from(e).context(ctx))
     }
 
-    fn unicast_block(
-        &mut self,
-        leader: &T::SignatureKey,
-        msg: BlockMessage<T>,
+    fn unicast_in(
+        &self,
+        slot: ViewNumber,
+        recipient: &T::SignatureKey,
+        message_type: impl Into<MessageType<T, Validated>>,
+        ctx: &'static str,
     ) -> Result<(), CoordinatorError> {
         let message = Message {
             sender: self.public_key.clone(),
-            message_type: MessageType::Block(msg),
+            message_type: message_type.into(),
         };
         self.network
             .sender()
-            .unicast(self.consensus.current_view(), leader, &message)
-            .map_err(|e| CoordinatorError::from(e).context("leader unicast"))
+            .unicast(slot, recipient, &message)
+            .map_err(|e| CoordinatorError::from(e).context(ctx))
     }
 
     /// Sends `forward` to the leaders of the `fanout` views from its own, each leader once with
@@ -1807,8 +1837,12 @@ where
                 view,
                 transactions: forward.transactions.clone(),
             };
-            self.unicast_block(&leader, BlockMessage::Transactions(message))
-                .map_err(|e| e.context("unicast transactions"))?;
+            self.unicast_in(
+                self.slot_for(view),
+                &leader,
+                MessageType::Block(BlockMessage::Transactions(message)),
+                "unicast transactions",
+            )?;
         }
         Ok(())
     }
@@ -1909,7 +1943,7 @@ where
                 // resolves now.
                 let _ = respond.send(Ok(()));
                 if let Some(forward) = forward {
-                    self.send_transactions(forward, self.epoch())?;
+                    self.send_transactions(forward, self.consensus.current_epoch())?;
                 }
             },
             ClientRequest::UpdateLeaf { update, respond } => {
@@ -2069,14 +2103,11 @@ where
                 let err = format!("failed to sign proposal request: {err}");
                 CoordinatorError::regular(err).context("sign proposal request")
             })?;
-        let message = Message {
-            sender: self.public_key.clone(),
-            message_type: MessageType::ProposalFetch(ProposalFetchMessage::Request(request)),
-        };
-        self.network
-            .sender()
-            .broadcast(self.consensus.current_view(), &message)
-            .map_err(|err| CoordinatorError::from(err).context("broadcast proposal request"))
+        self.broadcast_in(
+            self.slot_for(view),
+            MessageType::ProposalFetch(ProposalFetchMessage::Request(request)),
+            "broadcast proposal request",
+        )
     }
 
     fn request_missing_proposal(
@@ -2199,33 +2230,21 @@ where
         v > self.consensus.current_view() + *MAX_VIEWS_AHEAD
     }
 
-    /// The epoch this node is in.
-    fn epoch(&self) -> EpochNumber {
-        self.consensus
-            .current_epoch()
-            .unwrap_or_else(EpochNumber::genesis)
-    }
-
     /// Is `epoch` close enough to the node's own to tally a vote naming it?
     fn is_vote_epoch_admissible(&self, epoch: Option<EpochNumber>) -> bool {
-        epoch.is_none_or(|e| is_epoch_admissible(e, self.epoch()))
+        let current = self.consensus.current_epoch();
+        epoch.is_none_or(|e| is_epoch_admissible(e, current))
     }
 
     /// We ignore messages more than `EPOCH_CHANGE_LOOKAHEAD` ahead of ours.
     fn is_epoch_too_far_ahead(&self, epoch: Option<EpochNumber>) -> bool {
-        let current = self
-            .consensus
-            .current_epoch()
-            .unwrap_or(EpochNumber::genesis());
+        let current = self.consensus.current_epoch();
         epoch.is_some_and(|e| e > current + EPOCH_CHANGE_LOOKAHEAD)
     }
 
     /// Is `epoch` close enough to the node's own to buffer a fragment naming it?
     fn is_fragment_epoch_admissible(&self, epoch: EpochNumber) -> bool {
-        let current = self
-            .consensus
-            .current_epoch()
-            .unwrap_or(EpochNumber::genesis());
+        let current = self.consensus.current_epoch();
         is_epoch_admissible(epoch, current)
     }
 
@@ -2298,7 +2317,7 @@ where
         // re-signs and re-sends its timeout vote on every re-arm of the timer,
         // so the new tally fills from the next round.
         if let TimeoutVote::V2(vote) = &mut vote {
-            vote.data.epoch = Some(self.epoch());
+            vote.data.epoch = Some(self.consensus.current_epoch());
         }
 
         if !self.is_vote_epoch_admissible(vote.epoch()) {
@@ -2384,18 +2403,11 @@ where
         let Some(evidence) = self.catchup_evidence() else {
             return;
         };
-        if evidence.view_number() < stale_view {
+        let view = evidence.view_number();
+        if view < stale_view {
             return;
         }
-        let message = Message {
-            sender: self.public_key.clone(),
-            message_type: MessageType::Consensus(evidence),
-        };
-        if let Err(err) =
-            self.network
-                .sender()
-                .unicast(self.consensus.current_view(), peer, &message)
-        {
+        if let Err(err) = self.unicast_in(self.slot_for(view), peer, evidence, "catchup evidence") {
             warn!(%stale_view, %err, "failed to send catchup evidence");
         }
     }

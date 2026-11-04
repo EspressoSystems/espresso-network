@@ -31,7 +31,9 @@ jobs:
       - name: Install Nix
         uses: cachix/install-nix-action@v31
 
-      - uses: taiki-e/install-action@just
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: just
 
       - uses: actions/checkout@v7
 

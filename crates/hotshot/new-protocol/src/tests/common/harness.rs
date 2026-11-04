@@ -5,6 +5,7 @@ use hotshot_example_types::{
     state_types::{TestInstanceState, TestValidatedState},
 };
 use hotshot_types::{
+    PeerConnectInfo,
     data::{EpochNumber, Leaf2, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
     message::UpgradeLock,
@@ -27,7 +28,7 @@ use crate::{
     helpers::test_upgrade_lock,
     logging::KeyPrefix,
     message::{Certificate1, Message},
-    network::Cliquenet,
+    network::{Cliquenet, Role},
     outbox::Outbox,
     proposal::{ProposalValidator, VidShareValidator},
     state::StateManager,
@@ -49,6 +50,7 @@ const PROCESS_DEADLINE: Duration = Duration::from_secs(60);
 /// helpers to send events and collect results.
 pub(crate) struct TestHarness {
     coordinator: MockCoordinator,
+    connect_info: PeerConnectInfo,
     membership: EpochMembershipCoordinator<TestTypes>,
     outputs: Outbox<ConsensusOutput<TestTypes>>,
     /// Records this run when `NP_TRACE_DIR` is set; inert otherwise
@@ -151,6 +153,10 @@ impl TestHarness {
         let port =
             test_utils::reserve_tcp_port().expect("OS should have ephemeral ports available");
         let addr = hotshot_types::addr::NetAddr::Inet(std::net::Ipv4Addr::LOCALHOST.into(), port);
+        let connect_info = PeerConnectInfo {
+            x25519_key: keypair.public_key(),
+            p2p_addr: addr.clone(),
+        };
         let network = Cliquenet::create(
             "test-harness",
             public_key,
@@ -211,6 +217,7 @@ impl TestHarness {
             .build();
         Self {
             coordinator,
+            connect_info,
             membership: membership_handle,
             outputs: Outbox::new(),
             trace: trace::Recorder::for_current_test(),
@@ -384,6 +391,26 @@ impl TestHarness {
         );
         self.trace.placed(view, epoch);
         self.coordinator.consensus_mut().set_view(view, epoch);
+    }
+
+    /// This node's key and how a peer reaches it over the network.
+    pub fn connect_info(&self) -> (BLSPubKey, PeerConnectInfo) {
+        (
+            *self.coordinator.consensus().public_key(),
+            self.connect_info.clone(),
+        )
+    }
+
+    /// Add a peer that receives this node's broadcasts. The harness starts
+    /// with none, so by default nothing it sends leaves the node.
+    pub fn add_peer(&mut self, key: BLSPubKey, info: PeerConnectInfo) {
+        self.coordinator
+            .network_mut()
+            .add_peers(
+                Role::Active,
+                vec![(key, (info.x25519_key.into(), info.p2p_addr))],
+            )
+            .expect("network should accept the peer");
     }
 
     /// The membership this harness's coordinator resolves epochs through.

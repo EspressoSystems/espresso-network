@@ -1,11 +1,12 @@
 //! V1 state-signature API.
 
 use async_trait::async_trait;
-use serde::Serialize;
+use hotshot_types::light_client::LCV3StateSignatureRequestBody;
 
 #[async_trait]
 pub trait StateSignatureApi {
-    type Signature: Serialize + Send + Sync + 'static;
-
-    async fn get_state_signature(&self, height: u64) -> anyhow::Result<Self::Signature>;
+    async fn get_state_signature(
+        &self,
+        height: u64,
+    ) -> anyhow::Result<LCV3StateSignatureRequestBody>;
 }
