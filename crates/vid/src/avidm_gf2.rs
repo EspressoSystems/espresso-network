@@ -32,12 +32,14 @@ type MerkleCommit = <MerkleTree as MerkleTreeScheme>::Commitment;
 /// Dummy struct for AVID-M scheme over GF2
 pub struct AvidmGf2Scheme;
 
+/// `reed_solomon_simd` encodes at most this many shards.
+const MAX_TOTAL_WEIGHTS: usize = 1 << 16;
+
 /// VID Parameters
 ///
-/// [`Self::new`] requires `0 < recovery_threshold <= total_weights`. A param
-/// built from its fields or deserialized is not checked, and the scheme
-/// functions return [`VidError::InvalidParam`] when the threshold exceeds the
-/// total weight.
+/// Valid when `0 < recovery_threshold <= total_weights <= 2^16`. The fields
+/// are public and deserialized unchecked, so [`Self::new`] and every scheme
+/// entry point return [`VidError::InvalidParam`] for an invalid param.
 #[derive(Clone, Debug, Hash, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AvidmGf2Param {
     /// Total weights of all storage nodes
@@ -49,13 +51,22 @@ pub struct AvidmGf2Param {
 impl AvidmGf2Param {
     /// Construct a new [`AvidmGf2Param`].
     pub fn new(recovery_threshold: usize, total_weights: usize) -> VidResult<Self> {
-        if recovery_threshold == 0 || total_weights < recovery_threshold {
-            return Err(VidError::InvalidParam);
-        }
-        Ok(Self {
+        let param = Self {
             total_weights,
             recovery_threshold,
-        })
+        };
+        param.validate()?;
+        Ok(param)
+    }
+
+    fn validate(&self) -> VidResult<()> {
+        if self.recovery_threshold == 0
+            || self.total_weights < self.recovery_threshold
+            || self.total_weights > MAX_TOTAL_WEIGHTS
+        {
+            return Err(VidError::InvalidParam);
+        }
+        Ok(())
     }
 }
 
@@ -243,10 +254,7 @@ impl AvidmGf2Scheme {
         param: &AvidmGf2Param,
         original: &[Cow<'_, [u8]>],
     ) -> VidResult<Vec<Vec<u8>>> {
-        let recovery_count = param
-            .total_weights
-            .checked_sub(param.recovery_threshold)
-            .ok_or(VidError::InvalidParam)?;
+        let recovery_count = param.total_weights - param.recovery_threshold;
         if recovery_count == 0 {
             return Ok(vec![]);
         }
@@ -267,11 +275,9 @@ impl AvidmGf2Scheme {
 
     /// Merkle tree over all shards of `payload`, hashing recovery shards in place in the encoder.
     fn raw_commit(param: &AvidmGf2Param, payload: &[u8]) -> VidResult<MerkleTree> {
+        param.validate()?;
         let original_count = param.recovery_threshold;
-        let recovery_count = param
-            .total_weights
-            .checked_sub(original_count)
-            .ok_or(VidError::InvalidParam)?;
+        let recovery_count = param.total_weights - original_count;
         let shard_bytes = Self::payload_shard_bytes(param, payload.len())?;
         let original = Self::chunk_and_pad(payload, shard_bytes, original_count)?;
         if recovery_count == 0 {
@@ -294,6 +300,7 @@ impl AvidmGf2Scheme {
         param: &AvidmGf2Param,
         payload: &[u8],
     ) -> VidResult<(MerkleTree, Vec<Vec<u8>>)> {
+        param.validate()?;
         let shard_bytes = Self::payload_shard_bytes(param, payload.len())?;
         let original = Self::chunk_and_pad(payload, shard_bytes, param.recovery_threshold)?;
         let recovery = Self::encode_recovery(param, &original)?;
@@ -500,11 +507,9 @@ impl VidScheme for AvidmGf2Scheme {
         _commit: &Self::Commit,
         shares: &[Self::Share],
     ) -> VidResult<Vec<u8>> {
+        param.validate()?;
         let original_count = param.recovery_threshold;
-        let recovery_count = param
-            .total_weights
-            .checked_sub(param.recovery_threshold)
-            .ok_or(VidError::InvalidParam)?;
+        let recovery_count = param.total_weights - param.recovery_threshold;
         // Find the first non-empty share
         let Some(first_share) = shares.iter().find(|s| !s.payload.is_empty()) else {
             return Err(VidError::InsufficientShares);
@@ -812,26 +817,44 @@ pub mod tests {
     }
 
     #[test]
-    fn param_with_threshold_above_total_weight_is_rejected() {
+    fn invalid_param_is_rejected() {
         let param = AvidmGf2Scheme::setup(3, 9).unwrap();
         let payload = [7u8; 100];
         let (commit, shares) = AvidmGf2Scheme::disperse(&param, &[3, 3, 3], &payload).unwrap();
-        let forged = AvidmGf2Param {
-            total_weights: 2,
-            recovery_threshold: 3,
-        };
 
-        assert!(matches!(
-            AvidmGf2Scheme::recover(&forged, &commit, &shares),
-            Err(VidError::InvalidParam)
-        ));
-        assert!(matches!(
-            AvidmGf2Scheme::commit(&forged, &payload),
-            Err(VidError::InvalidParam)
-        ));
-        assert!(matches!(
-            AvidmGf2Scheme::disperse(&forged, &[2], &payload),
-            Err(VidError::InvalidParam)
-        ));
+        for (recovery_threshold, total_weights) in [
+            (0, 4),
+            (3, 2),
+            (1 << 40, 2),
+            (usize::MAX / 4, usize::MAX / 4),
+        ] {
+            let forged = AvidmGf2Param {
+                total_weights,
+                recovery_threshold,
+            };
+            assert!(
+                matches!(
+                    AvidmGf2Scheme::recover(&forged, &commit, &shares),
+                    Err(VidError::InvalidParam)
+                ),
+                "recover {forged:?}"
+            );
+            assert!(
+                matches!(
+                    AvidmGf2Scheme::commit(&forged, &payload),
+                    Err(VidError::InvalidParam)
+                ),
+                "commit {forged:?}"
+            );
+            if let Ok(weight) = u32::try_from(total_weights) {
+                assert!(
+                    matches!(
+                        AvidmGf2Scheme::disperse(&forged, &[weight], &payload),
+                        Err(VidError::InvalidParam)
+                    ),
+                    "disperse {forged:?}"
+                );
+            }
+        }
     }
 }
