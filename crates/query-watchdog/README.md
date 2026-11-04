@@ -44,6 +44,8 @@ Per 100-height chunk (follow from the tip, sweep over the window). Probes are HE
 - A 404 on a `leaf`, `block` or `vid_common` range is refined to the exact missing heights: GET reads the first missing
   height from the 404 message, then galloping and binary search over single heights find the end of the gap, repeated to
   the end of the range. `lc_leaf_proof` and `aggregate` count one height per missing chunk, per-epoch kinds one epoch.
+- Missing ranges are re-probed with a delay doubling from 5 s up to 600 s. A range that qualifies for alerting (last
+  failure a 404, at least 3 failed probes) is capped at 60 s, so a refilled range is noticed within a minute.
 - Gauges for the merklized state head lag and follow lag are exported.
 
 ## Log levels
@@ -136,6 +138,8 @@ Recommended alert, with a link to the missing data:
    - Query: `service:<watchdog service> @target:"query_watchdog::alert" status:error`.
    - Alert condition: count above 0 over the last 5 minutes.
    - Multi alert, grouped by `@fields.node` and `@fields.kind`.
+   - Set "On missing data" to "Show OK" (API `on_missing_data: "resolve"`) so the alert resolves once the range is
+     refilled: the retry notices within about 1 minute, and the 5 minute window then empties.
 3. Message:
    - Text:
      `{{[@fields.node].name}} {{[@fields.kind].name}} missing for {{log.attributes.[fields.oldest_age_seconds]}} s ({{log.attributes.[fields.missing]}} missing): {{log.attributes.[fields.url]}}`.

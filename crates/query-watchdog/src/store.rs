@@ -99,9 +99,29 @@ pub struct NodeStore {
 const RETRY_DELAY_MIN_SECS: i64 = 5;
 /// Cap of the doubling retry delay.
 const RETRY_DELAY_MAX_SECS: i64 = 600;
+/// Cap of the retry delay of a row that qualifies for alerting, so a refilled range is re-checked
+/// within a minute.
+const ALERT_RETRY_DELAY_MAX_SECS: i64 = 60;
+/// Consecutive failed probes of a missing range before it is alerted.
+pub const ALERT_MIN_FAILED_PROBES: u32 = 3;
 
 /// `last_status` of a row refined from a 404 that named a height; the only status that alerts.
 const STATUS_NOT_FOUND: &str = "404";
+
+/// The delay cap of a row with `status` after `failed_probes` failed probes. `RETRY_CAP_SQL` is
+/// the same rule for `upsert_failure`.
+fn retry_delay_cap_secs(status: &str, failed_probes: i64) -> i64 {
+    if status == STATUS_NOT_FOUND && failed_probes >= i64::from(ALERT_MIN_FAILED_PROBES) {
+        ALERT_RETRY_DELAY_MAX_SECS
+    } else {
+        RETRY_DELAY_MAX_SECS
+    }
+}
+
+/// `retry_delay_cap_secs` over an upsert's old row, with binds ?7 (`RETRY_DELAY_MAX_SECS`), ?8 (the
+/// new status), ?9 (`STATUS_NOT_FOUND`), ?10 (`ALERT_MIN_FAILED_PROBES`) and ?11
+/// (`ALERT_RETRY_DELAY_MAX_SECS`).
+const RETRY_CAP_SQL: &str = "CASE WHEN ?8 = ?9 AND failed_probes + 1 >= ?10 THEN ?11 ELSE ?7 END";
 
 /// Selects the rows of a kind that overlap a range.
 const SELECT_OVERLAPPING: &str = "SELECT range_start, range_end, first_missing_at, \
@@ -157,12 +177,17 @@ fn merge_rows(
                 .iter()
                 .filter(|row| row.range_start < range.end && row.range_end > range.start)
                 .collect();
+            let failed_probes = overlapping
+                .iter()
+                .map(|row| row.failed_probes)
+                .max()
+                .map_or(1, |failed| failed + 1);
             let retry_delay_secs = overlapping
                 .iter()
                 .map(|row| row.retry_delay_secs)
                 .max()
                 .map_or(RETRY_DELAY_MIN_SECS, |delay| {
-                    (delay * 2).min(RETRY_DELAY_MAX_SECS)
+                    (delay * 2).min(retry_delay_cap_secs(status, failed_probes))
                 });
             MissingRow {
                 range_start: range.start,
@@ -173,11 +198,7 @@ fn merge_rows(
                     .min()
                     .unwrap_or(now),
                 retry_delay_secs,
-                failed_probes: overlapping
-                    .iter()
-                    .map(|row| row.failed_probes)
-                    .max()
-                    .map_or(1, |failed| failed + 1),
+                failed_probes,
                 next_retry_at: now + TimeDelta::seconds(retry_delay_secs),
                 last_status: (*status).to_owned(),
             }
@@ -195,13 +216,14 @@ async fn upsert_failure(
     now: DateTime<Utc>,
 ) -> anyhow::Result<()> {
     // In `DO UPDATE`, unqualified columns are the old row, so both columns see the old delay.
-    sqlx::query(
+    sqlx::query(&format!(
         "INSERT INTO missing_chunk (node, kind, range_start, range_end, first_missing_at, \
          retry_delay_secs, next_retry_at, last_status) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?5 + ?6, \
          ?8) ON CONFLICT (node, kind, range_start) DO UPDATE SET range_end = MAX(range_end, \
-         excluded.range_end), retry_delay_secs = MIN(retry_delay_secs * 2, ?7), next_retry_at = \
-         ?5 + MIN(retry_delay_secs * 2, ?7), failed_probes = failed_probes + 1, last_status = ?8",
-    )
+         excluded.range_end), retry_delay_secs = MIN(retry_delay_secs * 2, {RETRY_CAP_SQL}), \
+         next_retry_at = ?5 + MIN(retry_delay_secs * 2, {RETRY_CAP_SQL}), failed_probes = \
+         failed_probes + 1, last_status = ?8"
+    ))
     .bind(node)
     .bind(<&'static str>::from(probe.kind))
     .bind(i64::try_from(probe.range.start)?)
@@ -210,6 +232,9 @@ async fn upsert_failure(
     .bind(RETRY_DELAY_MIN_SECS)
     .bind(RETRY_DELAY_MAX_SECS)
     .bind(status)
+    .bind(STATUS_NOT_FOUND)
+    .bind(ALERT_MIN_FAILED_PROBES)
+    .bind(ALERT_RETRY_DELAY_MAX_SECS)
     .execute(conn)
     .await?;
     Ok(())
@@ -361,7 +386,8 @@ impl NodeStore {
     }
 
     /// Upsert: new row retries after `RETRY_DELAY_MIN_SECS` with one failed probe; known row keeps
-    /// `first_missing_at`, raises `range_end`, doubles the delay up to `RETRY_DELAY_MAX_SECS`,
+    /// `first_missing_at`, raises `range_end`, doubles the delay up to `RETRY_DELAY_MAX_SECS` (`ALERT_RETRY_DELAY_MAX_SECS` for a row that
+    /// qualifies for alerting),
     /// counts another failed probe. `status` is the label of the failure (`"404"`, `"500"`,
     /// `"transport"`).
     pub async fn record_missing(
@@ -838,9 +864,9 @@ mod tests {
         let due = node.due_retries(at(T0 + 5), 10).await.unwrap();
         assert_eq!(due, std::slice::from_ref(&leaf));
 
-        // The delay doubles from 5 s to the 600 s cap.
+        // The delay doubles from 5 s; a 404 row with 3 failed probes stops at 60 s.
         let mut now = T0 + 5;
-        for delay in [10, 20, 40, 80, 160, 320, 600, 600] {
+        for delay in [10, 20, 40, 60, 60, 60] {
             node.record_missing(&leaf, "404", at(now)).await.unwrap();
             let before = node.due_retries(at(now + delay - 1), 10).await.unwrap();
             assert!(!before.contains(&leaf));
@@ -907,6 +933,32 @@ mod tests {
         let other = node_store("b:2").await;
         let summary = other.missing_summary(at(T0)).await.unwrap();
         assert_eq!(summary.iter().map(|k| k.missing_count).sum::<u64>(), 0);
+    }
+
+    #[tokio::test]
+    async fn retry_delay_stops_at_a_minute_only_for_alerting_rows() {
+        let node = node_store("a:1").await;
+        let cases = [
+            (DataKind::Leaf, "404", vec![10, 20, 40, 60, 60]),
+            (
+                DataKind::Block,
+                "500",
+                vec![10, 20, 40, 80, 160, 320, 600, 600],
+            ),
+        ];
+        for (kind, status, delays) in cases {
+            let probe = probe(kind, 0..100);
+            node.record_missing(&probe, status, at(T0)).await.unwrap();
+            let mut now = T0 + 5;
+            for delay in delays {
+                node.record_missing(&probe, status, at(now)).await.unwrap();
+                let before = node.due_retries(at(now + delay - 1), 10).await.unwrap();
+                assert!(!before.contains(&probe), "{status} before {delay}");
+                let after = node.due_retries(at(now + delay), 10).await.unwrap();
+                assert!(after.contains(&probe), "{status} after {delay}");
+                now += delay;
+            }
+        }
     }
 
     #[tokio::test]

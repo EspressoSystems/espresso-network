@@ -20,7 +20,10 @@ use crate::{
     chunk::{CHUNK_LEN, DataKind, EpochConfig, Probe, next_chunk, probes},
     gaps::{Known, Presence, Unrefined, find_gaps, parse_missing_height},
     metrics::WatchdogMetrics,
-    store::{KindSummary, NodeProgress, NodeStore, Store, SweepProgress, SweepState},
+    store::{
+        ALERT_MIN_FAILED_PROBES, KindSummary, NodeProgress, NodeStore, Store, SweepProgress,
+        SweepState,
+    },
 };
 
 /// Pacing shared by all node watches.
@@ -483,8 +486,6 @@ const RETRIES_PER_STEP: u32 = 4;
 const TIP_POLL_INTERVAL: Duration = Duration::from_secs(10);
 /// Blocks below the tip within which missing data is not alerted: nodes lag the tip a little.
 const ALERT_TIP_MARGIN: u64 = 10;
-/// Consecutive failed probes of a missing range before it is alerted.
-const ALERT_MIN_FAILED_PROBES: u32 = 3;
 /// Time between summary lines of one node.
 const SUMMARY_INTERVAL: Duration = Duration::from_secs(60);
 
@@ -683,8 +684,9 @@ impl NodeWatch {
     }
 
     /// Stores a failed probe: a 404 of a range kind is refined to its exact gaps (the tail that
-    /// cannot be refined stays chunk level), another failure of a range kind is recorded without
-    /// touching the rows it overlaps, anything else is missing as a whole.
+    /// cannot be refined stays chunk level); another failure of a range kind backs off the row for
+    /// exactly that range, otherwise adds rows only for heights no row covers; anything else is
+    /// missing as a whole.
     async fn record_failure(&mut self, probe: &Probe, error: &FetchError) -> anyhow::Result<()> {
         let is_not_found = matches!(error, FetchError::Status(StatusCode::NOT_FOUND));
         if !probe.kind.is_range() {
@@ -1130,9 +1132,16 @@ mod tests {
         };
         let heads = paths(Method::HEAD);
         let chunk_path = "/v1/availability/leaf/100/110";
-        assert_eq!(heads.iter().filter(|path| *path == chunk_path).count(), 1);
         // The chunk, the gallop at 104, 105 and 107, the binary step at 106, the rest from 106.
-        assert_eq!(heads.len(), 6, "{heads:?}");
+        let expected_heads = [
+            chunk_path,
+            "/v1/availability/leaf/104/105",
+            "/v1/availability/leaf/105/106",
+            "/v1/availability/leaf/107/108",
+            "/v1/availability/leaf/106/107",
+            "/v1/availability/leaf/106/110",
+        ];
+        assert_eq!(heads, expected_heads);
         assert_eq!(paths(Method::GET), [chunk_path]);
 
         let summary = store.node(&label).missing_summary(utc_now()).await.unwrap();
