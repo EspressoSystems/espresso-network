@@ -401,6 +401,28 @@ mod tests {
     use crate::TxTableEntries;
 
     #[test]
+    fn tx_table_entries_round_trip() {
+        for entries in [
+            TxTableEntries { cur: 7, prev: None },
+            TxTableEntries {
+                cur: 7,
+                prev: Some(0),
+            },
+        ] {
+            let bytes = bincode::serialize(&entries).unwrap();
+            assert_eq!(
+                bincode::deserialize::<TxTableEntries>(&bytes).unwrap(),
+                entries
+            );
+            let json = serde_json::to_string(&entries).unwrap();
+            assert_eq!(
+                serde_json::from_str::<TxTableEntries>(&json).unwrap(),
+                entries
+            );
+        }
+    }
+
+    #[test]
     fn tx_table_entries_reject_unexpected_byte_len() {
         for len in [0, 3, 5, 12] {
             let bytes = bincode::serialize(&vec![0u8; len]).unwrap();
