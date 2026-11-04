@@ -21,10 +21,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # inclusion_proofs and vid_ns_shares are off until the arkworks update lands
         target:
-          - inclusion_proofs
           - ns_table
-          - vid_ns_shares
     steps:
       - uses: actions/checkout@v7
 
