@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"trait":["NodeImplementation","NodeType"]};
+window.SIDEBAR_ITEMS = {"trait":["NodeType"]};
