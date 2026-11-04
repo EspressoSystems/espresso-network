@@ -334,11 +334,16 @@ where
         let mut block_builder = BlockBuilder::new(
             Arc::new(initializer.instance_state().clone()),
             membership_coordinator.clone(),
-            BlockBuilderConfig {
-                empty_block_delay,
-                min_pool_fraction,
-                block_sizes,
-                ..BlockBuilderConfig::default()
+            {
+                let default = BlockBuilderConfig::default();
+                BlockBuilderConfig {
+                    empty_block_delay,
+                    min_pool_fraction,
+                    block_sizes,
+                    send_lead: send_lead().unwrap_or(default.send_lead),
+                    fanout: forward_fanout().unwrap_or(default.fanout),
+                    ..default
+                }
             },
             upgrade_lock.clone(),
         )
@@ -601,6 +606,7 @@ where
                         view,
                         crate::leader_trace::LeaderEvent::Cert1VMinus1InputDispatched
                     );
+                    self.block_builder.on_certificate1(view);
                     return Ok(ConsensusInput::Certificate1(cert1))
                 }
                 Some(cert2) = self.vote2_collector.next() => {
@@ -618,6 +624,7 @@ where
                     // certificate only forms locally, and consensus dedupes
                     // the cert1 it carries.
                     self.vote1_collector.mark_completed(cert1.view_number(), cert1.epoch());
+                    self.block_builder.on_certificate1(cert1.view_number());
                     return Ok(ConsensusInput::Certificate1(cert1))
                 }
                 Some(cert2) = self.cert_verifiers.cert2.next() => {
@@ -2548,6 +2555,22 @@ impl<T: NodeType> PendingProposalFetches<T> {
             }
         }
     }
+}
+
+/// Bench knob: views between a transaction's submission and the first leader it is sent to,
+/// from `ESPRESSO_BENCH_SEND_LEAD`; unset or unparsable keeps the builder's default.
+fn send_lead() -> Option<u64> {
+    std::env::var("ESPRESSO_BENCH_SEND_LEAD")
+        .ok()
+        .and_then(|views| views.parse().ok())
+}
+
+/// Bench knob: how many upcoming leaders each transaction is sent to, from
+/// `ESPRESSO_BENCH_FORWARD_FANOUT`; unset, unparsable or 0 keeps the builder's default.
+fn forward_fanout() -> Option<std::num::NonZeroU64> {
+    std::env::var("ESPRESSO_BENCH_FORWARD_FANOUT")
+        .ok()
+        .and_then(|leaders| leaders.parse().ok())
 }
 
 /// Bench knob: how long a node waits for the systematic VID shares before it

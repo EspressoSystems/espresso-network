@@ -187,11 +187,6 @@ pub(crate) fn transaction_hashes<T: NodeType>(
 /// Room in a forwarded message for everything but the transactions.
 const FORWARD_ENVELOPE_BYTES: u64 = 4096;
 
-/// Views between a send and the first view it targets. The next view's leader takes its block
-/// as soon as it pairs this view's proposal, before most of this view's submissions reach it,
-/// so a copy sent to it would mostly wait in its pool for a later turn.
-const SEND_LEAD: u64 = 2;
-
 pub struct BlockBuilderConfig {
     pub max_retry_bytes: u64,
     /// `max_block_size` per protocol version; a missing version inherits the previous one.
@@ -204,9 +199,14 @@ pub struct BlockBuilderConfig {
     /// for transactions before it builds.
     pub empty_block_delay: Duration,
     /// The share of a block the pool must hold for a leader to build at once. Under it the
-    /// leader waits `empty_block_delay` for forwards and builds with what arrived. 0 waits
-    /// only on an empty pool.
+    /// leader waits for forwards, until `empty_block_delay` passes or Cert1 of the previous
+    /// view forms, and builds with what arrived. 0 waits only on an empty pool.
     pub min_pool_fraction: f64,
+    /// Views between a send and the first view it targets. At 2 the next view's leader has
+    /// taken its block by the time most of this view's submissions reach it, so a copy sent
+    /// to it would mostly wait in its pool for a later turn. 1 sends to it as well, for a
+    /// leader that holds its block for the pool to fill (`min_pool_fraction`).
+    pub send_lead: u64,
     /// How many upcoming leaders each transaction is sent to. A leader holds up to
     /// `fanout + 1` blocks of transactions for its later views.
     pub fanout: NonZeroU64,
@@ -222,6 +222,7 @@ impl Default for BlockBuilderConfig {
             dedup_window_size: ttl,
             empty_block_delay: Duration::from_millis(500),
             min_pool_fraction: 0.0,
+            send_lead: 2,
             fanout: NonZeroU64::new(2).expect("2 is non-zero"),
         }
     }
@@ -341,10 +342,11 @@ impl<T: NodeType> BlockBuilder<T> {
     }
 
     /// Builds a block for `request` from the pool, or when the pool holds less than
-    /// `min_pool_fraction` of a block, waits up to `empty_block_delay` for transactions to
-    /// arrive and builds from those. Without the wait an idle network produces empty blocks
-    /// as fast as consensus can run them, flooding the coordinator's event queue, and a
-    /// leader whose forwards are a moment late proposes a near-empty block instead of them.
+    /// `min_pool_fraction` of a block, waits for transactions to arrive, up to
+    /// `empty_block_delay` or until [`Self::on_certificate1`] ends the wait, and builds from
+    /// those. Without the wait an idle network produces empty blocks as fast as consensus can
+    /// run them, flooding the coordinator's event queue, and a leader whose forwards are a
+    /// moment late proposes a near-empty block instead of them.
     pub fn request_block(&mut self, request: BlockAndHeaderRequest<T>) {
         let view = request.view;
         if let Some(deferred) = self.deferred.get_mut(&view) {
@@ -393,6 +395,16 @@ impl<T: NodeType> BlockBuilder<T> {
             .collect();
         for view in due {
             self.build_deferred(view);
+        }
+    }
+
+    /// Cert1 of `view` formed, so the leader of the view after it can propose as soon as it
+    /// has a block: a request parked for the pool to fill builds now with what arrived. An
+    /// empty pool keeps waiting, since an empty block would only pass the turn.
+    pub fn on_certificate1(&mut self, view: ViewNumber) {
+        let next = view + 1;
+        if self.deferred.contains_key(&next) && self.leader_total_bytes > 0 {
+            self.build_deferred(next);
         }
     }
 
@@ -596,7 +608,7 @@ impl<T: NodeType> BlockBuilder<T> {
         (self.retry_pending.len(), self.retry_total_bytes as usize)
     }
 
-    /// Returns the message for the upcoming leaders, addressed to the view `SEND_LEAD` ahead,
+    /// Returns the message for the upcoming leaders, addressed to the view `send_lead` ahead,
     /// which the coordinator sends on to the leaders of the `fanout` views from there.
     /// Resubmitting a queued transaction succeeds without queueing or sending it twice.
     pub fn on_submit_transaction(
@@ -614,7 +626,7 @@ impl<T: NodeType> BlockBuilder<T> {
         // Forwarding uses the first target view's block size, which an upgrade can raise.
         let max_bytes = self
             .block_size(self.current_view)
-            .max(self.block_size(self.current_view + SEND_LEAD));
+            .max(self.block_size(self.current_view + self.config.send_lead));
         let budget = forward_budget(message_limit(max_bytes));
         if size > max_bytes {
             return Err(SubmitError::TooLarge {
@@ -635,7 +647,7 @@ impl<T: NodeType> BlockBuilder<T> {
         }
 
         let valid_until = self.current_view + self.config.ttl;
-        let first_target = self.current_view + SEND_LEAD;
+        let first_target = self.current_view + self.config.send_lead;
         let sent_until = first_target + (self.config.fanout.get() - 1);
         let message = TransactionMessage {
             view: first_target,
@@ -719,13 +731,13 @@ impl<T: NodeType> BlockBuilder<T> {
             return None;
         }
         Some(TransactionMessage {
-            view: view + SEND_LEAD,
+            view: view + self.config.send_lead,
             transactions: batch,
         })
     }
 
     fn resend_batch(&mut self, view: ViewNumber) -> Vec<T::Transaction> {
-        let first_target = view + SEND_LEAD;
+        let first_target = view + self.config.send_lead;
         let max_bytes = self.block_size(first_target);
         let max_encoded = forward_budget(message_limit(max_bytes));
         let mut batch = Vec::new();

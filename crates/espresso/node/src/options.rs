@@ -408,8 +408,9 @@ pub struct Options {
     pub empty_block_delay: Duration,
 
     /// The share of a block the leader's pool must hold for it to build at once. Under it the
-    /// leader waits `--empty-block-delay` for forwarded transactions and builds with what
-    /// arrived. 0 waits only when the pool is empty.
+    /// leader waits for forwarded transactions, until `--empty-block-delay` passes or the
+    /// previous view's Cert1 forms, and builds with what arrived. 0 waits only when the pool
+    /// is empty.
     #[clap(long, env = "ESPRESSO_NODE_MIN_POOL_FRACTION", default_value = "0", value_parser = parse_fraction)]
     pub min_pool_fraction: f64,
 

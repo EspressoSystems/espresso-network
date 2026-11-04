@@ -62,6 +62,7 @@ fn small_config() -> BlockBuilderConfig {
         dedup_window_size: 3,
         empty_block_delay: Duration::from_millis(500),
         min_pool_fraction: 0.0,
+        send_lead: 2,
         fanout: NonZeroU64::MIN,
     }
 }
@@ -91,6 +92,70 @@ async fn submit_forwards_from_the_view_after_next() {
     assert!(
         b.on_submit_transaction(tx(1)).unwrap().is_none(),
         "a pending transaction is not sent again when resubmitted"
+    );
+}
+
+#[tokio::test]
+async fn submit_forwards_from_the_next_view_with_a_send_lead_of_one() {
+    let mut b = builder_with(BlockBuilderConfig {
+        send_lead: 1,
+        ..small_config()
+    });
+    b.on_view_changed(view(4));
+
+    assert_eq!(
+        b.on_submit_transaction(tx(1)).unwrap(),
+        Some(tx_msg(view(5), Vec::from([tx(1)])))
+    );
+    assert_eq!(
+        b.on_view_changed(view(7)),
+        Some(tx_msg(view(8), Vec::from([tx(1)]))),
+        "a resend targets the next view as well"
+    );
+}
+
+/// With a `min_pool_fraction` the leader holds its block for the pool to fill, and Cert1 of
+/// the previous view ends the wait: it can propose at once, so it builds with what arrived.
+#[tokio::test]
+async fn cert1_of_the_previous_view_builds_a_parked_request() {
+    let mut b = builder_with(BlockBuilderConfig {
+        min_pool_fraction: 1.0,
+        ..small_config()
+    });
+    let test_data = TestData::new(1).await;
+    b.request_block(BlockAndHeaderRequest {
+        view: view(5),
+        epoch: epoch(),
+        parent_proposal: test_data.views[0].proposal.data.clone(),
+    });
+
+    b.on_certificate1(view(4));
+    assert!(
+        tokio::time::timeout(Duration::from_millis(50), b.next())
+            .await
+            .is_err(),
+        "an empty pool keeps waiting through Cert1"
+    );
+    b.on_transactions(tx_msg(view(5), vec![tx(1), tx(2)]));
+    b.on_certificate1(view(3));
+    assert!(
+        tokio::time::timeout(Duration::from_millis(50), b.next())
+            .await
+            .is_err(),
+        "Cert1 of an earlier view leaves the request parked"
+    );
+
+    b.on_certificate1(view(4));
+    let output = tokio::time::timeout(Duration::from_millis(200), b.next())
+        .await
+        .expect("Cert1 of the previous view builds the parked request")
+        .expect("a block is building")
+        .expect("the block builds");
+    assert_eq!(output.view, view(5));
+    assert_eq!(
+        sorted(output.manifest.hashes.clone()),
+        sorted(vec![tx(1).commit(), tx(2).commit()]),
+        "the block holds what the pool had, short of a full block"
     );
 }
 
