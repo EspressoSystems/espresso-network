@@ -269,6 +269,7 @@ impl NsAvidmGf2Scheme {
         common: &NsAvidmGf2Common,
         share: &NsAvidmGf2Share,
     ) -> VidResult<crate::VerificationResult> {
+        common.param.validate()?;
         if !(common.ns_commits.len() == common.ns_lens.len()
             && common.ns_commits.len() == share.num_nss()
             && share.validate())
@@ -332,6 +333,7 @@ impl NsAvidmGf2Scheme {
         ns_index: usize,
         shares: &[NsAvidmGf2Share],
     ) -> VidResult<Vec<u8>> {
+        common.param.validate()?;
         if shares.is_empty() {
             return Err(VidError::InsufficientShares);
         }
@@ -390,7 +392,10 @@ pub struct NsDispersal {
 pub mod tests {
     use rand::{RngCore, SeedableRng, rngs::StdRng, seq::SliceRandom};
 
-    use crate::{VidError, avidm_gf2::namespaced::NsAvidmGf2Scheme};
+    use crate::{
+        VidError,
+        avidm_gf2::{AvidmGf2Param, namespaced::NsAvidmGf2Scheme},
+    };
 
     fn disperse_with_payload(
         payload: &[u8],
@@ -727,6 +732,34 @@ pub mod tests {
             NsAvidmGf2Scheme::ns_recover(&common, 1, &shares),
             Err(VidError::IndexOutOfBound)
         ));
+    }
+
+    #[test]
+    fn forged_common_param_is_rejected() {
+        let (_commit, common, shares) = setup_test_data();
+        for (recovery_threshold, total_weights) in [(0, 4), (1, 1 << 16)] {
+            let mut forged = common.clone();
+            forged.param = AvidmGf2Param {
+                total_weights,
+                recovery_threshold,
+            };
+            assert!(
+                matches!(
+                    NsAvidmGf2Scheme::verify_share_with_verified_common(&forged, &shares[0]),
+                    Err(VidError::InvalidParam)
+                ),
+                "verify_share_with_verified_common {:?}",
+                forged.param
+            );
+            assert!(
+                matches!(
+                    NsAvidmGf2Scheme::ns_recover(&forged, 0, &shares),
+                    Err(VidError::InvalidParam)
+                ),
+                "ns_recover {:?}",
+                forged.param
+            );
+        }
     }
 
     /// A caller that encodes each namespace with `ns_disperse_one` and folds the
