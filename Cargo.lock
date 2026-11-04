@@ -3084,6 +3084,7 @@ dependencies = [
  "bytes",
  "cliquenet-types",
  "criterion 0.8.2",
+ "libc",
  "parking_lot",
  "quickcheck",
  "rand 0.10.1",

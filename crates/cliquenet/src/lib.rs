@@ -10,7 +10,13 @@ mod util;
 pub mod error;
 pub mod noise;
 
-use std::{collections::BTreeMap, fmt, num::NonZeroUsize, sync::Arc, time::Duration};
+use std::{
+    collections::BTreeMap,
+    fmt,
+    num::{NonZeroU64, NonZeroUsize},
+    sync::Arc,
+    time::Duration,
+};
 
 use bon::Builder;
 pub use cliquenet_types::{
@@ -67,6 +73,13 @@ pub struct Config {
     /// Max. number of bytes per message to send or receive.
     #[builder(default = NonZeroUsize::new(1024 * 1024 * 1024).expect("1 GB > 0"))]
     max_message_size: NonZeroUsize,
+
+    /// Cap on each connection's TCP pacing rate in bytes per second (`SO_MAX_PACING_RATE`).
+    ///
+    /// Bulk sends to every peer at once can exceed the host's bandwidth allowance, and the
+    /// losses that follow take a round trip each to repair. A cap below the allowance divided
+    /// by the number of peers keeps the aggregate under it. Linux only; ignored elsewhere.
+    max_pacing_rate: Option<NonZeroU64>,
 
     /// Connect retry delays in seconds.
     #[builder(
@@ -161,6 +174,7 @@ impl fmt::Debug for Config {
             .field("keepalive_interval", &self.keep_alive_interval)
             .field("keepalive_retries", &self.keep_alive_retries)
             .field("max_accept_tasks", &self.max_accept_tasks)
+            .field("max_pacing_rate", &self.max_pacing_rate)
             .finish()
     }
 }

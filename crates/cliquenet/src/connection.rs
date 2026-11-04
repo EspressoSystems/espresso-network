@@ -244,6 +244,38 @@ fn configure_socket(conf: &Config, node: &PublicKey, addr: &SocketAddr, stream: 
     if let Err(err) = SockRef::from(stream).set_tcp_keepalive(&k) {
         warn!(name = %conf.name, %node, %addr, %err, "failed to enable tcp keepalive");
     }
+
+    if let Some(rate) = conf.max_pacing_rate
+        && let Err(err) = set_max_pacing_rate(stream, rate.get())
+    {
+        warn!(name = %conf.name, %node, %addr, %err, "failed to set the max pacing rate");
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn set_max_pacing_rate(stream: &TcpStream, bytes_per_sec: u64) -> io::Result<()> {
+    use std::os::fd::AsRawFd;
+    // SAFETY: a plain setsockopt on the stream's own descriptor with a value of the size the
+    // kernel expects for this option.
+    let rc = unsafe {
+        libc::setsockopt(
+            stream.as_raw_fd(),
+            libc::SOL_SOCKET,
+            libc::SO_MAX_PACING_RATE,
+            (&raw const bytes_per_sec).cast(),
+            size_of::<u64>() as libc::socklen_t,
+        )
+    };
+    if rc == 0 {
+        Ok(())
+    } else {
+        Err(io::Error::last_os_error())
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn set_max_pacing_rate(_stream: &TcpStream, _bytes_per_sec: u64) -> io::Result<()> {
+    Ok(())
 }
 
 fn remote_static_key(state: &TransportState) -> Option<PublicKey> {

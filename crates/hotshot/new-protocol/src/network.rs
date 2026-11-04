@@ -1,6 +1,6 @@
 use std::{
     collections::{HashMap, HashSet},
-    num::NonZeroUsize,
+    num::{NonZeroU64, NonZeroUsize},
     sync::Arc,
 };
 
@@ -87,6 +87,15 @@ impl Lane {
     }
 }
 
+/// Bench knob: the main lane's per-connection pacing cap in bytes per second, from
+/// `ESPRESSO_BENCH_CLIQUENET_MAIN_PACING_BYTES_PER_S`. Unset or 0 leaves TCP's own pacing.
+fn main_lane_pacing_cap() -> Option<NonZeroU64> {
+    std::env::var("ESPRESSO_BENCH_CLIQUENET_MAIN_PACING_BYTES_PER_S")
+        .ok()
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .and_then(NonZeroU64::new)
+}
+
 pub struct Cliquenet<T: NodeType> {
     inner: Sender<T>,
     receiver: NetworkReceiver,
@@ -169,6 +178,10 @@ impl<T: NodeType> Cliquenet<T> {
                 )
                 .noise_protocols([(1.into(), Protocol::IK_25519_AesGcm_Blake2s)])
                 .maybe_max_message_size(max_message_size)
+                .maybe_max_pacing_rate(match lane {
+                    Lane::Main => main_lane_pacing_cap(),
+                    Lane::Control => None,
+                })
                 .build()
         };
 

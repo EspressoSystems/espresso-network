@@ -11,6 +11,7 @@ serde = ["cliquenet-types/serde"]
 bon             = { workspace = true }
 bytes           = { workspace = true }
 cliquenet-types = { workspace = true }
+libc            = "0.2"
 parking_lot     = { workspace = true }
 rand            = "0.10.0"
 snow            = { workspace = true }
