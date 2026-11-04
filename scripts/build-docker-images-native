@@ -199,6 +199,16 @@ echo "Running cargo commands: $cargo_cmd_line"
 rustup_toolchain="$(docker run --rm rust rustup show active-toolchain | cut -d ' ' -f 1)"
 echo "Using rustup toolchain: $rustup_toolchain"
 
+# In a git worktree .git is a file pointing into the main repository's .git directory, which must
+# be mounted at the same absolute path for git to work in the container.
+git_common_dir="$(git rev-parse --path-format=absolute --git-common-dir)"
+git_mount=()
+git_safe_dir=/work
+if [[ "$git_common_dir" != "$(pwd)"/* ]]; then
+  git_mount=(-v "$git_common_dir:$git_common_dir")
+  git_safe_dir='*'
+fi
+
 # Build in docker container:
 #   - cargo_target_dir is set to point to the location where the hosts
 #     cargo_target_dir is mounted.
@@ -210,11 +220,12 @@ docker run \
   -e "CARGO_TARGET_DIR=/work/$cargo_target_dir" \
   -e "RUSTUP_TOOLCHAIN=$rustup_toolchain" \
   -v "$(pwd):/work" \
+  ${git_mount[@]+"${git_mount[@]}"} \
   -v "$cargo_home/registry:/usr/local/cargo/registry" \
   -v "$cargo_home/git:/usr/local/cargo/git" \
   -it rust \
   bash -c "cd /work \
-  && git config --global --add safe.directory /work \
+  && git config --global --add safe.directory '$git_safe_dir' \
   && rm -rfv \"$cargo_build_json\" \
   && $cargo_cmd_line"
 
