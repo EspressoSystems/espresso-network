@@ -30,17 +30,17 @@ cargo run -p query-watchdog -- --nodes https://query.decaf.testnet.espresso.netw
 
 ## Options
 
-| Flag                    | Env (`ESPRESSO_QUERY_WATCHDOG_`) | Default                                                                                                                    |
-| ----------------------- | -------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
-| `--nodes`               | `NODES`                          | required, comma-separated base URLs without `/v1`, path ends with `/`                                                      |
-| `--db-path`             | `DB_PATH`                        | platform data directory, `state.sqlite` (Linux: `~/.local/share/query-watchdog/state.sqlite`); an error when there is none |
-| `--port`                | `PORT`                           | 8080                                                                                                                       |
-| `--sweep-interval`      | `SWEEP_INTERVAL`                 | 24h, time from one sweep start to the next                                                                                 |
-| `--sweep-once`          | `SWEEP_ONCE`                     | off; sweep once, then only follow the tip (`--sweep-interval` is ignored; a restart does not sweep again)                  |
-| `--request-interval`    | `REQUEST_INTERVAL`               | 200ms, wait before each request of one node                                                                                |
-| `--retention-blocks`    | `RETENTION_BLOCKS`               | absent: archive, sweep `[0, tip)`; N: sweep `[tip - N, tip)`, start rounded up to a multiple of 100                        |
-| `--alert-missing-after` | `ALERT_MISSING_AFTER`            | 60s, minimum age of missing data for the alert                                                                             |
-| `--reset`               | `RESET`                          | off; deletes the stored state at startup and always logs a WARN                                                            |
+| Flag                    | Env (`ESPRESSO_QUERY_WATCHDOG_`) | Default                                                                                                                     |
+| ----------------------- | -------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| `--nodes`               | `NODES`                          | required, comma-separated base URLs without `/v1`, path ends with `/`                                                       |
+| `--db-path`             | `DB_PATH`                        | platform data directory, `state.sqlite` (Linux: `~/.local/share/query-watchdog/state.sqlite`); an error when there is none  |
+| `--port`                | `PORT`                           | 8080                                                                                                                        |
+| `--sweep-interval`      | `SWEEP_INTERVAL`                 | 1 week, time from one sweep start to the next                                                                               |
+| `--sweep-once`          | `SWEEP_ONCE`                     | off; sweep once, starting at once, then only follow the tip (`--sweep-interval` is ignored; a restart does not sweep again) |
+| `--request-interval`    | `REQUEST_INTERVAL`               | 200ms, wait before each request of one node                                                                                 |
+| `--retention-blocks`    | `RETENTION_BLOCKS`               | absent: archive, sweep `[0, tip)`; N: sweep `[tip - N, tip - 10)`, start rounded up to a multiple of 100                    |
+| `--alert-missing-after` | `ALERT_MISSING_AFTER`            | 60s, minimum age of missing data for the alert                                                                              |
+| `--reset`               | `RESET`                          | off; deletes the stored state at startup and always logs a WARN                                                             |
 
 ## Checked
 
@@ -128,7 +128,7 @@ task resumes where the old one stopped.
 - Exact gaps assume one contiguous gap per search step: holes inside a gap are counted as missing up to the first
   present height found. A failure other than 404 (500, timeout, transport), or a 404 message that does not read
   `<kind> <height> not found`, leaves the rest of the range at chunk level, an upper bound. A retry of an exact gap
-  probes its last height first and keeps the whole row while that height is missing: heights repaired at the front stay
+  probes its first and last height and keeps the whole row while both are missing: heights repaired in the middle stay
   counted, and the row keeps its age and can still alert.
 - Any non-200 counts as missing (404, 500, timeout, transport). An overloaded or unreachable node shows as missing data.
   `fetch_errors_total{status}` separates the causes.

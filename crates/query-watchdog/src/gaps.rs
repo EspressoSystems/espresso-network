@@ -47,9 +47,9 @@ pub struct GapSearch {
 
 /// Finds the gaps of `range`: first missing height by range probe, gap end by galloping then binary
 /// search over single heights, repeated from the gap end. A gap with present heights inside is
-/// reported as one gap up to the first present height found by the search. For `Known::Gap`, one
-/// probe of the last height keeps the whole range when it is still missing; a one-height range
-/// needs none.
+/// reported as one gap up to the first present height found by the search. For `Known::Gap`, probes
+/// of the first and the last height keep the whole range when both are still missing; a
+/// one-height range needs none.
 pub async fn find_gaps<P: Presence>(
     presence: &mut P,
     range: Range<u64>,
@@ -59,9 +59,9 @@ pub async fn find_gaps<P: Presence>(
         return GapSearch::exact(vec![range]);
     }
     if known == Known::Gap {
-        match presence.is_present(range.end - 1).await {
-            Ok(false) => return GapSearch::exact(vec![range]),
-            Ok(true) => {},
+        match gap_still_missing(presence, &range).await {
+            Ok(true) => return GapSearch::exact(vec![range]),
+            Ok(false) => {},
             Err(Unrefined { status }) => return GapSearch::unrefined(Vec::new(), range, status),
         }
     }
@@ -98,6 +98,15 @@ impl GapSearch {
             unrefined: Some(Tail { range, status }),
         }
     }
+}
+
+/// Whether the first and the last height of a known gap are both still missing, which keeps the
+/// whole row; a present first height is checked first, so a refilled front costs one request.
+async fn gap_still_missing<P: Presence>(
+    presence: &mut P,
+    range: &Range<u64>,
+) -> Result<bool, Unrefined> {
+    Ok(!presence.is_present(range.start).await? && !presence.is_present(range.end - 1).await?)
 }
 
 /// The first gap in `range`, `None` when nothing is missing, or the rest that cannot be refined.
@@ -282,15 +291,22 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn known_gap_costs_one_probe_while_its_last_height_is_missing() {
+    async fn known_gap_costs_two_probes_while_both_ends_are_missing() {
         let mut fake = Fake::new([3, 4, 5, 6]);
         let search = find_gaps(&mut fake, 3..7, Known::Gap).await;
         assert_eq!(search, found(one(3..7), None));
-        assert_eq!(fake.single_probes, 1);
+        assert_eq!(fake.single_probes, 2);
         assert!(fake.first_missing_flags.is_empty());
+    }
 
-        let mut repaired = Fake::new([3, 4, 5]);
-        let search = find_gaps(&mut repaired, 3..7, Known::Gap).await;
+    #[tokio::test]
+    async fn known_gap_with_a_refilled_end_is_searched_again() {
+        let mut front = Fake::new([4, 5, 6]);
+        let search = find_gaps(&mut front, 3..7, Known::Gap).await;
+        assert_eq!(search, found(one(4..7), None));
+
+        let mut back = Fake::new([3, 4, 5]);
+        let search = find_gaps(&mut back, 3..7, Known::Gap).await;
         assert_eq!(search, found(one(3..6), None));
     }
 

@@ -14,7 +14,7 @@ use tokio::{net::TcpListener, sync::watch::Receiver};
 
 use crate::{
     store::{KindSummary, MissingRanges, NodeProgress, Store, SweepProgress, SweepState},
-    watch::{ALERT_TIP_MARGIN, SweepEtas, SweepWindow, WatchedNode, utc_now},
+    watch::{SweepEtas, SweepWindow, WatchedNode, utc_now},
 };
 
 /// Rows per node on the missing-data page.
@@ -280,8 +280,7 @@ fn running_lines(
     sweep: &SweepProgress,
     eta: Option<&SweepEta>,
 ) -> Vec<String> {
-    // The sweep started at `window.start_height` of its tip, `ALERT_TIP_MARGIN` above `until_height`.
-    let start = window.start_height(sweep.until_height + ALERT_TIP_MARGIN);
+    let start = window.sweep_start(sweep.until_height);
     let total = sweep.until_height.saturating_sub(start);
     let done = sweep.next_height.saturating_sub(start).min(total);
     let percent = if total == 0 {

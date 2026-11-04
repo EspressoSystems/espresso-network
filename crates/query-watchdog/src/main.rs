@@ -164,6 +164,7 @@ fn log_config(options: &Options, db_path: &Path, labels: &[String]) {
         nodes = ?labels,
         db_path = %db_path.display(),
         sweep_interval = %humantime::format_duration(watch.sweep_interval),
+        sweep_once = watch.sweep_once,
         request_interval = %humantime::format_duration(watch.request_interval),
         alert_missing_after = %humantime::format_duration(watch.alert_missing_after),
         retention_blocks = watch.retention_blocks,

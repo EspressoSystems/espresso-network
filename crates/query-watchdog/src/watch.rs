@@ -8,7 +8,7 @@ use std::{
     time::Duration,
 };
 
-use anyhow::{anyhow, bail, ensure};
+use anyhow::{Context, anyhow, bail, ensure};
 use chrono::{DateTime, SubsecRound, TimeDelta, Utc};
 use clap::Args;
 use reqwest::StatusCode;
@@ -33,12 +33,13 @@ pub struct WatchOptions {
     #[arg(
         long,
         env = "ESPRESSO_QUERY_WATCHDOG_SWEEP_INTERVAL",
-        value_parser = humantime::parse_duration,
-        default_value = "24h"
+        value_parser = parse_sweep_interval,
+        default_value = "1week"
     )]
     pub sweep_interval: Duration,
-    /// Sweep once, then only follow the tip; `--sweep-interval` is ignored. A restart does not
-    /// sweep again, and removing the flag schedules the next sweep one interval after the last.
+    /// Sweep once, then only follow the tip; `--sweep-interval` is ignored. A node that has not
+    /// swept yet sweeps at once, and a restart does not sweep again. Removing the flag schedules
+    /// the next sweep one interval after the last started.
     #[arg(long, env = "ESPRESSO_QUERY_WATCHDOG_SWEEP_ONCE")]
     pub sweep_once: bool,
     /// Wait before each request of one node watch.
@@ -87,7 +88,32 @@ pub enum SweepWindow {
     Retention { blocks: u64 },
 }
 
+/// Parses a humantime duration and checks that it converts to a chrono `TimeDelta`.
+fn parse_sweep_interval(text: &str) -> Result<Duration, String> {
+    let interval = humantime::parse_duration(text).map_err(|error| error.to_string())?;
+    TimeDelta::from_std(interval).map_err(|error| error.to_string())?;
+    Ok(interval)
+}
+
+impl WatchOptions {
+    /// `sweep_interval` as a chrono delta; validated when the option is parsed.
+    pub fn sweep_interval_delta(&self) -> TimeDelta {
+        TimeDelta::from_std(self.sweep_interval).expect("sweep_interval is checked at parse time")
+    }
+}
+
 impl SweepWindow {
+    /// The heights a sweep started at `tip_height` covers: from `start_height` up to
+    /// `ALERT_TIP_MARGIN` below the tip, where follow takes over.
+    pub fn sweep_range(self, tip_height: u64) -> Range<u64> {
+        self.start_height(tip_height)..tip_height.saturating_sub(ALERT_TIP_MARGIN)
+    }
+
+    /// The first height of the sweep that ends at `until_height`: the inverse of `sweep_range`.
+    pub fn sweep_start(self, until_height: u64) -> u64 {
+        self.start_height(until_height + ALERT_TIP_MARGIN)
+    }
+
     /// First height of the window for `tip_height`.
     pub fn start_height(self, tip_height: u64) -> u64 {
         match self {
@@ -268,7 +294,7 @@ impl Watchdog {
             Some(progress) => progress.clone().clamped_to(window_start),
             None => {
                 let progress = NodeProgress {
-                    follow_next_height: tip_height,
+                    follow_next_height: tip_height.saturating_sub(ALERT_TIP_MARGIN),
                     sweep: SweepState::Waiting,
                     last_sweep_started_at: None,
                     last_sweep_completed_at: None,
@@ -294,6 +320,7 @@ impl Watchdog {
             errors_since_summary: BTreeMap::new(),
             eta_origin: None,
             node_unhealthy: false,
+            probe_failed: false,
             node,
         };
         watch.reset_eta_origin();
@@ -491,8 +518,11 @@ pub struct NodeWatch {
     last_summary_at: Instant,
     errors_since_summary: BTreeMap<String, u64>,
     eta_origin: Option<EtaOrigin>,
-    /// The last probe failed with other than 404; the sweep pauses until one answers.
+    /// The last probe of follow or sweep failed with other than 404; the sweep pauses until one
+    /// answers. Retries neither set nor clear it.
     node_unhealthy: bool,
+    /// A request of the current probe failed with other than 404.
+    probe_failed: bool,
 }
 
 /// Where the ETA rate starts: when this process began or resumed the running sweep.
@@ -541,9 +571,9 @@ impl NodeWatch {
             tracing::info!(%node, tip_height = self.tip_height, %summary, "watching");
             return;
         }
-        let next_start = TimeDelta::from_std(self.watchdog.options.sweep_interval)
-            .ok()
-            .and_then(|interval| self.progress.next_sweep_start(interval));
+        let next_start = self
+            .progress
+            .next_sweep_start(self.watchdog.options.sweep_interval_delta());
         let (sweep, next_height, until_height, start_at) = match &self.progress.sweep {
             SweepState::Running(sweep) => (
                 "running",
@@ -596,8 +626,8 @@ impl NodeWatch {
         Ok(sent)
     }
 
-    /// Re-checks due missing ranges in batches until none is due or `RETRY_BUDGET` is spent;
-    /// returns the number of ranges re-checked.
+    /// Re-checks due missing ranges in batches until none is due or `RETRY_BUDGET` is spent,
+    /// checked before every probe; returns the number of ranges re-checked.
     async fn retry_step(&mut self) -> anyhow::Result<usize> {
         let deadline = Instant::now() + RETRY_BUDGET;
         let mut checked = 0;
@@ -607,9 +637,12 @@ impl NodeWatch {
                 break;
             }
             for probe in &due {
+                if Instant::now() >= deadline {
+                    break;
+                }
                 self.check_probe(probe).await?;
+                checked += 1;
             }
-            checked += due.len();
         }
         Ok(checked)
     }
@@ -625,12 +658,13 @@ impl NodeWatch {
             self.store.save_progress(&self.progress).await?;
         }
         if self.progress.sweep == SweepState::Waiting {
-            let interval = TimeDelta::from_std(self.watchdog.options.sweep_interval)?;
-            if self
+            // With `--sweep-once` the one sweep starts at once, whatever the old schedule says.
+            let interval = self.watchdog.options.sweep_interval_delta();
+            let not_yet = self
                 .progress
                 .next_sweep_start(interval)
-                .is_some_and(|start| utc_now() < start)
-            {
+                .is_some_and(|start| utc_now() < start);
+            if not_yet && !self.watchdog.options.sweep_once {
                 return Ok(0);
             }
             self.start_sweep().await?;
@@ -654,12 +688,14 @@ impl NodeWatch {
     /// Begins a sweep over the window, up to the follow margin below the tip: follow covers the
     /// rest.
     async fn start_sweep(&mut self) -> anyhow::Result<()> {
-        let start_height = self
+        let Range {
+            start: start_height,
+            end: until_height,
+        } = self
             .watchdog
             .options
             .sweep_window()
-            .start_height(self.tip_height);
-        let until_height = self.tip_height.saturating_sub(ALERT_TIP_MARGIN);
+            .sweep_range(self.tip_height);
         self.progress.last_sweep_started_at = Some(utc_now());
         self.progress.sweep = SweepState::Running(SweepProgress {
             until_height,
@@ -681,7 +717,10 @@ impl NodeWatch {
     /// clock stepped back) counts as no duration and logs a WARN.
     async fn finish_sweep(&mut self) -> anyhow::Result<()> {
         let completed_at = utc_now();
-        let started_at = self.progress.last_sweep_started_at.unwrap_or(completed_at);
+        let started_at = self
+            .progress
+            .last_sweep_started_at
+            .context("a running sweep has no start time")?;
         let duration = (completed_at - started_at).to_std().unwrap_or_else(|_| {
             tracing::warn!(
                 node = %self.node.label,
@@ -716,31 +755,34 @@ impl NodeWatch {
     async fn check_chunk(&mut self, chunk: &Range<u64>) -> anyhow::Result<usize> {
         let to_check = probes(chunk, self.epochs);
         for probe in &to_check {
-            self.check_probe(probe).await?;
+            self.node_unhealthy = !self.check_probe(probe).await?;
         }
         Ok(to_check.len())
     }
 
-    /// Sends the probe, then `record_found` on a 200 or `record_failure` otherwise.
-    async fn check_probe(&mut self, probe: &Probe) -> anyhow::Result<()> {
+    /// Sends the probe, then `record_found` on a 200 or `record_failure` otherwise; returns
+    /// whether every request of the probe, refinement included, was answered with 200 or 404.
+    async fn check_probe(&mut self, probe: &Probe) -> anyhow::Result<bool> {
+        self.probe_failed = false;
         match self.send_probe(probe).await {
-            Ok(()) => self.store.record_found(probe, utc_now()).await,
+            Ok(()) => self.store.record_found(probe, utc_now()).await?,
             Err(error) => {
                 self.record_error(FetchTarget::Data(probe.kind), &error);
-                self.record_failure(probe, &error).await
+                self.record_failure(probe, &error).await?;
             },
         }
+        Ok(!self.probe_failed)
     }
 
-    /// Waits `request_interval`, counts the probe and sends HEAD to `probe.route()`. The node
-    /// counts as unhealthy until a probe answers with 200 or 404.
+    /// Waits `request_interval`, counts the probe and sends HEAD to `probe.route()`; a failure
+    /// other than 404 marks the probe as failed.
     async fn send_probe(&mut self, probe: &Probe) -> Result<(), FetchError> {
         tokio::time::sleep(self.watchdog.options.request_interval).await;
         self.watchdog
             .metrics
             .count_probe(&self.node.label, probe.kind);
         let result = self.watchdog.head(&self.node, &probe.route()).await;
-        self.node_unhealthy = matches!(&result, Err(error) if !error.is_not_found());
+        self.probe_failed |= matches!(&result, Err(error) if !error.is_not_found());
         result
     }
 
@@ -749,7 +791,7 @@ impl NodeWatch {
     /// exactly that range, otherwise adds rows only for heights no row covers; anything else is
     /// missing as a whole.
     async fn record_failure(&mut self, probe: &Probe, error: &FetchError) -> anyhow::Result<()> {
-        let is_not_found = matches!(error, FetchError::Status(StatusCode::NOT_FOUND));
+        let is_not_found = error.is_not_found();
         if !probe.kind.is_range() {
             return self
                 .store
@@ -861,7 +903,7 @@ impl NodeWatch {
 
     /// Counts a failed refinement request; the range stays chunk level.
     fn refinement_failed(&mut self, kind: DataKind, error: &FetchError) -> Unrefined {
-        self.node_unhealthy = true;
+        self.probe_failed = true;
         self.record_error(FetchTarget::Data(kind), error);
         Unrefined {
             status: error.status_label().to_owned(),
@@ -1022,9 +1064,7 @@ impl Presence for RangeProber<'_> {
         }
         match self.watch.send_probe(&probe).await {
             Ok(()) => Ok(None),
-            Err(FetchError::Status(StatusCode::NOT_FOUND)) => {
-                self.watch.missing_height(&probe).await
-            },
+            Err(error) if error.is_not_found() => self.watch.missing_height(&probe).await,
             Err(error) => Err(self.watch.refinement_failed(self.kind, &error)),
         }
     }
@@ -1036,7 +1076,7 @@ impl Presence for RangeProber<'_> {
         };
         match self.watch.send_probe(&probe).await {
             Ok(()) => Ok(true),
-            Err(FetchError::Status(StatusCode::NOT_FOUND)) => Ok(false),
+            Err(error) if error.is_not_found() => Ok(false),
             Err(error) => Err(self.watch.refinement_failed(self.kind, &error)),
         }
     }
@@ -1126,6 +1166,8 @@ mod tests {
         missing: Arc<Mutex<BTreeSet<u64>>>,
         /// Every request answers 500 while set.
         failing: Arc<AtomicBool>,
+        /// GET requests answer 500 while set; HEAD still answers.
+        failing_gets: Arc<AtomicBool>,
         requests: Arc<Mutex<Vec<(Method, String)>>>,
     }
 
@@ -1136,11 +1178,14 @@ mod tests {
         uri: Uri,
         Path((from, until)): Path<(u64, u64)>,
     ) -> (StatusCode, String) {
+        let is_get = method == Method::GET;
         node.requests
             .lock()
             .unwrap()
             .push((method, uri.path().to_owned()));
-        if node.failing.load(Ordering::SeqCst) {
+        if node.failing.load(Ordering::SeqCst)
+            || (is_get && node.failing_gets.load(Ordering::SeqCst))
+        {
             return (StatusCode::INTERNAL_SERVER_ERROR, String::new());
         }
         let first_missing = node
@@ -1159,15 +1204,25 @@ mod tests {
         }
     }
 
+    /// Every other route: present, unless the node is failing.
+    async fn fake_other(State(node): State<FakeNode>) -> StatusCode {
+        if node.failing.load(Ordering::SeqCst) {
+            StatusCode::INTERNAL_SERVER_ERROR
+        } else {
+            StatusCode::OK
+        }
+    }
+
     async fn serve_fake(missing: impl IntoIterator<Item = u64>) -> (WatchedNode, FakeNode) {
         let fake = FakeNode {
             missing: Arc::new(Mutex::new(missing.into_iter().collect())),
             failing: Arc::default(),
+            failing_gets: Arc::default(),
             requests: Arc::default(),
         };
         let app = Router::new()
             .route("/v1/availability/leaf/{from}/{until}", get(fake_leaf_range))
-            .fallback(|| async { StatusCode::OK })
+            .fallback(fake_other)
             .with_state(fake.clone());
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let base_url = Url::parse(&format!("http://{}/", listener.local_addr().unwrap())).unwrap();
@@ -1369,30 +1424,121 @@ mod tests {
         watch.progress.last_sweep_started_at = Some(utc_now() + TimeDelta::hours(1));
         watch.finish_sweep().await.unwrap();
         assert_eq!(watch.progress.sweep, SweepState::Waiting);
+        assert!(watch.progress.last_sweep_completed_at.is_some());
     }
 
     #[tokio::test]
-    async fn the_sweep_pauses_while_the_node_fails_and_resumes_after() {
-        let (node, fake) = serve_fake([]).await;
+    async fn the_sweep_pauses_while_follow_or_sweep_probes_fail_and_resumes_after() {
+        let (node, fake) = serve_fake([905]).await;
         let (watchdog, _store, _registry) = test_watchdog(Some(200)).await;
         let (_tip_sender, tip) = watch::channel(1_000);
         let mut watch = watchdog.start_node(node, tip, None).await.unwrap();
+        let chunk = 900..910;
+        let probe = Probe {
+            kind: DataKind::Leaf,
+            range: chunk.clone(),
+        };
+
+        // A retry probe that fails neither sets nor clears the pause.
+        fake.failing.store(true, Ordering::SeqCst);
+        assert!(!watch.check_probe(&probe).await.unwrap());
+        assert!(!watch.node_unhealthy);
+        assert!(watch.sweep_step().await.unwrap() > 0, "the sweep goes on");
+        watch.progress.sweep = SweepState::Waiting;
+        watch.progress.last_sweep_started_at = None;
+
+        // A failing chunk probe pauses the sweep: no sweep starts.
+        watch.check_chunk(&chunk).await.unwrap();
+        assert!(watch.node_unhealthy);
+        assert_eq!(watch.sweep_step().await.unwrap(), 0);
+        assert_eq!(watch.progress.sweep, SweepState::Waiting);
+
+        // A retry probe that answers does not resume it; a chunk probe that answers does.
+        fake.failing.store(false, Ordering::SeqCst);
+        assert!(watch.check_probe(&probe).await.unwrap());
+        assert!(watch.node_unhealthy);
+        watch.check_chunk(&chunk).await.unwrap();
+        assert!(!watch.node_unhealthy);
+        assert!(watch.sweep_step().await.unwrap() > 0);
+        assert!(matches!(watch.progress.sweep, SweepState::Running(_)));
+    }
+
+    #[tokio::test]
+    async fn a_failed_refinement_pauses_the_sweep() {
+        let (node, fake) = serve_fake([905]).await;
+        let (watchdog, _store, _registry) = test_watchdog(Some(200)).await;
+        let (_tip_sender, tip) = watch::channel(1_000);
+        let mut watch = watchdog.start_node(node, tip, None).await.unwrap();
+
+        // The chunk HEAD says 404, but the GET naming the height fails with 500.
+        fake.failing_gets.store(true, Ordering::SeqCst);
         let probe = Probe {
             kind: DataKind::Leaf,
             range: 900..910,
         };
+        assert!(!watch.check_probe(&probe).await.unwrap());
+        assert_eq!(watch.errors_since_summary.get("500"), Some(&1));
+        // The chunk of a sweep or follow pauses the sweep when its last probe fails this way.
+        watch.node_unhealthy = false;
+        watch.check_chunk(&(900..910)).await.unwrap();
+        assert!(
+            !watch.node_unhealthy,
+            "the later probes of the chunk answered"
+        );
+    }
 
-        fake.failing.store(true, Ordering::SeqCst);
-        watch.check_probe(&probe).await.unwrap();
-        assert!(watch.node_unhealthy);
-        assert_eq!(watch.sweep_step().await.unwrap(), 0);
-        assert_eq!(watch.progress.sweep, SweepState::Waiting, "no sweep starts");
+    #[tokio::test]
+    async fn a_fresh_node_follows_from_where_its_sweep_ends() {
+        let (node, _fake) = serve_fake([]).await;
+        let (watchdog, _store, _registry) = test_watchdog(Some(300)).await;
+        let (_tip_sender, tip) = watch::channel(1_000);
+        let watch = watchdog.start_node(node, tip, None).await.unwrap();
+        let sweep_end = watchdog.options.sweep_window().sweep_range(1_000).end;
+        assert_eq!(sweep_end, 990);
+        assert_eq!(watch.progress.follow_next_height, sweep_end);
+    }
 
-        fake.failing.store(false, Ordering::SeqCst);
-        watch.check_probe(&probe).await.unwrap();
-        assert!(!watch.node_unhealthy);
-        assert!(watch.sweep_step().await.unwrap() > 0);
-        assert!(matches!(watch.progress.sweep, SweepState::Running(_)));
+    #[tokio::test]
+    async fn sweep_once_starts_the_one_sweep_at_once_whatever_the_schedule() {
+        let (node, _fake) = serve_fake([]).await;
+        let options = |sweep_once| WatchOptions {
+            sweep_interval: Duration::from_secs(3_600),
+            sweep_once,
+            request_interval: Duration::ZERO,
+            retention_blocks: Some(200),
+            alert_missing_after: Duration::ZERO,
+        };
+        let (_tip_sender, tip) = watch::channel(1_000);
+        for (sweep_once, expect_running) in [(false, false), (true, true)] {
+            let (watchdog, _store, _registry) = test_watchdog_with(options(sweep_once)).await;
+            let mut watch = watchdog
+                .start_node(node.clone(), tip.clone(), None)
+                .await
+                .unwrap();
+            // Waiting with the latest sweep started a minute ago: not due for an hour.
+            watch.progress.last_sweep_started_at = Some(utc_now() - TimeDelta::minutes(1));
+            watch.sweep_step().await.unwrap();
+            let running = matches!(watch.progress.sweep, SweepState::Running(_));
+            assert_eq!(running, expect_running, "sweep_once {sweep_once}");
+        }
+    }
+
+    #[test]
+    fn the_sweep_interval_defaults_to_a_week() {
+        #[derive(clap::Parser)]
+        struct Cli {
+            #[command(flatten)]
+            watch: WatchOptions,
+        }
+        let cli = <Cli as clap::Parser>::parse_from(["test"]);
+        assert_eq!(
+            cli.watch.sweep_interval,
+            Duration::from_secs(7 * 24 * 3_600)
+        );
+        assert_eq!(
+            humantime::format_duration(cli.watch.sweep_interval).to_string(),
+            "7days"
+        );
     }
 
     #[tokio::test]
@@ -1426,7 +1572,7 @@ mod tests {
         // Follow stays the margin behind the tip, so nothing is probed yet.
         assert_eq!(watch.follow_step().await.unwrap(), 0);
 
-        // The sweep covers `[700, 1000)` in chunks, finds the gap exactly, then waits.
+        // The sweep covers `[700, 990)` in chunks, finds the gap exactly, then waits.
         for _ in 0..5 {
             watch.sweep_step().await.unwrap();
         }
@@ -1445,7 +1591,7 @@ mod tests {
         };
         for _ in 0..2 {
             node_store
-                .record_missing(&gap, "404", utc_now())
+                .record_range_failure(&gap, "404", utc_now())
                 .await
                 .unwrap();
         }
@@ -1461,7 +1607,7 @@ mod tests {
         // A later tip moves follow and the window; rows below the window are forgotten.
         watch.tip_height = 1_500;
         assert_eq!(watch.follow_step().await.unwrap(), 5);
-        assert_eq!(watch.progress.follow_next_height, 1_100);
+        assert_eq!(watch.progress.follow_next_height, 1_090);
         assert_eq!(watch.trim_to_window().await.unwrap(), Some(1));
         assert_eq!(watch.progress.follow_next_height, 1_200);
         assert_eq!(progress().await.unwrap().unwrap(), watch.progress);

@@ -101,12 +101,12 @@ impl EpochConfig {
     }
 }
 
-/// The block `kind` of `epoch` depends on: `epoch_root_lag` epochs back, times the epoch height.
-/// `None` for an epoch before that root. Missing data of the epoch is probed, and judged against the
-/// tip, by the chunk holding this block.
+/// The block `kind` of `epoch` depends on: the epoch `epoch_root_lag` back (epoch 0 for earlier
+/// ones) times the epoch height. Missing data of the epoch is probed, and judged against the tip,
+/// by the chunk holding this block. `None` only when the product overflows.
 pub fn epoch_block(kind: DataKind, epoch: u64, epoch_height: u64) -> Option<u64> {
     epoch
-        .checked_sub(kind.epoch_root_lag())?
+        .saturating_sub(kind.epoch_root_lag())
         .checked_mul(epoch_height)
 }
 
@@ -283,7 +283,7 @@ mod tests {
             (StakeTable, 3, Some(30)),
             (LcStakeTable, 5, Some(90)),
             (StakeTable, 2, Some(0)),
-            (StakeTable, 1, None),
+            (StakeTable, 1, Some(0)),
             (Leaf, 3, Some(90)),
         ];
         for (kind, epoch, expected) in cases {

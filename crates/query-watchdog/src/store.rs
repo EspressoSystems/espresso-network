@@ -1,4 +1,4 @@
-use std::{fs, ops::Range, path::Path, str::FromStr, time::Duration};
+use std::{collections::BTreeSet, fs, ops::Range, path::Path, str::FromStr, time::Duration};
 
 use anyhow::{Context, bail};
 use chrono::{DateTime, TimeDelta, Utc};
@@ -123,17 +123,28 @@ pub const ALERT_MIN_FAILED_PROBES: u32 = 3;
 /// `last_status` of a row refined from a 404 that named a height; the only status that alerts.
 const STATUS_NOT_FOUND: &str = "404";
 
-/// The delay cap of a row with `status` after `failed_probes` failed probes.
-fn retry_delay_cap_secs(status: &str, failed_probes: i64) -> i64 {
-    if status == STATUS_NOT_FOUND && failed_probes >= i64::from(ALERT_MIN_FAILED_PROBES) {
+/// The delay cap of a row of `kind` with `status` after `failed_probes` failed probes: the short
+/// one for rows that qualify for alerting.
+fn retry_delay_cap_secs(kind: DataKind, status: &str, failed_probes: i64) -> i64 {
+    if kind.can_alert()
+        && status == STATUS_NOT_FOUND
+        && failed_probes >= i64::from(ALERT_MIN_FAILED_PROBES)
+    {
         ALERT_RETRY_DELAY_MAX_SECS
     } else {
         RETRY_DELAY_MAX_SECS
     }
 }
 
-/// The distinct `DataKind::epoch_root_lag` values of the per-epoch kinds.
-const EPOCH_ROOT_LAGS: [u64; 2] = [0, 2];
+/// The distinct `DataKind::epoch_root_lag` values of the per-epoch kinds, ascending.
+fn epoch_root_lags() -> Vec<u64> {
+    let lags: BTreeSet<_> = DataKind::VARIANTS
+        .iter()
+        .filter(|kind| kind.is_per_epoch())
+        .map(|kind| kind.epoch_root_lag())
+        .collect();
+    lags.into_iter().collect()
+}
 
 /// Selects the rows of a kind that overlap a range.
 const SELECT_OVERLAPPING: &str = "SELECT range_start, range_end, first_missing_at, \
@@ -183,6 +194,7 @@ impl MissingRow {
 /// doubled largest delay (capped) and the largest failed probe count plus one of the `old` rows it
 /// overlaps, or starts fresh at `now` with the minimum delay and one failed probe.
 fn merge_rows(
+    kind: DataKind,
     old: &[MissingRow],
     new: &[(Range<u64>, &str)],
     now: DateTime<Utc>,
@@ -203,7 +215,7 @@ fn merge_rows(
                 .map(|row| row.retry_delay_secs)
                 .max()
                 .map_or(RETRY_DELAY_MIN_SECS, |delay| {
-                    (delay * 2).min(retry_delay_cap_secs(status, failed_probes))
+                    (delay * 2).min(retry_delay_cap_secs(kind, status, failed_probes))
                 });
             MissingRow {
                 range_start: range.start,
@@ -241,7 +253,7 @@ async fn upsert_failure(
         .await?;
     let old: Vec<_> = old.into_iter().collect();
     let new = [(probe.range.clone(), status)];
-    let mut row = merge_rows(&old, &new, now).remove(0);
+    let mut row = merge_rows(probe.kind, &old, &new, now).remove(0);
     if let Some(old) = old.first() {
         row.range_end = row.range_end.max(old.range_end);
     }
@@ -437,7 +449,7 @@ impl NodeStore {
                 .into_iter()
                 .map(|part| (part, status))
                 .collect();
-            for row in merge_rows(&[], &fresh, now) {
+            for row in merge_rows(probe.kind, &[], &fresh, now) {
                 insert_row(&mut tx, &self.node, kind, &row).await?;
             }
         }
@@ -516,7 +528,7 @@ impl NodeStore {
             .chain(unrefined.map(|(rest, status)| (rest.clone(), status)))
             .collect();
         let outside = old.iter().flat_map(|row| outside_parts(row, within));
-        let rows: Vec<_> = merge_rows(&old, &new, now)
+        let rows: Vec<_> = merge_rows(kind, &old, &new, now)
             .into_iter()
             .chain(outside)
             .collect();
@@ -550,7 +562,8 @@ impl NodeStore {
 
     /// Forgets what is below `start_height`: per-height rows ending at or below it are deleted,
     /// range-kind rows crossing it are trimmed to start there, and per-epoch rows whose last block
-    /// `epoch * epoch_height` is below it are deleted; returns the number of deleted rows.
+    /// `epoch_block(kind, epoch, epoch_height)` is below it are deleted; returns the number of
+    /// deleted rows.
     pub async fn forget_below(
         &self,
         start_height: u64,
@@ -678,7 +691,8 @@ impl NodeStore {
     /// The oldest qualifying row per kind: last failure a 404 that named a height (`"404"`), at
     /// least `min_failed` failed probes, first missing at least `min_age` before `now`, and below
     /// the tip margin: per-height kinds end at or below `max_end_height`, per-epoch kinds have
-    /// their last block `epoch * epoch_height` at or below it. Ties go to the lowest `range_start`.
+    /// `epoch_block(kind, epoch, epoch_height)` at or below it. Ties go to the lowest
+    /// `range_start`.
     pub async fn alert_candidates(
         &self,
         now: DateTime<Utc>,
@@ -731,7 +745,8 @@ impl NodeStore {
 }
 
 /// Pushes the condition on per-epoch rows `epoch_block(kind, range_start, epoch_height)
-/// <comparison> bound`, in SQL: kinds with the same `epoch_root_lag` share a branch.
+/// <comparison> bound`, in SQL (`MAX(.., 0)` is the saturating subtraction): kinds with the same
+/// `epoch_root_lag` share a branch.
 fn push_epoch_condition(
     query: &mut QueryBuilder<'_, Sqlite>,
     epochs: EpochConfig,
@@ -739,7 +754,7 @@ fn push_epoch_condition(
     bound: i64,
 ) -> anyhow::Result<()> {
     let epoch_height = i64::try_from(epochs.epoch_height)?;
-    for (index, lag) in EPOCH_ROOT_LAGS.into_iter().enumerate() {
+    for (index, lag) in epoch_root_lags().into_iter().enumerate() {
         if index > 0 {
             query.push(" OR ");
         }
@@ -748,9 +763,9 @@ fn push_epoch_condition(
             kind.is_per_epoch() && kind.epoch_root_lag() == lag
         });
         query
-            .push(") AND (range_start - ")
+            .push(") AND MAX(range_start - ")
             .push_bind(i64::try_from(lag)?)
-            .push(") * ")
+            .push(", 0) * ")
             .push_bind(epoch_height)
             .push(comparison)
             .push_bind(bound)
@@ -879,6 +894,21 @@ mod tests {
         Store::connect(options).await.unwrap().node(label)
     }
 
+    /// Records a failed probe the way the watch loop does: range kinds through
+    /// `record_range_failure`, the others through `record_missing`.
+    async fn fail_probe(
+        node: &NodeStore,
+        probe: &Probe,
+        status: &str,
+        now: DateTime<Utc>,
+    ) -> anyhow::Result<()> {
+        if probe.kind.is_range() {
+            node.record_range_failure(probe, status, now).await
+        } else {
+            node.record_missing(probe, status, now).await
+        }
+    }
+
     async fn fail_probes(
         node: &NodeStore,
         kind: DataKind,
@@ -887,18 +917,11 @@ mod tests {
         times: i64,
         first: i64,
     ) {
-        // The production paths: range kinds go through `record_range_failure`.
         for i in 0..times {
             let probe = probe(kind, range.clone());
-            if kind.is_range() {
-                node.record_range_failure(&probe, status, at(first + i))
-                    .await
-                    .unwrap();
-            } else {
-                node.record_missing(&probe, status, at(first + i))
-                    .await
-                    .unwrap();
-            }
+            fail_probe(node, &probe, status, at(first + i))
+                .await
+                .unwrap();
         }
     }
 
@@ -923,10 +946,15 @@ mod tests {
                 .all(|k| k.missing_count == 0 && k.oldest.is_none())
         );
 
-        node.record_missing(&leaf, "404", at(T0)).await.unwrap();
-        node.record_missing(&probe(DataKind::StakeTable, 5..6), "404", at(T0 + 50))
-            .await
-            .unwrap();
+        fail_probe(&node, &leaf, "404", at(T0)).await.unwrap();
+        fail_probe(
+            &node,
+            &probe(DataKind::StakeTable, 5..6),
+            "404",
+            at(T0 + 50),
+        )
+        .await
+        .unwrap();
         assert!(node.due_retries(at(T0 + 4), 10).await.unwrap().is_empty());
         let due = node.due_retries(at(T0 + 5), 10).await.unwrap();
         assert_eq!(due, std::slice::from_ref(&leaf));
@@ -934,7 +962,7 @@ mod tests {
         // The delay doubles from 5 s; a 404 row with 3 failed probes stops at 60 s.
         let mut now = T0 + 5;
         for delay in [10, 20, 40, 60, 60, 60] {
-            node.record_missing(&leaf, "404", at(now)).await.unwrap();
+            fail_probe(&node, &leaf, "404", at(now)).await.unwrap();
             let before = node.due_retries(at(now + delay - 1), 10).await.unwrap();
             assert!(!before.contains(&leaf));
             let after = node.due_retries(at(now + delay), 10).await.unwrap();
@@ -960,7 +988,7 @@ mod tests {
             (DataKind::Block, 300..400, 30),
             (DataKind::Block, 200..300, 30),
         ] {
-            node.record_missing(&probe(kind, range), "404", at(T0 + secs))
+            fail_probe(&node, &probe(kind, range), "404", at(T0 + secs))
                 .await
                 .unwrap();
         }
@@ -981,9 +1009,14 @@ mod tests {
         assert_eq!(oldest(DataKind::Block).age, Duration::from_secs(70));
 
         // A row first missing after `now` is ignored instead of failing the age.
-        node.record_missing(&probe(DataKind::Leaf, 900..1000), "404", at(T0 + 500))
-            .await
-            .unwrap();
+        fail_probe(
+            &node,
+            &probe(DataKind::Leaf, 900..1000),
+            "404",
+            at(T0 + 500),
+        )
+        .await
+        .unwrap();
         let summary = node.missing_summary(at(T0 + 100)).await.unwrap();
         assert_eq!(count(&summary, DataKind::Leaf), 200);
 
@@ -1007,6 +1040,12 @@ mod tests {
         let node = node_store("a:1").await;
         let cases = [
             (DataKind::Leaf, "404", vec![10, 20, 40, 60, 60]),
+            // The aggregate never alerts, so its 404 rows back off up to 600 s.
+            (
+                DataKind::Aggregate,
+                "404",
+                vec![10, 20, 40, 80, 160, 320, 600, 600],
+            ),
             (
                 DataKind::Block,
                 "500",
@@ -1015,10 +1054,10 @@ mod tests {
         ];
         for (kind, status, delays) in cases {
             let probe = probe(kind, 0..100);
-            node.record_missing(&probe, status, at(T0)).await.unwrap();
+            fail_probe(&node, &probe, status, at(T0)).await.unwrap();
             let mut now = T0 + 5;
             for delay in delays {
-                node.record_missing(&probe, status, at(now)).await.unwrap();
+                fail_probe(&node, &probe, status, at(now)).await.unwrap();
                 let before = node.due_retries(at(now + delay - 1), 10).await.unwrap();
                 assert!(!before.contains(&probe), "{status} before {delay}");
                 let after = node.due_retries(at(now + delay), 10).await.unwrap();
@@ -1029,15 +1068,71 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn rows_of_single_heights_stay_apart_when_follow_and_sweep_share_a_chunk_start() {
+        // Follow probed 1050..1107 and found height 1106 missing; the sweep chunk 1100..1200
+        // probes only height 1199. The two rows are keyed by the heights they probed.
+        let node = node_store("a:1").await;
+        let follow = probe(DataKind::LcLeafProof, 1106..1107);
+        let sweep = probe(DataKind::LcLeafProof, 1199..1200);
+        fail_probe(&node, &follow, "404", at(T0)).await.unwrap();
+
+        node.record_found(&sweep, at(T0 + 1)).await.unwrap();
+        let summary = node.missing_summary(at(T0 + 2)).await.unwrap();
+        assert_eq!(
+            count(&summary, DataKind::LcLeafProof),
+            1,
+            "1199 present keeps 1106"
+        );
+
+        fail_probe(&node, &sweep, "404", at(T0 + 3)).await.unwrap();
+        let summary = node.missing_summary(at(T0 + 4)).await.unwrap();
+        assert_eq!(
+            count(&summary, DataKind::LcLeafProof),
+            2,
+            "1199 missing is its own row"
+        );
+        let due = node.due_retries(at(T0 + 1_000), 10).await.unwrap();
+        assert!(due.contains(&follow) && due.contains(&sweep), "{due:?}");
+
+        node.record_found(&follow, at(T0 + 5)).await.unwrap();
+        let summary = node.missing_summary(at(T0 + 6)).await.unwrap();
+        assert_eq!(count(&summary, DataKind::LcLeafProof), 1);
+    }
+
+    #[tokio::test]
+    async fn epoch_rows_before_the_root_lag_depend_on_block_zero() {
+        let node = node_store("a:1").await;
+        let epochs = EpochConfig {
+            epoch_height: 100,
+            epoch_start_block: 1,
+        };
+        fail_probes(&node, DataKind::StakeTable, 1..2, "404", 3, T0).await;
+        let found = node
+            .alert_candidates(at(T0 + 60), Duration::from_secs(60), 3, 0, Some(epochs))
+            .await
+            .unwrap();
+        let ranges: Vec<_> = found.iter().map(|c| c.range.clone()).collect();
+        assert_eq!(
+            ranges,
+            one(1..2),
+            "epoch 1 of a stake table rests on block 0"
+        );
+        assert_eq!(node.forget_below(1, Some(epochs)).await.unwrap(), 1);
+    }
+
+    #[test]
+    fn epoch_root_lags_follow_the_kinds() {
+        assert_eq!(epoch_root_lags(), [0, 2]);
+    }
+
+    #[tokio::test]
     async fn record_found_trims_rows_to_the_heights_still_missing() {
         let node = node_store("a:1").await;
         let long = probe(DataKind::Leaf, 100..200);
         let short = probe(DataKind::Leaf, 100..150);
 
-        node.record_missing(&long, "404", at(T0)).await.unwrap();
-        node.record_missing(&short, "404", at(T0 + 1))
-            .await
-            .unwrap();
+        fail_probe(&node, &long, "404", at(T0)).await.unwrap();
+        fail_probe(&node, &short, "404", at(T0 + 1)).await.unwrap();
         let summary = node.missing_summary(at(T0 + 2)).await.unwrap();
         assert_eq!(
             count(&summary, DataKind::Leaf),
@@ -1078,7 +1173,7 @@ mod tests {
             (DataKind::StakeTable, 6..7),
         ];
         for (kind, range) in rows {
-            node.record_missing(&probe(kind, range), "404", at(T0))
+            fail_probe(&node, &probe(kind, range), "404", at(T0))
                 .await
                 .unwrap();
         }
@@ -1146,7 +1241,7 @@ mod tests {
     async fn single_height_kinds_count_one_per_row() {
         let node = node_store("a:1").await;
         for kind in [DataKind::LcLeafProof, DataKind::Aggregate] {
-            node.record_missing(&probe(kind, 0..100), "404", at(T0))
+            fail_probe(&node, &probe(kind, 0..100), "404", at(T0))
                 .await
                 .unwrap();
         }
@@ -1249,7 +1344,7 @@ mod tests {
     #[tokio::test]
     async fn record_found_keeps_the_part_of_a_row_that_crosses_its_edge() {
         let node = node_store("a:1").await;
-        node.record_missing(&probe(DataKind::Block, 90..120), "404", at(T0))
+        fail_probe(&node, &probe(DataKind::Block, 90..120), "404", at(T0))
             .await
             .unwrap();
         node.record_found(&probe(DataKind::Block, 100..200), at(T0 + 10))
@@ -1268,7 +1363,7 @@ mod tests {
     async fn record_found_clears_exact_keys_of_single_height_kinds() {
         let node = node_store("a:1").await;
         for range in [100..200, 120..180] {
-            node.record_missing(&probe(DataKind::LcLeafProof, range), "404", at(T0))
+            fail_probe(&node, &probe(DataKind::LcLeafProof, range), "404", at(T0))
                 .await
                 .unwrap();
         }
@@ -1286,10 +1381,10 @@ mod tests {
     #[tokio::test]
     async fn replace_missing_keeps_the_parts_outside_the_range() {
         let node = node_store("a:1").await;
-        node.record_missing(&probe(DataKind::Leaf, 50..150), "404", at(T0))
+        fail_probe(&node, &probe(DataKind::Leaf, 50..150), "404", at(T0))
             .await
             .unwrap();
-        node.record_missing(&probe(DataKind::Leaf, 150..250), "404", at(T0 + 10))
+        fail_probe(&node, &probe(DataKind::Leaf, 150..250), "404", at(T0 + 10))
             .await
             .unwrap();
         let fresh = Range {
@@ -1330,7 +1425,7 @@ mod tests {
         node.replace_missing(DataKind::Leaf, &(100..200), &[refined], None, at(T0))
             .await
             .unwrap();
-        node.record_missing(&leaf(rest.clone()), "404", at(T0 + 5))
+        fail_probe(&node, &leaf(rest.clone()), "404", at(T0 + 5))
             .await
             .unwrap();
 
@@ -1393,7 +1488,7 @@ mod tests {
             last_sweep_completed_at: None,
         };
         node.save_progress(&progress).await.unwrap();
-        node.record_missing(&probe(DataKind::Leaf, 0..100), "404", at(T0))
+        fail_probe(&node, &probe(DataKind::Leaf, 0..100), "404", at(T0))
             .await
             .unwrap();
         assert_eq!(
