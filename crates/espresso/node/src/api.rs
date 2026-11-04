@@ -7402,7 +7402,8 @@ mod test {
     /// chain from genesis. The loop gets past the next boundary only if the reward tree it fetched
     /// is whole. The snapshot has no fee accounts, and from V0.6 on no block reads one, so the node
     /// answers that the fee state is missing from the boundary on, and pruned below it. A
-    /// brand-new database, which the data pruner has not stamped yet, starts from a boundary too.
+    /// brand-new database, which the data pruner has not stamped yet, starts from a boundary too,
+    /// and marks the blocks below its first block as pruned, so it never fetches them.
     /// A node without a pruner, here one that pruned before and has turned pruning off, still
     /// replays from genesis, on leaves from peers up to the data pruned height.
     #[rstest]
@@ -7446,6 +7447,14 @@ mod test {
         let start = wait_for_state_start(&db, deadline).await?;
         let state_start = db.read().await?.load_state_start_height().await?;
         check_state_start(expected, start, state_start, pruned, tip)?;
+        if expected == EmptyStateStart::RecentBoundary && !stamp_pruned_height {
+            let (first_pruned, first_block) = D::data_heights(&db).await?;
+            ensure!(
+                first_pruned.is_some() && first_pruned == first_block.map(|height| height - 1),
+                "a fresh pruned database marked {first_pruned:?} as pruned, but its first block \
+                 is {first_block:?}"
+            );
+        }
         let past = start.max(pruned) + PRUNED_START_EPOCH_HEIGHT;
         wait_for_state_head_above(&db, past, start, deadline).await?;
         let lowest = lowest_block_tree_node(&db).await?;

@@ -704,19 +704,52 @@ impl<Mode> Transaction<Mode> {
 
 /// Query service specific mutations.
 impl Transaction<Write> {
-    /// Record the height of the latest pruned header.
-    pub(crate) async fn save_pruned_height(&mut self, height: u64) -> anyhow::Result<()> {
-        self.upsert(
-            "pruned_height",
-            ["id", "last_height"],
-            ["id"],
-            [(Self::PRUNED_HEIGHT_ID, height as i64)],
-        )
-        .await
-        .context("updating pruned height")
+    /// Record the height of the latest pruned header, and return the height now stored.
+    ///
+    /// A lower height than the stored one leaves it as is. The pruner and a fresh pruned start both
+    /// write it, and a pruner run reads its starting height long before it writes. If a fresh
+    /// pruned start saves its height in between, a plain overwrite would move the height back down,
+    /// and the fetches of missing parents would then download the whole history. The plain
+    /// `upsert` helper can neither keep the larger value nor return the stored one.
+    pub(crate) async fn save_pruned_height(&mut self, height: u64) -> anyhow::Result<u64> {
+        let stmt = format!(
+            "INSERT INTO pruned_height (id, last_height) VALUES ($1, $2)
+             ON CONFLICT (id) DO UPDATE SET last_height = {MAX_FN}(pruned_height.last_height, \
+             excluded.last_height)
+             RETURNING last_height",
+            MAX_FN = Db::MAX_FN,
+        );
+        let (stored,) = query_as::<(i64,)>(&stmt)
+            .bind(Self::PRUNED_HEIGHT_ID)
+            .bind(height as i64)
+            .fetch_one(self.as_mut())
+            .await
+            .context("updating pruned height")?;
+        Ok(stored as u64)
     }
 }
 
+<<<<<<< HEAD
+||||||| parent of 047652988 (feat(query-service): start a fresh pruned node at its first block (#5426))
+#[cfg(test)]
+#[async_trait]
+impl crate::testing::consensus::SavePrunedHeight for Transaction<Write> {
+    async fn save_pruned_height(&mut self, height: u64) -> anyhow::Result<()> {
+        Transaction::<Write>::save_pruned_height(self, height).await
+    }
+}
+
+=======
+#[cfg(test)]
+#[async_trait]
+impl crate::testing::consensus::SavePrunedHeight for Transaction<Write> {
+    async fn save_pruned_height(&mut self, height: u64) -> anyhow::Result<()> {
+        Transaction::<Write>::save_pruned_height(self, height).await?;
+        Ok(())
+    }
+}
+
+>>>>>>> 047652988 (feat(query-service): start a fresh pruned node at its first block (#5426))
 impl<Types> UpdateAvailabilityStorage<Types> for Transaction<Write>
 where
     Types: NodeType,
