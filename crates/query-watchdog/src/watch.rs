@@ -13,7 +13,7 @@ use url::Url;
 
 use crate::{
     chunk::{CHUNK_LEN, DataKind, EpochConfig, Probe, next_chunk, probes},
-    metrics::WatchdogMetrics,
+    metrics::{ProbeResult, WatchdogMetrics},
     store::{KindSummary, NodeProgress, NodeStore, Store, SweepProgress, SweepState},
 };
 
@@ -111,6 +111,11 @@ impl WatchedNode {
             label: format!("{host}:{port}"),
             base_url,
         })
+    }
+
+    /// The GET URL of `probe`'s route.
+    pub fn probe_url(&self, probe: &Probe) -> Url {
+        self.route_url(&probe.route())
     }
 
     /// `route` below the base URL.
@@ -268,6 +273,7 @@ impl Watchdog {
         let summary = watch.summary().await?;
         watch.log_started(loaded.is_some(), &summary);
         self.metrics.export_summary(&watch.node.label, &summary)?;
+        watch.export_progress()?;
         Ok(watch)
     }
 
@@ -415,6 +421,7 @@ impl NodeWatch {
             sent += self.retry_step().await?;
             sent += self.sweep_step().await?;
             self.summarize_if_due(Instant::now()).await?;
+            self.export_progress()?;
             if sent == 0 {
                 tokio::select! {
                     () = tokio::time::sleep_until(self.next_state_poll_at) => {},
@@ -581,12 +588,30 @@ impl NodeWatch {
     async fn check_probe(&mut self, probe: &Probe) -> anyhow::Result<()> {
         tokio::time::sleep(self.watchdog.options.request_interval).await;
         match self.watchdog.head(&self.node, &probe.route()).await {
-            Ok(()) => self.store.record_found(probe).await,
+            Ok(()) => {
+                self.count_probe(probe, ProbeResult::Found);
+                self.store.record_found(probe).await
+            },
             Err(error) => {
+                self.count_probe(probe, ProbeResult::Missing);
                 self.record_error(FetchTarget::Data(probe.kind), &error);
                 self.store.record_missing(probe, utc_now()).await
             },
         }
+    }
+
+    /// Counts one probe of this node.
+    fn count_probe(&self, probe: &Probe, result: ProbeResult) {
+        self.watchdog
+            .metrics
+            .count_probe(&self.node.label, probe.kind, result);
+    }
+
+    /// Sets the tip, follow and sweep progress gauges.
+    fn export_progress(&self) -> anyhow::Result<()> {
+        self.watchdog
+            .metrics
+            .export_progress(&self.node.label, self.tip_height, &self.progress)
     }
 
     /// Counts a failed request of the watched node in the metrics and the summary window.
@@ -679,7 +704,7 @@ impl NodeWatch {
                 oldest_age_seconds = oldest.age.as_secs(),
                 range_start = oldest.range.start,
                 range_end = oldest.range.end,
-                url = %self.node.route_url(&probe.route()),
+                url = %self.node.probe_url(&probe),
                 "missing data"
             );
         }

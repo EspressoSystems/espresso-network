@@ -17,18 +17,19 @@
 //! 3. Metric monitors on lag and liveness:
 //!    - `max(last_5m):max:query_watchdog_follow_lag_blocks{*} by {node} > <blocks>`, and the same
 //!      for `query_watchdog_merklized_state_lag_blocks`.
-//!    - No-data monitor on any series, for example `query_watchdog_follow_lag_blocks`, notifying
-//!      on no data: the watchdog is down.
+//!    - No-data monitor, or a rate of 0 on `query_watchdog_probes_total` (counter, every probe),
+//!      per node: the watchdog is down or stuck.
 
 mod chunk;
 mod metrics;
 mod store;
 mod watch;
 
-use std::{collections::BTreeSet, path::PathBuf, sync::Arc};
+use std::{collections::BTreeSet, fmt::Write, path::PathBuf, sync::Arc};
 
 use anyhow::{Context, ensure};
-use axum::{Router, extract::State, http::StatusCode, routing::get};
+use axum::{Router, extract::State, http::StatusCode, response::Html, routing::get};
+use chrono::{SubsecRound, Utc};
 use clap::Parser;
 use futures::future::try_join_all;
 use prometheus::{Registry, TextEncoder};
@@ -41,8 +42,8 @@ use url::Url;
 
 use crate::{
     metrics::WatchdogMetrics,
-    store::Store,
-    watch::{NodeWatch, WatchOptions, Watchdog, WatchedNode},
+    store::{MissingRanges, NodeProgress, Store, SweepProgress, SweepState},
+    watch::{NodeWatch, SweepWindow, WatchOptions, Watchdog, WatchedNode},
 };
 
 /// Watches archive query nodes for heights they fail to serve.
@@ -106,7 +107,14 @@ async fn main() -> anyhow::Result<()> {
     let listener = TcpListener::bind(("0.0.0.0", options.port))
         .await
         .with_context(|| format!("binding port {}", options.port))?;
-    let server = tokio::spawn(serve_metrics(listener, registry));
+    let app = AppState {
+        registry,
+        metrics: metrics.clone(),
+        store: store.clone(),
+        nodes: Arc::new(nodes.clone()),
+        window: options.watch.sweep_window(),
+    };
+    let server = tokio::spawn(serve_metrics(listener, app));
 
     let watchdog = Watchdog::new(options.watch, metrics, store)?;
     let epochs = watchdog.fetch_epoch_config(&nodes).await?;
@@ -161,23 +169,167 @@ async fn shutdown_signal() -> anyhow::Result<&'static str> {
     }
 }
 
-/// `axum::serve` of a `Router` with `/healthcheck` (unit handler, 200) and `/status/metrics`
-/// (`State<Registry>`, `TextEncoder::encode_to_string(&registry.gather())`, 500 on encode error).
-async fn serve_metrics(listener: TcpListener, registry: Registry) -> anyhow::Result<()> {
-    let app = Router::new()
+/// Rows per node on the missing-data page.
+const PAGE_ROWS: u32 = 200;
+
+/// What the HTTP handlers read.
+#[derive(Clone)]
+struct AppState {
+    registry: Registry,
+    metrics: Arc<WatchdogMetrics>,
+    store: Store,
+    nodes: Arc<Vec<WatchedNode>>,
+    window: SweepWindow,
+}
+
+/// `axum::serve` of a `Router` with `/healthcheck` (unit handler, 200), `/status/metrics`
+/// (`TextEncoder::encode_to_string(&registry.gather())`, 500 on encode error) and `/`, the page of
+/// missing ranges per node (500 with the error text on a store error).
+async fn serve_metrics(listener: TcpListener, app: AppState) -> anyhow::Result<()> {
+    let router = Router::new()
+        .route("/", get(missing_page))
         .route("/healthcheck", get(|| async {}))
         .route("/status/metrics", get(encode_metrics))
-        .with_state(registry);
-    axum::serve(listener, app).await?;
+        .with_state(app);
+    axum::serve(listener, router).await?;
     Ok(())
 }
 
 /// Text exposition of the registry.
-async fn encode_metrics(State(registry): State<Registry>) -> Result<String, StatusCode> {
+async fn encode_metrics(State(app): State<AppState>) -> Result<String, StatusCode> {
     TextEncoder::new()
-        .encode_to_string(&registry.gather())
+        .encode_to_string(&app.registry.gather())
         .map_err(|error| {
             tracing::error!(%error, "encoding metrics");
             StatusCode::INTERNAL_SERVER_ERROR
         })
+}
+
+/// HTML page of the progress and oldest missing ranges of every node, read from the store.
+async fn missing_page(State(app): State<AppState>) -> Result<Html<String>, (StatusCode, String)> {
+    let now = Utc::now().trunc_subsecs(0);
+    let mut pages = Vec::new();
+    for node in app.nodes.iter() {
+        let store = app.store.node(&node.label);
+        let page = async {
+            Ok::<_, anyhow::Error>(NodePage {
+                node,
+                tip_height: app.metrics.tip_height(&node.label),
+                progress: store.load_progress().await?,
+                listed: store.missing_ranges(now, PAGE_ROWS).await?,
+            })
+        }
+        .await
+        .map_err(|error| {
+            tracing::error!(%error, node = %node.label, "reading page data");
+            (StatusCode::INTERNAL_SERVER_ERROR, format!("{error:#}"))
+        })?;
+        pages.push(page);
+    }
+    Ok(Html(render_page(app.window, &pages)))
+}
+
+/// What the page shows for one node.
+struct NodePage<'a> {
+    node: &'a WatchedNode,
+    tip_height: i64,
+    /// `None` before the node watch started.
+    progress: Option<NodeProgress>,
+    listed: MissingRanges,
+}
+
+/// Page with one heading, progress line and table per node.
+fn render_page(window: SweepWindow, nodes: &[NodePage<'_>]) -> String {
+    let mut page = String::from(
+        "<!DOCTYPE html><html><head><title>query-watchdog</title></head><body><h1>query-watchdog</\
+         h1>",
+    );
+    for node in nodes {
+        write_node(&mut page, window, node).expect("writing to a String");
+    }
+    page.push_str("</body></html>");
+    page
+}
+
+/// Appends the heading, progress line and table of one node.
+fn write_node(
+    page: &mut String,
+    window: SweepWindow,
+    node_page: &NodePage<'_>,
+) -> std::fmt::Result {
+    let NodePage {
+        node,
+        tip_height,
+        progress,
+        listed,
+    } = node_page;
+    write!(page, "<h2>{}</h2>", escape(&node.label))?;
+    match progress {
+        Some(progress) => write!(
+            page,
+            "<p>tip={tip_height} follow_next_height={} {}; last sweep completed {}</p>",
+            progress.follow_next_height,
+            describe_sweep(window, &progress.sweep),
+            progress
+                .last_sweep_completed_at
+                .map_or_else(|| "never".to_owned(), |t| t.to_rfc3339()),
+        )?,
+        None => page.write_str("<p>not started</p>")?,
+    }
+    if listed.shown.is_empty() {
+        return page.write_str("<p>nothing missing</p>");
+    }
+    page.write_str(
+        "<table border=\"1\"><tr><th>kind</th><th>range_start</th><th>range_end</th><th>age</\
+         th><th>link</th></tr>",
+    )?;
+    for missing in &listed.shown {
+        let probe = &missing.probe;
+        let url = escape(node.probe_url(probe).as_str());
+        let kind: &str = probe.kind.into();
+        let age = humantime::format_duration(missing.age);
+        write!(
+            page,
+            "<tr><td>{kind}</td><td>{}</td><td>{}</td><td>{age}</td><td><a \
+             href=\"{url}\">{url}</a></td></tr>",
+            probe.range.start, probe.range.end
+        )?;
+    }
+    page.write_str("</table>")?;
+    let hidden = listed.total - listed.shown.len() as u64;
+    if hidden > 0 {
+        write!(page, "<p>{hidden} more not shown</p>")?;
+    }
+    Ok(())
+}
+
+/// `sweep running 45% (next 300 of 1000)` or `sweep waiting until <time>`.
+fn describe_sweep(window: SweepWindow, sweep: &SweepState) -> String {
+    match sweep {
+        SweepState::Running(SweepProgress {
+            until_height,
+            next_height,
+            ..
+        }) => {
+            // The sweep started at `window.start_height(until_height)`, its tip then.
+            let start = window.start_height(*until_height);
+            let total = until_height.saturating_sub(start).max(1);
+            let done = next_height.saturating_sub(start).min(total);
+            format!(
+                "sweep running {}% (next {next_height} of {until_height})",
+                done * 100 / total
+            )
+        },
+        SweepState::Waiting { start_at } => {
+            format!("sweep waiting until {}", start_at.to_rfc3339())
+        },
+    }
+}
+
+/// Escapes text for HTML content and double-quoted attributes.
+fn escape(text: &str) -> String {
+    text.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
 }

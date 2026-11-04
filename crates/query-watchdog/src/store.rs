@@ -260,6 +260,47 @@ impl NodeStore {
         Ok(query.build().execute(&self.pool).await?.rows_affected())
     }
 
+    /// Up to `limit` missing ranges, oldest `first_missing_at` first (then `range_start`, `kind`),
+    /// with their ages at `now`, and the total number of missing ranges.
+    pub async fn missing_ranges(
+        &self,
+        now: DateTime<Utc>,
+        limit: u32,
+    ) -> anyhow::Result<MissingRanges> {
+        let rows: Vec<(String, u64, u64, DateTime<Utc>)> = sqlx::query_as(
+            "SELECT kind, range_start, range_end, first_missing_at FROM missing_chunk WHERE node \
+             = ? ORDER BY first_missing_at, range_start, kind LIMIT ?",
+        )
+        .bind(&self.node)
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await?;
+        let (total,): (u64,) = sqlx::query_as("SELECT COUNT(*) FROM missing_chunk WHERE node = ?")
+            .bind(&self.node)
+            .fetch_one(&self.pool)
+            .await?;
+        let shown = rows
+            .into_iter()
+            .map(|(kind, start, end, first)| {
+                Ok(MissingRange {
+                    probe: Probe {
+                        kind: DataKind::from_str(&kind)?,
+                        range: start..end,
+                    },
+                    age: self.age(now, first)?,
+                })
+            })
+            .collect::<anyhow::Result<_>>()?;
+        Ok(MissingRanges { shown, total })
+    }
+
+    /// `now - first`; errors when `first_missing_at` is in the future.
+    fn age(&self, now: DateTime<Utc>, first: DateTime<Utc>) -> anyhow::Result<Duration> {
+        (now - first)
+            .to_std()
+            .with_context(|| format!("{}: first_missing_at {first} is after {now}", self.node))
+    }
+
     /// One entry per `DataKind::VARIANTS`: `SUM(end - start)`, and the range with the earliest
     /// `first_missing_at` (lowest `range_start` on a tie) with its age at `now`.
     pub async fn missing_summary(&self, now: DateTime<Utc>) -> anyhow::Result<Vec<KindSummary>> {
@@ -275,12 +316,9 @@ impl NodeStore {
         let by_kind = rows
             .into_iter()
             .map(|(kind, count, first, start, end)| {
-                let age = (now - first).to_std().with_context(|| {
-                    format!("{}: first_missing_at {first} is after {now}", self.node)
-                })?;
                 let oldest = OldestMissing {
                     range: start..end,
-                    age,
+                    age: self.age(now, first)?,
                 };
                 Ok((DataKind::from_str(&kind)?, count, oldest))
             })
@@ -359,6 +397,20 @@ pub struct KindSummary {
     pub missing_count: u64,
     /// `None` when nothing is missing.
     pub oldest: Option<OldestMissing>,
+}
+
+/// A missing range and how long it has been missing.
+#[derive(Clone, Debug, PartialEq)]
+pub struct MissingRange {
+    pub probe: Probe,
+    pub age: Duration,
+}
+
+/// The oldest missing ranges of a node and the count of all of them.
+#[derive(Clone, Debug, PartialEq)]
+pub struct MissingRanges {
+    pub shown: Vec<MissingRange>,
+    pub total: u64,
 }
 
 /// The missing range with the earliest `first_missing_at`.
@@ -466,6 +518,16 @@ mod tests {
         assert_eq!(count(&summary, DataKind::Block), 200);
         assert_eq!(oldest(DataKind::Block).range, 200..300);
         assert_eq!(oldest(DataKind::Block).age, Duration::from_secs(70));
+
+        let listed = node.missing_ranges(at(T0 + 100), 3).await.unwrap();
+        let order: Vec<_> = listed.shown.iter().map(|r| r.probe.clone()).collect();
+        let expected = [
+            probe(DataKind::Leaf, 0..100),
+            probe(DataKind::Leaf, 100..200),
+            probe(DataKind::Block, 200..300),
+        ];
+        assert_eq!(order, expected);
+        assert_eq!(listed.total, 5);
 
         let other = node_store("b:2").await;
         let summary = other.missing_summary(at(T0)).await.unwrap();
