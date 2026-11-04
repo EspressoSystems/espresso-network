@@ -596,6 +596,9 @@ where
     P: SequencerPersistence + MembershipPersistence,
     Arc<P>: Storage<SeqTypes>,
 {
+    // Before the L1 work below, which can wait a long time for L1.
+    let first_epoch = genesis.first_epoch()?;
+
     let l1_client = l1_params
         .options
         .with_metrics(metrics)
@@ -693,7 +696,7 @@ where
         block_reward,
         fetcher,
         epoch_height,
-        genesis.first_epoch()?,
+        first_epoch,
     );
     info!("Membership created. Reloading stake");
     membership.reload_stake(RECENT_STAKE_TABLES_LIMIT).await;
@@ -1991,5 +1994,62 @@ mod test {
                 break;
             }
         }
+    }
+
+    #[rstest::rstest]
+    #[case::missing(None)]
+    #[case::zero(Some(0))]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn init_node_state_rejects_epochless_genesis_before_l1(
+        #[case] epoch_height: Option<u64>,
+    ) {
+        use espresso_types::v0::traits::PersistenceOptions;
+
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../data/genesis/mainnet.toml");
+        let mut genesis = Genesis::from_file(&path).unwrap();
+        genesis.epoch_height = epoch_height;
+        // Nothing listens on the L1 port and this block is never finalized, so L1 work cannot finish.
+        genesis.l1_finalized = L1Finalized::Number { number: u64::MAX };
+        let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
+        let l1_params = L1Params {
+            urls: vec![format!("http://127.0.0.1:{port}").parse().unwrap()],
+            options: L1ClientOptions::default(),
+        };
+        let catchup = CatchupParams {
+            state_peers: vec![],
+            backoff: Default::default(),
+            base_timeout: Duration::from_secs(2),
+            local_timeout: Duration::from_secs(5),
+            http_delay: Duration::ZERO,
+        };
+        let tmp = tempfile::TempDir::new().unwrap();
+        let persistence = persistence::fs::Options::new(tmp.path().into())
+            .create()
+            .await
+            .unwrap();
+
+        let result = tokio::time::timeout(
+            Duration::from_secs(10),
+            init_node_state(
+                &genesis,
+                &NetworkConfig::<SeqTypes>::default(),
+                l1_params,
+                catchup,
+                persistence,
+                &NoMetrics,
+            ),
+        )
+        .await;
+
+        let err = match result {
+            Ok(Err(err)) => err,
+            Ok(Ok(_)) => panic!("init_node_state accepted epoch_height={epoch_height:?}"),
+            Err(_) => panic!("init_node_state did not return within 10s: it is doing L1 work"),
+        };
+        assert!(
+            format!("{err:#}").contains("epoch_height"),
+            "expected an epoch_height error, got: {err:#}"
+        );
     }
 }
