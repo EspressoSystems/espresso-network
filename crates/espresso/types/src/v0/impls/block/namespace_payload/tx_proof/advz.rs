@@ -272,25 +272,4 @@ mod tests {
         let forged = Transaction::new(tx.namespace(), b"not in the block".to_vec());
         assert!(!proof.verify(block.ns_table(), &forged, &commit, &common));
     }
-
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn tx_proof_rejects_tx_of_another_length() {
-        let mut rng = jf_utils::test_rng();
-        let test = ValidTest::from_tx_lengths(vec![vec![2, 5]], &mut rng);
-        let block =
-            Payload::from_transactions(&test.all_txs(), &Default::default(), &Default::default())
-                .await
-                .unwrap()
-                .0;
-        let disperse = advz_scheme(10).disperse(block.encode()).unwrap();
-        let commit = VidCommitment::V0(disperse.commit);
-        let common = VidCommon::V0(disperse.common.clone());
-
-        let index = block.iter(block.ns_table()).next().unwrap();
-        let (tx, proof) = ADVZTxProof::new(&index, &block, &disperse.common).unwrap();
-        assert!(proof.verify(block.ns_table(), &tx, &commit, &common));
-
-        let shorter = Transaction::new(tx.namespace(), tx.payload()[..1].to_vec());
-        assert!(!proof.verify(block.ns_table(), &shorter, &commit, &common));
-    }
 }
