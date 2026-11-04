@@ -324,9 +324,10 @@ impl Watchdog {
         Ok((poller, receiver))
     }
 
-    /// Checks the stored state against the live network and stores a fresh anchor. A mismatch
-    /// (another network or a reset chain) is an error unless `reset`, which deletes the state with
-    /// a WARN; nodes that no longer serve the stored anchor only log a WARN.
+    /// With `reset`, deletes the stored state and always logs a WARN. Otherwise
+    /// checks it against the live network: a mismatch (another network or a reset chain) is an
+    /// error, nodes that no longer serve the stored anchor only log a WARN. Then stores a fresh
+    /// anchor.
     pub async fn check_state(
         &self,
         nodes: &[WatchedNode],
@@ -334,6 +335,11 @@ impl Watchdog {
         reset: bool,
     ) -> anyhow::Result<()> {
         let stored = self.store.load_anchor().await?;
+        if reset {
+            let deleted = self.store.reset().await?;
+            tracing::warn!(deleted, ?stored, "--reset deleted the stored state");
+            return self.refresh_anchor(nodes, tip_height).await;
+        }
         let live_hash = match &stored {
             Some(anchor) => self.fetch_block_hash(nodes, anchor.height).await,
             None => None,
@@ -352,15 +358,10 @@ impl Watchdog {
                     "no node serves the stored anchor block, state not verified"
                 );
             },
-            Verdict::Mismatch(reason) => {
-                ensure!(
-                    reset,
-                    "the stored state belongs to another network ({reason}); pass --reset to \
-                     delete it or use another --db-path"
-                );
-                tracing::warn!(reason, ?stored, "state belongs to another network, reset");
-                self.store.reset().await?;
-            },
+            Verdict::Mismatch(reason) => bail!(
+                "the stored state belongs to another network ({reason}); pass --reset to delete \
+                 it or use another --db-path"
+            ),
         }
         self.refresh_anchor(nodes, tip_height).await
     }

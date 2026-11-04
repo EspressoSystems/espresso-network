@@ -113,16 +113,19 @@ impl Store {
         Ok(max)
     }
 
-    /// Deletes all state in one transaction: missing rows, progress and the anchor.
-    pub async fn reset(&self) -> anyhow::Result<()> {
+    /// Deletes all state in one transaction: missing rows, progress and the anchor; returns the
+    /// number of deleted rows.
+    pub async fn reset(&self) -> anyhow::Result<u64> {
         let mut tx = self.pool.begin().await?;
+        let mut deleted = 0;
         for table in ["missing_chunk", "node_progress", "anchor"] {
-            sqlx::query(&format!("DELETE FROM {table}"))
+            deleted += sqlx::query(&format!("DELETE FROM {table}"))
                 .execute(&mut *tx)
-                .await?;
+                .await?
+                .rows_affected();
         }
         tx.commit().await?;
-        Ok(())
+        Ok(deleted)
     }
 
     /// Handle scoped to one node label.
@@ -1401,7 +1404,12 @@ mod tests {
             .unwrap();
         assert_eq!(store.max_follow_next_height().await.unwrap(), Some(700));
 
-        store.reset().await.unwrap();
+        assert_eq!(
+            store.reset().await.unwrap(),
+            3,
+            "anchor, progress and one missing row"
+        );
+        assert_eq!(store.reset().await.unwrap(), 0, "nothing left to delete");
         assert_eq!(store.load_anchor().await.unwrap(), None);
         assert_eq!(node.load_progress().await.unwrap(), None);
         let summary = node.missing_summary(at(T0)).await.unwrap();
