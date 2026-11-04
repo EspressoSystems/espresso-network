@@ -28,6 +28,8 @@ RUN chmod +x /bin/query-watchdog-entrypoint
 
 # Run a web server on this port by default. Port can be overridden by the container orchestrator.
 ENV ESPRESSO_QUERY_WATCHDOG_PORT=80
+# Fixed path instead of the platform default: the entrypoint (litestream restore) and
+# /etc/litestream.yml read the same variable, so all three agree on one file.
 ENV ESPRESSO_QUERY_WATCHDOG_DB_PATH=/data/state.sqlite
 
 CMD [ "/bin/query-watchdog-entrypoint" ]
