@@ -105,27 +105,8 @@ fn chain_config() -> ChainConfig {
     }
 }
 
-<<<<<<< HEAD
 /// `[start, duration]` in ms of closed spans, by span name; start is relative to the enclosing
 /// `request_block` span.
-||||||| parent of b059a9cc0 (perf(new-protocol): reuse the pool's hashes when building a block (#5382))
-/// `[start, completion - start, cpu]` in ms per step and iteration, by step name; start is
-/// relative to the enclosing `request_block` span. The CPU kind depends on the step:
-/// - thread CPU: `from_transactions`, `encode`, `builder_commitment`
-/// - process CPU, including rayon workers spinning for work: `request_block`, `block_commitments`
-/// - sum of the `tx_hash` leaves' thread CPU: `transaction_hashes`
-/// - residual upper bound, process CPU of `block_commitments` minus the steps above:
-///   `vid_commitment`
-=======
-/// `[start, completion - start, cpu]` in ms per step and iteration, by step name; start is
-/// relative to the enclosing `request_block` span. The CPU kind depends on the step:
-/// - thread CPU: `from_transactions`, `encode`, `builder_commitment`
-/// - process CPU, including rayon workers spinning for work: `request_block`, `block_commitments`
-/// - sum of the `tx_hash` leaves' thread CPU: `transaction_hashes`, absent while the pool's hashes
-///   are reused
-/// - residual upper bound, process CPU of `block_commitments` minus the steps above:
-///   `vid_commitment`
->>>>>>> b059a9cc0 (perf(new-protocol): reuse the pool's hashes when building a block (#5382))
 static STEPS: Mutex<BTreeMap<&'static str, Vec<[f64; 2]>>> = Mutex::new(BTreeMap::new());
 
 /// Start of the current `request_block` span. Steps on rayon threads have no parent span, and

@@ -331,7 +331,7 @@ fn built_payload_drops_inputs_but_never_changes_one() {
 /// inputs only and that `num_transactions` counts them, and returns their
 /// hashes.
 fn kept_hashes(txs: &[Transaction], chain_config: ChainConfig) -> HashSet<Commitment<Transaction>> {
-    let (block, ns_table) = Payload::from_transactions_sync(txs, chain_config).unwrap();
+    let (block, ns_table) = Payload::from_transactions_sync(txs.to_vec(), chain_config).unwrap();
     let kept: Vec<_> = block
         .transactions(&ns_table)
         .map(|tx| tx.commit())

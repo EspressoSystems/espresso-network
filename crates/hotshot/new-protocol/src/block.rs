@@ -264,13 +264,7 @@ pub struct BlockBuilder<T: NodeType> {
     /// leader and view, so a second block for the view is votable only if its
     /// payload is the same. It is the same whenever the new parent does not
     /// change how the payload is built.
-<<<<<<< HEAD
-    view_transactions: BTreeMap<ViewNumber, Vec<T::Transaction>>,
-||||||| parent of b059a9cc0 (perf(new-protocol): reuse the pool's hashes when building a block (#5382))
-    view_transactions: BTreeMap<ViewNumber, Arc<Vec<T::Transaction>>>,
-=======
     view_transactions: BTreeMap<ViewNumber, PooledBlock<T>>,
->>>>>>> b059a9cc0 (perf(new-protocol): reuse the pool's hashes when building a block (#5382))
     tasks: JoinSet<Result<BlockBuilderOutput<T>, BlockError>>,
 }
 
@@ -330,7 +324,7 @@ impl<T: NodeType> BlockBuilder<T> {
             let validated_state =
                 T::ValidatedState::from_header(&request.parent_proposal.block_header);
             let (payload, metadata) =
-                T::BlockPayload::from_transactions(txs, &validated_state, &instance)
+                T::BlockPayload::from_transactions(txs.to_vec(), &validated_state, &instance)
                     .await
                     .map_err(|e| BlockError::PayloadConstruction(e.to_string()))?;
             let payload: PayloadWithMetadata<T> = PayloadWithMetadata { payload, metadata };
@@ -391,40 +385,16 @@ impl<T: NodeType> BlockBuilder<T> {
         self.calculations.insert((view, parent_commitment), handle);
     }
 
-<<<<<<< HEAD
-    fn transactions_for(&mut self, view: ViewNumber) -> Vec<T::Transaction> {
-||||||| parent of b059a9cc0 (perf(new-protocol): reuse the pool's hashes when building a block (#5382))
-    fn transactions_for(&mut self, view: ViewNumber) -> Arc<Vec<T::Transaction>> {
-=======
     fn transactions_for(&mut self, view: ViewNumber) -> PooledBlock<T> {
->>>>>>> b059a9cc0 (perf(new-protocol): reuse the pool's hashes when building a block (#5382))
         if let Some(pooled) = self.view_transactions.get(&view) {
             return pooled.clone();
         }
-<<<<<<< HEAD
-        let txs = self.take_block(view);
-||||||| parent of b059a9cc0 (perf(new-protocol): reuse the pool's hashes when building a block (#5382))
-        let txs = Arc::new(self.take_block(view));
-=======
         let (txs, hashes) = self.take_block(view);
->>>>>>> b059a9cc0 (perf(new-protocol): reuse the pool's hashes when building a block (#5382))
         let pooled = PooledBlock {
-<<<<<<< HEAD
-            txs: txs.clone(),
-||||||| parent of b059a9cc0 (perf(new-protocol): reuse the pool's hashes when building a block (#5382))
-            txs: Arc::clone(txs),
-=======
             txs: Arc::new(txs),
->>>>>>> b059a9cc0 (perf(new-protocol): reuse the pool's hashes when building a block (#5382))
             hashes: Arc::new(hashes),
         };
-<<<<<<< HEAD
-        self.view_transactions.insert(view, txs.clone());
-||||||| parent of b059a9cc0 (perf(new-protocol): reuse the pool's hashes when building a block (#5382))
-        self.view_transactions.insert(view, Arc::clone());
-=======
         self.view_transactions.insert(view, pooled.clone());
->>>>>>> b059a9cc0 (perf(new-protocol): reuse the pool's hashes when building a block (#5382))
         pooled
     }
 
