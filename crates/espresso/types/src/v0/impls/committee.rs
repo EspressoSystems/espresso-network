@@ -1510,7 +1510,8 @@ impl MembershipSnapshot<SeqTypes> for EpochSnapshot {
     /// # Errors
     ///
     /// Returns `LeaderLookupError` if the snapshot's epoch is before
-    /// `first_epoch`, or the randomized committee is missing.
+    /// `first_epoch`, the randomized committee is missing, or the epoch has
+    /// no eligible leader.
     fn lookup_leader(&self, view: ViewNumber) -> Result<PubKey, Self::Error> {
         let inner = &self.inner;
         let first_epoch = inner.first_epoch;
@@ -1528,6 +1529,12 @@ impl MembershipSnapshot<SeqTypes> for EpochSnapshot {
             );
             return Err(EpochCommitteesError::LeaderLookupError);
         };
+        // `select_randomized_leader` panics on an empty committee. `new` seeds
+        // one when the genesis stake table has no staked member.
+        if inner.committee.eligible_leaders.is_empty() {
+            error!("no eligible leader for epoch {}", inner.epoch);
+            return Err(EpochCommitteesError::LeaderLookupError);
+        }
         Ok(PubKey::public_key(&select_randomized_leader(rand, *view)))
     }
 
@@ -2613,6 +2620,66 @@ mod tests {
                 .cloned()
                 .collect();
             assert_eq!(da, other_da, "epoch {epoch}: DA committee");
+        }
+    }
+
+    /// `count` committee members, none of them with stake.
+    fn unstaked_members(count: u64) -> Vec<PeerConfig<SeqTypes>> {
+        (0..count).map(|i| peer(42, i, 0)).collect()
+    }
+
+    // Without a staked member, the seeded first two epochs have no leader
+    // candidates. A leader lookup there must fail, not panic.
+    #[rstest]
+    #[case::empty_from_genesis(0, EpochNumber::genesis())]
+    #[case::empty_from_later(0, EpochNumber::new(5))]
+    #[case::zero_stake_from_genesis(3, EpochNumber::genesis())]
+    #[case::zero_stake_from_later(3, EpochNumber::new(5))]
+    fn lookup_leader_errors_without_staked_members(
+        #[case] members: u64,
+        #[case] first_epoch: EpochNumber,
+    ) {
+        let members = unstaked_members(members);
+        let committees = EpochCommittees::new(
+            members.clone(),
+            members,
+            None,
+            Fetcher::mock(),
+            100u64,
+            first_epoch,
+        );
+
+        for epoch in [first_epoch, first_epoch + 1] {
+            let snapshot = committees
+                .snapshot(epoch)
+                .unwrap_or_else(|| panic!("no snapshot for epoch {epoch}"));
+            for view in [0, 1, 7, 1000] {
+                let result = snapshot.lookup_leader(ViewNumber::new(view));
+                assert!(
+                    matches!(result, Err(EpochCommitteesError::LeaderLookupError)),
+                    "epoch {epoch}, view {view}: expected LeaderLookupError, got {result:?}"
+                );
+            }
+        }
+    }
+
+    // `NodeState::mock()` builds its membership without a staked member.
+    #[tokio::test]
+    async fn mock_coordinator_leader_errors_without_staked_members() {
+        let coordinator = NodeState::mock().coordinator;
+        let first_epoch = coordinator.membership().first_epoch();
+
+        for epoch in [first_epoch, first_epoch + 1] {
+            let membership = coordinator
+                .membership_for_epoch(Some(epoch))
+                .unwrap_or_else(|err| panic!("epoch {epoch} is not seeded: {err:#}"));
+            for view in [0, 1, 7, 1000] {
+                let result = membership.leader(ViewNumber::new(view));
+                assert!(
+                    result.is_err(),
+                    "epoch {epoch}, view {view}: expected an error, got {result:?}"
+                );
+            }
         }
     }
 
