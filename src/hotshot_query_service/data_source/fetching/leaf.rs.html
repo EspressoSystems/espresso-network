@@ -196,7 +196,7 @@
 <a href=#196 id=196 data-nosnippet>196</a>                <span class="prelude-val">Ok</span>(<span class="kw-2">mut </span>tx) =&gt; {
 <a href=#197 id=197 data-nosnippet>197</a>                    <span class="comment">// Don't bother fetching a pruned leaf.
 <a href=#198 id=198 data-nosnippet>198</a>                    </span><span class="kw">if let </span><span class="prelude-val">Ok</span>(pruned_height) = tx.load_pruned_height().<span class="kw">await
-<a href=#199 id=199 data-nosnippet>199</a>                        </span>&amp;&amp; pruned_height.is_some_and(|ph| height &lt;= ph)
+<a href=#199 id=199 data-nosnippet>199</a>                        </span>&amp;&amp; pruned_height.is_some_and(|ph| height - <span class="number">1 </span>&lt;= ph)
 <a href=#200 id=200 data-nosnippet>200</a>                    {
 <a href=#201 id=201 data-nosnippet>201</a>                        <span class="macro">tracing::info!</span>(height, <span class="question-mark">?</span>pruned_height, <span class="string">"not fetching pruned parent leaf"</span>);
 <a href=#202 id=202 data-nosnippet>202</a>                        <span class="kw">return</span>;

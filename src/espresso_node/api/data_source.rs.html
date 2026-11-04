@@ -765,28 +765,31 @@
 <a href=#765 id=765 data-nosnippet>765</a>        <span class="doccomment">/// The number of stored leaves at or below `height`.
 <a href=#766 id=766 data-nosnippet>766</a>        </span><span class="kw">async fn </span>count_leaves_up_to(db: <span class="kw-2">&amp;</span><span class="self">Self</span>::SqlStorage, height: u64) -&gt; anyhow::Result&lt;i64&gt;;
 <a href=#767 id=767 data-nosnippet>767</a>
-<a href=#768 id=768 data-nosnippet>768</a>        <span class="doccomment">/// Record a deferred migration, as the migration runner does when it starts one.
-<a href=#769 id=769 data-nosnippet>769</a>        </span><span class="kw">async fn </span>insert_deferred_migration(
-<a href=#770 id=770 data-nosnippet>770</a>            db: <span class="kw-2">&amp;</span><span class="self">Self</span>::SqlStorage,
-<a href=#771 id=771 data-nosnippet>771</a>            migration: DeferredMigration,
-<a href=#772 id=772 data-nosnippet>772</a>        ) -&gt; anyhow::Result&lt;()&gt;;
-<a href=#773 id=773 data-nosnippet>773</a>
-<a href=#774 id=774 data-nosnippet>774</a>        <span class="kw">async fn </span>reconstruct_state(
-<a href=#775 id=775 data-nosnippet>775</a>            db: <span class="kw-2">&amp;</span><span class="self">Self</span>::SqlStorage,
-<a href=#776 id=776 data-nosnippet>776</a>            instance: <span class="kw-2">&amp;</span>NodeState,
-<a href=#777 id=777 data-nosnippet>777</a>            from_height: u64,
-<a href=#778 id=778 data-nosnippet>778</a>            to_view: ViewNumber,
-<a href=#779 id=779 data-nosnippet>779</a>            fee_accounts: <span class="kw-2">&amp;</span>[FeeAccount],
-<a href=#780 id=780 data-nosnippet>780</a>            reward_accounts: <span class="kw-2">&amp;</span>[RewardAccountV2],
-<a href=#781 id=781 data-nosnippet>781</a>        ) -&gt; anyhow::Result&lt;(espresso_types::ValidatedState, Leaf2)&gt;;
-<a href=#782 id=782 data-nosnippet>782</a>    }
-<a href=#783 id=783 data-nosnippet>783</a>
-<a href=#784 id=784 data-nosnippet>784</a>    <span class="doccomment">/// A row of the `deferred_migrations` table.
-<a href=#785 id=785 data-nosnippet>785</a>    </span><span class="kw">pub struct </span>DeferredMigration {
-<a href=#786 id=786 data-nosnippet>786</a>        <span class="kw">pub </span>name: <span class="kw-2">&amp;</span><span class="lifetime">'static </span>str,
-<a href=#787 id=787 data-nosnippet>787</a>        <span class="kw">pub </span>started_at: chrono::DateTime&lt;chrono::Utc&gt;,
-<a href=#788 id=788 data-nosnippet>788</a>        <span class="kw">pub </span>completed_at: <span class="prelude-ty">Option</span>&lt;chrono::DateTime&lt;chrono::Utc&gt;&gt;,
-<a href=#789 id=789 data-nosnippet>789</a>        <span class="kw">pub </span>last_offset: <span class="prelude-ty">Option</span>&lt;i64&gt;,
-<a href=#790 id=790 data-nosnippet>790</a>    }
-<a href=#791 id=791 data-nosnippet>791</a>}
+<a href=#768 id=768 data-nosnippet>768</a>        <span class="doccomment">/// The data pruned height, then the lowest stored leaf above genesis.
+<a href=#769 id=769 data-nosnippet>769</a>        </span><span class="kw">async fn </span>data_heights(db: <span class="kw-2">&amp;</span><span class="self">Self</span>::SqlStorage) -&gt; anyhow::Result&lt;(<span class="prelude-ty">Option</span>&lt;u64&gt;, <span class="prelude-ty">Option</span>&lt;u64&gt;)&gt;;
+<a href=#770 id=770 data-nosnippet>770</a>
+<a href=#771 id=771 data-nosnippet>771</a>        <span class="doccomment">/// Record a deferred migration, as the migration runner does when it starts one.
+<a href=#772 id=772 data-nosnippet>772</a>        </span><span class="kw">async fn </span>insert_deferred_migration(
+<a href=#773 id=773 data-nosnippet>773</a>            db: <span class="kw-2">&amp;</span><span class="self">Self</span>::SqlStorage,
+<a href=#774 id=774 data-nosnippet>774</a>            migration: DeferredMigration,
+<a href=#775 id=775 data-nosnippet>775</a>        ) -&gt; anyhow::Result&lt;()&gt;;
+<a href=#776 id=776 data-nosnippet>776</a>
+<a href=#777 id=777 data-nosnippet>777</a>        <span class="kw">async fn </span>reconstruct_state(
+<a href=#778 id=778 data-nosnippet>778</a>            db: <span class="kw-2">&amp;</span><span class="self">Self</span>::SqlStorage,
+<a href=#779 id=779 data-nosnippet>779</a>            instance: <span class="kw-2">&amp;</span>NodeState,
+<a href=#780 id=780 data-nosnippet>780</a>            from_height: u64,
+<a href=#781 id=781 data-nosnippet>781</a>            to_view: ViewNumber,
+<a href=#782 id=782 data-nosnippet>782</a>            fee_accounts: <span class="kw-2">&amp;</span>[FeeAccount],
+<a href=#783 id=783 data-nosnippet>783</a>            reward_accounts: <span class="kw-2">&amp;</span>[RewardAccountV2],
+<a href=#784 id=784 data-nosnippet>784</a>        ) -&gt; anyhow::Result&lt;(espresso_types::ValidatedState, Leaf2)&gt;;
+<a href=#785 id=785 data-nosnippet>785</a>    }
+<a href=#786 id=786 data-nosnippet>786</a>
+<a href=#787 id=787 data-nosnippet>787</a>    <span class="doccomment">/// A row of the `deferred_migrations` table.
+<a href=#788 id=788 data-nosnippet>788</a>    </span><span class="kw">pub struct </span>DeferredMigration {
+<a href=#789 id=789 data-nosnippet>789</a>        <span class="kw">pub </span>name: <span class="kw-2">&amp;</span><span class="lifetime">'static </span>str,
+<a href=#790 id=790 data-nosnippet>790</a>        <span class="kw">pub </span>started_at: chrono::DateTime&lt;chrono::Utc&gt;,
+<a href=#791 id=791 data-nosnippet>791</a>        <span class="kw">pub </span>completed_at: <span class="prelude-ty">Option</span>&lt;chrono::DateTime&lt;chrono::Utc&gt;&gt;,
+<a href=#792 id=792 data-nosnippet>792</a>        <span class="kw">pub </span>last_offset: <span class="prelude-ty">Option</span>&lt;i64&gt;,
+<a href=#793 id=793 data-nosnippet>793</a>    }
+<a href=#794 id=794 data-nosnippet>794</a>}
 </code></pre></div></section></main></body></html>
