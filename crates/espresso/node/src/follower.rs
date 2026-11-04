@@ -628,7 +628,7 @@ impl<P: SequencerPersistence> Follower<P> {
                 next = self.next,
                 from,
                 tip,
-                "skipping ahead; the query service backfills the gap"
+                "skipping ahead; the query service backfills the gap above its pruned height"
             );
             self.catch_up_skipped_epochs(self.next..from).await?;
             self.next = from;
