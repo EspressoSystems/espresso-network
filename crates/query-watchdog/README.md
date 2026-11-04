@@ -18,15 +18,15 @@ cargo run -p query-watchdog -- --nodes https://query.decaf.testnet.espresso.netw
 
 ## Options
 
-| Flag                    | Env (`ESPRESSO_QUERY_WATCHDOG_`) | Default                                                                                             |
-| ----------------------- | -------------------------------- | --------------------------------------------------------------------------------------------------- |
-| `--nodes`               | `NODES`                          | required, comma-separated base URLs without `/v1`, path ends with `/`                               |
-| `--db-path`             | `DB_PATH`                        | required                                                                                            |
-| `--port`                | `PORT`                           | 8080                                                                                                |
-| `--sweep-interval`      | `SWEEP_INTERVAL`                 | 24h, time from one sweep start to the next                                                          |
-| `--request-interval`    | `REQUEST_INTERVAL`               | 200ms, wait before each request of one node                                                         |
-| `--retention-blocks`    | `RETENTION_BLOCKS`               | absent: archive, sweep `[0, tip)`; N: sweep `[tip - N, tip)`, start rounded up to a multiple of 100 |
-| `--alert-missing-after` | `ALERT_MISSING_AFTER`            | 60s, minimum age of missing data for the alert                                                      |
+| Flag                    | Env (`ESPRESSO_QUERY_WATCHDOG_`) | Default                                                                                                                    |
+| ----------------------- | -------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| `--nodes`               | `NODES`                          | required, comma-separated base URLs without `/v1`, path ends with `/`                                                      |
+| `--db-path`             | `DB_PATH`                        | platform data directory, `state.sqlite` (Linux: `~/.local/share/query-watchdog/state.sqlite`); an error when there is none |
+| `--port`                | `PORT`                           | 8080                                                                                                                       |
+| `--sweep-interval`      | `SWEEP_INTERVAL`                 | 24h, time from one sweep start to the next                                                                                 |
+| `--request-interval`    | `REQUEST_INTERVAL`               | 200ms, wait before each request of one node                                                                                |
+| `--retention-blocks`    | `RETENTION_BLOCKS`               | absent: archive, sweep `[0, tip)`; N: sweep `[tip - N, tip)`, start rounded up to a multiple of 100                        |
+| `--alert-missing-after` | `ALERT_MISSING_AFTER`            | 60s, minimum age of missing data for the alert                                                                             |
 
 ## Checked
 
@@ -92,6 +92,8 @@ and kind per minute, for the oldest row of the kind that meets all of:
 - Not checked: data contents, merklized-state history (archive nodes prune it), transactions index, namespace proofs,
   reward tree, `chain_config`, `vid_share`.
 - `--retention-blocks` must not exceed the node's own retention, or pruned heights show as missing.
+- One database per node set: reusing a path with a different `--nodes` list deletes the other set's rows at startup, so
+  use `--db-path` per network.
 - Without `LITESTREAM_REPLICA_URL` the state is lost when the task restarts.
 - Node URLs are assumed internal, without credentials.
 - Route paths and the 100-height chunk are hard-coded copies of the server's routes and limits.

@@ -7,10 +7,15 @@ mod metrics;
 mod store;
 mod watch;
 
-use std::{collections::BTreeSet, path::PathBuf, sync::Arc};
+use std::{
+    collections::BTreeSet,
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
 use anyhow::{Context, ensure};
 use clap::Parser;
+use directories::ProjectDirs;
 use futures::future::try_join_all;
 use prometheus::Registry;
 use tokio::{
@@ -41,12 +46,24 @@ struct Options {
         required = true
     )]
     nodes: Vec<Url>,
-    /// SQLite state file.
+    /// SQLite state file; default `state.sqlite` in the platform data directory of `query-watchdog`.
     #[arg(long, env = "ESPRESSO_QUERY_WATCHDOG_DB_PATH")]
-    db_path: PathBuf,
+    db_path: Option<PathBuf>,
     /// Pacing.
     #[command(flatten)]
     watch: WatchOptions,
+}
+
+impl Options {
+    /// `--db-path`, or `state.sqlite` in the platform data directory; errors when there is none.
+    fn resolve_db_path(&self) -> anyhow::Result<PathBuf> {
+        if let Some(path) = &self.db_path {
+            return Ok(path.clone());
+        }
+        let dirs = ProjectDirs::from("", "espresso", "query-watchdog")
+            .context("no home directory found for the default state file, pass --db-path")?;
+        Ok(dirs.data_dir().join("state.sqlite"))
+    }
 }
 
 /// Parses options, opens the store, forgets other nodes, opens the read-only pool of the page,
@@ -69,9 +86,10 @@ async fn main() -> anyhow::Result<()> {
         labels.iter().collect::<BTreeSet<_>>().len() == labels.len(),
         "duplicate node labels in {labels:?}"
     );
-    log_config(&options, &labels);
+    let db_path = options.resolve_db_path()?;
+    log_config(&options, &db_path, &labels);
 
-    let store = Store::open(&options.db_path).await?;
+    let store = Store::open(&db_path).await?;
     let forgotten = store.forget_other_nodes(&labels).await?;
     tracing::info!(count = forgotten, "forgot nodes");
 
@@ -80,7 +98,7 @@ async fn main() -> anyhow::Result<()> {
     let listener = TcpListener::bind(("0.0.0.0", options.port))
         .await
         .with_context(|| format!("binding port {}", options.port))?;
-    let reader = Store::open_read_only(&options.db_path).await?;
+    let reader = Store::open_read_only(&db_path).await?;
     let sweep_etas = SweepEtas::default();
     let window = options.watch.sweep_window();
     let app = AppState::new(registry, reader, nodes.clone(), window, sweep_etas.clone());
@@ -117,11 +135,11 @@ async fn main() -> anyhow::Result<()> {
 }
 
 /// The `config` INFO line.
-fn log_config(options: &Options, labels: &[String]) {
+fn log_config(options: &Options, db_path: &Path, labels: &[String]) {
     let watch = &options.watch;
     tracing::info!(
         nodes = ?labels,
-        db_path = %options.db_path.display(),
+        db_path = %db_path.display(),
         sweep_interval = %humantime::format_duration(watch.sweep_interval),
         request_interval = %humantime::format_duration(watch.request_interval),
         alert_missing_after = %humantime::format_duration(watch.alert_missing_after),
