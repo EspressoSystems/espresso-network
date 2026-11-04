@@ -530,6 +530,40 @@ mod test {
         );
     }
 
+    /// Live networks pin the full genesis L1 block, so startup never fetches it from L1.
+    #[test]
+    fn test_live_genesis_files_pin_l1_block() {
+        let cases = [
+            (
+                "mainnet.toml",
+                21116303,
+                0x67291ceb,
+                "0x8c580daf96a83884d4fac219dea3c26d7a805e4c92c91e04c5efc26929b4b129",
+            ),
+            (
+                "decaf.toml",
+                6758037,
+                0x66f43a1c,
+                "0x7063208185b352ec9732ee8eda32fa997dffa3a7abac945b9d91b21d85b173e2",
+            ),
+        ];
+        for (file, number, timestamp, hash) in cases {
+            let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../../data/genesis")
+                .join(file);
+            let genesis = Genesis::from_file(&path).unwrap();
+            assert_eq!(
+                genesis.l1_finalized,
+                L1Finalized::Block(L1BlockInfo {
+                    number,
+                    timestamp: U256::from(timestamp),
+                    hash: hash.parse::<B256>().unwrap(),
+                }),
+                "{file}",
+            );
+        }
+    }
+
     #[test]
     fn test_genesis_from_toml_with_optional_fields() {
         let toml = toml! {
