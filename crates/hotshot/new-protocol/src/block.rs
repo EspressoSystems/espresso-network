@@ -298,6 +298,8 @@ pub struct BlockBuilder<T: NodeType> {
     view_transactions: BTreeMap<ViewNumber, PooledBlock<T>>,
     /// Requests waiting for the pool to fill, by view.
     deferred: BTreeMap<ViewNumber, DeferredBuild<T>>,
+    /// The latest view whose Cert1 formed here.
+    cert1_view: Option<ViewNumber>,
     tasks: JoinSet<Result<BlockBuilderOutput<T>, BlockError>>,
     tracer: Option<crate::leader_trace::LeaderTracerHandle>,
     commitments_duration_metric: Option<Arc<dyn Histogram>>,
@@ -326,6 +328,7 @@ impl<T: NodeType> BlockBuilder<T> {
             calculations: BTreeMap::new(),
             view_transactions: BTreeMap::new(),
             deferred: BTreeMap::new(),
+            cert1_view: None,
             tasks: JoinSet::new(),
             tracer: None,
             commitments_duration_metric: None,
@@ -353,7 +356,10 @@ impl<T: NodeType> BlockBuilder<T> {
             deferred.requests.push(request);
             return;
         }
-        if self.view_transactions.contains_key(&view) || self.pool_is_ready(view) {
+        if self.view_transactions.contains_key(&view)
+            || self.pool_is_ready(view)
+            || self.can_propose(view)
+        {
             self.build(request);
             return;
         }
@@ -370,6 +376,13 @@ impl<T: NodeType> BlockBuilder<T> {
     fn pool_is_ready(&self, view: ViewNumber) -> bool {
         let min_bytes = (self.block_size(view) as f64 * self.config.min_pool_fraction) as u64;
         self.leader_total_bytes > 0 && self.leader_total_bytes >= min_bytes
+    }
+
+    /// Whether the leader of `view` could propose as soon as it has a block, so holding one
+    /// for the pool to fill only delays it: Cert1 of the previous view has formed and the
+    /// pool is not empty.
+    fn can_propose(&self, view: ViewNumber) -> bool {
+        self.cert1_view.is_some_and(|cert1| cert1 + 1 >= view) && self.leader_total_bytes > 0
     }
 
     /// Builds the parked requests of every view whose pool is ready, earliest view first.
@@ -399,11 +412,13 @@ impl<T: NodeType> BlockBuilder<T> {
     }
 
     /// Cert1 of `view` formed, so the leader of the view after it can propose as soon as it
-    /// has a block: a request parked for the pool to fill builds now with what arrived. An
-    /// empty pool keeps waiting, since an empty block would only pass the turn.
+    /// has a block: a request parked for the pool to fill builds now with what arrived, and
+    /// one that arrives later builds at once. An empty pool keeps waiting, since an empty
+    /// block would only pass the turn.
     pub fn on_certificate1(&mut self, view: ViewNumber) {
+        self.cert1_view = self.cert1_view.max(Some(view));
         let next = view + 1;
-        if self.deferred.contains_key(&next) && self.leader_total_bytes > 0 {
+        if self.deferred.contains_key(&next) && self.can_propose(next) {
             self.build_deferred(next);
         }
     }

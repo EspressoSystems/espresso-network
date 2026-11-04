@@ -159,6 +159,31 @@ async fn cert1_of_the_previous_view_builds_a_parked_request() {
     );
 }
 
+/// Cert1 can form before the leader's own validation of the proposal requests the block;
+/// the request then builds at once instead of waiting out `empty_block_delay`.
+#[tokio::test]
+async fn request_after_cert1_of_the_previous_view_builds_at_once() {
+    let mut b = builder_with(BlockBuilderConfig {
+        min_pool_fraction: 1.0,
+        ..small_config()
+    });
+    let test_data = TestData::new(1).await;
+    b.on_transactions(tx_msg(view(5), vec![tx(1)]));
+    b.on_certificate1(view(4));
+    b.request_block(BlockAndHeaderRequest {
+        view: view(5),
+        epoch: epoch(),
+        parent_proposal: test_data.views[0].proposal.data.clone(),
+    });
+    let output = tokio::time::timeout(Duration::from_millis(200), b.next())
+        .await
+        .expect("the request builds without waiting")
+        .expect("a block is building")
+        .expect("the block builds");
+    assert_eq!(output.view, view(5));
+    assert_eq!(output.manifest.hashes, vec![tx(1).commit()]);
+}
+
 #[tokio::test]
 async fn pending_transaction_is_resent_only_after_its_leaders_had_their_turn() {
     let mut b = builder_with(BlockBuilderConfig {
