@@ -17,6 +17,7 @@ use tokio::{sync::watch, time::Instant};
 use url::Url;
 
 use crate::{
+    anchor::{Anchor, Verdict, verdict},
     chunk::{CHUNK_LEN, DataKind, EpochConfig, Probe, next_chunk, probes},
     gaps::{Known, Presence, Unrefined, find_gaps, parse_missing_height},
     metrics::WatchdogMetrics,
@@ -185,17 +186,19 @@ pub enum FetchTarget {
     BlockHeight,
     MerklizedStateHeight,
     Config,
+    Anchor,
 }
 
 impl FetchTarget {
     /// The `kind` label of `fetch_errors_total`: the `DataKind` label, `"block_height"`,
-    /// `"merklized_state_height"` or `"config"`.
+    /// `"merklized_state_height"`, `"config"` or `"anchor"`.
     pub fn label(self) -> &'static str {
         match self {
             Self::Data(kind) => kind.into(),
             Self::BlockHeight => "block_height",
             Self::MerklizedStateHeight => "merklized_state_height",
             Self::Config => "config",
+            Self::Anchor => "anchor",
         }
     }
 }
@@ -221,6 +224,12 @@ const HTTP_TIMEOUT: Duration = Duration::from_secs(60);
 #[derive(Deserialize)]
 struct NetworkConfig {
     config: EpochConfig,
+}
+
+/// The part of a block summary the watchdog reads.
+#[derive(Deserialize)]
+struct BlockSummary {
+    hash: String,
 }
 
 /// Total time of a GET that is decoded (tip, state height, config).
@@ -313,6 +322,72 @@ impl Watchdog {
             tip: sender,
         };
         Ok((poller, receiver))
+    }
+
+    /// Checks the stored state against the live network and stores a fresh anchor. A mismatch
+    /// (another network or a reset chain) is an error unless `reset`, which deletes the state with
+    /// a WARN; nodes that no longer serve the stored anchor only log a WARN.
+    pub async fn check_state(
+        &self,
+        nodes: &[WatchedNode],
+        tip_height: u64,
+        reset: bool,
+    ) -> anyhow::Result<()> {
+        let stored = self.store.load_anchor().await?;
+        let live_hash = match &stored {
+            Some(anchor) => self.fetch_block_hash(nodes, anchor.height).await,
+            None => None,
+        };
+        let max_follow = self.store.max_follow_next_height().await?;
+        match verdict(
+            stored.as_ref(),
+            live_hash.as_deref(),
+            max_follow,
+            tip_height,
+        ) {
+            Verdict::Consistent => {},
+            Verdict::Unverifiable => {
+                tracing::warn!(
+                    ?stored,
+                    "no node serves the stored anchor block, state not verified"
+                );
+            },
+            Verdict::Mismatch(reason) => {
+                ensure!(
+                    reset,
+                    "the stored state belongs to another network ({reason}); pass --reset to \
+                     delete it or use another --db-path"
+                );
+                tracing::warn!(reason, ?stored, "state belongs to another network, reset");
+                self.store.reset().await?;
+            },
+        }
+        self.refresh_anchor(nodes, tip_height).await
+    }
+
+    /// Stores the block `ALERT_TIP_MARGIN` below `tip_height` as the anchor, when a node serves it.
+    async fn refresh_anchor(&self, nodes: &[WatchedNode], tip_height: u64) -> anyhow::Result<()> {
+        let height = tip_height.saturating_sub(ALERT_TIP_MARGIN);
+        if let Some(hash) = self.fetch_block_hash(nodes, height).await {
+            self.store.save_anchor(&Anchor { height, hash }).await?;
+        }
+        Ok(())
+    }
+
+    /// The hash of block `height` from the first node that serves its summary.
+    async fn fetch_block_hash(&self, nodes: &[WatchedNode], height: u64) -> Option<String> {
+        let route = format!("v1/availability/block/summary/{height}");
+        for node in nodes {
+            match self.get_json::<BlockSummary>(node, &route).await {
+                Ok(summary) => return Some(summary.hash),
+                Err(error) => {
+                    tracing::debug!(node = %node.label, %error, height, "anchor request failed");
+                    self.metrics
+                        .count_fetch_error(&node.label, FetchTarget::Anchor, &error);
+                },
+            }
+        }
+        None
     }
 
     /// `v1/config/hotshot` from the first node that answers; `None` when `epoch_height` is 0;
@@ -449,13 +524,19 @@ pub struct TipPoller {
 
 impl TipPoller {
     /// Polls forever, returning only an error; a round where no node answers keeps the previous
-    /// tip.
+    /// tip. Refreshes the stored anchor block once a minute.
     pub async fn run(self) -> anyhow::Result<Infallible> {
+        let mut last_anchor_at = Instant::now();
         loop {
             tokio::time::sleep(TIP_POLL_INTERVAL).await;
-            if let Some(tip) = self.watchdog.fetch_tip(&self.nodes).await {
-                self.watchdog.metrics.set_tip_height(tip)?;
-                self.tip.send_replace(tip);
+            let Some(tip) = self.watchdog.fetch_tip(&self.nodes).await else {
+                continue;
+            };
+            self.watchdog.metrics.set_tip_height(tip)?;
+            self.tip.send_replace(tip);
+            if last_anchor_at.elapsed() >= SUMMARY_INTERVAL {
+                last_anchor_at = Instant::now();
+                self.watchdog.refresh_anchor(&self.nodes, tip).await?;
             }
         }
     }
@@ -1061,7 +1142,7 @@ mod tests {
     use std::{
         collections::BTreeSet,
         str::FromStr,
-        sync::atomic::{AtomicBool, Ordering},
+        sync::atomic::{AtomicBool, AtomicU64, Ordering},
     };
 
     use axum::{
@@ -1082,6 +1163,8 @@ mod tests {
         missing: Arc<Mutex<BTreeSet<u64>>>,
         /// Every request answers 500 while set.
         failing: Arc<AtomicBool>,
+        /// Part of every block hash; a change stands for another network.
+        salt: Arc<AtomicU64>,
         requests: Arc<Mutex<Vec<(Method, String)>>>,
     }
 
@@ -1115,14 +1198,27 @@ mod tests {
         }
     }
 
+    /// Like the block summary route: only the hash matters here.
+    async fn fake_block_summary(State(node): State<FakeNode>, Path(height): Path<u64>) -> String {
+        format!(
+            r#"{{"hash":"hash-{}-{height}"}}"#,
+            node.salt.load(Ordering::SeqCst)
+        )
+    }
+
     async fn serve_fake(missing: impl IntoIterator<Item = u64>) -> (WatchedNode, FakeNode) {
         let fake = FakeNode {
             missing: Arc::new(Mutex::new(missing.into_iter().collect())),
             failing: Arc::default(),
+            salt: Arc::default(),
             requests: Arc::default(),
         };
         let app = Router::new()
             .route("/v1/availability/leaf/{from}/{until}", get(fake_leaf_range))
+            .route(
+                "/v1/availability/block/summary/{height}",
+                get(fake_block_summary),
+            )
             .fallback(|| async { StatusCode::OK })
             .with_state(fake.clone());
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -1262,6 +1358,85 @@ mod tests {
         watch.check_probe(&rest).await.unwrap();
         assert_eq!(missing().await, 0);
         assert!(watch.alerts().await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn state_of_another_network_is_an_error_unless_reset() {
+        let (node, fake) = serve_fake([]).await;
+        let (watchdog, store, _registry) = test_watchdog(None).await;
+        let nodes = [node];
+        let anchor = |height, hash: &str| {
+            Some(Anchor {
+                height,
+                hash: hash.to_owned(),
+            })
+        };
+
+        watchdog.check_state(&nodes, 1_000, false).await.unwrap();
+        assert_eq!(
+            store.load_anchor().await.unwrap(),
+            anchor(990, "hash-0-990")
+        );
+        watchdog.check_state(&nodes, 1_100, false).await.unwrap();
+        assert_eq!(
+            store.load_anchor().await.unwrap(),
+            anchor(1_090, "hash-0-1090")
+        );
+
+        // Another network: an error that leaves the state alone.
+        fake.salt.store(1, Ordering::SeqCst);
+        let gap = Probe {
+            kind: DataKind::Leaf,
+            range: 0..100,
+        };
+        let node_store = store.node(&nodes[0].label);
+        node_store
+            .record_missing(&gap, "404", utc_now())
+            .await
+            .unwrap();
+        let error = watchdog
+            .check_state(&nodes, 1_200, false)
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("--reset"), "{error}");
+        assert_eq!(
+            store.load_anchor().await.unwrap(),
+            anchor(1_090, "hash-0-1090")
+        );
+        assert_eq!(
+            node_store
+                .missing_ranges(utc_now(), 10)
+                .await
+                .unwrap()
+                .total,
+            1
+        );
+
+        // With `--reset`, the state is deleted and anchored to the new network.
+        watchdog.check_state(&nodes, 1_200, true).await.unwrap();
+        assert_eq!(
+            store.load_anchor().await.unwrap(),
+            anchor(1_190, "hash-1-1190")
+        );
+        assert_eq!(
+            node_store
+                .missing_ranges(utc_now(), 10)
+                .await
+                .unwrap()
+                .total,
+            0
+        );
+
+        // A follow height above the tip means the chain went backwards.
+        let progress = NodeProgress {
+            follow_next_height: 5_000,
+            sweep: SweepState::Waiting {
+                start_at: utc_now(),
+            },
+            last_sweep_completed_at: None,
+        };
+        node_store.save_progress(&progress).await.unwrap();
+        assert!(watchdog.check_state(&nodes, 1_300, false).await.is_err());
     }
 
     #[tokio::test]

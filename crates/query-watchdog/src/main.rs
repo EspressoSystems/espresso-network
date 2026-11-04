@@ -1,5 +1,6 @@
 //! Watches archive query nodes for data they fail to serve; see `README.md`.
 
+mod anchor;
 mod chunk;
 mod gaps;
 mod http;
@@ -49,6 +50,10 @@ struct Options {
     /// SQLite state file; default `state.sqlite` in the platform data directory of `query-watchdog`.
     #[arg(long, env = "ESPRESSO_QUERY_WATCHDOG_DB_PATH")]
     db_path: Option<PathBuf>,
+    /// Delete the stored state when it belongs to another network; without a mismatch it changes
+    /// nothing.
+    #[arg(long, env = "ESPRESSO_QUERY_WATCHDOG_RESET")]
+    reset: bool,
     /// Pacing.
     #[command(flatten)]
     watch: WatchOptions,
@@ -115,6 +120,9 @@ async fn main() -> anyhow::Result<()> {
     );
 
     let (tip_poller, tip) = watchdog.start_tip_poller(nodes.clone()).await?;
+    watchdog
+        .check_state(&nodes, *tip.borrow(), options.reset)
+        .await?;
     app.set_tip(tip.clone());
     let watches = try_join_all(
         nodes

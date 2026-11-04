@@ -8,7 +8,10 @@ use sqlx::{
 };
 use strum::VariantArray;
 
-use crate::chunk::{DataKind, EpochConfig, Probe};
+use crate::{
+    anchor::Anchor,
+    chunk::{DataKind, EpochConfig, Probe},
+};
 
 /// SQLite state of all node watches; WAL, so litestream can replicate it.
 #[derive(Clone, Debug)]
@@ -77,6 +80,49 @@ impl Store {
             .rows_affected();
         tx.commit().await?;
         Ok(forgotten)
+    }
+
+    /// The stored anchor block, if any.
+    pub async fn load_anchor(&self) -> anyhow::Result<Option<Anchor>> {
+        let row: Option<(u64, String)> =
+            sqlx::query_as("SELECT height, hash FROM anchor WHERE id = 1")
+                .fetch_optional(&self.pool)
+                .await?;
+        Ok(row.map(|(height, hash)| Anchor { height, hash }))
+    }
+
+    /// Replaces the stored anchor block.
+    pub async fn save_anchor(&self, anchor: &Anchor) -> anyhow::Result<()> {
+        sqlx::query(
+            "INSERT INTO anchor (id, height, hash) VALUES (1, ?, ?) ON CONFLICT (id) DO UPDATE \
+             SET height = excluded.height, hash = excluded.hash",
+        )
+        .bind(i64::try_from(anchor.height)?)
+        .bind(&anchor.hash)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// The largest follow height of any node, `None` without progress.
+    pub async fn max_follow_next_height(&self) -> anyhow::Result<Option<u64>> {
+        let (max,): (Option<u64>,) =
+            sqlx::query_as("SELECT MAX(follow_next_height) FROM node_progress")
+                .fetch_one(&self.pool)
+                .await?;
+        Ok(max)
+    }
+
+    /// Deletes all state in one transaction: missing rows, progress and the anchor.
+    pub async fn reset(&self) -> anyhow::Result<()> {
+        let mut tx = self.pool.begin().await?;
+        for table in ["missing_chunk", "node_progress", "anchor"] {
+            sqlx::query(&format!("DELETE FROM {table}"))
+                .execute(&mut *tx)
+                .await?;
+        }
+        tx.commit().await?;
+        Ok(())
     }
 
     /// Handle scoped to one node label.
@@ -1321,6 +1367,45 @@ mod tests {
 
     fn one(range: Range<u64>) -> Vec<Range<u64>> {
         vec![range]
+    }
+
+    #[tokio::test]
+    async fn anchor_roundtrip_and_reset() {
+        let node = node_store("a:1").await;
+        let store = Store {
+            pool: node.pool.clone(),
+        };
+        assert_eq!(store.load_anchor().await.unwrap(), None);
+        assert_eq!(store.max_follow_next_height().await.unwrap(), None);
+
+        let anchor = Anchor {
+            height: 500,
+            hash: "abc".to_owned(),
+        };
+        store.save_anchor(&anchor).await.unwrap();
+        let newer = Anchor {
+            height: 600,
+            hash: "def".to_owned(),
+        };
+        store.save_anchor(&newer).await.unwrap();
+        assert_eq!(store.load_anchor().await.unwrap(), Some(newer));
+
+        let progress = NodeProgress {
+            follow_next_height: 700,
+            sweep: SweepState::Waiting { start_at: at(T0) },
+            last_sweep_completed_at: None,
+        };
+        node.save_progress(&progress).await.unwrap();
+        node.record_missing(&probe(DataKind::Leaf, 0..100), "404", at(T0))
+            .await
+            .unwrap();
+        assert_eq!(store.max_follow_next_height().await.unwrap(), Some(700));
+
+        store.reset().await.unwrap();
+        assert_eq!(store.load_anchor().await.unwrap(), None);
+        assert_eq!(node.load_progress().await.unwrap(), None);
+        let summary = node.missing_summary(at(T0)).await.unwrap();
+        assert_eq!(summary.iter().map(|k| k.missing_count).sum::<u64>(), 0);
     }
 
     #[test]

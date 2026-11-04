@@ -28,3 +28,9 @@ CREATE TABLE node_progress (
     last_sweep_completed_at INTEGER NULL,
     CHECK ((next_sweep_at IS NULL) = (sweep_next_height IS NOT NULL))
 );
+
+CREATE TABLE anchor (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    height INTEGER NOT NULL,
+    hash TEXT NOT NULL
+);

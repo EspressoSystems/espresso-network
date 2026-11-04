@@ -39,6 +39,7 @@ cargo run -p query-watchdog -- --nodes https://query.decaf.testnet.espresso.netw
 | `--request-interval`    | `REQUEST_INTERVAL`               | 200ms, wait before each request of one node                                                                                |
 | `--retention-blocks`    | `RETENTION_BLOCKS`               | absent: archive, sweep `[0, tip)`; N: sweep `[tip - N, tip)`, start rounded up to a multiple of 100                        |
 | `--alert-missing-after` | `ALERT_MISSING_AFTER`            | 60s, minimum age of missing data for the alert                                                                             |
+| `--reset`               | `RESET`                          | off; deletes the stored state when it belongs to another network, otherwise changes nothing                                |
 
 ## Checked
 
@@ -128,9 +129,12 @@ task resumes where the old one stopped.
 - Not checked: data contents, merklized-state history (archive nodes prune it), transactions index, namespace proofs,
   reward tree, `chain_config`, `vid_share`.
 - `--retention-blocks` must not exceed the node's own retention, or pruned heights show as missing.
-- One database per node set: reusing a path with a different `--nodes` list deletes the other set's rows at startup, so
-  use `--db-path` per network.
-- Without `LITESTREAM_REPLICA_URL` the state is lost when the task restarts.
+- The state is bound to one network. At startup a recent block hash stored with it and the follow heights are checked
+  against the live nodes: another network or a reset chain exits with an error unless `--reset` deletes the state (it
+  logs a WARN; pass it once, not in the standing config). A stored block the nodes no longer serve only logs a WARN.
+  Rows of nodes no longer in `--nodes` are forgotten at startup.
+- Without `LITESTREAM_REPLICA_URL` the state is lost when the task restarts. `--reset` deletes rows, so litestream
+  replicates the reset; to retire a replica, point `LITESTREAM_REPLICA_URL` at a new path.
 - Node URLs must not carry credentials (a startup error): the URL appears in alerts, on the page and in debug logs.
 - Route paths and the 100-height chunk are hard-coded copies of the server's routes and limits.
 - The sweep ETA uses the rate since this process started sweeping and resets on restart.
