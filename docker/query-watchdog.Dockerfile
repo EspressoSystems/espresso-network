@@ -8,16 +8,14 @@ RUN case "${TARGETARCH}" in \
       arm64) litestream_arch=arm64 ;; \
       *) echo "unsupported arch: ${TARGETARCH}" >&2; exit 1 ;; \
     esac \
-    && release="https://github.com/benbjohnson/litestream/releases/download/v${LITESTREAM_VERSION}" \
-    && tarball="litestream-${LITESTREAM_VERSION}-linux-${litestream_arch}.tar.gz" \
-    && workdir="$(mktemp --directory)" \
-    && cd "${workdir}" \
-    && curl --fail --silent --show-error --location --remote-name "${release}/checksums.txt" \
-    && curl --fail --silent --show-error --location --remote-name "${release}/${tarball}" \
-    && grep " ${tarball}\$" checksums.txt | sha256sum --check - \
-    && tar --extract --gzip --file "${tarball}" --directory /usr/local/bin litestream \
-    && cd / \
-    && rm -rf "${workdir}"
+    && deb="litestream-${LITESTREAM_VERSION}-linux-${litestream_arch}.deb" \
+    && url="https://github.com/benbjohnson/litestream/releases/download/v${LITESTREAM_VERSION}" \
+    && tmp="$(mktemp -d)" \
+    && curl --fail --silent --show-error --location --output "${tmp}/${deb}" "${url}/${deb}" \
+    && curl --fail --silent --show-error --location --output "${tmp}/checksums.txt" "${url}/checksums.txt" \
+    && (cd "${tmp}" && grep " ${deb}\$" checksums.txt | sha256sum --check -) \
+    && dpkg -i "${tmp}/${deb}" \
+    && rm -rf "${tmp}"
 
 COPY target/$TARGETARCH/release/query-watchdog /bin/query-watchdog
 RUN chmod +x /bin/query-watchdog
