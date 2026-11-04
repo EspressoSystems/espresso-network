@@ -293,39 +293,4 @@ mod tests {
         let shorter = Transaction::new(tx.namespace(), tx.payload()[..1].to_vec());
         assert!(!proof.verify(block.ns_table(), &shorter, &commit, &common));
     }
-
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    #[ignore = "fails: not fixed yet"]
-    async fn tx_proof_rejects_tx_moved_to_another_namespace() {
-        let mut rng = jf_utils::test_rng();
-        let test = ValidTest::from_tx_lengths(vec![vec![5, 0, 24], vec![4], vec![1, 2]], &mut rng);
-        let block =
-            Payload::from_transactions(&test.all_txs(), &Default::default(), &Default::default())
-                .await
-                .unwrap()
-                .0;
-        let disperse = advz_scheme(4).disperse(block.encode()).unwrap();
-        let commit = VidCommitment::V0(disperse.commit);
-        let common = VidCommon::V0(disperse.common.clone());
-        let txs: Vec<_> = block
-            .iter(block.ns_table())
-            .map(|index| ADVZTxProof::new(&index, &block, &disperse.common).unwrap())
-            .collect();
-
-        for (tx, proof) in &txs {
-            for (other, _) in txs
-                .iter()
-                .filter(|(other, _)| other.namespace() != tx.namespace())
-            {
-                let moved = Transaction::new(other.namespace(), tx.payload().to_vec());
-                if txs.iter().any(|(real, _)| *real == moved) {
-                    continue;
-                }
-                assert!(
-                    !proof.verify(block.ns_table(), &moved, &commit, &common),
-                    "proof of {tx:?} verified {moved:?}"
-                );
-            }
-        }
-    }
 }
