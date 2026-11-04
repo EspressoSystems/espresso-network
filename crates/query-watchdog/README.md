@@ -69,9 +69,26 @@ and kind per minute, for the oldest row of the kind that meets all of:
 ## Docker
 
 - Image: `docker/query-watchdog.Dockerfile`, entrypoint `docker/query-watchdog/entrypoint.sh`.
+- Build locally: `scripts/build-docker-images-native --image query-watchdog`.
 - The image sets `ESPRESSO_QUERY_WATCHDOG_PORT=80` and `ESPRESSO_QUERY_WATCHDOG_DB_PATH=/data/state.sqlite`.
-- `LITESTREAM_REPLICA_URL` is optional. When set, litestream restores and replicates the file.
-- One task per replica path. Two writers corrupt the replica.
+- `/data` is not a volume. Mount one (`-v <dir>:/data`) or use litestream to keep state across containers.
+
+## State replication (litestream)
+
+The SQLite file holds the missing ranges, their first-missing times and sweep progress. Losing it resets alert ages and
+restarts the sweep from the window start. [Litestream](https://litestream.io) can stream it to S3 so a replaced Fargate
+task resumes where the old one stopped.
+
+- Optional. Without `LITESTREAM_REPLICA_URL` the entrypoint logs one line and runs the watchdog alone on local state.
+- With `LITESTREAM_REPLICA_URL` (for example `s3://bucket/query-watchdog/decaf`):
+  1. `litestream restore -if-db-not-exists -if-replica-exists` fetches the last replica when the local file is absent.
+  2. `litestream replicate -exec /bin/query-watchdog` runs the watchdog and streams changes (about 1 s lag).
+- Config: `docker/query-watchdog/litestream.yml` (one db, one `replica:` with `url: ${LITESTREAM_REPLICA_URL}`).
+- Credentials: AWS SDK default chain, on Fargate the task role. The role needs read and write on the replica prefix.
+- One writer per replica path. Run the ECS service with `minimumHealthyPercent=0` and `maximumPercent=100`; two writers
+  corrupt the replica.
+- Local test: `-e LITESTREAM_REPLICA_URL=file:///replica -v <dir>:/replica`.
+- Litestream is installed from the pinned release `.deb` (`LITESTREAM_VERSION` in the Dockerfile).
 
 ## Known limitations
 
