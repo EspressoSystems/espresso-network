@@ -1,20 +1,11 @@
 use chrono::{DateTime, Utc};
-use prometheus::{IntCounterVec, IntGaugeVec, Opts, Registry};
-use strum::IntoStaticStr;
+use prometheus::{IntCounterVec, IntGauge, IntGaugeVec, Opts, Registry};
 
 use crate::{
     chunk::DataKind,
     store::{NodeProgress, SweepState},
     watch::{FetchError, FetchTarget, NodeSummary},
 };
-
-/// Outcome of one probe, the `result` label of `probes_total`.
-#[derive(Clone, Copy, Debug, IntoStaticStr)]
-#[strum(serialize_all = "snake_case")]
-pub enum ProbeResult {
-    Found,
-    Missing,
-}
 
 /// `query_watchdog_*` families on the process `Registry`.
 pub struct WatchdogMetrics {
@@ -30,15 +21,17 @@ pub struct WatchdogMetrics {
     fetch_errors_total: IntCounterVec,
     /// `{node}`, unix seconds.
     last_sweep_completed_seconds: IntGaugeVec,
-    /// `{node}`.
-    tip_height: IntGaugeVec,
+    /// Max block height of all watched nodes.
+    tip_height: IntGauge,
     /// `{node}`.
     follow_next_height: IntGaugeVec,
-    /// `{node}`, 0 while the sweep is waiting.
+    /// `{node}`, 1 while a sweep runs, 0 while it waits.
+    sweep_running: IntGaugeVec,
+    /// `{node}`, next height of the running sweep; 0 while waiting.
     sweep_next_height: IntGaugeVec,
-    /// `{node}`, 0 while the sweep is waiting.
+    /// `{node}`, end height of the running sweep; 0 while waiting.
     sweep_until_height: IntGaugeVec,
-    /// `{node,kind,result}`, every probe.
+    /// `{node,kind}`, every probe sent.
     probes_total: IntCounterVec,
 }
 
@@ -67,46 +60,48 @@ impl WatchdogMetrics {
                 "Tip height minus the node's merklized state height",
                 &["node"],
             )?,
-            fetch_errors_total: {
-                let opts = Opts::new(
-                    "query_watchdog_fetch_errors_total",
-                    "Requests without a 200",
-                );
-                let counter = IntCounterVec::new(opts, &["node", "kind", "status"])?;
-                registry.register(Box::new(counter.clone()))?;
-                counter
-            },
+            fetch_errors_total: counter(
+                registry,
+                "fetch_errors_total",
+                "Requests without a 200",
+                &["node", "kind", "status"],
+            )?,
             last_sweep_completed_seconds: gauge(
                 registry,
                 "last_sweep_completed_seconds",
                 "Unix time of the last completed sweep",
                 &["node"],
             )?,
-            tip_height: gauge(registry, "tip_height", "Tip height", &["node"])?,
+            tip_height: {
+                let gauge = IntGauge::new("query_watchdog_tip_height", "Tip height")?;
+                registry.register(Box::new(gauge.clone()))?;
+                gauge
+            },
             follow_next_height: gauge(
                 registry,
                 "follow_next_height",
                 "Next height follow checks",
                 &["node"],
             )?,
+            sweep_running: gauge(
+                registry,
+                "sweep_running",
+                "1 while a sweep runs, 0 while it waits",
+                &["node"],
+            )?,
             sweep_next_height: gauge(
                 registry,
                 "sweep_next_height",
-                "Next height the running sweep checks, 0 while waiting",
+                "Next height of the running sweep, 0 while waiting",
                 &["node"],
             )?,
             sweep_until_height: gauge(
                 registry,
                 "sweep_until_height",
-                "End of the running sweep, 0 while waiting",
+                "End height of the running sweep, 0 while waiting",
                 &["node"],
             )?,
-            probes_total: {
-                let opts = Opts::new("query_watchdog_probes_total", "Probes sent");
-                let counter = IntCounterVec::new(opts, &["node", "kind", "result"])?;
-                registry.register(Box::new(counter.clone()))?;
-                counter
-            },
+            probes_total: counter(registry, "probes_total", "Probes sent", &["node", "kind"])?,
         })
     }
 
@@ -136,24 +131,18 @@ impl WatchdogMetrics {
         Ok(())
     }
 
-    /// Sets the tip, follow and sweep progress gauges of `node_label`.
-    pub fn export_progress(
-        &self,
-        node_label: &str,
-        tip_height: u64,
-        progress: &NodeProgress,
-    ) -> anyhow::Result<()> {
-        let (next, until) = match &progress.sweep {
-            SweepState::Running(sweep) => (sweep.next_height, sweep.until_height),
-            SweepState::Waiting { .. } => (0, 0),
+    /// Sets the follow and sweep progress gauges of `node_label`; the sweep gauges read 0 while
+    /// the sweep waits.
+    pub fn export_progress(&self, node_label: &str, progress: &NodeProgress) -> anyhow::Result<()> {
+        let (running, next, until) = match &progress.sweep {
+            SweepState::Running(sweep) => (1, sweep.next_height, sweep.until_height),
+            SweepState::Waiting { .. } => (0, 0, 0),
         };
         let labels = [node_label];
-        self.tip_height
-            .with_label_values(&labels)
-            .set(i64::try_from(tip_height)?);
         self.follow_next_height
             .with_label_values(&labels)
             .set(i64::try_from(progress.follow_next_height)?);
+        self.sweep_running.with_label_values(&labels).set(running);
         self.sweep_next_height
             .with_label_values(&labels)
             .set(i64::try_from(next)?);
@@ -163,15 +152,16 @@ impl WatchdogMetrics {
         Ok(())
     }
 
-    /// The last exported tip height of `node_label`.
-    pub fn tip_height(&self, node_label: &str) -> i64 {
-        self.tip_height.with_label_values(&[node_label]).get()
+    /// Sets the tip height.
+    pub fn set_tip_height(&self, tip_height: u64) -> anyhow::Result<()> {
+        self.tip_height.set(i64::try_from(tip_height)?);
+        Ok(())
     }
 
-    /// Counts one probe of `kind` under `{node_label, kind, result}`.
-    pub fn count_probe(&self, node_label: &str, kind: DataKind, result: ProbeResult) {
+    /// Counts one probe of `kind` under `{node_label, kind}`.
+    pub fn count_probe(&self, node_label: &str, kind: DataKind) {
         self.probes_total
-            .with_label_values(&[node_label, kind.into(), result.into()])
+            .with_label_values(&[node_label, kind.into()])
             .inc();
     }
 
@@ -200,4 +190,16 @@ fn gauge(
     let gauge = IntGaugeVec::new(Opts::new(format!("query_watchdog_{name}"), help), labels)?;
     registry.register(Box::new(gauge.clone()))?;
     Ok(gauge)
+}
+
+/// Creates a `query_watchdog_{name}` counter family and registers it.
+fn counter(
+    registry: &Registry,
+    name: &str,
+    help: &str,
+    labels: &[&str],
+) -> prometheus::Result<IntCounterVec> {
+    let counter = IntCounterVec::new(Opts::new(format!("query_watchdog_{name}"), help), labels)?;
+    registry.register(Box::new(counter.clone()))?;
+    Ok(counter)
 }

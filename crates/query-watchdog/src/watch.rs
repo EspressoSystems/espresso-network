@@ -13,7 +13,7 @@ use url::Url;
 
 use crate::{
     chunk::{CHUNK_LEN, DataKind, EpochConfig, Probe, next_chunk, probes},
-    metrics::{ProbeResult, WatchdogMetrics},
+    metrics::WatchdogMetrics,
     store::{KindSummary, NodeProgress, NodeStore, Store, SweepProgress, SweepState},
 };
 
@@ -48,7 +48,7 @@ pub struct WatchOptions {
         long,
         env = "ESPRESSO_QUERY_WATCHDOG_WARN_MISSING_AFTER",
         value_parser = humantime::parse_duration,
-        default_value = "10m"
+        default_value = "60s"
     )]
     pub warn_missing_after: Duration,
 }
@@ -113,13 +113,8 @@ impl WatchedNode {
         })
     }
 
-    /// The GET URL of `probe`'s route.
-    pub fn probe_url(&self, probe: &Probe) -> Url {
-        self.route_url(&probe.route())
-    }
-
     /// `route` below the base URL.
-    fn route_url(&self, route: &str) -> Url {
+    pub(crate) fn route_url(&self, route: &str) -> Url {
         self.base_url
             .join(route)
             .expect("a base URL can be extended by a relative route")
@@ -287,6 +282,7 @@ impl Watchdog {
             let labels: Vec<_> = nodes.iter().map(|node| &node.label).collect();
             anyhow!("no watched node answered v1/node/block-height: {labels:?}")
         })?;
+        self.metrics.set_tip_height(tip)?;
         let (sender, receiver) = watch::channel(tip);
         let poller = TipPoller {
             watchdog: self.clone(),
@@ -378,11 +374,13 @@ pub struct TipPoller {
 }
 
 impl TipPoller {
-    /// Polls forever, never returning; a round where no node answers keeps the previous tip.
-    pub async fn run(self) -> Infallible {
+    /// Polls forever, returning only an error; a round where no node answers keeps the previous
+    /// tip.
+    pub async fn run(self) -> anyhow::Result<Infallible> {
         loop {
             tokio::time::sleep(TIP_POLL_INTERVAL).await;
             if let Some(tip) = self.watchdog.fetch_tip(&self.nodes).await {
+                self.watchdog.metrics.set_tip_height(tip)?;
                 self.tip.send_replace(tip);
             }
         }
@@ -587,31 +585,23 @@ impl NodeWatch {
     /// then `record_found` on a 200 or `record_missing` otherwise.
     async fn check_probe(&mut self, probe: &Probe) -> anyhow::Result<()> {
         tokio::time::sleep(self.watchdog.options.request_interval).await;
+        self.watchdog
+            .metrics
+            .count_probe(&self.node.label, probe.kind);
         match self.watchdog.head(&self.node, &probe.route()).await {
-            Ok(()) => {
-                self.count_probe(probe, ProbeResult::Found);
-                self.store.record_found(probe).await
-            },
+            Ok(()) => self.store.record_found(probe).await,
             Err(error) => {
-                self.count_probe(probe, ProbeResult::Missing);
                 self.record_error(FetchTarget::Data(probe.kind), &error);
                 self.store.record_missing(probe, utc_now()).await
             },
         }
     }
 
-    /// Counts one probe of this node.
-    fn count_probe(&self, probe: &Probe, result: ProbeResult) {
-        self.watchdog
-            .metrics
-            .count_probe(&self.node.label, probe.kind, result);
-    }
-
-    /// Sets the tip, follow and sweep progress gauges.
+    /// Sets the follow and sweep progress gauges.
     fn export_progress(&self) -> anyhow::Result<()> {
         self.watchdog
             .metrics
-            .export_progress(&self.node.label, self.tip_height, &self.progress)
+            .export_progress(&self.node.label, &self.progress)
     }
 
     /// Counts a failed request of the watched node in the metrics and the summary window.
@@ -704,7 +694,7 @@ impl NodeWatch {
                 oldest_age_seconds = oldest.age.as_secs(),
                 range_start = oldest.range.start,
                 range_end = oldest.range.end,
-                url = %self.node.probe_url(&probe),
+                url = %self.node.route_url(&probe.route()),
                 "missing data"
             );
         }
@@ -746,7 +736,7 @@ impl fmt::Display for NodeSummary {
 }
 
 /// Current time at whole-second precision, the precision of persisted times.
-fn utc_now() -> DateTime<Utc> {
+pub(crate) fn utc_now() -> DateTime<Utc> {
     Utc::now().trunc_subsecs(0)
 }
 

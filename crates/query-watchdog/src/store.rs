@@ -34,6 +34,21 @@ impl Store {
             .with_context(|| format!("opening store {}", path.display()))
     }
 
+    /// Read-only pool on an existing `path` for readers that must not queue behind the writer
+    /// connection; WAL lets them run concurrently. Does not migrate.
+    pub async fn open_read_only(path: &Path) -> anyhow::Result<Self> {
+        let options = SqliteConnectOptions::new()
+            .filename(path)
+            .read_only(true)
+            .busy_timeout(Duration::from_secs(30));
+        let pool = SqlitePoolOptions::new()
+            .max_connections(2)
+            .connect_with(options)
+            .await
+            .with_context(|| format!("opening {} read-only", path.display()))?;
+        Ok(Self { pool })
+    }
+
     /// One-connection pool on `options` with no idle timeout or max lifetime, then
     /// `sqlx::migrate!("./migrations")`; tests pass `sqlite::memory:` options.
     pub async fn connect(options: SqliteConnectOptions) -> anyhow::Result<Self> {
@@ -81,7 +96,7 @@ pub struct NodeStore {
 }
 
 /// First retry delay of a missing chunk.
-const RETRY_DELAY_MIN_SECS: i64 = 10;
+const RETRY_DELAY_MIN_SECS: i64 = 5;
 /// Cap of the doubling retry delay.
 const RETRY_DELAY_MAX_SECS: i64 = 600;
 
@@ -260,28 +275,27 @@ impl NodeStore {
         Ok(query.build().execute(&self.pool).await?.rows_affected())
     }
 
-    /// Up to `limit` missing ranges, oldest `first_missing_at` first (then `range_start`, `kind`),
-    /// with their ages at `now`, and the total number of missing ranges.
+    /// Up to `limit` missing ranges first missing at or before `now`, oldest first (then
+    /// `range_start`, `kind`), with their ages, and the total number of such ranges.
     pub async fn missing_ranges(
         &self,
         now: DateTime<Utc>,
         limit: u32,
     ) -> anyhow::Result<MissingRanges> {
-        let rows: Vec<(String, u64, u64, DateTime<Utc>)> = sqlx::query_as(
-            "SELECT kind, range_start, range_end, first_missing_at FROM missing_chunk WHERE node \
-             = ? ORDER BY first_missing_at, range_start, kind LIMIT ?",
+        let rows: Vec<(String, u64, u64, DateTime<Utc>, u64)> = sqlx::query_as(
+            "SELECT kind, range_start, range_end, first_missing_at, COUNT(*) OVER () FROM \
+             missing_chunk WHERE node = ? AND first_missing_at <= ? ORDER BY first_missing_at, \
+             range_start, kind LIMIT ?",
         )
         .bind(&self.node)
+        .bind(now.timestamp())
         .bind(limit)
         .fetch_all(&self.pool)
         .await?;
-        let (total,): (u64,) = sqlx::query_as("SELECT COUNT(*) FROM missing_chunk WHERE node = ?")
-            .bind(&self.node)
-            .fetch_one(&self.pool)
-            .await?;
+        let total = rows.first().map_or(0, |row| row.4);
         let shown = rows
             .into_iter()
-            .map(|(kind, start, end, first)| {
+            .map(|(kind, start, end, first, _)| {
                 Ok(MissingRange {
                     probe: Probe {
                         kind: DataKind::from_str(&kind)?,
@@ -466,13 +480,13 @@ mod tests {
         node.record_missing(&probe(DataKind::StakeTable, 5..6), at(T0 + 50))
             .await
             .unwrap();
-        assert!(node.due_retries(at(T0 + 9), 10).await.unwrap().is_empty());
-        let due = node.due_retries(at(T0 + 10), 10).await.unwrap();
+        assert!(node.due_retries(at(T0 + 4), 10).await.unwrap().is_empty());
+        let due = node.due_retries(at(T0 + 5), 10).await.unwrap();
         assert_eq!(due, std::slice::from_ref(&leaf));
 
-        // The delay doubles from 10 s to the 600 s cap.
-        let mut now = T0 + 10;
-        for delay in [20, 40, 80, 160, 320, 600, 600] {
+        // The delay doubles from 5 s to the 600 s cap.
+        let mut now = T0 + 5;
+        for delay in [10, 20, 40, 80, 160, 320, 600, 600] {
             node.record_missing(&leaf, at(now)).await.unwrap();
             let before = node.due_retries(at(now + delay - 1), 10).await.unwrap();
             assert!(!before.contains(&leaf));
