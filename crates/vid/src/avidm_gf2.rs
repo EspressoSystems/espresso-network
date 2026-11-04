@@ -35,11 +35,16 @@ pub struct AvidmGf2Scheme;
 /// `reed_solomon_simd` encodes at most this many shards.
 const MAX_TOTAL_WEIGHTS: usize = 1 << 16;
 
+// Nodes set the threshold to a third of the total weight. A forged lower one
+// would encode `total_weights / recovery_threshold` bytes per payload byte.
+const MAX_EXPANSION: usize = 4;
+
 /// VID Parameters
 ///
-/// Valid when `0 < recovery_threshold <= total_weights <= 2^16`. The fields
-/// are public and deserialized unchecked, so [`Self::new`] and every scheme
-/// entry point return [`VidError::InvalidParam`] for an invalid param.
+/// Valid when `0 < recovery_threshold <= total_weights <= 2^16` and
+/// `total_weights <= 4 * recovery_threshold`. The fields are public and
+/// deserialized unchecked, so [`Self::new`] and every scheme entry point
+/// return [`VidError::InvalidParam`] for an invalid param.
 #[derive(Clone, Debug, Hash, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AvidmGf2Param {
     /// Total weights of all storage nodes
@@ -63,6 +68,7 @@ impl AvidmGf2Param {
         if self.recovery_threshold == 0
             || self.total_weights < self.recovery_threshold
             || self.total_weights > MAX_TOTAL_WEIGHTS
+            || self.total_weights.div_ceil(MAX_EXPANSION) > self.recovery_threshold
         {
             return Err(VidError::InvalidParam);
         }
@@ -827,6 +833,8 @@ pub mod tests {
             (3, 2),
             (1 << 40, 2),
             (usize::MAX / 4, usize::MAX / 4),
+            (1 << 15, 1 << 17),
+            (1, 1 << 16),
         ] {
             let forged = AvidmGf2Param {
                 total_weights,

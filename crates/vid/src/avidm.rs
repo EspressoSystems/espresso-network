@@ -123,16 +123,20 @@ pub struct AvidMShare {
     content: RawAvidMShare,
 }
 
-// The padding and the FFT domain are sized from these fields, so a forged
-// param could otherwise demand terabytes. Node VID weights are scaled to
-// about a thousand.
+// The padding grows with the threshold whatever the payload size, so a forged
+// param could otherwise demand terabytes. Node VID weights are about a thousand.
 const MAX_TOTAL_WEIGHTS: usize = 1 << 16;
+
+// Nodes set the threshold to a third of the total weight. A forged lower one
+// would encode `total_weights / recovery_threshold` elements per payload element.
+const MAX_EXPANSION: usize = 4;
 
 /// Public parameters of the AVID-M scheme.
 ///
-/// Valid when `0 < recovery_threshold <= total_weights <= 2^16`. The fields
-/// are public and deserialized unchecked, so [`Self::new`] and every scheme
-/// entry point return [`VidError::InvalidParam`] for an invalid param.
+/// Valid when `0 < recovery_threshold <= total_weights <= 2^16` and
+/// `total_weights <= 4 * recovery_threshold`. The fields are public and
+/// deserialized unchecked, so [`Self::new`] and every scheme entry point
+/// return [`VidError::InvalidParam`] for an invalid param.
 #[derive(Clone, Debug, Hash, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AvidMParam {
     /// Total weights of all storage nodes
@@ -156,6 +160,7 @@ impl AvidMParam {
         if self.recovery_threshold == 0
             || self.total_weights < self.recovery_threshold
             || self.total_weights > MAX_TOTAL_WEIGHTS
+            || self.total_weights.div_ceil(MAX_EXPANSION) > self.recovery_threshold
         {
             return Err(VidError::InvalidParam);
         }
@@ -509,18 +514,19 @@ pub mod tests {
     #[test]
     fn round_trip() {
         // play with these items
-        let params_list = [(2, 4), (3, 9), (5, 6), (15, 16)];
+        let num_storage_nodes_list = [4, 9, 6, 16];
         let payload_byte_lens = [1, 31, 32, 500];
 
         // more items as a function of the above
 
         let mut rng = jf_utils::test_rng();
 
-        for (recovery_threshold, num_storage_nodes) in params_list {
+        for num_storage_nodes in num_storage_nodes_list {
             let weights: Vec<u32> = (0..num_storage_nodes)
                 .map(|_| rng.next_u32() % 5 + 1)
                 .collect();
             let total_weights: u32 = weights.iter().sum();
+            let recovery_threshold = total_weights.div_ceil(3) as usize;
             let params = AvidMScheme::setup(recovery_threshold, total_weights as usize).unwrap();
 
             for payload_byte_len in payload_byte_lens {
@@ -600,6 +606,8 @@ pub mod tests {
             (3, 2),
             (1 << 40, 2),
             (usize::MAX / 4, usize::MAX / 4),
+            (1 << 15, 1 << 17),
+            (1, 1 << 16),
         ] {
             let forged = AvidMParam {
                 total_weights,
