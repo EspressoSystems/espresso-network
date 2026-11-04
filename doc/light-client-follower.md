@@ -32,8 +32,9 @@ Tuning:
 
 - `--follower-poll-interval` (1s): how often to poll the upstreams for new blocks.
 - `--follower-max-blocks-per-poll` (10): how many blocks one poll ingests. Older heights are backfilled by the query
-  service, so a fresh follower serves the tip promptly and fills history in the background. Stake tables for epoch roots
-  skipped this way are caught up from the peers before following on.
+  service, so a fresh follower serves the tip promptly and fills history in the background. A fresh follower with
+  `--prune` is the exception: it never fetches heights below its first block (see [Cold start](#cold-start)). Stake
+  tables for epoch roots skipped this way are caught up from the peers before following on.
 - `--light-client-genesis <file>`: pin the light client's root of trust to a reviewed TOML file (see
   `crates/light-client-query-service/genesis/`) instead of deriving it from the network config fetched from the peers.
 
@@ -87,10 +88,11 @@ Everything else is served from the same storage a staked query node fills from i
 
 ## Cold start
 
-A fresh follower starts serving from the tip and backfills history like any fresh query node. How the merklized state
-loop starts depends on the `storage-sql` module's `--prune` option. Without it, the loop replays from genesis, so state,
-reward and catchup endpoints lag until the backfill completes; restore the database from a snapshot to skip it. With it,
-the loop starts from a snapshot at a recent epoch boundary, from peers, and skips the replay. Its trees then stay
-incomplete: lookups of block proofs below that boundary, and of fee accounts that no block since then has touched, fail.
-`--prune` also drops the totals that count from genesis: the transaction count, the payload size and the explorer
-summary are a 404. A restart resumes from the height the database has reached.
+A fresh follower starts serving from the tip. What follows depends on the `storage-sql` module's `--prune` option.
+Without it, the follower backfills history like any fresh query node, and the merklized state loop replays from genesis,
+so state, reward and catchup endpoints lag until the backfill completes; restore the database from a snapshot to skip
+it. With it, the follower marks the heights below its first block as pruned and never fetches them, and the loop starts
+from a snapshot at a recent epoch boundary, from peers, and skips the replay. Its trees then stay incomplete: lookups of
+block proofs below that boundary, and of fee accounts that no block since then has touched, fail. `--prune` also drops
+the totals that count from genesis: the transaction count, the payload size and the explorer summary are a 404. A
+restart resumes from the height the database has reached.

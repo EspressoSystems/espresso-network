@@ -868,13 +868,17 @@ where
     Types: NodeType,
     Header<Types>: QueryableHeader<Types>,
     Payload<Types>: QueryablePayload<Types>,
-    S: VersionedDataSource + 'static,
+    S: VersionedDataSource + PruneStorage + 'static,
     for<'a> S::Transaction<'a>: UpdateAvailabilityStorage<Types>,
     for<'a> S::ReadOnly<'a>: AvailabilityStorage<Types> + NodeStorage<Types> + PrunedHeightStorage,
     P: AvailabilityProvider<Types>,
 {
     async fn append(&self, info: BlockInfo<Types>) -> anyhow::Result<()> {
         let height = info.height() as usize;
+        self.fetcher
+            .storage
+            .init_pruned_height(info.height())
+            .await?;
 
         // Save the new decided leaf.
         self.fetcher
