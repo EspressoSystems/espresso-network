@@ -15,6 +15,7 @@ the generic BFT consensus library it is built on, `contracts/` the Solidity L1 s
 - `doc/agents/live-chains.md` - querying mainnet or decaf over the query-service API
 - `doc/agents/rewards.md` - reward accumulation and the L1 claim path
 - `doc/cargo-features.md` - feature gates for zkVM builds and which functions panic without them
+- `doc/vid-reconstruction-window.md` - how long VID reconstruction may take before consensus waits, model and runs
 - `doc/upgrades.md` - configuring and running a consensus upgrade
 - `doc/software-releases.md` - release branches, `MAJOR.MINOR.PHASE.PATCH` tags, the tracker issue and its commands
 - `doc/espresso-dev-node.md` - single-process dev node, for rollup integration work
