@@ -546,6 +546,7 @@ mod tests {
             total_weights: 4,
             recovery_threshold: 0,
         };
+        // Must stay empty, the shape checks also return InvalidParam.
         let proof = AvidMBadEncodingProof {
             recovered_poly: vec![],
             raw_shares: vec![],

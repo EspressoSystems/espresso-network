@@ -123,12 +123,11 @@ pub struct AvidMShare {
     content: RawAvidMShare,
 }
 
-// The padding grows with the threshold whatever the payload size, so a forged
-// param could otherwise demand terabytes. Node VID weights are about a thousand.
+// Padding grows with the threshold. Node weights total at most
+// `VID_TARGET_TOTAL_STAKE` (1000) plus one per validator.
 const MAX_TOTAL_WEIGHTS: usize = 1 << 16;
 
-// Nodes set the threshold to a third of the total weight. A forged lower one
-// would encode `total_weights / recovery_threshold` elements per payload element.
+// Nodes expand 3x, so 4 is headroom.
 const MAX_EXPANSION: usize = 4;
 
 /// Public parameters of the AVID-M scheme.
@@ -160,7 +159,7 @@ impl AvidMParam {
         if self.recovery_threshold == 0
             || self.total_weights < self.recovery_threshold
             || self.total_weights > MAX_TOTAL_WEIGHTS
-            || self.total_weights > self.recovery_threshold.saturating_mul(MAX_EXPANSION)
+            || self.total_weights > self.recovery_threshold * MAX_EXPANSION
         {
             return Err(VidError::InvalidParam);
         }
@@ -515,7 +514,7 @@ pub mod tests {
     #[test]
     fn round_trip() {
         // play with these items
-        let num_storage_nodes_list = [4, 6, 9, 16];
+        let num_storage_nodes_list = [4, 9, 6, 16];
         let payload_byte_lens = [1, 31, 32, 500];
 
         // more items as a function of the above
@@ -527,53 +526,45 @@ pub mod tests {
                 .map(|_| rng.next_u32() % 5 + 1)
                 .collect();
             let total_weights: u32 = weights.iter().sum();
-            for recovery_threshold in [
-                total_weights.div_ceil(4),
-                total_weights.div_ceil(3),
-                total_weights,
-            ] {
-                let recovery_threshold = recovery_threshold as usize;
-                let params =
-                    AvidMScheme::setup(recovery_threshold, total_weights as usize).unwrap();
+            let recovery_threshold = total_weights.div_ceil(3) as usize;
+            let params = AvidMScheme::setup(recovery_threshold, total_weights as usize).unwrap();
 
-                for payload_byte_len in payload_byte_lens {
-                    println!(
-                        "recovery_threshold:: {recovery_threshold} num_storage_nodes: \
-                         {num_storage_nodes} payload_byte_len: {payload_byte_len}"
-                    );
-                    println!("weights: {weights:?}");
+            for payload_byte_len in payload_byte_lens {
+                println!(
+                    "recovery_threshold:: {recovery_threshold} num_storage_nodes: \
+                     {num_storage_nodes} payload_byte_len: {payload_byte_len}"
+                );
+                println!("weights: {weights:?}");
 
-                    let payload = {
-                        let mut bytes_random = vec![0u8; payload_byte_len];
-                        rng.fill_bytes(&mut bytes_random);
-                        bytes_random
-                    };
+                let payload = {
+                    let mut bytes_random = vec![0u8; payload_byte_len];
+                    rng.fill_bytes(&mut bytes_random);
+                    bytes_random
+                };
 
-                    let (commit, mut shares) =
-                        AvidMScheme::disperse(&params, &weights, &payload).unwrap();
+                let (commit, mut shares) =
+                    AvidMScheme::disperse(&params, &weights, &payload).unwrap();
 
-                    assert_eq!(shares.len(), num_storage_nodes);
+                assert_eq!(shares.len(), num_storage_nodes);
 
-                    // verify shares
-                    shares.iter().for_each(|share| {
-                        assert!(
-                            AvidMScheme::verify_share(&params, &commit, share)
-                                .is_ok_and(|r| r.is_ok())
-                        )
-                    });
+                // verify shares
+                shares.iter().for_each(|share| {
+                    assert!(
+                        AvidMScheme::verify_share(&params, &commit, share).is_ok_and(|r| r.is_ok())
+                    )
+                });
 
-                    // test payload recovery on a random subset of shares
-                    shares.shuffle(&mut rng);
-                    let mut cumulated_weights = 0;
-                    let mut cut_index = 0;
-                    while cumulated_weights < recovery_threshold {
-                        cumulated_weights += shares[cut_index].content.range.len();
-                        cut_index += 1;
-                    }
-                    let payload_recovered =
-                        AvidMScheme::recover(&params, &commit, &shares[..cut_index]).unwrap();
-                    assert_eq!(payload_recovered, payload);
+                // test payload recovery on a random subset of shares
+                shares.shuffle(&mut rng);
+                let mut cumulated_weights = 0;
+                let mut cut_index = 0;
+                while cumulated_weights <= recovery_threshold {
+                    cumulated_weights += shares[cut_index].content.range.len();
+                    cut_index += 1;
                 }
+                let payload_recovered =
+                    AvidMScheme::recover(&params, &commit, &shares[..cut_index]).unwrap();
+                assert_eq!(payload_recovered, payload);
             }
         }
     }

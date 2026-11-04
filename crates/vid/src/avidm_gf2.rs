@@ -32,13 +32,11 @@ type MerkleCommit = <MerkleTree as MerkleTreeScheme>::Commitment;
 /// Dummy struct for AVID-M scheme over GF2
 pub struct AvidmGf2Scheme;
 
-// reed_solomon_simd encodes at most this many shards. Every shard is at least
-// two bytes whatever the payload size, so a forged param could otherwise demand
-// terabytes. Node VID weights are about a thousand.
+// reed_solomon_simd's shard limit. Node weights total at most
+// `VID_TARGET_TOTAL_STAKE` (1000) plus one per validator.
 const MAX_TOTAL_WEIGHTS: usize = 1 << 16;
 
-// Nodes set the threshold to a third of the total weight. A forged lower one
-// would encode `total_weights / recovery_threshold` bytes per payload byte.
+// Nodes expand 3x, so 4 is headroom.
 const MAX_EXPANSION: usize = 4;
 
 /// VID Parameters
@@ -70,7 +68,7 @@ impl AvidmGf2Param {
         if self.recovery_threshold == 0
             || self.total_weights < self.recovery_threshold
             || self.total_weights > MAX_TOTAL_WEIGHTS
-            || self.total_weights > self.recovery_threshold.saturating_mul(MAX_EXPANSION)
+            || self.total_weights > self.recovery_threshold * MAX_EXPANSION
         {
             return Err(VidError::InvalidParam);
         }
@@ -283,7 +281,6 @@ impl AvidmGf2Scheme {
 
     /// Merkle tree over all shards of `payload`, hashing recovery shards in place in the encoder.
     fn raw_commit(param: &AvidmGf2Param, payload: &[u8]) -> VidResult<MerkleTree> {
-        param.validate()?;
         let original_count = param.recovery_threshold;
         let recovery_count = param.total_weights - original_count;
         let shard_bytes = Self::payload_shard_bytes(param, payload.len())?;
@@ -407,6 +404,7 @@ impl VidScheme for AvidmGf2Scheme {
     type Commit = AvidmGf2Commit;
 
     fn commit(param: &Self::Param, payload: &[u8]) -> VidResult<Self::Commit> {
+        param.validate()?;
         let mt = Self::raw_commit(param, payload)?;
         Ok(Self::Commit {
             commit: mt.commitment(),
