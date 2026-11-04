@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"fn":["radix2_domain"],"mod":["config","namespaced","proofs"],"struct":["AvidMCommit","AvidMParam","AvidMScheme","AvidMShare","RawAvidMShare"],"type":["Config","F","MerkleCommit","MerkleProof","MerkleTree"]};
+window.SIDEBAR_ITEMS = {"constant":["MAX_EXPANSION","MAX_TOTAL_WEIGHTS"],"fn":["radix2_domain"],"mod":["config","namespaced","proofs"],"struct":["AvidMCommit","AvidMParam","AvidMScheme","AvidMShare","RawAvidMShare"],"type":["Config","F","MerkleCommit","MerkleProof","MerkleTree"]};
