@@ -18,7 +18,7 @@ use url::Url;
 
 use crate::{
     chunk::{CHUNK_LEN, DataKind, EpochConfig, Probe, next_chunk, probes},
-    gaps::{Presence, Unrefined, find_gaps, parse_missing_height},
+    gaps::{Known, Presence, Unrefined, find_gaps, parse_missing_height},
     metrics::WatchdogMetrics,
     store::{KindSummary, NodeProgress, NodeStore, Store, SweepProgress, SweepState},
 };
@@ -381,25 +381,44 @@ impl Watchdog {
         FetchError::from_status(response.status())
     }
 
-    /// GET `route`, expected to be a 404 naming the first missing height in its JSON message;
-    /// `None` when the message does not parse, an error for any other status.
-    async fn missing_height(
+    /// GET `route` after its HEAD returned 404: the height named by the 404 message, `NoHeight` when
+    /// the 404 body does not name one, `Present` when the GET succeeds, an error for any other
+    /// status.
+    async fn lookup_missing_height(
         &self,
         node: &WatchedNode,
         route: &str,
-    ) -> Result<Option<u64>, FetchError> {
+    ) -> Result<HeightLookup, FetchError> {
         let response = self
             .http
             .get(node.route_url(route))
             .send()
             .await
             .map_err(FetchError::Transport)?;
-        if response.status() != StatusCode::NOT_FOUND {
-            return Err(FetchError::Status(response.status()));
+        let status = response.status();
+        if status.is_success() {
+            return Ok(HeightLookup::Present);
         }
-        let body: ErrorBody = response.json().await.map_err(FetchError::Transport)?;
-        Ok(parse_missing_height(&body.custom.message))
+        if status != StatusCode::NOT_FOUND {
+            return Err(FetchError::Status(status));
+        }
+        let height = response
+            .json::<ErrorBody>()
+            .await
+            .ok()
+            .and_then(|body| parse_missing_height(&body.custom.message));
+        Ok(height.map_or(HeightLookup::NoHeight, HeightLookup::Named))
     }
+}
+
+/// What the GET of a range that failed with 404 says.
+enum HeightLookup {
+    /// The first missing height.
+    Named(u64),
+    /// A 404 whose body does not name a height.
+    NoHeight,
+    /// The range is served after all.
+    Present,
 }
 
 /// The 404 body of the availability routes.
@@ -674,17 +693,25 @@ impl NodeWatch {
                 .record_missing(probe, error.status_label(), utc_now())
                 .await;
         }
+        let known = if self.store.is_exact_gap(probe).await? {
+            Known::Gap
+        } else {
+            Known::Missing
+        };
         let mut prober = RangeProber {
             watch: self,
             kind: probe.kind,
         };
-        let search = find_gaps(&mut prober, probe.range.clone()).await;
+        let search = find_gaps(&mut prober, probe.range.clone(), known).await;
         self.store
             .replace_missing(
                 probe.kind,
                 &probe.range,
                 &search.gaps,
-                search.unrefined.as_ref(),
+                search
+                    .unrefined
+                    .as_ref()
+                    .map(|tail| (&tail.range, tail.status.as_str())),
                 utc_now(),
             )
             .await
@@ -738,15 +765,26 @@ impl NodeWatch {
         };
     }
 
-    /// GETs the 404 of `probe` and reads the first missing height from its message.
+    /// GETs the 404 of `probe` and reads the first missing height from its message; `None` when
+    /// the range is served after all.
     async fn missing_height(&mut self, probe: &Probe) -> Result<Option<u64>, Unrefined> {
         tokio::time::sleep(self.watchdog.options.request_interval).await;
+        self.watchdog
+            .metrics
+            .count_probe(&self.node.label, probe.kind);
         let route = probe.route();
-        match self.watchdog.missing_height(&self.node, &route).await {
-            Ok(Some(height)) => Ok(Some(height)),
-            Ok(None) => {
-                tracing::debug!(node = %self.node.label, route, "404 message names no height");
-                Err(Unrefined)
+        match self
+            .watchdog
+            .lookup_missing_height(&self.node, &route)
+            .await
+        {
+            Ok(HeightLookup::Named(height)) => Ok(Some(height)),
+            Ok(HeightLookup::Present) => Ok(None),
+            Ok(HeightLookup::NoHeight) => {
+                tracing::debug!(node = %self.node.label, route, "404 body names no height");
+                Err(Unrefined {
+                    status: "no-height".to_owned(),
+                })
             },
             Err(error) => Err(self.refinement_failed(probe.kind, &error)),
         }
@@ -755,7 +793,9 @@ impl NodeWatch {
     /// Counts a failed refinement request; the range stays chunk level.
     fn refinement_failed(&mut self, kind: DataKind, error: &FetchError) -> Unrefined {
         self.record_error(FetchTarget::Data(kind), error);
-        Unrefined
+        Unrefined {
+            status: error.status_label().to_owned(),
+        }
     }
 
     /// Counts a failed request of the watched node in the metrics and the summary window.
@@ -856,7 +896,8 @@ impl NodeWatch {
                 .kinds
                 .iter()
                 .find(|kind| kind.kind == candidate.kind)
-                .map_or(0, |kind| kind.missing_count);
+                .expect("missing_summary has every kind")
+                .missing_count;
             // Node URLs are internal and carry no credentials.
             tracing::error!(
                 target: "query_watchdog::alert",
@@ -879,7 +920,7 @@ impl NodeWatch {
         let failures: BTreeMap<_, _> = self
             .errors_since_summary
             .iter()
-            .filter(|(status, _)| status.as_str() != "404")
+            .filter(|(status, _)| status.as_str() != StatusCode::NOT_FOUND.as_str())
             .collect();
         if !failures.is_empty() {
             tracing::warn!(node = %self.node.label, errors = ?failures, "node unhealthy");
@@ -894,11 +935,18 @@ struct RangeProber<'a> {
 }
 
 impl Presence for RangeProber<'_> {
-    async fn first_missing(&mut self, range: Range<u64>) -> Result<Option<u64>, Unrefined> {
+    async fn first_missing(
+        &mut self,
+        range: Range<u64>,
+        known_missing: bool,
+    ) -> Result<Option<u64>, Unrefined> {
         let probe = Probe {
             kind: self.kind,
             range,
         };
+        if known_missing {
+            return self.watch.missing_height(&probe).await;
+        }
         match self.watch.send_probe(&probe).await {
             Ok(()) => Ok(None),
             Err(FetchError::Status(StatusCode::NOT_FOUND)) => {

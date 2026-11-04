@@ -88,7 +88,7 @@ async fn encode_metrics(State(app): State<AppState>) -> Result<String, StatusCod
     TextEncoder::new()
         .encode_to_string(&app.registry.gather())
         .map_err(|error| {
-            tracing::error!(%error, "encoding metrics");
+            tracing::warn!(%error, "encoding metrics");
             StatusCode::INTERNAL_SERVER_ERROR
         })
 }
@@ -102,7 +102,7 @@ async fn missing_page(State(app): State<AppState>) -> Result<Html<String>, (Stat
         let page = load_node_page(&app, node, tip, now)
             .await
             .map_err(|error| {
-                tracing::error!(%error, node = %node.label, "reading page data");
+                tracing::warn!(%error, node = %node.label, "reading page data");
                 (StatusCode::INTERNAL_SERVER_ERROR, format!("{error:#}"))
             })?;
         pages.push(page);

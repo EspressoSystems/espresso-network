@@ -13,7 +13,7 @@ cargo run -p query-watchdog -- --nodes https://query.decaf.testnet.espresso.netw
 - The `serving` INFO line prints the endpoint URLs.
 - `/`: progress and missing ranges per node, with links to the failing GET.
 - `/status/metrics`: Prometheus metrics, `query_watchdog_*`.
-- `/healthcheck`: bare 200.
+- `/healthcheck`: 200 with `{"status":"available"}`.
 - Logs: `RUST_LOG` (default INFO), `RUST_LOG_FORMAT=json`.
 
 ## Options
@@ -76,8 +76,9 @@ and kind per minute, for the oldest row of the kind that meets all of:
 ## Known limitations
 
 - Archive full sweep is slow: about 100 / (5 x (`request_interval` + response time)) heights/s, about 46/s at 200 ms.
-  Sweeps then run back to back. The tip is covered by follow in real time. The page ETA and `sweep_eta_seconds` show
-  live numbers.
+  The rate holds for clean chunks. Each gap in a range kind adds a HEAD, a GET and about 2 x log2(gap length)
+  single-height probes. Sweeps then run back to back. The tip is covered by follow in real time. The page ETA and
+  `sweep_eta_seconds` show live numbers.
 - Probes start fetches on the watched node, so the watchdog also repairs. Missing age means "not fetchable for that
   long".
 - Exact gaps assume one contiguous gap per search step: holes inside a gap are counted as missing up to the first
@@ -85,8 +86,9 @@ and kind per minute, for the oldest row of the kind that meets all of:
   `<kind> <height> not found`, leaves the rest of the range at chunk level, an upper bound.
 - Any non-200 counts as missing (404, 500, timeout, transport). An overloaded or unreachable node shows as missing data.
   `fetch_errors_total{status}` separates the causes.
-- Old-epoch `stake_table` probes return 500 and start a stake-table catchup on the node. They resolve within about 20 s,
-  below the 60 s alert threshold, but an archive sweep triggers one catchup per historical epoch.
+- Old-epoch `stake_table` probes return 500 and start a stake-table catchup on the node. They resolve within about 20 s.
+  They never alert (only 404 does), but an archive sweep triggers one catchup per historical epoch and a
+  `node unhealthy` WARN each minute while they fail.
 - Not checked: data contents, merklized-state history (archive nodes prune it), transactions index, namespace proofs,
   reward tree, `chain_config`, `vid_share`.
 - `--retention-blocks` must not exceed the node's own retention, or pruned heights show as missing.
@@ -120,13 +122,13 @@ Recommended alert, with a link to the missing data:
 
 Companion monitors (Monitors > New Monitor > Metric):
 
-| Monitor                       | Query                                                                                      | Threshold                                  |
-| ----------------------------- | ------------------------------------------------------------------------------------------ | ------------------------------------------ |
-| Missing age, without the link | `max(last_5m):max:<namespace>.query_watchdog_oldest_missing_age_seconds{*} by {node,kind}` | above 60, matching `--alert-missing-after` |
-| Watchdog down or stuck        | `sum(last_10m):sum:<namespace>.query_watchdog_probes.count{*} by {node}.as_count()`        | equal 0, or notify on no data              |
-| Tip flat                      | `change(max(last_10m),last_10m):max:<namespace>.query_watchdog_tip_height{*}`              | equal 0                                    |
-| Follow lag                    | `max(last_5m):max:<namespace>.query_watchdog_follow_lag_blocks{*} by {node}`               | above `<blocks>`                           |
-| Merklized state lag           | `max(last_5m):max:<namespace>.query_watchdog_merklized_state_lag_blocks{*} by {node}`      | above `<blocks>`                           |
+| Monitor                       | Query                                                                                      | Threshold                                                                                                                                    |
+| ----------------------------- | ------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| Missing age, without the link | `max(last_5m):max:<namespace>.query_watchdog_oldest_missing_age_seconds{*} by {node,kind}` | above 60, matching `--alert-missing-after`; does not page: it also counts non-404 failures (500, transport, unrefined) and data near the tip |
+| Watchdog down or stuck        | `sum(last_10m):sum:<namespace>.query_watchdog_probes.count{*} by {node}.as_count()`        | equal 0, or notify on no data                                                                                                                |
+| Tip flat                      | `change(max(last_10m),last_10m):max:<namespace>.query_watchdog_tip_height{*}`              | equal 0                                                                                                                                      |
+| Follow lag                    | `max(last_5m):max:<namespace>.query_watchdog_follow_lag_blocks{*} by {node}`               | above `<blocks>`                                                                                                                             |
+| Merklized state lag           | `max(last_5m):max:<namespace>.query_watchdog_merklized_state_lag_blocks{*} by {node}`      | above `<blocks>`                                                                                                                             |
 
 ## Schema
 

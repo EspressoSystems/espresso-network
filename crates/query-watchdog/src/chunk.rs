@@ -3,7 +3,8 @@ use std::ops::Range;
 use serde::Deserialize;
 use strum::{EnumString, IntoStaticStr, VariantArray};
 
-/// Heights per request for every kind; the block range limit (`availability.rs:76`).
+/// Heights per request for every kind: the server's block range limit (`availability.rs:76`);
+/// larger values fail every block probe.
 pub const CHUNK_LEN: u64 = 100;
 
 /// Next chunk of `[next_height, until_height)`, at most `CHUNK_LEN` long; `None` when empty.
