@@ -50,9 +50,72 @@ LANES = {
     "from_transactions": "#2a78d6",
     "block_commitments": "#c3c2b7",
     "encode": "#e87ba4",
+<<<<<<< HEAD
     "transaction_commitments": "#eb6834",
+||||||| parent of a8c4a8d88 (perf(new-protocol): encode each block once on the leader (#5392))
+    "transaction_hashes": "#eb6834",
+=======
+    "transaction_hashes": "#eb6834",
+    # The VID step before and after the leader encoded each block once; a ref runs one of them.
+>>>>>>> a8c4a8d88 (perf(new-protocol): encode each block once on the leader (#5392))
     "vid_commitment": "#1baf7a",
+    "vid_encode": "#1baf7a",
     "builder_commitment": "#eda100",
+<<<<<<< HEAD
+||||||| parent of a8c4a8d88 (perf(new-protocol): encode each block once on the leader (#5392))
+    "vid_disperse": "#1c2633",
+    "disperse_params": "#7e57c2",
+    "sign": "#00838f",
+    "ns_encode": "#008300",
+    "fragments": "#8d6e63",
+    "serialize": "#d84315",
+}
+# Steps only `leader_vid` runs; other benchmarks get no lane for them.
+LEADER_VID_ONLY = {
+    "leader_vid",
+    "vid_disperse",
+    "disperse_params",
+    "sign",
+    "ns_encode",
+    "fragments",
+    "serialize",
+}
+# Per-step wording of the cpu kind, see STEPS in the bench.
+CPU_NOTES = {
+    "leader_vid": ", process cpu {:.1f} ms",
+    "request_block": ", process cpu {:.1f} ms",
+    "block_commitments": ", process cpu {:.1f} ms",
+    "vid_commitment": ", cpu <= {:.1f} ms (residual)",
+    "vid_disperse": ", process cpu {:.1f} ms",
+    "ns_encode": ", cpu <= {:.1f} ms (residual)",
+=======
+    "vid_disperse": "#1c2633",
+    "disperse_params": "#7e57c2",
+    "sign": "#00838f",
+    "ns_encode": "#008300",
+    "fragments": "#8d6e63",
+    "serialize": "#d84315",
+}
+# Steps only `leader_vid` runs; other benchmarks get no lane for them.
+LEADER_VID_ONLY = {
+    "leader_vid",
+    "vid_disperse",
+    "disperse_params",
+    "sign",
+    "ns_encode",
+    "fragments",
+    "serialize",
+}
+# Per-step wording of the cpu kind, see STEPS in the bench.
+CPU_NOTES = {
+    "leader_vid": ", process cpu {:.1f} ms",
+    "request_block": ", process cpu {:.1f} ms",
+    "block_commitments": ", process cpu {:.1f} ms",
+    "vid_commitment": ", cpu <= {:.1f} ms (residual)",
+    "vid_encode": ", cpu <= {:.1f} ms (residual)",
+    "vid_disperse": ", process cpu {:.1f} ms",
+    "ns_encode": ", cpu <= {:.1f} ms (residual)",
+>>>>>>> a8c4a8d88 (perf(new-protocol): encode each block once on the leader (#5392))
 }
 
 log = logging.getLogger("bench-block-build")

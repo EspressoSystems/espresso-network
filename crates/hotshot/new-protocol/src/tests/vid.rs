@@ -8,7 +8,7 @@ use hotshot_types::{
 
 use super::common::utils::{TestData, TestView};
 use crate::{
-    tests::common::utils::vid_fragments,
+    tests::common::utils::{ns_table, vid_fragments},
     vid::{
         PinnedBy, VidFragmentAccumulator, VidFragmentError, VidReconstructErrorKind,
         VidReconstructor, matches_commitment, ns_lens_match_metadata,
@@ -1112,16 +1112,6 @@ fn epoch_window_bounds() {
         EpochNumber::new(u64::MAX),
         EpochNumber::genesis()
     ));
-}
-
-/// Encode a namespace table whose namespaces end at `offsets`.
-fn ns_table(offsets: &[u32]) -> Vec<u8> {
-    let mut bytes = (offsets.len() as u32).to_le_bytes().to_vec();
-    for (id, offset) in offsets.iter().enumerate() {
-        bytes.extend_from_slice(&(id as u32).to_le_bytes());
-        bytes.extend_from_slice(&offset.to_le_bytes());
-    }
-    bytes
 }
 
 /// The commitment covers neither the namespace table nor `ns_lens`, and for a
