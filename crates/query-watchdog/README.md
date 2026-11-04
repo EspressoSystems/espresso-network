@@ -1,7 +1,19 @@
 # query-watchdog
 
-Checks that archive query nodes serve every height, epoch object and aggregate they should, keeps the missing set in
-SQLite, and reports it through logs, metrics and a page.
+**This service should not be required.** A query node should know which data it lacks, fill the gaps itself and report
+them. Today it does not, so this external watchdog fills the role:
+
+- The node has no complete check of what it serves. `v2/node/sync-status` covers only blocks, leaves and VID common, is
+  cached for 5 minutes and misses a tail above the node's highest header. Aggregates, light client proofs, state certs
+  and stake tables are not covered at all.
+- Nothing on the node alerts on missing data, so a gap is found when a rollup or follower asks for it.
+- The node's own gap filling runs in the background and reports nothing. A probe that hits a gap starts a fetch from
+  peers, so the watchdog also repairs.
+
+Remove the watchdog once the node reports and repairs its own gaps.
+
+The watchdog checks that archive query nodes serve every height, epoch object and aggregate they should, keeps the
+missing set in SQLite, and reports it through logs, metrics and a page.
 
 ## Run locally
 
