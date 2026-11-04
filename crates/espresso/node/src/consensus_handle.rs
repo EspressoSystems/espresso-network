@@ -27,7 +27,7 @@ use hotshot_types::{
     traits::{
         ValidatedState,
         metrics::{Gauge, Metrics},
-        node_implementation::{NodeImplementation, NodeType},
+        node_implementation::NodeType,
         signature_key::SignatureKey,
     },
     utils::StateAndDelta,
@@ -39,13 +39,13 @@ use tracing::{error, warn};
 
 /// The node's handle on consensus: the [`Coordinator`], run on its own task from
 /// [`start_consensus`](Self::start_consensus) on, and what the rest of the node reads from it.
-pub struct ConsensusHandle<T: NodeType, I: NodeImplementation<T>> {
+pub struct ConsensusHandle<T: NodeType, S> {
     epoch_height: BlockNumber,
     event_rx: InactiveReceiver<CoordinatorEvent<T>>,
     upgrade_lock: UpgradeLock<T>,
     membership_coordinator: EpochMembershipCoordinator<T>,
     resting: Arc<RwLock<Resting<T>>>,
-    new_proto: Arc<RwLock<NewProtocol<T, I::Storage>>>,
+    new_proto: Arc<RwLock<NewProtocol<T, S>>>,
     /// Cancelled once the coordinator task has ended, however it ended.
     exited: CancellationToken,
 }
@@ -82,14 +82,13 @@ impl<T: NodeType, S> NewProtocol<T, S> {
     }
 }
 
-impl<T, I> ConsensusHandle<T, I>
+impl<T, S> ConsensusHandle<T, S>
 where
     T: NodeType,
-    I: NodeImplementation<T>,
-    I::Storage: NewProtocolStorage<T>,
+    S: NewProtocolStorage<T>,
 {
     pub fn new(
-        coordinator: Coordinator<T, I::Storage>,
+        coordinator: Coordinator<T, S>,
         external_rx: UnboundedReceiver<OpaqueMessage<T::SignatureKey>>,
         upgrade_lock: UpgradeLock<T>,
         membership_coordinator: EpochMembershipCoordinator<T>,

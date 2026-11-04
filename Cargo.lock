@@ -3668,11 +3668,14 @@ name = "espresso-api"
 version = "0.1.0"
 dependencies = [
  "aide",
+ "alloy",
  "anyhow",
  "ark-serialize 0.5.0",
  "async-trait",
  "axum",
  "base64 0.22.1",
+ "chrono",
+ "committable",
  "either",
  "erased-serde",
  "espresso-types",
@@ -3682,6 +3685,7 @@ dependencies = [
  "hotshot-query-service-types",
  "hotshot-types",
  "http-wire",
+ "indexmap 2.14.0",
  "jf-merkle-tree-compat",
  "light-client",
  "pbjson",
@@ -3809,6 +3813,22 @@ dependencies = [
  "url",
  "vbs",
  "versions",
+]
+
+[[package]]
+name = "espresso-fuzz"
+version = "0.0.0"
+dependencies = [
+ "arbitrary",
+ "bincode",
+ "espresso-types",
+ "hotshot-query-service-types",
+ "hotshot-types",
+ "jf-advz",
+ "libfuzzer-sys",
+ "serde",
+ "serde_json",
+ "vid",
 ]
 
 [[package]]
@@ -6293,6 +6313,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "68ab91017fe16c622486840e4c83c9a37afeff978bd239b5293d61ece587de66"
 
 [[package]]
+name = "libfuzzer-sys"
+version = "0.4.13"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a9fd2f41a1cba099f79a0b6b6c35656cf7c03351a7bae8ff0f28f25270f929d2"
+dependencies = [
+ "arbitrary",
+ "cc",
+]
+
+[[package]]
 name = "libloading"
 version = "0.8.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7815,9 +7845,9 @@ dependencies = [
 
 [[package]]
 name = "pulldown-cmark"
-version = "0.13.5"
+version = "0.13.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "278e9268c93b9e498a2da46c34d90ba93a3255eb99009646398f34bc73ab36eb"
+checksum = "3db2be46835f013dd3f4fa7f5f7402c537787b54ebb6fe2b94bbdd7e2669bb7b"
 dependencies = [
  "bitflags 2.13.0",
  "memchr",
@@ -9918,6 +9948,7 @@ dependencies = [
  "anyhow",
  "client",
  "dotenvy",
+ "espresso-api",
  "espresso-contract-deployer",
  "espresso-node",
  "espresso-types",
@@ -10888,6 +10919,7 @@ dependencies = [
  "jf-poseidon2",
  "jf-utils",
  "p3-maybe-rayon",
+ "proptest",
  "rand 0.8.6",
  "reed-solomon-simd",
  "serde",

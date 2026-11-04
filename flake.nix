@@ -184,6 +184,7 @@
             curl
             protobuf # protoc, for the espresso-api v2 codegen
             toolchain
+            cargo-fuzz # fuzz/, needs nightly for sanitizers
           ];
           shellHook = rustShellHook;
         });
