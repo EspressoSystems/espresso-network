@@ -4676,7 +4676,7 @@
 <a href=#4676 id=4676 data-nosnippet>4676</a>        <span class="kw">let </span>(_network, node) = try_init_pre_new_protocol_node(persistence).<span class="kw">await</span>;
 <a href=#4677 id=4677 data-nosnippet>4677</a>        <span class="kw">let </span>node = node.expect(<span class="string">"a decided upgrade to the new protocol starts"</span>);
 <a href=#4678 id=4678 data-nosnippet>4678</a>        <span class="macro">assert_eq!</span>(
-<a href=#4679 id=4679 data-nosnippet>4679</a>            node.upgrade_lock().<span class="kw">await</span>.decided_upgrade_cert(),
+<a href=#4679 id=4679 data-nosnippet>4679</a>            node.upgrade_lock().decided_upgrade_cert(),
 <a href=#4680 id=4680 data-nosnippet>4680</a>            <span class="prelude-val">Some</span>(decided),
 <a href=#4681 id=4681 data-nosnippet>4681</a>            <span class="string">"the restored lock lost the decided upgrade"
 <a href=#4682 id=4682 data-nosnippet>4682</a>        </span>);

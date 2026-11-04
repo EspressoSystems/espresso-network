@@ -113,12 +113,12 @@
 <a href=#113 id=113 data-nosnippet>113</a>    </span>}
 <a href=#114 id=114 data-nosnippet>114</a>
 <a href=#115 id=115 data-nosnippet>115</a>    <span class="kw">async fn </span>membership_coordinator(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; EpochMembershipCoordinator&lt;SeqTypes&gt; {
-<a href=#116 id=116 data-nosnippet>116</a>        ConsensusHandle::membership_coordinator(<span class="self">self</span>).<span class="kw">await
-<a href=#117 id=117 data-nosnippet>117</a>    </span>}
+<a href=#116 id=116 data-nosnippet>116</a>        ConsensusHandle::membership_coordinator(<span class="self">self</span>)
+<a href=#117 id=117 data-nosnippet>117</a>    }
 <a href=#118 id=118 data-nosnippet>118</a>
 <a href=#119 id=119 data-nosnippet>119</a>    <span class="kw">async fn </span>upgrade_lock(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; UpgradeLock&lt;SeqTypes&gt; {
-<a href=#120 id=120 data-nosnippet>120</a>        ConsensusHandle::upgrade_lock(<span class="self">self</span>).<span class="kw">await
-<a href=#121 id=121 data-nosnippet>121</a>    </span>}
+<a href=#120 id=120 data-nosnippet>120</a>        ConsensusHandle::upgrade_lock(<span class="self">self</span>)
+<a href=#121 id=121 data-nosnippet>121</a>    }
 <a href=#122 id=122 data-nosnippet>122</a>
 <a href=#123 id=123 data-nosnippet>123</a>    <span class="kw">async fn </span>submit_transaction(<span class="kw-2">&amp;</span><span class="self">self</span>, tx: Transaction) -&gt; anyhow::Result&lt;Commitment&lt;Transaction&gt;&gt; {
 <a href=#124 id=124 data-nosnippet>124</a>        <span class="kw">let </span>commitment = tx.commit();

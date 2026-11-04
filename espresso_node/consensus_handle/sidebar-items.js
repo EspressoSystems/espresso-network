@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"enum":["NewProtocol"],"fn":["apply_input","broadcast_event","consensus_event","run_coordinator"],"struct":["ConsensusHandle","Resting"]};
+window.SIDEBAR_ITEMS = {"enum":["CoordinatorState"],"fn":["apply_input","broadcast_event","consensus_event","run_coordinator"],"struct":["ConsensusHandle","Resting"]};
