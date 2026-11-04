@@ -2424,13 +2424,9 @@ mod tests {
             let storage = TmpDb::init().await;
             let mut opt = tmp_options(&storage);
             opt.prune = prune;
-            let ds = super::DataSource::create(
-                opt.try_into().unwrap(),
-                super::Provider::default(),
-                false,
-            )
-            .await
-            .unwrap();
+            let ds = super::DataSource::create(opt, super::Provider::default(), false)
+                .await
+                .unwrap();
 
             let res = NodeDataSource::count_transactions_in_range(&ds, .., None).await;
             if prune {
