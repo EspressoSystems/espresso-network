@@ -123,7 +123,16 @@ pub struct AvidMShare {
     content: RawAvidMShare,
 }
 
+// The padding and the FFT domain are sized from these fields, so a forged
+// param could otherwise demand terabytes. Node VID weights are scaled to
+// about a thousand.
+const MAX_TOTAL_WEIGHTS: usize = 1 << 16;
+
 /// Public parameters of the AVID-M scheme.
+///
+/// Valid when `0 < recovery_threshold <= total_weights <= 2^16`. The fields
+/// are public and deserialized unchecked, so [`Self::new`] and every scheme
+/// entry point return [`VidError::InvalidParam`] for an invalid param.
 #[derive(Clone, Debug, Hash, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AvidMParam {
     /// Total weights of all storage nodes
@@ -135,13 +144,22 @@ pub struct AvidMParam {
 impl AvidMParam {
     /// Construct a new [`AvidMParam`].
     pub fn new(recovery_threshold: usize, total_weights: usize) -> VidResult<Self> {
-        if recovery_threshold == 0 || total_weights < recovery_threshold {
-            return Err(VidError::InvalidParam);
-        }
-        Ok(Self {
+        let param = Self {
             total_weights,
             recovery_threshold,
-        })
+        };
+        param.validate()?;
+        Ok(param)
+    }
+
+    fn validate(&self) -> VidResult<()> {
+        if self.recovery_threshold == 0
+            || self.total_weights < self.recovery_threshold
+            || self.total_weights > MAX_TOTAL_WEIGHTS
+        {
+            return Err(VidError::InvalidParam);
+        }
+        Ok(())
     }
 }
 
@@ -234,6 +252,7 @@ impl AvidMScheme {
 
     /// Short hand for `pad_to_field` and `raw_encode`.
     fn pad_and_encode(param: &AvidMParam, payload: &[u8]) -> VidResult<(MerkleTree, Vec<Vec<F>>)> {
+        param.validate()?;
         let payload = Self::pad_to_fields(param, payload);
         Self::raw_encode(param, &payload)
     }
@@ -340,6 +359,7 @@ impl AvidMScheme {
     }
 
     pub(crate) fn recover_fields(param: &AvidMParam, shares: &[AvidMShare]) -> VidResult<Vec<F>> {
+        param.validate()?;
         let recovery_threshold: usize = param.recovery_threshold;
 
         // Each share's payload contains some evaluations from `num_polys`
@@ -469,8 +489,8 @@ impl VidScheme for AvidMScheme {
 pub mod tests {
     use rand::{RngCore, seq::SliceRandom};
 
-    use super::F;
-    use crate::{VidScheme, avidm::AvidMScheme, utils::bytes_to_field};
+    use super::{AvidMParam, F};
+    use crate::{VidError, VidScheme, avidm::AvidMScheme, utils::bytes_to_field};
 
     #[test]
     fn test_padding() {
@@ -567,5 +587,47 @@ pub mod tests {
         let recover_timer = start_timer!(|| "Recovery");
         AvidMScheme::recover(&params, &commit, &shares).unwrap();
         end_timer!(recover_timer);
+    }
+
+    #[test]
+    fn invalid_param_is_rejected() {
+        let param = AvidMScheme::setup(3, 9).unwrap();
+        let payload = [7u8; 100];
+        let (commit, shares) = AvidMScheme::disperse(&param, &[3, 3, 3], &payload).unwrap();
+
+        for (recovery_threshold, total_weights) in [
+            (0, 4),
+            (3, 2),
+            (1 << 40, 2),
+            (usize::MAX / 4, usize::MAX / 4),
+        ] {
+            let forged = AvidMParam {
+                total_weights,
+                recovery_threshold,
+            };
+            assert!(
+                matches!(
+                    AvidMScheme::recover(&forged, &commit, &shares),
+                    Err(VidError::InvalidParam)
+                ),
+                "recover {forged:?}"
+            );
+            assert!(
+                matches!(
+                    AvidMScheme::commit(&forged, &payload),
+                    Err(VidError::InvalidParam)
+                ),
+                "commit {forged:?}"
+            );
+            if let Ok(weight) = u32::try_from(total_weights) {
+                assert!(
+                    matches!(
+                        AvidMScheme::disperse(&forged, &[weight], &payload),
+                        Err(VidError::InvalidParam)
+                    ),
+                    "disperse {forged:?}"
+                );
+            }
+        }
     }
 }

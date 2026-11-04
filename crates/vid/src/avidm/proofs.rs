@@ -106,6 +106,7 @@ impl AvidMBadEncodingProof {
         param: &AvidMParam,
         commit: &AvidMCommit,
     ) -> VidResult<VerificationResult> {
+        param.validate()?;
         // A bad encoding proof should have exactly `recovery_threshold` raw shares
         if self.raw_shares.len() != param.recovery_threshold {
             return Err(VidError::InvalidParam);
@@ -300,9 +301,9 @@ mod tests {
     use rand::{Rng, seq::SliceRandom};
 
     use crate::{
-        VidScheme,
+        VidError, VidScheme,
         avidm::{
-            AvidMCommit, AvidMScheme, AvidMShare, Config, F, MerkleTree, RawAvidMShare,
+            AvidMCommit, AvidMParam, AvidMScheme, AvidMShare, Config, F, MerkleTree, RawAvidMShare,
             config::AvidMConfig,
             namespaced::{NsAvidMCommit, NsAvidMScheme, NsAvidMShare},
             proofs::AvidMBadEncodingProof,
@@ -537,5 +538,21 @@ mod tests {
             AvidMScheme::proof_of_incorrect_encoding(&param, &commit, &[bad_share]).is_err(),
             "proof_of_incorrect_encoding must reject share with index >= total_weights"
         );
+    }
+
+    #[test]
+    fn bad_encoding_proof_rejects_zero_threshold() {
+        let forged = AvidMParam {
+            total_weights: 4,
+            recovery_threshold: 0,
+        };
+        let proof = AvidMBadEncodingProof {
+            recovered_poly: vec![],
+            raw_shares: vec![],
+        };
+        assert!(matches!(
+            proof.verify(&forged, &AvidMCommit::default()),
+            Err(VidError::InvalidParam)
+        ));
     }
 }
