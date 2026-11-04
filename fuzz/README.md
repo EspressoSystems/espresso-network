@@ -19,5 +19,7 @@ nix develop .#nightly
 cargo fuzz run vid_ns_shares -- -max_total_time=300 -rss_limit_mb=2048
 ```
 
-A crash is saved under `fuzz/artifacts/<target>/`. Replay it with `cargo fuzz run <target> <file>`, and shrink it with
-`cargo fuzz tmin <target> <file>`. Turn each one into a regular unit test next to the code before fixing it.
+CI runs each target for five minutes on every pull request (`.github/workflows/fuzz.yml`) and uploads crashes as a
+workflow artifact. A crash is saved under `fuzz/artifacts/<target>/`. Replay it with `cargo fuzz run <target> <file>`,
+and shrink it with `cargo fuzz tmin <target> <file>`. Turn each one into a regular unit test next to the code before
+fixing it.
