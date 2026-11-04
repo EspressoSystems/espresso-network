@@ -38,6 +38,10 @@ pub struct WatchOptions {
         default_value = "24h"
     )]
     pub sweep_interval: Duration,
+    /// Sweep once, then only follow the tip; `--sweep-interval` is ignored. A restart does not
+    /// sweep again, and removing the flag schedules the next sweep one interval after the last.
+    #[arg(long, env = "ESPRESSO_QUERY_WATCHDOG_SWEEP_ONCE")]
+    pub sweep_once: bool,
     /// Wait before each request of one node watch.
     #[arg(
         long,
@@ -615,6 +619,7 @@ impl NodeWatch {
             SweepState::Waiting { start_at } => {
                 ("waiting", None, None, Some(start_at.to_rfc3339()))
             },
+            SweepState::Done => ("done", None, None, None),
         };
         tracing::info!(
             %node,
@@ -678,6 +683,9 @@ impl NodeWatch {
 
     /// Starts a due sweep or checks its next chunk for every kind; logs start and end; saves progress.
     async fn sweep_step(&mut self) -> anyhow::Result<usize> {
+        if self.progress.sweep == SweepState::Done && !self.watchdog.options.sweep_once {
+            self.schedule_after_done().await?;
+        }
         if let SweepState::Waiting { start_at } = self.progress.sweep {
             if utc_now() < start_at {
                 return Ok(0);
@@ -698,6 +706,20 @@ impl NodeWatch {
         });
         self.store.save_progress(&self.progress).await?;
         Ok(sent)
+    }
+
+    /// After a one-time sweep without `--sweep-once` any more: the next sweep starts one interval
+    /// after the last one completed.
+    async fn schedule_after_done(&mut self) -> anyhow::Result<()> {
+        let interval = TimeDelta::from_std(self.watchdog.options.sweep_interval)?;
+        let last = self
+            .progress
+            .last_sweep_completed_at
+            .unwrap_or_else(utc_now);
+        self.progress.sweep = SweepState::Waiting {
+            start_at: last + interval,
+        };
+        self.store.save_progress(&self.progress).await
     }
 
     /// Begins a sweep over the window below the tip.
@@ -736,8 +758,12 @@ impl NodeWatch {
                 )
             })?;
         self.progress.last_sweep_completed_at = Some(completed_at);
-        self.progress.sweep = SweepState::Waiting {
-            start_at: sweep.started_at + interval,
+        self.progress.sweep = if self.watchdog.options.sweep_once {
+            SweepState::Done
+        } else {
+            SweepState::Waiting {
+                start_at: sweep.started_at + interval,
+            }
         };
         self.reset_eta_origin();
         self.store.save_progress(&self.progress).await?;
@@ -869,7 +895,7 @@ impl NodeWatch {
                 at: Instant::now(),
                 next_height: sweep.next_height,
             }),
-            SweepState::Waiting { .. } => None,
+            SweepState::Waiting { .. } | SweepState::Done => None,
         };
     }
 
@@ -1230,13 +1256,18 @@ mod tests {
 
     /// A watchdog over an in-memory store with no pacing; its registry shows the metrics.
     async fn test_watchdog(retention_blocks: Option<u64>) -> (Watchdog, Store, Registry) {
-        let registry = Registry::new();
         let options = WatchOptions {
             sweep_interval: Duration::from_secs(1),
+            sweep_once: false,
             request_interval: Duration::ZERO,
             retention_blocks,
             alert_missing_after: Duration::ZERO,
         };
+        test_watchdog_with(options).await
+    }
+
+    async fn test_watchdog_with(options: WatchOptions) -> (Watchdog, Store, Registry) {
+        let registry = Registry::new();
         let store = Store::connect(SqliteConnectOptions::from_str("sqlite::memory:").unwrap())
             .await
             .unwrap();
@@ -1359,6 +1390,48 @@ mod tests {
         watch.check_probe(&rest).await.unwrap();
         assert_eq!(missing().await, 0);
         assert!(watch.alerts().await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_one_time_sweep_ends_in_done_and_stays_quiet() {
+        let (node, _fake) = serve_fake([]).await;
+        let options = WatchOptions {
+            sweep_interval: Duration::from_secs(1),
+            sweep_once: true,
+            request_interval: Duration::ZERO,
+            retention_blocks: Some(200),
+            alert_missing_after: Duration::ZERO,
+        };
+        let (watchdog, store, _registry) = test_watchdog_with(options).await;
+        let (_tip_sender, tip) = watch::channel(1_000);
+        let label = node.label.clone();
+        let mut watch = watchdog.start_node(node, tip, None).await.unwrap();
+
+        for _ in 0..5 {
+            watch.sweep_step().await.unwrap();
+        }
+        let stored = store.node(&label).load_progress().await.unwrap().unwrap();
+        assert_eq!(stored.sweep, SweepState::Done);
+        assert!(stored.last_sweep_completed_at.is_some());
+        assert_eq!(watch.sweep_step().await.unwrap(), 0);
+        assert_eq!(watch.progress.sweep, SweepState::Done);
+
+        // Without the flag the next sweep is scheduled after the last one.
+        let mut watch = NodeWatch {
+            watchdog: Watchdog {
+                options: WatchOptions {
+                    sweep_once: false,
+                    ..watchdog.options.clone()
+                },
+                ..watchdog.clone()
+            },
+            ..watch
+        };
+        watch.sweep_step().await.unwrap();
+        assert!(
+            matches!(watch.progress.sweep, SweepState::Waiting { .. })
+                || matches!(watch.progress.sweep, SweepState::Running(_))
+        );
     }
 
     #[tokio::test]

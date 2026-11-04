@@ -151,7 +151,7 @@ impl WatchdogMetrics {
     ) -> anyhow::Result<()> {
         let (running, next, until) = match &progress.sweep {
             SweepState::Running(sweep) => (1, sweep.next_height, sweep.until_height),
-            SweepState::Waiting { .. } => (0, 0, 0),
+            SweepState::Waiting { .. } | SweepState::Done => (0, 0, 0),
         };
         let labels = [node_label];
         self.follow_next_height

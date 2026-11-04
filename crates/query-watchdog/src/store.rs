@@ -384,6 +384,7 @@ impl NodeStore {
                 row.sweep_started_at,
             ) {
                 (Some(start_at), None, None, None) => SweepState::Waiting { start_at },
+                (None, None, None, None) => SweepState::Done,
                 (None, Some(until_height), Some(next_height), Some(started_at)) => {
                     SweepState::Running(SweepProgress {
                         until_height,
@@ -406,6 +407,7 @@ impl NodeStore {
     pub async fn save_progress(&self, progress: &NodeProgress) -> anyhow::Result<()> {
         let (waiting, until, next, started) = match &progress.sweep {
             SweepState::Waiting { start_at } => (Some(start_at.timestamp()), None, None, None),
+            SweepState::Done => (None, None, None, None),
             SweepState::Running(sweep) => (
                 None,
                 Some(i64::try_from(sweep.until_height)?),
@@ -797,7 +799,7 @@ impl NodeProgress {
                 next_height: sweep.next_height.max(window_start),
                 ..sweep
             }),
-            waiting @ SweepState::Waiting { .. } => waiting,
+            other @ (SweepState::Waiting { .. } | SweepState::Done) => other,
         };
         Self {
             follow_next_height: self.follow_next_height.max(window_start),
@@ -810,8 +812,12 @@ impl NodeProgress {
 /// Sweep schedule of one node.
 #[derive(Clone, Debug, PartialEq)]
 pub enum SweepState {
-    Waiting { start_at: DateTime<Utc> },
+    Waiting {
+        start_at: DateTime<Utc>,
+    },
     Running(SweepProgress),
+    /// The one sweep of `--sweep-once` is finished.
+    Done,
 }
 
 /// A sweep in progress over `[next_height, until_height)`.
@@ -1414,6 +1420,18 @@ mod tests {
         assert_eq!(node.load_progress().await.unwrap(), None);
         let summary = node.missing_summary(at(T0)).await.unwrap();
         assert_eq!(summary.iter().map(|k| k.missing_count).sum::<u64>(), 0);
+    }
+
+    #[tokio::test]
+    async fn a_finished_one_time_sweep_roundtrips() {
+        let node = node_store("a:1").await;
+        let progress = NodeProgress {
+            follow_next_height: 700,
+            sweep: SweepState::Done,
+            last_sweep_completed_at: Some(at(T0)),
+        };
+        node.save_progress(&progress).await.unwrap();
+        assert_eq!(node.load_progress().await.unwrap(), Some(progress));
     }
 
     #[test]

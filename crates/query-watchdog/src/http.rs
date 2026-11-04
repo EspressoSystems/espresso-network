@@ -235,13 +235,14 @@ fn progress_lines(
     lines
 }
 
-/// The sweep lines: running (see `running_lines`) or `sweep: waiting until <time>`.
+/// The sweep lines: running (see `running_lines`), `sweep: waiting until <time>` or `sweep: done`.
 fn sweep_lines(window: SweepWindow, sweep: &SweepState, eta: Option<&SweepEta>) -> Vec<String> {
     match sweep {
         SweepState::Running(sweep) => running_lines(window, sweep, eta),
         SweepState::Waiting { start_at } => {
             vec![format!("sweep: waiting until {}", start_at.to_rfc3339())]
         },
+        SweepState::Done => vec!["sweep: done".to_owned()],
     }
 }
 

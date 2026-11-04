@@ -19,14 +19,14 @@ CREATE INDEX missing_chunk_age ON missing_chunk (node, first_missing_at, range_s
 CREATE TABLE node_progress (
     node TEXT PRIMARY KEY,
     follow_next_height INTEGER NOT NULL,
-    -- set while waiting
+    -- set while waiting; both this and the running columns are null once a one-time sweep is done
     next_sweep_at INTEGER NULL,
     -- set while running
     sweep_until_height INTEGER NULL,
     sweep_next_height INTEGER NULL,
     sweep_started_at INTEGER NULL,
     last_sweep_completed_at INTEGER NULL,
-    CHECK ((next_sweep_at IS NULL) = (sweep_next_height IS NOT NULL))
+    CHECK (next_sweep_at IS NULL OR sweep_next_height IS NULL)
 );
 
 CREATE TABLE anchor (

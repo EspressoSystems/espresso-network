@@ -36,6 +36,7 @@ cargo run -p query-watchdog -- --nodes https://query.decaf.testnet.espresso.netw
 | `--db-path`             | `DB_PATH`                        | platform data directory, `state.sqlite` (Linux: `~/.local/share/query-watchdog/state.sqlite`); an error when there is none |
 | `--port`                | `PORT`                           | 8080                                                                                                                       |
 | `--sweep-interval`      | `SWEEP_INTERVAL`                 | 24h, time from one sweep start to the next                                                                                 |
+| `--sweep-once`          | `SWEEP_ONCE`                     | off; sweep once, then only follow the tip (`--sweep-interval` is ignored; a restart does not sweep again)                  |
 | `--request-interval`    | `REQUEST_INTERVAL`               | 200ms, wait before each request of one node                                                                                |
 | `--retention-blocks`    | `RETENTION_BLOCKS`               | absent: archive, sweep `[0, tip)`; N: sweep `[tip - N, tip)`, start rounded up to a multiple of 100                        |
 | `--alert-missing-after` | `ALERT_MISSING_AFTER`            | 60s, minimum age of missing data for the alert                                                                             |
