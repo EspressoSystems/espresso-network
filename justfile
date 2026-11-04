@@ -110,6 +110,7 @@ proto-check $base="origin/main":
 # Needs `gh extension install github/gh-actions-lock --pin v0.4.0`. `--no-narrow` keeps
 # `@v4` as written instead of rewriting it to `@v4.2.1`. `--relock` advances refs such as
 # `@v4` and `@main` to their latest commit; `--verify` checks without writing.
+# `--verify-local` is the offline coverage check the pre-commit hook runs.
 # Update .github/workflows/actions.lock after changing a `uses:` line or on a conflict in it
 lock-actions *args:
     gh actions-lock --ignore-local-actions --no-narrow {{args}}
@@ -156,7 +157,7 @@ docker-stop-rm:
     docker stop $(docker ps -aq); docker rm $(docker ps -aq)
 
 anvil *args:
-    docker run -p 127.0.0.1:8545:8545 ghcr.io/foundry-rs/foundry:latest "anvil {{args}}"
+    docker run -p 127.0.0.1:8545:8545 ghcr.io/foundry-rs/foundry:v1.8.7 "anvil {{args}}"
 
 # hotshot-new-protocol: tested in hotshot.yml
 # slow-tests: slow and serial tests
