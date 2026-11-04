@@ -7448,7 +7448,7 @@ mod test {
         let state_start = db.read().await?.load_state_start_height().await?;
         check_state_start(expected, start, state_start, pruned, tip)?;
         if expected == EmptyStateStart::RecentBoundary && !stamp_pruned_height {
-            let (first_pruned, first_block) = D::data_heights(&db).await?;
+            let (first_pruned, first_block) = data_heights(&db).await?;
             ensure!(
                 first_pruned.is_some() && first_pruned == first_block.map(|height| height - 1),
                 "a fresh pruned database marked {first_pruned:?} as pruned, but its first block \
@@ -7760,6 +7760,17 @@ mod test {
         lowest
             .map(|height| height as u64)
             .context("no block tree nodes")
+    }
+
+    /// The data pruned height, then the lowest stored leaf above genesis.
+    async fn data_heights(db: &SqlStorage) -> anyhow::Result<(Option<u64>, Option<u64>)> {
+        let mut tx = db.read().await?;
+        let pruned = tx.load_pruned_height().await?;
+        let lowest: Option<i64> =
+            sqlx::query_scalar("SELECT min(height) FROM leaf2 WHERE height > 0")
+                .fetch_one(tx.as_mut())
+                .await?;
+        Ok((pruned, lowest.map(|height| height as u64)))
     }
 
     /// Forward connections on `port` to `target`, so a peer's URL is dead until this runs and

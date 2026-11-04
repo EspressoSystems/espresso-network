@@ -58,6 +58,7 @@ use super::{
         self,
         state::{Node, collect_nodes_from_proofs},
     },
+    syntax_helpers,
 };
 use crate::{
     Header, Payload, QueryError, QueryResult,
@@ -717,7 +718,7 @@ impl Transaction<Write> {
              ON CONFLICT (id) DO UPDATE SET last_height = {MAX_FN}(pruned_height.last_height, \
              excluded.last_height)
              RETURNING last_height",
-            MAX_FN = Db::MAX_FN,
+            MAX_FN = syntax_helpers::MAX_FN,
         );
         let (stored,) = query_as::<(i64,)>(&stmt)
             .bind(Self::PRUNED_HEIGHT_ID)
@@ -729,27 +730,6 @@ impl Transaction<Write> {
     }
 }
 
-<<<<<<< HEAD
-||||||| parent of 047652988 (feat(query-service): start a fresh pruned node at its first block (#5426))
-#[cfg(test)]
-#[async_trait]
-impl crate::testing::consensus::SavePrunedHeight for Transaction<Write> {
-    async fn save_pruned_height(&mut self, height: u64) -> anyhow::Result<()> {
-        Transaction::<Write>::save_pruned_height(self, height).await
-    }
-}
-
-=======
-#[cfg(test)]
-#[async_trait]
-impl crate::testing::consensus::SavePrunedHeight for Transaction<Write> {
-    async fn save_pruned_height(&mut self, height: u64) -> anyhow::Result<()> {
-        Transaction::<Write>::save_pruned_height(self, height).await?;
-        Ok(())
-    }
-}
-
->>>>>>> 047652988 (feat(query-service): start a fresh pruned node at its first block (#5426))
 impl<Types> UpdateAvailabilityStorage<Types> for Transaction<Write>
 where
     Types: NodeType,

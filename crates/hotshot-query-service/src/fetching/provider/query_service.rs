@@ -525,16 +525,8 @@ mod test {
         },
         node::data_source::NodeDataSource,
         testing::{
-<<<<<<< HEAD
             chain::ChainNode,
             consensus::MockDataSource,
-||||||| parent of 047652988 (feat(query-service): start a fresh pruned node at its first block (#5426))
-            chain::{ChainNode, genesis_vid},
-            consensus::{MockDataSource, TestSqlDb, sql_dbs},
-=======
-            chain::{ChainNode, genesis_vid},
-            consensus::{MockDataSource, SavePrunedHeight, TestSqlDb, sql_dbs},
->>>>>>> 047652988 (feat(query-service): start a fresh pruned node at its first block (#5426))
             mocks::{MockPayload, MockTransaction, MockTypes, mock_transaction},
             sleep,
         },
@@ -1682,14 +1674,11 @@ mod test {
 
     /// A leaf whose parent is at the pruned height does not fetch that parent: the pruner would only
     /// delete it again. Parents above the pruned height are still fetched.
-    #[apply(sql_dbs)]
-    async fn test_no_parent_fetch_at_pruned_height<Db: TestSqlDb>(_db: PhantomData<Db>)
-    where
-        for<'a> <Db::Storage as VersionedDataSource>::Transaction<'a>: SavePrunedHeight,
-    {
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_no_parent_fetch_at_pruned_height() {
         let network = peer().await;
         let (port, _server) = serve_availability(network.data_source()).await;
-        let db = Db::init().await;
+        let db = TmpDb::init().await;
         let provider = Provider::new(trusted_provider(port));
         let data_source = builder(&db, &provider)
             .await
@@ -1739,8 +1728,8 @@ mod test {
     /// pruned before it stores that block, so neither the proactive scan nor the fetches of missing
     /// parents download history the pruner would only delete. A pruned node whose first block is
     /// at height 1 has nothing to skip, and neither has a node that does not prune.
-    #[apply(sql_dbs)]
-    async fn test_fresh_pruned_start<Db: TestSqlDb>(_db: PhantomData<Db>) {
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_fresh_pruned_start() {
         let network = peer().await;
         let (port, _server) = serve_availability(network.data_source()).await;
         let leaves = network
@@ -1752,15 +1741,17 @@ mod test {
             .await;
 
         for (prune, first, pruned) in [(true, 4, Some(3)), (true, 1, None), (false, 4, None)] {
-            let db = Db::init().await;
+            let db = TmpDb::init().await;
             let provider = Provider::new(trusted_provider(port));
-            let storage = if prune {
+            let config = if prune {
                 // The pruner itself never runs within the test.
-                db.pruning_storage(PrunerCfg::new().with_interval(Duration::from_secs(3600)))
-                    .await
+                db.config()
+                    .pruner_cfg(PrunerCfg::new().with_interval(Duration::from_secs(3600)))
+                    .unwrap()
             } else {
-                db.storage().await
+                db.config()
             };
+            let storage = SqlStorage::connect(config, StorageConnectionType::Query).await;
             let data_source = FetchingDataSource::builder(storage.unwrap(), provider.clone())
                 .with_proactive_interval(Duration::from_secs(1))
                 .with_sync_status_ttl(Duration::from_secs(1))
@@ -1800,11 +1791,8 @@ mod test {
     /// that then restarted, is still a fresh pruned node: a data pruned height of 0 with no block
     /// above genesis has pruned nothing above genesis. It starts at its first block above genesis,
     /// as a brand-new database does, so it fetches no leaf below that block.
-    #[apply(sql_dbs)]
-    async fn test_fresh_pruned_start_at_pruned_height_zero<Db: TestSqlDb>(_db: PhantomData<Db>)
-    where
-        for<'a> <Db::Storage as VersionedDataSource>::Transaction<'a>: SavePrunedHeight,
-    {
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_fresh_pruned_start_at_pruned_height_zero() {
         let network = peer().await;
         let (port, _server) = serve_availability(network.data_source()).await;
         let leaves = network
@@ -1815,7 +1803,7 @@ mod test {
             .collect::<Vec<_>>()
             .await;
 
-        let db = Db::init().await;
+        let db = TmpDb::init().await;
         let storage = idle_pruning_storage(&db).await;
         {
             let mut tx = storage.write().await.unwrap();
@@ -1849,8 +1837,8 @@ mod test {
 
     /// Only the first block above genesis decides where a fresh pruned node starts: a later block
     /// leaves the data pruned height as the first block set it.
-    #[apply(sql_dbs)]
-    async fn test_fresh_pruned_start_only_first_block<Db: TestSqlDb>(_db: PhantomData<Db>) {
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_fresh_pruned_start_only_first_block() {
         let network = peer().await;
         let leaves = network
             .data_source()
@@ -1859,7 +1847,7 @@ mod test {
             .take(4)
             .collect::<Vec<_>>()
             .await;
-        let db = Db::init().await;
+        let db = TmpDb::init().await;
         let data_source = FetchingDataSource::builder(idle_pruning_storage(&db).await, NoFetching)
             .disable_proactive_fetching()
             .build()
@@ -1881,8 +1869,8 @@ mod test {
 
     /// A genesis block does not decide where a fresh pruned node starts: the first block above
     /// genesis, appended after it, still marks the blocks below it as pruned.
-    #[apply(sql_dbs)]
-    async fn test_fresh_pruned_start_after_genesis<Db: TestSqlDb>(_db: PhantomData<Db>) {
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_fresh_pruned_start_after_genesis() {
         let network = peer().await;
         let leaves = network
             .data_source()
@@ -1891,7 +1879,7 @@ mod test {
             .take(5)
             .collect::<Vec<_>>()
             .await;
-        let db = Db::init().await;
+        let db = TmpDb::init().await;
         let data_source = FetchingDataSource::builder(idle_pruning_storage(&db).await, NoFetching)
             .disable_proactive_fetching()
             .build()
@@ -1911,8 +1899,8 @@ mod test {
     /// A pruned node that already holds blocks above genesis when it starts is not fresh, for
     /// example a node that ran without pruning and then turns it on: its next block marks nothing
     /// as pruned.
-    #[apply(sql_dbs)]
-    async fn test_no_fresh_pruned_start_with_blocks<Db: TestSqlDb>(_db: PhantomData<Db>) {
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_no_fresh_pruned_start_with_blocks() {
         let network = peer().await;
         let leaves = network
             .data_source()
@@ -1921,7 +1909,7 @@ mod test {
             .take(4)
             .collect::<Vec<_>>()
             .await;
-        let db = Db::init().await;
+        let db = TmpDb::init().await;
         {
             // A first run, which neither prunes nor fetches, stores the first blocks.
             let data_source = data_source(&db, &NoFetching).await;
@@ -1941,11 +1929,8 @@ mod test {
 
     /// A pruned node whose data pruned height is above 0 is not fresh, even when it holds no block:
     /// it has pruned blocks above genesis before. Its next block leaves the pruned height as it is.
-    #[apply(sql_dbs)]
-    async fn test_no_fresh_pruned_start_after_pruning<Db: TestSqlDb>(_db: PhantomData<Db>)
-    where
-        for<'a> <Db::Storage as VersionedDataSource>::Transaction<'a>: SavePrunedHeight,
-    {
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_no_fresh_pruned_start_after_pruning() {
         let network = peer().await;
         let leaves = network
             .data_source()
@@ -1954,7 +1939,7 @@ mod test {
             .take(4)
             .collect::<Vec<_>>()
             .await;
-        let db = Db::init().await;
+        let db = TmpDb::init().await;
         let storage = idle_pruning_storage(&db).await;
         let pruned = 2;
         {
@@ -1973,8 +1958,12 @@ mod test {
     }
 
     /// Pruning storage on `db` whose pruner never runs within a test.
-    async fn idle_pruning_storage<Db: TestSqlDb>(db: &Db) -> Db::Storage {
-        db.pruning_storage(PrunerCfg::new().with_interval(Duration::from_secs(3600)))
+    async fn idle_pruning_storage(db: &TmpDb) -> SqlStorage {
+        let config = db
+            .config()
+            .pruner_cfg(PrunerCfg::new().with_interval(Duration::from_secs(3600)))
+            .unwrap();
+        SqlStorage::connect(config, StorageConnectionType::Query)
             .await
             .unwrap()
     }
