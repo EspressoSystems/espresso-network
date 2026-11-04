@@ -388,7 +388,7 @@ pub struct NsDispersal {
 /// Unit tests
 #[cfg(test)]
 pub mod tests {
-    use rand::{RngCore, seq::SliceRandom};
+    use rand::{RngCore, SeedableRng, rngs::StdRng, seq::SliceRandom};
 
     use crate::{VidError, avidm_gf2::namespaced::NsAvidmGf2Scheme};
 
@@ -655,6 +655,56 @@ pub mod tests {
         assert_eq!(ns1_payload_recovered[..], payload[ns_table[1].clone()]);
         let payload_recovered = NsAvidmGf2Scheme::recover(&common, &shares[..cut_index]).unwrap();
         assert_eq!(payload_recovered, payload);
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn any_threshold_covering_subset_recovers_the_payload(
+            weights in proptest::collection::vec(1u32..=5, 1..=9),
+            payload in proptest::collection::vec(proptest::num::u8::ANY, 0..2048),
+            ns_ends in proptest::collection::vec(proptest::num::usize::ANY, 0..4),
+            shuffle_seed: u64,
+        ) {
+            let total_weights: u32 = weights.iter().sum();
+            let recovery_threshold = total_weights.div_ceil(3) as usize;
+            let params =
+                NsAvidmGf2Scheme::setup(recovery_threshold, total_weights as usize).unwrap();
+            let mut ends: Vec<usize> = ns_ends
+                .iter()
+                .map(|end| end % (payload.len() + 1))
+                .chain([payload.len()])
+                .collect();
+            ends.sort_unstable();
+            ends.dedup();
+            let ns_table: Vec<_> = std::iter::once(0)
+                .chain(ends.iter().copied())
+                .zip(ends.iter().copied())
+                .map(|(start, end)| start..end)
+                .filter(|range| !range.is_empty() || payload.is_empty())
+                .collect();
+
+            let (_commit, common, mut shares) =
+                NsAvidmGf2Scheme::ns_disperse(&params, &weights, &payload, ns_table.clone())
+                    .unwrap();
+            shares.shuffle(&mut StdRng::seed_from_u64(shuffle_seed));
+            let mut weight = 0;
+            let subset: Vec<_> = shares
+                .into_iter()
+                .take_while(|share| {
+                    let needed = weight < recovery_threshold;
+                    weight += share.weight();
+                    needed
+                })
+                .collect();
+
+            proptest::prop_assert_eq!(NsAvidmGf2Scheme::recover(&common, &subset).unwrap(), payload.clone());
+            for (ns_index, range) in ns_table.into_iter().enumerate() {
+                proptest::prop_assert_eq!(
+                    NsAvidmGf2Scheme::ns_recover(&common, ns_index, &subset).unwrap(),
+                    payload[range].to_vec()
+                );
+            }
+        }
     }
 
     #[test]

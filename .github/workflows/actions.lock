@@ -101,6 +101,12 @@ workflows:
         - 'taiki-e/install-action@v2'
     '.github/workflows/flaky-tests-issue.yml':
         - 'actions/checkout@v7'
+    '.github/workflows/fuzz.yml':
+        - 'actions/checkout@v7'
+        - 'actions/upload-artifact@v7'
+        - 'dtolnay/rust-toolchain@master'
+        - 'swatinem/rust-cache@v2'
+        - 'taiki-e/install-action@v2'
     '.github/workflows/hotshot.yml':
         - 'actions/checkout@v7'
         - 'actions/download-artifact@v8'
