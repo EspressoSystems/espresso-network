@@ -20,6 +20,7 @@ humantime = { workspace = true }
 prometheus = { workspace = true }
 reqwest = { workspace = true }
 serde = { workspace = true }
+serde_json = { workspace = true }
 sqlx = { workspace = true, features = ["sqlite"] }
 strum = { workspace = true }
 tokio = { workspace = true, features = ["signal", "net", "sync"] }

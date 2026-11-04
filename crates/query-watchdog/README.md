@@ -83,7 +83,9 @@ and kind per minute, for the oldest row of the kind that meets all of:
   long".
 - Exact gaps assume one contiguous gap per search step: holes inside a gap are counted as missing up to the first
   present height found. A failure other than 404 (500, timeout, transport), or a 404 message that does not read
-  `<kind> <height> not found`, leaves the rest of the range at chunk level, an upper bound.
+  `<kind> <height> not found`, leaves the rest of the range at chunk level, an upper bound. A retry of an exact gap
+  probes its last height first and keeps the whole row while that height is missing: heights repaired at the front stay
+  counted, and the row keeps its age and can still alert.
 - Any non-200 counts as missing (404, 500, timeout, transport). An overloaded or unreachable node shows as missing data.
   `fetch_errors_total{status}` separates the causes.
 - Old-epoch `stake_table` probes return 500 and start a stake-table catchup on the node. They resolve within about 20 s.

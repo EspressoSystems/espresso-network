@@ -48,12 +48,16 @@ pub struct GapSearch {
 /// Finds the gaps of `range`: first missing height by range probe, gap end by galloping then binary
 /// search over single heights, repeated from the gap end. A gap with present heights inside is
 /// reported as one gap up to the first present height found by the search. For `Known::Gap`, one
-/// probe of the last height keeps the whole range when it is still missing.
+/// probe of the last height keeps the whole range when it is still missing; a one-height range
+/// needs none.
 pub async fn find_gaps<P: Presence>(
     presence: &mut P,
     range: Range<u64>,
     known: Known,
 ) -> GapSearch {
+    if known == Known::Gap && range.end - range.start == 1 {
+        return GapSearch::exact(vec![range]);
+    }
     if known == Known::Gap {
         match presence.is_present(range.end - 1).await {
             Ok(false) => return GapSearch::exact(vec![range]),
@@ -288,6 +292,15 @@ mod tests {
         let mut repaired = Fake::new([3, 4, 5]);
         let search = find_gaps(&mut repaired, 3..7, Known::Gap).await;
         assert_eq!(search, found(one(3..6), None));
+    }
+
+    #[tokio::test]
+    async fn known_one_height_gap_needs_no_probe() {
+        let mut fake = Fake::new([5]);
+        let search = find_gaps(&mut fake, 5..6, Known::Gap).await;
+        assert_eq!(search, found(one(5..6), None));
+        assert_eq!(fake.single_probes, 0);
+        assert!(fake.first_missing_flags.is_empty());
     }
 
     #[test]

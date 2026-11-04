@@ -402,9 +402,8 @@ impl Watchdog {
         if status != StatusCode::NOT_FOUND {
             return Err(FetchError::Status(status));
         }
-        let height = response
-            .json::<ErrorBody>()
-            .await
+        let body = response.bytes().await.map_err(FetchError::Transport)?;
+        let height = serde_json::from_slice::<ErrorBody>(&body)
             .ok()
             .and_then(|body| parse_missing_height(&body.custom.message));
         Ok(height.map_or(HeightLookup::NoHeight, HeightLookup::Named))
@@ -666,7 +665,7 @@ impl NodeWatch {
     /// Sends the probe, then `record_found` on a 200 or `record_failure` otherwise.
     async fn check_probe(&mut self, probe: &Probe) -> anyhow::Result<()> {
         match self.send_probe(probe).await {
-            Ok(()) => self.store.record_found(probe).await,
+            Ok(()) => self.store.record_found(probe, utc_now()).await,
             Err(error) => {
                 self.record_error(FetchTarget::Data(probe.kind), &error);
                 self.record_failure(probe, &error).await
@@ -684,13 +683,20 @@ impl NodeWatch {
     }
 
     /// Stores a failed probe: a 404 of a range kind is refined to its exact gaps (the tail that
-    /// cannot be refined stays chunk level), anything else is missing as a whole.
+    /// cannot be refined stays chunk level), another failure of a range kind is recorded without
+    /// touching the rows it overlaps, anything else is missing as a whole.
     async fn record_failure(&mut self, probe: &Probe, error: &FetchError) -> anyhow::Result<()> {
         let is_not_found = matches!(error, FetchError::Status(StatusCode::NOT_FOUND));
-        if !(probe.kind.is_range() && is_not_found) {
+        if !probe.kind.is_range() {
             return self
                 .store
                 .record_missing(probe, error.status_label(), utc_now())
+                .await;
+        }
+        if !is_not_found {
+            return self
+                .store
+                .record_range_failure(probe, error.status_label(), utc_now())
                 .await;
         }
         let known = if self.store.is_exact_gap(probe).await? {
@@ -1029,7 +1035,119 @@ pub(crate) fn utc_now() -> DateTime<Utc> {
 
 #[cfg(test)]
 mod tests {
+    use std::{collections::BTreeSet, str::FromStr};
+
+    use axum::{
+        Router,
+        extract::{Path, State},
+        http::{Method, Uri},
+        routing::get,
+    };
+    use prometheus::Registry;
+    use sqlx::sqlite::SqliteConnectOptions;
+    use tokio::net::TcpListener;
+
     use super::*;
+
+    /// A node serving every leaf except the `missing` heights, recording what it is asked.
+    #[derive(Clone)]
+    struct FakeNode {
+        missing: Arc<BTreeSet<u64>>,
+        requests: Arc<Mutex<Vec<(Method, String)>>>,
+    }
+
+    /// Like the availability range route: 404 naming the first missing height, else 200.
+    async fn fake_leaf_range(
+        State(node): State<FakeNode>,
+        method: Method,
+        uri: Uri,
+        Path((from, until)): Path<(u64, u64)>,
+    ) -> (StatusCode, String) {
+        node.requests
+            .lock()
+            .unwrap()
+            .push((method, uri.path().to_owned()));
+        match node.missing.range(from..until).next() {
+            Some(height) => (
+                StatusCode::NOT_FOUND,
+                format!(r#"{{"Custom":{{"message":"leaf {height} not found","status":404}}}}"#),
+            ),
+            None => (StatusCode::OK, String::new()),
+        }
+    }
+
+    async fn serve_fake(missing: impl IntoIterator<Item = u64>) -> (WatchedNode, FakeNode) {
+        let fake = FakeNode {
+            missing: Arc::new(missing.into_iter().collect()),
+            requests: Arc::default(),
+        };
+        let app = Router::new()
+            .route("/v1/availability/leaf/{from}/{until}", get(fake_leaf_range))
+            .with_state(fake.clone());
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base_url = Url::parse(&format!("http://{}/", listener.local_addr().unwrap())).unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await });
+        (WatchedNode::new(base_url).unwrap(), fake)
+    }
+
+    #[tokio::test]
+    async fn a_failed_range_probe_is_refined_with_one_head_per_range() {
+        let (node, fake) = serve_fake(103..106).await;
+        let registry = Registry::new();
+        let options = WatchOptions {
+            sweep_interval: Duration::from_secs(1),
+            request_interval: Duration::ZERO,
+            retention_blocks: None,
+            alert_missing_after: Duration::from_secs(60),
+        };
+        let store = Store::connect(SqliteConnectOptions::from_str("sqlite::memory:").unwrap())
+            .await
+            .unwrap();
+        let watchdog = Watchdog::new(
+            options,
+            Arc::new(WatchdogMetrics::new(&registry).unwrap()),
+            store.clone(),
+            SweepEtas::default(),
+        )
+        .unwrap();
+        let (_tip_sender, tip) = watch::channel(1_000);
+        let label = node.label.clone();
+        let mut node_watch = watchdog.start_node(node, tip, None).await.unwrap();
+
+        let chunk = Probe {
+            kind: DataKind::Leaf,
+            range: 100..110,
+        };
+        node_watch.check_probe(&chunk).await.unwrap();
+
+        let requests = fake.requests.lock().unwrap().clone();
+        let paths = |wanted: Method| -> Vec<String> {
+            requests
+                .iter()
+                .filter(|(method, _)| *method == wanted)
+                .map(|(_, path)| path.clone())
+                .collect()
+        };
+        let heads = paths(Method::HEAD);
+        let chunk_path = "/v1/availability/leaf/100/110";
+        assert_eq!(heads.iter().filter(|path| *path == chunk_path).count(), 1);
+        // The chunk, the gallop at 104, 105 and 107, the binary step at 106, the rest from 106.
+        assert_eq!(heads.len(), 6, "{heads:?}");
+        assert_eq!(paths(Method::GET), [chunk_path]);
+
+        let summary = store.node(&label).missing_summary(utc_now()).await.unwrap();
+        assert_eq!(summary[0].missing_count, 3);
+        assert_eq!(summary[0].oldest.as_ref().unwrap().range, 103..106);
+
+        let probes_total: u64 = registry
+            .gather()
+            .iter()
+            .filter(|family| family.get_name() == "query_watchdog_probes_total")
+            .flat_map(|family| family.get_metric())
+            .map(|metric| metric.get_counter().get_value() as u64)
+            .sum();
+        assert_eq!(probes_total, 7, "six HEADs and one GET");
+    }
 
     #[test]
     fn eta_at_pace_table() {

@@ -111,9 +111,6 @@ const SELECT_OVERLAPPING: &str = "SELECT range_start, range_end, first_missing_a
 /// Deletes the rows `SELECT_OVERLAPPING` selects.
 const DELETE_OVERLAPPING: &str =
     "DELETE FROM missing_chunk WHERE node = ? AND kind = ? AND range_start < ? AND range_end > ?";
-/// Deletes the rows of a kind inside a range: starting in it and not ending after it.
-const DELETE_INSIDE: &str = "DELETE FROM missing_chunk WHERE node = ? AND kind = ? AND \
-                             range_start >= ? AND range_start < ? AND range_end <= ?";
 /// Deletes the row of a kind that starts where a range starts and does not end after it.
 const DELETE_EXACT: &str =
     "DELETE FROM missing_chunk WHERE node = ? AND kind = ? AND range_start = ? AND range_end <= ?";
@@ -131,6 +128,11 @@ struct MissingRow {
 }
 
 impl MissingRow {
+    /// The range of the row.
+    fn range(&self) -> Range<u64> {
+        self.range_start..self.range_end
+    }
+
     /// The same retry state over `range`.
     fn restricted_to(&self, range: Range<u64>) -> Self {
         Self {
@@ -181,6 +183,54 @@ fn merge_rows(
             }
         })
         .collect()
+}
+
+/// Upserts a failed probe: a new row retries after `RETRY_DELAY_MIN_SECS`, a known row keeps
+/// `first_missing_at`, doubles its delay and counts another failed probe.
+async fn upsert_failure(
+    conn: &mut sqlx::SqliteConnection,
+    node: &str,
+    probe: &Probe,
+    status: &str,
+    now: DateTime<Utc>,
+) -> anyhow::Result<()> {
+    // In `DO UPDATE`, unqualified columns are the old row, so both columns see the old delay.
+    sqlx::query(
+        "INSERT INTO missing_chunk (node, kind, range_start, range_end, first_missing_at, \
+         retry_delay_secs, next_retry_at, last_status) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?5 + ?6, \
+         ?8) ON CONFLICT (node, kind, range_start) DO UPDATE SET range_end = MAX(range_end, \
+         excluded.range_end), retry_delay_secs = MIN(retry_delay_secs * 2, ?7), next_retry_at = \
+         ?5 + MIN(retry_delay_secs * 2, ?7), failed_probes = failed_probes + 1, last_status = ?8",
+    )
+    .bind(node)
+    .bind(<&'static str>::from(probe.kind))
+    .bind(i64::try_from(probe.range.start)?)
+    .bind(i64::try_from(probe.range.end)?)
+    .bind(now.timestamp())
+    .bind(RETRY_DELAY_MIN_SECS)
+    .bind(RETRY_DELAY_MAX_SECS)
+    .bind(status)
+    .execute(conn)
+    .await?;
+    Ok(())
+}
+
+/// The parts of `range` that no row of `rows` covers, in order.
+fn uncovered_parts(range: &Range<u64>, rows: &[MissingRow]) -> Vec<Range<u64>> {
+    let mut covering: Vec<_> = rows.iter().map(MissingRow::range).collect();
+    covering.sort_by_key(|row| row.start);
+    let mut parts = Vec::new();
+    let mut cursor = range.start;
+    for row in covering {
+        if row.start > cursor {
+            parts.push(cursor..row.start.min(range.end));
+        }
+        cursor = cursor.max(row.end);
+    }
+    if cursor < range.end {
+        parts.push(cursor..range.end);
+    }
+    parts
 }
 
 /// The parts of `row` below and above `within`, with the retry state unchanged.
@@ -320,54 +370,63 @@ impl NodeStore {
         status: &str,
         now: DateTime<Utc>,
     ) -> anyhow::Result<()> {
-        // In `DO UPDATE`, unqualified columns are the old row, so both columns see the old delay.
-        sqlx::query(
-            "INSERT INTO missing_chunk (node, kind, range_start, range_end, first_missing_at, \
-             retry_delay_secs, next_retry_at, last_status) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?5 + \
-             ?6, ?8) ON CONFLICT (node, kind, range_start) DO UPDATE SET range_end = \
-             MAX(range_end, excluded.range_end), retry_delay_secs = MIN(retry_delay_secs * 2, \
-             ?7), next_retry_at = ?5 + MIN(retry_delay_secs * 2, ?7), failed_probes = \
-             failed_probes + 1, last_status = ?8",
-        )
-        .bind(&self.node)
-        .bind(<&'static str>::from(probe.kind))
-        .bind(i64::try_from(probe.range.start)?)
-        .bind(i64::try_from(probe.range.end)?)
-        .bind(now.timestamp())
-        .bind(RETRY_DELAY_MIN_SECS)
-        .bind(RETRY_DELAY_MAX_SECS)
-        .bind(status)
-        .execute(&self.pool)
-        .await?;
-        Ok(())
+        let mut conn = self.pool.acquire().await?;
+        upsert_failure(&mut conn, &self.node, probe, status, now).await
     }
 
-    /// Deletes the missing rows a 200 for `probe` clears: for range kinds those inside
-    /// `probe.range`, for the others the row that starts where it starts and does not end after it.
-    pub async fn record_found(&self, probe: &Probe) -> anyhow::Result<()> {
+    /// Records a failed probe of a range kind without breaking the disjoint rows: a row for exactly
+    /// `probe.range` is upserted as `record_missing` does, otherwise rows that overlap stay as they
+    /// are and the parts no row covers become new rows with `status`.
+    pub async fn record_range_failure(
+        &self,
+        probe: &Probe,
+        status: &str,
+        now: DateTime<Utc>,
+    ) -> anyhow::Result<()> {
+        let mut tx = self.pool.begin().await?;
+        let kind = <&'static str>::from(probe.kind);
         let (start, end) = (
             i64::try_from(probe.range.start)?,
             i64::try_from(probe.range.end)?,
         );
-        let kind = <&'static str>::from(probe.kind);
-        if probe.kind.is_range() {
-            sqlx::query(DELETE_INSIDE)
-                .bind(&self.node)
-                .bind(kind)
-                .bind(start)
-                .bind(end)
-                .bind(end)
-                .execute(&self.pool)
-                .await?;
+        let old: Vec<MissingRow> = sqlx::query_as(SELECT_OVERLAPPING)
+            .bind(&self.node)
+            .bind(kind)
+            .bind(end)
+            .bind(start)
+            .fetch_all(&mut *tx)
+            .await?;
+        if old.iter().any(|row| row.range() == probe.range) {
+            upsert_failure(&mut tx, &self.node, probe, status, now).await?;
         } else {
-            sqlx::query(DELETE_EXACT)
-                .bind(&self.node)
-                .bind(kind)
-                .bind(start)
-                .bind(end)
-                .execute(&self.pool)
-                .await?;
+            let fresh: Vec<_> = uncovered_parts(&probe.range, &old)
+                .into_iter()
+                .map(|part| (part, status))
+                .collect();
+            for row in merge_rows(&[], &fresh, now) {
+                insert_row(&mut tx, &self.node, kind, &row).await?;
+            }
         }
+        tx.commit().await?;
+        Ok(())
+    }
+
+    /// Clears what a 200 for `probe` says is present: for range kinds the heights of
+    /// `probe.range` (rows are trimmed, the parts outside stay), for the others the row that starts
+    /// where it starts and does not end after it.
+    pub async fn record_found(&self, probe: &Probe, now: DateTime<Utc>) -> anyhow::Result<()> {
+        if probe.kind.is_range() {
+            return self
+                .replace_missing(probe.kind, &probe.range, &[], None, now)
+                .await;
+        }
+        sqlx::query(DELETE_EXACT)
+            .bind(&self.node)
+            .bind(<&'static str>::from(probe.kind))
+            .bind(i64::try_from(probe.range.start)?)
+            .bind(i64::try_from(probe.range.end)?)
+            .execute(&self.pool)
+            .await?;
         Ok(())
     }
 
@@ -851,7 +910,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn record_found_keeps_longer_range() {
+    async fn record_found_trims_rows_to_the_heights_still_missing() {
         let node = node_store("a:1").await;
         let long = probe(DataKind::Leaf, 100..200);
         let short = probe(DataKind::Leaf, 100..150);
@@ -867,15 +926,16 @@ mod tests {
             "range_end keeps the max"
         );
 
-        node.record_found(&short).await.unwrap();
+        node.record_found(&short, at(T0 + 2)).await.unwrap();
         let summary = node.missing_summary(at(T0 + 2)).await.unwrap();
         assert_eq!(
             count(&summary, DataKind::Leaf),
-            100,
-            "short probe cannot clear it"
+            50,
+            "the part outside the found range stays"
         );
+        assert_eq!(summary[0].oldest.as_ref().unwrap().range, 150..200);
 
-        node.record_found(&long).await.unwrap();
+        node.record_found(&long, at(T0 + 2)).await.unwrap();
         let summary = node.missing_summary(at(T0 + 2)).await.unwrap();
         assert_eq!(count(&summary, DataKind::Leaf), 0);
     }
@@ -943,7 +1003,7 @@ mod tests {
             .unwrap();
         assert_eq!(node.due_retries(at(T0 + 45), 10).await.unwrap().len(), 1);
 
-        node.record_found(&leaf).await.unwrap();
+        node.record_found(&leaf, at(T0 + 100)).await.unwrap();
         let summary = node.missing_summary(at(T0 + 100)).await.unwrap();
         assert_eq!(
             count(&summary, DataKind::Leaf),
@@ -1058,6 +1118,24 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn record_found_keeps_the_part_of_a_row_that_crosses_its_edge() {
+        let node = node_store("a:1").await;
+        node.record_missing(&probe(DataKind::Block, 90..120), "404", at(T0))
+            .await
+            .unwrap();
+        node.record_found(&probe(DataKind::Block, 100..200), at(T0 + 10))
+            .await
+            .unwrap();
+        let listed = node.missing_ranges(at(T0 + 10), 10).await.unwrap();
+        let rows: Vec<_> = listed
+            .shown
+            .iter()
+            .map(|r| (r.probe.range.clone(), r.age.as_secs()))
+            .collect();
+        assert_eq!(rows, [(90..100, 10)]);
+    }
+
+    #[tokio::test]
     async fn record_found_clears_exact_keys_of_single_height_kinds() {
         let node = node_store("a:1").await;
         for range in [100..200, 120..180] {
@@ -1065,7 +1143,7 @@ mod tests {
                 .await
                 .unwrap();
         }
-        node.record_found(&probe(DataKind::LcLeafProof, 100..200))
+        node.record_found(&probe(DataKind::LcLeafProof, 100..200), at(T0))
             .await
             .unwrap();
         let summary = node.missing_summary(at(T0)).await.unwrap();
@@ -1106,6 +1184,100 @@ mod tests {
             110,
             "no height counted twice"
         );
+    }
+
+    #[tokio::test]
+    async fn a_failed_chunk_probe_leaves_refined_rows_alone() {
+        let node = node_store("a:1").await;
+        let leaf = |range| probe(DataKind::Leaf, range);
+        let refined = Range {
+            start: 110,
+            end: 115,
+        };
+        let rest = Range {
+            start: 115,
+            end: 130,
+        };
+        node.replace_missing(DataKind::Leaf, &(100..200), &[refined], None, at(T0))
+            .await
+            .unwrap();
+        node.record_missing(&leaf(rest.clone()), "404", at(T0 + 5))
+            .await
+            .unwrap();
+
+        node.record_range_failure(&leaf(100..200), "500", at(T0 + 30))
+            .await
+            .unwrap();
+        let listed = node.missing_ranges(at(T0 + 100), 10).await.unwrap();
+        let rows: Vec<_> = listed
+            .shown
+            .iter()
+            .map(|r| (r.probe.range.clone(), r.age.as_secs()))
+            .collect();
+        // The refined rows keep their age; the heights no row covers become new rows.
+        let expected = [
+            (110..115, 100),
+            (115..130, 95),
+            (100..110, 70),
+            (130..200, 70),
+        ];
+        assert_eq!(rows, expected);
+        let summary = node.missing_summary(at(T0 + 100)).await.unwrap();
+        assert_eq!(
+            count(&summary, DataKind::Leaf),
+            100,
+            "no height counted twice"
+        );
+
+        let candidates = node
+            .alert_candidates(at(T0 + 100), Duration::from_secs(60), 1, 1000, None)
+            .await
+            .unwrap();
+        assert_eq!(
+            candidates[0].range,
+            110..115,
+            "the 404 rows still alert, the 500 rows do not"
+        );
+
+        // The same failure again backs the exact row off instead of adding rows.
+        node.record_range_failure(&leaf(110..115), "500", at(T0 + 40))
+            .await
+            .unwrap();
+        let listed = node.missing_ranges(at(T0 + 100), 10).await.unwrap();
+        assert_eq!(listed.total, 4);
+    }
+
+    fn one(range: Range<u64>) -> Vec<Range<u64>> {
+        vec![range]
+    }
+
+    #[test]
+    fn uncovered_parts_table() {
+        let row = |start, end| MissingRow {
+            range_start: start,
+            range_end: end,
+            first_missing_at: at(T0),
+            retry_delay_secs: 5,
+            failed_probes: 1,
+            next_retry_at: at(T0),
+            last_status: String::new(),
+        };
+        let cases = [
+            ("no rows", 0..10, vec![], one(0..10)),
+            ("row inside", 0..10, vec![row(3, 6)], vec![0..3, 6..10]),
+            ("row crossing the start", 5..10, vec![row(0, 7)], one(7..10)),
+            ("row crossing the end", 0..10, vec![row(8, 20)], one(0..8)),
+            ("covered", 0..10, vec![row(0, 4), row(4, 10)], vec![]),
+            (
+                "two rows apart",
+                0..10,
+                vec![row(6, 8), row(1, 3)],
+                vec![0..1, 3..6, 8..10],
+            ),
+        ];
+        for (name, range, rows, expected) in cases {
+            assert_eq!(uncovered_parts(&range, &rows), expected, "{name}");
+        }
     }
 
     #[test]
