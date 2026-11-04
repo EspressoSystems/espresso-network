@@ -181,12 +181,30 @@ impl NsPayloadBytesRange<'_> for NumTxsRange {
 // This serde impl uses Vec. We could save space by using an array of
 // length `TWO_ENTRIES_BYTE_LEN`, but then we need a way to distinguish
 // `prev=Some(0)` from `prev=None`.
-bytes_serde_impl!(
-    TxTableEntries,
-    to_payload_bytes,
-    Vec<u8>,
-    from_payload_bytes
-);
+impl Serialize for TxTableEntries {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        self.to_payload_bytes().serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for TxTableEntries {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let bytes = Vec::<u8>::deserialize(deserializer)?;
+        if bytes.len() != TX_OFFSET_BYTE_LEN && bytes.len() != Self::TWO_ENTRIES_BYTE_LEN {
+            return Err(serde::de::Error::invalid_length(
+                bytes.len(),
+                &"one or two tx table entries",
+            ));
+        }
+        Ok(Self::from_payload_bytes(&bytes))
+    }
+}
 
 impl TxTableEntries {
     const TWO_ENTRIES_BYTE_LEN: usize = 2 * TX_OFFSET_BYTE_LEN;
@@ -375,5 +393,21 @@ impl<'a> NsPayloadBuilder<'a> {
     /// Byte length of a single tx table entry.
     pub const fn tx_table_entry_byte_len() -> usize {
         TX_OFFSET_BYTE_LEN
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::TxTableEntries;
+
+    #[test]
+    fn tx_table_entries_reject_unexpected_byte_len() {
+        for len in [0, 3, 5, 12] {
+            let bytes = bincode::serialize(&vec![0u8; len]).unwrap();
+            assert!(
+                bincode::deserialize::<TxTableEntries>(&bytes).is_err(),
+                "{len}"
+            );
+        }
     }
 }
