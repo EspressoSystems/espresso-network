@@ -1058,7 +1058,11 @@ pub(crate) fn utc_now() -> DateTime<Utc> {
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::BTreeSet, str::FromStr};
+    use std::{
+        collections::BTreeSet,
+        str::FromStr,
+        sync::atomic::{AtomicBool, Ordering},
+    };
 
     use axum::{
         Router,
@@ -1075,7 +1079,9 @@ mod tests {
     /// A node serving every leaf except the `missing` heights, recording what it is asked.
     #[derive(Clone)]
     struct FakeNode {
-        missing: Arc<BTreeSet<u64>>,
+        missing: Arc<Mutex<BTreeSet<u64>>>,
+        /// Every request answers 500 while set.
+        failing: Arc<AtomicBool>,
         requests: Arc<Mutex<Vec<(Method, String)>>>,
     }
 
@@ -1090,7 +1096,17 @@ mod tests {
             .lock()
             .unwrap()
             .push((method, uri.path().to_owned()));
-        match node.missing.range(from..until).next() {
+        if node.failing.load(Ordering::SeqCst) {
+            return (StatusCode::INTERNAL_SERVER_ERROR, String::new());
+        }
+        let first_missing = node
+            .missing
+            .lock()
+            .unwrap()
+            .range(from..until)
+            .next()
+            .copied();
+        match first_missing {
             Some(height) => (
                 StatusCode::NOT_FOUND,
                 format!(r#"{{"Custom":{{"message":"leaf {height} not found","status":404}}}}"#),
@@ -1101,7 +1117,8 @@ mod tests {
 
     async fn serve_fake(missing: impl IntoIterator<Item = u64>) -> (WatchedNode, FakeNode) {
         let fake = FakeNode {
-            missing: Arc::new(missing.into_iter().collect()),
+            missing: Arc::new(Mutex::new(missing.into_iter().collect())),
+            failing: Arc::default(),
             requests: Arc::default(),
         };
         let app = Router::new()
@@ -1184,6 +1201,67 @@ mod tests {
             .map(|metric| metric.get_counter().get_value() as u64)
             .sum();
         assert_eq!(probes_total, 7, "six HEADs and one GET");
+    }
+
+    #[tokio::test]
+    async fn a_gap_is_alerted_then_cleared_as_the_node_fills_it() {
+        let (node, fake) = serve_fake(750..760).await;
+        let (watchdog, store, _registry) = test_watchdog(None).await;
+        let (_tip_sender, tip) = watch::channel(1_000);
+        let label = node.label.clone();
+        let mut watch = watchdog.start_node(node, tip, None).await.unwrap();
+        let node_store = store.node(&label);
+        let chunk = Probe {
+            kind: DataKind::Leaf,
+            range: 700..800,
+        };
+        let gap = Probe {
+            kind: DataKind::Leaf,
+            range: 750..760,
+        };
+        let alerting = |alerts: Vec<AlertCandidate>| -> Vec<Range<u64>> {
+            alerts.into_iter().map(|a| a.range).collect()
+        };
+        let missing =
+            || async { node_store.missing_summary(utc_now()).await.unwrap()[0].missing_count };
+
+        // The chunk probe finds the exact gap; two retries bring it to 3 failed 404 probes.
+        watch.check_probe(&chunk).await.unwrap();
+        assert_eq!(missing().await, 10);
+        for _ in 0..2 {
+            watch.check_probe(&gap).await.unwrap();
+        }
+        assert_eq!(
+            alerting(watch.alerts().await.unwrap()),
+            std::slice::from_ref(&gap.range)
+        );
+
+        // A node that answers 500 is unhealthy, not missing data: the row stops alerting.
+        fake.failing.store(true, Ordering::SeqCst);
+        watch.check_probe(&gap).await.unwrap();
+        assert!(watch.alerts().await.unwrap().is_empty());
+        assert_eq!(watch.errors_since_summary.get("500"), Some(&1));
+        fake.failing.store(false, Ordering::SeqCst);
+
+        // Half of the gap is filled: the next retry shrinks the row and it alerts again.
+        fake.missing.lock().unwrap().retain(|height| *height < 755);
+        watch.check_probe(&gap).await.unwrap();
+        assert_eq!(missing().await, 5);
+        let shrunk = 750..755;
+        assert_eq!(
+            alerting(watch.alerts().await.unwrap()),
+            std::slice::from_ref(&shrunk)
+        );
+
+        // The rest is filled: the retry clears the row and the alert.
+        fake.missing.lock().unwrap().clear();
+        let rest = Probe {
+            kind: DataKind::Leaf,
+            range: shrunk,
+        };
+        watch.check_probe(&rest).await.unwrap();
+        assert_eq!(missing().await, 0);
+        assert!(watch.alerts().await.unwrap().is_empty());
     }
 
     #[tokio::test]
