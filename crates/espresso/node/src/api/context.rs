@@ -113,11 +113,11 @@ impl<P: SequencerPersistence> ConsensusSource for ConsensusHandle<SeqTypes, Arc<
     }
 
     async fn membership_coordinator(&self) -> EpochMembershipCoordinator<SeqTypes> {
-        ConsensusHandle::membership_coordinator(self).await
+        ConsensusHandle::membership_coordinator(self)
     }
 
     async fn upgrade_lock(&self) -> UpgradeLock<SeqTypes> {
-        ConsensusHandle::upgrade_lock(self).await
+        ConsensusHandle::upgrade_lock(self)
     }
 
     async fn submit_transaction(&self, tx: Transaction) -> anyhow::Result<Commitment<Transaction>> {

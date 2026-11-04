@@ -4676,7 +4676,7 @@ mod test {
         let (_network, node) = try_init_pre_new_protocol_node(persistence).await;
         let node = node.expect("a decided upgrade to the new protocol starts");
         assert_eq!(
-            node.upgrade_lock().await.decided_upgrade_cert(),
+            node.upgrade_lock().decided_upgrade_cert(),
             Some(decided),
             "the restored lock lost the decided upgrade"
         );
