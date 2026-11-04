@@ -8,10 +8,7 @@ use sqlx::{
 };
 use strum::VariantArray;
 
-use crate::{
-    anchor::Anchor,
-    chunk::{DataKind, EpochConfig, Probe},
-};
+use crate::chunk::{DataKind, EpochConfig, Probe};
 
 /// SQLite state of all node watches; WAL, so litestream can replicate it.
 #[derive(Clone, Debug)]
@@ -82,43 +79,12 @@ impl Store {
         Ok(forgotten)
     }
 
-    /// The stored anchor block, if any.
-    pub async fn load_anchor(&self) -> anyhow::Result<Option<Anchor>> {
-        let row: Option<(u64, String)> =
-            sqlx::query_as("SELECT height, hash FROM anchor WHERE id = 1")
-                .fetch_optional(&self.pool)
-                .await?;
-        Ok(row.map(|(height, hash)| Anchor { height, hash }))
-    }
-
-    /// Replaces the stored anchor block.
-    pub async fn save_anchor(&self, anchor: &Anchor) -> anyhow::Result<()> {
-        sqlx::query(
-            "INSERT INTO anchor (id, height, hash) VALUES (1, ?, ?) ON CONFLICT (id) DO UPDATE \
-             SET height = excluded.height, hash = excluded.hash",
-        )
-        .bind(i64::try_from(anchor.height)?)
-        .bind(&anchor.hash)
-        .execute(&self.pool)
-        .await?;
-        Ok(())
-    }
-
-    /// The largest follow height of any node, `None` without progress.
-    pub async fn max_follow_next_height(&self) -> anyhow::Result<Option<u64>> {
-        let (max,): (Option<u64>,) =
-            sqlx::query_as("SELECT MAX(follow_next_height) FROM node_progress")
-                .fetch_one(&self.pool)
-                .await?;
-        Ok(max)
-    }
-
-    /// Deletes all state in one transaction: missing rows, progress and the anchor; returns the
-    /// number of deleted rows.
+    /// Deletes all state in one transaction: missing rows and progress; returns the number of
+    /// deleted rows.
     pub async fn reset(&self) -> anyhow::Result<u64> {
         let mut tx = self.pool.begin().await?;
         let mut deleted = 0;
-        for table in ["missing_chunk", "node_progress", "anchor"] {
+        for table in ["missing_chunk", "node_progress"] {
             deleted += sqlx::query(&format!("DELETE FROM {table}"))
                 .execute(&mut *tx)
                 .await?
@@ -157,8 +123,7 @@ pub const ALERT_MIN_FAILED_PROBES: u32 = 3;
 /// `last_status` of a row refined from a 404 that named a height; the only status that alerts.
 const STATUS_NOT_FOUND: &str = "404";
 
-/// The delay cap of a row with `status` after `failed_probes` failed probes. `RETRY_CAP_SQL` is
-/// the same rule for `upsert_failure`.
+/// The delay cap of a row with `status` after `failed_probes` failed probes.
 fn retry_delay_cap_secs(status: &str, failed_probes: i64) -> i64 {
     if status == STATUS_NOT_FOUND && failed_probes >= i64::from(ALERT_MIN_FAILED_PROBES) {
         ALERT_RETRY_DELAY_MAX_SECS
@@ -167,16 +132,18 @@ fn retry_delay_cap_secs(status: &str, failed_probes: i64) -> i64 {
     }
 }
 
-/// `retry_delay_cap_secs` over an upsert's old row, with binds ?7 (`RETRY_DELAY_MAX_SECS`), ?8 (the
-/// new status), ?9 (`STATUS_NOT_FOUND`), ?10 (`ALERT_MIN_FAILED_PROBES`) and ?11
-/// (`ALERT_RETRY_DELAY_MAX_SECS`).
-const RETRY_CAP_SQL: &str = "CASE WHEN ?8 = ?9 AND failed_probes + 1 >= ?10 THEN ?11 ELSE ?7 END";
+/// The distinct `DataKind::epoch_root_lag` values of the per-epoch kinds.
+const EPOCH_ROOT_LAGS: [u64; 2] = [0, 2];
 
 /// Selects the rows of a kind that overlap a range.
 const SELECT_OVERLAPPING: &str = "SELECT range_start, range_end, first_missing_at, \
                                   retry_delay_secs, failed_probes, next_retry_at, last_status \
                                   FROM missing_chunk WHERE node = ? AND kind = ? AND range_start \
                                   < ? AND range_end > ?";
+/// Selects the row of a kind that starts at a height.
+const SELECT_AT_START: &str = "SELECT range_start, range_end, first_missing_at, retry_delay_secs, \
+                               failed_probes, next_retry_at, last_status FROM missing_chunk WHERE \
+                               node = ? AND kind = ? AND range_start = ?";
 /// Deletes the rows `SELECT_OVERLAPPING` selects.
 const DELETE_OVERLAPPING: &str =
     "DELETE FROM missing_chunk WHERE node = ? AND kind = ? AND range_start < ? AND range_end > ?";
@@ -255,8 +222,9 @@ fn merge_rows(
         .collect()
 }
 
-/// Upserts a failed probe: a new row retries after `RETRY_DELAY_MIN_SECS`, a known row keeps
-/// `first_missing_at`, doubles its delay and counts another failed probe.
+/// Upserts a failed probe by exact key: the row, if any, is merged as `merge_rows` does (oldest
+/// first-missing time, doubled delay under its cap, one more failed probe) and keeps the larger
+/// `range_end`.
 async fn upsert_failure(
     conn: &mut sqlx::SqliteConnection,
     node: &str,
@@ -264,29 +232,20 @@ async fn upsert_failure(
     status: &str,
     now: DateTime<Utc>,
 ) -> anyhow::Result<()> {
-    // In `DO UPDATE`, unqualified columns are the old row, so both columns see the old delay.
-    sqlx::query(&format!(
-        "INSERT INTO missing_chunk (node, kind, range_start, range_end, first_missing_at, \
-         retry_delay_secs, next_retry_at, last_status) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?5 + ?6, \
-         ?8) ON CONFLICT (node, kind, range_start) DO UPDATE SET range_end = MAX(range_end, \
-         excluded.range_end), retry_delay_secs = MIN(retry_delay_secs * 2, {RETRY_CAP_SQL}), \
-         next_retry_at = ?5 + MIN(retry_delay_secs * 2, {RETRY_CAP_SQL}), failed_probes = \
-         failed_probes + 1, last_status = ?8"
-    ))
-    .bind(node)
-    .bind(<&'static str>::from(probe.kind))
-    .bind(i64::try_from(probe.range.start)?)
-    .bind(i64::try_from(probe.range.end)?)
-    .bind(now.timestamp())
-    .bind(RETRY_DELAY_MIN_SECS)
-    .bind(RETRY_DELAY_MAX_SECS)
-    .bind(status)
-    .bind(STATUS_NOT_FOUND)
-    .bind(ALERT_MIN_FAILED_PROBES)
-    .bind(ALERT_RETRY_DELAY_MAX_SECS)
-    .execute(conn)
-    .await?;
-    Ok(())
+    let kind = <&'static str>::from(probe.kind);
+    let old: Option<MissingRow> = sqlx::query_as(SELECT_AT_START)
+        .bind(node)
+        .bind(kind)
+        .bind(i64::try_from(probe.range.start)?)
+        .fetch_optional(&mut *conn)
+        .await?;
+    let old: Vec<_> = old.into_iter().collect();
+    let new = [(probe.range.clone(), status)];
+    let mut row = merge_rows(&old, &new, now).remove(0);
+    if let Some(old) = old.first() {
+        row.range_end = row.range_end.max(old.range_end);
+    }
+    insert_row(conn, node, kind, &row).await
 }
 
 /// The parts of `range` that no row of `rows` covers, in order.
@@ -348,10 +307,10 @@ async fn insert_row(
 #[derive(sqlx::FromRow)]
 struct ProgressRow {
     follow_next_height: u64,
-    next_sweep_at: Option<DateTime<Utc>>,
+    last_sweep_started_at: Option<DateTime<Utc>>,
     sweep_until_height: Option<u64>,
     sweep_next_height: Option<u64>,
-    sweep_started_at: Option<DateTime<Utc>>,
+    sweep_done: bool,
     last_sweep_completed_at: Option<DateTime<Utc>>,
 }
 
@@ -370,26 +329,25 @@ impl NodeStore {
     /// The node's progress; `None` on first run.
     pub async fn load_progress(&self) -> anyhow::Result<Option<NodeProgress>> {
         let row: Option<ProgressRow> = sqlx::query_as(
-            "SELECT follow_next_height, next_sweep_at, sweep_until_height, sweep_next_height, \
-             sweep_started_at, last_sweep_completed_at FROM node_progress WHERE node = ?",
+            "SELECT follow_next_height, last_sweep_started_at, sweep_until_height, \
+             sweep_next_height, sweep_done, last_sweep_completed_at FROM node_progress WHERE node \
+             = ?",
         )
         .bind(&self.node)
         .fetch_optional(&self.pool)
         .await?;
         row.map(|row| {
             let sweep = match (
-                row.next_sweep_at,
                 row.sweep_until_height,
                 row.sweep_next_height,
-                row.sweep_started_at,
+                row.sweep_done,
             ) {
-                (Some(start_at), None, None, None) => SweepState::Waiting { start_at },
-                (None, None, None, None) => SweepState::Done,
-                (None, Some(until_height), Some(next_height), Some(started_at)) => {
+                (None, None, false) => SweepState::Waiting,
+                (None, None, true) => SweepState::Done,
+                (Some(until_height), Some(next_height), false) => {
                     SweepState::Running(SweepProgress {
                         until_height,
                         next_height,
-                        started_at,
                     })
                 },
                 _ => bail!("inconsistent node_progress row for {}", self.node),
@@ -397,6 +355,7 @@ impl NodeStore {
             Ok(NodeProgress {
                 follow_next_height: row.follow_next_height,
                 sweep,
+                last_sweep_started_at: row.last_sweep_started_at,
                 last_sweep_completed_at: row.last_sweep_completed_at,
             })
         })
@@ -405,42 +364,40 @@ impl NodeStore {
 
     /// Upserts the full `node_progress` row.
     pub async fn save_progress(&self, progress: &NodeProgress) -> anyhow::Result<()> {
-        let (waiting, until, next, started) = match &progress.sweep {
-            SweepState::Waiting { start_at } => (Some(start_at.timestamp()), None, None, None),
-            SweepState::Done => (None, None, None, None),
+        let (until, next, done) = match &progress.sweep {
+            SweepState::Waiting => (None, None, false),
+            SweepState::Done => (None, None, true),
             SweepState::Running(sweep) => (
-                None,
                 Some(i64::try_from(sweep.until_height)?),
                 Some(i64::try_from(sweep.next_height)?),
-                Some(sweep.started_at.timestamp()),
+                false,
             ),
         };
         sqlx::query(
-            "INSERT INTO node_progress (node, follow_next_height, next_sweep_at, \
-             sweep_until_height, sweep_next_height, sweep_started_at, last_sweep_completed_at) \
-             VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT (node) DO UPDATE SET follow_next_height = \
-             excluded.follow_next_height, next_sweep_at = excluded.next_sweep_at, \
+            "INSERT INTO node_progress (node, follow_next_height, last_sweep_started_at, \
+             sweep_until_height, sweep_next_height, sweep_done, last_sweep_completed_at) VALUES \
+             (?, ?, ?, ?, ?, ?, ?) ON CONFLICT (node) DO UPDATE SET follow_next_height = \
+             excluded.follow_next_height, last_sweep_started_at = excluded.last_sweep_started_at, \
              sweep_until_height = excluded.sweep_until_height, sweep_next_height = \
-             excluded.sweep_next_height, sweep_started_at = excluded.sweep_started_at, \
+             excluded.sweep_next_height, sweep_done = excluded.sweep_done, \
              last_sweep_completed_at = excluded.last_sweep_completed_at",
         )
         .bind(&self.node)
         .bind(i64::try_from(progress.follow_next_height)?)
-        .bind(waiting)
+        .bind(progress.last_sweep_started_at.map(|t| t.timestamp()))
         .bind(until)
         .bind(next)
-        .bind(started)
+        .bind(done)
         .bind(progress.last_sweep_completed_at.map(|t| t.timestamp()))
         .execute(&self.pool)
         .await?;
         Ok(())
     }
 
-    /// Upsert: new row retries after `RETRY_DELAY_MIN_SECS` with one failed probe; known row keeps
-    /// `first_missing_at`, raises `range_end`, doubles the delay up to `RETRY_DELAY_MAX_SECS` (`ALERT_RETRY_DELAY_MAX_SECS` for a row that
-    /// qualifies for alerting),
-    /// counts another failed probe. `status` is the label of the failure (`"404"`, `"500"`,
-    /// `"transport"`).
+    /// Upserts a failed probe by exact key (see `upsert_failure`): a new row retries after
+    /// `RETRY_DELAY_MIN_SECS`; a known row doubles its delay up to `RETRY_DELAY_MAX_SECS`
+    /// (`ALERT_RETRY_DELAY_MAX_SECS` once it qualifies for alerting) and counts another failed
+    /// probe. `status` is the label of the failure (`"404"`, `"500"`, `"transport"`).
     pub async fn record_missing(
         &self,
         probe: &Probe,
@@ -604,17 +561,16 @@ impl NodeStore {
         let mut delete = QueryBuilder::new("DELETE FROM missing_chunk WHERE node = ");
         delete.push_bind(&self.node).push(" AND ((kind IN (");
         push_kinds(&mut delete, |kind| !kind.is_per_epoch());
-        delete.push(") AND range_end <= ").push_bind(start_height);
+        delete
+            .push(") AND range_end <= ")
+            .push_bind(start_height)
+            .push(")");
         if let Some(epochs) = epochs {
-            delete.push(") OR (kind IN (");
-            push_kinds(&mut delete, DataKind::is_per_epoch);
-            delete
-                .push(") AND range_start * ")
-                .push_bind(i64::try_from(epochs.epoch_height)?)
-                .push(" < ")
-                .push_bind(start_height);
+            delete.push(" OR (");
+            push_epoch_condition(&mut delete, epochs, " < ", start_height)?;
+            delete.push(")");
         }
-        delete.push("))");
+        delete.push(")");
         let forgotten = delete.build().execute(&mut *tx).await?.rows_affected();
         // Rows are disjoint, so no other row starts at `start_height`.
         let mut trim = QueryBuilder::new("UPDATE missing_chunk SET range_start = ");
@@ -748,18 +704,17 @@ impl NodeStore {
             .push(" AND first_missing_at <= ")
             .push_bind(max_first_missing.timestamp())
             .push(" AND ((kind IN (");
-        push_kinds(&mut query, |kind| !kind.is_per_epoch());
-        query.push(") AND range_end <= ").push_bind(max_end_height);
+        push_kinds(&mut query, |kind| !kind.is_per_epoch() && kind.can_alert());
+        query
+            .push(") AND range_end <= ")
+            .push_bind(max_end_height)
+            .push(")");
         if let Some(epochs) = epochs {
-            query.push(") OR (kind IN (");
-            push_kinds(&mut query, DataKind::is_per_epoch);
-            query
-                .push(") AND range_start * ")
-                .push_bind(i64::try_from(epochs.epoch_height)?)
-                .push(" <= ")
-                .push_bind(max_end_height);
+            query.push(" OR (");
+            push_epoch_condition(&mut query, epochs, " <= ", max_end_height)?;
+            query.push(")");
         }
-        query.push("))) WHERE rn = 1");
+        query.push(")) WHERE rn = 1");
         let rows: Vec<(String, u64, u64, DateTime<Utc>, u32)> =
             query.build_query_as().fetch_all(&self.pool).await?;
         rows.into_iter()
@@ -775,6 +730,35 @@ impl NodeStore {
     }
 }
 
+/// Pushes the condition on per-epoch rows `epoch_block(kind, range_start, epoch_height)
+/// <comparison> bound`, in SQL: kinds with the same `epoch_root_lag` share a branch.
+fn push_epoch_condition(
+    query: &mut QueryBuilder<'_, Sqlite>,
+    epochs: EpochConfig,
+    comparison: &str,
+    bound: i64,
+) -> anyhow::Result<()> {
+    let epoch_height = i64::try_from(epochs.epoch_height)?;
+    for (index, lag) in EPOCH_ROOT_LAGS.into_iter().enumerate() {
+        if index > 0 {
+            query.push(" OR ");
+        }
+        query.push("(kind IN (");
+        push_kinds(query, |kind| {
+            kind.is_per_epoch() && kind.epoch_root_lag() == lag
+        });
+        query
+            .push(") AND (range_start - ")
+            .push_bind(i64::try_from(lag)?)
+            .push(") * ")
+            .push_bind(epoch_height)
+            .push(comparison)
+            .push_bind(bound)
+            .push(")");
+    }
+    Ok(())
+}
+
 /// Pushes the bind list of the kinds for which `filter` holds.
 fn push_kinds(query: &mut QueryBuilder<'_, Sqlite>, filter: impl Fn(DataKind) -> bool) {
     let mut kinds = query.separated(", ");
@@ -788,10 +772,18 @@ fn push_kinds(query: &mut QueryBuilder<'_, Sqlite>, filter: impl Fn(DataKind) ->
 pub struct NodeProgress {
     pub follow_next_height: u64,
     pub sweep: SweepState,
+    /// Start of the latest sweep, `None` before the first.
+    pub last_sweep_started_at: Option<DateTime<Utc>>,
     pub last_sweep_completed_at: Option<DateTime<Utc>>,
 }
 
 impl NodeProgress {
+    /// When the next sweep may start, one `interval` after the latest start; `None` before the
+    /// first sweep, which starts at once.
+    pub fn next_sweep_start(&self, interval: TimeDelta) -> Option<DateTime<Utc>> {
+        self.last_sweep_started_at.map(|started| started + interval)
+    }
+
     /// Raises the follow height and a running sweep's next height to `window_start`.
     pub fn clamped_to(self, window_start: u64) -> Self {
         let sweep = match self.sweep {
@@ -799,7 +791,7 @@ impl NodeProgress {
                 next_height: sweep.next_height.max(window_start),
                 ..sweep
             }),
-            other @ (SweepState::Waiting { .. } | SweepState::Done) => other,
+            other @ (SweepState::Waiting | SweepState::Done) => other,
         };
         Self {
             follow_next_height: self.follow_next_height.max(window_start),
@@ -812,9 +804,8 @@ impl NodeProgress {
 /// Sweep schedule of one node.
 #[derive(Clone, Debug, PartialEq)]
 pub enum SweepState {
-    Waiting {
-        start_at: DateTime<Utc>,
-    },
+    /// Until `NodeProgress::next_sweep_start`.
+    Waiting,
     Running(SweepProgress),
     /// The one sweep of `--sweep-once` is finished.
     Done,
@@ -825,7 +816,6 @@ pub enum SweepState {
 pub struct SweepProgress {
     pub until_height: u64,
     pub next_height: u64,
-    pub started_at: DateTime<Utc>,
 }
 
 /// State of one kind on one node.
@@ -897,11 +887,18 @@ mod tests {
         times: i64,
         first: i64,
     ) {
+        // The production paths: range kinds go through `record_range_failure`.
         for i in 0..times {
             let probe = probe(kind, range.clone());
-            node.record_missing(&probe, status, at(first + i))
-                .await
-                .unwrap();
+            if kind.is_range() {
+                node.record_range_failure(&probe, status, at(first + i))
+                    .await
+                    .unwrap();
+            } else {
+                node.record_missing(&probe, status, at(first + i))
+                    .await
+                    .unwrap();
+            }
         }
     }
 
@@ -1078,6 +1075,7 @@ mod tests {
             (DataKind::StateCert, 3..4),
             (DataKind::StateCert, 4..5),
             (DataKind::StakeTable, 5..6),
+            (DataKind::StakeTable, 6..7),
         ];
         for (kind, range) in rows {
             node.record_missing(&probe(kind, range), "404", at(T0))
@@ -1086,9 +1084,10 @@ mod tests {
         }
 
         // Window starts at 100. Leaf 0..60 and lc_leaf_proof 99 end below it and go; leaf 80..140
-        // crosses it and is trimmed to 100..140. Epoch 3 ends at block 75 and goes; epoch 4 ends
-        // exactly at 100 and stays.
-        assert_eq!(node.forget_below(100, Some(epochs)).await.unwrap(), 3);
+        // crosses it and is trimmed to 100..140. The state cert of epoch 3 depends on block 75 and
+        // goes, epoch 4 on block 100 and stays. The stake table of epoch 5 depends on block 75
+        // (two epochs back) and goes, epoch 6 on block 100 and stays.
+        assert_eq!(node.forget_below(100, Some(epochs)).await.unwrap(), 4);
         let summary = node.missing_summary(at(T0)).await.unwrap();
         assert_eq!(count(&summary, DataKind::Leaf), 90);
         assert_eq!(summary[0].oldest.as_ref().unwrap().range, 100..140);
@@ -1102,8 +1101,12 @@ mod tests {
         let node = node_store("a:1").await;
         let chunk = 0..100;
         let leaf = probe(DataKind::Leaf, chunk.clone());
-        node.record_missing(&leaf, "404", at(T0)).await.unwrap();
-        node.record_missing(&leaf, "404", at(T0 + 5)).await.unwrap();
+        node.record_range_failure(&leaf, "404", at(T0))
+            .await
+            .unwrap();
+        node.record_range_failure(&leaf, "404", at(T0 + 5))
+            .await
+            .unwrap();
 
         let gaps = [10..20, 50..60];
         node.replace_missing(DataKind::Leaf, &chunk, &gaps, None, at(T0 + 30))
@@ -1170,8 +1173,8 @@ mod tests {
         fail(DataKind::Aggregate, 900..1000, "404", 3, T0).await;
         fail(DataKind::Aggregate, 400..500, "404", 3, T0).await;
         fail(DataKind::StateCert, 3..4, "404", 3, T0).await;
-        fail(DataKind::StakeTable, 6..7, "404", 3, T0).await;
-        fail(DataKind::StakeTable, 5..6, "404", 3, T0).await;
+        fail(DataKind::StakeTable, 8..9, "404", 3, T0).await;
+        fail(DataKind::StakeTable, 7..8, "404", 3, T0).await;
 
         let now = at(T0 + 60);
         let min_age = Duration::from_secs(60);
@@ -1184,20 +1187,19 @@ mod tests {
             .map(|c| (c.kind, c.range.clone(), c.age.as_secs(), c.failed_probes))
             .collect();
         summary.sort_by_key(|(kind, ..)| <&str>::from(*kind));
-        // Not alerting: block (500), vid_common (2 probes), lc_leaf_proof (too young), the
-        // aggregate row past the margin and the stake_table row past it. Leaf takes the older of
-        // its two rows. Rows ending exactly at the margin (aggregate 400..500, the last block of
-        // epoch 5 at 500) alert.
+        // Not alerting: block (500), vid_common (2 probes), lc_leaf_proof (too young), aggregate
+        // (never), and the stake_table row past the margin. Leaf takes the older of its two rows.
+        // A stake table depends on the block two epochs back: epoch 7 on block 500, exactly the
+        // margin, so it alerts; epoch 8 on block 600 does not.
         let expected = [
-            (DataKind::Aggregate, 400..500, 60, 3),
             (DataKind::Leaf, 100..200, 60, 3),
-            (DataKind::StakeTable, 5..6, 60, 3),
+            (DataKind::StakeTable, 7..8, 60, 3),
             (DataKind::StateCert, 3..4, 60, 3),
         ];
         assert_eq!(summary, expected);
 
         // A later 404 sets the status again and counts another probe.
-        node.record_missing(&probe(DataKind::Block, 100..200), "404", at(T0 + 3))
+        node.record_range_failure(&probe(DataKind::Block, 100..200), "404", at(T0 + 3))
             .await
             .unwrap();
         let found = node
@@ -1213,7 +1215,7 @@ mod tests {
         let node = node_store("a:1").await;
         let chunk = 0..100;
         for secs in [0, 5] {
-            node.record_missing(&probe(DataKind::Leaf, chunk.clone()), "404", at(T0 + secs))
+            node.record_range_failure(&probe(DataKind::Leaf, chunk.clone()), "404", at(T0 + secs))
                 .await
                 .unwrap();
         }
@@ -1379,44 +1381,27 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn anchor_roundtrip_and_reset() {
+    async fn reset_deletes_all_state() {
         let node = node_store("a:1").await;
         let store = Store {
             pool: node.pool.clone(),
         };
-        assert_eq!(store.load_anchor().await.unwrap(), None);
-        assert_eq!(store.max_follow_next_height().await.unwrap(), None);
-
-        let anchor = Anchor {
-            height: 500,
-            hash: "abc".to_owned(),
-        };
-        store.save_anchor(&anchor).await.unwrap();
-        let newer = Anchor {
-            height: 600,
-            hash: "def".to_owned(),
-        };
-        store.save_anchor(&newer).await.unwrap();
-        assert_eq!(store.load_anchor().await.unwrap(), Some(newer));
-
         let progress = NodeProgress {
             follow_next_height: 700,
-            sweep: SweepState::Waiting { start_at: at(T0) },
+            sweep: SweepState::Waiting,
+            last_sweep_started_at: None,
             last_sweep_completed_at: None,
         };
         node.save_progress(&progress).await.unwrap();
         node.record_missing(&probe(DataKind::Leaf, 0..100), "404", at(T0))
             .await
             .unwrap();
-        assert_eq!(store.max_follow_next_height().await.unwrap(), Some(700));
-
         assert_eq!(
             store.reset().await.unwrap(),
-            3,
-            "anchor, progress and one missing row"
+            2,
+            "progress and one missing row"
         );
         assert_eq!(store.reset().await.unwrap(), 0, "nothing left to delete");
-        assert_eq!(store.load_anchor().await.unwrap(), None);
         assert_eq!(node.load_progress().await.unwrap(), None);
         let summary = node.missing_summary(at(T0)).await.unwrap();
         assert_eq!(summary.iter().map(|k| k.missing_count).sum::<u64>(), 0);
@@ -1428,6 +1413,7 @@ mod tests {
         let progress = NodeProgress {
             follow_next_height: 700,
             sweep: SweepState::Done,
+            last_sweep_started_at: Some(at(T0)),
             last_sweep_completed_at: Some(at(T0)),
         };
         node.save_progress(&progress).await.unwrap();
@@ -1470,8 +1456,8 @@ mod tests {
             sweep: SweepState::Running(SweepProgress {
                 until_height: 500,
                 next_height: 80,
-                started_at: at(T0),
             }),
+            last_sweep_started_at: Some(at(T0)),
             last_sweep_completed_at: None,
         };
         let clamped = progress.clone().clamped_to(100);

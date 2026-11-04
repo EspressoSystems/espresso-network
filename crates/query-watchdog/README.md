@@ -61,6 +61,10 @@ Per 100-height chunk (follow stays 10 blocks behind the tip, sweep over the wind
   missing row, per-epoch kinds one epoch.
 - Missing ranges are re-probed with a delay doubling from 5 s up to 600 s. A range that qualifies for alerting (last
   failure a 404, at least 3 failed probes) is capped at 60 s, so a refilled range is noticed within a minute.
+- A stake table of epoch `e` is probed with the chunk holding block `(e - 2) * epoch_height`, the epoch root the node
+  builds it from; a state cert with the chunk holding `e * epoch_height`. The alert margin below uses the same block.
+- The sweep covers the window up to 10 blocks below the tip (follow covers the rest) and pauses while the node's last
+  probe failed with other than 404 (500, timeout, transport); follow and retries go on.
 - Gauges for the merklized state head lag and follow lag are exported.
 
 ## Log levels
@@ -81,7 +85,11 @@ and kind per minute, for the oldest row of the kind that meets all of:
   timeout and transport failures never qualify
 - at least 3 consecutive failed probes
 - first missing at least `--alert-missing-after` ago
-- not within 10 blocks of the tip (per-epoch kinds: the epoch's last block is at least 10 below the tip)
+- not within 10 blocks of the tip (per-epoch kinds: the block the object depends on, see above, is at least 10 below the
+  tip)
+
+`aggregate` never alerts: the node's aggregator legitimately lags the tip, so its 404s are counted as missing but never
+page.
 
 ## Docker
 
@@ -130,10 +138,9 @@ task resumes where the old one stopped.
 - Not checked: data contents, merklized-state history (archive nodes prune it), transactions index, namespace proofs,
   reward tree, `chain_config`, `vid_share`.
 - `--retention-blocks` must not exceed the node's own retention, or pruned heights show as missing.
-- The state is bound to one network. At startup a recent block hash stored with it and the follow heights are checked
-  against the live nodes: another network or a reset chain exits with an error. `--reset` deletes the state instead
-  (always with a WARN), so pass it once, not in the standing config. A stored block the nodes no longer serve only logs
-  a WARN. Rows of nodes no longer in `--nodes` are forgotten at startup.
+- State is per node URL. Rows of nodes no longer in `--nodes` are forgotten at startup. Pointing the same URL or state
+  file at another network is user error: use `--reset` (deletes the state at startup, always with a WARN, so pass it
+  once) or another `--db-path`.
 - Without `LITESTREAM_REPLICA_URL` the state is lost when the task restarts. `--reset` deletes rows, so litestream
   replicates the reset; to retire a replica, point `LITESTREAM_REPLICA_URL` at a new path.
 - Node URLs must not carry credentials (a startup error): the URL appears in alerts, on the page and in debug logs.

@@ -1,6 +1,5 @@
 //! Watches archive query nodes for data they fail to serve; see `README.md`.
 
-mod anchor;
 mod chunk;
 mod gaps;
 mod http;
@@ -50,8 +49,8 @@ struct Options {
     /// SQLite state file; default `state.sqlite` in the platform data directory of `query-watchdog`.
     #[arg(long, env = "ESPRESSO_QUERY_WATCHDOG_DB_PATH")]
     db_path: Option<PathBuf>,
-    /// Delete the stored state when it belongs to another network; without a mismatch it changes
-    /// nothing.
+    /// Delete the stored state at startup and log a WARN (pass it once, not in the standing
+    /// config).
     #[arg(long, env = "ESPRESSO_QUERY_WATCHDOG_RESET")]
     reset: bool,
     /// Pacing.
@@ -71,15 +70,24 @@ impl Options {
     }
 }
 
-/// Parses options, opens the store, forgets other nodes, opens the read-only pool of the page,
-/// spawns `http::serve`, fetches the epoch config and the first tip, starts each node, and runs
-/// `TipPoller::run` and every `NodeWatch::run` in one `select!` with the server and
-/// `shutdown_signal()`.
+/// Parses options and runs the watchdog; a fatal error is also logged, so it reaches the log
+/// stream (JSON included) before the process exits.
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let options = Options::parse();
     init_logging();
+    let result = run(options).await;
+    if let Err(error) = &result {
+        tracing::error!(error = format!("{error:#}"), "fatal");
+    }
+    result
+}
 
+/// Opens the store, forgets other nodes, opens the read-only pool of the page, spawns
+/// `http::serve`, fetches the epoch config and the first tip, starts each node, and runs
+/// `TipPoller::run` and every `NodeWatch::run` in one `select!` with the server and
+/// `shutdown_signal()`.
+async fn run(options: Options) -> anyhow::Result<()> {
     let nodes = options
         .nodes
         .iter()
@@ -106,7 +114,14 @@ async fn main() -> anyhow::Result<()> {
     let reader = Store::open_read_only(&db_path).await?;
     let sweep_etas = SweepEtas::default();
     let window = options.watch.sweep_window();
-    let app = AppState::new(registry, reader, nodes.clone(), window, sweep_etas.clone());
+    let app = AppState::new(
+        registry,
+        reader,
+        nodes.clone(),
+        window,
+        sweep_etas.clone(),
+        options.watch.sweep_interval,
+    )?;
     let server = tokio::spawn(http::serve(listener, app.clone()));
     log_serving(options.port);
 
@@ -120,9 +135,9 @@ async fn main() -> anyhow::Result<()> {
     );
 
     let (tip_poller, tip) = watchdog.start_tip_poller(nodes.clone()).await?;
-    watchdog
-        .check_state(&nodes, *tip.borrow(), options.reset)
-        .await?;
+    if options.reset {
+        watchdog.reset_state().await?;
+    }
     app.set_tip(tip.clone());
     let watches = try_join_all(
         nodes

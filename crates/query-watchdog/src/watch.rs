@@ -8,7 +8,7 @@ use std::{
     time::Duration,
 };
 
-use anyhow::{Context, anyhow, bail, ensure};
+use anyhow::{anyhow, bail, ensure};
 use chrono::{DateTime, SubsecRound, TimeDelta, Utc};
 use clap::Args;
 use reqwest::StatusCode;
@@ -17,7 +17,6 @@ use tokio::{sync::watch, time::Instant};
 use url::Url;
 
 use crate::{
-    anchor::{Anchor, Verdict, verdict},
     chunk::{CHUNK_LEN, DataKind, EpochConfig, Probe, next_chunk, probes},
     gaps::{Known, Presence, Unrefined, find_gaps, parse_missing_height},
     metrics::WatchdogMetrics,
@@ -156,6 +155,11 @@ impl FetchError {
         }
     }
 
+    /// Whether the node answered with 404.
+    pub fn is_not_found(&self) -> bool {
+        matches!(self, Self::Status(StatusCode::NOT_FOUND))
+    }
+
     /// `Ok` for a 2xx status.
     fn from_status(status: StatusCode) -> Result<(), Self> {
         status
@@ -190,19 +194,17 @@ pub enum FetchTarget {
     BlockHeight,
     MerklizedStateHeight,
     Config,
-    Anchor,
 }
 
 impl FetchTarget {
     /// The `kind` label of `fetch_errors_total`: the `DataKind` label, `"block_height"`,
-    /// `"merklized_state_height"`, `"config"` or `"anchor"`.
+    /// `"merklized_state_height"` or `"config"`.
     pub fn label(self) -> &'static str {
         match self {
             Self::Data(kind) => kind.into(),
             Self::BlockHeight => "block_height",
             Self::MerklizedStateHeight => "merklized_state_height",
             Self::Config => "config",
-            Self::Anchor => "anchor",
         }
     }
 }
@@ -228,12 +230,6 @@ const HTTP_TIMEOUT: Duration = Duration::from_secs(60);
 #[derive(Deserialize)]
 struct NetworkConfig {
     config: EpochConfig,
-}
-
-/// The part of a block summary the watchdog reads.
-#[derive(Deserialize)]
-struct BlockSummary {
-    hash: String,
 }
 
 /// Total time of a GET that is decoded (tip, state height, config).
@@ -273,9 +269,8 @@ impl Watchdog {
             None => {
                 let progress = NodeProgress {
                     follow_next_height: tip_height,
-                    sweep: SweepState::Waiting {
-                        start_at: utc_now(),
-                    },
+                    sweep: SweepState::Waiting,
+                    last_sweep_started_at: None,
                     last_sweep_completed_at: None,
                 };
                 store.save_progress(&progress).await?;
@@ -298,6 +293,7 @@ impl Watchdog {
             last_summary_at: now,
             errors_since_summary: BTreeMap::new(),
             eta_origin: None,
+            node_unhealthy: false,
             node,
         };
         watch.reset_eta_origin();
@@ -328,71 +324,11 @@ impl Watchdog {
         Ok((poller, receiver))
     }
 
-    /// With `reset`, deletes the stored state and always logs a WARN. Otherwise
-    /// checks it against the live network: a mismatch (another network or a reset chain) is an
-    /// error, nodes that no longer serve the stored anchor only log a WARN. Then stores a fresh
-    /// anchor.
-    pub async fn check_state(
-        &self,
-        nodes: &[WatchedNode],
-        tip_height: u64,
-        reset: bool,
-    ) -> anyhow::Result<()> {
-        let stored = self.store.load_anchor().await?;
-        if reset {
-            let deleted = self.store.reset().await?;
-            tracing::warn!(deleted, ?stored, "--reset deleted the stored state");
-            return self.refresh_anchor(nodes, tip_height).await;
-        }
-        let live_hash = match &stored {
-            Some(anchor) => self.fetch_block_hash(nodes, anchor.height).await,
-            None => None,
-        };
-        let max_follow = self.store.max_follow_next_height().await?;
-        match verdict(
-            stored.as_ref(),
-            live_hash.as_deref(),
-            max_follow,
-            tip_height,
-        ) {
-            Verdict::Consistent => {},
-            Verdict::Unverifiable => {
-                tracing::warn!(
-                    ?stored,
-                    "no node serves the stored anchor block, state not verified"
-                );
-            },
-            Verdict::Mismatch(reason) => bail!(
-                "the stored state belongs to another network ({reason}); pass --reset to delete \
-                 it or use another --db-path"
-            ),
-        }
-        self.refresh_anchor(nodes, tip_height).await
-    }
-
-    /// Stores the block `ALERT_TIP_MARGIN` below `tip_height` as the anchor, when a node serves it.
-    async fn refresh_anchor(&self, nodes: &[WatchedNode], tip_height: u64) -> anyhow::Result<()> {
-        let height = tip_height.saturating_sub(ALERT_TIP_MARGIN);
-        if let Some(hash) = self.fetch_block_hash(nodes, height).await {
-            self.store.save_anchor(&Anchor { height, hash }).await?;
-        }
+    /// Deletes the stored state (`--reset`) and always logs a WARN.
+    pub async fn reset_state(&self) -> anyhow::Result<()> {
+        let deleted = self.store.reset().await?;
+        tracing::warn!(deleted, "--reset deleted the stored state");
         Ok(())
-    }
-
-    /// The hash of block `height` from the first node that serves its summary.
-    async fn fetch_block_hash(&self, nodes: &[WatchedNode], height: u64) -> Option<String> {
-        let route = format!("v1/availability/block/summary/{height}");
-        for node in nodes {
-            match self.get_json::<BlockSummary>(node, &route).await {
-                Ok(summary) => return Some(summary.hash),
-                Err(error) => {
-                    tracing::debug!(node = %node.label, %error, height, "anchor request failed");
-                    self.metrics
-                        .count_fetch_error(&node.label, FetchTarget::Anchor, &error);
-                },
-            }
-        }
-        None
     }
 
     /// `v1/config/hotshot` from the first node that answers; `None` when `epoch_height` is 0;
@@ -529,19 +465,13 @@ pub struct TipPoller {
 
 impl TipPoller {
     /// Polls forever, returning only an error; a round where no node answers keeps the previous
-    /// tip. Refreshes the stored anchor block once a minute.
+    /// tip.
     pub async fn run(self) -> anyhow::Result<Infallible> {
-        let mut last_anchor_at = Instant::now();
         loop {
             tokio::time::sleep(TIP_POLL_INTERVAL).await;
-            let Some(tip) = self.watchdog.fetch_tip(&self.nodes).await else {
-                continue;
-            };
-            self.watchdog.metrics.set_tip_height(tip)?;
-            self.tip.send_replace(tip);
-            if last_anchor_at.elapsed() >= SUMMARY_INTERVAL {
-                last_anchor_at = Instant::now();
-                self.watchdog.refresh_anchor(&self.nodes, tip).await?;
+            if let Some(tip) = self.watchdog.fetch_tip(&self.nodes).await {
+                self.watchdog.metrics.set_tip_height(tip)?;
+                self.tip.send_replace(tip);
             }
         }
     }
@@ -561,6 +491,8 @@ pub struct NodeWatch {
     last_summary_at: Instant,
     errors_since_summary: BTreeMap<String, u64>,
     eta_origin: Option<EtaOrigin>,
+    /// The last probe failed with other than 404; the sweep pauses until one answers.
+    node_unhealthy: bool,
 }
 
 /// Where the ETA rate starts: when this process began or resumed the running sweep.
@@ -578,7 +510,7 @@ const RETRY_BUDGET: Duration = Duration::from_secs(5);
 const TIP_POLL_INTERVAL: Duration = Duration::from_secs(10);
 /// Blocks below the tip within which missing data is not alerted and follow does not probe yet:
 /// nodes lag the tip a little, and proofs need the blocks after them.
-const ALERT_TIP_MARGIN: u64 = 10;
+pub(crate) const ALERT_TIP_MARGIN: u64 = 10;
 /// Time between summary lines of one node.
 const SUMMARY_INTERVAL: Duration = Duration::from_secs(60);
 
@@ -609,6 +541,9 @@ impl NodeWatch {
             tracing::info!(%node, tip_height = self.tip_height, %summary, "watching");
             return;
         }
+        let next_start = TimeDelta::from_std(self.watchdog.options.sweep_interval)
+            .ok()
+            .and_then(|interval| self.progress.next_sweep_start(interval));
         let (sweep, next_height, until_height, start_at) = match &self.progress.sweep {
             SweepState::Running(sweep) => (
                 "running",
@@ -616,9 +551,7 @@ impl NodeWatch {
                 Some(sweep.until_height),
                 None,
             ),
-            SweepState::Waiting { start_at } => {
-                ("waiting", None, None, Some(start_at.to_rfc3339()))
-            },
+            SweepState::Waiting => ("waiting", None, None, next_start.map(|t| t.to_rfc3339())),
             SweepState::Done => ("done", None, None, None),
         };
         tracing::info!(
@@ -681,13 +614,23 @@ impl NodeWatch {
         Ok(checked)
     }
 
-    /// Starts a due sweep or checks its next chunk for every kind; logs start and end; saves progress.
+    /// Starts a due sweep or checks its next chunk for every kind; logs start and end; saves
+    /// progress. Does nothing while the node's last probe failed with other than 404.
     async fn sweep_step(&mut self) -> anyhow::Result<usize> {
-        if self.progress.sweep == SweepState::Done && !self.watchdog.options.sweep_once {
-            self.schedule_after_done().await?;
+        if self.node_unhealthy {
+            return Ok(0);
         }
-        if let SweepState::Waiting { start_at } = self.progress.sweep {
-            if utc_now() < start_at {
+        if self.progress.sweep == SweepState::Done && !self.watchdog.options.sweep_once {
+            self.progress.sweep = SweepState::Waiting;
+            self.store.save_progress(&self.progress).await?;
+        }
+        if self.progress.sweep == SweepState::Waiting {
+            let interval = TimeDelta::from_std(self.watchdog.options.sweep_interval)?;
+            if self
+                .progress
+                .next_sweep_start(interval)
+                .is_some_and(|start| utc_now() < start)
+            {
                 return Ok(0);
             }
             self.start_sweep().await?;
@@ -696,7 +639,7 @@ impl NodeWatch {
             return Ok(0);
         };
         let Some(chunk) = next_chunk(sweep.next_height, sweep.until_height) else {
-            self.finish_sweep(&sweep).await?;
+            self.finish_sweep().await?;
             return Ok(0);
         };
         let sent = self.check_chunk(&chunk).await?;
@@ -708,62 +651,51 @@ impl NodeWatch {
         Ok(sent)
     }
 
-    /// After a one-time sweep without `--sweep-once` any more: the next sweep starts one interval
-    /// after the last one completed.
-    async fn schedule_after_done(&mut self) -> anyhow::Result<()> {
-        let interval = TimeDelta::from_std(self.watchdog.options.sweep_interval)?;
-        let last = self
-            .progress
-            .last_sweep_completed_at
-            .unwrap_or_else(utc_now);
-        self.progress.sweep = SweepState::Waiting {
-            start_at: last + interval,
-        };
-        self.store.save_progress(&self.progress).await
-    }
-
-    /// Begins a sweep over the window below the tip.
+    /// Begins a sweep over the window, up to the follow margin below the tip: follow covers the
+    /// rest.
     async fn start_sweep(&mut self) -> anyhow::Result<()> {
         let start_height = self
             .watchdog
             .options
             .sweep_window()
             .start_height(self.tip_height);
+        let until_height = self.tip_height.saturating_sub(ALERT_TIP_MARGIN);
+        self.progress.last_sweep_started_at = Some(utc_now());
         self.progress.sweep = SweepState::Running(SweepProgress {
-            until_height: self.tip_height,
+            until_height,
             next_height: start_height,
-            started_at: utc_now(),
         });
         self.reset_eta_origin();
         self.store.save_progress(&self.progress).await?;
         tracing::info!(
             node = %self.node.label,
             start_height,
-            until_height = self.tip_height,
+            until_height,
             "sweep started"
         );
         Ok(())
     }
 
-    /// Schedules the next sweep, then logs the end line and sets the gauge.
-    async fn finish_sweep(&mut self, sweep: &SweepProgress) -> anyhow::Result<()> {
+    /// Ends the sweep: the next one is due one interval after this one started (or never with
+    /// `--sweep-once`); logs the end line and sets the gauge. A completion before the start (the
+    /// clock stepped back) counts as no duration and logs a WARN.
+    async fn finish_sweep(&mut self) -> anyhow::Result<()> {
         let completed_at = utc_now();
-        let interval = TimeDelta::from_std(self.watchdog.options.sweep_interval)?;
-        let duration = (completed_at - sweep.started_at)
-            .to_std()
-            .with_context(|| {
-                format!(
-                    "{}: sweep completed at {completed_at} before it started at {}",
-                    self.node.label, sweep.started_at
-                )
-            })?;
+        let started_at = self.progress.last_sweep_started_at.unwrap_or(completed_at);
+        let duration = (completed_at - started_at).to_std().unwrap_or_else(|_| {
+            tracing::warn!(
+                node = %self.node.label,
+                %started_at,
+                %completed_at,
+                "sweep completed before it started, the clock stepped back"
+            );
+            Duration::ZERO
+        });
         self.progress.last_sweep_completed_at = Some(completed_at);
         self.progress.sweep = if self.watchdog.options.sweep_once {
             SweepState::Done
         } else {
-            SweepState::Waiting {
-                start_at: sweep.started_at + interval,
-            }
+            SweepState::Waiting
         };
         self.reset_eta_origin();
         self.store.save_progress(&self.progress).await?;
@@ -800,13 +732,16 @@ impl NodeWatch {
         }
     }
 
-    /// Waits `request_interval`, counts the probe and sends HEAD to `probe.route()`.
-    async fn send_probe(&self, probe: &Probe) -> Result<(), FetchError> {
+    /// Waits `request_interval`, counts the probe and sends HEAD to `probe.route()`. The node
+    /// counts as unhealthy until a probe answers with 200 or 404.
+    async fn send_probe(&mut self, probe: &Probe) -> Result<(), FetchError> {
         tokio::time::sleep(self.watchdog.options.request_interval).await;
         self.watchdog
             .metrics
             .count_probe(&self.node.label, probe.kind);
-        self.watchdog.head(&self.node, &probe.route()).await
+        let result = self.watchdog.head(&self.node, &probe.route()).await;
+        self.node_unhealthy = matches!(&result, Err(error) if !error.is_not_found());
+        result
     }
 
     /// Stores a failed probe: a 404 of a range kind is refined to its exact gaps (the tail that
@@ -895,7 +830,7 @@ impl NodeWatch {
                 at: Instant::now(),
                 next_height: sweep.next_height,
             }),
-            SweepState::Waiting { .. } | SweepState::Done => None,
+            SweepState::Waiting | SweepState::Done => None,
         };
     }
 
@@ -926,6 +861,7 @@ impl NodeWatch {
 
     /// Counts a failed refinement request; the range stays chunk level.
     fn refinement_failed(&mut self, kind: DataKind, error: &FetchError) -> Unrefined {
+        self.node_unhealthy = true;
         self.record_error(FetchTarget::Data(kind), error);
         Unrefined {
             status: error.status_label().to_owned(),
@@ -1169,7 +1105,7 @@ mod tests {
     use std::{
         collections::BTreeSet,
         str::FromStr,
-        sync::atomic::{AtomicBool, AtomicU64, Ordering},
+        sync::atomic::{AtomicBool, Ordering},
     };
 
     use axum::{
@@ -1190,8 +1126,6 @@ mod tests {
         missing: Arc<Mutex<BTreeSet<u64>>>,
         /// Every request answers 500 while set.
         failing: Arc<AtomicBool>,
-        /// Part of every block hash; a change stands for another network.
-        salt: Arc<AtomicU64>,
         requests: Arc<Mutex<Vec<(Method, String)>>>,
     }
 
@@ -1225,27 +1159,14 @@ mod tests {
         }
     }
 
-    /// Like the block summary route: only the hash matters here.
-    async fn fake_block_summary(State(node): State<FakeNode>, Path(height): Path<u64>) -> String {
-        format!(
-            r#"{{"hash":"hash-{}-{height}"}}"#,
-            node.salt.load(Ordering::SeqCst)
-        )
-    }
-
     async fn serve_fake(missing: impl IntoIterator<Item = u64>) -> (WatchedNode, FakeNode) {
         let fake = FakeNode {
             missing: Arc::new(Mutex::new(missing.into_iter().collect())),
             failing: Arc::default(),
-            salt: Arc::default(),
             requests: Arc::default(),
         };
         let app = Router::new()
             .route("/v1/availability/leaf/{from}/{until}", get(fake_leaf_range))
-            .route(
-                "/v1/availability/block/summary/{height}",
-                get(fake_block_summary),
-            )
             .fallback(|| async { StatusCode::OK })
             .with_state(fake.clone());
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -1396,7 +1317,7 @@ mod tests {
     async fn a_one_time_sweep_ends_in_done_and_stays_quiet() {
         let (node, _fake) = serve_fake([]).await;
         let options = WatchOptions {
-            sweep_interval: Duration::from_secs(1),
+            sweep_interval: Duration::from_secs(3_600),
             sweep_once: true,
             request_interval: Duration::ZERO,
             retention_blocks: Some(200),
@@ -1427,90 +1348,69 @@ mod tests {
             },
             ..watch
         };
-        watch.sweep_step().await.unwrap();
-        assert!(
-            matches!(watch.progress.sweep, SweepState::Waiting { .. })
-                || matches!(watch.progress.sweep, SweepState::Running(_))
+        assert_eq!(watch.sweep_step().await.unwrap(), 0);
+        assert_eq!(watch.progress.sweep, SweepState::Waiting);
+        let started = watch.progress.last_sweep_started_at.unwrap();
+        assert_eq!(
+            watch.progress.next_sweep_start(TimeDelta::seconds(3_600)),
+            Some(started + TimeDelta::seconds(3_600))
         );
     }
 
     #[tokio::test]
-    async fn state_of_another_network_is_an_error_unless_reset() {
+    async fn a_sweep_that_ends_before_it_started_is_not_an_error() {
+        let (node, _fake) = serve_fake([]).await;
+        let (watchdog, _store, _registry) = test_watchdog(Some(200)).await;
+        let (_tip_sender, tip) = watch::channel(1_000);
+        let mut watch = watchdog.start_node(node, tip, None).await.unwrap();
+        watch.sweep_step().await.unwrap();
+        assert!(matches!(watch.progress.sweep, SweepState::Running(_)));
+
+        watch.progress.last_sweep_started_at = Some(utc_now() + TimeDelta::hours(1));
+        watch.finish_sweep().await.unwrap();
+        assert_eq!(watch.progress.sweep, SweepState::Waiting);
+    }
+
+    #[tokio::test]
+    async fn the_sweep_pauses_while_the_node_fails_and_resumes_after() {
         let (node, fake) = serve_fake([]).await;
-        let (watchdog, store, _registry) = test_watchdog(None).await;
-        let nodes = [node];
-        let anchor = |height, hash: &str| {
-            Some(Anchor {
-                height,
-                hash: hash.to_owned(),
-            })
-        };
-
-        watchdog.check_state(&nodes, 1_000, false).await.unwrap();
-        assert_eq!(
-            store.load_anchor().await.unwrap(),
-            anchor(990, "hash-0-990")
-        );
-        watchdog.check_state(&nodes, 1_100, false).await.unwrap();
-        assert_eq!(
-            store.load_anchor().await.unwrap(),
-            anchor(1_090, "hash-0-1090")
-        );
-
-        // Another network: an error that leaves the state alone.
-        fake.salt.store(1, Ordering::SeqCst);
-        let gap = Probe {
+        let (watchdog, _store, _registry) = test_watchdog(Some(200)).await;
+        let (_tip_sender, tip) = watch::channel(1_000);
+        let mut watch = watchdog.start_node(node, tip, None).await.unwrap();
+        let probe = Probe {
             kind: DataKind::Leaf,
-            range: 0..100,
+            range: 900..910,
         };
-        let node_store = store.node(&nodes[0].label);
-        node_store
-            .record_missing(&gap, "404", utc_now())
+
+        fake.failing.store(true, Ordering::SeqCst);
+        watch.check_probe(&probe).await.unwrap();
+        assert!(watch.node_unhealthy);
+        assert_eq!(watch.sweep_step().await.unwrap(), 0);
+        assert_eq!(watch.progress.sweep, SweepState::Waiting, "no sweep starts");
+
+        fake.failing.store(false, Ordering::SeqCst);
+        watch.check_probe(&probe).await.unwrap();
+        assert!(!watch.node_unhealthy);
+        assert!(watch.sweep_step().await.unwrap() > 0);
+        assert!(matches!(watch.progress.sweep, SweepState::Running(_)));
+    }
+
+    #[tokio::test]
+    async fn reset_state_deletes_everything_and_the_node_starts_fresh() {
+        let (node, _fake) = serve_fake([]).await;
+        let (watchdog, store, _registry) = test_watchdog(None).await;
+        let node_store = store.node(&node.label);
+        let (_tip_sender, tip) = watch::channel(1_000);
+        watchdog
+            .start_node(node.clone(), tip.clone(), None)
             .await
             .unwrap();
-        let error = watchdog
-            .check_state(&nodes, 1_200, false)
-            .await
-            .unwrap_err();
-        assert!(error.to_string().contains("--reset"), "{error}");
-        assert_eq!(
-            store.load_anchor().await.unwrap(),
-            anchor(1_090, "hash-0-1090")
-        );
-        assert_eq!(
-            node_store
-                .missing_ranges(utc_now(), 10)
-                .await
-                .unwrap()
-                .total,
-            1
-        );
+        assert!(node_store.load_progress().await.unwrap().is_some());
 
-        // With `--reset`, the state is deleted and anchored to the new network.
-        watchdog.check_state(&nodes, 1_200, true).await.unwrap();
-        assert_eq!(
-            store.load_anchor().await.unwrap(),
-            anchor(1_190, "hash-1-1190")
-        );
-        assert_eq!(
-            node_store
-                .missing_ranges(utc_now(), 10)
-                .await
-                .unwrap()
-                .total,
-            0
-        );
-
-        // A follow height above the tip means the chain went backwards.
-        let progress = NodeProgress {
-            follow_next_height: 5_000,
-            sweep: SweepState::Waiting {
-                start_at: utc_now(),
-            },
-            last_sweep_completed_at: None,
-        };
-        node_store.save_progress(&progress).await.unwrap();
-        assert!(watchdog.check_state(&nodes, 1_300, false).await.is_err());
+        watchdog.reset_state().await.unwrap();
+        assert!(node_store.load_progress().await.unwrap().is_none());
+        watchdog.start_node(node, tip, None).await.unwrap();
+        assert!(node_store.load_progress().await.unwrap().is_some());
     }
 
     #[tokio::test]
@@ -1531,10 +1431,7 @@ mod tests {
             watch.sweep_step().await.unwrap();
         }
         let stored = progress().await.unwrap().unwrap();
-        assert!(
-            matches!(stored.sweep, SweepState::Waiting { .. }),
-            "{stored:?}"
-        );
+        assert!(matches!(stored.sweep, SweepState::Waiting), "{stored:?}");
         assert!(stored.last_sweep_completed_at.is_some());
         let summary = watch.summary().await.unwrap();
         let leaf = &summary.kinds[0];

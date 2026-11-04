@@ -7,14 +7,14 @@ use std::{
 };
 
 use axum::{Json, Router, extract::State, http::StatusCode, response::Html, routing::get};
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, TimeDelta, Utc};
 use prometheus::{Registry, TextEncoder};
 use serde::Serialize;
 use tokio::{net::TcpListener, sync::watch::Receiver};
 
 use crate::{
     store::{KindSummary, MissingRanges, NodeProgress, Store, SweepProgress, SweepState},
-    watch::{SweepEtas, SweepWindow, WatchedNode, utc_now},
+    watch::{ALERT_TIP_MARGIN, SweepEtas, SweepWindow, WatchedNode, utc_now},
 };
 
 /// Rows per node on the missing-data page.
@@ -29,6 +29,7 @@ pub struct AppState {
     window: SweepWindow,
     tip: Arc<OnceLock<Receiver<u64>>>,
     sweep_etas: SweepEtas,
+    sweep_interval: TimeDelta,
 }
 
 impl AppState {
@@ -39,15 +40,17 @@ impl AppState {
         nodes: Vec<WatchedNode>,
         window: SweepWindow,
         sweep_etas: SweepEtas,
-    ) -> Self {
-        Self {
+        sweep_interval: Duration,
+    ) -> anyhow::Result<Self> {
+        Ok(Self {
             registry,
             store,
             nodes: nodes.into(),
             window,
             tip: Arc::default(),
             sweep_etas,
-        }
+            sweep_interval: TimeDelta::from_std(sweep_interval)?,
+        })
     }
 
     /// Publishes the tip receiver once the tip poller has started.
@@ -125,6 +128,8 @@ struct NodePage<'a> {
     sweep_eta: Option<SweepEta>,
     /// `None` before the node watch started.
     progress: Option<NodeProgress>,
+    /// When the waiting sweep starts, `None` before the first sweep.
+    next_sweep_start: Option<DateTime<Utc>>,
     /// One entry per kind.
     kinds: Vec<KindSummary>,
     listed: MissingRanges,
@@ -149,11 +154,16 @@ async fn load_node_page<'a>(
         remaining: (finish - now).to_std().unwrap_or(Duration::ZERO),
         finish,
     });
+    let progress = store.load_progress().await?;
+    let next_sweep_start = progress
+        .as_ref()
+        .and_then(|progress| progress.next_sweep_start(app.sweep_interval));
     Ok(NodePage {
         node,
         tip_height,
         sweep_eta,
-        progress: store.load_progress().await?,
+        progress,
+        next_sweep_start,
         kinds: store.missing_summary(now).await?,
         listed: store.missing_ranges(now, PAGE_ROWS).await?,
     })
@@ -184,6 +194,7 @@ fn write_node(
         tip_height,
         sweep_eta,
         progress,
+        next_sweep_start,
         kinds,
         listed,
     } = node_page;
@@ -197,7 +208,13 @@ fn write_node(
     write_line(page, &format!("tip: {tip}"))?;
     match progress {
         Some(progress) => {
-            for line in progress_lines(window, *tip_height, progress, sweep_eta.as_ref()) {
+            for line in progress_lines(
+                window,
+                *tip_height,
+                progress,
+                *next_sweep_start,
+                sweep_eta.as_ref(),
+            ) {
                 write_line(page, &line)?;
             }
         },
@@ -220,6 +237,7 @@ fn progress_lines(
     window: SweepWindow,
     tip: Option<u64>,
     progress: &NodeProgress,
+    next_sweep_start: Option<DateTime<Utc>>,
     eta: Option<&SweepEta>,
 ) -> Vec<String> {
     let follow = progress.follow_next_height;
@@ -227,7 +245,7 @@ fn progress_lines(
         format!(" (lag {})", tip.saturating_sub(follow))
     });
     let mut lines = vec![format!("follow next height: {follow}{lag}")];
-    lines.extend(sweep_lines(window, &progress.sweep, eta));
+    lines.extend(sweep_lines(window, &progress.sweep, next_sweep_start, eta));
     let completed = progress
         .last_sweep_completed_at
         .map_or_else(|| "never".to_owned(), |t| t.to_rfc3339());
@@ -235,12 +253,22 @@ fn progress_lines(
     lines
 }
 
-/// The sweep lines: running (see `running_lines`), `sweep: waiting until <time>` or `sweep: done`.
-fn sweep_lines(window: SweepWindow, sweep: &SweepState, eta: Option<&SweepEta>) -> Vec<String> {
+/// The sweep lines: running (see `running_lines`), `sweep: waiting until <time>` (`due now` before
+/// the first sweep) or `sweep: done`.
+fn sweep_lines(
+    window: SweepWindow,
+    sweep: &SweepState,
+    next_start: Option<DateTime<Utc>>,
+    eta: Option<&SweepEta>,
+) -> Vec<String> {
     match sweep {
         SweepState::Running(sweep) => running_lines(window, sweep, eta),
-        SweepState::Waiting { start_at } => {
-            vec![format!("sweep: waiting until {}", start_at.to_rfc3339())]
+        SweepState::Waiting => {
+            let when = next_start.map_or_else(
+                || "due now".to_owned(),
+                |t| format!("until {}", t.to_rfc3339()),
+            );
+            vec![format!("sweep: waiting {when}")]
         },
         SweepState::Done => vec!["sweep: done".to_owned()],
     }
@@ -252,8 +280,8 @@ fn running_lines(
     sweep: &SweepProgress,
     eta: Option<&SweepEta>,
 ) -> Vec<String> {
-    // The sweep started at `window.start_height` of its tip, which is `until_height`.
-    let start = window.start_height(sweep.until_height);
+    // The sweep started at `window.start_height` of its tip, `ALERT_TIP_MARGIN` above `until_height`.
+    let start = window.start_height(sweep.until_height + ALERT_TIP_MARGIN);
     let total = sweep.until_height.saturating_sub(start);
     let done = sweep.next_height.saturating_sub(start).min(total);
     let percent = if total == 0 {
@@ -359,7 +387,6 @@ mod tests {
         SweepState::Running(SweepProgress {
             until_height,
             next_height,
-            started_at: at(0),
         })
     }
 
@@ -368,8 +395,8 @@ mod tests {
         let retention = SweepWindow::Retention { blocks: 500 };
         let cases = [
             (SweepWindow::Archive, running(250, 1000), "25.0000"),
-            (retention, running(750, 1000), "50.0000"),
-            (retention, running(900, 1000), "80.0000"),
+            (retention, running(745, 990), "50.0000"),
+            (retention, running(892, 990), "80.0000"),
             (SweepWindow::Archive, running(1, 3), "33.3333"),
             // Window start rounds up past the tip: empty window.
             (
@@ -381,7 +408,7 @@ mod tests {
             (SweepWindow::Archive, running(1200, 1000), "100.0000"),
         ];
         for (window, sweep, percent) in cases {
-            let lines = sweep_lines(window, &sweep, None);
+            let lines = sweep_lines(window, &sweep, None, None);
             assert_eq!(lines[0], format!("sweep: running {percent}%"));
             assert_eq!(lines.len(), 4);
             assert_eq!(lines[1], "sweep eta: unknown");
@@ -390,7 +417,7 @@ mod tests {
             remaining: Duration::from_secs(300),
             finish: at(300),
         };
-        let lines = sweep_lines(SweepWindow::Archive, &running(250, 1000), Some(&eta));
+        let lines = sweep_lines(SweepWindow::Archive, &running(250, 1000), None, Some(&eta));
         assert_eq!(lines[1], "sweep eta: 5m (1970-01-01T00:05:00+00:00)");
     }
 
@@ -405,6 +432,7 @@ mod tests {
             tip_height: None,
             sweep_eta: None,
             progress: None,
+            next_sweep_start: None,
             kinds: Vec::new(),
             listed: MissingRanges {
                 shown: Vec::new(),

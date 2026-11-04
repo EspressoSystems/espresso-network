@@ -36,6 +36,21 @@ impl DataKind {
         matches!(self, Self::Leaf | Self::Block | Self::VidCommon)
     }
 
+    /// False for `Aggregate`: the node's aggregator legitimately lags the tip, so its missing
+    /// ranges are counted but never alerted.
+    pub fn can_alert(self) -> bool {
+        self != Self::Aggregate
+    }
+
+    /// Epochs between an object's epoch and the epoch whose root block the node builds it from:
+    /// 2 for the stake tables, 0 for the state cert.
+    pub fn epoch_root_lag(self) -> u64 {
+        match self {
+            Self::StakeTable | Self::LcStakeTable => 2,
+            _ => 0,
+        }
+    }
+
     /// True for `StakeTable`, `StateCert`, `LcStakeTable`; their ranges count epochs.
     pub fn is_per_epoch(self) -> bool {
         matches!(
@@ -86,10 +101,19 @@ impl EpochConfig {
     }
 }
 
+/// The block `kind` of `epoch` depends on: `epoch_root_lag` epochs back, times the epoch height.
+/// `None` for an epoch before that root. Missing data of the epoch is probed, and judged against the
+/// tip, by the chunk holding this block.
+pub fn epoch_block(kind: DataKind, epoch: u64, epoch_height: u64) -> Option<u64> {
+    epoch
+        .checked_sub(kind.epoch_root_lag())?
+        .checked_mul(epoch_height)
+}
+
 /// Every probe for `chunk`: each range kind over `chunk`, each single-height kind over its last
-/// height, and each per-epoch kind for every
-/// epoch `e` with `e * epoch_height` in `chunk`, `e >= epoch(epoch_start_block)`
-/// (`+ 2` for `LcStakeTable`), as `[e, e + 1)`. `None` epochs: per-height kinds only.
+/// height, and each per-epoch kind for every epoch `e` with `epoch_block(kind, e, epoch_height)` in
+/// `chunk`, `e >= epoch(epoch_start_block)` (`+ 2` for `LcStakeTable`), as `[e, e + 1)`. `None`
+/// epochs: per-height kinds only.
 pub fn probes(chunk: &Range<u64>, epochs: Option<EpochConfig>) -> Vec<Probe> {
     let per_height = DataKind::VARIANTS
         .iter()
@@ -104,8 +128,9 @@ pub fn probes(chunk: &Range<u64>, epochs: Option<EpochConfig>) -> Vec<Probe> {
         });
     let per_epoch = epochs.into_iter().flat_map(|config| {
         let first = config.epoch(config.epoch_start_block);
-        let in_chunk = chunk.start.div_ceil(config.epoch_height)
-            ..=chunk.end.saturating_sub(1) / config.epoch_height;
+        let candidates = chunk.start / config.epoch_height
+            ..=chunk.end.saturating_sub(1) / config.epoch_height + 2;
+        let chunk = chunk.clone();
         DataKind::VARIANTS
             .iter()
             .filter(|kind| kind.is_per_epoch())
@@ -115,9 +140,14 @@ pub fn probes(chunk: &Range<u64>, epochs: Option<EpochConfig>) -> Vec<Probe> {
                 } else {
                     first
                 };
-                in_chunk
+                let chunk = chunk.clone();
+                candidates
                     .clone()
-                    .filter(move |&e| e >= first)
+                    .filter(move |&e| {
+                        e >= first
+                            && epoch_block(kind, e, config.epoch_height)
+                                .is_some_and(|block| chunk.contains(&block))
+                    })
                     .map(move |e| Probe {
                         kind,
                         range: e..e + 1,
@@ -165,7 +195,8 @@ mod tests {
     #[test]
     fn probes_epochs() {
         use DataKind::*;
-        // first epoch = ceil(61 / 30) = 3; lc_stake_table starts at 5
+        // First epoch = ceil(61 / 30) = 3, `lc_stake_table` starts at 5. A stake table of epoch e
+        // is probed with the chunk holding block (e - 2) * 30, a state cert with e * 30.
         let epoch_probes = |kinds: &[(DataKind, u64)]| {
             kinds
                 .iter()
@@ -174,14 +205,20 @@ mod tests {
         };
         let cases: Vec<Case> = vec![
             ("no epochs", 0..100, None, per_height(0..100)),
-            ("epoch before first", 0..60, Some(EPOCHS), per_height(0..60)),
             (
-                "first epoch, no lc_stake_table yet",
+                "stake table of the first epoch comes early",
+                0..60,
+                Some(EPOCHS),
+                [per_height(0..60), epoch_probes(&[(StakeTable, 3)])].concat(),
+            ),
+            (
+                "state cert and lc stake table later",
                 60..100,
                 Some(EPOCHS),
                 [
                     per_height(60..100),
-                    epoch_probes(&[(StakeTable, 3), (StateCert, 3)]),
+                    epoch_probes(&[(StakeTable, 4), (StakeTable, 5), (StateCert, 3)]),
+                    epoch_probes(&[(LcStakeTable, 5)]),
                 ]
                 .concat(),
             ),
@@ -192,10 +229,10 @@ mod tests {
                 [
                     per_height(100..220),
                     epoch_probes(&[
-                        (StakeTable, 4),
-                        (StakeTable, 5),
                         (StakeTable, 6),
                         (StakeTable, 7),
+                        (StakeTable, 8),
+                        (StakeTable, 9),
                     ]),
                     epoch_probes(&[
                         (StateCert, 4),
@@ -203,29 +240,54 @@ mod tests {
                         (StateCert, 6),
                         (StateCert, 7),
                     ]),
-                    epoch_probes(&[(LcStakeTable, 5), (LcStakeTable, 6), (LcStakeTable, 7)]),
+                    epoch_probes(&[
+                        (LcStakeTable, 6),
+                        (LcStakeTable, 7),
+                        (LcStakeTable, 8),
+                        (LcStakeTable, 9),
+                    ]),
                 ]
                 .concat(),
             ),
             (
-                "epoch end at chunk start",
+                "block at chunk start",
                 90..100,
                 Some(EPOCHS),
                 [
                     per_height(90..100),
-                    epoch_probes(&[(StakeTable, 3), (StateCert, 3)]),
+                    epoch_probes(&[(StakeTable, 5), (StateCert, 3), (LcStakeTable, 5)]),
                 ]
                 .concat(),
             ),
             (
-                "epoch end excluded at chunk end",
+                "block at chunk end excluded",
                 0..90,
                 Some(EPOCHS),
-                per_height(0..90),
+                [
+                    per_height(0..90),
+                    epoch_probes(&[(StakeTable, 3), (StakeTable, 4)]),
+                ]
+                .concat(),
             ),
         ];
         for (name, chunk, epochs, expected) in cases {
             assert_eq!(kinds_and_ranges(probes(&chunk, epochs)), expected, "{name}");
+        }
+    }
+
+    #[test]
+    fn epoch_block_table() {
+        use DataKind::*;
+        let cases = [
+            (StateCert, 3, Some(90)),
+            (StakeTable, 3, Some(30)),
+            (LcStakeTable, 5, Some(90)),
+            (StakeTable, 2, Some(0)),
+            (StakeTable, 1, None),
+            (Leaf, 3, Some(90)),
+        ];
+        for (kind, epoch, expected) in cases {
+            assert_eq!(epoch_block(kind, epoch, 30), expected, "{kind:?} {epoch}");
         }
     }
 }
