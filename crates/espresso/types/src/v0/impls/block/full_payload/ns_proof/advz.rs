@@ -114,7 +114,14 @@ impl ADVZNsProof {
                         .ok()? // error: internal to payload_verify()
                         .ok()?; // verification failure
                     },
-                    (None, true) => {}, // 0-length namespace, nothing to verify
+                    (None, true) => {
+                        if !self.ns_payload.as_bytes_slice().is_empty() {
+                            tracing::info!(
+                                "ns verify: nonempty ns payload for an empty ns payload range"
+                            );
+                            return None;
+                        }
+                    },
                     (None, false) => {
                         tracing::error!(
                             "ns verify: missing proof for nonempty ns payload range {:?}",
@@ -173,7 +180,10 @@ mod tests {
     };
     use jf_advz::{VidDisperse, VidScheme};
 
-    use crate::{Payload, v0::impls::block::test::ValidTest, v0_1::ADVZNsProof};
+    use crate::{
+        NamespaceId, NsIndex, NsTableBuilder, Payload, v0::impls::block::test::ValidTest,
+        v0_1::ADVZNsProof,
+    };
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn ns_proof() {
@@ -337,5 +347,43 @@ mod tests {
                     .is_none()
             );
         }
+    }
+
+    /// Consensus rejects a namespace table with an empty namespace, so this
+    /// guards callers that pass `verify` a table they did not validate.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn empty_ns_proof_rejects_nonempty_payload() {
+        let mut rng = jf_utils::test_rng();
+        let test = ValidTest::from_tx_lengths(vec![vec![5, 8]], &mut rng);
+        let mut block =
+            Payload::from_transactions(&test.all_txs(), &Default::default(), &Default::default())
+                .await
+                .unwrap()
+                .0;
+        let byte_len = block.byte_len().as_usize();
+        let mut ns_table = NsTableBuilder::new();
+        ns_table.append_entry(block.ns_table().read_ns_id(&NsIndex(0)).unwrap(), byte_len);
+        ns_table.append_entry(NamespaceId::from(u32::MAX), byte_len);
+        *block.ns_table_mut() = ns_table.into_ns_table();
+
+        let disperse = advz_scheme(10).disperse(block.encode()).unwrap();
+        let commit = VidCommitment::V0(disperse.commit);
+        let empty_ns_proof = ADVZNsProof::new(&block, &NsIndex(1), &disperse.common).unwrap();
+        let (txs, _) = empty_ns_proof
+            .verify(block.ns_table(), &commit, &disperse.common)
+            .unwrap();
+        assert!(txs.is_empty());
+
+        let forged = ADVZNsProof {
+            ns_payload: ADVZNsProof::new(&block, &NsIndex(0), &disperse.common)
+                .unwrap()
+                .ns_payload,
+            ..empty_ns_proof
+        };
+        assert!(
+            forged
+                .verify(block.ns_table(), &commit, &disperse.common)
+                .is_none()
+        );
     }
 }

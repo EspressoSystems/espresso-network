@@ -56,7 +56,9 @@ LANES = {
     "block_commitments": "#c3c2b7",
     "encode": "#e87ba4",
     "transaction_hashes": "#eb6834",
+    # The VID step before and after the leader encoded each block once; a ref runs one of them.
     "vid_commitment": "#1baf7a",
+    "vid_encode": "#1baf7a",
     "builder_commitment": "#eda100",
     "vid_disperse": "#1c2633",
     "disperse_params": "#7e57c2",
@@ -81,6 +83,7 @@ CPU_NOTES = {
     "request_block": ", process cpu {:.1f} ms",
     "block_commitments": ", process cpu {:.1f} ms",
     "vid_commitment": ", cpu <= {:.1f} ms (residual)",
+    "vid_encode": ", cpu <= {:.1f} ms (residual)",
     "vid_disperse": ", process cpu {:.1f} ms",
     "ns_encode": ", cpu <= {:.1f} ms (residual)",
 }

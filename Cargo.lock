@@ -3816,6 +3816,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "espresso-fuzz"
+version = "0.0.0"
+dependencies = [
+ "arbitrary",
+ "bincode",
+ "espresso-types",
+ "hotshot-query-service-types",
+ "hotshot-types",
+ "jf-advz",
+ "libfuzzer-sys",
+ "serde",
+ "serde_json",
+ "vid",
+]
+
+[[package]]
 name = "espresso-keyset"
 version = "0.1.0"
 dependencies = [
@@ -6295,6 +6311,16 @@ name = "libc"
 version = "0.2.186"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "68ab91017fe16c622486840e4c83c9a37afeff978bd239b5293d61ece587de66"
+
+[[package]]
+name = "libfuzzer-sys"
+version = "0.4.13"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a9fd2f41a1cba099f79a0b6b6c35656cf7c03351a7bae8ff0f28f25270f929d2"
+dependencies = [
+ "arbitrary",
+ "cc",
+]
 
 [[package]]
 name = "libloading"
@@ -10893,6 +10919,7 @@ dependencies = [
  "jf-poseidon2",
  "jf-utils",
  "p3-maybe-rayon",
+ "proptest",
  "rand 0.8.6",
  "reed-solomon-simd",
  "serde",

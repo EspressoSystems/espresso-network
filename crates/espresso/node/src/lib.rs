@@ -21,14 +21,13 @@ pub mod state_cert;
 pub mod state_signature;
 pub mod util;
 
-use std::{fmt::Debug, marker::PhantomData, sync::Arc, time::Duration};
+use std::{fmt::Debug, sync::Arc, time::Duration};
 
 use alloy::primitives::U256;
 use anyhow::Context;
 use async_lock::Mutex;
 use catchup::{ParallelStateCatchup, StatePeers};
 use context::SequencerContext;
-use derivative::Derivative;
 use dyn_clone::clone_box;
 use espresso_types::{
     BackoffParams, EpochCommittees, EpochRewardsCalculator, L1ClientOptions, NodeState, SeqTypes,
@@ -70,7 +69,7 @@ use hotshot_types::{
     signature_key::{BLSPrivKey, BLSPubKey},
     traits::{
         metrics::{Metrics, NoMetrics},
-        node_implementation::{NodeImplementation, NodeType},
+        node_implementation::NodeType,
         signature_key::SignatureKey,
         storage::Storage,
     },
@@ -81,38 +80,13 @@ use options::Identity;
 pub use options::Options;
 use proposal_fetcher::ProposalFetcherConfig;
 pub use run::main;
-use serde::{Deserialize, Serialize};
 use tracing::info;
 use url::Url;
 use vbs::version::StaticVersion;
 
 use crate::request_response::data_source::Storage as RequestResponseStorage;
 
-/// The node's `NodeImplementation`, generic over its persistence.
-#[derive(Derivative, Serialize, Deserialize)]
-#[derivative(
-    Copy(bound = ""),
-    Debug(bound = ""),
-    Default(bound = ""),
-    PartialEq(bound = ""),
-    Eq(bound = ""),
-    Hash(bound = "")
-)]
-pub struct Node<P: SequencerPersistence>(PhantomData<fn(&P)>);
-
-// Using derivative to derive Clone triggers the clippy lint
-// https://rust-lang.github.io/rust-clippy/master/index.html#/incorrect_clone_impl_on_copy_type
-impl<P: SequencerPersistence> Clone for Node<P> {
-    fn clone(&self) -> Self {
-        *self
-    }
-}
-
 pub type SequencerApiVersion = StaticVersion<0, 1>;
-
-impl<P: SequencerPersistence> NodeImplementation<SeqTypes> for Node<P> {
-    type Storage = Arc<P>;
-}
 
 #[derive(Clone, Debug)]
 pub struct NetworkParams {
@@ -749,14 +723,11 @@ pub(crate) async fn prefetch_stake_table_events(
         return Ok(());
     };
 
-    // Not redundant: a genesis pinning a complete L1 block never waits on the L1 client,
-    // so it reaches this with an empty snapshot.
-    l1_client.wait_for_finalized_block(l1_genesis.number).await;
+    // A pinned genesis block never waits on the L1 client, so the snapshot may be empty here.
+    // Does not fetch the genesis block itself: RPCs that prune old history no longer serve it.
     let finalized = l1_client
-        .snapshot()
-        .await
-        .finalized
-        .context("no finalized L1 block after waiting for the genesis block")?;
+        .wait_for_latest_finalized_at_least(l1_genesis.number)
+        .await;
 
     tracing::info!(
         target: "announce",

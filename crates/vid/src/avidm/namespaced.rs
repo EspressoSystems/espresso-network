@@ -238,7 +238,6 @@ pub mod tests {
     fn round_trip() {
         // play with these items
         let num_storage_nodes = 9;
-        let recovery_threshold = 3;
         let ns_lens = [15, 33];
         let ns_table = [(0usize..15), (15..48)];
         let payload_byte_len = ns_lens.iter().sum();
@@ -251,6 +250,7 @@ pub mod tests {
             .map(|_| rng.next_u32() % 5 + 1)
             .collect();
         let total_weights: u32 = weights.iter().sum();
+        let recovery_threshold = total_weights.div_ceil(3) as usize;
         let params = NsAvidMScheme::setup(recovery_threshold, total_weights as usize).unwrap();
 
         println!(
