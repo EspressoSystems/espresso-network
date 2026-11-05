@@ -524,6 +524,12 @@ impl<T: NodeType, S> MessageType<T, S> {
     }
 }
 
+impl<T: NodeType, S> From<ConsensusMessage<T, S>> for MessageType<T, S> {
+    fn from(message: ConsensusMessage<T, S>) -> Self {
+        Self::Consensus(message)
+    }
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
 #[serde(bound(deserialize = "S: Deserialize<'de>"))]
 pub struct Message<T: NodeType, S> {

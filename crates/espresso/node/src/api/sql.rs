@@ -1440,7 +1440,7 @@ impl crate::api::data_source::PruningDataSource for SqlStorage {
 }
 
 impl crate::api::data_source::DatabaseMetadataSource for SqlStorage {
-    async fn get_table_sizes(&self) -> anyhow::Result<Vec<crate::api::data_source::TableSize>> {
+    async fn get_table_sizes(&self) -> anyhow::Result<Vec<espresso_api::v1::database::TableSize>> {
         let mut tx = self
             .read()
             .await
@@ -1467,7 +1467,7 @@ impl crate::api::data_source::DatabaseMetadataSource for SqlStorage {
                 let row_count: i64 = row.try_get("row_count").unwrap_or(-1);
                 let total_size_bytes: Option<i64> = row.try_get("total_size_bytes").ok();
 
-                table_sizes.push(crate::api::data_source::TableSize {
+                table_sizes.push(espresso_api::v1::database::TableSize {
                     table_name,
                     row_count,
                     total_size_bytes,
@@ -1509,7 +1509,7 @@ impl crate::api::data_source::DatabaseMetadataSource for SqlStorage {
 
                 let row_count: i64 = count_row.try_get("count").unwrap_or(0);
 
-                table_sizes.push(crate::api::data_source::TableSize {
+                table_sizes.push(espresso_api::v1::database::TableSize {
                     table_name,
                     row_count,
                     total_size_bytes: None,
@@ -1522,7 +1522,7 @@ impl crate::api::data_source::DatabaseMetadataSource for SqlStorage {
 
     async fn get_migration_status(
         &self,
-    ) -> anyhow::Result<Vec<crate::api::data_source::MigrationStatus>> {
+    ) -> anyhow::Result<Vec<espresso_api::v1::database::MigrationStatus>> {
         let mut tx = self
             .read()
             .await
@@ -1546,7 +1546,7 @@ impl crate::api::data_source::DatabaseMetadataSource for SqlStorage {
         Ok(rows
             .into_iter()
             .map(|(name, started_at, completed_at, last_offset)| {
-                crate::api::data_source::MigrationStatus {
+                espresso_api::v1::database::MigrationStatus {
                     name,
                     started_at,
                     completed_at,
@@ -1558,13 +1558,13 @@ impl crate::api::data_source::DatabaseMetadataSource for SqlStorage {
 }
 
 impl crate::api::data_source::DatabaseMetadataSource for DataSource {
-    async fn get_table_sizes(&self) -> anyhow::Result<Vec<crate::api::data_source::TableSize>> {
+    async fn get_table_sizes(&self) -> anyhow::Result<Vec<espresso_api::v1::database::TableSize>> {
         self.as_ref().get_table_sizes().await
     }
 
     async fn get_migration_status(
         &self,
-    ) -> anyhow::Result<Vec<crate::api::data_source::MigrationStatus>> {
+    ) -> anyhow::Result<Vec<espresso_api::v1::database::MigrationStatus>> {
         self.as_ref().get_migration_status().await
     }
 }
@@ -2338,6 +2338,16 @@ pub(crate) mod impl_testable_data_source {
                     .fetch_one(tx.as_mut())
                     .await?,
             )
+        }
+
+        async fn data_heights(db: &SqlStorage) -> anyhow::Result<(Option<u64>, Option<u64>)> {
+            let mut tx = db.read().await?;
+            let pruned = tx.load_pruned_height().await?;
+            let lowest: Option<i64> =
+                sqlx::query_scalar("SELECT min(height) FROM leaf2 WHERE height > 0")
+                    .fetch_one(tx.as_mut())
+                    .await?;
+            Ok((pruned, lowest.map(|height| height as u64)))
         }
 
         async fn insert_deferred_migration(
