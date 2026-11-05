@@ -5,8 +5,12 @@ use committable::Committable;
 use espresso_types::{Certificate2, Leaf2, SeqTypes};
 use hotshot_query_service_types::availability::LeafQueryData;
 use hotshot_types::{
-    data::EpochNumber, epoch_membership::EpochMembership, simple_certificate::QuorumCertificate2,
-    traits::block_contents::BlockHeader, utils::epoch_from_block_number, vote::HasViewNumber,
+    data::EpochNumber,
+    epoch_membership::EpochMembership,
+    simple_certificate::QuorumCertificate2,
+    traits::block_contents::BlockHeader,
+    utils::{epoch_from_block_number, is_last_block},
+    vote::HasViewNumber,
 };
 use serde::{Deserialize, Serialize};
 use versions::{EPOCH_VERSION, NEW_PROTOCOL_VERSION};
@@ -208,9 +212,9 @@ impl LeafProof {
                     "cert2 leaf commitment does not match leaf"
                 );
                 // A re-vote commits the last block of an epoch again, at a view of
-                // its own, so the commit may be later than the leaf. Its signers
-                // still signed this leaf's commitment, which is what finality
-                // rests on.
+                // its own, so the commit may be later than the leaf. No other block is
+                // voted on again. These are the node's checks in
+                // `verify_new_protocol_leaf_chain`.
                 ensure!(
                     cert2.view_number() >= curr.view_number(),
                     "cert2 view number is earlier than the leaf"
@@ -218,6 +222,21 @@ impl LeafProof {
                 ensure!(
                     cert2.data.block_number == curr.block_header().block_number(),
                     "cert2 block number does not match leaf"
+                );
+                if cert2.view_number() > curr.view_number() {
+                    ensure!(
+                        is_last_block(curr.height(), quorum.epoch_height()),
+                        "cert2 view is after the leaf's, which is not the last block of its epoch"
+                    );
+                }
+                let epoch = EpochNumber::new(epoch_from_block_number(
+                    curr.height(),
+                    quorum.epoch_height(),
+                ));
+                ensure!(
+                    cert2.data.epoch == epoch,
+                    "cert2 epoch {} does not match the leaf's epoch {epoch}",
+                    cert2.data.epoch
                 );
 
                 quorum
@@ -368,14 +387,36 @@ impl LeafProof {
 
 #[cfg(test)]
 mod test {
+    use std::marker::PhantomData;
+
+    use hotshot_types::{data::ViewNumber, simple_vote::Vote2Data};
     use pretty_assertions::assert_eq;
     use versions::{DRB_AND_HEADER_UPGRADE_VERSION, Upgrade};
 
     use super::*;
     use crate::testing::{
-        AlwaysFalseQuorum, AlwaysTrueQuorum, LEGACY_VERSION, VersionCheckQuorum, leaf_chain,
-        leaf_chain_with_upgrade,
+        AlwaysFalseQuorum, AlwaysTrueQuorum, LEAF_CHAIN_EPOCH_HEIGHT, LEGACY_VERSION,
+        VersionCheckQuorum, leaf_chain, leaf_chain_with_upgrade,
     };
+
+    /// A new-protocol proof for `leaf` alone, by a `Certificate2` at `view` naming `epoch`.
+    fn cert2_proof(leaf: &LeafQueryData<SeqTypes>, view: u64, epoch: u64) -> LeafProof {
+        let data = Vote2Data {
+            leaf_commit: leaf.leaf().commit(),
+            epoch: EpochNumber::new(epoch),
+            block_number: leaf.leaf().height(),
+        };
+        // Unsigned: the quorums here accept any signature.
+        let commitment = data.commit();
+        let view = ViewNumber::new(view);
+        LeafProof {
+            leaves: vec![leaf.leaf().clone()],
+            proof: FinalityProof::NewProtocol {
+                cert2: Arc::new(Certificate2::new(data, commitment, view, None, PhantomData)),
+                leaf_qc: Box::new(leaf.qc().clone()),
+            },
+        }
+    }
 
     /// A proof as a dishonest prover might send it: the requested leaf alone, with a 2-chain of
     /// QCs the prover did not derive from the leaves that follow it.
@@ -404,7 +445,9 @@ mod test {
         assert!(proof.push(leaves[2].clone()));
         assert_eq!(
             proof
-                .verify(LeafProofHint::Quorum(&AlwaysTrueQuorum))
+                .verify(LeafProofHint::Quorum(&AlwaysTrueQuorum::new(
+                    LEAF_CHAIN_EPOCH_HEIGHT
+                )))
                 .await
                 .unwrap(),
             leaves[0]
@@ -424,14 +467,18 @@ mod test {
         // The proof is otherwise valid...
         assert_eq!(
             proof
-                .verify(LeafProofHint::Quorum(&AlwaysTrueQuorum))
+                .verify(LeafProofHint::Quorum(&AlwaysTrueQuorum::new(
+                    LEAF_CHAIN_EPOCH_HEIGHT
+                )))
                 .await
                 .unwrap(),
             leaves[0]
         );
         // ...but fails if the signatures are not valid.
         proof
-            .verify(LeafProofHint::Quorum(&AlwaysFalseQuorum))
+            .verify(LeafProofHint::Quorum(&AlwaysFalseQuorum::new(
+                LEAF_CHAIN_EPOCH_HEIGHT,
+            )))
             .await
             .unwrap_err();
     }
@@ -489,7 +536,9 @@ mod test {
             Certificate::for_parent(leaves[2].leaf()),
         );
         let err = proof
-            .verify(LeafProofHint::Quorum(&AlwaysTrueQuorum))
+            .verify(LeafProofHint::Quorum(&AlwaysTrueQuorum::new(
+                LEAF_CHAIN_EPOCH_HEIGHT,
+            )))
             .await
             .unwrap_err();
         assert!(
@@ -521,7 +570,8 @@ mod test {
         assert_eq!(
             proof
                 .verify(LeafProofHint::Quorum(&VersionCheckQuorum::new(
-                    leaves.iter().map(|leaf| leaf.leaf().clone())
+                    leaves.iter().map(|leaf| leaf.leaf().clone()),
+                    LEAF_CHAIN_EPOCH_HEIGHT
                 )))
                 .await
                 .unwrap(),
@@ -558,6 +608,7 @@ mod test {
         let err = proof
             .verify(LeafProofHint::Quorum(&VersionCheckQuorum::new(
                 leaves.iter().map(|leaf| leaf.leaf().clone()),
+                LEAF_CHAIN_EPOCH_HEIGHT,
             )))
             .await
             .unwrap_err();
@@ -580,7 +631,9 @@ mod test {
         assert!(proof.push(leaves[3].clone()));
         assert_eq!(
             proof
-                .verify(LeafProofHint::Quorum(&AlwaysTrueQuorum))
+                .verify(LeafProofHint::Quorum(&AlwaysTrueQuorum::new(
+                    LEAF_CHAIN_EPOCH_HEIGHT
+                )))
                 .await
                 .unwrap(),
             leaves[0]
@@ -598,8 +651,35 @@ mod test {
         assert!(!proof.push(leaves[1].clone()));
         assert!(!proof.push(leaves[2].clone()));
         proof
-            .verify(LeafProofHint::Quorum(&AlwaysTrueQuorum))
+            .verify(LeafProofHint::Quorum(&AlwaysTrueQuorum::new(
+                LEAF_CHAIN_EPOCH_HEIGHT,
+            )))
             .await
             .unwrap_err();
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_new_protocol_later_cert2_only_for_last_block_of_epoch() {
+        // Epochs of 3 blocks: height 3 is the last block of epoch 1.
+        let leaves = leaf_chain(1..=3, NEW_PROTOCOL_VERSION).await;
+        let quorum = AlwaysTrueQuorum::new(3);
+
+        // A re-vote commits the epoch's last block at a later view.
+        let last = &leaves[2];
+        let revote = cert2_proof(last, *last.leaf().view_number() + 2, 1);
+        let verified = revote.verify(LeafProofHint::Quorum(&quorum)).await.unwrap();
+        assert_eq!(verified.leaf(), last.leaf());
+
+        // No other block is committed at a later view.
+        let middle = &leaves[1];
+        let proof = cert2_proof(middle, *middle.leaf().view_number() + 2, 1);
+        let err = proof
+            .verify(LeafProofHint::Quorum(&quorum))
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("not the last block of its epoch"),
+            "{err:#}"
+        );
     }
 }
