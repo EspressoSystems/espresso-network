@@ -20,9 +20,7 @@ use hotshot_types::{
     signature_key::BLSPubKey,
     stake_table::StakeTableEntry,
     traits::{
-        election::{
-            GenesisStakeTables, Membership, MembershipSnapshot, NonEpochMembershipSnapshot,
-        },
+        election::{GenesisStakeTables, Membership, MembershipSnapshot},
         signature_key::{SignatureKey as _, StakeTableEntryType},
     },
     utils::{epoch_from_block_number, root_block_in_epoch, transition_block_for_epoch},
@@ -79,14 +77,13 @@ pub struct EpochCommittees {
 
 #[derive(Debug)]
 struct Inner {
-    /// Captured pre-epoch view.
-    ///
-    /// Built once at constructor time. `add_da_committee` operates on the
-    /// per-epoch `da_committees` map and does not modify the pre-epoch view.
-    non_epoch_snapshot: NonEpochSnapshot,
-
     /// The stake tables of views before the first epoch.
+    ///
+    /// Built once at constructor time. `add_da_committee` does not change it.
     genesis: Arc<GenesisStakeTables<SeqTypes>>,
+
+    /// The DA committee of the epochs that no entry of `da_committees` covers.
+    genesis_da_committee: Arc<DaCommittee>,
 
     /// Per-epoch snapshots.
     ///
@@ -119,22 +116,6 @@ struct Inner {
 struct DaCommittee {
     committee: Vec<PeerConfig<SeqTypes>>,
     indexed_committee: HashMap<PubKey, PeerConfig<SeqTypes>>,
-}
-
-/// Pre-epoch stake-table state.
-#[derive(Debug)]
-struct NonEpochCommittee {
-    /// The nodes eligible for leadership.
-    ///
-    /// NOTE: This is currently a hack because the DA leader needs to be the quorum
-    /// leader but without voting rights.
-    eligible_leaders: Vec<PeerConfig<SeqTypes>>,
-
-    /// Keys for nodes participating in the network
-    stake_table: Vec<PeerConfig<SeqTypes>>,
-
-    /// Stake entries indexed by public key, for efficient lookup.
-    indexed_stake_table: HashMap<PubKey, PeerConfig<SeqTypes>>,
 }
 
 /// Holds Stake table and da stake
@@ -227,13 +208,7 @@ impl EpochCommittees {
                 return Some(cfg.clone());
             }
         }
-        inner
-            .non_epoch_snapshot
-            .inner
-            .committee
-            .indexed_stake_table
-            .get(key)
-            .cloned()
+        inner.genesis.stake(key)
     }
 
     pub fn latest_account(&self, key: &PubKey) -> Option<Address> {
@@ -450,17 +425,6 @@ impl EpochCommittees {
             .collect();
 
         // Index the stake table by public key
-        let indexed_stake_table: HashMap<PubKey, _> = stake_table
-            .iter()
-            .map(|peer_config| {
-                (
-                    PubKey::public_key(&peer_config.stake_table_entry),
-                    peer_config.clone(),
-                )
-            })
-            .collect();
-
-        // Index the stake table by public key
         let indexed_da_members: HashMap<PubKey, _> = da_members
             .iter()
             .map(|peer_config| {
@@ -480,18 +444,9 @@ impl EpochCommittees {
             indexed_committee: indexed_da_members,
         });
 
-        let members = Arc::new(NonEpochCommittee {
-            eligible_leaders,
-            stake_table,
-            indexed_stake_table,
-        });
-
-        let non_epoch_snapshot = NonEpochSnapshot::new(members.clone(), da_committee.clone());
-
         let epoch_committee = Arc::new(EpochCommittee {
-            eligible_leaders: members.eligible_leaders.clone(),
-            stake_table: members
-                .stake_table
+            eligible_leaders,
+            stake_table: stake_table
                 .iter()
                 .map(|x| (PubKey::public_key(&x.stake_table_entry), x.clone()))
                 .collect(),
@@ -521,14 +476,14 @@ impl EpochCommittees {
                 first_epoch,
                 epoch_committee,
                 None,
-                da_committee,
+                da_committee.clone(),
             ),
         );
 
         let committees = Self {
             inner: Arc::new(RwLock::new(Inner {
-                non_epoch_snapshot,
                 genesis,
+                genesis_da_committee: da_committee,
                 da_committees: BTreeMap::new(),
                 snapshots,
                 all_validators: BTreeMap::new(),
@@ -751,7 +706,6 @@ pub async fn fetch_and_calculate_block_reward(
 impl Membership<SeqTypes> for EpochCommittees {
     type Error = EpochCommitteesError;
     type Snapshot = EpochSnapshot;
-    type NonEpochSnapshot = NonEpochSnapshot;
 
     fn snapshot(&self, epoch: EpochNumber) -> Option<Self::Snapshot> {
         self.inner.read().snapshots.get(&epoch).cloned()
@@ -868,10 +822,6 @@ impl Membership<SeqTypes> for EpochCommittees {
             inner.put_randomized_committee(epoch, randomized);
         }
         true
-    }
-
-    fn non_epoch_snapshot(&self) -> Self::NonEpochSnapshot {
-        self.inner.read().non_epoch_snapshot.clone()
     }
 
     fn genesis_stake_tables(&self) -> Arc<GenesisStakeTables<SeqTypes>> {
@@ -1289,7 +1239,7 @@ pub enum EpochCommitteesError {
 }
 
 impl Inner {
-    /// The DA committee that applies to `epoch`, or the non-epoch fallback
+    /// The DA committee that applies to `epoch`, or the genesis DA committee
     /// when `epoch` is `None` or no explicit DA committee covers it.
     fn resolve_da_committee(&self, epoch: Option<EpochNumber>) -> Arc<DaCommittee> {
         if let Some(e) = epoch {
@@ -1298,9 +1248,9 @@ impl Inner {
                 .range((Bound::Included(0.into()), Bound::Included(e)))
                 .last()
                 .map(|(_, committee)| committee.clone())
-                .unwrap_or_else(|| self.non_epoch_snapshot.inner.da_committee.clone())
+                .unwrap_or_else(|| self.genesis_da_committee.clone())
         } else {
-            self.non_epoch_snapshot.inner.da_committee.clone()
+            self.genesis_da_committee.clone()
         }
     }
 
@@ -1554,86 +1504,6 @@ impl MembershipSnapshot<SeqTypes> for EpochSnapshot {
 
     fn stake_table_hash(&self) -> Option<Commitment<Self::StakeTableHash>> {
         self.inner.committee.stake_table_hash
-    }
-}
-
-/// A consistent pre-epoch view of `EpochCommittees`.
-///
-/// Returned by [`Membership::non_epoch_snapshot`].
-#[derive(Clone, Debug)]
-pub struct NonEpochSnapshot {
-    inner: Arc<NonEpochSnapshotInner>,
-}
-
-#[derive(Debug)]
-struct NonEpochSnapshotInner {
-    committee: Arc<NonEpochCommittee>,
-    da_committee: Arc<DaCommittee>,
-}
-
-impl NonEpochSnapshot {
-    fn new(committee: Arc<NonEpochCommittee>, da_committee: Arc<DaCommittee>) -> Self {
-        Self {
-            inner: Arc::new(NonEpochSnapshotInner {
-                committee,
-                da_committee,
-            }),
-        }
-    }
-}
-
-impl NonEpochMembershipSnapshot<SeqTypes> for NonEpochSnapshot {
-    type Error = EpochCommitteesError;
-
-    fn stake_table(&self) -> impl ExactSizeIterator<Item = &PeerConfig<SeqTypes>> + Send + '_ {
-        self.inner.committee.stake_table.iter()
-    }
-
-    fn da_stake_table(&self) -> impl ExactSizeIterator<Item = &PeerConfig<SeqTypes>> + Send + '_ {
-        self.inner.da_committee.committee.iter()
-    }
-
-    fn committee_members(
-        &self,
-        _: ViewNumber,
-    ) -> impl ExactSizeIterator<Item = &PubKey> + Send + '_ {
-        self.inner.committee.indexed_stake_table.keys()
-    }
-
-    fn da_committee_members(
-        &self,
-        _: ViewNumber,
-    ) -> impl ExactSizeIterator<Item = &PubKey> + Send + '_ {
-        self.inner.da_committee.indexed_committee.keys()
-    }
-
-    fn stake(&self, key: &PubKey) -> Option<PeerConfig<SeqTypes>> {
-        self.inner.committee.indexed_stake_table.get(key).cloned()
-    }
-
-    fn da_stake(&self, key: &PubKey) -> Option<PeerConfig<SeqTypes>> {
-        self.inner.da_committee.indexed_committee.get(key).cloned()
-    }
-
-    fn has_stake(&self, key: &PubKey) -> bool {
-        self.stake(key)
-            .map(|x| x.stake_table_entry.stake() > U256::ZERO)
-            .unwrap_or_default()
-    }
-
-    fn has_da_stake(&self, key: &PubKey) -> bool {
-        self.da_stake(key)
-            .map(|x| x.stake_table_entry.stake() > U256::ZERO)
-            .unwrap_or_default()
-    }
-
-    fn lookup_leader(&self, view: ViewNumber) -> Result<PubKey, Self::Error> {
-        let leaders = &self.inner.committee.eligible_leaders;
-        if leaders.is_empty() {
-            return Err(EpochCommitteesError::LeaderLookupError);
-        }
-        let index = *view as usize % leaders.len();
-        Ok(PubKey::public_key(&leaders[index].stake_table_entry))
     }
 }
 

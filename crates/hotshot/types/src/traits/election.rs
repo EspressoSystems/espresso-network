@@ -7,11 +7,11 @@
 //! The election trait, used to decide which node is the leader and determine if a vote is valid.
 //!
 //! Reads of per-epoch state go through a [`MembershipSnapshot`] obtained from
-//! [`Membership::snapshot`]. Reads of pre-epoch state go through a
-//! [`NonEpochMembershipSnapshot`] obtained from [`Membership::non_epoch_snapshot`].
-//! Each snapshot is a consistent point-in-time view; its accessors observe
-//! one moment of the membership state, so derived values from the same
-//! snapshot are guaranteed to come from one logical instant.
+//! [`Membership::snapshot`]. Each snapshot is a consistent point-in-time view;
+//! its accessors observe one moment of the membership state, so derived values
+//! from the same snapshot are guaranteed to come from one logical instant.
+//! Reads of the views before the first epoch go through the
+//! [`GenesisStakeTables`] from [`Membership::genesis_stake_tables`].
 
 use std::{fmt::Debug, sync::Arc};
 
@@ -287,94 +287,10 @@ fn total_stake<T: NodeType>(table: &[PeerConfig<T>]) -> U256 {
         .fold(U256::ZERO, |acc, p| acc + p.stake_table_entry.stake())
 }
 
-/// A consistent view of the pre-epoch [`Membership`] state.
-///
-/// Used when consensus is operating before epochs are enabled (the
-/// `epoch == None` path in the legacy API).
-pub trait NonEpochMembershipSnapshot<T: NodeType>: Clone + Send + Sync {
-    type Error: std::error::Error + Send + Sync + 'static;
-
-    fn stake_table(&self) -> impl ExactSizeIterator<Item = &PeerConfig<T>> + Send + '_;
-    fn da_stake_table(&self) -> impl ExactSizeIterator<Item = &PeerConfig<T>> + Send + '_;
-    fn committee_members(
-        &self,
-        view: ViewNumber,
-    ) -> impl ExactSizeIterator<Item = &T::SignatureKey> + Send + '_;
-    fn da_committee_members(
-        &self,
-        view: ViewNumber,
-    ) -> impl ExactSizeIterator<Item = &T::SignatureKey> + Send + '_;
-    fn stake(&self, key: &T::SignatureKey) -> Option<PeerConfig<T>>;
-    fn da_stake(&self, key: &T::SignatureKey) -> Option<PeerConfig<T>>;
-    fn has_stake(&self, key: &T::SignatureKey) -> bool;
-    fn has_da_stake(&self, key: &T::SignatureKey) -> bool;
-    fn lookup_leader(&self, view: ViewNumber) -> Result<T::SignatureKey, Self::Error>;
-
-    fn total_nodes(&self) -> usize {
-        self.stake_table().len()
-    }
-
-    fn da_total_nodes(&self) -> usize {
-        self.da_stake_table().len()
-    }
-
-    fn total_stake(&self) -> U256 {
-        self.stake_table()
-            .fold(U256::ZERO, |acc, e| acc + e.stake_table_entry.stake())
-    }
-
-    fn total_da_stake(&self) -> U256 {
-        self.da_stake_table()
-            .fold(U256::ZERO, |acc, e| acc + e.stake_table_entry.stake())
-    }
-
-    fn success_threshold(&self) -> U256 {
-        supermajority_threshold(self.total_stake())
-    }
-
-    fn da_success_threshold(&self) -> U256 {
-        let total = self.total_da_stake();
-        let one = U256::ONE;
-        let two = U256::from(2);
-        let three = U256::from(3);
-        if total < U256::MAX / two {
-            ((total * two) / three) + one
-        } else {
-            ((total / three) * two) + two
-        }
-    }
-
-    fn failure_threshold(&self) -> U256 {
-        let total = self.total_stake();
-        (total / U256::from(3)) + U256::ONE
-    }
-
-    fn upgrade_threshold(&self) -> U256 {
-        let total = self.total_stake();
-        let nine = U256::from(9);
-        let ten = U256::from(10);
-        let normal = self.success_threshold();
-        let higher = if total < U256::MAX / nine {
-            (total * nine) / ten
-        } else {
-            (total / ten) * nine
-        };
-        std::cmp::max(higher, normal)
-    }
-
-    fn leader(&self, view: ViewNumber) -> anytrace::Result<T::SignatureKey> {
-        use hotshot_utils::anytrace::*;
-        self.lookup_leader(view)
-            .wrap()
-            .context(info!("Failed to get leader for view {view} (non-epoch)"))
-    }
-}
-
 /// A protocol for determining membership in and participating in a committee.
 ///
-/// All read access goes through one of two snapshot types:
-/// - [`Self::snapshot`] for per-epoch reads
-/// - [`Self::non_epoch_snapshot`] for pre-epoch reads
+/// Per-epoch reads go through [`Self::snapshot`], and reads of the views
+/// before the first epoch through [`Self::genesis_stake_tables`].
 ///
 /// Each snapshot is a consistent point-in-time view; derived values read from
 /// the same snapshot are guaranteed to come from one logical moment.
@@ -384,16 +300,10 @@ pub trait Membership<T: NodeType>: Debug + Send + Sync {
     /// A consistent per-epoch view, returned by [`Self::snapshot`].
     type Snapshot: MembershipSnapshot<T, Error = Self::Error>;
 
-    /// A consistent pre-epoch view, returned by [`Self::non_epoch_snapshot`].
-    type NonEpochSnapshot: NonEpochMembershipSnapshot<T, Error = Self::Error>;
-
     /// Capture a consistent per-epoch view.
     ///
     /// Returns `None` if no committee is loaded for `epoch`.
     fn snapshot(&self, epoch: EpochNumber) -> Option<Self::Snapshot>;
-
-    /// Capture a consistent pre-epoch view.
-    fn non_epoch_snapshot(&self) -> Self::NonEpochSnapshot;
 
     /// The stake tables of views before the first epoch.
     fn genesis_stake_tables(&self) -> Arc<GenesisStakeTables<T>>;
