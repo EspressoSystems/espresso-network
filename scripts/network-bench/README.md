@@ -748,6 +748,8 @@ Each step is judged over its second half. A step stopped early is judged over it
 - Early stop (not with `--keep-going`): from 10 s into a step, decided < 80% of submitted over the last 10 s stops the
   step, which fails on the decided rule.
 - Without `--keep-going` the ramp stops at the first failing step, then runs one refine step halfway back.
+- A tx not yet matched to a block counts as late only as far as the scans prove: until the lowest height whose scan is
+  not finished reached a validator, or until now when every height is scanned.
 
 ### Drain
 

@@ -2980,3 +2980,123 @@ def test_summary_names_how_far_the_prover_got(tmp_path: Path):
     assert "prover" not in netbench.render(result, None)
     result["deployment"] = deployment() | {"prover": "prover-started"}
     assert "- light-client prover: prover-started" in netbench.render(result, None)
+
+
+# Consensus latency while the payload scan falls behind (#5473).
+
+
+def height_record(
+    height: int, validator: float | None, scanned: float | None
+) -> dict[str, Any]:
+    """A heights.jsonl record; the query node shows the height 0.1 s after a validator."""
+    return {
+        "height": height,
+        "validator": validator,
+        "query": None if validator is None else validator + 0.1,
+        "scanned": scanned,
+    }
+
+
+def unmatched(t_submit: float) -> dict[str, Any]:
+    """A tx the payload scan has not matched to a height."""
+    return {"t_submit": t_submit, "height": None, "status": "pending"}
+
+
+def consensus_latency(
+    txs: list[dict[str, Any]], heights: list[dict[str, Any]], now: float
+) -> netbench.Quantiles | None:
+    """Over the measured half of `step_window()`, 15 to 30, as known at `now`."""
+    m = netbench.step_measures(
+        step_window(), netbench.BenchConfig(), txs, heights, [], now
+    )
+    return m["consensus_latency_ms"]
+
+
+def samples(q: netbench.Quantiles | None) -> int:
+    return 0 if q is None else q["n"]
+
+
+def test_a_scan_behind_does_not_fail_consensus_on_blocks_decided_in_time():
+    """At 10 MB/s each block decides 200 ms after its tx, but at the step's end the scan has
+    finished only the heights up to t 10: no tx of the measured half has a height yet."""
+    txs = [
+        {"t_submit": i / 10, "height": i, "status": "included"}
+        if i < 100
+        else unmatched(i / 10)
+        for i in range(300)
+    ]
+    heights = [
+        height_record(i, i / 10 + 0.2, i / 10 + 1.0 if i < 100 else None)
+        for i in range(299)
+    ]
+    counters = [
+        {"ts": float(t), "decided_bytes": 10e6 * t, "timeouts": 0} for t in range(31)
+    ]
+    m = netbench.step_measures(
+        step_window(), netbench.BenchConfig(), txs, heights, counters, 30.0
+    )
+    assert fails(m) == ([], [])
+    assert samples(m["consensus_latency_ms"]) == 0
+
+
+def test_an_unmatched_tx_counts_from_the_decision_of_the_lowest_unscanned_height():
+    """Heights up to 5 scanned, height 6 decided at 25: a tx sent at 20 that none of them
+    holds was decided at 25 or later, so it counts 5000 ms however late `now` is."""
+    heights = [
+        height_record(h, 19.0 + h, 21.0 + h if h < 6 else None) for h in range(10)
+    ]
+    latency = some(consensus_latency([unmatched(20.0)], heights, 100.0))
+    assert (latency["n"], latency["p50"]) == (1, pytest.approx(5000.0))
+
+
+def test_the_lowest_unscanned_height_is_found_in_any_record_order():
+    """The records of the test above in reverse: still bounded by height 6, not by 9."""
+    heights = [
+        height_record(h, 19.0 + h, 21.0 + h if h < 6 else None)
+        for h in reversed(range(10))
+    ]
+    latency = some(consensus_latency([unmatched(20.0)], heights, 100.0))
+    assert latency["p50"] == pytest.approx(5000.0)
+
+
+def test_a_height_scanned_after_now_counts_as_unscanned():
+    """Judged at 30 from the final files: height 1, decided at 23, was scanned only at 40,
+    so at 30 the tx sent at 20 may be in it."""
+    heights = [
+        height_record(0, 21.0, 22.0),
+        height_record(1, 23.0, 40.0),
+        height_record(2, 26.0, None),
+    ]
+    latency = some(consensus_latency([unmatched(20.0)], heights, 30.0))
+    assert latency["p50"] == pytest.approx(3000.0)
+
+
+def test_an_unmatched_tx_whose_bound_is_within_the_target_is_left_out():
+    """The lowest unscanned height decided 500 ms after the unmatched tx was sent: it may
+    have been on time, so only the matched tx, 300 ms, counts."""
+    txs = [{"t_submit": 20.0, "height": 0, "status": "included"}, unmatched(20.0)]
+    heights = [height_record(0, 20.3, 21.0), height_record(1, 20.5, None)]
+    latency = some(consensus_latency(txs, heights, 60.0))
+    assert (latency["n"], latency["p50"]) == (1, pytest.approx(300.0))
+
+
+@pytest.mark.parametrize(
+    "heights",
+    [
+        pytest.param(
+            [height_record(0, 21.0, 22.0), height_record(1, 23.0, 24.0)],
+            id="every-height-scanned",
+        ),
+        pytest.param(
+            [
+                height_record(0, 21.0, 22.0),
+                {"height": 1, "validator": None, "query": 23.0, "scanned": None},
+            ],
+            id="lowest-unscanned-height-without-validator-time",
+        ),
+    ],
+)
+def test_an_unmatched_tx_counts_its_time_so_far_when_the_scan_bounds_nothing(heights):
+    """A tx sent at 20 and unmatched at 30 counts 10 s, as before the fix."""
+    latency = some(consensus_latency([unmatched(20.0)], heights, 30.0))
+    assert latency["p50"] == pytest.approx(10000.0)

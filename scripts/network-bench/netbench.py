@@ -2419,12 +2419,13 @@ def step_measures(
     now: float,
 ) -> StepMeasures:
     """Over the measured half, from what is known at `now`. A transaction not yet on a
-    validator, and a height not yet on the query node, count with their time so far once that
-    exceeds the target."""
+    validator counts with its time until `undecided_until` once that exceeds the target; a
+    height not yet on the query node counts with its time so far the same way."""
     t0, t1 = step["t_mid"], step["t_end"]
     inside = [c for c in counters if t0 <= c["ts"] <= t1]
     timeouts = ch.counter_total(inside, "timeouts")
     on_validator = {h["height"]: h["validator"] for h in heights}
+    undecided = undecided_until(heights, now)
     consensus = []
     for tx in txs:
         if not t0 <= tx["t_submit"] <= t1:
@@ -2432,8 +2433,8 @@ def step_measures(
         seen = on_validator.get(tx["height"])
         if seen is not None:
             consensus.append((seen - tx["t_submit"]) * 1000)
-        elif (now - tx["t_submit"]) * 1000 > cfg.latency_target_ms:
-            consensus.append((now - tx["t_submit"]) * 1000)
+        elif (undecided - tx["t_submit"]) * 1000 > cfg.latency_target_ms:
+            consensus.append((undecided - tx["t_submit"]) * 1000)
     lags = []
     for h in heights:
         seen = h["validator"]
@@ -2458,6 +2459,18 @@ def step_measures(
         "query_lag_ms": quantiles([lag for _, lag in lags]),
         "query_lag_slope_ms_s": theil_sen(lags),
     }
+
+
+def undecided_until(heights: Sequence[Mapping[str, Any]], now: float) -> float:
+    """Until when a transaction the payload scans have not matched is known to be undecided.
+    It is in none of the heights below the lowest one whose scan had not finished at `now`,
+    so it was decided when that height reached a validator or later. `now` when the scans
+    bound nothing: every height scanned, or that height on no validator yet."""
+    unscanned = [h for h in heights if h["scanned"] is None or h["scanned"] > now]
+    if not unscanned:
+        return now
+    seen = min(unscanned, key=lambda h: h["height"])["validator"]
+    return now if seen is None else min(seen, now)
 
 
 def submit_measures(
