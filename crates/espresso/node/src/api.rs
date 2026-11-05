@@ -54,7 +54,7 @@ use hotshot_types::{
     simple_certificate::LightClientStateUpdateCertificateV2,
     stake_table::HSStakeTable,
     traits::election::{Membership, MembershipSnapshot, NonEpochMembershipSnapshot},
-    utils::epoch_from_block_number,
+    utils::{epoch_from_block_number, root_block_in_epoch},
     vid::avidm::{AvidMScheme, init_avidm_param},
     vote::HasViewNumber,
 };
@@ -581,24 +581,23 @@ impl StateCertFetchingDataSource<SeqTypes> for ApiState {
         epoch: u64,
         timeout: Duration,
     ) -> Result<LightClientStateUpdateCertificateV2<SeqTypes>, StateCertFetchError> {
-        tracing::info!("fetching state certificate for epoch={epoch}");
         let handle = self.consensus().await;
-
-        let current_epoch = handle.current_epoch().await;
-
-        // The highest epoch we can have a state certificate for is current_epoch + 1
-        // Check if requested epoch is beyond the highest possible epoch
-        let highest_epoch = current_epoch.map(|e| e.u64() + 1);
-
-        if Some(epoch) > highest_epoch {
-            return Err(StateCertFetchError::Other(anyhow::anyhow!(
-                "requested state certificate for epoch {epoch} is beyond the highest possible \
-                 epoch {highest_epoch:?}"
-            )));
+        if handle.current_epoch().await.is_none() {
+            return Err(StateCertFetchError::EpochsNotStarted { epoch });
         }
 
-        // Get the stake table for validation
         let coordinator = handle.membership_coordinator().await;
+        let root = root_block_in_epoch(epoch, *coordinator.epoch_height());
+        let decided = handle.decided_leaf().await.height();
+        if decided < root {
+            return Err(StateCertFetchError::RootNotDecided {
+                epoch,
+                root,
+                decided,
+            });
+        }
+
+        tracing::info!("fetching state certificate for epoch={epoch}");
         if let Err(err) = coordinator.stake_table_for_epoch(Some(EpochNumber::new(epoch))) {
             tracing::warn!(
                 "Failed to get membership for epoch {epoch}: {err:#}. Waiting for catchup"
@@ -10962,6 +10961,16 @@ mod test {
                 error_status(client, &v2).await,
                 error_status(client, &v1).await,
                 "{v2}"
+            );
+        }
+        for route in [
+            "availability/state-cert/1000000",
+            "availability/state-cert-v2/1000000",
+        ] {
+            assert_eq!(
+                error_status(client, route).await,
+                StatusCode::NOT_FOUND,
+                "{route}"
             );
         }
 

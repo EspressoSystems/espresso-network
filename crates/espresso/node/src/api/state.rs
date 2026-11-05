@@ -745,8 +745,8 @@ where
                     .data_source
                     .request_state_cert(epoch, TIMEOUT)
                     .await
-                    .map_err(|e| {
-                        anyhow::anyhow!("failed to fetch state cert for epoch {}: {}", epoch, e)
+                    .map_err(|err| {
+                        lc_error(hotshot_query_service::Error::Availability { source: err.into() })
                     })?;
 
                 // Store the fetched certificate
@@ -779,8 +779,8 @@ where
                     .data_source
                     .request_state_cert(epoch, TIMEOUT)
                     .await
-                    .map_err(|e| {
-                        anyhow::anyhow!("failed to fetch state cert for epoch {}: {}", epoch, e)
+                    .map_err(|err| {
+                        lc_error(hotshot_query_service::Error::Availability { source: err.into() })
                     })?;
 
                 // Store the fetched certificate
@@ -6119,6 +6119,37 @@ mod tests {
             err.downcast_ref::<AvailabilityError>(),
             Some(AvailabilityError::BadRequest(_))
         ));
+    }
+
+    #[test]
+    fn state_cert_that_cannot_exist_or_no_peer_serves_is_not_found() {
+        use crate::state_cert::StateCertFetchError;
+
+        for err in [
+            StateCertFetchError::EpochsNotStarted { epoch: 1 },
+            StateCertFetchError::RootNotDecided {
+                epoch: 3,
+                root: 2995,
+                decided: 100,
+            },
+            StateCertFetchError::FetchError(anyhow::anyhow!("timeout")),
+        ] {
+            let err = lc_error(hotshot_query_service::Error::Availability { source: err.into() });
+            assert!(
+                matches!(
+                    err.downcast_ref::<AvailabilityError>(),
+                    Some(AvailabilityError::NotFound(_))
+                ),
+                "{err:#}"
+            );
+        }
+    }
+
+    #[test]
+    fn invalid_state_cert_from_peer_stays_internal() {
+        let err = crate::state_cert::StateCertFetchError::ValidationError(anyhow::anyhow!("bad"));
+        let err = lc_error(hotshot_query_service::Error::Availability { source: err.into() });
+        assert!(err.downcast_ref::<AvailabilityError>().is_none());
     }
 
     #[tokio::test(flavor = "multi_thread")]

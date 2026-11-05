@@ -29,11 +29,25 @@ pub enum StateCertFetchError {
 
     #[error("State certificate error: {0}")]
     Other(#[source] anyhow::Error),
+
+    #[error("no state certificate for epoch {epoch}: epochs have not started")]
+    EpochsNotStarted { epoch: u64 },
+
+    /// No state certificate for `epoch` can exist yet: it signs the epoch's root block.
+    #[error(
+        "root block {root} of epoch {epoch} is not decided yet, this node is at block {decided}"
+    )]
+    RootNotDecided { epoch: u64, root: u64, decided: u64 },
 }
 
 impl From<StateCertFetchError> for hotshot_query_service::availability::Error {
     fn from(err: StateCertFetchError) -> Self {
         match err {
+            err @ (StateCertFetchError::EpochsNotStarted { .. }
+            | StateCertFetchError::RootNotDecided { .. }) => Error::Custom {
+                message: err.to_string(),
+                status: StatusCode::NOT_FOUND,
+            },
             StateCertFetchError::FetchError(e) => Error::Custom {
                 message: format!("Failed to fetch state cert from peers: {e}"),
                 status: StatusCode::NOT_FOUND,
