@@ -51,7 +51,7 @@ use crate::{
     },
     epoch::{EpochManager, EpochRootResult},
     fetch::{Fetcher, Retry},
-    helpers::{proposal_commitment, validated_state_cert},
+    helpers::{ViewEpoch, proposal_commitment, validated_state_cert},
     logging::KeyPrefix,
     message::{
         self, BlockMessage, CatchupEvidence, Certificate1, Certificate2, ConsensusMessage, Message,
@@ -581,11 +581,15 @@ where
                     return Ok(ConsensusInput::TimeoutOneHonest(out.view_number()))
                 }
                 Some(cert1) = self.vote1_collector.next() => {
-                    self.cert_verifiers.cert1.mark_completed(cert1.view_number());
+                    self.cert_verifiers
+                        .cert1
+                        .mark_completed(ViewEpoch(cert1.view_number(), cert1.epoch()));
                     return Ok(ConsensusInput::Certificate1(cert1))
                 }
                 Some(cert2) = self.vote2_collector.next() => {
-                    self.cert_verifiers.cert2.mark_completed(cert2.view_number());
+                    self.cert_verifiers
+                        .cert2
+                        .mark_completed(ViewEpoch(cert2.view_number(), cert2.epoch()));
                     return Ok(ConsensusInput::Certificate2(cert2))
                 }
                 Some(cert1) = self.cert_verifiers.cert1.next() => {
@@ -624,7 +628,9 @@ where
                     return Ok(ConsensusInput::UpgradeCertificateFormed(cert))
                 }
                 Some((cert1, state_cert)) = self.epoch_root_collector.next() => {
-                    self.cert_verifiers.cert1.mark_completed(cert1.view_number());
+                    self.cert_verifiers
+                        .cert1
+                        .mark_completed(ViewEpoch(cert1.view_number(), cert1.epoch()));
                     self.storage
                         .append_state_cert(state_cert.view_number(), state_cert.clone());
                     return Ok(ConsensusInput::EpochRootCertificates { cert1, state_cert })
@@ -1301,7 +1307,7 @@ where
                     {
                         self.proposal_received_at = Some((view, Instant::now()));
                     }
-                    if self.consensus.wants_proposal_for_view(&view) {
+                    if self.consensus.wants_proposal_for_view(&view, epoch) {
                         self.proposal_validator.validate(p);
                     }
                     None
@@ -1346,7 +1352,7 @@ where
                         );
                         return None;
                     }
-                    if self.consensus.wants_proposal_for_view(&view) {
+                    if self.consensus.wants_proposal_for_view(&view, epoch) {
                         let signature = fragment.signature.clone();
                         match self
                             .vid_fragment_accumulator
