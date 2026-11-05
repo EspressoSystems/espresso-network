@@ -729,9 +729,9 @@ Progress: one fixed-width line every 10 s, totals at the end.
 - Inclusion: scans of the query node's blocks for the marker. Scans (fetch, JSON, base64, marker search) run in 4
   processes (`SCAN_PROCESSES`), stdlib only.
 - Scans that lag: a tx times out `--tx-timeout-s` after its submit, which frees its in-flight room. A later scan that
-  finds it in a block shown on the query node within `--tx-timeout-s` still includes it. At the end of the load the
-  scans go on while such a tx may still be found, for at most `--tx-timeout-s`. A lost payload counts as scanned once
-  given up.
+  finds it in a block shown on the query node within `--tx-timeout-s` still includes it; a find in a block shown later
+  leaves it timed out but records its height. At the end of the load the scans go on while such a tx may still be
+  included, for at most `--tx-timeout-s` after the load ended. A lost payload counts as scanned once given up.
 - Namespaces 10000 and 10015: the leader disperses a block's namespaces in parallel.
 - With `--clients`, readers fetch each new range of blocks from the query node as a light client does, see `--clients`
   above.

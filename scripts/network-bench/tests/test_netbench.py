@@ -3187,7 +3187,7 @@ def test_a_late_find_is_included_only_if_its_block_showed_within_the_timeout():
     run_tracker(cfg, state, heights, scan, done, clock, events)
     assert [(tx.status, tx.height) for tx in (early, late)] == [
         ("included", 0),
-        ("timeout", None),
+        ("timeout", 1),
     ]
     assert early.t_included == pytest.approx(0.5)
     assert late.t_included is None
@@ -3419,3 +3419,49 @@ def test_analyze_judges_at_the_end_of_the_evidence(tmp_path: Path, latest: str):
         netbench.write_jsonl(tmp_path / "consensus.jsonl", iter(counters))
     latency = some(analyze(tmp_path)["steps"][0]["consensus_latency_ms"])
     assert latency["max"] == pytest.approx((165.0 - 120.5) * 1000)
+
+
+def test_done_during_a_backlog_scan_starts_the_deadline_when_done_is_set():
+    """The query node shows 200 heights at 0 and a scan takes 0.5 s: the backlog takes 25 s.
+    The load is done at 3 while it is being scanned, and tx 0 is never found: the tracker
+    returns about 2 s after done, not after the backlog."""
+    clock, done = fakes.FakeClock(), asyncio.Event()
+    state, heights = netbench.LoadState(), netbench.Heights(0)
+    submit_at(state, 0, 0.0)
+
+    async def scan(height: int) -> list[int] | None:
+        await clock.asleep(0.5)
+        return []
+
+    done_at = 3.0
+    events = [*shows(heights, clock, (0.0, 200)), (done_at, done.set)]
+    cfg = netbench.BenchConfig(tx_timeout_s=2)
+    returned = run_tracker(cfg, state, heights, scan, done, clock, events)
+    deadline = done_at + cfg.tx_timeout_s
+    assert deadline - 0.5 <= returned <= deadline + TRACKER_SLACK_S
+
+
+def test_a_late_find_does_not_make_the_progress_timeouts_negative(
+    caplog: pytest.LogCaptureFixture,
+):
+    """tx 0, sent at 7 with a 2 s timeout, times out at 9, in the first progress window. Its
+    block showed at 8 but is scanned only at 12, in the second window, and includes it: the
+    second line shows 0 timed out, not -1."""
+    clock, done = fakes.FakeClock(), asyncio.Event()
+    state, heights = netbench.LoadState(), netbench.Heights(0)
+    tx = submit_at(state, 0, 7.0)
+
+    async def scan(height: int) -> list[int] | None:
+        return [0] if height == 0 else []
+
+    events = [*shows(heights, clock, (8.0, 1), (12.0, 1 + LAG)), (21.0, done.set)]
+    cfg = netbench.BenchConfig(tx_timeout_s=2)
+    with caplog.at_level(logging.INFO, netbench.log.name):
+        run_tracker(cfg, state, heights, scan, done, clock, events)
+    timed_out = [
+        int(line.split(" pend ")[1].split(" to ")[1].split(" |")[0])
+        for line in caplog.messages
+        if " pend " in line
+    ]
+    assert tx.status == "included"
+    assert timed_out == [1, 0]

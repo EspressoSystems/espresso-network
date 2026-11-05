@@ -1179,13 +1179,17 @@ class LoadState:
         self.max_in_flight = 0
         self.cap_waits = 0
         self.timeouts = 0
+        # Every timeout, also of txs a late scan included after all: for the progress line.
+        self.timeouts_seen = 0
         self.phase = Phase("starting", None, 0.0, 0.0)
         self.submit_errors = 0
         self.failovers = 0
         self.included: set[int] = set()
-        # Timed out while a block they may be in was still unscanned, with the time by which
-        # that block must have shown on the query node; see `include`.
+        # Timed out and not found yet, with the time by which the block must have shown on the
+        # query node for a late find to include it; see `include`.
         self.timed_out: dict[int, tuple[Tx, float]] = {}
+        # The latest of those times: a scan past it can include none of them any more.
+        self.findable_until = -math.inf
         self.duplicates = 0
         self.heartbeat_errors = 0
         self.missing_payloads: list[int] = []
@@ -1223,12 +1227,14 @@ class LoadState:
             tx.t_included = now
         elif status == "timeout":
             self.timeouts += 1
+            self.timeouts_seen += 1
         self.room.set()
 
     def time_out(self, tx: Tx, now: float, findable_until: float) -> None:
         """A scan that finds it in a block shown by `findable_until` still includes it."""
         self.resolve(tx.id, "timeout", now)
         self.timed_out[tx.id] = (tx, findable_until)
+        self.findable_until = max(self.findable_until, findable_until)
 
     def include(self, tx_id: int, height: int, at: float) -> None:
         """`at`: when the block showed on the query node."""
@@ -1242,18 +1248,15 @@ class LoadState:
             self.resolve(tx_id, "included", at)
             return
         late = self.timed_out.pop(tx_id, None)
-        if late is not None and at <= late[1]:
-            tx = late[0]
+        if late is None:
+            return
+        tx, findable_until = late
+        # Too late to count as included, its block still dates its consensus latency.
+        tx.height = height
+        if at <= findable_until:
             self.included.add(tx_id)
-            tx.height, tx.status, tx.t_included = height, "included", at
+            tx.status, tx.t_included = "included", at
             self.timeouts -= 1
-
-    def forget_unfindable(self, scanned_until: float) -> None:
-        """Every block the query node showed before `scanned_until` is scanned: a timed-out
-        transaction whose block had to show before then can no longer be included."""
-        self.timed_out = {
-            i: late for i, late in self.timed_out.items() if late[1] >= scanned_until
-        }
 
 
 async def generate_load(
@@ -2211,8 +2214,33 @@ async def track_inclusion(
     A transaction counts as included when its block's header appeared on the query node. A
     payload no query node has is retried after each scan until MISSING_PAYLOAD_S. After
     `done`, scans go on while a timed-out transaction may still be found, up to
-    `tx_timeout_s`."""
-    deadline = None
+    `tx_timeout_s` after `done` was set."""
+    ended = asyncio.create_task(set_at(done, clock))
+    try:
+        await track_until_settled(cfg, state, scan, heights, counters, ended, clock)
+    finally:
+        ended.cancel()
+
+
+async def set_at(event: asyncio.Event, clock: Clock) -> float:
+    await event.wait()
+    return clock.time()
+
+
+async def track_until_settled(
+    cfg: BenchConfig,
+    state: LoadState,
+    scan: Scan,
+    heights: Heights,
+    counters: list[dict[str, Any]],
+    ended: "asyncio.Task[float]",
+    clock: Clock,
+) -> None:
+    """`track_inclusion`, with `ended` done when the load ended, at its result."""
+
+    def deadline() -> float:
+        return ended.result() + cfg.tx_timeout_s if ended.done() else math.inf
+
     report = clock.time() + PROGRESS_S
     reported_timeouts = 0
     height = heights.start
@@ -2226,16 +2254,14 @@ async def track_inclusion(
                 counters,
                 now,
                 cfg.tx_size,
-                state.timeouts - reported_timeouts,
+                state.timeouts_seen - reported_timeouts,
             )
-            report, reported_timeouts = now + PROGRESS_S, state.timeouts
-        state.forget_unfindable(scanned_before(heights, height, missing, now))
-        if done.is_set():
-            if deadline is None:
-                deadline = now + cfg.tx_timeout_s
-                state.phase = Phase("done", None, now, cfg.tx_timeout_s)
-            settled = not state.pending and not state.timed_out
-            if settled or (now > deadline and not missing):
+            report, reported_timeouts = now + PROGRESS_S, state.timeouts_seen
+        if ended.done():
+            state.phase = Phase("done", None, ended.result(), cfg.tx_timeout_s)
+            scanned = scanned_before(heights, height, missing, now)
+            settled = not state.pending and scanned > state.findable_until
+            if settled or (now > deadline() and not missing):
                 for tx_id in list(state.pending):
                     state.resolve(tx_id, "timeout", now)
                 log_totals(state)
@@ -2246,9 +2272,7 @@ async def track_inclusion(
             state.time_out(tx, now, tx.t_submit + cfg.tx_timeout_s)
         top = heights.top("query")
         # A backlog can outlast the deadline: check it between batches.
-        while height < top - PAYLOAD_LAG_BLOCKS and (
-            deadline is None or clock.time() <= deadline
-        ):
+        while height < top - PAYLOAD_LAG_BLOCKS and clock.time() <= deadline():
             batch = range(height, min(top - PAYLOAD_LAG_BLOCKS, height + SCAN_BATCH))
             scans = await asyncio.gather(*(scan_stamped(scan, h, clock) for h in batch))
             for h, (ids, at, answered) in zip(batch, scans):
