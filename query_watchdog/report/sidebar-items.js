@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["GAUGE_INTERVAL","TICKS_PER_SUMMARY"],"struct":["NodeReport","ReportedNode"]};

@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["Known"],"fn":["find_gaps","first_missing","gap_end","gap_still_missing","next_gap","single"],"trait":["Presence"]};

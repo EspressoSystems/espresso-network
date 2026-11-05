@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["ImageRegion","MissingUpdate","RowKey"],"fn":["drop_units","hull_of","observe_piece","observe_unit","overlapping_rows"],"struct":["AlertRule","ConfirmedUnits","ImageDiff","KindTally","ListedRows","MissingRow","MissingSet"]};

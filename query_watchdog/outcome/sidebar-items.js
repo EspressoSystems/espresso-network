@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["NotServed","Observation","ProbeResult","RequestFailure","RequestHealth"],"struct":["FailedStatus","RangeFindings"]};
