@@ -13,8 +13,13 @@ use crate::{
     outcome::{FailedStatus, Failure, NotServed},
 };
 
-/// Total time of one request, including server-side range waits (`state.rs:85`).
-const HTTP_TIMEOUT: Duration = Duration::from_secs(60);
+/// Total time of a request that may wait server-side: a range HEAD over up to 100 blocks waits up
+/// to 100 x 500 ms for blocks the node does not have yet (`state.rs:85`).
+const RANGE_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// Total time of a HEAD of one height, point or epoch: no range wait, so a stuck node costs 10 s
+/// per probe and not a minute.
+const SINGLE_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Total time of a GET that is decoded (tip, state height, config).
 const JSON_TIMEOUT: Duration = Duration::from_secs(5);
@@ -62,7 +67,11 @@ impl WatchedNode {
 /// Why a request returned no 200.
 #[derive(Debug)]
 pub enum FetchError {
-    Status(StatusCode),
+    /// A non-2xx answer; `not_served` is built once from the status.
+    Status {
+        status: StatusCode,
+        not_served: NotServed,
+    },
     Transport(reqwest::Error),
 }
 
@@ -70,7 +79,7 @@ impl FetchError {
     /// The `status` label: `StatusCode::as_str()` (`"404"`, `"500"`, ...) or `"transport"`.
     pub fn status_label(&self) -> &str {
         match self {
-            Self::Status(status) => status.as_str(),
+            Self::Status { status, .. } => status.as_str(),
             Self::Transport(_) => "transport",
         }
     }
@@ -78,20 +87,26 @@ impl FetchError {
     /// 404 or the failure; replaces `is_not_found`.
     pub fn not_served(&self) -> NotServed {
         match self {
-            Self::Status(StatusCode::NOT_FOUND) => NotServed::NotFound,
-            Self::Status(status) => NotServed::Failed(Failure::Status(
-                FailedStatus::new(*status).expect("a FetchError status is non-2xx"),
-            )),
+            Self::Status { not_served, .. } => *not_served,
             Self::Transport(_) => NotServed::Failed(Failure::Transport),
         }
     }
 
+    /// The error of a non-2xx `status`.
+    fn status(status: StatusCode) -> Self {
+        let not_served = FailedStatus::new(status).map_or(NotServed::NotFound, |failed| {
+            NotServed::Failed(Failure::Status(failed))
+        });
+        Self::Status { status, not_served }
+    }
+
     /// `Ok` for a 2xx status.
     fn from_status(status: StatusCode) -> Result<(), Self> {
-        status
-            .is_success()
-            .then_some(())
-            .ok_or(Self::Status(status))
+        if status.is_success() {
+            Ok(())
+        } else {
+            Err(Self::status(status))
+        }
     }
 }
 
@@ -99,7 +114,7 @@ impl fmt::Display for FetchError {
     /// Status code, or the transport error with its cause.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Status(status) => write!(f, "status {status}"),
+            Self::Status { status, .. } => write!(f, "status {status}"),
             Self::Transport(error) => {
                 write!(f, "transport error: {error}")?;
                 let mut cause = error.source();
@@ -158,7 +173,7 @@ struct ErrorMessage {
     message: String,
 }
 
-/// HTTP to the watched nodes: one reqwest client with `HTTP_TIMEOUT`.
+/// HTTP to the watched nodes: one reqwest client with `RANGE_TIMEOUT`.
 #[derive(Clone, Debug)]
 pub struct NodeHttp {
     client: reqwest::Client,
@@ -168,15 +183,27 @@ impl NodeHttp {
     /// Builds the client.
     pub fn new() -> anyhow::Result<Self> {
         Ok(Self {
-            client: reqwest::Client::builder().timeout(HTTP_TIMEOUT).build()?,
+            client: reqwest::Client::builder().timeout(RANGE_TIMEOUT).build()?,
         })
     }
 
-    /// HEAD `route`; the status is the answer.
-    pub async fn head(&self, node: &WatchedNode, route: &str) -> Result<(), FetchError> {
+    /// HEAD `route`; the status is the answer. `RANGE_TIMEOUT` when the node may wait for blocks
+    /// (a range over several heights), else `SINGLE_TIMEOUT`.
+    pub async fn head(
+        &self,
+        node: &WatchedNode,
+        route: &str,
+        waits_server_side: bool,
+    ) -> Result<(), FetchError> {
+        let timeout = if waits_server_side {
+            RANGE_TIMEOUT
+        } else {
+            SINGLE_TIMEOUT
+        };
         let response = self
             .client
             .head(node.route_url(route))
+            .timeout(timeout)
             .send()
             .await
             .map_err(FetchError::Transport)?;
@@ -217,7 +244,7 @@ impl NodeHttp {
             return Ok(HeightLookup::Present);
         }
         if status != StatusCode::NOT_FOUND {
-            return Err(FetchError::Status(status));
+            return Err(FetchError::status(status));
         }
         let body = response.bytes().await.map_err(FetchError::Transport)?;
         let height = serde_json::from_slice::<ErrorBody>(&body)

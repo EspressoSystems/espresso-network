@@ -14,7 +14,8 @@ use crate::{
         next_chunk,
     },
     outcome::{
-        Failure, GapSearch, MissingReason, Observation, RangeOutcome, Unconfirmed, UnitOutcome,
+        Failure, GapSearch, MissingReason, NotServed, Observation, RangeOutcome, Unconfirmed,
+        UnitOutcome,
     },
 };
 
@@ -70,7 +71,12 @@ fn unit_state(
     let UnitOutcome::Missing(not_served) = outcome else {
         return None;
     };
-    Some(RowState::merged(kind, old, not_served.into(), now))
+    match old {
+        Some(old) if old.reason == MissingReason::NotFound && not_served != NotServed::NotFound => {
+            Some(old.delayed(kind, now))
+        },
+        _ => Some(RowState::merged(kind, old, not_served.into(), now)),
+    }
 }
 
 /// Applies a point or epoch observation to `rows`; whether the row changed.
@@ -111,9 +117,9 @@ fn drop_units<K: Ord + Copy, U: Ord + Copy>(
     Some(first..next(last))
 }
 
-/// Pieces a failed range probe writes. A probe inside one unconfirmed row backs that part off;
-/// otherwise rows stay, confirmed `NotFound` rows included, and the heights no row covers become
-/// fresh rows.
+/// Pieces a failed range probe writes. A `NotFound` row only has its retry time moved, the part
+/// inside the probe. A probe inside one unconfirmed row backs that part off; otherwise unconfirmed
+/// rows stay, and the heights no row covers become fresh rows.
 fn failure_pieces(
     kind: RangeKind,
     map: &RangeMap<Height, RowState>,
@@ -123,52 +129,81 @@ fn failure_pieces(
     now: DateTime<Utc>,
 ) -> Vec<(Range<Height>, RowState)> {
     let reason = MissingReason::Unconfirmed(Unconfirmed::Failed(failure));
-    match before {
-        [(row, state)]
-            if row.start <= heights.start
-                && row.end >= heights.end
-                && state.reason != MissingReason::NotFound =>
-        {
-            vec![(
-                heights.clone(),
-                RowState::merged(kind.into(), [state], reason, now),
-            )]
-        },
-        _ => map
-            .gaps(heights)
-            .map(|gap| (gap, RowState::merged(kind.into(), [], reason, now)))
-            .collect(),
-    }
+    let mut pieces: Vec<_> = before
+        .iter()
+        .filter_map(|(row, state)| {
+            if state.reason == MissingReason::NotFound {
+                let inside = row.start.max(heights.start)..row.end.min(heights.end);
+                return Some((inside, state.delayed(kind.into(), now)));
+            }
+            let covers = row.start <= heights.start && row.end >= heights.end;
+            (before.len() == 1 && covers).then(|| {
+                let backed_off = RowState::merged(kind.into(), [state], reason, now);
+                (heights.clone(), backed_off)
+            })
+        })
+        .collect();
+    pieces.extend(
+        map.gaps(heights)
+            .map(|gap| (gap, RowState::merged(kind.into(), [], reason, now))),
+    );
+    pieces
 }
 
-/// Pieces a refined search writes: each gap (`NotFound`) and the tail, inheriting from the rows
-/// they overlap.
+/// Pieces a refined search writes: each gap (`NotFound`) inheriting from the rows it overlaps, and
+/// the tail. A tail that ended on a failure keeps the `NotFound` rows under it, moving their retry
+/// time, and only the rest of it becomes unconfirmed rows.
 fn refined_pieces(
     kind: RangeKind,
     before: &[(Range<Height>, RowState)],
     search: &GapSearch,
     now: DateTime<Utc>,
 ) -> Vec<(Range<Height>, RowState)> {
-    let gaps = search
+    let continued = |piece: &Range<Height>, reason| {
+        let old = before
+            .iter()
+            .filter(|(row, _)| row.start < piece.end && row.end > piece.start)
+            .map(|(_, state)| state);
+        RowState::merged(kind.into(), old, reason, now)
+    };
+    let mut pieces: Vec<_> = search
         .gaps
         .iter()
-        .map(|gap| (gap.clone(), MissingReason::NotFound));
-    let tail = search.tail.iter().map(|tail| {
-        (
-            tail.heights.clone(),
-            MissingReason::Unconfirmed(tail.reason),
-        )
-    });
-    gaps.chain(tail)
-        .map(|(piece, reason)| {
-            let old = before
-                .iter()
-                .filter(|(row, _)| row.start < piece.end && row.end > piece.start)
-                .map(|(_, state)| state);
-            let state = RowState::merged(kind.into(), old, reason, now);
-            (piece, state)
+        .map(|gap| (gap.clone(), continued(gap, MissingReason::NotFound)))
+        .collect();
+    let Some(tail) = &search.tail else {
+        return pieces;
+    };
+    let reason = MissingReason::Unconfirmed(tail.reason);
+    if !matches!(tail.reason, Unconfirmed::Failed(_)) {
+        pieces.push((tail.heights.clone(), continued(&tail.heights, reason)));
+        return pieces;
+    }
+    let mut cursor = tail.heights.start;
+    let kept = before
+        .iter()
+        .filter(|(row, state)| {
+            state.reason == MissingReason::NotFound
+                && row.start < tail.heights.end
+                && row.end > tail.heights.start
         })
-        .collect()
+        .map(|(row, state)| {
+            let inside = row.start.max(tail.heights.start)..row.end.min(tail.heights.end);
+            (inside, state.delayed(kind.into(), now))
+        });
+    for (inside, state) in kept {
+        if cursor < inside.start {
+            let rest = cursor..inside.start;
+            pieces.push((rest.clone(), continued(&rest, reason)));
+        }
+        cursor = inside.end;
+        pieces.push((inside, state));
+    }
+    if cursor < tail.heights.end {
+        let rest = cursor..tail.heights.end;
+        pieces.push((rest.clone(), continued(&rest, reason)));
+    }
+    pieces
 }
 
 /// Retry and alert state shared by every unit of a row.
@@ -226,6 +261,22 @@ impl RowState {
             retry_delay,
             next_retry_at: now + delta(retry_delay),
             reason,
+        }
+    }
+
+    /// A `NotFound` row after a failure that is not a 404: only the retry time moves, the delay
+    /// doubling under the cap of its kind and state.
+    fn delayed(&self, kind: DataKind, now: DateTime<Utc>) -> RowState {
+        let cap = if self.is_confirmed(kind) {
+            ALERT_RETRY_DELAY_MAX
+        } else {
+            RETRY_DELAY_MAX
+        };
+        let retry_delay = (self.retry_delay * 2).min(cap);
+        RowState {
+            retry_delay,
+            next_retry_at: now + delta(retry_delay),
+            ..self.clone()
         }
     }
 
@@ -839,14 +890,18 @@ pub struct ListedRows {
 
 #[cfg(test)]
 mod tests {
+    use std::str::FromStr;
+
     use pretty_assertions::assert_eq;
     use proptest::{collection::vec, option, prelude::*};
     use reqwest::StatusCode;
+    use sqlx::sqlite::SqliteConnectOptions;
 
     use super::*;
     use crate::{
         kind::KindClass,
         outcome::{FailedStatus, NotServed, Tail},
+        store::{PersistedMissingSet, Store},
     };
 
     const T0: i64 = 1_000;
@@ -1522,35 +1577,146 @@ mod tests {
             2
         );
 
-        // The same failure again backs the exact row off instead of adding rows.
+        // The same failure again only moves the 404 row's retry time: no rows are added, the
+        // reason stays.
+        let retry_before = set.rows_in(&ImageRegion::Range {
+            kind: leaf,
+            heights: h(110..115),
+        })[0]
+            .state
+            .next_retry_at;
         observe(&mut set, failed_obs(leaf, 110..115), T0 + 40);
         assert_eq!(set.listed(at(T0 + 100), 10).total, 4);
+        let row = &set.rows_in(&ImageRegion::Range {
+            kind: leaf,
+            heights: h(110..115),
+        })[0];
+        assert_eq!(row.state.reason, MissingReason::NotFound);
+        assert!(row.state.next_retry_at > retry_before);
     }
 
     #[test]
-    fn a_failure_inside_a_confirmed_row_leaves_it_alone() {
+    fn a_failure_inside_a_404_row_only_moves_its_retry_time() {
         let mut set = MissingSet::new(None);
         let leaf = RangeKind::Leaf;
         repeat(&mut set, &gap_obs(leaf, 100..300), 3, T0);
-        let before: Vec<_> = set.rows().collect();
 
-        // Inside the row, then across its edge: the row stays, the uncovered heights are new.
-        let diff = observe(&mut set, failed_obs(leaf, 150..200), T0 + 10);
-        assert!(diff.regions.is_empty());
-        assert_eq!(set.rows().collect::<Vec<_>>(), before);
+        observe(&mut set, failed_obs(leaf, 150..200), T0 + 10);
+        let rows: Vec<_> = set.rows().collect();
+        let keys: Vec<_> = rows.iter().map(|row| row.key.clone()).collect();
+        assert_eq!(
+            keys,
+            [
+                range_key(leaf, 100..150),
+                range_key(leaf, 150..200),
+                range_key(leaf, 200..300)
+            ]
+        );
+        let middle = &rows[1].state;
+        assert_eq!(middle.reason, MissingReason::NotFound);
+        assert_eq!((middle.failed_probes, middle.first_missing_at), (3, at(T0)));
+        assert_eq!(middle.retry_delay, Duration::from_secs(40));
+        assert_eq!(middle.next_retry_at, at(T0 + 50));
+        assert_eq!(rows[0].state, rows[2].state);
+
+        // Across the edge: the 404 part moves, the heights no row covers are new.
         observe(&mut set, failed_obs(leaf, 250..350), T0 + 11);
         let rows: Vec<_> = set.rows().collect();
-        assert_eq!(rows.len(), 2);
-        assert_eq!(rows[0], before[0]);
-        assert_eq!(rows[1].key, range_key(leaf, 300..350));
-        assert_eq!(rows[1].state.failed_probes, 1);
+        assert_eq!(rows.len(), 5);
+        assert_eq!(rows[2].key, range_key(leaf, 200..250));
+        assert_eq!(rows[3].key, range_key(leaf, 250..300));
+        assert_eq!(rows[3].state.reason, MissingReason::NotFound);
+        assert_eq!(rows[3].state.next_retry_at, at(T0 + 11 + 40));
+        let fresh = set.rows_in(&ImageRegion::Range {
+            kind: leaf,
+            heights: h(300..350),
+        });
+        assert_eq!(fresh[0].state.failed_probes, 1);
+        assert_eq!(alerting(&set, T0 + 100), [range_key(leaf, 100..150)]);
+    }
+
+    #[test]
+    fn a_failure_in_the_middle_of_404s_on_a_point_row_keeps_it_alerting() {
+        let mut set = MissingSet::new(None);
+        let kind = PointKind::LcLeafProof;
+        let not_found = missing(NotServed::NotFound);
+        let key = RowKey::Point {
+            kind,
+            height: Height(99),
+        };
+        repeat(&mut set, &point_obs(kind, 99, not_found), 3, T0);
+
+        let failure = missing(NotServed::Failed(server_error()));
+        observe(&mut set, point_obs(kind, 99, failure), T0 + 3);
+        let row = set.rows().next().unwrap();
+        assert_eq!(row.state.reason, MissingReason::NotFound);
         assert_eq!(
-            alerting(&set, T0 + 100),
-            [RowKey::Range {
-                kind: leaf,
-                heights: h(100..300)
-            }]
+            (row.state.failed_probes, row.state.first_missing_at),
+            (3, at(T0))
         );
+        assert_eq!(row.state.next_retry_at, at(T0 + 3 + 40));
+        assert!(set.due(at(T0 + 42), 10).is_empty());
+        assert_eq!(alerting(&set, T0 + 100), std::slice::from_ref(&key));
+
+        observe(&mut set, point_obs(kind, 99, not_found), T0 + 4);
+        let row = set.rows().next().unwrap();
+        assert_eq!(
+            (row.state.failed_probes, row.state.first_missing_at),
+            (4, at(T0))
+        );
+        assert_eq!(row.state.retry_delay, Duration::from_secs(60));
+        assert_eq!(alerting(&set, T0 + 100), [key]);
+    }
+
+    #[test]
+    fn a_known_gap_that_ends_in_a_failed_tail_keeps_its_404_row() {
+        let mut set = MissingSet::new(None);
+        let leaf = RangeKind::Leaf;
+        repeat(&mut set, &gap_obs(leaf, 100..200), 3, T0);
+
+        let tail = (100..200, Unconfirmed::Failed(server_error()));
+        observe(
+            &mut set,
+            refined_obs(leaf, 100..200, &[], Some(tail)),
+            T0 + 3,
+        );
+        let rows: Vec<_> = set.rows().collect();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].state.reason, MissingReason::NotFound);
+        assert_eq!(rows[0].state.failed_probes, 3);
+        assert_eq!(rows[0].state.next_retry_at, at(T0 + 3 + 40));
+        assert_eq!(alerting(&set, T0 + 100).len(), 1);
+
+        observe(&mut set, gap_obs(leaf, 100..200), T0 + 4);
+        let rows: Vec<_> = set.rows().collect();
+        assert_eq!(
+            (rows[0].state.failed_probes, rows[0].state.first_missing_at),
+            (4, at(T0))
+        );
+        assert_eq!(alerting(&set, T0 + 100).len(), 1);
+    }
+
+    #[test]
+    fn a_failed_tail_over_a_404_row_and_open_heights_splits_them() {
+        let mut set = MissingSet::new(None);
+        let leaf = RangeKind::Leaf;
+        observe(&mut set, gap_obs(leaf, 120..140), T0);
+        let tail = (100..200, Unconfirmed::Failed(server_error()));
+        observe(
+            &mut set,
+            refined_obs(leaf, 100..200, &[], Some(tail)),
+            T0 + 1,
+        );
+        let rows: Vec<_> = set.rows().collect();
+        let reasons: Vec<_> = rows
+            .iter()
+            .map(|row| (row.key.units(), row.state.reason == MissingReason::NotFound))
+            .collect();
+        assert_eq!(
+            reasons,
+            [(100..120, false), (120..140, true), (140..200, false)]
+        );
+        assert_eq!(rows[1].state.failed_probes, 1);
     }
 
     /// Keys of the rows that alert at `secs`.
@@ -1790,7 +1956,22 @@ mod tests {
         },
         Forget(u64),
         Advance(u64),
-        Retry(bool),
+        Retry(RetryKind),
+    }
+
+    /// What a retry of the first due probe finds.
+    #[derive(Clone, Copy, Debug)]
+    enum RetryKind {
+        /// A request fails.
+        Failed,
+        /// The range is an exact gap again.
+        Gap,
+        /// The search fails at once: the whole range is the unrefined tail.
+        FailedTail,
+        /// The first half is a gap and the search fails after it.
+        GapThenFailedTail,
+        /// The 404 names no height.
+        NoHeightTail,
     }
 
     fn failure() -> impl Strategy<Value = Failure> {
@@ -1847,6 +2028,16 @@ mod tests {
             })
     }
 
+    fn retry_kind() -> impl Strategy<Value = RetryKind> {
+        prop_oneof![
+            2 => Just(RetryKind::Failed),
+            4 => Just(RetryKind::Gap),
+            1 => Just(RetryKind::FailedTail),
+            1 => Just(RetryKind::GapThenFailedTail),
+            1 => Just(RetryKind::NoHeightTail),
+        ]
+    }
+
     /// Ops over heights `0..heights` and epochs `0..epochs`; a small domain repeats units often.
     fn op(heights: u64, epochs: u64) -> impl Strategy<Value = Op> {
         let range = (
@@ -1894,7 +2085,7 @@ mod tests {
             2 => epoch,
             1 => (0..heights).prop_map(Op::Forget),
             4 => prop_oneof![0u64..12, 0u64..700].prop_map(Op::Advance),
-            8 => prop_oneof![1 => Just(true), 3 => Just(false)].prop_map(Op::Retry),
+            8 => retry_kind().prop_map(Op::Retry),
         ]
     }
 
@@ -1976,6 +2167,17 @@ mod tests {
         state
     }
 
+    /// A 404 unit after a failure that is not a 404: only the retry time moves.
+    fn model_delayed(kind: DataKind, old: &RowState, now: DateTime<Utc>) -> RowState {
+        let cap = if model_confirmed(kind, old) { 60 } else { 600 };
+        let delay = (old.retry_delay.as_secs() * 2).min(cap);
+        RowState {
+            retry_delay: Duration::from_secs(delay),
+            next_retry_at: now + seconds(delay),
+            ..old.clone()
+        }
+    }
+
     impl Model {
         fn state(&self, unit: Unit) -> Option<&RowState> {
             self.units.get(&unit).map(|(state, _)| state)
@@ -2025,8 +2227,21 @@ mod tests {
                 self.units.remove(&(kind, unit));
                 return;
             };
-            let olds = self.states_in(kind, unit..unit + 1);
-            let state = model_state(kind, &olds, not_served.into(), now);
+            let old = self.state((kind, unit)).cloned();
+            let state = match old {
+                Some(old)
+                    if old.reason == MissingReason::NotFound
+                        && not_served != NotServed::NotFound =>
+                {
+                    model_delayed(kind, &old, now)
+                },
+                _ => model_state(
+                    kind,
+                    &old.into_iter().collect::<Vec<_>>(),
+                    not_served.into(),
+                    now,
+                ),
+            };
             self.put((kind, unit), state, now);
         }
 
@@ -2049,43 +2264,44 @@ mod tests {
                         .clone()
                         .map(|unit| self.state((kind, unit)).cloned())
                         .collect();
-                    // One unconfirmed state over the whole range backs off; confirmed 404 rows stay
-                    // as they are; units without a row get a fresh one.
+                    // A 404 unit only moves its retry time. One unconfirmed state over the whole
+                    // range backs off; other unconfirmed units stay; units without a row are new.
                     let backs_off = states[0].as_ref().is_some_and(|first| {
                         first.reason != MissingReason::NotFound
                             && states.iter().all(|s| s.as_ref() == Some(first))
                     });
                     for (unit, old) in range.zip(states) {
-                        match old {
-                            Some(old) if backs_off => {
-                                let state = model_state(kind, &[old], reason, now);
-                                self.put((kind, unit), state, now);
+                        let state = match old {
+                            Some(old) if old.reason == MissingReason::NotFound => {
+                                model_delayed(kind, &old, now)
                             },
-                            None => {
-                                self.put((kind, unit), model_state(kind, &[], reason, now), now)
-                            },
-                            Some(_) => {},
-                        }
+                            Some(old) if backs_off => model_state(kind, &[old], reason, now),
+                            Some(_) => continue,
+                            None => model_state(kind, &[], reason, now),
+                        };
+                        self.put((kind, unit), state, now);
                     }
                 },
                 RangeOutcome::Refined(search) => {
-                    let gaps = search
-                        .gaps
-                        .iter()
-                        .map(|gap| (gap.start.0..gap.end.0, MissingReason::NotFound));
-                    let tail = search.tail.iter().map(|tail| {
-                        (
-                            tail.heights.start.0..tail.heights.end.0,
-                            MissingReason::Unconfirmed(tail.reason),
-                        )
-                    });
-                    let new: Vec<_> = gaps
-                        .chain(tail)
-                        .map(|(piece, reason)| {
+                    let mut new: Vec<(Range<u64>, RowState)> = Vec::new();
+                    for gap in &search.gaps {
+                        let piece = gap.start.0..gap.end.0;
+                        let olds = self.states_in(kind, piece.clone());
+                        new.push((
+                            piece,
+                            model_state(kind, &olds, MissingReason::NotFound, now),
+                        ));
+                    }
+                    if let Some(tail) = &search.tail {
+                        let piece = tail.heights.start.0..tail.heights.end.0;
+                        let reason = MissingReason::Unconfirmed(tail.reason);
+                        if matches!(tail.reason, Unconfirmed::Failed(_)) {
+                            new.extend(self.failed_tail(kind, piece, reason, now));
+                        } else {
                             let olds = self.states_in(kind, piece.clone());
-                            (piece, model_state(kind, &olds, reason, now))
-                        })
-                        .collect();
+                            new.push((piece, model_state(kind, &olds, reason, now)));
+                        }
+                    }
                     for unit in range {
                         self.units.remove(&(kind, unit));
                     }
@@ -2096,6 +2312,49 @@ mod tests {
                     }
                 },
             }
+        }
+
+        /// The units of a failed tail: 404 units keep their state with the retry time moved, each
+        /// maximal run of the other units continues the states it covers.
+        fn failed_tail(
+            &self,
+            kind: DataKind,
+            tail: Range<u64>,
+            reason: MissingReason,
+            now: DateTime<Utc>,
+        ) -> Vec<(Range<u64>, RowState)> {
+            let is_404 = |unit: u64| {
+                self.state((kind, unit))
+                    .is_some_and(|state| state.reason == MissingReason::NotFound)
+            };
+            let mut pieces = Vec::new();
+            let mut run_start = None;
+            for unit in tail.clone() {
+                if is_404(unit) {
+                    if let Some(start) = run_start.take() {
+                        pieces.push(self.continued_run(kind, start..unit, reason, now));
+                    }
+                    let kept = self.state((kind, unit)).unwrap();
+                    pieces.push((unit..unit + 1, model_delayed(kind, kept, now)));
+                } else if run_start.is_none() {
+                    run_start = Some(unit);
+                }
+            }
+            if let Some(start) = run_start {
+                pieces.push(self.continued_run(kind, start..tail.end, reason, now));
+            }
+            pieces
+        }
+
+        fn continued_run(
+            &self,
+            kind: DataKind,
+            run: Range<u64>,
+            reason: MissingReason,
+            now: DateTime<Utc>,
+        ) -> (Range<u64>, RowState) {
+            let olds = self.states_in(kind, run.clone());
+            (run, model_state(kind, &olds, reason, now))
         }
 
         fn forget_below(&mut self, window_start: u64) {
@@ -2161,16 +2420,27 @@ mod tests {
         (row.key.kind(), row.key.first_unit())
     }
 
-    /// Builds the observation of an op, resolving `Retry` against `due`.
-    fn observation_of(op: &Op, set: &MissingSet, now: DateTime<Utc>) -> Option<Observation> {
-        Some(match op {
+    /// What one op does to the set.
+    enum Step {
+        Advance(u64),
+        Update(MissingUpdate),
+        /// Nothing is due to retry.
+        Skip,
+    }
+
+    /// The step of an op, resolving `Retry` against `due`.
+    fn step_of(op: &Op, set: &MissingSet, now: DateTime<Utc>) -> Step {
+        let observation = match op {
+            Op::Advance(secs) => return Step::Advance(*secs),
+            Op::Forget(window_start) => {
+                return Step::Update(MissingUpdate::ForgetBelow(Height(*window_start)));
+            },
             Op::Range {
                 kind,
                 start,
                 len,
                 outcome,
             } => {
-                let heights = h(*start..start + len);
                 let outcome = match outcome {
                     RelOutcome::Present => RangeOutcome::Present,
                     RelOutcome::Failed(f) => RangeOutcome::Failed(*f),
@@ -2187,7 +2457,7 @@ mod tests {
                 };
                 Observation::Range {
                     kind: *kind,
-                    heights,
+                    heights: h(*start..start + len),
                     outcome,
                 }
             },
@@ -2201,43 +2471,77 @@ mod tests {
                 epoch,
                 outcome,
             } => epoch_obs(*kind, *epoch, *outcome),
-            Op::Retry(failed) => {
-                let probe = set.due(now, 20).into_iter().next()?;
-                let unit = if *failed {
-                    UnitOutcome::Missing(NotServed::Failed(Failure::Transport))
-                } else {
-                    UnitOutcome::Missing(NotServed::NotFound)
-                };
-                match probe {
-                    Probe::Range { kind, heights } => {
-                        let outcome = if *failed {
-                            RangeOutcome::Failed(Failure::Transport)
-                        } else {
-                            RangeOutcome::Refined(GapSearch {
-                                gaps: vec![heights.clone()],
-                                tail: None,
-                            })
-                        };
-                        Observation::Range {
+            Op::Retry(retry) => match set.due(now, 20).into_iter().next() {
+                Some(probe) => retry_observation(probe, *retry),
+                None => return Step::Skip,
+            },
+        };
+        Step::Update(MissingUpdate::Observed(observation))
+    }
+
+    /// The observation of a retried probe.
+    fn retry_observation(probe: Probe, retry: RetryKind) -> Observation {
+        let transport = Failure::Transport;
+        let unit = match retry {
+            RetryKind::Failed => UnitOutcome::Missing(NotServed::Failed(transport)),
+            _ => UnitOutcome::Missing(NotServed::NotFound),
+        };
+        match probe {
+            Probe::Range { kind, heights } => {
+                let middle = Height((heights.start.0 + heights.end.0).div_ceil(2));
+                let tail = |heights, reason| Some(Tail { heights, reason });
+                let (gaps, tail) = match retry {
+                    RetryKind::Failed => {
+                        let outcome = RangeOutcome::Failed(transport);
+                        return Observation::Range {
                             kind,
                             heights,
                             outcome,
-                        }
+                        };
                     },
-                    Probe::Point { kind, height } => Observation::Point {
-                        kind,
-                        height,
-                        outcome: unit,
+                    RetryKind::Gap => (vec![heights.clone()], None),
+                    RetryKind::FailedTail => (
+                        vec![],
+                        tail(heights.clone(), Unconfirmed::Failed(transport)),
+                    ),
+                    RetryKind::GapThenFailedTail if middle < heights.end => (
+                        vec![heights.start..middle],
+                        tail(middle..heights.end, Unconfirmed::Failed(transport)),
+                    ),
+                    RetryKind::GapThenFailedTail => (vec![heights.clone()], None),
+                    RetryKind::NoHeightTail => {
+                        (vec![], tail(heights.clone(), Unconfirmed::NoHeight))
                     },
-                    Probe::Epoch { kind, epoch } => Observation::Epoch {
-                        kind,
-                        epoch,
-                        outcome: unit,
-                    },
+                };
+                let outcome = RangeOutcome::Refined(GapSearch { gaps, tail });
+                Observation::Range {
+                    kind,
+                    heights,
+                    outcome,
                 }
             },
-            Op::Forget(_) | Op::Advance(_) => return None,
-        })
+            Probe::Point { kind, height } => Observation::Point {
+                kind,
+                height,
+                outcome: unit,
+            },
+            Probe::Epoch { kind, epoch } => Observation::Epoch {
+                kind,
+                epoch,
+                outcome: unit,
+            },
+        }
+    }
+
+    /// The kind label and units a retried observation covers.
+    fn observed_units(observation: &Observation) -> (DataKind, Range<u64>) {
+        match observation {
+            Observation::Range { kind, heights, .. } => {
+                ((*kind).into(), heights.start.0..heights.end.0)
+            },
+            Observation::Point { kind, height, .. } => ((*kind).into(), height.0..height.0 + 1),
+            Observation::Epoch { kind, epoch, .. } => ((*kind).into(), epoch.0..epoch.0 + 1),
+        }
     }
 
     type Image = BTreeMap<(DataKind, u64), MissingRow>;
@@ -2476,6 +2780,25 @@ mod tests {
         Ok(())
     }
 
+    /// After a retry of a due probe, its units are gone or wait for a later retry.
+    fn check_liveness(
+        set: &MissingSet,
+        retried: &(DataKind, Range<u64>),
+        now: DateTime<Utc>,
+    ) -> Result<(), TestCaseError> {
+        let units = expand(set);
+        for unit in retried.1.clone() {
+            if let Some(state) = units.get(&(retried.0, unit)) {
+                prop_assert!(
+                    state.next_retry_at > now,
+                    "{:?} {unit} is still due",
+                    retried.0
+                );
+            }
+        }
+        Ok(())
+    }
+
     /// Runs `ops` against the set and the model, checking every invariant after each step.
     fn run_ops(ops: Vec<Op>) -> Result<(), TestCaseError> {
         let mut set = MissingSet::new(Some(EPOCH_CONFIG));
@@ -2484,23 +2807,25 @@ mod tests {
         let mut now = at(T0);
         for op in ops {
             let runs_before = model.runs().len();
-            let diff = match &op {
-                Op::Advance(secs) => {
-                    now += seconds(*secs);
+            let update = match step_of(&op, &set, now) {
+                Step::Advance(secs) => {
+                    now += seconds(secs);
                     continue;
                 },
-                Op::Forget(window_start) => {
-                    model.forget_below(*window_start);
-                    set.apply(MissingUpdate::ForgetBelow(Height(*window_start)), now)
-                },
-                op => match observation_of(op, &set, now) {
-                    Some(observation) => {
-                        model.apply(&observation, now);
-                        set.apply(MissingUpdate::Observed(observation), now)
-                    },
-                    None => continue,
-                },
+                Step::Skip => continue,
+                Step::Update(update) => update,
             };
+            let retried = match (&op, &update) {
+                (Op::Retry(_), MissingUpdate::Observed(observation)) => {
+                    Some(observed_units(observation))
+                },
+                _ => None,
+            };
+            match &update {
+                MissingUpdate::Observed(observation) => model.apply(observation, now),
+                MissingUpdate::ForgetBelow(window_start) => model.forget_below(window_start.0),
+            }
+            let diff = set.apply(update, now);
             prop_assert_eq!(
                 diff.rows_removed,
                 runs_before.saturating_sub(model.runs().len())
@@ -2515,8 +2840,45 @@ mod tests {
             check_known(&set, &model)?;
             check_listed(&set, &model, now)?;
             check_image(&set, &image)?;
+            if let Some(retried) = retried {
+                check_liveness(&set, &retried, now)?;
+            }
         }
         Ok(())
+    }
+
+    /// Runs `ops` through `PersistedMissingSet` on SQLite in memory and reloads the image after
+    /// every step.
+    fn run_ops_persisted(ops: Vec<Op>) -> Result<(), TestCaseError> {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("a runtime builds");
+        runtime.block_on(async {
+            let options = SqliteConnectOptions::from_str("sqlite::memory:").unwrap();
+            let store = Store::connect(options).await.unwrap().node("a:1");
+            let mut persisted = PersistedMissingSet::load(store.clone(), Some(EPOCH_CONFIG))
+                .await
+                .unwrap();
+            let mut now = at(T0);
+            for op in ops {
+                match step_of(&op, persisted.set(), now) {
+                    Step::Advance(secs) => now += seconds(secs),
+                    Step::Skip => {},
+                    Step::Update(update) => {
+                        persisted.apply(update, now).await.unwrap();
+                    },
+                }
+                let loaded = PersistedMissingSet::load(store.clone(), Some(EPOCH_CONFIG))
+                    .await
+                    .expect("the image loads");
+                prop_assert_eq!(
+                    loaded.set().rows().collect::<Vec<_>>(),
+                    persisted.set().rows().collect::<Vec<_>>()
+                );
+            }
+            Ok(())
+        })
     }
 
     proptest! {
@@ -2531,6 +2893,15 @@ mod tests {
         #[test]
         fn repeated_probes_match_the_per_unit_model(ops in vec(op(110, 3), 1..60)) {
             run_ops(ops)?;
+        }
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(32))]
+
+        #[test]
+        fn the_persisted_image_reloads_after_every_step(ops in vec(op(110, 3), 1..40)) {
+            run_ops_persisted(ops)?;
         }
     }
 }

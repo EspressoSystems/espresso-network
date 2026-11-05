@@ -201,6 +201,11 @@ impl Probe {
         }
     }
 
+    /// Whether the node may wait for blocks before answering: a range over several heights.
+    pub fn waits_server_side(&self) -> bool {
+        matches!(self, Self::Range { heights, .. } if height_count(heights) > 1)
+    }
+
     /// Route of the request, as at HEAD; a point probe of height `h` uses `h` where HEAD used
     /// `end - 1`.
     pub fn route(&self) -> String {
@@ -242,8 +247,10 @@ impl EpochConfig {
         Epoch(block.0.div_ceil(self.epoch_height).max(1))
     }
 
-    /// The block `kind` of `epoch` is built from: `(epoch - root_lag)` saturating, times
-    /// `epoch_height`; `None` on overflow. The only epoch to block mapping.
+    /// The block `kind` of `epoch` is probed with: `(epoch - root_lag)` saturating, times
+    /// `epoch_height`; `None` on overflow. The only epoch to block mapping. For stake tables this
+    /// is the boundary of epoch `epoch - 2`, five blocks after the root block the node builds the
+    /// table from (`root_block_in_epoch` subtracts 5).
     pub fn root_block(&self, kind: EpochKind, epoch: Epoch) -> Option<Height> {
         epoch
             .0

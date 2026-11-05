@@ -30,17 +30,17 @@ cargo run -p query-watchdog -- --nodes https://query.decaf.testnet.espresso.netw
 
 ## Options
 
-| Flag                    | Env (`ESPRESSO_QUERY_WATCHDOG_`) | Default                                                                                                                     |
-| ----------------------- | -------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
-| `--nodes`               | `NODES`                          | required, comma-separated base URLs without `/v1`, path ends with `/`                                                       |
-| `--db-path`             | `DB_PATH`                        | platform data directory, `state.sqlite` (Linux: `~/.local/share/query-watchdog/state.sqlite`); an error when there is none  |
-| `--port`                | `PORT`                           | 8080                                                                                                                        |
-| `--sweep-interval`      | `SWEEP_INTERVAL`                 | 1 week, time from one sweep start to the next                                                                               |
-| `--sweep-once`          | `SWEEP_ONCE`                     | off; sweep once, starting at once, then only follow the tip (`--sweep-interval` is ignored; a restart does not sweep again) |
-| `--request-interval`    | `REQUEST_INTERVAL`               | 200ms, wait before each request of one node                                                                                 |
-| `--retention-blocks`    | `RETENTION_BLOCKS`               | absent: archive, sweep `[0, tip)`; N: sweep `[tip - N, tip - 10)`, start rounded up to a multiple of 100                    |
-| `--alert-missing-after` | `ALERT_MISSING_AFTER`            | 60s, minimum age of missing data for the alert                                                                              |
-| `--reset`               | `RESET`                          | off; deletes the stored state at startup and always logs a WARN                                                             |
+| Flag                    | Env (`ESPRESSO_QUERY_WATCHDOG_`) | Default                                                                                                                                                                                                                         |
+| ----------------------- | -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--nodes`               | `NODES`                          | required, comma-separated base URLs without `/v1`, path ends with `/`                                                                                                                                                           |
+| `--db-path`             | `DB_PATH`                        | platform data directory, `state.sqlite` (Linux: `~/.local/share/query-watchdog/state.sqlite`); an error when there is none                                                                                                      |
+| `--port`                | `PORT`                           | 8080                                                                                                                                                                                                                            |
+| `--sweep-interval`      | `SWEEP_INTERVAL`                 | 1 week (at most 1 year), time from one sweep start to the next                                                                                                                                                                  |
+| `--sweep-once`          | `SWEEP_ONCE`                     | off; sweep once, then only follow the tip (`--sweep-interval` is ignored; a node not yet `done`, a `waiting` one from an earlier `--sweep-interval` run included, starts its one sweep at once; a restart does not sweep again) |
+| `--request-interval`    | `REQUEST_INTERVAL`               | 200ms, wait before each request of one node                                                                                                                                                                                     |
+| `--retention-blocks`    | `RETENTION_BLOCKS`               | absent: archive, sweep `[0, tip)`; N: sweep `[tip - N, tip - 10)`, start rounded up to a multiple of 100                                                                                                                        |
+| `--alert-missing-after` | `ALERT_MISSING_AFTER`            | 60s (at most 1 year), minimum age of missing data for the alert                                                                                                                                                                 |
+| `--reset`               | `RESET`                          | off; deletes the stored state at startup and always logs a WARN                                                                                                                                                                 |
 
 ## Checked
 
@@ -59,12 +59,16 @@ Per 100-height chunk (follow stays 10 blocks behind the tip, sweep over the wind
   height from the 404 message, then galloping and binary search over single heights find the end of the gap, repeated to
   the end of the range. `lc_leaf_proof` and `aggregate` probe the last height of the chunk and count one height per
   missing row, per-epoch kinds one epoch.
-- Missing ranges are re-probed with a delay doubling from 5 s up to 600 s. A range that qualifies for alerting (last
-  failure a 404, at least 3 failed probes) is capped at 60 s, so a refilled range is noticed within a minute.
-- A stake table of epoch `e` is probed with the chunk holding block `(e - 2) * epoch_height`, the epoch root the node
-  builds it from; a state cert with the chunk holding `e * epoch_height`. The alert margin below uses the same block.
-- The sweep covers the window up to 10 blocks below the tip (follow covers the rest) and pauses while the node's last
-  probe failed with other than 404 (500, timeout, transport); follow and retries go on.
+- Missing ranges are re-probed with a delay doubling from 5 s up to 600 s. A range established by a 404 with at least 3
+  failed probes (alerting kinds) is capped at 60 s, so a refilled range is noticed within a minute. A later 500 or
+  timeout on such a row only moves its retry time (the delay doubles under the cap); its reason, age and failed probe
+  count stay.
+- A stake table of epoch `e` is probed with the chunk holding block `(e - 2) * epoch_height`, the epoch boundary five
+  blocks after the root block the node builds it from (`root_block_in_epoch` subtracts 5); a state cert with the chunk
+  holding `e * epoch_height`. The alert margin below uses the same block.
+- The sweep covers the window up to 10 blocks below the tip (follow covers the rest). It pauses while the last follow or
+  sweep chunk had a request fail with other than 404 (500, timeout, transport); the next fully answered chunk resumes
+  it. While paused it sends one chunk a minute to test the node. Follow and retries go on.
 - Gauges for the merklized state head lag and follow lag are exported.
 
 ## Log levels
@@ -81,8 +85,8 @@ The alert line `missing data` has the fields `node`, `kind`, `missing`, `oldest_
 `range_start`, `range_end` and `url` (the GET URL of the oldest qualifying range). It is logged at most once per node
 and kind per minute, for the oldest row of the kind that meets all of:
 
-- the last failure was a 404 (for `leaf`, `block`, `vid_common` one that named a height, so the range is exact); 500,
-  timeout and transport failures never qualify
+- the row was established by a 404 (for `leaf`, `block`, `vid_common` one that named a height, so the range is exact); a
+  later 500, timeout or transport failure only delays its retries and does not stop the alert
 - at least 3 consecutive failed probes
 - first missing at least `--alert-missing-after` ago
 - not within 10 blocks of the tip (per-epoch kinds: the block the object depends on, see above, is at least 10 below the
@@ -125,17 +129,17 @@ task resumes where the old one stopped.
 - The page shows what each node watch last published, so its ages are as of that publish, at most one loop iteration
   old. Before a node has started it reads `not started`.
 
-- Archive full sweep is slow: about 100 / (5 x (`request_interval` + response time)) heights/s, about 46/s at 200 ms.
-  The rate holds for clean chunks. Each gap in a range kind adds a HEAD, a GET and about 2 x log2(gap length)
-  single-height probes. Sweeps then run back to back. The tip is covered by follow in real time. The page ETA and
-  `sweep_eta_seconds` show live numbers.
+- Archive full sweep is slow: each 100-height chunk costs 5 probes plus the epoch probes whose block lies in it, each
+  `request_interval` plus response time, and every loop iteration also spends time on follow and retries. Each gap in a
+  range kind adds a HEAD, a GET and about 2 x log2(gap length) single-height probes. The tip is covered by follow in
+  real time. The page ETA and `sweep_eta_seconds` show the live rate.
 - Probes start fetches on the watched node, so the watchdog also repairs. Missing age means "not fetchable for that
   long".
 - Exact gaps assume one contiguous gap per search step: holes inside a gap are counted as missing up to the first
   present height found. A failure other than 404 (500, timeout, transport), or a 404 message that does not read
   `<kind> <height> not found`, leaves the rest of the range at chunk level, an upper bound. A retry of an exact gap
-  probes its first and last height and keeps the whole row while both are missing: heights repaired in the middle stay
-  counted, and the row keeps its age and can still alert.
+  probes the first and the last height of each retried piece of at most 100 heights and keeps the piece while both are
+  missing: heights repaired in the middle stay counted, and the row keeps its age and can still alert.
 - Any non-200 counts as missing (404, 500, timeout, transport). An overloaded or unreachable node shows as missing data.
   `fetch_errors_total{status}` separates the causes.
 - Old-epoch `stake_table` probes return 500 and start a stake-table catchup on the node. They resolve within about 20 s.

@@ -26,11 +26,11 @@ use crate::{
 /// Pacing shared by all node watches.
 #[derive(Clone, Debug, Args)]
 pub struct WatchOptions {
-    /// Time from one sweep start to the next.
+    /// Time from one sweep start to the next; at most 1 year.
     #[arg(
         long,
         env = "ESPRESSO_QUERY_WATCHDOG_SWEEP_INTERVAL",
-        value_parser = parse_chrono_duration,
+        value_parser = parse_year_bounded_duration,
         default_value = "1week"
     )]
     pub sweep_interval: Duration,
@@ -55,11 +55,12 @@ pub struct WatchOptions {
     )]
     pub retention_blocks: Option<u64>,
     /// Minimum age of missing data for the alert (ERROR on target `query_watchdog::alert`, once a
-    /// minute per node and kind). 60s leaves room for retries at about 5, 15 and 35 s first.
+    /// minute per node and kind); at most 1 year. 60s leaves room for retries at about 5, 15 and
+    /// 35 s first.
     #[arg(
         long,
         env = "ESPRESSO_QUERY_WATCHDOG_ALERT_MISSING_AFTER",
-        value_parser = parse_chrono_duration,
+        value_parser = parse_year_bounded_duration,
         default_value = "60s"
     )]
     pub alert_missing_after: Duration,
@@ -74,8 +75,7 @@ impl WatchOptions {
             })
     }
 
-    /// `sweep_interval` as a chrono delta; validated when the option is parsed. `alert_missing_after`
-    /// is validated the same way.
+    /// `sweep_interval` as a chrono delta; at most a year, checked when the option is parsed.
     pub fn sweep_interval_delta(&self) -> TimeDelta {
         TimeDelta::from_std(self.sweep_interval).expect("sweep_interval is checked at parse time")
     }
@@ -97,11 +97,17 @@ impl WatchOptions {
     }
 }
 
-/// Parses a humantime duration and checks that it converts to a chrono `TimeDelta`.
-fn parse_chrono_duration(text: &str) -> Result<Duration, String> {
-    let interval = humantime::parse_duration(text).map_err(|error| error.to_string())?;
-    TimeDelta::from_std(interval).map_err(|error| error.to_string())?;
-    Ok(interval)
+/// The longest `--sweep-interval` and `--alert-missing-after`: one year (humantime's `year`).
+/// Bounded, so adding either to a time cannot overflow.
+const MAX_OPTION_DURATION: Duration = Duration::from_secs(31_557_600);
+
+/// Parses a humantime duration of at most `MAX_OPTION_DURATION`.
+fn parse_year_bounded_duration(text: &str) -> Result<Duration, String> {
+    let duration = humantime::parse_duration(text).map_err(|error| error.to_string())?;
+    if duration > MAX_OPTION_DURATION {
+        return Err(format!("{text} is longer than 1 year"));
+    }
+    Ok(duration)
 }
 
 /// The part of `v1/config/hotshot` the watchdog reads.
@@ -626,7 +632,7 @@ impl<C: Clock> NodeWatch<C> {
         self.watchdog
             .system
             .http
-            .head(&self.node, &probe.route())
+            .head(&self.node, &probe.route(), probe.waits_server_side())
             .await
     }
 
@@ -901,6 +907,7 @@ impl<C: Clock> Presence for RangeProber<'_, C> {
 mod tests {
     use std::{
         collections::BTreeSet,
+        fmt::Debug,
         str::FromStr,
         sync::{
             Mutex,
@@ -918,13 +925,19 @@ mod tests {
     use prometheus::Registry;
     use sqlx::sqlite::SqliteConnectOptions;
     use tokio::net::TcpListener;
+    use tracing::{Event, Subscriber, field::Field};
+    use tracing_subscriber::{
+        Layer,
+        layer::{Context, SubscriberExt},
+    };
     use url::Url;
 
     use super::*;
     use crate::{
-        kind::DataKind,
+        kind::{DataKind, PointKind},
         missing::RowKey,
         node::NodeHttp,
+        outcome::MissingReason,
         schedule::{CompletedSweep, RunningSweep},
         system::ManualClock,
         view::{self, ViewReceiver},
@@ -1178,6 +1191,9 @@ mod tests {
         fake.failing.store(true, Ordering::SeqCst);
         watch.check_probe(&gap).await.unwrap();
         assert_eq!(alerting_ranges(&watch), [h(750..760)]);
+        let row = watch.missing.set().rows().next().unwrap();
+        assert_eq!(row.state.reason, MissingReason::NotFound);
+        assert_eq!(row.state.failed_probes, 3);
         assert_eq!(watch.errors_since_summary.get("500"), Some(&1));
         fake.failing.store(false, Ordering::SeqCst);
 
@@ -1188,12 +1204,165 @@ mod tests {
         assert_eq!(leaf_missing(&watch), 5);
         let rest = leaf(750..755);
         assert_eq!(alerting_ranges(&watch), [h(750..755)]);
+        let row = watch.missing.set().rows().next().unwrap();
+        assert_eq!(
+            row.state.failed_probes, 4,
+            "the 500 did not break the run of 404s"
+        );
 
         // The rest is filled: the retry clears the row and the alert.
         fake.missing.lock().unwrap().clear();
         watch.check_probe(&rest).await.unwrap();
         assert_eq!(leaf_missing(&watch), 0);
         assert!(alerting_ranges(&watch).is_empty());
+    }
+
+    /// Alert events collected from the `query_watchdog::alert` target.
+    #[derive(Clone, Default)]
+    struct AlertEvents(Arc<Mutex<Vec<BTreeMap<String, String>>>>);
+
+    #[derive(Default)]
+    struct Fields(BTreeMap<String, String>);
+
+    impl tracing::field::Visit for Fields {
+        fn record_debug(&mut self, field: &Field, value: &dyn Debug) {
+            self.0.insert(field.name().to_owned(), format!("{value:?}"));
+        }
+
+        fn record_str(&mut self, field: &Field, value: &str) {
+            self.0.insert(field.name().to_owned(), value.to_owned());
+        }
+    }
+
+    impl<S: Subscriber> Layer<S> for AlertEvents {
+        fn on_event(&self, event: &Event<'_>, _ctx: Context<'_, S>) {
+            if event.metadata().target() == "query_watchdog::alert" {
+                let mut fields = Fields::default();
+                event.record(&mut fields);
+                self.0.lock().unwrap().push(fields.0);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn the_summary_logs_one_alert_per_confirmed_gap() {
+        let (node, _fake) = serve_fake(750..760).await;
+        let events = AlertEvents::default();
+        let _guard =
+            tracing::subscriber::set_default(tracing_subscriber::registry().with(events.clone()));
+        let harness = Harness::new(None).await;
+        let (mut watch, _view) = harness.start(node.clone()).await;
+        watch.check_probe(&leaf(700..800)).await.unwrap();
+        for _ in 0..2 {
+            watch.check_probe(&leaf(750..760)).await.unwrap();
+        }
+
+        harness.clock.advance(SUMMARY_INTERVAL);
+        watch.summarize_if_due().await.unwrap();
+
+        let events = events.0.lock().unwrap().clone();
+        assert_eq!(events.len(), 1, "{events:?}");
+        let event = &events[0];
+        let expected = [
+            ("node", node.label.clone()),
+            ("kind", "leaf".to_owned()),
+            ("missing", "10".to_owned()),
+            ("failed_probes", "3".to_owned()),
+            ("range_start", "750".to_owned()),
+            ("range_end", "760".to_owned()),
+            (
+                "url",
+                node.route_url("v1/availability/leaf/750/760").to_string(),
+            ),
+        ];
+        for (name, value) in expected {
+            assert_eq!(event.get(name), Some(&value), "{name} in {event:?}");
+        }
+    }
+
+    /// Rows of an aggregate point probe at heights `1..=count`, all due after five seconds.
+    async fn add_due_points(watch: &mut NodeWatch<ManualClock>, count: u64) {
+        for height in 1..=count {
+            let observation = Observation::Point {
+                kind: PointKind::LcLeafProof,
+                height: Height(height),
+                outcome: UnitOutcome::Missing(NotServed::NotFound),
+            };
+            let now = watch.clock().now();
+            watch
+                .missing
+                .apply(MissingUpdate::Observed(observation), now)
+                .await
+                .unwrap();
+        }
+        watch.clock().sleep(Duration::from_secs(5)).await;
+    }
+
+    #[tokio::test]
+    async fn the_retries_stop_at_their_budget() {
+        let (node, _fake) = serve_fake([]).await;
+        let harness = Harness::with_options(WatchOptions {
+            sweep_interval: Duration::from_secs(1),
+            sweep_once: false,
+            request_interval: Duration::from_secs(2),
+            retention_blocks: None,
+            alert_missing_after: Duration::ZERO,
+        })
+        .await;
+        let (mut watch, _view) = harness.start(node).await;
+        add_due_points(&mut watch, 10).await;
+
+        // 2 s per request against a budget of 5 s: probes at 0, 2 and 4 s.
+        assert_eq!(watch.retry_step().await.unwrap(), 3);
+        assert_eq!(
+            watch.missing.set().rows().count(),
+            7,
+            "present points are cleared"
+        );
+    }
+
+    #[tokio::test]
+    async fn the_retries_run_in_batches_until_nothing_is_due() {
+        let (node, _fake) = serve_fake([]).await;
+        let harness = Harness::new(None).await;
+        let (mut watch, _view) = harness.start(node).await;
+        let count = RETRIES_PER_BATCH as u64 + 5;
+        add_due_points(&mut watch, count).await;
+
+        assert_eq!(watch.retry_step().await.unwrap() as u64, count);
+        assert_eq!(watch.missing.set().rows().count(), 0);
+    }
+
+    #[tokio::test]
+    async fn a_500_on_a_404_row_is_retried_once_and_then_waits() {
+        let (node, fake) = serve_fake(750..760).await;
+        let harness = Harness::with_options(WatchOptions {
+            sweep_interval: Duration::from_secs(1),
+            sweep_once: false,
+            request_interval: Duration::from_secs(1),
+            retention_blocks: None,
+            alert_missing_after: Duration::ZERO,
+        })
+        .await;
+        let (mut watch, _view) = harness.start(node).await;
+        watch.check_probe(&leaf(700..800)).await.unwrap();
+        for _ in 0..2 {
+            watch.check_probe(&leaf(750..760)).await.unwrap();
+        }
+        harness.clock.advance(Duration::from_secs(120));
+
+        fake.failing.store(true, Ordering::SeqCst);
+        assert_eq!(watch.retry_step().await.unwrap(), 1);
+        assert_eq!(
+            watch.retry_step().await.unwrap(),
+            0,
+            "the row waits for its next retry"
+        );
+        let row = watch.missing.set().rows().next().unwrap();
+        assert_eq!(row.state.reason, MissingReason::NotFound);
+        assert_eq!(row.state.failed_probes, 3);
+        assert!(row.state.next_retry_at > watch.clock().now());
+        assert_eq!(alerting_ranges(&watch), [h(750..760)]);
     }
 
     #[tokio::test]
@@ -1408,9 +1577,11 @@ mod tests {
     }
 
     #[test]
-    fn durations_beyond_chrono_are_rejected_at_parse_time() {
-        assert!(parse_chrono_duration("60s").is_ok());
-        assert!(parse_chrono_duration("400000000years").is_err());
+    fn durations_above_a_year_are_rejected_at_parse_time() {
+        assert!(parse_year_bounded_duration("60s").is_ok());
+        assert!(parse_year_bounded_duration("1year").is_ok());
+        assert!(parse_year_bounded_duration("13months").is_err());
+        assert!(parse_year_bounded_duration("400000000years").is_err());
     }
 
     #[test]
