@@ -44,12 +44,27 @@ pub trait NewProtocolStorage<T: NodeType>: StorageTrait<T> {
 
     /// Load the persisted locked QC, if any.
     async fn load_high_qc2(&self) -> anyhow::Result<Option<Certificate1<T>>>;
+
+    /// Persist the own `Certificate1` of the last block of an epoch, at the
+    /// block's own view.
+    ///
+    /// A re-vote request and the next epoch's first block name it, and
+    /// nothing else carries it once the view has passed: without it a
+    /// restarted node cannot lead either. Implementations keep the latest,
+    /// ordered by epoch, then view, as a monotonic compare-and-set.
+    async fn append_boundary_qc2(&self, qc: Certificate1<T>) -> anyhow::Result<()>;
+
+    /// Load the persisted boundary certificate, if any.
+    async fn load_boundary_qc2(&self) -> anyhow::Result<Option<Certificate1<T>>>;
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum ActionKind {
     Vote,
     Propose,
+    /// A timeout vote that carries the signer's lock. Recorded before it is
+    /// sent, so that a restarted node does not vote2 at a view it timed out.
+    Timeout,
 }
 
 impl From<ActionKind> for HotShotAction {
@@ -57,6 +72,7 @@ impl From<ActionKind> for HotShotAction {
         match kind {
             ActionKind::Vote => HotShotAction::Vote,
             ActionKind::Propose => HotShotAction::Propose,
+            ActionKind::Timeout => HotShotAction::TimeoutVote,
         }
     }
 }
@@ -216,6 +232,28 @@ impl<T: NodeType, S: NewProtocolStorage<T>> Storage<T, S> {
             }
         });
         self.handles.entry(view_number).or_default().push(handle);
+    }
+
+    /// Persist the own certificate of the last block of an epoch (see
+    /// [`NewProtocolStorage::append_boundary_qc2`]). Nothing waits on it.
+    pub fn append_boundary_qc2(&mut self, qc: Certificate1<T>) {
+        let view = qc.view_number();
+        let storage = self.storage.clone();
+        // Not registered with the decided-view GC, which would abort a write
+        // still retrying once a decide passes the block: nothing else carries
+        // the certificate by then. A late write is harmless, since only a later
+        // certificate replaces the stored one.
+        self.tasks.spawn(async move {
+            loop {
+                match storage.append_boundary_qc2(qc.clone()).await {
+                    Ok(()) => return None,
+                    Err(err) => {
+                        warn!(%err, %view, "failed to append boundary qc, retrying");
+                        sleep(RETRY_DELAY).await;
+                    },
+                }
+            }
+        });
     }
 
     /// Persist the locked QC; on success emits [`StorageOutput::HighQc`], which
@@ -406,5 +444,13 @@ impl<T: NodeType> NewProtocolStorage<T> for TestStorage<T> {
 
     async fn load_high_qc2(&self) -> anyhow::Result<Option<Certificate1<T>>> {
         Ok(self.high_qc_cloned().await)
+    }
+
+    async fn append_boundary_qc2(&self, qc: Certificate1<T>) -> anyhow::Result<()> {
+        self.update_boundary_qc2(qc).await
+    }
+
+    async fn load_boundary_qc2(&self) -> anyhow::Result<Option<Certificate1<T>>> {
+        Ok(self.boundary_qc_cloned().await)
     }
 }

@@ -27,6 +27,7 @@ use hotshot_types::{
         Certificate2, LightClientStateUpdateCertificateV2, NextEpochQuorumCertificate2,
         QuorumCertificate2, UpgradeCertificate,
     },
+    simple_vote::LockView,
     traits::{node_implementation::NodeType, storage::Storage},
     vote::HasViewNumber,
 };
@@ -45,6 +46,7 @@ pub struct TestStorageState<TYPES: NodeType> {
     pub proposals: BTreeMap<ViewNumber, Proposal<TYPES, QuorumProposal<TYPES>>>,
     pub proposals2: BTreeMap<ViewNumber, Proposal<TYPES, QuorumProposal2<TYPES>>>,
     pub proposals_wrapper: BTreeMap<ViewNumber, Proposal<TYPES, QuorumProposalWrapper<TYPES>>>,
+<<<<<<< HEAD
     high_qc: Option<hotshot_types::simple_certificate::QuorumCertificate<TYPES>>,
     high_qc2: Option<hotshot_types::simple_certificate::QuorumCertificate2<TYPES>>,
     eqc: Option<(
@@ -53,9 +55,22 @@ pub struct TestStorageState<TYPES: NodeType> {
     )>,
     next_epoch_high_qc2:
         Option<hotshot_types::simple_certificate::NextEpochQuorumCertificate2<TYPES>>,
+||||||| parent of d43330f25 (Store the boundary certificate, order locks by epoch (#5305))
+    high_qc2: Option<QuorumCertificate2<TYPES>>,
+=======
+    high_qc2: Option<QuorumCertificate2<TYPES>>,
+    /// The new protocol's latest epoch boundary block's own certificate.
+    boundary_qc2: Option<QuorumCertificate2<TYPES>>,
+>>>>>>> d43330f25 (Store the boundary certificate, order locks by epoch (#5305))
     action: ViewNumber,
     action_log: Vec<(ViewNumber, HotShotAction)>,
+<<<<<<< HEAD
     epoch: Option<EpochNumber>,
+||||||| parent of d43330f25 (Store the boundary certificate, order locks by epoch (#5305))
+=======
+    /// Where in `action_log` each restart of the node fell.
+    restarts: Vec<usize>,
+>>>>>>> d43330f25 (Store the boundary certificate, order locks by epoch (#5305))
     state_certs: BTreeMap<EpochNumber, LightClientStateUpdateCertificateV2<TYPES>>,
     drb_results: BTreeMap<EpochNumber, DrbResult>,
     drb_inputs: BTreeMap<u64, DrbInput>,
@@ -78,9 +93,11 @@ impl<TYPES: NodeType> Default for TestStorageState<TYPES> {
             high_qc2: None,
             eqc: None,
             next_epoch_high_qc2: None,
+            boundary_qc2: None,
             action: ViewNumber::genesis(),
             action_log: Vec::new(),
             epoch: None,
+            restarts: Vec::new(),
             state_certs: BTreeMap::new(),
             drb_results: BTreeMap::new(),
             drb_inputs: BTreeMap::new(),
@@ -137,6 +154,27 @@ impl<TYPES: NodeType> TestStorage<TYPES> {
         self.inner.read().await.next_epoch_high_qc2.clone()
     }
 
+    pub async fn boundary_qc_cloned(&self) -> Option<QuorumCertificate2<TYPES>> {
+        self.inner.read().await.boundary_qc2.clone()
+    }
+
+    /// Keep `qc` as the boundary certificate if it is later than the one kept,
+    /// ordered by epoch, then view.
+    pub async fn update_boundary_qc2(&self, qc: QuorumCertificate2<TYPES>) -> Result<()> {
+        if self.should_return_err.load(Ordering::Relaxed) {
+            bail!("Failed to update boundary qc to storage");
+        }
+        let mut inner = self.inner.write().await;
+        if inner
+            .boundary_qc2
+            .as_ref()
+            .is_none_or(|kept| LockView::of(kept) < LockView::of(&qc))
+        {
+            inner.boundary_qc2 = Some(qc);
+        }
+        Ok(())
+    }
+
     pub async fn decided_upgrade_certificate(&self) -> Option<UpgradeCertificate<TYPES>> {
         self.decided_upgrade_certificate.read().await.clone()
     }
@@ -148,6 +186,26 @@ impl<TYPES: NodeType> TestStorage<TYPES> {
     /// Every action successfully recorded, in call order.
     pub async fn action_log(&self) -> Vec<(ViewNumber, HotShotAction)> {
         self.inner.read().await.action_log.clone()
+    }
+
+    /// Note that the node restarts here: actions recorded from now on belong
+    /// to its next run.
+    pub async fn mark_restart(&self) {
+        let mut inner = self.inner.write().await;
+        let at = inner.action_log.len();
+        inner.restarts.push(at);
+    }
+
+    /// The recorded actions split into the node's runs, the first run first.
+    pub async fn action_log_by_run(&self) -> Vec<Vec<(ViewNumber, HotShotAction)>> {
+        let inner = self.inner.read().await;
+        let mut runs = Vec::new();
+        let mut start = 0;
+        for &end in inner.restarts.iter().chain([&inner.action_log.len()]) {
+            runs.push(inner.action_log[start..end].to_vec());
+            start = end;
+        }
+        runs
     }
 
     pub async fn restart_view(&self) -> ViewNumber {
