@@ -1,4 +1,7 @@
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::{
+    future::Future,
+    sync::atomic::{AtomicU64, Ordering},
+};
 
 #[cfg(feature = "client")]
 use hotshot_types::traits::metrics::Histogram;
@@ -20,6 +23,10 @@ pub struct LightClientMetrics {
     pub(crate) verification_failures: Box<dyn Counter>,
     #[cfg(feature = "client")]
     pub(crate) fetch_failures: Box<dyn Counter>,
+    #[cfg(feature = "client")]
+    db_read_duration: Box<dyn Histogram>,
+    #[cfg(feature = "client")]
+    db_write_duration: Box<dyn Histogram>,
     // Older epochs are verified too, for instance when backfilling headers, and must not move
     // the gauge back.
     max_stake_table_epoch: AtomicU64,
@@ -41,6 +48,12 @@ impl LightClientMetrics {
             verification_failures: metrics.create_counter("verification_failures".into(), None),
             #[cfg(feature = "client")]
             fetch_failures: metrics.create_counter("fetch_failures".into(), None),
+            #[cfg(feature = "client")]
+            db_read_duration: metrics
+                .create_histogram("db_read_duration".into(), Some("seconds".into())),
+            #[cfg(feature = "client")]
+            db_write_duration: metrics
+                .create_histogram("db_write_duration".into(), Some("seconds".into())),
             max_stake_table_epoch: AtomicU64::new(0),
         }
     }
@@ -55,6 +68,18 @@ impl LightClientMetrics {
         }
     }
 
+    pub(crate) async fn db_read<T>(&self, op: impl Future<Output = T>) -> T {
+        #[cfg(feature = "client")]
+        let op = timed(&*self.db_read_duration, op);
+        op.await
+    }
+
+    pub(crate) async fn db_write<T>(&self, op: impl Future<Output = T>) -> T {
+        #[cfg(feature = "client")]
+        let op = timed(&*self.db_write_duration, op);
+        op.await
+    }
+
     pub(crate) fn start_catchup(&self, epochs: u64) -> CatchupBacklog<'_> {
         self.stake_table_backlog.update(epochs as i64);
         CatchupBacklog {
@@ -62,6 +87,15 @@ impl LightClientMetrics {
             remaining: epochs,
         }
     }
+}
+
+// Only with `client`, since std's clock panics on zkVM targets.
+#[cfg(feature = "client")]
+async fn timed<T>(histogram: &dyn Histogram, op: impl Future<Output = T>) -> T {
+    let started = std::time::Instant::now();
+    let out = op.await;
+    histogram.add_point(started.elapsed().as_secs_f64());
+    out
 }
 
 impl Default for LightClientMetrics {

@@ -56,10 +56,13 @@ query service has fetched through it:
   counts it.
 - `verification_failures`: upstream responses that failed a proof or commitment check.
 - `fetch_failures`: fetches of missing data by the query service through the light client that failed, for any reason.
+- `db_read_duration`, `db_write_duration`: seconds per read from and write to the light client database, including the
+  wait for a connection and, for writes, the commit.
 
 At bootstrap the light client replays stake tables from the first dynamic epoch, so `stake_table_backlog` starts at the
 number of epochs to replay and falls to 0. A backlog that stays above 0, or a rising `verification_failures`, is worth
-an alert.
+an alert. A light client database on a network filesystem such as EFS shows up as slow `db_write_duration`, since every
+SQLite commit syncs to it.
 
 ## How it works
 

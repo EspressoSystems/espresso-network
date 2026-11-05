@@ -209,7 +209,7 @@ where
     }
 
     async fn verified_block_height(&self) -> Result<u64> {
-        let latest_known = self.db.block_height().await?;
+        let latest_known = self.metrics.db_read(self.db.block_height()).await?;
         let latest_from_server = self.server.block_height().await?;
         if latest_from_server > latest_known {
             // The server claims there is a newer block than we previously knew about. Verify that
@@ -247,7 +247,7 @@ where
     where
         Q: Send + Quorum,
     {
-        let upper_bound = self.db.leaf_upper_bound(id).await?;
+        let upper_bound = self.metrics.db_read(self.db.leaf_upper_bound(id)).await?;
         let known_finalized = if let Some(upper_bound) = upper_bound {
             if leaf_matches_id(&upper_bound, id) {
                 return Ok(upper_bound);
@@ -307,8 +307,11 @@ where
 
         // first try to fetch all the leaves from the local database
         let leaves = self
-            .db
-            .get_leaves_in_range(start_height as u32, end_height as u32)
+            .metrics
+            .db_read(
+                self.db
+                    .get_leaves_in_range(start_height as u32, end_height as u32),
+            )
             .await?;
 
         if leaves.len() == end_height - start_height {
@@ -461,7 +464,11 @@ where
         }
         // Cache the verified leaves, but do not fail the fetch if caching does.
         for leaf in leaves {
-            if let Err(err) = self.db.insert_leaf(leaf.clone()).await {
+            if let Err(err) = self
+                .metrics
+                .db_write(self.db.insert_leaf(leaf.clone()))
+                .await
+            {
                 tracing::warn!(
                     "failed to cache leaf at height {}: {:#?}",
                     leaf.height(),
@@ -603,7 +610,7 @@ where
     where
         Q: Send + Quorum,
     {
-        let Some(upper_bound) = self.db.leaf_upper_bound(id).await? else {
+        let Some(upper_bound) = self.metrics.db_read(self.db.leaf_upper_bound(id)).await? else {
             // We have neither the requested header nor an upper bound for it. All we can do is fetch
             // the corresponding leaf from the server (verifying a leaf proof) and then extract the
             // header from there.
@@ -963,8 +970,10 @@ where
         // (= iter 1's target). On genesis we fetch the root at `first_dynamic - 2` (signed by
         // the genesis stake table) and use its version.
         let (lower_bound, mut stake_table, mut prev_quorum, mut epoch_root_protocol_version) =
-            if let Some((lower_bound, stake_table, stored_version, next_stored_version)) =
-                self.db.stake_table_lower_bound(epoch).await?
+            if let Some((lower_bound, stake_table, stored_version, next_stored_version)) = self
+                .metrics
+                .db_read(self.db.stake_table_lower_bound(epoch))
+                .await?
             {
                 if lower_bound == epoch {
                     tracing::debug!(%epoch, "found stake table in database");
@@ -1074,13 +1083,13 @@ where
             // `root.version()` (snapshot for `epoch + 1`, used to seed iter 1 of a future
             // catchup that resumes from this row).
             if let Err(err) = self
-                .db
-                .insert_stake_table(
+                .metrics
+                .db_write(self.db.insert_stake_table(
                     EpochNumber::new(epoch),
                     &stake_table,
                     epoch_root_protocol_version,
                     root.version(),
-                )
+                ))
                 .await
             {
                 // If this fails, we can continue with the stake table that we have in memory right
@@ -1148,7 +1157,11 @@ where
 
             // Having fetched and verified the leaf from the server, we can now cache it locally to
             // improve future requests.
-            if let Err(err) = self.db.insert_leaf(leaf.clone()).await {
+            if let Err(err) = self
+                .metrics
+                .db_write(self.db.insert_leaf(leaf.clone()))
+                .await
+            {
                 // If this fails, we can still successfully return the leaf that we have in memory right
                 // now, so this is just a warning.
                 tracing::warn!("failed to cache fetched leaf: {err:#}");
@@ -1974,6 +1987,20 @@ mod test {
                 .unwrap()
                 .sample_count(),
             6
+        );
+        assert!(
+            group
+                .get_histogram("db_read_duration")
+                .unwrap()
+                .sample_count()
+                > 0
+        );
+        assert!(
+            group
+                .get_histogram("db_write_duration")
+                .unwrap()
+                .sample_count()
+                >= 6
         );
 
         lc.quorum_for_epoch(first + 1).await.unwrap();
