@@ -264,9 +264,73 @@ pub struct Consensus<T: NodeType> {
     /// Messages constructed and accounted for in `voted_*_views` /
     /// `proposed_views`, awaiting their storage confirmations. A pending vote2
     /// also records the locked-QC view it must see persisted before release.
+<<<<<<< HEAD
     pending_vote1: BTreeMap<ViewNumber, Vote1<T>>,
     pending_vote2: BTreeMap<ViewNumber, (Vote2<T>, ViewNumber)>,
     pending_proposal: BTreeMap<ViewNumber, SignedProposal<T, Proposal<T>>>,
+||||||| parent of 1d1090d28 (Views and votes at an epoch boundary (#5311))
+    pending_vote1: BTreeMap<ViewEpoch, Vote1<T>>,
+    pending_vote2: BTreeMap<ViewEpoch, PendingVote2<T>>,
+    pending_proposal: BTreeMap<ViewEpoch, SignedProposal<T, Proposal<T>>>,
+    pending_revote: BTreeMap<ViewEpoch, ReVoteMessage<T, Validated>>,
+    pending_timeout_vote: BTreeMap<ViewNumber, PendingTimeoutVote<T>>,
+
+    /// The highest view this node has sent, or may have sent before a
+    /// restart, a lock-carrying timeout vote for.
+    ///
+    /// Under the certificate rule a node never votes2 at or before it: its
+    /// timeout vote signed a lock earlier than the commit that vote2 would help
+    /// form, and a proposal skipping that commit could use the certificate.
+    timeout_vote_bar: Option<ViewNumber>,
+
+    /// The epoch of the re-vote commit processed at each view.
+    ///
+    /// Not in `decided_views`: the next epoch may have a block of its own at
+    /// a re-vote's view.
+    revote_commits: BTreeMap<ViewNumber, EpochNumber>,
+
+    /// Validated re-vote requests by view (see [`ReVote`]).
+    revotes: BTreeMap<ViewNumber, ReVote<T>>,
+
+    /// What was requested for each re-vote view, so it is requested once.
+    revote_fetches: BTreeSet<(ViewNumber, RevoteFetch)>,
+
+    /// The payloads of timeout certificate locks this node asked for, by the
+    /// block's view and payload commitment, with the view it asked in. Each is
+    /// asked for once per view: a silent peer is replaced in the next view.
+    lock_payload_fetches: BTreeMap<(ViewNumber, VidCommitment2), ViewNumber>,
+=======
+    pending_vote1: BTreeMap<ViewEpoch, Vote1<T>>,
+    pending_vote2: BTreeMap<ViewEpoch, PendingVote2<T>>,
+    pending_proposal: BTreeMap<ViewEpoch, SignedProposal<T, Proposal<T>>>,
+    pending_revote: BTreeMap<ViewEpoch, ReVoteMessage<T, Validated>>,
+    pending_timeout_vote: BTreeMap<ViewEpoch, PendingTimeoutVote<T>>,
+
+    /// The highest view this node has sent, or may have sent before a
+    /// restart, a lock-carrying timeout vote for.
+    ///
+    /// Under the certificate rule a node never votes2 at or before it: its
+    /// timeout vote signed a lock earlier than the commit that vote2 would help
+    /// form, and a proposal skipping that commit could use the certificate.
+    timeout_vote_bar: Option<ViewNumber>,
+
+    /// The epoch of the re-vote commit processed at each view.
+    ///
+    /// Not in `decided_views`: the next epoch may have a block of its own at
+    /// a re-vote's view.
+    revote_commits: BTreeMap<ViewNumber, EpochNumber>,
+
+    /// Validated re-vote requests by view (see [`ReVote`]).
+    revotes: BTreeMap<ViewNumber, ReVote<T>>,
+
+    /// What was requested for each re-vote view, so it is requested once.
+    revote_fetches: BTreeSet<(ViewNumber, RevoteFetch)>,
+
+    /// The payloads of timeout certificate locks this node asked for, by the
+    /// block's view and payload commitment, with the view it asked in. Each is
+    /// asked for once per view: a silent peer is replaced in the next view.
+    lock_payload_fetches: BTreeMap<(ViewNumber, VidCommitment2), ViewNumber>,
+>>>>>>> 1d1090d28 (Views and votes at an epoch boundary (#5311))
 
     /// An assembled or adopted upgrade certificate, kept until a leader turn
     /// attaches it, the upgrade decides, or `decide_by` passes.
@@ -485,11 +549,124 @@ impl<T: NodeType> Consensus<T> {
         self.stored_high_qc.is_some_and(|stored| stored >= required)
     }
 
+<<<<<<< HEAD
     /// Whether the parent block counts as reconstructed for voting: either we
     /// hold its payload, or our locked QC certifies exactly this parent leaf.
     /// A lock is only ever taken on a reconstructed block, so a lock matching
     /// the parent is itself proof of reconstruction — letting a restarted node
     /// vote on the first proposal built on its restored lock.
+||||||| parent of 1d1090d28 (Views and votes at an epoch boundary (#5311))
+    /// Whether a certificate at `view` is of an epoch earlier than this node's,
+    /// under the certificate rule: one of the outgoing committee's late
+    /// re-votes, which must not move this node through the incoming
+    /// committee's views.
+    fn behind_current_epoch(&self, view: ViewNumber, epoch: EpochNumber) -> bool {
+        self.upgrade_lock.certificate_rule(view) && epoch < self.current_epoch
+    }
+
+    pub(crate) fn lock_view(&self) -> Option<LockView> {
+        self.locked_cert.as_ref().map(LockView::of)
+    }
+
+    /// The proposal a certificate at `view` over `leaf_commit` certifies, with
+    /// the view it was proposed at.
+    ///
+    /// That is `view` itself, except for a re-vote, which certifies the last
+    /// block of an epoch again at a later view.
+    fn certified_proposal(
+        &self,
+        view: ViewNumber,
+        leaf_commit: Commitment<Leaf2<T>>,
+        block_number: Option<u64>,
+    ) -> Option<(ViewNumber, &Proposal<T>)> {
+        if let Some(proposal) = self.proposals.get(view, leaf_commit) {
+            return Some((view, proposal));
+        }
+        if !block_number.is_some_and(|bn| is_last_block(bn, *self.epoch_height)) {
+            return None;
+        }
+        self.proposals
+            .latest_before(view, leaf_commit)
+            .map(|proposal| (proposal.view_number, proposal))
+    }
+
+    /// A `Certificate2` this node holds over `leaf_commit`, at `from` or later.
+    fn cert2_over(
+        &self,
+        from: ViewNumber,
+        leaf_commit: Commitment<Leaf2<T>>,
+    ) -> Option<&Certificate2<T>> {
+        self.certs2
+            .range(ViewEpoch::start(from)..)
+            .map(|(_, cert2)| cert2)
+            .find(|cert2| cert2.data.leaf_commit == leaf_commit)
+    }
+
+    /// Whether the parent block counts as reconstructed for voting: this node
+    /// holds its payload, or its lock certifies the parent leaf.
+    ///
+    /// A lock is taken only on a reconstructed block, so a restarted node can
+    /// vote on the first proposal built on its restored lock. The exception is
+    /// an epoch's last block taken from an epoch change, whose only child opens
+    /// the next epoch and needs no parent payload. The leaf, which covers the
+    /// block's view, is compared rather than the view, since a re-vote's
+    /// certificate is at a later view than its block.
+=======
+    /// Whether a certificate at `view` is of an epoch earlier than this node's,
+    /// under the certificate rule: one of the outgoing committee's late
+    /// re-votes, which this node does not lock on.
+    fn behind_current_epoch(&self, view: ViewNumber, epoch: EpochNumber) -> bool {
+        self.upgrade_lock.certificate_rule(view) && epoch < self.current_epoch
+    }
+
+    pub(crate) fn lock_view(&self) -> Option<LockView> {
+        self.locked_cert.as_ref().map(LockView::of)
+    }
+
+    /// The proposal a certificate at `view` over `leaf_commit` certifies, with
+    /// the view it was proposed at.
+    ///
+    /// That is `view` itself, except for a re-vote, which certifies the last
+    /// block of an epoch again at a later view.
+    fn certified_proposal(
+        &self,
+        view: ViewNumber,
+        leaf_commit: Commitment<Leaf2<T>>,
+        block_number: Option<u64>,
+    ) -> Option<(ViewNumber, &Proposal<T>)> {
+        if let Some(proposal) = self.proposals.get(view, leaf_commit) {
+            return Some((view, proposal));
+        }
+        if !block_number.is_some_and(|bn| is_last_block(bn, *self.epoch_height)) {
+            return None;
+        }
+        self.proposals
+            .latest_before(view, leaf_commit)
+            .map(|proposal| (proposal.view_number, proposal))
+    }
+
+    /// A `Certificate2` this node holds over `leaf_commit`, at `from` or later.
+    fn cert2_over(
+        &self,
+        from: ViewNumber,
+        leaf_commit: Commitment<Leaf2<T>>,
+    ) -> Option<&Certificate2<T>> {
+        self.certs2
+            .range(ViewEpoch::start(from)..)
+            .map(|(_, cert2)| cert2)
+            .find(|cert2| cert2.data.leaf_commit == leaf_commit)
+    }
+
+    /// Whether the parent block counts as reconstructed for voting: this node
+    /// holds its payload, or its lock certifies the parent leaf.
+    ///
+    /// A lock is taken only on a reconstructed block, so a restarted node can
+    /// vote on the first proposal built on its restored lock. The exception is
+    /// an epoch's last block taken from an epoch change, whose only child opens
+    /// the next epoch and needs no parent payload. The leaf, which covers the
+    /// block's view, is compared rather than the view, since a re-vote's
+    /// certificate is at a later view than its block.
+>>>>>>> 1d1090d28 (Views and votes at an epoch boundary (#5311))
     fn parent_reconstructed(
         &self,
         parent_view: ViewNumber,
@@ -998,9 +1175,40 @@ impl<T: NodeType> Consensus<T> {
                 self.stored_actions = self.stored_actions.split_off(&(view, ActionKind::Vote));
                 self.requested_actions =
                     self.requested_actions.split_off(&(view, ActionKind::Vote));
+<<<<<<< HEAD
                 self.pending_vote1 = self.pending_vote1.split_off(&view);
                 self.pending_vote2 = self.pending_vote2.split_off(&view);
                 self.pending_proposal = self.pending_proposal.split_off(&view);
+||||||| parent of 1d1090d28 (Views and votes at an epoch boundary (#5311))
+                self.pending_vote1 = self.pending_vote1.split_off(&ViewEpoch::start(view));
+                self.pending_vote2 = self.pending_vote2.split_off(&ViewEpoch::start(view));
+                self.pending_proposal = self.pending_proposal.split_off(&ViewEpoch::start(view));
+                self.pending_revote = self.pending_revote.split_off(&ViewEpoch::start(view));
+                self.pending_timeout_vote = self.pending_timeout_vote.split_off(&view);
+                self.revotes = self.revotes.split_off(&keep_from);
+                self.revote_commits = self.revote_commits.split_off(&keep_from);
+                self.revote_fetches = self
+                    .revote_fetches
+                    .split_off(&(keep_from, RevoteFetch::Proposal));
+                self.lock_payload_fetches = self
+                    .lock_payload_fetches
+                    .split_off(&(keep_from, VidCommitment2::default()));
+=======
+                self.pending_vote1 = self.pending_vote1.split_off(&ViewEpoch::start(view));
+                self.pending_vote2 = self.pending_vote2.split_off(&ViewEpoch::start(view));
+                self.pending_proposal = self.pending_proposal.split_off(&ViewEpoch::start(view));
+                self.pending_revote = self.pending_revote.split_off(&ViewEpoch::start(view));
+                self.pending_timeout_vote =
+                    self.pending_timeout_vote.split_off(&ViewEpoch::start(view));
+                self.revotes = self.revotes.split_off(&keep_from);
+                self.revote_commits = self.revote_commits.split_off(&keep_from);
+                self.revote_fetches = self
+                    .revote_fetches
+                    .split_off(&(keep_from, RevoteFetch::Proposal));
+                self.lock_payload_fetches = self
+                    .lock_payload_fetches
+                    .split_off(&(keep_from, VidCommitment2::default()));
+>>>>>>> 1d1090d28 (Views and votes at an epoch boundary (#5311))
                 let epoch = EpochNumber::new(self.current_epoch.saturating_sub(1));
                 self.drb_results = self.drb_results.split_off(&epoch);
                 self.state_certs = self.state_certs.split_off(&epoch);
@@ -1713,10 +1921,24 @@ impl<T: NodeType> Consensus<T> {
         self.maybe_vote_2_and_update_lock(view, outbox);
         self.maybe_decide(view, outbox);
 
+        // Every `Cert1` is grounds for the view after it, an earlier epoch's
+        // included: a node that ignored one would split from the nodes that took
+        // it before the epoch change, and the two halves could time out
+        // different views for ever.
         let curr_view = self.current_view;
+<<<<<<< HEAD
         let next_view = view + 1;
 
         self.set_current_view_max(next_view);
+||||||| parent of 1d1090d28 (Views and votes at an epoch boundary (#5311))
+        let next_view = view + 1;
+
+        if !self.behind_current_epoch(view, epoch) {
+            self.set_current_view_max(next_view);
+        }
+=======
+        self.set_current_view_max(view + 1);
+>>>>>>> 1d1090d28 (Views and votes at an epoch boundary (#5311))
         self.set_current_epoch_max(epoch);
 
         if self.current_view != curr_view {
@@ -1854,6 +2076,172 @@ impl<T: NodeType> Consensus<T> {
             self.catchup_evidence(),
         ));
         Protocol::Abort
+<<<<<<< HEAD
+||||||| parent of 1d1090d28 (Views and votes at an epoch boundary (#5311))
+    }
+
+    /// Sign a timeout vote that carries this node's lock, and send it once
+    /// its action is recorded.
+    ///
+    /// The bar is raised first, so from now on this node does not vote2 at
+    /// `view` or before it, and recording the action keeps the bar where it
+    /// is across a restart (see [`Self::timeout_vote_bar`]).
+    fn send_timeout_vote3(
+        &mut self,
+        view: ViewNumber,
+        epoch: EpochNumber,
+        outbox: &mut Outbox<ConsensusOutput<T>>,
+    ) {
+        self.timeout_vote_bar = max(self.timeout_vote_bar, Some(view));
+        // The genesis QC is no lock: nothing earlier could be skipped.
+        let lock = self
+            .locked_cert
+            .clone()
+            .filter(|cert| cert.view_number() != ViewNumber::genesis());
+        let vote = match TimeoutBallot::sign(
+            view,
+            epoch,
+            lock,
+            &self.public_key,
+            &self.private_key,
+            &self.upgrade_lock,
+        ) {
+            Ok(ballot) => TimeoutVote::V3(ballot),
+            Err(err) => {
+                warn!(%view, %err, "failed to create timeout vote");
+                return;
+            },
+        };
+        let evidence = self.catchup_evidence();
+        // Counted from signing: a vote held until its action is stored still goes out.
+        self.sent_timeout_votes.insert(ViewEpoch(view, epoch));
+        if self.stored_actions.contains(&(view, ActionKind::Timeout)) {
+            self.send_timeout_vote(vote, evidence, outbox);
+        } else {
+            self.request_action(view, ActionKind::Timeout, outbox);
+            self.pending_timeout_vote.insert(view, (vote, evidence));
+        }
+    }
+
+    fn release_timeout_vote(&mut self, view: ViewNumber, outbox: &mut Outbox<ConsensusOutput<T>>) {
+        if !self.stored_actions.contains(&(view, ActionKind::Timeout)) {
+            return;
+        }
+        if let Some((vote, evidence)) = self.pending_timeout_vote.remove(&view) {
+            self.send_timeout_vote(vote, evidence, outbox);
+        }
+    }
+
+    fn send_timeout_vote(
+        &mut self,
+        vote: TimeoutVote<T>,
+        evidence: Option<CatchupEvidence<T>>,
+        outbox: &mut Outbox<ConsensusOutput<T>>,
+    ) {
+        let epoch = vote.epoch().unwrap_or(self.current_epoch);
+        self.sent_timeout_votes
+            .insert(ViewEpoch(vote.view_number(), epoch));
+        outbox.push_back(ConsensusOutput::SendTimeoutVote(vote, evidence));
+    }
+
+    /// Whether this node signed a timeout vote for `view` in `epoch`, or in any
+    /// epoch for a certificate that does not bind one.
+    fn sent_timeout_vote(&self, view: ViewNumber, epoch: Option<EpochNumber>) -> bool {
+        match epoch {
+            Some(epoch) => self.sent_timeout_votes.contains(&ViewEpoch(view, epoch)),
+            None => self
+                .sent_timeout_votes
+                .range(ViewEpoch::at_view(view))
+                .next()
+                .is_some(),
+        }
+=======
+    }
+
+    /// Sign a timeout vote that carries this node's lock, and send it once
+    /// its action is recorded.
+    ///
+    /// The bar is raised first, so from now on this node does not vote2 at
+    /// `view` or before it, and recording the action keeps the bar where it
+    /// is across a restart (see [`Self::timeout_vote_bar`]).
+    fn send_timeout_vote3(
+        &mut self,
+        view: ViewNumber,
+        epoch: EpochNumber,
+        outbox: &mut Outbox<ConsensusOutput<T>>,
+    ) {
+        self.timeout_vote_bar = max(self.timeout_vote_bar, Some(view));
+        // The genesis QC is no lock: nothing earlier could be skipped.
+        let lock = self
+            .locked_cert
+            .clone()
+            .filter(|cert| cert.view_number() != ViewNumber::genesis());
+        let vote = match TimeoutBallot::sign(
+            view,
+            epoch,
+            lock,
+            &self.public_key,
+            &self.private_key,
+            &self.upgrade_lock,
+        ) {
+            Ok(ballot) => TimeoutVote::V3(ballot),
+            Err(err) => {
+                warn!(%view, %err, "failed to create timeout vote");
+                return;
+            },
+        };
+        let evidence = self.catchup_evidence();
+        // Counted from signing: a vote held until its action is stored still goes out.
+        self.sent_timeout_votes.insert(ViewEpoch(view, epoch));
+        if self.stored_actions.contains(&(view, ActionKind::Timeout)) {
+            self.send_timeout_vote(vote, evidence, outbox);
+        } else {
+            self.request_action(view, ActionKind::Timeout, outbox);
+            self.pending_timeout_vote
+                .insert(ViewEpoch(view, epoch), (vote, evidence));
+        }
+    }
+
+    fn release_timeout_vote(&mut self, view: ViewNumber, outbox: &mut Outbox<ConsensusOutput<T>>) {
+        if !self.stored_actions.contains(&(view, ActionKind::Timeout)) {
+            return;
+        }
+        let pending: Vec<ViewEpoch> = self
+            .pending_timeout_vote
+            .range(ViewEpoch::at_view(view))
+            .map(|(key, _)| *key)
+            .collect();
+        for key in pending {
+            if let Some((vote, evidence)) = self.pending_timeout_vote.remove(&key) {
+                self.send_timeout_vote(vote, evidence, outbox);
+            }
+        }
+    }
+
+    fn send_timeout_vote(
+        &mut self,
+        vote: TimeoutVote<T>,
+        evidence: Option<CatchupEvidence<T>>,
+        outbox: &mut Outbox<ConsensusOutput<T>>,
+    ) {
+        let epoch = vote.epoch().unwrap_or(self.current_epoch);
+        self.sent_timeout_votes
+            .insert(ViewEpoch(vote.view_number(), epoch));
+        outbox.push_back(ConsensusOutput::SendTimeoutVote(vote, evidence));
+    }
+
+    /// Whether this node signed a timeout vote for `view` in `epoch`, or in any
+    /// epoch for a certificate that does not bind one.
+    fn sent_timeout_vote(&self, view: ViewNumber, epoch: Option<EpochNumber>) -> bool {
+        match epoch {
+            Some(epoch) => self.sent_timeout_votes.contains(&ViewEpoch(view, epoch)),
+            None => self
+                .sent_timeout_votes
+                .range(ViewEpoch::at_view(view))
+                .next()
+                .is_some(),
+        }
+>>>>>>> 1d1090d28 (Views and votes at an epoch boundary (#5311))
     }
 
     #[instrument(level = "debug", skip_all)]
@@ -2699,8 +3087,18 @@ impl<T: NodeType> Consensus<T> {
             outbox.push_back(ConsensusOutput::PersistHighQc(cert1));
         }
 
+<<<<<<< HEAD
         if self.certs2.contains_key(&view)
             || self.decided_views.contains(&view)
+||||||| parent of 1d1090d28 (Views and votes at an epoch boundary (#5311))
+        if self.voted_2_at(view, epoch)
+            || self.certs2.contains_key(&key)
+            || self.decided_views.contains(&block_view)
+=======
+        if self.voted_2_at(view, epoch)
+            || self.certs2.contains_key(&key)
+            || self.decided_views.contains(&view)
+>>>>>>> 1d1090d28 (Views and votes at an epoch boundary (#5311))
             || view <= self.decide_floor()
         {
             return;
