@@ -1,3 +1,4 @@
+use ::light_client::LightClientMetrics;
 use anyhow::Context;
 use espresso_telemetry as telemetry;
 use espresso_types::{traits::NullEventConsumer, v0::traits::SequencerPersistence};
@@ -293,7 +294,7 @@ where
         Some(http_opt) => {
             let http_opt = api_options(http_opt, modules, &storage_opt, public_node_config);
             http_opt
-                .serve(move |metrics, consumer, storage| {
+                .serve(move |metrics, consumer, storage, _| {
                     async move {
                         init_node(
                             genesis,
@@ -354,9 +355,18 @@ where
     let http_opt = api_options(http_opt, modules, &storage_opt, public_node_config);
     let persistence = storage_opt.create().await?;
     http_opt
-        .serve(move |metrics, sink, _storage| {
+        .serve(move |metrics, sink, _storage, registry| {
             async move {
-                init_follower_node(genesis, params, metrics, persistence, l1_params, sink).await
+                init_follower_node(
+                    genesis,
+                    params,
+                    metrics,
+                    LightClientMetrics::new(&*registry),
+                    persistence,
+                    l1_params,
+                    sink,
+                )
+                .await
             }
             .boxed()
         })

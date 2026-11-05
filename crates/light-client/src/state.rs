@@ -1967,7 +1967,7 @@ mod test {
 
         let group = metrics.get_subgroup(["light_client"]).unwrap();
         assert_eq!(
-            group.get_gauge("stake_table_epoch").unwrap().get(),
+            group.get_gauge("latest_stake_table_epoch").unwrap().get(),
             *target as usize
         );
         assert_eq!(group.get_gauge("stake_table_backlog").unwrap().get(), 0);
@@ -1982,14 +1982,14 @@ mod test {
 
         lc.quorum_for_epoch(first + 1).await.unwrap();
         assert_eq!(
-            group.get_gauge("stake_table_epoch").unwrap().get(),
+            group.get_gauge("latest_stake_table_epoch").unwrap().get(),
             *target as usize
         );
     }
 
     #[tokio::test]
     #[test_log::test]
-    async fn test_stake_table_epoch_metric_after_restart() {
+    async fn test_latest_stake_table_epoch_metric_after_restart() {
         let db = SqlStorage::default().await.unwrap();
         let client = TestClient::default();
         let genesis = client.genesis().await;
@@ -2006,7 +2006,7 @@ mod test {
 
         let group = metrics.get_subgroup(["light_client"]).unwrap();
         assert_eq!(
-            group.get_gauge("stake_table_epoch").unwrap().get(),
+            group.get_gauge("latest_stake_table_epoch").unwrap().get(),
             *target as usize
         );
         assert_eq!(
@@ -2037,7 +2037,7 @@ mod test {
 
         let group = metrics.get_subgroup(["light_client"]).unwrap();
         assert_eq!(
-            group.get_gauge("stake_table_epoch").unwrap().get(),
+            group.get_gauge("latest_stake_table_epoch").unwrap().get(),
             *first as usize + 2
         );
         assert_eq!(group.get_gauge("stake_table_backlog").unwrap().get(), 3);

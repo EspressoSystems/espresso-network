@@ -146,6 +146,7 @@ pub async fn init_follower_node<P>(
     genesis: Genesis,
     params: FollowerParams,
     metrics: Box<dyn Metrics>,
+    light_client_metrics: LightClientMetrics,
     persistence: P,
     l1_params: L1Params,
     sink: impl DecideSink + 'static,
@@ -154,7 +155,16 @@ where
     P: SequencerPersistence + MembershipPersistence,
     Arc<P>: Storage<SeqTypes>,
 {
-    init_with_source(genesis, params, metrics, persistence, l1_params, sink, None).await
+    init_with_source(
+        genesis,
+        params,
+        metrics,
+        persistence,
+        l1_params,
+        sink,
+        Upstream::LightClient(light_client_metrics),
+    )
+    .await
 }
 
 /// For tests that replay a recorded chain; the network config must already be persisted, as there
@@ -180,9 +190,15 @@ where
         persistence,
         l1_params,
         sink,
-        Some(source),
+        Upstream::Replay(source),
     )
     .await
+}
+
+enum Upstream {
+    LightClient(LightClientMetrics),
+    #[cfg(any(test, feature = "testing"))]
+    Replay(Arc<dyn ChainSource>),
 }
 
 async fn init_with_source<P>(
@@ -192,7 +208,7 @@ async fn init_with_source<P>(
     persistence: P,
     l1_params: L1Params,
     sink: impl DecideSink + 'static,
-    replay: Option<Arc<dyn ChainSource>>,
+    upstream: Upstream,
 ) -> anyhow::Result<FollowerHandle<P>>
 where
     P: SequencerPersistence + MembershipPersistence,
@@ -268,9 +284,10 @@ where
     .context("startup stake-table catchup failed")?;
     tracing::info!(%current_epoch, "startup catchup complete");
 
-    let (source, light_client): (Arc<dyn ChainSource>, _) = match replay {
-        Some(source) => (source, None),
-        None => {
+    let (source, light_client): (Arc<dyn ChainSource>, _) = match upstream {
+        #[cfg(any(test, feature = "testing"))]
+        Upstream::Replay(source) => (source, None),
+        Upstream::LightClient(light_client_metrics) => {
             let light_client = Arc::new(
                 connect_light_client(
                     &params.options,
@@ -278,7 +295,7 @@ where
                     &network_config,
                     genesis.chain_config.chain_id,
                     fetched,
-                    &*metrics,
+                    light_client_metrics,
                 )
                 .await?,
             );
@@ -844,7 +861,7 @@ async fn connect_light_client(
     network_config: &NetworkConfig<SeqTypes>,
     chain_id: ChainId,
     config_fetched: bool,
-    metrics: &dyn Metrics,
+    metrics: LightClientMetrics,
 ) -> anyhow::Result<NodeLightClient> {
     let db = options
         .light_client_db
@@ -852,12 +869,11 @@ async fn connect_light_client(
         .connect()
         .await
         .context("opening the light client database")?;
-    let metrics = LightClientMetrics::new(metrics);
     let client = FallbackClient::new(
         upstreams
             .iter()
             .cloned()
-            .map(|url| QueryServiceClient::with_metrics(url, &metrics))
+            .map(QueryServiceClient::new)
             .collect(),
     )?;
     let genesis = match options.light_client_genesis.clone() {

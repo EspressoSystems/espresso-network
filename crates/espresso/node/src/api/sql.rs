@@ -178,7 +178,7 @@ pub(in crate::api) async fn init_query_module(
         state.clone(),
         query_opt.light_client,
         light_client_db,
-    ));
+    )?);
     provider = provider.with_provider(Arc::clone(&light_client));
 
     let ranges_concurrency = mod_opt.ranges_concurrency;

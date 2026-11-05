@@ -1750,7 +1750,7 @@ pub(crate) fn light_client_genesis(config: &NetworkConfig<SeqTypes>, chain_id: C
 pub(crate) struct LightClientProvider {
     light_client: OnceCell<Arc<NodeLightClient>>,
     state: ApiState,
-    peers: Vec<Url>,
+    client: FallbackClient<QueryServiceClient>,
     metrics: OnceLock<Box<dyn Metrics>>,
     opt: LightClientOptions,
     db_opt: LightClientDbOptions,
@@ -1762,15 +1762,16 @@ impl LightClientProvider {
         state: ApiState,
         opt: LightClientOptions,
         db_opt: LightClientDbOptions,
-    ) -> Self {
-        Self {
+    ) -> anyhow::Result<Self> {
+        let client = FallbackClient::new(peers.into_iter().map(QueryServiceClient::new).collect())?;
+        Ok(Self {
             light_client: OnceCell::new(),
             state,
-            peers: peers.into_iter().collect(),
+            client,
             metrics: OnceLock::new(),
             opt,
             db_opt,
-        }
+        })
     }
 
     /// The registry is created with the query data source, which needs this provider first.
@@ -1809,18 +1810,16 @@ impl LightClientProvider {
             Some(metrics) => LightClientMetrics::new(&**metrics),
             None => LightClientMetrics::default(),
         };
-        let client = FallbackClient::new(
-            self.peers
-                .iter()
-                .cloned()
-                .map(|url| QueryServiceClient::with_metrics(url, &metrics))
-                .collect(),
-        )?;
         let chain_id = ctx.node_state().genesis_chain_config.chain_id;
         let genesis = light_client_genesis(&ctx.network_config(), chain_id);
         Ok(Arc::new(
-            LightClient::from_genesis_with_options(db, client, genesis, self.opt.clone())
-                .with_metrics(metrics),
+            LightClient::from_genesis_with_options(
+                db,
+                self.client.clone(),
+                genesis,
+                self.opt.clone(),
+            )
+            .with_metrics(metrics),
         ))
     }
 }
@@ -2232,7 +2231,7 @@ pub mod test_helpers {
                         let upgrades_map = cfg.upgrades();
                         async move {
                             if i == 0 {
-                                opt.serve(|metrics, consumer, storage| {
+                                opt.serve(|metrics, consumer, storage, _| {
                                     let cfg = cfg.clone();
                                     async move {
                                         Ok(cfg
@@ -4371,7 +4370,7 @@ mod test {
         let persistence = <D as TestableSequencerDataSource>::persistence_options(&dbs[LATE]);
         let catchup = state_peers();
         let _late = api
-            .serve(|metrics, consumer, storage| {
+            .serve(|metrics, consumer, storage, _| {
                 async move {
                     Ok(cfg
                         .init_node(
@@ -4446,11 +4445,9 @@ mod test {
             .text()
             .await
             .unwrap();
-        assert!(
-            metric_value(
-                &export,
-                &format!("consensus_light_client_requests{{peer=\"{peer_url}\"}}")
-            ) > Some(0.0),
+        assert_eq!(
+            metric_value(&export, "light_client_verification_failures"),
+            Some(0.0),
             "{export}"
         );
     }
@@ -5972,24 +5969,17 @@ mod test {
         .text()
         .await?;
         assert!(
-            metric_value(&export, "consensus_light_client_block_height") > Some(tip as f64),
+            metric_value(&export, "light_client_block_height") > Some(tip as f64),
             "{export}"
         );
         assert!(
-            metric_value(&export, "consensus_light_client_stake_table_epoch")
+            metric_value(&export, "light_client_latest_stake_table_epoch")
                 >= Some(epoch_from_block_number(tip, EPOCH_HEIGHT) as f64),
             "{export}"
         );
         assert_eq!(
-            metric_value(&export, "consensus_light_client_verification_failures"),
+            metric_value(&export, "light_client_verification_failures"),
             Some(0.0),
-            "{export}"
-        );
-        assert!(
-            metric_value(
-                &export,
-                &format!("consensus_light_client_requests{{peer=\"{api_url}\"}}")
-            ) > Some(0.0),
             "{export}"
         );
 
@@ -6138,9 +6128,18 @@ mod test {
             .catchup(Default::default())
             .config(Default::default())
             .submit(Default::default())
-            .serve(move |metrics, sink, _| {
+            .serve(move |metrics, sink, _, registry| {
                 async move {
-                    init_follower_node(genesis, params, metrics, persistence, l1_params, sink).await
+                    init_follower_node(
+                        genesis,
+                        params,
+                        metrics,
+                        LightClientMetrics::new(&*registry),
+                        persistence,
+                        l1_params,
+                        sink,
+                    )
+                    .await
                 }
                 .boxed()
             })
@@ -7336,7 +7335,7 @@ mod test {
         // start the query node so that it builds the merklized state
         let mut node_0 = opt
             .clone()
-            .serve(|metrics, consumer, storage| {
+            .serve(|metrics, consumer, storage, _| {
                 let cfg = network.cfg.clone();
                 let node_0_persistence = node_0_persistence.clone();
                 let state = state.clone();
@@ -7381,7 +7380,7 @@ mod test {
         // start the node again.
         tracing::info!("restarting node");
         let node_0 = opt
-            .serve(|metrics, consumer, storage| {
+            .serve(|metrics, consumer, storage, _| {
                 let cfg = network.cfg.clone();
                 async move {
                     Ok(cfg
@@ -8071,7 +8070,7 @@ mod test {
         );
         let state_peers = api_state_peers(&api_url);
         let query_node = opt
-            .serve(move |metrics, consumer, storage| {
+            .serve(move |metrics, consumer, storage, _| {
                 async move {
                     Ok(cfg
                         .init_node(
@@ -8277,7 +8276,7 @@ mod test {
         );
         let node_0 = opt
             .clone()
-            .serve(|metrics, consumer, storage| {
+            .serve(|metrics, consumer, storage, _| {
                 let cfg = network.cfg.clone();
                 let node_0_persistence = node_0_persistence.clone();
                 let state = state.clone();
@@ -12368,7 +12367,7 @@ mod test {
         );
         let node_0 = opt
             .clone()
-            .serve(|metrics, consumer, storage| {
+            .serve(|metrics, consumer, storage, _| {
                 let cfg = network.cfg.clone();
                 let new_persistence = new_persistence.clone();
                 let state = state.clone();

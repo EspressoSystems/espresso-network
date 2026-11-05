@@ -10,7 +10,7 @@ use espresso_types::v0::traits::NullEventConsumer;
 use futures::{channel::oneshot, future::BoxFuture};
 use hotshot_query_service::{
     data_source::{ExtensibleDataSource, MetricsDataSource},
-    status::{HasMetrics, UpdateStatusData},
+    status::HasMetrics,
 };
 use hotshot_types::traits::metrics::{Metrics, NoMetrics};
 use process_metrics::ProcessMetrics;
@@ -127,7 +127,8 @@ impl Options {
     ///
     /// The function `init_context` is used to create a sequencer context from a metrics object and
     /// optional saved consensus state. The metrics object is created from the API data source, so
-    /// that consensus will populuate metrics that can then be read and served by the API.
+    /// that consensus will populuate metrics that can then be read and served by the API. The last
+    /// argument is the root of the same registry, for metrics that do not belong to consensus.
     pub async fn serve<C, F>(mut self, init_context: F) -> anyhow::Result<C>
     where
         C: ApiContext + Clone,
@@ -135,6 +136,7 @@ impl Options {
             Box<dyn Metrics>,
             Box<dyn ApiSink>,
             Option<RequestResponseStorage>,
+            Box<dyn Metrics>,
         ) -> BoxFuture<'static, anyhow::Result<C>>,
     {
         // Create a channel to send the context to the web server after it is initialized. This
@@ -151,7 +153,7 @@ impl Options {
         // The server state type depends on whether we are running a query or status API or not, so
         // we handle the two cases differently.
         #[allow(clippy::type_complexity)]
-        let (metrics, consumer, storage): (
+        let (registry, consumer, storage): (
             Box<dyn Metrics>,
             Box<dyn ApiSink>,
             Option<RequestResponseStorage>,
@@ -178,7 +180,7 @@ impl Options {
             // `MetricsDataSource`, which allows us to run the status API with no persistent
             // storage.
             let ds = MetricsDataSource::default();
-            let metrics = ds.populate_metrics();
+            let registry: Box<dyn Metrics> = Box::new(ds.metrics().clone());
             telemetry::set_registry(Arc::new(ds.metrics().registry().clone()));
             tasks.spawn("process_metrics", ProcessMetrics::new(ds.metrics()).run());
             let axum_ds = Arc::new(ExtensibleDataSource::new(ds, state.clone()));
@@ -209,7 +211,7 @@ impl Options {
                 tracing::warn!("gRPC API not available in status-only mode");
             }
 
-            (metrics, Box::new(NullEventConsumer), None)
+            (registry, Box::new(NullEventConsumer), None)
         } else {
             // If no status or availability API is requested, we don't need metrics or a query
             // service data source. The only app state is the HotShot handle, which we use to
@@ -243,7 +245,9 @@ impl Options {
             (Box::new(NoMetrics), Box::new(NullEventConsumer), None)
         };
 
-        let ctx = init_context(metrics, consumer, storage.clone()).await?;
+        // The status API reads consensus gauges from this subgroup, by this name.
+        let metrics = registry.subgroup("consensus".into());
+        let ctx = init_context(metrics, consumer, storage.clone(), registry).await?;
         send_ctx
             .send(Box::new(ctx.clone()))
             .ok()
@@ -429,8 +433,8 @@ pub struct LightClient;
 /// Populate consensus metrics on `ds`, deposit its prometheus registry for the in-process
 /// telemetry push task (idempotent), and wrap it with the API state.
 ///
-/// Returns the metrics handle plus the wrapped query data source shared by the axum server and
-/// update loops.
+/// Returns the root of the metrics registry plus the wrapped query data source shared by the axum
+/// server and update loops.
 #[allow(clippy::type_complexity)]
 pub(super) fn init_query_data_source<D>(
     ds: D,
@@ -439,10 +443,10 @@ pub(super) fn init_query_data_source<D>(
 where
     D: SequencerDataSource + CatchupStorage + PruningDataSource + Send + Sync + 'static,
 {
-    let metrics = ds.populate_metrics();
+    let registry: Box<dyn Metrics> = Box::new(ds.metrics().clone());
     telemetry::set_registry(Arc::new(ds.metrics().registry().clone()));
     let ds = Arc::new(ExtensibleDataSource::new(ds, state));
-    (metrics, ds)
+    (registry, ds)
 }
 
 /// The environment variables listed in `api/public-env-vars.toml`, as `KEY=value` strings.
