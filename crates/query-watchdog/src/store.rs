@@ -203,13 +203,13 @@ impl PersistedMissingSet {
                 range_end,
             } = StoredRegion::try_from(region)?;
             sqlx::query(
-                "DELETE FROM missing_chunk WHERE node = ? AND kind = ? AND range_start < ? AND \
-                 range_end > ?",
+                "DELETE FROM missing_chunk WHERE node = ? AND kind = ? AND range_start >= ? AND \
+                 range_start < ?",
             )
             .bind(&self.store.node)
             .bind(kind)
-            .bind(range_end)
             .bind(range_start)
+            .bind(range_end)
             .execute(&mut *tx)
             .await?;
             for row in self.set.rows_in(region) {
@@ -726,5 +726,29 @@ mod tests {
             let loaded = PersistedMissingSet::load(store.node("a:1"), Epochs::Off).await;
             assert!(loaded.is_err(), "{name}");
         }
+    }
+
+    #[tokio::test]
+    async fn the_image_delete_seeks_the_primary_key() {
+        let store = memory_store().await;
+        let plan: Vec<(i64, i64, i64, String)> = sqlx::query_as(
+            "EXPLAIN QUERY PLAN DELETE FROM missing_chunk WHERE node = ? AND kind = ? AND \
+             range_start >= ? AND range_start < ?",
+        )
+        .bind("a:1")
+        .bind(DataKind::Leaf)
+        .bind(0)
+        .bind(10)
+        .fetch_all(&store.pool)
+        .await
+        .unwrap();
+        let details: Vec<_> = plan.into_iter().map(|row| row.3).collect();
+        assert_eq!(
+            details,
+            [
+                "SEARCH missing_chunk USING INDEX sqlite_autoindex_missing_chunk_1 (node=? AND \
+                 kind=? AND range_start>? AND range_start<?)"
+            ]
+        );
     }
 }

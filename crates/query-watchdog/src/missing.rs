@@ -216,7 +216,10 @@ pub enum MissingUpdate {
     ForgetAbove(Height),
 }
 
-/// Units of one kind whose image rows an update rewrote; one variant per unit family.
+/// Units of one kind whose image rows an update rewrote; one variant per unit family. The region
+/// is the hull of every row it overlaps before and after, and rows of a kind are disjoint, so
+/// every image row overlapping it starts inside it: the image delete is a primary-key range seek
+/// on the start.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ImageRegion {
     Range {
