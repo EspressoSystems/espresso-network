@@ -37,7 +37,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from multiprocessing.context import SpawnProcess
 from pathlib import Path
-from typing import Any, Literal, NotRequired, Protocol, TypedDict, TypeVar
+from typing import Any, Literal, NotRequired, Protocol, TypedDict, TypeVar, cast
 from urllib.parse import urlsplit
 
 import chaos as ch
@@ -2444,7 +2444,8 @@ def judge_step(
     counters: list[dict[str, Any]],
     now: float,
 ) -> dict[str, Any]:
-    """The one verdict on a step, as the ramp takes it at `now`; stored in steps.json."""
+    """The verdict on a step that steers the ramp or search, as known at `now`; stored in
+    steps.json. result.json judges the step again on the final files, see `final_verdict`."""
     m = step_measures(step, cfg, txs, heights, counters, now)
     consensus, query = step_fails(m, cfg)
     return {**step, **m, "consensus_fails": consensus, "query_fails": query}
@@ -2722,10 +2723,15 @@ def analyze(
     host = list(read_jsonl(out / "host.jsonl"))
     txs = list(read_jsonl(out / "load.jsonl"))
     heights = list(read_jsonl(out / "heights.jsonl"))
+    counters = list(read_jsonl(out / "consensus.jsonl"))
     calib = read_json(out / "calibration.json")
     before, after = calib["before"], calib["after"]
+    end = evidence_end(t1, counters, heights)
     steps = [
-        step_result(step, txs, series, host) for step in read_json(out / "steps.json")
+        step_result(
+            final_verdict(step, cfg, txs, heights, counters, end), txs, series, host
+        )
+        for step in read_json(out / "steps.json")
     ]
     result: BenchResult = {
         "schema_version": SCHEMA_VERSION,
@@ -2757,6 +2763,40 @@ def analyze(
     return result
 
 
+def evidence_end(
+    t1: float,
+    counters: Sequence[Mapping[str, Any]],
+    heights: Sequence[Mapping[str, Any]],
+) -> float:
+    """The last time the run recorded anything: when the final verdicts are judged."""
+    stamps = [h[k] for h in heights for k in ("validator", "query", "scanned")]
+    return max(
+        [t1, *(c["ts"] for c in counters), *(t for t in stamps if t is not None)]
+    )
+
+
+def final_verdict(
+    judged: dict[str, Any],
+    cfg: BenchConfig,
+    txs: list[dict[str, Any]],
+    heights: list[dict[str, Any]],
+    counters: list[dict[str, Any]],
+    now: float,
+) -> dict[str, Any]:
+    """A step of steps.json judged again on the run's final files. The ramp judged it at its
+    end, before the payload scans had matched every transaction and the query node had shown
+    every block; that verdict only steers the ramp or search. The pacer's measures stay as
+    the run saw them: load.jsonl leaves out transactions it queued but never sent."""
+    m = step_measures(cast(StepWindow, judged), cfg, txs, heights, counters, now)
+    final = judged | {
+        "consensus_latency_ms": m["consensus_latency_ms"],
+        "query_lag_ms": m["query_lag_ms"],
+        "query_lag_slope_ms_s": m["query_lag_slope_ms_s"],
+    }
+    consensus, query = step_fails(cast(StepMeasures, final), cfg)
+    return final | {"consensus_fails": consensus, "query_fails": query}
+
+
 def step_kind(step: Mapping[str, Any]) -> ProbeKind:
     """steps.json and result.json from before `kind` have only `refine`."""
     return step.get("kind", "refine" if step["refine"] else "ramp")
@@ -2768,7 +2808,7 @@ def step_result(
     series: dict[str, list[Sample]],
     host: list[dict[str, Any]],
 ) -> StepResult:
-    """The ramp's verdict on a step (see judge_step) plus metrics that decide nothing."""
+    """The final verdict on a step (see final_verdict) plus metrics that decide nothing."""
     t0, t1 = judged["t_mid"], judged["t_end"]
     views = [
         rate(s, t0, t1, "consensus_last_decided_view") for s in series.values() if s

@@ -754,6 +754,11 @@ Each step is judged over its second half. A step stopped early is judged over it
 - Without `--keep-going` the ramp stops at the first failing step, then runs one refine step halfway back.
 - A tx not yet matched to a block counts as late only as far as the scans prove: until the lowest height whose scan is
   not finished reached a validator, or until now when every height is scanned.
+- Two verdicts per step. At the step's end the ramp and the search judge it on what they know then, steer by it and log
+  it in `driver.log` and `steps.json`. `result.json` and the summary judge consensus latency and query lag again on the
+  final `load.jsonl`, `heights.jsonl` and `consensus.jsonl`, as of the last time the run recorded anything. The two can
+  differ while the scans or the query node lag; scans lagging over 1 s p99 mark the run noisy
+  (`benchmark tracker behind`).
 
 ### Drain
 

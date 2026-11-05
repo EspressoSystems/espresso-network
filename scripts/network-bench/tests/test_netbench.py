@@ -822,21 +822,6 @@ def test_result_json_is_finite(tmp_path: Path):
         netbench.write_json(tmp_path / "bad.json", {"x": math.inf})
 
 
-def test_report_keeps_the_ramp_verdict(tmp_path: Path):
-    write_run_dir(tmp_path)
-    path = tmp_path / "steps.json"
-    steps = netbench.read_json(path)
-    steps[0]["consensus_fails"] = ["decided 10% of offered"]
-    netbench.write_json(path, steps)
-    result = analyze(tmp_path)
-    assert not result["steps"][0]["passed"]
-    assert result["capacity"]["overall"] == {
-        "mb_s": None,
-        "bounded": True,
-        "failed_at_mb_s": 1.0,
-    }
-
-
 def test_no_scrapes_is_invalid_not_a_crash(tmp_path: Path):
     write_run_dir(tmp_path)
     netbench.write_jsonl(
@@ -3320,3 +3305,117 @@ def test_a_payload_given_up_as_lost_shows_as_scanned_when_given_up():
     assert tx.status == "timeout"
     assert lost["scanned"] == pytest.approx(calls[0][-1])
     assert lost["scanned"] >= netbench.MISSING_PAYLOAD_S
+
+
+def scan_every_height(out: Path, scanned: float = 131.0) -> None:
+    """Gives each height of heights.jsonl that the scan never finished the scan time
+    `scanned`."""
+    path = out / "heights.jsonl"
+    heights = [
+        h | {"scanned": scanned} if h["scanned"] is None else h
+        for h in netbench.read_jsonl(path)
+    ]
+    netbench.write_jsonl(path, iter(heights))
+
+
+def test_analyze_judges_a_step_from_the_final_files_not_the_in_run_verdict(
+    tmp_path: Path,
+):
+    """In the run the scan had matched nothing, so steps.json failed the 1 MB/s step on
+    consensus latency; in the final files every tx is in a block decided 200 ms after it
+    was sent, and every height is scanned. Only the run's own fields stay."""
+    write_run_dir(tmp_path)
+    txs: list[dict[str, Any]] = [
+        {
+            "id": i,
+            "node": 0,
+            "t_queued": t - 0.01,
+            "t_submit": t,
+            "t_done": t + 0.05,
+            "t_included": t + 0.8,
+            "height": 1000 + i,
+            "status": "included",
+        }
+        for i, t in enumerate(range(110, 151))
+    ]
+    heights = [
+        height_record(tx["height"], tx["t_submit"] + 0.2, tx["t_included"] + 1.1)
+        for tx in txs
+    ]
+    netbench.write_jsonl(tmp_path / "load.jsonl", iter(txs))
+    netbench.write_jsonl(tmp_path / "heights.jsonl", iter(heights))
+    steps = netbench.read_json(tmp_path / "steps.json")
+    steps[0] |= {
+        "consensus_latency_ms": quantiles(15000.0, 15000.0),
+        "consensus_fails": ["consensus latency p50 15000 ms > 1000 ms"],
+        "cap_waits": 7,
+    }
+    steps[1]["stopped_early"] = True
+    netbench.write_json(tmp_path / "steps.json", steps)
+    result = analyze(tmp_path)
+    one, two = result["steps"]
+    assert one["passed"]
+    assert one["consensus_fails"] == []
+    assert some(one["consensus_latency_ms"])["p50"] == pytest.approx(200.0)
+    assert result["capacity"]["overall"] == {
+        "mb_s": 1.0,
+        "bounded": True,
+        "failed_at_mb_s": 2.0,
+    }
+    assert (one["cap_waits"], two.get("stopped_early")) == (7, True)
+
+
+def test_analyze_takes_the_query_verdict_from_the_final_files(tmp_path: Path):
+    """steps.json failed the 1 MB/s step on a growing query lag; the final files show a
+    steady 300 ms."""
+    write_run_dir(tmp_path)
+    steps = netbench.read_json(tmp_path / "steps.json")
+    steps[0] |= {
+        "query_lag_ms": quantiles(5000.0, 9000.0),
+        "query_lag_slope_ms_s": 300.0,
+        "query_fails": ["query lag grows 300 ms/s", "query lag p50 5000 ms > 1000 ms"],
+    }
+    netbench.write_json(tmp_path / "steps.json", steps)
+    one = analyze(tmp_path)["steps"][0]
+    assert one["query_fails"] == []
+    assert some(one["query_lag_ms"])["p50"] == pytest.approx(300.0)
+    assert some(one["query_lag_slope_ms_s"]) == pytest.approx(0.0)
+    assert one["passed"]
+
+
+def test_analyze_fails_a_step_whose_txs_timed_out_with_every_height_scanned(
+    tmp_path: Path,
+):
+    """steps.json passed the 1 MB/s step, but in the final files every tx of its measured
+    half timed out with no height while the scan finished every height."""
+    write_run_dir(tmp_path)
+    txs = [
+        tx | {"status": "timeout", "height": None, "t_included": None}
+        if 115.0 <= tx["t_submit"] <= 130.0
+        else tx
+        for tx in netbench.read_jsonl(tmp_path / "load.jsonl")
+    ]
+    netbench.write_jsonl(tmp_path / "load.jsonl", iter(txs))
+    scan_every_height(tmp_path)
+    one = analyze(tmp_path)["steps"][0]
+    assert not one["passed"]
+    assert some(one["consensus_latency_ms"])["p50"] > 1000.0
+    assert any("latency" in rule for rule in one["consensus_fails"])
+
+
+@pytest.mark.parametrize("latest", ["run", "consensus", "heights"])
+def test_analyze_judges_at_the_end_of_the_evidence(tmp_path: Path, latest: str):
+    """With every height scanned, the tx sent at 120.5 that timed out with no height counts
+    until 165, whichever of run.json t1, the last consensus sample and the last
+    heights.jsonl time reaches it."""
+    write_run_dir(tmp_path)
+    scan_every_height(tmp_path, 165.0 if latest == "heights" else 131.0)
+    if latest == "run":
+        run = netbench.read_json(tmp_path / "run.json")
+        netbench.write_json(tmp_path / "run.json", run | {"t1": 165.0})
+    if latest == "consensus":
+        counters = list(netbench.read_jsonl(tmp_path / "consensus.jsonl"))
+        counters.append(counters[-1] | {"ts": 165.0})
+        netbench.write_jsonl(tmp_path / "consensus.jsonl", iter(counters))
+    latency = some(analyze(tmp_path)["steps"][0]["consensus_latency_ms"])
+    assert latency["max"] == pytest.approx((165.0 - 120.5) * 1000)
