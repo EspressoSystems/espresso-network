@@ -5,7 +5,6 @@ use std::{
     future::Future,
     ops::Range,
     sync::Arc,
-    time::Instant,
 };
 
 use anyhow::{Context, Result, anyhow, ensure};
@@ -1008,14 +1007,12 @@ where
                 )
             };
         tracing::info!(from = %lower_bound, to = %epoch, "performing stake table catchup");
-        let target = *epoch;
-        self.metrics
-            .stake_table_backlog
-            .set((target - *lower_bound) as usize);
+        let mut backlog = self.metrics.start_catchup(*epoch - *lower_bound);
 
         // Replay one epoch at a time from the lower bound stake table to the requested epoch.
-        for epoch in *lower_bound + 1..=target {
-            let started = Instant::now();
+        for epoch in *lower_bound + 1..=*epoch {
+            #[cfg(feature = "client")]
+            let started = std::time::Instant::now();
             let events = self
                 .server
                 .stake_table_events(EpochNumber::new(epoch))
@@ -1092,12 +1089,12 @@ where
             }
 
             tracing::info!(epoch, num_events, "finished stake table catchup for epoch");
+            // std's clock panics on zkVM targets, which build this file without `client`.
+            #[cfg(feature = "client")]
             self.metrics
                 .stake_table_catchup_duration
                 .add_point(started.elapsed().as_secs_f64());
-            self.metrics
-                .stake_table_backlog
-                .set((target - epoch) as usize);
+            backlog.epoch_done();
             self.metrics.stake_table_verified(EpochNumber::new(epoch));
             prev_quorum = next_quorum;
             epoch_root_protocol_version = root.version();
@@ -1188,8 +1185,7 @@ where
         self.chain_id == DECAF_CHAIN_ID
     }
 
-    fn verification_failure(&self, err: impl Into<anyhow::Error>) -> anyhow::Error {
-        let err = err.into();
+    fn verification_failure(&self, err: anyhow::Error) -> anyhow::Error {
         if err.downcast_ref::<StakeTableUnavailable>().is_none() {
             self.metrics.verification_failures.add(1);
         }
@@ -1266,7 +1262,7 @@ mod test {
     };
     use hotshot_query_service::metrics::PrometheusMetrics;
     use hotshot_query_service_types::availability::TransactionIndex;
-    use hotshot_types::{addr::NetAddr, x25519};
+    use hotshot_types::{addr::NetAddr, utils::epoch_from_block_number, x25519};
     use itertools::izip;
     use pretty_assertions::assert_eq;
     use versions::{DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_VERSION, NEW_PROTOCOL_VERSION};
@@ -2040,7 +2036,7 @@ mod test {
             group.get_gauge("latest_stake_table_epoch").unwrap().get(),
             *first as usize + 2
         );
-        assert_eq!(group.get_gauge("stake_table_backlog").unwrap().get(), 3);
+        assert_eq!(group.get_gauge("stake_table_backlog").unwrap().get(), 0);
     }
 
     #[tokio::test]
@@ -2059,6 +2055,30 @@ mod test {
         let epoch = genesis.first_epoch_with_dynamic_stake_table + 5;
         client.return_invalid_quorum(epoch).await;
         lc.quorum_for_epoch(epoch).await.unwrap_err();
+
+        let group = metrics.get_subgroup(["light_client"]).unwrap();
+        assert_eq!(group.get_counter("verification_failures").unwrap().get(), 1);
+    }
+
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_verification_failures_invalid_stake_table_under_leaf_proof() {
+        let metrics = PrometheusMetrics::default();
+        let client = TestClient::with_epoch_height(10);
+        let genesis = client.genesis().await;
+        let lc = LightClient::from_genesis(
+            SqlStorage::default().await.unwrap(),
+            client.clone(),
+            genesis.clone(),
+        )
+        .with_metrics(LightClientMetrics::new(&metrics));
+
+        // Height 45 is in epoch 5, so verifying its leaf replays up to the invalid stake table.
+        let epoch = genesis.first_epoch_with_dynamic_stake_table + 2;
+        assert_eq!(epoch_from_block_number(45, 10), *epoch);
+        client.leaf(45).await;
+        client.return_invalid_quorum(epoch).await;
+        lc.fetch_leaf(LeafId::Number(45)).await.unwrap_err();
 
         let group = metrics.get_subgroup(["light_client"]).unwrap();
         assert_eq!(group.get_counter("verification_failures").unwrap().get(), 1);

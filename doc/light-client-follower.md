@@ -50,7 +50,7 @@ The light client reports under `light_client_` in `/v1/status/metrics`, on a fol
 query service has fetched through it:
 
 - `latest_stake_table_epoch`: the latest epoch with a verified stake table.
-- `stake_table_backlog`: epochs left in the stake table catchup that is running, 0 when none is.
+- `stake_table_backlog`: epochs left in the stake table catchups that are running, 0 when none is.
 - `stake_table_catchup_duration`: seconds to replay one epoch of stake table events.
 - `follower_block_height`: on a follower, the block height the light client has verified, counted as `node/block-height`
   counts it.

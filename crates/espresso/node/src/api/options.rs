@@ -285,7 +285,7 @@ impl Options {
 
         tasks.spawn("process_metrics", ProcessMetrics::new(ds.metrics()).run());
 
-        let (metrics, ds) = init_query_data_source(ds, state.clone());
+        let (registry, ds) = init_query_data_source(ds, state.clone());
 
         let port = self.http.port;
         let ds_for_axum = ds.clone();
@@ -313,7 +313,7 @@ impl Options {
         }
 
         Ok((
-            metrics,
+            registry,
             Box::new(ApiEventConsumer::from(ds)),
             Some(RequestResponseStorage::Fs(inner_storage)),
         ))
@@ -430,8 +430,8 @@ pub struct Explorer;
 #[derive(Parser, Clone, Copy, Debug, Default)]
 pub struct LightClient;
 
-/// Populate consensus metrics on `ds`, deposit its prometheus registry for the in-process
-/// telemetry push task (idempotent), and wrap it with the API state.
+/// Deposit the prometheus registry of `ds` for the in-process telemetry push task (idempotent), and
+/// wrap it with the API state.
 ///
 /// Returns the root of the metrics registry plus the wrapped query data source shared by the axum
 /// server and update loops.

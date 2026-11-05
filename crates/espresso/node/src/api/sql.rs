@@ -185,8 +185,8 @@ pub(in crate::api) async fn init_query_module(
     let ds = DataSource::create(mod_opt.clone(), provider, false).await?;
     let inner_storage = ds.inner();
     tasks.spawn("process_metrics", ProcessMetrics::new(ds.metrics()).run());
-    let (metrics, ds) = init_query_data_source(ds, state.clone());
-    light_client.set_metrics(metrics.clone());
+    let (registry, ds) = init_query_data_source(ds, state.clone());
+    light_client.set_metrics(registry.clone());
 
     let get_node_state = {
         let state = state.clone();
@@ -249,7 +249,7 @@ pub(in crate::api) async fn init_query_module(
     }
 
     Ok((
-        metrics,
+        registry,
         Box::new(ApiEventConsumer::from(ds)),
         Some(RequestResponseStorage::Sql(inner_storage)),
     ))
