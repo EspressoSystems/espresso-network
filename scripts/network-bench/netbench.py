@@ -2483,23 +2483,13 @@ def step_measures(
     counters: list[dict[str, Any]],
     now: float,
 ) -> StepMeasures:
-    """Over the measured half, from what is known at `now`. A transaction not yet on a
-    validator counts with its time until `undecided_until` once that exceeds the target; a
-    height not yet on the query node counts with its time so far the same way."""
+    """Over the measured half, from what is known at `now`: see `consensus_latencies`. A
+    height not yet on the query node counts with its time so far once that exceeds the
+    target."""
     t0, t1 = step["t_mid"], step["t_end"]
     inside = [c for c in counters if t0 <= c["ts"] <= t1]
     timeouts = ch.counter_total(inside, "timeouts")
-    on_validator = {h["height"]: h["validator"] for h in heights}
-    undecided = undecided_until(heights, now)
-    consensus = []
-    for tx in txs:
-        if not t0 <= tx["t_submit"] <= t1:
-            continue
-        seen = on_validator.get(tx["height"])
-        if seen is not None:
-            consensus.append((seen - tx["t_submit"]) * 1000)
-        elif (undecided - tx["t_submit"]) * 1000 > cfg.latency_target_ms:
-            consensus.append((undecided - tx["t_submit"]) * 1000)
+    consensus, _ = consensus_latencies(step, cfg, txs, heights, now)
     lags = []
     for h in heights:
         seen = h["validator"]
@@ -2524,6 +2514,38 @@ def step_measures(
         "query_lag_ms": quantiles([lag for _, lag in lags]),
         "query_lag_slope_ms_s": theil_sen(lags),
     }
+
+
+def consensus_latencies(
+    step: StepWindow,
+    cfg: BenchConfig,
+    txs: list[dict[str, Any]],
+    heights: list[dict[str, Any]],
+    now: float,
+) -> tuple[list[float], int]:
+    """Consensus latency in ms of each transaction of the measured half known at `now`, and
+    how many are unknown. A transaction not yet on a validator counts with its time until
+    `undecided_until` once that exceeds the target, and is unknown otherwise. One that timed
+    out and no scan found counts at most its timeout: that it missed it is all that is known."""
+    t0, t1 = step["t_mid"], step["t_end"]
+    on_validator = {h["height"]: h["validator"] for h in heights}
+    undecided = undecided_until(heights, now)
+    known, unknown = [], 0
+    for tx in txs:
+        if not t0 <= tx["t_submit"] <= t1:
+            continue
+        seen = on_validator.get(tx["height"])
+        if seen is not None:
+            known.append((seen - tx["t_submit"]) * 1000)
+            continue
+        until = undecided
+        if tx["status"] == "timeout":
+            until = min(until, tx["t_submit"] + cfg.tx_timeout_s)
+        if (until - tx["t_submit"]) * 1000 > cfg.latency_target_ms:
+            known.append((until - tx["t_submit"]) * 1000)
+        else:
+            unknown += 1
+    return known, unknown
 
 
 def undecided_until(heights: Sequence[Mapping[str, Any]], now: float) -> float:

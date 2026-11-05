@@ -3405,10 +3405,17 @@ def test_analyze_fails_a_step_whose_txs_timed_out_with_every_height_scanned(
 
 @pytest.mark.parametrize("latest", ["run", "consensus", "heights"])
 def test_analyze_judges_at_the_end_of_the_evidence(tmp_path: Path, latest: str):
-    """With every height scanned, the tx sent at 120.5 that timed out with no height counts
-    until 165, whichever of run.json t1, the last consensus sample and the last
-    heights.jsonl time reaches it."""
+    """With every height scanned, a tx sent at 150 that timed out with no height, its 30 s
+    timeout still running, counts until 165, whichever of run.json t1, the last consensus
+    sample and the last heights.jsonl time reaches it."""
     write_run_dir(tmp_path)
+    txs = list(netbench.read_jsonl(tmp_path / "load.jsonl"))
+    late = {"id": 98, "node": 0, "t_queued": 149.99, "t_submit": 150.0}
+    txs.append(
+        late
+        | {"t_done": 150.05, "t_included": None, "height": None, "status": "timeout"}
+    )
+    netbench.write_jsonl(tmp_path / "load.jsonl", iter(txs))
     scan_every_height(tmp_path, 165.0 if latest == "heights" else 131.0)
     if latest == "run":
         run = netbench.read_json(tmp_path / "run.json")
@@ -3417,8 +3424,11 @@ def test_analyze_judges_at_the_end_of_the_evidence(tmp_path: Path, latest: str):
         counters = list(netbench.read_jsonl(tmp_path / "consensus.jsonl"))
         counters.append(counters[-1] | {"ts": 165.0})
         netbench.write_jsonl(tmp_path / "consensus.jsonl", iter(counters))
-    latency = some(analyze(tmp_path)["steps"][0]["consensus_latency_ms"])
-    assert latency["max"] == pytest.approx((165.0 - 120.5) * 1000)
+    latency = some(analyze(tmp_path)["steps"][1]["consensus_latency_ms"])
+    assert latency["max"] == pytest.approx((165.0 - 150.0) * 1000)
+
+
+# Fixes from the review of #5493.
 
 
 def test_done_during_a_backlog_scan_starts_the_deadline_when_done_is_set():
@@ -3439,6 +3449,28 @@ def test_done_during_a_backlog_scan_starts_the_deadline_when_done_is_set():
     returned = run_tracker(cfg, state, heights, scan, done, clock, events)
     deadline = done_at + cfg.tx_timeout_s
     assert deadline - 0.5 <= returned <= deadline + TRACKER_SLACK_S
+
+
+def test_a_timed_out_unmatched_tx_counts_at_most_its_timeout():
+    """Every height scanned and `now` at 100: an unmatched tx sent at 20 that timed out
+    counts its 30 s timeout; one still pending counts its 80 s so far."""
+    heights = [height_record(h, 19.0 + h, 21.0 + h) for h in range(5)]
+    timed_out = unmatched(20.0) | {"status": "timeout"}
+    assert some(consensus_latency([timed_out], heights, 100.0))["p50"] == pytest.approx(
+        30000.0
+    )
+    assert some(consensus_latency([unmatched(20.0)], heights, 100.0))[
+        "p50"
+    ] == pytest.approx(80000.0)
+
+
+def test_analyze_counts_a_timed_out_unmatched_tx_at_most_its_timeout(tmp_path: Path):
+    """Every height scanned and the evidence ending at 160: the tx sent at 120.5 that timed
+    out with no height counts its 30 s timeout, not 39.5 s."""
+    write_run_dir(tmp_path)
+    scan_every_height(tmp_path)
+    latency = some(analyze(tmp_path)["steps"][0]["consensus_latency_ms"])
+    assert latency["max"] == pytest.approx(30000.0)
 
 
 def test_a_late_find_does_not_make_the_progress_timeouts_negative(
