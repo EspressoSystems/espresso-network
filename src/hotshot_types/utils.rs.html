@@ -123,9 +123,9 @@
 <a href=#123 id=123 data-nosnippet>123</a>            // non-epoch chain before it, so no later height may be certified this way.
 <a href=#124 id=124 data-nosnippet>124</a>            </span><span class="prelude-val">None </span>=&gt; {
 <a href=#125 id=125 data-nosnippet>125</a>                <span class="macro">ensure!</span>(
-<a href=#126 id=126 data-nosnippet>126</a>                    first_epoch.is_some_and(|first| epoch &lt;= first),
+<a href=#126 id=126 data-nosnippet>126</a>                    epoch &lt;= first_epoch,
 <a href=#127 id=127 data-nosnippet>127</a>                    <span class="string">"QC claims no epoch but certifies the leaf at height {certified_height} in \
-<a href=#128 id=128 data-nosnippet>128</a>                     epoch {epoch}, after the first epoch {first_epoch:?}"
+<a href=#128 id=128 data-nosnippet>128</a>                     epoch {epoch}, after the first epoch {first_epoch}"
 <a href=#129 id=129 data-nosnippet>129</a>                </span>);
 <a href=#130 id=130 data-nosnippet>130</a>                coordinator.stake_table_for_epoch(<span class="prelude-val">None</span>)
 <a href=#131 id=131 data-nosnippet>131</a>            },
