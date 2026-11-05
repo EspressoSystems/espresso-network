@@ -3,12 +3,30 @@ module
 public import NewProtocolDiff.Trace
 public import NewProtocolDiff.Replay
 public import NewProtocolDiff.Corpus
+<<<<<<< HEAD
+||||||| parent of 4ad03c1cb (Lean spec: timers answered within δ, vote2 rules for epochs left (#5308))
+public import NewProtocolDiff.PromptCheck
+public import NewProtocolDiff.Check
+=======
+public import NewProtocolDiff.PromptCheck
+public import NewProtocolDiff.Check
+public import NewProtocolDiff.ProtocolCheck
+>>>>>>> 4ad03c1cb (Lean spec: timers answered within δ, vote2 rules for epochs left (#5308))
 public meta import NewProtocolSpec.Interface
 public meta import NewProtocolImpl.Machine
 public meta import NewProtocolDiff.Json
 public meta import NewProtocolDiff.Trace
 public meta import NewProtocolDiff.Replay
 public meta import NewProtocolDiff.Corpus
+<<<<<<< HEAD
+||||||| parent of 4ad03c1cb (Lean spec: timers answered within δ, vote2 rules for epochs left (#5308))
+public meta import NewProtocolDiff.PromptCheck
+public meta import NewProtocolDiff.Check
+=======
+public meta import NewProtocolDiff.PromptCheck
+public meta import NewProtocolDiff.Check
+public meta import NewProtocolDiff.ProtocolCheck
+>>>>>>> 4ad03c1cb (Lean spec: timers answered within δ, vote2 rules for epochs left (#5308))
 
 /-!
 # Checks on the harness itself
@@ -19,9 +37,23 @@ the format is checked at build time in both directions:
 * the identity injection does not collide and preserves the recorder's text, and
   every constructor round-trips through JSON — which catches an instance the
   deriving got wrong as well as one a future hand-written override breaks;
+<<<<<<< HEAD
 * the comparison accepts a run the machine agrees with, and rejects one it does
   not — including the case that matters most, a recorded identity that does not
   match the block, since that is how a hash-namespace mistake would show up.
+||||||| parent of 4ad03c1cb (Lean spec: timers answered within δ, vote2 rules for epochs left (#5308))
+* the step times are read as written, and the `Prompt` check passes a node that
+  votes in time and fails one that does not;
+* the signing rules refuse a vote whose identity does not match the block, since
+  that is how a hash-namespace mistake would show up.
+=======
+* the step times are read as written, and the `Prompt` check passes a node that
+  votes, and answers its timers, in time and fails one that does not;
+* the signing rules refuse a vote whose identity does not match the block, since
+  that is how a hash-namespace mistake would show up;
+* a timeout vote needs a timer for its view at or before it, and names the lock
+  the node held at that timer.
+>>>>>>> 4ad03c1cb (Lean spec: timers answered within δ, vote2 rules for epochs left (#5308))
 -/
 
 @[expose] public section
@@ -188,7 +220,179 @@ private def voteStep (identity : BlockHash) : Event :=
 /-- info: "OK: 4 steps, marks agree exactly" -/
 #guard_msgs in #eval run (opening ++ [voteStep ⟨3⟩])
 
+<<<<<<< HEAD
 /-- info: "DIVERGED after 3 steps\n  step 3: the recording voted1 in view 1 of epoch 0, the machine did not" -/
+||||||| parent of 4ad03c1cb (Lean spec: timers answered within δ, vote2 rules for epochs left (#5308))
+/--
+What a run still owes `δ` after it, with step `n` at time `n`, the last step's
+outputs released at `released`, and the recording ending at `ended`.
+-/
+private def late (es : List Event) (released : List (Nat × Nat)) (ended δ : Nat) : List String :=
+  let h := historyOf es
+  let ms := moments h (List.range h.length).toArray
+    ((List.replicate (h.length - 1) []).toArray.push released)
+  (promptFaults cfg (fun _ _ => some me) me ms ended δ).map fun (k, o) =>
+    match o, ms[k]? with
+    | .vote1 p, some m => s!"vote1 in view {p.viewNumber.toNat} at t={m.time}"
+    | _, _ => "another obligation"
+
+/-- info: [] -/
+#guard_msgs in #eval late (opening ++ [voteStep [vote ⟨3⟩]]) [] 100 5
+
+/-- info: ["vote1 in view 1 at t=3"] -/
+#guard_msgs in #eval late (opening ++ [voteStep []]) [] 100 5
+
+-- A vote released after the step is cast when it is released, not when the step was taken.
+/-- info: ["vote1 in view 1 at t=3"] -/
+#guard_msgs in #eval late (opening ++ [voteStep [vote ⟨3⟩]]) [(50, 1)] 100 5
+
+/-- info: [] -/
+#guard_msgs in #eval late (opening ++ [voteStep [vote ⟨3⟩]]) [(50, 1)] 100 60
+
+/-- info: true -/
+#guard_msgs in #eval checkSafe cfg me (historyOf (opening ++ [voteStep [vote ⟨3⟩]]))
+
+/-- info: false -/
+#guard_msgs in #eval checkSafe cfg me (historyOf (opening ++ [voteStep [vote ⟨999⟩]]))
+
+-- A recording that stopped before the deadline could still have voted.
+/-- info: [] -/
+#guard_msgs in #eval late (opening ++ [voteStep []]) [] 8 5
+
+/-- A recorded step carries its time and its releases, and the trace its end. -/
+private def timedTrace : String :=
+  "# trace {}\n" ++
+  r#"{"consensus":{"input":{"timeout":{"v":4}},"output":[],"t":17}}"# ++ "\n" ++
+  r#"{"consensus":{"input":{"timeout":{"v":5}},"output":[],"t":40,"released":[{"t":48,"outputs":2}]}}"# ++
+  "\n# ended at t=55\n"
+
+/-- info: "ok #[17, 40] #[[], [(48, 2)]] 55" -/
+=======
+/--
+What a run still owes `δ` after it, with step `n` at time `n`, the last step's
+outputs released at `released`, and the recording ending at `ended`.
+-/
+private def late (es : List Event) (released : List (Nat × Nat)) (ended δ : Nat) : List String :=
+  let h := historyOf es
+  let ms := moments h (List.range h.length).toArray
+    ((List.replicate (h.length - 1) []).toArray.push released)
+  (promptFaults cfg (fun _ _ => some me) me ms ended δ).map fun (k, o) =>
+    match o, ms[k]? with
+    | .vote1 p, some m => s!"vote1 in view {p.viewNumber.toNat} at t={m.time}"
+    | _, _ => "another obligation"
+
+/-- info: [] -/
+#guard_msgs in #eval late (opening ++ [voteStep [vote ⟨3⟩]]) [] 100 5
+
+/-- info: ["vote1 in view 1 at t=3"] -/
+#guard_msgs in #eval late (opening ++ [voteStep []]) [] 100 5
+
+-- A vote released after the step is cast when it is released, not when the step was taken.
+/-- info: ["vote1 in view 1 at t=3"] -/
+#guard_msgs in #eval late (opening ++ [voteStep [vote ⟨3⟩]]) [(50, 1)] 100 5
+
+/-- info: [] -/
+#guard_msgs in #eval late (opening ++ [voteStep [vote ⟨3⟩]]) [(50, 1)] 100 60
+
+/-- info: true -/
+#guard_msgs in #eval checkSafe cfg me (historyOf (opening ++ [voteStep [vote ⟨3⟩]]))
+
+/-- info: false -/
+#guard_msgs in #eval checkSafe cfg me (historyOf (opening ++ [voteStep [vote ⟨999⟩]]))
+
+-- A recording that stopped before the deadline could still have voted.
+/-- info: [] -/
+#guard_msgs in #eval late (opening ++ [voteStep []]) [] 8 5
+
+/-! A timer the node takes in view 1, answered in the same step, on a release, in a later step, or not at all. -/
+
+private def timerStep (outs : List Output) : Event := .consensus (.timeout ⟨1⟩) outs
+
+private def timeoutVote : Output := .send (.timeoutVote ⟨⟨⟨0⟩, lk⟩, ⟨1⟩, me⟩)
+
+/-- The timers a run has not answered `δ` after them, timed as in `late`. -/
+private def unanswered (es : List Event) (released : List (Nat × Nat)) (ended δ : Nat) : List String :=
+  let h := historyOf es
+  let ms := moments h (List.range h.length).toArray
+    ((List.replicate (h.length - 1) []).toArray.push released)
+  (timerFaults cfg me ms ended δ).map fun (k, v) =>
+    s!"timeout vote for view {v.toNat} at t={(ms[k]?.map (·.time)).getD 0}"
+
+/-- info: [] -/
+#guard_msgs in #eval unanswered (opening ++ [timerStep [timeoutVote]]) [] 100 5
+
+/-- info: ["timeout vote for view 1 at t=3"] -/
+#guard_msgs in #eval unanswered (opening ++ [timerStep []]) [] 100 5
+
+/-- info: ["timeout vote for view 1 at t=3"] -/
+#guard_msgs in #eval unanswered (opening ++ [timerStep [timeoutVote]]) [(50, 1)] 100 5
+
+/-- info: [] -/
+#guard_msgs in #eval unanswered (opening ++ [timerStep [timeoutVote]]) [(50, 1)] 100 60
+
+-- The vote may come in a later step, as long as it is within `δ`.
+/-- info: [] -/
+#guard_msgs in #eval unanswered (opening ++ [timerStep [], voteStep [timeoutVote]]) [] 100 5
+
+/-- info: ["timeout vote for view 1 at t=3"] -/
+#guard_msgs in #eval unanswered (opening ++ [timerStep [], voteStep [timeoutVote]]) [] 100 0
+
+/-! The one-honest indication may be for a later view than the node's. -/
+
+private def oneHonestStep (outs : List Output) : Event := .consensus (.timeoutOneHonest ⟨2⟩) outs
+
+private def timeoutVoteFor (epoch view : Nat) (lock : Cert1) : Output :=
+  .send (.timeoutVote ⟨⟨⟨epoch⟩, lock⟩, ⟨view⟩, me⟩)
+
+/-- info: [] -/
+#guard_msgs in #eval unanswered (opening ++ [oneHonestStep [timeoutVoteFor 0 2 lk]]) [] 100 5
+
+/-- info: ["timeout vote for view 2 at t=3"] -/
+#guard_msgs in #eval unanswered (opening ++ [oneHonestStep []]) [] 100 5
+
+/-! A timer the node has grounds past by its deadline is not owed: here by a timeout certificate. -/
+
+private def genesisCert : Cert1 := ⟨⟨⟨1⟩, ⟨0⟩, 0⟩, ViewNumber.genesis⟩
+
+private def certStep : Event := .consensus (.timeoutCertificate ⟨⟨⟨0⟩, genesisCert⟩, ⟨1⟩⟩) []
+
+/-- info: [] -/
+#guard_msgs in #eval unanswered (opening ++ [timerStep [], certStep]) [] 100 5
+
+/-! A vote sent after the timer must name the epoch the node was in at the timer. -/
+
+/-- info: ["timeout vote for view 1 at t=3"] -/
+#guard_msgs in #eval unanswered (opening ++ [timerStep [], voteStep [timeoutVoteFor 1 1 lk]]) [] 100 5
+
+/-!
+`ProtocolHistory.timeoutJustified`: a timeout vote answers a timer taken at or before
+it, and names the lock the node held then. The step that breaks it, if any.
+-/
+
+private def timeoutFault (es : List Event) : Option Nat :=
+  (protocolFault cfg (historyOf es) me (fun _ _ => some me)).map (·.1)
+
+/-- info: none -/
+#guard_msgs in #eval timeoutFault (opening ++ [timerStep [], voteStep [timeoutVoteFor 0 1 genesisCert]])
+
+-- No timer for the vote's view.
+/-- info: some 3 -/
+#guard_msgs in #eval timeoutFault (opening ++ [voteStep [timeoutVoteFor 0 1 genesisCert]])
+
+-- The lock was taken after the timer.
+/-- info: some 5 -/
+#guard_msgs in #eval
+  timeoutFault (opening ++ [timerStep [], .consensus (.certificate1 lk) [], voteStep [timeoutVoteFor 0 1 lk]])
+
+/-- A recorded step carries its time and its releases, and the trace its end. -/
+private def timedTrace : String :=
+  "# trace {}\n" ++
+  r#"{"consensus":{"input":{"timeout":{"v":4}},"output":[],"t":17}}"# ++ "\n" ++
+  r#"{"consensus":{"input":{"timeout":{"v":5}},"output":[],"t":40,"released":[{"t":48,"outputs":2}]}}"# ++
+  "\n# ended at t=55\n"
+
+/-- info: "ok #[17, 40] #[[], [(48, 2)]] 55" -/
+>>>>>>> 4ad03c1cb (Lean spec: timers answered within δ, vote2 rules for epochs left (#5308))
 #guard_msgs in
 #eval run (opening ++ [.consensus (.timeout ⟨9⟩) [.send (.vote1 ⟨⟨⟨3⟩, ⟨0⟩, 1⟩, ⟨1⟩, me⟩)]])
 

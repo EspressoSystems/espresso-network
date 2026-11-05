@@ -7,11 +7,11 @@ public import NewProtocolImpl.Steps
 # Checking a trace against the rest of the protocol
 
 The rules `NewProtocol.ProtocolHistory` adds to the signing rules, decided on a
-recorded trace: when a node may time out and must answer a timer, and what it may
-propose. Unlike the signing rules, these read the node's view, epoch and lock,
-which the specification derives from the history as the latest each has grounds
-for. Here each ground is collected into a list, and the latest is the largest
-element.
+recorded trace: when a node may time out, and what it may propose. That it answers
+its timers in time is checked with the obligations (`NewProtocolDiff.PromptCheck`).
+Unlike the signing rules, these read the node's view, epoch and lock, which the
+specification derives from the history as the latest each has grounds for. Here
+each ground is collected into a list, and the latest is the largest element.
 
 `checkProtocol_sound` is what makes a pass mean the trace obeys
 `ProtocolHistory`, for the leader schedule the trace names.
@@ -29,23 +29,21 @@ variable (cfg : Config) (h : History)
 
 variable (node : PubKey) (leader : EpochNumber → ViewNumber → Option PubKey)
 
-/-- Whether a timeout vote sent after `pre` is justified (`ProtocolHistory.timeoutJustified`). -/
-def timeoutJustifiedBy (pre : History) (st : Step) (vote : TimeoutVote) : Bool :=
-  decide (vote.signer = node) && decide (vote.data.epoch = epochOfHistory cfg pre)
-    && decide (vote.data.lock ∈ cert1sHeld cfg pre)
-    && match st.input with
-      | .timeout v => decide (v = vote.view ∧ viewOf cfg pre = vote.view)
-      | .timeoutOneHonest v => decide (v = vote.view ∧ viewOf cfg pre ≤ vote.view)
-      | _ => false
+/-- Whether step `m` took a timer or one-honest indication for view `v` (`History.TimerAt`). -/
+def timerAtB (m : Nat) (v : ViewNumber) : Bool :=
+  decide (timerView cfg h m = some v)
 
-/-- Whether a step after `pre` answers its timer or indication (`ProtocolHistory.timeoutAnswered`). -/
-def timeoutAnsweredBy (pre : History) (st : Step) : Bool :=
-  let answered v := (timeoutVotesOf st).any fun tv =>
-    decide (Output.send (.timeoutVote ⟨⟨epochOfHistory cfg pre, tv.data.lock⟩, v, node⟩) ∈ st.output)
-  match st.input with
-  | .timeout v => !decide (viewOf cfg pre = v) || answered v
-  | .timeoutOneHonest v => !decide (viewOf cfg pre ≤ v) || answered v
-  | _ => true
+/--
+Whether a timeout vote sent in step `n` is justified (`ProtocolHistory.timeoutJustified`).
+
+The timer is searched for from step `n` back, since it is almost always the step
+that sends the vote.
+-/
+def timeoutJustifiedBy (n : Nat) (vote : TimeoutVote) : Bool :=
+  decide (vote.signer = node)
+    && (List.range (n + 1)).reverse.any fun m =>
+      timerAtB cfg h m vote.view && decide (epochOfHistory cfg (h.take m) = vote.data.epoch)
+        && decide (vote.data.lock ∈ cert1sHeld cfg (h.take m))
 
 /-- Why a proposal is not one the node may make, given that `ProposalJustifiedB` failed. -/
 def proposalReason (post : History) (p : Proposal) : String :=
@@ -96,16 +94,21 @@ def vote1LeaderBy (post : History) (v : Vote1) : Bool :=
       || (receivedRevotes post).any fun x => decide (leader x.2.cert.data.epoch x.2.view = some x.1
         ∧ Vote1Again v x.2 ∧ NotBehindB cfg post x.2.cert.data.epoch))
 
+/-- Why a timeout vote sent in step `n` is not justified, given that `timeoutJustifiedBy` failed. -/
+def timeoutReason (n : Nat) (st : Step) : String :=
+  match (timeoutVotesOf st).find? (!timeoutJustifiedBy cfg h node n ·) with
+  | some tv => s!"timeoutJustified: a vote for view {tv.view.toNat} naming epoch \
+      {tv.data.epoch.toNat}, with no timer for that view at which the node was in that epoch \
+      and held the lock"
+  | none => "timeoutJustified"
+
 /-- The first rule step `n` breaks, and why. -/
 def stepFault (n : Nat) (st : Step) : Option String :=
-  let pre := h.take n
   if !(vote1sOf st).all (vote1LeaderBy cfg leader (h.take (n + 1))) then
     some s!"vote1Leader: a vote1 not on a proposal or re-vote request its view's leader sent, \
       or for a view not reached or an epoch left"
-  else if !(timeoutVotesOf st).all (timeoutJustifiedBy cfg node pre st) then
-    some s!"timeoutJustified: view {(viewOf cfg pre).toNat}, epoch {(epochOfHistory cfg pre).toNat}"
-  else if !timeoutAnsweredBy cfg node pre st then
-    some s!"timeoutAnswered: view {(viewOf cfg pre).toNat}"
+  else if !(timeoutVotesOf st).all (timeoutJustifiedBy cfg h node n) then
+    some (timeoutReason cfg h node n st)
   else
     match (proposalsOf st).findSome? fun p =>
         (proposalFault cfg node leader (h.take (n + 1)) p).map (s!"proposeJustified: {·}") with
@@ -142,37 +145,17 @@ variable {cfg h}
 
 variable {node leader}
 
-theorem timeoutJustified_of {pre : History} {st : Step} {vote : TimeoutVote}
-    (hj : timeoutJustifiedBy cfg node pre st vote = true) :
-    vote.signer = node ∧ pre.InEpoch cfg vote.data.epoch ∧ pre.HasCert1 cfg vote.data.lock
-      ∧ ((st.input = .timeout vote.view ∧ pre.InView cfg vote.view)
-        ∨ (st.input = .timeoutOneHonest vote.view ∧ ∃ v, pre.InView cfg v ∧ v ≤ vote.view)) := by
-  simp only [timeoutJustifiedBy, Bool.and_eq_true, decide_eq_true_eq] at hj
-  obtain ⟨⟨⟨hsig, hep⟩, hlock⟩, hin⟩ := hj
-  refine ⟨hsig, hep ▸ inEpoch_epochOfHistory cfg pre, hasCert1_of_mem hlock, ?_⟩
-  revert hin
-  cases hi : st.input <;> simp only [decide_eq_true_eq, Bool.false_eq_true, false_implies]
-  · rintro ⟨rfl, hv⟩
-    exact Or.inl ⟨rfl, hv ▸ inView_viewOf cfg pre⟩
-  · rintro ⟨rfl, hv⟩
-    exact Or.inr ⟨rfl, _, inView_viewOf cfg pre, hv⟩
+theorem timerAt_of {m : Nat} {v : ViewNumber} (ht : timerAtB cfg h m v = true) : h.TimerAt cfg m v :=
+  timerView_eq_some.mp (of_decide_eq_true ht)
 
-theorem timeoutAnswered_of {pre : History} {st : Step} {v : ViewNumber}
-    (ha : timeoutAnsweredBy cfg node pre st = true)
-    (howed : (st.input = .timeout v ∧ pre.InView cfg v)
-      ∨ (st.input = .timeoutOneHonest v ∧ ∃ w, pre.InView cfg w ∧ w ≤ v)) :
-    ∃ e L, pre.InEpoch cfg e ∧ Output.send (.timeoutVote ⟨⟨e, L⟩, v, node⟩) ∈ st.output := by
-  have hans : ((timeoutVotesOf st).any fun tv => decide (Output.send
-      (.timeoutVote ⟨⟨epochOfHistory cfg pre, tv.data.lock⟩, v, node⟩) ∈ st.output)) = true := by
-    rcases howed with ⟨hi, hv⟩ | ⟨hi, w, hw, hle⟩
-    · simp only [timeoutAnsweredBy, hi, Bool.or_eq_true, Bool.not_eq_true',
-        decide_eq_false_iff_not] at ha
-      exact ha.resolve_left (fun hn => hn (viewOf_of_inView hv))
-    · simp only [timeoutAnsweredBy, hi, Bool.or_eq_true, Bool.not_eq_true',
-        decide_eq_false_iff_not] at ha
-      exact ha.resolve_left (fun hn => hn (viewOf_of_inView hw ▸ hle))
-  obtain ⟨tv, -, hm⟩ := List.any_eq_true.mp hans
-  exact ⟨_, _, inEpoch_epochOfHistory cfg pre, of_decide_eq_true hm⟩
+theorem timeoutJustified_of {n : Nat} {vote : TimeoutVote} (hj : timeoutJustifiedBy cfg h node n vote = true) :
+    vote.signer = node ∧ ∃ m ≤ n, h.TimerAt cfg m vote.view ∧ (h.upTo m).InEpoch cfg vote.data.epoch
+      ∧ (h.upTo m).HasCert1 cfg vote.data.lock := by
+  simp only [timeoutJustifiedBy, Bool.and_eq_true, decide_eq_true_eq, List.any_eq_true,
+    List.mem_reverse, List.mem_range] at hj
+  obtain ⟨hsig, m, hm, ⟨ht, hep⟩, hlock⟩ := hj
+  exact ⟨hsig, m, Nat.lt_succ_iff.mp hm, timerAt_of ht, hep ▸ inEpoch_epochOfHistory cfg _,
+    hasCert1_of_mem hlock⟩
 
 theorem proposalJustified_of {post : History} {p : Proposal}
     (hf : proposalFault cfg node leader post p = none) :
@@ -207,17 +190,15 @@ theorem vote1Leader_of {post : History} {v : Vote1} (hv : vote1LeaderBy cfg lead
 
 theorem stepFault_none {n : Nat} {st : Step} (hf : stepFault cfg h node leader n st = none) :
     (∀ vote ∈ vote1sOf st, vote1LeaderBy cfg leader (h.take (n + 1)) vote = true)
-      ∧ (∀ vote ∈ timeoutVotesOf st, timeoutJustifiedBy cfg node (h.take n) st vote = true)
-      ∧ timeoutAnsweredBy cfg node (h.take n) st = true
+      ∧ (∀ vote ∈ timeoutVotesOf st, timeoutJustifiedBy cfg h node n vote = true)
       ∧ (∀ p ∈ proposalsOf st, proposalFault cfg node leader (h.take (n + 1)) p = none)
       ∧ ∀ r ∈ revotesOf st, revoteFault cfg node leader (h.take (n + 1)) r = none := by
   unfold stepFault at hf
   by_cases ha : (vote1sOf st).all (vote1LeaderBy cfg leader (h.take (n + 1))) = true <;>
-    by_cases h1 : (timeoutVotesOf st).all (timeoutJustifiedBy cfg node (h.take n) st) = true <;>
-    by_cases h2 : timeoutAnsweredBy cfg node (h.take n) st = true <;>
-    simp only [ha, h1, h2, Bool.not_true, Bool.not_false, Bool.false_eq_true, ite_false, ite_true,
+    by_cases h1 : (timeoutVotesOf st).all (timeoutJustifiedBy cfg h node n) = true <;>
+    simp only [ha, h1, Bool.not_true, Bool.not_false, Bool.false_eq_true, ite_false, ite_true,
       reduceCtorEq] at hf
-  refine ⟨List.all_eq_true.mp ha, List.all_eq_true.mp h1, h2, ?_⟩
+  refine ⟨List.all_eq_true.mp ha, List.all_eq_true.mp h1, ?_⟩
   split at hf
   · cases hf
   · rename_i hp
@@ -230,7 +211,7 @@ schedule the check was given, and given that the validity reports it received
 were truthful.
 -/
 theorem checkProtocol_sound (hs : checkSafe cfg node h = true) (hvalid : ValidityTruthful h)
-    (hp : protocolFault cfg h node leader = none) : ProtocolHistory cfg leader node (fun _ => True) (fun _ => True) h := by
+    (hp : protocolFault cfg h node leader = none) : ProtocolHistory cfg leader node (fun _ => True) h := by
   unfold protocolFault at hp
   split at hp
   · cases hp
@@ -251,20 +232,18 @@ theorem checkProtocol_sound (hs : checkSafe cfg node h = true) (hvalid : Validit
     simp only [hst, Option.bind_some, Option.map_eq_none_iff] at this
     exact this
   have hsafe := checkSafe_sound hs hvalid (fun _ => True)
-  refine ⟨hsafe, ?_, ?_, ?_, ?_, ?_, fun m m' v e hs hs' hv hv' he he' _ => ?_⟩
+  refine ⟨hsafe, ?_, ?_, ?_, ?_, fun m m' v e hs hs' hv hv' he he' _ => ?_⟩
   · rintro n vote ⟨st, hst, hmem⟩ _
     exact vote1Leader_of ((stepFault_none (hstep n st hst)).1 vote (mem_vote1sOf.mpr hmem))
   · intro n st vote hst hmem _
     exact timeoutJustified_of
       ((stepFault_none (hstep n st hst)).2.1 vote (mem_timeoutVotesOf hmem))
-  · intro n st v hst howed _
-    exact timeoutAnswered_of (stepFault_none (hstep n st hst)).2.2.1 howed
   · rintro n p ⟨st, hst, hmem⟩ _
     exact proposalJustified_of
-      ((stepFault_none (hstep n st hst)).2.2.2.1 p (mem_proposalsOf hmem))
+      ((stepFault_none (hstep n st hst)).2.2.1 p (mem_proposalsOf hmem))
   · rintro n r ⟨st, hst, hmem⟩ _
     exact revoteJustified_of
-      ((stepFault_none (hstep n st hst)).2.2.2.2 r (mem_revotesOf_iff.mpr hmem))
+      ((stepFault_none (hstep n st hst)).2.2.2 r (mem_revotesOf_iff.mpr hmem))
   · refine NewProtocolImpl.global_once ⟨fun v v' a b => hsafe.vote1Once v v' a b trivial,
       fun v v' a b => hsafe.vote2Once v v' a b trivial, ?_, ?_⟩ m m' v e hs hs' hv hv' he he'
     · rintro p p' ⟨st, hst, hm⟩ ⟨st', hst', hm'⟩ he hv
