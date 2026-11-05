@@ -18,6 +18,8 @@ use hotshot_query_service_types::availability::LeafId;
 use hotshot_query_service_types::{availability::LeafQueryData, node::BlockId};
 use hotshot_types::data::EpochNumber;
 #[cfg(feature = "client")]
+use hotshot_types::traits::metrics::{Counter, NoMetrics};
+#[cfg(feature = "client")]
 use http_client::{StatusCode, Url, error::ClientError as _};
 #[cfg(feature = "client")]
 use serde::de::DeserializeOwned;
@@ -28,6 +30,8 @@ use tokio::time::sleep;
 #[cfg(feature = "client")]
 use vbs::version::StaticVersion;
 
+#[cfg(feature = "client")]
+use crate::metrics::LightClientMetrics;
 use crate::{
     consensus::{
         header::HeaderProof, leaf::LeafProof, namespace::NamespaceProof, payload::PayloadProof,
@@ -159,6 +163,8 @@ type HttpClient = http_client::Client<hotshot_query_service_types::Error, Static
 #[derive(Clone, Debug)]
 pub struct QueryServiceClient {
     client: HttpClient,
+    requests: Box<dyn Counter>,
+    failures: Box<dyn Counter>,
 }
 
 #[cfg(feature = "client")]
@@ -166,19 +172,47 @@ impl QueryServiceClient {
     /// Connect to a HotShot query service at the given base URL.
     pub fn new(url: Url) -> Self {
         Self {
-            client: http_client::Client::builder(url)
-                .set_timeout(Some(Duration::from_secs(10)))
-                .build(),
+            client: Self::connect(url),
+            requests: Box::new(NoMetrics),
+            failures: Box::new(NoMetrics),
         }
+    }
+
+    /// [`new`](Self::new), counting requests and failures with `url` as the `peer` label.
+    pub fn with_metrics(url: Url, metrics: &LightClientMetrics) -> Self {
+        let peer = vec![url.to_string()];
+        Self {
+            requests: metrics.requests.create(peer.clone()),
+            failures: metrics.request_failures.create(peer),
+            client: Self::connect(url),
+        }
+    }
+
+    fn connect(url: Url) -> HttpClient {
+        http_client::Client::builder(url)
+            .set_timeout(Some(Duration::from_secs(10)))
+            .build()
     }
 
     /// GET `path`, deserializing the response
     async fn fetch<T: DeserializeOwned>(&self, path: &str) -> Result<T> {
-        self.client
+        self.requests.add(1);
+        let res = self
+            .client
             .get(path)
             .send()
             .await
-            .with_context(|| format!("fetching {path}"))
+            .with_context(|| format!("fetching {path}"));
+        self.record_failure(&res);
+        res
+    }
+
+    /// A peer answers 404 when it lacks the data, which for a cert2 is most heights, so a 404
+    /// is not a failure.
+    fn record_failure<T>(&self, res: &Result<T>) {
+        if res.as_ref().is_err_and(|err| !is_not_found(err)) {
+            self.failures.add(1);
+        }
     }
 }
 
@@ -232,12 +266,16 @@ impl Client for QueryServiceClient {
         &self,
         ranges: &[Range<u64>],
     ) -> Result<Vec<LeafQueryData<SeqTypes>>> {
-        self.client
+        self.requests.add(1);
+        let res = self
+            .client
             .post("/availability/leaf/ranges")
             .body_binary(&ranges)?
             .send()
             .await
-            .context("fetching leaf ranges")
+            .context("fetching leaf ranges");
+        self.record_failure(&res);
+        res
     }
 
     async fn header_proof(&self, root: u64, id: BlockId<SeqTypes>) -> Result<HeaderProof> {
@@ -250,12 +288,16 @@ impl Client for QueryServiceClient {
     }
 
     async fn payload_proofs_for_ranges(&self, ranges: &[Range<u64>]) -> Result<Vec<PayloadProof>> {
-        self.client
+        self.requests.add(1);
+        let res = self
+            .client
             .post("/light-client/payload/ranges")
             .body_binary(&ranges)?
             .send()
             .await
-            .context("fetching payload proof ranges")
+            .context("fetching payload proof ranges");
+        self.record_failure(&res);
+        res
     }
 
     async fn payload_proofs_in_range(&self, start: u64, end: u64) -> Result<Vec<PayloadProof>> {
@@ -551,10 +593,12 @@ mod test {
     };
     use espresso_types::{Header, TEST_UPGRADE, Transaction};
     use futures::{TryStreamExt, stream::StreamExt};
+    use hotshot_query_service::metrics::PrometheusMetrics;
     use hotshot_query_service_types::{
         Resolvable,
         availability::{BlockQueryData, LeafQueryData},
     };
+    use http_client::error::ClientError;
     use pretty_assertions::assert_eq;
     use rand::RngCore;
     use rstest_reuse::apply;
@@ -564,6 +608,7 @@ mod test {
     use super::*;
     use crate::{
         consensus::leaf::{FinalityProof, LeafProofHint},
+        metrics::LightClientMetrics,
         testing::AlwaysTrueQuorum,
     };
 
@@ -583,6 +628,43 @@ mod test {
             QueryServiceClient::new(url),
         ])
         .unwrap()
+    }
+
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_request_metrics() {
+        let metrics = PrometheusMetrics::default();
+        let url: Url = "http://notarealurl".parse().unwrap();
+        let client =
+            QueryServiceClient::with_metrics(url.clone(), &LightClientMetrics::new(&metrics));
+
+        client.block_height().await.unwrap_err();
+        let not_found = anyhow::Error::new(
+            <hotshot_query_service_types::Error as ClientError>::catch_all(
+                StatusCode::NOT_FOUND,
+                "no cert2".into(),
+            ),
+        );
+        client.record_failure(&Err::<(), _>(not_found));
+
+        let group = metrics.get_subgroup(["light_client"]).unwrap();
+        let peer = [url.to_string()];
+        assert_eq!(
+            group
+                .get_counter_family("requests")
+                .unwrap()
+                .get(&peer)
+                .get(),
+            1
+        );
+        assert_eq!(
+            group
+                .get_counter_family("request_failures")
+                .unwrap()
+                .get(&peer)
+                .get(),
+            1
+        );
     }
 
     #[apply(sql_data_sources)]

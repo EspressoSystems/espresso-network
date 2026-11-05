@@ -5,9 +5,10 @@ use std::{
     future::Future,
     ops::Range,
     sync::Arc,
+    time::Instant,
 };
 
-use anyhow::{Context, Result, bail, ensure};
+use anyhow::{Context, Result, anyhow, ensure};
 use async_lock::RwLock;
 use committable::Committable;
 use espresso_types::{
@@ -30,6 +31,7 @@ use crate::{
         leaf::LeafProofHint,
         quorum::{Quorum, StakeTable, StakeTablePair, StakeTableQuorum},
     },
+    metrics::LightClientMetrics,
     storage::{LeafRequest, Storage},
 };
 
@@ -117,6 +119,8 @@ pub struct LightClient<P, S> {
 
     // We cache stake tables in memory since they are large and expensive to load from the database.
     stake_tables: RwLock<BTreeMap<EpochNumber, Arc<StakeTable>>>,
+
+    metrics: LightClientMetrics,
 }
 
 impl<P, S> LightClient<P, S> {
@@ -173,7 +177,13 @@ where
             genesis_stake_table: Arc::new(genesis.stake_table.into()),
             first_epoch_with_dynamic_stake_table: genesis.first_epoch_with_dynamic_stake_table,
             stake_tables: Default::default(),
+            metrics: LightClientMetrics::default(),
         }
+    }
+
+    pub fn with_metrics(mut self, metrics: LightClientMetrics) -> Self {
+        self.metrics = metrics;
+        self
     }
 
     pub fn genesis(&self) -> Genesis {
@@ -194,6 +204,12 @@ where
     /// nor the connected server is aware of the true latest block, and so in rare cases the result
     /// of this method may be an underestimate.
     pub async fn block_height(&self) -> Result<u64> {
+        let height = self.verified_block_height().await?;
+        self.metrics.block_height.set(height as usize);
+        Ok(height)
+    }
+
+    async fn verified_block_height(&self) -> Result<u64> {
         let latest_known = self.db.block_height().await?;
         let latest_from_server = self.server.block_height().await?;
         if latest_from_server > latest_known {
@@ -370,17 +386,19 @@ where
         cert2: Certificate2<SeqTypes>,
         header: &Header,
     ) -> Result<Certificate2<SeqTypes>> {
-        ensure!(
-            cert2.data.block_number == header.height(),
-            "cert2 block number {} does not match requested height {}",
-            cert2.data.block_number,
-            header.height(),
-        );
+        if cert2.data.block_number != header.height() {
+            return Err(self.verification_failure(anyhow!(
+                "cert2 block number {} does not match requested height {}",
+                cert2.data.block_number,
+                header.height(),
+            )));
+        }
         let quorum = StakeTableQuorum::new((cert2.data.epoch, self), self.epoch_height);
         quorum
             .verify_cert2(&cert2, header.version())
             .await
-            .context("verifying cert2 signature")?;
+            .context("verifying cert2 signature")
+            .map_err(|err| self.verification_failure(err))?;
         Ok(cert2)
     }
 
@@ -429,12 +447,13 @@ where
         let mut expected_parent = known_finalized.leaf().parent_commitment();
         for leaf in leaves.iter().rev() {
             let leaf_hash = leaf.hash();
-            ensure!(
-                leaf_hash == expected_parent,
-                "leaf hash mismatch: expected parent hash {:?}, got leaf hash {:?}",
-                expected_parent,
-                leaf_hash
-            );
+            if leaf_hash != expected_parent {
+                return Err(self.verification_failure(anyhow!(
+                    "leaf hash mismatch: expected parent hash {:?}, got leaf hash {:?}",
+                    expected_parent,
+                    leaf_hash
+                )));
+            }
             expected_parent = leaf.leaf().parent_commitment();
         }
 
@@ -629,17 +648,19 @@ where
         };
         let header = proof
             .verify(upper_bound.header().block_merkle_tree_root())
-            .context("invalid header proof")?;
+            .context("invalid header proof")
+            .map_err(|err| self.verification_failure(err))?;
 
         // The server has given us a header and correctly proved it finalized, but we still
         // need to verify that it actually gave us the header we requested.
-        ensure!(
-            header_matches_id(&header, id),
-            "server returned a valid header proof for the wrong header (requested header {id}, \
-             got header {} with hash {})",
-            header.height(),
-            header.commit(),
-        );
+        if !header_matches_id(&header, id) {
+            return Err(self.verification_failure(anyhow!(
+                "server returned a valid header proof for the wrong header (requested header \
+                 {id}, got header {} with hash {})",
+                header.height(),
+                header.commit(),
+            )));
+        }
 
         Ok(header)
     }
@@ -698,7 +719,9 @@ where
         header: Header,
     ) -> Result<(BlockQueryData<SeqTypes>, VidCommonQueryData<SeqTypes>)> {
         let proof = self.server.payload_proof(header.height()).await?;
-        let (payload, vid_common) = proof.verify_with_vid_common(&header)?;
+        let (payload, vid_common) = proof
+            .verify_with_vid_common(&header)
+            .map_err(|err| self.verification_failure(err))?;
         Ok((
             BlockQueryData::new(header.clone(), payload),
             VidCommonQueryData::new(header, vid_common),
@@ -750,7 +773,9 @@ where
             .into_iter()
             .zip(proofs)
             .map(|(header, proof)| {
-                let (payload, vid_common) = proof.verify_with_vid_common(&header)?;
+                let (payload, vid_common) = proof
+                    .verify_with_vid_common(&header)
+                    .map_err(|err| self.verification_failure(err))?;
                 Ok((
                     BlockQueryData::new(header.clone(), payload),
                     VidCommonQueryData::new(header, vid_common),
@@ -801,7 +826,9 @@ where
             .zip(proofs)
             .map(|(leaf, proof)| {
                 let header = leaf.header().clone();
-                let (payload, vid_common) = proof.verify_with_vid_common(&header)?;
+                let (payload, vid_common) = proof
+                    .verify_with_vid_common(&header)
+                    .map_err(|err| self.verification_failure(err))?;
                 Ok((
                     BlockQueryData::new(header.clone(), payload),
                     VidCommonQueryData::new(header, vid_common),
@@ -830,7 +857,9 @@ where
             .server
             .namespace_proof(header.height(), namespace)
             .await?;
-        proof.verify(header, namespace)
+        proof
+            .verify(header, namespace)
+            .map_err(|err| self.verification_failure(err))
     }
 
     /// Fetch and verify the transactions in the given namespace of blocks in the range
@@ -857,7 +886,11 @@ where
         proofs
             .into_iter()
             .zip(&headers)
-            .map(|(proof, header)| proof.verify(header, namespace))
+            .map(|(proof, header)| {
+                proof
+                    .verify(header, namespace)
+                    .map_err(|err| self.verification_failure(err))
+            })
             .collect()
     }
 
@@ -891,7 +924,12 @@ where
             .map(|(proofs, header)| {
                 proofs
                     .into_iter()
-                    .map(|(namespace, proof)| Ok((namespace, proof.verify(header, namespace)?)))
+                    .map(|(namespace, proof)| {
+                        let transactions = proof
+                            .verify(header, namespace)
+                            .map_err(|err| self.verification_failure(err))?;
+                        Ok((namespace, transactions))
+                    })
                     .collect()
             })
             .collect()
@@ -899,6 +937,12 @@ where
 
     /// Fetch and verify the stake table for the requested epoch.
     pub async fn quorum_for_epoch(&self, epoch: EpochNumber) -> Result<Arc<StakeTable>> {
+        let quorum = self.load_quorum_for_epoch(epoch).await?;
+        self.metrics.stake_table_verified(epoch);
+        Ok(quorum)
+    }
+
+    async fn load_quorum_for_epoch(&self, epoch: EpochNumber) -> Result<Arc<StakeTable>> {
         if epoch < self.first_epoch_with_dynamic_stake_table {
             return Ok(self.genesis_stake_table.clone());
         }
@@ -964,9 +1008,14 @@ where
                 )
             };
         tracing::info!(from = %lower_bound, to = %epoch, "performing stake table catchup");
+        let target = *epoch;
+        self.metrics
+            .stake_table_backlog
+            .set((target - *lower_bound) as usize);
 
         // Replay one epoch at a time from the lower bound stake table to the requested epoch.
-        for epoch in *lower_bound + 1..=*epoch {
+        for epoch in *lower_bound + 1..=target {
+            let started = Instant::now();
             let events = self
                 .server
                 .stake_table_events(EpochNumber::new(epoch))
@@ -999,12 +1048,13 @@ where
                 .context(format!("fetching epoch root for {epoch}"))?
             };
             if let Some(hash) = root.next_stake_table_hash() {
-                ensure!(
-                    hash == stake_table.commit(),
-                    "epoch {epoch} root {root_height} stake table hash {hash} does not match \
-                     reconstructed hash {}",
-                    stake_table.commit(),
-                );
+                if hash != stake_table.commit() {
+                    return Err(self.verification_failure(anyhow!(
+                        "epoch {epoch} root {root_height} stake table hash {hash} does not match \
+                         reconstructed hash {}",
+                        stake_table.commit(),
+                    )));
+                }
             } else if self.decaf() && root.version() < DrbAndHeaderUpgradeVersion::VERSION {
                 // Decaf briefly ran a version of PoS where epoch root headers did not contain the
                 // hash of the expected stake table, and so we can not verify that we computed the
@@ -1017,7 +1067,9 @@ where
                     "trusting stake table prior to DRB upgrade on Decaf",
                 );
             } else {
-                bail!("epoch {epoch} root {root_height} does not have next stake table hash");
+                return Err(self.verification_failure(anyhow!(
+                    "epoch {epoch} root {root_height} does not have next stake table hash"
+                )));
             }
 
             // Cache the reconstructed stake table in the database. We store
@@ -1040,6 +1092,13 @@ where
             }
 
             tracing::info!(epoch, num_events, "finished stake table catchup for epoch");
+            self.metrics
+                .stake_table_catchup_duration
+                .add_point(started.elapsed().as_secs_f64());
+            self.metrics
+                .stake_table_backlog
+                .set((target - epoch) as usize);
+            self.metrics.stake_table_verified(EpochNumber::new(epoch));
             prev_quorum = next_quorum;
             epoch_root_protocol_version = root.version();
         }
@@ -1074,17 +1133,21 @@ where
                      to verify assumption",
                 )?),
             };
-            let leaf = proof.verify(hint).await?;
+            let leaf = proof
+                .verify(hint)
+                .await
+                .map_err(|err| self.verification_failure(err))?;
 
             // The server has given us a leaf and correctly proved it finalized, but we still need to
             // verify that it actually gave us the leaf we requested.
-            ensure!(
-                leaf_matches_id(&leaf, id),
-                "server returned a valid leaf proof for the wrong leaf (requested leaf {id}, got \
-                 leaf {} with hash {})",
-                leaf.height(),
-                leaf.hash(),
-            );
+            if !leaf_matches_id(&leaf, id) {
+                return Err(self.verification_failure(anyhow!(
+                    "server returned a valid leaf proof for the wrong leaf (requested leaf {id}, \
+                     got leaf {} with hash {})",
+                    leaf.height(),
+                    leaf.hash(),
+                )));
+            }
 
             // Having fetched and verified the leaf from the server, we can now cache it locally to
             // improve future requests.
@@ -1124,6 +1187,14 @@ where
     fn decaf(&self) -> bool {
         self.chain_id == DECAF_CHAIN_ID
     }
+
+    fn verification_failure(&self, err: impl Into<anyhow::Error>) -> anyhow::Error {
+        let err = err.into();
+        if err.downcast_ref::<StakeTableUnavailable>().is_none() {
+            self.metrics.verification_failures.add(1);
+        }
+        err
+    }
 }
 
 fn stake_table_state_to_quorum(
@@ -1141,17 +1212,29 @@ fn stake_table_state_to_quorum(
         .collect())
 }
 
+/// Context for an error loading a stake table while verifying a response, which says nothing
+/// about the response itself.
+#[derive(Debug, derive_more::Display)]
+#[display("loading the stake table")]
+struct StakeTableUnavailable;
+
 impl<P, S> StakeTablePair for (EpochNumber, &LightClient<P, S>)
 where
     P: Storage,
     S: Client,
 {
     async fn stake_table(&self) -> Result<Arc<StakeTable>> {
-        self.1.quorum_for_epoch(self.0).await
+        self.1
+            .quorum_for_epoch(self.0)
+            .await
+            .context(StakeTableUnavailable)
     }
 
     async fn next_epoch_stake_table(&self) -> Result<Arc<StakeTable>> {
-        self.1.quorum_for_epoch(self.0 + 1).await
+        self.1
+            .quorum_for_epoch(self.0 + 1)
+            .await
+            .context(StakeTableUnavailable)
     }
 }
 
@@ -1181,6 +1264,7 @@ mod test {
     use espresso_types::{
         NsIndex, RegisteredValidatorMap, StakeTableState, ValidatorSet, v0_3::RegisteredValidator,
     };
+    use hotshot_query_service::metrics::PrometheusMetrics;
     use hotshot_query_service_types::availability::TransactionIndex;
     use hotshot_types::{addr::NetAddr, x25519};
     use itertools::izip;
@@ -1199,10 +1283,18 @@ mod test {
         let client = TestClient::default();
         let db = SqlStorage::default().await.unwrap();
 
-        let lc = LightClient::from_genesis(db.clone(), client.clone(), client.genesis().await);
+        let metrics = PrometheusMetrics::default();
+        let lc = LightClient::from_genesis(db.clone(), client.clone(), client.genesis().await)
+            .with_metrics(LightClientMetrics::new(&metrics));
+        let gauge = metrics
+            .get_subgroup(["light_client"])
+            .unwrap()
+            .get_gauge("block_height")
+            .unwrap();
 
         // Test empty block height.
         assert_eq!(lc.block_height().await.unwrap(), 0);
+        assert_eq!(gauge.get(), 0);
 
         // Local block height greater than server.
         let leaf = leaf_chain(1..2, DRB_AND_HEADER_UPGRADE_VERSION)
@@ -1210,10 +1302,12 @@ mod test {
             .remove(0);
         db.insert_leaf(leaf).await.unwrap();
         assert_eq!(lc.block_height().await.unwrap(), 2);
+        assert_eq!(gauge.get(), 2);
 
         // Server block height greater than local.
         client.leaf(2).await;
         assert_eq!(lc.block_height().await.unwrap(), 3);
+        assert_eq!(gauge.get(), 3);
         // In the process of verifying the block height, we should have fetched and stored the
         // latest leaf.
         assert_eq!(db.block_height().await.unwrap(), 3);
@@ -1222,6 +1316,7 @@ mod test {
         client.mock_block_height(10).await;
         client.forget_leaf(9).await;
         assert_eq!(lc.block_height().await.unwrap(), 3);
+        assert_eq!(gauge.get(), 3);
     }
 
     #[tokio::test]
@@ -1851,6 +1946,165 @@ mod test {
                 .contains("does not match reconstructed hash"),
             "{err:#}"
         );
+    }
+
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_stake_table_catchup_metrics() {
+        let metrics = PrometheusMetrics::default();
+        let client = TestClient::default();
+        let genesis = client.genesis().await;
+        let lc = LightClient::from_genesis(
+            SqlStorage::default().await.unwrap(),
+            client.clone(),
+            genesis.clone(),
+        )
+        .with_metrics(LightClientMetrics::new(&metrics));
+
+        let first = genesis.first_epoch_with_dynamic_stake_table;
+        let target = first + 5;
+        lc.quorum_for_epoch(target).await.unwrap();
+
+        let group = metrics.get_subgroup(["light_client"]).unwrap();
+        assert_eq!(
+            group.get_gauge("stake_table_epoch").unwrap().get(),
+            *target as usize
+        );
+        assert_eq!(group.get_gauge("stake_table_backlog").unwrap().get(), 0);
+        // The walk starts just below the first dynamic epoch, so it replays `first..=target`.
+        assert_eq!(
+            group
+                .get_histogram("stake_table_catchup_duration")
+                .unwrap()
+                .sample_count(),
+            6
+        );
+
+        lc.quorum_for_epoch(first + 1).await.unwrap();
+        assert_eq!(
+            group.get_gauge("stake_table_epoch").unwrap().get(),
+            *target as usize
+        );
+    }
+
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_stake_table_epoch_metric_after_restart() {
+        let db = SqlStorage::default().await.unwrap();
+        let client = TestClient::default();
+        let genesis = client.genesis().await;
+        let target = genesis.first_epoch_with_dynamic_stake_table + 5;
+        LightClient::from_genesis(db.clone(), client.clone(), genesis.clone())
+            .quorum_for_epoch(target)
+            .await
+            .unwrap();
+
+        let metrics = PrometheusMetrics::default();
+        let lc = LightClient::from_genesis(db, client, genesis)
+            .with_metrics(LightClientMetrics::new(&metrics));
+        lc.quorum_for_epoch(target).await.unwrap();
+
+        let group = metrics.get_subgroup(["light_client"]).unwrap();
+        assert_eq!(
+            group.get_gauge("stake_table_epoch").unwrap().get(),
+            *target as usize
+        );
+        assert_eq!(
+            group
+                .get_histogram("stake_table_catchup_duration")
+                .unwrap()
+                .sample_count(),
+            0
+        );
+    }
+
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_stake_table_catchup_metrics_on_failure() {
+        let metrics = PrometheusMetrics::default();
+        let client = TestClient::default();
+        let genesis = client.genesis().await;
+        let lc = LightClient::from_genesis(
+            SqlStorage::default().await.unwrap(),
+            client.clone(),
+            genesis.clone(),
+        )
+        .with_metrics(LightClientMetrics::new(&metrics));
+
+        let first = genesis.first_epoch_with_dynamic_stake_table;
+        client.return_invalid_quorum(first + 3).await;
+        lc.quorum_for_epoch(first + 5).await.unwrap_err();
+
+        let group = metrics.get_subgroup(["light_client"]).unwrap();
+        assert_eq!(
+            group.get_gauge("stake_table_epoch").unwrap().get(),
+            *first as usize + 2
+        );
+        assert_eq!(group.get_gauge("stake_table_backlog").unwrap().get(), 3);
+    }
+
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_verification_failures_invalid_stake_table() {
+        let metrics = PrometheusMetrics::default();
+        let client = TestClient::default();
+        let genesis = client.genesis().await;
+        let lc = LightClient::from_genesis(
+            SqlStorage::default().await.unwrap(),
+            client.clone(),
+            genesis.clone(),
+        )
+        .with_metrics(LightClientMetrics::new(&metrics));
+
+        let epoch = genesis.first_epoch_with_dynamic_stake_table + 5;
+        client.return_invalid_quorum(epoch).await;
+        lc.quorum_for_epoch(epoch).await.unwrap_err();
+
+        let group = metrics.get_subgroup(["light_client"]).unwrap();
+        assert_eq!(group.get_counter("verification_failures").unwrap().get(), 1);
+    }
+
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_verification_failures_wrong_leaf() {
+        let metrics = PrometheusMetrics::default();
+        let client = TestClient::default();
+        let lc = LightClient::from_genesis(
+            SqlStorage::default().await.unwrap(),
+            client.clone(),
+            client.genesis().await,
+        )
+        .with_metrics(LightClientMetrics::new(&metrics));
+
+        client.return_wrong_leaf(1, 2).await;
+        lc.fetch_headers_in_range(1, 4).await.unwrap_err();
+
+        let group = metrics.get_subgroup(["light_client"]).unwrap();
+        assert_eq!(group.get_counter("verification_failures").unwrap().get(), 1);
+    }
+
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_verification_failures_ignore_unavailable_stake_table() {
+        let metrics = PrometheusMetrics::default();
+        let client = TestClient::with_epoch_height(10);
+        let genesis = client.genesis().await;
+        let lc = LightClient::from_genesis(
+            SqlStorage::default().await.unwrap(),
+            client.clone(),
+            genesis,
+        )
+        .with_metrics(LightClientMetrics::new(&metrics));
+
+        // Verifying a leaf in a dynamic epoch needs stake tables the server no longer has.
+        client.leaf(50).await;
+        for epoch in 0..10 {
+            client.forget_quorum(EpochNumber::new(epoch)).await;
+        }
+        lc.fetch_leaf(LeafId::Number(50)).await.unwrap_err();
+
+        let group = metrics.get_subgroup(["light_client"]).unwrap();
+        assert_eq!(group.get_counter("verification_failures").unwrap().get(), 0);
     }
 
     /// Regression: epoch-root leaf proofs must locate a 2-chain when views immediately after
