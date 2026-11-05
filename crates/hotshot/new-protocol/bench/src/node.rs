@@ -183,7 +183,7 @@ async fn build_coordinator(
     vid_disperser.set_tracer(tracer.clone());
 
     let mut vid_reconstructor = VidReconstructor::new();
-    vid_reconstructor.set_tracer(tracer);
+    vid_reconstructor.set_tracer(tracer.clone());
 
     let block_config = BlockBuilderConfig::default();
     let block_builder = BlockBuilder::new(
@@ -191,7 +191,8 @@ async fn build_coordinator(
         membership.clone(),
         block_config,
         upgrade_lock.clone(),
-    );
+    )
+    .with_tracer(tracer);
 
     let mut state_manager = StateManager::new(instance.clone(), upgrade_lock.clone());
     let genesis_state = Arc::new(genesis_state);

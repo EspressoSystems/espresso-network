@@ -48,6 +48,7 @@ use hotshot_types::{
     },
     vote::HasViewNumber,
 };
+use parking_lot::Mutex;
 
 use super::{
     certs::build_cert,
@@ -58,6 +59,7 @@ use crate::{
     client::{ClientLeafFetcherNetwork, CoordinatorClient},
     consensus::{Consensus, ConsensusInput, ConsensusOutput},
     helpers::{proposal_commitment, test_timeout_epoch_lock, test_upgrade_lock},
+    leader_trace::{LeaderEvent, LeaderTracer, LeaderTracerHandle},
     message::{
         CatchupEvidence, Certificate1, Certificate2, ConsensusMessage, Message, MessageType,
         Proposal, ProposalMessage, TimeoutVoteMessage, TimeoutVoteMessage3, Validated, Vote1,
@@ -1752,4 +1754,41 @@ pub(crate) fn record_leader(
     let view = input.view_number();
     let epoch = input.epoch().unwrap_or_else(|| consensus.current_epoch());
     trace.leader::<TestTypes>(view, epoch, consensus.leader_of(view, epoch).as_ref());
+}
+
+/// `LeaderTracer` keeping every recorded `(view, event, ts_ns)` in record order.
+#[derive(Default)]
+pub(crate) struct RecordingTracer {
+    events: Mutex<Vec<(u64, LeaderEvent, i128)>>,
+}
+
+impl RecordingTracer {
+    /// Recorded `(view, event)` pairs, in record order.
+    pub(crate) fn events(&self) -> Vec<(u64, LeaderEvent)> {
+        self.events
+            .lock()
+            .iter()
+            .map(|(view, event, _)| (*view, *event))
+            .collect()
+    }
+
+    /// Timestamp of the first recorded `event`, if any.
+    pub(crate) fn ts_ns(&self, event: LeaderEvent) -> Option<i128> {
+        self.events
+            .lock()
+            .iter()
+            .find(|(_, e, _)| *e == event)
+            .map(|(_, _, ts)| *ts)
+    }
+
+    /// This tracer as the handle type the components take.
+    pub(crate) fn handle(self: &Arc<Self>) -> LeaderTracerHandle {
+        self.clone()
+    }
+}
+
+impl LeaderTracer for RecordingTracer {
+    fn record(&self, view: u64, event: LeaderEvent, ts_ns: i128) {
+        self.events.lock().push((view, event, ts_ns));
+    }
 }

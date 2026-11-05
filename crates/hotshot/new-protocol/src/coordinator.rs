@@ -328,7 +328,7 @@ where
         );
         vid_disperser.set_tracer(leader_tracer.clone());
         let mut vid_reconstructor = VidReconstructor::new();
-        vid_reconstructor.set_tracer(leader_tracer);
+        vid_reconstructor.set_tracer(leader_tracer.clone());
 
         let lock = upgrade_lock.clone();
         let genesis_qc = consensus.cert1_at(ViewNumber::genesis()).cloned();
@@ -416,7 +416,8 @@ where
                     coordinator_metrics
                         .as_ref()
                         .map(|m| m.consensus.block_commitments_duration.clone().into()),
-                ),
+                )
+                .with_tracer(leader_tracer),
             )
             .proposal_validator(ProposalValidator::new(
                 membership_coordinator.clone(),
@@ -1318,6 +1319,11 @@ where
         commit: VidCommitment2,
     ) -> bool {
         self.built_dispersals.contains_key(&(view, epoch, commit))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn block_builder_mut(&mut self) -> &mut BlockBuilder<T> {
+        &mut self.block_builder
     }
 
     #[cfg(test)]

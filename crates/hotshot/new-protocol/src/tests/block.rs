@@ -1,4 +1,7 @@
-use std::{collections::BTreeMap, marker::PhantomData, num::NonZeroU64, sync::Arc, time::Duration};
+use std::{
+    collections::BTreeMap, marker::PhantomData, net::Ipv4Addr, num::NonZeroU64, sync::Arc,
+    time::Duration,
+};
 
 use committable::Committable;
 use hotshot_example_types::{
@@ -7,26 +10,36 @@ use hotshot_example_types::{
     state_types::TestInstanceState,
 };
 use hotshot_types::{
-    consensus::PayloadWithMetadata,
+    addr::NetAddr,
+    consensus::{ConsensusMetricsValue, PayloadWithMetadata},
     data::{EpochNumber, VidCommitment2, ViewNumber},
+    initializer::HotShotInitializer,
+    light_client::StateKeyPair,
     message::UpgradeLock,
     signature_key::BLSPubKey,
     simple_certificate::UpgradeCertificate,
     simple_vote::UpgradeProposalData,
-    traits::{BlockPayload, signature_key::SignatureKey},
+    traits::{BlockPayload, metrics::NoMetrics, signature_key::SignatureKey},
+    upgrade_config::UpgradeConfig,
+    x25519::Keypair,
 };
+use tokio::sync::mpsc;
 use versions::{NEW_PROTOCOL_VERSION, TIMEOUT_EPOCH_VERSION, Upgrade, Version};
 use vid::utils::blake3::Blake3Node;
 
 use crate::{
     block::{
-        BlockBuilder, BlockBuilderConfig, BlockError, block_commitments, forward_budget,
-        transaction_hashes,
+        BlockAndHeaderRequest, BlockBuilder, BlockBuilderConfig, BlockBuilderOutput, BlockError,
+        block_commitments, forward_budget, transaction_hashes,
     },
+    coordinator::Coordinator,
     helpers::test_upgrade_lock,
+    leader_trace::LeaderEvent,
     message::{BlockMessage, DedupManifest, Message, MessageType, TransactionMessage, Validated},
-    network::{MIN_MESSAGE_LIMIT, message_limit},
-    tests::common::utils::mock_membership,
+    network::{Cliquenet, MIN_MESSAGE_LIMIT, message_limit},
+    tests::common::utils::{
+        RecordingTracer, TestData, mock_membership, mock_membership_with_num_nodes,
+    },
 };
 
 fn tx(n: u8) -> TestTransaction {
@@ -448,12 +461,12 @@ async fn test_request_block_same_view_different_parent_both_produce_output() {
     let target_view = ViewNumber::new(5);
     b.request_block(BlockAndHeaderRequest {
         view: target_view,
-        epoch: EpochNumber::genesis(),
+        epoch: epoch(),
         parent_proposal: parent_a.clone(),
     });
     b.request_block(BlockAndHeaderRequest {
         view: target_view,
-        epoch: EpochNumber::genesis(),
+        epoch: epoch(),
         parent_proposal: parent_b.clone(),
     });
 
@@ -484,7 +497,7 @@ async fn test_request_block_same_view_reuses_transactions() {
     let target_view = ViewNumber::new(5);
     let request = |parent_index: usize| BlockAndHeaderRequest {
         view: target_view,
-        epoch: EpochNumber::genesis(),
+        epoch: epoch(),
         parent_proposal: test_data.views[parent_index].proposal.data.clone(),
     };
 
@@ -674,7 +687,7 @@ async fn test_request_block_dedups_same_view_same_parent() {
     let target_view = ViewNumber::new(5);
     let req = || BlockAndHeaderRequest {
         view: target_view,
-        epoch: EpochNumber::genesis(),
+        epoch: epoch(),
         parent_proposal: parent.clone(),
     };
     b.request_block(req());
@@ -682,6 +695,50 @@ async fn test_request_block_dedups_same_view_same_parent() {
 
     assert!(matches!(b.next().await, Some(Ok(_))));
     assert!(b.next().await.is_none());
+}
+
+/// A deduped request records no second `BlockRequestStarted`.
+#[tokio::test]
+async fn request_block_dedup_records_one_request_event() {
+    let tracer = Arc::new(RecordingTracer::default());
+    let mut b = builder_with(BlockBuilderConfig {
+        empty_block_delay: Duration::ZERO,
+        ..small_config()
+    })
+    .with_tracer(Some(tracer.handle()));
+    let parent = TestData::new(2).await.views[0].proposal.data.clone();
+    let req = || BlockAndHeaderRequest {
+        view: view(5),
+        epoch: epoch(),
+        parent_proposal: parent.clone(),
+    };
+    b.request_block(req());
+    b.request_block(req());
+
+    assert!(matches!(b.next().await, Some(Ok(_))));
+    let started = tracer
+        .events()
+        .into_iter()
+        .filter(|(_, e)| *e == LeaderEvent::BlockRequestStarted)
+        .count();
+    assert_eq!(started, 1);
+}
+
+/// With an empty pool, `BlockPayloadStart` follows `BlockRequestStarted` by at least the delay.
+#[tokio::test]
+async fn block_builder_payload_start_waits_empty_block_delay() {
+    let delay = Duration::from_millis(50);
+    let tracer = Arc::new(RecordingTracer::default());
+    let mut b = builder_with(BlockBuilderConfig {
+        empty_block_delay: delay,
+        ..small_config()
+    })
+    .with_tracer(Some(tracer.handle()));
+
+    assert!(matches!(request_one_block(&mut b).await, Some(Ok(_))));
+    let started = tracer.ts_ns(LeaderEvent::BlockRequestStarted).unwrap();
+    let payload = tracer.ts_ns(LeaderEvent::BlockPayloadStart).unwrap();
+    assert!(payload - started >= delay.as_nanos() as i128);
 }
 
 #[tokio::test]
@@ -911,4 +968,141 @@ async fn block_record_expires_with_the_retry_ttl() {
     b.on_view_changed(view(7));
     b.on_blocks_decided([(view(1), payload(1))]);
     assert_eq!(b.outstanding_transactions().0, 1);
+}
+
+/// Requests one block for view 5 from `b` and returns its output.
+async fn request_one_block(
+    b: &mut BlockBuilder<TestTypes>,
+) -> Option<Result<BlockBuilderOutput<TestTypes>, BlockError>> {
+    let parent = TestData::new(2).await.views[0].proposal.data.clone();
+    b.request_block(BlockAndHeaderRequest {
+        view: view(5),
+        epoch: epoch(),
+        parent_proposal: parent,
+    });
+    b.next().await
+}
+
+#[tokio::test]
+async fn block_builder_records_all_four_events() {
+    let tracer = Arc::new(RecordingTracer::default());
+    let mut b = builder_with(BlockBuilderConfig {
+        empty_block_delay: Duration::ZERO,
+        ..small_config()
+    })
+    .with_tracer(Some(tracer.handle()));
+
+    assert!(matches!(request_one_block(&mut b).await, Some(Ok(_))));
+    assert_eq!(
+        tracer.events(),
+        [
+            (5, LeaderEvent::BlockRequestStarted),
+            (5, LeaderEvent::BlockPayloadStart),
+            (5, LeaderEvent::BlockCommitmentsStart),
+            (5, LeaderEvent::BlockCommitmentsEnd)
+        ]
+    );
+}
+
+/// A version before the new protocol makes `block_commitments` fail, which still ends the span.
+#[tokio::test]
+async fn block_builder_records_commitments_end_on_error() {
+    let tracer = Arc::new(RecordingTracer::default());
+    let old = versions::version(0, 5);
+    let mut b = BlockBuilder::new(
+        Arc::new(TestInstanceState::default()),
+        mock_membership(),
+        BlockBuilderConfig {
+            empty_block_delay: Duration::ZERO,
+            ..small_config()
+        },
+        UpgradeLock::from_certificate(Upgrade::new(old, NEW_PROTOCOL_VERSION), &None),
+    )
+    .with_tracer(Some(tracer.handle()));
+
+    assert!(matches!(
+        request_one_block(&mut b).await,
+        Some(Err(BlockError::UnsupportedVersion(version))) if version == old
+    ));
+    assert_eq!(
+        tracer.events(),
+        [
+            (5, LeaderEvent::BlockRequestStarted),
+            (5, LeaderEvent::BlockPayloadStart),
+            (5, LeaderEvent::BlockCommitmentsStart),
+            (5, LeaderEvent::BlockCommitmentsEnd)
+        ]
+    );
+}
+
+/// `Coordinator::maker` hands its tracer to the block builder it constructs.
+#[tokio::test]
+async fn coordinator_maker_wires_the_tracer_to_the_block_builder() {
+    let epoch_height = 10;
+    let (public_key, private_key) = BLSPubKey::generated_from_seed_indexed([0; 32], 0);
+    let state_key_pair = StateKeyPair::generate_from_seed_indexed([0; 32], 0);
+    let instance_state = TestInstanceState::default();
+    let upgrade_lock = test_upgrade_lock::<TestTypes>();
+    let (membership, storage, _client) =
+        mock_membership_with_num_nodes(10, epoch_height, public_key);
+    let initializer = HotShotInitializer::from_genesis(
+        instance_state,
+        epoch_height,
+        vec![],
+        Upgrade::trivial(NEW_PROTOCOL_VERSION),
+    )
+    .await
+    .unwrap();
+    let keypair = Keypair::derive_from::<BLSPubKey>(&private_key).unwrap();
+    let addr = NetAddr::Inet(
+        Ipv4Addr::LOCALHOST.into(),
+        test_utils::reserve_tcp_port().unwrap(),
+    );
+    let network = Cliquenet::create(
+        "test-maker-tracer",
+        public_key,
+        keypair,
+        addr,
+        vec![],
+        None,
+        upgrade_lock.clone(),
+        Box::new(NoMetrics),
+    )
+    .await
+    .unwrap();
+    let tracer = Arc::new(RecordingTracer::default());
+
+    let mut coordinator = Coordinator::maker()
+        .membership_coordinator(membership)
+        .network(network)
+        .initializer(&initializer)
+        .upgrade_lock(upgrade_lock)
+        .public_key(public_key)
+        .private_key(private_key)
+        .state_private_key(state_key_pair.sign_key_ref().clone())
+        .stake_table_capacity(10)
+        .timeout_duration(Duration::from_secs(30))
+        .empty_block_delay(Duration::ZERO)
+        .block_sizes(sizes(512))
+        .storage(storage)
+        .metrics(&NoMetrics)
+        .consensus_metrics(ConsensusMetricsValue::new(&NoMetrics))
+        .leader_tracer(tracer.handle())
+        .upgrade_config(UpgradeConfig::default())
+        .external_tx(mpsc::unbounded_channel().0)
+        .make();
+
+    assert!(matches!(
+        request_one_block(coordinator.block_builder_mut()).await,
+        Some(Ok(_))
+    ));
+    assert_eq!(
+        tracer.events(),
+        [
+            (5, LeaderEvent::BlockRequestStarted),
+            (5, LeaderEvent::BlockPayloadStart),
+            (5, LeaderEvent::BlockCommitmentsStart),
+            (5, LeaderEvent::BlockCommitmentsEnd)
+        ]
+    );
 }

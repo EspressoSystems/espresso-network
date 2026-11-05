@@ -165,10 +165,31 @@ async fn run_benchmark(
         all_traces.push_str(&trace);
     }
 
-    // Only leaders disperse, and empty blocks have no buckets.
-    if block_size > 0 {
-        for event in ["ns_disperse_end", "vid_shares_unicast_start"] {
-            assert!(all_traces.contains(event), "no node traced `{event}`");
+    // Only leaders disperse. With `block_size > 0` the disperser encodes itself; with 0 the block
+    // builder serves every request, so only that path holds. The `block_request_started` and
+    // `block_payload_start` assertions hold on both runs: the startup request uses the block builder.
+    let traced = |event: &str| all_traces.contains(&format!(",{event},"));
+    let path_events: &[&str] = if block_size > 0 {
+        &["ns_disperse_start", "ns_disperse_end"]
+    } else {
+        &[
+            "block_commitments_start",
+            "block_commitments_end",
+            "vid_fragments_start",
+            "vid_fragments_end",
+        ]
+    };
+    for event in path_events.iter().chain(&[
+        "block_request_started",
+        "block_payload_start",
+        "vid_shares_unicast_start",
+        "vid_shares_unicast_end",
+    ]) {
+        assert!(traced(event), "no node traced `{event}`");
+    }
+    if block_size == 0 {
+        for event in ["ns_disperse_start", "ns_disperse_end"] {
+            assert!(!traced(event), "a node traced `{event}` on the Built path");
         }
     }
 

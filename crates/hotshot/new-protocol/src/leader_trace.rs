@@ -31,12 +31,32 @@ pub enum LeaderEvent {
     // V-1 events that trigger V duty.
     ProposalValidatedVMinus1,
     RequestBlockHeaderQueued,
+
+    // Block builder, per request.
+    /// The block builder accepts a request and spawns its task, before the empty-block delay.
+    BlockRequestStarted,
+    /// The block builder task is past the empty-block delay, before it builds the payload.
+    BlockPayloadStart,
+    /// The block builder starts `block::block_commitments`: payload bytes, then the VID encode in
+    /// parallel with transaction hashes and builder commitment. Built path only.
+    BlockCommitmentsStart,
+    /// `block_commitments` returned, `Ok` or not. Same span as `block_commitments_duration`.
+    BlockCommitmentsEnd,
+
+    // Coordinator applies the header and block.
     HeaderCreatedApplied,
     BlockBuiltApplied,
 
-    // Erasure-code the block and unicast the shares.
+    // Disperse the block and unicast the shares. `NsDisperse*` when the disperser encodes
+    // (`Dispersal::Encode`), `VidFragments*` when the block builder did (`Dispersal::Built`).
+    /// The disperser starts encoding the block. Encode path only.
     NsDisperseStart,
+    /// The last bucket is encoded and its fragments assembled. Encode path only.
     NsDisperseEnd,
+    /// The disperser starts on the block builder's shares: sign, bucket, assemble. Built path only.
+    VidFragmentsStart,
+    /// The last bucket's fragments are assembled. Built path only.
+    VidFragmentsEnd,
     VidSharesUnicastStart,
     VidSharesUnicastEnd,
 
@@ -81,10 +101,16 @@ impl LeaderEvent {
         match self {
             ProposalValidatedVMinus1 => "proposal_validated_v_minus_1",
             RequestBlockHeaderQueued => "request_block_header_queued",
+            BlockRequestStarted => "block_request_started",
+            BlockPayloadStart => "block_payload_start",
+            BlockCommitmentsStart => "block_commitments_start",
+            BlockCommitmentsEnd => "block_commitments_end",
             HeaderCreatedApplied => "header_created_applied",
             BlockBuiltApplied => "block_built_applied",
             NsDisperseStart => "ns_disperse_start",
             NsDisperseEnd => "ns_disperse_end",
+            VidFragmentsStart => "vid_fragments_start",
+            VidFragmentsEnd => "vid_fragments_end",
             VidSharesUnicastStart => "vid_shares_unicast_start",
             VidSharesUnicastEnd => "vid_shares_unicast_end",
             Vote1VMinus1Arrived => "vote1_v_minus_1_arrived",
