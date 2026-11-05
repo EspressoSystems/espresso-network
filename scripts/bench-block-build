@@ -57,15 +57,6 @@ LANES = {
     "transaction_commitments": "#eb6834",
     "vid_commitment": "#1baf7a",
     "builder_commitment": "#eda100",
-<<<<<<< HEAD
-||||||| parent of ddb4d31fe (feat(bench): time the leader's VID dispersal in block_build (#5401))
-}
-# Per-step wording of the cpu kind, see STEPS in the bench.
-CPU_NOTES = {
-    "request_block": ", process cpu {:.1f} ms",
-    "block_commitments": ", process cpu {:.1f} ms",
-    "vid_commitment": ", cpu <= {:.1f} ms (residual)",
-=======
     "vid_disperse": "#1c2633",
     "disperse_params": "#7e57c2",
     "sign": "#00838f",
@@ -82,16 +73,6 @@ LEADER_VID_ONLY = {
     "ns_encode",
     "fragments",
     "serialize",
-}
-# Per-step wording of the cpu kind, see STEPS in the bench.
-CPU_NOTES = {
-    "leader_vid": ", process cpu {:.1f} ms",
-    "request_block": ", process cpu {:.1f} ms",
-    "block_commitments": ", process cpu {:.1f} ms",
-    "vid_commitment": ", cpu <= {:.1f} ms (residual)",
-    "vid_disperse": ", process cpu {:.1f} ms",
-    "ns_encode": ", cpu <= {:.1f} ms (residual)",
->>>>>>> ddb4d31fe (feat(bench): time the leader's VID dispersal in block_build (#5401))
 }
 
 log = logging.getLogger("bench-block-build")
@@ -269,16 +250,8 @@ def waterfall(runs: pd.DataFrame, path: Path) -> None:
             xerr=errors,
             error_kw={"ecolor": "#52514e", "capsize": 3},
         )
-<<<<<<< HEAD
         for lane, start, duration, error in zip(
             lanes, bars.start, bars.duration, errors, strict=True
-||||||| parent of ddb4d31fe (feat(bench): time the leader's VID dispersal in block_build (#5401))
-        for lane, step, start, duration, cpu, error in zip(
-            lanes, LANES, bars.start, bars.duration, bars.cpu, errors, strict=True
-=======
-        for lane, step, start, duration, cpu, error in zip(
-            lanes, steps, bars.start, bars.duration, bars.cpu, errors, strict=True
->>>>>>> ddb4d31fe (feat(bench): time the leader's VID dispersal in block_build (#5401))
         ):
             note = "not run" if pd.isna(duration) else f"{duration:.1f} ms"
             x = 0 if pd.isna(start) else start + duration + error
@@ -340,25 +313,8 @@ def run_one(binary: Path, name: str, env: dict[str, str], home: Path) -> pd.Data
     # Steps start with criterion's warm-up iterations; keep one per measured iteration.
     measured = int(sum(json.loads(sample_file.read_text())["iters"]))
     steps = json.loads(steps_file.read_text())
-<<<<<<< HEAD
     rows = [(step, s, d) for step, spans in steps.items() for s, d in spans[-measured:]]
     return pd.DataFrame(rows, columns=["step", "start", "duration"])
-||||||| parent of ddb4d31fe (feat(bench): time the leader's VID dispersal in block_build (#5401))
-    # Rows are [start, completion - start, cpu]; older refs record [start, duration] only.
-    rows = [
-        (step, *span[:2], span[2] if len(span) > 2 else math.nan)
-        for step, spans in steps.items()
-        for span in spans[-measured:]
-    ]
-    return pd.DataFrame(rows, columns=["step", "start", "duration", "cpu"])
-=======
-    # Rows are [start, completion - start, cpu]; older refs record [start, duration] only.
-    rows = [
-        (step, *span[:2], span[2] if len(span) > 2 else math.nan)
-        for step, spans in steps.items()
-        for span in spans[-measured:]
-    ]
-    return pd.DataFrame(rows, columns=["step", "start", "duration", "cpu"])
 
 
 def shared_benches(binaries: dict[str, Path], bench_filter: str) -> list[str]:
@@ -377,7 +333,6 @@ def shared_benches(binaries: dict[str, Path], bench_filter: str) -> list[str]:
 def root(name: str) -> str:
     """The step spanning a benchmark's iteration: `block_build/<root>/<size>`."""
     return name.split("/")[1]
->>>>>>> ddb4d31fe (feat(bench): time the leader's VID dispersal in block_build (#5401))
 
 
 def list_benches(binary: Path) -> list[str]:
