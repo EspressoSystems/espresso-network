@@ -41,15 +41,17 @@ members = [
     "crates/test-utils",
     "crates/versions",
     "crates/vid",
+    "fuzz",
     "sdks/crypto-helper",
     "slow-tests",
     "sp1/target-check",
     "tests",
 ]
 
-# All crates except espresso-dev-node and crypto-helper.
+# All crates except espresso-dev-node, crypto-helper and fuzz.
 # espresso-dev-node: enables the espresso-node testing feature
 # crypto-helper: vendored openssl leaks to workspace via feature unification
+# fuzz: compiles libFuzzer, and is run through cargo-fuzz
 default-members = [
     "contracts/rust/adapter",
     "contracts/rust/deployer",

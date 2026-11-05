@@ -13,7 +13,6 @@ use hotshot_types::{
     data::EpochNumber,
     epoch_membership::EpochMembershipCoordinator,
     signature_key::{BLSPubKey, SchnorrPubKey},
-    traits::election::Membership,
 };
 
 /// Create an `EpochMembershipCoordinator<TestTypes>` with `num_nodes` validators.
@@ -44,13 +43,12 @@ pub async fn make_membership(
         members.clone(),
         public_key,
         u64::MAX,
+        EpochNumber::genesis(),
     );
     // Bench doesn't drive catchup events into the fetcher; install a
     // disconnected receiver so the fetcher's listener is wired but idle.
     let (_tx, rx) = async_broadcast::broadcast(1);
     membership.set_leaf_fetcher(leaf_fetcher_network, TestStorage::default(), public_key, rx);
-
-    membership.set_first_epoch(EpochNumber::genesis(), [0u8; 32]);
 
     let coordinator =
         EpochMembershipCoordinator::new(membership, u64::MAX, &TestStorage::<TestTypes>::default());

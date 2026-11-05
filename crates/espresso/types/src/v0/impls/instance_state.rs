@@ -350,8 +350,14 @@ impl NodeState {
         let l1 = L1Client::new(vec!["http://localhost:3331".parse().unwrap()])
             .expect("Failed to create L1 client");
 
-        let membership =
-            EpochCommittees::new_stake(vec![], Default::default(), None, Fetcher::mock(), 0);
+        let membership = EpochCommittees::new(
+            vec![],
+            Default::default(),
+            None,
+            Fetcher::mock(),
+            0,
+            EpochNumber::genesis(),
+        );
 
         let storage = TestStorage::default();
         let coordinator = EpochMembershipCoordinator::new(membership, 100, &storage);
@@ -377,8 +383,14 @@ impl NodeState {
         let l1 = L1Client::new(vec!["http://localhost:3331".parse().unwrap()])
             .expect("Failed to create L1 client");
 
-        let membership =
-            EpochCommittees::new_stake(vec![], Default::default(), None, Fetcher::mock(), 0);
+        let membership = EpochCommittees::new(
+            vec![],
+            Default::default(),
+            None,
+            Fetcher::mock(),
+            0,
+            EpochNumber::genesis(),
+        );
         let storage = TestStorage::default();
         let coordinator = EpochMembershipCoordinator::new(membership, 100, &storage);
 
@@ -402,8 +414,14 @@ impl NodeState {
         let l1 = L1Client::new(vec!["http://localhost:3331".parse().unwrap()])
             .expect("Failed to create L1 client");
 
-        let membership =
-            EpochCommittees::new_stake(vec![], Default::default(), None, Fetcher::mock(), 0);
+        let membership = EpochCommittees::new(
+            vec![],
+            Default::default(),
+            None,
+            Fetcher::mock(),
+            0,
+            EpochNumber::genesis(),
+        );
 
         let storage = TestStorage::default();
         let coordinator = EpochMembershipCoordinator::new(membership, 100, &storage);
@@ -493,8 +511,14 @@ impl Default for NodeState {
         let l1 = L1Client::new(vec!["http://localhost:3331".parse().unwrap()])
             .expect("Failed to create L1 client");
 
-        let membership =
-            EpochCommittees::new_stake(vec![], Default::default(), None, Fetcher::mock(), 0);
+        let membership = EpochCommittees::new(
+            vec![],
+            Default::default(),
+            None,
+            Fetcher::mock(),
+            0,
+            EpochNumber::genesis(),
+        );
         let storage = TestStorage::default();
         let coordinator = EpochMembershipCoordinator::new(membership, 100, &storage);
 

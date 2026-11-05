@@ -101,10 +101,17 @@ workflows:
         - 'taiki-e/install-action@v2'
     '.github/workflows/flaky-tests-issue.yml':
         - 'actions/checkout@v7'
+    '.github/workflows/fuzz.yml':
+        - 'actions/checkout@v7'
+        - 'actions/upload-artifact@v7'
+        - 'dtolnay/rust-toolchain@master'
+        - 'swatinem/rust-cache@v2'
+        - 'taiki-e/install-action@v2'
     '.github/workflows/hotshot.yml':
         - 'actions/checkout@v7'
         - 'actions/download-artifact@v8'
         - 'actions/upload-artifact@v7'
+        - 'leanprover/lean-action@v1'
         - 'marocchino/sticky-pull-request-comment@v3'
         - 'swatinem/rust-cache@v2'
         - 'taiki-e/install-action@v2'
@@ -177,6 +184,11 @@ workflows:
         - 'rui314/setup-mold@v1'
         - 'swatinem/rust-cache@v2'
 dependencies:
+    'actions/cache@caa296126883cff596d87d8935842f9db880ef25':
+        ref: 'v5.1.0'
+        commit: 'sha1-caa296126883cff596d87d8935842f9db880ef25'
+        owner_id: 44036562
+        repo_id: 215566462
     'actions/checkout@v7':
         ref: 'v7'
         commit: 'sha1-3d3c42e5aac5ba805825da76410c181273ba90b1'
@@ -288,6 +300,13 @@ dependencies:
         commit: 'sha1-8560fb503c275d433c56f05a2f64850093baa9f7'
         owner_id: 3511026
         repo_id: 312027768
+    'leanprover/lean-action@v1':
+        ref: 'v1'
+        commit: 'sha1-fe408643ea7367d8c0404a8be3975bb145f5fb64'
+        owner_id: 7233018
+        repo_id: 795738301
+        uses:
+            - 'actions/cache@caa296126883cff596d87d8935842f9db880ef25'
     'marocchino/sticky-pull-request-comment@v3':
         ref: 'v3'
         commit: 'sha1-5770ad5eb8f42dd2c4f34da00c94c5381e49af88'

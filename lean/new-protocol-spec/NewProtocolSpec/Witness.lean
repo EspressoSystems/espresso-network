@@ -271,10 +271,6 @@ theorem safeMe (n : Nat) (hv : ∀ b, BlockValid b) :
       · exact Or.inr ((Trace.received_history _).mpr ⟨3, by omega, rfl⟩)
     | 0, hmem | 1, hmem | 2, hmem | 5, hmem | 6, hmem | _ + 7, hmem => simp [script] at hmem
     | 4, hmem => simp [script] at hmem
-  vote2Once v v' hs hs' _ _ _ := by
-    obtain ⟨i, -, hi⟩ := (Trace.sent_history _).mp hs
-    obtain ⟨j, -, hj⟩ := (Trace.sent_history _).mp hs'
-    rw [vote2s_sent hi, vote2s_sent hj]
   vote2BeforeTimeout := fun i vote ⟨st, hst, _⟩ _ tv hs => by
     obtain ⟨hi, -⟩ := getElem?_history hst
     rw [Trace.history_upTo _ (Nat.succ_le_of_lt hi)] at hs
@@ -354,12 +350,6 @@ theorem safeYou (P : EpochNumber → Prop) (n : Nat) (hv : ∀ b, BlockValid b) 
     · exact Or.inr (Or.inl ((Trace.received_history _).mpr ⟨4, by omega, rfl⟩))
     · exact Or.inr (Or.inl ⟨other, some share2, (Trace.received_history _).mpr ⟨2, by omega, rfl⟩⟩)
     · exact Or.inr ((Trace.received_history _).mpr ⟨5, by omega, rfl⟩)
-  vote2Once v v' hs hs' _ _ _ := by
-    obtain ⟨i, -, hi⟩ := (Trace.sent_history _).mp hs
-    obtain ⟨j, -, hj⟩ := (Trace.sent_history _).mp hs'
-    rcases yours_output hi with ⟨-, hi⟩ | ⟨-, hi⟩ | ⟨-, hi⟩ <;> cases hi
-    rcases yours_output hj with ⟨-, hj⟩ | ⟨-, hj⟩ | ⟨-, hj⟩ <;> cases hj
-    rfl
   vote2BeforeTimeout := fun i vote ⟨st, hst, _⟩ _ tv hs => by
     obtain ⟨hi, -⟩ := getElem?_history hst
     rw [Trace.history_upTo _ (Nat.succ_le_of_lt hi)] at hs
@@ -419,55 +409,63 @@ theorem backed2' : Cert2Backed (C := com) (fun k _ => tr k) cert2₂ :=
     subst hk; show SentBy (tr you) _; rw [tr_you]; exact ⟨5, by simp [yours, vote2You]⟩⟩
 
 /-- What `me` receives carries backed certificates. -/
-theorem me_inputs {n : Nat} : (∀ c, c ∈ (script n).input.cert1 → c = cfg.anchorCert ∨ Cert1Backed (C := com)
-      (fun k _ => tr k) c)
-    ∧ (∀ c, c ∈ (script n).input.cert2 → Cert2Backed (C := com) (fun k _ => tr k) c)
-    ∧ (∀ tc, tc ∉ (script n).input.timeoutCert) := by
+theorem me_inputs {n : Nat} : (∀ c, ((script n).input = .certificate1 c ∨ (∃ c2 p, (script n).input = .epochChange c c2 p)
+        ∨ ∃ s p share, (script n).input = .proposal s p share ∧ p.parentCert = c) →
+      c = cfg.anchorCert ∨ Cert1Backed (C := com) (fun k _ => tr k) c)
+    ∧ (∀ c, ((script n).input = .certificate2 c ∨ ∃ c1 p, (script n).input = .epochChange c1 c p) →
+      Cert2Backed (C := com) (fun k _ => tr k) c)
+    ∧ (∀ tc, ¬((script n).input = .timeoutCertificate tc
+        ∨ (∃ s p share, (script n).input = .proposal s p share ∧ p.timeoutEvidence = some tc)
+        ∨ ∃ s r, (script n).input = .revote s r ∧ r.timeoutEvidence = some tc)) := by
   match n with
-  | 0 => exact ⟨fun c hin => by simp [script, Input.cert1, blk1] at hin; subst hin; exact Or.inl rfl,
-      fun c hin => by simp [script, Input.cert2] at hin, fun tc hin => by
-        simp [script, Input.timeoutCert, blk1] at hin⟩
+  | 0 => exact ⟨fun c hin => by simp [script, blk1, and_assoc] at hin; subst hin; exact Or.inl rfl,
+      fun c hin => by simp [script] at hin, fun tc hin => by
+        simp [script, blk1, and_assoc] at hin⟩
   | 2 => exact ⟨fun c hin => by
-        simp [script, Input.cert1] at hin; subst hin; exact Or.inr (backed1 (Or.inl rfl)),
-      fun c hin => by simp [script, Input.cert2] at hin, fun tc hin => by
-        simp [script, Input.timeoutCert] at hin⟩
-  | 4 => exact ⟨fun c hin => by simp [script, Input.cert1] at hin,
-      fun c hin => by simp [script, Input.cert2] at hin; subst hin; exact backed2, fun tc hin => by
-        simp [script, Input.timeoutCert] at hin⟩
+        simp [script] at hin; subst hin; exact Or.inr (backed1 (Or.inl rfl)),
+      fun c hin => by simp [script] at hin, fun tc hin => by
+        simp [script] at hin⟩
+  | 4 => exact ⟨fun c hin => by simp [script] at hin,
+      fun c hin => by simp [script] at hin; subst hin; exact backed2, fun tc hin => by
+        simp [script] at hin⟩
   | 5 => exact ⟨fun c hin => by
-        simp [script, Input.cert1, blk2] at hin; subst hin; exact Or.inr (backed1 (Or.inl rfl)),
-      fun c hin => by simp [script, Input.cert2] at hin, fun tc hin => by
-        simp [script, Input.timeoutCert, blk2] at hin⟩
-  | 1 | 3 | 6 | _ + 7 => exact ⟨fun c hin => by simp [script, Input.cert1] at hin,
-      fun c hin => by simp [script, Input.cert2] at hin, fun tc hin => by
-        simp [script, Input.timeoutCert] at hin⟩
+        simp [script, blk2, and_assoc] at hin; subst hin; exact Or.inr (backed1 (Or.inl rfl)),
+      fun c hin => by simp [script] at hin, fun tc hin => by
+        simp [script, blk2, and_assoc] at hin⟩
+  | 1 | 3 | 6 | _ + 7 => exact ⟨fun c hin => by simp [script] at hin,
+      fun c hin => by simp [script] at hin, fun tc hin => by
+        simp [script] at hin⟩
 
 /-- What `you` receives carries backed certificates. -/
-theorem you_inputs {n : Nat} : (∀ c, c ∈ (yours n).input.cert1 → c = cfg.anchorCert ∨ Cert1Backed (C := com)
-      (fun k _ => tr k) c)
-    ∧ (∀ c, c ∈ (yours n).input.cert2 → Cert2Backed (C := com) (fun k _ => tr k) c)
-    ∧ (∀ tc, tc ∉ (yours n).input.timeoutCert) := by
+theorem you_inputs {n : Nat} : (∀ c, ((yours n).input = .certificate1 c ∨ (∃ c2 p, (yours n).input = .epochChange c c2 p)
+        ∨ ∃ s p share, (yours n).input = .proposal s p share ∧ p.parentCert = c) →
+      c = cfg.anchorCert ∨ Cert1Backed (C := com) (fun k _ => tr k) c)
+    ∧ (∀ c, ((yours n).input = .certificate2 c ∨ ∃ c1 p, (yours n).input = .epochChange c1 c p) →
+      Cert2Backed (C := com) (fun k _ => tr k) c)
+    ∧ (∀ tc, ¬((yours n).input = .timeoutCertificate tc
+        ∨ (∃ s p share, (yours n).input = .proposal s p share ∧ p.timeoutEvidence = some tc)
+        ∨ ∃ s r, (yours n).input = .revote s r ∧ r.timeoutEvidence = some tc)) := by
   match n with
-  | 1 => exact ⟨fun c hin => by simp [yours, Input.cert1] at hin,
-      fun c hin => by simp [yours, Input.cert2] at hin; subst hin; exact backed2, fun tc hin => by
-        simp [yours, Input.timeoutCert] at hin⟩
+  | 1 => exact ⟨fun c hin => by simp [yours] at hin,
+      fun c hin => by simp [yours] at hin; subst hin; exact backed2, fun tc hin => by
+        simp [yours] at hin⟩
   | 2 => exact ⟨fun c hin => by
-        simp [yours, Input.cert1, blk2] at hin; subst hin; exact Or.inr (backed1 (Or.inl rfl)),
-      fun c hin => by simp [yours, Input.cert2] at hin, fun tc hin => by
-        simp [yours, Input.timeoutCert, blk2] at hin⟩
-  | 0 => exact ⟨fun c hin => by simp [yours, Input.cert1, blk1] at hin; subst hin; exact Or.inl rfl,
-      fun c hin => by simp [yours, Input.cert2] at hin, fun tc hin => by
-        simp [yours, Input.timeoutCert, blk1] at hin⟩
+        simp [yours, blk2, and_assoc] at hin; subst hin; exact Or.inr (backed1 (Or.inl rfl)),
+      fun c hin => by simp [yours] at hin, fun tc hin => by
+        simp [yours, blk2, and_assoc] at hin⟩
+  | 0 => exact ⟨fun c hin => by simp [yours, blk1, and_assoc] at hin; subst hin; exact Or.inl rfl,
+      fun c hin => by simp [yours] at hin, fun tc hin => by
+        simp [yours, blk1, and_assoc] at hin⟩
   | 4 => exact ⟨fun c hin => by
-        simp [yours, Input.cert1] at hin; subst hin; exact Or.inr (backed1 (Or.inr rfl)),
-      fun c hin => by simp [yours, Input.cert2] at hin, fun tc hin => by
-        simp [yours, Input.timeoutCert] at hin⟩
-  | 6 => exact ⟨fun c hin => by simp [yours, Input.cert1] at hin,
-      fun c hin => by simp [yours, Input.cert2] at hin; subst hin; exact backed2', fun tc hin => by
-        simp [yours, Input.timeoutCert] at hin⟩
-  | 3 | 5 | _ + 7 => exact ⟨fun c hin => by simp [yours, Input.cert1] at hin,
-      fun c hin => by simp [yours, Input.cert2] at hin, fun tc hin => by
-        simp [yours, Input.timeoutCert] at hin⟩
+        simp [yours] at hin; subst hin; exact Or.inr (backed1 (Or.inr rfl)),
+      fun c hin => by simp [yours] at hin, fun tc hin => by
+        simp [yours] at hin⟩
+  | 6 => exact ⟨fun c hin => by simp [yours] at hin,
+      fun c hin => by simp [yours] at hin; subst hin; exact backed2', fun tc hin => by
+        simp [yours] at hin⟩
+  | 3 | 5 | _ + 7 => exact ⟨fun c hin => by simp [yours] at hin,
+      fun c hin => by simp [yours] at hin, fun tc hin => by
+        simp [yours] at hin⟩
 
 /-- The only proposal `you` receives is the second block. -/
 theorem you_proposals {i : Nat} {sender : PubKey} {p : Proposal} {share : Option VidShare}

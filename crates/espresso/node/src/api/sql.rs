@@ -2077,8 +2077,6 @@ async fn reward_header_dependencies(
             continue;
         }
 
-        let first_epoch = first_epoch.context("first epoch not found")?;
-
         let proposal_epoch = EpochNumber::new(epoch_from_block_number(height, epoch_height));
 
         // reward distribution starts third epoch onwards
@@ -2338,6 +2336,16 @@ pub(crate) mod impl_testable_data_source {
                     .fetch_one(tx.as_mut())
                     .await?,
             )
+        }
+
+        async fn data_heights(db: &SqlStorage) -> anyhow::Result<(Option<u64>, Option<u64>)> {
+            let mut tx = db.read().await?;
+            let pruned = tx.load_pruned_height().await?;
+            let lowest: Option<i64> =
+                sqlx::query_scalar("SELECT min(height) FROM leaf2 WHERE height > 0")
+                    .fetch_one(tx.as_mut())
+                    .await?;
+            Ok((pruned, lowest.map(|height| height as u64)))
         }
 
         async fn insert_deferred_migration(

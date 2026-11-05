@@ -187,7 +187,7 @@ impl<'a> Node<'a> {
             (
                 proposals.get(ViewNumber::new(1), a_commit).is_some(),
                 proposals.at(ViewNumber::new(1)).count(),
-                self.harness.consensus.locked_view(),
+                self.harness.consensus.lock_view().map(|lock| lock.view),
                 vote2s_at_view_1,
                 self.held_at_view_1(),
                 decided_at_view_1,
