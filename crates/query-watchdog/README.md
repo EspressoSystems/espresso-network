@@ -23,7 +23,8 @@ cargo run -p query-watchdog -- --nodes https://query.decaf.testnet.espresso.netw
 ```
 
 - The `serving` INFO line prints the endpoint URLs.
-- `/`: progress and missing ranges per node, with links to the failing request.
+- `/`: progress and missing ranges per node, with age, last tried and next try (`due` once overdue) and links to the
+  failing request.
 - `/status/metrics`: Prometheus metrics, `query_watchdog_*`; `query_watchdog_confirmed_missing{node}` pages.
 - `/healthcheck`: 200 with `{"status":"available"}`.
 - Logs: `RUST_LOG` (default INFO), `RUST_LOG_FORMAT=json`.
