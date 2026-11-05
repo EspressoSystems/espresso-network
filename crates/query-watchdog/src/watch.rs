@@ -827,15 +827,63 @@ impl<C: Clock> NodeWatch<C> {
         }
     }
 
-    /// Waits `request_interval`, counts the probe, sends HEAD.
+    /// `send_head`; a 404 of a probe with a peer fetch route goes on to `send_peer_fetch`.
     async fn send_probe(&mut self, probe: &Probe) -> Result<(), FetchError> {
+        match self.send_head(probe).await {
+            Err(FetchError::NotFound) if probe.peer_fetch_route().is_some() => {
+                self.send_peer_fetch(probe).await
+            },
+            answer => answer,
+        }
+    }
+
+    /// Waits `request_interval`, counts the probe, sends HEAD.
+    async fn send_head(&mut self, probe: &Probe) -> Result<(), FetchError> {
+        self.pace(probe).await;
+        self.watchdog.system.http.head(&self.node, probe).await
+    }
+
+    /// Asks the route that fetches from peers, after the node's own route answered 404. The node
+    /// answered the first request, so a 404, 500 or timeout means the peers could not serve the
+    /// object (`NotFound`, logged at DEBUG with its cause); any other status or transport error is
+    /// a failure. A 200 counts a local miss.
+    async fn send_peer_fetch(&mut self, probe: &Probe) -> Result<(), FetchError> {
+        self.pace(probe).await;
+        let answer = self
+            .watchdog
+            .system
+            .http
+            .head_peer_fetch(&self.node, probe)
+            .await
+            .expect("the caller checked the peer fetch route");
+        match answer {
+            Ok(()) => {
+                self.watchdog
+                    .metrics
+                    .count_local_miss(&self.node.label, probe.kind());
+                Ok(())
+            },
+            Err(error) if error.is_peer_miss() => {
+                tracing::debug!(
+                    node = %self.node.label,
+                    route = probe.peer_fetch_route(),
+                    %error,
+                    "no peer served the object"
+                );
+                Err(FetchError::NotFound)
+            },
+            Err(error) => Err(error),
+        }
+    }
+
+    /// Waits `request_interval` and counts the probe.
+    async fn pace(&mut self, probe: &Probe) {
         self.clock()
             .sleep(self.watchdog.options.request_interval)
             .await;
         self.watchdog
             .metrics
             .count_probe(&self.node.label, probe.kind());
-        self.watchdog.system.http.head(&self.node, probe).await
     }
 
     /// Counts a failed request in metrics and `counters.errors`.
@@ -972,7 +1020,7 @@ mod tests {
     use super::*;
     use crate::{
         capture::Capture,
-        kind::{DataKind, PointKind},
+        kind::{DataKind, Epoch, EpochKind, PointKind},
         missing::RowKey,
         node::{NodeHttp, ProbeTimeouts},
         schedule::{CompletedSweep, RunningSweep},
@@ -982,6 +1030,17 @@ mod tests {
     };
 
     const CONFIG_OFF: &str = r#"{"config":{"epoch_height":0,"epoch_start_block":0}}"#;
+
+    /// Answers of the two state cert routes.
+    #[derive(Default)]
+    struct StateCertRoutes {
+        /// Status of `v1/catchup/{epoch}/state-cert`.
+        catchup: StatusCode,
+        /// Status of `v1/availability/state-cert-v2/{epoch}`.
+        availability: StatusCode,
+        /// Time the availability route takes to answer.
+        availability_delay: Duration,
+    }
 
     /// A node serving every route except what the flags and sets take away, recording requests.
     #[derive(Clone)]
@@ -1004,6 +1063,8 @@ mod tests {
         all_404: Arc<AtomicBool>,
         /// Every route records the request and never answers while set.
         hang: Arc<AtomicBool>,
+        /// What the state cert routes answer.
+        state_cert: Arc<Mutex<StateCertRoutes>>,
         tip: Arc<AtomicU64>,
         config: Arc<Mutex<String>>,
         requests: Arc<Mutex<Vec<(Method, String)>>>,
@@ -1058,6 +1119,17 @@ mod tests {
             ["v1", "node", "stake-table", _] if flag(&node.failing_stake_table) => {
                 (StatusCode::INTERNAL_SERVER_ERROR, String::new())
             },
+            ["v1", "catchup", _, "state-cert"] => {
+                (node.state_cert.lock().unwrap().catchup, String::new())
+            },
+            ["v1", "availability", "state-cert-v2", _] => {
+                let (status, delay) = {
+                    let routes = node.state_cert.lock().unwrap();
+                    (routes.availability, routes.availability_delay)
+                };
+                tokio::time::sleep(delay).await;
+                (status, String::new())
+            },
             _ if flag(&node.all_404) => (StatusCode::NOT_FOUND, String::new()),
             ["v1", "availability", "leaf", from, until] => {
                 if flag(&node.failing_leaf) {
@@ -1106,6 +1178,7 @@ mod tests {
             leaf_budget: Arc::default(),
             all_404: Arc::default(),
             hang: Arc::default(),
+            state_cert: Arc::default(),
             tip: Arc::new(AtomicU64::new(1_000)),
             config: Arc::new(Mutex::new(CONFIG_OFF.to_owned())),
             requests: Arc::default(),
@@ -2069,6 +2142,128 @@ mod tests {
         assert!(page.contains("v1/node/stake-table/5"), "{page}");
     }
 
+    const CERT_PROBE: Probe = Probe::Epoch {
+        kind: EpochKind::StateCert,
+        epoch: Epoch(5),
+    };
+
+    /// `observe` of a state cert probe against a node answering `catchup` and `availability`
+    /// (after `delay`), with the peer fetch timeout at 200 ms; the observation, the number of
+    /// requests, and the local misses.
+    async fn observe_state_cert(
+        catchup: StatusCode,
+        availability: StatusCode,
+        delay: Duration,
+    ) -> (Observation, usize, u64) {
+        let (node, fake) = serve_fake([]).await;
+        *fake.state_cert.lock().unwrap() = StateCertRoutes {
+            catchup,
+            availability,
+            availability_delay: delay,
+        };
+        let timeouts = ProbeTimeouts {
+            peer_fetch_head: Duration::from_millis(200),
+            ..ProbeTimeouts::DEFAULT
+        };
+        let harness = Harness::with_timeouts(options(None), timeouts).await;
+        let (mut watch, _view) = harness.start(node.clone()).await;
+        let result = watch.observe(&CERT_PROBE).await;
+        let ProbeResult::Epoch { observation, .. } = result else {
+            panic!("an epoch probe observes an epoch");
+        };
+        let requests = fake.requests_to("/v1/catchup/5/state-cert")
+            + fake.requests_to("/v1/availability/state-cert-v2/5");
+        let misses = harness
+            .registry
+            .gather()
+            .iter()
+            .filter(|family| family.get_name() == "query_watchdog_local_misses_total")
+            .flat_map(|family| family.get_metric())
+            .map(|metric| metric.get_counter().get_value() as u64)
+            .sum();
+        (observation, requests, misses)
+    }
+
+    #[tokio::test]
+    async fn a_stored_state_cert_is_present_after_one_request() {
+        let (observation, requests, misses) =
+            observe_state_cert(StatusCode::OK, StatusCode::NOT_FOUND, Duration::ZERO).await;
+        assert_eq!(
+            (observation, requests, misses),
+            (Observation::Present, 1, 0)
+        );
+    }
+
+    #[tokio::test]
+    async fn a_state_cert_fetched_from_peers_is_present_and_a_local_miss() {
+        let (observation, requests, misses) = observe_state_cert(
+            StatusCode::NOT_FOUND,
+            StatusCode::OK,
+            Duration::from_millis(50),
+        )
+        .await;
+        assert_eq!(
+            (observation, requests, misses),
+            (Observation::Present, 2, 1)
+        );
+    }
+
+    #[tokio::test]
+    async fn a_state_cert_no_peer_has_is_not_found_whatever_the_status() {
+        for availability in [StatusCode::INTERNAL_SERVER_ERROR, StatusCode::NOT_FOUND] {
+            let (observation, requests, misses) =
+                observe_state_cert(StatusCode::NOT_FOUND, availability, Duration::ZERO).await;
+            assert_eq!(
+                (observation, requests, misses),
+                (Observation::NotFound, 2, 0)
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_state_cert_fetch_slower_than_the_timeout_is_not_found() {
+        let (observation, requests, misses) = observe_state_cert(
+            StatusCode::NOT_FOUND,
+            StatusCode::OK,
+            Duration::from_millis(600),
+        )
+        .await;
+        assert_eq!(
+            (observation, requests, misses),
+            (Observation::NotFound, 2, 0)
+        );
+    }
+
+    #[tokio::test]
+    async fn a_state_cert_fetch_answered_503_fails() {
+        let (observation, requests, misses) = observe_state_cert(
+            StatusCode::NOT_FOUND,
+            StatusCode::SERVICE_UNAVAILABLE,
+            Duration::ZERO,
+        )
+        .await;
+        assert!(
+            matches!(observation, Observation::Failed(_)),
+            "{observation:?}"
+        );
+        assert_eq!((requests, misses), (2, 0));
+    }
+
+    #[tokio::test]
+    async fn a_failing_catchup_route_fails_the_state_cert_without_the_second_request() {
+        let (observation, requests, misses) = observe_state_cert(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            StatusCode::OK,
+            Duration::ZERO,
+        )
+        .await;
+        assert!(
+            matches!(observation, Observation::Failed(_)),
+            "{observation:?}"
+        );
+        assert_eq!((requests, misses), (1, 0));
+    }
+
     #[tokio::test]
     async fn a_node_answering_404_everywhere_is_counted_as_missing() {
         let (node, fake) = serve_fake([]).await;
@@ -2222,6 +2417,7 @@ mod tests {
             range_head: Duration::from_secs(30),
             single_head: Duration::from_secs(30),
             json: Duration::from_secs(30),
+            peer_fetch_head: Duration::from_secs(30),
         };
         let harness = Harness::with_timeouts(
             WatchOptions {

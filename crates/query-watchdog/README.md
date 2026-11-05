@@ -54,7 +54,7 @@ Probes are HEAD requests.
 | `leaf`, `block`, `vid_common` | heights | `v1/availability/{leaf,block,vid/common}/{start}/{end}` |
 | `lc_leaf_proof`               | heights | `v1/light-client/leaf/{end - 1}`                        |
 | `stake_table`                 | epochs  | `v1/node/stake-table/{epoch}`                           |
-| `state_cert`                  | epochs  | `v1/catchup/{epoch}/state-cert`                         |
+| `state_cert`                  | epochs  | `v1/catchup/{epoch}/state-cert`, then see below         |
 | `lc_stake_table`              | epochs  | `v1/light-client/stake-table/{epoch}`                   |
 
 - A 404 on a `leaf`, `block` or `vid_common` range is refined to the exact missing heights with HEADs only: a binary
@@ -62,6 +62,17 @@ Probes are HEAD requests.
   search over single heights find the end of the gap, repeated from a HEAD of the rest. Any 404 counts, whatever its
   body. `lc_leaf_proof` probes the last height of the chunk and counts one height per missing row, per-epoch kinds one
   epoch.
+- `state_cert` takes two steps. The first HEAD reads the node's database only: 200 is present, 404 goes to step 2,
+  anything else fails as for the other kinds. Step 2 is a HEAD of `v1/availability/state-cert-v2/{epoch}` with a 5 s
+  timeout; the node fetches the cert from peers and stores it, so the probe heals a node whose peers have the cert. 200
+  is present and counts `query_watchdog_local_misses_total{node,kind}` (no alert; it shows a node that does not store
+  certs itself). A 404, 500 or timeout is not found: a cert no peer can serve within 5 s counts as missing. Any other
+  status (502, 503, 504, 429, ...) and any other transport error (connect refused, reset) fails. `probes_total` counts
+  both requests. `fetch_errors_total` records one 404 per unhealed probe (the real step 2 status is in the DEBUG log)
+  and nothing when step 2 heals. The node's own peer fetch waits up to 40 s
+  (`crates/espresso/node/src/api/state.rs:777`), plus a stake-table catchup for epochs not loaded
+  (`crates/espresso/node/src/api.rs:607`). When no peer has the cert the watchdog usually sees its 5 s timeout, and
+  old-epoch certs in an archive sweep can time out at 5 s even when peers have them, then heal on a later retry.
 - A stake table of epoch `e` is probed with the chunk holding block `(e - 2) * epoch_height`, the epoch boundary five
   blocks after the root block the node builds it from (`root_block_in_epoch` subtracts 5); a state cert with the chunk
   holding `e * epoch_height`. The alert margin below uses the same block.
@@ -102,11 +113,13 @@ number of 404s since). A not-found unit with at least 3 404s is confirmed; every
   the representative (only while the recovery queue is empty), the recovery queue again, then due failed rows. Failed
   rows never count, so they never delay red or green. Follow and the sweep keep the rest of the loop iteration.
 - Capacity at the default request cost (about 0.3 s, about 16 requests per retry step; a still-missing exact range piece
-  costs 3 requests, a refilled piece, point or epoch 1): a new gap is retried at about +5 s and +15 s and the node turns
-  red about 60 to 120 s after the gap is found, whatever the number of confirmed rows. After a repair the representative
-  is found present within 60 s; the recovery queue then re-checks about 120 pieces a minute during a sweep and about 200
-  without one, so N confirmed pieces take about N / 120 to N / 200 minutes, then the monitor window of 5 minutes.
-- Request timeouts: range HEAD 60 s (the node may wait 500 ms per height), single HEAD 10 s, JSON GET 5 s.
+  costs 3 requests, a refilled piece or point 1, an epoch 1, a `state_cert` up to 2, 5 s on a timeout): a new gap is
+  retried at about +5 s and +15 s and the node turns red about 60 to 120 s after the gap is found, whatever the number
+  of confirmed rows. After a repair the representative is found present within 60 s; the recovery queue then re-checks
+  about 120 pieces a minute during a sweep and about 200 without one, so N confirmed pieces take about N / 120 to N /
+  200 minutes, then the monitor window of 5 minutes.
+- Request timeouts: range HEAD 60 s (the node may wait 500 ms per height), single HEAD 10 s, JSON GET 5 s, peer-fetch
+  HEAD (`state_cert` step 2) 5 s.
 
 ## Log levels
 
@@ -182,13 +195,16 @@ task resumes where the old one stopped.
   node turns red after 3 404s and the age.
 - Any non-200 counts as missing in the page and `missing` (404, 500, timeout, transport). Only confirmed 404s count in
   `confirmed_missing`. An overloaded or unreachable node shows as missing data. `fetch_errors_total{status}` separates
-  the causes.
+  the causes, except a `state_cert` step 2 failure that counts as not found (404, 500, timeout), which is recorded
+  as 404.
 - One red per node: a new gap on a node that is already red does not page again.
 - `confirmed_missing` sums heights and epochs and can overstate until the representative is found present or the sweep
   re-checks the confirmed rows.
 - Old-epoch `stake_table` probes return 500 and start a stake-table catchup on the node. They resolve within about 20 s.
   They never count (only 404 does), but an archive sweep triggers one catchup per historical epoch and a
   `node unhealthy` WARN each minute while they fail.
+- The node's state cert route cancels its peer fetch when the client disconnects and answers 500 instead of 404 when no
+  peer has the cert; both are node issues. The 5 s timeout can cancel a fetch that would have finished.
 - Not checked: data contents, aggregates (transaction count, payload size), merklized-state history (archive nodes prune
   it), transactions index, namespace proofs, reward tree, `chain_config`, `vid_share`.
 - `--retention-blocks` must not exceed the node's own retention, or pruned heights show as missing.
@@ -206,8 +222,8 @@ task resumes where the old one stopped.
   `node_lag_blocks` and, when it stops advancing, in the follow lag against its own height staying flat.
 - A node that only times out or answers 500 never turns red, since no missing data is confirmed. It shows as a
   `node unhealthy` WARN and in `fetch_errors_total{status}`; the companion monitor below pages on those.
-- Request timeouts are per request kind (range HEAD 60 s, single HEAD 10 s, JSON GET 5 s); a hanging node holds its loop
-  for that long per request, while gauges and the `summary` line continue.
+- Request timeouts are per request kind (range HEAD 60 s, single HEAD 10 s, JSON GET 5 s, peer-fetch HEAD 5 s); a
+  hanging node holds its loop for that long per request, while gauges and the `summary` line continue.
 
 ## Datadog
 
