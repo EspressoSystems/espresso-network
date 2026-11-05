@@ -1264,6 +1264,54 @@ async fn test_leader_sends_proposal() {
     );
 }
 
+/// Skipping the upload must preserve local availability checks and voting.
+#[tokio::test]
+async fn test_bench_skip_next_leader_rebroadcast_preserves_votes() {
+    let data = TestData::new(4).await;
+    let parent = &data.views[0];
+    let next_leader = data.views[1].leader_public_key;
+    let bystander = parent.leader_public_key;
+    assert_ne!(next_leader, bystander);
+
+    for skip in [false, true] {
+        for key in [next_leader, bystander] {
+            for share_first in [false, true] {
+                let mut harness = ConsensusHarness::new(node_index_for_key(&key)).await;
+                harness.consensus.skip_next_leader_rebroadcast = skip;
+                let (proposal, share) = parent.proposal_input_consensus(&key);
+                let inputs = if share_first {
+                    [share, proposal]
+                } else {
+                    [proposal, share]
+                };
+                for input in inputs {
+                    harness.apply(input).await;
+                }
+                let broadcasts = count_matching(harness.outputs(), |output| {
+                    matches!(output, ConsensusOutput::BroadcastVidShare(share)
+                        if share.view_number() == parent.view_number)
+                });
+                assert_eq!(broadcasts, usize::from(!(skip && key == next_leader)));
+                assert!(any(harness.outputs(), is_proposal_paired));
+                assert!(any(harness.outputs(), |o| is_vote1_for_view(
+                    o,
+                    *parent.view_number
+                )));
+                harness.apply(parent.cert1_input()).await;
+                assert!(!any(harness.outputs(), |o| is_vote2_for_view(
+                    o,
+                    *parent.view_number
+                )));
+                harness.apply(parent.block_reconstructed_input()).await;
+                assert!(any(harness.outputs(), |o| is_vote2_for_view(
+                    o,
+                    *parent.view_number
+                )));
+            }
+        }
+    }
+}
+
 /// The next leader requests its block when the proposal arrives, before its own VID share
 /// for that block does, so the share's transfer stays off the view's critical path. Pairing
 /// later does not ask again.

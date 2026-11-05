@@ -218,6 +218,8 @@ pub(crate) const GC_MARGIN_VIEWS: NonZeroU64 = NonZeroU64::new(2).expect("2 > 0"
 const _: () = assert!(DECIDE_BUFFER >= VID_RECONSTRUCT_GC_MARGIN);
 
 pub struct Consensus<T: NodeType> {
+    /// Benchmark only: spends availability redundancy to free the next leader's uplink.
+    pub(crate) skip_next_leader_rebroadcast: bool,
     proposals: Proposals<T>,
     signed_proposals: BTreeMap<ProposalKey<T>, SignedProposal<T, Proposal<T>>>,
     proposed_views: BTreeSet<ViewNumber>,
@@ -354,6 +356,10 @@ impl<T: NodeType> Consensus<T> {
     {
         let last_decided_view = genesis_leaf.view_number();
         Self {
+            skip_next_leader_rebroadcast: std::env::var_os(
+                "ESPRESSO_BENCH_SKIP_NEXT_LEADER_REBROADCAST",
+            )
+            .is_some(),
             proposals: Proposals::new(),
             signed_proposals: BTreeMap::new(),
             proposed_views: BTreeSet::new(),
@@ -1205,7 +1211,16 @@ impl<T: NodeType> Consensus<T> {
         self.proposals.set_live(view, commit);
         self.signed_proposals
             .insert((view, commit), signed_proposal.clone());
-        outbox.push_back(ConsensusOutput::BroadcastVidShare(vid_share.clone()));
+        let next_epoch = if is_last_block(block_number, *self.epoch_height) {
+            epoch + 1
+        } else {
+            epoch
+        };
+        if self.skip_next_leader_rebroadcast && self.is_leader(view + 1, next_epoch) {
+            info!(%view, "bench: skip next leader VID rebroadcast");
+        } else {
+            outbox.push_back(ConsensusOutput::BroadcastVidShare(vid_share.clone()));
+        }
         self.vid_shares.insert(view, vid_share);
         self.adopt_certified_drb(view);
         self.adopt_proposal_upgrade_certificate(&proposal);
