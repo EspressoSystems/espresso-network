@@ -10,7 +10,7 @@ use tokio::net::TcpListener;
 use crate::{
     node::WatchedNode,
     schedule::{RunningSweep, SweepState},
-    view::{KindSummary, NodeView, NodeViewSlot, SweepEta, age_at},
+    view::{KindSummary, NodeView, NodeViewSlot, SweepEta, TryTimes, age_at},
 };
 
 /// What the HTTP handlers read.
@@ -195,7 +195,7 @@ fn missing_lines(kinds: &[KindSummary]) -> Vec<String> {
     }
 }
 
-/// The listed rows with links; ages at the view's `published_at`.
+/// The listed rows with links; ages and try times at the view's `published_at`.
 fn write_missing_table(page: &mut String, node: &WatchedNode, view: &NodeView) -> std::fmt::Result {
     let listed = &view.listed;
     if listed.shown.is_empty() {
@@ -203,7 +203,7 @@ fn write_missing_table(page: &mut String, node: &WatchedNode, view: &NodeView) -
     }
     page.write_str(
         "<table border=\"1\"><tr><th>kind</th><th>range_start</th><th>range_end</th><th>age</\
-         th><th>link</th></tr>",
+         th><th>last tried</th><th>next try</th><th>link</th></tr>",
     )?;
     for row in &listed.shown {
         let key = &row.key;
@@ -211,12 +211,16 @@ fn write_missing_table(page: &mut String, node: &WatchedNode, view: &NodeView) -
         let kind: &str = key.kind().into();
         let age =
             humantime::format_duration(age_at(row.state.first_missing_at(), view.published_at));
+        let tries = TryTimes::at(&row.state.retry(), view.published_at);
         let units = key.units();
         write!(
             page,
-            "<tr><td>{kind}</td><td>{}</td><td>{}</td><td>{age}</td><td><a \
+            "<tr><td>{kind}</td><td>{}</td><td>{}</td><td>{age}</td><td>{}</td><td>{}</td><td><a \
              href=\"{url}\">{url}</a></td></tr>",
-            units.start, units.end
+            units.start,
+            units.end,
+            tries.last_tried_text(),
+            tries.next_try_text()
         )?;
     }
     page.write_str("</table>")?;
@@ -314,7 +318,7 @@ mod tests {
         let state = UnitState::NotFound {
             first_missing_at: at(0),
             not_found_probes: NonZeroU32::new(3).unwrap(),
-            retry: Retry::after(RetryDelay::from_secs(60).unwrap(), at(0)),
+            retry: Retry::after(RetryDelay::from_secs(120).unwrap(), at(0)),
         };
         let key = RowKey::Range {
             kind: RangeKind::Leaf,
@@ -347,7 +351,8 @@ mod tests {
             "<li>sweep: running 25.0000%</li>",
             "<li>last sweep completed: never</li>",
             "<li>missing leaf: 300 heights</li>",
-            "<td>leaf</td><td>1000</td><td>1300</td><td>1m 30s</td>",
+            "<td>leaf</td><td>1000</td><td>1300</td><td>1m 30s</td><td>1m 30s ago</td><td>in \
+             30s</td>",
             "href=\"http://localhost:1/v1/availability/leaf/1000/1100\"",
             "<p>2 more not shown</p>",
         ] {

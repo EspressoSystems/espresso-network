@@ -62,6 +62,8 @@ pub enum RequestKind {
     SingleHead,
     /// GET decoded as JSON: tip, state height, config.
     Json,
+    /// HEAD of a route that fetches the object from peers when the node lacks it.
+    PeerFetchHead,
 }
 
 impl RequestKind {
@@ -81,14 +83,18 @@ pub struct ProbeTimeouts {
     pub range_head: Duration,
     pub single_head: Duration,
     pub json: Duration,
+    /// Long enough for a fetch from a peer that has the object to finish and be stored: a client
+    /// timeout cancels the node's fetch.
+    pub peer_fetch_head: Duration,
 }
 
 impl ProbeTimeouts {
-    /// 60 s, 10 s, 5 s.
+    /// 60 s, 10 s, 5 s, 5 s.
     pub const DEFAULT: ProbeTimeouts = ProbeTimeouts {
         range_head: Duration::from_secs(60),
         single_head: Duration::from_secs(10),
         json: Duration::from_secs(5),
+        peer_fetch_head: Duration::from_secs(5),
     };
 
     /// The timeout of `request`.
@@ -97,6 +103,7 @@ impl ProbeTimeouts {
             RequestKind::RangeHead => self.range_head,
             RequestKind::SingleHead => self.single_head,
             RequestKind::Json => self.json,
+            RequestKind::PeerFetchHead => self.peer_fetch_head,
         }
     }
 }
@@ -188,11 +195,27 @@ impl NodeHttp {
 
     /// HEAD of `probe` with `RequestKind::head_of(probe)`'s timeout.
     pub async fn head(&self, node: &WatchedNode, probe: &Probe) -> Result<(), FetchError> {
-        let timeout = self.timeouts.of(RequestKind::head_of(probe));
+        self.head_route(node, &probe.route(), RequestKind::head_of(probe))
+            .await
+    }
+
+    /// HEAD of `route`, a route that fetches from peers, with the `PeerFetchHead` timeout.
+    pub async fn head_peer_fetch(&self, node: &WatchedNode, route: &str) -> Result<(), FetchError> {
+        self.head_route(node, route, RequestKind::PeerFetchHead)
+            .await
+    }
+
+    /// HEAD of `route` with the timeout of `request`.
+    async fn head_route(
+        &self,
+        node: &WatchedNode,
+        route: &str,
+        request: RequestKind,
+    ) -> Result<(), FetchError> {
         let response = self
             .client
-            .head(node.route_url(&probe.route()))
-            .timeout(timeout)
+            .head(node.route_url(route))
+            .timeout(self.timeouts.of(request))
             .send()
             .await
             .map_err(FetchError::Transport)?;
@@ -253,6 +276,7 @@ mod tests {
             range_head: Duration::from_millis(500),
             single_head: Duration::from_millis(100),
             json: Duration::from_millis(100),
+            peer_fetch_head: Duration::from_millis(100),
         })
         .unwrap();
         http.head(&node, &range(0..100)).await.unwrap();
@@ -274,6 +298,7 @@ mod tests {
         assert_eq!(secs(RequestKind::RangeHead), 60);
         assert_eq!(secs(RequestKind::SingleHead), 10);
         assert_eq!(secs(RequestKind::Json), 5);
+        assert_eq!(secs(RequestKind::PeerFetchHead), 5);
         let epoch = Probe::Epoch {
             kind: EpochKind::StakeTable,
             epoch: Epoch(3),
