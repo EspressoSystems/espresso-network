@@ -105,7 +105,8 @@ EXIT_LEFTOVER = 4
 LEFTOVER_MESSAGE = "resources may remain, run: aws-bench down %s"
 
 # Duration model. Phases not on the critical path of a laptop disconnect (provision, services,
-# destroy) use the same value for expected and worst case.
+# destroy) use the same value for expected and worst case. Latency shaping (`tc` and two pings)
+# takes seconds and has no entry.
 PROVISION_S = 480.0
 SERVICES_S = 180.0
 READY_EXPECTED_S = 180.0
@@ -114,6 +115,8 @@ COLLECT_MAX_S = 600.0
 DESTROY_S = 180.0
 # `--tcp-cc bbr3`: install the XanMod kernel and reboot every node host.
 KERNEL_EXPECTED_S = 300.0
+# `--tcp-cc bbr_hold`: header install and module build, on the first shaping of a fleet.
+BBR_HOLD_EXPECTED_S = 120.0
 XANMOD_INSTALL_TIMEOUT_S = 900
 # Vendored: dl.xanmod.org redirects to gitlab.com, which served the hosts no key.
 # Fingerprint D38D7D1DA1349567ADED882D86F7D09EE734E623.
@@ -1521,6 +1524,8 @@ def shot_seconds(cfg: RunConfig) -> tuple[float, float]:
     if cfg.tcp_cc == "bbr3":
         expected_s += KERNEL_EXPECTED_S
         worst_s += XANMOD_INSTALL_TIMEOUT_S + SSH_READY_TIMEOUT_S
+    if cfg.latency != "off" and cfg.tcp_cc == "bbr_hold":
+        expected_s += BBR_HOLD_EXPECTED_S
     if "rds" in cfg.db_modes:
         expected_s += RDS_CREATE_S
         worst_s += RDS_CREATE_MAX_S

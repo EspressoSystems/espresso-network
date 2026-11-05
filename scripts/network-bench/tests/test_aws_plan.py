@@ -351,6 +351,7 @@ def test_worst_uses_ready_timeout_and_collect_max():
         + netbench.DRAIN_MAX_S
         + netbench.DRAIN_GRACE_S
         - awsb.DRAIN_EXPECTED_S
+        - awsb.BBR_HOLD_EXPECTED_S
     )
 
 
@@ -360,7 +361,11 @@ def test_a_run_has_no_provision_or_destroy():
     run_expected, run_worst = awsb.run_seconds(cfg)
     shot_expected, shot_worst = awsb.shot_seconds(cfg)
     fixed = awsb.PROVISION_S + awsb.DESTROY_S
-    assert run_expected - awsb.RESET_EXPECTED_S == shot_expected - fixed
+    # The module build belongs to the first shaping of a fleet, not to later runs.
+    assert (
+        run_expected - awsb.RESET_EXPECTED_S
+        == shot_expected - fixed - awsb.BBR_HOLD_EXPECTED_S
+    )
     assert run_worst - awsb.RESET_MAX_S == shot_worst - fixed
 
 
@@ -370,9 +375,9 @@ def test_estimate_matches_hand_computed_totals():
     # of cost_estimate's formula, so a formula regression trips this test.
     cfg = small_cfg(pg_iops=6000, pg_mbps=500)
     estimate = shot_estimate(awsb.plan_hosts(cfg), cfg)
-    assert estimate["expected_s"] == 1670.0
+    assert estimate["expected_s"] == 1790.0
     assert estimate["ttl_s"] == 3580.0
-    assert estimate["expected_usd"] == pytest.approx(0.865536, abs=1e-5)
+    assert estimate["expected_usd"] == pytest.approx(0.926594, abs=1e-5)
     assert estimate["bound_usd"] == pytest.approx(1.928954, abs=1e-5)
 
 
@@ -2269,6 +2274,18 @@ def test_staking_adds_its_time_to_the_estimate():
     staked = awsb.shot_seconds(small_cfg(epoch_height=3000))
     assert staked[0] - plain[0] == awsb.STAKE_EXPECTED_S
     assert staked[1] - plain[1] == awsb.STAKE_TIMEOUT_S + awsb.L1_FINALIZED_TIMEOUT_S
+
+
+def test_bbr_hold_build_adds_to_the_expected_estimate_only():
+    cubic = awsb.shot_seconds(small_cfg(latency="decaf-2025", tcp_cc="cubic"))
+    hold = awsb.shot_seconds(small_cfg(latency="decaf-2025", tcp_cc="bbr_hold"))
+    assert hold == (cubic[0] + awsb.BBR_HOLD_EXPECTED_S, cubic[1])
+
+
+def test_bbr_hold_without_shaping_adds_nothing():
+    cubic = awsb.shot_seconds(small_cfg(latency="off", tcp_cc="cubic"))
+    hold = awsb.shot_seconds(small_cfg(latency="off", tcp_cc="bbr_hold"))
+    assert hold == cubic
 
 
 def test_staking_cli_is_pulled_on_ctl_only():
