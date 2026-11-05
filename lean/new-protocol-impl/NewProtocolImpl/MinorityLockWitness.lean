@@ -615,7 +615,7 @@ open Lists
 variable (hv : ∀ b, BlockValid b)
 
 include hv in
-theorem protocol (k : PubKey) (n : Nat) : ProtocolHistory cfg leader k (fun _ => True) (fun _ => True) (H k n) :=
+theorem protocol (k : PubKey) (n : Nat) : ProtocolHistory cfg leader k (fun _ => True) (H k n) :=
   Kit.protocol input hv k n
 
 /-- Nothing is owed after a step. -/
@@ -661,12 +661,19 @@ theorem not_timedOut_early {k : PubKey} {n : Nat} {v : ViewNumber} (hn : n ≤ 5
   omega
 
 theorem not_pastView {k : PubKey} {n : Nat} {v : ViewNumber} (h3 : 3 ≤ v.toNat) :
-    ¬ (H k n).PastView v := by
-  rintro (h | ⟨tc, htc, hle⟩)
+    ¬ (H k n).PastView cfg v := by
+  rintro (h | ⟨tc, htc, hle⟩ | ⟨j, w, ht, hle⟩)
   · exact not_timedOut h3 h
   · obtain ⟨rfl, -⟩ := received_tc htc
     have : v.toNat ≤ 2 := hle
     omega
+  · obtain ⟨-, hi | hi⟩ := Kit.timerAt_input ht
+    · obtain ⟨-, rfl⟩ := input_timeout hi
+      have : v.toNat ≤ 2 := hle
+      omega
+    · obtain ⟨-, rfl⟩ := input_oneHonest hi
+      have : v.toNat ≤ 2 := hle
+      omega
 
 include hv in
 /-- No honest node asks for a re-vote: no block is the last of an epoch. -/
@@ -776,11 +783,16 @@ theorem proposes (u : Nat) :
     · exact not_timedOut (by show 3 ≤ vOf (u + 1); rw [vOf_succ]; omega)
 
 theorem not_pastView_early {k : PubKey} {n : Nat} {v : ViewNumber} (hn : n ≤ 5) :
-    ¬ (H k n).PastView v := by
-  rintro (h | ⟨tc, htc, -⟩)
+    ¬ (H k n).PastView cfg v := by
+  rintro (h | ⟨tc, htc, -⟩ | ⟨j, w, ht, -⟩)
   · exact not_timedOut_early hn h
   · obtain ⟨-, h⟩ := received_tc htc
     omega
+  · obtain ⟨hj, hi | hi⟩ := Kit.timerAt_input ht
+    · obtain ⟨rfl, -⟩ := input_timeout hi
+      omega
+    · obtain ⟨rfl, -⟩ := input_oneHonest hi
+      omega
 
 include hv in
 /-- Every vote1 an honest node sends is on the schedule's proposal, after it arrived. -/
@@ -860,20 +872,19 @@ theorem votes2 (k : PubKey) (u : Nat) (hu : u ≠ 0 ∨ k ≠ c) : ∃ j, j ≤ 
   have hp : pAt k u = sAt u + 4 := by
     unfold pAt
     exact ite_eq_right fun ⟨h0, hk⟩ => hu.elim (· h0) (· hk)
-  have hpast : ¬ (H k (sAt u + 4 + 1)).PastView (certOf (blk u)).view := by
+  have hpast : ¬ (H k (sAt u + 4 + 1)).PastView cfg (certOf (blk u)).view := by
     rcases u with _ | u
     · exact not_pastView_early (by simp [sAt])
     · exact not_pastView (by rw [certOf_view, vOf_succ]; show 3 ≤ u + 3; omega)
   refine Classical.byContradiction fun hneg => settled k (sAt u + 4) (.vote2 (certOf (blk u)))
     ⟨⟨blk u, Or.inr (Or.inl (recv_cert1 u (by omega))), hasProposal_of u (by omega),
-      ⟨Nat.le_refl _, rfl⟩, Or.inr ?_⟩, fun vote hs _ hvv => ?_, fun c2 hc2 _ hv2 => ?_,
-      hpast, Kit.afterFloor_of input hv (by rw [certOf_view]; show 0 < vOf u; unfold vOf; split <;> omega)
-        fun x hx => by
-          rw [certOf_view]
-          rcases hasProposal hx with rfl | ⟨y, rfl, hy⟩
-          · show 0 < vOf u + 20; omega
-          · rw [blk_view]; show vOf y < vOf u + 20
-            rcases y with _ | y <;> rcases u with _ | u <;> simp [vOf, sAt] at hy ⊢ <;> omega⟩
+      ⟨Nat.le_refl _, rfl⟩, Or.inr ?_⟩, notBehind, fun vote hs _ hvv => ?_, fun c2 hc2 _ hv2 => ?_,
+      hpast, by rw [certOf_view]; show 0 < vOf u; unfold vOf; split <;> omega,
+      Kit.decidedBefore_of fun c2 hc2 => by
+        obtain ⟨x, rfl, hlt⟩ := hasCert2 hc2
+        rw [certOf_view]
+        show x + 3 < vOf u
+        rcases u with _ | u <;> simp [vOf, sAt] at hlt ⊢ <;> omega⟩
   · rw [blk_view]; exact recv_payload u (by omega)
   · obtain ⟨j, hj, hjv⟩ := sent_iff.mp hs
     obtain ⟨u', rfl, -⟩ := sent_vote2 hv hjv
@@ -1232,7 +1243,7 @@ include hv in
 /-- **The liveness premises can be met together, with a timeout before GST.** -/
 theorem premises_met :
     ConfigCoherent cfg ∧ Synchrony (net hv) 28 3 25 ∧ Prompt (net hv) 0
-      ∧ 8 * 3 + 3 * 0 < 25 ∧ LeaderRotation C leader :=
+      ∧ 8 * 3 + 4 * 0 < 25 ∧ LeaderRotation C leader :=
   ⟨cfg_coherent, sync hv, prompt_of_machine _ 0 (fun k _ => ⟨input k, rfl⟩)
     (fun _ hk => Kit.steady_of_uniform (fun _ _ _ h => h) hk), by decide, rotation⟩
 

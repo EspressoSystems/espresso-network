@@ -743,9 +743,17 @@ async fn test_two_epochs_at_one_view_draw_one_vote2() {
         .apply_pair(at.proposal_input_consensus(&node_key))
         .await;
 
-    // The same block, proposed again as the next epoch's at the same view.
+    // The same payload, proposed again as the next epoch's at the same view.
+    // The epoch is not part of a leaf's commitment, so another field makes it
+    // a different block; otherwise it would replace the first in the node's
+    // proposals.
     let mut later = at.proposal.data.clone();
     later.epoch = at.epoch_number + 1;
+    later.next_drb_result = Some([1; 32]);
+    assert_ne!(
+        proposal_commitment(&later),
+        proposal_commitment(&at.proposal.data)
+    );
     harness.consensus.seed_proposals([later.clone()]);
     let membership = mock_membership()
         .membership_for_epoch(Some(later.epoch))

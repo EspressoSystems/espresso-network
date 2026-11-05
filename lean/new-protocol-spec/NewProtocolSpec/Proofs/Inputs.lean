@@ -76,6 +76,19 @@ theorem SameInputs.viewGround (v : ViewNumber) : h1.ViewGround cfg v ↔ h2.View
 theorem SameInputs.inView (v : ViewNumber) : h1.InView cfg v ↔ h2.InView cfg v := by
   simp only [InView, he.viewGround]
 
+theorem SameInputs.timerAt (n : Nat) (v : ViewNumber) : h1.TimerAt cfg n v ↔ h2.TimerAt cfg n v := by
+  have key : ∀ {a b : History}, SameInputs a b → a.TimerAt cfg n v → b.TimerAt cfg n v := by
+    intro a b hab ⟨st, hst, hcase⟩
+    have hm : (b.map (·.input))[n]? = some st.input := by
+      rw [← hab, List.getElem?_map, hst]; rfl
+    rw [List.getElem?_map] at hm
+    obtain ⟨st', hst', hin⟩ := Option.map_eq_some_iff.mp hm
+    have hv := fun u => SameInputs.inView (cfg := cfg) (SameInputs.upTo hab n) u
+    refine ⟨st', hst', ?_⟩
+    simp only [hin, ← hv]
+    exact hcase
+  exact ⟨key he, key he.symm⟩
+
 theorem SameInputs.certJustified (c : Cert1) (ev : Option TimeoutCert) :
     CertJustified cfg h1 c ev ↔ CertJustified cfg h2 c ev := by
   cases ev with
@@ -154,13 +167,14 @@ theorem owed_antitone {h1 h2 : History} (he : SameInputs h1 h2)
       ⟨b, (he.hasProposal _).mpr hb, hcert, (he.hasPayload _ _).mpr hpay⟩, (he.notBehind _).mpr hnb,
       hto _ ht, fun vote hsv => honce vote (hs _ hsv), (he.inView _).mpr hv⟩
   | vote2 c =>
-    obtain ⟨⟨b, hc, hb, hcert, hpay⟩, honce, hc2, hpast, hfloor⟩ := ho
+    obtain ⟨⟨b, hc, hb, hcert, hpay⟩, hnb, honce, hc2, hpast, hgen, hdec⟩ := ho
     refine ⟨⟨b, (he.hasCert1 _).mpr hc, (he.hasProposal _).mpr hb, hcert, (he.hasPayload _ _).mpr hpay⟩,
-      fun vote hsv => honce vote (hs _ hsv), fun c2 h => hc2 c2 ((he.hasCert2 _).mp h),
-      fun hp => hpast ?_, hfl _ hfloor⟩
-    rcases hp with ⟨vote, hsv, hle⟩ | ⟨tc, htc, hle⟩
+      (he.notBehind _).mpr hnb, fun vote hsv => honce vote (hs _ hsv), fun c2 h => hc2 c2 ((he.hasCert2 _).mp h),
+      fun hp => hpast ?_, hgen, fun u hu => hdec u (hd u hu)⟩
+    rcases hp with ⟨vote, hsv, hle⟩ | ⟨tc, htc, hle⟩ | ⟨n, w, ht, hle⟩
     · exact Or.inl ⟨vote, hs _ hsv, hle⟩
-    · exact Or.inr ⟨tc, (he.received _).mp htc, hle⟩
+    · exact Or.inr (Or.inl ⟨tc, (he.received _).mp htc, hle⟩)
+    · exact Or.inr (Or.inr ⟨n, w, (he.timerAt n w).mp ht, hle⟩)
   | decide c =>
     obtain ⟨b, c1, hc, hb, hcm, hc1, hcert, hdec, hfloor⟩ := ho
     exact ⟨b, c1, (he.hasCert2 _).mpr hc, (he.hasProposal _).mpr hb, hcm, (he.hasCert1 _).mpr hc1,
