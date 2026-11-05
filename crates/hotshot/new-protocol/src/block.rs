@@ -104,20 +104,15 @@ pub struct BlockCommitments<T: NodeType> {
 
 /// The leader's commitment work for a built block, on the proposal's critical path. The
 /// `block_build` bench in espresso-types calls this; its spans time each step.
-<<<<<<< HEAD
-||||||| parent of a8c4a8d88 (perf(new-protocol): encode each block once on the leader (#5392))
-///
-/// `pooled_hashes` are the pool's hashes of the transactions the payload was built from.
-=======
 ///
 /// `pooled_hashes` are the pool's hashes of the transactions the payload was built from, and
 /// `stake_table` the nodes of the block's epoch. The payload commitment is folded from the
 /// block's dispersal, so the leader encodes the payload once for both. The new protocol runs
 /// from `NEW_PROTOCOL_VERSION`, whose VID scheme is always AvidmGf2, so an earlier `version` is
 /// refused.
->>>>>>> a8c4a8d88 (perf(new-protocol): encode each block once on the leader (#5392))
 pub fn block_commitments<T: NodeType>(
     payload: &PayloadWithMetadata<T>,
+    pooled_hashes: &[Commitment<T::Transaction>],
     stake_table: &[PeerConfig<T>],
     version: Version,
 ) -> Result<BlockCommitments<T>, BlockError> {
@@ -131,10 +126,7 @@ pub fn block_commitments<T: NodeType>(
     // Independent work, run in parallel rather than paid for in turn on the leader's proposal
     // path.
     let (hashes, (dispersal, builder_commitment)) = rayon::join(
-        || {
-            debug_span!("transaction_commitments")
-                .in_scope(|| payload.payload.transaction_commitments(&payload.metadata))
-        },
+        || transaction_hashes(payload, pooled_hashes),
         || {
             rayon::join(
                 || {
@@ -163,6 +155,32 @@ pub fn block_commitments<T: NodeType>(
         hashes,
         dispersal,
     })
+}
+
+/// The payload's transaction hashes, in any order: every consumer uses them as a set.
+///
+/// Building a payload can drop transactions but never changes, repeats or adds one, so a payload
+/// that kept as many transactions as the pool gave it holds exactly the pooled ones, and the
+/// pool's hashes save hashing them again. Debug builds check this.
+pub(crate) fn transaction_hashes<T: NodeType>(
+    payload: &PayloadWithMetadata<T>,
+    pooled_hashes: &[Commitment<T::Transaction>],
+) -> Vec<Commitment<T::Transaction>> {
+    if payload.payload.num_transactions(&payload.metadata) == pooled_hashes.len() {
+        debug_assert_eq!(
+            pooled_hashes.iter().copied().collect::<HashSet<_>>(),
+            payload
+                .payload
+                .transaction_commitments(&payload.metadata)
+                .into_iter()
+                .collect::<HashSet<_>>(),
+            "a payload that kept every pooled transaction holds exactly those"
+        );
+        pooled_hashes.to_vec()
+    } else {
+        debug_span!("transaction_hashes")
+            .in_scope(|| payload.payload.transaction_commitments(&payload.metadata))
+    }
 }
 
 /// Room in a forwarded message for everything but the transactions.
@@ -230,6 +248,13 @@ const fn retry_entry_overhead<T: NodeType>() -> u64 {
     2 * (map + order) as u64
 }
 
+/// Transactions taken from the pool for a view, with the hashes the pool keyed them by.
+#[derive(Clone)]
+struct PooledBlock<T: NodeType> {
+    txs: Arc<Vec<T::Transaction>>,
+    hashes: Arc<Vec<Commitment<T::Transaction>>>,
+}
+
 pub struct BlockBuilder<T: NodeType> {
     instance: Arc<T::InstanceState>,
     membership: EpochMembershipCoordinator<T>,
@@ -248,14 +273,14 @@ pub struct BlockBuilder<T: NodeType> {
     // `handle_proposal_with_vid_share` and one from
     // `handle_timeout_certificate`) don't dedup against each other.
     calculations: BTreeMap<(ViewNumber, Commitment<Leaf2<T>>), AbortHandle>,
-    /// The transactions taken for the first block of each view.
+    /// The transactions taken for the first block of each view, with their hashes.
     ///
     /// Every later block for the view is built from exactly these. A leader
     /// disperses a block as soon as it is built, and peers keep one share per
     /// leader and view, so a second block for the view is votable only if its
     /// payload is the same. It is the same whenever the new parent does not
     /// change how the payload is built.
-    view_transactions: BTreeMap<ViewNumber, Vec<T::Transaction>>,
+    view_transactions: BTreeMap<ViewNumber, PooledBlock<T>>,
     tasks: JoinSet<Result<BlockBuilderOutput<T>, BlockError>>,
     commitments_duration_metric: Option<Arc<dyn Histogram>>,
 }
@@ -303,7 +328,10 @@ impl<T: NodeType> BlockBuilder<T> {
             return;
         };
         let epoch = request.epoch;
-        let txs = self.transactions_for(view);
+        let PooledBlock {
+            txs,
+            hashes: pooled_hashes,
+        } = self.transactions_for(view);
         let instance = self.instance.clone();
         let membership = self.membership.clone();
 
@@ -320,7 +348,7 @@ impl<T: NodeType> BlockBuilder<T> {
             let validated_state =
                 T::ValidatedState::from_header(&request.parent_proposal.block_header);
             let (payload, metadata) =
-                T::BlockPayload::from_transactions(txs, &validated_state, &instance)
+                T::BlockPayload::from_transactions(txs.to_vec(), &validated_state, &instance)
                     .await
                     .map_err(|e| BlockError::PayloadConstruction(e.to_string()))?;
             let payload: PayloadWithMetadata<T> = PayloadWithMetadata { payload, metadata };
@@ -332,12 +360,6 @@ impl<T: NodeType> BlockBuilder<T> {
                 .cloned()
                 .collect();
             let commitments = spawn_blocking(move || {
-<<<<<<< HEAD
-                let commitments = block_commitments(&payload, total_weight, version);
-||||||| parent of a8c4a8d88 (perf(new-protocol): encode each block once on the leader (#5392))
-                let commitments =
-                    block_commitments(&payload, &pooled_hashes, total_weight, version);
-=======
                 let measurement = duration_metric.map(Measurement::start);
                 let commitments =
                     block_commitments(&payload, &pooled_hashes, &stake_table, version);
@@ -345,7 +367,6 @@ impl<T: NodeType> BlockBuilder<T> {
                     Ok(_) => finish_measurement(measurement),
                     Err(_) => ignore_measurement(measurement),
                 }
->>>>>>> a8c4a8d88 (perf(new-protocol): encode each block once on the leader (#5392))
                 (payload, commitments)
             });
             let (payload, commitments) = match commitments.await {
@@ -393,17 +414,25 @@ impl<T: NodeType> BlockBuilder<T> {
         self.calculations.insert((view, parent_commitment), handle);
     }
 
-    fn transactions_for(&mut self, view: ViewNumber) -> Vec<T::Transaction> {
-        if let Some(txs) = self.view_transactions.get(&view) {
-            return txs.clone();
+    fn transactions_for(&mut self, view: ViewNumber) -> PooledBlock<T> {
+        if let Some(pooled) = self.view_transactions.get(&view) {
+            return pooled.clone();
         }
-        let txs = self.take_block(view);
-        self.view_transactions.insert(view, txs.clone());
-        txs
+        let (txs, hashes) = self.take_block(view);
+        let pooled = PooledBlock {
+            txs: Arc::new(txs),
+            hashes: Arc::new(hashes),
+        };
+        self.view_transactions.insert(view, pooled.clone());
+        pooled
     }
 
-    /// Removes up to one block of pooled transactions, those sent for the earliest views first.
-    fn take_block(&mut self, view: ViewNumber) -> Vec<T::Transaction> {
+    /// Removes up to one block of pooled transactions, those sent for the earliest views first,
+    /// and returns them with their hashes.
+    fn take_block(
+        &mut self,
+        view: ViewNumber,
+    ) -> (Vec<T::Transaction>, Vec<Commitment<T::Transaction>>) {
         let max_bytes = self.block_size(view);
         let mut bytes = 0;
         let mut taken = Vec::new();
@@ -415,13 +444,14 @@ impl<T: NodeType> BlockBuilder<T> {
             bytes += size;
             taken.push(*hash);
         }
-        taken
-            .into_iter()
+        let txs = taken
+            .iter()
             .map(|hash| {
-                self.remove_pooled(&hash)
+                self.remove_pooled(hash)
                     .expect("hashes come from the pool's own order")
             })
-            .collect()
+            .collect();
+        (txs, taken)
     }
 
     fn remove_pooled(&mut self, hash: &Commitment<T::Transaction>) -> Option<T::Transaction> {
@@ -699,7 +729,7 @@ impl<T: NodeType> BlockBuilder<T> {
 
     #[cfg(test)]
     pub(crate) fn drain(&mut self, view: ViewNumber) -> Vec<T::Transaction> {
-        self.take_block(view)
+        self.take_block(view).0
     }
 }
 

@@ -10,21 +10,23 @@ use hotshot_types::{
     PeerConfig,
     data::{
         EpochNumber, VidCommitment2, VidDisperse2, ViewNumber,
-        vid_disperse::{AvidmGf2DisperseShareFragment, AvidmGf2NamespacePiece},
+        vid_disperse::{
+            AvidmGf2DisperseParams, AvidmGf2DisperseShareFragment, AvidmGf2NamespacePiece,
+        },
     },
     epoch_membership::EpochMembershipCoordinator,
     message::Proposal as SignedProposal,
     traits::{metrics::Histogram, node_implementation::NodeType, signature_key::SignatureKey},
-    vid::avidm_gf2::AvidmGf2Scheme,
+    vid::avidm_gf2::{AvidmGf2NsDispersal, AvidmGf2Scheme},
 };
 use hotshot_utils::anytrace::{self, Wrap};
 use rayon::prelude::*;
 use tokio::task::{AbortHandle, JoinSet};
-use tracing::{error, warn};
+use tracing::{debug_span, error, warn};
 
 use crate::{
     coordinator::metrics::{Measurement, finish_measurement},
-    message::{ConsensusMessage, Message, MessageType},
+    message::{ConsensusMessage, Message, MessageType, Validated},
     network::{NetworkError, Sender},
 };
 
@@ -219,44 +221,6 @@ where
         ),
     };
 
-<<<<<<< HEAD
-    let signature = T::SignatureKey::sign(&private_key, payload_commitment.as_ref())
-||||||| parent of a8c4a8d88 (perf(new-protocol): encode each block once on the leader (#5392))
-    disperse_payload(
-        &params,
-        view,
-        epoch,
-        payload_commitment,
-        &public_key,
-        &private_key,
-        move |recipient, message| network.unicast(view, recipient, message),
-    )?;
-
-    Ok(VidDisperseOutput {
-        view,
-        payload_commitment,
-    })
-}
-
-/// Erasure-codes the payload in `params` and hands every recipient's fragment of each bucket of
-/// namespaces to `send`, which the disperser points at the network. The `block_build` bench in
-/// espresso-types passes a `send` that only serializes; the spans time each step.
-pub fn disperse_payload<T, S>(
-    params: &AvidmGf2DisperseParams<T>,
-    view: ViewNumber,
-    epoch: EpochNumber,
-    payload_commitment: VidCommitment2,
-    public_key: &T::SignatureKey,
-    private_key: &<T::SignatureKey as SignatureKey>::PrivateKey,
-    send: S,
-) -> Result<(), VidDisperseError>
-where
-    T: NodeType,
-    S: Fn(&T::SignatureKey, &Message<T, Validated>) -> Result<(), NetworkError> + Clone + Send,
-{
-    let signature = debug_span!("sign")
-        .in_scope(|| T::SignatureKey::sign(private_key, payload_commitment.as_ref()))
-=======
     disperse_payload(
         dispersal,
         view,
@@ -297,10 +261,7 @@ where
 
     let signature = debug_span!("sign")
         .in_scope(|| T::SignatureKey::sign(private_key, payload_commitment.as_ref()))
->>>>>>> a8c4a8d88 (perf(new-protocol): encode each block once on the leader (#5392))
         .map_err(|err| VidDisperseError::Sign(err.into()))?;
-
-    let num_namespaces = params.ns_table.len();
 
     // Coalesce namespaces into size-balanced buckets, roughly one per core,
     // but never below the minimum size, so a block of many tiny namespaces
@@ -322,60 +283,6 @@ where
         None => ns_buckets.into_iter().map(Bucket::Encode).collect(),
     };
 
-<<<<<<< HEAD
-    buckets.par_iter().try_for_each_with(
-        network,
-        |network, bucket| -> Result<(), VidDisperseError> {
-            let mut pieces = vec![Vec::new(); params.recipients.len()];
-
-            for &ns_index in bucket {
-                let dispersal = AvidmGf2Scheme::ns_disperse_one(
-                    &params.param,
-                    &params.weights,
-                    &params.payload[params.ns_table[ns_index].clone()],
-                    ns_index,
-                )
-                .wrap()
-                .map_err(VidDisperseError::Vid)?;
-
-                let ns_payload_byte_len = dispersal.payload_byte_len;
-                let ns_commit = dispersal.commit;
-                for (pieces, ns_share) in pieces.iter_mut().zip(dispersal.shares) {
-                    pieces.push(AvidmGf2NamespacePiece {
-                        ns_index: dispersal.ns_index,
-                        ns_payload_byte_len,
-                        ns_commit,
-                        ns_share,
-                    });
-                }
-            }
-
-            for (recipient, pieces) in params.recipients.iter().zip(pieces) {
-                let fragment = AvidmGf2DisperseShareFragment {
-                    view_number: view,
-                    epoch: Some(epoch),
-                    target_epoch: Some(epoch),
-                    payload_commitment,
-                    recipient_key: recipient.clone(),
-                    param: params.param.clone(),
-                    num_namespaces,
-                    namespaces: pieces,
-                };
-||||||| parent of a8c4a8d88 (perf(new-protocol): encode each block once on the leader (#5392))
-    buckets
-        .par_iter()
-        .try_for_each_with(send, |send, bucket| -> Result<(), VidDisperseError> {
-            let dispersals = debug_span!("ns_encode").in_scope(|| {
-                bucket
-                    .iter()
-                    .map(|&ns_index| disperse_namespace(params, ns_index))
-                    .collect::<Result<_, _>>()
-            })?;
-            let bucket_fragments = debug_span!("fragments")
-                .in_scope(|| fragments(view, epoch, payload_commitment, params, dispersals));
-            for fragment in bucket_fragments {
-                let recipient = fragment.recipient_key.clone();
-=======
     buckets.into_par_iter().try_for_each_with(
         send,
         |send, bucket| -> Result<(), VidDisperseError> {
@@ -384,14 +291,13 @@ where
                 .in_scope(|| fragments(view, epoch, payload_commitment, &params, dispersals));
             for fragment in bucket_fragments {
                 let recipient = fragment.recipient_key.clone();
->>>>>>> a8c4a8d88 (perf(new-protocol): encode each block once on the leader (#5392))
                 let message = Message {
                     sender: public_key.clone(),
                     message_type: MessageType::Consensus(ConsensusMessage::VidShareFragment(
                         SignedProposal::new(fragment, signature.clone()),
                     )),
                 };
-                if let Err(err) = network.unicast(view, recipient, &message) {
+                if let Err(err) = send(&recipient, &message) {
                     if err.is_critical() {
                         return Err(err.into());
                     }
@@ -399,13 +305,6 @@ where
                 }
             }
             Ok(())
-<<<<<<< HEAD
-        },
-    )?;
-||||||| parent of a8c4a8d88 (perf(new-protocol): encode each block once on the leader (#5392))
-        })
-}
-=======
         },
     )
 }
@@ -456,12 +355,56 @@ fn into_buckets(
         })
         .collect()
 }
->>>>>>> a8c4a8d88 (perf(new-protocol): encode each block once on the leader (#5392))
 
-    Ok(VidDisperseOutput {
-        view,
-        payload_commitment,
-    })
+/// Erasure-codes the namespace at `ns_index` of the payload in `params`.
+fn disperse_namespace<T: NodeType>(
+    params: &AvidmGf2DisperseParams<T>,
+    ns_index: usize,
+) -> Result<AvidmGf2NsDispersal, VidDisperseError> {
+    AvidmGf2Scheme::ns_disperse_one(
+        &params.param,
+        &params.weights,
+        &params.payload[params.ns_table[ns_index].clone()],
+        ns_index,
+    )
+    .wrap()
+    .map_err(VidDisperseError::Vid)
+}
+
+/// One fragment per recipient in `params`, carrying its shares of `dispersals`.
+fn fragments<T: NodeType>(
+    view: ViewNumber,
+    epoch: EpochNumber,
+    payload_commitment: VidCommitment2,
+    params: &AvidmGf2DisperseParams<T>,
+    dispersals: Vec<AvidmGf2NsDispersal>,
+) -> Vec<AvidmGf2DisperseShareFragment<T>> {
+    let mut pieces = vec![Vec::new(); params.recipients.len()];
+    for dispersal in dispersals {
+        for (pieces, ns_share) in pieces.iter_mut().zip(dispersal.shares) {
+            pieces.push(AvidmGf2NamespacePiece {
+                ns_index: dispersal.ns_index,
+                ns_payload_byte_len: dispersal.payload_byte_len,
+                ns_commit: dispersal.commit,
+                ns_share,
+            });
+        }
+    }
+    params
+        .recipients
+        .iter()
+        .zip(pieces)
+        .map(|(recipient, pieces)| AvidmGf2DisperseShareFragment {
+            view_number: view,
+            epoch: Some(epoch),
+            target_epoch: Some(epoch),
+            payload_commitment,
+            recipient_key: recipient.clone(),
+            param: params.param.clone(),
+            num_namespaces: params.ns_table.len(),
+            namespaces: pieces,
+        })
+        .collect()
 }
 
 /// Group namespace indices into buckets whose payload sizes are each at least
@@ -523,9 +466,9 @@ mod tests {
     use alloy::primitives::U256;
     use hotshot_example_types::{
         block_types::{TestBlockPayload, TestMetadata},
-        node_stake::{TestNodeStakes, gen_node_lists},
         node_types::TestTypes,
     };
+    use hotshot_testing::{node_stake::TestNodeStakes, test_builder::gen_node_lists};
     use hotshot_types::{
         PeerConfig,
         data::{

@@ -238,7 +238,8 @@ impl BlockPayload<SeqTypes> for Payload {
 
     /// The per-transaction Keccak256 is the serial tail of block recovery: it
     /// runs between the parallel erasure decode and the vote, and grows linearly
-    /// with the block's transaction count. Each hash is independent.
+    /// with the block's transaction count. Each hash is independent. Each runs
+    /// in a `tx_hash` debug span.
     ///
     /// Indices are materialized first — an `NsIndex` plus a position, far smaller
     /// than the transactions themselves — so only the hashing goes wide, and only
@@ -258,6 +259,7 @@ impl BlockPayload<SeqTypes> for Payload {
         // documents and unwraps on. Both branches resolve through this, so they
         // cannot disagree on contents or order.
         let commit = |index: &Index| {
+            let _span = tracing::debug_span!("tx_hash").entered();
             self.transaction(index)
                 .expect("index yielded by iter must resolve to a transaction")
                 .commit()
@@ -268,6 +270,12 @@ impl BlockPayload<SeqTypes> for Payload {
             return indices.iter().map(commit).collect();
         }
         indices.par_iter().map(commit).collect()
+    }
+
+    /// Counts the indices `iter` yields. The default builds every transaction, copying its
+    /// bytes, only to count it.
+    fn num_transactions(&self, metadata: &Self::Metadata) -> usize {
+        QueryablePayload::len(self, metadata)
     }
 
     fn txn_bytes(&self) -> usize {

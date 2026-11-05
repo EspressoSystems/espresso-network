@@ -33,7 +33,8 @@ mod reconstruct;
 
 pub use disperse::{
     BuiltDispersal, Dispersal, VidDisperseError, VidDisperseOutput, VidDisperseRequest,
-    VidDisperser};
+    VidDisperser, disperse_payload,
+};
 pub use fragments::{VidFragmentAccumulator, VidFragmentError};
 use hotshot_types::{
     data::{

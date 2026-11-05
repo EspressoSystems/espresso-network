@@ -274,6 +274,10 @@ where
     async fn prune<'a>(&'a self, pruner: &mut Self::Pruner<'a>) -> anyhow::Result<Option<u64>> {
         self.inner.prune(pruner).await
     }
+
+    async fn init_pruned_height(&self, height: u64) -> anyhow::Result<()> {
+        self.inner.init_pruned_height(height).await
+    }
 }
 
 impl<S> HasMetrics for FailStorage<S>

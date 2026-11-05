@@ -127,7 +127,7 @@ demo-native-large-block-upgrade *args: (build "test" "--no-default-features")
 demo-native-ff *args: (build "test" "--no-default-features")
     ESPRESSO_NODE_GENESIS_FILE=data/genesis/demo-ff.toml scripts/demo-native -f process-compose.yaml {{args}}
 
-# A/B the leader block-build critical path between two git refs (see scripts/bench-block-build)
+# A/B the leader's block build and VID work between two git refs (see scripts/bench-block-build)
 [positional-arguments]
 bench-block-build *args:
     scripts/bench-block-build "$@"
@@ -146,7 +146,7 @@ docker-stop-rm:
     docker stop $(docker ps -aq); docker rm $(docker ps -aq)
 
 anvil *args:
-    docker run -p 127.0.0.1:8545:8545 ghcr.io/foundry-rs/foundry:latest "anvil {{args}}"
+    docker run -p 127.0.0.1:8545:8545 ghcr.io/foundry-rs/foundry:v1.8.7 "anvil {{args}}"
 
 # hotshot-testing: tested in hotshot.yml
 # hotshot-new-protocol: tested in hotshot.yml
