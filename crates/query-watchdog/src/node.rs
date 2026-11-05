@@ -126,16 +126,6 @@ impl FetchError {
         }
     }
 
-    /// Whether a peer-fetch route answered that no peer could serve the object: 404, 500 or a
-    /// timeout.
-    pub fn is_peer_miss(&self) -> bool {
-        match self {
-            Self::NotFound => true,
-            Self::Status(status) => status.is_internal_server_error(),
-            Self::Transport(error) => error.is_timeout(),
-        }
-    }
-
     /// `Ok` for a 2xx status.
     fn from_status(status: StatusCode) -> Result<(), Self> {
         if status.is_success() {
@@ -209,18 +199,10 @@ impl NodeHttp {
             .await
     }
 
-    /// HEAD of `probe.peer_fetch_route()` with the `PeerFetchHead` timeout; `None` when the probe
-    /// has no such route.
-    pub async fn head_peer_fetch(
-        &self,
-        node: &WatchedNode,
-        probe: &Probe,
-    ) -> Option<Result<(), FetchError>> {
-        let route = probe.peer_fetch_route()?;
-        Some(
-            self.head_route(node, &route, RequestKind::PeerFetchHead)
-                .await,
-        )
+    /// HEAD of `route`, a route that fetches from peers, with the `PeerFetchHead` timeout.
+    pub async fn head_peer_fetch(&self, node: &WatchedNode, route: &str) -> Result<(), FetchError> {
+        self.head_route(node, route, RequestKind::PeerFetchHead)
+            .await
     }
 
     /// HEAD of `route` with the timeout of `request`.

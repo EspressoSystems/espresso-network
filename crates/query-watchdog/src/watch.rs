@@ -829,11 +829,10 @@ impl<C: Clock> NodeWatch<C> {
 
     /// `send_head`; a 404 of a probe with a peer fetch route goes on to `send_peer_fetch`.
     async fn send_probe(&mut self, probe: &Probe) -> Result<(), FetchError> {
-        match self.send_head(probe).await {
-            Err(FetchError::NotFound) if probe.peer_fetch_route().is_some() => {
-                self.send_peer_fetch(probe).await
-            },
-            answer => answer,
+        let answer = self.send_head(probe).await;
+        match (&answer, probe.peer_fetch_route()) {
+            (Err(FetchError::NotFound), Some(route)) => self.send_peer_fetch(probe, &route).await,
+            _ => answer,
         }
     }
 
@@ -843,36 +842,29 @@ impl<C: Clock> NodeWatch<C> {
         self.watchdog.system.http.head(&self.node, probe).await
     }
 
-    /// Asks the route that fetches from peers, after the node's own route answered 404. The node
-    /// answered the first request, so a 404, 500 or timeout means the peers could not serve the
-    /// object (`NotFound`, logged at DEBUG with its cause); any other status or transport error is
-    /// a failure. A 200 counts a local miss.
-    async fn send_peer_fetch(&mut self, probe: &Probe) -> Result<(), FetchError> {
+    /// A healing attempt after the node's own route answered 404: a 200 from `route` means the
+    /// node fetched and stored the object (`Ok`, a local miss). Any other result keeps the 404,
+    /// since a node that cannot serve the object through its peers cannot serve clients either;
+    /// the cause goes to the DEBUG log.
+    async fn send_peer_fetch(&mut self, probe: &Probe, route: &str) -> Result<(), FetchError> {
         self.pace(probe).await;
-        let answer = self
+        match self
             .watchdog
             .system
             .http
-            .head_peer_fetch(&self.node, probe)
+            .head_peer_fetch(&self.node, route)
             .await
-            .expect("the caller checked the peer fetch route");
-        match answer {
+        {
             Ok(()) => {
                 self.watchdog
                     .metrics
                     .count_local_miss(&self.node.label, probe.kind());
                 Ok(())
             },
-            Err(error) if error.is_peer_miss() => {
-                tracing::debug!(
-                    node = %self.node.label,
-                    route = probe.peer_fetch_route(),
-                    %error,
-                    "no peer served the object"
-                );
+            Err(error) => {
+                tracing::debug!(node = %self.node.label, route, %error, "no peer served the object");
                 Err(FetchError::NotFound)
             },
-            Err(error) => Err(error),
         }
     }
 
@@ -1013,7 +1005,10 @@ mod tests {
     use pretty_assertions::assert_eq;
     use prometheus::Registry;
     use sqlx::sqlite::SqliteConnectOptions;
-    use tokio::net::TcpListener;
+    use tokio::{
+        io::{AsyncReadExt, AsyncWriteExt},
+        net::TcpListener,
+    };
     use tracing::Level;
     use url::Url;
 
@@ -1301,6 +1296,17 @@ mod tests {
                 .flat_map(|family| family.get_metric())
                 .find(|metric| metric.get_label().iter().all(wanted))
                 .map(|metric| metric.get_gauge().get_value() as i64)
+        }
+
+        /// `query_watchdog_local_misses_total` summed over all nodes and kinds.
+        fn local_misses(&self) -> u64 {
+            self.registry
+                .gather()
+                .iter()
+                .filter(|family| family.get_name() == "query_watchdog_local_misses_total")
+                .flat_map(|family| family.get_metric())
+                .map(|metric| metric.get_counter().get_value() as u64)
+                .sum()
         }
 
         /// Writes `result` into the stored image of `node` at `at`, before it starts.
@@ -2173,15 +2179,7 @@ mod tests {
         };
         let requests = fake.requests_to("/v1/catchup/5/state-cert")
             + fake.requests_to("/v1/availability/state-cert-v2/5");
-        let misses = harness
-            .registry
-            .gather()
-            .iter()
-            .filter(|family| family.get_name() == "query_watchdog_local_misses_total")
-            .flat_map(|family| family.get_metric())
-            .map(|metric| metric.get_counter().get_value() as u64)
-            .sum();
-        (observation, requests, misses)
+        (observation, requests, harness.local_misses())
     }
 
     #[tokio::test]
@@ -2235,18 +2233,94 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_state_cert_fetch_answered_503_fails() {
-        let (observation, requests, misses) = observe_state_cert(
-            StatusCode::NOT_FOUND,
+    async fn a_state_cert_fetch_that_cannot_be_served_is_not_found_whatever_the_status() {
+        for availability in [
             StatusCode::SERVICE_UNAVAILABLE,
-            Duration::ZERO,
-        )
-        .await;
-        assert!(
-            matches!(observation, Observation::Failed(_)),
-            "{observation:?}"
-        );
-        assert_eq!((requests, misses), (2, 0));
+            StatusCode::BAD_GATEWAY,
+            StatusCode::TOO_MANY_REQUESTS,
+        ] {
+            let (observation, requests, misses) =
+                observe_state_cert(StatusCode::NOT_FOUND, availability, Duration::ZERO).await;
+            assert_eq!(
+                (observation, requests, misses),
+                (Observation::NotFound, 2, 0)
+            );
+        }
+    }
+
+    /// A node that answers 404 to every request except the peer fetch route, where it closes the
+    /// connection without a reply.
+    async fn dropping_node() -> WatchedNode {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = Url::parse(&format!("http://{}/", listener.local_addr().unwrap())).unwrap();
+        tokio::spawn(async move {
+            loop {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                tokio::spawn(async move {
+                    let mut buffer = [0; 1024];
+                    let read = socket.read(&mut buffer).await.unwrap();
+                    if !String::from_utf8_lossy(&buffer[..read]).contains("state-cert-v2") {
+                        let reply = "HTTP/1.1 404 Not Found\r\ncontent-length: 0\r\nconnection: \
+                                     close\r\n\r\n";
+                        socket.write_all(reply.as_bytes()).await.unwrap();
+                    }
+                });
+            }
+        });
+        WatchedNode::new(url).unwrap()
+    }
+
+    #[tokio::test]
+    async fn a_dropped_connection_on_the_peer_fetch_keeps_the_404() {
+        let node = dropping_node().await;
+        let harness = Harness::new(None).await;
+        let (mut watch, _view) = harness.start(node).await;
+        let result = watch.observe(&CERT_PROBE).await;
+        let ProbeResult::Epoch { observation, .. } = result else {
+            panic!("an epoch probe observes an epoch");
+        };
+        assert_eq!(observation, Observation::NotFound);
+        assert_eq!(harness.local_misses(), 0);
+    }
+
+    #[tokio::test]
+    async fn a_state_cert_confirmed_missing_is_healed_by_the_peer_fetch() {
+        let (node, fake) = serve_fake([]).await;
+        *fake.config.lock().unwrap() =
+            r#"{"config":{"epoch_height":30,"epoch_start_block":61}}"#.to_owned();
+        fake.tip.store(300, Ordering::SeqCst);
+        *fake.state_cert.lock().unwrap() = StateCertRoutes {
+            catchup: StatusCode::NOT_FOUND,
+            availability: StatusCode::NOT_FOUND,
+            availability_delay: Duration::ZERO,
+        };
+        let harness = Harness::new(None).await;
+        harness.set_height(&node, 300);
+        let epochs = harness
+            .watchdog
+            .fetch_epochs(std::slice::from_ref(&node))
+            .await
+            .unwrap();
+        let (mut watch, view) = harness.start_with(node.clone(), epochs).await;
+        let mut reporter = harness.reporter(&node, &view);
+        let missing = || harness.gauge("missing", &node, Some("state_cert"));
+
+        for _ in 0..3 {
+            watch.check_probe(&CERT_PROBE).await.unwrap();
+            harness.clock.advance(Duration::from_secs(10));
+        }
+        watch.publish();
+        reporter.tick(1).unwrap();
+        assert_eq!(harness.gauge("confirmed_missing", &node, None), Some(1));
+        assert_eq!(missing(), Some(1));
+
+        fake.state_cert.lock().unwrap().availability = StatusCode::OK;
+        watch.check_probe(&CERT_PROBE).await.unwrap();
+        watch.publish();
+        reporter.tick(2).unwrap();
+        assert_eq!(harness.gauge("confirmed_missing", &node, None), Some(0));
+        assert_eq!(missing(), Some(0));
+        assert_eq!(harness.local_misses(), 1);
     }
 
     #[tokio::test]

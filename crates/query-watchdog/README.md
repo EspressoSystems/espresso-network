@@ -67,12 +67,17 @@ Probes are HEAD requests.
   timeout; the node fetches the cert from peers and stores it, so the probe heals a node whose peers have the cert. 200
   is present and counts `query_watchdog_local_misses_total{node,kind}` (no alert; it shows a node that does not store
   certs itself). A 404, 500 or timeout is not found: a cert no peer can serve within 5 s counts as missing. Any other
-  status (502, 503, 504, 429, ...) and any other transport error (connect refused, reset) fails. `probes_total` counts
-  both requests. `fetch_errors_total` records one 404 per unhealed probe (the real step 2 status is in the DEBUG log)
-  and nothing when step 2 heals. The node's own peer fetch waits up to 40 s
-  (`crates/espresso/node/src/api/state.rs:777`), plus a stake-table catchup for epochs not loaded
-  (`crates/espresso/node/src/api.rs:607`). When no peer has the cert the watchdog usually sees its 5 s timeout, and
-  old-epoch certs in an archive sweep can time out at 5 s even when peers have them, then heal on a later retry.
+  step 2 result (502, 503, 504, 429, a connection error) also keeps the 404: step 1 proved the database lacks the cert,
+  and a node that cannot fetch it from peers cannot serve clients either. `probes_total` counts both requests.
+  `fetch_errors_total` records one 404 per unhealed probe (the real step 2 status is in the DEBUG log) and nothing when
+  step 2 heals. The node's own peer fetch waits up to 40 s (`crates/espresso/node/src/api/state.rs:777`), plus a
+  stake-table catchup for epochs not loaded (`crates/espresso/node/src/api.rs:607`). When no peer has the cert the
+  watchdog usually sees its 5 s timeout, and old-epoch certs in an archive sweep can time out at 5 s even when peers
+  have them, then heal on a later retry. A timeout during a slow stake-table catchup counts as missing, but the unit
+  counts only after 60 s and the node's catchup continues after the client disconnects, so the retry after 35 s normally
+  heals it; it pages only when the catchup takes more than about 60 s. A cert no peer has costs one 5 s step 2 request
+  per re-check; confirmed rows are re-checked only by the representative (once a minute per node), the recovery queue
+  and the weekly sweep.
 - A stake table of epoch `e` is probed with the chunk holding block `(e - 2) * epoch_height`, the epoch boundary five
   blocks after the root block the node builds it from (`root_block_in_epoch` subtracts 5); a state cert with the chunk
   holding `e * epoch_height`. The alert margin below uses the same block.
@@ -220,8 +225,10 @@ task resumes where the old one stopped.
   `node unhealthy` and missing data instead.
 - A lagging or stuck node never turns red: nothing above its own height is probed or counted. It shows in
   `node_lag_blocks` and, when it stops advancing, in the follow lag against its own height staying flat.
-- A node that only times out or answers 500 never turns red, since no missing data is confirmed. It shows as a
-  `node unhealthy` WARN and in `fetch_errors_total{status}`; the companion monitor below pages on those.
+- A node that only times out or answers 500 never turns red, since no missing data is confirmed. The exception is
+  `state_cert`: a step 2 failure of any kind counts as a 404, so a cert the node cannot fetch from peers can turn the
+  node red like any other missing object. The node otherwise shows as a `node unhealthy` WARN and in
+  `fetch_errors_total{status}`; the companion monitor below pages on those.
 - Request timeouts are per request kind (range HEAD 60 s, single HEAD 10 s, JSON GET 5 s, peer-fetch HEAD 5 s); a
   hanging node holds its loop for that long per request, while gauges and the `summary` line continue.
 

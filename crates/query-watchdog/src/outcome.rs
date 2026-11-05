@@ -17,11 +17,6 @@ impl FailedStatus {
         (!status.is_success() && status != StatusCode::NOT_FOUND).then_some(Self(status))
     }
 
-    /// Whether the status is 500.
-    pub fn is_internal_server_error(&self) -> bool {
-        self.0 == StatusCode::INTERNAL_SERVER_ERROR
-    }
-
     /// `"500"`, `"503"`, ...
     pub fn label(&self) -> &str {
         self.0.as_str()
