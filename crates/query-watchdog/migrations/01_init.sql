@@ -10,7 +10,7 @@ CREATE TABLE missing_chunk (
     failed_probes INTEGER NOT NULL,
     last_status TEXT NOT NULL,
     PRIMARY KEY (node, kind, range_start),
-    CHECK (kind IN ('leaf', 'block', 'vid_common', 'lc_leaf_proof', 'aggregate', 'stake_table', 'state_cert', 'lc_stake_table')),
+    CHECK (kind IN ('leaf', 'block', 'vid_common', 'lc_leaf_proof', 'stake_table', 'state_cert', 'lc_stake_table')),
     CHECK (range_start >= 0 AND range_end > range_start),
     -- point and epoch kinds hold one unit per row
     CHECK (kind IN ('leaf', 'block', 'vid_common') OR range_end = range_start + 1),

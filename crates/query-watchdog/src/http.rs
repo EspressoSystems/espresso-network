@@ -8,10 +8,9 @@ use serde::Serialize;
 use tokio::net::TcpListener;
 
 use crate::{
-    missing::{KindSummary, ListedRows},
     node::WatchedNode,
     schedule::{RunningSweep, SweepState},
-    view::{NodeView, SweepEta, ViewReceiver},
+    view::{KindSummary, NodeView, NodeViewSlot, SweepEta, age_at},
 };
 
 /// What the HTTP handlers read.
@@ -19,13 +18,6 @@ use crate::{
 pub struct AppState {
     registry: Registry,
     nodes: Arc<[NodeViewSlot]>,
-}
-
-/// One watched node and the receiver of its published view.
-#[derive(Clone)]
-pub struct NodeViewSlot {
-    pub node: WatchedNode,
-    pub view: ViewReceiver,
 }
 
 impl AppState {
@@ -87,7 +79,7 @@ async fn missing_page(State(app): State<AppState>) -> Html<String> {
 }
 
 /// Page with the endpoint links, then one section per node.
-fn render_page(nodes: &[(&WatchedNode, Option<&NodeView>)]) -> String {
+pub(crate) fn render_page(nodes: &[(&WatchedNode, Option<&NodeView>)]) -> String {
     let mut page = String::from(
         "<!DOCTYPE html><html><head><title>query-watchdog</title></head><body><h1>query-watchdog</\
          h1><ul><li><a href=\"/status/metrics\">/status/metrics</a></li><li><a \
@@ -115,15 +107,16 @@ fn write_node(page: &mut String, node: &WatchedNode, view: Option<&NodeView>) ->
         write_line(page, "missing: none")?;
         return page.write_str("</ul>");
     };
-    write_line(page, &format!("tip: {}", view.summary.tip_height))?;
-    for line in progress_lines(view) {
+    let summary = view.summary(view.frontier.tip(), view.published_at);
+    write_line(page, &format!("tip: {}", summary.tip_height))?;
+    for line in progress_lines(view, summary.follow_lag_blocks) {
         write_line(page, &line)?;
     }
-    for line in missing_lines(&view.summary.kinds) {
+    for line in missing_lines(&summary.kinds) {
         write_line(page, &line)?;
     }
     page.write_str("</ul>")?;
-    write_missing_table(page, node, &view.listed)
+    write_missing_table(page, node, view)
 }
 
 /// Appends `text` as a list item.
@@ -132,9 +125,8 @@ fn write_line(page: &mut String, text: &str) -> std::fmt::Result {
 }
 
 /// Follow, sweep and last-sweep lines.
-fn progress_lines(view: &NodeView) -> Vec<String> {
+fn progress_lines(view: &NodeView, lag: u64) -> Vec<String> {
     let follow = view.progress.follow_next_height;
-    let lag = view.summary.follow_lag_blocks;
     let mut lines = vec![format!("follow next height: {follow} (lag {lag})")];
     lines.extend(sweep_lines(view));
     let completed = view
@@ -203,12 +195,9 @@ fn missing_lines(kinds: &[KindSummary]) -> Vec<String> {
     }
 }
 
-/// The listed rows with links, or `nothing missing`.
-fn write_missing_table(
-    page: &mut String,
-    node: &WatchedNode,
-    listed: &ListedRows,
-) -> std::fmt::Result {
+/// The listed rows with links; ages at the view's `published_at`.
+fn write_missing_table(page: &mut String, node: &WatchedNode, view: &NodeView) -> std::fmt::Result {
+    let listed = &view.listed;
     if listed.shown.is_empty() {
         return page.write_str("<p>nothing missing</p>");
     }
@@ -216,11 +205,12 @@ fn write_missing_table(
         "<table border=\"1\"><tr><th>kind</th><th>range_start</th><th>range_end</th><th>age</\
          th><th>link</th></tr>",
     )?;
-    for aged in &listed.shown {
-        let key = &aged.row.key;
+    for row in &listed.shown {
+        let key = &row.key;
         let url = escape(node.route_url(&key.first_probe().route()).as_str());
         let kind: &str = key.kind().into();
-        let age = humantime::format_duration(aged.age);
+        let age =
+            humantime::format_duration(age_at(row.state.first_missing_at(), view.published_at));
         let units = key.units();
         write!(
             page,
@@ -247,7 +237,7 @@ fn escape(text: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
+    use std::{num::NonZeroU32, time::Duration};
 
     use chrono::{DateTime, Utc};
     use url::Url;
@@ -255,10 +245,10 @@ mod tests {
     use super::*;
     use crate::{
         kind::{DataKind, Height, RangeKind},
-        missing::{AgedRow, MissingRow, OldestMissing, RowKey, RowState},
-        outcome::MissingReason,
-        schedule::{NodeProgress, RunningSweep},
-        view::NodeSummary,
+        missing::{AlertRule, KindTally, ListedRows, MissingRow, RowKey},
+        schedule::{Frontier, NodeProgress, RunningSweep, SweepWindow},
+        state::{Retry, RetryDelay, UnitState},
+        view::WatchCounters,
     };
 
     fn at(secs: i64) -> DateTime<Utc> {
@@ -281,21 +271,23 @@ mod tests {
         }
     }
 
-    fn view(sweep: SweepState, listed: ListedRows, kinds: Vec<KindSummary>) -> NodeView {
+    fn view(sweep: SweepState, listed: ListedRows, tallies: Vec<KindTally>) -> NodeView {
         NodeView {
-            summary: NodeSummary {
-                tip_height: Height(5_000),
-                follow_lag_blocks: 10,
-                merklized_state_lag_blocks: None,
-                kinds,
-            },
+            published_at: at(90),
+            frontier: Frontier::new(Height(5_000), SweepWindow::Archive),
             progress: NodeProgress {
                 follow_next_height: Height(4_990),
                 sweep,
             },
+            merklized_state_height: None,
+            alert_rule: AlertRule {
+                min_age: Duration::from_secs(60),
+            },
+            tallies,
+            listed,
+            counters: WatchCounters::default(),
             next_sweep_start: None,
             sweep_eta: None,
-            listed,
         }
     }
 
@@ -319,42 +311,33 @@ mod tests {
 
     #[test]
     fn render_page_shows_the_published_view() {
-        let state = RowState {
+        let state = UnitState::NotFound {
             first_missing_at: at(0),
-            failed_probes: 3,
-            retry_delay: Duration::from_secs(60),
-            next_retry_at: at(60),
-            reason: MissingReason::NotFound,
+            not_found_probes: NonZeroU32::new(3).unwrap(),
+            retry: Retry::after(RetryDelay::from_secs(60).unwrap(), at(0)),
         };
         let key = RowKey::Range {
             kind: RangeKind::Leaf,
             heights: Height(1_000)..Height(1_300),
         };
+        let row = MissingRow { key, state };
         let listed = ListedRows {
-            shown: vec![AgedRow {
-                row: MissingRow {
-                    key: key.clone(),
-                    state,
-                },
-                age: Duration::from_secs(90),
-            }],
+            shown: vec![row.clone()],
             total: 3,
         };
-        let kinds = vec![KindSummary {
+        let tally = KindTally {
             kind: DataKind::Leaf,
             missing_count: 300,
-            oldest: Some(OldestMissing {
-                key,
-                age: Duration::from_secs(90),
-            }),
-        }];
+            oldest: Some(row),
+            confirmed: Default::default(),
+        };
         let view = view(
             SweepState::Running {
                 sweep: running(0, 250, 1000),
                 last_completed_at: None,
             },
             listed,
-            kinds,
+            vec![tally],
         );
         let node = node("a:1");
         let html = render_page(&[(&node, Some(&view))]);

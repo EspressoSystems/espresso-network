@@ -1,17 +1,16 @@
-use std::time::Duration;
-
-use chrono::{DateTime, Utc};
 use prometheus::{IntCounterVec, IntGauge, IntGaugeVec, Opts, Registry};
 
 use crate::{
     kind::{DataKind, Height},
     node::{FetchError, FetchTarget},
-    schedule::{NodeProgress, SweepState},
-    view::NodeSummary,
+    report::NodeReport,
+    schedule::SweepState,
 };
 
 /// `query_watchdog_*` families on the process `Registry`.
 pub struct WatchdogMetrics {
+    /// `{node}`, `NodeSummary::confirmed_missing`; the paging gauge.
+    confirmed_missing: IntGaugeVec,
     /// `{node,kind}`, heights or epochs per kind.
     missing: IntGaugeVec,
     /// `{node,kind}`.
@@ -46,6 +45,12 @@ impl WatchdogMetrics {
     pub fn new(registry: &Registry) -> prometheus::Result<Self> {
         let node_kind = ["node", "kind"];
         Ok(Self {
+            confirmed_missing: gauge(
+                registry,
+                "confirmed_missing",
+                "Confirmed missing heights and epochs old enough to count",
+                &["node"],
+            )?,
             missing: gauge(registry, "missing", "Missing heights or epochs", &node_kind)?,
             oldest_missing_age_seconds: gauge(
                 registry,
@@ -116,54 +121,55 @@ impl WatchdogMetrics {
         })
     }
 
-    /// Sets the gauges of `node_label` from `summary`; `None` age exports 0.
-    pub fn export_summary(&self, node_label: &str, summary: &NodeSummary) -> anyhow::Result<()> {
+    /// Every per-node gauge from one report: `confirmed_missing`, `missing` and
+    /// `oldest_missing_age_seconds` per kind, follow and sweep gauges, ETA (series removed when
+    /// the report has none), last completed sweep.
+    pub fn export_node(&self, report: &NodeReport) -> anyhow::Result<()> {
+        let label = report.node.label.as_str();
+        let summary = &report.summary;
+        self.confirmed_missing
+            .with_label_values(&[label])
+            .set(i64::try_from(summary.confirmed_missing())?);
         self.follow_lag_blocks
-            .with_label_values(&[node_label])
+            .with_label_values(&[label])
             .set(i64::try_from(summary.follow_lag_blocks)?);
         if let Some(lag) = summary.merklized_state_lag_blocks {
             self.merklized_state_lag_blocks
-                .with_label_values(&[node_label])
+                .with_label_values(&[label])
                 .set(i64::try_from(lag)?);
         }
         for kind in &summary.kinds {
-            let labels = [node_label, kind.kind.into()];
+            let labels = [label, kind.kind.into()];
             self.missing
                 .with_label_values(&labels)
                 .set(i64::try_from(kind.missing_count)?);
             let age = kind
-                .oldest
-                .as_ref()
-                .map_or(Ok(0), |oldest| i64::try_from(oldest.age.as_secs()))?;
+                .oldest_age
+                .map_or(Ok(0), |age| i64::try_from(age.as_secs()))?;
             self.oldest_missing_age_seconds
                 .with_label_values(&labels)
                 .set(age);
         }
-        Ok(())
+        self.export_progress(report)
     }
 
-    /// Follow and sweep gauges; sweep heights read 0 unless `Running`; ETA series removed when
-    /// `None`.
-    pub fn export_progress(
-        &self,
-        node_label: &str,
-        progress: &NodeProgress,
-        sweep_eta: Option<Duration>,
-    ) -> anyhow::Result<()> {
+    /// Follow, sweep and last-sweep gauges; sweep heights read 0 unless `Running`.
+    fn export_progress(&self, report: &NodeReport) -> anyhow::Result<()> {
+        let labels = [report.node.label.as_str()];
+        let progress = &report.progress;
         let (running, next, until) = match &progress.sweep {
             SweepState::Running { sweep, .. } => (1, sweep.next_height, sweep.until_height),
             _ => (0, Height(0), Height(0)),
         };
-        let labels = [node_label];
         self.follow_next_height
             .with_label_values(&labels)
             .set(i64::try_from(progress.follow_next_height.0)?);
         self.sweep_running.with_label_values(&labels).set(running);
-        match sweep_eta {
+        match report.sweep_eta {
             Some(eta) => self
                 .sweep_eta_seconds
                 .with_label_values(&labels)
-                .set(i64::try_from(eta.as_secs())?),
+                .set(i64::try_from(eta.remaining.as_secs())?),
             None => {
                 // Fails only when the series does not exist yet.
                 self.sweep_eta_seconds.remove_label_values(&labels).ok();
@@ -175,6 +181,11 @@ impl WatchdogMetrics {
         self.sweep_until_height
             .with_label_values(&labels)
             .set(i64::try_from(until.0)?);
+        if let Some(completed_at) = progress.sweep.last_completed() {
+            self.last_sweep_completed_seconds
+                .with_label_values(&labels)
+                .set(completed_at.timestamp());
+        }
         Ok(())
     }
 
@@ -191,18 +202,11 @@ impl WatchdogMetrics {
             .inc();
     }
 
-    /// Counts one failure under `{node_label, target.label(), error.status_label()}`.
+    /// Counts one failure under `{node_label, target.label(), error.not_served().label()}`.
     pub fn count_fetch_error(&self, node_label: &str, target: FetchTarget, error: &FetchError) {
         self.fetch_errors_total
-            .with_label_values(&[node_label, target.label(), error.status_label()])
+            .with_label_values(&[node_label, target.label(), error.not_served().label()])
             .inc();
-    }
-
-    /// Sets the unix time of the node's last completed sweep.
-    pub fn mark_sweep_completed(&self, node_label: &str, completed_at: DateTime<Utc>) {
-        self.last_sweep_completed_seconds
-            .with_label_values(&[node_label])
-            .set(completed_at.timestamp());
     }
 }
 

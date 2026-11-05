@@ -1,4 +1,4 @@
-use std::{fs, ops::Range, path::Path, time::Duration};
+use std::{fs, num::NonZeroU32, ops::Range, path::Path, time::Duration};
 
 use anyhow::{Context, bail, ensure};
 use chrono::{DateTime, Utc};
@@ -8,9 +8,11 @@ use sqlx::{
 };
 
 use crate::{
-    kind::{DataKind, Epoch, EpochConfig, Height, KindClass},
-    missing::{ImageDiff, ImageRegion, MissingRow, MissingSet, MissingUpdate, RowKey, RowState},
+    kind::{DataKind, Epoch, Epochs, Height, KindClass},
+    missing::{ImageDiff, ImageRegion, MissingRow, MissingSet, MissingUpdate, RowKey},
+    outcome::NotServed,
     schedule::{CompletedSweep, NodeProgress, RunningSweep, SweepState},
+    state::{Retry, RetryDelay, UnitState},
 };
 
 /// SQLite state of all node watches; WAL, so litestream can replicate it.
@@ -161,7 +163,7 @@ pub struct PersistedMissingSet {
 
 impl PersistedMissingSet {
     /// Loads the node's image (`MissingSet::from_rows`).
-    pub async fn load(store: NodeStore, epoch_config: Option<EpochConfig>) -> anyhow::Result<Self> {
+    pub async fn load(store: NodeStore, epochs: Epochs) -> anyhow::Result<Self> {
         let stored: Vec<StoredRow> = sqlx::query_as(
             "SELECT kind, range_start, range_end, first_missing_at, retry_delay_secs, \
              next_retry_at, failed_probes, last_status FROM missing_chunk WHERE node = ? ORDER BY \
@@ -175,7 +177,7 @@ impl PersistedMissingSet {
             .map(MissingRow::try_from)
             .collect::<anyhow::Result<Vec<_>>>()
             .with_context(|| format!("{}: reading missing_chunk", store.node))?;
-        let set = MissingSet::from_rows(epoch_config, rows)
+        let set = MissingSet::from_rows(epochs, rows)
             .with_context(|| format!("{}: loading missing_chunk", store.node))?;
         Ok(Self { set, store })
     }
@@ -267,7 +269,7 @@ struct StoredRow {
 impl TryFrom<StoredRow> for MissingRow {
     type Error = anyhow::Error;
 
-    /// Checked conversions, `KindClass` dispatch, `MissingReason::from_str`.
+    /// Checked conversions, `KindClass` dispatch, `NotServed::from_str`, `RetryDelay::from_secs`.
     fn try_from(row: StoredRow) -> anyhow::Result<Self> {
         let start = u64::try_from(row.range_start)?;
         let end = u64::try_from(row.range_end)?;
@@ -300,13 +302,21 @@ impl TryFrom<StoredRow> for MissingRow {
                 }
             },
         };
-        let state = RowState {
-            first_missing_at: from_unix(row.first_missing_at)?,
-            failed_probes: u32::try_from(row.failed_probes)?,
-            retry_delay: Duration::from_secs(u64::try_from(row.retry_delay_secs)?),
-            next_retry_at: from_unix(row.next_retry_at)?,
-            reason: row.last_status.parse()?,
+        let last_status = row.last_status.parse::<NotServed>()?;
+        let probe_count = u32::try_from(row.failed_probes)
+            .ok()
+            .and_then(NonZeroU32::new)
+            .with_context(|| format!("failed_probes {} is not positive", row.failed_probes))?;
+        let retry = Retry {
+            delay: RetryDelay::from_secs(u64::try_from(row.retry_delay_secs)?)?,
+            next_at: from_unix(row.next_retry_at)?,
         };
+        let state = UnitState::from_stored(
+            last_status,
+            from_unix(row.first_missing_at)?,
+            probe_count,
+            retry,
+        );
         Ok(Self { key, state })
     }
 }
@@ -321,11 +331,11 @@ impl TryFrom<&MissingRow> for StoredRow {
             kind: row.key.kind(),
             range_start: start,
             range_end: end,
-            first_missing_at: row.state.first_missing_at.timestamp(),
-            retry_delay_secs: i64::try_from(row.state.retry_delay.as_secs())?,
-            next_retry_at: row.state.next_retry_at.timestamp(),
-            failed_probes: i64::from(row.state.failed_probes),
-            last_status: row.state.reason.label().to_owned(),
+            first_missing_at: row.state.first_missing_at().timestamp(),
+            retry_delay_secs: i64::try_from(row.state.retry().delay.duration().as_secs())?,
+            next_retry_at: row.state.retry().next_at.timestamp(),
+            failed_probes: i64::from(row.state.probe_count().get()),
+            last_status: row.state.last_status().label().to_owned(),
         })
     }
 }
@@ -460,15 +470,15 @@ mod tests {
 
     use super::*;
     use crate::{
-        kind::{EpochKind, PointKind, RangeKind},
-        outcome::{GapSearch, NotServed, Observation, RangeOutcome, UnitOutcome},
+        kind::{EpochConfig, EpochKind, PointKind, RangeKind},
+        outcome::{Observation, ProbeResult, RangeFindings},
     };
 
     const T0: i64 = 1_000;
-    const EPOCH_CONFIG: EpochConfig = EpochConfig {
-        epoch_height: 30,
-        epoch_start_block: 61,
-    };
+    const EPOCHS: Epochs = Epochs::On(EpochConfig {
+        epoch_height: std::num::NonZeroU64::new(30).unwrap(),
+        epoch_start_block: Height(61),
+    });
 
     fn at(secs: i64) -> DateTime<Utc> {
         DateTime::from_timestamp(secs, 0).unwrap()
@@ -481,29 +491,25 @@ mod tests {
 
     fn gap(kind: RangeKind, start: u64, end: u64) -> MissingUpdate {
         let heights = Height(start)..Height(end);
-        MissingUpdate::Observed(Observation::Range {
+        MissingUpdate::Observed(ProbeResult::Range {
             kind,
-            heights: heights.clone(),
-            outcome: RangeOutcome::Refined(GapSearch {
-                gaps: vec![heights],
-                tail: None,
-            }),
+            findings: RangeFindings::uniform(heights, Observation::NotFound),
         })
     }
 
-    fn point(kind: PointKind, height: u64, outcome: UnitOutcome) -> MissingUpdate {
-        MissingUpdate::Observed(Observation::Point {
+    fn point(kind: PointKind, height: u64, observation: Observation) -> MissingUpdate {
+        MissingUpdate::Observed(ProbeResult::Point {
             kind,
             height: Height(height),
-            outcome,
+            observation,
         })
     }
 
-    fn epoch(kind: EpochKind, epoch: u64, outcome: UnitOutcome) -> MissingUpdate {
-        MissingUpdate::Observed(Observation::Epoch {
+    fn epoch(kind: EpochKind, epoch: u64, observation: Observation) -> MissingUpdate {
+        MissingUpdate::Observed(ProbeResult::Epoch {
             kind,
             epoch: Epoch(epoch),
-            outcome,
+            observation,
         })
     }
 
@@ -521,28 +527,27 @@ mod tests {
     async fn the_image_roundtrips_and_matches_the_kind_labels() {
         let store = memory_store().await;
         let node = store.node("a:1");
-        let mut persisted = PersistedMissingSet::load(node.clone(), Some(EPOCH_CONFIG))
+        let mut persisted = PersistedMissingSet::load(node.clone(), EPOCHS)
             .await
             .unwrap();
-        let missing = UnitOutcome::Missing(NotServed::NotFound);
+        let missing = Observation::NotFound;
         let updates = [
             gap(RangeKind::Leaf, 0, 100),
             gap(RangeKind::Block, 100, 200),
             gap(RangeKind::VidCommon, 200, 300),
             point(PointKind::LcLeafProof, 99, missing),
-            point(PointKind::Aggregate, 199, missing),
             epoch(EpochKind::StakeTable, 5, missing),
             epoch(EpochKind::StateCert, 3, missing),
             epoch(EpochKind::LcStakeTable, 7, missing),
             // Merges with its touching neighbour and rewrites both rows.
             gap(RangeKind::Leaf, 100, 200),
             gap(RangeKind::Leaf, 50, 150),
-            point(PointKind::LcLeafProof, 99, UnitOutcome::Present),
+            point(PointKind::LcLeafProof, 99, Observation::Present),
             MissingUpdate::ForgetBelow(Height(120)),
         ];
         for (i, update) in updates.into_iter().enumerate() {
             persisted.apply(update, at(T0)).await.unwrap();
-            let loaded = PersistedMissingSet::load(node.clone(), Some(EPOCH_CONFIG))
+            let loaded = PersistedMissingSet::load(node.clone(), EPOCHS)
                 .await
                 .unwrap();
             let loaded: Vec<_> = loaded.set().rows().collect();
@@ -584,7 +589,9 @@ mod tests {
             sweep: SweepState::NeverSwept,
         };
         node.save_progress(&progress).await.unwrap();
-        let mut persisted = PersistedMissingSet::load(node.clone(), None).await.unwrap();
+        let mut persisted = PersistedMissingSet::load(node.clone(), Epochs::Off)
+            .await
+            .unwrap();
         persisted
             .apply(gap(RangeKind::Leaf, 0, 100), at(T0))
             .await
@@ -596,7 +603,7 @@ mod tests {
         );
         assert_eq!(store.reset().await.unwrap(), 0, "nothing left to delete");
         assert_eq!(node.load_progress().await.unwrap(), None);
-        let loaded = PersistedMissingSet::load(node, None).await.unwrap();
+        let loaded = PersistedMissingSet::load(node, Epochs::Off).await.unwrap();
         assert_eq!(loaded.set().rows().count(), 0);
     }
 
@@ -651,6 +658,7 @@ mod tests {
             row("oops", 0, 10, 1, "404"),
             row("leaf", 0, 10, 1, ""),
             row("leaf", -1, 10, 1, "404"),
+            row("aggregate", 0, 10, 1, "404"),
         ];
         for values in bad {
             assert!(insert_raw(&store, &values).await.is_err(), "{values}");
@@ -709,12 +717,13 @@ mod tests {
                 vec![row(0, 10, "404", T0), row(10, 20, "404", T0)],
             ),
             ("unknown status", vec![row(0, 10, "teapot", T0)]),
+            ("legacy no-height status", vec![row(0, 10, "no-height", T0)]),
         ];
         for (name, rows) in cases {
             let store = memory_store().await;
             // The primary key (node, kind, range_start) lets overlapping rows through.
             insert_raw(&store, &rows.join(", ")).await.unwrap();
-            let loaded = PersistedMissingSet::load(store.node("a:1"), None).await;
+            let loaded = PersistedMissingSet::load(store.node("a:1"), Epochs::Off).await;
             assert!(loaded.is_err(), "{name}");
         }
     }

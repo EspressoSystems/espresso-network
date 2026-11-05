@@ -4,16 +4,16 @@
 them. Today it does not, so this external watchdog fills the role:
 
 - The node has no complete check of what it serves. `v2/node/sync-status` covers only blocks, leaves and VID common, is
-  cached for 5 minutes and misses a tail above the node's highest header. Aggregates, light client proofs, state certs
-  and stake tables are not covered at all.
+  cached for 5 minutes and misses a tail above the node's highest header. Light client proofs, state certs and stake
+  tables are not covered at all.
 - Nothing on the node alerts on missing data, so a gap is found when a rollup or follower asks for it.
 - The node's own gap filling runs in the background and reports nothing. A probe that hits a gap starts a fetch from
   peers, so the watchdog also repairs.
 
 Remove the watchdog once the node reports and repairs its own gaps.
 
-The watchdog checks that archive query nodes serve every height, epoch object and aggregate they should, keeps the
-missing set in memory (SQLite holds its image), and reports it through logs, metrics and a page.
+The watchdog checks that archive query nodes serve every height and epoch object they should, keeps the missing set in
+memory (SQLite holds its image), and reports it through a paging metric, logs and a page.
 
 ## Run locally
 
@@ -23,8 +23,8 @@ cargo run -p query-watchdog -- --nodes https://query.decaf.testnet.espresso.netw
 ```
 
 - The `serving` INFO line prints the endpoint URLs.
-- `/`: progress and missing ranges per node, with links to the failing GET.
-- `/status/metrics`: Prometheus metrics, `query_watchdog_*`.
+- `/`: progress and missing ranges per node, with links to the failing request.
+- `/status/metrics`: Prometheus metrics, `query_watchdog_*`; `query_watchdog_confirmed_missing{node}` pages.
 - `/healthcheck`: 200 with `{"status":"available"}`.
 - Logs: `RUST_LOG` (default INFO), `RUST_LOG_FORMAT=json`.
 
@@ -39,30 +39,29 @@ cargo run -p query-watchdog -- --nodes https://query.decaf.testnet.espresso.netw
 | `--sweep-once`          | `SWEEP_ONCE`                     | off; sweep once, then only follow the tip (`--sweep-interval` is ignored; a node not yet `done`, a `waiting` one from an earlier `--sweep-interval` run included, starts its one sweep at once; a restart does not sweep again) |
 | `--request-interval`    | `REQUEST_INTERVAL`               | 200ms, wait before each request of one node                                                                                                                                                                                     |
 | `--retention-blocks`    | `RETENTION_BLOCKS`               | absent: archive, sweep `[0, tip)`; N: sweep `[tip - N, tip - 10)`, start rounded up to a multiple of 100                                                                                                                        |
-| `--alert-missing-after` | `ALERT_MISSING_AFTER`            | 60s (at most 1 year), minimum age of missing data for the alert                                                                                                                                                                 |
+| `--alert-missing-after` | `ALERT_MISSING_AFTER`            | 60s (at most 1 year), minimum age before a confirmed unit counts in `confirmed_missing`                                                                                                                                         |
 | `--reset`               | `RESET`                          | off; deletes the stored state at startup and always logs a WARN                                                                                                                                                                 |
 
 ## Checked
 
-Per 100-height chunk (follow stays 10 blocks behind the tip, sweep over the window). Probes are HEAD requests.
+Per chunk of at most 100 heights. Follow probes the heights settled since its last chunk (10 blocks behind the tip), up
+to 100 per chunk, so near the tip a chunk is a few heights and `lc_leaf_proof` samples the last height of each such
+chunk. The sweep covers its window in chunks of 100 and so samples one height per 100 for `lc_leaf_proof`. Probes are
+HEAD requests.
 
 | Kind                          | Unit    | Route                                                   |
 | ----------------------------- | ------- | ------------------------------------------------------- |
 | `leaf`, `block`, `vid_common` | heights | `v1/availability/{leaf,block,vid/common}/{start}/{end}` |
 | `lc_leaf_proof`               | heights | `v1/light-client/leaf/{end - 1}`                        |
-| `aggregate`                   | heights | `v1/node/transactions/count/{end - 1}`                  |
 | `stake_table`                 | epochs  | `v1/node/stake-table/{epoch}`                           |
 | `state_cert`                  | epochs  | `v1/catchup/{epoch}/state-cert`                         |
 | `lc_stake_table`              | epochs  | `v1/light-client/stake-table/{epoch}`                   |
 
-- A 404 on a `leaf`, `block` or `vid_common` range is refined to the exact missing heights: GET reads the first missing
-  height from the 404 message, then galloping and binary search over single heights find the end of the gap, repeated to
-  the end of the range. `lc_leaf_proof` and `aggregate` probe the last height of the chunk and count one height per
-  missing row, per-epoch kinds one epoch.
-- Missing ranges are re-probed with a delay doubling from 5 s up to 600 s. A range established by a 404 with at least 3
-  failed probes (alerting kinds) is capped at 60 s, so a refilled range is noticed within a minute. A later 500 or
-  timeout on such a row only moves its retry time (the delay doubles under the cap); its reason, age and failed probe
-  count stay.
+- A 404 on a `leaf`, `block` or `vid_common` range is refined to the exact missing heights with HEADs only: a binary
+  search over prefix ranges (at most 7 HEADs per 100 heights) finds the first missing height, then galloping and binary
+  search over single heights find the end of the gap, repeated from a HEAD of the rest. Any 404 counts, whatever its
+  body. `lc_leaf_proof` probes the last height of the chunk and counts one height per missing row, per-epoch kinds one
+  epoch.
 - A stake table of epoch `e` is probed with the chunk holding block `(e - 2) * epoch_height`, the epoch boundary five
   blocks after the root block the node builds it from (`root_block_in_epoch` subtracts 5); a state cert with the chunk
   holding `e * epoch_height`. The alert margin below uses the same block.
@@ -71,29 +70,55 @@ Per 100-height chunk (follow stays 10 blocks behind the tip, sweep over the wind
   it. While paused it sends one chunk a minute to test the node. Follow and retries go on.
 - Gauges for the merklized state head lag and follow lag are exported.
 
+### Retries
+
+Every missing unit is in one of two states: failed (no 404 since it went missing) or not found (a 404 answered, with the
+number of 404s since). A not-found unit with at least 3 404s is confirmed; every other unit is confirming.
+
+| Old state \ probe | Present | 404                                                  | 500, timeout, transport                              |
+| ----------------- | ------- | ---------------------------------------------------- | ---------------------------------------------------- |
+| none              | none    | not found, 1 404, retry in 5 s                       | failed, 1 failure, retry in 5 s                      |
+| failed            | none    | not found, starts fresh (1 404, 5 s)                 | failed, count + 1, delay doubles (cap 600 s)         |
+| not found, n 404s | none    | n + 1 404s, delay doubles (cap 60 s once n + 1 >= 3) | n 404s kept, delay doubles (cap 60 s when confirmed) |
+
+- Delays are whole seconds from 5 s, doubling up to 600 s; confirmed units cap at 60 s. A failure never demotes a
+  not-found unit.
+- Each unit keeps its own state: a gap over units of two rows continues each unit's state, and units the gap newly
+  covers start fresh. A retried row splits into pieces of at most 100 heights, so the page lists the pieces.
+- Confirming rows are retried at their next time in (next time, kind, first unit) order, at most 100 heights per probe.
+- Of the confirmed rows only the oldest (the representative) is retried at its next time, at most once a minute. When
+  the representative is found present, every confirmed row is re-checked once (the recovery queue, memory only).
+  Confirmed rows outside these keep a stale next time, are re-checked by follow and the sweep, and can keep counting
+  until then.
+- One retry step starts probes within 5 s (`RETRY_BUDGET`): the representative, then due confirming rows, then the
+  recovery queue; follow and the sweep keep the rest of the loop iteration.
+- Capacity at the default request cost (about 0.3 s, about 16 requests per retry step; a still-missing exact range piece
+  costs 3 requests, a refilled piece, point or epoch 1): a new gap is retried at about +5 s and +15 s and the node turns
+  red about 60 to 120 s after the gap is found, whatever the number of confirmed rows. After a repair the representative
+  is found present within 60 s; the recovery queue then re-checks about 120 pieces a minute during a sweep and about 200
+  without one, so N confirmed pieces take about N / 120 to N / 200 minutes, then the monitor window of 5 minutes.
+- Request timeouts: range HEAD 60 s (the node may wait 500 ms per height), single HEAD 10 s, JSON GET 5 s.
+
 ## Log levels
 
-| Level                                 | Meaning                                                                                    |
-| ------------------------------------- | ------------------------------------------------------------------------------------------ |
-| ERROR, target `query_watchdog::alert` | missing data, the only line that pages                                                     |
-| ERROR, other targets                  | the watchdog itself is failing; the process exits                                          |
-| WARN                                  | degraded or transient (`node unhealthy`: non-404 failures in the last minute), never pages |
-| INFO                                  | lifecycle: config, start, sweep start and end, one summary per node per minute             |
-| DEBUG                                 | per request                                                                                |
+| Level | Meaning                                                                                    |
+| ----- | ------------------------------------------------------------------------------------------ |
+| ERROR | the watchdog itself is failing; the process exits                                          |
+| WARN  | degraded or transient (`node unhealthy`: non-404 failures in the last minute), never pages |
+| INFO  | lifecycle: config, start, sweep start and end, one `summary` per node per minute           |
+| DEBUG | per request                                                                                |
 
-The alert line `missing data` has the fields `node`, `kind`, `missing`, `oldest_age_seconds`, `failed_probes`,
-`range_start`, `range_end` and `url` (the GET URL of the oldest qualifying range). It is logged at most once per node
-and kind per minute, for the oldest row of the kind that meets all of:
+The `summary` line has `node`, `errors` and `forgotten` since the previous line (`forgotten` is 0 in archive mode),
+`confirmed_missing`, `sweep_eta` and the summary text with, per kind, `missing`, `confirmed` and `oldest_age`. The line
+comes every 60 s per node, also while a node hangs.
 
-- the row was established by a 404 (for `leaf`, `block`, `vid_common` one that named a height, so the range is exact); a
-  later 500, timeout or transport failure only delays its retries and does not stop the alert
-- at least 3 consecutive failed probes
+Paging is a metric, `query_watchdog_confirmed_missing{node}`, written every 15 s: the units (heights and epochs) of the
+node that are
+
+- confirmed: at least 3 probes answered 404 since the first 404 (500, timeout and transport only delay retries)
 - first missing at least `--alert-missing-after` ago
 - not within 10 blocks of the tip (per-epoch kinds: the block the object depends on, see above, is at least 10 below the
   tip)
-
-`aggregate` never alerts: the node's aggregator legitimately lags the tip, so its 404s are counted as missing but never
-page.
 
 ## Docker
 
@@ -117,43 +142,49 @@ task resumes where the old one stopped.
 - One writer per replica path. Run the ECS service with `minimumHealthyPercent=0` and `maximumPercent=100`; two writers
   corrupt the replica.
 - More than one watchdog (for redundancy): run separate ECS services, each with its own `LITESTREAM_REPLICA_URL`. They
-  are independent; the Datadog monitor groups by node and kind, so they raise one alert.
+  are independent; the Datadog monitor groups by node, so they raise one alert.
 - Local test: `-e LITESTREAM_REPLICA_URL=file:///replica -v <dir>:/replica`.
 - Litestream is installed from the pinned release `.deb` (`LITESTREAM_VERSION` in the Dockerfile).
 
 ## Known limitations
 
 - The missing set lives in memory and SQLite is its write-through image, loaded once at startup. Adjacent missing ranges
-  of one kind with equal state show as one row on the page and in the alert `range_start`/`range_end`. The link and the
-  alert `url` probe the first 100 heights of the row.
-- The page shows what each node watch last published, so its ages are as of that publish, at most one loop iteration
-  old. Before a node has started it reads `not started`.
-
-- Archive full sweep is slow: each 100-height chunk costs 5 probes plus the epoch probes whose block lies in it, each
+  of one kind with equal state show as one row on the page. A retried row splits into pieces of at most 100 heights and
+  stays split, so the page lists the pieces; a sweep chunk across two pieces is searched again by bisection, and the
+  units keep their state. The link probes the first 100 heights of the row.
+- The page shows what each node watch last published, so its ages are as of that publish, at most one probe old. Before
+  a node has started it reads `not started`.
+- Archive full sweep is slow: each 100-height chunk costs 4 probes plus the epoch probes whose block lies in it, each
   `request_interval` plus response time, and every loop iteration also spends time on follow and retries. Each gap in a
-  range kind adds a HEAD, a GET and about 2 x log2(gap length) single-height probes. The tip is covered by follow in
-  real time. The page ETA and `sweep_eta_seconds` show the live rate.
+  range kind adds about 7 + 2 x log2(gap length) HEADs. The tip is covered by follow in real time. The page ETA and
+  `sweep_eta_seconds` show the live rate.
 - Probes start fetches on the watched node, so the watchdog also repairs. Missing age means "not fetchable for that
   long".
 - Exact gaps assume one contiguous gap per search step: holes inside a gap are counted as missing up to the first
-  present height found. A failure other than 404 (500, timeout, transport), or a 404 message that does not read
-  `<kind> <height> not found`, leaves the rest of the range at chunk level, an upper bound. A retry of an exact gap
-  probes the first and the last height of each retried piece of at most 100 heights and keeps the piece while both are
-  missing: heights repaired in the middle stay counted, and the row keeps its age and can still alert.
-- Any non-200 counts as missing (404, 500, timeout, transport). An overloaded or unreachable node shows as missing data.
-  `fetch_errors_total{status}` separates the causes.
+  present height found. A failure other than 404 (500, timeout, transport) leaves the rest of the range failed, an upper
+  bound. A retry of an exact gap probes the first and the last height of each retried piece of at most 100 heights and
+  keeps the piece while both are missing: heights repaired in the middle stay counted, and the row keeps its age and can
+  still count.
+- Any 404 counts, also one that is not the query service's (a proxy page, an unmounted route, a wrong base URL): such a
+  node turns red after 3 404s and the age.
+- Any non-200 counts as missing in the page and `missing` (404, 500, timeout, transport). Only confirmed 404s count in
+  `confirmed_missing`. An overloaded or unreachable node shows as missing data. `fetch_errors_total{status}` separates
+  the causes.
+- One red per node: a new gap on a node that is already red does not page again.
+- `confirmed_missing` sums heights and epochs and can overstate until the representative is found present or the sweep
+  re-checks the confirmed rows.
 - Old-epoch `stake_table` probes return 500 and start a stake-table catchup on the node. They resolve within about 20 s.
-  They never alert (only 404 does), but an archive sweep triggers one catchup per historical epoch and a
+  They never count (only 404 does), but an archive sweep triggers one catchup per historical epoch and a
   `node unhealthy` WARN each minute while they fail.
-- Not checked: data contents, merklized-state history (archive nodes prune it), transactions index, namespace proofs,
-  reward tree, `chain_config`, `vid_share`.
+- Not checked: data contents, aggregates (transaction count, payload size), merklized-state history (archive nodes prune
+  it), transactions index, namespace proofs, reward tree, `chain_config`, `vid_share`.
 - `--retention-blocks` must not exceed the node's own retention, or pruned heights show as missing.
 - State is per node URL. Rows of nodes no longer in `--nodes` are forgotten at startup. Pointing the same URL or state
   file at another network is user error: use `--reset` (deletes the state at startup, always with a WARN, so pass it
   once) or another `--db-path`.
 - Without `LITESTREAM_REPLICA_URL` the state is lost when the task restarts. `--reset` deletes rows, so litestream
   replicates the reset; to retire a replica, point `LITESTREAM_REPLICA_URL` at a new path.
-- Node URLs must not carry credentials (a startup error): the URL appears in alerts, on the page and in debug logs.
+- Node URLs must not carry credentials (a startup error): the URL appears on the page and in debug logs.
 - Route paths and the 100-height chunk are hard-coded copies of the server's routes and limits.
 - The sweep ETA uses the rate since this process started sweeping and resets on restart.
 - A restart loop at startup can mean every watched node is unreachable; once running, an outage shows as
@@ -161,44 +192,41 @@ task resumes where the old one stopped.
 - The tip is the max over all watched nodes. A single node that is stuck but answering keeps the tip flat: no probes
   above it, no missing ranges, no lag; only `tip_height` stays flat. With several nodes, the stuck node's follow probes
   above its height go missing and the follow lag grows.
+- Request timeouts are per request kind (range HEAD 60 s, single HEAD 10 s, JSON GET 5 s); a hanging node holds its loop
+  for that long per request, while gauges and the `summary` line continue.
 
 ## Datadog
 
 JSON logs (`RUST_LOG_FORMAT=json`) put event fields under `fields`. Metric names below are as Datadog receives them:
-`<namespace>` is set in the OpenMetrics check config, gauges keep their name, and counters lose `_total` and gain
-`.count`.
+`<namespace>` is set in the OpenMetrics check config (scrape of `/status/metrics`, every 15 s by default), gauges keep
+their name, and counters lose `_total` and gain `.count`.
 
-Recommended alert, with a link to the missing data:
+Recommended alert, with a link to the watchdog page:
 
-1. Logs > Configuration: add facets on `@fields.node` and `@fields.kind`.
-2. Monitors > New Monitor > Logs:
-   - Query: `service:<watchdog service> @target:"query_watchdog::alert" status:error`.
-   - Alert condition: count above 0 over the last 5 minutes.
-   - Multi alert, grouped by `@fields.node` and `@fields.kind`.
-   - Set "On missing data" to "Show OK" (API `on_missing_data: "resolve"`) so the alert resolves once the range is
-     refilled: the retry notices within about 1 minute, and the 5 minute window then empties.
-3. Message:
-   - Text:
-     `{{[@fields.node].name}} {{[@fields.kind].name}} missing for {{log.attributes.[fields.oldest_age_seconds]}} s ({{log.attributes.[fields.missing]}} missing): {{log.attributes.[fields.url]}}`.
-   - `missing` is in heights, or epochs for `stake_table`, `state_cert` and `lc_stake_table`.
+1. Monitors > New Monitor > Metric:
+   - Query: `max(last_5m):max:<namespace>.query_watchdog_confirmed_missing{*} by {node} > 0`.
+   - Multi alert by `node`. The monitor resolves once the gauge has been 0 for the window, 5 minutes after the last
+     confirmed unit is repaired (the representative is found present within a minute, then the recovery queue re-checks
+     the confirmed rows, see Retries).
+2. Message:
+   - Text: `{{node.name}} has {{value}} confirmed missing units: https://<watchdog host>/`.
    - Notify target: `@slack-<channel>`.
-   - Syntax: docs.datadoghq.com/monitors/notify/variables/ (no `@` in `log.attributes`, brackets around dotted keys).
 
 Companion monitors (Monitors > New Monitor > Metric):
 
-| Monitor                       | Query                                                                                      | Threshold                                                                                                                                    |
-| ----------------------------- | ------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------- |
-| Missing age, without the link | `max(last_5m):max:<namespace>.query_watchdog_oldest_missing_age_seconds{*} by {node,kind}` | above 60, matching `--alert-missing-after`; does not page: it also counts non-404 failures (500, transport, unrefined) and data near the tip |
-| Watchdog down or stuck        | `sum(last_10m):sum:<namespace>.query_watchdog_probes.count{*} by {node}.as_count()`        | equal 0, or notify on no data                                                                                                                |
-| Tip flat                      | `change(max(last_10m),last_10m):max:<namespace>.query_watchdog_tip_height{*}`              | equal 0                                                                                                                                      |
-| Follow lag                    | `max(last_5m):max:<namespace>.query_watchdog_follow_lag_blocks{*} by {node}`               | above `<blocks>`                                                                                                                             |
-| Merklized state lag           | `max(last_5m):max:<namespace>.query_watchdog_merklized_state_lag_blocks{*} by {node}`      | above `<blocks>`                                                                                                                             |
+| Monitor                | Query                                                                                 | Threshold                     |
+| ---------------------- | ------------------------------------------------------------------------------------- | ----------------------------- |
+| Watchdog down or stuck | `sum(last_10m):sum:<namespace>.query_watchdog_probes.count{*} by {node}.as_count()`   | equal 0, or notify on no data |
+| Tip flat               | `change(max(last_10m),last_10m):max:<namespace>.query_watchdog_tip_height{*}`         | equal 0                       |
+| Follow lag             | `max(last_5m):max:<namespace>.query_watchdog_follow_lag_blocks{*} by {node}`          | above `<blocks>`              |
+| Merklized state lag    | `max(last_5m):max:<namespace>.query_watchdog_merklized_state_lag_blocks{*} by {node}` | above `<blocks>`              |
 
 ## Schema
 
 - Migrations are in `migrations/` and run at startup (`sqlx::migrate!`).
-- Add a new `NN_name.sql`. Never edit an applied migration. `01_init.sql` was edited in place before the first deploy;
-  from the first deploy on this rule holds.
+- Add a new `NN_name.sql`. Never edit an applied migration. `01_init.sql` was edited in place before the first deploy
+  (the `aggregate` kind left its `kind` CHECK); from the first deploy on this rule holds. A state file from an earlier
+  build fails at startup in the migration checksum; delete it.
 - `missing_chunk` holds one row per range of a range kind (`leaf`, `block`, `vid_common`) and one row per height or
   epoch for the other kinds (`range_end = range_start + 1`). CHECK constraints reject unknown kinds, empty ranges and
   retry delays outside 5 to 600 s.

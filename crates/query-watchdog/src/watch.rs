@@ -1,26 +1,27 @@
-use std::{collections::BTreeMap, convert::Infallible, ops::Range, sync::Arc, time::Duration};
+use std::{convert::Infallible, ops::Range, sync::Arc, time::Duration};
 
 use anyhow::{anyhow, bail};
-use chrono::{DateTime, TimeDelta, Utc};
+use chrono::TimeDelta;
 use clap::Args;
-use reqwest::StatusCode;
 use serde::Deserialize;
 use tokio::{sync::watch, time::Instant};
 
 use crate::{
     gaps::{Presence, find_gaps},
-    kind::{EpochConfig, Height, Probe, RangeKind, next_chunk, probes},
+    kind::{Epochs, Height, HotshotEpochs, Probe, RangeKind, next_chunk, probes},
     metrics::WatchdogMetrics,
-    missing::{AgedRow, AlertRule, MissingUpdate},
-    node::{FetchError, FetchTarget, HeightLookup, WatchedNode},
-    outcome::{NotServed, Observation, RangeOutcome, RequestHealth, Unconfirmed, UnitOutcome},
+    missing::{AlertRule, MissingUpdate},
+    node::{FetchError, FetchTarget, WatchedNode},
+    outcome::{NotServed, Observation, ProbeResult, RangeFindings, RequestFailure, RequestHealth},
+    report::{GAUGE_INTERVAL, ReportedNode, TICKS_PER_SUMMARY},
+    retry::{ChunkQueue, RETRY_BUDGET, RetryQueue},
     schedule::{
         EtaOrigin, Frontier, NodeProgress, RunningSweep, SweepGate, SweepSchedule, SweepState,
         SweepWindow,
     },
     store::{NodeStore, PersistedMissingSet, Store},
     system::{Clock, System},
-    view::{NodeSummary, NodeView, PAGE_ROWS, SweepEta, ViewSender},
+    view::{NodeView, NodeViewSlot, PAGE_ROWS, SweepEta, ViewSender, WatchCounters},
 };
 
 /// Pacing shared by all node watches.
@@ -54,9 +55,8 @@ pub struct WatchOptions {
         value_parser = clap::value_parser!(u64).range(1..)
     )]
     pub retention_blocks: Option<u64>,
-    /// Minimum age of missing data for the alert (ERROR on target `query_watchdog::alert`, once a
-    /// minute per node and kind); at most 1 year. 60s leaves room for retries at about 5, 15 and
-    /// 35 s first.
+    /// Minimum age before a confirmed unit counts in `query_watchdog_confirmed_missing`; at most 1
+    /// year. 60s leaves room for retries at about 5 and 15 s first.
     #[arg(
         long,
         env = "ESPRESSO_QUERY_WATCHDOG_ALERT_MISSING_AFTER",
@@ -113,17 +113,11 @@ fn parse_year_bounded_duration(text: &str) -> Result<Duration, String> {
 /// The part of `v1/config/hotshot` the watchdog reads.
 #[derive(Deserialize)]
 struct NetworkConfig {
-    config: EpochConfig,
+    config: HotshotEpochs,
 }
 
-/// Due missing rows fetched per batch of retries.
-const RETRIES_PER_BATCH: usize = 20;
-/// Time one iteration spends on retries; sweep and follow keep the rest.
-const RETRY_BUDGET: Duration = Duration::from_secs(5);
 /// Time between tip polls and between polls of a node's merklized state height.
 const TIP_POLL_INTERVAL: Duration = Duration::from_secs(10);
-/// Time between summary lines of one node.
-const SUMMARY_INTERVAL: Duration = Duration::from_secs(60);
 
 /// Parts shared by all node watches; every field is a cheap clone.
 #[derive(Clone)]
@@ -151,12 +145,12 @@ impl<C: Clock> Watchdog<C> {
     }
 
     /// Loads or creates progress (clamped to the window start on resume) and the missing set,
-    /// logs `watching` or `resumed`, exports gauges and publishes the first view.
+    /// logs `watching` or `resumed` and publishes the first view; the reporter owns the gauges.
     pub async fn start_node(
         &self,
         node: WatchedNode,
         tip: watch::Receiver<Height>,
-        epoch_config: Option<EpochConfig>,
+        epochs: Epochs,
         view: ViewSender,
     ) -> anyhow::Result<NodeWatch<C>> {
         let frontier = Frontier::new(*tip.borrow(), self.options.sweep_window());
@@ -172,11 +166,7 @@ impl<C: Clock> Watchdog<C> {
                 (progress, NodeStart::Fresh)
             },
         };
-        let missing = PersistedMissingSet::load(store.clone(), epoch_config).await?;
-        if let Some(completed_at) = progress.sweep.last_completed() {
-            self.metrics.mark_sweep_completed(&node.label, completed_at);
-        }
-        let now = self.system.clock.instant();
+        let missing = PersistedMissingSet::load(store.clone(), epochs).await?;
         let mut watch = NodeWatch {
             watchdog: self.clone(),
             node,
@@ -187,17 +177,16 @@ impl<C: Clock> Watchdog<C> {
             progress,
             gate: SweepGate::Open,
             merklized_state_height: None,
-            next_state_poll_at: now,
-            last_summary_at: now,
-            errors_since_summary: BTreeMap::new(),
+            next_state_poll_at: self.system.clock.instant(),
+            counters: WatchCounters::default(),
+            trimmed_to: Height(0),
+            recovery: ChunkQueue::default(),
             eta_origin: None,
             view,
         };
         watch.reset_eta_origin();
-        let summary = watch.summary(self.system.clock.now());
-        watch.log_started(start, &summary);
-        self.metrics.export_summary(&watch.node.label, &summary)?;
-        watch.publish()?;
+        watch.log_started(start);
+        watch.publish();
         Ok(watch)
     }
 
@@ -221,6 +210,19 @@ impl<C: Clock> Watchdog<C> {
         Ok((poller, receiver))
     }
 
+    /// The reporter over `nodes`, reading the live tip.
+    pub fn start_reporter(
+        &self,
+        tip: watch::Receiver<Height>,
+        nodes: Vec<NodeViewSlot>,
+    ) -> Reporter<C> {
+        Reporter {
+            watchdog: self.clone(),
+            tip,
+            nodes: nodes.into_iter().map(ReportedNode::new).collect(),
+        }
+    }
+
     /// Deletes the stored state (`--reset`) and always logs a WARN.
     pub async fn reset_state(&self) -> anyhow::Result<()> {
         let deleted = self.store.reset().await?;
@@ -228,11 +230,9 @@ impl<C: Clock> Watchdog<C> {
         Ok(())
     }
 
-    /// `v1/config/hotshot` from the first node that answers; `None` when `epoch_height` is 0.
-    pub async fn fetch_epoch_config(
-        &self,
-        nodes: &[WatchedNode],
-    ) -> anyhow::Result<Option<EpochConfig>> {
+    /// `v1/config/hotshot` from the first node that answers, through `From<HotshotEpochs> for
+    /// Epochs`.
+    pub async fn fetch_epochs(&self, nodes: &[WatchedNode]) -> anyhow::Result<Epochs> {
         let mut failures = Vec::new();
         for node in nodes {
             match self
@@ -241,9 +241,7 @@ impl<C: Clock> Watchdog<C> {
                 .get_json::<NetworkConfig>(node, "v1/config/hotshot")
                 .await
             {
-                Ok(NetworkConfig { config }) => {
-                    return Ok((config.epoch_height != 0).then_some(config));
-                },
+                Ok(NetworkConfig { config }) => return Ok(config.into()),
                 Err(error) => {
                     self.metrics
                         .count_fetch_error(&node.label, FetchTarget::Config, &error);
@@ -299,11 +297,55 @@ impl<C: Clock> TipPoller<C> {
     }
 }
 
+/// Writes gauges every `GAUGE_INTERVAL` and logs every `TICKS_PER_SUMMARY` ticks for every node,
+/// from published views only.
+pub struct Reporter<C: Clock> {
+    watchdog: Watchdog<C>,
+    tip: watch::Receiver<Height>,
+    nodes: Vec<ReportedNode>,
+}
+
+impl<C: Clock> Reporter<C> {
+    /// `tick(0)`, then forever: sleep `GAUGE_INTERVAL`, `tick(tick_index + 1)`. Returns only an
+    /// error.
+    pub async fn run(mut self) -> anyhow::Result<Infallible> {
+        let mut tick_index = 0;
+        loop {
+            self.tick(tick_index)?;
+            self.watchdog.system.clock.sleep(GAUGE_INTERVAL).await;
+            tick_index += 1;
+        }
+    }
+
+    /// `ReportedNode::report` and `export_node` for every node at `clock.now()`; also
+    /// `ReportedNode::log` when `tick_index` is a positive multiple of `TICKS_PER_SUMMARY`.
+    fn tick(&mut self, tick_index: u64) -> anyhow::Result<()> {
+        let now = self.watchdog.system.clock.now();
+        let tip = *self.tip.borrow();
+        let log = tick_index > 0 && tick_index.is_multiple_of(TICKS_PER_SUMMARY);
+        for node in &mut self.nodes {
+            let report = node.report(tip, now)?;
+            self.watchdog.metrics.export_node(&report)?;
+            if log {
+                node.log(&report);
+            }
+        }
+        Ok(())
+    }
+}
+
 /// First run or resume of a node watch, for the start line.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum NodeStart {
     Fresh,
     Resumed,
+}
+
+/// Requests one chunk sent and their combined health.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ChunkChecked {
+    pub sent: usize,
+    pub health: RequestHealth,
 }
 
 /// Checker of one watched node: follow, retries and sweep, one request at a time.
@@ -319,8 +361,12 @@ pub struct NodeWatch<C: Clock> {
     gate: SweepGate,
     merklized_state_height: Option<Height>,
     next_state_poll_at: Instant,
-    last_summary_at: Instant,
-    errors_since_summary: BTreeMap<String, u64>,
+    counters: WatchCounters,
+    /// Window start of the last `ForgetBelow`; `Height(0)` at start.
+    trimmed_to: Height,
+    /// Confirmed rows still to re-check after the representative was found present; empty at
+    /// start.
+    recovery: ChunkQueue,
     eta_origin: Option<EtaOrigin>,
     view: ViewSender,
 }
@@ -330,17 +376,17 @@ impl<C: Clock> NodeWatch<C> {
         &self.watchdog.system.clock
     }
 
-    /// Runs the loop until a store error.
+    /// Runs the loop until a store error: frontier, `trim_step`, state poll, follow, retry and
+    /// sweep steps; idles when nothing was sent.
     pub async fn run(mut self) -> anyhow::Result<()> {
         loop {
             let tip = *self.tip.borrow_and_update();
             self.frontier = Frontier::new(tip, self.watchdog.options.sweep_window());
+            self.trim_step().await?;
             self.poll_state_height().await;
             let mut sent = self.follow_step().await?;
             sent += self.retry_step().await?;
             sent += self.sweep_step().await?;
-            self.summarize_if_due().await?;
-            self.publish()?;
             if sent == 0 {
                 let wait = self
                     .next_state_poll_at
@@ -354,9 +400,12 @@ impl<C: Clock> NodeWatch<C> {
     }
 
     /// The `watching` or `resumed` line.
-    fn log_started(&self, start: NodeStart, summary: &NodeSummary) {
+    fn log_started(&self, start: NodeStart) {
         let node = &self.node.label;
         let tip_height = self.frontier.tip().0;
+        let summary = self
+            .snapshot()
+            .summary(self.frontier.tip(), self.clock().now());
         if start == NodeStart::Fresh {
             tracing::info!(%node, tip_height, %summary, "watching");
             return;
@@ -389,6 +438,35 @@ impl<C: Clock> NodeWatch<C> {
         );
     }
 
+    /// Retention: when `frontier.window_start` is above `trimmed_to`, clamps progress, applies
+    /// `ForgetBelow` and adds `rows_removed` to `counters.forgotten_rows`. Archive: `window_start`
+    /// stays 0, never runs.
+    async fn trim_step(&mut self) -> anyhow::Result<()> {
+        let window_start = self.frontier.window_start();
+        if window_start <= self.trimmed_to {
+            return Ok(());
+        }
+        let clamped = self.progress.clamped_to(window_start);
+        if clamped != self.progress {
+            let sweep_changed = clamped.sweep != self.progress.sweep;
+            self.commit_progress(clamped).await?;
+            if sweep_changed {
+                self.reset_eta_origin();
+            }
+        }
+        let now = self.clock().now();
+        let diff = self
+            .missing
+            .apply(MissingUpdate::ForgetBelow(window_start), now)
+            .await?;
+        self.counters.forgotten_rows += diff.rows_removed as u64;
+        self.recovery
+            .forget_below(window_start, self.missing.set().epochs());
+        self.trimmed_to = window_start;
+        self.publish();
+        Ok(())
+    }
+
     /// Refreshes the merklized state height when due.
     async fn poll_state_height(&mut self) {
         let now = self.clock().instant();
@@ -406,12 +484,15 @@ impl<C: Clock> NodeWatch<C> {
             .get_json::<u64>(&self.node, "v1/block-state/block-height")
             .await
         {
-            Ok(height) => self.merklized_state_height = Some(Height(height)),
+            Ok(height) => {
+                self.merklized_state_height = Some(Height(height));
+                self.publish();
+            },
             Err(error) => self.record_error(FetchTarget::MerklizedStateHeight, &error),
         }
     }
 
-    /// Checks the next follow chunk below `frontier.settled_end`; returns requests sent.
+    /// Checks the next follow chunk, then `gate.after_follow_chunk`; returns requests sent.
     async fn follow_step(&mut self) -> anyhow::Result<usize> {
         let Some(chunk) = next_chunk(
             self.progress.follow_next_height,
@@ -419,46 +500,52 @@ impl<C: Clock> NodeWatch<C> {
         ) else {
             return Ok(0);
         };
-        let sent = self.check_chunk(&chunk).await?;
+        let checked = self.check_chunk(&chunk).await?;
+        self.gate = self
+            .gate
+            .after_follow_chunk(checked.health, self.clock().instant());
         self.commit_progress(NodeProgress {
             follow_next_height: chunk.end,
             ..self.progress
         })
         .await?;
+        Ok(checked.sent)
+    }
+
+    /// `RetryQueue::new` at `now`; while `RETRY_BUDGET` from the step start has time left: the
+    /// representative when `recovery` is empty (a result that `found_present` sets `recovery =
+    /// ChunkQueue::confirmed(set)`), then `confirming`, then `recovery`; returns requests sent.
+    async fn retry_step(&mut self) -> anyhow::Result<usize> {
+        let deadline = self.clock().instant() + RETRY_BUDGET;
+        let mut queue = RetryQueue::new(self.missing.set(), self.clock().now());
+        let mut sent = 0;
+        if self.recovery.is_empty()
+            && let Some(probe) = queue.representative.take()
+        {
+            let result = self.check_probe(&probe).await?;
+            sent += 1;
+            if result.found_present() {
+                self.recovery = ChunkQueue::confirmed(self.missing.set());
+            }
+        }
+        while self.clock().instant() < deadline
+            && let Some(probe) = queue.confirming.next_probe()
+        {
+            self.check_probe(&probe).await?;
+            sent += 1;
+        }
+        while self.clock().instant() < deadline
+            && let Some(probe) = self.recovery.next_probe()
+        {
+            self.check_probe(&probe).await?;
+            sent += 1;
+        }
         Ok(sent)
     }
 
-    /// Re-checks `MissingSet::due` probes in batches until none is due or `RETRY_BUDGET` is
-    /// spent.
-    async fn retry_step(&mut self) -> anyhow::Result<usize> {
-        let deadline = self.clock().instant() + RETRY_BUDGET;
-        let mut checked = 0;
-        while self.clock().instant() < deadline {
-            let due = self
-                .missing
-                .set()
-                .due(self.clock().now(), RETRIES_PER_BATCH);
-            if due.is_empty() {
-                break;
-            }
-            for probe in &due {
-                if self.clock().instant() >= deadline {
-                    break;
-                }
-                self.check_probe(probe).await?;
-                checked += 1;
-            }
-        }
-        Ok(checked)
-    }
-
-    /// Reschedules, starts, advances or finishes the sweep when `gate.admits`; returns requests
-    /// sent.
+    /// Reschedules, starts or finishes the sweep without the gate; sends the next chunk only when
+    /// `gate.admits`, then `gate.after_sweep_chunk`; returns requests sent.
     async fn sweep_step(&mut self) -> anyhow::Result<usize> {
-        let now = self.clock().instant();
-        if !self.gate.admits(now) {
-            return Ok(0);
-        }
         let schedule = self.watchdog.options.sweep_schedule();
         let rescheduled = self.progress.sweep.rescheduled(schedule);
         if rescheduled != self.progress.sweep {
@@ -488,7 +575,13 @@ impl<C: Clock> NodeWatch<C> {
             self.finish_sweep(sweep).await?;
             return Ok(0);
         };
-        let sent = self.check_chunk(&chunk).await?;
+        if !self.gate.admits(self.clock().instant()) {
+            return Ok(0);
+        }
+        let checked = self.check_chunk(&chunk).await?;
+        self.gate = self
+            .gate
+            .after_sweep_chunk(checked.health, self.clock().instant());
         self.commit_progress(NodeProgress {
             sweep: SweepState::Running {
                 sweep: sweep.advanced(chunk.end),
@@ -497,7 +590,7 @@ impl<C: Clock> NodeWatch<C> {
             ..self.progress
         })
         .await?;
-        Ok(sent)
+        Ok(checked.sent)
     }
 
     /// Starts a sweep over `frontier.sweep_range()` and logs `sweep started`.
@@ -522,8 +615,7 @@ impl<C: Clock> NodeWatch<C> {
         Ok(())
     }
 
-    /// Finishes `sweep`, sets the gauge, logs `sweep completed` (WARN on a backward
-    /// clock step).
+    /// Finishes `sweep` and logs `sweep completed` (WARN on a backward clock step).
     async fn finish_sweep(&mut self, sweep: RunningSweep) -> anyhow::Result<()> {
         let completed_at = self.clock().now();
         let duration = (completed_at - sweep.started_at)
@@ -544,10 +636,7 @@ impl<C: Clock> NodeWatch<C> {
         })
         .await?;
         self.reset_eta_origin();
-        self.watchdog
-            .metrics
-            .mark_sweep_completed(&self.node.label, completed_at);
-        let summary = self.summary(completed_at);
+        let summary = self.snapshot().summary(self.frontier.tip(), completed_at);
         tracing::info!(
             node = %self.node.label,
             duration = %humantime::format_duration(duration),
@@ -557,66 +646,70 @@ impl<C: Clock> NodeWatch<C> {
         Ok(())
     }
 
-    /// `check_probe` for every probe of the chunk, then `gate.after_chunk` with the combined
-    /// health.
-    async fn check_chunk(&mut self, chunk: &Range<Height>) -> anyhow::Result<usize> {
-        let to_check = probes(chunk, self.missing.set().epoch_config());
+    /// `check_probe` for every probe of the chunk.
+    async fn check_chunk(&mut self, chunk: &Range<Height>) -> anyhow::Result<ChunkChecked> {
+        let to_check = probes(chunk, self.missing.set().epochs());
         let mut health = RequestHealth::Answered;
         for probe in &to_check {
-            health = health.and(self.check_probe(probe).await?);
+            health = health.and(self.check_probe(probe).await?.health());
         }
-        let now = self.clock().instant();
-        self.gate = self.gate.after_chunk(health, now);
-        Ok(to_check.len())
+        Ok(ChunkChecked {
+            sent: to_check.len(),
+            health,
+        })
     }
 
-    /// `observe` then `missing.apply`; returns the observation's health.
-    async fn check_probe(&mut self, probe: &Probe) -> anyhow::Result<RequestHealth> {
-        let observation = self.observe(probe).await;
-        let health = observation.health();
+    /// `observe`, `missing.apply`, `publish`; returns the applied result.
+    async fn check_probe(&mut self, probe: &Probe) -> anyhow::Result<ProbeResult> {
+        let result = self.observe(probe).await;
         let now = self.clock().now();
         self.missing
-            .apply(MissingUpdate::Observed(observation), now)
+            .apply(MissingUpdate::Observed(result.clone()), now)
             .await?;
-        Ok(health)
+        self.publish();
+        Ok(result)
     }
 
     /// Sends the probe and, for a range 404, runs `find_gaps` with `missing.set().known(..)`;
     /// counts errors.
-    async fn observe(&mut self, probe: &Probe) -> Observation {
-        let result = self.send_probe(probe).await;
-        if let Err(error) = &result {
-            self.record_error(FetchTarget::Data(probe.kind()), error);
-        }
+    async fn observe(&mut self, probe: &Probe) -> ProbeResult {
+        let answer = self.send_probe(probe).await;
+        let observation = match &answer {
+            Ok(()) => Observation::Present,
+            Err(error) => {
+                self.record_error(FetchTarget::Data(probe.kind()), error);
+                error.not_served().into()
+            },
+        };
         match probe {
             Probe::Range { kind, heights } => {
-                let outcome = match result.map_err(|error| error.not_served()) {
-                    Ok(()) => RangeOutcome::Present,
-                    Err(NotServed::Failed(failure)) => RangeOutcome::Failed(failure),
-                    Err(NotServed::NotFound) => {
+                let findings = match observation {
+                    Observation::NotFound => {
                         let known = self.missing.set().known(*kind, heights);
                         let mut prober = RangeProber {
                             watch: self,
                             kind: *kind,
                         };
-                        RangeOutcome::Refined(find_gaps(&mut prober, heights.clone(), known).await)
+                        find_gaps(&mut prober, heights.clone(), known).await
+                    },
+                    Observation::Present | Observation::Failed(_) => {
+                        RangeFindings::uniform(heights.clone(), observation)
                     },
                 };
-                Observation::Range {
+                ProbeResult::Range {
                     kind: *kind,
-                    heights: heights.clone(),
-                    outcome,
+                    findings,
                 }
             },
-            Probe::Point { kind, height } => Observation::Point {
+            Probe::Point { kind, height } => ProbeResult::Point {
                 kind: *kind,
                 height: *height,
-                outcome: unit_outcome(result),
+                observation,
             },
-            Probe::Epoch { kind, epoch } => Observation::Epoch {
+            Probe::Epoch { kind, epoch } => ProbeResult::Epoch {
                 kind: *kind,
                 epoch: *epoch,
-                outcome: unit_outcome(result),
+                observation,
             },
         }
     }
@@ -629,209 +722,55 @@ impl<C: Clock> NodeWatch<C> {
         self.watchdog
             .metrics
             .count_probe(&self.node.label, probe.kind());
-        self.watchdog
-            .system
-            .http
-            .head(&self.node, &probe.route(), probe.waits_server_side())
-            .await
+        self.watchdog.system.http.head(&self.node, probe).await
     }
 
-    /// GETs the 404 of the range probe and reads the first missing height; `None` when the range
-    /// is served after all.
-    async fn missing_height(
-        &mut self,
-        kind: RangeKind,
-        heights: &Range<Height>,
-    ) -> Result<Option<Height>, Unconfirmed> {
-        self.clock()
-            .sleep(self.watchdog.options.request_interval)
-            .await;
-        self.watchdog
-            .metrics
-            .count_probe(&self.node.label, kind.into());
-        let route = Probe::Range {
-            kind,
-            heights: heights.clone(),
-        }
-        .route();
-        match self
-            .watchdog
-            .system
-            .http
-            .lookup_missing_height(&self.node, &route)
-            .await
-        {
-            Ok(HeightLookup::Named(height)) => Ok(Some(height)),
-            Ok(HeightLookup::Present) => Ok(None),
-            Ok(HeightLookup::NoHeight) => {
-                tracing::debug!(node = %self.node.label, route, "404 body names no height");
-                Err(Unconfirmed::NoHeight)
-            },
-            Err(error) => Err(self.refinement_failed(kind, &error)),
-        }
-    }
-
-    /// Counts a failed refinement request; the range stays chunk level.
-    fn refinement_failed(&mut self, kind: RangeKind, error: &FetchError) -> Unconfirmed {
-        self.record_error(FetchTarget::Data(kind.into()), error);
-        error.not_served().into()
-    }
-
-    /// Counts a failed request in metrics and the summary window.
+    /// Counts a failed request in metrics and `counters.errors`.
     fn record_error(&mut self, target: FetchTarget, error: &FetchError) {
         tracing::debug!(node = %self.node.label, target = target.label(), %error, "request failed");
         self.watchdog
             .metrics
             .count_fetch_error(&self.node.label, target, error);
-        *self
-            .errors_since_summary
-            .entry(error.status_label().to_owned())
-            .or_default() += 1;
+        self.counters.errors.count(error.not_served());
     }
 
-    /// Saves `progress` and makes it current; the only progress write.
+    /// Saves `progress`, makes it current, publishes; the only progress write.
     async fn commit_progress(&mut self, progress: NodeProgress) -> anyhow::Result<()> {
         self.store.save_progress(&progress).await?;
         self.progress = progress;
+        self.publish();
         Ok(())
     }
 
-    /// Sends the view with `send_replace` (never fails without receivers) and sets the progress
-    /// gauges.
-    fn publish(&self) -> anyhow::Result<()> {
+    /// The view of the current state at `clock.now()`.
+    fn snapshot(&self) -> NodeView {
         let now = self.clock().now();
-        let remaining = self.sweep_eta();
-        let sweep_eta = remaining.and_then(|remaining| {
+        let rule = self.watchdog.options.alert_rule();
+        let sweep_eta = self.sweep_eta().and_then(|remaining| {
             let finish = now.checked_add_signed(TimeDelta::from_std(remaining).ok()?)?;
             Some(SweepEta { remaining, finish })
         });
-        self.view.send_replace(Some(NodeView {
-            summary: self.summary(now),
+        let set = self.missing.set();
+        NodeView {
+            published_at: now,
+            frontier: self.frontier,
             progress: self.progress,
+            merklized_state_height: self.merklized_state_height,
+            alert_rule: rule,
+            tallies: set.tallies(self.frontier.settled_end(), rule.counted_until(now)),
+            listed: set.listed(PAGE_ROWS),
+            counters: self.counters.clone(),
             next_sweep_start: self
                 .progress
                 .sweep
                 .next_start(self.watchdog.options.sweep_schedule()),
             sweep_eta,
-            listed: self.missing.set().listed(now, PAGE_ROWS),
-        }));
-        self.watchdog
-            .metrics
-            .export_progress(&self.node.label, &self.progress, remaining)
-    }
-
-    /// Snapshot from the frontier, progress, state height and `MissingSet::summary(now)`.
-    fn summary(&self, now: DateTime<Utc>) -> NodeSummary {
-        let tip = self.frontier.tip();
-        NodeSummary {
-            tip_height: tip,
-            follow_lag_blocks: tip.blocks_since(self.progress.follow_next_height),
-            merklized_state_lag_blocks: self
-                .merklized_state_height
-                .map(|height| tip.blocks_since(height)),
-            kinds: self.missing.set().summary(now),
         }
     }
 
-    /// Once per `SUMMARY_INTERVAL`: trim, summary line, alerts, unhealthy WARN, gauges.
-    async fn summarize_if_due(&mut self) -> anyhow::Result<()> {
-        let now = self.clock().instant();
-        if now.saturating_duration_since(self.last_summary_at) < SUMMARY_INTERVAL {
-            return Ok(());
-        }
-        self.last_summary_at = now;
-        let forgotten = self.trim_to_window().await?;
-        let now = self.clock().now();
-        let summary = self.summary(now);
-        tracing::info!(
-            node = %self.node.label,
-            errors = ?self.errors_since_summary,
-            forgotten,
-            sweep_eta = self
-                .sweep_eta()
-                .map(|eta| humantime::format_duration(eta).to_string()),
-            %summary,
-            "summary"
-        );
-        self.alert_missing(&summary, now);
-        self.warn_unhealthy();
-        self.watchdog
-            .metrics
-            .export_summary(&self.node.label, &summary)?;
-        self.errors_since_summary.clear();
-        Ok(())
-    }
-
-    /// Retention only: clamps progress and applies `ForgetBelow(frontier.window_start)`; returns
-    /// rows removed.
-    async fn trim_to_window(&mut self) -> anyhow::Result<Option<usize>> {
-        if self.watchdog.options.sweep_window() == SweepWindow::Archive {
-            return Ok(None);
-        }
-        let window_start = self.frontier.window_start();
-        let clamped = self.progress.clamped_to(window_start);
-        if clamped != self.progress {
-            let sweep_changed = clamped.sweep != self.progress.sweep;
-            self.commit_progress(clamped).await?;
-            if sweep_changed {
-                self.reset_eta_origin();
-            }
-        }
-        let now = self.clock().now();
-        let diff = self
-            .missing
-            .apply(MissingUpdate::ForgetBelow(window_start), now)
-            .await?;
-        Ok(Some(diff.rows_removed))
-    }
-
-    /// `MissingSet::alert_candidates` with the options' rule and `frontier.settled_end`.
-    fn alerts(&self, now: DateTime<Utc>) -> Vec<AgedRow> {
-        self.missing.set().alert_candidates(
-            self.watchdog.options.alert_rule(),
-            self.frontier.settled_end(),
-            now,
-        )
-    }
-
-    /// One ERROR on target `query_watchdog::alert` per candidate; fields as at HEAD.
-    fn alert_missing(&self, summary: &NodeSummary, now: DateTime<Utc>) {
-        for candidate in self.alerts(now) {
-            let key = &candidate.row.key;
-            let kind = key.kind();
-            let missing = summary
-                .kinds
-                .iter()
-                .find(|summary| summary.kind == kind)
-                .expect("the summary has every kind")
-                .missing_count;
-            let range_start = key.first_unit();
-            // Node URLs are internal and carry no credentials.
-            tracing::error!(
-                target: "query_watchdog::alert",
-                node = %self.node.label,
-                kind = <&str>::from(kind),
-                missing,
-                oldest_age_seconds = candidate.age.as_secs(),
-                failed_probes = candidate.row.state.failed_probes,
-                range_start,
-                range_end = range_start + key.unit_count(),
-                url = %self.node.route_url(&key.first_probe().route()),
-                "missing data"
-            );
-        }
-    }
-
-    /// One WARN when requests of the last minute failed other than with 404; not an alert.
-    fn warn_unhealthy(&self) {
-        let failures: BTreeMap<_, _> = self
-            .errors_since_summary
-            .iter()
-            .filter(|(status, _)| status.as_str() != StatusCode::NOT_FOUND.as_str())
-            .collect();
-        if !failures.is_empty() {
-            tracing::warn!(node = %self.node.label, errors = ?failures, "node unhealthy");
-        }
+    /// `send_replace(Some(snapshot()))`; never fails without receivers.
+    fn publish(&self) {
+        self.view.send_replace(Some(self.snapshot()));
     }
 
     /// ETA of the running sweep at the pace since `eta_origin`.
@@ -854,14 +793,6 @@ impl<C: Clock> NodeWatch<C> {
     }
 }
 
-/// What a point or epoch HEAD established.
-fn unit_outcome(result: Result<(), FetchError>) -> UnitOutcome {
-    match result {
-        Ok(()) => UnitOutcome::Present,
-        Err(error) => UnitOutcome::Missing(error.not_served()),
-    }
-}
-
 /// Asks one node which heights of one range kind it serves, for `find_gaps`.
 struct RangeProber<'a, C: Clock> {
     watch: &'a mut NodeWatch<C>,
@@ -869,36 +800,21 @@ struct RangeProber<'a, C: Clock> {
 }
 
 impl<C: Clock> Presence for RangeProber<'_, C> {
-    async fn first_missing(
-        &mut self,
-        heights: Range<Height>,
-        known_missing: bool,
-    ) -> Result<Option<Height>, Unconfirmed> {
-        if known_missing {
-            return self.watch.missing_height(self.kind, &heights).await;
-        }
+    async fn all_present(&mut self, heights: Range<Height>) -> Result<bool, RequestFailure> {
         let probe = Probe::Range {
             kind: self.kind,
-            heights: heights.clone(),
-        };
-        match self.watch.send_probe(&probe).await {
-            Ok(()) => Ok(None),
-            Err(error) if error.not_served() == NotServed::NotFound => {
-                self.watch.missing_height(self.kind, &heights).await
-            },
-            Err(error) => Err(self.watch.refinement_failed(self.kind, &error)),
-        }
-    }
-
-    async fn is_present(&mut self, height: Height) -> Result<bool, Unconfirmed> {
-        let probe = Probe::Range {
-            kind: self.kind,
-            heights: height..height.next(),
+            heights,
         };
         match self.watch.send_probe(&probe).await {
             Ok(()) => Ok(true),
-            Err(error) if error.not_served() == NotServed::NotFound => Ok(false),
-            Err(error) => Err(self.watch.refinement_failed(self.kind, &error)),
+            Err(error) => match error.not_served() {
+                NotServed::NotFound => Ok(false),
+                NotServed::Failed(failure) => {
+                    self.watch
+                        .record_error(FetchTarget::Data(self.kind.into()), &error);
+                    Err(failure)
+                },
+            },
         }
     }
 }
@@ -907,110 +823,156 @@ impl<C: Clock> Presence for RangeProber<'_, C> {
 mod tests {
     use std::{
         collections::BTreeSet,
-        fmt::Debug,
         str::FromStr,
         sync::{
             Mutex,
-            atomic::{AtomicBool, Ordering},
+            atomic::{AtomicBool, AtomicU64, Ordering},
         },
     };
 
     use axum::{
         Router,
-        extract::{Path, State},
-        http::{Method, Uri},
-        routing::get,
+        extract::State,
+        http::{Method, StatusCode, Uri},
     };
+    use chrono::{DateTime, Utc};
     use pretty_assertions::assert_eq;
     use prometheus::Registry;
     use sqlx::sqlite::SqliteConnectOptions;
     use tokio::net::TcpListener;
-    use tracing::{Event, Subscriber, field::Field};
-    use tracing_subscriber::{
-        Layer,
-        layer::{Context, SubscriberExt},
-    };
+    use tracing::Level;
     use url::Url;
 
     use super::*;
     use crate::{
+        capture::Capture,
         kind::{DataKind, PointKind},
         missing::RowKey,
-        node::NodeHttp,
-        outcome::MissingReason,
+        node::{NodeHttp, ProbeTimeouts},
         schedule::{CompletedSweep, RunningSweep},
+        state::{RetryDelay, UnitState},
         system::ManualClock,
         view::{self, ViewReceiver},
     };
 
-    /// A node serving every leaf except the `missing` heights, recording what it is asked.
+    const CONFIG_OFF: &str = r#"{"config":{"epoch_height":0,"epoch_start_block":0}}"#;
+
+    /// A node serving every route except what the flags and sets take away, recording requests.
     #[derive(Clone)]
     struct FakeNode {
+        /// Leaf heights the leaf range route lacks.
         missing: Arc<Mutex<BTreeSet<u64>>>,
-        /// Every request answers 500 while set.
+        /// Epochs the stake table route lacks.
+        missing_epochs: Arc<Mutex<BTreeSet<u64>>>,
+        /// Every route answers 500 while set.
         failing: Arc<AtomicBool>,
-        /// The leaf route answers 500 while set; other routes still answer.
+        /// The leaf range route answers 500 while set.
         failing_leaf: Arc<AtomicBool>,
-        /// GET requests answer 500 while set; HEAD still answers.
-        failing_gets: Arc<AtomicBool>,
+        /// Leaf range requests that answer before the rest answer 500; `None` is unlimited.
+        leaf_budget: Arc<Mutex<Option<usize>>>,
+        /// Every data route answers 404 while set.
+        all_404: Arc<AtomicBool>,
+        /// Every route records the request and never answers while set.
+        hang: Arc<AtomicBool>,
+        tip: Arc<AtomicU64>,
+        config: Arc<Mutex<String>>,
         requests: Arc<Mutex<Vec<(Method, String)>>>,
     }
 
-    /// Like the availability range route: 404 naming the first missing height, else 200.
-    async fn fake_leaf_range(
-        State(node): State<FakeNode>,
-        method: Method,
-        uri: Uri,
-        Path((from, until)): Path<(u64, u64)>,
-    ) -> (StatusCode, String) {
-        let is_get = method == Method::GET;
-        node.requests
-            .lock()
-            .unwrap()
-            .push((method, uri.path().to_owned()));
-        if node.failing.load(Ordering::SeqCst)
-            || node.failing_leaf.load(Ordering::SeqCst)
-            || (is_get && node.failing_gets.load(Ordering::SeqCst))
-        {
-            return (StatusCode::INTERNAL_SERVER_ERROR, String::new());
+    impl FakeNode {
+        /// HEAD paths requested so far.
+        fn heads(&self) -> Vec<String> {
+            self.requests
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|(method, _)| *method == Method::HEAD)
+                .map(|(_, path)| path.clone())
+                .collect()
         }
-        let first_missing = node
-            .missing
-            .lock()
-            .unwrap()
-            .range(from..until)
-            .next()
-            .copied();
-        match first_missing {
-            Some(height) => (
-                StatusCode::NOT_FOUND,
-                format!(r#"{{"Custom":{{"message":"leaf {height} not found","status":404}}}}"#),
-            ),
-            None => (StatusCode::OK, String::new()),
+
+        /// Requests of any method to `path`.
+        fn requests_to(&self, path: &str) -> usize {
+            self.requests
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|(_, p)| p == path)
+                .count()
         }
     }
 
-    /// Every other route: present, unless the node is failing.
-    async fn fake_other(State(node): State<FakeNode>) -> StatusCode {
-        if node.failing.load(Ordering::SeqCst) {
-            StatusCode::INTERNAL_SERVER_ERROR
-        } else {
-            StatusCode::OK
+    async fn fake_route(
+        State(node): State<FakeNode>,
+        method: Method,
+        uri: Uri,
+    ) -> (StatusCode, String) {
+        let path = uri.path().to_owned();
+        node.requests.lock().unwrap().push((method, path.clone()));
+        if node.hang.load(Ordering::SeqCst) {
+            std::future::pending::<()>().await;
+        }
+        let flag = |flag: &AtomicBool| flag.load(Ordering::SeqCst);
+        let ok = |body: &str| (StatusCode::OK, body.to_owned());
+        let segments: Vec<&str> = path.trim_start_matches('/').split('/').collect();
+        if flag(&node.failing) {
+            return (StatusCode::INTERNAL_SERVER_ERROR, String::new());
+        }
+        match segments.as_slice() {
+            ["v1", "config", "hotshot"] => ok(&node.config.lock().unwrap()),
+            ["v1", "node", "block-height"] => ok(&node.tip.load(Ordering::SeqCst).to_string()),
+            ["v1", "block-state", "block-height"] => ok("1000"),
+            _ if flag(&node.all_404) => (StatusCode::NOT_FOUND, String::new()),
+            ["v1", "availability", "leaf", from, until] => {
+                if flag(&node.failing_leaf) {
+                    return (StatusCode::INTERNAL_SERVER_ERROR, String::new());
+                }
+                if let Some(left) = node.leaf_budget.lock().unwrap().as_mut() {
+                    if *left == 0 {
+                        return (StatusCode::INTERNAL_SERVER_ERROR, String::new());
+                    }
+                    *left -= 1;
+                }
+                let (from, until): (u64, u64) = (from.parse().unwrap(), until.parse().unwrap());
+                let gap = node
+                    .missing
+                    .lock()
+                    .unwrap()
+                    .range(from..until)
+                    .next()
+                    .is_some();
+                if gap {
+                    (StatusCode::NOT_FOUND, String::new())
+                } else {
+                    ok("")
+                }
+            },
+            ["v1", "node", "stake-table", epoch] => {
+                let epoch: u64 = epoch.parse().unwrap();
+                if node.missing_epochs.lock().unwrap().contains(&epoch) {
+                    (StatusCode::NOT_FOUND, String::new())
+                } else {
+                    ok("")
+                }
+            },
+            _ => ok(""),
         }
     }
 
     async fn serve_fake(missing: impl IntoIterator<Item = u64>) -> (WatchedNode, FakeNode) {
         let fake = FakeNode {
             missing: Arc::new(Mutex::new(missing.into_iter().collect())),
+            missing_epochs: Arc::default(),
             failing: Arc::default(),
             failing_leaf: Arc::default(),
-            failing_gets: Arc::default(),
+            leaf_budget: Arc::default(),
+            all_404: Arc::default(),
+            hang: Arc::default(),
+            tip: Arc::new(AtomicU64::new(1_000)),
+            config: Arc::new(Mutex::new(CONFIG_OFF.to_owned())),
             requests: Arc::default(),
         };
-        let app = Router::new()
-            .route("/v1/availability/leaf/{from}/{until}", get(fake_leaf_range))
-            .fallback(fake_other)
-            .with_state(fake.clone());
+        let app = Router::new().fallback(fake_route).with_state(fake.clone());
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let base_url = Url::parse(&format!("http://{}/", listener.local_addr().unwrap())).unwrap();
         tokio::spawn(async move { axum::serve(listener, app).await });
@@ -1023,25 +985,31 @@ mod tests {
         store: Store,
         registry: Registry,
         clock: ManualClock,
-        /// Keeps the tip channel open.
-        _tip_sender: watch::Sender<Height>,
+        tip_sender: watch::Sender<Height>,
         tip: watch::Receiver<Height>,
+    }
+
+    fn options(retention_blocks: Option<u64>) -> WatchOptions {
+        WatchOptions {
+            sweep_interval: Duration::from_secs(1),
+            sweep_once: false,
+            request_interval: Duration::ZERO,
+            retention_blocks,
+            alert_missing_after: Duration::ZERO,
+        }
     }
 
     impl Harness {
         /// A watchdog over an in-memory store, a manual clock and no pacing.
         async fn new(retention_blocks: Option<u64>) -> Self {
-            Self::with_options(WatchOptions {
-                sweep_interval: Duration::from_secs(1),
-                sweep_once: false,
-                request_interval: Duration::ZERO,
-                retention_blocks,
-                alert_missing_after: Duration::ZERO,
-            })
-            .await
+            Self::with_options(options(retention_blocks)).await
         }
 
         async fn with_options(options: WatchOptions) -> Self {
+            Self::with_timeouts(options, ProbeTimeouts::DEFAULT).await
+        }
+
+        async fn with_timeouts(options: WatchOptions, timeouts: ProbeTimeouts) -> Self {
             let registry = Registry::new();
             let store = Store::connect(SqliteConnectOptions::from_str("sqlite::memory:").unwrap())
                 .await
@@ -1049,7 +1017,7 @@ mod tests {
             let clock = ManualClock::new(DateTime::from_timestamp(1_000_000, 0).unwrap());
             let system = System {
                 clock: clock.clone(),
-                http: NodeHttp::new().unwrap(),
+                http: NodeHttp::new(timeouts).unwrap(),
             };
             let watchdog = Watchdog::new(
                 system,
@@ -1063,27 +1031,64 @@ mod tests {
                 store,
                 registry,
                 clock,
-                _tip_sender: tip_sender,
+                tip_sender,
                 tip,
             }
         }
 
         async fn start(&self, node: WatchedNode) -> (NodeWatch<ManualClock>, ViewReceiver) {
-            self.start_with(node, None).await
+            self.start_with(node, Epochs::Off).await
         }
 
         async fn start_with(
             &self,
             node: WatchedNode,
-            epoch_config: Option<EpochConfig>,
+            epochs: Epochs,
         ) -> (NodeWatch<ManualClock>, ViewReceiver) {
             let (sender, receiver) = view::channel();
             let watch = self
                 .watchdog
-                .start_node(node, self.tip.clone(), epoch_config, sender)
+                .start_node(node, self.tip.clone(), epochs, sender)
                 .await
                 .unwrap();
             (watch, receiver)
+        }
+
+        /// A reporter over one started node.
+        fn reporter(&self, node: &WatchedNode, view: &ViewReceiver) -> Reporter<ManualClock> {
+            let slot = NodeViewSlot {
+                node: node.clone(),
+                view: view.clone(),
+            };
+            self.watchdog.start_reporter(self.tip.clone(), vec![slot])
+        }
+
+        /// The value of a gauge of `node` (and `kind`, when given).
+        fn gauge(&self, name: &str, node: &WatchedNode, kind: Option<&str>) -> Option<i64> {
+            let wanted = |label: &prometheus::proto::LabelPair| match label.get_name() {
+                "node" => label.get_value() == node.label,
+                "kind" => kind == Some(label.get_value()),
+                _ => true,
+            };
+            self.registry
+                .gather()
+                .iter()
+                .filter(|family| family.get_name() == format!("query_watchdog_{name}"))
+                .flat_map(|family| family.get_metric())
+                .find(|metric| metric.get_label().iter().all(wanted))
+                .map(|metric| metric.get_gauge().get_value() as i64)
+        }
+
+        /// Writes `result` into the stored image of `node` at `at`, before it starts.
+        async fn preload(&self, node: &WatchedNode, results: Vec<(ProbeResult, DateTime<Utc>)>) {
+            let store = self.store.node(&node.label);
+            let mut persisted = PersistedMissingSet::load(store, Epochs::Off).await.unwrap();
+            for (result, at) in results {
+                persisted
+                    .apply(MissingUpdate::Observed(result), at)
+                    .await
+                    .unwrap();
+            }
         }
     }
 
@@ -1098,19 +1103,32 @@ mod tests {
         }
     }
 
-    fn leaf_missing<C: Clock>(watch: &NodeWatch<C>) -> u64 {
-        watch.summary(watch.clock().now()).kinds[0].missing_count
+    fn leaf_result(range: Range<u64>, observation: Observation) -> ProbeResult {
+        ProbeResult::Range {
+            kind: RangeKind::Leaf,
+            findings: RangeFindings::uniform(h(range), observation),
+        }
     }
 
-    fn alerting_ranges<C: Clock>(watch: &NodeWatch<C>) -> Vec<Range<Height>> {
-        let alerts = watch.alerts(watch.clock().now());
-        alerts
-            .into_iter()
-            .map(|aged| match aged.row.key {
-                RowKey::Range { heights, .. } => heights,
-                other => panic!("{other:?}"),
-            })
-            .collect()
+    fn point_result(height: u64, observation: Observation) -> ProbeResult {
+        ProbeResult::Point {
+            kind: PointKind::LcLeafProof,
+            height: Height(height),
+            observation,
+        }
+    }
+
+    fn leaf_missing<C: Clock>(watch: &NodeWatch<C>) -> u64 {
+        watch.snapshot().tallies[0].missing_count
+    }
+
+    /// Confirmed missing units as the reporter would count them now.
+    fn confirmed<C: Clock>(watch: &NodeWatch<C>) -> u64 {
+        let now = watch.clock().now();
+        watch
+            .snapshot()
+            .summary(watch.frontier.tip(), now)
+            .confirmed_missing()
     }
 
     fn is_running<C: Clock>(watch: &NodeWatch<C>) -> bool {
@@ -1122,45 +1140,43 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_failed_range_probe_is_refined_with_one_head_per_range() {
+    async fn a_failed_range_probe_is_refined_by_bisection() {
         let (node, fake) = serve_fake(103..106).await;
         let harness = Harness::new(None).await;
         let (mut watch, _view) = harness.start(node).await;
 
         watch.check_probe(&leaf(100..110)).await.unwrap();
 
-        let requests = fake.requests.lock().unwrap().clone();
-        let paths = |wanted: Method| -> Vec<String> {
-            requests
-                .iter()
-                .filter(|(method, _)| *method == wanted)
-                .map(|(_, path)| path.clone())
-                .collect()
-        };
-        let chunk_path = "/v1/availability/leaf/100/110";
-        // The chunk, the gallop at 104, 105 and 107, the binary step at 106, the rest from 106.
-        let expected_heads = [
-            chunk_path,
+        // The chunk, the prefix search for 103, the gallop at 104, 105 and 107, the binary step
+        // at 106, the rest from 106.
+        let expected = [
+            "/v1/availability/leaf/100/110",
+            "/v1/availability/leaf/100/105",
+            "/v1/availability/leaf/100/102",
+            "/v1/availability/leaf/100/103",
+            "/v1/availability/leaf/100/104",
             "/v1/availability/leaf/104/105",
             "/v1/availability/leaf/105/106",
             "/v1/availability/leaf/107/108",
             "/v1/availability/leaf/106/107",
             "/v1/availability/leaf/106/110",
         ];
-        assert_eq!(paths(Method::HEAD), expected_heads);
-        assert_eq!(paths(Method::GET), [chunk_path]);
-
-        let summary = watch.summary(watch.clock().now());
-        assert_eq!(summary.kinds[0].missing_count, 3);
-        let oldest = summary.kinds[0].oldest.as_ref().unwrap();
+        assert_eq!(fake.heads(), expected);
         assert_eq!(
-            oldest.key,
+            fake.requests.lock().unwrap().len(),
+            expected.len(),
+            "HEADs only"
+        );
+
+        let tally = watch.snapshot().tallies.remove(0);
+        assert_eq!(tally.missing_count, 3);
+        assert_eq!(
+            tally.oldest.unwrap().key,
             RowKey::Range {
                 kind: RangeKind::Leaf,
                 heights: h(103..106)
             }
         );
-
         let probes_total: u64 = harness
             .registry
             .gather()
@@ -1169,129 +1185,56 @@ mod tests {
             .flat_map(|family| family.get_metric())
             .map(|metric| metric.get_counter().get_value() as u64)
             .sum();
-        assert_eq!(probes_total, 7, "six HEADs and one GET");
+        assert_eq!(probes_total, 10);
     }
 
     #[tokio::test]
-    async fn a_gap_is_alerted_then_cleared_as_the_node_fills_it() {
+    async fn a_gap_is_confirmed_then_cleared_as_the_node_fills_it() {
         let (node, fake) = serve_fake(750..760).await;
+        let capture = Capture::default();
+        let _guard = capture.install();
         let harness = Harness::new(None).await;
-        let (mut watch, _view) = harness.start(node).await;
-        let gap = leaf(750..760);
+        let (mut watch, view) = harness.start(node.clone()).await;
+        let mut reporter = harness.reporter(&node, &view);
 
-        // The chunk probe finds the exact gap; two retries bring it to 3 failed 404 probes.
+        // The chunk probe finds the exact gap; two retries bring it to 3 404s.
         watch.check_probe(&leaf(700..800)).await.unwrap();
         assert_eq!(leaf_missing(&watch), 10);
+        reporter.tick(1).unwrap();
+        assert_eq!(harness.gauge("confirmed_missing", &node, None), Some(0));
         for _ in 0..2 {
-            watch.check_probe(&gap).await.unwrap();
+            harness.clock.advance(Duration::from_secs(10));
+            assert_eq!(watch.retry_step().await.unwrap(), 1);
         }
-        assert_eq!(alerting_ranges(&watch), [h(750..760)]);
+        reporter.tick(2).unwrap();
+        assert_eq!(harness.gauge("confirmed_missing", &node, None), Some(10));
 
-        // A node that answers 500 is unhealthy, not missing data: the 404 row stays as it was.
+        // A node that answers 500 is unhealthy, not missing data: the 404 row stays confirmed.
         fake.failing.store(true, Ordering::SeqCst);
-        watch.check_probe(&gap).await.unwrap();
-        assert_eq!(alerting_ranges(&watch), [h(750..760)]);
-        let row = watch.missing.set().rows().next().unwrap();
-        assert_eq!(row.state.reason, MissingReason::NotFound);
-        assert_eq!(row.state.failed_probes, 3);
-        assert_eq!(watch.errors_since_summary.get("500"), Some(&1));
+        harness.clock.advance(Duration::from_secs(61));
+        watch.retry_step().await.unwrap();
+        assert_eq!(confirmed(&watch), 10);
+        assert_eq!(watch.counters.errors.failures().is_empty(), false);
         fake.failing.store(false, Ordering::SeqCst);
 
-        // Half of the gap is filled: the next retry shrinks the row, which continues the run of
-        // 404 probes and keeps alerting.
-        fake.missing.lock().unwrap().retain(|height| *height < 755);
-        watch.check_probe(&gap).await.unwrap();
-        assert_eq!(leaf_missing(&watch), 5);
-        let rest = leaf(750..755);
-        assert_eq!(alerting_ranges(&watch), [h(750..755)]);
-        let row = watch.missing.set().rows().next().unwrap();
-        assert_eq!(
-            row.state.failed_probes, 4,
-            "the 500 did not break the run of 404s"
-        );
-
-        // The rest is filled: the retry clears the row and the alert.
+        // The node fills the gap: the representative is found present, the row is gone.
         fake.missing.lock().unwrap().clear();
-        watch.check_probe(&rest).await.unwrap();
+        harness.clock.advance(Duration::from_secs(61));
+        watch.retry_step().await.unwrap();
         assert_eq!(leaf_missing(&watch), 0);
-        assert!(alerting_ranges(&watch).is_empty());
+        reporter.tick(3).unwrap();
+        assert_eq!(harness.gauge("confirmed_missing", &node, None), Some(0));
+        assert!(capture.with_message("missing data").is_empty());
     }
 
-    /// Alert events collected from the `query_watchdog::alert` target.
-    #[derive(Clone, Default)]
-    struct AlertEvents(Arc<Mutex<Vec<BTreeMap<String, String>>>>);
-
-    #[derive(Default)]
-    struct Fields(BTreeMap<String, String>);
-
-    impl tracing::field::Visit for Fields {
-        fn record_debug(&mut self, field: &Field, value: &dyn Debug) {
-            self.0.insert(field.name().to_owned(), format!("{value:?}"));
-        }
-
-        fn record_str(&mut self, field: &Field, value: &str) {
-            self.0.insert(field.name().to_owned(), value.to_owned());
-        }
-    }
-
-    impl<S: Subscriber> Layer<S> for AlertEvents {
-        fn on_event(&self, event: &Event<'_>, _ctx: Context<'_, S>) {
-            if event.metadata().target() == "query_watchdog::alert" {
-                let mut fields = Fields::default();
-                event.record(&mut fields);
-                self.0.lock().unwrap().push(fields.0);
-            }
-        }
-    }
-
-    #[tokio::test]
-    async fn the_summary_logs_one_alert_per_confirmed_gap() {
-        let (node, _fake) = serve_fake(750..760).await;
-        let events = AlertEvents::default();
-        let _guard =
-            tracing::subscriber::set_default(tracing_subscriber::registry().with(events.clone()));
-        let harness = Harness::new(None).await;
-        let (mut watch, _view) = harness.start(node.clone()).await;
-        watch.check_probe(&leaf(700..800)).await.unwrap();
-        for _ in 0..2 {
-            watch.check_probe(&leaf(750..760)).await.unwrap();
-        }
-
-        harness.clock.advance(SUMMARY_INTERVAL);
-        watch.summarize_if_due().await.unwrap();
-
-        let events = events.0.lock().unwrap().clone();
-        assert_eq!(events.len(), 1, "{events:?}");
-        let event = &events[0];
-        let expected = [
-            ("node", node.label.clone()),
-            ("kind", "leaf".to_owned()),
-            ("missing", "10".to_owned()),
-            ("failed_probes", "3".to_owned()),
-            ("range_start", "750".to_owned()),
-            ("range_end", "760".to_owned()),
-            (
-                "url",
-                node.route_url("v1/availability/leaf/750/760").to_string(),
-            ),
-        ];
-        for (name, value) in expected {
-            assert_eq!(event.get(name), Some(&value), "{name} in {event:?}");
-        }
-    }
-
-    /// Rows of an aggregate point probe at heights `1..=count`, all due after five seconds.
-    async fn add_due_points(watch: &mut NodeWatch<ManualClock>, count: u64) {
+    /// `count` confirmed-to-be rows of the point kind at heights `1..=count`.
+    async fn add_confirming_points(watch: &mut NodeWatch<ManualClock>, count: u64) {
         for height in 1..=count {
-            let observation = Observation::Point {
-                kind: PointKind::LcLeafProof,
-                height: Height(height),
-                outcome: UnitOutcome::Missing(NotServed::NotFound),
-            };
             let now = watch.clock().now();
+            let result = point_result(height, Observation::NotFound);
             watch
                 .missing
-                .apply(MissingUpdate::Observed(observation), now)
+                .apply(MissingUpdate::Observed(result), now)
                 .await
                 .unwrap();
         }
@@ -1302,52 +1245,31 @@ mod tests {
     async fn the_retries_stop_at_their_budget() {
         let (node, _fake) = serve_fake([]).await;
         let harness = Harness::with_options(WatchOptions {
-            sweep_interval: Duration::from_secs(1),
-            sweep_once: false,
             request_interval: Duration::from_secs(2),
-            retention_blocks: None,
-            alert_missing_after: Duration::ZERO,
+            ..options(None)
         })
         .await;
         let (mut watch, _view) = harness.start(node).await;
-        add_due_points(&mut watch, 10).await;
+        add_confirming_points(&mut watch, 10).await;
 
         // 2 s per request against a budget of 5 s: probes at 0, 2 and 4 s.
         assert_eq!(watch.retry_step().await.unwrap(), 3);
-        assert_eq!(
-            watch.missing.set().rows().count(),
-            7,
-            "present points are cleared"
-        );
-    }
-
-    #[tokio::test]
-    async fn the_retries_run_in_batches_until_nothing_is_due() {
-        let (node, _fake) = serve_fake([]).await;
-        let harness = Harness::new(None).await;
-        let (mut watch, _view) = harness.start(node).await;
-        let count = RETRIES_PER_BATCH as u64 + 5;
-        add_due_points(&mut watch, count).await;
-
-        assert_eq!(watch.retry_step().await.unwrap() as u64, count);
-        assert_eq!(watch.missing.set().rows().count(), 0);
+        assert_eq!(watch.missing.set().rows().count(), 7, "present points go");
     }
 
     #[tokio::test]
     async fn a_500_on_a_404_row_is_retried_once_and_then_waits() {
         let (node, fake) = serve_fake(750..760).await;
         let harness = Harness::with_options(WatchOptions {
-            sweep_interval: Duration::from_secs(1),
-            sweep_once: false,
             request_interval: Duration::from_secs(1),
-            retention_blocks: None,
-            alert_missing_after: Duration::ZERO,
+            ..options(None)
         })
         .await;
         let (mut watch, _view) = harness.start(node).await;
         watch.check_probe(&leaf(700..800)).await.unwrap();
         for _ in 0..2 {
-            watch.check_probe(&leaf(750..760)).await.unwrap();
+            harness.clock.advance(Duration::from_secs(10));
+            watch.retry_step().await.unwrap();
         }
         harness.clock.advance(Duration::from_secs(120));
 
@@ -1359,10 +1281,149 @@ mod tests {
             "the row waits for its next retry"
         );
         let row = watch.missing.set().rows().next().unwrap();
-        assert_eq!(row.state.reason, MissingReason::NotFound);
-        assert_eq!(row.state.failed_probes, 3);
-        assert!(row.state.next_retry_at > watch.clock().now());
-        assert_eq!(alerting_ranges(&watch), [h(750..760)]);
+        assert!(row.state.is_confirmed());
+        assert_eq!(row.state.probe_count().get(), 3);
+        assert_eq!(row.state.retry().delay, RetryDelay::from_secs(40).unwrap());
+        assert!(row.state.retry().next_at > watch.clock().now());
+        assert!(watch.recovery.is_empty());
+    }
+
+    /// Preloads `count` confirmed `lc_leaf_proof` rows at heights `1..=count` into the image.
+    async fn preload_confirmed_points(harness: &Harness, node: &WatchedNode, count: u64) {
+        let start = harness.clock.now();
+        let mut results = Vec::new();
+        for _ in 0..5 {
+            let marks: Vec<_> = (1..=count)
+                .map(|height| point_result(height, Observation::NotFound))
+                .collect();
+            results.extend(marks.into_iter().map(|result| (result, start)));
+        }
+        harness.preload(node, results).await;
+    }
+
+    #[tokio::test]
+    async fn only_the_representative_is_retried_until_it_is_found_present() {
+        let (node, fake) = serve_fake([]).await;
+        let harness = Harness::with_options(WatchOptions {
+            request_interval: Duration::from_secs(1),
+            ..options(None)
+        })
+        .await;
+        preload_confirmed_points(&harness, &node, 40).await;
+        let (mut watch, view) = harness.start(node).await;
+        fake.all_404.store(true, Ordering::SeqCst);
+
+        harness.clock.advance(Duration::from_secs(61));
+        assert_eq!(watch.retry_step().await.unwrap(), 1, "only the oldest row");
+        assert_eq!(fake.heads(), ["/v1/light-client/leaf/1"]);
+        assert_eq!(
+            watch.retry_step().await.unwrap(),
+            0,
+            "its next_at is a minute away"
+        );
+        harness.clock.advance(Duration::from_secs(61));
+        assert_eq!(watch.retry_step().await.unwrap(), 1);
+
+        // The node serves again: the representative, then the others once each at the budget.
+        fake.all_404.store(false, Ordering::SeqCst);
+        fake.requests.lock().unwrap().clear();
+        harness.clock.advance(Duration::from_secs(61));
+        let mut sent = vec![watch.retry_step().await.unwrap()];
+        while watch.missing.set().rows().count() > 0 {
+            sent.push(watch.retry_step().await.unwrap());
+            assert!(sent.len() < 20, "{sent:?}");
+        }
+        assert_eq!(sent, [5; 8], "40 rows at 5 per step");
+        let heads = fake.heads();
+        let distinct: BTreeSet<_> = heads.iter().collect();
+        assert_eq!(heads.len(), 40);
+        assert_eq!(distinct.len(), 40, "no row twice");
+        let view = view.borrow();
+        let tallies = &view.as_ref().unwrap().tallies;
+        assert!(tallies.iter().all(|t| t.missing_count == 0));
+    }
+
+    #[tokio::test]
+    async fn a_new_gap_is_confirmed_whatever_the_number_of_confirmed_rows() {
+        let (node, fake) = serve_fake([]).await;
+        let harness = Harness::with_options(WatchOptions {
+            request_interval: Duration::from_secs(1),
+            ..options(None)
+        })
+        .await;
+        // 1000 confirmed leaf rows of 10 heights, none touching.
+        let mut findings = RangeFindings::new(h(0..20_000));
+        for i in 0..1_000u64 {
+            findings.mark(h(i * 20..i * 20 + 10), Observation::NotFound);
+        }
+        let start = harness.clock.now();
+        let rows = ProbeResult::Range {
+            kind: RangeKind::Leaf,
+            findings,
+        };
+        harness
+            .preload(&node, (0..5).map(|_| (rows.clone(), start)).collect())
+            .await;
+        let (mut watch, _view) = harness.start(node).await;
+        fake.all_404.store(true, Ordering::SeqCst);
+        harness.clock.advance(Duration::from_secs(61));
+
+        let now = watch.clock().now();
+        watch
+            .missing
+            .apply(
+                MissingUpdate::Observed(point_result(5, Observation::NotFound)),
+                now,
+            )
+            .await
+            .unwrap();
+        let fresh_since = watch.clock().now();
+        let fresh_state = |watch: &NodeWatch<ManualClock>| {
+            watch
+                .missing
+                .set()
+                .rows()
+                .find(|row| row.key.kind() == DataKind::LcLeafProof)
+                .unwrap()
+                .state
+        };
+        while {
+            watch.retry_step().await.unwrap();
+            !fresh_state(&watch).is_confirmed()
+        } {
+            harness.clock.advance(Duration::from_secs(1));
+            assert!(
+                watch.clock().now() - fresh_since < TimeDelta::seconds(30),
+                "not confirmed in time"
+            );
+        }
+        assert!(
+            watch.clock().now() - fresh_since <= TimeDelta::seconds(17),
+            "confirmed at {}",
+            watch.clock().now() - fresh_since
+        );
+        let heads = fake.heads();
+        let leaf_heads: Vec<_> = heads
+            .iter()
+            .filter(|path| path.starts_with("/v1/availability/leaf"))
+            .collect();
+        assert_eq!(
+            leaf_heads,
+            [
+                "/v1/availability/leaf/0/10",
+                "/v1/availability/leaf/0/1",
+                "/v1/availability/leaf/9/10"
+            ],
+            "the representative and its two end checks"
+        );
+        assert_eq!(
+            heads
+                .iter()
+                .filter(|p| p.starts_with("/v1/light-client"))
+                .count(),
+            2
+        );
+        assert_eq!(heads.len(), 5, "no other request");
     }
 
     #[tokio::test]
@@ -1371,12 +1432,10 @@ mod tests {
         let harness = Harness::with_options(WatchOptions {
             sweep_interval: Duration::from_secs(3_600),
             sweep_once: true,
-            request_interval: Duration::ZERO,
-            retention_blocks: Some(200),
-            alert_missing_after: Duration::ZERO,
+            ..options(Some(200))
         })
         .await;
-        let (mut watch, _view) = harness.start(node.clone()).await;
+        let (mut watch, _view) = harness.start(node).await;
 
         for _ in 0..5 {
             watch.sweep_step().await.unwrap();
@@ -1418,7 +1477,6 @@ mod tests {
         else {
             panic!("running");
         };
-
         let sweep = RunningSweep {
             started_at: watch.clock().now() + TimeDelta::hours(1),
             ..sweep
@@ -1435,40 +1493,52 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn the_sweep_pauses_while_follow_or_sweep_probes_fail_and_resumes_after() {
+    async fn the_sweep_pauses_while_a_chunk_fails_and_resumes_after() {
         let (node, fake) = serve_fake([905]).await;
         let harness = Harness::new(Some(200)).await;
         let (mut watch, _view) = harness.start(node).await;
-        let chunk = h(900..910);
-        let probe = leaf(900..910);
 
         // A retry probe that fails neither sets nor clears the pause.
         fake.failing.store(true, Ordering::SeqCst);
-        assert_eq!(
-            watch.check_probe(&probe).await.unwrap(),
-            RequestHealth::Failed
-        );
+        let failed = watch.check_probe(&leaf(900..910)).await.unwrap();
+        assert_eq!(failed.health(), RequestHealth::Failed);
         assert!(!is_paused(&watch));
-        assert!(watch.sweep_step().await.unwrap() > 0, "the sweep goes on");
-        watch.progress.sweep = SweepState::NeverSwept;
 
-        // A failing chunk probe pauses the sweep: no sweep starts.
-        watch.check_chunk(&chunk).await.unwrap();
+        // A failing sweep chunk pauses; the sweep started without the gate and goes no further.
+        assert!(watch.sweep_step().await.unwrap() > 0);
         assert!(is_paused(&watch));
         assert_eq!(watch.sweep_step().await.unwrap(), 0);
-        assert_eq!(watch.progress.sweep, SweepState::NeverSwept);
+        assert!(is_running(&watch));
 
-        // A retry probe that answers does not resume it; a chunk probe that answers does.
+        // A retry probe that answers does not resume it; the recheck chunk after a minute does.
         fake.failing.store(false, Ordering::SeqCst);
-        assert_eq!(
-            watch.check_probe(&probe).await.unwrap(),
-            RequestHealth::Answered
-        );
+        let answered = watch.check_probe(&leaf(900..910)).await.unwrap();
+        assert_eq!(answered.health(), RequestHealth::Answered);
         assert!(is_paused(&watch));
-        watch.check_chunk(&chunk).await.unwrap();
+        harness.clock.advance(Duration::from_secs(60));
+        assert!(watch.sweep_step().await.unwrap() > 0);
+        assert!(!is_paused(&watch));
+    }
+
+    #[tokio::test]
+    async fn a_failed_follow_chunk_pauses_the_sweep() {
+        let (node, fake) = serve_fake([]).await;
+        let harness = Harness::new(Some(200)).await;
+        let window = harness.watchdog.options.sweep_window();
+        let (mut watch, _view) = harness.start(node).await;
+
+        fake.failing.store(true, Ordering::SeqCst);
+        watch.frontier = Frontier::new(Height(1_500), window);
+        assert_eq!(watch.follow_step().await.unwrap(), 4);
+        assert!(is_paused(&watch));
+        assert_eq!(watch.sweep_step().await.unwrap(), 0);
+        assert!(is_running(&watch), "the sweep starts without the gate");
+
+        // A follow chunk that answers opens the gate.
+        fake.failing.store(false, Ordering::SeqCst);
+        watch.follow_step().await.unwrap();
         assert!(!is_paused(&watch));
         assert!(watch.sweep_step().await.unwrap() > 0);
-        assert!(is_running(&watch));
     }
 
     #[tokio::test]
@@ -1476,16 +1546,16 @@ mod tests {
         let (node, fake) = serve_fake([]).await;
         let harness = Harness::new(Some(200)).await;
         let (mut watch, _view) = harness.start(node).await;
-        let chunk = h(900..910);
 
-        // The leaf probe, first of five, fails; the four after it answer.
+        // The leaf probe, first of four, fails; the three after it answer.
         fake.failing_leaf.store(true, Ordering::SeqCst);
-        watch.check_chunk(&chunk).await.unwrap();
+        assert!(watch.sweep_step().await.unwrap() > 0);
         assert!(is_paused(&watch), "any failed probe pauses");
         assert_eq!(watch.sweep_step().await.unwrap(), 0);
 
         fake.failing_leaf.store(false, Ordering::SeqCst);
-        watch.check_chunk(&chunk).await.unwrap();
+        harness.clock.advance(Duration::from_secs(60));
+        assert!(watch.sweep_step().await.unwrap() > 0);
         assert!(!is_paused(&watch));
     }
 
@@ -1495,9 +1565,8 @@ mod tests {
         let harness = Harness::new(Some(400)).await;
         let (mut watch, _view) = harness.start(node).await;
 
-        // A flat tip gives follow nothing to probe, so only the recheck can clear the pause.
         fake.failing.store(true, Ordering::SeqCst);
-        watch.check_chunk(&h(900..910)).await.unwrap();
+        assert!(watch.sweep_step().await.unwrap() > 0);
         assert!(is_paused(&watch));
         assert_eq!(watch.sweep_step().await.unwrap(), 0, "within the minute");
 
@@ -1520,21 +1589,48 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_failed_refinement_pauses_the_sweep() {
+    async fn a_recheck_is_kept_while_the_sweep_waits() {
+        let (node, _fake) = serve_fake([]).await;
+        let harness = Harness::with_options(WatchOptions {
+            sweep_interval: Duration::from_secs(3_600),
+            ..options(Some(200))
+        })
+        .await;
+        let (mut watch, _view) = harness.start(node).await;
+        let started_at = watch.clock().now() - TimeDelta::minutes(1);
+        watch.progress.sweep = SweepState::Waiting {
+            last: CompletedSweep {
+                started_at,
+                completed_at: started_at,
+            },
+        };
+        let paused = SweepGate::Paused {
+            recheck_at: watch.clock().instant() - Duration::from_secs(1),
+        };
+        watch.gate = paused;
+
+        assert_eq!(watch.sweep_step().await.unwrap(), 0);
+        assert_eq!(watch.gate, paused, "the recheck is not spent");
+
+        harness.clock.advance(Duration::from_secs(3_600));
+        assert!(watch.sweep_step().await.unwrap() > 0);
+        assert!(!is_paused(&watch));
+    }
+
+    #[tokio::test]
+    async fn a_failed_refinement_fails_the_probe() {
         let (node, fake) = serve_fake([905]).await;
         let harness = Harness::new(Some(200)).await;
         let (mut watch, _view) = harness.start(node).await;
 
-        // The chunk HEAD says 404, but the GET naming the height fails with 500.
-        fake.failing_gets.store(true, Ordering::SeqCst);
-        assert_eq!(
-            watch.check_probe(&leaf(900..910)).await.unwrap(),
-            RequestHealth::Failed
-        );
-        assert_eq!(watch.errors_since_summary.get("500"), Some(&1));
-        // A chunk of follow or sweep with such a probe pauses the sweep.
-        watch.check_chunk(&h(900..910)).await.unwrap();
-        assert!(is_paused(&watch));
+        // The chunk HEAD says 404, the first bisection HEAD fails with 500.
+        *fake.leaf_budget.lock().unwrap() = Some(1);
+        let result = watch.check_probe(&leaf(900..910)).await.unwrap();
+        assert_eq!(result.health(), RequestHealth::Failed);
+        assert_eq!(watch.counters.errors.failures().is_empty(), false);
+        let row = watch.missing.set().rows().next().unwrap();
+        assert!(matches!(row.state, UnitState::Failed { .. }));
+        assert_eq!(row.key.units(), 900..910);
     }
 
     #[tokio::test]
@@ -1553,9 +1649,7 @@ mod tests {
             let harness = Harness::with_options(WatchOptions {
                 sweep_interval: Duration::from_secs(3_600),
                 sweep_once,
-                request_interval: Duration::ZERO,
-                retention_blocks: Some(200),
-                alert_missing_after: Duration::ZERO,
+                ..options(Some(200))
             })
             .await;
             let (mut watch, _view) = harness.start(node.clone()).await;
@@ -1617,7 +1711,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn the_watch_loop_follows_sweeps_alerts_and_trims() {
+    async fn the_watch_loop_follows_sweeps_confirms_and_trims() {
         let (node, _fake) = serve_fake(750..760).await;
         let harness = Harness::new(Some(300)).await;
         let window = harness.watchdog.options.sweep_window();
@@ -1635,32 +1729,32 @@ mod tests {
             matches!(stored.sweep, SweepState::Waiting { .. }),
             "{stored:?}"
         );
-        let summary = watch.summary(watch.clock().now());
-        let leaf_summary = &summary.kinds[0];
-        assert_eq!(
-            (leaf_summary.kind, leaf_summary.missing_count),
-            (DataKind::Leaf, 10)
-        );
+        assert_eq!(leaf_missing(&watch), 10);
+        assert_eq!(watch.snapshot().tallies[0].kind, DataKind::Leaf);
 
-        // Two more failed 404 probes make the row alert: 3 probes, old enough, below the margin.
+        // Two more 404 probes make the row confirmed: old enough, below the margin.
         for _ in 0..2 {
             watch.check_probe(&leaf(750..760)).await.unwrap();
         }
-        assert_eq!(alerting_ranges(&watch), [h(750..760)]);
+        assert_eq!(confirmed(&watch), 10);
         watch.frontier = Frontier::new(Height(755), window);
-        assert!(alerting_ranges(&watch).is_empty(), "inside the tip margin");
+        assert_eq!(confirmed(&watch), 0, "inside the tip margin");
 
         // A later tip moves follow and the window; rows below the window are forgotten.
         watch.frontier = Frontier::new(Height(1_500), window);
-        assert_eq!(watch.follow_step().await.unwrap(), 5);
+        assert_eq!(watch.follow_step().await.unwrap(), 4);
         assert_eq!(watch.progress.follow_next_height, Height(1_090));
-        assert_eq!(watch.trim_to_window().await.unwrap(), Some(1));
+        watch.trim_step().await.unwrap();
+        assert_eq!(watch.counters.forgotten_rows, 1);
         assert_eq!(watch.progress.follow_next_height, Height(1_200));
         assert_eq!(
             watch.store.load_progress().await.unwrap().unwrap(),
             watch.progress
         );
         assert_eq!(leaf_missing(&watch), 0);
+        // The trim runs once per window start.
+        watch.trim_step().await.unwrap();
+        assert_eq!(watch.counters.forgotten_rows, 1);
     }
 
     #[tokio::test]
@@ -1680,7 +1774,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn the_watch_publishes_its_view() {
+    async fn the_watch_publishes_after_every_probe_and_progress_commit() {
         let (node, _fake) = serve_fake(750..760).await;
         let harness = Harness::new(None).await;
         let (mut watch, view) = harness.start(node).await;
@@ -1689,14 +1783,522 @@ mod tests {
             let first = first
                 .as_ref()
                 .expect("the first view is published at start");
-            assert_eq!(first.summary.tip_height, Height(1_000));
+            assert_eq!(first.frontier.tip(), Height(1_000));
             assert_eq!(first.progress, watch.progress);
         }
+        harness.clock.advance(Duration::from_secs(7));
         watch.check_probe(&leaf(700..800)).await.unwrap();
-        watch.publish().unwrap();
+        {
+            let published = view.borrow();
+            let published = published.as_ref().unwrap();
+            assert_eq!(published.listed.total, 1);
+            assert_eq!(published.tallies[0].missing_count, 10);
+            assert_eq!(published.published_at, watch.clock().now());
+        }
+        let progress = NodeProgress {
+            follow_next_height: Height(123),
+            ..watch.progress
+        };
+        watch.commit_progress(progress).await.unwrap();
+        assert_eq!(view.borrow().as_ref().unwrap().progress, progress);
+    }
+
+    #[tokio::test]
+    async fn the_loop_follows_sweeps_retries_and_publishes() {
+        let (node, _fake) = serve_fake(750..753).await;
+        let harness = Harness::with_options(WatchOptions {
+            sweep_once: true,
+            ..options(Some(300))
+        })
+        .await;
+        let (watch, view) = harness.start(node).await;
+        let task = tokio::spawn(watch.run());
+        let done = async {
+            loop {
+                {
+                    let view = view.borrow();
+                    let view = view.as_ref().unwrap();
+                    let swept = matches!(view.progress.sweep, SweepState::Done { .. });
+                    if swept
+                        && view.tallies[0].missing_count == 3
+                        && view.progress.follow_next_height == Height(990)
+                    {
+                        return;
+                    }
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        };
+        tokio::time::timeout(Duration::from_secs(5), done)
+            .await
+            .expect("the loop sweeps and publishes");
+        assert!(!task.is_finished(), "{:?}", task.is_finished());
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn the_tip_poller_publishes_the_max_and_keeps_it_when_no_node_answers() {
+        let (first, fake_first) = serve_fake([]).await;
+        let (second, fake_second) = serve_fake([]).await;
+        fake_first.tip.store(5, Ordering::SeqCst);
+        fake_second.tip.store(7, Ordering::SeqCst);
+        let harness = Harness::new(None).await;
+        let (poller, mut tip) = harness
+            .watchdog
+            .start_tip_poller(vec![first, second])
+            .await
+            .unwrap();
+        assert_eq!(*tip.borrow(), Height(7));
+
+        fake_first.tip.store(9, Ordering::SeqCst);
+        fake_second.tip.store(8, Ordering::SeqCst);
+        let task = tokio::spawn(poller.run());
+        tokio::time::timeout(Duration::from_secs(5), tip.changed())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(*tip.borrow_and_update(), Height(9));
+
+        let before = fake_first.requests_to("/v1/node/block-height");
+        fake_first.failing.store(true, Ordering::SeqCst);
+        fake_second.failing.store(true, Ordering::SeqCst);
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while fake_first.requests_to("/v1/node/block-height") < before + 3
+                || fake_second.requests_to("/v1/node/block-height") < before + 3
+            {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(*tip.borrow(), Height(9));
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn an_epoch_object_missing_on_the_node_is_counted_in_the_gauge() {
+        let (node, fake) = serve_fake([]).await;
+        *fake.config.lock().unwrap() =
+            r#"{"config":{"epoch_height":30,"epoch_start_block":61}}"#.to_owned();
+        fake.missing_epochs.lock().unwrap().insert(5);
+        fake.tip.store(300, Ordering::SeqCst);
+        let harness = Harness::new(None).await;
+        harness.tip_sender.send_replace(Height(300));
+        let epochs = harness
+            .watchdog
+            .fetch_epochs(std::slice::from_ref(&node))
+            .await
+            .unwrap();
+        assert!(matches!(epochs, Epochs::On(_)));
+        let (mut watch, view) = harness.start_with(node.clone(), epochs).await;
+        let mut reporter = harness.reporter(&node, &view);
+
+        for _ in 0..6 {
+            watch.sweep_step().await.unwrap();
+        }
+        assert!(matches!(watch.progress.sweep, SweepState::Waiting { .. }));
+        for _ in 0..2 {
+            harness.clock.advance(Duration::from_secs(61));
+            watch.retry_step().await.unwrap();
+        }
+        reporter.tick(1).unwrap();
+        assert_eq!(harness.gauge("confirmed_missing", &node, None), Some(1));
         let view = view.borrow();
         let view = view.as_ref().unwrap();
-        assert_eq!(view.listed.total, 1);
-        assert_eq!(view.summary.kinds[0].missing_count, 10);
+        let summary = view.summary(Height(300), watch.clock().now());
+        let stake = summary
+            .kinds
+            .iter()
+            .find(|kind| kind.kind == DataKind::StakeTable)
+            .unwrap();
+        assert_eq!(stake.confirmed_missing, 1);
+        let route = view.listed.shown[0].key.first_probe().route();
+        assert!(route.ends_with("v1/node/stake-table/5"), "{route}");
+        let page = crate::http::render_page(&[(&node, Some(view))]);
+        assert!(page.contains("v1/node/stake-table/5"), "{page}");
+    }
+
+    #[tokio::test]
+    async fn a_node_answering_404_everywhere_is_counted_as_missing() {
+        let (node, fake) = serve_fake([]).await;
+        fake.all_404.store(true, Ordering::SeqCst);
+        let harness = Harness::new(None).await;
+        let window = harness.watchdog.options.sweep_window();
+        let (mut watch, view) = harness.start(node.clone()).await;
+        let mut reporter = harness.reporter(&node, &view);
+
+        watch.frontier = Frontier::new(Height(1_100), window);
+        watch.follow_step().await.unwrap();
+        for delay in [5, 10] {
+            harness.clock.advance(Duration::from_secs(delay));
+            watch.retry_step().await.unwrap();
+        }
+        harness.tip_sender.send_replace(Height(1_100));
+        reporter.tick(1).unwrap();
+        assert!(harness.gauge("confirmed_missing", &node, None).unwrap() > 0);
+    }
+
+    /// The `summary` events of `capture` as (clock time, `confirmed_missing`).
+    fn summaries(capture: &Capture) -> Vec<(DateTime<Utc>, String)> {
+        capture
+            .with_message("summary")
+            .into_iter()
+            .map(|event| (event.at.unwrap(), event.fields["confirmed_missing"].clone()))
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn the_reporter_writes_gauges_every_tick_and_logs_every_fourth() {
+        let (node, _fake) = serve_fake([]).await;
+        let harness = Harness::with_options(WatchOptions {
+            alert_missing_after: Duration::from_secs(60),
+            ..options(None)
+        })
+        .await;
+        let start = harness.clock.now();
+        let result = leaf_result(500..510, Observation::NotFound);
+        let first = start - TimeDelta::seconds(50);
+        harness
+            .preload(
+                &node,
+                (0..3)
+                    .map(|i| (result.clone(), first + TimeDelta::seconds(i)))
+                    .collect(),
+            )
+            .await;
+        let capture = Capture::with_clock(harness.clock.clone());
+        let _guard = capture.install();
+        let (_watch, view) = harness.start(node.clone()).await;
+        let mut reporter = harness.reporter(&node, &view);
+
+        reporter.tick(0).unwrap();
+        for gauge in [
+            "confirmed_missing",
+            "follow_lag_blocks",
+            "follow_next_height",
+            "sweep_running",
+            "sweep_next_height",
+            "sweep_until_height",
+        ] {
+            assert!(harness.gauge(gauge, &node, None).is_some(), "{gauge}");
+        }
+        assert_eq!(harness.gauge("missing", &node, Some("leaf")), Some(10));
+        assert_eq!(harness.gauge("sweep_eta_seconds", &node, None), None);
+        assert_eq!(harness.gauge("confirmed_missing", &node, None), Some(0));
+        assert!(capture.with_message("summary").is_empty());
+
+        for tick in 1..=8 {
+            harness.clock.advance(GAUGE_INTERVAL);
+            reporter.tick(tick).unwrap();
+            let logged = capture.with_message("summary").len();
+            assert_eq!(logged, tick as usize / 4, "after tick {tick}");
+            if tick == 1 {
+                assert_eq!(harness.gauge("confirmed_missing", &node, None), Some(10));
+            }
+        }
+        let logged = summaries(&capture);
+        assert_eq!(
+            logged.iter().map(|(_, n)| n.as_str()).collect::<Vec<_>>(),
+            ["10", "10"]
+        );
+        assert_eq!(logged[1].0 - logged[0].0, TimeDelta::seconds(60));
+    }
+
+    #[tokio::test]
+    async fn the_report_reads_the_live_tip_and_a_stepped_back_clock() {
+        let (node, _fake) = serve_fake([]).await;
+        let harness = Harness::new(None).await;
+        let now = harness.clock.now();
+        harness
+            .preload(
+                &node,
+                (0..3)
+                    .map(|_| {
+                        (
+                            leaf_result(500..510, Observation::NotFound),
+                            now + TimeDelta::seconds(100),
+                        )
+                    })
+                    .collect(),
+            )
+            .await;
+        let (_watch, view) = harness.start(node.clone()).await;
+        let slot = NodeViewSlot {
+            node: node.clone(),
+            view: view.clone(),
+        };
+        let reported = ReportedNode::new(slot);
+        let report = reported.report(Height(1_500), now).unwrap();
+        assert_eq!(report.summary.follow_lag_blocks, 510);
+        let leaf = &report.summary.kinds[0];
+        assert_eq!(
+            leaf.oldest_age,
+            Some(Duration::ZERO),
+            "first missing after now"
+        );
+        assert_eq!(leaf.confirmed_missing, 0);
+        assert_eq!(leaf.missing_count, 10);
+
+        // The reporter takes the live tip from its channel.
+        harness.tip_sender.send_replace(Height(1_500));
+        let mut reporter = harness.reporter(&node, &view);
+        reporter.tick(0).unwrap();
+        assert_eq!(harness.gauge("follow_lag_blocks", &node, None), Some(510));
+    }
+
+    #[tokio::test]
+    async fn a_node_without_a_view_is_an_error() {
+        let (node, _fake) = serve_fake([]).await;
+        let (_sender, receiver) = view::channel();
+        let reported = ReportedNode::new(NodeViewSlot {
+            node,
+            view: receiver,
+        });
+        let now = DateTime::from_timestamp(1_000_000, 0).unwrap();
+        assert!(reported.report(Height(1), now).is_err());
+    }
+
+    #[tokio::test]
+    async fn the_reporter_keeps_ticking_while_the_node_hangs() {
+        let (node, fake) = serve_fake([]).await;
+        fake.hang.store(true, Ordering::SeqCst);
+        let timeouts = ProbeTimeouts {
+            range_head: Duration::from_secs(30),
+            single_head: Duration::from_secs(30),
+            json: Duration::from_secs(30),
+        };
+        let harness = Harness::with_timeouts(
+            WatchOptions {
+                alert_missing_after: Duration::from_secs(120),
+                ..options(None)
+            },
+            timeouts,
+        )
+        .await;
+        let first = harness.clock.now() - TimeDelta::seconds(30);
+        harness
+            .preload(
+                &node,
+                (0..3)
+                    .map(|i| {
+                        (
+                            leaf_result(500..510, Observation::NotFound),
+                            first + TimeDelta::seconds(i),
+                        )
+                    })
+                    .collect(),
+            )
+            .await;
+        let capture = Capture::with_clock(harness.clock.clone());
+        let _guard = capture.install();
+        let (watch, view) = harness.start(node.clone()).await;
+        let reporter = harness.reporter(&node, &view);
+        let watch_task = tokio::spawn(watch.run());
+        let reporter_task = tokio::spawn(reporter.run());
+
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while capture.with_message("summary").len() < 3 {
+                tokio::time::sleep(Duration::from_millis(2)).await;
+            }
+        })
+        .await
+        .expect("three summaries while the node hangs");
+        watch_task.abort();
+        reporter_task.abort();
+
+        let logged = summaries(&capture);
+        let counts: Vec<_> = logged.iter().take(3).map(|(_, n)| n.as_str()).collect();
+        assert_eq!(counts, ["0", "10", "10"]);
+        assert_eq!(logged[1].0 - logged[0].0, TimeDelta::seconds(60));
+        assert_eq!(logged[2].0 - logged[1].0, TimeDelta::seconds(60));
+        assert_eq!(
+            fake.requests.lock().unwrap().len(),
+            1,
+            "one request, still open"
+        );
+    }
+
+    /// A report with the given cumulative counters.
+    fn report_with(
+        node: &WatchedNode,
+        errors: &[(NotServed, u64)],
+        forgotten_rows: u64,
+    ) -> crate::report::NodeReport {
+        let mut counters = WatchCounters {
+            forgotten_rows,
+            ..WatchCounters::default()
+        };
+        for (not_served, times) in errors {
+            for _ in 0..*times {
+                counters.errors.count(*not_served);
+            }
+        }
+        crate::report::NodeReport {
+            node: node.clone(),
+            summary: crate::view::NodeSummary {
+                tip_height: Height(1),
+                follow_lag_blocks: 0,
+                merklized_state_lag_blocks: None,
+                kinds: Vec::new(),
+            },
+            counters,
+            progress: NodeProgress {
+                follow_next_height: Height(0),
+                sweep: SweepState::NeverSwept,
+            },
+            sweep_eta: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn the_summary_logs_counter_differences_and_warns_once() {
+        let (node, _fake) = serve_fake([]).await;
+        let capture = Capture::default();
+        let _guard = capture.install();
+        let (_sender, receiver) = view::channel();
+        let mut reported = ReportedNode::new(NodeViewSlot {
+            node: node.clone(),
+            view: receiver,
+        });
+        let transport = NotServed::Failed(crate::outcome::RequestFailure::Transport);
+        let server = |code| {
+            NotServed::Failed(crate::outcome::RequestFailure::Status(
+                crate::outcome::FailedStatus::new(StatusCode::from_u16(code).unwrap()).unwrap(),
+            ))
+        };
+        let errors = [(NotServed::NotFound, 2), (server(500), 1)];
+        reported.log(&report_with(&node, &errors, 4));
+        let errors = [(NotServed::NotFound, 3), (server(500), 1)];
+        reported.log(&report_with(&node, &errors, 4));
+
+        let summaries = capture.with_message("summary");
+        assert_eq!(summaries[0].target, "query_watchdog::report");
+        assert_eq!(summaries[0].fields["errors"], r#"{"404": 2, "500": 1}"#);
+        assert_eq!(summaries[0].fields["forgotten"], "4");
+        assert_eq!(summaries[1].fields["errors"], r#"{"404": 1}"#);
+        assert_eq!(summaries[1].fields["forgotten"], "0");
+        let warnings = capture.with_message("node unhealthy");
+        assert_eq!(warnings.len(), 1);
+        assert_eq!(warnings[0].level, Level::WARN);
+        assert_eq!(warnings[0].fields["errors"], r#"{"500": 1}"#);
+
+        let mut all = crate::view::ErrorCounts::default();
+        for not_served in [
+            NotServed::NotFound,
+            server(503),
+            server(500),
+            server(500),
+            transport,
+        ] {
+            all.count(not_served);
+        }
+        assert_eq!(
+            format!("{all:?}"),
+            r#"{"404": 1, "500": 2, "503": 1, "transport": 1}"#
+        );
+    }
+
+    #[tokio::test]
+    async fn the_trim_drops_recovery_keys_below_the_window() {
+        let (node, fake) = serve_fake([]).await;
+        let harness = Harness::new(Some(200)).await;
+        let start = harness.clock.now();
+        let points = (0..5).flat_map(|_| {
+            [700, 705, 850, 855].map(|height| (point_result(height, Observation::NotFound), start))
+        });
+        let range = (0..5).map(|_| (leaf_result(790..810, Observation::NotFound), start));
+        harness.preload(&node, points.chain(range).collect()).await;
+        let (mut watch, _view) = harness.start(node).await;
+        watch.recovery = ChunkQueue::confirmed(watch.missing.set());
+
+        // Window start 800: the queued keys below it are dropped, the range is clipped.
+        watch.trim_step().await.unwrap();
+        fake.requests.lock().unwrap().clear();
+        watch.retry_step().await.unwrap();
+        let heads = fake.heads();
+        assert!(!heads.is_empty());
+        for path in heads {
+            let height: u64 = path.rsplit('/').next().unwrap().parse().unwrap();
+            assert!(height >= 800, "{path}");
+        }
+    }
+
+    /// Confirmed `lc_leaf_proof` rows at heights 1 to 3 with their recovery queue queued and the
+    /// row of height 2 removed, as a sweep chunk would before its turn.
+    async fn recovery_with_a_stale_key(
+        fake: &FakeNode,
+        node: WatchedNode,
+        harness: &Harness,
+    ) -> NodeWatch<ManualClock> {
+        let _ = fake;
+        preload_confirmed_points(harness, &node, 3).await;
+        let (mut watch, _view) = harness.start(node).await;
+        watch.recovery = ChunkQueue::confirmed(watch.missing.set());
+        let now = watch.clock().now();
+        watch
+            .missing
+            .apply(
+                MissingUpdate::Observed(point_result(2, Observation::Present)),
+                now,
+            )
+            .await
+            .unwrap();
+        watch
+    }
+
+    #[tokio::test]
+    async fn a_stale_recovery_key_that_answers_200_changes_nothing() {
+        let (node, fake) = serve_fake([]).await;
+        let harness = Harness::new(None).await;
+        let mut watch = recovery_with_a_stale_key(&fake, node, &harness).await;
+        watch.retry_step().await.unwrap();
+        assert_eq!(watch.missing.set().rows().count(), 0);
+        assert!(watch.recovery.is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_stale_recovery_key_that_answers_404_starts_a_fresh_row() {
+        let (node, fake) = serve_fake([]).await;
+        let harness = Harness::new(None).await;
+        let mut watch = recovery_with_a_stale_key(&fake, node, &harness).await;
+        fake.all_404.store(true, Ordering::SeqCst);
+        let now = watch.clock().now();
+        watch.retry_step().await.unwrap();
+        let rows: Vec<_> = watch.missing.set().rows().collect();
+        assert_eq!(rows.len(), 3);
+        let fresh = &rows[1];
+        assert_eq!(fresh.key.first_unit(), 2);
+        assert_eq!(fresh.state.probe_count().get(), 1);
+        assert_eq!(fresh.state.first_missing_at(), now);
+        assert_eq!(fresh.state.retry().delay, RetryDelay::FIRST);
+    }
+
+    #[tokio::test]
+    async fn a_failed_refinement_pauses_the_sweep_gate() {
+        let (node, fake) = serve_fake([805]).await;
+        let harness = Harness::new(Some(200)).await;
+        let (mut watch, _view) = harness.start(node).await;
+
+        // The sweep chunk 800..900: the leaf HEAD says 404, the first bisection HEAD fails.
+        *fake.leaf_budget.lock().unwrap() = Some(1);
+        assert!(watch.sweep_step().await.unwrap() > 0);
+        assert!(is_paused(&watch));
+        assert_eq!(watch.sweep_step().await.unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn two_gaps_are_summed_in_the_gauge() {
+        let (node, _fake) = serve_fake((750..760).chain(770..775)).await;
+        let harness = Harness::new(None).await;
+        let (mut watch, view) = harness.start(node.clone()).await;
+        let mut reporter = harness.reporter(&node, &view);
+
+        watch.check_probe(&leaf(700..800)).await.unwrap();
+        for _ in 0..2 {
+            harness.clock.advance(Duration::from_secs(10));
+            watch.retry_step().await.unwrap();
+        }
+        reporter.tick(1).unwrap();
+        assert_eq!(harness.gauge("confirmed_missing", &node, None), Some(15));
     }
 }

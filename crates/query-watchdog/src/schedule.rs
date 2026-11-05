@@ -253,28 +253,37 @@ pub enum SweepGate {
 }
 
 impl SweepGate {
-    /// After a follow or sweep chunk: `Answered` opens; `Failed` pauses, with `recheck_at = now +
-    /// SWEEP_RECHECK_INTERVAL` when it was open and the old `recheck_at` when it was paused.
-    pub fn after_chunk(self, health: RequestHealth, now: Instant) -> Self {
+    /// After a follow chunk: `Answered` opens; `Failed` pauses an open gate until `now +
+    /// SWEEP_RECHECK_INTERVAL` and keeps a paused gate's `recheck_at`.
+    pub fn after_follow_chunk(self, health: RequestHealth, now: Instant) -> Self {
         match (self, health) {
             (_, RequestHealth::Answered) => Self::Open,
-            (Self::Open, RequestHealth::Failed) => Self::Paused {
-                recheck_at: now + SWEEP_RECHECK_INTERVAL,
-            },
+            (Self::Open, RequestHealth::Failed) => Self::pausing(now),
             (paused @ Self::Paused { .. }, RequestHealth::Failed) => paused,
         }
     }
 
-    /// `Open`: true. `Paused`: false before `recheck_at`; at or after it, moves `recheck_at` one
-    /// interval past `now` and returns true.
-    pub fn admits(&mut self, now: Instant) -> bool {
+    /// After a sweep chunk: `Answered` opens; `Failed` pauses until `now +
+    /// SWEEP_RECHECK_INTERVAL`, so a recheck is spent only by a chunk that was sent.
+    pub fn after_sweep_chunk(self, health: RequestHealth, now: Instant) -> Self {
+        match health {
+            RequestHealth::Answered => Self::Open,
+            RequestHealth::Failed => Self::pausing(now),
+        }
+    }
+
+    /// `Open`, or `Paused` at or after `recheck_at`. Pure.
+    pub fn admits(&self, now: Instant) -> bool {
         match self {
             Self::Open => true,
-            Self::Paused { recheck_at } if now >= *recheck_at => {
-                *recheck_at = now + SWEEP_RECHECK_INTERVAL;
-                true
-            },
-            Self::Paused { .. } => false,
+            Self::Paused { recheck_at } => now >= *recheck_at,
+        }
+    }
+
+    /// Paused until one recheck interval after `now`.
+    fn pausing(now: Instant) -> Self {
+        Self::Paused {
+            recheck_at: now + SWEEP_RECHECK_INTERVAL,
         }
     }
 }
@@ -458,35 +467,42 @@ mod tests {
     }
 
     #[test]
-    fn the_gate_pauses_on_a_failure_and_rechecks_each_minute() {
+    fn gate_cells() {
         let start = Instant::now();
         let at_secs = |secs| start + Duration::from_secs(secs);
-
-        assert_eq!(
-            SweepGate::Open.after_chunk(Answered, start),
-            SweepGate::Open
-        );
-        let paused = SweepGate::Open.after_chunk(Failed, at_secs(10));
-        assert_eq!(
-            paused,
-            SweepGate::Paused {
-                recheck_at: at_secs(70)
-            }
-        );
-        // Another failed chunk keeps the old recheck time.
-        assert_eq!(paused.after_chunk(Failed, at_secs(40)), paused);
-        assert_eq!(paused.after_chunk(Answered, at_secs(40)), SweepGate::Open);
-
-        let mut gate = paused;
-        assert!(!gate.admits(at_secs(69)));
-        assert!(gate.admits(at_secs(70)));
-        assert_eq!(
-            gate,
-            SweepGate::Paused {
-                recheck_at: at_secs(130)
-            }
-        );
-        assert!(!gate.admits(at_secs(71)));
+        let paused = SweepGate::Paused {
+            recheck_at: at_secs(70),
+        };
+        let paused_from = |secs: u64| SweepGate::Paused {
+            recheck_at: at_secs(secs + 60),
+        };
+        // (gate, health, now, after follow chunk, after sweep chunk)
+        let cases = [
+            (
+                SweepGate::Open,
+                Answered,
+                10,
+                SweepGate::Open,
+                SweepGate::Open,
+            ),
+            (
+                SweepGate::Open,
+                Failed,
+                10,
+                paused_from(10),
+                paused_from(10),
+            ),
+            (paused, Answered, 40, SweepGate::Open, SweepGate::Open),
+            (paused, Failed, 40, paused, paused_from(40)),
+            (paused, Failed, 80, paused, paused_from(80)),
+        ];
+        for (gate, health, now, follow, sweep) in cases {
+            assert_eq!(gate.after_follow_chunk(health, at_secs(now)), follow);
+            assert_eq!(gate.after_sweep_chunk(health, at_secs(now)), sweep);
+        }
+        for (secs, admits) in [(69, false), (70, true), (71, true)] {
+            assert_eq!(paused.admits(at_secs(secs)), admits);
+        }
         assert!(SweepGate::Open.admits(start));
     }
 

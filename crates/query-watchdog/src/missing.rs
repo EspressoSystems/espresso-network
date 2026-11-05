@@ -10,41 +10,12 @@ use strum::VariantArray;
 use crate::{
     gaps::Known,
     kind::{
-        DataKind, Epoch, EpochConfig, EpochKind, Height, PointKind, Probe, RangeKind, height_count,
+        DataKind, Epoch, EpochKind, Epochs, Height, PointKind, Probe, RangeKind, height_count,
         next_chunk,
     },
-    outcome::{
-        Failure, GapSearch, MissingReason, NotServed, Observation, RangeOutcome, Unconfirmed,
-        UnitOutcome,
-    },
+    outcome::{Observation, ProbeResult, RangeFindings},
+    state::{UnitState, transition},
 };
-
-/// First retry delay of a row.
-const RETRY_DELAY_MIN: Duration = Duration::from_secs(5);
-/// Cap of the doubling retry delay.
-const RETRY_DELAY_MAX: Duration = Duration::from_secs(600);
-/// Cap for a confirmed row, so a refilled range is noticed within a minute.
-const ALERT_RETRY_DELAY_MAX: Duration = Duration::from_secs(60);
-/// Consecutive failed probes before a row is confirmed.
-pub const ALERT_MIN_FAILED_PROBES: u32 = 3;
-
-/// `duration` as a chrono delta; delays and ages are at most days.
-fn delta(duration: Duration) -> TimeDelta {
-    TimeDelta::from_std(duration).expect("durations here fit a chrono delta")
-}
-
-/// Time since the row first went missing; rows first missing after `now` are filtered out before.
-fn age(now: DateTime<Utc>, state: &RowState) -> Duration {
-    (now - state.first_missing_at)
-        .to_std()
-        .expect("rows first missing after now are left out")
-}
-
-/// Whether `row` went missing before `other`: earlier first-missing time, then lower first unit.
-fn older(row: &MissingRow, other: &MissingRow) -> bool {
-    let key = |row: &MissingRow| (row.state.first_missing_at, row.key.first_unit());
-    key(row) < key(other)
-}
 
 /// The smallest range holding both.
 fn hull_of<T: Ord + Copy>(a: &Range<T>, b: &Range<T>) -> Range<T> {
@@ -53,54 +24,59 @@ fn hull_of<T: Ord + Copy>(a: &Range<T>, b: &Range<T>) -> Range<T> {
 
 /// Rows of `map` overlapping `heights`, whole.
 fn overlapping_rows(
-    map: &RangeMap<Height, RowState>,
+    map: &RangeMap<Height, UnitState>,
     heights: &Range<Height>,
-) -> Vec<(Range<Height>, RowState)> {
+) -> Vec<(Range<Height>, UnitState)> {
     map.overlapping(heights)
-        .map(|(range, state)| (range.clone(), state.clone()))
+        .map(|(range, state)| (range.clone(), *state))
         .collect()
 }
 
-/// The state of a point or epoch row after `outcome`; `None` when the unit is present.
-fn unit_state(
-    kind: DataKind,
-    old: Option<&RowState>,
-    outcome: UnitOutcome,
-    now: DateTime<Utc>,
-) -> Option<RowState> {
-    let UnitOutcome::Missing(not_served) = outcome else {
-        return None;
-    };
-    match old {
-        Some(old) if old.reason == MissingReason::NotFound && not_served != NotServed::NotFound => {
-            Some(old.delayed(kind, now))
-        },
-        _ => Some(RowState::merged(kind, old, not_served.into(), now)),
-    }
-}
-
-/// Applies a point or epoch observation to `rows`; whether the row changed.
+/// Applies `observation` at `now` to the unit `key` of `rows`; whether the row changed.
 fn observe_unit<K: Ord + Copy, U: Ord + Copy>(
-    rows: &mut BTreeMap<(K, U), RowState>,
+    rows: &mut BTreeMap<(K, U), UnitState>,
     key: (K, U),
-    kind: DataKind,
-    outcome: UnitOutcome,
+    observation: Observation,
     now: DateTime<Utc>,
 ) -> bool {
-    let old = rows.get(&key).cloned();
-    let new = unit_state(kind, old.as_ref(), outcome, now);
-    let changed = new != old;
+    let old = rows.get(&key).copied();
+    let new = transition(old, observation, now);
     match new {
         Some(state) => rows.insert(key, state),
         None => rows.remove(&key),
     };
-    changed
+    new != old
+}
+
+/// Applies `observation` at `now` to every unit of `piece`: the part of each row inside `piece`
+/// and the heights no row covers (read as `None`) go through `transition` and are written back.
+fn observe_piece(
+    map: &mut RangeMap<Height, UnitState>,
+    piece: Range<Height>,
+    observation: Observation,
+    now: DateTime<Utc>,
+) {
+    let mut parts: Vec<(Range<Height>, Option<UnitState>)> = map
+        .overlapping(&piece)
+        .map(|(row, state)| {
+            let inside = row.start.max(piece.start)..row.end.min(piece.end);
+            (inside, Some(*state))
+        })
+        .chain(map.gaps(&piece).map(|gap| (gap, None)))
+        .collect();
+    parts.sort_by_key(|(range, _)| range.start);
+    map.remove(piece);
+    for (range, old) in parts {
+        if let Some(new) = transition(old, observation, now) {
+            map.insert(range, new);
+        }
+    }
 }
 
 /// Removes the rows of `kind` whose unit satisfies `dropped`; the units they covered, `None` when
 /// there were none.
 fn drop_units<K: Ord + Copy, U: Ord + Copy>(
-    rows: &mut BTreeMap<(K, U), RowState>,
+    rows: &mut BTreeMap<(K, U), UnitState>,
     kind: K,
     dropped: impl Fn(U) -> bool,
     next: impl Fn(U) -> U,
@@ -115,183 +91,6 @@ fn drop_units<K: Ord + Copy, U: Ord + Copy>(
         rows.remove(&(kind, unit));
     }
     Some(first..next(last))
-}
-
-/// Pieces a failed range probe writes. A `NotFound` row only has its retry time moved, the part
-/// inside the probe. A probe inside one unconfirmed row backs that part off; otherwise unconfirmed
-/// rows stay, and the heights no row covers become fresh rows.
-fn failure_pieces(
-    kind: RangeKind,
-    map: &RangeMap<Height, RowState>,
-    before: &[(Range<Height>, RowState)],
-    heights: &Range<Height>,
-    failure: Failure,
-    now: DateTime<Utc>,
-) -> Vec<(Range<Height>, RowState)> {
-    let reason = MissingReason::Unconfirmed(Unconfirmed::Failed(failure));
-    let mut pieces: Vec<_> = before
-        .iter()
-        .filter_map(|(row, state)| {
-            if state.reason == MissingReason::NotFound {
-                let inside = row.start.max(heights.start)..row.end.min(heights.end);
-                return Some((inside, state.delayed(kind.into(), now)));
-            }
-            let covers = row.start <= heights.start && row.end >= heights.end;
-            (before.len() == 1 && covers).then(|| {
-                let backed_off = RowState::merged(kind.into(), [state], reason, now);
-                (heights.clone(), backed_off)
-            })
-        })
-        .collect();
-    pieces.extend(
-        map.gaps(heights)
-            .map(|gap| (gap, RowState::merged(kind.into(), [], reason, now))),
-    );
-    pieces
-}
-
-/// Pieces a refined search writes: each gap (`NotFound`) inheriting from the rows it overlaps, and
-/// the tail. A tail that ended on a failure keeps the `NotFound` rows under it, moving their retry
-/// time, and only the rest of it becomes unconfirmed rows.
-fn refined_pieces(
-    kind: RangeKind,
-    before: &[(Range<Height>, RowState)],
-    search: &GapSearch,
-    now: DateTime<Utc>,
-) -> Vec<(Range<Height>, RowState)> {
-    let continued = |piece: &Range<Height>, reason| {
-        let old = before
-            .iter()
-            .filter(|(row, _)| row.start < piece.end && row.end > piece.start)
-            .map(|(_, state)| state);
-        RowState::merged(kind.into(), old, reason, now)
-    };
-    let mut pieces: Vec<_> = search
-        .gaps
-        .iter()
-        .map(|gap| (gap.clone(), continued(gap, MissingReason::NotFound)))
-        .collect();
-    let Some(tail) = &search.tail else {
-        return pieces;
-    };
-    let reason = MissingReason::Unconfirmed(tail.reason);
-    if !matches!(tail.reason, Unconfirmed::Failed(_)) {
-        pieces.push((tail.heights.clone(), continued(&tail.heights, reason)));
-        return pieces;
-    }
-    let mut cursor = tail.heights.start;
-    let kept = before
-        .iter()
-        .filter(|(row, state)| {
-            state.reason == MissingReason::NotFound
-                && row.start < tail.heights.end
-                && row.end > tail.heights.start
-        })
-        .map(|(row, state)| {
-            let inside = row.start.max(tail.heights.start)..row.end.min(tail.heights.end);
-            (inside, state.delayed(kind.into(), now))
-        });
-    for (inside, state) in kept {
-        if cursor < inside.start {
-            let rest = cursor..inside.start;
-            pieces.push((rest.clone(), continued(&rest, reason)));
-        }
-        cursor = inside.end;
-        pieces.push((inside, state));
-    }
-    if cursor < tail.heights.end {
-        let rest = cursor..tail.heights.end;
-        pieces.push((rest.clone(), continued(&rest, reason)));
-    }
-    pieces
-}
-
-/// Retry and alert state shared by every unit of a row.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct RowState {
-    pub first_missing_at: DateTime<Utc>,
-    pub failed_probes: u32,
-    pub retry_delay: Duration,
-    pub next_retry_at: DateTime<Utc>,
-    pub reason: MissingReason,
-}
-
-impl RowState {
-    /// State after one more failed probe of `kind` with `reason` at `now`, continuing `old`: for
-    /// `NotFound` only the `NotFound` states of `old` count. Oldest `first_missing_at`, largest
-    /// `failed_probes + 1`, largest delay doubled under the cap (`ALERT_RETRY_DELAY_MAX` when the
-    /// result is confirmed, else `RETRY_DELAY_MAX`); nothing counted: fresh at `now`, 1 probe,
-    /// `RETRY_DELAY_MIN`. The only inheritance and backoff rule.
-    fn merged<'a>(
-        kind: DataKind,
-        old: impl IntoIterator<Item = &'a RowState>,
-        reason: MissingReason,
-        now: DateTime<Utc>,
-    ) -> RowState {
-        let counted: Vec<_> = old
-            .into_iter()
-            .filter(|state| {
-                reason != MissingReason::NotFound || state.reason == MissingReason::NotFound
-            })
-            .collect();
-        let failed_probes = counted
-            .iter()
-            .map(|state| state.failed_probes)
-            .max()
-            .map_or(1, |failed| failed + 1);
-        let first_missing_at = counted
-            .iter()
-            .map(|state| state.first_missing_at)
-            .min()
-            .unwrap_or(now);
-        let retry_delay = match counted.iter().map(|state| state.retry_delay).max() {
-            None => RETRY_DELAY_MIN,
-            Some(delay) => {
-                let cap = if is_confirmed(kind, reason, failed_probes) {
-                    ALERT_RETRY_DELAY_MAX
-                } else {
-                    RETRY_DELAY_MAX
-                };
-                (delay * 2).min(cap)
-            },
-        };
-        RowState {
-            first_missing_at,
-            failed_probes,
-            retry_delay,
-            next_retry_at: now + delta(retry_delay),
-            reason,
-        }
-    }
-
-    /// A `NotFound` row after a failure that is not a 404: only the retry time moves, the delay
-    /// doubling under the cap of its kind and state.
-    fn delayed(&self, kind: DataKind, now: DateTime<Utc>) -> RowState {
-        let cap = if self.is_confirmed(kind) {
-            ALERT_RETRY_DELAY_MAX
-        } else {
-            RETRY_DELAY_MAX
-        };
-        let retry_delay = (self.retry_delay * 2).min(cap);
-        RowState {
-            retry_delay,
-            next_retry_at: now + delta(retry_delay),
-            ..self.clone()
-        }
-    }
-
-    /// `kind.can_alert()`, reason `NotFound`, at least `ALERT_MIN_FAILED_PROBES` failed probes.
-    /// Selects the 60 s retry cap in `merged` and gates `AlertRule::fires`.
-    pub fn is_confirmed(&self, kind: DataKind) -> bool {
-        is_confirmed(kind, self.reason, self.failed_probes)
-    }
-}
-
-/// `RowState::is_confirmed` over its inputs, for `merged` before the state exists.
-fn is_confirmed(kind: DataKind, reason: MissingReason, failed_probes: u32) -> bool {
-    kind.can_alert()
-        && reason == MissingReason::NotFound
-        && failed_probes >= ALERT_MIN_FAILED_PROBES
 }
 
 /// Units one row covers.
@@ -330,7 +129,7 @@ impl RowKey {
     }
 
     /// Probe of the row's first `CHUNK_LEN` heights (`kind::next_chunk` from the start), or of the
-    /// point or epoch; the page link and the alert `url`.
+    /// point or epoch; the page link.
     pub fn first_probe(&self) -> Probe {
         match self {
             Self::Range { kind, heights } => Probe::Range {
@@ -364,18 +163,23 @@ impl RowKey {
         first..first + self.unit_count()
     }
 
-    /// Probes of the whole row, each at most `CHUNK_LEN` heights from the start; the point or
-    /// epoch probe for those kinds.
-    fn probes(&self) -> Box<dyn Iterator<Item = Probe> + '_> {
-        match self {
-            Self::Range { kind, heights } => {
-                let (kind, end) = (*kind, heights.end);
-                let chunks = std::iter::successors(next_chunk(heights.start, end), move |chunk| {
-                    next_chunk(chunk.end, end)
-                });
-                Box::new(chunks.map(move |heights| Probe::Range { kind, heights }))
+    /// The probe of the first `CHUNK_LEN` heights and the rest of a range key; point and epoch
+    /// keys have no rest.
+    pub fn split_first_chunk(self) -> (Probe, Option<RowKey>) {
+        let probe = self.first_probe();
+        match (self, &probe) {
+            (Self::Range { kind, heights }, Probe::Range { heights: chunk, .. })
+                if chunk.end < heights.end =>
+            {
+                (
+                    probe.clone(),
+                    Some(Self::Range {
+                        kind,
+                        heights: chunk.end..heights.end,
+                    }),
+                )
             },
-            key => Box::new(std::iter::once(key.first_probe())),
+            _ => (probe, None),
         }
     }
 }
@@ -384,14 +188,25 @@ impl RowKey {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MissingRow {
     pub key: RowKey,
-    pub state: RowState,
+    pub state: UnitState,
+}
+
+impl MissingRow {
+    /// Orders rows by (`first_missing_at`, first unit, kind): oldest first.
+    pub fn age_order(&self) -> (DateTime<Utc>, u64, DataKind) {
+        (
+            self.state.first_missing_at(),
+            self.key.first_unit(),
+            self.key.kind(),
+        )
+    }
 }
 
 /// The only kinds of change to a missing set.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum MissingUpdate {
     /// A probe result.
-    Observed(Observation),
+    Observed(ProbeResult),
     /// Drops heights below the window start: range rows are trimmed, point rows below go, epoch
     /// rows whose root block is below go. `ForgetBelow(Height(0))` changes nothing and returns no
     /// region (`RangeMap::remove` panics on an empty range).
@@ -438,17 +253,17 @@ pub struct ImageDiff {
 /// and touching rows differ in state (`RangeMap` coalesces equal neighbours).
 #[derive(Clone, Debug)]
 pub struct MissingSet {
-    epoch_config: Option<EpochConfig>,
-    ranges: BTreeMap<RangeKind, RangeMap<Height, RowState>>,
-    points: BTreeMap<(PointKind, Height), RowState>,
-    epoch_rows: BTreeMap<(EpochKind, Epoch), RowState>,
+    epochs: Epochs,
+    ranges: BTreeMap<RangeKind, RangeMap<Height, UnitState>>,
+    points: BTreeMap<(PointKind, Height), UnitState>,
+    epoch_rows: BTreeMap<(EpochKind, Epoch), UnitState>,
 }
 
 impl MissingSet {
     /// Empty set.
-    pub fn new(epoch_config: Option<EpochConfig>) -> Self {
+    pub fn new(epochs: Epochs) -> Self {
         Self {
-            epoch_config,
+            epochs,
             ranges: BTreeMap::new(),
             points: BTreeMap::new(),
             epoch_rows: BTreeMap::new(),
@@ -459,10 +274,10 @@ impl MissingSet {
     /// before `insert`), or touch with equal state (row count after loading below the input
     /// count).
     pub fn from_rows(
-        epoch_config: Option<EpochConfig>,
+        epochs: Epochs,
         rows: impl IntoIterator<Item = MissingRow>,
     ) -> anyhow::Result<Self> {
-        let mut set = Self::new(epoch_config);
+        let mut set = Self::new(epochs);
         let mut input_rows = 0;
         for MissingRow { key, state } in rows {
             input_rows += 1;
@@ -501,13 +316,13 @@ impl MissingSet {
         Ok(set)
     }
 
-    /// Applies one update at `now` and returns the image regions it rewrote. The only mutator.
+    /// Applies one update at `now`: a probe result applies `transition` to each piece it covers
+    /// (range rows split at piece bounds, units without a row read `None`); returns the regions it
+    /// rewrote. The only mutator.
     pub fn apply(&mut self, update: MissingUpdate, now: DateTime<Utc>) -> ImageDiff {
         let rows_before = self.row_count();
         let regions = match update {
-            MissingUpdate::Observed(observation) => {
-                self.observe(observation, now).into_iter().collect()
-            },
+            MissingUpdate::Observed(result) => self.observe(result, now).into_iter().collect(),
             MissingUpdate::ForgetBelow(window_start) => self.forget_below(window_start),
         };
         ImageDiff {
@@ -522,79 +337,58 @@ impl MissingSet {
             + self.epoch_rows.len()
     }
 
-    /// Applies one observation; the region it rewrote, `None` when nothing changed.
-    fn observe(&mut self, observation: Observation, now: DateTime<Utc>) -> Option<ImageRegion> {
-        match observation {
-            Observation::Range {
-                kind,
-                heights,
-                outcome,
-            } => self.observe_range(kind, heights, &outcome, now),
-            Observation::Point {
+    /// Applies one probe result; the region it rewrote, `None` when nothing changed.
+    fn observe(&mut self, result: ProbeResult, now: DateTime<Utc>) -> Option<ImageRegion> {
+        match result {
+            ProbeResult::Range { kind, findings } => self.observe_range(kind, &findings, now),
+            ProbeResult::Point {
                 kind,
                 height,
-                outcome,
-            } => observe_unit(&mut self.points, (kind, height), kind.into(), outcome, now)
-                .then_some(ImageRegion::Points {
+                observation,
+            } => observe_unit(&mut self.points, (kind, height), observation, now).then_some(
+                ImageRegion::Points {
                     kind,
                     heights: height..height.next(),
-                }),
-            Observation::Epoch {
+                },
+            ),
+            ProbeResult::Epoch {
                 kind,
                 epoch,
-                outcome,
-            } => observe_unit(
-                &mut self.epoch_rows,
-                (kind, epoch),
-                kind.into(),
-                outcome,
-                now,
-            )
-            .then_some(ImageRegion::Epochs {
-                kind,
-                epochs: epoch..epoch.next(),
-            }),
+                observation,
+            } => observe_unit(&mut self.epoch_rows, (kind, epoch), observation, now).then_some(
+                ImageRegion::Epochs {
+                    kind,
+                    epochs: epoch..epoch.next(),
+                },
+            ),
         }
     }
 
-    /// Applies a range outcome over `heights`; the rewritten region, `None` when nothing changed.
+    /// Applies the pieces of `findings`; the region (the hull of the probed range and the rows
+    /// overlapping it before and after) when a row changed, `None` otherwise.
     fn observe_range(
         &mut self,
         kind: RangeKind,
-        heights: Range<Height>,
-        outcome: &RangeOutcome,
+        findings: &RangeFindings,
         now: DateTime<Utc>,
     ) -> Option<ImageRegion> {
         let map = self.ranges.entry(kind).or_default();
-        let before = overlapping_rows(map, &heights);
-        let hull0 = before
+        let probed = findings.heights();
+        let before = overlapping_rows(map, probed);
+        let region = before
             .iter()
-            .fold(heights.clone(), |hull, (range, _)| hull_of(&hull, range));
-        let pieces = match outcome {
-            RangeOutcome::Present => Vec::new(),
-            RangeOutcome::Failed(failure) => {
-                failure_pieces(kind, map, &before, &heights, *failure, now)
-            },
-            RangeOutcome::Refined(search) => refined_pieces(kind, &before, search, now),
-        };
-        // A failure keeps every row; the other outcomes replace what lies in `heights`.
-        if !matches!(outcome, RangeOutcome::Failed(_)) {
-            map.remove(heights);
+            .fold(probed.clone(), |hull, (range, _)| hull_of(&hull, range));
+        for (piece, observation) in findings.pieces() {
+            observe_piece(map, piece, observation, now);
         }
-        for (range, state) in pieces {
-            map.insert(range, state);
-        }
-        let after = overlapping_rows(map, &hull0);
+        let after = overlapping_rows(map, &region);
         if before == after {
             return None;
         }
-        let hull = after
+        let heights = after
             .iter()
-            .fold(hull0, |hull, (range, _)| hull_of(&hull, range));
-        Some(ImageRegion::Range {
-            kind,
-            heights: hull,
-        })
+            .fold(region, |hull, (range, _)| hull_of(&hull, range));
+        Some(ImageRegion::Range { kind, heights })
     }
 
     /// Drops what lies below `window_start`; the rewritten regions.
@@ -621,24 +415,23 @@ impl MissingSet {
                 regions.push(ImageRegion::Points { kind, heights });
             }
         }
-        if let Some(config) = self.epoch_config {
-            for &kind in EpochKind::VARIANTS {
-                let dropped = |epoch: Epoch| {
-                    config
-                        .root_block(kind, epoch)
-                        .is_some_and(|block| block < window_start)
-                };
-                if let Some(epochs) = drop_units(&mut self.epoch_rows, kind, dropped, Epoch::next) {
-                    regions.push(ImageRegion::Epochs { kind, epochs });
-                }
+        let epochs = self.epochs;
+        for &kind in EpochKind::VARIANTS {
+            let dropped = |epoch: Epoch| {
+                epochs
+                    .root_block(kind, epoch)
+                    .is_some_and(|block| block < window_start)
+            };
+            if let Some(epochs) = drop_units(&mut self.epoch_rows, kind, dropped, Epoch::next) {
+                regions.push(ImageRegion::Epochs { kind, epochs });
             }
         }
         regions
     }
 
-    /// The epoch config the set judges epoch rows with; also the `probes` argument.
-    pub fn epoch_config(&self) -> Option<EpochConfig> {
-        self.epoch_config
+    /// The epochs the set judges epoch rows with; also the `probes` argument.
+    pub fn epochs(&self) -> Epochs {
+        self.epochs
     }
 
     /// Every row, kinds in `DataKind` order, units ascending.
@@ -649,7 +442,7 @@ impl MissingSet {
                     kind,
                     heights: heights.clone(),
                 },
-                state: state.clone(),
+                state: *state,
             })
         });
         let points = self
@@ -657,14 +450,14 @@ impl MissingSet {
             .iter()
             .map(|(&(kind, height), state)| MissingRow {
                 key: RowKey::Point { kind, height },
-                state: state.clone(),
+                state: *state,
             });
         let epochs = self
             .epoch_rows
             .iter()
             .map(|(&(kind, epoch), state)| MissingRow {
                 key: RowKey::Epoch { kind, epoch },
-                state: state.clone(),
+                state: *state,
             });
         ranges.chain(points).chain(epochs)
     }
@@ -691,7 +484,7 @@ impl MissingSet {
                 .range((*kind, heights.start)..(*kind, heights.end))
                 .map(|(&(kind, height), state)| MissingRow {
                     key: RowKey::Point { kind, height },
-                    state: state.clone(),
+                    state: *state,
                 })
                 .collect(),
             ImageRegion::Epochs { kind, epochs } => self
@@ -699,42 +492,20 @@ impl MissingSet {
                 .range((*kind, epochs.start)..(*kind, epochs.end))
                 .map(|(&(kind, epoch), state)| MissingRow {
                     key: RowKey::Epoch { kind, epoch },
-                    state: state.clone(),
+                    state: *state,
                 })
                 .collect(),
         }
     }
 
-    /// Up to `limit` probes with `next_retry_at <= now`, ordered by (`next_retry_at`, kind, first
-    /// unit); a range row longer than `CHUNK_LEN` yields consecutive probes of at most
-    /// `CHUNK_LEN` heights from its start, split by `kind::next_chunk`.
-    pub fn due(&self, now: DateTime<Utc>, limit: usize) -> Vec<Probe> {
-        let mut due: Vec<_> = self
-            .rows()
-            .filter(|row| row.state.next_retry_at <= now)
-            .collect();
-        due.sort_by_key(|row| {
-            (
-                row.state.next_retry_at,
-                row.key.kind(),
-                row.key.first_unit(),
-            )
-        });
-        due.iter()
-            .flat_map(|row| row.key.probes())
-            .take(limit)
-            .collect()
-    }
-
-    /// `Known::Gap` when `heights` lies inside one row of `kind` with reason `NotFound`, else
-    /// `Known::Missing`.
+    /// `Known::Gap` when `heights` lies inside one `NotFound` row of `kind`, else `Known::Missing`.
     pub fn known(&self, kind: RangeKind, heights: &Range<Height>) -> Known {
         let inside_not_found = self
             .ranges
             .get(&kind)
             .and_then(|map| map.get_key_value(&heights.start))
             .is_some_and(|(row, state)| {
-                row.end >= heights.end && state.reason == MissingReason::NotFound
+                row.end >= heights.end && matches!(state, UnitState::NotFound { .. })
             });
         if inside_not_found {
             Known::Gap
@@ -743,154 +514,129 @@ impl MissingSet {
         }
     }
 
-    /// The block a row is judged against the tip by: range end, point height + 1, epoch root
-    /// block (`None` without epochs or on overflow).
+    /// Range end, point height + 1, or epoch root block (`None` when `Off` or on overflow).
     pub fn alert_height(&self, key: &RowKey) -> Option<Height> {
         match key {
             RowKey::Range { heights, .. } => Some(heights.end),
             RowKey::Point { height, .. } => Some(height.next()),
-            RowKey::Epoch { kind, epoch } => self.epoch_config?.root_block(*kind, *epoch),
+            RowKey::Epoch { kind, epoch } => self.epochs.root_block(*kind, *epoch),
         }
     }
 
-    /// One entry per `DataKind`: units missing and the oldest row (`first_missing_at`, then first
-    /// unit) with its age; rows first missing after `now` are left out.
-    pub fn summary(&self, now: DateTime<Utc>) -> Vec<KindSummary> {
-        let mut by_kind: BTreeMap<DataKind, (u64, Option<MissingRow>)> = BTreeMap::new();
-        for row in self.rows().filter(|row| row.state.first_missing_at <= now) {
-            let (count, oldest) = by_kind.entry(row.key.kind()).or_default();
-            *count += row.key.unit_count();
-            if oldest.as_ref().is_none_or(|old| older(&row, old)) {
-                *oldest = Some(row);
-            }
-        }
-        DataKind::VARIANTS
+    /// One per `DataKind`: units missing, the oldest row by (`first_missing_at`, first unit), and
+    /// the confirmed units whose `alert_height` is at or below `settled_end`, split at
+    /// `counted_until`.
+    pub fn tallies(&self, settled_end: Height, counted_until: DateTime<Utc>) -> Vec<KindTally> {
+        let mut tallies: Vec<KindTally> = DataKind::VARIANTS
             .iter()
-            .map(|&kind| {
-                let (missing_count, oldest) = by_kind.remove(&kind).unwrap_or_default();
-                KindSummary {
-                    kind,
-                    missing_count,
-                    oldest: oldest.map(|row| OldestMissing {
-                        age: age(now, &row.state),
-                        key: row.key,
-                    }),
-                }
-            })
-            .collect()
-    }
-
-    /// Up to `limit` rows first missing at or before `now`, ordered by (`first_missing_at`, first
-    /// unit, kind), with ages, and the total.
-    pub fn listed(&self, now: DateTime<Utc>, limit: usize) -> ListedRows {
-        let mut rows: Vec<_> = self
-            .rows()
-            .filter(|row| row.state.first_missing_at <= now)
-            .collect();
-        let total = rows.len() as u64;
-        rows.sort_by_key(|row| {
-            (
-                row.state.first_missing_at,
-                row.key.first_unit(),
-                row.key.kind(),
-            )
-        });
-        let shown = rows
-            .into_iter()
-            .take(limit)
-            .map(|row| AgedRow {
-                age: age(now, &row.state),
-                row,
+            .map(|&kind| KindTally {
+                kind,
+                missing_count: 0,
+                oldest: None,
+                confirmed: ConfirmedUnits::default(),
             })
             .collect();
-        ListedRows { shown, total }
-    }
-
-    /// Per kind, the oldest row (`first_missing_at`, then first unit) for which `rule.fires`; rows
-    /// without an `alert_height` never fire.
-    pub fn alert_candidates(
-        &self,
-        rule: AlertRule,
-        settled_end: Height,
-        now: DateTime<Utc>,
-    ) -> Vec<AgedRow> {
-        let mut by_kind: BTreeMap<DataKind, MissingRow> = BTreeMap::new();
         for row in self.rows() {
-            let fires = self
+            let settled = self
                 .alert_height(&row.key)
-                .is_some_and(|height| rule.fires(&row, height, settled_end, now));
-            if fires
-                && by_kind
-                    .get(&row.key.kind())
-                    .is_none_or(|old| older(&row, old))
-            {
-                by_kind.insert(row.key.kind(), row);
+                .is_some_and(|height| height <= settled_end);
+            let tally = tallies
+                .iter_mut()
+                .find(|tally| tally.kind == row.key.kind())
+                .expect("a tally exists per kind");
+            tally.missing_count += row.key.unit_count();
+            if settled && row.state.is_confirmed() {
+                tally.confirmed.add(&row, counted_until);
+            }
+            let older = tally
+                .oldest
+                .as_ref()
+                .is_none_or(|old| row.age_order() < old.age_order());
+            if older {
+                tally.oldest = Some(row);
             }
         }
-        by_kind
-            .into_values()
-            .map(|row| AgedRow {
-                age: age(now, &row.state),
-                row,
-            })
-            .collect()
+        tallies
+    }
+
+    /// Up to `limit` rows by (`first_missing_at`, first unit, kind), and the total.
+    pub fn listed(&self, limit: usize) -> ListedRows {
+        let mut rows: Vec<_> = self.rows().collect();
+        let total = rows.len() as u64;
+        rows.sort_by_key(MissingRow::age_order);
+        rows.truncate(limit);
+        ListedRows { shown: rows, total }
     }
 }
 
-/// When a missing row pages.
-#[derive(Clone, Copy, Debug)]
+/// The age from which a confirmed unit counts.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct AlertRule {
     pub min_age: Duration,
 }
 
 impl AlertRule {
-    /// `RowState::is_confirmed`, first missing at least `min_age` before `now`, `alert_height` at
-    /// or below `settled_end`.
-    pub fn fires(
-        &self,
-        row: &MissingRow,
-        alert_height: Height,
-        settled_end: Height,
-        now: DateTime<Utc>,
-    ) -> bool {
-        row.state.is_confirmed(row.key.kind())
-            && row.state.first_missing_at <= now - delta(self.min_age)
-            && alert_height <= settled_end
+    /// `now - min_age`: units first missing at or before it count.
+    pub fn counted_until(&self, now: DateTime<Utc>) -> DateTime<Utc> {
+        now - TimeDelta::from_std(self.min_age).expect("min_age fits a chrono delta")
     }
 }
 
-/// State of one kind on one node.
+/// Units missing of one kind, its oldest row and its confirmed settled units; valid from the
+/// publish on.
 #[derive(Clone, Debug, PartialEq)]
-pub struct KindSummary {
+pub struct KindTally {
     pub kind: DataKind,
     pub missing_count: u64,
-    pub oldest: Option<OldestMissing>,
+    pub oldest: Option<MissingRow>,
+    pub confirmed: ConfirmedUnits,
 }
 
-/// The oldest row of a kind.
-#[derive(Clone, Debug, PartialEq)]
-pub struct OldestMissing {
-    pub key: RowKey,
-    pub age: Duration,
+/// Confirmed settled units of one kind, split at the publish's `counted_until`.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ConfirmedUnits {
+    /// Units first missing at or before the publish's `counted_until`.
+    pub aged: u64,
+    /// Younger units per `first_missing_at`; at most one entry per second of `min_age` (60 at the
+    /// default).
+    pub young: BTreeMap<DateTime<Utc>, u64>,
 }
 
-/// A row and its age at the `now` it was read; a listed row or an alert candidate.
-#[derive(Clone, Debug, PartialEq)]
-pub struct AgedRow {
-    pub row: MissingRow,
-    pub age: Duration,
+impl ConfirmedUnits {
+    /// Adds the units of the confirmed `row`, split at `counted_until`.
+    fn add(&mut self, row: &MissingRow, counted_until: DateTime<Utc>) {
+        let units = row.key.unit_count();
+        let first = row.state.first_missing_at();
+        if first <= counted_until {
+            self.aged += units;
+        } else {
+            *self.young.entry(first).or_default() += units;
+        }
+    }
+
+    /// `aged` plus the `young` units first missing at or before `counted_until`; the confirmed
+    /// missing count of a kind. A `counted_until` below the publish's (clock stepped back) still
+    /// counts every `aged` unit.
+    pub fn count(&self, counted_until: DateTime<Utc>) -> u64 {
+        self.aged
+            + self
+                .young
+                .range(..=counted_until)
+                .map(|(_, n)| n)
+                .sum::<u64>()
+    }
 }
 
 /// The oldest rows of a node and the count of all of them.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ListedRows {
-    pub shown: Vec<AgedRow>,
+    pub shown: Vec<MissingRow>,
     pub total: u64,
 }
 
 #[cfg(test)]
 mod tests {
-    use std::str::FromStr;
+    use std::{num::NonZeroU64, str::FromStr};
 
     use pretty_assertions::assert_eq;
     use proptest::{collection::vec, option, prelude::*};
@@ -899,13 +645,22 @@ mod tests {
 
     use super::*;
     use crate::{
-        kind::KindClass,
-        outcome::{FailedStatus, NotServed, Tail},
+        kind::{CHUNK_LEN, EpochConfig, KindClass},
+        outcome::{FailedStatus, RequestFailure},
+        retry::{ChunkQueue, RetryQueue},
+        state::{Retry, RetryDelay},
         store::{PersistedMissingSet, Store},
     };
 
     const T0: i64 = 1_000;
     const MIN_AGE: Duration = Duration::from_secs(60);
+
+    fn epochs(height: u64, start: u64) -> Epochs {
+        Epochs::On(EpochConfig {
+            epoch_height: NonZeroU64::new(height).unwrap(),
+            epoch_start_block: Height(start),
+        })
+    }
 
     fn at(secs: i64) -> DateTime<Utc> {
         DateTime::from_timestamp(secs, 0).unwrap()
@@ -915,98 +670,53 @@ mod tests {
         Height(range.start)..Height(range.end)
     }
 
-    fn status(code: StatusCode) -> Failure {
-        Failure::Status(FailedStatus::new(code).unwrap())
+    fn server_error() -> RequestFailure {
+        RequestFailure::Status(FailedStatus::new(StatusCode::INTERNAL_SERVER_ERROR).unwrap())
     }
 
-    fn server_error() -> Failure {
-        status(StatusCode::INTERNAL_SERVER_ERROR)
-    }
-
-    fn observe(set: &mut MissingSet, observation: Observation, secs: i64) -> ImageDiff {
-        set.apply(MissingUpdate::Observed(observation), at(secs))
-    }
-
-    fn range_obs(kind: RangeKind, range: Range<u64>, outcome: RangeOutcome) -> Observation {
-        Observation::Range {
+    fn range_result(kind: RangeKind, range: Range<u64>, observation: Observation) -> ProbeResult {
+        ProbeResult::Range {
             kind,
-            heights: h(range),
-            outcome,
+            findings: RangeFindings::uniform(h(range), observation),
         }
     }
 
-    /// A 404 whose search found the whole range missing.
-    fn gap_obs(kind: RangeKind, range: Range<u64>) -> Observation {
-        let outcome = RangeOutcome::Refined(GapSearch {
-            gaps: vec![h(range.clone())],
-            tail: None,
-        });
-        range_obs(kind, range, outcome)
+    /// A range whose search found one `gap` and left the rest present.
+    fn gap_result(kind: RangeKind, range: Range<u64>, gap: Range<u64>) -> ProbeResult {
+        let mut findings = RangeFindings::new(h(range));
+        findings.mark(h(gap), Observation::NotFound);
+        ProbeResult::Range { kind, findings }
     }
 
-    fn failed_obs(kind: RangeKind, range: Range<u64>) -> Observation {
-        range_obs(kind, range, RangeOutcome::Failed(server_error()))
-    }
-
-    fn present_obs(kind: RangeKind, range: Range<u64>) -> Observation {
-        range_obs(kind, range, RangeOutcome::Present)
-    }
-
-    fn refined_obs(
-        kind: RangeKind,
-        range: Range<u64>,
-        gaps: &[Range<u64>],
-        tail: Option<(Range<u64>, Unconfirmed)>,
-    ) -> Observation {
-        let outcome = RangeOutcome::Refined(GapSearch {
-            gaps: gaps.iter().cloned().map(h).collect(),
-            tail: tail.map(|(heights, reason)| Tail {
-                heights: h(heights),
-                reason,
-            }),
-        });
-        range_obs(kind, range, outcome)
-    }
-
-    fn one(range: Range<u64>) -> Vec<Range<u64>> {
-        vec![range]
-    }
-
-    fn point_obs(kind: PointKind, height: u64, outcome: UnitOutcome) -> Observation {
-        Observation::Point {
+    fn point_result(kind: PointKind, height: u64, observation: Observation) -> ProbeResult {
+        ProbeResult::Point {
             kind,
             height: Height(height),
-            outcome,
+            observation,
         }
     }
 
-    fn epoch_obs(kind: EpochKind, epoch: u64, outcome: UnitOutcome) -> Observation {
-        Observation::Epoch {
+    fn epoch_result(kind: EpochKind, epoch: u64, observation: Observation) -> ProbeResult {
+        ProbeResult::Epoch {
             kind,
             epoch: Epoch(epoch),
-            outcome,
+            observation,
         }
     }
 
-    fn missing(not_served: NotServed) -> UnitOutcome {
-        UnitOutcome::Missing(not_served)
+    fn observe(set: &mut MissingSet, result: ProbeResult, secs: i64) -> ImageDiff {
+        set.apply(MissingUpdate::Observed(result), at(secs))
     }
 
-    fn count(set: &MissingSet, now: i64, kind: DataKind) -> u64 {
-        set.summary(at(now))
-            .iter()
-            .find(|summary| summary.kind == kind)
-            .unwrap()
-            .missing_count
+    /// `times` observations at `first`, `first + 1`, ...
+    fn repeat(set: &mut MissingSet, result: &ProbeResult, times: i64, first: i64) {
+        for i in 0..times {
+            observe(set, result.clone(), first + i);
+        }
     }
 
-    fn oldest(set: &MissingSet, now: i64, kind: DataKind) -> OldestMissing {
-        set.summary(at(now))
-            .into_iter()
-            .find(|summary| summary.kind == kind)
-            .unwrap()
-            .oldest
-            .unwrap()
+    fn leaf_gap(range: Range<u64>) -> ProbeResult {
+        range_result(RangeKind::Leaf, range, Observation::NotFound)
     }
 
     fn range_key(kind: RangeKind, range: Range<u64>) -> RowKey {
@@ -1016,59 +726,70 @@ mod tests {
         }
     }
 
-    /// Listed rows as `(key, age seconds)`.
-    fn listed(set: &MissingSet, now: i64) -> Vec<(RowKey, u64)> {
-        set.listed(at(now), 100)
-            .shown
+    fn tally(set: &MissingSet, kind: DataKind) -> KindTally {
+        set.tallies(Height(10_000), at(T0 + 10_000))
             .into_iter()
-            .map(|aged| (aged.row.key, aged.age.as_secs()))
+            .find(|tally| tally.kind == kind)
+            .unwrap()
+    }
+
+    fn count(set: &MissingSet, kind: DataKind) -> u64 {
+        tally(set, kind).missing_count
+    }
+
+    fn keys(set: &MissingSet) -> Vec<RowKey> {
+        set.rows().map(|row| row.key).collect()
+    }
+
+    /// Confirmed settled units of every kind that count at `counted_until`.
+    fn confirmed_count(
+        set: &MissingSet,
+        settled_end: u64,
+        counted_until: i64,
+    ) -> Vec<(DataKind, u64)> {
+        let rule = AlertRule { min_age: MIN_AGE };
+        let counted_until = rule.counted_until(at(counted_until));
+        set.tallies(Height(settled_end), counted_until)
+            .into_iter()
+            .map(|tally| (tally.kind, tally.confirmed.count(counted_until)))
+            .filter(|(_, count)| *count > 0)
             .collect()
     }
 
-    fn rule() -> AlertRule {
-        AlertRule { min_age: MIN_AGE }
-    }
-
     #[test]
-    fn missing_backoff_and_summary() {
-        let mut set = MissingSet::new(Some(EpochConfig {
-            epoch_height: 30,
-            epoch_start_block: 61,
-        }));
+    fn missing_backoff_and_tallies() {
+        let mut set = MissingSet::new(epochs(30, 61));
         assert!(
-            set.summary(at(T0))
+            set.tallies(Height(1_000), at(T0))
                 .iter()
-                .all(|k| k.missing_count == 0 && k.oldest.is_none())
+                .all(|t| t.missing_count == 0 && t.oldest.is_none())
         );
-        assert_eq!(set.summary(at(T0)).len(), DataKind::VARIANTS.len());
+        assert_eq!(
+            set.tallies(Height(1_000), at(T0)).len(),
+            DataKind::VARIANTS.len()
+        );
 
-        let leaf = Probe::Range {
-            kind: RangeKind::Leaf,
-            heights: h(0..100),
-        };
-        observe(&mut set, gap_obs(RangeKind::Leaf, 0..100), T0);
+        observe(&mut set, leaf_gap(0..100), T0);
         observe(
             &mut set,
-            epoch_obs(EpochKind::StakeTable, 5, missing(NotServed::NotFound)),
+            epoch_result(EpochKind::StakeTable, 5, Observation::NotFound),
             T0 + 50,
         );
-        assert!(set.due(at(T0 + 4), 10).is_empty());
-        assert_eq!(set.due(at(T0 + 5), 10), std::slice::from_ref(&leaf));
+        let next_at = |set: &MissingSet| set.rows().next().unwrap().state.retry().next_at;
+        assert_eq!(next_at(&set), at(T0 + 5));
 
-        // The delay doubles from 5 s; a 404 row with 3 failed probes stops at 60 s.
+        // The delay doubles from 5 s; a row with 3 404s stops at 60 s.
         let mut now = T0 + 5;
         for delay in [10, 20, 40, 60, 60, 60] {
-            observe(&mut set, gap_obs(RangeKind::Leaf, 0..100), now);
-            assert!(!set.due(at(now + delay - 1), 10).contains(&leaf));
-            assert!(set.due(at(now + delay), 10).contains(&leaf));
+            observe(&mut set, leaf_gap(0..100), now);
+            assert_eq!(next_at(&set), at(now + delay));
             now += delay;
         }
 
-        let leaf_oldest = oldest(&set, T0 + 100, DataKind::Leaf);
-        assert_eq!(leaf_oldest.key, range_key(RangeKind::Leaf, 0..100));
-        assert_eq!(leaf_oldest.age, Duration::from_secs(100));
-        assert_eq!(count(&set, T0 + 100, DataKind::Leaf), 100);
-        assert_eq!(count(&set, T0 + 100, DataKind::StakeTable), 1);
+        let leaf = tally(&set, DataKind::Leaf);
+        assert_eq!(leaf.oldest.unwrap().key, range_key(RangeKind::Leaf, 0..100));
+        assert_eq!(leaf.missing_count, 100);
+        assert_eq!(count(&set, DataKind::StakeTable), 1);
 
         // A later row does not displace the oldest. Touching rows with the same state merge.
         for (kind, range, secs) in [
@@ -1076,24 +797,19 @@ mod tests {
             (RangeKind::Block, 300..400, 30),
             (RangeKind::Block, 200..300, 30),
         ] {
-            observe(&mut set, gap_obs(kind, range), T0 + secs);
+            observe(
+                &mut set,
+                range_result(kind, range, Observation::NotFound),
+                T0 + secs,
+            );
         }
-        assert_eq!(count(&set, T0 + 100, DataKind::Leaf), 200);
-        assert_eq!(
-            oldest(&set, T0 + 100, DataKind::Leaf).key,
-            range_key(RangeKind::Leaf, 0..100)
-        );
-        assert_eq!(count(&set, T0 + 100, DataKind::Block), 200);
-        let block = oldest(&set, T0 + 100, DataKind::Block);
+        assert_eq!(count(&set, DataKind::Leaf), 200);
+        assert_eq!(count(&set, DataKind::Block), 200);
+        let block = tally(&set, DataKind::Block).oldest.unwrap();
         assert_eq!(block.key, range_key(RangeKind::Block, 200..400));
-        assert_eq!(block.age, Duration::from_secs(70));
 
-        // A row first missing after `now` is ignored instead of failing the age.
-        observe(&mut set, gap_obs(RangeKind::Leaf, 900..1000), T0 + 500);
-        assert_eq!(count(&set, T0 + 100, DataKind::Leaf), 200);
-
-        let page = set.listed(at(T0 + 100), 3);
-        let order: Vec<_> = page.shown.iter().map(|aged| aged.row.key.clone()).collect();
+        let page = set.listed(3);
+        let order: Vec<_> = page.shown.iter().map(|row| row.key.clone()).collect();
         assert_eq!(
             order,
             [
@@ -1103,69 +819,36 @@ mod tests {
             ]
         );
         assert_eq!(page.total, 4);
-
-        let other = MissingSet::new(None);
-        assert_eq!(
-            other
-                .summary(at(T0))
-                .iter()
-                .map(|k| k.missing_count)
-                .sum::<u64>(),
-            0
-        );
-    }
-
-    /// One failed probe of `kind` over `[0, 100)` (height 99 for point kinds), as the loop sees a
-    /// 404 (`NotFound`) or a 500.
-    fn fail_kind(set: &mut MissingSet, kind: DataKind, not_found: bool, secs: i64) {
-        let observation = match kind.class() {
-            KindClass::Range(kind) if not_found => gap_obs(kind, 0..100),
-            KindClass::Range(kind) => failed_obs(kind, 0..100),
-            KindClass::Point(kind) => point_obs(
-                kind,
-                99,
-                missing(if not_found {
-                    NotServed::NotFound
-                } else {
-                    NotServed::Failed(server_error())
-                }),
-            ),
-            KindClass::Epoch(_) => unreachable!("range and point kinds only"),
-        };
-        observe(set, observation, secs);
     }
 
     #[test]
-    fn retry_delay_stops_at_a_minute_only_for_alerting_rows() {
+    fn rows_first_missing_after_now_count_as_missing_and_never_as_confirmed() {
+        let mut set = MissingSet::new(Epochs::Off);
+        repeat(&mut set, &leaf_gap(0..10), 3, T0 + 500);
+        assert_eq!(count(&set, DataKind::Leaf), 10);
+        // Counted at a `counted_until` before the row went missing: not confirmed missing.
+        assert_eq!(confirmed_count(&set, 1_000, T0 + 100), []);
+        assert_eq!(set.listed(10).total, 1);
+    }
+
+    #[test]
+    fn retry_delay_stops_at_a_minute_only_for_confirmed_rows() {
         let cases = [
-            (DataKind::Leaf, true, vec![10, 20, 40, 60, 60]),
-            // The aggregate never alerts, so its 404 rows back off up to 600 s.
+            (Observation::NotFound, vec![10, 20, 40, 60, 60]),
             (
-                DataKind::Aggregate,
-                true,
-                vec![10, 20, 40, 80, 160, 320, 600, 600],
-            ),
-            (
-                DataKind::Block,
-                false,
+                Observation::Failed(server_error()),
                 vec![10, 20, 40, 80, 160, 320, 600, 600],
             ),
         ];
-        for (kind, not_found, delays) in cases {
-            let mut set = MissingSet::new(None);
-            fail_kind(&mut set, kind, not_found, T0);
+        for (observation, delays) in cases {
+            let mut set = MissingSet::new(Epochs::Off);
+            let result = point_result(PointKind::LcLeafProof, 99, observation);
+            observe(&mut set, result.clone(), T0);
             let mut now = T0 + 5;
             for delay in delays {
-                fail_kind(&mut set, kind, not_found, now);
-                assert!(
-                    set.due(at(now + delay - 1), 10).is_empty(),
-                    "{kind:?} before {delay}"
-                );
-                assert_eq!(
-                    set.due(at(now + delay), 10).len(),
-                    1,
-                    "{kind:?} after {delay}"
-                );
+                observe(&mut set, result.clone(), now);
+                let next_at = set.rows().next().unwrap().state.retry().next_at;
+                assert_eq!(next_at, at(now + delay), "{observation:?} {delay}");
                 now += delay;
             }
         }
@@ -1173,767 +856,720 @@ mod tests {
 
     #[test]
     fn rows_of_single_heights_stay_apart() {
-        // Follow probed up to 1107 and found height 1106 missing; the sweep chunk 1100..1200
-        // probes only height 1199. The two rows are keyed by the heights they probed.
-        let mut set = MissingSet::new(None);
+        let mut set = MissingSet::new(Epochs::Off);
         let kind = PointKind::LcLeafProof;
         observe(
             &mut set,
-            point_obs(kind, 1106, missing(NotServed::NotFound)),
+            point_result(kind, 1106, Observation::NotFound),
             T0,
         );
-
         observe(
             &mut set,
-            point_obs(kind, 1199, UnitOutcome::Present),
+            point_result(kind, 1199, Observation::Present),
             T0 + 1,
         );
-        assert_eq!(
-            count(&set, T0 + 2, kind.into()),
-            1,
-            "1199 present keeps 1106"
-        );
-
+        assert_eq!(count(&set, kind.into()), 1, "1199 present keeps 1106");
         observe(
             &mut set,
-            point_obs(kind, 1199, missing(NotServed::NotFound)),
+            point_result(kind, 1199, Observation::NotFound),
             T0 + 3,
         );
-        assert_eq!(count(&set, T0 + 4, kind.into()), 2);
-        let due = set.due(at(T0 + 1_000), 10);
-        assert_eq!(due.len(), 2, "{due:?}");
-
+        assert_eq!(count(&set, kind.into()), 2);
         observe(
             &mut set,
-            point_obs(kind, 1106, UnitOutcome::Present),
+            point_result(kind, 1106, Observation::Present),
             T0 + 5,
         );
-        assert_eq!(count(&set, T0 + 6, kind.into()), 1);
+        assert_eq!(count(&set, kind.into()), 1);
+    }
+
+    #[test]
+    fn point_kinds_count_one_per_row() {
+        let mut set = MissingSet::new(Epochs::Off);
+        observe(
+            &mut set,
+            point_result(PointKind::LcLeafProof, 99, Observation::NotFound),
+            T0,
+        );
+        assert_eq!(count(&set, DataKind::LcLeafProof), 1);
     }
 
     #[test]
     fn an_exact_gap_found_in_a_failed_row_starts_fresh() {
-        let mut set = MissingSet::new(None);
-        for secs in 0..3 {
-            observe(&mut set, failed_obs(RangeKind::Leaf, 0..100), T0 + secs);
-        }
+        let mut set = MissingSet::new(Epochs::Off);
+        let failed = range_result(RangeKind::Leaf, 0..100, Observation::Failed(server_error()));
+        repeat(&mut set, &failed, 3, T0);
 
-        // Refining the wide row finds a gap: a new 404 row, not a continuation of the 500s.
         observe(
             &mut set,
-            refined_obs(RangeKind::Leaf, 0..100, &one(10..20), None),
+            gap_result(RangeKind::Leaf, 0..100, 10..20),
             T0 + 100,
         );
         let rows: Vec<_> = set.rows().collect();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].key, range_key(RangeKind::Leaf, 10..20));
-        assert_eq!(rows[0].state.failed_probes, 1);
-        assert_eq!(rows[0].state.first_missing_at, at(T0 + 100));
-        let zero_age = AlertRule {
-            min_age: Duration::ZERO,
-        };
-        assert!(
-            set.alert_candidates(zero_age, Height(1_000), at(T0 + 100))
-                .is_empty(),
-            "no alert before 3 probes of its own"
-        );
+        assert_eq!(rows[0].state.probe_count().get(), 1);
+        assert_eq!(rows[0].state.first_missing_at(), at(T0 + 100));
+        assert_eq!(confirmed_count(&set, 1_000, T0 + 200), []);
 
-        // Two more 404 probes of the gap bring it to 3 and it alerts, with its own age.
-        for secs in [101, 102] {
-            observe(&mut set, gap_obs(RangeKind::Leaf, 10..20), T0 + secs);
-        }
-        let alerting = set.alert_candidates(zero_age, Height(1_000), at(T0 + 102));
-        assert_eq!(alerting.len(), 1);
-        assert_eq!(alerting[0].age.as_secs(), 2);
+        repeat(&mut set, &leaf_gap(10..20), 2, T0 + 101);
+        assert_eq!(
+            confirmed_count(&set, 1_000, T0 + 200),
+            [(DataKind::Leaf, 10)]
+        );
     }
 
     #[test]
     fn epoch_rows_before_the_root_lag_depend_on_block_zero() {
-        let epoch_config = EpochConfig {
-            epoch_height: 100,
-            epoch_start_block: 1,
-        };
-        let mut set = MissingSet::new(Some(epoch_config));
-        for secs in 0..3 {
-            observe(
-                &mut set,
-                epoch_obs(EpochKind::StakeTable, 1, missing(NotServed::NotFound)),
-                T0 + secs,
-            );
-        }
-        let found = set.alert_candidates(rule(), Height(0), at(T0 + 60));
-        assert_eq!(found.len(), 1, "epoch 1 of a stake table rests on block 0");
+        let mut set = MissingSet::new(epochs(100, 1));
+        repeat(
+            &mut set,
+            &epoch_result(EpochKind::StakeTable, 1, Observation::NotFound),
+            3,
+            T0,
+        );
+        assert_eq!(
+            confirmed_count(&set, 0, T0 + 200),
+            [(DataKind::StakeTable, 1)],
+            "epoch 1 of a stake table rests on block 0"
+        );
         let diff = set.apply(MissingUpdate::ForgetBelow(Height(1)), at(T0 + 60));
         assert_eq!(diff.rows_removed, 1);
     }
 
     #[test]
     fn found_trims_rows_to_the_heights_still_missing() {
-        let mut set = MissingSet::new(None);
-        observe(&mut set, gap_obs(RangeKind::Leaf, 100..200), T0);
-        observe(&mut set, gap_obs(RangeKind::Leaf, 100..150), T0 + 1);
-        assert_eq!(count(&set, T0 + 2, DataKind::Leaf), 100);
+        let mut set = MissingSet::new(Epochs::Off);
+        observe(&mut set, leaf_gap(100..200), T0);
+        observe(&mut set, leaf_gap(100..150), T0 + 1);
+        assert_eq!(count(&set, DataKind::Leaf), 100);
 
-        observe(&mut set, present_obs(RangeKind::Leaf, 100..150), T0 + 2);
-        assert_eq!(count(&set, T0 + 2, DataKind::Leaf), 50);
-        assert_eq!(
-            oldest(&set, T0 + 2, DataKind::Leaf).key,
-            range_key(RangeKind::Leaf, 150..200)
+        let present = |range| range_result(RangeKind::Leaf, range, Observation::Present);
+        observe(&mut set, present(100..150), T0 + 2);
+        assert_eq!(count(&set, DataKind::Leaf), 50);
+        assert_eq!(keys(&set), [range_key(RangeKind::Leaf, 150..200)]);
+        observe(&mut set, present(100..200), T0 + 2);
+        assert_eq!(count(&set, DataKind::Leaf), 0);
+    }
+
+    #[test]
+    fn found_keeps_the_part_of_a_row_that_crosses_its_edge() {
+        let mut set = MissingSet::new(Epochs::Off);
+        observe(&mut set, leaf_gap(100..200), T0);
+        let present = range_result(RangeKind::Leaf, 150..250, Observation::Present);
+        observe(&mut set, present, T0 + 1);
+        assert_eq!(keys(&set), [range_key(RangeKind::Leaf, 100..150)]);
+    }
+
+    #[test]
+    fn found_clears_exact_keys_of_point_kinds() {
+        let mut set = MissingSet::new(Epochs::Off);
+        let kind = PointKind::LcLeafProof;
+        for height in [5, 6] {
+            observe(
+                &mut set,
+                point_result(kind, height, Observation::NotFound),
+                T0,
+            );
+        }
+        observe(
+            &mut set,
+            point_result(kind, 5, Observation::Present),
+            T0 + 1,
         );
-
-        observe(&mut set, present_obs(RangeKind::Leaf, 100..200), T0 + 2);
-        assert_eq!(count(&set, T0 + 2, DataKind::Leaf), 0);
+        assert_eq!(
+            keys(&set),
+            [RowKey::Point {
+                kind,
+                height: Height(6)
+            }]
+        );
     }
 
     #[test]
     fn forget_below_window_start() {
-        let epoch_config = EpochConfig {
-            epoch_height: 25,
-            epoch_start_block: 1,
-        };
-        let mut set = MissingSet::new(Some(epoch_config));
-        let not_found = missing(NotServed::NotFound);
+        let mut set = MissingSet::new(epochs(25, 1));
         for range in [0..60, 80..140, 150..200] {
-            observe(&mut set, gap_obs(RangeKind::Leaf, range), T0);
+            observe(&mut set, leaf_gap(range), T0);
         }
         for height in [99, 150] {
             observe(
                 &mut set,
-                point_obs(PointKind::LcLeafProof, height, not_found),
+                point_result(PointKind::LcLeafProof, height, Observation::NotFound),
                 T0,
             );
         }
         for epoch in [3, 4] {
             observe(
                 &mut set,
-                epoch_obs(EpochKind::StateCert, epoch, not_found),
+                epoch_result(EpochKind::StateCert, epoch, Observation::NotFound),
                 T0,
             );
         }
         for epoch in [5, 6] {
             observe(
                 &mut set,
-                epoch_obs(EpochKind::StakeTable, epoch, not_found),
+                epoch_result(EpochKind::StakeTable, epoch, Observation::NotFound),
                 T0,
             );
         }
 
         // Window starts at 100. Leaf 0..60 and lc_leaf_proof 99 end below it and go; leaf 80..140
-        // crosses it and is trimmed to 100..140. The state cert of epoch 3 depends on block 75 and
-        // goes, epoch 4 on block 100 and stays. The stake table of epoch 5 depends on block 75
-        // (two epochs back) and goes, epoch 6 on block 100 and stays.
+        // is trimmed to 100..140. The state cert of epoch 3 depends on block 75 and goes, epoch 4
+        // on block 100 and stays. The stake table of epoch 5 depends on block 75 and goes, epoch
+        // 6 on block 100 and stays.
         let diff = set.apply(MissingUpdate::ForgetBelow(Height(100)), at(T0));
         assert_eq!(diff.rows_removed, 4);
-        assert_eq!(count(&set, T0, DataKind::Leaf), 90);
+        assert_eq!(count(&set, DataKind::Leaf), 90);
         assert_eq!(
-            oldest(&set, T0, DataKind::Leaf).key,
+            tally(&set, DataKind::Leaf).oldest.unwrap().key,
             range_key(RangeKind::Leaf, 100..140)
         );
-        assert_eq!(count(&set, T0, DataKind::LcLeafProof), 1);
-        assert_eq!(count(&set, T0, DataKind::StateCert), 1);
-        assert_eq!(count(&set, T0, DataKind::StakeTable), 1);
+        assert_eq!(count(&set, DataKind::LcLeafProof), 1);
+        assert_eq!(count(&set, DataKind::StateCert), 1);
+        assert_eq!(count(&set, DataKind::StakeTable), 1);
     }
 
     #[test]
-    fn refined_inherits_age_and_backoff() {
-        let mut set = MissingSet::new(None);
-        observe(&mut set, gap_obs(RangeKind::Leaf, 0..100), T0);
-        observe(&mut set, gap_obs(RangeKind::Leaf, 0..100), T0 + 5);
-
-        observe(
-            &mut set,
-            refined_obs(RangeKind::Leaf, 0..100, &[10..20, 50..60], None),
-            T0 + 30,
-        );
-        assert_eq!(count(&set, T0 + 100, DataKind::Leaf), 20);
-        let leaf = oldest(&set, T0 + 100, DataKind::Leaf);
+    fn forget_below_zero_changes_nothing() {
+        let mut set = MissingSet::new(Epochs::Off);
+        observe(&mut set, leaf_gap(0..10), T0);
+        let diff = set.apply(MissingUpdate::ForgetBelow(Height(0)), at(T0));
         assert_eq!(
-            (leaf.key, leaf.age),
-            (range_key(RangeKind::Leaf, 10..20), Duration::from_secs(100))
+            diff,
+            ImageDiff {
+                regions: vec![],
+                rows_removed: 0
+            }
         );
-        // The old delay was 10 s, so the new rows retry 20 s after the replacement.
-        assert!(set.due(at(T0 + 49), 10).is_empty());
-        assert_eq!(set.due(at(T0 + 50), 10).len(), 2);
-
-        observe(
-            &mut set,
-            refined_obs(RangeKind::Leaf, 100..200, &one(120..130), None),
-            T0 + 40,
-        );
-        assert_eq!(set.due(at(T0 + 45), 10).len(), 1);
-
-        observe(&mut set, present_obs(RangeKind::Leaf, 0..100), T0 + 100);
-        assert_eq!(count(&set, T0 + 100, DataKind::Leaf), 10);
+        assert_eq!(count(&set, DataKind::Leaf), 10);
     }
 
     #[test]
-    fn point_kinds_count_one_per_row() {
-        let mut set = MissingSet::new(None);
-        for kind in [PointKind::LcLeafProof, PointKind::Aggregate] {
-            observe(
-                &mut set,
-                point_obs(kind, 99, missing(NotServed::NotFound)),
-                T0,
-            );
-        }
-        assert_eq!(count(&set, T0, DataKind::LcLeafProof), 1);
-        assert_eq!(count(&set, T0, DataKind::Aggregate), 1);
-    }
-
-    /// `times` observations of a missing unit or range at `first`, `first + 1`, ...
-    fn repeat(set: &mut MissingSet, observation: &Observation, times: i64, first: i64) {
-        for i in 0..times {
-            observe(set, observation.clone(), first + i);
-        }
-    }
-
-    #[test]
-    fn alert_candidates_apply_every_condition() {
-        let epoch_config = EpochConfig {
-            epoch_height: 100,
-            epoch_start_block: 1,
-        };
-        let mut set = MissingSet::new(Some(epoch_config));
-        let not_found = missing(NotServed::NotFound);
-        repeat(&mut set, &gap_obs(RangeKind::Leaf, 100..200), 3, T0);
-        repeat(&mut set, &gap_obs(RangeKind::Leaf, 50..100), 3, T0 + 10);
-        repeat(&mut set, &failed_obs(RangeKind::Block, 100..200), 3, T0);
-        repeat(&mut set, &gap_obs(RangeKind::VidCommon, 100..200), 2, T0);
-        repeat(
-            &mut set,
-            &point_obs(PointKind::LcLeafProof, 199, not_found),
-            3,
-            T0 + 50,
-        );
-        for height in [999, 499] {
-            repeat(
-                &mut set,
-                &point_obs(PointKind::Aggregate, height, not_found),
-                3,
-                T0,
-            );
-        }
-        repeat(
-            &mut set,
-            &epoch_obs(EpochKind::StateCert, 3, not_found),
-            3,
-            T0,
-        );
-        for epoch in [8, 7] {
-            repeat(
-                &mut set,
-                &epoch_obs(EpochKind::StakeTable, epoch, not_found),
-                3,
-                T0,
-            );
-        }
-
-        let now = at(T0 + 60);
-        let summary = |set: &MissingSet, now| -> Vec<_> {
-            set.alert_candidates(rule(), Height(500), now)
-                .iter()
-                .map(|c| {
-                    (
-                        c.row.key.kind(),
-                        c.row.key.first_unit(),
-                        c.age.as_secs(),
-                        c.row.state.failed_probes,
-                    )
-                })
-                .collect()
-        };
-        // Not alerting: block (500), vid_common (2 probes), lc_leaf_proof (too young), aggregate
-        // (never), and the stake_table row past the margin. Leaf takes the older of its two rows.
-        // A stake table depends on the block two epochs back: epoch 7 on block 500, exactly the
-        // margin, so it alerts; epoch 8 on block 600 does not.
+    fn a_gap_continues_each_unit_and_new_units_start_fresh() {
+        let mut set = MissingSet::new(Epochs::Off);
+        let leaf = RangeKind::Leaf;
+        observe(&mut set, leaf_gap(100..200), T0);
+        observe(&mut set, leaf_gap(100..200), T0 + 5);
+        // A gap over the old row and 50 new heights.
+        observe(&mut set, leaf_gap(150..250), T0 + 30);
+        let rows: Vec<_> = set.rows().collect();
+        let shape: Vec<_> = rows
+            .iter()
+            .map(|row| {
+                (
+                    row.key.units(),
+                    row.state.first_missing_at(),
+                    row.state.probe_count().get(),
+                )
+            })
+            .collect();
         assert_eq!(
-            summary(&set, now),
+            shape,
             [
-                (DataKind::Leaf, 100, 60, 3),
-                (DataKind::StakeTable, 7, 60, 3),
-                (DataKind::StateCert, 3, 60, 3),
+                (100..150, at(T0), 2),
+                (150..200, at(T0), 3),
+                (200..250, at(T0 + 30), 1)
             ]
         );
-
-        // A 404 after 500s starts the row afresh: the 500s do not count toward the alert.
-        observe(&mut set, gap_obs(RangeKind::Block, 100..200), T0 + 3);
-        assert!(summary(&set, now).iter().all(|c| c.0 != DataKind::Block));
-        repeat(&mut set, &gap_obs(RangeKind::Block, 100..200), 2, T0 + 4);
-        let found = summary(&set, at(T0 + 70));
-        let block = found.iter().find(|c| c.0 == DataKind::Block).unwrap();
-        assert_eq!(block.3, 3);
+        assert_eq!(rows[0].key, range_key(leaf, 100..150));
     }
 
     #[test]
-    fn refinement_inherits_failed_probes_and_unconfirmed_never_alerts() {
-        let mut set = MissingSet::new(None);
-        for secs in [0, 5] {
-            observe(&mut set, gap_obs(RangeKind::Leaf, 0..100), T0 + secs);
-        }
-        let tail = (50..100, Unconfirmed::Failed(server_error()));
+    fn a_failed_chunk_probe_backs_off_failed_and_delays_not_found() {
+        let mut set = MissingSet::new(Epochs::Off);
+        let leaf = RangeKind::Leaf;
+        repeat(&mut set, &leaf_gap(100..200), 3, T0);
+        let failed = Observation::Failed(server_error());
         observe(
             &mut set,
-            refined_obs(RangeKind::Leaf, 0..100, &one(10..20), Some(tail)),
-            T0 + 30,
+            range_result(RangeKind::Leaf, 100..300, failed),
+            T0 + 10,
         );
-        let found = set.alert_candidates(rule(), Height(1000), at(T0 + 100));
-        let rows: Vec<_> = found
-            .iter()
-            .map(|c| (c.row.key.clone(), c.row.state.failed_probes))
-            .collect();
-        assert_eq!(rows, [(range_key(RangeKind::Leaf, 10..20), 3)]);
-    }
-
-    #[test]
-    fn found_keeps_the_part_of_a_row_that_crosses_its_edge() {
-        let mut set = MissingSet::new(None);
-        observe(&mut set, gap_obs(RangeKind::Block, 90..120), T0);
-        observe(&mut set, present_obs(RangeKind::Block, 100..200), T0 + 10);
+        let rows: Vec<_> = set.rows().collect();
         assert_eq!(
-            listed(&set, T0 + 10),
-            [(range_key(RangeKind::Block, 90..100), 10)]
+            rows.iter().map(|r| r.key.clone()).collect::<Vec<_>>(),
+            [range_key(leaf, 100..200), range_key(leaf, 200..300)]
         );
-    }
+        // Not found: count and first time kept, delay doubled under the 60 s cap.
+        let UnitState::NotFound {
+            first_missing_at,
+            not_found_probes,
+            retry,
+        } = rows[0].state
+        else {
+            panic!("{:?}", rows[0].state);
+        };
+        assert_eq!((first_missing_at, not_found_probes.get()), (at(T0), 3));
+        assert_eq!(retry.next_at, at(T0 + 10 + 40));
+        // Heights no row covered start as failed rows.
+        assert!(matches!(rows[1].state, UnitState::Failed { .. }));
 
-    #[test]
-    fn found_clears_exact_keys_of_point_kinds() {
-        let mut set = MissingSet::new(None);
-        let kind = PointKind::LcLeafProof;
-        for height in [199, 179] {
-            observe(
-                &mut set,
-                point_obs(kind, height, missing(NotServed::NotFound)),
-                T0,
-            );
-        }
-        observe(&mut set, point_obs(kind, 199, UnitOutcome::Present), T0);
-        assert_eq!(
-            count(&set, T0, kind.into()),
-            1,
-            "only the row at the same height goes"
-        );
+        // A second failure backs the failed row off and keeps its first time.
+        observe(&mut set, range_result(leaf, 200..300, failed), T0 + 20);
+        let second = set.rows().nth(1).unwrap().state;
+        assert_eq!(second.probe_count().get(), 2);
+        assert_eq!(second.first_missing_at(), at(T0 + 10));
     }
 
     #[test]
     fn refined_keeps_the_parts_outside_the_range() {
-        let mut set = MissingSet::new(None);
-        observe(&mut set, gap_obs(RangeKind::Leaf, 50..150), T0);
-        observe(&mut set, gap_obs(RangeKind::Leaf, 150..250), T0 + 10);
+        let mut set = MissingSet::new(Epochs::Off);
+        let leaf = RangeKind::Leaf;
+        observe(&mut set, leaf_gap(50..150), T0);
+        observe(&mut set, leaf_gap(150..250), T0 + 10);
+        observe(&mut set, gap_result(leaf, 100..200, 120..130), T0 + 30);
+        let shape: Vec<_> = set
+            .rows()
+            .map(|row| {
+                (
+                    row.key,
+                    row.state.first_missing_at(),
+                    row.state.probe_count().get(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            shape,
+            [
+                (range_key(leaf, 50..100), at(T0), 1),
+                (range_key(leaf, 120..130), at(T0), 2),
+                (range_key(leaf, 200..250), at(T0 + 10), 1),
+            ]
+        );
+        assert_eq!(count(&set, DataKind::Leaf), 110, "no height counted twice");
+    }
+
+    #[test]
+    fn refinement_continues_not_found_units_and_a_failed_tail_never_confirms() {
+        let mut set = MissingSet::new(Epochs::Off);
+        let leaf = RangeKind::Leaf;
+        for secs in [0, 5] {
+            observe(&mut set, leaf_gap(0..100), T0 + secs);
+        }
+        let mut findings = RangeFindings::new(h(0..100));
+        findings.mark(h(10..20), Observation::NotFound);
+        findings.mark(h(50..100), Observation::Failed(server_error()));
         observe(
             &mut set,
-            refined_obs(RangeKind::Leaf, 100..200, &one(120..130), None),
+            ProbeResult::Range {
+                kind: leaf,
+                findings,
+            },
             T0 + 30,
         );
-        let key = |range| range_key(RangeKind::Leaf, range);
+        let shape: Vec<_> = set
+            .rows()
+            .map(|row| {
+                (
+                    row.key,
+                    row.state.probe_count().get(),
+                    row.state.is_confirmed(),
+                )
+            })
+            .collect();
         assert_eq!(
-            listed(&set, T0 + 100),
+            shape,
             [
-                (key(50..100), 100),
-                (key(120..130), 100),
-                (key(200..250), 90)
+                (range_key(leaf, 10..20), 3, true),
+                (range_key(leaf, 50..100), 2, false),
             ]
         );
         assert_eq!(
-            count(&set, T0 + 100, DataKind::Leaf),
-            110,
-            "no height counted twice"
+            confirmed_count(&set, 1_000, T0 + 200),
+            [(DataKind::Leaf, 10)]
         );
     }
 
     #[test]
-    fn a_failed_chunk_probe_leaves_refined_rows_alone() {
-        let mut set = MissingSet::new(None);
+    fn a_failure_inside_a_404_row_splits_it_and_keeps_its_count() {
+        let mut set = MissingSet::new(Epochs::Off);
         let leaf = RangeKind::Leaf;
-        observe(
-            &mut set,
-            refined_obs(leaf, 100..200, &one(110..115), None),
-            T0,
-        );
-        observe(&mut set, gap_obs(leaf, 115..130), T0 + 5);
-
-        observe(&mut set, failed_obs(leaf, 100..200), T0 + 30);
-        let key = |range| range_key(leaf, range);
-        // The refined rows keep their age; the heights no row covers become new rows.
-        assert_eq!(
-            listed(&set, T0 + 100),
-            [
-                (key(110..115), 100),
-                (key(115..130), 95),
-                (key(100..110), 70),
-                (key(130..200), 70),
-            ]
-        );
-        assert_eq!(
-            count(&set, T0 + 100, DataKind::Leaf),
-            100,
-            "no height counted twice"
-        );
-        let reasons: Vec<_> = set.rows().map(|row| row.state.reason).collect();
-        assert_eq!(
-            reasons
-                .iter()
-                .filter(|r| **r == MissingReason::NotFound)
-                .count(),
-            2
-        );
-
-        // The same failure again only moves the 404 row's retry time: no rows are added, the
-        // reason stays.
-        let retry_before = set.rows_in(&ImageRegion::Range {
-            kind: leaf,
-            heights: h(110..115),
-        })[0]
-            .state
-            .next_retry_at;
-        observe(&mut set, failed_obs(leaf, 110..115), T0 + 40);
-        assert_eq!(set.listed(at(T0 + 100), 10).total, 4);
-        let row = &set.rows_in(&ImageRegion::Range {
-            kind: leaf,
-            heights: h(110..115),
-        })[0];
-        assert_eq!(row.state.reason, MissingReason::NotFound);
-        assert!(row.state.next_retry_at > retry_before);
-    }
-
-    #[test]
-    fn a_failure_inside_a_404_row_only_moves_its_retry_time() {
-        let mut set = MissingSet::new(None);
-        let leaf = RangeKind::Leaf;
-        repeat(&mut set, &gap_obs(leaf, 100..300), 3, T0);
-
-        observe(&mut set, failed_obs(leaf, 150..200), T0 + 10);
+        repeat(&mut set, &leaf_gap(100..300), 3, T0);
+        let failed = Observation::Failed(server_error());
+        observe(&mut set, range_result(leaf, 150..200, failed), T0 + 10);
         let rows: Vec<_> = set.rows().collect();
-        let keys: Vec<_> = rows.iter().map(|row| row.key.clone()).collect();
         assert_eq!(
-            keys,
+            rows.iter().map(|r| r.key.clone()).collect::<Vec<_>>(),
             [
                 range_key(leaf, 100..150),
                 range_key(leaf, 150..200),
                 range_key(leaf, 200..300)
             ]
         );
-        let middle = &rows[1].state;
-        assert_eq!(middle.reason, MissingReason::NotFound);
-        assert_eq!((middle.failed_probes, middle.first_missing_at), (3, at(T0)));
-        assert_eq!(middle.retry_delay, Duration::from_secs(40));
-        assert_eq!(middle.next_retry_at, at(T0 + 50));
+        assert_eq!(rows[1].state.probe_count().get(), 3);
+        assert_eq!(rows[1].state.retry().next_at, at(T0 + 50));
         assert_eq!(rows[0].state, rows[2].state);
-
-        // Across the edge: the 404 part moves, the heights no row covers are new.
-        observe(&mut set, failed_obs(leaf, 250..350), T0 + 11);
-        let rows: Vec<_> = set.rows().collect();
-        assert_eq!(rows.len(), 5);
-        assert_eq!(rows[2].key, range_key(leaf, 200..250));
-        assert_eq!(rows[3].key, range_key(leaf, 250..300));
-        assert_eq!(rows[3].state.reason, MissingReason::NotFound);
-        assert_eq!(rows[3].state.next_retry_at, at(T0 + 11 + 40));
-        let fresh = set.rows_in(&ImageRegion::Range {
-            kind: leaf,
-            heights: h(300..350),
-        });
-        assert_eq!(fresh[0].state.failed_probes, 1);
-        assert_eq!(alerting(&set, T0 + 100), [range_key(leaf, 100..150)]);
     }
 
     #[test]
-    fn a_failure_in_the_middle_of_404s_on_a_point_row_keeps_it_alerting() {
-        let mut set = MissingSet::new(None);
+    fn a_failure_in_the_middle_of_404s_on_a_point_row_keeps_it_confirmed() {
+        let mut set = MissingSet::new(Epochs::Off);
         let kind = PointKind::LcLeafProof;
-        let not_found = missing(NotServed::NotFound);
-        let key = RowKey::Point {
-            kind,
-            height: Height(99),
-        };
-        repeat(&mut set, &point_obs(kind, 99, not_found), 3, T0);
-
-        let failure = missing(NotServed::Failed(server_error()));
-        observe(&mut set, point_obs(kind, 99, failure), T0 + 3);
-        let row = set.rows().next().unwrap();
-        assert_eq!(row.state.reason, MissingReason::NotFound);
-        assert_eq!(
-            (row.state.failed_probes, row.state.first_missing_at),
-            (3, at(T0))
+        repeat(
+            &mut set,
+            &point_result(kind, 99, Observation::NotFound),
+            3,
+            T0,
         );
-        assert_eq!(row.state.next_retry_at, at(T0 + 3 + 40));
-        assert!(set.due(at(T0 + 42), 10).is_empty());
-        assert_eq!(alerting(&set, T0 + 100), std::slice::from_ref(&key));
-
-        observe(&mut set, point_obs(kind, 99, not_found), T0 + 4);
+        let failure = Observation::Failed(server_error());
+        observe(&mut set, point_result(kind, 99, failure), T0 + 3);
         let row = set.rows().next().unwrap();
-        assert_eq!(
-            (row.state.failed_probes, row.state.first_missing_at),
-            (4, at(T0))
+        assert!(row.state.is_confirmed());
+        assert_eq!(row.state.probe_count().get(), 3);
+        assert_eq!(row.state.retry().next_at, at(T0 + 3 + 40));
+        observe(
+            &mut set,
+            point_result(kind, 99, Observation::NotFound),
+            T0 + 4,
         );
-        assert_eq!(row.state.retry_delay, Duration::from_secs(60));
-        assert_eq!(alerting(&set, T0 + 100), [key]);
+        let row = set.rows().next().unwrap();
+        assert_eq!(row.state.probe_count().get(), 4);
+        assert_eq!(row.state.retry().delay, RetryDelay::from_secs(60).unwrap());
     }
 
     #[test]
     fn a_known_gap_that_ends_in_a_failed_tail_keeps_its_404_row() {
-        let mut set = MissingSet::new(None);
+        let mut set = MissingSet::new(Epochs::Off);
         let leaf = RangeKind::Leaf;
-        repeat(&mut set, &gap_obs(leaf, 100..200), 3, T0);
-
-        let tail = (100..200, Unconfirmed::Failed(server_error()));
-        observe(
-            &mut set,
-            refined_obs(leaf, 100..200, &[], Some(tail)),
-            T0 + 3,
-        );
+        repeat(&mut set, &leaf_gap(100..200), 3, T0);
+        let failed = Observation::Failed(server_error());
+        observe(&mut set, range_result(leaf, 100..200, failed), T0 + 3);
         let rows: Vec<_> = set.rows().collect();
         assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].state.reason, MissingReason::NotFound);
-        assert_eq!(rows[0].state.failed_probes, 3);
-        assert_eq!(rows[0].state.next_retry_at, at(T0 + 3 + 40));
-        assert_eq!(alerting(&set, T0 + 100).len(), 1);
-
-        observe(&mut set, gap_obs(leaf, 100..200), T0 + 4);
-        let rows: Vec<_> = set.rows().collect();
-        assert_eq!(
-            (rows[0].state.failed_probes, rows[0].state.first_missing_at),
-            (4, at(T0))
-        );
-        assert_eq!(alerting(&set, T0 + 100).len(), 1);
+        assert!(rows[0].state.is_confirmed());
+        observe(&mut set, leaf_gap(100..200), T0 + 4);
+        let row = set.rows().next().unwrap();
+        assert_eq!(row.state.probe_count().get(), 4);
+        assert_eq!(row.state.first_missing_at(), at(T0));
     }
 
     #[test]
     fn a_failed_tail_over_a_404_row_and_open_heights_splits_them() {
-        let mut set = MissingSet::new(None);
+        let mut set = MissingSet::new(Epochs::Off);
         let leaf = RangeKind::Leaf;
-        observe(&mut set, gap_obs(leaf, 120..140), T0);
-        let tail = (100..200, Unconfirmed::Failed(server_error()));
+        observe(&mut set, leaf_gap(120..140), T0);
+        let mut findings = RangeFindings::new(h(100..200));
+        findings.mark(h(100..200), Observation::Failed(server_error()));
         observe(
             &mut set,
-            refined_obs(leaf, 100..200, &[], Some(tail)),
+            ProbeResult::Range {
+                kind: leaf,
+                findings,
+            },
             T0 + 1,
         );
-        let rows: Vec<_> = set.rows().collect();
-        let reasons: Vec<_> = rows
-            .iter()
-            .map(|row| (row.key.units(), row.state.reason == MissingReason::NotFound))
+        let shape: Vec<_> = set
+            .rows()
+            .map(|row| {
+                (
+                    row.key.units(),
+                    matches!(row.state, UnitState::NotFound { .. }),
+                )
+            })
             .collect();
         assert_eq!(
-            reasons,
+            shape,
             [(100..120, false), (120..140, true), (140..200, false)]
         );
-        assert_eq!(rows[1].state.failed_probes, 1);
-    }
-
-    /// Keys of the rows that alert at `secs`.
-    fn alerting(set: &MissingSet, secs: i64) -> Vec<RowKey> {
-        set.alert_candidates(rule(), Height(1_000), at(secs))
-            .into_iter()
-            .map(|aged| aged.row.key)
-            .collect()
-    }
-
-    #[test]
-    fn forget_below_zero_changes_nothing() {
-        let mut set = MissingSet::new(Some(EpochConfig {
-            epoch_height: 30,
-            epoch_start_block: 61,
-        }));
-        let not_found = missing(NotServed::NotFound);
-        observe(&mut set, gap_obs(RangeKind::Leaf, 0..100), T0);
-        observe(&mut set, point_obs(PointKind::Aggregate, 5, not_found), T0);
-        observe(&mut set, epoch_obs(EpochKind::StateCert, 3, not_found), T0);
-        let before: Vec<_> = set.rows().collect();
-        let diff = set.apply(MissingUpdate::ForgetBelow(Height(0)), at(T0 + 5));
-        assert_eq!((diff.regions.len(), diff.rows_removed), (0, 0));
-        assert_eq!(set.rows().collect::<Vec<_>>(), before);
     }
 
     #[test]
     fn touching_rows_with_equal_state_merge_past_a_chunk() {
-        let mut set = MissingSet::new(None);
-        observe(&mut set, gap_obs(RangeKind::Leaf, 100..200), T0);
-        observe(&mut set, gap_obs(RangeKind::Leaf, 200..300), T0);
-        let rows: Vec<_> = set.rows().collect();
-        assert_eq!(rows.len(), 1);
-        assert_eq!(
-            rows[0].key.first_probe(),
-            Probe::Range {
-                kind: RangeKind::Leaf,
-                heights: h(100..200),
-            }
-        );
-        let probes = set.due(at(T0 + 5), 10);
-        let heights: Vec<_> = probes
-            .iter()
-            .map(|probe| match probe {
-                Probe::Range { heights, .. } => heights.clone(),
-                other => panic!("{other:?}"),
-            })
-            .collect();
-        assert_eq!(heights, [h(100..200), h(200..300)]);
+        let mut set = MissingSet::new(Epochs::Off);
+        for range in [0..100, 100..200, 200..300] {
+            observe(&mut set, leaf_gap(range), T0);
+        }
+        assert_eq!(keys(&set), [range_key(RangeKind::Leaf, 0..300)]);
     }
 
     #[test]
     fn a_failed_retry_of_a_piece_splits_the_row() {
-        let mut set = MissingSet::new(None);
-        observe(&mut set, failed_obs(RangeKind::Leaf, 100..300), T0);
-        observe(&mut set, failed_obs(RangeKind::Leaf, 100..200), T0 + 5);
-        let rows: Vec<_> = set.rows().collect();
-        assert_eq!(rows.len(), 2);
-        assert_eq!(rows[0].key, range_key(RangeKind::Leaf, 100..200));
-        assert_eq!(rows[0].state.failed_probes, 2);
-        assert_eq!(rows[1].state.failed_probes, 1);
+        let mut set = MissingSet::new(Epochs::Off);
+        observe(&mut set, leaf_gap(0..300), T0);
+        let failed = Observation::Failed(server_error());
+        observe(
+            &mut set,
+            range_result(RangeKind::Leaf, 0..100, failed),
+            T0 + 5,
+        );
+        assert_eq!(set.rows().count(), 2);
     }
 
     #[test]
-    fn rows_first_missing_after_now_are_left_out() {
-        let mut set = MissingSet::new(None);
-        for secs in 0..3 {
-            observe(&mut set, gap_obs(RangeKind::Leaf, 0..100), T0 + 500 + secs);
-        }
-        let now = at(T0);
-        assert_eq!(count(&set, T0, DataKind::Leaf), 0);
-        assert!(oldest_is_none(&set, T0));
-        assert_eq!(set.listed(now, 10).total, 0);
-        assert!(set.alert_candidates(rule(), Height(1_000), now).is_empty());
-    }
-
-    fn oldest_is_none(set: &MissingSet, now: i64) -> bool {
-        set.summary(at(now)).iter().all(|k| k.oldest.is_none())
-    }
-
-    #[test]
-    fn epoch_rows_without_a_config_are_kept_and_never_alert() {
-        let mut set = MissingSet::new(None);
+    fn confirmed_units_apply_every_condition() {
+        let mut set = MissingSet::new(epochs(100, 1));
+        let nf = Observation::NotFound;
+        repeat(&mut set, &leaf_gap(100..200), 3, T0);
+        repeat(&mut set, &leaf_gap(50..100), 3, T0 + 10);
         repeat(
             &mut set,
-            &epoch_obs(EpochKind::StateCert, 5, missing(NotServed::NotFound)),
+            &range_result(
+                RangeKind::Block,
+                100..200,
+                Observation::Failed(server_error()),
+            ),
             3,
             T0,
         );
+        repeat(
+            &mut set,
+            &range_result(RangeKind::VidCommon, 100..200, nf),
+            2,
+            T0,
+        );
+        repeat(
+            &mut set,
+            &point_result(PointKind::LcLeafProof, 199, nf),
+            3,
+            T0 + 50,
+        );
+        repeat(&mut set, &epoch_result(EpochKind::StateCert, 3, nf), 3, T0);
+        for epoch in [8, 7] {
+            repeat(
+                &mut set,
+                &epoch_result(EpochKind::StakeTable, epoch, nf),
+                3,
+                T0,
+            );
+        }
+
+        // At T0 + 60 a unit counts when first missing at or before T0. Not counting: block (500),
+        // vid_common (2 probes), lc_leaf_proof (too young), the leaf rows past the settled end 500
+        // are none; stake table epoch 7 rests on block 500 and counts, epoch 8 on block 600 does
+        // not.
+        assert_eq!(
+            confirmed_count(&set, 500, T0 + 60),
+            [
+                (DataKind::Leaf, 100),
+                (DataKind::StakeTable, 1),
+                (DataKind::StateCert, 1)
+            ]
+        );
+        // Leaf 50..100 first missing at T0 + 10 counts from T0 + 70.
+        assert_eq!(
+            confirmed_count(&set, 500, T0 + 70)[0],
+            (DataKind::Leaf, 150)
+        );
+        // Without epochs epoch rows never count.
+        let rows = set.rows().collect::<Vec<_>>();
+        let off = MissingSet::from_rows(Epochs::Off, rows).unwrap();
         assert!(
-            set.alert_candidates(
-                AlertRule {
-                    min_age: Duration::ZERO
-                },
-                Height(u64::MAX),
-                at(T0 + 1_000)
-            )
-            .is_empty()
+            confirmed_count(&off, 500, T0 + 70)
+                .iter()
+                .all(|(k, _)| *k == DataKind::Leaf)
         );
-        let diff = set.apply(
-            MissingUpdate::ForgetBelow(Height(1_000_000)),
-            at(T0 + 1_000),
+        // The young units sit in `young` until counted.
+        let units = set
+            .tallies(Height(500), at(T0 + 60 - 60))
+            .into_iter()
+            .find(|t| t.kind == DataKind::Leaf)
+            .unwrap()
+            .confirmed;
+        assert_eq!(units.aged, 100);
+        assert_eq!(units.young.len(), 1);
+        assert_eq!(units.count(at(T0 + 10)), 150);
+    }
+
+    #[test]
+    fn epoch_rows_without_epochs_are_kept_and_never_count() {
+        let mut set = MissingSet::new(Epochs::Off);
+        repeat(
+            &mut set,
+            &epoch_result(EpochKind::StateCert, 3, Observation::NotFound),
+            3,
+            T0,
         );
-        assert_eq!((diff.regions.len(), diff.rows_removed), (0, 0));
-        assert_eq!(set.due(at(T0 + 1_000), 10).len(), 1);
+        assert_eq!(confirmed_count(&set, 10_000, T0 + 1_000), []);
+        let diff = set.apply(MissingUpdate::ForgetBelow(Height(10_000)), at(T0));
+        assert_eq!(diff.rows_removed, 0);
+        assert_eq!(count(&set, DataKind::StateCert), 1);
     }
 
     #[test]
     fn epoch_rows_with_an_overflowing_root_block_are_kept() {
-        let epoch_config = EpochConfig {
-            epoch_height: 30,
-            epoch_start_block: 61,
-        };
-        let mut set = MissingSet::new(Some(epoch_config));
-        let epoch = u64::MAX / 2;
-        assert_eq!(
-            epoch_config.root_block(EpochKind::StateCert, Epoch(epoch)),
-            None
-        );
-        repeat(
+        let mut set = MissingSet::new(epochs(30, 61));
+        observe(
             &mut set,
-            &epoch_obs(EpochKind::StateCert, epoch, missing(NotServed::NotFound)),
-            3,
+            epoch_result(EpochKind::StateCert, u64::MAX, Observation::NotFound),
             T0,
         );
-        assert!(
-            set.alert_candidates(
-                AlertRule {
-                    min_age: Duration::ZERO
-                },
-                Height(u64::MAX),
-                at(T0 + 1_000)
-            )
-            .is_empty()
-        );
-        let diff = set.apply(MissingUpdate::ForgetBelow(Height(u64::MAX)), at(T0 + 1_000));
+        let diff = set.apply(MissingUpdate::ForgetBelow(Height(u64::MAX)), at(T0));
         assert_eq!(diff.rows_removed, 0);
+        assert_eq!(count(&set, DataKind::StateCert), 1);
     }
 
     #[test]
-    fn an_empty_refined_search_equals_present() {
-        let mut set = MissingSet::new(None);
-        observe(&mut set, gap_obs(RangeKind::Leaf, 0..100), T0);
-        observe(
-            &mut set,
-            refined_obs(RangeKind::Leaf, 0..100, &[], None),
-            T0 + 5,
-        );
+    fn an_empty_search_equals_present() {
+        let mut set = MissingSet::new(Epochs::Off);
+        observe(&mut set, leaf_gap(100..200), T0);
+        let all_present = ProbeResult::Range {
+            kind: RangeKind::Leaf,
+            findings: RangeFindings::new(h(100..200)),
+        };
+        observe(&mut set, all_present, T0 + 1);
         assert_eq!(set.rows().count(), 0);
     }
 
     #[test]
     fn known_gap_needs_a_not_found_row_around_the_probe() {
-        let mut set = MissingSet::new(None);
-        observe(&mut set, gap_obs(RangeKind::Leaf, 100..300), T0);
-        observe(&mut set, failed_obs(RangeKind::Block, 100..300), T0);
-        assert_eq!(set.known(RangeKind::Leaf, &h(150..200)), Known::Gap);
-        assert_eq!(set.known(RangeKind::Leaf, &h(250..350)), Known::Missing);
-        assert_eq!(set.known(RangeKind::Block, &h(150..200)), Known::Missing);
+        let mut set = MissingSet::new(Epochs::Off);
+        let leaf = RangeKind::Leaf;
+        observe(&mut set, leaf_gap(100..200), T0);
+        observe(
+            &mut set,
+            range_result(
+                RangeKind::Block,
+                300..400,
+                Observation::Failed(server_error()),
+            ),
+            T0,
+        );
+        assert_eq!(set.known(leaf, &h(100..200)), Known::Gap);
+        assert_eq!(set.known(leaf, &h(120..150)), Known::Gap);
+        assert_eq!(set.known(leaf, &h(100..201)), Known::Missing);
+        assert_eq!(set.known(leaf, &h(50..150)), Known::Missing);
+        assert_eq!(set.known(RangeKind::Block, &h(300..400)), Known::Missing);
     }
 
     #[test]
     fn from_rows_rejects_overlapping_and_touching_equal_rows() {
-        let state = |secs| RowState {
+        let state = |secs| UnitState::NotFound {
             first_missing_at: at(secs),
-            failed_probes: 1,
-            retry_delay: RETRY_DELAY_MIN,
-            next_retry_at: at(secs + 5),
-            reason: MissingReason::NotFound,
+            not_found_probes: std::num::NonZeroU32::MIN,
+            retry: Retry::after(RetryDelay::FIRST, at(secs)),
         };
         let row = |range, secs| MissingRow {
             key: range_key(RangeKind::Leaf, range),
             state: state(secs),
         };
-        assert!(MissingSet::from_rows(None, [row(0..10, T0), row(5..15, T0 + 1)]).is_err());
-        assert!(MissingSet::from_rows(None, [row(0..10, T0), row(10..20, T0)]).is_err());
-        assert!(MissingSet::from_rows(None, [row(0..10, T0), row(10..20, T0 + 1)]).is_ok());
+        let load = |rows: Vec<MissingRow>| MissingSet::from_rows(Epochs::Off, rows);
+        assert!(load(vec![row(0..10, T0), row(5..15, T0 + 1)]).is_err());
+        assert!(load(vec![row(0..10, T0), row(10..20, T0)]).is_err());
+        assert!(load(vec![row(0..10, T0), row(10..20, T0 + 1)]).is_ok());
     }
 
     #[test]
     fn rows_come_out_sorted_by_kind() {
-        let mut set = MissingSet::new(Some(EpochConfig {
-            epoch_height: 30,
-            epoch_start_block: 61,
-        }));
-        let not_found = missing(NotServed::NotFound);
-        observe(
-            &mut set,
-            epoch_obs(EpochKind::LcStakeTable, 7, not_found),
-            T0,
-        );
-        observe(&mut set, point_obs(PointKind::Aggregate, 5, not_found), T0);
-        observe(&mut set, gap_obs(RangeKind::VidCommon, 0..10), T0);
-        observe(&mut set, gap_obs(RangeKind::Leaf, 0..10), T0);
+        let mut set = MissingSet::new(epochs(30, 61));
+        let nf = Observation::NotFound;
+        observe(&mut set, epoch_result(EpochKind::LcStakeTable, 7, nf), T0);
+        observe(&mut set, point_result(PointKind::LcLeafProof, 5, nf), T0);
+        observe(&mut set, range_result(RangeKind::VidCommon, 0..10, nf), T0);
+        observe(&mut set, leaf_gap(0..10), T0);
         let kinds: Vec<_> = set.rows().map(|row| row.key.kind()).collect();
         assert!(kinds.windows(2).all(|pair| pair[0] < pair[1]), "{kinds:?}");
     }
 
+    #[test]
+    fn split_first_chunk_cuts_ranges_only() {
+        let (probe, rest) = range_key(RangeKind::Leaf, 10..250).split_first_chunk();
+        assert_eq!(
+            probe,
+            Probe::Range {
+                kind: RangeKind::Leaf,
+                heights: h(10..110)
+            }
+        );
+        assert_eq!(rest, Some(range_key(RangeKind::Leaf, 110..250)));
+        let (_, rest) = range_key(RangeKind::Leaf, 10..110).split_first_chunk();
+        assert_eq!(rest, None);
+        let point = RowKey::Point {
+            kind: PointKind::LcLeafProof,
+            height: Height(4),
+        };
+        assert_eq!(point.clone().split_first_chunk().1, None);
+    }
+
+    /// Drains a queue into probes.
+    fn drain(mut queue: ChunkQueue) -> Vec<Probe> {
+        std::iter::from_fn(|| queue.next_probe()).collect()
+    }
+
+    fn leaf_probe(range: Range<u64>) -> Probe {
+        Probe::Range {
+            kind: RangeKind::Leaf,
+            heights: h(range),
+        }
+    }
+
+    #[test]
+    fn retry_queue_order() {
+        let mut set = MissingSet::new(Epochs::Off);
+        let nf = Observation::NotFound;
+        // Confirming rows with different next_at: 5 s after T0 + 3, 5 s after T0.
+        observe(&mut set, leaf_gap(1_000..1_250), T0 + 3);
+        observe(&mut set, range_result(RangeKind::Block, 5..10, nf), T0);
+        observe(&mut set, point_result(PointKind::LcLeafProof, 7, nf), T0);
+        // Two confirmed rows, the older one first missing at T0 - 100.
+        repeat(&mut set, &leaf_gap(300..310), 3, T0 - 100);
+        repeat(&mut set, &leaf_gap(400..410), 3, T0 - 50);
+
+        let queue = RetryQueue::new(&set, at(T0 + 8));
+        assert_eq!(
+            drain(queue.confirming),
+            [
+                Probe::Range {
+                    kind: RangeKind::Block,
+                    heights: h(5..10)
+                },
+                Probe::Point {
+                    kind: PointKind::LcLeafProof,
+                    height: Height(7)
+                },
+                leaf_probe(1_000..1_100),
+                leaf_probe(1_100..1_200),
+                leaf_probe(1_200..1_250),
+            ]
+        );
+        // The older confirmed row has next_at T0 - 98 + 20: due. The younger would be due too.
+        let queue = RetryQueue::new(&set, at(T0));
+        assert_eq!(queue.representative, Some(leaf_probe(300..310)));
+        // No confirming row is due at T0: the earliest next_at is T0 + 5.
+        assert!(drain(queue.confirming).is_empty());
+        // Not due although the younger confirmed row is.
+        let mut late = set.clone();
+        observe(&mut late, leaf_gap(300..310), T0 + 1_000);
+        let queue = RetryQueue::new(&late, at(T0 + 1_000));
+        assert_eq!(queue.representative, None);
+        assert_eq!(
+            drain(ChunkQueue::confirmed(&set)),
+            [leaf_probe(300..310), leaf_probe(400..410)]
+        );
+    }
+
     // Property test against a per-unit reference model.
 
-    const EPOCH_CONFIG: EpochConfig = EpochConfig {
-        epoch_height: 30,
-        epoch_start_block: 61,
-    };
-    const SETTLED_END: Height = Height(300);
+    const EPOCHS: Epochs = Epochs::On(EpochConfig {
+        epoch_height: NonZeroU64::new(30).unwrap(),
+        epoch_start_block: Height(61),
+    });
+    const SETTLED_ENDS: [u64; 3] = [150, 300, 500];
 
     type Unit = (DataKind, u64);
 
-    /// A relative range outcome: gaps are offsets into the probed range.
+    /// A range shape relative to the probed range.
     #[derive(Clone, Debug)]
-    enum RelOutcome {
-        Present,
-        Failed(Failure),
-        Refined {
-            gaps: Vec<Range<u64>>,
-            tail: Option<(u64, Unconfirmed)>,
+    enum Shape {
+        Uniform(Observation),
+        /// Gaps are the maximal true runs of the mask below the optional failed tail start.
+        Mask {
+            mask: Vec<bool>,
+            tail: Option<(u64, RequestFailure)>,
         },
+    }
+
+    /// What a retry finds for the probe it takes.
+    #[derive(Clone, Copy, Debug)]
+    enum Answer {
+        Present,
+        NotFound,
+        Failed,
+        Transport,
+        /// First half not found, the rest failed.
+        GapThenFailed,
+        /// First half present, the rest not found.
+        PresentThenGap,
     }
 
     #[derive(Clone, Debug)]
@@ -1942,99 +1578,61 @@ mod tests {
             kind: RangeKind,
             start: u64,
             len: u64,
-            outcome: RelOutcome,
+            shape: Shape,
         },
         Point {
             kind: PointKind,
             height: u64,
-            outcome: UnitOutcome,
+            observation: Observation,
         },
         Epoch {
             kind: EpochKind,
             epoch: u64,
-            outcome: UnitOutcome,
+            observation: Observation,
         },
         Forget(u64),
         Advance(u64),
-        Retry(RetryKind),
+        Retry(Answer),
+        Representative(Answer),
     }
 
-    /// What a retry of the first due probe finds.
-    #[derive(Clone, Copy, Debug)]
-    enum RetryKind {
-        /// A request fails.
-        Failed,
-        /// The range is an exact gap again.
-        Gap,
-        /// The search fails at once: the whole range is the unrefined tail.
-        FailedTail,
-        /// The first half is a gap and the search fails after it.
-        GapThenFailedTail,
-        /// The 404 names no height.
-        NoHeightTail,
-    }
-
-    fn failure() -> impl Strategy<Value = Failure> {
+    fn failure() -> impl Strategy<Value = RequestFailure> {
         prop_oneof![
-            Just(Failure::Transport),
+            Just(RequestFailure::Transport),
             Just(server_error()),
-            Just(status(StatusCode::SERVICE_UNAVAILABLE)),
+            Just(RequestFailure::Status(
+                FailedStatus::new(StatusCode::SERVICE_UNAVAILABLE).unwrap()
+            )),
         ]
     }
 
-    fn unconfirmed() -> impl Strategy<Value = Unconfirmed> {
+    fn observation() -> impl Strategy<Value = Observation> {
         prop_oneof![
-            Just(Unconfirmed::NoHeight),
-            Just(Unconfirmed::OutOfRange),
-            failure().prop_map(Unconfirmed::Failed),
+            Just(Observation::Present),
+            Just(Observation::NotFound),
+            failure().prop_map(Observation::Failed),
         ]
     }
 
-    fn unit_outcome() -> impl Strategy<Value = UnitOutcome> {
+    fn answer() -> impl Strategy<Value = Answer> {
         prop_oneof![
-            Just(UnitOutcome::Present),
-            Just(UnitOutcome::Missing(NotServed::NotFound)),
-            failure().prop_map(|f| UnitOutcome::Missing(NotServed::Failed(f))),
+            2 => Just(Answer::Present),
+            4 => Just(Answer::NotFound),
+            2 => Just(Answer::Failed),
+            1 => Just(Answer::Transport),
+            1 => Just(Answer::GapThenFailed),
+            1 => Just(Answer::PresentThenGap),
         ]
     }
 
-    /// Gaps are the maximal true runs of a mask below the optional tail start. A gap may end where
-    /// the tail starts, as a real search leaves it.
-    fn refined(len: u64) -> impl Strategy<Value = RelOutcome> {
-        (
-            vec(any::<bool>(), len as usize),
-            option::of((0..len, unconfirmed())),
-        )
-            .prop_map(|(mask, tail)| {
-                let end = tail
-                    .as_ref()
-                    .map_or(mask.len(), |(start, _)| *start as usize);
-                let mut gaps = Vec::new();
-                let mut start = None;
-                for (i, &on) in mask[..end].iter().enumerate() {
-                    match (on, start) {
-                        (true, None) => start = Some(i as u64),
-                        (false, Some(s)) => {
-                            gaps.push(s..i as u64);
-                            start = None;
-                        },
-                        _ => {},
-                    }
-                }
-                if let Some(s) = start {
-                    gaps.push(s..end as u64);
-                }
-                RelOutcome::Refined { gaps, tail }
-            })
-    }
-
-    fn retry_kind() -> impl Strategy<Value = RetryKind> {
+    fn shape(len: u64) -> impl Strategy<Value = Shape> {
         prop_oneof![
-            2 => Just(RetryKind::Failed),
-            4 => Just(RetryKind::Gap),
-            1 => Just(RetryKind::FailedTail),
-            1 => Just(RetryKind::GapThenFailedTail),
-            1 => Just(RetryKind::NoHeightTail),
+            observation().prop_map(Shape::Uniform),
+            (
+                vec(any::<bool>(), len as usize),
+                option::of((0..len, failure()))
+            )
+                .prop_map(|(mask, tail)| Shape::Mask { mask, tail }),
         ]
     }
 
@@ -2043,41 +1641,34 @@ mod tests {
         let range = (
             prop::sample::select(RangeKind::VARIANTS),
             0..heights,
-            1..=crate::kind::CHUNK_LEN.min(heights),
+            1..=CHUNK_LEN.min(heights),
         )
-            .prop_flat_map(|(kind, start, len)| {
-                let outcome = prop_oneof![
-                    Just(RelOutcome::Present),
-                    failure().prop_map(RelOutcome::Failed),
-                    refined(len),
-                ];
-                (Just(kind), Just(start), Just(len), outcome)
-            })
-            .prop_map(|(kind, start, len, outcome)| Op::Range {
+            .prop_flat_map(|(kind, start, len)| (Just(kind), Just(start), Just(len), shape(len)))
+            .prop_map(|(kind, start, len, shape)| Op::Range {
                 kind,
                 start,
                 len,
-                outcome,
+                shape,
             });
         let point = (
             prop::sample::select(PointKind::VARIANTS),
             0..heights,
-            unit_outcome(),
+            observation(),
         )
-            .prop_map(|(kind, height, outcome)| Op::Point {
+            .prop_map(|(kind, height, observation)| Op::Point {
                 kind,
                 height,
-                outcome,
+                observation,
             });
         let epoch = (
             prop::sample::select(EpochKind::VARIANTS),
             0..epochs,
-            unit_outcome(),
+            observation(),
         )
-            .prop_map(|(kind, epoch, outcome)| Op::Epoch {
+            .prop_map(|(kind, epoch, observation)| Op::Epoch {
                 kind,
                 epoch,
-                outcome,
+                observation,
             });
         prop_oneof![
             4 => range,
@@ -2085,15 +1676,103 @@ mod tests {
             2 => epoch,
             1 => (0..heights).prop_map(Op::Forget),
             4 => prop_oneof![0u64..12, 0u64..700].prop_map(Op::Advance),
-            8 => retry_kind().prop_map(Op::Retry),
+            6 => answer().prop_map(Op::Retry),
+            3 => answer().prop_map(Op::Representative),
         ]
     }
 
-    /// One state per unit (a height, or an epoch number) with the time it was written. The rules
-    /// are written per unit and spelled out, not shared with `MissingSet`.
+    /// Findings of `shape` over `heights`.
+    fn findings_of(heights: Range<Height>, shape: &Shape) -> RangeFindings {
+        let (mask, tail) = match shape {
+            Shape::Uniform(observation) => return RangeFindings::uniform(heights, *observation),
+            Shape::Mask { mask, tail } => (mask, tail),
+        };
+        let start = heights.start.0;
+        let end = tail.map_or(mask.len(), |(offset, _)| offset as usize);
+        let mut findings = RangeFindings::new(heights.clone());
+        let mut run: Option<usize> = None;
+        for (i, &on) in mask[..end].iter().chain([&false]).enumerate() {
+            match (on, run) {
+                (true, None) => run = Some(i),
+                (false, Some(from)) => {
+                    let gap = Height(start + from as u64)..Height(start + i as u64);
+                    findings.mark(gap, Observation::NotFound);
+                    run = None;
+                },
+                _ => {},
+            }
+        }
+        if let Some((offset, failure)) = tail {
+            findings.mark(
+                Height(start + offset)..heights.end,
+                Observation::Failed(*failure),
+            );
+        }
+        findings
+    }
+
+    /// The result a retry of `probe` finds.
+    fn found_result(probe: &Probe, found: Answer) -> ProbeResult {
+        let unit = |observation| match probe {
+            Probe::Point { kind, height } => ProbeResult::Point {
+                kind: *kind,
+                height: *height,
+                observation,
+            },
+            Probe::Epoch { kind, epoch } => ProbeResult::Epoch {
+                kind: *kind,
+                epoch: *epoch,
+                observation,
+            },
+            Probe::Range { .. } => unreachable!("units only"),
+        };
+        let uniform = |observation| match probe {
+            Probe::Range { kind, heights } => ProbeResult::Range {
+                kind: *kind,
+                findings: RangeFindings::uniform(heights.clone(), observation),
+            },
+            _ => unit(observation),
+        };
+        let split = |first, second| match probe {
+            Probe::Range { kind, heights } if height_count(heights) > 1 => {
+                let mid = Height(heights.start.0 + height_count(heights) / 2);
+                let mut findings = RangeFindings::new(heights.clone());
+                if first != Observation::Present {
+                    findings.mark(heights.start..mid, first);
+                }
+                findings.mark(mid..heights.end, second);
+                ProbeResult::Range {
+                    kind: *kind,
+                    findings,
+                }
+            },
+            _ => uniform(second),
+        };
+        match found {
+            Answer::Present => uniform(Observation::Present),
+            Answer::NotFound => uniform(Observation::NotFound),
+            Answer::Failed => uniform(Observation::Failed(server_error())),
+            Answer::Transport => uniform(Observation::Failed(RequestFailure::Transport)),
+            Answer::GapThenFailed => {
+                split(Observation::NotFound, Observation::Failed(server_error()))
+            },
+            Answer::PresentThenGap => split(Observation::Present, Observation::NotFound),
+        }
+    }
+
+    /// Units a probe covers.
+    fn probe_units(probe: &Probe) -> (DataKind, Range<u64>) {
+        match probe {
+            Probe::Range { kind, heights } => ((*kind).into(), heights.start.0..heights.end.0),
+            Probe::Point { kind, height } => ((*kind).into(), height.0..height.0 + 1),
+            Probe::Epoch { kind, epoch } => ((*kind).into(), epoch.0..epoch.0 + 1),
+        }
+    }
+
+    /// One state per unit; the only rule applied is `state::transition`, per unit.
     #[derive(Default)]
     struct Model {
-        units: BTreeMap<Unit, (RowState, DateTime<Utc>)>,
+        units: BTreeMap<Unit, UnitState>,
     }
 
     /// A maximal run of consecutive units of one range kind with one state; one run per other
@@ -2101,747 +1780,372 @@ mod tests {
     struct Run {
         kind: DataKind,
         units: Range<u64>,
-        state: RowState,
-    }
-
-    fn seconds(secs: u64) -> TimeDelta {
-        TimeDelta::seconds(secs as i64)
-    }
-
-    /// The block an epoch's object is built from: two epochs back for stake tables.
-    fn model_root_block(kind: DataKind, epoch: u64) -> u64 {
-        let lag = if matches!(kind, DataKind::StakeTable | DataKind::LcStakeTable) {
-            2
-        } else {
-            0
-        };
-        epoch.saturating_sub(lag) * 30
-    }
-
-    /// Confirmed 404 rows of alerting kinds retry at most once a minute.
-    fn model_confirmed(kind: DataKind, state: &RowState) -> bool {
-        kind != DataKind::Aggregate
-            && state.reason == MissingReason::NotFound
-            && state.failed_probes >= 3
-    }
-
-    /// The state after one more failed probe, continuing the states of the units it covers.
-    fn model_state(
-        kind: DataKind,
-        olds: &[RowState],
-        reason: MissingReason,
-        now: DateTime<Utc>,
-    ) -> RowState {
-        let counted: Vec<&RowState> = if reason == MissingReason::NotFound {
-            olds.iter()
-                .filter(|old| old.reason == MissingReason::NotFound)
-                .collect()
-        } else {
-            olds.iter().collect()
-        };
-        let mut state = RowState {
-            first_missing_at: now,
-            failed_probes: 1,
-            retry_delay: Duration::from_secs(5),
-            next_retry_at: now + seconds(5),
-            reason,
-        };
-        if counted.is_empty() {
-            return state;
-        }
-        state.first_missing_at = counted.iter().map(|o| o.first_missing_at).min().unwrap();
-        state.failed_probes = counted.iter().map(|o| o.failed_probes).max().unwrap() + 1;
-        let doubled = counted
-            .iter()
-            .map(|o| o.retry_delay.as_secs())
-            .max()
-            .unwrap()
-            * 2;
-        let cap = if model_confirmed(kind, &state) {
-            60
-        } else {
-            600
-        };
-        state.retry_delay = Duration::from_secs(doubled.min(cap));
-        state.next_retry_at = now + seconds(state.retry_delay.as_secs());
-        state
-    }
-
-    /// A 404 unit after a failure that is not a 404: only the retry time moves.
-    fn model_delayed(kind: DataKind, old: &RowState, now: DateTime<Utc>) -> RowState {
-        let cap = if model_confirmed(kind, old) { 60 } else { 600 };
-        let delay = (old.retry_delay.as_secs() * 2).min(cap);
-        RowState {
-            retry_delay: Duration::from_secs(delay),
-            next_retry_at: now + seconds(delay),
-            ..old.clone()
-        }
+        state: UnitState,
     }
 
     impl Model {
-        fn state(&self, unit: Unit) -> Option<&RowState> {
-            self.units.get(&unit).map(|(state, _)| state)
+        fn observe_unit(&mut self, unit: Unit, observation: Observation, now: DateTime<Utc>) {
+            match crate::state::transition(self.units.get(&unit).copied(), observation, now) {
+                Some(state) => self.units.insert(unit, state),
+                None => self.units.remove(&unit),
+            };
         }
 
-        fn put(&mut self, unit: Unit, state: RowState, now: DateTime<Utc>) {
-            self.units.insert(unit, (state, now));
-        }
-
-        fn states_in(&self, kind: DataKind, units: Range<u64>) -> Vec<RowState> {
-            units
-                .filter_map(|unit| self.state((kind, unit)).cloned())
-                .collect()
-        }
-
-        fn apply(&mut self, observation: &Observation, now: DateTime<Utc>) {
-            match observation {
-                Observation::Range {
-                    kind,
-                    heights,
-                    outcome,
-                } => {
-                    let units = heights.start.0..heights.end.0;
-                    self.apply_range((*kind).into(), units, outcome, now)
+        fn apply(&mut self, result: &ProbeResult, now: DateTime<Utc>) {
+            match result {
+                ProbeResult::Range { kind, findings } => {
+                    for (piece, observation) in findings.pieces() {
+                        for height in piece.start.0..piece.end.0 {
+                            self.observe_unit(((*kind).into(), height), observation, now);
+                        }
+                    }
                 },
-                Observation::Point {
+                ProbeResult::Point {
                     kind,
                     height,
-                    outcome,
-                } => self.apply_unit((*kind).into(), height.0, *outcome, now),
-                Observation::Epoch {
+                    observation,
+                } => self.observe_unit(((*kind).into(), height.0), *observation, now),
+                ProbeResult::Epoch {
                     kind,
                     epoch,
-                    outcome,
-                } => self.apply_unit((*kind).into(), epoch.0, *outcome, now),
+                    observation,
+                } => self.observe_unit(((*kind).into(), epoch.0), *observation, now),
             }
-        }
-
-        fn apply_unit(
-            &mut self,
-            kind: DataKind,
-            unit: u64,
-            outcome: UnitOutcome,
-            now: DateTime<Utc>,
-        ) {
-            let UnitOutcome::Missing(not_served) = outcome else {
-                self.units.remove(&(kind, unit));
-                return;
-            };
-            let old = self.state((kind, unit)).cloned();
-            let state = match old {
-                Some(old)
-                    if old.reason == MissingReason::NotFound
-                        && not_served != NotServed::NotFound =>
-                {
-                    model_delayed(kind, &old, now)
-                },
-                _ => model_state(
-                    kind,
-                    &old.into_iter().collect::<Vec<_>>(),
-                    not_served.into(),
-                    now,
-                ),
-            };
-            self.put((kind, unit), state, now);
-        }
-
-        fn apply_range(
-            &mut self,
-            kind: DataKind,
-            range: Range<u64>,
-            outcome: &RangeOutcome,
-            now: DateTime<Utc>,
-        ) {
-            match outcome {
-                RangeOutcome::Present => {
-                    for unit in range {
-                        self.units.remove(&(kind, unit));
-                    }
-                },
-                RangeOutcome::Failed(failure) => {
-                    let reason = MissingReason::Unconfirmed(Unconfirmed::Failed(*failure));
-                    let states: Vec<_> = range
-                        .clone()
-                        .map(|unit| self.state((kind, unit)).cloned())
-                        .collect();
-                    // A 404 unit only moves its retry time. One unconfirmed state over the whole
-                    // range backs off; other unconfirmed units stay; units without a row are new.
-                    let backs_off = states[0].as_ref().is_some_and(|first| {
-                        first.reason != MissingReason::NotFound
-                            && states.iter().all(|s| s.as_ref() == Some(first))
-                    });
-                    for (unit, old) in range.zip(states) {
-                        let state = match old {
-                            Some(old) if old.reason == MissingReason::NotFound => {
-                                model_delayed(kind, &old, now)
-                            },
-                            Some(old) if backs_off => model_state(kind, &[old], reason, now),
-                            Some(_) => continue,
-                            None => model_state(kind, &[], reason, now),
-                        };
-                        self.put((kind, unit), state, now);
-                    }
-                },
-                RangeOutcome::Refined(search) => {
-                    let mut new: Vec<(Range<u64>, RowState)> = Vec::new();
-                    for gap in &search.gaps {
-                        let piece = gap.start.0..gap.end.0;
-                        let olds = self.states_in(kind, piece.clone());
-                        new.push((
-                            piece,
-                            model_state(kind, &olds, MissingReason::NotFound, now),
-                        ));
-                    }
-                    if let Some(tail) = &search.tail {
-                        let piece = tail.heights.start.0..tail.heights.end.0;
-                        let reason = MissingReason::Unconfirmed(tail.reason);
-                        if matches!(tail.reason, Unconfirmed::Failed(_)) {
-                            new.extend(self.failed_tail(kind, piece, reason, now));
-                        } else {
-                            let olds = self.states_in(kind, piece.clone());
-                            new.push((piece, model_state(kind, &olds, reason, now)));
-                        }
-                    }
-                    for unit in range {
-                        self.units.remove(&(kind, unit));
-                    }
-                    for (piece, state) in new {
-                        for unit in piece {
-                            self.put((kind, unit), state.clone(), now);
-                        }
-                    }
-                },
-            }
-        }
-
-        /// The units of a failed tail: 404 units keep their state with the retry time moved, each
-        /// maximal run of the other units continues the states it covers.
-        fn failed_tail(
-            &self,
-            kind: DataKind,
-            tail: Range<u64>,
-            reason: MissingReason,
-            now: DateTime<Utc>,
-        ) -> Vec<(Range<u64>, RowState)> {
-            let is_404 = |unit: u64| {
-                self.state((kind, unit))
-                    .is_some_and(|state| state.reason == MissingReason::NotFound)
-            };
-            let mut pieces = Vec::new();
-            let mut run_start = None;
-            for unit in tail.clone() {
-                if is_404(unit) {
-                    if let Some(start) = run_start.take() {
-                        pieces.push(self.continued_run(kind, start..unit, reason, now));
-                    }
-                    let kept = self.state((kind, unit)).unwrap();
-                    pieces.push((unit..unit + 1, model_delayed(kind, kept, now)));
-                } else if run_start.is_none() {
-                    run_start = Some(unit);
-                }
-            }
-            if let Some(start) = run_start {
-                pieces.push(self.continued_run(kind, start..tail.end, reason, now));
-            }
-            pieces
-        }
-
-        fn continued_run(
-            &self,
-            kind: DataKind,
-            run: Range<u64>,
-            reason: MissingReason,
-            now: DateTime<Utc>,
-        ) -> (Range<u64>, RowState) {
-            let olds = self.states_in(kind, run.clone());
-            (run, model_state(kind, &olds, reason, now))
         }
 
         fn forget_below(&mut self, window_start: u64) {
             self.units.retain(|&(kind, unit), _| match kind.class() {
-                KindClass::Range(_) => unit >= window_start,
-                KindClass::Point(_) => unit + 1 > window_start,
-                KindClass::Epoch(_) => model_root_block(kind, unit) >= window_start,
+                KindClass::Range(_) | KindClass::Point(_) => unit >= window_start,
+                KindClass::Epoch(kind) => EPOCHS
+                    .root_block(kind, Epoch(unit))
+                    .is_none_or(|block| block.0 >= window_start),
             });
         }
 
         fn runs(&self) -> Vec<Run> {
             let mut runs: Vec<Run> = Vec::new();
-            for (&(kind, unit), (state, _)) in &self.units {
+            for (&(kind, unit), &state) in &self.units {
                 let extends = matches!(kind.class(), KindClass::Range(_))
                     && runs.last().is_some_and(|run| {
-                        run.kind == kind && run.units.end == unit && run.state == *state
+                        run.kind == kind && run.units.end == unit && run.state == state
                     });
                 if extends {
-                    runs.last_mut().unwrap().units.end = unit + 1;
+                    runs.last_mut().unwrap().units.end += 1;
                 } else {
                     runs.push(Run {
                         kind,
                         units: unit..unit + 1,
-                        state: state.clone(),
+                        state,
                     });
                 }
             }
             runs
         }
 
-        /// Whether `range` lies inside one 404 run of `kind`.
-        fn is_known_gap(&self, kind: DataKind, range: &Range<u64>) -> bool {
-            let first = self.state((kind, range.start));
-            first.is_some_and(|first| {
-                first.reason == MissingReason::NotFound
-                    && range
-                        .clone()
-                        .all(|unit| self.state((kind, unit)) == Some(first))
-            })
-        }
-    }
-
-    fn model_alert_height(run: &Run) -> u64 {
-        match run.kind.class() {
-            KindClass::Range(_) => run.units.end,
-            KindClass::Point(_) => run.units.start + 1,
-            KindClass::Epoch(_) => model_root_block(run.kind, run.units.start),
-        }
-    }
-
-    fn expand(set: &MissingSet) -> BTreeMap<Unit, RowState> {
-        let mut units = BTreeMap::new();
-        for row in set.rows() {
-            for unit in row.key.units() {
-                units.insert((row.key.kind(), unit), row.state.clone());
+        /// The height a run is judged against the tip by.
+        fn alert_height(run: &Run) -> Option<u64> {
+            match run.kind.class() {
+                KindClass::Range(_) => Some(run.units.end),
+                KindClass::Point(_) => Some(run.units.end),
+                KindClass::Epoch(kind) => {
+                    EPOCHS.root_block(kind, Epoch(run.units.start)).map(|h| h.0)
+                },
             }
         }
-        units
     }
 
-    /// The image row key.
-    fn image_key(row: &MissingRow) -> (DataKind, u64) {
-        (row.key.kind(), row.key.first_unit())
+    fn seconds(secs: u64) -> TimeDelta {
+        TimeDelta::seconds(secs as i64)
     }
 
-    /// What one op does to the set.
+    /// The units of every row of the set.
+    fn expand(set: &MissingSet) -> BTreeMap<Unit, UnitState> {
+        set.rows()
+            .flat_map(|row| {
+                let kind = row.key.kind();
+                row.key.units().map(move |unit| ((kind, unit), row.state))
+            })
+            .collect()
+    }
+
+    fn check_units(set: &MissingSet, model: &Model) -> Result<(), TestCaseError> {
+        prop_assert_eq!(&expand(set), &model.units);
+        Ok(())
+    }
+
+    /// Range rows of a kind ascend, are disjoint, and touching rows differ in state.
+    fn check_row_order(set: &MissingSet) -> Result<(), TestCaseError> {
+        let rows: Vec<_> = set.rows().collect();
+        for pair in rows.windows(2) {
+            let (a, b) = (&pair[0], &pair[1]);
+            prop_assert!(a.key.kind() <= b.key.kind());
+            if a.key.kind() == b.key.kind() {
+                prop_assert!(a.key.units().end <= b.key.units().start, "{a:?} {b:?}");
+                let touching = a.key.units().end == b.key.units().start;
+                if touching && matches!(a.key, RowKey::Range { .. }) {
+                    prop_assert!(a.state != b.state, "touching equal rows {a:?} {b:?}");
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn check_tallies(
+        set: &MissingSet,
+        model: &Model,
+        now: DateTime<Utc>,
+    ) -> Result<(), TestCaseError> {
+        let runs = model.runs();
+        for settled_end in SETTLED_ENDS {
+            for counted in [now - seconds(100), now, now + seconds(300)] {
+                let tallies = set.tallies(Height(settled_end), counted);
+                prop_assert_eq!(tallies.len(), DataKind::VARIANTS.len());
+                for tally in tallies {
+                    let of_kind = || runs.iter().filter(|run| run.kind == tally.kind);
+                    let missing: u64 = of_kind().map(|run| run.units.end - run.units.start).sum();
+                    prop_assert_eq!(tally.missing_count, missing);
+                    let oldest =
+                        of_kind().min_by_key(|run| (run.state.first_missing_at(), run.units.start));
+                    prop_assert_eq!(
+                        tally
+                            .oldest
+                            .as_ref()
+                            .map(|row| (row.state, row.key.first_unit())),
+                        oldest.map(|run| (run.state, run.units.start))
+                    );
+                    for later in [counted, counted + seconds(50), counted + seconds(900)] {
+                        let expected: u64 = of_kind()
+                            .filter(|run| {
+                                run.state.is_confirmed()
+                                    && run.state.first_missing_at() <= later
+                                    && Model::alert_height(run).is_some_and(|h| h <= settled_end)
+                            })
+                            .map(|run| run.units.end - run.units.start)
+                            .sum();
+                        prop_assert_eq!(tally.confirmed.count(later), expected);
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// The probes of `run`: its units cut at `CHUNK_LEN` from the start.
+    fn run_probes(run: &Run) -> Vec<Probe> {
+        match run.kind.class() {
+            KindClass::Range(kind) => {
+                let mut probes = Vec::new();
+                let mut start = run.units.start;
+                while start < run.units.end {
+                    let end = run.units.end.min(start + CHUNK_LEN);
+                    probes.push(Probe::Range {
+                        kind,
+                        heights: h(start..end),
+                    });
+                    start = end;
+                }
+                probes
+            },
+            KindClass::Point(kind) => vec![Probe::Point {
+                kind,
+                height: Height(run.units.start),
+            }],
+            KindClass::Epoch(kind) => vec![Probe::Epoch {
+                kind,
+                epoch: Epoch(run.units.start),
+            }],
+        }
+    }
+
+    fn check_retry_queue(
+        set: &MissingSet,
+        model: &Model,
+        now: DateTime<Utc>,
+    ) -> Result<(), TestCaseError> {
+        let runs = model.runs();
+        let queue = RetryQueue::new(set, now);
+        let oldest_confirmed = runs
+            .iter()
+            .filter(|run| run.state.is_confirmed())
+            .min_by_key(|run| (run.state.first_missing_at(), run.units.start, run.kind));
+        let representative = oldest_confirmed
+            .filter(|run| run.state.retry().next_at <= now)
+            .map(|run| run_probes(run).remove(0));
+        prop_assert_eq!(&queue.representative, &representative);
+
+        let mut due: Vec<_> = runs
+            .iter()
+            .filter(|run| !run.state.is_confirmed() && run.state.retry().next_at <= now)
+            .collect();
+        due.sort_by_key(|run| (run.state.retry().next_at, run.kind, run.units.start));
+        let expected: Vec<Probe> = due.into_iter().flat_map(run_probes).collect();
+        prop_assert_eq!(drain(queue.confirming), expected);
+
+        let confirmed: Vec<Probe> = runs
+            .iter()
+            .filter(|run| run.state.is_confirmed())
+            .flat_map(run_probes)
+            .collect();
+        prop_assert_eq!(drain(ChunkQueue::confirmed(set)), confirmed);
+        Ok(())
+    }
+
+    fn check_known_and_listed(set: &MissingSet, model: &Model) -> Result<(), TestCaseError> {
+        let runs = model.runs();
+        for run in &runs {
+            let KindClass::Range(kind) = run.kind.class() else {
+                continue;
+            };
+            let not_found = matches!(run.state, UnitState::NotFound { .. });
+            let expect = |gap| if gap { Known::Gap } else { Known::Missing };
+            prop_assert_eq!(set.known(kind, &h(run.units.clone())), expect(not_found));
+            prop_assert_eq!(
+                set.known(kind, &h(run.units.start..run.units.end + 1)),
+                Known::Missing
+            );
+        }
+        let mut order: Vec<_> = runs.iter().collect();
+        order.sort_by_key(|run| (run.state.first_missing_at(), run.units.start, run.kind));
+        let listed = set.listed(20);
+        prop_assert_eq!(listed.total, runs.len() as u64);
+        let shown: Vec<_> = listed
+            .shown
+            .iter()
+            .map(|row| (row.key.kind(), row.key.units()))
+            .collect();
+        let expected: Vec<_> = order
+            .iter()
+            .take(20)
+            .map(|run| (run.kind, run.units.clone()))
+            .collect();
+        prop_assert_eq!(shown, expected);
+        Ok(())
+    }
+
+    /// The write-through image: the units of the rows of each rewritten region are replaced.
+    fn apply_diff(
+        set: &MissingSet,
+        diff: &ImageDiff,
+        image: &mut BTreeMap<Unit, UnitState>,
+    ) -> Result<(), TestCaseError> {
+        for region in &diff.regions {
+            let (kind, units) = region.units();
+            image.retain(|&(k, unit), _| k != kind || !units.contains(&unit));
+            for row in set.rows_in(region) {
+                prop_assert_eq!(row.key.kind(), kind);
+                prop_assert!(
+                    row.key.units().start >= units.start && row.key.units().end <= units.end,
+                    "{row:?} outside {region:?}"
+                );
+                for unit in row.key.units() {
+                    image.insert((kind, unit), row.state);
+                }
+            }
+        }
+        prop_assert_eq!(&*image, &expand(set));
+        Ok(())
+    }
+
+    /// After a probe from the retry queue, its units are gone or wait for a later retry.
+    fn check_liveness(
+        set: &MissingSet,
+        probe: &Probe,
+        now: DateTime<Utc>,
+    ) -> Result<(), TestCaseError> {
+        let (kind, units) = probe_units(probe);
+        let state = expand(set);
+        for unit in units {
+            if let Some(state) = state.get(&(kind, unit)) {
+                prop_assert!(state.retry().next_at > now, "{kind:?} {unit} is still due");
+            }
+        }
+        Ok(())
+    }
+
+    /// What an op does at `now`.
     enum Step {
         Advance(u64),
-        Update(MissingUpdate),
-        /// Nothing is due to retry.
         Skip,
+        Update(MissingUpdate, Option<Probe>),
     }
 
-    /// The step of an op, resolving `Retry` against `due`.
     fn step_of(op: &Op, set: &MissingSet, now: DateTime<Utc>) -> Step {
-        let observation = match op {
-            Op::Advance(secs) => return Step::Advance(*secs),
-            Op::Forget(window_start) => {
-                return Step::Update(MissingUpdate::ForgetBelow(Height(*window_start)));
-            },
+        let observed = |result| Step::Update(MissingUpdate::Observed(result), None);
+        match op {
+            Op::Advance(secs) => Step::Advance(*secs),
+            Op::Forget(height) => Step::Update(MissingUpdate::ForgetBelow(Height(*height)), None),
             Op::Range {
                 kind,
                 start,
                 len,
-                outcome,
-            } => {
-                let outcome = match outcome {
-                    RelOutcome::Present => RangeOutcome::Present,
-                    RelOutcome::Failed(f) => RangeOutcome::Failed(*f),
-                    RelOutcome::Refined { gaps, tail } => RangeOutcome::Refined(GapSearch {
-                        gaps: gaps
-                            .iter()
-                            .map(|g| h(start + g.start..start + g.end))
-                            .collect(),
-                        tail: tail.map(|(offset, reason)| Tail {
-                            heights: h(start + offset..start + len),
-                            reason,
-                        }),
-                    }),
-                };
-                Observation::Range {
-                    kind: *kind,
-                    heights: h(*start..start + len),
-                    outcome,
-                }
-            },
+                shape,
+            } => observed(ProbeResult::Range {
+                kind: *kind,
+                findings: findings_of(h(*start..*start + *len), shape),
+            }),
             Op::Point {
                 kind,
                 height,
-                outcome,
-            } => point_obs(*kind, *height, *outcome),
+                observation,
+            } => observed(point_result(*kind, *height, *observation)),
             Op::Epoch {
                 kind,
                 epoch,
-                outcome,
-            } => epoch_obs(*kind, *epoch, *outcome),
-            Op::Retry(retry) => match set.due(now, 20).into_iter().next() {
-                Some(probe) => retry_observation(probe, *retry),
-                None => return Step::Skip,
-            },
-        };
-        Step::Update(MissingUpdate::Observed(observation))
-    }
-
-    /// The observation of a retried probe.
-    fn retry_observation(probe: Probe, retry: RetryKind) -> Observation {
-        let transport = Failure::Transport;
-        let unit = match retry {
-            RetryKind::Failed => UnitOutcome::Missing(NotServed::Failed(transport)),
-            _ => UnitOutcome::Missing(NotServed::NotFound),
-        };
-        match probe {
-            Probe::Range { kind, heights } => {
-                let middle = Height((heights.start.0 + heights.end.0).div_ceil(2));
-                let tail = |heights, reason| Some(Tail { heights, reason });
-                let (gaps, tail) = match retry {
-                    RetryKind::Failed => {
-                        let outcome = RangeOutcome::Failed(transport);
-                        return Observation::Range {
-                            kind,
-                            heights,
-                            outcome,
-                        };
-                    },
-                    RetryKind::Gap => (vec![heights.clone()], None),
-                    RetryKind::FailedTail => (
-                        vec![],
-                        tail(heights.clone(), Unconfirmed::Failed(transport)),
-                    ),
-                    RetryKind::GapThenFailedTail if middle < heights.end => (
-                        vec![heights.start..middle],
-                        tail(middle..heights.end, Unconfirmed::Failed(transport)),
-                    ),
-                    RetryKind::GapThenFailedTail => (vec![heights.clone()], None),
-                    RetryKind::NoHeightTail => {
-                        (vec![], tail(heights.clone(), Unconfirmed::NoHeight))
-                    },
-                };
-                let outcome = RangeOutcome::Refined(GapSearch { gaps, tail });
-                Observation::Range {
-                    kind,
-                    heights,
-                    outcome,
-                }
-            },
-            Probe::Point { kind, height } => Observation::Point {
-                kind,
-                height,
-                outcome: unit,
-            },
-            Probe::Epoch { kind, epoch } => Observation::Epoch {
-                kind,
-                epoch,
-                outcome: unit,
-            },
-        }
-    }
-
-    /// The kind label and units a retried observation covers.
-    fn observed_units(observation: &Observation) -> (DataKind, Range<u64>) {
-        match observation {
-            Observation::Range { kind, heights, .. } => {
-                ((*kind).into(), heights.start.0..heights.end.0)
-            },
-            Observation::Point { kind, height, .. } => ((*kind).into(), height.0..height.0 + 1),
-            Observation::Epoch { kind, epoch, .. } => ((*kind).into(), epoch.0..epoch.0 + 1),
-        }
-    }
-
-    type Image = BTreeMap<(DataKind, u64), MissingRow>;
-
-    fn check_units(set: &MissingSet, model: &Model) -> Result<(), TestCaseError> {
-        let expected: BTreeMap<_, _> = model
-            .units
-            .iter()
-            .map(|(unit, (state, _))| (*unit, state.clone()))
-            .collect();
-        prop_assert_eq!(expand(set), expected);
-        Ok(())
-    }
-
-    /// Rows are sorted by kind, disjoint, and touching rows differ in state.
-    fn check_row_order(set: &MissingSet) -> Result<(), TestCaseError> {
-        let rows: Vec<_> = set.rows().collect();
-        for pair in rows.windows(2) {
-            prop_assert!(pair[0].key.kind() <= pair[1].key.kind());
-            if let (
-                RowKey::Range {
-                    kind: ka,
-                    heights: a,
-                },
-                RowKey::Range {
-                    kind: kb,
-                    heights: b,
-                },
-            ) = (&pair[0].key, &pair[1].key)
-                && ka == kb
-            {
-                prop_assert!(a.end <= b.start);
-                prop_assert!(a.end != b.start || pair[0].state != pair[1].state);
-            }
-        }
-        Ok(())
-    }
-
-    /// Delays stay in 5 to 600 s, 60 s for confirmed rows; the retry time follows the write.
-    fn check_state_rules(model: &Model) -> Result<(), TestCaseError> {
-        for (&(kind, _), (state, written)) in &model.units {
-            let delay = state.retry_delay.as_secs();
-            prop_assert!((5..=600).contains(&delay));
-            prop_assert!(state.failed_probes >= 1);
-            prop_assert!(!model_confirmed(kind, state) || delay <= 60);
-            prop_assert_eq!(state.next_retry_at, *written + seconds(delay));
-        }
-        Ok(())
-    }
-
-    fn check_summary(
-        set: &MissingSet,
-        model: &Model,
-        now: DateTime<Utc>,
-    ) -> Result<(), TestCaseError> {
-        let runs = model.runs();
-        for summary in set.summary(now) {
-            let of_kind = || {
-                runs.iter()
-                    .filter(|run| run.kind == summary.kind && run.state.first_missing_at <= now)
-            };
-            let count: u64 = of_kind().map(|run| run.units.end - run.units.start).sum();
-            prop_assert_eq!(summary.missing_count, count);
-            let oldest = of_kind().min_by_key(|run| (run.state.first_missing_at, run.units.start));
-            prop_assert_eq!(
-                summary
-                    .oldest
-                    .map(|o| (o.key.first_unit(), o.age.as_secs() as i64)),
-                oldest.map(|run| (
-                    run.units.start,
-                    (now - run.state.first_missing_at).num_seconds()
-                ))
-            );
-        }
-        Ok(())
-    }
-
-    /// The oldest firing run per kind alerts; nothing unconfirmed or of the aggregate does.
-    fn check_alerts(
-        set: &MissingSet,
-        model: &Model,
-        now: DateTime<Utc>,
-    ) -> Result<(), TestCaseError> {
-        let runs = model.runs();
-        let candidates = set.alert_candidates(rule(), SETTLED_END, now);
-        for &kind in DataKind::VARIANTS {
-            let firing = runs
-                .iter()
-                .filter(|run| {
-                    run.kind == kind
-                        && model_confirmed(kind, &run.state)
-                        && run.state.first_missing_at <= now - seconds(60)
-                        && model_alert_height(run) <= SETTLED_END.0
+                observation,
+            } => observed(epoch_result(*kind, *epoch, *observation)),
+            Op::Retry(found) => {
+                let probe = RetryQueue::new(set, now).confirming.next_probe();
+                probe.map_or(Step::Skip, |probe| {
+                    let result = found_result(&probe, *found);
+                    Step::Update(MissingUpdate::Observed(result), Some(probe))
                 })
-                .min_by_key(|run| (run.state.first_missing_at, run.units.start));
-            let found = candidates.iter().find(|c| c.row.key.kind() == kind);
-            prop_assert_eq!(
-                found.map(|c| (c.row.key.units(), c.row.state.clone())),
-                firing.map(|run| (run.units.clone(), run.state.clone()))
-            );
+            },
+            Op::Representative(found) => {
+                let probe = RetryQueue::new(set, now).representative;
+                probe.map_or(Step::Skip, |probe| {
+                    let result = found_result(&probe, *found);
+                    Step::Update(MissingUpdate::Observed(result), Some(probe))
+                })
+            },
         }
-        for candidate in &candidates {
-            prop_assert_eq!(candidate.row.state.reason, MissingReason::NotFound);
-            prop_assert!(candidate.row.key.kind() != DataKind::Aggregate);
-        }
-        Ok(())
-    }
-
-    /// Due probes: due runs by retry time, kind and start, split at 100 heights, first 20.
-    fn check_due(set: &MissingSet, model: &Model, now: DateTime<Utc>) -> Result<(), TestCaseError> {
-        let runs = model.runs();
-        let mut due: Vec<_> = runs
-            .iter()
-            .filter(|run| run.state.next_retry_at <= now)
-            .collect();
-        due.sort_by_key(|run| (run.state.next_retry_at, run.kind, run.units.start));
-        let mut expected = Vec::new();
-        for run in due {
-            let first = run.units.start;
-            match run.kind.class() {
-                KindClass::Range(kind) => {
-                    for start in (first..run.units.end).step_by(100) {
-                        let end = run.units.end.min(start + 100);
-                        expected.push(Probe::Range {
-                            kind,
-                            heights: h(start..end),
-                        });
-                    }
-                },
-                KindClass::Point(kind) => expected.push(Probe::Point {
-                    kind,
-                    height: Height(first),
-                }),
-                KindClass::Epoch(kind) => expected.push(Probe::Epoch {
-                    kind,
-                    epoch: Epoch(first),
-                }),
-            }
-        }
-        expected.truncate(20);
-        prop_assert_eq!(set.due(now, 20), expected);
-        Ok(())
-    }
-
-    /// `known` agrees with the model on the runs and on ranges just inside and past them.
-    fn check_known(set: &MissingSet, model: &Model) -> Result<(), TestCaseError> {
-        for run in model.runs() {
-            let KindClass::Range(kind) = run.kind.class() else {
-                continue;
-            };
-            let (start, end) = (run.units.start, run.units.end);
-            for range in [start..end, start..start + 1, start..end + 1] {
-                let expected = if model.is_known_gap(run.kind, &range) {
-                    Known::Gap
-                } else {
-                    Known::Missing
-                };
-                prop_assert_eq!(set.known(kind, &h(range.clone())), expected, "{:?}", range);
-            }
-        }
-        Ok(())
-    }
-
-    /// The listing is the oldest runs first (start, then kind), with the total.
-    fn check_listed(
-        set: &MissingSet,
-        model: &Model,
-        now: DateTime<Utc>,
-    ) -> Result<(), TestCaseError> {
-        let mut runs: Vec<_> = model
-            .runs()
-            .into_iter()
-            .filter(|run| run.state.first_missing_at <= now)
-            .collect();
-        runs.sort_by_key(|run| (run.state.first_missing_at, run.units.start, run.kind));
-        let expected: Vec<_> = runs
-            .iter()
-            .take(7)
-            .map(|run| {
-                (
-                    run.kind,
-                    run.units.clone(),
-                    (now - run.state.first_missing_at).num_seconds(),
-                )
-            })
-            .collect();
-        let listed = set.listed(now, 7);
-        let shown: Vec<_> = listed
-            .shown
-            .iter()
-            .map(|aged| {
-                (
-                    aged.row.key.kind(),
-                    aged.row.key.units(),
-                    aged.age.as_secs() as i64,
-                )
-            })
-            .collect();
-        prop_assert_eq!(shown, expected);
-        prop_assert_eq!(listed.total, runs.len() as u64);
-        Ok(())
-    }
-
-    /// The image equals the set, and loading it gives the set back.
-    fn check_image(set: &MissingSet, image: &Image) -> Result<(), TestCaseError> {
-        let rows: Vec<_> = set.rows().collect();
-        let image_rows: Vec<_> = image.values().cloned().collect();
-        prop_assert_eq!(&image_rows, &rows);
-        let loaded = MissingSet::from_rows(Some(EPOCH_CONFIG), image_rows)
-            .expect("an image written from a set loads");
-        prop_assert_eq!(loaded.rows().collect::<Vec<_>>(), rows);
-        Ok(())
-    }
-
-    /// Applies the diff's regions to the image and checks each lies inside its region.
-    fn apply_diff(
-        set: &MissingSet,
-        diff: &ImageDiff,
-        image: &mut Image,
-    ) -> Result<(), TestCaseError> {
-        for region in &diff.regions {
-            let (kind, units) = region.units();
-            image.retain(|_, row| {
-                let rows = row.key.units();
-                !(row.key.kind() == kind && rows.start < units.end && rows.end > units.start)
-            });
-            for row in set.rows_in(region) {
-                let rows = row.key.units();
-                prop_assert!(
-                    units.start <= rows.start && rows.end <= units.end,
-                    "{row:?} outside {region:?}"
-                );
-                image.insert(image_key(&row), row);
-            }
-        }
-        Ok(())
-    }
-
-    /// After a retry of a due probe, its units are gone or wait for a later retry.
-    fn check_liveness(
-        set: &MissingSet,
-        retried: &(DataKind, Range<u64>),
-        now: DateTime<Utc>,
-    ) -> Result<(), TestCaseError> {
-        let units = expand(set);
-        for unit in retried.1.clone() {
-            if let Some(state) = units.get(&(retried.0, unit)) {
-                prop_assert!(
-                    state.next_retry_at > now,
-                    "{:?} {unit} is still due",
-                    retried.0
-                );
-            }
-        }
-        Ok(())
     }
 
     /// Runs `ops` against the set and the model, checking every invariant after each step.
     fn run_ops(ops: Vec<Op>) -> Result<(), TestCaseError> {
-        let mut set = MissingSet::new(Some(EPOCH_CONFIG));
+        let mut set = MissingSet::new(EPOCHS);
         let mut model = Model::default();
-        let mut image = Image::new();
+        let mut image = BTreeMap::new();
         let mut now = at(T0);
         for op in ops {
-            let runs_before = model.runs().len();
-            let update = match step_of(&op, &set, now) {
+            let (update, probe) = match step_of(&op, &set, now) {
                 Step::Advance(secs) => {
                     now += seconds(secs);
                     continue;
                 },
                 Step::Skip => continue,
-                Step::Update(update) => update,
+                Step::Update(update, probe) => (update, probe),
             };
-            let retried = match (&op, &update) {
-                (Op::Retry(_), MissingUpdate::Observed(observation)) => {
-                    Some(observed_units(observation))
-                },
-                _ => None,
-            };
+            let runs_before = model.runs().len();
             match &update {
-                MissingUpdate::Observed(observation) => model.apply(observation, now),
+                MissingUpdate::Observed(result) => model.apply(result, now),
                 MissingUpdate::ForgetBelow(window_start) => model.forget_below(window_start.0),
             }
             let diff = set.apply(update, now);
-            prop_assert_eq!(
-                diff.rows_removed,
-                runs_before.saturating_sub(model.runs().len())
-            );
+            let forgotten = matches!(op, Op::Forget(_));
+            if forgotten {
+                prop_assert_eq!(
+                    diff.rows_removed,
+                    runs_before.saturating_sub(model.runs().len())
+                );
+            }
             apply_diff(&set, &diff, &mut image)?;
             check_units(&set, &model)?;
             check_row_order(&set)?;
-            check_state_rules(&model)?;
-            check_summary(&set, &model, now)?;
-            check_alerts(&set, &model, now)?;
-            check_due(&set, &model, now)?;
-            check_known(&set, &model)?;
-            check_listed(&set, &model, now)?;
-            check_image(&set, &image)?;
-            if let Some(retried) = retried {
-                check_liveness(&set, &retried, now)?;
+            check_tallies(&set, &model, now)?;
+            check_retry_queue(&set, &model, now)?;
+            check_known_and_listed(&set, &model)?;
+            if let Some(probe) = probe {
+                check_liveness(&set, &probe, now)?;
             }
         }
         Ok(())
@@ -2857,7 +2161,7 @@ mod tests {
         runtime.block_on(async {
             let options = SqliteConnectOptions::from_str("sqlite::memory:").unwrap();
             let store = Store::connect(options).await.unwrap().node("a:1");
-            let mut persisted = PersistedMissingSet::load(store.clone(), Some(EPOCH_CONFIG))
+            let mut persisted = PersistedMissingSet::load(store.clone(), EPOCHS)
                 .await
                 .unwrap();
             let mut now = at(T0);
@@ -2865,11 +2169,11 @@ mod tests {
                 match step_of(&op, persisted.set(), now) {
                     Step::Advance(secs) => now += seconds(secs),
                     Step::Skip => {},
-                    Step::Update(update) => {
+                    Step::Update(update, _) => {
                         persisted.apply(update, now).await.unwrap();
                     },
                 }
-                let loaded = PersistedMissingSet::load(store.clone(), Some(EPOCH_CONFIG))
+                let loaded = PersistedMissingSet::load(store.clone(), EPOCHS)
                     .await
                     .expect("the image loads");
                 prop_assert_eq!(

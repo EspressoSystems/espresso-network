@@ -1,5 +1,7 @@
 //! Watches archive query nodes for data they fail to serve; see `README.md`.
 
+#[cfg(test)]
+mod capture;
 mod gaps;
 mod http;
 mod kind;
@@ -7,7 +9,10 @@ mod metrics;
 mod missing;
 mod node;
 mod outcome;
+mod report;
+mod retry;
 mod schedule;
+mod state;
 mod store;
 mod system;
 mod view;
@@ -32,11 +37,13 @@ use tracing_subscriber::{EnvFilter, filter::LevelFilter};
 use url::Url;
 
 use crate::{
-    http::{AppState, NodeViewSlot},
+    http::AppState,
+    kind::Epochs,
     metrics::WatchdogMetrics,
-    node::{NodeHttp, WatchedNode},
+    node::{NodeHttp, ProbeTimeouts, WatchedNode},
     store::Store,
     system::{System, WallClock},
+    view::NodeViewSlot,
     watch::{NodeWatch, WatchOptions, Watchdog},
 };
 
@@ -91,10 +98,8 @@ async fn main() -> anyhow::Result<()> {
     result
 }
 
-/// Opens the store, forgets other nodes, creates one view channel per node, spawns
-/// `http::serve`, builds the `System` (`WallClock`, `NodeHttp`), fetches the epoch config and
-/// first tip, applies `--reset`, starts each node, and runs the poller and every
-/// `NodeWatch::run` in one `select!` with the server and `shutdown_signal()`.
+/// As HEAD, plus `NodeHttp::new(ProbeTimeouts::DEFAULT)`, `fetch_epochs`, `start_reporter` on a
+/// second receiver of each view channel, and `Reporter::run` in the `select!`.
 async fn run(options: Options) -> anyhow::Result<()> {
     let nodes = options
         .nodes
@@ -130,21 +135,26 @@ async fn run(options: Options) -> anyhow::Result<()> {
             (sender, slot)
         })
         .unzip();
-    let server = tokio::spawn(http::serve(listener, AppState::new(registry, slots)));
+    let server = tokio::spawn(http::serve(
+        listener,
+        AppState::new(registry, slots.clone()),
+    ));
     log_serving(options.port);
 
     let system = System {
         clock: WallClock,
-        http: NodeHttp::new()?,
+        http: NodeHttp::new(ProbeTimeouts::DEFAULT)?,
     };
     let watchdog = Watchdog::new(system, options.watch, metrics, store);
-    let epochs = watchdog.fetch_epoch_config(&nodes).await?;
-    tracing::info!(
-        epoch_height = epochs.map(|e| e.epoch_height),
-        epoch_start_block = epochs.map(|e| e.epoch_start_block),
-        epochs = epochs.is_none().then_some("off"),
-        "epochs"
-    );
+    let epochs = watchdog.fetch_epochs(&nodes).await?;
+    match epochs {
+        Epochs::On(config) => tracing::info!(
+            epoch_height = config.epoch_height.get(),
+            epoch_start_block = config.epoch_start_block.0,
+            "epochs"
+        ),
+        Epochs::Off => tracing::info!(epochs = "off", "epochs"),
+    }
 
     let (tip_poller, tip) = watchdog.start_tip_poller(nodes.clone()).await?;
     if options.reset {
@@ -157,9 +167,11 @@ async fn run(options: Options) -> anyhow::Result<()> {
             .map(|(node, view)| watchdog.start_node(node, tip.clone(), epochs, view)),
     )
     .await?;
+    let reporter = watchdog.start_reporter(tip, slots);
 
     tokio::select! {
         result = try_join_all(watches.into_iter().map(NodeWatch::run)) => result.map(drop),
+        result = reporter.run() => result.map(drop),
         result = tip_poller.run() => result.map(drop),
         result = server => result?,
         signal = shutdown_signal() => {

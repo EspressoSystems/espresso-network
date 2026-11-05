@@ -1,6 +1,6 @@
 //! Kinds of data, heights and epochs, and the probes that check them.
 
-use std::{fmt, ops::Range};
+use std::{fmt, num::NonZeroU64, ops::Range};
 
 use serde::Deserialize;
 use strum::{IntoStaticStr, VariantArray};
@@ -64,7 +64,6 @@ pub enum RangeKind {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, VariantArray)]
 pub enum PointKind {
     LcLeafProof,
-    Aggregate,
 }
 
 /// Kinds probed once per epoch, with the chunk holding the epoch's root block.
@@ -99,7 +98,6 @@ pub enum DataKind {
     Block,
     VidCommon,
     LcLeafProof,
-    Aggregate,
     StakeTable,
     StateCert,
     LcStakeTable,
@@ -121,16 +119,10 @@ impl DataKind {
             Self::Block => KindClass::Range(RangeKind::Block),
             Self::VidCommon => KindClass::Range(RangeKind::VidCommon),
             Self::LcLeafProof => KindClass::Point(PointKind::LcLeafProof),
-            Self::Aggregate => KindClass::Point(PointKind::Aggregate),
             Self::StakeTable => KindClass::Epoch(EpochKind::StakeTable),
             Self::StateCert => KindClass::Epoch(EpochKind::StateCert),
             Self::LcStakeTable => KindClass::Epoch(EpochKind::LcStakeTable),
         }
-    }
-
-    /// False for `Aggregate`: the node's aggregator lags the tip, so its rows never alert.
-    pub fn can_alert(self) -> bool {
-        self != Self::Aggregate
     }
 
     /// `"heights"` or `"epochs"`, for the page.
@@ -158,7 +150,6 @@ impl From<PointKind> for DataKind {
     fn from(kind: PointKind) -> Self {
         match kind {
             PointKind::LcLeafProof => Self::LcLeafProof,
-            PointKind::Aggregate => Self::Aggregate,
         }
     }
 }
@@ -201,11 +192,6 @@ impl Probe {
         }
     }
 
-    /// Whether the node may wait for blocks before answering: a range over several heights.
-    pub fn waits_server_side(&self) -> bool {
-        matches!(self, Self::Range { heights, .. } if height_count(heights) > 1)
-    }
-
     /// Route of the request, as at HEAD; a point probe of height `h` uses `h` where HEAD used
     /// `end - 1`.
     pub fn route(&self) -> String {
@@ -220,7 +206,6 @@ impl Probe {
             },
             Self::Point { kind, height } => match kind {
                 PointKind::LcLeafProof => format!("v1/light-client/leaf/{height}"),
-                PointKind::Aggregate => format!("v1/node/transactions/count/{height}"),
             },
             Self::Epoch { kind, epoch } => {
                 let epoch = epoch.0;
@@ -234,28 +219,59 @@ impl Probe {
     }
 }
 
-/// Epoch parameters of the network, from `v1/config/hotshot`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+/// Epoch parameters of a network with epochs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct EpochConfig {
-    pub epoch_height: u64,
-    pub epoch_start_block: u64,
+    pub epoch_height: NonZeroU64,
+    pub epoch_start_block: Height,
+}
+
+/// Whether the network has epochs; `Off` means no epoch probes and epoch rows never count or get
+/// forgotten.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Epochs {
+    Off,
+    On(EpochConfig),
+}
+
+/// Raw epoch fields of `v1/config/hotshot`; only `From<HotshotEpochs> for Epochs` reads them.
+#[derive(Clone, Copy, Debug, Deserialize)]
+pub struct HotshotEpochs {
+    epoch_height: u64,
+    epoch_start_block: u64,
+}
+
+impl From<HotshotEpochs> for Epochs {
+    /// `Off` when `epoch_height` is 0, the value reported without epochs.
+    fn from(raw: HotshotEpochs) -> Self {
+        match NonZeroU64::new(raw.epoch_height) {
+            Some(epoch_height) => Self::On(EpochConfig {
+                epoch_height,
+                epoch_start_block: Height(raw.epoch_start_block),
+            }),
+            None => Self::Off,
+        }
+    }
 }
 
 impl EpochConfig {
     /// Epoch of a block: `ceil(block / epoch_height)`, block 0 in epoch 1.
     fn epoch_of(&self, block: Height) -> Epoch {
-        Epoch(block.0.div_ceil(self.epoch_height).max(1))
+        Epoch(block.0.div_ceil(self.epoch_height.get()).max(1))
     }
+}
 
-    /// The block `kind` of `epoch` is probed with: `(epoch - root_lag)` saturating, times
-    /// `epoch_height`; `None` on overflow. The only epoch to block mapping. For stake tables this
-    /// is the boundary of epoch `epoch - 2`, five blocks after the root block the node builds the
-    /// table from (`root_block_in_epoch` subtracts 5).
+impl Epochs {
+    /// The block `kind` of `epoch` is probed with (rule as `EpochConfig::root_block` at HEAD);
+    /// `None` when `Off` or on overflow. The only epoch to block mapping.
     pub fn root_block(&self, kind: EpochKind, epoch: Epoch) -> Option<Height> {
+        let Self::On(config) = self else {
+            return None;
+        };
         epoch
             .0
             .saturating_sub(kind.root_lag())
-            .checked_mul(self.epoch_height)
+            .checked_mul(config.epoch_height.get())
             .map(Height)
     }
 }
@@ -265,10 +281,8 @@ pub fn next_chunk(next: Height, until: Height) -> Option<Range<Height>> {
     (next < until).then(|| next..until.min(Height(next.0.saturating_add(CHUNK_LEN))))
 }
 
-/// Every probe of `chunk`: each range kind over it, each point kind at its last height, each
-/// epoch kind for every epoch whose root block lies in it (from the first epoch, `+ 2` for
-/// `LcStakeTable`). `None` config: no epoch probes.
-pub fn probes(chunk: &Range<Height>, epoch_config: Option<EpochConfig>) -> Vec<Probe> {
+/// Every probe of `chunk`, as at HEAD without `aggregate`; `Epochs::Off`: no epoch probes.
+pub fn probes(chunk: &Range<Height>, epochs: Epochs) -> Vec<Probe> {
     let ranges = RangeKind::VARIANTS.iter().map(|&kind| Probe::Range {
         kind,
         heights: chunk.clone(),
@@ -277,21 +291,33 @@ pub fn probes(chunk: &Range<Height>, epoch_config: Option<EpochConfig>) -> Vec<P
     let points = PointKind::VARIANTS
         .iter()
         .map(|&kind| Probe::Point { kind, height: last });
-    let epochs = epoch_config.into_iter().flat_map(|config| {
-        let first = config.epoch_of(Height(config.epoch_start_block)).0;
-        let candidates = chunk.start.0 / config.epoch_height..=last.0 / config.epoch_height + 2;
-        EpochKind::VARIANTS.iter().flat_map(move |&kind| {
+    let epoch_probes = match epochs {
+        Epochs::Off => Vec::new(),
+        Epochs::On(config) => epoch_probes(chunk, last, config),
+    };
+    ranges.chain(points).chain(epoch_probes).collect()
+}
+
+/// Epoch probes of a chunk: every epoch whose root block lies in it, from the first epoch (`+ 2`
+/// for `LcStakeTable`).
+fn epoch_probes(chunk: &Range<Height>, last: Height, config: EpochConfig) -> Vec<Probe> {
+    let epochs = Epochs::On(config);
+    let first = config.epoch_of(config.epoch_start_block).0;
+    let height = config.epoch_height.get();
+    let candidates = chunk.start.0 / height..=last.0 / height + 2;
+    EpochKind::VARIANTS
+        .iter()
+        .flat_map(|&kind| {
             let first = if kind == EpochKind::LcStakeTable {
                 first + 2
             } else {
                 first
             };
-            let chunk = chunk.clone();
             candidates
                 .clone()
                 .filter(move |&e| {
                     e >= first
-                        && config
+                        && epochs
                             .root_block(kind, Epoch(e))
                             .is_some_and(|block| chunk.contains(&block))
                 })
@@ -300,8 +326,7 @@ pub fn probes(chunk: &Range<Height>, epoch_config: Option<EpochConfig>) -> Vec<P
                     epoch: Epoch(e),
                 })
         })
-    });
-    ranges.chain(points).chain(epochs).collect()
+        .collect()
 }
 
 #[cfg(test)]
@@ -311,10 +336,10 @@ mod tests {
 
     use super::*;
 
-    const EPOCHS: EpochConfig = EpochConfig {
-        epoch_height: 30,
-        epoch_start_block: 61,
-    };
+    const EPOCHS: Epochs = Epochs::On(EpochConfig {
+        epoch_height: NonZeroU64::new(30).unwrap(),
+        epoch_start_block: Height(61),
+    });
 
     fn h(range: Range<u64>) -> Range<Height> {
         Height(range.start)..Height(range.end)
@@ -353,18 +378,18 @@ mod tests {
         // First epoch = ceil(61 / 30) = 3, `lc_stake_table` starts at 5. A stake table of epoch e
         // is probed with the chunk holding block (e - 2) * 30, a state cert with e * 30.
         #[allow(clippy::type_complexity)]
-        let cases: Vec<(&str, Range<u64>, Option<EpochConfig>, Vec<Probe>)> = vec![
-            ("no epochs", 0..100, None, per_height(0..100)),
+        let cases: Vec<(&str, Range<u64>, Epochs, Vec<Probe>)> = vec![
+            ("no epochs", 0..100, Epochs::Off, per_height(0..100)),
             (
                 "stake table of the first epoch comes early",
                 0..60,
-                Some(EPOCHS),
+                EPOCHS,
                 [per_height(0..60), epoch_probes(&[(StakeTable, 3)])].concat(),
             ),
             (
                 "state cert and lc stake table later",
                 60..100,
-                Some(EPOCHS),
+                EPOCHS,
                 [
                     per_height(60..100),
                     epoch_probes(&[(StakeTable, 4), (StakeTable, 5), (StateCert, 3)]),
@@ -375,7 +400,7 @@ mod tests {
             (
                 "several epochs in one chunk",
                 100..220,
-                Some(EPOCHS),
+                EPOCHS,
                 [
                     per_height(100..220),
                     epoch_probes(&[
@@ -402,7 +427,7 @@ mod tests {
             (
                 "block at chunk start",
                 90..100,
-                Some(EPOCHS),
+                EPOCHS,
                 [
                     per_height(90..100),
                     epoch_probes(&[(StakeTable, 5), (StateCert, 3), (LcStakeTable, 5)]),
@@ -412,7 +437,7 @@ mod tests {
             (
                 "block at chunk end excluded",
                 0..90,
-                Some(EPOCHS),
+                EPOCHS,
                 [
                     per_height(0..90),
                     epoch_probes(&[(StakeTable, 3), (StakeTable, 4)]),
@@ -473,9 +498,53 @@ mod tests {
     #[test]
     fn point_route_uses_the_height() {
         let probe = Probe::Point {
-            kind: PointKind::Aggregate,
+            kind: PointKind::LcLeafProof,
             height: Height(1199),
         };
-        assert_eq!(probe.route(), "v1/node/transactions/count/1199");
+        assert_eq!(probe.route(), "v1/light-client/leaf/1199");
+    }
+
+    #[tokio::test]
+    async fn decoding_aggregate_as_a_data_kind_fails() {
+        let pool = sqlx::sqlite::SqlitePool::connect("sqlite::memory:")
+            .await
+            .unwrap();
+        let decode = |label: &'static str| {
+            let pool = pool.clone();
+            async move {
+                sqlx::query_scalar::<_, DataKind>("SELECT ?")
+                    .bind(label)
+                    .fetch_one(&pool)
+                    .await
+            }
+        };
+        assert_eq!(decode("leaf").await.unwrap(), DataKind::Leaf);
+        assert!(decode("aggregate").await.is_err());
+    }
+
+    #[test]
+    fn zero_epoch_height_is_off() {
+        let raw = |epoch_height| HotshotEpochs {
+            epoch_height,
+            epoch_start_block: 61,
+        };
+        assert_eq!(Epochs::from(raw(0)), Epochs::Off);
+        assert_eq!(Epochs::from(raw(30)), EPOCHS);
+    }
+
+    #[test]
+    fn there_is_no_aggregate_kind() {
+        assert_eq!(DataKind::VARIANTS.len(), 7);
+        let labels: Vec<&str> = DataKind::VARIANTS.iter().map(|&k| k.into()).collect();
+        assert!(!labels.contains(&"aggregate"));
+        let routes: Vec<String> = probes(&h(0..100), EPOCHS)
+            .iter()
+            .map(Probe::route)
+            .collect();
+        assert!(
+            routes
+                .iter()
+                .all(|r| !r.starts_with("v1/node/transactions"))
+        );
     }
 }
