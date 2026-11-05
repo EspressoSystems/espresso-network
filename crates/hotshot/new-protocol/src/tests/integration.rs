@@ -2,8 +2,8 @@ use std::{marker::PhantomData, net::Ipv4Addr, time::Duration};
 
 use committable::{Commitment, CommitmentBoundsArkless, Committable};
 use hotshot::types::{BLSPrivKey, BLSPubKey};
-use hotshot_testing::helpers::build_cert;
 use hotshot_example_types::{block_types::TestTransaction, node_types::TestTypes};
+use hotshot_testing::helpers::build_cert;
 use hotshot_types::{
     PeerConnectInfo,
     addr::NetAddr,

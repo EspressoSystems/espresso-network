@@ -1197,6 +1197,10 @@ where
         self.consensus.current_view()
     }
 
+    pub fn last_decided_leaf(&self) -> &Leaf2<T> {
+        self.consensus.last_decided_leaf()
+    }
+
     pub fn state(&self, v: ViewNumber) -> Option<&StateEntry<T>> {
         self.state_manager.get_state(v)
     }
