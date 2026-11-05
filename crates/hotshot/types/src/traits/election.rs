@@ -129,21 +129,12 @@ pub trait MembershipSnapshot<T: NodeType>: Clone + Send + Sync {
 
     /// DA quorum threshold for this epoch.
     fn da_success_threshold(&self) -> U256 {
-        let total = self.total_da_stake();
-        let one = U256::ONE;
-        let two = U256::from(2);
-        let three = U256::from(3);
-        if total < U256::MAX / two {
-            ((total * two) / three) + one
-        } else {
-            ((total / three) * two) + two
-        }
+        supermajority_threshold(self.total_da_stake())
     }
 
     /// Failure threshold (1/3 + 1) for this epoch.
     fn failure_threshold(&self) -> U256 {
-        let total = self.total_stake();
-        (total / U256::from(3)) + U256::ONE
+        one_honest_threshold(self.total_stake())
     }
 
     /// Threshold required for a protocol upgrade.
