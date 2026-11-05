@@ -122,3 +122,36 @@ async fn share_starved_node_recovers_over_cliquenet() {
         .await
         .unwrap();
 }
+
+/// Abstaining on the parent must not prevent producing a child or deciding across epochs.
+#[tokio::test(flavor = "multi_thread")]
+async fn leader_vid_omissions_decide_across_epochs() {
+    for num_nodes in [5, 10, 20] {
+        TestRunner::builder()
+            .num_nodes(num_nodes)
+            .bench_skip_leader_vid(true)
+            .control_lane(ControlLane::On)
+            .epoch_height(10)
+            .target_decisions(30)
+            .max_runtime(std::time::Duration::from_secs(90))
+            .build()
+            .run()
+            .await
+            .unwrap();
+    }
+}
+
+/// A skipped leader must still permit the next view's timeout recovery.
+#[tokio::test(flavor = "multi_thread")]
+async fn leader_vid_omissions_recover_after_offline_leader() {
+    TestRunner::builder()
+        .num_nodes(10)
+        .bench_skip_leader_vid(true)
+        .down_nodes(BTreeSet::from([0]))
+        .epoch_height(10)
+        .target_decisions(30)
+        .build()
+        .run()
+        .await
+        .unwrap();
+}

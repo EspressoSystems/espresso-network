@@ -97,6 +97,10 @@ pub struct TestRunner {
     #[builder(default = 5)]
     num_nodes: usize,
 
+    /// Exercise the combined benchmark VID omissions without mutating process environment.
+    #[builder(default)]
+    bench_skip_leader_vid: bool,
+
     /// Number of leaves each node must decide before the test passes.
     #[builder(default = 10)]
     target_decisions: usize,
@@ -546,6 +550,12 @@ impl TestRunner {
             )
             .await;
 
+            if self.bench_skip_leader_vid {
+                coord.consensus_mut().skip_next_leader_rebroadcast = true;
+                coord.consensus_mut().skip_next_leader_reconstruction = true;
+                coord.consensus_mut().skip_producer_rebroadcast = true;
+            }
+
             if let Some(certs) = self.initial_timeout_certs.get(&i) {
                 for tc in certs {
                     let epoch = tc.epoch().expect("seeded timeout cert has an epoch");
@@ -662,7 +672,7 @@ impl TestRunner {
                                         &connect_infos,
                                     );
                                 let (external_tx, external_rx) = mpsc::unbounded_channel();
-                                let coord = build_test_coordinator(
+                                let mut coord = build_test_coordinator(
                                     change.idx as u64,
                                     net,
                                     membership,
@@ -677,6 +687,11 @@ impl TestRunner {
                                     external_tx,
                                 )
                                 .await;
+                                if self.bench_skip_leader_vid {
+                                    coord.consensus_mut().skip_next_leader_rebroadcast = true;
+                                    coord.consensus_mut().skip_next_leader_reconstruction = true;
+                                    coord.consensus_mut().skip_producer_rebroadcast = true;
+                                }
                                 // Bump the generation so stale events queued
                                 // by the aborted task are ignored.
                                 generations[change.idx] += 1;

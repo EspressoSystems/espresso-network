@@ -749,7 +749,8 @@ where
                     }
                 },
                 Some(out) = self.fetcher.next() => {
-                    if self.consensus.is_reconstructed(out.view, out.payload_commitment) {
+                    if self.consensus.is_reconstructed(out.view, out.payload_commitment)
+                        || self.consensus.bench_skips_reconstruction(out.view) {
                         continue
                     }
                     self.vid_reconstructor.retire_view(out.view);
@@ -984,6 +985,11 @@ where
                     self.storage
                         .append_state_cert(state_cert.view_number(), state_cert.clone());
                 }
+                if self.consensus.bench_skips_reconstruction(view) {
+                    self.vid_reconstructor.retire_view(view);
+                    info!(%node, %view, "bench: skip next leader reconstruction");
+                    return Ok(());
+                }
                 let expected_param =
                     expected_vid_param(&self.membership_coordinator, proposal.data.epoch);
                 self.vid_reconstructor.handle_proposal(
@@ -1111,10 +1117,24 @@ where
             },
             ConsensusOutput::BroadcastVidShare(share) => {
                 debug!(%node, view = %share.view_number(), "send vid share");
-                self.broadcast(
-                    ConsensusMessage::VidShareBroadcast(share),
-                    "broadcast vid share",
-                )?
+                let excluded = self.consensus.vid_rebroadcast_exclusions(&share);
+                if excluded.is_empty() {
+                    self.broadcast(
+                        ConsensusMessage::VidShareBroadcast(share),
+                        "broadcast vid share",
+                    )?;
+                } else {
+                    let message = Message {
+                        sender: self.public_key.clone(),
+                        message_type: MessageType::Consensus(ConsensusMessage::VidShareBroadcast(
+                            share,
+                        )),
+                    };
+                    self.network
+                        .sender()
+                        .broadcast_except(self.consensus.current_view(), &message, &excluded)
+                        .map_err(|e| CoordinatorError::from(e).context("broadcast vid share"))?;
+                }
             },
             ConsensusOutput::SendVote2(vote2) => {
                 let view = vote2.view_number();

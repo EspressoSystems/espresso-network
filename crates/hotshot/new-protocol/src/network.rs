@@ -576,6 +576,30 @@ impl<T: NodeType> Sender<T> {
         Ok(())
     }
 
+    /// Encode once and omit peers that already have, or intentionally skip, the payload.
+    pub(crate) fn broadcast_except(
+        &self,
+        v: ViewNumber,
+        m: &Message<T, Validated>,
+        excluded: &[T::SignatureKey],
+    ) -> Result<(), NetworkError> {
+        let bytes = self.serialize(m)?;
+        let mut targets: HashSet<PublicKey> = self
+            .shared
+            .read()
+            .peers
+            .iter()
+            .filter(|(key, _)| !excluded.contains(key))
+            .map(|(_, info)| info.x25519_key.into())
+            .collect();
+        if !excluded.contains(&self.my_keys.0) {
+            targets.insert(self.my_keys.1);
+        }
+        self.sender_for(m)
+            .multicast(Slot::new(*v), targets, bytes)?;
+        Ok(())
+    }
+
     pub fn max_message_size(&self) -> NonZeroUsize {
         self.sender.config().max_message_size()
     }

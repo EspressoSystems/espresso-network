@@ -1043,7 +1043,11 @@ struct LatePeer {
 
 impl LatePeer {
     fn new() -> Self {
-        let (key, private_key) = BLSPubKey::generated_from_seed_indexed([1; 32], 0);
+        Self::new_with_index(0)
+    }
+
+    fn new_with_index(index: u64) -> Self {
+        let (key, private_key) = BLSPubKey::generated_from_seed_indexed([1; 32], index);
         let keypair = Keypair::derive_from::<BLSPubKey>(&private_key).unwrap();
         let port = test_utils::reserve_tcp_port().unwrap();
         let info = PeerConnectInfo {
@@ -2031,3 +2035,43 @@ const MALFORMED_BLOCK: u64 = 11;
 
 /// A block in the genesis epoch.
 const WELL_FORMED_BLOCK: u64 = 2;
+
+/// The excluded peer receives the later marker, while another peer gets the first one.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_broadcast_except_omits_only_selected_peer() {
+    let data = TestData::new(2).await;
+    let mut harness = TestHarness::new(0).await;
+    let excluded = LatePeer::new_with_index(0);
+    let included = LatePeer::new_with_index(1);
+    let excluded_key = excluded.key;
+    harness.add_peer(excluded.key, excluded.info.clone());
+    harness.add_peer(included.key, included.info.clone());
+    let mut excluded_net = excluded.start(harness.connect_info()).await;
+    let mut included_net = included.start(harness.connect_info()).await;
+    let message = |index: usize| Message {
+        sender: harness.connect_info().0,
+        message_type: MessageType::Consensus(ConsensusMessage::Certificate1(
+            data.views[index].cert1.clone(),
+            harness.connect_info().0,
+        )),
+    };
+    let network = harness.coordinator().network().sender();
+    network
+        .broadcast_except(ViewNumber::new(1), &message(0), &[excluded_key])
+        .unwrap();
+    network.broadcast(ViewNumber::new(1), &message(1)).unwrap();
+    let received = timeout(Duration::from_secs(30), included_net.receive())
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(matches!(received.message_type,
+        MessageType::Consensus(ConsensusMessage::Certificate1(cert, _))
+            if cert.view_number() == data.views[0].view_number));
+    let received = timeout(Duration::from_secs(30), excluded_net.receive())
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(matches!(received.message_type,
+        MessageType::Consensus(ConsensusMessage::Certificate1(cert, _))
+            if cert.view_number() == data.views[1].view_number));
+}

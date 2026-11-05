@@ -3171,3 +3171,110 @@ async fn test_forged_state_cert_at_epoch_root_fails_validation() {
         Ok(_) => panic!("a state_cert with too few signers passed validation"),
     }
 }
+
+#[tokio::test]
+async fn test_bench_vid_recipient_exclusions() {
+    let data = TestData::new_with_epoch_height(12, 10).await;
+    for view in &data.views {
+        let mut harness = ConsensusHarness::new(0).await;
+        let key = *harness.consensus.public_key();
+        let (_, ConsensusInput::VidShare(share)) = view.proposal_input_consensus(&key) else {
+            panic!("expected an assigned share");
+        };
+        harness
+            .consensus
+            .force_set_proposal(view.view_number, view.proposal.data.clone());
+        assert!(
+            harness
+                .consensus
+                .vid_rebroadcast_exclusions(&share)
+                .is_empty()
+        );
+        harness.consensus.skip_producer_rebroadcast = true;
+        assert_eq!(
+            harness.consensus.vid_rebroadcast_exclusions(&share),
+            vec![view.leader_public_key]
+        );
+        harness.consensus.skip_next_leader_reconstruction = true;
+        let proposal = &view.proposal.data;
+        let epoch = if hotshot_types::utils::is_last_block(proposal.block_header.block_number, 10) {
+            proposal.epoch + 1
+        } else {
+            proposal.epoch
+        };
+        let next = harness
+            .consensus
+            .leader_of(view.view_number + 1, epoch)
+            .unwrap();
+        let excluded = harness.consensus.vid_rebroadcast_exclusions(&share);
+        assert!(excluded.contains(&next));
+        assert!(excluded.contains(&view.leader_public_key));
+        assert_eq!(
+            excluded.len(),
+            if next == view.leader_public_key { 1 } else { 2 }
+        );
+    }
+}
+
+#[tokio::test]
+async fn test_bench_next_leader_proposes_without_reconstructing_parent() {
+    let data = TestData::new(4).await;
+    let parent = &data.views[0];
+    let own = &data.views[1];
+    let key = own.leader_public_key;
+    let mut harness = ConsensusHarness::new(node_index_for_key(&key)).await;
+    harness.consensus.skip_next_leader_reconstruction = true;
+    harness
+        .apply_pair(parent.proposal_input_consensus(&key))
+        .await;
+    assert!(
+        harness
+            .consensus
+            .bench_skips_reconstruction(parent.view_number)
+    );
+    harness.apply(parent.cert1_input()).await;
+    assert!(any(harness.outputs(), |o| is_proposal_for_view(
+        o,
+        *own.view_number
+    )));
+    assert!(!any(harness.outputs(), |o| is_vote2_for_view(
+        o,
+        *parent.view_number
+    )));
+    harness.apply_pair(own.proposal_input_consensus(&key)).await;
+    assert!(!any(harness.outputs(), |o| is_vote1_for_view(
+        o,
+        *own.view_number
+    )));
+    harness.apply(own.block_reconstructed_input()).await;
+    harness.apply(own.cert1_input()).await;
+    assert!(any(harness.outputs(), |o| is_vote2_for_view(
+        o,
+        *own.view_number
+    )));
+}
+
+#[tokio::test]
+async fn test_bench_next_leader_does_not_fetch_skipped_parent() {
+    let data = TestData::new(4).await;
+    let key = data.views[1].leader_public_key;
+    for skip in [false, true] {
+        let mut harness = ConsensusHarness::new(node_index_for_key(&key)).await;
+        harness.consensus.skip_next_leader_reconstruction = skip;
+        harness
+            .apply_pair(data.views[0].proposal_input_consensus(&key))
+            .await;
+        harness
+            .apply_pair(data.views[1].proposal_input_consensus(&key))
+            .await;
+        harness.set_view(ViewNumber::new(5), data.views[0].epoch_number);
+        harness
+            .apply(ConsensusInput::Timeout(ViewNumber::new(5)))
+            .await;
+        let fetched = any(harness.outputs(), |output| {
+            matches!(output, ConsensusOutput::RequestMissingPayload {view, ..}
+                if *view == data.views[0].view_number)
+        });
+        assert_eq!(fetched, !skip);
+    }
+}

@@ -220,6 +220,9 @@ const _: () = assert!(DECIDE_BUFFER >= VID_RECONSTRUCT_GC_MARGIN);
 pub struct Consensus<T: NodeType> {
     /// Benchmark only: spends availability redundancy to free the next leader's uplink.
     pub(crate) skip_next_leader_rebroadcast: bool,
+    /// Benchmark only: the next leader abstains from votes requiring this payload.
+    pub(crate) skip_next_leader_reconstruction: bool,
+    pub(crate) skip_producer_rebroadcast: bool,
     proposals: Proposals<T>,
     signed_proposals: BTreeMap<ProposalKey<T>, SignedProposal<T, Proposal<T>>>,
     proposed_views: BTreeSet<ViewNumber>,
@@ -360,6 +363,12 @@ impl<T: NodeType> Consensus<T> {
                 "ESPRESSO_BENCH_SKIP_NEXT_LEADER_REBROADCAST",
             )
             .is_some(),
+            skip_next_leader_reconstruction: std::env::var_os(
+                "ESPRESSO_BENCH_SKIP_NEXT_LEADER_RECONSTRUCTION",
+            )
+            .is_some(),
+            skip_producer_rebroadcast: std::env::var_os("ESPRESSO_BENCH_SKIP_PRODUCER_REBROADCAST")
+                .is_some(),
             proposals: Proposals::new(),
             signed_proposals: BTreeMap::new(),
             proposed_views: BTreeSet::new(),
@@ -1443,6 +1452,49 @@ impl<T: NodeType> Consensus<T> {
             .map(|share| share.payload_byte_len())
     }
 
+    /// Keep the assigned share for proposal validation, but deliberately abstain from
+    /// reconstructing the preceding leader's block while preparing our own.
+    pub(crate) fn bench_skips_reconstruction(&self, view: ViewNumber) -> bool {
+        self.skip_next_leader_reconstruction
+            && self.proposal_at(view).is_some_and(|proposal| {
+                let epoch = self.epoch_after(proposal);
+                self.is_leader(view + 1, epoch)
+            })
+    }
+
+    pub(crate) fn vid_rebroadcast_exclusions(
+        &self,
+        share: &VidDisperseShare2<T>,
+    ) -> Vec<T::SignatureKey> {
+        let mut excluded = Vec::new();
+        let Some(proposal) =
+            self.proposal_with_payload(share.view_number(), share.payload_commitment)
+        else {
+            return excluded;
+        };
+        if self.skip_producer_rebroadcast
+            && let Some(leader) = self.leader_of(proposal.view_number, proposal.epoch)
+        {
+            excluded.push(leader);
+        }
+        if self.skip_next_leader_reconstruction
+            && let Some(leader) =
+                self.leader_of(proposal.view_number + 1, self.epoch_after(proposal))
+            && !excluded.contains(&leader)
+        {
+            excluded.push(leader);
+        }
+        excluded
+    }
+
+    fn epoch_after(&self, proposal: &Proposal<T>) -> EpochNumber {
+        if is_last_block(proposal.block_header.block_number(), *self.epoch_height) {
+            proposal.epoch + 1
+        } else {
+            proposal.epoch
+        }
+    }
+
     /// Whether a proposal parked for its share may already drive the next leader's block
     /// build: the first seen for its view, and one the paired path would not reject outright.
     /// One speculative build per view bounds what a leader's proposals alone can cost the next.
@@ -1533,7 +1585,7 @@ impl<T: NodeType> Consensus<T> {
         // so its payload no longer blocks anything. Its proposal outlives the
         // decide by the decide buffer, which would otherwise keep it a
         // candidate for as long as the lock stays put.
-        if self.decided_views.contains(&view) {
+        if self.decided_views.contains(&view) || self.bench_skips_reconstruction(view) {
             return;
         }
 
