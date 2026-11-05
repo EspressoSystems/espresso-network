@@ -44,44 +44,11 @@ application, and with it may deliver ancestors it has not delivered yet, as far 
 them. An ancestor it does not hold is skipped; {ref "valid-decides"}[Valid decides] says when a
 skipped block is delivered later.
 
-<<<<<<< HEAD
-A view that produces no {name NewProtocol.Cert1}`Cert1` in time is given up. Each node's timer fires, and
-the node sends a timeout vote. The vote names a {name NewProtocol.Cert1}`Cert1` the node holds, no
-earlier than any block it voted2 on, called the vote's lock. A node that sees
-timeout votes for a view from enough nodes that one of them is honest (the
-_one-honest indication_) times the view out too. A quorum of timeout votes is a
-{name NewProtocol.TimeoutCert}`TimeoutCert`, whose lock is the latest of its votes' locks. The next view starts
-on it, and its leader must build on a block no earlier than the certificate's lock.
-Timeout votes go to every node, so the honest signers of a certificate draw every
-other node's vote through the one-honest indication, and the certificate forms
-everywhere without being sent on
-({name NewProtocol.Synchrony.timeoutOneHonest}`Synchrony.timeoutOneHonest`). Only a node handed a certificate
-without having voted for its view sends it on
-({name NewProtocol.Synchrony.timeoutCertForward}`Synchrony.timeoutCertForward`), and a node that keeps timing a
-view out after others left it is answered with what took them past it
-({name NewProtocol.Synchrony.timeoutCatchUp}`Synchrony.timeoutCatchUp`).
-||||||| parent of 0fa17419c (Some small improvements. (#5349))
-A view that produces no {name NewProtocol.Cert1}`Cert1` in time is given up. Each node's timer fires, and
-the node sends a timeout vote. The vote names a {name NewProtocol.Cert1}`Cert1` the node held at the timer, no
-earlier than any block it voted2 on up to the vote's view, called the vote's lock. A node that sees
-timeout votes for a view from enough nodes that one of them is honest (the
-_one-honest indication_) times the view out too. A quorum of timeout votes is a
-{name NewProtocol.TimeoutCert}`TimeoutCert`, whose lock is the latest of its votes' locks. The next view starts
-on it, and its leader must build on a block no earlier than the certificate's lock.
-Timeout votes go to every node, so the honest signers of a certificate draw every
-other node's vote through the one-honest indication, and the certificate forms
-everywhere without being sent on
-({name NewProtocol.Synchrony.timeoutOneHonest}`Synchrony.timeoutOneHonest`). Only a node handed a certificate
-without having voted for its view sends it on
-({name NewProtocol.Synchrony.timeoutCertForward}`Synchrony.timeoutCertForward`), and a node that keeps timing a
-view out after others left it is answered with what took them past it
-({name NewProtocol.Synchrony.timeoutCatchUp}`Synchrony.timeoutCatchUp`).
-=======
 A view that produces no {name NewProtocol.Cert1}`Cert1` in time is given up. Each node's timer
 fires, and the node sends a timeout vote. The vote names a {name NewProtocol.Cert1}`Cert1` the
-node held at the timer, no earlier than any block it voted2 on up to the vote's view, called
-the vote's lock. A node that sees timeout votes for a view from enough nodes that one of them
-is honest (the _one-honest indication_) times the view out too. A quorum of timeout votes is a
+node holds, no earlier than any block it voted2 on, called the vote's lock. A node that sees
+timeout votes for a view from enough nodes that one of them is honest (the _one-honest
+indication_) times the view out too. A quorum of timeout votes is a
 {name NewProtocol.TimeoutCert}`TimeoutCert`, whose lock is the latest of its votes' locks. The
 next view starts on it, and its leader must build on a block no earlier than the certificate's
 lock. Timeout votes go to every node, so the honest signers of a certificate draw every other
@@ -89,7 +56,6 @@ node's vote through the one-honest indication, and the certificate forms everywh
 being sent on. Only a node handed a certificate without having voted for its view sends it on,
 and a node that keeps timing a view out after others left it is answered with what took them past
 it.
->>>>>>> 0fa17419c (Some small improvements. (#5349))
 
 Blocks are grouped into epochs of a fixed number of blocks, and each epoch has its
 own committee. The last block of an epoch must be committed by its own committee
@@ -98,30 +64,12 @@ before the next epoch starts. When it has a {name NewProtocol.Cert1}`Cert1` but 
 again in a later view (a {name NewProtocol.RevoteRequest}`RevoteRequest`).
 {ref "epochs"}[Crossing an epoch boundary] gives an overview.
 
-<<<<<<< HEAD
 *What is proved.* {name NewProtocol.NoFork}`NoFork`, {name NewProtocol.DecideAgreement}`DecideAgreement` and {name NewProtocol.DecidesValid}`DecidesValid` hold at all times,
 before GST too, given the signing rules, genuine certificates, quorums of an epoch
 that share an honest member, no hash collisions and a coherent configuration.
 {name NewProtocol.ChainGrows}`ChainGrows` holds eventually after GST, given in addition the whole
 protocol, promptness within `δ`, synchrony with bound `Δ`, a view timer `τ` longer
 than `8Δ + 3δ`, honest quorums in every epoch, finitely many honest nodes, and
-||||||| parent of 0fa17419c (Some small improvements. (#5349))
-*What is proved.* {name NewProtocol.NoFork}`NoFork`, {name NewProtocol.DecideAgreement}`DecideAgreement` and {name NewProtocol.DecidesValid}`DecidesValid` hold at all times,
-before GST too, given the signing rules, genuine certificates, quorums of an epoch
-that share an honest member, no hash collisions and a coherent configuration.
-{name NewProtocol.ChainGrows}`ChainGrows` holds eventually after GST, given in addition the whole
-protocol, promptness within `δ`, synchrony with bound `Δ`, a view timer `τ` longer
-than `8Δ + 4δ`, honest quorums in every epoch, finitely many honest nodes, and
-=======
-*What is proved.* {name NewProtocol.NoFork}`NoFork`,
-{name NewProtocol.DecideAgreement}`DecideAgreement` and
-{name NewProtocol.DecidesValid}`DecidesValid` hold at all times, before GST too, given the
-signing rules, genuine certificates, quorums of an epoch that share an honest member, no
-hash collisions and a coherent configuration.
-{name NewProtocol.ChainGrows}`ChainGrows` holds eventually after GST, given in addition the
-whole protocol, promptness within `δ`, synchrony with bound `Δ`, a view timer `τ` longer
-than `8Δ + 4δ`, honest quorums in every epoch, finitely many honest nodes, and
->>>>>>> 0fa17419c (Some small improvements. (#5349))
 leaders honest in each epoch infinitely often. {ref "proved"}[What is proved] is the
 one complete list of each result's premises.
 
@@ -133,29 +81,12 @@ can be checked against them directly.
 
 The rules come in layers, each read by a different result:
 
-<<<<<<< HEAD
 * {name NewProtocol.SafeHistory}`SafeHistory`: when a node may sign a vote, and what a decide must show. The
   no-fork result reads nothing else of a node.
 * {name NewProtocol.ProtocolHistory}`ProtocolHistory`: the rest of what a node may do, such as timing out and
   proposing. Liveness needs these.
 * {name NewProtocol.Owed}`Owed`: what a node must eventually do. With a bound on how long anything stays
   owed ({name NewProtocol.Prompt}`Prompt`), liveness needs this too.
-||||||| parent of 0fa17419c (Some small improvements. (#5349))
-* {name NewProtocol.SafeHistory}`SafeHistory`: when a node may sign a vote, and what a decide must show. The
-  no-fork result reads nothing else of a node.
-* {name NewProtocol.ProtocolHistory}`ProtocolHistory`: the rest of what a node may do, such as timing out and
-  proposing. Liveness needs these.
-* {name NewProtocol.Owed}`Owed`: what a node must eventually do. With a bound on how long anything stays
-  owed or a timer unanswered ({name NewProtocol.Prompt}`Prompt`), liveness needs this too.
-=======
-* {name NewProtocol.SafeHistory}`SafeHistory`: when a node may sign a vote, and what a decide
-  must show. The no-fork result reads nothing else of a node.
-* {name NewProtocol.ProtocolHistory}`ProtocolHistory`: the rest of what a node may do, such as
-  timing out and proposing. Liveness needs these.
-* {name NewProtocol.Owed}`Owed`: what a node must eventually do. With a bound on how long
-  anything stays owed or a timer unanswered ({name NewProtocol.Prompt}`Prompt`), liveness needs
-  this too.
->>>>>>> 0fa17419c (Some small improvements. (#5349))
 
 Everything shown here is spliced from the declaration that states it, and every
 reproduced definition is checked against the source when this document is built.
@@ -1095,20 +1026,9 @@ and two quorums of an epoch share a node honest in it. Across views, these rules
 
 * A vote1 on a proposal that follows a timeout checks the parent against the
   timeout certificate's lock ({name NewProtocol.SafeParent}`SafeParent`).
-<<<<<<< HEAD
 * A timeout vote names a lock at least as late as every view the node voted2 in
   ({name NewProtocol.SafeHistory.timeoutLock}`SafeHistory.timeoutLock`).
 * No vote2 follows a timeout of its view ({name NewProtocol.SafeHistory.vote2BeforeTimeout}`SafeHistory.vote2BeforeTimeout`).
-||||||| parent of 0fa17419c (Some small improvements. (#5349))
-* A timeout vote names a lock at least as late as every view up to its own that
-  the node voted2 in ({name NewProtocol.SafeHistory.timeoutLock}`SafeHistory.timeoutLock`).
-* No vote2 follows a timeout of its view ({name NewProtocol.SafeHistory.vote2BeforeTimeout}`SafeHistory.vote2BeforeTimeout`).
-=======
-* A timeout vote names a lock at least as late as every view up to its own that
-  the node voted2 in ({name NewProtocol.SafeHistory.timeoutLock}`SafeHistory.timeoutLock`).
-* No vote2 follows a timeout of its view
-  ({name NewProtocol.SafeHistory.vote2BeforeTimeout}`SafeHistory.vote2BeforeTimeout`).
->>>>>>> 0fa17419c (Some small improvements. (#5349))
 
 Suppose a quorum committed a block at view `x`, and a later view's proposal skips
 past `x` behind a timeout certificate of the same epoch. The certificate's quorum and
@@ -1316,28 +1236,12 @@ tag := "owed"
 %%%
 
 The rules above are permissions: a node that never acts satisfies all of them.
-<<<<<<< HEAD
 {name NewProtocol.Owed}`Owed` is the other side, what a node must eventually do. Each obligation is an
 action that is justified by what the node holds, not yet taken, and not overtaken
 by events. Every obligation ends, and none asks for anything the node would have to
 fetch: a vote1 and a proposal are owed only in the node's current view and until it
 times the view out, a vote2 until the node gives its view up, and a decide only
 after the decide floor.
-||||||| parent of 0fa17419c (Some small improvements. (#5349))
-{name NewProtocol.Owed}`Owed` is the other side, what a node must eventually do. Each obligation is an
-action that is justified by what the node holds, not yet taken, and not overtaken
-by events. Every obligation ends, and none asks for anything the node would have to
-fetch: a vote1 and a proposal are owed only in the node's current view and until it
-times the view out, a vote2 until the node gives its view up, decides it or a
-later one, or leaves its epoch, and a decide only after the decide floor.
-=======
-{name NewProtocol.Owed}`Owed` is the other side, what a node must eventually do.
-Each obligation is an action that is justified by what the node holds, not yet taken,
-and not overtaken by events. Every obligation ends, and none asks for anything the node would
-have to fetch: a vote1 and a proposal are owed only in the node's current view and until it
-times the view out, a vote2 until the node gives its view up, decides it or a
-later one, or leaves its epoch, and a decide only after the decide floor.
->>>>>>> 0fa17419c (Some small improvements. (#5349))
 
 How long an obligation may stay owed is not said here. That is {name NewProtocol.Prompt}`Prompt`,
 below.
@@ -1883,7 +1787,6 @@ Each property is a named proposition, proved for every configuration and committ
 Each premise below is a hypothesis of the proposition, or a field of the structures
 it quantifies over.
 
-<<<<<<< HEAD
 * {name NewProtocol.NoFork}`NoFork`, proved by {name NewProtocol.noFork}`noFork`, and {name NewProtocol.DecideAgreement}`DecideAgreement`, proved by
   {name NewProtocol.decideAgreement}`decideAgreement`: the signing rules and genuine certificates ({name NewProtocol.Network}`Network`),
   quorum intersection ({name NewProtocol.Committee.intersect}`Committee.intersect`), {name NewProtocol.ConfigCoherent}`ConfigCoherent`, {name NewProtocol.CollisionFree}`CollisionFree`,
@@ -1896,43 +1799,6 @@ it quantifies over.
   ({name NewProtocol.TimedNetwork.honestQuorum}`TimedNetwork.honestQuorum`); finitely many honest nodes
   ({name NewProtocol.Committee.honestFinite}`Committee.honestFinite`); {name NewProtocol.Synchrony}`Synchrony`, {name NewProtocol.Prompt}`Prompt`, `8Δ + 3δ < τ`,
   {name NewProtocol.LeaderRotation}`LeaderRotation`, {name NewProtocol.ConfigCoherent}`ConfigCoherent` and {name NewProtocol.CollisionFree}`CollisionFree`.
-||||||| parent of 0fa17419c (Some small improvements. (#5349))
-* {name NewProtocol.NoFork}`NoFork`, proved by {name NewProtocol.noFork}`noFork`, and {name NewProtocol.DecideAgreement}`DecideAgreement`, proved by
-  {name NewProtocol.decideAgreement}`decideAgreement`: the signing rules and genuine certificates ({name NewProtocol.Network}`Network`),
-  quorum intersection ({name NewProtocol.Committee.intersect}`Committee.intersect`), {name NewProtocol.ConfigCoherent}`ConfigCoherent`, {name NewProtocol.CollisionFree}`CollisionFree`,
-  and a block table that is {name NewProtocol.TreeCoherent}`TreeCoherent` and {name NewProtocol.Resolves}`Resolves` the honest nodes'
-  blocks.
-* {name NewProtocol.DecidesValid}`DecidesValid`, proved by {name NewProtocol.decidesValid}`decidesValid`: {name NewProtocol.Network}`Network`, quorum
-  intersection, {name NewProtocol.ConfigCoherent}`ConfigCoherent` and {name NewProtocol.CollisionFree}`CollisionFree`.
-* {name NewProtocol.ChainGrows}`ChainGrows`, proved by {name NewProtocol.Liveness.chainGrows}`Liveness.chainGrows`: a {name NewProtocol.TimedNetwork}`TimedNetwork`, which
-  adds to {name NewProtocol.Network}`Network` the whole protocol and honest quorums in every epoch
-  ({name NewProtocol.TimedNetwork.honestQuorum}`TimedNetwork.honestQuorum`); finitely many honest nodes
-  ({name NewProtocol.Committee.honestFinite}`Committee.honestFinite`); {name NewProtocol.Synchrony}`Synchrony`, {name NewProtocol.Prompt}`Prompt`, `8Δ + 4δ < τ`,
-  {name NewProtocol.LeaderRotation}`LeaderRotation`, {name NewProtocol.ConfigCoherent}`ConfigCoherent` and {name NewProtocol.CollisionFree}`CollisionFree`.
-=======
-* {name NewProtocol.NoFork}`NoFork`, proved by {name NewProtocol.noFork}`noFork`, and
-  {name NewProtocol.DecideAgreement}`DecideAgreement`, proved by
-  {name NewProtocol.decideAgreement}`decideAgreement`: the signing rules and genuine certificates
-  ({name NewProtocol.Network}`Network`), quorum intersection
-  ({name NewProtocol.Committee.intersect}`Committee.intersect`),
-  {name NewProtocol.ConfigCoherent}`ConfigCoherent`, {name NewProtocol.CollisionFree}`CollisionFree`,
-  and a block table that is {name NewProtocol.TreeCoherent}`TreeCoherent` and
-  {name NewProtocol.Resolves}`Resolves` the honest nodes' blocks.
-* {name NewProtocol.DecidesValid}`DecidesValid`, proved by
-  {name NewProtocol.decidesValid}`decidesValid`: {name NewProtocol.Network}`Network`, quorum
-  intersection, {name NewProtocol.ConfigCoherent}`ConfigCoherent` and
-  {name NewProtocol.CollisionFree}`CollisionFree`.
-* {name NewProtocol.ChainGrows}`ChainGrows`, proved by
-  {name NewProtocol.Liveness.chainGrows}`Liveness.chainGrows`: a
-  {name NewProtocol.TimedNetwork}`TimedNetwork`, which adds to {name NewProtocol.Network}`Network`
-  the whole protocol and honest quorums in every epoch
-  ({name NewProtocol.TimedNetwork.honestQuorum}`TimedNetwork.honestQuorum`); finitely many honest
-  nodes ({name NewProtocol.Committee.honestFinite}`Committee.honestFinite`);
-  {name NewProtocol.Synchrony}`Synchrony`, {name NewProtocol.Prompt}`Prompt`, `8Δ + 4δ < τ`,
-  {name NewProtocol.LeaderRotation}`LeaderRotation`,
-  {name NewProtocol.ConfigCoherent}`ConfigCoherent` and
-  {name NewProtocol.CollisionFree}`CollisionFree`.
->>>>>>> 0fa17419c (Some small improvements. (#5349))
 
 ## No fork
 
@@ -2453,16 +2319,8 @@ kind is where an audit should spend its doubt.
   {name NewProtocol.SafeHistory.timeoutLock}`SafeHistory.timeoutLock` read every vote the
   node ever sent, so an implementation meets them across a restart only if it
   persists what it signed.
-<<<<<<< HEAD
 * _A bound on how long._ {name NewProtocol.ChainGrows}`ChainGrows` says decides keep coming after GST, not
   how soon. The proof uses `8Δ + 3δ < τ` to fit a view into one timer, but no
-||||||| parent of 0fa17419c (Some small improvements. (#5349))
-* _A bound on how long._ {name NewProtocol.ChainGrows}`ChainGrows` says decides keep coming after GST, not
-  how soon. The proof uses `8Δ + 4δ < τ` to fit a view into one timer, but no
-=======
-* _A bound on how long._ {name NewProtocol.ChainGrows}`ChainGrows` says decides keep coming after
-  GST, not how soon. The proof uses `8Δ + 4δ < τ` to fit a view into one timer, but no
->>>>>>> 0fa17419c (Some small improvements. (#5349))
   latency bound reaches the statement.
 * _Before GST._ Safety holds at all times. Progress is claimed only after the network
   stabilises ({name NewProtocol.Synchrony}`Synchrony`).
@@ -2535,26 +2393,11 @@ machine and the trace checker; neither needs reading to judge what is claimed.
   honest node is handed is backed.
 * The quorum system: the fields of {name NewProtocol.Committee}`Committee`, quorum intersection and
   finitely many honest nodes ({name NewProtocol.Committee.honestFinite}`Committee.honestFinite`).
-<<<<<<< HEAD
 * For liveness: the fields of {name NewProtocol.TimedNetwork}`TimedNetwork` and {name NewProtocol.Synchrony}`Synchrony`, the bound
   `8Δ + 3δ < τ`, and {name NewProtocol.LeaderRotation}`LeaderRotation`.
 * {name NewProtocol.Resolves}`Resolves` and {name NewProtocol.TreeCoherent}`TreeCoherent`, which are about the block table of the
   statement rather than about the protocol. Without them the statement says nothing,
   since ancestry is followed through the table.
-||||||| parent of 0fa17419c (Some small improvements. (#5349))
-* For liveness: the fields of {name NewProtocol.TimedNetwork}`TimedNetwork` and {name NewProtocol.Synchrony}`Synchrony`, the bound
-  `8Δ + 4δ < τ`, and {name NewProtocol.LeaderRotation}`LeaderRotation`.
-* {name NewProtocol.Resolves}`Resolves` and {name NewProtocol.TreeCoherent}`TreeCoherent`, which are about the block table of the
-  statement rather than about the protocol. Without them the statement says nothing,
-  since ancestry is followed through the table.
-=======
-* For liveness: the fields of {name NewProtocol.TimedNetwork}`TimedNetwork` and
-  {name NewProtocol.Synchrony}`Synchrony`, the bound `8Δ + 4δ < τ`, and
-  {name NewProtocol.LeaderRotation}`LeaderRotation`.
-* {name NewProtocol.Resolves}`Resolves` and {name NewProtocol.TreeCoherent}`TreeCoherent`, which
-  are about the block table of the statement rather than about the protocol. Without them the
-  statement says nothing, since ancestry is followed through the table.
->>>>>>> 0fa17419c (Some small improvements. (#5349))
 
 *Questions worth asking of the rules.*
 

@@ -140,19 +140,9 @@ theorem global_once {h : History} (hg : Global h) :
 /-- **Extending a protocol history by a step that obeys the rules.** -/
 theorem protocolHistory_snoc {h : History} {st : Step} (hp : ProtocolHistory cfg leader node (fun _ => True) (fun _ => True) h)
     (hs : StepOK cfg leader node h st) (hg : Global (h ++ [st])) :
-<<<<<<< HEAD
     ProtocolHistory cfg leader node (fun _ => True) (fun _ => True) (h ++ [st]) := by
-  refine ⟨⟨?_, fun v v' a b _ he hv => hg.vote1Once v v' a b he hv, ?_,
-    fun v v' a b _ he hv => hg.vote2Once v v' a b he hv, ?_, ?_, ?_, ?_⟩, ?_, ?_, ?_, ?_, ?_,
-||||||| parent of 0fa17419c (Some small improvements. (#5349))
-    ProtocolHistory cfg leader node (fun _ => True) (h ++ [st]) := by
-  refine ⟨⟨?_, fun v v' a b _ he hv => hg.vote1Once v v' a b he hv, ?_,
-    fun v v' a b _ he hv => hg.vote2Once v v' a b he hv, ?_, ?_, ?_, ?_⟩, ?_, ?_, ?_, ?_,
-=======
-    ProtocolHistory cfg leader node (fun _ => True) (h ++ [st]) := by
   refine ⟨⟨?_, fun v v' a b _ he hv => hg.vote1Once v v' a b he hv, ?_, ?_, ?_, ?_, ?_⟩,
-    ?_, ?_, ?_, ?_,
->>>>>>> 0fa17419c (Some small improvements. (#5349))
+    ?_, ?_, ?_, ?_, ?_,
     fun m m' v e hs hs' hv hv' he he' _ => global_once hg m m' v e hs hs' hv hv' he he'⟩
   · rintro n vote ⟨st', hn, hm⟩ _
     rcases getElem?_snoc hn with ⟨hold, hu, _⟩ | ⟨rfl, hu, _⟩
@@ -204,16 +194,8 @@ theorem protocolHistory_snoc {h : History} {st : Step} (hp : ProtocolHistory cfg
     · rw [hu]; exact hs.revote r hm
 
 /-- The empty history obeys every rule. -/
-<<<<<<< HEAD
 theorem protocolHistory_nil : ProtocolHistory cfg leader node (fun _ => True) (fun _ => True) [] := by
-  refine ⟨⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩, ?_, ?_, ?_, ?_, ?_, ?_⟩ <;> simp [Sent, SentAt]
-||||||| parent of 0fa17419c (Some small improvements. (#5349))
-theorem protocolHistory_nil : ProtocolHistory cfg leader node (fun _ => True) [] := by
-  refine ⟨⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩, ?_, ?_, ?_, ?_, ?_⟩ <;> simp [Sent, SentAt]
-=======
-theorem protocolHistory_nil : ProtocolHistory cfg leader node (fun _ => True) [] := by
-  refine ⟨⟨?_, ?_, ?_, ?_, ?_, ?_, ?_⟩, ?_, ?_, ?_, ?_, ?_⟩ <;> simp [Sent, SentAt]
->>>>>>> 0fa17419c (Some small improvements. (#5349))
+  refine ⟨⟨?_, ?_, ?_, ?_, ?_, ?_, ?_⟩, ?_, ?_, ?_, ?_, ?_, ?_⟩ <;> simp [Sent, SentAt]
 
 theorem global_nil : Global [] := by
   refine ⟨?_, ?_, ?_⟩ <;> simp [Sent]
