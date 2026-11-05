@@ -4918,6 +4918,7 @@ dependencies = [
  "rayon",
  "rstest",
  "rstest_reuse",
+ "rustix 1.1.4",
  "serde",
  "serde_bytes",
  "serde_json",

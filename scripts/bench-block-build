@@ -23,6 +23,7 @@ two. Before each run the script samples CPU use while idle and warns if other wo
 
 import json
 import logging
+import math
 import os
 import re
 import shutil
@@ -50,9 +51,15 @@ LANES = {
     "from_transactions": "#2a78d6",
     "block_commitments": "#c3c2b7",
     "encode": "#e87ba4",
-    "transaction_commitments": "#eb6834",
+    "transaction_hashes": "#eb6834",
     "vid_commitment": "#1baf7a",
     "builder_commitment": "#eda100",
+}
+# Per-step wording of the cpu kind, see STEPS in the bench.
+CPU_NOTES = {
+    "request_block": ", process cpu {:.1f} ms",
+    "block_commitments": ", process cpu {:.1f} ms",
+    "vid_commitment": ", cpu <= {:.1f} ms (residual)",
 }
 
 log = logging.getLogger("bench-block-build")
@@ -168,23 +175,41 @@ def summarize(runs: pd.DataFrame) -> str:
     median = runs.pivot_table(
         index=keys, columns="side", values="duration", aggfunc="median"
     )
+    # pivot_table drops a side whose cpu is all NaN, i.e. a ref without the instrumentation.
+    cpu = runs.pivot_table(
+        index=keys, columns="side", values="cpu", aggfunc="median"
+    ).reindex(columns=median.columns)
     sem = per_run.sem().unstack("side")
     run_medians = per_run.agg(lambda v: " ".join(f"{x:.2f}" for x in v)).unstack("side")
     if "base" not in median:
         table = pd.DataFrame(
-            {"ms": median["head"], "± se": sem["head"], "runs": run_medians["head"]}
+            {
+                "ms": median["head"],
+                "± se": sem["head"],
+                "cpu ms": cpu["head"],
+                "runs": run_medians["head"],
+            }
         )
     else:
         median = median.dropna()
         ratio = median["head"] / median["base"]
         # Delta-method standard error of head / base.
         se = (sem["head"] ** 2 + ratio**2 * sem["base"] ** 2) ** 0.5 / median["base"]
+        cpu_ratio = cpu["head"] / cpu["base"]
         change = [
             f"{r - 1:+.1%} ± {e:.1%}{'' if abs(r - 1) > 2 * e else ' (noise)'}"
             for r, e in zip(ratio, se.reindex(ratio.index), strict=True)
         ]
         table = median.assign(
-            change=change, base_runs=run_medians["base"], head_runs=run_medians["head"]
+            change=change,
+            base_cpu=cpu["base"],
+            head_cpu=cpu["head"],
+            cpu_change=[
+                "" if pd.isna(r) else f"{r - 1:+.1%}"
+                for r in cpu_ratio.reindex(median.index)
+            ],
+            base_runs=run_medians["base"],
+            head_runs=run_medians["head"],
         )
     table = table.reset_index()
     table["benchmark"] = table.benchmark.str.removeprefix("block_build/")
@@ -198,7 +223,7 @@ def summarize(runs: pd.DataFrame) -> str:
 def waterfall(runs: pd.DataFrame, path: Path) -> None:
     """One panel per malloc, benchmark and ref: each step at its median start and duration."""
     keys = ["malloc", "benchmark", "label", "step"]
-    medians = runs.groupby(keys)[["start", "duration"]].median()
+    medians = runs.groupby(keys)[["start", "duration", "cpu"]].median()
     sem = runs.groupby([*keys, "rep"]).duration.median().groupby(level=keys).sem()
     panels = medians.index.droplevel("step").unique()
     fig, axes = plt.subplots(
@@ -217,10 +242,12 @@ def waterfall(runs: pd.DataFrame, path: Path) -> None:
             xerr=errors,
             error_kw={"ecolor": "#52514e", "capsize": 3},
         )
-        for lane, start, duration, error in zip(
-            lanes, bars.start, bars.duration, errors, strict=True
+        for lane, step, start, duration, cpu, error in zip(
+            lanes, LANES, bars.start, bars.duration, bars.cpu, errors, strict=True
         ):
             note = "not run" if pd.isna(duration) else f"{duration:.1f} ms"
+            if not pd.isna(cpu):
+                note += CPU_NOTES.get(step, ", cpu {:.1f} ms").format(cpu)
             x = 0 if pd.isna(start) else start + duration + error
             ax.text(x, lane, f"  {note}", va="center")
         ax.set_yticks(list(lanes), list(LANES))
@@ -264,8 +291,13 @@ def run_one(binary: Path, name: str, env: dict[str, str], home: Path) -> pd.Data
     # Steps start with criterion's warm-up iterations; keep one per measured iteration.
     measured = int(sum(json.loads(sample_file.read_text())["iters"]))
     steps = json.loads(steps_file.read_text())
-    rows = [(step, s, d) for step, spans in steps.items() for s, d in spans[-measured:]]
-    return pd.DataFrame(rows, columns=["step", "start", "duration"])
+    # Rows are [start, completion - start, cpu]; older refs record [start, duration] only.
+    rows = [
+        (step, *span[:2], span[2] if len(span) > 2 else math.nan)
+        for step, spans in steps.items()
+        for span in spans[-measured:]
+    ]
+    return pd.DataFrame(rows, columns=["step", "start", "duration", "cpu"])
 
 
 def list_benches(binary: Path) -> list[str]:
