@@ -4,6 +4,11 @@ use alloy::primitives::Address;
 use anyhow::Context;
 use async_trait::async_trait;
 use committable::Commitment;
+use espresso_api::v1::{
+    database::{MigrationStatus, TableSize},
+    node::StakeTableWithEpochNumber,
+    status::NodePublicKeys,
+};
 use espresso_types::{
     Certificate2, FeeAccount, FeeAccountProof, FeeMerkleTree, Leaf2, NodeState, PubKey,
     Transaction,
@@ -26,17 +31,14 @@ use hotshot_query_service::{
 };
 use hotshot_types::{
     PeerConfig,
-    addr::NetAddr,
     data::{EpochNumber, VidShare, ViewNumber},
-    light_client::{LCV3StateSignatureRequestBody, StateVerKey},
+    light_client::LCV3StateSignatureRequestBody,
     signature_key::BLSPubKey,
     simple_certificate::LightClientStateUpdateCertificateV2,
     traits::node_implementation::NodeType,
-    x25519,
 };
 use indexmap::IndexMap;
 use light_client::{state::LightClientOptions, storage::LightClientDbOptions};
-use serde::{Deserialize, Serialize};
 use url::Url;
 
 use super::{
@@ -128,38 +130,6 @@ pub(crate) trait NodeStateDataSource {
     fn node_state(&self) -> impl Send + Future<Output = NodeState>;
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct NodePublicKeys {
-    pub eth_account: Option<Address>,
-    pub consensus_key: BLSPubKey,
-    pub state_ver_key: StateVerKey,
-    #[serde(with = "x25519_tagged")]
-    pub x25519_key: Option<x25519::PublicKey>,
-    /// Cliquenet address peers dial: the configured advertise address, `None` when there is none.
-    pub p2p_addr: Option<NetAddr>,
-}
-
-mod x25519_tagged {
-    use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error as _};
-
-    use super::x25519;
-
-    pub fn serialize<S: Serializer>(
-        key: &Option<x25519::PublicKey>,
-        s: S,
-    ) -> Result<S::Ok, S::Error> {
-        key.as_ref().map(ToString::to_string).serialize(s)
-    }
-
-    pub fn deserialize<'de, D: Deserializer<'de>>(
-        d: D,
-    ) -> Result<Option<x25519::PublicKey>, D::Error> {
-        Option::<String>::deserialize(d)?
-            .map(|s| s.parse().map_err(D::Error::custom))
-            .transpose()
-    }
-}
-
 pub(crate) trait NodeKeysDataSource {
     fn node_public_keys(&self) -> impl Send + Future<Output = Option<NodePublicKeys>>;
 }
@@ -168,13 +138,6 @@ pub(crate) trait TokenDataSource<T: NodeType> {
     fn get_initial_supply_l1(&self) -> impl Send + Future<Output = anyhow::Result<U256>>;
     fn get_total_supply_l1(&self) -> impl Send + Future<Output = anyhow::Result<U256>>;
     fn get_decided_header(&self) -> impl Send + Future<Output = espresso_types::Header>;
-}
-
-#[derive(Serialize, Deserialize)]
-#[serde(bound = "T: NodeType")]
-pub struct StakeTableWithEpochNumber<T: NodeType> {
-    pub epoch: Option<EpochNumber>,
-    pub stake_table: Vec<PeerConfig<T>>,
 }
 
 pub(crate) trait StakeTableDataSource<T: NodeType> {
@@ -419,23 +382,6 @@ pub trait StateCertFetchingDataSource<Types: NodeType> {
     ) -> Result<LightClientStateUpdateCertificateV2<Types>, StateCertFetchError>;
 }
 
-/// Database table size information.
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct TableSize {
-    pub table_name: String,
-    pub row_count: i64,
-    pub total_size_bytes: Option<i64>,
-}
-
-/// Status of a single deferred background migration.
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct MigrationStatus {
-    pub name: String,
-    pub started_at: chrono::DateTime<chrono::Utc>,
-    pub completed_at: Option<chrono::DateTime<chrono::Utc>>,
-    pub last_offset: Option<i64>,
-}
-
 /// Data source for database metadata and statistics.
 ///
 /// This trait is only implemented by SQL-based storage backends (PostgreSQL and SQLite).
@@ -630,7 +576,9 @@ pub(crate) trait PruningDataSource {
 
 #[cfg(test)]
 mod test {
-    use hotshot_types::{light_client::StateKeyPair, traits::signature_key::SignatureKey as _};
+    use hotshot_types::{
+        addr::NetAddr, light_client::StateKeyPair, traits::signature_key::SignatureKey as _, x25519,
+    };
 
     use super::*;
 
@@ -816,6 +764,9 @@ pub mod testing {
 
         /// The number of stored leaves at or below `height`.
         async fn count_leaves_up_to(db: &Self::SqlStorage, height: u64) -> anyhow::Result<i64>;
+
+        /// The data pruned height, then the lowest stored leaf above genesis.
+        async fn data_heights(db: &Self::SqlStorage) -> anyhow::Result<(Option<u64>, Option<u64>)>;
 
         /// Record a deferred migration, as the migration runner does when it starts one.
         async fn insert_deferred_migration(

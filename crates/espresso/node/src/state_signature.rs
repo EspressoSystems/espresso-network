@@ -7,7 +7,7 @@ use std::{
 
 use alloy::primitives::FixedBytes;
 use async_lock::RwLock;
-use espresso_types::Header;
+use espresso_types::{Header, traits::SequencerPersistence};
 use hotshot_contract_adapter::light_client::derive_signed_state_digest;
 use hotshot_types::{
     data::{EpochNumber, ViewNumber},
@@ -94,14 +94,11 @@ impl<ApiVer: StaticVersionType> StateSigner<ApiVer> {
         self
     }
 
-    pub(super) async fn handle_decide<I>(
+    pub(super) async fn handle_decide<P: SequencerPersistence>(
         &mut self,
         leaf: &DecidedLeaf,
-        consensus_handle: &ConsensusHandle<SeqTypes, I>,
-    ) where
-        I: hotshot_types::traits::node_implementation::NodeImplementation<SeqTypes>,
-        I::Storage: hotshot_new_protocol::storage::NewProtocolStorage<SeqTypes>,
-    {
+        consensus_handle: &ConsensusHandle<SeqTypes, Arc<P>>,
+    ) {
         match leaf.header.get_light_client_state(leaf.view) {
             Ok(state) => {
                 tracing::debug!(
@@ -110,7 +107,7 @@ impl<ApiVer: StaticVersionType> StateSigner<ApiVer> {
                 );
 
                 let cur_block_height = state.block_height;
-                let blocks_per_epoch = *consensus_handle.epoch_height().await;
+                let blocks_per_epoch = *consensus_handle.epoch_height();
 
                 let option_state_epoch = option_epoch_from_block_number(
                     leaf.with_epoch,
@@ -121,7 +118,6 @@ impl<ApiVer: StaticVersionType> StateSigner<ApiVer> {
                 if self.voting_stake_table_epoch != option_state_epoch {
                     let Ok(membership) = consensus_handle
                         .membership_coordinator()
-                        .await
                         .stake_table_for_epoch(option_state_epoch)
                     else {
                         tracing::error!(

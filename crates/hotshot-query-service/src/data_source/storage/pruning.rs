@@ -38,6 +38,16 @@ pub trait PruneStorage: PrunerConfig {
     async fn prune<'a>(&'a self, _pruner: &mut Self::Pruner<'a>) -> anyhow::Result<Option<u64>> {
         Ok(None)
     }
+
+    /// Called with the height of each decided block, before the block is stored.
+    ///
+    /// On a fresh pruned database, the first block above genesis marks the blocks below it as
+    /// pruned, without deleting anything. A pruned node only keeps recent blocks, and otherwise the
+    /// proactive scan and the fetches of missing parents would download the whole history, only for
+    /// the pruner to delete it.
+    async fn init_pruned_height(&self, _height: u64) -> anyhow::Result<()> {
+        Ok(())
+    }
 }
 
 #[async_trait]

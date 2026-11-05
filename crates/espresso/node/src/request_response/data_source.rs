@@ -14,7 +14,6 @@ use espresso_types::{
     v0_3::{RewardAccountV1, RewardMerkleTreeV1},
     v0_4::{RewardAccountV2, RewardMerkleTreeV2},
 };
-use hotshot_new_protocol::storage::NewProtocolStorage;
 use hotshot_query_service::{
     data_source::{
         VersionedDataSource,
@@ -24,7 +23,6 @@ use hotshot_query_service::{
 };
 use hotshot_types::{
     data::{VidShare, ViewNumber},
-    traits::node_implementation::NodeImplementation,
     vote::HasViewNumber,
 };
 use itertools::Itertools;
@@ -96,9 +94,8 @@ pub trait RequestStorage: Send + Sync {
 }
 
 #[derive(Clone)]
-pub struct DataSource<I: NodeImplementation<SeqTypes>, P: SequencerPersistence> {
-    /// The consensus adapter handle
-    pub consensus_handle: Arc<ConsensusHandle<SeqTypes, I>>,
+pub struct DataSource<P: SequencerPersistence> {
+    pub consensus_handle: Arc<ConsensusHandle<SeqTypes, Arc<P>>>,
     /// The node's state
     pub node_state: NodeState,
     /// The storage
@@ -107,7 +104,7 @@ pub struct DataSource<I: NodeImplementation<SeqTypes>, P: SequencerPersistence> 
     pub persistence: Arc<P>,
 }
 
-impl<I: NodeImplementation<SeqTypes>, P: SequencerPersistence> DataSource<I, P> {
+impl<P: SequencerPersistence> DataSource<P> {
     fn sql_storage(&self, what: &str) -> Result<&dyn RequestStorage> {
         match &self.storage {
             Some(Storage::Sql(storage)) => Ok(&**storage),
@@ -119,11 +116,7 @@ impl<I: NodeImplementation<SeqTypes>, P: SequencerPersistence> DataSource<I, P> 
 
 /// Implement the trait that allows the [`RequestResponseProtocol`] to calculate/derive a response for a specific request
 #[async_trait]
-impl<I: NodeImplementation<SeqTypes>, P: SequencerPersistence> DataSourceTrait<Request>
-    for DataSource<I, P>
-where
-    I::Storage: NewProtocolStorage<SeqTypes>,
-{
+impl<P: SequencerPersistence> DataSourceTrait<Request> for DataSource<P> {
     async fn derive_response_for(&self, request: &Request) -> Result<Response> {
         match request {
             Request::Accounts(height, view, accounts) => {
@@ -387,13 +380,10 @@ where
 ///
 /// Returns an error if the chain cannot be assembled from memory (e.g. the height is below the
 /// latest decided leaf).
-async fn legacy_leaf_chain_from_memory<I: NodeImplementation<SeqTypes>>(
-    consensus_handle: &ConsensusHandle<SeqTypes, I>,
+async fn legacy_leaf_chain_from_memory<P: SequencerPersistence>(
+    consensus_handle: &ConsensusHandle<SeqTypes, Arc<P>>,
     height: u64,
-) -> anyhow::Result<Vec<espresso_types::Leaf2>>
-where
-    I::Storage: NewProtocolStorage<SeqTypes>,
-{
+) -> anyhow::Result<Vec<espresso_types::Leaf2>> {
     let mut leaves = consensus_handle.undecided_leaves().await;
     leaves.sort_by_key(|l| l.view_number());
 

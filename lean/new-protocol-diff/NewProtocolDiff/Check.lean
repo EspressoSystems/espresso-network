@@ -52,11 +52,6 @@ def CheckVote2 : Prop :=
       ∧ History.HasPayload cfg (h.take (i + 1)) b.viewNumber b.payloadCommit
       ∧ v.view = c.view ∧ v.data = c.data.toVote2
 
-/-- `SafeHistory.vote2Once`. -/
-def CheckVote2Once : Prop :=
-  ∀ st ∈ h, ∀ st' ∈ h, ∀ v ∈ vote2sOf st, ∀ v' ∈ vote2sOf st',
-    v.data.epoch = v'.data.epoch → v.view = v'.view → v = v'
-
 /-- `SafeHistory.vote2BeforeTimeout`. -/
 def CheckVote2BeforeTimeout : Prop :=
   ∀ i, (hi : i < h.length) → ∀ v ∈ vote2sOf h[i], ∀ st ∈ h.take (i + 1), ∀ tv ∈ timeoutVotesOf st,
@@ -65,7 +60,7 @@ def CheckVote2BeforeTimeout : Prop :=
 /-- `SafeHistory.timeoutLock`. -/
 def CheckTimeoutLock : Prop :=
   ∀ i, (hi : i < h.length) → ∀ tv ∈ timeoutVotesOf h[i], ∀ st ∈ h.take i, ∀ v2 ∈ vote2sOf st,
-    v2.data.epoch < tv.data.lock.data.epoch
+    v2.view ≤ tv.view → v2.data.epoch < tv.data.lock.data.epoch
       ∨ (v2.data.epoch = tv.data.lock.data.epoch ∧ v2.view ≤ tv.data.lock.view)
 
 /-- `SafeHistory.decideJustified`. -/
@@ -91,7 +86,6 @@ def CheckDecideOnce : Prop :=
 instance : Decidable (CheckVote1 cfg node h) := by unfold CheckVote1; infer_instance
 instance : Decidable (CheckVote1Once h) := by unfold CheckVote1Once; infer_instance
 instance : Decidable (CheckVote2 cfg node h) := by unfold CheckVote2; infer_instance
-instance : Decidable (CheckVote2Once h) := by unfold CheckVote2Once; infer_instance
 instance : Decidable (CheckVote2BeforeTimeout h) := by unfold CheckVote2BeforeTimeout; infer_instance
 instance : Decidable (CheckTimeoutLock h) := by unfold CheckTimeoutLock; infer_instance
 -- The decide rule's conjuncts outgrow the default instance size.
@@ -104,7 +98,6 @@ def checkRules : List (String × Bool) :=
   [ ("vote1Justified", decide (CheckVote1 cfg node h)),
     ("vote1Once", decide (CheckVote1Once h)),
     ("vote2Justified", decide (CheckVote2 cfg node h)),
-    ("vote2Once", decide (CheckVote2Once h)),
     ("vote2BeforeTimeout", decide (CheckVote2BeforeTimeout h)),
     ("timeoutLock", decide (CheckTimeoutLock h)),
     ("decideJustified", decide (CheckDecide cfg h)),
@@ -125,8 +118,8 @@ theorem checkSafe_sound (hc : checkSafe cfg node h = true) (hvalid : ValidityTru
     (P : EpochNumber → Prop) : SafeHistory cfg node P h := by
   simp only [checkSafe, checkRules, List.all_cons, List.all_nil, Bool.and_true,
     Bool.and_eq_true, decide_eq_true_eq] at hc
-  obtain ⟨h1, h1o, h2, h2o, hbt, hlock, hdec, honce⟩ := hc
-  refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  obtain ⟨h1, h1o, h2, hbt, hlock, hdec, honce⟩ := hc
+  refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
   · rintro n vote ⟨st, hst, hmem⟩ _
     obtain ⟨hn, rfl⟩ := List.getElem?_eq_some_iff.mp hst
     obtain ⟨hsig, ⟨st', hst', x, hx, hwf, hsafe, hop, hfor, st'', hst'', hval⟩ | ⟨x, hx, hw, hs, hag⟩⟩ :=
@@ -145,17 +138,13 @@ theorem checkSafe_sound (hc : checkSafe cfg node h = true) (hvalid : ValidityTru
     obtain ⟨hsig, hgen, c, hc, b, hb, hcert, hpay, hview, hdata⟩ :=
       h2 n hn vote (mem_vote2sOf.mpr hmem)
     exact ⟨hsig, hgen, c, b, hasCert1_of_mem hc, hasProposal_of_mem hb, hcert, hpay, hview, hdata⟩
-  · intro v v' hs hs' _ he hv
-    obtain ⟨st, hst, hm⟩ := hs
-    obtain ⟨st', hst', hm'⟩ := hs'
-    exact h2o st hst st' hst' v (mem_vote2sOf.mpr hm) v' (mem_vote2sOf.mpr hm') he hv
   · rintro n vote ⟨st, hst, hmem⟩ _ tv ⟨st', hst', htv⟩ _
     obtain ⟨hn, rfl⟩ := List.getElem?_eq_some_iff.mp hst
     exact Nat.lt_of_not_le fun hle =>
       hbt n hn vote (mem_vote2sOf.mpr hmem) st' hst' tv (mem_timeoutVotesOf htv) hle
-  · rintro n vote ⟨st, hst, hmem⟩ _ v2 ⟨st', hst', hv2⟩ _
+  · rintro n vote ⟨st, hst, hmem⟩ _ v2 ⟨st', hst', hv2⟩ _ hle
     obtain ⟨hn, rfl⟩ := List.getElem?_eq_some_iff.mp hst
-    exact hlock n hn vote (mem_timeoutVotesOf hmem) st' hst' v2 (mem_vote2sOf.mpr hv2)
+    exact hlock n hn vote (mem_timeoutVotesOf hmem) st' hst' v2 (mem_vote2sOf.mpr hv2) hle
   · intro n st blocks c1 c2 hst hmem _
     obtain ⟨hn, rfl⟩ := List.getElem?_eq_some_iff.mp hst
     obtain ⟨⟨head, hhead, hc2, hcommit, hc1, hcert⟩, hlinked, hall⟩ :=

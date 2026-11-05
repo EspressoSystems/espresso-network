@@ -146,6 +146,14 @@ which the specification does not model.
 def signsNoLock (text : String) : Bool :=
   (text.splitOn "\n").any (· == "# timeouts sign no lock")
 
+/--
+Whether the test that recorded the trace failed: the `# test failed` line. A failing
+test has left the path it was written for, so its run says nothing about whether the
+node conforms.
+-/
+def testFailed (text : String) : Bool :=
+  (text.splitOn "\n").any (· == "# test failed")
+
 /-- The traces an argument names: itself, or every `*.jsonl` in it. -/
 def tracesUnder (path : System.FilePath) : IO (Array System.FilePath) := do
   if ← path.isDir then
