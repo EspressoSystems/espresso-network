@@ -1183,6 +1183,9 @@ class LoadState:
         self.submit_errors = 0
         self.failovers = 0
         self.included: set[int] = set()
+        # Timed out while a block they may be in was still unscanned, with the time by which
+        # that block must have shown on the query node; see `include`.
+        self.timed_out: dict[int, tuple[Tx, float]] = {}
         self.duplicates = 0
         self.heartbeat_errors = 0
         self.missing_payloads: list[int] = []
@@ -1222,7 +1225,13 @@ class LoadState:
             self.timeouts += 1
         self.room.set()
 
+    def time_out(self, tx: Tx, now: float, findable_until: float) -> None:
+        """A scan that finds it in a block shown by `findable_until` still includes it."""
+        self.resolve(tx.id, "timeout", now)
+        self.timed_out[tx.id] = (tx, findable_until)
+
     def include(self, tx_id: int, height: int, at: float) -> None:
+        """`at`: when the block showed on the query node."""
         if tx_id in self.included:
             self.duplicates += 1
             return
@@ -1231,6 +1240,20 @@ class LoadState:
             self.included.add(tx_id)
             tx.height = height
             self.resolve(tx_id, "included", at)
+            return
+        late = self.timed_out.pop(tx_id, None)
+        if late is not None and at <= late[1]:
+            tx = late[0]
+            self.included.add(tx_id)
+            tx.height, tx.status, tx.t_included = height, "included", at
+            self.timeouts -= 1
+
+    def forget_unfindable(self, scanned_until: float) -> None:
+        """Every block the query node showed before `scanned_until` is scanned: a timed-out
+        transaction whose block had to show before then can no longer be included."""
+        self.timed_out = {
+            i: late for i, late in self.timed_out.items() if late[1] >= scanned_until
+        }
 
 
 async def generate_load(
@@ -2186,7 +2209,9 @@ async def track_inclusion(
 ) -> None:
     """Scan every new block's payload for our marker; time out transactions that never show.
     A transaction counts as included when its block's header appeared on the query node. A
-    payload no query node has is retried after each scan until MISSING_PAYLOAD_S."""
+    payload no query node has is retried after each scan until MISSING_PAYLOAD_S. After
+    `done`, scans go on while a timed-out transaction may still be found, up to
+    `tx_timeout_s`."""
     deadline = None
     report = clock.time() + PROGRESS_S
     reported_timeouts = 0
@@ -2204,11 +2229,13 @@ async def track_inclusion(
                 state.timeouts - reported_timeouts,
             )
             report, reported_timeouts = now + PROGRESS_S, state.timeouts
+        state.forget_unfindable(scanned_before(heights, height, missing, now))
         if done.is_set():
             if deadline is None:
                 deadline = now + cfg.tx_timeout_s
                 state.phase = Phase("done", None, now, cfg.tx_timeout_s)
-            if not state.pending or (now > deadline and not missing):
+            settled = not state.pending and not state.timed_out
+            if settled or (now > deadline and not missing):
                 for tx_id in list(state.pending):
                     state.resolve(tx_id, "timeout", now)
                 log_totals(state)
@@ -2216,9 +2243,12 @@ async def track_inclusion(
         for tx in [
             tx for tx in state.pending.values() if now - tx.t_submit > cfg.tx_timeout_s
         ]:
-            state.resolve(tx.id, "timeout", now)
+            state.time_out(tx, now, tx.t_submit + cfg.tx_timeout_s)
         top = heights.top("query")
-        while height < top - PAYLOAD_LAG_BLOCKS:
+        # A backlog can outlast the deadline: check it between batches.
+        while height < top - PAYLOAD_LAG_BLOCKS and (
+            deadline is None or clock.time() <= deadline
+        ):
             batch = range(height, min(top - PAYLOAD_LAG_BLOCKS, height + SCAN_BATCH))
             scans = await asyncio.gather(*(scan_stamped(scan, h, clock) for h in batch))
             for h, (ids, at, answered) in zip(batch, scans):
@@ -2231,6 +2261,14 @@ async def track_inclusion(
         await clock.asleep(0.1)
 
 
+def scanned_before(
+    heights: Heights, next_height: int, missing: Mapping[int, float], now: float
+) -> float:
+    """When the query node showed the lowest height not scanned yet: every block it showed
+    before then is scanned. `now` when every block it showed is."""
+    return heights.seen["query"].get(min([next_height, *missing]), now)
+
+
 async def retry_missing(
     state: LoadState,
     scan: Scan,
@@ -2239,8 +2277,9 @@ async def retry_missing(
     clock: Clock,
 ) -> None:
     """One fetch per missing payload. Past MISSING_PAYLOAD_S after its block appeared a
-    payload counts as lost; its transactions, which cannot be told apart, time out. The
-    time restarts while every query node refuses."""
+    payload counts as lost; its transactions, which cannot be told apart, time out. A lost
+    payload counts as scanned when given up. The time restarts while every query node
+    refuses."""
     for height, at_height in list(missing.items()):
         ids, at, answered = await scan_stamped(scan, height, clock)
         if not answered:
@@ -2252,6 +2291,7 @@ async def retry_missing(
         if ids is None:
             log.warning("payload %d missing on every query node, skipping", height)
             state.missing_payloads.append(height)
+            heights.scanned[height] = at
         else:
             record_inclusions(state, ids, heights, height, at)
 

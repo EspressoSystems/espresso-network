@@ -3100,3 +3100,223 @@ def test_an_unmatched_tx_counts_its_time_so_far_when_the_scan_bounds_nothing(hei
     """A tx sent at 20 and unmatched at 30 counts 10 s, as before the fix."""
     latency = some(consensus_latency([unmatched(20.0)], heights, 30.0))
     assert latency["p50"] == pytest.approx(10000.0)
+
+
+# The query node shows the heights below the count at the time.
+Shown = tuple[float, int]
+Event = tuple[float, Callable[[], object]]
+
+# Past the deadline, a tracker may finish the scans it has started and its poll.
+TRACKER_SLACK_S = 1.0
+
+
+def submit_at(state: netbench.LoadState, tx_id: int, t_submit: float) -> netbench.Tx:
+    tx = netbench.Tx(id=tx_id, node=0, t_queued=t_submit, t_submit=t_submit)
+    state.submitted(tx)
+    return tx
+
+
+def show_query(heights: netbench.Heights, clock: fakes.FakeClock, count: int) -> None:
+    heights.saw("query", count, clock.time())
+
+
+def shows(
+    heights: netbench.Heights, clock: fakes.FakeClock, *shown: Shown
+) -> list[Event]:
+    return [(t, functools.partial(show_query, heights, clock, n)) for t, n in shown]
+
+
+def run_tracker(
+    cfg: netbench.BenchConfig,
+    state: netbench.LoadState,
+    heights: netbench.Heights,
+    scan: netbench.Scan,
+    done: asyncio.Event,
+    clock: fakes.FakeClock,
+    events: list[Event],
+) -> float:
+    """`track_inclusion` while each event's action runs at its time (awaited if it returns
+    an awaitable); returns the time the tracker returned."""
+
+    async def tracked() -> float:
+        await netbench.track_inclusion(cfg, state, scan, heights, [], done, clock)
+        return clock.time()
+
+    async def main() -> float:
+        tracker = asyncio.create_task(tracked())
+        for at, action in sorted(events, key=lambda e: e[0]):
+            await clock.asleep(max(0.0, at - clock.time()))
+            if inspect.isawaitable(outcome := action()):
+                await outcome
+        return await tracker
+
+    return clock.run(main())
+
+
+LAG = netbench.PAYLOAD_LAG_BLOCKS
+
+
+def test_a_tx_timed_out_while_its_block_waited_for_the_scan_is_included_when_found():
+    """Sent at 0 with a 2 s timeout; its block, height 0, shows at 0.5 but is scanned only
+    once the next height shows at 3. The timeout frees its room; the late find includes it
+    at 0.5."""
+    clock, done = fakes.FakeClock(), asyncio.Event()
+    state, heights = netbench.LoadState(), netbench.Heights(0)
+    tx = submit_at(state, 0, 0.0)
+    room: list[bool] = []
+
+    async def scan(height: int) -> list[int] | None:
+        return [0] if height == 0 else []
+
+    async def check_room() -> None:
+        room.append(await state.wait_for_room(clock.time(), clock))
+
+    events = [
+        *shows(heights, clock, (0.5, 1), (3.0, 1 + LAG)),
+        (2.5, check_room),
+        (4.0, done.set),
+    ]
+    cfg = netbench.BenchConfig(tx_timeout_s=2)
+    run_tracker(cfg, state, heights, scan, done, clock, events)
+    assert room == [True]
+    assert (tx.status, tx.height) == ("included", 0)
+    assert tx.t_included == pytest.approx(0.5)
+    assert state.timeouts == 0
+
+
+def test_a_late_find_is_included_only_if_its_block_showed_within_the_timeout():
+    """Both sent at 0 with a 2 s timeout and found after it: tx 0's block showed at 0.5,
+    tx 1's at 2.5, too late to count."""
+    clock, done = fakes.FakeClock(), asyncio.Event()
+    state, heights = netbench.LoadState(), netbench.Heights(0)
+    early, late = submit_at(state, 0, 0.0), submit_at(state, 1, 0.0)
+
+    async def scan(height: int) -> list[int] | None:
+        return {0: [0], 1: [1]}.get(height, [])
+
+    events = [
+        *shows(heights, clock, (0.5, 1), (2.5, 2), (3.0, 2 + LAG)),
+        (4.0, done.set),
+    ]
+    cfg = netbench.BenchConfig(tx_timeout_s=2)
+    run_tracker(cfg, state, heights, scan, done, clock, events)
+    assert [(tx.status, tx.height) for tx in (early, late)] == [
+        ("included", 0),
+        ("timeout", None),
+    ]
+    assert early.t_included == pytest.approx(0.5)
+    assert late.t_included is None
+    assert state.timeouts == 1
+
+
+def test_after_done_with_nothing_pending_the_tracker_still_scans_the_backlog():
+    """tx 0, sent at 0 with a 2 s timeout, is in height 2, shown at 0.5. Slow scans of
+    heights 0 and 1 run until about 3.3: by then the tx timed out, the load was done at 2.5
+    and height 2 became scannable at 2.6. Nothing is pending, yet the tracker scans height 2
+    and includes the tx."""
+    clock, done = fakes.FakeClock(), asyncio.Event()
+    state, heights = netbench.LoadState(), netbench.Heights(0)
+    tx = submit_at(state, 0, 0.0)
+    slow_s = {0: 2.05, 1: 1.0}
+
+    async def scan(height: int) -> list[int] | None:
+        await clock.asleep(slow_s.get(height, 0.0))
+        return [0] if height == 2 else []
+
+    events = [
+        *shows(heights, clock, (0.0, 1 + LAG), (0.5, 2 + LAG), (2.6, 3 + LAG)),
+        (2.5, done.set),
+    ]
+    cfg = netbench.BenchConfig(tx_timeout_s=2)
+    run_tracker(cfg, state, heights, scan, done, clock, events)
+    assert (tx.status, tx.height) == ("included", 2)
+    assert tx.t_included == pytest.approx(0.5)
+
+
+def test_after_done_the_tracker_scans_the_last_height_shown_once_the_next_one_shows():
+    """tx 0 times out at 2 and the load is done at 2.5; its block, the last height shown,
+    at 0.5, can be scanned only once the next height shows at 3. The tracker waits for it
+    and includes the tx."""
+    clock, done = fakes.FakeClock(), asyncio.Event()
+    state, heights = netbench.LoadState(), netbench.Heights(0)
+    tx = submit_at(state, 0, 0.0)
+
+    async def scan(height: int) -> list[int] | None:
+        return [0] if height == 0 else []
+
+    events = [*shows(heights, clock, (0.5, 1), (3.0, 1 + LAG)), (2.5, done.set)]
+    cfg = netbench.BenchConfig(tx_timeout_s=2)
+    run_tracker(cfg, state, heights, scan, done, clock, events)
+    assert (tx.status, tx.height) == ("included", 0)
+    assert tx.t_included == pytest.approx(0.5)
+
+
+def test_after_done_the_tracker_scans_until_the_timeout_when_the_scan_never_catches_up():
+    """tx 0, sent at 0 with a 2 s timeout, is in height 99. The load is done at 1.5, when
+    the query node shows nothing yet; at 1.8 it shows 100 heights, then one more every
+    0.1 s. A scan takes 0.5 s, so after tx 0 times out at 2 the scan never reaches its
+    block: the tracker scans until 2 s after done, checking between scans, and returns."""
+    clock, done = fakes.FakeClock(), asyncio.Event()
+    state, heights = netbench.LoadState(), netbench.Heights(0)
+    submit_at(state, 0, 0.0)
+
+    async def scan(height: int) -> list[int] | None:
+        await clock.asleep(0.5)
+        return [0] if height == 99 else []
+
+    done_at = 1.5
+    feed = shows(heights, clock, *((1.8 + k / 10, 100 + k) for k in range(80)))
+    cfg = netbench.BenchConfig(tx_timeout_s=2)
+    returned = run_tracker(
+        cfg, state, heights, scan, done, clock, [*feed, (done_at, done.set)]
+    )
+    deadline = done_at + cfg.tx_timeout_s
+    assert deadline - 0.5 <= returned <= deadline + TRACKER_SLACK_S
+    assert any((h["scanned"] or 0.0) > done_at for h in heights.records())
+
+
+def test_after_done_with_no_tx_timed_out_the_tracker_leaves_the_backlog():
+    """Guard: tx 0 is included at once. At 1 the load is done just as the query node shows
+    98 more heights: no tx timed out, so the tracker returns within 0.5 s and scans none of
+    them."""
+    clock, done = fakes.FakeClock(), asyncio.Event()
+    state, heights = netbench.LoadState(), netbench.Heights(0)
+    tx = submit_at(state, 0, 0.0)
+
+    async def scan(height: int) -> list[int] | None:
+        await clock.asleep(0.5 if height > 0 else 0.0)
+        return [0] if height == 0 else []
+
+    def backlog_and_done() -> None:
+        show_query(heights, clock, 100)
+        done.set()
+
+    events = [*shows(heights, clock, (0.2, 1 + LAG)), (1.0, backlog_and_done)]
+    cfg = netbench.BenchConfig(tx_timeout_s=2)
+    returned = run_tracker(cfg, state, heights, scan, done, clock, events)
+    assert tx.status == "included"
+    assert returned <= 1.0 + 0.5
+    assert [h["height"] for h in heights.records() if h["scanned"] is not None] == [0]
+
+
+def test_a_payload_given_up_as_lost_shows_as_scanned_when_given_up():
+    """Height 0's payload is missing on every query node: given up past MISSING_PAYLOAD_S,
+    it shows as scanned at that last attempt, is listed missing, and its tx times out."""
+    clock, done = fakes.FakeClock(), asyncio.Event()
+    state, heights = netbench.LoadState(), netbench.Heights(0)
+    tx = submit_at(state, 0, 0.0)
+    calls: collections.defaultdict[int, list[float]] = collections.defaultdict(list)
+
+    async def scan(height: int) -> list[int] | None:
+        calls[height].append(clock.time())
+        return None if height == 0 else []
+
+    end = netbench.MISSING_PAYLOAD_S + 2.0
+    events = [*shows(heights, clock, (0.0, 3)), (end, done.set)]
+    cfg = netbench.BenchConfig(tx_timeout_s=2)
+    run_tracker(cfg, state, heights, scan, done, clock, events)
+    lost = next(h for h in heights.records() if h["height"] == 0)
+    assert state.missing_payloads == [0]
+    assert tx.status == "timeout"
+    assert lost["scanned"] == pytest.approx(calls[0][-1])
+    assert lost["scanned"] >= netbench.MISSING_PAYLOAD_S
