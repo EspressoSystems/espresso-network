@@ -55,37 +55,42 @@
 <a href=#55 id=55 data-nosnippet>55</a>        <span class="self">self</span>.all.range(r).flat_map(|(<span class="kw">_</span>, a)| a.values())
 <a href=#56 id=56 data-nosnippet>56</a>    }
 <a href=#57 id=57 data-nosnippet>57</a>
-<a href=#58 id=58 data-nosnippet>58</a>    <span class="kw">pub fn </span>last(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>Proposal&lt;T&gt;&gt; {
-<a href=#59 id=59 data-nosnippet>59</a>        <span class="kw">let </span>(<span class="kw">_</span>, all) = <span class="self">self</span>.all.last_key_value()<span class="question-mark">?</span>;
-<a href=#60 id=60 data-nosnippet>60</a>        all.values().max_by_key(|p| p.justify_qc.view_number())
+<a href=#58 id=58 data-nosnippet>58</a>    <span class="doccomment">/// The proposal held under `c` at the latest view before `v`.
+<a href=#59 id=59 data-nosnippet>59</a>    </span><span class="kw">pub fn </span>latest_before(<span class="kw-2">&amp;</span><span class="self">self</span>, v: ViewNumber, c: Commitment&lt;Leaf2&lt;T&gt;&gt;) -&gt; <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>Proposal&lt;T&gt;&gt; {
+<a href=#60 id=60 data-nosnippet>60</a>        <span class="self">self</span>.all.range(..v).rev().find_map(|(<span class="kw">_</span>, a)| a.get(<span class="kw-2">&amp;</span>c))
 <a href=#61 id=61 data-nosnippet>61</a>    }
 <a href=#62 id=62 data-nosnippet>62</a>
-<a href=#63 id=63 data-nosnippet>63</a>    <span class="kw">pub fn </span>insert_under(<span class="kw-2">&amp;mut </span><span class="self">self</span>, p: Proposal&lt;T&gt;, c: Commitment&lt;Leaf2&lt;T&gt;&gt;) {
-<a href=#64 id=64 data-nosnippet>64</a>        <span class="self">self</span>.all.entry(p.view_number).or_default().insert(c, p);
-<a href=#65 id=65 data-nosnippet>65</a>    }
-<a href=#66 id=66 data-nosnippet>66</a>
-<a href=#67 id=67 data-nosnippet>67</a>    <span class="kw">pub fn </span>set_live(<span class="kw-2">&amp;mut </span><span class="self">self</span>, v: ViewNumber, c: Commitment&lt;Leaf2&lt;T&gt;&gt;) {
-<a href=#68 id=68 data-nosnippet>68</a>        <span class="self">self</span>.live.insert(v, c);
-<a href=#69 id=69 data-nosnippet>69</a>    }
-<a href=#70 id=70 data-nosnippet>70</a>
-<a href=#71 id=71 data-nosnippet>71</a>    <span class="kw">pub fn </span>retain_from(<span class="kw-2">&amp;mut </span><span class="self">self</span>, view: ViewNumber) {
-<a href=#72 id=72 data-nosnippet>72</a>        <span class="self">self</span>.all = <span class="self">self</span>.all.split_off(<span class="kw-2">&amp;</span>view);
-<a href=#73 id=73 data-nosnippet>73</a>        <span class="self">self</span>.live = <span class="self">self</span>.live.split_off(<span class="kw-2">&amp;</span>view);
+<a href=#63 id=63 data-nosnippet>63</a>    <span class="kw">pub fn </span>last(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>Proposal&lt;T&gt;&gt; {
+<a href=#64 id=64 data-nosnippet>64</a>        <span class="kw">let </span>(<span class="kw">_</span>, all) = <span class="self">self</span>.all.last_key_value()<span class="question-mark">?</span>;
+<a href=#65 id=65 data-nosnippet>65</a>        all.values().max_by_key(|p| p.justify_qc.view_number())
+<a href=#66 id=66 data-nosnippet>66</a>    }
+<a href=#67 id=67 data-nosnippet>67</a>
+<a href=#68 id=68 data-nosnippet>68</a>    <span class="kw">pub fn </span>insert_under(<span class="kw-2">&amp;mut </span><span class="self">self</span>, p: Proposal&lt;T&gt;, c: Commitment&lt;Leaf2&lt;T&gt;&gt;) {
+<a href=#69 id=69 data-nosnippet>69</a>        <span class="self">self</span>.all.entry(p.view_number).or_default().insert(c, p);
+<a href=#70 id=70 data-nosnippet>70</a>    }
+<a href=#71 id=71 data-nosnippet>71</a>
+<a href=#72 id=72 data-nosnippet>72</a>    <span class="kw">pub fn </span>set_live(<span class="kw-2">&amp;mut </span><span class="self">self</span>, v: ViewNumber, c: Commitment&lt;Leaf2&lt;T&gt;&gt;) {
+<a href=#73 id=73 data-nosnippet>73</a>        <span class="self">self</span>.live.insert(v, c);
 <a href=#74 id=74 data-nosnippet>74</a>    }
 <a href=#75 id=75 data-nosnippet>75</a>
-<a href=#76 id=76 data-nosnippet>76</a>    <span class="attr">#[cfg(test)]
-<a href=#77 id=77 data-nosnippet>77</a>    </span><span class="kw">pub fn </span>insert(<span class="kw-2">&amp;mut </span><span class="self">self</span>, p: Proposal&lt;T&gt;) -&gt; Commitment&lt;Leaf2&lt;T&gt;&gt; {
-<a href=#78 id=78 data-nosnippet>78</a>        <span class="kw">let </span>c = <span class="kw">crate</span>::helpers::proposal_commitment(<span class="kw-2">&amp;</span>p);
-<a href=#79 id=79 data-nosnippet>79</a>        <span class="self">self</span>.insert_under(p, c);
-<a href=#80 id=80 data-nosnippet>80</a>        c
-<a href=#81 id=81 data-nosnippet>81</a>    }
-<a href=#82 id=82 data-nosnippet>82</a>
-<a href=#83 id=83 data-nosnippet>83</a>    <span class="attr">#[cfg(test)]
-<a href=#84 id=84 data-nosnippet>84</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>replace_view(<span class="kw-2">&amp;mut </span><span class="self">self</span>, proposal: Proposal&lt;T&gt;) {
-<a href=#85 id=85 data-nosnippet>85</a>        <span class="kw">let </span>view = proposal.view_number;
-<a href=#86 id=86 data-nosnippet>86</a>        <span class="self">self</span>.all.remove(<span class="kw-2">&amp;</span>view);
-<a href=#87 id=87 data-nosnippet>87</a>        <span class="self">self</span>.live.remove(<span class="kw-2">&amp;</span>view);
-<a href=#88 id=88 data-nosnippet>88</a>        <span class="self">self</span>.insert(proposal);
-<a href=#89 id=89 data-nosnippet>89</a>    }
-<a href=#90 id=90 data-nosnippet>90</a>}
+<a href=#76 id=76 data-nosnippet>76</a>    <span class="kw">pub fn </span>retain_from(<span class="kw-2">&amp;mut </span><span class="self">self</span>, view: ViewNumber) {
+<a href=#77 id=77 data-nosnippet>77</a>        <span class="self">self</span>.all = <span class="self">self</span>.all.split_off(<span class="kw-2">&amp;</span>view);
+<a href=#78 id=78 data-nosnippet>78</a>        <span class="self">self</span>.live = <span class="self">self</span>.live.split_off(<span class="kw-2">&amp;</span>view);
+<a href=#79 id=79 data-nosnippet>79</a>    }
+<a href=#80 id=80 data-nosnippet>80</a>
+<a href=#81 id=81 data-nosnippet>81</a>    <span class="attr">#[cfg(test)]
+<a href=#82 id=82 data-nosnippet>82</a>    </span><span class="kw">pub fn </span>insert(<span class="kw-2">&amp;mut </span><span class="self">self</span>, p: Proposal&lt;T&gt;) -&gt; Commitment&lt;Leaf2&lt;T&gt;&gt; {
+<a href=#83 id=83 data-nosnippet>83</a>        <span class="kw">let </span>c = <span class="kw">crate</span>::helpers::proposal_commitment(<span class="kw-2">&amp;</span>p);
+<a href=#84 id=84 data-nosnippet>84</a>        <span class="self">self</span>.insert_under(p, c);
+<a href=#85 id=85 data-nosnippet>85</a>        c
+<a href=#86 id=86 data-nosnippet>86</a>    }
+<a href=#87 id=87 data-nosnippet>87</a>
+<a href=#88 id=88 data-nosnippet>88</a>    <span class="attr">#[cfg(test)]
+<a href=#89 id=89 data-nosnippet>89</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>replace_view(<span class="kw-2">&amp;mut </span><span class="self">self</span>, proposal: Proposal&lt;T&gt;) {
+<a href=#90 id=90 data-nosnippet>90</a>        <span class="kw">let </span>view = proposal.view_number;
+<a href=#91 id=91 data-nosnippet>91</a>        <span class="self">self</span>.all.remove(<span class="kw-2">&amp;</span>view);
+<a href=#92 id=92 data-nosnippet>92</a>        <span class="self">self</span>.live.remove(<span class="kw-2">&amp;</span>view);
+<a href=#93 id=93 data-nosnippet>93</a>        <span class="self">self</span>.insert(proposal);
+<a href=#94 id=94 data-nosnippet>94</a>    }
+<a href=#95 id=95 data-nosnippet>95</a>}
 </code></pre></div></section></main></body></html>

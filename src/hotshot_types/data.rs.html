@@ -945,7 +945,7 @@
 <a href=#945 id=945 data-nosnippet>945</a>        <span class="kw">match </span><span class="self">self </span>{
 <a href=#946 id=946 data-nosnippet>946</a>            ViewChangeEvidence2::Timeout(timeout_cert) =&gt; timeout_cert.data().view == <span class="kw-2">*</span>view - <span class="number">1</span>,
 <a href=#947 id=947 data-nosnippet>947</a>            ViewChangeEvidence2::ViewSync(view_sync_cert) =&gt; view_sync_cert.view_number == <span class="kw-2">*</span>view,
-<a href=#948 id=948 data-nosnippet>948</a>            ViewChangeEvidence2::Timeout3(timeout_cert) =&gt; timeout_cert.data().view == <span class="kw-2">*</span>view - <span class="number">1</span>,
+<a href=#948 id=948 data-nosnippet>948</a>            ViewChangeEvidence2::Timeout3(timeout_cert) =&gt; timeout_cert.view_number == <span class="kw-2">*</span>view - <span class="number">1</span>,
 <a href=#949 id=949 data-nosnippet>949</a>        }
 <a href=#950 id=950 data-nosnippet>950</a>    }
 <a href=#951 id=951 data-nosnippet>951</a>
