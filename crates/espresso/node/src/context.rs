@@ -455,8 +455,8 @@ where
         &self.validator_config
     }
 
-    pub async fn upgrade_lock(&self) -> UpgradeLock<SeqTypes> {
-        self.consensus_handle.upgrade_lock().await
+    pub fn upgrade_lock(&self) -> UpgradeLock<SeqTypes> {
+        self.consensus_handle.upgrade_lock()
     }
 
     pub async fn shutdown_consensus(&self) {
