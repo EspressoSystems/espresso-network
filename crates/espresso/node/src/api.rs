@@ -5969,7 +5969,7 @@ mod test {
         .text()
         .await?;
         assert!(
-            metric_value(&export, "light_client_block_height") > Some(tip as f64),
+            metric_value(&export, "light_client_follower_block_height") > Some(tip as f64),
             "{export}"
         );
         assert!(

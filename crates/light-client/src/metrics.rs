@@ -13,8 +13,10 @@ pub struct LightClientMetrics {
     pub(crate) latest_stake_table_epoch: Box<dyn Gauge>,
     pub(crate) stake_table_backlog: Box<dyn Gauge>,
     pub(crate) stake_table_catchup_duration: Box<dyn Histogram>,
-    pub(crate) block_height: Box<dyn Gauge>,
+    pub(crate) follower_block_height: Box<dyn Gauge>,
     pub(crate) verification_failures: Box<dyn Counter>,
+    #[cfg(feature = "client")]
+    pub(crate) fetch_failures: Box<dyn Counter>,
     // Older epochs are verified too, for instance when backfilling headers, and must not move
     // the gauge back.
     max_stake_table_epoch: AtomicU64,
@@ -31,8 +33,10 @@ impl LightClientMetrics {
                 "stake_table_catchup_duration".into(),
                 Some("seconds".into()),
             ),
-            block_height: metrics.create_gauge("block_height".into(), None),
+            follower_block_height: metrics.create_gauge("follower_block_height".into(), None),
             verification_failures: metrics.create_counter("verification_failures".into(), None),
+            #[cfg(feature = "client")]
+            fetch_failures: metrics.create_counter("fetch_failures".into(), None),
             max_stake_table_epoch: AtomicU64::new(0),
         }
     }

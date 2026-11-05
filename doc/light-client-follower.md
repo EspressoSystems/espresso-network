@@ -52,8 +52,10 @@ query service has fetched through it:
 - `latest_stake_table_epoch`: the latest epoch with a verified stake table.
 - `stake_table_backlog`: epochs left in the stake table catchup that is running, 0 when none is.
 - `stake_table_catchup_duration`: seconds to replay one epoch of stake table events.
-- `block_height`: the block height the light client has verified, counted as `node/block-height` counts it.
+- `follower_block_height`: on a follower, the block height the light client has verified, counted as `node/block-height`
+  counts it.
 - `verification_failures`: upstream responses that failed a proof or commitment check.
+- `fetch_failures`: fetches of missing data by the query service through the light client that failed, for any reason.
 
 At bootstrap the light client replays stake tables from the first dynamic epoch, so `stake_table_backlog` starts at the
 number of epochs to replay and falls to 0. A backlog that stays above 0, or a rising `verification_failures`, is worth

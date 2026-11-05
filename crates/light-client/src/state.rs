@@ -120,7 +120,7 @@ pub struct LightClient<P, S> {
     // We cache stake tables in memory since they are large and expensive to load from the database.
     stake_tables: RwLock<BTreeMap<EpochNumber, Arc<StakeTable>>>,
 
-    metrics: LightClientMetrics,
+    pub(crate) metrics: LightClientMetrics,
 }
 
 impl<P, S> LightClient<P, S> {
@@ -205,7 +205,7 @@ where
     /// of this method may be an underestimate.
     pub async fn block_height(&self) -> Result<u64> {
         let height = self.verified_block_height().await?;
-        self.metrics.block_height.set(height as usize);
+        self.metrics.follower_block_height.set(height as usize);
         Ok(height)
     }
 
@@ -1289,7 +1289,7 @@ mod test {
         let gauge = metrics
             .get_subgroup(["light_client"])
             .unwrap()
-            .get_gauge("block_height")
+            .get_gauge("follower_block_height")
             .unwrap();
 
         // Test empty block height.
