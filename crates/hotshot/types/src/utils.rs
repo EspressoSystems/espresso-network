@@ -123,9 +123,9 @@ pub async fn verify_leaf_chain<T: NodeType>(
             // non-epoch chain before it, so no later height may be certified this way.
             None => {
                 ensure!(
-                    first_epoch.is_some_and(|first| epoch <= first),
+                    epoch <= first_epoch,
                     "QC claims no epoch but certifies the leaf at height {certified_height} in \
-                     epoch {epoch}, after the first epoch {first_epoch:?}"
+                     epoch {epoch}, after the first epoch {first_epoch}"
                 );
                 coordinator.stake_table_for_epoch(None)
             },

@@ -313,12 +313,10 @@ impl StakeTableDataSource<SeqTypes> for ApiState {
                 .await
                 .membership()
                 .first_epoch();
-            if let Some(first_epoch) = first_epoch
-                && requested < first_epoch
-            {
+            if requested < first_epoch {
                 return Err(anyhow::anyhow!(
                     "requested stake table for epoch {requested:?} is below the first epoch \
-                     {first_epoch:?}"
+                     {first_epoch}"
                 ));
             }
         }

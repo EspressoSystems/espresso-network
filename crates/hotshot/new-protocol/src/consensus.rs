@@ -2096,7 +2096,7 @@ impl<T: NodeType> Consensus<T> {
         }
 
         // Epoch 1 is the genesis epoch and has no successor that needs a
-        // DRB from a transition leaf — `set_first_epoch` pre-loads DRBs for
+        // DRB from a transition leaf — the membership seeds DRBs for
         // `first_epoch` and `first_epoch + 1`.  Every epoch beyond that
         // communicates its successor's DRB via `next_drb_result` on each
         // leaf in its transition zone; the successor epoch's catchup

@@ -149,7 +149,7 @@ mod test {
         simple_certificate::QuorumCertificate2,
         simple_vote::{QuorumData2, VersionedVoteData, Vote2Data},
         stake_table::{StakeTableEntry, supermajority_threshold},
-        traits::{election::Membership, signature_key::SignatureKey},
+        traits::signature_key::SignatureKey,
         utils::{BuilderCommitment, verify_leaf_chain},
     };
     use versions::{EPOCH_VERSION, NEW_PROTOCOL_VERSION, Upgrade};
@@ -193,9 +193,9 @@ mod test {
                 peers1.clone(),
                 peers1[0].stake_table_entry.stake_key,
                 EPOCH_HEIGHT,
+                EpochNumber::new(1),
             );
         membership.add_quorum_committee(EpochNumber::new(2), peers2.clone());
-        membership.set_first_epoch(EpochNumber::new(1), [0u8; 32]);
         EpochMembershipCoordinator::new(
             membership,
             EPOCH_HEIGHT,

@@ -14,7 +14,7 @@
 
 use std::time::Duration;
 
-use anyhow::{Context, ensure};
+use anyhow::ensure;
 use espresso_types::SeqTypes;
 use hotshot_types::{
     data::EpochNumber, epoch_membership::EpochMembershipCoordinator, traits::election::Membership,
@@ -40,9 +40,7 @@ pub async fn bootstrap_epoch_window(
     }
 
     let membership = coordinator.membership();
-    let first_epoch = membership
-        .first_epoch()
-        .context("first_epoch not seeded; genesis stake table missing")?;
+    let first_epoch = membership.first_epoch();
 
     // Catchup resumes from the latest consecutive pair of stake tables we
     // hold, so a gap near the tip is bridged by the step that runs into it

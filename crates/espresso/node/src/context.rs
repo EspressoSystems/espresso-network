@@ -605,13 +605,7 @@ async fn seed_membership(
         }
     }
 
-    load_start_epoch_info(
-        membership_coordinator,
-        initializer.start_epoch_info(),
-        config.epoch_height,
-        config.epoch_start_block,
-    )
-    .await;
+    load_start_epoch_info(membership_coordinator, initializer.start_epoch_info()).await;
 }
 
 impl<P: SequencerPersistence> Drop for SequencerContext<P> {

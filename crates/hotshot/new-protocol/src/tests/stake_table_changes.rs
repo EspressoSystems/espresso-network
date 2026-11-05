@@ -1,7 +1,7 @@
 //! Validator set changes at epoch boundaries, driven by a per-epoch stake
 //! table schedule shared by all nodes.
 //!
-//! Epochs 1 and 2 are fixed at genesis (`set_first_epoch`), so epoch 3 is
+//! Epochs 1 and 2 are fixed at genesis (`StrictMembership::new`), so epoch 3 is
 //! the first epoch whose committee can differ. Its stake table is registered
 //! network-wide when the epoch-1 root decides.
 //!
