@@ -162,7 +162,7 @@ pub(crate) fn transaction_hashes<T: NodeType>(
         );
         pooled_hashes.to_vec()
     } else {
-        debug_span!("transaction_commitments")
+        debug_span!("transaction_hashes")
             .in_scope(|| payload.payload.transaction_commitments(&payload.metadata))
     }
 }
