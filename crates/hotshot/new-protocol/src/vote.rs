@@ -2047,6 +2047,8 @@ mod tests {
     /// of a view that must bind its epoch.
     #[tokio::test]
     async fn relabelled_v2_cert_still_verifies_where_it_is_allowed() {
+        // Tests behaviour before 0.7.
+        crate::helpers::pin_test_version(versions::NEW_PROTOCOL_VERSION);
         let coordinator = mock_membership();
         let epoch = EpochNumber::genesis();
         let membership = coordinator.membership_for_epoch(Some(epoch)).unwrap();
@@ -2064,6 +2066,8 @@ mod tests {
     /// is refused however well signed, and before it the new one is.
     #[tokio::test]
     async fn the_wrong_form_is_refused() {
+        // Tests behaviour before 0.7.
+        crate::helpers::pin_test_version(versions::NEW_PROTOCOL_VERSION);
         let coordinator = mock_membership();
         let epoch = EpochNumber::genesis();
         let membership = coordinator.membership_for_epoch(Some(epoch)).unwrap();
