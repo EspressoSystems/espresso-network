@@ -760,7 +760,7 @@ Each step is judged over its second half. A step stopped early is judged over it
   final `load.jsonl`, `heights.jsonl` and `consensus.jsonl`, as of the last time the run recorded anything. The two can
   differ while the scans or the query node lag; scans lagging over 1 s p99 mark the run noisy
   (`benchmark tracker behind`). The final verdict also fails a step when its txs the scans never reached could change
-  its p50 (`consensus latency unknown`).
+  its p50 (`consensus latency unknown`). `throughput.png` shades steps by the final verdict.
 
 ### Drain
 
