@@ -264,9 +264,19 @@ theorem checkProtocol_sound (hs : checkSafe cfg node h = true) (hvalid : Validit
       ((stepFault_none (hstep n st hst)).2.2.2.1 p (mem_proposalsOf hmem))
   · rintro n r ⟨st, hst, hmem⟩ _
     exact revoteJustified_of
+<<<<<<< HEAD
       ((stepFault_none (hstep n st hst)).2.2.2.2 r (mem_revotesOf_iff.mpr hmem))
   · refine NewProtocolImpl.global_once ⟨fun v v' a b => hsafe.vote1Once v v' a b trivial,
       fun v v' a b => hsafe.vote2Once v v' a b trivial, ?_, ?_⟩ m m' v e hs hs' hv hv' he he'
+||||||| parent of 0fa17419c (Some small improvements. (#5349))
+      ((stepFault_none (hstep n st hst)).2.2.2 r (mem_revotesOf_iff.mpr hmem))
+  · refine NewProtocolImpl.global_once ⟨fun v v' a b => hsafe.vote1Once v v' a b trivial,
+      fun v v' a b => hsafe.vote2Once v v' a b trivial, ?_, ?_⟩ m m' v e hs hs' hv hv' he he'
+=======
+      ((stepFault_none (hstep n st hst)).2.2.2 r (mem_revotesOf_iff.mpr hmem))
+  · refine NewProtocolImpl.global_once ⟨fun v v' a b => hsafe.vote1Once v v' a b trivial, ?_, ?_⟩
+      m m' v e hs hs' hv hv' he he'
+>>>>>>> 0fa17419c (Some small improvements. (#5349))
     · rintro p p' ⟨st, hst, hm⟩ ⟨st', hst', hm'⟩ he hv
       exact honce p (List.mem_flatMap.mpr ⟨st, hst, mem_proposalsOf hm⟩)
         p' (List.mem_flatMap.mpr ⟨st', hst', mem_proposalsOf hm'⟩) he hv
