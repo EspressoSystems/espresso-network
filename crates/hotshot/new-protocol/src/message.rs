@@ -9,12 +9,12 @@ use hotshot_types::{
         EpochNumber, UpgradeProposal2, VidDisperseShare2, ViewNumber,
         vid_disperse::AvidmGf2DisperseShareFragment,
     },
-    message::Proposal as SignedProposal,
+    message::{Proposal as SignedProposal, UpgradeLock},
     request_response::ProposalRequestPayload,
     simple_certificate::{TimeoutCertificate2, TimeoutCertificate3, TimeoutEvidence},
     simple_vote::{
-        HasEpoch, LightClientStateUpdateVote2, QuorumVote2, SimpleVote, TimeoutVote2, TimeoutVote3,
-        UpgradeVote2, Vote2Data,
+        HasEpoch, LightClientStateUpdateVote2, LockView, QuorumVote2, SimpleVote, TimeoutData3,
+        TimeoutLock, TimeoutVote2, TimeoutVote3, UpgradeVote2, Vote2Data,
     },
     traits::{
         block_contents::BlockHeader, node_implementation::NodeType, signature_key::SignatureKey,
@@ -42,7 +42,58 @@ pub type Vote2<T> = SimpleVote<T, Vote2Data<T>>;
 #[derive(Clone, Debug, PartialEq, Hash, Eq)]
 pub enum TimeoutVote<T: NodeType> {
     V2(TimeoutVote2<T>),
-    V3(TimeoutVote3<T>),
+    V3(TimeoutBallot<T>),
+}
+
+/// A timeout vote that signs its signer's lock, with the certificate of that
+/// lock.
+///
+/// The lock the vote signs is the certificate's, so the two always agree;
+/// `None` is a signer locked on nothing but genesis. A ballot can only be
+/// signed by its own signer ([`Self::sign`]) or read from a message
+/// ([`TimeoutVoteMessage3::ballot`]), and neither checks the signatures.
+#[derive(Clone, Debug, PartialEq, Hash, Eq)]
+pub struct TimeoutBallot<T: NodeType> {
+    vote: TimeoutVote3<T>,
+    lock: Option<Certificate1<T>>,
+}
+
+impl<T: NodeType> TimeoutBallot<T> {
+    /// Sign a timeout vote for `view` in `epoch` naming the lock `lock`
+    /// certifies.
+    pub fn sign(
+        view: ViewNumber,
+        epoch: EpochNumber,
+        lock: Option<Certificate1<T>>,
+        public_key: &T::SignatureKey,
+        private_key: &<T::SignatureKey as SignatureKey>::PrivateKey,
+        upgrade_lock: &UpgradeLock<T>,
+    ) -> anyhow::Result<Self> {
+        let data = TimeoutData3 {
+            view,
+            epoch,
+            lock: lock.as_ref().map(LockView::of),
+        };
+        let vote =
+            SimpleVote::create_signed_vote(data, view, public_key, private_key, upgrade_lock)
+                .map_err(|err| anyhow::anyhow!("failed to sign timeout vote: {err}"))?;
+        Ok(Self { vote, lock })
+    }
+
+    /// The signed vote.
+    pub fn vote(&self) -> &TimeoutVote3<T> {
+        &self.vote
+    }
+
+    /// The certificate of the lock the vote signs.
+    pub fn lock(&self) -> Option<&Certificate1<T>> {
+        self.lock.as_ref()
+    }
+
+    /// The lock the vote signs, by what is checked of it.
+    pub fn timeout_lock(&self) -> TimeoutLock<'_, T> {
+        TimeoutLock::of(self.lock.as_ref(), self.vote.data.epoch)
+    }
 }
 
 impl<T: NodeType> TimeoutVote<T> {
@@ -53,14 +104,15 @@ impl<T: NodeType> TimeoutVote<T> {
     pub fn signing_key(&self) -> T::SignatureKey {
         match self {
             Self::V2(vote) => vote.signing_key(),
-            Self::V3(vote) => vote.signing_key(),
+            Self::V3(ballot) => ballot.vote.signing_key(),
         }
     }
 
     pub fn is_well_formed(&self) -> bool {
         match self {
             Self::V2(v) => v.view_number() == v.data.view,
-            Self::V3(v) => v.view_number() == v.data.view,
+            // Its data is built from its view.
+            Self::V3(_) => true,
         }
     }
 }
@@ -69,7 +121,7 @@ impl<T: NodeType> HasViewNumber for TimeoutVote<T> {
     fn view_number(&self) -> ViewNumber {
         match self {
             Self::V2(vote) => vote.view_number(),
-            Self::V3(vote) => vote.view_number(),
+            Self::V3(ballot) => ballot.vote.view_number(),
         }
     }
 }
@@ -78,7 +130,7 @@ impl<T: NodeType> HasEpoch for TimeoutVote<T> {
     fn epoch(&self) -> Option<EpochNumber> {
         match self {
             Self::V2(vote) => vote.data.epoch,
-            Self::V3(vote) => Some(vote.data.epoch),
+            Self::V3(ballot) => Some(ballot.vote.data.epoch),
         }
     }
 }
@@ -175,16 +227,84 @@ impl<T: NodeType> HasViewNumber for TimeoutVoteMessage<T> {
     }
 }
 
+/// A timeout vote that signs its signer's lock, as it travels.
+///
+/// The signed data is not sent: it is the view, the epoch and the lock of
+/// `lock`, so the lock a vote signs and the certificate it comes with cannot
+/// disagree, and neither can its view and the view its data names.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
 #[serde(bound(deserialize = ""))]
 pub struct TimeoutVoteMessage3<T: NodeType> {
-    pub vote: TimeoutVote3<T>,
+    pub signer: T::SignatureKey,
+    pub signature: <T::SignatureKey as SignatureKey>::PureAssembledSignatureType,
+    pub view: ViewNumber,
+    pub epoch: EpochNumber,
+    /// The certificate of the signer's lock; `None` if it is locked on nothing
+    /// but genesis. A lock no quorum certified cannot be counted.
+    pub lock: Option<Certificate1<T>>,
+    /// The signer's catchup evidence.
+    ///
+    /// If the `lock` serves as catchup evidence it is `None`.
     pub evidence: Option<CatchupEvidence<T>>,
+}
+
+impl<T: NodeType> TimeoutVoteMessage3<T> {
+    /// The message for `ballot`, with `evidence` left out if it is the lock.
+    pub fn new(ballot: TimeoutBallot<T>, evidence: Option<CatchupEvidence<T>>) -> Self {
+        let TimeoutBallot { vote, lock } = ballot;
+        let evidence =
+            evidence.filter(|e| !matches!(e, CatchupEvidence::Qc(qc) if Some(qc) == lock.as_ref()));
+        Self {
+            signer: vote.signature.0,
+            signature: vote.signature.1,
+            view: vote.view_number,
+            epoch: vote.data.epoch,
+            lock,
+            evidence,
+        }
+    }
+
+    /// The signer's catchup evidence: the one the message carries, or else
+    /// its lock.
+    pub fn evidence(&self) -> Option<CatchupEvidence<T>> {
+        self.evidence
+            .clone()
+            .or_else(|| self.lock.clone().map(CatchupEvidence::Qc))
+    }
+
+    /// The vote, if its lock is a signed certificate no later than the view
+    /// it times out and its epoch.
+    pub fn ballot(&self) -> Result<TimeoutBallot<T>, &'static str> {
+        if let Some(cert) = &self.lock {
+            if cert.view_number() == ViewNumber::genesis() {
+                return Err("the genesis certificate is no lock");
+            }
+            if cert.view_number() > self.view {
+                return Err("the lock is later than the view timed out");
+            }
+            if cert.data.epoch.is_some_and(|epoch| epoch > self.epoch) {
+                return Err("the lock is later than the vote's epoch");
+            }
+        }
+        let data = TimeoutData3 {
+            view: self.view,
+            epoch: self.epoch,
+            lock: self.lock.as_ref().map(LockView::of),
+        };
+        Ok(TimeoutBallot {
+            vote: SimpleVote {
+                signature: (self.signer.clone(), self.signature.clone()),
+                data,
+                view_number: self.view,
+            },
+            lock: self.lock.clone(),
+        })
+    }
 }
 
 impl<T: NodeType> HasViewNumber for TimeoutVoteMessage3<T> {
     fn view_number(&self) -> ViewNumber {
-        self.vote.view_number()
+        self.view
     }
 }
 
