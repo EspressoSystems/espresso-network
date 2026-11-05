@@ -3104,4 +3104,142 @@ mod tests {
             }
         }
     }
+
+    /// One member for each of `stakes`, in order, with keys from `seed`.
+    fn members_with_stakes(seed: u8, stakes: &[u64]) -> Vec<PeerConfig<SeqTypes>> {
+        (0..)
+            .zip(stakes)
+            .map(|(index, &stake)| peer(seed, index, stake))
+            .collect()
+    }
+
+    /// A member with `stake`, given in hexadecimal, so it may not fit in a
+    /// `u64`.
+    fn member_with_hex_stake(seed: u8, stake: &str) -> PeerConfig<SeqTypes> {
+        ValidatorConfig::<SeqTypes>::generated_from_seed_indexed(
+            [seed; 32],
+            0,
+            hex_u256(stake),
+            true,
+        )
+        .public_config()
+    }
+
+    fn hex_u256(hex: &str) -> U256 {
+        U256::from_str_radix(hex, 16).unwrap_or_else(|err| panic!("{hex}: {err}"))
+    }
+
+    /// Asserts the failure threshold and the DA success threshold of the
+    /// first two epochs of a chain whose genesis stake table is `quorum` and
+    /// whose genesis DA committee is `da`. Reads both from the epoch snapshot
+    /// and from each lookup of the coordinator.
+    fn assert_epoch_thresholds(
+        quorum: Vec<PeerConfig<SeqTypes>>,
+        da: Vec<PeerConfig<SeqTypes>>,
+        failure: U256,
+        da_success: U256,
+    ) {
+        let first_epoch = EpochNumber::new(5);
+        let committees =
+            EpochCommittees::new(quorum, da, None, Fetcher::mock(), 100u64, first_epoch);
+        let coordinator = coordinator_for(committees);
+
+        for epoch in [first_epoch, first_epoch + 1] {
+            let snapshot = coordinator
+                .membership()
+                .snapshot(epoch)
+                .unwrap_or_else(|| panic!("no snapshot for epoch {epoch}"));
+            assert_eq!(
+                snapshot.failure_threshold(),
+                failure,
+                "snapshot({epoch}): failure threshold"
+            );
+            assert_eq!(
+                snapshot.da_success_threshold(),
+                da_success,
+                "snapshot({epoch}): DA success threshold"
+            );
+
+            for (lookup, membership) in lookups(&coordinator, Some(epoch)) {
+                assert_eq!(
+                    membership.failure_threshold(),
+                    failure,
+                    "{lookup}({epoch}): failure threshold"
+                );
+                assert_eq!(
+                    membership.da_success_threshold(),
+                    da_success,
+                    "{lookup}({epoch}): DA success threshold"
+                );
+            }
+        }
+    }
+
+    // The failure threshold is one third of the quorum stake, rounded down,
+    // plus one. The DA success threshold is two thirds of the DA stake,
+    // rounded down, plus one. The quorum and DA totals differ in most cases,
+    // so a threshold read from the wrong table fails the test.
+    #[rstest]
+    #[case::empty(&[], &[], 1, 1)]
+    #[case::quorum_1_da_100(&[1], &[40, 60], 1, 67)]
+    #[case::quorum_2_da_10(&[1, 1], &[1, 2, 3, 4], 1, 7)]
+    #[case::quorum_3_da_4(&[1, 1, 1], &[4], 2, 3)]
+    #[case::quorum_4_da_3(&[1, 3], &[1, 1, 1], 2, 3)]
+    #[case::quorum_7_da_5(&[7], &[2, 3], 3, 4)]
+    #[case::quorum_10_da_2(&[1, 2, 3, 4], &[2], 4, 2)]
+    #[case::quorum_100_da_1(&[10, 20, 30, 40], &[1], 34, 1)]
+    #[case::quorum_1000_da_11(&[100, 200, 300, 400], &[5, 6], 334, 8)]
+    #[tokio::test]
+    async fn epoch_failure_and_da_success_thresholds(
+        #[case] quorum: &[u64],
+        #[case] da: &[u64],
+        #[case] failure: u64,
+        #[case] da_success: u64,
+    ) {
+        assert_epoch_thresholds(
+            members_with_stakes(42, quorum),
+            members_with_stakes(123, da),
+            U256::from(failure),
+            U256::from(da_success),
+        );
+    }
+
+    // Totals of at least `U256::MAX / 2` take another branch of the DA
+    // success threshold, because doubling them overflows.
+    #[rstest]
+    // Quorum `U256::MAX`, DA `U256::MAX / 2 - 1`.
+    #[case::da_just_below_half_of_max(
+        "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        "7ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffe",
+        "5555555555555555555555555555555555555555555555555555555555555556",
+        "5555555555555555555555555555555555555555555555555555555555555555"
+    )]
+    // Quorum `U256::MAX / 2 - 1`, DA `U256::MAX / 2`.
+    #[case::da_half_of_max(
+        "7ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffe",
+        "7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        "2aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaab",
+        "5555555555555555555555555555555555555555555555555555555555555556"
+    )]
+    // Quorum 1, DA `U256::MAX`.
+    #[case::da_max(
+        "1",
+        "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        "1",
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaac"
+    )]
+    #[tokio::test]
+    async fn epoch_failure_and_da_success_thresholds_near_u256_max(
+        #[case] quorum: &str,
+        #[case] da: &str,
+        #[case] failure: &str,
+        #[case] da_success: &str,
+    ) {
+        assert_epoch_thresholds(
+            vec![member_with_hex_stake(42, quorum)],
+            vec![member_with_hex_stake(123, da)],
+            hex_u256(failure),
+            hex_u256(da_success),
+        );
+    }
 }
