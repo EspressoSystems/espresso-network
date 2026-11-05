@@ -1223,7 +1223,7 @@ theorem votes1 (k : PubKey) (u : Nat) (hl : lag k u = 0) : ∃ j, j ≤ 15 * u +
   · rw [blk_view]; exact recv_at u 2 (by omega) (by omega)
   · cases u with
     | zero => exact Or.inl rfl
-    | succ u => exact Or.inr (Or.inl (blk_enters u))
+    | succ u => exact Liveness.parentReady_of_opens (blk_enters u) hopen
   · rw [blk_epoch]; show eAt (15 * u + 3) ≤ u + 1; omega
   · obtain ⟨y, hle, hy⟩ := timedOut ht
     rw [blk_view] at hle
@@ -1487,7 +1487,7 @@ def net : TimedNetwork cfg leader C where
   trace k _ := tr k
   safe k _ n := .of_every (protocol hv k n).toSafeHistory
   cert1Genuine k _ n x hc := by
-    rcases Input.mem_cert1.mp hc with hin | ⟨c2, p, hin⟩ | ⟨s, p, vid, hin, rfl⟩
+    rcases hc with hin | ⟨c2, p, hin⟩ | ⟨s, p, vid, hin, rfl⟩
     · obtain ⟨u, ⟨-, rfl⟩ | ⟨-, rfl⟩⟩ := input_cert1 hin
       · exact Or.inr (backed1 hv u)
       · exact Or.inr (backed1R hv u)
@@ -1499,7 +1499,7 @@ def net : TimedNetwork cfg leader C where
       | zero => exact Or.inl rfl
       | succ u => exact Or.inr (backed1 hv u)
   cert2Genuine k _ n x hc := by
-    rcases Input.mem_cert2.mp hc with hin | ⟨c1, p, hin⟩
+    rcases hc with hin | ⟨c1, p, hin⟩
     · obtain ⟨u, ⟨-, rfl⟩ | ⟨-, rfl⟩⟩ := input_cert2 hin
       · exact backed2 hv u
       · exact backed2R hv u
@@ -1507,7 +1507,7 @@ def net : TimedNetwork cfg leader C where
       · exact backed2 hv u
       · exact backed2R hv u
   timeoutCertGenuine k _ n tc hc := by
-    rcases Input.mem_timeoutCert.mp hc with hin | ⟨s, p, vid, hin, hte⟩ | ⟨s, r, hin, hte⟩
+    rcases hc with hin | ⟨s, p, vid, hin, hte⟩ | ⟨s, r, hin, hte⟩
     · obtain ⟨u, -, rfl⟩ := input_tc hin
       exact ⟨tcBacked u, tcChecked hv u⟩
     · obtain ⟨u, -, -, rfl⟩ := input_proposal_any hin

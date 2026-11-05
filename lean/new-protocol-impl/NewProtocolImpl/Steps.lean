@@ -64,8 +64,6 @@ structure StepOK (pre : History) (st : Step) : Prop where
 structure Global (h : History) : Prop where
   vote1Once : ∀ vote vote', h.Sent (.vote1 vote) → h.Sent (.vote1 vote') →
     vote.data.epoch = vote'.data.epoch → vote.view = vote'.view → vote = vote'
-  vote2Once : ∀ vote vote', h.Sent (.vote2 vote) → h.Sent (.vote2 vote') →
-    vote.data.epoch = vote'.data.epoch → vote.view = vote'.view → vote = vote'
   proposeOnce : ∀ p p', h.Sent (.proposal p) → h.Sent (.proposal p') →
     p.epoch = p'.epoch → p.viewNumber = p'.viewNumber → p = p'
   revoteOnce : ∀ r, h.Sent (.revote r) →
@@ -150,8 +148,8 @@ theorem global_once {h : History} (hg : Global h) :
 theorem protocolHistory_snoc {h : History} {st : Step} (hp : ProtocolHistory cfg leader node (fun _ => True) h)
     (hs : StepOK cfg leader node h st) (hg : Global (h ++ [st])) :
     ProtocolHistory cfg leader node (fun _ => True) (h ++ [st]) := by
-  refine ⟨⟨?_, fun v v' a b _ he hv => hg.vote1Once v v' a b he hv, ?_,
-    fun v v' a b _ he hv => hg.vote2Once v v' a b he hv, ?_, ?_, ?_, ?_⟩, ?_, ?_, ?_, ?_,
+  refine ⟨⟨?_, fun v v' a b _ he hv => hg.vote1Once v v' a b he hv, ?_, ?_, ?_, ?_, ?_⟩,
+    ?_, ?_, ?_, ?_,
     fun m m' v e hs hs' hv hv' he he' _ => global_once hg m m' v e hs hs' hv hv' he he'⟩
   · rintro n vote ⟨st', hn, hm⟩ _
     rcases getElem?_snoc hn with ⟨hold, hu, _⟩ | ⟨rfl, hu, _⟩
@@ -205,9 +203,9 @@ theorem protocolHistory_snoc {h : History} {st : Step} (hp : ProtocolHistory cfg
 
 /-- The empty history obeys every rule. -/
 theorem protocolHistory_nil : ProtocolHistory cfg leader node (fun _ => True) [] := by
-  refine ⟨⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩, ?_, ?_, ?_, ?_, ?_⟩ <;> simp [Sent, SentAt]
+  refine ⟨⟨?_, ?_, ?_, ?_, ?_, ?_, ?_⟩, ?_, ?_, ?_, ?_, ?_⟩ <;> simp [Sent, SentAt]
 
 theorem global_nil : Global [] := by
-  refine ⟨?_, ?_, ?_, ?_⟩ <;> simp [Sent]
+  refine ⟨?_, ?_, ?_⟩ <;> simp [Sent]
 
 end NewProtocolImpl

@@ -21,8 +21,8 @@ a block:
   `Cert1`, the payload and the `Cert2`. A node outside the block's committee gets
   the proposal without a share, and no payload (`phase`);
 * the epoch change, with the block's `Cert1` and `Cert2`. A node outside the
-  committee locks on the block through it, and votes for the next block without
-  the payload of its parent (`ParentReady`);
+  committee locks on the block through it, and holds the parent of the next block
+  it votes for (`ParentReady`);
 * the re-vote request `a` sent once it could lock on the block, before the `Cert2`
   could arrive, in view `u + 2`. It arrives after the epoch change, so nobody votes
   on it (`NotBehind`).
@@ -799,7 +799,7 @@ theorem votes1 (k : PubKey) (u : Nat) (hl : lag k u = 0) : ∃ j, j ≤ 8 * u + 
   · rw [blk_view]; exact recv_at u 2 (by omega) (by omega)
   · cases u with
     | zero => exact Or.inl rfl
-    | succ u => exact Or.inr (Or.inl (blk_enters u))
+    | succ u => exact Liveness.parentReady_of_opens (blk_enters u) hopen
   · rw [blk_epoch]; show eAt (8 * u + 3) ≤ u + 1; omega
   · obtain ⟨j, hj, hjv⟩ := sent_iff.mp hs
     obtain ⟨u', rfl, -, -⟩ := sent_vote1 hv hjv
@@ -891,7 +891,7 @@ def net : TimedNetwork cfg leader C where
   trace k _ := tr k
   safe k _ n := .of_every (protocol hv k n).toSafeHistory
   cert1Genuine k _ n x hc := by
-    rcases Input.mem_cert1.mp hc with hin | ⟨c2, p, hin⟩ | ⟨s, p, vid, hin, rfl⟩
+    rcases hc with hin | ⟨c2, p, hin⟩ | ⟨s, p, vid, hin, rfl⟩
     · obtain ⟨u, -, rfl⟩ := input_cert1 hin
       exact Or.inr (backed1 hv u)
     · obtain ⟨u, -, rfl, -, -⟩ := input_epochChange hin
@@ -902,13 +902,13 @@ def net : TimedNetwork cfg leader C where
       | zero => exact Or.inl rfl
       | succ u => exact Or.inr (backed1 hv u)
   cert2Genuine k _ n x hc := by
-    rcases Input.mem_cert2.mp hc with hin | ⟨c1, p, hin⟩
+    rcases hc with hin | ⟨c1, p, hin⟩
     · obtain ⟨u, -, rfl⟩ := input_cert2 hin
       exact backed2 hv u
     · obtain ⟨u, -, -, rfl, -⟩ := input_epochChange hin
       exact backed2 hv u
   timeoutCertGenuine k _ n tc hc := by
-    rcases Input.mem_timeoutCert.mp hc with hin | ⟨s, p, vid, hin, hte⟩ | ⟨s, r, hin, hte⟩
+    rcases hc with hin | ⟨s, p, vid, hin, hte⟩ | ⟨s, r, hin, hte⟩
     · exact absurd hin (input_quiet.2.2 tc)
     · obtain ⟨u, -, -, rfl⟩ := input_proposal_any hin
       rw [blk_evidence] at hte; cases hte

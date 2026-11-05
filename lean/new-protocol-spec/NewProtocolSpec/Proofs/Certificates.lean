@@ -139,14 +139,41 @@ theorem cert1_proposal {C : Committee} (N : Network cfg C)
 /-- Two backed `Cert1`s of one epoch at one view carry the same data. -/
 theorem cert1_unique (cfg : Config) {C : Committee} (N : Network cfg C) {c c' : Cert1}
     (h : Cert1Backed N.trace c) (h' : Cert1Backed N.trace c')
-    (he : c.data.epoch = c'.data.epoch) (hv : c.view = c'.view) :
-    c.data.blockHash = c'.data.blockHash := by
+    (he : c.data.epoch = c'.data.epoch) (hv : c.view = c'.view) : c.data = c'.data := by
   obtain ⟨q, hq, hcast⟩ := h
   obtain ⟨q', hq', hcast'⟩ := h'
   obtain ⟨k, hk, hk', hhon⟩ := C.intersect c.data.epoch q q' hq (he ▸ hq')
   have hhon' : C.honest c'.data.epoch k := he ▸ hhon
   have hagree := vote1_agree N (hcast k hk hhon) (hcast' k hk' hhon') hhon he hv
-  exact congrArg (fun v : Vote1 => v.data.blockHash) hagree
+  exact congrArg (fun v : Vote1 => v.data) hagree
+
+/--
+Two vote2s an honest node sends for one epoch and view are the same vote.
+
+No signing rule says so: each names the data of a `Cert1` the node held at the
+vote's view (`SafeHistory.vote2Justified`), never the anchor's, and two backed
+`Cert1`s of one epoch at one view agree (`cert1_unique`).
+-/
+theorem vote2_agree (cfg : Config) {C : Committee} (N : Network cfg C) (hcfg : ConfigCoherent cfg)
+    {k : PubKey} {h : C.Honest k} {v v' : Vote2}
+    (hs : SentBy (N.trace k h) (.vote2 v)) (hs' : SentBy (N.trace k h) (.vote2 v'))
+    (he : C.honest v.data.epoch k) (heq : v.data.epoch = v'.data.epoch) (hv : v.view = v'.view) :
+    v = v' := by
+  obtain ⟨hk, hgen, c, hcv, hcd, n, hc⟩ := vote2_signed N hs he
+  obtain ⟨hk', -, c', hcv', hcd', n', hc'⟩ := vote2_signed N hs' (heq ▸ he)
+  have backed : ∀ {c : Cert1}, v.view = c.view →
+      (∃ n, ((N.trace k h).history (n + 1)).HasCert1 cfg c) → Cert1Backed N.trace c := by
+    rintro c hview ⟨n, hc⟩
+    refine (cert1_held_backed N hc).resolve_left fun ha => ?_
+    rw [hview, ha, hcfg.anchorCertView] at hgen
+    exact Nat.lt_irrefl _ hgen
+  have hdata := cert1_unique cfg N (backed hcv ⟨n, hc⟩) (backed (hv.trans hcv') ⟨n', hc'⟩)
+    ((congrArg Vote2Data.epoch hcd).symm.trans (heq.trans (congrArg Vote2Data.epoch hcd')))
+    (hcv.symm.trans (hv.trans hcv'))
+  cases v; cases v'
+  simp only at hk hk' hcd hcd' hv
+  subst hk hk' hv
+  rw [hcd, hcd', hdata]
 
 /-- A backed `Cert2` presupposes a backed `Cert1` over the same block, at the same view. -/
 theorem cert2_implies_cert1 (cfg : Config) {C : Committee} (N : Network cfg C)

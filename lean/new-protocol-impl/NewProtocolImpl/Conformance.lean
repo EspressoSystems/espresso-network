@@ -595,15 +595,12 @@ theorem global_arrive {out : List Output} (hg : Global pre)
     · exact Or.inl
   have h1 : ∀ v, (pre ++ [Step.mk i out]).Sent (.vote1 v) ↔ pre.Sent (.vote1 v) :=
     fun v => hsent _ (fun _ h => by cases h)
-  have h2 : ∀ v, (pre ++ [Step.mk i out]).Sent (.vote2 v) ↔ pre.Sent (.vote2 v) :=
-    fun v => hsent _ (fun _ h => by cases h)
   have hp : ∀ p, (pre ++ [Step.mk i out]).Sent (.proposal p) ↔ pre.Sent (.proposal p) :=
     fun p => hsent _ (fun _ h => by cases h)
   have hr : ∀ r, (pre ++ [Step.mk i out]).Sent (.revote r) ↔ pre.Sent (.revote r) :=
     fun r => hsent _ (fun _ h => by cases h)
-  refine ⟨?_, ?_, ?_, ?_⟩
+  refine ⟨?_, ?_, ?_⟩
   · intro v v' hs hs' he hv; exact hg.vote1Once v v' ((h1 v).mp hs) ((h1 v').mp hs') he hv
-  · intro v v' hs hs' he hv; exact hg.vote2Once v v' ((h2 v).mp hs) ((h2 v').mp hs') he hv
   · intro q q' hs hs' he hv; exact hg.proposeOnce q q' ((hp q).mp hs) ((hp q').mp hs') he hv
   · intro r hs
     obtain ⟨h1, h2⟩ := hg.revoteOnce r ((hr r).mp hs)
@@ -613,7 +610,7 @@ theorem global_arrive {out : List Output} (hg : Global pre)
 theorem global_act {out : List Output} {o : Obligation}
     (hg : Global (pre ++ [Step.mk i out])) (ho : Owed cfg leader node (pre ++ [Step.mk i out]) o) :
     Global (pre ++ [Step.mk i (out ++ act cfg leader node (pre ++ [Step.mk i out]) o)]) := by
-  refine ⟨?_, ?_, ?_, ?_⟩
+  refine ⟨?_, ?_, ?_⟩
   · intro v v' hs hs' he hv
     rcases sent_more.mp hs with a | a <;> rcases sent_more.mp hs' with b | b
     · exact hg.vote1Once v v' a b he hv
@@ -621,16 +618,6 @@ theorem global_act {out : List Output} {o : Obligation}
     · exact absurd hv.symm (act_vote1_fresh ho a v' b he.symm)
     · have := act_subsingleton a b
       simp only [Message.vote1.injEq] at this
-      exact this
-  · intro v v' hs hs' he hv
-    rcases sent_more.mp hs with a | a <;> rcases sent_more.mp hs' with b | b
-    · exact hg.vote2Once v v' a b he hv
-    · obtain ⟨c, rfl, rfl⟩ := act_vote2 b
-      exact absurd hv (ho.notVoted v a he)
-    · obtain ⟨c, rfl, rfl⟩ := act_vote2 a
-      exact absurd hv.symm (ho.notVoted v' b he.symm)
-    · have := act_subsingleton a b
-      simp only [Message.vote2.injEq] at this
       exact this
   · intro q q' hs hs' he hv
     rcases sent_more.mp hs with a | a <;> rcases sent_more.mp hs' with b | b
