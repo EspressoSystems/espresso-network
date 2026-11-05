@@ -1028,24 +1028,6 @@ impl<TYPES: NodeType> EpochMembership<TYPES> {
         }
     }
 
-    /// The leader for `view`, returning the membership-impl error type.
-    ///
-    /// # Errors
-    ///
-    /// Returns the membership-impl error if the leader cannot be calculated.
-    pub fn lookup_leader(
-        &self,
-        view: ViewNumber,
-    ) -> std::result::Result<
-        TYPES::SignatureKey,
-        <<TYPES as NodeType>::Membership as Membership<TYPES>>::Error,
-    > {
-        match &self.snapshot {
-            EpochMembershipSnapshot::Epoch { snapshot, .. } => snapshot.lookup_leader(view),
-            EpochMembershipSnapshot::NonEpoch(s) => s.lookup_leader(view),
-        }
-    }
-
     pub fn total_nodes(&self) -> usize {
         match &self.snapshot {
             EpochMembershipSnapshot::Epoch { snapshot, .. } => snapshot.total_nodes(),

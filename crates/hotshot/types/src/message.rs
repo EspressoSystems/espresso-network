@@ -30,7 +30,7 @@ pub const EXTERNAL_MESSAGE_VERSION: Version = Version { major: 0, minor: 0 };
 
 use crate::{
     data::{
-        DaProposal, DaProposal2, EpochNumber, Leaf, Leaf2, QuorumProposal, QuorumProposal2,
+        DaProposal, DaProposal2, EpochNumber, Leaf2, QuorumProposal, QuorumProposal2,
         QuorumProposal2Legacy, QuorumProposalWrapper, UpgradeProposal, VidDisperseShare0,
         VidDisperseShare1, VidDisperseShare2, ViewNumber,
     },
@@ -49,7 +49,6 @@ use crate::{
         ViewSyncPreCommitVote2,
     },
     traits::{
-        election::{Membership, NonEpochMembershipSnapshot},
         network::{DataRequest, ResponseMessage, ViewMessage},
         node_implementation::NodeType,
         signature_key::SignatureKey,
@@ -583,32 +582,6 @@ where
         data: proposal.data.into(),
         signature: proposal.signature,
         _pd: proposal._pd,
-    }
-}
-
-impl<TYPES> Proposal<TYPES, QuorumProposal<TYPES>>
-where
-    TYPES: NodeType,
-{
-    /// Checks that the signature of the quorum proposal is valid.
-    /// # Errors
-    /// Returns an error when the proposal signature is invalid.
-    pub fn validate_signature(
-        &self,
-        membership: &TYPES::Membership,
-        _epoch_height: u64,
-        upgrade_lock: &UpgradeLock<TYPES>,
-    ) -> Result<()> {
-        let view_number = self.data.view_number();
-        let view_leader_key = membership.non_epoch_snapshot().leader(view_number)?;
-        let proposed_leaf = Leaf::from_quorum_proposal(&self.data);
-
-        ensure!(
-            view_leader_key.validate(&self.signature, proposed_leaf.commit(upgrade_lock).as_ref()),
-            "Proposal signature is invalid."
-        );
-
-        Ok(())
     }
 }
 
