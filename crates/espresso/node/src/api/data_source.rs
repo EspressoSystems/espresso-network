@@ -107,7 +107,7 @@ pub(super) async fn provider(
         state.clone(),
         opt,
         db_opt,
-    )?))
+    )))
 }
 
 pub(crate) trait SubmitDataSource {

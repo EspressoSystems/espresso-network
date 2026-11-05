@@ -11,7 +11,7 @@
 use std::{cmp::max, collections::HashMap, ops::Range, sync::Arc, time::Duration};
 
 use ::light_client::{
-    LightClient,
+    LightClient, LightClientMetrics,
     client::{FallbackClient, QueryServiceClient},
     state::{Genesis as LightClientGenesis, LightClientOptions},
     storage::LightClientDbOptions,
@@ -278,6 +278,7 @@ where
                     &network_config,
                     genesis.chain_config.chain_id,
                     fetched,
+                    &*metrics,
                 )
                 .await?,
             );
@@ -843,6 +844,7 @@ async fn connect_light_client(
     network_config: &NetworkConfig<SeqTypes>,
     chain_id: ChainId,
     config_fetched: bool,
+    metrics: &dyn Metrics,
 ) -> anyhow::Result<NodeLightClient> {
     let db = options
         .light_client_db
@@ -850,11 +852,12 @@ async fn connect_light_client(
         .connect()
         .await
         .context("opening the light client database")?;
+    let metrics = LightClientMetrics::new(metrics);
     let client = FallbackClient::new(
         upstreams
             .iter()
             .cloned()
-            .map(QueryServiceClient::new)
+            .map(|url| QueryServiceClient::with_metrics(url, &metrics))
             .collect(),
     )?;
     let genesis = match options.light_client_genesis.clone() {
@@ -869,10 +872,8 @@ async fn connect_light_client(
             light_client_genesis(network_config, chain_id)
         },
     };
-    Ok(LightClient::from_genesis_with_options(
-        db,
-        client,
-        genesis,
-        options.light_client.clone(),
-    ))
+    Ok(
+        LightClient::from_genesis_with_options(db, client, genesis, options.light_client.clone())
+            .with_metrics(metrics),
+    )
 }

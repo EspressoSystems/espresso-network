@@ -44,6 +44,22 @@ Tuning, as options of the `follower` module:
 Against the native demo (`just demo-native`), node 0 on port 24000 serves everything a follower needs:
 `-- query --peers http://localhost:24000 -- follower`.
 
+## Metrics
+
+The light client reports under `consensus_light_client_` in `/v1/status/metrics`, on a follower and on any SQL query
+node whose query service has fetched through it:
+
+- `stake_table_epoch`: the latest epoch with a verified stake table.
+- `stake_table_backlog`: epochs left in the stake table catchup that is running, 0 when none is.
+- `stake_table_catchup_duration`: seconds to replay one epoch of stake table events.
+- `block_height`: the block height the light client has verified, counted as `node/block-height` counts it.
+- `verification_failures`: upstream responses that failed a proof or commitment check.
+- `requests{peer}`, `request_failures{peer}`: requests to each upstream, and those that failed other than with a 404.
+
+At bootstrap the light client replays stake tables from the first dynamic epoch, so `stake_table_backlog` starts at the
+number of epochs to replay and falls to 0. A backlog that stays above 0, or a rising `verification_failures`, is worth
+an alert.
+
 ## How it works
 
 ```

@@ -178,7 +178,7 @@ pub(in crate::api) async fn init_query_module(
         state.clone(),
         query_opt.light_client,
         light_client_db,
-    )?);
+    ));
     provider = provider.with_provider(Arc::clone(&light_client));
 
     let ranges_concurrency = mod_opt.ranges_concurrency;
@@ -186,6 +186,7 @@ pub(in crate::api) async fn init_query_module(
     let inner_storage = ds.inner();
     tasks.spawn("process_metrics", ProcessMetrics::new(ds.metrics()).run());
     let (metrics, ds) = init_query_data_source(ds, state.clone());
+    light_client.set_metrics(metrics.clone());
 
     let get_node_state = {
         let state = state.clone();
