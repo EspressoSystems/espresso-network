@@ -846,12 +846,7 @@ pub async fn distribute_block_reward(
         .context("epoch height not found")?;
     let epoch = EpochNumber::new(epoch_from_block_number(height, epoch_height));
     let coordinator = instance_state.coordinator.clone();
-    let first_epoch = {
-        coordinator
-            .membership()
-            .first_epoch()
-            .context("The first epoch was not set.")?
-    };
+    let first_epoch = coordinator.membership().first_epoch();
 
     // Rewards are distributed only if the current epoch is not the first or second epoch
     // this is because we don't have stake table from the contract for the first two epochs

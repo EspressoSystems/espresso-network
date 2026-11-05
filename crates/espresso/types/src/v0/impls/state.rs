@@ -183,8 +183,6 @@ pub enum ProposalValidationError {
     NextStakeTableHashNotNone,
     #[error("No Epoch Height")]
     NoEpochHeight,
-    #[error("No First Epoch Configured")]
-    NoFirstEpoch,
     #[error("Total rewards mismatch: proposed header has {proposed} but actual is {actual}")]
     TotalRewardsMismatch {
         proposed: RewardAmount,
@@ -1294,9 +1292,7 @@ async fn validate_next_stake_table_hash(
         epoch_height,
     ));
     let coordinator = instance.coordinator.clone();
-    let Some(first_epoch) = coordinator.membership().first_epoch() else {
-        return Err(ProposalValidationError::NoFirstEpoch);
-    };
+    let first_epoch = coordinator.membership().first_epoch();
 
     // We only require a `stake_table_hash` for epochs past the second
     let Some(proposed_next_stake_table_hash) = proposed_header.next_stake_table_hash() else {

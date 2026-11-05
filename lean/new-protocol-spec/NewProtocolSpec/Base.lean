@@ -83,14 +83,7 @@ instance (n : Nat) : OfNat EpochNumber n := ⟨⟨n⟩⟩
 
 end EpochNumber
 
-/--
-The height of a block in the chain.
-
-A distinct type from `ViewNumber`: the two are counted separately and a run has
-more views than blocks, so putting them in one type would let a proof confuse them
-silently. `Config.epochHeight` stays a `Nat`, since it is how many blocks an epoch
-holds, a length rather than a position.
--/
+/-- The height of a block in the chain. -/
 structure BlockNumber where
   /-- A `BlockNumber` wraps a `Nat`. -/
   toNat : Nat
@@ -139,10 +132,9 @@ end BlockNumber
 /--
 The epoch a block number falls in, under an epoch height of `height`.
 
-The whole of the epoch arithmetic the protocol reads. Blocks are dealt out
-`height` to an epoch, so block `n` belongs to epoch `⌈n / height⌉`, and epochs
-are numbered from one: the last block of epoch `k` is `k * height`, and the
-first of epoch `k + 1` is one past it.
+Blocks are dealt out `height` to an epoch, so block `n` belongs to epoch
+`⌈n / height⌉`, and epochs are numbered from one: the last block of epoch
+`k` is `k * height`, and the first of epoch `k + 1` is one past it.
 
 Block zero and a `height` of zero do not follow that rule. Block zero is the
 anchor: it precedes every epoch and is reported as epoch one, the epoch whose

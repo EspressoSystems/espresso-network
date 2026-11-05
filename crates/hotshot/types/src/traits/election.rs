@@ -45,8 +45,8 @@ pub trait MembershipSnapshot<T: NodeType>: Clone + Send + Sync {
     /// The epoch this snapshot is bound to.
     fn epoch(&self) -> EpochNumber;
 
-    /// The first epoch known to the membership (cached at snapshot creation).
-    fn first_epoch(&self) -> Option<EpochNumber>;
+    /// The first epoch of the membership.
+    fn first_epoch(&self) -> EpochNumber;
 
     /// Whether a randomized stake table (DRB result) was available for this
     /// epoch at the time the snapshot was captured.
@@ -279,8 +279,8 @@ pub trait Membership<T: NodeType>: Debug + Send + Sync {
     /// Capture a consistent pre-epoch view.
     fn non_epoch_snapshot(&self) -> Self::NonEpochSnapshot;
 
-    /// Get first epoch if epochs are enabled, `None` otherwise.
-    fn first_epoch(&self) -> Option<EpochNumber>;
+    /// The first epoch, which runs on the genesis stake table.
+    fn first_epoch(&self) -> EpochNumber;
 
     /// Get the highest epoch for which a stake table is currently in memory,
     /// or `None` if no stake tables are loaded. It is where catchup resumes
@@ -317,12 +317,6 @@ pub trait Membership<T: NodeType>: Debug + Send + Sync {
     ///
     /// Returns `true` if a snapshot for `epoch` is available afterwards.
     fn load_stake_table(&self, epoch: EpochNumber) -> impl Future<Output = bool> + Send;
-
-    /// Called to notify the Membership that Epochs are enabled.
-    /// Implementations should copy the pre-epoch stake table into epoch and epoch+1
-    /// when this is called. The value of initial_drb_result should be used for DRB
-    /// calculations for epochs (epoch+1) and earlier.
-    fn set_first_epoch(&self, e: EpochNumber, r: DrbResult);
 
     /// Register a DA committee that takes effect starting at `first_epoch`.
     fn add_da_committee(&self, first_epoch: EpochNumber, da_committee: Vec<PeerConfig<T>>);

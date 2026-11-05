@@ -21,8 +21,10 @@ What an honest node's history must satisfy.
 
 Each rule reads the history up to and including the step it constrains, so a node
 may act on an input in the step it arrives. The timeout rules are the exception:
-they read the history before the step, because a timer or one-honest indication
-is answered from the view and epoch the node was in when it arrived.
+they read the history before the step that took the timer or one-honest
+indication, because the vote answers it from the view, epoch and lock the node
+had when it arrived. The vote may be sent in a later step, as by a node that stores
+its timeout before sending it; `Prompt` asks that it come within `δ`.
 -/
 
 @[expose] public section
@@ -122,10 +124,6 @@ structure SafeHistory (honestIn : EpochNumber → Prop) (h : History) : Prop whe
         ∧ (h.upTo (n + 1)).HasPayload cfg b.viewNumber b.payloadCommit
         ∧ vote.view = c.view ∧ vote.data = c.data.toVote2
 
-  /-- At most one vote2 per epoch and view. -/
-  vote2Once : ∀ vote vote', h.Sent (.vote2 vote) → h.Sent (.vote2 vote') →
-    honestIn vote.data.epoch → vote.data.epoch = vote'.data.epoch → vote.view = vote'.view → vote = vote'
-
   /--
   No vote2 at a view the node has timed out, or at an earlier one.
 
@@ -138,13 +136,18 @@ structure SafeHistory (honestIn : EpochNumber → Prop) (h : History) : Prop whe
 
   /--
   A timeout vote names a lock no earlier, in epoch and view order (`EpochViewLE`),
-  than every vote2 the node sent before it.
+  than every vote2 the node sent before it at the vote's view or an earlier one.
 
   What makes `SafeParent` safe: a timeout certificate's lock is then no earlier
-  than any view its honest signers voted2 in before timing out.
+  than any view up to its own that its honest signers voted2 in before timing out.
+  The lock is one the node held at the timer (`ProtocolHistory.timeoutJustified`),
+  so between the timer and the vote it draws, the node does not vote2 at the
+  vote's view or an earlier one unless the lock covers it. A vote2 at a later view
+  may come in between, and the lock need not cover it.
   -/
   timeoutLock : ∀ n vote, h.SentAt n (.timeoutVote vote) →
     honestIn vote.data.epoch → ∀ v2 : Vote2, (h.upTo n).Sent (.vote2 v2) → honestIn v2.data.epoch →
+      v2.view ≤ vote.view →
       EpochViewLE v2.data.epoch v2.view vote.data.lock.data.epoch vote.data.lock.view
 
   /--
@@ -325,17 +328,23 @@ def ProposedIn (h : History) (e : EpochNumber) (v : ViewNumber) : Prop :=
     ∨ ∃ r, h.Sent (.revote r) ∧ r.view = v ∧ r.cert.data.epoch = e
 
 /--
+`h` answers the timer for view `v` the node took at step `n`: in that step or a
+later one, it sent a timeout vote for `v` naming the epoch it was in at the timer.
+-/
+def History.TimerAnswered (h : History) (n : Nat) (v : ViewNumber) : Prop :=
+  ∃ e L i, n ≤ i ∧ (h.upTo n).InEpoch cfg e
+    ∧ h.SentAt i (.timeoutVote { data := { epoch := e, lock := L }, view := v, signer := node })
+
+/--
 `SafeHistory`, and the rest of what an honest node may do, for the epochs it is
 honest in.
 
 The added fields are what liveness needs: a node that timed out at will could stop
-every view, and one that answered no timer could keep a failed view open for ever.
-As for the signing rules, a rule applies when the node is honest in the epoch of
-the messages it relates. A timer is answered when the node is honest in the epoch
-it is in and a member of its committee (`memberIn`): a timeout vote counts towards
-no certificate of an epoch the node is not a member of.
+every view. As for the signing rules, a rule applies when the node is honest in the
+epoch of the messages it relates. That a node answers its timers is a matter of
+time, and `Prompt` asks it of the epochs it is honest in and a member of.
 -/
-structure ProtocolHistory (honestIn memberIn : EpochNumber → Prop) (h : History) : Prop
+structure ProtocolHistory (honestIn : EpochNumber → Prop) (h : History) : Prop
     extends SafeHistory cfg node honestIn h where
   /--
   A vote1 is on a proposal, or answers a re-vote request, that the leader of its
@@ -358,30 +367,15 @@ structure ProtocolHistory (honestIn memberIn : EpochNumber → Prop) (h : Histor
       ∧ NotBehind cfg (h.upTo (n + 1)) r.cert.data.epoch)
 
   /--
-  A timeout vote answers a timer or the one-honest indication, names the node's
-  epoch, and names as its lock a certificate the node holds.
-
-  The timer fires for the view the node is in. The one-honest indication may be
-  for a later view, since the node is following others who already left. Both are
-  read from the history before the step (`h.upTo n`), not after it.
+  A timeout vote answers a timer or the one-honest indication the node took at or
+  before the step it is sent in (`History.TimerAt`). It is the vote the node would
+  have sent at the timer: it names the node's epoch then, and as its lock a
+  certificate the node held then.
   -/
   timeoutJustified : ∀ n st vote, h[n]? = some st → Output.send (.timeoutVote vote) ∈ st.output →
-    honestIn vote.data.epoch → vote.signer = node ∧ (h.upTo n).InEpoch cfg vote.data.epoch
-      ∧ (h.upTo n).HasCert1 cfg vote.data.lock
-      ∧ ((st.input = .timeout vote.view ∧ (h.upTo n).InView cfg vote.view)
-        ∨ (st.input = .timeoutOneHonest vote.view
-            ∧ ∃ v, (h.upTo n).InView cfg v ∧ v ≤ vote.view))
-
-  /--
-  Such a timer or indication is answered, in the step it arrives, in an epoch the
-  node is honest in and a member of.
-  -/
-  timeoutAnswered : ∀ n st v, h[n]? = some st →
-    ((st.input = .timeout v ∧ (h.upTo n).InView cfg v)
-      ∨ (st.input = .timeoutOneHonest v ∧ ∃ w, (h.upTo n).InView cfg w ∧ w ≤ v)) →
-    (∀ e, (h.upTo n).InEpoch cfg e → honestIn e ∧ memberIn e) →
-    ∃ e L, (h.upTo n).InEpoch cfg e
-      ∧ Output.send (.timeoutVote { data := { epoch := e, lock := L }, view := v, signer := node }) ∈ st.output
+    honestIn vote.data.epoch → vote.signer = node
+      ∧ ∃ m ≤ n, h.TimerAt cfg m vote.view ∧ (h.upTo m).InEpoch cfg vote.data.epoch
+        ∧ (h.upTo m).HasCert1 cfg vote.data.lock
 
   /-- A proposal is one the node may make. -/
   proposeJustified : ∀ n p, h.SentAt n (.proposal p) →
@@ -401,18 +395,13 @@ structure ProtocolHistory (honestIn memberIn : EpochNumber → Prop) (h : Histor
 /-! ## What a node owes -/
 
 /--
-The node holds what a vote1 on `p` reads of its parent.
+The node holds the parent of `p`, unless the parent is the anchor.
 
-The parent and its payload, unless the parent is the anchor or `p` opens an epoch.
-The exemption is there because VID shares go to the committee of a block's own
-epoch, so a node new to the incoming committee cannot rebuild the outgoing
-epoch's last block.
 -/
 def ParentReady (h : History) (p : Proposal) : Prop :=
-  p.parentCert.view = cfg.anchorView ∨ EntersEpoch cfg p
+  p.parentCert.view = cfg.anchorView
     ∨ ∃ parent, h.HasProposal cfg parent ∧ parent.viewNumber ≤ p.parentCert.view
         ∧ p.parentCert.data.blockHash = blockHash parent
-        ∧ h.HasPayload cfg parent.viewNumber parent.payloadCommit
 
 /--
 The node owes a vote1 on `p`: it received `p` from the view's leader with its
@@ -496,13 +485,22 @@ inductive Obligation where
 
 /--
 The node owes a vote2 on the block `c` is over: it holds `c`, the block's proposal
-and payload, has not yet voted2 for the epoch and view, holds no `Cert2` there,
-has not given the view up, and the view is after its floor.
+and payload, has not left `c`'s epoch, has not yet voted2 for the epoch and view,
+holds no `Cert2` there, has not given the view up, and has decided nothing at the
+view or a later one.
 -/
 structure OwedVote2 (h : History) (c : Cert1) : Prop where
   /-- The node holds `c`, the block it is over, and the block's payload. -/
   holds : ∃ b, h.HasCert1 cfg c ∧ h.HasProposal cfg b ∧ Certifies c b
     ∧ h.HasPayload cfg b.viewNumber b.payloadCommit
+
+  /--
+  It is for the node's epoch or a later one.
+
+  A node that has left the epoch holds the `Cert2` that ended it, and the nodes
+  still in the epoch receive that `Cert2` with the epoch change.
+  -/
+  current : NotBehind cfg h c.data.epoch
 
   /-- The node has not voted2 for the epoch and view. -/
   notVoted : ∀ vote : Vote2, h.Sent (.vote2 vote) → vote.data.epoch = c.data.epoch → vote.view ≠ c.view
@@ -511,10 +509,18 @@ structure OwedVote2 (h : History) (c : Cert1) : Prop where
   notCommitted : ∀ c2, h.HasCert2 c2 → c2.data.epoch = c.data.epoch → c2.view ≠ c.view
 
   /-- The node has not given the view up. -/
-  notPast : ¬ h.PastView c.view
+  notPast : ¬ h.PastView cfg c.view
 
-  /-- The view is after the floor (`History.AfterFloor`), so after the anchor's. -/
-  afterFloor : h.AfterFloor cfg c.view
+  /-- The view is after the anchor's. -/
+  afterAnchor : cfg.anchorView < c.view
+
+  /--
+  The node has decided no view at `c`'s or a later one.
+
+  Its chain is decided at the view or a later one, so the vote2 can no longer help
+  it, and a decide comes with a `Cert2` the other nodes receive as well.
+  -/
+  notDecidedPast : ∀ u, h.DecidedView u → u < c.view
 
 /--
 The node owes a decide of the block `c` commits: it holds `c`, the block's
@@ -536,10 +542,10 @@ The node owes the action.
 Each case is the action being justified by what the node holds, not yet taken, and
 not overtaken. A vote1 and a proposal are owed only in the view the node is in, and
 until it times the view out; a vote2 until the node gives the certificate's view
-up, holds its `Cert2`, or the view falls behind the floor; a decide until the
-block's view is decided or falls behind the floor. So every obligation ends, and
-none asks for anything the node would have to fetch, or for a view earlier than
-the floor (`Config.decideBuffer`).
+up, holds its `Cert2`, decides the view or a later one, or leaves the epoch; a
+decide until the block's view is decided or falls behind the floor. So every
+obligation ends, and none asks for anything the node would have to fetch, or for
+a view earlier than the floor (`Config.decideBuffer`).
 -/
 def Owed (h : History) : Obligation → Prop
   | .vote1 p => OwedVote1 cfg leader h p
@@ -563,7 +569,11 @@ def Output.SignedIn (honestIn : EpochNumber → Prop) : Output → Prop
   | .send (.vote1 v) => honestIn v.data.epoch
   | .send (.vote2 v) => honestIn v.data.epoch
   | .send (.timeoutVote v) => honestIn v.data.epoch
-  | .send _ => True
+  | .send (.timeoutCert _) => True
+  | .send (.cert1 _) => True
+  | .send (.cert2 _) => True
+  | .send (.epochChange ..) => True
+  | .send (.vidShare _) => True
   | .decided _ _ c2 => honestIn c2.data.epoch
 
 open Classical in

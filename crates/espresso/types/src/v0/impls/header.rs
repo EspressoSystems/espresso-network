@@ -945,10 +945,7 @@ impl Header {
         let epoch = EpochNumber::new(epoch_from_block_number(height, epoch_height));
         let prev_epoch = EpochNumber::new(*epoch - 1);
         let coordinator = instance_state.coordinator.clone();
-        let first_epoch = coordinator
-            .membership()
-            .first_epoch()
-            .context("first_epoch not available")?;
+        let first_epoch = coordinator.membership().first_epoch();
 
         // No rewards data exists for the first two epochs.
         if epoch <= first_epoch + 1 {
@@ -1575,12 +1572,7 @@ impl BlockHeader<SeqTypes> for Header {
                     .context("epoch height not in instance state")?;
                 if is_ge_epoch_root(height + 1, epoch_height) {
                     let coordinator = instance_state.coordinator.clone();
-                    let first_epoch = {
-                        coordinator
-                            .membership()
-                            .first_epoch()
-                            .context("The first epoch was not set.")?
-                    };
+                    let first_epoch = coordinator.membership().first_epoch();
 
                     let epoch = EpochNumber::new(epoch_from_block_number(height + 1, epoch_height));
 

@@ -107,13 +107,94 @@ pub struct TimeoutData2 {
     pub epoch: Option<EpochNumber>,
 }
 
-/// Data used for a timeout vote, binding the epoch the vote was cast in.
+/// Data used for a timeout vote, binding the epoch the vote was cast in and
+/// the lock its signer held when it timed out.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
 pub struct TimeoutData3 {
     /// View the timeout is for
     pub view: ViewNumber,
     /// Epoch number
     pub epoch: EpochNumber,
+    /// The signer's lock, `None` while it is locked on nothing but genesis.
+    pub lock: Option<LockView>,
+}
+
+/// Where a lock sits in the order locks are compared by: epoch first, then view.
+///
+/// A certificate of a later epoch is later than any certificate of an earlier
+/// one, whatever their views.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct LockView {
+    /// Field order is the comparison order: epoch, then view.
+    pub epoch: EpochNumber,
+    pub view: ViewNumber,
+}
+
+impl LockView {
+    /// The position of the lock a `Certificate1` (`QuorumCertificate2`) gives.
+    pub fn of<T: NodeType>(cert: &crate::simple_certificate::QuorumCertificate2<T>) -> Self {
+        Self {
+            epoch: cert.data.epoch.unwrap_or_else(EpochNumber::genesis),
+            view: cert.view_number(),
+        }
+    }
+}
+
+/// The lock a timeout vote or certificate of some epoch carries, by what is
+/// checked of it.
+///
+/// A proposal after a timeout certificate is of the certificate's epoch, and a
+/// lock of an earlier epoch admits any parent, so whether an older lock is
+/// genuine changes nothing. Only a recent lock's certificate is verified, its
+/// committee looked up and the lock adopted, which keeps a peer from starting
+/// catchups for old epochs. A vote with a stale lock still counts: an honest
+/// node back from several epochs away holds such a lock until it adopts a newer
+/// one.
+#[derive(Debug)]
+pub enum TimeoutLock<'a, T: NodeType> {
+    /// Locked on nothing but genesis.
+    None,
+    /// Of an epoch before the one before: only its position is bound.
+    Stale(LockView),
+    /// Of the vote's epoch or the one before: its certificate is verified
+    /// against that epoch's committee.
+    Recent(&'a crate::simple_certificate::QuorumCertificate2<T>),
+}
+
+impl<'a, T: NodeType> TimeoutLock<'a, T> {
+    pub fn of(
+        cert: Option<&'a crate::simple_certificate::QuorumCertificate2<T>>,
+        epoch: EpochNumber,
+    ) -> Self {
+        let Some(cert) = cert else {
+            return Self::None;
+        };
+        let lock = LockView::of(cert);
+        if lock.epoch.saturating_add(1) >= *epoch {
+            Self::Recent(cert)
+        } else {
+            Self::Stale(lock)
+        }
+    }
+
+    /// The certificate of a recent lock.
+    pub fn recent(self) -> Option<&'a crate::simple_certificate::QuorumCertificate2<T>> {
+        match self {
+            Self::Recent(cert) => Some(cert),
+            Self::None | Self::Stale(_) => None,
+        }
+    }
+
+    /// The epoch whose committee verifies a recent lock's certificate.
+    pub fn verified_in(self) -> Option<EpochNumber> {
+        self.recent().map(|cert| LockView::of(cert).epoch)
+    }
+}
+
+impl std::fmt::Display for LockView {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}@{}", self.epoch, self.view)
+    }
 }
 
 /// Data used for a Pre Commit vote.
@@ -520,12 +601,19 @@ impl Committable for TimeoutData2 {
 
 impl Committable for TimeoutData3 {
     fn commit(&self) -> Commitment<Self> {
-        let TimeoutData3 { view, epoch } = self;
+        let TimeoutData3 { view, epoch, lock } = self;
 
-        committable::RawCommitmentBuilder::new("Timeout data v3")
+        let builder = committable::RawCommitmentBuilder::new("Timeout data v3")
             .u64_field("view number", **view)
-            .u64_field("epoch number", **epoch)
-            .finalize()
+            .u64_field("epoch number", **epoch);
+        match lock {
+            None => builder.u64_field("lock", 0),
+            Some(lock) => builder
+                .u64_field("lock", 1)
+                .u64_field("lock epoch", *lock.epoch)
+                .u64_field("lock view", *lock.view),
+        }
+        .finalize()
     }
 }
 

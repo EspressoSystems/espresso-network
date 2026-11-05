@@ -45,7 +45,9 @@ signature, a hyphen at each camel-case seam and a bare break after each dot, but
 a name written as `{name X}` or as plain code reaches LaTeX without them, and a
 long one then runs past the margin. `breakbefore` and `breakafter` ask fancyvrb
 for the same two policies, and for a break after `_`, everywhere a name is set
-inline.
+inline. No break is marked: a hyphen would read as part of the name, and
+fancyvrb cannot tell a camel-case seam from the start of a word. Verso's own
+hyphens are switched off for the same reason.
 
 A few lines still have no break in reach, a name being one long word in a narrow
 column. `emergencystretch` gives TeX a last pass in which it may loosen the
@@ -90,7 +92,7 @@ where
 private def houseTeXPreamble : String :=
   fontRules ++
   r#"
-\RecustomVerbatimCommand{\LeanVerb}{Verb}{commandchars=\\\{\},fontsize=\small,breaklines=true,breakafter={._},breakbefore={ABCDEFGHIJKLMNOPQRSTUVWXYZ},breakbeforesymbolpre={-},breakaftersymbolpre={}}
+\RecustomVerbatimCommand{\LeanVerb}{Verb}{commandchars=\\\{\},fontsize=\small,formatcom={\def\-{}\let\allowbreak\relax},breaklines=true,breakafter={._},breakbefore={ABCDEFGHIJKLMNOPQRSTUVWXYZ},breakbeforesymbolpre={},breakaftersymbolpre={}}
 
 \emergencystretch=1em
 "#

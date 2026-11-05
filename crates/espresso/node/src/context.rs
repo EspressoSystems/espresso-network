@@ -201,6 +201,12 @@ where
             .load_high_qc2()
             .await
             .context("loading persisted locked QC")?;
+        // And the epoch boundary certificate a re-vote and the next epoch's
+        // first block name.
+        let boundary_qc = persistence
+            .load_boundary_qc2()
+            .await
+            .context("loading persisted boundary QC")?;
         let anchor_cert2 = persistence
             .load_cert2(initializer.anchor_leaf().view_number())
             .await
@@ -233,6 +239,7 @@ where
             .metrics(metrics)
             .consensus_metrics(ConsensusMetricsValue::new(metrics))
             .maybe_locked_qc(locked_qc)
+            .maybe_boundary_qc(boundary_qc)
             .maybe_anchor_cert2(anchor_cert2)
             .maybe_leader_tracer(leader_tracer)
             .upgrade_config(UpgradeConfig {
@@ -619,13 +626,7 @@ async fn seed_membership(
         }
     }
 
-    load_start_epoch_info(
-        membership_coordinator,
-        initializer.start_epoch_info(),
-        config.epoch_height,
-        config.epoch_start_block,
-    )
-    .await;
+    load_start_epoch_info(membership_coordinator, initializer.start_epoch_info()).await;
 }
 
 impl<P: SequencerPersistence> Drop for SequencerContext<P> {

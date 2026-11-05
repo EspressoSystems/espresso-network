@@ -12,7 +12,9 @@ use espresso_types::{
     FeeAccount, FeeAmount, GenesisHeader, L1BlockInfo, L1Client, SeqTypes, Timestamp, Upgrade,
     v0_3::ChainConfig,
 };
-use hotshot_types::{VersionedDaCommittee, version_ser};
+use hotshot_types::{
+    VersionedDaCommittee, data::EpochNumber, utils::epoch_from_block_number, version_ser,
+};
 use serde::{Deserialize, Serialize, Serializer};
 use url::Url;
 use vbs::version::Version;
@@ -141,6 +143,21 @@ impl Genesis {
         std::iter::once((self.base_version, *self.chain_config.max_block_size))
             .chain(upgrades)
             .collect()
+    }
+
+    /// The first epoch, which runs on the genesis stake table.
+    ///
+    /// Fails when `epoch_height` is missing or zero.
+    pub fn first_epoch(&self) -> anyhow::Result<EpochNumber> {
+        let epoch_height = self
+            .epoch_height
+            .filter(|&height| height > 0)
+            .context("genesis needs a positive epoch_height")?;
+        let start = self.epoch_start_block.unwrap_or_default();
+        Ok(EpochNumber::new(epoch_from_block_number(
+            start,
+            epoch_height,
+        )))
     }
 }
 
@@ -1750,5 +1767,59 @@ mod test {
                 );
             }
         }
+    }
+
+    /// A genesis with the given epoch fields. The other fields do not matter.
+    fn genesis_with_epochs(epoch_height: Option<u64>, epoch_start_block: Option<u64>) -> Genesis {
+        let mut genesis: Genesis = toml::from_str(&minimal_genesis_toml("0.4", "")).unwrap();
+        genesis.epoch_height = epoch_height;
+        genesis.epoch_start_block = epoch_start_block;
+        genesis
+    }
+
+    // The first epoch is the epoch that holds `epoch_start_block`. Epochs are
+    // numbered from 1: block 0 is in epoch 1, and block b > 0 is in epoch
+    // ceil(b / epoch_height).
+    #[rstest::rstest]
+    #[case::mainnet(40000, Some(10960201), 275)]
+    #[case::decaf(3000, Some(3160636), 1054)]
+    #[case::last_block_of_epoch(300, Some(600), 2)]
+    #[case::first_block_of_epoch(300, Some(601), 3)]
+    #[case::block_one(300, Some(1), 1)]
+    #[case::block_zero(300, Some(0), 1)]
+    #[case::start_block_missing(300, None, 1)]
+    fn first_epoch_holds_epoch_start_block(
+        #[case] epoch_height: u64,
+        #[case] epoch_start_block: Option<u64>,
+        #[case] expected: u64,
+    ) {
+        let genesis = genesis_with_epochs(Some(epoch_height), epoch_start_block);
+        assert_eq!(
+            genesis.first_epoch().unwrap(),
+            EpochNumber::new(expected),
+            "epoch_height={epoch_height}, epoch_start_block={epoch_start_block:?}"
+        );
+    }
+
+    #[rstest::rstest]
+    #[case::missing(None)]
+    #[case::zero(Some(0))]
+    fn first_epoch_needs_nonzero_epoch_height(#[case] epoch_height: Option<u64>) {
+        let genesis = genesis_with_epochs(epoch_height, Some(600));
+        assert!(
+            genesis.first_epoch().is_err(),
+            "epoch_height={epoch_height:?} must be rejected"
+        );
+    }
+
+    #[rstest::rstest]
+    #[case::mainnet("mainnet.toml", 275)]
+    #[case::decaf("decaf.toml", 1054)]
+    fn first_epoch_of_committed_genesis_files(#[case] file: &str, #[case] expected: u64) {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../data/genesis")
+            .join(file);
+        let genesis = Genesis::from_file(&path).unwrap();
+        assert_eq!(genesis.first_epoch().unwrap(), EpochNumber::new(expected));
     }
 }
