@@ -523,8 +523,32 @@ just bench aws run --tag release-x --leader-trace
     view and the next leader's pipeline, SVG), `trace/leader_window.png` (the leader of a view in the middle of the used
     views: work spans, process CPU in cores busy, network Gbps; a panel reads "no data" without the `cpu_node*.csv` or
     `net_node*.csv` of that node, as in runs before the sampler).
-  - Without `ns_disperse_end` or `vid_shares_unicast_start` in the traces, the build in both figures ends in one
-    "disperse + fan-out" bar.
+  - Dispersal events by path:
+    - Built (espresso-node, bench node with empty blocks): the block builder encodes the block once.
+      `block_commitments_start`/`_end` bracket payload bytes and the VID encode (run in parallel with transaction
+      hashes). The disperser records `vid_fragments_start`/`_end` around signing and fragment assembly of every bucket;
+      no encoding runs there.
+    - Encode (bench node with `--block-size` > 0): the disperser encodes. `ns_disperse_start`/`_end` bracket disperse
+      parameters, signing, encoding and fragment assembly of every bucket.
+    - Both: `vid_shares_unicast_start` (first share send) and `vid_shares_unicast_end` (all sends queued).
+  - Spans in `leader_window.png` and `timeline.svg`. `leader_window.png` skips a span lacking an endpoint; the
+    timeline skips a view lacking an event of its full layout:
+
+    | Span | Events | Path |
+    |---|---|---|
+    | block-build (Encode) | `request_block_header_queued` .. `block_built_applied` | Encode |
+    | block-build (Built) | `block_payload_start` .. `block_built_applied` | Built; includes the VID encode (timeline: build/prep) |
+    | request queue + tx select | `request_block_header_queued` .. `block_request_started` | Built (the consensus outbox to the block builder plus pool transaction selection; `block_request_started` is recorded when the block builder accepts the request); tier 2 in `leader_window.png`, timeline row 0 |
+    | builder start + empty-block delay | `block_request_started` .. `block_payload_start` | Built (tokio scheduling of the builder task plus the `empty_block_delay` sleep (500 ms default) when the pool is empty; the block builder records `block_payload_start` after it; Encode views other than the first have none); tier 2 in `leader_window.png`, timeline row 0 |
+    | encode + commitments | `block_commitments_start` .. `block_commitments_end` | Built; tier 2 in `leader_window.png`, timeline row 1 |
+    | sign + fragments | `vid_fragments_start` .. `vid_fragments_end` | Built; timeline row 1 |
+    | disperse (timeline: dispersal) | `ns_disperse_start` .. `ns_disperse_end` | Encode; timeline row 1 |
+    | fan-out | `vid_shares_unicast_start` .. `vid_shares_unicast_end` | both; overlaps the span before it with several buckets; tier 3 in `leader_window.png`, timeline row 2 |
+
+  - `leader_window.png` also draws `sign + fragments` (Built) and `disperse` (Encode). Hatched spans are CPU heavy; encode + commitments is not hatched, the CPU panel shows its load.
+
+  - `block build` in `leader_path.*` is `request_block_header_queued` .. `block_built_applied`; it includes the VID encode
+    on the Built path.
   - With `steps.json`, plots and stats cover only views whose t0 lies in a step's measured window `t_mid`..`t_end`.
 
 ### Baselines

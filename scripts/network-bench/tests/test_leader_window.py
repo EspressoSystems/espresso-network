@@ -12,18 +12,52 @@ def window() -> lw.Window:
     return lw.Window(1000 * MS, 1100 * MS)
 
 
-def test_view_spans_split_the_disperse_only_with_its_events():
-    full = {event: 0 for event in lw.SPLIT_EVENTS}
-    assert lw.view_spans(full) == lw.SPANS
-    labels = [span[2] for span in lw.view_spans({})]
-    assert labels == [
+BUILT = {
+    "request_block_header_queued": 0,
+    "block_request_started": 1,
+    "block_payload_start": 1,
+    "block_commitments_start": 2,
+    "block_commitments_end": 5,
+    "block_built_applied": 6,
+    "vid_fragments_start": 7,
+    "vid_fragments_end": 9,
+    "vid_shares_unicast_start": 8,
+    "vid_shares_unicast_end": 12,
+}
+ENCODE = {
+    "request_block_header_queued": 0,
+    "block_built_applied": 6,
+    "ns_disperse_start": 7,
+    "ns_disperse_end": 9,
+    "vid_shares_unicast_start": 8,
+    "vid_shares_unicast_end": 12,
+}
+
+
+def labels(evs: dict[str, int]) -> list[str]:
+    return [span[2] for span in lw.view_spans(evs)]
+
+
+def test_view_spans_of_a_built_view():
+    assert lw.view_spans(BUILT)[0] == lw.BUILT_BLOCK_BUILD
+    assert labels(BUILT) == [
         "block-build",
-        "disperse + fan-out",
-        "recover-decode",
-        "txn-commit",
+        "request queue + tx select",
+        "builder start + empty-block delay",
+        "encode + commitments",
+        "sign + fragments",
+        "fan-out",
     ]
-    only_end = {"ns_disperse_end": 0}
-    assert lw.view_spans(only_end) == lw.view_spans({})
+
+
+def test_view_spans_of_an_encode_view():
+    assert lw.view_spans(ENCODE) == (lw.BLOCK_BUILD, lw.DISPERSE, lw.FAN_OUT)
+
+
+def test_view_spans_skip_spans_with_an_absent_endpoint():
+    assert labels({}) == []
+    assert labels({"ns_disperse_start": 0}) == []
+    assert labels({"vid_fragments_end": 0, "vid_shares_unicast_end": 1}) == []
 
 
 def test_window_clips_spans():
@@ -87,6 +121,15 @@ def leader_trace() -> tuple[Trace, dict[int, tuple[int, int]]]:
         trace[0][view] = {
             "proposal_queued": queued,
             "request_block_header_queued": queued - 80 * MS,
+            "block_request_started": queued - 78 * MS,
+            "block_payload_start": queued - 75 * MS,
+            "block_built_applied": queued - 30 * MS,
+            "block_commitments_start": queued - 70 * MS,
+            "block_commitments_end": queued - 40 * MS,
+            "vid_fragments_start": queued - 29 * MS,
+            "vid_fragments_end": queued - 20 * MS,
+            "vid_shares_unicast_start": queued - 25 * MS,
+            "vid_shares_unicast_end": queued - 10 * MS,
             "header_created_applied": queued - 10 * MS,
             "leaf_decided": queued + 50 * MS,
         }

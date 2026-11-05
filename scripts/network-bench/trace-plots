@@ -14,6 +14,9 @@ views; CPU and network need the `cpu_node*.csv` and `net_node*.csv` samples besi
 `stats.json`. With `steps.json`, all of these cover only the views in the measured halves;
 without it, every view after the warmup.
 
+The plots describe the events of the current code only. Traces from older code are not supported;
+when events move, update the plots and drop the old layout instead of adding fallbacks.
+
     trace-plots RUN_DIR [--warmup N]
 """
 

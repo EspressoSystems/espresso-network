@@ -4,16 +4,22 @@ leader's `proposal_queued` (t = 0), with the next leader's pipeline one cycle la
 Every metric is a median over the given views. A metric whose events the traces lack is 0 in the
 arithmetic, so its bars or markers collapse, and `present_<metric>` is 0; a leader build bar with
 an absent endpoint is not drawn. The leader build metrics are medians over the views that have
-every event of the layout the majority of views supports: split (`ns_disperse_end` and
-`vid_shares_unicast_start` present) or one "disperse + fan-out" bar, with or without the
-`header_created_applied` and `leaf2_commit_computed` tail (header, parent Cert1 wait, commit +
-sign).
+every event of the layout the majority of views supports; views without a full layout are
+skipped:
+- Built (espresso-node, bench node with empty blocks): request queue + tx select
+  (`request_block_header_queued`..`block_request_started`), builder start + empty-block delay
+  (`block_request_started`..`block_payload_start`), encode + commitments
+  (`block_commitments_*`), sign + fragments (`vid_fragments_*`), fan-out.
+- Encode (bench node with `--block-size` > 0): dispersal (`ns_disperse_*`), fan-out.
 
-Each leader build lane has three sub-rows: the sequential path (build/prep, header, parent Cert1
-wait, commit + sign), dispersal and fan-out. Dispersal and fan-out overlap in time, so
-they are drawn in parallel rows; share-sign shows in the fan-out row only when it is positive.
-A label that does not fit its bar goes beside, above or below it where the lane has room, else it
-is centered and overflows the bar. Bars shorter than 1 ms are not drawn."""
+Each leader build lane has three sub-rows: the sequential path (request queue + tx select and builder start +
+empty-block delay on the Built path, build/prep, header, parent Cert1 wait, commit + sign), the encode or dispersal bars, and
+fan-out. Encode or dispersal and fan-out overlap in time on both paths, so they are drawn in
+parallel rows. A label that does not fit its bar goes beside, above or below it where the lane
+has room, else it is centered and overflows the bar. Bars shorter than 1 ms are not drawn.
+
+The layouts describe the events of the current code only. Traces from older code are not
+supported; when events move, update the layouts and drop the old one instead of adding fallbacks."""
 
 import math
 import statistics
@@ -26,11 +32,17 @@ from leadertrace import DECIDED, NS_PER_MS, Trace, leaders
 # all nodes at view V; "leader_prev": L_V's stamp at view V - 1.
 EVENTS = {
     "request_block": ("request_block_header_queued", "leader"),
+    "request_started": ("block_request_started", "leader"),
+    "payload_start": ("block_payload_start", "leader"),
     "block_built": ("block_built_applied", "leader"),
     "header_created": ("header_created_applied", "leader"),
     "leaf2_commit": ("leaf2_commit_computed", "leader"),
+    "commitments_start": ("block_commitments_start", "leader"),
+    "commitments_end": ("block_commitments_end", "leader"),
+    "fragments_start": ("vid_fragments_start", "leader"),
+    "fragments_end": ("vid_fragments_end", "leader"),
     "ns_disperse_start": ("ns_disperse_start", "leader"),
-    "vid_disperse": ("ns_disperse_end", "leader"),
+    "ns_disperse_end": ("ns_disperse_end", "leader"),
     "vid_unicast_start": ("vid_shares_unicast_start", "leader"),
     "vid_unicast_end": ("vid_shares_unicast_end", "leader"),
     "proposal_validated": ("proposal_validated_v_minus_1", "cluster"),
@@ -49,18 +61,48 @@ EVENTS = {
 }
 
 Metrics = dict[str, float]
-# Leader build events by group: always drawn, the dispersal/fan-out split, the header tail.
-BUILD_EVENTS = ("request_block", "block_built", "ns_disperse_start", "vid_unicast_end")
-SPLIT_EVENTS = ("vid_disperse", "vid_unicast_start")
-TAIL_EVENTS = ("header_created", "leaf2_commit")
-BUILD_GROUP_EVENTS = BUILD_EVENTS + SPLIT_EVENTS + TAIL_EVENTS
+# Leader build events required on every path, then the events of each path (Built, then Encode).
+BUILD_EVENTS = (
+    "request_block",
+    "block_built",
+    "header_created",
+    "leaf2_commit",
+    "vid_unicast_end",
+)
+DISPERSAL_LAYOUTS = (
+    (
+        "request_started",
+        "payload_start",
+        "commitments_start",
+        "commitments_end",
+        "fragments_start",
+        "fragments_end",
+        "vid_unicast_start",
+    ),
+    ("ns_disperse_start", "ns_disperse_end", "vid_unicast_start"),
+)
+BUILD_GROUP_EVENTS = (
+    *BUILD_EVENTS,
+    "request_started",
+    "payload_start",
+    "commitments_start",
+    "commitments_end",
+    "fragments_start",
+    "fragments_end",
+    "vid_unicast_start",
+    "ns_disperse_start",
+    "ns_disperse_end",
+)
 ViewRow = dict[str, float | None]
 
 TITLE = "Block V finalization timeline"
-BUILD_PREP, DISPERSAL, SHARE_SIGN, FAN_OUT, HEADER = (
+REQUEST_QUEUE = "#fde68a"
+EMPTY_DELAY, BUILD_PREP, DISPERSAL, ENCODE_COMMIT, SIGN_FRAGMENTS, FAN_OUT, HEADER = (
+    "#cbd5e1",
     "#94a3b8",
     "#2563eb",
     "#9333ea",
+    "#0891b2",
     "#ea580c",
     "#64748b",
 )
@@ -154,31 +196,50 @@ def timeline_metrics(rows: list[ViewRow]) -> Metrics:
 
 
 def build_layout(rows: list[ViewRow]) -> tuple[str, ...]:
-    """The richest set of leader build events that at least half of the views have in full."""
-    for extra in (SPLIT_EVENTS + TAIL_EVENTS, SPLIT_EVENTS, TAIL_EVENTS, ()):
-        events = BUILD_EVENTS + extra
+    """BUILD_EVENTS + the first dispersal layout that at least half of the views have in full;
+    () when none does. With () every row counts as complete and no median exists, since no
+    name is in the layout."""
+    for dispersal in DISPERSAL_LAYOUTS:
+        events = BUILD_EVENTS + dispersal
         have = sum(all(row[name] is not None for name in events) for row in rows)
         if have and have * 2 >= len(rows):
             return events
-    return BUILD_EVENTS
+    return ()
 
 
 def build_segments(m: Metrics) -> list[tuple[int, str, str, str, str]]:
     """(row, label, start metric, end metric, color) of the leader's build whose endpoints are
-    both present. Row 0 is the sequential path, row 1 dispersal, row 2 fan-out."""
-    if m["present_vid_disperse"] and m["present_vid_unicast_start"]:
-        middle = [
-            (1, "dispersal", "ns_disperse_start", "vid_disperse", DISPERSAL),
-            (2, "share-sign", "vid_disperse", "vid_unicast_start", SHARE_SIGN),
-            (2, "fan-out", "vid_unicast_start", "vid_unicast_end", FAN_OUT),
-        ]
-    else:
-        middle = [
-            (1, "disperse + fan-out", "ns_disperse_start", "vid_unicast_end", DISPERSAL)
-        ]
+    both present. Row 0 is the sequential path, row 1 encode + commitments and sign + fragments
+    (Built) or dispersal (Encode), row 2 fan-out. Medians exist only for the chosen layout's
+    events, so the other path's segments are absent. On the Built path the request queue + tx select and
+    the builder start + empty-block delay precede build/prep."""
+    prep_start = "payload_start" if m["present_payload_start"] else "request_block"
     segments = [
-        (0, "build/prep", "request_block", "block_built", BUILD_PREP),
-        *middle,
+        (
+            0,
+            "request queue + tx select",
+            "request_block",
+            "request_started",
+            REQUEST_QUEUE,
+        ),
+        (
+            0,
+            "builder start + empty-block delay",
+            "request_started",
+            "payload_start",
+            EMPTY_DELAY,
+        ),
+        (0, "build/prep", prep_start, "block_built", BUILD_PREP),
+        (
+            1,
+            "encode + commitments",
+            "commitments_start",
+            "commitments_end",
+            ENCODE_COMMIT,
+        ),
+        (1, "sign + fragments", "fragments_start", "fragments_end", SIGN_FRAGMENTS),
+        (1, "dispersal", "ns_disperse_start", "ns_disperse_end", DISPERSAL),
+        (2, "fan-out", "vid_unicast_start", "vid_unicast_end", FAN_OUT),
         (0, "header", "block_built", "header_created", HEADER),
         (0, "parent Cert1 wait", "header_created", "leaf2_commit", CERT1_WAIT),
         (0, "commit + sign", "leaf2_commit", "proposal_queued", COMMIT_SIGN),
@@ -808,9 +869,12 @@ def brackets(m: Metrics, f: Frame) -> str:
 
 
 LEGEND_SWATCHES = (
+    ("request queue + tx select", REQUEST_QUEUE),
+    ("builder start + empty-block delay", EMPTY_DELAY),
     ("build/prep", BUILD_PREP),
+    ("encode + commitments", ENCODE_COMMIT),
+    ("sign + fragments", SIGN_FRAGMENTS),
     ("dispersal", DISPERSAL),
-    ("share-sign", SHARE_SIGN),
     ("fan-out", FAN_OUT),
     ("header", HEADER),
     ("parent Cert1 wait", CERT1_WAIT),

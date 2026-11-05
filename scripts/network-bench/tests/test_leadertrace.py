@@ -32,6 +32,14 @@ PATH_EVENTS = (
     ("leaf_decided", 40),
 )
 PATH_DURATIONS = [2, 2, 1, 3, 2, 1, 2, 2, 1, 4, 2, 5, 13]
+DISPERSAL_EVENTS = (
+    "block_commitments_start",
+    "block_commitments_end",
+    "vid_fragments_start",
+    "vid_fragments_end",
+    "vid_shares_unicast_start",
+    "vid_shares_unicast_end",
+)
 
 
 def leader_rows(view: int) -> list[tuple[int, str, int]]:
@@ -112,6 +120,18 @@ def test_leader_path_splits_a_view_at_each_event():
     assert skipped == Counter()
     assert list(path) == [1, 2, 3]
     assert path[2] == pytest.approx(PATH_DURATIONS)
+
+
+def test_leader_path_ignores_the_dispersal_events():
+    trace = three_nodes()
+    base, _ = leadertrace.leader_path(trace, warmup=1)
+    for view in range(4):
+        events = trace[view % 3][view]
+        for i, event in enumerate(DISPERSAL_EVENTS):
+            events[event] = (10 * view + 4 + i) * MS
+    path, skipped = leadertrace.leader_path(trace, warmup=1)
+    assert skipped == Counter()
+    assert path == base
 
 
 def test_leader_path_sums_to_decision_time_after_t0():
