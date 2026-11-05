@@ -17,6 +17,7 @@ use hotshot_types::{
         block_contents::BlockHeader, node_implementation::NodeType, signature_key::SignatureKey,
     },
     utils::{epoch_from_block_number, is_epoch_root, is_last_block},
+    vid::avidm_gf2::init_avidm_gf2_param,
     vote::HasViewNumber,
 };
 use hotshot_utils::anytrace::{self, ensure};
@@ -441,7 +442,11 @@ impl<T: NodeType> Validator<T> {
         ) {
             return Err(ValidationError::InvalidVidShareProposalSignature);
         }
-        if vid_proposal.data.verify(total_weight) {
+        if verify_vid_share(
+            &vid_proposal.data,
+            total_weight,
+            crate::vid::systematic_only(),
+        ) {
             Ok(())
         } else {
             Err(ValidationError::VidShareNotVerified)
@@ -581,6 +586,30 @@ impl<T: NodeType> Validator<T> {
                 .map_err(|e| ValidationError::NoMembershipForEpoch(epoch, e)),
         }
     }
+}
+
+/// Empty shares carry only the leader-signed common data in the benchmark's
+/// systematic-only mode. They unblock header validation, never reconstruction;
+/// voting still requires the full payload under protocol 0.7.
+pub(crate) fn verify_vid_share<T: NodeType>(
+    share: &VidDisperseShare2<T>,
+    total_weight: usize,
+    systematic_only: bool,
+) -> bool {
+    if share.share.weight() != 0 || !systematic_only {
+        return share.verify(total_weight);
+    }
+    init_avidm_gf2_param(total_weight).is_ok_and(|expected| share.common.param == expected)
+        && share.is_consistent()
+        && share.share.validate()
+        && !share.common.ns_commits.is_empty()
+        && share.share.num_nss() == share.common.ns_commits.len()
+        && share.common.ns_commits.len() == share.common.ns_lens.len()
+        && share.share.range().is_some_and(|range| {
+            range.is_empty()
+                && range.start >= share.common.param.recovery_threshold
+                && range.end <= total_weight
+        })
 }
 
 #[derive(Debug, thiserror::Error)]

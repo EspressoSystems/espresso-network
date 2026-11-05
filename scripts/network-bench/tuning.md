@@ -23,6 +23,15 @@ With `--prune` and `--query-engine sqlite`, each prune batch holds the write loc
 
 ## Experimental VID leader traffic
 
+`ESPRESSO_BENCH_VID_SYSTEMATIC_ONLY=1` sends only shard indices below the recovery threshold,
+including trimming a weighted share that straddles that boundary. Parity-only recipients receive
+the leader-signed common data in empty-share fragments so they can validate the proposal; they
+do not rebroadcast those empty shares. Every validator still reconstructs before voting on 0.7.
+Parity shards are still computed locally, but their bytes and proofs are never sent. This mode
+has no parity fallback: every systematic shard must arrive. Leave `ESPRESSO_BENCH_VID_TWO_THIRDS`
+unset to use f+1 recovery (four of ten equal-weight validators). Other omission flags should be
+unset for an isolated experiment. This flag is benchmark-only and enabled by presence.
+
 These flags are enabled by presence, including a value of `0`; leave them unset to disable them.
 
 - `ESPRESSO_BENCH_SKIP_NEXT_LEADER_REBROADCAST=1`: the leader of V+1 does not rebroadcast its share of V.

@@ -112,6 +112,18 @@ impl AvidmGf2Share {
         &self.mt_proofs
     }
 
+    /// Keep only shard indices below `end`, preserving their Merkle proofs.
+    ///
+    /// A share entirely beyond `end` becomes empty. It then carries no
+    /// availability evidence and does not pass ordinary share verification.
+    pub fn retain_shards_before(&mut self, end: usize) {
+        let end = end.clamp(self.range.start, self.range.end);
+        let len = end - self.range.start;
+        self.payload.truncate(len);
+        self.mt_proofs.truncate(len);
+        self.range.end = end;
+    }
+
     /// Validate the share structure.
     pub fn validate(&self) -> bool {
         self.payload.len() == self.range.len() && self.mt_proofs.len() == self.range.len()

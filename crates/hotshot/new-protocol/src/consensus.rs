@@ -1227,7 +1227,7 @@ impl<T: NodeType> Consensus<T> {
         };
         if self.skip_next_leader_rebroadcast && self.is_leader(view + 1, next_epoch) {
             info!(%view, "bench: skip next leader VID rebroadcast");
-        } else {
+        } else if !crate::vid::systematic_only() || vid_share.share.weight() != 0 {
             outbox.push_back(ConsensusOutput::BroadcastVidShare(vid_share.clone()));
         }
         self.vid_shares.insert(view, vid_share);

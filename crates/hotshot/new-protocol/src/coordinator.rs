@@ -999,8 +999,10 @@ where
                     proposal.data.epoch,
                     expected_param,
                 );
-                self.vid_reconstructor
-                    .handle_vid_share(self.public_key.clone(), vid_share);
+                if !crate::vid::systematic_only() || vid_share.share.weight() != 0 {
+                    self.vid_reconstructor
+                        .handle_vid_share(self.public_key.clone(), vid_share);
+                }
             },
             ConsensusOutput::SendProposal(proposal) => {
                 let view = proposal.data.view_number;

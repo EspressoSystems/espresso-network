@@ -123,6 +123,25 @@ async fn share_starved_node_recovers_over_cliquenet() {
         .unwrap();
 }
 
+/// Every validator must reconstruct and decide across epochs.
+/// Also run with ESPRESSO_BENCH_VID_SYSTEMATIC_ONLY=1 to exercise metadata-only recipients.
+#[tokio::test(flavor = "multi_thread")]
+async fn vid_dispersal_decides_across_epochs() {
+    for num_nodes in [5, 10, 20] {
+        TestRunner::builder()
+            .num_nodes(num_nodes)
+            .transactions(60)
+            .control_lane(ControlLane::On)
+            .epoch_height(10)
+            .target_decisions(30)
+            .max_runtime(std::time::Duration::from_secs(90))
+            .build()
+            .run()
+            .await
+            .unwrap();
+    }
+}
+
 /// Abstaining on the parent must not prevent producing a child or deciding across epochs.
 #[tokio::test(flavor = "multi_thread")]
 async fn leader_vid_omissions_decide_across_epochs() {

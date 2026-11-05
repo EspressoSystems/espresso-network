@@ -31,6 +31,14 @@ mod disperse;
 mod fragments;
 mod reconstruct;
 
+/// Benchmark only: send the original shards and signed common data, without parity bytes.
+pub(crate) fn systematic_only() -> bool {
+    static ENABLED: std::sync::LazyLock<bool> = std::sync::LazyLock::new(|| {
+        std::env::var_os("ESPRESSO_BENCH_VID_SYSTEMATIC_ONLY").is_some()
+    });
+    *ENABLED
+}
+
 pub use disperse::{
     BuiltDispersal, Dispersal, VidDisperseError, VidDisperseOutput, VidDisperseRequest,
     VidDisperser, disperse_payload,

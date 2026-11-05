@@ -296,6 +296,11 @@ where
         .in_scope(|| T::SignatureKey::sign(private_key, payload_commitment.as_ref()))
         .map_err(|err| VidDisperseError::Sign(err.into()))?;
 
+    if super::systematic_only() {
+        tracing::info!(%view, threshold = params.param.recovery_threshold,
+            total_weight = params.param.total_weights, "bench: send systematic VID shards only");
+    }
+
     // Coalesce namespaces into size-balanced buckets, roughly one per core,
     // but never below the minimum size, so a block of many tiny namespaces
     // goes out as a few balanced messages per recipient instead of one tiny
@@ -323,8 +328,11 @@ where
         send,
         |send, bucket| -> Result<(), VidDisperseError> {
             let dispersals = bucket.dispersals(&params)?;
-            let bucket_fragments = debug_span!("fragments")
+            let mut bucket_fragments = debug_span!("fragments")
                 .in_scope(|| fragments(view, epoch, payload_commitment, &params, dispersals));
+            if super::systematic_only() {
+                retain_systematic_shards(&mut bucket_fragments);
+            }
             if buckets_left.fetch_sub(1, Ordering::AcqRel) == 1 {
                 crate::trace_leader_event!(
                     tracer,
@@ -357,6 +365,16 @@ where
             Ok(())
         },
     )
+}
+
+fn retain_systematic_shards<T: NodeType>(fragments: &mut [AvidmGf2DisperseShareFragment<T>]) {
+    for fragment in fragments {
+        for piece in &mut fragment.namespaces {
+            piece
+                .ns_share
+                .retain_shards_before(fragment.param.recovery_threshold);
+        }
+    }
 }
 
 /// The namespace dispersals of one bucket, which go out as one fragment per recipient.
@@ -534,13 +552,16 @@ mod tests {
     use versions::NEW_PROTOCOL_VERSION;
 
     use super::{
-        Bucket, BuiltDispersal, Dispersal, VidDisperseError, VidDisperseRequest, bucketize,
-        disperse_payload, fragments, handle_vid_disperse_request, into_buckets,
+        AvidmGf2Scheme, Bucket, BuiltDispersal, Dispersal, VidDisperseError, VidDisperseRequest,
+        bucketize, disperse_namespace, disperse_payload, fragments, handle_vid_disperse_request,
+        into_buckets, retain_systematic_shards,
     };
     use crate::{
         message::{ConsensusMessage, Message, MessageType, Validated},
         network::NetworkError,
+        proposal::verify_vid_share,
         tests::common::utils::{mock_membership, ns_table},
+        vid::VidFragmentAccumulator,
     };
 
     /// Build a contiguous namespace table from per-namespace byte lengths.
@@ -622,6 +643,66 @@ mod tests {
     fn payload() -> (Vec<u8>, Vec<u8>) {
         let payload = (0..6000).map(|i| (i % 251) as u8).collect();
         (payload, ns_table(&[1000, 3000, 6000]))
+    }
+
+    #[test]
+    fn systematic_only_trims_weighted_shares_and_preserves_recovery() {
+        let (payload, metadata) = payload();
+        let mut params =
+            AvidmGf2DisperseParams::new(&stake_table(), payload.clone().into(), &metadata).unwrap();
+        // With total weight 15, either recovery threshold (5 or 10) cuts
+        // through a recipient's range rather than between recipients.
+        params.weights = vec![3; 5];
+        let dispersals: Vec<_> = (0..params.ns_table.len())
+            .map(|index| disperse_namespace(&params, index).unwrap())
+            .collect();
+        let commits: Vec<_> = dispersals.iter().map(|d| d.commit).collect();
+        let commitment = AvidmGf2Scheme::aggregate_commit(&commits).unwrap();
+        let mut fragments = fragments(
+            ViewNumber::new(7),
+            EpochNumber::new(3),
+            commitment,
+            &params,
+            dispersals,
+        );
+        retain_systematic_shards(&mut fragments);
+        let leader = BLSPubKey::generated_from_seed_indexed([1; 32], 0).0;
+        let mut shares = Vec::new();
+        let mut accumulator = VidFragmentAccumulator::<TestTypes>::new();
+        for fragment in fragments {
+            let share = accumulator.accept(&leader, fragment).unwrap().unwrap();
+            assert!(verify_vid_share(&share, 15, true));
+            if share.share.weight() == 0 {
+                assert!(!verify_vid_share(&share, 15, false));
+                assert!(
+                    share
+                        .share
+                        .ns_shares()
+                        .iter()
+                        .all(|ns| { ns.payload().is_empty() && ns.mt_proofs().is_empty() })
+                );
+                let mut forged = share.clone();
+                forged.common.param.total_weights += 1;
+                assert!(!verify_vid_share(&forged, 15, true));
+                let mut malformed = share.clone();
+                malformed.common.ns_lens.pop();
+                assert!(!verify_vid_share(&malformed, 15, true));
+            } else {
+                assert!(verify_vid_share(&share, 15, false));
+                assert!(share.share.range().unwrap().end <= params.param.recovery_threshold);
+                shares.push(share);
+            }
+            // The accumulator models one receiving validator at a time.
+            accumulator = VidFragmentAccumulator::new();
+        }
+        assert_eq!(
+            shares.iter().map(|s| s.share.weight()).sum::<usize>(),
+            params.param.recovery_threshold
+        );
+        let common = &shares[0].common;
+        let contents: Vec<_> = shares.iter().map(|s| s.share.clone()).collect();
+        assert_eq!(AvidmGf2Scheme::recover(common, &contents).unwrap(), payload);
+        assert!(AvidmGf2Scheme::recover(common, &contents[1..]).is_err());
     }
 
     #[test]
