@@ -2832,14 +2832,24 @@ def final_verdict(
     """A step of steps.json judged again on the run's final files. The ramp judged it at its
     end, before the payload scans had matched every transaction and the query node had shown
     every block; that verdict only steers the ramp or search. The pacer's measures stay as
-    the run saw them: load.jsonl leaves out transactions it queued but never sent."""
-    m = step_measures(cast(StepWindow, judged), cfg, txs, heights, counters, now)
+    the run saw them: load.jsonl leaves out transactions it queued but never sent. Unlike the
+    ramp's, this verdict fails a step whose unknown latencies could decide its p50."""
+    window = cast(StepWindow, judged)
+    m = step_measures(window, cfg, txs, heights, counters, now)
     final = judged | {
         "consensus_latency_ms": m["consensus_latency_ms"],
         "query_lag_ms": m["query_lag_ms"],
         "query_lag_slope_ms_s": m["query_lag_slope_ms_s"],
     }
     consensus, query = step_fails(cast(StepMeasures, final), cfg)
+    known, unknown = consensus_latencies(window, cfg, txs, heights, now)
+    on_time = sum(1 for ms in known if ms <= cfg.latency_target_ms)
+    n = len(known) + unknown
+    if unknown and on_time <= n / 2 and len(known) - on_time <= n / 2:
+        consensus.append(
+            f"consensus latency unknown for {unknown} of {n} txs: "
+            "the payload scans never reached them"
+        )
     return final | {"consensus_fails": consensus, "query_fails": query}
 
 

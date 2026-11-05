@@ -3451,6 +3451,84 @@ def test_done_during_a_backlog_scan_starts_the_deadline_when_done_is_set():
     assert deadline - 0.5 <= returned <= deadline + TRACKER_SLACK_S
 
 
+UNKNOWN_RULE = "consensus latency unknown"
+
+
+def unreached_from(out: Path, t: float) -> None:
+    """In the final files every tx sent from `t` on timed out with no height, and every
+    height a validator showed from `t` on is unscanned: the scans never reached them."""
+    txs = [
+        tx | {"status": "timeout", "height": None, "t_included": None}
+        if tx["t_submit"] >= t
+        else tx
+        for tx in netbench.read_jsonl(out / "load.jsonl")
+    ]
+    netbench.write_jsonl(out / "load.jsonl", iter(txs))
+    heights = [
+        h | {"scanned": None} if h["validator"] >= t else h
+        for h in netbench.read_jsonl(out / "heights.jsonl")
+    ]
+    netbench.write_jsonl(out / "heights.jsonl", iter(heights))
+
+
+def test_a_step_the_scans_never_reached_fails_as_latency_unknown(tmp_path: Path):
+    """The scans stopped below the height decided at 112.5, before the 1 MB/s step: the
+    latency of its 17 txs is unknown, and the final verdict fails the step."""
+    write_run_dir(tmp_path)
+    unreached_from(tmp_path, 112.0)
+    result = analyze(tmp_path)
+    one = result["steps"][0]
+    assert one["consensus_fails"] == [
+        "consensus latency unknown for 17 of 17 txs: the payload scans never reached them"
+    ]
+    assert not one["passed"]
+    assert result["capacity"]["overall"] == {
+        "mb_s": None,
+        "bounded": True,
+        "failed_at_mb_s": 1.0,
+    }
+
+
+def test_a_step_without_a_known_majority_fails_as_latency_unknown(tmp_path: Path):
+    """The scans stopped at the height decided at 123.5: of the step's 17 txs, 8 are on
+    time, the one sent at 120.5 is late (3 s) and 8 are unknown. Neither side holds a
+    majority, so the final verdict fails the step."""
+    write_run_dir(tmp_path)
+    unreached_from(tmp_path, 123.0)
+    one = analyze(tmp_path)["steps"][0]
+    assert one["consensus_fails"] == [
+        "consensus latency unknown for 8 of 17 txs: the payload scans never reached them"
+    ]
+    assert not one["passed"]
+
+
+def test_a_few_unknown_latencies_under_an_on_time_majority_pass(tmp_path: Path):
+    """Guard: the scans stopped at the height decided at 128.5: of the step's 17 txs, 13
+    are on time, 1 is late and 3 are unknown. The on-time majority passes the step."""
+    write_run_dir(tmp_path)
+    unreached_from(tmp_path, 128.0)
+    one = analyze(tmp_path)["steps"][0]
+    assert not [r for r in one["consensus_fails"] if r.startswith(UNKNOWN_RULE)]
+    assert one["passed"]
+
+
+def test_the_in_run_verdict_has_no_latency_unknown_rule(tmp_path: Path):
+    """Guard: `judge_step` on the files of the first latency-unknown test, at the same
+    `now`, does not fail the step as latency unknown."""
+    write_run_dir(tmp_path)
+    unreached_from(tmp_path, 112.0)
+    step = netbench.read_json(tmp_path / "steps.json")[0]
+    judged = netbench.judge_step(
+        step,
+        netbench.BenchConfig(),
+        list(netbench.read_jsonl(tmp_path / "load.jsonl")),
+        list(netbench.read_jsonl(tmp_path / "heights.jsonl")),
+        list(netbench.read_jsonl(tmp_path / "consensus.jsonl")),
+        160.0,
+    )
+    assert not [r for r in judged["consensus_fails"] if r.startswith(UNKNOWN_RULE)]
+
+
 def test_a_timed_out_unmatched_tx_counts_at_most_its_timeout():
     """Every height scanned and `now` at 100: an unmatched tx sent at 20 that timed out
     counts its 30 s timeout; one still pending counts its 80 s so far."""
