@@ -200,9 +200,12 @@ impl<TYPES: NodeType> BlockPayload<TYPES> for TestBlockPayload {
     async fn from_transactions(
         transactions: impl IntoIterator<Item = Self::Transaction> + Send,
         _validated_state: &Self::ValidatedState,
-        _instance_state: &Self::Instance,
+        instance_state: &Self::Instance,
     ) -> Result<(Self, Self::Metadata), Self::Error> {
-        let txns_vec: Vec<TestTransaction> = transactions.into_iter().collect();
+        let txns_vec: Vec<TestTransaction> = match instance_state.max_block_transactions {
+            Some(max) => transactions.into_iter().take(max).collect(),
+            None => transactions.into_iter().collect(),
+        };
         let metadata = TestMetadata {
             num_transactions: txns_vec.len() as u64,
         };
