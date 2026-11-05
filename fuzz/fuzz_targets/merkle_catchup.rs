@@ -336,7 +336,7 @@ impl<T: AccountTree> Accounts<T> {
             return false;
         };
 
-        let mut local = T::from_commitment(&root);
+        let mut local = T::from_commitment(root);
         let mut honest = self.full.clone();
         if let Some(account) = known {
             let (proof, _) = self.full.prove_account(account).unwrap();
