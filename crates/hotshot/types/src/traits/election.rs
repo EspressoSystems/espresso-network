@@ -13,7 +13,7 @@
 //! one moment of the membership state, so derived values from the same
 //! snapshot are guaranteed to come from one logical instant.
 
-use std::fmt::Debug;
+use std::{fmt::Debug, sync::Arc};
 
 use alloy_primitives::U256;
 use committable::{Commitment, Committable};
@@ -25,7 +25,7 @@ use crate::{
     data::{EpochNumber, Leaf2, ViewNumber},
     drb::DrbResult,
     epoch_membership::EpochMembershipCoordinator,
-    stake_table::supermajority_threshold,
+    stake_table::{one_honest_threshold, supermajority_threshold, upgrade_threshold},
     traits::signature_key::StakeTableEntryType,
 };
 
@@ -148,16 +148,7 @@ pub trait MembershipSnapshot<T: NodeType>: Clone + Send + Sync {
 
     /// Threshold required for a protocol upgrade.
     fn upgrade_threshold(&self) -> U256 {
-        let total = self.total_stake();
-        let nine = U256::from(9);
-        let ten = U256::from(10);
-        let normal = self.success_threshold();
-        let higher = if total < U256::MAX / nine {
-            (total * nine) / ten
-        } else {
-            (total / ten) * nine
-        };
-        std::cmp::max(higher, normal)
+        upgrade_threshold(self.total_stake())
     }
 
     /// The leader for `view` in this epoch, returning a HotShot-internal
@@ -169,6 +160,131 @@ pub trait MembershipSnapshot<T: NodeType>: Clone + Send + Sync {
             "Failed to get leader for view {view} in epoch {epoch}"
         ))
     }
+}
+
+/// The stake tables of views before the first epoch, when epochs were not
+/// enabled yet: the genesis stake table and the genesis DA committee.
+///
+/// The members of the stake table take turns as leader, in order, whatever
+/// their stake. Epochs pick leaders at random instead.
+#[derive(Debug)]
+pub struct GenesisStakeTables<T: NodeType> {
+    stake_table: Vec<PeerConfig<T>>,
+    da_stake_table: Vec<PeerConfig<T>>,
+    /// The keys of `stake_table`, in the same order.
+    committee_members: Vec<T::SignatureKey>,
+    /// The keys of `da_stake_table`, in the same order.
+    da_committee_members: Vec<T::SignatureKey>,
+}
+
+impl<T: NodeType> GenesisStakeTables<T> {
+    /// Keeps both tables as given, in order.
+    pub fn new(stake_table: Vec<PeerConfig<T>>, da_stake_table: Vec<PeerConfig<T>>) -> Self {
+        Self {
+            committee_members: keys(&stake_table),
+            da_committee_members: keys(&da_stake_table),
+            stake_table,
+            da_stake_table,
+        }
+    }
+
+    pub fn stake_table(&self) -> impl ExactSizeIterator<Item = &PeerConfig<T>> + Send + '_ {
+        self.stake_table.iter()
+    }
+
+    pub fn da_stake_table(&self) -> impl ExactSizeIterator<Item = &PeerConfig<T>> + Send + '_ {
+        self.da_stake_table.iter()
+    }
+
+    pub fn committee_members(&self) -> impl ExactSizeIterator<Item = &T::SignatureKey> + Send + '_ {
+        self.committee_members.iter()
+    }
+
+    pub fn da_committee_members(
+        &self,
+    ) -> impl ExactSizeIterator<Item = &T::SignatureKey> + Send + '_ {
+        self.da_committee_members.iter()
+    }
+
+    pub fn stake(&self, key: &T::SignatureKey) -> Option<PeerConfig<T>> {
+        entry(&self.committee_members, &self.stake_table, key)
+    }
+
+    pub fn da_stake(&self, key: &T::SignatureKey) -> Option<PeerConfig<T>> {
+        entry(&self.da_committee_members, &self.da_stake_table, key)
+    }
+
+    pub fn has_stake(&self, key: &T::SignatureKey) -> bool {
+        self.stake(key)
+            .is_some_and(|p| p.stake_table_entry.stake() > U256::ZERO)
+    }
+
+    pub fn has_da_stake(&self, key: &T::SignatureKey) -> bool {
+        self.da_stake(key)
+            .is_some_and(|p| p.stake_table_entry.stake() > U256::ZERO)
+    }
+
+    /// The leader for `view`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the stake table is empty.
+    pub fn leader(&self, view: ViewNumber) -> anytrace::Result<T::SignatureKey> {
+        if self.committee_members.is_empty() {
+            return Err(anytrace::info!(
+                "Failed to get leader for view {view}: the genesis stake table is empty"
+            ));
+        }
+        let index = *view as usize % self.committee_members.len();
+        Ok(self.committee_members[index].clone())
+    }
+
+    pub fn total_nodes(&self) -> usize {
+        self.stake_table.len()
+    }
+
+    pub fn da_total_nodes(&self) -> usize {
+        self.da_stake_table.len()
+    }
+
+    pub fn success_threshold(&self) -> U256 {
+        supermajority_threshold(total_stake(&self.stake_table))
+    }
+
+    pub fn da_success_threshold(&self) -> U256 {
+        supermajority_threshold(total_stake(&self.da_stake_table))
+    }
+
+    pub fn failure_threshold(&self) -> U256 {
+        one_honest_threshold(total_stake(&self.stake_table))
+    }
+
+    pub fn upgrade_threshold(&self) -> U256 {
+        upgrade_threshold(total_stake(&self.stake_table))
+    }
+}
+
+fn keys<T: NodeType>(table: &[PeerConfig<T>]) -> Vec<T::SignatureKey> {
+    table
+        .iter()
+        .map(|p| p.stake_table_entry.public_key())
+        .collect()
+}
+
+/// The entry of `table` for `key`, where `keys` are the keys of `table`.
+fn entry<T: NodeType>(
+    keys: &[T::SignatureKey],
+    table: &[PeerConfig<T>],
+    key: &T::SignatureKey,
+) -> Option<PeerConfig<T>> {
+    let index = keys.iter().position(|k| k == key)?;
+    Some(table[index].clone())
+}
+
+fn total_stake<T: NodeType>(table: &[PeerConfig<T>]) -> U256 {
+    table
+        .iter()
+        .fold(U256::ZERO, |acc, p| acc + p.stake_table_entry.stake())
 }
 
 /// A consistent view of the pre-epoch [`Membership`] state.
@@ -278,6 +394,9 @@ pub trait Membership<T: NodeType>: Debug + Send + Sync {
 
     /// Capture a consistent pre-epoch view.
     fn non_epoch_snapshot(&self) -> Self::NonEpochSnapshot;
+
+    /// The stake tables of views before the first epoch.
+    fn genesis_stake_tables(&self) -> Arc<GenesisStakeTables<T>>;
 
     /// The first epoch, which runs on the genesis stake table.
     fn first_epoch(&self) -> EpochNumber;

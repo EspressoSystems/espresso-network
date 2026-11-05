@@ -20,7 +20,9 @@ use hotshot_types::{
     signature_key::BLSPubKey,
     stake_table::StakeTableEntry,
     traits::{
-        election::{Membership, MembershipSnapshot, NonEpochMembershipSnapshot},
+        election::{
+            GenesisStakeTables, Membership, MembershipSnapshot, NonEpochMembershipSnapshot,
+        },
         signature_key::{SignatureKey as _, StakeTableEntryType},
     },
     utils::{epoch_from_block_number, root_block_in_epoch, transition_block_for_epoch},
@@ -82,6 +84,9 @@ struct Inner {
     /// Built once at constructor time. `add_da_committee` operates on the
     /// per-epoch `da_committees` map and does not modify the pre-epoch view.
     non_epoch_snapshot: NonEpochSnapshot,
+
+    /// The stake tables of views before the first epoch.
+    genesis: Arc<GenesisStakeTables<SeqTypes>>,
 
     /// Per-epoch snapshots.
     ///
@@ -466,6 +471,10 @@ impl EpochCommittees {
             })
             .collect();
 
+        let genesis = Arc::new(GenesisStakeTables::new(
+            stake_table.clone(),
+            da_members.clone(),
+        ));
         let da_committee = Arc::new(DaCommittee {
             committee: da_members,
             indexed_committee: indexed_da_members,
@@ -519,6 +528,7 @@ impl EpochCommittees {
         let committees = Self {
             inner: Arc::new(RwLock::new(Inner {
                 non_epoch_snapshot,
+                genesis,
                 da_committees: BTreeMap::new(),
                 snapshots,
                 all_validators: BTreeMap::new(),
@@ -862,6 +872,10 @@ impl Membership<SeqTypes> for EpochCommittees {
 
     fn non_epoch_snapshot(&self) -> Self::NonEpochSnapshot {
         self.inner.read().non_epoch_snapshot.clone()
+    }
+
+    fn genesis_stake_tables(&self) -> Arc<GenesisStakeTables<SeqTypes>> {
+        self.inner.read().genesis.clone()
     }
 
     /// Adds the epoch committee and block reward for a given epoch,

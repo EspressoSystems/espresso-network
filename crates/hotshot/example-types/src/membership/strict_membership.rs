@@ -16,7 +16,10 @@ use hotshot_types::{
     event::Event,
     traits::{
         block_contents::BlockHeader,
-        election::{Membership, MembershipSnapshot, NoStakeTableHash, NonEpochMembershipSnapshot},
+        election::{
+            GenesisStakeTables, Membership, MembershipSnapshot, NoStakeTableHash,
+            NonEpochMembershipSnapshot,
+        },
         leaf_fetcher_network::LeafFetcherNetwork,
         node_implementation::NodeType,
         signature_key::StakeTableEntryType,
@@ -181,6 +184,22 @@ where
 
     fn non_epoch_snapshot(&self) -> Self::NonEpochSnapshot {
         StrictNonEpochSnapshot::build(self.inner.read().table.clone())
+    }
+
+    fn genesis_stake_tables(&self) -> Arc<GenesisStakeTables<T>> {
+        let table = &self.inner.read().table;
+        Arc::new(GenesisStakeTables::new(
+            table
+                .stake_table(None)
+                .into_iter()
+                .map(Into::into)
+                .collect(),
+            table
+                .da_stake_table(None)
+                .into_iter()
+                .map(Into::into)
+                .collect(),
+        ))
     }
 
     fn add_drb_result(&self, e: EpochNumber, drb: DrbResult) {
