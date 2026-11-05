@@ -3,6 +3,7 @@ use std::{collections::BTreeMap, time::Duration};
 use hotshot_example_types::{node_types::TestTypes, storage_types::TestStorage};
 use hotshot_types::{
     data::{EpochNumber, ViewNumber},
+    event::HotShotAction,
     signature_key::BLSPubKey,
     traits::signature_key::SignatureKey,
 };
@@ -325,18 +326,23 @@ async fn late_start_f_nodes_with_epochs() {
         .unwrap();
 }
 
-/// A restarted node acts only in views after every view it acted in before
-/// the restart.
+/// A restarted node votes and proposes only in views after every view it acted
+/// in before the restart.
 ///
-/// A node may act twice in one view, in two epochs, so this is the check that
-/// it did not re-enter a view: within one run views may repeat.
+/// It may still time out the view it stopped in, which it resumes in and has
+/// to leave. Within one run a view may repeat: a node may act in one view in
+/// two epochs.
 async fn assert_no_view_reentered(idx: usize, storage: &TestStorage<TestTypes>) {
     let mut latest: Option<ViewNumber> = None;
     for run in storage.action_log_by_run().await {
         if let Some(latest) = latest {
             for (view, action) in &run {
+                let allowed = match action {
+                    HotShotAction::TimeoutVote => *view >= latest,
+                    _ => *view > latest,
+                };
                 assert!(
-                    *view > latest,
+                    allowed,
                     "node {idx} recorded {action:?} for view {view} after a restart, having acted \
                      up to view {latest} before it"
                 );

@@ -226,6 +226,11 @@ impl<TYPES: NodeType> TestStorage<TYPES> {
         self.inner.read().await.cert2s.get(&view).cloned()
     }
 
+    /// Every stored `Certificate2`, by the view it is stored under.
+    pub async fn cert2s(&self) -> Vec<Certificate2<TYPES>> {
+        self.inner.read().await.cert2s.values().cloned().collect()
+    }
+
     pub async fn vids_cloned(&self) -> VidShares<TYPES> {
         self.inner.read().await.vids.clone()
     }

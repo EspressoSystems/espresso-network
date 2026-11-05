@@ -626,6 +626,7 @@ mod test {
         let url: Url = format!("http://localhost:{port}").parse().unwrap();
 
         let test_config = TestConfigBuilder::default().build();
+        let epoch_height = test_config.hotshot_config().epoch_height;
         let storage = D::create_storage().await;
         let persistence = <D as TestableSequencerDataSource>::persistence_options(&storage);
 
@@ -671,7 +672,7 @@ mod test {
             assert!(matches!(proof.proof(), FinalityProof::NewProtocol { .. }));
             assert_eq!(
                 proof
-                    .verify(LeafProofHint::Quorum(&AlwaysTrueQuorum))
+                    .verify(LeafProofHint::Quorum(&AlwaysTrueQuorum::new(epoch_height)))
                     .await
                     .unwrap(),
                 leaves[0]
@@ -686,7 +687,7 @@ mod test {
             .unwrap();
         assert_eq!(
             proof
-                .verify(LeafProofHint::Quorum(&AlwaysTrueQuorum))
+                .verify(LeafProofHint::Quorum(&AlwaysTrueQuorum::new(epoch_height)))
                 .await
                 .unwrap()
                 .payload_hash(),
