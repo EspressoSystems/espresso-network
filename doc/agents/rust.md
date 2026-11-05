@@ -54,7 +54,6 @@ just demo-native                      # local network via process-compose
 
 - **SequencerContext** (`crates/espresso/node/src/context.rs`): runs the new protocol's `Coordinator` behind
   `ConsensusHandle` (`consensus_handle.rs`), which is what the rest of the node reads consensus state from.
-- **Node** (`crates/espresso/node/src/lib.rs`): generic over `P: SequencerPersistence`.
 - **ValidatedState** (`crates/espresso/types/src/v0/impls/state.rs`): four merkle trees (block, fee, reward v1, reward
   v2) plus chain config; `validate_and_apply_header()` is the state transition. Persisting the merklized state is
   `crates/espresso/node/src/state.rs`: a loop that replays every leaf from its newest snapshot. With no state, it first

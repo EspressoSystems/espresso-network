@@ -29,3 +29,5 @@ fee_contract = "0x9fce21c3f7600aa63392a5f5713986b39bb98884"
 
 [l1_finalized]
 number = 21116303
+timestamp = "0x67291ceb"
+hash = "0x8c580daf96a83884d4fac219dea3c26d7a805e4c92c91e04c5efc26929b4b129"

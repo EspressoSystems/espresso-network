@@ -55,7 +55,7 @@ use url::Url;
 use versions::{NEW_PROTOCOL_VERSION, Version};
 
 use crate::{
-    Node, SeqTypes, SequencerApiVersion,
+    SeqTypes, SequencerApiVersion,
     catchup::ParallelStateCatchup,
     consensus_handle::ConsensusHandle,
     external_event_handler::ExternalEventHandler,
@@ -69,7 +69,6 @@ use crate::{
     startup_catchup::bootstrap_epoch_window,
     state_signature::{self, DecidedLeaf, StateSignatureMemStorage, StateSigner},
 };
-pub(crate) type ConsensusNode<P> = Node<P>;
 
 /// Inbound request-response messages are dropped (not queued) when this channel is full. A node
 /// catching up has many batched requests in flight, each answered by up to `request_batch_size`
@@ -83,9 +82,8 @@ const OUTBOUND_MESSAGE_CHANNEL_CAPACITY: usize = 128;
 #[derive(Derivative, Clone)]
 #[derivative(Debug(bound = ""))]
 pub struct SequencerContext<P: SequencerPersistence> {
-    /// The consensus adapter that dispatches between old HotShot and new coordinator.
     #[derivative(Debug = "ignore")]
-    consensus_handle: Arc<ConsensusHandle<SeqTypes, ConsensusNode<P>>>,
+    consensus_handle: Arc<ConsensusHandle<SeqTypes, Arc<P>>>,
 
     #[derivative(Debug = "ignore")]
     persistence: Arc<P>,
@@ -93,7 +91,7 @@ pub struct SequencerContext<P: SequencerPersistence> {
     /// The request-response protocol
     #[derivative(Debug = "ignore")]
     #[allow(dead_code)]
-    pub request_response_protocol: RequestResponseProtocol<ConsensusNode<P>, P>,
+    pub request_response_protocol: RequestResponseProtocol<P>,
 
     /// Light client state signatures produced by the state signer task.
     state_signatures: Arc<RwLock<StateSignatureMemStorage>>,
@@ -337,11 +335,11 @@ where
     /// Constructor
     #[allow(clippy::too_many_arguments)]
     fn new(
-        consensus_handle: Arc<ConsensusHandle<SeqTypes, ConsensusNode<P>>>,
+        consensus_handle: Arc<ConsensusHandle<SeqTypes, Arc<P>>>,
         persistence: Arc<P>,
         state_signer: StateSigner<SequencerApiVersion>,
         external_event_handler: ExternalEventHandler,
-        request_response_protocol: RequestResponseProtocol<ConsensusNode<P>, P>,
+        request_response_protocol: RequestResponseProtocol<P>,
         node_state: NodeState,
         network_config: NetworkConfig<SeqTypes>,
         validator_config: ValidatorConfig<SeqTypes>,
@@ -449,8 +447,7 @@ where
         self.consensus_handle.submit_transaction(tx).await
     }
 
-    /// Return a reference to the consensus adapter.
-    pub fn consensus_handle(&self) -> Arc<ConsensusHandle<SeqTypes, ConsensusNode<P>>> {
+    pub fn consensus_handle(&self) -> Arc<ConsensusHandle<SeqTypes, Arc<P>>> {
         self.consensus_handle.clone()
     }
 
@@ -458,8 +455,8 @@ where
         &self.validator_config
     }
 
-    pub async fn upgrade_lock(&self) -> UpgradeLock<SeqTypes> {
-        self.consensus_handle.upgrade_lock().await
+    pub fn upgrade_lock(&self) -> UpgradeLock<SeqTypes> {
+        self.consensus_handle.upgrade_lock()
     }
 
     pub async fn shutdown_consensus(&self) {
@@ -734,7 +731,7 @@ const SIGNER_QUEUE_CAPACITY: usize = 128;
 /// one height, so every node must sign the same heights. Signing every decide keeps that while
 /// posts fall behind, and dropping only the oldest once the queue is full keeps it as well.
 async fn sign_decided_leaves<P>(
-    consensus_handle: Arc<ConsensusHandle<SeqTypes, ConsensusNode<P>>>,
+    consensus_handle: Arc<ConsensusHandle<SeqTypes, Arc<P>>>,
     mut state_signer: StateSigner<SequencerApiVersion>,
     mut leaves: broadcast::Receiver<DecidedLeaf>,
 ) where
