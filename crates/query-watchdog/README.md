@@ -65,10 +65,11 @@ Probes are HEAD requests.
 - A stake table of epoch `e` is probed with the chunk holding block `(e - 2) * epoch_height`, the epoch boundary five
   blocks after the root block the node builds it from (`root_block_in_epoch` subtracts 5); a state cert with the chunk
   holding `e * epoch_height`. The alert margin below uses the same block.
-- Heights are judged against each node's own block height, never lowered by a failed poll: nothing above the node's own
-  height minus 10 is probed or counted, and the retention window follows the node's own height. The tip poller polls
-  every node; `query_watchdog_tip_height` is the highest height and `query_watchdog_node_lag_blocks{node}` the distance
-  of a node from it.
+- Heights are judged against each node's own block height: a failed poll keeps the old height, an answered lower height
+  is followed (a node restored from an older backup is lagging, not missing data). Nothing above the node's own height
+  minus 10 is probed by follow or the sweep or counted, and the retention window follows the node's own height. The tip
+  poller polls every node; `query_watchdog_tip_height` is the highest height and `query_watchdog_node_lag_blocks{node}`
+  the distance of a node from it.
 - The sweep covers the window up to 10 blocks below the node's own height (follow covers the rest). It pauses while the
   last follow or sweep chunk had a range or point request fail with other than 404 (500, timeout, transport); epoch
   probe failures never pause it, since old-epoch objects answer 500 while the node catches up. The next fully answered
@@ -92,10 +93,11 @@ number of 404s since). A not-found unit with at least 3 404s is confirmed; every
   covers start fresh. A retried row splits into pieces of at most 100 heights, so the page lists the pieces.
 - Confirming rows are retried at their next time, at most 100 heights per probe. The order (next time, kind, first unit)
   applies within each queue: not-found rows go first, failed rows last (see the retry step below).
-- Of the confirmed rows only the oldest (the representative) is retried at its next time, at most once a minute. When
-  the representative is found present, every confirmed row is re-checked once (the recovery queue, memory only).
-  Confirmed rows outside these keep a stale next time, are re-checked by the next sweep (never under `--sweep-once`) or
-  by the recovery queue after a repair, and can keep counting until then. Follow never revisits rows.
+- Of the confirmed rows only the representative, the due row with the earliest next time (the longest overdue), is
+  retried, at most once a minute, so confirmed rows are re-probed in rotation. When the representative is found present,
+  every confirmed row is re-checked once (the recovery queue, memory only). Confirmed rows outside these keep a stale
+  next time, are re-checked by the next sweep (never under `--sweep-once`) or by the recovery queue after a repair, and
+  can keep counting until then. Follow never revisits rows.
 - One retry step starts probes within 5 s (`RETRY_BUDGET`): due not-found rows below confirmation, the recovery queue,
   the representative (only while the recovery queue is empty), the recovery queue again, then due failed rows. Failed
   rows never count, so they never delay red or green. Follow and the sweep keep the rest of the loop iteration.
@@ -163,8 +165,8 @@ task resumes where the old one stopped.
   of one kind with equal state show as one row on the page. A retried row splits into pieces of at most 100 heights and
   stays split, so the page lists the pieces; a sweep chunk across two pieces is searched again by bisection, and the
   units keep their state. The link probes the first 100 heights of the row.
-- The page shows what each node watch last published, so its ages are as of that publish, at most one probe old. Before
-  a node has started it reads `not started`.
+- The page shows what each node watch last published, so its ages are as of that publish, at most one loop step (follow,
+  retry or sweep) old. Before a node has started it reads `not started`.
 - Archive full sweep is slow: each 100-height chunk costs 4 probes plus the epoch probes whose block lies in it, each
   `request_interval` plus response time, and every loop iteration also spends time on follow and retries. Each gap in a
   range kind adds about 7 + 2 x log2(gap length) HEADs. The tip is covered by follow in real time. The page ETA and

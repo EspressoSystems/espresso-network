@@ -13,7 +13,7 @@ use crate::{
     schedule::{Frontier, NodeProgress},
 };
 
-/// Block heights the tip poller saw: per node, never lowered, and their maximum.
+/// Block heights the tip poller last saw per node, and their maximum.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Tips {
     max: Height,
@@ -21,11 +21,12 @@ pub struct Tips {
 }
 
 impl Tips {
-    /// Records `height` for `label` unless the node already had a higher one.
+    /// Records the answered `height` of `label`, also a lower one (a node restored from an older
+    /// backup is lagging, not missing data). A failed poll records nothing, so it keeps the old
+    /// height.
     pub fn observed(&mut self, label: &str, height: Height) {
-        let own = self.nodes.entry(label.to_owned()).or_default();
-        *own = (*own).max(height);
-        self.max = self.max.max(*own);
+        self.nodes.insert(label.to_owned(), height);
+        self.max = self.nodes.values().copied().max().unwrap_or_default();
     }
 
     /// The highest height of any node.
@@ -255,19 +256,18 @@ mod tests {
     use super::*;
 
     #[test]
-    fn tips_never_lower_a_node_and_the_maximum() {
+    fn tips_follow_answered_heights_only() {
         let mut tips = Tips::default();
         assert_eq!(tips.node("a"), None);
         tips.observed("a", Height(10));
         tips.observed("b", Height(7));
         assert_eq!((tips.max(), tips.node_lag_blocks("b")), (Height(10), 3));
         tips.observed("a", Height(4));
-        tips.observed("b", Height(5));
         assert_eq!(
             (tips.node("a"), tips.node("b")),
-            (Some(Height(10)), Some(Height(7)))
+            (Some(Height(4)), Some(Height(7)))
         );
-        assert_eq!(tips.max(), Height(10));
-        assert_eq!(tips.node_lag_blocks("unknown"), 10);
+        assert_eq!(tips.max(), Height(7));
+        assert_eq!(tips.node_lag_blocks("unknown"), 7);
     }
 }

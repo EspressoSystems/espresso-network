@@ -13,6 +13,9 @@ use crate::{
 /// Time per retry step in which probes may start; follow and sweep keep the rest (HEAD's value).
 pub const RETRY_BUDGET: Duration = Duration::from_secs(5);
 
+/// Time between representative probes of one node: the 60 s retry cap of a confirmed row.
+pub const REPRESENTATIVE_INTERVAL: Duration = Duration::from_secs(60);
+
 /// Rows yielding probes of at most `CHUNK_LEN` heights, front first.
 #[derive(Clone, Debug, Default)]
 pub struct ChunkQueue(VecDeque<RowKey>);
@@ -61,8 +64,9 @@ impl ChunkQueue {
 /// What one retry step may probe at one `now`.
 #[derive(Clone, Debug)]
 pub struct RetryQueue {
-    /// First chunk of the oldest confirmed row by (`first_missing_at`, first unit, kind), when its
-    /// `next_at <= now`.
+    /// First chunk of the due confirmed row (`next_at <= now`) with the earliest `next_at`, ties by
+    /// (`first_missing_at`, first unit, kind): the longest overdue row, so confirmed rows are
+    /// re-probed in rotation.
     pub representative: Option<Probe>,
     /// Not-found rows below confirmation with `next_at <= now`, in (`next_at`, kind, first unit)
     /// order.
@@ -78,8 +82,8 @@ impl RetryQueue {
             set.rows().partition(|row| row.state.is_confirmed());
         let representative = confirmed
             .iter()
-            .min_by_key(|row| row.age_order())
             .filter(|row| row.state.retry().next_at <= now)
+            .min_by_key(|row| (row.state.retry().next_at, row.age_order()))
             .map(|row| row.key.first_probe());
         let (failed, not_found) = unconfirmed
             .into_iter()

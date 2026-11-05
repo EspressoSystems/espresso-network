@@ -1593,11 +1593,11 @@ mod tests {
         assert_eq!(queue.representative, Some(leaf_probe(300..310)));
         // No confirming row is due at T0: the earliest next_at is T0 + 5.
         assert!(drain(queue.not_found).is_empty());
-        // Not due although the younger confirmed row is.
+        // The older row was just probed; the overdue younger row is the representative.
         let mut late = set.clone();
         observe(&mut late, leaf_gap(300..310), T0 + 1_000);
         let queue = RetryQueue::new(&late, at(T0 + 1_000));
-        assert_eq!(queue.representative, None);
+        assert_eq!(queue.representative, Some(leaf_probe(400..410)));
         assert_eq!(
             drain(ChunkQueue::confirmed(&set)),
             [leaf_probe(300..310), leaf_probe(400..410)]
@@ -2041,12 +2041,17 @@ mod tests {
     ) -> Result<(), TestCaseError> {
         let runs = model.runs();
         let queue = RetryQueue::new(set, now);
-        let oldest_confirmed = runs
+        let representative = runs
             .iter()
-            .filter(|run| run.state.is_confirmed())
-            .min_by_key(|run| (run.state.first_missing_at(), run.units.start, run.kind));
-        let representative = oldest_confirmed
-            .filter(|run| run.state.retry().next_at <= now)
+            .filter(|run| run.state.is_confirmed() && run.state.retry().next_at <= now)
+            .min_by_key(|run| {
+                (
+                    run.state.retry().next_at,
+                    run.state.first_missing_at(),
+                    run.units.start,
+                    run.kind,
+                )
+            })
             .map(|run| run_probes(run).remove(0));
         prop_assert_eq!(&queue.representative, &representative);
 
