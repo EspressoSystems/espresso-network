@@ -12,7 +12,6 @@ use super::{
     context::SequencerContext,
     init_node, network,
     options::{Modules, Options, PublicNodeConfig},
-    persistence,
 };
 use crate::{default_telemetry_endpoint, keyset::KeySet};
 
@@ -80,48 +79,25 @@ pub async fn main(migrated_envs: Vec<(&str, &str)>) -> anyhow::Result<()> {
 
     tracing::warn!(?genesis, "genesis");
 
-    let result = if let Some(storage) = modules.storage_rocksdb.take() {
-        run_with_storage(
-            genesis,
-            modules,
-            opt,
-            storage,
-            public_node_config,
-            telemetry_handle.as_mut(),
-        )
-        .await
-    } else if let Some(storage) = modules.storage_fs.take() {
-        run_with_storage(
-            genesis,
-            modules,
-            opt,
-            storage,
-            public_node_config,
-            telemetry_handle.as_mut(),
-        )
-        .await
-    } else if let Some(storage) = modules.storage_sql.take() {
-        run_with_storage(
-            genesis,
-            modules,
-            opt,
-            storage,
-            public_node_config,
-            telemetry_handle.as_mut(),
-        )
-        .await
-    } else {
-        // Persistence is required. If none is provided, just use the local file system.
-        run_with_storage(
-            genesis,
-            modules,
-            opt,
-            persistence::fs::Options::default(),
-            public_node_config,
-            telemetry_handle.as_mut(),
-        )
-        .await
-    };
+    if modules.storage_sql.is_some() || modules.storage_fs.is_some() {
+        tracing::warn!(
+            "storage-sql and storage-fs only back the query module, which is not enabled, so they \
+             are ignored. Consensus data is stored in RocksDB"
+        );
+    }
+    let storage = modules
+        .storage_rocksdb
+        .take()
+        .expect("module parsing always selects the RocksDB consensus storage");
+    let result = run_with_storage(
+        genesis,
+        modules,
+        opt,
+        storage,
+        public_node_config,
+        telemetry_handle.as_mut(),
+    )
+    .await;
 
     if let Some(h) = telemetry_handle {
         h.shutdown();

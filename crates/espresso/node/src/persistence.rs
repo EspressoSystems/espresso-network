@@ -293,12 +293,13 @@ mod tests {
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     pub fn persistence_types<P: TestablePersistence>(#[case] _p: PhantomData<P>) {}
 
-    /// Backends that replay decided leaves to the event consumer. RocksDB is left out: it serves
-    /// non-query nodes only and drops decided data without generating decide events.
+    /// Backends that replay decided leaves to the event consumer. RocksDB replays only when it
+    /// backs a query node, which is how its test options open it.
     #[rstest_reuse::template]
     #[rstest::rstest]
     #[case(PhantomData::<crate::persistence::sql::Persistence>)]
     #[case(PhantomData::<crate::persistence::fs::Persistence>)]
+    #[case(PhantomData::<crate::persistence::rocksdb::Persistence>)]
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     pub fn replaying_persistence_types<P: TestablePersistence>(#[case] _p: PhantomData<P>) {}
 

@@ -75,6 +75,11 @@ pub struct BlockBuilderOutput<T: NodeType> {
 /// Room in a forwarded message for everything but the transactions.
 const FORWARD_ENVELOPE_BYTES: u64 = 4096;
 
+/// Blocks' worth of forwarded transactions a leader keeps. The payload builder truncates to one
+/// block, and what it leaves out stays in its submitters' retry buffers because the dedup
+/// manifest lists only included transactions.
+const LEADER_BUFFER_BLOCKS: u64 = 3;
+
 pub struct BlockBuilderConfig {
     pub max_retry_bytes: u64,
     /// `max_block_size` per protocol version; a missing version inherits the previous one.
@@ -186,19 +191,18 @@ impl<T: NodeType> BlockBuilder<T> {
             if buffer.is_empty() {
                 sleep(empty_block_delay).await;
             }
-            let (hashes, txs): (Vec<_>, Vec<_>) = buffer.into_iter().unzip();
-            let manifest = DedupManifest {
-                view,
-                epoch,
-                hashes,
-            };
-
+            let txs = buffer.into_iter().map(|(_, tx)| tx).collect::<Vec<_>>();
             let validated_state =
                 T::ValidatedState::from_header(&request.parent_proposal.block_header);
             let (payload, metadata) =
                 T::BlockPayload::from_transactions(txs, &validated_state, &instance)
                     .await
                     .map_err(|e| BlockError::PayloadConstruction(e.to_string()))?;
+            let manifest = DedupManifest {
+                view,
+                epoch,
+                hashes: payload.transaction_commitments(&metadata),
+            };
             let payload: PayloadWithMetadata<T> = PayloadWithMetadata { payload, metadata };
 
             let total_weight = {
@@ -344,7 +348,7 @@ impl<T: NodeType> BlockBuilder<T> {
     }
 
     pub fn on_transactions(&mut self, msg: TransactionMessage<T>) {
-        let max_bytes = self.block_size(msg.view);
+        let max_bytes = self.block_size(msg.view) * LEADER_BUFFER_BLOCKS;
         for tx in msg.transactions {
             let hash = tx.commit();
 

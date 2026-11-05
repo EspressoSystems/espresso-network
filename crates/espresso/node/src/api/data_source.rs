@@ -85,11 +85,17 @@ impl DataSourceOptions for persistence::fs::Options {
 }
 
 impl StorageOptions for persistence::rocksdb::Options {
-    fn enable_query_module(&self, _opt: Options, _query: Query) -> anyhow::Result<Options> {
-        anyhow::bail!(
-            "storage-rocksdb only stores consensus data and cannot serve the query module. Use \
-             storage-sql or storage-fs on query nodes"
-        )
+    fn enable_query_module(&self, opt: Options, query: Query) -> anyhow::Result<Options> {
+        match self.query_storage() {
+            Some(persistence::rocksdb::QueryStorage::Sql(sql)) => {
+                Ok(opt.query_sql(query, sql.clone()))
+            },
+            Some(persistence::rocksdb::QueryStorage::Fs(fs)) => Ok(opt.query_fs(query, fs.clone())),
+            None => anyhow::bail!(
+                "storage-rocksdb only stores consensus data and cannot serve the query module on \
+                 its own. Add storage-sql or storage-fs for the query service database"
+            ),
+        }
     }
 }
 

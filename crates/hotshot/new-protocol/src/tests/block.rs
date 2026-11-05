@@ -15,7 +15,7 @@ use hotshot_types::{
 use versions::{NEW_PROTOCOL_VERSION, TIMEOUT_EPOCH_VERSION, Upgrade, Version};
 
 use crate::{
-    block::{BlockBuilder, BlockBuilderConfig, forward_budget},
+    block::{BlockBuilder, BlockBuilderConfig},
     helpers::test_upgrade_lock,
     message::{BlockMessage, DedupManifest, Message, MessageType, TransactionMessage, Validated},
     network::{MIN_MESSAGE_LIMIT, message_limit},
@@ -260,8 +260,8 @@ async fn test_full_forward_fits_in_a_message() {
     );
     assert_eq!(
         forwarded,
-        forward_budget(limit) as usize / (tx_len + 8),
-        "the message budget, not the block size, should stop the batch"
+        block_size as usize / tx_len,
+        "the limit leaves room for VID shares, so the block size stops the batch"
     );
 }
 
