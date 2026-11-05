@@ -17,6 +17,8 @@ pub struct WatchdogMetrics {
     oldest_missing_age_seconds: IntGaugeVec,
     /// `{node}`.
     follow_lag_blocks: IntGaugeVec,
+    /// `{node}`, highest node height minus the node's own height; no alert.
+    node_lag_blocks: IntGaugeVec,
     /// `{node}`.
     merklized_state_lag_blocks: IntGaugeVec,
     /// `{node,kind,status}`.
@@ -62,6 +64,12 @@ impl WatchdogMetrics {
                 registry,
                 "follow_lag_blocks",
                 "Tip height minus the next height follow checks",
+                &["node"],
+            )?,
+            node_lag_blocks: gauge(
+                registry,
+                "node_lag_blocks",
+                "Highest node height minus this node's height",
                 &["node"],
             )?,
             merklized_state_lag_blocks: gauge(
@@ -133,6 +141,9 @@ impl WatchdogMetrics {
         self.follow_lag_blocks
             .with_label_values(&[label])
             .set(i64::try_from(summary.follow_lag_blocks)?);
+        self.node_lag_blocks
+            .with_label_values(&[label])
+            .set(i64::try_from(report.node_lag_blocks)?);
         if let Some(lag) = summary.merklized_state_lag_blocks {
             self.merklized_state_lag_blocks
                 .with_label_values(&[label])

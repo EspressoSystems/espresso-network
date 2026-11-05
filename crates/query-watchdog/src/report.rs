@@ -6,10 +6,9 @@ use anyhow::Context;
 use chrono::{DateTime, Utc};
 
 use crate::{
-    kind::Height,
     node::WatchedNode,
     schedule::NodeProgress,
-    view::{NodeSummary, NodeViewSlot, SweepEta, WatchCounters},
+    view::{NodeSummary, NodeViewSlot, SweepEta, Tips, WatchCounters},
 };
 
 /// Time between gauge writes; the Datadog OpenMetrics default scrape interval.
@@ -32,17 +31,19 @@ impl ReportedNode {
         }
     }
 
-    /// The latest view at `now` against the live `tip`. Errors when the node has published no
+    /// The latest view at `now` against the node's live height in `tips`. Errors when the node has published no
     /// view. The view's `borrow()` ends before it returns, so logging never holds the channel lock
     /// a publishing node watch waits on.
-    pub fn report(&self, tip: Height, now: DateTime<Utc>) -> anyhow::Result<NodeReport> {
+    pub fn report(&self, tips: &Tips, now: DateTime<Utc>) -> anyhow::Result<NodeReport> {
         let guard = self.slot.view.borrow();
         let view = guard
             .as_ref()
             .with_context(|| format!("{} has published no view", self.slot.node.label))?;
+        let label = &self.slot.node.label;
         Ok(NodeReport {
             node: self.slot.node.clone(),
-            summary: view.summary(tip, now),
+            summary: view.summary(tips.node(label).unwrap_or_default(), now),
+            node_lag_blocks: tips.node_lag_blocks(label),
             counters: view.counters.clone(),
             progress: view.progress,
             sweep_eta: view.sweep_eta,
@@ -79,6 +80,8 @@ impl ReportedNode {
 pub struct NodeReport {
     pub node: WatchedNode,
     pub summary: NodeSummary,
+    /// Blocks behind the highest node; never pages.
+    pub node_lag_blocks: u64,
     /// Cumulative, from the view.
     pub counters: WatchCounters,
     pub progress: NodeProgress,

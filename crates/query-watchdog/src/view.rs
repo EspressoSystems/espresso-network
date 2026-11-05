@@ -13,6 +13,37 @@ use crate::{
     schedule::{Frontier, NodeProgress},
 };
 
+/// Block heights the tip poller saw: per node, never lowered, and their maximum.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Tips {
+    max: Height,
+    nodes: BTreeMap<String, Height>,
+}
+
+impl Tips {
+    /// Records `height` for `label` unless the node already had a higher one.
+    pub fn observed(&mut self, label: &str, height: Height) {
+        let own = self.nodes.entry(label.to_owned()).or_default();
+        *own = (*own).max(height);
+        self.max = self.max.max(*own);
+    }
+
+    /// The highest height of any node.
+    pub fn max(&self) -> Height {
+        self.max
+    }
+
+    /// The node's own height; `None` until it has answered.
+    pub fn node(&self, label: &str) -> Option<Height> {
+        self.nodes.get(label).copied()
+    }
+
+    /// Blocks the node is behind the highest node.
+    pub fn node_lag_blocks(&self, label: &str) -> u64 {
+        self.max.blocks_since(self.node(label).unwrap_or_default())
+    }
+}
+
 /// Rows per node on the missing-data page.
 pub const PAGE_ROWS: usize = 200;
 
@@ -217,4 +248,26 @@ pub fn channel() -> (ViewSender, ViewReceiver) {
 pub struct NodeViewSlot {
     pub node: WatchedNode,
     pub view: ViewReceiver,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tips_never_lower_a_node_and_the_maximum() {
+        let mut tips = Tips::default();
+        assert_eq!(tips.node("a"), None);
+        tips.observed("a", Height(10));
+        tips.observed("b", Height(7));
+        assert_eq!((tips.max(), tips.node_lag_blocks("b")), (Height(10), 3));
+        tips.observed("a", Height(4));
+        tips.observed("b", Height(5));
+        assert_eq!(
+            (tips.node("a"), tips.node("b")),
+            (Some(Height(10)), Some(Height(7)))
+        );
+        assert_eq!(tips.max(), Height(10));
+        assert_eq!(tips.node_lag_blocks("unknown"), 10);
+    }
 }

@@ -230,6 +230,15 @@ impl ProbeResult {
         }
     }
 
+    /// The health that may pause the sweep: epoch probes never do, since old-epoch objects answer
+    /// 500 while the node catches up.
+    pub fn gate_health(&self) -> RequestHealth {
+        match self {
+            Self::Range { .. } | Self::Point { .. } => self.health(),
+            Self::Epoch { .. } => RequestHealth::Answered,
+        }
+    }
+
     /// Some unit observed `Present`; a representative result that is starts recovery.
     pub fn found_present(&self) -> bool {
         match self {

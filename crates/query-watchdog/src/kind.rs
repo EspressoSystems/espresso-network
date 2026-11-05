@@ -9,7 +9,7 @@ use strum::{IntoStaticStr, VariantArray};
 pub const CHUNK_LEN: u64 = 100;
 
 /// A block height.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Height(pub u64);
 
 impl Height {

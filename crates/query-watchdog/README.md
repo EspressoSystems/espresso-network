@@ -44,10 +44,10 @@ cargo run -p query-watchdog -- --nodes https://query.decaf.testnet.espresso.netw
 
 ## Checked
 
-Per chunk of at most 100 heights. Follow probes the heights settled since its last chunk (10 blocks behind the tip), up
-to 100 per chunk, so near the tip a chunk is a few heights and `lc_leaf_proof` samples the last height of each such
-chunk. The sweep covers its window in chunks of 100 and so samples one height per 100 for `lc_leaf_proof`. Probes are
-HEAD requests.
+Per chunk of at most 100 heights. Follow probes the heights settled since its last chunk (10 blocks behind the node's
+own height), up to 100 per chunk, so near the tip a chunk is a few heights and `lc_leaf_proof` samples the last height
+of each such chunk. The sweep covers its window in chunks of 100 and so samples one height per 100 for `lc_leaf_proof`.
+Probes are HEAD requests.
 
 | Kind                          | Unit    | Route                                                   |
 | ----------------------------- | ------- | ------------------------------------------------------- |
@@ -65,9 +65,14 @@ HEAD requests.
 - A stake table of epoch `e` is probed with the chunk holding block `(e - 2) * epoch_height`, the epoch boundary five
   blocks after the root block the node builds it from (`root_block_in_epoch` subtracts 5); a state cert with the chunk
   holding `e * epoch_height`. The alert margin below uses the same block.
-- The sweep covers the window up to 10 blocks below the tip (follow covers the rest). It pauses while the last follow or
-  sweep chunk had a request fail with other than 404 (500, timeout, transport); the next fully answered chunk resumes
-  it. While paused it sends one chunk a minute to test the node. Follow and retries go on.
+- Heights are judged against each node's own block height, never lowered by a failed poll: nothing above the node's own
+  height minus 10 is probed or counted, and the retention window follows the node's own height. The tip poller polls
+  every node; `query_watchdog_tip_height` is the highest height and `query_watchdog_node_lag_blocks{node}` the distance
+  of a node from it.
+- The sweep covers the window up to 10 blocks below the node's own height (follow covers the rest). It pauses while the
+  last follow or sweep chunk had a range or point request fail with other than 404 (500, timeout, transport); epoch
+  probe failures never pause it, since old-epoch objects answer 500 while the node catches up. The next fully answered
+  chunk resumes it. While paused it sends one chunk a minute to test the node. Follow and retries go on.
 - Gauges for the merklized state head lag and follow lag are exported.
 
 ### Retries
@@ -85,13 +90,15 @@ number of 404s since). A not-found unit with at least 3 404s is confirmed; every
   not-found unit.
 - Each unit keeps its own state: a gap over units of two rows continues each unit's state, and units the gap newly
   covers start fresh. A retried row splits into pieces of at most 100 heights, so the page lists the pieces.
-- Confirming rows are retried at their next time in (next time, kind, first unit) order, at most 100 heights per probe.
+- Confirming rows are retried at their next time, at most 100 heights per probe. The order (next time, kind, first unit)
+  applies within each queue: not-found rows go first, failed rows last (see the retry step below).
 - Of the confirmed rows only the oldest (the representative) is retried at its next time, at most once a minute. When
   the representative is found present, every confirmed row is re-checked once (the recovery queue, memory only).
-  Confirmed rows outside these keep a stale next time, are re-checked by follow and the sweep, and can keep counting
-  until then.
-- One retry step starts probes within 5 s (`RETRY_BUDGET`): the representative, then due confirming rows, then the
-  recovery queue; follow and the sweep keep the rest of the loop iteration.
+  Confirmed rows outside these keep a stale next time, are re-checked by the next sweep (never under `--sweep-once`) or
+  by the recovery queue after a repair, and can keep counting until then. Follow never revisits rows.
+- One retry step starts probes within 5 s (`RETRY_BUDGET`): due not-found rows below confirmation, the recovery queue,
+  the representative (only while the recovery queue is empty), the recovery queue again, then due failed rows. Failed
+  rows never count, so they never delay red or green. Follow and the sweep keep the rest of the loop iteration.
 - Capacity at the default request cost (about 0.3 s, about 16 requests per retry step; a still-missing exact range piece
   costs 3 requests, a refilled piece, point or epoch 1): a new gap is retried at about +5 s and +15 s and the node turns
   red about 60 to 120 s after the gap is found, whatever the number of confirmed rows. After a repair the representative
@@ -117,8 +124,12 @@ node that are
 
 - confirmed: at least 3 probes answered 404 since the first 404 (500, timeout and transport only delay retries)
 - first missing at least `--alert-missing-after` ago
-- not within 10 blocks of the tip (per-epoch kinds: the block the object depends on, see above, is at least 10 below the
-  tip)
+- not within 10 blocks of the node's own height (per-epoch kinds: the block the object depends on, see above, is at
+  least 10 below it)
+
+Design assumption: data is expected to be fetchable once it is 10 blocks below the node's own height and has been
+missing 60 s; anything still 404 after that counts as missing. Per-kind availability delays are not modelled (design
+decision).
 
 ## Docker
 
@@ -189,9 +200,10 @@ task resumes where the old one stopped.
 - The sweep ETA uses the rate since this process started sweeping and resets on restart.
 - A restart loop at startup can mean every watched node is unreachable; once running, an outage shows as
   `node unhealthy` and missing data instead.
-- The tip is the max over all watched nodes. A single node that is stuck but answering keeps the tip flat: no probes
-  above it, no missing ranges, no lag; only `tip_height` stays flat. With several nodes, the stuck node's follow probes
-  above its height go missing and the follow lag grows.
+- A lagging or stuck node never turns red: nothing above its own height is probed or counted. It shows in
+  `node_lag_blocks` and, when it stops advancing, in the follow lag against its own height staying flat.
+- A node that only times out or answers 500 never turns red, since no missing data is confirmed. It shows as a
+  `node unhealthy` WARN and in `fetch_errors_total{status}`; the companion monitor below pages on those.
 - Request timeouts are per request kind (range HEAD 60 s, single HEAD 10 s, JSON GET 5 s); a hanging node holds its loop
   for that long per request, while gauges and the `summary` line continue.
 
@@ -214,12 +226,14 @@ Recommended alert, with a link to the watchdog page:
 
 Companion monitors (Monitors > New Monitor > Metric):
 
-| Monitor                | Query                                                                                 | Threshold                     |
-| ---------------------- | ------------------------------------------------------------------------------------- | ----------------------------- |
-| Watchdog down or stuck | `sum(last_10m):sum:<namespace>.query_watchdog_probes.count{*} by {node}.as_count()`   | equal 0, or notify on no data |
-| Tip flat               | `change(max(last_10m),last_10m):max:<namespace>.query_watchdog_tip_height{*}`         | equal 0                       |
-| Follow lag             | `max(last_5m):max:<namespace>.query_watchdog_follow_lag_blocks{*} by {node}`          | above `<blocks>`              |
-| Merklized state lag    | `max(last_5m):max:<namespace>.query_watchdog_merklized_state_lag_blocks{*} by {node}` | above `<blocks>`              |
+| Monitor                | Query                                                                                               | Threshold                     |
+| ---------------------- | --------------------------------------------------------------------------------------------------- | ----------------------------- |
+| Watchdog down or stuck | `sum(last_10m):sum:<namespace>.query_watchdog_probes.count{*} by {node}.as_count()`                 | equal 0, or notify on no data |
+| Fetch errors           | `sum(last_10m):sum:<namespace>.query_watchdog_fetch_errors.count{!status:404} by {node}.as_count()` | above `<errors>`              |
+| Node lag               | `max(last_5m):max:<namespace>.query_watchdog_node_lag_blocks{*} by {node}`                          | above `<blocks>`              |
+| Tip flat               | `change(max(last_10m),last_10m):max:<namespace>.query_watchdog_tip_height{*}`                       | equal 0                       |
+| Follow lag             | `max(last_5m):max:<namespace>.query_watchdog_follow_lag_blocks{*} by {node}`                        | above `<blocks>`              |
+| Merklized state lag    | `max(last_5m):max:<namespace>.query_watchdog_merklized_state_lag_blocks{*} by {node}`               | above `<blocks>`              |
 
 ## Schema
 

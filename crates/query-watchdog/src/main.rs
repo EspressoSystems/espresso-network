@@ -156,7 +156,7 @@ async fn run(options: Options) -> anyhow::Result<()> {
         Epochs::Off => tracing::info!(epochs = "off", "epochs"),
     }
 
-    let (tip_poller, tip) = watchdog.start_tip_poller(nodes.clone()).await?;
+    let (tip_poller, tips) = watchdog.start_tip_poller(nodes.clone()).await?;
     if options.reset {
         watchdog.reset_state().await?;
     }
@@ -164,10 +164,10 @@ async fn run(options: Options) -> anyhow::Result<()> {
         nodes
             .into_iter()
             .zip(senders)
-            .map(|(node, view)| watchdog.start_node(node, tip.clone(), epochs, view)),
+            .map(|(node, view)| watchdog.start_node(node, tips.clone(), epochs, view)),
     )
     .await?;
-    let reporter = watchdog.start_reporter(tip, slots);
+    let reporter = watchdog.start_reporter(tips, slots);
 
     tokio::select! {
         result = try_join_all(watches.into_iter().map(NodeWatch::run)) => result.map(drop),

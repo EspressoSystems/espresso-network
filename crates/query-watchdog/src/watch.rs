@@ -1,6 +1,6 @@
 use std::{convert::Infallible, ops::Range, sync::Arc, time::Duration};
 
-use anyhow::{anyhow, bail};
+use anyhow::bail;
 use chrono::TimeDelta;
 use clap::Args;
 use serde::Deserialize;
@@ -21,7 +21,7 @@ use crate::{
     },
     store::{NodeStore, PersistedMissingSet, Store},
     system::{Clock, System},
-    view::{NodeView, NodeViewSlot, PAGE_ROWS, SweepEta, ViewSender, WatchCounters},
+    view::{NodeView, NodeViewSlot, PAGE_ROWS, SweepEta, Tips, ViewSender, WatchCounters},
 };
 
 /// Pacing shared by all node watches.
@@ -144,37 +144,29 @@ impl<C: Clock> Watchdog<C> {
         }
     }
 
-    /// Loads or creates progress (clamped to the window start on resume) and the missing set,
-    /// logs `watching` or `resumed` and publishes the first view; the reporter owns the gauges.
+    /// Loads the missing set and the stored progress and publishes the first view; the reporter
+    /// owns the gauges. When the node has answered, the watch begins at once (progress created or
+    /// clamped, `watching` or `resumed` logged); otherwise `run` begins it at the first answer.
     pub async fn start_node(
         &self,
         node: WatchedNode,
-        tip: watch::Receiver<Height>,
+        tips: watch::Receiver<Tips>,
         epochs: Epochs,
         view: ViewSender,
     ) -> anyhow::Result<NodeWatch<C>> {
-        let frontier = Frontier::new(*tip.borrow(), self.options.sweep_window());
+        let frontier = Frontier::new(Height(0), self.options.sweep_window());
         let store = self.store.node(&node.label);
-        let (progress, start) = match store.load_progress().await? {
-            Some(progress) => (
-                progress.clamped_to(frontier.window_start()),
-                NodeStart::Resumed,
-            ),
-            None => {
-                let progress = NodeProgress::first_run(&frontier);
-                store.save_progress(&progress).await?;
-                (progress, NodeStart::Fresh)
-            },
-        };
+        let stored = store.load_progress().await?;
         let missing = PersistedMissingSet::load(store.clone(), epochs).await?;
         let mut watch = NodeWatch {
             watchdog: self.clone(),
             node,
-            tip,
+            tips,
             frontier,
             missing,
             store,
-            progress,
+            progress: NodeProgress::first_run(&frontier),
+            startup: Startup::WaitingForHeight { stored },
             gate: SweepGate::Open,
             merklized_state_height: None,
             next_state_poll_at: self.system.clock.instant(),
@@ -184,41 +176,42 @@ impl<C: Clock> Watchdog<C> {
             eta_origin: None,
             view,
         };
-        watch.reset_eta_origin();
-        watch.log_started(start);
+        watch.begin_if_height_known().await?;
         watch.publish();
         Ok(watch)
     }
 
-    /// First tip, errors when no node answers; returns the poller and the receiver every
-    /// `NodeWatch` reads.
+    /// First heights, errors when no node answers; returns the poller and the receiver every
+    /// `NodeWatch` and the reporter read.
     pub async fn start_tip_poller(
         &self,
         nodes: Vec<WatchedNode>,
-    ) -> anyhow::Result<(TipPoller<C>, watch::Receiver<Height>)> {
-        let tip = self.fetch_tip(&nodes).await.ok_or_else(|| {
+    ) -> anyhow::Result<(TipPoller<C>, watch::Receiver<Tips>)> {
+        let mut tips = Tips::default();
+        if self.fetch_tips(&nodes, &mut tips).await == 0 {
             let labels: Vec<_> = nodes.iter().map(|node| &node.label).collect();
-            anyhow!("no watched node answered v1/node/block-height: {labels:?}")
-        })?;
-        self.metrics.set_tip_height(tip)?;
-        let (sender, receiver) = watch::channel(tip);
+            bail!("no watched node answered v1/node/block-height: {labels:?}");
+        }
+        self.metrics.set_tip_height(tips.max())?;
+        let (sender, receiver) = watch::channel(tips.clone());
         let poller = TipPoller {
             watchdog: self.clone(),
             nodes,
-            tip: sender,
+            tips,
+            sender,
         };
         Ok((poller, receiver))
     }
 
-    /// The reporter over `nodes`, reading the live tip.
+    /// The reporter over `nodes`, reading the live node heights.
     pub fn start_reporter(
         &self,
-        tip: watch::Receiver<Height>,
+        tips: watch::Receiver<Tips>,
         nodes: Vec<NodeViewSlot>,
     ) -> Reporter<C> {
         Reporter {
             watchdog: self.clone(),
-            tip,
+            tips,
             nodes: nodes.into_iter().map(ReportedNode::new).collect(),
         }
     }
@@ -255,9 +248,9 @@ impl<C: Clock> Watchdog<C> {
         )
     }
 
-    /// Max `v1/node/block-height` across `nodes`; `None` when none answers.
-    async fn fetch_tip(&self, nodes: &[WatchedNode]) -> Option<Height> {
-        let mut tip = None;
+    /// Records the `v1/node/block-height` of every node in `tips`; returns how many answered.
+    async fn fetch_tips(&self, nodes: &[WatchedNode], tips: &mut Tips) -> usize {
+        let mut answered = 0;
         for node in nodes {
             match self
                 .system
@@ -265,7 +258,10 @@ impl<C: Clock> Watchdog<C> {
                 .get_json::<u64>(node, "v1/node/block-height")
                 .await
             {
-                Ok(height) => tip = tip.max(Some(Height(height))),
+                Ok(height) => {
+                    tips.observed(&node.label, Height(height));
+                    answered += 1;
+                },
                 Err(error) => {
                     tracing::debug!(node = %node.label, %error, "tip request failed");
                     self.metrics
@@ -273,26 +269,26 @@ impl<C: Clock> Watchdog<C> {
                 },
             }
         }
-        tip
+        answered
     }
 }
 
-/// Publishes the max block height of all watched nodes every `TIP_POLL_INTERVAL`.
+/// Publishes the block height of every watched node and their maximum every `TIP_POLL_INTERVAL`.
 pub struct TipPoller<C: Clock> {
     watchdog: Watchdog<C>,
     nodes: Vec<WatchedNode>,
-    tip: watch::Sender<Height>,
+    tips: Tips,
+    sender: watch::Sender<Tips>,
 }
 
 impl<C: Clock> TipPoller<C> {
-    /// Polls forever, returning only an error; a round where no node answers keeps the tip.
-    pub async fn run(self) -> anyhow::Result<Infallible> {
+    /// Polls forever, returning only an error; a node that does not answer keeps its height.
+    pub async fn run(mut self) -> anyhow::Result<Infallible> {
         loop {
             self.watchdog.system.clock.sleep(TIP_POLL_INTERVAL).await;
-            if let Some(tip) = self.watchdog.fetch_tip(&self.nodes).await {
-                self.watchdog.metrics.set_tip_height(tip)?;
-                self.tip.send_replace(tip);
-            }
+            self.watchdog.fetch_tips(&self.nodes, &mut self.tips).await;
+            self.watchdog.metrics.set_tip_height(self.tips.max())?;
+            self.sender.send_replace(self.tips.clone());
         }
     }
 }
@@ -301,7 +297,7 @@ impl<C: Clock> TipPoller<C> {
 /// from published views only.
 pub struct Reporter<C: Clock> {
     watchdog: Watchdog<C>,
-    tip: watch::Receiver<Height>,
+    tips: watch::Receiver<Tips>,
     nodes: Vec<ReportedNode>,
 }
 
@@ -321,10 +317,10 @@ impl<C: Clock> Reporter<C> {
     /// `ReportedNode::log` when `tick_index` is a positive multiple of `TICKS_PER_SUMMARY`.
     fn tick(&mut self, tick_index: u64) -> anyhow::Result<()> {
         let now = self.watchdog.system.clock.now();
-        let tip = *self.tip.borrow();
+        let tips = self.tips.borrow().clone();
         let log = tick_index > 0 && tick_index.is_multiple_of(TICKS_PER_SUMMARY);
         for node in &mut self.nodes {
-            let report = node.report(tip, now)?;
+            let report = node.report(&tips, now)?;
             self.watchdog.metrics.export_node(&report)?;
             if log {
                 node.log(&report);
@@ -348,16 +344,27 @@ pub struct ChunkChecked {
     pub health: RequestHealth,
 }
 
+/// Whether the watch has built its progress from the node's own height.
+#[derive(Clone, Copy, Debug)]
+enum Startup {
+    /// The node has not answered; `stored` is the progress of an earlier run.
+    WaitingForHeight {
+        stored: Option<NodeProgress>,
+    },
+    Begun,
+}
+
 /// Checker of one watched node: follow, retries and sweep, one request at a time.
 pub struct NodeWatch<C: Clock> {
     watchdog: Watchdog<C>,
     node: WatchedNode,
-    tip: watch::Receiver<Height>,
-    /// Set once per loop iteration from `tip`.
+    tips: watch::Receiver<Tips>,
+    /// Set once per loop iteration from the node's own height in `tips`.
     frontier: Frontier,
     missing: PersistedMissingSet,
     store: NodeStore,
     progress: NodeProgress,
+    startup: Startup,
     gate: SweepGate,
     merklized_state_height: Option<Height>,
     next_state_poll_at: Instant,
@@ -379,9 +386,11 @@ impl<C: Clock> NodeWatch<C> {
     /// Runs the loop until a store error: frontier, `trim_step`, state poll, follow, retry and
     /// sweep steps; idles when nothing was sent.
     pub async fn run(mut self) -> anyhow::Result<()> {
+        self.await_own_height().await?;
         loop {
-            let tip = *self.tip.borrow_and_update();
-            self.frontier = Frontier::new(tip, self.watchdog.options.sweep_window());
+            let own = self.tips.borrow_and_update().node(&self.node.label);
+            let own = own.expect("the node answered before the loop starts");
+            self.frontier = Frontier::new(own, self.watchdog.options.sweep_window());
             self.trim_step().await?;
             self.poll_state_height().await;
             let mut sent = self.follow_step().await?;
@@ -393,10 +402,66 @@ impl<C: Clock> NodeWatch<C> {
                     .saturating_duration_since(self.clock().instant());
                 tokio::select! {
                     () = self.watchdog.system.clock.sleep(wait) => {},
-                    changed = self.tip.changed() => changed?,
+                    changed = self.tips.changed() => changed?,
                 }
             }
         }
+    }
+
+    /// Waits for the node's first block height, then `begin_if_height_known`.
+    async fn await_own_height(&mut self) -> anyhow::Result<()> {
+        loop {
+            self.begin_if_height_known().await?;
+            if matches!(self.startup, Startup::Begun) {
+                return Ok(());
+            }
+            self.tips.changed().await?;
+        }
+    }
+
+    /// Once the node's own height is known: builds the frontier, creates the progress or clamps
+    /// the stored one to the window, drops persisted rows above `settled_end`, logs `watching` or
+    /// `resumed`.
+    async fn begin_if_height_known(&mut self) -> anyhow::Result<()> {
+        let Startup::WaitingForHeight { stored } = self.startup else {
+            return Ok(());
+        };
+        let Some(own) = self.tips.borrow().node(&self.node.label) else {
+            return Ok(());
+        };
+        self.startup = Startup::Begun;
+        self.frontier = Frontier::new(own, self.watchdog.options.sweep_window());
+        let start = match stored {
+            Some(progress) => {
+                self.progress = progress.clamped_to(self.frontier.window_start());
+                NodeStart::Resumed
+            },
+            None => {
+                self.progress = NodeProgress::first_run(&self.frontier);
+                self.store.save_progress(&self.progress).await?;
+                NodeStart::Fresh
+            },
+        };
+        self.reset_eta_origin();
+        self.drop_rows_above_height().await?;
+        self.log_started(start);
+        self.publish();
+        Ok(())
+    }
+
+    /// Drops persisted rows the node cannot serve yet, so they never count with old ages.
+    async fn drop_rows_above_height(&mut self) -> anyhow::Result<()> {
+        let update = MissingUpdate::ForgetAbove(self.frontier.settled_end());
+        let now = self.clock().now();
+        let diff = self.missing.apply(update, now).await?;
+        if diff.rows_removed > 0 {
+            tracing::info!(
+                node = %self.node.label,
+                rows = diff.rows_removed,
+                "dropped rows above the node's own height"
+            );
+        }
+        Ok(())
     }
 
     /// The `watching` or `resumed` line.
@@ -512,35 +577,60 @@ impl<C: Clock> NodeWatch<C> {
         Ok(checked.sent)
     }
 
-    /// `RetryQueue::new` at `now`; while `RETRY_BUDGET` from the step start has time left: the
-    /// representative when `recovery` is empty (a result that `found_present` sets `recovery =
-    /// ChunkQueue::confirmed(set)`), then `confirming`, then `recovery`; returns requests sent.
+    /// `RetryQueue::new` at `now`; while `RETRY_BUDGET` from the step start has time left: due
+    /// not-found rows, `recovery`, the representative when `recovery` was empty at the step start (a result that
+    /// `found_present` sets `recovery = ChunkQueue::confirmed(set)`), `recovery` again, then due
+    /// failed rows, which never count and so never delay red or green; returns requests sent.
     async fn retry_step(&mut self) -> anyhow::Result<usize> {
         let deadline = self.clock().instant() + RETRY_BUDGET;
         let mut queue = RetryQueue::new(self.missing.set(), self.clock().now());
+        let representative = queue
+            .representative
+            .take()
+            .filter(|_| self.recovery.is_empty());
+        let mut sent = self.drain(&mut queue.not_found, deadline).await?;
+        sent += self.drain_recovery(deadline).await?;
+        sent += self.probe_representative(representative, deadline).await?;
+        sent += self.drain_recovery(deadline).await?;
+        sent += self.drain(&mut queue.failed, deadline).await?;
+        Ok(sent)
+    }
+
+    /// Probes `queue` until it is empty or `deadline`; returns requests sent.
+    async fn drain(&mut self, queue: &mut ChunkQueue, deadline: Instant) -> anyhow::Result<usize> {
         let mut sent = 0;
-        if self.recovery.is_empty()
-            && let Some(probe) = queue.representative.take()
-        {
-            let result = self.check_probe(&probe).await?;
-            sent += 1;
-            if result.found_present() {
-                self.recovery = ChunkQueue::confirmed(self.missing.set());
-            }
-        }
         while self.clock().instant() < deadline
-            && let Some(probe) = queue.confirming.next_probe()
-        {
-            self.check_probe(&probe).await?;
-            sent += 1;
-        }
-        while self.clock().instant() < deadline
-            && let Some(probe) = self.recovery.next_probe()
+            && let Some(probe) = queue.next_probe()
         {
             self.check_probe(&probe).await?;
             sent += 1;
         }
         Ok(sent)
+    }
+
+    /// `drain` of `recovery`.
+    async fn drain_recovery(&mut self, deadline: Instant) -> anyhow::Result<usize> {
+        let mut recovery = std::mem::take(&mut self.recovery);
+        let sent = self.drain(&mut recovery, deadline).await;
+        self.recovery = recovery;
+        sent
+    }
+
+    /// Probes the representative before `deadline`; a present result queues every confirmed row
+    /// in `recovery`. Returns requests sent.
+    async fn probe_representative(
+        &mut self,
+        representative: Option<Probe>,
+        deadline: Instant,
+    ) -> anyhow::Result<usize> {
+        let Some(probe) = representative.filter(|_| self.clock().instant() < deadline) else {
+            return Ok(0);
+        };
+        let result = self.check_probe(&probe).await?;
+        if result.found_present() {
+            self.recovery = ChunkQueue::confirmed(self.missing.set());
+        }
+        Ok(1)
     }
 
     /// Reschedules, starts or finishes the sweep without the gate; sends the next chunk only when
@@ -575,6 +665,9 @@ impl<C: Clock> NodeWatch<C> {
             self.finish_sweep(sweep).await?;
             return Ok(0);
         };
+        if chunk.end > self.frontier.settled_end() {
+            return Ok(0);
+        }
         if !self.gate.admits(self.clock().instant()) {
             return Ok(0);
         }
@@ -651,7 +744,7 @@ impl<C: Clock> NodeWatch<C> {
         let to_check = probes(chunk, self.missing.set().epochs());
         let mut health = RequestHealth::Answered;
         for probe in &to_check {
-            health = health.and(self.check_probe(probe).await?.health());
+            health = health.and(self.check_probe(probe).await?.gate_health());
         }
         Ok(ChunkChecked {
             sent: to_check.len(),
@@ -870,6 +963,10 @@ mod tests {
         failing_leaf: Arc<AtomicBool>,
         /// Leaf range requests that answer before the rest answer 500; `None` is unlimited.
         leaf_budget: Arc<Mutex<Option<usize>>>,
+        /// The light client leaf route answers 500 while set.
+        failing_points: Arc<AtomicBool>,
+        /// The stake table route answers 500 while set.
+        failing_stake_table: Arc<AtomicBool>,
         /// Every data route answers 404 while set.
         all_404: Arc<AtomicBool>,
         /// Every route records the request and never answers while set.
@@ -922,6 +1019,12 @@ mod tests {
             ["v1", "config", "hotshot"] => ok(&node.config.lock().unwrap()),
             ["v1", "node", "block-height"] => ok(&node.tip.load(Ordering::SeqCst).to_string()),
             ["v1", "block-state", "block-height"] => ok("1000"),
+            ["v1", "light-client", "leaf", _] if flag(&node.failing_points) => {
+                (StatusCode::INTERNAL_SERVER_ERROR, String::new())
+            },
+            ["v1", "node", "stake-table", _] if flag(&node.failing_stake_table) => {
+                (StatusCode::INTERNAL_SERVER_ERROR, String::new())
+            },
             _ if flag(&node.all_404) => (StatusCode::NOT_FOUND, String::new()),
             ["v1", "availability", "leaf", from, until] => {
                 if flag(&node.failing_leaf) {
@@ -965,6 +1068,8 @@ mod tests {
             missing_epochs: Arc::default(),
             failing: Arc::default(),
             failing_leaf: Arc::default(),
+            failing_points: Arc::default(),
+            failing_stake_table: Arc::default(),
             leaf_budget: Arc::default(),
             all_404: Arc::default(),
             hang: Arc::default(),
@@ -985,8 +1090,8 @@ mod tests {
         store: Store,
         registry: Registry,
         clock: ManualClock,
-        tip_sender: watch::Sender<Height>,
-        tip: watch::Receiver<Height>,
+        tips_sender: watch::Sender<Tips>,
+        tips: watch::Receiver<Tips>,
     }
 
     fn options(retention_blocks: Option<u64>) -> WatchOptions {
@@ -1025,14 +1130,14 @@ mod tests {
                 Arc::new(WatchdogMetrics::new(&registry).unwrap()),
                 store.clone(),
             );
-            let (tip_sender, tip) = watch::channel(Height(1_000));
+            let (tips_sender, tips) = watch::channel(Tips::default());
             Self {
                 watchdog,
                 store,
                 registry,
                 clock,
-                tip_sender,
-                tip,
+                tips_sender,
+                tips,
             }
         }
 
@@ -1046,9 +1151,16 @@ mod tests {
             epochs: Epochs,
         ) -> (NodeWatch<ManualClock>, ViewReceiver) {
             let (sender, receiver) = view::channel();
+            self.tips_sender.send_if_modified(|tips| {
+                let unknown = tips.node(&node.label).is_none();
+                if unknown {
+                    tips.observed(&node.label, Height(1_000));
+                }
+                unknown
+            });
             let watch = self
                 .watchdog
-                .start_node(node, self.tip.clone(), epochs, sender)
+                .start_node(node, self.tips.clone(), epochs, sender)
                 .await
                 .unwrap();
             (watch, receiver)
@@ -1060,7 +1172,13 @@ mod tests {
                 node: node.clone(),
                 view: view.clone(),
             };
-            self.watchdog.start_reporter(self.tip.clone(), vec![slot])
+            self.watchdog.start_reporter(self.tips.clone(), vec![slot])
+        }
+
+        /// Raises the height of `node` as the tip poller would.
+        fn set_height(&self, node: &WatchedNode, height: u64) {
+            self.tips_sender
+                .send_modify(|tips| tips.observed(&node.label, Height(height)));
         }
 
         /// The value of a gauge of `node` (and `kind`, when given).
@@ -1842,13 +1960,16 @@ mod tests {
         let (second, fake_second) = serve_fake([]).await;
         fake_first.tip.store(5, Ordering::SeqCst);
         fake_second.tip.store(7, Ordering::SeqCst);
+        let (first_label, second_label) = (first.label.clone(), second.label.clone());
         let harness = Harness::new(None).await;
         let (poller, mut tip) = harness
             .watchdog
             .start_tip_poller(vec![first, second])
             .await
             .unwrap();
-        assert_eq!(*tip.borrow(), Height(7));
+        assert_eq!(tip.borrow().max(), Height(7));
+        assert_eq!(tip.borrow().node(&first_label), Some(Height(5)));
+        assert_eq!(tip.borrow().node_lag_blocks(&first_label), 2);
 
         fake_first.tip.store(9, Ordering::SeqCst);
         fake_second.tip.store(8, Ordering::SeqCst);
@@ -1857,7 +1978,8 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        assert_eq!(*tip.borrow_and_update(), Height(9));
+        assert_eq!(tip.borrow_and_update().max(), Height(9));
+        assert_eq!(tip.borrow().node(&second_label), Some(Height(8)));
 
         let before = fake_first.requests_to("/v1/node/block-height");
         fake_first.failing.store(true, Ordering::SeqCst);
@@ -1871,7 +1993,7 @@ mod tests {
         })
         .await
         .unwrap();
-        assert_eq!(*tip.borrow(), Height(9));
+        assert_eq!(tip.borrow().max(), Height(9));
         task.abort();
     }
 
@@ -1883,7 +2005,7 @@ mod tests {
         fake.missing_epochs.lock().unwrap().insert(5);
         fake.tip.store(300, Ordering::SeqCst);
         let harness = Harness::new(None).await;
-        harness.tip_sender.send_replace(Height(300));
+        harness.set_height(&node, 300);
         let epochs = harness
             .watchdog
             .fetch_epochs(std::slice::from_ref(&node))
@@ -1933,7 +2055,7 @@ mod tests {
             harness.clock.advance(Duration::from_secs(delay));
             watch.retry_step().await.unwrap();
         }
-        harness.tip_sender.send_replace(Height(1_100));
+        harness.set_height(&node, 1_100);
         reporter.tick(1).unwrap();
         assert!(harness.gauge("confirmed_missing", &node, None).unwrap() > 0);
     }
@@ -2028,7 +2150,12 @@ mod tests {
             view: view.clone(),
         };
         let reported = ReportedNode::new(slot);
-        let report = reported.report(Height(1_500), now).unwrap();
+        let tips = {
+            let mut tips = Tips::default();
+            tips.observed(&node.label, Height(1_500));
+            tips
+        };
+        let report = reported.report(&tips, now).unwrap();
         assert_eq!(report.summary.follow_lag_blocks, 510);
         let leaf = &report.summary.kinds[0];
         assert_eq!(
@@ -2040,7 +2167,7 @@ mod tests {
         assert_eq!(leaf.missing_count, 10);
 
         // The reporter takes the live tip from its channel.
-        harness.tip_sender.send_replace(Height(1_500));
+        harness.set_height(&node, 1_500);
         let mut reporter = harness.reporter(&node, &view);
         reporter.tick(0).unwrap();
         assert_eq!(harness.gauge("follow_lag_blocks", &node, None), Some(510));
@@ -2055,7 +2182,7 @@ mod tests {
             view: receiver,
         });
         let now = DateTime::from_timestamp(1_000_000, 0).unwrap();
-        assert!(reported.report(Height(1), now).is_err());
+        assert!(reported.report(&Tips::default(), now).is_err());
     }
 
     #[tokio::test]
@@ -2135,6 +2262,7 @@ mod tests {
         }
         crate::report::NodeReport {
             node: node.clone(),
+            node_lag_blocks: 0,
             summary: crate::view::NodeSummary {
                 tip_height: Height(1),
                 follow_lag_blocks: 0,
@@ -2300,5 +2428,295 @@ mod tests {
         }
         reporter.tick(1).unwrap();
         assert_eq!(harness.gauge("confirmed_missing", &node, None), Some(15));
+    }
+
+    fn server_error() -> crate::outcome::RequestFailure {
+        crate::outcome::RequestFailure::Status(
+            crate::outcome::FailedStatus::new(StatusCode::INTERNAL_SERVER_ERROR).unwrap(),
+        )
+    }
+
+    /// 2000 failed `lc_leaf_proof` rows at heights 1000 to 2999, due after a minute.
+    async fn preload_failed_points(harness: &Harness, node: &WatchedNode) {
+        let start = harness.clock.now();
+        let results = (1_000..3_000)
+            .map(|height| {
+                let failed = Observation::Failed(server_error());
+                (point_result(height, failed), start)
+            })
+            .collect();
+        harness.preload(node, results).await;
+    }
+
+    #[tokio::test]
+    async fn failed_rows_do_not_delay_a_new_gap_from_being_confirmed() {
+        let (node, fake) = serve_fake([5]).await;
+        fake.failing_points.store(true, Ordering::SeqCst);
+        let harness = Harness::with_options(WatchOptions {
+            request_interval: Duration::from_millis(100),
+            ..options(None)
+        })
+        .await;
+        harness.set_height(&node, 5_000);
+        preload_failed_points(&harness, &node).await;
+        let (mut watch, _view) = harness.start(node).await;
+        harness.clock.advance(Duration::from_secs(61));
+
+        let now = watch.clock().now();
+        let gap = leaf_result(5..6, Observation::NotFound);
+        watch
+            .missing
+            .apply(MissingUpdate::Observed(gap), now)
+            .await
+            .unwrap();
+        let confirmed_gap = |watch: &NodeWatch<ManualClock>| {
+            let state = watch
+                .missing
+                .set()
+                .rows()
+                .find(|row| row.key.kind() == DataKind::Leaf)
+                .unwrap()
+                .state;
+            let retry = state.retry();
+            let delay = TimeDelta::from_std(retry.delay.duration()).unwrap();
+            // The row was written at its retry time minus its delay.
+            state.is_confirmed().then(|| retry.next_at - delay)
+        };
+        let confirmed_at = loop {
+            watch.retry_step().await.unwrap();
+            if let Some(at) = confirmed_gap(&watch) {
+                break at;
+            }
+            assert!(watch.clock().now() - now < TimeDelta::seconds(60));
+        };
+        let waited = confirmed_at - now;
+        assert!(waited <= TimeDelta::seconds(17), "{waited}");
+        assert!(
+            watch.missing.set().rows().count() >= 2_000,
+            "failed rows stay"
+        );
+    }
+
+    #[tokio::test]
+    async fn failed_rows_do_not_stop_recovery_from_draining() {
+        let (node, _fake) = serve_fake([]).await;
+        let harness = Harness::with_options(WatchOptions {
+            request_interval: Duration::from_secs(1),
+            ..options(None)
+        })
+        .await;
+        harness.set_height(&node, 5_000);
+        preload_failed_points(&harness, &node).await;
+        preload_confirmed_points(&harness, &node, 40).await;
+        let (mut watch, _view) = harness.start(node).await;
+        harness.clock.advance(Duration::from_secs(61));
+
+        for _ in 0..8 {
+            assert_eq!(watch.retry_step().await.unwrap(), 5);
+        }
+        assert!(watch.recovery.is_empty());
+        let rows: Vec<_> = watch.missing.set().rows().collect();
+        assert_eq!(rows.len(), 2_000, "only the confirmed rows were probed");
+        assert!(rows.iter().all(|row| !row.state.is_confirmed()));
+    }
+
+    #[tokio::test]
+    async fn an_epoch_failure_does_not_pause_the_sweep() {
+        let (node, fake) = serve_fake([]).await;
+        *fake.config.lock().unwrap() =
+            r#"{"config":{"epoch_height":30,"epoch_start_block":61}}"#.to_owned();
+        fake.failing_stake_table.store(true, Ordering::SeqCst);
+        let harness = Harness::new(None).await;
+        harness.set_height(&node, 300);
+        let epochs = harness
+            .watchdog
+            .fetch_epochs(std::slice::from_ref(&node))
+            .await
+            .unwrap();
+        let (mut watch, _view) = harness.start_with(node, epochs).await;
+
+        assert!(watch.sweep_step().await.unwrap() > 0);
+        assert!(fake.requests_to("/v1/node/stake-table/5") > 0);
+        assert!(!watch.counters.errors.failures().is_empty());
+        assert!(!is_paused(&watch));
+    }
+
+    #[tokio::test]
+    async fn a_lagging_node_probes_nothing_above_its_own_height_and_never_counts() {
+        let (node, fake) = serve_fake(600..1_000).await;
+        let harness = Harness::with_options(WatchOptions {
+            sweep_once: true,
+            ..options(None)
+        })
+        .await;
+        harness.set_height(&node, 500);
+        harness.set_height(
+            &WatchedNode::new(Url::parse("http://other:1/").unwrap()).unwrap(),
+            1_000,
+        );
+        let (watch, view) = harness.start(node.clone()).await;
+        let mut reporter = harness.reporter(&node, &view);
+        let task = tokio::spawn(watch.run());
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let done = matches!(
+                    view.borrow().as_ref().unwrap().progress.sweep,
+                    SweepState::Done { .. }
+                );
+                if done {
+                    return;
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("the sweep ends");
+        task.abort();
+
+        for path in fake.heads() {
+            if let Some(end) = path.strip_prefix("/v1/availability/leaf/") {
+                let end: u64 = end.rsplit('/').next().unwrap().parse().unwrap();
+                assert!(end <= 490, "{path}");
+            }
+        }
+        reporter.tick(1).unwrap();
+        assert_eq!(harness.gauge("confirmed_missing", &node, None), Some(0));
+        assert_eq!(harness.gauge("node_lag_blocks", &node, None), Some(500));
+    }
+
+    #[tokio::test]
+    async fn a_node_that_answers_late_starts_from_its_own_height_without_skipping() {
+        let (node, fake) = serve_fake([]).await;
+        let harness = Harness::with_options(WatchOptions {
+            sweep_once: true,
+            ..options(None)
+        })
+        .await;
+        harness
+            .tips_sender
+            .send_modify(|tips| tips.observed("other:1", Height(1_000)));
+        let (sender, view) = view::channel();
+        let watch = harness
+            .watchdog
+            .start_node(node.clone(), harness.tips.clone(), Epochs::Off, sender)
+            .await
+            .unwrap();
+        let node_store = harness.store.node(&node.label);
+        assert!(node_store.load_progress().await.unwrap().is_none());
+        let task = tokio::spawn(watch.run());
+
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(node_store.load_progress().await.unwrap().is_none());
+        assert!(matches!(
+            view.borrow().as_ref().unwrap().progress.sweep,
+            SweepState::NeverSwept
+        ));
+
+        harness.set_height(&node, 500);
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let done = matches!(
+                    view.borrow().as_ref().unwrap().progress.sweep,
+                    SweepState::Done { .. }
+                );
+                if done {
+                    return;
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("the sweep ends");
+        task.abort();
+
+        assert_eq!(
+            view.borrow().as_ref().unwrap().progress.follow_next_height,
+            Height(490)
+        );
+        let heads = fake.heads();
+        assert!(
+            heads.contains(&"/v1/availability/leaf/0/100".to_owned()),
+            "{heads:?}"
+        );
+        assert!(
+            heads.contains(&"/v1/availability/leaf/400/490".to_owned()),
+            "{heads:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn persisted_rows_above_the_nodes_height_are_dropped_and_never_count() {
+        let (node, _fake) = serve_fake([]).await;
+        let harness = Harness::new(None).await;
+        let start = harness.clock.now() - TimeDelta::seconds(600);
+        let rows = (0..5).flat_map(|_| {
+            [
+                (point_result(900, Observation::NotFound), start),
+                (leaf_result(880..900, Observation::NotFound), start),
+                (leaf_result(400..410, Observation::NotFound), start),
+            ]
+        });
+        harness.preload(&node, rows.collect()).await;
+        harness.set_height(&node, 500);
+        let (watch, _view) = harness.start(node).await;
+
+        let kept: Vec<_> = watch
+            .missing
+            .set()
+            .rows()
+            .map(|row| row.key.units())
+            .collect();
+        assert_eq!(kept, vec![400..410]);
+        assert_eq!(
+            confirmed(&watch),
+            10,
+            "only the row below the node's height counts"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_sweep_chunk_above_the_nodes_height_waits() {
+        let (node, fake) = serve_fake([]).await;
+        let harness = Harness::new(None).await;
+        let started_at = harness.clock.now();
+        let sweep = RunningSweep {
+            started_at,
+            start_height: Height(800),
+            next_height: Height(800),
+            until_height: Height(990),
+        };
+        let progress = NodeProgress {
+            follow_next_height: Height(490),
+            sweep: SweepState::Running {
+                sweep,
+                last_completed_at: None,
+            },
+        };
+        harness
+            .store
+            .node(&node.label)
+            .save_progress(&progress)
+            .await
+            .unwrap();
+        harness.set_height(&node, 500);
+        let (mut watch, _view) = harness.start(node).await;
+
+        assert_eq!(watch.sweep_step().await.unwrap(), 0);
+        assert!(fake.heads().is_empty());
+        assert_eq!(watch.progress, progress);
+    }
+
+    #[tokio::test]
+    async fn a_drained_recovery_queue_is_not_followed_by_a_stale_representative() {
+        let (node, fake) = serve_fake([]).await;
+        let harness = Harness::new(None).await;
+        preload_confirmed_points(&harness, &node, 3).await;
+        let (mut watch, _view) = harness.start(node).await;
+        harness.clock.advance(Duration::from_secs(61));
+        watch.recovery = ChunkQueue::confirmed(watch.missing.set());
+
+        assert_eq!(watch.retry_step().await.unwrap(), 3);
+        assert_eq!(fake.heads().len(), 3, "no second pass over the first row");
+        assert_eq!(watch.missing.set().rows().count(), 0);
     }
 }

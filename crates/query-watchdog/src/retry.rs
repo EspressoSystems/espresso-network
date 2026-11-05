@@ -7,6 +7,7 @@ use chrono::{DateTime, Utc};
 use crate::{
     kind::{Epochs, Height, Probe},
     missing::{MissingRow, MissingSet, RowKey},
+    state::UnitState,
 };
 
 /// Time per retry step in which probes may start; follow and sweep keep the rest (HEAD's value).
@@ -63,31 +64,43 @@ pub struct RetryQueue {
     /// First chunk of the oldest confirmed row by (`first_missing_at`, first unit, kind), when its
     /// `next_at <= now`.
     pub representative: Option<Probe>,
-    /// Confirming rows with `next_at <= now`, in (`next_at`, kind, first unit) order.
-    pub confirming: ChunkQueue,
+    /// Not-found rows below confirmation with `next_at <= now`, in (`next_at`, kind, first unit)
+    /// order.
+    pub not_found: ChunkQueue,
+    /// Failed rows with `next_at <= now`, in the same order; they never count, so they go last.
+    pub failed: ChunkQueue,
 }
 
 impl RetryQueue {
-    /// The representative and the due confirming rows of `set` at `now`.
+    /// The representative and the due unconfirmed rows of `set` at `now`.
     pub fn new(set: &MissingSet, now: DateTime<Utc>) -> Self {
-        let (confirmed, mut confirming): (Vec<MissingRow>, Vec<MissingRow>) =
+        let (confirmed, unconfirmed): (Vec<MissingRow>, Vec<MissingRow>) =
             set.rows().partition(|row| row.state.is_confirmed());
         let representative = confirmed
             .iter()
             .min_by_key(|row| row.age_order())
             .filter(|row| row.state.retry().next_at <= now)
             .map(|row| row.key.first_probe());
-        confirming.retain(|row| row.state.retry().next_at <= now);
-        confirming.sort_by_key(|row| {
+        let (failed, not_found) = unconfirmed
+            .into_iter()
+            .filter(|row| row.state.retry().next_at <= now)
+            .partition(|row| matches!(row.state, UnitState::Failed { .. }));
+        Self {
+            representative,
+            not_found: Self::queue(not_found),
+            failed: Self::queue(failed),
+        }
+    }
+
+    /// `rows` in (`next_at`, kind, first unit) order.
+    fn queue(mut rows: Vec<MissingRow>) -> ChunkQueue {
+        rows.sort_by_key(|row| {
             (
                 row.state.retry().next_at,
                 row.key.kind(),
                 row.key.first_unit(),
             )
         });
-        Self {
-            representative,
-            confirming: ChunkQueue(confirming.into_iter().map(|row| row.key).collect()),
-        }
+        ChunkQueue(rows.into_iter().map(|row| row.key).collect())
     }
 }

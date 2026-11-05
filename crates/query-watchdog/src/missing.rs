@@ -211,6 +211,9 @@ pub enum MissingUpdate {
     /// rows whose root block is below go. `ForgetBelow(Height(0))` changes nothing and returns no
     /// region (`RangeMap::remove` panics on an empty range).
     ForgetBelow(Height),
+    /// Drops what lies at or above `settled_end`, the units the node cannot serve yet: range
+    /// rows are trimmed, point rows at or above go, epoch rows whose root block is above go.
+    ForgetAbove(Height),
 }
 
 /// Units of one kind whose image rows an update rewrote; one variant per unit family.
@@ -324,6 +327,7 @@ impl MissingSet {
         let regions = match update {
             MissingUpdate::Observed(result) => self.observe(result, now).into_iter().collect(),
             MissingUpdate::ForgetBelow(window_start) => self.forget_below(window_start),
+            MissingUpdate::ForgetAbove(settled_end) => self.forget_above(settled_end),
         };
         ImageDiff {
             regions,
@@ -421,6 +425,40 @@ impl MissingSet {
                 epochs
                     .root_block(kind, epoch)
                     .is_some_and(|block| block < window_start)
+            };
+            if let Some(epochs) = drop_units(&mut self.epoch_rows, kind, dropped, Epoch::next) {
+                regions.push(ImageRegion::Epochs { kind, epochs });
+            }
+        }
+        regions
+    }
+
+    /// Drops what lies at or above `settled_end`; the rewritten regions.
+    fn forget_above(&mut self, settled_end: Height) -> Vec<ImageRegion> {
+        let mut regions = Vec::new();
+        let above = settled_end..Height(u64::MAX);
+        for (&kind, map) in &mut self.ranges {
+            let hull = overlapping_rows(map, &above)
+                .iter()
+                .map(|(range, _)| range.clone())
+                .reduce(|hull, range| hull_of(&hull, &range));
+            if let Some(heights) = hull {
+                map.remove(above.clone());
+                regions.push(ImageRegion::Range { kind, heights });
+            }
+        }
+        for &kind in PointKind::VARIANTS {
+            let dropped = |height: Height| height >= settled_end;
+            if let Some(heights) = drop_units(&mut self.points, kind, dropped, Height::next) {
+                regions.push(ImageRegion::Points { kind, heights });
+            }
+        }
+        let epochs = self.epochs;
+        for &kind in EpochKind::VARIANTS {
+            let dropped = |epoch: Epoch| {
+                epochs
+                    .root_block(kind, epoch)
+                    .is_some_and(|block| block > settled_end)
             };
             if let Some(epochs) = drop_units(&mut self.epoch_rows, kind, dropped, Epoch::next) {
                 regions.push(ImageRegion::Epochs { kind, epochs });
@@ -1031,6 +1069,31 @@ mod tests {
     }
 
     #[test]
+    fn forget_above_drops_what_the_node_cannot_serve_yet() {
+        let mut set = MissingSet::new(epochs(30, 61));
+        let nf = Observation::NotFound;
+        observe(&mut set, leaf_gap(100..300), T0);
+        observe(&mut set, point_result(PointKind::LcLeafProof, 199, nf), T0);
+        observe(&mut set, point_result(PointKind::LcLeafProof, 200, nf), T0);
+        observe(&mut set, epoch_result(EpochKind::StateCert, 6, nf), T0);
+        observe(&mut set, epoch_result(EpochKind::StateCert, 7, nf), T0);
+        // State cert of epoch 6 rests on block 180, epoch 7 on block 210.
+        set.apply(MissingUpdate::ForgetAbove(Height(200)), at(T0));
+        let units: Vec<_> = set
+            .rows()
+            .map(|row| (row.key.kind(), row.key.units()))
+            .collect();
+        assert_eq!(
+            units,
+            [
+                (DataKind::Leaf, 100..200),
+                (DataKind::LcLeafProof, 199..200),
+                (DataKind::StateCert, 6..7),
+            ]
+        );
+    }
+
+    #[test]
     fn forget_below_zero_changes_nothing() {
         let mut set = MissingSet::new(Epochs::Off);
         observe(&mut set, leaf_gap(0..10), T0);
@@ -1507,7 +1570,7 @@ mod tests {
 
         let queue = RetryQueue::new(&set, at(T0 + 8));
         assert_eq!(
-            drain(queue.confirming),
+            drain(queue.not_found),
             [
                 Probe::Range {
                     kind: RangeKind::Block,
@@ -1526,7 +1589,7 @@ mod tests {
         let queue = RetryQueue::new(&set, at(T0));
         assert_eq!(queue.representative, Some(leaf_probe(300..310)));
         // No confirming row is due at T0: the earliest next_at is T0 + 5.
-        assert!(drain(queue.confirming).is_empty());
+        assert!(drain(queue.not_found).is_empty());
         // Not due although the younger confirmed row is.
         let mut late = set.clone();
         observe(&mut late, leaf_gap(300..310), T0 + 1_000);
@@ -1591,6 +1654,7 @@ mod tests {
             observation: Observation,
         },
         Forget(u64),
+        ForgetAbove(u64),
         Advance(u64),
         Retry(Answer),
         Representative(Answer),
@@ -1675,6 +1739,7 @@ mod tests {
             2 => point,
             2 => epoch,
             1 => (0..heights).prop_map(Op::Forget),
+            1 => (0..heights).prop_map(Op::ForgetAbove),
             4 => prop_oneof![0u64..12, 0u64..700].prop_map(Op::Advance),
             6 => answer().prop_map(Op::Retry),
             3 => answer().prop_map(Op::Representative),
@@ -1811,6 +1876,15 @@ mod tests {
                     observation,
                 } => self.observe_unit(((*kind).into(), epoch.0), *observation, now),
             }
+        }
+
+        fn forget_above(&mut self, settled_end: u64) {
+            self.units.retain(|&(kind, unit), _| match kind.class() {
+                KindClass::Range(_) | KindClass::Point(_) => unit < settled_end,
+                KindClass::Epoch(kind) => EPOCHS
+                    .root_block(kind, Epoch(unit))
+                    .is_none_or(|block| block.0 <= settled_end),
+            });
         }
 
         fn forget_below(&mut self, window_start: u64) {
@@ -1973,13 +2047,21 @@ mod tests {
             .map(|run| run_probes(run).remove(0));
         prop_assert_eq!(&queue.representative, &representative);
 
-        let mut due: Vec<_> = runs
-            .iter()
-            .filter(|run| !run.state.is_confirmed() && run.state.retry().next_at <= now)
-            .collect();
-        due.sort_by_key(|run| (run.state.retry().next_at, run.kind, run.units.start));
-        let expected: Vec<Probe> = due.into_iter().flat_map(run_probes).collect();
-        prop_assert_eq!(drain(queue.confirming), expected);
+        let due = |failed: bool| -> Vec<Probe> {
+            let mut due: Vec<_> = runs
+                .iter()
+                .filter(|run| {
+                    let is_failed = matches!(run.state, UnitState::Failed { .. });
+                    !run.state.is_confirmed()
+                        && is_failed == failed
+                        && run.state.retry().next_at <= now
+                })
+                .collect();
+            due.sort_by_key(|run| (run.state.retry().next_at, run.kind, run.units.start));
+            due.into_iter().flat_map(run_probes).collect()
+        };
+        prop_assert_eq!(drain(queue.not_found), due(false));
+        prop_assert_eq!(drain(queue.failed), due(true));
 
         let confirmed: Vec<Probe> = runs
             .iter()
@@ -2074,6 +2156,9 @@ mod tests {
         match op {
             Op::Advance(secs) => Step::Advance(*secs),
             Op::Forget(height) => Step::Update(MissingUpdate::ForgetBelow(Height(*height)), None),
+            Op::ForgetAbove(height) => {
+                Step::Update(MissingUpdate::ForgetAbove(Height(*height)), None)
+            },
             Op::Range {
                 kind,
                 start,
@@ -2094,7 +2179,11 @@ mod tests {
                 observation,
             } => observed(epoch_result(*kind, *epoch, *observation)),
             Op::Retry(found) => {
-                let probe = RetryQueue::new(set, now).confirming.next_probe();
+                let mut queue = RetryQueue::new(set, now);
+                let probe = queue
+                    .not_found
+                    .next_probe()
+                    .or_else(|| queue.failed.next_probe());
                 probe.map_or(Step::Skip, |probe| {
                     let result = found_result(&probe, *found);
                     Step::Update(MissingUpdate::Observed(result), Some(probe))
@@ -2129,6 +2218,7 @@ mod tests {
             match &update {
                 MissingUpdate::Observed(result) => model.apply(result, now),
                 MissingUpdate::ForgetBelow(window_start) => model.forget_below(window_start.0),
+                MissingUpdate::ForgetAbove(settled_end) => model.forget_above(settled_end.0),
             }
             let diff = set.apply(update, now);
             let forgotten = matches!(op, Op::Forget(_));
