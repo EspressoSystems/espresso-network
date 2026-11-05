@@ -99,12 +99,19 @@ pub async fn build_test_coordinator(
         .map(|(leaf, _)| leaf.clone())
         .unwrap_or_else(|| genesis_leaf.clone());
 
+    // State votes commit to every member; the test network can exceed ten nodes.
+    let stake_table_capacity = membership
+        .stake_table_for_epoch(Some(EpochNumber::genesis()))
+        .expect("test genesis membership")
+        .stake_table()
+        .len()
+        .max(10);
     let mut consensus = Consensus::new(
         membership.clone(),
         public_key,
         private_key.clone(),
         state_private_key,
-        10,
+        stake_table_capacity,
         upgrade_lock.clone(),
         initial_leaf,
         epoch_height,
