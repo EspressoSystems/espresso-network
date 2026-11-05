@@ -204,7 +204,7 @@ async fn one_missed_payload_stalls_certification() {
         // the behind node has done neither, and still sits where it started.
         if node == behind {
             assert_eq!(harness.consensus.current_view(), ViewNumber::genesis());
-            assert_eq!(harness.consensus.locked_view(), None);
+            assert_eq!(harness.consensus.lock_view().map(|lock| lock.view), None);
         }
 
         // View 2, parented at view 1.
@@ -307,9 +307,12 @@ async fn one_missed_payload_stalls_certification() {
         // certificate, and none formed. Every view after 3 therefore replays
         // view 3 — a proposal parented at view 1, six votes, no certificate.
         if current.contains(&node) {
-            assert_eq!(harness.consensus.locked_view(), Some(ViewNumber::new(1)));
+            assert_eq!(
+                harness.consensus.lock_view().map(|lock| lock.view),
+                Some(ViewNumber::new(1))
+            );
         } else {
-            assert_eq!(harness.consensus.locked_view(), None);
+            assert_eq!(harness.consensus.lock_view().map(|lock| lock.view), None);
         }
     }
 
