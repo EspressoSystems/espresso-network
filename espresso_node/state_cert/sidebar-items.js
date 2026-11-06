@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"enum":["StateCertFetchError"],"fn":["validate_state_cert"]};
+window.SIDEBAR_ITEMS = {"enum":["StateCertFetchError"],"fn":["ensure_cert_can_exist","validate_state_cert"]};
