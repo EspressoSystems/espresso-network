@@ -3618,3 +3618,36 @@ def test_an_unscanned_height_decided_before_a_tx_was_sent_does_not_bound_it():
     latency = consensus_latency([unmatched(20.0)], heights, 100.0)
     assert samples(latency) == 1
     assert some(latency)["p50"] == pytest.approx(5000.0)
+
+
+def add_late_scan(out: Path, lost: bool) -> None:
+    """Height 3000, ready to scan at 140.5 once 3001 showed, scanned 12 s later; listed in
+    load-meta.json's missing_payloads if `lost`."""
+    heights = list(netbench.read_jsonl(out / "heights.jsonl"))
+    heights += [
+        {"height": 3000, "validator": 139.5, "query": 140.0, "scanned": 152.5},
+        {"height": 3001, "validator": 140.0, "query": 140.5, "scanned": None},
+    ]
+    netbench.write_jsonl(out / "heights.jsonl", iter(heights))
+    meta = netbench.read_json(out / "load-meta.json")
+    netbench.write_json(
+        out / "load-meta.json", meta | {"missing_payloads": [3000] if lost else []}
+    )
+
+
+def test_tracker_lag_leaves_out_a_payload_given_up_as_lost(tmp_path: Path):
+    """A lost payload is stamped scanned when given up, 12 s after it could be scanned:
+    that is no tracker lag, so the lag stays the fixture's 100 ms."""
+    write_run_dir(tmp_path)
+    add_late_scan(tmp_path, lost=True)
+    lag = some(analyze(tmp_path)["load"]["tracker_lag_ms"])
+    assert lag["max"] == pytest.approx(100.0)
+    assert lag["p99"] == pytest.approx(100.0)
+
+
+def test_tracker_lag_counts_a_late_scan_that_found_its_payload(tmp_path: Path):
+    """Guard: the same height scanned 12 s late but not lost counts in the tracker lag."""
+    write_run_dir(tmp_path)
+    add_late_scan(tmp_path, lost=False)
+    lag = some(analyze(tmp_path)["load"]["tracker_lag_ms"])
+    assert lag["max"] == pytest.approx(12000.0)

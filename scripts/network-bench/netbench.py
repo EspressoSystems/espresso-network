@@ -3249,7 +3249,9 @@ def load_stats(
         "max_in_flight": meta["max_in_flight"],
         "cap_waits": meta["cap_waits"],
         "missing_payloads": meta["missing_payloads"],
-        "tracker_lag_ms": quantiles(scan_lags(heights, t0, t1)),
+        "tracker_lag_ms": quantiles(
+            scan_lags(heights, t0, t1, set(meta["missing_payloads"]))
+        ),
         "drain_s": meta["drain_s"],
         "refine_skipped": meta["refine_skipped"],
         # Absent from load-meta.json of runs before it was recorded.
@@ -3285,12 +3287,17 @@ def client_stats(
     }
 
 
-def scan_lags(heights: list[dict[str, Any]], t0: float, t1: float) -> list[float]:
+def scan_lags(
+    heights: list[dict[str, Any]], t0: float, t1: float, lost: set[int]
+) -> list[float]:
     """Per height: ms from when its scan could start, once node0 showed the height
-    PAYLOAD_LAG_BLOCKS above it, to the scan's end."""
+    PAYLOAD_LAG_BLOCKS above it, to the scan's end. A `lost` payload is stamped scanned when
+    given up, MISSING_PAYLOAD_S on, which is no lag of the bench."""
     shown = {h["height"]: h["query"] for h in heights}
     lags = []
     for h in heights:
+        if h["height"] in lost:
+            continue
         ready = shown.get(h["height"] + PAYLOAD_LAG_BLOCKS)
         if ready is not None and h["scanned"] is not None and t0 <= ready <= t1:
             lags.append((h["scanned"] - ready) * 1000)
