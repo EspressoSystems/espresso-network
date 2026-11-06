@@ -54,7 +54,7 @@ use hotshot_types::{
     simple_certificate::LightClientStateUpdateCertificateV2,
     stake_table::HSStakeTable,
     traits::election::{Membership, MembershipSnapshot, NonEpochMembershipSnapshot},
-    utils::{epoch_from_block_number, root_block_in_epoch},
+    utils::epoch_from_block_number,
     vid::avidm::{AvidMScheme, init_avidm_param},
     vote::HasViewNumber,
 };
@@ -85,7 +85,7 @@ use crate::{
         data_source::{retain_v1_reward_accounts, retain_v2_reward_accounts},
         request::{Request, Response},
     },
-    state_cert::{StateCertFetchError, validate_state_cert},
+    state_cert::{StateCertFetchError, ensure_cert_can_exist, validate_state_cert},
 };
 #[cfg(any(test, feature = "testing"))]
 use crate::{SequencerApiVersion, SequencerContext};
@@ -582,20 +582,19 @@ impl StateCertFetchingDataSource<SeqTypes> for ApiState {
         timeout: Duration,
     ) -> Result<LightClientStateUpdateCertificateV2<SeqTypes>, StateCertFetchError> {
         let handle = self.consensus().await;
-        if handle.current_epoch().await.is_none() {
+        let coordinator = handle.membership_coordinator().await;
+        let epoch_height = *coordinator.epoch_height();
+        let decided = handle.decided_leaf().await;
+        if decided.epoch(epoch_height).is_none() {
             return Err(StateCertFetchError::EpochsNotStarted { epoch });
         }
-
-        let coordinator = handle.membership_coordinator().await;
-        let root = root_block_in_epoch(epoch, *coordinator.epoch_height());
-        let decided = handle.decided_leaf().await.height();
-        if decided < root {
-            return Err(StateCertFetchError::RootNotDecided {
-                epoch,
-                root,
-                decided,
-            });
-        }
+        ensure_cert_can_exist(
+            epoch,
+            coordinator.membership().first_epoch(),
+            epoch_height,
+            decided.height(),
+            handle.current_epoch().await,
+        )?;
 
         tracing::info!("fetching state certificate for epoch={epoch}");
         if let Err(err) = coordinator.stake_table_for_epoch(Some(EpochNumber::new(epoch))) {

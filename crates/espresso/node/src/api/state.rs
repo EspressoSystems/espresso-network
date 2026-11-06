@@ -6122,17 +6122,20 @@ mod tests {
     }
 
     #[test]
-    fn state_cert_that_cannot_exist_or_no_peer_serves_is_not_found() {
+    fn state_cert_that_cannot_exist_is_not_found() {
         use crate::state_cert::StateCertFetchError;
 
         for err in [
             StateCertFetchError::EpochsNotStarted { epoch: 1 },
+            StateCertFetchError::BeforeFirstEpoch {
+                epoch: 0,
+                first_epoch: 1,
+            },
             StateCertFetchError::RootNotDecided {
                 epoch: 3,
                 root: 2995,
                 decided: 100,
             },
-            StateCertFetchError::FetchError(anyhow::anyhow!("timeout")),
         ] {
             let err = lc_error(hotshot_query_service::Error::Availability { source: err.into() });
             assert!(
@@ -6146,10 +6149,16 @@ mod tests {
     }
 
     #[test]
-    fn invalid_state_cert_from_peer_stays_internal() {
-        let err = crate::state_cert::StateCertFetchError::ValidationError(anyhow::anyhow!("bad"));
-        let err = lc_error(hotshot_query_service::Error::Availability { source: err.into() });
-        assert!(err.downcast_ref::<AvailabilityError>().is_none());
+    fn state_cert_peers_failed_to_serve_stays_internal() {
+        use crate::state_cert::StateCertFetchError;
+
+        for err in [
+            StateCertFetchError::FetchError(anyhow::anyhow!("timeout")),
+            StateCertFetchError::ValidationError(anyhow::anyhow!("bad")),
+        ] {
+            let err = lc_error(hotshot_query_service::Error::Availability { source: err.into() });
+            assert!(err.downcast_ref::<AvailabilityError>().is_none(), "{err:#}");
+        }
     }
 
     #[tokio::test(flavor = "multi_thread")]
