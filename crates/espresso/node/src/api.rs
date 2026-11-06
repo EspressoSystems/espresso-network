@@ -85,7 +85,7 @@ use crate::{
         data_source::{retain_v1_reward_accounts, retain_v2_reward_accounts},
         request::{Request, Response},
     },
-    state_cert::{StateCertFetchError, validate_state_cert},
+    state_cert::{StateCertFetchError, ensure_cert_can_exist, validate_state_cert},
 };
 #[cfg(any(test, feature = "testing"))]
 use crate::{SequencerApiVersion, SequencerContext};
@@ -581,24 +581,19 @@ impl StateCertFetchingDataSource<SeqTypes> for ApiState {
         epoch: u64,
         timeout: Duration,
     ) -> Result<LightClientStateUpdateCertificateV2<SeqTypes>, StateCertFetchError> {
-        tracing::info!("fetching state certificate for epoch={epoch}");
         let handle = self.consensus().await;
-
-        let current_epoch = handle.current_epoch().await;
-
-        // The highest epoch we can have a state certificate for is current_epoch + 1
-        // Check if requested epoch is beyond the highest possible epoch
-        let highest_epoch = current_epoch.map(|e| e.u64() + 1);
-
-        if Some(epoch) > highest_epoch {
-            return Err(StateCertFetchError::Other(anyhow::anyhow!(
-                "requested state certificate for epoch {epoch} is beyond the highest possible \
-                 epoch {highest_epoch:?}"
-            )));
-        }
-
-        // Get the stake table for validation
         let coordinator = handle.membership_coordinator().await;
+        let epoch_height = *coordinator.epoch_height();
+        let decided = handle.decided_leaf().await;
+        ensure_cert_can_exist(
+            EpochNumber::new(epoch),
+            coordinator.membership().first_epoch(),
+            epoch_height,
+            decided.epoch(epoch_height).map(|_| decided.height()),
+            handle.current_epoch().await,
+        )?;
+
+        tracing::info!("fetching state certificate for epoch={epoch}");
         if let Err(err) = coordinator.stake_table_for_epoch(Some(EpochNumber::new(epoch))) {
             tracing::warn!(
                 "Failed to get membership for epoch {epoch}: {err:#}. Waiting for catchup"
@@ -640,20 +635,18 @@ impl StateCertFetchingDataSource<SeqTypes> for ApiState {
                     &cert,
                     &stake_table,
                     EpochNumber::new(epoch),
-                    *coordinator.epoch_height(),
+                    epoch_height,
                     &handle.upgrade_lock().await,
                 )
                 .map_err(|e| {
-                    StateCertFetchError::ValidationError(e.context(format!(
-                        "state certificate validation failed for epoch={epoch}"
-                    )))
+                    StateCertFetchError::ValidationError(e.context(format!("epoch={epoch}")))
                 })?;
 
                 tracing::info!("fetched and validated state certificate for epoch {epoch}");
                 Ok(cert)
             },
             Ok(Err(e)) => Err(StateCertFetchError::FetchError(
-                e.context(format!("failed to fetch state cert for epoch {epoch}")),
+                e.context(format!("epoch={epoch}")),
             )),
         }
     }
@@ -10935,18 +10928,23 @@ mod test {
             assert_eq!(status, StatusCode::BAD_REQUEST, "{missing_selector}");
         }
 
-        // No state certificate or cert2 exists for an epoch or height the network never reaches,
-        // and a block this network built has no bad encoding to prove. These only show both
-        // versions refusing alike. The conversions are covered by the reference-vector tests.
+        for route in [
+            "availability/state-cert/1000000",
+            "v2/availability/state-cert?epoch=1000000",
+            "availability/state-cert-v2/1000000",
+            "v2/availability/state-cert-v2?epoch=1000000",
+        ] {
+            assert_eq!(
+                error_status(client, route).await,
+                StatusCode::NOT_FOUND,
+                "{route}"
+            );
+        }
+
+        // No cert2 exists for a height the network never reaches, and a block this network built
+        // has no bad encoding to prove. These only show both versions refusing alike. The
+        // conversions are covered by the reference-vector tests.
         for (v1, v2) in [
-            (
-                "availability/state-cert/1000000".to_string(),
-                "v2/availability/state-cert?epoch=1000000".to_string(),
-            ),
-            (
-                "availability/state-cert-v2/1000000".to_string(),
-                "v2/availability/state-cert-v2?epoch=1000000".to_string(),
-            ),
             (
                 format!("availability/incorrect-encoding-proof/{last_block}/102"),
                 format!(
@@ -12146,6 +12144,28 @@ mod test {
         client.connect(Some(Duration::from_secs(10))).await;
 
         assert_state_certs(&client, 3..=TEST_EPOCHS, TEST_EPOCH_HEIGHT).await;
+
+        // The root gate runs only after a storage miss, so a stored cert is served whatever
+        // this node has decided.
+        const UNDECIDED_EPOCH: u64 = 1_000_000;
+        let persistence = network.server.persistence();
+        let cert = persistence
+            .get_state_cert_by_epoch(TEST_EPOCHS)
+            .await
+            .unwrap()
+            .expect("the query above stored this cert");
+        persistence
+            .insert_state_cert(UNDECIDED_EPOCH, cert.clone())
+            .await
+            .unwrap();
+        let served = client
+            .get::<StateCertQueryDataV2<SeqTypes>>(&format!(
+                "availability/state-cert-v2/{UNDECIDED_EPOCH}"
+            ))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(served.0, cert);
     }
 
     /// Light client provers and catching-up nodes still fetch the state certificates of
