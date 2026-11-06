@@ -7,7 +7,7 @@ use tokio::sync::watch;
 
 use crate::{
     kind::{DataKind, Height},
-    missing::{AlertRule, KindTally, ListedRows},
+    missing::{KindTally, ListedRows},
     node::WatchedNode,
     outcome::NotServed,
     schedule::{Frontier, NodeProgress},
@@ -151,12 +151,11 @@ impl WatchCounters {
     }
 }
 
-/// A kind's missing and confirmed counts and oldest age at a `now`.
+/// A kind's missing count and oldest age at a `now`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct KindSummary {
     pub kind: DataKind,
     pub missing_count: u64,
-    pub confirmed_missing: u64,
     pub oldest_age: Option<Duration>,
 }
 
@@ -167,18 +166,12 @@ pub struct NodeSummary {
     pub follow_lag_blocks: u64,
     /// `None` until the node answers `v1/block-state/block-height`.
     pub merklized_state_lag_blocks: Option<u64>,
+    /// `NodeView.not_found_units`; the node's share of the alert total.
+    pub not_found_units: u64,
     pub kinds: Vec<KindSummary>,
 }
 
-impl NodeSummary {
-    /// Sum of `confirmed_missing` over kinds (heights and epochs): the `confirmed_missing{node}`
-    /// gauge.
-    pub fn confirmed_missing(&self) -> u64 {
-        self.kinds.iter().map(|kind| kind.confirmed_missing).sum()
-    }
-}
-
-/// One line: `tip=.. lag=.. state_lag=.. leaf missing=0 confirmed=0 oldest_age=-, block ...`.
+/// One line: `tip=.. lag=.. state_lag=.. leaf missing=0 oldest_age=-, block ...`.
 impl fmt::Display for NodeSummary {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
@@ -193,11 +186,7 @@ impl fmt::Display for NodeSummary {
         for (i, kind) in self.kinds.iter().enumerate() {
             let label: &str = kind.kind.into();
             f.write_str(if i == 0 { " " } else { ", " })?;
-            write!(
-                f,
-                "{label} missing={} confirmed={} oldest_age=",
-                kind.missing_count, kind.confirmed_missing
-            )?;
+            write!(f, "{label} missing={} oldest_age=", kind.missing_count)?;
             match kind.oldest_age {
                 Some(age) => write!(f, "{}", humantime::format_duration(age))?,
                 None => f.write_str("-")?,
@@ -219,14 +208,14 @@ pub struct SweepEta {
 #[derive(Clone, Debug)]
 pub struct NodeView {
     pub published_at: DateTime<Utc>,
-    /// The loop's frontier at publish; `tallies` judged settled rows by its `settled_end`.
+    /// The loop's frontier at publish; `not_found_units` judged settled rows by its `settled_end`.
     pub frontier: Frontier,
     pub progress: NodeProgress,
     /// `None` until the node answers `v1/block-state/block-height`.
     pub merklized_state_height: Option<Height>,
-    /// The options' rule; `tallies` split confirmed units at `alert_rule.counted_until(published_at)`.
-    pub alert_rule: AlertRule,
-    /// `MissingSet::tallies(frontier.settled_end(), alert_rule.counted_until(published_at))`.
+    /// `MissingSet::not_found_units(tally_settled_end())` at publish.
+    pub not_found_units: u64,
+    /// `MissingSet::tallies()`.
     pub tallies: Vec<KindTally>,
     /// `MissingSet::listed(PAGE_ROWS)`.
     pub listed: ListedRows,
@@ -239,22 +228,21 @@ pub struct NodeView {
 }
 
 impl NodeView {
-    /// Lags against `tip`; ages and confirmed counts at `now`.
+    /// Lags against `tip`; ages at `now`.
     pub fn summary(&self, tip: Height, now: DateTime<Utc>) -> NodeSummary {
-        let counted_until = self.alert_rule.counted_until(now);
         NodeSummary {
             tip_height: tip,
             follow_lag_blocks: tip.blocks_since(self.progress.follow_next_height),
             merklized_state_lag_blocks: self
                 .merklized_state_height
                 .map(|height| tip.blocks_since(height)),
+            not_found_units: self.not_found_units,
             kinds: self
                 .tallies
                 .iter()
                 .map(|tally| KindSummary {
                     kind: tally.kind,
                     missing_count: tally.missing_count,
-                    confirmed_missing: tally.confirmed.count(counted_until),
                     oldest_age: tally
                         .oldest
                         .as_ref()

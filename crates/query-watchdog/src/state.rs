@@ -1,4 +1,4 @@
-//! The retry and alert state of missing units and the one rule that changes it.
+//! The retry state of missing units and the one rule that changes it.
 
 use std::{num::NonZeroU32, time::Duration};
 
@@ -7,8 +7,9 @@ use chrono::{DateTime, TimeDelta, Utc};
 
 use crate::outcome::{NotServed, Observation, RequestFailure};
 
-/// 404s since the first, inclusive, before a not-found unit is confirmed.
-pub const ALERT_MIN_NOT_FOUND: u32 = 3;
+/// 404s since the first, inclusive, before a not-found unit is confirmed: retried by the
+/// representative, capped at 60 s.
+pub const CONFIRM_MIN_NOT_FOUND: u32 = 3;
 
 /// Smallest retry delay in seconds.
 const DELAY_MIN_SECS: u64 = 5;
@@ -137,14 +138,14 @@ impl UnitState {
         }
     }
 
-    /// `NotFound` with at least `ALERT_MIN_NOT_FOUND` 404s; the only rule for counting, the
-    /// representative, the recovery queue and `RetryCap::Confirmed`.
+    /// `NotFound` with at least `CONFIRM_MIN_NOT_FOUND` 404s; the rule for the representative, the
+    /// recovery queue and `RetryCap::Confirmed`.
     pub fn is_confirmed(&self) -> bool {
         match self {
             Self::Failed { .. } => false,
             Self::NotFound {
                 not_found_probes, ..
-            } => not_found_probes.get() >= ALERT_MIN_NOT_FOUND,
+            } => not_found_probes.get() >= CONFIRM_MIN_NOT_FOUND,
         }
     }
 

@@ -10,7 +10,7 @@ use crate::{
     gaps::{Presence, find_gaps},
     kind::{Epochs, Height, HotshotEpochs, Probe, RangeKind, next_chunk, probes},
     metrics::WatchdogMetrics,
-    missing::{AlertRule, MissingUpdate},
+    missing::MissingUpdate,
     node::{FetchError, FetchTarget, WatchedNode},
     outcome::{NotServed, Observation, ProbeResult, RangeFindings, RequestFailure, RequestHealth},
     report::{GAUGE_INTERVAL, ReportedNode, TICKS_PER_SUMMARY},
@@ -55,15 +55,6 @@ pub struct WatchOptions {
         value_parser = clap::value_parser!(u64).range(1..)
     )]
     pub retention_blocks: Option<u64>,
-    /// Minimum age before a confirmed unit counts in `query_watchdog_confirmed_missing`; at most 1
-    /// year. 60s leaves room for retries at about 5 and 15 s first.
-    #[arg(
-        long,
-        env = "ESPRESSO_QUERY_WATCHDOG_ALERT_MISSING_AFTER",
-        value_parser = parse_year_bounded_duration,
-        default_value = "60s"
-    )]
-    pub alert_missing_after: Duration,
 }
 
 impl WatchOptions {
@@ -88,16 +79,9 @@ impl WatchOptions {
             SweepSchedule::Every(self.sweep_interval_delta())
         }
     }
-
-    /// `min_age` from `--alert-missing-after`.
-    pub fn alert_rule(&self) -> AlertRule {
-        AlertRule {
-            min_age: self.alert_missing_after,
-        }
-    }
 }
 
-/// The longest `--sweep-interval` and `--alert-missing-after`: one year (humantime's `year`).
+/// The longest `--sweep-interval`: one year (humantime's `year`).
 /// Bounded, so adding either to a time cannot overflow.
 const MAX_OPTION_DURATION: Duration = Duration::from_secs(31_557_600);
 
@@ -314,19 +298,23 @@ impl<C: Clock> Reporter<C> {
         }
     }
 
-    /// `ReportedNode::report` and `export_node` for every node at `clock.now()`; also
+    /// `ReportedNode::report` and `export_node` for every node at `clock.now()`, then
+    /// `set_not_found_units` with the sum of `not_found_units` over the reports; also
     /// `ReportedNode::log` when `tick_index` is a positive multiple of `TICKS_PER_SUMMARY`.
     fn tick(&mut self, tick_index: u64) -> anyhow::Result<()> {
         let now = self.watchdog.system.clock.now();
         let tips = self.tips.borrow().clone();
         let log = tick_index > 0 && tick_index.is_multiple_of(TICKS_PER_SUMMARY);
+        let mut not_found_units = 0;
         for node in &mut self.nodes {
             let report = node.report(&tips, now)?;
+            not_found_units += report.summary.not_found_units;
             self.watchdog.metrics.export_node(&report)?;
             if log {
                 node.log(&report);
             }
         }
+        self.watchdog.metrics.set_not_found_units(not_found_units)?;
         Ok(())
     }
 }
@@ -897,7 +885,6 @@ impl<C: Clock> NodeWatch<C> {
     /// The view of the current state at `clock.now()`.
     fn snapshot(&self) -> NodeView {
         let now = self.clock().now();
-        let rule = self.watchdog.options.alert_rule();
         let sweep_eta = self.sweep_eta().and_then(|remaining| {
             let finish = now.checked_add_signed(TimeDelta::from_std(remaining).ok()?)?;
             Some(SweepEta { remaining, finish })
@@ -908,8 +895,8 @@ impl<C: Clock> NodeWatch<C> {
             frontier: self.frontier,
             progress: self.progress,
             merklized_state_height: self.merklized_state_height,
-            alert_rule: rule,
-            tallies: set.tallies(self.tally_settled_end(), rule.counted_until(now)),
+            not_found_units: set.not_found_units(self.tally_settled_end()),
+            tallies: set.tallies(),
             listed: set.listed(PAGE_ROWS),
             counters: self.counters.clone(),
             next_sweep_start: self
@@ -920,9 +907,9 @@ impl<C: Clock> NodeWatch<C> {
         }
     }
 
-    /// The height below which confirmed rows count. Until the node's own height is known, the
+    /// The settled end of `not_found_units`. Until the node's own height is known, the
     /// stored follow height: what was settled before the restart still counts, so an unreachable
-    /// node keeps its `confirmed_missing`.
+    /// node keeps its count.
     fn tally_settled_end(&self) -> Height {
         match self.startup {
             Startup::WaitingForHeight {
@@ -1201,7 +1188,6 @@ mod tests {
             sweep_once: false,
             request_interval: Duration::ZERO,
             retention_blocks,
-            alert_missing_after: Duration::ZERO,
         }
     }
 
@@ -1298,6 +1284,16 @@ mod tests {
                 .map(|metric| metric.get_gauge().get_value() as i64)
         }
 
+        /// The unlabeled `query_watchdog_not_found_units` gauge.
+        fn total(&self) -> Option<i64> {
+            self.registry
+                .gather()
+                .iter()
+                .find(|family| family.get_name() == "query_watchdog_not_found_units")
+                .and_then(|family| family.get_metric().first())
+                .map(|metric| metric.get_gauge().get_value() as i64)
+        }
+
         /// `query_watchdog_local_misses_total` summed over all nodes and kinds.
         fn local_misses(&self) -> u64 {
             self.registry
@@ -1352,13 +1348,13 @@ mod tests {
         watch.snapshot().tallies[0].missing_count
     }
 
-    /// Confirmed missing units as the reporter would count them now.
-    fn confirmed<C: Clock>(watch: &NodeWatch<C>) -> u64 {
+    /// Not-found units as the reporter would count them now.
+    fn not_found_units<C: Clock>(watch: &NodeWatch<C>) -> u64 {
         let now = watch.clock().now();
         watch
             .snapshot()
             .summary(watch.frontier.tip(), now)
-            .confirmed_missing()
+            .not_found_units
     }
 
     fn is_running<C: Clock>(watch: &NodeWatch<C>) -> bool {
@@ -1419,7 +1415,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_gap_is_confirmed_then_cleared_as_the_node_fills_it() {
+    async fn a_gap_counts_at_once_then_clears_as_the_node_fills_it() {
         let (node, fake) = serve_fake(750..760).await;
         let capture = Capture::default();
         let _guard = capture.install();
@@ -1431,19 +1427,19 @@ mod tests {
         watch.check_probe(&leaf(700..800)).await.unwrap();
         assert_eq!(leaf_missing(&watch), 10);
         reporter.tick(1).unwrap();
-        assert_eq!(harness.gauge("confirmed_missing", &node, None), Some(0));
+        assert_eq!(harness.total(), Some(0));
         for _ in 0..2 {
             harness.clock.advance(Duration::from_secs(10));
             assert_eq!(watch.retry_step().await.unwrap(), 1);
         }
         reporter.tick(2).unwrap();
-        assert_eq!(harness.gauge("confirmed_missing", &node, None), Some(10));
+        assert_eq!(harness.total(), Some(10));
 
         // A node that answers 500 is unhealthy, not missing data: the 404 row stays confirmed.
         fake.failing.store(true, Ordering::SeqCst);
         harness.clock.advance(Duration::from_secs(61));
         watch.retry_step().await.unwrap();
-        assert_eq!(confirmed(&watch), 10);
+        assert_eq!(not_found_units(&watch), 10);
         assert_eq!(watch.counters.errors.failures().is_empty(), false);
         fake.failing.store(false, Ordering::SeqCst);
 
@@ -1453,7 +1449,7 @@ mod tests {
         watch.retry_step().await.unwrap();
         assert_eq!(leaf_missing(&watch), 0);
         reporter.tick(3).unwrap();
-        assert_eq!(harness.gauge("confirmed_missing", &node, None), Some(0));
+        assert_eq!(harness.total(), Some(0));
         assert!(capture.with_message("missing data").is_empty());
     }
 
@@ -1916,6 +1912,10 @@ mod tests {
             watch: WatchOptions,
         }
         let cli = <Cli as clap::Parser>::parse_from(["test"]);
+        assert!(
+            <Cli as clap::Parser>::try_parse_from(["test", "--alert-missing-after", "60s"])
+                .is_err()
+        );
         assert_eq!(
             cli.watch.sweep_interval,
             Duration::from_secs(7 * 24 * 3_600)
@@ -1966,9 +1966,9 @@ mod tests {
         for _ in 0..2 {
             watch.check_probe(&leaf(750..760)).await.unwrap();
         }
-        assert_eq!(confirmed(&watch), 10);
+        assert_eq!(not_found_units(&watch), 10);
         watch.frontier = Frontier::new(Height(755), window);
-        assert_eq!(confirmed(&watch), 0, "inside the tip margin");
+        assert_eq!(not_found_units(&watch), 0, "inside the tip margin");
 
         // A later tip moves follow and the window; rows below the window are forgotten.
         watch.frontier = Frontier::new(Height(1_500), window);
@@ -2132,7 +2132,7 @@ mod tests {
             watch.retry_step().await.unwrap();
         }
         reporter.tick(1).unwrap();
-        assert_eq!(harness.gauge("confirmed_missing", &node, None), Some(1));
+        assert_eq!(harness.total(), Some(1));
         let view = view.borrow();
         let view = view.as_ref().unwrap();
         let summary = view.summary(Height(300), watch.clock().now());
@@ -2141,7 +2141,8 @@ mod tests {
             .iter()
             .find(|kind| kind.kind == DataKind::StakeTable)
             .unwrap();
-        assert_eq!(stake.confirmed_missing, 1);
+        assert_eq!(stake.missing_count, 1);
+        assert_eq!(summary.not_found_units, 1);
         let route = view.listed.shown[0].key.first_probe().route();
         assert!(route.ends_with("v1/node/stake-table/5"), "{route}");
         let page = crate::http::render_page(&[(&node, Some(view))]);
@@ -2311,14 +2312,14 @@ mod tests {
         }
         watch.publish();
         reporter.tick(1).unwrap();
-        assert_eq!(harness.gauge("confirmed_missing", &node, None), Some(1));
+        assert_eq!(harness.total(), Some(1));
         assert_eq!(missing(), Some(1));
 
         fake.state_cert.lock().unwrap().availability = StatusCode::OK;
         watch.check_probe(&CERT_PROBE).await.unwrap();
         watch.publish();
         reporter.tick(2).unwrap();
-        assert_eq!(harness.gauge("confirmed_missing", &node, None), Some(0));
+        assert_eq!(harness.total(), Some(0));
         assert_eq!(missing(), Some(0));
         assert_eq!(harness.local_misses(), 1);
     }
@@ -2355,26 +2356,25 @@ mod tests {
         }
         harness.set_height(&node, 1_100);
         reporter.tick(1).unwrap();
-        assert!(harness.gauge("confirmed_missing", &node, None).unwrap() > 0);
+        assert!(harness.total().unwrap() > 0);
     }
 
-    /// The `summary` events of `capture` as (clock time, `confirmed_missing`).
-    fn summaries(capture: &Capture) -> Vec<(DateTime<Utc>, String)> {
+    /// The clock times of the `summary` events of `capture`.
+    fn summaries(capture: &Capture) -> Vec<DateTime<Utc>> {
         capture
             .with_message("summary")
             .into_iter()
-            .map(|event| (event.at.unwrap(), event.fields["confirmed_missing"].clone()))
+            .map(|event| {
+                assert!(!event.fields.contains_key("confirmed_missing"));
+                event.at.unwrap()
+            })
             .collect()
     }
 
     #[tokio::test]
     async fn the_reporter_writes_gauges_every_tick_and_logs_every_fourth() {
         let (node, _fake) = serve_fake([]).await;
-        let harness = Harness::with_options(WatchOptions {
-            alert_missing_after: Duration::from_secs(60),
-            ..options(None)
-        })
-        .await;
+        let harness = Harness::new(None).await;
         let start = harness.clock.now();
         let result = leaf_result(500..510, Observation::NotFound);
         let first = start - TimeDelta::seconds(50);
@@ -2393,7 +2393,6 @@ mod tests {
 
         reporter.tick(0).unwrap();
         for gauge in [
-            "confirmed_missing",
             "follow_lag_blocks",
             "follow_next_height",
             "sweep_running",
@@ -2404,7 +2403,7 @@ mod tests {
         }
         assert_eq!(harness.gauge("missing", &node, Some("leaf")), Some(10));
         assert_eq!(harness.gauge("sweep_eta_seconds", &node, None), None);
-        assert_eq!(harness.gauge("confirmed_missing", &node, None), Some(0));
+        assert_eq!(harness.total(), Some(10));
         assert!(capture.with_message("summary").is_empty());
 
         for tick in 1..=8 {
@@ -2412,16 +2411,44 @@ mod tests {
             reporter.tick(tick).unwrap();
             let logged = capture.with_message("summary").len();
             assert_eq!(logged, tick as usize / 4, "after tick {tick}");
-            if tick == 1 {
-                assert_eq!(harness.gauge("confirmed_missing", &node, None), Some(10));
-            }
         }
         let logged = summaries(&capture);
-        assert_eq!(
-            logged.iter().map(|(_, n)| n.as_str()).collect::<Vec<_>>(),
-            ["10", "10"]
+        assert_eq!(logged.len(), 2);
+        assert_eq!(logged[1] - logged[0], TimeDelta::seconds(60));
+    }
+
+    #[tokio::test]
+    async fn the_total_gauge_sums_every_node() {
+        let (node_a, _fake_a) = serve_fake([]).await;
+        let (mut node_b, _fake_b) = serve_fake([]).await;
+        node_b.label = "other".to_owned();
+        let harness = Harness::new(None).await;
+        let now = harness.clock.now();
+        for (node, range) in [(&node_a, 500..510), (&node_b, 500..515)] {
+            harness
+                .preload(
+                    node,
+                    (0..3)
+                        .map(|_| (leaf_result(range.clone(), Observation::NotFound), now))
+                        .collect(),
+                )
+                .await;
+        }
+        let (_watch_a, view_a) = harness.start(node_a.clone()).await;
+        let (_watch_b, view_b) = harness.start(node_b.clone()).await;
+        let slots = [(node_a, view_a), (node_b, view_b)]
+            .into_iter()
+            .map(|(node, view)| NodeViewSlot { node, view })
+            .collect();
+        let mut reporter = harness.watchdog.start_reporter(harness.tips.clone(), slots);
+        reporter.tick(0).unwrap();
+        assert_eq!(harness.total(), Some(25));
+        let families: Vec<_> = harness.registry.gather();
+        assert!(
+            families
+                .iter()
+                .all(|family| family.get_name() != "query_watchdog_confirmed_missing")
         );
-        assert_eq!(logged[1].0 - logged[0].0, TimeDelta::seconds(60));
     }
 
     #[tokio::test]
@@ -2461,7 +2488,7 @@ mod tests {
             Some(Duration::ZERO),
             "first missing after now"
         );
-        assert_eq!(leaf.confirmed_missing, 0);
+        assert_eq!(report.summary.not_found_units, 10);
         assert_eq!(leaf.missing_count, 10);
 
         // The reporter takes the live tip from its channel.
@@ -2493,14 +2520,7 @@ mod tests {
             json: Duration::from_secs(30),
             peer_fetch_head: Duration::from_secs(30),
         };
-        let harness = Harness::with_timeouts(
-            WatchOptions {
-                alert_missing_after: Duration::from_secs(120),
-                ..options(None)
-            },
-            timeouts,
-        )
-        .await;
+        let harness = Harness::with_timeouts(options(None), timeouts).await;
         let first = harness.clock.now() - TimeDelta::seconds(30);
         harness
             .preload(
@@ -2533,10 +2553,9 @@ mod tests {
         reporter_task.abort();
 
         let logged = summaries(&capture);
-        let counts: Vec<_> = logged.iter().take(3).map(|(_, n)| n.as_str()).collect();
-        assert_eq!(counts, ["0", "10", "10"]);
-        assert_eq!(logged[1].0 - logged[0].0, TimeDelta::seconds(60));
-        assert_eq!(logged[2].0 - logged[1].0, TimeDelta::seconds(60));
+        assert!(logged.len() >= 3);
+        assert_eq!(logged[1] - logged[0], TimeDelta::seconds(60));
+        assert_eq!(logged[2] - logged[1], TimeDelta::seconds(60));
         assert_eq!(
             fake.requests.lock().unwrap().len(),
             1,
@@ -2566,6 +2585,7 @@ mod tests {
                 tip_height: Height(1),
                 follow_lag_blocks: 0,
                 merklized_state_lag_blocks: None,
+                not_found_units: 0,
                 kinds: Vec::new(),
             },
             counters,
@@ -2726,7 +2746,7 @@ mod tests {
             watch.retry_step().await.unwrap();
         }
         reporter.tick(1).unwrap();
-        assert_eq!(harness.gauge("confirmed_missing", &node, None), Some(15));
+        assert_eq!(harness.total(), Some(15));
     }
 
     fn server_error() -> crate::outcome::RequestFailure {
@@ -2879,7 +2899,7 @@ mod tests {
             }
         }
         reporter.tick(1).unwrap();
-        assert_eq!(harness.gauge("confirmed_missing", &node, None), Some(0));
+        assert_eq!(harness.total(), Some(0));
         assert_eq!(harness.gauge("node_lag_blocks", &node, None), Some(500));
     }
 
@@ -2967,7 +2987,7 @@ mod tests {
             .collect();
         assert_eq!(kept, vec![400..410]);
         assert_eq!(
-            confirmed(&watch),
+            not_found_units(&watch),
             10,
             "only the row below the node's height counts"
         );
@@ -3020,7 +3040,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn an_unreachable_node_keeps_its_confirmed_missing_after_a_restart() {
+    async fn an_unreachable_node_keeps_its_not_found_units_after_a_restart() {
         let (node, _fake) = serve_fake([]).await;
         let harness = Harness::new(None).await;
         let long_ago = harness.clock.now() - TimeDelta::seconds(600);
@@ -3046,7 +3066,7 @@ mod tests {
         let mut reporter = harness.reporter(&node, &view);
 
         reporter.tick(1).unwrap();
-        assert_eq!(harness.gauge("confirmed_missing", &node, None), Some(10));
+        assert_eq!(harness.total(), Some(10));
     }
 
     #[tokio::test]
@@ -3088,14 +3108,14 @@ mod tests {
         harness.preload(&node, rows.collect()).await;
         let (mut watch, _view) = harness.start(node.clone()).await;
         let window = harness.watchdog.options.sweep_window();
-        assert_eq!(confirmed(&watch), 10);
+        assert_eq!(not_found_units(&watch), 10);
 
         harness.set_height(&node, 505);
         watch.frontier = Frontier::new(Height(505), window);
-        assert_eq!(confirmed(&watch), 0);
+        assert_eq!(not_found_units(&watch), 0);
         assert_eq!(watch.missing.set().rows().count(), 1);
 
         watch.frontier = Frontier::new(Height(1_000), window);
-        assert_eq!(confirmed(&watch), 10);
+        assert_eq!(not_found_units(&watch), 10);
     }
 }

@@ -1,9 +1,9 @@
 //! The missing data of one node: rows, updates and the queries the loops and the page read.
 
-use std::{collections::BTreeMap, ops::Range, time::Duration};
+use std::{collections::BTreeMap, ops::Range};
 
 use anyhow::ensure;
-use chrono::{DateTime, TimeDelta, Utc};
+use chrono::{DateTime, Utc};
 use rangemap::RangeMap;
 use strum::VariantArray;
 
@@ -564,31 +564,22 @@ impl MissingSet {
         }
     }
 
-    /// One per `DataKind`: units missing, the oldest row by (`first_missing_at`, first unit), and
-    /// the confirmed units whose `alert_height` is at or below `settled_end`, split at
-    /// `counted_until`.
-    pub fn tallies(&self, settled_end: Height, counted_until: DateTime<Utc>) -> Vec<KindTally> {
+    /// One per `DataKind`: units missing and the oldest row by (`first_missing_at`, first unit).
+    pub fn tallies(&self) -> Vec<KindTally> {
         let mut tallies: Vec<KindTally> = DataKind::VARIANTS
             .iter()
             .map(|&kind| KindTally {
                 kind,
                 missing_count: 0,
                 oldest: None,
-                confirmed: ConfirmedUnits::default(),
             })
             .collect();
         for row in self.rows() {
-            let settled = self
-                .alert_height(&row.key)
-                .is_some_and(|height| height <= settled_end);
             let tally = tallies
                 .iter_mut()
                 .find(|tally| tally.kind == row.key.kind())
                 .expect("a tally exists per kind");
             tally.missing_count += row.key.unit_count();
-            if settled && row.state.is_confirmed() {
-                tally.confirmed.add(&row, counted_until);
-            }
             let older = tally
                 .oldest
                 .as_ref()
@@ -598,6 +589,19 @@ impl MissingSet {
             }
         }
         tallies
+    }
+
+    /// Units of `NotFound` rows, any 404 count and age, whose `alert_height` is at or below
+    /// `settled_end`; `Failed` rows never count.
+    pub fn not_found_units(&self, settled_end: Height) -> u64 {
+        self.rows()
+            .filter(|row| matches!(row.state, UnitState::NotFound { .. }))
+            .filter(|row| {
+                self.alert_height(&row.key)
+                    .is_some_and(|height| height <= settled_end)
+            })
+            .map(|row| row.key.unit_count())
+            .sum()
     }
 
     /// Up to `limit` rows by (`first_missing_at`, first unit, kind), and the total.
@@ -610,62 +614,12 @@ impl MissingSet {
     }
 }
 
-/// The age from which a confirmed unit counts.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct AlertRule {
-    pub min_age: Duration,
-}
-
-impl AlertRule {
-    /// `now - min_age`: units first missing at or before it count.
-    pub fn counted_until(&self, now: DateTime<Utc>) -> DateTime<Utc> {
-        now - TimeDelta::from_std(self.min_age).expect("min_age fits a chrono delta")
-    }
-}
-
-/// Units missing of one kind, its oldest row and its confirmed settled units; valid from the
-/// publish on.
+/// Units missing of one kind and its oldest row.
 #[derive(Clone, Debug, PartialEq)]
 pub struct KindTally {
     pub kind: DataKind,
     pub missing_count: u64,
     pub oldest: Option<MissingRow>,
-    pub confirmed: ConfirmedUnits,
-}
-
-/// Confirmed settled units of one kind, split at the publish's `counted_until`.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct ConfirmedUnits {
-    /// Units first missing at or before the publish's `counted_until`.
-    pub aged: u64,
-    /// Younger units per `first_missing_at`; at most one entry per second of `min_age` (60 at the
-    /// default).
-    pub young: BTreeMap<DateTime<Utc>, u64>,
-}
-
-impl ConfirmedUnits {
-    /// Adds the units of the confirmed `row`, split at `counted_until`.
-    fn add(&mut self, row: &MissingRow, counted_until: DateTime<Utc>) {
-        let units = row.key.unit_count();
-        let first = row.state.first_missing_at();
-        if first <= counted_until {
-            self.aged += units;
-        } else {
-            *self.young.entry(first).or_default() += units;
-        }
-    }
-
-    /// `aged` plus the `young` units first missing at or before `counted_until`; the confirmed
-    /// missing count of a kind. A `counted_until` below the publish's (clock stepped back) still
-    /// counts every `aged` unit.
-    pub fn count(&self, counted_until: DateTime<Utc>) -> u64 {
-        self.aged
-            + self
-                .young
-                .range(..=counted_until)
-                .map(|(_, n)| n)
-                .sum::<u64>()
-    }
 }
 
 /// The oldest rows of a node and the count of all of them.
@@ -679,6 +633,7 @@ pub struct ListedRows {
 mod tests {
     use std::{num::NonZeroU64, str::FromStr};
 
+    use chrono::TimeDelta;
     use pretty_assertions::assert_eq;
     use proptest::{collection::vec, option, prelude::*};
     use reqwest::StatusCode;
@@ -694,7 +649,6 @@ mod tests {
     };
 
     const T0: i64 = 1_000;
-    const MIN_AGE: Duration = Duration::from_secs(60);
 
     fn epochs(height: u64, start: u64) -> Epochs {
         Epochs::On(EpochConfig {
@@ -768,7 +722,7 @@ mod tests {
     }
 
     fn tally(set: &MissingSet, kind: DataKind) -> KindTally {
-        set.tallies(Height(10_000), at(T0 + 10_000))
+        set.tallies()
             .into_iter()
             .find(|tally| tally.kind == kind)
             .unwrap()
@@ -782,33 +736,20 @@ mod tests {
         set.rows().map(|row| row.key).collect()
     }
 
-    /// Confirmed settled units of every kind that count at `counted_until`.
-    fn confirmed_count(
-        set: &MissingSet,
-        settled_end: u64,
-        counted_until: i64,
-    ) -> Vec<(DataKind, u64)> {
-        let rule = AlertRule { min_age: MIN_AGE };
-        let counted_until = rule.counted_until(at(counted_until));
-        set.tallies(Height(settled_end), counted_until)
-            .into_iter()
-            .map(|tally| (tally.kind, tally.confirmed.count(counted_until)))
-            .filter(|(_, count)| *count > 0)
-            .collect()
+    /// `set.not_found_units(settled_end)`.
+    fn not_found_units(set: &MissingSet, settled_end: u64) -> u64 {
+        set.not_found_units(Height(settled_end))
     }
 
     #[test]
     fn missing_backoff_and_tallies() {
         let mut set = MissingSet::new(epochs(30, 61));
         assert!(
-            set.tallies(Height(1_000), at(T0))
+            set.tallies()
                 .iter()
                 .all(|t| t.missing_count == 0 && t.oldest.is_none())
         );
-        assert_eq!(
-            set.tallies(Height(1_000), at(T0)).len(),
-            DataKind::VARIANTS.len()
-        );
+        assert_eq!(set.tallies().len(), DataKind::VARIANTS.len());
 
         observe(&mut set, leaf_gap(0..100), T0);
         observe(
@@ -860,16 +801,6 @@ mod tests {
             ]
         );
         assert_eq!(page.total, 4);
-    }
-
-    #[test]
-    fn rows_first_missing_after_now_count_as_missing_and_never_as_confirmed() {
-        let mut set = MissingSet::new(Epochs::Off);
-        repeat(&mut set, &leaf_gap(0..10), 3, T0 + 500);
-        assert_eq!(count(&set, DataKind::Leaf), 10);
-        // Counted at a `counted_until` before the row went missing: not confirmed missing.
-        assert_eq!(confirmed_count(&set, 1_000, T0 + 100), []);
-        assert_eq!(set.listed(10).total, 1);
     }
 
     #[test]
@@ -951,13 +882,10 @@ mod tests {
         assert_eq!(rows[0].key, range_key(RangeKind::Leaf, 10..20));
         assert_eq!(rows[0].state.probe_count().get(), 1);
         assert_eq!(rows[0].state.first_missing_at(), at(T0 + 100));
-        assert_eq!(confirmed_count(&set, 1_000, T0 + 200), []);
+        assert_eq!(not_found_units(&set, 1_000), 10);
 
         repeat(&mut set, &leaf_gap(10..20), 2, T0 + 101);
-        assert_eq!(
-            confirmed_count(&set, 1_000, T0 + 200),
-            [(DataKind::Leaf, 10)]
-        );
+        assert_eq!(not_found_units(&set, 1_000), 10);
     }
 
     #[test]
@@ -970,8 +898,8 @@ mod tests {
             T0,
         );
         assert_eq!(
-            confirmed_count(&set, 0, T0 + 200),
-            [(DataKind::StakeTable, 1)],
+            not_found_units(&set, 0),
+            1,
             "epoch 1 of a stake table rests on block 0"
         );
         let diff = set.apply(MissingUpdate::ForgetBelow(Height(1)), at(T0 + 60));
@@ -1241,10 +1169,8 @@ mod tests {
                 (range_key(leaf, 50..100), 2, false),
             ]
         );
-        assert_eq!(
-            confirmed_count(&set, 1_000, T0 + 200),
-            [(DataKind::Leaf, 10)]
-        );
+        // The unconfirmed 50..100 row is still NotFound and counts; Failed rows never do.
+        assert_eq!(not_found_units(&set, 1_000), 60);
     }
 
     #[test]
@@ -1363,7 +1289,7 @@ mod tests {
     }
 
     #[test]
-    fn confirmed_units_apply_every_condition() {
+    fn not_found_units_apply_every_condition() {
         let mut set = MissingSet::new(epochs(100, 1));
         let nf = Observation::NotFound;
         repeat(&mut set, &leaf_gap(100..200), 3, T0);
@@ -1400,41 +1326,14 @@ mod tests {
             );
         }
 
-        // At T0 + 60 a unit counts when first missing at or before T0. Not counting: block (500),
-        // vid_common (2 probes), lc_leaf_proof (too young), the leaf rows past the settled end 500
-        // are none; stake table epoch 7 rests on block 500 and counts, epoch 8 on block 600 does
-        // not.
-        assert_eq!(
-            confirmed_count(&set, 500, T0 + 60),
-            [
-                (DataKind::Leaf, 100),
-                (DataKind::StakeTable, 1),
-                (DataKind::StateCert, 1)
-            ]
-        );
-        // Leaf 50..100 first missing at T0 + 10 counts from T0 + 70.
-        assert_eq!(
-            confirmed_count(&set, 500, T0 + 70)[0],
-            (DataKind::Leaf, 150)
-        );
+        // Counting: leaf 100..200 and 50..100 (150), vid_common with 2 404s, lc_leaf_proof,
+        // state cert 3, stake table epoch 7 (root block 500). Not counting: block (Failed) and
+        // stake table epoch 8 (root block 600 above the settled end).
+        assert_eq!(not_found_units(&set, 500), 150 + 100 + 1 + 1 + 1);
         // Without epochs epoch rows never count.
         let rows = set.rows().collect::<Vec<_>>();
         let off = MissingSet::from_rows(Epochs::Off, rows).unwrap();
-        assert!(
-            confirmed_count(&off, 500, T0 + 70)
-                .iter()
-                .all(|(k, _)| *k == DataKind::Leaf)
-        );
-        // The young units sit in `young` until counted.
-        let units = set
-            .tallies(Height(500), at(T0 + 60 - 60))
-            .into_iter()
-            .find(|t| t.kind == DataKind::Leaf)
-            .unwrap()
-            .confirmed;
-        assert_eq!(units.aged, 100);
-        assert_eq!(units.young.len(), 1);
-        assert_eq!(units.count(at(T0 + 10)), 150);
+        assert_eq!(not_found_units(&off, 500), 150 + 100 + 1);
     }
 
     #[test]
@@ -1446,7 +1345,7 @@ mod tests {
             3,
             T0,
         );
-        assert_eq!(confirmed_count(&set, 10_000, T0 + 1_000), []);
+        assert_eq!(not_found_units(&set, 10_000), 0);
         let diff = set.apply(MissingUpdate::ForgetBelow(Height(10_000)), at(T0));
         assert_eq!(diff.rows_removed, 0);
         assert_eq!(count(&set, DataKind::StateCert), 1);
@@ -1967,42 +1866,34 @@ mod tests {
         Ok(())
     }
 
-    fn check_tallies(
-        set: &MissingSet,
-        model: &Model,
-        now: DateTime<Utc>,
-    ) -> Result<(), TestCaseError> {
+    fn check_tallies(set: &MissingSet, model: &Model) -> Result<(), TestCaseError> {
         let runs = model.runs();
+        let tallies = set.tallies();
+        prop_assert_eq!(tallies.len(), DataKind::VARIANTS.len());
+        for tally in tallies {
+            let of_kind = || runs.iter().filter(|run| run.kind == tally.kind);
+            let missing: u64 = of_kind().map(|run| run.units.end - run.units.start).sum();
+            prop_assert_eq!(tally.missing_count, missing);
+            let oldest =
+                of_kind().min_by_key(|run| (run.state.first_missing_at(), run.units.start));
+            prop_assert_eq!(
+                tally
+                    .oldest
+                    .as_ref()
+                    .map(|row| (row.state, row.key.first_unit())),
+                oldest.map(|run| (run.state, run.units.start))
+            );
+        }
         for settled_end in SETTLED_ENDS {
-            for counted in [now - seconds(100), now, now + seconds(300)] {
-                let tallies = set.tallies(Height(settled_end), counted);
-                prop_assert_eq!(tallies.len(), DataKind::VARIANTS.len());
-                for tally in tallies {
-                    let of_kind = || runs.iter().filter(|run| run.kind == tally.kind);
-                    let missing: u64 = of_kind().map(|run| run.units.end - run.units.start).sum();
-                    prop_assert_eq!(tally.missing_count, missing);
-                    let oldest =
-                        of_kind().min_by_key(|run| (run.state.first_missing_at(), run.units.start));
-                    prop_assert_eq!(
-                        tally
-                            .oldest
-                            .as_ref()
-                            .map(|row| (row.state, row.key.first_unit())),
-                        oldest.map(|run| (run.state, run.units.start))
-                    );
-                    for later in [counted, counted + seconds(50), counted + seconds(900)] {
-                        let expected: u64 = of_kind()
-                            .filter(|run| {
-                                run.state.is_confirmed()
-                                    && run.state.first_missing_at() <= later
-                                    && Model::alert_height(run).is_some_and(|h| h <= settled_end)
-                            })
-                            .map(|run| run.units.end - run.units.start)
-                            .sum();
-                        prop_assert_eq!(tally.confirmed.count(later), expected);
-                    }
-                }
-            }
+            let expected: u64 = runs
+                .iter()
+                .filter(|run| {
+                    matches!(run.state, UnitState::NotFound { .. })
+                        && Model::alert_height(run).is_some_and(|h| h <= settled_end)
+                })
+                .map(|run| run.units.end - run.units.start)
+                .sum();
+            prop_assert_eq!(set.not_found_units(Height(settled_end)), expected);
         }
         Ok(())
     }
@@ -2239,7 +2130,7 @@ mod tests {
             apply_diff(&set, &diff, &mut image)?;
             check_units(&set, &model)?;
             check_row_order(&set)?;
-            check_tallies(&set, &model, now)?;
+            check_tallies(&set, &model)?;
             check_retry_queue(&set, &model, now)?;
             check_known_and_listed(&set, &model)?;
             if let Some(probe) = probe {

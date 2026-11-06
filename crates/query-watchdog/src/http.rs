@@ -78,13 +78,24 @@ async fn missing_page(State(app): State<AppState>) -> Html<String> {
     Html(render_page(&nodes))
 }
 
-/// Page with the endpoint links, then one section per node.
+/// Page with the endpoint links, the status line, then one section per node.
 pub(crate) fn render_page(nodes: &[(&WatchedNode, Option<&NodeView>)]) -> String {
     let mut page = String::from(
         "<!DOCTYPE html><html><head><title>query-watchdog</title></head><body><h1>query-watchdog</\
          h1><ul><li><a href=\"/status/metrics\">/status/metrics</a></li><li><a \
          href=\"/healthcheck\">/healthcheck</a></li></ul>",
     );
+    let total: u64 = nodes
+        .iter()
+        .filter_map(|(_, view)| *view)
+        .map(|view| view.not_found_units)
+        .sum();
+    let color = if total > 0 { "red" } else { "green" };
+    write!(
+        page,
+        "<p style=\"background:{color}\">{color}: {total} not-found units</p>"
+    )
+    .expect("writing to a String");
     for (node, view) in nodes {
         write_node(&mut page, node, *view).expect("writing to a String");
     }
@@ -249,7 +260,7 @@ mod tests {
     use super::*;
     use crate::{
         kind::{DataKind, Height, RangeKind},
-        missing::{AlertRule, KindTally, ListedRows, MissingRow, RowKey},
+        missing::{KindTally, ListedRows, MissingRow, RowKey},
         schedule::{Frontier, NodeProgress, RunningSweep, SweepWindow},
         state::{Retry, RetryDelay, UnitState},
         view::WatchCounters,
@@ -284,9 +295,7 @@ mod tests {
                 sweep,
             },
             merklized_state_height: None,
-            alert_rule: AlertRule {
-                min_age: Duration::from_secs(60),
-            },
+            not_found_units: 0,
             tallies,
             listed,
             counters: WatchCounters::default(),
@@ -300,6 +309,22 @@ mod tests {
             shown: Vec::new(),
             total: 0,
         }
+    }
+
+    #[test]
+    fn the_status_line_is_red_with_the_total_and_green_at_zero() {
+        let (a, b, c) = (node("a"), node("b"), node("c"));
+        let mut red = view(SweepState::NeverSwept, no_rows(), Vec::new());
+        red.not_found_units = 15;
+        let green = view(SweepState::NeverSwept, no_rows(), Vec::new());
+
+        let html = render_page(&[(&a, Some(&red)), (&b, Some(&green)), (&c, None)]);
+        assert!(html.contains("red: 15 not-found units"), "{html}");
+        assert!(html.contains("background:red"), "{html}");
+
+        let html = render_page(&[(&b, Some(&green)), (&c, None)]);
+        assert!(html.contains("green: 0 not-found units"), "{html}");
+        assert!(html.contains("background:green"), "{html}");
     }
 
     #[test]
@@ -333,7 +358,6 @@ mod tests {
             kind: DataKind::Leaf,
             missing_count: 300,
             oldest: Some(row),
-            confirmed: Default::default(),
         };
         let view = view(
             SweepState::Running {
