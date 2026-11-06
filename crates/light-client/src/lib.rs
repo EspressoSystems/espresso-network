@@ -1,6 +1,6 @@
 pub mod client;
 pub mod consensus;
-pub mod metrics;
+mod metrics;
 #[cfg(feature = "client")]
 pub mod provider;
 pub mod state;

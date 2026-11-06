@@ -28,7 +28,7 @@ where
         match self.fetch_leaf(LeafId::Number(req.height as usize)).await {
             Ok(leaf) => Some(leaf),
             Err(err) => {
-                self.metrics.fetch_failures.add(1);
+                self.metrics.fetch_failed();
                 tracing::warn!(?req, "failed to fetch leaf: {err:#}");
                 None
             },
@@ -46,7 +46,7 @@ where
         match self.fetch_payload(BlockId::PayloadHash(req.0)).await {
             Ok(payload) => Some(payload.data),
             Err(err) => {
-                self.metrics.fetch_failures.add(1);
+                self.metrics.fetch_failed();
                 tracing::warn!(?req, "failed to fetch payload: {err:#}");
                 None
             },
@@ -64,7 +64,7 @@ where
         match self.fetch_vid_common(BlockId::PayloadHash(req.0)).await {
             Ok(vid) => Some(vid.common),
             Err(err) => {
-                self.metrics.fetch_failures.add(1);
+                self.metrics.fetch_failed();
                 tracing::warn!(?req, "failed to fetch VID common: {err:#}");
                 None
             },
@@ -85,7 +85,7 @@ where
         {
             Ok(leaves) => leaves,
             Err(err) => {
-                self.metrics.fetch_failures.add(1);
+                self.metrics.fetch_failed();
                 tracing::warn!(?req, "failed to fetch leaf: {err:#}");
                 return None;
             },
@@ -93,7 +93,7 @@ where
         match leaves.try_into() {
             Ok(leaves) => Some(leaves),
             Err(err) => {
-                self.metrics.fetch_failures.add(1);
+                self.metrics.fetch_failed();
                 tracing::warn!(?req, "received invalid leaf range: {err:#}");
                 None
             },
@@ -117,7 +117,7 @@ where
         {
             Ok(blocks) => blocks,
             Err(err) => {
-                self.metrics.fetch_failures.add(1);
+                self.metrics.fetch_failed();
                 tracing::warn!(?req, "failed to fetch block range: {err:#}");
                 return None;
             },
@@ -125,7 +125,7 @@ where
         match blocks.try_into() {
             Ok(blocks) => Some(blocks),
             Err(err) => {
-                self.metrics.fetch_failures.add(1);
+                self.metrics.fetch_failed();
                 tracing::warn!(?req, "received invalid block range: {err:#}");
                 None
             },
@@ -149,7 +149,7 @@ where
         {
             Ok(vid_common) => vid_common,
             Err(err) => {
-                self.metrics.fetch_failures.add(1);
+                self.metrics.fetch_failed();
                 tracing::warn!(?req, "failed to fetch VID common range: {err:#}");
                 return None;
             },
@@ -157,7 +157,7 @@ where
         match vid_common.try_into() {
             Ok(vid_common) => Some(vid_common),
             Err(err) => {
-                self.metrics.fetch_failures.add(1);
+                self.metrics.fetch_failed();
                 tracing::warn!(?req, "received invalid VID common range: {err:#}");
                 None
             },
@@ -175,7 +175,7 @@ where
         match self.fetch_certificate2(req.height).await {
             Ok(cert2) => Some(cert2),
             Err(err) => {
-                self.metrics.fetch_failures.add(1);
+                self.metrics.fetch_failed();
                 tracing::info!(?req, %err, "failed to fetch cert2, will retry");
                 None
             },
@@ -199,7 +199,7 @@ where
         match self.fetch_leaves_for_ranges(&req.0).await {
             Ok(leaves) => Some(leaves),
             Err(err) => {
-                self.metrics.fetch_failures.add(1);
+                self.metrics.fetch_failed();
                 tracing::warn!(?req, "failed to fetch leaf ranges: {err:#}");
                 None
             },
@@ -228,7 +228,7 @@ where
                 Some(BlockRangesResponse { blocks, vid_common })
             },
             Err(err) => {
-                self.metrics.fetch_failures.add(1);
+                self.metrics.fetch_failed();
                 tracing::warn!(?req, "failed to fetch block ranges: {err:#}");
                 None
             },
@@ -256,7 +256,7 @@ where
         match fetched {
             Ok(fetched) => Some(fetched.into_iter().map(|(_, common)| common).collect()),
             Err(err) => {
-                self.metrics.fetch_failures.add(1);
+                self.metrics.fetch_failed();
                 tracing::warn!(?req, "failed to fetch VID common ranges: {err:#}");
                 None
             },

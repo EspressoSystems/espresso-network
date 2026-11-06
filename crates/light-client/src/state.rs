@@ -204,7 +204,7 @@ where
     /// of this method may be an underestimate.
     pub async fn block_height(&self) -> Result<u64> {
         let height = self.verified_block_height().await?;
-        self.metrics.follower_block_height.set(height as usize);
+        self.metrics.set_follower_block_height(height);
         Ok(height)
     }
 
@@ -1016,12 +1016,10 @@ where
                 )
             };
         tracing::info!(from = %lower_bound, to = %epoch, "performing stake table catchup");
-        let mut backlog = self.metrics.start_catchup(*epoch - *lower_bound);
+        let mut catchup = self.metrics.start_catchup(*epoch - *lower_bound);
 
         // Replay one epoch at a time from the lower bound stake table to the requested epoch.
         for epoch in *lower_bound + 1..=*epoch {
-            #[cfg(feature = "client")]
-            let started = std::time::Instant::now();
             let events = self
                 .server
                 .stake_table_events(EpochNumber::new(epoch))
@@ -1098,12 +1096,7 @@ where
             }
 
             tracing::info!(epoch, num_events, "finished stake table catchup for epoch");
-            // std's clock panics on zkVM targets, which build this file without `client`.
-            #[cfg(feature = "client")]
-            self.metrics
-                .stake_table_catchup_duration
-                .add_point(started.elapsed().as_secs_f64());
-            backlog.epoch_done();
+            catchup.epoch_done();
             self.metrics.stake_table_verified(EpochNumber::new(epoch));
             prev_quorum = next_quorum;
             epoch_root_protocol_version = root.version();
@@ -1200,7 +1193,7 @@ where
 
     fn verification_failure(&self, err: anyhow::Error) -> anyhow::Error {
         if err.downcast_ref::<StakeTableUnavailable>().is_none() {
-            self.metrics.verification_failures.add(1);
+            self.metrics.verification_failed();
         }
         err
     }
@@ -1292,14 +1285,8 @@ mod test {
         let client = TestClient::default();
         let db = SqlStorage::default().await.unwrap();
 
-        let metrics = PrometheusMetrics::default();
-        let lc = LightClient::from_genesis(db.clone(), client.clone(), client.genesis().await)
-            .with_metrics(LightClientMetrics::new(&metrics));
-        let gauge = metrics
-            .get_subgroup(["light_client"])
-            .unwrap()
-            .get_gauge("follower_block_height")
-            .unwrap();
+        let (lc, metrics) = metered(db.clone(), &client, client.genesis().await);
+        let gauge = metrics.get_gauge("follower_block_height").unwrap();
 
         // Test empty block height.
         assert_eq!(lc.block_height().await.unwrap(), 0);
@@ -1957,46 +1944,55 @@ mod test {
         );
     }
 
+    /// A light client reporting to a fresh registry, with that registry's `light_client` group.
+    fn metered(
+        db: SqlStorage,
+        client: &TestClient,
+        genesis: Genesis,
+    ) -> (LightClient<SqlStorage, TestClient>, PrometheusMetrics) {
+        let metrics = PrometheusMetrics::default();
+        let lc = LightClient::from_genesis(db, client.clone(), genesis)
+            .with_metrics(LightClientMetrics::new(&metrics));
+        (lc, metrics.get_subgroup(["light_client"]).unwrap())
+    }
+
     #[tokio::test]
     #[test_log::test]
     async fn test_stake_table_catchup_metrics() {
-        let metrics = PrometheusMetrics::default();
         let client = TestClient::default();
         let genesis = client.genesis().await;
-        let lc = LightClient::from_genesis(
+        let (lc, metrics) = metered(
             SqlStorage::default().await.unwrap(),
-            client.clone(),
+            &client,
             genesis.clone(),
-        )
-        .with_metrics(LightClientMetrics::new(&metrics));
+        );
 
         let first = genesis.first_epoch_with_dynamic_stake_table;
         let target = first + 5;
         lc.quorum_for_epoch(target).await.unwrap();
 
-        let group = metrics.get_subgroup(["light_client"]).unwrap();
         assert_eq!(
-            group.get_gauge("latest_stake_table_epoch").unwrap().get(),
+            metrics.get_gauge("latest_stake_table_epoch").unwrap().get(),
             *target as usize
         );
-        assert_eq!(group.get_gauge("stake_table_backlog").unwrap().get(), 0);
+        assert_eq!(metrics.get_gauge("stake_table_backlog").unwrap().get(), 0);
         // The walk starts just below the first dynamic epoch, so it replays `first..=target`.
         assert_eq!(
-            group
+            metrics
                 .get_histogram("stake_table_catchup_duration")
                 .unwrap()
                 .sample_count(),
             6
         );
         assert!(
-            group
+            metrics
                 .get_histogram("db_read_duration")
                 .unwrap()
                 .sample_count()
                 > 0
         );
         assert!(
-            group
+            metrics
                 .get_histogram("db_write_duration")
                 .unwrap()
                 .sample_count()
@@ -2005,7 +2001,7 @@ mod test {
 
         lc.quorum_for_epoch(first + 1).await.unwrap();
         assert_eq!(
-            group.get_gauge("latest_stake_table_epoch").unwrap().get(),
+            metrics.get_gauge("latest_stake_table_epoch").unwrap().get(),
             *target as usize
         );
     }
@@ -2022,18 +2018,15 @@ mod test {
             .await
             .unwrap();
 
-        let metrics = PrometheusMetrics::default();
-        let lc = LightClient::from_genesis(db, client, genesis)
-            .with_metrics(LightClientMetrics::new(&metrics));
+        let (lc, metrics) = metered(db, &client, genesis);
         lc.quorum_for_epoch(target).await.unwrap();
 
-        let group = metrics.get_subgroup(["light_client"]).unwrap();
         assert_eq!(
-            group.get_gauge("latest_stake_table_epoch").unwrap().get(),
+            metrics.get_gauge("latest_stake_table_epoch").unwrap().get(),
             *target as usize
         );
         assert_eq!(
-            group
+            metrics
                 .get_histogram("stake_table_catchup_duration")
                 .unwrap()
                 .sample_count(),
@@ -2044,61 +2037,39 @@ mod test {
     #[tokio::test]
     #[test_log::test]
     async fn test_stake_table_catchup_metrics_on_failure() {
-        let metrics = PrometheusMetrics::default();
         let client = TestClient::default();
         let genesis = client.genesis().await;
-        let lc = LightClient::from_genesis(
+        let (lc, metrics) = metered(
             SqlStorage::default().await.unwrap(),
-            client.clone(),
+            &client,
             genesis.clone(),
-        )
-        .with_metrics(LightClientMetrics::new(&metrics));
+        );
 
         let first = genesis.first_epoch_with_dynamic_stake_table;
         client.return_invalid_quorum(first + 3).await;
         lc.quorum_for_epoch(first + 5).await.unwrap_err();
 
-        let group = metrics.get_subgroup(["light_client"]).unwrap();
         assert_eq!(
-            group.get_gauge("latest_stake_table_epoch").unwrap().get(),
+            metrics.get_gauge("latest_stake_table_epoch").unwrap().get(),
             *first as usize + 2
         );
-        assert_eq!(group.get_gauge("stake_table_backlog").unwrap().get(), 0);
-    }
-
-    #[tokio::test]
-    #[test_log::test]
-    async fn test_verification_failures_invalid_stake_table() {
-        let metrics = PrometheusMetrics::default();
-        let client = TestClient::default();
-        let genesis = client.genesis().await;
-        let lc = LightClient::from_genesis(
-            SqlStorage::default().await.unwrap(),
-            client.clone(),
-            genesis.clone(),
-        )
-        .with_metrics(LightClientMetrics::new(&metrics));
-
-        let epoch = genesis.first_epoch_with_dynamic_stake_table + 5;
-        client.return_invalid_quorum(epoch).await;
-        lc.quorum_for_epoch(epoch).await.unwrap_err();
-
-        let group = metrics.get_subgroup(["light_client"]).unwrap();
-        assert_eq!(group.get_counter("verification_failures").unwrap().get(), 1);
+        assert_eq!(metrics.get_gauge("stake_table_backlog").unwrap().get(), 0);
+        assert_eq!(
+            metrics.get_counter("verification_failures").unwrap().get(),
+            1
+        );
     }
 
     #[tokio::test]
     #[test_log::test]
     async fn test_verification_failures_invalid_stake_table_under_leaf_proof() {
-        let metrics = PrometheusMetrics::default();
         let client = TestClient::with_epoch_height(10);
         let genesis = client.genesis().await;
-        let lc = LightClient::from_genesis(
+        let (lc, metrics) = metered(
             SqlStorage::default().await.unwrap(),
-            client.clone(),
+            &client,
             genesis.clone(),
-        )
-        .with_metrics(LightClientMetrics::new(&metrics));
+        );
 
         // Height 45 is in epoch 5, so verifying its leaf replays up to the invalid stake table.
         let epoch = genesis.first_epoch_with_dynamic_stake_table + 2;
@@ -2107,41 +2078,40 @@ mod test {
         client.return_invalid_quorum(epoch).await;
         lc.fetch_leaf(LeafId::Number(45)).await.unwrap_err();
 
-        let group = metrics.get_subgroup(["light_client"]).unwrap();
-        assert_eq!(group.get_counter("verification_failures").unwrap().get(), 1);
+        assert_eq!(
+            metrics.get_counter("verification_failures").unwrap().get(),
+            1
+        );
     }
 
     #[tokio::test]
     #[test_log::test]
     async fn test_verification_failures_wrong_leaf() {
-        let metrics = PrometheusMetrics::default();
         let client = TestClient::default();
-        let lc = LightClient::from_genesis(
+        let (lc, metrics) = metered(
             SqlStorage::default().await.unwrap(),
-            client.clone(),
+            &client,
             client.genesis().await,
-        )
-        .with_metrics(LightClientMetrics::new(&metrics));
+        );
 
         client.return_wrong_leaf(1, 2).await;
         lc.fetch_headers_in_range(1, 4).await.unwrap_err();
 
-        let group = metrics.get_subgroup(["light_client"]).unwrap();
-        assert_eq!(group.get_counter("verification_failures").unwrap().get(), 1);
+        assert_eq!(
+            metrics.get_counter("verification_failures").unwrap().get(),
+            1
+        );
     }
 
     #[tokio::test]
     #[test_log::test]
     async fn test_verification_failures_ignore_unavailable_stake_table() {
-        let metrics = PrometheusMetrics::default();
         let client = TestClient::with_epoch_height(10);
-        let genesis = client.genesis().await;
-        let lc = LightClient::from_genesis(
+        let (lc, metrics) = metered(
             SqlStorage::default().await.unwrap(),
-            client.clone(),
-            genesis,
-        )
-        .with_metrics(LightClientMetrics::new(&metrics));
+            &client,
+            client.genesis().await,
+        );
 
         // Verifying a leaf in a dynamic epoch needs stake tables the server no longer has.
         client.leaf(50).await;
@@ -2150,8 +2120,10 @@ mod test {
         }
         lc.fetch_leaf(LeafId::Number(50)).await.unwrap_err();
 
-        let group = metrics.get_subgroup(["light_client"]).unwrap();
-        assert_eq!(group.get_counter("verification_failures").unwrap().get(), 0);
+        assert_eq!(
+            metrics.get_counter("verification_failures").unwrap().get(),
+            0
+        );
     }
 
     /// Regression: epoch-root leaf proofs must locate a 2-chain when views immediately after

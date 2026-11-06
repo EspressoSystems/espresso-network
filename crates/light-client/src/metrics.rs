@@ -1,3 +1,8 @@
+//! Durations are measured only with the `client` feature, since std's clock panics on zkVM
+//! targets.
+
+#[cfg(feature = "client")]
+use std::time::Instant;
 use std::{
     future::Future,
     sync::atomic::{AtomicU64, Ordering},
@@ -18,11 +23,11 @@ pub struct LightClientMetrics {
     latest_stake_table_epoch: Box<dyn Gauge>,
     stake_table_backlog: Box<dyn Gauge>,
     #[cfg(feature = "client")]
-    pub(crate) stake_table_catchup_duration: Box<dyn Histogram>,
-    pub(crate) follower_block_height: Box<dyn Gauge>,
-    pub(crate) verification_failures: Box<dyn Counter>,
+    stake_table_catchup_duration: Box<dyn Histogram>,
+    follower_block_height: Box<dyn Gauge>,
+    verification_failures: Box<dyn Counter>,
     #[cfg(feature = "client")]
-    pub(crate) fetch_failures: Box<dyn Counter>,
+    fetch_failures: Box<dyn Counter>,
     #[cfg(feature = "client")]
     db_read_duration: Box<dyn Histogram>,
     #[cfg(feature = "client")]
@@ -68,6 +73,19 @@ impl LightClientMetrics {
         }
     }
 
+    pub(crate) fn set_follower_block_height(&self, height: u64) {
+        self.follower_block_height.set(height as usize);
+    }
+
+    pub(crate) fn verification_failed(&self) {
+        self.verification_failures.add(1);
+    }
+
+    #[cfg(feature = "client")]
+    pub(crate) fn fetch_failed(&self) {
+        self.fetch_failures.add(1);
+    }
+
     pub(crate) async fn db_read<T>(&self, op: impl Future<Output = T>) -> T {
         #[cfg(feature = "client")]
         let op = timed(&*self.db_read_duration, op);
@@ -80,22 +98,15 @@ impl LightClientMetrics {
         op.await
     }
 
-    pub(crate) fn start_catchup(&self, epochs: u64) -> CatchupBacklog<'_> {
+    pub(crate) fn start_catchup(&self, epochs: u64) -> CatchupProgress<'_> {
         self.stake_table_backlog.update(epochs as i64);
-        CatchupBacklog {
-            gauge: &*self.stake_table_backlog,
+        CatchupProgress {
+            metrics: self,
             remaining: epochs,
+            #[cfg(feature = "client")]
+            epoch_started: Instant::now(),
         }
     }
-}
-
-// Only with `client`, since std's clock panics on zkVM targets.
-#[cfg(feature = "client")]
-async fn timed<T>(histogram: &dyn Histogram, op: impl Future<Output = T>) -> T {
-    let started = std::time::Instant::now();
-    let out = op.await;
-    histogram.add_point(started.elapsed().as_secs_f64());
-    out
 }
 
 impl Default for LightClientMetrics {
@@ -104,22 +115,42 @@ impl Default for LightClientMetrics {
     }
 }
 
-/// One catchup's share of the stake table backlog, removed when the catchup ends however it ends,
-/// so the gauge sums the epochs left across the catchups still running.
-pub(crate) struct CatchupBacklog<'a> {
-    gauge: &'a dyn Gauge,
-    remaining: u64,
+#[cfg(feature = "client")]
+async fn timed<T>(histogram: &dyn Histogram, op: impl Future<Output = T>) -> T {
+    let started = Instant::now();
+    let out = op.await;
+    histogram.add_point(started.elapsed().as_secs_f64());
+    out
 }
 
-impl CatchupBacklog<'_> {
+/// One stake table catchup. Its share of the backlog is removed when it ends however it ends, so
+/// the gauge sums the epochs left across the catchups still running.
+#[derive(Debug)]
+pub(crate) struct CatchupProgress<'a> {
+    metrics: &'a LightClientMetrics,
+    remaining: u64,
+    #[cfg(feature = "client")]
+    epoch_started: Instant,
+}
+
+impl CatchupProgress<'_> {
     pub(crate) fn epoch_done(&mut self) {
         self.remaining -= 1;
-        self.gauge.update(-1);
+        self.metrics.stake_table_backlog.update(-1);
+        #[cfg(feature = "client")]
+        {
+            self.metrics
+                .stake_table_catchup_duration
+                .add_point(self.epoch_started.elapsed().as_secs_f64());
+            self.epoch_started = Instant::now();
+        }
     }
 }
 
-impl Drop for CatchupBacklog<'_> {
+impl Drop for CatchupProgress<'_> {
     fn drop(&mut self) {
-        self.gauge.update(-(self.remaining as i64));
+        self.metrics
+            .stake_table_backlog
+            .update(-(self.remaining as i64));
     }
 }
