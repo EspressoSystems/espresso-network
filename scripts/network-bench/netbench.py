@@ -2242,6 +2242,12 @@ async def track_until_settled(
     def deadline() -> float:
         return ended.result() + cfg.tx_timeout_s if ended.done() else math.inf
 
+    def settled() -> bool:
+        """The load ended, nothing is pending, and no timed-out tx can still be found."""
+        scanned = scanned_before(heights, height, missing, clock.time())
+        unfound = state.timed_out and scanned <= state.findable_until
+        return ended.done() and not state.pending and not unfound
+
     report = clock.time() + PROGRESS_S
     reported_timeouts = 0
     height = heights.start
@@ -2260,9 +2266,7 @@ async def track_until_settled(
             report, reported_timeouts = now + PROGRESS_S, state.timeouts_seen
         if ended.done():
             state.phase = Phase("done", None, ended.result(), cfg.tx_timeout_s)
-            scanned = scanned_before(heights, height, missing, now)
-            settled = not state.pending and scanned > state.findable_until
-            if settled or (now > deadline() and not missing):
+            if settled() or (now > deadline() and not missing):
                 for tx_id in list(state.pending):
                     state.resolve(tx_id, "timeout", now)
                 log_totals(state)
@@ -2272,8 +2276,12 @@ async def track_until_settled(
         ]:
             state.time_out(tx, now, tx.t_submit + cfg.tx_timeout_s)
         top = heights.top("query")
-        # A backlog can outlast the deadline: check it between batches.
-        while height < top - PAYLOAD_LAG_BLOCKS and clock.time() <= deadline():
+        # A backlog can outlast the deadline and the need to scan: check both per batch.
+        while (
+            height < top - PAYLOAD_LAG_BLOCKS
+            and clock.time() <= deadline()
+            and not settled()
+        ):
             batch = range(height, min(top - PAYLOAD_LAG_BLOCKS, height + SCAN_BATCH))
             scans = await asyncio.gather(*(scan_stamped(scan, h, clock) for h in batch))
             for h, (ids, at, answered) in zip(batch, scans):

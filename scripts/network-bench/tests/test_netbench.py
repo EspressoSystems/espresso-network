@@ -3651,3 +3651,28 @@ def test_tracker_lag_counts_a_late_scan_that_found_its_payload(tmp_path: Path):
     add_late_scan(tmp_path, lost=False)
     lag = some(analyze(tmp_path)["load"]["tracker_lag_ms"])
     assert lag["max"] == pytest.approx(12000.0)
+
+
+def test_after_done_the_tracker_returns_once_every_timed_out_tx_was_found():
+    """tx 0, sent at 0 with a 2 s timeout, is in height 2, shown at 0.5. A slow scan of
+    height 0 holds the tracker past the timeout; at 2.6 a late scan includes the tx. 200
+    heights shown at 1.5 are still being scanned when the load is done at 3, far behind the
+    tx's old timeout, but no timed-out tx is left to find: the tracker returns at once."""
+    clock, done = fakes.FakeClock(), asyncio.Event()
+    state, heights = netbench.LoadState(), netbench.Heights(0)
+    tx = submit_at(state, 0, 0.0)
+
+    async def scan(height: int) -> list[int] | None:
+        await clock.asleep(2.1 if height == 0 else 0.3)
+        return [0] if height == 2 else []
+
+    done_at = 3.0
+    events = [
+        *shows(heights, clock, (0.0, 2), (0.5, 3), (1.5, 203)),
+        (done_at, done.set),
+    ]
+    cfg = netbench.BenchConfig(tx_timeout_s=2)
+    returned = run_tracker(cfg, state, heights, scan, done, clock, events)
+    assert (tx.status, tx.height) == ("included", 2)
+    assert any(h["scanned"] is None for h in heights.records() if h["query"] == 1.5)
+    assert returned <= done_at + 0.5
