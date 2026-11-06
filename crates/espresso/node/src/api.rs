@@ -4500,6 +4500,48 @@ mod test {
         );
     }
 
+    /// While the current epoch is unknown, the `current` stake table endpoints serve the genesis
+    /// tables with no epoch. A dead coordinator is one way a node loses its current epoch.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_current_stake_tables_serve_genesis_without_current_epoch() {
+        let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
+        let (storage, persistence) = node_storage::<Sqlite, 2>().await;
+        let config = TestNetworkConfigBuilder::with_num_nodes()
+            .api_config(Sqlite::options(&storage[0], Options::with_port(port)))
+            .network_config(TestConfigBuilder::default().build())
+            .persistences(persistence)
+            .build();
+        let network = TestNetwork::new(config, TEST_UPGRADE).await;
+        // The kill does nothing until the coordinator runs, which a decided leaf proves.
+        while network.server.decided_leaf().await.height() < 1 {
+            sleep(Duration::from_millis(100)).await;
+        }
+
+        let handle = network.server.consensus_handle();
+        handle.kill_coordinator();
+        timeout(Duration::from_secs(10), handle.stopped())
+            .await
+            .expect("the coordinator did not stop after it was killed");
+        assert_eq!(handle.current_epoch().await, None, "current epoch");
+
+        let client: Client<ClientErr, StaticVersion<0, 1>> =
+            Client::new(format!("http://localhost:{port}").parse().unwrap());
+        // Every genesis member has stake, so the genesis tables are the configured ones.
+        let genesis = network.cfg.hotshot_config();
+        for (route, expected) in [
+            ("node/stake-table/current", &genesis.known_nodes_with_stake),
+            ("node/da-stake-table/current", &genesis.known_da_nodes),
+        ] {
+            let current: StakeTableWithEpochNumber<SeqTypes> = client
+                .get(route)
+                .send()
+                .await
+                .unwrap_or_else(|err| panic!("{route}: {err}"));
+            assert_eq!(current.epoch, None, "{route}: epoch");
+            assert_eq!(&current.stake_table, expected, "{route}: stake table");
+        }
+    }
+
     /// After shutdown the readers serve the coordinator's last decide, not the anchor the node
     /// started from, and the leaf and state they serve belong to the same block.
     #[test_log::test(tokio::test(flavor = "multi_thread"))]

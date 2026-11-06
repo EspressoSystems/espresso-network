@@ -303,3 +303,81 @@ pub(crate) fn should_vote(stake_table: &HSStakeTable<SeqTypes>, ver_key: &Schnor
         .iter()
         .any(|peer| &peer.state_ver_key == ver_key && !peer.stake_table_entry.stake().is_zero())
 }
+
+#[cfg(test)]
+mod test {
+    use espresso_types::{TEST_UPGRADE, traits::PersistenceOptions};
+    use futures::StreamExt;
+    use hotshot_types::light_client::DEFAULT_STAKE_TABLE_CAPACITY;
+    use test_utils::reserve_tcp_port;
+
+    use super::*;
+    use crate::{
+        SequencerApiVersion,
+        api::{
+            Options,
+            test_helpers::{TestNetwork, TestNetworkConfigBuilder},
+        },
+        testing::{TestConfigBuilder, decided_leaves},
+    };
+
+    // A leaf decided before epochs were enabled has no epoch. Its state is
+    // signed with the genesis stake table as the next stake table.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_handle_decide_signs_leaf_without_epoch_with_genesis_stake_table() {
+        let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
+        let config = TestNetworkConfigBuilder::default()
+            .api_config(Options::with_port(port))
+            .network_config(TestConfigBuilder::default().build())
+            .build();
+        let network = TestNetwork::new(config, TEST_UPGRADE).await;
+
+        let (leaf, height) = decided_leaf_without_epoch(&network).await;
+        let validator = network.server.validator_config();
+        let mut signer = StateSigner::<SequencerApiVersion>::new(
+            validator.state_private_key.clone(),
+            validator.state_public_key.clone(),
+            StakeTableState::default(),
+            // Any epoch but the leaf's makes the signer pick its stake table again.
+            Some(EpochNumber::genesis()),
+            DEFAULT_STAKE_TABLE_CAPACITY,
+            false,
+        );
+        signer
+            .handle_decide(&leaf, network.server.consensus_handle().as_ref())
+            .await;
+
+        // Every genesis member has stake, so the genesis stake table is the configured one.
+        let genesis = HSStakeTable::from_iter(network.cfg.known_nodes_with_stake())
+            .commitment(DEFAULT_STAKE_TABLE_CAPACITY)
+            .expect("genesis stake table commitment");
+        let signature = signer
+            .signatures
+            .read()
+            .await
+            .get_signature(height)
+            .unwrap_or_else(|| panic!("no signature for height {height}"));
+        assert_eq!(signature.next_stake, genesis, "next stake table");
+    }
+
+    /// The newest leaf of the next decide of `network`, with its epoch
+    /// removed, and its height.
+    async fn decided_leaf_without_epoch<P: PersistenceOptions, const N: usize>(
+        network: &TestNetwork<P, N>,
+    ) -> (DecidedLeaf, u64) {
+        let mut events = network.server.event_stream();
+        let mut event = loop {
+            let event = events.next().await.expect("event stream ended");
+            if decided_leaves(&event).is_some() {
+                break event;
+            }
+        };
+        let CoordinatorEvent::NewDecide { leaf_infos, .. } = &mut event else {
+            unreachable!("a decide event");
+        };
+        leaf_infos[0].leaf.with_epoch = false;
+        let height = leaf_infos[0].leaf.height();
+        let leaf = DecidedLeaf::from_event(&event).expect("a decided leaf");
+        (leaf, height)
+    }
+}
