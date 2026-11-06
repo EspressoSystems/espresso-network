@@ -44,6 +44,27 @@ Tuning, as options of the `follower` module:
 Against the native demo (`just demo-native`), node 0 on port 24000 serves everything a follower needs:
 `-- query --peers http://localhost:24000 -- follower`.
 
+## Metrics
+
+The light client reports under `light_client_` in `/v1/status/metrics`, on a follower and on any SQL query node whose
+query service has fetched through it:
+
+- `latest_stake_table_epoch`: the latest epoch with a verified stake table.
+- `stake_table_backlog`: epochs left in the stake table catchups that are running, summed over catchups that can
+  overlap, 0 when none is.
+- `stake_table_catchup_duration`: seconds to fetch, verify and store one epoch of stake table events.
+- `follower_block_height`: on a follower, one more than the latest leaf height the light client has verified, like
+  `node/block-height`. It stays 0 on a query node, which never asks the light client for the chain height.
+- `verification_failures`: upstream responses that failed a proof or commitment check.
+- `fetch_failures`: fetches of missing data by the query service through the light client that failed, for any reason.
+- `db_read_duration`, `db_write_duration`: seconds per read from and write to the light client database, including the
+  wait for a connection and, for writes, the commit.
+
+At bootstrap the light client replays stake tables from the first dynamic epoch, so `stake_table_backlog` rises by the
+number of epochs to replay for each catchup and falls to 0. A backlog that stays above 0, or a rising
+`verification_failures`, is worth an alert. A light client database on a network filesystem such as EFS shows up as slow
+`db_write_duration`, since every SQLite commit syncs to it.
+
 ## How it works
 
 ```
