@@ -193,7 +193,7 @@ impl<D: Sync> StakeTableDataSource<SeqTypes> for StorageState<D> {
     /// Get the stake table for a given epoch
     async fn get_stake_table(
         &self,
-        epoch: Option<EpochNumber>,
+        epoch: EpochNumber,
     ) -> anyhow::Result<Vec<PeerConfig<SeqTypes>>> {
         self.as_ref().get_stake_table(epoch).await
     }
@@ -206,7 +206,7 @@ impl<D: Sync> StakeTableDataSource<SeqTypes> for StorageState<D> {
     /// Get the DA stake table for a given epoch
     async fn get_da_stake_table(
         &self,
-        epoch: Option<EpochNumber>,
+        epoch: EpochNumber,
     ) -> anyhow::Result<Vec<PeerConfig<SeqTypes>>> {
         self.as_ref().get_da_stake_table(epoch).await
     }
@@ -314,33 +314,30 @@ impl StakeTableDataSource<SeqTypes> for ApiState {
     /// Get the stake table for a given epoch
     async fn get_stake_table(
         &self,
-        epoch: Option<EpochNumber>,
+        epoch: EpochNumber,
     ) -> anyhow::Result<Vec<PeerConfig<SeqTypes>>> {
         let handle = self.consensus().await;
-        if let Some(requested) = epoch {
-            let first_epoch = handle
-                .membership_coordinator()
-                .await
-                .membership()
-                .first_epoch();
-            if requested < first_epoch {
-                return Err(anyhow::anyhow!(
-                    "requested stake table for epoch {requested:?} is below the first epoch \
-                     {first_epoch}"
-                ));
-            }
+        let first_epoch = handle
+            .membership_coordinator()
+            .await
+            .membership()
+            .first_epoch();
+        if epoch < first_epoch {
+            return Err(anyhow::anyhow!(
+                "requested stake table for epoch {epoch} is below the first epoch {first_epoch}"
+            ));
         }
         let highest_epoch = handle.current_epoch().await.map(|e| e + 1);
-        if epoch > highest_epoch {
+        if Some(epoch) > highest_epoch {
             return Err(anyhow::anyhow!(
-                "requested stake table for epoch {epoch:?} is beyond the current epoch + 1 \
+                "requested stake table for epoch {epoch} is beyond the current epoch + 1 \
                  {highest_epoch:?}"
             ));
         }
         let mem = handle
             .membership_coordinator()
             .await
-            .stake_table_for_epoch(epoch)?;
+            .stake_table_for_epoch(Some(epoch))?;
 
         Ok(mem.stake_table().cloned().collect())
     }
@@ -349,7 +346,7 @@ impl StakeTableDataSource<SeqTypes> for ApiState {
     async fn get_stake_table_current(&self) -> anyhow::Result<StakeTableWithEpochNumber<SeqTypes>> {
         let epoch = self.consensus().await.current_epoch().await;
         let stake_table = match epoch {
-            Some(epoch) => self.get_stake_table(Some(epoch)).await?,
+            Some(epoch) => self.get_stake_table(epoch).await?,
             None => self
                 .genesis_stake_tables()
                 .await
@@ -364,22 +361,14 @@ impl StakeTableDataSource<SeqTypes> for ApiState {
     /// Get the DA stake table for a given epoch
     async fn get_da_stake_table(
         &self,
-        epoch: Option<EpochNumber>,
+        epoch: EpochNumber,
     ) -> anyhow::Result<Vec<PeerConfig<SeqTypes>>> {
         let coordinator = self.consensus().await.membership_coordinator().await;
-        Ok(match epoch {
-            Some(e) => coordinator
-                .membership()
-                .snapshot(e)
-                .map(|s| s.da_stake_table().cloned().collect())
-                .unwrap_or_default(),
-            None => coordinator
-                .membership()
-                .genesis_stake_tables()
-                .da_stake_table()
-                .cloned()
-                .collect(),
-        })
+        Ok(coordinator
+            .membership()
+            .snapshot(epoch)
+            .map(|s| s.da_stake_table().cloned().collect())
+            .unwrap_or_default())
     }
 
     /// Get the DA stake table for the current epoch and return it along with the epoch number
@@ -388,7 +377,7 @@ impl StakeTableDataSource<SeqTypes> for ApiState {
     ) -> anyhow::Result<StakeTableWithEpochNumber<SeqTypes>> {
         let epoch = self.consensus().await.current_epoch().await;
         let stake_table = match epoch {
-            Some(epoch) => self.get_da_stake_table(Some(epoch)).await?,
+            Some(epoch) => self.get_da_stake_table(epoch).await?,
             None => self
                 .genesis_stake_tables()
                 .await
