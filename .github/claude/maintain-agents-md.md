@@ -24,6 +24,8 @@ Edit nothing else; anything outside `AGENTS.md` and `doc/` is dropped before the
 6. Cut what one grep answers: directory trees, file inventories, restated control flow.
 7. Naming a tool makes agents reach for it. Name only tools that should be used.
 8. No aspirational rules. Every instruction is read as mandatory work.
+9. The `Test-first workflow` section stays in `AGENTS.md`: every session that changes code needs it. Fix stale facts in
+   it, but do not move it out.
 
 ## Checks
 
