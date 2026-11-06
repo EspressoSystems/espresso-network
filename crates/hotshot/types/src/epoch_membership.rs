@@ -829,8 +829,8 @@ impl<TYPES: NodeType> Clone for EpochMembership<TYPES> {
 }
 
 impl<TYPES: NodeType> EpochMembership<TYPES> {
-    pub fn epoch(&self) -> Option<EpochNumber> {
-        Some(self.epoch)
+    pub fn epoch(&self) -> EpochNumber {
+        self.epoch
     }
 
     pub fn next_epoch(&self) -> Result<Self> {
@@ -851,8 +851,8 @@ impl<TYPES: NodeType> EpochMembership<TYPES> {
     }
 
     /// Borrow the per-epoch snapshot.
-    pub fn snapshot(&self) -> Option<&<TYPES::Membership as Membership<TYPES>>::Snapshot> {
-        Some(&self.snapshot)
+    pub fn snapshot(&self) -> &<TYPES::Membership as Membership<TYPES>>::Snapshot {
+        &self.snapshot
     }
 
     /// Add the DRB result for this epoch to the membership.

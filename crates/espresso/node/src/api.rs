@@ -414,7 +414,6 @@ impl StakeTableDataSource<SeqTypes> for ApiState {
             .membership_for_epoch(e)
             .context("membership not found")?
             .snapshot()
-            .with_context(|| format!("no committee for epoch={e}"))?
             .validators()
             .clone())
     }

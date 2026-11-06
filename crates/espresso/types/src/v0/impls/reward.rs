@@ -955,9 +955,7 @@ pub async fn get_leader_and_fetch_missing_rewards(
 
     let membership = coordinator.membership_for_epoch(epoch)?;
 
-    let snapshot = membership
-        .snapshot()
-        .context(format!("no committee for epoch {epoch:?}"))?;
+    let snapshot = membership.snapshot();
 
     let leader: BLSPubKey = snapshot
         .leader(view)
