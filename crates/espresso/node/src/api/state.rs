@@ -6125,7 +6125,7 @@ mod tests {
     #[case::fetch(StateCertFetchError::FetchError(anyhow::anyhow!("timeout")))]
     #[case::validation(StateCertFetchError::ValidationError(anyhow::anyhow!("bad")))]
     #[case::other(StateCertFetchError::Other(anyhow::anyhow!("catchup")))]
-    fn state_cert_that_peers_failed_to_serve_is_internal(#[case] err: StateCertFetchError) {
+    fn state_cert_fetch_failure_is_internal(#[case] err: StateCertFetchError) {
         let err = state_cert_error(err);
         assert!(err.downcast_ref::<AvailabilityError>().is_none(), "{err:#}");
     }

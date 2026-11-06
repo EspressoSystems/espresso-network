@@ -639,16 +639,14 @@ impl StateCertFetchingDataSource<SeqTypes> for ApiState {
                     &handle.upgrade_lock().await,
                 )
                 .map_err(|e| {
-                    StateCertFetchError::ValidationError(e.context(format!(
-                        "state certificate validation failed for epoch={epoch}"
-                    )))
+                    StateCertFetchError::ValidationError(e.context(format!("epoch={epoch}")))
                 })?;
 
                 tracing::info!("fetched and validated state certificate for epoch {epoch}");
                 Ok(cert)
             },
             Ok(Err(e)) => Err(StateCertFetchError::FetchError(
-                e.context(format!("failed to fetch state cert for epoch {epoch}")),
+                e.context(format!("epoch={epoch}")),
             )),
         }
     }
@@ -10964,6 +10962,7 @@ mod test {
                 "{v2}"
             );
         }
+
         check_ranges_v2_parity(client, &limits, first_block, last_block).await;
 
         // Each stream's first frame is the unary answer for the height it starts from.
