@@ -16,7 +16,7 @@ use hotshot_types::{
     event::Event,
     traits::{
         block_contents::BlockHeader,
-        election::{Membership, MembershipSnapshot, NoStakeTableHash, NonEpochMembershipSnapshot},
+        election::{GenesisStakeTables, Membership, MembershipSnapshot, NoStakeTableHash},
         leaf_fetcher_network::LeafFetcherNetwork,
         node_implementation::NodeType,
         signature_key::StakeTableEntryType,
@@ -163,7 +163,6 @@ where
 {
     type Error = StrictMembershipError;
     type Snapshot = StrictEpochSnapshot<T, S>;
-    type NonEpochSnapshot = StrictNonEpochSnapshot<T, S>;
 
     fn snapshot(&self, epoch: EpochNumber) -> Option<Self::Snapshot> {
         let inner = self.inner.read();
@@ -179,8 +178,20 @@ where
         ))
     }
 
-    fn non_epoch_snapshot(&self) -> Self::NonEpochSnapshot {
-        StrictNonEpochSnapshot::build(self.inner.read().table.clone())
+    fn genesis_stake_tables(&self) -> Arc<GenesisStakeTables<T>> {
+        let table = &self.inner.read().table;
+        Arc::new(GenesisStakeTables::new(
+            table
+                .stake_table(None)
+                .into_iter()
+                .map(Into::into)
+                .collect(),
+            table
+                .da_stake_table(None)
+                .into_iter()
+                .map(Into::into)
+                .collect(),
+        ))
     }
 
     fn add_drb_result(&self, e: EpochNumber, drb: DrbResult) {
@@ -463,127 +474,5 @@ where
 
     fn lookup_leader(&self, view: ViewNumber) -> Result<T::SignatureKey, Self::Error> {
         Ok(self.table.lookup_leader(*view, Some(*self.epoch))?)
-    }
-}
-
-/// Pre-epoch snapshot for `StrictMembership`. Materializes views at
-/// construction so accessors can return borrowed iterators.
-pub struct StrictNonEpochSnapshot<T, S>
-where
-    T: NodeType,
-    S: TestStakeTable<T::SignatureKey, T::StateSignatureKey>,
-{
-    stake_table: Vec<PeerConfig<T>>,
-    da_stake_table: Vec<PeerConfig<T>>,
-    committee_keys: Vec<T::SignatureKey>,
-    da_committee_keys: Vec<T::SignatureKey>,
-    table: S,
-    _phantom: std::marker::PhantomData<T>,
-}
-
-impl<T, S> StrictNonEpochSnapshot<T, S>
-where
-    T: NodeType,
-    S: TestStakeTable<T::SignatureKey, T::StateSignatureKey>,
-{
-    fn build(table: S) -> Self {
-        let stake_entries = table.stake_table(None);
-        let da_entries = table.da_stake_table(None);
-        let committee_keys = stake_entries
-            .iter()
-            .map(|e| e.signature_key.clone())
-            .collect();
-        let da_committee_keys = da_entries.iter().map(|e| e.signature_key.clone()).collect();
-        let stake_table = stake_entries.into_iter().map(Into::into).collect();
-        let da_stake_table = da_entries.into_iter().map(Into::into).collect();
-        Self {
-            stake_table,
-            da_stake_table,
-            committee_keys,
-            da_committee_keys,
-            table,
-            _phantom: std::marker::PhantomData,
-        }
-    }
-}
-
-impl<T, S> Clone for StrictNonEpochSnapshot<T, S>
-where
-    T: NodeType,
-    S: TestStakeTable<T::SignatureKey, T::StateSignatureKey>,
-{
-    fn clone(&self) -> Self {
-        Self {
-            stake_table: self.stake_table.clone(),
-            da_stake_table: self.da_stake_table.clone(),
-            committee_keys: self.committee_keys.clone(),
-            da_committee_keys: self.da_committee_keys.clone(),
-            table: self.table.clone(),
-            _phantom: std::marker::PhantomData,
-        }
-    }
-}
-
-impl<T, S> Debug for StrictNonEpochSnapshot<T, S>
-where
-    T: NodeType,
-    S: TestStakeTable<T::SignatureKey, T::StateSignatureKey>,
-{
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> Result<(), fmt::Error> {
-        f.debug_struct("StrictNonEpochSnapshot")
-            .field("table", &self.table)
-            .finish()
-    }
-}
-
-impl<T, S> NonEpochMembershipSnapshot<T> for StrictNonEpochSnapshot<T, S>
-where
-    T: NodeType,
-    S: TestStakeTable<T::SignatureKey, T::StateSignatureKey>,
-{
-    type Error = StrictMembershipError;
-
-    fn stake_table(&self) -> impl ExactSizeIterator<Item = &PeerConfig<T>> + Send + '_ {
-        self.stake_table.iter()
-    }
-
-    fn da_stake_table(&self) -> impl ExactSizeIterator<Item = &PeerConfig<T>> + Send + '_ {
-        self.da_stake_table.iter()
-    }
-
-    fn committee_members(
-        &self,
-        _: ViewNumber,
-    ) -> impl ExactSizeIterator<Item = &T::SignatureKey> + Send + '_ {
-        self.committee_keys.iter()
-    }
-
-    fn da_committee_members(
-        &self,
-        _: ViewNumber,
-    ) -> impl ExactSizeIterator<Item = &T::SignatureKey> + Send + '_ {
-        self.da_committee_keys.iter()
-    }
-
-    fn stake(&self, key: &T::SignatureKey) -> Option<PeerConfig<T>> {
-        self.table.stake(key.clone(), None).map(Into::into)
-    }
-
-    fn da_stake(&self, key: &T::SignatureKey) -> Option<PeerConfig<T>> {
-        self.table.da_stake(key.clone(), None).map(Into::into)
-    }
-
-    fn has_stake(&self, key: &T::SignatureKey) -> bool {
-        self.stake(key)
-            .is_some_and(|x| x.stake_table_entry.stake() > U256::ZERO)
-    }
-
-    fn has_da_stake(&self, key: &T::SignatureKey) -> bool {
-        self.da_stake(key)
-            .is_some_and(|x| x.stake_table_entry.stake() > U256::ZERO)
-    }
-
-    fn lookup_leader(&self, view: ViewNumber) -> Result<T::SignatureKey, Self::Error> {
-        Ok(self.table.lookup_leader(*view, None)?)
     }
 }

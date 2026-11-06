@@ -81,6 +81,12 @@ impl Retry {
             next_at: now + delta,
         }
     }
+
+    /// When the probe that set this retry ran: `next_at - delay`.
+    pub fn last_tried_at(&self) -> DateTime<Utc> {
+        self.next_at
+            - TimeDelta::from_std(self.delay.duration()).expect("a delay fits a chrono delta")
+    }
 }
 
 /// State shared by every unit of one missing row.

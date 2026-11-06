@@ -11,6 +11,7 @@ use crate::{
     node::WatchedNode,
     outcome::NotServed,
     schedule::{Frontier, NodeProgress},
+    state::Retry,
 };
 
 /// Block heights the tip poller last saw per node, and their maximum.
@@ -47,6 +48,36 @@ impl Tips {
 
 /// Rows per node on the missing-data page.
 pub const PAGE_ROWS: usize = 200;
+
+/// Page text of when a row was last probed and is probed next, at a `now`.
+pub struct TryTimes {
+    last_tried: Duration,
+    next_try: Option<Duration>,
+}
+
+impl TryTimes {
+    /// Time since `retry.last_tried_at()`; `next_try` is `None` once `retry.next_at` is not after
+    /// `now`.
+    pub fn at(retry: &Retry, now: DateTime<Utc>) -> Self {
+        Self {
+            last_tried: age_at(retry.last_tried_at(), now),
+            next_try: (retry.next_at - now).to_std().ok().filter(|d| !d.is_zero()),
+        }
+    }
+
+    /// `42s ago`.
+    pub fn last_tried_text(&self) -> String {
+        format!("{} ago", humantime::format_duration(self.last_tried))
+    }
+
+    /// `in 18s`, or `due`.
+    pub fn next_try_text(&self) -> String {
+        match self.next_try {
+            Some(wait) => format!("in {}", humantime::format_duration(wait)),
+            None => "due".to_owned(),
+        }
+    }
+}
 
 /// `now - first_missing_at`, 0 when the clock stepped back.
 pub fn age_at(first_missing_at: DateTime<Utc>, now: DateTime<Utc>) -> Duration {
@@ -254,6 +285,19 @@ pub struct NodeViewSlot {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::state::RetryDelay;
+
+    #[test]
+    fn try_times_read_due_once_next_at_is_not_after_now() {
+        let start = DateTime::from_timestamp(1_000, 0).unwrap();
+        let retry = Retry::after(RetryDelay::from_secs(18).unwrap(), start);
+        let at = |secs| start + chrono::TimeDelta::seconds(secs);
+        let waiting = TryTimes::at(&retry, at(6));
+        assert_eq!(waiting.last_tried_text(), "6s ago");
+        assert_eq!(waiting.next_try_text(), "in 12s");
+        assert_eq!(TryTimes::at(&retry, at(18)).next_try_text(), "due");
+        assert_eq!(TryTimes::at(&retry, at(40)).next_try_text(), "due");
+    }
 
     #[test]
     fn tips_follow_answered_heights_only() {

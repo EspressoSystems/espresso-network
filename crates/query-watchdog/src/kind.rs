@@ -183,6 +183,18 @@ pub enum Probe {
 }
 
 impl Probe {
+    /// Route that fetches the object from peers when the node lacks it, for the probes whose own
+    /// route reads the node's database only (`state_cert`).
+    pub fn peer_fetch_route(&self) -> Option<String> {
+        match self {
+            Self::Epoch {
+                kind: EpochKind::StateCert,
+                epoch,
+            } => Some(format!("v1/availability/state-cert-v2/{}", epoch.0)),
+            Self::Range { .. } | Self::Point { .. } | Self::Epoch { .. } => None,
+        }
+    }
+
     /// The kind label.
     pub fn kind(&self) -> DataKind {
         match self {

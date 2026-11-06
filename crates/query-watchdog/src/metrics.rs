@@ -39,6 +39,9 @@ pub struct WatchdogMetrics {
     sweep_eta_seconds: IntGaugeVec,
     /// `{node,kind}`, every probe sent.
     probes_total: IntCounterVec,
+    /// `{node,kind}`, objects the node lacked locally and served after a fetch from peers; no
+    /// alert.
+    local_misses_total: IntCounterVec,
 }
 
 impl WatchdogMetrics {
@@ -126,6 +129,12 @@ impl WatchdogMetrics {
                 &["node"],
             )?,
             probes_total: counter(registry, "probes_total", "Probes sent", &["node", "kind"])?,
+            local_misses_total: counter(
+                registry,
+                "local_misses_total",
+                "Objects the node did not store and fetched from peers",
+                &node_kind,
+            )?,
         })
     }
 
@@ -209,6 +218,13 @@ impl WatchdogMetrics {
     /// Counts one probe of `kind` under `{node_label, kind}`.
     pub fn count_probe(&self, node_label: &str, kind: DataKind) {
         self.probes_total
+            .with_label_values(&[node_label, kind.into()])
+            .inc();
+    }
+
+    /// Counts one object of `kind` served only after a fetch from peers.
+    pub fn count_local_miss(&self, node_label: &str, kind: DataKind) {
+        self.local_misses_total
             .with_label_values(&[node_label, kind.into()])
             .inc();
     }
