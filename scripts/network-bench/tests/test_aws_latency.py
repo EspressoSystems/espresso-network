@@ -72,7 +72,7 @@ def test_flags_round_trip_through_the_manifest_config():
 
 def test_up_defaults_the_latency_flags():
     args = awsb.parse_args(["up", "--tag", "x"])
-    assert (args.latency, args.intra_latency) == ("off", True)
+    assert (args.latency, args.intra_latency) == ("decaf-2025", True)
     with pytest.raises(SystemExit):
         awsb.parse_args(["up", "--tag", "x", "--latency", "mainnet"])
 
@@ -83,17 +83,19 @@ def test_no_intra_latency_needs_a_profile():
         awsb.config_from_args(plan_args("--no-intra-latency"))
 
 
-def test_tcp_cc_and_mtu_need_a_profile_and_default_to_bbr_and_1500():
-    for flag, value in (("--tcp-cc", "cubic"), ("--mtu", "9001")):
+# TEST:harness-network-defaults-ok
+def test_tcp_cc_and_mtu_need_a_profile_and_default_to_bbr_hold_and_9001():
+    for flag, value in (("--tcp-cc", "cubic"), ("--mtu", "1500")):
         with pytest.raises(awsb.Refused, match=flag):
             awsb.config_from_args(plan_args(flag, value))
     cfg = awsb.config_from_args(plan_args("--latency", "decaf-2025"))
-    assert (cfg.tcp_cc, cfg.mtu) == ("bbr", 1500)
+    assert (cfg.tcp_cc, cfg.mtu) == ("bbr_hold", awsb.VPC_MTU)
     meta = awsb.latency_meta(cfg, awsb.plan_hosts(cfg))
-    assert meta["sysctls"]["net.ipv4.tcp_congestion_control"] == "bbr"
-    assert meta["mtu"] == 1500
-    flags = ("--latency", "decaf-2025", "--tcp-cc", "cubic", "--mtu", "9001")
-    assert awsb.config_from_args(plan_args(*flags)).mtu == 9001
+    assert meta["sysctls"]["net.ipv4.tcp_congestion_control"] == "bbr_hold"
+    assert meta["mtu"] == 9001
+    flags = ("--latency", "decaf-2025", "--tcp-cc", "cubic", "--mtu", "1500")
+    explicit = awsb.config_from_args(plan_args(*flags))
+    assert (explicit.tcp_cc, explicit.mtu) == ("cubic", 1500)
 
 
 # TEST:hash-four-distinct-ok
@@ -103,6 +105,7 @@ def test_hash_differs_per_profile():
         nodes=2,
         load=netbench.BenchConfig(submit_nodes=1),
         consensus_storage="journal",
+        latency="off",
     )
     hosts = awsb.plan_hosts(base)
     images = {}
@@ -536,3 +539,17 @@ def test_mtu_mismatches_name_each_node_whose_interface_differs(isolated: Path):
     )
     found = awsb.mtu_mismatches(remote(runner, isolated), ["node0", "node1"], 1500)
     assert found == ["node0: mtu 9001, expected 1500"]
+
+
+# TEST:harness-latency-default-ok
+@pytest.mark.usefixtures("valid")
+def test_a_run_without_latency_shapes_with_the_reference_profile(
+    run_harness: RunHarness,
+):
+    runner = shaping_runner()
+    args = awsb.parse_args(["run", "--tag", "t", "--nodes", "2", "--yes"])
+    assert awsb.cmd_run(args, FakeSystem(run=runner)) == awsb.EXIT_OK
+    assert len([c for c in ssh_calls(runner) if "tc qdisc add" in c]) == 2
+    manifest = netbench.read_json(run_harness.run_dir / "manifest.json")
+    assert manifest["latency"]["profile"] == "decaf-2025"
+    assert manifest["latency"]["mtu"] == awsb.VPC_MTU

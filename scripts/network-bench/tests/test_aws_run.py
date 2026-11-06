@@ -93,7 +93,7 @@ def test_valid_run_exits_0_with_cost_and_index(run_harness: RunHarness):
     assert manifest["fleet"] == "run1"
     assert manifest["cost_usd"]["actual"] == cost["actual"]
     assert manifest["start_spread_s"] == 0.0
-    assert manifest["argv"] == ["run", "--tag", "t", "--nodes", "2"]
+    assert manifest["argv"] == ["run", "--tag", "t", "--nodes", "2", "--latency", "off"]
     assert "fleet_argv" not in manifest
     *_, row = run_harness.index().splitlines()
     assert row.startswith("| run1/01-run |")
@@ -1317,3 +1317,55 @@ def test_a_plain_run_never_starts_stake(run_harness: RunHarness):
     assert not runner.ran("docker start stake")
     assert not runner.ran("sh /opt/bench/wait-for-l1-finalized")
     assert not (run_harness.run_dir / "hosts/ctl/stake.env").exists()
+
+
+# TEST:harness-tmpfs-needs-blob-fails
+def test_single_shot_refuses_tmpfs_without_the_blob_dir_experiment(run_harness):
+    runner = FakeRunner(states=[DONE_STATE], describe=DESCRIBE)
+    with pytest.raises(awsb.Refused, match="blob-dir"):
+        run_harness.run(runner, "--query-engine", "sqlite", "--query-db", "tmpfs")
+    assert not (run_harness.fleet_dir / "fleet.json").exists()
+    assert not runner.ran("tofu", "apply")
+    assert not any(c[0] == "ssh" for c in runner.calls)
+
+
+# TEST:harness-records-experiments-ok
+@pytest.mark.usefixtures("valid")
+def test_single_shot_records_the_listed_experiments_in_fleet_and_run_manifest(
+    run_harness, monkeypatch
+):
+    monkeypatch.setattr(
+        awsb, "preflight", lambda *_: fake_preflight(experiments=["journal"])
+    )
+    runner = FakeRunner(states=[DONE_STATE], describe=DESCRIBE)
+    assert run_harness.run(runner) == awsb.EXIT_OK
+    fleet = netbench.read_json(run_harness.fleet_dir / "fleet.json")
+    manifest = netbench.read_json(run_harness.run_dir / "manifest.json")
+    assert fleet["experiments"] == manifest["experiments"] == ["journal"]
+    assert manifest["experiments_enabled"] == ["journal"]
+
+
+@dataclasses.dataclass
+class AskSpy(FakeSystem):
+    """Records the log messages that exist when the cost prompt is shown."""
+
+    logged: Callable[[], list[str]] = list
+
+    def ask(self, prompt: str) -> bool:
+        self.seen = self.logged()
+        return super().ask(prompt)
+
+
+# TEST:harness-dirty-warning-ok
+@pytest.mark.usefixtures("valid")
+def test_the_dirty_warning_comes_before_the_cost_prompt(run_harness):
+    runner = FakeRunner(states=[DONE_STATE], describe=DESCRIBE)
+    runner.respond("status --porcelain", lambda _: completed(stdout=" M scripts/x\n"))
+    system = AskSpy(
+        run=runner,
+        answer=True,
+        logged=lambda: (run_harness.fleet_dir / "driver.log").read_text().splitlines(),
+    )
+    args = awsb.parse_args(["run", "--tag", "t", "--nodes", "2", "--latency", "off"])
+    assert awsb.cmd_run(args, system) == awsb.EXIT_OK
+    assert any("uncommitted changes" in m for m in system.seen)

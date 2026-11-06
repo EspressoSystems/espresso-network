@@ -1,6 +1,7 @@
 use anyhow::Context;
 use espresso_telemetry as telemetry;
 use espresso_types::{traits::NullEventConsumer, v0::traits::SequencerPersistence};
+use espresso_utils::experiment::Experiment;
 use futures::future::FutureExt;
 use hotshot_types::traits::metrics::NoMetrics;
 use process_metrics::log_cpu_probe;
@@ -50,9 +51,15 @@ impl<P: SequencerPersistence> NodeContext<P> {
     }
 }
 
+/// Parses options; answers `--list-experiments` and returns, else installs the experiments and runs the node.
 pub async fn main(migrated_envs: Vec<(&str, &str)>) -> anyhow::Result<()> {
     espresso_types::assert_node_feature();
     let opt = <Options as clap::Parser>::parse();
+    if opt.list_experiments {
+        println!("{}", serde_json::to_string(&Experiment::names())?);
+        return Ok(());
+    }
+    opt.experiments.clone().install();
     let mut modules = opt.modules();
 
     // Genesis carries the chain ID, which selects the default telemetry
@@ -113,6 +120,9 @@ pub async fn main(migrated_envs: Vec<(&str, &str)>) -> anyhow::Result<()> {
     }
     if let Some(e) = telemetry_init_error {
         tracing::error!("{e:#}; continuing without telemetry");
+    }
+    if !opt.experiments.is_empty() {
+        tracing::warn!(experiments = ?opt.experiments.names(), "experiments enabled");
     }
     espresso_utils::env_compat::log_migrated_env_vars(&migrated_envs);
     log_cpu_probe(genesis.drb_difficulty.max(genesis.drb_upgrade_difficulty)).await;

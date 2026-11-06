@@ -21,6 +21,7 @@ from fakes import (
     write_collected_run,
 )
 from test_chaos import EVENTS, KINDS, T0, ev
+from test_netbench import deployment
 
 CONFIG: dict[str, Any] = {
     "nodes": 22,
@@ -510,3 +511,17 @@ def test_floor_section_counts_timeouts_views_and_logs_outside_faults(tmp_path: P
     floor = json.loads((tmp_path / "floor.json").read_text())
     assert floor["nodes"]["node0"]["during"] == {"header-failed": 1}
     assert awsb.floor_section(tmp_path, manifest, [], rows, [], T0 + 240) == []
+
+
+# TEST:harness-summary-setup-ok
+def test_render_puts_the_setup_lines_below_the_chaos_lead():
+    steps = steps_of([4.0, 2.0, 3.0, 4.0])
+    result = chaos_result(steps)
+    result["deployment"] = {
+        **deployment(),
+        "experiments": ["journal"],
+        "experiments_enabled": ["journal"],
+    }
+    text = netbench.render(result, None, "![chart](throughput.png)", view_of(steps))
+    assert text.index("- Verdict") < text.index("- experiments: journal")
+    assert text.index("- experiments: journal") < text.index("![chart]")

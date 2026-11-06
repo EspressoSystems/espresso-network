@@ -422,6 +422,14 @@ class DeploymentMeta(TypedDict):
     # `--slow-nodes`: the nodes whose espresso-node ran on `slow_cores` cores; absent without.
     slow_nodes: NotRequired[list[str]]
     slow_cores: NotRequired[int]
+    # Experiments the espresso-node image reported; absent in runs from before the record.
+    experiments: NotRequired[list[str]]
+    # Experiments the nodes enabled.
+    experiments_enabled: NotRequired[list[str]]
+    # Harness tuning pairs in effect after `--node-env`, by role.
+    harness_node_env: NotRequired[dict[str, list[str]]]
+    # Whether the harness checkout had uncommitted changes at run start.
+    harness_dirty: NotRequired[bool]
 
 
 class BenchResult(TypedDict):
@@ -3408,8 +3416,9 @@ def render(
     chart: str = "",
     chaos: ch.ChaosView | None = None,
 ) -> str:
-    """The summary; `chart`, a markdown image, goes right below the headline. A `chaos` run
-    leads with its report and lists every step instead of every rate."""
+    """The summary; `setup_lines` and `chart`, a markdown image, go right below the headline,
+    in this order. A `chaos` run leads with its report and lists every step instead of every
+    rate."""
     head = (
         [
             f"- {status_line(result)}",
@@ -3424,6 +3433,7 @@ def render(
         *(["## Network benchmark", ""] if chaos is None else [*chaos["lead"], ""]),
         *head,
         *([""] if head else []),
+        *([*setup, ""] if (setup := setup_lines(result)) else []),
         *([chart, ""] if chart else []),
         *(chaos["faults"] if chaos else capacity_table(result, comparison)),
         "### Load steps",
@@ -3547,6 +3557,42 @@ def latency_line(meta: LatencyMeta) -> str:
         sysctls = (f"{k.rsplit('.', 1)[1]}={v}" for k, v in meta["sysctls"].items())
         line += f"; sysctl {' '.join(sysctls)}"
     return line
+
+
+def setup_lines(result: BenchResult) -> list[str]:
+    """Experiments, harness node env, `--node-env` and revisions for the top of the summary;
+    empty for the local bench. Each line is left out when its record is missing, as in runs
+    from before it."""
+    if "deployment" not in result:
+        return []
+    d = result["deployment"]
+    lines = []
+    if "experiments_enabled" in d:
+        line = f"- experiments: {', '.join(d['experiments_enabled']) or 'none'}"
+        if d["experiments"] != d["experiments_enabled"]:
+            line += f" (image lists: {', '.join(d['experiments']) or 'none'})"
+        lines.append(line)
+    if "harness_node_env" in d:
+        roles = (("validator", "validators"), ("query", "query nodes"))
+        parts = [
+            f"{label} {', '.join(f'`{pair}`' for pair in d['harness_node_env'][role])}"
+            for role, label in roles
+            if d["harness_node_env"][role]
+        ]
+        lines.append(f"- node env, harness: {'; '.join(parts) or 'none'}")
+    if "node_env" in d:
+        lines.append(
+            "- node env, --node-env: "
+            + ", ".join(f"`{pair}`" for pair in d["node_env"])
+        )
+    revisions = []
+    if d["image_revision"] is not None:
+        revisions.append(f"image {d['image_revision'][:10]}")
+    revisions.append(f"harness {result['run']['sha'][:10]}")
+    if d.get("harness_dirty"):
+        revisions.append("dirty")
+    lines.append(f"- revisions: {', '.join(revisions)}")
+    return lines
 
 
 def deployment_lines(result: BenchResult) -> list[str]:

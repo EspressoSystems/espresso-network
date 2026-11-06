@@ -113,8 +113,9 @@ def test_bbr3_is_refused_on_arm64(isolated: Path, monkeypatch: pytest.MonkeyPatc
 
 
 def test_bbr3_adds_the_kernel_step_to_the_estimate():
-    cfg = awsb.RunConfig(tag="x", latency="decaf-2025")
-    plain = awsb.shot_seconds(cfg)
+    plain = awsb.shot_seconds(
+        awsb.RunConfig(tag="x", latency="decaf-2025", tcp_cc="cubic")
+    )
     bbr3 = awsb.shot_seconds(
         awsb.RunConfig(tag="x", latency="decaf-2025", tcp_cc="bbr3")
     )

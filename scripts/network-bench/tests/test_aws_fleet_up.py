@@ -33,7 +33,7 @@ from fakes import (
 
 NEW_DIGEST = f"sha256:{'1' * 64}"
 NODE0_IP = "203.0.113.2"
-PG_VOLUME = {"gb": 400, "iops": 12000, "mbps": 500}
+PG_VOLUME = {"gb": 400, "iops": 12000, "mbps": 1500}
 
 
 @pytest.fixture
@@ -383,7 +383,7 @@ def test_consensus_storage_belongs_to_one_run(harness, runner):
 
 def test_max_block_size_belongs_to_one_run(harness, runner):
     manifest = harness.fleet()
-    assert awsb.fleet_run_config(harness.run_args(), manifest).max_block_size == "50mb"
+    assert awsb.fleet_run_config(harness.run_args(), manifest).max_block_size == "70mb"
     cfg = awsb.fleet_run_config(harness.run_args("--max-block-size", "30mb"), manifest)
     assert cfg.max_block_size == "30mb"
 
@@ -516,6 +516,36 @@ def test_the_new_images_become_the_fleets_and_the_runs(harness, resolved):
     run = run_manifest(harness)
     assert run["images"] == fleet["images"]
     assert run["config"]["tag"] == "other"
+
+
+# TEST:harness-retag-relists-ok
+def test_a_different_tag_relists_the_experiments_and_the_same_tag_does_not(
+    harness, resolved
+):
+    runner = pull_fleet(harness, resolved)
+    runner.respond("--list-experiments", lambda _: completed(stdout='["journal"]'))
+    assert harness.fleet()["experiments"] == []
+    assert harness.run(runner, "--tag", "t") == awsb.EXIT_OK
+    assert runner.count("docker", "run") == 0
+    assert harness.run(runner, "--tag", "other") == awsb.EXIT_OK
+    assert runner.count("docker", "run") == 1
+    assert harness.fleet()["experiments"] == ["journal"]
+    run = run_manifest(harness, "02-colocated")
+    assert (run["experiments"], run["experiments_enabled"]) == (["journal"],) * 2
+    assert harness.run(runner, "--tag", "other") == awsb.EXIT_OK
+    assert runner.count("docker", "run") == 1
+
+
+def test_a_fleet_from_before_the_listing_is_listed_on_its_next_run(harness, resolved):
+    runner = pull_fleet(harness, resolved)
+    runner.respond("--list-experiments", lambda _: completed(stdout='["journal"]'))
+    path = harness.fleet_dir / "fleet.json"
+    saved = netbench.read_json(path)
+    del saved["experiments"]
+    netbench.write_json(path, saved)
+    assert harness.run(runner) == awsb.EXIT_OK
+    assert runner.count("docker", "run") == 1
+    assert run_manifest(harness)["experiments"] == ["journal"]
 
 
 def test_the_same_tag_pulls_nothing(harness, resolved):
@@ -689,7 +719,7 @@ def test_the_volume_adds_size_iops_and_throughput_above_the_baseline():
     expected = (
         400 * awsb.PRICES["gp3_gb_month_usd"]
         + 9000 * awsb.PRICES["gp3_iops_month_usd"]
-        + 375 * awsb.PRICES["gp3_mbps_month_usd"]
+        + 1375 * awsb.PRICES["gp3_mbps_month_usd"]
     ) / awsb.HOURS_PER_MONTH
     assert volume_rate(PG_VOLUME) - volume_rate(None) == pytest.approx(expected)
 

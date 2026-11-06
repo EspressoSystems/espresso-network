@@ -226,7 +226,12 @@ def test_prover_files_are_rendered_for_ctl_only_with_the_prover(tmp_path: Path):
         hosts = awsb.plan_hosts(cfg)
         for spec in hosts:
             (run_dir / "hosts" / spec["name"]).mkdir(parents=True)
-        manifest = {"hosts": hosts, "images": fake_images(), "memory_mib": MEMORY_MIB}
+        manifest = {
+            "hosts": hosts,
+            "images": fake_images(),
+            "memory_mib": MEMORY_MIB,
+            "experiments_enabled": [],
+        }
         awsb.render_host_files(run_dir, cfg, manifest, fleet(2))
     assert not (tmp_path / "plain/hosts/ctl/prover.sh").exists()
     script = (tmp_path / "prover/hosts/ctl/prover.sh").read_text()

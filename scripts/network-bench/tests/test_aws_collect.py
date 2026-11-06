@@ -66,7 +66,12 @@ def render_run_dir(run_dir: Path, cfg: Any) -> None:
     hosts = awsb.plan_hosts(cfg)
     for host in hosts:
         (run_dir / "hosts" / host["name"]).mkdir(parents=True)
-    manifest = {"hosts": hosts, "images": fake_images(), "memory_mib": MEMORY_MIB}
+    manifest = {
+        "hosts": hosts,
+        "images": fake_images(),
+        "memory_mib": MEMORY_MIB,
+        "experiments_enabled": [],
+    }
     awsb.render_host_files(run_dir, cfg, manifest, two_node_hosts_info())
 
 
@@ -820,12 +825,11 @@ def test_query_db_line_omits_tls_for_sqlite() -> None:
     ],
 )
 def test_query_store_combinations(engine: str, placement: str, ok: bool) -> None:
-    env = ["ESPRESSO_QUERY_PAYLOAD_DIR=/payload"]
     if ok:
-        awsb.check_query_store(engine, placement, env)
+        awsb.check_query_store(engine, placement)
     else:
         with pytest.raises(awsb.Refused, match="does not support"):
-            awsb.check_query_store(engine, placement, env)
+            awsb.check_query_store(engine, placement)
 
 
 def test_sqlite_on_a_volume_reports_the_volume_store() -> None:
@@ -843,10 +847,18 @@ def test_sqlite_on_a_volume_reports_the_volume_store() -> None:
     assert line.startswith("- Query DB: sqlite, volume, ebs") and "TLS" not in line
 
 
-def test_tmpfs_needs_the_payload_dir_outside_sqlite() -> None:
-    with pytest.raises(awsb.Refused, match="ESPRESSO_QUERY_PAYLOAD_DIR"):
-        awsb.check_query_store("sqlite", "tmpfs", ["RUST_LOG=debug"])
-    awsb.check_query_store("sqlite", "colocated", [])
+# TEST:harness-tmpfs-needs-blob-fails
+def test_tmpfs_needs_the_blob_dir_experiment() -> None:
+    with pytest.raises(awsb.Refused, match="blob-dir"):
+        awsb.check_blob_dir("tmpfs", [])
+    with pytest.raises(awsb.Refused, match="blob-dir"):
+        awsb.check_blob_dir("tmpfs", ["journal"])
+
+
+# TEST:harness-tmpfs-with-blob-ok
+def test_tmpfs_with_the_blob_dir_experiment_and_other_placements_pass() -> None:
+    awsb.check_blob_dir("tmpfs", ["journal", "blob-dir"])
+    awsb.check_blob_dir("colocated", [])
 
 
 def test_a_run_dir_with_the_legacy_sqlite_query_db_reads_as_sqlite_colocated(
@@ -1497,3 +1509,34 @@ def test_the_trace_dir_is_collected_and_wiped_by_a_reset(isolated: Path) -> None
     awsb.collect_hosts(hosts, [hosts.hosts["node0"]], isolated, "postgres")
     (rsync,) = [c for c in runner.calls if c[0] == "rsync"]
     assert not [a for a in rsync if a.startswith("--exclude") and "trace" in a]
+
+
+def test_reproduce_section_names_the_harness_commit_and_flags_a_dirty_tree() -> None:
+    clean = {**manifest_of(["run", "--tag", "t"]), "git_rev": "abc1234"}
+    assert "# harness: git checkout abc1234\n" in awsb.reproduce_section(clean)
+    dirty = awsb.reproduce_section({**clean, "harness_dirty": True})
+    assert "# harness: git checkout abc1234 (uncommitted changes)\n" in dirty
+    assert "# harness:" not in awsb.reproduce_section(
+        manifest_of(["run", "--tag", "t"])
+    )
+
+
+# TEST:harness-manifest-no-experiments-ok
+def test_deployment_meta_copies_the_new_fields_only_when_recorded() -> None:
+    manifest = {
+        **small_node0_manifest(),
+        "az": "eu-west-1b",
+        "ami_id": "ami-0abc",
+        "cost_usd": {"expected": 1.0, "bound": 2.0},
+        "start_spread_s": 0.0,
+    }
+    new = {"experiments", "experiments_enabled", "harness_node_env", "harness_dirty"}
+    assert not new & awsb.deployment_meta(manifest, clean_evidence()).keys()
+    recorded = {
+        "experiments": ["journal"],
+        "experiments_enabled": ["journal"],
+        "harness_node_env": {"validator": ["A=1"], "query": ["A=1"]},
+        "harness_dirty": True,
+    }
+    meta = awsb.deployment_meta({**manifest, **recorded}, clean_evidence())
+    assert {k: meta[k] for k in new} == recorded

@@ -105,7 +105,8 @@ EXIT_LEFTOVER = 4
 LEFTOVER_MESSAGE = "resources may remain, run: aws-bench down %s"
 
 # Duration model. Phases not on the critical path of a laptop disconnect (provision, services,
-# destroy) use the same value for expected and worst case.
+# destroy) use the same value for expected and worst case. Latency shaping (`tc` and two pings)
+# takes seconds and has no entry.
 PROVISION_S = 480.0
 SERVICES_S = 180.0
 READY_EXPECTED_S = 180.0
@@ -114,6 +115,8 @@ COLLECT_MAX_S = 600.0
 DESTROY_S = 180.0
 # `--tcp-cc bbr3`: install the XanMod kernel and reboot every node host.
 KERNEL_EXPECTED_S = 300.0
+# `--tcp-cc bbr_hold`: header install and module build, on the first shaping of a fleet.
+BBR_HOLD_EXPECTED_S = 120.0
 XANMOD_INSTALL_TIMEOUT_S = 900
 # Vendored: dl.xanmod.org redirects to gitlab.com, which served the hosts no key.
 # Fingerprint D38D7D1DA1349567ADED882D86F7D09EE734E623.
@@ -170,6 +173,8 @@ CTL_TYPE = "c8g.2xlarge"
 REGION = "eu-west-1"  # default of `--region`
 # Fleets and IAM roles from before `--region` carry no region.
 LEGACY_REGION = "eu-west-1"
+# Runs from before `--latency` were unshaped.
+LEGACY_LATENCY = "off"
 # The Pricing API is served from a few regions only, whatever region the prices are for.
 PRICING_REGION = "us-east-1"
 PROFILE = "timeboost-dev"
@@ -189,8 +194,10 @@ PUBLISH_MANIFEST_KEYS = (
     "query_db",
     "images",
 )
-# Absent from manifests written before the run command was recorded.
-PUBLISH_MANIFEST_OPTIONAL = ("argv", "fleet_argv")
+# Absent from manifests written before the field was recorded; `argv` and `fleet_argv` are
+# the run commands, published sanitized.
+PUBLISH_MANIFEST_OPTIONAL = ("argv", "fleet_argv", "harness_dirty")
+ARGV_KEYS = ("argv", "fleet_argv")
 # Left out of a recorded command: a remote URL can carry credentials, the others only
 # describe how the original was confirmed or published.
 ARGV_DROP_VALUE = ("--results-remote",)
@@ -426,9 +433,26 @@ PG_JSON = f"{BENCH_DIR}/pg.json"
 # Self-signed cert made by user-data on the query role, mounted read-only into the container.
 PG_TLS_DIR = "/data/pg-tls"
 # Query payloads and VID shares of the query node live next to the Postgres data so they use the
-# same volume; node image reads ESPRESSO_QUERY_PAYLOAD_DIR, which `--node-env` sets to
-# PAYLOAD_CONTAINER_DIR (experimental, so not a default).
+# same volume; node image reads ESPRESSO_NODE_BLOB_DIR, which the harness sets to
+# PAYLOAD_CONTAINER_DIR when the image enables BLOB_DIR_EXPERIMENT.
 PAYLOAD_HOST_DIR = "/data/pg/payload"
+# The experiment that gates ESPRESSO_NODE_BLOB_DIR in the image; the harness sets the dir only
+# then.
+BLOB_DIR_EXPERIMENT = "blob-dir"
+# Tuning env of every node, ahead of `--node-env`; images without a variable ignore it.
+HARNESS_NODE_ENV: dict[str, str] = {
+    "GLIBC_TUNABLES": "glibc.malloc.hugetlb=1",
+    "ESPRESSO_NODE_EXPERIMENTS": "all",
+}
+# Manifest fields `result.json` records under `deployment`; absent in manifests from before them.
+DEPLOYMENT_RECORD_KEYS = (
+    "experiments",
+    "experiments_enabled",
+    "harness_node_env",
+    "harness_dirty",
+)
+# Checkout paths the harness reads or ships; `.env` stays out (local secrets).
+HARNESS_PATHS = ("scripts/network-bench", "scripts/wait-for-l1-finalized")
 TRACE_HOST_DIR = f"{BENCH_DIR}/trace"
 TRACE_CONTAINER_DIR = "/trace"
 TRACE_PLOTS_TIMEOUT_S = 600
@@ -829,6 +853,8 @@ class Preflight(TypedDict):
     instance_prices: dict[str, float]
     ami_id: str
     images: dict[str, ImageInfo]
+    # `--list-experiments` of `images["espresso-node"]`, run locally; [] for images without the flag.
+    experiments: list[str]
     # The engine minor `rds_orderable` resolved; present when the fleet has an rds mode.
     rds_engine_version: NotRequired[str]
 
@@ -906,6 +932,9 @@ class FleetManifest(TypedDict):
     memory_mib: NotRequired[dict[str, int]]
     ami_id: NotRequired[str]
     images: NotRequired[dict[str, ImageInfo]]
+    # `Preflight.experiments`, or the re-listing of `retagged` after a tag change; absent in
+    # fleets listed before experiments existed.
+    experiments: NotRequired[list[str]]
     hosts_info: NotRequired[dict[str, "HostInfo"]]
     cost_usd: NotRequired[dict[str, float]]
     expires_at: NotRequired[str]
@@ -933,6 +962,12 @@ class Manifest(FleetManifest):
     start_spread_s: NotRequired[float]
     config_hash: NotRequired[str]
     latency: NotRequired[nb.LatencyMeta]
+    # `experiments` the run's nodes enable after `--node-env`.
+    experiments_enabled: NotRequired[list[str]]
+    # Harness tuning pairs in effect after `--node-env`, per role.
+    harness_node_env: NotRequired[dict[NodeRole, list[str]]]
+    # Whether HARNESS_PATHS held uncommitted changes at run start.
+    harness_dirty: NotRequired[bool]
 
 
 class AgentState(TypedDict):
@@ -1017,6 +1052,8 @@ class Ec2Balance(TypedDict):
 
 # The class body's `latency` field shadows the module inside it.
 INTERNET_MTU = latency.INTERNET_MTU
+# Jumbo frames inside one VPC; inter-region paths carry INTERNET_MTU.
+VPC_MTU = 9001
 JITTER_RATIO = latency.JITTER_RATIO
 
 
@@ -1031,7 +1068,7 @@ class RunConfig:
     load: nb.BenchConfig = field(default_factory=lambda: aws_load())
     root_gb: str = "auto"
     pg_iops: int = 12000
-    pg_mbps: int = 500
+    pg_mbps: int = 1500
     region: str = REGION
     max_usd: float = 10.0
     yes: bool = False
@@ -1041,18 +1078,19 @@ class RunConfig:
     # `KEY=VALUE` written last into every node's node.env, so it also overrides.
     node_env: tuple[str, ...] = ()
     # Genesis `max_block_size`, verbatim.
-    max_block_size: str = "50mb"
+    max_block_size: str = "70mb"
     # Genesis `base_version` and `upgrade_version`, verbatim: the protocol the network runs
     # from genesis. The images must support it.
     protocol_version: str = "0.6"
     # espresso-node writes leader_trace_node{N}.csv to /opt/bench/trace; `trace-plots` renders it.
     leader_trace: bool = False
-    # `latency.PROFILES` name; `off` shapes nothing. `intra_latency` adds the same-location delay.
-    latency: str = "off"
+    # `latency.PROFILES` name; `off` shapes nothing, the default is the reference geography.
+    # `intra_latency` adds the same-location delay.
+    latency: str = "decaf-2025"
     intra_latency: bool = True
     # `latency.TCP_CCS` name and interface MTU, set on the nodes with the latency shaping.
-    tcp_cc: str = "bbr"
-    mtu: int = INTERNET_MTU
+    tcp_cc: str = "bbr_hold"
+    mtu: int = VPC_MTU
     # `latency.NETEMS` name: `full` adds jitter and loss to the delay.
     netem: str = "delay"
     # With `netem` full: the jitter floor as a ratio of the one-way delay.
@@ -1065,7 +1103,7 @@ class RunConfig:
     search: nb.SearchConfig | None = None
     # `ALLOCATORS` name: espresso-node from `ALLOC_REPOSITORY`; None for the regular image.
     allocator: str | None = None
-    # `journal` is experimental and absent from images built from `main`.
+    # `journal` runs consensus on the journal; so does `fs` on images with the `journal` experiment.
     consensus_storage: ConsensusStorage = "fs"
     # Faults while the load runs; None for a plain run.
     chaos: ch.ChaosConfig | None = None
@@ -1486,6 +1524,8 @@ def shot_seconds(cfg: RunConfig) -> tuple[float, float]:
     if cfg.tcp_cc == "bbr3":
         expected_s += KERNEL_EXPECTED_S
         worst_s += XANMOD_INSTALL_TIMEOUT_S + SSH_READY_TIMEOUT_S
+    if cfg.latency != "off" and cfg.tcp_cc == "bbr_hold":
+        expected_s += BBR_HOLD_EXPECTED_S
     if "rds" in cfg.db_modes:
         expected_s += RDS_CREATE_S
         worst_s += RDS_CREATE_MAX_S
@@ -2205,9 +2245,13 @@ def resolve_image(http_get: HttpGet, ref: str, platform: str) -> ImageInfo:
 
 
 def preflight(system: System, cfg: RunConfig, hosts: list[HostSpec]) -> Preflight:
+    """Checks the tools, then resolves everything the fleet needs from AWS (account, instance
+    specs, prices, AZ, AMI, rds engine minor), the images of `cfg.tag`, and the experiments
+    the node image reports. No AWS write. `docker` must be on PATH: the listing runs locally."""
     run = system.run
     tools_on_path(
-        system.which, ["tofu", "aws", "ssh", "scp", "rsync", "git", "ssh-keygen"]
+        system.which,
+        ["tofu", "aws", "ssh", "scp", "rsync", "git", "ssh-keygen", "docker"],
     )
     account = caller_account(run, cfg.region)
     types = {h["instance_type"] for h in hosts}
@@ -2221,6 +2265,7 @@ def preflight(system: System, cfg: RunConfig, hosts: list[HostSpec]) -> Prefligh
     ami_id = resolve_ami(run, cfg.region, arch)
     rds_minor = rds_orderable(run, cfg, az) if "rds" in cfg.db_modes else None
     images = resolve_images(system.http_get, cfg, rds_minor, arch)
+    experiments = list_experiments(system, images["espresso-node"], arch)
     pre: Preflight = {
         "account": account,
         "az": az,
@@ -2229,10 +2274,77 @@ def preflight(system: System, cfg: RunConfig, hosts: list[HostSpec]) -> Prefligh
         "instance_prices": prices,
         "ami_id": ami_id,
         "images": images,
+        "experiments": experiments,
     }
     if rds_minor is not None:
         pre["rds_engine_version"] = rds_minor
     return pre
+
+
+def list_experiments(system: System, image: ImageInfo, arch: Arch) -> list[str]:
+    """The experiments `image` reports, listed by a local `docker run` of the local platform's
+    digest of `image["ref"]`: `image` itself when the platform is the fleet's `linux/<arch>`,
+    else resolved through `system.http_get`. Refused when that digest's revision differs from
+    `image["revision"]`. The first listing of a tag pulls the image."""
+    local = local_platform(system.run)
+    local_image = image
+    if local != f"linux/{arch}":
+        local_image = resolve_image(system.http_get, image["ref"], local)
+        if local_image["revision"] != image["revision"]:
+            raise Refused(
+                f"{image['ref']} has revision {image['revision']} on linux/{arch} but "
+                f"{local_image['revision']} on {local}: cannot list its experiments locally"
+            )
+    result = system.run(experiments_argv(local_image))
+    names = parse_experiments(result)
+    note = ", image predates --list-experiments" if result.returncode == 2 else ""
+    log.info("experiments of %s: %s%s", image["ref"], ", ".join(names) or "none", note)
+    return names
+
+
+def local_platform(run: Runner) -> str:
+    """`os/arch` of the local docker server, which is what `docker run` executes; Refused when
+    docker fails."""
+    result = run(["docker", "version", "--format", "{{.Server.Os}}/{{.Server.Arch}}"])
+    if result.returncode != 0:
+        raise Refused(f"docker version failed: {result.stderr.strip()}")
+    return result.stdout.strip()
+
+
+def experiments_argv(image: ImageInfo) -> list[str]:
+    """Calls the postgres binary directly: the entrypoint script writes to stdout and can
+    prepend `-- storage-sql`."""
+    return [
+        "docker",
+        "run",
+        "--rm",
+        "--entrypoint",
+        "/bin/espresso-node-postgres",
+        f"{image['ref']}@{image['digest']}",
+        "--list-experiments",
+    ]
+
+
+def parse_experiments(result: subprocess.CompletedProcess[str]) -> list[str]:
+    """The JSON array of names on rc 0; [] on rc 2 when stderr names `--list-experiments` (clap's
+    usage error: the image predates the flag); Refused on any other rc, or on rc 0 with anything
+    but a JSON array of strings."""
+    if result.returncode == 2 and "--list-experiments" in result.stderr:
+        return []
+    if result.returncode != 0:
+        raise Refused(
+            f"--list-experiments exited {result.returncode}: {result.stderr.strip()}"
+        )
+    try:
+        names = json.loads(result.stdout)
+    except json.JSONDecodeError as exc:
+        raise Refused(f"--list-experiments printed no JSON ({exc})") from exc
+    if not isinstance(names, list) or not all(isinstance(n, str) for n in names):
+        raise Refused(
+            f"--list-experiments printed {result.stdout.strip()[:200]!r}, not a JSON "
+            "array of strings"
+        )
+    return names
 
 
 def terraform_env() -> dict[str, str]:
@@ -2474,17 +2586,68 @@ def _journal_max_bytes(host: HostSpec) -> int:
     return int(usable_gb * 1_000_000_000 * fraction)
 
 
+def enabled_experiments(known: list[str], node_env: tuple[str, ...]) -> list[str]:
+    """`known` filtered by the effective ESPRESSO_NODE_EXPERIMENTS: HARNESS_NODE_ENV's `all`
+    or the `--node-env` value, parsed as the node does: entries trimmed, empty ones dropped,
+    duplicates collapsed, `all` only alone. Refused for a name the image does not list or `all`
+    next to other names: the nodes would exit at startup."""
+    env = {**HARNESS_NODE_ENV, **dict(_split_pair(pair) for pair in node_env)}
+    entries = env["ESPRESSO_NODE_EXPERIMENTS"].split(",")
+    names = list(dict.fromkeys(e.strip() for e in entries if e.strip()))
+    if names == ["all"]:
+        return list(known)
+    if "all" in names:
+        raise Refused("ESPRESSO_NODE_EXPERIMENTS: `all` must be the only entry")
+    if unknown := [n for n in names if n not in known]:
+        raise Refused(
+            f"ESPRESSO_NODE_EXPERIMENTS names {unknown}, which the image does not "
+            f"list (it lists {known})"
+        )
+    return [name for name in known if name in names]
+
+
+def harness_env_pairs(enabled: list[str], role: NodeRole) -> list[str]:
+    """`KEY=VALUE` tuning pairs the harness gives a node of `role`: HARNESS_NODE_ENV, plus the
+    blob dir on query nodes when BLOB_DIR_EXPERIMENT is enabled."""
+    pairs = [f"{key}={value}" for key, value in HARNESS_NODE_ENV.items()]
+    if role == "query" and BLOB_DIR_EXPERIMENT in enabled:
+        pairs.append(f"ESPRESSO_NODE_BLOB_DIR={PAYLOAD_CONTAINER_DIR}")
+    return pairs
+
+
+def effective_harness_env(
+    enabled: list[str], node_env: tuple[str, ...]
+) -> dict[NodeRole, list[str]]:
+    """`harness_env_pairs` per role without the keys `node_env` overrides."""
+    overridden = {_split_pair(pair)[0] for pair in node_env}
+    roles: tuple[NodeRole, ...] = ("validator", "query")
+    return {
+        role: [
+            pair
+            for pair in harness_env_pairs(enabled, role)
+            if _split_pair(pair)[0] not in overridden
+        ]
+        for role in roles
+    }
+
+
+def _split_pair(pair: str) -> tuple[str, str]:
+    key, _, value = pair.partition("=")
+    return key, value
+
+
 def render_node_env(
     host: HostSpec,
     hosts: dict[str, HostInfo],
     pg: PgEndpoint | None,
     node_env: Iterable[str] = (),
-    consensus_storage: ConsensusStorage = "fs",
     query_engine: QueryEngine = "postgres",
     prune: int | None = None,
     config_peers: bool = False,
     chaos: bool = False,
 ) -> str:
+    """Host env, journal env on every node, then `node_env` (harness pairs, trace env,
+    `--node-env`)."""
     self_info = hosts[host["name"]]
     ctl_info = hosts["ctl"]
     node_names = _node_names(hosts)
@@ -2513,8 +2676,7 @@ def render_node_env(
         "ESPRESSO_NODE_STORAGE_PATH": "/store/espresso",
         "ESPRESSO_NODE_IDENTITY_NODE_NAME": host["name"],
     }
-    if consensus_storage == "journal":
-        env["ESPRESSO_NODE_JOURNAL_MAX_BYTES"] = str(_journal_max_bytes(host))
+    env["ESPRESSO_NODE_JOURNAL_MAX_BYTES"] = str(_journal_max_bytes(host))
     # A required value left empty risks a clap parse error; omit rather than pass "".
     if peer_urls:
         env["ESPRESSO_NODE_STATE_PEERS"] = ",".join(peer_urls)
@@ -2536,10 +2698,9 @@ def render_node_env(
     if host["role"] == "query" and query_engine == "sqlite":
         # The entrypoint then starts the node on SQLite and prepends storage-sql itself.
         env["ESPRESSO_NODE_EMBEDDED_DB"] = "true"
-        if consensus_storage == "journal":
-            # The journal refuses to open next to an existing sqlite database until its first
-            # segment exists, e.g. after a restart before that.
-            env["ESPRESSO_NODE_JOURNAL_IGNORE_EXISTING"] = "true"
+        # The journal refuses to open next to an existing sqlite database until its first
+        # segment exists, e.g. after a restart before that.
+        env["ESPRESSO_NODE_JOURNAL_IGNORE_EXISTING"] = "true"
     elif host["role"] == "query":
         if pg is None:
             raise ValueError(
@@ -3253,25 +3414,25 @@ def add_latency_flags(parser: argparse.ArgumentParser) -> None:
         "--no-intra-latency",
         dest="intra_latency",
         action="store_false",
-        help="with --latency: no delay between nodes of the same location",
+        help="on shaped runs: no delay between nodes of the same location",
     )
     parser.add_argument(
         "--tcp-cc",
         choices=latency.TCP_CCS,
         default=RunConfig.tcp_cc,
-        help="with --latency: TCP congestion control of the nodes",
+        help="on shaped runs: TCP congestion control of the nodes",
     )
     parser.add_argument(
         "--mtu",
         type=positive_int,
         default=RunConfig.mtu,
-        help="with --latency: interface MTU of the nodes; 1500 for internet-sized packets",
+        help="on shaped runs: interface MTU of the nodes; 1500 for internet-sized packets",
     )
     parser.add_argument(
         "--netem",
         choices=latency.NETEMS,
         default=RunConfig.netem,
-        help="with --latency: `full` adds per-pair jitter and loss to the delay; `full` with --chaos",
+        help="on shaped runs: `full` adds per-pair jitter and loss to the delay; `full` with --chaos",
     )
     parser.add_argument(
         "--jitter-ratio",
@@ -3500,6 +3661,24 @@ def chaos_load(load: nb.BenchConfig, chaos: ch.ChaosConfig) -> nb.BenchConfig:
     )
 
 
+def check_root_gb(root_gb: str) -> None:
+    """Refuses an explicit `--root-gb` with no room after RESERVED_GB for the journal cap."""
+    if root_gb != "auto" and int(root_gb) <= RESERVED_GB:
+        raise Refused(
+            f"--root-gb {root_gb} leaves no room for the journal: it must exceed "
+            f"{RESERVED_GB} GB reserved for the OS and images"
+        )
+
+
+def with_db_modes(
+    cfg: RunConfig, args: argparse.Namespace, db_modes: tuple[DbMode, ...]
+) -> RunConfig:
+    """`cfg` with `db_modes`; `--pg-mbps` not given takes RDS_MBPS when `rds` is among them."""
+    if "rds" in db_modes and "--pg-mbps" not in given_flags(args.argv):
+        cfg = dataclasses.replace(cfg, pg_mbps=RDS_MBPS)
+    return dataclasses.replace(cfg, db_modes=db_modes)
+
+
 def config_from_args(args: argparse.Namespace) -> RunConfig:
     keys = [pair.partition("=")[0] for pair in args.node_env]
     for key in keys:
@@ -3510,6 +3689,7 @@ def config_from_args(args: argparse.Namespace) -> RunConfig:
     check_latency_flags(
         profile, args.intra_latency, args.tcp_cc, args.mtu, netem, args.jitter_ratio
     )
+    check_root_gb(args.root_gb)
     chaos = chaos_from_args(args)
     nodes = chaos_default(args, "--nodes", CHAOS_NODES)
     search = search_from_args(args)
@@ -3882,7 +4062,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 
 def cmd_plan(args: argparse.Namespace, system: System) -> int:
     cfg = dataclasses.replace(
-        config_from_args(args), db_modes=args.db_modes, ttl_min=args.ttl_min
+        with_db_modes(config_from_args(args), args, args.db_modes),
+        ttl_min=args.ttl_min,
     )
     fleet_dir, *_ = plan_fleet(args, cfg, system)
     log.info("rendered %s (phase=planned)", fleet_dir)
@@ -4135,7 +4316,7 @@ def cmd_run(args: argparse.Namespace, system: System) -> int:
         raise Refused(
             "run needs --tag, or --fleet [FLEET] to measure on a fleet from `up`"
         )
-    cfg = dataclasses.replace(fleet_config_from_args(args), db_modes=(args.query_db,))
+    cfg = with_db_modes(fleet_config_from_args(args), args, (args.query_db,))
     interrupts = Interrupts(system.clock, system.forward)
     try:
         fleet_dir, run_dir, tf = prepare_run(args, cfg, system)
@@ -4221,12 +4402,17 @@ def plan_fleet(
     args: argparse.Namespace, cfg: RunConfig, system: System
 ) -> tuple[Path, Path, Terraform, list[HostSpec], Preflight]:
     """Preflight, cost check, render, `tofu init` and `plan`. Shared by `plan` and `run`; makes
-    no AWS write. The preflight summary is logged before the cost line."""
+    no AWS write. The preflight summary is logged before the cost line. `--query-db tmpfs`
+    on an image without the blob-dir experiment is refused before anything is rendered, and
+    the harness checkout is recorded in the run dir."""
     fleet_dir, hosts, pre, estimate = plan_new_fleet(
         args, cfg, system, idle_fleet=False
     )
+    check_blob_dir(cfg.query_db, enabled_experiments(pre["experiments"], cfg.node_env))
+    changes = harness_changes(system.run)
     fleet = render_fleet_dir(system, cfg, fleet_dir, hosts, pre, estimate, args.argv)
     run_dir = render_run(fleet_dir, fleet, cfg, SINGLE_RUN, args.argv)
+    record_harness_tree(run_dir, changes)
     return fleet_dir, run_dir, init_terraform(system.run, fleet_dir), hosts, pre
 
 
@@ -4348,7 +4534,7 @@ def measure_run(run: Run) -> None:
         remote = fleet.remote
         assert remote is not None, "up_fleet must run first"
         manifest = fleet.manifest
-        render_host_files(run.run_dir, run.cfg, manifest, remote.hosts)
+        render_host_files(run.run_dir, run.cfg, run.manifest, remote.hosts)
         enter_phase(
             fleet, run.manifest_path, "shipping", "files, host monitors, containers"
         )
@@ -4985,29 +5171,31 @@ def cmd_run_fleet(args: argparse.Namespace, system: System) -> int:
         return EXIT_FAILED
 
 
-def check_query_store(
-    engine: QueryEngine, placement: DbMode, node_env: Iterable[str]
-) -> None:
+def check_query_store(engine: QueryEngine, placement: DbMode) -> None:
+    """Refuses a placement the engine does not support."""
     if placement not in QUERY_PLACEMENTS[engine]:
         raise Refused(
             f"--query-engine {engine} does not support --query-db {placement}; "
             f"choose from {', '.join(QUERY_PLACEMENTS[engine])}"
         )
-    if placement == "tmpfs" and not any(
-        pair.startswith("ESPRESSO_QUERY_PAYLOAD_DIR=") for pair in node_env
-    ):
+
+
+def check_blob_dir(placement: DbMode, enabled: list[str]) -> None:
+    """Refuses `tmpfs` unless BLOB_DIR_EXPERIMENT is enabled: payloads in SQLite would fill
+    the tmpfs. An explicit `--node-env ESPRESSO_NODE_BLOB_DIR` does not lift it, because an
+    image ignores the option without the experiment."""
+    if placement == "tmpfs" and BLOB_DIR_EXPERIMENT not in enabled:
         raise Refused(
-            "--query-db tmpfs needs --node-env ESPRESSO_QUERY_PAYLOAD_DIR=...: "
+            f"--query-db tmpfs needs the image's {BLOB_DIR_EXPERIMENT} experiment: "
             "payloads in SQLite would fill the tmpfs"
         )
 
 
 def fleet_config_from_args(args: argparse.Namespace) -> RunConfig:
     query_engine = chaos_default(args, "--query-engine", CHAOS_QUERY_ENGINE)
-    check_query_store(query_engine, args.query_db, args.node_env)
+    check_query_store(query_engine, args.query_db)
     return dataclasses.replace(
-        config_from_args(args),
-        db_modes=args.db_modes,
+        with_db_modes(config_from_args(args), args, args.db_modes),
         query_engine=query_engine,
         query_db=args.query_db,
         ttl_min=args.ttl_min,
@@ -5113,7 +5301,11 @@ def admit_run(
     )
     try:
         estimate = check_run_allowed(manifest, cfg, utc_now(system.clock))
-        fleet = retagged(system.http_get, manifest, cfg)
+        fleet = retagged(system, manifest, cfg)
+        check_blob_dir(
+            cfg.query_db, enabled_experiments(fleet["experiments"], cfg.node_env)
+        )
+        changes = harness_changes(system.run)
         run_dir = render_run(
             fleet_dir,
             fleet,
@@ -5122,21 +5314,27 @@ def admit_run(
             argv,
             estimate,
         )
+        record_harness_tree(run_dir, changes)
         return run_dir, estimate
     except BaseException:
         release_fleet_lock(fleet_dir)
         raise
 
 
-def retagged(
-    http_get: HttpGet, manifest: FleetManifest, cfg: RunConfig
-) -> FleetManifest:
-    """The fleet manifest with the digests `cfg.tag` resolves to; the manifest itself when the
-    tag is the fleet's, which needs no registry access."""
-    if not tag_changed(manifest, cfg):
+def retagged(system: System, manifest: FleetManifest, cfg: RunConfig) -> FleetManifest:
+    """The fleet manifest with the images and experiments of `cfg.tag`: re-resolved and
+    re-listed when the tag or allocator changed or `experiments` is missing, else the manifest
+    itself."""
+    changed = tag_changed(manifest, cfg)
+    if not changed and "experiments" in manifest:
         return manifest
-    images = resolve_images(http_get, cfg, None, manifest["arch"])
-    return {**manifest, "images": images}
+    images = (
+        resolve_images(system.http_get, cfg, None, manifest["arch"])
+        if changed
+        else manifest["images"]
+    )
+    experiments = list_experiments(system, images["espresso-node"], manifest["arch"])
+    return {**manifest, "images": images, "experiments": experiments}
 
 
 def take_fleet_lock(
@@ -5253,6 +5451,7 @@ def pull_tag(run: Run) -> None:
         fleet.manifest_path,
         saved["phase"],
         images=images,
+        experiments=run.manifest["experiments"],
         config={**saved["config"], "tag": run.cfg.tag, "allocator": run.cfg.allocator},
     )
 
@@ -5576,6 +5775,7 @@ def render_fleet_dir(
         memory_mib=pre["memory_mib"],
         ami_id=pre["ami_id"],
         images=pre["images"],
+        experiments=pre["experiments"],
         git_rev=git_rev,
         ssh_public_key=ssh_pub,
         cost_usd={
@@ -5615,6 +5815,30 @@ def render_fleet_dir(
     return fleet
 
 
+def harness_changes(run: Runner) -> list[str]:
+    """`git status --porcelain` lines under HARNESS_PATHS, tracked and untracked; empty for a
+    clean checkout. Read before anything is rendered, because git can still fail."""
+    result = run(
+        ["git", "-C", str(REPO_ROOT), "status", "--porcelain", "--", *HARNESS_PATHS]
+    )
+    if result.returncode != 0:
+        raise Refused(f"git status failed: {result.stderr.strip()}")
+    return result.stdout.splitlines()
+
+
+def record_harness_tree(run_dir: Path, changes: list[str]) -> None:
+    """Writes `harness_dirty` to the run manifest and logs one WARNING when `changes` is not
+    empty."""
+    manifest = read_manifest(run_dir)
+    nb.write_json(run_dir / MANIFEST_JSON, {**manifest, "harness_dirty": bool(changes)})
+    if changes:
+        log.warning(
+            "harness checkout has uncommitted changes in %d files under %s",
+            len(changes),
+            ", ".join(HARNESS_PATHS),
+        )
+
+
 def render_run(
     fleet_dir: Path,
     fleet: FleetManifest,
@@ -5624,7 +5848,9 @@ def render_run(
     run_estimate: RunEstimate | None = None,
 ) -> Path:
     """`runs/<nn>-<name>/` with its manifest, genesis and load config. Without a
-    `run_estimate` this is the run of a single shot, which also provisions."""
+    `run_estimate` this is the run of a single shot, which also provisions. The manifest gets
+    the experiments the nodes enable (`fleet["experiments"]` after `--node-env`) and the
+    harness node env in effect."""
     genesis = render_genesis(
         (SCRIPT_DIR / "genesis.toml").read_bytes(),
         stake_table_capacity(cfg),
@@ -5644,6 +5870,9 @@ def render_run(
     )
     if meta is not None:
         manifest["latency"] = meta
+    enabled = enabled_experiments(fleet["experiments"], cfg.node_env)
+    manifest["experiments_enabled"] = enabled
+    manifest["harness_node_env"] = effective_harness_env(enabled, cfg.node_env)
     nb.write_json(run_dir / "manifest.json", manifest)
     append_event(run_dir, "planned", "manifest-written", None)
     (run_dir / "genesis.toml").write_bytes(genesis)
@@ -5952,10 +6181,15 @@ def slow_node_names(cfg: RunConfig) -> list[str]:
 def render_host_files(
     run_dir: Path,
     cfg: RunConfig,
-    manifest: FleetManifest,
+    manifest: Manifest,
     hosts: dict[str, HostInfo],
 ) -> None:
+    """Writes every host's files under `run_dir/hosts/<name>/`: start script, and per role the
+    ctl, stake and prover files or `node.env` (plus `node-rejoin.env` and `recreate.sh` under
+    chaos). Each node's `node_env` is the harness pairs of the run's enabled experiments, then
+    the leader trace env, then `--node-env`, which wins."""
     slow = slow_node_names(cfg)
+    enabled = manifest["experiments_enabled"]
     for spec in manifest["hosts"]:
         host_dir = run_dir / "hosts" / spec["name"]
         host_dir.mkdir(parents=True, exist_ok=True)
@@ -5995,8 +6229,11 @@ def render_host_files(
                 spec,
                 hosts,
                 pg,
-                (*trace_env(cfg), *cfg.node_env),
-                cfg.consensus_storage,
+                (
+                    *harness_env_pairs(enabled, spec["role"]),
+                    *trace_env(cfg),
+                    *cfg.node_env,
+                ),
                 cfg.query_engine,
                 cfg.prune,
             )
@@ -7791,6 +8028,7 @@ def config_from_manifest(saved: dict[str, Any]) -> RunConfig:
     fields.pop("staking", None)  # derived from epoch_height
     fields.setdefault("region", LEGACY_REGION)
     fields.setdefault("consensus_storage", LEGACY_CONSENSUS_STORAGE)
+    fields.setdefault("latency", LEGACY_LATENCY)
     fields["search"] = search_config(saved.get("search"))
     fields["chaos"] = chaos_config(saved.get("chaos"))
     return RunConfig(**fields)
@@ -8380,9 +8618,15 @@ def reproduce_section(manifest: Manifest) -> str:
     else:
         commands = [pin_tag(run_argv, tag)]
     node = manifest["images"]["espresso-node"]
+    dirty = " (uncommitted changes)" if manifest.get("harness_dirty") else ""
     lines = [
         *(f"just bench aws {shlex.join(argv)}" for argv in commands),
         f"# espresso-node {node['revision'] or '-'} {node['digest']}",
+        *(
+            [f"# harness: git checkout {manifest['git_rev']}{dirty}"]
+            if "git_rev" in manifest
+            else []
+        ),
     ]
     return "\n".join(["", "", "### Reproduce", "", "```", *lines, "```", ""])
 
@@ -8831,6 +9075,7 @@ def deployment_meta(manifest: Manifest, evidence: Evidence) -> nb.DeploymentMeta
             else {}
         ),
         **({"staking": True} if config.get("staking") else {}),
+        **{k: manifest[k] for k in DEPLOYMENT_RECORD_KEYS if k in manifest},
         **({"prover": evidence["prover"]} if "prover" in evidence else {}),
         **(
             {
@@ -9494,7 +9739,7 @@ INDEX_HEADER = (
 
 def latency_cell(config: dict) -> str:
     # Manifests from before the flag have no such key.
-    profile = config.get("latency", "off")
+    profile = config.get("latency", LEGACY_LATENCY)
     if profile == "off":
         return "off"
     cell = profile if config["intra_latency"] else f"{profile} no-intra"
@@ -9727,7 +9972,7 @@ def published_manifest(run_dir: Path) -> dict[str, Any]:
     manifest = read_manifest(run_dir)
     reduced: dict[str, Any] = {key: manifest[key] for key in PUBLISH_MANIFEST_KEYS}
     reduced |= {
-        k: sanitize_argv(manifest[k])
+        k: sanitize_argv(manifest[k]) if k in ARGV_KEYS else manifest[k]
         for k in PUBLISH_MANIFEST_OPTIONAL
         if k in manifest
     }

@@ -7,23 +7,27 @@
 | Setting                                          | Needs                        |
 | ------------------------------------------------ | ---------------------------- |
 | `--consensus-storage journal`                    | bench                        |
-| `ESPRESSO_QUERY_PAYLOAD_DIR=/payload`            | bench                        |
+| `ESPRESSO_NODE_BLOB_DIR=/payload`                | harness default, `blob-dir`  |
 | `ESPRESSO_BENCH_BLAKE3_TX_HASH=1`                | bench                        |
 | `--query-engine sqlite`                          | main                         |
 | `EXPERIMENTAL_SQLITE_PRAGMAS=synchronous=normal` | bench                        |
-| `GLIBC_TUNABLES=glibc.malloc.hugetlb=1`          | main                         |
+| `GLIBC_TUNABLES=glibc.malloc.hugetlb=1`          | harness default              |
 | `--allocator NAME`                               | `build-allocators.yml` image |
 | `--prune [RETENTION]`                            | main                         |
 
 With `--query-engine sqlite`, `--query-db volume` keeps SQLite and payloads off the root disk the journal uses; `tmpfs`
-drops SQLite disk I/O entirely (needs `ESPRESSO_QUERY_PAYLOAD_DIR`). `EXPERIMENTAL_SQLITE_PRAGMAS` takes comma-separated
-`key=value` pragmas applied after the defaults.
+drops SQLite disk I/O entirely (needs an image with the `blob-dir` experiment). `EXPERIMENTAL_SQLITE_PRAGMAS` takes
+comma-separated `key=value` pragmas applied after the defaults.
+
+With `ESPRESSO_NODE_EXPERIMENTS=all` (the harness default), `--consensus-storage fs` runs the journal on images with the
+`journal` experiment; the summary's experiments line shows it. A real `fs` run on such an image needs
+`--node-env ESPRESSO_NODE_EXPERIMENTS=<names without journal>`.
 
 With `--prune` and `--query-engine sqlite`, each prune batch holds the write lock, which shows as query lag.
 
-## Host (with `--latency`)
+## Host (shaped runs, the default)
 
-- `--mtu 9001` is needed for very high throughput, but only traffic inside one VPC gets it; real inter-region paths
-  carry 1500, so results overstate a WAN deployment.
-- `--tcp-cc bbr` (default) is needed for good throughput. `--tcp-cc bbr_hold` (experimental) keeps throughput stable
-  after an overload. `--tcp-cc bbr3` runs BBR v3 on the XanMod kernel (x86_64 only).
+- `--mtu 9001` (default) is needed for very high throughput, but only traffic inside one VPC gets it; real inter-region
+  paths carry 1500, so results overstate a WAN deployment. `--mtu 1500` gives internet-sized packets.
+- `--tcp-cc bbr_hold` (default) keeps throughput stable after an overload; `--tcp-cc bbr` is stock BBR. `--tcp-cc bbr3`
+  runs BBR v3 on the XanMod kernel (x86_64 only).

@@ -61,6 +61,8 @@ just demo-native                      # local network via process-compose
   replay from genesis, which gives complete trees. A state that started at a boundary stays incomplete after a switch to
   `--archive`, and the loop logs an error at start. Leaves the data pruner has already deleted, and state the local
   snapshot lacks, come from peers; the state pruner never passes that snapshot.
+- **Experiments** (`crates/espresso/utils/src/experiment.rs`): bench-branch features behind `ESPRESSO_NODE_EXPERIMENTS`.
+  Adding one: `doc/agents/experiments.md`.
 - **Coordinator** (`crates/hotshot/new-protocol/src/coordinator.rs`): the consensus protocol.
   `EpochMembershipCoordinator` (`crates/hotshot/types/src/epoch_membership.rs`) manages per-epoch stake tables.
 - **L1Client** (`crates/espresso/types/src/v0/impls/l1.rs`): tracks `head` and `finalized`; reads use

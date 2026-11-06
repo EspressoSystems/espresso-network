@@ -12,7 +12,7 @@ kver=$(uname -r)
 tag=v$(echo "$kver" | cut -d. -f1-2)
 DEBIAN_FRONTEND=noninteractive apt-get install -y -q "linux-headers-$kver" build-essential >/dev/null
 dir=$(mktemp -d)
-curl -sfL "https://raw.githubusercontent.com/torvalds/linux/$tag/net/ipv4/tcp_bbr.c" -o "$dir/tcp_bbr_hold.c"
+curl -sSfL --retry 5 --retry-all-errors "https://raw.githubusercontent.com/torvalds/linux/$tag/net/ipv4/tcp_bbr.c" -o "$dir/tcp_bbr_hold.c"
 sed -i \
   -e 's/= "bbr",/= "bbr_hold",/' \
   -e 's/bbr_probe_rtt_mode_ms = 200;/bbr_probe_rtt_mode_ms = 0;/' \

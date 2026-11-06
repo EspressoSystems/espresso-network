@@ -16,7 +16,7 @@ use clap::{Args, FromArgMatches, Parser, error::ErrorKind};
 use derivative::Derivative;
 use espresso_telemetry::TelemetryOptions;
 use espresso_types::{BackoffParams, L1ClientOptions, parse_duration};
-use espresso_utils::logging;
+use espresso_utils::{experiment::EnabledExperiments, logging};
 use hotshot_types::addr::NetAddr;
 use light_client::{
     state::LightClientOptions,
@@ -118,6 +118,14 @@ pub struct Options {
 
     #[clap(flatten)]
     pub key_set: KeySetOptions,
+
+    /// Bench-branch features to enable: comma list of names, or `all`; `--list-experiments` shows the names.
+    #[clap(long, env = "ESPRESSO_NODE_EXPERIMENTS", default_value = "")]
+    pub experiments: EnabledExperiments,
+
+    /// Print the experiments this binary has as a JSON array and exit.
+    #[clap(long)]
+    pub list_experiments: bool,
 
     /// Add optional modules to the service.
     ///
@@ -986,7 +994,7 @@ pub(crate) mod tests {
         FeeAccount, GenesisHeader, L1BlockInfo, PubKey, SeqTypes, Timestamp, Upgrade, UpgradeMode,
         UpgradeType, ViewBasedUpgrade, v0_3::ChainConfig,
     };
-    use espresso_utils::ser::FromStringOrInteger;
+    use espresso_utils::{experiment::Experiment, ser::FromStringOrInteger};
     use hotshot_types::{
         PeerConfig, VersionedDaCommittee, light_client::StateKeyPair, stake_table::StakeTableEntry,
         traits::signature_key::SignatureKey, x25519,
@@ -996,6 +1004,35 @@ pub(crate) mod tests {
 
     use super::*;
     use crate::genesis::{L1Finalized, StakeTableConfig};
+
+    #[test]
+    fn experiment_options_unknown_fails() {
+        let err = Options::try_parse_from(["n", "--experiments", "nope"]).unwrap_err();
+        let msg = err.to_string();
+        assert_eq!(err.kind(), ErrorKind::ValueValidation);
+        assert!(msg.contains("--experiments"), "{msg}");
+        assert!(msg.contains("nope"), "{msg}");
+        assert!(
+            msg.contains(&format!("this binary has {:?}", Experiment::names())),
+            "{msg}"
+        );
+    }
+
+    #[test]
+    fn experiment_options_list_json_ok() {
+        let opt =
+            Options::try_parse_from(["n", "--list-experiments", "--", "bad", "module"]).unwrap();
+        assert!(opt.list_experiments);
+        assert!(opt.experiments.is_empty());
+        let quoted: Vec<String> = Experiment::names()
+            .iter()
+            .map(|n| format!("{n:?}"))
+            .collect();
+        assert_eq!(
+            serde_json::to_string(&Experiment::names()).unwrap(),
+            format!("[{}]", quoted.join(","))
+        );
+    }
 
     #[test]
     fn test_build_version() {

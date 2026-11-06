@@ -18,6 +18,7 @@ from fakes import (
     run_cmd,
     tag_mapping,
     tag_runner,
+    unshaped,
     valid_result,
     write_fleet,
 )
@@ -41,19 +42,19 @@ def down(harness: FleetHarness, runner: FakeRunner, *argv: str) -> FakeSystem:
 
 # TEST:run-fleet-bare-picks-ok
 def test_run_fleet_without_a_dir_picks_the_only_fleet(harness, runner):
-    args = harness.parse("run", "--fleet", "--yes")
+    args = harness.parse("run", "--fleet", "--yes", *unshaped(()))
     assert awsb.cmd_run(args, FakeSystem(run=runner)) == awsb.EXIT_OK
     assert (harness.fleet_dir / "runs" / "01-colocated" / "manifest.json").exists()
     assert "fleet fleet1 (idle)" in harness.driver_log()
 
 
 def test_fleet_run_manifest_records_both_commands(harness, runner):
-    args = harness.parse("run", "--fleet", "--yes")
+    args = harness.parse("run", "--fleet", "--yes", *unshaped(()))
     assert awsb.cmd_run(args, FakeSystem(run=runner)) == awsb.EXIT_OK
     manifest = netbench.read_json(
         harness.fleet_dir / "runs" / "01-colocated" / "manifest.json"
     )
-    assert manifest["argv"] == ["run", "--fleet"]
+    assert manifest["argv"] == ["run", "--fleet", "--latency", "off"]
     assert manifest["fleet_argv"] == awsb.sanitize_argv(harness.fleet()["argv"])
     assert manifest["fleet_argv"][0] == "up"
     assert "--yes" not in manifest["fleet_argv"]
@@ -499,3 +500,17 @@ def test_a_host_agent_runs_outside_the_repo_root(
     monkeypatch.setattr(awsb, "cmd_agent_host", lambda args, system: awsb.EXIT_OK)
     assert awsb.main() == awsb.EXIT_OK
     assert "repo root" not in caplog.text
+
+
+# TEST:harness-tree-diff-ok
+@pytest.mark.parametrize(("status", "dirty"), [("", False), (" M scripts/x\n", True)])
+def test_run_fleet_records_the_harness_state_in_the_run_manifest(
+    harness, runner, status, dirty
+):
+    runner.respond("status --porcelain", lambda _: completed(stdout=status))
+    args = harness.run_args()
+    assert awsb.cmd_run(args, FakeSystem(run=runner)) == awsb.EXIT_OK
+    manifest = netbench.read_json(
+        harness.fleet_dir / "runs" / "01-colocated" / "manifest.json"
+    )
+    assert manifest["harness_dirty"] is dirty

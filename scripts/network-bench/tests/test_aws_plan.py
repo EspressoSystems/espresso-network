@@ -196,7 +196,7 @@ def test_query_nodes_flag_reaches_the_config_and_the_hash():
 
 
 def api_peers(hosts: dict, name: str, **kw) -> list[str]:
-    spec = {"name": name, "role": hosts[name]["role"]}
+    spec = host(name, hosts[name]["role"])
     env = parse_env(awsb.render_node_env(spec, hosts, awsb.pg_endpoint(), **kw))
     return env["ESPRESSO_NODE_API_PEERS"].split(",")
 
@@ -351,6 +351,7 @@ def test_worst_uses_ready_timeout_and_collect_max():
         + netbench.DRAIN_MAX_S
         + netbench.DRAIN_GRACE_S
         - awsb.DRAIN_EXPECTED_S
+        - awsb.BBR_HOLD_EXPECTED_S
     )
 
 
@@ -360,7 +361,11 @@ def test_a_run_has_no_provision_or_destroy():
     run_expected, run_worst = awsb.run_seconds(cfg)
     shot_expected, shot_worst = awsb.shot_seconds(cfg)
     fixed = awsb.PROVISION_S + awsb.DESTROY_S
-    assert run_expected - awsb.RESET_EXPECTED_S == shot_expected - fixed
+    # The module build belongs to the first shaping of a fleet, not to later runs.
+    assert (
+        run_expected - awsb.RESET_EXPECTED_S
+        == shot_expected - fixed - awsb.BBR_HOLD_EXPECTED_S
+    )
     assert run_worst - awsb.RESET_MAX_S == shot_worst - fixed
 
 
@@ -370,9 +375,9 @@ def test_estimate_matches_hand_computed_totals():
     # of cost_estimate's formula, so a formula regression trips this test.
     cfg = small_cfg(pg_iops=6000, pg_mbps=500)
     estimate = shot_estimate(awsb.plan_hosts(cfg), cfg)
-    assert estimate["expected_s"] == 1670.0
+    assert estimate["expected_s"] == 1790.0
     assert estimate["ttl_s"] == 3580.0
-    assert estimate["expected_usd"] == pytest.approx(0.865536, abs=1e-5)
+    assert estimate["expected_usd"] == pytest.approx(0.926594, abs=1e-5)
     assert estimate["bound_usd"] == pytest.approx(1.928954, abs=1e-5)
 
 
@@ -624,6 +629,8 @@ def test_preflight_resolves_az_ami_and_images(monkeypatch: pytest.MonkeyPatch):
         lambda _: instance_types({"c8g.2xlarge": "arm64", "c8g.4xlarge": "arm64"}),
     )
     runner.respond("get-products", pricing)
+    runner.respond("docker version", lambda _: completed(stdout="linux/arm64\n"))
+    runner.respond("--list-experiments", lambda _: completed(stdout='["journal"]'))
     monkeypatch.setattr(
         awsb, "resolve_image", lambda _http_get, ref, _platform: fake_image(ref)
     )
@@ -637,6 +644,7 @@ def test_preflight_resolves_az_ami_and_images(monkeypatch: pytest.MonkeyPatch):
     assert result["az"] == "eu-west-1a"
     assert result["ami_id"] == "ami-0abc"
     assert set(result["images"]) == set(awsb.image_refs(cfg))
+    assert result["experiments"] == ["journal"]
 
 
 LOCK_ERROR = """\
@@ -847,6 +855,8 @@ def intel_preflight_runner(ctl_arch: str = "x86_64") -> FakeRunner:
         "describe-instance-type-offerings", lambda _: offerings("eu-west-1a")
     )
     runner.respond("get-products", pricing)
+    runner.respond("docker version", lambda _: completed(stdout="linux/amd64\n"))
+    runner.respond("--list-experiments", lambda _: completed(stdout="[]"))
     return runner
 
 
@@ -1100,7 +1110,7 @@ def test_max_block_size_flag_rejects_bad_formats(bad):
 
 
 def test_max_block_size_flag_defaults_and_differs_in_the_config_hash():
-    assert node_env_config().max_block_size == "50mb"
+    assert node_env_config().max_block_size == "70mb"
     assert node_env_config("--max-block-size", "100MB").max_block_size == "100MB"
     template = (HERE / "genesis.toml").read_bytes()
     cfg = small_cfg()
@@ -1290,17 +1300,16 @@ def node_env(name: str, nodes: int = 5) -> dict[str, str]:
     return parse_env(awsb.render_node_env(spec, fleet(nodes), awsb.pg_endpoint()))
 
 
-def test_journal_max_bytes_is_set_only_for_journal_storage():
-    spec = next(h for h in awsb.plan_hosts(small_cfg()) if h["name"] == "node1")
-    env = {
-        storage: parse_env(
-            awsb.render_node_env(spec, fleet(2), None, consensus_storage=storage)
-        )
-        for storage in ("fs", "journal")
-    }
-    assert "ESPRESSO_NODE_JOURNAL_MAX_BYTES" not in env["fs"]
-    assert int(env["journal"]["ESPRESSO_NODE_JOURNAL_MAX_BYTES"]) > 0
-    assert env["fs"]["ESPRESSO_NODE_STORAGE_PATH"] == "/store/espresso"
+# TEST:harness-journal-env-always-ok
+def test_journal_max_bytes_is_set_on_every_node():
+    for cfg in (
+        small_cfg(),
+        dataclasses.replace(small_cfg(), consensus_storage="journal"),
+    ):
+        spec = next(h for h in awsb.plan_hosts(cfg) if h["name"] == "node1")
+        env = parse_env(awsb.render_node_env(spec, fleet(2), None))
+        assert int(env["ESPRESSO_NODE_JOURNAL_MAX_BYTES"]) > 0
+        assert env["ESPRESSO_NODE_STORAGE_PATH"] == "/store/espresso"
 
 
 def test_sqlite_node0_env_selects_the_embedded_db_and_has_no_postgres():
@@ -1309,17 +1318,8 @@ def test_sqlite_node0_env_selects_the_embedded_db_and_has_no_postgres():
     assert env["ESPRESSO_NODE_EMBEDDED_DB"] == "true"
     assert not [key for key in env if "POSTGRES" in key]
     assert "ESPRESSO_NODE_EMBEDDED_DB" not in node_env("node0")
-    assert "ESPRESSO_NODE_JOURNAL_IGNORE_EXISTING" not in env
-    journal = parse_env(
-        awsb.render_node_env(
-            spec,
-            fleet(2),
-            None,
-            consensus_storage="journal",
-            query_engine="sqlite",
-        )
-    )
-    assert journal["ESPRESSO_NODE_JOURNAL_IGNORE_EXISTING"] == "true"
+    assert env["ESPRESSO_NODE_JOURNAL_IGNORE_EXISTING"] == "true"
+    assert "ESPRESSO_NODE_JOURNAL_IGNORE_EXISTING" not in node_env("node0")
 
 
 def test_node_env_streams_l1_heads_over_websocket():
@@ -1723,7 +1723,7 @@ def test_format_node_summary_chaos() -> None:
     chaos = ch.ChaosConfig(minutes=3, kinds=("restart", "kill"))
     fs = awsb.format_node_summary(small_cfg(22, chaos=chaos))
     assert fs[-1] == (
-        "chaos: 3 min at 4 MB/s; latency off; budget < 1/3 stake; kinds restart,kill; seed 42; gap 45 s; "
+        "chaos: 3 min at 4 MB/s; latency decaf-2025; budget < 1/3 stake; kinds restart,kill; seed 42; gap 45 s; "
         "kill down 60 s; recover timeout 300 s; query floor 2"
     )
 
@@ -2019,6 +2019,38 @@ def test_search_sizes_disks_from_the_offered_gb(db_modes, validator_gb, query_gb
     assert awsb.node_root_gb(cfg, query=True) == query_gb
 
 
+def test_pg_mbps_defaults_to_rds_mbps_when_rds_is_a_db_mode():
+    args = plan_args("--db-modes", "colocated,rds")
+    cfg = awsb.with_db_modes(awsb.config_from_args(args), args, args.db_modes)
+    assert cfg.pg_mbps == awsb.RDS_MBPS
+    awsb.check_rds_config(cfg)
+
+
+def test_an_explicit_pg_mbps_is_kept_with_rds():
+    args = plan_args("--db-modes", "rds", "--pg-mbps", "1500")
+    cfg = awsb.with_db_modes(awsb.config_from_args(args), args, args.db_modes)
+    assert cfg.pg_mbps == 1500
+    with pytest.raises(awsb.Refused, match="--pg-mbps 500"):
+        awsb.check_rds_config(cfg)
+
+
+def test_pg_mbps_stays_1500_without_rds():
+    args = plan_args("--db-modes", "colocated,volume")
+    cfg = awsb.with_db_modes(awsb.config_from_args(args), args, args.db_modes)
+    assert cfg.pg_mbps == 1500
+
+
+@pytest.mark.parametrize("root_gb", ["20", "10", "0"])
+def test_a_root_gb_within_the_reserve_is_refused(root_gb):
+    with pytest.raises(awsb.Refused, match="--root-gb"):
+        awsb.config_from_args(plan_args("--root-gb", root_gb))
+
+
+def test_a_root_gb_above_the_reserve_is_accepted():
+    cfg = awsb.config_from_args(plan_args("--root-gb", "21"))
+    assert cfg.root_gb == "21"
+
+
 def test_payload_factor():
     assert awsb.payload_factor(3) == 2.0
     assert awsb.payload_factor(5) == pytest.approx(1.6)
@@ -2209,7 +2241,12 @@ def test_host_files_ship_stake_env_only_with_epochs(tmp_path: Path):
         hosts = awsb.plan_hosts(cfg)
         for spec in hosts:
             (run_dir / "hosts" / spec["name"]).mkdir(parents=True)
-        manifest = {"hosts": hosts, "images": fake_images(), "memory_mib": MEMORY_MIB}
+        manifest = {
+            "hosts": hosts,
+            "images": fake_images(),
+            "memory_mib": MEMORY_MIB,
+            "experiments_enabled": [],
+        }
         awsb.render_host_files(run_dir, cfg, manifest, fleet(2))
     assert not (tmp_path / "plain/hosts/ctl/stake.env").exists()
     assert (tmp_path / "epochs/hosts/ctl/stake.env").exists()
@@ -2239,6 +2276,18 @@ def test_staking_adds_its_time_to_the_estimate():
     assert staked[1] - plain[1] == awsb.STAKE_TIMEOUT_S + awsb.L1_FINALIZED_TIMEOUT_S
 
 
+def test_bbr_hold_build_adds_to_the_expected_estimate_only():
+    cubic = awsb.shot_seconds(small_cfg(latency="decaf-2025", tcp_cc="cubic"))
+    hold = awsb.shot_seconds(small_cfg(latency="decaf-2025", tcp_cc="bbr_hold"))
+    assert hold == (cubic[0] + awsb.BBR_HOLD_EXPECTED_S, cubic[1])
+
+
+def test_bbr_hold_without_shaping_adds_nothing():
+    cubic = awsb.shot_seconds(small_cfg(latency="off", tcp_cc="cubic"))
+    hold = awsb.shot_seconds(small_cfg(latency="off", tcp_cc="bbr_hold"))
+    assert hold == cubic
+
+
 def test_staking_cli_is_pulled_on_ctl_only():
     assert "staking-cli" in awsb.IMAGE_COMPONENTS
     assert "staking-cli" in awsb.ROLE_IMAGES["ctl"]
@@ -2252,3 +2301,321 @@ def test_wait_for_l1_finalized_is_shipped_and_not_collected(isolated: Path):
         "scripts/wait-for-l1-finalized" in " ".join(call) for call in runner.calls
     )
     assert "--exclude=/wait-for-l1-finalized" in awsb.COLLECT_EXCLUDES
+
+
+# TEST:harness-docker-required-fails
+def test_preflight_requires_docker():
+    tools = {"tofu", "aws", "ssh", "scp", "rsync", "git", "ssh-keygen"}
+    with pytest.raises(awsb.Refused, match="docker"):
+        awsb.preflight(FakeSystem(tools=tools), awsb.RunConfig(tag="x"), [])
+
+
+def listing_runner(platform: str, reply: Any) -> FakeRunner:
+    runner = FakeRunner()
+    runner.respond("docker version", lambda _: completed(stdout=f"{platform}\n"))
+    runner.respond("--list-experiments", reply)
+    return runner
+
+
+def listing_registry() -> FakeRegistry:
+    platforms = [("linux", "amd64"), ("linux", "arm64")]
+    return FakeRegistry("x", "v1", platforms, revision="abc1234")
+
+
+def docker_runs(runner: FakeRunner) -> list[list[str]]:
+    return [call for call in runner.calls if call[:2] == ["docker", "run"]]
+
+
+# TEST:harness-records-experiments-ok
+def test_list_experiments_runs_the_fleets_digest_locally_on_equal_platforms():
+    server = listing_registry()
+    image = resolve_with(server, "linux/arm64")
+    requests: list[str] = []
+
+    def http(url: str, headers: dict[str, str]):
+        requests.append(url)
+        return server(url, headers)
+
+    runner = listing_runner("linux/arm64", lambda _: completed(stdout='["journal"]\n'))
+    system = FakeSystem(run=runner, http=http)
+    assert awsb.list_experiments(system, image, "arm64") == ["journal"]
+    (call,) = docker_runs(runner)
+    assert call == awsb.experiments_argv(image)
+    assert call[3:5] == ["--entrypoint", "/bin/espresso-node-postgres"]
+    assert call[-2:] == [f"{server.ref}@{image['digest']}", "--list-experiments"]
+    assert requests == []
+
+
+# TEST:harness-local-platform-digest-ok
+def test_list_experiments_runs_the_local_platforms_digest():
+    server = listing_registry()
+    image = resolve_with(server, "linux/arm64")
+    runner = listing_runner("linux/amd64", lambda _: completed(stdout="[]"))
+    system = FakeSystem(run=runner, http=server)
+    assert awsb.list_experiments(system, image, "arm64") == []
+    (call,) = docker_runs(runner)
+    assert call[-2] == f"{server.ref}@{server.digests[('linux', 'amd64')]}"
+
+
+# TEST:harness-local-revision-mismatch-fails
+def test_list_experiments_refuses_another_revision_on_the_local_platform():
+    server = listing_registry()
+    image = {**resolve_with(server, "linux/arm64"), "revision": "other"}
+    runner = listing_runner("linux/amd64", lambda _: completed(stdout="[]"))
+    with pytest.raises(awsb.Refused, match="other"):
+        awsb.list_experiments(FakeSystem(run=runner, http=server), image, "arm64")
+    assert docker_runs(runner) == []
+
+
+# TEST:harness-local-platform-missing-fails
+def test_list_experiments_refuses_a_local_platform_the_index_lacks():
+    server = FakeRegistry("x", "v1", [("linux", "arm64")], revision="abc1234")
+    image = resolve_with(server, "linux/arm64")
+    runner = listing_runner("linux/amd64", lambda _: completed(stdout="[]"))
+    with pytest.raises(awsb.Refused, match="no linux/amd64 platform"):
+        awsb.list_experiments(FakeSystem(run=runner, http=server), image, "arm64")
+
+
+# TEST:harness-docker-version-fails
+def test_a_failed_docker_version_is_refused():
+    runner = FakeRunner()
+    runner.respond(
+        "docker version",
+        lambda _: completed(returncode=1, stderr="Cannot connect to the Docker daemon"),
+    )
+    with pytest.raises(awsb.Refused, match="Cannot connect"):
+        awsb.local_platform(runner)
+
+
+# TEST:harness-old-image-empty-ok
+def test_an_image_without_the_flag_lists_nothing(caplog):
+    server = listing_registry()
+    image = resolve_with(server, "linux/arm64")
+    runner = listing_runner(
+        "linux/arm64",
+        lambda _: completed(
+            returncode=2,
+            stderr="unexpected argument '--list-experiments'",
+        ),
+    )
+    with caplog.at_level("INFO"):
+        assert awsb.list_experiments(FakeSystem(run=runner), image, "arm64") == []
+    messages = [r.getMessage() for r in caplog.records if r.levelname == "INFO"]
+    assert messages == [
+        f"experiments of {server.ref}: none, image predates --list-experiments"
+    ]
+
+
+# TEST:harness-listing-failure-fails
+@pytest.mark.parametrize("returncode", [125, 127])
+def test_a_failed_listing_is_refused_with_the_stderr(returncode):
+    result = completed(returncode=returncode, stderr="pull access denied")
+    with pytest.raises(awsb.Refused, match="pull access denied"):
+        awsb.parse_experiments(result)
+
+
+# TEST:harness-listing-other-usage-error-fails
+def test_a_usage_error_not_naming_the_flag_is_refused_with_the_stderr():
+    result = completed(returncode=2, stderr="error: unexpected argument '--bogus'")
+    with pytest.raises(awsb.Refused, match="--bogus"):
+        awsb.parse_experiments(result)
+
+
+def test_a_usage_error_naming_the_flag_lists_nothing():
+    stderr = "error: unexpected argument '--list-experiments' found"
+    assert awsb.parse_experiments(completed(returncode=2, stderr=stderr)) == []
+
+
+# TEST:harness-listing-bad-json-fails
+@pytest.mark.parametrize("stdout", ["Starting Espresso node...", '{"a": 1}', "[1]", ""])
+def test_a_listing_that_is_not_a_json_array_of_strings_is_refused(stdout):
+    with pytest.raises(awsb.Refused, match="list-experiments"):
+        awsb.parse_experiments(completed(stdout=stdout))
+
+
+# TEST:harness-enabled-experiments-ok
+def test_enabled_experiments_follow_the_effective_env():
+    known = ["journal", "blob-dir"]
+    assert awsb.enabled_experiments(known, ()) == known
+    only = ("ESPRESSO_NODE_EXPERIMENTS=journal",)
+    assert awsb.enabled_experiments(known, only) == ["journal"]
+    assert awsb.enabled_experiments(known, ("ESPRESSO_NODE_EXPERIMENTS=",)) == []
+    assert awsb.enabled_experiments([], ()) == []
+
+
+def test_enabled_experiments_parse_the_value_like_the_node():
+    known = ["journal", "blob-dir"]
+    messy = ("ESPRESSO_NODE_EXPERIMENTS= journal ,, journal,",)
+    assert awsb.enabled_experiments(known, messy) == ["journal"]
+    assert (
+        awsb.enabled_experiments(known, ("ESPRESSO_NODE_EXPERIMENTS=all,all",)) == known
+    )
+
+
+def test_enabled_experiments_refuse_what_the_node_would_reject():
+    known = ["journal"]
+    with pytest.raises(awsb.Refused, match="only entry"):
+        awsb.enabled_experiments(known, ("ESPRESSO_NODE_EXPERIMENTS=all,journal",))
+    with pytest.raises(awsb.Refused, match=r"\['nope'\]"):
+        awsb.enabled_experiments(known, ("ESPRESSO_NODE_EXPERIMENTS=journal,nope",))
+    with pytest.raises(awsb.Refused, match="journal"):
+        awsb.enabled_experiments([], ("ESPRESSO_NODE_EXPERIMENTS=journal",))
+
+
+@pytest.mark.usefixtures("preflighted")
+def test_plan_refuses_an_unlisted_experiment_before_writing_anything(fleet_dir):
+    runner = FakeRunner(states=[])
+    args = plan_args("--node-env", "ESPRESSO_NODE_EXPERIMENTS=nope")
+    with pytest.raises(awsb.Refused, match="nope"):
+        awsb.cmd_plan(args, FakeSystem(run=runner))
+    assert not (fleet_dir / "fleet.json").exists()
+    assert not runner.ran("tofu")
+
+
+# TEST:harness-blob-dir-gated-ok
+def test_the_blob_dir_pair_goes_to_query_nodes_only_when_the_experiment_is_enabled():
+    blob = "ESPRESSO_NODE_BLOB_DIR=/payload"
+    assert blob in awsb.harness_env_pairs(["blob-dir"], "query")
+    assert blob not in awsb.harness_env_pairs(["blob-dir"], "validator")
+    assert blob not in awsb.harness_env_pairs([], "query")
+    assert "GLIBC_TUNABLES=glibc.malloc.hugetlb=1" in awsb.harness_env_pairs(
+        [], "validator"
+    )
+
+
+# TEST:harness-env-override-ok
+def test_a_node_env_override_drops_the_pair_from_the_effective_harness_env():
+    effective = awsb.effective_harness_env(["blob-dir"], ("GLIBC_TUNABLES=",))
+    assert not any(p.startswith("GLIBC_TUNABLES") for p in effective["query"])
+    assert "ESPRESSO_NODE_EXPERIMENTS=all" in effective["validator"]
+    assert "ESPRESSO_NODE_BLOB_DIR=/payload" in effective["query"]
+
+
+# TEST:harness-blob-override-off-ok
+def test_an_experiments_override_without_blob_dir_sets_no_blob_dir():
+    node_env = ("ESPRESSO_NODE_EXPERIMENTS=journal",)
+    enabled = awsb.enabled_experiments(["journal", "blob-dir"], node_env)
+    assert enabled == ["journal"]
+    effective = awsb.effective_harness_env(enabled, node_env)
+    assert not any("BLOB_DIR" in p for p in effective["query"])
+    assert not any(
+        p.startswith("ESPRESSO_NODE_EXPERIMENTS") for p in effective["query"]
+    )
+
+
+# TEST:harness-env-defaults-ok
+def test_host_files_carry_the_harness_env_and_the_node_env_wins(tmp_path: Path):
+    cfg = small_cfg(node_env=("GLIBC_TUNABLES=x",))
+    run_dir = tmp_path / "run"
+    hosts = awsb.plan_hosts(cfg)
+    for spec in hosts:
+        (run_dir / "hosts" / spec["name"]).mkdir(parents=True)
+    manifest = {
+        "hosts": hosts,
+        "images": fake_images(),
+        "memory_mib": MEMORY_MIB,
+        "experiments_enabled": ["blob-dir"],
+    }
+    awsb.render_host_files(run_dir, cfg, manifest, fleet(2))
+    node0 = parse_env((run_dir / "hosts/node0/node.env").read_text())
+    node1 = parse_env((run_dir / "hosts/node1/node.env").read_text())
+    assert node0["GLIBC_TUNABLES"] == node1["GLIBC_TUNABLES"] == "x"
+    assert node0["ESPRESSO_NODE_EXPERIMENTS"] == "all"
+    assert node1["ESPRESSO_NODE_EXPERIMENTS"] == "all"
+    assert node0["ESPRESSO_NODE_BLOB_DIR"] == "/payload"
+    assert "ESPRESSO_NODE_BLOB_DIR" not in node1
+
+
+DIRTY = " M scripts/network-bench/aws-bench\n?? scripts/network-bench/new.py\n"
+
+
+def status_runner(status: str, **kwargs: Any) -> FakeRunner:
+    runner = FakeRunner(**kwargs)
+    runner.respond("status --porcelain", lambda _: completed(stdout=status))
+    return runner
+
+
+# TEST:harness-tree-clean-ok
+def test_harness_changes_lists_the_porcelain_lines_under_the_harness_paths():
+    runner = status_runner(DIRTY)
+    assert len(awsb.harness_changes(runner)) == 2
+    assert runner.ran("git", "status", "--porcelain", "--", "scripts/network-bench")
+    assert runner.calls[0][:3] == ["git", "-C", str(awsb.REPO_ROOT)]
+    assert awsb.harness_changes(status_runner("")) == []
+
+
+# TEST:harness-git-failure-fails
+def test_a_failed_git_status_is_refused_with_gits_stderr():
+    runner = FakeRunner()
+    runner.respond(
+        "status --porcelain",
+        lambda _: completed(returncode=128, stderr="fatal: not a git repository"),
+    )
+    with pytest.raises(awsb.Refused, match="not a git repository"):
+        awsb.harness_changes(runner)
+
+
+def run_dir_with_manifest(tmp_path: Path) -> Path:
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    netbench.write_json(run_dir / "manifest.json", {"phase": "planned", "config": {}})
+    return run_dir
+
+
+# TEST:harness-dirty-warning-ok
+def test_a_dirty_tree_is_recorded_and_logs_one_warning(tmp_path, caplog):
+    run_dir = run_dir_with_manifest(tmp_path)
+    with caplog.at_level("WARNING"):
+        awsb.record_harness_tree(run_dir, [" M a", "?? b"])
+    assert netbench.read_json(run_dir / "manifest.json")["harness_dirty"] is True
+    (record,) = [r for r in caplog.records if r.levelname == "WARNING"]
+    assert "uncommitted changes in 2 files" in record.getMessage()
+
+
+def test_a_clean_tree_is_recorded_without_a_warning(tmp_path, caplog):
+    run_dir = run_dir_with_manifest(tmp_path)
+    with caplog.at_level("WARNING"):
+        awsb.record_harness_tree(run_dir, [])
+    assert netbench.read_json(run_dir / "manifest.json")["harness_dirty"] is False
+    assert caplog.records == []
+
+
+# TEST:harness-tree-diff-ok
+@pytest.mark.usefixtures("preflighted")
+@pytest.mark.parametrize(("status", "dirty"), [("", False), (DIRTY, True)])
+def test_plan_records_the_harness_state_in_the_run_manifest(fleet_dir, status, dirty):
+    runner = status_runner(status, states=[])
+    assert awsb.cmd_plan(plan_args(), FakeSystem(run=runner)) == awsb.EXIT_OK
+    manifest = netbench.read_json(fleet_dir / "runs/01-run/manifest.json")
+    assert manifest["harness_dirty"] is dirty
+
+
+@pytest.mark.usefixtures("preflighted")
+def test_plan_reads_the_harness_state_before_rendering_anything(fleet_dir):
+    runner = FakeRunner(states=[])
+    runner.respond(
+        "status --porcelain", lambda _: completed(returncode=128, stderr="fatal")
+    )
+    with pytest.raises(awsb.Refused, match="git status failed"):
+        awsb.cmd_plan(plan_args(), FakeSystem(run=runner))
+    assert not (fleet_dir / "fleet.json").exists()
+
+
+# TEST:harness-hash-unchanged-ok
+def test_the_config_hash_ignores_tcp_cc_and_mtu():
+    cfg = small_cfg(latency="off")
+    hosts = awsb.plan_hosts(cfg)
+    other = replace(cfg, tcp_cc="cubic", mtu=1500)
+    assert awsb.run_config_hash(
+        cfg, hosts, fake_images(), b"g"
+    ) == awsb.run_config_hash(other, hosts, fake_images(), b"g")
+
+
+# TEST:harness-pg-mbps-default-ok
+def test_pg_mbps_defaults_to_1500_and_rds_needs_500():
+    cfg = awsb.config_from_args(plan_args())
+    assert cfg.pg_mbps == 1500
+    rds = replace(cfg, db_modes=("rds",))
+    with pytest.raises(awsb.Refused, match="--pg-mbps 500"):
+        awsb.check_rds_config(rds)
+    awsb.check_rds_config(replace(rds, pg_mbps=500))
