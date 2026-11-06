@@ -32,16 +32,16 @@ cargo run -p query-watchdog -- --nodes https://query.decaf.testnet.espresso.netw
 
 ## Options
 
-| Flag                    | Env (`ESPRESSO_QUERY_WATCHDOG_`) | Default                                                                                                                                                                                                                         |
-| ----------------------- | -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `--nodes`               | `NODES`                          | required, comma-separated base URLs without `/v1`, path ends with `/`                                                                                                                                                           |
-| `--db-path`             | `DB_PATH`                        | platform data directory, `state.sqlite` (Linux: `~/.local/share/query-watchdog/state.sqlite`); an error when there is none                                                                                                      |
-| `--port`                | `PORT`                           | 8080                                                                                                                                                                                                                            |
-| `--sweep-interval`      | `SWEEP_INTERVAL`                 | 1 week (at most 1 year), time from one sweep start to the next                                                                                                                                                                  |
-| `--sweep-once`          | `SWEEP_ONCE`                     | off; sweep once, then only follow the tip (`--sweep-interval` is ignored; a node not yet `done`, a `waiting` one from an earlier `--sweep-interval` run included, starts its one sweep at once; a restart does not sweep again) |
-| `--request-interval`    | `REQUEST_INTERVAL`               | 200ms, wait before each request of one node                                                                                                                                                                                     |
-| `--retention-blocks`    | `RETENTION_BLOCKS`               | absent: archive, sweep `[0, tip)`; N: sweep `[tip - N, tip - 10)`, start rounded up to a multiple of 100                                                                                                                        |
-| `--reset`               | `RESET`                          | off; deletes the stored state at startup and always logs a WARN                                                                                                                                                                 |
+| Flag                 | Env (`ESPRESSO_QUERY_WATCHDOG_`) | Default                                                                                                                                                                                                                         |
+| -------------------- | -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--nodes`            | `NODES`                          | required, comma-separated base URLs without `/v1`, path ends with `/`                                                                                                                                                           |
+| `--db-path`          | `DB_PATH`                        | platform data directory, `state.sqlite` (Linux: `~/.local/share/query-watchdog/state.sqlite`); an error when there is none                                                                                                      |
+| `--port`             | `PORT`                           | 8080                                                                                                                                                                                                                            |
+| `--sweep-interval`   | `SWEEP_INTERVAL`                 | 1 week (at most 1 year), time from one sweep start to the next                                                                                                                                                                  |
+| `--sweep-once`       | `SWEEP_ONCE`                     | off; sweep once, then only follow the tip (`--sweep-interval` is ignored; a node not yet `done`, a `waiting` one from an earlier `--sweep-interval` run included, starts its one sweep at once; a restart does not sweep again) |
+| `--request-interval` | `REQUEST_INTERVAL`               | 200ms, wait before each request of one node (block-time header GETs are paced separately)                                                                                                                                       |
+| `--retention-blocks` | `RETENTION_BLOCKS`               | absent: archive, sweep `[0, tip)`; N: sweep `[tip - N, tip - 10)`, start rounded up to a multiple of 100                                                                                                                        |
+| `--reset`            | `RESET`                          | off; deletes the stored state at startup and always logs a WARN                                                                                                                                                                 |
 
 ## Checked
 
@@ -76,9 +76,8 @@ Probes are HEAD requests.
   watchdog usually sees its 5 s timeout, and old-epoch certs in an archive sweep can time out at 5 s even when peers
   have them, then heal on a later retry. A timeout during a slow stake-table catchup counts as not found at once; the
   node's catchup continues after the client disconnects, so the retry after 35 s normally heals it and the monitor
-  window absorbs the short count. A cert no peer has costs one 5 s step 2 request
-  per re-check; confirmed rows are re-checked only by the representative (once a minute per node), the recovery queue
-  and the weekly sweep.
+  window absorbs the short count. A cert no peer has costs one 5 s step 2 request per re-check; confirmed rows are
+  re-checked only by the representative (once a minute per node), the recovery queue and the weekly sweep.
 - A stake table of epoch `e` is probed with the chunk holding block `(e - 2) * epoch_height`, the epoch boundary five
   blocks after the root block the node builds it from (`root_block_in_epoch` subtracts 5); a state cert with the chunk
   holding `e * epoch_height`. The alert total below uses the same block.
@@ -96,8 +95,9 @@ Probes are HEAD requests.
 ### Retries
 
 Every missing unit is in one of two states: failed (no 404 since it went missing) or not found (a 404 answered, with the
-number of 404s since). A not-found unit with at least 3 404s is confirmed, a retry class: only confirmed rows go through the representative
-and the recovery queue. The alert total counts not-found units at any 404 count.
+number of 404s since). A not-found unit with at least 3 404s is confirmed; every other unit is confirming. Confirmation
+only drives retry scheduling: only confirmed rows go through the representative and the recovery queue. The alert total
+counts not-found units at any 404 count.
 
 | Old state \ probe | Present | 404                                                  | 500, timeout, transport                              |
 | ----------------- | ------- | ---------------------------------------------------- | ---------------------------------------------------- |
@@ -121,10 +121,10 @@ and the recovery queue. The alert total counts not-found units at any 404 count.
   rows never count, so they never delay the alert total. Follow and the sweep keep the rest of the loop iteration.
 - Capacity at the default request cost (about 0.3 s, about 16 requests per retry step; a still-missing exact range piece
   costs 3 requests, a refilled piece or point 1, an epoch 1, a `state_cert` up to 2, 5 s on a timeout): a new gap is
-  retried at about +5 s and +15 s whatever the number of confirmed rows; the unit counts in the alert total from
-  the first 404. After a repair the representative is found present within 60 s; the recovery queue then re-checks
-  about 120 pieces a minute during a sweep and about 200 without one, so N confirmed pieces take about N / 120 to N /
-  200 minutes, then the monitor window.
+  retried at about +5 s and +15 s whatever the number of confirmed rows; the unit counts in the alert total from the
+  first 404. After a repair the representative is found present within 60 s; the recovery queue then re-checks about 120
+  pieces a minute during a sweep and about 200 without one, so N confirmed pieces take about N / 120 to N / 200 minutes,
+  then the monitor window.
 - Request timeouts: range HEAD 60 s (the node may wait 500 ms per height), single HEAD 10 s, JSON GET 5 s, peer-fetch
   HEAD (`state_cert` step 2) 5 s.
 
@@ -138,21 +138,22 @@ and the recovery queue. The alert total counts not-found units at any 404 count.
 | DEBUG | per request                                                                                |
 
 The `summary` line has `node`, `errors` and `forgotten` since the previous line (`forgotten` is 0 in archive mode),
-`sweep_eta` and the summary text with, per kind, `missing` and `oldest_age`. The line
-comes every 60 s per node, also while a node hangs.
+`sweep_eta` and the summary text with, per kind, `missing` and `oldest_age`. The line comes every 60 s per node, also
+while a node hangs.
 
 Alert total: `query_watchdog_not_found_units`, unlabeled, written every 15 s: the units (heights and epochs) of all
 nodes and kinds that
 
-- are not found: the last answer was a 404, at any 404 count (500, timeout and transport answers never count)
+- are not found: a 404 answered since the unit went missing, at any 404 count; a later 500, timeout or transport answer
+  does not undo it. Units that never got a 404 (failed) never count
 - are not within 10 blocks of the node's own height (per-epoch kinds: the block the object depends on, see above, is at
   least 10 below it)
 
-The watchdog keeps no age and no threshold; the Datadog monitor decides how long a total above 0 lasts before it pages.
+The watchdog applies no minimum age and no threshold; the Datadog monitor decides how long a total above 0 lasts before
+it pages.
 
-Design assumption: data is expected to be fetchable once it is 10 blocks below the node's own height; anything
-still 404 after that counts as missing. Per-kind availability delays are not modelled (design
-decision).
+Design assumption: data is expected to be fetchable once it is 10 blocks below the node's own height; anything still 404
+after that counts as missing. Per-kind availability delays are not modelled (design decision).
 
 ## Docker
 
@@ -163,9 +164,9 @@ decision).
 
 ## State replication (litestream)
 
-The SQLite file holds the missing ranges, their first-missing times and sweep progress. Losing it resets missing ages and
-restarts the sweep from the window start. [Litestream](https://litestream.io) can stream it to S3 so a replaced Fargate
-task resumes where the old one stopped.
+The SQLite file holds the missing ranges, their first-missing times and sweep progress. Losing it resets missing ages
+and restarts the sweep from the window start. [Litestream](https://litestream.io) can stream it to S3 so a replaced
+Fargate task resumes where the old one stopped.
 
 - Optional. Without `LITESTREAM_REPLICA_URL` the entrypoint logs one line and runs the watchdog alone on local state.
 - With `LITESTREAM_REPLICA_URL` (for example `s3://bucket/query-watchdog/decaf`):
@@ -193,7 +194,8 @@ task resumes where the old one stopped.
   second for the heights the page shows (newest block `tip - 1`, follow next, sweep next and until, the first block of
   each row; an epoch row shows its root block), at most 20 per round, newest first, in `--nodes` order from nodes whose
   published height covers it. A height no node serves reads `time unknown` and is asked again after 5 minutes; failures
-  count under `fetch_errors_total{kind="header"}`.
+  count under `fetch_errors_total{kind="header"}`. These GETs are paced separately from probes (each after
+  `--request-interval`), so a node can see up to two requests per interval.
 - Archive full sweep is slow: each 100-height chunk costs 4 probes plus the epoch probes whose block lies in it, each
   `request_interval` plus response time, and every loop iteration also spends time on follow and retries. Each gap in a
   range kind adds about 7 + 2 x log2(gap length) HEADs. The tip is covered by follow in real time. The page ETA and
@@ -208,9 +210,9 @@ task resumes where the old one stopped.
 - Any 404 counts, also one that is not the query service's (a proxy page, an unmounted route, a wrong base URL): such a
   node adds to the alert total.
 - Any non-200 counts as missing in the page and `missing` (404, 500, timeout, transport). Only 404s count in
-  `query_watchdog_not_found_units`. An overloaded or unreachable node shows as missing data. `fetch_errors_total{status}` separates
-  the causes, except a `state_cert` step 2 failure that counts as not found (404, 500, timeout), which is recorded
-  as 404.
+  `query_watchdog_not_found_units`. An overloaded or unreachable node shows as missing data.
+  `fetch_errors_total{status}` separates the causes, except a `state_cert` step 2 failure that counts as not found (404,
+  500, timeout), which is recorded as 404.
 - One total for all nodes: a new gap while the total is above 0 does not page again.
 - `query_watchdog_not_found_units` sums heights and epochs and can overstate until the representative is found present
   or the sweep re-checks the confirmed rows.
@@ -232,12 +234,12 @@ task resumes where the old one stopped.
 - The sweep ETA uses the rate since this process started sweeping and resets on restart.
 - A restart loop at startup can mean every watched node is unreachable; once running, an outage shows as
   `node unhealthy` and missing data instead.
-- A lagging or stuck node never counts: nothing above its own height is probed or counted. It shows in
-  `node_lag_blocks` and, when it stops advancing, in the follow lag against its own height staying flat.
-- A node that only times out or answers 500 never counts, since no 404 is seen. The exception is `state_cert`: a
-  step 2 failure of any kind counts as a 404, so a cert the node cannot fetch from peers counts like any other missing
-  object. The node otherwise shows as a `node unhealthy` WARN and in
-  `fetch_errors_total{status}`; the companion monitor below pages on those.
+- A lagging or stuck node never counts: nothing above its own height is probed or counted. It shows in `node_lag_blocks`
+  and, when it stops advancing, in the follow lag against its own height staying flat.
+- A node that only times out or answers 500 never counts, since no 404 is seen. The exception is `state_cert`: a step 2
+  failure of any kind counts as a 404, so a cert the node cannot fetch from peers counts like any other missing object.
+  The node otherwise shows as a `node unhealthy` WARN and in `fetch_errors_total{status}`; the companion monitor below
+  pages on those.
 - Request timeouts are per request kind (range HEAD 60 s, single HEAD 10 s, JSON GET 5 s, peer-fetch HEAD 5 s); a
   hanging node holds its loop for that long per request, while gauges and the `summary` line continue.
 
@@ -252,8 +254,9 @@ Recommended alert, a simple alert with a link to the watchdog page:
 1. Monitors > New Monitor > Metric:
    - Query: `min(last_10m):max:<namespace>.query_watchdog_not_found_units{*} > 0`. The window is the operator's choice;
      it absorbs short 404s near the tip and state cert heals.
-   - The monitor resolves once the total has been 0 for the window after the last unit is repaired (the representative
-     is found present within a minute, then the recovery queue re-checks the confirmed rows, see Retries).
+   - The monitor resolves at the first evaluation whose window contains a 0 sample, once the last unit is repaired (the
+     representative is found present within a minute, then the recovery queue re-checks the confirmed rows, see
+     Retries).
 2. Message:
    - Text: `{{value}} not-found units: https://<watchdog host>/`.
    - Notify target: `@slack-<channel>`.

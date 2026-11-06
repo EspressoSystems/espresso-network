@@ -318,8 +318,8 @@ impl<C: Clock> BlockTimePoller<C> {
     }
 
     /// Shown heights of every published view; `retain_shown` on times and `unserved`; each
-    /// `to_fetch` height through `fetch_block_time`, publishing each time or recording it
-    /// unserved.
+    /// `to_fetch` height that some node has reached, at most `MAX_HEADERS_PER_POLL`, through
+    /// `fetch_block_time`, publishing each time or recording it unserved.
     async fn poll_once(&mut self) {
         let shown: BTreeSet<Height> = self
             .nodes
@@ -343,23 +343,29 @@ impl<C: Clock> BlockTimePoller<C> {
             let now = self.watchdog.system.clock.now();
             self.unserved.to_fetch(&shown, &times, now)
         };
-        for height in to_fetch.into_iter().take(MAX_HEADERS_PER_POLL) {
-            match self.fetch_block_time(height).await {
+        let mut fetched = 0;
+        for height in to_fetch {
+            let nodes = self.nodes_with_block(height);
+            if nodes.is_empty() {
+                continue;
+            }
+            match self.fetch_block_time(height, nodes).await {
                 Some(time) => self.sender.send_modify(|times| times.insert(height, time)),
                 None => {
                     let now = self.watchdog.system.clock.now();
                     self.unserved.record(height, now);
                 },
             }
+            fetched += 1;
+            if fetched == MAX_HEADERS_PER_POLL {
+                break;
+            }
         }
     }
 
-    /// The header time of `height` from the first node in `--nodes` order that serves a decodable
-    /// header, each request after `request_interval`; failures count under
-    /// `FetchTarget::Header`.
-    async fn fetch_block_time(&self, height: Height) -> Option<DateTime<Utc>> {
-        let nodes: Vec<WatchedNode> = self
-            .nodes
+    /// Nodes in `--nodes` order whose published `newest_block()` reaches `height`.
+    fn nodes_with_block(&self, height: Height) -> Vec<WatchedNode> {
+        self.nodes
             .iter()
             .filter(|slot| {
                 let view = slot.view.borrow();
@@ -368,7 +374,16 @@ impl<C: Clock> BlockTimePoller<C> {
                     .is_some_and(|newest| newest >= height)
             })
             .map(|slot| slot.node.clone())
-            .collect();
+            .collect()
+    }
+
+    /// The header time of `height` from the first of `nodes` that serves a decodable header, each
+    /// request after `request_interval`; failures count under `FetchTarget::Header`.
+    async fn fetch_block_time(
+        &self,
+        height: Height,
+        nodes: Vec<WatchedNode>,
+    ) -> Option<DateTime<Utc>> {
         let system = &self.watchdog.system;
         for node in nodes {
             system
@@ -694,7 +709,7 @@ impl<C: Clock> NodeWatch<C> {
     /// `RetryQueue::new` at `now`; while `RETRY_BUDGET` from the step start has time left: due
     /// not-found rows, `recovery`, the representative when `recovery` was empty at the step start (a result that
     /// `found_present` sets `recovery = ChunkQueue::confirmed(set)`), `recovery` again, then due
-    /// failed rows, which never count and so never delay red or green; returns requests sent.
+    /// failed rows, which never count and so never delay the alert total; returns requests sent.
     async fn retry_step(&mut self) -> anyhow::Result<usize> {
         let deadline = self.clock().instant() + RETRY_BUDGET;
         let mut queue = RetryQueue::new(self.missing.set(), self.clock().now());
@@ -3319,10 +3334,63 @@ mod tests {
 
         poller.poll_once().await;
 
-        let newest = *shown.last().unwrap();
-        assert!(times.borrow().get(newest).is_some());
+        for height in &shown {
+            assert!(times.borrow().get(*height).is_some(), "{height}");
+        }
         assert!(header_requests(&fake_first, &shown) > 0);
         assert!(header_requests(&fake_second, &shown) > 0);
+    }
+
+    #[tokio::test]
+    async fn a_height_no_node_has_reached_is_not_recorded_unserved() {
+        let (node, fake) = serve_fake([]).await;
+        let harness = Harness::new(None).await;
+        harness.set_height(&node, 0);
+        let (_watch, view) = harness.start(node.clone()).await;
+        let shown = view.borrow().as_ref().unwrap().shown_block_heights();
+        assert!(!shown.is_empty());
+        let (mut poller, times) = block_time_poller(&harness, vec![slot(&node, &view)]);
+
+        poller.poll_once().await;
+
+        assert_eq!(header_requests(&fake, &shown), 0);
+        let now = harness.clock.now();
+        let to_fetch = poller.unserved.to_fetch(&shown, &times.borrow(), now);
+        assert_eq!(to_fetch, shown.iter().rev().copied().collect::<Vec<_>>());
+    }
+
+    #[tokio::test]
+    async fn a_height_leaving_every_view_is_dropped_from_the_times() {
+        let (node, _fake) = serve_fake([]).await;
+        let harness = Harness::new(None).await;
+        let (_watch, started) = harness.start(node.clone()).await;
+        let (sender, view) = view::channel();
+        sender.send_replace(started.borrow().clone());
+        let (mut poller, times) = block_time_poller(&harness, vec![slot(&node, &view)]);
+        poller.poll_once().await;
+        assert_ne!(*times.borrow(), BlockTimes::default());
+
+        sender.send_replace(None);
+        poller.poll_once().await;
+
+        assert_eq!(*times.borrow(), BlockTimes::default());
+    }
+
+    #[tokio::test]
+    async fn one_poll_fetches_at_most_the_header_cap() {
+        let (node, fake) = serve_fake([]).await;
+        let harness = Harness::new(None).await;
+        preload_confirmed_points(&harness, &node, 40).await;
+        let (_watch, view) = harness.start(node.clone()).await;
+        let shown = view.borrow().as_ref().unwrap().shown_block_heights();
+        assert!(shown.len() > MAX_HEADERS_PER_POLL, "{}", shown.len());
+        let (mut poller, times) = block_time_poller(&harness, vec![slot(&node, &view)]);
+
+        poller.poll_once().await;
+
+        assert_eq!(header_requests(&fake, &shown), MAX_HEADERS_PER_POLL);
+        let newest: Vec<_> = shown.iter().rev().take(MAX_HEADERS_PER_POLL).collect();
+        assert!(newest.iter().all(|h| times.borrow().get(**h).is_some()));
     }
 
     #[tokio::test]

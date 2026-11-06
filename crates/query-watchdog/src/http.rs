@@ -3,7 +3,6 @@
 use std::{
     fmt::{self, Write},
     sync::Arc,
-    time::Duration,
 };
 
 use axum::{Json, Router, extract::State, http::StatusCode, response::Html, routing::get};
@@ -299,20 +298,20 @@ fn write_line(out: &mut String, text: &str) -> fmt::Result {
 
 /// `<rfc3339> (<age> ago)`, or `<rfc3339> (in <wait>)` for a time after `now`.
 fn time_text(at: DateTime<Utc>, now: DateTime<Utc>) -> String {
-    match (now - at).to_std() {
-        Ok(age) => format!(
+    if at <= now {
+        let age = (now - at).to_std().expect("at <= now");
+        format!(
             "{} ({} ago)",
             at.to_rfc3339(),
             humantime::format_duration(age)
-        ),
-        Err(_) => {
-            let wait = (at - now).to_std().unwrap_or(Duration::ZERO);
-            format!(
-                "{} (in {})",
-                at.to_rfc3339(),
-                humantime::format_duration(wait)
-            )
-        },
+        )
+    } else {
+        let wait = (at - now).to_std().expect("at > now");
+        format!(
+            "{} (in {})",
+            at.to_rfc3339(),
+            humantime::format_duration(wait)
+        )
     }
 }
 
@@ -558,8 +557,16 @@ mod tests {
         assert!(!timed.contains("time unknown"), "{timed}");
 
         let untimed = render(&[(&node, Some(&view))], at(120));
-        let shown = view.shown_block_heights().len();
-        assert_eq!(untimed.matches("(time unknown)").count(), shown + 1);
+        for height in view.shown_block_heights() {
+            assert!(
+                untimed.contains(&format!("{height} (time unknown)")),
+                "{height}: {untimed}"
+            );
+            assert!(
+                timed.contains(&format!("{height} at ")),
+                "{height}: {timed}"
+            );
+        }
     }
 
     #[test]
@@ -577,7 +584,7 @@ mod tests {
     }
 
     #[test]
-    fn a_view_published_after_the_page_reads_zero_ago() {
+    fn a_view_published_after_the_page_reads_in() {
         let view = listed_view();
         let node = node("a:1");
         let html = render(&[(&node, Some(&view))], at(60));
