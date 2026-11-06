@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"constant":["MAX_OPTION_DURATION","TIP_POLL_INTERVAL"],"enum":["NodeStart","Startup"],"fn":["parse_year_bounded_duration"],"struct":["ChunkChecked","NetworkConfig","NodeWatch","RangeProber","Reporter","TipPoller","WatchOptions","Watchdog"]};
+window.SIDEBAR_ITEMS = {"constant":["MAX_OPTION_DURATION","TIP_POLL_INTERVAL"],"enum":["NodeStart","Startup"],"fn":["parse_year_bounded_duration"],"struct":["BlockTimePoller","ChunkChecked","NetworkConfig","NodeWatch","RangeProber","Reporter","TipPoller","WatchOptions","Watchdog"]};

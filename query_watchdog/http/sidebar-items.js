@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"fn":["encode_metrics","escape","format_eta","healthcheck","missing_lines","missing_page","progress_lines","render_page","running_lines","serve","sweep_lines","write_line","write_missing_table","write_node"],"struct":["AppState","Health"]};
+window.SIDEBAR_ITEMS = {"fn":["encode_metrics","escape","healthcheck","missing_line","missing_page","node_link","serve","time_text"],"struct":["AppState","Health","Page"]};

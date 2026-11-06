@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"constant":["PAGE_ROWS"],"fn":["age_at","channel"],"struct":["ErrorCounts","KindSummary","NodeSummary","NodeView","NodeViewSlot","SweepEta","Tips","TryTimes","WatchCounters"],"type":["ViewReceiver","ViewSender"]};
+window.SIDEBAR_ITEMS = {"constant":["PAGE_ROWS"],"fn":["age_at","channel","short_duration"],"struct":["ErrorCounts","KindSummary","NodeSummary","NodeView","NodeViewSlot","SweepEta","Tips","TryTimes","WatchCounters"],"type":["ViewReceiver","ViewSender"]};

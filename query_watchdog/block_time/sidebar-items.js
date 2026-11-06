@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["BLOCK_TIME_POLL_INTERVAL","HEADER_POLL_BUDGET","HEADER_RETRY_INTERVAL","MAX_HEADERS_PER_POLL"],"fn":["channel","header_route"],"struct":["BlockTimes","HeaderFields","HeaderJson","UnservedHeaders"],"type":["BlockTimesReceiver","BlockTimesSender"]};

@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"constant":["ALERT_MIN_NOT_FOUND","CONFIRMED_CAP_SECS","DELAY_MAX_SECS","DELAY_MIN_SECS"],"enum":["RetryCap","UnitState"],"fn":["transition"],"struct":["Retry","RetryDelay"]};
+window.SIDEBAR_ITEMS = {"constant":["CONFIRM_MIN_NOT_FOUND","DELAY_MAX_SECS","DELAY_MIN_SECS","NOT_FOUND_CAP_SECS"],"enum":["RetryCap","UnitState"],"fn":["transition"],"struct":["Retry","RetryDelay"]};
