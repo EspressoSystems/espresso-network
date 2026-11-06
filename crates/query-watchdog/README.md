@@ -102,14 +102,14 @@ number of 404s since). A not-found unit with at least 3 404s is confirmed; every
 only drives retry scheduling: only confirmed rows go through the representative and the recovery queue. The alert total
 counts not-found units at any 404 count.
 
-| Old state \ probe | Present | 404                                                  | 500, timeout, transport                              |
-| ----------------- | ------- | ---------------------------------------------------- | ---------------------------------------------------- |
-| none              | none    | not found, 1 404, retry in 5 s                       | failed, 1 failure, retry in 5 s                      |
-| failed            | none    | not found, starts fresh (1 404, 5 s)                 | failed, count + 1, delay doubles (cap 600 s)         |
-| not found, n 404s | none    | n + 1 404s, delay doubles (cap 60 s once n + 1 >= 3) | n 404s kept, delay doubles (cap 60 s when confirmed) |
+| Old state \ probe | Present | 404                                  | 500, timeout, transport                      |
+| ----------------- | ------- | ------------------------------------ | -------------------------------------------- |
+| none              | none    | not found, 1 404, retry in 5 s       | failed, 1 failure, retry in 5 s              |
+| failed            | none    | not found, starts fresh (1 404, 5 s) | failed, count + 1, delay doubles (cap 600 s) |
+| not found, n 404s | none    | n + 1 404s, delay doubles (cap 60 s) | n 404s kept, delay doubles (cap 60 s)        |
 
-- Delays are whole seconds from 5 s, doubling up to 600 s; confirmed units cap at 60 s. A failure never demotes a
-  not-found unit.
+- Delays are whole seconds from 5 s, doubling up to 600 s; not-found units cap at 60 s, so every not-found unit is
+  re-probed within 60 s of its last try. A failure never demotes a not-found unit.
 - Each unit keeps its own state: a gap over units of two rows continues each unit's state, and units the gap newly
   covers start fresh. A retried row splits into pieces of at most 100 heights, so the page lists the pieces.
 - Confirming rows are retried at their next time, at most 100 heights per probe. The order (next time, kind, first unit)
@@ -219,7 +219,7 @@ Fargate task resumes where the old one stopped.
   500, timeout), which is recorded as 404.
 - One total for all nodes: a new gap while the total is above 0 does not page again.
 - `query_watchdog_not_found_units` sums heights and epochs and can overstate until the representative is found present
-  or the sweep re-checks the confirmed rows.
+  or the sweep re-checks the confirmed rows. Unconfirmed not-found rows are re-probed within 60 s.
 - Old-epoch `stake_table` probes return 500 and start a stake-table catchup on the node. They resolve within about 20 s.
   They never count (only 404 does), but an archive sweep triggers one catchup per historical epoch and a
   `node unhealthy` WARN each minute while they fail.
@@ -259,8 +259,8 @@ Recommended alert, a simple alert with a link to the watchdog page:
    - Query: `min(last_10m):max:<namespace>.query_watchdog_not_found_units{*} > 0`. The window is the operator's choice;
      it absorbs short 404s near the tip and state cert heals.
    - The monitor resolves at the first evaluation whose window contains a 0 sample, once the last unit is repaired (the
-     representative is found present within a minute, then the recovery queue re-checks the confirmed rows, see
-     Retries).
+     representative is found present within a minute, then the recovery queue re-checks the confirmed rows and
+     unconfirmed not-found rows are re-probed within 60 s, see Retries).
    - The gauge is one total over all nodes. Overlapping short 404s on different nodes can keep `min(last_10m)` above 0,
      and a standing gap hides new ones; the page shows the per-node detail.
 2. Message:

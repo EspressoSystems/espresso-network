@@ -3340,6 +3340,26 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_poll_stops_at_the_header_budget() {
+        let (node, fake) = serve_fake([]).await;
+        let harness = Harness::with_options(WatchOptions {
+            request_interval: HEADER_POLL_BUDGET / 3 + Duration::from_millis(1),
+            ..options(None)
+        })
+        .await;
+        preload_confirmed_points(&harness, &node, 10).await;
+        let (_watch, view) = harness.start(node.clone()).await;
+        let shown = view.borrow().as_ref().unwrap().missing_row_blocks();
+        assert!(shown.len() > 4, "{} row blocks", shown.len());
+        let (mut poller, _times) = block_time_poller(&harness, vec![slot(&node, &view)]);
+
+        poller.poll_once().await;
+
+        // One request per interval: the fourth starts after the budget.
+        assert_eq!(header_requests(&fake, &shown), 3);
+    }
+
+    #[tokio::test]
     async fn header_failures_are_not_counted_as_fetch_errors() {
         let (node, fake) = serve_fake([]).await;
         fake.headers_missing.store(true, Ordering::SeqCst);

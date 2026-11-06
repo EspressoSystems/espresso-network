@@ -814,7 +814,7 @@ mod tests {
     }
 
     #[test]
-    fn retry_delay_stops_at_a_minute_only_for_confirmed_rows() {
+    fn retry_delay_stops_at_a_minute_only_for_not_found_rows() {
         let cases = [
             (Observation::NotFound, vec![10, 20, 40, 60, 60]),
             (

@@ -8,31 +8,31 @@ use chrono::{DateTime, TimeDelta, Utc};
 use crate::outcome::{NotServed, Observation, RequestFailure};
 
 /// 404s since the first, inclusive, before a not-found unit is confirmed: retried by the
-/// representative, capped at 60 s.
+/// representative and the recovery queue.
 pub const CONFIRM_MIN_NOT_FOUND: u32 = 3;
 
 /// Smallest retry delay in seconds.
 const DELAY_MIN_SECS: u64 = 5;
 /// Largest retry delay in seconds.
 const DELAY_MAX_SECS: u64 = 600;
-/// Retry delay cap of a confirmed unit in seconds.
-const CONFIRMED_CAP_SECS: u16 = 60;
+/// Retry delay cap of a not-found unit in seconds.
+const NOT_FOUND_CAP_SECS: u16 = 60;
 
 /// Upper bound of a doubling retry delay.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RetryCap {
-    /// 600 s, for every unit that is not confirmed.
-    Confirming,
-    /// 60 s, so the representative is re-checked once a minute.
-    Confirmed,
+    /// 600 s, for a unit with no 404 since it went missing.
+    Failed,
+    /// 60 s, so every not-found unit is re-probed within a minute.
+    NotFound,
 }
 
 impl RetryCap {
     /// The cap in seconds.
     fn secs(self) -> u16 {
         match self {
-            Self::Confirming => DELAY_MAX_SECS as u16,
-            Self::Confirmed => CONFIRMED_CAP_SECS,
+            Self::Failed => DELAY_MAX_SECS as u16,
+            Self::NotFound => NOT_FOUND_CAP_SECS,
         }
     }
 }
@@ -138,8 +138,8 @@ impl UnitState {
         }
     }
 
-    /// `NotFound` with at least `CONFIRM_MIN_NOT_FOUND` 404s; the rule for the representative, the
-    /// recovery queue and `RetryCap::Confirmed`.
+    /// `NotFound` with at least `CONFIRM_MIN_NOT_FOUND` 404s; the rule for the representative and
+    /// the recovery queue.
     pub fn is_confirmed(&self) -> bool {
         match self {
             Self::Failed { .. } => false,
@@ -181,13 +181,11 @@ impl UnitState {
         }
     }
 
-    /// `self` with its own delay doubled under the cap of `self`, counted from `now`. The cap
-    /// is read from the new shape, so confirmation has one rule.
+    /// `self` with its own delay doubled under the cap of its variant, counted from `now`.
     fn backed_off(self, now: DateTime<Utc>) -> UnitState {
-        let cap = if self.is_confirmed() {
-            RetryCap::Confirmed
-        } else {
-            RetryCap::Confirming
+        let cap = match self {
+            Self::Failed { .. } => RetryCap::Failed,
+            Self::NotFound { .. } => RetryCap::NotFound,
         };
         let retry = Retry::after(self.retry().delay.doubled(cap), now);
         match self {
@@ -400,7 +398,7 @@ mod tests {
             (Some(n(OLD, 4, 60)), Fail(transport), Some(n(OLD, 4, 60))),
             (Some(n(OLD, 2, 10)), Fail(s500), Some(n(OLD, 2, 20))),
             (Some(n(OLD, 2, 10)), Fail(transport), Some(n(OLD, 2, 20))),
-            (Some(n(OLD, 2, 400)), Fail(s500), Some(n(OLD, 2, 600))),
+            (Some(n(OLD, 2, 400)), Fail(s500), Some(n(OLD, 2, 60))),
         ]
     }
 
@@ -479,13 +477,13 @@ mod tests {
     fn delays_double_under_both_caps() {
         let secs = |s| RetryDelay::from_secs(s).unwrap();
         let cases = [
-            (5, RetryCap::Confirming, 10),
-            (320, RetryCap::Confirming, 600),
-            (600, RetryCap::Confirming, 600),
-            (5, RetryCap::Confirmed, 10),
-            (30, RetryCap::Confirmed, 60),
-            (60, RetryCap::Confirmed, 60),
-            (600, RetryCap::Confirmed, 60),
+            (5, RetryCap::Failed, 10),
+            (320, RetryCap::Failed, 600),
+            (600, RetryCap::Failed, 600),
+            (5, RetryCap::NotFound, 10),
+            (30, RetryCap::NotFound, 60),
+            (60, RetryCap::NotFound, 60),
+            (600, RetryCap::NotFound, 60),
         ];
         for (delay, cap, expected) in cases {
             assert_eq!(secs(delay).doubled(cap), secs(expected), "{delay} {cap:?}");
@@ -553,5 +551,15 @@ mod tests {
         let stored = Some(old(n(OLD, 3, 600)));
         let after = transition(stored, Observation::Failed(status(500)), at(NOW)).unwrap();
         assert_eq!(after.retry().delay, RetryDelay::from_secs(60).unwrap());
+    }
+
+    #[test]
+    fn failures_after_one_404_stay_within_a_minute() {
+        let mut state = transition(None, Observation::NotFound, at(NOW));
+        for _ in 0..10 {
+            state = transition(state, Observation::Failed(status(500)), at(NOW));
+            let delay = state.unwrap().retry().delay;
+            assert!(delay <= RetryDelay::from_secs(60).unwrap(), "{delay:?}");
+        }
     }
 }
