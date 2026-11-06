@@ -1103,6 +1103,11 @@ impl<T: NodeType> Consensus<T> {
         outbox: &mut Outbox<ConsensusOutput<T>>,
     ) -> Protocol {
         let view = proposal.view_number();
+        crate::trace_leader_event!(
+            self.tracer,
+            view,
+            crate::leader_trace::LeaderEvent::ProposalArrivedVMinus1
+        );
         let VidCommitment::V2(commit) = proposal.proposal.data.block_header.payload_commitment()
         else {
             warn!(%view, "proposal payload commitment is not V2, discarding");
@@ -1130,6 +1135,11 @@ impl<T: NodeType> Consensus<T> {
         vid_share: VidDisperseShare2<T>,
         outbox: &mut Outbox<ConsensusOutput<T>>,
     ) -> Protocol {
+        crate::trace_leader_event!(
+            self.tracer,
+            vid_share.view_number(),
+            crate::leader_trace::LeaderEvent::VidShareArrivedVMinus1
+        );
         let key = (
             vid_share.view_number(),
             vid_share.epoch,

@@ -29,6 +29,10 @@ pub trait LeaderTracer: Send + Sync + 'static {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LeaderEvent {
     // V-1 events that trigger V duty.
+    /// This node's own VID share for the view arrived, before or after its proposal.
+    VidShareArrivedVMinus1,
+    /// A validated proposal for the view arrived, before or after this node's share.
+    ProposalArrivedVMinus1,
     ProposalValidatedVMinus1,
     RequestBlockHeaderQueued,
     /// The leader took the block's transactions from its pool, after any wait for them.
@@ -81,6 +85,8 @@ impl LeaderEvent {
     pub fn name(self) -> &'static str {
         use LeaderEvent::*;
         match self {
+            VidShareArrivedVMinus1 => "vid_share_arrived_v_minus_1",
+            ProposalArrivedVMinus1 => "proposal_arrived_v_minus_1",
             ProposalValidatedVMinus1 => "proposal_validated_v_minus_1",
             RequestBlockHeaderQueued => "request_block_header_queued",
             BlockTaken => "block_taken",
