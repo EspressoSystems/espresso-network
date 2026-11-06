@@ -74,6 +74,7 @@ use super::{
         SubmitDataSource, TokenDataSource,
     },
 };
+use crate::state_cert::StateCertFetchError;
 
 /// Timeout for failing requests due to missing data.
 ///
@@ -754,9 +755,7 @@ where
                     .data_source
                     .request_state_cert(epoch, TIMEOUT)
                     .await
-                    .map_err(|err| {
-                        lc_error(hotshot_query_service::Error::Availability { source: err.into() })
-                    })?;
+                    .map_err(state_cert_error)?;
 
                 // Store the fetched certificate
                 self.data_source
@@ -3746,6 +3745,17 @@ fn explorer_error(err: ExplorerError) -> anyhow::Error {
     lc_error(hotshot_query_service::Error::Explorer { source: err })
 }
 
+fn state_cert_error(err: StateCertFetchError) -> anyhow::Error {
+    match err {
+        StateCertFetchError::EpochsNotStarted { .. }
+        | StateCertFetchError::BeforeFirstEpoch { .. }
+        | StateCertFetchError::RootNotDecided { .. } => not_found(err.to_string()),
+        StateCertFetchError::FetchError(_)
+        | StateCertFetchError::ValidationError(_)
+        | StateCertFetchError::Other(_) => err.into(),
+    }
+}
+
 /// Bounds the leaves in a single leaf proof, and so the memory to build and serialize it.
 ///
 /// Tracks the `hotshot_query_service` small-object range limit, so a dependency bump that
@@ -6096,44 +6106,28 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn state_cert_that_cannot_exist_is_not_found() {
-        use crate::state_cert::StateCertFetchError;
-
-        for err in [
-            StateCertFetchError::EpochsNotStarted { epoch: 1 },
-            StateCertFetchError::BeforeFirstEpoch {
-                epoch: 0,
-                first_epoch: 1,
-            },
-            StateCertFetchError::RootNotDecided {
-                epoch: 3,
-                root: 2995,
-                decided: 100,
-            },
-        ] {
-            let err = lc_error(hotshot_query_service::Error::Availability { source: err.into() });
-            assert!(
-                matches!(
-                    err.downcast_ref::<AvailabilityError>(),
-                    Some(AvailabilityError::NotFound(_))
-                ),
-                "{err:#}"
-            );
-        }
+    #[rstest::rstest]
+    #[case::epochs_not_started(StateCertFetchError::EpochsNotStarted { epoch: 1 })]
+    #[case::before_first_epoch(StateCertFetchError::BeforeFirstEpoch { epoch: 0, first_epoch: 1 })]
+    #[case::root_not_decided(StateCertFetchError::RootNotDecided { epoch: 3, decided_height: 100 })]
+    fn state_cert_that_cannot_exist_is_not_found(#[case] err: StateCertFetchError) {
+        let err = state_cert_error(err);
+        assert!(
+            matches!(
+                err.downcast_ref::<AvailabilityError>(),
+                Some(AvailabilityError::NotFound(_))
+            ),
+            "{err:#}"
+        );
     }
 
-    #[test]
-    fn state_cert_peers_failed_to_serve_stays_internal() {
-        use crate::state_cert::StateCertFetchError;
-
-        for err in [
-            StateCertFetchError::FetchError(anyhow::anyhow!("timeout")),
-            StateCertFetchError::ValidationError(anyhow::anyhow!("bad")),
-        ] {
-            let err = lc_error(hotshot_query_service::Error::Availability { source: err.into() });
-            assert!(err.downcast_ref::<AvailabilityError>().is_none(), "{err:#}");
-        }
+    #[rstest::rstest]
+    #[case::fetch(StateCertFetchError::FetchError(anyhow::anyhow!("timeout")))]
+    #[case::validation(StateCertFetchError::ValidationError(anyhow::anyhow!("bad")))]
+    #[case::other(StateCertFetchError::Other(anyhow::anyhow!("catchup")))]
+    fn state_cert_that_peers_failed_to_serve_is_internal(#[case] err: StateCertFetchError) {
+        let err = state_cert_error(err);
+        assert!(err.downcast_ref::<AvailabilityError>().is_none(), "{err:#}");
     }
 
     #[tokio::test(flavor = "multi_thread")]

@@ -585,14 +585,11 @@ impl StateCertFetchingDataSource<SeqTypes> for ApiState {
         let coordinator = handle.membership_coordinator().await;
         let epoch_height = *coordinator.epoch_height();
         let decided = handle.decided_leaf().await;
-        if decided.epoch(epoch_height).is_none() {
-            return Err(StateCertFetchError::EpochsNotStarted { epoch });
-        }
         ensure_cert_can_exist(
-            epoch,
+            EpochNumber::new(epoch),
             coordinator.membership().first_epoch(),
             epoch_height,
-            decided.height(),
+            decided.epoch(epoch_height).map(|_| decided.height()),
             handle.current_epoch().await,
         )?;
 
@@ -638,7 +635,7 @@ impl StateCertFetchingDataSource<SeqTypes> for ApiState {
                     &cert,
                     &stake_table,
                     EpochNumber::new(epoch),
-                    *coordinator.epoch_height(),
+                    epoch_height,
                     &handle.upgrade_lock().await,
                 )
                 .map_err(|e| {
@@ -10933,18 +10930,23 @@ mod test {
             assert_eq!(status, StatusCode::BAD_REQUEST, "{missing_selector}");
         }
 
-        // No state certificate or cert2 exists for an epoch or height the network never reaches,
-        // and a block this network built has no bad encoding to prove. These only show both
-        // versions refusing alike. The conversions are covered by the reference-vector tests.
+        for route in [
+            "availability/state-cert/1000000",
+            "v2/availability/state-cert?epoch=1000000",
+            "availability/state-cert-v2/1000000",
+            "v2/availability/state-cert-v2?epoch=1000000",
+        ] {
+            assert_eq!(
+                error_status(client, route).await,
+                StatusCode::NOT_FOUND,
+                "{route}"
+            );
+        }
+
+        // No cert2 exists for a height the network never reaches, and a block this network built
+        // has no bad encoding to prove. These only show both versions refusing alike. The
+        // conversions are covered by the reference-vector tests.
         for (v1, v2) in [
-            (
-                "availability/state-cert/1000000".to_string(),
-                "v2/availability/state-cert?epoch=1000000".to_string(),
-            ),
-            (
-                "availability/state-cert-v2/1000000".to_string(),
-                "v2/availability/state-cert-v2?epoch=1000000".to_string(),
-            ),
             (
                 format!("availability/incorrect-encoding-proof/{last_block}/102"),
                 format!(
@@ -10962,17 +10964,6 @@ mod test {
                 "{v2}"
             );
         }
-        for route in [
-            "availability/state-cert/1000000",
-            "availability/state-cert-v2/1000000",
-        ] {
-            assert_eq!(
-                error_status(client, route).await,
-                StatusCode::NOT_FOUND,
-                "{route}"
-            );
-        }
-
         check_ranges_v2_parity(client, &limits, first_block, last_block).await;
 
         // Each stream's first frame is the unary answer for the height it starts from.
@@ -12154,6 +12145,28 @@ mod test {
         client.connect(Some(Duration::from_secs(10))).await;
 
         assert_state_certs(&client, 3..=TEST_EPOCHS, TEST_EPOCH_HEIGHT).await;
+
+        // The root gate runs only after a storage miss, so a stored cert is served whatever
+        // this node has decided.
+        const UNDECIDED_EPOCH: u64 = 1_000_000;
+        let persistence = network.server.persistence();
+        let cert = persistence
+            .get_state_cert_by_epoch(TEST_EPOCHS)
+            .await
+            .unwrap()
+            .expect("the query above stored this cert");
+        persistence
+            .insert_state_cert(UNDECIDED_EPOCH, cert.clone())
+            .await
+            .unwrap();
+        let served = client
+            .get::<StateCertQueryDataV2<SeqTypes>>(&format!(
+                "availability/state-cert-v2/{UNDECIDED_EPOCH}"
+            ))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(served.0, cert);
     }
 
     /// Light client provers and catching-up nodes still fetch the state certificates of

@@ -4,10 +4,8 @@ use std::collections::HashMap;
 
 use alloy::primitives::U256;
 use anyhow::{bail, ensure};
-use disco_types::status::StatusCode;
 use espresso_types::SeqTypes;
 use hotshot_contract_adapter::light_client::derive_signed_state_digest;
-use hotshot_query_service::availability::Error;
 use hotshot_types::{
     data::{EpochNumber, ViewNumber},
     light_client::StateVerKey,
@@ -15,19 +13,19 @@ use hotshot_types::{
     simple_certificate::LightClientStateUpdateCertificateV2,
     stake_table::HSStakeTable,
     traits::signature_key::{LCV2StateSignatureKey, LCV3StateSignatureKey, StakeTableEntryType},
-    utils::{epoch_from_block_number, is_epoch_root},
+    utils::{epoch_from_block_number, is_epoch_root, root_block_in_epoch},
 };
 
 /// Error type for state certificate fetching
 #[derive(Debug, thiserror::Error)]
 pub enum StateCertFetchError {
-    #[error("Failed to fetch state certificate: {0}")]
+    #[error("failed to fetch state certificate: {0:#}")]
     FetchError(#[source] anyhow::Error),
 
-    #[error("State certificate validation failed: {0}")]
+    #[error("state certificate validation failed: {0:#}")]
     ValidationError(#[source] anyhow::Error),
 
-    #[error("State certificate error: {0}")]
+    #[error("state certificate error: {0:#}")]
     Other(#[source] anyhow::Error),
 
     #[error("no state certificate for epoch {epoch}: epochs have not started")]
@@ -36,68 +34,46 @@ pub enum StateCertFetchError {
     #[error("no state certificate for epoch {epoch}: the first epoch is {first_epoch}")]
     BeforeFirstEpoch { epoch: u64, first_epoch: u64 },
 
-    /// No state certificate for `epoch` can exist yet: it signs the epoch's root block.
     #[error(
-        "root block {root} of epoch {epoch} is not decided yet, this node is at block {decided}"
+        "the root block of epoch {epoch} is not decided yet, this node is at block \
+         {decided_height}"
     )]
-    RootNotDecided { epoch: u64, root: u64, decided: u64 },
+    RootNotDecided { epoch: u64, decided_height: u64 },
 }
 
-impl From<StateCertFetchError> for hotshot_query_service::availability::Error {
-    fn from(err: StateCertFetchError) -> Self {
-        match err {
-            err @ (StateCertFetchError::EpochsNotStarted { .. }
-            | StateCertFetchError::BeforeFirstEpoch { .. }
-            | StateCertFetchError::RootNotDecided { .. }) => Error::Custom {
-                message: err.to_string(),
-                status: StatusCode::NOT_FOUND,
-            },
-            StateCertFetchError::FetchError(e) => Error::Custom {
-                message: format!("Failed to fetch state cert from peers: {e}"),
-                status: StatusCode::INTERNAL_SERVER_ERROR,
-            },
-            StateCertFetchError::ValidationError(e) => Error::Custom {
-                message: format!("State certificate validation failed: {e}"),
-                status: StatusCode::INTERNAL_SERVER_ERROR,
-            },
-            StateCertFetchError::Other(e) => Error::Custom {
-                message: format!("Failed to process state cert: {e}"),
-                status: StatusCode::INTERNAL_SERVER_ERROR,
-            },
-        }
-    }
-}
-
-/// Fails when no peer can hold a state certificate for `epoch` yet, so asking them is wasted.
+/// Fails until this node decides the root block that a state certificate for `epoch` signs.
 ///
-/// `decided` is this node's decided block height and `current_epoch` the epoch its consensus is
-/// in, `None` if unknown. A node whose decided height lags still fetches any epoch its consensus
-/// has already left.
+/// `decided_height` is `None` while this node's decided leaf predates epochs. `current_epoch` is
+/// the epoch this node's consensus is in, `None` if unknown: a node whose decided leaf trails its
+/// consensus still fetches any epoch that consensus has already left.
 pub(crate) fn ensure_cert_can_exist(
-    epoch: u64,
+    epoch: EpochNumber,
     first_epoch: EpochNumber,
     epoch_height: u64,
-    decided: u64,
+    decided_height: Option<u64>,
     current_epoch: Option<EpochNumber>,
 ) -> Result<(), StateCertFetchError> {
-    if epoch < first_epoch.u64() {
+    let Some(decided_height) = decided_height else {
+        return Err(StateCertFetchError::EpochsNotStarted { epoch: epoch.u64() });
+    };
+    if epoch < first_epoch {
         return Err(StateCertFetchError::BeforeFirstEpoch {
-            epoch,
+            epoch: epoch.u64(),
             first_epoch: first_epoch.u64(),
         });
     }
-    if current_epoch.is_some_and(|current| current.u64() > epoch) {
+    if current_epoch.is_some_and(|current| current > epoch) {
         return Ok(());
     }
     // The cert signs the root block inside `epoch` itself, not the `epoch - 2` root that sets its
-    // stake table. Saturating because `epoch` comes from the URL: an overflowing root has to stay
-    // above every decided height instead of wrapping below it.
-    let root = epoch.saturating_mul(epoch_height).saturating_sub(5);
-    if decided < root {
+    // stake table. `epoch` comes from the URL, so epochs past the decided one are rejected before
+    // `root_block_in_epoch` multiplies it.
+    if epoch.u64() > epoch_from_block_number(decided_height, epoch_height)
+        || decided_height < root_block_in_epoch(epoch.u64(), epoch_height)
+    {
         return Err(StateCertFetchError::RootNotDecided {
-            epoch,
-            root,
-            decided,
+            epoch: epoch.u64(),
+            decided_height,
         });
     }
     Ok(())
@@ -504,19 +480,20 @@ mod tests {
 
     const DECAF_EPOCH_HEIGHT: u64 = 3000;
     const DECAF_FIRST_EPOCH: u64 = 1054;
-    /// Read off decaf's live certificate for epoch 7361.
+    /// Read off decaf's live certificates for these epochs.
+    const FIRST_EPOCH_ROOT: u64 = 3_161_995;
     const EPOCH_7361_ROOT: u64 = 22_082_995;
 
     fn decaf_gate(
         epoch: u64,
-        decided: u64,
+        decided_height: u64,
         current_epoch: Option<u64>,
     ) -> Result<(), StateCertFetchError> {
         ensure_cert_can_exist(
-            epoch,
+            EpochNumber::new(epoch),
             EpochNumber::new(DECAF_FIRST_EPOCH),
             DECAF_EPOCH_HEIGHT,
-            decided,
+            Some(decided_height),
             current_epoch.map(EpochNumber::new),
         )
     }
@@ -524,30 +501,26 @@ mod tests {
     #[rstest::rstest]
     #[case::root_just_decided(7361, EPOCH_7361_ROOT, Some(7361))]
     #[case::consensus_left_the_epoch(7361, EPOCH_7361_ROOT - 1000, Some(7362))]
-    #[case::first_epoch(DECAF_FIRST_EPOCH, DECAF_FIRST_EPOCH * DECAF_EPOCH_HEIGHT - 5, None)]
+    #[case::first_epoch(DECAF_FIRST_EPOCH, FIRST_EPOCH_ROOT, None)]
     fn cert_that_can_exist_is_fetched(
         #[case] epoch: u64,
-        #[case] decided: u64,
+        #[case] decided_height: u64,
         #[case] current_epoch: Option<u64>,
     ) {
-        decaf_gate(epoch, decided, current_epoch).expect("peers may hold this cert");
+        decaf_gate(epoch, decided_height, current_epoch).expect("peers may hold this cert");
     }
 
     #[rstest::rstest]
     #[case::root_one_block_ahead(7361, EPOCH_7361_ROOT - 1, Some(7361))]
     #[case::current_epoch_unknown(7361, EPOCH_7361_ROOT - 1, None)]
-    #[case::root_overflows(u64::MAX, u64::MAX - 6, None)]
-    #[case::root_would_wrap_below_decided(
-        u64::MAX / DECAF_EPOCH_HEIGHT + 1,
-        EPOCH_7361_ROOT,
-        Some(7361)
-    )]
+    #[case::first_epoch_root_one_block_ahead(DECAF_FIRST_EPOCH, FIRST_EPOCH_ROOT - 1, None)]
+    #[case::far_future_epoch(u64::MAX, EPOCH_7361_ROOT, Some(7361))]
     fn cert_whose_root_is_not_decided_is_not_fetched(
         #[case] epoch: u64,
-        #[case] decided: u64,
+        #[case] decided_height: u64,
         #[case] current_epoch: Option<u64>,
     ) {
-        let err = decaf_gate(epoch, decided, current_epoch).unwrap_err();
+        let err = decaf_gate(epoch, decided_height, current_epoch).unwrap_err();
         assert!(
             matches!(err, StateCertFetchError::RootNotDecided { .. }),
             "{err}"
@@ -561,6 +534,22 @@ mod tests {
         let err = decaf_gate(epoch, EPOCH_7361_ROOT, Some(7361)).unwrap_err();
         assert!(
             matches!(err, StateCertFetchError::BeforeFirstEpoch { .. }),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn cert_before_epochs_start_is_not_fetched() {
+        let err = ensure_cert_can_exist(
+            EpochNumber::new(DECAF_FIRST_EPOCH),
+            EpochNumber::new(DECAF_FIRST_EPOCH),
+            DECAF_EPOCH_HEIGHT,
+            None,
+            None,
+        )
+        .unwrap_err();
+        assert!(
+            matches!(err, StateCertFetchError::EpochsNotStarted { .. }),
             "{err}"
         );
     }
