@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"mod":["block","cert_verifier","client","consensus","coordinator","epoch","fetch","helpers","logging","message","network","outbox","proposal","serve","state","storage","upgrade","utils","vid","vote"]};
+window.SIDEBAR_ITEMS = {"macro":[["trace_leader_event",1]],"mod":["block","cert_verifier","client","consensus","coordinator","epoch","fetch","helpers","leader_trace","logging","message","network","outbox","proposal","serve","state","storage","upgrade","utils","vid","vote"]};
