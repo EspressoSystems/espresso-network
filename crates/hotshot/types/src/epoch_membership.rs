@@ -888,10 +888,6 @@ impl<TYPES: NodeType> EpochMembership<TYPES> {
         self.coordinator.stake_table_for_epoch(Some(epoch + 1))
     }
 
-    pub fn get_new_epoch(&self, epoch: Option<EpochNumber>) -> Result<Self> {
-        self.coordinator.membership_for_epoch(epoch)
-    }
-
     async fn get_epoch_root(&self) -> anyhow::Result<Leaf2<TYPES>> {
         let Some(epoch) = self.epoch() else {
             anyhow::bail!("Cannot get root for None epoch");

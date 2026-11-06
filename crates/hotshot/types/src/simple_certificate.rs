@@ -35,7 +35,7 @@ use crate::{
         ViewSyncFinalizeData, ViewSyncFinalizeData2, ViewSyncPreCommitData, ViewSyncPreCommitData2,
         Vote2Data, Voteable,
     },
-    stake_table::{HSStakeTable, StakeTableEntries},
+    stake_table::HSStakeTable,
     traits::{
         node_implementation::NodeType,
         signature_key::{SignatureKey, StateSignatureKey},
@@ -455,31 +455,6 @@ impl<TYPES: NodeType> UpgradeCertificate<TYPES> {
             self.data.new_version_first_view >= view_number,
             "Upgrade certificate is no longer relevant."
         );
-
-        Ok(())
-    }
-
-    /// Validate an upgrade certificate.
-    /// # Errors
-    /// Returns an error when the upgrade certificate is invalid.
-    pub async fn validate(
-        upgrade_certificate: &Option<Self>,
-        membership: &EpochMembership<TYPES>,
-        epoch: Option<EpochNumber>,
-        upgrade_lock: &UpgradeLock<TYPES>,
-    ) -> Result<()> {
-        ensure!(epoch == membership.epoch(), "Epochs don't match!");
-        if let Some(cert) = upgrade_certificate {
-            let membership_stake_table = membership.stake_table();
-            let membership_upgrade_threshold = membership.upgrade_threshold();
-
-            cert.is_valid_cert(
-                &StakeTableEntries::from_iter(membership_stake_table).0,
-                membership_upgrade_threshold,
-                upgrade_lock,
-            )
-            .context(|e| warn!("Invalid upgrade certificate: {e}"))?;
-        }
 
         Ok(())
     }
