@@ -53,7 +53,7 @@
 <a href=#53 id=53 data-nosnippet>53</a>    network::NetworkConfig,
 <a href=#54 id=54 data-nosnippet>54</a>    simple_certificate::LightClientStateUpdateCertificateV2,
 <a href=#55 id=55 data-nosnippet>55</a>    stake_table::HSStakeTable,
-<a href=#56 id=56 data-nosnippet>56</a>    traits::election::{Membership, MembershipSnapshot, NonEpochMembershipSnapshot},
+<a href=#56 id=56 data-nosnippet>56</a>    traits::election::{Membership, MembershipSnapshot},
 <a href=#57 id=57 data-nosnippet>57</a>    utils::epoch_from_block_number,
 <a href=#58 id=58 data-nosnippet>58</a>    vid::avidm::{AvidMScheme, init_avidm_param},
 <a href=#59 id=59 data-nosnippet>59</a>    vote::HasViewNumber,
@@ -359,7 +359,7 @@
 <a href=#359 id=359 data-nosnippet>359</a>                .unwrap_or_default(),
 <a href=#360 id=360 data-nosnippet>360</a>            <span class="prelude-val">None </span>=&gt; coordinator
 <a href=#361 id=361 data-nosnippet>361</a>                .membership()
-<a href=#362 id=362 data-nosnippet>362</a>                .non_epoch_snapshot()
+<a href=#362 id=362 data-nosnippet>362</a>                .genesis_stake_tables()
 <a href=#363 id=363 data-nosnippet>363</a>                .da_stake_table()
 <a href=#364 id=364 data-nosnippet>364</a>                .cloned()
 <a href=#365 id=365 data-nosnippet>365</a>                .collect(),
