@@ -953,7 +953,7 @@ pub async fn get_leader_and_fetch_missing_rewards(
 
     let coordinator = instance_state.coordinator.clone();
 
-    let membership = coordinator.membership_for_epoch(Some(epoch))?;
+    let membership = coordinator.membership_for_epoch(epoch)?;
 
     let snapshot = membership
         .snapshot()
@@ -1234,7 +1234,7 @@ impl EpochRewardsCalculator {
         );
 
         // Ensure stake table is available for this epoch
-        if let Err(err) = coordinator.membership_for_epoch(Some(epoch)) {
+        if let Err(err) = coordinator.membership_for_epoch(epoch) {
             tracing::info!(%epoch, "stake table missing for epoch, triggering catchup: {err:#}");
             coordinator
                 .wait_for_catchup(epoch)

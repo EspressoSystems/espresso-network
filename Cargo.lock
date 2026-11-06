@@ -5177,7 +5177,6 @@ dependencies = [
  "digest 0.10.7",
  "displaydoc",
  "dyn-clone",
- "either",
  "futures",
  "generic-array 1.4.3",
  "hotshot-utils",

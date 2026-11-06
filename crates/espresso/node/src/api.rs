@@ -337,7 +337,7 @@ impl StakeTableDataSource<SeqTypes> for ApiState {
         let mem = handle
             .membership_coordinator()
             .await
-            .stake_table_for_epoch(Some(epoch))?;
+            .stake_table_for_epoch(epoch)?;
 
         Ok(mem.stake_table().cloned().collect())
     }
@@ -411,7 +411,7 @@ impl StakeTableDataSource<SeqTypes> for ApiState {
             .await
             .membership_coordinator()
             .await
-            .membership_for_epoch(Some(e))
+            .membership_for_epoch(e)
             .context("membership not found")?
             .snapshot()
             .with_context(|| format!("no committee for epoch={e}"))?
@@ -605,7 +605,7 @@ impl StateCertFetchingDataSource<SeqTypes> for ApiState {
         )?;
 
         tracing::info!("fetching state certificate for epoch={epoch}");
-        if let Err(err) = coordinator.stake_table_for_epoch(Some(EpochNumber::new(epoch))) {
+        if let Err(err) = coordinator.stake_table_for_epoch(EpochNumber::new(epoch)) {
             tracing::warn!(
                 "Failed to get membership for epoch {epoch}: {err:#}. Waiting for catchup"
             );
@@ -622,7 +622,7 @@ impl StateCertFetchingDataSource<SeqTypes> for ApiState {
         }
 
         let membership = coordinator
-            .stake_table_for_epoch(Some(EpochNumber::new(epoch)))
+            .stake_table_for_epoch(EpochNumber::new(epoch))
             .map_err(|e| {
                 StateCertFetchError::Other(
                     anyhow::Error::new(e)
@@ -6578,18 +6578,20 @@ mod test {
                     if leaf.height() <= height_before_restart {
                         continue;
                     }
-                    let membership =
-                        match coordinator.membership_for_epoch(leaf.epoch(EPOCH_HEIGHT)) {
-                            Ok(membership) => membership,
-                            Err(err) => {
-                                tracing::warn!(
-                                    height = leaf.height(),
-                                    %err,
-                                    "no membership for epoch",
-                                );
-                                continue;
-                            },
-                        };
+                    let membership = match coordinator.membership_for_epoch(
+                        leaf.epoch(EPOCH_HEIGHT)
+                            .expect("new-protocol leaves have an epoch"),
+                    ) {
+                        Ok(membership) => membership,
+                        Err(err) => {
+                            tracing::warn!(
+                                height = leaf.height(),
+                                %err,
+                                "no membership for epoch",
+                            );
+                            continue;
+                        },
+                    };
                     match membership.leader(leaf.view_number()) {
                         Ok(leader) if leader == node_1_key => return Some(leaf.height()),
                         Ok(_) => {},
@@ -7065,11 +7067,11 @@ mod test {
         // Verify that the restarted node catches up for each epoch
         for epoch_num in 1..=7 {
             let epoch = EpochNumber::new(epoch_num);
-            let node_em = match coordinator.membership_for_epoch(Some(epoch)) {
+            let node_em = match coordinator.membership_for_epoch(epoch) {
                 Ok(em) => em,
                 Err(_) => coordinator.wait_for_catchup(epoch).await.unwrap(),
             };
-            let server_em = match server_coordinator.membership_for_epoch(Some(epoch)) {
+            let server_em = match server_coordinator.membership_for_epoch(epoch) {
                 Ok(em) => em,
                 Err(_) => server_coordinator.wait_for_catchup(epoch).await.unwrap(),
             };
@@ -7193,7 +7195,7 @@ mod test {
         println!("trigger catchup in this order: {rand_epochs:?}");
         for epoch_num in rand_epochs {
             let epoch = EpochNumber::new(epoch_num);
-            let _ = coordinator.membership_for_epoch(Some(epoch));
+            let _ = coordinator.membership_for_epoch(epoch);
         }
 
         // Verify that the restarted node catches up for each epoch
@@ -7201,7 +7203,7 @@ mod test {
             println!("getting stake table for epoch = {epoch_num}");
             let epoch = EpochNumber::new(epoch_num);
             let node_em = coordinator.wait_for_catchup(epoch).await.unwrap();
-            let server_em = match server_coordinator.membership_for_epoch(Some(epoch)) {
+            let server_em = match server_coordinator.membership_for_epoch(epoch) {
                 Ok(em) => em,
                 Err(_) => server_coordinator.wait_for_catchup(epoch).await.unwrap(),
             };

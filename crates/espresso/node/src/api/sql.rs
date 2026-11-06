@@ -2084,7 +2084,7 @@ async fn reward_header_dependencies(
             continue;
         }
 
-        let epoch_membership = match coordinator.membership_for_epoch(Some(proposal_epoch)) {
+        let epoch_membership = match coordinator.membership_for_epoch(proposal_epoch) {
             Ok(e) => e,
             Err(err) => {
                 tracing::info!(

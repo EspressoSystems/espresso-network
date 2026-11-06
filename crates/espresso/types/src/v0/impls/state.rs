@@ -1305,7 +1305,7 @@ async fn validate_next_stake_table_hash(
 
     let epoch_membership = instance
         .coordinator
-        .stake_table_for_epoch(Some(epoch + 1))
+        .stake_table_for_epoch(epoch + 1)
         .map_err(|_| ProposalValidationError::NextStakeTableNotFound)?;
     let next_stake_table_hash = epoch_membership
         .stake_table_hash()

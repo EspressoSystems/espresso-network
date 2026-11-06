@@ -354,7 +354,7 @@ async fn catchup_retries_after_persistence_query_stalls() {
     let (store, coordinator) = setup();
     let target = EpochNumber::new(TARGET_EPOCH);
 
-    let Err(err) = coordinator.stake_table_for_epoch(Some(target)) else {
+    let Err(err) = coordinator.stake_table_for_epoch(target) else {
         panic!("epoch {target} has no local snapshot, so this must not succeed")
     };
     assert!(
@@ -367,7 +367,7 @@ async fn catchup_retries_after_persistence_query_stalls() {
         wait_until(RECOVERY_BUDGET, || store.calls() >= 1).await,
         "catchup never reached the persistence layer"
     );
-    let Err(err) = coordinator.stake_table_for_epoch(Some(target)) else {
+    let Err(err) = coordinator.stake_table_for_epoch(target) else {
         panic!("epoch {target} must still be unavailable")
     };
     assert!(
@@ -382,7 +382,7 @@ async fn catchup_retries_after_persistence_query_stalls() {
     // restarted and every view it leads times out.
     let stalled_epoch = WALK_EPOCH;
     let retried = wait_until(RECOVERY_BUDGET, || {
-        let _ = coordinator.stake_table_for_epoch(Some(target));
+        let _ = coordinator.stake_table_for_epoch(target);
         store.loads_of(stalled_epoch) >= 2
     })
     .await;
@@ -411,7 +411,7 @@ async fn unrelated_epoch_still_reaches_storage_while_one_query_stalls() {
     let target = EpochNumber::new(TARGET_EPOCH);
     let other = EpochNumber::new(OTHER_EPOCH);
 
-    assert!(coordinator.stake_table_for_epoch(Some(target)).is_err());
+    assert!(coordinator.stake_table_for_epoch(target).is_err());
     assert!(
         wait_until(RECOVERY_BUDGET, || store.calls() >= 1).await,
         "catchup never reached the persistence layer"
@@ -456,7 +456,7 @@ async fn step_timeout_recovers_catchup_when_storage_bound_cannot() {
     let (store, coordinator) = setup_with(Duration::from_secs(3600), Duration::from_millis(500));
     let target = EpochNumber::new(TARGET_EPOCH);
 
-    let Err(err) = coordinator.stake_table_for_epoch(Some(target)) else {
+    let Err(err) = coordinator.stake_table_for_epoch(target) else {
         panic!("epoch {target} has no local snapshot, so this must not succeed")
     };
     assert!(
@@ -476,7 +476,7 @@ async fn step_timeout_recovers_catchup_when_storage_bound_cannot() {
     // fine — the wedge under test is the permanent map entry, not the locks.
     let recovered = wait_until(RECOVERY_BUDGET, || {
         matches!(
-            coordinator.stake_table_for_epoch(Some(target)),
+            coordinator.stake_table_for_epoch(target),
             Err(e) if format!("{e:?}").contains("Starting catchup")
         )
     })

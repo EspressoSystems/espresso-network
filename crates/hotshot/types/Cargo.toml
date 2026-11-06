@@ -37,7 +37,6 @@ derive_more = { workspace = true }
 digest = { workspace = true }
 displaydoc = { workspace = true }
 dyn-clone = { workspace = true }
-either = { workspace = true }
 futures = { workspace = true }
 generic-array = { workspace = true }
 hotshot-utils = { workspace = true }

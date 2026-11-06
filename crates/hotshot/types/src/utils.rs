@@ -139,11 +139,9 @@ pub async fn verify_leaf_chain<T: NodeType>(
                     "QC claims epoch {claimed} but certifies the leaf at height \
                      {certified_height} in epoch {epoch}"
                 );
-                let membership = coordinator
-                    .stake_table_for_epoch(Some(epoch))
-                    .map_err(|err| {
-                        anyhow!("no stake table available for epoch {epoch}: {err:?}")
-                    })?;
+                let membership = coordinator.stake_table_for_epoch(epoch).map_err(|err| {
+                    anyhow!("no stake table available for epoch {epoch}: {err:?}")
+                })?;
                 (
                     StakeTableEntries::<T>::from_iter(membership.stake_table()).0,
                     membership.success_threshold(),

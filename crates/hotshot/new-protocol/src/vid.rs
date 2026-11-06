@@ -59,7 +59,7 @@ pub fn expected_vid_param<T: NodeType>(
     membership: &EpochMembershipCoordinator<T>,
     epoch: EpochNumber,
 ) -> Option<AvidmGf2Param> {
-    let membership = membership.stake_table_for_epoch(Some(epoch)).ok()?;
+    let membership = membership.stake_table_for_epoch(epoch).ok()?;
     let total_weight = vid_total_weight::<T, _>(membership.stake_table(), Some(epoch));
     init_avidm_gf2_param(total_weight).ok()
 }

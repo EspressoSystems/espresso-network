@@ -585,7 +585,7 @@ async fn test_payload_commitment_comes_from_the_built_dispersal() {
     }
 
     let membership = mock_membership();
-    let members = membership.stake_table_for_epoch(Some(epoch())).unwrap();
+    let members = membership.stake_table_for_epoch(epoch()).unwrap();
     let total_weight = vid_total_weight(members.stake_table(), Some(epoch()));
     let version = test_upgrade_lock::<TestTypes>().version(view(4)).unwrap();
     let mut num_transactions = Vec::new();

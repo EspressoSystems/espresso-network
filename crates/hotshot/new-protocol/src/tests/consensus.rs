@@ -170,7 +170,7 @@ async fn test_timeout_certificate_does_not_lower_the_epoch() {
     harness.set_view(timed_out.view_number, entered);
     let membership = harness
         .membership_coordinator
-        .membership_for_epoch(Some(left))
+        .membership_for_epoch(left)
         .expect("the epoch resolves");
 
     harness
@@ -257,7 +257,7 @@ async fn test_timeout_certificate_raises_the_epoch() {
         .register_epoch(ahead, [0u8; 32]);
     let membership = harness
         .membership_coordinator
-        .membership_for_epoch(Some(ahead))
+        .membership_for_epoch(ahead)
         .expect("the epoch resolves");
 
     harness
@@ -309,7 +309,7 @@ async fn test_later_timeout_certificate_is_kept_for_its_epoch() {
     let membership = harness.membership_coordinator.clone();
     let certificate = |epoch| {
         let membership = membership
-            .membership_for_epoch(Some(epoch))
+            .membership_for_epoch(epoch)
             .expect("the epoch resolves");
         ConsensusInput::TimeoutCertificate(ValidCert::new(
             build_timeout_cert3(
@@ -357,7 +357,7 @@ async fn test_unbound_timeout_certificate_is_refused_when_upgraded() {
     let view = &test_data.views[1];
     let membership = harness
         .membership_coordinator
-        .membership_for_epoch(Some(view.epoch_number))
+        .membership_for_epoch(view.epoch_number)
         .expect("the epoch resolves");
     let signers: Vec<u64> = (0..10).collect();
     let cert = ConsensusInput::TimeoutCertificate(ValidCert::new(
@@ -520,7 +520,7 @@ async fn view_one_proposed_from_genesis(
     if genesis_timed_out {
         let membership = harness
             .membership_coordinator
-            .membership_for_epoch(Some(epoch))
+            .membership_for_epoch(epoch)
             .expect("the genesis epoch resolves");
         let certificate = build_timeout_cert3(
             ViewNumber::genesis(),
@@ -804,7 +804,7 @@ async fn test_two_epochs_at_one_view_draw_one_vote2() {
     );
     harness.consensus.seed_proposals([later.clone()]);
     let membership = mock_membership()
-        .membership_for_epoch(Some(later.epoch))
+        .membership_for_epoch(later.epoch)
         .expect("the next epoch resolves");
     let (public_key, private_key) = BLSPubKey::generated_from_seed_indexed([0; 32], 0);
     let later_cert1 = build_cert1(
@@ -1021,7 +1021,7 @@ async fn test_cert2_of_another_block_number_decides_nothing() {
 
     let block = BlockHeader::<TestTypes>::block_number(&view.proposal.data.block_header);
     let membership = mock_membership()
-        .membership_for_epoch(Some(view.epoch_number))
+        .membership_for_epoch(view.epoch_number)
         .unwrap();
     let (public_key, private_key) = BLSPubKey::generated_from_seed_indexed([0; 32], 0);
     let misnumbered = build_cert2(
@@ -1788,7 +1788,7 @@ async fn test_leader_never_proposes_on_a_certificate_of_its_own_view() {
     let epoch = EpochNumber::genesis();
     let membership = harness
         .membership_coordinator
-        .membership_for_epoch(Some(epoch))
+        .membership_for_epoch(epoch)
         .expect("the genesis epoch resolves");
     let timed_out = &test_data.views[0];
     harness
@@ -1844,7 +1844,7 @@ fn next_epoch_timeout_cert(
         .register_epoch(ahead, [0u8; 32]);
     let membership = harness
         .membership_coordinator
-        .membership_for_epoch(Some(ahead))
+        .membership_for_epoch(ahead)
         .expect("the epoch resolves");
     let tc = build_timeout_cert3_with_lock(timed_out, ahead, lock, &membership);
     ConsensusInput::TimeoutCertificate(ValidCert::new(TimeoutEvidence::V3(tc), ahead))

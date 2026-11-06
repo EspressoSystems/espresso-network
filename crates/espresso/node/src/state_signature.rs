@@ -305,7 +305,7 @@ fn voting_stake_table(
         let genesis = coordinator.membership().genesis_stake_tables();
         return Some(HSStakeTable::from_iter(genesis.stake_table()));
     };
-    let Ok(membership) = coordinator.stake_table_for_epoch(Some(epoch)) else {
+    let Ok(membership) = coordinator.stake_table_for_epoch(epoch) else {
         tracing::error!("Failed to get membership for epoch: {epoch}");
         return None;
     };

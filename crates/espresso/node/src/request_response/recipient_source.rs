@@ -32,7 +32,7 @@ impl<P: SequencerPersistence> RecipientSourceTrait<Request, PubKey> for Recipien
             .unwrap_or(EpochNumber::genesis());
 
         // Attempt to get the membership for the current epoch
-        let membership = match self.memberships.stake_table_for_epoch(Some(epoch_number)) {
+        let membership = match self.memberships.stake_table_for_epoch(epoch_number) {
             Ok(membership) => membership,
             Err(e) => {
                 warn!(
@@ -41,7 +41,7 @@ impl<P: SequencerPersistence> RecipientSourceTrait<Request, PubKey> for Recipien
                 );
                 let prev_epoch = epoch_number.saturating_sub(1);
                 self.memberships
-                    .stake_table_for_epoch(Some(EpochNumber::new(prev_epoch)))
+                    .stake_table_for_epoch(EpochNumber::new(prev_epoch))
                     .with_context(|| "failed to get stake table for epoch")?
             },
         };

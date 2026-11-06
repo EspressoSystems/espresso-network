@@ -210,7 +210,7 @@ impl TestViewGenerator {
 
     fn epoch_membership(&self) -> EpochMembership<TestTypes> {
         self.membership
-            .membership_for_epoch(Some(EpochNumber::genesis()))
+            .membership_for_epoch(EpochNumber::genesis())
             .unwrap()
     }
 

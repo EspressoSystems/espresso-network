@@ -456,14 +456,13 @@ impl<T: NodeType, Th: Threshold<T>> TimeoutTally<T, Th> {
         {
             return false;
         }
+        let Some(epoch) = cert.data.epoch else {
+            return false;
+        };
         let valid = match self.checked_locks.get(cert) {
             Some(valid) => *valid,
             None => {
-                let Ok(membership) = self
-                    .membership
-                    .coordinator
-                    .membership_for_epoch(cert.data.epoch)
-                else {
+                let Ok(membership) = self.membership.coordinator.membership_for_epoch(epoch) else {
                     return false;
                 };
                 let entries = StakeTableEntries::from_iter(membership.stake_table()).0;
@@ -620,7 +619,7 @@ where
 
         // A stake table may still arrive by catchup, so keep the vote for
         // `retry_pending_votes`.
-        let Ok(membership) = self.membership.membership_for_epoch(Some(epoch)) else {
+        let Ok(membership) = self.membership.membership_for_epoch(epoch) else {
             self.pending
                 .entry(key)
                 .or_default()
@@ -629,7 +628,7 @@ where
         };
         let missing = vote
             .epochs()
-            .find(|e| self.membership.membership_for_epoch(Some(*e)).is_err());
+            .find(|e| self.membership.membership_for_epoch(*e).is_err());
         if let Some(missing) = missing {
             self.pending
                 .entry(key)
@@ -728,8 +727,11 @@ where
             .map(|(&(_, epoch), signers)| {
                 let stats = VoteStats {
                     signers: signers.len(),
-                    stake: self.membership.membership_for_epoch(Some(epoch)).ok().map(
-                        |membership| {
+                    stake: self
+                        .membership
+                        .membership_for_epoch(epoch)
+                        .ok()
+                        .map(|membership| {
                             let stake = signers
                                 .iter()
                                 .filter_map(|signer| {
@@ -738,8 +740,7 @@ where
                                 .map(|peer| peer.stake_table_entry.stake())
                                 .sum();
                             (stake, Cert::<T, V, Th>::threshold(&membership))
-                        },
-                    ),
+                        }),
                 };
                 (epoch, stats)
             })
@@ -1003,7 +1004,7 @@ mod tests {
         assert_eq!(cert.view_number(), view);
 
         let membership = mock_membership();
-        let epoch_membership = membership.membership_for_epoch(Some(epoch)).unwrap();
+        let epoch_membership = membership.membership_for_epoch(epoch).unwrap();
         verify_cert(cert.cert(), &expected_data, &epoch_membership);
     }
 
@@ -1043,7 +1044,7 @@ mod tests {
         assert_eq!(cert_views, views.to_vec());
 
         let membership = mock_membership();
-        let epoch_membership = membership.membership_for_epoch(Some(epoch)).unwrap();
+        let epoch_membership = membership.membership_for_epoch(epoch).unwrap();
         for cert in &certs {
             verify_cert(cert.cert(), &expected_data, &epoch_membership);
         }
@@ -1068,7 +1069,7 @@ mod tests {
         assert_eq!(cert.view_number(), view);
 
         let membership = mock_membership();
-        let epoch_membership = membership.membership_for_epoch(Some(epoch)).unwrap();
+        let epoch_membership = membership.membership_for_epoch(epoch).unwrap();
         verify_cert(cert.cert(), &expected_data, &epoch_membership);
     }
 
@@ -1102,7 +1103,7 @@ mod tests {
         assert_eq!(cert_views, views.to_vec());
 
         let membership = mock_membership();
-        let epoch_membership = membership.membership_for_epoch(Some(epoch)).unwrap();
+        let epoch_membership = membership.membership_for_epoch(epoch).unwrap();
         for cert in &certs {
             verify_cert(cert.cert(), &expected_data, &epoch_membership);
         }
@@ -1216,7 +1217,7 @@ mod tests {
         let cert = timeout(CERT_TIMEOUT, task.next()).await.unwrap().unwrap();
         assert_no_certs(&mut task).await;
         let membership = mock_membership();
-        let epoch_membership = membership.membership_for_epoch(Some(epoch)).unwrap();
+        let epoch_membership = membership.membership_for_epoch(epoch).unwrap();
         verify_cert(cert.cert(), &vote_2_data(), &epoch_membership);
     }
 
@@ -1272,7 +1273,7 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        let membership = mock_membership().membership_for_epoch(Some(epoch)).unwrap();
+        let membership = mock_membership().membership_for_epoch(epoch).unwrap();
         let entries = StakeTableEntries::<TestTypes>::from_iter(membership.stake_table()).0;
         cert.check_signatures(&entries, membership.success_threshold(), &lock)
             .expect("the certificate carries only valid signatures");
@@ -1290,7 +1291,7 @@ mod tests {
             lock.clone(),
         );
         let epoch = EpochNumber::genesis();
-        let membership = coordinator.membership_for_epoch(Some(epoch)).unwrap();
+        let membership = coordinator.membership_for_epoch(epoch).unwrap();
         let view = ViewNumber::new(5);
         let older = lock_cert(ViewNumber::new(2), epoch, &membership, &lock);
         let newer = lock_cert(ViewNumber::new(3), epoch, &membership, &lock);
@@ -1328,7 +1329,7 @@ mod tests {
         for e in [lock_epoch, epoch] {
             known.membership().register_epoch(e, TEST_DRB_RESULT);
         }
-        let lock_membership = known.membership_for_epoch(Some(lock_epoch)).unwrap();
+        let lock_membership = known.membership_for_epoch(lock_epoch).unwrap();
         let cert = Some(lock_cert(
             ViewNumber::new(30),
             lock_epoch,
@@ -1381,7 +1382,7 @@ mod tests {
             lock.clone(),
         );
         let epoch = EpochNumber::genesis();
-        let membership = coordinator.membership_for_epoch(Some(epoch)).unwrap();
+        let membership = coordinator.membership_for_epoch(epoch).unwrap();
         let view = ViewNumber::new(5);
         let honest = lock_cert(ViewNumber::new(2), epoch, &membership, &lock);
         // A "certificate" at a later view with no signatures at all.
@@ -1412,7 +1413,7 @@ mod tests {
     async fn timeout_lock_of_a_later_epoch_is_rejected() {
         let lock = test_timeout_epoch_lock();
         let epoch = EpochNumber::genesis();
-        let membership = mock_membership().membership_for_epoch(Some(epoch)).unwrap();
+        let membership = mock_membership().membership_for_epoch(epoch).unwrap();
         let view = ViewNumber::new(5);
         let later = lock_cert(ViewNumber::new(2), epoch + 1, &membership, &lock);
 
@@ -1447,7 +1448,7 @@ mod tests {
         let lock = test_timeout_epoch_lock();
         let coordinator = mock_membership();
         let epoch = EpochNumber::new(2);
-        let membership = coordinator.membership_for_epoch(Some(epoch)).unwrap();
+        let membership = coordinator.membership_for_epoch(epoch).unwrap();
         let entries = StakeTableEntries::<TestTypes>::from_iter(membership.stake_table()).0;
         let with_forged_lock = |lock_epoch| {
             let mut cert = lock_cert(ViewNumber::new(2), lock_epoch, &membership, &lock);
@@ -1475,7 +1476,7 @@ mod tests {
     async fn timeout_vote_message_carries_its_lock_once() {
         let lock = test_timeout_epoch_lock();
         let epoch = EpochNumber::genesis();
-        let membership = mock_membership().membership_for_epoch(Some(epoch)).unwrap();
+        let membership = mock_membership().membership_for_epoch(epoch).unwrap();
         let own = lock_cert(ViewNumber::new(2), epoch, &membership, &lock);
         let other = lock_cert(ViewNumber::new(3), epoch, &membership, &lock);
         let (pub_key, priv_key) = BLSPubKey::generated_from_seed_indexed([0u8; 32], 0);
@@ -1505,7 +1506,7 @@ mod tests {
     async fn timeout_certificate_weight_is_checked_before_signatures() {
         let lock = test_timeout_epoch_lock();
         let epoch = EpochNumber::genesis();
-        let membership = mock_membership().membership_for_epoch(Some(epoch)).unwrap();
+        let membership = mock_membership().membership_for_epoch(epoch).unwrap();
         let entries = StakeTableEntries::<TestTypes>::from_iter(membership.stake_table()).0;
         let mut cert =
             build_timeout_cert3_signed_by(ViewNumber::new(5), epoch, None, &membership, &[0, 1, 2]);
@@ -2025,7 +2026,7 @@ mod tests {
     async fn relabelled_v3_cert_is_rejected() {
         let coordinator = mock_membership();
         let epoch = EpochNumber::genesis();
-        let membership = coordinator.membership_for_epoch(Some(epoch)).unwrap();
+        let membership = coordinator.membership_for_epoch(epoch).unwrap();
         let lock = UpgradeLock::new(Upgrade::trivial(TIMEOUT_EPOCH_VERSION));
 
         let mut cert = timeout_cert_v3(ViewNumber::new(1), epoch, &lock, &membership);
@@ -2051,7 +2052,7 @@ mod tests {
         crate::helpers::pin_test_version(versions::NEW_PROTOCOL_VERSION);
         let coordinator = mock_membership();
         let epoch = EpochNumber::genesis();
-        let membership = coordinator.membership_for_epoch(Some(epoch)).unwrap();
+        let membership = coordinator.membership_for_epoch(epoch).unwrap();
         let lock = test_upgrade_lock();
 
         let mut cert = timeout_cert_v2(ViewNumber::new(1), epoch, &lock, &membership);
@@ -2070,7 +2071,7 @@ mod tests {
         crate::helpers::pin_test_version(versions::NEW_PROTOCOL_VERSION);
         let coordinator = mock_membership();
         let epoch = EpochNumber::genesis();
-        let membership = coordinator.membership_for_epoch(Some(epoch)).unwrap();
+        let membership = coordinator.membership_for_epoch(epoch).unwrap();
         let view = ViewNumber::new(1);
 
         let bound = UpgradeLock::new(Upgrade::trivial(TIMEOUT_EPOCH_VERSION));
@@ -2093,7 +2094,7 @@ mod tests {
     async fn the_required_form_flips_at_the_boundary() {
         let coordinator = mock_membership();
         let epoch = EpochNumber::genesis();
-        let membership = coordinator.membership_for_epoch(Some(epoch)).unwrap();
+        let membership = coordinator.membership_for_epoch(epoch).unwrap();
         let boundary = ViewNumber::new(10);
         let lock = upgrading_lock(boundary);
 
@@ -2208,7 +2209,7 @@ mod tests {
 
         let membership = mock_membership();
         let epoch_membership = membership
-            .membership_for_epoch(Some(EpochNumber::genesis()))
+            .membership_for_epoch(EpochNumber::genesis())
             .unwrap();
         verify_cert(cert.cert(), &upgrade_data(view), &epoch_membership);
     }
