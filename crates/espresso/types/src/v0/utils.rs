@@ -190,6 +190,8 @@ pub enum ParseRatioError {
     InvalidNumerator { err: ParseIntError },
     #[error("Invalid denominator {err:?}")]
     InvalidDenominator { err: ParseIntError },
+    #[error("denominator must be greater than zero")]
+    ZeroDenominator,
 }
 
 impl FromStr for Ratio {
@@ -197,14 +199,18 @@ impl FromStr for Ratio {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let (num, den) = s.split_once(':').ok_or(ParseRatioError::MissingDelimiter)?;
-        Ok(Self {
+        let ratio = Self {
             numerator: num
                 .parse()
                 .map_err(|err| ParseRatioError::InvalidNumerator { err })?,
             denominator: den
                 .parse()
                 .map_err(|err| ParseRatioError::InvalidDenominator { err })?,
-        })
+        };
+        if ratio.denominator == 0 {
+            return Err(ParseRatioError::ZeroDenominator);
+        }
+        Ok(ratio)
     }
 }
 
@@ -266,7 +272,8 @@ pub struct BackoffParams {
     )]
     max: Duration,
 
-    /// Exponential backoff jitter as a ratio of the backoff delay, numerator:denominator.
+    /// Maximum additive jitter as a ratio of the scaled backoff delay, numerator:denominator.
+    /// Jitter is sampled in milliseconds; a zero numerator disables it. The denominator must be positive.
     #[clap(
         long = "catchup-backoff-jitter",
         env = "ESPRESSO_NODE_CATCHUP_BACKOFF_JITTER",
@@ -364,24 +371,182 @@ impl BackoffParams {
 
     #[must_use]
     pub fn backoff(&self, delay: Duration) -> Duration {
+        self.backoff_with_rng(delay, &mut rand::thread_rng())
+    }
+
+    fn backoff_with_rng(&self, delay: Duration, rng: &mut impl Rng) -> Duration {
         if delay >= self.max {
             return self.max;
         }
 
-        let mut rng = rand::thread_rng();
+        let delay = delay.saturating_mul(self.factor);
+        if delay >= self.max {
+            return self.max;
+        }
 
-        // Increase the backoff by the backoff factor.
-        let ms = (delay * self.factor).as_millis() as u64;
+        let ms = delay.as_millis();
+        let jitter_num = u128::from(self.jitter.numerator);
+        let jitter_den = u128::from(self.jitter.denominator);
 
-        // Sample a random jitter factor in the range [0, self.jitter].
-        let jitter_num = rng.gen_range(0..self.jitter.numerator);
-        let jitter_den = self.jitter.denominator;
+        // Divide before multiplying to avoid overflow even for durations above u64::MAX ms.
+        let max_jitter_ms = (ms / jitter_den)
+            .saturating_mul(jitter_num)
+            .saturating_add((ms % jitter_den) * jitter_num / jitter_den);
+        let jitter_ms = rng.gen_range(0..=max_jitter_ms).min(self.max.as_millis());
+        let jitter = Duration::new(
+            (jitter_ms / 1000) as u64,
+            ((jitter_ms % 1000) * 1_000_000) as u32,
+        );
 
-        // Increase the delay by the jitter factor.
-        let jitter = ms * jitter_num / jitter_den;
-        let delay = Duration::from_millis(ms + jitter);
+        min(delay.saturating_add(jitter), self.max)
+    }
+}
 
-        // Bound the delay by the maximum.
-        min(delay, self.max)
+#[cfg(test)]
+mod tests {
+    use rand::{
+        SeedableRng,
+        rngs::{StdRng, mock::StepRng},
+    };
+
+    use super::*;
+
+    #[test]
+    fn backoff_default_jitter_varies_within_bounds() {
+        let params = BackoffParams::try_parse_from(["test"]).unwrap();
+        assert_eq!(params.jitter, "1:10".parse().unwrap());
+        let mut rng = StdRng::seed_from_u64(0);
+        let lower = Duration::from_millis(800);
+        let upper = Duration::from_millis(880);
+        let delays: Vec<_> = (0..128)
+            .map(|_| params.backoff_with_rng(Duration::from_millis(200), &mut rng))
+            .collect();
+        assert!(delays.iter().all(|delay| (lower..=upper).contains(delay)));
+        assert!(delays.iter().any(|delay| *delay > lower && *delay < upper));
+        assert!(delays.iter().any(|delay| *delay != delays[0]));
+    }
+
+    #[test]
+    fn backoff_zero_jitter() {
+        let params = BackoffParams::new(
+            Duration::from_millis(200),
+            Duration::from_secs(5),
+            4,
+            "0:10".parse().unwrap(),
+        );
+        assert_eq!(params.backoff(params.base), Duration::from_millis(800));
+        assert_eq!(params.backoff(Duration::ZERO), Duration::ZERO);
+    }
+
+    #[test]
+    fn backoff_jitter_includes_both_endpoints() {
+        let params = BackoffParams::new(
+            Duration::from_millis(1),
+            Duration::from_secs(1),
+            1,
+            "1:1".parse().unwrap(),
+        );
+        assert_eq!(
+            params.backoff_with_rng(params.base, &mut StepRng::new(0, 0)),
+            params.base
+        );
+        assert_eq!(
+            params.backoff_with_rng(params.base, &mut StepRng::new(1 << 63, 0)),
+            Duration::from_millis(2)
+        );
+    }
+
+    #[test]
+    fn backoff_caps_jitter_at_maximum() {
+        let params = BackoffParams::new(
+            Duration::from_millis(1),
+            Duration::from_micros(1500),
+            1,
+            "1:1".parse().unwrap(),
+        );
+        assert_eq!(
+            params.backoff_with_rng(params.base, &mut StepRng::new(1 << 63, 0)),
+            params.max
+        );
+    }
+
+    #[test]
+    fn backoff_sub_millisecond_jitter() {
+        let params = BackoffParams::new(
+            Duration::from_millis(1),
+            Duration::from_secs(5),
+            1,
+            "1:10".parse().unwrap(),
+        );
+        assert_eq!(params.backoff(params.base), params.base);
+    }
+
+    #[test]
+    fn backoff_respects_maximum() {
+        let params = BackoffParams::new(
+            Duration::from_secs(2),
+            Duration::from_secs(5),
+            4,
+            "1:10".parse().unwrap(),
+        );
+        for delay in [params.base, params.max, Duration::MAX] {
+            assert_eq!(params.backoff(delay), params.max);
+        }
+    }
+
+    #[test]
+    fn backoff_large_duration_and_factor() {
+        let params = BackoffParams::new(
+            Duration::from_secs(u64::MAX / 2),
+            Duration::MAX,
+            u32::MAX,
+            "1:10".parse().unwrap(),
+        );
+        assert_eq!(params.backoff(params.base), Duration::MAX);
+    }
+
+    #[test]
+    fn backoff_preserves_large_duration() {
+        let params = BackoffParams::new(
+            Duration::from_secs(u64::MAX / 2),
+            Duration::MAX,
+            1,
+            "0:10".parse().unwrap(),
+        );
+        assert_eq!(params.backoff(params.base), params.base);
+    }
+
+    #[test]
+    fn backoff_large_jitter_ratio() {
+        let params = BackoffParams::new(
+            Duration::from_secs(u64::MAX / 2),
+            Duration::MAX,
+            1,
+            Ratio {
+                numerator: u64::MAX,
+                denominator: 1,
+            },
+        );
+        let mut rng = StdRng::seed_from_u64(0);
+        for _ in 0..128 {
+            assert!(
+                (params.base..=params.max)
+                    .contains(&params.backoff_with_rng(params.base, &mut rng))
+            );
+        }
+    }
+
+    #[test]
+    fn ratio_rejects_zero_denominator() {
+        for ratio in ["1:0", "0:0"] {
+            assert!(matches!(
+                ratio.parse::<Ratio>(),
+                Err(ParseRatioError::ZeroDenominator)
+            ));
+            assert!(
+                BackoffParams::try_parse_from(["test", "--catchup-backoff-jitter", ratio]).is_err()
+            );
+        }
+        assert_eq!("0:10".parse::<Ratio>().unwrap().numerator, 0);
     }
 }
