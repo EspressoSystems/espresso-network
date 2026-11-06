@@ -12,7 +12,10 @@ use bon::{Builder, bon};
 use committable::Commitment;
 use hotshot_types::{
     consensus::{ConsensusMetricsValue, ParticipationTracker},
-    data::{EpochNumber, Leaf2, VidCommitment, VidCommitment2, ViewChangeEvidence2, ViewNumber},
+    data::{
+        EpochNumber, Leaf2, VidCommitment, VidCommitment2, VidDisperseShare2, ViewChangeEvidence2,
+        ViewNumber,
+    },
     epoch_membership::EpochMembershipCoordinator,
     initializer::HotShotInitializer,
     message::{Proposal as SignedProposal, UpgradeLock},
@@ -663,6 +666,7 @@ where
                 }
                 Some(item) = self.share_validator.next() => match item {
                     Ok(vid_share) => {
+                        self.forward_vid_share(&vid_share)?;
                         return Ok(ConsensusInput::VidShare(vid_share))
                     },
                     Err(e) => {
@@ -1116,27 +1120,6 @@ where
                     crate::leader_trace::LeaderEvent::Vote1BroadcastEnd
                 );
                 r?
-            },
-            ConsensusOutput::BroadcastVidShare(share) => {
-                debug!(%node, view = %share.view_number(), "send vid share");
-                let excluded = self.consensus.vid_rebroadcast_exclusions(&share);
-                if excluded.is_empty() {
-                    self.broadcast(
-                        ConsensusMessage::VidShareBroadcast(share),
-                        "broadcast vid share",
-                    )?;
-                } else {
-                    let message = Message {
-                        sender: self.public_key.clone(),
-                        message_type: MessageType::Consensus(ConsensusMessage::VidShareBroadcast(
-                            share,
-                        )),
-                    };
-                    self.network
-                        .sender()
-                        .broadcast_except(self.consensus.current_view(), &message, &excluded)
-                        .map_err(|e| CoordinatorError::from(e).context("broadcast vid share"))?;
-                }
             },
             ConsensusOutput::SendVote2(vote2) => {
                 let view = vote2.view_number();
@@ -1864,6 +1847,50 @@ where
         }
     }
 
+    /// Send this node's verified share to every peer the moment it is in hand,
+    /// before the view's proposal arrives: a receiver's reconstructor parks a
+    /// share until the proposal pins the commitment, so nothing is lost by
+    /// sending first, and the share no longer queues behind proposal
+    /// validation. The disperser holds every share already and is left out.
+    fn forward_vid_share(
+        &mut self,
+        share: &VidDisperseShare2<T>,
+    ) -> Result<(), CoordinatorError> {
+        let view = share.view_number();
+        let Some(epoch) = share.epoch else {
+            return Ok(());
+        };
+        if crate::vid::systematic_only() && share.share.weight() == 0 {
+            return Ok(());
+        }
+        // Without the proposal the block number is unknown, so the next
+        // leader is looked up in the share's epoch; only the last view of an
+        // epoch resolves differently.
+        let next_leader = self.leader(view + 1, epoch);
+        if self.consensus.skip_next_leader_rebroadcast
+            && next_leader.as_ref() == Some(&self.public_key)
+        {
+            info!(%view, "bench: skip next leader VID rebroadcast");
+            return Ok(());
+        }
+        let excluded = share_forward_exclusions(
+            self.leader(view, epoch),
+            next_leader,
+            self.consensus.skip_next_leader_reconstruction,
+        );
+        debug!(node = %self.node_id, %view, "send vid share");
+        let message = Message {
+            sender: self.public_key.clone(),
+            message_type: MessageType::Consensus(ConsensusMessage::VidShareBroadcast(
+                share.clone(),
+            )),
+        };
+        self.network
+            .sender()
+            .broadcast_except(self.consensus.current_view(), &message, &excluded)
+            .map_err(|e| CoordinatorError::from(e).context("broadcast vid share"))
+    }
+
     fn broadcast(
         &self,
         message_type: ConsensusMessage<T, Validated>,
@@ -2493,6 +2520,23 @@ pub enum GcScope {
 }
 
 /// The admissible window around `current`.
+/// Peers a share forward leaves out: the disperser, which holds every share,
+/// and under the bench knob the next leader, which will not reconstruct.
+pub(crate) fn share_forward_exclusions<K: PartialEq>(
+    disperser: Option<K>,
+    next_leader: Option<K>,
+    skip_next_leader_reconstruction: bool,
+) -> Vec<K> {
+    let mut excluded: Vec<K> = disperser.into_iter().collect();
+    if skip_next_leader_reconstruction
+        && let Some(leader) = next_leader
+        && !excluded.contains(&leader)
+    {
+        excluded.push(leader);
+    }
+    excluded
+}
+
 pub(crate) fn is_epoch_admissible(epoch: EpochNumber, current: EpochNumber) -> bool {
     current.saturating_sub(EPOCH_CHANGE_LOOKBEHIND) <= *epoch
         && *epoch <= current.saturating_add(EPOCH_CHANGE_LOOKAHEAD)

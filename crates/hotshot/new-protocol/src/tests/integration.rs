@@ -1744,7 +1744,7 @@ async fn test_stale_timeout_vote_answered_with_catchup_evidence() {
 /// chose, over a signature covering only the payload commitment. Neither a
 /// stream from a node that does not lead the view nor one naming an epoch
 /// outside the admissible window may displace the honest leader's: the node
-/// must still assemble its own share, vote, and broadcast the real share.
+/// must still assemble its own share, pair it with the proposal, and vote.
 ///
 /// The forged streams are shaped as squats -- a single namespace, so they
 /// would complete on their first fragment -- which under a view-keyed
@@ -1807,16 +1807,16 @@ async fn test_forged_vid_fragments_do_not_block_the_vote() {
     .await
     .expect("forged fragments must not stop the honest share assembling");
 
-    // And the share it broadcasts is its own, not a forgery.
-    let broadcast = harness
+    // And the share it pairs with the proposal is its own, not a forgery.
+    let paired = harness
         .outputs()
         .iter()
         .find_map(|output| match output {
-            ConsensusOutput::BroadcastVidShare(share) => Some(share.clone()),
+            ConsensusOutput::ProposalPaired { vid_share, .. } => Some(vid_share.clone()),
             _ => None,
         })
-        .expect("the node broadcasts its share alongside vote1");
-    assert_eq!(broadcast, view.vid_share_for(&node_key));
+        .expect("the node pairs its share with the proposal");
+    assert_eq!(paired, view.vid_share_for(&node_key));
 }
 
 /// A signed `Cert1` whose epoch is not the one its block number falls in is

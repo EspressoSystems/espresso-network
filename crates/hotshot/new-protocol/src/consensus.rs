@@ -176,13 +176,6 @@ pub enum ConsensusOutput<T: NodeType> {
         header: T::BlockHeader,
         payload: Arc<T::BlockPayload>,
     },
-    /// Broadcast our own VID share so peers can reconstruct the block. Emitted
-    /// as soon as the share pairs with its validated proposal, not with vote1:
-    /// a node whose parent reconstructs only after the view is certified never
-    /// votes, and its share must still reach the others. On a single network
-    /// the share then queues ahead of this node's vote1; the control lane
-    /// carries the vote separately.
-    BroadcastVidShare(VidDisperseShare2<T>),
     /// The `UpgradeLock` has been updated; the certificate must be persisted.
     UpgradeDecided(UpgradeCertificate<T>),
 }
@@ -222,7 +215,6 @@ pub struct Consensus<T: NodeType> {
     pub(crate) skip_next_leader_rebroadcast: bool,
     /// Benchmark only: the next leader abstains from votes requiring this payload.
     pub(crate) skip_next_leader_reconstruction: bool,
-    pub(crate) skip_producer_rebroadcast: bool,
     proposals: Proposals<T>,
     signed_proposals: BTreeMap<ProposalKey<T>, SignedProposal<T, Proposal<T>>>,
     proposed_views: BTreeSet<ViewNumber>,
@@ -367,8 +359,6 @@ impl<T: NodeType> Consensus<T> {
                 "ESPRESSO_BENCH_SKIP_NEXT_LEADER_RECONSTRUCTION",
             )
             .is_some(),
-            skip_producer_rebroadcast: std::env::var_os("ESPRESSO_BENCH_SKIP_PRODUCER_REBROADCAST")
-                .is_some(),
             proposals: Proposals::new(),
             signed_proposals: BTreeMap::new(),
             proposed_views: BTreeSet::new(),
@@ -1220,16 +1210,6 @@ impl<T: NodeType> Consensus<T> {
         self.proposals.set_live(view, commit);
         self.signed_proposals
             .insert((view, commit), signed_proposal.clone());
-        let next_epoch = if is_last_block(block_number, *self.epoch_height) {
-            epoch + 1
-        } else {
-            epoch
-        };
-        if self.skip_next_leader_rebroadcast && self.is_leader(view + 1, next_epoch) {
-            info!(%view, "bench: skip next leader VID rebroadcast");
-        } else if !crate::vid::systematic_only() || vid_share.share.weight() != 0 {
-            outbox.push_back(ConsensusOutput::BroadcastVidShare(vid_share.clone()));
-        }
         self.vid_shares.insert(view, vid_share);
         self.adopt_certified_drb(view);
         self.adopt_proposal_upgrade_certificate(&proposal);
@@ -1460,31 +1440,6 @@ impl<T: NodeType> Consensus<T> {
                 let epoch = self.epoch_after(proposal);
                 self.is_leader(view + 1, epoch)
             })
-    }
-
-    pub(crate) fn vid_rebroadcast_exclusions(
-        &self,
-        share: &VidDisperseShare2<T>,
-    ) -> Vec<T::SignatureKey> {
-        let mut excluded = Vec::new();
-        let Some(proposal) =
-            self.proposal_with_payload(share.view_number(), share.payload_commitment)
-        else {
-            return excluded;
-        };
-        if self.skip_producer_rebroadcast
-            && let Some(leader) = self.leader_of(proposal.view_number, proposal.epoch)
-        {
-            excluded.push(leader);
-        }
-        if self.skip_next_leader_reconstruction
-            && let Some(leader) =
-                self.leader_of(proposal.view_number + 1, self.epoch_after(proposal))
-            && !excluded.contains(&leader)
-        {
-            excluded.push(leader);
-        }
-        excluded
     }
 
     fn epoch_after(&self, proposal: &Proposal<T>) -> EpochNumber {

@@ -1287,11 +1287,6 @@ async fn test_bench_skip_next_leader_rebroadcast_preserves_votes() {
                 for input in inputs {
                     harness.apply(input).await;
                 }
-                let broadcasts = count_matching(harness.outputs(), |output| {
-                    matches!(output, ConsensusOutput::BroadcastVidShare(share)
-                        if share.view_number() == parent.view_number)
-                });
-                assert_eq!(broadcasts, usize::from(!(skip && key == next_leader)));
                 assert!(any(harness.outputs(), is_proposal_paired));
                 assert!(any(harness.outputs(), |o| is_vote1_for_view(
                     o,
@@ -3172,48 +3167,14 @@ async fn test_forged_state_cert_at_epoch_root_fails_validation() {
     }
 }
 
-#[tokio::test]
-async fn test_bench_vid_recipient_exclusions() {
-    let data = TestData::new_with_epoch_height(12, 10).await;
-    for view in &data.views {
-        let mut harness = ConsensusHarness::new(0).await;
-        let key = *harness.consensus.public_key();
-        let (_, ConsensusInput::VidShare(share)) = view.proposal_input_consensus(&key) else {
-            panic!("expected an assigned share");
-        };
-        harness
-            .consensus
-            .force_set_proposal(view.view_number, view.proposal.data.clone());
-        assert!(
-            harness
-                .consensus
-                .vid_rebroadcast_exclusions(&share)
-                .is_empty()
-        );
-        harness.consensus.skip_producer_rebroadcast = true;
-        assert_eq!(
-            harness.consensus.vid_rebroadcast_exclusions(&share),
-            vec![view.leader_public_key]
-        );
-        harness.consensus.skip_next_leader_reconstruction = true;
-        let proposal = &view.proposal.data;
-        let epoch = if hotshot_types::utils::is_last_block(proposal.block_header.block_number, 10) {
-            proposal.epoch + 1
-        } else {
-            proposal.epoch
-        };
-        let next = harness
-            .consensus
-            .leader_of(view.view_number + 1, epoch)
-            .unwrap();
-        let excluded = harness.consensus.vid_rebroadcast_exclusions(&share);
-        assert!(excluded.contains(&next));
-        assert!(excluded.contains(&view.leader_public_key));
-        assert_eq!(
-            excluded.len(),
-            if next == view.leader_public_key { 1 } else { 2 }
-        );
-    }
+#[test]
+fn test_bench_share_forward_exclusions() {
+    use crate::coordinator::share_forward_exclusions;
+    assert_eq!(share_forward_exclusions(Some(1), Some(2), false), vec![1]);
+    assert_eq!(share_forward_exclusions(Some(1), Some(2), true), vec![1, 2]);
+    assert_eq!(share_forward_exclusions(Some(1), Some(1), true), vec![1]);
+    assert_eq!(share_forward_exclusions(None, Some(2), true), vec![2]);
+    assert_eq!(share_forward_exclusions::<u8>(None, None, true), Vec::<u8>::new());
 }
 
 #[tokio::test]

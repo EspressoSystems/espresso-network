@@ -553,7 +553,6 @@ impl TestRunner {
             if self.bench_skip_leader_vid {
                 coord.consensus_mut().skip_next_leader_rebroadcast = true;
                 coord.consensus_mut().skip_next_leader_reconstruction = true;
-                coord.consensus_mut().skip_producer_rebroadcast = true;
             }
 
             if let Some(certs) = self.initial_timeout_certs.get(&i) {
@@ -690,7 +689,6 @@ impl TestRunner {
                                 if self.bench_skip_leader_vid {
                                     coord.consensus_mut().skip_next_leader_rebroadcast = true;
                                     coord.consensus_mut().skip_next_leader_reconstruction = true;
-                                    coord.consensus_mut().skip_producer_rebroadcast = true;
                                 }
                                 // Bump the generation so stale events queued
                                 // by the aborted task are ignored.
