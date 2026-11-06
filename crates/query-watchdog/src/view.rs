@@ -1,13 +1,17 @@
 //! What a node watch publishes for the page and the reporter.
 
-use std::{collections::BTreeMap, fmt, time::Duration};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fmt,
+    time::Duration,
+};
 
 use chrono::{DateTime, Utc};
 use tokio::sync::watch;
 
 use crate::{
-    kind::{DataKind, Height},
-    missing::{AlertRule, KindTally, ListedRows},
+    kind::{DataKind, Epochs, Height},
+    missing::{KindTally, ListedRows},
     node::WatchedNode,
     outcome::NotServed,
     schedule::{Frontier, NodeProgress},
@@ -67,13 +71,13 @@ impl TryTimes {
 
     /// `42s ago`.
     pub fn last_tried_text(&self) -> String {
-        format!("{} ago", humantime::format_duration(self.last_tried))
+        format!("{} ago", short_duration(self.last_tried))
     }
 
     /// `in 18s`, or `due`.
     pub fn next_try_text(&self) -> String {
         match self.next_try {
-            Some(wait) => format!("in {}", humantime::format_duration(wait)),
+            Some(wait) => format!("in {}", short_duration(wait)),
             None => "due".to_owned(),
         }
     }
@@ -82,6 +86,34 @@ impl TryTimes {
 /// `now - first_missing_at`, 0 when the clock stepped back.
 pub fn age_at(first_missing_at: DateTime<Utc>, now: DateTime<Utc>) -> Duration {
     (now - first_missing_at).to_std().unwrap_or(Duration::ZERO)
+}
+
+/// The two largest non-zero-leading units of `duration`, whole units only: `9s`, `1m 38s`,
+/// `2h 5m`, `6d 23h`; a zero second unit is dropped (`2h`).
+pub fn short_duration(duration: Duration) -> String {
+    const UNITS: [(u64, &str); 4] = [(86_400, "d"), (3_600, "h"), (60, "m"), (1, "s")];
+    let mut left = duration.as_secs();
+    let mut parts = Vec::with_capacity(2);
+    for (size, name) in UNITS {
+        let count = left / size;
+        left %= size;
+        if parts.is_empty() && count == 0 {
+            continue;
+        }
+        parts.push((count, name));
+        if parts.len() == 2 {
+            break;
+        }
+    }
+    parts.retain(|(count, _)| *count > 0);
+    if parts.is_empty() {
+        return "0s".to_owned();
+    }
+    parts
+        .iter()
+        .map(|(count, name)| format!("{count}{name}"))
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// Requests without 2xx per `NotServed`; `Debug` prints a label map, as HEAD's `errors` field.
@@ -151,12 +183,11 @@ impl WatchCounters {
     }
 }
 
-/// A kind's missing and confirmed counts and oldest age at a `now`.
+/// A kind's missing count and oldest age at a `now`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct KindSummary {
     pub kind: DataKind,
     pub missing_count: u64,
-    pub confirmed_missing: u64,
     pub oldest_age: Option<Duration>,
 }
 
@@ -167,18 +198,12 @@ pub struct NodeSummary {
     pub follow_lag_blocks: u64,
     /// `None` until the node answers `v1/block-state/block-height`.
     pub merklized_state_lag_blocks: Option<u64>,
+    /// `NodeView.not_found_units`; the node's share of the alert total.
+    pub not_found_units: u64,
     pub kinds: Vec<KindSummary>,
 }
 
-impl NodeSummary {
-    /// Sum of `confirmed_missing` over kinds (heights and epochs): the `confirmed_missing{node}`
-    /// gauge.
-    pub fn confirmed_missing(&self) -> u64 {
-        self.kinds.iter().map(|kind| kind.confirmed_missing).sum()
-    }
-}
-
-/// One line: `tip=.. lag=.. state_lag=.. leaf missing=0 confirmed=0 oldest_age=-, block ...`.
+/// One line: `tip=.. lag=.. state_lag=.. leaf missing=0 oldest_age=-, block ...`.
 impl fmt::Display for NodeSummary {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
@@ -193,11 +218,7 @@ impl fmt::Display for NodeSummary {
         for (i, kind) in self.kinds.iter().enumerate() {
             let label: &str = kind.kind.into();
             f.write_str(if i == 0 { " " } else { ", " })?;
-            write!(
-                f,
-                "{label} missing={} confirmed={} oldest_age=",
-                kind.missing_count, kind.confirmed_missing
-            )?;
+            write!(f, "{label} missing={} oldest_age=", kind.missing_count)?;
             match kind.oldest_age {
                 Some(age) => write!(f, "{}", humantime::format_duration(age))?,
                 None => f.write_str("-")?,
@@ -219,14 +240,16 @@ pub struct SweepEta {
 #[derive(Clone, Debug)]
 pub struct NodeView {
     pub published_at: DateTime<Utc>,
-    /// The loop's frontier at publish; `tallies` judged settled rows by its `settled_end`.
+    /// The loop's frontier at publish; `not_found_units` judged settled rows by its `settled_end`.
     pub frontier: Frontier,
     pub progress: NodeProgress,
     /// `None` until the node answers `v1/block-state/block-height`.
     pub merklized_state_height: Option<Height>,
-    /// The options' rule; `tallies` split confirmed units at `alert_rule.counted_until(published_at)`.
-    pub alert_rule: AlertRule,
-    /// `MissingSet::tallies(frontier.settled_end(), alert_rule.counted_until(published_at))`.
+    /// The watch's epochs, for `RowKey::first_block` of listed epoch rows.
+    pub epochs: Epochs,
+    /// `MissingSet::not_found_units(tally_settled_end())` at publish.
+    pub not_found_units: u64,
+    /// `MissingSet::tallies()`.
     pub tallies: Vec<KindTally>,
     /// `MissingSet::listed(PAGE_ROWS)`.
     pub listed: ListedRows,
@@ -239,22 +262,21 @@ pub struct NodeView {
 }
 
 impl NodeView {
-    /// Lags against `tip`; ages and confirmed counts at `now`.
+    /// Lags against `tip`; ages at `now`.
     pub fn summary(&self, tip: Height, now: DateTime<Utc>) -> NodeSummary {
-        let counted_until = self.alert_rule.counted_until(now);
         NodeSummary {
             tip_height: tip,
             follow_lag_blocks: tip.blocks_since(self.progress.follow_next_height),
             merklized_state_lag_blocks: self
                 .merklized_state_height
                 .map(|height| tip.blocks_since(height)),
+            not_found_units: self.not_found_units,
             kinds: self
                 .tallies
                 .iter()
                 .map(|tally| KindSummary {
                     kind: tally.kind,
                     missing_count: tally.missing_count,
-                    confirmed_missing: tally.confirmed.count(counted_until),
                     oldest_age: tally
                         .oldest
                         .as_ref()
@@ -262,6 +284,20 @@ impl NodeView {
                 })
                 .collect(),
         }
+    }
+
+    /// `frontier.tip() - 1`; `None` at tip 0.
+    pub fn newest_block(&self) -> Option<Height> {
+        self.frontier.tip().0.checked_sub(1).map(Height)
+    }
+
+    /// `first_block` of each listed row.
+    pub fn missing_row_blocks(&self) -> BTreeSet<Height> {
+        self.listed
+            .shown
+            .iter()
+            .filter_map(|row| row.key.first_block(self.epochs))
+            .collect()
     }
 }
 
@@ -284,8 +320,84 @@ pub struct NodeViewSlot {
 
 #[cfg(test)]
 mod tests {
+    use std::num::NonZeroU32;
+
     use super::*;
-    use crate::state::RetryDelay;
+    use crate::{
+        kind::{Epoch, EpochConfig, EpochKind, PointKind, RangeKind},
+        missing::{MissingRow, RowKey},
+        schedule::{SweepState, SweepWindow},
+        state::{RetryDelay, UnitState},
+    };
+
+    fn row(key: RowKey) -> MissingRow {
+        let at = DateTime::from_timestamp(0, 0).unwrap();
+        MissingRow {
+            key,
+            state: UnitState::NotFound {
+                first_missing_at: at,
+                not_found_probes: NonZeroU32::new(1).unwrap(),
+                retry: Retry::after(RetryDelay::from_secs(10).unwrap(), at),
+            },
+        }
+    }
+
+    fn view(tip: u64, sweep: SweepState, rows: Vec<MissingRow>, epochs: Epochs) -> NodeView {
+        NodeView {
+            published_at: DateTime::from_timestamp(0, 0).unwrap(),
+            frontier: Frontier::new(Height(tip), SweepWindow::Archive),
+            progress: NodeProgress {
+                follow_next_height: Height(90),
+                sweep,
+            },
+            merklized_state_height: None,
+            epochs,
+            not_found_units: 0,
+            tallies: Vec::new(),
+            listed: ListedRows {
+                total: rows.len() as u64,
+                shown: rows,
+            },
+            counters: WatchCounters::default(),
+            next_sweep_start: None,
+            sweep_eta: None,
+        }
+    }
+
+    fn rows() -> Vec<MissingRow> {
+        vec![
+            row(RowKey::Range {
+                kind: RangeKind::Leaf,
+                heights: Height(10)..Height(20),
+            }),
+            row(RowKey::Point {
+                kind: PointKind::LcLeafProof,
+                height: Height(30),
+            }),
+            row(RowKey::Epoch {
+                kind: EpochKind::StakeTable,
+                epoch: Epoch(4),
+            }),
+        ]
+    }
+
+    #[test]
+    fn missing_row_blocks_are_the_first_blocks_of_listed_rows() {
+        let epochs = Epochs::On(EpochConfig {
+            epoch_height: std::num::NonZeroU64::new(10).unwrap(),
+            epoch_start_block: Height(0),
+        });
+        let heights = view(100, SweepState::NeverSwept, rows(), epochs).missing_row_blocks();
+        // Stake table epoch 4 has root block (4 - 2) * 10.
+        assert_eq!(heights, [10, 30, 20].map(Height).into_iter().collect());
+
+        let off = view(100, SweepState::NeverSwept, rows(), Epochs::Off).missing_row_blocks();
+        assert_eq!(off, [10, 30].map(Height).into_iter().collect());
+
+        let at_zero = view(0, SweepState::NeverSwept, Vec::new(), Epochs::Off);
+        assert_eq!(at_zero.newest_block(), None);
+        assert!(at_zero.missing_row_blocks().is_empty());
+    }
 
     #[test]
     fn try_times_read_due_once_next_at_is_not_after_now() {
@@ -297,6 +409,24 @@ mod tests {
         assert_eq!(waiting.next_try_text(), "in 12s");
         assert_eq!(TryTimes::at(&retry, at(18)).next_try_text(), "due");
         assert_eq!(TryTimes::at(&retry, at(40)).next_try_text(), "due");
+    }
+
+    #[test]
+    fn short_duration_keeps_two_units() {
+        let cases = [
+            (0, "0s"),
+            (9, "9s"),
+            (60, "1m"),
+            (98, "1m 38s"),
+            (7_500, "2h 5m"),
+            (7_200, "2h"),
+            (7_205, "2h"),
+            (3_600 * 24 * 7 - 100, "6d 23h"),
+            (86_400 * 3 + 59, "3d"),
+        ];
+        for (secs, text) in cases {
+            assert_eq!(short_duration(Duration::from_secs(secs)), text, "{secs}");
+        }
     }
 
     #[test]
