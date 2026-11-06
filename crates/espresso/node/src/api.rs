@@ -53,7 +53,7 @@ use hotshot_types::{
     network::NetworkConfig,
     simple_certificate::LightClientStateUpdateCertificateV2,
     stake_table::HSStakeTable,
-    traits::election::{Membership, MembershipSnapshot, NonEpochMembershipSnapshot},
+    traits::election::{Membership, MembershipSnapshot},
     utils::epoch_from_block_number,
     vid::avidm::{AvidMScheme, init_avidm_param},
     vote::HasViewNumber,
@@ -359,7 +359,7 @@ impl StakeTableDataSource<SeqTypes> for ApiState {
                 .unwrap_or_default(),
             None => coordinator
                 .membership()
-                .non_epoch_snapshot()
+                .genesis_stake_tables()
                 .da_stake_table()
                 .cloned()
                 .collect(),
