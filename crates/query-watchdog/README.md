@@ -25,10 +25,10 @@ cargo run -p query-watchdog -- --nodes https://query.decaf.testnet.espresso.netw
 - The `serving` INFO line prints the endpoint URLs.
 - `/`: status line (`red: N not-found units` or `green: 0 not-found units`, dark text on a light background),
   `generated at <time> UTC`, the endpoint links and one overview table with a row per node (not found, published age,
-  newest block and its age, follow lag, sweep progress, last sweep age; full times in the hover title). Below, per
-  node, the missing counts per kind and the missing rows with first block time, missing for, last tried, next try
-  (`due` once overdue) and links to the failing request. Times are UTC `YYYY-MM-DD HH:MM:SS`, ages and durations show
-  at most two units (`1m 38s`, `6d 23h`).
+  newest block height, follow lag, sweep progress, last sweep age; full times in the hover title). Below, per node, the
+  missing counts per kind and the missing rows with first block time and its age, missing for, last tried, next try
+  (`due` once overdue) and links to the failing request. Times are UTC `YYYY-MM-DD HH:MM:SS`, ages and durations show at
+  most two units (`1m 38s`, `6d 23h`).
 - `/status/metrics`: Prometheus metrics, `query_watchdog_*`; `query_watchdog_not_found_units` is the alert gauge.
 - `/healthcheck`: 200 with `{"status":"available"}`.
 - Logs: `RUST_LOG` (default INFO), `RUST_LOG_FORMAT=json`.
@@ -191,14 +191,15 @@ Fargate task resumes where the old one stopped.
   stays split, so the page lists the pieces; a sweep chunk across two pieces is searched again by bisection, and the
   units keep their state. The link probes the first 100 heights of the row.
 - The page shows what each node watch last published, at most one loop step (follow, retry or sweep) old; each node
-  prints `published at` with its age. Every age is taken at `generated at`, the render time. Before a node has started
-  it reads `not started`.
-- Block times come from `v1/availability/header/{height}` (v0.2 or later headers, `fields.timestamp`), fetched every
-  second for the heights the page shows (newest block `tip - 1`, follow next, sweep next and until, the first block of
-  each row; an epoch row shows its root block), at most 20 per round, newest first, in `--nodes` order from nodes whose
-  published height covers it. A height no node serves reads `time unknown` and is asked again after 5 minutes; failures
-  count under `fetch_errors_total{kind="header"}`. These GETs are paced separately from probes (each after
-  `--request-interval`), so a node can see up to two requests per interval.
+  shows the age of its publish time in the `published` column, the time on hover. Every age is taken at `generated at`,
+  the render time. Before a node has started it reads `not started`.
+- Block times come from `v1/availability/header/{height}` (`fields.timestamp`), fetched every second for the first block
+  of each listed missing row only (an epoch row shows its root block), at most 20 per round and 10 s per round, newest
+  first, in `--nodes` order from nodes whose published height covers it. A height no node serves (404, 5xx or timeout)
+  reads `time unknown` and is asked again after 5 minutes. Header failures are logged at DEBUG and are not counted in
+  `fetch_errors_total`. These GETs are paced separately from probes (each after `--request-interval`), so a node can see
+  up to two requests per interval. v0.1 flat headers are not decoded and read `time unknown`; mainnet and decaf headers
+  are v0.2 from height 0.
 - Archive full sweep is slow: each 100-height chunk costs 4 probes plus the epoch probes whose block lies in it, each
   `request_interval` plus response time, and every loop iteration also spends time on follow and retries. Each gap in a
   range kind adds about 7 + 2 x log2(gap length) HEADs. The tip is covered by follow in real time. The page ETA and
@@ -260,6 +261,8 @@ Recommended alert, a simple alert with a link to the watchdog page:
    - The monitor resolves at the first evaluation whose window contains a 0 sample, once the last unit is repaired (the
      representative is found present within a minute, then the recovery queue re-checks the confirmed rows, see
      Retries).
+   - The gauge is one total over all nodes. Overlapping short 404s on different nodes can keep `min(last_10m)` above 0,
+     and a standing gap hides new ones; the page shows the per-node detail.
 2. Message:
    - Text: `{{value}} not-found units: https://<watchdog host>/`.
    - Notify target: `@slack-<channel>`.

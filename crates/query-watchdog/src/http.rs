@@ -150,26 +150,28 @@ impl Page<'_> {
     fn write_overview(&self, out: &mut String) -> fmt::Result {
         out.write_str(
             "<table border=\"1\"><tr><th>node</th><th>not found</th><th>published</th><th>newest \
-             block</th><th>block age</th><th>follow lag</th><th>sweep</th><th>last sweep</th></tr>",
+             block</th><th>follow lag</th><th>sweep</th><th>last sweep</th></tr>",
         )?;
         for (node, view) in self.nodes {
             let link = node_link(node);
             match view {
                 None => write!(
                     out,
-                    "<tr><td>{link}</td><td>-</td><td>-</td><td>-</td><td>-</td><td>-</td><td>not \
+                    "<tr><td>{link}</td><td>-</td><td>-</td><td>-</td><td>-</td><td>not \
                      started</td><td>-</td></tr>"
                 )?,
                 Some(view) => {
                     let summary = view.summary(view.frontier.tip(), self.generated_at);
-                    let (newest, block_age) = self.newest_block_cells(view);
+                    let newest = view
+                        .newest_block()
+                        .map_or_else(|| "-".to_owned(), |height| height.to_string());
                     let last_sweep = match view.progress.sweep.last_completed() {
                         Some(done) => self.age_cell(done),
                         None => "<td>never</td>".to_owned(),
                     };
                     write!(
                         out,
-                        "<tr><td>{link}</td><td>{}</td>{}{newest}{block_age}<td>{}</\
+                        "<tr><td>{link}</td><td>{}</td>{}<td>{newest}</td><td>{}</\
                          td>{}{last_sweep}</tr>",
                         summary.not_found_units,
                         self.age_cell(view.published_at),
@@ -189,23 +191,6 @@ impl Page<'_> {
             time_text(at),
             view::short_duration(view::age_at(at, self.generated_at))
         )
-    }
-
-    /// Cells of the newest block's height (title: block time) and age; `-` where unknown.
-    fn newest_block_cells(&self, view: &NodeView) -> (String, String) {
-        let Some(height) = view.newest_block() else {
-            return ("<td>-</td>".to_owned(), "<td>-</td>".to_owned());
-        };
-        match self.block_times.get(height) {
-            Some(time) => (
-                format!("<td title=\"{}\">{height}</td>", time_text(time)),
-                self.age_cell(time),
-            ),
-            None => (
-                format!("<td title=\"time unknown\">{height}</td>"),
-                "<td>-</td>".to_owned(),
-            ),
-        }
     }
 
     /// `running 45.0% (eta 12m)`, `next in 6d 23h`, `due now` or `done`.
@@ -283,10 +268,13 @@ impl Page<'_> {
             let kind: &str = key.kind().into();
             let first_block = match key.first_block(view.epochs) {
                 None => "-".to_owned(),
-                Some(height) => self
-                    .block_times
-                    .get(height)
-                    .map_or_else(|| "time unknown".to_owned(), time_text),
+                Some(height) => self.block_times.get(height).map_or_else(
+                    || "time unknown".to_owned(),
+                    |time| {
+                        let age = view::age_at(time, self.generated_at);
+                        format!("{} ({} ago)", time_text(time), view::short_duration(age))
+                    },
+                ),
             };
             let age = view::short_duration(view::age_at(
                 row.state.first_missing_at(),
@@ -413,10 +401,10 @@ mod tests {
         }
     }
 
-    /// Times of every height `views` show, one second per height after 1000 s.
+    /// Times of the first blocks of `views`' rows, one second per height after 1000 s.
     fn times_of(views: &[&NodeView]) -> BlockTimes {
         let mut times = BlockTimes::default();
-        for height in views.iter().flat_map(|view| view.shown_block_heights()) {
+        for height in views.iter().flat_map(|view| view.missing_row_blocks()) {
             times.insert(height, at(1_000 + height.0 as i64));
         }
         times
@@ -503,8 +491,7 @@ mod tests {
         assert!(!html.contains("<&\">"));
         assert!(
             html.contains(
-                "<td>-</td><td>-</td><td>-</td><td>-</td><td>-</td><td>not \
-                 started</td><td>-</td></tr>"
+                "<td>-</td><td>-</td><td>-</td><td>-</td><td>not started</td><td>-</td></tr>"
             ),
             "{html}"
         );
@@ -520,30 +507,13 @@ mod tests {
             finish: at(845),
         });
         let node = node("a:1");
-        let times = times_of(&[&view]);
-        let html = render_with(&[(&node, Some(&view))], &times, at(120));
-        let row = "<tr><td><a href=\"http://localhost:1/\">a:1</a></td><td>0</td><td \
-                   title=\"1970-01-01 00:01:30\">30s</td><td title=\"1970-01-01 \
-                   01:39:59\">4999</td>";
-        assert!(html.contains(row), "{html}");
-        for expected in [
-            // Block 4999 has time 5999 s, after the page time: age saturates at 0s.
-            "<td title=\"1970-01-01 01:39:59\">0s</td><td>10</td>",
-            "<td title=\"1970-01-01 00:14:05\">running 25.0% (eta 12m 5s)</td><td>never</td></tr>",
-        ] {
-            assert!(html.contains(expected), "{expected} missing in {html}");
-        }
-    }
-
-    #[test]
-    fn block_age_is_dashed_without_a_block_time() {
-        let view = listed_view();
-        let node = node("a:1");
         let html = render(&[(&node, Some(&view))], at(120));
-        assert!(
-            html.contains("<td title=\"time unknown\">4999</td><td>-</td><td>10</td>"),
-            "{html}"
-        );
+        let row = "<tr><td><a href=\"http://localhost:1/\">a:1</a></td><td>0</td><td \
+                   title=\"1970-01-01 00:01:30\">30s</td><td>4999</td><td>10</td>";
+        assert!(html.contains(row), "{html}");
+        let sweep =
+            "<td title=\"1970-01-01 00:14:05\">running 25.0% (eta 12m 5s)</td><td>never</td></tr>";
+        assert!(html.contains(sweep), "{html}");
     }
 
     #[test]
@@ -575,7 +545,7 @@ mod tests {
         for expected in [
             "<h2><a href=\"http://localhost:1/\">a:1</a></h2>",
             "<p>missing: leaf 300 heights</p>",
-            "<td>leaf</td><td>1000</td><td>1300</td><td>1970-01-01 00:33:20</td>",
+            "<td>leaf</td><td>1000</td><td>1300</td><td>1970-01-01 00:33:20 (0s ago)</td>",
             "</td><td>2m</td><td>2m ago</td><td>due</td>",
             "href=\"http://localhost:1/v1/availability/leaf/1000/1100\"",
             "<p>2 more not shown</p>",

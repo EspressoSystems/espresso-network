@@ -8,8 +8,8 @@ use tokio::{sync::watch, time::Instant};
 
 use crate::{
     block_time::{
-        BLOCK_TIME_POLL_INTERVAL, BlockTimesSender, HeaderJson, MAX_HEADERS_PER_POLL,
-        UnservedHeaders, header_route,
+        BLOCK_TIME_POLL_INTERVAL, BlockTimesSender, HEADER_POLL_BUDGET, HeaderJson,
+        MAX_HEADERS_PER_POLL, UnservedHeaders, header_route,
     },
     gaps::{Presence, find_gaps},
     kind::{Epochs, Height, HotshotEpochs, Probe, RangeKind, next_chunk, probes},
@@ -296,7 +296,7 @@ impl<C: Clock> TipPoller<C> {
     }
 }
 
-/// Fetches the time of every shown block height without one, every `BLOCK_TIME_POLL_INTERVAL`.
+/// Fetches the first block time of every listed missing row without one, every `BLOCK_TIME_POLL_INTERVAL`.
 pub struct BlockTimePoller<C: Clock> {
     watchdog: Watchdog<C>,
     nodes: Vec<NodeViewSlot>,
@@ -317,9 +317,10 @@ impl<C: Clock> BlockTimePoller<C> {
         }
     }
 
-    /// Shown heights of every published view; `retain_shown` on times and `unserved`; each
-    /// `to_fetch` height that some node has reached, at most `MAX_HEADERS_PER_POLL`, through
-    /// `fetch_block_time`, publishing each time or recording it unserved.
+    /// Missing row blocks of every published view; `retain_shown` on times and `unserved`; each
+    /// `to_fetch` height that some node has reached, at most `MAX_HEADERS_PER_POLL` and until
+    /// `HEADER_POLL_BUDGET` has passed, through `fetch_block_time`, publishing each time or
+    /// recording it unserved.
     async fn poll_once(&mut self) {
         let shown: BTreeSet<Height> = self
             .nodes
@@ -328,23 +329,24 @@ impl<C: Clock> BlockTimePoller<C> {
                 slot.view
                     .borrow()
                     .as_ref()
-                    .map(NodeView::shown_block_heights)
+                    .map(NodeView::missing_row_blocks)
                     .unwrap_or_default()
             })
             .collect();
         self.unserved.retain_shown(&shown);
-        self.sender.send_if_modified(|times| {
-            let before = times.clone();
-            times.retain_shown(&shown);
-            *times != before
-        });
+        self.sender
+            .send_if_modified(|times| times.retain_shown(&shown));
         let to_fetch = {
             let times = self.sender.borrow();
             let now = self.watchdog.system.clock.now();
             self.unserved.to_fetch(&shown, &times, now)
         };
+        let deadline = self.watchdog.system.clock.instant() + HEADER_POLL_BUDGET;
         let mut fetched = 0;
         for height in to_fetch {
+            if self.watchdog.system.clock.instant() >= deadline {
+                break;
+            }
             let nodes = self.nodes_with_block(height);
             if nodes.is_empty() {
                 continue;
@@ -378,7 +380,7 @@ impl<C: Clock> BlockTimePoller<C> {
     }
 
     /// The header time of `height` from the first of `nodes` that serves a decodable header, each
-    /// request after `request_interval`; failures count under `FetchTarget::Header`.
+    /// request after `request_interval`; failures are logged at DEBUG and not counted.
     async fn fetch_block_time(
         &self,
         height: Height,
@@ -403,11 +405,6 @@ impl<C: Clock> BlockTimePoller<C> {
                 },
                 Err(error) => {
                     tracing::debug!(node = %node.label, height = height.0, %error, "header request failed");
-                    self.watchdog.metrics.count_fetch_error(
-                        &node.label,
-                        FetchTarget::Header,
-                        &error,
-                    );
                 },
             }
         }
@@ -1445,6 +1442,17 @@ mod tests {
                 .find(|family| family.get_name() == "query_watchdog_not_found_units")
                 .and_then(|family| family.get_metric().first())
                 .map(|metric| metric.get_gauge().get_value() as i64)
+        }
+
+        /// `query_watchdog_fetch_errors_total` summed over all nodes, kinds and statuses.
+        fn fetch_errors(&self) -> u64 {
+            self.registry
+                .gather()
+                .iter()
+                .filter(|family| family.get_name() == "query_watchdog_fetch_errors_total")
+                .flat_map(|family| family.get_metric())
+                .map(|metric| metric.get_counter().get_value() as u64)
+                .sum()
         }
 
         /// `query_watchdog_local_misses_total` summed over all nodes and kinds.
@@ -3304,20 +3312,48 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn the_block_time_poller_fills_the_shown_heights() {
-        let (node, _fake) = serve_fake([]).await;
+    async fn the_block_time_poller_fills_the_missing_row_blocks() {
+        let (node, fake) = serve_fake([]).await;
         let harness = Harness::new(None).await;
+        preload_confirmed_points(&harness, &node, 3).await;
         let (_watch, view) = harness.start(node.clone()).await;
-        let shown = view.borrow().as_ref().unwrap().shown_block_heights();
+        let shown = view.borrow().as_ref().unwrap().missing_row_blocks();
         assert!(!shown.is_empty());
         let (mut poller, times) = block_time_poller(&harness, vec![slot(&node, &view)]);
 
         poller.poll_once().await;
 
-        for height in shown {
+        for height in &shown {
             let expected = DateTime::from_timestamp(1_700_000_000 + height.0 as i64, 0);
-            assert_eq!(times.borrow().get(height), expected, "{height}");
+            assert_eq!(times.borrow().get(*height), expected, "{height}");
         }
+        // Only the listed rows' first blocks: not the newest block (999) or the follow height.
+        let header_paths = fake
+            .requests
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(_, path)| path.starts_with("/v1/availability/header/"))
+            .count();
+        assert_eq!(header_paths, shown.len());
+        assert_eq!(header_requests(&fake, &[Height(999)].into()), 0);
+    }
+
+    #[tokio::test]
+    async fn header_failures_are_not_counted_as_fetch_errors() {
+        let (node, fake) = serve_fake([]).await;
+        fake.headers_missing.store(true, Ordering::SeqCst);
+        let harness = Harness::new(None).await;
+        preload_confirmed_points(&harness, &node, 3).await;
+        let (_watch, view) = harness.start(node.clone()).await;
+        let before = harness.fetch_errors();
+        let (mut poller, _times) = block_time_poller(&harness, vec![slot(&node, &view)]);
+
+        poller.poll_once().await;
+
+        let shown = view.borrow().as_ref().unwrap().missing_row_blocks();
+        assert_eq!(header_requests(&fake, &shown), shown.len());
+        assert_eq!(harness.fetch_errors(), before);
     }
 
     #[tokio::test]
@@ -3326,9 +3362,10 @@ mod tests {
         let (second, fake_second) = serve_fake([]).await;
         fake_first.headers_missing.store(true, Ordering::SeqCst);
         let harness = Harness::new(None).await;
+        preload_confirmed_points(&harness, &first, 3).await;
         let (_watch_first, view_first) = harness.start(first.clone()).await;
         let (_watch_second, view_second) = harness.start(second.clone()).await;
-        let shown = view_first.borrow().as_ref().unwrap().shown_block_heights();
+        let shown = view_first.borrow().as_ref().unwrap().missing_row_blocks();
         let slots = vec![slot(&first, &view_first), slot(&second, &view_second)];
         let (mut poller, times) = block_time_poller(&harness, slots);
 
@@ -3345,10 +3382,14 @@ mod tests {
     async fn a_height_no_node_has_reached_is_not_recorded_unserved() {
         let (node, fake) = serve_fake([]).await;
         let harness = Harness::new(None).await;
-        harness.set_height(&node, 0);
-        let (_watch, view) = harness.start(node.clone()).await;
-        let shown = view.borrow().as_ref().unwrap().shown_block_heights();
-        assert!(!shown.is_empty());
+        preload_confirmed_points(&harness, &node, 3).await;
+        let (_watch, started) = harness.start(node.clone()).await;
+        let shown = started.borrow().as_ref().unwrap().missing_row_blocks();
+        // Newest block 0: no node has reached any of the row blocks 1 to 3.
+        let mut low = started.borrow().clone().unwrap();
+        low.frontier = Frontier::new(Height(1), harness.watchdog.options.sweep_window());
+        let (sender, view) = view::channel();
+        sender.send_replace(Some(low));
         let (mut poller, times) = block_time_poller(&harness, vec![slot(&node, &view)]);
 
         poller.poll_once().await;
@@ -3363,6 +3404,7 @@ mod tests {
     async fn a_height_leaving_every_view_is_dropped_from_the_times() {
         let (node, _fake) = serve_fake([]).await;
         let harness = Harness::new(None).await;
+        preload_confirmed_points(&harness, &node, 3).await;
         let (_watch, started) = harness.start(node.clone()).await;
         let (sender, view) = view::channel();
         sender.send_replace(started.borrow().clone());
@@ -3382,7 +3424,7 @@ mod tests {
         let harness = Harness::new(None).await;
         preload_confirmed_points(&harness, &node, 40).await;
         let (_watch, view) = harness.start(node.clone()).await;
-        let shown = view.borrow().as_ref().unwrap().shown_block_heights();
+        let shown = view.borrow().as_ref().unwrap().missing_row_blocks();
         assert!(shown.len() > MAX_HEADERS_PER_POLL, "{}", shown.len());
         let (mut poller, times) = block_time_poller(&harness, vec![slot(&node, &view)]);
 
@@ -3399,9 +3441,10 @@ mod tests {
         let (ahead, _fake_ahead) = serve_fake([]).await;
         let harness = Harness::new(None).await;
         harness.set_height(&lagging, 10);
+        preload_confirmed_points(&harness, &ahead, 20).await;
         let (_watch_lagging, view_lagging) = harness.start(lagging.clone()).await;
         let (_watch_ahead, view_ahead) = harness.start(ahead.clone()).await;
-        let shown = view_ahead.borrow().as_ref().unwrap().shown_block_heights();
+        let shown = view_ahead.borrow().as_ref().unwrap().missing_row_blocks();
         let slots = vec![slot(&lagging, &view_lagging), slot(&ahead, &view_ahead)];
         let (mut poller, times) = block_time_poller(&harness, slots);
 
@@ -3422,8 +3465,9 @@ mod tests {
         let (node, fake) = serve_fake([]).await;
         fake.headers_missing.store(true, Ordering::SeqCst);
         let harness = Harness::new(None).await;
+        preload_confirmed_points(&harness, &node, 3).await;
         let (_watch, view) = harness.start(node.clone()).await;
-        let shown = view.borrow().as_ref().unwrap().shown_block_heights();
+        let shown = view.borrow().as_ref().unwrap().missing_row_blocks();
         let (mut poller, times) = block_time_poller(&harness, vec![slot(&node, &view)]);
 
         poller.poll_once().await;

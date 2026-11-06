@@ -14,7 +14,7 @@ use crate::{
     missing::{KindTally, ListedRows},
     node::WatchedNode,
     outcome::NotServed,
-    schedule::{Frontier, NodeProgress, SweepState},
+    schedule::{Frontier, NodeProgress},
     state::Retry,
 };
 
@@ -291,21 +291,13 @@ impl NodeView {
         self.frontier.tip().0.checked_sub(1).map(Height)
     }
 
-    /// Heights the page prints with a time: newest block, follow next height, the running sweep's
-    /// next and until heights, `first_block` of each listed row.
-    pub fn shown_block_heights(&self) -> BTreeSet<Height> {
-        let mut heights: BTreeSet<Height> = self.newest_block().into_iter().collect();
-        heights.insert(self.progress.follow_next_height);
-        if let SweepState::Running { sweep, .. } = &self.progress.sweep {
-            heights.extend([sweep.next_height, sweep.until_height]);
-        }
-        heights.extend(
-            self.listed
-                .shown
-                .iter()
-                .filter_map(|row| row.key.first_block(self.epochs)),
-        );
-        heights
+    /// `first_block` of each listed row.
+    pub fn missing_row_blocks(&self) -> BTreeSet<Height> {
+        self.listed
+            .shown
+            .iter()
+            .filter_map(|row| row.key.first_block(self.epochs))
+            .collect()
     }
 }
 
@@ -334,7 +326,7 @@ mod tests {
     use crate::{
         kind::{Epoch, EpochConfig, EpochKind, PointKind, RangeKind},
         missing::{MissingRow, RowKey},
-        schedule::{RunningSweep, SweepWindow},
+        schedule::{SweepState, SweepWindow},
         state::{RetryDelay, UnitState},
     };
 
@@ -390,35 +382,21 @@ mod tests {
     }
 
     #[test]
-    fn shown_block_heights_cover_tip_follow_sweep_and_rows() {
-        let at = DateTime::from_timestamp(0, 0).unwrap();
-        let sweep = SweepState::Running {
-            sweep: RunningSweep {
-                started_at: at,
-                start_height: Height(0),
-                next_height: Height(50),
-                until_height: Height(80),
-            },
-            last_completed_at: None,
-        };
+    fn missing_row_blocks_are_the_first_blocks_of_listed_rows() {
         let epochs = Epochs::On(EpochConfig {
             epoch_height: std::num::NonZeroU64::new(10).unwrap(),
             epoch_start_block: Height(0),
         });
-        let heights = view(100, sweep, rows(), epochs).shown_block_heights();
+        let heights = view(100, SweepState::NeverSwept, rows(), epochs).missing_row_blocks();
         // Stake table epoch 4 has root block (4 - 2) * 10.
-        let expected = [99, 90, 50, 80, 10, 30, 20]
-            .map(Height)
-            .into_iter()
-            .collect();
-        assert_eq!(heights, expected);
+        assert_eq!(heights, [10, 30, 20].map(Height).into_iter().collect());
 
-        let off = view(100, SweepState::NeverSwept, rows(), Epochs::Off).shown_block_heights();
-        assert_eq!(off, [99, 90, 10, 30].map(Height).into_iter().collect());
+        let off = view(100, SweepState::NeverSwept, rows(), Epochs::Off).missing_row_blocks();
+        assert_eq!(off, [10, 30].map(Height).into_iter().collect());
 
         let at_zero = view(0, SweepState::NeverSwept, Vec::new(), Epochs::Off);
         assert_eq!(at_zero.newest_block(), None);
-        assert_eq!(at_zero.shown_block_heights(), [Height(90)].into());
+        assert!(at_zero.missing_row_blocks().is_empty());
     }
 
     #[test]

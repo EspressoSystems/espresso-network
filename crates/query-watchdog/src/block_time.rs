@@ -1,4 +1,4 @@
-//! Times of the blocks the page shows, read from block headers.
+//! Times of the first blocks of the missing rows the page lists, read from block headers.
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -13,13 +13,14 @@ use crate::kind::Height;
 
 /// Time between poll rounds of `BlockTimePoller`.
 pub const BLOCK_TIME_POLL_INTERVAL: Duration = Duration::from_secs(1);
-/// Most headers fetched in one poll round, newest first, so new tip and follow heights are not
-/// starved by a cold fill of every listed row.
+/// Most headers fetched in one poll round, newest first.
 pub const MAX_HEADERS_PER_POLL: usize = 20;
+/// Time one poll round may start new header requests in.
+pub const HEADER_POLL_BUDGET: Duration = Duration::from_secs(10);
 /// Wait before a shown height no node served is asked again.
 pub const HEADER_RETRY_INTERVAL: Duration = Duration::from_secs(300);
 
-/// Block time per shown height; written by the poller, read by the page.
+/// Block time per listed missing row's first block; written by the poller, read by the page.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct BlockTimes(BTreeMap<Height, DateTime<Utc>>);
 
@@ -34,9 +35,11 @@ impl BlockTimes {
         self.0.insert(height, time);
     }
 
-    /// Keeps the heights in `shown`.
-    pub fn retain_shown(&mut self, shown: &BTreeSet<Height>) {
+    /// Keeps the heights in `shown`; whether any was dropped.
+    pub fn retain_shown(&mut self, shown: &BTreeSet<Height>) -> bool {
+        let before = self.0.len();
         self.0.retain(|height, _| shown.contains(height));
+        self.0.len() != before
     }
 }
 
