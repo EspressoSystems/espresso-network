@@ -728,6 +728,11 @@ Progress: one fixed-width line every 10 s, totals at the end.
   256 txs' size, base64-encoded once. Requests are built from slices of the encoded pool.
 - Inclusion: scans of the query node's blocks for the marker. Scans (fetch, JSON, base64, marker search) run in 4
   processes (`SCAN_PROCESSES`), stdlib only.
+- Scans that lag: a tx times out `--tx-timeout-s` after its submit, which frees its in-flight room. A later scan that
+  finds it in a block shown on the query node within `--tx-timeout-s` still includes it; a find in a block shown later
+  leaves it timed out but records its height. At the end of the load the scans go on while such a tx may still be
+  included, for at most `--tx-timeout-s` after the load ended. A lost payload counts as scanned once given up, but not
+  in the benchmark tracker lag.
 - Namespaces 10000 and 10015: the leader disperses a block's namespaces in parallel.
 - With `--clients`, readers fetch each new range of blocks from the query node as a light client does, see `--clients`
   above.
@@ -748,6 +753,15 @@ Each step is judged over its second half. A step stopped early is judged over it
 - Early stop (not with `--keep-going`): from 10 s into a step, decided < 80% of submitted over the last 10 s stops the
   step, which fails on the decided rule.
 - Without `--keep-going` the ramp stops at the first failing step, then runs one refine step halfway back.
+- A tx not yet matched to a block counts as late only as far as the scans prove: until the first height decided after it
+  was sent whose scan is not finished reached a validator, or until now when there is none. A tx that timed out and was
+  never found counts at most its timeout.
+- Two verdicts per step. At the step's end the ramp and the search judge it on what they know then, steer by it and log
+  it in `driver.log` and `steps.json`. `result.json` and the summary judge consensus latency and query lag again on the
+  final `load.jsonl`, `heights.jsonl` and `consensus.jsonl`, as of the last time the run recorded anything. The two can
+  differ while the scans or the query node lag; scans lagging over 1 s p99 mark the run noisy
+  (`benchmark tracker behind`). The final verdict also fails a step when its txs the scans never reached could change
+  its p50 (`consensus latency unknown`). `throughput.png` shades steps by the final verdict.
 
 ### Drain
 
