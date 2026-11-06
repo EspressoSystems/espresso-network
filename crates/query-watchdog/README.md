@@ -23,8 +23,9 @@ cargo run -p query-watchdog -- --nodes https://query.decaf.testnet.espresso.netw
 ```
 
 - The `serving` INFO line prints the endpoint URLs.
-- `/`: progress and missing ranges per node, with age, last tried and next try (`due` once overdue) and links to the
-  failing request.
+- `/`: status line (`red: N not-found units` or `green: 0 not-found units`), `generated at`, then per node
+  `published at`, progress with block times and ages, and the missing rows with first block time, missing for, last
+  tried, next try (`due` once overdue) and links to the failing request.
 - `/status/metrics`: Prometheus metrics, `query_watchdog_*`; `query_watchdog_not_found_units` is the alert gauge.
 - `/healthcheck`: 200 with `{"status":"available"}`.
 - Logs: `RUST_LOG` (default INFO), `RUST_LOG_FORMAT=json`.
@@ -185,8 +186,14 @@ task resumes where the old one stopped.
   of one kind with equal state show as one row on the page. A retried row splits into pieces of at most 100 heights and
   stays split, so the page lists the pieces; a sweep chunk across two pieces is searched again by bisection, and the
   units keep their state. The link probes the first 100 heights of the row.
-- The page shows what each node watch last published, so its ages are as of that publish, at most one loop step (follow,
-  retry or sweep) old. Before a node has started it reads `not started`.
+- The page shows what each node watch last published, at most one loop step (follow, retry or sweep) old; each node
+  prints `published at` with its age. Every age is taken at `generated at`, the render time. Before a node has started
+  it reads `not started`.
+- Block times come from `v1/availability/header/{height}` (v0.2 or later headers, `fields.timestamp`), fetched every
+  second for the heights the page shows (newest block `tip - 1`, follow next, sweep next and until, the first block of
+  each row; an epoch row shows its root block), at most 20 per round, newest first, in `--nodes` order from nodes whose
+  published height covers it. A height no node serves reads `time unknown` and is asked again after 5 minutes; failures
+  count under `fetch_errors_total{kind="header"}`.
 - Archive full sweep is slow: each 100-height chunk costs 4 probes plus the epoch probes whose block lies in it, each
   `request_interval` plus response time, and every loop iteration also spends time on follow and retries. Each gap in a
   range kind adds about 7 + 2 x log2(gap length) HEADs. The tip is covered by follow in real time. The page ETA and

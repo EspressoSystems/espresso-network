@@ -157,6 +157,16 @@ impl RowKey {
         }
     }
 
+    /// Block of the first unit: range start, point height, or the epoch's root block (`None` when
+    /// `Off` or on overflow).
+    pub fn first_block(&self, epochs: Epochs) -> Option<Height> {
+        match self {
+            Self::Range { heights, .. } => Some(heights.start),
+            Self::Point { height, .. } => Some(*height),
+            Self::Epoch { kind, epoch } => epochs.root_block(*kind, *epoch),
+        }
+    }
+
     /// The units covered: heights or epoch numbers.
     pub fn units(&self) -> Range<u64> {
         let first = self.first_unit();

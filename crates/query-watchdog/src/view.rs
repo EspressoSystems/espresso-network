@@ -1,16 +1,20 @@
 //! What a node watch publishes for the page and the reporter.
 
-use std::{collections::BTreeMap, fmt, time::Duration};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fmt,
+    time::Duration,
+};
 
 use chrono::{DateTime, Utc};
 use tokio::sync::watch;
 
 use crate::{
-    kind::{DataKind, Height},
+    kind::{DataKind, Epochs, Height},
     missing::{KindTally, ListedRows},
     node::WatchedNode,
     outcome::NotServed,
-    schedule::{Frontier, NodeProgress},
+    schedule::{Frontier, NodeProgress, SweepState},
     state::Retry,
 };
 
@@ -213,6 +217,8 @@ pub struct NodeView {
     pub progress: NodeProgress,
     /// `None` until the node answers `v1/block-state/block-height`.
     pub merklized_state_height: Option<Height>,
+    /// The watch's epochs, for `RowKey::first_block` of listed epoch rows.
+    pub epochs: Epochs,
     /// `MissingSet::not_found_units(tally_settled_end())` at publish.
     pub not_found_units: u64,
     /// `MissingSet::tallies()`.
@@ -251,6 +257,28 @@ impl NodeView {
                 .collect(),
         }
     }
+
+    /// `frontier.tip() - 1`; `None` at tip 0.
+    pub fn newest_block(&self) -> Option<Height> {
+        self.frontier.tip().0.checked_sub(1).map(Height)
+    }
+
+    /// Heights the page prints with a time: newest block, follow next height, the running sweep's
+    /// next and until heights, `first_block` of each listed row.
+    pub fn shown_block_heights(&self) -> BTreeSet<Height> {
+        let mut heights: BTreeSet<Height> = self.newest_block().into_iter().collect();
+        heights.insert(self.progress.follow_next_height);
+        if let SweepState::Running { sweep, .. } = &self.progress.sweep {
+            heights.extend([sweep.next_height, sweep.until_height]);
+        }
+        heights.extend(
+            self.listed
+                .shown
+                .iter()
+                .filter_map(|row| row.key.first_block(self.epochs)),
+        );
+        heights
+    }
 }
 
 /// Publishing side of one node's view; `None` until the watch starts.
@@ -272,8 +300,98 @@ pub struct NodeViewSlot {
 
 #[cfg(test)]
 mod tests {
+    use std::num::NonZeroU32;
+
     use super::*;
-    use crate::state::RetryDelay;
+    use crate::{
+        kind::{Epoch, EpochConfig, EpochKind, PointKind, RangeKind},
+        missing::{MissingRow, RowKey},
+        schedule::{RunningSweep, SweepWindow},
+        state::{RetryDelay, UnitState},
+    };
+
+    fn row(key: RowKey) -> MissingRow {
+        let at = DateTime::from_timestamp(0, 0).unwrap();
+        MissingRow {
+            key,
+            state: UnitState::NotFound {
+                first_missing_at: at,
+                not_found_probes: NonZeroU32::new(1).unwrap(),
+                retry: Retry::after(RetryDelay::from_secs(10).unwrap(), at),
+            },
+        }
+    }
+
+    fn view(tip: u64, sweep: SweepState, rows: Vec<MissingRow>, epochs: Epochs) -> NodeView {
+        NodeView {
+            published_at: DateTime::from_timestamp(0, 0).unwrap(),
+            frontier: Frontier::new(Height(tip), SweepWindow::Archive),
+            progress: NodeProgress {
+                follow_next_height: Height(90),
+                sweep,
+            },
+            merklized_state_height: None,
+            epochs,
+            not_found_units: 0,
+            tallies: Vec::new(),
+            listed: ListedRows {
+                total: rows.len() as u64,
+                shown: rows,
+            },
+            counters: WatchCounters::default(),
+            next_sweep_start: None,
+            sweep_eta: None,
+        }
+    }
+
+    fn rows() -> Vec<MissingRow> {
+        vec![
+            row(RowKey::Range {
+                kind: RangeKind::Leaf,
+                heights: Height(10)..Height(20),
+            }),
+            row(RowKey::Point {
+                kind: PointKind::LcLeafProof,
+                height: Height(30),
+            }),
+            row(RowKey::Epoch {
+                kind: EpochKind::StakeTable,
+                epoch: Epoch(4),
+            }),
+        ]
+    }
+
+    #[test]
+    fn shown_block_heights_cover_tip_follow_sweep_and_rows() {
+        let at = DateTime::from_timestamp(0, 0).unwrap();
+        let sweep = SweepState::Running {
+            sweep: RunningSweep {
+                started_at: at,
+                start_height: Height(0),
+                next_height: Height(50),
+                until_height: Height(80),
+            },
+            last_completed_at: None,
+        };
+        let epochs = Epochs::On(EpochConfig {
+            epoch_height: std::num::NonZeroU64::new(10).unwrap(),
+            epoch_start_block: Height(0),
+        });
+        let heights = view(100, sweep, rows(), epochs).shown_block_heights();
+        // Stake table epoch 4 has root block (4 - 2) * 10.
+        let expected = [99, 90, 50, 80, 10, 30, 20]
+            .map(Height)
+            .into_iter()
+            .collect();
+        assert_eq!(heights, expected);
+
+        let off = view(100, SweepState::NeverSwept, rows(), Epochs::Off).shown_block_heights();
+        assert_eq!(off, [99, 90, 10, 30].map(Height).into_iter().collect());
+
+        let at_zero = view(0, SweepState::NeverSwept, Vec::new(), Epochs::Off);
+        assert_eq!(at_zero.newest_block(), None);
+        assert_eq!(at_zero.shown_block_heights(), [Height(90)].into());
+    }
 
     #[test]
     fn try_times_read_due_once_next_at_is_not_after_now() {

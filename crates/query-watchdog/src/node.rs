@@ -162,17 +162,20 @@ pub enum FetchTarget {
     BlockHeight,
     MerklizedStateHeight,
     Config,
+    /// A block header for a page block time; label `"header"`.
+    Header,
 }
 
 impl FetchTarget {
     /// The `kind` label of `fetch_errors_total`: the `DataKind` label, `"block_height"`,
-    /// `"merklized_state_height"` or `"config"`.
+    /// `"merklized_state_height"`, `"config"` or `"header"`.
     pub fn label(self) -> &'static str {
         match self {
             Self::Data(kind) => kind.into(),
             Self::BlockHeight => "block_height",
             Self::MerklizedStateHeight => "merklized_state_height",
             Self::Config => "config",
+            Self::Header => "header",
         }
     }
 }

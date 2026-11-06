@@ -1,5 +1,6 @@
 //! Watches archive query nodes for data they fail to serve; see `README.md`.
 
+mod block_time;
 #[cfg(test)]
 mod capture;
 mod gaps;
@@ -135,9 +136,10 @@ async fn run(options: Options) -> anyhow::Result<()> {
             (sender, slot)
         })
         .unzip();
+    let (block_times_sender, block_times) = block_time::channel();
     let server = tokio::spawn(http::serve(
         listener,
-        AppState::new(registry, slots.clone()),
+        AppState::new(registry, slots.clone(), block_times),
     ));
     log_serving(options.port);
 
@@ -167,12 +169,14 @@ async fn run(options: Options) -> anyhow::Result<()> {
             .map(|(node, view)| watchdog.start_node(node, tips.clone(), epochs, view)),
     )
     .await?;
-    let reporter = watchdog.start_reporter(tips, slots);
+    let reporter = watchdog.start_reporter(tips, slots.clone());
+    let block_time_poller = watchdog.start_block_time_poller(slots, block_times_sender);
 
     tokio::select! {
         result = try_join_all(watches.into_iter().map(NodeWatch::run)) => result.map(drop),
         result = reporter.run() => result.map(drop),
         result = tip_poller.run() => result.map(drop),
+        never = block_time_poller.run() => match never {},
         result = server => result?,
         signal = shutdown_signal() => {
             tracing::debug!(signal = signal?, "shutting down");
