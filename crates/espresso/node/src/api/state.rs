@@ -733,34 +733,9 @@ where
         &self,
         epoch: u64,
     ) -> anyhow::Result<espresso_types::StateCertQueryDataV1<SeqTypes>> {
-        // Try to get from local storage first
-        let state_cert = self.data_source.get_state_cert_by_epoch(epoch).await?;
-
-        let cert = match state_cert {
-            Some(cert) => cert,
-            None => {
-                // Not found locally, try to fetch from peers
-                const TIMEOUT: Duration = Duration::from_secs(40);
-                let cert = self
-                    .data_source
-                    .request_state_cert(epoch, TIMEOUT)
-                    .await
-                    .map_err(|err| {
-                        lc_error(hotshot_query_service::Error::Availability { source: err.into() })
-                    })?;
-
-                // Store the fetched certificate
-                self.data_source
-                    .insert_state_cert(epoch, cert.clone())
-                    .await?;
-
-                cert
-            },
-        };
-
-        Ok(espresso_types::StateCertQueryDataV1::from(
-            espresso_types::StateCertQueryDataV2(cert),
-        ))
+        self.get_state_cert_v2(epoch)
+            .await
+            .map(espresso_types::StateCertQueryDataV1::from)
     }
 
     async fn get_state_cert_v2(
