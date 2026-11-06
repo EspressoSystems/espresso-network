@@ -703,10 +703,11 @@ impl<C: Clock> NodeWatch<C> {
         Ok(checked.sent)
     }
 
-    /// `RetryQueue::new` at `now`; while `RETRY_BUDGET` from the step start has time left: due
-    /// not-found rows, `recovery`, the representative when `recovery` was empty at the step start (a result that
-    /// `found_present` sets `recovery = ChunkQueue::confirmed(set)`), `recovery` again, then due
-    /// failed rows, which never count and so never delay the alert total; returns requests sent.
+    /// `RetryQueue::new` at `now`; while `RETRY_BUDGET` from the step start has time left: `recovery`,
+    /// the representative when `recovery` was empty at the step start (a result that `found_present`
+    /// sets `recovery = ChunkQueue::confirmed(set)`), `recovery` again, due not-found rows, then due
+    /// failed rows. Recovery and the representative go first so that not-found rows, due every
+    /// minute, cannot use the whole budget; returns requests sent.
     async fn retry_step(&mut self) -> anyhow::Result<usize> {
         let deadline = self.clock().instant() + RETRY_BUDGET;
         let mut queue = RetryQueue::new(self.missing.set(), self.clock().now());
@@ -714,10 +715,10 @@ impl<C: Clock> NodeWatch<C> {
             .representative
             .take()
             .filter(|_| self.recovery.is_empty());
-        let mut sent = self.drain(&mut queue.not_found, deadline).await?;
-        sent += self.drain_recovery(deadline).await?;
+        let mut sent = self.drain_recovery(deadline).await?;
         sent += self.probe_representative(representative, deadline).await?;
         sent += self.drain_recovery(deadline).await?;
+        sent += self.drain(&mut queue.not_found, deadline).await?;
         sent += self.drain(&mut queue.failed, deadline).await?;
         if sent > 0 {
             self.publish();
@@ -1728,6 +1729,32 @@ mod tests {
         let view = view.borrow();
         let tallies = &view.as_ref().unwrap().tallies;
         assert!(tallies.iter().all(|t| t.missing_count == 0));
+    }
+
+    #[tokio::test]
+    async fn due_unconfirmed_rows_do_not_starve_the_representative() {
+        let (node, fake) = serve_fake([]).await;
+        let harness = Harness::with_options(WatchOptions {
+            request_interval: Duration::from_secs(1),
+            ..options(None)
+        })
+        .await;
+        preload_confirmed_points(&harness, &node, 1).await;
+        let (mut watch, _view) = harness.start(node).await;
+        fake.all_404.store(true, Ordering::SeqCst);
+        let now = watch.clock().now();
+        for height in 100..120 {
+            let result = point_result(height, Observation::NotFound);
+            watch
+                .missing
+                .apply(MissingUpdate::Observed(result), now)
+                .await
+                .unwrap();
+        }
+        harness.clock.advance(Duration::from_secs(61));
+
+        watch.retry_step().await.unwrap();
+        assert_eq!(fake.heads()[0], "/v1/light-client/leaf/1");
     }
 
     #[tokio::test]

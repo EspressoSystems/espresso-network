@@ -119,15 +119,17 @@ counts not-found units at any 404 count.
   every confirmed row is re-checked once (the recovery queue, memory only). Confirmed rows outside these keep a stale
   next time, are re-checked by the next sweep (never under `--sweep-once`) or by the recovery queue after a repair, and
   can keep counting until then. Follow never revisits rows.
-- One retry step starts probes within 5 s (`RETRY_BUDGET`): due not-found rows below confirmation, the recovery queue,
-  the representative (only while the recovery queue is empty), the recovery queue again, then due failed rows. Failed
-  rows never count, so they never delay the alert total. Follow and the sweep keep the rest of the loop iteration.
+- One retry step starts probes within 5 s (`RETRY_BUDGET`): the recovery queue, the representative (only while the
+  recovery queue is empty), the recovery queue again, due not-found rows below confirmation, then due failed rows.
+  Not-found rows are due every minute at most, so they go after the recovery queue and the representative to not starve
+  them. The alert total counts from the first 404, so the order does not delay it. Follow and the sweep keep the rest of
+  the loop iteration.
 - Capacity at the default request cost (about 0.3 s, about 16 requests per retry step; a still-missing exact range piece
   costs 3 requests, a refilled piece or point 1, an epoch 1, a `state_cert` up to 2, 5 s on a timeout): a new gap is
-  retried at about +5 s and +15 s whatever the number of confirmed rows; the unit counts in the alert total from the
-  first 404. After a repair the representative is found present within 60 s; the recovery queue then re-checks about 120
-  pieces a minute during a sweep and about 200 without one, so N confirmed pieces take about N / 120 to N / 200 minutes,
-  then the monitor window.
+  retried at about +5 s and +15 s while the budget has time left after the representative; the unit counts in the alert
+  total from the first 404. After a repair the representative is found present within 60 s; the recovery queue then
+  re-checks about 120 pieces a minute during a sweep and about 200 without one, so N confirmed pieces take about N / 120
+  to N / 200 minutes, then the monitor window.
 - Request timeouts: range HEAD 60 s (the node may wait 500 ms per height), single HEAD 10 s, JSON GET 5 s, peer-fetch
   HEAD (`state_cert` step 2) 5 s.
 
