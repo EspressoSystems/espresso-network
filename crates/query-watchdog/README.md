@@ -23,9 +23,12 @@ cargo run -p query-watchdog -- --nodes https://query.decaf.testnet.espresso.netw
 ```
 
 - The `serving` INFO line prints the endpoint URLs.
-- `/`: status line (`red: N not-found units` or `green: 0 not-found units`), `generated at`, then per node
-  `published at`, progress with block times and ages, and the missing rows with first block time, missing for, last
-  tried, next try (`due` once overdue) and links to the failing request.
+- `/`: status line (`red: N not-found units` or `green: 0 not-found units`, dark text on a light background),
+  `generated at <time> UTC`, the endpoint links and one overview table with a row per node (not found, published age,
+  newest block and its age, follow lag, sweep progress, last sweep age; full times in the hover title). Below, per
+  node, the missing counts per kind and the missing rows with first block time, missing for, last tried, next try
+  (`due` once overdue) and links to the failing request. Times are UTC `YYYY-MM-DD HH:MM:SS`, ages and durations show
+  at most two units (`1m 38s`, `6d 23h`).
 - `/status/metrics`: Prometheus metrics, `query_watchdog_*`; `query_watchdog_not_found_units` is the alert gauge.
 - `/healthcheck`: 200 with `{"status":"available"}`.
 - Logs: `RUST_LOG` (default INFO), `RUST_LOG_FORMAT=json`.

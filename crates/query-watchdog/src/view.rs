@@ -71,13 +71,13 @@ impl TryTimes {
 
     /// `42s ago`.
     pub fn last_tried_text(&self) -> String {
-        format!("{} ago", humantime::format_duration(self.last_tried))
+        format!("{} ago", short_duration(self.last_tried))
     }
 
     /// `in 18s`, or `due`.
     pub fn next_try_text(&self) -> String {
         match self.next_try {
-            Some(wait) => format!("in {}", humantime::format_duration(wait)),
+            Some(wait) => format!("in {}", short_duration(wait)),
             None => "due".to_owned(),
         }
     }
@@ -86,6 +86,34 @@ impl TryTimes {
 /// `now - first_missing_at`, 0 when the clock stepped back.
 pub fn age_at(first_missing_at: DateTime<Utc>, now: DateTime<Utc>) -> Duration {
     (now - first_missing_at).to_std().unwrap_or(Duration::ZERO)
+}
+
+/// The two largest non-zero-leading units of `duration`, whole units only: `9s`, `1m 38s`,
+/// `2h 5m`, `6d 23h`; a zero second unit is dropped (`2h`).
+pub fn short_duration(duration: Duration) -> String {
+    const UNITS: [(u64, &str); 4] = [(86_400, "d"), (3_600, "h"), (60, "m"), (1, "s")];
+    let mut left = duration.as_secs();
+    let mut parts = Vec::with_capacity(2);
+    for (size, name) in UNITS {
+        let count = left / size;
+        left %= size;
+        if parts.is_empty() && count == 0 {
+            continue;
+        }
+        parts.push((count, name));
+        if parts.len() == 2 {
+            break;
+        }
+    }
+    parts.retain(|(count, _)| *count > 0);
+    if parts.is_empty() {
+        return "0s".to_owned();
+    }
+    parts
+        .iter()
+        .map(|(count, name)| format!("{count}{name}"))
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// Requests without 2xx per `NotServed`; `Debug` prints a label map, as HEAD's `errors` field.
@@ -403,6 +431,24 @@ mod tests {
         assert_eq!(waiting.next_try_text(), "in 12s");
         assert_eq!(TryTimes::at(&retry, at(18)).next_try_text(), "due");
         assert_eq!(TryTimes::at(&retry, at(40)).next_try_text(), "due");
+    }
+
+    #[test]
+    fn short_duration_keeps_two_units() {
+        let cases = [
+            (0, "0s"),
+            (9, "9s"),
+            (60, "1m"),
+            (98, "1m 38s"),
+            (7_500, "2h 5m"),
+            (7_200, "2h"),
+            (7_205, "2h"),
+            (3_600 * 24 * 7 - 100, "6d 23h"),
+            (86_400 * 3 + 59, "3d"),
+        ];
+        for (secs, text) in cases {
+            assert_eq!(short_duration(Duration::from_secs(secs)), text, "{secs}");
+        }
     }
 
     #[test]
