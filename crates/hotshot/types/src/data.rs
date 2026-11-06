@@ -602,7 +602,7 @@ impl<TYPES: NodeType> VidDisperse<TYPES> {
         payload: &TYPES::BlockPayload,
         membership: &EpochMembershipCoordinator<TYPES>,
         view: ViewNumber,
-        target_epoch: Option<EpochNumber>,
+        target_epoch: EpochNumber,
         data_epoch: Option<EpochNumber>,
         metadata: &<TYPES::BlockPayload as BlockPayload<TYPES>>::Metadata,
         upgrade_lock: &UpgradeLock<TYPES>,

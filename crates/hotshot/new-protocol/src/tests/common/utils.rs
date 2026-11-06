@@ -1669,7 +1669,7 @@ impl ConsensusHarness {
                     payload,
                     &self.membership_coordinator,
                     *view,
-                    Some(*epoch),
+                    *epoch,
                     Some(*epoch),
                     metadata,
                     &test_upgrade_lock(),

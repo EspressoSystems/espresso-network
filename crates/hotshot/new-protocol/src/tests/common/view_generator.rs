@@ -168,7 +168,7 @@ impl TestViewGenerator {
             &payload,
             &membership.coordinator,
             view_number,
-            Some(EpochNumber::genesis()),
+            EpochNumber::genesis(),
             Some(EpochNumber::genesis()),
             &metadata,
             &self.upgrade_lock,

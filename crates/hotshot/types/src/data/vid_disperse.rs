@@ -111,11 +111,11 @@ impl<TYPES: NodeType> ADVZDisperse<TYPES> {
         view_number: ViewNumber,
         mut vid_disperse: JfVidDisperse<ADVZScheme>,
         membership: &EpochMembershipCoordinator<TYPES>,
-        target_epoch: Option<EpochNumber>,
+        target_epoch: EpochNumber,
         data_epoch: Option<EpochNumber>,
     ) -> Result<Self> {
         let shares = membership
-            .stake_table_for_epoch(target_epoch)?
+            .stake_table_for_epoch(Some(target_epoch))?
             .stake_table()
             .map(|entry| entry.stake_table_entry.public_key())
             .map(|node| (node.clone(), vid_disperse.shares.remove(0)))
@@ -127,7 +127,7 @@ impl<TYPES: NodeType> ADVZDisperse<TYPES> {
             common: vid_disperse.common,
             payload_commitment: vid_disperse.commit,
             epoch: data_epoch,
-            target_epoch,
+            target_epoch: Some(target_epoch),
         })
     }
 
@@ -141,11 +141,11 @@ impl<TYPES: NodeType> ADVZDisperse<TYPES> {
         payload: &TYPES::BlockPayload,
         membership: &EpochMembershipCoordinator<TYPES>,
         view: ViewNumber,
-        target_epoch: Option<EpochNumber>,
+        target_epoch: EpochNumber,
         data_epoch: Option<EpochNumber>,
     ) -> Result<(Self, Duration)> {
         let num_nodes = membership
-            .stake_table_for_epoch(target_epoch)?
+            .stake_table_for_epoch(Some(target_epoch))?
             .total_nodes();
 
         let txns = payload.encode();
@@ -415,13 +415,13 @@ impl<TYPES: NodeType> AvidMDisperse<TYPES> {
         shares: &[AvidMShare],
         common: AvidMCommon,
         membership: &EpochMembership<TYPES>,
-        target_epoch: Option<EpochNumber>,
+        target_epoch: EpochNumber,
         data_epoch: Option<EpochNumber>,
     ) -> Result<Self> {
         let payload_byte_len = shares[0].payload_byte_len();
         let shares = membership
             .coordinator
-            .stake_table_for_epoch(target_epoch)?
+            .stake_table_for_epoch(Some(target_epoch))?
             .stake_table()
             .map(|entry| entry.stake_table_entry.public_key())
             .zip(shares)
@@ -433,7 +433,7 @@ impl<TYPES: NodeType> AvidMDisperse<TYPES> {
             shares,
             payload_commitment: commit,
             epoch: data_epoch,
-            target_epoch,
+            target_epoch: Some(target_epoch),
             payload_byte_len,
             common,
         })
@@ -450,11 +450,11 @@ impl<TYPES: NodeType> AvidMDisperse<TYPES> {
         payload: &TYPES::BlockPayload,
         membership: &EpochMembershipCoordinator<TYPES>,
         view: ViewNumber,
-        target_epoch: Option<EpochNumber>,
+        target_epoch: EpochNumber,
         data_epoch: Option<EpochNumber>,
         metadata: &<TYPES::BlockPayload as BlockPayload<TYPES>>::Metadata,
     ) -> Result<(Self, Duration)> {
-        let target_mem = membership.stake_table_for_epoch(target_epoch)?;
+        let target_mem = membership.stake_table_for_epoch(Some(target_epoch))?;
         let stake_table: Vec<_> = target_mem.stake_table().cloned().collect();
         let approximate_weights = approximate_weights(&stake_table);
 
@@ -677,13 +677,13 @@ impl<TYPES: NodeType> AvidmGf2Disperse<TYPES> {
         shares: &[AvidmGf2Share],
         common: AvidmGf2Common,
         membership: &EpochMembership<TYPES>,
-        target_epoch: Option<EpochNumber>,
+        target_epoch: EpochNumber,
         data_epoch: Option<EpochNumber>,
     ) -> Result<Self> {
         let payload_byte_len = common.payload_byte_len();
         let shares = membership
             .coordinator
-            .stake_table_for_epoch(target_epoch)?
+            .stake_table_for_epoch(Some(target_epoch))?
             .stake_table()
             .map(|entry| entry.stake_table_entry.public_key())
             .zip(shares)
@@ -695,7 +695,7 @@ impl<TYPES: NodeType> AvidmGf2Disperse<TYPES> {
             shares,
             payload_commitment: commit,
             epoch: data_epoch,
-            target_epoch,
+            target_epoch: Some(target_epoch),
             payload_byte_len,
             common,
         })
@@ -710,11 +710,11 @@ impl<TYPES: NodeType> AvidmGf2Disperse<TYPES> {
         payload: &TYPES::BlockPayload,
         membership: &EpochMembershipCoordinator<TYPES>,
         view: ViewNumber,
-        target_epoch: Option<EpochNumber>,
+        target_epoch: EpochNumber,
         data_epoch: Option<EpochNumber>,
         metadata: &<TYPES::BlockPayload as BlockPayload<TYPES>>::Metadata,
     ) -> Result<(Self, Duration)> {
-        let target_mem = membership.stake_table_for_epoch(target_epoch)?;
+        let target_mem = membership.stake_table_for_epoch(Some(target_epoch))?;
         let stake_table: Vec<_> = target_mem.stake_table().cloned().collect();
         let approximate_weights = approximate_weights(&stake_table);
 
@@ -839,10 +839,10 @@ impl<TYPES: NodeType> AvidmGf2Disperse<TYPES> {
     pub fn disperse_params(
         payload: &TYPES::BlockPayload,
         membership: &EpochMembershipCoordinator<TYPES>,
-        target_epoch: Option<EpochNumber>,
+        target_epoch: EpochNumber,
         metadata: &<TYPES::BlockPayload as BlockPayload<TYPES>>::Metadata,
     ) -> Result<AvidmGf2DisperseParams<TYPES>> {
-        let target_mem = membership.stake_table_for_epoch(target_epoch)?;
+        let target_mem = membership.stake_table_for_epoch(Some(target_epoch))?;
         let stake_table: Vec<_> = target_mem.stake_table().cloned().collect();
         AvidmGf2DisperseParams::new(&stake_table, payload.encode(), &metadata.encode())
     }

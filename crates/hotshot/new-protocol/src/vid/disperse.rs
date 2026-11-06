@@ -216,7 +216,7 @@ where
             VidDisperse2::<T>::disperse_params(
                 &vid_disperse_request.block,
                 &epoch_membership_coordinator,
-                Some(epoch),
+                epoch,
                 &vid_disperse_request.metadata,
             )
             .map_err(VidDisperseError::Vid)?,

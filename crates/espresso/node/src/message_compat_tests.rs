@@ -363,7 +363,7 @@ async fn test_message_compat<Ver: StaticVersionType>(_ver: Ver) {
                 &payload,
                 &membership,
                 ViewNumber::genesis(),
-                Some(EpochNumber::genesis()),
+                EpochNumber::genesis(),
                 Some(EpochNumber::new(1)),
             )
             .await
@@ -678,7 +678,7 @@ async fn reference_new_protocol_messages(
         &payload,
         &membership,
         view,
-        Some(epoch),
+        epoch,
         Some(epoch),
         &metadata,
     )
@@ -688,8 +688,7 @@ async fn reference_new_protocol_messages(
     .to_shares()
     .remove(0);
     let params =
-        VidDisperse2::<SeqTypes>::disperse_params(&payload, &membership, Some(epoch), &metadata)
-            .unwrap();
+        VidDisperse2::<SeqTypes>::disperse_params(&payload, &membership, epoch, &metadata).unwrap();
     let dispersal = AvidmGf2Scheme::ns_disperse_one(
         &params.param,
         &params.weights,

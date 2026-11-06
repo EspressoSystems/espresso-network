@@ -481,7 +481,7 @@ impl World {
             payload,
             &self.membership,
             ViewNumber::new(view),
-            Some(epoch),
+            epoch,
             Some(epoch),
             metadata,
             &test_upgrade_lock(),
