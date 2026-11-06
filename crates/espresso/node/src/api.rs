@@ -53,7 +53,7 @@ use hotshot_types::{
     network::NetworkConfig,
     simple_certificate::LightClientStateUpdateCertificateV2,
     stake_table::HSStakeTable,
-    traits::election::{Membership, MembershipSnapshot},
+    traits::election::{GenesisStakeTables, Membership, MembershipSnapshot},
     utils::epoch_from_block_number,
     vid::avidm::{AvidMScheme, init_avidm_param},
     vote::HasViewNumber,
@@ -154,6 +154,16 @@ impl ApiState {
 
     async fn network_config(&self) -> NetworkConfig<SeqTypes> {
         self.context().await.network_config()
+    }
+
+    /// The stake tables of the views before the first epoch.
+    async fn genesis_stake_tables(&self) -> Arc<GenesisStakeTables<SeqTypes>> {
+        self.consensus()
+            .await
+            .membership_coordinator()
+            .await
+            .membership()
+            .genesis_stake_tables()
     }
 }
 
@@ -338,11 +348,17 @@ impl StakeTableDataSource<SeqTypes> for ApiState {
     /// Get the stake table for the current epoch and return it along with the epoch number
     async fn get_stake_table_current(&self) -> anyhow::Result<StakeTableWithEpochNumber<SeqTypes>> {
         let epoch = self.consensus().await.current_epoch().await;
+        let stake_table = match epoch {
+            Some(epoch) => self.get_stake_table(Some(epoch)).await?,
+            None => self
+                .genesis_stake_tables()
+                .await
+                .stake_table()
+                .cloned()
+                .collect(),
+        };
 
-        Ok(StakeTableWithEpochNumber {
-            epoch,
-            stake_table: self.get_stake_table(epoch).await?,
-        })
+        Ok(StakeTableWithEpochNumber { epoch, stake_table })
     }
 
     /// Get the DA stake table for a given epoch
@@ -371,11 +387,17 @@ impl StakeTableDataSource<SeqTypes> for ApiState {
         &self,
     ) -> anyhow::Result<StakeTableWithEpochNumber<SeqTypes>> {
         let epoch = self.consensus().await.current_epoch().await;
+        let stake_table = match epoch {
+            Some(epoch) => self.get_da_stake_table(Some(epoch)).await?,
+            None => self
+                .genesis_stake_tables()
+                .await
+                .da_stake_table()
+                .cloned()
+                .collect(),
+        };
 
-        Ok(StakeTableWithEpochNumber {
-            epoch,
-            stake_table: self.get_da_stake_table(epoch).await?,
-        })
+        Ok(StakeTableWithEpochNumber { epoch, stake_table })
     }
 
     async fn get_block_reward(
