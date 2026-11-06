@@ -27,18 +27,18 @@ NET_HEADER = ["t_ns", "rx_bytes", "tx_bytes"]
 LEADER_PATH = (
     ("wait to propose", "request_block_header_queued"),
     ("block build", "block_built_applied"),
-    ("header", "header_created_applied"),
-    # The leaf commitment needs the parent's Cert1: this segment waits on the votes of V - 1,
+    ("parent state + header", "header_created_applied"),
+    # The proposal needs the parent's Cert1: this segment waits on the votes of V - 1,
     # it is not leader-local work.
-    ("parent Cert1 wait", "leaf2_commit_computed"),
+    ("parent Cert1 wait", "proposal_assembled"),
     ("commit + sign", "proposal_queued"),
-    ("outbox wait", "proposal_broadcast_start"),
-    ("proposal broadcast", "proposal_broadcast_end"),
+    ("persist proposal + action", "proposal_broadcast_start"),
+    ("proposal serialize + enqueue", "proposal_broadcast_end"),
     ("validate own proposal", "proposal_validated_v_minus_1"),
-    ("validated -> vote1 sent", "vote1_broadcast_start"),
-    ("collect vote1 -> Cert1", "cert1_v_minus_1_input_dispatched"),
+    ("validated -> vote1 sent", "vote1_v_minus_1_broadcast_start"),
+    ("collect vote1 -> Cert1", "cert1_v_minus_1_obtained"),
     ("Cert1 -> vote2 sent", "vote2_v_minus_1_broadcast_end"),
-    ("collect vote2 -> Cert2", "cert2_v_minus_1_input_dispatched"),
+    ("collect vote2 -> Cert2", "cert2_v_minus_1_obtained"),
     ("Cert2 -> decided", "leaf_decided"),
 )
 DECIDED = "leaf_decided"
@@ -127,9 +127,11 @@ def view_times(trace: Trace) -> dict[int, float]:
 
 def leader_path(
     trace: Trace, warmup: int = DEFAULT_WARMUP
-) -> tuple[dict[int, list[float]], Counter[str]]:
-    """View to the durations in ms of the `LEADER_PATH` segments, and the counts of views left
-    out by reason.
+) -> tuple[dict[int, list[float]], int, Counter[str]]:
+    """View to the durations in ms of the `LEADER_PATH` segments, the number of views left out,
+    and the counts of what left views out. A view without a t0 anchor counts once under
+    `no t0 anchor`; a view lacking events counts once under `missing <event>` for each absent
+    event, so the sum exceeds the number of views skipped.
 
     t0 is the previous leader's `proposal_queued`, so "wait to propose" is measured across hosts
     and includes clock skew. All other segments use the clock of the leader of V. Durations are
@@ -145,11 +147,11 @@ def leader_path(
         events = trace[lead[view][0]][view]
         absent = [event for _, event in LEADER_PATH if event not in events]
         if absent:
-            skipped[f"missing {absent[0]}"] += 1
+            skipped.update(f"missing {event}" for event in absent)
             continue
         stamps = [lead[view - 1][1], *(events[event] for _, event in LEADER_PATH)]
         path[view] = [(b - a) / NS_PER_MS for a, b in itertools.pairwise(stamps)]
-    return path, skipped
+    return path, sum(v >= warmup for v in lead) - len(path), skipped
 
 
 def cluster_finality_ms(

@@ -52,6 +52,7 @@ use crate::{
     epoch::{EpochManager, EpochRootResult},
     fetch::{Fetcher, Retry},
     helpers::{ViewEpoch, proposal_commitment, validated_state_cert},
+    leader_trace::LeaderTracerHandle,
     logging::KeyPrefix,
     message::{
         self, BlockMessage, CatchupEvidence, Certificate1, Certificate2, ConsensusMessage, Message,
@@ -205,6 +206,7 @@ where
         /// `Certificate2` of the anchor persisted on a prior run.
         anchor_cert2: Option<Certificate2<T>>,
         upgrade_config: UpgradeConfig,
+        leader_tracer: Option<LeaderTracerHandle>,
         external_tx: mpsc::UnboundedSender<OpaqueMessage<T::SignatureKey>>,
     ) -> Self {
         let mut consensus = Consensus::new(
@@ -217,6 +219,7 @@ where
             initializer.anchor_leaf().clone(),
             initializer.epoch_height(),
         );
+        consensus.set_tracer(leader_tracer.clone());
 
         let anchor_leaf = initializer.anchor_leaf();
         let anchor_view = anchor_leaf.view_number();
@@ -342,7 +345,7 @@ where
 
         let participation = ParticipationTracker::new(&membership_coordinator, anchor_epoch);
 
-        let vid_disperser = VidDisperser::new(
+        let mut vid_disperser = VidDisperser::new(
             membership_coordinator.clone(),
             network.sender().clone(),
             public_key.clone(),
@@ -353,6 +356,9 @@ where
                 .as_ref()
                 .map(|m| m.consensus.vid_disperse_duration.clone().into()),
         );
+        vid_disperser.set_tracer(leader_tracer.clone());
+        let mut vid_reconstructor = VidReconstructor::new();
+        vid_reconstructor.set_tracer(leader_tracer.clone());
 
         let lock = upgrade_lock.clone();
         let genesis_qc = consensus.cert1_at(ViewNumber::genesis()).cloned();
@@ -362,7 +368,7 @@ where
             .network(network)
             .state_manager(state_manager)
             .vid_disperser(vid_disperser)
-            .vid_reconstructor(VidReconstructor::new())
+            .vid_reconstructor(vid_reconstructor)
             .vote1_collector(VoteCollector::new(
                 membership_coordinator.clone(),
                 lock.clone(),
@@ -424,7 +430,8 @@ where
                     coordinator_metrics
                         .as_ref()
                         .map(|m| m.consensus.block_commitments_duration.clone().into()),
-                ),
+                )
+                .with_tracer(leader_tracer),
             )
             .proposal_validator(ProposalValidator::new(
                 membership_coordinator.clone(),
@@ -492,14 +499,14 @@ where
             // node cannot propose off the anchor for a later view; the
             // timeout path takes over instead.
             if let Some(parent_proposal) = self.consensus.proposal_at(cur_view).cloned() {
-                self.outbox
-                    .push_back(ConsensusOutput::RequestBlockAndHeader(
-                        BlockAndHeaderRequest {
-                            view: next_view,
-                            epoch,
-                            parent_proposal,
-                        },
-                    ));
+                self.consensus.push_block_request(
+                    BlockAndHeaderRequest {
+                        view: next_view,
+                        epoch,
+                        parent_proposal,
+                    },
+                    &mut self.outbox,
+                );
             }
         }
     }
@@ -1016,6 +1023,11 @@ where
                         .previous_proposal_to_proposal_time
                         .add_point(received_at.elapsed().as_millis() as f64);
                 }
+                crate::trace_leader_event!(
+                    self.consensus.tracer,
+                    view,
+                    crate::leader_trace::LeaderEvent::ProposalBroadcastStart
+                );
                 if let Err(err) = self.broadcast_in(
                     self.slot_for(view),
                     ConsensusMessage::Proposal(ProposalMessage::validated(proposal.clone())),
@@ -1027,6 +1039,11 @@ where
                         warn!(%node, %err, "network error while broadcasting proposal")
                     }
                 }
+                crate::trace_leader_event!(
+                    self.consensus.tracer,
+                    view,
+                    crate::leader_trace::LeaderEvent::ProposalBroadcastEnd
+                );
             },
             ConsensusOutput::SendTimeoutVote(vote, evidence) => {
                 let view = vote.view_number();
@@ -1094,11 +1111,22 @@ where
                 {
                     self.participation.leader_proposed(leader, epoch);
                 }
-                self.broadcast_in(
+                crate::trace_leader_event!(
+                    self.consensus.tracer,
+                    view,
+                    crate::leader_trace::LeaderEvent::Vote1VMinus1BroadcastStart
+                );
+                let r = self.broadcast_in(
                     self.slot_for(view),
                     ConsensusMessage::Vote1(vote1),
                     "broadcast vote1",
-                )?
+                );
+                crate::trace_leader_event!(
+                    self.consensus.tracer,
+                    view,
+                    crate::leader_trace::LeaderEvent::Vote1VMinus1BroadcastEnd
+                );
+                r?
             },
             ConsensusOutput::BroadcastVidShare(share) => {
                 let view = share.view_number();
@@ -1113,11 +1141,22 @@ where
                 let view = vote2.view_number();
                 debug!(%node, %view, "send vote2");
                 self.record_voted_view(view);
-                self.broadcast_in(
+                crate::trace_leader_event!(
+                    self.consensus.tracer,
+                    view,
+                    crate::leader_trace::LeaderEvent::Vote2VMinus1BroadcastStart
+                );
+                let r = self.broadcast_in(
                     self.slot_for(view),
                     ConsensusMessage::Vote2(vote2),
                     "broadcast vote2",
-                )?
+                );
+                crate::trace_leader_event!(
+                    self.consensus.tracer,
+                    view,
+                    crate::leader_trace::LeaderEvent::Vote2VMinus1BroadcastEnd
+                );
+                r?
             },
             ConsensusOutput::PersistBoundaryQc(qc) => {
                 debug!(%node, view = %qc.view_number(), "persist boundary qc");
@@ -1154,11 +1193,22 @@ where
                     epoch = ?cert1.epoch().map(|e| *e),
                     "send certificate1"
                 );
-                self.broadcast_in(
+                crate::trace_leader_event!(
+                    self.consensus.tracer,
+                    view,
+                    crate::leader_trace::LeaderEvent::Cert1VMinus1BroadcastStart
+                );
+                let r = self.broadcast_in(
                     self.slot_for(view),
                     ConsensusMessage::Certificate1(cert1, self.public_key.clone()),
                     "broadcast certificate1",
-                )?
+                );
+                crate::trace_leader_event!(
+                    self.consensus.tracer,
+                    view,
+                    crate::leader_trace::LeaderEvent::Cert1VMinus1BroadcastEnd
+                );
+                r?
             },
             ConsensusOutput::SendCertificate2(cert2) => {
                 let view = cert2.view_number();
@@ -1298,6 +1348,11 @@ where
     }
 
     #[cfg(test)]
+    pub(crate) fn block_builder_mut(&mut self) -> &mut BlockBuilder<T> {
+        &mut self.block_builder
+    }
+
+    #[cfg(test)]
     pub(crate) fn network(&self) -> &Cliquenet<T> {
         &self.network
     }
@@ -1434,6 +1489,11 @@ where
                         warn!(%node, %sender, %view, "vote1 is not well formed");
                         return None;
                     }
+                    crate::trace_leader_event!(
+                        self.consensus.tracer,
+                        view,
+                        crate::leader_trace::LeaderEvent::Vote1VMinus1Arrived
+                    );
                     let bn = vote1.vote.data.block_number.unwrap_or(0);
                     let epoch_height = *self.consensus.epoch_height;
                     let is_epoch_root_vote = is_epoch_root(bn, epoch_height);
