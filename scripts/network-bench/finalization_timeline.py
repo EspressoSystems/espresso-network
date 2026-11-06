@@ -13,7 +13,7 @@ skipped:
 - Encode (bench node with `--block-size` > 0): dispersal (`ns_disperse_*`), fan-out.
 
 Each leader build lane has three sub-rows: the sequential path (request queue + tx select and builder start +
-empty-block delay on the Built path, build/prep, header, parent Cert1 wait, commit + sign), the encode or dispersal bars, and
+empty-block delay on the Built path, build/prep, parent state + header, parent Cert1 wait, commit + sign), the encode or dispersal bars, and
 fan-out. Encode or dispersal and fan-out overlap in time on both paths, so they are drawn in
 parallel rows. A label that does not fit its bar goes beside, above or below it where the lane
 has room, else it is centered and overflows the bar. Bars shorter than 1 ms are not drawn.
@@ -36,7 +36,7 @@ EVENTS = {
     "payload_start": ("block_payload_start", "leader"),
     "block_built": ("block_built_applied", "leader"),
     "header_created": ("header_created_applied", "leader"),
-    "leaf2_commit": ("leaf2_commit_computed", "leader"),
+    "proposal_assembled": ("proposal_assembled", "leader"),
     "commitments_start": ("block_commitments_start", "leader"),
     "commitments_end": ("block_commitments_end", "leader"),
     "fragments_start": ("vid_fragments_start", "leader"),
@@ -50,11 +50,11 @@ EVENTS = {
     "vid_threshold_reached": ("threshold_share_reached_v_minus_1", "cluster"),
     "recover_decode_end": ("recover_v_minus_1_decode_end", "cluster"),
     "block_reconstructed": ("recover_v_minus_1_end", "cluster"),
-    "cert1_formed": ("cert1_v_minus_1_input_dispatched", "cluster"),
-    "vote2_sent": ("vote2_v_minus_1_queued", "cluster"),
-    "cert2_formed": ("cert2_v_minus_1_input_dispatched", "cluster"),
+    "cert1_formed": ("cert1_v_minus_1_obtained", "cluster"),
+    "vote2_sent": ("vote2_v_minus_1_broadcast_end", "cluster"),
+    "cert2_formed": ("cert2_v_minus_1_obtained", "cluster"),
     "leaf_decided": (DECIDED, "cluster"),
-    "cert1_at_L_V": ("cert1_v_minus_1_input_dispatched", "leader_prev"),
+    "cert1_at_L_V": ("cert1_v_minus_1_obtained", "leader_prev"),
     "leader_recover_start": ("recover_v_minus_1_start", "leader_prev"),
     "leader_recover_decode_end": ("recover_v_minus_1_decode_end", "leader_prev"),
     "verify_at_L_V": ("recover_v_minus_1_end", "leader_prev"),
@@ -66,7 +66,7 @@ BUILD_EVENTS = (
     "request_block",
     "block_built",
     "header_created",
-    "leaf2_commit",
+    "proposal_assembled",
     "vid_unicast_end",
 )
 DISPERSAL_LAYOUTS = (
@@ -239,10 +239,16 @@ def build_segments(m: Metrics) -> list[tuple[int, str, str, str, str]]:
         ),
         (1, "sign + fragments", "fragments_start", "fragments_end", SIGN_FRAGMENTS),
         (1, "dispersal", "ns_disperse_start", "ns_disperse_end", DISPERSAL),
-        (2, "fan-out", "vid_unicast_start", "vid_unicast_end", FAN_OUT),
-        (0, "header", "block_built", "header_created", HEADER),
-        (0, "parent Cert1 wait", "header_created", "leaf2_commit", CERT1_WAIT),
-        (0, "commit + sign", "leaf2_commit", "proposal_queued", COMMIT_SIGN),
+        (
+            2,
+            "fan-out (serialize + enqueue)",
+            "vid_unicast_start",
+            "vid_unicast_end",
+            FAN_OUT,
+        ),
+        (0, "parent state + header", "block_built", "header_created", HEADER),
+        (0, "parent Cert1 wait", "header_created", "proposal_assembled", CERT1_WAIT),
+        (0, "commit + sign", "proposal_assembled", "proposal_queued", COMMIT_SIGN),
     ]
     return [
         segment
@@ -875,8 +881,8 @@ LEGEND_SWATCHES = (
     ("encode + commitments", ENCODE_COMMIT),
     ("sign + fragments", SIGN_FRAGMENTS),
     ("dispersal", DISPERSAL),
-    ("fan-out", FAN_OUT),
-    ("header", HEADER),
+    ("fan-out (serialize + enqueue)", FAN_OUT),
+    ("parent state + header", HEADER),
     ("parent Cert1 wait", CERT1_WAIT),
     ("commit + sign", COMMIT_SIGN),
     ("share wait", SHARE_WAIT),

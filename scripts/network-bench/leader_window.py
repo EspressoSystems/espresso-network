@@ -20,7 +20,7 @@ from matplotlib.lines import Line2D
 
 Leaders = dict[int, tuple[int, int]]
 
-CERT1 = "cert1_v_minus_1_input_dispatched"
+CERT1 = "cert1_v_minus_1_obtained"
 
 # (start event, end event, label, cpu heavy, tier). Hatched spans burn cores and shade the CPU
 # panel; the others move bytes. Tier 1 (V-1 recovery), tier 2 (the block builder's request queue,
@@ -73,7 +73,7 @@ FRAGMENTS: Span = (
 FAN_OUT: Span = (
     "vid_shares_unicast_start",
     "vid_shares_unicast_end",
-    "fan-out",
+    "fan-out (serialize + enqueue)",
     False,
     3,
 )
@@ -101,19 +101,24 @@ SPANS = (
 MARKS = (("proposal_queued", "*", "proposal_queued"), ("leaf_decided", "D", "decided"))
 # (start event, end event, label, direction); drawn on the network panel's TX and RX rows.
 NET_SPANS = (
-    ("vid_shares_unicast_start", "vid_shares_unicast_end", "fan-out", "tx"),
-    ("proposal_broadcast_start", "proposal_broadcast_end", "proposal bcast", "tx"),
-    ("vote1_broadcast_start", "vote1_broadcast_end", "vote1 bcast (+share)", "tx"),
+    ("vid_shares_unicast_start", "vid_shares_unicast_end", "fan-out ser+enq", "tx"),
+    ("proposal_broadcast_start", "proposal_broadcast_end", "proposal ser+enq", "tx"),
+    (
+        "vote1_v_minus_1_broadcast_start",
+        "vote1_v_minus_1_broadcast_end",
+        "vote1 ser+enq",
+        "tx",
+    ),
     (
         "cert1_v_minus_1_broadcast_start",
         "cert1_v_minus_1_broadcast_end",
-        "cert1 bcast",
+        "cert1 ser+enq",
         "tx",
     ),
     (
         "vote2_v_minus_1_broadcast_start",
         "vote2_v_minus_1_broadcast_end",
-        "vote2 bcast",
+        "vote2 ser+enq",
         "tx",
     ),
     (
@@ -130,7 +135,7 @@ SPAN_COLORS = {
     "encode + commitments": "#9333ea",
     "disperse": "#2563eb",
     "sign + fragments": "#0891b2",
-    "fan-out": "#ea580c",
+    "fan-out (serialize + enqueue)": "#ea580c",
     "recover-decode": "#10b981",
     "txn-commit": "#d97706",
 }

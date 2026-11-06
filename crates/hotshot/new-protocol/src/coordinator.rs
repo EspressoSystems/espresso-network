@@ -499,14 +499,14 @@ where
             // node cannot propose off the anchor for a later view; the
             // timeout path takes over instead.
             if let Some(parent_proposal) = self.consensus.proposal_at(cur_view).cloned() {
-                self.outbox
-                    .push_back(ConsensusOutput::RequestBlockAndHeader(
-                        BlockAndHeaderRequest {
-                            view: next_view,
-                            epoch,
-                            parent_proposal,
-                        },
-                    ));
+                self.consensus.push_block_request(
+                    BlockAndHeaderRequest {
+                        view: next_view,
+                        epoch,
+                        parent_proposal,
+                    },
+                    &mut self.outbox,
+                );
             }
         }
     }
@@ -606,22 +606,12 @@ where
                     self.cert_verifiers
                         .cert1
                         .mark_completed(ViewEpoch(cert1.view_number(), cert1.epoch()));
-                    crate::trace_leader_event!(
-                        self.consensus.tracer,
-                        cert1.view_number(),
-                        crate::leader_trace::LeaderEvent::Cert1VMinus1InputDispatched
-                    );
                     return Ok(ConsensusInput::Certificate1(cert1))
                 }
                 Some(cert2) = self.vote2_collector.next() => {
                     self.cert_verifiers
                         .cert2
                         .mark_completed(ViewEpoch(cert2.view_number(), cert2.epoch()));
-                    crate::trace_leader_event!(
-                        self.consensus.tracer,
-                        cert2.view_number(),
-                        crate::leader_trace::LeaderEvent::Cert2VMinus1InputDispatched
-                    );
                     return Ok(ConsensusInput::Certificate2(cert2))
                 }
                 Some(cert1) = self.cert_verifiers.cert1.next() => {
@@ -1124,7 +1114,7 @@ where
                 crate::trace_leader_event!(
                     self.consensus.tracer,
                     view,
-                    crate::leader_trace::LeaderEvent::Vote1BroadcastStart
+                    crate::leader_trace::LeaderEvent::Vote1VMinus1BroadcastStart
                 );
                 let r = self.broadcast_in(
                     self.slot_for(view),
@@ -1134,7 +1124,7 @@ where
                 crate::trace_leader_event!(
                     self.consensus.tracer,
                     view,
-                    crate::leader_trace::LeaderEvent::Vote1BroadcastEnd
+                    crate::leader_trace::LeaderEvent::Vote1VMinus1BroadcastEnd
                 );
                 r?
             },

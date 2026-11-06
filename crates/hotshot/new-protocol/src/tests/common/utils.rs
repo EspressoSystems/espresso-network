@@ -2082,6 +2082,15 @@ impl RecordingTracer {
             .collect()
     }
 
+    /// Number of times `event` was recorded for `view`.
+    pub(crate) fn count(&self, view: u64, event: LeaderEvent) -> usize {
+        self.events
+            .lock()
+            .iter()
+            .filter(|(v, e, _)| *v == view && *e == event)
+            .count()
+    }
+
     /// Timestamp of the first recorded `event`, if any.
     pub(crate) fn ts_ns(&self, event: LeaderEvent) -> Option<i128> {
         self.events

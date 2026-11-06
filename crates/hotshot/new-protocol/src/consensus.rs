@@ -582,14 +582,28 @@ impl<T: NodeType> Consensus<T> {
     }
 
     fn insert_cert1(&mut self, cert: Certificate1<T>) {
-        self.certs1.entry(cert1_key(&cert)).or_insert(cert);
+        let view = cert.view_number();
+        if let Entry::Vacant(entry) = self.certs1.entry(cert1_key(&cert)) {
+            entry.insert(cert);
+            crate::trace_leader_event!(
+                self.tracer,
+                view,
+                crate::leader_trace::LeaderEvent::Cert1VMinus1Obtained
+            );
+        }
     }
 
     /// Insert a cert2 and return if it is new for its view and epoch.
     fn insert_cert2(&mut self, cert: Certificate2<T>) -> bool {
+        let view = cert.view_number();
         match self.certs2.entry(cert2_key(&cert)) {
             Entry::Vacant(entry) => {
                 entry.insert(cert);
+                crate::trace_leader_event!(
+                    self.tracer,
+                    view,
+                    crate::leader_trace::LeaderEvent::Cert2VMinus1Obtained
+                );
                 true
             },
             Entry::Occupied(_) => false,
@@ -1831,19 +1845,29 @@ impl<T: NodeType> Consensus<T> {
             proposal.epoch
         };
         if self.is_leader(view + 1, epoch) {
-            outbox.push_back(ConsensusOutput::RequestBlockAndHeader(
+            self.push_block_request(
                 BlockAndHeaderRequest {
                     view: view + 1,
                     epoch,
                     parent_proposal: proposal.clone(),
                 },
-            ));
-            crate::trace_leader_event!(
-                self.tracer,
-                view + 1,
-                crate::leader_trace::LeaderEvent::RequestBlockHeaderQueued
+                outbox,
             );
         }
+    }
+
+    /// Queue a block and header request, stamping when it enters the outbox.
+    pub(crate) fn push_block_request(
+        &self,
+        request: BlockAndHeaderRequest<T>,
+        outbox: &mut Outbox<ConsensusOutput<T>>,
+    ) {
+        crate::trace_leader_event!(
+            self.tracer,
+            request.view,
+            crate::leader_trace::LeaderEvent::RequestBlockHeaderQueued
+        );
+        outbox.push_back(ConsensusOutput::RequestBlockAndHeader(request));
     }
 
     /// Ask for the payload of the view every proposal we could vote for is
@@ -2609,13 +2633,14 @@ impl<T: NodeType> Consensus<T> {
 
         // Request block and header if we're the first leader of the next epoch
         if self.is_leader(next_view, next_epoch) {
-            outbox.push_back(ConsensusOutput::RequestBlockAndHeader(
+            self.push_block_request(
                 BlockAndHeaderRequest {
                     view: next_view,
                     epoch: next_epoch,
                     parent_proposal: proposal,
                 },
-            ));
+                outbox,
+            );
         }
 
         Protocol::Continue
@@ -2623,11 +2648,6 @@ impl<T: NodeType> Consensus<T> {
 
     #[instrument(level = "debug", skip_all)]
     fn maybe_propose(&mut self, view: ViewNumber, outbox: &mut Outbox<ConsensusOutput<T>>) {
-        crate::trace_leader_event!(
-            self.tracer,
-            view,
-            crate::leader_trace::LeaderEvent::MaybeProposeEntered
-        );
         if view <= self.timeout_view {
             return;
         }
@@ -2749,13 +2769,14 @@ impl<T: NodeType> Consensus<T> {
             if (view_change_evidence.is_some() || next_epoch_justify_qc.is_some())
                 && self.is_leader(view, proposal_epoch)
             {
-                outbox.push_back(ConsensusOutput::RequestBlockAndHeader(
+                self.push_block_request(
                     BlockAndHeaderRequest {
                         view,
                         epoch: proposal_epoch,
                         parent_proposal: proposal.clone(),
                     },
-                ));
+                    outbox,
+                );
             }
             debug!("no block header");
             return;
@@ -2840,7 +2861,7 @@ impl<T: NodeType> Consensus<T> {
         crate::trace_leader_event!(
             self.tracer,
             view,
-            crate::leader_trace::LeaderEvent::Leaf2CommitComputed
+            crate::leader_trace::LeaderEvent::ProposalAssembled
         );
         let signature =
             match T::SignatureKey::sign(&self.private_key, proposed_leaf.commit().as_ref()) {
@@ -2850,11 +2871,6 @@ impl<T: NodeType> Consensus<T> {
                     return;
                 },
             };
-        crate::trace_leader_event!(
-            self.tracer,
-            view,
-            crate::leader_trace::LeaderEvent::ProposalSigned
-        );
 
         let message = SignedProposal {
             data: proposal,
@@ -3779,11 +3795,6 @@ impl<T: NodeType> Consensus<T> {
                 return;
             },
         };
-        crate::trace_leader_event!(
-            self.tracer,
-            view,
-            crate::leader_trace::LeaderEvent::Vote2VMinus1Signed
-        );
         self.voted_2_views.insert(key);
         // Lock is set above and >= view; the vote waits until it is persisted.
         let required = self

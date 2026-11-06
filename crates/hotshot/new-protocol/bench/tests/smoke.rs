@@ -156,7 +156,12 @@ async fn run_benchmark(
             trace_lines.len()
         );
         // Every node votes and decides, so these fire regardless of leadership.
-        for event in ["vote2_v_minus_1_signed", "leaf_decided"] {
+        for event in [
+            "vote2_v_minus_1_queued",
+            "cert1_v_minus_1_obtained",
+            "cert2_v_minus_1_obtained",
+            "leaf_decided",
+        ] {
             assert!(
                 trace.contains(event),
                 "node {i} leader trace has no `{event}` rows"
@@ -166,8 +171,9 @@ async fn run_benchmark(
     }
 
     // Only leaders disperse. With `block_size > 0` the disperser encodes itself; with 0 the block
-    // builder serves every request, so only that path holds. The `block_request_started` and
-    // `block_payload_start` assertions hold on both runs: the startup request uses the block builder.
+    // builder serves every request, so only that path holds. The `block_request_started`,
+    // `request_block_header_queued` and `block_payload_start` assertions hold on both runs: the
+    // startup request uses the block builder.
     let traced = |event: &str| all_traces.contains(&format!(",{event},"));
     let path_events: &[&str] = if block_size > 0 {
         &["ns_disperse_start", "ns_disperse_end"]
@@ -181,6 +187,7 @@ async fn run_benchmark(
     };
     for event in path_events.iter().chain(&[
         "block_request_started",
+        "request_block_header_queued",
         "block_payload_start",
         "vid_shares_unicast_start",
         "vid_shares_unicast_end",

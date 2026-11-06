@@ -1096,8 +1096,14 @@ async fn coordinator_maker_wires_the_tracer_to_the_block_builder() {
         request_one_block(coordinator.block_builder_mut()).await,
         Some(Ok(_))
     ));
+    // Startup also records the genesis cert1 at view 0.
+    let builder_events: Vec<_> = tracer
+        .events()
+        .into_iter()
+        .filter(|(view, _)| *view == 5)
+        .collect();
     assert_eq!(
-        tracer.events(),
+        builder_events,
         [
             (5, LeaderEvent::BlockRequestStarted),
             (5, LeaderEvent::BlockPayloadStart),

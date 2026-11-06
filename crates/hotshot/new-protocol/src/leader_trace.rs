@@ -9,7 +9,7 @@ use std::{
     path::Path,
     sync::{
         Arc, Weak,
-        atomic::{AtomicBool, AtomicU64, Ordering},
+        atomic::{AtomicBool, Ordering},
     },
     thread,
     time::Duration,
@@ -25,7 +25,8 @@ pub trait LeaderTracer: Send + Sync + 'static {
     fn record(&self, view: u64, event: LeaderEvent, ts_ns: i128);
 }
 
-/// Events of the leader's V-1 to V duty, in rough order.
+/// Per-view events in rough order. Most fire on every node; the proposal and block builder events
+/// fire on the leader of the view only.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LeaderEvent {
     // V-1 events that trigger V duty.
@@ -63,6 +64,8 @@ pub enum LeaderEvent {
     // Replica work for V-1, in parallel.
     Vote1VMinus1Arrived,
     ThresholdShareReachedVMinus1,
+    /// Stamped on every attempt; with the first stamp kept, the recover span includes failed
+    /// attempts and the retry.
     RecoverVMinus1Start,
     /// Erasure decoding done; the rest until `RecoverVMinus1End` is the
     /// single-threaded `from_bytes` and transaction commitments.
@@ -70,17 +73,17 @@ pub enum LeaderEvent {
     RecoverVMinus1End,
 
     // cert1[V-1] formation; gates V's proposal.
-    Cert1VMinus1InputDispatched,
-    Vote2VMinus1Signed,
+    /// Consensus first stores cert1 of V-1, however it was formed or received.
+    Cert1VMinus1Obtained,
     Vote2VMinus1Queued,
     // cert2 formation and finality.
-    Cert2VMinus1InputDispatched,
+    /// Consensus first stores cert2 of V-1, however it was formed or received.
+    Cert2VMinus1Obtained,
     LeafDecided,
 
     // Build and sign V's proposal.
-    MaybeProposeEntered,
-    Leaf2CommitComputed,
-    ProposalSigned,
+    /// The proposal is assembled, before its commit is computed and signed.
+    ProposalAssembled,
     ProposalQueued,
 
     // Network sends of V's proposal and V-1 votes and certs.
@@ -90,8 +93,8 @@ pub enum LeaderEvent {
     Vote2VMinus1BroadcastEnd,
     Cert1VMinus1BroadcastStart,
     Cert1VMinus1BroadcastEnd,
-    Vote1BroadcastStart,
-    Vote1BroadcastEnd,
+    Vote1VMinus1BroadcastStart,
+    Vote1VMinus1BroadcastEnd,
 }
 
 impl LeaderEvent {
@@ -118,14 +121,11 @@ impl LeaderEvent {
             RecoverVMinus1Start => "recover_v_minus_1_start",
             RecoverVMinus1DecodeEnd => "recover_v_minus_1_decode_end",
             RecoverVMinus1End => "recover_v_minus_1_end",
-            Cert1VMinus1InputDispatched => "cert1_v_minus_1_input_dispatched",
-            Vote2VMinus1Signed => "vote2_v_minus_1_signed",
+            Cert1VMinus1Obtained => "cert1_v_minus_1_obtained",
             Vote2VMinus1Queued => "vote2_v_minus_1_queued",
-            Cert2VMinus1InputDispatched => "cert2_v_minus_1_input_dispatched",
+            Cert2VMinus1Obtained => "cert2_v_minus_1_obtained",
             LeafDecided => "leaf_decided",
-            MaybeProposeEntered => "maybe_propose_entered",
-            Leaf2CommitComputed => "leaf2_commit_computed",
-            ProposalSigned => "proposal_signed",
+            ProposalAssembled => "proposal_assembled",
             ProposalQueued => "proposal_queued",
             ProposalBroadcastStart => "proposal_broadcast_start",
             ProposalBroadcastEnd => "proposal_broadcast_end",
@@ -133,8 +133,8 @@ impl LeaderEvent {
             Vote2VMinus1BroadcastEnd => "vote2_v_minus_1_broadcast_end",
             Cert1VMinus1BroadcastStart => "cert1_v_minus_1_broadcast_start",
             Cert1VMinus1BroadcastEnd => "cert1_v_minus_1_broadcast_end",
-            Vote1BroadcastStart => "vote1_broadcast_start",
-            Vote1BroadcastEnd => "vote1_broadcast_end",
+            Vote1VMinus1BroadcastStart => "vote1_v_minus_1_broadcast_start",
+            Vote1VMinus1BroadcastEnd => "vote1_v_minus_1_broadcast_end",
         }
     }
 }
@@ -150,12 +150,8 @@ const FLUSH_INTERVAL: Duration = Duration::from_secs(1);
 ///
 /// A background thread flushes every second, so a SIGKILL loses at most about 1s
 /// of rows. Appends to an existing file. The first I/O error disables the tracer.
-/// `MaybeProposeEntered` fires many times per view; only the first entry of each
-/// new highest view is recorded.
 pub struct CsvLeaderTracer {
     node_id: u64,
-    /// One past the highest view recorded for `MaybeProposeEntered`.
-    propose_high_water: AtomicU64,
     shared: Arc<Shared>,
 }
 
@@ -203,11 +199,7 @@ impl CsvLeaderTracer {
             failed: AtomicBool::new(false),
         });
         spawn_flusher(Arc::downgrade(&shared))?;
-        Ok(Self {
-            node_id,
-            propose_high_water: AtomicU64::new(0),
-            shared,
-        })
+        Ok(Self { node_id, shared })
     }
 }
 
@@ -229,14 +221,6 @@ fn spawn_flusher(shared: Weak<Shared>) -> io::Result<()> {
 impl LeaderTracer for CsvLeaderTracer {
     fn record(&self, view: u64, event: LeaderEvent, ts_ns: i128) {
         if self.shared.failed.load(Ordering::Relaxed) {
-            return;
-        }
-        if event == LeaderEvent::MaybeProposeEntered
-            && self
-                .propose_high_water
-                .fetch_max(view.saturating_add(1), Ordering::Relaxed)
-                > view
-        {
             return;
         }
         let row = format!("{view},{},{},{ts_ns}\n", self.node_id, event.name());
@@ -294,24 +278,6 @@ mod tests {
             assert!(Instant::now() < deadline, "row not flushed within 10s");
             thread::sleep(Duration::from_millis(20));
         }
-    }
-
-    #[test]
-    fn maybe_propose_entered_recorded_once_per_view() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("trace.csv");
-        let tracer = CsvLeaderTracer::new(0, &path).unwrap();
-        for (ts, view) in [5, 6, 5, 6, 6, 7].into_iter().enumerate() {
-            tracer.record(view, LeaderEvent::MaybeProposeEntered, ts as i128);
-        }
-        drop(tracer);
-        assert_eq!(
-            fs::read_to_string(&path).unwrap(),
-            format!(
-                "{HEADER}5,0,maybe_propose_entered,0\n6,0,maybe_propose_entered,1\n7,0,\
-                 maybe_propose_entered,5\n"
-            )
-        );
     }
 
     #[test]

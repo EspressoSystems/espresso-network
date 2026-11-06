@@ -343,11 +343,13 @@ impl<T: NodeType> VidReconstructor<T> {
                 metadata,
                 tracer.clone(),
             );
-            crate::trace_leader_event!(
-                tracer,
-                view,
-                crate::leader_trace::LeaderEvent::RecoverVMinus1End
-            );
+            if result.is_ok() {
+                crate::trace_leader_event!(
+                    tracer,
+                    view,
+                    crate::leader_trace::LeaderEvent::RecoverVMinus1End
+                );
+            }
             result
         });
         self.calculations.insert(view, task);

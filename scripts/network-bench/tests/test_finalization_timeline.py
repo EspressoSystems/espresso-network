@@ -18,7 +18,7 @@ def timeline_trace(layout: str) -> Trace:
         "request_block_header_queued": 940 * MS,
         "block_built_applied": 960 * MS,
         "header_created_applied": 962 * MS,
-        "leaf2_commit_computed": 997 * MS,
+        "proposal_assembled": 997 * MS,
         "vid_shares_unicast_start": 975 * MS,
         "vid_shares_unicast_end": 985 * MS,
     }
@@ -34,7 +34,7 @@ def timeline_trace(layout: str) -> Trace:
     else:
         leader |= {"ns_disperse_start": 960 * MS, "ns_disperse_end": 970 * MS}
     trace[0][1] = leader
-    trace[0][0] = {"cert1_v_minus_1_input_dispatched": 1005 * MS}
+    trace[0][0] = {"cert1_v_minus_1_obtained": 1005 * MS}
     for node, offset in enumerate((10, 20, 30)):
         trace[node].setdefault(1, {})["proposal_validated_v_minus_1"] = (
             1000 + offset
@@ -101,8 +101,8 @@ def test_metrics_need_views():
                 (0, "build/prep"),
                 (1, "encode + commitments"),
                 (1, "sign + fragments"),
-                (2, "fan-out"),
-                (0, "header"),
+                (2, "fan-out (serialize + enqueue)"),
+                (0, "parent state + header"),
                 (0, "parent Cert1 wait"),
                 (0, "commit + sign"),
             ],
@@ -112,8 +112,8 @@ def test_metrics_need_views():
             [
                 (0, "build/prep"),
                 (1, "dispersal"),
-                (2, "fan-out"),
-                (0, "header"),
+                (2, "fan-out (serialize + enqueue)"),
+                (0, "parent state + header"),
                 (0, "parent Cert1 wait"),
                 (0, "commit + sign"),
             ],
@@ -131,7 +131,7 @@ def test_build_segments_follow_the_path_of_the_trace(
 def test_build_segments_header_follows_block_built_and_ends_at_the_proposal():
     m = ft.timeline_metrics(ft.view_rows(timeline_trace("built"), [1]))
     by_label = {label: (start, end) for _, label, start, end, _ in ft.build_segments(m)}
-    assert by_label["header"] == ("block_built", "header_created")
+    assert by_label["parent state + header"] == ("block_built", "header_created")
     assert by_label["commit + sign"][1] == "proposal_queued"
     assert m["proposal_queued"] == 0
 
@@ -190,7 +190,7 @@ def test_bar_places_labels_that_do_not_fit_and_never_drops_them():
 
 def test_build_bars_skip_bars_shorter_than_1_ms():
     trace = timeline_trace("built")
-    trace[0][1]["leaf2_commit_computed"] = 999_800_000
+    trace[0][1]["proposal_assembled"] = 999_800_000
     m = ft.timeline_metrics(ft.view_rows(trace, [1]))
     f = ft.Frame.of(m)
     assert "commit + sign" not in ft.build_bars(m, f, 0.0, "L_V")
@@ -204,7 +204,7 @@ def test_svg_parses_and_labels_the_encode_bars_and_finality(tmp_path: Path):
     assert root.tag.endswith("svg")
     text = out.read_text(encoding="utf-8")
     assert "dispersal 10" in text
-    assert "fan-out 10" in text
+    assert "fan-out (serialize + enqueue) 10" in text
     assert "share-sign" not in text
     assert "collect vote1 + Cert1  (205 ms)" in text
     assert "per-view cycle = 200 ms" in text
@@ -224,7 +224,7 @@ def build_row(layout: str = "built", **overrides: float | None) -> ft.ViewRow:
     row: ft.ViewRow = dict.fromkeys(ft.EVENTS)
     row |= {"cycle": 100.0, "request_block": -50.0, "block_built": -40.0}
     row |= {"vid_unicast_start": -20.0, "vid_unicast_end": -10.0}
-    row |= {"header_created": -35.0, "leaf2_commit": -5.0}
+    row |= {"header_created": -35.0, "proposal_assembled": -5.0}
     if layout == "built":
         row |= {"request_started": -49.5, "payload_start": -49.0}
         row |= {"commitments_start": -48.0, "commitments_end": -42.0}

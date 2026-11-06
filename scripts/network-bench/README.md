@@ -515,8 +515,18 @@ just bench aws run --tag release-x --leader-trace
     - Files are block-buffered; the last rows reach disk when the buffer fills or the agent stops.
   - `node_id` in the file name and rows is the orchestrator-assigned node index, not the host number; the host is the
     directory it was collected from. Per-view plots name both.
-  - `parent Cert1 wait` (header created until the leaf commitment): `maybe_propose` waits for the parent's Cert1, not
+  - `parent Cert1 wait` (header created until `proposal_assembled`): the proposal waits for the parent's Cert1, not
     leader-local work.
+  - `parent state + header` includes the wait for the parent's validated state on the Built path (espresso-node). On the
+    bench Encode path the header is built right after the block and the segment is near 0.
+  - `persist proposal + action` (`proposal_queued` until `proposal_broadcast_start`): `append_proposal`, `append_da` of the
+    payload and the recorded action, before the proposal is released.
+  - `proposal serialize + enqueue`, `fan-out (serialize + enqueue)` and the TX-row bars of
+    `leader_window.png` (`ser+enq`) measure serialization and enqueue onto the network channel, not wire time.
+  - `cert1_v_minus_1_obtained` and `cert2_v_minus_1_obtained` are stamped when the node first holds the certificate, whether
+    from its own tally, a relay or the next proposal. `request_block_header_queued` is stamped on every block request path.
+  - `trace-plots` skip a view for a missing event; `stats.json` `leader_path.skipped` counts every absent event of the view
+    (`missing <event>`), so its sum can exceed the number of views skipped.
   - `trace-plots RUN_DIR` (uv script, matplotlib; also run by `render`) writes `trace/leader_path.png`,
     `trace/leader_path_typical.png`, `trace/leader_path_worst.png`, `trace/finality.png`, `trace/stats.json`,
     `trace/leader_path.md` (segment medians per load step), `trace/timeline.svg` (median finalization timeline of one
@@ -543,7 +553,7 @@ just bench aws run --tag release-x --leader-trace
     | encode + commitments | `block_commitments_start` .. `block_commitments_end` | Built; tier 2 in `leader_window.png`, timeline row 1 |
     | sign + fragments | `vid_fragments_start` .. `vid_fragments_end` | Built; timeline row 1 |
     | disperse (timeline: dispersal) | `ns_disperse_start` .. `ns_disperse_end` | Encode; timeline row 1 |
-    | fan-out | `vid_shares_unicast_start` .. `vid_shares_unicast_end` | both; overlaps the span before it with several buckets; tier 3 in `leader_window.png`, timeline row 2 |
+    | fan-out (serialize + enqueue) | `vid_shares_unicast_start` .. `vid_shares_unicast_end` | both; overlaps the span before it with several buckets; tier 3 in `leader_window.png`, timeline row 2 |
 
   - `leader_window.png` also draws `sign + fragments` (Built) and `disperse` (Encode). Hatched spans are CPU heavy; encode + commitments is not hatched, the CPU panel shows its load.
 

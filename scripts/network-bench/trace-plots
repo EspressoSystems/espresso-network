@@ -67,7 +67,7 @@ def main(argv: list[str]) -> None:
     if not paths:
         sys.exit(f"no leader_trace_node*.csv under {args.run_dir}/{TRACE_GLOB}")
     trace = leadertrace.read_traces(paths)
-    path, skipped = leadertrace.leader_path(trace, args.warmup)
+    path, skipped_views, skipped = leadertrace.leader_path(trace, args.warmup)
     if not path:
         sys.exit(
             f"no views to plot after warmup {args.warmup}; skipped: {dict(skipped)}"
@@ -92,7 +92,9 @@ def main(argv: list[str]) -> None:
     plt.rcParams.update({"font.size": FONT})
     views = np.array(list(path))
     data = np.array(list(path.values()))
-    plot_aggregate(views, data, stats, len(trace), skipped, out / "leader_path.png")
+    plot_aggregate(
+        views, data, stats, len(trace), skipped_views, out / "leader_path.png"
+    )
     leaders = leadertrace.leaders(trace)
     hosts = trace_hosts(paths)
     rows = dict(zip(path, data, strict=True))
@@ -286,7 +288,7 @@ def plot_aggregate(
     data: np.ndarray,
     stats: dict,
     nodes: int,
-    skipped: Counter[str],
+    skipped_views: int,
     path: Path,
 ) -> None:
     fig, (top, bottom) = plt.subplots(
@@ -317,7 +319,7 @@ def plot_aggregate(
     bottom.legend(loc="center left", bbox_to_anchor=(1.005, 0.5))
     fig.suptitle(
         f"Leader critical path: {nodes} nodes, views {views.min()}-{views.max()}, "
-        f"{len(views)} used, {sum(skipped.values())} skipped (median / p95)",
+        f"{len(views)} used, {skipped_views} skipped (median / p95)",
         fontsize=16,
     )
     fig.tight_layout(rect=(0, 0, 1, 0.97))

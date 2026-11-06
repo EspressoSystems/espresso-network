@@ -46,7 +46,7 @@ def test_view_spans_of_a_built_view():
         "builder start + empty-block delay",
         "encode + commitments",
         "sign + fragments",
-        "fan-out",
+        "fan-out (serialize + enqueue)",
     ]
 
 

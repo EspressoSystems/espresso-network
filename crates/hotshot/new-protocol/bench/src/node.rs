@@ -67,7 +67,7 @@ pub async fn run(cfg: NodeConfig) -> Result<()> {
         network,
         client,
         &cfg,
-        tracer.clone(),
+        tracer,
     )
     .await;
 
@@ -326,13 +326,6 @@ async fn run_instrumented(mut coordinator: BenchCoordinator, cfg: &NodeConfig) -
                     block.metadata,
                     version,
                 );
-                let header_input = ConsensusInput::HeaderCreated(
-                    req.view,
-                    proposal_commitment(&req.parent_proposal),
-                    header,
-                );
-                metrics.on_input(&header_input);
-                coordinator.apply_consensus(header_input);
                 let block_input = ConsensusInput::BlockBuilt {
                     view: req.view,
                     epoch: req.epoch,
@@ -342,6 +335,13 @@ async fn run_instrumented(mut coordinator: BenchCoordinator, cfg: &NodeConfig) -
                 };
                 metrics.on_input(&block_input);
                 coordinator.apply_consensus(block_input);
+                let header_input = ConsensusInput::HeaderCreated(
+                    req.view,
+                    proposal_commitment(&req.parent_proposal),
+                    header,
+                );
+                metrics.on_input(&header_input);
+                coordinator.apply_consensus(header_input);
                 continue; // skip process_consensus_output for this one
             }
 
