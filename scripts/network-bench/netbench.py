@@ -7,6 +7,7 @@ by the AWS driver and its agents.
 import argparse
 import asyncio
 import base64
+import bisect
 import contextlib
 import dataclasses
 import functools
@@ -2529,7 +2530,7 @@ def consensus_latencies(
     out and no scan found counts at most its timeout: that it missed it is all that is known."""
     t0, t1 = step["t_mid"], step["t_end"]
     on_validator = {h["height"]: h["validator"] for h in heights}
-    undecided = undecided_until(heights, now)
+    unscanned = unscanned_decided(heights, now)
     known, unknown = [], 0
     for tx in txs:
         if not t0 <= tx["t_submit"] <= t1:
@@ -2538,7 +2539,7 @@ def consensus_latencies(
         if seen is not None:
             known.append((seen - tx["t_submit"]) * 1000)
             continue
-        until = undecided
+        until = undecided_until(unscanned, tx["t_submit"], now)
         if tx["status"] == "timeout":
             until = min(until, tx["t_submit"] + cfg.tx_timeout_s)
         if (until - tx["t_submit"]) * 1000 > cfg.latency_target_ms:
@@ -2548,16 +2549,23 @@ def consensus_latencies(
     return known, unknown
 
 
-def undecided_until(heights: Sequence[Mapping[str, Any]], now: float) -> float:
-    """Until when a transaction the payload scans have not matched is known to be undecided.
-    It is in none of the heights below the lowest one whose scan had not finished at `now`,
-    so it was decided when that height reached a validator or later. `now` when the scans
-    bound nothing: every height scanned, or that height on no validator yet."""
-    unscanned = [h for h in heights if h["scanned"] is None or h["scanned"] > now]
-    if not unscanned:
-        return now
-    seen = min(unscanned, key=lambda h: h["height"])["validator"]
-    return now if seen is None else min(seen, now)
+def unscanned_decided(heights: Sequence[Mapping[str, Any]], now: float) -> list[float]:
+    """Sorted, when each height whose payload scan had not finished at `now` reached a
+    validator; heights on no validator yet are left out."""
+    return sorted(
+        h["validator"]
+        for h in heights
+        if (h["scanned"] is None or h["scanned"] > now) and h["validator"] is not None
+    )
+
+
+def undecided_until(unscanned: Sequence[float], t_submit: float, now: float) -> float:
+    """Until when a transaction sent at `t_submit` that the payload scans have not matched is
+    known to be undecided. It is in an unscanned height, or one not shown yet, decided after
+    it was sent, so the first of `unscanned` (see `unscanned_decided`) at or after
+    `t_submit` bounds it. `now` when none does."""
+    i = bisect.bisect_left(unscanned, t_submit)
+    return min(unscanned[i], now) if i < len(unscanned) else now
 
 
 def submit_measures(

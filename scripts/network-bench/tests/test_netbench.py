@@ -3575,3 +3575,46 @@ def test_a_late_find_does_not_make_the_progress_timeouts_negative(
     ]
     assert tx.status == "included"
     assert timed_out == [1, 0]
+
+
+# Fixes from the second review of #5493.
+
+LATENCY_P50_RULE = "consensus latency p50"
+
+
+def test_a_stall_after_the_newest_unscanned_height_does_not_hide_the_latency():
+    """Consensus stalls after height 149, decided at 15.1; the scans have finished every
+    height below it, and the payload lag keeps 149 unscanned. The txs sent from 15.2 on
+    cannot be in it, so at 30 they count their time so far and fail the latency rule."""
+    txs = [
+        {"t_submit": i / 10, "height": i, "status": "included"}
+        if i < 149
+        else unmatched(i / 10)
+        for i in range(300)
+    ]
+    heights = [
+        height_record(i, i / 10 + 0.2, i / 10 + 0.5 if i < 149 else None)
+        for i in range(150)
+    ]
+    counters = [
+        {"ts": float(t), "decided_bytes": 10e6 * min(t, 15.1), "timeouts": 0}
+        for t in range(31)
+    ]
+    m = netbench.step_measures(
+        step_window(), netbench.BenchConfig(), txs, heights, counters, 30.0
+    )
+    assert [r for r in fails(m)[0] if r.startswith(LATENCY_P50_RULE)]
+    assert some(m["consensus_latency_ms"])["p50"] > 1000.0
+
+
+def test_an_unscanned_height_decided_before_a_tx_was_sent_does_not_bound_it():
+    """Unscanned heights decided at 18 and 25: the tx sent at 20 cannot be in the first,
+    so the second bounds it, and it counts 5000 ms at 100."""
+    heights = [
+        height_record(0, 17.0, 17.5),
+        height_record(1, 18.0, None),
+        height_record(2, 25.0, None),
+    ]
+    latency = consensus_latency([unmatched(20.0)], heights, 100.0)
+    assert samples(latency) == 1
+    assert some(latency)["p50"] == pytest.approx(5000.0)

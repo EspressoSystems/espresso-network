@@ -752,9 +752,9 @@ Each step is judged over its second half. A step stopped early is judged over it
 - Early stop (not with `--keep-going`): from 10 s into a step, decided < 80% of submitted over the last 10 s stops the
   step, which fails on the decided rule.
 - Without `--keep-going` the ramp stops at the first failing step, then runs one refine step halfway back.
-- A tx not yet matched to a block counts as late only as far as the scans prove: until the lowest height whose scan is
-  not finished reached a validator, or until now when every height is scanned. A tx that timed out and was never found
-  counts at most its timeout.
+- A tx not yet matched to a block counts as late only as far as the scans prove: until the first height decided after it
+  was sent whose scan is not finished reached a validator, or until now when there is none. A tx that timed out and was
+  never found counts at most its timeout.
 - Two verdicts per step. At the step's end the ramp and the search judge it on what they know then, steer by it and log
   it in `driver.log` and `steps.json`. `result.json` and the summary judge consensus latency and query lag again on the
   final `load.jsonl`, `heights.jsonl` and `consensus.jsonl`, as of the last time the run recorded anything. The two can
