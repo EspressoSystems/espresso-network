@@ -23,6 +23,49 @@ use vbs::{BinarySerializer, Serializer, version::StaticVersion};
 
 type Ver01 = StaticVersion<0, 1>;
 
+#[tokio::test]
+async fn healthcheck_deadline_covers_stalled_responses() {
+    let url = spawn_server(Router::new().route(
+        "/healthcheck",
+        get(|| async { std::future::pending::<axum::http::StatusCode>().await }),
+    ))
+    .await;
+    let client = Client::<ClientErr, Ver01>::new(url);
+    let deadline = Some(Duration::from_millis(50));
+    assert!(matches!(
+        tokio::time::timeout(Duration::from_secs(2), client.connect(deadline)).await,
+        Ok(false)
+    ));
+    assert!(matches!(
+        tokio::time::timeout(
+            Duration::from_secs(2),
+            client.wait_for_health::<HealthStatus>(|_| true, deadline)
+        )
+        .await,
+        Ok(None)
+    ));
+}
+
+#[tokio::test]
+async fn healthcheck_deadline_covers_retry_sleep() {
+    let url = spawn_server(Router::new().route(
+        "/healthcheck",
+        get(|| async { axum::http::StatusCode::SERVICE_UNAVAILABLE }),
+    ))
+    .await;
+    let client = Client::<ClientErr, Ver01>::builder(url)
+        .set_retry_interval(Duration::from_secs(5))
+        .build();
+    assert!(matches!(
+        tokio::time::timeout(
+            Duration::from_secs(2),
+            client.connect(Some(Duration::from_millis(50)))
+        )
+        .await,
+        Ok(false)
+    ));
+}
+
 async fn spawn_server(app: Router) -> url::Url {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
