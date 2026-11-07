@@ -360,6 +360,13 @@ pub struct Options {
     #[clap(long, env = "ESPRESSO_NODE_IS_DA", action)]
     pub is_da: bool,
 
+    /// The stake this node registers with the orchestrator.
+    ///
+    /// Only networks bootstrapped from the orchestrator, with no L1 stake table, take their stake
+    /// from here. VID share sizes, leader selection and vote thresholds all weigh it.
+    #[clap(long, env = "ESPRESSO_NODE_STAKE_VALUE", default_value = "1")]
+    pub stake_value: u64,
+
     /// Peer nodes use to fetch missing state
     #[clap(long, env = "ESPRESSO_NODE_STATE_PEERS", value_delimiter = ',')]
     #[derivative(Debug(format_with = "fmt_urls"))]

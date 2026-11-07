@@ -9,11 +9,16 @@
 | `--consensus-storage journal`                    | bench                        |
 | `ESPRESSO_NODE_BLOB_DIR=/payload`                | bench                        |
 | `ESPRESSO_BENCH_BLAKE3_TX_HASH=1`                | bench                        |
+| `ESPRESSO_NODE_STAKE_VALUE=N` (per node)         | bench                        |
 | `--query-engine sqlite`                          | main                         |
 | `EXPERIMENTAL_SQLITE_PRAGMAS=synchronous=normal` | bench                        |
 | `GLIBC_TUNABLES=glibc.malloc.hugetlb=1`          | main                         |
 | `--allocator NAME`                               | `build-allocators.yml` image |
 | `--prune [RETENTION]`                            | main                         |
+
+`ESPRESSO_NODE_STAKE_VALUE` is the stake a node registers with the orchestrator; the harness's `--stake` sets it
+per node. Share sizes, vote thresholds and leader frequency follow it, and VID uses the raw stakes as shard
+counts while the total stays at or below 1000.
 
 With `--query-engine sqlite`, `--query-db volume` keeps SQLite and payloads off the root disk the journal uses; `tmpfs`
 drops SQLite disk I/O entirely (needs `ESPRESSO_NODE_BLOB_DIR`). `EXPERIMENTAL_SQLITE_PRAGMAS` takes comma-separated
