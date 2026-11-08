@@ -25,7 +25,7 @@
     - after a timeout, a vote1 checks the parent against the certificate's lock
     - locks are ordered by epoch, then view
   - an epoch's last block without a `Certificate2` is committed by a re-vote (`ReVote`) at a later view; the next
-    epoch's first block names the block's own `Certificate1`, persisted as `boundary_qc2` (migration `V1506`)
+    epoch's first block names the block's own `Certificate1`, persisted as `boundary_qc2` (migration `V1602`)
 
 What a network runs: `base_version` and `upgrade_version` in `data/genesis/<network>.toml`. Live confirmation is
 `consensus_genesis{base_version,upgrade_version}` from `/v1/status/metrics`, see `doc/agents/live-chains.md`.
