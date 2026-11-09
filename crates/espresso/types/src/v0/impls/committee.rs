@@ -2865,31 +2865,6 @@ mod tests {
         assert_genesis_da_committee(&committees.genesis_stake_tables(), &staked);
     }
 
-    // Views before epochs were enabled were led in turn by the staked genesis
-    // members, in genesis order, whatever their stake. Epochs pick leaders at
-    // random instead.
-    #[rstest]
-    #[case::genesis(1)]
-    #[case::later(5)]
-    #[case::mainnet(275)]
-    #[tokio::test]
-    async fn genesis_stake_tables_leaders_rotate_round_robin(#[case] first_epoch: u64) {
-        let first_epoch = EpochNumber::new(first_epoch);
-        let (all, staked) = unordered_genesis_members();
-        let committees =
-            EpochCommittees::new(all.clone(), all, None, Fetcher::mock(), 100u64, first_epoch);
-        let genesis = committees.genesis_stake_tables();
-
-        for view in 0..64 {
-            let expected =
-                PubKey::public_key(&staked[view as usize % staked.len()].stake_table_entry);
-            let leader = genesis
-                .leader(ViewNumber::new(view))
-                .unwrap_or_else(|err| panic!("view {view}: no genesis leader: {err}"));
-            assert_eq!(leader, expected, "view {view}: genesis leader");
-        }
-    }
-
     // VID shares and the light client stake table commitment depend on the
     // order of the stake table.
     #[rstest]
@@ -2987,42 +2962,9 @@ mod tests {
         assert_eq!(da, staked, "genesis DA committee");
     }
 
-    // Without a staked member, the first epoch has no leader, so the views
-    // before it must not have one either.
-    #[rstest]
-    #[case::empty_from_genesis(0, EpochNumber::genesis())]
-    #[case::empty_from_later(0, EpochNumber::new(5))]
-    #[case::zero_stake_from_genesis(3, EpochNumber::genesis())]
-    #[case::zero_stake_from_later(3, EpochNumber::new(5))]
-    #[tokio::test]
-    async fn genesis_stake_tables_leader_errors_without_staked_members(
-        #[case] members: u64,
-        #[case] first_epoch: EpochNumber,
-    ) {
-        let members = unstaked_members(members);
-        let committees = EpochCommittees::new(
-            members.clone(),
-            members,
-            None,
-            Fetcher::mock(),
-            100u64,
-            first_epoch,
-        );
-        let genesis = committees.genesis_stake_tables();
-
-        for view in [0, 1, 7, 1000] {
-            let result = genesis.leader(ViewNumber::new(view));
-            assert!(
-                result.is_err(),
-                "view {view}: expected an error from the genesis tables, got {result:?}"
-            );
-        }
-    }
-
     /// Asserts that every read of the genesis stake table gives the same
     /// answer as the snapshot of `first_epoch`. `members` are the keys to
-    /// check `stake` and `has_stake` for, next to one key that is not a
-    /// member.
+    /// check `stake` for, next to one key that is not a member.
     fn assert_genesis_reads_first_epoch(
         committees: &EpochCommittees,
         first_epoch: EpochNumber,
@@ -3037,21 +2979,6 @@ mod tests {
         let genesis_table: Vec<_> = genesis.stake_table().cloned().collect();
         let first_table: Vec<_> = first.stake_table().cloned().collect();
         assert_eq!(genesis_table, first_table, "{context}: stake table");
-        let genesis_members: std::collections::HashSet<PubKey> =
-            genesis.committee_members().copied().collect();
-        let first_members: std::collections::HashSet<PubKey> = first
-            .committee_members(ViewNumber::new(0))
-            .copied()
-            .collect();
-        assert_eq!(
-            genesis_members, first_members,
-            "{context}: committee members"
-        );
-        assert_eq!(
-            genesis.total_nodes(),
-            first.total_nodes(),
-            "{context}: total nodes"
-        );
         assert_eq!(
             genesis.success_threshold(),
             first.success_threshold(),
@@ -3063,43 +2990,16 @@ mod tests {
             let key = PubKey::public_key(&member.stake_table_entry);
             let stake = genesis.stake(&key);
             assert_eq!(stake, first.stake(&key), "{context}: stake({key})");
-            let has_stake = genesis.has_stake(&key);
-            assert_eq!(
-                has_stake,
-                first.has_stake(&key),
-                "{context}: has_stake({key})"
-            );
         }
     }
 
-    /// Asserts that every read of the genesis DA committee gives `expected`,
-    /// in order, and nothing else.
+    /// Asserts that the genesis DA stake table is `expected`, in order.
     fn assert_genesis_da_committee(
         genesis: &GenesisStakeTables<SeqTypes>,
         expected: &[PeerConfig<SeqTypes>],
     ) {
         let da: Vec<_> = genesis.da_stake_table().cloned().collect();
         assert_eq!(da, expected, "genesis DA stake table");
-        assert_eq!(
-            genesis.da_total_nodes(),
-            expected.len(),
-            "genesis DA total nodes"
-        );
-        let members: std::collections::HashSet<PubKey> =
-            genesis.da_committee_members().copied().collect();
-        assert_eq!(members, keys_of(expected), "genesis DA committee members");
-
-        for peer in expected {
-            let key = PubKey::public_key(&peer.stake_table_entry);
-            let da_stake = genesis.da_stake(&key);
-            assert_eq!(da_stake.as_ref(), Some(peer), "genesis da_stake({key})");
-            assert!(genesis.has_da_stake(&key), "genesis has_da_stake({key})");
-        }
-        let outsider = PubKey::public_key(&peer(99, 0, 100).stake_table_entry);
-        assert!(
-            !genesis.has_da_stake(&outsider),
-            "genesis has_da_stake of a key outside the DA committee"
-        );
     }
 
     /// Asserts that every read of the DA committee of the snapshot of `epoch`

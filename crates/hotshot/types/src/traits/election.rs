@@ -155,25 +155,16 @@ pub trait MembershipSnapshot<T: NodeType>: Clone + Send + Sync {
 
 /// The stake tables of views before the first epoch, when epochs were not
 /// enabled yet: the genesis stake table and the genesis DA committee.
-///
-/// The members of the stake table take turns as leader, in order, whatever
-/// their stake. Epochs pick leaders at random instead.
 #[derive(Debug)]
 pub struct GenesisStakeTables<T: NodeType> {
     stake_table: Vec<PeerConfig<T>>,
     da_stake_table: Vec<PeerConfig<T>>,
-    /// The keys of `stake_table`, in the same order.
-    committee_members: Vec<T::SignatureKey>,
-    /// The keys of `da_stake_table`, in the same order.
-    da_committee_members: Vec<T::SignatureKey>,
 }
 
 impl<T: NodeType> GenesisStakeTables<T> {
     /// Keeps both tables as given, in order.
     pub fn new(stake_table: Vec<PeerConfig<T>>, da_stake_table: Vec<PeerConfig<T>>) -> Self {
         Self {
-            committee_members: keys(&stake_table),
-            da_committee_members: keys(&da_stake_table),
             stake_table,
             da_stake_table,
         }
@@ -187,95 +178,22 @@ impl<T: NodeType> GenesisStakeTables<T> {
         self.da_stake_table.iter()
     }
 
-    pub fn committee_members(&self) -> impl ExactSizeIterator<Item = &T::SignatureKey> + Send + '_ {
-        self.committee_members.iter()
-    }
-
-    pub fn da_committee_members(
-        &self,
-    ) -> impl ExactSizeIterator<Item = &T::SignatureKey> + Send + '_ {
-        self.da_committee_members.iter()
-    }
-
+    /// The first entry of the stake table for `key`.
     pub fn stake(&self, key: &T::SignatureKey) -> Option<PeerConfig<T>> {
-        entry(&self.committee_members, &self.stake_table, key)
-    }
-
-    pub fn da_stake(&self, key: &T::SignatureKey) -> Option<PeerConfig<T>> {
-        entry(&self.da_committee_members, &self.da_stake_table, key)
-    }
-
-    pub fn has_stake(&self, key: &T::SignatureKey) -> bool {
-        self.stake(key)
-            .is_some_and(|p| p.stake_table_entry.stake() > U256::ZERO)
-    }
-
-    pub fn has_da_stake(&self, key: &T::SignatureKey) -> bool {
-        self.da_stake(key)
-            .is_some_and(|p| p.stake_table_entry.stake() > U256::ZERO)
-    }
-
-    /// The leader for `view`.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the stake table is empty.
-    pub fn leader(&self, view: ViewNumber) -> anytrace::Result<T::SignatureKey> {
-        if self.committee_members.is_empty() {
-            return Err(anytrace::info!(
-                "Failed to get leader for view {view}: the genesis stake table is empty"
-            ));
-        }
-        let index = *view as usize % self.committee_members.len();
-        Ok(self.committee_members[index].clone())
-    }
-
-    pub fn total_nodes(&self) -> usize {
-        self.stake_table.len()
-    }
-
-    pub fn da_total_nodes(&self) -> usize {
-        self.da_stake_table.len()
+        self.stake_table
+            .iter()
+            .find(|p| p.stake_table_entry.public_key() == *key)
+            .cloned()
     }
 
     pub fn success_threshold(&self) -> U256 {
-        supermajority_threshold(total_stake(&self.stake_table))
+        supermajority_threshold(
+            self.stake_table
+                .iter()
+                .map(|p| p.stake_table_entry.stake())
+                .sum(),
+        )
     }
-
-    pub fn da_success_threshold(&self) -> U256 {
-        supermajority_threshold(total_stake(&self.da_stake_table))
-    }
-
-    pub fn failure_threshold(&self) -> U256 {
-        one_honest_threshold(total_stake(&self.stake_table))
-    }
-
-    pub fn upgrade_threshold(&self) -> U256 {
-        upgrade_threshold(total_stake(&self.stake_table))
-    }
-}
-
-fn keys<T: NodeType>(table: &[PeerConfig<T>]) -> Vec<T::SignatureKey> {
-    table
-        .iter()
-        .map(|p| p.stake_table_entry.public_key())
-        .collect()
-}
-
-/// The entry of `table` for `key`, where `keys` are the keys of `table`.
-fn entry<T: NodeType>(
-    keys: &[T::SignatureKey],
-    table: &[PeerConfig<T>],
-    key: &T::SignatureKey,
-) -> Option<PeerConfig<T>> {
-    let index = keys.iter().position(|k| k == key)?;
-    Some(table[index].clone())
-}
-
-fn total_stake<T: NodeType>(table: &[PeerConfig<T>]) -> U256 {
-    table
-        .iter()
-        .fold(U256::ZERO, |acc, p| acc + p.stake_table_entry.stake())
 }
 
 /// A protocol for determining membership in and participating in a committee.
