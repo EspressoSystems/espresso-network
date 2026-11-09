@@ -28,16 +28,29 @@ test = false
 doc = false
 bench = false
 
+[[bin]]
+name = "stake_table_events"
+path = "fuzz_targets/stake_table_events.rs"
+test = false
+doc = false
+bench = false
+
 [dependencies]
+alloy = { workspace = true }
 arbitrary = { version = "1", features = ["derive"] }
 bincode = { workspace = true }
+committable = { workspace = true }
 espresso-types = { workspace = true }
+hotshot-contract-adapter = { workspace = true }
 hotshot-query-service-types = { workspace = true }
 hotshot-types = { workspace = true }
 jf-advz = { workspace = true }
 libfuzzer-sys = "0.4"
+rand = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+vbs = { workspace = true }
+versions = { workspace = true }
 vid = { workspace = true }
 
 [lints]
