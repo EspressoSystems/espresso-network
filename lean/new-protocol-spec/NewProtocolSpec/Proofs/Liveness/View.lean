@@ -233,7 +233,7 @@ theorem late_vote1 {k : PubKey} {hk : C.Honest k} {i : Nat} {v : Vote1}
   have hE := late_inEpoch hs hst hkE (late_vote_time hi he hl)
   rcases hcase with ⟨sender, p, vid, hrec, hlead, hfor, hnb⟩ | ⟨sender, r, hrec, hlead, hfor, hnb⟩
   · -- The vote1 is for this proposal, which the signing rules checked.
-    rcases hjust with ⟨s0, p0, vid0, hrec0, hwf0, -, -, hopen0, hfor0⟩ | ⟨s0, r0, hrec0, hwf0, -, hfor0⟩
+    rcases hjust with ⟨s0, p0, vid0, hrec0, hwf0, -, -, hopen0, -, hfor0⟩ | ⟨s0, r0, hrec0, hwf0, -, hfor0⟩
     · have hpp : p = p0 := hcf p p0 (congrArg Vote1Data.blockHash (hfor.2.symm.trans hfor0.2))
       subst hpp
       have hpe := late_proposal_epoch hcfg hcf hs hst hkE hi he hl hrec0 hwf0 hopen0 hnb

@@ -308,6 +308,39 @@ impl Recorder {
         self.push_step(input, Vec::new(), t);
     }
 
+    /// Record that the node holds the payload of `proposal` without having
+    /// reconstructed it, as a test that restores a lock on it does.
+    ///
+    /// A node locks only on a block whose payload it holds, so a restored lock
+    /// stands for a payload the node had before it restarted. That holds only
+    /// if the payload was persisted with the lock, which a real restart does
+    /// not ensure: the two are written by separate storage tasks (see
+    /// `Consensus::parent_reconstructed`).
+    pub fn payload_held<T: NodeType>(&mut self, proposal: &Proposal<T>) {
+        if self.path.is_none() {
+            return;
+        }
+        let input = tagged(
+            "blockReconstructed",
+            obj(&[
+                ("v", view_json(proposal.view_number)),
+                ("c", payload_json(&proposal.block_header)),
+            ]),
+        );
+        let t = self.now();
+        self.push_step(input, Vec::new(), t);
+    }
+
+    /// Record that the node holds `cert`, as a test that restores a lock on it
+    /// does.
+    pub fn cert1_held<T: NodeType>(&mut self, cert: &Certificate1<T>) {
+        if self.path.is_none() {
+            return;
+        }
+        let t = self.now();
+        self.push_step(certificate1_json(cert), Vec::new(), t);
+    }
+
     /// Record that a test placed the node at `view` in `epoch` directly.
     ///
     /// No input puts a node there, so the view and epoch a checker derives from
@@ -320,6 +353,22 @@ impl Recorder {
         }
         self.lines.push(format!(
             "# placed at view {view} epoch {epoch} (at step {})",
+            self.steps
+        ));
+    }
+
+    /// Record that a test restored the node's lock on `view` directly.
+    ///
+    /// The steps cannot show how the node came to hold the lock, nor what it did
+    /// on it before the restart, so what a checker derives from them as owed is
+    /// not what the node owes. Written like [`Recorder::placed`], so a checker
+    /// can leave the rules that read what the node owes unchecked.
+    pub fn lock_restored(&mut self, view: ViewNumber) {
+        if self.path.is_none() {
+            return;
+        }
+        self.lines.push(format!(
+            "# placed lock at view {view} (at step {})",
             self.steps
         ));
     }

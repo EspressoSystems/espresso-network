@@ -745,9 +745,9 @@ theorem step_ok (hvt : ValidityTruthful (pre ++ [Step.mk i []])) :
     rcases step_mem hm with h0 | ⟨o, out', hsub, ho, ha⟩
     · obtain ⟨v, hx, _⟩ := mem_timeoutAnswer h0; cases hx
     · rcases act_vote1 ha with ⟨p, rfl, rfl⟩ | ⟨r, rfl, rfl⟩
-      · obtain ⟨⟨s, vid, hr, _⟩, hw, hval, _, hsafe, hopen, _⟩ := ho
+      · obtain ⟨⟨s, vid, hr, _⟩, hw, hval, hpr, hsafe, hopen, _⟩ := ho
         refine ⟨rfl, Or.inl ⟨s, p, vid, (sameInputs_step.received _).mp hr, hw, ?_, hsafe,
-          (sameInputs_step.opens p).mp hopen, rfl, rfl⟩⟩
+          (sameInputs_step.opens p).mp hopen, (sameInputs_step.parentReady p).mp hpr, rfl, rfl⟩⟩
         exact hvt _ _ ((sameInputs_grow.received _).mp hval) p rfl
       · obtain ⟨⟨s, hr, _⟩, hw, hsafe, _⟩ := ho
         exact ⟨rfl, Or.inr ⟨s, r, (sameInputs_step.received _).mp hr, hw, hsafe, rfl, rfl⟩⟩

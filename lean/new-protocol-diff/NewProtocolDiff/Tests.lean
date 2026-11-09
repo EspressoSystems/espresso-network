@@ -218,6 +218,25 @@ private def late (es : List Event) (released : List (Nat × Nat)) (ended δ : Na
 /-- info: false -/
 #guard_msgs in #eval checkSafe cfg me (historyOf (opening ++ [voteStep [vote ⟨999⟩]]))
 
+/-- A child of `prop1`, on `prop1`'s certificate. -/
+private def child : Proposal :=
+  ⟨⟨⟨43⟩, 2⟩, ⟨2⟩, ⟨0⟩, ⟨⟨⟨3⟩, ⟨0⟩, 1⟩, ⟨1⟩⟩, none, ⟨5⟩⟩
+
+/-- A vote1 on `child`, after the node holds `prop1`, and its payload if `withParentPayload`. -/
+private def childVote (withParentPayload : Bool) : List Event :=
+  opening
+    ++ (if withParentPayload then [.consensus (.blockReconstructed ⟨1⟩ ⟨42⟩) []] else [])
+    ++ [ .consensus (.certificate1 ⟨⟨⟨3⟩, ⟨0⟩, 1⟩, ⟨1⟩⟩) [],
+         .consensus (.proposal ⟨1⟩ child (some ⟨⟨1⟩, ⟨43⟩⟩)) [],
+         .consensus (.blockValidated ⟨2⟩ ⟨5⟩) [.send (.vote1 ⟨⟨⟨5⟩, ⟨0⟩, 2⟩, ⟨2⟩, me⟩)] ]
+
+-- A vote1 needs the parent's payload, not only the parent (`ParentReady`).
+/-- info: true -/
+#guard_msgs in #eval checkSafe cfg me (historyOf (childVote true))
+
+/-- info: false -/
+#guard_msgs in #eval checkSafe cfg me (historyOf (childVote false))
+
 -- A recording that stopped before the deadline could still have voted.
 /-- info: [] -/
 #guard_msgs in #eval late (opening ++ [voteStep []]) [] 8 5
