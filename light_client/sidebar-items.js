@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"mod":["client","consensus","provider","state","storage"]};
+window.SIDEBAR_ITEMS = {"mod":["client","consensus","metrics","provider","state","storage"],"struct":["LightClientMetrics"]};

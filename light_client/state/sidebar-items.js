@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"constant":["MAX_FINALIZED_HINT_DISTANCE"],"enum":["CacheLeaves"],"fn":["header_matches_id","leaf_matches_id","stake_table_state_to_quorum"],"struct":["Genesis","LightClient","LightClientOptions"]};
+window.SIDEBAR_ITEMS = {"constant":["MAX_FINALIZED_HINT_DISTANCE"],"enum":["CacheLeaves"],"fn":["header_matches_id","leaf_matches_id","stake_table_state_to_quorum"],"struct":["Genesis","LightClient","LightClientOptions","StakeTableUnavailable"]};
