@@ -111,6 +111,8 @@ pub struct NetworkParams {
     pub cliquenet_advertise_addr: Option<NetAddr>,
     /// X25519 secret key.
     pub x25519_secret_key: x25519::SecretKey,
+    /// Stake this node registers with the orchestrator.
+    pub stake_value: U256,
 }
 
 pub struct L1Params {
@@ -304,6 +306,7 @@ where
         network_params.private_state_key,
         &network_params.x25519_secret_key,
         network_params.cliquenet_advertise_addr,
+        network_params.stake_value,
         is_da,
     );
 
@@ -467,13 +470,14 @@ fn local_validator_config(
     state_key: StateSignKey,
     x25519_key: &x25519::SecretKey,
     advertise_addr: Option<NetAddr>,
+    stake_value: U256,
     is_da: bool,
 ) -> ValidatorConfig<SeqTypes> {
     let state_key_pair = StateKeyPair::from_sign_key(state_key);
     ValidatorConfig {
         public_key: BLSPubKey::from_private(&staking_key),
         private_key: staking_key,
-        stake_value: U256::ONE,
+        stake_value,
         state_public_key: state_key_pair.ver_key(),
         state_private_key: state_key_pair.sign_key(),
         is_da,
@@ -1820,6 +1824,7 @@ mod test {
             keys.state.clone(),
             &keys.x25519,
             Some(advertise.clone()),
+            U256::ONE,
             false,
         );
         assert_eq!(
@@ -1830,8 +1835,14 @@ mod test {
             })
         );
 
-        let without_addr =
-            local_validator_config(keys.staking, keys.state, &keys.x25519, None, false);
+        let without_addr = local_validator_config(
+            keys.staking,
+            keys.state,
+            &keys.x25519,
+            None,
+            U256::ONE,
+            false,
+        );
         assert_eq!(
             without_addr
                 .x25519_keypair
@@ -1851,6 +1862,7 @@ mod test {
             keys.state.clone(),
             &keys.x25519,
             Some(advertise.clone()),
+            U256::ONE,
             false,
         );
 
@@ -1863,9 +1875,36 @@ mod test {
             Some(advertise)
         );
 
-        let unconfigured =
-            local_validator_config(keys.staking, keys.state, &keys.x25519, None, false);
+        let unconfigured = local_validator_config(
+            keys.staking,
+            keys.state,
+            &keys.x25519,
+            None,
+            U256::ONE,
+            false,
+        );
         assert!(orchestrator_registration(&unconfigured).is_err());
+    }
+
+    /// The orchestrator builds the stake table from what each node registers, so the configured
+    /// stake has to reach the registration.
+    #[test]
+    fn orchestrator_registration_carries_the_stake_value() {
+        let keys = test_keys();
+        let config = local_validator_config(
+            keys.staking,
+            keys.state,
+            &keys.x25519,
+            Some("node.example.com:9977".parse().unwrap()),
+            U256::from(7),
+            false,
+        );
+
+        let registration = orchestrator_registration(&config).unwrap();
+        assert_eq!(
+            registration.public_config().stake_table_entry.stake_amount,
+            U256::from(7)
+        );
     }
 
     #[test]
