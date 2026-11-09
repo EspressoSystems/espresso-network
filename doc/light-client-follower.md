@@ -46,36 +46,8 @@ Against the native demo (`just demo-native`), node 0 on port 24000 serves everyt
 
 ## Metrics
 
-The light client reports under `light_client_` in `/v1/status/metrics`, on a follower and on any SQL query node whose
-query service has fetched through it:
-
-- `latest_stake_table_epoch`: the latest epoch with a verified stake table.
-- `stake_table_backlog`: epochs left in the stake table catchups that are running, summed over catchups that can
-  overlap, 0 when none is.
-- `stake_table_catchup_duration`: seconds to fetch, verify and store one epoch of stake table events.
-- `follower_block_height`: on a follower, one more than the latest leaf height the light client has verified, like
-  `node/block-height`. It stays 0 on a query node, which never asks the light client for the chain height.
-- `verification_failures`: upstream responses that failed a proof or commitment check.
-- `fetch_requests`: fetches of missing data by the query service through the light client.
-- `fetch_failures`: those fetches that failed, for any reason.
-- `db_read_duration`, `db_write_duration`: seconds per read from and write to the light client database, including the
-  wait for a connection and, for writes, the commit.
-
-At bootstrap the light client replays stake tables from the first dynamic epoch, so `stake_table_backlog` rises by the
-number of epochs to replay for each catchup and falls to 0. A light client database on a network filesystem such as EFS
-shows up as slow `db_write_duration`, since every SQLite commit syncs to it.
-
-### Alerts
-
-Starting points, to tune against what a healthy deployment shows:
-
-| Alert                     | Expression                                                                              | Means                                                                                                                     |
-| ------------------------- | --------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
-| Follower stalled          | `changes(light_client_follower_block_height[5m]) == 0`                                  | No block verified in 5 minutes: the follower cannot reach or verify its upstreams.                                        |
-| Verification failure      | `increase(light_client_verification_failures[15m]) > 0`                                 | An upstream served data that failed a proof. Page: it is a faulty or malicious upstream, or a light client bug.           |
-| Stake table catchup stuck | `min_over_time(light_client_stake_table_backlog[30m]) > 0`                              | A catchup has not finished in 30 minutes. A fresh node replaying many epochs can trip it while bootstrapping.             |
-| Fetch failure ratio       | `rate(light_client_fetch_failures[10m]) / rate(light_client_fetch_requests[10m]) > 0.5` | Most backfill fetches fail. The query service retries them, so this is a warning unless it lasts.                         |
-| Slow light client storage | `histogram_quantile(0.99, rate(light_client_db_write_duration_bucket[5m])) > 1`         | Writes take over a second at p99, which slows following and catchup. Check the storage backing the light client database. |
+The light client's metrics, and suggested alerts on them, are in the
+[light client README](../crates/light-client/README.md).
 
 ## How it works
 
