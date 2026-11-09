@@ -13,7 +13,7 @@
 //! Reads of the views before the first epoch go through the
 //! [`GenesisStakeTables`] from [`Membership::genesis_stake_tables`].
 
-use std::{fmt::Debug, sync::Arc};
+use std::{collections::HashMap, fmt::Debug, sync::Arc};
 
 use alloy_primitives::U256;
 use committable::{Commitment, Committable};
@@ -159,6 +159,8 @@ pub trait MembershipSnapshot<T: NodeType>: Clone + Send + Sync {
 pub struct GenesisStakeTables<T: NodeType> {
     stake_table: Vec<PeerConfig<T>>,
     da_stake_table: Vec<PeerConfig<T>>,
+    /// The position of each key in `stake_table`.
+    stake_index: HashMap<T::SignatureKey, usize>,
 }
 
 impl<T: NodeType> GenesisStakeTables<T> {
@@ -171,9 +173,12 @@ impl<T: NodeType> GenesisStakeTables<T> {
         stake_table: Vec<PeerConfig<T>>,
         da_stake_table: Vec<PeerConfig<T>>,
     ) -> anyhow::Result<Self> {
+        let stake_index = index_keys(&stake_table, "stake table")?;
+        index_keys(&da_stake_table, "DA committee")?;
         Ok(Self {
             stake_table,
             da_stake_table,
+            stake_index,
         })
     }
 
@@ -185,12 +190,9 @@ impl<T: NodeType> GenesisStakeTables<T> {
         self.da_stake_table.iter()
     }
 
-    /// The first entry of the stake table for `key`.
     pub fn stake(&self, key: &T::SignatureKey) -> Option<PeerConfig<T>> {
-        self.stake_table
-            .iter()
-            .find(|p| p.stake_table_entry.public_key() == *key)
-            .cloned()
+        let &position = self.stake_index.get(key)?;
+        Some(self.stake_table[position].clone())
     }
 
     pub fn success_threshold(&self) -> U256 {
@@ -201,6 +203,25 @@ impl<T: NodeType> GenesisStakeTables<T> {
                 .sum(),
         )
     }
+}
+
+/// The position of each key in `table`, the genesis `name`.
+///
+/// # Errors
+///
+/// Returns an error if `table` holds a key twice.
+fn index_keys<T: NodeType>(
+    table: &[PeerConfig<T>],
+    name: &str,
+) -> anyhow::Result<HashMap<T::SignatureKey, usize>> {
+    let mut index = HashMap::with_capacity(table.len());
+    for (position, peer) in table.iter().enumerate() {
+        let key = peer.stake_table_entry.public_key();
+        if index.insert(key.clone(), position).is_some() {
+            anyhow::bail!("the genesis {name} holds the key {key} twice");
+        }
+    }
+    Ok(index)
 }
 
 /// A protocol for determining membership in and participating in a committee.

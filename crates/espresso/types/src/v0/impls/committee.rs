@@ -2971,6 +2971,69 @@ mod tests {
         assert_eq!(da, staked, "genesis DA committee");
     }
 
+    // The DA committee is normally a subset of the stake table, so the other
+    // table holds the repeated key once, which is fine.
+    #[rstest]
+    #[case::stake_table(false)]
+    #[case::da_stake_table(true)]
+    fn genesis_stake_tables_reject_key_twice(#[case] twice_in_da: bool) {
+        let (_, staked) = genesis_members();
+        let (twice, key) = with_key_twice(staked.clone());
+        let (stake_table, da) = if twice_in_da {
+            (staked, twice)
+        } else {
+            (twice, staked)
+        };
+
+        let Err(err) = GenesisStakeTables::<SeqTypes>::new(stake_table, da) else {
+            panic!("accepted a table with key {key} twice");
+        };
+        let message = format!("{err:#}");
+        assert!(
+            message.contains(&key.to_string()),
+            "error {message:?} does not name the key {key}"
+        );
+    }
+
+    // `new` drops the members without stake before it builds the genesis
+    // tables, so both entries of the repeated key have stake.
+    #[rstest]
+    #[case::stake_table(false)]
+    #[case::da_stake_table(true)]
+    #[tokio::test]
+    async fn epoch_committees_reject_staked_genesis_key_twice(#[case] twice_in_da: bool) {
+        let (all, _) = genesis_members();
+        let (twice, key) = with_key_twice(all.clone());
+        let (members, da) = if twice_in_da {
+            (all, twice)
+        } else {
+            (twice, all)
+        };
+
+        let result = EpochCommittees::new(
+            members,
+            da,
+            None,
+            Fetcher::mock(),
+            100u64,
+            EpochNumber::new(5),
+        );
+        assert!(result.is_err(), "accepted a genesis with key {key} twice");
+    }
+
+    /// `members` with the key of `members[1]` once more at the end, with more
+    /// stake. So the two entries differ, are not neighbours, and only their
+    /// keys match. Returns the table and the repeated key.
+    fn with_key_twice(
+        mut members: Vec<PeerConfig<SeqTypes>>,
+    ) -> (Vec<PeerConfig<SeqTypes>>, PubKey) {
+        let mut twice = members[1].clone();
+        twice.stake_table_entry.stake_amount += U256::from(200);
+        let key = PubKey::public_key(&twice.stake_table_entry);
+        members.push(twice);
+        (members, key)
+    }
+
     /// Asserts that every read of the genesis stake table gives the same
     /// answer as the snapshot of `first_epoch`. `members` are the keys to
     /// check `stake` for, next to one key that is not a member.
