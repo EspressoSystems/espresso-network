@@ -5,7 +5,7 @@ use hotshot_example_types::{block_types::TestTransaction, node_types::TestTypes}
 use hotshot_types::{
     PeerConnectInfo,
     addr::NetAddr,
-    data::{EpochNumber, VidCommitment, VidCommitment2, ViewNumber},
+    data::{EpochNumber, VidCommitment, VidCommitment2, VidDisperseShare2, ViewNumber},
     epoch_membership::EpochMembership,
     signature_key::{BLSPrivKey, BLSPubKey},
     simple_certificate::{TimeoutCertificate3, TimeoutEvidence},
@@ -28,7 +28,7 @@ use super::common::{
 use crate::{
     block::BlockAndHeaderRequest,
     consensus::{ConsensusInput, ConsensusOutput},
-    coordinator::{EPOCH_CHANGE_LOOKAHEAD, error::Severity},
+    coordinator::{EPOCH_CHANGE_LOOKAHEAD, error::Severity, share_forward_exclusions},
     helpers::{test_timeout_epoch_lock, test_upgrade_lock},
     message::{
         BlockMessage, CatchupEvidence, Certificate1, ConsensusMessage, EpochChangeMessage, Message,
@@ -1906,7 +1906,7 @@ async fn test_stale_timeout_vote_answered_with_catchup_evidence() {
 /// chose, over a signature covering only the payload commitment. Neither a
 /// stream from a node that does not lead the view nor one naming an epoch
 /// outside the admissible window may displace the honest leader's: the node
-/// must still assemble its own share, vote, and broadcast the real share.
+/// must still assemble its own share, pair it with the proposal, and vote.
 ///
 /// The forged streams are shaped as squats -- a single namespace, so they
 /// would complete on their first fragment -- which under a view-keyed
@@ -1969,16 +1969,77 @@ async fn test_forged_vid_fragments_do_not_block_the_vote() {
     .await
     .expect("forged fragments must not stop the honest share assembling");
 
-    // And the share it broadcasts is its own, not a forgery.
-    let broadcast = harness
+    // And the share it pairs with the proposal is its own, not a forgery.
+    let paired = harness
         .outputs()
         .iter()
         .find_map(|output| match output {
-            ConsensusOutput::BroadcastVidShare(share) => Some(share.clone()),
+            ConsensusOutput::ProposalPaired { vid_share, .. } => Some(vid_share.clone()),
             _ => None,
         })
-        .expect("the node broadcasts its share alongside vote1");
-    assert_eq!(broadcast, view.vid_share_for(&node_key));
+        .expect("the node pairs its share with the proposal");
+    assert_eq!(paired, view.vid_share_for(&node_key));
+}
+
+/// A forward skips the nodes holding the share already: its recipient, this
+/// node, and its disperser, the leader of its view in the epoch it names. A
+/// view holding shares of two epochs, as at an epoch boundary, skips each
+/// share's own disperser.
+#[tokio::test]
+async fn test_share_forward_exclusions() {
+    let test_data = TestData::new(1).await;
+    let view = &test_data.views[0];
+    let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
+    let leader = |view: ViewNumber, epoch: EpochNumber| {
+        Some(BLSPubKey::generated_from_seed_indexed([2; 32], *view * 100 + *epoch).0)
+    };
+    let mut share = view.vid_share_for(&node_key);
+    let epoch = share.epoch.expect("a dispersed share names its epoch");
+    for epoch in [epoch, epoch + 1] {
+        share.epoch = Some(epoch);
+        let disperser = leader(view.view_number, epoch).unwrap();
+        assert_eq!(
+            share_forward_exclusions(&share, leader),
+            [node_key, disperser]
+        );
+    }
+    // A leader forwarding the share it dispersed to itself.
+    assert_eq!(
+        share_forward_exclusions(&share, |_, _| Some(node_key)),
+        [node_key]
+    );
+    assert_eq!(share_forward_exclusions(&share, |_, _| None), [node_key]);
+}
+
+/// A node forwards its VID share as soon as it has verified it, before the
+/// view's proposal arrives, to every peer but the view's leader: the leader
+/// dispersed the share and holds every share of the view already.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_vid_share_forwarded_on_arrival_skips_the_disperser() {
+    let test_data = TestData::new(1).await;
+    let test_view = &test_data.views[0];
+    let mut harness = TestHarness::new(0).await;
+    let node_key = harness.connect_info().0;
+    assert_ne!(
+        test_view.leader_public_key, node_key,
+        "the leader must be a peer"
+    );
+    let disperser = late_member(&test_view.leader_public_key);
+    let peer = LatePeer::new();
+    harness.add_peer(disperser.key, disperser.info.clone());
+    harness.add_peer(peer.key, peer.info.clone());
+
+    forward_share_before_proposal(&mut harness, test_view, &node_key).await;
+
+    let view = test_view.view_number;
+    assert_eq!(
+        shares_received(&harness, peer, view).await,
+        [test_view.vid_share_for(&node_key)]
+    );
+    assert!(
+        shares_received(&harness, disperser, view).await.is_empty(),
+        "the disperser is sent no share"
+    );
 }
 
 /// A node that a certificate moved past a view still assembles its share for
@@ -2367,23 +2428,27 @@ async fn test_vote1_ahead_of_view_survives_view_change() {
     assert_eq!(views, [test_view.view_number]);
 }
 
-/// The VID share a node broadcasts with its Vote1 can be for a view two ahead
-/// of its own. The view change that follows must not drop it.
+/// The VID share a node forwards on arrival can be for a view two ahead of its
+/// own. The view change that follows must not drop it.
 #[tokio::test(flavor = "multi_thread")]
 async fn test_vid_share_ahead_of_view_survives_view_change() {
     let test_data = TestData::new(3).await;
     let test_view = &test_data.views[2];
-    let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
-    let share = test_view.vid_share_for(&node_key);
-    let views =
-        views_received_sent_ahead(ConsensusOutput::BroadcastVidShare(share), test_view, |m| {
-            matches!(
-                m,
-                MessageType::Consensus(ConsensusMessage::VidShareBroadcast(_))
-            )
-        })
-        .await;
-    assert_eq!(views, [test_view.view_number]);
+    let (view, epoch) = (test_view.view_number, test_view.epoch_number);
+    let mut harness = TestHarness::new(0).await;
+    assert!(*harness.current_view() + 2 <= *view);
+    let node_key = harness.connect_info().0;
+    let peer = LatePeer::new();
+    harness.add_peer(peer.key, peer.info.clone());
+
+    forward_share_before_proposal(&mut harness, test_view, &node_key).await;
+    harness
+        .coordinator_mut()
+        .process_consensus_output(ConsensusOutput::ViewChanged(view, epoch))
+        .unwrap();
+
+    let shares = shares_received(&harness, peer, view).await;
+    assert_eq!(shares, [test_view.vid_share_for(&node_key)]);
 }
 
 /// A Vote2 for a view two ahead of the voter's own must survive the view
@@ -2748,6 +2813,44 @@ async fn received_before_marker(
         }
         received.push(message);
     }
+}
+
+/// Deliver the fragments of `node_key`'s VID share for `test_view`, but not
+/// the view's proposal, and drive the coordinator until it has verified the
+/// share, which it forwards then.
+async fn forward_share_before_proposal(
+    harness: &mut TestHarness,
+    test_view: &TestView,
+    node_key: &BLSPubKey,
+) {
+    for fragment in test_view.vid_share_inputs(node_key) {
+        harness.message(fragment);
+    }
+    drive_until(harness, |input| {
+        matches!(input, ConsensusInput::VidShare(_))
+    })
+    .await;
+}
+
+/// The VID shares `peer` receives from `harness` before a marker sent at
+/// `slot`, each listed once.
+async fn shares_received(
+    harness: &TestHarness,
+    peer: LatePeer,
+    slot: ViewNumber,
+) -> Vec<VidDisperseShare2<TestTypes>> {
+    let mut shares: Vec<_> = received_before_marker(harness, peer, slot)
+        .await
+        .into_iter()
+        .filter_map(|message| match message.message_type {
+            MessageType::Consensus(ConsensusMessage::VidShareBroadcast(share)) => Some(share),
+            _ => None,
+        })
+        .collect();
+    // Delivery is at least once: a replaced connection resends every message
+    // the peer has not acknowledged yet.
+    shares.dedup();
+    shares
 }
 
 /// The views of the `received` messages that `is_kind` selects, each listed
