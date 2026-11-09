@@ -6,7 +6,7 @@
     parent_state: <a class="struct" href="../../espresso_types/v0/impls/state/struct.ValidatedState.html" title="struct espresso_types::v0::impls::state::ValidatedState">ValidatedState</a>,
 )<div class="where">where
     T: <a class="trait" href="trait.SequencerStateDataSource.html" title="trait espresso_node::state::SequencerStateDataSource">SequencerStateDataSource</a>,
-    for&lt;'a&gt; T::Transaction&lt;'a&gt;: <a class="trait" href="trait.SequencerStateUpdate.html" title="trait espresso_node::state::SequencerStateUpdate">SequencerStateUpdate</a>,</div></code></pre><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><p>Apply every leaf above <code>parent_leaf</code> as it arrives. Leaves come from the local stream, except
+    for&lt;'a&gt; T::<a class="associatedtype" href="../../hotshot_query_service/data_source/update/trait.VersionedDataSource.html#associatedtype.Transaction" title="type hotshot_query_service::data_source::update::VersionedDataSource::Transaction">Transaction</a>&lt;'a&gt;: <a class="trait" href="trait.SequencerStateUpdate.html" title="trait espresso_node::state::SequencerStateUpdate">SequencerStateUpdate</a>,</div></code></pre><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><p>Apply every leaf above <code>parent_leaf</code> as it arrives. Leaves come from the local stream, except
 those the data pruner has already deleted: the availability layer never fetches a leaf at or
 below the data pruned height, so the stream would wait for one forever. Those come from peers,
 in runs. Returns when the stream ends, or when a leaf from peers does not extend the parent.</p>
