@@ -181,7 +181,8 @@ async fn test_message_compat<Ver: StaticVersionType>(_ver: Ver) {
             Fetcher::mock(),
             epoch_height,
             1.into(),
-        ),
+        )
+        .expect("genesis without duplicate keys"),
         epoch_height,
         &storage,
     );
@@ -458,7 +459,8 @@ async fn reference_new_protocol_messages(
             Fetcher::mock(),
             epoch_height,
             1.into(),
-        ),
+        )
+        .expect("genesis without duplicate keys"),
         epoch_height,
         &storage,
     );

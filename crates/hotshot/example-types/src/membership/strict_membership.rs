@@ -77,10 +77,10 @@ where
         epoch_height: u64,
         first_epoch: EpochNumber,
     ) -> Self {
-        let genesis = Arc::new(GenesisStakeTables::new(
-            quorum_members.clone(),
-            da_members.clone(),
-        ));
+        let genesis = Arc::new(
+            GenesisStakeTables::new(quorum_members.clone(), da_members.clone())
+                .expect("genesis members without duplicate keys"),
+        );
         let membership = Self {
             inner: Arc::new(RwLock::new(Inner {
                 table: TestStakeTable::new(

@@ -243,6 +243,7 @@ fn setup_with(
         EPOCH_HEIGHT,
         EpochNumber::new(FIRST_EPOCH),
     )
+    .expect("genesis without duplicate keys")
     .with_storage_read_timeout(storage_read_timeout);
 
     let coordinator = EpochMembershipCoordinator::new(

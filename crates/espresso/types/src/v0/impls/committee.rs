@@ -401,6 +401,11 @@ impl EpochCommittees {
     ///
     /// `first_epoch` and `first_epoch + 1` run on the genesis stake table,
     /// `committee_members`, with the initial DRB result.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the staked genesis members or the genesis DA
+    /// members hold a key twice.
     pub fn new<B: Into<BlockNumber>>(
         committee_members: Vec<PeerConfig<SeqTypes>>,
         da_members: Vec<PeerConfig<SeqTypes>>,
@@ -408,7 +413,7 @@ impl EpochCommittees {
         fetcher: Fetcher,
         epoch_height: B,
         first_epoch: EpochNumber,
-    ) -> Self {
+    ) -> anyhow::Result<Self> {
         // For each member, get the stake table entry
         let stake_table: Vec<_> = committee_members
             .iter()
@@ -438,7 +443,7 @@ impl EpochCommittees {
         let genesis = Arc::new(GenesisStakeTables::new(
             stake_table.clone(),
             da_members.clone(),
-        ));
+        )?);
         let da_committee = Arc::new(DaCommittee {
             committee: da_members,
             indexed_committee: indexed_da_members,
@@ -498,7 +503,7 @@ impl EpochCommittees {
             epoch_height: epoch_height.into(),
         };
         committees.seed_first_epoch(first_epoch);
-        committees
+        Ok(committees)
     }
 
     /// Override how long `load_stake_table` may spend on each of its two
@@ -1548,6 +1553,7 @@ mod tests {
             })
             .collect();
         EpochCommittees::new(peers.clone(), peers, None, fetcher, 100u64, first_epoch)
+            .expect("genesis without duplicate keys")
     }
 
     /// Persistence stub holding stake tables for epochs 7 and 8, plus a DRB
@@ -2418,6 +2424,7 @@ mod tests {
     fn committees_from_first_epoch(first_epoch: EpochNumber, fetcher: Fetcher) -> EpochCommittees {
         let (members, _) = genesis_members();
         EpochCommittees::new(members.clone(), members, None, fetcher, 100u64, first_epoch)
+            .expect("genesis without duplicate keys")
     }
 
     /// Asserts that `epoch` runs on exactly the `staked` committee, has a DRB
@@ -2570,7 +2577,8 @@ mod tests {
             Fetcher::mock(),
             100u64,
             first_epoch,
-        );
+        )
+        .expect("genesis without duplicate keys");
 
         for epoch in [first_epoch, first_epoch + 1] {
             let snapshot = committees
@@ -2883,7 +2891,8 @@ mod tests {
             .map(|p| PubKey::public_key(&p.stake_table_entry))
             .collect();
         let committees =
-            EpochCommittees::new(all.clone(), all, None, Fetcher::mock(), 100u64, first_epoch);
+            EpochCommittees::new(all.clone(), all, None, Fetcher::mock(), 100u64, first_epoch)
+                .expect("genesis without duplicate keys");
         let genesis = committees.genesis_stake_tables();
 
         let stake_table: Vec<_> = genesis.stake_table().cloned().collect();
@@ -3089,7 +3098,8 @@ mod tests {
     ) {
         let first_epoch = EpochNumber::new(5);
         let committees =
-            EpochCommittees::new(quorum, da, None, Fetcher::mock(), 100u64, first_epoch);
+            EpochCommittees::new(quorum, da, None, Fetcher::mock(), 100u64, first_epoch)
+                .expect("genesis without duplicate keys");
         let coordinator = coordinator_for(committees);
 
         for epoch in [first_epoch, first_epoch + 1] {

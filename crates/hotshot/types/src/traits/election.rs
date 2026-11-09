@@ -163,11 +163,18 @@ pub struct GenesisStakeTables<T: NodeType> {
 
 impl<T: NodeType> GenesisStakeTables<T> {
     /// Keeps both tables as given, in order.
-    pub fn new(stake_table: Vec<PeerConfig<T>>, da_stake_table: Vec<PeerConfig<T>>) -> Self {
-        Self {
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a table holds a key twice.
+    pub fn new(
+        stake_table: Vec<PeerConfig<T>>,
+        da_stake_table: Vec<PeerConfig<T>>,
+    ) -> anyhow::Result<Self> {
+        Ok(Self {
             stake_table,
             da_stake_table,
-        }
+        })
     }
 
     pub fn stake_table(&self) -> impl ExactSizeIterator<Item = &PeerConfig<T>> + Send + '_ {
