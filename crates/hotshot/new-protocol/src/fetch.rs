@@ -23,7 +23,7 @@ use crate::{
             PayloadFetchMessage, PayloadFetchResponse, PayloadRequestBody, PayloadResponseBody,
         },
     },
-    vid::{ObtainedPayload, expected_vid_param, matches_commitment},
+    vid::{ObtainedPayload, PayloadSource, expected_vid_param, matches_commitment},
 };
 
 /// The requesting half of payload recovery.
@@ -195,6 +195,7 @@ impl<T: NodeType> Fetcher<T> {
                         payload,
                         metadata,
                         tx_commitments,
+                        source: PayloadSource::Fetched,
                     })
                 });
 
@@ -287,7 +288,7 @@ mod tests {
             payload::{PayloadFetchResponse, PayloadResponseBody},
         },
         tests::common::utils::{ConsensusHarness, TestData},
-        vid::expected_vid_param,
+        vid::{PayloadSource, expected_vid_param},
     };
 
     fn key(index: u64) -> BLSPubKey {
@@ -390,6 +391,7 @@ mod tests {
         let obtained = fetcher.next().await.expect("payload is verified");
         assert_eq!(obtained.view, view());
         assert_eq!(obtained.payload_commitment, commitment);
+        assert_eq!(obtained.source, PayloadSource::Fetched);
     }
 
     /// Bytes that do not re-commit are dropped, however well-formed the rest

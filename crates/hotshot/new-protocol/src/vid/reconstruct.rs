@@ -1,15 +1,23 @@
 use std::{
     collections::{BTreeMap, BTreeSet, HashSet, btree_map::Entry},
     ops::Range,
+    sync::Arc,
+    time::{Duration, Instant},
 };
 
 use committable::Commitment;
 use hotshot_types::{
+    consensus::ConsensusMetricsValue,
     data::{
         EpochNumber, VidCommitment2, VidDisperseShare2, ViewNumber,
         ns_table::{ns_table_payload_byte_len, parse_ns_table},
     },
-    traits::{BlockPayload, block_contents::EncodeBytes, node_implementation::NodeType},
+    traits::{
+        BlockPayload,
+        block_contents::EncodeBytes,
+        metrics::{Counter, Histogram},
+        node_implementation::NodeType,
+    },
     vid::avidm_gf2::{AvidmGf2Common, AvidmGf2Param, AvidmGf2Scheme, AvidmGf2Share},
 };
 use tokio::task::{AbortHandle, JoinSet};
@@ -34,6 +42,19 @@ pub struct ObtainedPayload<T: NodeType> {
     pub payload: T::BlockPayload,
     pub metadata: <T::BlockPayload as BlockPayload<T>>::Metadata,
     pub tx_commitments: Vec<Commitment<T::Transaction>>,
+    pub source: PayloadSource,
+}
+
+/// How a payload came into hand.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PayloadSource {
+    /// The shares held every original shard, and the payload is their
+    /// concatenation.
+    Systematic,
+    /// A threshold of shares was erasure-decoded.
+    Decoded,
+    /// A peer sent the payload whole.
+    Fetched,
 }
 
 /// Why a reconstruction attempt failed.
@@ -87,6 +108,41 @@ pub struct VidReconstructor<T: NodeType> {
     tasks: JoinSet<ReconstructResult<T>>,
     calculations: BTreeMap<ViewNumber, AbortHandle>,
     tracer: Option<crate::leader_trace::LeaderTracerHandle>,
+    metrics: Option<VidReconstructMetrics>,
+}
+
+/// How long reconstruction attempts take by path, and how many fail.
+#[derive(Clone)]
+pub struct VidReconstructMetrics {
+    pub(crate) systematic_duration: Arc<dyn Histogram>,
+    pub(crate) decode_duration: Arc<dyn Histogram>,
+    pub(crate) failures: Arc<dyn Counter>,
+}
+
+impl VidReconstructMetrics {
+    pub fn new(consensus: &ConsensusMetricsValue) -> Self {
+        Self {
+            systematic_duration: consensus.vid_reconstruct_systematic_duration.clone().into(),
+            decode_duration: consensus.vid_reconstruct_decode_duration.clone().into(),
+            failures: consensus.vid_reconstruct_failures.clone().into(),
+        }
+    }
+
+    fn record<T: NodeType>(
+        &self,
+        path: ReconstructPath,
+        elapsed: Duration,
+        result: &ReconstructResult<T>,
+    ) {
+        let duration = match path {
+            ReconstructPath::Systematic => &self.systematic_duration,
+            ReconstructPath::Decode => &self.decode_duration,
+        };
+        duration.add_point(elapsed.as_secs_f64());
+        if result.is_err() {
+            self.failures.add(1);
+        }
+    }
 }
 
 pub(crate) struct VidShareAccumulator<T: NodeType> {
@@ -125,7 +181,13 @@ impl<T: NodeType> VidReconstructor<T> {
             tasks: JoinSet::new(),
             calculations: BTreeMap::new(),
             tracer: None,
+            metrics: None,
         }
+    }
+
+    pub fn with_metrics(mut self, metrics: Option<VidReconstructMetrics>) -> Self {
+        self.metrics = metrics;
+        self
     }
 
     pub fn set_tracer(&mut self, tracer: Option<crate::leader_trace::LeaderTracerHandle>) {
@@ -314,6 +376,7 @@ impl<T: NodeType> VidReconstructor<T> {
         let Some(common) = accumulator.common.clone() else {
             return;
         };
+        let path = accumulator.path(common.param.recovery_threshold);
         let payload_commitment = accumulator.payload_commitment;
         let metadata = accumulator.metadata.clone();
         let shares: Vec<(T::SignatureKey, AvidmGf2Share)> = accumulator
@@ -328,12 +391,14 @@ impl<T: NodeType> VidReconstructor<T> {
             crate::leader_trace::LeaderEvent::ThresholdShareReachedVMinus1
         );
         let tracer = self.tracer.clone();
+        let metrics = self.metrics.clone();
         let task = self.tasks.spawn_blocking(move || {
             crate::trace_leader_event!(
                 tracer,
                 view,
                 crate::leader_trace::LeaderEvent::RecoverVMinus1Start
             );
+            let started = Instant::now();
             let result = reconstruct::<T>(
                 view,
                 epoch,
@@ -341,8 +406,12 @@ impl<T: NodeType> VidReconstructor<T> {
                 common,
                 shares,
                 metadata,
+                path,
                 tracer.clone(),
             );
+            if let Some(metrics) = &metrics {
+                metrics.record(path, started.elapsed(), &result);
+            }
             if result.is_ok() {
                 crate::trace_leader_event!(
                     tracer,
@@ -536,6 +605,40 @@ impl<T: NodeType> VidShareAccumulator<T> {
             .as_ref()
             .is_some_and(|common| self.coverage() >= common.param.recovery_threshold)
     }
+
+    /// The path `recover` takes with the admitted shares, by its own test:
+    /// concatenation if they hold every original shard (the positions below
+    /// `recovery_threshold`), decoding otherwise. Exact because their ranges
+    /// are disjoint.
+    fn path(&self, recovery_threshold: usize) -> ReconstructPath {
+        let originals: usize = self
+            .ranges()
+            .map(|range| (range.start..range.end.min(recovery_threshold)).len())
+            .sum();
+        if originals >= recovery_threshold {
+            ReconstructPath::Systematic
+        } else {
+            ReconstructPath::Decode
+        }
+    }
+}
+
+/// How `recover` rebuilds a payload from a share set.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ReconstructPath {
+    /// Concatenate the original shards.
+    Systematic,
+    /// Erasure-decode the missing original shards.
+    Decode,
+}
+
+impl From<ReconstructPath> for PayloadSource {
+    fn from(path: ReconstructPath) -> Self {
+        match path {
+            ReconstructPath::Systematic => Self::Systematic,
+            ReconstructPath::Decode => Self::Decoded,
+        }
+    }
 }
 
 /// Decode the shares and accept the result only if it re-commits to
@@ -545,6 +648,7 @@ impl<T: NodeType> VidShareAccumulator<T> {
 /// verifies, the payload is unrecoverable: the shares cover the recovery
 /// threshold with disjoint ranges, so the disperser committed to a
 /// non-codeword and no share subset can ever succeed.
+#[allow(clippy::too_many_arguments)]
 fn reconstruct<T: NodeType>(
     view: ViewNumber,
     epoch: EpochNumber,
@@ -552,6 +656,7 @@ fn reconstruct<T: NodeType>(
     common: AvidmGf2Common,
     shares: Vec<(T::SignatureKey, AvidmGf2Share)>,
     metadata: Metadata<T>,
+    path: ReconstructPath,
     tracer: Option<crate::leader_trace::LeaderTracerHandle>,
 ) -> ReconstructResult<T> {
     let (keys, shares): (Vec<_>, Vec<_>) = shares.into_iter().unzip();
@@ -572,6 +677,7 @@ fn reconstruct<T: NodeType>(
             payload,
             metadata,
             tx_commitments,
+            source: path.into(),
         };
         return Ok(output);
     }
