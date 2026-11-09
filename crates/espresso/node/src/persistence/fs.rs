@@ -2155,6 +2155,16 @@ mod test {
             TempDir::new().unwrap()
         }
 
+        async fn insert_legacy_eqc(
+            &self,
+            high_qc: &QuorumCertificate2<SeqTypes>,
+            next_epoch_qc: &NextEpochQuorumCertificate2<SeqTypes>,
+        ) -> anyhow::Result<()> {
+            let inner = self.inner.read().await;
+            fs::write(inner.eqc(), bincode::serialize(&(high_qc, next_epoch_qc))?)?;
+            Ok(())
+        }
+
         fn options(storage: &Self::Storage) -> impl PersistenceOptions<Persistence = Self> {
             Options::new(storage.path().into())
         }

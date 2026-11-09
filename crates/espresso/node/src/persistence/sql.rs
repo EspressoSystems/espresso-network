@@ -2452,6 +2452,20 @@ mod testing {
             Arc::new(TmpDb::init().await)
         }
 
+        async fn insert_legacy_eqc(
+            &self,
+            high_qc: &QuorumCertificate2<SeqTypes>,
+            next_epoch_qc: &NextEpochQuorumCertificate2<SeqTypes>,
+        ) -> anyhow::Result<()> {
+            let mut tx = self.db.write().await?;
+            tx.execute(
+                query("INSERT INTO eqc (id, data) VALUES (true, $1)")
+                    .bind(bincode::serialize(&(high_qc, next_epoch_qc))?),
+            )
+            .await?;
+            tx.commit().await
+        }
+
         #[allow(refining_impl_trait)]
         fn options(db: &Self::Storage) -> Options {
             Options(super::super::tmp_options(db))
