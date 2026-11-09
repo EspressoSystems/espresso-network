@@ -1087,7 +1087,7 @@ scripts/network-bench/
   finalization_timeline.py timeline.svg of trace-plots
   leader_window.py       leader_window.png of trace-plots
   instance-types.md      leader block-build time and cost per block per instance type
-  genesis.toml           0.6, 100 MB blocks, 1 wei base fee
+  genesis.toml           0.7 (0.6 genesis block), 100 MB blocks, 1 wei base fee
   process-compose.yaml   local 3-node network
   justfile               `just bench <recipe>`; `aws` forwards to aws-bench
   aws/user-data.sh       cloud-init template, every host
