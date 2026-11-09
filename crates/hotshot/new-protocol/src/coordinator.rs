@@ -1138,15 +1138,6 @@ where
                 );
                 r?
             },
-            ConsensusOutput::BroadcastVidShare(share) => {
-                let view = share.view_number();
-                debug!(%node, %view, "send vid share");
-                self.broadcast_in(
-                    self.slot_for(view),
-                    ConsensusMessage::VidShareBroadcast(share),
-                    "broadcast vid share",
-                )?
-            },
             ConsensusOutput::SendVote2(vote2) => {
                 let view = vote2.view_number();
                 debug!(%node, %view, "send vote2");
