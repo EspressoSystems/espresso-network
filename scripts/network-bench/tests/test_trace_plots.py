@@ -6,20 +6,33 @@ import pytest
 from fakes import load_script
 from test_leadertrace import MS, leader_rows, write_trace
 
+SHARE, PROPOSAL = leadertrace.SHARE_ARRIVED, leadertrace.PROPOSAL_ARRIVED
+
 plots = load_script("trace-plots")
 
 
 def write_run(
-    run_dir: Path, views: int = 40, overrides: dict[tuple[int, str], int] | None = None
+    run_dir: Path,
+    views: int = 40,
+    overrides: dict[tuple[int, str], int] | None = None,
+    arrivals: bool = False,
 ) -> None:
     """Three nodes rotating the lead, with the timings of `three_nodes` in every view.
-    `overrides` maps (view, event) to a replacement ts_ns."""
+    `overrides` maps (view, event) to a replacement ts_ns. With `arrivals`, every node records its
+    share and the proposal arriving: the replica after the leader holds its share 9 ms, the
+    other one's proposal waits 2 ms for the share."""
     overrides = overrides or {}
     rows: dict[int, list[tuple[int, str, int]]] = {0: [], 1: [], 2: []}
     for view in range(views):
         rows[view % 3] += leader_rows(view)
         for node in set(range(3)) - {view % 3}:
             rows[node].append((view, "leaf_decided", (10 * view + 40) * MS))
+        if arrivals:
+            for offset, (share, proposal) in enumerate(((1, 11), (3, 12), (14, 12))):
+                rows[(view + offset) % 3] += [
+                    (view, SHARE, (10 * view + share) * MS),
+                    (view, PROPOSAL, (10 * view + proposal) * MS),
+                ]
     for node, node_rows in rows.items():
         trace_dir = run_dir / "hosts" / f"node{node}" / "trace"
         trace_dir.mkdir(parents=True)
@@ -94,6 +107,61 @@ def test_main_writes_the_plots_and_stats(tmp_path: Path):
         "p95": pytest.approx(30),
     }
     assert "steps" not in stats
+    assert stats["arrival"] == {
+        "pairs": 0,
+        "share_first": None,
+        "waits": dict.fromkeys(plots.ARRIVAL_WAITS),
+    }
+
+
+def test_stats_and_table_cover_the_replica_arrivals(tmp_path: Path):
+    write_run(tmp_path, arrivals=True)
+    plots.main([str(tmp_path)])
+    assert read_stats(tmp_path)["arrival"] == {
+        "pairs": 60,
+        "share_first": 0.5,
+        "waits": {
+            "share held": {
+                "pairs": 30,
+                "median": pytest.approx(9),
+                "p95": pytest.approx(9),
+            },
+            "proposal waited for share": {
+                "pairs": 30,
+                "median": pytest.approx(2),
+                "p95": pytest.approx(2),
+            },
+        },
+    }
+    lines = (tmp_path / "trace" / "leader_path.md").read_text().splitlines()
+    assert lines[3:] == [
+        "",
+        (
+            "| load | replica pairs | share first | share held (median ms) "
+            "| proposal waited for share (median ms) |"
+        ),
+        "|---|---|---|---|---|",
+        "| all views | 60 | 50% | 9.0 | 2.0 |",
+    ]
+    timeline = (tmp_path / "trace" / "timeline.svg").read_text(encoding="utf-8")
+    assert "share held 9" in timeline
+
+
+def test_per_step_stats_and_table_cover_the_replica_arrivals(tmp_path: Path):
+    write_run(tmp_path, arrivals=True)
+    write_steps(tmp_path)
+    plots.main([str(tmp_path)])
+    stats = read_stats(tmp_path)
+    # Binned by the view's own proposal_queued: views 10..18 and 20..29.
+    assert [s["arrival"]["pairs"] for s in stats["steps"]] == [18, 20, 0]
+    assert stats["arrival"]["pairs"] == 38
+    assert stats["steps"][2]["arrival"]["share_first"] is None
+    lines = (tmp_path / "trace" / "leader_path.md").read_text().splitlines()
+    assert lines[-3:] == [
+        "| 120 MB/s | 18 | 50% | 9.0 | 2.0 |",
+        "| 155 MB/s (refine) | 20 | 50% | 9.0 | 2.0 |",
+        "| 200 MB/s | 0 | - | - | - |",
+    ]
 
 
 def test_stats_count_negative_segments_of_a_view(tmp_path: Path):
@@ -156,10 +224,16 @@ def test_step_stats_bin_views_by_t0_in_the_measured_half():
             "t_end": 30.0,
         }
     ]
-    (step,) = plots.step_stats(path, times, steps)
+    gaps = {2: [4.0], 3: [6.0, -1.0], 4: [8.0]}
+    (step,) = plots.step_stats(path, gaps, times, steps)
     assert step["views"] == 2
     assert set(step["segments"].values()) == {2.0}
     assert step["total"] == 26.0
+    # Arrivals bin by the view's own time: views 2 and 3.
+    assert step["arrival"]["pairs"] == 3
+    assert step["arrival"]["share_first"] == pytest.approx(2 / 3)
+    assert step["arrival"]["waits"]["share held"]["median"] == 5.0
+    assert step["arrival"]["waits"]["proposal waited for share"]["median"] == 1.0
 
 
 def test_pick_views_takes_the_median_and_the_maximum():

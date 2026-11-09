@@ -18,6 +18,11 @@ fan-out. Encode or dispersal and fan-out overlap in time on both paths, so they 
 parallel rows. A label that does not fit its bar goes beside, above or below it where the lane
 has room, else it is centered and overflows the bar. Bars shorter than 1 ms are not drawn.
 
+The replica lane starts with the replicas' wait to pair V's proposal with their own VID share,
+between the median arrivals over the replicas (L_V left out): `share held` when the share came
+first, `proposal waited for share` when the proposal did. Without the arrival events it is not
+drawn.
+
 The layouts describe the events of the current code only. Traces from older code are not
 supported; when events move, update the layouts and drop the old one instead of adding fallbacks."""
 
@@ -26,10 +31,18 @@ import statistics
 from dataclasses import dataclass
 from pathlib import Path
 
-from leadertrace import DECIDED, NS_PER_MS, Trace, leaders
+from leadertrace import (
+    DECIDED,
+    NS_PER_MS,
+    PROPOSAL_ARRIVED,
+    SHARE_ARRIVED,
+    Trace,
+    leaders,
+)
 
 # metric -> (event, where). "leader": L_V's own stamp of view V; "cluster": the median stamp over
-# all nodes at view V; "leader_prev": L_V's stamp at view V - 1.
+# all nodes at view V; "replicas": the median over the nodes other than L_V; "leader_prev": L_V's
+# stamp at view V - 1.
 EVENTS = {
     "request_block": ("request_block_header_queued", "leader"),
     "request_started": ("block_request_started", "leader"),
@@ -45,6 +58,8 @@ EVENTS = {
     "ns_disperse_end": ("ns_disperse_end", "leader"),
     "vid_unicast_start": ("vid_shares_unicast_start", "leader"),
     "vid_unicast_end": ("vid_shares_unicast_end", "leader"),
+    "share_arrived": (SHARE_ARRIVED, "replicas"),
+    "proposal_arrived": (PROPOSAL_ARRIVED, "replicas"),
     "proposal_validated": ("proposal_validated_v_minus_1", "cluster"),
     "vote1_arrived": ("vote1_v_minus_1_arrived", "cluster"),
     "vid_threshold_reached": ("threshold_share_reached_v_minus_1", "cluster"),
@@ -108,6 +123,7 @@ EMPTY_DELAY, BUILD_PREP, DISPERSAL, ENCODE_COMMIT, SIGN_FRAGMENTS, FAN_OUT, HEAD
 )
 CERT1_WAIT, COMMIT_SIGN = "#e11d48", "#0f766e"
 SHARE_WAIT, RECOVER, COMMIT, COLLECT = "#bbf7d0", "#10b981", "#d97706", "#8b5cf6"
+SHARE_HELD, PROPOSAL_WAITED = "#7dd3fc", "#fda4af"
 VOTE1_CERT1, CERT1_VOTE2, VOTE2_CERT2, CERT2_DECIDED = (
     "#c4b5fd",
     "#fde68a",
@@ -143,7 +159,8 @@ def view_row(trace: Trace, lead: dict[int, tuple[int, int]], view: int) -> ViewR
             return rel(stamp(leader, view, event))
         if where == "leader_prev":
             return rel(stamp(leader, view - 1, event))
-        stamps = [ts for node in trace if (ts := stamp(node, view, event)) is not None]
+        nodes = [node for node in trace if where == "cluster" or node != leader]
+        stamps = [ts for node in nodes if (ts := stamp(node, view, event)) is not None]
         return rel(statistics.median_low(stamps)) if stamps else None
 
     return {"cycle": (queued - lead[view - 1][1]) / NS_PER_MS} | {
@@ -174,6 +191,9 @@ def timeline_metrics(rows: list[ViewRow]) -> Metrics:
         f"present_{name}": float(value is not None) for name, value in medians.items()
     }
     m["present_proposal_queued"] = 1.0
+    paired = m["present_share_arrived"] and m["present_proposal_arrived"]
+    gap = m["proposal_arrived"] - m["share_arrived"] if paired else 0.0
+    m["share_held_ms"], m["proposal_waited_ms"] = max(0.0, gap), max(0.0, -gap)
     m["share_wait_ms"] = max(0.0, m["vid_threshold_reached"] - m["proposal_validated"])
     if m["recover_decode_end"]:
         m["recover_decode_ms"] = max(
@@ -547,7 +567,7 @@ def lane_labels(f: Frame) -> str:
         ),
         "Recon": (
             "Recon (V, replicas)",
-            "validate V → share-wait → decode → txn-commit",
+            "pair → validate V → share-wait → decode → txn-commit",
         ),
         "Deciding": (
             "Deciding (median)",
@@ -729,7 +749,7 @@ def recon_lane(m: Metrics, f: Frame) -> str:
     y, cy = f.bar_y("Recon"), f.cy("Recon")
     recv, reached = m["proposal_validated"], m["vid_threshold_reached"]
     decode_end, built = m["recover_decode_end"], m["block_reconstructed"]
-    out = ""
+    out = pairing_bar(m, f, y)
     if m["share_wait_ms"] > 0:
         out += (
             dot(f.x(recv), cy, 5, "#b45309")
@@ -769,6 +789,24 @@ def recon_lane(m: Metrics, f: Frame) -> str:
             600,
             "start",
         )
+    )
+
+
+def pairing_bar(m: Metrics, f: Frame, y: int) -> str:
+    """The replicas' wait to pair V's proposal with their own share, from the median arrival of
+    the first to that of the second; nothing without both arrival events. The label goes below,
+    ending at the bar end: the critical path arrow runs through the bar to proposal_validated."""
+    share, proposal = m["share_arrived"], m["proposal_arrived"]
+    if m["share_held_ms"] > 0:
+        t0, t1, color = share, proposal, SHARE_HELD
+        body = f"share held {m['share_held_ms']:.0f}"
+    elif m["proposal_waited_ms"] > 0:
+        t0, t1, color = proposal, share, PROPOSAL_WAITED
+        body = f"proposal waited for share {m['proposal_waited_ms']:.0f}"
+    else:
+        return ""
+    return rect(f.x(t0), y, f.w(t0, t1), f.bar_h, color) + text(
+        f.x(t1), y + f.bar_h + 12, body, 10, "#374151", 600, "end"
     )
 
 
@@ -885,6 +923,8 @@ LEGEND_SWATCHES = (
     ("parent state + header", HEADER),
     ("parent Cert1 wait", CERT1_WAIT),
     ("commit + sign", COMMIT_SIGN),
+    ("share held", SHARE_HELD),
+    ("proposal waited for share", PROPOSAL_WAITED),
     ("share wait", SHARE_WAIT),
     ("recover-decode", RECOVER),
     ("txn-commit", COMMIT),
