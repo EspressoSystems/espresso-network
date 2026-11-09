@@ -566,6 +566,24 @@ pub struct ConsensusMetricsValue {
     /// The time a leader took to disperse a block: signing and sending the shares, plus
     /// erasure-coding the payload when the block builder had not
     pub vid_disperse_duration: Box<dyn Histogram>,
+    /// The time the new-protocol coordinator took to take in one batch of transactions forwarded
+    /// to it as an upcoming leader
+    pub forwarded_transactions_duration: Box<dyn Histogram>,
+    /// The time a VID reconstruction attempt took that concatenated the original shards,
+    /// including the check of the payload against its commitment
+    pub vid_reconstruct_systematic_duration: Box<dyn Histogram>,
+    /// The time a VID reconstruction attempt took that erasure-decoded a threshold of shares,
+    /// including the check of the payload against its commitment
+    pub vid_reconstruct_decode_duration: Box<dyn Histogram>,
+    /// VID reconstruction attempts that failed: bad shares, or a disperser that committed to a
+    /// non-codeword
+    pub vid_reconstruct_failures: Box<dyn Counter>,
+    /// Payloads obtained by concatenating the original VID shards
+    pub vid_payloads_systematic: Box<dyn Counter>,
+    /// Payloads obtained by erasure-decoding a threshold of VID shares
+    pub vid_payloads_decoded: Box<dyn Counter>,
+    /// Payloads obtained whole from a peer
+    pub vid_payloads_fetched: Box<dyn Counter>,
 }
 
 impl ConsensusMetricsValue {
@@ -618,6 +636,26 @@ impl ConsensusMetricsValue {
                 String::from("vid_disperse_duration"),
                 Some("seconds".to_string()),
             ),
+            forwarded_transactions_duration: metrics.create_histogram(
+                String::from("forwarded_transactions_duration"),
+                Some("seconds".to_string()),
+            ),
+            vid_reconstruct_systematic_duration: metrics.create_histogram(
+                String::from("vid_reconstruct_systematic_duration"),
+                Some("seconds".to_string()),
+            ),
+            vid_reconstruct_decode_duration: metrics.create_histogram(
+                String::from("vid_reconstruct_decode_duration"),
+                Some("seconds".to_string()),
+            ),
+            vid_reconstruct_failures: metrics
+                .create_counter(String::from("vid_reconstruct_failures"), None),
+            vid_payloads_systematic: metrics
+                .create_counter(String::from("vid_payloads_systematic"), None),
+            vid_payloads_decoded: metrics
+                .create_counter(String::from("vid_payloads_decoded"), None),
+            vid_payloads_fetched: metrics
+                .create_counter(String::from("vid_payloads_fetched"), None),
         }
     }
 }
