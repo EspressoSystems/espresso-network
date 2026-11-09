@@ -1140,7 +1140,7 @@ def test_protocol_version_flag_rejects_bad_formats(bad):
 
 
 def test_protocol_version_flag_defaults_and_differs_in_the_config_hash():
-    assert node_env_config().protocol_version == "0.6"
+    assert node_env_config().protocol_version == "0.7"
     assert node_env_config("--protocol-version", "0.8").protocol_version == "0.8"
     template = (HERE / "genesis.toml").read_bytes()
     cfg = small_cfg()

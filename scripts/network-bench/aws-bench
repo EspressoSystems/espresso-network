@@ -1043,8 +1043,9 @@ class RunConfig:
     # Genesis `max_block_size`, verbatim.
     max_block_size: str = "50mb"
     # Genesis `base_version` and `upgrade_version`, verbatim: the protocol the network runs
-    # from genesis. The images must support it.
-    protocol_version: str = "0.6"
+    # from genesis. The images must support it. At 0.6 the leader also hashes the whole
+    # payload for the builder commitment, which 0.7 drops and the next release runs.
+    protocol_version: str = "0.7"
     # espresso-node writes leader_trace_node{N}.csv to /opt/bench/trace; `trace-plots` renders it.
     leader_trace: bool = False
     # `latency.PROFILES` name; `off` shapes nothing. `intra_latency` adds the same-location delay.
