@@ -1040,6 +1040,9 @@ class RunConfig:
     query_db: DbMode = "colocated"
     # `KEY=VALUE` written last into every node's node.env, so it also overrides.
     node_env: tuple[str, ...] = ()
+    # Stake each node registers with the orchestrator, in node order; empty leaves every node at
+    # espresso-node's default of 1. Share sizes, vote thresholds and leader frequency follow it.
+    node_stake: tuple[int, ...] = ()
     # Genesis `max_block_size`, verbatim.
     max_block_size: str = "50mb"
     # Genesis `base_version` and `upgrade_version`, verbatim: the protocol the network runs
@@ -1384,6 +1387,7 @@ def plan_hosts(cfg: RunConfig) -> list[HostSpec]:
             f"--prover supports at most {PROVER_STAKE_TABLE_CAPACITY} nodes: {cfg.nodes}"
         )
     check_submit_nodes(cfg)
+    check_node_stake(cfg)
     check_slow_nodes(cfg)
     if not 1 <= cfg.query_nodes <= cfg.nodes:
         raise Refused(
@@ -1732,6 +1736,11 @@ def format_node_summary(cfg: RunConfig) -> list[str]:
             f"leader-trace {'on' if cfg.leader_trace else 'off'}"
         ),
         f"node-env: {' '.join(cfg.node_env) or 'none'}",
+        *(
+            [f"node-stake: {format_node_stake(cfg.node_stake)}"]
+            if cfg.node_stake
+            else []
+        ),
         *([format_slow_nodes_summary(cfg)] if cfg.slow_nodes else []),
         *([format_chaos_summary(cfg.chaos, cfg.latency)] if cfg.chaos else []),
         *(
@@ -2484,6 +2493,7 @@ def render_node_env(
     prune: int | None = None,
     config_peers: bool = False,
     chaos: bool = False,
+    node_stake: Sequence[int] = (),
 ) -> str:
     self_info = hosts[host["name"]]
     ctl_info = hosts["ctl"]
@@ -2556,6 +2566,8 @@ def render_node_env(
         )
     if host["name"] == "node0" and prune is not None:
         env.update(prune_env(prune))
+    if node_stake:
+        env["ESPRESSO_NODE_STAKE_VALUE"] = str(node_stake[i])
     for pair in node_env:
         key, _, value = pair.partition("=")
         env[key] = value
@@ -3339,6 +3351,18 @@ def add_node_env_flag(parser: argparse.ArgumentParser) -> None:
     )
 
 
+def add_node_stake_flag(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--node-stake",
+        type=stake_list,
+        default=RunConfig(tag="").node_stake,
+        metavar="N,N,...",
+        help="stake each node registers with the orchestrator, one positive integer per node "
+        "in node order; unset leaves every node at 1. VID shards follow the raw stakes while "
+        "the total is at most 1000",
+    )
+
+
 def add_block_size_flag(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--max-block-size",
@@ -3422,6 +3446,25 @@ def check_submit_nodes(cfg: RunConfig) -> None:
         )
 
 
+def check_node_stake(cfg: RunConfig) -> None:
+    if not cfg.node_stake:
+        return
+    if len(cfg.node_stake) != cfg.nodes:
+        raise Refused(
+            f"--node-stake needs one value per node ({cfg.nodes}): "
+            f"{len(cfg.node_stake)} given"
+        )
+    if staking(cfg):
+        raise Refused(
+            "--node-stake sets the orchestrator's stake table, which the L1 stake table of "
+            "--epoch-height (also set by --chaos and --prover) replaces after two epochs"
+        )
+
+
+def format_node_stake(node_stake: Sequence[int]) -> str:
+    return ",".join(map(str, node_stake))
+
+
 def check_slow_nodes(cfg: RunConfig) -> None:
     if cfg.slow_cores is not None and not cfg.slow_nodes:
         raise Refused("--slow-cores needs --slow-nodes")
@@ -3453,6 +3496,12 @@ def env_pair(text: str) -> str:
     if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*=.*", text) is None:
         raise argparse.ArgumentTypeError(f"not KEY=VALUE: {text}")
     return text
+
+
+def stake_list(text: str) -> tuple[int, ...]:
+    if re.fullmatch(r"[1-9]\d*(,[1-9]\d*)*", text) is None:
+        raise argparse.ArgumentTypeError(f"not positive integers like 4,1,1: {text}")
+    return tuple(int(n) for n in text.split(","))
 
 
 def given_flags(argv: list[str]) -> set[str]:
@@ -3534,6 +3583,7 @@ def config_from_args(args: argparse.Namespace) -> RunConfig:
         chaos=chaos,
         load=load,
         node_env=tuple(args.node_env),
+        node_stake=args.node_stake,
         max_block_size=args.max_block_size,
         protocol_version=args.protocol_version,
         leader_trace=args.leader_trace,
@@ -3704,6 +3754,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     )
     add_run_flags(plan_p)
     add_node_env_flag(plan_p)
+    add_node_stake_flag(plan_p)
     add_block_size_flag(plan_p)
     add_protocol_version_flag(plan_p)
     add_leader_trace_flag(plan_p)
@@ -3730,6 +3781,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     up_p.set_defaults(
         func=cmd_up,
         node_env=[],
+        node_stake=defaults.node_stake,
         max_block_size=defaults.max_block_size,
         protocol_version=defaults.protocol_version,
         leader_trace=defaults.leader_trace,
@@ -3764,6 +3816,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     )
     add_run_flags(run_p, tag_required=False)
     add_node_env_flag(run_p)
+    add_node_stake_flag(run_p)
     add_block_size_flag(run_p)
     add_protocol_version_flag(run_p)
     add_leader_trace_flag(run_p)
@@ -5017,7 +5070,7 @@ def fleet_config_from_args(args: argparse.Namespace) -> RunConfig:
 
 
 def fleet_run_config(args: argparse.Namespace, saved: FleetManifest) -> RunConfig:
-    """The fleet's own config with the flags that belong to one run: image tag and allocator, load, database mode, node env."""
+    """The fleet's own config with the flags that belong to one run: image tag and allocator, load, database mode, node env and stake."""
     base = config_from_manifest(saved["config"])
     cli = fleet_config_from_args(args)
     load = dataclasses.replace(cli.load, submit_nodes=submit_nodes(args, base.nodes))
@@ -5031,6 +5084,7 @@ def fleet_run_config(args: argparse.Namespace, saved: FleetManifest) -> RunConfi
         query_engine=cli.query_engine,
         query_db=cli.query_db,
         node_env=cli.node_env,
+        node_stake=cli.node_stake,
         max_block_size=cli.max_block_size,
         protocol_version=cli.protocol_version,
         leader_trace=cli.leader_trace,
@@ -5051,6 +5105,7 @@ def fleet_run_config(args: argparse.Namespace, saved: FleetManifest) -> RunConfi
         search=cli.search,
     )
     check_submit_nodes(cfg)
+    check_node_stake(cfg)
     check_slow_nodes(cfg)
     check_search(cfg)
     check_chaos(cfg)
@@ -5711,6 +5766,11 @@ def run_config_hash(
             f"query-nodes={cfg.query_nodes}".encode(),
             cfg.query_engine.encode(),
             *([json.dumps(sorted(cfg.node_env)).encode()] if cfg.node_env else []),
+            *(
+                [f"node-stake={format_node_stake(cfg.node_stake)}".encode()]
+                if cfg.node_stake
+                else []
+            ),
             *([b"leader-trace"] if cfg.leader_trace else []),
             *([b"staking"] if staking(cfg) else []),
             *([b"prover"] if cfg.prover else []),
@@ -6001,7 +6061,9 @@ def render_host_files(
                 cfg.prune,
             )
             chaos = cfg.chaos is not None
-            node_env.write_text(render_node_env(*env_args, chaos=chaos))
+            node_env.write_text(
+                render_node_env(*env_args, chaos=chaos, node_stake=cfg.node_stake)
+            )
             if chaos:
                 (host_dir / "node-rejoin.env").write_text(
                     render_node_env(*env_args, config_peers=True, chaos=chaos)
@@ -7788,6 +7850,8 @@ def config_from_manifest(saved: dict[str, Any]) -> RunConfig:
     # Dirs from before the flag have no such key.
     if "node_env" in saved:
         fields["node_env"] = tuple(saved["node_env"])
+    if "node_stake" in saved:
+        fields["node_stake"] = tuple(saved["node_stake"])
     fields.pop("staking", None)  # derived from epoch_height
     fields.setdefault("region", LEGACY_REGION)
     fields.setdefault("consensus_storage", LEGACY_CONSENSUS_STORAGE)
@@ -8813,6 +8877,7 @@ def deployment_meta(manifest: Manifest, evidence: Evidence) -> nb.DeploymentMeta
         **({"latency": manifest["latency"]} if "latency" in manifest else {}),
         # Manifests from before the flag have no such key.
         **({"node_env": config["node_env"]} if config.get("node_env") else {}),
+        **({"node_stake": config["node_stake"]} if config.get("node_stake") else {}),
         **(
             {"max_block_size": config["max_block_size"]}
             if "max_block_size" in config

@@ -411,6 +411,8 @@ class DeploymentMeta(TypedDict):
     latency: NotRequired[LatencyMeta]
     # `KEY=VALUE` overrides of every node's environment.
     node_env: NotRequired[list[str]]
+    # `--node-stake`: the stake each node registered with the orchestrator, in node order.
+    node_stake: NotRequired[list[int]]
     # Genesis `max_block_size`; absent in manifests from before the flag.
     max_block_size: NotRequired[str]
     # `--prune` retention of the query node's data and state; absent without pruning.
@@ -3757,6 +3759,11 @@ def deployment_lines(result: BenchResult) -> list[str]:
         *(
             ["- node env: " + ", ".join(f"`{pair}`" for pair in d["node_env"])]
             if "node_env" in d
+            else []
+        ),
+        *(
+            ["- node stake: " + ",".join(map(str, d["node_stake"]))]
+            if "node_stake" in d
             else []
         ),
         *(
