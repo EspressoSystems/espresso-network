@@ -1,5 +1,7 @@
 """One leader's action window across views V-2..V+2 as a PNG: the leader's work spans, the node's
 CPU load in cores busy, and the primary interface's network rate with the send and receive phases of consensus.
+A third row of that panel holds, in the views the node did not lead, its wait to pair its own VID
+share with the proposal, whichever arrived first.
 
 The CPU and network panels read the samples of `leadertrace.read_cpu` and `read_net`; without
 samples (a run before the sampler existed) a panel says so and the figure still renders.
@@ -12,7 +14,7 @@ from collections import defaultdict
 from pathlib import Path
 
 import numpy as np
-from leadertrace import NS_PER_MS, Cpu, Net, Trace
+from leadertrace import NS_PER_MS, PROPOSAL_ARRIVED, SHARE_ARRIVED, Cpu, Net, Trace
 from matplotlib import patches
 from matplotlib.axes import Axes
 from matplotlib.figure import Figure
@@ -99,8 +101,9 @@ SPANS = (
     *RECOVER,
 )
 MARKS = (("proposal_queued", "*", "proposal_queued"), ("leaf_decided", "D", "decided"))
-# (start event, end event, label, direction); drawn on the network panel's TX and RX rows.
-NET_SPANS = (
+# (start event, end event, label, row); drawn on the network panel's TX, RX and PAIR rows.
+NetSpan = tuple[str, str, str, str]
+NET_SPANS: tuple[NetSpan, ...] = (
     ("vid_shares_unicast_start", "vid_shares_unicast_end", "fan-out ser+enq", "tx"),
     ("proposal_broadcast_start", "proposal_broadcast_end", "proposal ser+enq", "tx"),
     (
@@ -127,6 +130,15 @@ NET_SPANS = (
         "vote1 collect",
         "rx",
     ),
+)
+# The replica's wait to pair: its own share held for the proposal, or the proposal waiting for it.
+# Its own row: the share of V+1 often arrives before Cert1(V), inside the vote1 collect of V.
+SHARE_HELD: NetSpan = (SHARE_ARRIVED, PROPOSAL_ARRIVED, "share held", "pair")
+PROPOSAL_WAITED: NetSpan = (
+    PROPOSAL_ARRIVED,
+    SHARE_ARRIVED,
+    "proposal waited for share",
+    "pair",
 )
 SPAN_COLORS = {
     "block-build": "#6366f1",
@@ -364,7 +376,7 @@ def net_spans(
     columns = []
     for view in in_window:
         evs = events[view]
-        for start, end, label, direction in NET_SPANS:
+        for start, end, label, direction in (*NET_SPANS, *pairing_spans(evs)):
             if start not in evs or end not in evs:
                 continue
             clipped = window.clipped(evs[start], evs[end])
@@ -373,6 +385,21 @@ def net_spans(
                 color = colors.get(view, OFF_WINDOW_COLOR)
                 columns.append((x, x + width, label, color, direction))
     return columns
+
+
+def pairing_spans(evs: dict[str, int]) -> tuple[NetSpan, ...]:
+    """The replica's wait to pair in a view the node did not lead: `share held` when its share
+    arrived first (or with the proposal), else `proposal waited for share`. Nothing in a view the
+    node led, where both loop back to it, or without both arrival events."""
+    if (
+        "proposal_queued" in evs
+        or SHARE_ARRIVED not in evs
+        or PROPOSAL_ARRIVED not in evs
+    ):
+        return ()
+    if evs[SHARE_ARRIVED] <= evs[PROPOSAL_ARRIVED]:
+        return (SHARE_HELD,)
+    return (PROPOSAL_WAITED,)
 
 
 def draw_view_boundaries(
@@ -558,7 +585,7 @@ def draw_net(
     columns: list[tuple[float, float, str, str, str]],
     window: Window,
 ) -> None:
-    """`events_ax`: TX and RX phase bars above `ax`, which plots the rates in Gbps."""
+    """`events_ax`: TX, RX and pairing phase bars above `ax`, which plots the rates in Gbps."""
     series = net_series(net, window)
     draw_net_events(events_ax, node, columns, window, series is not None)
     min_visible_ms = max(1.0, window.span_ms * 0.005)
@@ -605,9 +632,9 @@ def draw_net_events(
     window: Window,
     have_samples: bool,
 ) -> None:
-    """TX bars (labels above) over RX bars (labels inside), in axes-fraction rows."""
+    """TX bars (labels above) over RX and PAIR bars (labels inside), in axes-fraction rows."""
     tx_label_y = 0.78
-    rows = {"tx": (0.45, 0.22), "rx": (0.08, 0.22)}
+    rows = {"tx": (0.50, 0.17), "rx": (0.28, 0.17), "pair": (0.06, 0.17)}
     ax.set_yticks([])
     for spine in ("top", "right", "left", "bottom"):
         ax.spines[spine].set_visible(False)

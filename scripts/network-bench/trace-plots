@@ -7,7 +7,8 @@
 aws-bench) into `<run_dir>/trace/`: `leader_path.png` (median waterfall and per-view stacked
 segments), `leader_path_typical.png` and `leader_path_worst.png` (single-view waterfalls),
 `leader_path.md` (segment medians per load step of `<run_dir>/steps.json`, if present, over
-the views whose t0 lies in the step's measured half),
+the views whose t0 lies in the step's measured half, then the replicas' share and proposal
+arrival waits per step when the traces have those events),
 `finality.png` (cluster finality histogram and CDF), `timeline.svg` (median finalization timeline),
 `leader_window.png` (one leader's work, CPU and network around a view in the middle of the used
 views; CPU and network need the `cpu_node*.csv` and `net_node*.csv` samples beside the trace) and
@@ -37,6 +38,9 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 NAMES = [name for name, _ in leadertrace.LEADER_PATH]
+# A replica's wait to pair its own VID share with the proposal: the share came first, or the
+# proposal did (`leadertrace.arrival_gaps` positive or negative).
+ARRIVAL_WAITS = ("share held", "proposal waited for share")
 QUEUED = [event for _, event in leadertrace.LEADER_PATH].index("proposal_queued")
 COLORS = (
     "#9e9e9e",
@@ -75,6 +79,7 @@ def main(argv: list[str]) -> None:
     finality, finality_skipped = leadertrace.cluster_finality_ms(trace, args.warmup)
     if not finality:
         sys.exit(f"no views with a quorum decision; skipped: {dict(finality_skipped)}")
+    gaps = leadertrace.arrival_gaps(trace, args.warmup)
 
     steps_file = args.run_dir / "steps.json"
     steps = None
@@ -83,8 +88,11 @@ def main(argv: list[str]) -> None:
         times = leadertrace.view_times(trace)
         path = measured(path, steps, lambda view: times[view - 1]) or path
         finality = measured(finality, steps, times.__getitem__) or finality
-        steps = step_stats(path, times, steps)
-    stats = build_stats(path, list(finality.values()), skipped, finality_skipped, steps)
+        gaps = measured(gaps, steps, times.__getitem__) or gaps
+        steps = step_stats(path, gaps, times, steps)
+    stats = build_stats(
+        path, list(finality.values()), gaps, skipped, finality_skipped, steps
+    )
     out = args.run_dir / "trace"
     out.mkdir(exist_ok=True)
     (out / "stats.json").write_text(json.dumps(stats, indent=2) + "\n")
@@ -135,6 +143,7 @@ def optional_figure(name: str, draw: Callable[[], None]) -> None:
 def build_stats(
     path: dict[int, list[float]],
     finality: list[float],
+    gaps: dict[int, list[float]],
     skipped: Counter[str],
     finality_skipped: Counter[str],
     steps: list[dict] | None,
@@ -164,10 +173,38 @@ def build_stats(
             "median": float(np.median(finality)),
             "p95": float(np.percentile(finality, 95)),
         },
+        "arrival": arrival_stats(gaps),
     }
     if steps is not None:
         stats["steps"] = steps
     return stats
+
+
+def arrival_stats(gaps: dict[int, list[float]]) -> dict:
+    """The replicas' pairing waits of `gaps` (`leadertrace.arrival_gaps`): the number of
+    (replica, view) pairs, the fraction in which the share came first, and per `ARRIVAL_WAITS`
+    its pair count, median and p95 in ms, null without one. A trace without the arrival events
+    has no pairs and a null fraction."""
+    values = np.array([gap for row in gaps.values() for gap in row])
+    held, waited = values[values >= 0], -values[values < 0]
+    return {
+        "pairs": len(values),
+        "share_first": float(len(held) / len(values)) if len(values) else None,
+        "waits": {
+            name: spread(waits)
+            for name, waits in zip(ARRIVAL_WAITS, (held, waited), strict=True)
+        },
+    }
+
+
+def spread(values: np.ndarray) -> dict | None:
+    if not len(values):
+        return None
+    return {
+        "pairs": len(values),
+        "median": float(np.median(values)),
+        "p95": float(np.percentile(values, 95)),
+    }
 
 
 def pick_views(totals: dict[int, float]) -> dict[str, int]:
@@ -194,11 +231,15 @@ def measured(by_view: dict, steps: list[dict], time_of: Callable[[int], float]) 
 
 
 def step_stats(
-    path: dict[int, list[float]], times: dict[int, float], steps: list[dict]
+    path: dict[int, list[float]],
+    gaps: dict[int, list[float]],
+    times: dict[int, float],
+    steps: list[dict],
 ) -> list[dict]:
     """Per load step, the view count and median of each segment and of the total over the views
     whose t0 (the previous leader's `proposal_queued`) lies in the measured half of the step,
-    `t_mid` to `t_end`. Medians are null for a step without views."""
+    `t_mid` to `t_end`, and the `arrival_stats` of the views whose own `proposal_queued` lies
+    there. Medians are null for a step without views."""
     result = []
     for step in steps:
         rows = [
@@ -206,6 +247,9 @@ def step_stats(
             for view, durations in path.items()
             if in_measured(times[view - 1], [step])
         ]
+        arrivals = {
+            view: row for view, row in gaps.items() if in_measured(times[view], [step])
+        }
         medians = np.median(rows, axis=0) if rows else None
         result.append(
             {
@@ -218,27 +262,20 @@ def step_stats(
                 "total": None
                 if medians is None
                 else float(np.median(np.sum(rows, axis=1))),
+                "arrival": arrival_stats(arrivals),
             }
         )
     return result
 
 
 def leader_path_table(stats: dict) -> str:
-    """Markdown table of segment medians: a row per load step, or one row for all views."""
+    """Markdown table of segment medians: a row per load step, or one row for all views. Then,
+    when the traces have the arrival events, `arrival_table` with the same rows."""
     if "steps" in stats:
-        rows = [
-            (
-                f"{s['rate_mb_s']:g} MB/s" + (" (refine)" if s["refine"] else ""),
-                s["views"],
-                s["segments"],
-                s["total"],
-            )
-            for s in stats["steps"]
-        ]
+        rows = [(s["views"], s["segments"], s["total"]) for s in stats["steps"]]
     else:
         rows = [
             (
-                "all views",
                 stats["leader_path"]["views"],
                 {n: v["median"] for n, v in stats["leader_path"]["segments"].items()},
                 stats["leader_path"]["total"]["median"],
@@ -248,13 +285,51 @@ def leader_path_table(stats: dict) -> str:
         "| load | views | " + " | ".join(NAMES) + " | total |",
         "|" + "---|" * (len(NAMES) + 3),
     ]
-    for label, views, segments, total in rows:
+    loads = load_labels(stats)
+    for label, (views, segments, total) in zip(loads, rows, strict=True):
         cells = (
             ["-"] * (len(NAMES) + 1)
             if segments is None
             else [f"{segments[n]:.1f}" for n in NAMES] + [f"{total:.1f}"]
         )
         lines.append(f"| {label} | {views} | " + " | ".join(cells) + " |")
+    table = "\n".join(lines) + "\n"
+    if not stats["arrival"]["pairs"]:
+        return table
+    return table + "\n" + arrival_table(stats, loads)
+
+
+def load_labels(stats: dict) -> list[str]:
+    """The row labels of the tables: one per load step, or `all views`."""
+    if "steps" not in stats:
+        return ["all views"]
+    return [
+        f"{s['rate_mb_s']:g} MB/s" + (" (refine)" if s["refine"] else "")
+        for s in stats["steps"]
+    ]
+
+
+def arrival_table(stats: dict, loads: list[str]) -> str:
+    """Markdown table of the replicas' pairing: pairs, the share first fraction and the median
+    ms of each of `ARRIVAL_WAITS`, a row per load."""
+    arrivals = (
+        [s["arrival"] for s in stats["steps"]]
+        if "steps" in stats
+        else [stats["arrival"]]
+    )
+    lines = [
+        "| load | replica pairs | share first | "
+        + " | ".join(f"{name} (median ms)" for name in ARRIVAL_WAITS)
+        + " |",
+        "|" + "---|" * (len(ARRIVAL_WAITS) + 3),
+    ]
+    for load, arrival in zip(loads, arrivals, strict=True):
+        first = arrival["share_first"]
+        cells = ["-" if first is None else f"{first:.0%}"] + [
+            "-" if (w := arrival["waits"][name]) is None else f"{w['median']:.1f}"
+            for name in ARRIVAL_WAITS
+        ]
+        lines.append(f"| {load} | {arrival['pairs']} | " + " | ".join(cells) + " |")
     return "\n".join(lines) + "\n"
 
 

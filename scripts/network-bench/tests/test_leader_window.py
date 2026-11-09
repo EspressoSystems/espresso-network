@@ -3,7 +3,7 @@ from pathlib import Path
 import leader_window as lw
 import numpy as np
 import pytest
-from leadertrace import Trace
+from leadertrace import PROPOSAL_ARRIVED, SHARE_ARRIVED, Trace
 
 MS = 1_000_000
 
@@ -58,6 +58,32 @@ def test_view_spans_skip_spans_with_an_absent_endpoint():
     assert labels({}) == []
     assert labels({"ns_disperse_start": 0}) == []
     assert labels({"vid_fragments_end": 0, "vid_shares_unicast_end": 1}) == []
+
+
+def test_pairing_spans_follow_the_arrival_order():
+    assert lw.pairing_spans({SHARE_ARRIVED: 1, PROPOSAL_ARRIVED: 5}) == (lw.SHARE_HELD,)
+    assert lw.pairing_spans({SHARE_ARRIVED: 5, PROPOSAL_ARRIVED: 1}) == (
+        lw.PROPOSAL_WAITED,
+    )
+
+
+def test_pairing_spans_skip_led_views_and_views_lacking_an_arrival():
+    led = {SHARE_ARRIVED: 1, PROPOSAL_ARRIVED: 5, "proposal_queued": 4}
+    assert lw.pairing_spans(led) == ()
+    assert lw.pairing_spans({SHARE_ARRIVED: 1}) == ()
+    assert lw.pairing_spans({PROPOSAL_ARRIVED: 1}) == ()
+
+
+def test_net_spans_put_the_pairing_wait_on_its_own_row():
+    events = {
+        5: {SHARE_ARRIVED: 1010 * MS, PROPOSAL_ARRIVED: 1030 * MS},
+        6: {SHARE_ARRIVED: 1060 * MS, PROPOSAL_ARRIVED: 1050 * MS},
+    }
+    colors = {5: "#111", 6: "#222"}
+    assert lw.net_spans(events, [5, 6], colors, window()) == [
+        (10.0, 30.0, "share held", "#111", "pair"),
+        (50.0, 60.0, "proposal waited for share", "#222", "pair"),
+    ]
 
 
 def test_window_clips_spans():

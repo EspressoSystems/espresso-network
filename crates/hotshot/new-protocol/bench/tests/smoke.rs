@@ -155,8 +155,11 @@ async fn run_benchmark(
             "node {i} leader trace has only {} lines (expected header + events)",
             trace_lines.len()
         );
-        // Every node votes and decides, so these fire regardless of leadership.
+        // Every node pairs proposals with its shares, votes and decides, so these fire
+        // regardless of leadership.
         for event in [
+            "vid_share_v_minus_1_arrived",
+            "proposal_v_minus_1_arrived",
             "vote2_v_minus_1_queued",
             "cert1_v_minus_1_obtained",
             "cert2_v_minus_1_obtained",
