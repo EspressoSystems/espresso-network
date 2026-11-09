@@ -36,7 +36,7 @@ use crate::{
     helpers::test_upgrade_lock,
     leader_trace::LeaderEvent,
     message::{BlockMessage, DedupManifest, Message, MessageType, TransactionMessage, Validated},
-    network::{Cliquenet, MIN_MESSAGE_LIMIT, message_limit},
+    network::{Cliquenet, ControlLane, MIN_MESSAGE_LIMIT, message_limit},
     tests::common::utils::{
         RecordingTracer, TestData, mock_membership, mock_membership_with_num_nodes,
     },
@@ -1090,6 +1090,7 @@ async fn coordinator_maker_wires_the_tracer_to_the_block_builder() {
         addr,
         vec![],
         None,
+        ControlLane::Off,
         upgrade_lock.clone(),
         Box::new(NoMetrics),
     )

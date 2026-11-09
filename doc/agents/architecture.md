@@ -27,8 +27,8 @@ Reads **finalized L1 blocks** only, to avoid reorgs.
 
 ## Stake table events
 
-`StakeTableEvent` (`crates/espresso/types/src/v0/v0_3/stake_table.rs`) is the full set of `StakeTable` contract
-events that affect consensus membership, including the V2/V3 event variants.
+`StakeTableEvent` (`crates/espresso/types/src/v0/v0_3/stake_table.rs`) is the full set of `StakeTable` contract events
+that affect consensus membership, including the V2/V3 event variants.
 
 A fetcher polls finalized L1 blocks, validates signatures, builds a `ValidatorMap`; `select_active_validator_set()`
 drops validators below `max_stake / VID_TARGET_TOTAL_STAKE` and truncates to `MAX_VALIDATORS` by descending stake.
@@ -39,6 +39,26 @@ Effective from the next epoch boundary.
 V0_6, `crates/hotshot/new-protocol/`, `doc/stake-table-fast-finality.md`. Replaces CDN + libp2p networking with
 `crates/cliquenet/` (fully-connected mesh, x25519-encrypted). Validators register `x25519_key` and `p2p_addr` on the
 StakeTable contract for peer discovery.
+
+### Control lane
+
+Opt-in with `--cliquenet-control-lane` (`ESPRESSO_NODE_CLIQUENET_CONTROL_LANE`), off by default; `ControlLane` in
+`crates/hotshot/new-protocol/src/network.rs`. cliquenet writes one message at a time on each connection, lowest view
+first, so a proposal or vote waits for every VID share queued ahead of it. With the lane on, `Cliquenet` runs a second
+cliquenet network with the same key and peers, and `Lane::of` sends everything on it except the bulk, which stays on the
+main network: VID shares and fragments, transaction forwards, payload fetch responses and external (request-response)
+messages. `receive` reads the lane first. Off, the node runs the single network it always did.
+
+- Port: the lane binds one port above `--cliquenet-bind-address` and dials each peer one port above its registered
+  `p2p_addr` (or orchestrator advertise address). Peers learn one address per validator, so the offset is fixed, not
+  configured. Main port 0 or 65535 is refused; nodes sharing a host need cliquenet ports at least two apart.
+- All or none: a node without the lane never receives the lane's messages. While between one and two thirds of the stake
+  has it on, no leader can gather a quorum, so turn it on everywhere in one coordinated restart.
+- Failure: each lane connects, retries and queues on its own. A peer whose lane is unreachable gets its shares but no
+  proposals, votes or certificates (they wait in the lane's queue until the view is garbage collected; nothing falls
+  back to the main network), so it cannot vote. Failing to bind the lane's port fails startup.
+- Operations: open the port above the cliquenet port between validators and map it next to the main one behind NAT. The
+  lane's cliquenet metrics are in a `control_lane` subgroup.
 
 ## Consensus upgrades
 

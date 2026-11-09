@@ -35,7 +35,7 @@ use crate::{
         MessageType, Proposal, ProposalFetchMessage, ProposalFetchRequest, TimeoutBallot,
         TimeoutVote, TimeoutVoteMessage3, Unchecked, Validated,
     },
-    network::Cliquenet,
+    network::{Cliquenet, ControlLane},
     outbox::Outbox,
     storage::ActionKind,
     tests::common::assertions::{
@@ -1100,6 +1100,7 @@ impl LatePeer {
             self.info.p2p_addr,
             [harness_node],
             None,
+            ControlLane::Off,
             test_upgrade_lock(),
             Box::new(NoMetrics),
         )

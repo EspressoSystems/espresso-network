@@ -57,7 +57,7 @@ pub(crate) fn default_telemetry_endpoint(chain_id: ChainId) -> Option<&'static s
 pub use espresso_types::RECENT_STAKE_TABLES_LIMIT;
 use genesis::L1Finalized;
 pub use genesis::{Genesis, GenesisSource};
-use hotshot_new_protocol::network::{Cliquenet, message_limit};
+use hotshot_new_protocol::network::{Cliquenet, ControlLane, message_limit};
 use hotshot_orchestrator::client::{OrchestratorClient, get_complete_config};
 use hotshot_types::{
     ValidatorConfig,
@@ -109,6 +109,8 @@ pub struct NetworkParams {
     pub cliquenet_bind_addr: NetAddr,
     /// Cliquenet address to advertise to other nodes (registered in the stake table).
     pub cliquenet_advertise_addr: Option<NetAddr>,
+    /// Whether control messages get a cliquenet network of their own, the control lane.
+    pub cliquenet_control_lane: ControlLane,
     /// X25519 secret key.
     pub x25519_secret_key: x25519::SecretKey,
     /// Stake this node registers with the orchestrator.
@@ -401,6 +403,7 @@ where
         let metrics = clone_box(&*metrics);
         let secret_key = network_params.x25519_secret_key.into();
         let bind_addr = network_params.cliquenet_bind_addr.clone();
+        let control_lane = network_params.cliquenet_control_lane;
         // Accept the largest configured version's messages from startup.
         let largest = *block_sizes
             .values()
@@ -416,6 +419,7 @@ where
                 bind_addr,
                 [],
                 max_message_size,
+                control_lane,
                 upgrade,
                 metrics,
             )
@@ -1630,6 +1634,7 @@ pub mod testing {
                     coordinator_addr,
                     [],
                     Some(message_limit(max_block_size)),
+                    ControlLane::Off,
                     upgrade,
                     Box::new(NoMetrics),
                 )
