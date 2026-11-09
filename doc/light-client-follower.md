@@ -44,6 +44,11 @@ Tuning, as options of the `follower` module:
 Against the native demo (`just demo-native`), node 0 on port 24000 serves everything a follower needs:
 `-- query --peers http://localhost:24000 -- follower`.
 
+## Metrics
+
+The light client's metrics, and suggested alerts on them, are in the
+[light client README](../crates/light-client/README.md).
+
 ## How it works
 
 ```
