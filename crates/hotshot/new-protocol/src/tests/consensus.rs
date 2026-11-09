@@ -3838,6 +3838,64 @@ async fn test_cert2_obtained_recorded_once_per_view() {
     assert_eq!(obtained(), 1, "a duplicate is not recorded again");
 }
 
+/// A replica stamps its VID share and the proposal as each enters consensus, in the order they
+/// arrive, and both before the pairing validates the proposal.
+#[tokio::test]
+async fn test_share_and_proposal_arrival_stamped_in_arrival_order() {
+    use LeaderEvent::{ProposalVMinus1Arrived, ProposalValidatedVMinus1, VidShareVMinus1Arrived};
+
+    assert_eq!(
+        pairing_events(ArrivalOrder::ShareFirst).await,
+        [
+            VidShareVMinus1Arrived,
+            ProposalVMinus1Arrived,
+            ProposalValidatedVMinus1
+        ]
+    );
+    assert_eq!(
+        pairing_events(ArrivalOrder::ProposalFirst).await,
+        [
+            ProposalVMinus1Arrived,
+            VidShareVMinus1Arrived,
+            ProposalValidatedVMinus1
+        ]
+    );
+}
+
+enum ArrivalOrder {
+    ShareFirst,
+    ProposalFirst,
+}
+
+/// The arrival and validation events a fresh replica records for one view's proposal and share,
+/// applied in `order`.
+async fn pairing_events(order: ArrivalOrder) -> Vec<LeaderEvent> {
+    const PAIRING: [LeaderEvent; 3] = [
+        LeaderEvent::VidShareVMinus1Arrived,
+        LeaderEvent::ProposalVMinus1Arrived,
+        LeaderEvent::ProposalValidatedVMinus1,
+    ];
+    let mut harness = ConsensusHarness::new(0).await;
+    let tracer = Arc::new(RecordingTracer::default());
+    harness.consensus.set_tracer(Some(tracer.handle()));
+    let test_data = TestData::new(1).await;
+    let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
+    let view = &test_data.views[0];
+    let (proposal, vid_share) = view.proposal_input_consensus(&node_key);
+    let (first, second) = match order {
+        ArrivalOrder::ShareFirst => (vid_share, proposal),
+        ArrivalOrder::ProposalFirst => (proposal, vid_share),
+    };
+    harness.apply(first).await;
+    harness.apply(second).await;
+    tracer
+        .events()
+        .into_iter()
+        .filter(|(v, event)| *v == *view.view_number && PAIRING.contains(event))
+        .map(|(_, event)| event)
+        .collect()
+}
+
 /// Every `RequestBlockAndHeader` output, including the re-request after a timeout certificate,
 /// is stamped `RequestBlockHeaderQueued` for its view.
 #[tokio::test]
