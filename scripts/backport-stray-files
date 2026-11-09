@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# Print the files that BACKPORT adds over BASE but that ORIGINAL_PR did not add.
+#
+# When the original change modifies a file that the target branch does not have, the
+# cherry-pick stops on a modify/delete conflict. Git then leaves the source branch's whole
+# file in place, with no conflict markers, so a marker search cannot find it.
+set -euo pipefail
+
+if [[ $# -ne 3 ]]; then
+  echo "usage: $0 ORIGINAL_PR BASE BACKPORT" >&2
+  exit 1
+fi
+
+original_pr="$1"
+base="$2"
+backport="$3"
+
+added_by_original=$(gh api --paginate "repos/{owner}/{repo}/pulls/${original_pr}/files" \
+  --jq '.[] | select(.status == "added" or .status == "copied") | .filename')
+added_by_backport=$(git diff --find-renames --name-only --diff-filter=A "${base}...${backport}")
+
+comm -23 <(sort -u <<<"${added_by_backport}") <(sort -u <<<"${added_by_original}") | sed '/^$/d'

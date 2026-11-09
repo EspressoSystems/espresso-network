@@ -77,14 +77,24 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
+          ORIGINAL_PR: ${{ inputs.pr_number || github.event.pull_request.number }}
         run: |
           set -euo pipefail
+          # Copy the script from the triggering commit: the working tree may now be on a
+          # backport branch that predates it. The verify step runs it again.
+          git show "$GITHUB_SHA:scripts/backport-stray-files" > "$RUNNER_TEMP/backport-stray-files"
+          chmod +x "$RUNNER_TEMP/backport-stray-files"
           pr_numbers="${{ steps.backport.outputs.created_pull_numbers }} ${{ steps.dispatch_backport.outputs.created_pull_numbers }}"
           needs_claude=""
           for pr in $pr_numbers; do
             branch=$(gh pr view "$pr" --json headRefName -q .headRefName)
-            git fetch origin "$branch"
-            if git grep -lE '^<<<<<<< ' "origin/$branch" -- >/dev/null; then
+            base=$(gh pr view "$pr" --json baseRefName -q .baseRefName)
+            git fetch origin "$branch" "$base"
+            stray=$("$RUNNER_TEMP/backport-stray-files" "$ORIGINAL_PR" "origin/$base" "origin/$branch")
+            if [ -n "$stray" ]; then
+              printf 'PR #%s:\n%s\n' "$pr" "$stray" >> "$RUNNER_TEMP/stray-files.txt"
+            fi
+            if [ -n "$stray" ] || git grep -lE '^<<<<<<< ' "origin/$branch" -- >/dev/null; then
               needs_claude="$needs_claude $pr"
             else
               gh pr ready "$pr" || true
@@ -105,8 +115,9 @@ jobs:
           # Read the prompt from the triggering commit: the working tree is now on
           # the backport branch, which may predate this file.
           prompt_body=$(git show "$GITHUB_SHA:.github/claude/backport-resolve.md")
-          prompt=$(printf 'Mergiraf left conflict markers in these backport PRs:\n%s\n\n%s' \
-            "$NEEDS_CLAUDE" "$prompt_body")
+          stray_files=$(cat "$RUNNER_TEMP/stray-files.txt" 2>/dev/null || echo none)
+          prompt=$(printf 'These backport PRs have conflicts to resolve:\n%s\n\nFiles the target branch does not have, per PR:\n%s\n\n%s' \
+            "$NEEDS_CLAUDE" "$stray_files" "$prompt_body")
           claude -p "$prompt" --model claude-opus-4-8 --dangerously-skip-permissions
 
       - name: Install protoc
@@ -126,6 +137,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
+          ORIGINAL_PR: ${{ inputs.pr_number || github.event.pull_request.number }}
         run: |
           set -euo pipefail
           run_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
@@ -149,6 +161,11 @@ jobs:
             fi
             if git grep -lnE '^(<<<<<<< |>>>>>>> )' HEAD -- >/dev/null 2>&1; then
               fail "$pr" "conflict markers are still present after resolution."
+            fi
+            base=$(gh pr view "$pr" --json baseRefName -q .baseRefName)
+            stray=$("$RUNNER_TEMP/backport-stray-files" "$ORIGINAL_PR" "origin/$base" HEAD)
+            if [ -n "$stray" ]; then
+              fail "$pr" "the backport still adds files that the original PR only changed: $(tr '\n' ' ' <<<"$stray")"
             fi
             git fetch origin "$branch"
             if [ "$(git rev-parse HEAD)" = "$(git rev-parse "origin/$branch")" ]; then
