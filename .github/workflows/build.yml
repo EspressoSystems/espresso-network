@@ -261,6 +261,7 @@ jobs:
           - node-validator
           - orchestrator
           - prover-service
+          - query-watchdog
           - espresso-node
           - staking-cli
           - state-relay-server
@@ -389,6 +390,7 @@ jobs:
           - node-validator
           - orchestrator
           - prover-service
+          - query-watchdog
           - espresso-node
           - staking-cli
           - state-relay-server
@@ -486,6 +488,7 @@ jobs:
           - node-validator
           - orchestrator
           - prover-service
+          - query-watchdog
           - espresso-node
           - staking-cli
           - state-relay-server

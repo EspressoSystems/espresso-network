@@ -103,16 +103,8 @@ func (b *RawCommitmentBuilder) Uint256Field(f string, n *U256) *RawCommitmentBui
 
 // Include a value of type `uint256` in the hash.
 func (b *RawCommitmentBuilder) Uint256(n *U256) *RawCommitmentBuilder {
-	bytes := make([]byte, 32)
-	n.FillBytes(bytes)
-
-	// `FillBytes` uses big endian byte ordering, but the Espresso commitment scheme uses little
-	// endian, so we need to reverse the bytes.
-	for i, j := 0, len(bytes)-1; i < j; i, j = i+1, j-1 {
-		bytes[i], bytes[j] = bytes[j], bytes[i]
-	}
-
-	return b.FixedSizeBytes(bytes)
+	bytes := n.ToLittleEndianBytes()
+	return b.FixedSizeBytes(bytes[:])
 }
 
 // Include a named field of type `uint64` in the hash.

@@ -139,10 +139,15 @@ theorem lockable_nil {r : Trace} {c : Cert1} (hl : (r.history 0).Lockable cfg c)
 
 theorem parentReady_grows {h1 h2 : History} (hr : ∀ i, h1.Received i → h2.Received i) {p : Proposal}
     (hp : ParentReady cfg h1 p) : ParentReady cfg h2 p := by
-  rcases hp with hg | he | ⟨parent, hb, hv, hh, hpay⟩
+  rcases hp with hg | ⟨parent, hb, hv, hh⟩
   · exact Or.inl hg
-  · exact Or.inr (Or.inl he)
-  · exact Or.inr (Or.inr ⟨parent, hasProposal_grows hr hb, hv, hh, hasPayload_grows hr hpay⟩)
+  · exact Or.inr ⟨parent, hasProposal_grows hr hb, hv, hh⟩
+
+/-- A proposal opening an epoch has its parent ready once its opening is justified. -/
+theorem parentReady_of_opens {h : History} {p : Proposal} (hent : EntersEpoch cfg p)
+    (hop : OpensEpochJustified cfg h p) : ParentReady cfg h p := by
+  obtain ⟨⟨q, hq, hqv, hqh⟩, -⟩ := hop hent
+  exact Or.inr ⟨q, hq, Nat.le_of_eq (congrArg ViewNumber.toNat hqv), hqh⟩
 
 /-! ## Along a trace -/
 
@@ -292,20 +297,19 @@ variable (N : TimedNetwork cfg leader C)
 
 /-- A history that obeys the protocol in every epoch obeys it in any set of epochs. -/
 theorem _root_.NewProtocol.ProtocolHistory.of_every {leader : EpochNumber → ViewNumber → Option PubKey}
-    {node : PubKey} {P Q : EpochNumber → Prop} {h : History}
-    (hp : ProtocolHistory cfg leader node (fun _ => True) (fun _ => True) h) :
-    ProtocolHistory cfg leader node P Q h where
+    {node : PubKey} {P : EpochNumber → Prop} {h : History}
+    (hp : ProtocolHistory cfg leader node (fun _ => True) h) :
+    ProtocolHistory cfg leader node P h where
   toSafeHistory := .of_every hp.toSafeHistory
   vote1Leader := fun n vote ⟨st, hn, hm⟩ _ => hp.vote1Leader n vote ⟨st, hn, hm⟩ trivial
   timeoutJustified n st vote hn hm _ := hp.timeoutJustified n st vote hn hm trivial
-  timeoutAnswered n st v hn hi _ := hp.timeoutAnswered n st v hn hi fun _ _ => ⟨trivial, trivial⟩
   proposeJustified := fun n p ⟨st, hn, hm⟩ _ => hp.proposeJustified n p ⟨st, hn, hm⟩ trivial
   revoteJustified := fun n r ⟨st, hn, hm⟩ _ => hp.revoteJustified n r ⟨st, hn, hm⟩ trivial
   proposeOnce m m' v e hs hs' hv hv' he he' _ := hp.proposeOnce m m' v e hs hs' hv hv' he he' trivial
 
 /-- At most one proposal per epoch and view, of the epochs the node is honest in. -/
 theorem _root_.NewProtocol.ProtocolHistory.proposal_once {leader : EpochNumber → ViewNumber → Option PubKey}
-    {node : PubKey} {P Q : EpochNumber → Prop} {h : History} (hp : ProtocolHistory cfg leader node P Q h)
+    {node : PubKey} {P : EpochNumber → Prop} {h : History} (hp : ProtocolHistory cfg leader node P h)
     (p p' : Proposal) (hs : h.Sent (.proposal p)) (hs' : h.Sent (.proposal p')) (he : P p.epoch)
     (heq : p.epoch = p'.epoch) (hv : p.viewNumber = p'.viewNumber) : p = p' := by
   have := hp.proposeOnce _ _ p.viewNumber p.epoch hs hs' rfl (by rw [hv]; rfl) rfl (by rw [heq]; rfl) he
@@ -316,7 +320,7 @@ At most one re-vote request per epoch and view, and none where the node proposed
 of an epoch the node is honest in.
 -/
 theorem _root_.NewProtocol.ProtocolHistory.revote_once {leader : EpochNumber → ViewNumber → Option PubKey}
-    {node : PubKey} {P Q : EpochNumber → Prop} {h : History} (hp : ProtocolHistory cfg leader node P Q h)
+    {node : PubKey} {P : EpochNumber → Prop} {h : History} (hp : ProtocolHistory cfg leader node P h)
     (r : RevoteRequest) (hs : h.Sent (.revote r)) (he : P r.cert.data.epoch) :
     (∀ r', h.Sent (.revote r') → r'.cert.data.epoch = r.cert.data.epoch → r'.view = r.view → r' = r)
       ∧ ∀ p, h.Sent (.proposal p) → p.epoch = r.cert.data.epoch → p.viewNumber ≠ r.view :=
@@ -384,7 +388,7 @@ theorem not_owed_throughout {δ : Nat} (hp : Prompt N δ) {k : PubKey} {hk : C.H
     (howed : ∀ m, n ≤ m → N.time k hk m ≤ B →
       OwedIn cfg leader k (C.honest · k) ((N.trace k hk).history (m + 1)) o) :
     False := by
-  obtain ⟨m, hm, htm, hnow⟩ := hp k hk n o (howed n (Nat.le_refl _) (by omega))
+  obtain ⟨m, hm, htm, hnow⟩ := hp.owed k hk n o (howed n (Nat.le_refl _) (by omega))
   exact hnow (howed m hm (by omega))
 
 include hu in

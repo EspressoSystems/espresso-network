@@ -21,7 +21,7 @@ pub mod state_cert;
 pub mod state_signature;
 pub mod util;
 
-use std::{fmt::Debug, sync::Arc, time::Duration};
+use std::{fmt::Debug, path::PathBuf, sync::Arc, time::Duration};
 
 use alloy::primitives::U256;
 use anyhow::Context;
@@ -152,6 +152,7 @@ pub async fn init_node<P>(
     identity: Identity,
     proposal_fetcher_config: ProposalFetcherConfig,
     empty_block_delay: Duration,
+    leader_trace_dir: Option<PathBuf>,
 ) -> anyhow::Result<SequencerContext<P>>
 where
     P: SequencerPersistence + MembershipPersistence,
@@ -437,6 +438,7 @@ where
         network_params.bootstrap_epoch_catchup_timeout,
         empty_block_delay,
         block_sizes,
+        leader_trace_dir,
     )
     .await?;
 
@@ -570,6 +572,9 @@ where
     P: SequencerPersistence + MembershipPersistence,
     Arc<P>: Storage<SeqTypes>,
 {
+    // Before the L1 work below, which can wait a long time for L1.
+    let first_epoch = genesis.first_epoch()?;
+
     let l1_client = l1_params
         .options
         .with_metrics(metrics)
@@ -661,12 +666,13 @@ where
     let block_reward = fetcher.fetch_fixed_block_reward().await.ok();
     info!("Block reward fetched: {:?}", block_reward);
     let epoch_height = genesis.epoch_height.unwrap_or_default();
-    let mut membership = EpochCommittees::new_stake(
+    let mut membership = EpochCommittees::new(
         network_config.config.known_nodes_with_stake.clone(),
         network_config.config.known_da_nodes.clone(),
         block_reward,
         fetcher,
         epoch_height,
+        first_epoch,
     );
     info!("Membership created. Reloading stake");
     membership.reload_stake(RECENT_STAKE_TABLES_LIMIT).await;
@@ -859,6 +865,7 @@ pub mod testing {
             BlockPayload, EncodeBytes, block_contents::BlockHeader, metrics::NoMetrics,
             signature_key::BuilderSignatureKey,
         },
+        utils::epoch_from_block_number,
     };
     use rand::SeedableRng as _;
     use rand_chacha::ChaCha20Rng;
@@ -1560,12 +1567,16 @@ pub mod testing {
             fetcher.spawn_update_loop().await;
 
             let block_reward = fetcher.fetch_fixed_block_reward().await.ok();
-            let mut membership = EpochCommittees::new_stake(
+            let mut membership = EpochCommittees::new(
                 config.known_nodes_with_stake.clone(),
                 config.known_da_nodes.clone(),
                 block_reward,
                 fetcher,
                 config.epoch_height,
+                EpochNumber::new(epoch_from_block_number(
+                    config.epoch_start_block,
+                    config.epoch_height,
+                )),
             );
             membership.reload_stake(50).await;
 
@@ -1649,6 +1660,7 @@ pub mod testing {
                 Duration::from_secs(2),
                 Duration::from_millis(500),
                 BTreeMap::from([(upgrade.base, max_block_size)]),
+                None,
             )
             .await
         }
@@ -1986,5 +1998,62 @@ mod test {
                 break;
             }
         }
+    }
+
+    #[rstest::rstest]
+    #[case::missing(None)]
+    #[case::zero(Some(0))]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn init_node_state_rejects_epochless_genesis_before_l1(
+        #[case] epoch_height: Option<u64>,
+    ) {
+        use espresso_types::v0::traits::PersistenceOptions;
+
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../data/genesis/mainnet.toml");
+        let mut genesis = Genesis::from_file(&path).unwrap();
+        genesis.epoch_height = epoch_height;
+        // Nothing listens on the L1 port and this block is never finalized, so L1 work cannot finish.
+        genesis.l1_finalized = L1Finalized::Number { number: u64::MAX };
+        let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
+        let l1_params = L1Params {
+            urls: vec![format!("http://127.0.0.1:{port}").parse().unwrap()],
+            options: L1ClientOptions::default(),
+        };
+        let catchup = CatchupParams {
+            state_peers: vec![],
+            backoff: Default::default(),
+            base_timeout: Duration::from_secs(2),
+            local_timeout: Duration::from_secs(5),
+            http_delay: Duration::ZERO,
+        };
+        let tmp = tempfile::TempDir::new().unwrap();
+        let persistence = persistence::fs::Options::new(tmp.path().into())
+            .create()
+            .await
+            .unwrap();
+
+        let result = tokio::time::timeout(
+            Duration::from_secs(10),
+            init_node_state(
+                &genesis,
+                &NetworkConfig::<SeqTypes>::default(),
+                l1_params,
+                catchup,
+                persistence,
+                &NoMetrics,
+            ),
+        )
+        .await;
+
+        let err = match result {
+            Ok(Err(err)) => err,
+            Ok(Ok(_)) => panic!("init_node_state accepted epoch_height={epoch_height:?}"),
+            Err(_) => panic!("init_node_state did not return within 10s: it is doing L1 work"),
+        };
+        assert!(
+            format!("{err:#}").contains("epoch_height"),
+            "expected an epoch_height error, got: {err:#}"
+        );
     }
 }

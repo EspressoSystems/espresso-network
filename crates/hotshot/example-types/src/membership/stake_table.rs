@@ -149,8 +149,6 @@ pub trait TestStakeTable<
 
     fn set_first_epoch(&mut self, epoch: u64, initial_drb_result: DrbResult);
 
-    fn first_epoch(&self) -> Option<u64>;
-
     fn get_epoch_drb(&self, epoch: u64) -> anyhow::Result<DrbResult>;
 
     fn add_da_committee(

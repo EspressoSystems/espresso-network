@@ -2078,8 +2078,6 @@ async fn reward_header_dependencies(
             continue;
         }
 
-        let first_epoch = first_epoch.context("first epoch not found")?;
-
         let proposal_epoch = EpochNumber::new(epoch_from_block_number(height, epoch_height));
 
         // reward distribution starts third epoch onwards

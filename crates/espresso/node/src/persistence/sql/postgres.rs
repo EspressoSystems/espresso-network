@@ -107,7 +107,7 @@ mod test {
         },
     };
     use hotshot_types::{
-        data::{EpochNumber, QuorumProposal, ViewNumber, vid_commitment},
+        data::{QuorumProposal, ViewNumber, vid_commitment},
         event::HotShotAction,
         simple_certificate::QuorumCertificate,
         traits::{
@@ -115,7 +115,6 @@ mod test {
             block_contents::{
                 BlockHeader, BlockPayload as _, BuilderFee, GENESIS_VID_NUM_STORAGE_NODES,
             },
-            election::Membership,
             signature_key::BuilderSignatureKey,
         },
     };
@@ -154,11 +153,6 @@ mod test {
     }
 
     async fn test_postgres_read_ns_table(instance_state: NodeState) {
-        instance_state
-            .coordinator
-            .membership()
-            .set_first_epoch(EpochNumber::genesis(), Default::default());
-
         let tmp = Persistence::tmp_storage().await;
         let mut opt = Persistence::options(&tmp);
         let storage = opt.create().await.unwrap();

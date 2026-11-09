@@ -74,6 +74,7 @@ use super::{
         SubmitDataSource, TokenDataSource,
     },
 };
+use crate::state_cert::StateCertFetchError;
 
 /// Timeout for failing requests due to missing data.
 ///
@@ -733,34 +734,9 @@ where
         &self,
         epoch: u64,
     ) -> anyhow::Result<espresso_types::StateCertQueryDataV1<SeqTypes>> {
-        // Try to get from local storage first
-        let state_cert = self.data_source.get_state_cert_by_epoch(epoch).await?;
-
-        let cert = match state_cert {
-            Some(cert) => cert,
-            None => {
-                // Not found locally, try to fetch from peers
-                const TIMEOUT: Duration = Duration::from_secs(40);
-                let cert = self
-                    .data_source
-                    .request_state_cert(epoch, TIMEOUT)
-                    .await
-                    .map_err(|e| {
-                        anyhow::anyhow!("failed to fetch state cert for epoch {}: {}", epoch, e)
-                    })?;
-
-                // Store the fetched certificate
-                self.data_source
-                    .insert_state_cert(epoch, cert.clone())
-                    .await?;
-
-                cert
-            },
-        };
-
-        Ok(espresso_types::StateCertQueryDataV1::from(
-            espresso_types::StateCertQueryDataV2(cert),
-        ))
+        self.get_state_cert_v2(epoch)
+            .await
+            .map(espresso_types::StateCertQueryDataV1::from)
     }
 
     async fn get_state_cert_v2(
@@ -779,9 +755,7 @@ where
                     .data_source
                     .request_state_cert(epoch, TIMEOUT)
                     .await
-                    .map_err(|e| {
-                        anyhow::anyhow!("failed to fetch state cert for epoch {}: {}", epoch, e)
-                    })?;
+                    .map_err(state_cert_error)?;
 
                 // Store the fetched certificate
                 self.data_source
@@ -3771,6 +3745,17 @@ fn explorer_error(err: ExplorerError) -> anyhow::Error {
     lc_error(hotshot_query_service::Error::Explorer { source: err })
 }
 
+fn state_cert_error(err: StateCertFetchError) -> anyhow::Error {
+    match err {
+        StateCertFetchError::EpochsNotStarted { .. }
+        | StateCertFetchError::BeforeFirstEpoch { .. }
+        | StateCertFetchError::RootNotDecided { .. } => not_found(err.to_string()),
+        StateCertFetchError::FetchError(_)
+        | StateCertFetchError::ValidationError(_)
+        | StateCertFetchError::Other(_) => err.into(),
+    }
+}
+
 /// Bounds the leaves in a single leaf proof, and so the memory to build and serialize it.
 ///
 /// Tracks the `hotshot_query_service` small-object range limit, so a dependency bump that
@@ -6119,6 +6104,30 @@ mod tests {
             err.downcast_ref::<AvailabilityError>(),
             Some(AvailabilityError::BadRequest(_))
         ));
+    }
+
+    #[rstest::rstest]
+    #[case::epochs_not_started(StateCertFetchError::EpochsNotStarted { epoch: 1 })]
+    #[case::before_first_epoch(StateCertFetchError::BeforeFirstEpoch { epoch: 0, first_epoch: 1 })]
+    #[case::root_not_decided(StateCertFetchError::RootNotDecided { epoch: 3, decided_height: 100 })]
+    fn state_cert_that_cannot_exist_is_not_found(#[case] err: StateCertFetchError) {
+        let err = state_cert_error(err);
+        assert!(
+            matches!(
+                err.downcast_ref::<AvailabilityError>(),
+                Some(AvailabilityError::NotFound(_))
+            ),
+            "{err:#}"
+        );
+    }
+
+    #[rstest::rstest]
+    #[case::fetch(StateCertFetchError::FetchError(anyhow::anyhow!("timeout")))]
+    #[case::validation(StateCertFetchError::ValidationError(anyhow::anyhow!("bad")))]
+    #[case::other(StateCertFetchError::Other(anyhow::anyhow!("catchup")))]
+    fn state_cert_fetch_failure_is_internal(#[case] err: StateCertFetchError) {
+        let err = state_cert_error(err);
+        assert!(err.downcast_ref::<AvailabilityError>().is_none(), "{err:#}");
     }
 
     #[tokio::test(flavor = "multi_thread")]

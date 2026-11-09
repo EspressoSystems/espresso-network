@@ -39,7 +39,6 @@ use hotshot_types::{
     ValidatorConfig,
     data::{EpochNumber, VidShare, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
-    initializer::load_start_epoch_info,
     message::UpgradeLock,
     network::NetworkConfig,
     traits::{
@@ -268,13 +267,6 @@ where
     .await?;
     let coordinator = node_state.coordinator.clone();
 
-    load_start_epoch_info(
-        &coordinator,
-        &[],
-        epoch_height,
-        genesis.epoch_start_block.unwrap_or_default(),
-    )
-    .await;
     let current_epoch = bootstrap_epoch_window(
         &coordinator,
         epoch_height,
@@ -750,9 +742,7 @@ impl<P: SequencerPersistence> Follower<P> {
         if skipped.is_empty() {
             return Ok(());
         }
-        let Some(first_epoch) = self.coordinator.membership().first_epoch() else {
-            return Ok(());
-        };
+        let first_epoch = self.coordinator.membership().first_epoch();
         let first = max(
             epoch_from_block_number(skipped.start, self.epoch_height),
             first_epoch.u64(),

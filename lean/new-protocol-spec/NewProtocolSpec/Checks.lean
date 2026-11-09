@@ -80,12 +80,12 @@ meta def checkFields (parent : Name) (expected : List Name) : MetaM Unit := do
 
 /-! The signing rules: what safety rests on. -/
 run_meta (checkFields `NewProtocol.SafeHistory
-  [`vote1Justified, `vote1Once, `vote2Justified, `vote2Once, `vote2BeforeTimeout, `timeoutLock,
+  [`vote1Justified, `vote1Once, `vote2Justified, `vote2BeforeTimeout, `timeoutLock,
    `decideJustified, `decideOnce])
 
 /-! The rest of the protocol: what liveness reads of a node beyond safety. -/
 run_meta (checkFields `NewProtocol.ProtocolHistory
-  [`toSafeHistory, `vote1Leader, `timeoutJustified, `timeoutAnswered, `proposeJustified,
+  [`toSafeHistory, `vote1Leader, `timeoutJustified, `proposeJustified,
    `revoteJustified, `proposeOnce])
 
 /-! What a node owes. -/
@@ -97,7 +97,7 @@ run_meta (checkFields `NewProtocol.OwedVote1Again
   [`received, `wellFormed, `safe, `payload, `current, `notTimedOut, `notVoted, `inView])
 
 run_meta (checkFields `NewProtocol.OwedVote2
-  [`holds, `notVoted, `notCommitted, `notPast, `afterFloor])
+  [`holds, `current, `notVoted, `notCommitted, `notPast, `afterAnchor, `notDecidedPast])
 
 run_meta (checkFields `NewProtocol.OwedDecide [`holds])
 
@@ -120,6 +120,9 @@ run_meta (checkFields `NewProtocol.Synchrony
    `timeoutCert, `timeoutOneHonest, `timeoutCertForward, `timeoutCatchUp, `timeoutLockSpread, `epochChange,
    `proposalValid, `validatedSound, `validated, `header, `timeUnbounded, `timerNotEarly,
    `timerFires])
+
+/-! What is assumed of how promptly a node acts. -/
+run_meta (checkFields `NewProtocol.Prompt [`owed, `timers])
 
 end Checks
 end NewProtocol
