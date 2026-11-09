@@ -25,6 +25,8 @@ extend-exclude = [
   "data/genesis/staging-new.toml",
   "data/genesis/demo-da-committees.toml",
   "tests/proof_of_stake.rs",
+  # `thr` for threshold, in a column header and its loop variable
+  "scripts/network-bench/vid-race-model.py",
 ]
 
 [default.extend-words]
