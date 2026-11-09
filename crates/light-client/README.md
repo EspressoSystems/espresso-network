@@ -28,9 +28,8 @@ filesystem such as EFS shows up as slow `db_write_duration`, since every SQLite 
 
 ## Alerts
 
-Suggestions for the light client on a query node. None of them needs a page: the query node keeps serving what it has,
-and only fetches of missing data depend on the light client. The thresholds are starting points, to tune against what a
-healthy deployment shows.
+Suggestions for the light client on a query node. The thresholds are starting points, to tune against what a healthy
+deployment shows.
 
 - **Verification failure.** An upstream served data that failed a proof or commitment check, or the light client has a
   bug. A healthy network never raises it.
