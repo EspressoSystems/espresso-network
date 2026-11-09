@@ -30,7 +30,7 @@ use vid::utils::blake3::Blake3Node;
 use crate::{
     block::{
         BlockAndHeaderRequest, BlockBuilder, BlockBuilderConfig, BlockBuilderOutput, BlockError,
-        block_commitments, forward_budget, transaction_hashes,
+        MIN_PARALLEL_TRANSACTIONS, block_commitments, forward_budget, transaction_hashes,
     },
     coordinator::Coordinator,
     helpers::test_upgrade_lock,
@@ -873,6 +873,31 @@ async fn transactions_larger_than_a_block_are_not_pooled() {
         txns,
         Vec::from([tx(1), tx(2)]),
         "the oversized transaction takes no pool space from ones that fit"
+    );
+}
+
+#[tokio::test]
+async fn batch_hashed_in_parallel_pools_in_order_under_its_own_hashes() {
+    let mut b = builder_with(BlockBuilderConfig {
+        block_sizes: sizes(32),
+        ..small_config()
+    });
+    // The pool holds fanout + 1 blocks: the first 64 of these one-byte transactions.
+    let batch: Vec<_> = (0..80).map(tx).collect();
+    assert!(batch.len() >= MIN_PARALLEL_TRANSACTIONS);
+    b.on_transactions(tx_msg(view(1), batch.clone()));
+    b.on_block_reconstructed(
+        view(1),
+        payload(1),
+        batch[..32].iter().map(Committable::commit).collect(),
+    );
+
+    let mut txns = b.drain(view(2));
+    txns.sort_by_key(|t| t.bytes().clone());
+    assert_eq!(
+        txns,
+        batch[32..64].to_vec(),
+        "the batch's first 64 are pooled, and the hashes of its first 32 remove exactly those"
     );
 }
 
