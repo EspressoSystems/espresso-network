@@ -449,6 +449,7 @@ just bench aws run --fleet --prover   # the fleet's ctl needs 12288 MiB, e.g. up
 just bench aws run --tag release-x --allocator mimalloc
 just bench aws run --tag release-x --max-block-size 30mb
 just bench aws run --tag release-x --node-env ESPRESSO_NODE_EMPTY_BLOCK_DELAY=50ms
+just bench aws run --tag release-x --nodes 10 --node-stake 1,7,5,3,2,2,2,1,1,1
 just bench aws run --tag release-x --node-type c8i.4xlarge --ctl-type c8i.2xlarge   # Intel: amd64 AMI and images
 just bench aws run --tag release-x --leader-trace
 ```
@@ -471,6 +472,15 @@ just bench aws run --tag release-x --leader-trace
   the whole payload for the builder commitment, a serial floor on the block build.
 - `--node-env KEY=VALUE`: repeatable; added last to every node's environment, overriding the harness's value. Taken
   verbatim and listed in the summary, so not for secrets. Part of the config hash.
+- `--node-stake N,N,...`: the stake each node registers with the orchestrator (`ESPRESSO_NODE_STAKE_VALUE`), one
+  positive integer per node in node order, `node0` first; unset, every node registers 1. Part of the config hash, listed
+  in the summary.
+  - Share sizes, vote thresholds and leader frequency follow it. VID shards follow the raw stakes while the total is at
+    most 1000.
+  - Refused with `--epoch-height`, which `--chaos` and `--prover` set: the L1 stake table replaces the registered stakes
+    after two epochs.
+  - Images from before espresso-node read `ESPRESSO_NODE_STAKE_VALUE` register 1 whatever the flag says; the
+    `stake_table` of `result.json` is the stake the network ran with.
 - `--submit-nodes N`: nodes receiving txs, validators first, then `node0`. Default: all nodes, `node0` included;
   `nodes - 1` keeps txs off the query node.
   - With `node0` submitting, query lag, the query-node rule and `node0` CPU are not comparable across `--submit-nodes`
@@ -710,6 +720,7 @@ Where:
 | `--max-block-size`                    | `50mb`                         | per run      | genesis `max_block_size`                                                                      |
 | `--protocol-version`                  | `0.7`                          | per run      | genesis `base_version` and `upgrade_version`; the images must support it                      |
 | `--node-env KEY=VALUE`                | none                           | per run      | repeatable; node environment                                                                  |
+| `--node-stake N,N,...`                | 1 per node                     | per run      | stake each node registers with the orchestrator, in node order                                |
 | `--leader-trace`, `--no-leader-trace` | off                            | per run      | leader trace CSVs and plots                                                                   |
 | `--submit-nodes`                      | nodes                          | per run      | nodes receiving txs, 1..nodes                                                                 |
 | `--slow-nodes`, `--slow-cores`        | off                            | per run      | the last N validator-only nodes run espresso-node on C cores                                  |
@@ -909,7 +920,8 @@ Each step is judged over its second half. A step stopped early is judged over it
   `linux/amd64`). Recorded as `arch` in the manifest.
 - vCPUs: an Intel vCPU is a hyperthread (c8i.4xlarge: 16 vCPU = 8 cores). A Graviton vCPU is a physical core
   (c8g.4xlarge: 16 cores).
-- Stake: equal, orchestrator self-registration. 5 nodes give quorum 4, so a lagging `node0` never stalls consensus.
+- Stake: orchestrator self-registration, equal unless `--node-stake`. 5 nodes give quorum 4, so a lagging `node0` never
+  stalls consensus.
 - Peers: every node has state peers. Query nodes set `ESPRESSO_NODE_API_PEERS` to the other query nodes; the single
   query node has none.
 - Keys: test mnemonic, index 20 + i. No `keygen`. `stake-for-demo` only with `--epoch-height`.
