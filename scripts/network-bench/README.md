@@ -764,8 +764,8 @@ Progress: one fixed-width line every 10 s, totals at the end.
 - Rates from `--steps` (MB/s), each held `--step-s`, round-robin over the submit nodes.
 - Each payload: a 16 B per-run marker, an 8 B id, and `tx_size - 24` bytes cut at a random offset from a seeded pool of
   256 txs' size, base64-encoded once. Requests are built from slices of the encoded pool.
-- Inclusion: scans of the query node's blocks for the marker. Scans (fetch, JSON, base64, marker search) run in 4
-  processes (`SCAN_PROCESSES`), stdlib only.
+- Inclusion: scans of the query node's blocks for the marker. Scans (fetch, base64 of the JSON answer's `raw_payload`
+  field, marker search) run in 4 processes (`SCAN_PROCESSES`), 4 blocks at a time (`SCAN_BATCH`), stdlib only.
 - Scans that lag: a tx times out `--tx-timeout-s` after its submit, which frees its in-flight room. A later scan that
   finds it in a block shown on the query node within `--tx-timeout-s` still includes it; a find in a block shown later
   leaves it timed out but records its height. At the end of the load the scans go on while such a tx may still be

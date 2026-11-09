@@ -2364,10 +2364,20 @@ def test_a_payload_is_asked_for_in_binary_and_scanned_as_it_comes():
 
 def test_a_json_payload_answer_is_decoded_and_a_binary_one_kept():
     raw = b"\x7b" + bytes(range(256))
-    doc = {"data": {"raw_payload": base64.b64encode(raw).decode(), "ns_table": {}}}
+    doc = {
+        "height": 3,
+        "data": {"raw_payload": base64.b64encode(raw).decode(), "ns_table": {}},
+    }
     assert netbench.payload_bytes(json.dumps(doc).encode()) == raw
+    assert (
+        netbench.payload_bytes(json.dumps(doc, separators=(",", ":")).encode()) == raw
+    )
     assert netbench.payload_bytes(raw) == raw
     assert netbench.payload_bytes(b"{not json") == b"{not json"
+    assert (
+        netbench.payload_bytes(b'{"data":{"raw_payload":"@@"}}')
+        == b'{"data":{"raw_payload":"@@"}}'
+    )
 
 
 def test_scan_block_finds_ids_on_the_second_query_node():
