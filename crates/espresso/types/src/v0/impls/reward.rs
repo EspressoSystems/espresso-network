@@ -40,8 +40,8 @@ use crate::{
     EpochSnapshot, FeeAccount, SeqTypes,
     eth_signature_key::EthKeyPair,
     v0_3::{
-        RewardAccountProofV1, RewardAccountV1, RewardMerkleCommitmentV1, RewardMerkleProofV1,
-        RewardMerkleTreeV1,
+        REWARD_MERKLE_TREE_V1_HEIGHT, RewardAccountProofV1, RewardAccountV1,
+        RewardMerkleCommitmentV1, RewardMerkleProofV1, RewardMerkleTreeV1,
     },
     v0_4::{Delta, REWARD_MERKLE_TREE_V2_ARITY, REWARD_MERKLE_TREE_V2_HEIGHT},
     v0_5::LeaderCounts,
@@ -509,7 +509,12 @@ impl RewardAccountProofV1 {
         }
     }
 
+    /// Returns `None` if `account` is not in memory, or if `tree` does not have the v1 reward
+    /// tree's height, as a tree decoded from a peer may not.
     pub fn prove(tree: &RewardMerkleTreeV1, account: Address) -> Option<(Self, U256)> {
+        if tree.height() != REWARD_MERKLE_TREE_V1_HEIGHT {
+            return None;
+        }
         match tree.universal_lookup(RewardAccountV1(account)) {
             LookupResult::Ok(balance, proof) => Some((
                 Self {
@@ -529,17 +534,19 @@ impl RewardAccountProofV1 {
         }
     }
 
+    /// Also checks that the proof remembers into a tree with root `comm`, so a caller can
+    /// remember a verified proof without handling a failure.
     pub fn verify(&self, comm: &RewardMerkleCommitmentV1) -> anyhow::Result<U256> {
-        match &self.proof {
+        let balance = match &self.proof {
             RewardMerkleProofV1::Presence(proof) => {
                 ensure!(
                     RewardMerkleTreeV1::verify(comm, RewardAccountV1(self.account), proof)?.is_ok(),
                     "invalid proof"
                 );
-                Ok(proof
+                proof
                     .elem()
                     .context("presence proof is missing account balance")?
-                    .0)
+                    .0
             },
             RewardMerkleProofV1::Absence(proof) => {
                 let tree = RewardMerkleTreeV1::from_commitment(comm);
@@ -551,9 +558,12 @@ impl RewardAccountProofV1 {
                     )?,
                     "invalid proof"
                 );
-                Ok(U256::ZERO)
+                U256::ZERO
             },
-        }
+        };
+        self.remember(&mut RewardMerkleTreeV1::from_commitment(comm))
+            .context("proof cannot be remembered")?;
+        Ok(balance)
     }
 
     pub fn remember(&self, tree: &mut RewardMerkleTreeV1) -> anyhow::Result<()> {
@@ -1436,7 +1446,57 @@ impl EpochRewardsCalculator {
 #[cfg(test)]
 pub mod tests {
 
+    use rstest::rstest;
+
     use super::*;
+
+    #[rstest]
+    #[case::shorter(7)]
+    #[case::taller(21)]
+    fn test_prove_v1_rejects_a_tree_of_another_height(#[case] height: u64) {
+        let account = Address::repeat_byte(1);
+        let tree = RewardMerkleTreeV1::from_kv_set(
+            REWARD_MERKLE_TREE_V1_HEIGHT,
+            [(RewardAccountV1(account), RewardAmount::from(1))],
+        )
+        .unwrap();
+        let mut json = serde_json::to_value(&tree).unwrap();
+        json["height"] = height.into();
+        let tree: RewardMerkleTreeV1 = serde_json::from_value(json).unwrap();
+
+        assert!(RewardAccountProofV1::prove(&tree, account).is_none());
+    }
+
+    #[test]
+    fn test_verify_v1_rejects_a_proof_with_a_rewritten_branch_value() {
+        let present = Address::repeat_byte(1);
+        let mut absent = present;
+        absent.0[0] = 2;
+        let tree = RewardMerkleTreeV1::from_kv_set(
+            REWARD_MERKLE_TREE_V1_HEIGHT,
+            [(RewardAccountV1(present), RewardAmount::from(1))],
+        )
+        .unwrap();
+        let (mut proof, _) = RewardAccountProofV1::prove(&tree, absent).unwrap();
+        let RewardMerkleProofV1::Absence(path) = &mut proof.proof else {
+            panic!("expected an absence proof");
+        };
+        let Some(MerkleNode::Branch {
+            value: root,
+            children,
+        }) = path.proof.last_mut()
+        else {
+            panic!("expected a branch at the root");
+        };
+        let (MerkleNode::Branch { value, .. } | MerkleNode::ForgettenSubtree { value }) =
+            Arc::make_mut(&mut children[1])
+        else {
+            panic!("expected a node on the path below the root");
+        };
+        *value = *root;
+
+        assert!(proof.verify(&tree.commitment()).is_err());
+    }
 
     fn make_distributor(commission: u16) -> RewardDistributor {
         RewardDistributor::new(

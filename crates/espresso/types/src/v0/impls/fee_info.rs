@@ -25,8 +25,8 @@ use thiserror::Error;
 
 use super::v0_1::IterableFeeInfo;
 use crate::{
-    AccountQueryData, FeeAccount, FeeAccountProof, FeeAmount, FeeInfo, FeeMerkleCommitment,
-    FeeMerkleProof, FeeMerkleTree, SeqTypes, eth_signature_key::EthKeyPair,
+    AccountQueryData, FEE_MERKLE_TREE_HEIGHT, FeeAccount, FeeAccountProof, FeeAmount, FeeInfo,
+    FeeMerkleCommitment, FeeMerkleProof, FeeMerkleTree, SeqTypes, eth_signature_key::EthKeyPair,
 };
 
 /// Possible charge fee failures
@@ -347,7 +347,12 @@ impl FeeAccountProof {
         }
     }
 
+    /// Returns `None` if `account` is not in memory, or if `tree` does not have the fee tree's
+    /// height, as a tree decoded from a peer may not.
     pub fn prove(tree: &FeeMerkleTree, account: Address) -> Option<(Self, U256)> {
+        if tree.height() != FEE_MERKLE_TREE_HEIGHT {
+            return None;
+        }
         match tree.universal_lookup(FeeAccount(account)) {
             LookupResult::Ok(balance, proof) => Some((
                 Self {
@@ -367,17 +372,19 @@ impl FeeAccountProof {
         }
     }
 
+    /// Also checks that the proof remembers into a tree with root `comm`, so a caller can
+    /// remember a verified proof without handling a failure.
     pub fn verify(&self, comm: &FeeMerkleCommitment) -> anyhow::Result<U256> {
-        match &self.proof {
+        let balance = match &self.proof {
             FeeMerkleProof::Presence(proof) => {
                 ensure!(
                     FeeMerkleTree::verify(comm, FeeAccount(self.account), proof)?.is_ok(),
                     "invalid proof"
                 );
-                Ok(proof
+                proof
                     .elem()
                     .context("presence proof is missing account balance")?
-                    .0)
+                    .0
             },
             FeeMerkleProof::Absence(proof) => {
                 let tree = FeeMerkleTree::from_commitment(comm);
@@ -389,9 +396,12 @@ impl FeeAccountProof {
                     )?,
                     "invalid proof"
                 );
-                Ok(U256::ZERO)
+                U256::ZERO
             },
-        }
+        };
+        self.remember(&mut FeeMerkleTree::from_commitment(comm))
+            .context("proof cannot be remembered")?;
+        Ok(balance)
     }
 
     pub fn remember(&self, tree: &mut FeeMerkleTree) -> anyhow::Result<()> {
@@ -450,8 +460,64 @@ pub fn retain_accounts(
 
 #[cfg(test)]
 mod test {
+    use std::sync::Arc;
+
+    use jf_merkle_tree_compat::{MerkleTreeScheme, prelude::MerkleNode};
+    use rstest::rstest;
+
     use super::{Address, IterableFeeInfo};
-    use crate::{FeeAccount, FeeAmount, FeeInfo};
+    use crate::{
+        FEE_MERKLE_TREE_HEIGHT, FeeAccount, FeeAccountProof, FeeAmount, FeeInfo, FeeMerkleProof,
+        FeeMerkleTree,
+    };
+
+    #[rstest]
+    #[case::shorter(7)]
+    #[case::taller(21)]
+    fn test_prove_rejects_a_tree_of_another_height(#[case] height: u64) {
+        let account = Address::repeat_byte(1);
+        let tree = FeeMerkleTree::from_kv_set(
+            FEE_MERKLE_TREE_HEIGHT,
+            [(FeeAccount(account), FeeAmount::from(1))],
+        )
+        .unwrap();
+        let mut json = serde_json::to_value(&tree).unwrap();
+        json["height"] = height.into();
+        let tree: FeeMerkleTree = serde_json::from_value(json).unwrap();
+
+        assert!(FeeAccountProof::prove(&tree, account).is_none());
+    }
+
+    #[test]
+    fn test_verify_rejects_a_proof_with_a_rewritten_branch_value() {
+        let present = Address::repeat_byte(1);
+        let mut absent = present;
+        absent.0[0] = 2;
+        let tree = FeeMerkleTree::from_kv_set(
+            FEE_MERKLE_TREE_HEIGHT,
+            [(FeeAccount(present), FeeAmount::from(1))],
+        )
+        .unwrap();
+        let (mut proof, _) = FeeAccountProof::prove(&tree, absent).unwrap();
+        let FeeMerkleProof::Absence(path) = &mut proof.proof else {
+            panic!("expected an absence proof");
+        };
+        let Some(MerkleNode::Branch {
+            value: root,
+            children,
+        }) = path.proof.last_mut()
+        else {
+            panic!("expected a branch at the root");
+        };
+        let (MerkleNode::Branch { value, .. } | MerkleNode::ForgettenSubtree { value }) =
+            Arc::make_mut(&mut children[1])
+        else {
+            panic!("expected a node on the path below the root");
+        };
+        *value = *root;
+
+        assert!(proof.verify(&tree.commitment()).is_err());
+    }
 
     #[test]
     fn test_iterable_fee_info() {
