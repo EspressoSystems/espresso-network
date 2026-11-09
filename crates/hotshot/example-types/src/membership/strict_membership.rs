@@ -37,6 +37,8 @@ where
     S: TestStakeTable<T::SignatureKey, T::StateSignatureKey>,
 {
     inner: Arc<RwLock<Inner<T, S>>>,
+    /// The members given to `new`, which run the views before the first epoch.
+    genesis: Arc<GenesisStakeTables<T>>,
     epoch_height: BlockNumber,
 }
 
@@ -75,6 +77,10 @@ where
         epoch_height: u64,
         first_epoch: EpochNumber,
     ) -> Self {
+        let genesis = Arc::new(GenesisStakeTables::new(
+            quorum_members.clone(),
+            da_members.clone(),
+        ));
         let membership = Self {
             inner: Arc::new(RwLock::new(Inner {
                 table: TestStakeTable::new(
@@ -86,6 +92,7 @@ where
                 drbs: HashSet::new(),
                 fetcher: None,
             })),
+            genesis,
             epoch_height: epoch_height.into(),
         };
         membership.seed_first_epoch(first_epoch);
@@ -179,19 +186,7 @@ where
     }
 
     fn genesis_stake_tables(&self) -> Arc<GenesisStakeTables<T>> {
-        let table = &self.inner.read().table;
-        Arc::new(GenesisStakeTables::new(
-            table
-                .stake_table(None)
-                .into_iter()
-                .map(Into::into)
-                .collect(),
-            table
-                .da_stake_table(None)
-                .into_iter()
-                .map(Into::into)
-                .collect(),
-        ))
+        self.genesis.clone()
     }
 
     fn add_drb_result(&self, e: EpochNumber, drb: DrbResult) {
@@ -232,7 +227,7 @@ where
 
         let (stake_table, fetcher) = {
             let inner = self.inner.read();
-            let table = inner.table.stake_table(Some(*e));
+            let table = inner.table.stake_table(*e);
             let fetcher = inner
                 .fetcher
                 .clone()
@@ -279,7 +274,7 @@ where
             };
 
             let drb_block_height = transition_block_for_epoch(previous_epoch, *epoch_height);
-            let stake_table = self.inner.read().table.stake_table(Some(previous_epoch));
+            let stake_table = self.inner.read().table.stake_table(previous_epoch);
             let fetcher = fetcher.expect("get_epoch_drb called before set_leaf_fetcher_network");
 
             let mut drb_leaf = None;
@@ -350,8 +345,8 @@ where
     S: TestStakeTable<T::SignatureKey, T::StateSignatureKey>,
 {
     fn build(epoch: EpochNumber, first_epoch: EpochNumber, has_drb: bool, table: S) -> Self {
-        let stake_entries = table.stake_table(Some(*epoch));
-        let da_entries = table.da_stake_table(Some(*epoch));
+        let stake_entries = table.stake_table(*epoch);
+        let da_entries = table.da_stake_table(*epoch);
         let committee_keys = stake_entries
             .iter()
             .map(|e| e.signature_key.clone())
@@ -451,14 +446,12 @@ where
     }
 
     fn stake(&self, key: &T::SignatureKey) -> Option<PeerConfig<T>> {
-        self.table
-            .stake(key.clone(), Some(*self.epoch))
-            .map(Into::into)
+        self.table.stake(key.clone(), *self.epoch).map(Into::into)
     }
 
     fn da_stake(&self, key: &T::SignatureKey) -> Option<PeerConfig<T>> {
         self.table
-            .da_stake(key.clone(), Some(*self.epoch))
+            .da_stake(key.clone(), *self.epoch)
             .map(Into::into)
     }
 
@@ -473,7 +466,7 @@ where
     }
 
     fn lookup_leader(&self, view: ViewNumber) -> Result<T::SignatureKey, Self::Error> {
-        Ok(self.table.lookup_leader(*view, Some(*self.epoch))?)
+        Ok(self.table.lookup_leader(*view, *self.epoch)?)
     }
 }
 
