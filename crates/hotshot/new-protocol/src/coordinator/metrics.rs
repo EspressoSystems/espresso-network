@@ -2,6 +2,8 @@ use std::{sync::Arc, time::Instant};
 
 use hotshot_types::{consensus::ConsensusMetricsValue, traits::metrics::Histogram};
 
+use crate::vid::PayloadSource;
+
 pub struct Metrics {
     pub(crate) consensus: ConsensusMetricsValue,
 }
@@ -9,6 +11,15 @@ pub struct Metrics {
 impl Metrics {
     pub fn new(consensus: ConsensusMetricsValue) -> Self {
         Self { consensus }
+    }
+
+    pub(crate) fn payload_obtained(&self, source: PayloadSource) {
+        let counter = match source {
+            PayloadSource::Systematic => &self.consensus.vid_payloads_systematic,
+            PayloadSource::Decoded => &self.consensus.vid_payloads_decoded,
+            PayloadSource::Fetched => &self.consensus.vid_payloads_fetched,
+        };
+        counter.add(1);
     }
 }
 

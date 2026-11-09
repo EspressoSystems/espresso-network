@@ -1,10 +1,13 @@
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use hotshot_example_types::{block_types::TestTransaction, node_types::TestTypes};
 use hotshot_types::{
     data::{VidCommitment2, VidDisperseShare2, ViewNumber, ns_table::parse_ns_table},
     signature_key::BLSPubKey,
-    traits::signature_key::SignatureKey,
+    traits::{
+        metrics::{Counter, Histogram},
+        signature_key::SignatureKey,
+    },
     vid::avidm_gf2::{AvidmGf2Scheme, init_avidm_gf2_param},
 };
 use vid::VidError;
@@ -14,8 +17,9 @@ use crate::{
     leader_trace::LeaderEvent,
     tests::common::utils::{ns_table, vid_fragments},
     vid::{
-        PinnedBy, VidFragmentAccumulator, VidFragmentError, VidReconstructErrorKind,
-        VidReconstructor, matches_commitment, ns_lens_match_metadata,
+        ObtainedPayload, PayloadSource, PinnedBy, VidFragmentAccumulator, VidFragmentError,
+        VidReconstructErrorKind, VidReconstructMetrics, VidReconstructor, matches_commitment,
+        ns_lens_match_metadata,
     },
 };
 
@@ -235,13 +239,16 @@ async fn assert_no_duplicate_success(
 
 /// Drive the reconstructor to a single successful reconstruction and assert it
 /// matches `view`'s commitment.
-async fn expect_reconstruction(reconstructor: &mut VidReconstructor<TestTypes>, view: &TestView) {
+async fn expect_reconstruction(
+    reconstructor: &mut VidReconstructor<TestTypes>,
+    view: &TestView,
+) -> ObtainedPayload<TestTypes> {
     expect_reconstruction_of(
         reconstructor,
         view.view_number,
         view.vid_shares[0].payload_commitment,
     )
-    .await;
+    .await
 }
 
 /// Drive the reconstructor to a single successful reconstruction and assert it
@@ -250,7 +257,7 @@ async fn expect_reconstruction_of(
     reconstructor: &mut VidReconstructor<TestTypes>,
     view: ViewNumber,
     payload_commitment: VidCommitment2,
-) {
+) -> ObtainedPayload<TestTypes> {
     let out = tokio::time::timeout(std::time::Duration::from_secs(5), reconstructor.next())
         .await
         .expect("reconstruction should complete in time")
@@ -258,6 +265,7 @@ async fn expect_reconstruction_of(
         .expect("reconstruction should succeed");
     assert_eq!(out.view, view);
     assert_eq!(out.payload_commitment, payload_commitment);
+    out
 }
 
 /// Feeding shares beyond the threshold produces exactly one reconstruction
@@ -623,6 +631,111 @@ async fn test_non_codeword_payload_is_unrecoverable() {
         "shares for a view already proven unrecoverable",
     )
     .await;
+}
+
+/// A histogram or counter that keeps what it is given: [`Self::count`] is
+/// the number of points, or the sum of the counts.
+#[derive(Clone, Debug, Default)]
+struct Recorded(Arc<Mutex<Vec<f64>>>);
+
+impl Recorded {
+    fn count(&self) -> usize {
+        self.0.lock().unwrap().len()
+    }
+}
+
+impl Histogram for Recorded {
+    fn add_point(&self, point: f64) {
+        self.0.lock().unwrap().push(point);
+    }
+}
+
+impl Counter for Recorded {
+    fn add(&self, amount: usize) {
+        self.0
+            .lock()
+            .unwrap()
+            .extend(std::iter::repeat_n(1.0, amount));
+    }
+}
+
+/// Each attempt is timed under the path `recover` takes, and a successful one
+/// says how the payload was obtained: concatenated when the shares hold every
+/// original shard, decoded when one is missing. A failed attempt is counted.
+///
+/// With equal stakes, the shares holding the original shards cover the
+/// recovery threshold only once all of them are in.
+#[tokio::test]
+async fn test_attempts_are_recorded_by_recovery_path() {
+    let test_data = TestData::new(3).await;
+    let [systematic, decoded, non_codeword] = &test_data.views[..] else {
+        panic!("three views");
+    };
+    let systematic_duration = Recorded::default();
+    let decode_duration = Recorded::default();
+    let failures = Recorded::default();
+    let mut reconstructor =
+        VidReconstructor::<TestTypes>::new().with_metrics(Some(VidReconstructMetrics {
+            systematic_duration: Arc::new(systematic_duration.clone()),
+            decode_duration: Arc::new(decode_duration.clone()),
+            failures: Arc::new(failures.clone()),
+        }));
+    let recovery_threshold = recovery_threshold(systematic) as usize;
+    let starts = |share: &VidDisperseShare2<TestTypes>| share.share.range().unwrap().start;
+
+    handle_proposal(&mut reconstructor, systematic);
+    for share in &systematic.vid_shares {
+        if starts(share) < recovery_threshold {
+            feed(&mut reconstructor, share.clone());
+        }
+    }
+    let out = expect_reconstruction(&mut reconstructor, systematic).await;
+    assert_eq!(out.source, PayloadSource::Systematic);
+
+    handle_proposal(&mut reconstructor, decoded);
+    for share in &decoded.vid_shares {
+        if starts(share) != 0 {
+            feed(&mut reconstructor, share.clone());
+        }
+    }
+    let out = expect_reconstruction(&mut reconstructor, decoded).await;
+    assert_eq!(out.source, PayloadSource::Decoded);
+    assert_eq!(
+        (
+            systematic_duration.count(),
+            decode_duration.count(),
+            failures.count()
+        ),
+        (1, 1, 0)
+    );
+
+    let (payload_commitment, shares) = non_codeword_shares(non_codeword);
+    reconstructor.handle_proposal(
+        non_codeword.view_number,
+        payload_commitment,
+        non_codeword.proposal.data.block_header.metadata,
+        non_codeword.proposal.data.epoch,
+        Some(shares[0].common.param.clone()),
+        PinnedBy::Leader,
+    );
+    for share in shares {
+        if starts(&share) < recovery_threshold {
+            feed(&mut reconstructor, share);
+        }
+    }
+    let result = tokio::time::timeout(std::time::Duration::from_secs(5), reconstructor.next())
+        .await
+        .expect("attempt should complete in time")
+        .expect("should produce a result");
+    assert!(result.is_err(), "a non-codeword does not reconstruct");
+    assert_eq!(
+        (
+            systematic_duration.count(),
+            decode_duration.count(),
+            failures.count()
+        ),
+        (2, 1, 1)
+    );
 }
 
 /// Replaying another voter's valid share under your own key adds no coverage:
