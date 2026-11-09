@@ -12,7 +12,10 @@ use bon::{Builder, bon};
 use committable::Commitment;
 use hotshot_types::{
     consensus::{ConsensusMetricsValue, ParticipationTracker},
-    data::{EpochNumber, Leaf2, VidCommitment, VidCommitment2, ViewChangeEvidence2, ViewNumber},
+    data::{
+        EpochNumber, Leaf2, VidCommitment, VidCommitment2, VidDisperseShare2, ViewChangeEvidence2,
+        ViewNumber,
+    },
     epoch_membership::EpochMembershipCoordinator,
     initializer::HotShotInitializer,
     message::{Proposal as SignedProposal, UpgradeLock},
@@ -662,6 +665,13 @@ where
                 }
                 Some(item) = self.share_validator.next() => match item {
                     Ok(vid_share) => {
+                        // A failed forward costs the peers this share, not this node its vote.
+                        if let Err(err) = self.forward_vid_share(&vid_share) {
+                            if err.severity == Severity::Critical {
+                                return Err(err)
+                            }
+                            warn!(node = %self.node_id, %err, "vid share not forwarded");
+                        }
                         return Ok(ConsensusInput::VidShare(vid_share))
                     },
                     Err(e) => {
@@ -1127,15 +1137,6 @@ where
                     crate::leader_trace::LeaderEvent::Vote1VMinus1BroadcastEnd
                 );
                 r?
-            },
-            ConsensusOutput::BroadcastVidShare(share) => {
-                let view = share.view_number();
-                debug!(%node, %view, "send vid share");
-                self.broadcast_in(
-                    self.slot_for(view),
-                    ConsensusMessage::VidShareBroadcast(share),
-                    "broadcast vid share",
-                )?
             },
             ConsensusOutput::SendVote2(vote2) => {
                 let view = vote2.view_number();
@@ -1958,6 +1959,27 @@ where
             .map_err(|e| CoordinatorError::from(e).context(ctx))
     }
 
+    /// Send this node's share, which the share validator has verified, to the nodes that lack it.
+    ///
+    /// It goes out on arrival, ahead of the view's proposal: a receiver holds a share until a
+    /// proposal pins the view to its commitment, so sending first loses nothing, and the share no
+    /// longer waits for the proposal to validate and this node to vote.
+    fn forward_vid_share(&mut self, share: &VidDisperseShare2<T>) -> Result<(), CoordinatorError> {
+        let view = share.view_number();
+        let excluded = share_forward_exclusions(share, |view, epoch| self.leader(view, epoch));
+        debug!(node = %self.node_id, %view, "forward vid share");
+        let message = Message {
+            sender: self.public_key.clone(),
+            message_type: MessageType::Consensus(ConsensusMessage::VidShareBroadcast(
+                share.clone(),
+            )),
+        };
+        self.network
+            .sender()
+            .broadcast_except(self.slot_for(view), &message, &excluded)
+            .map_err(|e| CoordinatorError::from(e).context("forward vid share"))
+    }
+
     /// Sends `forward` to the leaders of the `fanout` views from its own, each leader once with
     /// the earliest of its views.
     fn send_transactions(
@@ -2621,6 +2643,28 @@ pub enum GcScope {
     Decided(ViewNumber),
     /// GC is invoked on a view that advanced via timeout certificate.
     Timeout(ViewNumber),
+}
+
+/// The nodes a forward of `share` skips because they hold it already: its recipient, this node,
+/// and its disperser, which holds every share of the view.
+///
+/// The disperser is `leader` of the share's view in the epoch the share names: the leader whose
+/// signature the share validator checked. No epoch is derived from a block number, which is
+/// unknown before the proposal arrives, so the last view of an epoch needs no special case, and
+/// a view holding shares of two epochs skips each share's own disperser.
+pub(crate) fn share_forward_exclusions<T: NodeType>(
+    share: &VidDisperseShare2<T>,
+    leader: impl FnOnce(ViewNumber, EpochNumber) -> Option<T::SignatureKey>,
+) -> Vec<T::SignatureKey> {
+    let mut excluded = vec![share.recipient_key.clone()];
+    if let Some(disperser) = share
+        .epoch
+        .and_then(|epoch| leader(share.view_number, epoch))
+        && disperser != share.recipient_key
+    {
+        excluded.push(disperser);
+    }
+    excluded
 }
 
 /// The admissible window around `current`.
