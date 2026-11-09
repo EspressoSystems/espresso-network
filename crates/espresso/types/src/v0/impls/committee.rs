@@ -1240,18 +1240,14 @@ pub enum EpochCommitteesError {
 
 impl Inner {
     /// The DA committee that applies to `epoch`, or the genesis DA committee
-    /// when `epoch` is `None` or no explicit DA committee covers it.
-    fn resolve_da_committee(&self, epoch: Option<EpochNumber>) -> Arc<DaCommittee> {
-        if let Some(e) = epoch {
-            // The greatest key ≤ `e` is the DA committee that applies.
-            self.da_committees
-                .range((Bound::Included(0.into()), Bound::Included(e)))
-                .last()
-                .map(|(_, committee)| committee.clone())
-                .unwrap_or_else(|| self.genesis_da_committee.clone())
-        } else {
-            self.genesis_da_committee.clone()
-        }
+    /// when no explicit DA committee covers it.
+    fn resolve_da_committee(&self, epoch: EpochNumber) -> Arc<DaCommittee> {
+        // The greatest key ≤ `epoch` is the DA committee that applies.
+        self.da_committees
+            .range((Bound::Included(0.into()), Bound::Included(epoch)))
+            .last()
+            .map(|(_, committee)| committee.clone())
+            .unwrap_or_else(|| self.genesis_da_committee.clone())
     }
 
     /// Borrow the per-epoch `EpochCommittee` if loaded.
@@ -1285,7 +1281,7 @@ impl Inner {
             .snapshots
             .get(&epoch)
             .and_then(|s| s.inner.randomized.clone());
-        let da_committee = self.resolve_da_committee(Some(epoch));
+        let da_committee = self.resolve_da_committee(epoch);
         let first_epoch = self.first_epoch;
         self.snapshots.insert(
             epoch,
