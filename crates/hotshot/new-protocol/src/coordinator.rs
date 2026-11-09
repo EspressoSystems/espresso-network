@@ -1766,7 +1766,13 @@ where
                             "recv transactions"
                         );
                         if !self.is_view_too_far_ahead(msg.view) {
-                            self.block_builder.on_transactions(msg)
+                            let started = Instant::now();
+                            self.block_builder.on_transactions(msg);
+                            if let Some(m) = &self.metrics {
+                                m.consensus
+                                    .forwarded_transactions_duration
+                                    .add_point(started.elapsed().as_secs_f64());
+                            }
                         }
                     },
                     BlockMessage::DedupManifest(manifest) => {

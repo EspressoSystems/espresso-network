@@ -566,6 +566,9 @@ pub struct ConsensusMetricsValue {
     /// The time a leader took to disperse a block: signing and sending the shares, plus
     /// erasure-coding the payload when the block builder had not
     pub vid_disperse_duration: Box<dyn Histogram>,
+    /// The time the new-protocol coordinator took to take in one batch of transactions forwarded
+    /// to it as an upcoming leader
+    pub forwarded_transactions_duration: Box<dyn Histogram>,
 }
 
 impl ConsensusMetricsValue {
@@ -616,6 +619,10 @@ impl ConsensusMetricsValue {
             ),
             vid_disperse_duration: metrics.create_histogram(
                 String::from("vid_disperse_duration"),
+                Some("seconds".to_string()),
+            ),
+            forwarded_transactions_duration: metrics.create_histogram(
+                String::from("forwarded_transactions_duration"),
                 Some("seconds".to_string()),
             ),
         }
