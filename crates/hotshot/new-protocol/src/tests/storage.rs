@@ -1,11 +1,15 @@
 use std::{sync::atomic::Ordering, time::Duration};
 
+use committable::RawCommitmentBuilder;
 use hotshot_example_types::{node_types::TestTypes, storage_types::TestStorage};
 use hotshot_types::{
-    data::ViewNumber, signature_key::BLSPubKey, traits::signature_key::SignatureKey,
+    data::{EpochNumber, ViewNumber},
+    signature_key::BLSPubKey,
+    traits::signature_key::SignatureKey,
 };
 use tokio::time::timeout;
 
+use super::common::utils::{build_cert1, mock_membership};
 use crate::storage::{ActionKind, Storage, StorageOutput};
 
 fn test_storage() -> (
@@ -67,4 +71,31 @@ async fn test_gc_aborts_pending_writes() {
     inner.should_return_err.store(false, Ordering::Relaxed);
 
     assert!(storage.next().await.is_none());
+}
+
+/// The boundary certificate is written however long storage fails, even after
+/// gc passes its view: nothing else carries it once the view has passed.
+#[tokio::test]
+async fn test_gc_does_not_abort_the_boundary_certificate() {
+    let (mut storage, inner) = test_storage();
+    let epoch = EpochNumber::genesis();
+    let membership = mock_membership().membership_for_epoch(Some(epoch)).unwrap();
+    let (public_key, private_key) = BLSPubKey::generated_from_seed_indexed([0; 32], 0);
+    let leaf = RawCommitmentBuilder::new("leaf").u64(9).finalize();
+    let view = ViewNumber::new(10);
+    let cert = build_cert1(leaf, epoch, 9, &membership, view, &public_key, &private_key);
+
+    inner.should_return_err.store(true, Ordering::Relaxed);
+    storage.append_boundary_qc2(cert.clone());
+    storage.gc(view + 5);
+    inner.should_return_err.store(false, Ordering::Relaxed);
+
+    timeout(Duration::from_secs(5), async {
+        while inner.boundary_qc_cloned().await.is_none() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the write completes once storage recovers");
+    assert_eq!(inner.boundary_qc_cloned().await, Some(cert));
 }
