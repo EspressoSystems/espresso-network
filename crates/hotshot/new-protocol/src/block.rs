@@ -22,6 +22,7 @@ use hotshot_types::{
     },
     utils::BuilderCommitment,
 };
+use rayon::iter::{IntoParallelRefIterator as _, ParallelIterator as _};
 use tokio::{
     task::{AbortHandle, JoinSet, spawn_blocking},
     time::sleep,
@@ -593,9 +594,8 @@ impl<T: NodeType> BlockBuilder<T> {
         let view = msg.view.max(self.current_view);
         let block_size = self.block_size(view);
         let max_bytes = block_size.saturating_mul(self.config.fanout.get() + 1);
-        for tx in msg.transactions {
-            let hash = tx.commit();
-
+        let hashes = forwarded_hashes::<T>(&msg.transactions);
+        for (hash, tx) in hashes.into_iter().zip(msg.transactions) {
             if self.dedups.values().any(|hs| hs.contains(&hash)) {
                 continue;
             }
@@ -791,6 +791,35 @@ impl<T: NodeType> BlockBuilder<T> {
     pub(crate) fn drain(&mut self, view: ViewNumber) -> Vec<T::Transaction> {
         self.take_block(view).0
     }
+}
+
+/// Transaction count from which [`forwarded_hashes`] hashes in parallel.
+///
+/// Mirrors `MIN_PARALLEL_TRANSACTIONS` in espresso-types. Below it, hashing on the coordinator
+/// costs less than a round trip through the rayon pool, and a busy pool takes outside jobs only
+/// once its own work runs out, so the coordinator could wait behind a VID encode.
+pub(crate) const MIN_PARALLEL_TRANSACTIONS: usize = 32;
+
+/// Batch size from which [`forwarded_hashes`] hashes in parallel regardless of transaction
+/// count; a few large transactions are slow to hash serially.
+const MIN_PARALLEL_BYTES: u64 = 1 << 20;
+
+/// The hashes of a forwarded batch, in batch order.
+///
+/// A forward carries up to a block of transactions, and the coordinator waits for their hashes
+/// before it handles anything else, so a large batch is hashed across the rayon pool.
+/// `par_iter` is indexed, so `collect` keeps batch order.
+fn forwarded_hashes<T: NodeType>(
+    transactions: &[T::Transaction],
+) -> Vec<Commitment<T::Transaction>> {
+    let bytes: u64 = transactions
+        .iter()
+        .map(Transaction::minimum_block_size)
+        .sum();
+    if transactions.len() < MIN_PARALLEL_TRANSACTIONS && bytes < MIN_PARALLEL_BYTES {
+        return transactions.iter().map(Committable::commit).collect();
+    }
+    transactions.par_iter().map(Committable::commit).collect()
 }
 
 impl<T: NodeType> From<&BlockBuilderOutput<T>> for HeaderRequest<T> {
