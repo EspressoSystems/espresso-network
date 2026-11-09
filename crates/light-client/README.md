@@ -38,9 +38,9 @@ deployment shows.
   increase(light_client_verification_failures[15m]) > 0
   ```
 
-- **Stake table catchup stalled.** A catchup is running but finished no epoch in 15 minutes. A failed catchup releases
-  its backlog, so one that keeps failing and retrying flaps between 0 and the full backlog, which `max_over_time` still
-  catches.
+- **Stake table catchup stalled.** A catchup is running but has not finished an epoch in 15 minutes. This only sees long
+  catchups. One that fails within a few seconds never shows up here, but the fetch that needed it fails too, so the
+  fetch alert fires instead.
 
   ```
   max_over_time(light_client_stake_table_backlog[15m]) > 0
