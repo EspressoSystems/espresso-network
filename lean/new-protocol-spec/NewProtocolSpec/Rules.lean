@@ -110,9 +110,10 @@ structure SafeHistory (honestIn : EpochNumber → Prop) (h : History) : Prop whe
 
   The parent's payload is what makes a `Cert1` mean its parent is available. A
   vote1 on a proposal says the signer had it. A vote1 answering a re-vote request
-  says nothing of the parent, but re-certifies a block that already has a `Cert1`,
-  so a backed `Cert1` always has an honest node that held the parent with its
-  payload (`cert1_parent_ready`).
+  says nothing of the parent, but re-certifies a block that already has a `Cert1`.
+  So an honest node held the parent of a block with a backed `Cert1`, with its
+  payload, unless the parent is the anchor or the block opens an epoch
+  (`cert1_parent_ready`).
   -/
   vote1Justified : ∀ n vote, h.SentAt n (.vote1 vote) →
     honestIn vote.data.epoch → vote.signer = node

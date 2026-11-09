@@ -48,7 +48,7 @@ inductive Finding where
 
 /--
 A `# placed` or `# forced` line, which the recorder writes when a test sets the
-node's view and epoch, or replaces a proposal it holds, directly. What the rules
+node's view and epoch, replaces a proposal it holds, or restores its lock, directly. What the rules
 derive from the steps is then not the node's, so only the signing rules are
 checked: they read only what was received and sent, which the test did not
 change.

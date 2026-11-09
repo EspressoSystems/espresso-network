@@ -713,6 +713,14 @@ impl<T: NodeType> Consensus<T> {
     /// the next epoch and needs no parent payload. The leaf, which covers the
     /// block's view, is compared rather than the view, since a re-vote's
     /// certificate is at a later view than its block.
+    ///
+    /// The specification does not cover restarts yet. One detail to settle
+    /// when it does: the lock (`append_high_qc2`) and the payload
+    /// (`append_da`) are persisted by separate storage tasks, so a node that
+    /// restarts between the two writes comes back with the lock but without
+    /// the payload, and the lock alone counts here. Ordering the two writes,
+    /// or checking the payload on restart, keeps a restarted node within the
+    /// rule that a vote1 needs the parent's payload (`ParentReady`).
     fn parent_reconstructed(
         &self,
         parent_view: ViewNumber,

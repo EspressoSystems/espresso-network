@@ -314,7 +314,8 @@ impl Recorder {
     /// A node locks only on a block whose payload it holds, so a restored lock
     /// stands for a payload the node had before it restarted. That holds only
     /// if the payload was persisted with the lock, which a real restart does
-    /// not ensure (see `Consensus::parent_reconstructed`).
+    /// not ensure: the two are written by separate storage tasks (see
+    /// `Consensus::parent_reconstructed`).
     pub fn payload_held<T: NodeType>(&mut self, proposal: &Proposal<T>) {
         if self.path.is_none() {
             return;
@@ -352,6 +353,22 @@ impl Recorder {
         }
         self.lines.push(format!(
             "# placed at view {view} epoch {epoch} (at step {})",
+            self.steps
+        ));
+    }
+
+    /// Record that a test restored the node's lock on `view` directly.
+    ///
+    /// The steps cannot show how the node came to hold the lock, nor what it did
+    /// on it before the restart, so what a checker derives from them as owed is
+    /// not what the node owes. Written like [`Recorder::placed`], so a checker
+    /// can leave the rules that read what the node owes unchecked.
+    pub fn lock_restored(&mut self, view: ViewNumber) {
+        if self.path.is_none() {
+            return;
+        }
+        self.lines.push(format!(
+            "# placed lock at view {view} (at step {})",
             self.steps
         ));
     }

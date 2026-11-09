@@ -1409,7 +1409,8 @@ impl ConsensusHarness {
 
     /// Restore a lock on `block` as a restart does: seed the block and the lock
     /// `cert1` certifying it, and record the block, its payload and `cert1` as
-    /// held.
+    /// held. The trace is marked as placed, since its steps do not show what
+    /// the node did on the lock before the restart.
     pub fn seed_locked_block(
         &mut self,
         block: Proposal<TestTypes>,
@@ -1418,6 +1419,7 @@ impl ConsensusHarness {
         self.seed_proposals([block.clone()]);
         self.trace.payload_held(&block);
         self.trace.cert1_held(&cert1);
+        self.trace.lock_restored(cert1.view_number);
         self.consensus.seed_locked_cert(cert1);
     }
 
