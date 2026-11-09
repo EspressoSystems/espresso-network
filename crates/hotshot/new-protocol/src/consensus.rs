@@ -185,9 +185,6 @@ pub enum ConsensusOutput<T: NodeType> {
         header: T::BlockHeader,
         payload: Arc<T::BlockPayload>,
     },
-    /// Broadcast our own VID share so peers can reconstruct the block. Emitted
-    /// right after `SendVote1` so it never delays the cert-forming vote.
-    BroadcastVidShare(VidDisperseShare2<T>),
     /// The `UpgradeLock` has been updated; the certificate must be persisted.
     UpgradeDecided(UpgradeCertificate<T>),
 }
@@ -3299,14 +3296,6 @@ impl<T: NodeType> Consensus<T> {
             return;
         }
         outbox.push_back(ConsensusOutput::SendVote1(vote1));
-        if is_revote {
-            return;
-        }
-        if let Some(vid_share) = self.vid_shares.get(&view).cloned() {
-            outbox.push_back(ConsensusOutput::BroadcastVidShare(vid_share));
-        } else {
-            debug!(%view, "vid share gone for released vote1; skipping broadcast");
-        }
     }
 
     fn release_vote2(&mut self, view: ViewNumber, outbox: &mut Outbox<ConsensusOutput<T>>) {
@@ -3498,10 +3487,10 @@ impl<T: NodeType> Consensus<T> {
             debug!(%view, "state commitment not available");
             return;
         }
-        let Some(vid_share) = self.vid_shares.get(&view) else {
+        if !self.vid_shares.contains_key(&view) {
             debug!(%view, "vid share not available");
             return;
-        };
+        }
 
         let block_number = proposal.block_header.block_number();
         let epoch = proposal.epoch;
@@ -3639,12 +3628,10 @@ impl<T: NodeType> Consensus<T> {
         };
         let can_send = self.stored_actions.contains(&(view, ActionKind::Vote))
             && self.is_proposal_stored(view, &proposal_commit);
-        let vid_share = can_send.then(|| vid_share.clone());
         self.voted_1_views.insert(ViewEpoch(view, epoch));
         self.vote1_parent.insert(view, qc_view);
-        if let Some(vid_share) = vid_share {
+        if can_send {
             outbox.push_back(ConsensusOutput::SendVote1(vote));
-            outbox.push_back(ConsensusOutput::BroadcastVidShare(vid_share));
         } else {
             self.request_action(view, ActionKind::Vote, outbox);
             self.pending_vote1.insert(ViewEpoch(view, epoch), vote);
