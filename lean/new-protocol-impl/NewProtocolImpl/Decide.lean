@@ -322,11 +322,7 @@ def OwedB (h : History) : Obligation → Prop
       (∃ x ∈ receivedProposals h, x.2.1 = p ∧ leader p.epoch p.viewNumber = some x.1
         ∧ ShareMatches p x.2.2)
       ∧ ProposalWellFormed cfg p ∧ h.Received (.blockValidated p.viewNumber (blockHash p))
-      ∧ (p.parentCert.view = cfg.anchorView ∨ EntersEpoch cfg p
-          ∨ ∃ parent ∈ proposalsHeld cfg h, parent.viewNumber ≤ p.parentCert.view
-              ∧ p.parentCert.data.blockHash = blockHash parent
-              ∧ h.HasPayload cfg parent.viewNumber parent.payloadCommit)
-      ∧ SafeParentB p ∧ OpensB cfg h p ∧ NotBehindB cfg h p.epoch
+      ∧ ParentReadyB cfg h p ∧ SafeParentB p ∧ OpensB cfg h p ∧ NotBehindB cfg h p.epoch
       ∧ ¬ TimedOutB h p.viewNumber
       ∧ (∀ vote ∈ vote1sSent h, vote.data.epoch = p.epoch → vote.view ≠ p.viewNumber)
       ∧ viewOf cfg h = p.viewNumber
@@ -657,7 +653,7 @@ theorem owedB_iff {h : History} {o : Obligation} :
     OwedB cfg leader node h o ↔ Owed cfg leader node h o := by
   cases o with
   | vote1 p =>
-    simp only [OwedB, Owed, owedVote1_iff, ParentReady, safeParentB_iff, opensB_iff, notBehindB_iff, mem_proposalsHeld,
+    simp only [OwedB, Owed, owedVote1_iff, parentReadyB_iff, safeParentB_iff, opensB_iff, notBehindB_iff, mem_proposalsHeld,
       mem_vote1sSent, timedOutB_iff, ← inView_iff_viewOf]
     apply and_congr _ Iff.rfl
     constructor

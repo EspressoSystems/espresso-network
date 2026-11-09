@@ -312,7 +312,9 @@ impl Recorder {
     /// reconstructed it, as a test that restores a lock on it does.
     ///
     /// A node locks only on a block whose payload it holds, so a restored lock
-    /// stands for a payload the node had before it restarted.
+    /// stands for a payload the node had before it restarted. That holds only
+    /// if the payload was persisted with the lock, which a real restart does
+    /// not ensure (see `Consensus::parent_reconstructed`).
     pub fn payload_held<T: NodeType>(&mut self, proposal: &Proposal<T>) {
         if self.path.is_none() {
             return;
@@ -326,6 +328,16 @@ impl Recorder {
         );
         let t = self.now();
         self.push_step(input, Vec::new(), t);
+    }
+
+    /// Record that the node holds `cert`, as a test that restores a lock on it
+    /// does.
+    pub fn cert1_held<T: NodeType>(&mut self, cert: &Certificate1<T>) {
+        if self.path.is_none() {
+            return;
+        }
+        let t = self.now();
+        self.push_step(certificate1_json(cert), Vec::new(), t);
     }
 
     /// Record that a test placed the node at `view` in `epoch` directly.

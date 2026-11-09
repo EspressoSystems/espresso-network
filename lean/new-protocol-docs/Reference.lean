@@ -30,7 +30,10 @@ member of the committee then votes on the proposal twice.
 A vote1 says the proposal is a fit extension: the block is valid and its parent
 is safe to build on, given what may have been committed. It also says the node holds
 the parent and has its payload, unless the parent is the anchor or the proposal opens
-an epoch, so the parent of a block with a {name NewProtocol.Cert1}`Cert1` is available.
+an epoch. A vote1 answering a re-vote request says neither, but re-certifies a block
+that already has a {name NewProtocol.Cert1}`Cert1`. So, outside those two cases, some
+honest node held the parent of every block with a {name NewProtocol.Cert1}`Cert1`, with
+its payload ({name NewProtocol.cert1_parent_ready}`cert1_parent_ready`): the parent is available.
 Beyond what safety needs, an honest node votes1 only on a proposal from the view's
 leader, and owes a vote1 once it holds its own share of the payload and the parent's
 payload, and was told the block is valid. A quorum of vote1s is a {name NewProtocol.Cert1}`Cert1`.
