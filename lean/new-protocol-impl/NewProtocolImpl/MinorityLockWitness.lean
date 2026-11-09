@@ -799,7 +799,7 @@ include hv in
 theorem sent_vote1 {k : PubKey} {j : Nat} {vote : Vote1}
     (hx : Output.send (.vote1 vote) ∈ (tr k j).output) :
     ∃ u, vote = ⟨(certOf (blk u)).data, ⟨vOf u⟩, k⟩ ∧ sAt u + 1 ≤ j := by
-  obtain ⟨hsig, ⟨s, p, vid, hrec, -, -, -, -, hfor⟩ | ⟨s, r, -, hw, -⟩⟩ :=
+  obtain ⟨hsig, ⟨s, p, vid, hrec, -, -, -, -, -, hfor⟩ | ⟨s, r, -, hw, -⟩⟩ :=
     (protocol hv k (j + 1)).vote1Justified j vote ⟨_, (getElem_H j), hx⟩ trivial
   rotate_left
   · exact absurd rfl hw.2.2.2.1

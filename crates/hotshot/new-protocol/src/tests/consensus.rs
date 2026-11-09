@@ -660,10 +660,10 @@ async fn test_vote1_parent_reconstruction_from_lock() {
 
     // Restart: re-seed the parent proposal and restore the lock that certifies
     // it, but do NOT mark its block reconstructed.
-    harness.seed_proposals([test_data.views[0].proposal.data.clone()]);
-    harness
-        .consensus
-        .seed_locked_cert(test_data.views[0].cert1.clone());
+    harness.seed_locked_block(
+        test_data.views[0].proposal.data.clone(),
+        test_data.views[0].cert1.clone(),
+    );
 
     harness
         .apply_pair(test_data.views[1].proposal_input_consensus(&node_key))

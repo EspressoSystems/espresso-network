@@ -25,7 +25,7 @@ structure StepOK (pre : History) (st : Step) : Prop where
   vote1 : ∀ vote, Output.send (.vote1 vote) ∈ st.output → vote.signer = node
     ∧ ((∃ sender p vid, (pre ++ [st]).Received (.proposal sender p (some vid))
         ∧ ProposalWellFormed cfg p ∧ BlockValid p ∧ SafeParent p
-        ∧ OpensEpochJustified cfg (pre ++ [st]) p ∧ Vote1For vote p)
+        ∧ OpensEpochJustified cfg (pre ++ [st]) p ∧ ParentReady cfg (pre ++ [st]) p ∧ Vote1For vote p)
       ∨ ∃ sender r, (pre ++ [st]).Received (.revote sender r)
         ∧ RevoteWellFormed cfg r ∧ SafeRevote r ∧ Vote1Again vote r)
   vote2 : ∀ vote, Output.send (.vote2 vote) ∈ st.output → vote.signer = node

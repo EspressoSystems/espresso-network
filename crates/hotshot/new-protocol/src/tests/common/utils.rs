@@ -1407,6 +1407,18 @@ impl ConsensusHarness {
         self.consensus.seed_proposals(proposals);
     }
 
+    /// Restore a lock on `block` as a restart does: seed the block, record it
+    /// and its payload as held, and seed the lock `cert1` certifying it.
+    pub fn seed_locked_block(
+        &mut self,
+        block: Proposal<TestTypes>,
+        cert1: Certificate1<TestTypes>,
+    ) {
+        self.seed_proposals([block.clone()]);
+        self.trace.payload_held(&block);
+        self.consensus.seed_locked_cert(cert1);
+    }
+
     /// Record the run under `label` instead of the test's name, for a test that
     /// replays several runs.
     pub fn record_as(mut self, label: &str) -> Self {

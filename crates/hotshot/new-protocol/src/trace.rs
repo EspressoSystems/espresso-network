@@ -308,6 +308,26 @@ impl Recorder {
         self.push_step(input, Vec::new(), t);
     }
 
+    /// Record that the node holds the payload of `proposal` without having
+    /// reconstructed it, as a test that restores a lock on it does.
+    ///
+    /// A node locks only on a block whose payload it holds, so a restored lock
+    /// stands for a payload the node had before it restarted.
+    pub fn payload_held<T: NodeType>(&mut self, proposal: &Proposal<T>) {
+        if self.path.is_none() {
+            return;
+        }
+        let input = tagged(
+            "blockReconstructed",
+            obj(&[
+                ("v", view_json(proposal.view_number)),
+                ("c", payload_json(&proposal.block_header)),
+            ]),
+        );
+        let t = self.now();
+        self.push_step(input, Vec::new(), t);
+    }
+
     /// Record that a test placed the node at `view` in `epoch` directly.
     ///
     /// No input puts a node there, so the view and epoch a checker derives from
