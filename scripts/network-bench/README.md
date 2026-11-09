@@ -123,9 +123,11 @@ just bench aws run --tag release-x
 
 - `--keep-going` runs every step with no refine step, then stops the load and drains for up to
   `max(300 s, --tx-timeout-s)`. The summary reports this as the backlog drain time.
-- Inclusion is read from the query node. A query lag above `--cap-s` throttles the load. A lag above `--tx-timeout-s`
-  times transactions out. Both need to exceed the expected lag (e.g. 600).
-- Consensus latency of a step with query lag above `--cap-s` is not comparable across runs.
+- Inclusion is read from the query node: each block's payload is fetched and scanned for the load's marker. The
+  in-flight cap (`--cap-s`) counts transactions submitted and not yet decided by the validators' counters, so a query
+  node or a scan that falls behind does not throttle the load. A query lag above `--tx-timeout-s` still times
+  transactions out, and the scans get at most `--tx-timeout-s` after the load ended to catch up, so it needs to exceed
+  the expected lag (e.g. 600).
 - A long `--tx-timeout-s` raises the TTL bound; raise `--max-usd` when `plan` reports it over 10.
 - Transactions of a lost payload stay pending until `--tx-timeout-s`, and the end of the run waits for them.
 - The CI job does not fit this mode: its step timeout is 15 min.
@@ -762,8 +764,8 @@ Progress: one fixed-width line every 10 s, totals at the end.
 - Rates from `--steps` (MB/s), each held `--step-s`, round-robin over the submit nodes.
 - Each payload: a 16 B per-run marker, an 8 B id, and `tx_size - 24` bytes cut at a random offset from a seeded pool of
   256 txs' size, base64-encoded once. Requests are built from slices of the encoded pool.
-- Inclusion: scans of the query node's blocks for the marker. Scans (fetch, JSON, base64, marker search) run in 4
-  processes (`SCAN_PROCESSES`), stdlib only.
+- Inclusion: scans of the query node's blocks for the marker. Scans (fetch, base64 of the JSON answer's `raw_payload`
+  field, marker search) run in 4 processes (`SCAN_PROCESSES`), 4 blocks at a time (`SCAN_BATCH`), stdlib only.
 - Scans that lag: a tx times out `--tx-timeout-s` after its submit, which frees its in-flight room. A later scan that
   finds it in a block shown on the query node within `--tx-timeout-s` still includes it; a find in a block shown later
   leaves it timed out but records its height. At the end of the load the scans go on while such a tx may still be
@@ -773,7 +775,12 @@ Progress: one fixed-width line every 10 s, totals at the end.
 - With `--clients`, readers fetch each new range of blocks from the query node as a light client does, see `--clients`
   above.
 - Pacer: one tx every `tx_size / rate`. A late pacer sends every tx that came due, up to 1 s of load (`CATCHUP_S`);
-  schedule lost beyond that stays lost. The in-flight cap applies. Txs are sent only before the step's end.
+  schedule lost beyond that stays lost. Txs are sent only before the step's end.
+- In-flight cap: `--cap-s` of the step's load, counted as txs submitted and not yet decided by the validators'
+  `consensus_finalized_bytes_sum` (polled every second, divided by `--tx-size`), and at most the txs not yet included or
+  timed out. A tx the network dropped stops counting at its timeout. Earlier runs counted a tx until a scan found it, so
+  a scan behind consensus throttled the load and leaders built empty blocks: their capacities above about 250 MB/s
+  measured the scan.
 
 ### Step rules
 
@@ -783,11 +790,16 @@ Each step is judged over its second half. A step stopped early is judged over it
 | ----------------- | ------------------------------------------------------------ | ----------------------------------- |
 | decided MB/s      | validators' `consensus_finalized_bytes_sum`, Theil-Sen slope | < 80% of submitted                  |
 | view timeouts     | `consensus_number_of_timeouts`                               | > 0                                 |
-| consensus latency | submit until header on a validator                           | p50 > 1000 ms                       |
+| consensus latency | submit until a validator decides the including block         | p50 > 1000 ms                       |
 | query lag         | header on query node minus header on a validator             | p50 > 1000 ms, or growing > 50 ms/s |
 
 - Early stop (not with `--keep-going`): from 10 s into a step, decided < 80% of submitted over the last 10 s stops the
   step, which fails on the decided rule.
+- A validator's decide is when its `/v1/status/block-height` reaches the including block, polled every 100 ms on the
+  validators without query storage. On a query node that route is answered by its storage with the block count, one more
+  than the decided height, so it is left out, or polled without the +1 when every node is a query node. Polled with the
+  others, it showed every height one block early and the latency ended at the decide of the block before the including
+  one.
 - Without `--keep-going` the ramp stops at the first failing step, then runs one refine step halfway back.
 - A tx not yet matched to a block counts as late only as far as the scans prove: until the first height decided after it
   was sent whose scan is not finished reached a validator, or until now when there is none. A tx that timed out and was
