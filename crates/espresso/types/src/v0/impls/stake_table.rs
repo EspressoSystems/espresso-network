@@ -627,28 +627,17 @@ impl StakeTableState {
                     .get_mut(&validator)
                     .ok_or(StakeTableError::ValidatorNotFound(validator))?;
 
+                // The token supply keeps L1 events far from overflowing, but a light client
+                // replays events its server sends.
+                let stake = val
+                    .stake
+                    .checked_add(amount)
+                    .ok_or(StakeTableError::StakeOverflow(validator))?;
+
                 // All checks ok, applying changes
-                // This cannot overflow in practice
-                val.stake = val.stake.checked_add(amount).unwrap_or_else(|| {
-                    panic!(
-                        "validator stake overflow: validator={validator}, stake={}, \
-                         amount={amount}",
-                        val.stake
-                    )
-                });
-                // Insert the delegator with the given stake
-                // or increase the stake if already present
-                val.delegators
-                    .entry(delegator)
-                    .and_modify(|stake| {
-                        *stake = stake.checked_add(amount).unwrap_or_else(|| {
-                            panic!(
-                                "delegator stake overflow: delegator={delegator}, stake={stake}, \
-                                 amount={amount}"
-                            )
-                        });
-                    })
-                    .or_insert(amount);
+                val.stake = stake;
+                // A delegator never holds more than the validator's total, so this fits too
+                *val.delegators.entry(delegator).or_default() += amount;
             },
 
             StakeTableEvent::Undelegate(Undelegated {
@@ -3100,6 +3089,34 @@ mod tests {
             "delegator stake is zero"
 
         );
+    }
+
+    #[test]
+    fn test_delegate_overflowing_stake_is_rejected() {
+        let mut state = StakeTableState::default();
+        let validator = TestValidator::random();
+        let account = validator.account;
+        state
+            .apply_event(StakeTableEvent::Register((&validator).into()))
+            .unwrap()
+            .unwrap();
+        let delegate = |amount| {
+            StakeTableEvent::Delegate(Delegated {
+                delegator: Address::random(),
+                validator: account,
+                amount,
+            })
+        };
+        state.apply_event(delegate(U256::MAX)).unwrap().unwrap();
+        let before = state.clone();
+
+        let result = state.apply_event(delegate(U256::from(1)));
+
+        assert_matches!(
+            result,
+            Err(StakeTableError::StakeOverflow(addr)) if addr == account
+        );
+        assert_eq!(state, before);
     }
 
     #[test]
