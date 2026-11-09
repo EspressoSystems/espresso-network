@@ -8,7 +8,7 @@ use hotshot_example_types::{
 };
 use hotshot_types::{
     data::{
-        EpochNumber, Leaf2, QuorumProposal2, QuorumProposalWrapper, VidCommitment, VidDisperse,
+        EpochNumber, Leaf2, QuorumProposal2, QuorumProposalWrapper, VidCommitment, VidDisperse2,
         ViewNumber, vid_commitment,
     },
     epoch_membership::{EpochMembership, EpochMembershipCoordinator},
@@ -32,7 +32,7 @@ pub struct GeneratedView {
     pub leaf: Leaf2<TestTypes>,
     pub view_number: ViewNumber,
     pub leader_public_key: BLSPubKey,
-    pub vid_disperse: VidDisperse<TestTypes>,
+    pub vid_disperse: VidDisperse2<TestTypes>,
 }
 
 /// Generates consecutive views on `TestTypes` with empty payloads, each justified by a QC on the
@@ -164,18 +164,17 @@ impl TestViewGenerator {
         metadata: TestMetadata,
     ) -> GeneratedView {
         let (private_key, leader_public_key) = self.leader_key_pair(membership, view_number);
-        let vid_disperse = VidDisperse::calculate_vid_disperse(
+        let vid_disperse = VidDisperse2::calculate_vid_disperse(
             &payload,
             &membership.coordinator,
             view_number,
             Some(EpochNumber::genesis()),
             Some(EpochNumber::genesis()),
             &metadata,
-            &self.upgrade_lock,
         )
         .await
         .unwrap()
-        .disperse;
+        .0;
 
         let proposal = QuorumProposalWrapper::<TestTypes> {
             proposal: QuorumProposal2::<TestTypes> {

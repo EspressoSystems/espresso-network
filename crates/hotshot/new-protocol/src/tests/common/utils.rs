@@ -19,8 +19,8 @@ use hotshot_types::{
     PeerConnectInfo,
     addr::NetAddr,
     data::{
-        EpochNumber, Leaf2, VidCommitment, VidCommitment2, VidDisperse, VidDisperse2,
-        VidDisperseShare2, ViewNumber, vid_commitment,
+        EpochNumber, Leaf2, VidCommitment, VidCommitment2, VidDisperse2, VidDisperseShare2,
+        ViewNumber, vid_commitment,
         vid_disperse::{AvidmGf2DisperseShareFragment, AvidmGf2NamespacePiece, vid_total_weight},
     },
     epoch_membership::EpochMembershipCoordinator,
@@ -1138,9 +1138,7 @@ pub(crate) fn extract_vid_shares(
 fn extract_vid_disperse(
     gen_view: &GeneratedView,
 ) -> (VidDisperse2<TestTypes>, Vec<VidDisperseShare2<TestTypes>>) {
-    let hotshot_types::data::VidDisperse::V2(vid_disperse) = gen_view.vid_disperse.clone() else {
-        panic!("Expected V2 VID disperse");
-    };
+    let vid_disperse = gen_view.vid_disperse.clone();
     let vid_shares = extract_vid_shares(&vid_disperse);
     (vid_disperse, vid_shares)
 }
@@ -1683,20 +1681,16 @@ impl ConsensusHarness {
                 metadata,
                 payload_commitment: _,
             } => {
-                let vid_disperse = VidDisperse::calculate_vid_disperse(
+                let (vid, _) = VidDisperse2::calculate_vid_disperse(
                     payload,
                     &self.membership_coordinator,
                     *view,
                     Some(*epoch),
                     Some(*epoch),
                     metadata,
-                    &test_upgrade_lock(),
                 )
                 .await
                 .unwrap();
-                let VidDisperse::V2(vid) = vid_disperse.disperse else {
-                    panic!("VidDisperse is not a V2");
-                };
                 let input = ConsensusInput::VidDisperseCreated(*view, vid.payload_commitment);
                 self.apply_recorded(input, outbox);
             },
