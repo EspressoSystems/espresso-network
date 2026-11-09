@@ -2507,6 +2507,49 @@ mod tests {
         }
     }
 
+    // A node adds the configured DA committees at startup, before it builds
+    // the snapshots of later epochs. Each such snapshot takes the DA committee
+    // with the greatest start epoch at or below its epoch, or the genesis DA
+    // committee when no added committee starts at or below it.
+    #[tokio::test]
+    async fn snapshots_built_after_add_da_committee_take_the_da_committee_of_their_epoch() {
+        let (_, staked) = genesis_members();
+        let stored = AuthenticatedValidator::mock();
+        let stored_table: AuthenticatedValidatorMap =
+            [(stored.account, stored)].into_iter().collect();
+        let fetcher = fetcher_with_latest_stake(
+            (3..=8)
+                .map(|e| (EpochNumber::new(e), (stored_table.clone(), None), None))
+                .collect(),
+        );
+        let mut committees = committees_from_first_epoch(EpochNumber::genesis(), fetcher);
+
+        let da_from_4: Vec<_> = (0..2).map(|i| peer(61, i, 50)).collect();
+        let da_from_6: Vec<_> = (0..3).map(|i| peer(62, i, 50)).collect();
+        let da_from_9: Vec<_> = (0..2).map(|i| peer(63, i, 50)).collect();
+        committees.add_da_committee(EpochNumber::new(6), da_from_6.clone());
+        committees.add_da_committee(EpochNumber::new(4), da_from_4.clone());
+        committees.add_da_committee(EpochNumber::new(9), da_from_9);
+        committees.reload_stake(RECENT_STAKE_TABLES_LIMIT).await;
+
+        for (epoch, expected) in [
+            (3, &staked),
+            (4, &da_from_4),
+            (5, &da_from_4),
+            (6, &da_from_6),
+            (7, &da_from_6),
+            (8, &da_from_6),
+        ] {
+            let da: Vec<_> = committees
+                .snapshot(EpochNumber::new(epoch))
+                .unwrap_or_else(|| panic!("stored stake table for epoch {epoch} was not loaded"))
+                .da_stake_table()
+                .cloned()
+                .collect();
+            assert_eq!(&da, expected, "epoch {epoch}: DA committee");
+        }
+    }
+
     /// `count` committee members, none of them with stake.
     fn unstaked_members(count: u64) -> Vec<PeerConfig<SeqTypes>> {
         (0..count).map(|i| peer(42, i, 0)).collect()
