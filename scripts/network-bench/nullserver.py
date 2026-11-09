@@ -78,7 +78,8 @@ class NullNode:
             if path == "/v1/node/block-height":
                 return 200, str(self.count).encode()
             if path == "/v1/status/block-height":
-                return 200, str(self.count - 1).encode()
+                # Like a real query node, whose storage answers this route with the count.
+                return 200, str(self.count).encode()
             if path == "/v1/status/metrics":
                 text = (
                     f"consensus_finalized_bytes_sum {self.decided_bytes}\n"

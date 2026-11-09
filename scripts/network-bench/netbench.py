@@ -97,6 +97,11 @@ MISSING_PAYLOAD_S = 10
 # One slow or failed answer from the query node must not end the run.
 READ_DEADLINE_S = 30.0
 READ_RETRY_S = 1.0
+JSON = "application/json"
+# The API's versioned binary encoding, in which a payload's bytes appear verbatim. The v1
+# payload routes answer JSON whatever the request accepts; asking for binary costs nothing
+# and takes effect once they negotiate.
+BINARY = "application/octet-stream"
 # Payload scans run in this many processes when the caller asks for them (a block of 100 MB
 # costs about a core-second of JSON, base64 and search, which in the load process would
 # compete with the pacer for the GIL); this many blocks are scanned at once.
@@ -457,7 +462,8 @@ class BenchConfig:
     step_s: int = 30
     submit_nodes: int = 3
     workers: int = 6
-    # Safety cap on transactions in flight: this many seconds of the current step's load.
+    # Safety cap on transactions in flight, submitted and not yet decided by the validators'
+    # counters: this many seconds of the current step's load.
     cap_s: float = 5.0
     tx_timeout_s: int = 30
     # At the first step's rate.
@@ -627,7 +633,12 @@ class Http(Protocol):
     closed: threading.Event
 
     def request(
-        self, method: str, url: str, body: bytes | None = None, timeout: float = 10.0
+        self,
+        method: str,
+        url: str,
+        body: bytes | None = None,
+        timeout: float = 10.0,
+        accept: str = JSON,
     ) -> tuple[int, bytes]: ...
 
     def close(self) -> None: ...
@@ -659,10 +670,15 @@ class HttpPool:
         self.closed = threading.Event()
 
     def request(
-        self, method: str, url: str, body: bytes | None = None, timeout: float = 10.0
+        self,
+        method: str,
+        url: str,
+        body: bytes | None = None,
+        timeout: float = 10.0,
+        accept: str = JSON,
     ) -> tuple[int, bytes]:
         parts = urlsplit(url)
-        headers = {"Accept": "application/json"}
+        headers = {"Accept": accept}
         if body is not None:
             headers["Content-Type"] = "application/json"
         for attempt in range(2):
@@ -849,21 +865,37 @@ def read(pool: Http, url: str) -> tuple[int, bytes]:
     raise AssertionError("unreachable")
 
 
-def block_count(pool: Http, url: str, source: "HeightSource") -> int:
-    """Blocks decided as `source` sees them. A validator's status API reports the newest
-    decided height, one less than the count."""
-    path, extra = HEIGHT_API[source]
-    return int(get_ok(pool, url + path)) + extra
+def status_height_urls(
+    validator_urls: Sequence[str], query_urls: Sequence[str]
+) -> list[tuple[str, int]]:
+    """Where the decided height is polled, with what to add to make it a block count. The
+    status API of a validator without query storage reports the newest decided height, one
+    less than the count. On a query node the same route is answered by its storage and returns
+    the count itself, so polled like the others it shows every height one block early; query
+    nodes are polled only when no other validator exists."""
+    plain = [(url, 1) for url in validator_urls if url not in query_urls]
+    return plain or [(url, 0) for url in validator_urls]
 
 
-def get_first(pool: Http, query_urls: Sequence[str], path: str) -> bytes | None:
+def block_count(
+    pool: Http, url: str, source: "HeightSource", extra: int | None = None
+) -> int:
+    """Blocks decided as `source` sees them. `extra` is what the node's answer lacks to be a
+    count, `HEIGHT_API`'s default unless `status_height_urls` says otherwise."""
+    path, default = HEIGHT_API[source]
+    return int(get_ok(pool, url + path)) + (default if extra is None else extra)
+
+
+def get_first(
+    pool: Http, query_urls: Sequence[str], path: str, accept: str = JSON
+) -> bytes | None:
     """Body of `path` from the first query node that has it. A node that fails, answers 5xx
     or 404 (still syncing) is skipped; None if none has it yet. NoAnswer if every node refused
     the connection."""
     answered = False
     for query_url in query_urls:
         try:
-            status, body = pool.request("GET", query_url + path)
+            status, body = pool.request("GET", query_url + path, accept=accept)
         except OSError as err:
             log.debug("%s, trying the next query node", err)
             answered |= not isinstance(err, ConnectionError)
@@ -879,14 +911,29 @@ def get_first(pool: Http, query_urls: Sequence[str], path: str) -> bytes | None:
 
 
 def block_payload(pool: Http, query_urls: Sequence[str], height: int) -> bytes | None:
-    """Raw payload bytes of block `height` from the first query node that has it; None if
-    none has it yet."""
-    body = get_first(pool, query_urls, f"/v1/availability/payload/{height}")
-    return (
-        None
-        if body is None
-        else base64.b64decode(json.loads(body)["data"]["raw_payload"])
-    )
+    """Bytes holding the payload of block `height` from the first query node that has it,
+    None if none has it yet: the binary answer as it came, which carries the payload verbatim
+    inside its envelope, or the decoded payload of a node that answers JSON regardless."""
+    body = get_first(pool, query_urls, f"/v1/availability/payload/{height}", BINARY)
+    return None if body is None else payload_bytes(body)
+
+
+# The JSON form's payload field, decoded without parsing the document around it (a tenth of
+# a second per 100 MB; the fetch itself is the scan's wait).
+RAW_PAYLOAD = re.compile(rb'"raw_payload"\s*:\s*"')
+
+
+def payload_bytes(body: bytes) -> bytes:
+    """The payload's bytes out of a payload answer: decoded from the JSON form's base64 field,
+    or the binary answer itself, which carries them verbatim."""
+    if body[:1] == b"{" and (m := RAW_PAYLOAD.search(body)):
+        end = body.find(b'"', m.end())
+        if end > 0:
+            try:
+                return base64.b64decode(body[m.end() : end], validate=True)
+            except ValueError:
+                pass
+    return body
 
 
 def find_tx_ids(raw: bytes, marker: bytes) -> list[int]:
@@ -1167,12 +1214,15 @@ class Phase:
 
 
 class LoadState:
-    """Transactions of one run. At most `cap` are pending: submitted but neither included nor
-    timed out."""
+    """Transactions of one run. At most `cap` are in flight: submitted and, by the validators'
+    counters, not yet decided. `pending` waits for the scan of the including block as well,
+    which can run seconds behind consensus, so it bounds the count but does not set it."""
 
     def __init__(self) -> None:
         self.cap = 1
         self.room = asyncio.Event()
+        self.decided_base: float | None = None
+        self.decided_txs = 0
         # Held by `post_tx` to send and by `drop_unsent` to drop: a tx is one or the other.
         self.lock = threading.Lock()
         self.txs: list[Tx] = []
@@ -1198,7 +1248,22 @@ class LoadState:
     def submitted(self, tx: Tx) -> None:
         self.txs.append(tx)
         self.pending[tx.id] = tx
-        self.max_in_flight = max(self.max_in_flight, len(self.pending))
+        self.max_in_flight = max(self.max_in_flight, self.in_flight())
+
+    def in_flight(self) -> int:
+        """Submitted and not decided, as far as the validators' counters say; never more than
+        `pending`, so a transaction the network dropped stops counting at its timeout."""
+        return max(0, min(len(self.pending), len(self.txs) - self.decided_txs))
+
+    def note_decided(self, decided_bytes: float, tx_size: int) -> None:
+        """A counters sample: bytes decided since the first sample are this run's
+        transactions (and the heartbeat's few), so room under the cap frees with consensus,
+        not with the scan."""
+        if self.decided_base is None:
+            self.decided_base = decided_bytes
+        self.decided_txs = int((decided_bytes - self.decided_base) / tx_size)
+        if self.in_flight() < self.cap:
+            self.room.set()
 
     def failed(self, tx: Tx) -> None:
         """A submit that failed, unless the transaction was included anyway."""
@@ -1209,9 +1274,9 @@ class LoadState:
 
     async def wait_for_room(self, until: float, clock: Clock) -> bool:
         """False if there is no room before `until`."""
-        if len(self.pending) >= self.cap:
+        if self.in_flight() >= self.cap:
             self.cap_waits += 1
-        while len(self.pending) >= self.cap:
+        while self.in_flight() >= self.cap:
             self.room.clear()
             try:
                 await clock.wait_for(self.room.wait(), until - clock.time())
@@ -1325,12 +1390,14 @@ async def generate_load(
                 ),
                 *(
                     group.create_task(
-                        poll_heights(polling, url, heights, "validator", clock)
+                        poll_heights(polling, url, heights, "validator", clock, extra)
                     )
-                    for url in validator_urls
+                    for url, extra in status_height_urls(validator_urls, query_urls)
                 ),
                 group.create_task(
-                    poll_counters(polling, validator_urls, counters, clock)
+                    poll_counters(
+                        polling, validator_urls, counters, clock, state, cfg.tx_size
+                    )
                 ),
                 *(
                     [group.create_task(watch_readers(readers, clock))]
@@ -2149,12 +2216,13 @@ async def poll_heights(
     heights: Heights,
     source: HeightSource,
     clock: Clock,
+    extra: int | None = None,
 ) -> None:
     """On its own thread, so block times never wait for payload scans. A node that stays down
     past `read`'s deadline is polled again until it returns."""
     while True:
         try:
-            count = await client.call(block_count, url, source)
+            count = await client.call(block_count, url, source, extra)
         except NetworkError as err:
             log.debug("height poll of %s: %s", url, err)
         else:
@@ -2163,18 +2231,23 @@ async def poll_heights(
 
 
 async def poll_counters(
-    client: Client, urls: Sequence[str], counters: list[dict[str, Any]], clock: Clock
+    client: Client,
+    urls: Sequence[str],
+    counters: list[dict[str, Any]],
+    clock: Clock,
+    state: LoadState | None = None,
+    tx_size: int = 0,
 ) -> None:
     """Every COUNTER_POLL_S, decided payload bytes, view timeouts and the current view: the highest over the
     validators that answer, and `nodes` with each answering validator's own. A restarted
     validator's counters start from 0 and fall under the others'. A sweep nobody answers
-    writes no sample."""
+    writes no sample. With `state`, each sample also frees room under the in-flight cap."""
     while True:
         answers = await asyncio.gather(
             *(client.call(try_counters, url) for url in urls)
         )
         if nodes := {url: m for url, m in zip(urls, answers, strict=True) if m}:
-            counters.append(
+            sample: dict[str, Any] = (
                 {"ts": clock.time()}
                 | {
                     key: max(m[key] for m in nodes.values())
@@ -2182,6 +2255,9 @@ async def poll_counters(
                 }
                 | {"nodes": nodes}
             )
+            counters.append(sample)
+            if state is not None:
+                state.note_decided(sample["decided_bytes"], tx_size)
         await clock.asleep(COUNTER_POLL_S)
 
 
