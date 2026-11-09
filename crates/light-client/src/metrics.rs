@@ -27,6 +27,8 @@ pub struct LightClientMetrics {
     follower_block_height: Box<dyn Gauge>,
     verification_failures: Box<dyn Counter>,
     #[cfg(feature = "client")]
+    fetch_requests: Box<dyn Counter>,
+    #[cfg(feature = "client")]
     fetch_failures: Box<dyn Counter>,
     #[cfg(feature = "client")]
     db_read_duration: Box<dyn Histogram>,
@@ -51,6 +53,8 @@ impl LightClientMetrics {
             ),
             follower_block_height: metrics.create_gauge("follower_block_height".into(), None),
             verification_failures: metrics.create_counter("verification_failures".into(), None),
+            #[cfg(feature = "client")]
+            fetch_requests: metrics.create_counter("fetch_requests".into(), None),
             #[cfg(feature = "client")]
             fetch_failures: metrics.create_counter("fetch_failures".into(), None),
             #[cfg(feature = "client")]
@@ -79,6 +83,11 @@ impl LightClientMetrics {
 
     pub(crate) fn verification_failed(&self) {
         self.verification_failures.add(1);
+    }
+
+    #[cfg(feature = "client")]
+    pub(crate) fn fetch_requested(&self) {
+        self.fetch_requests.add(1);
     }
 
     #[cfg(feature = "client")]
