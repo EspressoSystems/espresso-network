@@ -8,7 +8,8 @@ use hotshot_contract_adapter::light_client::derive_signed_state_digest;
 use hotshot_example_types::{
     block_types::{TestBlockHeader, TestBlockPayload, TestMetadata},
     membership::{
-        TestableMembership, static_committee::StaticStakeTable, strict_membership::StrictMembership,
+        TestableMembership, fetcher::ExternalMessage, static_committee::StaticStakeTable,
+        strict_membership::StrictMembership,
     },
     node_stake::{TestNodeStakes, gen_node_lists},
     node_types::{TEST_VERSIONS, TestTypes},
@@ -766,7 +767,7 @@ pub fn mock_membership_with_client(
     EpochMembershipCoordinator<TestTypes>,
     TestStorage<TestTypes>,
     CoordinatorClient<TestTypes>,
-    async_broadcast::Sender<hotshot_types::event::Event<TestTypes>>,
+    async_broadcast::Sender<ExternalMessage>,
 ) {
     let client = CoordinatorClient::<TestTypes>::default();
     let leaf_fetcher_network = Arc::new(ClientLeafFetcherNetwork::new(client.handle().clone()));
@@ -811,7 +812,7 @@ pub fn mock_membership_with_client_and_schedule(
     EpochMembershipCoordinator<TestTypes>,
     TestStorage<TestTypes>,
     CoordinatorClient<TestTypes>,
-    async_broadcast::Sender<hotshot_types::event::Event<TestTypes>>,
+    async_broadcast::Sender<ExternalMessage>,
 ) {
     let client = CoordinatorClient::<TestTypes>::default();
     let leaf_fetcher_network = Arc::new(ClientLeafFetcherNetwork::new(client.handle().clone()));
@@ -837,7 +838,7 @@ pub fn mock_membership_with_leaf_fetcher_network(
 ) -> (
     EpochMembershipCoordinator<TestTypes>,
     TestStorage<TestTypes>,
-    async_broadcast::Sender<hotshot_types::event::Event<TestTypes>>,
+    async_broadcast::Sender<ExternalMessage>,
 ) {
     mock_membership_core(
         num_nodes,
@@ -861,7 +862,7 @@ fn mock_membership_core(
 ) -> (
     EpochMembershipCoordinator<TestTypes>,
     TestStorage<TestTypes>,
-    async_broadcast::Sender<hotshot_types::event::Event<TestTypes>>,
+    async_broadcast::Sender<ExternalMessage>,
 ) {
     let mut members = gen_node_lists(
         num_nodes as u64,
@@ -910,11 +911,10 @@ fn mock_membership_core(
             membership.add_da_committee(EpochNumber::new(*first_epoch), committee);
         }
     }
-    // Channel used by the Coordinator to forward ExternalMessageReceived
-    // events to the membership's Leaf2Fetcher (drives epoch catchup).
+    // Forward external messages to the membership's Leaf2Fetcher for epoch catchup.
     // Overflow is enabled so slow listeners don't stall the Coordinator.
     let (mut external_events_tx, mut external_events_rx) =
-        async_broadcast::broadcast::<hotshot_types::event::Event<TestTypes>>(1024);
+        async_broadcast::broadcast::<ExternalMessage>(1024);
     external_events_tx.set_overflow(true);
     external_events_rx.set_overflow(true);
     membership.set_leaf_fetcher(
