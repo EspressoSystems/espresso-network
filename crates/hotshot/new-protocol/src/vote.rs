@@ -31,7 +31,8 @@ use hotshot_types::{
         TimeoutCertificate3, UpgradeThreshold,
     },
     simple_vote::{
-        HasEpoch, QuorumVote2, SimpleVote, TimeoutLock, UpgradeVote2, VersionedVoteData, Voteable,
+        HasEpoch, LockView, QuorumVote2, SimpleVote, TimeoutLock, UpgradeVote2, VersionedVoteData,
+        Voteable,
     },
     stake_table::StakeTableEntries,
     traits::{
@@ -456,9 +457,7 @@ impl<T: NodeType, Th: Threshold<T>> TimeoutTally<T, Th> {
         {
             return false;
         }
-        let Some(epoch) = cert.data.epoch else {
-            return false;
-        };
+        let epoch = LockView::of(cert).epoch;
         let valid = match self.checked_locks.get(cert) {
             Some(valid) => *valid,
             None => {
