@@ -14,7 +14,6 @@ use std::{
     hash::Hash,
     marker::PhantomData,
     sync::Arc,
-    time::Duration,
 };
 
 use bincode::Options;
@@ -30,8 +29,7 @@ use versions::{EPOCH_VERSION, NEW_PROTOCOL_VERSION, Upgrade};
 
 use crate::{
     drb::DrbResult,
-    epoch_membership::EpochMembershipCoordinator,
-    message::{Proposal, UpgradeLock, convert_proposal},
+    message::{Proposal, UpgradeLock},
     simple_certificate::{
         LightClientStateUpdateCertificateV1, LightClientStateUpdateCertificateV2,
         NextEpochQuorumCertificate2, QuorumCertificate, QuorumCertificate2, TimeoutCertificate,
@@ -523,205 +521,8 @@ impl From<VidShare2> for VidShare {
 pub mod ns_table;
 pub mod vid_disperse;
 
-/// A helper struct to hold the disperse data and the time it took to calculate the disperse
-pub struct VidDisperseAndDuration<TYPES: NodeType> {
-    /// The disperse data
-    pub disperse: VidDisperse<TYPES>,
-    /// The time it took to calculate the disperse
-    pub duration: Duration,
-}
-
-/// Type aliases for different versions of VID disperse
-pub type VidDisperse0<TYPES> = vid_disperse::ADVZDisperse<TYPES>;
-pub type VidDisperse1<TYPES> = vid_disperse::AvidMDisperse<TYPES>;
+/// VID dispersal for the current protocol.
 pub type VidDisperse2<TYPES> = vid_disperse::AvidmGf2Disperse<TYPES>;
-
-/// VID dispersal data
-///
-/// Like [`DaProposal`].
-///
-/// TODO move to vid.rs?
-#[derive(Debug, Serialize, Deserialize, Clone, Eq, PartialEq, Hash)]
-#[serde(bound = "TYPES: NodeType")]
-pub enum VidDisperse<TYPES: NodeType> {
-    /// Disperse type for first VID version
-    V0(VidDisperse0<TYPES>),
-    /// Disperse type for AvidM Scheme
-    V1(VidDisperse1<TYPES>),
-    /// Disperse type for AvidmGf2 Scheme
-    V2(VidDisperse2<TYPES>),
-}
-
-impl<TYPES: NodeType> From<VidDisperse0<TYPES>> for VidDisperse<TYPES> {
-    fn from(disperse: VidDisperse0<TYPES>) -> Self {
-        Self::V0(disperse)
-    }
-}
-
-impl<TYPES: NodeType> From<VidDisperse1<TYPES>> for VidDisperse<TYPES> {
-    fn from(disperse: VidDisperse1<TYPES>) -> Self {
-        Self::V1(disperse)
-    }
-}
-
-impl<TYPES: NodeType> From<VidDisperse2<TYPES>> for VidDisperse<TYPES> {
-    fn from(disperse: VidDisperse2<TYPES>) -> Self {
-        Self::V2(disperse)
-    }
-}
-
-impl<TYPES: NodeType> HasViewNumber for VidDisperse<TYPES> {
-    fn view_number(&self) -> ViewNumber {
-        match self {
-            Self::V0(disperse) => disperse.view_number(),
-            Self::V1(disperse) => disperse.view_number(),
-            Self::V2(disperse) => disperse.view_number(),
-        }
-    }
-}
-
-impl<TYPES: NodeType> HasEpoch for VidDisperse<TYPES> {
-    fn epoch(&self) -> Option<EpochNumber> {
-        match self {
-            Self::V0(disperse) => disperse.epoch(),
-            Self::V1(disperse) => disperse.epoch(),
-            Self::V2(disperse) => disperse.epoch(),
-        }
-    }
-}
-
-impl<TYPES: NodeType> VidDisperse<TYPES> {
-    /// Calculate the vid disperse information from the payload given a view, epoch and membership,
-    /// If the sender epoch is missing, it means it's the same as the target epoch.
-    ///
-    /// # Errors
-    /// Returns an error if the disperse or commitment calculation fails
-    #[allow(clippy::panic)]
-    pub async fn calculate_vid_disperse(
-        payload: &TYPES::BlockPayload,
-        membership: &EpochMembershipCoordinator<TYPES>,
-        view: ViewNumber,
-        target_epoch: Option<EpochNumber>,
-        data_epoch: Option<EpochNumber>,
-        metadata: &<TYPES::BlockPayload as BlockPayload<TYPES>>::Metadata,
-        upgrade_lock: &UpgradeLock<TYPES>,
-    ) -> Result<VidDisperseAndDuration<TYPES>> {
-        let epochs_enabled = upgrade_lock.epochs_enabled(view);
-        let upgraded_vid2 = upgrade_lock.upgraded_vid2(view);
-        if upgraded_vid2 {
-            VidDisperse2::calculate_vid_disperse(
-                payload,
-                membership,
-                view,
-                target_epoch,
-                data_epoch,
-                metadata,
-            )
-            .await
-            .map(|(disperse, duration)| VidDisperseAndDuration {
-                disperse: Self::V2(disperse),
-                duration,
-            })
-        } else if epochs_enabled {
-            VidDisperse1::calculate_vid_disperse(
-                payload,
-                membership,
-                view,
-                target_epoch,
-                data_epoch,
-                metadata,
-            )
-            .await
-            .map(|(disperse, duration)| VidDisperseAndDuration {
-                disperse: Self::V1(disperse),
-                duration,
-            })
-        } else {
-            VidDisperse0::calculate_vid_disperse(
-                payload,
-                membership,
-                view,
-                target_epoch,
-                data_epoch,
-            )
-            .await
-            .map(|(disperse, duration)| VidDisperseAndDuration {
-                disperse: Self::V0(disperse),
-                duration,
-            })
-        }
-    }
-
-    /// Return the internal payload commitment
-    pub fn payload_commitment(&self) -> VidCommitment {
-        match self {
-            Self::V0(disperse) => VidCommitment::V0(disperse.payload_commitment),
-            Self::V1(disperse) => disperse.payload_commitment.into(),
-            Self::V2(disperse) => disperse.payload_commitment.into(),
-        }
-    }
-
-    /// Return a slice reference to the payload commitment. Should be used for signature.
-    pub fn payload_commitment_ref(&self) -> &[u8] {
-        match self {
-            Self::V0(disperse) => disperse.payload_commitment.as_ref(),
-            Self::V1(disperse) => disperse.payload_commitment.as_ref(),
-            Self::V2(disperse) => disperse.payload_commitment.as_ref(),
-        }
-    }
-
-    /// Set the view number
-    pub fn set_view_number(&mut self, view_number: ViewNumber) {
-        match self {
-            Self::V0(share) => share.view_number = view_number,
-            Self::V1(share) => share.view_number = view_number,
-            Self::V2(share) => share.view_number = view_number,
-        }
-    }
-
-    pub fn to_shares(self) -> Vec<VidDisperseShare<TYPES>> {
-        match self {
-            VidDisperse::V0(disperse) => disperse
-                .to_shares()
-                .into_iter()
-                .map(|share| VidDisperseShare::V0(share))
-                .collect(),
-            VidDisperse::V1(disperse) => disperse
-                .to_shares()
-                .into_iter()
-                .map(|share| VidDisperseShare::V1(share))
-                .collect(),
-            VidDisperse::V2(disperse) => disperse
-                .to_shares()
-                .into_iter()
-                .map(|share| VidDisperseShare::V2(share))
-                .collect(),
-        }
-    }
-
-    /// Split a VID share proposal into a proposal for each recipient.
-    pub fn to_share_proposals(
-        proposal: Proposal<TYPES, Self>,
-    ) -> Vec<Proposal<TYPES, VidDisperseShare<TYPES>>> {
-        match proposal.data {
-            VidDisperse::V0(disperse) => disperse
-                .to_share_proposals(&proposal.signature)
-                .into_iter()
-                .map(|proposal| convert_proposal(proposal))
-                .collect(),
-            VidDisperse::V1(disperse) => disperse
-                .to_share_proposals(&proposal.signature)
-                .into_iter()
-                .map(|proposal| convert_proposal(proposal))
-                .collect(),
-            VidDisperse::V2(disperse) => disperse
-                .to_share_proposals(&proposal.signature)
-                .into_iter()
-                .map(|proposal| convert_proposal(proposal))
-                .collect(),
-        }
-    }
-}
 
 /// Type aliases for different versions of VID disperse shares
 pub type VidDisperseShare0<TYPES> = vid_disperse::ADVZDisperseShare<TYPES>;
