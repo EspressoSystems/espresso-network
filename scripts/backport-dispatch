@@ -9,6 +9,12 @@ fi
 pr_number="$1"
 target_branch="$2"
 
+# Whoever can label a PR sets the target, so allow a plain branch name only, never a git option.
+if [[ ! "${target_branch}" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]*$ ]]; then
+  echo "invalid target branch: ${target_branch}" >&2
+  exit 1
+fi
+
 : "${GITHUB_OUTPUT:?GITHUB_OUTPUT is not set}"
 : "${GH_TOKEN:?GH_TOKEN is not set}"
 
