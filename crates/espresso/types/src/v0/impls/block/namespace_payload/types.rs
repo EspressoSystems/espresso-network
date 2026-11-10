@@ -196,13 +196,9 @@ impl<'de> Deserialize<'de> for TxTableEntries {
         D: Deserializer<'de>,
     {
         let bytes = Vec::<u8>::deserialize(deserializer)?;
-        if bytes.len() != TX_OFFSET_BYTE_LEN && bytes.len() != Self::TWO_ENTRIES_BYTE_LEN {
-            return Err(serde::de::Error::invalid_length(
-                bytes.len(),
-                &"one or two tx table entries",
-            ));
-        }
-        Ok(Self::from_payload_bytes(&bytes))
+        Self::try_from_payload_bytes(&bytes).ok_or_else(|| {
+            serde::de::Error::invalid_length(bytes.len(), &"one or two 4-byte tx table entries")
+        })
     }
 }
 
@@ -217,28 +213,28 @@ impl TxTableEntries {
         bytes.extend(usize_to_bytes::<TX_OFFSET_BYTE_LEN>(self.cur));
         bytes
     }
-}
 
-impl FromNsPayloadBytes<'_> for TxTableEntries {
-    fn from_payload_bytes(bytes: &[u8]) -> Self {
+    fn try_from_payload_bytes(bytes: &[u8]) -> Option<Self> {
         match bytes.len() {
-            TX_OFFSET_BYTE_LEN => Self {
+            TX_OFFSET_BYTE_LEN => Some(Self {
                 cur: usize_from_bytes::<TX_OFFSET_BYTE_LEN>(bytes),
                 prev: None,
-            },
-            Self::TWO_ENTRIES_BYTE_LEN => Self {
+            }),
+            Self::TWO_ENTRIES_BYTE_LEN => Some(Self {
                 cur: usize_from_bytes::<TX_OFFSET_BYTE_LEN>(&bytes[TX_OFFSET_BYTE_LEN..]),
                 prev: Some(usize_from_bytes::<TX_OFFSET_BYTE_LEN>(
                     &bytes[..TX_OFFSET_BYTE_LEN],
                 )),
-            },
-            len => panic!(
-                "unexpected bytes len {} should be either {} or {}",
-                len,
-                TX_OFFSET_BYTE_LEN,
-                Self::TWO_ENTRIES_BYTE_LEN
-            ),
+            }),
+            _ => None,
         }
+    }
+}
+
+impl FromNsPayloadBytes<'_> for TxTableEntries {
+    fn from_payload_bytes(bytes: &[u8]) -> Self {
+        Self::try_from_payload_bytes(bytes)
+            .expect("TxTableEntriesRange only spans one or two tx table entries")
     }
 }
 
@@ -425,10 +421,16 @@ mod tests {
     #[test]
     fn tx_table_entries_reject_unexpected_byte_len() {
         for len in [0, 3, 5, 12] {
-            let bytes = bincode::serialize(&vec![0u8; len]).unwrap();
+            let bytes = vec![0u8; len];
             assert!(
-                bincode::deserialize::<TxTableEntries>(&bytes).is_err(),
-                "{len}"
+                bincode::deserialize::<TxTableEntries>(&bincode::serialize(&bytes).unwrap())
+                    .is_err(),
+                "bincode accepted {len} bytes"
+            );
+            assert!(
+                serde_json::from_str::<TxTableEntries>(&serde_json::to_string(&bytes).unwrap())
+                    .is_err(),
+                "json accepted {len} bytes"
             );
         }
     }
