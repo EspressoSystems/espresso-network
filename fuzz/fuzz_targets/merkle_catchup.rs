@@ -1,4 +1,4 @@
-//! Fee and reward account snapshots and block frontiers from catchup peers.
+//! Fee and v1 reward account snapshots and block frontiers from catchup peers.
 //!
 //! A node missing state asks a peer for it. For accounts the peer returns a
 //! partial merkle tree. The node proves each requested account out of it and
@@ -10,8 +10,12 @@
 //!
 //! An honest response is decoded, its tree structure edited, and encoded
 //! again, so the input reaches the merkle code instead of stopping in the field
-//! element decoder. A response the node accepts must leave it in the same
-//! state an honest one would.
+//! element decoder. A response the node accepts must leave it holding the same
+//! accounts and roots an honest one would.
+//!
+//! Fee catchup runs only for headers below the new protocol, and v1 reward
+//! catchup only up to the epoch version. The v2 reward tree, which catchup
+//! fetches whole, is not covered here.
 
 #![no_main]
 
@@ -25,12 +29,9 @@ use arbitrary::Arbitrary;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use committable::Commitment;
 use espresso_types::{
-    BLOCK_MERKLE_TREE_HEIGHT, BlockMerkleTree, FEE_MERKLE_TREE_HEIGHT, FeeAccount, FeeAccountProof,
-    FeeAmount, FeeMerkleTree, Header,
-    v0_3::{
-        REWARD_MERKLE_TREE_V1_HEIGHT, RewardAccountProofV1, RewardAccountV1, RewardAmount,
-        RewardMerkleTreeV1,
-    },
+    BLOCK_MERKLE_TREE_HEIGHT, BlockMerkleTree, FEE_MERKLE_TREE_HEIGHT, FeeAccountProof,
+    FeeMerkleTree, Header,
+    v0_3::{REWARD_MERKLE_TREE_V1_HEIGHT, RewardAccountProofV1, RewardMerkleTreeV1},
 };
 use jf_merkle_tree_compat::{
     AppendableMerkleTreeScheme, Element, ForgetableMerkleTreeScheme,
@@ -45,6 +46,10 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 /// copying a subtree into itself cannot grow one input without bound.
 const MAX_NODES: usize = 1 << 12;
 
+/// Edits applied per input. Each one walks the nodes, so this bounds the time
+/// of a run.
+const MAX_EDITS: usize = 64;
+
 /// Block counts for the frontier fixtures. With arity 3 they cover a last leaf
 /// in each child slot, and frontiers whose parent levels are full.
 const LEAF_COUNTS: [u64; 7] = [1, 2, 3, 4, 9, 10, 28];
@@ -52,8 +57,8 @@ const LEAF_COUNTS: [u64; 7] = [1, 2, 3, 4, 9, 10, 28];
 #[derive(Arbitrary, Debug)]
 enum Input {
     FeeAccounts(AccountsResponse),
-    RewardAccounts(AccountsResponse),
-    Frontier(FrontierResponse),
+    RewardAccountsV1(AccountsResponse),
+    Frontier { fixture: u8, edits: Vec<NodeEdit> },
 }
 
 #[derive(Arbitrary, Debug)]
@@ -64,13 +69,6 @@ struct AccountsResponse {
     /// request.
     known: Option<u8>,
     height: Option<u64>,
-    edits: Vec<NodeEdit>,
-}
-
-#[derive(Arbitrary, Debug)]
-struct FrontierResponse {
-    fixture: u8,
-    pos: Option<u64>,
     edits: Vec<NodeEdit>,
 }
 
@@ -102,14 +100,24 @@ enum NodeEdit {
         node: u16,
         from: u16,
     },
+    Pos {
+        node: u16,
+        from: u16,
+    },
     Children {
         node: u16,
-        len: u8,
+        len: u16,
     },
+    /// The only edits that write into an empty slot, since numbering skips
+    /// empty nodes.
     Graft {
         node: u16,
         slot: u8,
         from: u16,
+    },
+    Hollow {
+        node: u16,
+        slot: u8,
     },
 }
 
@@ -130,17 +138,22 @@ struct TreeWire<E: Element, I: Index> {
 }
 
 /// The fee and v1 reward trees, which catchup fetches the same way.
-trait AccountTree: ForgetableUniversalMerkleTreeScheme + Clone {
+trait AccountTree:
+    ForgetableUniversalMerkleTreeScheme<
+        Element: From<U256> + Into<U256> + Copy + CanonicalSerialize + CanonicalDeserialize,
+        Index: From<Address> + CanonicalSerialize + CanonicalDeserialize,
+        MembershipProof: PartialEq,
+        NonMembershipProof: PartialEq,
+    > + Clone
+    + Serialize
+    + DeserializeOwned
+{
     type Proof;
 
     fn empty() -> Self;
-    fn index(account: Address) -> Self::Index;
-    fn amount(value: U256) -> Self::Element;
-    fn value(amount: &Self::Element) -> U256;
     fn prove_account(&self, account: Address) -> Option<(Self::Proof, U256)>;
     fn verify_proof(proof: &Self::Proof, root: &Self::Commitment) -> anyhow::Result<U256>;
     fn remember_proof(&mut self, proof: &Self::Proof) -> anyhow::Result<()>;
-    fn edited(&self, height: Option<u64>, edits: &[NodeEdit]) -> Option<Self>;
 }
 
 impl AccountTree for FeeMerkleTree {
@@ -148,18 +161,6 @@ impl AccountTree for FeeMerkleTree {
 
     fn empty() -> Self {
         Self::new(FEE_MERKLE_TREE_HEIGHT)
-    }
-
-    fn index(account: Address) -> FeeAccount {
-        FeeAccount(account)
-    }
-
-    fn amount(value: U256) -> FeeAmount {
-        FeeAmount(value)
-    }
-
-    fn value(amount: &FeeAmount) -> U256 {
-        amount.0
     }
 
     fn prove_account(&self, account: Address) -> Option<(FeeAccountProof, U256)> {
@@ -173,10 +174,6 @@ impl AccountTree for FeeMerkleTree {
     fn remember_proof(&mut self, proof: &FeeAccountProof) -> anyhow::Result<()> {
         proof.remember(self)
     }
-
-    fn edited(&self, height: Option<u64>, edits: &[NodeEdit]) -> Option<Self> {
-        edit_tree::<FeeAmount, FeeAccount, _>(self, height, edits)
-    }
 }
 
 impl AccountTree for RewardMerkleTreeV1 {
@@ -184,18 +181,6 @@ impl AccountTree for RewardMerkleTreeV1 {
 
     fn empty() -> Self {
         Self::new(REWARD_MERKLE_TREE_V1_HEIGHT)
-    }
-
-    fn index(account: Address) -> RewardAccountV1 {
-        RewardAccountV1(account)
-    }
-
-    fn amount(value: U256) -> RewardAmount {
-        RewardAmount(value)
-    }
-
-    fn value(amount: &RewardAmount) -> U256 {
-        amount.0
     }
 
     fn prove_account(&self, account: Address) -> Option<(RewardAccountProofV1, U256)> {
@@ -208,10 +193,6 @@ impl AccountTree for RewardMerkleTreeV1 {
 
     fn remember_proof(&mut self, proof: &RewardAccountProofV1) -> anyhow::Result<()> {
         proof.remember(self)
-    }
-
-    fn edited(&self, height: Option<u64>, edits: &[NodeEdit]) -> Option<Self> {
-        edit_tree::<RewardAmount, RewardAccountV1, _>(self, height, edits)
     }
 }
 
@@ -230,7 +211,7 @@ struct Frontier {
 }
 
 static FEE: LazyLock<Accounts<FeeMerkleTree>> = LazyLock::new(Accounts::new);
-static REWARD: LazyLock<Accounts<RewardMerkleTreeV1>> = LazyLock::new(Accounts::new);
+static REWARD_V1: LazyLock<Accounts<RewardMerkleTreeV1>> = LazyLock::new(Accounts::new);
 static FRONTIERS: LazyLock<Vec<Frontier>> =
     LazyLock::new(|| LEAF_COUNTS.into_iter().map(Frontier::new).collect());
 
@@ -241,17 +222,17 @@ fn next_block() -> Commitment<Header> {
 fuzz_target!(
     init: {
         FEE.assert_honest_responses_accepted();
-        REWARD.assert_honest_responses_accepted();
+        REWARD_V1.assert_honest_responses_accepted();
         for frontier in FRONTIERS.iter() {
-            assert!(frontier.check(&FrontierResponse { fixture: 0, pos: None, edits: Vec::new() }));
+            assert!(frontier.check(&[]));
         }
     },
     |input: Input| {
         match input {
             Input::FeeAccounts(response) => FEE.check(&response),
-            Input::RewardAccounts(response) => REWARD.check(&response),
-            Input::Frontier(response) => {
-                FRONTIERS[usize::from(response.fixture) % FRONTIERS.len()].check(&response)
+            Input::RewardAccountsV1(response) => REWARD_V1.check(&response),
+            Input::Frontier { fixture, edits } => {
+                FRONTIERS[usize::from(fixture) % FRONTIERS.len()].check(&edits)
             },
         };
     }
@@ -280,7 +261,7 @@ impl<T: AccountTree> Accounts<T> {
         let mut balances = Vec::new();
         for (i, account) in present.into_iter().enumerate() {
             let balance = U256::from(1000 * (i + 1));
-            full.update_with(T::index(account), |_| Some(T::amount(balance)))
+            full.update_with(T::Index::from(account), |_| Some(balance.into()))
                 .unwrap();
             balances.push((account, balance));
         }
@@ -288,42 +269,73 @@ impl<T: AccountTree> Accounts<T> {
         Self { full, balances }
     }
 
+    /// Every request from a node that knows no account, and a request for
+    /// everything else from a node that knows each one in turn.
     fn assert_honest_responses_accepted(&self) {
-        for request in 1..=u8::MAX {
-            assert!(self.check(&AccountsResponse {
+        let unknown = (1..=u8::MAX).map(|request| (request, None));
+        let known = (0..self.balances.len() as u8).map(|i| (u8::MAX, Some(i)));
+        for (request, known) in unknown.chain(known) {
+            let response = AccountsResponse {
                 request,
-                known: None,
+                known,
                 height: None,
                 edits: Vec::new(),
-            }));
+            };
+            assert!(
+                self.check(&response),
+                "an honest response is rejected: {response:?}"
+            );
         }
     }
 
     /// Run `response` through catchup as the node does. Returns whether the
     /// node accepts it.
     fn check(&self, response: &AccountsResponse) -> bool {
-        let known = response
-            .known
-            .map(|i| self.balances[usize::from(i) % self.balances.len()].0);
-        let requested: Vec<(Address, U256)> = self
-            .balances
-            .iter()
-            .enumerate()
-            .filter(|&(i, &(account, _))| response.request >> i & 1 == 1 && Some(account) != known)
-            .map(|(_, &entry)| entry)
-            .collect();
+        let requested = self.requested(response);
         if requested.is_empty() {
             return false;
         }
-
-        let root = self.full.commitment();
-        let Some(snapshot) = self
-            .snapshot(requested.iter().map(|(account, _)| *account))
-            .edited(response.height, &response.edits)
-        else {
+        let Some(proofs) = self.fetch(&requested, response) else {
             return false;
         };
-        let Some(proofs) = requested
+        self.catch_up(self.known(response), &requested, &proofs);
+        true
+    }
+
+    fn known(&self, response: &AccountsResponse) -> Option<Address> {
+        response
+            .known
+            .map(|i| self.balances[usize::from(i) % self.balances.len()].0)
+    }
+
+    /// The fixture accounts `response` requests, which never include the one
+    /// the node already knows.
+    fn requested(&self, response: &AccountsResponse) -> Vec<(Address, U256)> {
+        let known = self.known(response);
+        self.balances
+            .iter()
+            .enumerate()
+            .filter(|&(i, &(account, _))| {
+                (response.request >> i) & 1 == 1 && Some(account) != known
+            })
+            .map(|(_, &entry)| entry)
+            .collect()
+    }
+
+    /// The proofs the node takes from the edited response, as the catchup
+    /// providers check them.
+    fn fetch(
+        &self,
+        requested: &[(Address, U256)],
+        response: &AccountsResponse,
+    ) -> Option<Vec<T::Proof>> {
+        let root = self.full.commitment();
+        let snapshot = edit_tree::<T::Element, T::Index, T>(
+            &self.snapshot(requested.iter().map(|(account, _)| *account)),
+            response.height,
+            &response.edits,
+        )?;
+        requested
             .iter()
             .map(|&(account, balance)| {
                 let (proof, _) = snapshot.prove_account(account)?;
@@ -331,28 +343,36 @@ impl<T: AccountTree> Accounts<T> {
                 assert_eq!(proved, balance, "proved a wrong balance for {account}");
                 Some(proof)
             })
-            .collect::<Option<Vec<_>>>()
-        else {
-            return false;
-        };
+            .collect()
+    }
 
-        let mut local = T::from_commitment(root);
-        let mut honest = self.full.clone();
+    /// Remember `proofs` into a node that already holds `known`, and update
+    /// every balance it holds, as state validation does. The node must end up
+    /// with the honest accounts and root.
+    fn catch_up(&self, known: Option<Address>, requested: &[(Address, U256)], proofs: &[T::Proof]) {
+        let mut local = T::from_commitment(self.full.commitment());
         if let Some(account) = known {
             let (proof, _) = self.full.prove_account(account).unwrap();
             local.remember_proof(&proof).unwrap();
         }
-        for proof in &proofs {
+        for proof in proofs {
             local
                 .remember_proof(proof)
                 .expect("a verified proof is remembered");
         }
-        for (account, _) in &requested {
+
+        let mut honest = self.full.clone();
+        let held = requested.iter().map(|(account, _)| *account).chain(known);
+        for account in held {
+            let index = T::Index::from(account);
+            assert!(
+                local.universal_lookup(&index) == honest.universal_lookup(&index),
+                "remembered {account} differently from the honest tree"
+            );
             for tree in [&mut local, &mut honest] {
-                let credited = tree.update_with(T::index(*account), |balance| {
-                    Some(T::amount(
-                        balance.map_or(U256::ZERO, T::value) + U256::from(1),
-                    ))
+                let credited = tree.update_with(&index, |balance| {
+                    let balance: U256 = balance.copied().map_or(U256::ZERO, Into::into);
+                    Some((balance + U256::from(1)).into())
                 });
                 assert!(
                     matches!(
@@ -367,14 +387,13 @@ impl<T: AccountTree> Accounts<T> {
             local.commitment() == honest.commitment(),
             "state after catching up differs from the honest state"
         );
-        true
     }
 
     /// The partial tree an honest peer returns for `accounts`.
     fn snapshot(&self, accounts: impl IntoIterator<Item = Address>) -> T {
         let mut snapshot = T::from_commitment(self.full.commitment());
         for account in accounts {
-            let index = T::index(account);
+            let index = T::Index::from(account);
             match self.full.universal_lookup(&index) {
                 LookupResult::Ok(elem, proof) => snapshot.remember(index, elem, proof).unwrap(),
                 LookupResult::NotFound(proof) => {
@@ -404,15 +423,12 @@ impl Frontier {
         }
     }
 
-    /// Run `response` through catchup as the node does. Returns whether the
-    /// node accepts it.
-    fn check(&self, response: &FrontierResponse) -> bool {
+    /// Run the frontier with `edits` through catchup as the node does. Returns
+    /// whether the node accepts it.
+    fn check(&self, edits: &[NodeEdit]) -> bool {
         let mut proof = self.proof.clone();
-        if let Some(pos) = response.pos {
-            proof.pos = pos;
-        }
         let mut nodes: Vec<_> = proof.proof.into_iter().map(Arc::new).collect();
-        if !apply_edits(&mut nodes, &response.edits) {
+        if !apply_node_edits(&mut nodes, edits) {
             return false;
         }
         proof.proof = nodes.into_iter().map(Arc::unwrap_or_clone).collect();
@@ -427,10 +443,6 @@ impl Frontier {
         {
             return false;
         }
-        assert!(
-            local.commitment() == self.tree.commitment(),
-            "remembering the frontier changed the root"
-        );
         let (last, _) = local
             .lookup(local.num_leaves() - 1)
             .expect_ok()
@@ -448,28 +460,34 @@ impl Frontier {
 }
 
 /// Re-encode `tree` with `height` and `edits` applied, and decode it as the
-/// node would.
+/// node would. Returns `None` if the edits grew it past [`MAX_NODES`].
 fn edit_tree<E, I, T>(tree: &T, height: Option<u64>, edits: &[NodeEdit]) -> Option<T>
 where
     E: Element + CanonicalSerialize + CanonicalDeserialize,
     I: Index + CanonicalSerialize + CanonicalDeserialize,
     T: Serialize + DeserializeOwned,
 {
-    let mut wire: TreeWire<E, I> =
-        bincode::deserialize(&bincode::serialize(tree).unwrap()).unwrap();
+    let mut wire: TreeWire<E, I> = bincode::deserialize(&bincode::serialize(tree).unwrap())
+        .expect("TreeWire mirrors the jellyfish tree layout");
     if let Some(height) = height {
         wire.height = height as usize;
     }
-    if !apply_edits(std::slice::from_mut(&mut wire.root), edits) {
+    if !apply_node_edits(std::slice::from_mut(&mut wire.root), edits) {
         return None;
     }
-    bincode::deserialize(&bincode::serialize(&wire).unwrap()).ok()
+    Some(
+        bincode::deserialize(&bincode::serialize(&wire).unwrap())
+            .expect("TreeWire mirrors the jellyfish tree layout"),
+    )
 }
 
-/// Apply `edits` in order. Returns false if they grew the nodes past
-/// [`MAX_NODES`].
-fn apply_edits<E: Element, I: Index>(roots: &mut [Arc<Node<E, I>>], edits: &[NodeEdit]) -> bool {
-    for edit in edits {
+/// Apply up to [`MAX_EDITS`] of `edits` in order. Returns false if they grew
+/// the nodes past [`MAX_NODES`].
+fn apply_node_edits<E: Element, I: Index>(
+    roots: &mut [Arc<Node<E, I>>],
+    edits: &[NodeEdit],
+) -> bool {
+    for edit in edits.iter().take(MAX_EDITS) {
         let count = count(roots);
         if count == 0 {
             return true;
@@ -487,26 +505,35 @@ fn apply_edits<E: Element, I: Index>(roots: &mut [Arc<Node<E, I>>], edits: &[Nod
             },
             NodeEdit::Empty { node } => *nth_mut(roots, at(node)) = Arc::new(MerkleNode::Empty),
             NodeEdit::Copy { from, to } => {
-                let from = nth(roots, at(from)).clone();
+                let from = nth_mut(roots, at(from)).clone();
                 *nth_mut(roots, at(to)) = from;
             },
             NodeEdit::Transplant { from, to } => {
-                let mut from = nth(roots, at(from)).clone();
+                let mut from = nth_mut(roots, at(from)).clone();
                 let to = nth_mut(roots, at(to));
                 set_value(&mut from, to.value());
                 *to = from;
             },
             NodeEdit::Value { node, from } => {
-                let value = nth(roots, at(from)).value();
+                let value = nth_mut(roots, at(from)).value();
                 set_value(nth_mut(roots, at(node)), value);
             },
             NodeEdit::Elem { node, from } => {
-                let MerkleNode::Leaf { elem: from, .. } = &**nth(roots, at(from)) else {
+                let MerkleNode::Leaf { elem: from, .. } = &**nth_mut(roots, at(from)) else {
                     continue;
                 };
                 let from = from.clone();
                 if let MerkleNode::Leaf { elem, .. } = Arc::make_mut(nth_mut(roots, at(node))) {
                     *elem = from;
+                }
+            },
+            NodeEdit::Pos { node, from } => {
+                let MerkleNode::Leaf { pos: from, .. } = &**nth_mut(roots, at(from)) else {
+                    continue;
+                };
+                let from = from.clone();
+                if let MerkleNode::Leaf { pos, .. } = Arc::make_mut(nth_mut(roots, at(node))) {
+                    *pos = from;
                 }
             },
             NodeEdit::Children { node, len } => {
@@ -516,12 +543,22 @@ fn apply_edits<E: Element, I: Index>(roots: &mut [Arc<Node<E, I>>], edits: &[Nod
                 }
             },
             NodeEdit::Graft { node, slot, from } => {
-                let from = nth(roots, at(from)).clone();
+                let from = nth_mut(roots, at(from)).clone();
                 if let MerkleNode::Branch { children, .. } = Arc::make_mut(nth_mut(roots, at(node)))
                     && !children.is_empty()
                 {
                     let slot = usize::from(slot) % children.len();
                     children[slot] = from;
+                }
+            },
+            NodeEdit::Hollow { node, slot } => {
+                if let MerkleNode::Branch { children, .. } = Arc::make_mut(nth_mut(roots, at(node)))
+                    && !children.is_empty()
+                {
+                    let slot = usize::from(slot) % children.len();
+                    children[slot] = Arc::new(MerkleNode::ForgettenSubtree {
+                        value: children[slot].value(),
+                    });
                 }
             },
         }
@@ -549,52 +586,25 @@ fn count<E: Element, I: Index>(nodes: &[Arc<Node<E, I>>]) -> usize {
         .sum()
 }
 
-fn nth<E: Element, I: Index>(roots: &[Arc<Node<E, I>>], n: usize) -> &Arc<Node<E, I>> {
-    find(roots, &mut { n }).expect("n is below the node count")
-}
-
-fn nth_mut<E: Element, I: Index>(roots: &mut [Arc<Node<E, I>>], n: usize) -> &mut Arc<Node<E, I>> {
-    find_mut(roots, &mut { n }).expect("n is below the node count")
-}
-
-fn find<'a, E: Element, I: Index>(
-    nodes: &'a [Arc<Node<E, I>>],
-    n: &mut usize,
-) -> Option<&'a Arc<Node<E, I>>> {
+/// The `n`th non-empty node in preorder. Only the branches on the way to it
+/// are made unique, so a shared subtree elsewhere is not copied.
+fn nth_mut<E: Element, I: Index>(
+    nodes: &mut [Arc<Node<E, I>>],
+    mut n: usize,
+) -> &mut Arc<Node<E, I>> {
     for node in nodes {
-        if matches!(**node, MerkleNode::Empty) {
+        let size = count(std::slice::from_ref(node));
+        if n >= size {
+            n -= size;
             continue;
         }
-        if *n == 0 {
-            return Some(node);
+        if n == 0 {
+            return node;
         }
-        *n -= 1;
-        if let MerkleNode::Branch { children, .. } = &**node
-            && let Some(found) = find(children, n)
-        {
-            return Some(found);
-        }
+        let MerkleNode::Branch { children, .. } = Arc::make_mut(node) else {
+            unreachable!("only a branch counts more than one node");
+        };
+        return nth_mut(children, n - 1);
     }
-    None
-}
-
-fn find_mut<'a, E: Element, I: Index>(
-    nodes: &'a mut [Arc<Node<E, I>>],
-    n: &mut usize,
-) -> Option<&'a mut Arc<Node<E, I>>> {
-    for node in nodes {
-        if matches!(**node, MerkleNode::Empty) {
-            continue;
-        }
-        if *n == 0 {
-            return Some(node);
-        }
-        *n -= 1;
-        if let MerkleNode::Branch { children, .. } = Arc::make_mut(node)
-            && let Some(found) = find_mut(children, n)
-        {
-            return Some(found);
-        }
-    }
-    None
+    unreachable!("n is below the node count")
 }
