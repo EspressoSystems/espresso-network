@@ -11,11 +11,17 @@
 
 use std::{fmt, sync::Arc};
 
-use anyhow::{Context, bail, ensure};
+use anyhow::{Context, anyhow, bail, ensure};
 use committable::{Commitment, Committable};
-use hotshot_types::{data::ViewNumber, epoch_membership::EpochMembershipCoordinator};
+use hotshot_types::{
+    data::{EpochNumber, ViewNumber},
+    epoch_membership::EpochMembershipCoordinator,
+};
 #[cfg(feature = "node")]
-use hotshot_types::{message::UpgradeLock, utils::verify_leaf_chain};
+use hotshot_types::{
+    message::UpgradeLock,
+    utils::{StakeTableUnavailable, verify_leaf_chain},
+};
 use jf_merkle_tree_compat::MerkleTreeScheme;
 use versions::NEW_PROTOCOL_VERSION;
 #[cfg(feature = "node")]
@@ -34,6 +40,18 @@ use crate::{
         forgotten_accounts_include,
     },
 };
+
+/// Why a response failed verification.
+#[derive(Debug, thiserror::Error)]
+pub enum VerifyError {
+    /// The response is wrong. The responder is at fault, and another one may answer correctly.
+    #[error(transparent)]
+    Invalid(anyhow::Error),
+    /// This node does not hold the stake table the response must be checked against yet. Looking
+    /// it up started its catchup, so the same response may verify later.
+    #[error("no stake table available for epoch {0} to verify the response against")]
+    Unavailable(EpochNumber),
+}
 
 /// A value checked against the request it answers.
 #[derive(Clone, Debug)]
@@ -72,7 +90,10 @@ pub struct FeeAccountsAt {
 
 impl FeeAccountsAt {
     /// One proof per requested account, each checked against [`Self::root`].
-    pub fn verify(&self, tree: &FeeMerkleTree) -> anyhow::Result<Verified<Vec<FeeAccountProof>>> {
+    pub fn verify(
+        &self,
+        tree: &FeeMerkleTree,
+    ) -> Result<Verified<Vec<FeeAccountProof>>, VerifyError> {
         self.accounts
             .iter()
             .map(|account| {
@@ -88,6 +109,7 @@ impl FeeAccountsAt {
             })
             .collect::<anyhow::Result<_>>()
             .map(Verified::new)
+            .map_err(VerifyError::Invalid)
     }
 }
 
@@ -105,7 +127,7 @@ impl RewardAccountsV1At {
     pub fn verify(
         &self,
         tree: &RewardMerkleTreeV1,
-    ) -> anyhow::Result<Verified<Vec<RewardAccountProofV1>>> {
+    ) -> Result<Verified<Vec<RewardAccountProofV1>>, VerifyError> {
         self.accounts
             .iter()
             .map(|account| {
@@ -121,6 +143,7 @@ impl RewardAccountsV1At {
             })
             .collect::<anyhow::Result<_>>()
             .map(Verified::new)
+            .map_err(VerifyError::Invalid)
     }
 }
 
@@ -141,8 +164,10 @@ impl RewardTreeV2At {
     pub async fn verify_balances(
         &self,
         balances: Vec<(RewardAccountV2, RewardAmount)>,
-    ) -> anyhow::Result<Verified<PermittedRewardMerkleTreeV2>> {
-        let tree = PermittedRewardMerkleTreeV2::try_from_kv_set(balances).await?;
+    ) -> Result<Verified<PermittedRewardMerkleTreeV2>, VerifyError> {
+        let tree = PermittedRewardMerkleTreeV2::try_from_kv_set(balances)
+            .await
+            .map_err(VerifyError::Invalid)?;
         self.verify_tree(tree)
     }
 
@@ -151,7 +176,12 @@ impl RewardTreeV2At {
     pub fn verify_tree(
         &self,
         tree: PermittedRewardMerkleTreeV2,
-    ) -> anyhow::Result<Verified<PermittedRewardMerkleTreeV2>> {
+    ) -> Result<Verified<PermittedRewardMerkleTreeV2>, VerifyError> {
+        self.check_tree(&tree).map_err(VerifyError::Invalid)?;
+        Ok(Verified::new(tree))
+    }
+
+    fn check_tree(&self, tree: &PermittedRewardMerkleTreeV2) -> anyhow::Result<()> {
         ensure!(
             tree.tree.commitment() == self.root,
             "reward merkle tree v2 does not match root {}",
@@ -161,7 +191,7 @@ impl RewardTreeV2At {
             !forgotten_accounts_include(&tree.tree, &self.accounts),
             "reward merkle tree v2 is missing requested accounts"
         );
-        Ok(Verified::new(tree))
+        Ok(())
     }
 }
 
@@ -200,7 +230,22 @@ impl LeafAt {
         &self,
         leaves: Vec<Leaf2>,
         cert2: Option<Certificate2<SeqTypes>>,
-    ) -> anyhow::Result<Verified<Leaf2>> {
+    ) -> Result<Verified<Leaf2>, VerifyError> {
+        match self.verify_chain(leaves, cert2).await {
+            Ok(leaf) => Ok(Verified::new(leaf)),
+            Err(err) => match err.downcast_ref::<StakeTableUnavailable>() {
+                Some(StakeTableUnavailable(epoch)) => Err(VerifyError::Unavailable(*epoch)),
+                None => Err(VerifyError::Invalid(err)),
+            },
+        }
+    }
+
+    #[cfg(feature = "node")]
+    async fn verify_chain(
+        &self,
+        leaves: Vec<Leaf2>,
+        cert2: Option<Certificate2<SeqTypes>>,
+    ) -> anyhow::Result<Leaf2> {
         let leaf = match self.cert2_height(&leaves)? {
             Some(_) => {
                 let cert2 = cert2.context("new-protocol leaf chain needs its cert2")?;
@@ -230,7 +275,7 @@ impl LeafAt {
                     })?
             },
         };
-        Ok(Verified::new(leaf))
+        Ok(leaf)
     }
 }
 
@@ -238,12 +283,13 @@ impl LeafAt {
 pub fn verify_chain_config(
     commitment: Commitment<ChainConfig>,
     chain_config: ChainConfig,
-) -> anyhow::Result<Verified<ChainConfig>> {
-    ensure!(
-        chain_config.commit() == commitment,
-        "received chain config with mismatched commitment: expected {commitment}, got {}",
-        chain_config.commit()
-    );
+) -> Result<Verified<ChainConfig>, VerifyError> {
+    if chain_config.commit() != commitment {
+        return Err(VerifyError::Invalid(anyhow!(
+            "received chain config with mismatched commitment: expected {commitment}, got {}",
+            chain_config.commit()
+        )));
+    }
     Ok(Verified::new(chain_config))
 }
 

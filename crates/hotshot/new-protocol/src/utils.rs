@@ -6,7 +6,7 @@ use hotshot_types::{
     message::UpgradeLock,
     stake_table::StakeTableEntries,
     traits::node_implementation::NodeType,
-    utils::{epoch_from_block_number, is_last_block},
+    utils::{certifying_stake_table, epoch_from_block_number, is_last_block},
     vote::{Certificate, HasViewNumber},
 };
 
@@ -72,9 +72,7 @@ pub async fn verify_new_protocol_leaf_chain<T: NodeType>(
         cert2.data.block_number
     );
 
-    let membership = coordinator
-        .stake_table_for_epoch(Some(epoch))
-        .map_err(|err| anyhow!("no stake table available for epoch {epoch}: {err:?}"))?;
+    let membership = certifying_stake_table(coordinator, epoch)?;
     let entries = StakeTableEntries::<T>::from_iter(membership.stake_table()).0;
     cert2.is_valid_cert(&entries, membership.success_threshold(), upgrade_lock)?;
 
@@ -120,9 +118,7 @@ pub async fn verify_new_protocol_leaf_chain<T: NodeType>(
                 leaf.height()
             );
         }
-        let membership = coordinator
-            .stake_table_for_epoch(Some(qc_epoch))
-            .map_err(|err| anyhow!("no stake table available for epoch {qc_epoch}: {err:?}"))?;
+        let membership = certifying_stake_table(coordinator, qc_epoch)?;
         let entries = StakeTableEntries::<T>::from_iter(membership.stake_table()).0;
         justify_qc.is_valid_cert(&entries, membership.success_threshold(), upgrade_lock)?;
         if leaf.height() == expected_height {
@@ -158,7 +154,7 @@ mod test {
         simple_vote::{QuorumData2, VersionedVoteData, Vote2Data},
         stake_table::{StakeTableEntry, supermajority_threshold},
         traits::signature_key::SignatureKey,
-        utils::{BuilderCommitment, verify_leaf_chain},
+        utils::{BuilderCommitment, StakeTableUnavailable, verify_leaf_chain},
     };
     use versions::{EPOCH_VERSION, NEW_PROTOCOL_VERSION, Upgrade};
 
@@ -462,6 +458,10 @@ mod test {
             err.to_string().contains("no stake table available"),
             "{err:#}"
         );
+        assert!(
+            err.downcast_ref::<StakeTableUnavailable>().is_some(),
+            "{err:#}"
+        );
     }
 
     /// QCs formed before epochs were enabled claim no epoch. Up to the first epoch they are
@@ -609,6 +609,10 @@ mod test {
             .unwrap_err();
         assert!(
             err.to_string().contains("no stake table available"),
+            "{err:#}"
+        );
+        assert!(
+            err.downcast_ref::<StakeTableUnavailable>().is_some(),
             "{err:#}"
         );
     }
