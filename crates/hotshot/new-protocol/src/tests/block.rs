@@ -614,7 +614,7 @@ async fn test_payload_commitment_comes_from_the_built_dispersal() {
             total_weight,
             version,
         );
-        assert_eq!(output.payload_commitment, expected);
+        assert_eq!(VidCommitment::V2(output.payload_commitment), expected);
         let dispersal = output
             .dispersal
             .expect("the builder hands over its dispersal");

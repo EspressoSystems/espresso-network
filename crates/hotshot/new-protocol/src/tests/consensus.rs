@@ -543,7 +543,7 @@ async fn view_one_proposed_from_genesis(
     let block = MockBlock::new();
     let header = TestBlockHeader::new(
         &parent,
-        block.payload_commitment,
+        VidCommitment::V2(block.payload_commitment),
         block.builder_commitment,
         block.metadata,
         TEST_VERSIONS.test.base,
@@ -2196,7 +2196,7 @@ async fn test_propose_refuses_when_stored_proposal_differs_from_cert() {
     let byzantine_parent_leaf: Leaf2<TestTypes> = byzantine.into();
     let byzantine_built_header = TestBlockHeader::new(
         &byzantine_parent_leaf,
-        mock.payload_commitment,
+        VidCommitment::V2(mock.payload_commitment),
         mock.builder_commitment,
         mock.metadata,
         TEST_VERSIONS.test.base,

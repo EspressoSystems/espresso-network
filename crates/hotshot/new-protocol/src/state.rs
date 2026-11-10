@@ -5,7 +5,7 @@ use std::{
 
 use committable::{Commitment, Committable};
 use hotshot_types::{
-    data::{BlockNumber, EpochNumber, Leaf2, VidCommitment, ViewNumber},
+    data::{BlockNumber, EpochNumber, Leaf2, VidCommitment, VidCommitment2, ViewNumber},
     message::UpgradeLock,
     traits::{
         BlockPayload, ValidatedState,
@@ -51,7 +51,7 @@ pub struct HeaderRequest<T: NodeType> {
     pub view: ViewNumber,
     pub epoch: EpochNumber,
     pub parent_proposal: Proposal<T>,
-    pub payload_commitment: VidCommitment,
+    pub payload_commitment: VidCommitment2,
     pub builder_commitment: BuilderCommitment,
     pub metadata: <T::BlockPayload as BlockPayload<T>>::Metadata,
     pub builder_fee: BuilderFee<T>,
@@ -374,7 +374,7 @@ impl<T: NodeType> StateManager<T> {
                 &parent_entry.state,
                 &instance,
                 &parent_entry.leaf,
-                request.payload_commitment,
+                VidCommitment::V2(request.payload_commitment),
                 request.builder_commitment,
                 request.metadata,
                 request.builder_fee,
