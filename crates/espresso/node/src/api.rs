@@ -1,7 +1,12 @@
-use std::{collections::HashMap, pin::Pin, sync::Arc, time::Duration};
+use std::{
+    collections::HashMap,
+    pin::Pin,
+    sync::{Arc, OnceLock},
+    time::Duration,
+};
 
 use ::light_client::{
-    LightClient,
+    LightClient, LightClientMetrics,
     client::{FallbackClient, QueryServiceClient},
     state::{Genesis, LightClientOptions},
     storage::LightClientDbOptions,
@@ -53,7 +58,10 @@ use hotshot_types::{
     network::NetworkConfig,
     simple_certificate::LightClientStateUpdateCertificateV2,
     stake_table::HSStakeTable,
-    traits::election::{Membership, MembershipSnapshot, NonEpochMembershipSnapshot},
+    traits::{
+        election::{Membership, MembershipSnapshot},
+        metrics::Metrics,
+    },
     utils::epoch_from_block_number,
     vid::avidm::{AvidMScheme, init_avidm_param},
     vote::HasViewNumber,
@@ -85,7 +93,7 @@ use crate::{
         data_source::{retain_v1_reward_accounts, retain_v2_reward_accounts},
         request::{Request, Response},
     },
-    state_cert::{StateCertFetchError, validate_state_cert},
+    state_cert::{StateCertFetchError, ensure_cert_can_exist, validate_state_cert},
 };
 #[cfg(any(test, feature = "testing"))]
 use crate::{SequencerApiVersion, SequencerContext};
@@ -313,12 +321,10 @@ impl StakeTableDataSource<SeqTypes> for ApiState {
                 .await
                 .membership()
                 .first_epoch();
-            if let Some(first_epoch) = first_epoch
-                && requested < first_epoch
-            {
+            if requested < first_epoch {
                 return Err(anyhow::anyhow!(
                     "requested stake table for epoch {requested:?} is below the first epoch \
-                     {first_epoch:?}"
+                     {first_epoch}"
                 ));
             }
         }
@@ -361,7 +367,7 @@ impl StakeTableDataSource<SeqTypes> for ApiState {
                 .unwrap_or_default(),
             None => coordinator
                 .membership()
-                .non_epoch_snapshot()
+                .genesis_stake_tables()
                 .da_stake_table()
                 .cloned()
                 .collect(),
@@ -583,24 +589,19 @@ impl StateCertFetchingDataSource<SeqTypes> for ApiState {
         epoch: u64,
         timeout: Duration,
     ) -> Result<LightClientStateUpdateCertificateV2<SeqTypes>, StateCertFetchError> {
-        tracing::info!("fetching state certificate for epoch={epoch}");
         let handle = self.consensus().await;
-
-        let current_epoch = handle.current_epoch().await;
-
-        // The highest epoch we can have a state certificate for is current_epoch + 1
-        // Check if requested epoch is beyond the highest possible epoch
-        let highest_epoch = current_epoch.map(|e| e.u64() + 1);
-
-        if Some(epoch) > highest_epoch {
-            return Err(StateCertFetchError::Other(anyhow::anyhow!(
-                "requested state certificate for epoch {epoch} is beyond the highest possible \
-                 epoch {highest_epoch:?}"
-            )));
-        }
-
-        // Get the stake table for validation
         let coordinator = handle.membership_coordinator().await;
+        let epoch_height = *coordinator.epoch_height();
+        let decided = handle.decided_leaf().await;
+        ensure_cert_can_exist(
+            EpochNumber::new(epoch),
+            coordinator.membership().first_epoch(),
+            epoch_height,
+            decided.epoch(epoch_height).map(|_| decided.height()),
+            handle.current_epoch().await,
+        )?;
+
+        tracing::info!("fetching state certificate for epoch={epoch}");
         if let Err(err) = coordinator.stake_table_for_epoch(Some(EpochNumber::new(epoch))) {
             tracing::warn!(
                 "Failed to get membership for epoch {epoch}: {err:#}. Waiting for catchup"
@@ -642,20 +643,18 @@ impl StateCertFetchingDataSource<SeqTypes> for ApiState {
                     &cert,
                     &stake_table,
                     EpochNumber::new(epoch),
-                    *coordinator.epoch_height(),
+                    epoch_height,
                     &handle.upgrade_lock().await,
                 )
                 .map_err(|e| {
-                    StateCertFetchError::ValidationError(e.context(format!(
-                        "state certificate validation failed for epoch={epoch}"
-                    )))
+                    StateCertFetchError::ValidationError(e.context(format!("epoch={epoch}")))
                 })?;
 
                 tracing::info!("fetched and validated state certificate for epoch {epoch}");
                 Ok(cert)
             },
             Ok(Err(e)) => Err(StateCertFetchError::FetchError(
-                e.context(format!("failed to fetch state cert for epoch {epoch}")),
+                e.context(format!("epoch={epoch}")),
             )),
         }
     }
@@ -1743,6 +1742,7 @@ pub(crate) struct LightClientProvider {
     light_client: OnceCell<Arc<NodeLightClient>>,
     state: ApiState,
     client: FallbackClient<QueryServiceClient>,
+    metrics: OnceLock<Box<dyn Metrics>>,
     opt: LightClientOptions,
     db_opt: LightClientDbOptions,
 }
@@ -1759,9 +1759,17 @@ impl LightClientProvider {
             light_client: OnceCell::new(),
             state,
             client,
+            metrics: OnceLock::new(),
             opt,
             db_opt,
         })
+    }
+
+    /// The registry is created with the query data source, which needs this provider first.
+    /// The light client is built on the first fetch, after the node context exists, and the
+    /// context is created after this is called.
+    pub(crate) fn set_metrics(&self, metrics: Box<dyn Metrics>) {
+        self.metrics.set(metrics).ok();
     }
 
     pub(crate) async fn light_client(&self) -> Option<&Arc<NodeLightClient>> {
@@ -1787,14 +1795,23 @@ impl LightClientProvider {
             .connect()
             .await
             .context("opening the light client database")?;
+        // Registered after the database opens, since an init retried after a failed open would
+        // register the same metrics again and panic.
+        let metrics = match self.metrics.get() {
+            Some(metrics) => LightClientMetrics::new(&**metrics),
+            None => LightClientMetrics::default(),
+        };
         let chain_id = ctx.node_state().genesis_chain_config.chain_id;
         let genesis = light_client_genesis(&ctx.network_config(), chain_id);
-        Ok(Arc::new(LightClient::from_genesis_with_options(
-            db,
-            self.client.clone(),
-            genesis,
-            self.opt.clone(),
-        )))
+        Ok(Arc::new(
+            LightClient::from_genesis_with_options(
+                db,
+                self.client.clone(),
+                genesis,
+                self.opt.clone(),
+            )
+            .with_metrics(metrics),
+        ))
     }
 }
 
@@ -2205,7 +2222,7 @@ pub mod test_helpers {
                         let upgrades_map = cfg.upgrades();
                         async move {
                             if i == 0 {
-                                opt.serve(|metrics, consumer, storage| {
+                                opt.serve(|metrics, consumer, storage, _| {
                                     let cfg = cfg.clone();
                                     async move {
                                         Ok(cfg
@@ -4344,7 +4361,7 @@ mod test {
         let persistence = <D as TestableSequencerDataSource>::persistence_options(&dbs[LATE]);
         let catchup = state_peers();
         let _late = api
-            .serve(|metrics, consumer, storage| {
+            .serve(|metrics, consumer, storage, _| {
                 async move {
                     Ok(cfg
                         .init_node(
@@ -4412,6 +4429,18 @@ mod test {
             .unwrap();
             assert_eq!(ours, theirs);
         }
+
+        let export = reqwest::get(format!("http://localhost:{late_port}/v1/status/metrics"))
+            .await
+            .unwrap()
+            .text()
+            .await
+            .unwrap();
+        assert_eq!(
+            metric_value(&export, "light_client_verification_failures"),
+            Some(0.0),
+            "{export}"
+        );
     }
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
@@ -4676,7 +4705,7 @@ mod test {
         let (_network, node) = try_init_pre_new_protocol_node(persistence).await;
         let node = node.expect("a decided upgrade to the new protocol starts");
         assert_eq!(
-            node.upgrade_lock().await.decided_upgrade_cert(),
+            node.upgrade_lock().decided_upgrade_cert(),
             Some(decided),
             "the restored lock lost the decided upgrade"
         );
@@ -5910,8 +5939,10 @@ mod test {
             urls: vec![network.cfg.l1_url()],
             options: network.cfg.l1_opt(),
         };
+        let follower_port = reserve_tcp_port().expect("No ports free for query service");
         let (mut follower, follower_client) = start_follower::<D>(
             &follower_storage,
+            follower_port,
             genesis.clone(),
             params.clone(),
             l1_params(),
@@ -5921,6 +5952,27 @@ mod test {
         wait_for_epochs(&mut events, EPOCH_HEIGHT, EPOCHS_TO_FOLLOW).await;
         let tip = network.server.decided_leaf().await.height();
         assert_follows_to(&follower, &follower_client, tip).await?;
+
+        let export = reqwest::get(format!(
+            "http://localhost:{follower_port}/v1/status/metrics"
+        ))
+        .await?
+        .text()
+        .await?;
+        assert!(
+            metric_value(&export, "light_client_follower_block_height") > Some(tip as f64),
+            "{export}"
+        );
+        assert!(
+            metric_value(&export, "light_client_latest_stake_table_epoch")
+                >= Some(epoch_from_block_number(tip, EPOCH_HEIGHT) as f64),
+            "{export}"
+        );
+        assert_eq!(
+            metric_value(&export, "light_client_verification_failures"),
+            Some(0.0),
+            "{export}"
+        );
 
         let finalized_height = latest_cert2_height(&api_client, tip)
             .await
@@ -5977,8 +6029,14 @@ mod test {
         // starts.
         follower.shut_down().await;
         drop(follower);
-        let (_follower, follower_client) =
-            start_follower::<D>(&follower_storage, genesis, params, l1_params()).await?;
+        let (_follower, follower_client) = start_follower::<D>(
+            &follower_storage,
+            reserve_tcp_port().expect("No ports free for query service"),
+            genesis,
+            params,
+            l1_params(),
+        )
+        .await?;
         wait_for_epochs(&mut events, EPOCH_HEIGHT, EPOCHS_TO_FOLLOW + 1).await;
         let tip = network.server.decided_leaf().await.height();
         timeout(
@@ -6031,8 +6089,16 @@ mod test {
         }
     }
 
+    /// The value of `series`, a metric name with its labels if any, in a `status/metrics` export.
+    fn metric_value(export: &str, series: &str) -> Option<f64> {
+        export
+            .lines()
+            .find_map(|line| line.strip_prefix(series)?.strip_prefix(' ')?.parse().ok())
+    }
+
     async fn start_follower<D: TestableSqlDataSource>(
         storage: &<D as TestableSequencerDataSource>::Storage,
+        port: u16,
         genesis: NodeGenesis,
         params: FollowerParams,
         l1_params: L1Params,
@@ -6040,7 +6106,6 @@ mod test {
         FollowerContext<<D::Options as PersistenceOptions>::Persistence>,
         Client<ClientErr, SequencerApiVersion>,
     )> {
-        let port = reserve_tcp_port().expect("No ports free for query service");
         let mut db = D::persistence_options(storage);
         let persistence = db.create().await?;
         let handle = db
@@ -6054,9 +6119,18 @@ mod test {
             .catchup(Default::default())
             .config(Default::default())
             .submit(Default::default())
-            .serve(move |metrics, sink, _| {
+            .serve(move |metrics, sink, _, registry| {
                 async move {
-                    init_follower_node(genesis, params, metrics, persistence, l1_params, sink).await
+                    init_follower_node(
+                        genesis,
+                        params,
+                        metrics,
+                        LightClientMetrics::new(&*registry),
+                        persistence,
+                        l1_params,
+                        sink,
+                    )
+                    .await
                 }
                 .boxed()
             })
@@ -7252,7 +7326,7 @@ mod test {
         // start the query node so that it builds the merklized state
         let mut node_0 = opt
             .clone()
-            .serve(|metrics, consumer, storage| {
+            .serve(|metrics, consumer, storage, _| {
                 let cfg = network.cfg.clone();
                 let node_0_persistence = node_0_persistence.clone();
                 let state = state.clone();
@@ -7297,7 +7371,7 @@ mod test {
         // start the node again.
         tracing::info!("restarting node");
         let node_0 = opt
-            .serve(|metrics, consumer, storage| {
+            .serve(|metrics, consumer, storage, _| {
                 let cfg = network.cfg.clone();
                 async move {
                     Ok(cfg
@@ -7987,7 +8061,7 @@ mod test {
         );
         let state_peers = api_state_peers(&api_url);
         let query_node = opt
-            .serve(move |metrics, consumer, storage| {
+            .serve(move |metrics, consumer, storage, _| {
                 async move {
                     Ok(cfg
                         .init_node(
@@ -8193,7 +8267,7 @@ mod test {
         );
         let node_0 = opt
             .clone()
-            .serve(|metrics, consumer, storage| {
+            .serve(|metrics, consumer, storage, _| {
                 let cfg = network.cfg.clone();
                 let node_0_persistence = node_0_persistence.clone();
                 let state = state.clone();
@@ -10937,18 +11011,23 @@ mod test {
             assert_eq!(status, StatusCode::BAD_REQUEST, "{missing_selector}");
         }
 
-        // No state certificate or cert2 exists for an epoch or height the network never reaches,
-        // and a block this network built has no bad encoding to prove. These only show both
-        // versions refusing alike. The conversions are covered by the reference-vector tests.
+        for route in [
+            "availability/state-cert/1000000",
+            "v2/availability/state-cert?epoch=1000000",
+            "availability/state-cert-v2/1000000",
+            "v2/availability/state-cert-v2?epoch=1000000",
+        ] {
+            assert_eq!(
+                error_status(client, route).await,
+                StatusCode::NOT_FOUND,
+                "{route}"
+            );
+        }
+
+        // No cert2 exists for a height the network never reaches, and a block this network built
+        // has no bad encoding to prove. These only show both versions refusing alike. The
+        // conversions are covered by the reference-vector tests.
         for (v1, v2) in [
-            (
-                "availability/state-cert/1000000".to_string(),
-                "v2/availability/state-cert?epoch=1000000".to_string(),
-            ),
-            (
-                "availability/state-cert-v2/1000000".to_string(),
-                "v2/availability/state-cert-v2?epoch=1000000".to_string(),
-            ),
             (
                 format!("availability/incorrect-encoding-proof/{last_block}/102"),
                 format!(
@@ -12148,6 +12227,28 @@ mod test {
         client.connect(Some(Duration::from_secs(10))).await;
 
         assert_state_certs(&client, 3..=TEST_EPOCHS, TEST_EPOCH_HEIGHT).await;
+
+        // The root gate runs only after a storage miss, so a stored cert is served whatever
+        // this node has decided.
+        const UNDECIDED_EPOCH: u64 = 1_000_000;
+        let persistence = network.server.persistence();
+        let cert = persistence
+            .get_state_cert_by_epoch(TEST_EPOCHS)
+            .await
+            .unwrap()
+            .expect("the query above stored this cert");
+        persistence
+            .insert_state_cert(UNDECIDED_EPOCH, cert.clone())
+            .await
+            .unwrap();
+        let served = client
+            .get::<StateCertQueryDataV2<SeqTypes>>(&format!(
+                "availability/state-cert-v2/{UNDECIDED_EPOCH}"
+            ))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(served.0, cert);
     }
 
     /// Light client provers and catching-up nodes still fetch the state certificates of
@@ -12284,7 +12385,7 @@ mod test {
         );
         let node_0 = opt
             .clone()
-            .serve(|metrics, consumer, storage| {
+            .serve(|metrics, consumer, storage, _| {
                 let cfg = network.cfg.clone();
                 let new_persistence = new_persistence.clone();
                 let state = state.clone();

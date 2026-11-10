@@ -136,50 +136,6 @@ inductive Input where
 deriving DecidableEq, Repr
 
 /--
-The `Cert1` an input carries, if any: a certificate on its own, an epoch change's
-first certificate, or a proposal's parent certificate.
-
-Every certificate an input carries is checked before the node acts on it
-(`Network`). A re-vote request's certificate is checked too, but is never the
-anchor's, so it is stated apart (`Network.revoteGenuine`).
--/
-def Input.cert1 : Input → Option Cert1
-  | .certificate1 c | .epochChange c _ _ => some c
-  | .proposal _ p _ => some p.parentCert
-  | _ => none
-
-/-- The `Cert2` an input carries, if any: a certificate on its own, or an epoch change's. -/
-def Input.cert2 : Input → Option Cert2
-  | .certificate2 c | .epochChange _ c _ => some c
-  | _ => none
-
-/-- The timeout certificate an input carries, if any: one on its own, or timeout evidence. -/
-def Input.timeoutCert : Input → Option TimeoutCert
-  | .timeoutCertificate tc => some tc
-  | .proposal _ p _ => p.timeoutEvidence
-  | .revote _ r => r.timeoutEvidence
-  | _ => none
-
-/-- The `Cert1` an input carries, case by case. -/
-theorem Input.mem_cert1 {i : Input} {c : Cert1} : c ∈ i.cert1 ↔
-    i = .certificate1 c ∨ (∃ c2 p, i = .epochChange c c2 p)
-      ∨ ∃ s p share, i = .proposal s p share ∧ p.parentCert = c := by
-  cases i <;> simp [Input.cert1, eq_comm] <;>
-    (try exact ⟨fun h => ⟨_, _, ⟨rfl, rfl⟩, h⟩, fun ⟨_, _, ⟨_, h1⟩, h2⟩ => h1 ▸ h2⟩)
-
-/-- The `Cert2` an input carries, case by case. -/
-theorem Input.mem_cert2 {i : Input} {c : Cert2} : c ∈ i.cert2 ↔
-    i = .certificate2 c ∨ ∃ c1 p, i = .epochChange c1 c p := by
-  cases i <;> simp [Input.cert2, eq_comm]
-
-/-- The timeout certificate an input carries, case by case. -/
-theorem Input.mem_timeoutCert {i : Input} {tc : TimeoutCert} : tc ∈ i.timeoutCert ↔
-    i = .timeoutCertificate tc ∨ (∃ s p share, i = .proposal s p share ∧ p.timeoutEvidence = some tc)
-      ∨ ∃ s r, i = .revote s r ∧ r.timeoutEvidence = some tc := by
-  cases i <;> simp [Input.timeoutCert, eq_comm] <;>
-    (try exact ⟨fun h => ⟨_, _, ⟨rfl, rfl⟩, h⟩, fun ⟨_, _, ⟨_, h1⟩, h2⟩ => h1 ▸ h2⟩)
-
-/--
 A message a node sends.
 
 No message names a recipient. Who receives what, and when, is the network's part,

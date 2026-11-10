@@ -2,7 +2,10 @@
 CPU load in cores busy, and the primary interface's network rate with the send and receive phases of consensus.
 
 The CPU and network panels read the samples of `leadertrace.read_cpu` and `read_net`; without
-samples (a run before the sampler existed) a panel says so and the figure still renders."""
+samples (a run before the sampler existed) a panel says so and the figure still renders.
+
+The spans describe the events of the current code only. Traces from older code are not supported;
+when events move, update the spans and drop the old layout instead of adding fallbacks."""
 
 import itertools
 from collections import defaultdict
@@ -17,14 +20,64 @@ from matplotlib.lines import Line2D
 
 Leaders = dict[int, tuple[int, int]]
 
-CERT1 = "cert1_v_minus_1_input_dispatched"
+CERT1 = "cert1_v_minus_1_obtained"
 
 # (start event, end event, label, cpu heavy, tier). Hatched spans burn cores and shade the CPU
-# panel; the others move bytes. Tier 1 is drawn below tier 0.
-SPANS = (
-    ("request_block_header_queued", "header_created_applied", "block-build", True, 0),
-    ("ns_disperse_start", "ns_disperse_end", "disperse", True, 0),
-    ("vid_shares_unicast_start", "vid_shares_unicast_end", "fan-out", False, 0),
+# panel; the others move bytes. Tier 1 (V-1 recovery), tier 2 (the block builder's request queue,
+# builder start + empty-block delay and encode, concurrent with recovery) and tier 3 (fan-out) are
+# drawn below tier 0. The encode is not hatched: the CPU panel already shows its load.
+Span = tuple[str, str, str, bool, int]
+BLOCK_BUILD: Span = (
+    "request_block_header_queued",
+    "block_built_applied",
+    "block-build",
+    True,
+    0,
+)
+BUILT_BLOCK_BUILD: Span = (
+    "block_payload_start",
+    "block_built_applied",
+    "block-build",
+    True,
+    0,
+)
+REQUEST_QUEUE: Span = (
+    "request_block_header_queued",
+    "block_request_started",
+    "request queue + tx select",
+    False,
+    2,
+)
+EMPTY_BLOCK_DELAY: Span = (
+    "block_request_started",
+    "block_payload_start",
+    "builder start + empty-block delay",
+    False,
+    2,
+)
+COMMITMENTS: Span = (
+    "block_commitments_start",
+    "block_commitments_end",
+    "encode + commitments",
+    False,
+    2,
+)
+DISPERSE: Span = ("ns_disperse_start", "ns_disperse_end", "disperse", True, 0)
+FRAGMENTS: Span = (
+    "vid_fragments_start",
+    "vid_fragments_end",
+    "sign + fragments",
+    True,
+    0,
+)
+FAN_OUT: Span = (
+    "vid_shares_unicast_start",
+    "vid_shares_unicast_end",
+    "fan-out (serialize + enqueue)",
+    False,
+    3,
+)
+RECOVER: tuple[Span, ...] = (
     (
         "recover_v_minus_1_start",
         "recover_v_minus_1_decode_end",
@@ -34,32 +87,38 @@ SPANS = (
     ),
     ("recover_v_minus_1_decode_end", "recover_v_minus_1_end", "txn-commit", True, 1),
 )
-# Drawn instead of the two spans above for a view without `ns_disperse_end` or
-# `vid_shares_unicast_start`.
-DISPERSE_FAN_OUT = (
-    "ns_disperse_start",
-    "vid_shares_unicast_end",
-    "disperse + fan-out",
-    True,
-    0,
+SPANS = (
+    BLOCK_BUILD,
+    BUILT_BLOCK_BUILD,
+    REQUEST_QUEUE,
+    EMPTY_BLOCK_DELAY,
+    COMMITMENTS,
+    DISPERSE,
+    FRAGMENTS,
+    FAN_OUT,
+    *RECOVER,
 )
-SPLIT_EVENTS = ("ns_disperse_end", "vid_shares_unicast_start")
 MARKS = (("proposal_queued", "*", "proposal_queued"), ("leaf_decided", "D", "decided"))
 # (start event, end event, label, direction); drawn on the network panel's TX and RX rows.
 NET_SPANS = (
-    ("vid_shares_unicast_start", "vid_shares_unicast_end", "fan-out", "tx"),
-    ("proposal_broadcast_start", "proposal_broadcast_end", "proposal bcast", "tx"),
-    ("vote1_broadcast_start", "vote1_broadcast_end", "vote1 bcast (+share)", "tx"),
+    ("vid_shares_unicast_start", "vid_shares_unicast_end", "fan-out ser+enq", "tx"),
+    ("proposal_broadcast_start", "proposal_broadcast_end", "proposal ser+enq", "tx"),
+    (
+        "vote1_v_minus_1_broadcast_start",
+        "vote1_v_minus_1_broadcast_end",
+        "vote1 ser+enq",
+        "tx",
+    ),
     (
         "cert1_v_minus_1_broadcast_start",
         "cert1_v_minus_1_broadcast_end",
-        "cert1 bcast",
+        "cert1 ser+enq",
         "tx",
     ),
     (
         "vote2_v_minus_1_broadcast_start",
         "vote2_v_minus_1_broadcast_end",
-        "vote2 bcast",
+        "vote2 ser+enq",
         "tx",
     ),
     (
@@ -71,9 +130,12 @@ NET_SPANS = (
 )
 SPAN_COLORS = {
     "block-build": "#6366f1",
+    "request queue + tx select": "#fde68a",
+    "builder start + empty-block delay": "#cbd5e1",
+    "encode + commitments": "#9333ea",
     "disperse": "#2563eb",
-    "disperse + fan-out": "#2563eb",
-    "fan-out": "#ea580c",
+    "sign + fragments": "#0891b2",
+    "fan-out (serialize + enqueue)": "#ea580c",
     "recover-decode": "#10b981",
     "txn-commit": "#d97706",
 }
@@ -156,12 +218,17 @@ class Window:
         return (x, width) if width > 0 else None
 
 
-def view_spans(evs: dict[str, int]) -> tuple:
-    """`SPANS` of one view; `DISPERSE_FAN_OUT` replaces the disperse and fan-out spans when the
-    view lacks the events that split them."""
-    if all(event in evs for event in SPLIT_EVENTS):
-        return SPANS
-    return (SPANS[0], DISPERSE_FAN_OUT, *SPANS[3:])
+def view_spans(evs: dict[str, int]) -> tuple[Span, ...]:
+    """The `SPANS` of one view with both endpoints present. A Built view (it has
+    `block_payload_start`) builds from there and has no `disperse`; an Encode view builds from
+    `request_block_header_queued` and has no `request queue + tx select`, `builder start + empty-block delay`,
+    `encode + commitments` or `sign + fragments`."""
+    skipped = BLOCK_BUILD if "block_payload_start" in evs else BUILT_BLOCK_BUILD
+    return tuple(
+        span
+        for span in SPANS
+        if span is not skipped and span[0] in evs and span[1] in evs
+    )
 
 
 def draw_work(
@@ -180,8 +247,6 @@ def draw_work(
         evs = events[view]
         color = colors.get(view, OFF_WINDOW_COLOR)
         for start, end, label, cpu, tier in view_spans(evs):
-            if start not in evs or end not in evs:
-                continue
             clipped = window.clipped(evs[start], evs[end])
             if clipped is None:
                 continue
@@ -231,7 +296,7 @@ def draw_work(
     for y in (-0.5, 0.5):
         ax.axhline(y, color="#d1d5db", linewidth=0.7, alpha=0.8, zorder=1)
     ax.set_yticks([0], ["Leader work"], fontsize=11, fontweight="bold")
-    ax.set_ylim(0.65, -0.85)
+    ax.set_ylim(0.65, -1.55)
     ax.tick_params(axis="x", labelbottom=False)
     ax.grid(axis="x", alpha=0.3)
     draw_work_legend(ax, used)

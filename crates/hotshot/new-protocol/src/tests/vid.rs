@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use hotshot_example_types::{block_types::TestTransaction, node_types::TestTypes};
 use hotshot_types::{
     data::{VidCommitment2, VidDisperseShare2, ViewNumber, ns_table::parse_ns_table},
@@ -7,8 +9,9 @@ use hotshot_types::{
 };
 use vid::VidError;
 
-use super::common::utils::{TestData, TestView};
+use super::common::utils::{RecordingTracer, TestData, TestView};
 use crate::{
+    leader_trace::LeaderEvent,
     tests::common::utils::{ns_table, vid_fragments},
     vid::{
         PinnedBy, VidFragmentAccumulator, VidFragmentError, VidReconstructErrorKind,
@@ -483,7 +486,9 @@ async fn test_inconsistent_common_shares_ignored() {
 async fn test_weeds_bad_shares_and_recovers() {
     let test_data = TestData::new(1).await;
     let view = &test_data.views[0];
+    let tracer = Arc::new(RecordingTracer::default());
     let mut reconstructor = VidReconstructor::<TestTypes>::new();
+    reconstructor.set_tracer(Some(tracer.handle()));
 
     let payload_commitment = view.vid_shares[0].payload_commitment;
     let recovery_threshold = recovery_threshold(view);
@@ -528,6 +533,16 @@ async fn test_weeds_bad_shares_and_recovers() {
     // Weeding plus the shares that arrived in flight put the coverage back
     // over the threshold: the retry happens without further input.
     expect_reconstruction(&mut reconstructor, view).await;
+    assert_eq!(
+        tracer.count(*view.view_number, LeaderEvent::RecoverVMinus1Start),
+        2,
+        "the failed attempt and the retry"
+    );
+    assert_eq!(
+        tracer.count(*view.view_number, LeaderEvent::RecoverVMinus1End),
+        1,
+        "only the successful attempt"
+    );
 }
 
 /// A disperser that commits to a non-codeword produces shares that each verify
@@ -539,7 +554,9 @@ async fn test_weeds_bad_shares_and_recovers() {
 async fn test_non_codeword_payload_is_unrecoverable() {
     let test_data = TestData::new(1).await;
     let view = &test_data.views[0];
+    let tracer = Arc::new(RecordingTracer::default());
     let mut reconstructor = VidReconstructor::<TestTypes>::new();
+    reconstructor.set_tracer(Some(tracer.handle()));
 
     let (payload_commitment, shares) = non_codeword_shares(view);
     let recovery_threshold = recovery_threshold(view);
@@ -581,6 +598,15 @@ async fn test_non_codeword_payload_is_unrecoverable() {
     assert_eq!(err.view, view.view_number);
     assert_eq!(err.payload_commitment, payload_commitment);
     assert_eq!(err.kind, VidReconstructErrorKind::Unrecoverable);
+    assert_eq!(
+        tracer.count(*view.view_number, LeaderEvent::RecoverVMinus1Start),
+        1
+    );
+    assert_eq!(
+        tracer.count(*view.view_number, LeaderEvent::RecoverVMinus1End),
+        0,
+        "a failed attempt records no end"
+    );
     assert!(
         err.bad_share_keys.is_empty(),
         "no share is individually unverifiable: {:?}",

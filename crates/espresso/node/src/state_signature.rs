@@ -107,7 +107,7 @@ impl<ApiVer: StaticVersionType> StateSigner<ApiVer> {
                 );
 
                 let cur_block_height = state.block_height;
-                let blocks_per_epoch = *consensus_handle.epoch_height().await;
+                let blocks_per_epoch = *consensus_handle.epoch_height();
 
                 let option_state_epoch = option_epoch_from_block_number(
                     leaf.with_epoch,
@@ -118,7 +118,6 @@ impl<ApiVer: StaticVersionType> StateSigner<ApiVer> {
                 if self.voting_stake_table_epoch != option_state_epoch {
                     let Ok(membership) = consensus_handle
                         .membership_coordinator()
-                        .await
                         .stake_table_for_epoch(option_state_epoch)
                     else {
                         tracing::error!(

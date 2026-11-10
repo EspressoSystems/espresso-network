@@ -67,7 +67,7 @@ use parking_lot::Mutex;
 /// Blocks per epoch, matching the other `EpochCommittees` tests.
 const EPOCH_HEIGHT: u64 = 100;
 
-/// `set_first_epoch` seeds stake tables for this epoch and the next, so epochs
+/// `EpochCommittees::new` seeds stake tables for this epoch and the next, so epochs
 /// 1 and 2 resolve locally and everything from 3 up needs catchup.
 const FIRST_EPOCH: u64 = 1;
 
@@ -77,7 +77,7 @@ const FIRST_EPOCH: u64 = 1;
 const TARGET_EPOCH: u64 = 5;
 
 /// The first epoch a walk toward any target has to fetch: the one after the
-/// pair `set_first_epoch` seeds.
+/// pair `EpochCommittees::new` seeds.
 const WALK_EPOCH: u64 = FIRST_EPOCH + 2;
 
 /// A second, unrelated epoch, used to show the blast radius.
@@ -234,10 +234,16 @@ fn setup_with(
             .public_config()
         })
         .collect();
-    let committees = EpochCommittees::new_stake(peers.clone(), peers, None, fetcher, EPOCH_HEIGHT)
-        .with_storage_read_timeout(storage_read_timeout);
     // Seeds snapshots for FIRST_EPOCH and FIRST_EPOCH + 1.
-    committees.set_first_epoch(EpochNumber::new(FIRST_EPOCH), [0u8; 32]);
+    let committees = EpochCommittees::new(
+        peers.clone(),
+        peers,
+        None,
+        fetcher,
+        EPOCH_HEIGHT,
+        EpochNumber::new(FIRST_EPOCH),
+    )
+    .with_storage_read_timeout(storage_read_timeout);
 
     let coordinator = EpochMembershipCoordinator::new(
         committees,

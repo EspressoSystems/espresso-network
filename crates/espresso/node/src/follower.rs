@@ -11,7 +11,7 @@
 use std::{cmp::max, collections::HashMap, ops::Range, sync::Arc, time::Duration};
 
 use ::light_client::{
-    LightClient,
+    LightClient, LightClientMetrics,
     client::{FallbackClient, QueryServiceClient},
     state::{Genesis as LightClientGenesis, LightClientOptions},
     storage::LightClientDbOptions,
@@ -39,7 +39,6 @@ use hotshot_types::{
     ValidatorConfig,
     data::{EpochNumber, VidShare, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
-    initializer::load_start_epoch_info,
     message::UpgradeLock,
     network::NetworkConfig,
     traits::{
@@ -146,6 +145,7 @@ pub async fn init_follower_node<P>(
     genesis: Genesis,
     params: FollowerParams,
     metrics: Box<dyn Metrics>,
+    light_client_metrics: LightClientMetrics,
     persistence: P,
     l1_params: L1Params,
     sink: impl DecideSink + 'static,
@@ -154,7 +154,16 @@ where
     P: SequencerPersistence + MembershipPersistence,
     Arc<P>: Storage<SeqTypes>,
 {
-    init_with_source(genesis, params, metrics, persistence, l1_params, sink, None).await
+    init_with_source(
+        genesis,
+        params,
+        metrics,
+        persistence,
+        l1_params,
+        sink,
+        Upstream::LightClient(light_client_metrics),
+    )
+    .await
 }
 
 /// For tests that replay a recorded chain; the network config must already be persisted, as there
@@ -180,9 +189,15 @@ where
         persistence,
         l1_params,
         sink,
-        Some(source),
+        Upstream::Replay(source),
     )
     .await
+}
+
+enum Upstream {
+    LightClient(LightClientMetrics),
+    #[cfg(any(test, feature = "testing"))]
+    Replay(Arc<dyn ChainSource>),
 }
 
 async fn init_with_source<P>(
@@ -192,7 +207,7 @@ async fn init_with_source<P>(
     persistence: P,
     l1_params: L1Params,
     sink: impl DecideSink + 'static,
-    replay: Option<Arc<dyn ChainSource>>,
+    upstream: Upstream,
 ) -> anyhow::Result<FollowerHandle<P>>
 where
     P: SequencerPersistence + MembershipPersistence,
@@ -252,13 +267,6 @@ where
     .await?;
     let coordinator = node_state.coordinator.clone();
 
-    load_start_epoch_info(
-        &coordinator,
-        &[],
-        epoch_height,
-        genesis.epoch_start_block.unwrap_or_default(),
-    )
-    .await;
     let current_epoch = bootstrap_epoch_window(
         &coordinator,
         epoch_height,
@@ -268,9 +276,10 @@ where
     .context("startup stake-table catchup failed")?;
     tracing::info!(%current_epoch, "startup catchup complete");
 
-    let (source, light_client): (Arc<dyn ChainSource>, _) = match replay {
-        Some(source) => (source, None),
-        None => {
+    let (source, light_client): (Arc<dyn ChainSource>, _) = match upstream {
+        #[cfg(any(test, feature = "testing"))]
+        Upstream::Replay(source) => (source, None),
+        Upstream::LightClient(light_client_metrics) => {
             let light_client = Arc::new(
                 connect_light_client(
                     &params.options,
@@ -278,6 +287,7 @@ where
                     &network_config,
                     genesis.chain_config.chain_id,
                     fetched,
+                    light_client_metrics,
                 )
                 .await?,
             );
@@ -732,9 +742,7 @@ impl<P: SequencerPersistence> Follower<P> {
         if skipped.is_empty() {
             return Ok(());
         }
-        let Some(first_epoch) = self.coordinator.membership().first_epoch() else {
-            return Ok(());
-        };
+        let first_epoch = self.coordinator.membership().first_epoch();
         let first = max(
             epoch_from_block_number(skipped.start, self.epoch_height),
             first_epoch.u64(),
@@ -843,6 +851,7 @@ async fn connect_light_client(
     network_config: &NetworkConfig<SeqTypes>,
     chain_id: ChainId,
     config_fetched: bool,
+    metrics: LightClientMetrics,
 ) -> anyhow::Result<NodeLightClient> {
     let db = options
         .light_client_db
@@ -869,10 +878,8 @@ async fn connect_light_client(
             light_client_genesis(network_config, chain_id)
         },
     };
-    Ok(LightClient::from_genesis_with_options(
-        db,
-        client,
-        genesis,
-        options.light_client.clone(),
-    ))
+    Ok(
+        LightClient::from_genesis_with_options(db, client, genesis, options.light_client.clone())
+            .with_metrics(metrics),
+    )
 }
