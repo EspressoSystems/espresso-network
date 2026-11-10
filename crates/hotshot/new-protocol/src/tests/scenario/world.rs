@@ -28,9 +28,7 @@ use hotshot_example_types::{
     storage_types::TestStorage,
 };
 use hotshot_types::{
-    data::{
-        EpochNumber, Leaf2, VidCommitment, VidDisperse, VidDisperse2, VidDisperseShare2, ViewNumber,
-    },
+    data::{EpochNumber, Leaf2, VidCommitment, VidDisperse2, VidDisperseShare2, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
     message::{Proposal as SignedProposal, UpgradeLock},
     signature_key::{BLSPrivKey, BLSPubKey},
@@ -477,20 +475,16 @@ impl World {
         if let Some(vid) = self.cache.vids.get(&key) {
             return vid.clone();
         }
-        let disperse = VidDisperse::calculate_vid_disperse(
+        let (vid, _) = VidDisperse2::calculate_vid_disperse(
             payload,
             &self.membership,
             ViewNumber::new(view),
             epoch,
             Some(epoch),
             metadata,
-            &test_upgrade_lock(),
         )
         .await
         .expect("dispersal succeeds");
-        let VidDisperse::V2(vid) = disperse.disperse else {
-            panic!("a V2 dispersal");
-        };
         self.cache.vids.insert(key, vid.clone());
         vid
     }

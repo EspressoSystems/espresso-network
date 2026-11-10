@@ -13,8 +13,7 @@ use hotshot_types::{
     data::{EpochNumber, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
     light_client::{
-        LCV2StateSignatureRequestBody, LCV3StateSignatureRequestBody, LightClientState,
-        StakeTableState, StateSignKey, StateVerKey,
+        LCV3StateSignatureRequestBody, LightClientState, StakeTableState, StateSignKey, StateVerKey,
     },
     new_protocol::CoordinatorEvent,
     signature_key::SchnorrPubKey,
@@ -22,10 +21,7 @@ use hotshot_types::{
     traits::{
         block_contents::BlockHeader,
         election::Membership,
-        signature_key::{
-            LCV1StateSignatureKey, LCV2StateSignatureKey, LCV3StateSignatureKey,
-            StakeTableEntryType,
-        },
+        signature_key::{LCV2StateSignatureKey, LCV3StateSignatureKey, StakeTableEntryType},
     },
     utils::{is_ge_epoch_root, option_epoch_from_block_number},
 };
@@ -111,11 +107,8 @@ impl<ApiVer: StaticVersionType> StateSigner<ApiVer> {
                 let cur_block_height = state.block_height;
                 let blocks_per_epoch = *consensus_handle.epoch_height();
 
-                let option_state_epoch = option_epoch_from_block_number(
-                    leaf.with_epoch,
-                    cur_block_height,
-                    blocks_per_epoch,
-                );
+                let option_state_epoch =
+                    option_epoch_from_block_number(true, cur_block_height, blocks_per_epoch);
 
                 if self.voting_stake_table_epoch != option_state_epoch {
                     let Some(stake_table) = voting_stake_table(
@@ -147,7 +140,7 @@ impl<ApiVer: StaticVersionType> StateSigner<ApiVer> {
                 }
 
                 // The last few state updates are handled in the consensus, we do not sign them.
-                if leaf.with_epoch & is_ge_epoch_root(cur_block_height, blocks_per_epoch) {
+                if is_ge_epoch_root(cur_block_height, blocks_per_epoch) {
                     tracing::debug!("Skipping epoch transition block {cur_block_height}");
                     return;
                 }
@@ -165,48 +158,15 @@ impl<ApiVer: StaticVersionType> StateSigner<ApiVer> {
                     return;
                 };
 
-                if let Some(client) = &self.relay_server_client {
-                    if let Err(error) = client
+                if let Some(client) = &self.relay_server_client
+                    && let Err(error) = client
                         .post::<()>("api/state")
                         .body_binary(&request_body)
                         .unwrap()
                         .send()
                         .await
-                    {
-                        tracing::error!("Error posting signature to the relay server: {:?}", error);
-                    }
-
-                    if !leaf.with_epoch {
-                        // Before epoch upgrade, we need to sign the state for the legacy light client
-                        let Ok(legacy_signature) =
-                            <SchnorrPubKey as LCV1StateSignatureKey>::sign_state(
-                                &self.sign_key,
-                                &state,
-                            )
-                        else {
-                            tracing::error!("Failed to sign new state for legacy light client");
-                            return;
-                        };
-                        let legacy_request_body = LCV2StateSignatureRequestBody {
-                            key: self.ver_key.clone(),
-                            state,
-                            next_stake: StakeTableState::default(),
-                            signature: legacy_signature,
-                        };
-                        if let Err(error) = client
-                            .post::<()>("api/legacy-state")
-                            .body_binary(&legacy_request_body)
-                            .unwrap()
-                            .send()
-                            .await
-                        {
-                            tracing::error!(
-                                "Error posting signature for legacy light client to the relay \
-                                 server: {:?}",
-                                error
-                            );
-                        }
-                    }
+                {
+                    tracing::error!("Error posting signature to the relay server: {:?}", error);
                 }
             },
             Err(err) => {
@@ -256,7 +216,6 @@ impl<ApiVer: StaticVersionType> StateSigner<ApiVer> {
 pub(crate) struct DecidedLeaf {
     header: Header,
     view: ViewNumber,
-    with_epoch: bool,
 }
 
 impl DecidedLeaf {
@@ -268,7 +227,6 @@ impl DecidedLeaf {
         Some(DecidedLeaf {
             header: leaf.block_header().clone(),
             view: leaf.view_number(),
-            with_epoch: leaf.with_epoch,
         })
     }
 }
@@ -317,82 +275,4 @@ pub(crate) fn should_vote(stake_table: &HSStakeTable<SeqTypes>, ver_key: &Schnor
         .0
         .iter()
         .any(|peer| &peer.state_ver_key == ver_key && !peer.stake_table_entry.stake().is_zero())
-}
-
-#[cfg(test)]
-mod test {
-    use espresso_types::{TEST_UPGRADE, traits::PersistenceOptions};
-    use futures::StreamExt;
-    use hotshot_types::light_client::DEFAULT_STAKE_TABLE_CAPACITY;
-    use test_utils::reserve_tcp_port;
-
-    use super::*;
-    use crate::{
-        SequencerApiVersion,
-        api::{
-            Options,
-            test_helpers::{TestNetwork, TestNetworkConfigBuilder},
-        },
-        testing::{TestConfigBuilder, decided_leaves},
-    };
-
-    // A leaf decided before epochs were enabled has no epoch. Its state is
-    // signed with the genesis stake table as the next stake table.
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_handle_decide_signs_leaf_without_epoch_with_genesis_stake_table() {
-        let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
-        let config = TestNetworkConfigBuilder::default()
-            .api_config(Options::with_port(port))
-            .network_config(TestConfigBuilder::default().build())
-            .build();
-        let network = TestNetwork::new(config, TEST_UPGRADE).await;
-
-        let (leaf, height) = decided_leaf_without_epoch(&network).await;
-        let validator = network.server.validator_config();
-        let mut signer = StateSigner::<SequencerApiVersion>::new(
-            validator.state_private_key.clone(),
-            validator.state_public_key.clone(),
-            StakeTableState::default(),
-            // Any epoch but the leaf's makes the signer pick its stake table again.
-            Some(EpochNumber::genesis()),
-            DEFAULT_STAKE_TABLE_CAPACITY,
-            false,
-        );
-        signer
-            .handle_decide(&leaf, network.server.consensus_handle().as_ref())
-            .await;
-
-        // Every genesis member has stake, so the genesis stake table is the configured one.
-        let genesis = HSStakeTable::from_iter(network.cfg.known_nodes_with_stake())
-            .commitment(DEFAULT_STAKE_TABLE_CAPACITY)
-            .expect("genesis stake table commitment");
-        let signature = signer
-            .signatures
-            .read()
-            .await
-            .get_signature(height)
-            .unwrap_or_else(|| panic!("no signature for height {height}"));
-        assert_eq!(signature.next_stake, genesis, "next stake table");
-    }
-
-    /// The newest leaf of the next decide of `network`, with its epoch
-    /// removed, and its height.
-    async fn decided_leaf_without_epoch<P: PersistenceOptions, const N: usize>(
-        network: &TestNetwork<P, N>,
-    ) -> (DecidedLeaf, u64) {
-        let mut events = network.server.event_stream();
-        let mut event = loop {
-            let event = events.next().await.expect("event stream ended");
-            if decided_leaves(&event).is_some() {
-                break event;
-            }
-        };
-        let CoordinatorEvent::NewDecide { leaf_infos, .. } = &mut event else {
-            unreachable!("a decide event");
-        };
-        leaf_infos[0].leaf.with_epoch = false;
-        let height = leaf_infos[0].leaf.height();
-        let leaf = DecidedLeaf::from_event(&event).expect("a decided leaf");
-        (leaf, height)
-    }
 }

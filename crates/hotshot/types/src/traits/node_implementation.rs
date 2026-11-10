@@ -16,12 +16,8 @@ use super::{
         StateSignatureKey,
     },
 };
-use crate::{
-    constants::DEFAULT_UPGRADE_CONSTANTS,
-    traits::{
-        BlockPayload, election::Membership, signature_key::SignatureKey, states::InstanceState,
-    },
-    upgrade_config::UpgradeConstants,
+use crate::traits::{
+    BlockPayload, election::Membership, signature_key::SignatureKey, states::InstanceState,
 };
 
 /// Trait with all the type definitions that are used in the current hotshot setup.
@@ -39,8 +35,6 @@ pub trait NodeType:
     + Sync
     + 'static
 {
-    /// Constants used to construct upgrade proposals
-    const UPGRADE_CONSTANTS: UpgradeConstants = DEFAULT_UPGRADE_CONSTANTS;
     /// The block header type that this hotshot setup is using.
     type BlockHeader: BlockHeader<Self>;
     /// The block type that this hotshot setup is using.

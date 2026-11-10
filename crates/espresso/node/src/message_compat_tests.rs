@@ -44,7 +44,7 @@ use hotshot_types::{
     data::{
         DaProposal, DaProposal2, EpochNumber, QuorumProposal, UpgradeProposal, UpgradeProposal2,
         VidDisperse2, ViewChangeEvidence, ViewNumber,
-        vid_disperse::{ADVZDisperse, AvidmGf2DisperseShareFragment, AvidmGf2NamespacePiece},
+        vid_disperse::{ADVZDisperseShare, AvidmGf2DisperseShareFragment, AvidmGf2NamespacePiece},
     },
     epoch_membership::EpochMembershipCoordinator,
     light_client::{StakeTableState, StateKeyPair},
@@ -70,11 +70,14 @@ use hotshot_types::{
         BlockPayload, EncodeBytes,
         block_contents::BlockHeader,
         node_implementation::NodeType,
-        signature_key::{LCV2StateSignatureKey, LCV3StateSignatureKey, SignatureKey},
+        signature_key::{
+            LCV2StateSignatureKey, LCV3StateSignatureKey, SignatureKey, StakeTableEntryType,
+        },
     },
     utils::EpochTransitionIndicator,
-    vid::avidm_gf2::AvidmGf2Scheme,
+    vid::{advz::advz_scheme, avidm_gf2::AvidmGf2Scheme},
 };
+use jf_advz::VidScheme;
 use pretty_assertions::assert_eq;
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json::Value;
@@ -169,24 +172,6 @@ where
 async fn test_message_compat<Ver: StaticVersionType>(_ver: Ver) {
     let (sender, priv_key) = PubKey::generated_from_seed_indexed(Default::default(), 0);
     let signature = PubKey::sign(&priv_key, &[]).unwrap();
-    let committee = vec![PeerConfig::test_default()]; /* one committee member, necessary to generate a VID share */
-    let storage = TestStorage::default();
-    let epoch_height = 10;
-
-    let membership = EpochMembershipCoordinator::new(
-        EpochCommittees::new(
-            committee.clone(),
-            committee,
-            None,
-            Fetcher::mock(),
-            epoch_height,
-            1.into(),
-        )
-        .expect("genesis without duplicate keys"),
-        epoch_height,
-        &storage,
-    );
-
     let upgrade_data = UpgradeProposalData {
         old_version: Version { major: 0, minor: 1 },
         new_version: Version { major: 1, minor: 0 },
@@ -326,6 +311,17 @@ async fn test_message_compat<Ver: StaticVersionType>(_ver: Ver) {
             view_number: ViewNumber::genesis(),
         }),
     ];
+    let mut vid = advz_scheme(1).disperse(payload.encode()).unwrap();
+    let vid_share = ADVZDisperseShare::<SeqTypes> {
+        view_number: ViewNumber::genesis(),
+        payload_commitment: vid.commit,
+        share: vid.shares.remove(0),
+        common: vid.common,
+        recipient_key: PeerConfig::<SeqTypes>::test_default()
+            .stake_table_entry
+            .public_key(),
+    };
+
     let da_messages = [
         DaConsensusMessage::DaProposal(Proposal {
             data: DaProposal {
@@ -360,18 +356,7 @@ async fn test_message_compat<Ver: StaticVersionType>(_ver: Ver) {
             Default::default(),
         )),
         DaConsensusMessage::VidDisperseMsg(Proposal {
-            data: ADVZDisperse::calculate_vid_disperse(
-                &payload,
-                &membership,
-                ViewNumber::genesis(),
-                EpochNumber::genesis(),
-                Some(EpochNumber::new(1)),
-            )
-            .await
-            .unwrap()
-            .0
-            .to_shares()
-            .remove(0),
+            data: vid_share,
             signature: signature.clone(),
             _pd: Default::default(),
         }),

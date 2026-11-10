@@ -281,8 +281,10 @@ pub(crate) trait CatchupDataSource: Sync {
 
     fn get_leaf_chain(
         &self,
-        height: u64,
-    ) -> impl Send + Future<Output = anyhow::Result<Vec<Leaf2>>>;
+        _height: u64,
+    ) -> impl Send + Future<Output = anyhow::Result<Vec<Leaf2>>> {
+        async { anyhow::bail!("leaf chain catchup is not supported for this data source") }
+    }
 
     /// Load the cert2 stored at exactly `height`, if one exists.
     ///

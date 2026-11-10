@@ -13,7 +13,6 @@ use hotshot_types::{
     data::{BlockNumber, EpochNumber, Leaf2, ViewNumber},
     drb::{DrbResult, INITIAL_DRB_RESULT},
     epoch_membership::EpochMembershipCoordinator,
-    event::Event,
     traits::{
         block_contents::BlockHeader,
         election::{GenesisStakeTables, Membership, MembershipSnapshot, NoStakeTableHash},
@@ -26,7 +25,11 @@ use hotshot_types::{
 use parking_lot::RwLock;
 
 use crate::{
-    membership::{TestableMembership, fetcher::Leaf2Fetcher, stake_table::TestStakeTable},
+    membership::{
+        TestableMembership,
+        fetcher::{ExternalMessage, Leaf2Fetcher},
+        stake_table::TestStakeTable,
+    },
     storage_types::TestStorage,
 };
 
@@ -104,7 +107,7 @@ where
         network: Arc<dyn LeafFetcherNetwork<T>>,
         storage: TestStorage<T>,
         public_key: T::SignatureKey,
-        channel: Receiver<Event<T>>,
+        channel: Receiver<ExternalMessage>,
     ) {
         let mut fetcher = Leaf2Fetcher::new(network, storage, public_key);
         fetcher.set_external_channel(channel);

@@ -19,12 +19,12 @@ use tokio::time::sleep;
 use super::node_implementation::NodeType;
 use crate::{
     data::{
-        DaProposal, DaProposal2, EpochNumber, QuorumProposalWrapper, VidCommitment,
-        VidDisperseShare, ViewNumber,
+        DaProposal2, EpochNumber, QuorumProposalWrapper, VidCommitment, VidDisperseShare,
+        ViewNumber,
     },
     drb::{DrbInput, DrbResult},
     event::HotShotAction,
-    message::{Proposal, convert_proposal},
+    message::Proposal,
     simple_certificate::{LightClientStateUpdateCertificateV2, UpgradeCertificate},
 };
 
@@ -35,20 +35,11 @@ pub trait Storage<TYPES: NodeType>: Send + Sync + Clone + 'static {
     async fn append_vid(&self, proposal: &Proposal<TYPES, VidDisperseShare<TYPES>>) -> Result<()>;
 
     /// Add a proposal to the stored DA proposals.
-    async fn append_da(
-        &self,
-        proposal: &Proposal<TYPES, DaProposal<TYPES>>,
-        vid_commit: VidCommitment,
-    ) -> Result<()>;
-    /// Add a proposal to the stored DA proposals.
     async fn append_da2(
         &self,
         proposal: &Proposal<TYPES, DaProposal2<TYPES>>,
         vid_commit: VidCommitment,
-    ) -> Result<()> {
-        self.append_da(&convert_proposal(proposal.clone()), vid_commit)
-            .await
-    }
+    ) -> Result<()>;
     /// Add a proposal we sent to the store
     async fn append_proposal_wrapper(
         &self,
