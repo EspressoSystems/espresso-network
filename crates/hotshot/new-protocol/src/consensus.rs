@@ -1595,9 +1595,7 @@ impl<T: NodeType> Consensus<T> {
         if let Some(commit_view) = commit_view {
             self.maybe_decide(commit_view, outbox);
         }
-        if let Some(tc) = proposal.view_change_evidence.clone()
-            && !self.timeout_certs.contains_key(&view)
-        {
+        if let Some(tc) = proposal.view_change_evidence.clone() {
             let tc_epoch = HasEpoch::epoch(&tc).unwrap_or(proposal.epoch);
             self.handle_timeout_certificate(ValidCert::new(tc, tc_epoch), outbox);
         }
@@ -2445,20 +2443,26 @@ impl<T: NodeType> Consensus<T> {
     ) -> Protocol {
         let timed_out_view = certificate.view_number();
         let view = timed_out_view + 1;
-        if view < self.current_view {
-            debug!(
-                %view,
-                current_view = %self.current_view,
-                "ignoring stale timeout certificate"
-            );
-            return Protocol::Abort;
-        }
         if certificate.binds_epoch() != self.upgrade_lock.timeout_epoch_bound(timed_out_view) {
             warn!(
                 %timed_out_view,
                 "timeout certificate has the wrong form for its version"
             );
             return Protocol::Abort;
+        }
+        if view < self.current_view {
+            debug!(
+                %view,
+                current_view = %self.current_view,
+                "stale timeout certificate; keeping its epoch and lock"
+            );
+            // The TC moves the node to no view, but its epoch and lock are grounds
+            // as much as a current certificate's.
+            if certificate.binds_epoch() {
+                self.set_current_epoch_max(certificate.epoch());
+            }
+            self.keep_timeout_lock(certificate.cert(), outbox);
+            return Protocol::Continue;
         }
         if let Some(stored) = self.timeout_certs.get(&view).map(HasEpoch::epoch) {
             if certificate.binds_epoch() && stored < Some(certificate.epoch()) {
@@ -2472,6 +2476,7 @@ impl<T: NodeType> Consensus<T> {
                 self.adopt_timeout_lock(view, outbox);
             } else {
                 debug!(%view, "duplicate timeout certificate; already applied");
+                self.keep_timeout_lock(certificate.cert(), outbox);
             }
             return Protocol::Continue;
         }
@@ -2509,20 +2514,23 @@ impl<T: NodeType> Consensus<T> {
     /// (`TimeoutLock::Recent`), the one the certificate's verification
     /// checked, is taken in.
     fn adopt_timeout_lock(&mut self, view: ViewNumber, outbox: &mut Outbox<ConsensusOutput<T>>) {
-        let Some(cert) = self
-            .timeout_certs
-            .get(&view)
-            .and_then(|tc| tc.timeout_lock().recent().cloned())
-        else {
+        let Some(tc) = self.timeout_certs.get(&view).cloned() else {
+            return;
+        };
+        let Some(cert) = tc.timeout_lock().recent().cloned() else {
             return;
         };
         let lock = LockView::of(&cert);
-        if lock.view <= self.decide_floor() || self.lock_view().is_some_and(|own| own >= lock) {
+        if lock.view <= self.decide_floor() {
+            return;
+        }
+        if self.lock_view().is_some_and(|own| own >= lock) {
+            self.keep_timeout_lock(&tc, outbox);
             return;
         }
         let leaf_commit = cert.data.leaf_commit;
         let block_number = cert.data.block_number;
-        self.insert_cert1(cert);
+        self.insert_cert1(cert.clone());
         self.adopt_certified_drb(lock.view);
         match self.certified_proposal(lock.view, leaf_commit, block_number) {
             None => {
@@ -2553,7 +2561,29 @@ impl<T: NodeType> Consensus<T> {
                 }
             },
         }
-        self.maybe_vote_2_and_update_lock(lock.view, outbox);
+        self.advance_on(cert, lock.epoch, outbox);
+        self.retry_later_certificates(lock.view, outbox);
+    }
+
+    /// Keep the lock a TC carries.
+    ///
+    /// It is a cert1 like any other: with it, the node can vote2 on and
+    /// decide its block once it holds the rest, and it is grounds for the view
+    /// and epoch after it.
+    fn keep_timeout_lock(
+        &mut self,
+        tc: &TimeoutEvidence<T>,
+        outbox: &mut Outbox<ConsensusOutput<T>>,
+    ) {
+        let Some(cert) = tc.timeout_lock().recent() else {
+            return;
+        };
+        let lock = LockView::of(cert);
+        if lock.view <= self.decide_floor() {
+            return;
+        }
+        self.advance_on(cert.clone(), lock.epoch, outbox);
+        self.retry_later_certificates(lock.view, outbox);
     }
 
     #[instrument(level = "debug", skip_all)]
@@ -3883,9 +3913,7 @@ impl<T: NodeType> Consensus<T> {
             return Protocol::Abort;
         }
         self.advance_on(revote.cert1.clone(), revote.epoch, outbox);
-        if let Some(timeout) = &revote.timeout
-            && !self.timeout_certs.contains_key(&view)
-        {
+        if let Some(timeout) = &revote.timeout {
             let tc = ValidCert::new(TimeoutEvidence::V3(timeout.clone()), revote.epoch);
             self.handle_timeout_certificate(tc, outbox);
         }

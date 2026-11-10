@@ -390,6 +390,52 @@ fn revote_from_leader(
     ConsensusInput::ReVote(ReVoteMessage::new(revote, &leader_key).unwrap())
 }
 
+/// A timeout certificate a re-vote request carries is taken as one received on
+/// its own: a duplicate still has its lock kept, which decides the block it
+/// certifies once the node holds the block's `Certificate2`. The request's own
+/// certificate is over the last block, and decides nothing here.
+#[tokio::test]
+async fn revote_request_keeps_a_duplicate_timeout_certificates_lock() {
+    let test_data = TestData::new_with_epoch_height(BOUNDARY + 1, EPOCH_HEIGHT).await;
+    let block = &test_data.views[BOUNDARY - 1];
+    let boundary = &test_data.views[BOUNDARY];
+    let mut harness =
+        ConsensusHarness::new_with_upgrade_lock(0, EPOCH_HEIGHT, test_timeout_epoch_lock()).await;
+    let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
+    harness
+        .apply_pair(block.proposal_input_consensus(&node_key))
+        .await;
+    harness.apply(block.block_reconstructed_input()).await;
+    harness.apply(block.cert2_input()).await;
+    assert!(
+        !any(harness.outputs(), |o| decides_view(o, 9)),
+        "setup: no decide without the Certificate1"
+    );
+
+    harness
+        .apply(ConsensusInput::TimeoutCertificate(ValidCert::new(
+            timeout_cert(&harness, view(10), None),
+            epoch(1),
+        )))
+        .await;
+    let TimeoutEvidence::V3(timeout) = timeout_cert(&harness, view(10), Some(block.cert1.clone()))
+    else {
+        unreachable!("a lock-carrying certificate binds its epoch")
+    };
+    let revote = ReVote {
+        view: view(11),
+        epoch: epoch(1),
+        cert1: boundary.cert1.clone(),
+        timeout: Some(timeout),
+    };
+    revote
+        .well_formed(EPOCH_HEIGHT)
+        .expect("a well-formed re-vote request");
+    harness.apply(revote_from_leader(&harness, revote)).await;
+
+    assert!(any(harness.outputs(), |o| decides_view(o, 9)));
+}
+
 /// A re-vote request for a view the node has left, by a timeout certificate it
 /// received but did not sign, still gets a vote1.
 ///
