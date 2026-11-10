@@ -43,6 +43,7 @@ use espresso_types::{
     v0_4::{
         PermittedRewardMerkleTreeV2, RewardAccountQueryDataV2, RewardAccountV2, RewardMerkleTreeV2,
     },
+    validate_state_cert,
 };
 use futures::future::{BoxFuture, Future, FutureExt};
 use hotshot_contract_adapter::sol_types::EspToken;
@@ -91,7 +92,7 @@ use crate::{
         data_source::{retain_v1_reward_accounts, retain_v2_reward_accounts},
         request::{Request, Response},
     },
-    state_cert::{StateCertFetchError, ensure_cert_can_exist, validate_state_cert},
+    state_cert::{StateCertFetchError, ensure_cert_can_exist},
 };
 #[cfg(any(test, feature = "testing"))]
 use crate::{SequencerApiVersion, SequencerContext};
