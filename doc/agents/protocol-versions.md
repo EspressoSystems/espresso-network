@@ -12,7 +12,7 @@
   leader_counts
 - V0_6, `NEW_PROTOCOL_VERSION`: AvidmGf2 VID proofs, cliquenet, DA upgrade; reuses the V0_5 header; no fees, no L1
   deposit reads, fee tree untouched
-- V0_7, `TIMEOUT_EPOCH_VERSION` (also `LARGE_BLOCK_VERSION`, `NO_BUILDER_COMMITMENT_VERSION`, `MAX_SUPPORTED_VERSION`):
+- V0_7, `TIMEOUT_EPOCH_VERSION` (also `LARGE_BLOCK_VERSION`, `NO_BUILDER_COMMITMENT_VERSION`):
   - timeout votes and certificates bind the epoch (`TimeoutData3`, `TimeoutVote3`, `TimeoutCertificate3`,
     `CatchupEvidence::Tc3`; form chosen by `UpgradeLock::timeout_epoch_bound`)
   - `Header::V7` is the V0_6 header without `builder_commitment`
@@ -26,6 +26,11 @@
     - locks are ordered by epoch, then view
   - an epoch's last block without a `Certificate2` is committed by a re-vote (`ReVote`) at a later view; the next
     epoch's first block names the block's own `Certificate1`, persisted as `boundary_qc2` (migration `V1506`)
+
+- V0_8, `NO_BUILDER_FEE_VERSION` (`MAX_SUPPORTED_VERSION`): `Header::V8` removes fee metadata and builder signatures.
+  Leaders stop creating synthetic builder fees, and validation skips builder signature and minimum-fee checks. The
+  frozen fee tree root stays committed and checked; historical headers retain their wire formats and fee checks.
+  This version is supported but requires an explicitly configured consensus upgrade; genesis files are unchanged.
 
 What a network runs: `base_version` and `upgrade_version` in `data/genesis/<network>.toml`. Live confirmation is
 `consensus_genesis{base_version,upgrade_version}` from `/v1/status/metrics`, see `doc/agents/live-chains.md`.

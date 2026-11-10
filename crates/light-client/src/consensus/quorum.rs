@@ -34,10 +34,11 @@ pub trait Quorum: Sync {
                 (0, 5) => self.verify_static::<StaticVersion<0, 5>>(cert).await,
                 (0, 6) => self.verify_static::<StaticVersion<0, 6>>(cert).await,
                 (0, 7) => self.verify_static::<StaticVersion<0, 7>>(cert).await,
+                (0, 8) => self.verify_static::<StaticVersion<0, 8>>(cert).await,
                 _ => {
                     const {
                         assert!(MAX_SUPPORTED_VERSION.major == 0);
-                        assert!(MAX_SUPPORTED_VERSION.minor == 7);
+                        assert!(MAX_SUPPORTED_VERSION.minor == 8);
                     }
                     bail!("unsupported version {version}");
                 },
@@ -72,10 +73,11 @@ pub trait Quorum: Sync {
                 (0, 5) => self.verify_cert2_static::<StaticVersion<0, 5>>(cert2).await,
                 (0, 6) => self.verify_cert2_static::<StaticVersion<0, 6>>(cert2).await,
                 (0, 7) => self.verify_cert2_static::<StaticVersion<0, 7>>(cert2).await,
+                (0, 8) => self.verify_cert2_static::<StaticVersion<0, 8>>(cert2).await,
                 _ => {
                     const {
                         assert!(MAX_SUPPORTED_VERSION.major == 0);
-                        assert!(MAX_SUPPORTED_VERSION.minor == 7);
+                        assert!(MAX_SUPPORTED_VERSION.minor == 8);
                     }
                     bail!("unsupported version {version}");
                 },
@@ -125,10 +127,14 @@ pub trait Quorum: Sync {
                     self.verify_next_epoch_static::<StaticVersion<0, 7>>(cert)
                         .await
                 },
+                (0, 8) => {
+                    self.verify_next_epoch_static::<StaticVersion<0, 8>>(cert)
+                        .await
+                },
                 _ => {
                     const {
                         assert!(MAX_SUPPORTED_VERSION.major == 0);
-                        assert!(MAX_SUPPORTED_VERSION.minor == 7);
+                        assert!(MAX_SUPPORTED_VERSION.minor == 8);
                     }
                     bail!("unsupported version {version}");
                 },
@@ -704,10 +710,19 @@ mod test {
         view: ViewNumber,
         quorum: &QuorumKeys,
     ) -> QuorumCertificate2<SeqTypes> {
+        signed_qc(data, view, quorum, EPOCH_VERSION)
+    }
+
+    fn signed_qc(
+        data: QuorumData2<SeqTypes>,
+        view: ViewNumber,
+        quorum: &QuorumKeys,
+        version: Version,
+    ) -> QuorumCertificate2<SeqTypes> {
         let commit = VersionedVoteData::new_infallible(
             data,
             view,
-            &UpgradeLock::<SeqTypes>::new(Upgrade::trivial(EPOCH_VERSION)),
+            &UpgradeLock::<SeqTypes>::new(Upgrade::trivial(version)),
         )
         .commit();
         let sig = boundary_signature(commit.as_ref(), quorum);
@@ -886,6 +901,89 @@ mod test {
         let (leaves, committing_qc, deciding_qc, quorum) = mid_epoch_forgery_fixture(true).await;
         quorum
             .verify_qc_chain_and_get_version(leaves[1].leaf(), [&committing_qc, &deciding_qc])
+            .await
+            .unwrap_err();
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_v8_signed_certificates() {
+        let current = boundary_quorum(0..5);
+        let next = boundary_quorum(5..10);
+        let quorum = StakeTableQuorum::new(
+            (
+                Arc::new(StakeTable::from(current.1.clone())),
+                Arc::new(StakeTable::from(next.1.clone())),
+            ),
+            10,
+        );
+        let version = versions::NO_BUILDER_FEE_VERSION;
+        let data = QuorumData2 {
+            leaf_commit: Commitment::from_raw([7; 32]),
+            epoch: Some(EpochNumber::new(1)),
+            block_number: Some(1),
+        };
+        let cert =
+            Certificate::non_epoch_change(signed_qc(data, ViewNumber::new(1), &current, version));
+        quorum.verify(&cert, version).await.unwrap();
+        let wrong_quorum_cert =
+            Certificate::non_epoch_change(signed_qc(data, ViewNumber::new(1), &next, version));
+        quorum
+            .verify(&wrong_quorum_cert, version)
+            .await
+            .unwrap_err();
+
+        let next_data = QuorumData2 {
+            epoch: Some(EpochNumber::new(2)),
+            block_number: Some(11),
+            ..data
+        };
+        let next_cert = Certificate::non_epoch_change(signed_qc(
+            next_data,
+            ViewNumber::new(11),
+            &next,
+            version,
+        ));
+        quorum.verify_next_epoch(&next_cert, version).await.unwrap();
+        let wrong_next_quorum_cert = Certificate::non_epoch_change(signed_qc(
+            next_data,
+            ViewNumber::new(11),
+            &current,
+            version,
+        ));
+        quorum
+            .verify_next_epoch(&wrong_next_quorum_cert, version)
+            .await
+            .unwrap_err();
+
+        let vote2 = Vote2Data {
+            leaf_commit: data.leaf_commit,
+            epoch: EpochNumber::new(1),
+            block_number: 1,
+        };
+        let view = ViewNumber::new(1);
+        let commitment = VersionedVoteData::new_infallible(
+            vote2.clone(),
+            view,
+            &UpgradeLock::<SeqTypes>::new(Upgrade::trivial(version)),
+        )
+        .commit();
+        let signature = boundary_signature(commitment.as_ref(), &current);
+        let cert2 = Certificate2::<SeqTypes>::create_signed_certificate(
+            commitment,
+            vote2.clone(),
+            signature,
+            view,
+        );
+        quorum.verify_cert2(&cert2, version).await.unwrap();
+        let wrong_signature = boundary_signature(commitment.as_ref(), &next);
+        let wrong_quorum_cert2 = Certificate2::<SeqTypes>::create_signed_certificate(
+            commitment,
+            vote2,
+            wrong_signature,
+            view,
+        );
+        quorum
+            .verify_cert2(&wrong_quorum_cert2, version)
             .await
             .unwrap_err();
     }

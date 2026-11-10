@@ -5602,10 +5602,28 @@ mod test {
     async fn test_new_protocol_large_block_upgrade<D: TestableSqlDataSource>(
         _d: PhantomData<D>,
     ) -> anyhow::Result<()> {
+        check_new_protocol_header_upgrade::<D>(Upgrade::new(
+            NEW_PROTOCOL_VERSION,
+            LARGE_BLOCK_VERSION,
+        ))
+        .await
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_new_protocol_fee_free_header_upgrade() -> anyhow::Result<()> {
+        check_new_protocol_header_upgrade::<Sqlite>(Upgrade::new(
+            versions::TIMEOUT_EPOCH_VERSION,
+            versions::NO_BUILDER_FEE_VERSION,
+        ))
+        .await
+    }
+
+    async fn check_new_protocol_header_upgrade<D: TestableSqlDataSource>(
+        upgrade: Upgrade,
+    ) -> anyhow::Result<()> {
         const EPOCH_HEIGHT: u64 = 10;
         const NUM_NODES: usize = 5;
         const UPGRADE_START_PROPOSING_VIEW: u64 = 30;
-        const UPGRADE: Upgrade = Upgrade::new(NEW_PROTOCOL_VERSION, LARGE_BLOCK_VERSION);
 
         let api_port = reserve_tcp_port().expect("No ports free for query service");
         let url: Url = format!("http://localhost:{api_port}").parse().unwrap();
@@ -5613,7 +5631,7 @@ mod test {
         let test_config = TestConfigBuilder::<NUM_NODES>::default()
             .epoch_height(EPOCH_HEIGHT)
             .epoch_start_block(0)
-            .set_upgrades(LARGE_BLOCK_VERSION)
+            .set_upgrades(upgrade.target)
             .await
             .upgrade_proposing_views(UPGRADE_START_PROPOSING_VIEW, 1000)
             .build();
@@ -5627,9 +5645,7 @@ mod test {
 
         // The genesis chain config differs from the upgrade's only in
         // `max_block_size`.
-        let upgrade_chain_config = test_config
-            .get_upgrade_map()
-            .chain_config(LARGE_BLOCK_VERSION);
+        let upgrade_chain_config = test_config.get_upgrade_map().chain_config(upgrade.target);
         let genesis_chain_config = ChainConfig {
             max_block_size: ChainConfig::default().max_block_size,
             ..upgrade_chain_config
@@ -5660,7 +5676,7 @@ mod test {
             .network_config(test_config)
             .build();
 
-        let network = TestNetwork::new(config, UPGRADE).await;
+        let network = TestNetwork::new(config, upgrade).await;
         let client: Client<ClientErr, StaticVersion<0, 1>> = Client::new(url);
         client.connect(None).await;
 
@@ -5672,10 +5688,18 @@ mod test {
 
         // Activation is at the upgrade proposal's view plus
         // `hotshot_new_protocol::upgrade::FINISH_OFFSET` (20).
+        let mut saw_base_version = false;
         let upgrade_height = timeout(Duration::from_secs(600), async {
             loop {
                 let leaf = leaves.next().await.unwrap().unwrap();
-                if leaf.header().version() >= LARGE_BLOCK_VERSION {
+                if leaf.header().version() >= upgrade.target {
+                    assert_eq!(leaf.header().version(), upgrade.target);
+                    if upgrade.target >= versions::NO_BUILDER_FEE_VERSION {
+                        let header = serde_json::to_value(leaf.header()).unwrap();
+                        for removed in ["fee_info", "builder_signature", "builder_commitment"] {
+                            assert!(header["fields"].get(removed).is_none());
+                        }
+                    }
                     assert_eq!(
                         leaf.header().chain_config().commit(),
                         upgrade_chain_config.commit(),
@@ -5683,6 +5707,8 @@ mod test {
                     );
                     break leaf.height();
                 }
+                assert_eq!(leaf.header().version(), upgrade.base);
+                saw_base_version = true;
                 assert_eq!(
                     leaf.header().chain_config().commit(),
                     genesis_chain_config.commit(),
@@ -5698,12 +5724,13 @@ mod test {
         })
         .await
         .expect("the network did not upgrade to the large-block version");
-        tracing::info!(upgrade_height, "large-block upgrade complete");
+        assert!(saw_base_version, "must decide blocks before the upgrade");
+        tracing::info!(upgrade_height, "header upgrade complete");
 
         timeout(Duration::from_secs(120), async {
             loop {
                 let leaf = leaves.next().await.unwrap().unwrap();
-                assert!(leaf.header().version() >= LARGE_BLOCK_VERSION);
+                assert!(leaf.header().version() >= upgrade.target);
                 if leaf.height() > upgrade_height + 3 {
                     break;
                 }

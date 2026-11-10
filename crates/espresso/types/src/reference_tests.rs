@@ -86,6 +86,7 @@ type V4Serializer = vbs::Serializer<StaticVersion<0, 4>>;
 type V5Serializer = vbs::Serializer<StaticVersion<0, 5>>;
 type V6Serializer = vbs::Serializer<StaticVersion<0, 6>>;
 type V7Serializer = vbs::Serializer<StaticVersion<0, 7>>;
+type V8Serializer = vbs::Serializer<StaticVersion<0, 8>>;
 
 const REFERENCE_NAMESPACE_ID: u32 = 12648430;
 
@@ -290,8 +291,14 @@ async fn reference_header(version: Version) -> Header {
     let ns_table = payload.ns_table().clone();
     let payload_commitment = vid_commitment(&payload.encode(), &ns_table.encode(), 1, version);
     let builder_commitment = payload.builder_commitment(&ns_table);
-    let builder_signature =
-        FeeAccount::sign_fee(&builder_key, fee_info.amount().as_u64().unwrap(), &ns_table).unwrap();
+    let (fees, builder_signatures) = if version < versions::NO_BUILDER_FEE_VERSION {
+        let signature =
+            FeeAccount::sign_fee(&builder_key, fee_info.amount().as_u64().unwrap(), &ns_table)
+                .unwrap();
+        (vec![fee_info], vec![signature])
+    } else {
+        (vec![], vec![])
+    };
 
     let staket_table_hash = reference_stake_table_hash();
 
@@ -314,8 +321,8 @@ async fn reference_header(version: Version) -> Header {
         state.block_merkle_tree.commitment(),
         state.reward_merkle_tree_v1.commitment(),
         state.reward_merkle_tree_v2.commitment(),
-        vec![fee_info],
-        vec![builder_signature],
+        fees,
+        builder_signatures,
         None,
         version,
         Some(staket_table_hash),
@@ -415,6 +422,7 @@ change in the serialization of this data structure.
         "v5" => V5Serializer::serialize(&reference).unwrap(),
         "v6" => V6Serializer::serialize(&reference).unwrap(),
         "v7" => V7Serializer::serialize(&reference).unwrap(),
+        "v8" => V8Serializer::serialize(&reference).unwrap(),
         _ => panic!("invalid version"),
     };
     if actual != expected {
@@ -448,6 +456,7 @@ change in the serialization of this data structure.
         "v5" => V5Serializer::deserialize(&expected).unwrap(),
         "v6" => V6Serializer::deserialize(&expected).unwrap(),
         "v7" => V7Serializer::deserialize(&expected).unwrap(),
+        "v8" => V8Serializer::deserialize(&expected).unwrap(),
         _ => panic!("invalid version"),
     };
 
@@ -623,6 +632,17 @@ async fn test_reference_header_v7() {
         "header",
         reference_header(version(0, 7)).await,
         REFERENCE_V7_HEADER_COMMITMENT,
+    );
+}
+
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
+async fn test_reference_header_v8() {
+    let header = reference_header(version(0, 8)).await;
+    reference_test(
+        "v8",
+        "header",
+        header,
+        "BLOCK~rqoFfhe9uZyCnvrw9b-UcipZ6lMyOHstVfh-IS1Lnp8q",
     );
 }
 

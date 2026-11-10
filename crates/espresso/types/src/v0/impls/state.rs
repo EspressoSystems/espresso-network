@@ -86,6 +86,11 @@ pub enum BuilderValidationError {
 /// Possible proposal validation failures
 #[derive(Error, Debug, Eq, PartialEq)]
 pub enum ProposalValidationError {
+    #[error("Header version mismatch: expected={expected}, proposal={proposal}")]
+    HeaderVersionMismatch {
+        expected: Version,
+        proposal: Version,
+    },
     #[error("Next stake table hash mismatch: expected={expected:?}, proposal={proposal:?}")]
     NextStakeTableHashMismatch {
         expected: StakeTableHash,
@@ -611,6 +616,7 @@ impl<'a> ValidatedTransition<'a> {
     /// Top level validation routine. Performs all validation units in
     /// the given order.
     /// ```ignore
+    /// self.validate_version()?;
     /// self.validate_timestamp()?;
     /// self.validate_builder_fee()?;
     /// self.validate_height()?;
@@ -625,6 +631,7 @@ impl<'a> ValidatedTransition<'a> {
     /// self.validate_total_rewards_distributed()?;
     /// ```
     pub(crate) fn validate(self) -> Result<Self, ProposalValidationError> {
+        self.validate_version()?;
         self.validate_timestamp()?;
         self.validate_builder_fee()?;
         self.validate_height()?;
@@ -641,6 +648,20 @@ impl<'a> ValidatedTransition<'a> {
         self.validate_leader_counts()?;
 
         Ok(self)
+    }
+
+    /// Decided headers are replayed by the query node under their own version, not the view's,
+    /// so a header tagged differently from its view would be applied under different rules
+    /// there than the ones consensus validated it with.
+    fn validate_version(&self) -> Result<(), ProposalValidationError> {
+        let proposal = self.proposal.header.version();
+        if proposal != self.version {
+            return Err(ProposalValidationError::HeaderVersionMismatch {
+                expected: self.version,
+                proposal,
+            });
+        }
+        Ok(())
     }
 
     /// The proposal [Header::l1_finalized] must be `Some` and non-decreasing relative to parent.
@@ -740,6 +761,9 @@ impl<'a> ValidatedTransition<'a> {
     /// Validate that [`FeeAmount`] that is
     /// sufficient for block size.
     fn validate_fee(&self) -> Result<(), ProposalValidationError> {
+        if self.version >= versions::NO_BUILDER_FEE_VERSION {
+            return Ok(());
+        }
         // TODO this should be updated to `base_fee * bundle_size` when we have
         // VID per bundle or namespace.
         let Some(amount) = self.proposal.header.fee_info().amount() else {
@@ -970,6 +994,9 @@ fn validate_builder_fee(
     proposed_header: &Header,
     version: Version,
 ) -> Result<(), BuilderValidationError> {
+    if version >= versions::NO_BUILDER_FEE_VERSION {
+        return Ok(());
+    }
     let fee_info = proposed_header.fee_info();
     let builder_signature = proposed_header.builder_signature();
 
@@ -1633,7 +1660,7 @@ mod test {
         UpgradeMode, UpgradeType, ViewBasedUpgrade,
         eth_signature_key::{BuilderSignature, EthKeyPair},
         mock::MockStateCatchup,
-        v0_1, v0_2, v0_3, v0_4, v0_5, v0_6, v0_7,
+        v0_1, v0_2, v0_3, v0_4, v0_5, v0_6, v0_7, v0_8,
     };
 
     impl Transaction {
@@ -1699,6 +1726,12 @@ mod test {
                     timestamp_millis,
                     ..parent.clone()
                 }),
+                Header::V8(parent) => Header::V8(v0_8::Header {
+                    height: parent.height + 1,
+                    timestamp,
+                    timestamp_millis,
+                    ..parent.clone()
+                }),
             }
         }
         /// Replaces builder signature w/ invalid one.
@@ -1745,6 +1778,7 @@ mod test {
                     builder_signature: Some(sig),
                     ..header.clone()
                 }),
+                Header::V8(header) => Header::V8(header.clone()),
             }
         }
 
@@ -1799,6 +1833,7 @@ mod test {
                     builder_signature,
                     ..parent.clone()
                 }),
+                Header::V8(parent) => Header::V8(parent.clone()),
             }
         }
     }
@@ -1905,6 +1940,78 @@ mod test {
             ),
             err
         );
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_fee_validation_upgrade_boundary() {
+        for version in [
+            versions::TIMEOUT_EPOCH_VERSION,
+            versions::NO_BUILDER_FEE_VERSION,
+        ] {
+            let instance = NodeState::mock()
+                .with_genesis_version(version)
+                .with_current_version(version)
+                .with_chain_config(ChainConfig {
+                    base_fee: 1000.into(),
+                    max_block_size: 10.into(),
+                    ..Default::default()
+                });
+            let (payload, metadata) =
+                Payload::from_transactions(&[], &instance.genesis_state, &instance)
+                    .await
+                    .unwrap();
+            let header = Header::genesis(&instance, payload, &metadata, version);
+            let transition =
+                ValidatedTransition::mock(instance.clone(), &header, Proposal::new(&header, 20));
+            let opposite_version = if version == versions::TIMEOUT_EPOCH_VERSION {
+                versions::NO_BUILDER_FEE_VERSION
+            } else {
+                versions::TIMEOUT_EPOCH_VERSION
+            };
+            let mut mismatched =
+                ValidatedTransition::mock(instance.clone(), &header, Proposal::new(&header, 20));
+            mismatched.version = opposite_version;
+            assert_eq!(
+                mismatched.validate().unwrap_err(),
+                ProposalValidationError::HeaderVersionMismatch {
+                    expected: opposite_version,
+                    proposal: version,
+                }
+            );
+            // Fee-free blocks must still respect the configured payload limit and frozen fee root.
+            assert!(matches!(
+                transition.validate_block_size(),
+                Err(ProposalValidationError::MaxBlockSizeExceeded { .. })
+            ));
+            if version < versions::NO_BUILDER_FEE_VERSION {
+                assert!(matches!(
+                    transition.validate_builder_fee(),
+                    Err(ProposalValidationError::BuilderValidationError(
+                        BuilderValidationError::FeeAndSignatureCountMismatch { .. }
+                    ))
+                ));
+                assert!(matches!(
+                    transition.validate_fee(),
+                    Err(ProposalValidationError::InsufficientFee { .. })
+                ));
+                let invalid = header.invalid_builder_signature();
+                assert!(matches!(
+                    validate_builder_fee(&invalid, version),
+                    Err(BuilderValidationError::InvalidBuilderSignature)
+                ));
+            } else {
+                transition.validate_builder_fee().unwrap();
+                transition.validate_fee().unwrap();
+                transition.validate_fee_merkle_tree().unwrap();
+                let mut invalid = header.clone();
+                let mut changed_state = instance.genesis_state.clone();
+                changed_state.prefund_account(FeeAccount::default(), 1u64.into());
+                *invalid.fee_merkle_tree_root_mut() = changed_state.fee_merkle_tree.commitment();
+                let invalid_transition =
+                    ValidatedTransition::mock(instance, &header, Proposal::new(&invalid, 20));
+                assert!(invalid_transition.validate_fee_merkle_tree().is_err());
+            }
+        }
     }
 
     /// A state holding only a chain config commitment takes the full config from the instance
@@ -2469,6 +2576,7 @@ mod test {
                 fee_info: FeeInfo::new(account, data),
                 ..header
             }),
+            Header::V8(header) => Header::V8(header.clone()),
         };
 
         let version = header.version();
@@ -2540,6 +2648,37 @@ mod test {
         )
         .validate_total_rewards_distributed()
         .unwrap_err();
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_header_version_must_match_view_version() {
+        let instance = NodeState::mock().with_genesis_version(EPOCH_REWARD_VERSION);
+        let (payload, metadata) =
+            Payload::from_transactions(&[], &instance.genesis_state, &instance)
+                .await
+                .unwrap();
+        let v5_header = Header::genesis(&instance, payload, &metadata, EPOCH_REWARD_VERSION);
+
+        let err = ValidatedTransition::new(
+            ValidatedState::default(),
+            &v5_header,
+            Proposal::new(&v5_header, 0),
+            None,
+            NEW_PROTOCOL_VERSION,
+            OffsetDateTime::now_utc(),
+            None,
+            None,
+        )
+        .validate()
+        .unwrap_err();
+
+        assert_eq!(
+            err,
+            ProposalValidationError::HeaderVersionMismatch {
+                expected: NEW_PROTOCOL_VERSION,
+                proposal: EPOCH_REWARD_VERSION,
+            }
+        );
     }
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]

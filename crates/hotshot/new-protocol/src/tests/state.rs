@@ -69,11 +69,11 @@ fn make_header_request(
         payload_commitment,
         builder_commitment,
         metadata,
-        builder_fee: BuilderFee {
+        builder_fee: Some(BuilderFee {
             fee_amount: 0,
             fee_account: builder_key,
             fee_signature: builder_signature,
-        },
+        }),
     }
 }
 

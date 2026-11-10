@@ -86,7 +86,7 @@ pub struct BlockBuilderOutput<T: NodeType> {
     pub payload: PayloadWithMetadata<T>,
     pub parent_proposal: Proposal<T>,
     pub builder_commitment: BuilderCommitment,
-    pub builder_fee: BuilderFee<T>,
+    pub builder_fee: Option<BuilderFee<T>>,
     pub payload_commitment: VidCommitment,
     pub manifest: DedupManifest<T>,
     /// The shares behind `payload_commitment`, until the coordinator takes them for the
@@ -410,18 +410,23 @@ impl<T: NodeType> BlockBuilder<T> {
                 epoch,
                 hashes,
             };
-            let (builder_key, builder_private_key) =
-                T::BuilderSignatureKey::generated_from_seed_indexed([0u8; 32], 0);
-            let offered_fee = block_size;
-            let builder_fee = BuilderFee {
-                fee_amount: offered_fee,
-                fee_account: builder_key,
-                fee_signature: T::BuilderSignatureKey::sign_fee(
-                    &builder_private_key,
-                    offered_fee,
-                    &payload.metadata,
-                )
-                .map_err(|_| BlockError::BuilderSignature)?,
+            let builder_fee = if version < versions::NO_BUILDER_FEE_VERSION {
+                let (builder_key, builder_private_key) =
+                    T::BuilderSignatureKey::generated_from_seed_indexed([0u8; 32], 0);
+                let offered_fee = block_size;
+                let builder_fee = BuilderFee {
+                    fee_amount: offered_fee,
+                    fee_account: builder_key,
+                    fee_signature: T::BuilderSignatureKey::sign_fee(
+                        &builder_private_key,
+                        offered_fee,
+                        &payload.metadata,
+                    )
+                    .map_err(|_| BlockError::BuilderSignature)?,
+                };
+                Some(builder_fee)
+            } else {
+                None
             };
             Ok(BlockBuilderOutput {
                 view,

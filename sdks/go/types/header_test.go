@@ -106,6 +106,38 @@ func TestHeader0_7(t *testing.T) {
 	requireCommitment(t, header, "BLOCK~Y05GqjVqwmnMOza3LMLFagoyQxwEDFcYQCRRnzpho5a1")
 }
 
+func TestHeader0_8(t *testing.T) {
+	header := getHeaderFromTestFile("../../../data/v8/header.json", t)
+	require.Equal(t, common_types.Version{Major: 0, Minor: 8}, header.Version())
+	require.Equal(t, uint64(42), header.GetBlockHeight())
+	require.Nil(t, header.GetBuilderCommitment())
+	requireCommitment(t, header, "BLOCK~rqoFfhe9uZyCnvrw9b-UcipZ6lMyOHstVfh-IS1Lnp8q")
+	encoded, err := json.Marshal(HeaderImpl{Header: header})
+	require.NoError(t, err)
+	var value map[string]json.RawMessage
+	require.NoError(t, json.Unmarshal(encoded, &value))
+	var fields map[string]json.RawMessage
+	require.NoError(t, json.Unmarshal(value["fields"], &fields))
+	for _, removed := range []string{"fee_info", "builder_signature", "builder_commitment"} {
+		require.NotContains(t, fields, removed)
+	}
+}
+
+// Keep the SDK's historical fallback for unknown minor versions unchanged.
+func TestHeaderUnknownMinorKeepsLegacyFallback(t *testing.T) {
+	encoded, err := os.ReadFile("../../../data/v7/header.json")
+	require.NoError(t, err)
+	var raw RawHeader
+	require.NoError(t, json.Unmarshal(encoded, &raw))
+	raw.Version.Minor = 9
+	encoded, err = json.Marshal(raw)
+	require.NoError(t, err)
+	var parsed HeaderImpl
+	require.NoError(t, json.Unmarshal(encoded, &parsed))
+	require.Equal(t, common_types.Version{Major: 0, Minor: 7}, parsed.Header.Version())
+	requireCommitment(t, parsed.Header, "BLOCK~Y05GqjVqwmnMOza3LMLFagoyQxwEDFcYQCRRnzpho5a1")
+}
+
 // A header from mainnet, which runs 0.6, against the hash the query service reports for its
 // block. Unlike the reference vectors it has no `next_stake_table_hash` and a large
 // `total_reward_distributed`.
@@ -118,7 +150,7 @@ func TestHeaderMainnet0_6(t *testing.T) {
 }
 
 func TestHeaderImplMarshalAndUnmarshal(t *testing.T) {
-	for _, version := range []string{"v1", "v2", "v3", "v4", "v5", "v6", "v7"} {
+	for _, version := range []string{"v1", "v2", "v3", "v4", "v5", "v6", "v7", "v8"} {
 		header := getHeaderFromTestFile("../../../data/"+version+"/header.json", t)
 		testHeaderImplMarshalAndUnmarshal(header, t)
 	}
