@@ -26,7 +26,6 @@ use serde::{Deserialize, Serialize};
 use tagged_base64::{TaggedBase64, Tb64Error};
 use thiserror::Error;
 use vbs::version::Version;
-use vec1::Vec1;
 use versions::{EPOCH_VERSION, NEW_PROTOCOL_VERSION, Upgrade};
 
 use crate::{
@@ -45,7 +44,7 @@ use crate::{
     },
     traits::{
         BlockPayload,
-        block_contents::{BlockHeader, BuilderFee, EncodeBytes, TestableBlock},
+        block_contents::{BlockHeader, EncodeBytes, TestableBlock},
         node_implementation::NodeType,
         signature_key::SignatureKey,
         states::TestableState,
@@ -2257,126 +2256,6 @@ impl<TYPES: NodeType> Leaf<TYPES> {
             block_header: block_header.clone(),
             upgrade_certificate: upgrade_certificate.clone(),
             block_payload: None,
-        }
-    }
-}
-
-pub mod null_block {
-    #![allow(missing_docs)]
-
-    use jf_advz::VidScheme;
-    use vbs::version::Version;
-    use versions::EPOCH_VERSION;
-
-    use crate::{
-        data::VidCommitment,
-        traits::{
-            BlockPayload, block_contents::BuilderFee, node_implementation::NodeType,
-            signature_key::BuilderSignatureKey,
-        },
-        vid::advz::advz_scheme,
-    };
-
-    /// The commitment for a null block payload.
-    ///
-    /// Note: the commitment depends on the network (via `num_storage_nodes`),
-    /// and may change (albeit rarely) during execution.
-    ///
-    /// We memoize the result to avoid having to recalculate it.
-    // TODO(Chengyu): fix it. Empty commitment must be computed at every upgrade.
-    // #[memoize(SharedCache, Capacity: 10)]
-    #[must_use]
-    pub fn commitment(num_storage_nodes: usize) -> Option<VidCommitment> {
-        let vid_result = advz_scheme(num_storage_nodes).commit_only(Vec::new());
-
-        match vid_result {
-            Ok(r) => Some(VidCommitment::V0(r)),
-            Err(_) => None,
-        }
-    }
-
-    /// Builder fee data for a null block payload
-    #[must_use]
-    pub fn builder_fee<TYPES: NodeType>(
-        num_storage_nodes: usize,
-        version: Version,
-    ) -> Option<BuilderFee<TYPES>> {
-        /// Arbitrary fee amount, this block doesn't actually come from a builder
-        const FEE_AMOUNT: u64 = 0;
-
-        let (pub_key, priv_key) =
-            <TYPES::BuilderSignatureKey as BuilderSignatureKey>::generated_from_seed_indexed(
-                [0_u8; 32], 0,
-            );
-
-        if version >= EPOCH_VERSION {
-            let (_null_block, null_block_metadata) =
-                <TYPES::BlockPayload as BlockPayload<TYPES>>::empty();
-
-            match TYPES::BuilderSignatureKey::sign_fee(&priv_key, FEE_AMOUNT, &null_block_metadata)
-            {
-                Ok(sig) => Some(BuilderFee {
-                    fee_amount: FEE_AMOUNT,
-                    fee_account: pub_key,
-                    fee_signature: sig,
-                }),
-                Err(_) => None,
-            }
-        } else {
-            let (_null_block, null_block_metadata) =
-                <TYPES::BlockPayload as BlockPayload<TYPES>>::empty();
-
-            match TYPES::BuilderSignatureKey::sign_fee_with_vid_commitment(
-                &priv_key,
-                FEE_AMOUNT,
-                &null_block_metadata,
-                &commitment(num_storage_nodes)?,
-            ) {
-                Ok(sig) => Some(BuilderFee {
-                    fee_amount: FEE_AMOUNT,
-                    fee_account: pub_key,
-                    fee_signature: sig,
-                }),
-                Err(_) => None,
-            }
-        }
-    }
-}
-
-/// A packed bundle constructed from a sequence of bundles.
-#[derive(Debug, Eq, PartialEq, Clone)]
-pub struct PackedBundle<TYPES: NodeType> {
-    /// The combined transactions as bytes.
-    pub encoded_transactions: Arc<[u8]>,
-
-    /// The metadata of the block.
-    pub metadata: <TYPES::BlockPayload as BlockPayload<TYPES>>::Metadata,
-
-    /// The view number that this block is associated with.
-    pub view_number: ViewNumber,
-
-    /// The view number that this block is associated with.
-    pub epoch_number: Option<EpochNumber>,
-
-    /// The sequencing fee for submitting bundles.
-    pub sequencing_fees: Vec1<BuilderFee<TYPES>>,
-}
-
-impl<TYPES: NodeType> PackedBundle<TYPES> {
-    /// Create a new [`PackedBundle`].
-    pub fn new(
-        encoded_transactions: Arc<[u8]>,
-        metadata: <TYPES::BlockPayload as BlockPayload<TYPES>>::Metadata,
-        view_number: ViewNumber,
-        epoch_number: Option<EpochNumber>,
-        sequencing_fees: Vec1<BuilderFee<TYPES>>,
-    ) -> Self {
-        Self {
-            encoded_transactions,
-            metadata,
-            view_number,
-            epoch_number,
-            sequencing_fees,
         }
     }
 }

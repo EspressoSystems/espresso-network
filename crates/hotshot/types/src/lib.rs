@@ -26,7 +26,6 @@ use vec1::Vec1;
 use crate::{addr::NetAddr, utils::bincode_opts};
 
 pub mod addr;
-pub mod bundle;
 pub mod consensus;
 pub mod constants;
 pub mod data;
