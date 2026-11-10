@@ -1121,8 +1121,10 @@ where
                 id,
                 LeafRequest::Leaf(LeafId::Number(0)) | LeafRequest::Header(BlockId::Number(0))
             );
-            if genesis && known_finalized.is_none() {
-                return self.fetch_genesis_leaf_from_server(make_quorum).await;
+            if genesis {
+                return self
+                    .fetch_genesis_leaf_from_server(known_finalized, make_quorum)
+                    .await;
             }
             self.fetch_proven_leaf_from_server(id, known_finalized, make_quorum)
                 .await
@@ -1132,13 +1134,15 @@ where
     /// The genesis QC is unsigned, so the genesis leaf is proven through its child instead.
     async fn fetch_genesis_leaf_from_server<Q>(
         &self,
+        known_finalized: Option<&Leaf2>,
         make_quorum: impl Send + FnOnce(EpochNumber) -> Q,
     ) -> Result<LeafQueryData<SeqTypes>>
     where
         Q: Send + Quorum,
     {
+        let known_finalized = known_finalized.filter(|leaf| leaf.height() > 1);
         let child = self
-            .fetch_proven_leaf_from_server(LeafId::Number(1), None, make_quorum)
+            .fetch_proven_leaf_from_server(LeafId::Number(1), known_finalized, make_quorum)
             .await?;
         let mut leaves = self
             .fetch_leaves_in_range_from_server(0, 1, &child, CacheLeaves::Yes)
@@ -1397,6 +1401,15 @@ mod test {
             lc.fetch_header(BlockId::Number(0)).await.unwrap(),
             *leaf.header()
         );
+
+        // A cached leaf close above genesis is sent to the server as a finalized hint.
+        let lc = LightClient::from_genesis(
+            SqlStorage::default().await.unwrap(),
+            client.clone(),
+            client.genesis().await,
+        );
+        lc.fetch_leaf(LeafId::Number(10)).await.unwrap();
+        assert_eq!(lc.fetch_leaf(LeafId::Number(0)).await.unwrap(), leaf);
     }
 
     #[tokio::test]
