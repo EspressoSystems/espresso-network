@@ -44,6 +44,7 @@ use crate::{
     BlockMerkleCommitment, FeeAccount, FeeAmount, FeeInfo, FeeMerkleCommitment, Header,
     L1BlockInfo, L1Snapshot, Leaf2, NamespaceId, NsIndex, NsTable, PayloadByteLen, SeqTypes,
     TimestampMillis,
+    catchup::Verified,
     eth_signature_key::BuilderSignature,
     v0::{
         header::{EitherOrVersion, VersionedHeader},
@@ -61,7 +62,7 @@ use crate::{
     v0_7,
 };
 #[cfg(feature = "node")]
-use crate::{UpgradeType, v0::impls::distribute_block_reward};
+use crate::{UpgradeType, catchup::FeeAccountsAt, v0::impls::distribute_block_reward};
 
 impl v0_1::Header {
     pub(crate) fn commit(&self) -> Commitment<Header> {
@@ -1076,6 +1077,7 @@ impl Header {
                     .as_ref()
                     .fetch_chain_config(validated_cf.commit())
                     .await
+                    .map(Verified::into_inner)
             },
         }
     }
@@ -1476,15 +1478,17 @@ impl BlockHeader<SeqTypes> for Header {
                     .as_ref()
                     .fetch_accounts(
                         instance_state,
-                        height,
-                        view,
-                        parent_state.fee_merkle_tree.commitment(),
-                        missing_accounts,
+                        &FeeAccountsAt {
+                            height,
+                            view,
+                            root: parent_state.fee_merkle_tree.commitment(),
+                            accounts: missing_accounts,
+                        },
                     )
                     .await?;
 
                 // Insert missing fee state entries
-                for proof in missing_account_proofs.iter() {
+                for proof in missing_account_proofs.inner() {
                     proof
                         .remember(&mut validated_state.fee_merkle_tree)
                         .context("remembering fee account")?;
