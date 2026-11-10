@@ -128,6 +128,15 @@ impl LeafProof {
         let mut curr = leaf;
         for next in leaves {
             ensure!(curr.commit() == next.parent_commitment());
+            ensure!(
+                curr.height().checked_add(1) == Some(next.height())
+                    && next.view_number() > curr.view_number(),
+                "leaf {} at view {} does not extend leaf {} at view {}",
+                next.height(),
+                next.view_number(),
+                curr.height(),
+                curr.view_number()
+            );
             curr = next;
 
             if opt_qc.is_none() {
@@ -637,6 +646,30 @@ mod test {
                 .await
                 .unwrap(),
             leaves[0]
+        );
+    }
+
+    /// The finality proof covers the last leaf, but the first leaf is the one returned, so a leaf
+    /// chain that runs backwards would return a leaf above the one actually proven.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_backward_leaf_chain_rejected() {
+        let mut proof = LeafProof::default();
+        let leaves = leaf_chain([100, 1, 2, 3, 4], LEGACY_VERSION).await;
+        for leaf in &leaves[..4] {
+            assert!(!proof.push(leaf.clone()));
+        }
+        assert!(proof.push(leaves[4].clone()));
+        assert_eq!(proof.leaves().len(), 2);
+
+        let err = proof
+            .verify(LeafProofHint::Quorum(&AlwaysTrueQuorum::new(
+                LEAF_CHAIN_EPOCH_HEIGHT,
+            )))
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("does not extend"),
+            "unexpected error: {err:#}"
         );
     }
 
