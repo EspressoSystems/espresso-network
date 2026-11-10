@@ -1,6 +1,6 @@
 use std::{collections::BTreeSet, sync::Arc};
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use async_trait::async_trait;
 use espresso_types::{PubKey, SeqTypes, traits::SequencerPersistence};
 use hotshot_types::{data::EpochNumber, epoch_membership::EpochMembershipCoordinator};
@@ -36,21 +36,30 @@ impl<P: SequencerPersistence> RecipientSourceTrait<Request, PubKey> for Recipien
 
         // Attempt to get the membership for the current epoch
         let membership = match self.memberships.stake_table_for_epoch(Some(epoch_number)) {
-            Ok(membership) => membership,
+            Ok(membership) => Some(membership),
             Err(e) => {
                 warn!(
                     "Failed to get membership for epoch {}: {e:#}. Failing over to previous epoch",
                     epoch_number
                 );
                 let prev_epoch = epoch_number.saturating_sub(1);
-                self.memberships
+                match self
+                    .memberships
                     .stake_table_for_epoch(Some(EpochNumber::new(prev_epoch)))
-                    .with_context(|| "failed to get stake table for epoch")?
+                {
+                    Ok(membership) => Some(membership),
+                    // Far behind: `l1_finalized_peers` are the only recipients.
+                    Err(e) => {
+                        warn!("Failed to get membership for epoch {prev_epoch}: {e:#}");
+                        None
+                    },
+                }
             },
         };
 
         let table_keys = membership
-            .stake_table()
+            .iter()
+            .flat_map(|membership| membership.stake_table())
             .map(|entry| entry.stake_table_entry.stake_key);
         Ok(responders(
             table_keys,
