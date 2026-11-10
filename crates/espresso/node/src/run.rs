@@ -462,7 +462,7 @@ mod test {
             private_x25519_key: None,
         };
         let genesis = Genesis::from_file(
-            &std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
                 .join("../../../data/genesis/demo-ff.toml"),
         )
         .unwrap();
