@@ -16,6 +16,7 @@ use clap::Parser;
 use espresso_types::{
     AuthenticatedValidatorMap, Header, Leaf2, NetworkConfig, Payload, PubKey,
     RegisteredValidatorMap, SeqTypes, StakeTableHash,
+    catchup::Verified,
     traits::{EventsPersistenceRead, MembershipPersistence, StakeTuple},
     v0::traits::{EventConsumer, PersistenceOptions, SequencerPersistence, StateCertPersistence},
     v0_3::{
@@ -1542,7 +1543,7 @@ impl StateCertPersistence for Persistence {
     async fn insert_state_cert(
         &self,
         epoch: u64,
-        cert: LightClientStateUpdateCertificateV2<SeqTypes>,
+        cert: Verified<LightClientStateUpdateCertificateV2<SeqTypes>>,
     ) -> anyhow::Result<()> {
         let inner = self.inner.read().await;
         let dir_path = inner.finalized_state_cert_dir_path();
@@ -1551,7 +1552,7 @@ impl StateCertPersistence for Persistence {
             .context(format!("creating state cert dir {}", dir_path.display()))?;
 
         let file_path = dir_path.join(epoch.to_string()).with_extension("txt");
-        let bytes = bincode::serialize(&cert)
+        let bytes = bincode::serialize(cert.inner())
             .context("serializing light client state update certificate")?;
 
         fs::write(&file_path, bytes).context(format!(

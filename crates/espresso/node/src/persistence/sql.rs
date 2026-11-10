@@ -8,6 +8,7 @@ use derive_more::{Deref, DerefMut};
 use espresso_types::{
     AuthenticatedValidatorMap, BackoffParams, Header, Leaf, Leaf2, NetworkConfig, Payload, PubKey,
     RegisteredValidatorMap, StakeTableHash,
+    catchup::Verified,
     traits::{EventsPersistenceRead, MembershipPersistence, StakeTuple},
     v0::traits::{
         EventConsumer, PersistenceOptions, SequencerPersistence, StateCatchup, StateCertPersistence,
@@ -1774,10 +1775,10 @@ impl StateCertPersistence for Persistence {
     async fn insert_state_cert(
         &self,
         epoch: u64,
-        cert: LightClientStateUpdateCertificateV2<SeqTypes>,
+        cert: Verified<LightClientStateUpdateCertificateV2<SeqTypes>>,
     ) -> anyhow::Result<()> {
         let epoch_i64 = epoch as i64;
-        let bytes = bincode::serialize(&cert)
+        let bytes = bincode::serialize(cert.inner())
             .with_context(|| format!("Failed to serialize state cert for epoch {epoch}"))?;
 
         serializable_retry!(self, || async {

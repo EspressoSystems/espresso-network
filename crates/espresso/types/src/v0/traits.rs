@@ -42,7 +42,7 @@ use serde::{Serialize, de::DeserializeOwned};
 use versions::{NEW_PROTOCOL_VERSION, Upgrade};
 
 use super::{
-    catchup::{FeeAccountsAt, LeafAt, RewardAccountsV1At, RewardTreeV2At, Verified},
+    catchup::{FeeAccountsAt, LeafAt, RewardAccountsV1At, RewardTreeV2At, StateCertFor, Verified},
     impls::NodeState,
     utils::BackoffParams,
     v0_3::{EventKey, IndexedStake, StakeTableEvent},
@@ -219,19 +219,21 @@ pub trait StateCatchup: Send + Sync {
     async fn try_fetch_state_cert(
         &self,
         retry: usize,
-        epoch: u64,
-    ) -> anyhow::Result<LightClientStateUpdateCertificateV2<SeqTypes>>;
+        req: &StateCertFor,
+    ) -> anyhow::Result<Verified<LightClientStateUpdateCertificateV2<SeqTypes>>>;
 
     /// Fetch the state certificate for a given epoch, retrying on transient errors.
     async fn fetch_state_cert(
         &self,
-        epoch: u64,
-    ) -> anyhow::Result<LightClientStateUpdateCertificateV2<SeqTypes>> {
+        req: &StateCertFor,
+    ) -> anyhow::Result<Verified<LightClientStateUpdateCertificateV2<SeqTypes>>> {
         self.backoff()
             .retry(self, |provider, retry| {
                 provider
-                    .try_fetch_state_cert(retry, epoch)
-                    .map_err(|err| err.context(format!("fetching state cert for epoch {epoch}")))
+                    .try_fetch_state_cert(retry, req)
+                    .map_err(|err| {
+                        err.context(format!("fetching state cert for epoch {}", req.epoch))
+                    })
                     .boxed()
             })
             .await
@@ -357,16 +359,16 @@ impl<T: StateCatchup + ?Sized> StateCatchup for Arc<T> {
     async fn try_fetch_state_cert(
         &self,
         retry: usize,
-        epoch: u64,
-    ) -> anyhow::Result<LightClientStateUpdateCertificateV2<SeqTypes>> {
-        (**self).try_fetch_state_cert(retry, epoch).await
+        req: &StateCertFor,
+    ) -> anyhow::Result<Verified<LightClientStateUpdateCertificateV2<SeqTypes>>> {
+        (**self).try_fetch_state_cert(retry, req).await
     }
 
     async fn fetch_state_cert(
         &self,
-        epoch: u64,
-    ) -> anyhow::Result<LightClientStateUpdateCertificateV2<SeqTypes>> {
-        (**self).fetch_state_cert(epoch).await
+        req: &StateCertFor,
+    ) -> anyhow::Result<Verified<LightClientStateUpdateCertificateV2<SeqTypes>>> {
+        (**self).fetch_state_cert(req).await
     }
 
     fn backoff(&self) -> &BackoffParams {
@@ -490,7 +492,7 @@ pub trait StateCertPersistence: Send + Sync + 'static {
     async fn insert_state_cert(
         &self,
         epoch: u64,
-        cert: LightClientStateUpdateCertificateV2<SeqTypes>,
+        cert: Verified<LightClientStateUpdateCertificateV2<SeqTypes>>,
     ) -> anyhow::Result<()>;
 }
 
