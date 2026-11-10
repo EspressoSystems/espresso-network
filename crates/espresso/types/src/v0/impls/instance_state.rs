@@ -685,7 +685,7 @@ pub mod mock {
             );
             let tree = retain_accounts(src, req.accounts.iter().copied())
                 .with_context(|| "failed to retain accounts")?;
-            req.verify(&tree)
+            Ok(req.verify(&tree)?)
         }
 
         async fn try_remember_blocks_merkle_tree(

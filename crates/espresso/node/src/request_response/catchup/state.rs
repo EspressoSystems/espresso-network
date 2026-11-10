@@ -150,7 +150,7 @@ impl<P: SequencerPersistence> StateCatchup for RequestResponseProtocol<P> {
                 let Response::Accounts(fee_merkle_tree) = response else {
                     return Err(anyhow::anyhow!("expected accounts response"));
                 };
-                req.verify(&fee_merkle_tree)
+                Ok(req.verify(&fee_merkle_tree)?)
             }
         };
 
@@ -232,7 +232,7 @@ impl<P: SequencerPersistence> StateCatchup for RequestResponseProtocol<P> {
             let Response::ChainConfig(chain_config) = response else {
                 return Err(anyhow::anyhow!("expected chain config response"));
             };
-            verify_chain_config(commitment, chain_config)
+            Ok(verify_chain_config(commitment, chain_config)?)
         };
 
         // Wait for the protocol to send us the chain config
@@ -324,7 +324,7 @@ impl<P: SequencerPersistence> StateCatchup for RequestResponseProtocol<P> {
                     .context(
                         "Failed to deserialize RewardMerkleTreeV2 for height {height} from remote",
                     )?;
-                req.verify_balances(tree_data.balances).await
+                Ok(req.verify_balances(tree_data.balances).await?)
             }
         };
 
@@ -357,7 +357,7 @@ impl<P: SequencerPersistence> StateCatchup for RequestResponseProtocol<P> {
                 let Response::RewardAccountsV1(reward_merkle_tree) = response else {
                     return Err(anyhow::anyhow!("expected v1 reward accounts response"));
                 };
-                req.verify(&reward_merkle_tree)
+                Ok(req.verify(&reward_merkle_tree)?)
             }
         };
 
