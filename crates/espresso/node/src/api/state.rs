@@ -762,7 +762,7 @@ where
                     .insert_state_cert(epoch, cert.clone())
                     .await?;
 
-                cert
+                cert.into_inner()
             },
         };
 

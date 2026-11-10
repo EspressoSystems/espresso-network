@@ -4,8 +4,8 @@ use committable::Commitment;
 use espresso_types::{
     BackoffParams, BlockMerkleTree, FeeAccountProof, Leaf2, NodeState, SeqTypes,
     catchup::{
-        FeeAccountsAt, LeafAt, LeafChain, RewardAccountsV1At, RewardTreeV2At, Verified,
-        verify_chain_config,
+        FeeAccountsAt, LeafAt, LeafChain, RewardAccountsV1At, RewardTreeV2At, StateCertFor,
+        Verified, verify_chain_config,
     },
     traits::{SequencerPersistence, StateCatchup},
     v0_3::{ChainConfig, RewardAccountProofV1},
@@ -119,11 +119,11 @@ impl<P: SequencerPersistence> StateCatchup for RequestResponseProtocol<P> {
     async fn try_fetch_state_cert(
         &self,
         _retry: usize,
-        epoch: u64,
-    ) -> anyhow::Result<LightClientStateUpdateCertificateV2<SeqTypes>> {
+        req: &StateCertFor,
+    ) -> anyhow::Result<Verified<LightClientStateUpdateCertificateV2<SeqTypes>>> {
         let timeout_duration = self.config.request_batch_interval * 3;
 
-        timeout(timeout_duration, self.fetch_state_cert(epoch))
+        timeout(timeout_duration, self.fetch_state_cert(req))
             .await
             .with_context(|| "timed out while fetching state cert")?
     }
@@ -380,18 +380,20 @@ impl<P: SequencerPersistence> StateCatchup for RequestResponseProtocol<P> {
 
     async fn fetch_state_cert(
         &self,
-        epoch: u64,
-    ) -> anyhow::Result<LightClientStateUpdateCertificateV2<SeqTypes>> {
+        req: &StateCertFor,
+    ) -> anyhow::Result<Verified<LightClientStateUpdateCertificateV2<SeqTypes>>> {
+        let epoch = req.epoch.u64();
         tracing::info!("Fetching state cert for epoch: {epoch}");
 
-        // Create the response validation function
-        let response_validation_fn = move |_request: &Request, response: Response| async move {
-            // Make sure the response is a state cert response
-            let Response::StateCert(state_cert) = response else {
-                return Err(anyhow::anyhow!("expected state cert response"));
-            };
-
-            Ok(state_cert)
+        let owned_req = req.clone();
+        let response_validation_fn = move |_request: &Request, response: Response| {
+            let req = owned_req.clone();
+            async move {
+                let Response::StateCert(state_cert) = response else {
+                    return Err(anyhow::anyhow!("expected state cert response"));
+                };
+                Ok(req.verify(state_cert)?)
+            }
         };
 
         // Wait for the protocol to send us the state cert

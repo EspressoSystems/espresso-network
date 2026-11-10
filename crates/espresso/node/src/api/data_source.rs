@@ -12,6 +12,7 @@ use espresso_api::v1::{
 use espresso_types::{
     Certificate2, FeeAccount, FeeAccountProof, FeeMerkleTree, Leaf2, NodeState, PubKey,
     Transaction,
+    catchup::Verified,
     config::PublicNetworkConfig,
     v0::traits::PersistenceOptions,
     v0_3::{
@@ -218,7 +219,7 @@ pub(crate) trait StateCertDataSource {
     async fn insert_state_cert(
         &self,
         epoch: u64,
-        cert: LightClientStateUpdateCertificateV2<SeqTypes>,
+        cert: Verified<LightClientStateUpdateCertificateV2<SeqTypes>>,
     ) -> anyhow::Result<()>;
 }
 
@@ -379,7 +380,7 @@ pub trait StateCertFetchingDataSource<Types: NodeType> {
         &self,
         epoch: u64,
         timeout: Duration,
-    ) -> Result<LightClientStateUpdateCertificateV2<Types>, StateCertFetchError>;
+    ) -> Result<Verified<LightClientStateUpdateCertificateV2<Types>>, StateCertFetchError>;
 }
 
 /// Data source for database metadata and statistics.
@@ -419,7 +420,7 @@ where
     async fn insert_state_cert(
         &self,
         epoch: u64,
-        cert: LightClientStateUpdateCertificateV2<SeqTypes>,
+        cert: Verified<LightClientStateUpdateCertificateV2<SeqTypes>>,
     ) -> anyhow::Result<()> {
         (*self).insert_state_cert(epoch, cert).await
     }
@@ -452,7 +453,7 @@ where
         &self,
         epoch: u64,
         timeout: Duration,
-    ) -> Result<LightClientStateUpdateCertificateV2<Types>, StateCertFetchError> {
+    ) -> Result<Verified<LightClientStateUpdateCertificateV2<Types>>, StateCertFetchError> {
         (*self).request_state_cert(epoch, timeout).await
     }
 }

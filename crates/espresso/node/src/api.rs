@@ -32,6 +32,7 @@ use espresso_api::{
 use espresso_types::{
     AccountQueryData, AuthenticatedValidatorMap, BlockMerkleTree, ChainId, FeeAccount,
     FeeMerkleTree, Leaf2, NodeState, PubKey, Transaction,
+    catchup::{StateCertFor, Verified},
     config::PublicNetworkConfig,
     retain_accounts,
     traits::{EventsPersistenceRead, MembershipPersistence},
@@ -43,7 +44,6 @@ use espresso_types::{
     v0_4::{
         PermittedRewardMerkleTreeV2, RewardAccountQueryDataV2, RewardAccountV2, RewardMerkleTreeV2,
     },
-    validate_state_cert,
 };
 use futures::future::{BoxFuture, Future, FutureExt};
 use hotshot_contract_adapter::sol_types::EspToken;
@@ -489,7 +489,7 @@ impl<D: Sync> StateCertFetchingDataSource<SeqTypes> for StorageState<D> {
         &self,
         epoch: u64,
         timeout: Duration,
-    ) -> Result<LightClientStateUpdateCertificateV2<SeqTypes>, StateCertFetchError> {
+    ) -> Result<Verified<LightClientStateUpdateCertificateV2<SeqTypes>>, StateCertFetchError> {
         self.as_ref().request_state_cert(epoch, timeout).await
     }
 }
@@ -589,7 +589,7 @@ impl StateCertFetchingDataSource<SeqTypes> for ApiState {
         &self,
         epoch: u64,
         timeout: Duration,
-    ) -> Result<LightClientStateUpdateCertificateV2<SeqTypes>, StateCertFetchError> {
+    ) -> Result<Verified<LightClientStateUpdateCertificateV2<SeqTypes>>, StateCertFetchError> {
         let handle = self.consensus().await;
         let coordinator = handle.membership_coordinator().await;
         let epoch_height = *coordinator.epoch_height();
@@ -628,29 +628,22 @@ impl StateCertFetchingDataSource<SeqTypes> for ApiState {
                 )
             })?;
 
-        let stake_table = HSStakeTable::from_iter(membership.stake_table());
+        let req = StateCertFor {
+            epoch: EpochNumber::new(epoch),
+            stake_table: HSStakeTable::from_iter(membership.stake_table()),
+            epoch_height,
+            upgrade_lock: handle.upgrade_lock().await,
+        };
 
         let state_catchup = self.context().await.node_state().state_catchup.clone();
 
-        let result = tokio::time::timeout(timeout, state_catchup.fetch_state_cert(epoch)).await;
+        let result = tokio::time::timeout(timeout, state_catchup.fetch_state_cert(&req)).await;
 
         match result {
             Err(_) => Err(StateCertFetchError::FetchError(anyhow::anyhow!(
                 "timeout while fetching state cert for epoch {epoch}"
             ))),
             Ok(Ok(cert)) => {
-                // Validation errors should be mapped to ValidationError
-                validate_state_cert(
-                    &cert,
-                    &stake_table,
-                    EpochNumber::new(epoch),
-                    epoch_height,
-                    &handle.upgrade_lock().await,
-                )
-                .map_err(|e| {
-                    StateCertFetchError::ValidationError(e.context(format!("epoch={epoch}")))
-                })?;
-
                 tracing::info!("fetched and validated state certificate for epoch {epoch}");
                 Ok(cert)
             },
@@ -674,7 +667,7 @@ impl<D: Sync> StateCertDataSource for StorageState<D> {
     async fn insert_state_cert(
         &self,
         epoch: u64,
-        cert: LightClientStateUpdateCertificateV2<SeqTypes>,
+        cert: Verified<LightClientStateUpdateCertificateV2<SeqTypes>>,
     ) -> anyhow::Result<()> {
         self.as_ref().insert_state_cert(epoch, cert).await
     }
@@ -695,7 +688,7 @@ impl StateCertDataSource for ApiState {
     async fn insert_state_cert(
         &self,
         epoch: u64,
-        cert: LightClientStateUpdateCertificateV2<SeqTypes>,
+        cert: Verified<LightClientStateUpdateCertificateV2<SeqTypes>>,
     ) -> anyhow::Result<()> {
         self.state_certs()
             .await
@@ -12240,7 +12233,7 @@ mod test {
             .unwrap()
             .expect("the query above stored this cert");
         persistence
-            .insert_state_cert(UNDECIDED_EPOCH, cert.clone())
+            .insert_state_cert(UNDECIDED_EPOCH, Verified::new_unchecked(cert.clone()))
             .await
             .unwrap();
         let served = client
@@ -12274,9 +12267,21 @@ mod test {
             Duration::from_secs(2),
             &NoMetrics,
         );
+        let consensus = replay.node.handle().consensus();
+        let coordinator = consensus.membership_coordinator().await;
+        let upgrade_lock = consensus.upgrade_lock().await;
         for (epoch, cert) in &chain.state_certs {
+            let membership = coordinator
+                .stake_table_for_epoch(Some(EpochNumber::new(*epoch)))
+                .map_err(|err| anyhow::anyhow!("stake table of epoch {epoch}: {err:?}"))?;
+            let req = StateCertFor {
+                epoch: EpochNumber::new(*epoch),
+                stake_table: HSStakeTable::from_iter(membership.stake_table()),
+                epoch_height: chain.epoch_height(),
+                upgrade_lock: upgrade_lock.clone(),
+            };
             ensure!(
-                peers.try_fetch_state_cert(0, *epoch).await? == *cert,
+                peers.try_fetch_state_cert(0, &req).await?.inner() == cert,
                 "catchup of the epoch {epoch} state certificate"
             );
         }

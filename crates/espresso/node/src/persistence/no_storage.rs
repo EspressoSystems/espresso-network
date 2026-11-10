@@ -6,6 +6,7 @@ use async_trait::async_trait;
 use espresso_types::{
     AuthenticatedValidatorMap, Header, Leaf2, NetworkConfig, PubKey, RegisteredValidatorMap,
     StakeTableHash,
+    catchup::Verified,
     traits::{EventsPersistenceRead, MembershipPersistence, StakeTuple},
     v0::traits::{EventConsumer, PersistenceOptions, SequencerPersistence, StateCertPersistence},
     v0_3::{EventKey, IndexedStake, RegisteredValidator, RewardAmount, StakeTableEvent},
@@ -230,7 +231,7 @@ impl StateCertPersistence for NoStorage {
     async fn insert_state_cert(
         &self,
         _epoch: u64,
-        _cert: LightClientStateUpdateCertificateV2<SeqTypes>,
+        _cert: Verified<LightClientStateUpdateCertificateV2<SeqTypes>>,
     ) -> anyhow::Result<()> {
         Ok(())
     }
