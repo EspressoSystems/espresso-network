@@ -16,8 +16,8 @@ use espresso_types::{
     FeeAccountProof, FeeMerkleCommitment, FeeMerkleTree, Leaf2, NodeState, SeqTypes,
     ValidatedState,
     catchup::{
-        FeeAccountsAt, LeafAt, RewardAccountsV1At, RewardTreeV2At, Verified, VerifyError,
-        verify_chain_config,
+        FeeAccountsAt, LeafAt, LeafChain, LegacyChain, NewProtocolChain, RewardAccountsV1At,
+        RewardTreeV2At, Verified, VerifyError, verify_chain_config,
     },
     config::PublicNetworkConfig,
     v0::traits::StateCatchup,
@@ -131,6 +131,12 @@ pub struct StatePeers<ApiVer: StaticVersionType> {
     backoff: BackoffParams,
     /// Base timeout for per peer catchup request
     base_timeout: Duration,
+}
+
+/// A peer's leaf chain, with the cert2 that finalizes it when it is a new-protocol chain.
+enum LeafResponse {
+    Legacy(LegacyChain),
+    NewProtocol(NewProtocolChain, Box<Certificate2<SeqTypes>>),
 }
 
 impl<ApiVer: StaticVersionType> StatePeers<ApiVer> {
@@ -416,26 +422,34 @@ impl<ApiVer: StaticVersionType> StateCatchup for StatePeers<ApiVer> {
         self.fetch_verified(
             retry,
             |client| async move {
-                let chain = client
+                let leaves = client
                     .get::<Vec<Leaf2>>(&paths::catchup_leafchain(height))
                     .send()
                     .await
                     .with_context(|| format!("failed to fetch leaf chain at height {height}"))?;
-                let cert2 = match req.cert2_height(&chain)? {
-                    Some(cert2_height) => Some(
-                        client
+                match req.classify(leaves)? {
+                    LeafChain::Legacy(chain) => anyhow::Ok(LeafResponse::Legacy(chain)),
+                    LeafChain::NewProtocol(chain) => {
+                        let cert2_height = chain.cert2_height();
+                        let cert2 = client
                             .get::<Certificate2<SeqTypes>>(&paths::catchup_cert2(cert2_height))
                             .send()
                             .await
                             .with_context(|| {
                                 format!("failed to fetch cert2 for height {cert2_height}")
-                            })?,
-                    ),
-                    None => None,
-                };
-                anyhow::Ok((chain, cert2))
+                            })?;
+                        Ok(LeafResponse::NewProtocol(chain, Box::new(cert2)))
+                    },
+                }
             },
-            |(chain, cert2)| req.verify(chain, cert2),
+            |response| async move {
+                match response {
+                    LeafResponse::Legacy(chain) => req.verify_legacy(chain).await,
+                    LeafResponse::NewProtocol(chain, cert2) => {
+                        req.verify_new_protocol(chain, *cert2).await
+                    },
+                }
+            },
         )
         .await
     }
@@ -1682,7 +1696,9 @@ mod test {
 
     use espresso_types::v0::mock::MockStateCatchup;
     use hotshot_types::{data::EpochNumber, traits::metrics::NoMetrics};
+    use light_client::testing::leaf_chain_with_upgrade;
     use test_utils::reserve_tcp_port;
+    use versions::{DRB_AND_HEADER_UPGRADE_VERSION, NEW_PROTOCOL_VERSION, Upgrade};
 
     use super::*;
     use crate::SequencerApiVersion;
@@ -1888,6 +1904,59 @@ mod test {
         assert_eq!((bad.requests, bad.failures), (11, 1));
         let good = score(&peers, 1).await;
         assert_eq!((good.requests, good.failures), (11, 5));
+    }
+
+    /// Leaves at heights 1 to 6, legacy up to 3 and new-protocol from 4.
+    async fn cutover_leaves() -> Vec<Leaf2> {
+        leaf_chain_with_upgrade(
+            1..=6,
+            4,
+            Upgrade::new(DRB_AND_HEADER_UPGRADE_VERSION, NEW_PROTOCOL_VERSION),
+        )
+        .await
+        .into_iter()
+        .map(|leaf| leaf.leaf().clone())
+        .collect()
+    }
+
+    fn classify_at(height: u64, leaves: Vec<Leaf2>) -> Result<LeafChain, VerifyError> {
+        LeafAt {
+            height,
+            coordinator: NodeState::mock().coordinator,
+        }
+        .classify(leaves)
+    }
+
+    #[tokio::test]
+    async fn a_legacy_leaf_put_first_does_not_downgrade_a_new_protocol_height() {
+        let leaves = cutover_leaves().await;
+        let response = vec![leaves[2].clone(), leaves[3].clone(), leaves[4].clone()];
+
+        let chain = classify_at(4, response).unwrap();
+
+        assert!(
+            matches!(&chain, LeafChain::NewProtocol(chain) if chain.cert2_height() == 5),
+            "{chain:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_legacy_height_stays_legacy_when_its_chain_crosses_the_cutover() {
+        let leaves = cutover_leaves().await;
+        let response = vec![leaves[2].clone(), leaves[3].clone(), leaves[4].clone()];
+
+        let chain = classify_at(3, response).unwrap();
+
+        assert!(matches!(chain, LeafChain::Legacy(_)), "{chain:?}");
+    }
+
+    #[tokio::test]
+    async fn a_chain_without_the_requested_leaf_is_invalid() {
+        let leaves = cutover_leaves().await;
+
+        let err = classify_at(9, leaves).unwrap_err();
+
+        assert!(matches!(err, VerifyError::Invalid(_)), "{err:#}");
     }
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
