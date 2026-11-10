@@ -5,6 +5,7 @@ use hotshot_types::{
 };
 use serde::{Deserialize, Serialize};
 
+pub mod catchup;
 pub mod config;
 mod header;
 mod impls;

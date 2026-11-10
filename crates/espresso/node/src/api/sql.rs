@@ -2404,6 +2404,7 @@ mod tests {
     use espresso_types::{
         BLOCK_MERKLE_TREE_HEIGHT, BackoffParams, BlockMerkleTree, FEE_MERKLE_TREE_HEIGHT,
         FeeAccount, FeeAmount, FeeMerkleTree, NodeState,
+        catchup::FeeAccountsAt,
         v0::traits::StateCatchup,
         v0_4::{REWARD_MERKLE_TREE_V2_HEIGHT, RewardMerkleTreeV2},
     };
@@ -2578,10 +2579,20 @@ mod tests {
         let catchup = SqlStateCatchup::new(storage, BackoffParams::disabled());
 
         let proofs = catchup
-            .try_fetch_accounts(0, &instance, height, view, fee_root, &[account, absent])
+            .try_fetch_accounts(
+                0,
+                &instance,
+                &FeeAccountsAt {
+                    height,
+                    view,
+                    root: fee_root,
+                    accounts: vec![account, absent],
+                },
+            )
             .await
             .unwrap();
         let balances = proofs
+            .inner()
             .iter()
             .map(|proof| proof.verify(&fee_root).unwrap())
             .collect::<Vec<_>>();
@@ -2597,7 +2608,16 @@ mod tests {
         // A root the snapshot does not have is rejected, not trusted.
         let wrong_root = FeeMerkleTree::new(FEE_MERKLE_TREE_HEIGHT).commitment();
         catchup
-            .try_fetch_accounts(0, &instance, height, view, wrong_root, &[account])
+            .try_fetch_accounts(
+                0,
+                &instance,
+                &FeeAccountsAt {
+                    height,
+                    view,
+                    root: wrong_root,
+                    accounts: vec![account],
+                },
+            )
             .await
             .unwrap_err();
     }

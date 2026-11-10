@@ -3553,6 +3553,7 @@ mod test {
         FeeAmount, Header, L1ClientOptions, NamespaceId, NamespaceProofQueryData, NsProof,
         RegisteredValidatorMap, RewardDistributor, StakeTableState, StateCertQueryDataV1,
         StateCertQueryDataV2, TEST_UPGRADE, ValidatedState, ValidatorLeaderCounts,
+        catchup::LeafAt,
         config::PublicHotShotConfig,
         traits::{NullEventConsumer, PersistenceOptions},
         v0_3::{AuthenticatedValidator, COMMISSION_BASIS_POINTS, Fetcher, RewardAmount},
@@ -14579,10 +14580,15 @@ mod test {
             &NoMetrics,
         );
 
-        let leaf = catchup.fetch_leaf(coordinator, TARGET_HEIGHT).await?;
+        let leaf = catchup
+            .fetch_leaf(&LeafAt {
+                height: TARGET_HEIGHT,
+                coordinator,
+            })
+            .await?;
 
         assert_eq!(
-            leaf.height(),
+            leaf.inner().height(),
             TARGET_HEIGHT,
             "fetch_leaf must return the leaf at exactly the requested height"
         );

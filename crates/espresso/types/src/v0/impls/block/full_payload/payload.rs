@@ -197,7 +197,8 @@ impl BlockPayload<SeqTypes> for Payload {
                     .as_ref()
                     .fetch_chain_config(validated_state_cf.commit())
                     .await
-                    .map_err(|err| BlockBuildingError::MissingChainConfig(format!("{err:#}")))?,
+                    .map_err(|err| BlockBuildingError::MissingChainConfig(format!("{err:#}")))?
+                    .into_inner(),
             }
         };
 

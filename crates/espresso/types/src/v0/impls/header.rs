@@ -45,6 +45,7 @@ use crate::{
     BlockMerkleCommitment, FeeAccount, FeeAmount, FeeInfo, FeeMerkleCommitment, Header,
     L1BlockInfo, L1Snapshot, Leaf2, NamespaceId, NsIndex, NsTable, PayloadByteLen, SeqTypes,
     TimestampMillis,
+    catchup::Verified,
     eth_signature_key::BuilderSignature,
     v0::{
         header::{EitherOrVersion, VersionedHeader},
@@ -955,6 +956,7 @@ impl Header {
                     .as_ref()
                     .fetch_chain_config(validated_cf.commit())
                     .await
+                    .map(Verified::into_inner)
             },
         }
     }

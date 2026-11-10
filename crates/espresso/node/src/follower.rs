@@ -26,6 +26,7 @@ use espresso_api::error::SubmitError;
 use espresso_types::{
     Certificate2, ChainConfig, Header, Leaf2, NodeState, PubKey, SeqTypes, Transaction,
     ValidatedState,
+    catchup::Verified,
     traits::MembershipPersistence,
     v0::traits::{SequencerPersistence, StateCatchup, StateCertPersistence},
     v0_1::ChainId,
@@ -789,11 +790,11 @@ impl<P: SequencerPersistence> Follower<P> {
         }
         let resolved = match resolvable.resolve() {
             Some(chain_config) => Ok(chain_config),
-            None => {
-                self.state_catchup
-                    .fetch_chain_config(resolvable.commit())
-                    .await
-            },
+            None => self
+                .state_catchup
+                .fetch_chain_config(resolvable.commit())
+                .await
+                .map(Verified::into_inner),
         };
         match resolved {
             Ok(chain_config) => *self.chain_config.write().await = chain_config,
