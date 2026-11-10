@@ -5,8 +5,8 @@
     anchor_view: <a class="enum" href="https://doc.rust-lang.org/1.99.1/core/option/enum.Option.html" title="enum core::option::Option">Option</a>&lt;<a class="struct" href="../../hotshot_types/data/struct.ViewNumber.html" title="struct hotshot_types::data::ViewNumber">ViewNumber</a>&gt;,
     metrics: <a class="struct" href="struct.DecideProcessorMetrics.html" title="struct espresso_node::context::DecideProcessorMetrics">DecideProcessorMetrics</a>,
 )<div class="where">where
-    P: SequencerPersistence,
-    C: PersistenceEventConsumer + 'static,</div></code></pre><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><p>Turns persisted decided leaves into query-service decide events and GCs processed data.
+    P: <a class="trait" href="../../espresso_types/v0/traits/trait.SequencerPersistence.html" title="trait espresso_types::v0::traits::SequencerPersistence">SequencerPersistence</a>,
+    C: <a class="trait" href="../../espresso_types/v0/traits/trait.EventConsumer.html" title="trait espresso_types::v0::traits::EventConsumer">PersistenceEventConsumer</a> + 'static,</div></code></pre><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><p>Turns persisted decided leaves into query-service decide events and GCs processed data.
 Decoupled from <a href="fn.handle_events.html" title="fn espresso_node::context::handle_events"><code>handle_events</code></a> so slow ingestion/GC can’t stall (or drop) consensus events;
 cursor-driven, so it can lag without losing data.</p>
 </div></details></section></div></main></body></html>
