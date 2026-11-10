@@ -29,10 +29,11 @@ use versions::{EPOCH_VERSION, NEW_PROTOCOL_VERSION, Upgrade};
 #[cfg(feature = "node")]
 use crate::{Certificate2, Leaf2};
 use crate::{
-    FeeAccount, FeeAccountProof, FeeMerkleCommitment, FeeMerkleTree, SeqTypes,
+    FEE_MERKLE_TREE_HEIGHT, FeeAccount, FeeAccountProof, FeeMerkleCommitment, FeeMerkleTree,
+    SeqTypes,
     v0_3::{
-        ChainConfig, RewardAccountProofV1, RewardAccountV1, RewardAmount, RewardMerkleCommitmentV1,
-        RewardMerkleTreeV1,
+        ChainConfig, REWARD_MERKLE_TREE_V1_HEIGHT, RewardAccountProofV1, RewardAccountV1,
+        RewardAmount, RewardMerkleCommitmentV1, RewardMerkleTreeV1,
     },
     v0_4::{
         PermittedRewardMerkleTreeV2, RewardAccountV2, RewardMerkleCommitmentV2,
@@ -93,6 +94,13 @@ impl FeeAccountsAt {
         &self,
         tree: &FeeMerkleTree,
     ) -> Result<Verified<Vec<FeeAccountProof>>, VerifyError> {
+        // `prove` sizes its lookup by the tree's own height, which comes from the peer.
+        if tree.height() != FEE_MERKLE_TREE_HEIGHT {
+            return Err(VerifyError::Invalid(anyhow!(
+                "fee merkle tree has height {}, expected {FEE_MERKLE_TREE_HEIGHT}",
+                tree.height()
+            )));
+        }
         self.accounts
             .iter()
             .map(|account| {
@@ -127,6 +135,13 @@ impl RewardAccountsV1At {
         &self,
         tree: &RewardMerkleTreeV1,
     ) -> Result<Verified<Vec<RewardAccountProofV1>>, VerifyError> {
+        // `prove` sizes its lookup by the tree's own height, which comes from the peer.
+        if tree.height() != REWARD_MERKLE_TREE_V1_HEIGHT {
+            return Err(VerifyError::Invalid(anyhow!(
+                "v1 reward merkle tree has height {}, expected {REWARD_MERKLE_TREE_V1_HEIGHT}",
+                tree.height()
+            )));
+        }
         self.accounts
             .iter()
             .map(|account| {
@@ -393,6 +408,31 @@ mod tests {
             format!("{err:#}").contains("response missing fee account"),
             "{err:#}"
         );
+    }
+
+    #[test]
+    fn fee_accounts_reject_a_tree_of_another_height() {
+        let tree = FeeMerkleTree::new(FEE_MERKLE_TREE_HEIGHT + 1);
+        let req = fee_accounts_at(tree.commitment(), vec![account(1)]);
+
+        let err = req.verify(&tree).unwrap_err();
+
+        assert!(format!("{err:#}").contains("has height"), "{err:#}");
+    }
+
+    #[test]
+    fn v1_reward_accounts_reject_a_tree_of_another_height() {
+        let tree = RewardMerkleTreeV1::new(REWARD_MERKLE_TREE_V1_HEIGHT + 1);
+        let req = RewardAccountsV1At {
+            height: 1,
+            view: ViewNumber::new(1),
+            root: tree.commitment(),
+            accounts: vec![RewardAccountV1(Address::repeat_byte(1))],
+        };
+
+        let err = req.verify(&tree).unwrap_err();
+
+        assert!(format!("{err:#}").contains("has height"), "{err:#}");
     }
 
     #[test]
