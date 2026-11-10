@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"struct":["UpgradeConfig","UpgradeConstants"]};
+window.SIDEBAR_ITEMS = {"struct":["UpgradeConfig"]};
