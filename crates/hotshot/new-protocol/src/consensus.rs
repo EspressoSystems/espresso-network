@@ -1699,15 +1699,6 @@ impl<T: NodeType> Consensus<T> {
             // The proposal itself may now be decidable (e.g. cert2 arrived first
             // and triggered the fetch).
             self.maybe_decide(view, outbox);
-            // A timeout certificate's lock asked for the block: the node needs
-            // its payload as well to lock on it, if the lock is still later
-            // than its own. Asked for after the decide, which changes whether
-            // the payload is needed.
-            if let Some((lock, block_number)) = self.lock_block_fetches.remove(&commit)
-                && self.lock_view().is_none_or(|own| own < lock)
-            {
-                self.request_lock_payload(lock, commit, block_number, outbox);
-            }
             // Views extending it may be blocked on it.
             let extending_views: BTreeSet<ViewNumber> = self
                 .proposals
@@ -1721,6 +1712,16 @@ impl<T: NodeType> Consensus<T> {
                 self.maybe_decide(extending_view, outbox);
             }
             self.retry_later_certificates(view, outbox);
+            // A timeout certificate's lock asked for the block: the node needs
+            // its payload as well to lock on it, if the lock is still later
+            // than its own. Asked for after every decide the block's arrival
+            // allows, at its own view or a re-vote's, since a decide changes
+            // whether the payload is needed.
+            if let Some((lock, block_number)) = self.lock_block_fetches.remove(&commit)
+                && self.lock_view().is_none_or(|own| own < lock)
+            {
+                self.request_lock_payload(lock, commit, block_number, outbox);
+            }
             self.maybe_propose(view + 1, outbox);
         }
     }

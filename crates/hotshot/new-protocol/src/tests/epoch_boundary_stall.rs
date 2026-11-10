@@ -555,6 +555,50 @@ async fn fetched_lock_block_decided_as_a_last_block_fetches_no_payload() {
     assert_eq!(payload_requests(&harness, view(10)), 0);
 }
 
+/// The same holds when the block is decided by a re-vote's `Certificate2` at a
+/// later view, which its arrival also allows.
+#[tokio::test]
+async fn fetched_lock_block_decided_by_a_revote_fetches_no_payload() {
+    let test_data = TestData::new_with_epoch_height(BOUNDARY + 1, EPOCH_HEIGHT).await;
+    let boundary = &test_data.views[BOUNDARY];
+    let leaf = proposal_commitment(&boundary.proposal.data);
+    let probe =
+        ConsensusHarness::new_with_upgrade_lock(0, EPOCH_HEIGHT, test_timeout_epoch_lock()).await;
+    // Not the leader of the block, which would build its own block there.
+    let node = non_leader(&probe, boundary.view_number, epoch(1));
+    let mut harness =
+        node_before_the_boundary_block(node, &test_data, test_timeout_epoch_lock()).await;
+    let membership = harness
+        .membership_coordinator
+        .membership_for_epoch(Some(epoch(1)))
+        .unwrap();
+    let (pk, sk) = BLSPubKey::generated_from_seed_indexed([0u8; 32], 0);
+    let block = BlockHeader::<TestTypes>::block_number(&boundary.proposal.data.block_header);
+    let cert2_12 = build_cert2(leaf, epoch(1), block, &membership, view(12), &pk, &sk);
+    harness
+        .apply(ConsensusInput::Certificate2(ValidCert::new(
+            cert2_12,
+            epoch(1),
+        )))
+        .await;
+    let tc = timeout_cert(&harness, view(10), Some(boundary.cert1.clone()));
+    harness.apply(timeout_cert_input(tc)).await;
+    assert!(
+        fetches(&harness, boundary.cert1.data.leaf_commit),
+        "setup: the lock asks for its block"
+    );
+
+    harness
+        .apply(ConsensusInput::FetchedProposal(boundary.proposal_message()))
+        .await;
+
+    assert!(
+        any(harness.outputs(), |o| decides_view(o, 10)),
+        "setup: the block is decided as it arrives"
+    );
+    assert_eq!(payload_requests(&harness, view(10)), 0);
+}
+
 /// The boundary certificate is persisted once, however often a timeout
 /// certificate brings it again as its lock.
 #[tokio::test]
