@@ -54,7 +54,7 @@ pub struct HeaderRequest<T: NodeType> {
     pub payload_commitment: VidCommitment,
     pub builder_commitment: BuilderCommitment,
     pub metadata: <T::BlockPayload as BlockPayload<T>>::Metadata,
-    pub builder_fee: BuilderFee<T>,
+    pub builder_fee: Option<BuilderFee<T>>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

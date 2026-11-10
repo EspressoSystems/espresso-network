@@ -135,6 +135,7 @@ impl From<&Header> for proto::HeaderResponse {
             Header::V5(_) => Shape::V5(header_v5(header)),
             Header::V6(_) => Shape::V6(header_v5(header)),
             Header::V7(_) => Shape::V7(header_v5(header)),
+            Header::V8(_) => Shape::V8(header_v8(header)),
         };
         proto::HeaderResponse {
             header: Some(shape),
@@ -241,6 +242,35 @@ fn header_v5(header: &Header) -> proto::HeaderV5 {
         fee_merkle_tree_root: header.fee_merkle_tree_root().to_string(),
         fee_info: header.fee_info().first().map(Into::into),
         builder_signature: header.builder_signature().first().map(Into::into),
+        reward_merkle_tree_root: reward_merkle_tree_root(header),
+        total_reward_distributed: header
+            .total_reward_distributed()
+            .expect("0.4 and later headers carry total_reward_distributed")
+            .to_string(),
+        next_stake_table_hash: header.next_stake_table_hash().map(|hash| hash.to_string()),
+        leader_counts: header
+            .leader_counts()
+            .expect("0.5 and later headers carry leader_counts")
+            .iter()
+            .map(|count| *count as u32)
+            .collect(),
+    }
+}
+
+fn header_v8(header: &Header) -> proto::HeaderV8 {
+    proto::HeaderV8 {
+        chain_config: Some(header.chain_config().into()),
+        height: header.height(),
+        timestamp: header.timestamp_internal(),
+        timestamp_millis: header.timestamp_millis_internal(),
+        l1_head: header.l1_head(),
+        l1_finalized: header.l1_finalized().map(Into::into),
+        payload_commitment: header.payload_commitment().to_string(),
+        ns_table: Some(proto::NsTable {
+            bytes: header.ns_table().encode().to_vec(),
+        }),
+        block_merkle_tree_root: header.block_merkle_tree_root().to_string(),
+        fee_merkle_tree_root: header.fee_merkle_tree_root().to_string(),
         reward_merkle_tree_root: reward_merkle_tree_root(header),
         total_reward_distributed: header
             .total_reward_distributed()

@@ -432,6 +432,43 @@ async fn test_leader_buffer_drain() {
     assert!(b.drain(view(2)).is_empty(), "second drain should be empty");
 }
 
+#[tokio::test]
+async fn test_builder_fee_disappears_at_the_upgrade_view() {
+    let first_view = view(5);
+    let data = UpgradeProposalData {
+        old_version: TIMEOUT_EPOCH_VERSION,
+        new_version: versions::NO_BUILDER_FEE_VERSION,
+        decide_by: first_view,
+        new_version_hash: Vec::new(),
+        old_version_last_view: first_view - 1,
+        new_version_first_view: first_view,
+    };
+    let cert = UpgradeCertificate::new(data.clone(), data.commit(), first_view, None, PhantomData);
+    let upgrade_lock = UpgradeLock::from_certificate(
+        Upgrade::new(TIMEOUT_EPOCH_VERSION, versions::NO_BUILDER_FEE_VERSION),
+        &Some(cert),
+    );
+    let mut builder = BlockBuilder::new(
+        Arc::new(TestInstanceState::default()),
+        mock_membership(),
+        small_config(),
+        upgrade_lock,
+    );
+    let parent = TestData::new(2).await.views[0].proposal.data.clone();
+    for target_view in [4, 5] {
+        builder.on_transactions(tx_msg(view(target_view - 1), vec![tx(target_view as u8)]));
+        builder.request_block(BlockAndHeaderRequest {
+            view: view(target_view),
+            epoch: epoch(),
+            parent_proposal: parent.clone(),
+        });
+    }
+    for _ in 0..2 {
+        let output = builder.next().await.unwrap().unwrap();
+        assert_eq!(output.builder_fee.is_some(), output.view < first_view);
+    }
+}
+
 /// Two paths can emit `RequestBlockAndHeader` for the same view N+1 with
 /// different parents:
 ///   1. `handle_proposal_with_vid_share(P_N)` — parent = P_N

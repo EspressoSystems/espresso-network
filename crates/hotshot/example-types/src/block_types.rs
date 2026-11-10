@@ -345,7 +345,7 @@ impl<
         payload_commitment: VidCommitment,
         builder_commitment: BuilderCommitment,
         metadata: <TYPES::BlockPayload as BlockPayload<TYPES>>::Metadata,
-        _builder_fee: BuilderFee<TYPES>,
+        _builder_fee: Option<BuilderFee<TYPES>>,
         version: Version,
         _view_number: u64,
     ) -> Result<Self, Self::Error> {

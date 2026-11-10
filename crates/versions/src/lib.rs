@@ -20,7 +20,8 @@ pub const TIMEOUT_EPOCH_VERSION: Version = version(0, 7);
 pub const NO_BUILDER_COMMITMENT_VERSION: Version = version(0, 7);
 // The LargeBlock chain-config change ships in the same upgrade as the timeout-epoch binding.
 pub const LARGE_BLOCK_VERSION: Version = TIMEOUT_EPOCH_VERSION;
-pub const MAX_SUPPORTED_VERSION: Version = TIMEOUT_EPOCH_VERSION;
+pub const NO_BUILDER_FEE_VERSION: Version = version(0, 8);
+pub const MAX_SUPPORTED_VERSION: Version = NO_BUILDER_FEE_VERSION;
 
 // Known upgrade hashes:
 

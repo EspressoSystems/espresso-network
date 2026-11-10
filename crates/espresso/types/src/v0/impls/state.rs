@@ -761,6 +761,9 @@ impl<'a> ValidatedTransition<'a> {
     /// Validate that [`FeeAmount`] that is
     /// sufficient for block size.
     fn validate_fee(&self) -> Result<(), ProposalValidationError> {
+        if self.version >= versions::NO_BUILDER_FEE_VERSION {
+            return Ok(());
+        }
         // TODO this should be updated to `base_fee * bundle_size` when we have
         // VID per bundle or namespace.
         let Some(amount) = self.proposal.header.fee_info().amount() else {
@@ -991,6 +994,9 @@ fn validate_builder_fee(
     proposed_header: &Header,
     version: Version,
 ) -> Result<(), BuilderValidationError> {
+    if version >= versions::NO_BUILDER_FEE_VERSION {
+        return Ok(());
+    }
     let fee_info = proposed_header.fee_info();
     let builder_signature = proposed_header.builder_signature();
 
@@ -1654,7 +1660,7 @@ mod test {
         UpgradeMode, UpgradeType, ViewBasedUpgrade,
         eth_signature_key::{BuilderSignature, EthKeyPair},
         mock::MockStateCatchup,
-        v0_1, v0_2, v0_3, v0_4, v0_5, v0_6, v0_7,
+        v0_1, v0_2, v0_3, v0_4, v0_5, v0_6, v0_7, v0_8,
     };
 
     impl Transaction {
@@ -1720,6 +1726,12 @@ mod test {
                     timestamp_millis,
                     ..parent.clone()
                 }),
+                Header::V8(parent) => Header::V8(v0_8::Header {
+                    height: parent.height + 1,
+                    timestamp,
+                    timestamp_millis,
+                    ..parent.clone()
+                }),
             }
         }
         /// Replaces builder signature w/ invalid one.
@@ -1766,6 +1778,7 @@ mod test {
                     builder_signature: Some(sig),
                     ..header.clone()
                 }),
+                Header::V8(header) => Header::V8(header.clone()),
             }
         }
 
@@ -1820,6 +1833,7 @@ mod test {
                     builder_signature,
                     ..parent.clone()
                 }),
+                Header::V8(parent) => Header::V8(parent.clone()),
             }
         }
     }
@@ -1926,6 +1940,78 @@ mod test {
             ),
             err
         );
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_fee_validation_upgrade_boundary() {
+        for version in [
+            versions::TIMEOUT_EPOCH_VERSION,
+            versions::NO_BUILDER_FEE_VERSION,
+        ] {
+            let instance = NodeState::mock()
+                .with_genesis_version(version)
+                .with_current_version(version)
+                .with_chain_config(ChainConfig {
+                    base_fee: 1000.into(),
+                    max_block_size: 10.into(),
+                    ..Default::default()
+                });
+            let (payload, metadata) =
+                Payload::from_transactions(&[], &instance.genesis_state, &instance)
+                    .await
+                    .unwrap();
+            let header = Header::genesis(&instance, payload, &metadata, version);
+            let transition =
+                ValidatedTransition::mock(instance.clone(), &header, Proposal::new(&header, 20));
+            let opposite_version = if version == versions::TIMEOUT_EPOCH_VERSION {
+                versions::NO_BUILDER_FEE_VERSION
+            } else {
+                versions::TIMEOUT_EPOCH_VERSION
+            };
+            let mut mismatched =
+                ValidatedTransition::mock(instance.clone(), &header, Proposal::new(&header, 20));
+            mismatched.version = opposite_version;
+            assert_eq!(
+                mismatched.validate().unwrap_err(),
+                ProposalValidationError::HeaderVersionMismatch {
+                    expected: opposite_version,
+                    proposal: version,
+                }
+            );
+            // Fee-free blocks must still respect the configured payload limit and frozen fee root.
+            assert!(matches!(
+                transition.validate_block_size(),
+                Err(ProposalValidationError::MaxBlockSizeExceeded { .. })
+            ));
+            if version < versions::NO_BUILDER_FEE_VERSION {
+                assert!(matches!(
+                    transition.validate_builder_fee(),
+                    Err(ProposalValidationError::BuilderValidationError(
+                        BuilderValidationError::FeeAndSignatureCountMismatch { .. }
+                    ))
+                ));
+                assert!(matches!(
+                    transition.validate_fee(),
+                    Err(ProposalValidationError::InsufficientFee { .. })
+                ));
+                let invalid = header.invalid_builder_signature();
+                assert!(matches!(
+                    validate_builder_fee(&invalid, version),
+                    Err(BuilderValidationError::InvalidBuilderSignature)
+                ));
+            } else {
+                transition.validate_builder_fee().unwrap();
+                transition.validate_fee().unwrap();
+                transition.validate_fee_merkle_tree().unwrap();
+                let mut invalid = header.clone();
+                let mut changed_state = instance.genesis_state.clone();
+                changed_state.prefund_account(FeeAccount::default(), 1u64.into());
+                *invalid.fee_merkle_tree_root_mut() = changed_state.fee_merkle_tree.commitment();
+                let invalid_transition =
+                    ValidatedTransition::mock(instance, &header, Proposal::new(&invalid, 20));
+                assert!(invalid_transition.validate_fee_merkle_tree().is_err());
+            }
+        }
     }
 
     /// A state holding only a chain config commitment takes the full config from the instance
@@ -2490,6 +2576,7 @@ mod test {
                 fee_info: FeeInfo::new(account, data),
                 ..header
             }),
+            Header::V8(header) => Header::V8(header.clone()),
         };
 
         let version = header.version();

@@ -170,7 +170,8 @@ pub trait BlockHeader<TYPES: NodeType>:
     type Error: Error + Debug + Send + Sync;
 
     /// Build a header with the parent validate state, instance-level state, parent leaf, payload
-    /// and builder commitments, and metadata. This is only used in pre-marketplace versions
+    /// and builder commitments, and metadata.
+    /// `builder_fee` is absent from protocol 0.8 onward; historical versions require it.
     #[allow(clippy::too_many_arguments)]
     fn new(
         parent_state: &TYPES::ValidatedState,
@@ -179,7 +180,7 @@ pub trait BlockHeader<TYPES: NodeType>:
         payload_commitment: VidCommitment,
         builder_commitment: BuilderCommitment,
         metadata: <TYPES::BlockPayload as BlockPayload<TYPES>>::Metadata,
-        builder_fee: BuilderFee<TYPES>,
+        builder_fee: Option<BuilderFee<TYPES>>,
         version: Version,
         view_number: u64,
     ) -> impl Future<Output = Result<Self, Self::Error>> + Send;

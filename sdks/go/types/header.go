@@ -12,6 +12,7 @@ import (
 	v05 "github.com/EspressoSystems/espresso-network/sdks/go/types/v0/v0_5"
 	v06 "github.com/EspressoSystems/espresso-network/sdks/go/types/v0/v0_6"
 	v07 "github.com/EspressoSystems/espresso-network/sdks/go/types/v0/v0_7"
+	v08 "github.com/EspressoSystems/espresso-network/sdks/go/types/v0/v0_8"
 )
 
 // Republic
@@ -30,6 +31,7 @@ type Header0_4 = v04.Header
 type Header0_5 = v05.Header
 type Header0_6 = v06.Header
 type Header0_7 = v07.Header
+type Header0_8 = v08.Header
 
 type Bytes = common_types.Bytes
 
@@ -193,10 +195,11 @@ func parseHeader(data []byte) (HeaderInterface, error) {
 		header = new(v05.Header)
 	case 6:
 		header = new(v06.Header)
+	case 8:
+		header = new(v08.Header)
 	default:
-		// A version this SDK does not know yet is read through the newest shape it does, as each
-		// upgrade so far has kept the fields of the one before. `Version` and `Commit` then
-		// report that shape's version, not the header's.
+		// Preserve the historical 0.7 fallback for unrecognized minor versions.
+		// Version and Commit report the fallback shape's version, not the unrecognized tag.
 		header = new(v07.Header)
 	}
 	if err := json.Unmarshal(rawHeader.Fields, header); err != nil {

@@ -59,7 +59,7 @@ use crate::{
     v0_4::{self, RewardAccountV2, RewardMerkleCommitmentV2},
     v0_5::{self, LeaderCounts, MAX_VALIDATORS},
     v0_6::{self},
-    v0_7,
+    v0_7, v0_8,
 };
 
 impl v0_1::Header {
@@ -125,6 +125,11 @@ impl Committable for Header {
                 .u64_field("version_minor", 7)
                 .field("fields", fields.commit())
                 .finalize(),
+            Self::V8(fields) => RawCommitmentBuilder::new(&Self::tag())
+                .u64_field("version_major", 0)
+                .u64_field("version_minor", 8)
+                .field("fields", fields.commit())
+                .finalize(),
         }
     }
 
@@ -169,6 +174,11 @@ impl Serialize for Header {
             .serialize(serializer),
             Self::V7(fields) => VersionedHeader {
                 version: EitherOrVersion::Version(Version { major: 0, minor: 7 }),
+                fields: fields.clone(),
+            }
+            .serialize(serializer),
+            Self::V8(fields) => VersionedHeader {
+                version: EitherOrVersion::Version(Version { major: 0, minor: 8 }),
                 fields: fields.clone(),
             }
             .serialize(serializer),
@@ -233,6 +243,10 @@ impl<'de> Deserialize<'de> for Header {
                         seq.next_element()?
                             .ok_or_else(|| de::Error::missing_field("fields"))?,
                     )),
+                    EitherOrVersion::Version(Version { major: 0, minor: 8 }) => Ok(Header::V8(
+                        seq.next_element()?
+                            .ok_or_else(|| de::Error::missing_field("fields"))?,
+                    )),
                     EitherOrVersion::Version(v) => {
                         Err(serde::de::Error::custom(format!("invalid version {v:?}")))
                     },
@@ -274,6 +288,9 @@ impl<'de> Deserialize<'de> for Header {
                             serde_json::from_value(fields.clone()).map_err(de::Error::custom)?,
                         )),
                         EitherOrVersion::Version(Version { major: 0, minor: 7 }) => Ok(Header::V7(
+                            serde_json::from_value(fields.clone()).map_err(de::Error::custom)?,
+                        )),
+                        EitherOrVersion::Version(Version { major: 0, minor: 8 }) => Ok(Header::V8(
                             serde_json::from_value(fields.clone()).map_err(de::Error::custom)?,
                         )),
                         EitherOrVersion::Version(v) => {
@@ -337,6 +354,7 @@ impl Header {
             Self::V5(_) => Version { major: 0, minor: 5 },
             Self::V6(_) => Version { major: 0, minor: 6 },
             Self::V7(_) => Version { major: 0, minor: 7 },
+            Self::V8(_) => Version { major: 0, minor: 8 },
         }
     }
     #[allow(clippy::too_many_arguments)]
@@ -362,7 +380,10 @@ impl Header {
         leader_counts: Option<LeaderCounts>,
     ) -> Self {
         // Ensure FeeInfo contains at least 1 element
-        assert!(!fee_info.is_empty(), "Invalid fee_info length: 0");
+        assert!(
+            version >= versions::NO_BUILDER_FEE_VERSION || !fee_info.is_empty(),
+            "Invalid fee_info length: 0"
+        );
 
         match (version.major, version.minor) {
             (0, 1) => Self::V1(v0_1::Header {
@@ -487,6 +508,22 @@ impl Header {
                 next_stake_table_hash,
                 leader_counts: leader_counts.expect("leader_counts required for V7 header"),
             }),
+            (0, 8) => Self::V8(v0_8::Header {
+                chain_config: chain_config.into(),
+                height,
+                timestamp,
+                timestamp_millis: TimestampMillis::from_millis(timestamp_millis),
+                l1_head,
+                l1_finalized,
+                payload_commitment,
+                ns_table,
+                block_merkle_tree_root,
+                fee_merkle_tree_root,
+                reward_merkle_tree_root: reward_merkle_tree_root_v2,
+                total_reward_distributed: total_reward_distributed.unwrap_or_default(),
+                next_stake_table_hash,
+                leader_counts: leader_counts.expect("leader_counts required for V8 header"),
+            }),
             // This case should never occur
             // but if it does, we must panic
             // because we don't have the versioned types for this version
@@ -499,6 +536,7 @@ impl Header {
             Self::V4(fields) => fields.next_stake_table_hash,
             Self::V5(fields) | Self::V6(fields) => fields.next_stake_table_hash,
             Self::V7(fields) => fields.next_stake_table_hash,
+            Self::V8(fields) => fields.next_stake_table_hash,
             _ => None,
         }
     }
@@ -509,6 +547,7 @@ impl Header {
         match self {
             Self::V5(fields) | Self::V6(fields) => Some(&fields.leader_counts),
             Self::V7(fields) => Some(&fields.leader_counts),
+            Self::V8(fields) => Some(&fields.leader_counts),
             _ => None,
         }
     }
@@ -524,6 +563,10 @@ impl Header {
                 true
             },
             Self::V7(fields) => {
+                fields.next_stake_table_hash = Some(hash);
+                true
+            },
+            Self::V8(fields) => {
                 fields.next_stake_table_hash = Some(hash);
                 true
             },
@@ -543,6 +586,7 @@ macro_rules! field {
             Self::V5(data) => &data.$name,
             Self::V6(data) => &data.$name,
             Self::V7(data) => &data.$name,
+            Self::V8(data) => &data.$name,
         }
     };
 }
@@ -557,6 +601,7 @@ macro_rules! field_mut {
             Self::V5(data) => &mut data.$name,
             Self::V6(data) => &mut data.$name,
             Self::V7(data) => &mut data.$name,
+            Self::V8(data) => &mut data.$name,
         }
     };
 }
@@ -570,7 +615,7 @@ impl Header {
         ns_table: NsTable,
         parent_leaf: &Leaf2,
         mut l1: L1Snapshot,
-        builder_fee: Vec<BuilderFee<SeqTypes>>,
+        builder_fee: Option<BuilderFee<SeqTypes>>,
         mut timestamp: u64,
         mut timestamp_millis: u64,
         mut state: ValidatedState,
@@ -657,35 +702,56 @@ impl Header {
             .context("missing blocks frontier")?;
         let block_merkle_tree_root = state.block_merkle_tree.commitment();
 
-        let fee_info = FeeInfo::from_builder_fees(builder_fee.clone());
-
-        let builder_signature: Vec<BuilderSignature> =
-            builder_fee.iter().map(|e| e.fee_signature).collect();
-
         let fee_merkle_tree_root = state.fee_merkle_tree.commitment();
 
         let header = match (version.major, version.minor) {
-            (0, 6) => Self::V6(v0_6::Header {
-                chain_config: chain_config.into(),
-                height,
-                timestamp,
-                timestamp_millis: TimestampMillis::from_millis(timestamp_millis),
-                l1_head: l1.head,
-                l1_finalized: l1.finalized,
-                payload_commitment,
-                builder_commitment,
-                ns_table,
-                block_merkle_tree_root,
-                fee_merkle_tree_root,
-                reward_merkle_tree_root: state.reward_merkle_tree_v2.commitment(),
-                fee_info: fee_info[0],
-                builder_signature: builder_signature.first().copied(),
-                total_reward_distributed,
-                next_stake_table_hash,
-                leader_counts,
-            }),
+            (0, 6) => {
+                let builder_fee = builder_fee.context("builder fee required before 0.8")?;
+                let builder_signature = Some(builder_fee.fee_signature);
+                Self::V6(v0_6::Header {
+                    chain_config: chain_config.into(),
+                    height,
+                    timestamp,
+                    timestamp_millis: TimestampMillis::from_millis(timestamp_millis),
+                    l1_head: l1.head,
+                    l1_finalized: l1.finalized,
+                    payload_commitment,
+                    builder_commitment,
+                    ns_table,
+                    block_merkle_tree_root,
+                    fee_merkle_tree_root,
+                    reward_merkle_tree_root: state.reward_merkle_tree_v2.commitment(),
+                    fee_info: builder_fee.into(),
+                    builder_signature,
+                    total_reward_distributed,
+                    next_stake_table_hash,
+                    leader_counts,
+                })
+            },
             // From 0.7 the header carries no builder commitment.
-            (0, 7) => Self::V7(v0_7::Header {
+            (0, 7) => {
+                let builder_fee = builder_fee.context("builder fee required before 0.8")?;
+                let builder_signature = Some(builder_fee.fee_signature);
+                Self::V7(v0_7::Header {
+                    chain_config: chain_config.into(),
+                    height,
+                    timestamp,
+                    timestamp_millis: TimestampMillis::from_millis(timestamp_millis),
+                    l1_head: l1.head,
+                    l1_finalized: l1.finalized,
+                    payload_commitment,
+                    ns_table,
+                    block_merkle_tree_root,
+                    fee_merkle_tree_root,
+                    reward_merkle_tree_root: state.reward_merkle_tree_v2.commitment(),
+                    fee_info: builder_fee.into(),
+                    builder_signature,
+                    total_reward_distributed,
+                    next_stake_table_hash,
+                    leader_counts,
+                })
+            },
+            (0, 8) => Self::V8(v0_8::Header {
                 chain_config: chain_config.into(),
                 height,
                 timestamp,
@@ -697,8 +763,6 @@ impl Header {
                 block_merkle_tree_root,
                 fee_merkle_tree_root,
                 reward_merkle_tree_root: state.reward_merkle_tree_v2.commitment(),
-                fee_info: fee_info[0],
-                builder_signature: builder_signature.first().copied(),
                 total_reward_distributed,
                 next_stake_table_hash,
                 leader_counts,
@@ -970,6 +1034,7 @@ impl Header {
             Self::V4(fields) => fields.chain_config,
             Self::V5(fields) | Self::V6(fields) => fields.chain_config,
             Self::V7(fields) => fields.chain_config,
+            Self::V8(fields) => fields.chain_config,
         }
     }
 
@@ -989,6 +1054,7 @@ impl Header {
             Self::V4(fields) => fields.timestamp,
             Self::V5(fields) | Self::V6(fields) => fields.timestamp,
             Self::V7(fields) => fields.timestamp,
+            Self::V8(fields) => fields.timestamp,
         }
     }
 
@@ -1000,6 +1066,7 @@ impl Header {
             Self::V4(fields) => fields.timestamp_millis.u64(),
             Self::V5(fields) | Self::V6(fields) => fields.timestamp_millis.u64(),
             Self::V7(fields) => fields.timestamp_millis.u64(),
+            Self::V8(fields) => fields.timestamp_millis.u64(),
         }
     }
 
@@ -1023,6 +1090,10 @@ impl Header {
                 fields.timestamp_millis = TimestampMillis::from_millis(timestamp_millis);
             },
             Self::V7(fields) => {
+                fields.timestamp = timestamp;
+                fields.timestamp_millis = TimestampMillis::from_millis(timestamp_millis);
+            },
+            Self::V8(fields) => {
                 fields.timestamp = timestamp;
                 fields.timestamp_millis = TimestampMillis::from_millis(timestamp_millis);
             },
@@ -1104,6 +1175,7 @@ impl Header {
             Self::V4(data) => Some(&data.builder_commitment),
             Self::V5(data) | Self::V6(data) => Some(&data.builder_commitment),
             Self::V7(_) => None,
+            Self::V8(_) => None,
         }
     }
 
@@ -1142,6 +1214,7 @@ impl Header {
             Self::V4(fields) => vec![fields.fee_info],
             Self::V5(fields) | Self::V6(fields) => vec![fields.fee_info],
             Self::V7(fields) => vec![fields.fee_info],
+            Self::V8(_) => vec![],
         }
     }
 
@@ -1156,6 +1229,7 @@ impl Header {
             Self::V4(fields) => Either::Right(fields.reward_merkle_tree_root),
             Self::V5(fields) | Self::V6(fields) => Either::Right(fields.reward_merkle_tree_root),
             Self::V7(fields) => Either::Right(fields.reward_merkle_tree_root),
+            Self::V8(fields) => Either::Right(fields.reward_merkle_tree_root),
         }
     }
 
@@ -1179,6 +1253,7 @@ impl Header {
             Self::V4(fields) => fields.builder_signature.as_slice().to_vec(),
             Self::V5(fields) | Self::V6(fields) => fields.builder_signature.as_slice().to_vec(),
             Self::V7(fields) => fields.builder_signature.as_slice().to_vec(),
+            Self::V8(_) => vec![],
         }
     }
 
@@ -1188,6 +1263,7 @@ impl Header {
             Self::V4(fields) => Some(fields.total_reward_distributed),
             Self::V5(fields) | Self::V6(fields) => Some(fields.total_reward_distributed),
             Self::V7(fields) => Some(fields.total_reward_distributed),
+            Self::V8(fields) => Some(fields.total_reward_distributed),
         }
     }
 }
@@ -1271,7 +1347,7 @@ impl BlockHeader<SeqTypes> for Header {
         payload_commitment: VidCommitment,
         builder_commitment: BuilderCommitment,
         metadata: <<SeqTypes as NodeType>::BlockPayload as BlockPayload<SeqTypes>>::Metadata,
-        builder_fee: BuilderFee<SeqTypes>,
+        builder_fee: Option<BuilderFee<SeqTypes>>,
         version: Version,
         view_number: u64,
     ) -> Result<Self, Self::Error> {
@@ -1402,7 +1478,7 @@ impl BlockHeader<SeqTypes> for Header {
                 metadata,
                 parent_leaf,
                 l1_snapshot,
-                vec![builder_fee],
+                builder_fee,
                 timestamp,
                 timestamp_millis,
                 validated_state,
@@ -1468,7 +1544,11 @@ impl BlockHeader<SeqTypes> for Header {
             block_merkle_tree_root,
             reward_merkle_tree_v1.commitment(),
             reward_merkle_tree_root,
-            vec![FeeInfo::genesis()],
+            if instance_state.genesis_version < versions::NO_BUILDER_FEE_VERSION {
+                vec![FeeInfo::genesis()]
+            } else {
+                vec![]
+            },
             vec![],
             None,
             instance_state.genesis_version,
@@ -1669,7 +1749,8 @@ mod test_headers {
         async fn run(self) {
             for version in [
                 versions::NEW_PROTOCOL_VERSION,
-                versions::MAX_SUPPORTED_VERSION,
+                versions::TIMEOUT_EPOCH_VERSION,
+                versions::NO_BUILDER_FEE_VERSION,
             ] {
                 self.run_version(version).await;
             }
@@ -1736,11 +1817,11 @@ mod test_headers {
                     head: self.l1_head,
                     finalized: self.l1_finalized,
                 },
-                vec![BuilderFee {
+                (version < versions::NO_BUILDER_FEE_VERSION).then_some(BuilderFee {
                     fee_account,
                     fee_amount,
                     fee_signature,
-                }],
+                }),
                 self.timestamp,
                 self.timestamp_millis,
                 validated_state.clone(),
@@ -1948,7 +2029,7 @@ mod test_headers {
                 genesis.header.payload_commitment(),
                 genesis.header.builder_commitment().unwrap().clone(),
                 genesis.ns_table.clone(),
-                builder_fee.clone(),
+                Some(builder_fee.clone()),
                 version(0, minor),
                 1,
             )
@@ -2026,49 +2107,87 @@ mod test_headers {
             fee_account: key_pair.fee_account(),
             fee_signature,
         };
-        let proposal = tokio::time::timeout(
-            std::time::Duration::from_secs(10),
-            Header::new(
-                &forgotten_state,
-                &genesis_state,
-                &parent_leaf,
-                payload_commitment,
-                builder_commitment.clone(),
-                ns_table,
-                builder_fee,
-                versions::NEW_PROTOCOL_VERSION,
-                *parent_leaf.view_number() + 1,
-            ),
-        )
-        .await
-        .expect("proposal must not wait for fee account proofs")
-        .unwrap();
-
-        let proposal_state = parent_state
-            .apply_header(
-                &genesis_state,
-                &genesis_state.state_catchup,
-                &parent_leaf,
-                &proposal,
-                versions::NEW_PROTOCOL_VERSION,
-                parent_leaf.view_number() + 1,
+        for version in [
+            versions::NEW_PROTOCOL_VERSION,
+            versions::TIMEOUT_EPOCH_VERSION,
+            versions::NO_BUILDER_FEE_VERSION,
+        ] {
+            let mut parent_leaf = parent_leaf.clone();
+            if version == versions::NO_BUILDER_FEE_VERSION {
+                let instance = genesis_state
+                    .clone()
+                    .with_genesis_version(versions::TIMEOUT_EPOCH_VERSION);
+                let payload = parent_leaf.block_payload().unwrap().clone();
+                let mut header = Header::genesis(
+                    &instance,
+                    payload,
+                    &ns_table,
+                    versions::TIMEOUT_EPOCH_VERSION,
+                );
+                *header.block_merkle_tree_root_mut() = parent_header.block_merkle_tree_root();
+                *header.fee_merkle_tree_root_mut() = parent_header.fee_merkle_tree_root();
+                *parent_leaf.block_header_mut() = header;
+            }
+            let proposal = tokio::time::timeout(
+                std::time::Duration::from_secs(10),
+                Header::new(
+                    &forgotten_state,
+                    &genesis_state,
+                    &parent_leaf,
+                    payload_commitment,
+                    builder_commitment.clone(),
+                    ns_table.clone(),
+                    (version < versions::NO_BUILDER_FEE_VERSION).then(|| builder_fee.clone()),
+                    version,
+                    *parent_leaf.view_number() + 1,
+                ),
             )
             .await
-            .unwrap()
-            .0;
+            .expect("proposal must not wait for fee account proofs")
+            .unwrap();
 
-        assert_eq!(
-            proposal_state.block_merkle_tree.commitment(),
-            proposal.block_merkle_tree_root()
-        );
-        assert_eq!(
-            proposal_state.fee_merkle_tree.commitment(),
-            proposal.fee_merkle_tree_root()
-        );
-        assert_eq!(
-            proposal_state.reward_merkle_tree_v2.commitment(),
-            proposal.reward_merkle_tree_root().right().unwrap()
-        );
+            let encoded = bincode::serialize(&proposal).unwrap();
+            let replayed: Header = bincode::deserialize(&encoded).unwrap();
+            assert_eq!(replayed, proposal);
+            if version >= versions::NO_BUILDER_FEE_VERSION {
+                assert_eq!(
+                    parent_leaf.block_header().version(),
+                    versions::TIMEOUT_EPOCH_VERSION
+                );
+                let json = serde_json::to_value(&proposal).unwrap();
+                for removed in ["fee_info", "builder_signature", "builder_commitment"] {
+                    assert!(json["fields"].get(removed).is_none());
+                }
+                assert!(proposal.fee_info().is_empty());
+                assert!(proposal.builder_signature().is_empty());
+            }
+
+            let proposal_state = parent_state
+                .apply_header(
+                    &genesis_state,
+                    &genesis_state.state_catchup,
+                    &parent_leaf,
+                    &replayed,
+                    version,
+                    parent_leaf.view_number() + 1,
+                )
+                .await
+                .unwrap()
+                .0;
+
+            assert_eq!(
+                proposal_state.block_merkle_tree.commitment(),
+                proposal.block_merkle_tree_root()
+            );
+            assert_eq!(
+                proposal_state.fee_merkle_tree.commitment(),
+                proposal.fee_merkle_tree_root()
+            );
+            assert_eq!(
+                proposal_state.reward_merkle_tree_v2.commitment(),
+                proposal.reward_merkle_tree_root().right().unwrap()
+            );
+        }
     }
 
     #[test_log::test]
