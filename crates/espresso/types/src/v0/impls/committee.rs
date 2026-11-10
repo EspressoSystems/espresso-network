@@ -696,26 +696,26 @@ impl EpochCommittees {
         let previous_epoch = EpochNumber::new(epoch.saturating_sub(1));
         let decided_hash = block_header.next_stake_table_hash();
 
-        // The previous epoch's stake table is stored below only if the decided
-        // stake_table_hash is consistent with what we get.
-        //
-        // in principle this is unnecessary and we could've stored these right away,
-        // without offsetting the epoch. but the intention is to catch L1 provider issues
-        // if there is a mismatch
-        //
-        // Checked before anything of `epoch` is put in memory, so a mismatch installs nothing.
-        if let Some(previous_committee) = self.inner.read().epoch_committee(previous_epoch)
-            && decided_hash.is_some()
-            && decided_hash != previous_committee.stake_table_hash
-        {
-            return Err(EpochCommitteesError::StakeTableHashMismatch { epoch });
-        }
-
         let inserted;
         let previous_committee;
         let previous_validators;
         {
             let mut inner = self.inner.write();
+            // The previous epoch's stake table is stored below only if the decided
+            // stake_table_hash is consistent with what we get.
+            //
+            // in principle this is unnecessary and we could've stored these right away,
+            // without offsetting the epoch. but the intention is to catch L1 provider issues
+            // if there is a mismatch
+            //
+            // Checked under the write lock before anything of `epoch` is put in memory, so the
+            // checked committee is the one stored and a mismatch installs nothing.
+            if let Some(previous_committee) = inner.epoch_committee(previous_epoch)
+                && decided_hash.is_some()
+                && decided_hash != previous_committee.stake_table_hash
+            {
+                return Err(EpochCommitteesError::StakeTableHashMismatch { epoch });
+            }
             inserted = inner.epoch_committee(epoch).is_none();
             inner.put_epoch_committee(epoch, Arc::new(committee));
             previous_committee = inner.epoch_committee(previous_epoch).cloned();
