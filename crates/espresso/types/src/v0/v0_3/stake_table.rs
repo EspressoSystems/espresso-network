@@ -1,7 +1,7 @@
 use std::{collections::HashMap, sync::Arc};
 
 use alloy::{
-    primitives::{Address, Log, U256},
+    primitives::{Address, B256, Log, U256},
     transports::{RpcError, TransportErrorKind},
 };
 use async_lock::{Mutex, RwLock};
@@ -519,6 +519,30 @@ pub enum StakeTableError {
     StakeTableEventDecodeError(#[from] alloy::sol_types::Error),
     #[error("Stake table events sorting error: {0}")]
     EventSortingError(#[from] EventSortingError),
+}
+
+/// The L1 provider cannot vouch for the block a stake table scan stops at. Retryable, since the
+/// client has moved to the next provider or the current one may catch up.
+#[derive(Debug, Error)]
+pub enum ProviderBlockError {
+    #[error("L1 provider does not have block {number}")]
+    Missing { number: u64 },
+    #[error("L1 provider block {number} has hash {actual}, expected {expected}")]
+    Mismatch {
+        number: u64,
+        expected: B256,
+        actual: B256,
+    },
+    #[error("Failed to fetch L1 block {number}")]
+    Fetch {
+        number: u64,
+        #[source]
+        source: RpcError<TransportErrorKind>,
+    },
+    #[error("Timed out fetching L1 block {number}")]
+    Timeout { number: u64 },
+    #[error("L1 provider changed during the stake table scan up to block {number}")]
+    Switched { number: u64 },
 }
 
 #[derive(Debug, Error)]
