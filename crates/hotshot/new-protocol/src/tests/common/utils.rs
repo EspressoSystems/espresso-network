@@ -1212,6 +1212,7 @@ pub(crate) struct ConsensusHarness {
     defer_action_for: BTreeSet<(ViewNumber, ActionKind)>,
     deferred_locks: BTreeMap<ViewNumber, Vec<ConsensusInput<TestTypes>>>,
     defer_lock_for: BTreeSet<ViewNumber>,
+    drb_results: BTreeMap<EpochNumber, hotshot_types::drb::DrbResult>,
     trace: trace::Recorder,
 }
 
@@ -1301,6 +1302,7 @@ impl ConsensusHarness {
             defer_action_for: BTreeSet::new(),
             deferred_locks: BTreeMap::new(),
             defer_lock_for: BTreeSet::new(),
+            drb_results: BTreeMap::new(),
             trace: trace::Recorder::for_current_test(),
         }
     }
@@ -1360,6 +1362,7 @@ impl ConsensusHarness {
             defer_action_for: BTreeSet::new(),
             deferred_locks: BTreeMap::new(),
             defer_lock_for: BTreeSet::new(),
+            drb_results: BTreeMap::new(),
             trace: trace::Recorder::for_current_test(),
         }
     }
@@ -1701,20 +1704,21 @@ impl ConsensusHarness {
                 self.apply_recorded(input, outbox);
             },
             ConsensusOutput::RequestDrbResult(epoch) => {
-                // The result an epoch root computed, as the proposals of the
-                // epoch's transition carry it.
+                // Epoch e's result is computed from the root of epoch e-2 and
+                // carried by the transition proposals of epoch e-1.
                 let drb = self
-                    .membership_coordinator
-                    .get_epoch_drb(*epoch)
-                    .await
+                    .drb_results
+                    .get(epoch)
+                    .copied()
                     .unwrap_or(TEST_DRB_RESULT);
                 self.apply_recorded(ConsensusInput::DrbResult(*epoch, drb), outbox);
             },
             ConsensusOutput::LeafDecided { leaves, .. } => {
                 // Mirror the EpochManager: when an epoch-root block is decided,
                 // register the future epoch in the membership (add_epoch_root)
-                // and store the DRB result computed from it (compute_drb_result),
-                // which `TestData` gives the transition's proposals.
+                // and compute the DRB result from it (compute_drb_result), which
+                // `TestData` gives the transition proposals of the epoch before
+                // the target epoch.
                 let epoch_height = self.consensus.epoch_height;
                 for leaf in leaves {
                     let block_number = <TestBlockHeader as BlockHeader<TestTypes>>::block_number(
@@ -1736,10 +1740,8 @@ impl ConsensusHarness {
                         .membership_coordinator
                         .compute_drb_result(target_epoch, leaf.clone())
                         .await
-                        .unwrap_or(TEST_DRB_RESULT);
-                    self.membership_coordinator
-                        .membership()
-                        .add_drb_result(target_epoch, drb);
+                        .expect("compute_drb_result should succeed in test harness");
+                    self.drb_results.insert(target_epoch, drb);
                 }
             },
             _ => {},

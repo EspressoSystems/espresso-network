@@ -997,7 +997,7 @@ async fn test_epoch3_transition_requests_drb_for_future_epoch() {
 
     // Epoch 3's stake table and DRB result should already be registered
     // in the membership: when block 5 was decided (epoch root), the
-    // harness called add_epoch_root and add_drb_result for the target
+    // harness called add_epoch_root and compute_drb_result for the target
     // epoch (epoch 1 + 2 = 3).
 
     let v17 = &test_data.views[16];
