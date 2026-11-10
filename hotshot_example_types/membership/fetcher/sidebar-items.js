@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"struct":["Leaf2Fetcher"]};
+window.SIDEBAR_ITEMS = {"struct":["ExternalMessage","Leaf2Fetcher"]};
