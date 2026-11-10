@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"enum":["NetworkChange","NetworkError","RequestKind","ResponseMessage"],"struct":["DataRequest"],"trait":["Id","ViewMessage"]};
+window.SIDEBAR_ITEMS = {"enum":["NetworkError","RequestKind","ResponseMessage"],"struct":["DataRequest"],"trait":["Id","ViewMessage"]};
