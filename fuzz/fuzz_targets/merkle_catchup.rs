@@ -123,6 +123,9 @@ enum NodeEdit {
 
 type Node<E, I> = MerkleNode<E, I, Sha3Node>;
 
+/// What a peer sends for the block tree, as `BlocksFrontier` in the node.
+type BlocksFrontier = MerkleProof<Commitment<Header>, u64, Sha3Node, 3>;
+
 /// The serde layout of the jellyfish merkle tree types, whose fields are
 /// private.
 #[derive(Serialize, Deserialize)]
@@ -206,7 +209,7 @@ struct Accounts<T> {
 struct Frontier {
     tree: BlockMerkleTree,
     last: Commitment<Header>,
-    proof: MerkleProof<Commitment<Header>, u64, Sha3Node, 3>,
+    proof: BlocksFrontier,
     pushed: BlockMerkleTree,
 }
 
@@ -432,6 +435,9 @@ impl Frontier {
             return false;
         }
         proof.proof = nodes.into_iter().map(Arc::unwrap_or_clone).collect();
+        let proof: BlocksFrontier =
+            bincode::deserialize(&bincode::serialize(&proof).expect("a frontier encodes"))
+                .expect("a frontier decodes from its own encoding");
 
         let mut local = BlockMerkleTree::from_commitment(self.tree.commitment());
         let Some(elem) = proof.elem() else {
