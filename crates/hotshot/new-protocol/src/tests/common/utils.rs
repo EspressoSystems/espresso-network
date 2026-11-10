@@ -32,7 +32,7 @@ use hotshot_types::{
         UpgradeCertificate2,
     },
     simple_vote::{
-        LightClientStateUpdateVote2, LockView, QuorumVote2, TimeoutData2, TimeoutData3,
+        HasEpoch, LightClientStateUpdateVote2, LockView, QuorumVote2, TimeoutData2, TimeoutData3,
         TimeoutVote2, UpgradeProposalData, UpgradeVote, Vote2Data,
     },
     stake_table::{HSStakeTable, StakeTableEntries},
@@ -2002,6 +2002,43 @@ pub(crate) fn build_timeout_cert3_with_lock(
     let members = epoch_membership.stake_table().len() as u64;
     let signers: Vec<u64> = (0..members).collect();
     build_timeout_cert3_signed_by(view_number, epoch, lock, epoch_membership, &signers)
+}
+
+/// The timeout certificate of `epoch` for `timed_out`, its signers all locked
+/// on `lock`, as `harness`'s membership signs it.
+pub(crate) fn timeout_cert_of(
+    harness: &ConsensusHarness,
+    epoch: EpochNumber,
+    timed_out: ViewNumber,
+    lock: Option<Certificate1<TestTypes>>,
+) -> TimeoutEvidence<TestTypes> {
+    let membership = harness
+        .membership_coordinator
+        .membership_for_epoch(Some(epoch))
+        .expect("the epoch resolves");
+    TimeoutEvidence::V3(build_timeout_cert3_with_lock(
+        timed_out,
+        epoch,
+        lock,
+        &membership,
+    ))
+}
+
+/// `tc` as a timeout certificate received on its own.
+pub(crate) fn timeout_cert_input(tc: TimeoutEvidence<TestTypes>) -> ConsensusInput<TestTypes> {
+    let epoch = HasEpoch::epoch(&tc).expect("a lock-carrying certificate names its epoch");
+    ConsensusInput::TimeoutCertificate(ValidCert::new(tc, epoch))
+}
+
+/// How often the node asked for the payload of the block at `view`.
+pub(crate) fn payload_requests(harness: &ConsensusHarness, view: ViewNumber) -> usize {
+    harness
+        .outputs()
+        .iter()
+        .filter(
+            |o| matches!(o, ConsensusOutput::RequestMissingPayload { view: v, .. } if *v == view),
+        )
+        .count()
 }
 
 /// Build a lock-carrying timeout certificate for `view_number` in `epoch`,
