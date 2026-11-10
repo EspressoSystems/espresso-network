@@ -1036,7 +1036,7 @@ pub fn build_state_vote_for_test(
 pub struct MockBlock {
     pub block: TestBlockPayload,
     pub metadata: TestMetadata,
-    pub payload_commitment: VidCommitment,
+    pub payload_commitment: VidCommitment2,
     pub builder_commitment: BuilderCommitment,
 }
 
@@ -1067,12 +1067,14 @@ impl MockBlock {
         let metadata = TestMetadata {
             num_transactions: 0,
         };
-        let payload_commitment = vid_commitment(
+        let VidCommitment::V2(payload_commitment) = vid_commitment(
             &block.encode(),
             &metadata.encode(),
             total_weight,
             crate::helpers::test_version(),
-        );
+        ) else {
+            panic!("the new protocol commits with AvidmGf2");
+        };
         let builder_commitment =
             <TestBlockPayload as BlockPayload<TestTypes>>::builder_commitment(&block, &metadata);
         Self {
@@ -1648,7 +1650,7 @@ impl ConsensusHarness {
                 let parent_leaf = req.parent_proposal.clone().into();
                 let header = TestBlockHeader::new(
                     &parent_leaf,
-                    mock_block.payload_commitment,
+                    VidCommitment::V2(mock_block.payload_commitment),
                     mock_block.builder_commitment,
                     mock_block.metadata,
                     TEST_VERSIONS.test.base,

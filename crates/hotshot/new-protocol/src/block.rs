@@ -10,7 +10,7 @@ use committable::{Commitment, Committable};
 use hotshot_types::{
     PeerConfig,
     consensus::PayloadWithMetadata,
-    data::{EpochNumber, Leaf2, VidCommitment, VidCommitment2, ViewNumber},
+    data::{EpochNumber, Leaf2, VidCommitment2, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
     message::UpgradeLock,
     traits::{
@@ -87,7 +87,7 @@ pub struct BlockBuilderOutput<T: NodeType> {
     pub parent_proposal: Proposal<T>,
     pub builder_commitment: BuilderCommitment,
     pub builder_fee: BuilderFee<T>,
-    pub payload_commitment: VidCommitment,
+    pub payload_commitment: VidCommitment2,
     pub manifest: DedupManifest<T>,
     /// The shares behind `payload_commitment`, until the coordinator takes them for the
     /// disperser.
@@ -97,7 +97,7 @@ pub struct BlockBuilderOutput<T: NodeType> {
 /// Commitments the leader computes for a block it built.
 pub struct BlockCommitments<T: NodeType> {
     pub block_size: u64,
-    pub payload_commitment: VidCommitment,
+    pub payload_commitment: VidCommitment2,
     pub builder_commitment: BuilderCommitment,
     pub hashes: Vec<Commitment<T::Transaction>>,
     pub dispersal: BuiltDispersal<T>,
@@ -151,7 +151,7 @@ pub fn block_commitments<T: NodeType>(
     let dispersal = dispersal?;
     Ok(BlockCommitments {
         block_size,
-        payload_commitment: VidCommitment::V2(dispersal.payload_commitment()?),
+        payload_commitment: dispersal.payload_commitment()?,
         builder_commitment,
         hashes,
         dispersal,
