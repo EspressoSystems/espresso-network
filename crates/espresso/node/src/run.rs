@@ -116,6 +116,9 @@ pub async fn main(migrated_envs: Vec<(&str, &str)>) -> anyhow::Result<()> {
         tracing::error!("{e:#}; continuing without telemetry");
     }
     espresso_utils::env_compat::log_migrated_env_vars(&migrated_envs);
+    if !opt.builder_urls.is_empty() {
+        tracing::warn!("--builder-urls is deprecated and ignored; leaders build blocks in-process");
+    }
     log_cpu_probe(genesis.drb_difficulty.max(genesis.drb_upgrade_difficulty)).await;
 
     tracing::warn!(?modules, "sequencer starting up");
@@ -263,7 +266,6 @@ where
         cliquenet_advertise_addr: opt.cliquenet_advertise_address,
         x25519_secret_key: x25519,
         orchestrator_url: opt.orchestrator_url,
-        builder_urls: opt.builder_urls,
         state_relay_server_url: opt.state_relay_server_url,
         public_api_url: opt.public_api_url,
         private_staking_key: staking,
