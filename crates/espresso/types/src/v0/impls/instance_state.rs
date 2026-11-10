@@ -616,10 +616,11 @@ pub mod mock {
 
     use super::*;
     use crate::{
-        BackoffParams, BlockMerkleTree, FeeAccount, FeeAccountProof, FeeMerkleCommitment, Leaf2,
+        BackoffParams, BlockMerkleTree, FeeAccountProof, Leaf2,
+        catchup::{FeeAccountsAt, LeafAt, RewardAccountsV1At, RewardTreeV2At, Verified},
         retain_accounts,
-        v0_3::{RewardAccountProofV1, RewardAccountV1, RewardMerkleCommitmentV1},
-        v0_4::{PermittedRewardMerkleTreeV2, RewardAccountV2, RewardMerkleCommitmentV2},
+        v0_3::RewardAccountProofV1,
+        v0_4::PermittedRewardMerkleTreeV2,
     };
 
     #[derive(Debug, Clone)]
@@ -661,9 +662,8 @@ pub mod mock {
         async fn try_fetch_leaf(
             &self,
             _retry: usize,
-            _coordinator: EpochMembershipCoordinator<SeqTypes>,
-            _height: u64,
-        ) -> anyhow::Result<Leaf2> {
+            _req: &LeafAt,
+        ) -> anyhow::Result<Verified<Leaf2>> {
             Err(anyhow::anyhow!("todo"))
         }
 
@@ -671,32 +671,21 @@ pub mod mock {
             &self,
             _retry: usize,
             _instance: &NodeState,
-            _height: u64,
-            view: ViewNumber,
-            fee_merkle_tree_root: FeeMerkleCommitment,
-            accounts: &[FeeAccount],
-        ) -> anyhow::Result<Vec<FeeAccountProof>> {
+            req: &FeeAccountsAt,
+        ) -> anyhow::Result<Verified<Vec<FeeAccountProof>>> {
             tokio::time::sleep(self.delay).await;
 
-            let src = &self.state[&view].fee_merkle_tree;
-            assert_eq!(src.commitment(), fee_merkle_tree_root);
+            let src = &self.state[&req.view].fee_merkle_tree;
+            assert_eq!(src.commitment(), req.root);
 
-            tracing::info!("catchup: fetching accounts {accounts:?} for view {view}");
-            let tree = retain_accounts(src, accounts.iter().copied())
+            tracing::info!(
+                "catchup: fetching accounts {:?} for view {}",
+                req.accounts,
+                req.view
+            );
+            let tree = retain_accounts(src, req.accounts.iter().copied())
                 .with_context(|| "failed to retain accounts")?;
-
-            // Verify the proofs
-            let mut proofs = Vec::new();
-            for account in accounts {
-                let (proof, _) = FeeAccountProof::prove(&tree, (*account).into())
-                    .context(format!("response missing fee account {account}"))?;
-                proof.verify(&fee_merkle_tree_root).context(format!(
-                    "invalid proof for fee account {account}, root: {fee_merkle_tree_root}"
-                ))?;
-                proofs.push(proof);
-            }
-
-            Ok(proofs)
+            req.verify(&tree)
         }
 
         async fn try_remember_blocks_merkle_tree(
@@ -730,20 +719,17 @@ pub mod mock {
             &self,
             _retry: usize,
             _commitment: Commitment<ChainConfig>,
-        ) -> anyhow::Result<ChainConfig> {
+        ) -> anyhow::Result<Verified<ChainConfig>> {
             tokio::time::sleep(self.delay).await;
 
-            Ok(ChainConfig::default())
+            Ok(Verified::new_unchecked(ChainConfig::default()))
         }
 
         async fn try_fetch_reward_merkle_tree_v2(
             &self,
             _retry: usize,
-            _height: u64,
-            _view: ViewNumber,
-            _reward_merkle_tree_root: RewardMerkleCommitmentV2,
-            _accounts: Arc<Vec<RewardAccountV2>>,
-        ) -> anyhow::Result<PermittedRewardMerkleTreeV2> {
+            _req: &RewardTreeV2At,
+        ) -> anyhow::Result<Verified<PermittedRewardMerkleTreeV2>> {
             anyhow::bail!("unimplemented")
         }
 
@@ -751,11 +737,8 @@ pub mod mock {
             &self,
             _retry: usize,
             _instance: &NodeState,
-            _height: u64,
-            _view: ViewNumber,
-            _reward_merkle_tree_root: RewardMerkleCommitmentV1,
-            _accounts: &[RewardAccountV1],
-        ) -> anyhow::Result<Vec<RewardAccountProofV1>> {
+            _req: &RewardAccountsV1At,
+        ) -> anyhow::Result<Verified<Vec<RewardAccountProofV1>>> {
             anyhow::bail!("unimplemented")
         }
 

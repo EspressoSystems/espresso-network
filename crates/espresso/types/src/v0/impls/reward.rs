@@ -38,6 +38,7 @@ use super::{
 };
 use crate::{
     EpochSnapshot, FeeAccount, SeqTypes,
+    catchup::{LeafAt, RewardAccountsV1At, RewardTreeV2At},
     eth_signature_key::EthKeyPair,
     v0_3::{
         RewardAccountProofV1, RewardAccountV1, RewardMerkleCommitmentV1, RewardMerkleProofV1,
@@ -1001,14 +1002,16 @@ pub async fn get_leader_and_fetch_missing_rewards(
                 .state_catchup
                 .fetch_reward_accounts_v1(
                     instance_state,
-                    parent_height,
-                    parent_view,
-                    validated_state.reward_merkle_tree_v1.commitment(),
-                    missing_reward_accts,
+                    &RewardAccountsV1At {
+                        height: parent_height,
+                        view: parent_view,
+                        root: validated_state.reward_merkle_tree_v1.commitment(),
+                        accounts: missing_reward_accts,
+                    },
                 )
                 .await?;
 
-            for proof in missing_account_proofs.iter() {
+            for proof in missing_account_proofs.inner() {
                 proof
                     .remember(&mut validated_state.reward_merkle_tree_v1)
                     .expect("proof previously verified");
@@ -1032,13 +1035,14 @@ pub async fn get_leader_and_fetch_missing_rewards(
 
             validated_state.reward_merkle_tree_v2 = instance_state
                 .state_catchup
-                .fetch_reward_merkle_tree_v2(
-                    parent_height,
-                    parent_view,
-                    reward_merkle_tree_root,
-                    reward_accounts,
-                )
+                .fetch_reward_merkle_tree_v2(&RewardTreeV2At {
+                    height: parent_height,
+                    view: parent_view,
+                    root: reward_merkle_tree_root,
+                    accounts: reward_accounts,
+                })
                 .await?
+                .into_inner()
                 .tree;
 
             tracing::warn!(
@@ -1251,7 +1255,10 @@ impl EpochRewardsCalculator {
             let leaf = instance_state
                 .state_catchup
                 .as_ref()
-                .fetch_leaf(coordinator.clone(), epoch_last_block_height)
+                .fetch_leaf(&LeafAt {
+                    height: epoch_last_block_height,
+                    coordinator: coordinator.clone(),
+                })
                 .await
                 .with_context(|| {
                     format!(
@@ -1259,7 +1266,7 @@ impl EpochRewardsCalculator {
                          {epoch}"
                     )
                 })?;
-            let header = leaf.block_header();
+            let header = leaf.inner().block_header();
 
             tracing::info!(
                 %epoch,
@@ -1342,12 +1349,12 @@ impl EpochRewardsCalculator {
             reward_tree = instance_state
                 .state_catchup
                 .as_ref()
-                .fetch_reward_merkle_tree_v2(
-                    epoch_last_block_height,
-                    ViewNumber::new(0),
-                    reward_merkle_tree_root,
-                    Arc::new(missing_accounts),
-                )
+                .fetch_reward_merkle_tree_v2(&RewardTreeV2At {
+                    height: epoch_last_block_height,
+                    view: ViewNumber::new(0),
+                    root: reward_merkle_tree_root,
+                    accounts: Arc::new(missing_accounts),
+                })
                 .await
                 .with_context(|| {
                     format!(
@@ -1355,6 +1362,7 @@ impl EpochRewardsCalculator {
                          for epoch {epoch}"
                     )
                 })?
+                .into_inner()
                 .tree;
 
             tracing::info!(

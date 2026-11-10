@@ -41,6 +41,7 @@ use super::{
 };
 use crate::{
     Header, Leaf2, PubKey, SeqTypes,
+    catchup::LeafAt,
     traits::StateCatchup,
     v0_3::{ASSUMED_BLOCK_TIME_SECONDS, AuthenticatedValidator, Fetcher, RewardAmount},
 };
@@ -331,9 +332,13 @@ impl EpochCommittees {
 
                     self.fetcher
                         .peers
-                        .fetch_leaf(coordinator.clone(), root_height)
+                        .fetch_leaf(&LeafAt {
+                            height: root_height,
+                            coordinator: coordinator.clone(),
+                        })
                         .await
                         .context("Epoch root leaf not found")?
+                        .inner()
                         .block_header()
                         .timestamp_millis_internal()
                 },
@@ -1068,16 +1073,17 @@ impl Membership<SeqTypes> for EpochCommittees {
     ) -> Result<Leaf2, Self::Error> {
         let block_height = root_block_in_epoch(*epoch, *self.epoch_height());
         let peers = self.fetcher.peers.clone();
+        let req = LeafAt {
+            height: block_height,
+            coordinator: coordinator.clone(),
+        };
 
         // the root block may not exist anywhere yet
         // Each attempt tries all peers once
         // `retry` only scales the per peer timeout
         for retry in 0..3 {
-            match peers
-                .try_fetch_leaf(retry, coordinator.clone(), block_height)
-                .await
-            {
-                Ok(leaf) => return Ok(leaf),
+            match peers.try_fetch_leaf(retry, &req).await {
+                Ok(leaf) => return Ok(leaf.into_inner()),
                 Err(err) => {
                     warn!(%epoch, block_height, retry, "failed to fetch epoch root leaf: {err:#}");
                 },
@@ -1124,9 +1130,16 @@ impl Membership<SeqTypes> for EpochCommittees {
             epoch, block_height
         );
         let drb_leaf = peers
-            .try_fetch_leaf(1, coordinator.clone(), block_height)
+            .try_fetch_leaf(
+                1,
+                &LeafAt {
+                    height: block_height,
+                    coordinator: coordinator.clone(),
+                },
+            )
             .await
-            .map_err(Self::Error::Catchup)?;
+            .map_err(Self::Error::Catchup)?
+            .into_inner();
 
         let Some(drb) = drb_leaf.next_drb_result else {
             error!(
