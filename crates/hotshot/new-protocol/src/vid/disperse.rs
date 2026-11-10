@@ -2,7 +2,10 @@ use std::{
     collections::BTreeMap,
     mem,
     ops::Range,
-    sync::{Arc, LazyLock},
+    sync::{
+        Arc, LazyLock,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+    },
 };
 
 use hotshot_types::{
@@ -28,8 +31,10 @@ use tracing::{debug_span, error, warn};
 
 use crate::{
     coordinator::metrics::{Measurement, finish_measurement},
+    leader_trace::{LeaderEvent, LeaderTracerHandle, now_ns},
     message::{ConsensusMessage, Message, MessageType, Validated},
     network::{NetworkError, Sender},
+    trace_leader_event,
 };
 
 static NUM_THREADS: LazyLock<usize> = LazyLock::new(|| rayon::current_num_threads().max(1));
@@ -102,6 +107,7 @@ pub struct VidDisperser<T: NodeType> {
     private_key: <T::SignatureKey as SignatureKey>::PrivateKey,
     tasks: JoinSet<Result<VidDisperseOutput, VidDisperseError>>,
     duration_metric: Option<Arc<dyn Histogram>>,
+    tracer: Option<LeaderTracerHandle>,
 }
 
 impl<T: NodeType> VidDisperser<T> {
@@ -119,7 +125,12 @@ impl<T: NodeType> VidDisperser<T> {
             private_key,
             tasks: JoinSet::new(),
             duration_metric: None,
+            tracer: None,
         }
+    }
+
+    pub fn set_tracer(&mut self, tracer: Option<LeaderTracerHandle>) {
+        self.tracer = tracer;
     }
 
     pub fn with_metrics(mut self, hist: Option<Arc<dyn Histogram>>) -> Self {
@@ -149,6 +160,7 @@ impl<T: NodeType> VidDisperser<T> {
         let public_key = self.public_key.clone();
         let private_key = self.private_key.clone();
         let duration_metric = self.duration_metric.clone();
+        let tracer = self.tracer.clone();
         let view = vid_disperse_request.view;
         let handle = self.tasks.spawn_blocking(move || {
             let measurement = duration_metric.map(Measurement::start);
@@ -158,6 +170,7 @@ impl<T: NodeType> VidDisperser<T> {
                 public_key,
                 private_key,
                 vid_disperse_request,
+                tracer,
                 built,
             );
             finish_measurement(measurement);
@@ -200,6 +213,7 @@ fn handle_vid_disperse_request<T, S>(
     public_key: T::SignatureKey,
     private_key: <T::SignatureKey as SignatureKey>::PrivateKey,
     vid_disperse_request: VidDisperseRequest<T>,
+    tracer: Option<LeaderTracerHandle>,
     built: Option<BuiltDispersal<T>>,
 ) -> Result<VidDisperseOutput, VidDisperseError>
 where
@@ -211,16 +225,22 @@ where
     let payload_commitment = vid_disperse_request.payload_commitment;
 
     let dispersal = match built {
-        Some(built) => Dispersal::Built(built),
-        None => Dispersal::Encode(
-            VidDisperse2::<T>::disperse_params(
-                &vid_disperse_request.block,
-                &epoch_membership_coordinator,
-                epoch,
-                &vid_disperse_request.metadata,
+        Some(built) => {
+            trace_leader_event!(tracer, view, LeaderEvent::VidFragmentsStart);
+            Dispersal::Built(built)
+        },
+        None => {
+            trace_leader_event!(tracer, view, LeaderEvent::NsDisperseStart);
+            Dispersal::Encode(
+                VidDisperse2::<T>::disperse_params(
+                    &vid_disperse_request.block,
+                    &epoch_membership_coordinator,
+                    epoch,
+                    &vid_disperse_request.metadata,
+                )
+                .map_err(VidDisperseError::Vid)?,
             )
-            .map_err(VidDisperseError::Vid)?,
-        ),
+        },
     };
 
     disperse_payload(
@@ -230,8 +250,11 @@ where
         payload_commitment,
         &public_key,
         &private_key,
+        tracer.as_ref(),
         send,
     )?;
+
+    trace_leader_event!(tracer, view, LeaderEvent::VidSharesUnicastEnd);
 
     Ok(VidDisperseOutput {
         view,
@@ -243,6 +266,7 @@ where
 /// `send`, which the disperser points at the network. A [`Dispersal::Encode`] is erasure-coded
 /// bucket by bucket first. The `block_build` bench in espresso-types passes a `send` that only
 /// serializes; the spans time each step.
+#[allow(clippy::too_many_arguments)]
 pub fn disperse_payload<T, S>(
     dispersal: Dispersal<T>,
     view: ViewNumber,
@@ -250,15 +274,18 @@ pub fn disperse_payload<T, S>(
     payload_commitment: VidCommitment2,
     public_key: &T::SignatureKey,
     private_key: &<T::SignatureKey as SignatureKey>::PrivateKey,
+    tracer: Option<&LeaderTracerHandle>,
     send: S,
 ) -> Result<(), VidDisperseError>
 where
     T: NodeType,
     S: Fn(&T::SignatureKey, &Message<T, Validated>) -> Result<(), NetworkError> + Clone + Send,
 {
-    let (params, dispersals) = match dispersal {
-        Dispersal::Built(BuiltDispersal { params, dispersals }) => (params, Some(dispersals)),
-        Dispersal::Encode(params) => (params, None),
+    let (params, dispersals, assembled_event) = match dispersal {
+        Dispersal::Built(BuiltDispersal { params, dispersals }) => {
+            (params, Some(dispersals), LeaderEvent::VidFragmentsEnd)
+        },
+        Dispersal::Encode(params) => (params, None, LeaderEvent::NsDisperseEnd),
     };
 
     let signature = debug_span!("sign")
@@ -285,12 +312,19 @@ where
         None => ns_buckets.into_iter().map(Bucket::Encode).collect(),
     };
 
+    let bucket_trace =
+        tracer.map(|tracer| BucketTrace::new(tracer, view, buckets.len(), assembled_event));
+
     buckets.into_par_iter().try_for_each_with(
         send,
         |send, bucket| -> Result<(), VidDisperseError> {
             let dispersals = bucket.dispersals(&params)?;
             let bucket_fragments = debug_span!("fragments")
                 .in_scope(|| fragments(view, epoch, payload_commitment, &params, dispersals));
+            if let Some(trace) = &bucket_trace {
+                trace.bucket_assembled();
+                trace.send_starting();
+            }
             for fragment in bucket_fragments {
                 let recipient = fragment.recipient_key.clone();
                 let message = Message {
@@ -356,6 +390,54 @@ fn into_buckets(
                 .collect()
         })
         .collect()
+}
+
+/// Records the last bucket's `assembled_event` and the first bucket's `VidSharesUnicastStart`.
+/// With several buckets `assembled_event` can come after `VidSharesUnicastStart`.
+/// Built only when a tracer is registered.
+struct BucketTrace<'a> {
+    tracer: &'a LeaderTracerHandle,
+    view: ViewNumber,
+    /// `NsDisperseEnd` for `Dispersal::Encode`, `VidFragmentsEnd` for `Dispersal::Built`.
+    assembled_event: LeaderEvent,
+    buckets_left: AtomicUsize,
+    unicast_started: AtomicBool,
+}
+
+impl<'a> BucketTrace<'a> {
+    /// Trace for a dispersal of `buckets` buckets.
+    fn new(
+        tracer: &'a LeaderTracerHandle,
+        view: ViewNumber,
+        buckets: usize,
+        assembled_event: LeaderEvent,
+    ) -> Self {
+        Self {
+            tracer,
+            view,
+            assembled_event,
+            buckets_left: AtomicUsize::new(buckets),
+            unicast_started: AtomicBool::new(false),
+        }
+    }
+
+    /// Called once per bucket after its fragments are assembled; records for the last one.
+    fn bucket_assembled(&self) {
+        if self.buckets_left.fetch_sub(1, Ordering::AcqRel) == 1 {
+            self.record(self.assembled_event);
+        }
+    }
+
+    /// Called per bucket before its sends; records for the first one.
+    fn send_starting(&self) {
+        if !self.unicast_started.swap(true, Ordering::AcqRel) {
+            self.record(LeaderEvent::VidSharesUnicastStart);
+        }
+    }
+
+    fn record(&self, event: LeaderEvent) {
+        self.tracer.record(*self.view, event, now_ns());
+    }
 }
 
 /// Erasure-codes the namespace at `ns_index` of the payload in `params`.
@@ -486,13 +568,14 @@ mod tests {
     use versions::NEW_PROTOCOL_VERSION;
 
     use super::{
-        Bucket, BuiltDispersal, Dispersal, VidDisperseError, VidDisperseRequest, bucketize,
-        disperse_payload, fragments, handle_vid_disperse_request, into_buckets,
+        Bucket, BucketTrace, BuiltDispersal, Dispersal, VidDisperseError, VidDisperseRequest,
+        bucketize, disperse_payload, fragments, handle_vid_disperse_request, into_buckets,
     };
     use crate::{
+        leader_trace::LeaderEvent,
         message::{ConsensusMessage, Message, MessageType, Validated},
         network::NetworkError,
-        tests::common::utils::{mock_membership, ns_table},
+        tests::common::utils::{RecordingTracer, mock_membership, ns_table},
     };
 
     /// Build a contiguous namespace table from per-namespace byte lengths.
@@ -511,6 +594,20 @@ mod tests {
     /// Total payload bytes of the namespaces at `indices`.
     fn bytes(indices: &[usize], ns_table: &[Range<usize>]) -> usize {
         indices.iter().map(|&i| ns_table[i].len()).sum()
+    }
+
+    /// The assembled event is recorded once, after the last bucket assembles.
+    #[test]
+    fn bucket_trace_records_assembled_after_the_last_bucket() {
+        let tracer = Arc::new(RecordingTracer::default());
+        let handle = tracer.handle();
+        let trace = BucketTrace::new(&handle, ViewNumber::new(7), 3, LeaderEvent::VidFragmentsEnd);
+
+        trace.bucket_assembled();
+        trace.bucket_assembled();
+        assert_eq!(tracer.events(), []);
+        trace.bucket_assembled();
+        assert_eq!(tracer.events(), [(7, LeaderEvent::VidFragmentsEnd)]);
     }
 
     quickcheck! {
@@ -673,6 +770,7 @@ mod tests {
             commitment,
             &leader,
             &private_key,
+            None,
             send,
         );
         let sent = mem::take(&mut *sent.lock().unwrap());
@@ -812,6 +910,7 @@ mod tests {
                 leader,
                 private_key.clone(),
                 request.clone(),
+                None,
                 built,
             )
         };
@@ -826,5 +925,125 @@ mod tests {
             .map(|peer| peer.stake_table_entry.public_key())
             .collect();
         assert_eq!(*recipients.lock().unwrap(), expected);
+    }
+
+    /// Runs [`disperse_payload`] with a [`RecordingTracer`] and a `send` that accepts everything.
+    fn disperse_traced(
+        dispersal: Dispersal<TestTypes>,
+        commitment: VidCommitment2,
+    ) -> Vec<LeaderEvent> {
+        let (leader, private_key) = BLSPubKey::generated_from_seed_indexed([1; 32], 0);
+        let tracer = Arc::new(RecordingTracer::default());
+        disperse_payload(
+            dispersal,
+            ViewNumber::new(7),
+            EpochNumber::new(3),
+            commitment,
+            &leader,
+            &private_key,
+            Some(&tracer.handle()),
+            |_: &BLSPubKey, _: &Message<TestTypes, Validated>| Ok(()),
+        )
+        .unwrap();
+        tracer
+            .events()
+            .into_iter()
+            .map(|(_, event)| event)
+            .collect()
+    }
+
+    /// The position of `event` in `events`, which holds it exactly once.
+    fn position_of(events: &[LeaderEvent], event: LeaderEvent) -> usize {
+        let mut positions = events
+            .iter()
+            .enumerate()
+            .filter(|(_, e)| **e == event)
+            .map(|(i, _)| i);
+        let position = positions
+            .next()
+            .unwrap_or_else(|| panic!("{event:?} not recorded"));
+        assert!(positions.next().is_none(), "{event:?} recorded twice");
+        position
+    }
+
+    /// Tracing a `Dispersal::Built` records the fragment events and no encode events.
+    #[test]
+    fn disperse_built_records_fragment_events() {
+        let (built, commitment) = built_dispersal(large_payload());
+        let events = disperse_traced(Dispersal::Built(built), commitment);
+
+        position_of(&events, LeaderEvent::VidFragmentsEnd);
+        position_of(&events, LeaderEvent::VidSharesUnicastStart);
+        assert!(!events.contains(&LeaderEvent::NsDisperseEnd));
+        assert!(!events.contains(&LeaderEvent::VidFragmentsStart));
+    }
+
+    /// Tracing a `Dispersal::Encode` records the encode events and no fragment events.
+    #[test]
+    fn disperse_encode_records_ns_disperse_events() {
+        let (payload, metadata) = large_payload();
+        let params =
+            AvidmGf2DisperseParams::new(&stake_table(), payload.clone().into(), &metadata).unwrap();
+        let (_, commitment) = built_dispersal((payload, metadata));
+        let events = disperse_traced(Dispersal::Encode(params), commitment);
+
+        position_of(&events, LeaderEvent::NsDisperseEnd);
+        position_of(&events, LeaderEvent::VidSharesUnicastStart);
+        assert!(!events.contains(&LeaderEvent::VidFragmentsEnd));
+    }
+
+    /// One bucket assembles before it sends.
+    #[test]
+    fn disperse_single_bucket_assembles_before_it_sends() {
+        let (built, commitment) = built_dispersal(payload());
+        let events = disperse_traced(Dispersal::Built(built), commitment);
+
+        assert!(
+            position_of(&events, LeaderEvent::VidFragmentsEnd)
+                < position_of(&events, LeaderEvent::VidSharesUnicastStart)
+        );
+    }
+
+    /// The disperser records the start event of the path it takes: `built` and the failing
+    /// encode of an epoch without a stake table both start a span.
+    #[tokio::test]
+    async fn handle_disperse_request_records_each_paths_start() {
+        let (leader, private_key) = BLSPubKey::generated_from_seed_indexed([1; 32], 0);
+        let (built, commitment) = built_dispersal(payload());
+        let request = VidDisperseRequest {
+            view: ViewNumber::new(7),
+            epoch: EpochNumber::new(0),
+            block: TestBlockPayload {
+                transactions: vec![],
+            },
+            metadata: TestMetadata {
+                num_transactions: 0,
+            },
+            payload_commitment: commitment,
+        };
+        let disperse = |built| {
+            let tracer = Arc::new(RecordingTracer::default());
+            let result = handle_vid_disperse_request(
+                mock_membership(),
+                |_: &BLSPubKey, _: &Message<TestTypes, Validated>| Ok(()),
+                leader,
+                private_key.clone(),
+                request.clone(),
+                Some(tracer.handle()),
+                built,
+            );
+            (result, tracer.events())
+        };
+
+        let (result, events) = disperse(None);
+        assert!(result.is_err(), "encoding needs the epoch's stake table");
+        assert_eq!(events, [(7, LeaderEvent::NsDisperseStart)]);
+
+        let (result, events) = disperse(Some(built));
+        result.unwrap();
+        let events: Vec<_> = events.into_iter().map(|(_, event)| event).collect();
+        assert_eq!(events[0], LeaderEvent::VidFragmentsStart);
+        assert_eq!(events.last(), Some(&LeaderEvent::VidSharesUnicastEnd));
+        assert!(!events.contains(&LeaderEvent::NsDisperseStart));
     }
 }

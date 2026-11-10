@@ -50,7 +50,7 @@ impl ReportedNode {
         })
     }
 
-    /// The `summary` INFO line (HEAD's fields plus `confirmed_missing`) and `node unhealthy` when
+    /// The `summary` INFO line (`node`, `errors`, `forgotten`, `sweep_eta`, `summary`) and `node unhealthy` when
     /// `errors.failures()` since the previous call is not empty; `errors` and `forgotten` since the
     /// previous call.
     pub fn log(&mut self, report: &NodeReport) {
@@ -60,7 +60,6 @@ impl ReportedNode {
             %node,
             errors = ?since.errors,
             forgotten = since.forgotten_rows,
-            confirmed_missing = report.summary.confirmed_missing(),
             sweep_eta = report
                 .sweep_eta
                 .map(|eta| humantime::format_duration(eta.remaining).to_string()),

@@ -799,7 +799,7 @@ include hv in
 theorem sent_vote1 {k : PubKey} {j : Nat} {vote : Vote1}
     (hx : Output.send (.vote1 vote) ∈ (tr k j).output) :
     ∃ u, vote = ⟨(certOf (blk u)).data, ⟨vOf u⟩, k⟩ ∧ sAt u + 1 ≤ j := by
-  obtain ⟨hsig, ⟨s, p, vid, hrec, -, -, -, -, hfor⟩ | ⟨s, r, -, hw, -⟩⟩ :=
+  obtain ⟨hsig, ⟨s, p, vid, hrec, -, -, -, -, -, hfor⟩ | ⟨s, r, -, hw, -⟩⟩ :=
     (protocol hv k (j + 1)).vote1Justified j vote ⟨_, (getElem_H j), hx⟩ trivial
   rotate_left
   · exact absurd rfl hw.2.2.2.1
@@ -813,14 +813,18 @@ theorem sent_vote1 {k : PubKey} {j : Nat} {vote : Vote1}
   rw [hsig, hv', hd, blk_view]
   rfl
 
-/-- The parent reaches every node before its child's validity report. -/
+/-- The parent's payload reaches every node before its child's validity report. -/
 theorem parent_ready {k : PubKey} (u : Nat) : ParentReady cfg (H k (sAt u + 2 + 1)) (blk u) := by
   rcases u with _ | w
   · exact Or.inl rfl
-  · refine Or.inr ⟨blk w, hasProposal_of w ?_, ?_, ?_⟩
+  · refine Or.inr (Or.inr ⟨blk w, hasProposal_of w ?_, ?_, ?_, Or.inr ?_⟩)
     · rw [sAt_succ]; unfold sAt; split <;> omega
     · rw [blk_parent]; exact Nat.le_refl _
     · rw [blk_parent]; rfl
+    · rw [blk_view]
+      refine recv_payload w ?_
+      rw [sAt_succ]; unfold pAt sAt; repeat' split
+      all_goals omega
 
 include hv in
 /-- Every honest node votes1 for `blk u` by the step its validity report arrives in. -/

@@ -30,6 +30,7 @@ use crate::{
     consensus::{ConsensusInput, ConsensusOutput},
     coordinator::GcScope,
     helpers::{proposal_commitment, test_timeout_epoch_lock, test_upgrade_lock},
+    leader_trace::LeaderEvent,
     message::{Certificate1, Proposal, ProposalMessage, TimeoutBallot, TimeoutVote},
     outbox::Outbox,
     proposal::{ProposalValidator, ValidationError},
@@ -43,7 +44,7 @@ use crate::{
             is_send_timeout_vote, is_view_changed, is_vote1, is_vote1_for_view, is_vote2,
             is_vote2_for_view, node_index_for_key,
         },
-        utils::{ConsensusHarness, MockBlock, state_verified_input},
+        utils::{ConsensusHarness, MockBlock, RecordingTracer, state_verified_input},
     },
 };
 
@@ -658,11 +659,12 @@ async fn test_vote1_parent_reconstruction_from_lock() {
     let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
 
     // Restart: re-seed the parent proposal and restore the lock that certifies
-    // it, but do NOT mark its block reconstructed.
-    harness.seed_proposals([test_data.views[0].proposal.data.clone()]);
-    harness
-        .consensus
-        .seed_locked_cert(test_data.views[0].cert1.clone());
+    // it, without marking its block reconstructed in memory. The trace records
+    // its payload as held, which a lock implies.
+    harness.seed_locked_block(
+        test_data.views[0].proposal.data.clone(),
+        test_data.views[0].cert1.clone(),
+    );
 
     harness
         .apply_pair(test_data.views[1].proposal_input_consensus(&node_key))
@@ -3760,4 +3762,118 @@ async fn test_forged_state_cert_at_epoch_root_fails_validation() {
         Err(other) => panic!("expected InvalidStateCert, got: {other}"),
         Ok(_) => panic!("a state_cert with too few signers passed validation"),
     }
+}
+
+/// A cert1 stored by consensus records `Cert1VMinus1Obtained` once, whether it arrives in a
+/// proposal's `justify_qc` or as a relayed cert input.
+#[tokio::test]
+async fn test_cert1_obtained_recorded_once_per_view() {
+    let mut harness = ConsensusHarness::new(0).await;
+    let tracer = Arc::new(RecordingTracer::default());
+    harness.consensus.set_tracer(Some(tracer.handle()));
+    let test_data = TestData::new(3).await;
+    let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
+    let certified = *test_data.views[0].view_number;
+    let obtained =
+        |tracer: &RecordingTracer| tracer.count(certified, LeaderEvent::Cert1VMinus1Obtained);
+
+    harness
+        .apply_pair(test_data.views[0].proposal_input_consensus(&node_key))
+        .await;
+    assert_eq!(obtained(&tracer), 0);
+
+    harness
+        .apply_pair(test_data.views[1].proposal_input_consensus(&node_key))
+        .await;
+    assert_eq!(obtained(&tracer), 1, "cert1 from the justify_qc");
+
+    harness.apply(test_data.views[0].cert1_input()).await;
+    assert_eq!(obtained(&tracer), 1, "a duplicate is not recorded again");
+}
+
+/// A cert1 delivered as an input before any proposal for its view is recorded once; the
+/// proposal that later carries it in its `justify_qc` does not record it again.
+#[tokio::test]
+async fn test_cert1_input_before_proposal_recorded_once() {
+    let mut harness = ConsensusHarness::new(0).await;
+    let tracer = Arc::new(RecordingTracer::default());
+    harness.consensus.set_tracer(Some(tracer.handle()));
+    let test_data = TestData::new(3).await;
+    let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
+    let certified = *test_data.views[0].view_number;
+    let obtained = || tracer.count(certified, LeaderEvent::Cert1VMinus1Obtained);
+
+    harness.apply(test_data.views[0].cert1_input()).await;
+    assert_eq!(obtained(), 1, "cert1 input without a proposal");
+
+    harness
+        .apply_pair(test_data.views[0].proposal_input_consensus(&node_key))
+        .await;
+    harness
+        .apply_pair(test_data.views[1].proposal_input_consensus(&node_key))
+        .await;
+    assert_eq!(obtained(), 1, "the justify_qc does not record it again");
+}
+
+/// A cert2 stored by consensus records `Cert2VMinus1Obtained` once per view.
+#[tokio::test]
+async fn test_cert2_obtained_recorded_once_per_view() {
+    let mut harness = ConsensusHarness::new(0).await;
+    let tracer = Arc::new(RecordingTracer::default());
+    harness.consensus.set_tracer(Some(tracer.handle()));
+    let test_data = TestData::new(3).await;
+    let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
+    let certified = *test_data.views[0].view_number;
+    let obtained = || tracer.count(certified, LeaderEvent::Cert2VMinus1Obtained);
+
+    harness
+        .apply_pair(test_data.views[0].proposal_input_consensus(&node_key))
+        .await;
+    assert_eq!(obtained(), 0);
+
+    harness.apply(test_data.views[0].cert2_input()).await;
+    assert_eq!(obtained(), 1);
+
+    harness.apply(test_data.views[0].cert2_input()).await;
+    assert_eq!(obtained(), 1, "a duplicate is not recorded again");
+}
+
+/// Every `RequestBlockAndHeader` output, including the re-request after a timeout certificate,
+/// is stamped `RequestBlockHeaderQueued` for its view.
+#[tokio::test]
+async fn test_block_request_queued_stamped_for_every_request() {
+    const EPOCH_HEIGHT: u64 = 10;
+    let test_data = TestData::new_with_epoch_height(2, EPOCH_HEIGHT).await;
+    let parent = &test_data.views[0];
+    let next_view = ViewNumber::new(2);
+
+    let probe = ConsensusHarness::new_with_epoch_height(0, EPOCH_HEIGHT).await;
+    let leader = probe
+        .consensus
+        .leader_of(next_view, EpochNumber::new(1))
+        .expect("a leader for the next view");
+    let mut harness =
+        ConsensusHarness::new_with_epoch_height(node_index_for_key(&leader), EPOCH_HEIGHT).await;
+    let tracer = Arc::new(RecordingTracer::default());
+    harness.consensus.set_tracer(Some(tracer.handle()));
+
+    harness
+        .apply_pair(parent.proposal_input_consensus(&leader))
+        .await;
+    harness.apply(parent.block_reconstructed_input()).await;
+    harness.apply(parent.cert1_input()).await;
+    harness.apply(parent.timeout_cert_input()).await;
+
+    let requests = harness
+        .outputs()
+        .iter()
+        .filter(|output| {
+            matches!(output, ConsensusOutput::RequestBlockAndHeader(r) if r.view == next_view)
+        })
+        .count();
+    assert!(requests > 0, "the leader requests a block for {next_view}");
+    assert_eq!(
+        tracer.count(*next_view, LeaderEvent::RequestBlockHeaderQueued),
+        requests
+    );
 }

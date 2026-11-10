@@ -9,8 +9,9 @@ use crate::{
 
 /// `query_watchdog_*` families on the process `Registry`.
 pub struct WatchdogMetrics {
-    /// `{node}`, `NodeSummary::confirmed_missing`; the paging gauge.
-    confirmed_missing: IntGaugeVec,
+    /// Unlabeled; the alert total, sum of `NodeSummary.not_found_units` over nodes. A label-less
+    /// vec has no series until the first `set_not_found_units`.
+    not_found_units: IntGaugeVec,
     /// `{node,kind}`, heights or epochs per kind.
     missing: IntGaugeVec,
     /// `{node,kind}`.
@@ -50,11 +51,11 @@ impl WatchdogMetrics {
     pub fn new(registry: &Registry) -> prometheus::Result<Self> {
         let node_kind = ["node", "kind"];
         Ok(Self {
-            confirmed_missing: gauge(
+            not_found_units: gauge(
                 registry,
-                "confirmed_missing",
-                "Confirmed missing heights and epochs old enough to count",
-                &["node"],
+                "not_found_units",
+                "Settled units answering 404, summed over nodes",
+                &[],
             )?,
             missing: gauge(registry, "missing", "Missing heights or epochs", &node_kind)?,
             oldest_missing_age_seconds: gauge(
@@ -138,15 +139,12 @@ impl WatchdogMetrics {
         })
     }
 
-    /// Every per-node gauge from one report: `confirmed_missing`, `missing` and
+    /// Every per-node gauge from one report: `missing` and
     /// `oldest_missing_age_seconds` per kind, follow and sweep gauges, ETA (series removed when
     /// the report has none), last completed sweep.
     pub fn export_node(&self, report: &NodeReport) -> anyhow::Result<()> {
         let label = report.node.label.as_str();
         let summary = &report.summary;
-        self.confirmed_missing
-            .with_label_values(&[label])
-            .set(i64::try_from(summary.confirmed_missing())?);
         self.follow_lag_blocks
             .with_label_values(&[label])
             .set(i64::try_from(summary.follow_lag_blocks)?);
@@ -209,6 +207,14 @@ impl WatchdogMetrics {
         Ok(())
     }
 
+    /// Sets the alert total.
+    pub fn set_not_found_units(&self, total: u64) -> anyhow::Result<()> {
+        self.not_found_units
+            .with_label_values(&[])
+            .set(i64::try_from(total)?);
+        Ok(())
+    }
+
     /// Sets the tip height.
     pub fn set_tip_height(&self, tip: Height) -> anyhow::Result<()> {
         self.tip_height.set(i64::try_from(tip.0)?);
@@ -259,4 +265,29 @@ fn counter(
     let counter = IntCounterVec::new(Opts::new(format!("query_watchdog_{name}"), help), labels)?;
     registry.register(Box::new(counter.clone()))?;
     Ok(counter)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Names of the families `registry` currently exports.
+    fn family_names(registry: &Registry) -> Vec<String> {
+        registry
+            .gather()
+            .iter()
+            .map(|family| family.get_name().to_string())
+            .collect()
+    }
+
+    #[test]
+    fn the_alert_total_is_absent_until_first_set() {
+        let registry = Registry::new();
+        let metrics = WatchdogMetrics::new(&registry).unwrap();
+        let name = "query_watchdog_not_found_units".to_string();
+        assert!(!family_names(&registry).contains(&name));
+
+        metrics.set_not_found_units(0).unwrap();
+        assert!(family_names(&registry).contains(&name));
+    }
 }

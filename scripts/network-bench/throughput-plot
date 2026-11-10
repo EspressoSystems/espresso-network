@@ -40,6 +40,7 @@ from pathlib import Path
 
 import chaos as ch
 import matplotlib
+import netbench as nb
 import numpy as np
 import tomllib
 
@@ -365,6 +366,21 @@ def read_jsonl(path: Path) -> list[dict]:
         return [json.loads(line) for line in f]
 
 
+def final_steps(run_dir: Path, steps: list[dict]) -> list[dict]:
+    """The steps with the verdict `result.json` gives them (`netbench.final_verdict`); as in
+    steps.json when the run has no run.json to judge them on."""
+    run_path = run_dir / "run.json"
+    run = json.loads(run_path.read_text()) if run_path.exists() else {}
+    if "t1" not in run:
+        return steps
+    cfg = nb.load_config(json.loads((run_dir / "config.json").read_text()))
+    txs = read_jsonl(run_dir / "load.jsonl")
+    heights = read_jsonl(run_dir / "heights.jsonl")
+    counters = read_jsonl(run_dir / "consensus.jsonl")
+    end = nb.evidence_end(run["t1"], counters, heights)
+    return [nb.final_verdict(s, cfg, txs, heights, counters, end) for s in steps]
+
+
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("run_dir", type=Path)
@@ -372,7 +388,7 @@ def main(argv: list[str] | None = None) -> None:
 
     cfg = json.loads((run_dir / "config.json").read_text())
     tx_size = cfg["tx_size"]
-    steps = json.loads((run_dir / "steps.json").read_text())
+    steps = final_steps(run_dir, json.loads((run_dir / "steps.json").read_text()))
     counters = read_jsonl(run_dir / "consensus.jsonl")
     txs = read_jsonl(run_dir / "load.jsonl")
     heights = read_jsonl(run_dir / "heights.jsonl")

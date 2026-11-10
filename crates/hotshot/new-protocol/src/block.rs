@@ -33,9 +33,11 @@ use crate::{
     consensus::ConsensusInput,
     coordinator::metrics::{Measurement, finish_measurement, ignore_measurement},
     helpers::proposal_commitment,
+    leader_trace::{LeaderEvent, LeaderTracerHandle},
     message::{DedupManifest, Proposal, TransactionMessage},
     network::message_limit,
     state::HeaderRequest,
+    trace_leader_event,
     vid::{BuiltDispersal, VidDisperseError},
 };
 
@@ -288,6 +290,9 @@ pub struct BlockBuilder<T: NodeType> {
     view_transactions: BTreeMap<ViewNumber, PooledBlock<T>>,
     tasks: JoinSet<Result<BlockBuilderOutput<T>, BlockError>>,
     commitments_duration_metric: Option<Arc<dyn Histogram>>,
+    /// Records the four block-builder events (request, payload start, commitments
+    /// start/end), when set.
+    tracer: Option<LeaderTracerHandle>,
 }
 
 impl<T: NodeType> BlockBuilder<T> {
@@ -316,7 +321,14 @@ impl<T: NodeType> BlockBuilder<T> {
             view_transactions: BTreeMap::new(),
             tasks: JoinSet::new(),
             commitments_duration_metric: None,
+            tracer: None,
         }
+    }
+
+    /// Registers the leader tracer; builder-style like `with_metrics`.
+    pub fn with_tracer(mut self, tracer: Option<LeaderTracerHandle>) -> Self {
+        self.tracer = tracer;
+        self
     }
 
     pub fn with_metrics(mut self, commitments_duration: Option<Arc<dyn Histogram>>) -> Self {
@@ -344,13 +356,16 @@ impl<T: NodeType> BlockBuilder<T> {
 
         let empty_block_delay = self.config.empty_block_delay;
         let duration_metric = self.commitments_duration_metric.clone();
+        let tracer = self.tracer.clone();
 
+        trace_leader_event!(tracer, view, LeaderEvent::BlockRequestStarted);
         let handle = self.tasks.spawn(async move {
             // Without this an idle network produces empty blocks as fast as consensus can run
             // them, flooding the coordinator's event queue.
             if txs.is_empty() {
                 sleep(empty_block_delay).await;
             }
+            trace_leader_event!(tracer, view, LeaderEvent::BlockPayloadStart);
 
             let validated_state =
                 T::ValidatedState::from_header(&request.parent_proposal.block_header);
@@ -368,8 +383,10 @@ impl<T: NodeType> BlockBuilder<T> {
                 .collect();
             let commitments = spawn_blocking(move || {
                 let measurement = duration_metric.map(Measurement::start);
+                trace_leader_event!(tracer, view, LeaderEvent::BlockCommitmentsStart);
                 let commitments =
                     block_commitments(&payload, &pooled_hashes, &stake_table, version);
+                trace_leader_event!(tracer, view, LeaderEvent::BlockCommitmentsEnd);
                 match &commitments {
                     Ok(_) => finish_measurement(measurement),
                     Err(_) => ignore_measurement(measurement),

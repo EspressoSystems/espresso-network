@@ -236,6 +236,13 @@ def OpensB (h : History) (p : Proposal) : Prop :=
     ∧ p.parentCert.data.blockHash = blockHash parent)
     ∧ ∃ c2 ∈ cert2sHeld h ++ [cfg.anchorCert2], c2.view < p.viewNumber ∧ c2.data = p.parentCert.data.toVote2
 
+/-- `ParentReady`, over lists. -/
+def ParentReadyB (h : History) (p : Proposal) : Prop :=
+  p.parentCert.view = cfg.anchorView ∨ EntersEpoch cfg p
+    ∨ ∃ parent ∈ proposalsHeld cfg h, parent.viewNumber ≤ p.parentCert.view
+        ∧ p.parentCert.data.blockHash = blockHash parent
+        ∧ h.HasPayload cfg parent.viewNumber parent.payloadCommit
+
 /-- `ProposalJustified`, over lists. -/
 def ProposalJustifiedB (h : History) (p : Proposal) : Prop :=
   leader p.epoch p.viewNumber = some node ∧ ProposalWellFormed cfg p
@@ -315,10 +322,7 @@ def OwedB (h : History) : Obligation → Prop
       (∃ x ∈ receivedProposals h, x.2.1 = p ∧ leader p.epoch p.viewNumber = some x.1
         ∧ ShareMatches p x.2.2)
       ∧ ProposalWellFormed cfg p ∧ h.Received (.blockValidated p.viewNumber (blockHash p))
-      ∧ (p.parentCert.view = cfg.anchorView
-          ∨ ∃ parent ∈ proposalsHeld cfg h, parent.viewNumber ≤ p.parentCert.view
-              ∧ p.parentCert.data.blockHash = blockHash parent)
-      ∧ SafeParentB p ∧ OpensB cfg h p ∧ NotBehindB cfg h p.epoch
+      ∧ ParentReadyB cfg h p ∧ SafeParentB p ∧ OpensB cfg h p ∧ NotBehindB cfg h p.epoch
       ∧ ¬ TimedOutB h p.viewNumber
       ∧ (∀ vote ∈ vote1sSent h, vote.data.epoch = p.epoch → vote.view ≠ p.viewNumber)
       ∧ viewOf cfg h = p.viewNumber
@@ -355,6 +359,9 @@ instance (h : History) (c : Cert1) (ev : Option TimeoutCert) : Decidable (CertJu
 
 instance (h : History) (p : Proposal) : Decidable (OpensB cfg h p) := by
   unfold OpensB; infer_instance
+
+instance (h : History) (p : Proposal) : Decidable (ParentReadyB cfg h p) := by
+  unfold ParentReadyB; infer_instance
 
 instance (h : History) (p : Proposal) : Decidable (ProposalJustifiedB cfg leader node h p) := by
   unfold ProposalJustifiedB; infer_instance
@@ -481,6 +488,12 @@ theorem certJustifiedB_iff {h : History} {c : Cert1} {ev : Option TimeoutCert} :
 theorem opensB_iff {h : History} {p : Proposal} : OpensB cfg h p ↔ OpensEpochJustified cfg h p := by
   simp only [OpensB, OpensEpochJustified, mem_proposalsHeld, List.mem_append, mem_cert2sHeld,
     List.mem_singleton]
+
+theorem parentReadyB_iff {h : History} {p : Proposal} : ParentReadyB cfg h p ↔ ParentReady cfg h p := by
+  simp only [ParentReadyB, ParentReady, mem_proposalsHeld]
+
+instance (h : History) (p : Proposal) : Decidable (ParentReady cfg h p) :=
+  decidable_of_iff _ parentReadyB_iff
 
 theorem proposalJustifiedB_iff {h : History} {p : Proposal} :
     ProposalJustifiedB cfg leader node h p ↔ ProposalJustified cfg leader node h p := by
@@ -640,7 +653,7 @@ theorem owedB_iff {h : History} {o : Obligation} :
     OwedB cfg leader node h o ↔ Owed cfg leader node h o := by
   cases o with
   | vote1 p =>
-    simp only [OwedB, Owed, owedVote1_iff, ParentReady, safeParentB_iff, opensB_iff, notBehindB_iff, mem_proposalsHeld,
+    simp only [OwedB, Owed, owedVote1_iff, parentReadyB_iff, safeParentB_iff, opensB_iff, notBehindB_iff, mem_proposalsHeld,
       mem_vote1sSent, timedOutB_iff, ← inView_iff_viewOf]
     apply and_congr _ Iff.rfl
     constructor

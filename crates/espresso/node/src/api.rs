@@ -1,7 +1,12 @@
-use std::{collections::HashMap, pin::Pin, sync::Arc, time::Duration};
+use std::{
+    collections::HashMap,
+    pin::Pin,
+    sync::{Arc, OnceLock},
+    time::Duration,
+};
 
 use ::light_client::{
-    LightClient,
+    LightClient, LightClientMetrics,
     client::{FallbackClient, QueryServiceClient},
     state::{Genesis, LightClientOptions},
     storage::LightClientDbOptions,
@@ -53,7 +58,10 @@ use hotshot_types::{
     network::NetworkConfig,
     simple_certificate::LightClientStateUpdateCertificateV2,
     stake_table::HSStakeTable,
-    traits::election::{GenesisStakeTables, Membership, MembershipSnapshot},
+    traits::{
+        election::{GenesisStakeTables, Membership, MembershipSnapshot},
+        metrics::Metrics,
+    },
     utils::epoch_from_block_number,
     vid::avidm::{AvidMScheme, init_avidm_param},
     vote::HasViewNumber,
@@ -1744,6 +1752,7 @@ pub(crate) struct LightClientProvider {
     light_client: OnceCell<Arc<NodeLightClient>>,
     state: ApiState,
     client: FallbackClient<QueryServiceClient>,
+    metrics: OnceLock<Box<dyn Metrics>>,
     opt: LightClientOptions,
     db_opt: LightClientDbOptions,
 }
@@ -1760,9 +1769,17 @@ impl LightClientProvider {
             light_client: OnceCell::new(),
             state,
             client,
+            metrics: OnceLock::new(),
             opt,
             db_opt,
         })
+    }
+
+    /// The registry is created with the query data source, which needs this provider first.
+    /// The light client is built on the first fetch, after the node context exists, and the
+    /// context is created after this is called.
+    pub(crate) fn set_metrics(&self, metrics: Box<dyn Metrics>) {
+        self.metrics.set(metrics).ok();
     }
 
     pub(crate) async fn light_client(&self) -> Option<&Arc<NodeLightClient>> {
@@ -1788,14 +1805,23 @@ impl LightClientProvider {
             .connect()
             .await
             .context("opening the light client database")?;
+        // Registered after the database opens, since an init retried after a failed open would
+        // register the same metrics again and panic.
+        let metrics = match self.metrics.get() {
+            Some(metrics) => LightClientMetrics::new(&**metrics),
+            None => LightClientMetrics::default(),
+        };
         let chain_id = ctx.node_state().genesis_chain_config.chain_id;
         let genesis = light_client_genesis(&ctx.network_config(), chain_id);
-        Ok(Arc::new(LightClient::from_genesis_with_options(
-            db,
-            self.client.clone(),
-            genesis,
-            self.opt.clone(),
-        )))
+        Ok(Arc::new(
+            LightClient::from_genesis_with_options(
+                db,
+                self.client.clone(),
+                genesis,
+                self.opt.clone(),
+            )
+            .with_metrics(metrics),
+        ))
     }
 }
 
@@ -2206,7 +2232,7 @@ pub mod test_helpers {
                         let upgrades_map = cfg.upgrades();
                         async move {
                             if i == 0 {
-                                opt.serve(|metrics, consumer, storage| {
+                                opt.serve(|metrics, consumer, storage, _| {
                                     let cfg = cfg.clone();
                                     async move {
                                         Ok(cfg
@@ -4345,7 +4371,7 @@ mod test {
         let persistence = <D as TestableSequencerDataSource>::persistence_options(&dbs[LATE]);
         let catchup = state_peers();
         let _late = api
-            .serve(|metrics, consumer, storage| {
+            .serve(|metrics, consumer, storage, _| {
                 async move {
                     Ok(cfg
                         .init_node(
@@ -4413,6 +4439,18 @@ mod test {
             .unwrap();
             assert_eq!(ours, theirs);
         }
+
+        let export = reqwest::get(format!("http://localhost:{late_port}/v1/status/metrics"))
+            .await
+            .unwrap()
+            .text()
+            .await
+            .unwrap();
+        assert_eq!(
+            metric_value(&export, "light_client_verification_failures"),
+            Some(0.0),
+            "{export}"
+        );
     }
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
@@ -5953,8 +5991,10 @@ mod test {
             urls: vec![network.cfg.l1_url()],
             options: network.cfg.l1_opt(),
         };
+        let follower_port = reserve_tcp_port().expect("No ports free for query service");
         let (mut follower, follower_client) = start_follower::<D>(
             &follower_storage,
+            follower_port,
             genesis.clone(),
             params.clone(),
             l1_params(),
@@ -5964,6 +6004,27 @@ mod test {
         wait_for_epochs(&mut events, EPOCH_HEIGHT, EPOCHS_TO_FOLLOW).await;
         let tip = network.server.decided_leaf().await.height();
         assert_follows_to(&follower, &follower_client, tip).await?;
+
+        let export = reqwest::get(format!(
+            "http://localhost:{follower_port}/v1/status/metrics"
+        ))
+        .await?
+        .text()
+        .await?;
+        assert!(
+            metric_value(&export, "light_client_follower_block_height") > Some(tip as f64),
+            "{export}"
+        );
+        assert!(
+            metric_value(&export, "light_client_latest_stake_table_epoch")
+                >= Some(epoch_from_block_number(tip, EPOCH_HEIGHT) as f64),
+            "{export}"
+        );
+        assert_eq!(
+            metric_value(&export, "light_client_verification_failures"),
+            Some(0.0),
+            "{export}"
+        );
 
         let finalized_height = latest_cert2_height(&api_client, tip)
             .await
@@ -6020,8 +6081,14 @@ mod test {
         // starts.
         follower.shut_down().await;
         drop(follower);
-        let (_follower, follower_client) =
-            start_follower::<D>(&follower_storage, genesis, params, l1_params()).await?;
+        let (_follower, follower_client) = start_follower::<D>(
+            &follower_storage,
+            reserve_tcp_port().expect("No ports free for query service"),
+            genesis,
+            params,
+            l1_params(),
+        )
+        .await?;
         wait_for_epochs(&mut events, EPOCH_HEIGHT, EPOCHS_TO_FOLLOW + 1).await;
         let tip = network.server.decided_leaf().await.height();
         timeout(
@@ -6074,8 +6141,16 @@ mod test {
         }
     }
 
+    /// The value of `series`, a metric name with its labels if any, in a `status/metrics` export.
+    fn metric_value(export: &str, series: &str) -> Option<f64> {
+        export
+            .lines()
+            .find_map(|line| line.strip_prefix(series)?.strip_prefix(' ')?.parse().ok())
+    }
+
     async fn start_follower<D: TestableSqlDataSource>(
         storage: &<D as TestableSequencerDataSource>::Storage,
+        port: u16,
         genesis: NodeGenesis,
         params: FollowerParams,
         l1_params: L1Params,
@@ -6083,7 +6158,6 @@ mod test {
         FollowerContext<<D::Options as PersistenceOptions>::Persistence>,
         Client<ClientErr, SequencerApiVersion>,
     )> {
-        let port = reserve_tcp_port().expect("No ports free for query service");
         let mut db = D::persistence_options(storage);
         let persistence = db.create().await?;
         let handle = db
@@ -6097,9 +6171,18 @@ mod test {
             .catchup(Default::default())
             .config(Default::default())
             .submit(Default::default())
-            .serve(move |metrics, sink, _| {
+            .serve(move |metrics, sink, _, registry| {
                 async move {
-                    init_follower_node(genesis, params, metrics, persistence, l1_params, sink).await
+                    init_follower_node(
+                        genesis,
+                        params,
+                        metrics,
+                        LightClientMetrics::new(&*registry),
+                        persistence,
+                        l1_params,
+                        sink,
+                    )
+                    .await
                 }
                 .boxed()
             })
@@ -7297,7 +7380,7 @@ mod test {
         // start the query node so that it builds the merklized state
         let mut node_0 = opt
             .clone()
-            .serve(|metrics, consumer, storage| {
+            .serve(|metrics, consumer, storage, _| {
                 let cfg = network.cfg.clone();
                 let node_0_persistence = node_0_persistence.clone();
                 let state = state.clone();
@@ -7342,7 +7425,7 @@ mod test {
         // start the node again.
         tracing::info!("restarting node");
         let node_0 = opt
-            .serve(|metrics, consumer, storage| {
+            .serve(|metrics, consumer, storage, _| {
                 let cfg = network.cfg.clone();
                 async move {
                     Ok(cfg
@@ -8032,7 +8115,7 @@ mod test {
         );
         let state_peers = api_state_peers(&api_url);
         let query_node = opt
-            .serve(move |metrics, consumer, storage| {
+            .serve(move |metrics, consumer, storage, _| {
                 async move {
                     Ok(cfg
                         .init_node(
@@ -8238,7 +8321,7 @@ mod test {
         );
         let node_0 = opt
             .clone()
-            .serve(|metrics, consumer, storage| {
+            .serve(|metrics, consumer, storage, _| {
                 let cfg = network.cfg.clone();
                 let node_0_persistence = node_0_persistence.clone();
                 let state = state.clone();
@@ -12356,7 +12439,7 @@ mod test {
         );
         let node_0 = opt
             .clone()
-            .serve(|metrics, consumer, storage| {
+            .serve(|metrics, consumer, storage, _| {
                 let cfg = network.cfg.clone();
                 let new_persistence = new_persistence.clone();
                 let state = state.clone();
