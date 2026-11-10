@@ -576,9 +576,9 @@ impl Header {
         mut state: ValidatedState,
         chain_config: ChainConfig,
         version: Version,
-        total_reward_distributed: Option<RewardAmount>,
+        total_reward_distributed: RewardAmount,
         next_stake_table_hash: Option<StakeTableHash>,
-        leader_counts: Option<LeaderCounts>,
+        leader_counts: LeaderCounts,
     ) -> anyhow::Result<Self> {
         ensure!(
             version.major == 0,
@@ -680,9 +680,9 @@ impl Header {
                 reward_merkle_tree_root: state.reward_merkle_tree_v2.commitment(),
                 fee_info: fee_info[0],
                 builder_signature: builder_signature.first().copied(),
-                total_reward_distributed: total_reward_distributed.unwrap_or_default(),
+                total_reward_distributed,
                 next_stake_table_hash,
-                leader_counts: leader_counts.expect("leader_counts is required for V6 headers"),
+                leader_counts,
             }),
             // From 0.7 the header carries no builder commitment.
             (0, 7) => Self::V7(v0_7::Header {
@@ -699,9 +699,9 @@ impl Header {
                 reward_merkle_tree_root: state.reward_merkle_tree_v2.commitment(),
                 fee_info: fee_info[0],
                 builder_signature: builder_signature.first().copied(),
-                total_reward_distributed: total_reward_distributed.unwrap_or_default(),
+                total_reward_distributed,
                 next_stake_table_hash,
-                leader_counts: leader_counts.expect("leader_counts is required for V7 headers"),
+                leader_counts,
             }),
             // The proposer rejects unsupported versions before preparing state.
             _ => panic!("invalid version: {version}"),
@@ -1408,9 +1408,9 @@ impl BlockHeader<SeqTypes> for Header {
                 validated_state,
                 chain_config,
                 version,
-                Some(total_reward_distributed),
+                total_reward_distributed,
                 next_stake_table_hash,
-                Some(leader_counts),
+                leader_counts,
             )?)
         }
     }
@@ -1746,9 +1746,9 @@ mod test_headers {
                 validated_state.clone(),
                 genesis.instance_state.chain_config,
                 version,
-                Some(RewardAmount::default()),
+                RewardAmount::default(),
                 None, // next_stake_table_hash
-                Some([0; MAX_VALIDATORS]),
+                [0; MAX_VALIDATORS],
             )
             .unwrap();
             assert_eq!(header.height(), parent.height() + 1);
