@@ -24,6 +24,11 @@ jobs:
         # inclusion_proofs and vid_ns_shares are off until the arkworks update lands
         target:
           - ns_table
+          - stake_table_events
+        include:
+          # A replay needs several events, longer than libFuzzer grows inputs to in five minutes
+          - target: stake_table_events
+            args: -max_len=512 -len_control=0
     steps:
       - uses: actions/checkout@v7
 
@@ -44,7 +49,7 @@ jobs:
         # The prebuilt cargo-fuzz defaults to musl, which AddressSanitizer does not support
         run: >
           cargo +nightly fuzz run --target x86_64-unknown-linux-gnu ${{ matrix.target }}
-          -- -max_total_time=300 -rss_limit_mb=2048
+          -- -max_total_time=300 -rss_limit_mb=2048 ${{ matrix.args }}
 
       - uses: actions/upload-artifact@v7
         if: failure()
