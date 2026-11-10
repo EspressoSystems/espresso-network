@@ -1458,50 +1458,6 @@ impl<TYPES: NodeType> Leaf2<TYPES> {
         self.block_header().payload_commitment()
     }
 
-    /// Validate that a leaf has the right upgrade certificate to be the immediate child of another leaf
-    ///
-    /// This may not be a complete function. Please double-check that it performs the checks you expect before substituting validation logic with it.
-    ///
-    /// # Errors
-    /// Returns an error if the certificates are not identical, or that when we no longer see a
-    /// cert, it's for the right reason.
-    pub fn extends_upgrade(&self, parent: &Self, upgrade: &UpgradeLock<TYPES>) -> Result<()> {
-        match (self.upgrade_certificate(), parent.upgrade_certificate()) {
-            // Easiest cases are:
-            //   - no upgrade certificate on either: this is the most common case, and is always fine.
-            //   - if the parent didn't have a certificate, but we see one now, it just means that we have begun an upgrade: again, this is always fine.
-            (None | Some(_), None) => {},
-            // If we no longer see a cert, we have to make sure that we either:
-            //    - no longer care because we have passed new_version_first_view, or
-            //    - no longer care because we have passed `decide_by` without deciding the certificate.
-            (None, Some(parent_cert)) => {
-                let decided_upgrade_certificate_read = upgrade.decided_upgrade_cert();
-                ensure!(
-                    self.view_number() > parent_cert.data.new_version_first_view
-                        || (self.view_number() > parent_cert.data.decide_by
-                            && decided_upgrade_certificate_read.is_none()),
-                    "The new leaf is missing an upgrade certificate that was present in its \
-                     parent, and should still be live."
-                );
-            },
-            // If we both have a certificate, they should be identical.
-            // Technically, this prevents us from initiating a new upgrade in the view immediately following an upgrade.
-            // I think this is a fairly lax restriction.
-            (Some(cert), Some(parent_cert)) => {
-                ensure!(
-                    cert == parent_cert,
-                    "The new leaf does not extend the parent leaf, because it has attached a \
-                     different upgrade certificate."
-                );
-            },
-        }
-
-        // This check should be added once we sort out the genesis leaf/justify_qc issue.
-        // ensure!(self.parent_commitment() == parent_leaf.commit(), "The commitment of the parent leaf does not match the specified parent commitment.");
-
-        Ok(())
-    }
-
     /// Converts a `Leaf2` to a `Leaf`. This operation is fundamentally unsafe and should not be used.
     pub fn to_leaf_unsafe(self) -> Leaf<TYPES> {
         let bytes: [u8; 32] = self.parent_commitment.into();
@@ -1838,50 +1794,6 @@ impl<TYPES: NodeType> Leaf<TYPES> {
     /// A commitment to the block payload contained in this leaf.
     pub fn payload_commitment(&self) -> VidCommitment {
         self.block_header().payload_commitment()
-    }
-
-    /// Validate that a leaf has the right upgrade certificate to be the immediate child of another leaf
-    ///
-    /// This may not be a complete function. Please double-check that it performs the checks you expect before substituting validation logic with it.
-    ///
-    /// # Errors
-    /// Returns an error if the certificates are not identical, or that when we no longer see a
-    /// cert, it's for the right reason.
-    pub fn extends_upgrade(&self, parent: &Self, upgrade: &UpgradeLock<TYPES>) -> Result<()> {
-        match (self.upgrade_certificate(), parent.upgrade_certificate()) {
-            // Easiest cases are:
-            //   - no upgrade certificate on either: this is the most common case, and is always fine.
-            //   - if the parent didn't have a certificate, but we see one now, it just means that we have begun an upgrade: again, this is always fine.
-            (None | Some(_), None) => {},
-            // If we no longer see a cert, we have to make sure that we either:
-            //    - no longer care because we have passed new_version_first_view, or
-            //    - no longer care because we have passed `decide_by` without deciding the certificate.
-            (None, Some(parent_cert)) => {
-                let decided_upgrade_certificate_read = upgrade.decided_upgrade_cert();
-                ensure!(
-                    self.view_number() > parent_cert.data.new_version_first_view
-                        || (self.view_number() > parent_cert.data.decide_by
-                            && decided_upgrade_certificate_read.is_none()),
-                    "The new leaf is missing an upgrade certificate that was present in its \
-                     parent, and should still be live."
-                );
-            },
-            // If we both have a certificate, they should be identical.
-            // Technically, this prevents us from initiating a new upgrade in the view immediately following an upgrade.
-            // I think this is a fairly lax restriction.
-            (Some(cert), Some(parent_cert)) => {
-                ensure!(
-                    cert == parent_cert,
-                    "The new leaf does not extend the parent leaf, because it has attached a \
-                     different upgrade certificate."
-                );
-            },
-        }
-
-        // This check should be added once we sort out the genesis leaf/justify_qc issue.
-        // ensure!(self.parent_commitment() == parent_leaf.commit(), "The commitment of the parent leaf does not match the specified parent commitment.");
-
-        Ok(())
     }
 }
 
