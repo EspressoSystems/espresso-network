@@ -617,7 +617,9 @@ pub mod mock {
     use super::*;
     use crate::{
         BackoffParams, BlockMerkleTree, FeeAccountProof, Leaf2,
-        catchup::{FeeAccountsAt, LeafAt, RewardAccountsV1At, RewardTreeV2At, Verified},
+        catchup::{
+            FeeAccountsAt, LeafAt, RewardAccountsV1At, RewardTreeV2At, StateCertFor, Verified,
+        },
         retain_accounts,
         v0_3::RewardAccountProofV1,
         v0_4::PermittedRewardMerkleTreeV2,
@@ -745,8 +747,8 @@ pub mod mock {
         async fn try_fetch_state_cert(
             &self,
             _retry: usize,
-            _epoch: u64,
-        ) -> anyhow::Result<LightClientStateUpdateCertificateV2<SeqTypes>> {
+            _req: &StateCertFor,
+        ) -> anyhow::Result<Verified<LightClientStateUpdateCertificateV2<SeqTypes>>> {
             anyhow::bail!("unimplemented")
         }
 

@@ -17,7 +17,7 @@ use espresso_types::{
     ValidatedState,
     catchup::{
         FeeAccountsAt, LeafAt, LeafChain, LegacyChain, NewProtocolChain, RewardAccountsV1At,
-        RewardTreeV2At, Verified, VerifyError, verify_chain_config,
+        RewardTreeV2At, StateCertFor, Verified, VerifyError, verify_chain_config,
     },
     config::PublicNetworkConfig,
     v0::traits::StateCatchup,
@@ -532,16 +532,20 @@ impl<ApiVer: StaticVersionType> StateCatchup for StatePeers<ApiVer> {
     async fn try_fetch_state_cert(
         &self,
         retry: usize,
-        epoch: u64,
-    ) -> anyhow::Result<LightClientStateUpdateCertificateV2<SeqTypes>> {
-        self.fetch(retry, |client| async move {
-            client
-                .get::<LightClientStateUpdateCertificateV2<SeqTypes>>(&paths::catchup_state_cert(
-                    epoch,
-                ))
-                .send()
-                .await
-        })
+        req: &StateCertFor,
+    ) -> anyhow::Result<Verified<LightClientStateUpdateCertificateV2<SeqTypes>>> {
+        self.fetch_verified(
+            retry,
+            |client| async move {
+                client
+                    .get::<LightClientStateUpdateCertificateV2<SeqTypes>>(
+                        &paths::catchup_state_cert(req.epoch.u64()),
+                    )
+                    .send()
+                    .await
+            },
+            |cert| async move { req.verify(cert) },
+        )
         .await
     }
 
@@ -955,8 +959,8 @@ where
     async fn try_fetch_state_cert(
         &self,
         _retry: usize,
-        _epoch: u64,
-    ) -> anyhow::Result<LightClientStateUpdateCertificateV2<SeqTypes>> {
+        _req: &StateCertFor,
+    ) -> anyhow::Result<Verified<LightClientStateUpdateCertificateV2<SeqTypes>>> {
         bail!("state cert catchup not supported for SqlStateCatchup");
     }
 
@@ -1067,8 +1071,8 @@ impl StateCatchup for NullStateCatchup {
     async fn try_fetch_state_cert(
         &self,
         _retry: usize,
-        _epoch: u64,
-    ) -> anyhow::Result<LightClientStateUpdateCertificateV2<SeqTypes>> {
+        _req: &StateCertFor,
+    ) -> anyhow::Result<Verified<LightClientStateUpdateCertificateV2<SeqTypes>>> {
         bail!("state catchup is disabled");
     }
 
@@ -1173,10 +1177,10 @@ impl<C: StateCatchup> StateCatchup for SingleAttemptCatchup<C> {
     async fn try_fetch_state_cert(
         &self,
         retry: usize,
-        epoch: u64,
-    ) -> anyhow::Result<LightClientStateUpdateCertificateV2<SeqTypes>> {
+        req: &StateCertFor,
+    ) -> anyhow::Result<Verified<LightClientStateUpdateCertificateV2<SeqTypes>>> {
         self.inner
-            .try_fetch_state_cert(self.retry + retry, epoch)
+            .try_fetch_state_cert(self.retry + retry, req)
             .await
     }
 
@@ -1431,11 +1435,14 @@ impl StateCatchup for ParallelStateCatchup {
     async fn try_fetch_state_cert(
         &self,
         retry: usize,
-        epoch: u64,
-    ) -> anyhow::Result<LightClientStateUpdateCertificateV2<SeqTypes>> {
-        self.on_providers(move |provider| async move {
-            provider.try_fetch_state_cert(retry, epoch).await
-        })
+        req: &StateCertFor,
+    ) -> anyhow::Result<Verified<LightClientStateUpdateCertificateV2<SeqTypes>>> {
+        let req = req.clone();
+        self.on_providers(clone! {(req) move |provider| {
+            clone! {(req) async move {
+                provider.try_fetch_state_cert(retry, &req).await
+            }}
+        }})
         .await
     }
 
@@ -1505,10 +1512,15 @@ impl StateCatchup for ParallelStateCatchup {
 
     async fn fetch_state_cert(
         &self,
-        epoch: u64,
-    ) -> anyhow::Result<LightClientStateUpdateCertificateV2<SeqTypes>> {
-        self.on_providers(move |provider| async move { provider.fetch_state_cert(epoch).await })
-            .await
+        req: &StateCertFor,
+    ) -> anyhow::Result<Verified<LightClientStateUpdateCertificateV2<SeqTypes>>> {
+        let req = req.clone();
+        self.on_providers(clone! {(req) move |provider| {
+            clone! {(req) async move {
+                provider.fetch_state_cert(&req).await
+            }}
+        }})
+        .await
     }
 
     async fn remember_blocks_merkle_tree(
@@ -1695,7 +1707,7 @@ mod test {
     };
 
     use espresso_types::v0::mock::MockStateCatchup;
-    use hotshot_types::{data::EpochNumber, traits::metrics::NoMetrics};
+    use hotshot_types::{data::EpochNumber, message::UpgradeLock, traits::metrics::NoMetrics};
     use light_client::testing::leaf_chain_with_upgrade;
     use test_utils::reserve_tcp_port;
     use versions::{DRB_AND_HEADER_UPGRADE_VERSION, NEW_PROTOCOL_VERSION, Upgrade};
@@ -2071,8 +2083,8 @@ mod test {
         async fn try_fetch_state_cert(
             &self,
             _retry: usize,
-            _epoch: u64,
-        ) -> anyhow::Result<LightClientStateUpdateCertificateV2<SeqTypes>> {
+            _req: &StateCertFor,
+        ) -> anyhow::Result<Verified<LightClientStateUpdateCertificateV2<SeqTypes>>> {
             bail!("unsupported")
         }
 
@@ -2130,7 +2142,13 @@ mod test {
         let remote = DelayedCatchup::provider(false, Duration::ZERO);
         let catchup = ParallelStateCatchup::new(&[local, remote], Duration::from_secs(30));
 
-        let err = format!("{:#}", catchup.fetch_state_cert(1).await.unwrap_err());
+        let req = StateCertFor {
+            epoch: EpochNumber::new(1),
+            stake_table: Default::default(),
+            epoch_height: 10,
+            upgrade_lock: UpgradeLock::new(Upgrade::trivial(NEW_PROTOCOL_VERSION)),
+        };
+        let err = format!("{:#}", catchup.fetch_state_cert(&req).await.unwrap_err());
         assert_eq!(err.matches("unsupported").count(), 2, "{err}");
         assert!(err.contains("DelayedCatchup(local)"), "{err}");
         assert!(err.contains("DelayedCatchup(remote)"), "{err}");

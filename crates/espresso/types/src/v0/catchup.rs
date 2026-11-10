@@ -1,26 +1,25 @@
 //! Catchup requests, and the values a peer sends back once they are verified against the request.
 //!
-//! The leaf, fee account, reward account, reward tree and chain config methods of
-//! [`StateCatchup`](super::traits::StateCatchup) return [`Verified`] values. A provider gets one
-//! only from the `verify` function of the request it was asked to answer, or from
+//! The leaf, fee account, reward account, reward tree, chain config and state certificate methods
+//! of [`StateCatchup`](super::traits::StateCatchup) return [`Verified`] values. A provider gets
+//! one only from the `verify` function of the request it was asked to answer, or from
 //! [`Verified::new_unchecked`] for a trusted source. The types do not stop a provider from
 //! verifying against a request it built itself, so providers must use the one they were given.
 //!
-//! Not covered yet: the blocks frontier is checked by `remember` inside each provider, and state
-//! certificates are checked only by their consumer.
+//! Not covered yet: the blocks frontier is checked by `remember` inside each provider.
 
 use std::{fmt, sync::Arc};
 
 use anyhow::{Context, anyhow, ensure};
 use committable::{Commitment, Committable};
+#[cfg(feature = "node")]
+use hotshot_types::utils::{StakeTableUnavailable, verify_leaf_chain};
 use hotshot_types::{
     data::{EpochNumber, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
-};
-#[cfg(feature = "node")]
-use hotshot_types::{
     message::UpgradeLock,
-    utils::{StakeTableUnavailable, verify_leaf_chain},
+    simple_certificate::LightClientStateUpdateCertificateV2,
+    stake_table::HSStakeTable,
 };
 use jf_merkle_tree_compat::MerkleTreeScheme;
 #[cfg(feature = "node")]
@@ -39,6 +38,7 @@ use crate::{
         PermittedRewardMerkleTreeV2, RewardAccountV2, RewardMerkleCommitmentV2,
         forgotten_accounts_include,
     },
+    validate_state_cert,
 };
 
 /// Why a response failed verification.
@@ -327,6 +327,35 @@ fn classify_verify_error(result: anyhow::Result<Leaf2>) -> Result<Verified<Leaf2
             Some(StakeTableUnavailable(epoch)) => Err(VerifyError::Unavailable(*epoch)),
             None => Err(VerifyError::Invalid(err)),
         },
+    }
+}
+
+/// The state certificate of an epoch, checked against that epoch's stake table.
+#[derive(Clone, Debug)]
+pub struct StateCertFor {
+    pub epoch: EpochNumber,
+    pub stake_table: HSStakeTable<SeqTypes>,
+    pub epoch_height: u64,
+    pub upgrade_lock: UpgradeLock<SeqTypes>,
+}
+
+impl StateCertFor {
+    /// Accepts `cert` if it certifies the root block of [`Self::epoch`] with enough of
+    /// [`Self::stake_table`], as [`validate_state_cert`] checks.
+    pub fn verify(
+        &self,
+        cert: LightClientStateUpdateCertificateV2<SeqTypes>,
+    ) -> Result<Verified<LightClientStateUpdateCertificateV2<SeqTypes>>, VerifyError> {
+        validate_state_cert(
+            &cert,
+            &self.stake_table,
+            self.epoch,
+            self.epoch_height,
+            &self.upgrade_lock,
+        )
+        .with_context(|| format!("state certificate for epoch {}", self.epoch))
+        .map_err(VerifyError::Invalid)?;
+        Ok(Verified::new(cert))
     }
 }
 
