@@ -9,14 +9,13 @@ use espresso_types::{
     traits::SequencerPersistence,
 };
 use futures::{FutureExt, StreamExt, TryStreamExt, stream};
-use hotshot_new_protocol::{storage::NewProtocolStorage, utils::verify_cert2};
+use hotshot_new_protocol::utils::verify_cert2;
 use hotshot_types::{
     data::EpochNumber,
     drb::DrbResult,
     epoch_membership::{EpochMembershipCoordinator, LcContractSeedFn},
     message::UpgradeLock,
     stake_table::HSStakeTable,
-    traits::node_implementation::NodeImplementation,
     utils::{root_block_in_epoch, transition_block_for_epoch},
 };
 use light_client::consensus::header::HeaderProof;
@@ -35,10 +34,7 @@ const MAX_CONCURRENT_REQUESTS: usize = 3;
 /// Trust: `ST(E')` keys and stake come from the SNARK-verified `votingStakeTableState`. The seed
 /// header only gives the candidate quorum that verifies the anchor `H*(E'-1)+1`; every installed
 /// table comes from a header proven against the anchor or reached from it by parent links.
-pub(crate) struct LcContractSeed<I: NodeImplementation<SeqTypes>, P: SequencerPersistence>
-where
-    I::Storage: NewProtocolStorage<SeqTypes>,
-{
+pub(crate) struct LcContractSeed<P: SequencerPersistence> {
     node_state: NodeState,
     upgrade_lock: UpgradeLock<SeqTypes>,
     stake_table_capacity: usize,
@@ -46,16 +42,13 @@ where
     /// after the hook is installed. The hook must be installed first: `apply_epoch` at startup
     /// can start a catchup, which then runs without a seed if none is set. An attempt before the
     /// protocol is set fails and is retried.
-    requests: RequestsCell<I, P>,
+    requests: RequestsCell<P>,
 }
 
 /// Late-bound request-response protocol of a seed.
-pub(crate) type RequestsCell<I, P> = Arc<OnceLock<RequestResponseProtocol<I, P>>>;
+pub(crate) type RequestsCell<P> = Arc<OnceLock<RequestResponseProtocol<P>>>;
 
-impl<I: NodeImplementation<SeqTypes>, P: SequencerPersistence> LcContractSeed<I, P>
-where
-    I::Storage: NewProtocolStorage<SeqTypes>,
-{
+impl<P: SequencerPersistence> LcContractSeed<P> {
     /// A seed over `node_state` (L1, LC contract), the node's restored `upgrade_lock` and the
     /// `stake_table_capacity` of the LC contract commitment.
     pub fn new(
@@ -72,7 +65,7 @@ where
     }
 
     /// The cell to set with the request-response protocol once it exists.
-    pub fn requests_cell(&self) -> RequestsCell<I, P> {
+    pub fn requests_cell(&self) -> RequestsCell<P> {
         Arc::clone(&self.requests)
     }
 
@@ -143,7 +136,7 @@ where
     }
 
     /// The request-response protocol, if it is up.
-    fn requests(&self) -> anyhow::Result<&RequestResponseProtocol<I, P>> {
+    fn requests(&self) -> anyhow::Result<&RequestResponseProtocol<P>> {
         self.requests
             .get()
             .context("the request-response protocol is not started")

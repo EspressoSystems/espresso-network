@@ -26,6 +26,7 @@ use hotshot_types::{
     simple_certificate::{
         Certificate2, LightClientStateUpdateCertificateV2, QuorumCertificate2, UpgradeCertificate,
     },
+    simple_vote::LockView,
     traits::{node_implementation::NodeType, storage::Storage},
     vote::HasViewNumber,
 };
@@ -43,9 +44,12 @@ pub struct TestStorageState<TYPES: NodeType> {
     da2s: HashMap<ViewNumber, Proposal<TYPES, DaProposal2<TYPES>>>,
     pub proposals_wrapper: BTreeMap<ViewNumber, Proposal<TYPES, QuorumProposalWrapper<TYPES>>>,
     high_qc2: Option<QuorumCertificate2<TYPES>>,
+    /// The new protocol's latest epoch boundary block's own certificate.
+    boundary_qc2: Option<QuorumCertificate2<TYPES>>,
     action: ViewNumber,
     action_log: Vec<(ViewNumber, HotShotAction)>,
-    epoch: Option<EpochNumber>,
+    /// Where in `action_log` each restart of the node fell.
+    restarts: Vec<usize>,
     state_certs: BTreeMap<EpochNumber, LightClientStateUpdateCertificateV2<TYPES>>,
     drb_results: BTreeMap<EpochNumber, DrbResult>,
     drb_inputs: BTreeMap<u64, DrbInput>,
@@ -63,9 +67,10 @@ impl<TYPES: NodeType> Default for TestStorageState<TYPES> {
             da2s: HashMap::new(),
             proposals_wrapper: BTreeMap::new(),
             high_qc2: None,
+            boundary_qc2: None,
             action: ViewNumber::genesis(),
             action_log: Vec::new(),
-            epoch: None,
+            restarts: Vec::new(),
             state_certs: BTreeMap::new(),
             drb_results: BTreeMap::new(),
             drb_inputs: BTreeMap::new(),
@@ -118,7 +123,7 @@ impl<TYPES: NodeType> TestStorage<TYPES> {
         self.inner.read().await.high_qc2.clone()
     }
 
-    /// Persist the locked QC, keeping the one with the highest view: a stale
+    /// Persist the locked QC, keeping the latest by epoch, then view: a stale
     /// write is a no-op, like the sequencer's `append_high_qc2`.
     pub async fn store_high_qc2(&self, new_high_qc: QuorumCertificate2<TYPES>) -> Result<()> {
         if self.should_return_err.load(Ordering::Relaxed) {
@@ -129,9 +134,30 @@ impl<TYPES: NodeType> TestStorage<TYPES> {
         if inner
             .high_qc2
             .as_ref()
-            .is_none_or(|current| new_high_qc.view_number() > current.view_number())
+            .is_none_or(|current| LockView::of(&new_high_qc) > LockView::of(current))
         {
             inner.high_qc2 = Some(new_high_qc);
+        }
+        Ok(())
+    }
+
+    pub async fn boundary_qc_cloned(&self) -> Option<QuorumCertificate2<TYPES>> {
+        self.inner.read().await.boundary_qc2.clone()
+    }
+
+    /// Keep `qc` as the boundary certificate if it is later than the one kept,
+    /// ordered by epoch, then view.
+    pub async fn update_boundary_qc2(&self, qc: QuorumCertificate2<TYPES>) -> Result<()> {
+        if self.should_return_err.load(Ordering::Relaxed) {
+            bail!("Failed to update boundary qc to storage");
+        }
+        let mut inner = self.inner.write().await;
+        if inner
+            .boundary_qc2
+            .as_ref()
+            .is_none_or(|kept| LockView::of(kept) < LockView::of(&qc))
+        {
+            inner.boundary_qc2 = Some(qc);
         }
         Ok(())
     }
@@ -147,6 +173,26 @@ impl<TYPES: NodeType> TestStorage<TYPES> {
     /// Every action successfully recorded, in call order.
     pub async fn action_log(&self) -> Vec<(ViewNumber, HotShotAction)> {
         self.inner.read().await.action_log.clone()
+    }
+
+    /// Note that the node restarts here: actions recorded from now on belong
+    /// to its next run.
+    pub async fn mark_restart(&self) {
+        let mut inner = self.inner.write().await;
+        let at = inner.action_log.len();
+        inner.restarts.push(at);
+    }
+
+    /// The recorded actions split into the node's runs, the first run first.
+    pub async fn action_log_by_run(&self) -> Vec<Vec<(ViewNumber, HotShotAction)>> {
+        let inner = self.inner.read().await;
+        let mut runs = Vec::new();
+        let mut start = 0;
+        for &end in inner.restarts.iter().chain([&inner.action_log.len()]) {
+            runs.push(inner.action_log[start..end].to_vec());
+            start = end;
+        }
+        runs
     }
 
     pub async fn restart_view(&self) -> ViewNumber {
@@ -180,9 +226,11 @@ impl<TYPES: NodeType> TestStorage<TYPES> {
         self.inner.read().await.cert2s.get(&view).cloned()
     }
 
-    pub async fn last_actioned_epoch(&self) -> Option<EpochNumber> {
-        self.inner.read().await.epoch
+    /// Every stored `Certificate2`, by the view it is stored under.
+    pub async fn cert2s(&self) -> Vec<Certificate2<TYPES>> {
+        self.inner.read().await.cert2s.values().cloned().collect()
     }
+
     pub async fn vids_cloned(&self) -> VidShares<TYPES> {
         self.inner.read().await.vids.clone()
     }
@@ -264,7 +312,6 @@ impl<TYPES: NodeType> Storage<TYPES> for TestStorage<TYPES> {
     async fn record_action(
         &self,
         view: ViewNumber,
-        epoch: Option<EpochNumber>,
         action: hotshot_types::event::HotShotAction,
     ) -> Result<()> {
         if self.should_return_err.load(Ordering::Relaxed) {
@@ -275,13 +322,9 @@ impl<TYPES: NodeType> Storage<TYPES> for TestStorage<TYPES> {
         if matches!(
             action,
             HotShotAction::Vote | HotShotAction::Propose | HotShotAction::TimeoutVote
-        ) {
-            if view > inner.action {
-                inner.action = view;
-            }
-            if epoch > inner.epoch {
-                inner.epoch = epoch;
-            }
+        ) && view > inner.action
+        {
+            inner.action = view;
         }
         if matches!(action, HotShotAction::Vote) {
             inner.restart_view = view + 1;

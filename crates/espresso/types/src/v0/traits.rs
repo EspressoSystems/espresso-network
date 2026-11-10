@@ -962,12 +962,7 @@ pub trait SequencerPersistence:
         proposal: &Proposal<SeqTypes, DaProposal<SeqTypes>>,
         vid_commit: VidCommitment,
     ) -> anyhow::Result<()>;
-    async fn record_action(
-        &self,
-        view: ViewNumber,
-        epoch: Option<EpochNumber>,
-        action: HotShotAction,
-    ) -> anyhow::Result<()>;
+    async fn record_action(&self, view: ViewNumber, action: HotShotAction) -> anyhow::Result<()>;
 
     async fn append_quorum_proposal2(
         &self,
@@ -1002,6 +997,20 @@ pub trait SequencerPersistence:
 
     /// Load the persisted locked QC, if any.
     async fn load_high_qc2(&self) -> anyhow::Result<Option<QuorumCertificate2<SeqTypes>>> {
+        Ok(None)
+    }
+
+    /// Persist the new protocol's latest epoch boundary certificate: the own
+    /// `Certificate1` of the last block of an epoch, at the block's view.
+    ///
+    /// Implementations must apply this as an atomic monotonic compare-and-set,
+    /// ordered by epoch, then view, like [`Self::append_high_qc2`].
+    async fn append_boundary_qc2(&self, _qc: QuorumCertificate2<SeqTypes>) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    /// Load the persisted boundary certificate, if any.
+    async fn load_boundary_qc2(&self) -> anyhow::Result<Option<QuorumCertificate2<SeqTypes>>> {
         Ok(None)
     }
 
@@ -1111,13 +1120,8 @@ impl<P: SequencerPersistence> Storage<SeqTypes> for Arc<P> {
         (**self).append_da2(proposal, vid_commit).await
     }
 
-    async fn record_action(
-        &self,
-        view: ViewNumber,
-        epoch: Option<EpochNumber>,
-        action: HotShotAction,
-    ) -> anyhow::Result<()> {
-        (**self).record_action(view, epoch, action).await
+    async fn record_action(&self, view: ViewNumber, action: HotShotAction) -> anyhow::Result<()> {
+        (**self).record_action(view, action).await
     }
 
     async fn append_proposal_wrapper(
@@ -1181,6 +1185,14 @@ impl<P: SequencerPersistence> NewProtocolStorage<SeqTypes> for Arc<P> {
 
     async fn load_high_qc2(&self) -> anyhow::Result<Option<Certificate1<SeqTypes>>> {
         (**self).load_high_qc2().await
+    }
+
+    async fn append_boundary_qc2(&self, qc: Certificate1<SeqTypes>) -> anyhow::Result<()> {
+        (**self).append_boundary_qc2(qc).await
+    }
+
+    async fn load_boundary_qc2(&self) -> anyhow::Result<Option<Certificate1<SeqTypes>>> {
+        (**self).load_boundary_qc2().await
     }
 }
 

@@ -37,6 +37,7 @@ use crate::{
 pub mod currency;
 pub mod errors;
 pub mod monetary_value;
+pub mod response;
 pub mod sql;
 pub mod traits;
 

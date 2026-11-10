@@ -14,7 +14,6 @@ use espresso_types::{
     v0_3::{RewardAccountV1, RewardMerkleTreeV1},
     v0_4::{RewardAccountV2, RewardMerkleTreeV2},
 };
-use hotshot_new_protocol::storage::NewProtocolStorage;
 use hotshot_query_service::{
     data_source::{
         VersionedDataSource,
@@ -22,12 +21,7 @@ use hotshot_query_service::{
     },
     node::BlockId,
 };
-use hotshot_types::{
-    data::{VidShare, ViewNumber},
-    traits::node_implementation::NodeImplementation,
-    vote::HasViewNumber,
-};
-use itertools::Itertools;
+use hotshot_types::data::{VidShare, ViewNumber};
 use jf_merkle_tree_compat::{
     ForgetableMerkleTreeScheme, ForgetableUniversalMerkleTreeScheme, LookupResult,
     MerkleTreeScheme, UniversalMerkleTreeScheme,
@@ -100,9 +94,8 @@ pub trait RequestStorage: Send + Sync {
 }
 
 #[derive(Clone)]
-pub struct DataSource<I: NodeImplementation<SeqTypes>, P: SequencerPersistence> {
-    /// The consensus adapter handle
-    pub consensus_handle: Arc<ConsensusHandle<SeqTypes, I>>,
+pub struct DataSource<P: SequencerPersistence> {
+    pub consensus_handle: Arc<ConsensusHandle<SeqTypes, Arc<P>>>,
     /// The node's state
     pub node_state: NodeState,
     /// The storage
@@ -111,7 +104,7 @@ pub struct DataSource<I: NodeImplementation<SeqTypes>, P: SequencerPersistence> 
     pub persistence: Arc<P>,
 }
 
-impl<I: NodeImplementation<SeqTypes>, P: SequencerPersistence> DataSource<I, P> {
+impl<P: SequencerPersistence> DataSource<P> {
     fn sql_storage(&self, what: &str) -> Result<&dyn RequestStorage> {
         match &self.storage {
             Some(Storage::Sql(storage)) => Ok(&**storage),
@@ -123,11 +116,7 @@ impl<I: NodeImplementation<SeqTypes>, P: SequencerPersistence> DataSource<I, P> 
 
 /// Implement the trait that allows the [`RequestResponseProtocol`] to calculate/derive a response for a specific request
 #[async_trait]
-impl<I: NodeImplementation<SeqTypes>, P: SequencerPersistence> DataSourceTrait<Request>
-    for DataSource<I, P>
-where
-    I::Storage: NewProtocolStorage<SeqTypes>,
-{
+impl<P: SequencerPersistence> DataSourceTrait<Request> for DataSource<P> {
     async fn derive_response_for(&self, request: &Request) -> Result<Response> {
         match request {
             Request::Accounts(height, view, accounts) => {
@@ -164,14 +153,6 @@ where
             },
 
             Request::Leaf(height) => {
-                // Legacy heights can be served from in-memory undecided leaves; new-protocol
-                // heights always fall through to storage.
-                if let Ok(leaf_chain) =
-                    legacy_leaf_chain_from_memory(&*self.consensus_handle, *height).await
-                {
-                    return Ok(Response::Leaf(leaf_chain));
-                }
-
                 let leaf_chain = self
                     .sql_storage("leaf")?
                     .get_leaf_chain(*height)
@@ -391,52 +372,6 @@ where
             },
         }
     }
-}
-
-/// Build a legacy-protocol 3-chain leaf chain decided at `height` from in-memory undecided leaves.
-///
-/// Returns an error if the chain cannot be assembled from memory (e.g. the height is below the
-/// latest decided leaf).
-async fn legacy_leaf_chain_from_memory<I: NodeImplementation<SeqTypes>>(
-    consensus_handle: &ConsensusHandle<SeqTypes, I>,
-    height: u64,
-) -> anyhow::Result<Vec<espresso_types::Leaf2>>
-where
-    I::Storage: NewProtocolStorage<SeqTypes>,
-{
-    let mut leaves = consensus_handle.undecided_leaves().await;
-    leaves.sort_by_key(|l| l.view_number());
-
-    let (position, mut last_leaf) = leaves
-        .iter()
-        .find_position(|l| l.height() == height)
-        .ok_or_else(|| anyhow::anyhow!("leaf at height {height} not in memory"))?;
-
-    let mut leaf_chain = vec![last_leaf.clone()];
-    for leaf in leaves.iter().skip(position + 1) {
-        if leaf.justify_qc().view_number() == last_leaf.view_number() {
-            leaf_chain.push(leaf.clone());
-        } else {
-            continue;
-        }
-        if leaf.view_number() == last_leaf.view_number() + 1 {
-            last_leaf = leaf;
-            break;
-        }
-        last_leaf = leaf;
-    }
-
-    for leaf in leaves
-        .iter()
-        .skip_while(|l| l.view_number() <= last_leaf.view_number())
-    {
-        if leaf.justify_qc().view_number() == last_leaf.view_number() {
-            leaf_chain.push(leaf.clone());
-            return Ok(leaf_chain);
-        }
-    }
-
-    anyhow::bail!("incomplete leaf chain in memory for height {height}")
 }
 
 /// Get a partial snapshot of the given reward state, which contains only the specified accounts.

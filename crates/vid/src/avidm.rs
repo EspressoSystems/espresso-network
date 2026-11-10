@@ -123,7 +123,19 @@ pub struct AvidMShare {
     content: RawAvidMShare,
 }
 
+// Padding grows with the threshold. Node weights total at most
+// `VID_TARGET_TOTAL_STAKE` (1000) plus one per validator.
+const MAX_TOTAL_WEIGHTS: usize = 1 << 16;
+
+// Nodes expand 3x, so 4 is headroom.
+const MAX_EXPANSION: usize = 4;
+
 /// Public parameters of the AVID-M scheme.
+///
+/// Valid when `0 < recovery_threshold <= total_weights <= 2^16` and
+/// `total_weights <= 4 * recovery_threshold`. The fields are public and
+/// deserialized unchecked, so [`Self::new`] and every [`AvidMScheme`] entry
+/// point return [`VidError::InvalidParam`] for an invalid param.
 #[derive(Clone, Debug, Hash, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AvidMParam {
     /// Total weights of all storage nodes
@@ -135,13 +147,23 @@ pub struct AvidMParam {
 impl AvidMParam {
     /// Construct a new [`AvidMParam`].
     pub fn new(recovery_threshold: usize, total_weights: usize) -> VidResult<Self> {
-        if recovery_threshold == 0 || total_weights < recovery_threshold {
-            return Err(VidError::InvalidParam);
-        }
-        Ok(Self {
+        let param = Self {
             total_weights,
             recovery_threshold,
-        })
+        };
+        param.validate()?;
+        Ok(param)
+    }
+
+    fn validate(&self) -> VidResult<()> {
+        if self.recovery_threshold == 0
+            || self.total_weights < self.recovery_threshold
+            || self.total_weights > MAX_TOTAL_WEIGHTS
+            || self.total_weights > self.recovery_threshold * MAX_EXPANSION
+        {
+            return Err(VidError::InvalidParam);
+        }
+        Ok(())
     }
 }
 
@@ -234,6 +256,7 @@ impl AvidMScheme {
 
     /// Short hand for `pad_to_field` and `raw_encode`.
     fn pad_and_encode(param: &AvidMParam, payload: &[u8]) -> VidResult<(MerkleTree, Vec<Vec<F>>)> {
+        param.validate()?;
         let payload = Self::pad_to_fields(param, payload);
         Self::raw_encode(param, &payload)
     }
@@ -316,6 +339,7 @@ impl AvidMScheme {
         commit: &AvidMCommit,
         share: &RawAvidMShare,
     ) -> VidResult<crate::VerificationResult> {
+        param.validate()?;
         if share.range.is_empty()
             || share.range.end > param.total_weights
             || share.range.len() != share.payload.len()
@@ -340,6 +364,7 @@ impl AvidMScheme {
     }
 
     pub(crate) fn recover_fields(param: &AvidMParam, shares: &[AvidMShare]) -> VidResult<Vec<F>> {
+        param.validate()?;
         let recovery_threshold: usize = param.recovery_threshold;
 
         // Each share's payload contains some evaluations from `num_polys`
@@ -469,8 +494,8 @@ impl VidScheme for AvidMScheme {
 pub mod tests {
     use rand::{RngCore, seq::SliceRandom};
 
-    use super::F;
-    use crate::{VidScheme, avidm::AvidMScheme, utils::bytes_to_field};
+    use super::{AvidMParam, F};
+    use crate::{VidError, VidScheme, avidm::AvidMScheme, utils::bytes_to_field};
 
     #[test]
     fn test_padding() {
@@ -489,18 +514,19 @@ pub mod tests {
     #[test]
     fn round_trip() {
         // play with these items
-        let params_list = [(2, 4), (3, 9), (5, 6), (15, 16)];
+        let num_storage_nodes_list = [4, 9, 6, 16];
         let payload_byte_lens = [1, 31, 32, 500];
 
         // more items as a function of the above
 
         let mut rng = jf_utils::test_rng();
 
-        for (recovery_threshold, num_storage_nodes) in params_list {
+        for num_storage_nodes in num_storage_nodes_list {
             let weights: Vec<u32> = (0..num_storage_nodes)
                 .map(|_| rng.next_u32() % 5 + 1)
                 .collect();
             let total_weights: u32 = weights.iter().sum();
+            let recovery_threshold = total_weights.div_ceil(3) as usize;
             let params = AvidMScheme::setup(recovery_threshold, total_weights as usize).unwrap();
 
             for payload_byte_len in payload_byte_lens {
@@ -567,5 +593,70 @@ pub mod tests {
         let recover_timer = start_timer!(|| "Recovery");
         AvidMScheme::recover(&params, &commit, &shares).unwrap();
         end_timer!(recover_timer);
+    }
+
+    #[test]
+    fn param_bounds_are_inclusive() {
+        for (recovery_threshold, total_weights) in [(1, 1), (1 << 14, 1 << 16), (2, 8)] {
+            assert!(
+                AvidMParam::new(recovery_threshold, total_weights).is_ok(),
+                "({recovery_threshold}, {total_weights})"
+            );
+        }
+        for (recovery_threshold, total_weights) in
+            [(0, 4), (3, 2), ((1 << 14) + 1, (1 << 16) + 1), (2, 9)]
+        {
+            assert!(
+                matches!(
+                    AvidMParam::new(recovery_threshold, total_weights),
+                    Err(VidError::InvalidParam)
+                ),
+                "({recovery_threshold}, {total_weights})"
+            );
+        }
+    }
+
+    #[test]
+    fn invalid_param_is_rejected() {
+        let param = AvidMScheme::setup(3, 9).unwrap();
+        let payload = [7u8; 100];
+        let (commit, shares) = AvidMScheme::disperse(&param, &[3, 3, 3], &payload).unwrap();
+
+        for (recovery_threshold, total_weights) in
+            [(0, 4), (3, 2), (1 << 15, 1 << 17), (1, 1 << 16)]
+        {
+            let forged = AvidMParam {
+                total_weights,
+                recovery_threshold,
+            };
+            assert!(
+                matches!(
+                    AvidMScheme::recover(&forged, &commit, &shares),
+                    Err(VidError::InvalidParam)
+                ),
+                "recover {forged:?}"
+            );
+            assert!(
+                matches!(
+                    AvidMScheme::commit(&forged, &payload),
+                    Err(VidError::InvalidParam)
+                ),
+                "commit {forged:?}"
+            );
+            assert!(
+                matches!(
+                    AvidMScheme::disperse(&forged, &[1], &payload),
+                    Err(VidError::InvalidParam)
+                ),
+                "disperse {forged:?}"
+            );
+            assert!(
+                matches!(
+                    AvidMScheme::verify_share(&forged, &commit, &shares[0]),
+                    Err(VidError::InvalidParam)
+                ),
+                "verify_share {forged:?}"
+            );
+        }
     }
 }

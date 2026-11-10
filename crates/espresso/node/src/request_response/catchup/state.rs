@@ -13,11 +13,10 @@ use espresso_types::{
         forgotten_accounts_include,
     },
 };
-use hotshot_new_protocol::{storage::NewProtocolStorage, utils::verify_new_protocol_leaf_chain};
+use hotshot_new_protocol::utils::verify_new_protocol_leaf_chain;
 use hotshot_types::{
     data::ViewNumber, epoch_membership::EpochMembershipCoordinator, message::UpgradeLock,
     simple_certificate::LightClientStateUpdateCertificateV2,
-    traits::node_implementation::NodeImplementation,
 };
 use jf_merkle_tree_compat::{ForgetableMerkleTreeScheme, MerkleTreeScheme};
 use tokio::time::timeout;
@@ -33,11 +32,7 @@ use crate::{
 };
 
 #[async_trait]
-impl<I: NodeImplementation<SeqTypes>, P: SequencerPersistence> StateCatchup
-    for RequestResponseProtocol<I, P>
-where
-    I::Storage: NewProtocolStorage<SeqTypes>,
-{
+impl<P: SequencerPersistence> StateCatchup for RequestResponseProtocol<P> {
     async fn try_fetch_leaf(
         &self,
         _retry: usize,

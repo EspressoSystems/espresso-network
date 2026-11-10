@@ -113,7 +113,7 @@ def test_main_writes_per_step_stats_and_table(tmp_path: Path):
         (155.0, True, 10),
         (200.0, False, 0),
     ]
-    assert steps[0]["segments"]["header"] == pytest.approx(1)
+    assert steps[0]["segments"]["parent state + header"] == pytest.approx(1)
     assert steps[0]["total"] == pytest.approx(40)
     assert steps[2]["segments"] is None
     assert steps[2]["total"] is None

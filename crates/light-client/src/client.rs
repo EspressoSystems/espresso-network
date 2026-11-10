@@ -300,7 +300,11 @@ impl Client for QueryServiceClient {
         // A peer that lacks the cert2 responds 404. We surface that as an error rather than
         // `Ok(None)` so `FallbackClient` keeps trying other peers instead of stopping at the first
         // one that lacks it; it resolves absent only once every peer has 404'd.
-        self.fetch::<Certificate2<SeqTypes>>(&format!("/availability/cert2/{height}"))
+        //
+        // Catchup reads only the peer's storage. `/availability/cert2` would start a fetch on a
+        // peer that lacks the cert2, and query nodes peered at each other then keep re-triggering
+        // one another's fetches for heights that never had a cert2.
+        self.fetch::<Certificate2<SeqTypes>>(&format!("/catchup/{height}/cert2"))
             .await
             .map(Some)
     }
@@ -622,6 +626,7 @@ mod test {
         let url: Url = format!("http://localhost:{port}").parse().unwrap();
 
         let test_config = TestConfigBuilder::default().build();
+        let epoch_height = test_config.hotshot_config().epoch_height;
         let storage = D::create_storage().await;
         let persistence = <D as TestableSequencerDataSource>::persistence_options(&storage);
 
@@ -667,7 +672,7 @@ mod test {
             assert!(matches!(proof.proof(), FinalityProof::NewProtocol { .. }));
             assert_eq!(
                 proof
-                    .verify(LeafProofHint::Quorum(&AlwaysTrueQuorum))
+                    .verify(LeafProofHint::Quorum(&AlwaysTrueQuorum::new(epoch_height)))
                     .await
                     .unwrap(),
                 leaves[0]
@@ -682,7 +687,7 @@ mod test {
             .unwrap();
         assert_eq!(
             proof
-                .verify(LeafProofHint::Quorum(&AlwaysTrueQuorum))
+                .verify(LeafProofHint::Quorum(&AlwaysTrueQuorum::new(epoch_height)))
                 .await
                 .unwrap()
                 .payload_hash(),

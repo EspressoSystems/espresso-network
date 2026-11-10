@@ -30,7 +30,7 @@ pub const EXTERNAL_MESSAGE_VERSION: Version = Version { major: 0, minor: 0 };
 
 use crate::{
     data::{
-        DaProposal, DaProposal2, EpochNumber, Leaf, Leaf2, QuorumProposal, QuorumProposal2,
+        DaProposal, DaProposal2, EpochNumber, Leaf2, QuorumProposal, QuorumProposal2,
         QuorumProposal2Legacy, QuorumProposalWrapper, UpgradeProposal, VidDisperseShare0,
         VidDisperseShare1, VidDisperseShare2, ViewNumber,
     },
@@ -49,7 +49,6 @@ use crate::{
         ViewSyncPreCommitVote2,
     },
     traits::{
-        election::{Membership, NonEpochMembershipSnapshot},
         network::{DataRequest, ResponseMessage, ViewMessage},
         node_implementation::NodeType,
         signature_key::SignatureKey,
@@ -586,32 +585,6 @@ where
     }
 }
 
-impl<TYPES> Proposal<TYPES, QuorumProposal<TYPES>>
-where
-    TYPES: NodeType,
-{
-    /// Checks that the signature of the quorum proposal is valid.
-    /// # Errors
-    /// Returns an error when the proposal signature is invalid.
-    pub fn validate_signature(
-        &self,
-        membership: &TYPES::Membership,
-        _epoch_height: u64,
-        upgrade_lock: &UpgradeLock<TYPES>,
-    ) -> Result<()> {
-        let view_number = self.data.view_number();
-        let view_leader_key = membership.non_epoch_snapshot().leader(view_number)?;
-        let proposed_leaf = Leaf::from_quorum_proposal(&self.data);
-
-        ensure!(
-            view_leader_key.validate(&self.signature, proposed_leaf.commit(upgrade_lock).as_ref()),
-            "Proposal signature is invalid."
-        );
-
-        Ok(())
-    }
-}
-
 impl<TYPES> Proposal<TYPES, QuorumProposalWrapper<TYPES>>
 where
     TYPES: NodeType,
@@ -780,6 +753,18 @@ impl<TYPES: NodeType> UpgradeLock<TYPES> {
     pub fn timeout_epoch_bound(&self, timed_out_view: ViewNumber) -> bool {
         let v = ViewNumber::new(timed_out_view.u64().saturating_add(1));
         self.version_infallible(v) >= TIMEOUT_EPOCH_VERSION
+    }
+
+    /// Whether the certificate rule governs votes at `view`.
+    ///
+    /// Under it a node does not vote2 at a view it has sent a timeout vote
+    /// for, and a vote1 for a proposal after a timeout checks the proposal's
+    /// parent against the lock its timeout certificate carries instead of
+    /// against the voter's own votes. The certificates that carry a lock are
+    /// the epoch-binding ones, so the rule starts with them:
+    /// `certificate_rule(v) == timeout_epoch_bound(v - 1)`.
+    pub fn certificate_rule(&self, view: ViewNumber) -> bool {
+        self.version_infallible(view) >= TIMEOUT_EPOCH_VERSION
     }
 
     /// Serialize a message with a version number, using `message.view_number()`

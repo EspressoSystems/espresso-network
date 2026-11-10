@@ -816,10 +816,12 @@ mod test {
         AppendableMerkleTreeScheme, ToTraversalPath, prelude::SHA3MerkleTree,
     };
     use light_client::{
+        client::{Client as _, FallbackClient, QueryServiceClient},
         consensus::leaf::{FinalityProof, LeafProofHint},
         testing::{
-            AlwaysTrueQuorum, TestClient, VersionCheckQuorum, custom_leaf_chain_with_upgrade,
-            custom_leaf_chain_with_upgrades, leaf_chain, leaf_chain_with_upgrade,
+            AlwaysTrueQuorum, LEAF_CHAIN_EPOCH_HEIGHT, TestClient, VersionCheckQuorum,
+            custom_leaf_chain_with_upgrade, custom_leaf_chain_with_upgrades, leaf_chain,
+            leaf_chain_with_upgrade,
         },
     };
     use rstest_reuse::apply;
@@ -883,7 +885,9 @@ mod test {
                 .unwrap();
         assert_eq!(
             proof
-                .verify(LeafProofHint::Quorum(&AlwaysTrueQuorum))
+                .verify(LeafProofHint::Quorum(&AlwaysTrueQuorum::new(
+                    LEAF_CHAIN_EPOCH_HEIGHT
+                )))
                 .await
                 .unwrap(),
             leaves[0]
@@ -982,7 +986,9 @@ mod test {
         assert!(matches!(proof.proof(), FinalityProof::NewProtocol { .. }));
         assert_eq!(
             proof
-                .verify(LeafProofHint::Quorum(&AlwaysTrueQuorum))
+                .verify(LeafProofHint::Quorum(&AlwaysTrueQuorum::new(
+                    LEAF_CHAIN_EPOCH_HEIGHT
+                )))
                 .await
                 .unwrap(),
             leaves[0]
@@ -1021,7 +1027,9 @@ mod test {
         assert!(matches!(proof.proof(), FinalityProof::NewProtocol { .. }));
         assert_eq!(
             proof
-                .verify(LeafProofHint::Quorum(&AlwaysTrueQuorum))
+                .verify(LeafProofHint::Quorum(&AlwaysTrueQuorum::new(
+                    LEAF_CHAIN_EPOCH_HEIGHT
+                )))
                 .await
                 .unwrap(),
             leaves[0]
@@ -1055,7 +1063,9 @@ mod test {
         assert!(matches!(proof.proof(), FinalityProof::NewProtocol { .. }));
         assert_eq!(
             proof
-                .verify(LeafProofHint::Quorum(&AlwaysTrueQuorum))
+                .verify(LeafProofHint::Quorum(&AlwaysTrueQuorum::new(
+                    LEAF_CHAIN_EPOCH_HEIGHT
+                )))
                 .await
                 .unwrap(),
             leaves[0]
@@ -1128,7 +1138,9 @@ mod test {
         assert!(matches!(proof.proof(), FinalityProof::HotStuff2 { .. }));
         assert_eq!(
             proof
-                .verify(LeafProofHint::Quorum(&AlwaysTrueQuorum))
+                .verify(LeafProofHint::Quorum(&AlwaysTrueQuorum::new(
+                    LEAF_CHAIN_EPOCH_HEIGHT
+                )))
                 .await
                 .unwrap(),
             leaves[0]
@@ -1147,7 +1159,9 @@ mod test {
         assert!(matches!(proof.proof(), FinalityProof::NewProtocol { .. }));
         assert_eq!(
             proof
-                .verify(LeafProofHint::Quorum(&AlwaysTrueQuorum))
+                .verify(LeafProofHint::Quorum(&AlwaysTrueQuorum::new(
+                    LEAF_CHAIN_EPOCH_HEIGHT
+                )))
                 .await
                 .unwrap(),
             leaves[3]
@@ -1181,7 +1195,9 @@ mod test {
             .unwrap();
         assert_eq!(
             proof
-                .verify(LeafProofHint::Quorum(&AlwaysTrueQuorum))
+                .verify(LeafProofHint::Quorum(&AlwaysTrueQuorum::new(
+                    LEAF_CHAIN_EPOCH_HEIGHT
+                )))
                 .await
                 .unwrap(),
             leaves[0]
@@ -1253,7 +1269,9 @@ mod test {
         assert!(matches!(proof.proof(), FinalityProof::NewProtocol { .. }));
         assert_eq!(
             proof
-                .verify(LeafProofHint::Quorum(&AlwaysTrueQuorum))
+                .verify(LeafProofHint::Quorum(&AlwaysTrueQuorum::new(
+                    LEAF_CHAIN_EPOCH_HEIGHT
+                )))
                 .await
                 .unwrap(),
             leaves[0]
@@ -1296,7 +1314,8 @@ mod test {
         assert_eq!(
             proof
                 .verify(LeafProofHint::Quorum(&VersionCheckQuorum::new(
-                    leaves.iter().map(|leaf| leaf.leaf().clone())
+                    leaves.iter().map(|leaf| leaf.leaf().clone()),
+                    LEAF_CHAIN_EPOCH_HEIGHT
                 )))
                 .await
                 .unwrap(),
@@ -1344,7 +1363,8 @@ mod test {
         assert_eq!(
             proof
                 .verify(LeafProofHint::Quorum(&VersionCheckQuorum::new(
-                    leaves.iter().map(|leaf| leaf.leaf().clone())
+                    leaves.iter().map(|leaf| leaf.leaf().clone()),
+                    LEAF_CHAIN_EPOCH_HEIGHT
                 )))
                 .await
                 .unwrap(),
@@ -1389,7 +1409,8 @@ mod test {
         assert_eq!(
             proof
                 .verify(LeafProofHint::Quorum(&VersionCheckQuorum::new(
-                    leaves.iter().map(|leaf| leaf.leaf().clone())
+                    leaves.iter().map(|leaf| leaf.leaf().clone()),
+                    LEAF_CHAIN_EPOCH_HEIGHT
                 )))
                 .await
                 .unwrap(),
@@ -1441,7 +1462,9 @@ mod test {
         assert!(matches!(proof.proof(), FinalityProof::NewProtocol { .. }));
         assert_eq!(
             proof
-                .verify(LeafProofHint::Quorum(&AlwaysTrueQuorum))
+                .verify(LeafProofHint::Quorum(&AlwaysTrueQuorum::new(
+                    LEAF_CHAIN_EPOCH_HEIGHT
+                )))
                 .await
                 .unwrap(),
             leaves[1]
@@ -1500,7 +1523,10 @@ mod test {
             tx.commit().await.unwrap();
         }
 
-        let quorum = VersionCheckQuorum::new(leaves.iter().map(|leaf| leaf.leaf().clone()));
+        let quorum = VersionCheckQuorum::new(
+            leaves.iter().map(|leaf| leaf.leaf().clone()),
+            LEAF_CHAIN_EPOCH_HEIGHT,
+        );
         for leaf in &leaves {
             let height = leaf.height();
             let proof = get_leaf_proof(&ds, leaf.clone(), None, Duration::MAX, CHAIN_LIMIT)
@@ -1664,7 +1690,9 @@ mod test {
                 .unwrap();
         assert_eq!(
             proof
-                .verify(LeafProofHint::Quorum(&AlwaysTrueQuorum))
+                .verify(LeafProofHint::Quorum(&AlwaysTrueQuorum::new(
+                    LEAF_CHAIN_EPOCH_HEIGHT
+                )))
                 .await
                 .unwrap(),
             leaves[0]
@@ -2054,6 +2082,36 @@ mod test {
         (provider, requested)
     }
 
+    /// A peer serving `cert2` over the catchup route at every height, or 404ing when it has none.
+    /// Records the heights it is asked for.
+    async fn serve_catchup_cert2(
+        cert2: Option<espresso_types::Certificate2<SeqTypes>>,
+    ) -> (QueryServiceClient, Arc<Mutex<Vec<u64>>>) {
+        let requested = Arc::new(Mutex::new(Vec::new()));
+        let seen = requested.clone();
+        let router = Router::new().route(
+            "/catchup/{height}/cert2",
+            get(move |headers: HeaderMap, Path(height): Path<u64>| {
+                seen.lock().unwrap().push(height);
+                let served = cert2.clone();
+                async move {
+                    respond(
+                        &headers,
+                        served.ok_or_else(|| ServerError {
+                            status: axum::http::StatusCode::NOT_FOUND,
+                            message: format!("no cert2 available for height {height}"),
+                        }),
+                    )
+                }
+            }),
+        );
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+        let client = QueryServiceClient::new(format!("http://{addr}").parse().unwrap());
+        (client, requested)
+    }
+
     /// A proof no stored cert2 can complete asks the peers for one. The peer 404s the requested
     /// height itself, so recovery has to reach a descendant.
     #[apply(sql_data_sources)]
@@ -2117,7 +2175,9 @@ mod test {
                     .unwrap();
             assert_eq!(
                 proof
-                    .verify(LeafProofHint::Quorum(&AlwaysTrueQuorum))
+                    .verify(LeafProofHint::Quorum(&AlwaysTrueQuorum::new(
+                        LEAF_CHAIN_EPOCH_HEIGHT
+                    )))
                     .await
                     .unwrap(),
                 leaves[0]
@@ -2163,5 +2223,30 @@ mod test {
             asked.iter().all(|h| (1..=3).contains(h)),
             "recovery reached past the limit: {asked:?}"
         );
+    }
+
+    #[tokio::test]
+    async fn test_fallback_client_asks_every_peer_for_cert2() {
+        let leaves = leaf_chain(1..=2, NEW_PROTOCOL_VERSION).await;
+        let cert2 = cert2_for_leaf(&leaves[1]);
+        let height = leaves[1].height();
+
+        let mut peers = Vec::new();
+        let mut requests = Vec::new();
+        for holds_cert2 in [false, false, false, false, true] {
+            let (peer, requested) = serve_catchup_cert2(holds_cert2.then(|| cert2.clone())).await;
+            peers.push(peer);
+            requests.push(requested);
+        }
+        let client = FallbackClient::new(peers).unwrap();
+
+        assert_eq!(client.cert2(height).await.unwrap(), Some(cert2));
+        for (i, requested) in requests.iter().enumerate() {
+            assert_eq!(
+                *requested.lock().unwrap(),
+                [height],
+                "peer {i} was not asked exactly once"
+            );
+        }
     }
 }

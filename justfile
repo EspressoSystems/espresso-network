@@ -107,6 +107,14 @@ proto-check $base="origin/main":
     git archive "$merge_base" crates/espresso/api/proto | tar -x -C "$dir"
     buf breaking crates/espresso/api/proto --against "$dir/crates/espresso/api/proto"
 
+# Needs `gh extension install github/gh-actions-lock --pin v0.4.0`. `--no-narrow` keeps
+# `@v4` as written instead of rewriting it to `@v4.2.1`. `--relock` advances refs such as
+# `@v4` and `@main` to their latest commit; `--verify` checks without writing.
+# `--verify-local` is the offline coverage check the pre-commit hook runs.
+# Update .github/workflows/actions.lock after changing a `uses:` line or on a conflict in it
+lock-actions *args:
+    gh actions-lock --ignore-local-actions --no-narrow {{args}}
+
 # slow-tests picks its storage backend at compile time, so check its sqlite variant too
 clippy *args:
     cargo clippy --workspace --features testing --all-targets {{args}}
@@ -149,13 +157,14 @@ docker-stop-rm:
     docker stop $(docker ps -aq); docker rm $(docker ps -aq)
 
 anvil *args:
-    docker run -p 127.0.0.1:8545:8545 ghcr.io/foundry-rs/foundry:latest "anvil {{args}}"
+    docker run -p 127.0.0.1:8545:8545 ghcr.io/foundry-rs/foundry:v1.8.7 "anvil {{args}}"
 
 # hotshot-new-protocol: tested in hotshot.yml
 # slow-tests: slow and serial tests
 # espresso-dev-node: tested by test-dev-node
 # espresso-crypto-helper: vendored openssl leaks to workspace via feature unification
-nextest_excludes := "--exclude hotshot-new-protocol --exclude slow-tests --exclude espresso-dev-node --exclude espresso-crypto-helper"
+# espresso-fuzz: `--bins` builds the fuzz targets, whose `main` is libFuzzer's, not the test harness
+nextest_excludes := "--exclude hotshot-new-protocol --exclude slow-tests --exclude espresso-dev-node --exclude espresso-crypto-helper --exclude espresso-fuzz"
 
 nextest *args:
     cargo nextest run --locked --workspace {{nextest_excludes}} --lib --bins --tests --verbose {{args}}
@@ -185,6 +194,11 @@ test-all:
 # owed within `defaultDelta` (`Prompt`). See `lean/new-protocol-diff/CheckMain.lean`
 # and `crates/hotshot/new-protocol/src/trace.rs`.
 #
+# The suite is recorded at 0.7 (`NP_TEST_VERSION`), whose timeouts sign their
+# lock: the specification covers only lock-signing timeouts. A test of behaviour
+# before 0.7 pins its version, and its traces are out of scope. A test that fails
+# fails the recipe, after the check has run on the traces recorded.
+#
 # Record runs of the new-protocol tests and check each against `lean/new-protocol-spec`.
 test-lean-check dir="":
     #!/usr/bin/env bash
@@ -199,9 +213,36 @@ test-lean-check dir="":
     # Under `target` because it is build output: gitignored, and cleaned with it.
     traces="$(pwd)/target/np-traces"
     rm -rf "$traces"
-    echo "recording to $traces"
-    NP_TRACE_DIR="$traces" cargo test -p hotshot-new-protocol --release --lib tests:: || exit $?
-    lean/new-protocol-diff/.lake/build/bin/check "$traces"
+    echo "recording at 0.7 to $traces"
+    suite=0
+    NP_TEST_VERSION=0.7 NP_TRACE_DIR="$traces" \
+      cargo test -p hotshot-new-protocol --release --lib tests:: || suite=$?
+    checked=0
+    lean/new-protocol-diff/.lake/build/bin/check "$traces" || checked=$?
+    if [ "$suite" -ne 0 ]; then
+      echo "the test suite failed at 0.7" >&2
+    fi
+    [ "$suite" -eq 0 ] && [ "$checked" -eq 0 ]
+
+# Replay random settings `first` to `first + count - 1` of the Lean simulator to the
+# Rust node and check each trace. Each draws faults, committees, timing and delays.
+test-lean-scenarios first="1" count="48":
+    #!/usr/bin/env bash
+    set -uo pipefail
+    (cd lean/new-protocol-diff && lake build sim check) || exit 1
+    scenarios="$(pwd)/target/np-scenarios"
+    traces="$(pwd)/target/np-scenario-traces"
+    rm -rf "$scenarios" "$traces"
+    lean/new-protocol-diff/.lake/build/bin/sim --scenarios "$scenarios" {{first}} {{count}} || exit 1
+    replayed=0
+    NP_TEST_VERSION=0.7 NP_TRACE_DIR="$traces" NP_SCENARIOS="$scenarios" \
+      cargo test -p hotshot-new-protocol --release --lib tests::scenario:: || replayed=$?
+    checked=0
+    lean/new-protocol-diff/.lake/build/bin/check "$traces" || checked=$?
+    if [ "$replayed" -ne 0 ]; then
+      echo "replaying the scenarios failed" >&2
+    fi
+    [ "$replayed" -eq 0 ] && [ "$checked" -eq 0 ]
 
 test-integration: (build "test")
 	INTEGRATION_TEST_NODE_VERSION=2 cargo nextest run -p tests --nocapture --profile integration test_native_demo_basic
