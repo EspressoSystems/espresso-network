@@ -3819,15 +3819,19 @@ dependencies = [
 name = "espresso-fuzz"
 version = "0.0.0"
 dependencies = [
+ "anyhow",
  "arbitrary",
  "bincode",
  "espresso-types",
+ "futures",
  "hotshot-query-service-types",
  "hotshot-types",
  "jf-advz",
  "libfuzzer-sys",
+ "light-client",
  "serde",
  "serde_json",
+ "versions",
  "vid",
 ]
 
