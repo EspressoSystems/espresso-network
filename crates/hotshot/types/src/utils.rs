@@ -32,7 +32,7 @@ use versions::EPOCH_VERSION;
 
 use crate::{
     data::{EpochNumber, Leaf2, VidCommitment, ViewNumber},
-    epoch_membership::EpochMembershipCoordinator,
+    epoch_membership::{EpochMembership, EpochMembershipCoordinator},
     message::UpgradeLock,
     simple_certificate::QuorumCertificate2,
     simple_vote::HasEpoch,
@@ -104,6 +104,36 @@ pub type StateAndDelta<TYPES> = (
     Option<Arc<<<TYPES as NodeType>::ValidatedState as ValidatedState<TYPES>>::Delta>>,
 );
 
+/// A stake table this node does not hold yet.
+///
+/// Unlike every other leaf chain verification error, this one is about this node, not about the
+/// chain: looking the table up starts its catchup, so verifying again later can succeed.
+#[derive(Debug, thiserror::Error)]
+#[error("no stake table available for epoch {0}")]
+pub struct StakeTableUnavailable(pub EpochNumber);
+
+/// The stake table that verifies certificates of `epoch`.
+///
+/// Fails with a [`StakeTableUnavailable`] context, found by `downcast_ref`, when this node does
+/// not hold the table yet.
+pub fn certifying_stake_table<T: NodeType>(
+    coordinator: &EpochMembershipCoordinator<T>,
+    epoch: EpochNumber,
+) -> anyhow::Result<EpochMembership<T>> {
+    coordinator
+        .stake_table_for_epoch(Some(epoch))
+        .map_err(|err| {
+            let err = anyhow!("{err:?}");
+            if epoch < coordinator.membership().first_epoch() {
+                err.context(format!(
+                    "no stake table for epoch {epoch}, before the first epoch"
+                ))
+            } else {
+                err.context(StakeTableUnavailable(epoch))
+            }
+        })
+}
+
 pub async fn verify_leaf_chain<T: NodeType>(
     mut leaf_chain: Vec<Leaf2<T>>,
     coordinator: &EpochMembershipCoordinator<T>,
@@ -127,7 +157,9 @@ pub async fn verify_leaf_chain<T: NodeType>(
                     "QC claims no epoch but certifies the leaf at height {certified_height} in \
                      epoch {epoch}, after the first epoch {first_epoch}"
                 );
-                coordinator.stake_table_for_epoch(None)
+                coordinator
+                    .stake_table_for_epoch(None)
+                    .map_err(|err| anyhow!("no stake table available for epoch {epoch}: {err:?}"))?
             },
             Some(claimed) => {
                 ensure!(
@@ -135,10 +167,9 @@ pub async fn verify_leaf_chain<T: NodeType>(
                     "QC claims epoch {claimed} but certifies the leaf at height \
                      {certified_height} in epoch {epoch}"
                 );
-                coordinator.stake_table_for_epoch(Some(epoch))
+                certifying_stake_table(coordinator, epoch)?
             },
-        }
-        .map_err(|err| anyhow!("no stake table available for epoch {epoch}: {err:?}"))?;
+        };
         if let Some(block_number) = qc.data.block_number {
             ensure!(
                 block_number == certified_height,
