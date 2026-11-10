@@ -7887,6 +7887,10 @@ mod test {
             .send()
             .await?
             - 1;
+        // The node reads the L1-finalized height when its state starts, so set it first.
+        if expected == EmptyStateStart::RecentBoundary {
+            set_l1_finalized_hotshot_height(&network, PRUNED_START_L1_FINALIZED_HEIGHT).await?;
+        }
         let (_query_node, query_client) = network.start_query_node(db_opt).await;
 
         let deadline = Instant::now() + Duration::from_secs(180);
@@ -7920,11 +7924,186 @@ mod test {
                 assert_same_response(&network.api_client, &query_client, &fee_state).await?;
             },
         }
+        if expected == EmptyStateStart::RecentBoundary {
+            check_reward_trees_below_start(&network.api_client, &query_client, start).await?;
+        }
         Ok(())
     }
 
     /// The epoch height of the network in [`test_state_loop_starts_on_pruned_data`].
     const PRUNED_START_EPOCH_HEIGHT: u64 = 10;
+
+    /// The HotShot height the L1 light client has finalized when the query node of
+    /// [`test_state_loop_starts_on_pruned_data`] starts from a boundary: in the second epoch, so
+    /// reward proofs go at the first boundary, which lies below the start, and more than 4 epochs
+    /// below it when the start is above 50.
+    const PRUNED_START_L1_FINALIZED_HEIGHT: u64 =
+        PRUNED_START_EPOCH_HEIGHT + PRUNED_START_EPOCH_HEIGHT / 2;
+
+    /// Check that a query node whose state started from the boundary `start` serves, through
+    /// `actual`, the reward trees it needs to store reward proofs for the L1-finalized height
+    /// [`PRUNED_START_L1_FINALIZED_HEIGHT`]: the same as node 0 (`expected`) serves at each
+    /// boundary from the finalized one up to `start`, at most 4 of them, and none below.
+    async fn check_reward_trees_below_start(
+        expected: &Client<ClientErr, StaticVersion<0, 1>>,
+        actual: &Client<ClientErr, StaticVersion<0, 1>>,
+        start: u64,
+    ) -> anyhow::Result<()> {
+        let epoch = PRUNED_START_EPOCH_HEIGHT;
+        let proof_boundary = l1_finalized_proof_boundary(PRUNED_START_L1_FINALIZED_HEIGHT, epoch);
+        let lowest = proof_boundary.max(start.saturating_sub(4 * epoch));
+        let context = || {
+            format!(
+                "L1-finalized height {PRUNED_START_L1_FINALIZED_HEIGHT}, its boundary \
+                 {proof_boundary}, state start {start}"
+            )
+        };
+        // The tree at `start` is the snapshot's, fetched from node 0, so the trees of the two
+        // nodes compare equal byte for byte.
+        check_same_reward_tree(expected, actual, start)
+            .await
+            .with_context(|| format!("setup: the snapshot's reward tree, {}", context()))?;
+        // The node may store the trees below the start just after it records the start.
+        let needed = (lowest..start).step_by(epoch as usize).collect::<Vec<_>>();
+        wait_for_reward_trees(actual, &needed, Instant::now() + Duration::from_secs(30)).await;
+        for &height in &needed {
+            check_same_reward_tree(expected, actual, height)
+                .await
+                .with_context(context)?;
+        }
+        for height in (epoch..lowest).step_by(epoch as usize) {
+            check_no_reward_tree(actual, height)
+                .await
+                .with_context(context)?;
+        }
+        Ok(())
+    }
+
+    /// The boundary whose reward tree a node needs to store reward proofs when the L1 light client
+    /// has finalized `finalized`: the newest epoch boundary at or below it.
+    fn l1_finalized_proof_boundary(finalized: u64, epoch_height: u64) -> u64 {
+        if hotshot_types::utils::is_last_block(finalized, epoch_height) {
+            finalized
+        } else {
+            (epoch_from_block_number(finalized, epoch_height) - 1) * epoch_height
+        }
+    }
+
+    /// Set the HotShot height the L1 light client has finalized to `height`, on the mock light
+    /// client the stake table of `network` points to, as the light client prover would.
+    async fn set_l1_finalized_hotshot_height<D: TestableSqlDataSource>(
+        network: &PrunedStartNetwork<D>,
+        height: u64,
+    ) -> anyhow::Result<()> {
+        use hotshot_contract_adapter::sol_types::{LightClientStateSol, LightClientV3Mock};
+
+        let cfg = &network.network.cfg;
+        let provider = ProviderBuilder::new()
+            .wallet(EthereumWallet::from(cfg.signer()))
+            .connect_http(cfg.l1_url());
+        let stake_table = network
+            .genesis_state
+            .chain_config
+            .resolve()
+            .context("genesis chain config")?
+            .stake_table_contract
+            .context("no stake table contract in the genesis chain config")?;
+        let address = StakeTableV3::new(stake_table, &provider)
+            .lightClient()
+            .call()
+            .await?;
+        let light_client = LightClientV3Mock::new(address, &provider);
+        let state: LightClientStateSol = light_client.finalizedState().call().await?.into();
+        light_client
+            .setFinalizedState(
+                LightClientStateSol {
+                    blockHeight: height,
+                    ..state
+                }
+                .into(),
+            )
+            .send()
+            .await?
+            .get_receipt()
+            .await?;
+        let set = light_client.finalizedState().call().await?.blockHeight;
+        ensure!(
+            set == height,
+            "setup: the light client finalized height is {set}, not {height}"
+        );
+        Ok(())
+    }
+
+    /// The route that serves a node's reward tree at `height` from its own storage.
+    fn reward_tree_path(height: u64) -> String {
+        espresso_api::routes::v1::reward_merkle_tree_v2(height)
+    }
+
+    /// Wait until `client` serves the reward tree at each of `heights`, or until `deadline`.
+    async fn wait_for_reward_trees(
+        client: &Client<ClientErr, StaticVersion<0, 1>>,
+        heights: &[u64],
+        deadline: Instant,
+    ) {
+        while Instant::now() < deadline {
+            let answers = join_all(heights.iter().map(|&height| async move {
+                client
+                    .get::<Vec<u8>>(&reward_tree_path(height))
+                    .send()
+                    .await
+            }))
+            .await;
+            if answers.iter().all(Result::is_ok) {
+                return;
+            }
+            sleep(Duration::from_millis(500)).await;
+        }
+    }
+
+    /// Check that `actual` serves the same reward tree at `height` as `expected`, node 0.
+    async fn check_same_reward_tree(
+        expected: &Client<ClientErr, StaticVersion<0, 1>>,
+        actual: &Client<ClientErr, StaticVersion<0, 1>>,
+        height: u64,
+    ) -> anyhow::Result<()> {
+        let path = reward_tree_path(height);
+        let expected = expected
+            .get::<Vec<u8>>(&path)
+            .send()
+            .await
+            .with_context(|| format!("setup: node 0 has no reward tree at {height}"))?;
+        match actual.get::<Vec<u8>>(&path).send().await {
+            Ok(actual) => ensure!(
+                actual == expected,
+                "the query node's reward tree at {height} differs from node 0's"
+            ),
+            Err(err) => bail!(
+                "the query node has no reward tree at {height}: {path} answered {}",
+                err.status
+            ),
+        }
+        Ok(())
+    }
+
+    /// Check that `client` has no reward tree at `height`.
+    async fn check_no_reward_tree(
+        client: &Client<ClientErr, StaticVersion<0, 1>>,
+        height: u64,
+    ) -> anyhow::Result<()> {
+        let path = reward_tree_path(height);
+        let answer = client
+            .get::<Vec<u8>>(&path)
+            .send()
+            .await
+            .map(|_| ())
+            .map_err(|err| err.status);
+        ensure!(
+            answer == Err(StatusCode::NOT_FOUND),
+            "the query node has a reward tree at {height}, which it should not: {path} answered \
+             {answer:?}"
+        );
+        Ok(())
+    }
 
     /// The network of [`test_state_loop_starts_on_pruned_data`]. Node 0 is the API node, the only
     /// peer the query node fetches the snapshot, leaves and accounts from. Node 1 is shut down, to
