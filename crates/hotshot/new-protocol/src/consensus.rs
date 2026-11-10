@@ -312,6 +312,11 @@ pub struct Consensus<T: NodeType> {
     /// lock that certifies each and the block's number. Once a block arrives
     /// without this node's share, fetched or adopted from parked, its payload
     /// is asked for.
+    ///
+    /// The other ways a block arrives need no request. One paired live with
+    /// this node's share has its payload rebuilt from the shares the votes
+    /// carry, which a fetch would only race. One taken from an epoch change is
+    /// an epoch's last block, whose payload its only child does not need.
     lock_block_fetches: BTreeMap<Commitment<Leaf2<T>>, (LockView, Option<u64>)>,
 
     /// The latest boundary certificate this node asked storage to persist (see
@@ -2534,10 +2539,16 @@ impl<T: NodeType> Consensus<T> {
         let timed_out_view = certificate.view_number();
         let view = timed_out_view + 1;
         if certificate.binds_epoch() != self.upgrade_lock.timeout_epoch_bound(timed_out_view) {
-            warn!(
-                %timed_out_view,
-                "timeout certificate has the wrong form for its version"
-            );
+            // One for a view this node has left is expected around a version
+            // cutover, from nodes that lag or restarted.
+            if view < self.current_view {
+                debug!(%timed_out_view, "stale timeout certificate of the wrong form");
+            } else {
+                warn!(
+                    %timed_out_view,
+                    "timeout certificate has the wrong form for its version"
+                );
+            }
             return Protocol::Abort;
         }
         if view < self.current_view {
@@ -2547,7 +2558,9 @@ impl<T: NodeType> Consensus<T> {
                 "stale timeout certificate; keeping its epoch and lock"
             );
             // The TC moves the node to no view, but its epoch and lock are grounds
-            // as much as a current certificate's.
+            // as much as a current certificate's. No `ViewChanged` is emitted for
+            // a rise in epoch alone, as in `advance_on`: the next one carries the
+            // epoch, and the coordinator's per-epoch steps wait for it.
             if certificate.binds_epoch() {
                 self.set_current_epoch_max(certificate.epoch());
             }
@@ -2654,6 +2667,9 @@ impl<T: NodeType> Consensus<T> {
             self.request_lock_payload(lock, leaf_commit, block_number, outbox);
             return;
         }
+        // Asked for also when the lock is of an epoch this node has left: the
+        // block is then that epoch's last, which the leader of the next epoch's
+        // first block builds on, though its payload is not needed.
         let decided_number = self.last_decided_leaf.block_header().block_number();
         if lock.view >= self.last_decided_view && block_number.is_none_or(|n| n > decided_number) {
             debug!(view = %lock.view, "timeout certificate lock without its block; requesting fetch");

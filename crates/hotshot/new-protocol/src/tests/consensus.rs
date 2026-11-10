@@ -389,6 +389,38 @@ async fn test_duplicate_timeout_certificate_lock_decides_its_block() {
     assert!(any(harness.outputs(), |o| decides_view(o, 1)));
 }
 
+/// A timeout certificate's lock no later than the node's own is still kept:
+/// with its block's `Certificate2` it decides the block.
+#[tokio::test]
+async fn test_timeout_certificate_lock_no_later_than_own_decides_its_block() {
+    let test_data = TestData::new(2).await;
+    let block = &test_data.views[0];
+    let later = &test_data.views[1];
+    let epoch = block.epoch_number;
+    let mut harness = node_with_certificate2_only(&test_data).await;
+    // Locked on the next block as after a restart, which brings no
+    // `Certificate1` of this one.
+    harness.seed_locked_block(later.proposal.data.clone(), later.cert1.clone());
+    assert_eq!(
+        harness.consensus.lock_view().map(|lock| lock.view),
+        Some(later.view_number)
+    );
+    assert!(
+        !any(harness.outputs(), |o| decides_view(o, 1)),
+        "setup: still no Certificate1 over the block"
+    );
+
+    let tc = timeout_cert_of(
+        &harness,
+        epoch,
+        ViewNumber::new(2),
+        Some(block.cert1.clone()),
+    );
+    harness.apply(timeout_cert_input(tc)).await;
+
+    assert!(any(harness.outputs(), |o| decides_view(o, 1)));
+}
+
 /// A second timeout certificate for a view the node has entered, carried in a
 /// proposal for that view, still has its lock kept. A re-vote request's is in
 /// `epoch_boundary_stall`.
