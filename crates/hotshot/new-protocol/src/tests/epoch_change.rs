@@ -815,12 +815,13 @@ async fn test_first_epoch_leader_proposes_without_drb() {
     );
 }
 
-/// Epoch 2 also does not require a DRB result for proposing.  This test
-/// runs through epoch 1, crosses the epoch boundary, advances into
-/// epoch 2's transition window, and verifies the leader proposes without
-/// needing a DRB result pre-fed.
+/// A leader in epoch 2's transition window needs the DRB result of epoch 3,
+/// which its proposal carries. This test runs through epoch 1, crosses the
+/// epoch boundary, advances into epoch 2's transition window with no DRB
+/// result fed in advance, and verifies the leader requests the result and
+/// proposes once it has it.
 #[tokio::test]
-async fn test_second_epoch_leader_proposes_without_drb() {
+async fn test_second_epoch_leader_proposes_with_requested_drb() {
     // We need at least 18 views: 10 for epoch 1, 1 epoch boundary, 7 into epoch 2.
     let test_data = TestData::new_with_epoch_height(19, EPOCH_HEIGHT).await;
 
@@ -896,7 +897,9 @@ async fn test_second_epoch_leader_proposes_without_drb() {
     }
 
     // ---- Epoch 2 transition window (block 17+) ----
-    // No DRB pre-fed — epoch 2 should not require one.
+    // No DRB result for epoch 3 is fed in advance: the node requests it
+    // when view 17's proposal arrives, and the harness answers with the
+    // result epoch 1's root computed.
     // Process view 17 (block 17, first block in transition window).
     // After cert1 for view 17, the leader for view 18 should propose.
     harness
@@ -909,8 +912,15 @@ async fn test_second_epoch_leader_proposes_without_drb() {
     harness.apply(test_data.views[16].cert2_input()).await;
 
     assert!(
+        any(
+            harness.outputs(),
+            |o| matches!(o, ConsensusOutput::RequestDrbResult(e) if *e == EpochNumber::new(3))
+        ),
+        "the node requests epoch 3's DRB result in epoch 2's transition window"
+    );
+    assert!(
         any(harness.outputs(), is_proposal),
-        "Leader should propose during epoch 2 transition window without a DRB result"
+        "Leader should propose during epoch 2 transition window once it has the DRB result"
     );
 }
 

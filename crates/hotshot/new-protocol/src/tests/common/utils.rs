@@ -1701,13 +1701,20 @@ impl ConsensusHarness {
                 self.apply_recorded(input, outbox);
             },
             ConsensusOutput::RequestDrbResult(epoch) => {
-                self.consensus
-                    .apply(ConsensusInput::DrbResult(*epoch, TEST_DRB_RESULT), outbox);
+                // The result an epoch root computed, as the proposals of the
+                // epoch's transition carry it.
+                let drb = self
+                    .membership_coordinator
+                    .get_epoch_drb(*epoch)
+                    .await
+                    .unwrap_or(TEST_DRB_RESULT);
+                self.apply_recorded(ConsensusInput::DrbResult(*epoch, drb), outbox);
             },
             ConsensusOutput::LeafDecided { leaves, .. } => {
                 // Mirror the EpochManager: when an epoch-root block is decided,
                 // register the future epoch in the membership (add_epoch_root)
-                // and store a DRB result for it (compute_drb_result).
+                // and store the DRB result computed from it (compute_drb_result),
+                // which `TestData` gives the transition's proposals.
                 let epoch_height = self.consensus.epoch_height;
                 for leaf in leaves {
                     let block_number = <TestBlockHeader as BlockHeader<TestTypes>>::block_number(
@@ -1725,9 +1732,14 @@ impl ConsensusHarness {
                     let epoch =
                         hotshot_types::utils::epoch_from_block_number(block_number, *epoch_height);
                     let target_epoch = EpochNumber::new(epoch + 2);
+                    let drb = self
+                        .membership_coordinator
+                        .compute_drb_result(target_epoch, leaf.clone())
+                        .await
+                        .unwrap_or(TEST_DRB_RESULT);
                     self.membership_coordinator
                         .membership()
-                        .add_drb_result(target_epoch, TEST_DRB_RESULT);
+                        .add_drb_result(target_epoch, drb);
                 }
             },
             _ => {},

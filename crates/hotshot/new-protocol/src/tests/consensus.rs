@@ -3503,7 +3503,21 @@ async fn timeout_at_an_epoch_boundary_requests_the_next_epoch() {
             .apply_pair(parent.proposal_input_consensus(&leader))
             .await;
         harness.apply(parent.block_reconstructed_input()).await;
-        harness.apply(parent.cert1_input()).await;
+        // Consensus takes an epoch root's Cert1 together with its state
+        // certificate, which the next view's proposal carries.
+        let cert1 = match test_data.views[parent_idx + 1]
+            .proposal
+            .data
+            .state_cert
+            .clone()
+        {
+            Some(state_cert) => ConsensusInput::EpochRootCertificates {
+                cert1: ValidCert::new(parent.cert1.clone(), parent.epoch_number),
+                state_cert,
+            },
+            None => parent.cert1_input(),
+        };
+        harness.apply(cert1).await;
         harness.apply(parent.timeout_cert_input()).await;
 
         // Scope to the view under test: the setup steps and `maybe_propose`'s
