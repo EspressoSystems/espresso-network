@@ -116,7 +116,7 @@ jobs:
           # the backport branch, which may predate this file.
           prompt_body=$(git show "$GITHUB_SHA:.github/claude/backport-resolve.md")
           stray_files=$(cat "$RUNNER_TEMP/stray-files.txt" 2>/dev/null || echo none)
-          prompt=$(printf 'These backport PRs have conflicts to resolve:\n%s\n\nFiles the target branch does not have, per PR:\n%s\n\n%s' \
+          prompt=$(printf 'These backport PRs have conflicts to resolve:\n%s\n\nFiles that do not match the original PR, per PR:\n%s\n\n%s' \
             "$NEEDS_CLAUDE" "$stray_files" "$prompt_body")
           claude -p "$prompt" --model claude-opus-4-8 --dangerously-skip-permissions
 
@@ -165,7 +165,7 @@ jobs:
             base=$(gh pr view "$pr" --json baseRefName -q .baseRefName)
             stray=$("$RUNNER_TEMP/backport-stray-files" "$ORIGINAL_PR" "origin/$base" HEAD)
             if [ -n "$stray" ]; then
-              fail "$pr" "the backport still adds files that the original PR only changed: $(tr '\n' ' ' <<<"$stray")"
+              fail "$pr" "the backport still has files that do not match the original PR: $(paste -sd ';' - <<<"$stray" | sed 's/;/; /g')"
             fi
             git fetch origin "$branch"
             if [ "$(git rev-parse HEAD)" = "$(git rev-parse "origin/$branch")" ]; then

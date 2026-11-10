@@ -1,9 +1,13 @@
 #!/usr/bin/env bash
-# Print the files that BACKPORT adds over BASE but that ORIGINAL_PR did not add.
+# Print the files where BACKPORT does not match the files that ORIGINAL_PR adds and deletes:
 #
-# When the original change modifies a file that the target branch does not have, the
-# cherry-pick stops on a modify/delete conflict. Git then leaves the source branch's whole
-# file in place, with no conflict markers, so a marker search cannot find it.
+#   added PATH   BACKPORT adds PATH over BASE, but ORIGINAL_PR did not add it.
+#   kept PATH    ORIGINAL_PR deleted PATH, but BACKPORT still has it.
+#
+# A cherry-pick leaves both behind with no conflict markers, so a marker search cannot find them.
+# When the original change modifies a file that the target branch does not have (modify/delete),
+# git leaves the source branch's whole copy. When it deletes a file that the target branch changed
+# (delete/modify), the backport commits the target branch's version.
 set -euo pipefail
 
 if [[ $# -ne 3 ]]; then
@@ -15,8 +19,31 @@ original_pr="$1"
 base="$2"
 backport="$3"
 
-added_by_original=$(gh api --paginate "repos/{owner}/{repo}/pulls/${original_pr}/files" \
-  --jq '.[] | select(.status == "added" or .status == "copied") | .filename')
-added_by_backport=$(git diff --find-renames --name-only --diff-filter=A "${base}...${backport}")
+pr_files=$(gh api --paginate "repos/{owner}/{repo}/pulls/${original_pr}/files" \
+  --jq '.[] | [.status, .filename, .previous_filename // ""] | @tsv')
 
-comm -23 <(sort -u <<<"${added_by_backport}") <(sort -u <<<"${added_by_original}") | sed '/^$/d'
+wanted=""
+deleted=""
+while IFS=$'\t' read -r status file previous; do
+  case "${status}" in
+    added | copied) wanted+="${file}"$'\n' ;;
+    renamed)
+      # Without the old file on BASE, git keeps the source branch's copy of the new one.
+      if git cat-file -e "${base}:${previous}" 2>/dev/null; then
+        wanted+="${file}"$'\n'
+        deleted+="${previous}"$'\n'
+      fi
+      ;;
+    removed) deleted+="${file}"$'\n' ;;
+  esac
+done <<<"${pr_files}"
+
+# --no-renames: whether a rename is wanted comes from the PR's status, not from git's similarity guess.
+added_by_backport=$(git -c core.quotePath=false diff --no-renames --name-only --diff-filter=A "${base}...${backport}")
+comm -23 <(sort -u <<<"${added_by_backport}") <(sort -u <<<"${wanted}") | sed '/^$/d; s/^/added /'
+
+while IFS= read -r file; do
+  if [[ -n "${file}" ]] && git cat-file -e "${backport}:${file}" 2>/dev/null; then
+    echo "kept ${file}"
+  fi
+done <<<"${deleted}"
