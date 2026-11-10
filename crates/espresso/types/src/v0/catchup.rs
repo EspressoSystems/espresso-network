@@ -11,7 +11,7 @@
 
 use std::{fmt, sync::Arc};
 
-use anyhow::{Context, anyhow, bail, ensure};
+use anyhow::{Context, anyhow, ensure};
 use committable::{Commitment, Committable};
 use hotshot_types::{
     data::{EpochNumber, ViewNumber},
@@ -23,14 +23,13 @@ use hotshot_types::{
     utils::{StakeTableUnavailable, verify_leaf_chain},
 };
 use jf_merkle_tree_compat::MerkleTreeScheme;
-use versions::NEW_PROTOCOL_VERSION;
 #[cfg(feature = "node")]
-use versions::{EPOCH_VERSION, Upgrade};
+use versions::{EPOCH_VERSION, NEW_PROTOCOL_VERSION, Upgrade};
 
 #[cfg(feature = "node")]
-use crate::Certificate2;
+use crate::{Certificate2, Leaf2};
 use crate::{
-    FeeAccount, FeeAccountProof, FeeMerkleCommitment, FeeMerkleTree, Leaf2, SeqTypes,
+    FeeAccount, FeeAccountProof, FeeMerkleCommitment, FeeMerkleTree, SeqTypes,
     v0_3::{
         ChainConfig, RewardAccountProofV1, RewardAccountV1, RewardAmount, RewardMerkleCommitmentV1,
         RewardMerkleTreeV1,
@@ -210,72 +209,109 @@ impl fmt::Debug for LeafAt {
     }
 }
 
+/// A leaf chain from a peer, sorted by which verifier it needs. Only [`LeafAt::classify`] builds
+/// one, so a chain cannot reach a verifier other than the one its requested leaf's version picks.
+#[cfg(feature = "node")]
+#[derive(Clone, Debug)]
+pub enum LeafChain {
+    /// A legacy 3-chain, which decides the requested leaf on its own.
+    Legacy(LegacyChain),
+    /// A new-protocol leaf range, which needs the cert2 at
+    /// [`NewProtocolChain::cert2_height`].
+    NewProtocol(NewProtocolChain),
+}
+
+#[cfg(feature = "node")]
+#[derive(Clone, Debug)]
+pub struct LegacyChain(Vec<Leaf2>);
+
+#[cfg(feature = "node")]
+#[derive(Clone, Debug)]
+pub struct NewProtocolChain {
+    leaves: Vec<Leaf2>,
+    cert2_height: u64,
+}
+
+#[cfg(feature = "node")]
+impl NewProtocolChain {
+    /// The height of the cert2 that finalizes the chain: its highest leaf.
+    pub fn cert2_height(&self) -> u64 {
+        self.cert2_height
+    }
+}
+
+#[cfg(feature = "node")]
 impl LeafAt {
-    /// The height of the cert2 that finalizes the chain, taken from its last leaf, if the first
-    /// leaf is new-protocol. `None` means a legacy chain, which needs no cert2. Errors on an
-    /// empty chain.
-    pub fn cert2_height(&self, leaves: &[Leaf2]) -> anyhow::Result<Option<u64>> {
-        let (Some(first), Some(last)) = (leaves.first(), leaves.last()) else {
-            bail!("empty leaf chain for height {}", self.height);
-        };
-        Ok((first.block_header().version() >= NEW_PROTOCOL_VERSION).then(|| last.height()))
-    }
-
-    /// Verifies `leaves` and returns the leaf at [`Self::height`].
-    ///
-    /// A new-protocol chain needs the cert2 at [`Self::cert2_height`]. A legacy chain ignores
-    /// `cert2`.
-    #[cfg(feature = "node")]
-    pub async fn verify(
-        &self,
-        leaves: Vec<Leaf2>,
-        cert2: Option<Certificate2<SeqTypes>>,
-    ) -> Result<Verified<Leaf2>, VerifyError> {
-        match self.verify_chain(leaves, cert2).await {
-            Ok(leaf) => Ok(Verified::new(leaf)),
-            Err(err) => match err.downcast_ref::<StakeTableUnavailable>() {
-                Some(StakeTableUnavailable(epoch)) => Err(VerifyError::Unavailable(*epoch)),
-                None => Err(VerifyError::Invalid(err)),
-            },
+    /// Picks the verifier from the version of the leaf at [`Self::height`], which its commitment
+    /// covers, never from the order or other leaves of the response.
+    pub fn classify(&self, leaves: Vec<Leaf2>) -> Result<LeafChain, VerifyError> {
+        let mut requested = leaves
+            .iter()
+            .filter(|leaf| leaf.height() == self.height)
+            .peekable();
+        if requested.peek().is_none() {
+            return Err(VerifyError::Invalid(anyhow!(
+                "leaf chain has no leaf at the requested height {}",
+                self.height
+            )));
         }
+        if !requested.any(|leaf| leaf.block_header().version() >= NEW_PROTOCOL_VERSION) {
+            return Ok(LeafChain::Legacy(LegacyChain(leaves)));
+        }
+        let cert2_height = leaves
+            .iter()
+            .map(Leaf2::height)
+            .max()
+            .expect("the chain has a leaf at the requested height");
+        Ok(LeafChain::NewProtocol(NewProtocolChain {
+            leaves,
+            cert2_height,
+        }))
     }
 
-    #[cfg(feature = "node")]
-    async fn verify_chain(
+    /// Verifies a legacy chain and returns the leaf at [`Self::height`].
+    pub async fn verify_legacy(&self, chain: LegacyChain) -> Result<Verified<Leaf2>, VerifyError> {
+        let upgrade_lock = UpgradeLock::<SeqTypes>::new(Upgrade::trivial(EPOCH_VERSION));
+        let result = verify_leaf_chain(chain.0, &self.coordinator, self.height, &upgrade_lock)
+            .await
+            .with_context(|| format!("failed to verify leaf chain at height {}", self.height));
+        classify_verify_error(result)
+    }
+
+    /// Verifies a new-protocol chain with the cert2 that finalizes it, and returns the leaf at
+    /// [`Self::height`].
+    pub async fn verify_new_protocol(
         &self,
-        leaves: Vec<Leaf2>,
-        cert2: Option<Certificate2<SeqTypes>>,
-    ) -> anyhow::Result<Leaf2> {
-        let leaf = match self.cert2_height(&leaves)? {
-            Some(_) => {
-                let cert2 = cert2.context("new-protocol leaf chain needs its cert2")?;
-                let upgrade_lock =
-                    UpgradeLock::<SeqTypes>::new(Upgrade::trivial(NEW_PROTOCOL_VERSION));
-                hotshot_new_protocol::utils::verify_new_protocol_leaf_chain(
-                    leaves,
-                    &self.coordinator,
-                    self.height,
-                    &upgrade_lock,
-                    cert2,
-                )
-                .await
-                .with_context(|| {
-                    format!(
-                        "failed to verify leaf chain with cert2 at height {}",
-                        self.height
-                    )
-                })?
-            },
-            None => {
-                let upgrade_lock = UpgradeLock::<SeqTypes>::new(Upgrade::trivial(EPOCH_VERSION));
-                verify_leaf_chain(leaves, &self.coordinator, self.height, &upgrade_lock)
-                    .await
-                    .with_context(|| {
-                        format!("failed to verify leaf chain at height {}", self.height)
-                    })?
-            },
-        };
-        Ok(leaf)
+        chain: NewProtocolChain,
+        cert2: Certificate2<SeqTypes>,
+    ) -> Result<Verified<Leaf2>, VerifyError> {
+        let upgrade_lock = UpgradeLock::<SeqTypes>::new(Upgrade::trivial(NEW_PROTOCOL_VERSION));
+        let result = hotshot_new_protocol::utils::verify_new_protocol_leaf_chain(
+            chain.leaves,
+            &self.coordinator,
+            self.height,
+            &upgrade_lock,
+            cert2,
+        )
+        .await
+        .with_context(|| {
+            format!(
+                "failed to verify leaf chain with cert2 at height {}",
+                self.height
+            )
+        });
+        classify_verify_error(result)
+    }
+}
+
+#[cfg(feature = "node")]
+fn classify_verify_error(result: anyhow::Result<Leaf2>) -> Result<Verified<Leaf2>, VerifyError> {
+    match result {
+        Ok(leaf) => Ok(Verified::new(leaf)),
+        Err(err) => match err.downcast_ref::<StakeTableUnavailable>() {
+            Some(StakeTableUnavailable(epoch)) => Err(VerifyError::Unavailable(*epoch)),
+            None => Err(VerifyError::Invalid(err)),
+        },
     }
 }
 

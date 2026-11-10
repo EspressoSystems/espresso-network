@@ -4,7 +4,8 @@ use committable::Commitment;
 use espresso_types::{
     BackoffParams, BlockMerkleTree, FeeAccountProof, Leaf2, NodeState, SeqTypes,
     catchup::{
-        FeeAccountsAt, LeafAt, RewardAccountsV1At, RewardTreeV2At, Verified, verify_chain_config,
+        FeeAccountsAt, LeafAt, LeafChain, RewardAccountsV1At, RewardTreeV2At, Verified,
+        verify_chain_config,
     },
     traits::{SequencerPersistence, StateCatchup},
     v0_3::{ChainConfig, RewardAccountProofV1},
@@ -174,49 +175,51 @@ impl<P: SequencerPersistence> StateCatchup for RequestResponseProtocol<P> {
 
         // Fetch the leaf chain. For new-protocol heights the responder returns the leaf range
         // `[height..=cert2_height]`; for legacy-protocol heights, it returns a 3-chain.
+        let owned_req = req.clone();
         let leaf_chain = self
             .request_indefinitely(
                 Request::Leaf(height),
-                move |_request: &Request, response: Response| async move {
-                    let Response::Leaf(leaves) = response else {
-                        return Err(anyhow::anyhow!("expected leaf response"));
-                    };
-                    if leaves.is_empty() {
-                        return Err(anyhow::anyhow!(
-                            "received empty leaf chain for height {height}"
-                        ));
+                move |_request: &Request, response: Response| {
+                    let req = owned_req.clone();
+                    async move {
+                        let Response::Leaf(leaves) = response else {
+                            return Err(anyhow::anyhow!("expected leaf response"));
+                        };
+                        Ok(req.classify(leaves)?)
                     }
-                    Ok(leaves)
                 },
             )
             .await
             .with_context(|| "failed to request leaf chain")?;
 
-        // The chain terminates at the leaf the cert2 finalizes, so request that cert2 by its
-        // exact height
-        let cert2 = match req.cert2_height(&leaf_chain)? {
-            Some(cert2_height) => Some(
-                self.request_indefinitely(
-                    Request::Cert2(cert2_height),
-                    move |_request: &Request, response: Response| async move {
-                        let Response::Cert2(cert2) = response else {
-                            return Err(anyhow::anyhow!("expected cert2 response"));
-                        };
-                        if cert2.data.block_number != cert2_height {
-                            return Err(anyhow::anyhow!(
-                                "received cert2 at height {} but expected exactly {cert2_height}",
-                                cert2.data.block_number
-                            ));
-                        }
-                        Ok(cert2)
-                    },
-                )
-                .await
-                .with_context(|| format!("failed to request cert2 at height {cert2_height}"))?,
-            ),
-            None => None,
+        let result = match leaf_chain {
+            LeafChain::Legacy(chain) => req.verify_legacy(chain).await?,
+            LeafChain::NewProtocol(chain) => {
+                // The chain terminates at the leaf the cert2 finalizes, so request that cert2 by
+                // its exact height
+                let cert2_height = chain.cert2_height();
+                let cert2 = self
+                    .request_indefinitely(
+                        Request::Cert2(cert2_height),
+                        move |_request: &Request, response: Response| async move {
+                            let Response::Cert2(cert2) = response else {
+                                return Err(anyhow::anyhow!("expected cert2 response"));
+                            };
+                            if cert2.data.block_number != cert2_height {
+                                return Err(anyhow::anyhow!(
+                                    "received cert2 at height {} but expected exactly \
+                                     {cert2_height}",
+                                    cert2.data.block_number
+                                ));
+                            }
+                            Ok(cert2)
+                        },
+                    )
+                    .await
+                    .with_context(|| format!("failed to request cert2 at height {cert2_height}"))?;
+                req.verify_new_protocol(chain, cert2).await?
+            },
         };
-        let result = req.verify(leaf_chain, cert2).await?;
 
         tracing::info!("Fetched leaf for height: {height}");
         Ok(result)
