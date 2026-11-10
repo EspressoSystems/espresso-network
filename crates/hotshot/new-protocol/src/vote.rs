@@ -858,8 +858,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_epoch_root_state_votes_require_lcv3_signature() {
+    #[tokio::test]
+    async fn test_epoch_root_state_votes_require_lcv3_signature() {
         // A legacy upgrade lock must not disable checks in the live tally.
         pin_test_version(EPOCH_VERSION);
         let membership = mock_membership()
@@ -889,8 +889,8 @@ mod tests {
         assert_eq!(cert.signatures.len(), THRESHOLD as usize);
     }
 
-    #[test]
-    fn test_epoch_root_state_votes_form_valid_certificate() {
+    #[tokio::test]
+    async fn test_epoch_root_state_votes_form_valid_certificate() {
         let membership = mock_membership()
             .membership_for_epoch(Some(EpochNumber::genesis()))
             .unwrap();
