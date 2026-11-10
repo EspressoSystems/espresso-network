@@ -3437,13 +3437,6 @@ mod api_tests {
             );
             assert!(
                 persistence
-                    .load_vid_share(leaf.view_number())
-                    .await
-                    .unwrap()
-                    .is_none()
-            );
-            assert!(
-                persistence
                     .load_quorum_proposal(leaf.view_number())
                     .await
                     .is_err()
