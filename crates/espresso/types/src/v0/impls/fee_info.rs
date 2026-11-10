@@ -72,10 +72,6 @@ impl FeeInfo {
     pub fn amount(&self) -> FeeAmount {
         self.amount
     }
-    /// Get a `Vec<FeeInfo>` from `Vec<BuilderFee>`
-    pub fn from_builder_fees(fees: Vec<BuilderFee<SeqTypes>>) -> Vec<FeeInfo> {
-        fees.into_iter().map(FeeInfo::from).collect()
-    }
 }
 
 impl IterableFeeInfo for Vec<FeeInfo> {
@@ -94,24 +90,6 @@ impl IterableFeeInfo for Vec<FeeInfo> {
         self.iter()
             .unique_by(|entry| &entry.account)
             .map(|entry| entry.account)
-            .collect()
-    }
-}
-
-impl IterableFeeInfo for Vec<BuilderFee<SeqTypes>> {
-    /// Get sum of amounts
-    fn amount(&self) -> Option<FeeAmount> {
-        self.iter()
-            .map(|fee_info| fee_info.fee_amount)
-            .try_fold(0u64, |acc, n| acc.checked_add(n))
-            .map(FeeAmount::from)
-    }
-
-    /// Get a `Vec` of all unique fee accounts
-    fn accounts(&self) -> Vec<FeeAccount> {
-        self.iter()
-            .unique_by(|entry| &entry.fee_account)
-            .map(|entry| entry.fee_account)
             .collect()
     }
 }
