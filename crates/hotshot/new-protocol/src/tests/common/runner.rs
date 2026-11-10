@@ -10,14 +10,14 @@ use bon::Builder;
 use cliquenet::noise::Protocol;
 use committable::{Commitment, Committable};
 use hotshot_example_types::{
-    block_types::TestTransaction, node_types::TestTypes, storage_types::TestStorage,
+    block_types::TestTransaction, membership::fetcher::ExternalMessage, node_types::TestTypes,
+    storage_types::TestStorage,
 };
 use hotshot_types::{
     PeerConnectInfo,
     addr::NetAddr,
     data::ViewNumber,
     epoch_membership::EpochMembershipCoordinator,
-    event::{Event, EventType},
     message::UpgradeLock,
     signature_key::BLSPubKey,
     simple_certificate::TimeoutEvidence,
@@ -430,7 +430,7 @@ impl TestRunner {
         EpochMembershipCoordinator<TestTypes>,
         TestStorage<TestTypes>,
         CoordinatorClient<TestTypes>,
-        Sender<Event<TestTypes>>,
+        Sender<ExternalMessage>,
     ) {
         match &self.stake_table_schedule {
             Some(schedule) => mock_membership_with_client_and_schedule(
@@ -939,7 +939,7 @@ async fn run_node(
     output_tx: UnboundedSender<TaggedEvent>,
     idx: usize,
     generation: u64,
-    external_events_tx: Sender<Event<TestTypes>>,
+    external_events_tx: Sender<ExternalMessage>,
     mut cancel: oneshot::Receiver<oneshot::Sender<()>>,
 ) {
     let mut commits: BTreeMap<ViewNumber, [u8; 32]> = BTreeMap::new();
@@ -947,13 +947,10 @@ async fn run_node(
     let _forward = AbortOnDropHandle::new(tokio::spawn(async move {
         while let Some(m) = external_rx.recv().await {
             let _ = external_events_tx
-                .broadcast_direct(Event {
-                    // The test leaf fetcher ignores the view.
+                .broadcast_direct(ExternalMessage {
+                    // The external channel does not carry a consensus view.
                     view_number: ViewNumber::genesis(),
-                    event: EventType::ExternalMessageReceived {
-                        sender: m.sender,
-                        data: m.data,
-                    },
+                    data: m.data,
                 })
                 .await;
         }
