@@ -278,8 +278,6 @@ pub struct LightClientStateUpdateVoteAccumulator<TYPES: NodeType> {
             >,
         ),
     >,
-
-    pub upgrade_lock: UpgradeLock<TYPES>,
 }
 
 impl<TYPES: NodeType> LightClientStateUpdateVoteAccumulator<TYPES> {
@@ -309,16 +307,11 @@ impl<TYPES: NodeType> LightClientStateUpdateVoteAccumulator<TYPES> {
             error!("Invalid light client state update vote {vote:?}");
             return None;
         }
-        // only verify the new state signature on the new version
-        if self
-            .upgrade_lock
-            .proposal2_version(ViewNumber::new(vote.light_client_state.view_number))
-            && !<TYPES::StateSignatureKey as LCV3StateSignatureKey>::verify_state_sig(
-                &state_ver_key,
-                &vote.signature,
-                vote.signed_state_digest,
-            )
-        {
+        if !<TYPES::StateSignatureKey as LCV3StateSignatureKey>::verify_state_sig(
+            &state_ver_key,
+            &vote.signature,
+            vote.signed_state_digest,
+        ) {
             error!("Invalid light client state update vote {vote:?}");
             return None;
         }

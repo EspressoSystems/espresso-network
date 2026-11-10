@@ -194,10 +194,9 @@ impl<T: NodeType> Tally<T> for EpochRootTally<T> {
 
     fn new(m: EpochMembership<T>, l: UpgradeLock<T>) -> Self {
         Self {
-            quorum: CheckedAccumulator::new(m.clone(), l.clone()),
+            quorum: CheckedAccumulator::new(m.clone(), l),
             state: LightClientStateUpdateVoteAccumulator {
                 vote_outcomes: HashMap::new(),
-                upgrade_lock: l,
             },
             membership: m,
             quorum_cert: None,
@@ -768,6 +767,7 @@ mod tests {
     use std::{fmt::Debug, marker::PhantomData, time::Duration};
 
     use committable::Committable;
+    use hotshot_contract_adapter::light_client::derive_signed_state_digest;
     use hotshot_example_types::{
         node_stake::{TestNodeStakes, gen_node_lists},
         node_types::TestTypes,
@@ -775,28 +775,35 @@ mod tests {
     use hotshot_types::{
         data::{EpochNumber, ViewNumber},
         epoch_membership::EpochMembership,
+        light_client::{LightClientState, StakeTableState, StateKeyPair},
         message::UpgradeLock,
-        signature_key::BLSPubKey,
+        signature_key::{BLSPubKey, SchnorrPubKey},
         simple_certificate::{
             Certificate1, SuccessThreshold, Threshold, TimeoutCertificate2, TimeoutCertificate3,
             TimeoutEvidence, UpgradeCertificate,
         },
         simple_vote::{
-            HasEpoch, LockView, QuorumData2, QuorumVote2, SimpleVote, TimeoutData2, TimeoutData3,
-            TimeoutVote2, UpgradeProposalData, VersionedVoteData, Vote2Data,
+            HasEpoch, LightClientStateUpdateVote2, LockView, QuorumData2, QuorumVote2, SimpleVote,
+            TimeoutData2, TimeoutData3, TimeoutVote2, UpgradeProposalData, VersionedVoteData,
+            Vote2Data,
         },
         stake_table::StakeTableEntries,
-        traits::{node_implementation::NodeType, signature_key::SignatureKey},
+        traits::{
+            node_implementation::NodeType,
+            signature_key::{LCV2StateSignatureKey, LCV3StateSignatureKey, SignatureKey},
+        },
         vote::{Certificate, HasViewNumber, Vote, VoteAccumulator},
     };
     use tokio::{sync::mpsc, time::timeout};
-    use versions::{NEW_PROTOCOL_VERSION, TIMEOUT_EPOCH_VERSION, Upgrade};
+    use versions::{EPOCH_VERSION, NEW_PROTOCOL_VERSION, TIMEOUT_EPOCH_VERSION, Upgrade};
 
-    use super::{Ballot, Cert, SimpleTally, TimeoutTally, VoteCollector};
+    use super::{Ballot, Cert, EpochRootTally, SimpleTally, Tally, TimeoutTally, VoteCollector};
     use crate::{
         cert_verifier::verify_timeout3,
-        helpers::{test_timeout_epoch_lock, test_upgrade_lock},
-        message::{CatchupEvidence, TimeoutBallot, TimeoutVoteMessage3, UpgradeVoteMessage, Vote2},
+        helpers::{pin_test_version, test_timeout_epoch_lock, test_upgrade_lock},
+        message::{
+            CatchupEvidence, TimeoutBallot, TimeoutVoteMessage3, UpgradeVoteMessage, Vote1, Vote2,
+        },
         tests::common::utils::{
             TEST_DRB_RESULT, build_timeout_cert3_signed_by, build_timeout_cert3_with_lock,
             mock_membership,
@@ -815,6 +822,116 @@ mod tests {
     const RECOVERY_TIMEOUT: Duration = Duration::from_secs(10);
     /// How long to wait to confirm no certificate is produced (failure tests).
     const NO_CERT_TIMEOUT: Duration = Duration::from_millis(500);
+
+    fn make_epoch_root_vote(node_index: u64) -> Vote1<TestTypes> {
+        let view = ViewNumber::new(1);
+        let epoch = EpochNumber::genesis();
+        let key_pair = StateKeyPair::generate_from_seed_indexed([0; 32], node_index);
+        let light_client_state = LightClientState {
+            view_number: view.u64(),
+            ..Default::default()
+        };
+        let next_stake_table_state = StakeTableState::default();
+        let auth_root = [42; 32].into();
+        let signed_state_digest =
+            derive_signed_state_digest(&light_client_state, &next_stake_table_state, &auth_root);
+        Vote1 {
+            vote: make_quorum_vote(node_index, view, epoch),
+            state_vote: Some(LightClientStateUpdateVote2 {
+                epoch,
+                light_client_state,
+                next_stake_table_state,
+                signature: <SchnorrPubKey as LCV3StateSignatureKey>::sign_state(
+                    key_pair.sign_key_ref(),
+                    signed_state_digest,
+                )
+                .unwrap(),
+                v2_signature: <SchnorrPubKey as LCV2StateSignatureKey>::sign_state(
+                    key_pair.sign_key_ref(),
+                    &light_client_state,
+                    &next_stake_table_state,
+                )
+                .unwrap(),
+                auth_root,
+                signed_state_digest,
+            }),
+        }
+    }
+
+    #[test]
+    fn test_epoch_root_state_votes_require_lcv3_signature() {
+        // A legacy upgrade lock must not disable checks in the live tally.
+        pin_test_version(EPOCH_VERSION);
+        let membership = mock_membership()
+            .membership_for_epoch(Some(EpochNumber::genesis()))
+            .unwrap();
+        let mut tally = EpochRootTally::new(membership, test_upgrade_lock());
+        for i in 0..THRESHOLD - 1 {
+            assert!(tally.add(make_epoch_root_vote(i)).is_none());
+        }
+
+        let valid_vote = make_epoch_root_vote(THRESHOLD - 1);
+        let mut invalid_vote = valid_vote.clone();
+        invalid_vote.state_vote.as_mut().unwrap().signature = make_epoch_root_vote(NUM_NODES)
+            .state_vote
+            .unwrap()
+            .signature;
+        assert!(tally.add(invalid_vote).is_none());
+        assert!(tally.quorum_cert.is_some());
+        assert!(tally.state_cert.is_none());
+        let (stake, votes) = tally.state.vote_outcomes.values().next().unwrap();
+        assert_eq!(*stake, alloy::primitives::U256::from(THRESHOLD - 1));
+        assert_eq!(votes.len(), (THRESHOLD - 1) as usize);
+
+        let (_, cert) = tally
+            .add(valid_vote)
+            .expect("valid LCV3 vote reaches quorum");
+        assert_eq!(cert.signatures.len(), THRESHOLD as usize);
+    }
+
+    #[test]
+    fn test_epoch_root_state_votes_form_valid_certificate() {
+        let membership = mock_membership()
+            .membership_for_epoch(Some(EpochNumber::genesis()))
+            .unwrap();
+        let mut tally = EpochRootTally::new(membership.clone(), test_upgrade_lock());
+        let mut invalid_vote = make_epoch_root_vote(0);
+        invalid_vote.state_vote.as_mut().unwrap().v2_signature = make_epoch_root_vote(NUM_NODES)
+            .state_vote
+            .unwrap()
+            .v2_signature;
+        assert!(tally.add(invalid_vote).is_none());
+        assert!(tally.state.vote_outcomes.is_empty());
+
+        for i in 0..THRESHOLD - 1 {
+            assert!(tally.add(make_epoch_root_vote(i)).is_none());
+        }
+        let final_vote = make_epoch_root_vote(THRESHOLD - 1);
+        let state_vote = final_vote.state_vote.clone().unwrap();
+        let (quorum, cert) = tally.add(final_vote).expect("valid votes reach quorum");
+        verify_cert(quorum.cert(), quorum.cert().data(), &membership);
+        assert_eq!(cert.epoch, state_vote.epoch);
+        assert_eq!(cert.light_client_state, state_vote.light_client_state);
+        assert_eq!(
+            cert.next_stake_table_state,
+            state_vote.next_stake_table_state
+        );
+        assert_eq!(cert.auth_root, state_vote.auth_root);
+        assert_eq!(cert.signatures.len(), THRESHOLD as usize);
+        for (key, v3, v2) in cert.signatures {
+            assert!(<SchnorrPubKey as LCV3StateSignatureKey>::verify_state_sig(
+                &key,
+                &v3,
+                state_vote.signed_state_digest,
+            ));
+            assert!(<SchnorrPubKey as LCV2StateSignatureKey>::verify_state_sig(
+                &key,
+                &v2,
+                &cert.light_client_state,
+                &cert.next_stake_table_state,
+            ));
+        }
+    }
 
     /// Create a signed QuorumVote2 (used for Certificate1 accumulation).
     fn make_quorum_vote(
