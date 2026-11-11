@@ -8,7 +8,7 @@ use hotshot_types::{
     data::ViewNumber,
     epoch_membership::EpochMembership,
     message::UpgradeLock,
-    simple_certificate::CertificatePair,
+    simple_certificate::{Certificate1, CertificatePair},
     stake_table::{HSStakeTable, StakeTableEntries, StakeTableEntry, supermajority_threshold},
     vote::{self, HasViewNumber},
 };
@@ -87,6 +87,41 @@ pub trait Quorum: Sync {
     fn verify_cert2_static<V: StaticVersionType + 'static>(
         &self,
         cert2: &Certificate2<SeqTypes>,
+    ) -> impl Send + Future<Output = Result<()>>;
+
+    /// Verify a new protocol Certificate1 threshold signature.
+    ///
+    /// Unlike [`verify`](Self::verify), this applies no epoch transition rule, because new
+    /// protocol certificates never come with a next-epoch QC.
+    fn verify_cert1(
+        &self,
+        cert1: &Certificate1<SeqTypes>,
+        version: Version,
+    ) -> impl Send + Future<Output = Result<()>> {
+        async move {
+            match (version.major, version.minor) {
+                (0, 1) => self.verify_cert1_static::<StaticVersion<0, 1>>(cert1).await,
+                (0, 2) => self.verify_cert1_static::<StaticVersion<0, 2>>(cert1).await,
+                (0, 3) => self.verify_cert1_static::<StaticVersion<0, 3>>(cert1).await,
+                (0, 4) => self.verify_cert1_static::<StaticVersion<0, 4>>(cert1).await,
+                (0, 5) => self.verify_cert1_static::<StaticVersion<0, 5>>(cert1).await,
+                (0, 6) => self.verify_cert1_static::<StaticVersion<0, 6>>(cert1).await,
+                (0, 7) => self.verify_cert1_static::<StaticVersion<0, 7>>(cert1).await,
+                _ => {
+                    const {
+                        assert!(MAX_SUPPORTED_VERSION.major == 0);
+                        assert!(MAX_SUPPORTED_VERSION.minor == 7);
+                    }
+                    bail!("unsupported version {version}");
+                },
+            }
+        }
+    }
+
+    /// Same as [`verify_cert1`](Self::verify_cert1), but with the version as a type-level parameter.
+    fn verify_cert1_static<V: StaticVersionType + 'static>(
+        &self,
+        cert1: &Certificate1<SeqTypes>,
     ) -> impl Send + Future<Output = Result<()>>;
 
     /// Check a threshold signature on a certificate signed by the epoch after this quorum's.
@@ -444,6 +479,17 @@ where
             .verify_cert::<V, _>(cert2)
             .await
             .context("verifying cert2")
+    }
+
+    async fn verify_cert1_static<V: StaticVersionType + 'static>(
+        &self,
+        cert1: &Certificate1<SeqTypes>,
+    ) -> Result<()> {
+        let stake_table = self.membership.stake_table().await?;
+        stake_table
+            .verify_cert::<V, _>(cert1)
+            .await
+            .context("verifying cert1")
     }
 
     async fn verify_next_epoch_static<V: StaticVersionType + 'static>(

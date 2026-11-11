@@ -244,6 +244,15 @@ impl LeafProof {
                     .await
                     .context("verifying cert2 signature")?;
 
+                // `leaf_qc` is returned only when the requested leaf is `curr`. Otherwise the
+                // requested leaf's QC comes from the leaf chain, whose hashes already bind it.
+                if opt_qc.is_none() {
+                    quorum
+                        .verify_cert1(leaf_qc, version)
+                        .await
+                        .context("verifying leaf QC signature")?;
+                }
+
                 leaf_qc.as_ref().clone()
             },
             (proof, hint) => {
@@ -389,14 +398,19 @@ impl LeafProof {
 mod test {
     use std::marker::PhantomData;
 
+    use hotshot_query_service_types::availability::LeafId;
     use hotshot_types::{data::ViewNumber, simple_vote::Vote2Data};
     use pretty_assertions::assert_eq;
     use versions::{DRB_AND_HEADER_UPGRADE_VERSION, Upgrade};
 
     use super::*;
-    use crate::testing::{
-        AlwaysFalseQuorum, AlwaysTrueQuorum, LEAF_CHAIN_EPOCH_HEIGHT, LEGACY_VERSION,
-        VersionCheckQuorum, leaf_chain, leaf_chain_with_upgrade,
+    use crate::{
+        client::Client,
+        consensus::quorum::StakeTable,
+        testing::{
+            AlwaysFalseQuorum, AlwaysTrueQuorum, LEAF_CHAIN_EPOCH_HEIGHT, LEGACY_VERSION,
+            TestClient, VersionCheckQuorum, leaf_chain, leaf_chain_with_upgrade,
+        },
     };
 
     /// A new-protocol proof for `leaf` alone, by a `Certificate2` at `view` naming `epoch`.
@@ -679,6 +693,34 @@ mod test {
             .unwrap_err();
         assert!(
             err.to_string().contains("not the last block of its epoch"),
+            "{err:#}"
+        );
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_new_protocol_forged_leaf_qc_rejected() {
+        let client = TestClient::default();
+        client.set_upgrade(1, NEW_PROTOCOL_VERSION).await;
+        client.leaf(1).await;
+        let genesis = client.genesis().await;
+        let stake_table = Arc::new(StakeTable::from(genesis.stake_table));
+        let quorum =
+            StakeTableQuorum::new((stake_table.clone(), stake_table), genesis.epoch_height);
+
+        let proof = client.leaf_proof(LeafId::Number(1), None).await.unwrap();
+        proof.verify(LeafProofHint::Quorum(&quorum)).await.unwrap();
+
+        let mut forged = proof.clone();
+        let FinalityProof::NewProtocol { leaf_qc, .. } = &mut forged.proof else {
+            panic!("expected a new protocol proof");
+        };
+        leaf_qc.view_number = ViewNumber::new(999_999);
+        let err = forged
+            .verify(LeafProofHint::Quorum(&quorum))
+            .await
+            .unwrap_err();
+        assert!(
+            format!("{err:#}").contains("verifying leaf QC signature"),
             "{err:#}"
         );
     }

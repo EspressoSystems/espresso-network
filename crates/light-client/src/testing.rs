@@ -31,7 +31,9 @@ use hotshot_types::{
     },
     message::UpgradeLock,
     signature_key::SchnorrPubKey,
-    simple_certificate::{NextEpochQuorumCertificate2, QuorumCertificate2, UpgradeCertificate},
+    simple_certificate::{
+        Certificate1, NextEpochQuorumCertificate2, QuorumCertificate2, UpgradeCertificate,
+    },
     simple_vote::{
         NextEpochQuorumData2, QuorumData2, UpgradeProposalData, VersionedVoteData, Vote2Data,
     },
@@ -311,6 +313,13 @@ impl Quorum for AlwaysTrueQuorum {
         Ok(())
     }
 
+    async fn verify_cert1_static<V: StaticVersionType + 'static>(
+        &self,
+        _: &Certificate1<SeqTypes>,
+    ) -> Result<()> {
+        Ok(())
+    }
+
     fn epoch_height(&self) -> u64 {
         self.epoch_height
     }
@@ -336,6 +345,13 @@ impl Quorum for AlwaysFalseQuorum {
     async fn verify_cert2_static<V: StaticVersionType + 'static>(
         &self,
         _: &Certificate2<SeqTypes>,
+    ) -> Result<()> {
+        bail!("always false quorum");
+    }
+
+    async fn verify_cert1_static<V: StaticVersionType + 'static>(
+        &self,
+        _: &Certificate1<SeqTypes>,
     ) -> Result<()> {
         bail!("always false quorum");
     }
@@ -390,6 +406,13 @@ impl Quorum for VersionCheckQuorum {
         Ok(())
     }
 
+    async fn verify_cert1_static<V: StaticVersionType + 'static>(
+        &self,
+        _: &Certificate1<SeqTypes>,
+    ) -> Result<()> {
+        Ok(())
+    }
+
     fn epoch_height(&self) -> u64 {
         self.epoch_height
     }
@@ -421,6 +444,13 @@ impl Quorum for EpochChangeQuorum {
     async fn verify_cert2_static<V: StaticVersionType + 'static>(
         &self,
         _: &Certificate2<SeqTypes>,
+    ) -> Result<()> {
+        Ok(())
+    }
+
+    async fn verify_cert1_static<V: StaticVersionType + 'static>(
+        &self,
+        _: &Certificate1<SeqTypes>,
     ) -> Result<()> {
         Ok(())
     }
