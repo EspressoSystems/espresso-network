@@ -134,7 +134,13 @@ fn strategies_reach_every_apply_event_outcome() {
 }
 
 proptest! {
-    #![proptest_config(ProptestConfig::with_cases(64))]
+    // A saved seed replays the strategies rather than the input, so it goes stale as soon as they
+    // change. A failure prints its shrunk input, which is what a regression test needs.
+    #![proptest_config(ProptestConfig {
+        cases: 64,
+        failure_persistence: None,
+        ..ProptestConfig::default()
+    })]
 
     #[test]
     fn rejected_events_change_nothing_and_stake_matches_delegations((start, ops) in sequence()) {
