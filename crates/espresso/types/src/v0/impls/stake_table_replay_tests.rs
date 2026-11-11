@@ -7,7 +7,7 @@
 //! targets can refer to the state built so far.
 
 use std::{
-    collections::HashSet,
+    collections::{BTreeSet, HashSet},
     net::{Ipv4Addr, Ipv6Addr},
     sync::LazyLock,
 };
@@ -27,14 +27,17 @@ use hotshot_contract_adapter::{
     stake_table::{StateSignatureSol, sign_address_bls, sign_address_schnorr},
 };
 use hotshot_types::{light_client::StateKeyPair, signature_key::BLSKeyPair};
-use proptest::{option, prelude::*};
+use proptest::{option, prelude::*, strategy::ValueTree, test_runner::TestRunner};
 use rand::{SeedableRng, rngs::StdRng};
 use vbs::version::Version;
 use versions::{EPOCH_VERSION, NEW_PROTOCOL_VERSION};
 
 use crate::{
     PubKey, RegisteredValidatorMap, StakeTableState, ValidatorSet,
-    v0_3::{COMMISSION_BASIS_POINTS, EventKey, RegisteredValidator, StakeTableEvent},
+    v0_3::{
+        COMMISSION_BASIS_POINTS, EventKey, ExpectedStakeTableError, RegisteredValidator,
+        StakeTableError, StakeTableEvent,
+    },
 };
 
 const POOL_SIZE: usize = 8;
@@ -44,6 +47,86 @@ const POOL_SIZE: usize = 8;
 const MAX_SIGNED_EVENTS: usize = 6;
 
 const ESP: u64 = 1_000_000_000_000_000_000;
+
+/// Sequences the reachability test draws. Enough for every outcome in [`REACHABLE`] to show up
+/// several times, so a strategy change that makes one rare still fails the test.
+const OUTCOME_SEQUENCES: usize = 500;
+
+/// Every outcome of `apply_event`, as `event: outcome`. The strategies must reach each one, or the
+/// properties below never test that branch.
+const REACHABLE: &[&str] = &[
+    "Register: Ok authenticated",
+    "Register: Ok unauthenticated",
+    "Register: Expected SchnorrKeyAlreadyUsed",
+    "Register: Error ValidatorAlreadyExited",
+    "Register: Error AlreadyRegistered",
+    "Register: Error BlsKeyAlreadyUsed",
+    "RegisterV2: Ok authenticated",
+    "RegisterV2: Ok unauthenticated",
+    "RegisterV2: Error ValidatorAlreadyExited",
+    "RegisterV2: Error AlreadyRegistered",
+    "RegisterV2: Error BlsKeyAlreadyUsed",
+    "RegisterV3: Ok authenticated",
+    "RegisterV3: Ok unauthenticated",
+    "RegisterV3: Error ValidatorAlreadyExited",
+    "RegisterV3: Error AlreadyRegistered",
+    "RegisterV3: Error BlsKeyAlreadyUsed",
+    "RegisterV3: Error X25519KeyAlreadyUsed",
+    "Deregister: Ok",
+    "Deregister: Error ValidatorNotFound",
+    "DeregisterV2: Ok",
+    "DeregisterV2: Error ValidatorNotFound",
+    "Delegate: Ok",
+    "Delegate: Error ZeroDelegatorStake",
+    "Delegate: Error ValidatorNotFound",
+    "Delegate: Error StakeOverflow",
+    "Undelegate: Ok",
+    "Undelegate: Error ValidatorNotFound",
+    "Undelegate: Error InsufficientStake",
+    "Undelegate: Error DelegatorNotFound",
+    "UndelegateV2: Ok",
+    "UndelegateV2: Error ValidatorNotFound",
+    "UndelegateV2: Error InsufficientStake",
+    "UndelegateV2: Error DelegatorNotFound",
+    "KeyUpdate: Ok",
+    "KeyUpdate: Expected InvalidBlsKey",
+    "KeyUpdate: Expected InvalidSchnorrKey",
+    "KeyUpdate: Expected SchnorrKeyAlreadyUsed",
+    "KeyUpdate: Error ValidatorNotFound",
+    "KeyUpdate: Error BlsKeyAlreadyUsed",
+    "KeyUpdateV2: Ok",
+    "KeyUpdateV2: Expected InvalidBlsKey",
+    "KeyUpdateV2: Expected InvalidSchnorrKey",
+    "KeyUpdateV2: Expected SchnorrKeyAlreadyUsed",
+    "KeyUpdateV2: Error AuthenticationFailed",
+    "KeyUpdateV2: Error ValidatorNotFound",
+    "KeyUpdateV2: Error BlsKeyAlreadyUsed",
+    "CommissionUpdate: Ok",
+    "CommissionUpdate: Error InvalidCommission",
+    "CommissionUpdate: Error ValidatorNotFound",
+    "X25519KeyUpdate: Ok",
+    "X25519KeyUpdate: Error ValidatorNotFound",
+    "X25519KeyUpdate: Error X25519KeyAlreadyUsed",
+    "P2pAddrUpdate: Ok",
+    "P2pAddrUpdate: Error ValidatorNotFound",
+];
+
+#[test]
+fn strategies_reach_every_apply_event_outcome() {
+    let mut runner = TestRunner::deterministic();
+    let mut seen = BTreeSet::new();
+    for _ in 0..OUTCOME_SEQUENCES {
+        let (start, ops) = sequence().new_tree(&mut runner).unwrap().current();
+        replay_observed(&start, &ops, |event, result, state| {
+            seen.insert(outcome(event, result, state));
+        });
+    }
+    let missing: Vec<_> = REACHABLE
+        .iter()
+        .filter(|outcome| !seen.contains(**outcome))
+        .collect();
+    assert!(missing.is_empty(), "the strategies never reach {missing:?}");
+}
 
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(64))]
@@ -303,20 +386,20 @@ fn op() -> impl Strategy<Value = Op> {
                 amount,
             }
         }),
-        2 => (delegator(), validator(), amount()).prop_map(|(delegator, validator, amount)| {
-            Op::Undelegate {
+        2 => (undelegator(), validator(), undelegated()).prop_map(
+            |(delegator, validator, amount)| Op::Undelegate {
                 delegator,
                 validator,
                 amount,
             }
-        }),
-        1 => (delegator(), validator(), amount()).prop_map(|(delegator, validator, amount)| {
-            Op::UndelegateV2 {
+        ),
+        1 => (undelegator(), validator(), undelegated()).prop_map(
+            |(delegator, validator, amount)| Op::UndelegateV2 {
                 delegator,
                 validator,
                 amount,
             }
-        }),
+        ),
         1 => (validator(), bls_key(), schnorr_key()).prop_map(|(validator, bls, schnorr)| {
             Op::KeyUpdate {
                 validator,
@@ -356,6 +439,14 @@ fn delegator() -> impl Strategy<Value = Delegator> {
     prop_oneof![
         3 => pool_index().prop_map(Delegator::Pool),
         1 => any::<usize>().prop_map(Delegator::Existing),
+    ]
+}
+
+/// Mostly a delegator the validator already has, since an undelegation from anyone else fails.
+fn undelegator() -> impl Strategy<Value = Delegator> {
+    prop_oneof![
+        3 => any::<usize>().prop_map(Delegator::Existing),
+        1 => pool_index().prop_map(Delegator::Pool),
     ]
 }
 
@@ -401,7 +492,16 @@ fn amount() -> impl Strategy<Value = Amount> {
         1 => (0..1_000u64).prop_map(move |n| exact(U256::MAX - U256::from(n))),
         1 => Just(exact(U256::ZERO)),
         2 => any::<usize>().prop_map(Amount::Earlier),
-        2 => Just(Amount::Held),
+    ]
+}
+
+/// Mostly what the delegator holds or an amount used before, so an undelegation can empty a
+/// delegation or leave part of it.
+fn undelegated() -> impl Strategy<Value = Amount> {
+    prop_oneof![
+        3 => Just(Amount::Held),
+        2 => any::<usize>().prop_map(Amount::Earlier),
+        2 => amount(),
     ]
 }
 
@@ -432,17 +532,59 @@ fn p2p_addr() -> impl Strategy<Value = String> {
 /// error, but a rejected event must leave the state as it was, so skipping it instead reaches only
 /// states a server could produce by not sending it, and lets a sequence go deeper.
 fn replay(start: &Start, ops: &[Op]) -> StakeTableState {
+    replay_observed(start, ops, |_, _, _| {})
+}
+
+/// [`replay`], calling `observe` with each event, what applying it returned, and the state after.
+fn replay_observed(
+    start: &Start,
+    ops: &[Op],
+    mut observe: impl FnMut(
+        &StakeTableEvent,
+        &Result<Result<(), ExpectedStakeTableError>, StakeTableError>,
+        &StakeTableState,
+    ),
+) -> StakeTableState {
     let mut replay = Replay::new(start);
     for op in ops {
         for event in replay.events(op) {
             let before = replay.state.clone();
-            match replay.state.apply_event(event) {
+            let result = replay.state.apply_event(event.clone());
+            match result {
                 Ok(Ok(())) => assert_stake_matches_delegations(&replay.state),
                 Ok(Err(_)) | Err(_) => assert_unchanged(&before, &replay.state),
             }
+            observe(&event, &result, &replay.state);
         }
     }
     replay.state
+}
+
+/// `event: outcome` as listed in [`REACHABLE`], named after the event and error variants.
+fn outcome(
+    event: &StakeTableEvent,
+    result: &Result<Result<(), ExpectedStakeTableError>, StakeTableError>,
+    state: &StakeTableState,
+) -> String {
+    let variant = |debug: String| debug.split('(').next().unwrap_or_default().to_owned();
+    let kind = variant(format!("{event:?}"));
+    let outcome = match result {
+        Ok(Ok(())) => match event {
+            StakeTableEvent::Register(ValidatorRegistered { account, .. })
+            | StakeTableEvent::RegisterV2(ValidatorRegisteredV2 { account, .. })
+            | StakeTableEvent::RegisterV3(ValidatorRegisteredV3 { account, .. }) => {
+                if state.validators()[account].authenticated {
+                    "Ok authenticated".to_owned()
+                } else {
+                    "Ok unauthenticated".to_owned()
+                }
+            },
+            _ => "Ok".to_owned(),
+        },
+        Ok(Err(err)) => format!("Expected {}", variant(format!("{err:?}"))),
+        Err(err) => format!("Error {}", variant(format!("{err:?}"))),
+    };
+    format!("{kind}: {outcome}")
 }
 
 struct Replay {
