@@ -318,8 +318,17 @@ where
         );
     }
 
-    async fn load_stake_table(&self, _: EpochNumber) -> bool {
-        false
+    async fn load_epoch(
+        &self,
+        epoch: EpochNumber,
+        _: hotshot_types::traits::election::EpochComponents,
+    ) -> Result<hotshot_types::traits::election::StakeTableAvailability, Self::Error> {
+        use hotshot_types::traits::election::StakeTableAvailability;
+        Ok(if self.snapshot(epoch).is_some() {
+            StakeTableAvailability::Present
+        } else {
+            StakeTableAvailability::Absent
+        })
     }
 }
 

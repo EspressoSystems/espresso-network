@@ -20,7 +20,10 @@ use hotshot_types::{
     signature_key::BLSPubKey,
     stake_table::StakeTableEntry,
     traits::{
-        election::{GenesisStakeTables, Membership, MembershipSnapshot},
+        election::{
+            EpochComponents, GenesisStakeTables, Membership, MembershipSnapshot,
+            StakeTableAvailability,
+        },
         signature_key::{SignatureKey as _, StakeTableEntryType},
     },
     utils::{epoch_from_block_number, root_block_in_epoch, transition_block_for_epoch},
@@ -41,7 +44,7 @@ use super::{
 };
 use crate::{
     Header, Leaf2, PubKey, SeqTypes,
-    traits::StateCatchup,
+    traits::{MembershipPersistence, StakeTuple, StateCatchup},
     v0_3::{ASSUMED_BLOCK_TIME_SECONDS, AuthenticatedValidator, Fetcher, RewardAmount},
 };
 
@@ -54,10 +57,10 @@ use crate::{
 /// catchup.
 pub const RECENT_STAKE_TABLES_LIMIT: u64 = 20;
 
-/// Default for how long `load_stake_table` may spend on each of its two
+/// Default for how long `load_epoch` may spend on each of its two
 /// phases.
 ///
-/// Catchup calls `load_stake_table` once per epoch it walks and bounds each
+/// Catchup calls `load_epoch` for each epoch it walks and bounds each
 /// call by its own `DEFAULT_CATCHUP_TIMEOUT` (300 s), so this is the tighter
 /// of the two and is what a stalled store actually costs per epoch. Neither
 /// bounds a walk as a whole.
@@ -119,7 +122,7 @@ struct DaCommittee {
 }
 
 /// Holds Stake table and da stake
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 struct EpochCommittee {
     /// The nodes eligible for leadership.
     ///
@@ -315,6 +318,8 @@ impl EpochCommittees {
             let next_epoch = epoch
                 .checked_sub(1)
                 .context("underflow: cannot get next epoch when epoch is 0")?;
+            self.load_epoch(EpochNumber::new(next_epoch), EpochComponents::SourceRoot)
+                .await?;
             let prev_ts = match self.map_header(next_epoch, |h| h.timestamp_millis_internal()) {
                 Some(ts) => ts,
                 None => {
@@ -501,7 +506,7 @@ impl EpochCommittees {
         committees
     }
 
-    /// Override how long `load_stake_table` may spend on each of its two
+    /// Override how long `load_epoch` may spend on each of its two
     /// phases. Mostly for tests.
     pub fn with_storage_read_timeout(mut self, timeout: Duration) -> Self {
         self.storage_read_timeout = timeout;
@@ -551,6 +556,65 @@ impl EpochCommittees {
                 .write()
                 .put_epoch_committee(epoch, Arc::new(committee));
         }
+    }
+
+    async fn read_epoch_components(
+        &self,
+        persistence: &dyn MembershipPersistence,
+        epoch: EpochNumber,
+        components: EpochComponents,
+    ) -> Result<(Option<StakeTuple>, Option<DrbResult>, Option<Header>), EpochCommitteesError> {
+        let resident = self.snapshot(epoch);
+        let stake = if resident.is_none() {
+            persistence
+                .load_stake(epoch)
+                .await
+                .map_err(|source| EpochCommitteesError::StakeTableStorage { epoch, source })?
+        } else {
+            None
+        };
+        if resident.is_none() && stake.is_none() {
+            return Ok((None, None, None));
+        }
+        let drb = if matches!(
+            components,
+            EpochComponents::Leader | EpochComponents::AllPersisted
+        ) && !resident.as_ref().is_some_and(|s| s.has_drb())
+        {
+            persistence
+                .load_drb_result(epoch)
+                .await
+                .map_err(|source| EpochCommitteesError::DrbStorage { epoch, source })?
+        } else {
+            None
+        };
+        let header = if matches!(
+            components,
+            EpochComponents::SourceRoot | EpochComponents::AllPersisted
+        ) && !resident
+            .as_ref()
+            .is_some_and(|s| s.inner.committee.header.is_some())
+        {
+            persistence
+                .load_epoch_root(epoch)
+                .await
+                .map_err(|source| EpochCommitteesError::EpochRootStorage { epoch, source })?
+        } else {
+            None
+        };
+        Ok::<_, EpochCommitteesError>((stake, drb, header))
+    }
+
+    fn resident_components_present(&self, epoch: EpochNumber, components: EpochComponents) -> bool {
+        self.snapshot(epoch)
+            .is_some_and(|snapshot| match components {
+                EpochComponents::StakeTable => true,
+                EpochComponents::Leader => snapshot.has_drb(),
+                EpochComponents::SourceRoot => snapshot.inner.committee.header.is_some(),
+                EpochComponents::AllPersisted => {
+                    snapshot.has_drb() && snapshot.inner.committee.header.is_some()
+                },
+            })
     }
 
     /// Get root leaf header for a given epoch
@@ -651,7 +715,17 @@ pub async fn fetch_and_calculate_block_reward(
         );
     }
 
-    let header = match committee.header.clone() {
+    if committee.header.is_none() {
+        coordinator
+            .membership()
+            .load_epoch(current_epoch, EpochComponents::SourceRoot)
+            .await?;
+    }
+    let header = match committee.header.clone().or_else(|| {
+        coordinator
+            .membership()
+            .map_header(current_epoch, Clone::clone)
+    }) {
         Some(header) => header,
         None => {
             let root_epoch = current_epoch.checked_sub(2).context(format!(
@@ -711,117 +785,47 @@ impl Membership<SeqTypes> for EpochCommittees {
         self.inner.read().snapshots.get(&epoch).cloned()
     }
 
-    /// Load the committee for `epoch` from storage.
-    ///
-    /// Everything persisted for the epoch is restored: the stake table, the
-    /// epoch root header, and the randomized committee (rebuilt from the DRB
-    /// result).
-    async fn load_stake_table(&self, epoch: EpochNumber) -> bool {
-        if self.inner.read().snapshots.contains_key(&epoch) {
-            return true;
+    async fn load_epoch(
+        &self,
+        epoch: EpochNumber,
+        components: EpochComponents,
+    ) -> Result<StakeTableAvailability, Self::Error> {
+        if self.resident_components_present(epoch, components) {
+            return Ok(StakeTableAvailability::Present);
         }
         let locks = tokio::time::timeout(self.storage_read_timeout, async {
-            // Ensure there is only one `load_stake_table` at a time:
             let guard = self.load_from_storage_lock.lock().await;
-            // Check if someone else won the race while we queued.
-            if self.inner.read().snapshots.contains_key(&epoch) {
-                return None;
-            }
             let persistence = self.fetcher.persistence.lock().await;
-            Some((guard, persistence))
+            (guard, persistence)
         })
         .await;
         let (_guard, persistence) = match locks {
-            Ok(Some(locks)) => locks,
-            // Someone else loaded the epoch while we queued for the first lock.
-            Ok(None) => return true,
-            Err(_) => {
-                // A timeout can also mean a won race.
-                if self.inner.read().snapshots.contains_key(&epoch) {
-                    return true;
-                }
-                warn!(
-                    %epoch,
-                    timeout = ?self.storage_read_timeout,
-                    "timed out queueing for the storage locks; treating the epoch as not persisted"
-                );
-                return false;
+            Ok(locks) => locks,
+            Err(_) if self.resident_components_present(epoch, components) => {
+                return Ok(StakeTableAvailability::Present);
             },
+            Err(_) => return Err(EpochCommitteesError::StorageLockTimeout(epoch)),
         };
-        // Check if someone else won the race:
-        if self.inner.read().snapshots.contains_key(&epoch) {
-            return true;
-        }
-        // Bound the reads so a stalled query cannot pin the locks held above.
-        let read = tokio::time::timeout(self.storage_read_timeout, async {
-            let stake = match persistence.load_stake(epoch).await {
-                Ok(Some(stake)) => stake,
-                Ok(None) => return None,
-                Err(err) => {
-                    warn!(%err, "failed to load stake table for epoch {epoch} from persistence");
-                    return None;
-                },
-            };
-            let drb = match persistence.load_drb_result(epoch).await {
-                Ok(drb) => drb,
-                Err(err) => {
-                    warn!(%err, "failed to load drb result for epoch {epoch} from persistence");
-                    None
-                },
-            };
-            let header = match persistence.load_epoch_root(epoch).await {
-                Ok(header) => header,
-                Err(err) => {
-                    warn!(%err, "failed to load epoch root for epoch {epoch} from persistence");
-                    None
-                },
-            };
-            Some((stake, drb, header))
-        })
+        let read = tokio::time::timeout(
+            self.storage_read_timeout,
+            self.read_epoch_components(&*persistence, epoch, components),
+        )
         .await;
-        let ((validators, block_reward, stake_table_hash), drb, header) = match read {
-            Ok(Some(loaded)) => loaded,
-            Ok(None) => return false,
-            Err(_) => {
-                if self.inner.read().snapshots.contains_key(&epoch) {
-                    return true;
-                }
-                warn!(
-                    %epoch,
-                    timeout = ?self.storage_read_timeout,
-                    "storage reads for the stake table timed out; treating the epoch as not \
-                     persisted"
-                );
-                return false;
+        let (stake, drb, header) = match read {
+            Ok(result) => result?,
+            Err(_) if self.resident_components_present(epoch, components) => {
+                return Ok(StakeTableAvailability::Present);
             },
+            Err(_) => return Err(EpochCommitteesError::StorageReadTimeout(epoch)),
         };
         drop(persistence);
-        info!(
-            %epoch,
-            has_drb = drb.is_some(),
-            has_header = header.is_some(),
-            "stake table loaded from persistence"
-        );
-        let committee = Arc::new(EpochCommittee::new(
-            validators,
-            block_reward,
-            stake_table_hash,
-            header,
-        ));
-        let randomized = drb.map(|drb| {
-            let leaders = committee
-                .eligible_leaders
-                .iter()
-                .map(|peer_config| peer_config.stake_table_entry.clone())
-                .collect();
-            Arc::new(generate_stake_cdf(leaders, drb))
+        let committee = stake.map(|(validators, reward, hash)| {
+            Arc::new(EpochCommittee::new(validators, reward, hash, None))
         });
-        let mut inner = self.inner.write();
-        inner.put_epoch_committee(epoch, committee);
-        if let Some(randomized) = randomized {
-            inner.put_randomized_committee(epoch, randomized);
-        }
-        true
+        Ok(self
+            .inner
+            .write()
+            .hydrate_epoch(epoch, committee, drb, header))
     }
 
     fn genesis_stake_tables(&self) -> Arc<GenesisStakeTables<SeqTypes>> {
@@ -902,7 +906,7 @@ impl Membership<SeqTypes> for EpochCommittees {
             block_reward = Some(reward);
         }
 
-        self.load_stake_table(epoch).await;
+        self.load_epoch(epoch, EpochComponents::SourceRoot).await?;
 
         let epoch_committee = self.inner.read().epoch_committee(epoch).cloned();
 
@@ -1219,6 +1223,33 @@ impl Membership<SeqTypes> for EpochCommittees {
 
 #[derive(Error, Debug)]
 pub enum EpochCommitteesError {
+    #[error("failed to load persisted stake table for epoch {epoch}: {source}")]
+    StakeTableStorage {
+        epoch: EpochNumber,
+        #[source]
+        source: anyhow::Error,
+    },
+
+    #[error("failed to load persisted DRB for epoch {epoch}: {source}")]
+    DrbStorage {
+        epoch: EpochNumber,
+        #[source]
+        source: anyhow::Error,
+    },
+
+    #[error("failed to load persisted epoch root for epoch {epoch}: {source}")]
+    EpochRootStorage {
+        epoch: EpochNumber,
+        #[source]
+        source: anyhow::Error,
+    },
+
+    #[error("membership storage lock acquisition timed out for epoch {0}")]
+    StorageLockTimeout(EpochNumber),
+
+    #[error("membership component read timed out for epoch {0}")]
+    StorageReadTimeout(EpochNumber),
+
     #[error("could not lookup leader")]
     LeaderLookupError,
 
@@ -1239,6 +1270,40 @@ pub enum EpochCommitteesError {
 }
 
 impl Inner {
+    /// Merge against the state at installation time: storage I/O may have
+    /// overlapped a decided root, DA update, or a newer supplied DRB.
+    fn hydrate_epoch(
+        &mut self,
+        epoch: EpochNumber,
+        loaded: Option<Arc<EpochCommittee>>,
+        drb: Option<DrbResult>,
+        header: Option<Header>,
+    ) -> StakeTableAvailability {
+        let Some(committee) = self.epoch_committee(epoch).cloned().or(loaded) else {
+            return StakeTableAvailability::Absent;
+        };
+        let committee = if committee.header.is_none() && header.is_some() {
+            Arc::new(EpochCommittee {
+                header,
+                ..(*committee).clone()
+            })
+        } else {
+            committee
+        };
+        self.put_epoch_committee(epoch, committee.clone());
+        if !self.snapshots[&epoch].has_drb()
+            && let Some(drb) = drb
+        {
+            let leaders = committee
+                .eligible_leaders
+                .iter()
+                .map(|peer| peer.stake_table_entry.clone())
+                .collect();
+            self.put_randomized_committee(epoch, Arc::new(generate_stake_cdf(leaders, drb)));
+        }
+        StakeTableAvailability::Present
+    }
+
     /// The DA committee that applies to `epoch`, or the genesis DA committee
     /// when `epoch` is `None` or no explicit DA committee covers it.
     fn resolve_da_committee(&self, epoch: Option<EpochNumber>) -> Arc<DaCommittee> {
@@ -1559,8 +1624,20 @@ mod tests {
     /// records headers written via `store_epoch_root`, independent of
     /// `header`. `fail_next_store` makes the next `store_epoch_root` fail
     /// once, then clears itself.
+    #[derive(Debug, Default)]
+    struct ReadControl {
+        stake_reads: AtomicUsize,
+        drb_reads: AtomicUsize,
+        root_reads: AtomicUsize,
+        fail_stake: AtomicBool,
+        fail_root: AtomicBool,
+        drb_gate: Option<Arc<tokio::sync::Notify>>,
+        drb_started: tokio::sync::Notify,
+    }
+
     #[derive(Debug)]
     struct MockStakeStore {
+        control: Arc<ReadControl>,
         header: Header,
         stored_headers: std::sync::Mutex<HashMap<EpochNumber, Header>>,
         fail_next_store: Arc<AtomicBool>,
@@ -1572,6 +1649,10 @@ mod tests {
             &self,
             epoch: EpochNumber,
         ) -> anyhow::Result<Option<crate::traits::StakeTuple>> {
+            self.control.stake_reads.fetch_add(1, Ordering::SeqCst);
+            if self.control.fail_stake.load(Ordering::SeqCst) {
+                anyhow::bail!("injected stake read failure");
+            }
             Ok((*epoch == 7 || *epoch == 8).then(|| (Default::default(), None, None)))
         }
 
@@ -1583,10 +1664,19 @@ mod tests {
         }
 
         async fn load_drb_result(&self, epoch: EpochNumber) -> anyhow::Result<Option<DrbResult>> {
+            self.control.drb_reads.fetch_add(1, Ordering::SeqCst);
+            self.control.drb_started.notify_one();
+            if let Some(gate) = &self.control.drb_gate {
+                gate.notified().await;
+            }
             Ok((*epoch == 7).then_some([7; 32]))
         }
 
         async fn load_epoch_root(&self, epoch: EpochNumber) -> anyhow::Result<Option<Header>> {
+            self.control.root_reads.fetch_add(1, Ordering::SeqCst);
+            if self.control.fail_root.load(Ordering::SeqCst) {
+                anyhow::bail!("injected root read failure");
+            }
             if let Some(header) = self.stored_headers.lock().unwrap().get(&epoch) {
                 return Ok(Some(header.clone()));
             }
@@ -1659,6 +1749,279 @@ mod tests {
         }
     }
 
+    async fn committees_with_read_control(control: Arc<ReadControl>) -> EpochCommittees {
+        let store = MockStakeStore {
+            control,
+            header: build_epoch_root_header().await,
+            stored_headers: Default::default(),
+            fail_next_store: Default::default(),
+        };
+        let fetcher = Fetcher::new(
+            Arc::new(crate::mock::MockStateCatchup::default()),
+            Arc::new(AsyncMutex::new(store)),
+            crate::L1Client::new(vec!["http://localhost:3331".parse().unwrap()]).unwrap(),
+            crate::ChainConfig::default(),
+        );
+        build_committees_with_fetcher(4, fetcher, EpochNumber::genesis())
+    }
+
+    #[tokio::test]
+    async fn table_ensure_and_pure_reads_do_not_wait_for_legacy_drb_catchup() {
+        use hotshot_types::epoch_membership::ResidentEpochReadiness;
+
+        let gate = Arc::new(tokio::sync::Notify::new());
+        let control = Arc::new(ReadControl {
+            drb_gate: Some(gate.clone()),
+            fail_root: AtomicBool::new(true),
+            ..Default::default()
+        });
+        let committees = committees_with_read_control(control.clone()).await;
+        let coordinator = EpochMembershipCoordinator::<SeqTypes>::new(
+            committees,
+            100u64,
+            &hotshot_example_types::storage_types::TestStorage::default(),
+        );
+        let epoch = EpochNumber::new(7);
+        assert!(coordinator.snapshot(epoch).is_none());
+        assert!(coordinator.leader_snapshot(epoch).is_none());
+        assert_eq!(
+            coordinator.resident_readiness(epoch),
+            ResidentEpochReadiness::Unavailable
+        );
+        tokio::task::yield_now().await;
+        assert_eq!(control.stake_reads.load(Ordering::SeqCst), 0);
+        assert_eq!(control.drb_reads.load(Ordering::SeqCst), 0);
+
+        let table = coordinator.ensure_stake_table(epoch).await.unwrap();
+        assert!(!table.has_drb());
+        assert_eq!(control.drb_reads.load(Ordering::SeqCst), 0);
+        assert_eq!(control.root_reads.load(Ordering::SeqCst), 0);
+        assert!(coordinator.membership_for_epoch(Some(epoch)).is_err());
+        tokio::time::timeout(Duration::from_secs(1), control.drb_started.notified())
+            .await
+            .unwrap();
+        assert_eq!(
+            coordinator.resident_readiness(epoch),
+            ResidentEpochReadiness::StakeTable
+        );
+        tokio::time::timeout(
+            Duration::from_millis(100),
+            coordinator.ensure_stake_table(epoch),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert!(
+            tokio::time::timeout(
+                Duration::from_millis(20),
+                coordinator.ensure_leader_membership(epoch)
+            )
+            .await
+            .is_err()
+        );
+        assert!(coordinator.leader_snapshot(epoch).is_none());
+
+        gate.notify_one();
+        let leader = coordinator.ensure_leader_membership(epoch).await.unwrap();
+        assert!(leader.snapshot().has_drb());
+        assert!(!table.has_drb());
+        assert_eq!(control.drb_reads.load(Ordering::SeqCst), 1);
+        // A source-root storage error must not prevent restoring a saved DRB.
+        assert_eq!(control.root_reads.load(Ordering::SeqCst), 0);
+        assert!(matches!(
+            coordinator
+                .membership()
+                .load_epoch(epoch, EpochComponents::AllPersisted)
+                .await,
+            Err(EpochCommitteesError::EpochRootStorage { .. })
+        ));
+    }
+
+    #[tokio::test]
+    async fn persisted_absence_failure_and_timeout_remain_distinct() {
+        let control = Arc::new(ReadControl::default());
+        let committees = committees_with_read_control(control.clone())
+            .await
+            .with_storage_read_timeout(Duration::from_millis(20));
+        let epoch = EpochNumber::new(9);
+        assert_eq!(
+            committees
+                .load_epoch(epoch, EpochComponents::StakeTable)
+                .await
+                .unwrap(),
+            StakeTableAvailability::Absent
+        );
+        control.fail_stake.store(true, Ordering::SeqCst);
+        assert!(matches!(
+            committees
+                .load_epoch(epoch, EpochComponents::StakeTable)
+                .await,
+            Err(EpochCommitteesError::StakeTableStorage { .. })
+        ));
+        control.fail_stake.store(false, Ordering::SeqCst);
+        let _busy = committees.fetcher.persistence.lock().await;
+        assert!(matches!(
+            committees
+                .load_epoch(epoch, EpochComponents::StakeTable)
+                .await,
+            Err(EpochCommitteesError::StorageLockTimeout(timed_out)) if timed_out == epoch
+        ));
+    }
+
+    #[tokio::test]
+    async fn add_epoch_root_does_not_wait_for_persisted_drb() {
+        let control = Arc::new(ReadControl {
+            drb_gate: Some(Arc::new(tokio::sync::Notify::new())),
+            ..Default::default()
+        });
+        let committees = committees_with_read_control(control.clone()).await;
+        let epoch = EpochNumber::new(3);
+        {
+            let mut inner = committees.inner.write();
+            let template = inner.epoch_committee(EpochNumber::genesis()).unwrap();
+            let committee = EpochCommittee {
+                block_reward: Some(RewardAmount::default()),
+                stake_table_hash: Some(StakeTableState::default().commit()),
+                header: None,
+                ..(**template).clone()
+            };
+            inner.put_epoch_committee(epoch, Arc::new(committee));
+        }
+        let coordinator = EpochMembershipCoordinator::<SeqTypes>::new(
+            committees,
+            100u64,
+            &hotshot_example_types::storage_types::TestStorage::default(),
+        );
+        let header = build_epoch_root_header().await;
+        tokio::time::timeout(
+            Duration::from_millis(100),
+            coordinator.add_epoch_root(header),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert!(!coordinator.snapshot(epoch).unwrap().has_drb());
+        assert_eq!(control.drb_reads.load(Ordering::SeqCst), 0);
+        assert_eq!(control.root_reads.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn source_root_hydration_does_not_require_drb() {
+        let control = Arc::new(ReadControl {
+            drb_gate: Some(Arc::new(tokio::sync::Notify::new())),
+            ..Default::default()
+        });
+        let committees = committees_with_read_control(control.clone()).await;
+        let epoch = EpochNumber::new(7);
+        committees
+            .load_epoch(epoch, EpochComponents::StakeTable)
+            .await
+            .unwrap();
+        tokio::time::timeout(
+            Duration::from_millis(100),
+            committees.load_epoch(epoch, EpochComponents::SourceRoot),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        let restored = committees.snapshot(epoch).unwrap();
+        assert!(restored.inner.committee.header.is_some());
+        assert!(!restored.has_drb());
+        assert_eq!(control.drb_reads.load(Ordering::SeqCst), 0);
+        assert_eq!(control.root_reads.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn stalled_drb_read_returns_typed_timeout_without_changing_table_readiness() {
+        let control = Arc::new(ReadControl {
+            drb_gate: Some(Arc::new(tokio::sync::Notify::new())),
+            ..Default::default()
+        });
+        let committees = committees_with_read_control(control)
+            .await
+            .with_storage_read_timeout(Duration::from_millis(20));
+        let epoch = EpochNumber::new(7);
+        committees
+            .load_epoch(epoch, EpochComponents::StakeTable)
+            .await
+            .unwrap();
+        assert!(
+            matches!(committees.load_epoch(epoch, EpochComponents::Leader).await,
+            Err(EpochCommitteesError::StorageReadTimeout(timed_out)) if timed_out == epoch)
+        );
+        assert!(!committees.snapshot(epoch).unwrap().has_drb());
+        assert_eq!(
+            committees
+                .load_epoch(epoch, EpochComponents::StakeTable)
+                .await
+                .unwrap(),
+            StakeTableAvailability::Present
+        );
+    }
+
+    #[tokio::test]
+    async fn persisted_hydration_preserves_concurrent_table_drb_and_da_updates() {
+        let gate = Arc::new(tokio::sync::Notify::new());
+        let control = Arc::new(ReadControl {
+            drb_gate: Some(gate.clone()),
+            ..Default::default()
+        });
+        let committees = committees_with_read_control(control.clone()).await;
+        let epoch = EpochNumber::new(7);
+        committees
+            .load_epoch(epoch, EpochComponents::StakeTable)
+            .await
+            .unwrap();
+        let before = committees.snapshot(epoch).unwrap();
+        let load = tokio::spawn({
+            let committees = committees.clone();
+            async move {
+                committees
+                    .load_epoch(epoch, EpochComponents::AllPersisted)
+                    .await
+            }
+        });
+        tokio::time::timeout(Duration::from_secs(1), control.drb_started.notified())
+            .await
+            .unwrap();
+        // Replacing the table while storage awaits must preserve its new order.
+        let replacement = build_committees(3)
+            .inner
+            .read()
+            .epoch_committee(EpochNumber::genesis())
+            .unwrap()
+            .clone();
+        committees
+            .inner
+            .write()
+            .put_epoch_committee(epoch, replacement.clone());
+        committees.add_drb_result(epoch, [9; 32]);
+        committees.add_da_committee(epoch, vec![]);
+        let concurrent = committees.snapshot(epoch).unwrap();
+        gate.notify_one();
+        assert_eq!(
+            load.await.unwrap().unwrap(),
+            StakeTableAvailability::Present
+        );
+        let hydrated = committees.snapshot(epoch).unwrap();
+        assert!(Arc::ptr_eq(
+            &hydrated.inner.randomized.as_ref().unwrap(),
+            &concurrent.inner.randomized.as_ref().unwrap()
+        ));
+        assert_eq!(
+            hydrated.inner.randomized.as_ref().unwrap().drb_result(),
+            [9; 32]
+        );
+        assert_eq!(
+            hydrated.stake_table().collect::<Vec<_>>(),
+            concurrent.stake_table().collect::<Vec<_>>()
+        );
+        assert_eq!(hydrated.da_total_nodes(), 0);
+        assert!(hydrated.inner.committee.header.is_some());
+        assert!(!before.has_drb());
+        assert!(before.inner.committee.header.is_none());
+    }
+
     // `load_stake_table` materializes a snapshot from the persisted stake
     // table (e.g. after eviction by `prune_epochs`) without network catchup,
     // including the randomized committee and the epoch root header when
@@ -1666,6 +2029,7 @@ mod tests {
     #[tokio::test]
     async fn restore_stake_table_from_persistence() {
         let store = MockStakeStore {
+            control: Default::default(),
             header: build_epoch_root_header().await,
             stored_headers: Default::default(),
             fail_next_store: Default::default(),
@@ -1698,15 +2062,58 @@ mod tests {
         assert!(!committees.load_stake_table(EpochNumber::new(9)).await);
     }
 
+    #[tokio::test]
+    async fn restore_missing_components_of_resident_stake_table() {
+        let store = MockStakeStore {
+            control: Default::default(),
+            header: build_epoch_root_header().await,
+            stored_headers: Default::default(),
+            fail_next_store: Default::default(),
+        };
+        let fetcher = Fetcher::new(
+            Arc::new(crate::mock::MockStateCatchup::default()),
+            Arc::new(AsyncMutex::new(store)),
+            crate::L1Client::new(vec!["http://localhost:3331".parse().unwrap()]).unwrap(),
+            crate::ChainConfig::default(),
+        );
+        let committees = build_committees_with_fetcher(4, fetcher, EpochNumber::genesis());
+        let epoch = EpochNumber::new(7);
+        assert_eq!(
+            committees
+                .load_epoch(epoch, EpochComponents::StakeTable)
+                .await
+                .unwrap(),
+            StakeTableAvailability::Present,
+        );
+        let captured = committees.snapshot(epoch).unwrap();
+        assert!(!captured.has_drb());
+        assert!(captured.inner.committee.header.is_none());
+
+        assert!(committees.load_stake_table(epoch).await);
+        let restored = committees.snapshot(epoch).unwrap();
+        assert!(restored.has_drb());
+        assert!(restored.inner.committee.header.is_some());
+        assert!(!captured.has_drb());
+        assert!(captured.inner.committee.header.is_none());
+        assert_eq!(
+            captured.stake_table().collect::<Vec<_>>(),
+            restored.stake_table().collect::<Vec<_>>()
+        );
+    }
+
     // A caller that times out queueing for the storage locks must still
     // answer `true` when the epoch was loaded by someone else while it
     // queued: `load_stake_table`'s contract is "is a snapshot available",
     // and a false here sends catchup to peers for an epoch already in
     // memory. The held lock models the persistence lock's other users (the
     // L1 event fetcher) keeping it busy past the lock-phase budget.
+    #[rstest]
+    #[case(true)]
+    #[case(false)]
     #[tokio::test]
-    async fn won_race_reported_loaded_when_lock_phase_times_out() {
+    async fn won_race_reported_loaded_when_lock_phase_times_out(#[case] legacy: bool) {
         let store = MockStakeStore {
+            control: Default::default(),
             header: build_epoch_root_header().await,
             stored_headers: Default::default(),
             fail_next_store: Default::default(),
@@ -1731,7 +2138,17 @@ mod tests {
         let seven = EpochNumber::new(7);
         let loader = tokio::spawn({
             let committees = committees.clone();
-            async move { committees.load_stake_table(seven).await }
+            async move {
+                if legacy {
+                    committees.load_stake_table(seven).await
+                } else {
+                    committees
+                        .load_epoch(seven, EpochComponents::StakeTable)
+                        .await
+                        .unwrap()
+                        == StakeTableAvailability::Present
+                }
+            }
         });
         // Give the loader time to run its entry checks and park; inserting
         // before it enters would satisfy the entry check and prove nothing.
@@ -2142,6 +2559,7 @@ mod tests {
     ) {
         let fail_next_store = Arc::<AtomicBool>::default();
         let store = MockStakeStore {
+            control: Default::default(),
             header: header.clone(),
             stored_headers: Default::default(),
             fail_next_store: fail_next_store.clone(),

@@ -25,7 +25,10 @@ use crate::{
     },
     traits::{
         block_contents::BlockHeader,
-        election::{GenesisStakeTables, Membership, MembershipSnapshot},
+        election::{
+            EpochComponents, GenesisStakeTables, LeaderMembership, Membership, MembershipSnapshot,
+            StakeTableAvailability,
+        },
         node_implementation::NodeType,
         signature_key::StakeTableEntryType,
         storage::{
@@ -57,6 +60,15 @@ type Snapshot<T> = <<T as NodeType>::Membership as Membership<T>>::Snapshot;
 /// The stake-table hash type associated with `T::Membership`'s per-epoch
 /// snapshot.
 type SnapshotStakeTableHash<T> = <Snapshot<T> as MembershipSnapshot<T>>::StakeTableHash;
+
+/// Consensus components currently resident in memory. This says nothing about
+/// reward context, authenticated roots, or persistence.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ResidentEpochReadiness {
+    Unavailable,
+    StakeTable,
+    Leader,
+}
 
 /// Struct to Coordinate membership catchup
 pub struct EpochMembershipCoordinator<TYPES: NodeType> {
@@ -129,6 +141,66 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
     /// Get a reference to the membership
     pub fn membership(&self) -> &TYPES::Membership {
         &self.membership
+    }
+
+    /// Capture a consistent resident table without storage, network or tasks.
+    pub fn snapshot(&self, epoch: EpochNumber) -> Option<Snapshot<TYPES>> {
+        self.membership.snapshot(epoch)
+    }
+
+    /// Capture leader-selection inputs without starting acquisition.
+    pub fn leader_snapshot(&self, epoch: EpochNumber) -> Option<LeaderMembership<TYPES>> {
+        LeaderMembership::from_snapshot(self.snapshot(epoch)?)
+    }
+
+    pub fn resident_readiness(&self, epoch: EpochNumber) -> ResidentEpochReadiness {
+        match self.snapshot(epoch) {
+            None => ResidentEpochReadiness::Unavailable,
+            Some(snapshot) if snapshot.has_drb() => ResidentEpochReadiness::Leader,
+            Some(_) => ResidentEpochReadiness::StakeTable,
+        }
+    }
+
+    /// Acquire a table without waiting for DRB or future hash confirmation.
+    /// Existing table derivation may also prepare reward context; rewards are not
+    /// part of the returned capability. Concurrent legacy catchup can continue
+    /// acquiring its DRB after this returns.
+    pub async fn ensure_stake_table(&self, epoch: EpochNumber) -> Result<Snapshot<TYPES>> {
+        if epoch < self.membership.first_epoch() {
+            return Err(anytrace::error!(
+                "epoch {epoch} precedes the first membership epoch"
+            ));
+        }
+        if let Some(snapshot) = self.snapshot(epoch) {
+            return Ok(snapshot);
+        }
+        if let Some(attempt) = self.stake_table_map.get_attempt(epoch) {
+            attempt.await?;
+        } else if !self.stake_table_present(epoch).await? {
+            self.catchup_tables(epoch).await?;
+        }
+        self.snapshot(epoch).ok_or_else(|| {
+            anytrace::error!("table acquisition for epoch {epoch} left no resident table")
+        })
+    }
+
+    /// Acquire the table and DRB, then capture the capability from fresh state.
+    pub async fn ensure_leader_membership(
+        &self,
+        epoch: EpochNumber,
+    ) -> Result<LeaderMembership<TYPES>> {
+        self.ensure_stake_table(epoch).await?;
+        if let Some(ready) = self.leader_snapshot(epoch) {
+            return Ok(ready);
+        }
+        let (attempt, _entry) = self.catchup_map.get_or_insert(epoch, || {
+            let coordinator = self.clone();
+            async move { coordinator.drb_ready(epoch).await }.boxed()
+        });
+        attempt.await?;
+        self.leader_snapshot(epoch).ok_or_else(|| {
+            anytrace::error!("leader acquisition for epoch {epoch} left no resident DRB")
+        })
     }
 
     /// Handles notifications that a new epoch root has been created.
@@ -328,6 +400,14 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
     /// wait for its result. Every walk awaits attempts in increasing epoch
     /// order and an attempt awaits none, so no two can wait on each other.
     async fn catchup(&self, epoch: EpochNumber) -> Result<()> {
+        self.catchup_tables(epoch).await?;
+        self.drb_ready(epoch).await
+    }
+
+    async fn catchup_tables(&self, epoch: EpochNumber) -> Result<()> {
+        if self.snapshot(epoch).is_some() {
+            return Ok(());
+        }
         let seeded = self.membership.first_epoch() + 1;
 
         if epoch <= seeded {
@@ -371,7 +451,7 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
             try_epoch += 1;
         }
 
-        self.drb_ready(epoch).await
+        Ok(())
     }
 
     /// The membership for `epoch`, if its stake table is in memory.
@@ -403,7 +483,8 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
         debug!(%epoch, "loading stake table from storage");
         timeout(
             self.catchup_timeout,
-            self.membership.load_stake_table(epoch),
+            self.membership
+                .load_epoch(epoch, EpochComponents::StakeTable),
         )
         .await
         .map_err(|_| {
@@ -411,7 +492,9 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
                 "loading the stake table for epoch {epoch} from storage exceeded {:?}",
                 self.catchup_timeout
             )
-        })
+        })?
+        .map(|availability| availability == StakeTableAvailability::Present)
+        .wrap()
     }
 
     /// Make `epoch`'s DRB result present.
@@ -423,6 +506,16 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
             .snapshot(epoch)
             .is_some_and(|snapshot| snapshot.has_drb())
         {
+            return Ok(());
+        }
+        timeout(
+            self.catchup_timeout,
+            self.membership.load_epoch(epoch, EpochComponents::Leader),
+        )
+        .await
+        .map_err(|_| anytrace::error!("loading persisted DRB for epoch {epoch} timed out"))?
+        .wrap()?;
+        if self.leader_snapshot(epoch).is_some() {
             return Ok(());
         }
         debug!(%epoch, "fetching drb result from peers");
@@ -469,17 +562,13 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
         }
     }
 
-    /// Get the stake table for `epoch`, blocking on catchup if necessary.
-    ///
-    /// Unlike `stake_table_for_epoch`, this returns the result rather than
-    /// kicking off catchup and immediately returning an error. Used at startup
-    /// to drive the existing catchup chain synchronously before consensus is
-    /// running.
+    /// Compatibility wrapper for table-only acquisition.
     pub async fn wait_for_stake_table(&self, epoch: EpochNumber) -> Result<EpochMembership<TYPES>> {
-        match self.stake_table_for_epoch(Some(epoch)) {
-            Ok(mem) => Ok(mem),
-            Err(_) => self.wait_for_catchup(epoch).await,
-        }
+        let snapshot = self.ensure_stake_table(epoch).await?;
+        Ok(EpochMembership {
+            coordinator: self.clone(),
+            snapshot: EpochMembershipSnapshot::Epoch { epoch, snapshot },
+        })
     }
 
     /// Call this method if you think catchup is in progress for a given epoch

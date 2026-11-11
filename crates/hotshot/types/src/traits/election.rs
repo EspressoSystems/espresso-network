@@ -153,6 +153,49 @@ pub trait MembershipSnapshot<T: NodeType>: Clone + Send + Sync {
     }
 }
 
+/// A captured membership whose DRB was available when it was captured.
+///
+/// This guarantees the leader-selection input, not that every leader lookup
+/// succeeds (for example, an implementation can have an empty committee).
+#[derive(Clone)]
+pub struct LeaderMembership<T: NodeType> {
+    snapshot: <T::Membership as Membership<T>>::Snapshot,
+}
+
+impl<T: NodeType> LeaderMembership<T> {
+    pub fn from_snapshot(snapshot: <T::Membership as Membership<T>>::Snapshot) -> Option<Self> {
+        snapshot.has_drb().then_some(Self { snapshot })
+    }
+
+    pub fn snapshot(&self) -> &<T::Membership as Membership<T>>::Snapshot {
+        &self.snapshot
+    }
+
+    pub fn leader(&self, view: ViewNumber) -> anytrace::Result<T::SignatureKey> {
+        self.snapshot.leader(view)
+    }
+}
+
+/// Which persisted components to hydrate. Missing records are permitted;
+/// readiness must be checked on the snapshot captured after loading.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum EpochComponents {
+    /// Load only the table. Rewards, source roots and DRB are not prerequisites.
+    StakeTable,
+    /// Load the table and missing DRB, without requiring a source-root read.
+    Leader,
+    /// Load the table and missing source root, without waiting for a DRB read.
+    SourceRoot,
+    /// Restore all available table, source-root and DRB records.
+    AllPersisted,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum StakeTableAvailability {
+    Absent,
+    Present,
+}
+
 /// The stake tables of views before the first epoch, when epochs were not
 /// enabled yet: the genesis stake table and the genesis DA committee.
 ///
@@ -293,7 +336,8 @@ pub trait Membership<T: NodeType>: Debug + Send + Sync {
 
     /// Capture a consistent per-epoch view.
     ///
-    /// Returns `None` if no committee is loaded for `epoch`.
+    /// Returns `None` if no committee is loaded for `epoch`. This is a pure
+    /// read: it must not load storage, start tasks, or fetch from peers.
     fn snapshot(&self, epoch: EpochNumber) -> Option<Self::Snapshot>;
 
     /// The stake tables of views before the first epoch.
@@ -333,10 +377,27 @@ pub trait Membership<T: NodeType>: Debug + Send + Sync {
     /// Called to notify the Membership when a new DRB result has been calculated.
     fn add_drb_result(&self, e: EpochNumber, d: DrbResult);
 
-    /// Load the committee for `epoch` from local storage.
+    /// Hydrate missing persisted components without replacing richer resident
+    /// state. Absence is distinct from storage failure or timeout. A present
+    /// table does not imply that the other requested components were stored.
+    fn load_epoch(
+        &self,
+        epoch: EpochNumber,
+        components: EpochComponents,
+    ) -> impl Future<Output = Result<StakeTableAvailability, Self::Error>> + Send;
+
+    /// Compatibility loader restoring every available persisted component.
     ///
-    /// Returns `true` if a snapshot for `epoch` is available afterwards.
-    fn load_stake_table(&self, epoch: EpochNumber) -> impl Future<Output = bool> + Send;
+    /// This lossy adapter reports resident table availability even if hydration
+    /// fails. New acquisition code must use [`Self::load_epoch`] to preserve errors.
+    fn load_stake_table(&self, epoch: EpochNumber) -> impl Future<Output = bool> + Send {
+        async move {
+            matches!(
+                self.load_epoch(epoch, EpochComponents::AllPersisted).await,
+                Ok(StakeTableAvailability::Present)
+            ) || self.snapshot(epoch).is_some()
+        }
+    }
 
     /// Register a DA committee that takes effect starting at `first_epoch`.
     fn add_da_committee(&self, first_epoch: EpochNumber, da_committee: Vec<PeerConfig<T>>);
