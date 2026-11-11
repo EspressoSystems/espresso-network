@@ -3,6 +3,7 @@ import dataclasses
 import json
 import logging
 import re
+import shlex
 import signal
 import threading
 from collections.abc import Callable, Iterator
@@ -1349,7 +1350,7 @@ def test_reproduce_section_single_shot_pins_the_tag_and_shows_the_digest() -> No
     section = awsb.reproduce_section(manifest_of(argv))
     assert section == (
         "\n\n### Reproduce\n\n```\n"
-        "just bench aws run --note 'a b' --tag t\n"
+        "just bench aws run --note 'a b' --protocol-version 0.6 --tag t\n"
         "# espresso-node abc1234 sha256:d1\n"
         "```\n"
     )
@@ -1361,21 +1362,38 @@ def test_reproduce_section_fleet_run_pins_the_up_command() -> None:
     )
     assert section_commands(section) == [
         "just bench aws up --nodes 3 --tag t",
-        "just bench aws run --fleet --query-db rds",
+        "just bench aws run --fleet --query-db rds --protocol-version 0.6",
     ]
+
+
+def test_reproduce_section_keeps_the_protocol_version_the_run_ran() -> None:
+    def commands(argv: list[str], **config: str) -> list[str]:
+        manifest = manifest_of(argv)
+        manifest["config"] |= config
+        return section_commands(awsb.reproduce_section(manifest))
+
+    assert commands(["run"], protocol_version="0.7") == [
+        "just bench aws run --protocol-version 0.7 --tag t"
+    ]
+    for given in (["--protocol-version", "0.8"], ["--protocol-version=0.8"]):
+        assert commands(["run", *given], protocol_version="0.8") == [
+            f"just bench aws {shlex.join(['run', *given])} --tag t"
+        ]
 
 
 def test_reproduce_section_sanitizes_an_unsanitized_manifest() -> None:
     section = awsb.reproduce_section(manifest_of(RUN_FLEET, fleet_argv=UP))
     assert section_commands(section) == [
         "just bench aws up --nodes 3 --tag t",
-        "just bench aws run --fleet --query-db rds",
+        "just bench aws run --fleet --query-db rds --protocol-version 0.6",
     ]
 
 
 def test_reproduce_section_old_single_shot_manifest_gets_one() -> None:
     section = awsb.reproduce_section(manifest_of(["run", "--tag", "t", "--yes"]))
-    assert section_commands(section) == ["just bench aws run --tag t"]
+    assert section_commands(section) == [
+        "just bench aws run --protocol-version 0.6 --tag t"
+    ]
 
 
 @pytest.mark.parametrize(
@@ -1393,8 +1411,10 @@ def test_summary_ends_with_the_reproduce_section(collected_run: Path) -> None:
     netbench.write_json(collected_run / "manifest.json", {**manifest, "argv": argv})
     awsb.write_report(collected_run)
     summary = (collected_run / "summary.md").read_text()
-    tag = manifest["config"]["tag"]
-    assert section_commands(summary) == [f"just bench aws run --tag {tag}"]
+    version, tag = manifest["config"]["protocol_version"], manifest["config"]["tag"]
+    assert section_commands(summary) == [
+        f"just bench aws run --protocol-version {version} --tag {tag}"
+    ]
     assert summary.endswith("```\n")
     assert CRED not in summary
     assert "--yes" not in summary

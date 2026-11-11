@@ -8368,14 +8368,32 @@ def pin_tag(argv: list[str], tag: str) -> list[str]:
     return [*out, "--tag", tag]
 
 
+# What a run without `--protocol-version` ran at before the default moved to 0.7; manifests
+# from before the flag have no such key and ran the template's 0.6 too.
+PROTOCOL_VERSION_BEFORE_DEFAULT_MOVED = "0.6"
+
+
+def pin_protocol_version(argv: list[str], version: str) -> list[str]:
+    """`argv` with `--protocol-version` added unless given, so the command keeps running the
+    version this run ran when the default moves."""
+    if "--protocol-version" in given_flags(argv):
+        return argv
+    return [*argv, "--protocol-version", version]
+
+
 def reproduce_section(manifest: Manifest) -> str:
-    """The command(s) that made this run, sanitized and pinned to the run's image tag, with
-    the digest the tag resolved to; empty for a manifest from before they were recorded.
-    Then `argv` is missing or, for a fleet run, still the `up` command."""
+    """The command(s) that made this run, sanitized and pinned to the run's image tag and
+    protocol version, with the digest the tag resolved to; empty for a manifest from before
+    they were recorded. Then `argv` is missing or, for a fleet run, still the `up` command."""
     if "argv" not in manifest or manifest["argv"][0] != "run":
         return ""
     tag = manifest["config"]["tag"]
-    run_argv = sanitize_argv(manifest["argv"])
+    run_argv = pin_protocol_version(
+        sanitize_argv(manifest["argv"]),
+        manifest["config"].get(
+            "protocol_version", PROTOCOL_VERSION_BEFORE_DEFAULT_MOVED
+        ),
+    )
     if "fleet_argv" in manifest:
         commands = [pin_tag(sanitize_argv(manifest["fleet_argv"]), tag), run_argv]
     else:
