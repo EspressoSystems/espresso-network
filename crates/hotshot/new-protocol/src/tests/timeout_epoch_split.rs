@@ -126,10 +126,7 @@ async fn boundary_timeout_vote(
     );
     // Not the last `ViewChanged`: an `EpochChange` that arrives after Cert1
     // moved the node into the view relabels it without emitting another one.
-    let label = harness
-        .consensus
-        .current_epoch()
-        .expect("the node holds an epoch past the boundary");
+    let label = harness.consensus.current_epoch();
 
     harness
         .apply(ConsensusInput::Timeout(ViewNumber::new(NEXT_VIEW)))
@@ -138,7 +135,7 @@ async fn boundary_timeout_vote(
         .outputs()
         .iter()
         .filter_map(|o| match o {
-            ConsensusOutput::SendTimeoutVote(vote, _) => Some(vote.clone()),
+            ConsensusOutput::SendTimeoutVote(vote, ..) => Some(vote.clone()),
             _ => None,
         })
         .last()
@@ -170,7 +167,7 @@ async fn split_boundary_votes(
 
 fn v3_vote(vote: TimeoutVote<TestTypes>) -> TimeoutVote3<TestTypes> {
     match vote {
-        TimeoutVote::V3(vote) => vote,
+        TimeoutVote::V3(ballot) => ballot.vote().clone(),
         TimeoutVote::V2(_) => panic!("epoch-binding lock must produce V3 votes"),
     }
 }
@@ -272,6 +269,8 @@ async fn v3_timeout_votes_split_at_epoch_boundary_form_no_certificate() {
 /// and the V2 collector then aggregates all 10 into a certificate.
 #[tokio::test]
 async fn v2_timeout_votes_split_at_epoch_boundary_form_a_certificate() {
+    // Tests behaviour before 0.7.
+    crate::helpers::pin_test_version(versions::NEW_PROTOCOL_VERSION);
     let lock = test_upgrade_lock();
     let test_data = TestData::new_with_epoch_height(BOUNDARY + 2, EPOCH_HEIGHT).await;
 

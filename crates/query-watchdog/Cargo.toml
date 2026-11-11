@@ -1,0 +1,37 @@
+[package]
+name = "query-watchdog"
+version = { workspace = true }
+authors = { workspace = true }
+edition = { workspace = true }
+description = "Watches archive query nodes for data they fail to serve."
+
+[[bin]]
+name = "query-watchdog"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = { workspace = true }
+axum = { workspace = true }
+chrono = { workspace = true }
+clap = { workspace = true }
+directories = { workspace = true }
+futures = { workspace = true }
+humantime = { workspace = true }
+prometheus = { workspace = true }
+rangemap = "1.8.0"
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sqlx = { workspace = true, features = ["sqlite"] }
+strum = { workspace = true }
+tokio = { workspace = true, features = ["signal", "net", "sync"] }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true, features = ["env-filter", "json"] }
+url = { workspace = true }
+
+[dev-dependencies]
+pretty_assertions = { workspace = true }
+proptest = { workspace = true }
+
+[lints]
+workspace = true

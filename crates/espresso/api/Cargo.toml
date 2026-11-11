@@ -5,20 +5,26 @@ edition.workspace = true
 
 [dependencies]
 aide = { workspace = true }
+alloy = { workspace = true }
 anyhow = { workspace = true }
 ark-serialize = { workspace = true }
 async-trait = { workspace = true }
 axum = { workspace = true }
 base64 = { workspace = true }
+chrono = { workspace = true }
+committable = { workspace = true }
 either = { workspace = true }
 erased-serde = { workspace = true }
 espresso-types = { workspace = true }
 espresso-utils = { workspace = true }
 futures = { workspace = true }
+hotshot-contract-adapter = { workspace = true }
 hotshot-query-service-types = { workspace = true }
 hotshot-types = { workspace = true }
 http-wire = { workspace = true, features = ["server"] }
+indexmap = { workspace = true }
 jf-merkle-tree-compat = { workspace = true }
+light-client = { workspace = true }
 pbjson = { workspace = true }
 prost = { workspace = true }
 schemars = { workspace = true }

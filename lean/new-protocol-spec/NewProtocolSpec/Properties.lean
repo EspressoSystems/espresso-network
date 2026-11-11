@@ -147,18 +147,18 @@ The premises are:
 * a coherent configuration (`ConfigCoherent`) and no hash collisions
   (`CollisionFree`).
 
-The timer has to outlast a view with an honest leader, which `8 * Δ + 3 * δ < τ`
+The timer has to outlast a view with an honest leader, which `8 * Δ + 4 * δ < τ`
 counts. From the first honest node entering the view: every honest node is in it
-by `2Δ`, since a timeout certificate may take that long to spread; the leader can
-lock on what put it there by `3Δ`, has a header by `4Δ` and proposes by `4Δ + δ`;
-the members have the proposal and its validity report by `6Δ + δ` and vote1 by
-`6Δ + 2δ`; every honest node has the `Cert1` by `7Δ + 2δ`, every member can lock on it by
-`8Δ + 2δ` and votes2 by `8Δ + 3δ`. No honest node times the view out before `τ`
-has passed since it entered.
+by `2Δ + δ`, since a timeout certificate may take that long to form and spread;
+the leader can lock on what put it there by `3Δ + δ`, has a header by `4Δ + δ` and
+proposes by `4Δ + 2δ`; the members have the proposal and its validity report by
+`6Δ + 2δ` and vote1 by `6Δ + 3δ`; every honest node has the `Cert1` by `7Δ + 3δ`,
+every member can lock on it by `8Δ + 3δ` and votes2 by `8Δ + 4δ`. No honest node
+times the view out before `τ` has passed since it entered.
 -/
 def ChainGrows (leader : EpochNumber → ViewNumber → Option PubKey) (C : Committee) : Prop :=
   ∀ (N : TimedNetwork cfg leader C) (GST : Time) (Δ δ τ : Duration), ConfigCoherent cfg → CollisionFree →
-    Synchrony N GST Δ τ → Prompt N δ → 8 * Δ + 3 * δ < τ → LeaderRotation C leader →
+    Synchrony N GST Δ τ → Prompt N δ → 8 * Δ + 4 * δ < τ → LeaderRotation C leader →
     (∀ t, ∃ k, ∃ h : C.Honest k, N.DecidesAfter k h t)
       ∧ ∀ t k (h : C.Honest k),
         (C.Steady k ∨ (cfg.epochHeight = 0 ∧ C.honest cfg.startEpoch k)

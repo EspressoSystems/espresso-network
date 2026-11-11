@@ -2,7 +2,7 @@
 
 Goal: find every real defect in the PR. Recall over precision.
 
-- Steps 2-9 each collect up to 6 candidates. Do not judge them until Findings.
+- Steps 2-10 each collect up to 6 candidates. Do not judge them until Findings.
 
 ## Procedure
 
@@ -35,7 +35,26 @@ Goal: find every real defect in the PR. Recall over precision.
    - Operator action needed: a `doc/operator-notes/*.md` fragment is present.
    - Secrets: can anything secret (keys, tokens, passwords, credentials in URLs) leave the process or reach a less
      trusted reader through this change? Follow error rendering and struct dumps, not only explicit fields.
-7. Design at the type level: would better types make this defect or this runtime check impossible?
-8. Tests. Would any test fail without the change? Changed behavior without a test that pins it: candidate.
-9. Cleanup, only with a concrete cost: code duplicating an existing helper (name it); derivable state; dead code;
-   repeated I/O or work on a hot path; a special case where fixing the shared mechanism is simpler (name the change).
+7. Untrusted input: values from peers, HTTP or gRPC clients, L1, or files.
+   - Certificates, votes, signatures and proofs: verified against the stake table or key of the epoch and view they
+     claim, before they are stored, cached, forwarded, or used to pick a branch. Check thresholds, empty signer sets,
+     and view or epoch 0. A certificate's epoch may differ from its data's in two valid cases: no epoch before epochs
+     activate, and the next epoch's dual-signed QC on the last leaf of an epoch. Any other mismatch: candidate.
+   - Every field used from signed or committed data is inside what the signature or commitment covers. A version tag,
+     length, key or metadata field beside it is attacker controlled: candidate if it picks a branch, sizes a buffer, or
+     keys a cache.
+   - Data fetched from one of several peers is verified before the fetch returns, so a bad peer is retried past. Checked
+     only after the fetch succeeds: candidate.
+   - L1 events: any registrant chooses the keys and values. Duplicate, zero, or colliding keys handled.
+   - Deserialization without a size or depth limit. Allocations, loops, maps, channels or retries sized by the sender.
+     Requests cheap to send and expensive to serve, with no bound or cost to the sender.
+   - SQL text containing values from outside the process instead of bind parameters.
+   - A new route or gRPC method that writes or exposes internal state without the gate its siblings have.
+   - `contracts/`: reentrancy, missing access modifiers, unchecked external calls, signature replay across chains or
+     upgrades, storage layout changes in upgradeable contracts.
+   - `.github/`: PR controlled content (titles, branch names, bodies, files) reaching a shell or a prompt run with write
+     tokens, `pull_request_target`, third party actions not pinned to a sha.
+8. Design at the type level: would better types make this defect or this runtime check impossible?
+9. Tests. Would any test fail without the change? Changed behavior without a test that pins it: candidate.
+10. Cleanup, only with a concrete cost: code duplicating an existing helper (name it); derivable state; dead code;
+    repeated I/O or work on a hot path; a special case where fixing the shared mechanism is simpler (name the change).

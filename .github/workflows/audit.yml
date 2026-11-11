@@ -76,5 +76,6 @@ jobs:
           branch: bot/cargo-audit
           title: "[Bot] Audit fixes"
           commit-message: Cargo audit fixes
+          author: github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>
           body-path: /tmp/pr-body.txt
 

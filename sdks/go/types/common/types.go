@@ -292,6 +292,17 @@ func (i *U256) ToDecimal() *U256Decimal {
 	return &U256Decimal{i.Int}
 }
 
+// The 32-byte little-endian encoding the commitment scheme uses for a `uint256`.
+func (i *U256) ToLittleEndianBytes() [32]byte {
+	var bytes [32]byte
+	// `FillBytes` writes big-endian, so reverse it.
+	i.FillBytes(bytes[:])
+	for lo, hi := 0, len(bytes)-1; lo < hi; lo, hi = lo+1, hi-1 {
+		bytes[lo], bytes[hi] = bytes[hi], bytes[lo]
+	}
+	return bytes
+}
+
 type FeeInfo struct {
 	Account common.Address `json:"account"`
 	Amount  U256Decimal    `json:"amount"`

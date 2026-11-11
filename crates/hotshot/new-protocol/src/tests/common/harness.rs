@@ -5,6 +5,7 @@ use hotshot_example_types::{
     state_types::{TestInstanceState, TestValidatedState},
 };
 use hotshot_types::{
+    PeerConnectInfo,
     data::{EpochNumber, Leaf2, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
     message::UpgradeLock,
@@ -16,7 +17,10 @@ use tokio::sync::mpsc;
 
 use super::{
     coordinator_builder::{build_genesis_cert1, build_genesis_proposal},
-    utils::{mock_membership_with_num_nodes, record_leader},
+    utils::{
+        mock_membership_with_num_nodes, record_fallback_anchor, record_leader,
+        record_output_leaders,
+    },
 };
 use crate::{
     block::{BlockBuilder, BlockBuilderConfig},
@@ -27,7 +31,7 @@ use crate::{
     helpers::test_upgrade_lock,
     logging::KeyPrefix,
     message::{Certificate1, Message},
-    network::Cliquenet,
+    network::{Cliquenet, Role},
     outbox::Outbox,
     proposal::{ProposalValidator, VidShareValidator},
     state::StateManager,
@@ -49,6 +53,7 @@ const PROCESS_DEADLINE: Duration = Duration::from_secs(60);
 /// helpers to send events and collect results.
 pub(crate) struct TestHarness {
     coordinator: MockCoordinator,
+    connect_info: PeerConnectInfo,
     membership: EpochMembershipCoordinator<TestTypes>,
     outputs: Outbox<ConsensusOutput<TestTypes>>,
     /// Records this run when `NP_TRACE_DIR` is set; inert otherwise
@@ -151,6 +156,10 @@ impl TestHarness {
         let port =
             test_utils::reserve_tcp_port().expect("OS should have ephemeral ports available");
         let addr = hotshot_types::addr::NetAddr::Inet(std::net::Ipv4Addr::LOCALHOST.into(), port);
+        let connect_info = PeerConnectInfo {
+            x25519_key: keypair.public_key(),
+            p2p_addr: addr.clone(),
+        };
         let network = Cliquenet::create(
             "test-harness",
             public_key,
@@ -211,6 +220,7 @@ impl TestHarness {
             .build();
         Self {
             coordinator,
+            connect_info,
             membership: membership_handle,
             outputs: Outbox::new(),
             trace: trace::Recorder::for_current_test(),
@@ -232,7 +242,13 @@ impl TestHarness {
             *consensus.epoch_height,
         );
         record_leader(&mut self.trace, consensus, &input);
+        record_fallback_anchor(&mut self.trace, consensus);
         self.coordinator.apply_consensus(input.clone());
+        record_output_leaders(
+            &mut self.trace,
+            self.coordinator.consensus(),
+            self.coordinator.outbox().iter(),
+        );
         // The outbox was drained at the end of the previous call, so it now holds
         // exactly what this input drew — which is what a trace step is.
         self.trace.record(&input, self.coordinator.outbox().iter());
@@ -356,7 +372,7 @@ impl TestHarness {
         let consensus = self.coordinator.consensus_mut();
         let genesis_leaf = consensus.last_decided_leaf().clone();
         let genesis_cert1 = build_genesis_cert1(&genesis_leaf);
-        let genesis_proposal = build_genesis_proposal(&genesis_leaf, &genesis_cert1);
+        let genesis_proposal = build_genesis_proposal(&genesis_leaf);
         consensus.seed_parent(genesis_cert1.clone(), genesis_proposal, std::iter::empty());
         genesis_cert1
     }
@@ -384,6 +400,26 @@ impl TestHarness {
         );
         self.trace.placed(view, epoch);
         self.coordinator.consensus_mut().set_view(view, epoch);
+    }
+
+    /// This node's key and how a peer reaches it over the network.
+    pub fn connect_info(&self) -> (BLSPubKey, PeerConnectInfo) {
+        (
+            *self.coordinator.consensus().public_key(),
+            self.connect_info.clone(),
+        )
+    }
+
+    /// Add a peer that receives this node's broadcasts. The harness starts
+    /// with none, so by default nothing it sends leaves the node.
+    pub fn add_peer(&mut self, key: BLSPubKey, info: PeerConnectInfo) {
+        self.coordinator
+            .network_mut()
+            .add_peers(
+                Role::Active,
+                vec![(key, (info.x25519_key.into(), info.p2p_addr))],
+            )
+            .expect("network should accept the peer");
     }
 
     /// The membership this harness's coordinator resolves epochs through.

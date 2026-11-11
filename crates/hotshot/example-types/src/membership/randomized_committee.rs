@@ -31,8 +31,6 @@ pub struct RandomizedStakeTable<
 
     da_members: Vec<TestStakeTableEntry<PubKey, StatePubKey>>,
 
-    first_epoch: Option<u64>,
-
     epochs: BTreeSet<u64>,
 
     drb_results: BTreeMap<u64, DrbResult>,
@@ -67,7 +65,6 @@ where
         Self {
             quorum_members,
             da_members,
-            first_epoch: None,
             randomized_committee,
             epochs: BTreeSet::new(),
             drb_results: BTreeMap::new(),
@@ -112,8 +109,6 @@ where
     }
 
     fn set_first_epoch(&mut self, epoch: u64, initial_drb_result: DrbResult) {
-        self.first_epoch = Some(epoch);
-
         self.add_epoch_root(epoch);
         self.add_epoch_root(epoch + 1);
 
@@ -126,10 +121,6 @@ where
             .get(&epoch)
             .context("DRB result missing")
             .copied()
-    }
-
-    fn first_epoch(&self) -> Option<u64> {
-        self.first_epoch
     }
 
     fn add_da_committee(

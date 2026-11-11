@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use hotshot_example_types::{block_types::TestTransaction, node_types::TestTypes};
 use hotshot_types::{
     data::{VidCommitment2, VidDisperseShare2, ViewNumber, ns_table::parse_ns_table},
@@ -5,10 +7,12 @@ use hotshot_types::{
     traits::signature_key::SignatureKey,
     vid::avidm_gf2::{AvidmGf2Scheme, init_avidm_gf2_param},
 };
+use vid::VidError;
 
-use super::common::utils::{TestData, TestView};
+use super::common::utils::{RecordingTracer, TestData, TestView};
 use crate::{
-    tests::common::utils::vid_fragments,
+    leader_trace::LeaderEvent,
+    tests::common::utils::{ns_table, vid_fragments},
     vid::{
         PinnedBy, VidFragmentAccumulator, VidFragmentError, VidReconstructErrorKind,
         VidReconstructor, matches_commitment, ns_lens_match_metadata,
@@ -482,7 +486,9 @@ async fn test_inconsistent_common_shares_ignored() {
 async fn test_weeds_bad_shares_and_recovers() {
     let test_data = TestData::new(1).await;
     let view = &test_data.views[0];
+    let tracer = Arc::new(RecordingTracer::default());
     let mut reconstructor = VidReconstructor::<TestTypes>::new();
+    reconstructor.set_tracer(Some(tracer.handle()));
 
     let payload_commitment = view.vid_shares[0].payload_commitment;
     let recovery_threshold = recovery_threshold(view);
@@ -527,6 +533,16 @@ async fn test_weeds_bad_shares_and_recovers() {
     // Weeding plus the shares that arrived in flight put the coverage back
     // over the threshold: the retry happens without further input.
     expect_reconstruction(&mut reconstructor, view).await;
+    assert_eq!(
+        tracer.count(*view.view_number, LeaderEvent::RecoverVMinus1Start),
+        2,
+        "the failed attempt and the retry"
+    );
+    assert_eq!(
+        tracer.count(*view.view_number, LeaderEvent::RecoverVMinus1End),
+        1,
+        "only the successful attempt"
+    );
 }
 
 /// A disperser that commits to a non-codeword produces shares that each verify
@@ -538,7 +554,9 @@ async fn test_weeds_bad_shares_and_recovers() {
 async fn test_non_codeword_payload_is_unrecoverable() {
     let test_data = TestData::new(1).await;
     let view = &test_data.views[0];
+    let tracer = Arc::new(RecordingTracer::default());
     let mut reconstructor = VidReconstructor::<TestTypes>::new();
+    reconstructor.set_tracer(Some(tracer.handle()));
 
     let (payload_commitment, shares) = non_codeword_shares(view);
     let recovery_threshold = recovery_threshold(view);
@@ -580,6 +598,15 @@ async fn test_non_codeword_payload_is_unrecoverable() {
     assert_eq!(err.view, view.view_number);
     assert_eq!(err.payload_commitment, payload_commitment);
     assert_eq!(err.kind, VidReconstructErrorKind::Unrecoverable);
+    assert_eq!(
+        tracer.count(*view.view_number, LeaderEvent::RecoverVMinus1Start),
+        1
+    );
+    assert_eq!(
+        tracer.count(*view.view_number, LeaderEvent::RecoverVMinus1End),
+        0,
+        "a failed attempt records no end"
+    );
     assert!(
         err.bad_share_keys.is_empty(),
         "no share is individually unverifiable: {:?}",
@@ -1114,20 +1141,10 @@ fn epoch_window_bounds() {
     ));
 }
 
-/// Encode a namespace table whose namespaces end at `offsets`.
-fn ns_table(offsets: &[u32]) -> Vec<u8> {
-    let mut bytes = (offsets.len() as u32).to_le_bytes().to_vec();
-    for (id, offset) in offsets.iter().enumerate() {
-        bytes.extend_from_slice(&(id as u32).to_le_bytes());
-        bytes.extend_from_slice(&offset.to_le_bytes());
-    }
-    bytes
-}
-
 /// The commitment covers neither the namespace table nor `ns_lens`, and for a
 /// one-namespace block a table sized for another payload parses to the honest
 /// table. A leader claiming a shorter block than it dispersed passes every
-/// pairing check and recovers the dispersed bytes; the recommit must refuse
+/// pairing check and its block decodes to the dispersed bytes; the recommit must refuse
 /// the table rather than accept the fallback, or the block decides with a
 /// header that misdescribes its payload.
 #[test]
@@ -1150,7 +1167,11 @@ fn test_recommit_refuses_ns_table_sized_for_another_payload() {
     forged.ns_lens = vec![short];
     assert!(AvidmGf2Scheme::is_consistent(&commitment, &forged));
     assert!(ns_lens_match_metadata(&forged, &short_table));
-    let recovered = AvidmGf2Scheme::recover(&forged, &shares).unwrap();
+    assert!(matches!(
+        AvidmGf2Scheme::recover(&forged, &shares),
+        Err(VidError::InvalidShare)
+    ));
+    let recovered = AvidmGf2Scheme::recover(&common, &shares).unwrap();
     assert_eq!(recovered, payload);
     assert!(!matches_commitment(
         view,

@@ -17,7 +17,6 @@ use espresso_types::{
     v0::traits::{MembershipPersistence, SequencerPersistence, StateCertPersistence},
 };
 use futures::future::BoxFuture;
-use hotshot_new_protocol::storage::NewProtocolStorage;
 use hotshot_query_service::availability::VidCommonQueryData;
 use hotshot_types::{
     ValidatorConfig,
@@ -25,7 +24,6 @@ use hotshot_types::{
     epoch_membership::EpochMembershipCoordinator,
     message::UpgradeLock,
     network::NetworkConfig,
-    traits::node_implementation::NodeImplementation,
     utils::StateAndDelta,
 };
 
@@ -89,11 +87,7 @@ pub trait ApiContext: Send + Sync + 'static {
 }
 
 #[async_trait]
-impl<I> ConsensusSource for ConsensusHandle<SeqTypes, I>
-where
-    I: NodeImplementation<SeqTypes>,
-    I::Storage: NewProtocolStorage<SeqTypes>,
-{
+impl<P: SequencerPersistence> ConsensusSource for ConsensusHandle<SeqTypes, Arc<P>> {
     async fn decided_leaf(&self) -> Leaf2 {
         ConsensusHandle::decided_leaf(self).await
     }
@@ -119,11 +113,11 @@ where
     }
 
     async fn membership_coordinator(&self) -> EpochMembershipCoordinator<SeqTypes> {
-        ConsensusHandle::membership_coordinator(self).await
+        ConsensusHandle::membership_coordinator(self)
     }
 
     async fn upgrade_lock(&self) -> UpgradeLock<SeqTypes> {
-        ConsensusHandle::upgrade_lock(self).await
+        ConsensusHandle::upgrade_lock(self)
     }
 
     async fn submit_transaction(&self, tx: Transaction) -> anyhow::Result<Commitment<Transaction>> {

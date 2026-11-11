@@ -27,15 +27,18 @@ descriptor set is exported as `espresso_api::FILE_DESCRIPTOR_SET`).
 ### What is served today
 
 `StatusService`, `TokenService`, `NodeService`, `ConfigService`, `DatabaseService`, `AvailabilityService`,
-`MerklizedStateService`, `RewardStateService`, `StateSignatureService`, `SubmitService`, `ExplorerService` and
-`CatchupService`, served under `/v2/status/...`, `/v2/token/...`, `/v2/node/...`, `/v2/config/...`, `/v2/database/...`,
-`/v2/availability/...`, `/v2/merklized-state/...`, `/v2/state-signature/...`, `/v2/submit/...`, `/v2/explorer/...` and
-`/v2/catchup/...`.
+`MerklizedStateService`, `RewardStateService`, `StateSignatureService`, `SubmitService`, `ExplorerService`,
+`CatchupService` and `LightClientService`, served under `/v2/status/...`, `/v2/token/...`, `/v2/node/...`,
+`/v2/config/...`, `/v2/database/...`, `/v2/availability/...`, `/v2/merklized-state/...`, `/v2/state-signature/...`,
+`/v2/submit/...`, `/v2/explorer/...`, `/v2/catchup/...` and `/v2/light-client/...`.
 
 - `NodeService` carries over every v1 `node` endpoint except `oldest-block` and `oldest-leaf`. Where v1 has a route per
   epoch and a `current` route, v2 has one route with an optional `epoch` parameter, as it does for the block reward;
   where v1 has a route per way of naming a block, v2 has one route with an optional parameter per naming, of which
-  exactly one must be given. `/v2/node/block-height` duplicates `/v2/status/block-height` because v1 has both.
+  exactly one must be given. `/v2/node/block-height` duplicates `/v2/status/block-height` because v1 has both. The
+  transaction count and the payload size count from genesis, so only nodes that keep every block have them. A node
+  started with `--prune` or `--lightweight` has none: these routes are a 404 on v1 and v2, and so is the explorer
+  summary, which counts transactions from genesis.
 - `ConfigService` serves v1's config module as typed messages. `hotshot` carries every consensus parameter, including
   the genesis membership and the DA committee overrides. The comment on `HotshotConfigResponse` in `config.proto` says
   what it drops from v1's orchestrator wrapper. `runtime` carries the identity, endpoints, storage settings and enabled
@@ -98,6 +101,18 @@ descriptor set is exported as `espresso_api::FILE_DESCRIPTOR_SET`).
   way. v1's `reward-accounts-v2` and `reward-amounts` are not carried over, since both answer every request with a
   deprecation 404. Like the reward balances, the fee balance is a decimal string, where v1 serves it as `0x`-prefixed
   hex. Accounts in proofs are lowercase `0x`-prefixed hex.
+- `LightClientService` serves the proofs a light client checks against state it already trusts. Where v1 has a route per
+  way of naming a leaf or header, v2 has one request with alternative fields, and a known-finalized height is an
+  optional field rather than a second route. Every proof is typed, built from the messages `availability` and
+  `merklized-state` already publish, so a leaf proof is its leaf chain plus a `FinalityProof` whose arm names the commit
+  rule. Stake table events carry the contract's fields under their proto names (`bls_vk`, so `blsVk` in JSON, where the
+  contract writes `blsVK`), with curve coordinates as `0x`-prefixed hex, amounts and timestamps as decimal strings, and
+  signature and key bytes as `bytes`, base64 in JSON, where v1 writes `0x` hex. `undelegation_id` is a `uint64`, which
+  JSON also writes as a decimal string. The multi-namespace route takes its namespace list in a body rather than v1's
+  TaggedBase64 path segment, so it caps the list at 100 distinct namespaces where v1 is capped by the URL length. v1's
+  batch `payload/ranges` is `POST /v2/light-client/payload-ranges`. A range of payloads or namespace proofs is one
+  response message, so a large one can exceed a gRPC client's default 4 MB decode limit. Like the v1 module it is served
+  on every SQL query node.
 
 Everything else a client needs is still on v1. Every route in the OpenAPI document is a route `serve_axum` mounts: the
 tests in `crates/espresso/api/src/axum.rs` pin the documented set to a reviewed route list and probe each documented
@@ -184,6 +199,11 @@ A service gated on an `OptionalModules` flag, as `ConfigService` is on `config`:
   `buf format -w crates/espresso/api/proto`. The rules compare a field's message type by name, so renaming a message a
   field refers to counts as a break even though the wire bytes are unchanged. buf does not read the `google.api.http`
   annotation, so a changed route is not caught by it.
+- A rename is therefore an addition. Add the new name as a new field, or a new rpc, and mark the old one
+  `[deprecated = true]` (`option deprecated = true` on an rpc), which the OpenAPI document flags. Serve both until
+  clients have moved: fill in both in responses and accept either in requests. prost marks the old Rust field
+  `#[deprecated]`, so each handler that still touches it needs `#[expect(deprecated, reason = "...")]` to pass
+  `just lint`. Then delete the old field and `reserved` its number and name, so neither is ever reused.
 - An rpc is a GET, or a POST when it changes state or its input cannot be flat. A POST binds the whole request message
   as its protoJSON body (`body: "*"`) and refuses a query string with a 400.
 - v2 addresses resources with flat query parameters, not v1-style path parameters: one static route per rpc, with every

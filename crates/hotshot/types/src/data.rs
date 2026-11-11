@@ -14,7 +14,6 @@ use std::{
     hash::Hash,
     marker::PhantomData,
     sync::Arc,
-    time::Duration,
 };
 
 use bincode::Options;
@@ -26,13 +25,11 @@ use serde::{Deserialize, Serialize};
 use tagged_base64::{TaggedBase64, Tb64Error};
 use thiserror::Error;
 use vbs::version::Version;
-use vec1::Vec1;
 use versions::{EPOCH_VERSION, NEW_PROTOCOL_VERSION, Upgrade};
 
 use crate::{
     drb::DrbResult,
-    epoch_membership::EpochMembershipCoordinator,
-    message::{Proposal, UpgradeLock, convert_proposal},
+    message::{Proposal, UpgradeLock},
     simple_certificate::{
         LightClientStateUpdateCertificateV1, LightClientStateUpdateCertificateV2,
         NextEpochQuorumCertificate2, QuorumCertificate, QuorumCertificate2, TimeoutCertificate,
@@ -45,7 +42,7 @@ use crate::{
     },
     traits::{
         BlockPayload,
-        block_contents::{BlockHeader, BuilderFee, EncodeBytes, TestableBlock},
+        block_contents::{BlockHeader, EncodeBytes, TestableBlock},
         node_implementation::NodeType,
         signature_key::SignatureKey,
         states::TestableState,
@@ -524,205 +521,8 @@ impl From<VidShare2> for VidShare {
 pub mod ns_table;
 pub mod vid_disperse;
 
-/// A helper struct to hold the disperse data and the time it took to calculate the disperse
-pub struct VidDisperseAndDuration<TYPES: NodeType> {
-    /// The disperse data
-    pub disperse: VidDisperse<TYPES>,
-    /// The time it took to calculate the disperse
-    pub duration: Duration,
-}
-
-/// Type aliases for different versions of VID disperse
-pub type VidDisperse0<TYPES> = vid_disperse::ADVZDisperse<TYPES>;
-pub type VidDisperse1<TYPES> = vid_disperse::AvidMDisperse<TYPES>;
+/// VID dispersal for the current protocol.
 pub type VidDisperse2<TYPES> = vid_disperse::AvidmGf2Disperse<TYPES>;
-
-/// VID dispersal data
-///
-/// Like [`DaProposal`].
-///
-/// TODO move to vid.rs?
-#[derive(Debug, Serialize, Deserialize, Clone, Eq, PartialEq, Hash)]
-#[serde(bound = "TYPES: NodeType")]
-pub enum VidDisperse<TYPES: NodeType> {
-    /// Disperse type for first VID version
-    V0(VidDisperse0<TYPES>),
-    /// Disperse type for AvidM Scheme
-    V1(VidDisperse1<TYPES>),
-    /// Disperse type for AvidmGf2 Scheme
-    V2(VidDisperse2<TYPES>),
-}
-
-impl<TYPES: NodeType> From<VidDisperse0<TYPES>> for VidDisperse<TYPES> {
-    fn from(disperse: VidDisperse0<TYPES>) -> Self {
-        Self::V0(disperse)
-    }
-}
-
-impl<TYPES: NodeType> From<VidDisperse1<TYPES>> for VidDisperse<TYPES> {
-    fn from(disperse: VidDisperse1<TYPES>) -> Self {
-        Self::V1(disperse)
-    }
-}
-
-impl<TYPES: NodeType> From<VidDisperse2<TYPES>> for VidDisperse<TYPES> {
-    fn from(disperse: VidDisperse2<TYPES>) -> Self {
-        Self::V2(disperse)
-    }
-}
-
-impl<TYPES: NodeType> HasViewNumber for VidDisperse<TYPES> {
-    fn view_number(&self) -> ViewNumber {
-        match self {
-            Self::V0(disperse) => disperse.view_number(),
-            Self::V1(disperse) => disperse.view_number(),
-            Self::V2(disperse) => disperse.view_number(),
-        }
-    }
-}
-
-impl<TYPES: NodeType> HasEpoch for VidDisperse<TYPES> {
-    fn epoch(&self) -> Option<EpochNumber> {
-        match self {
-            Self::V0(disperse) => disperse.epoch(),
-            Self::V1(disperse) => disperse.epoch(),
-            Self::V2(disperse) => disperse.epoch(),
-        }
-    }
-}
-
-impl<TYPES: NodeType> VidDisperse<TYPES> {
-    /// Calculate the vid disperse information from the payload given a view, epoch and membership,
-    /// If the sender epoch is missing, it means it's the same as the target epoch.
-    ///
-    /// # Errors
-    /// Returns an error if the disperse or commitment calculation fails
-    #[allow(clippy::panic)]
-    pub async fn calculate_vid_disperse(
-        payload: &TYPES::BlockPayload,
-        membership: &EpochMembershipCoordinator<TYPES>,
-        view: ViewNumber,
-        target_epoch: Option<EpochNumber>,
-        data_epoch: Option<EpochNumber>,
-        metadata: &<TYPES::BlockPayload as BlockPayload<TYPES>>::Metadata,
-        upgrade_lock: &UpgradeLock<TYPES>,
-    ) -> Result<VidDisperseAndDuration<TYPES>> {
-        let epochs_enabled = upgrade_lock.epochs_enabled(view);
-        let upgraded_vid2 = upgrade_lock.upgraded_vid2(view);
-        if upgraded_vid2 {
-            VidDisperse2::calculate_vid_disperse(
-                payload,
-                membership,
-                view,
-                target_epoch,
-                data_epoch,
-                metadata,
-            )
-            .await
-            .map(|(disperse, duration)| VidDisperseAndDuration {
-                disperse: Self::V2(disperse),
-                duration,
-            })
-        } else if epochs_enabled {
-            VidDisperse1::calculate_vid_disperse(
-                payload,
-                membership,
-                view,
-                target_epoch,
-                data_epoch,
-                metadata,
-            )
-            .await
-            .map(|(disperse, duration)| VidDisperseAndDuration {
-                disperse: Self::V1(disperse),
-                duration,
-            })
-        } else {
-            VidDisperse0::calculate_vid_disperse(
-                payload,
-                membership,
-                view,
-                target_epoch,
-                data_epoch,
-            )
-            .await
-            .map(|(disperse, duration)| VidDisperseAndDuration {
-                disperse: Self::V0(disperse),
-                duration,
-            })
-        }
-    }
-
-    /// Return the internal payload commitment
-    pub fn payload_commitment(&self) -> VidCommitment {
-        match self {
-            Self::V0(disperse) => VidCommitment::V0(disperse.payload_commitment),
-            Self::V1(disperse) => disperse.payload_commitment.into(),
-            Self::V2(disperse) => disperse.payload_commitment.into(),
-        }
-    }
-
-    /// Return a slice reference to the payload commitment. Should be used for signature.
-    pub fn payload_commitment_ref(&self) -> &[u8] {
-        match self {
-            Self::V0(disperse) => disperse.payload_commitment.as_ref(),
-            Self::V1(disperse) => disperse.payload_commitment.as_ref(),
-            Self::V2(disperse) => disperse.payload_commitment.as_ref(),
-        }
-    }
-
-    /// Set the view number
-    pub fn set_view_number(&mut self, view_number: ViewNumber) {
-        match self {
-            Self::V0(share) => share.view_number = view_number,
-            Self::V1(share) => share.view_number = view_number,
-            Self::V2(share) => share.view_number = view_number,
-        }
-    }
-
-    pub fn to_shares(self) -> Vec<VidDisperseShare<TYPES>> {
-        match self {
-            VidDisperse::V0(disperse) => disperse
-                .to_shares()
-                .into_iter()
-                .map(|share| VidDisperseShare::V0(share))
-                .collect(),
-            VidDisperse::V1(disperse) => disperse
-                .to_shares()
-                .into_iter()
-                .map(|share| VidDisperseShare::V1(share))
-                .collect(),
-            VidDisperse::V2(disperse) => disperse
-                .to_shares()
-                .into_iter()
-                .map(|share| VidDisperseShare::V2(share))
-                .collect(),
-        }
-    }
-
-    /// Split a VID share proposal into a proposal for each recipient.
-    pub fn to_share_proposals(
-        proposal: Proposal<TYPES, Self>,
-    ) -> Vec<Proposal<TYPES, VidDisperseShare<TYPES>>> {
-        match proposal.data {
-            VidDisperse::V0(disperse) => disperse
-                .to_share_proposals(&proposal.signature)
-                .into_iter()
-                .map(|proposal| convert_proposal(proposal))
-                .collect(),
-            VidDisperse::V1(disperse) => disperse
-                .to_share_proposals(&proposal.signature)
-                .into_iter()
-                .map(|proposal| convert_proposal(proposal))
-                .collect(),
-            VidDisperse::V2(disperse) => disperse
-                .to_share_proposals(&proposal.signature)
-                .into_iter()
-                .map(|proposal| convert_proposal(proposal))
-                .collect(),
-        }
-    }
-}
 
 /// Type aliases for different versions of VID disperse shares
 pub type VidDisperseShare0<TYPES> = vid_disperse::ADVZDisperseShare<TYPES>;
@@ -945,7 +745,7 @@ impl<TYPES: NodeType> ViewChangeEvidence2<TYPES> {
         match self {
             ViewChangeEvidence2::Timeout(timeout_cert) => timeout_cert.data().view == *view - 1,
             ViewChangeEvidence2::ViewSync(view_sync_cert) => view_sync_cert.view_number == *view,
-            ViewChangeEvidence2::Timeout3(timeout_cert) => timeout_cert.data().view == *view - 1,
+            ViewChangeEvidence2::Timeout3(timeout_cert) => timeout_cert.view_number == *view - 1,
         }
     }
 
@@ -955,22 +755,6 @@ impl<TYPES: NodeType> ViewChangeEvidence2<TYPES> {
             Self::Timeout(cert) => Some(TimeoutEvidence::V2(cert)),
             Self::Timeout3(cert) => Some(TimeoutEvidence::V3(cert)),
             Self::ViewSync(_) => None,
-        }
-    }
-
-    /// Convert to [`ViewChangeEvidence`].
-    ///
-    /// `None` for [`Self::Timeout3`]: the legacy types have no epoch binding
-    /// form.
-    pub fn to_evidence(self) -> Option<ViewChangeEvidence<TYPES>> {
-        match self {
-            ViewChangeEvidence2::Timeout(timeout_cert) => {
-                Some(ViewChangeEvidence::Timeout(timeout_cert.to_tc()))
-            },
-            ViewChangeEvidence2::ViewSync(view_sync_cert) => {
-                Some(ViewChangeEvidence::ViewSync(view_sync_cert.to_vsc()))
-            },
-            ViewChangeEvidence2::Timeout3(_) => None,
         }
     }
 }
@@ -1285,20 +1069,6 @@ impl<TYPES: NodeType> From<QuorumProposal<TYPES>> for QuorumProposal2<TYPES> {
                 .map(ViewChangeEvidence::to_evidence2),
             next_drb_result: None,
             state_cert: None,
-        }
-    }
-}
-
-impl<TYPES: NodeType> From<QuorumProposal2<TYPES>> for QuorumProposal<TYPES> {
-    fn from(quorum_proposal2: QuorumProposal2<TYPES>) -> Self {
-        Self {
-            block_header: quorum_proposal2.block_header,
-            view_number: quorum_proposal2.view_number,
-            justify_qc: quorum_proposal2.justify_qc.to_qc(),
-            upgrade_certificate: quorum_proposal2.upgrade_certificate,
-            proposal_certificate: quorum_proposal2
-                .view_change_evidence
-                .and_then(ViewChangeEvidence2::to_evidence),
         }
     }
 }
@@ -1688,50 +1458,6 @@ impl<TYPES: NodeType> Leaf2<TYPES> {
         self.block_header().payload_commitment()
     }
 
-    /// Validate that a leaf has the right upgrade certificate to be the immediate child of another leaf
-    ///
-    /// This may not be a complete function. Please double-check that it performs the checks you expect before substituting validation logic with it.
-    ///
-    /// # Errors
-    /// Returns an error if the certificates are not identical, or that when we no longer see a
-    /// cert, it's for the right reason.
-    pub fn extends_upgrade(&self, parent: &Self, upgrade: &UpgradeLock<TYPES>) -> Result<()> {
-        match (self.upgrade_certificate(), parent.upgrade_certificate()) {
-            // Easiest cases are:
-            //   - no upgrade certificate on either: this is the most common case, and is always fine.
-            //   - if the parent didn't have a certificate, but we see one now, it just means that we have begun an upgrade: again, this is always fine.
-            (None | Some(_), None) => {},
-            // If we no longer see a cert, we have to make sure that we either:
-            //    - no longer care because we have passed new_version_first_view, or
-            //    - no longer care because we have passed `decide_by` without deciding the certificate.
-            (None, Some(parent_cert)) => {
-                let decided_upgrade_certificate_read = upgrade.decided_upgrade_cert();
-                ensure!(
-                    self.view_number() > parent_cert.data.new_version_first_view
-                        || (self.view_number() > parent_cert.data.decide_by
-                            && decided_upgrade_certificate_read.is_none()),
-                    "The new leaf is missing an upgrade certificate that was present in its \
-                     parent, and should still be live."
-                );
-            },
-            // If we both have a certificate, they should be identical.
-            // Technically, this prevents us from initiating a new upgrade in the view immediately following an upgrade.
-            // I think this is a fairly lax restriction.
-            (Some(cert), Some(parent_cert)) => {
-                ensure!(
-                    cert == parent_cert,
-                    "The new leaf does not extend the parent leaf, because it has attached a \
-                     different upgrade certificate."
-                );
-            },
-        }
-
-        // This check should be added once we sort out the genesis leaf/justify_qc issue.
-        // ensure!(self.parent_commitment() == parent_leaf.commit(), "The commitment of the parent leaf does not match the specified parent commitment.");
-
-        Ok(())
-    }
-
     /// Converts a `Leaf2` to a `Leaf`. This operation is fundamentally unsafe and should not be used.
     pub fn to_leaf_unsafe(self) -> Leaf<TYPES> {
         let bytes: [u8; 32] = self.parent_commitment.into();
@@ -2069,50 +1795,6 @@ impl<TYPES: NodeType> Leaf<TYPES> {
     pub fn payload_commitment(&self) -> VidCommitment {
         self.block_header().payload_commitment()
     }
-
-    /// Validate that a leaf has the right upgrade certificate to be the immediate child of another leaf
-    ///
-    /// This may not be a complete function. Please double-check that it performs the checks you expect before substituting validation logic with it.
-    ///
-    /// # Errors
-    /// Returns an error if the certificates are not identical, or that when we no longer see a
-    /// cert, it's for the right reason.
-    pub fn extends_upgrade(&self, parent: &Self, upgrade: &UpgradeLock<TYPES>) -> Result<()> {
-        match (self.upgrade_certificate(), parent.upgrade_certificate()) {
-            // Easiest cases are:
-            //   - no upgrade certificate on either: this is the most common case, and is always fine.
-            //   - if the parent didn't have a certificate, but we see one now, it just means that we have begun an upgrade: again, this is always fine.
-            (None | Some(_), None) => {},
-            // If we no longer see a cert, we have to make sure that we either:
-            //    - no longer care because we have passed new_version_first_view, or
-            //    - no longer care because we have passed `decide_by` without deciding the certificate.
-            (None, Some(parent_cert)) => {
-                let decided_upgrade_certificate_read = upgrade.decided_upgrade_cert();
-                ensure!(
-                    self.view_number() > parent_cert.data.new_version_first_view
-                        || (self.view_number() > parent_cert.data.decide_by
-                            && decided_upgrade_certificate_read.is_none()),
-                    "The new leaf is missing an upgrade certificate that was present in its \
-                     parent, and should still be live."
-                );
-            },
-            // If we both have a certificate, they should be identical.
-            // Technically, this prevents us from initiating a new upgrade in the view immediately following an upgrade.
-            // I think this is a fairly lax restriction.
-            (Some(cert), Some(parent_cert)) => {
-                ensure!(
-                    cert == parent_cert,
-                    "The new leaf does not extend the parent leaf, because it has attached a \
-                     different upgrade certificate."
-                );
-            },
-        }
-
-        // This check should be added once we sort out the genesis leaf/justify_qc issue.
-        // ensure!(self.parent_commitment() == parent_leaf.commit(), "The commitment of the parent leaf does not match the specified parent commitment.");
-
-        Ok(())
-    }
 }
 
 impl<TYPES: NodeType> TestableLeaf for Leaf<TYPES>
@@ -2287,126 +1969,6 @@ impl<TYPES: NodeType> Leaf<TYPES> {
             block_header: block_header.clone(),
             upgrade_certificate: upgrade_certificate.clone(),
             block_payload: None,
-        }
-    }
-}
-
-pub mod null_block {
-    #![allow(missing_docs)]
-
-    use jf_advz::VidScheme;
-    use vbs::version::Version;
-    use versions::EPOCH_VERSION;
-
-    use crate::{
-        data::VidCommitment,
-        traits::{
-            BlockPayload, block_contents::BuilderFee, node_implementation::NodeType,
-            signature_key::BuilderSignatureKey,
-        },
-        vid::advz::advz_scheme,
-    };
-
-    /// The commitment for a null block payload.
-    ///
-    /// Note: the commitment depends on the network (via `num_storage_nodes`),
-    /// and may change (albeit rarely) during execution.
-    ///
-    /// We memoize the result to avoid having to recalculate it.
-    // TODO(Chengyu): fix it. Empty commitment must be computed at every upgrade.
-    // #[memoize(SharedCache, Capacity: 10)]
-    #[must_use]
-    pub fn commitment(num_storage_nodes: usize) -> Option<VidCommitment> {
-        let vid_result = advz_scheme(num_storage_nodes).commit_only(Vec::new());
-
-        match vid_result {
-            Ok(r) => Some(VidCommitment::V0(r)),
-            Err(_) => None,
-        }
-    }
-
-    /// Builder fee data for a null block payload
-    #[must_use]
-    pub fn builder_fee<TYPES: NodeType>(
-        num_storage_nodes: usize,
-        version: Version,
-    ) -> Option<BuilderFee<TYPES>> {
-        /// Arbitrary fee amount, this block doesn't actually come from a builder
-        const FEE_AMOUNT: u64 = 0;
-
-        let (pub_key, priv_key) =
-            <TYPES::BuilderSignatureKey as BuilderSignatureKey>::generated_from_seed_indexed(
-                [0_u8; 32], 0,
-            );
-
-        if version >= EPOCH_VERSION {
-            let (_null_block, null_block_metadata) =
-                <TYPES::BlockPayload as BlockPayload<TYPES>>::empty();
-
-            match TYPES::BuilderSignatureKey::sign_fee(&priv_key, FEE_AMOUNT, &null_block_metadata)
-            {
-                Ok(sig) => Some(BuilderFee {
-                    fee_amount: FEE_AMOUNT,
-                    fee_account: pub_key,
-                    fee_signature: sig,
-                }),
-                Err(_) => None,
-            }
-        } else {
-            let (_null_block, null_block_metadata) =
-                <TYPES::BlockPayload as BlockPayload<TYPES>>::empty();
-
-            match TYPES::BuilderSignatureKey::sign_fee_with_vid_commitment(
-                &priv_key,
-                FEE_AMOUNT,
-                &null_block_metadata,
-                &commitment(num_storage_nodes)?,
-            ) {
-                Ok(sig) => Some(BuilderFee {
-                    fee_amount: FEE_AMOUNT,
-                    fee_account: pub_key,
-                    fee_signature: sig,
-                }),
-                Err(_) => None,
-            }
-        }
-    }
-}
-
-/// A packed bundle constructed from a sequence of bundles.
-#[derive(Debug, Eq, PartialEq, Clone)]
-pub struct PackedBundle<TYPES: NodeType> {
-    /// The combined transactions as bytes.
-    pub encoded_transactions: Arc<[u8]>,
-
-    /// The metadata of the block.
-    pub metadata: <TYPES::BlockPayload as BlockPayload<TYPES>>::Metadata,
-
-    /// The view number that this block is associated with.
-    pub view_number: ViewNumber,
-
-    /// The view number that this block is associated with.
-    pub epoch_number: Option<EpochNumber>,
-
-    /// The sequencing fee for submitting bundles.
-    pub sequencing_fees: Vec1<BuilderFee<TYPES>>,
-}
-
-impl<TYPES: NodeType> PackedBundle<TYPES> {
-    /// Create a new [`PackedBundle`].
-    pub fn new(
-        encoded_transactions: Arc<[u8]>,
-        metadata: <TYPES::BlockPayload as BlockPayload<TYPES>>::Metadata,
-        view_number: ViewNumber,
-        epoch_number: Option<EpochNumber>,
-        sequencing_fees: Vec1<BuilderFee<TYPES>>,
-    ) -> Self {
-        Self {
-            encoded_transactions,
-            metadata,
-            view_number,
-            epoch_number,
-            sequencing_fees,
         }
     }
 }

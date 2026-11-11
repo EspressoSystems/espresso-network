@@ -2,6 +2,7 @@ use std::{
     collections::BTreeMap,
     fmt::{Debug, Display},
     future::Future,
+    path::PathBuf,
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -19,6 +20,7 @@ use futures::{
 };
 use hotshot_new_protocol::{
     coordinator::Coordinator,
+    leader_trace::{CsvLeaderTracer, LeaderTracerHandle},
     network::{Cliquenet, NetworkError},
 };
 use hotshot_orchestrator::client::OrchestratorClient;
@@ -55,7 +57,7 @@ use url::Url;
 use versions::{NEW_PROTOCOL_VERSION, Version};
 
 use crate::{
-    Node, SeqTypes, SequencerApiVersion,
+    SeqTypes, SequencerApiVersion,
     catchup::ParallelStateCatchup,
     consensus_handle::ConsensusHandle,
     external_event_handler::ExternalEventHandler,
@@ -69,7 +71,6 @@ use crate::{
     startup_catchup::bootstrap_epoch_window,
     state_signature::{self, DecidedLeaf, StateSignatureMemStorage, StateSigner},
 };
-pub(crate) type ConsensusNode<P> = Node<P>;
 
 /// Inbound request-response messages are dropped (not queued) when this channel is full. A node
 /// catching up has many batched requests in flight, each answered by up to `request_batch_size`
@@ -83,9 +84,8 @@ const OUTBOUND_MESSAGE_CHANNEL_CAPACITY: usize = 128;
 #[derive(Derivative, Clone)]
 #[derivative(Debug(bound = ""))]
 pub struct SequencerContext<P: SequencerPersistence> {
-    /// The consensus adapter that dispatches between old HotShot and new coordinator.
     #[derivative(Debug = "ignore")]
-    consensus_handle: Arc<ConsensusHandle<SeqTypes, ConsensusNode<P>>>,
+    consensus_handle: Arc<ConsensusHandle<SeqTypes, Arc<P>>>,
 
     #[derivative(Debug = "ignore")]
     persistence: Arc<P>,
@@ -93,7 +93,7 @@ pub struct SequencerContext<P: SequencerPersistence> {
     /// The request-response protocol
     #[derivative(Debug = "ignore")]
     #[allow(dead_code)]
-    pub request_response_protocol: RequestResponseProtocol<ConsensusNode<P>, P>,
+    pub request_response_protocol: RequestResponseProtocol<P>,
 
     /// Light client state signatures produced by the state signer task.
     state_signatures: Arc<RwLock<StateSignatureMemStorage>>,
@@ -141,6 +141,7 @@ where
         bootstrap_epoch_catchup_timeout: Duration,
         empty_block_delay: Duration,
         block_sizes: BTreeMap<Version, u64>,
+        leader_trace_dir: Option<PathBuf>,
     ) -> anyhow::Result<Self>
     where
         F: AsyncFnOnce(UpgradeLock<SeqTypes>) -> Result<Cliquenet<SeqTypes>, NetworkError>,
@@ -148,11 +149,12 @@ where
         let config = &network_config.config;
         let pub_key = validator_config.public_key;
         tracing::info!(%pub_key, "initializing consensus");
+        let upgrade_lock = restored_upgrade_lock(upgrade, &initializer);
+        let version = running_version(&upgrade_lock);
         ensure!(
-            upgrade.base >= NEW_PROTOCOL_VERSION,
-            "base version {} predates the new protocol ({NEW_PROTOCOL_VERSION}), the only \
-             consensus this node runs",
-            upgrade.base
+            version >= NEW_PROTOCOL_VERSION,
+            "the chain runs version {version}, which predates the new protocol \
+             ({NEW_PROTOCOL_VERSION}), the only consensus this node runs"
         );
 
         let instance_state = initializer.instance_state().clone();
@@ -175,7 +177,6 @@ where
 
         let epoch_height = initializer.epoch_height();
 
-        let upgrade_lock = restored_upgrade_lock(upgrade, &initializer);
         seed_membership(&membership_coordinator, config, &upgrade_lock, &initializer).await;
 
         let mut coordinator_network = coordinator_network(upgrade_lock.clone()).await?;
@@ -200,10 +201,26 @@ where
             .load_high_qc2()
             .await
             .context("loading persisted locked QC")?;
+        // And the epoch boundary certificate a re-vote and the next epoch's
+        // first block name.
+        let boundary_qc = persistence
+            .load_boundary_qc2()
+            .await
+            .context("loading persisted boundary QC")?;
         let anchor_cert2 = persistence
             .load_cert2(initializer.anchor_leaf().view_number())
             .await
             .context("loading the anchor's cert2")?;
+
+        let leader_tracer = leader_trace_dir
+            .map(|dir| {
+                let node_id = instance_state.node_id;
+                let path = dir.join(format!("leader_trace_node{node_id}.csv"));
+                CsvLeaderTracer::new(node_id, &path)
+                    .map(|tracer| Arc::new(tracer) as LeaderTracerHandle)
+                    .with_context(|| format!("creating leader trace {}", path.display()))
+            })
+            .transpose()?;
 
         let (external_tx, external_rx) = unbounded_channel();
         let coordinator = Coordinator::maker()
@@ -222,7 +239,9 @@ where
             .metrics(metrics)
             .consensus_metrics(ConsensusMetricsValue::new(metrics))
             .maybe_locked_qc(locked_qc)
+            .maybe_boundary_qc(boundary_qc)
             .maybe_anchor_cert2(anchor_cert2)
+            .maybe_leader_tracer(leader_tracer)
             .upgrade_config(UpgradeConfig {
                 start_proposing_view: config.start_proposing_view,
                 stop_proposing_view: config.stop_proposing_view,
@@ -337,11 +356,11 @@ where
     /// Constructor
     #[allow(clippy::too_many_arguments)]
     fn new(
-        consensus_handle: Arc<ConsensusHandle<SeqTypes, ConsensusNode<P>>>,
+        consensus_handle: Arc<ConsensusHandle<SeqTypes, Arc<P>>>,
         persistence: Arc<P>,
         state_signer: StateSigner<SequencerApiVersion>,
         external_event_handler: ExternalEventHandler,
-        request_response_protocol: RequestResponseProtocol<ConsensusNode<P>, P>,
+        request_response_protocol: RequestResponseProtocol<P>,
         node_state: NodeState,
         network_config: NetworkConfig<SeqTypes>,
         validator_config: ValidatorConfig<SeqTypes>,
@@ -449,8 +468,7 @@ where
         self.consensus_handle.submit_transaction(tx).await
     }
 
-    /// Return a reference to the consensus adapter.
-    pub fn consensus_handle(&self) -> Arc<ConsensusHandle<SeqTypes, ConsensusNode<P>>> {
+    pub fn consensus_handle(&self) -> Arc<ConsensusHandle<SeqTypes, Arc<P>>> {
         self.consensus_handle.clone()
     }
 
@@ -458,8 +476,8 @@ where
         &self.validator_config
     }
 
-    pub async fn upgrade_lock(&self) -> UpgradeLock<SeqTypes> {
-        self.consensus_handle.upgrade_lock().await
+    pub fn upgrade_lock(&self) -> UpgradeLock<SeqTypes> {
+        self.consensus_handle.upgrade_lock()
     }
 
     pub async fn shutdown_consensus(&self) {
@@ -581,6 +599,14 @@ fn restored_upgrade_lock(
     UpgradeLock::from_certificate(upgrade, &decided_upgrade_certificate)
 }
 
+/// The version the chain runs now: the decided upgrade's, or the base when none was decided.
+fn running_version(upgrade_lock: &UpgradeLock<SeqTypes>) -> Version {
+    upgrade_lock
+        .decided_upgrade_cert()
+        .map(|cert| cert.data.new_version)
+        .unwrap_or(upgrade_lock.upgrade().base)
+}
+
 async fn seed_membership(
     membership_coordinator: &EpochMembershipCoordinator<SeqTypes>,
     config: &HotShotConfig<SeqTypes>,
@@ -589,10 +615,7 @@ async fn seed_membership(
 ) {
     membership_coordinator.set_drb_difficulty_selector(drb_difficulty_selector(config));
 
-    let running_version = upgrade_lock
-        .decided_upgrade_cert()
-        .map(|cert| cert.data.new_version)
-        .unwrap_or(upgrade_lock.upgrade().base);
+    let running_version = running_version(upgrade_lock);
     let membership = membership_coordinator.membership();
     for da_committee in &config.da_committees {
         if running_version >= da_committee.start_version {
@@ -603,13 +626,7 @@ async fn seed_membership(
         }
     }
 
-    load_start_epoch_info(
-        membership_coordinator,
-        initializer.start_epoch_info(),
-        config.epoch_height,
-        config.epoch_start_block,
-    )
-    .await;
+    load_start_epoch_info(membership_coordinator, initializer.start_epoch_info()).await;
 }
 
 impl<P: SequencerPersistence> Drop for SequencerContext<P> {
@@ -729,7 +746,7 @@ const SIGNER_QUEUE_CAPACITY: usize = 128;
 /// one height, so every node must sign the same heights. Signing every decide keeps that while
 /// posts fall behind, and dropping only the oldest once the queue is full keeps it as well.
 async fn sign_decided_leaves<P>(
-    consensus_handle: Arc<ConsensusHandle<SeqTypes, ConsensusNode<P>>>,
+    consensus_handle: Arc<ConsensusHandle<SeqTypes, Arc<P>>>,
     mut state_signer: StateSigner<SequencerApiVersion>,
     mut leaves: broadcast::Receiver<DecidedLeaf>,
 ) where

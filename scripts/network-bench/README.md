@@ -505,14 +505,60 @@ just bench aws run --tag release-x --leader-trace
     adds a lag panel. No step rule uses them.
   - Needs the `light-client` module, which every query node runs (routes only).
 - `--leader-trace`: nodes get `ESPRESSO_NODE_LEADER_TRACE_DIR=/trace` (host `/opt/bench/trace`).
-  - Collected: `hosts/<name>/trace/leader_trace_node*.csv`.
+  - Collected: `hosts/<name>/trace/leader_trace_node*.csv`, `cpu_node*.csv`, `net_node*.csv`.
+  - `agent-host` (validators and query nodes) samples every 10 ms, from the moment the node creates its trace file, on
+    the wall clock of the trace. Values are cumulative counters; `trace-plots` differences them and drops an interval
+    whose counter decreased (container recreated) or whose time did not advance.
+    - `cpu_node{N}.csv`: `t_ns,usage_usec`, the cgroup `usage_usec` of the `espresso-node` container.
+    - `net_node{N}.csv`: `t_ns,rx_bytes,tx_bytes`, `/proc/net/dev` of the default-route interface (resolved once at
+      sampler start, as `ip -o -4 route show to default`).
+    - Files are block-buffered; the last rows reach disk when the buffer fills or the agent stops.
   - `node_id` in the file name and rows is the orchestrator-assigned node index, not the host number; the host is the
     directory it was collected from. Per-view plots name both.
-  - `parent Cert1 wait` (header created until the leaf commitment): `maybe_propose` waits for the parent's Cert1, not
+  - `parent Cert1 wait` (header created until `proposal_assembled`): the proposal waits for the parent's Cert1, not
     leader-local work.
+  - `parent state + header` includes the wait for the parent's validated state on the Built path (espresso-node). On the
+    bench Encode path the header is built right after the block and the segment is near 0.
+  - `persist proposal + action` (`proposal_queued` until `proposal_broadcast_start`): `append_proposal`, `append_da` of the
+    payload and the recorded action, before the proposal is released.
+  - `proposal serialize + enqueue`, `fan-out (serialize + enqueue)` and the TX-row bars of
+    `leader_window.png` (`ser+enq`) measure serialization and enqueue onto the network channel, not wire time.
+  - `cert1_v_minus_1_obtained` and `cert2_v_minus_1_obtained` are stamped when the node first holds the certificate, whether
+    from its own tally, a relay or the next proposal. `request_block_header_queued` is stamped on every block request path.
+  - `trace-plots` skip a view for a missing event; `stats.json` `leader_path.skipped` counts every absent event of the view
+    (`missing <event>`), so its sum can exceed the number of views skipped.
   - `trace-plots RUN_DIR` (uv script, matplotlib; also run by `render`) writes `trace/leader_path.png`,
     `trace/leader_path_typical.png`, `trace/leader_path_worst.png`, `trace/finality.png`, `trace/stats.json`,
-    `trace/leader_path.md` (segment medians per load step).
+    `trace/leader_path.md` (segment medians per load step), `trace/timeline.svg` (median finalization timeline of one
+    view and the next leader's pipeline, SVG), `trace/leader_window.png` (the leader of a view in the middle of the used
+    views: work spans, process CPU in cores busy, network Gbps; a panel reads "no data" without the `cpu_node*.csv` or
+    `net_node*.csv` of that node, as in runs before the sampler).
+  - Dispersal events by path:
+    - Built (espresso-node, bench node with empty blocks): the block builder encodes the block once.
+      `block_commitments_start`/`_end` bracket payload bytes and the VID encode (run in parallel with transaction
+      hashes). The disperser records `vid_fragments_start`/`_end` around signing and fragment assembly of every bucket;
+      no encoding runs there.
+    - Encode (bench node with `--block-size` > 0): the disperser encodes. `ns_disperse_start`/`_end` bracket disperse
+      parameters, signing, encoding and fragment assembly of every bucket.
+    - Both: `vid_shares_unicast_start` (first share send) and `vid_shares_unicast_end` (all sends queued).
+  - Spans in `leader_window.png` and `timeline.svg`. `leader_window.png` skips a span lacking an endpoint; the
+    timeline skips a view lacking an event of its full layout:
+
+    | Span | Events | Path |
+    |---|---|---|
+    | block-build (Encode) | `request_block_header_queued` .. `block_built_applied` | Encode |
+    | block-build (Built) | `block_payload_start` .. `block_built_applied` | Built; includes the VID encode (timeline: build/prep) |
+    | request queue + tx select | `request_block_header_queued` .. `block_request_started` | Built (the consensus outbox to the block builder plus pool transaction selection; `block_request_started` is recorded when the block builder accepts the request); tier 2 in `leader_window.png`, timeline row 0 |
+    | builder start + empty-block delay | `block_request_started` .. `block_payload_start` | Built (tokio scheduling of the builder task plus the `empty_block_delay` sleep (500 ms default) when the pool is empty; the block builder records `block_payload_start` after it; Encode views other than the first have none); tier 2 in `leader_window.png`, timeline row 0 |
+    | encode + commitments | `block_commitments_start` .. `block_commitments_end` | Built; tier 2 in `leader_window.png`, timeline row 1 |
+    | sign + fragments | `vid_fragments_start` .. `vid_fragments_end` | Built; timeline row 1 |
+    | disperse (timeline: dispersal) | `ns_disperse_start` .. `ns_disperse_end` | Encode; timeline row 1 |
+    | fan-out (serialize + enqueue) | `vid_shares_unicast_start` .. `vid_shares_unicast_end` | both; overlaps the span before it with several buckets; tier 3 in `leader_window.png`, timeline row 2 |
+
+  - `leader_window.png` also draws `sign + fragments` (Built) and `disperse` (Encode). Hatched spans are CPU heavy; encode + commitments is not hatched, the CPU panel shows its load.
+
+  - `block build` in `leader_path.*` is `request_block_header_queued` .. `block_built_applied`; it includes the VID encode
+    on the Built path.
   - With `steps.json`, plots and stats cover only views whose t0 lies in a step's measured window `t_mid`..`t_end`.
 
 ### Baselines
@@ -716,6 +762,11 @@ Progress: one fixed-width line every 10 s, totals at the end.
   256 txs' size, base64-encoded once. Requests are built from slices of the encoded pool.
 - Inclusion: scans of the query node's blocks for the marker. Scans (fetch, JSON, base64, marker search) run in 4
   processes (`SCAN_PROCESSES`), stdlib only.
+- Scans that lag: a tx times out `--tx-timeout-s` after its submit, which frees its in-flight room. A later scan that
+  finds it in a block shown on the query node within `--tx-timeout-s` still includes it; a find in a block shown later
+  leaves it timed out but records its height. At the end of the load the scans go on while such a tx may still be
+  included, for at most `--tx-timeout-s` after the load ended. A lost payload counts as scanned once given up, but not
+  in the benchmark tracker lag.
 - Namespaces 10000 and 10015: the leader disperses a block's namespaces in parallel.
 - With `--clients`, readers fetch each new range of blocks from the query node as a light client does, see `--clients`
   above.
@@ -736,6 +787,15 @@ Each step is judged over its second half. A step stopped early is judged over it
 - Early stop (not with `--keep-going`): from 10 s into a step, decided < 80% of submitted over the last 10 s stops the
   step, which fails on the decided rule.
 - Without `--keep-going` the ramp stops at the first failing step, then runs one refine step halfway back.
+- A tx not yet matched to a block counts as late only as far as the scans prove: until the first height decided after it
+  was sent whose scan is not finished reached a validator, or until now when there is none. A tx that timed out and was
+  never found counts at most its timeout.
+- Two verdicts per step. At the step's end the ramp and the search judge it on what they know then, steer by it and log
+  it in `driver.log` and `steps.json`. `result.json` and the summary judge consensus latency and query lag again on the
+  final `load.jsonl`, `heights.jsonl` and `consensus.jsonl`, as of the last time the run recorded anything. The two can
+  differ while the scans or the query node lag; scans lagging over 1 s p99 mark the run noisy
+  (`benchmark tracker behind`). The final verdict also fails a step when its txs the scans never reached could change
+  its p50 (`consensus latency unknown`). `throughput.png` shades steps by the final verdict.
 
 ### Drain
 
@@ -954,7 +1014,7 @@ runs/01-run/             one measurement
   hosts/<host>/          node.env|ctl.env, start.sh, agent.json, <container>.log.gz, collect-<k>/ (`collect`),
                          cloud-init-output.log, chrony.txt, host.jsonl, sockets.jsonl (nodes), ena-allowance.txt,
                          node-rejoin.env, recreate.sh (--chaos), espresso-node.wiped.log.gz (wiped nodes)
-                         trace/ (--leader-trace)
+                         trace/ (--leader-trace: leader_trace_node*.csv, cpu_node*.csv, net_node*.csv)
                          pg-stats.json pg-stats.jsonl pg-statements.json pg-settings.json du-payload.txt (node0)
   cloudwatch/            ec2-node0.json (EBS balance, every run); rds.json (rds runs)
   rds-logs/              postgres logs of the run window (rds runs)
@@ -987,8 +1047,9 @@ runs/01-run/             one measurement
 
 #### Published files
 
-- Pushed: `summary.md`, `result.json`, `cost.json`, `throughput.png`, `trace/*.png`, `trace/leader_path.md`,
-  `trace/stats.json`, `index-row.json`, a reduced `manifest.json`. Other files stay local. Symlinks are refused.
+- Pushed: `summary.md`, `result.json`, `cost.json`, `throughput.png`, `trace/*.png`, `trace/*.svg`,
+  `trace/leader_path.md`, `trace/stats.json`, `index-row.json`, a reduced `manifest.json`. Other files stay local.
+  Symlinks are refused.
 - A workflow in the results repo rebuilds its `INDEX.md` and `README.md` (leaderboard, recent runs, totals).
 - The reduced `manifest.json` keeps `fleet`, `created_at`, `git_rev`, `query_db`, `images`, `config` without `node_env`,
   and each host's name, role and instance type. `summary.md` is published as written and lists `--node-env` values.
@@ -1019,7 +1080,9 @@ scripts/network-bench/
   decaf-locations.json   decaf validator cities, same fields
   throughput-plot        throughput.png of a run dir (uv script)
   trace-plots            leader trace plots of a run dir (uv script)
-  leadertrace.py         leader critical-path breakdown used by trace-plots
+  leadertrace.py         leader critical-path breakdown and trace/sample readers used by trace-plots
+  finalization_timeline.py timeline.svg of trace-plots
+  leader_window.py       leader_window.png of trace-plots
   instance-types.md      leader block-build time and cost per block per instance type
   genesis.toml           0.6, 100 MB blocks, 1 wei base fee
   process-compose.yaml   local 3-node network

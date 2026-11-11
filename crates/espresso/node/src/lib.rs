@@ -21,14 +21,13 @@ pub mod state_cert;
 pub mod state_signature;
 pub mod util;
 
-use std::{fmt::Debug, marker::PhantomData, sync::Arc, time::Duration};
+use std::{fmt::Debug, path::PathBuf, sync::Arc, time::Duration};
 
 use alloy::primitives::U256;
 use anyhow::Context;
 use async_lock::Mutex;
 use catchup::{ParallelStateCatchup, StatePeers};
 use context::SequencerContext;
-use derivative::Derivative;
 use dyn_clone::clone_box;
 use espresso_types::{
     BackoffParams, EpochCommittees, EpochRewardsCalculator, L1ClientOptions, NodeState, SeqTypes,
@@ -70,7 +69,7 @@ use hotshot_types::{
     signature_key::{BLSPrivKey, BLSPubKey},
     traits::{
         metrics::{Metrics, NoMetrics},
-        node_implementation::{NodeImplementation, NodeType},
+        node_implementation::NodeType,
         signature_key::SignatureKey,
         storage::Storage,
     },
@@ -81,38 +80,13 @@ use options::Identity;
 pub use options::Options;
 use proposal_fetcher::ProposalFetcherConfig;
 pub use run::main;
-use serde::{Deserialize, Serialize};
 use tracing::info;
 use url::Url;
 use vbs::version::StaticVersion;
 
 use crate::request_response::data_source::Storage as RequestResponseStorage;
 
-/// The node's `NodeImplementation`, generic over its persistence.
-#[derive(Derivative, Serialize, Deserialize)]
-#[derivative(
-    Copy(bound = ""),
-    Debug(bound = ""),
-    Default(bound = ""),
-    PartialEq(bound = ""),
-    Eq(bound = ""),
-    Hash(bound = "")
-)]
-pub struct Node<P: SequencerPersistence>(PhantomData<fn(&P)>);
-
-// Using derivative to derive Clone triggers the clippy lint
-// https://rust-lang.github.io/rust-clippy/master/index.html#/incorrect_clone_impl_on_copy_type
-impl<P: SequencerPersistence> Clone for Node<P> {
-    fn clone(&self) -> Self {
-        *self
-    }
-}
-
 pub type SequencerApiVersion = StaticVersion<0, 1>;
-
-impl<P: SequencerPersistence> NodeImplementation<SeqTypes> for Node<P> {
-    type Storage = Arc<P>;
-}
 
 #[derive(Clone, Debug)]
 pub struct NetworkParams {
@@ -178,6 +152,7 @@ pub async fn init_node<P>(
     identity: Identity,
     proposal_fetcher_config: ProposalFetcherConfig,
     empty_block_delay: Duration,
+    leader_trace_dir: Option<PathBuf>,
 ) -> anyhow::Result<SequencerContext<P>>
 where
     P: SequencerPersistence + MembershipPersistence,
@@ -463,6 +438,7 @@ where
         network_params.bootstrap_epoch_catchup_timeout,
         empty_block_delay,
         block_sizes,
+        leader_trace_dir,
     )
     .await?;
 
@@ -596,6 +572,9 @@ where
     P: SequencerPersistence + MembershipPersistence,
     Arc<P>: Storage<SeqTypes>,
 {
+    // Before the L1 work below, which can wait a long time for L1.
+    let first_epoch = genesis.first_epoch()?;
+
     let l1_client = l1_params
         .options
         .with_metrics(metrics)
@@ -687,12 +666,13 @@ where
     let block_reward = fetcher.fetch_fixed_block_reward().await.ok();
     info!("Block reward fetched: {:?}", block_reward);
     let epoch_height = genesis.epoch_height.unwrap_or_default();
-    let mut membership = EpochCommittees::new_stake(
+    let mut membership = EpochCommittees::new(
         network_config.config.known_nodes_with_stake.clone(),
         network_config.config.known_da_nodes.clone(),
         block_reward,
         fetcher,
         epoch_height,
+        first_epoch,
     );
     info!("Membership created. Reloading stake");
     membership.reload_stake(RECENT_STAKE_TABLES_LIMIT).await;
@@ -749,14 +729,11 @@ pub(crate) async fn prefetch_stake_table_events(
         return Ok(());
     };
 
-    // Not redundant: a genesis pinning a complete L1 block never waits on the L1 client,
-    // so it reaches this with an empty snapshot.
-    l1_client.wait_for_finalized_block(l1_genesis.number).await;
+    // A pinned genesis block never waits on the L1 client, so the snapshot may be empty here.
+    // Does not fetch the genesis block itself: RPCs that prune old history no longer serve it.
     let finalized = l1_client
-        .snapshot()
-        .await
-        .finalized
-        .context("no finalized L1 block after waiting for the genesis block")?;
+        .wait_for_latest_finalized_at_least(l1_genesis.number)
+        .await;
 
     tracing::info!(
         target: "announce",
@@ -888,6 +865,7 @@ pub mod testing {
             BlockPayload, EncodeBytes, block_contents::BlockHeader, metrics::NoMetrics,
             signature_key::BuilderSignatureKey,
         },
+        utils::epoch_from_block_number,
     };
     use rand::SeedableRng as _;
     use rand_chacha::ChaCha20Rng;
@@ -1472,6 +1450,37 @@ pub mod testing {
         pub async fn init_node<P: PersistenceOptions>(
             &self,
             i: usize,
+            state: ValidatedState,
+            persistence_opt: P,
+            state_peers: Option<impl StateCatchup + 'static>,
+            storage: Option<RequestResponseStorage>,
+            metrics: &dyn Metrics,
+            stake_table_capacity: usize,
+            event_consumer: impl EventConsumer + 'static,
+            upgrade: versions::Upgrade,
+            upgrades: BTreeMap<Version, Upgrade>,
+        ) -> SequencerContext<P::Persistence> {
+            self.try_init_node(
+                i,
+                state,
+                persistence_opt,
+                state_peers,
+                storage,
+                metrics,
+                stake_table_capacity,
+                event_consumer,
+                upgrade,
+                upgrades,
+            )
+            .await
+            .expect("node initializes")
+        }
+
+        /// [`Self::init_node`], returning the error `SequencerContext::init` refuses with.
+        #[allow(clippy::too_many_arguments)]
+        pub async fn try_init_node<P: PersistenceOptions>(
+            &self,
+            i: usize,
             mut state: ValidatedState,
             mut persistence_opt: P,
             state_peers: Option<impl StateCatchup + 'static>,
@@ -1481,7 +1490,7 @@ pub mod testing {
             event_consumer: impl EventConsumer + 'static,
             upgrade: versions::Upgrade,
             upgrades: BTreeMap<Version, Upgrade>,
-        ) -> SequencerContext<P::Persistence> {
+        ) -> anyhow::Result<SequencerContext<P::Persistence>> {
             let config = self.config.clone();
             let my_peer_config = &config.known_nodes_with_stake[i];
             let is_da = config.known_da_nodes.contains(my_peer_config);
@@ -1558,12 +1567,16 @@ pub mod testing {
             fetcher.spawn_update_loop().await;
 
             let block_reward = fetcher.fetch_fixed_block_reward().await.ok();
-            let mut membership = EpochCommittees::new_stake(
+            let mut membership = EpochCommittees::new(
                 config.known_nodes_with_stake.clone(),
                 config.known_da_nodes.clone(),
                 block_reward,
                 fetcher,
                 config.epoch_height,
+                EpochNumber::new(epoch_from_block_number(
+                    config.epoch_start_block,
+                    config.epoch_height,
+                )),
             );
             membership.reload_stake(50).await;
 
@@ -1647,9 +1660,9 @@ pub mod testing {
                 Duration::from_secs(2),
                 Duration::from_millis(500),
                 BTreeMap::from([(upgrade.base, max_block_size)]),
+                None,
             )
             .await
-            .unwrap()
         }
 
         pub fn builder_key() -> EthKeyPair {
@@ -1985,5 +1998,62 @@ mod test {
                 break;
             }
         }
+    }
+
+    #[rstest::rstest]
+    #[case::missing(None)]
+    #[case::zero(Some(0))]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn init_node_state_rejects_epochless_genesis_before_l1(
+        #[case] epoch_height: Option<u64>,
+    ) {
+        use espresso_types::v0::traits::PersistenceOptions;
+
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../data/genesis/mainnet.toml");
+        let mut genesis = Genesis::from_file(&path).unwrap();
+        genesis.epoch_height = epoch_height;
+        // Nothing listens on the L1 port and this block is never finalized, so L1 work cannot finish.
+        genesis.l1_finalized = L1Finalized::Number { number: u64::MAX };
+        let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
+        let l1_params = L1Params {
+            urls: vec![format!("http://127.0.0.1:{port}").parse().unwrap()],
+            options: L1ClientOptions::default(),
+        };
+        let catchup = CatchupParams {
+            state_peers: vec![],
+            backoff: Default::default(),
+            base_timeout: Duration::from_secs(2),
+            local_timeout: Duration::from_secs(5),
+            http_delay: Duration::ZERO,
+        };
+        let tmp = tempfile::TempDir::new().unwrap();
+        let persistence = persistence::fs::Options::new(tmp.path().into())
+            .create()
+            .await
+            .unwrap();
+
+        let result = tokio::time::timeout(
+            Duration::from_secs(10),
+            init_node_state(
+                &genesis,
+                &NetworkConfig::<SeqTypes>::default(),
+                l1_params,
+                catchup,
+                persistence,
+                &NoMetrics,
+            ),
+        )
+        .await;
+
+        let err = match result {
+            Ok(Err(err)) => err,
+            Ok(Ok(_)) => panic!("init_node_state accepted epoch_height={epoch_height:?}"),
+            Err(_) => panic!("init_node_state did not return within 10s: it is doing L1 work"),
+        };
+        assert!(
+            format!("{err:#}").contains("epoch_height"),
+            "expected an epoch_height error, got: {err:#}"
+        );
     }
 }

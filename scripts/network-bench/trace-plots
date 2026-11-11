@@ -8,8 +8,14 @@ aws-bench) into `<run_dir>/trace/`: `leader_path.png` (median waterfall and per-
 segments), `leader_path_typical.png` and `leader_path_worst.png` (single-view waterfalls),
 `leader_path.md` (segment medians per load step of `<run_dir>/steps.json`, if present, over
 the views whose t0 lies in the step's measured half),
-`finality.png` (cluster finality histogram and CDF) and `stats.json`. With `steps.json`, all of
-these cover only the views in the measured halves; without it, every view after the warmup.
+`finality.png` (cluster finality histogram and CDF), `timeline.svg` (median finalization timeline),
+`leader_window.png` (one leader's work, CPU and network around a view in the middle of the used
+views; CPU and network need the `cpu_node*.csv` and `net_node*.csv` samples beside the trace) and
+`stats.json`. With `steps.json`, all of these cover only the views in the measured halves;
+without it, every view after the warmup.
+
+The plots describe the events of the current code only. Traces from older code are not supported;
+when events move, update the plots and drop the old layout instead of adding fallbacks.
 
     trace-plots RUN_DIR [--warmup N]
 """
@@ -21,6 +27,8 @@ from collections import Counter
 from collections.abc import Callable
 from pathlib import Path
 
+import finalization_timeline
+import leader_window
 import leadertrace
 import matplotlib
 import numpy as np
@@ -59,7 +67,7 @@ def main(argv: list[str]) -> None:
     if not paths:
         sys.exit(f"no leader_trace_node*.csv under {args.run_dir}/{TRACE_GLOB}")
     trace = leadertrace.read_traces(paths)
-    path, skipped = leadertrace.leader_path(trace, args.warmup)
+    path, skipped_views, skipped = leadertrace.leader_path(trace, args.warmup)
     if not path:
         sys.exit(
             f"no views to plot after warmup {args.warmup}; skipped: {dict(skipped)}"
@@ -79,10 +87,14 @@ def main(argv: list[str]) -> None:
     stats = build_stats(path, list(finality.values()), skipped, finality_skipped, steps)
     out = args.run_dir / "trace"
     out.mkdir(exist_ok=True)
+    (out / "stats.json").write_text(json.dumps(stats, indent=2) + "\n")
+    (out / "leader_path.md").write_text(leader_path_table(stats))
     plt.rcParams.update({"font.size": FONT})
     views = np.array(list(path))
     data = np.array(list(path.values()))
-    plot_aggregate(views, data, stats, len(trace), skipped, out / "leader_path.png")
+    plot_aggregate(
+        views, data, stats, len(trace), skipped_views, out / "leader_path.png"
+    )
     leaders = leadertrace.leaders(trace)
     hosts = trace_hosts(paths)
     rows = dict(zip(path, data, strict=True))
@@ -92,8 +104,32 @@ def main(argv: list[str]) -> None:
         leader = f"{hosts[node]} (trace node {node})"
         plot_view(view, leader, rows[view], out / f"leader_path_{name}.png")
     plot_finality(list(finality.values()), stats["finality"], out / "finality.png")
-    (out / "stats.json").write_text(json.dumps(stats, indent=2) + "\n")
-    (out / "leader_path.md").write_text(leader_path_table(stats))
+    ordered = sorted(path)
+    window_view = ordered[len(ordered) // 2]
+    optional_figure(
+        "timeline.svg",
+        lambda: finalization_timeline.write_timeline(
+            trace, ordered, out / "timeline.svg"
+        ),
+    )
+    optional_figure(
+        "leader_window.png",
+        lambda: leader_window.write_leader_window(
+            trace,
+            leaders,
+            window_view,
+            *node_samples(paths, leaders[window_view][0]),
+            out / "leader_window.png",
+        ),
+    )
+
+
+def optional_figure(name: str, draw: Callable[[], None]) -> None:
+    """Runs `draw`; a failing figure is reported on stderr so the other outputs survive."""
+    try:
+        draw()
+    except Exception as exc:  # noqa: BLE001 the figure is optional
+        print(f"warning: {name} not written: {exc!r}", file=sys.stderr)
 
 
 def build_stats(
@@ -252,7 +288,7 @@ def plot_aggregate(
     data: np.ndarray,
     stats: dict,
     nodes: int,
-    skipped: Counter[str],
+    skipped_views: int,
     path: Path,
 ) -> None:
     fig, (top, bottom) = plt.subplots(
@@ -283,7 +319,7 @@ def plot_aggregate(
     bottom.legend(loc="center left", bbox_to_anchor=(1.005, 0.5))
     fig.suptitle(
         f"Leader critical path: {nodes} nodes, views {views.min()}-{views.max()}, "
-        f"{len(views)} used, {sum(skipped.values())} skipped (median / p95)",
+        f"{len(views)} used, {skipped_views} skipped (median / p95)",
         fontsize=16,
     )
     fig.tight_layout(rect=(0, 0, 1, 0.97))
@@ -297,6 +333,19 @@ def trace_hosts(paths: list[Path]) -> dict[int, str]:
     return {
         int(p.stem.removeprefix("leader_trace_node")): p.parents[1].name for p in paths
     }
+
+
+def node_samples(
+    paths: list[Path], node: int
+) -> tuple[leadertrace.Cpu, leadertrace.Net]:
+    """The CPU and network samples beside the trace of `node`; empty for a run without them."""
+    [trace_path] = [p for p in paths if p.name == f"leader_trace_node{node}.csv"]
+    cpu_path = trace_path.with_name(f"cpu_node{node}.csv")
+    net_path = trace_path.with_name(f"net_node{node}.csv")
+    return (
+        leadertrace.read_cpu(cpu_path) if cpu_path.exists() else [],
+        leadertrace.read_net(net_path) if net_path.exists() else [],
+    )
 
 
 def plot_view(view: int, leader: str, durations: np.ndarray, path: Path) -> None:
