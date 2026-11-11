@@ -188,6 +188,38 @@ def test_leader_path_counts_every_absent_event_of_a_view():
     )
 
 
+def arrive(events: dict[str, int], share_ms: int, proposal_ms: int) -> None:
+    events[leadertrace.SHARE_ARRIVED] = share_ms * MS
+    events[leadertrace.PROPOSAL_ARRIVED] = proposal_ms * MS
+
+
+def test_arrival_gaps_are_signed_by_arrival_order_and_leave_out_the_leader():
+    trace = three_nodes()
+    arrive(trace[0].setdefault(2, {}), 21, 30)  # share held 9 ms
+    arrive(trace[1].setdefault(2, {}), 32, 30)  # proposal waited 2 ms
+    arrive(trace[2][2], 22, 31)  # the leader of view 2
+    assert leadertrace.arrival_gaps(trace, warmup=0) == {
+        2: [pytest.approx(9), pytest.approx(-2)]
+    }
+
+
+def test_arrival_gaps_skip_nodes_lacking_an_event_and_the_warmup():
+    trace = three_nodes()
+    arrive(trace[0].setdefault(2, {}), 21, 30)
+    del trace[0][2][leadertrace.PROPOSAL_ARRIVED]
+    arrive(trace[1].setdefault(2, {}), 21, 30)
+    arrive(trace[1].setdefault(3, {}), 31, 40)
+    assert leadertrace.arrival_gaps(trace, warmup=0) == {
+        2: [pytest.approx(9)],
+        3: [pytest.approx(9)],
+    }
+    assert list(leadertrace.arrival_gaps(trace, warmup=3)) == [3]
+
+
+def test_arrival_gaps_of_a_trace_without_the_events_are_empty():
+    assert leadertrace.arrival_gaps(three_nodes(), warmup=0) == {}
+
+
 def test_view_times_gives_proposal_queued_in_unix_seconds():
     trace = {0: {7: {"proposal_queued": 1_500_000_000}}}
     assert leadertrace.view_times(trace) == {7: pytest.approx(1.5)}

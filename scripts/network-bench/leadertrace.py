@@ -42,6 +42,10 @@ LEADER_PATH = (
     ("Cert2 -> decided", "leaf_decided"),
 )
 DECIDED = "leaf_decided"
+# A replica's own VID share and the proposal entering consensus, in either order; the first to
+# arrive waits for the other to pair with it.
+SHARE_ARRIVED = "vid_share_v_minus_1_arrived"
+PROPOSAL_ARRIVED = "proposal_v_minus_1_arrived"
 DEFAULT_WARMUP = 10
 NS_PER_MS = 1_000_000
 
@@ -152,6 +156,28 @@ def leader_path(
         stamps = [lead[view - 1][1], *(events[event] for _, event in LEADER_PATH)]
         path[view] = [(b - a) / NS_PER_MS for a, b in itertools.pairwise(stamps)]
     return path, sum(v >= warmup for v in lead) - len(path), skipped
+
+
+def arrival_gaps(trace: Trace, warmup: int = DEFAULT_WARMUP) -> dict[int, list[float]]:
+    """View to the ms from each replica's own VID share arriving until the proposal arrived:
+    positive when the share came first and was held for the proposal, negative when the proposal
+    came first and waited for the share. Covers the views with a leader; the leader is left out,
+    since its share and proposal loop back to it. A node lacking either event has no gap, so
+    traces from before these events give an empty map."""
+    gaps: dict[int, list[float]] = {}
+    for view, (leader, _) in leaders(trace).items():
+        if view < warmup:
+            continue
+        row = [
+            (events[PROPOSAL_ARRIVED] - events[SHARE_ARRIVED]) / NS_PER_MS
+            for node, views in trace.items()
+            if node != leader
+            and SHARE_ARRIVED in (events := views.get(view, {}))
+            and PROPOSAL_ARRIVED in events
+        ]
+        if row:
+            gaps[view] = row
+    return gaps
 
 
 def cluster_finality_ms(

@@ -1,9 +1,10 @@
+import re
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
 import finalization_timeline as ft
 import pytest
-from leadertrace import Trace
+from leadertrace import PROPOSAL_ARRIVED, SHARE_ARRIVED, Trace
 
 MS = 1_000_000
 
@@ -55,6 +56,65 @@ def test_view_rows_are_relative_to_the_proposal_and_take_the_cluster_median():
     assert row["commitments_end"] is None
     assert row["cert2_formed"] is None
     assert row["leaf_decided"] == 50
+
+
+def arrive(trace: Trace, arrivals: dict[int, tuple[int, int]]) -> Trace:
+    """Node to the ms of its share and proposal arriving for view 1."""
+    for node, (share, proposal) in arrivals.items():
+        trace[node].setdefault(1, {}).update(
+            {SHARE_ARRIVED: share * MS, PROPOSAL_ARRIVED: proposal * MS}
+        )
+    return trace
+
+
+def test_view_rows_take_the_arrivals_over_the_replicas_only():
+    trace = arrive(
+        timeline_trace("encode"), {0: (976, 1001), 1: (950, 1020), 2: (960, 1030)}
+    )
+    (row,) = ft.view_rows(trace, [1])
+    assert (row["share_arrived"], row["proposal_arrived"]) == (-50, 20)
+
+
+@pytest.mark.parametrize(
+    ("share", "proposal", "held", "waited"),
+    [(-50.0, 20.0, 70, 0), (30.0, 20.0, 0, 10), (None, 20.0, 0, 0)],
+)
+def test_metrics_split_the_pairing_wait_by_arrival_order(
+    share: float | None, proposal: float, held: float, waited: float
+):
+    row = dict.fromkeys(ft.EVENTS) | {
+        "cycle": 100.0,
+        "share_arrived": share,
+        "proposal_arrived": proposal,
+    }
+    m = ft.timeline_metrics([row])
+    assert (m["share_held_ms"], m["proposal_waited_ms"]) == (held, waited)
+
+
+@pytest.mark.parametrize(
+    ("arrivals", "label"),
+    [
+        ({1: (950, 1020), 2: (960, 1030)}, "share held 70"),
+        ({1: (1030, 1020), 2: (1040, 1030)}, "proposal waited for share 10"),
+        ({}, None),
+    ],
+)
+def test_recon_lane_draws_the_pairing_wait(
+    tmp_path: Path, arrivals: dict[int, tuple[int, int]], label: str | None
+):
+    out = tmp_path / "timeline.svg"
+    ft.write_timeline(arrive(timeline_trace("encode"), arrivals), [1], out)
+    text = out.read_text(encoding="utf-8")
+    drawn = re.findall(r"(?:share held|proposal waited for share) \d+", text)
+    assert drawn == ([label] if label else [])
+
+
+def test_frame_starts_before_a_pairing_wait_that_precedes_the_request():
+    trace = arrive(timeline_trace("encode"), {1: (700, 1020), 2: (710, 1030)})
+    m = ft.timeline_metrics(ft.view_rows(trace, [1]))
+    f = ft.Frame.of(m)
+    assert f.t_min <= m["share_arrived"] - 30
+    assert f.x(m["share_arrived"]) > f.x_left
 
 
 def test_metrics_are_medians_that_skip_absent_values():
