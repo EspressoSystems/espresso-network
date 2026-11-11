@@ -5,7 +5,7 @@ use hotshot_example_types::{block_types::TestTransaction, node_types::TestTypes}
 use hotshot_types::{
     PeerConnectInfo,
     addr::NetAddr,
-    data::{EpochNumber, VidCommitment, VidCommitment2, ViewNumber},
+    data::{EpochNumber, VidCommitment2, ViewNumber},
     epoch_membership::EpochMembership,
     signature_key::{BLSPrivKey, BLSPubKey},
     simple_certificate::{TimeoutCertificate3, TimeoutEvidence},
@@ -1000,11 +1000,11 @@ async fn test_leader_disperses_the_built_dispersal() {
     let ConsensusInput::BlockBuilt {
         view,
         epoch,
-        payload_commitment: VidCommitment::V2(commit),
+        payload_commitment: commit,
         ..
     } = block_built
     else {
-        panic!("expected a block with a V2 payload commitment");
+        panic!("expected a built block");
     };
     assert!(
         harness

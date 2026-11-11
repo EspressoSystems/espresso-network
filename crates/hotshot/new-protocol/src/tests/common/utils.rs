@@ -8,7 +8,8 @@ use hotshot_contract_adapter::light_client::derive_signed_state_digest;
 use hotshot_example_types::{
     block_types::{TestBlockHeader, TestBlockPayload, TestMetadata},
     membership::{
-        TestableMembership, static_committee::StaticStakeTable, strict_membership::StrictMembership,
+        TestableMembership, fetcher::ExternalMessage, static_committee::StaticStakeTable,
+        strict_membership::StrictMembership,
     },
     node_stake::{TestNodeStakes, gen_node_lists},
     node_types::{TEST_VERSIONS, TestTypes},
@@ -19,8 +20,8 @@ use hotshot_types::{
     PeerConnectInfo,
     addr::NetAddr,
     data::{
-        EpochNumber, Leaf2, VidCommitment, VidCommitment2, VidDisperse, VidDisperse2,
-        VidDisperseShare2, ViewNumber, vid_commitment,
+        EpochNumber, Leaf2, VidCommitment, VidCommitment2, VidDisperse2, VidDisperseShare2,
+        ViewNumber, vid_commitment,
         vid_disperse::{AvidmGf2DisperseShareFragment, AvidmGf2NamespacePiece, vid_total_weight},
     },
     epoch_membership::EpochMembershipCoordinator,
@@ -781,7 +782,7 @@ pub fn mock_membership_with_client(
     EpochMembershipCoordinator<TestTypes>,
     TestStorage<TestTypes>,
     CoordinatorClient<TestTypes>,
-    async_broadcast::Sender<hotshot_types::event::Event<TestTypes>>,
+    async_broadcast::Sender<ExternalMessage>,
 ) {
     let client = CoordinatorClient::<TestTypes>::default();
     let leaf_fetcher_network = Arc::new(ClientLeafFetcherNetwork::new(client.handle().clone()));
@@ -826,7 +827,7 @@ pub fn mock_membership_with_client_and_schedule(
     EpochMembershipCoordinator<TestTypes>,
     TestStorage<TestTypes>,
     CoordinatorClient<TestTypes>,
-    async_broadcast::Sender<hotshot_types::event::Event<TestTypes>>,
+    async_broadcast::Sender<ExternalMessage>,
 ) {
     let client = CoordinatorClient::<TestTypes>::default();
     let leaf_fetcher_network = Arc::new(ClientLeafFetcherNetwork::new(client.handle().clone()));
@@ -852,7 +853,7 @@ pub fn mock_membership_with_leaf_fetcher_network(
 ) -> (
     EpochMembershipCoordinator<TestTypes>,
     TestStorage<TestTypes>,
-    async_broadcast::Sender<hotshot_types::event::Event<TestTypes>>,
+    async_broadcast::Sender<ExternalMessage>,
 ) {
     mock_membership_core(
         num_nodes,
@@ -876,7 +877,7 @@ fn mock_membership_core(
 ) -> (
     EpochMembershipCoordinator<TestTypes>,
     TestStorage<TestTypes>,
-    async_broadcast::Sender<hotshot_types::event::Event<TestTypes>>,
+    async_broadcast::Sender<ExternalMessage>,
 ) {
     let mut members = gen_node_lists(
         num_nodes as u64,
@@ -925,11 +926,10 @@ fn mock_membership_core(
             membership.add_da_committee(EpochNumber::new(*first_epoch), committee);
         }
     }
-    // Channel used by the Coordinator to forward ExternalMessageReceived
-    // events to the membership's Leaf2Fetcher (drives epoch catchup).
+    // Forward external messages to the membership's Leaf2Fetcher for epoch catchup.
     // Overflow is enabled so slow listeners don't stall the Coordinator.
     let (mut external_events_tx, mut external_events_rx) =
-        async_broadcast::broadcast::<hotshot_types::event::Event<TestTypes>>(1024);
+        async_broadcast::broadcast::<ExternalMessage>(1024);
     external_events_tx.set_overflow(true);
     external_events_rx.set_overflow(true);
     membership.set_leaf_fetcher(
@@ -1051,7 +1051,7 @@ pub fn build_state_vote_for_test(
 pub struct MockBlock {
     pub block: TestBlockPayload,
     pub metadata: TestMetadata,
-    pub payload_commitment: VidCommitment,
+    pub payload_commitment: VidCommitment2,
     pub builder_commitment: BuilderCommitment,
 }
 
@@ -1082,12 +1082,14 @@ impl MockBlock {
         let metadata = TestMetadata {
             num_transactions: 0,
         };
-        let payload_commitment = vid_commitment(
+        let VidCommitment::V2(payload_commitment) = vid_commitment(
             &block.encode(),
             &metadata.encode(),
             total_weight,
             crate::helpers::test_version(),
-        );
+        ) else {
+            panic!("the new protocol commits with AvidmGf2");
+        };
         let builder_commitment =
             <TestBlockPayload as BlockPayload<TestTypes>>::builder_commitment(&block, &metadata);
         Self {
@@ -1153,9 +1155,7 @@ pub(crate) fn extract_vid_shares(
 fn extract_vid_disperse(
     gen_view: &GeneratedView,
 ) -> (VidDisperse2<TestTypes>, Vec<VidDisperseShare2<TestTypes>>) {
-    let hotshot_types::data::VidDisperse::V2(vid_disperse) = gen_view.vid_disperse.clone() else {
-        panic!("Expected V2 VID disperse");
-    };
+    let vid_disperse = gen_view.vid_disperse.clone();
     let vid_shares = extract_vid_shares(&vid_disperse);
     (vid_disperse, vid_shares)
 }
@@ -1670,7 +1670,7 @@ impl ConsensusHarness {
                 let parent_leaf = req.parent_proposal.clone().into();
                 let header = TestBlockHeader::new(
                     &parent_leaf,
-                    mock_block.payload_commitment,
+                    VidCommitment::V2(mock_block.payload_commitment),
                     mock_block.builder_commitment,
                     mock_block.metadata,
                     TEST_VERSIONS.test.base,
@@ -1703,20 +1703,16 @@ impl ConsensusHarness {
                 metadata,
                 payload_commitment: _,
             } => {
-                let vid_disperse = VidDisperse::calculate_vid_disperse(
+                let (vid, _) = VidDisperse2::calculate_vid_disperse(
                     payload,
                     &self.membership_coordinator,
                     *view,
                     Some(*epoch),
                     Some(*epoch),
                     metadata,
-                    &test_upgrade_lock(),
                 )
                 .await
                 .unwrap();
-                let VidDisperse::V2(vid) = vid_disperse.disperse else {
-                    panic!("VidDisperse is not a V2");
-                };
                 let input = ConsensusInput::VidDisperseCreated(*view, vid.payload_commitment);
                 self.apply_recorded(input, outbox);
             },

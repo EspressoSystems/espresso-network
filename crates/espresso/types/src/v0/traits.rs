@@ -16,7 +16,7 @@ use hotshot_new_protocol::storage::NewProtocolStorage;
 use hotshot_types::simple_certificate::{Certificate1, Certificate2};
 #[cfg(feature = "node")]
 use hotshot_types::{
-    data::{DaProposal, DaProposal2, QuorumProposalWrapper, VidCommitment, VidDisperseShare},
+    data::{DaProposal2, QuorumProposalWrapper, VidCommitment, VidDisperseShare},
     drb::DrbInput,
     event::{HotShotAction, LeafInfo},
     initializer::{HotShotInitializer, InitializerEpochInfo},
@@ -957,11 +957,6 @@ pub trait SequencerPersistence:
         &self,
         proposal: &Proposal<SeqTypes, VidDisperseShare<SeqTypes>>,
     ) -> anyhow::Result<()>;
-    async fn append_da(
-        &self,
-        proposal: &Proposal<SeqTypes, DaProposal<SeqTypes>>,
-        vid_commit: VidCommitment,
-    ) -> anyhow::Result<()>;
     async fn record_action(&self, view: ViewNumber, action: HotShotAction) -> anyhow::Result<()>;
 
     async fn append_quorum_proposal2(
@@ -1014,13 +1009,6 @@ pub trait SequencerPersistence:
         Ok(None)
     }
 
-    /// Update the current eQC in storage.
-    async fn store_eqc(
-        &self,
-        _high_qc: QuorumCertificate2<SeqTypes>,
-        _next_epoch_high_qc: NextEpochQuorumCertificate2<SeqTypes>,
-    ) -> anyhow::Result<()>;
-
     /// Load the current eQC from storage.
     async fn load_eqc(
         &self,
@@ -1039,13 +1027,6 @@ pub trait SequencerPersistence:
             Some((leaf, _)) => Ok(leaf.view_number()),
             None => Ok(ViewNumber::genesis()),
         }
-    }
-
-    async fn append_next_epoch_high_qc2(
-        &self,
-        _next_epoch_high_qc: NextEpochQuorumCertificate2<SeqTypes>,
-    ) -> anyhow::Result<()> {
-        Ok(())
     }
 
     async fn append_da2(
@@ -1102,14 +1083,6 @@ impl<P: SequencerPersistence> Storage<SeqTypes> for Arc<P> {
         proposal: &Proposal<SeqTypes, VidDisperseShare<SeqTypes>>,
     ) -> anyhow::Result<()> {
         (**self).append_vid(proposal).await
-    }
-
-    async fn append_da(
-        &self,
-        proposal: &Proposal<SeqTypes, DaProposal<SeqTypes>>,
-        vid_commit: VidCommitment,
-    ) -> anyhow::Result<()> {
-        (**self).append_da(proposal, vid_commit).await
     }
 
     async fn append_da2(
