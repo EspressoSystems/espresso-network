@@ -31,7 +31,8 @@ use vbs::version::Version;
 use versions::EPOCH_VERSION;
 
 use crate::{
-    data::{EpochNumber, Leaf2, VidCommitment},
+    data::{BlockNumber, EpochNumber, Leaf2, VidCommitment},
+    epoch::{EpochLength, EpochPosition},
     epoch_membership::EpochMembershipCoordinator,
     message::UpgradeLock,
     simple_certificate::QuorumCertificate2,
@@ -335,15 +336,9 @@ pub fn bincode_opts() -> BincodeOpts {
 /// Returns an epoch number given a block number and an epoch height
 #[must_use]
 pub fn epoch_from_block_number(block_number: u64, epoch_height: u64) -> u64 {
-    if epoch_height == 0 {
-        0
-    } else if block_number == 0 {
-        1
-    } else if block_number.is_multiple_of(epoch_height) {
-        block_number / epoch_height
-    } else {
-        block_number / epoch_height + 1
-    }
+    EpochLength::new(epoch_height)
+        .map(|length| *length.epoch_of(BlockNumber::new(block_number)))
+        .unwrap_or(0)
 }
 
 /// Returns the block number of the epoch root in the given epoch
@@ -352,6 +347,12 @@ pub fn epoch_from_block_number(block_number: u64, epoch_height: u64) -> u64 {
 /// To find that root block number for epoch e, call `root_block_in_epoch(e-2,_)`.
 #[must_use]
 pub fn root_block_in_epoch(epoch: u64, epoch_height: u64) -> u64 {
+    if let Ok(length) = EpochLength::new(epoch_height)
+        && let Ok(height) = length.root_inside(EpochNumber::new(epoch))
+    {
+        return *height;
+    }
+    // Preserve legacy zero sentinels and profile-dependent underflow/overflow behavior.
     if epoch_height == 0 || epoch < 1 {
         0
     } else {
@@ -364,6 +365,12 @@ pub fn root_block_in_epoch(epoch: u64, epoch_height: u64) -> u64 {
 /// This is the height at which we begin the transition to LEAVE the specified epoch
 #[must_use]
 pub fn transition_block_for_epoch(epoch: u64, epoch_height: u64) -> u64 {
+    if let Ok(length) = EpochLength::new(epoch_height)
+        && let Ok(height) = length.transition_leaving(EpochNumber::new(epoch))
+    {
+        return *height;
+    }
+    // Preserve legacy zero sentinels and profile-dependent underflow/overflow behavior.
     if epoch_height == 0 || epoch < 1 {
         0
     } else {
@@ -379,20 +386,10 @@ pub fn option_epoch_from_block_number(
     block_number: u64,
     epoch_height: u64,
 ) -> Option<EpochNumber> {
-    if with_epoch {
-        if epoch_height == 0 {
-            None
-        } else if block_number == 0 {
-            Some(1u64)
-        } else if block_number.is_multiple_of(epoch_height) {
-            Some(block_number / epoch_height)
-        } else {
-            Some(block_number / epoch_height + 1)
-        }
-        .map(EpochNumber::new)
-    } else {
-        None
-    }
+    with_epoch
+        .then(|| EpochLength::new(epoch_height).ok())
+        .flatten()
+        .map(|length| length.epoch_of(BlockNumber::new(block_number)))
 }
 
 /// Returns Some(1) if epochs are enabled by `base`, otherwise returns None
@@ -422,6 +419,11 @@ pub enum EpochTransitionIndicator {
 /// Return true if the given block number is the final full block, the "transition block"
 #[must_use]
 pub fn is_transition_block(block_number: u64, epoch_height: u64) -> bool {
+    if let Some(position) = standard_epoch_position(block_number, epoch_height)
+        && block_number.checked_add(3).is_some()
+    {
+        return position.is_transition_block();
+    }
     if block_number == 0 || epoch_height == 0 {
         false
     } else {
@@ -431,6 +433,9 @@ pub fn is_transition_block(block_number: u64, epoch_height: u64) -> bool {
 /// returns true if it's the first transition block (epoch height - 2)
 #[must_use]
 pub fn is_first_transition_block(block_number: u64, epoch_height: u64) -> bool {
+    if let Some(position) = standard_epoch_position(block_number, epoch_height) {
+        return position.is_first_transition_block();
+    }
     if block_number == 0 || epoch_height == 0 {
         false
     } else {
@@ -440,6 +445,9 @@ pub fn is_first_transition_block(block_number: u64, epoch_height: u64) -> bool {
 /// Returns true if the block is part of the epoch transition (including the last non null block)
 #[must_use]
 pub fn is_epoch_transition(block_number: u64, epoch_height: u64) -> bool {
+    if let Some(position) = standard_epoch_position(block_number, epoch_height) {
+        return position.is_epoch_transition();
+    }
     if block_number == 0 || epoch_height == 0 {
         false
     } else {
@@ -450,6 +458,9 @@ pub fn is_epoch_transition(block_number: u64, epoch_height: u64) -> bool {
 /// Returns true if the block is the last block in the epoch
 #[must_use]
 pub fn is_last_block(block_number: u64, epoch_height: u64) -> bool {
+    if let Some(position) = standard_epoch_position(block_number, epoch_height) {
+        return position.is_last();
+    }
     if block_number == 0 || epoch_height == 0 {
         false
     } else {
@@ -464,6 +475,9 @@ pub fn is_last_block(block_number: u64, epoch_height: u64) -> bool {
 /// the special rules for transition blocks.
 #[must_use]
 pub fn is_middle_transition_block(block_number: u64, epoch_height: u64) -> bool {
+    if let Some(position) = standard_epoch_position(block_number, epoch_height) {
+        return position.is_middle_transition_block();
+    }
     if block_number == 0 || epoch_height == 0 {
         false
     } else {
@@ -472,10 +486,14 @@ pub fn is_middle_transition_block(block_number: u64, epoch_height: u64) -> bool 
     }
 }
 
-/// Returns true if the given block number is the third from the last in the epoch based on the
-/// given epoch height.
+/// Returns true if the given block number is five blocks before an epoch boundary.
 #[must_use]
 pub fn is_epoch_root(block_number: u64, epoch_height: u64) -> bool {
+    if let Some(position) = standard_epoch_position(block_number, epoch_height)
+        && block_number.checked_add(5).is_some()
+    {
+        return position.is_root();
+    }
     if block_number == 0 || epoch_height == 0 {
         false
     } else {
@@ -486,6 +504,9 @@ pub fn is_epoch_root(block_number: u64, epoch_height: u64) -> bool {
 /// Returns true if the given block number is equal or greater than the epoch root block
 #[must_use]
 pub fn is_ge_epoch_root(block_number: u64, epoch_height: u64) -> bool {
+    if let Some(position) = standard_epoch_position(block_number, epoch_height) {
+        return position.is_at_or_after_root();
+    }
     if block_number == 0 || epoch_height == 0 {
         false
     } else {
@@ -495,11 +516,23 @@ pub fn is_ge_epoch_root(block_number: u64, epoch_height: u64) -> bool {
 
 /// Returns true if the given block number is strictly greater than the epoch root block
 pub fn is_gt_epoch_root(block_number: u64, epoch_height: u64) -> bool {
+    if let Some(position) = standard_epoch_position(block_number, epoch_height) {
+        return position.is_after_root();
+    }
     if block_number == 0 || epoch_height == 0 {
         false
     } else {
         block_number.is_multiple_of(epoch_height) || block_number % epoch_height > epoch_height - 5
     }
+}
+
+// Small/static epoch modes and arithmetic overflow retain their historical helper behavior.
+// Refined geometry rejects nonexistent positions instead of aliasing an earlier epoch or genesis.
+fn standard_epoch_position(block_number: u64, epoch_height: u64) -> Option<EpochPosition> {
+    EpochLength::new(epoch_height)
+        .ok()
+        .filter(|length| length.get() > 5)
+        .map(|length| length.position(BlockNumber::new(block_number)))
 }
 
 #[cfg(test)]
@@ -559,7 +592,6 @@ mod test {
 
     #[test]
     fn test_root_block_in_epoch() {
-        // block 0 is always epoch 0
         let epoch = 3;
         let epoch_height = 10;
         let epoch_root_block_number = root_block_in_epoch(3, epoch_height);
@@ -572,5 +604,96 @@ mod test {
             epoch,
             epoch_from_block_number(epoch_root_block_number, epoch_height)
         );
+    }
+
+    #[test]
+    fn epoch_adapters_preserve_legacy_standard_geometry() {
+        for blocks in 6..=50 {
+            for h in 0..=blocks * 5 + 1 {
+                let positive = h > 0;
+                assert_eq!(is_last_block(h, blocks), positive && h % blocks == 0);
+                assert_eq!(is_epoch_root(h, blocks), positive && (h + 5) % blocks == 0);
+                assert_eq!(
+                    is_transition_block(h, blocks),
+                    positive && (h + 3) % blocks == 0
+                );
+                assert_eq!(
+                    is_first_transition_block(h, blocks),
+                    positive && h % blocks == blocks - 2
+                );
+                assert_eq!(
+                    is_epoch_transition(h, blocks),
+                    positive && (h % blocks >= blocks - 3 || h % blocks == 0)
+                );
+                let left = blocks - h % blocks;
+                assert_eq!(
+                    is_middle_transition_block(h, blocks),
+                    positive && (left == 1 || left == 2)
+                );
+                assert_eq!(
+                    is_ge_epoch_root(h, blocks),
+                    positive && (h % blocks == 0 || h % blocks >= blocks - 5)
+                );
+                assert_eq!(
+                    is_gt_epoch_root(h, blocks),
+                    positive && (h % blocks == 0 || h % blocks > blocks - 5)
+                );
+                assert_eq!(
+                    option_epoch_from_block_number(true, h, blocks),
+                    Some(EpochNumber::new(epoch_from_block_number(h, blocks)))
+                );
+                assert_eq!(option_epoch_from_block_number(false, h, blocks), None);
+            }
+            for epoch in 1..=5 {
+                assert_eq!(root_block_in_epoch(epoch, blocks), epoch * blocks - 5);
+                assert_eq!(
+                    transition_block_for_epoch(epoch, blocks),
+                    epoch * blocks - 3
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn epoch_adapters_keep_disabled_and_small_length_modes() {
+        for h in [0, 1, u64::MAX] {
+            assert_eq!(epoch_from_block_number(h, 0), 0);
+            assert_eq!(option_epoch_from_block_number(true, h, 0), None);
+            assert!(!is_last_block(h, 0));
+            assert!(!is_epoch_root(h, 0));
+            assert!(!is_transition_block(h, 0));
+            assert!(!is_first_transition_block(h, 0));
+            assert!(!is_epoch_transition(h, 0));
+            assert!(!is_middle_transition_block(h, 0));
+            assert!(!is_ge_epoch_root(h, 0));
+            assert!(!is_gt_epoch_root(h, 0));
+        }
+        assert_eq!(root_block_in_epoch(0, 10), 0);
+        assert_eq!(transition_block_for_epoch(0, 10), 0);
+        assert_eq!(root_block_in_epoch(2, 3), 1);
+        assert_eq!(root_block_in_epoch(1, 5), 0);
+        assert_eq!(transition_block_for_epoch(2, 2), 1);
+        assert_eq!(transition_block_for_epoch(1, 3), 0);
+        assert!(is_epoch_root(5, 5));
+        assert!(is_transition_block(3, 3));
+        assert!(is_middle_transition_block(2, 2));
+        assert!(is_ge_epoch_root(1, 5));
+        assert!(is_gt_epoch_root(1, 5));
+        assert_eq!(epoch_from_block_number(u64::MAX, 1), u64::MAX);
+        assert_eq!(epoch_from_block_number(u64::MAX, u64::MAX), 1);
+    }
+
+    #[test]
+    #[cfg(debug_assertions)]
+    fn epoch_adapters_keep_legacy_debug_arithmetic_panics() {
+        assert!(std::panic::catch_unwind(|| is_epoch_root(u64::MAX, 10)).is_err());
+        assert!(std::panic::catch_unwind(|| is_transition_block(u64::MAX, 10)).is_err());
+        assert!(std::panic::catch_unwind(|| root_block_in_epoch(u64::MAX, 10)).is_err());
+        assert!(std::panic::catch_unwind(|| transition_block_for_epoch(u64::MAX, 10)).is_err());
+        assert!(std::panic::catch_unwind(|| root_block_in_epoch(1, 1)).is_err());
+        assert!(std::panic::catch_unwind(|| is_first_transition_block(1, 1)).is_err());
+        assert!(std::panic::catch_unwind(|| is_epoch_transition(1, 2)).is_err());
+        assert!(std::panic::catch_unwind(|| is_ge_epoch_root(1, 2)).is_err());
+        assert!(std::panic::catch_unwind(|| is_gt_epoch_root(1, 2)).is_err());
     }
 }

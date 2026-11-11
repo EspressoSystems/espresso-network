@@ -31,6 +31,7 @@ pub mod constants;
 pub mod data;
 /// Holds the types and functions for DRB computation.
 pub mod drb;
+pub mod epoch;
 /// Epoch Membership wrappers
 pub mod epoch_membership;
 pub mod error;
