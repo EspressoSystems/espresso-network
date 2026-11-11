@@ -698,6 +698,35 @@ async fn test_vote1_blocked_without_parent_proposal() {
     );
 }
 
+/// Holding the parent proposal is not enough: the vote1 on its child waits for
+/// the parent's payload.
+#[tokio::test]
+async fn test_vote1_waits_for_parent_payload() {
+    let mut harness = ConsensusHarness::new(0).await;
+    let test_data = TestData::new(3).await;
+    let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
+    let child = *test_data.views[1].view_number;
+
+    harness
+        .apply_pair(test_data.views[0].proposal_input_consensus(&node_key))
+        .await;
+    harness
+        .apply_pair(test_data.views[1].proposal_input_consensus(&node_key))
+        .await;
+    assert!(
+        !any(harness.outputs(), |o| is_vote1_for_view(o, child)),
+        "vote1 must not fire before the parent's payload is held"
+    );
+
+    harness
+        .apply(test_data.views[0].block_reconstructed_input())
+        .await;
+    assert!(
+        any(harness.outputs(), |o| is_vote1_for_view(o, child)),
+        "vote1 should fire once the parent's payload is held"
+    );
+}
+
 /// Vote1 fires for view 1 (genesis parent) — parent checks are skipped.
 #[tokio::test]
 async fn test_vote1_genesis_parent() {

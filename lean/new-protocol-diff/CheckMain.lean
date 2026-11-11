@@ -12,18 +12,18 @@ import NewProtocolDiff.Coverage
 /-!
 Check recorded traces against the rules of the specification.
 
-    check [--delta-ms <δ>] [--coverage] <trace-or-directory>...
+    check [--coverage] <trace-or-directory>...
 
 Each argument is a trace or a directory of `*.jsonl` traces. A trace passes when
 its history obeys every rule of `NewProtocol.ProtocolHistory`, for the leaders the
-trace names, and its node discharges what it owes and answers its timers within
-`δ` milliseconds (`NewProtocolDiff.PromptUntil`, `NewProtocolDiff.TimersUntil`),
+trace names, and its node acts on what it owes, and answers its timers, in the
+step it owes them in (`NewProtocolDiff.StepPrompt`, `NewProtocolDiff.TimersAnswered`),
 for a node honest in every epoch, for which `NewProtocol.OwedIn` is
 `NewProtocol.Owed`, and a member of every committee. `NewProtocolDiff.checkProtocol_sound`,
-`NewProtocolDiff.checkPrompt_sound` and `NewProtocolDiff.checkTimers_sound` are
-what make a pass mean that. A delay an unmodelled input excuses is reported and
-does not fail the trace, so a pass with an excuse does not mean `PromptUntil` or
-`TimersUntil`. A trace in which a test set the node's
+`NewProtocolDiff.checkSteps_sound` and `NewProtocolDiff.checkTimers_sound` are
+what make a pass mean that. A step fault an input outside the model excuses
+(`waitExcuse`) is reported and does not fail the trace, so a pass with an excuse
+does not mean `StepPrompt`. A trace in which a test set the node's
 view directly is checked against the signing rules of `NewProtocol.SafeHistory`
 only (`NewProtocolDiff.checkSafe_sound`), since its steps do not show the view it
 is in. The exit status is 1 if any trace breaks a rule or cannot be read, or if no
@@ -65,28 +65,92 @@ def describeObligation : Obligation → String
   | .decide c => s!"decide of view {c.view.toNat}"
   | .propose e v => s!"proposal of epoch {e.toNat} for view {v.toNat}"
 
-/--
-Each obligation or timer the node did not discharge within `δ`, once, with the
-step it was first owed after and what excuses it, if anything does.
+/-- What a trace says beyond its steps, each with where. -/
+structure Annotations where
+  joined : List Nat
+  held : List HeldAt
+  dropped : List DroppedAt
+  drbRequests : List (DrbRequest × Nat × Nat)
+  stateCerts : List Nat
 
-A node waiting on something the model does not cover, a DRB result for one, can
-owe for that reason alone. An unmodelled input dropped before the last step within
-the deadline excuses the delay.
+/-- What `events` say beyond their steps. -/
+def annotate (events : List Event) : Annotations :=
+  ⟨joinedSteps events, heldBack events, droppedInputs events, drbRequests events,
+    stateCertSteps events⟩
+
+/--
+What excuses an obligation `o`, given how the node stopped owing it (`ending`), if
+it did, if anything.
+
+A vote1 or a proposal can wait for an input the model does not have: the DRB that
+names a leader, or the outcome of state validation. The DRB result excuses an
+action the node took when it arrived (`drbArrivedInto`), or one the node gave up
+or never took while it had asked for the result and not got it (`drbAwaited`): by
+the step it gave the action up in, or by the end of the run. A
+failed state validation of its block excuses a vote1 the node did not cast
+(`stateValidationFailedFor`). A leader proposing on an epoch root waits for its
+state certificate, which arrives with a proposal taken together with the step
+the leader acted in. A vote2 can wait for the node's own share of its block,
+which excuses a vote2 the node cast once the share arrived (`shareArrived`), and
+which an equivocating leader can withhold for good (`lacksShare`).
 -/
-def lateness {α : Type} [BEq α] (describe : α → String) (text : String) (ms : List Moment) (δ : Nat)
-    (faults : List (Nat × α)) : List (String × Option String) :=
-  let first := faults.foldl (fun acc (k, o) => if acc.any (·.2 == o) then acc else acc ++ [(k, o)]) []
-  first.map fun (k, o) =>
-    let t := timeAt ms k
-    let n := (ms[k]?.map (·.step)).getD 0
-    let last := (((ms.drop k).takeWhile (·.time ≤ t + δ)).getLast?.map (·.step)).getD n
-    (s!"{describe o} owed in step {n} (t={t} ms)", unmodelledDropped text last)
+def waitExcuse (cfg : Config) (ann : Annotations) (h : History) (ending : Option Ending) :
+    Obligation → Option String
+  | o@(.vote1 _) | o@(.vote1Again _) => unmodelled o
+  | o@(.propose ..) => (unmodelled o).orElse fun _ =>
+      match ending with
+      | some (.acted m) =>
+        if ann.stateCerts.any fun k => groupStart ann.joined m m ≤ k && k ≤ m
+        then some "light-client certification" else none
+      | _ => none
+  | o@(.vote2 _) =>
+    let arrived := match ending with
+      | some (.acted m) => shareArrived h ann.joined m o
+      | _ => false
+    if arrived then some "storing its own share, for restarts"
+    else if lacksShare cfg h last o then some "its own share of the block, which it lacks"
+    else none
+  | .decide _ => none
+where
+  /-- The step after which the node no longer owed the obligation, or the last step. -/
+  last : Nat :=
+    match ending with
+    | some (.acted d) | some (.lapsed d) => d
+    | none => h.length - 1
+  /-- The input outside the model the node waited for, if any. -/
+  unmodelled (o : Obligation) : Option String :=
+    match ending with
+    | some (.acted m) =>
+      if drbArrivedInto cfg ann.drbRequests ann.dropped o m then some "leader election (the DRB result)" else none
+    | _ =>
+      if stateValidationFailedFor ann.dropped o last then some "state validation, which failed"
+      else if drbAwaited cfg ann.drbRequests ann.dropped o last (if ending.isSome then last else last + 1)
+      then some "leader election (the DRB result it asked for)"
+      else none
+
+/--
+Each obligation the node did not act on in a step it owed it after, once, in
+words, with what excuses it, if anything does: when it arose, and when the node
+acted on it or stopped owing it, if it did.
+-/
+def stepLateness (cfg : Config) (node : PubKey) (ann : Annotations) (h : History)
+    (owed : Array (List Obligation)) : List (String × Option String) :=
+  let faults := (stepFaultsIn owed h.length ann.joined ann.held).map fun (m, o) => (aroseIn owed o m, m, o)
+  let first := faults.foldl (init := []) fun acc (n, m, o) =>
+    if acc.any fun (n', _, o') => n' == n && o' == o then acc else acc ++ [(n, m, o)]
+  first.map fun (n, m, o) =>
+    let ending := endingOf node owed h ann.held o m
+    let when := match ending with
+      | some (.acted d) => s!"acted on in step {d}"
+      | some (.lapsed d) => s!"no longer owed after step {d}, not acted on"
+      | none => "never acted on"
+    (s!"{describeObligation o} owed after step {n}, {when}", waitExcuse cfg ann h ending o)
 
 /--
 What the node owes after its last step, in words.
 
-The recording may stop within `δ` of the step that made it owed, and then it is
-not late. Reported for a passing trace, as where to look for a node that stops.
+In a passing trace these are held back for storage, or excused. Reported as
+where to look for a node that stops.
 -/
 def owedAtEnd (cfg : Config) (leader : EpochNumber → ViewNumber → Option PubKey) (node : PubKey)
     (h : History) : List String :=
@@ -94,7 +158,7 @@ def owedAtEnd (cfg : Config) (leader : EpochNumber → ViewNumber → Option Pub
     describeObligation |>.eraseDups
 
 /-- Check one trace. -/
-def checkOne (δ : Nat) (coverage : Option (IO.Ref Coverage)) (path : System.FilePath) :
+def checkOne (coverage : Option (IO.Ref Coverage)) (path : System.FilePath) :
     IO Finding := do
   let text ← IO.FS.readFile path
   match readPreamble text with
@@ -114,8 +178,8 @@ def checkOne (δ : Nat) (coverage : Option (IO.Ref Coverage)) (path : System.Fil
       | none => return .unreadable e
     | .ok events =>
     -- Actions the trace has no step for would otherwise go unchecked.
-    if let some line := heldNote text then
-      return .broken [s!"actions before any step ({(line.drop 2).toString})"]
+    if unjoined events then
+      return .broken ["actions before any step"]
     else
       let h := historyOf events
       let broken := (checkRules (said.configFor h) ⟨said.node⟩ h).filterMap fun (name, ok) =>
@@ -127,50 +191,43 @@ def checkOne (δ : Nat) (coverage : Option (IO.Ref Coverage)) (path : System.Fil
       match protocolFault (said.configFor h) h ⟨said.node⟩ leader with
       | some (n, why) => return .protocol n why
       | none =>
-      match readTiming text with
-      | .error e => return .unreadable s!"step times: {e}"
-      | .ok time =>
-        if time.steps.size ≠ h.length then
-          return .unreadable s!"{time.steps.size} step times for {h.length} steps"
-        if let some n := (List.range h.length).find? fun n =>
-            ((time.releases.getD n []).map (·.2)).sum > (h[n]?.map (·.output.length)).getD 0 then
-          return .unreadable s!"step {n} released more outputs than it has"
-        let ms := moments h time.steps time.releases
-        if let some cov := coverage then
-          -- Counted outside the reference, which the other traces' tasks wait on.
-          let mine := ({} : Coverage).add (said.configFor h) leader ⟨said.node⟩ h ms
-          cov.modify (·.merge mine)
-        let faults := promptFaults (said.configFor h) leader ⟨said.node⟩ ms time.ended δ
-        let timers := timerFaults (said.configFor h) ⟨said.node⟩ ms time.ended δ
-        let late := lateness describeObligation text ms δ faults
-          ++ lateness (fun v => s!"timeout vote for view {v.toNat}") text ms δ timers
-        let unexcused := late.filterMap fun (what, excuse) => if excuse.isNone then some what else none
-        if !unexcused.isEmpty then return .late unexcused
-        return .pass (late.filterMap fun (what, excuse) => excuse.map (s!"{what}, excused by {·}"))
-          (owedAtEnd (said.configFor h) leader ⟨said.node⟩ h)
+      let cfg := said.configFor h
+      let node : PubKey := ⟨said.node⟩
+      if let some cov := coverage then
+        -- Counted outside the reference, which the other traces' tasks wait on.
+        let mine := ({} : Coverage).add cfg leader node h (joinedSteps events) (heldBack events)
+        cov.modify (·.merge mine)
+      let ann := annotate events
+      let owed := owedAfter cfg leader node h
+      let late := stepLateness cfg node ann h owed
+        ++ (timerFaults cfg node h ann.held).map (fun (n, v) =>
+          (s!"timeout vote for view {v.toNat} owed for the timer in step {n}", none))
+        ++ (unreleasedIn owed h.length ann.held ann.dropped).map (fun (k, o) =>
+          (s!"{describeObligation o} held back in step {k} and never released, though storage \
+            confirmed what it waited for", none))
+        ++ (droppedActionFaults cfg node ann.held ann.dropped ann.drbRequests).map fun (k, kind, v, d) =>
+          (s!"{repr kind} for view {v.toNat} only on {repr d}, after step {k}", none)
+      let unexcused := late.filterMap fun (what, excuse) => if excuse.isNone then some what else none
+      if !unexcused.isEmpty then return .late unexcused
+      return .pass (late.filterMap fun (what, excuse) => excuse.map (s!"{what}, excused by {·}"))
+        (owedAtEnd cfg leader node h)
 
-/-- How long a node may take to discharge what it owes, in milliseconds, unless told otherwise. -/
-def defaultDelta : Nat := 100
-
-def usage : String := "usage: check [--delta-ms <δ>] [--coverage] <trace-or-directory>..."
+def usage : String := "usage: check [--coverage] <trace-or-directory>..."
 
 /-- What the command line asked for. -/
 structure CheckOptions where
-  delta : Nat := defaultDelta
   coverage : Bool := false
   paths : List String := []
 
 /-- Read the command line, or say why it cannot be read. -/
 def parseOptions : List String → CheckOptions → Option CheckOptions
   | [], o => some o
-  | "--delta-ms" :: d :: rest, o => d.toNat?.bind fun δ => parseOptions rest { o with delta := δ }
   | "--coverage" :: rest, o => parseOptions rest { o with coverage := true }
   | arg :: rest, o =>
     if arg.startsWith "--" then none else parseOptions rest { o with paths := o.paths ++ [arg] }
 
 public def main (args : List String) : IO UInt32 := do
   let some opts := parseOptions args {} | do IO.eprintln usage; return 2
-  let δ := opts.delta
   let paths := opts.paths
   if paths.isEmpty then
     IO.eprintln usage
@@ -185,7 +242,7 @@ public def main (args : List String) : IO UInt32 := do
   let mut signingOnly := 0
   let mut excused := 0
   -- Each trace in a task of its own, so the checks use every core.
-  let tasks ← traces.mapM fun path => IO.asTask (checkOne δ coverage path)
+  let tasks ← traces.mapM fun path => IO.asTask (checkOne coverage path)
   for (path, task) in traces.zip tasks do
     -- A trace that cannot be read, gone since it was listed for one, is reported
     -- with the others rather than ending the run.
@@ -205,7 +262,7 @@ public def main (args : List String) : IO UInt32 := do
         IO.println s!"still owes at the end {String.intercalate ", " owed}: {path}"
     | .late owed =>
       failed := true
-      IO.println s!"late by more than {δ} ms: {String.intercalate "; " owed}: {path}"
+      IO.println s!"did not act in the step it owed in: {String.intercalate "; " owed}: {path}"
     | .outOfScope why =>
       skipped := skipped + 1
       IO.println s!"out of scope: {path}: {why}"
@@ -219,8 +276,8 @@ public def main (args : List String) : IO UInt32 := do
       failed := true
       IO.println s!"breaks {why} (step {n}): {path}"
   IO.println s!"checked {traces.size} traces: {passed} obey every rule and discharge \
-    what they owe within {δ} ms, {signingOnly} every signing rule, {skipped} out of scope; \
-    {excused} of those passing were late where an unmodelled input excuses it"
+    what they owe in the step they owe it in, {signingOnly} every signing rule, {skipped} out of scope; \
+    {excused} of those passing were late where an input outside the model excuses it"
   if passed + signingOnly == 0 then
     IO.println "no trace was checked against any rule"
     failed := true

@@ -1232,11 +1232,11 @@ impl ConsensusHarness {
         record_leader(&mut self.trace, &self.consensus, &input);
         record_fallback_anchor(&mut self.trace, &self.consensus);
         let before = outbox.len();
-        let refused = trace::Recorder::refused_by(&self.consensus, &input);
+        let earlier = self.trace.before(&self.consensus, &input);
         self.consensus.apply(input.clone(), outbox);
         record_output_leaders(&mut self.trace, &self.consensus, outbox.iter().skip(before));
         self.trace
-            .record(&self.consensus, refused, &input, outbox.iter().skip(before));
+            .record(&self.consensus, earlier, &input, outbox.iter().skip(before));
     }
 }
 

@@ -1,5 +1,8 @@
 mod proposals;
 
+#[cfg(any(test, feature = "trace"))]
+pub(crate) mod recorded;
+
 use std::{
     cmp::max,
     collections::{BTreeMap, BTreeSet, btree_map::Entry},

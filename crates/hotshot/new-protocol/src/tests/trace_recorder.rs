@@ -10,6 +10,7 @@ use hotshot_types::{
     simple_certificate::TimeoutEvidence,
     traits::signature_key::SignatureKey,
 };
+use serde_json::{Value, json};
 use versions::{NEW_PROTOCOL_VERSION, TIMEOUT_EPOCH_VERSION, Version};
 
 use super::common::utils::{
@@ -288,38 +289,112 @@ async fn trace_of_two_timers() -> String {
     harness.recorded()
 }
 
-/// The steps at which `trace` notes an action of `kind` for view 1 as held
-/// back for storage.
-fn held_back_at(trace: &str, kind: &str) -> Vec<usize> {
-    let note = format!("# held back {kind} for view 1 (at step ");
+/// The lines of `trace` that are steps or dropped inputs, as JSON.
+fn events(trace: &str) -> Vec<Value> {
     trace
         .lines()
-        .filter_map(|l| l.strip_prefix(&note)?.strip_suffix(')')?.parse().ok())
+        .filter(|l| !l.starts_with('#'))
+        .map(|l| serde_json::from_str(l).expect("a line of a trace is JSON"))
+        .collect()
+}
+
+/// What a line of a trace says beyond its input and outputs.
+fn notes(event: &Value) -> &Value {
+    event
+        .get("consensus")
+        .or_else(|| event.get("dropped"))
+        .map(|body| &body["notes"])
+        .expect("a line is a step or a dropped input")
+}
+
+/// The actions of `kind` for view 1 that `event` says were held back, each
+/// as the writes it waits for.
+fn held_back(event: &Value, kind: &str) -> Vec<Value> {
+    notes(event)["held"]
+        .as_array()
+        .expect("the actions held back are a list")
+        .iter()
+        .filter(|held| held["kind"] == kind && held["view"] == 1 && held["epoch"] == 1)
+        .map(|held| held["waits"].clone())
         .collect()
 }
 
 /// A certificate written as received just before the message that carried it
-/// is marked as taken with it, and a vote held back for storage is noted in
-/// the step that held it back.
+/// is marked as taken with it. A vote held back for storage is written in the
+/// step that held it back, with the writes it waits for.
 #[tokio::test]
-async fn joined_steps_and_held_back_votes_are_noted() {
+async fn joined_steps_and_held_back_votes_are_written() {
     let trace = trace_of_a_proposal(TIMEOUT_EPOCH_VERSION).await;
-    let lines: Vec<&str> = trace.lines().collect();
-    let joined = lines
+    let events = events(&trace);
+    let joined = events
         .iter()
-        .position(|l| l.starts_with("# taken with the next step (at step "))
+        .position(|e| notes(e)["joined"] == true)
         .expect("the parent's certificate is taken with the proposal");
-    assert_eq!(trace_steps(lines[joined + 1], "certificate1"), 1);
-    assert_eq!(trace_steps(lines[joined + 2], "proposal"), 1);
-    assert_eq!(held_back_at(&trace, "vote1").len(), 1);
+    assert!(events[joined]["consensus"]["input"]["certificate1"].is_object());
+    assert!(events[joined + 1]["consensus"]["input"]["proposal"].is_object());
+    assert_eq!(notes(&events[joined + 1])["joined"], false);
+
+    let held: Vec<Value> = events.iter().flat_map(|e| held_back(e, "vote1")).collect();
+    assert_eq!(
+        held,
+        [json!([{ "action": { "v": 1, "kind": "vote" } }])],
+        "the vote1 waits for its action to be stored: the proposal already is"
+    );
+}
+
+/// Storage confirming a write is a line of its own, with what it confirmed
+/// and what the node released on it.
+#[tokio::test]
+async fn storage_confirmation_is_a_line_with_what_it_released() {
+    let trace = trace_of_a_proposal(TIMEOUT_EPOCH_VERSION).await;
+    let events = events(&trace);
+    let confirmed = |write: &str| {
+        events
+            .iter()
+            .filter(|e| e["dropped"]["kind"]["stored"]["w"][write]["v"] == 1)
+            .collect::<Vec<_>>()
+    };
+    let votes = |event: &Value| {
+        event["dropped"]["output"]
+            .as_array()
+            .expect("the outputs are a list")
+            .iter()
+            .filter(|o| o["send"]["m"]["vote1"].is_object())
+            .count()
+    };
+    let action = confirmed("action");
+    let proposal = confirmed("proposal");
+    assert_eq!((action.len(), proposal.len()), (1, 1));
+    assert_eq!(
+        action[0]["dropped"]["kind"]["stored"]["w"]["action"]["kind"],
+        "vote"
+    );
+    assert!(proposal[0]["dropped"]["kind"]["stored"]["w"]["proposal"]["c"].is_string());
+    assert_eq!(
+        votes(action[0]) + votes(proposal[0]),
+        1,
+        "the vote1 is released on the confirmation of the last write it waits for"
+    );
 }
 
 /// A timer for a view whose timeout vote is held back already is answered by
-/// that vote, so the vote is noted as held back at each timer's step.
+/// that vote, so the vote is written as held back at each timer's step.
 #[tokio::test]
-async fn timeout_vote_held_back_is_noted_at_every_timer() {
+async fn timeout_vote_held_back_is_written_at_every_timer() {
     let trace = trace_of_two_timers().await;
-    let noted = held_back_at(&trace, "timeout");
-    assert_eq!(noted.len(), 2);
-    assert_eq!(noted[1], noted[0] + 1, "at the step of each timer");
+    let events = events(&trace);
+    let timers: Vec<&Value> = events
+        .iter()
+        .filter(|e| {
+            let input = &e["consensus"]["input"];
+            input["timeout"].is_object() || input["timeoutOneHonest"].is_object()
+        })
+        .collect();
+    assert_eq!(timers.len(), 2);
+    for timer in timers {
+        assert_eq!(
+            held_back(timer, "timeout"),
+            [json!([{ "action": { "v": 1, "kind": "timeout" } }])]
+        );
+    }
 }
