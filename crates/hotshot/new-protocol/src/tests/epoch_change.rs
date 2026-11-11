@@ -3,14 +3,13 @@ use hotshot_types::{
     data::{EpochNumber, ViewNumber},
     message::Proposal as SignedProposal,
     signature_key::BLSPubKey,
-    traits::{block_contents::BlockHeader, signature_key::SignatureKey},
-    utils::is_epoch_transition,
+    traits::signature_key::SignatureKey,
     vote::HasViewNumber,
 };
 
 use super::common::{
     assertions::{is_send_epoch_change, is_view_changed},
-    utils::{ConsensusHarness, TEST_DRB_RESULT, TestData},
+    utils::{ConsensusHarness, TestData},
 };
 use crate::{
     consensus::{ConsensusInput, ConsensusOutput},
@@ -19,35 +18,19 @@ use crate::{
     proposal::MalformedProposal,
     tests::common::assertions::{
         any, count_matching, has_request_drb_for_epoch, is_leaf_decided, is_proposal,
-        is_request_block_and_header, is_vote1,
+        is_request_block_and_header, is_vote1, is_vote1_for_view,
     },
 };
 
 const EPOCH_HEIGHT: u64 = 10;
 
 /// Run views through the harness fully (proposal, block_reconstructed, cert1, cert2).
-/// Pre-feeds DRB results before epoch transition views so handle_proposal accepts them.
 async fn run_views_full(
     harness: &mut ConsensusHarness,
     test_data: &TestData,
     node_key: &BLSPubKey,
     range: std::ops::Range<usize>,
 ) {
-    // Collect which epochs need DRB results and pre-feed them all up front.
-    let mut drb_epochs = std::collections::BTreeSet::new();
-    for i in range.clone() {
-        let block_number =
-            BlockHeader::<TestTypes>::block_number(&test_data.views[i].proposal.data.block_header);
-        if is_epoch_transition(block_number, EPOCH_HEIGHT) {
-            drb_epochs.insert(test_data.views[i].epoch_number + 1);
-        }
-    }
-    for epoch in drb_epochs {
-        harness
-            .apply(ConsensusInput::DrbResult(epoch, TEST_DRB_RESULT))
-            .await;
-    }
-
     for i in range {
         harness
             .apply_pair(test_data.views[i].proposal_input_consensus(node_key))
@@ -783,9 +766,10 @@ async fn test_epoch_change_votes() {
     );
 }
 
-/// In the first two epochs, the leader should be able to propose during the
-/// epoch transition window without a DRB result.  The DRB is only needed
-/// starting from epoch 3 onward.  This test covers epoch 1.
+/// In the first epoch, the leader should be able to propose during the
+/// epoch transition window without a DRB result: the membership seeds the
+/// results of the first two epochs, so a transition proposal carries one
+/// only from epoch 2 onward, for epoch 3.
 #[tokio::test]
 async fn test_first_epoch_leader_proposes_without_drb() {
     let test_data = TestData::new_with_epoch_height(11, EPOCH_HEIGHT).await;
@@ -815,13 +799,14 @@ async fn test_first_epoch_leader_proposes_without_drb() {
     );
 }
 
-/// A leader in epoch 2's transition window needs the DRB result of epoch 3,
-/// which its proposal carries. This test runs through epoch 1, crosses the
-/// epoch boundary, advances into epoch 2's transition window with no DRB
-/// result fed in advance, and verifies the leader requests the result and
-/// proposes once it has it.
+/// A node in epoch 2's transition window needs the DRB result of epoch 3,
+/// which the transition proposals carry. This test runs through epoch 1,
+/// crosses the epoch boundary and advances into epoch 2's transition window.
+/// The result is the one computed when epoch 1's root was decided, and the
+/// test verifies the node votes for a transition proposal carrying it and,
+/// as the next leader, proposes with it.
 #[tokio::test]
-async fn test_second_epoch_leader_proposes_with_requested_drb() {
+async fn test_second_epoch_node_votes_and_proposes_with_computed_drb() {
     // We need at least 18 views: 10 for epoch 1, 1 epoch boundary, 7 into epoch 2.
     let test_data = TestData::new_with_epoch_height(19, EPOCH_HEIGHT).await;
 
@@ -897,9 +882,8 @@ async fn test_second_epoch_leader_proposes_with_requested_drb() {
     }
 
     // ---- Epoch 2 transition window (block 17+) ----
-    // No DRB result for epoch 3 is fed in advance: the node requests it
-    // when view 17's proposal arrives, and the harness answers with the
-    // result epoch 1's root computed.
+    // The node holds epoch 3's DRB result since it decided block 5, epoch 1's
+    // root, so it never has to request it.
     // Process view 17 (block 17, first block in transition window).
     // After cert1 for view 17, the leader for view 18 should propose.
     harness
@@ -911,25 +895,34 @@ async fn test_second_epoch_leader_proposes_with_requested_drb() {
     harness.apply(test_data.views[16].cert1_input()).await;
     harness.apply(test_data.views[16].cert2_input()).await;
 
+    let drb = test_data.views[16].proposal.data.next_drb_result;
+    assert!(drb.is_some(), "view 17's proposal carries epoch 3's DRB");
     assert!(
-        any(
-            harness.outputs(),
-            |o| matches!(o, ConsensusOutput::RequestDrbResult(e) if *e == EpochNumber::new(3))
-        ),
-        "the node requests epoch 3's DRB result in epoch 2's transition window"
+        !has_request_drb_for_epoch(harness.outputs(), EpochNumber::new(3)),
+        "the node holds epoch 3's DRB result from the decided epoch root"
     );
     assert!(
-        any(harness.outputs(), is_proposal),
-        "Leader should propose during epoch 2 transition window once it has the DRB result"
+        any(harness.outputs(), |o| is_vote1_for_view(o, 17)),
+        "the node votes for a transition proposal carrying the computed DRB result"
+    );
+    assert!(
+        any(harness.outputs(), |o| matches!(
+            o,
+            ConsensusOutput::SendProposal(p)
+                if p.data.view_number == ViewNumber::new(18) && p.data.next_drb_result == drb
+        )),
+        "the leader of view 18 proposes with the computed DRB result"
     );
 }
 
-/// Starting from epoch 3, when a node receives a transition-window proposal
-/// without a DRB result available, consensus should emit RequestDrbResult
-/// for the next epoch.  Epochs 1 and 2 skip this check; epoch 3 is the
-/// first epoch that requires a real DRB.
+/// When a node receives a transition-window proposal of epoch 2 or later
+/// without holding the next epoch's DRB result, consensus should emit
+/// RequestDrbResult for the next epoch, and vote once it is given the result.
+/// Here the node is in epoch 2, block 17's proposal is relabelled into epoch 3,
+/// and the node has not decided epoch 2's root, which epoch 4's result is
+/// computed from.
 #[tokio::test]
-async fn test_epoch3_transition_requests_drb_for_future_epoch() {
+async fn test_epoch3_transition_requests_drb_and_votes_once_given_it() {
     let test_data = TestData::new_with_epoch_height(18, EPOCH_HEIGHT).await;
 
     let mut harness = ConsensusHarness::new(0).await;
@@ -984,6 +977,8 @@ async fn test_epoch3_transition_requests_drb_for_future_epoch() {
     harness.apply(first_e2_view.cert2_input()).await;
 
     // ---- Epoch 2 views 12-16 (before transition window) ----
+    // No Cert2 from view 15 on, so block 15, epoch 2's root, stays undecided
+    // and the harness has no DRB result for epoch 4.
     for i in 11..16 {
         harness
             .apply_pair(test_data.views[i].proposal_input_consensus(&node_key))
@@ -992,13 +987,14 @@ async fn test_epoch3_transition_requests_drb_for_future_epoch() {
             .apply(test_data.views[i].block_reconstructed_input())
             .await;
         harness.apply(test_data.views[i].cert1_input()).await;
-        harness.apply(test_data.views[i].cert2_input()).await;
+        if i < 14 {
+            harness.apply(test_data.views[i].cert2_input()).await;
+        }
     }
 
-    // Epoch 3's stake table and DRB result should already be registered
-    // in the membership: when block 5 was decided (epoch root), the
-    // harness called add_epoch_root and compute_drb_result for the target
-    // epoch (epoch 1 + 2 = 3).
+    // Epoch 3's stake table and DRB result are registered in the membership
+    // since block 5 was decided (epoch 1's root). Epoch 4's are not: block 15,
+    // epoch 2's root, is undecided.
 
     let v17 = &test_data.views[16];
     let mut v17_proposal: Proposal<TestTypes> = v17.proposal.data.clone();
@@ -1031,5 +1027,18 @@ async fn test_epoch3_transition_requests_drb_for_future_epoch() {
         has_request_drb_for_epoch(harness.outputs(), EpochNumber::new(4)),
         "Consensus should request DRB for epoch 4 (current epoch 3 + 1) when processing a \
          transition-window proposal without a DRB result"
+    );
+    assert!(
+        !any(harness.outputs(), |o| is_vote1_for_view(o, 17)),
+        "the vote waits for the DRB result"
+    );
+
+    let drb = v17.proposal.data.next_drb_result.expect("a DRB result");
+    harness
+        .apply(ConsensusInput::DrbResult(EpochNumber::new(4), drb))
+        .await;
+    assert!(
+        any(harness.outputs(), |o| is_vote1_for_view(o, 17)),
+        "the node votes once it has the DRB result the proposal carries"
     );
 }
