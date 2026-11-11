@@ -689,19 +689,15 @@ where
                         let manifest = block.manifest.clone();
                         // Retain the payload and persist it when consensus proposes this
                         // exact block (cf. SendProposal):
-                        if let VidCommitment::V2(commit) = block.payload_commitment {
-                            self.da_payloads.insert(
-                                (block.view, commit),
-                                PendingDa {
-                                    epoch: block.epoch,
-                                    payload: block.payload.payload.clone(),
-                                    metadata: block.payload.metadata.clone(),
-                                    hashes: manifest.hashes.clone(),
-                                },
-                            );
-                        } else {
-                            warn!(view = %block.view, "block payload commitment is not V2");
-                        }
+                        self.da_payloads.insert(
+                            (block.view, block.payload_commitment),
+                            PendingDa {
+                                epoch: block.epoch,
+                                payload: block.payload.payload.clone(),
+                                metadata: block.payload.metadata.clone(),
+                                hashes: manifest.hashes.clone(),
+                            },
+                        );
                         // We built this block; skip reconstructing it from our own loopback share.
                         self.vid_reconstructor.retire_view(block.view);
                         // A leader of several views builds a copy sent for a later one into this
@@ -722,11 +718,11 @@ where
                         }
                         // Held only now, as an error above drops the block: consensus asks to
                         // disperse every block it is given, and that request takes it back.
-                        if let VidCommitment::V2(commit) = block.payload_commitment
-                            && let Some(dispersal) = block.dispersal.take()
-                        {
-                            self.built_dispersals
-                                .insert((block.view, epoch, commit), dispersal);
+                        if let Some(dispersal) = block.dispersal.take() {
+                            self.built_dispersals.insert(
+                                (block.view, epoch, block.payload_commitment),
+                                dispersal,
+                            );
                         }
                         return Ok(block.into())
                     }

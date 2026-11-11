@@ -9,10 +9,8 @@ use std::{
 };
 
 use hotshot_types::{
-    constants::TEST_UPGRADE_CONSTANTS,
     signature_key::{BLSPubKey, BuilderKey, SchnorrPubKey},
     traits::node_implementation::NodeType,
-    upgrade_config::UpgradeConstants,
 };
 use vbs::version::StaticVersion;
 use versions::{NEW_PROTOCOL_VERSION, Upgrade, version};
@@ -47,8 +45,6 @@ use crate::{
 /// to select our traits
 pub struct TestTypes;
 impl NodeType for TestTypes {
-    const UPGRADE_CONSTANTS: UpgradeConstants = TEST_UPGRADE_CONSTANTS;
-
     type BlockHeader = TestBlockHeader;
     type BlockPayload = TestBlockPayload;
     type SignatureKey = BLSPubKey;
@@ -77,8 +73,6 @@ impl NodeType for TestTypes {
 /// to select our traits
 pub struct TestTypesRandomizedLeader;
 impl NodeType for TestTypesRandomizedLeader {
-    const UPGRADE_CONSTANTS: UpgradeConstants = TEST_UPGRADE_CONSTANTS;
-
     type BlockHeader = TestBlockHeader;
     type BlockPayload = TestBlockPayload;
     type SignatureKey = BLSPubKey;
@@ -141,8 +135,6 @@ impl<StakeTable: TestStakeTable<BLSPubKey, SchnorrPubKey>> Clone
 impl<StakeTable: TestStakeTable<BLSPubKey, SchnorrPubKey> + 'static> NodeType
     for TestTypesEpochCatchupTypes<StakeTable>
 {
-    const UPGRADE_CONSTANTS: UpgradeConstants = TEST_UPGRADE_CONSTANTS;
-
     type BlockHeader = TestBlockHeader;
     type BlockPayload = TestBlockPayload;
     type SignatureKey = BLSPubKey;
@@ -180,8 +172,6 @@ pub struct TestTypesRandomizedCommitteeMembers<
 impl<QuorumConfig: QuorumFilterConfig, DaConfig: QuorumFilterConfig> NodeType
     for TestTypesRandomizedCommitteeMembers<QuorumConfig, DaConfig>
 {
-    const UPGRADE_CONSTANTS: UpgradeConstants = TEST_UPGRADE_CONSTANTS;
-
     type BlockHeader = TestBlockHeader;
     type BlockPayload = TestBlockPayload;
     type SignatureKey = BLSPubKey;
@@ -213,8 +203,6 @@ impl<QuorumConfig: QuorumFilterConfig, DaConfig: QuorumFilterConfig> NodeType
 /// to select our traits
 pub struct TestConsecutiveLeaderTypes;
 impl NodeType for TestConsecutiveLeaderTypes {
-    const UPGRADE_CONSTANTS: UpgradeConstants = TEST_UPGRADE_CONSTANTS;
-
     type BlockHeader = TestBlockHeader;
     type BlockPayload = TestBlockPayload;
     type SignatureKey = BLSPubKey;
@@ -246,8 +234,6 @@ impl NodeType for TestConsecutiveLeaderTypes {
 /// to select our traits
 pub struct TestTwoStakeTablesTypes;
 impl NodeType for TestTwoStakeTablesTypes {
-    const UPGRADE_CONSTANTS: UpgradeConstants = TEST_UPGRADE_CONSTANTS;
-
     type BlockHeader = TestBlockHeader;
     type BlockPayload = TestBlockPayload;
     type SignatureKey = BLSPubKey;

@@ -67,7 +67,7 @@ pub enum ConsensusInput<T: NodeType> {
         epoch: EpochNumber,
         payload: T::BlockPayload,
         metadata: <T::BlockPayload as BlockPayload<T>>::Metadata,
-        payload_commitment: VidCommitment,
+        payload_commitment: VidCommitment2,
     },
     /// This node obtained a proposal's payload, by reconstructing it from VID
     /// shares or fetching it from a peer. Consensus keeps the payload so a
@@ -1056,18 +1056,14 @@ impl<T: NodeType> Consensus<T> {
                     view,
                     crate::leader_trace::LeaderEvent::BlockBuiltApplied
                 );
-                if let VidCommitment::V2(payload_commitment) = payload_commitment {
-                    outbox.push_back(ConsensusOutput::RequestVidDisperse {
-                        view,
-                        epoch,
-                        payload: payload.clone(),
-                        metadata,
-                        payload_commitment,
-                    });
-                    self.blocks.insert((view, payload_commitment), payload);
-                } else {
-                    warn!(%view, %epoch, "block built with non-V2 payload commitment; ignoring");
-                }
+                outbox.push_back(ConsensusOutput::RequestVidDisperse {
+                    view,
+                    epoch,
+                    payload: payload.clone(),
+                    metadata,
+                    payload_commitment,
+                });
+                self.blocks.insert((view, payload_commitment), payload);
                 Protocol::Continue
             },
             ConsensusInput::VidDisperseCreated(view, payload_commitment) => {

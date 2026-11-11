@@ -21,11 +21,7 @@ use hotshot_query_service::{
     },
     node::BlockId,
 };
-use hotshot_types::{
-    data::{VidShare, ViewNumber},
-    vote::HasViewNumber,
-};
-use itertools::Itertools;
+use hotshot_types::data::{VidShare, ViewNumber};
 use jf_merkle_tree_compat::{
     ForgetableMerkleTreeScheme, ForgetableUniversalMerkleTreeScheme, LookupResult,
     MerkleTreeScheme, UniversalMerkleTreeScheme,
@@ -153,14 +149,6 @@ impl<P: SequencerPersistence> DataSourceTrait<Request> for DataSource<P> {
             },
 
             Request::Leaf(height) => {
-                // Legacy heights can be served from in-memory undecided leaves; new-protocol
-                // heights always fall through to storage.
-                if let Ok(leaf_chain) =
-                    legacy_leaf_chain_from_memory(&*self.consensus_handle, *height).await
-                {
-                    return Ok(Response::Leaf(leaf_chain));
-                }
-
                 let leaf_chain = self
                     .sql_storage("leaf")?
                     .get_leaf_chain(*height)
@@ -374,49 +362,6 @@ impl<P: SequencerPersistence> DataSourceTrait<Request> for DataSource<P> {
             },
         }
     }
-}
-
-/// Build a legacy-protocol 3-chain leaf chain decided at `height` from in-memory undecided leaves.
-///
-/// Returns an error if the chain cannot be assembled from memory (e.g. the height is below the
-/// latest decided leaf).
-async fn legacy_leaf_chain_from_memory<P: SequencerPersistence>(
-    consensus_handle: &ConsensusHandle<SeqTypes, Arc<P>>,
-    height: u64,
-) -> anyhow::Result<Vec<espresso_types::Leaf2>> {
-    let mut leaves = consensus_handle.undecided_leaves().await;
-    leaves.sort_by_key(|l| l.view_number());
-
-    let (position, mut last_leaf) = leaves
-        .iter()
-        .find_position(|l| l.height() == height)
-        .ok_or_else(|| anyhow::anyhow!("leaf at height {height} not in memory"))?;
-
-    let mut leaf_chain = vec![last_leaf.clone()];
-    for leaf in leaves.iter().skip(position + 1) {
-        if leaf.justify_qc().view_number() == last_leaf.view_number() {
-            leaf_chain.push(leaf.clone());
-        } else {
-            continue;
-        }
-        if leaf.view_number() == last_leaf.view_number() + 1 {
-            last_leaf = leaf;
-            break;
-        }
-        last_leaf = leaf;
-    }
-
-    for leaf in leaves
-        .iter()
-        .skip_while(|l| l.view_number() <= last_leaf.view_number())
-    {
-        if leaf.justify_qc().view_number() == last_leaf.view_number() {
-            leaf_chain.push(leaf.clone());
-            return Ok(leaf_chain);
-        }
-    }
-
-    anyhow::bail!("incomplete leaf chain in memory for height {height}")
 }
 
 /// Get a partial snapshot of the given reward state, which contains only the specified accounts.
