@@ -2,7 +2,7 @@ use http::StatusCode;
 use serde::{Serialize, de::DeserializeOwned};
 use vbs::{
     BinarySerializer, Serializer,
-    version::{StaticVersion, StaticVersionType},
+    version::{StaticVersion, StaticVersionType, Version},
 };
 
 use crate::{content_type::ContentType, error::WireError};
@@ -66,13 +66,31 @@ pub(crate) fn decode_body<Ver: StaticVersionType, T: DeserializeOwned>(
     body: &[u8],
 ) -> Result<T, DecodeFailure> {
     match content_type.and_then(ContentType::parse) {
-        Some(ContentType::Binary) => Serializer::<Ver>::deserialize(body)
-            .map_err(|err| DecodeFailure::Binary(err.to_string())),
+        Some(ContentType::Binary) => decode_binary::<Ver, T>(body),
         Some(ContentType::Json) => {
             serde_json::from_slice(body).map_err(|err| DecodeFailure::Json(err.to_string()))
         },
         None => Err(DecodeFailure::UnsupportedContentType),
     }
+}
+
+/// Decode a VBS payload like [`vbs::Serializer::deserialize`], but through
+/// [`versions::deserialize_limited`] since the bytes come from a peer.
+pub(crate) fn decode_binary<Ver, T>(bytes: &[u8]) -> Result<T, DecodeFailure>
+where
+    Ver: StaticVersionType,
+    T: DeserializeOwned,
+{
+    let (version, rest) =
+        Version::deserialize(bytes).map_err(|err| DecodeFailure::Binary(err.to_string()))?;
+    if version != Ver::version() {
+        // The text, swapped arguments included, is the one `vbs` returns, which clients see.
+        return Err(DecodeFailure::Binary(format!(
+            "Version Mismatch! Expected {version}, got {}",
+            Ver::version()
+        )));
+    }
+    versions::deserialize_limited(rest).map_err(|err| DecodeFailure::Binary(err.to_string()))
 }
 
 /// Decode the client-side view of a complete response.
@@ -134,5 +152,46 @@ fn body_debug(body: &[u8]) -> String {
     match std::str::from_utf8(body) {
         Ok(s) => format!("body: {s}"),
         Err(_) => format!("body: {}", hex::encode(body)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde::Deserialize;
+
+    use super::*;
+
+    type Ver = StaticVersion<0, 1>;
+
+    #[test]
+    fn binary_rejects_deeply_nested_input() {
+        #[derive(Debug, Deserialize)]
+        #[expect(dead_code, reason = "only ever decoded")]
+        enum Nest {
+            End,
+            Inner(Box<Nest>),
+        }
+
+        let end = 0u32.to_le_bytes();
+        let inner = 1u32.to_le_bytes();
+        let mut bytes = Version::serialize(&Ver::version());
+        bytes.extend(inner.repeat(1_000));
+        bytes.extend(end);
+
+        match decode_binary::<Ver, Nest>(&bytes) {
+            Err(DecodeFailure::Binary(err)) => assert!(err.contains("nested more than"), "{err}"),
+            other => panic!("expected a binary decode failure, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn binary_version_mismatch_reads_like_vbs() {
+        let bytes = Serializer::<StaticVersion<0, 2>>::serialize(&0u8).unwrap();
+        let vbs_err = Serializer::<Ver>::deserialize::<u8>(&bytes).unwrap_err();
+
+        match decode_binary::<Ver, u8>(&bytes) {
+            Err(DecodeFailure::Binary(err)) => assert_eq!(err, vbs_err.to_string()),
+            other => panic!("expected a binary decode failure, got {other:?}"),
+        }
     }
 }
