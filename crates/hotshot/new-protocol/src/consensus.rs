@@ -1442,16 +1442,16 @@ impl<T: NodeType> Consensus<T> {
         outbox: &mut Outbox<ConsensusOutput<T>>,
     ) -> Protocol {
         let view = proposal.view_number();
-        crate::trace_leader_event!(
-            self.tracer,
-            view,
-            crate::leader_trace::LeaderEvent::ProposalVMinus1Arrived
-        );
         let VidCommitment::V2(commit) = proposal.proposal.data.block_header.payload_commitment()
         else {
             warn!(%view, "proposal payload commitment is not V2, discarding");
             return Protocol::Abort;
         };
+        crate::trace_leader_event!(
+            self.tracer,
+            view,
+            crate::leader_trace::LeaderEvent::ProposalVMinus1Arrived
+        );
         let key = (view, Some(proposal.proposal.data.epoch), commit);
         let Some(vid_share) = self.unpaired_vid_shares.remove(&key) else {
             let leaf_commit = proposal_commitment(&proposal.proposal.data);
