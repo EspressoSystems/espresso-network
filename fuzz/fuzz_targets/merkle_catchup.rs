@@ -29,9 +29,11 @@ use arbitrary::Arbitrary;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use committable::Commitment;
 use espresso_types::{
-    BLOCK_MERKLE_TREE_HEIGHT, BlockMerkleTree, FEE_MERKLE_TREE_HEIGHT, FeeAccountProof,
+    BLOCK_MERKLE_TREE_HEIGHT, BlockMerkleTree, FEE_MERKLE_TREE_HEIGHT, FeeAccount, FeeAccountProof,
     FeeMerkleTree, Header,
-    v0_3::{REWARD_MERKLE_TREE_V1_HEIGHT, RewardAccountProofV1, RewardMerkleTreeV1},
+    v0_3::{
+        REWARD_MERKLE_TREE_V1_HEIGHT, RewardAccountProofV1, RewardAccountV1, RewardMerkleTreeV1,
+    },
 };
 use jf_merkle_tree_compat::{
     AppendableMerkleTreeScheme, Element, ForgetableMerkleTreeScheme,
@@ -155,7 +157,11 @@ trait AccountTree:
 
     fn empty() -> Self;
     fn prove_account(&self, account: Address) -> Option<(Self::Proof, U256)>;
-    fn verify_proof(proof: &Self::Proof, root: &Self::Commitment) -> anyhow::Result<U256>;
+    fn verify_snapshot(
+        snapshot: &Self,
+        accounts: &[Address],
+        root: &Self::Commitment,
+    ) -> anyhow::Result<Vec<Self::Proof>>;
     fn remember_proof(&mut self, proof: &Self::Proof) -> anyhow::Result<()>;
 }
 
@@ -170,8 +176,13 @@ impl AccountTree for FeeMerkleTree {
         FeeAccountProof::prove(self, account)
     }
 
-    fn verify_proof(proof: &FeeAccountProof, root: &Self::Commitment) -> anyhow::Result<U256> {
-        proof.verify(root)
+    fn verify_snapshot(
+        snapshot: &Self,
+        accounts: &[Address],
+        root: &Self::Commitment,
+    ) -> anyhow::Result<Vec<FeeAccountProof>> {
+        let accounts: Vec<_> = accounts.iter().copied().map(FeeAccount).collect();
+        FeeAccountProof::verify_snapshot(snapshot, &accounts, root)
     }
 
     fn remember_proof(&mut self, proof: &FeeAccountProof) -> anyhow::Result<()> {
@@ -190,8 +201,13 @@ impl AccountTree for RewardMerkleTreeV1 {
         RewardAccountProofV1::prove(self, account)
     }
 
-    fn verify_proof(proof: &RewardAccountProofV1, root: &Self::Commitment) -> anyhow::Result<U256> {
-        proof.verify(root)
+    fn verify_snapshot(
+        snapshot: &Self,
+        accounts: &[Address],
+        root: &Self::Commitment,
+    ) -> anyhow::Result<Vec<RewardAccountProofV1>> {
+        let accounts: Vec<_> = accounts.iter().copied().map(RewardAccountV1).collect();
+        RewardAccountProofV1::verify_snapshot(snapshot, &accounts, root)
     }
 
     fn remember_proof(&mut self, proof: &RewardAccountProofV1) -> anyhow::Result<()> {
@@ -201,9 +217,8 @@ impl AccountTree for RewardMerkleTreeV1 {
 
 struct Accounts<T> {
     full: T,
-    /// Every fixture account with its balance, zero for the ones not in the
-    /// tree.
-    balances: Vec<(Address, U256)>,
+    /// Every fixture account, including the ones not in the tree.
+    accounts: Vec<Address>,
 }
 
 struct Frontier {
@@ -261,22 +276,22 @@ impl<T: AccountTree> Accounts<T> {
         let absent = [shared(1, 0x22), Address::repeat_byte(0x55)];
 
         let mut full = T::empty();
-        let mut balances = Vec::new();
         for (i, account) in present.into_iter().enumerate() {
             let balance = U256::from(1000 * (i + 1));
             full.update_with(T::Index::from(account), |_| Some(balance.into()))
                 .unwrap();
-            balances.push((account, balance));
         }
-        balances.extend(absent.map(|account| (account, U256::ZERO)));
-        Self { full, balances }
+        Self {
+            full,
+            accounts: present.into_iter().chain(absent).collect(),
+        }
     }
 
     /// Every request from a node that knows no account, and a request for
     /// everything else from a node that knows each one in turn.
     fn assert_honest_responses_accepted(&self) {
         let unknown = (1..=u8::MAX).map(|request| (request, None));
-        let known = (0..self.balances.len() as u8).map(|i| (u8::MAX, Some(i)));
+        let known = (0..self.accounts.len() as u8).map(|i| (u8::MAX, Some(i)));
         for (request, known) in unknown.chain(known) {
             let response = AccountsResponse {
                 request,
@@ -308,51 +323,35 @@ impl<T: AccountTree> Accounts<T> {
     fn known(&self, response: &AccountsResponse) -> Option<Address> {
         response
             .known
-            .map(|i| self.balances[usize::from(i) % self.balances.len()].0)
+            .map(|i| self.accounts[usize::from(i) % self.accounts.len()])
     }
 
     /// The fixture accounts `response` requests, which never include the one
     /// the node already knows.
-    fn requested(&self, response: &AccountsResponse) -> Vec<(Address, U256)> {
+    fn requested(&self, response: &AccountsResponse) -> Vec<Address> {
         let known = self.known(response);
-        self.balances
+        self.accounts
             .iter()
             .enumerate()
-            .filter(|&(i, &(account, _))| {
-                (response.request >> i) & 1 == 1 && Some(account) != known
-            })
-            .map(|(_, &entry)| entry)
+            .filter(|&(i, &account)| (response.request >> i) & 1 == 1 && Some(account) != known)
+            .map(|(_, &account)| account)
             .collect()
     }
 
-    /// The proofs the node takes from the edited response, as the catchup
-    /// providers check them.
-    fn fetch(
-        &self,
-        requested: &[(Address, U256)],
-        response: &AccountsResponse,
-    ) -> Option<Vec<T::Proof>> {
-        let root = self.full.commitment();
+    /// The proofs the node takes from the edited response.
+    fn fetch(&self, requested: &[Address], response: &AccountsResponse) -> Option<Vec<T::Proof>> {
         let snapshot = edit_tree::<T::Element, T::Index, T>(
-            &self.snapshot(requested.iter().map(|(account, _)| *account)),
+            &self.snapshot(requested.iter().copied()),
             response.height,
             &response.edits,
         )?;
-        requested
-            .iter()
-            .map(|&(account, balance)| {
-                let (proof, _) = snapshot.prove_account(account)?;
-                let proved = T::verify_proof(&proof, &root).ok()?;
-                assert_eq!(proved, balance, "proved a wrong balance for {account}");
-                Some(proof)
-            })
-            .collect()
+        T::verify_snapshot(&snapshot, requested, &self.full.commitment()).ok()
     }
 
     /// Remember `proofs` into a node that already holds `known`, and update
     /// every balance it holds, as state validation does. The node must end up
     /// with the honest accounts and root.
-    fn catch_up(&self, known: Option<Address>, requested: &[(Address, U256)], proofs: &[T::Proof]) {
+    fn catch_up(&self, known: Option<Address>, requested: &[Address], proofs: &[T::Proof]) {
         let mut local = T::from_commitment(self.full.commitment());
         if let Some(account) = known {
             let (proof, _) = self.full.prove_account(account).unwrap();
@@ -365,7 +364,7 @@ impl<T: AccountTree> Accounts<T> {
         }
 
         let mut honest = self.full.clone();
-        let held = requested.iter().map(|(account, _)| *account).chain(known);
+        let held = requested.iter().copied().chain(known);
         for account in held {
             let index = T::Index::from(account);
             assert!(

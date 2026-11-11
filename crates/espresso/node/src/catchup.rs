@@ -309,19 +309,7 @@ impl<ApiVer: StaticVersionType> StateCatchup for StatePeers<ApiVer> {
                 .body_binary(&accounts.to_vec())?
                 .send()
                 .await?;
-
-            // Verify proofs.
-            let mut proofs = Vec::new();
-            for account in accounts {
-                let (proof, _) = FeeAccountProof::prove(&tree, (*account).into())
-                    .context(format!("response missing fee account {account}"))?;
-                proof.verify(&fee_merkle_tree_root).context(format!(
-                    "invalid proof for fee account {account}, root: {fee_merkle_tree_root}"
-                ))?;
-                proofs.push(proof);
-            }
-
-            anyhow::Ok(proofs)
+            FeeAccountProof::verify_snapshot(&tree, accounts, &fee_merkle_tree_root)
         })
         .await
     }
@@ -499,20 +487,7 @@ impl<ApiVer: StaticVersionType> StateCatchup for StatePeers<ApiVer> {
                 .body_binary(&accounts.to_vec())?
                 .send()
                 .await?;
-
-            // Verify proofs.
-            let mut proofs = Vec::new();
-            for account in accounts {
-                let (proof, _) = RewardAccountProofV1::prove(&tree, (*account).into())
-                    .context(format!("response missing reward account {account}"))?;
-                proof.verify(&reward_merkle_tree_root).context(format!(
-                    "invalid proof for v1 reward account {account}, root: \
-                     {reward_merkle_tree_root} height {height} view {view}"
-                ))?;
-                proofs.push(proof);
-            }
-
-            anyhow::Ok(proofs)
+            RewardAccountProofV1::verify_snapshot(&tree, accounts, &reward_merkle_tree_root)
         })
         .await
     }
@@ -854,19 +829,7 @@ where
                 tree
             },
         };
-
-        // Verify the accounts
-        let mut proofs = Vec::new();
-        for account in accounts {
-            let (proof, _) = FeeAccountProof::prove(&fee_merkle_tree_from_db, (*account).into())
-                .context(format!("response missing account {account}"))?;
-            proof.verify(&fee_merkle_tree_root).context(format!(
-                "invalid proof for fee account {account}, root: {fee_merkle_tree_root}"
-            ))?;
-            proofs.push(proof);
-        }
-
-        Ok(proofs)
+        FeeAccountProof::verify_snapshot(&fee_merkle_tree_from_db, accounts, &fee_merkle_tree_root)
     }
 
     #[tracing::instrument(skip(self, _retry, instance, mt))]
@@ -959,19 +922,11 @@ where
             .get_reward_accounts_v1(instance, block_height, view, accounts)
             .await
             .with_context(|| "failed to get reward accounts from DB")?;
-        // Verify the accounts
-        let mut proofs = Vec::new();
-        for account in accounts {
-            let (proof, _) =
-                RewardAccountProofV1::prove(&reward_merkle_tree_from_db, (*account).into())
-                    .context(format!("response missing account {account}"))?;
-            proof.verify(&reward_merkle_tree_root).context(format!(
-                "invalid proof for v1 reward account {account}, root: {reward_merkle_tree_root}"
-            ))?;
-            proofs.push(proof);
-        }
-
-        Ok(proofs)
+        RewardAccountProofV1::verify_snapshot(
+            &reward_merkle_tree_from_db,
+            accounts,
+            &reward_merkle_tree_root,
+        )
     }
 
     async fn try_fetch_state_cert(
