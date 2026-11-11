@@ -390,7 +390,7 @@ def test_max_block_size_belongs_to_one_run(harness, runner):
 
 def test_protocol_version_belongs_to_one_run(harness, runner):
     manifest = harness.fleet()
-    assert awsb.fleet_run_config(harness.run_args(), manifest).protocol_version == "0.6"
+    assert awsb.fleet_run_config(harness.run_args(), manifest).protocol_version == "0.7"
     cfg = awsb.fleet_run_config(harness.run_args("--protocol-version", "0.8"), manifest)
     assert cfg.protocol_version == "0.8"
 

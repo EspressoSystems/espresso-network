@@ -1,5 +1,7 @@
-base_version = "0.6"
-upgrade_version = "0.6"
+base_version = "0.7"
+upgrade_version = "0.7"
+# A node refuses a genesis_version above base_version, so this is the lowest
+# `aws-bench --protocol-version` a run may pass; the flag refuses anything below.
 genesis_version = "0.6"
 epoch_height = 1000000
 epoch_start_block = 1
