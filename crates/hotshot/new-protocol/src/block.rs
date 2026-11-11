@@ -2,7 +2,7 @@ use std::{
     collections::{BTreeMap, BTreeSet, HashMap, HashSet},
     num::{NonZeroU64, NonZeroUsize},
     panic::resume_unwind,
-    sync::Arc,
+    sync::{Arc, LazyLock},
     time::Duration,
 };
 
@@ -793,34 +793,60 @@ impl<T: NodeType> BlockBuilder<T> {
     }
 }
 
-/// Transaction count from which [`forwarded_hashes`] hashes in parallel.
-///
-/// Mirrors `MIN_PARALLEL_TRANSACTIONS` in espresso-types. Below it, hashing on the coordinator
-/// costs less than a round trip through the rayon pool, and a busy pool takes outside jobs only
-/// once its own work runs out, so the coordinator could wait behind a VID encode.
-pub(crate) const MIN_PARALLEL_TRANSACTIONS: usize = 32;
-
-/// Batch size from which [`forwarded_hashes`] hashes in parallel regardless of transaction
-/// count; a few large transactions are slow to hash serially.
-const MIN_PARALLEL_BYTES: u64 = 1 << 20;
-
 /// The hashes of a forwarded batch, in batch order.
 ///
 /// A forward carries up to a block of transactions, and the coordinator waits for their hashes
-/// before it handles anything else, so a large batch is hashed across the rayon pool.
-/// `par_iter` is indexed, so `collect` keeps batch order.
-fn forwarded_hashes<T: NodeType>(
+/// before it handles anything else, so a batch that is slow to hash serially is hashed across
+/// [`FORWARD_HASH_POOL`]. `par_iter` is indexed, so `collect` keeps batch order.
+pub(crate) fn forwarded_hashes<T: NodeType>(
     transactions: &[T::Transaction],
 ) -> Vec<Commitment<T::Transaction>> {
+    let serial = || transactions.iter().map(Committable::commit).collect();
     let bytes: u64 = transactions
         .iter()
         .map(Transaction::minimum_block_size)
         .sum();
     if transactions.len() < MIN_PARALLEL_TRANSACTIONS && bytes < MIN_PARALLEL_BYTES {
-        return transactions.iter().map(Committable::commit).collect();
+        return serial();
     }
-    transactions.par_iter().map(Committable::commit).collect()
+    match &*FORWARD_HASH_POOL {
+        Some(pool) => pool.install(|| transactions.par_iter().map(Committable::commit).collect()),
+        None => serial(),
+    }
 }
+
+/// Batch size from which [`forwarded_hashes`] hashes in parallel.
+///
+/// Set by what hashing costs the coordinator, not by when parallel hashing breaks even: a
+/// batch of this size hashes serially in about 0.4 ms, and below that the handoff to the pool
+/// is not worth it.
+pub(crate) const MIN_PARALLEL_BYTES: u64 = 256 * 1024;
+
+/// Transaction count from which [`forwarded_hashes`] hashes in parallel whatever the batch's
+/// size: each hash has a fixed cost, and this many one-byte transactions also take about
+/// 0.4 ms.
+pub(crate) const MIN_PARALLEL_TRANSACTIONS: usize = 1024;
+
+/// Threads hashing forwarded batches: a quarter of the cores, between 2 and 4.
+fn forward_hash_threads() -> usize {
+    let cores = std::thread::available_parallelism().map_or(1, usize::from);
+    (cores / 4).clamp(2, 4)
+}
+
+/// The pool forwarded batches are hashed on, apart from rayon's global one.
+///
+/// Any peer can forward a batch and the sender is not checked. On the global pool its hashing
+/// would take every core from the leader's VID encode, and the coordinator would wait behind an
+/// encode already running there, since a busy pool takes outside jobs last. This pool bounds
+/// both. `None` if its threads cannot be spawned; batches are then hashed serially.
+static FORWARD_HASH_POOL: LazyLock<Option<rayon::ThreadPool>> = LazyLock::new(|| {
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(forward_hash_threads())
+        .thread_name(|i| format!("forward-hash-{i}"))
+        .build()
+        .inspect_err(|err| warn!(%err, "no pool to hash forwarded transactions on"))
+        .ok()
+});
 
 impl<T: NodeType> From<&BlockBuilderOutput<T>> for HeaderRequest<T> {
     fn from(output: &BlockBuilderOutput<T>) -> Self {
