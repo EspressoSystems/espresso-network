@@ -1,7 +1,7 @@
 """One leader's action window across views V-2..V+2 as a PNG: the leader's work spans, the node's
 CPU load in cores busy, and the primary interface's network rate with the send and receive phases of consensus.
 A third row of that panel holds, in the views the node did not lead, its wait to pair its own VID
-share with the proposal, whichever arrived first.
+share with the proposal, whichever arrived first; without such a wait in the window there is no row.
 
 The CPU and network panels read the samples of `leadertrace.read_cpu` and `read_net`; without
 samples (a run before the sampler existed) a panel says so and the figure still renders.
@@ -625,6 +625,16 @@ def draw_net(
     ax.grid(axis="y", alpha=0.3)
 
 
+def net_event_rows(
+    columns: list[tuple[float, float, str, str, str]],
+) -> dict[str, tuple[float, float]]:
+    """Row to its (bottom, height) in axes fractions. The PAIR row exists only with a pairing
+    span to hold: a trace without the arrival events, or a window of led views, has none."""
+    if any(row == "pair" for *_, row in columns):
+        return {"tx": (0.50, 0.17), "rx": (0.28, 0.17), "pair": (0.06, 0.17)}
+    return {"tx": (0.45, 0.22), "rx": (0.08, 0.22)}
+
+
 def draw_net_events(
     ax: Axes,
     node: int,
@@ -634,7 +644,7 @@ def draw_net_events(
 ) -> None:
     """TX bars (labels above) over RX and PAIR bars (labels inside), in axes-fraction rows."""
     tx_label_y = 0.78
-    rows = {"tx": (0.50, 0.17), "rx": (0.28, 0.17), "pair": (0.06, 0.17)}
+    rows = net_event_rows(columns)
     ax.set_yticks([])
     for spine in ("top", "right", "left", "bottom"):
         ax.spines[spine].set_visible(False)

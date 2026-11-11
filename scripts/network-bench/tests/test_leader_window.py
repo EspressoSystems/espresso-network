@@ -86,6 +86,13 @@ def test_net_spans_put_the_pairing_wait_on_its_own_row():
     ]
 
 
+def test_the_pair_row_exists_only_with_a_pairing_span():
+    fan_out = (0.0, 4.0, "fan-out ser+enq", "#111", "tx")
+    assert set(lw.net_event_rows([fan_out])) == {"tx", "rx"}
+    held = (10.0, 30.0, "share held", "#111", "pair")
+    assert set(lw.net_event_rows([fan_out, held])) == {"tx", "rx", "pair"}
+
+
 def test_window_clips_spans():
     w = window()
     assert w.clipped(990 * MS, 1010 * MS) == (0.0, 10.0)

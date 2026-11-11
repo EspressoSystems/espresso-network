@@ -109,6 +109,14 @@ def test_recon_lane_draws_the_pairing_wait(
     assert drawn == ([label] if label else [])
 
 
+def test_frame_starts_before_a_pairing_wait_that_precedes_the_request():
+    trace = arrive(timeline_trace("encode"), {1: (700, 1020), 2: (710, 1030)})
+    m = ft.timeline_metrics(ft.view_rows(trace, [1]))
+    f = ft.Frame.of(m)
+    assert f.t_min <= m["share_arrived"] - 30
+    assert f.x(m["share_arrived"]) > f.x_left
+
+
 def test_metrics_are_medians_that_skip_absent_values():
     rows: list[ft.ViewRow] = [
         {"cycle": 100.0, "cert1_formed": 10.0},

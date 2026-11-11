@@ -307,7 +307,11 @@ class Frame:
 
     @classmethod
     def of(cls, m: Metrics) -> "Frame":
-        t_left = min(0, m["request_block"]) - 30
+        starts = [0, m["request_block"]]
+        # Replica stamps: before L_V's request when the share of V is early or clocks differ.
+        if m["share_held_ms"] > 0 or m["proposal_waited_ms"] > 0:
+            starts += [m["share_arrived"], m["proposal_arrived"]]
+        t_left = min(starts) - 30
         t_max = int((max(m["finality_ms"], m["cycle"]) + 80 + 49) // 50) * 50
         return cls(t_min=int(t_left // 50) * 50, t_max=t_max)
 
