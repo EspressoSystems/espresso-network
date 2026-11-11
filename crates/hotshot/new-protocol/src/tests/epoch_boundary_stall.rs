@@ -957,9 +957,7 @@ async fn restarted_node_does_not_vote2_at_a_view_it_timed_out() {
         .await;
     // The node timed view 1 out before it went down; its timeout action is
     // the last one recorded.
-    harness
-        .consensus
-        .resume_from_restart(ViewNumber::genesis(), view(1), view(1));
+    harness.resume_from_restart(ViewNumber::genesis(), view(1), view(1));
     harness.apply(test_data.views[0].cert1_input()).await;
     assert_eq!(
         harness.consensus.lock_view().map(|lock| lock.view),

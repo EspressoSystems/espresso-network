@@ -50,7 +50,7 @@ use std::{
     cell::{Cell, RefCell},
     collections::{BTreeMap, HashMap},
     fs::create_dir_all,
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::atomic::{AtomicUsize, Ordering},
     time::Instant,
 };
@@ -65,7 +65,8 @@ use hotshot_types::{
 };
 
 use crate::{
-    consensus::{ConsensusInput, ConsensusOutput, DECIDE_BUFFER},
+    consensus::{Consensus, ConsensusInput, ConsensusOutput, DECIDE_BUFFER},
+    helpers::proposal_commitment,
     message::{CatchupEvidence, Certificate1, Certificate2, Proposal, ReVote, TimeoutVote},
 };
 
@@ -80,11 +81,12 @@ const TRACE_DIR: &str = "NP_TRACE_DIR";
 /// filled in then.
 const ANCHOR_LOCK: &str = "\"<anchor lock>\"";
 
-/// The note saying a run had timeouts that sign no lock.
+/// The note saying a run was, at least in part, before the certificate rule.
 ///
-/// Before the certificate rule a timeout vote and certificate carry no lock,
-/// and the rules that read one do not apply. A checker leaves such a run out.
-const UNSIGNED_LOCKS: &str = "# timeouts sign no lock";
+/// Before it a timeout vote and certificate carry no lock, and a node votes by
+/// the rules it replaced, which the model does not have. A checker leaves such
+/// a run out.
+pub(crate) const BEFORE_CERTIFICATE_RULE: &str = "# before the certificate rule";
 
 /// The note saying the test that recorded the run failed.
 ///
@@ -155,9 +157,10 @@ pub struct Recorder {
     /// lock out of a timeout vote or certificate; the model names the anchor's
     /// certificate.
     anchor_lock: Option<String>,
-    /// Whether the run had a timeout vote or certificate that signs no lock,
-    /// as before the certificate rule. The model has none such.
-    unsigned_locks: Cell<bool>,
+    /// Whether the run was, at least in part, before the certificate rule: it
+    /// took an input at a view before it, or had a timeout vote or certificate
+    /// that signs no lock. The model has none such.
+    before_certificate_rule: Cell<bool>,
     /// A certificate for the anchor to name when the run gives none, as
     /// [`Recorder::fallback_anchor`] was told.
     fallback_anchor: Option<String>,
@@ -184,47 +187,42 @@ struct LastStep {
 impl Recorder {
     /// A recorder collecting a trace for `$NP_TRACE_DIR/<label>.jsonl`, or an inert one.
     pub fn new(label: &str) -> Self {
-        let inert = Self {
-            path: None,
-            lines: Vec::new(),
-            identified: true,
-            pending: Vec::new(),
-            last: None,
-            led: BTreeMap::new(),
-            steps: 0,
-            epoch_height: 0,
-            anchor_lock: None,
-            unsigned_locks: Cell::new(false),
-            fallback_anchor: None,
-            evidence: RefCell::new(HashMap::new()),
-            started: Instant::now(),
-        };
         let Ok(dir) = std::env::var(TRACE_DIR) else {
-            return inert;
+            return Self::writing_to(None);
         };
         let dir = PathBuf::from(dir);
         if let Err(err) = create_dir_all(&dir) {
             eprintln!("trace: cannot create {}: {err}", dir.display());
-            return inert;
+            return Self::writing_to(None);
         }
         // A label may name a test, and test names contain `::`.
         let name = label.replace("::", "-");
         let seq = NEXT_TRACE.fetch_add(1, Ordering::Relaxed);
+        Self::writing_to(Some(dir.join(format!("{name}.{seq}.jsonl"))))
+    }
+
+    /// A recorder writing its trace to `path`, or an inert one if there is none.
+    pub fn writing_to(path: Option<PathBuf>) -> Self {
         Self {
-            path: Some(dir.join(format!("{name}.{seq}.jsonl"))),
+            identified: path.is_none(),
+            path,
             lines: Vec::new(),
-            identified: false,
             pending: Vec::new(),
             last: None,
             led: BTreeMap::new(),
             steps: 0,
             epoch_height: 0,
             anchor_lock: None,
-            unsigned_locks: Cell::new(false),
+            before_certificate_rule: Cell::new(false),
             fallback_anchor: None,
             evidence: RefCell::new(HashMap::new()),
             started: Instant::now(),
         }
+    }
+
+    /// The file the trace is written to, unless the recorder is inert.
+    pub fn path(&self) -> Option<&Path> {
+        self.path.as_deref()
     }
 
     /// A recorder labelled by the running test, which is this thread's name.
@@ -373,6 +371,23 @@ impl Recorder {
         ));
     }
 
+    /// Record that a test resumed the node as after a restart, which bars it
+    /// from acting again in the views up to `view`.
+    ///
+    /// The steps do not show what the node did before the restart, so what a
+    /// checker derives from them as owed in those views is not what the node
+    /// owes. Written like [`Recorder::placed`], so a checker can leave the
+    /// rules that read what the node owes unchecked.
+    pub fn restarted(&mut self, view: ViewNumber) {
+        if self.path.is_none() {
+            return;
+        }
+        self.lines.push(format!(
+            "# placed restart after view {view} (at step {})",
+            self.steps
+        ));
+    }
+
     /// Record that a test replaced the node's proposal for `view` directly.
     ///
     /// No input does that, so the blocks a checker derives from the steps are not
@@ -441,9 +456,30 @@ impl Recorder {
         self.led.insert((epoch, view), named);
     }
 
-    /// Record one step: the input taken, and what it drew.
+    /// Whether `consensus` refuses `input` whole, keeping none of the
+    /// certificates it carries: a re-vote request at or before the decide
+    /// floor, or of an epoch earlier than the node's, as `handle_revote`
+    /// decides it.
+    ///
+    /// Consensus decides that on its state before the input, which the input
+    /// may change, so this is asked before the input and told to
+    /// [`Recorder::record`] after it.
+    pub fn refused_by<T: NodeType>(consensus: &Consensus<T>, input: &ConsensusInput<T>) -> bool {
+        matches!(
+            input,
+            ConsensusInput::ReVote(message)
+                if message.revote.view <= consensus.decide_floor()
+                    || message.revote.epoch < consensus.current_epoch()
+        )
+    }
+
+    /// Record one step: the input taken, and what it drew, on `consensus` as
+    /// it is after the input. `refused` is what [`Recorder::refused_by`] said
+    /// before it.
     pub fn record<'a, T: NodeType + 'a>(
         &mut self,
+        consensus: &Consensus<T>,
+        refused: bool,
         input: &ConsensusInput<T>,
         outputs: impl Iterator<Item = &'a ConsensusOutput<T>>,
     ) {
@@ -455,34 +491,61 @@ impl Recorder {
         let t = self.now();
         self.learn_anchor_lock(input, &outputs);
 
+        // A node at a view before the certificate rule, or an input for one,
+        // puts the run outside the model. These two inputs belong to no view.
+        let input_view = match input {
+            ConsensusInput::DrbResult(..) | ConsensusInput::UpgradeCertificateFormed(..) => None,
+            _ => Some(input.view_number()),
+        };
+        let upgrade_lock = consensus.upgrade_lock();
+        if std::iter::once(consensus.current_view())
+            .chain(input_view)
+            .any(|view| !upgrade_lock.certificate_rule(view))
+        {
+            self.before_certificate_rule.set(true);
+        }
+
         // The model takes a proposal already paired with our share, and pairs
         // nothing itself. Rather than reassemble the pair here — where a bug
         // would look like a fault — take it from the output that reports
         // the pairing, as a step of its own. The parent's `Cert1`, the timeout
         // certificate and its lock, and the `Cert2` a proposal opening an
         // epoch comes with, are kept on pairing, so each is received just
-        // before.
+        // before. Only a timeout certificate's recent lock is verified, and
+        // only a recent one is kept.
+        //
+        // Consensus may refuse the proposal right after pairing it, and then
+        // keeps none of its certificates. A proposal it took is the one it
+        // holds as paired with this node's share. A duplicate of that one is
+        // refused too, but its certificates were kept with the first copy.
         for output in &outputs {
             if let ConsensusOutput::ProposalPaired {
                 proposal,
                 vid_share,
             } = output
             {
-                steps.push((certificate1_json(&proposal.data.justify_qc), Vec::new()));
-                if let Some(tc) = &proposal.data.view_change_evidence {
-                    if let Some((_, lock)) = tc.lock() {
-                        steps.push((certificate1_json(lock), Vec::new()));
+                let commit = proposal_commitment(&proposal.data);
+                let taken = consensus
+                    .proposals()
+                    .live(proposal.data.view_number)
+                    .is_some_and(|live| proposal_commitment(live) == commit);
+                if taken {
+                    steps.push((certificate1_json(&proposal.data.justify_qc), Vec::new()));
+                    if let Some(tc) = &proposal.data.view_change_evidence {
+                        if let Some(lock) = tc.timeout_lock().recent() {
+                            steps.push((certificate1_json(lock), Vec::new()));
+                        }
+                        steps.push((
+                            tagged(
+                                "timeoutCertificate",
+                                obj(&[("c", self.timeout_cert_json(tc))]),
+                            ),
+                            Vec::new(),
+                        ));
                     }
-                    steps.push((
-                        tagged(
-                            "timeoutCertificate",
-                            obj(&[("c", self.timeout_cert_json(tc))]),
-                        ),
-                        Vec::new(),
-                    ));
-                }
-                if let Some(cert2) = &proposal.data.next_epoch_justify_qc {
-                    steps.push((certificate2_json(cert2), Vec::new()));
+                    if let Some(cert2) = &proposal.data.next_epoch_justify_qc {
+                        steps.push((certificate2_json(cert2), Vec::new()));
+                    }
                 }
                 let key = (proposal.data.epoch, proposal.data.view_number);
                 let sender = self.led.get(&key).cloned();
@@ -497,9 +560,11 @@ impl Recorder {
         // receiving the message (`History.HasCert1`). Consensus keeps the
         // lock of a timeout certificate, and the timeout certificate and the
         // certificate of a re-vote request, so each is received just before
-        // the input carrying it.
-        for carried in self.carried_steps(input) {
-            steps.push((carried, Vec::new()));
+        // the input carrying it. It keeps none of a re-vote request it refuses.
+        if !refused {
+            for carried in self.carried_steps(input) {
+                steps.push((carried, Vec::new()));
+            }
         }
 
         // The input first: a block decided in the same step is written with the
@@ -656,9 +721,9 @@ impl Drop for Recorder {
         if std::thread::panicking() {
             self.lines.push(TEST_FAILED.to_string());
         }
-        if self.unsigned_locks.get() {
+        if self.before_certificate_rule.get() {
             self.lines
-                .insert(1.min(self.lines.len()), UNSIGNED_LOCKS.to_string());
+                .insert(1.min(self.lines.len()), BEFORE_CERTIFICATE_RULE.to_string());
         }
         let mut text = self.lines.join("\n");
         text.push('\n');
@@ -1030,7 +1095,7 @@ impl Recorder {
             None => "null".to_string(),
             Some(CatchupEvidence::Qc(qc)) => tagged("cert1", obj(&[("cert", cert1_json_raw(qc))])),
             Some(CatchupEvidence::Tc(tc)) => {
-                self.unsigned_locks.set(true);
+                self.before_certificate_rule.set(true);
                 tagged(
                     "timeout",
                     obj(&[(
@@ -1052,7 +1117,7 @@ impl Recorder {
     /// model; it is written with the anchor's, and the run is marked.
     fn timeout_cert_json<T: NodeType>(&self, cert: &TimeoutEvidence<T>) -> String {
         if !cert.binds_epoch() {
-            self.unsigned_locks.set(true);
+            self.before_certificate_rule.set(true);
         }
         self.timeout_data_json(
             cert.epoch(),
@@ -1085,7 +1150,7 @@ impl Recorder {
     fn timeout_vote_lock_json<T: NodeType>(&self, vote: &TimeoutVote<T>) -> String {
         match vote {
             TimeoutVote::V2(_) => {
-                self.unsigned_locks.set(true);
+                self.before_certificate_rule.set(true);
                 self.lock_json::<T>(None)
             },
             TimeoutVote::V3(ballot) => self.lock_json(ballot.lock()),
@@ -1106,19 +1171,21 @@ impl Recorder {
 
     /// The certificates `input` carries that consensus keeps, as inputs of
     /// their own: a timeout certificate's lock, and a re-vote request's
-    /// timeout certificate, its lock and the request's certificate.
+    /// timeout certificate, its lock and the request's certificate. Only a
+    /// recent lock is verified, and only a recent one is kept.
     fn carried_steps<T: NodeType>(&self, input: &ConsensusInput<T>) -> Vec<String> {
         match input {
             ConsensusInput::TimeoutCertificate(cert) => cert
-                .lock()
-                .map(|(_, lock)| certificate1_json(lock))
+                .timeout_lock()
+                .recent()
+                .map(certificate1_json)
                 .into_iter()
                 .collect(),
             ConsensusInput::ReVote(message) => {
                 let revote = &message.revote;
                 let mut steps = Vec::new();
                 if let Some(tc) = &revote.timeout {
-                    steps.extend(tc.lock_cert().map(certificate1_json));
+                    steps.extend(tc.timeout_lock().recent().map(certificate1_json));
                     steps.push(tagged(
                         "timeoutCertificate",
                         obj(&[("c", self.timeout_cert3_json(tc))]),

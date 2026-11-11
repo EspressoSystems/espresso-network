@@ -2734,9 +2734,7 @@ async fn test_no_revote2_for_restart_barred_views() {
     )
     .await;
     // Raise the action bar to the voted view, as `Coordinator::maker` does.
-    harness
-        .consensus
-        .resume_from_restart(anchor_view, anchor_view + 1, voted.view_number);
+    harness.resume_from_restart(anchor_view, anchor_view + 1, voted.view_number);
 
     // A peer relays the missed Cert2s before re-broadcasting the Cert1s.
     harness.apply(anchor.cert2_input()).await;
@@ -2778,9 +2776,7 @@ async fn test_revote2_after_restart_without_cert2() {
         [voted.proposal.data.clone()],
     )
     .await;
-    harness
-        .consensus
-        .resume_from_restart(anchor_view, anchor_view + 1, voted.view_number);
+    harness.resume_from_restart(anchor_view, anchor_view + 1, voted.view_number);
 
     // A peer re-broadcasts Cert1 for the voted view; no Cert2 exists anywhere.
     harness.apply(voted.cert1_input()).await;
@@ -2812,9 +2808,7 @@ async fn test_no_redecide_below_restart_anchor() {
     // Make the pre-anchor proposal available so only the floor stands between
     // the replayed certificates and a duplicate decide.
     harness.seed_proposals([decided.proposal.data.clone()]);
-    harness
-        .consensus
-        .resume_from_restart(anchor_view, anchor_view + 1, anchor_view);
+    harness.resume_from_restart(anchor_view, anchor_view + 1, anchor_view);
 
     harness.apply(decided.cert1_input()).await;
     harness.apply(decided.cert2_input()).await;

@@ -18,17 +18,22 @@ use hotshot_types::{
     data::{VidCommitment, VidCommitment2, ViewNumber},
     message::Proposal as SignedProposal,
     signature_key::BLSPubKey,
+    simple_certificate::TimeoutEvidence,
     traits::signature_key::SignatureKey,
     vote::HasViewNumber,
 };
+use versions::TIMEOUT_EPOCH_VERSION;
 
 use crate::{
     consensus::{ConsensusInput, ConsensusOutput},
-    helpers::proposal_commitment,
+    helpers::{pin_test_version, proposal_commitment},
     message::ProposalMessage,
     tests::common::{
         assertions::{count_matching, is_vote1_for_view, node_index_for_key},
-        utils::{ConsensusHarness, TestData, TestView},
+        utils::{
+            ConsensusHarness, TestData, TestView, build_timeout_cert3_with_lock,
+            carrying_timeout_cert, trace_steps,
+        },
     },
 };
 
@@ -206,6 +211,64 @@ impl<'a> Node<'a> {
              1, leaves decided at view 1, vote1s at view 2)"
         );
     }
+}
+
+/// A rival proposal that pairs with the node's share while the node holds
+/// another one paired for the view is refused, and nothing it carries is kept.
+/// The trace does not write the rival's timeout certificate as received.
+#[tokio::test]
+async fn refused_rival_has_none_of_its_certificates_recorded() {
+    pin_test_version(TIMEOUT_EPOCH_VERSION);
+    let test_data = TestData::new(1).await;
+    let a = &test_data.views[0];
+    let index = (0..10)
+        .find(|i| *i != node_index_for_key(&a.leader_public_key))
+        .expect("ten nodes, one leader");
+    let key = BLSPubKey::generated_from_seed_indexed([0; 32], index).0;
+    let dir = tempfile::tempdir().unwrap();
+    let mut harness = ConsensusHarness::new(index)
+        .await
+        .record_to(&dir.path().join("trace.jsonl"));
+
+    harness.apply_pair(a.proposal_input_consensus(&key)).await;
+    let (proposal, share) = rival(a, &key);
+    let membership = harness
+        .membership_coordinator
+        .membership_for_epoch(Some(a.epoch_number))
+        .unwrap();
+    let tc = TimeoutEvidence::V3(build_timeout_cert3_with_lock(
+        ViewNumber::genesis(),
+        a.epoch_number,
+        None,
+        &membership,
+    ));
+    harness.apply(carrying_timeout_cert(proposal, tc)).await;
+    harness.apply(share).await;
+    assert_eq!(
+        harness
+            .consensus
+            .proposals()
+            .at(ViewNumber::new(1))
+            .map(proposal_commitment)
+            .collect::<Vec<_>>(),
+        [proposal_commitment(&a.proposal.data)],
+        "setup: the node refused the rival"
+    );
+    assert!(
+        harness
+            .consensus
+            .timeout_cert_at(ViewNumber::new(1))
+            .is_none(),
+        "setup: the node did not keep the rival's timeout certificate"
+    );
+
+    let trace = harness.recorded();
+    assert_eq!(
+        trace_steps(&trace, "proposal"),
+        4,
+        "setup: both proposals arrived, and each was paired"
+    );
+    assert_eq!(trace_steps(&trace, "timeoutCertificate"), 0);
 }
 
 /// The inputs that deliver another proposal for `a`'s view, from the same leader

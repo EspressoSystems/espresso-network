@@ -243,6 +243,7 @@ impl TestHarness {
         );
         record_leader(&mut self.trace, consensus, &input);
         record_fallback_anchor(&mut self.trace, consensus);
+        let refused = trace::Recorder::refused_by(consensus, &input);
         self.coordinator.apply_consensus(input.clone());
         record_output_leaders(
             &mut self.trace,
@@ -251,7 +252,12 @@ impl TestHarness {
         );
         // The outbox was drained at the end of the previous call, so it now holds
         // exactly what this input drew — which is what a trace step is.
-        self.trace.record(&input, self.coordinator.outbox().iter());
+        self.trace.record(
+            self.coordinator.consensus(),
+            refused,
+            &input,
+            self.coordinator.outbox().iter(),
+        );
         self.outputs
             .extend(self.coordinator.outbox().iter().cloned());
         for out in self.coordinator.outbox_mut().take() {

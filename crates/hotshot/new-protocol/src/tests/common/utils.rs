@@ -1,5 +1,6 @@
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap},
+    path::Path,
     sync::Arc,
 };
 
@@ -1231,9 +1232,11 @@ impl ConsensusHarness {
         record_leader(&mut self.trace, &self.consensus, &input);
         record_fallback_anchor(&mut self.trace, &self.consensus);
         let before = outbox.len();
+        let refused = trace::Recorder::refused_by(&self.consensus, &input);
         self.consensus.apply(input.clone(), outbox);
         record_output_leaders(&mut self.trace, &self.consensus, outbox.iter().skip(before));
-        self.trace.record(&input, outbox.iter().skip(before));
+        self.trace
+            .record(&self.consensus, refused, &input, outbox.iter().skip(before));
     }
 }
 
@@ -1377,6 +1380,28 @@ impl ConsensusHarness {
         self.consensus.set_view(view, epoch);
     }
 
+    /// Resume the node as after a restart, as `Consensus::resume_from_restart`
+    /// does, and note in the trace the last view that bars it from.
+    pub fn resume_from_restart(
+        &mut self,
+        anchor_view: ViewNumber,
+        restart_view: ViewNumber,
+        last_actioned_view: ViewNumber,
+    ) {
+        self.trace.preamble(
+            self.consensus.public_key(),
+            self.consensus.last_decided_leaf(),
+            self.consensus.cert1_at(ViewNumber::genesis()),
+            *self.consensus.epoch_height,
+        );
+        let first_allowed = (anchor_view + 1)
+            .max(restart_view)
+            .max(last_actioned_view + 1);
+        self.trace.restarted(first_allowed - 1);
+        self.consensus
+            .resume_from_restart(anchor_view, restart_view, last_actioned_view);
+    }
+
     /// Replace the node's proposal for `view`, as `Consensus::force_set_proposal`
     /// does, and note the replacement in the trace.
     pub fn force_set_proposal(&mut self, view: ViewNumber, proposal: Proposal<TestTypes>) {
@@ -1428,6 +1453,25 @@ impl ConsensusHarness {
     pub fn record_as(mut self, label: &str) -> Self {
         self.trace = trace::Recorder::new(label);
         self
+    }
+
+    /// Record the run to `path`, whether or not a trace directory is set. For
+    /// a harness that has taken no input yet: the trace starts here.
+    pub fn record_to(mut self, path: &Path) -> Self {
+        self.trace = trace::Recorder::writing_to(Some(path.to_path_buf()));
+        self
+    }
+
+    /// The trace of this run, read from the file it is written to as the
+    /// harness is dropped.
+    pub fn recorded(self) -> String {
+        let path = self
+            .trace
+            .path()
+            .expect("the run is recorded")
+            .to_path_buf();
+        drop(self);
+        std::fs::read_to_string(path).expect("the run recorded a trace")
     }
 
     /// Fail the state validation of the block with this leaf commitment, as for a
@@ -1985,6 +2029,27 @@ pub(crate) fn build_timeout_cert3(
         None,
         epoch_membership,
     ))
+}
+
+/// `proposal`, an input that delivers a proposal, with the proposal carrying
+/// `tc`. Consensus takes the proposal as already validated, so the signature
+/// need not cover the certificate.
+pub(crate) fn carrying_timeout_cert(
+    proposal: ConsensusInput<TestTypes>,
+    tc: TimeoutEvidence<TestTypes>,
+) -> ConsensusInput<TestTypes> {
+    let ConsensusInput::Proposal(leader, mut message) = proposal else {
+        panic!("not a proposal input");
+    };
+    message.proposal.data.view_change_evidence = Some(tc);
+    ConsensusInput::Proposal(leader, message)
+}
+
+/// How many steps of `trace` take an input of the kind `input`, as the
+/// recorder names it.
+pub(crate) fn trace_steps(trace: &str, input: &str) -> usize {
+    let step = format!("{{\"consensus\":{{\"input\":{{\"{input}\"");
+    trace.lines().filter(|l| l.starts_with(&step)).count()
 }
 
 /// Build a lock-carrying timeout certificate for `view_number` in `epoch`,

@@ -48,10 +48,10 @@ inductive Finding where
 
 /--
 A `# placed` or `# forced` line, which the recorder writes when a test sets the
-node's view and epoch, replaces a proposal it holds, or restores its lock, directly. What the rules
-derive from the steps is then not the node's, so only the signing rules are
-checked: they read only what was received and sent, which the test did not
-change.
+node's view and epoch, replaces a proposal it holds, restores its lock, or
+resumes it as after a restart, directly. What the rules derive from the steps is
+then not the node's, so only the signing rules are checked: they read only what
+was received and sent, which the test did not change.
 -/
 def placement (text : String) : Option String :=
   (text.splitOn "\n").find? (fun l => l.startsWith "# placed " || l.startsWith "# forced ")
@@ -102,8 +102,8 @@ def checkOne (δ : Nat) (coverage : Option (IO.Ref Coverage)) (path : System.Fil
   | .ok said =>
     if said.anchorView ≠ 0 then
       return .outOfScope s!"restored from view {said.anchorView}, and restarts are not covered"
-    else if signsNoLock text then
-      return .outOfScope "its timeouts sign no lock, as before the certificate rule"
+    else if beforeCertificateRule text then
+      return .outOfScope "recorded before the certificate rule"
     else if testFailed text then
       return .outOfScope "the test that recorded it failed"
     else

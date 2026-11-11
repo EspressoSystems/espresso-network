@@ -20,6 +20,7 @@ mod storage;
 mod timeout_certificate;
 mod timeout_epoch_split;
 mod trace_contract;
+mod trace_recorder;
 mod transactions;
 mod upgrade;
 mod vid;

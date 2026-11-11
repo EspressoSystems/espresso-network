@@ -139,12 +139,13 @@ def leaderIn (leaders : Std.TreeMap ViewNumber (List (EpochNumber × PubKey)))
   ((leaders.get? v).getD []).lookup e
 
 /--
-Whether the trace says its timeouts sign no lock: the `# timeouts sign no lock`
-line. Before the certificate rule a timeout vote and certificate carry no lock,
-which the specification does not model.
+Whether the trace says it was, at least in part, before the certificate rule: the
+`# before the certificate rule` line. Before it a timeout vote and certificate
+carry no lock, and a node votes by the rules it replaced, which the specification
+does not model.
 -/
-def signsNoLock (text : String) : Bool :=
-  (text.splitOn "\n").any (· == "# timeouts sign no lock")
+def beforeCertificateRule (text : String) : Bool :=
+  (text.splitOn "\n").any (· == "# before the certificate rule")
 
 /--
 Whether the test that recorded the trace failed: the `# test failed` line. A failing
