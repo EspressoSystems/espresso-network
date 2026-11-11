@@ -2,9 +2,9 @@
 //! the events its server sends.
 //!
 //! A sequence starts from an empty stake table or from the state after a prefix of decaf's history,
-//! so it runs against real validators, delegations and a set larger than `MAX_VALIDATORS`. Ops pick
-//! accounts and keys from small pools so that sequences reuse them, and amounts, delegators and
-//! targets can refer to the state built so far.
+//! so it runs against real validators and delegations, with up to `MAX_VALIDATORS` of them staked.
+//! Ops pick accounts and keys from small pools so that sequences reuse them, and amounts, delegators
+//! and targets can refer to the state built so far.
 
 use std::{
     collections::{BTreeSet, HashSet},
@@ -49,6 +49,9 @@ mod strategy;
 
 use self::{model::*, strategy::*};
 
+/// What `apply_event` returns.
+type ApplyResult = Result<Result<(), ExpectedStakeTableError>, StakeTableError>;
+
 /// Sequences the reachability test draws. Enough for every outcome in [`REACHABLE`] to show up
 /// several times, so a strategy change that makes one rare still fails the test.
 const OUTCOME_SEQUENCES: usize = 500;
@@ -64,11 +67,13 @@ const REACHABLE: &[&str] = &[
     "Register: Error BlsKeyAlreadyUsed",
     "RegisterV2: Ok authenticated",
     "RegisterV2: Ok unauthenticated",
+    "RegisterV2: Ok dropped reused Schnorr key",
     "RegisterV2: Error ValidatorAlreadyExited",
     "RegisterV2: Error AlreadyRegistered",
     "RegisterV2: Error BlsKeyAlreadyUsed",
     "RegisterV3: Ok authenticated",
     "RegisterV3: Ok unauthenticated",
+    "RegisterV3: Ok dropped reused Schnorr key",
     "RegisterV3: Error ValidatorAlreadyExited",
     "RegisterV3: Error AlreadyRegistered",
     "RegisterV3: Error BlsKeyAlreadyUsed",
@@ -81,13 +86,17 @@ const REACHABLE: &[&str] = &[
     "Delegate: Error ZeroDelegatorStake",
     "Delegate: Error ValidatorNotFound",
     "Delegate: Error StakeOverflow",
-    "Undelegate: Ok",
+    "Undelegate: Ok emptied",
+    "Undelegate: Ok partial",
     "Undelegate: Error ValidatorNotFound",
-    "Undelegate: Error InsufficientStake",
+    "Undelegate: Error InsufficientStake for the validator",
+    "Undelegate: Error InsufficientStake for the delegator",
     "Undelegate: Error DelegatorNotFound",
-    "UndelegateV2: Ok",
+    "UndelegateV2: Ok emptied",
+    "UndelegateV2: Ok partial",
     "UndelegateV2: Error ValidatorNotFound",
-    "UndelegateV2: Error InsufficientStake",
+    "UndelegateV2: Error InsufficientStake for the validator",
+    "UndelegateV2: Error InsufficientStake for the delegator",
     "UndelegateV2: Error DelegatorNotFound",
     "KeyUpdate: Ok",
     "KeyUpdate: Expected InvalidBlsKey",
@@ -105,10 +114,12 @@ const REACHABLE: &[&str] = &[
     "CommissionUpdate: Ok",
     "CommissionUpdate: Error InvalidCommission",
     "CommissionUpdate: Error ValidatorNotFound",
-    "X25519KeyUpdate: Ok",
+    "X25519KeyUpdate: Ok set",
+    "X25519KeyUpdate: Ok cleared",
     "X25519KeyUpdate: Error ValidatorNotFound",
     "X25519KeyUpdate: Error X25519KeyAlreadyUsed",
-    "P2pAddrUpdate: Ok",
+    "P2pAddrUpdate: Ok set",
+    "P2pAddrUpdate: Ok cleared",
     "P2pAddrUpdate: Error ValidatorNotFound",
 ];
 
@@ -161,7 +172,7 @@ proptest! {
     #[test]
     fn hash_ignores_validator_order((start, ops) in sequence()) {
         let state = replay(&start, &ops);
-        prop_assert_eq!(sorted_by_account(&state).commit(), state.commit());
+        assert_eq!(sorted_by_account(&state).commit(), state.commit());
     }
 
     #[test]
@@ -169,7 +180,7 @@ proptest! {
         let mut model = Model::from_state(&Replay::new(&start).state);
         replay_observed(&start, &ops, |event, result, state| {
             let expected = model.apply(event);
-            assert_eq!(result_label(result), expected, "{event:?} in {state:?}");
+            assert_eq!(format!("{result:?}"), format!("{expected:?}"), "{event:?} in {state:?}");
             assert!(model.matches(state), "{event:?} left {state:?}, the model holds {model:?}");
         });
     }
@@ -185,7 +196,7 @@ proptest! {
             };
             let sorted_set = ValidatorSet::from_state(&sorted, version)
                 .expect("the same validators in another order give a validator set");
-            prop_assert_eq!(quorum(&set), quorum(&sorted_set), "at {}", version);
+            assert_eq!(quorum(&set), quorum(&sorted_set), "at {version}");
         }
     }
 }
@@ -201,11 +212,7 @@ fn replay(start: &Start, ops: &[Op]) -> StakeTableState {
 fn replay_observed(
     start: &Start,
     ops: &[Op],
-    mut observe: impl FnMut(
-        &StakeTableEvent,
-        &Result<Result<(), ExpectedStakeTableError>, StakeTableError>,
-        &StakeTableState,
-    ),
+    mut observe: impl FnMut(&StakeTableEvent, &ApplyResult, &StakeTableState),
 ) -> StakeTableState {
     let mut replay = Replay::new(start);
     for op in ops {
@@ -222,31 +229,87 @@ fn replay_observed(
     replay.state
 }
 
-/// `event: outcome` as listed in [`REACHABLE`], named after the event and error variants.
-fn outcome(
-    event: &StakeTableEvent,
-    result: &Result<Result<(), ExpectedStakeTableError>, StakeTableError>,
-    state: &StakeTableState,
-) -> String {
-    let variant = |debug: String| debug.split('(').next().unwrap_or_default().to_owned();
+/// `event: outcome` as listed in [`REACHABLE`]. Outcomes are named after the error variants, and
+/// split further where one variant covers branches that differ. A rejected event leaves `state`
+/// as it was before.
+fn outcome(event: &StakeTableEvent, result: &ApplyResult, state: &StakeTableState) -> String {
     let kind = variant(format!("{event:?}"));
-    let outcome = match result {
-        Ok(Ok(())) => match event {
-            StakeTableEvent::Register(ValidatorRegistered { account, .. })
-            | StakeTableEvent::RegisterV2(ValidatorRegisteredV2 { account, .. })
-            | StakeTableEvent::RegisterV3(ValidatorRegisteredV3 { account, .. }) => {
-                if state.validators()[account].authenticated {
-                    "Ok authenticated".to_owned()
-                } else {
-                    "Ok unauthenticated".to_owned()
-                }
+    let outcome = match (event, result) {
+        (StakeTableEvent::Register(e), Ok(Ok(()))) => registration(state, e.account, e.schnorrVk),
+        (StakeTableEvent::RegisterV2(e), Ok(Ok(()))) => registration(state, e.account, e.schnorrVK),
+        (StakeTableEvent::RegisterV3(e), Ok(Ok(()))) => registration(state, e.account, e.schnorrVK),
+        (
+            StakeTableEvent::Undelegate(Undelegated {
+                delegator,
+                validator,
+                amount,
+            })
+            | StakeTableEvent::UndelegateV2(UndelegatedV2 {
+                delegator,
+                validator,
+                amount,
+                ..
+            }),
+            result,
+        ) => match result {
+            Ok(Ok(()))
+                if state.validators()[validator]
+                    .delegators
+                    .contains_key(delegator) =>
+            {
+                "Ok partial"
             },
-            _ => "Ok".to_owned(),
+            Ok(Ok(())) => "Ok emptied",
+            Err(StakeTableError::InsufficientStake)
+                if state.validators()[validator].stake < *amount =>
+            {
+                "Error InsufficientStake for the validator"
+            },
+            Err(StakeTableError::InsufficientStake) => "Error InsufficientStake for the delegator",
+            _ => return format!("{kind}: {}", decision(result)),
+        }
+        .to_owned(),
+        (StakeTableEvent::X25519KeyUpdate(e), Ok(Ok(()))) => {
+            set_or_cleared(state.validators()[&e.validator].x25519_key.is_some())
         },
-        Ok(Err(err)) => format!("Expected {}", variant(format!("{err:?}"))),
-        Err(err) => format!("Error {}", variant(format!("{err:?}"))),
+        (StakeTableEvent::P2pAddrUpdate(e), Ok(Ok(()))) => {
+            set_or_cleared(state.validators()[&e.validator].p2p_addr.is_some())
+        },
+        _ => decision(result),
     };
     format!("{kind}: {outcome}")
+}
+
+/// `Ok`, `Expected <variant>` or `Error <variant>`.
+fn decision(result: &ApplyResult) -> String {
+    match result {
+        Ok(Ok(())) => "Ok".to_owned(),
+        Ok(Err(err)) => format!("Expected {}", variant(format!("{err:?}"))),
+        Err(err) => format!("Error {}", variant(format!("{err:?}"))),
+    }
+}
+
+/// The variant name a `Debug` string starts with.
+fn variant(debug: String) -> String {
+    debug.split('(').next().unwrap_or_default().to_owned()
+}
+
+/// Whether an accepted registration left the validator authenticated, and if not, whether that is
+/// because it reused a Schnorr key that parses.
+fn registration(state: &StakeTableState, account: Address, schnorr: EdOnBN254PointSol) -> String {
+    let validator = &state.validators()[&account];
+    if validator.authenticated {
+        "Ok authenticated"
+    } else if validator.state_ver_key.is_none() && SchnorrPubKey::try_from(schnorr).is_ok() {
+        "Ok dropped reused Schnorr key"
+    } else {
+        "Ok unauthenticated"
+    }
+    .to_owned()
+}
+
+fn set_or_cleared(set: bool) -> String {
+    if set { "Ok set" } else { "Ok cleared" }.to_owned()
 }
 
 fn assert_unchanged(before: &StakeTableState, after: &StakeTableState) {
@@ -355,14 +418,4 @@ fn quorum(set: &ValidatorSet) -> Vec<(PubKey, U256)> {
         .values()
         .map(|v| (*v.stake_table_key(), v.stake))
         .collect()
-}
-
-/// `Ok`, `Expected <variant>` or `Error <variant>`, the decision a result stands for.
-fn result_label(result: &Result<Result<(), ExpectedStakeTableError>, StakeTableError>) -> String {
-    let variant = |debug: String| debug.split('(').next().unwrap_or_default().to_owned();
-    match result {
-        Ok(Ok(())) => "Ok".to_owned(),
-        Ok(Err(err)) => format!("Expected {}", variant(format!("{err:?}"))),
-        Err(err) => format!("Error {}", variant(format!("{err:?}"))),
-    }
 }

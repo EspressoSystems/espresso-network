@@ -2,10 +2,11 @@
 
 use super::*;
 
-/// The rules of the stake table contract as the light client applies them, written out on their
-/// own so `apply_event` has something to be compared against. It shares only the key, signature
-/// and address parsers with `apply_event`.
-#[derive(Clone, Debug, Default)]
+/// The decisions `apply_event` makes, written out on their own so that a change to one of them
+/// shows up as a disagreement. It shares only the key, signature and address parsers with
+/// `apply_event`, and follows its order of checks, so it tracks `apply_event` rather than the
+/// contract.
+#[derive(Clone, Debug)]
 pub(super) struct Model {
     validators: RegisteredValidatorMap,
     exits: HashSet<Address>,
@@ -15,7 +16,7 @@ pub(super) struct Model {
 }
 
 /// Keys a registration carries, once its signatures have been checked or not.
-pub(super) struct Registration {
+struct Registration {
     account: Address,
     bls: Option<PubKey>,
     schnorr: Option<SchnorrPubKey>,
@@ -44,27 +45,18 @@ impl Model {
             && self.x25519_keys == *state.used_x25519_keys()
     }
 
-    /// Apply `event` if the rules accept it, and return the decision as [`result_label`] names
-    /// it.
-    pub(super) fn apply(&mut self, event: &StakeTableEvent) -> String {
-        match self.try_apply(event) {
-            Ok(()) => "Ok".to_owned(),
-            Err(label) => label.to_owned(),
-        }
-    }
-
-    fn try_apply(&mut self, event: &StakeTableEvent) -> Result<(), &'static str> {
+    /// Apply `event` if it is accepted, and return what `apply_event` should return for it.
+    pub(super) fn apply(&mut self, event: &StakeTableEvent) -> ApplyResult {
         match event {
             StakeTableEvent::Register(e) => {
                 let bls = PubKey::try_from(e.blsVk).ok();
                 let schnorr = SchnorrPubKey::try_from(e.schnorrVk).ok();
-                // Unlike later versions, a reused Schnorr key rejects the registration.
                 self.check_new(e.account, bls.as_ref(), None)?;
-                if schnorr
-                    .as_ref()
-                    .is_some_and(|k| self.schnorr_keys.contains(k))
-                {
-                    return Err("Expected SchnorrKeyAlreadyUsed");
+                // Unlike later versions, a reused Schnorr key rejects the registration.
+                if let Some(k) = schnorr.as_ref().filter(|k| self.schnorr_keys.contains(*k)) {
+                    return Ok(Err(ExpectedStakeTableError::SchnorrKeyAlreadyUsed(
+                        k.to_string(),
+                    )));
                 }
                 self.register(Registration {
                     account: e.account,
@@ -125,14 +117,14 @@ impl Model {
             },
             StakeTableEvent::Delegate(e) => {
                 if e.amount.is_zero() {
-                    return Err("Error ZeroDelegatorStake");
+                    return Err(StakeTableError::ZeroDelegatorStake(e.delegator));
                 }
                 let v = self.registered(e.validator)?;
                 let held = v.delegators.get(&e.delegator).copied().unwrap_or_default();
                 let (Some(stake), Some(held)) =
                     (v.stake.checked_add(e.amount), held.checked_add(e.amount))
                 else {
-                    return Err("Error StakeOverflow");
+                    return Err(StakeTableError::StakeOverflow(e.validator));
                 };
                 v.stake = stake;
                 v.delegators.insert(e.delegator, held);
@@ -150,14 +142,14 @@ impl Model {
             }) => {
                 let v = self.registered(*validator)?;
                 if v.stake < *amount {
-                    return Err("Error InsufficientStake");
+                    return Err(StakeTableError::InsufficientStake);
                 }
                 let held = *v
                     .delegators
                     .get(delegator)
-                    .ok_or("Error DelegatorNotFound")?;
+                    .ok_or(StakeTableError::DelegatorNotFound(*delegator))?;
                 if held < *amount {
-                    return Err("Error InsufficientStake");
+                    return Err(StakeTableError::InsufficientStake);
                 }
                 v.stake -= *amount;
                 if held == *amount {
@@ -167,22 +159,33 @@ impl Model {
                 }
             },
             StakeTableEvent::KeyUpdate(e) => {
-                let bls = PubKey::try_from(e.blsVK).map_err(|_| "Expected InvalidBlsKey")?;
-                let schnorr = SchnorrPubKey::try_from(e.schnorrVK)
-                    .map_err(|_| "Expected InvalidSchnorrKey")?;
-                self.update_keys(e.account, bls, schnorr)?;
+                let Ok(bls) = PubKey::try_from(e.blsVK) else {
+                    return Ok(Err(ExpectedStakeTableError::InvalidBlsKey));
+                };
+                let Ok(schnorr) = SchnorrPubKey::try_from(e.schnorrVK) else {
+                    return Ok(Err(ExpectedStakeTableError::InvalidSchnorrKey));
+                };
+                return self.update_keys(e.account, bls, schnorr);
             },
             StakeTableEvent::KeyUpdateV2(e) => {
-                let (bls, schnorr) = e.authenticate().map_err(|err| match err {
-                    StakeTableSolError::InvalidBlsKey => "Expected InvalidBlsKey",
-                    StakeTableSolError::InvalidSchnorrKey => "Expected InvalidSchnorrKey",
-                    _ => "Error AuthenticationFailed",
-                })?;
-                self.update_keys(e.account, bls, schnorr)?;
+                let (bls, schnorr) = match e.authenticate() {
+                    Ok(keys) => keys,
+                    Err(StakeTableSolError::InvalidBlsKey) => {
+                        return Ok(Err(ExpectedStakeTableError::InvalidBlsKey));
+                    },
+                    Err(StakeTableSolError::InvalidSchnorrKey) => {
+                        return Ok(Err(ExpectedStakeTableError::InvalidSchnorrKey));
+                    },
+                    Err(err) => return Err(StakeTableError::AuthenticationFailed(err.to_string())),
+                };
+                return self.update_keys(e.account, bls, schnorr);
             },
             StakeTableEvent::CommissionUpdate(e) => {
                 if e.newCommission > COMMISSION_BASIS_POINTS {
-                    return Err("Error InvalidCommission");
+                    return Err(StakeTableError::InvalidCommission(
+                        e.validator,
+                        e.newCommission,
+                    ));
                 }
                 self.registered(e.validator)?.commission = e.newCommission;
             },
@@ -191,7 +194,7 @@ impl Model {
                 let key = parse_x25519_key(e.x25519Key.0);
                 if let Some(key) = key {
                     if self.x25519_keys.contains(&key) {
-                        return Err("Error X25519KeyAlreadyUsed");
+                        return Err(StakeTableError::X25519KeyAlreadyUsed(key.to_string()));
                     }
                     self.x25519_keys.insert(key);
                 }
@@ -202,16 +205,16 @@ impl Model {
                 self.registered(e.validator)?.p2p_addr = e.p2pAddr.parse().ok();
             },
         }
-        Ok(())
+        Ok(Ok(()))
     }
 
     fn registered(
         &mut self,
         account: Address,
-    ) -> Result<&mut RegisteredValidator<PubKey>, &'static str> {
+    ) -> Result<&mut RegisteredValidator<PubKey>, StakeTableError> {
         self.validators
             .get_mut(&account)
-            .ok_or("Error ValidatorNotFound")
+            .ok_or(StakeTableError::ValidatorNotFound(account))
     }
 
     /// The checks every registration makes, in the order they are made.
@@ -220,18 +223,18 @@ impl Model {
         account: Address,
         bls: Option<&PubKey>,
         x25519: Option<&x25519::PublicKey>,
-    ) -> Result<(), &'static str> {
+    ) -> Result<(), StakeTableError> {
         if self.exits.contains(&account) {
-            return Err("Error ValidatorAlreadyExited");
+            return Err(StakeTableError::ValidatorAlreadyExited(account));
         }
         if self.validators.contains_key(&account) {
-            return Err("Error AlreadyRegistered");
+            return Err(StakeTableError::AlreadyRegistered(account));
         }
-        if bls.is_some_and(|k| self.bls_keys.contains(k)) {
-            return Err("Error BlsKeyAlreadyUsed");
+        if let Some(k) = bls.filter(|k| self.bls_keys.contains(*k)) {
+            return Err(StakeTableError::BlsKeyAlreadyUsed(k.to_string()));
         }
-        if x25519.is_some_and(|k| self.x25519_keys.contains(k)) {
-            return Err("Error X25519KeyAlreadyUsed");
+        if let Some(k) = x25519.filter(|k| self.x25519_keys.contains(*k)) {
+            return Err(StakeTableError::X25519KeyAlreadyUsed(k.to_string()));
         }
         Ok(())
     }
@@ -275,13 +278,15 @@ impl Model {
         account: Address,
         bls: PubKey,
         schnorr: SchnorrPubKey,
-    ) -> Result<(), &'static str> {
+    ) -> ApplyResult {
         self.registered(account)?;
         if self.bls_keys.contains(&bls) {
-            return Err("Error BlsKeyAlreadyUsed");
+            return Err(StakeTableError::BlsKeyAlreadyUsed(bls.to_string()));
         }
         if self.schnorr_keys.contains(&schnorr) {
-            return Err("Expected SchnorrKeyAlreadyUsed");
+            return Ok(Err(ExpectedStakeTableError::SchnorrKeyAlreadyUsed(
+                schnorr.to_string(),
+            )));
         }
         self.bls_keys.insert(bls);
         self.schnorr_keys.insert(schnorr.clone());
@@ -289,12 +294,12 @@ impl Model {
         v.stake_table_key = Some(bls);
         v.state_ver_key = Some(schnorr);
         v.authenticated = true;
-        Ok(())
+        Ok(Ok(()))
     }
 }
 
 /// The x25519 key in `bytes`, if it is one. The all zero encoding parses but is not a key.
-pub(super) fn parse_x25519_key(bytes: [u8; 32]) -> Option<x25519::PublicKey> {
+fn parse_x25519_key(bytes: [u8; 32]) -> Option<x25519::PublicKey> {
     (bytes != [0; 32])
         .then(|| x25519::PublicKey::try_from(bytes.as_slice()).ok())
         .flatten()

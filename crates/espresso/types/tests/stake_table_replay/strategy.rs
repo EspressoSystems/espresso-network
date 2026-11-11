@@ -90,6 +90,9 @@ pub(super) enum Validator {
     Pool(usize),
     /// A validator of the start state, by index. A sequence that starts empty uses the pool.
     Start(usize),
+    /// The `n`th most recently registered validator in the state so far, so that the ops of a
+    /// sequence concentrate on a few live validators. With none registered, it uses the pool.
+    Existing(usize),
 }
 
 #[derive(Clone, Debug)]
@@ -133,8 +136,8 @@ pub(super) enum X25519Key {
     Raw([u8; 32]),
     /// Rejected by the contract, so only a server can send it.
     Zero,
-    /// At or above the field modulus, also rejected by the contract.
-    Unreduced,
+    /// The encoding of the field modulus itself, which the contract and the parser both reject.
+    Modulus,
 }
 
 #[derive(Clone, Debug)]
@@ -144,6 +147,8 @@ pub(super) enum Amount {
     Earlier(usize),
     /// What the delegator holds with the validator in the state so far.
     Held,
+    /// One more than [`Amount::Held`], which only another delegator's stake can cover.
+    OverHeld,
 }
 
 pub(super) struct Pool {
@@ -193,7 +198,7 @@ pub(super) fn start() -> impl Strategy<Value = Start> {
 
 pub(super) fn op() -> impl Strategy<Value = Op> {
     prop_oneof![
-        3 => (validator(), bls_key(), schnorr_key(), commission(), option::of(amount())).prop_map(
+        3 => (registrant(), bls_key(), schnorr_key(), commission(), option::of(amount())).prop_map(
             |(account, bls, schnorr, commission, self_stake)| Op::Register {
                 account,
                 bls,
@@ -202,14 +207,14 @@ pub(super) fn op() -> impl Strategy<Value = Op> {
                 self_stake,
             }
         ),
-        2 => (validator(), signed_keys(), commission()).prop_map(|(account, keys, commission)| {
+        2 => (registrant(), signed_keys(), commission()).prop_map(|(account, keys, commission)| {
             Op::RegisterV2 {
                 account,
                 keys,
                 commission,
             }
         }),
-        2 => (validator(), signed_keys(), commission(), x25519_key(), p2p_addr()).prop_map(
+        2 => (registrant(), signed_keys(), commission(), x25519_key(), p2p_addr()).prop_map(
             |(account, keys, commission, x25519_key, p2p_addr)| Op::RegisterV3 {
                 account,
                 keys,
@@ -269,16 +274,27 @@ pub(super) fn pool_index() -> impl Strategy<Value = usize> {
     prop_oneof![3 => 0..3usize, 1 => 0..POOL_SIZE]
 }
 
-pub(super) fn validator() -> impl Strategy<Value = Validator> {
+/// Accounts to register: mostly fresh ones from the pool, sometimes one already registered.
+pub(super) fn registrant() -> impl Strategy<Value = Validator> {
     prop_oneof![
         3 => pool_index().prop_map(Validator::Pool),
         1 => any::<usize>().prop_map(Validator::Start),
+        1 => pool_index().prop_map(Validator::Existing),
+    ]
+}
+
+/// Validators every other op acts on: mostly registered ones, sometimes unknown ones.
+pub(super) fn validator() -> impl Strategy<Value = Validator> {
+    prop_oneof![
+        1 => pool_index().prop_map(Validator::Pool),
+        1 => any::<usize>().prop_map(Validator::Start),
+        4 => pool_index().prop_map(Validator::Existing),
     ]
 }
 
 pub(super) fn delegator() -> impl Strategy<Value = Delegator> {
     prop_oneof![
-        3 => pool_index().prop_map(Delegator::Pool),
+        3 => (0..POOL_SIZE).prop_map(Delegator::Pool),
         1 => any::<usize>().prop_map(Delegator::Existing),
     ]
 }
@@ -341,6 +357,7 @@ pub(super) fn amount() -> impl Strategy<Value = Amount> {
 pub(super) fn undelegated() -> impl Strategy<Value = Amount> {
     prop_oneof![
         3 => Just(Amount::Held),
+        2 => Just(Amount::OverHeld),
         2 => any::<usize>().prop_map(Amount::Earlier),
         2 => amount(),
     ]
@@ -351,12 +368,13 @@ pub(super) fn x25519_key() -> impl Strategy<Value = X25519Key> {
         6 => pool_index().prop_map(X25519Key::Pool),
         2 => any::<[u8; 32]>().prop_map(X25519Key::Raw),
         1 => Just(X25519Key::Zero),
-        1 => Just(X25519Key::Unreduced),
+        1 => Just(X25519Key::Modulus),
     ]
 }
 
-/// Addresses `StakeTableV3.validateP2pAddr` accepts: a nonempty host, a colon, and a port from 1
-/// to 65535. Only these reach an honest light client, so the round trip check relies on it.
+/// Mostly addresses `StakeTableV3.validateP2pAddr` accepts: a nonempty host, a colon, and a port
+/// from 1 to 65535. A few are ones only a server can send, which do not parse and so clear the
+/// validator's address.
 pub(super) fn p2p_addr() -> impl Strategy<Value = String> {
     let host = prop_oneof![
         3 => any::<Ipv4Addr>().prop_map(|ip| ip.to_string()),
@@ -366,7 +384,15 @@ pub(super) fn p2p_addr() -> impl Strategy<Value = String> {
         2 => "[\\[\\]:._0-9a-zA-Z-]{1,16}",
     ];
     let port = prop_oneof![8 => 1..=u16::MAX, 1 => Just(1u16), 1 => Just(u16::MAX)];
-    (host, port).prop_map(|(host, port)| format!("{host}:{port}"))
+    let unparsable = prop_oneof![
+        Just(String::new()),
+        "[a-z]{1,8}:[a-z]{1,4}",
+        "[a-z]{1,8}:[1-9][0-9]{5}",
+    ];
+    prop_oneof![
+        9 => (host, port).prop_map(|(host, port)| format!("{host}:{port}")),
+        1 => unparsable,
+    ]
 }
 
 pub(super) struct Replay {
@@ -573,7 +599,16 @@ impl Replay {
             Validator::Start(i) if !self.start_validators.is_empty() => {
                 self.start_validators[i % self.start_validators.len()]
             },
-            Validator::Start(i) | Validator::Pool(i) => POOL.validators[i % POOL_SIZE],
+            Validator::Existing(n) if !self.state.validators().is_empty() => {
+                let validators = self.state.validators();
+                *validators
+                    .get_index(validators.len() - 1 - n % validators.len())
+                    .expect("the index is below the length")
+                    .0
+            },
+            Validator::Start(i) | Validator::Existing(i) | Validator::Pool(i) => {
+                POOL.validators[i % POOL_SIZE]
+            },
         }
     }
 
@@ -601,16 +636,22 @@ impl Replay {
         let value = match *amount {
             Amount::Exact(value) => value,
             Amount::Earlier(i) => *self.amounts.get(i % self.amounts.len().max(1))?,
-            Amount::Held => self
-                .state
-                .validators()
-                .get(&validator)
-                .and_then(|v| v.delegators.get(&delegator))
-                .copied()
-                .unwrap_or_default(),
+            Amount::Held => self.held(delegator, validator),
+            Amount::OverHeld => self
+                .held(delegator, validator)
+                .saturating_add(U256::from(1)),
         };
         self.amounts.push(value);
         Some(value)
+    }
+
+    fn held(&self, delegator: Address, validator: Address) -> U256 {
+        self.state
+            .validators()
+            .get(&validator)
+            .and_then(|v| v.delegators.get(&delegator))
+            .copied()
+            .unwrap_or_default()
     }
 
     /// Signatures over the signers' accounts, or `None` past [`MAX_SIGNED_EVENTS`].
@@ -670,7 +711,12 @@ impl X25519Key {
                 bytes
             },
             X25519Key::Zero => [0; 32],
-            X25519Key::Unreduced => [0xff; 32],
+            X25519Key::Modulus => {
+                let mut p = [0xff; 32];
+                p[0] = 0xed;
+                p[31] = 0x7f;
+                p
+            },
         })
     }
 }
