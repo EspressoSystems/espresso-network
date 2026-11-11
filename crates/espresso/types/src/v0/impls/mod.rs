@@ -9,6 +9,8 @@ mod instance_state;
 mod l1;
 pub mod reward;
 mod stake_table;
+#[cfg(test)]
+mod stake_table_replay_tests;
 mod state;
 mod transaction;
 
