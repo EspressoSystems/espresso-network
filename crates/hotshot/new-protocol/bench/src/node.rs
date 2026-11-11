@@ -15,6 +15,7 @@ use hotshot_new_protocol::{
     coordinator::{Coordinator, timer::Timer},
     epoch::EpochManager,
     helpers::proposal_commitment,
+    leader_trace::{CsvLeaderTracer, LeaderTracerHandle},
     network::Cliquenet,
     outbox::Outbox,
     proposal::{ProposalValidator, VidShareValidator},
@@ -26,7 +27,7 @@ use hotshot_new_protocol::{
 use hotshot_types::{
     PeerConnectInfo,
     addr::NetAddr,
-    data::{EpochNumber, Leaf2, ViewNumber},
+    data::{EpochNumber, Leaf2, VidCommitment, VidCommitment2, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
     message::UpgradeLock,
     signature_key::BLSPubKey,
@@ -53,10 +54,30 @@ pub async fn run(cfg: NodeConfig) -> Result<()> {
     let (membership, client) = make_membership(cfg.total_nodes, public_key).await;
     let network = create_network(cfg.node_id, &public_key, &private_key, &cfg).await?;
 
-    let coordinator =
-        build_coordinator(public_key, private_key, membership, network, client, &cfg).await;
+    let tracer = cfg
+        .leader_trace
+        .then(|| CsvLeaderTracer::new(cfg.node_id, leader_trace_path(&cfg)))
+        .transpose()?
+        .map(|tracer| Arc::new(tracer) as LeaderTracerHandle);
+
+    let coordinator = build_coordinator(
+        public_key,
+        private_key,
+        membership,
+        network,
+        client,
+        &cfg,
+        tracer,
+    )
+    .await;
 
     run_instrumented(coordinator, &cfg).await
+}
+
+fn leader_trace_path(cfg: &NodeConfig) -> PathBuf {
+    let out = PathBuf::from(&cfg.output_file);
+    let dir = out.parent().map(|p| p.to_path_buf()).unwrap_or_default();
+    dir.join(format!("leader_trace_node{}.csv", cfg.node_id))
 }
 
 async fn create_network(
@@ -114,6 +135,7 @@ async fn build_coordinator(
     network: Cliquenet<TestTypes>,
     client: CoordinatorClient<TestTypes>,
     cfg: &NodeConfig,
+    tracer: Option<LeaderTracerHandle>,
 ) -> BenchCoordinator {
     let instance = Arc::new(TestInstanceState::default());
     let epoch_height = u64::MAX;
@@ -139,6 +161,7 @@ async fn build_coordinator(
         genesis_leaf.clone(),
         epoch_height,
     );
+    consensus.set_tracer(tracer.clone());
 
     let vote1_collector = VoteCollector::new(membership.clone(), upgrade_lock.clone());
     let vote2_collector = VoteCollector::new(membership.clone(), upgrade_lock.clone());
@@ -151,14 +174,16 @@ async fn build_coordinator(
 
     let epoch_manager = EpochManager::new(epoch_height, membership.clone());
 
-    let vid_disperser = VidDisperser::new(
+    let mut vid_disperser = VidDisperser::new(
         membership.clone(),
         network.sender().clone(),
         public_key,
         private_key.clone(),
     );
+    vid_disperser.set_tracer(tracer.clone());
 
-    let vid_reconstructor = VidReconstructor::new();
+    let mut vid_reconstructor = VidReconstructor::new();
+    vid_reconstructor.set_tracer(tracer.clone());
 
     let block_config = BlockBuilderConfig::default();
     let block_builder = BlockBuilder::new(
@@ -166,7 +191,8 @@ async fn build_coordinator(
         membership.clone(),
         block_config,
         upgrade_lock.clone(),
-    );
+    )
+    .with_tracer(tracer);
 
     let mut state_manager = StateManager::new(instance.clone(), upgrade_lock.clone());
     let genesis_state = Arc::new(genesis_state);
@@ -295,18 +321,11 @@ async fn run_instrumented(mut coordinator: BenchCoordinator, cfg: &NodeConfig) -
                 let version = bench_upgrade_lock().version_infallible(req.view);
                 let header = TestBlockHeader::new::<TestTypes>(
                     &parent_leaf,
-                    block.payload_commitment,
+                    VidCommitment::V2(block.payload_commitment),
                     block.builder_commitment,
                     block.metadata,
                     version,
                 );
-                let header_input = ConsensusInput::HeaderCreated(
-                    req.view,
-                    proposal_commitment(&req.parent_proposal),
-                    header,
-                );
-                metrics.on_input(&header_input);
-                coordinator.apply_consensus(header_input);
                 let block_input = ConsensusInput::BlockBuilt {
                     view: req.view,
                     epoch: req.epoch,
@@ -316,6 +335,13 @@ async fn run_instrumented(mut coordinator: BenchCoordinator, cfg: &NodeConfig) -
                 };
                 metrics.on_input(&block_input);
                 coordinator.apply_consensus(block_input);
+                let header_input = ConsensusInput::HeaderCreated(
+                    req.view,
+                    proposal_commitment(&req.parent_proposal),
+                    header,
+                );
+                metrics.on_input(&header_input);
+                coordinator.apply_consensus(header_input);
                 continue; // skip process_consensus_output for this one
             }
 
@@ -347,7 +373,7 @@ async fn run_instrumented(mut coordinator: BenchCoordinator, cfg: &NodeConfig) -
 struct TestBlock {
     block: TestBlockPayload,
     metadata: TestMetadata,
-    payload_commitment: hotshot_types::data::VidCommitment,
+    payload_commitment: VidCommitment2,
     builder_commitment: hotshot_types::utils::BuilderCommitment,
 }
 
@@ -363,12 +389,14 @@ fn build_test_block(size: usize, num_nodes: usize) -> TestBlock {
     };
     // Use the actual committee size so the commitment matches what
     // VidDisperse::calculate_vid_disperse will produce.
-    let payload_commitment = hotshot_types::data::vid_commitment(
+    let VidCommitment::V2(payload_commitment) = hotshot_types::data::vid_commitment(
         &block.encode(),
         &metadata.encode(),
         num_nodes,
         versions::NEW_PROTOCOL_VERSION,
-    );
+    ) else {
+        panic!("the new protocol commits with AvidmGf2");
+    };
     let builder_commitment =
         <TestBlockPayload as BlockPayload<TestTypes>>::builder_commitment(&block, &metadata);
     TestBlock {

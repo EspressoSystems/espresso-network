@@ -35,8 +35,7 @@ pub const FINISH_OFFSET: u64 = 20;
 /// the wire format would flip before the decided certificate propagates) or
 /// an epoch other than the voter's own.
 ///
-/// Unlike the legacy task this ignores `T::UPGRADE_CONSTANTS`: one-view
-/// finality needs no 130-view runway or empty-block transition period.
+/// One-view finality needs no empty-block transition period.
 ///
 /// `None` when an offset would overflow the view number. No honest node
 /// reaches such a view, so nothing is expected there and a peer supplying

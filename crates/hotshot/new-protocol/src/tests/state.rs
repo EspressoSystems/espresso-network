@@ -6,7 +6,7 @@ use hotshot_example_types::{
     state_types::{INVALID_BLOCK_NUMBER, TestInstanceState, TestStateDelta, TestValidatedState},
 };
 use hotshot_types::{
-    data::{Leaf2, ViewNumber, vid_commitment},
+    data::{Leaf2, VidCommitment, ViewNumber, vid_commitment},
     traits::{
         BlockPayload, EncodeBytes, ValidatedState,
         block_contents::{BlockHeader, BuilderFee},
@@ -46,12 +46,14 @@ fn make_header_request(
     let metadata = TestMetadata {
         num_transactions: 0,
     };
-    let payload_commitment = vid_commitment(
+    let VidCommitment::V2(payload_commitment) = vid_commitment(
         &block.encode(),
         &metadata.encode(),
         10,
         TEST_VERSIONS.test.base,
-    );
+    ) else {
+        panic!("the new protocol commits with AvidmGf2");
+    };
     let builder_commitment =
         <TestBlockPayload as BlockPayload<TestTypes>>::builder_commitment(&block, &metadata);
     let (builder_key, builder_private_key) =

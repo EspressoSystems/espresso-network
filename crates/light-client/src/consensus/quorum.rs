@@ -149,6 +149,9 @@ pub trait Quorum: Sync {
         self.verify_static::<V>(qc)
     }
 
+    /// The number of blocks in an epoch.
+    fn epoch_height(&self) -> u64;
+
     /// Verify that QCs are signed, form a chain starting from `leaf`, with a particular protocol
     /// version.
     ///
@@ -463,6 +466,10 @@ where
 
         Ok(())
     }
+
+    fn epoch_height(&self) -> u64 {
+        self.epoch_height
+    }
 }
 
 #[cfg(test)]
@@ -485,15 +492,16 @@ mod test {
 
     use super::*;
     use crate::testing::{
-        AlwaysFalseQuorum, AlwaysTrueQuorum, ENABLE_EPOCHS, EpochChangeQuorum, LEGACY_VERSION,
-        VersionCheckQuorum, custom_epoch_change_leaf_chain, custom_leaf_chain_with_upgrade,
-        epoch_change_leaf_chain, leaf_chain, leaf_chain_with_upgrade, qc_chain_from_leaf_chain,
+        AlwaysFalseQuorum, AlwaysTrueQuorum, ENABLE_EPOCHS, EpochChangeQuorum,
+        LEAF_CHAIN_EPOCH_HEIGHT, LEGACY_VERSION, VersionCheckQuorum,
+        custom_epoch_change_leaf_chain, custom_leaf_chain_with_upgrade, epoch_change_leaf_chain,
+        leaf_chain, leaf_chain_with_upgrade, qc_chain_from_leaf_chain,
     };
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_valid_chain() {
         let leaves = leaf_chain(1..=3, EPOCH_VERSION).await;
-        let ChainVersions { leaf: version, .. } = AlwaysTrueQuorum
+        let ChainVersions { leaf: version, .. } = AlwaysTrueQuorum::new(LEAF_CHAIN_EPOCH_HEIGHT)
             .verify_qc_chain_and_get_version(
                 leaves[0].leaf(),
                 &qc_chain_from_leaf_chain(&leaves[1..]),
@@ -506,7 +514,7 @@ mod test {
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_wrong_leaf() {
         let leaves = leaf_chain(1..=3, EPOCH_VERSION).await;
-        AlwaysTrueQuorum
+        AlwaysTrueQuorum::new(LEAF_CHAIN_EPOCH_HEIGHT)
             .verify_qc_chain_and_get_version(
                 leaves[2].leaf(),
                 &qc_chain_from_leaf_chain(&leaves[1..]),
@@ -518,7 +526,7 @@ mod test {
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_invalid_qc() {
         let leaves = leaf_chain(1..=2, EPOCH_VERSION).await;
-        AlwaysFalseQuorum
+        AlwaysFalseQuorum::new(LEAF_CHAIN_EPOCH_HEIGHT)
             .verify_qc_chain_and_get_version(
                 leaves[0].leaf(),
                 &[Certificate::for_parent(leaves[1].leaf())],
@@ -530,7 +538,7 @@ mod test {
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_non_consecutive() {
         let leaves = leaf_chain(1..=4, EPOCH_VERSION).await;
-        AlwaysTrueQuorum
+        AlwaysTrueQuorum::new(LEAF_CHAIN_EPOCH_HEIGHT)
             .verify_qc_chain_and_get_version(
                 leaves[0].leaf(),
                 &qc_chain_from_leaf_chain([&leaves[1], &leaves[3]]),
@@ -542,14 +550,13 @@ mod test {
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_upgrade() {
         let leaves = leaf_chain_with_upgrade(1..=3, 2, ENABLE_EPOCHS).await;
-        let ChainVersions { leaf: version, .. } =
-            VersionCheckQuorum::new(leaves.iter().map(|leaf| leaf.leaf().clone()))
-                .verify_qc_chain_and_get_version(
-                    leaves[0].leaf(),
-                    &qc_chain_from_leaf_chain(&leaves[1..]),
-                )
-                .await
-                .unwrap();
+        let ChainVersions { leaf: version, .. } = VersionCheckQuorum::new(
+            leaves.iter().map(|leaf| leaf.leaf().clone()),
+            LEAF_CHAIN_EPOCH_HEIGHT,
+        )
+        .verify_qc_chain_and_get_version(leaves[0].leaf(), &qc_chain_from_leaf_chain(&leaves[1..]))
+        .await
+        .unwrap();
         assert_eq!(version, leaves[0].header().version());
     }
 
@@ -561,13 +568,13 @@ mod test {
             proposal.upgrade_certificate = None;
         })
         .await;
-        VersionCheckQuorum::new(leaves.iter().map(|leaf| leaf.leaf().clone()))
-            .verify_qc_chain_and_get_version(
-                leaves[0].leaf(),
-                &qc_chain_from_leaf_chain(&leaves[1..]),
-            )
-            .await
-            .unwrap_err();
+        VersionCheckQuorum::new(
+            leaves.iter().map(|leaf| leaf.leaf().clone()),
+            LEAF_CHAIN_EPOCH_HEIGHT,
+        )
+        .verify_qc_chain_and_get_version(leaves[0].leaf(), &qc_chain_from_leaf_chain(&leaves[1..]))
+        .await
+        .unwrap_err();
     }
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]

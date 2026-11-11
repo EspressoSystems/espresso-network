@@ -44,7 +44,7 @@ use hotshot_new_protocol::{
 use hotshot_types::{
     PeerConfig, ValidatorConfig,
     consensus::PayloadWithMetadata,
-    data::{EpochNumber, VidCommitment, VidCommitment2, ViewNumber},
+    data::{EpochNumber, VidCommitment2, ViewNumber},
     message::UpgradeLock,
 };
 use rand::{RngCore, SeedableRng};
@@ -130,9 +130,6 @@ fn leader_vid(
         dispersal,
         ..
     } = commitments;
-    let VidCommitment::V2(payload_commitment) = payload_commitment else {
-        panic!("protocol 0.6 commits with AvidmGf2");
-    };
     let fragments = tracing::debug_span!("vid_disperse")
         .in_scope(|| disperse(dispersal, payload_commitment, committee));
     (payload, hashes, fragments)
@@ -154,6 +151,7 @@ fn disperse(
         payload_commitment,
         &committee.leader.public_key,
         &committee.leader.private_key,
+        None,
         |_, message| {
             let bytes = tracing::debug_span!("serialize")
                 .in_scope(|| upgrade_lock.serialize(message))

@@ -32,7 +32,7 @@ use hotshot_query_service::{
 };
 use hotshot_types::{
     data::{
-        DaProposal, DaProposal2, EpochNumber, QuorumProposal, QuorumProposalWrapper,
+        DaProposal2, EpochNumber, QuorumProposal, QuorumProposalWrapper,
         QuorumProposalWrapperLegacy, VidCommitment, VidCommon, VidDisperseShare,
     },
     drb::{DrbInput, DrbResult},
@@ -44,6 +44,7 @@ use hotshot_types::{
         CertificatePair, LightClientStateUpdateCertificateV1, LightClientStateUpdateCertificateV2,
         NextEpochQuorumCertificate2, QuorumCertificate2, UpgradeCertificate,
     },
+    simple_vote::LockView,
     traits::{
         block_contents::{BlockHeader, BlockPayload},
         metrics::Metrics,
@@ -924,10 +925,22 @@ impl SequencerPersistence for Persistence {
         cert2: Option<&Certificate2<SeqTypes>>,
         _consumer: &(impl EventConsumer + 'static),
     ) -> anyhow::Result<()> {
+        let leaf_chain: Vec<_> = leaf_chain.into_iter().collect();
+        // Keyed by the view of the newest leaf, which a re-vote's cert2 is later than.
+        let newest = leaf_chain
+            .iter()
+            .map(|(info, _)| info.leaf.view_number())
+            .max();
+        if let Some(cert2) = cert2
+            && newest.is_none()
+        {
+            tracing::warn!(view = %cert2.view_number, "cert2 without a decided leaf; not stored");
+        }
         let cert2_row = cert2
-            .map(|cert2| {
+            .zip(newest)
+            .map(|(cert2, newest)| {
                 let data = bincode::serialize(cert2).context("serializing cert2")?;
-                anyhow::Ok((cert2.view_number.u64() as i64, data))
+                anyhow::Ok((newest.u64() as i64, data))
             })
             .transpose()?;
         let values = leaf_chain
@@ -940,7 +953,9 @@ impl SequencerPersistence for Persistence {
                 let mut leaf = info.leaf.clone();
                 leaf.unfill_block_payload();
 
-                let view = cert.view_number().u64() as i64;
+                // Keyed by the leaf's view, as everything joined with it is: the certificate of
+                // an epoch's last block may be a re-vote's, at a later view.
+                let view = leaf.view_number().u64() as i64;
                 let leaf_bytes = bincode::serialize(&leaf)?;
                 let qc_bytes = bincode::serialize(cert.qc())?;
                 let next_epoch_qc_bytes = match cert.next_epoch_qc() {
@@ -1217,37 +1232,15 @@ impl SequencerPersistence for Persistence {
         res
     }
 
-    async fn append_da(
-        &self,
-        proposal: &Proposal<SeqTypes, DaProposal<SeqTypes>>,
-        vid_commit: VidCommitment,
-    ) -> anyhow::Result<()> {
-        let data = &proposal.data;
-        let view = data.view_number().u64();
-        let data_bytes = bincode::serialize(proposal).unwrap();
-
-        let now = Instant::now();
-        let res = serializable_retry!(self, || async {
-            let mut tx = self.db.write().await?;
-            tx.upsert(
-                "da_proposal",
-                ["view", "data", "payload_hash"],
-                ["view"],
-                [(view as i64, data_bytes.clone(), vid_commit.to_string())],
-            )
-            .await?;
-            tx.commit().await
-        })
-        .await;
-        self.internal_metrics
-            .internal_append_da_duration
-            .add_point(now.elapsed().as_secs_f64());
-        res
-    }
-
     async fn record_action(&self, view: ViewNumber, action: HotShotAction) -> anyhow::Result<()> {
         // Todo Remove this after https://github.com/EspressoSystems/espresso-network/issues/1931
-        if !matches!(action, HotShotAction::Propose | HotShotAction::Vote) {
+        //
+        // A timeout vote counts: a restarted node must not vote2 at a view it
+        // sent a timeout vote for.
+        if !matches!(
+            action,
+            HotShotAction::Propose | HotShotAction::Vote | HotShotAction::TimeoutVote
+        ) {
             return Ok(());
         }
 
@@ -1366,7 +1359,8 @@ impl SequencerPersistence for Persistence {
     }
 
     async fn append_high_qc2(&self, high_qc: QuorumCertificate2<SeqTypes>) -> anyhow::Result<()> {
-        let view = high_qc.view_number();
+        // Locks are ordered by epoch, then view.
+        let lock = LockView::of(&high_qc);
         let data = bincode::serialize(&high_qc).context("serializing high_qc2")?;
         serializable_retry!(self, || async {
             let mut tx = self.db.write().await?;
@@ -1381,10 +1375,10 @@ impl SequencerPersistence for Persistence {
                     let bytes: Vec<u8> = row.get("data");
                     bincode::deserialize::<QuorumCertificate2<SeqTypes>>(&bytes)
                         .context("deserializing existing high_qc2")
-                        .map(|qc| qc.view_number())
+                        .map(|qc| LockView::of(&qc))
                 })
                 .transpose()?;
-            if stored_view.is_some_and(|stored| stored >= view) {
+            if stored_view.is_some_and(|stored| stored >= lock) {
                 return Ok(());
             }
             tx.upsert("high_qc2", ["id", "data"], ["id"], [(true, data.clone())])
@@ -1405,6 +1399,52 @@ impl SequencerPersistence for Persistence {
             let bytes: Vec<u8> = row.get("data");
             bincode::deserialize::<QuorumCertificate2<SeqTypes>>(&bytes)
                 .context("deserializing high_qc2")
+        })
+        .transpose()
+    }
+
+    async fn append_boundary_qc2(&self, qc: QuorumCertificate2<SeqTypes>) -> anyhow::Result<()> {
+        let lock = LockView::of(&qc);
+        let data = bincode::serialize(&qc).context("serializing boundary_qc2")?;
+        serializable_retry!(self, || async {
+            let mut tx = self.db.write().await?;
+            // Compare-and-set inside one write transaction, as for `high_qc2`.
+            let stored = query("SELECT data FROM boundary_qc2 WHERE id = true")
+                .fetch_optional(tx.as_mut())
+                .await?
+                .map(|row| {
+                    let bytes: Vec<u8> = row.get("data");
+                    bincode::deserialize::<QuorumCertificate2<SeqTypes>>(&bytes)
+                        .context("deserializing existing boundary_qc2")
+                        .map(|qc| LockView::of(&qc))
+                })
+                .transpose()?;
+            if stored.is_some_and(|stored| stored >= lock) {
+                return Ok(());
+            }
+            tx.upsert(
+                "boundary_qc2",
+                ["id", "data"],
+                ["id"],
+                [(true, data.clone())],
+            )
+            .await?;
+            tx.commit().await
+        })
+        .await
+    }
+
+    async fn load_boundary_qc2(&self) -> anyhow::Result<Option<QuorumCertificate2<SeqTypes>>> {
+        let row = self
+            .db
+            .read()
+            .await?
+            .fetch_optional("SELECT data FROM boundary_qc2 WHERE id = true")
+            .await?;
+        row.map(|row| {
+            let bytes: Vec<u8> = row.get("data");
+            bincode::deserialize::<QuorumCertificate2<SeqTypes>>(&bytes)
+                .context("deserializing boundary_qc2")
         })
         .transpose()
     }
@@ -1446,57 +1486,6 @@ impl SequencerPersistence for Persistence {
                 [(true, upgrade_certificate_bytes.clone())],
             )
             .await?;
-            tx.commit().await
-        })
-        .await
-    }
-
-    async fn append_next_epoch_high_qc2(
-        &self,
-        next_epoch_high_qc: NextEpochQuorumCertificate2<SeqTypes>,
-    ) -> anyhow::Result<()> {
-        let view = next_epoch_high_qc.view_number();
-        let data =
-            bincode::serialize(&next_epoch_high_qc).context("serializing next epoch high_qc2")?;
-        serializable_retry!(self, || async {
-            let mut tx = self.db.write().await?;
-            let stored_view =
-                query("SELECT data FROM next_epoch_quorum_certificate WHERE id = true")
-                    .fetch_optional(tx.as_mut())
-                    .await?
-                    .map(|row| {
-                        let bytes: Vec<u8> = row.get("data");
-                        bincode::deserialize::<NextEpochQuorumCertificate2<SeqTypes>>(&bytes)
-                            .context("deserializing existing next epoch high_qc2")
-                            .map(|qc| qc.view_number())
-                    })
-                    .transpose()?;
-            if stored_view.is_some_and(|stored| stored >= view) {
-                return Ok(());
-            }
-            tx.upsert(
-                "next_epoch_quorum_certificate",
-                ["id", "data"],
-                ["id"],
-                [(true, data.clone())],
-            )
-            .await?;
-            tx.commit().await
-        })
-        .await
-    }
-
-    async fn store_eqc(
-        &self,
-        high_qc: QuorumCertificate2<SeqTypes>,
-        next_epoch_high_qc: NextEpochQuorumCertificate2<SeqTypes>,
-    ) -> anyhow::Result<()> {
-        let eqc_bytes =
-            bincode::serialize(&(high_qc, next_epoch_high_qc)).context("serializing eqc")?;
-        serializable_retry!(self, || async {
-            let mut tx = self.db.write().await?;
-            tx.upsert("eqc", ["id", "data"], ["id"], [(true, eqc_bytes.clone())])
-                .await?;
             tx.commit().await
         })
         .await
@@ -2382,6 +2371,20 @@ mod testing {
 
         async fn tmp_storage() -> Self::Storage {
             Arc::new(TmpDb::init().await)
+        }
+
+        async fn insert_legacy_eqc(
+            &self,
+            high_qc: &QuorumCertificate2<SeqTypes>,
+            next_epoch_qc: &NextEpochQuorumCertificate2<SeqTypes>,
+        ) -> anyhow::Result<()> {
+            let mut tx = self.db.write().await?;
+            tx.execute(
+                query("INSERT INTO eqc (id, data) VALUES (true, $1)")
+                    .bind(bincode::serialize(&(high_qc, next_epoch_qc))?),
+            )
+            .await?;
+            tx.commit().await
         }
 
         #[allow(refining_impl_trait)]

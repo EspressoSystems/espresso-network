@@ -15,7 +15,6 @@ use std::{
     fs::OpenOptions,
     io,
     sync::Arc,
-    time::Duration,
 };
 
 use alloy::primitives::U256;
@@ -30,16 +29,15 @@ use axum::{
 };
 use client::{BenchResults, BenchResultsDownloadConfig};
 use csv::Writer;
-use futures::{StreamExt, stream::FuturesUnordered};
 use hotshot_types::{
     PeerConfig,
-    network::{BuilderType, NetworkConfig, PublicKeysFile},
+    network::{NetworkConfig, PublicKeysFile},
     traits::{
         node_implementation::NodeType,
         signature_key::{SignatureKey, StakeTableEntryType},
     },
 };
-use http_client::{Url, error::ClientErr};
+use http_client::Url;
 use http_wire::{self as wire, ServerError, WireVersion, cors_layer, healthcheck_response};
 use serde::de::DeserializeOwned;
 use tokio::net::TcpListener;
@@ -78,8 +76,6 @@ struct OrchestratorState<TYPES: NodeType> {
     manual_start_allowed: bool,
     /// Whether we are still accepting new keys for registration
     accepting_new_keys: bool,
-    /// Builder address pool
-    builders: Vec<Url>,
     /// whether we are using a fixed stake table, disabling public key registration
     fixed_stake_table: bool,
 }
@@ -101,12 +97,6 @@ impl<TYPES: NodeType> OrchestratorState<TYPES> {
             fixed_stake_table = true;
         }
 
-        let builders = if matches!(network_config.builder, BuilderType::External) {
-            network_config.config.builder_urls.clone().into()
-        } else {
-            vec![]
-        };
-
         OrchestratorState {
             latest_index: 0,
             tmp_latest_index: 0,
@@ -119,7 +109,6 @@ impl<TYPES: NodeType> OrchestratorState<TYPES> {
             nodes_post_results: 0,
             manual_start_allowed: true,
             accepting_new_keys: true,
-            builders,
             fixed_stake_table,
         }
     }
@@ -205,14 +194,6 @@ pub trait OrchestratorApi<TYPES: NodeType> {
     /// # Errors
     /// if unable to serve
     fn post_manual_start(&mut self, password_bytes: Vec<u8>) -> Result<(), ServerError>;
-    /// post endpoint for registering a builder with the orchestrator
-    /// # Errors
-    /// if unable to serve
-    fn post_builder(&mut self, builder: Url) -> Result<(), ServerError>;
-    /// get endpoints for builders
-    /// # Errors
-    /// if not all builders are registered yet
-    fn get_builders(&self) -> Result<Vec<Url>, ServerError>;
 }
 
 impl<TYPES: NodeType> OrchestratorState<TYPES>
@@ -563,23 +544,6 @@ where
         }
         Ok(())
     }
-
-    fn post_builder(&mut self, builder: Url) -> Result<(), ServerError> {
-        self.builders.push(builder);
-        Ok(())
-    }
-
-    fn get_builders(&self) -> Result<Vec<Url>, ServerError> {
-        if !matches!(self.config.builder, BuilderType::External)
-            && self.builders.len() != self.config.config.da_staked_committee_size
-        {
-            return Err(ServerError {
-                status: StatusCode::NOT_FOUND,
-                message: "Not all builders are registered yet".to_string(),
-            });
-        }
-        Ok(self.builders.clone())
-    }
 }
 
 /// Shared, lock-guarded orchestrator state, cloned into every axum handler via `State`.
@@ -714,46 +678,6 @@ async fn post_results<TYPES: NodeType>(
     wire::respond(&headers, result)
 }
 
-async fn post_builder<TYPES: NodeType>(
-    State(state): State<SharedOrchestratorState<TYPES>>,
-    headers: HeaderMap,
-    body: Bytes,
-) -> Response {
-    let result = match decode_wrapped_body::<Vec<Url>>(&body) {
-        Ok(urls) => {
-            let mut reachable = urls
-                .into_iter()
-                .map(|url| async {
-                    let client: http_client::Client<ClientErr, OrchestratorVersion> =
-                        http_client::Client::builder(url.clone()).build();
-                    client
-                        .connect(Some(Duration::from_secs(2)))
-                        .await
-                        .then_some(url)
-                })
-                .collect::<FuturesUnordered<_>>()
-                .filter_map(futures::future::ready);
-            match reachable.next().await {
-                Some(url) => state.write().await.post_builder(url),
-                None => Err(ServerError {
-                    status: StatusCode::BAD_REQUEST,
-                    message: "No reachable addresses".to_string(),
-                }),
-            }
-        },
-        Err(err) => Err(err),
-    };
-    wire::respond(&headers, result)
-}
-
-async fn get_builders<TYPES: NodeType>(
-    State(state): State<SharedOrchestratorState<TYPES>>,
-    headers: HeaderMap,
-) -> Response {
-    let result = state.read().await.get_builders();
-    wire::respond(&headers, result)
-}
-
 /// Builds the `api` module's routes. Existing clients call these both directly (e.g.
 /// `api/identity`) and under a major-version prefix (`v0/api/identity`), so the `/api` tree is
 /// mounted at the root and under `/v0`.
@@ -773,8 +697,6 @@ fn api_router<TYPES: NodeType>() -> Router<SharedOrchestratorState<TYPES>> {
         .route("/start", get(get_start::<TYPES>))
         .route("/results", post(post_results::<TYPES>))
         .route("/manual_start", post(post_manual_start::<TYPES>))
-        .route("/builders", get(get_builders::<TYPES>))
-        .route("/builder", post(post_builder::<TYPES>))
 }
 
 /// Builds the full router: the app-level `healthcheck`, plus the `api` module served both

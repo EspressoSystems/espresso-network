@@ -5,7 +5,6 @@
 // along with the HotShot repository. If not, see <https://mit-license.org/>.
 
 use std::{
-    collections::BTreeMap,
     pin::pin,
     sync::{
         Arc,
@@ -25,7 +24,6 @@ use versions::DRB_AND_HEADER_UPGRADE_VERSION;
 
 use crate::{
     HotShotConfig,
-    data::EpochNumber,
     traits::{
         node_implementation::NodeType,
         storage::{LoadDrbProgressFn, StoreDrbProgressFn},
@@ -94,9 +92,6 @@ pub type DrbSeedInput = [u8; 32];
 
 /// Alias for DRB result from `compute_drb_result`.
 pub type DrbResult = [u8; 32];
-
-/// Number of previous results and seeds to keep
-pub const KEEP_PREVIOUS_RESULT_COUNT: u64 = 8;
 
 // TODO: Use `HASHES_PER_SECOND` * `VIEW_TIMEOUT` * `DRB_CALCULATION_NUM_VIEW` to calculate this
 // once we bench the hash time.
@@ -329,49 +324,6 @@ pub async fn compute_drb_result(
     });
 
     Some(drb_result)
-}
-
-/// Seeds for DRB computation and computed results.
-#[derive(Clone, Debug)]
-pub struct DrbResults {
-    /// Stored results from computations
-    pub results: BTreeMap<EpochNumber, DrbResult>,
-}
-
-impl DrbResults {
-    #[must_use]
-    /// Constructor with initial values for epochs 1 and 2.
-    pub fn new() -> Self {
-        Self {
-            results: BTreeMap::from([
-                (EpochNumber::new(1), INITIAL_DRB_RESULT),
-                (EpochNumber::new(2), INITIAL_DRB_RESULT),
-            ]),
-        }
-    }
-
-    pub fn store_result(&mut self, epoch: EpochNumber, result: DrbResult) {
-        self.results.insert(epoch, result);
-    }
-
-    /// Garbage collects internal data structures
-    pub fn garbage_collect(&mut self, epoch: EpochNumber) {
-        if epoch.u64() < KEEP_PREVIOUS_RESULT_COUNT {
-            return;
-        }
-
-        let retain_epoch = epoch - KEEP_PREVIOUS_RESULT_COUNT;
-        // N.B. x.split_off(y) returns the part of the map where key >= y
-
-        // Remove result entries older than EPOCH
-        self.results = self.results.split_off(&retain_epoch);
-    }
-}
-
-impl Default for DrbResults {
-    fn default() -> Self {
-        Self::new()
-    }
 }
 
 /// Functions for leader selection based on the DRB.
