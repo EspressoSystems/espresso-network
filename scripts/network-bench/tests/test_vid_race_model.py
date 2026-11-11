@@ -1,4 +1,5 @@
 import importlib.util
+import math
 import subprocess
 import sys
 from fractions import Fraction
@@ -64,6 +65,14 @@ def test_the_race_saves_at_most_the_reconstruction_cost_gap():
     gap = (0.51 - 0.37) * 100.0
     savings = [d - c for d, c in zip(out.decode_finish, out.concat_finish, strict=True)]
     assert 0 < max(savings) <= gap + 1e-9
+
+
+def test_the_leader_egress_is_the_mean_over_every_node_as_leader():
+    sc = scenario(stake="top:1:0.2")
+    weights = model.vid_weights(model.stake_fractions(sc.stake, sc.n, sc.profile, []))
+    coded_mb = sc.payload_mb * sum(weights) / math.ceil(sum(weights) * sc.threshold)
+    out = model.simulate(sc)
+    assert out.leader_egress_mb == pytest.approx(coded_mb * (sc.n - 1) / sc.n)
 
 
 def test_the_docstring_example_prints_one_row_per_policy():

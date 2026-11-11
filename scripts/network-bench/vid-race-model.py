@@ -72,7 +72,8 @@ class Scenario:
 
 @dataclass
 class Outcome:
-    """Per (leader, replica) finish times in ms, and per-leader quorum times."""
+    """Per (leader, replica) finish times in ms, and per-leader quorum times. The leader's
+    egress and the mean node egress are means over the leaders; the max is over all of them."""
 
     decode_finish: list[float]
     concat_finish: list[float]
@@ -195,8 +196,8 @@ def simulate(sc: Scenario) -> Outcome:
                 continue
             arrive[i] = finish[k] + delays.get((leader, i), 0.0)
             k += 1
-        out.leader_egress_ms = max(finish) if finish else 0.0
-        out.leader_egress_mb = sum(flows)
+        out.leader_egress_ms += (max(finish) if finish else 0.0) / n
+        out.leader_egress_mb += sum(flows) / n
 
         # 2. Rebroadcast: node i sends its share to n-1 peers at once. With
         # `--relay tree`, a share above `relay_cap` times the mean goes to
