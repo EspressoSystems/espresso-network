@@ -10,10 +10,11 @@ use anyhow::{Context, anyhow, bail, ensure};
 use async_lock::RwLock;
 use async_trait::async_trait;
 use committable::{Commitment, Committable};
+use either::Either;
 use espresso_api::routes::v1 as paths;
 use espresso_types::{
     BackoffParams, BlockMerkleCommitment, BlockMerkleTree, Certificate2, FeeAccount,
-    FeeAccountProof, FeeMerkleCommitment, FeeMerkleTree, Leaf2, NodeState, SeqTypes,
+    FeeAccountProof, FeeMerkleCommitment, FeeMerkleTree, Header, Leaf2, NodeState, SeqTypes,
     ValidatedState,
     config::PublicNetworkConfig,
     v0::traits::StateCatchup,
@@ -1679,6 +1680,8 @@ pub async fn add_fee_accounts_to_state(
 ) -> anyhow::Result<()> {
     let view = leaf.view_number();
     let (existing_state, delta) = consensus_handle.state_and_delta(view).await;
+    let existing_state =
+        existing_state.filter(|existing| state_matches_header(existing, leaf.block_header()));
     let (state, delta) = match existing_state {
         Some(existing) => {
             let mut state = (*existing).clone();
@@ -1726,6 +1729,8 @@ pub async fn add_v2_reward_accounts_to_state(
 ) -> anyhow::Result<()> {
     let view = leaf.view_number();
     let (existing_state, delta) = consensus_handle.state_and_delta(view).await;
+    let existing_state =
+        existing_state.filter(|existing| state_matches_header(existing, leaf.block_header()));
     let (state, delta) = match existing_state {
         Some(existing) => {
             let mut state = (*existing).clone();
@@ -1773,6 +1778,8 @@ pub async fn add_v1_reward_accounts_to_state(
 ) -> anyhow::Result<()> {
     let view = leaf.view_number();
     let (existing_state, delta) = consensus_handle.state_and_delta(view).await;
+    let existing_state =
+        existing_state.filter(|existing| state_matches_header(existing, leaf.block_header()));
     let (state, delta) = match existing_state {
         Some(existing) => {
             let mut state = (*existing).clone();
@@ -1810,6 +1817,18 @@ pub async fn add_v1_reward_accounts_to_state(
     Ok(())
 }
 
+// Consensus looks state up by view, so the entry can belong to another leaf at the same view.
+// Its state and delta must not be stored under this leaf.
+fn state_matches_header(state: &ValidatedState, header: &Header) -> bool {
+    let reward_root_matches = match header.reward_merkle_tree_root() {
+        Either::Left(root) => state.reward_merkle_tree_v1.commitment() == root,
+        Either::Right(root) => state.reward_merkle_tree_v2.commitment() == root,
+    };
+    state.block_merkle_tree.commitment() == header.block_merkle_tree_root()
+        && state.fee_merkle_tree.commitment() == header.fee_merkle_tree_root()
+        && reward_root_matches
+}
+
 #[cfg(test)]
 mod test {
     use std::{
@@ -1823,6 +1842,21 @@ mod test {
 
     use super::*;
     use crate::SequencerApiVersion;
+
+    #[tokio::test]
+    async fn state_of_another_leaf_at_the_same_view_is_not_reused() {
+        let instance = NodeState::mock();
+        let state = ValidatedState::default();
+        let leaf = Leaf2::genesis(&state, &instance, espresso_types::TEST_UPGRADE.base).await;
+        assert!(state_matches_header(&state, leaf.block_header()));
+
+        let mut other_leaf_state = state.clone();
+        other_leaf_state.prefund_account(FeeAccount::default(), espresso_types::FeeAmount::from(1));
+        assert!(!state_matches_header(
+            &other_leaf_state,
+            leaf.block_header()
+        ));
+    }
 
     /// A peer that never answers keeps the `fetch_*` methods of a [`ParallelStateCatchup`] retrying
     /// for good, so a caller that retries on its own never gets an error to retry from.
