@@ -633,11 +633,17 @@ impl StakeTableState {
                     .stake
                     .checked_add(amount)
                     .ok_or(StakeTableError::StakeOverflow(validator))?;
+                let delegator_stake = val
+                    .delegators
+                    .get(&delegator)
+                    .copied()
+                    .unwrap_or_default()
+                    .checked_add(amount)
+                    .ok_or(StakeTableError::StakeOverflow(validator))?;
 
                 // All checks ok, applying changes
                 val.stake = stake;
-                // A delegator never holds more than the validator's total, so this fits too
-                *val.delegators.entry(delegator).or_default() += amount;
+                val.delegators.insert(delegator, delegator_stake);
             },
 
             StakeTableEvent::Undelegate(Undelegated {
@@ -3115,6 +3121,43 @@ mod tests {
         assert_matches!(
             result,
             Err(StakeTableError::StakeOverflow(addr)) if addr == account
+        );
+        assert_eq!(state, before);
+    }
+
+    #[test]
+    fn test_delegate_overflowing_a_delegator_is_rejected() {
+        let validator = TestValidator::random();
+        let delegator = Address::random();
+        let mut registered = StakeTableState::default();
+        registered
+            .apply_event(StakeTableEvent::Register((&validator).into()))
+            .unwrap()
+            .unwrap();
+        // A state built outside `apply_event`, such as one reloaded from storage, need not
+        // keep each delegator below the validator's total.
+        let mut validators = registered.validators().clone();
+        let entry = validators.get_mut(&validator.account).unwrap();
+        entry.stake = U256::from(1);
+        entry.delegators.insert(delegator, U256::MAX);
+        let mut state = StakeTableState::new(
+            validators,
+            registered.validator_exits().clone(),
+            registered.used_bls_keys().clone(),
+            registered.used_schnorr_keys().clone(),
+            registered.used_x25519_keys().clone(),
+        );
+        let before = state.clone();
+
+        let result = state.apply_event(StakeTableEvent::Delegate(Delegated {
+            delegator,
+            validator: validator.account,
+            amount: U256::from(1),
+        }));
+
+        assert_matches!(
+            result,
+            Err(StakeTableError::StakeOverflow(addr)) if addr == validator.account
         );
         assert_eq!(state, before);
     }
