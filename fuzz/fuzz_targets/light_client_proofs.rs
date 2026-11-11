@@ -9,7 +9,10 @@
 
 #![no_main]
 
-use std::sync::{Arc, LazyLock};
+use std::{
+    collections::BTreeMap,
+    sync::{Arc, LazyLock},
+};
 
 use arbitrary::Arbitrary;
 use espresso_fuzz::{Edit, apply_edits};
@@ -19,6 +22,7 @@ use hotshot_query_service_types::{
     availability::{LeafId, LeafQueryData},
     node::BlockId,
 };
+use hotshot_types::{data::EpochNumber, utils::epoch_from_block_number};
 use libfuzzer_sys::fuzz_target;
 use light_client::{
     client::Client,
@@ -34,7 +38,10 @@ use light_client::{
 use serde::{Serialize, de::DeserializeOwned};
 use versions::NEW_PROTOCOL_VERSION;
 
-const NUM_BLOCKS: usize = 8;
+const NUM_BLOCKS: usize = 20;
+// Small enough that the chain reaches epoch 4, the first epoch whose stake
+// table differs from the one before it in `TestClient`.
+const EPOCH_HEIGHT: u64 = 6;
 const NAMESPACES: [u32; 4] = [10, 20, 30, 99];
 
 #[derive(Arbitrary, Debug)]
@@ -64,8 +71,7 @@ enum Format {
 type Quorum = StakeTableQuorum<(Arc<StakeTable>, Arc<StakeTable>)>;
 
 struct Chain {
-    epoch_height: u64,
-    quorum: Quorum,
+    quorums: BTreeMap<u64, Quorum>,
     leaves: Vec<Leaf2>,
     headers: Vec<Header>,
     payloads: Vec<Payload>,
@@ -157,18 +163,28 @@ fn mutate<T: Serialize + DeserializeOwned>(
 
 impl Chain {
     async fn new() -> Self {
-        let client = TestClient::default();
-        let new_protocol = TestClient::default();
+        let client = TestClient::with_epoch_height(EPOCH_HEIGHT);
+        let new_protocol = TestClient::with_epoch_height(EPOCH_HEIGHT);
         new_protocol.set_upgrade(1, NEW_PROTOCOL_VERSION).await;
         for height in 0..NUM_BLOCKS + 3 {
             client.add_block(height, block_txs(height)).await;
             new_protocol.add_block(height, block_txs(height)).await;
         }
 
-        let genesis = client.genesis().await;
-        let stake_table = Arc::new(StakeTable::from(genesis.stake_table));
-        let quorum =
-            StakeTableQuorum::new((stake_table.clone(), stake_table), genesis.epoch_height);
+        let last_epoch = epoch_from_block_number((NUM_BLOCKS + 3) as u64, EPOCH_HEIGHT);
+        let mut stake_tables = vec![];
+        for epoch in 1..=last_epoch + 1 {
+            let entries = client.quorum_for_epoch(EpochNumber::new(epoch)).await;
+            stake_tables.push(Arc::new(StakeTable::from(entries)));
+        }
+        let quorums = stake_tables
+            .windows(2)
+            .zip(1..)
+            .map(|(pair, epoch)| {
+                let membership = (pair[0].clone(), pair[1].clone());
+                (epoch, StakeTableQuorum::new(membership, EPOCH_HEIGHT))
+            })
+            .collect();
 
         let mut leaves = vec![];
         let mut headers = vec![];
@@ -217,8 +233,7 @@ impl Chain {
         }
 
         let chain = Self {
-            epoch_height: genesis.epoch_height,
-            quorum,
+            quorums,
             leaves,
             headers,
             payloads,
@@ -261,16 +276,20 @@ impl Chain {
         }
     }
 
-    /// Picks the hint the way the light client does: the trusted quorum when
-    /// the proof carries certificates, and a leaf it already trusts when the
-    /// proof claims to end right before it.
+    /// Picks the hint the way the light client does: the quorum of the proof's
+    /// epoch when the proof carries certificates, and a leaf it already trusts
+    /// when the proof claims to end right before it.
     async fn verify_leaf_proof(
         &self,
         proof: &LeafProof,
         finalized: Option<&Leaf2>,
     ) -> anyhow::Result<LeafQueryData<SeqTypes>> {
-        let hint = match proof.epoch(self.epoch_height)? {
-            Some(_) => LeafProofHint::Quorum(&self.quorum),
+        let hint = match proof.epoch(EPOCH_HEIGHT)? {
+            Some(epoch) => LeafProofHint::Quorum(
+                self.quorums
+                    .get(&*epoch)
+                    .ok_or_else(|| anyhow::anyhow!("no stake table for epoch {epoch}"))?,
+            ),
             None => LeafProofHint::<Quorum>::Assumption(
                 finalized.ok_or_else(|| anyhow::anyhow!("no finalized leaf to assume"))?,
             ),
