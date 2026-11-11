@@ -110,6 +110,9 @@ pub struct Cache {
     timeout_certs: BTreeMap<(u64, u64, Option<CertKey>), TimeoutCertificate3<TestTypes>>,
     /// Each node's keys, by its number less one.
     keys: Vec<(BLSPubKey, BLSPrivKey)>,
+    /// The DRB result computed from an epoch root, by the root's leaf
+    /// commitment and the epoch the result is for.
+    drbs: BTreeMap<(Commitment<Leaf2<TestTypes>>, u64), DrbResult>,
 }
 
 type CertKey = (Commitment<Leaf2<TestTypes>>, u64, u64, u64);
@@ -136,8 +139,6 @@ pub struct World {
     cert2s: HashMap<u64, Vec<Cert>>,
     /// The epochs whose committee an epoch root registered.
     registered_epochs: std::collections::HashSet<u64>,
-    /// The DRB result computed from each epoch root built, by its leaf.
-    drbs: HashMap<Commitment<Leaf2<TestTypes>>, DrbResult>,
 }
 
 impl World {
@@ -184,7 +185,6 @@ impl World {
             own: std::collections::HashSet::new(),
             cert2s: HashMap::new(),
             registered_epochs: std::collections::HashSet::new(),
-            drbs: HashMap::new(),
         }
     }
 
@@ -586,8 +586,7 @@ impl World {
     /// The DRB result a transition block of epoch 2 or later carries for the
     /// next epoch: the one computed from the epoch root it descends from, two
     /// epochs before the one the result is for. `None` for any other block,
-    /// and for one that names another epoch than its height puts it in, which
-    /// descends from no root of the epoch before the one it names.
+    /// and for one a misbehaving leader built that descends from no such root.
     async fn next_drb_result(&mut self, def: &format::Block) -> Option<DrbResult> {
         if def.epoch <= *EpochNumber::genesis()
             || !is_epoch_transition(def.height, self.epoch_height)
@@ -604,9 +603,14 @@ impl World {
                 .expect("a transition block's ancestors are in the scenario's block list")
                 .parent;
         }
+        // A misbehaving leader's chain may skip the root's height.
+        if ancestor.height != root_height {
+            return None;
+        }
         let root = self.leaf_commit(ancestor.block).await;
-        let drb = self.drbs.get(&root).expect("an epoch root's DRB result");
-        Some(*drb)
+        let target = def.epoch + 1;
+        let drb = self.cache.drbs.get(&(root, target));
+        Some(*drb.expect("an epoch root's DRB result"))
     }
 
     /// The light-client state certificate that goes with a `Cert1` over an epoch
@@ -665,12 +669,15 @@ impl World {
     /// Registered when a root is built, not when it is decided, so only the
     /// first root built at a height registers: a faulty leader can build
     /// another block there. Each root's result is kept, for the blocks that
-    /// descend from it.
+    /// descend from it, across the scenarios of a run.
     async fn register_epoch_root(&mut self, root: &Leaf2<TestTypes>) {
         let height = <TestBlockHeader as BlockHeader<TestTypes>>::block_number(root.block_header());
         let target = EpochNumber::new(epoch_from_block_number(height, self.epoch_height) + 2);
-        let drb = self.root_drb(target, root).await;
-        self.drbs.insert(root.commit(), drb);
+        let drb = match self.cache.drbs.get(&(root.commit(), *target)) {
+            Some(drb) => *drb,
+            None => self.root_drb(target, root).await,
+        };
+        self.cache.drbs.insert((root.commit(), *target), drb);
         if !self.registered_epochs.insert(*target) {
             return;
         }

@@ -1125,6 +1125,11 @@ impl<T: NodeType> Consensus<T> {
     }
 
     #[cfg(test)]
+    pub fn has_drb_result(&self, epoch: EpochNumber) -> bool {
+        self.drb_results.contains_key(&epoch)
+    }
+
+    #[cfg(test)]
     pub fn set_view(&mut self, view: ViewNumber, epoch: EpochNumber) {
         self.current_view = view;
         self.current_epoch = epoch;

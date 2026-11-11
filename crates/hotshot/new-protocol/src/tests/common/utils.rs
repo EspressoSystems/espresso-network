@@ -624,15 +624,15 @@ impl TestData {
             if epoch_height > 0 && is_epoch_root(block_number, epoch_height) {
                 let target_epoch =
                     EpochNumber::new(epoch_from_block_number(block_number, epoch_height) + 2);
-                let _ = membership
+                membership
                     .add_epoch_root(proposal.block_header.clone())
-                    .await;
-                if let Ok(drb) = membership
+                    .await
+                    .expect("an epoch root registers");
+                let drb = membership
                     .compute_drb_result(target_epoch, leaf.clone())
                     .await
-                {
-                    computed_drbs.insert(*target_epoch, drb);
-                }
+                    .expect("an epoch root's DRB result computes");
+                computed_drbs.insert(*target_epoch, drb);
             }
 
             // Re-sign the proposal when the leaf commitment changed due to patching.
@@ -1214,7 +1214,8 @@ pub fn reconstructed_blocks(
 /// instance and auto-responds to outputs that consensus expects feedback for
 /// (`RequestState`, `RequestBlockAndHeader`, `RequestVidDisperse`). It
 /// computes an epoch's DRB result when it sees the epoch's root decided, and
-/// gives it to consensus then, as the `EpochManager` does.
+/// gives it to consensus then, as the `EpochManager` does. It does not
+/// answer a `RequestDrbResult`.
 pub(crate) struct ConsensusHarness {
     pub consensus: Consensus<TestTypes>,
     pub membership_coordinator: EpochMembershipCoordinator<TestTypes>,
@@ -1716,8 +1717,10 @@ impl ConsensusHarness {
                 let input = ConsensusInput::VidDisperseCreated(*view, vid.payload_commitment);
                 self.apply_recorded(input, outbox);
             },
-            // Not answered here: the result arrives once the epoch's root is
-            // decided (`on_leaf_decided`), or from the test.
+            // Not answered here. The membership holds an epoch's result only
+            // once the epoch's root is decided, which gives it to consensus too
+            // (`on_leaf_decided`), and the harness has no peers to catch up
+            // from. A test whose node never decides the root supplies it.
             ConsensusOutput::RequestDrbResult(epoch) => {
                 self.awaited_drbs.insert(*epoch);
             },
@@ -1761,7 +1764,8 @@ impl ConsensusHarness {
     }
 
     /// Give consensus the DRB result of `epoch`, recording it in the trace
-    /// only if the node had requested it.
+    /// only if the node was waiting on it: it had requested the result and
+    /// still lacks it, or the result releases outputs.
     ///
     /// The trace checker takes a recorded DRB result as a reason for the node
     /// to be late from then on, since the specification has no DRB. A result
@@ -1773,10 +1777,19 @@ impl ConsensusHarness {
         outbox: &mut Outbox<ConsensusOutput<TestTypes>>,
     ) {
         let input = ConsensusInput::DrbResult(epoch, drb);
-        if self.awaited_drbs.remove(&epoch) {
-            self.apply_recorded(input, outbox);
-        } else {
-            self.consensus.apply(input, outbox);
+        if self.awaited_drbs.remove(&epoch) && !self.consensus.has_drb_result(epoch) {
+            return self.apply_recorded(input, outbox);
+        }
+        let before = outbox.len();
+        self.consensus.apply(input.clone(), outbox);
+        // A request for another epoch's result is re-emitted on every input.
+        let released = outbox
+            .iter()
+            .skip(before)
+            .any(|o| !matches!(o, ConsensusOutput::RequestDrbResult(_)));
+        if released {
+            record_output_leaders(&mut self.trace, &self.consensus, outbox.iter().skip(before));
+            self.trace.record(&input, outbox.iter().skip(before));
         }
     }
 
@@ -2120,7 +2133,8 @@ pub(crate) fn record_leader(
     consensus: &Consensus<TestTypes>,
     input: &ConsensusInput<TestTypes>,
 ) {
-    if !trace.recording() {
+    // A DRB result is about no view.
+    if !trace.recording() || matches!(input, ConsensusInput::DrbResult(..)) {
         return;
     }
     let view = input.view_number();
