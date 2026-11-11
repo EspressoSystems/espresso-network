@@ -1139,6 +1139,23 @@ def test_protocol_version_flag_rejects_bad_formats(bad):
         node_env_config("--protocol-version", bad)
 
 
+def test_protocol_version_flag_rejects_a_version_below_the_genesis_version(capsys):
+    floor = awsb.template_genesis_version((HERE / "genesis.toml").read_text())
+    assert node_env_config("--protocol-version", floor).protocol_version == floor
+    major, minor = awsb.version_key(floor)
+    with pytest.raises(SystemExit):
+        node_env_config("--protocol-version", f"{major}.{minor - 1}")
+    assert f"genesis_version {floor}" in capsys.readouterr().err
+    assert awsb.version_key("0.10") > awsb.version_key("0.9")
+
+
+def test_local_genesis_runs_the_harness_default_protocol_version():
+    genesis = (HERE / "genesis.toml").read_text()
+    default = awsb.RunConfig(tag="").protocol_version
+    for field in ("base_version", "upgrade_version"):
+        assert re.findall(rf'(?m)^{field} = "(.*)"$', genesis) == [default]
+
+
 def test_protocol_version_flag_defaults_and_differs_in_the_config_hash():
     assert node_env_config().protocol_version == "0.7"
     assert node_env_config("--protocol-version", "0.8").protocol_version == "0.8"

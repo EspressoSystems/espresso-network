@@ -3447,7 +3447,26 @@ def block_size(text: str) -> str:
 def protocol_version(text: str) -> str:
     if re.fullmatch(r"\d+\.\d+", text) is None:
         raise argparse.ArgumentTypeError(f"not a version like 0.8: {text}")
+    # A node refuses a genesis_version above base_version, and it would do so only after
+    # the fleet is up.
+    floor = template_genesis_version((SCRIPT_DIR / "genesis.toml").read_text())
+    if version_key(text) < version_key(floor):
+        raise argparse.ArgumentTypeError(
+            f"below the genesis template's genesis_version {floor}: {text}"
+        )
     return text
+
+
+def template_genesis_version(template: str) -> str:
+    found = re.search(r'(?m)^genesis_version = "(\d+\.\d+)"$', template)
+    if found is None:
+        raise ValueError("no genesis_version field in genesis template")
+    return found[1]
+
+
+def version_key(version: str) -> tuple[int, int]:
+    major, _, minor = version.partition(".")
+    return int(major), int(minor)
 
 
 def env_pair(text: str) -> str:
