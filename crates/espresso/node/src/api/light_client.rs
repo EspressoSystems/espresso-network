@@ -766,8 +766,9 @@ mod test {
         client::{Client as _, FallbackClient, QueryServiceClient},
         consensus::leaf::{FinalityProof, LeafProofHint},
         testing::{
-            AlwaysTrueQuorum, TestClient, VersionCheckQuorum, custom_leaf_chain_with_upgrade,
-            custom_leaf_chain_with_upgrades, leaf_chain, leaf_chain_with_upgrade,
+            AlwaysTrueQuorum, LEAF_CHAIN_EPOCH_HEIGHT, TestClient, VersionCheckQuorum,
+            custom_leaf_chain_with_upgrade, custom_leaf_chain_with_upgrades, leaf_chain,
+            leaf_chain_with_upgrade,
         },
     };
     use rstest_reuse::apply;
@@ -828,7 +829,9 @@ mod test {
                 .unwrap();
         assert_eq!(
             proof
-                .verify(LeafProofHint::Quorum(&AlwaysTrueQuorum))
+                .verify(LeafProofHint::Quorum(&AlwaysTrueQuorum::new(
+                    LEAF_CHAIN_EPOCH_HEIGHT
+                )))
                 .await
                 .unwrap(),
             leaves[0]
@@ -927,7 +930,9 @@ mod test {
         assert!(matches!(proof.proof(), FinalityProof::NewProtocol { .. }));
         assert_eq!(
             proof
-                .verify(LeafProofHint::Quorum(&AlwaysTrueQuorum))
+                .verify(LeafProofHint::Quorum(&AlwaysTrueQuorum::new(
+                    LEAF_CHAIN_EPOCH_HEIGHT
+                )))
                 .await
                 .unwrap(),
             leaves[0]
@@ -966,7 +971,9 @@ mod test {
         assert!(matches!(proof.proof(), FinalityProof::NewProtocol { .. }));
         assert_eq!(
             proof
-                .verify(LeafProofHint::Quorum(&AlwaysTrueQuorum))
+                .verify(LeafProofHint::Quorum(&AlwaysTrueQuorum::new(
+                    LEAF_CHAIN_EPOCH_HEIGHT
+                )))
                 .await
                 .unwrap(),
             leaves[0]
@@ -1000,7 +1007,9 @@ mod test {
         assert!(matches!(proof.proof(), FinalityProof::NewProtocol { .. }));
         assert_eq!(
             proof
-                .verify(LeafProofHint::Quorum(&AlwaysTrueQuorum))
+                .verify(LeafProofHint::Quorum(&AlwaysTrueQuorum::new(
+                    LEAF_CHAIN_EPOCH_HEIGHT
+                )))
                 .await
                 .unwrap(),
             leaves[0]
@@ -1073,7 +1082,9 @@ mod test {
         assert!(matches!(proof.proof(), FinalityProof::HotStuff2 { .. }));
         assert_eq!(
             proof
-                .verify(LeafProofHint::Quorum(&AlwaysTrueQuorum))
+                .verify(LeafProofHint::Quorum(&AlwaysTrueQuorum::new(
+                    LEAF_CHAIN_EPOCH_HEIGHT
+                )))
                 .await
                 .unwrap(),
             leaves[0]
@@ -1092,7 +1103,9 @@ mod test {
         assert!(matches!(proof.proof(), FinalityProof::NewProtocol { .. }));
         assert_eq!(
             proof
-                .verify(LeafProofHint::Quorum(&AlwaysTrueQuorum))
+                .verify(LeafProofHint::Quorum(&AlwaysTrueQuorum::new(
+                    LEAF_CHAIN_EPOCH_HEIGHT
+                )))
                 .await
                 .unwrap(),
             leaves[3]
@@ -1126,7 +1139,9 @@ mod test {
             .unwrap();
         assert_eq!(
             proof
-                .verify(LeafProofHint::Quorum(&AlwaysTrueQuorum))
+                .verify(LeafProofHint::Quorum(&AlwaysTrueQuorum::new(
+                    LEAF_CHAIN_EPOCH_HEIGHT
+                )))
                 .await
                 .unwrap(),
             leaves[0]
@@ -1198,7 +1213,9 @@ mod test {
         assert!(matches!(proof.proof(), FinalityProof::NewProtocol { .. }));
         assert_eq!(
             proof
-                .verify(LeafProofHint::Quorum(&AlwaysTrueQuorum))
+                .verify(LeafProofHint::Quorum(&AlwaysTrueQuorum::new(
+                    LEAF_CHAIN_EPOCH_HEIGHT
+                )))
                 .await
                 .unwrap(),
             leaves[0]
@@ -1241,7 +1258,8 @@ mod test {
         assert_eq!(
             proof
                 .verify(LeafProofHint::Quorum(&VersionCheckQuorum::new(
-                    leaves.iter().map(|leaf| leaf.leaf().clone())
+                    leaves.iter().map(|leaf| leaf.leaf().clone()),
+                    LEAF_CHAIN_EPOCH_HEIGHT
                 )))
                 .await
                 .unwrap(),
@@ -1289,7 +1307,8 @@ mod test {
         assert_eq!(
             proof
                 .verify(LeafProofHint::Quorum(&VersionCheckQuorum::new(
-                    leaves.iter().map(|leaf| leaf.leaf().clone())
+                    leaves.iter().map(|leaf| leaf.leaf().clone()),
+                    LEAF_CHAIN_EPOCH_HEIGHT
                 )))
                 .await
                 .unwrap(),
@@ -1334,7 +1353,8 @@ mod test {
         assert_eq!(
             proof
                 .verify(LeafProofHint::Quorum(&VersionCheckQuorum::new(
-                    leaves.iter().map(|leaf| leaf.leaf().clone())
+                    leaves.iter().map(|leaf| leaf.leaf().clone()),
+                    LEAF_CHAIN_EPOCH_HEIGHT
                 )))
                 .await
                 .unwrap(),
@@ -1386,7 +1406,9 @@ mod test {
         assert!(matches!(proof.proof(), FinalityProof::NewProtocol { .. }));
         assert_eq!(
             proof
-                .verify(LeafProofHint::Quorum(&AlwaysTrueQuorum))
+                .verify(LeafProofHint::Quorum(&AlwaysTrueQuorum::new(
+                    LEAF_CHAIN_EPOCH_HEIGHT
+                )))
                 .await
                 .unwrap(),
             leaves[1]
@@ -1445,7 +1467,10 @@ mod test {
             tx.commit().await.unwrap();
         }
 
-        let quorum = VersionCheckQuorum::new(leaves.iter().map(|leaf| leaf.leaf().clone()));
+        let quorum = VersionCheckQuorum::new(
+            leaves.iter().map(|leaf| leaf.leaf().clone()),
+            LEAF_CHAIN_EPOCH_HEIGHT,
+        );
         for leaf in &leaves {
             let height = leaf.height();
             let proof = get_leaf_proof(&ds, leaf.clone(), None, Duration::MAX, CHAIN_LIMIT)
@@ -1609,7 +1634,9 @@ mod test {
                 .unwrap();
         assert_eq!(
             proof
-                .verify(LeafProofHint::Quorum(&AlwaysTrueQuorum))
+                .verify(LeafProofHint::Quorum(&AlwaysTrueQuorum::new(
+                    LEAF_CHAIN_EPOCH_HEIGHT
+                )))
                 .await
                 .unwrap(),
             leaves[0]
@@ -2057,7 +2084,9 @@ mod test {
                     .unwrap();
             assert_eq!(
                 proof
-                    .verify(LeafProofHint::Quorum(&AlwaysTrueQuorum))
+                    .verify(LeafProofHint::Quorum(&AlwaysTrueQuorum::new(
+                        LEAF_CHAIN_EPOCH_HEIGHT
+                    )))
                     .await
                     .unwrap(),
                 leaves[0]

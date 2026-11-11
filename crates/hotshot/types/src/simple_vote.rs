@@ -107,13 +107,94 @@ pub struct TimeoutData2 {
     pub epoch: Option<EpochNumber>,
 }
 
-/// Data used for a timeout vote, binding the epoch the vote was cast in.
+/// Data used for a timeout vote, binding the epoch the vote was cast in and
+/// the lock its signer held when it timed out.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
 pub struct TimeoutData3 {
     /// View the timeout is for
     pub view: ViewNumber,
     /// Epoch number
     pub epoch: EpochNumber,
+    /// The signer's lock, `None` while it is locked on nothing but genesis.
+    pub lock: Option<LockView>,
+}
+
+/// Where a lock sits in the order locks are compared by: epoch first, then view.
+///
+/// A certificate of a later epoch is later than any certificate of an earlier
+/// one, whatever their views.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct LockView {
+    /// Field order is the comparison order: epoch, then view.
+    pub epoch: EpochNumber,
+    pub view: ViewNumber,
+}
+
+impl LockView {
+    /// The position of the lock a `Certificate1` (`QuorumCertificate2`) gives.
+    pub fn of<T: NodeType>(cert: &crate::simple_certificate::QuorumCertificate2<T>) -> Self {
+        Self {
+            epoch: cert.data.epoch.unwrap_or_else(EpochNumber::genesis),
+            view: cert.view_number(),
+        }
+    }
+}
+
+/// The lock a timeout vote or certificate of some epoch carries, by what is
+/// checked of it.
+///
+/// A proposal after a timeout certificate is of the certificate's epoch, and a
+/// lock of an earlier epoch admits any parent, so whether an older lock is
+/// genuine changes nothing. Only a recent lock's certificate is verified, its
+/// committee looked up and the lock adopted, which keeps a peer from starting
+/// catchups for old epochs. A vote with a stale lock still counts: an honest
+/// node back from several epochs away holds such a lock until it adopts a newer
+/// one.
+#[derive(Debug)]
+pub enum TimeoutLock<'a, T: NodeType> {
+    /// Locked on nothing but genesis.
+    None,
+    /// Of an epoch before the one before: only its position is bound.
+    Stale(LockView),
+    /// Of the vote's epoch or the one before: its certificate is verified
+    /// against that epoch's committee.
+    Recent(&'a crate::simple_certificate::QuorumCertificate2<T>),
+}
+
+impl<'a, T: NodeType> TimeoutLock<'a, T> {
+    pub fn of(
+        cert: Option<&'a crate::simple_certificate::QuorumCertificate2<T>>,
+        epoch: EpochNumber,
+    ) -> Self {
+        let Some(cert) = cert else {
+            return Self::None;
+        };
+        let lock = LockView::of(cert);
+        if lock.epoch.saturating_add(1) >= *epoch {
+            Self::Recent(cert)
+        } else {
+            Self::Stale(lock)
+        }
+    }
+
+    /// The certificate of a recent lock.
+    pub fn recent(self) -> Option<&'a crate::simple_certificate::QuorumCertificate2<T>> {
+        match self {
+            Self::Recent(cert) => Some(cert),
+            Self::None | Self::Stale(_) => None,
+        }
+    }
+
+    /// The epoch whose committee verifies a recent lock's certificate.
+    pub fn verified_in(self) -> Option<EpochNumber> {
+        self.recent().map(|cert| LockView::of(cert).epoch)
+    }
+}
+
+impl std::fmt::Display for LockView {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}@{}", self.epoch, self.view)
+    }
 }
 
 /// Data used for a Pre Commit vote.
@@ -282,14 +363,6 @@ impl<T: NodeType> Committable for Vote2Data<T> {
 /// Sealing this trait prevents creating new vote types outside this file.
 pub trait Voteable<TYPES: NodeType>:
     sealed::Sealed + Committable + Clone + Serialize + Debug + PartialEq + Hash + Eq
-{
-}
-
-/// Marker trait for data or commitments that can be voted on.
-/// Only structs in this file can implement voteable.  This is enforced with the `Sealed` trait
-/// Sealing this trait prevents creating new vote types outside this file.
-pub trait Voteable2<TYPES: NodeType>:
-    sealed::Sealed + HasEpoch + Committable + Clone + Serialize + Debug + PartialEq + Hash + Eq
 {
 }
 
@@ -520,12 +593,19 @@ impl Committable for TimeoutData2 {
 
 impl Committable for TimeoutData3 {
     fn commit(&self) -> Commitment<Self> {
-        let TimeoutData3 { view, epoch } = self;
+        let TimeoutData3 { view, epoch, lock } = self;
 
-        committable::RawCommitmentBuilder::new("Timeout data v3")
+        let builder = committable::RawCommitmentBuilder::new("Timeout data v3")
             .u64_field("view number", **view)
-            .u64_field("epoch number", **epoch)
-            .finalize()
+            .u64_field("epoch number", **epoch);
+        match lock {
+            None => builder.u64_field("lock", 0),
+            Some(lock) => builder
+                .u64_field("lock", 1)
+                .u64_field("lock epoch", *lock.epoch)
+                .u64_field("lock view", *lock.view),
+        }
+        .finalize()
     }
 }
 
@@ -760,237 +840,6 @@ impl<
 {
 }
 
-// impl votable for all the data types in this file sealed marker should ensure nothing is accidentally
-// implemented for structs that aren't "voteable"
-impl<
-    TYPES: NodeType,
-    V: sealed::Sealed + HasEpoch + Committable + Clone + Serialize + Debug + PartialEq + Hash + Eq,
-> Voteable2<TYPES> for V
-{
-}
-
-impl<TYPES: NodeType> QuorumVote<TYPES> {
-    /// Convert a `QuorumVote` to a `QuorumVote2`
-    pub fn to_vote2(self) -> QuorumVote2<TYPES> {
-        let bytes: [u8; 32] = self.data.leaf_commit.into();
-
-        let signature = self.signature;
-        let data = QuorumData2 {
-            leaf_commit: Commitment::from_raw(bytes),
-            epoch: None,
-            block_number: None,
-        };
-        let view_number = self.view_number;
-
-        SimpleVote {
-            signature,
-            data,
-            view_number,
-        }
-    }
-}
-
-impl<TYPES: NodeType> QuorumVote2<TYPES> {
-    /// Convert a `QuorumVote2` to a `QuorumVote`
-    pub fn to_vote(self) -> QuorumVote<TYPES> {
-        let bytes: [u8; 32] = self.data.leaf_commit.into();
-
-        let signature = self.signature.clone();
-        let data = QuorumData {
-            leaf_commit: Commitment::from_raw(bytes),
-        };
-        let view_number = self.view_number;
-
-        SimpleVote {
-            signature,
-            data,
-            view_number,
-        }
-    }
-}
-
-impl<TYPES: NodeType> DaVote<TYPES> {
-    /// Convert a `QuorumVote` to a `QuorumVote2`
-    pub fn to_vote2(self) -> DaVote2<TYPES> {
-        let signature = self.signature;
-        let data = DaData2 {
-            payload_commit: self.data.payload_commit,
-            next_epoch_payload_commit: None,
-            epoch: None,
-        };
-        let view_number = self.view_number;
-
-        SimpleVote {
-            signature,
-            data,
-            view_number,
-        }
-    }
-}
-
-impl<TYPES: NodeType> DaVote2<TYPES> {
-    /// Convert a `QuorumVote2` to a `QuorumVote`
-    pub fn to_vote(self) -> DaVote<TYPES> {
-        let signature = self.signature;
-        let data = DaData {
-            payload_commit: self.data.payload_commit,
-        };
-        let view_number = self.view_number;
-
-        SimpleVote {
-            signature,
-            data,
-            view_number,
-        }
-    }
-}
-
-impl<TYPES: NodeType> TimeoutVote<TYPES> {
-    /// Convert a `TimeoutVote` to a `TimeoutVote2`
-    pub fn to_vote2(self) -> TimeoutVote2<TYPES> {
-        let signature = self.signature;
-        let data = TimeoutData2 {
-            view: self.data.view,
-            epoch: None,
-        };
-        let view_number = self.view_number;
-
-        SimpleVote {
-            signature,
-            data,
-            view_number,
-        }
-    }
-}
-
-impl<TYPES: NodeType> TimeoutVote2<TYPES> {
-    /// Convert a `QuorumVote2` to a `QuorumVote`
-    pub fn to_vote(self) -> TimeoutVote<TYPES> {
-        let signature = self.signature;
-        let data = TimeoutData {
-            view: self.data.view,
-        };
-        let view_number = self.view_number;
-
-        SimpleVote {
-            signature,
-            data,
-            view_number,
-        }
-    }
-}
-
-impl<TYPES: NodeType> ViewSyncPreCommitVote<TYPES> {
-    /// Convert a `ViewSyncPreCommitVote` to a `ViewSyncPreCommitVote2`
-    pub fn to_vote2(self) -> ViewSyncPreCommitVote2<TYPES> {
-        let signature = self.signature;
-        let data = ViewSyncPreCommitData2 {
-            relay: self.data.relay,
-            round: self.data.round,
-            epoch: None,
-        };
-        let view_number = self.view_number;
-
-        SimpleVote {
-            signature,
-            data,
-            view_number,
-        }
-    }
-}
-
-impl<TYPES: NodeType> ViewSyncPreCommitVote2<TYPES> {
-    /// Convert a `ViewSyncPreCommitVote2` to a `ViewSyncPreCommitVote`
-    pub fn to_vote(self) -> ViewSyncPreCommitVote<TYPES> {
-        let signature = self.signature;
-        let data = ViewSyncPreCommitData {
-            relay: self.data.relay,
-            round: self.data.round,
-        };
-        let view_number = self.view_number;
-
-        SimpleVote {
-            signature,
-            data,
-            view_number,
-        }
-    }
-}
-
-impl<TYPES: NodeType> ViewSyncCommitVote<TYPES> {
-    /// Convert a `ViewSyncCommitVote` to a `ViewSyncCommitVote2`
-    pub fn to_vote2(self) -> ViewSyncCommitVote2<TYPES> {
-        let signature = self.signature;
-        let data = ViewSyncCommitData2 {
-            relay: self.data.relay,
-            round: self.data.round,
-            epoch: None,
-        };
-        let view_number = self.view_number;
-
-        SimpleVote {
-            signature,
-            data,
-            view_number,
-        }
-    }
-}
-
-impl<TYPES: NodeType> ViewSyncCommitVote2<TYPES> {
-    /// Convert a `ViewSyncCommitVote2` to a `ViewSyncCommitVote`
-    pub fn to_vote(self) -> ViewSyncCommitVote<TYPES> {
-        let signature = self.signature;
-        let data = ViewSyncCommitData {
-            relay: self.data.relay,
-            round: self.data.round,
-        };
-        let view_number = self.view_number;
-
-        SimpleVote {
-            signature,
-            data,
-            view_number,
-        }
-    }
-}
-
-impl<TYPES: NodeType> ViewSyncFinalizeVote<TYPES> {
-    /// Convert a `ViewSyncFinalizeVote` to a `ViewSyncFinalizeVote2`
-    pub fn to_vote2(self) -> ViewSyncFinalizeVote2<TYPES> {
-        let signature = self.signature;
-        let data = ViewSyncFinalizeData2 {
-            relay: self.data.relay,
-            round: self.data.round,
-            epoch: None,
-        };
-        let view_number = self.view_number;
-
-        SimpleVote {
-            signature,
-            data,
-            view_number,
-        }
-    }
-}
-
-impl<TYPES: NodeType> ViewSyncFinalizeVote2<TYPES> {
-    /// Convert a `ViewSyncFinalizeVote2` to a `ViewSyncFinalizeVote`
-    pub fn to_vote(self) -> ViewSyncFinalizeVote<TYPES> {
-        let signature = self.signature;
-        let data = ViewSyncFinalizeData {
-            relay: self.data.relay,
-            round: self.data.round,
-        };
-        let view_number = self.view_number;
-
-        SimpleVote {
-            signature,
-            data,
-            view_number,
-        }
-    }
-}
-
 // Type aliases for simple use of all the main votes.  We should never see `SimpleVote` outside this file
 
 /// Quorum vote Alias
@@ -1100,31 +949,6 @@ pub struct LightClientStateUpdateVote2<TYPES: NodeType> {
     pub signed_state_digest: CircuitField,
 }
 
-impl<TYPES: NodeType> LightClientStateUpdateVote<TYPES> {
-    pub fn to_vote2(self) -> LightClientStateUpdateVote2<TYPES> {
-        LightClientStateUpdateVote2 {
-            epoch: self.epoch,
-            light_client_state: self.light_client_state,
-            next_stake_table_state: self.next_stake_table_state,
-            signature: self.signature.clone(),
-            v2_signature: self.signature,
-            auth_root: Default::default(),
-            signed_state_digest: Default::default(),
-        }
-    }
-}
-
-impl<TYPES: NodeType> LightClientStateUpdateVote2<TYPES> {
-    pub fn to_vote(self) -> LightClientStateUpdateVote<TYPES> {
-        LightClientStateUpdateVote {
-            epoch: self.epoch,
-            light_client_state: self.light_client_state,
-            next_stake_table_state: self.next_stake_table_state,
-            signature: self.v2_signature,
-        }
-    }
-}
-
 impl<TYPES: NodeType> HasViewNumber for LightClientStateUpdateVote<TYPES> {
     fn view_number(&self) -> ViewNumber {
         ViewNumber::new(self.light_client_state.view_number)
@@ -1149,24 +973,6 @@ pub struct EpochRootQuorumVote<TYPES: NodeType> {
 pub struct EpochRootQuorumVote2<TYPES: NodeType> {
     pub vote: QuorumVote2<TYPES>,
     pub state_vote: LightClientStateUpdateVote2<TYPES>,
-}
-
-impl<TYPES: NodeType> EpochRootQuorumVote<TYPES> {
-    pub fn to_vote2(self) -> EpochRootQuorumVote2<TYPES> {
-        EpochRootQuorumVote2 {
-            vote: self.vote,
-            state_vote: self.state_vote.to_vote2(),
-        }
-    }
-}
-
-impl<TYPES: NodeType> EpochRootQuorumVote2<TYPES> {
-    pub fn to_vote(self) -> EpochRootQuorumVote<TYPES> {
-        EpochRootQuorumVote {
-            vote: self.vote,
-            state_vote: self.state_vote.to_vote(),
-        }
-    }
 }
 
 impl<TYPES: NodeType> HasViewNumber for EpochRootQuorumVote<TYPES> {

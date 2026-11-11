@@ -31,7 +31,7 @@ use vbs::version::Version;
 use versions::EPOCH_VERSION;
 
 use crate::{
-    data::{EpochNumber, Leaf2, VidCommitment, ViewNumber},
+    data::{EpochNumber, Leaf2, VidCommitment},
     epoch_membership::EpochMembershipCoordinator,
     message::UpgradeLock,
     simple_certificate::QuorumCertificate2,
@@ -275,13 +275,6 @@ impl<TYPES: NodeType> Deref for View<TYPES> {
 pub struct View<TYPES: NodeType> {
     /// The view data. Wrapped in a struct so we can mutate
     pub view_inner: ViewInner<TYPES>,
-}
-
-/// A struct containing information about a finished round.
-#[derive(Debug, Clone)]
-pub struct RoundFinishedEvent {
-    /// The round that finished
-    pub view_number: ViewNumber,
 }
 
 /// Type alias for byte array of SHA256 digest length

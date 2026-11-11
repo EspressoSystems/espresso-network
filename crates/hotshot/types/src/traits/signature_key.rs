@@ -17,18 +17,14 @@ use std::{
 use alloy_primitives::U256;
 use ark_serialize::SerializationError;
 use bitvec::prelude::*;
-use committable::Committable;
 use jf_signature::SignatureError;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use tagged_base64::{TaggedBase64, Tb64Error};
 
 use super::EncodeBytes;
 use crate::{
-    bundle::Bundle,
     data::VidCommitment,
     light_client::{CircuitField, LightClientState, StakeTableState, ToFieldsLightClientCompat},
-    traits::node_implementation::NodeType,
-    utils::BuilderCommitment,
 };
 
 /// Type representing stake table entries in a `StakeTable`
@@ -267,48 +263,6 @@ pub trait BuilderSignatureKey:
         )
     }
 
-    /// validate signature over sequencing fee information
-    /// with the builder's public key (marketplace version)
-    fn validate_sequencing_fee_signature_marketplace(
-        &self,
-        signature: &Self::BuilderSignature,
-        fee_amount: u64,
-        view_number: u64,
-    ) -> bool {
-        self.validate_builder_signature(
-            signature,
-            &aggregate_fee_data_marketplace(fee_amount, view_number),
-        )
-    }
-
-    /// validate the bundle's signature using the builder's public key
-    fn validate_bundle_signature<TYPES: NodeType<BuilderSignatureKey = Self>>(
-        &self,
-        bundle: Bundle<TYPES>,
-    ) -> bool where {
-        let commitments = bundle
-            .transactions
-            .iter()
-            .flat_map(|txn| <[u8; 32]>::from(txn.commit()))
-            .collect::<Vec<u8>>();
-
-        self.validate_builder_signature(&bundle.signature, &commitments)
-    }
-
-    /// validate signature over block information with the builder's public key
-    fn validate_block_info_signature(
-        &self,
-        signature: &Self::BuilderSignature,
-        block_size: u64,
-        fee_amount: u64,
-        payload_commitment: &BuilderCommitment,
-    ) -> bool {
-        self.validate_builder_signature(
-            signature,
-            &aggregate_block_info_data(block_size, fee_amount, payload_commitment),
-        )
-    }
-
     /// sign the message with the builder's private key
     /// # Errors
     /// If unable to sign the data with the key
@@ -326,51 +280,6 @@ pub trait BuilderSignatureKey:
         metadata: &Metadata,
     ) -> Result<Self::BuilderSignature, Self::SignError> {
         Self::sign_builder_message(private_key, &aggregate_fee_data(fee_amount, metadata))
-    }
-
-    /// sign sequencing fee offer, with the payload commitment included
-    /// # Errors
-    /// If unable to sign the data with the key
-    fn sign_fee_with_vid_commitment<Metadata: EncodeBytes>(
-        private_key: &Self::BuilderPrivateKey,
-        fee_amount: u64,
-        metadata: &Metadata,
-        vid_commitment: &VidCommitment,
-    ) -> Result<Self::BuilderSignature, Self::SignError> {
-        Self::sign_builder_message(
-            private_key,
-            &aggregate_fee_data_with_vid_commitment(fee_amount, metadata, vid_commitment),
-        )
-    }
-
-    /// sign transactions (marketplace version)
-    /// # Errors
-    /// If unable to sign the data with the key
-    fn sign_bundle<TYPES: NodeType>(
-        private_key: &Self::BuilderPrivateKey,
-        transactions: &[TYPES::Transaction],
-    ) -> Result<Self::BuilderSignature, Self::SignError> {
-        let commitments = transactions
-            .iter()
-            .flat_map(|txn| <[u8; 32]>::from(txn.commit()))
-            .collect::<Vec<u8>>();
-
-        Self::sign_builder_message(private_key, &commitments)
-    }
-
-    /// sign information about offered block
-    /// # Errors
-    /// If unable to sign the data with the key
-    fn sign_block_info(
-        private_key: &Self::BuilderPrivateKey,
-        block_size: u64,
-        fee_amount: u64,
-        payload_commitment: &BuilderCommitment,
-    ) -> Result<Self::BuilderSignature, Self::SignError> {
-        Self::sign_builder_message(
-            private_key,
-            &aggregate_block_info_data(block_size, fee_amount, payload_commitment),
-        )
     }
 
     /// Generate a new key pair
@@ -400,27 +309,6 @@ fn aggregate_fee_data_with_vid_commitment<Metadata: EncodeBytes>(
     fee_info.extend_from_slice(vid_commitment.as_ref());
 
     fee_info
-}
-
-/// Aggregate all inputs used for signature over fee data
-fn aggregate_fee_data_marketplace(fee_amount: u64, view_number: u64) -> Vec<u8> {
-    let mut fee_info = Vec::new();
-    fee_info.extend_from_slice(fee_amount.to_be_bytes().as_ref());
-    fee_info.extend_from_slice(view_number.to_be_bytes().as_ref());
-    fee_info
-}
-
-/// Aggregate all inputs used for signature over block info
-fn aggregate_block_info_data(
-    block_size: u64,
-    fee_amount: u64,
-    payload_commitment: &BuilderCommitment,
-) -> Vec<u8> {
-    let mut block_info = Vec::new();
-    block_info.extend_from_slice(block_size.to_be_bytes().as_ref());
-    block_info.extend_from_slice(fee_amount.to_be_bytes().as_ref());
-    block_info.extend_from_slice(payload_commitment.as_ref());
-    block_info
 }
 
 /// Light client state signature key with minimal requirements

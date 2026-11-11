@@ -4,35 +4,17 @@
 // You should have received a copy of the MIT License
 // along with the HotShot repository. If not, see <https://mit-license.org/>.
 
-//! Events that a `HotShot` instance can emit
+//! Decided leaf information and persisted consensus actions.
 
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    data::{
-        DaProposal2, Leaf2, QuorumProposalWrapper, UpgradeProposal, VidDisperseShare, ViewNumber,
-    },
-    error::HotShotError,
-    message::Proposal,
-    simple_certificate::{CertificatePair, LightClientStateUpdateCertificateV2},
+    data::{Leaf2, VidDisperseShare},
+    simple_certificate::LightClientStateUpdateCertificateV2,
     traits::{ValidatedState, node_implementation::NodeType},
-    vote::HasViewNumber,
 };
-
-/// A status event emitted by a `HotShot` instance
-///
-/// This includes some metadata, such as the stage and view number that the event was generated in,
-/// as well as an inner [`EventType`] describing the event proper.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(bound(deserialize = "TYPES: NodeType"))]
-pub struct Event<TYPES: NodeType> {
-    /// The view number that this event originates from
-    pub view_number: ViewNumber,
-    /// The underlying event
-    pub event: EventType<TYPES>,
-}
 
 /// Decided leaf with the corresponding state and VID info.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -65,186 +47,6 @@ impl<TYPES: NodeType> LeafInfo<TYPES> {
             delta,
             vid_share,
             state_cert,
-        }
-    }
-}
-
-/// The chain of decided leaves with its corresponding state and VID info.
-pub type LeafChain<TYPES> = Vec<LeafInfo<TYPES>>;
-
-/// Utilities for converting between HotShotError and a string.
-pub mod error_adaptor {
-    use serde::{de::Deserializer, ser::Serializer};
-
-    use super::{Arc, Deserialize, HotShotError, NodeType};
-
-    /// Convert a HotShotError into a string
-    ///
-    /// # Errors
-    /// Returns `Err` if the serializer fails.
-    pub fn serialize<S: Serializer, TYPES: NodeType>(
-        elem: &Arc<HotShotError<TYPES>>,
-        serializer: S,
-    ) -> Result<S::Ok, S::Error> {
-        serializer.serialize_str(&format!("{elem}"))
-    }
-
-    /// Convert a string into a HotShotError
-    ///
-    /// # Errors
-    /// Returns `Err` if the string cannot be deserialized.
-    pub fn deserialize<'de, D: Deserializer<'de>, TYPES: NodeType>(
-        deserializer: D,
-    ) -> Result<Arc<HotShotError<TYPES>>, D::Error> {
-        let str = String::deserialize(deserializer)?;
-        Ok(Arc::new(HotShotError::FailedToDeserialize(str)))
-    }
-}
-
-/// The type and contents of a status event emitted by a `HotShot` instance
-///
-/// This enum does not include metadata shared among all variants, such as the stage and view
-/// number, and is thus always returned wrapped in an [`Event`].
-#[non_exhaustive]
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(bound(deserialize = "TYPES: NodeType"))]
-#[allow(clippy::large_enum_variant)]
-pub enum EventType<TYPES: NodeType> {
-    /// A view encountered an error and was interrupted
-    Error {
-        /// The underlying error
-        #[serde(with = "error_adaptor")]
-        error: Arc<HotShotError<TYPES>>,
-    },
-    /// A new decision event was issued
-    Decide {
-        /// The chain of Leaves that were committed by this decision
-        ///
-        /// This list is sorted in reverse view number order, with the newest (highest view number)
-        /// block first in the list.
-        ///
-        /// This list may be incomplete if the node is currently performing catchup.
-        /// Vid Info for a decided view may be missing if this node never saw it's share.
-        leaf_chain: Arc<LeafChain<TYPES>>,
-        /// The QC signing the most recent leaf in `leaf_chain`.
-        ///
-        /// Note that the QC for each additional leaf in the chain can be obtained from the leaf
-        /// before it using
-        committing_qc: Arc<CertificatePair<TYPES>>,
-        /// A QC signing the leaf corresponding to `qc`.
-        ///
-        /// Together with `qc`, this forms a 2-chain, which is sufficient for a light client to
-        /// verify that the leaf chain contained in this event is in fact decided.
-        deciding_qc: Option<Arc<CertificatePair<TYPES>>>,
-        /// Optional information of the number of transactions in the block, for logging purposes.
-        block_size: Option<u64>,
-    },
-    /// A replica task was canceled by a timeout interrupt
-    ReplicaViewTimeout {
-        /// The view that timed out
-        view_number: ViewNumber,
-    },
-    /// The view has finished.  If values were decided on, a `Decide` event will also be emitted.
-    ViewFinished {
-        /// The view number that has just finished
-        view_number: ViewNumber,
-    },
-    /// The view timed out
-    ViewTimeout {
-        /// The view that timed out
-        view_number: ViewNumber,
-    },
-    /// New transactions were received from the network
-    /// or submitted to the network by us
-    Transactions {
-        /// The list of transactions
-        transactions: Vec<TYPES::Transaction>,
-    },
-    /// DA proposal was received from the network
-    /// or submitted to the network by us
-    DaProposal {
-        /// Contents of the proposal
-        proposal: Proposal<TYPES, DaProposal2<TYPES>>,
-        /// Public key of the leader submitting the proposal
-        sender: TYPES::SignatureKey,
-    },
-    /// Quorum proposal was received from the network
-    /// or submitted to the network by us
-    QuorumProposal {
-        /// Contents of the proposal
-        proposal: Proposal<TYPES, QuorumProposalWrapper<TYPES>>,
-        /// Public key of the leader submitting the proposal
-        sender: TYPES::SignatureKey,
-    },
-    /// Upgrade proposal was received from the network
-    /// or submitted to the network by us
-    UpgradeProposal {
-        /// Contents of the proposal
-        proposal: Proposal<TYPES, UpgradeProposal>,
-        /// Public key of the leader submitting the proposal
-        sender: TYPES::SignatureKey,
-    },
-
-    /// A message destined for external listeners was received
-    ExternalMessageReceived {
-        /// Public Key of the message sender
-        sender: TYPES::SignatureKey,
-        /// Serialized data of the message
-        data: Vec<u8>,
-    },
-}
-
-impl<TYPES: NodeType> std::fmt::Display for Event<TYPES> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{} (view {})", self.event, self.view_number)
-    }
-}
-
-impl<TYPES: NodeType> std::fmt::Display for EventType<TYPES> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Error { error } => write!(f, "Error: {error}"),
-            Self::Decide { leaf_chain, .. } => {
-                let newest = leaf_chain.first().map(|l| l.leaf.view_number());
-                let oldest = leaf_chain.last().map(|l| l.leaf.view_number());
-                write!(
-                    f,
-                    "Decide: leaves={} oldest={:?} newest={:?}",
-                    leaf_chain.len(),
-                    oldest,
-                    newest,
-                )
-            },
-            Self::ReplicaViewTimeout { view_number } => {
-                write!(f, "ReplicaViewTimeout: view={view_number}")
-            },
-            Self::ViewFinished { view_number } => {
-                write!(f, "ViewFinished: view={view_number}")
-            },
-            Self::ViewTimeout { view_number } => {
-                write!(f, "ViewTimeout: view={view_number}")
-            },
-            Self::Transactions { transactions } => {
-                write!(f, "Transactions: count={}", transactions.len())
-            },
-            Self::DaProposal { proposal, .. } => {
-                write!(f, "DaProposal: view={}", proposal.data.view_number())
-            },
-            Self::QuorumProposal { proposal, .. } => {
-                write!(f, "QuorumProposal: view={}", proposal.data.view_number())
-            },
-            Self::UpgradeProposal { proposal, .. } => {
-                write!(
-                    f,
-                    "UpgradeProposal: view={} old_version={} new_version={}",
-                    proposal.data.view_number,
-                    proposal.data.upgrade_proposal.old_version,
-                    proposal.data.upgrade_proposal.new_version,
-                )
-            },
-            Self::ExternalMessageReceived { .. } => {
-                write!(f, "ExternalMessageReceived")
-            },
         }
     }
 }

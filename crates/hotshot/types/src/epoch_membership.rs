@@ -25,7 +25,7 @@ use crate::{
     },
     traits::{
         block_contents::BlockHeader,
-        election::{Membership, MembershipSnapshot, NonEpochMembershipSnapshot},
+        election::{GenesisStakeTables, Membership, MembershipSnapshot},
         node_implementation::NodeType,
         signature_key::StakeTableEntryType,
         storage::{
@@ -169,10 +169,7 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
         maybe_epoch: Option<EpochNumber>,
     ) -> Result<EpochMembership<TYPES>> {
         let Some(epoch) = maybe_epoch else {
-            return Ok(EpochMembership {
-                coordinator: self.clone(),
-                snapshot: EpochMembershipSnapshot::NonEpoch(self.membership.non_epoch_snapshot()),
-            });
+            return Ok(self.genesis_membership());
         };
         let first_epoch = self.membership.first_epoch();
         if epoch < first_epoch {
@@ -204,10 +201,7 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
     /// table for the given Epoch
     pub fn stake_table_for_epoch(&self, e: Option<EpochNumber>) -> Result<EpochMembership<TYPES>> {
         let Some(epoch) = e else {
-            return Ok(EpochMembership {
-                coordinator: self.clone(),
-                snapshot: EpochMembershipSnapshot::NonEpoch(self.membership.non_epoch_snapshot()),
-            });
+            return Ok(self.genesis_membership());
         };
         let first_epoch = self.membership.first_epoch();
         if epoch < first_epoch {
@@ -258,15 +252,8 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
                     }
                 },
             };
-        if let Some(snap) = membership.snapshot() {
-            for m in snap.stake_table().chain(snap.da_stake_table()) {
-                merge(m.stake_table_entry.public_key(), m.connect_info.clone());
-            }
-        } else {
-            let snap = membership.non_epoch_snapshot()?;
-            for m in snap.stake_table().chain(snap.da_stake_table()) {
-                merge(m.stake_table_entry.public_key(), m.connect_info.clone());
-            }
+        for m in membership.stake_table().chain(membership.da_stake_table()) {
+            merge(m.stake_table_entry.public_key(), m.connect_info.clone());
         }
         Some(out)
     }
@@ -396,6 +383,14 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
                 snapshot: self.membership.snapshot(epoch)?,
             },
         })
+    }
+
+    /// The membership of views before the first epoch.
+    fn genesis_membership(&self) -> EpochMembership<TYPES> {
+        EpochMembership {
+            coordinator: self.clone(),
+            snapshot: EpochMembershipSnapshot::Genesis(self.membership.genesis_stake_tables()),
+        }
     }
 
     /// Whether `epoch`'s stake table is in memory.
@@ -846,7 +841,8 @@ enum EpochMembershipSnapshot<TYPES: NodeType> {
         epoch: EpochNumber,
         snapshot: <TYPES::Membership as Membership<TYPES>>::Snapshot,
     },
-    NonEpoch(<TYPES::Membership as Membership<TYPES>>::NonEpochSnapshot),
+    /// Views before the first epoch.
+    Genesis(Arc<GenesisStakeTables<TYPES>>),
 }
 
 impl<TYPES: NodeType> Clone for EpochMembershipSnapshot<TYPES> {
@@ -856,7 +852,7 @@ impl<TYPES: NodeType> Clone for EpochMembershipSnapshot<TYPES> {
                 epoch: *epoch,
                 snapshot: snapshot.clone(),
             },
-            Self::NonEpoch(s) => Self::NonEpoch(s.clone()),
+            Self::Genesis(g) => Self::Genesis(g.clone()),
         }
     }
 }
@@ -874,7 +870,7 @@ impl<TYPES: NodeType> EpochMembership<TYPES> {
     pub fn epoch(&self) -> Option<EpochNumber> {
         match &self.snapshot {
             EpochMembershipSnapshot::Epoch { epoch, .. } => Some(*epoch),
-            EpochMembershipSnapshot::NonEpoch(_) => None,
+            EpochMembershipSnapshot::Genesis(_) => None,
         }
     }
 
@@ -911,22 +907,11 @@ impl<TYPES: NodeType> EpochMembership<TYPES> {
         self.coordinator.get_epoch_drb(epoch).await.wrap()
     }
 
-    /// Borrow the per-epoch snapshot, or `None` for the pre-epoch case.
+    /// Borrow the per-epoch snapshot, or `None` before the first epoch.
     pub fn snapshot(&self) -> Option<&<TYPES::Membership as Membership<TYPES>>::Snapshot> {
         match &self.snapshot {
             EpochMembershipSnapshot::Epoch { snapshot, .. } => Some(snapshot),
-            EpochMembershipSnapshot::NonEpoch(_) => None,
-        }
-    }
-
-    /// Borrow the pre-epoch snapshot, or `None` if this is a per-epoch
-    /// membership.
-    pub fn non_epoch_snapshot(
-        &self,
-    ) -> Option<&<TYPES::Membership as Membership<TYPES>>::NonEpochSnapshot> {
-        match &self.snapshot {
-            EpochMembershipSnapshot::NonEpoch(s) => Some(s),
-            EpochMembershipSnapshot::Epoch { .. } => None,
+            EpochMembershipSnapshot::Genesis(_) => None,
         }
     }
 
@@ -944,14 +929,13 @@ impl<TYPES: NodeType> EpochMembership<TYPES> {
     // snapshot was captured at construction time, so a single accessor
     // call observes one consistent view. For *sequences* of related reads
     // that must observe the same view, take a snapshot via
-    // [`Self::snapshot`] / [`Self::non_epoch_snapshot`] and call methods
-    // on it directly.
+    // [`Self::snapshot`] and call methods on it directly.
     // ---------------------------------------------------------------------
 
     pub fn stake_table(&self) -> impl ExactSizeIterator<Item = &PeerConfig<TYPES>> + Send {
         match &self.snapshot {
             EpochMembershipSnapshot::Epoch { snapshot, .. } => Either::Left(snapshot.stake_table()),
-            EpochMembershipSnapshot::NonEpoch(s) => Either::Right(s.stake_table()),
+            EpochMembershipSnapshot::Genesis(g) => Either::Right(g.stake_table()),
         }
     }
 
@@ -960,7 +944,7 @@ impl<TYPES: NodeType> EpochMembership<TYPES> {
             EpochMembershipSnapshot::Epoch { snapshot, .. } => {
                 Either::Left(snapshot.da_stake_table())
             },
-            EpochMembershipSnapshot::NonEpoch(s) => Either::Right(s.da_stake_table()),
+            EpochMembershipSnapshot::Genesis(g) => Either::Right(g.da_stake_table()),
         }
     }
 
@@ -972,7 +956,7 @@ impl<TYPES: NodeType> EpochMembership<TYPES> {
             EpochMembershipSnapshot::Epoch { snapshot, .. } => {
                 Either::Left(snapshot.committee_members(view))
             },
-            EpochMembershipSnapshot::NonEpoch(s) => Either::Right(s.committee_members(view)),
+            EpochMembershipSnapshot::Genesis(g) => Either::Right(g.committee_members()),
         }
     }
 
@@ -984,35 +968,35 @@ impl<TYPES: NodeType> EpochMembership<TYPES> {
             EpochMembershipSnapshot::Epoch { snapshot, .. } => {
                 Either::Left(snapshot.da_committee_members(view))
             },
-            EpochMembershipSnapshot::NonEpoch(s) => Either::Right(s.da_committee_members(view)),
+            EpochMembershipSnapshot::Genesis(g) => Either::Right(g.da_committee_members()),
         }
     }
 
     pub fn stake(&self, key: &TYPES::SignatureKey) -> Option<PeerConfig<TYPES>> {
         match &self.snapshot {
             EpochMembershipSnapshot::Epoch { snapshot, .. } => snapshot.stake(key),
-            EpochMembershipSnapshot::NonEpoch(s) => s.stake(key),
+            EpochMembershipSnapshot::Genesis(g) => g.stake(key),
         }
     }
 
     pub fn da_stake(&self, key: &TYPES::SignatureKey) -> Option<PeerConfig<TYPES>> {
         match &self.snapshot {
             EpochMembershipSnapshot::Epoch { snapshot, .. } => snapshot.da_stake(key),
-            EpochMembershipSnapshot::NonEpoch(s) => s.da_stake(key),
+            EpochMembershipSnapshot::Genesis(g) => g.da_stake(key),
         }
     }
 
     pub fn has_stake(&self, key: &TYPES::SignatureKey) -> bool {
         match &self.snapshot {
             EpochMembershipSnapshot::Epoch { snapshot, .. } => snapshot.has_stake(key),
-            EpochMembershipSnapshot::NonEpoch(s) => s.has_stake(key),
+            EpochMembershipSnapshot::Genesis(g) => g.has_stake(key),
         }
     }
 
     pub fn has_da_stake(&self, key: &TYPES::SignatureKey) -> bool {
         match &self.snapshot {
             EpochMembershipSnapshot::Epoch { snapshot, .. } => snapshot.has_da_stake(key),
-            EpochMembershipSnapshot::NonEpoch(s) => s.has_da_stake(key),
+            EpochMembershipSnapshot::Genesis(g) => g.has_da_stake(key),
         }
     }
 
@@ -1024,74 +1008,56 @@ impl<TYPES: NodeType> EpochMembership<TYPES> {
     pub fn leader(&self, view: ViewNumber) -> Result<TYPES::SignatureKey> {
         match &self.snapshot {
             EpochMembershipSnapshot::Epoch { snapshot, .. } => snapshot.leader(view),
-            EpochMembershipSnapshot::NonEpoch(s) => s.leader(view),
-        }
-    }
-
-    /// The leader for `view`, returning the membership-impl error type.
-    ///
-    /// # Errors
-    ///
-    /// Returns the membership-impl error if the leader cannot be calculated.
-    pub fn lookup_leader(
-        &self,
-        view: ViewNumber,
-    ) -> std::result::Result<
-        TYPES::SignatureKey,
-        <<TYPES as NodeType>::Membership as Membership<TYPES>>::Error,
-    > {
-        match &self.snapshot {
-            EpochMembershipSnapshot::Epoch { snapshot, .. } => snapshot.lookup_leader(view),
-            EpochMembershipSnapshot::NonEpoch(s) => s.lookup_leader(view),
+            EpochMembershipSnapshot::Genesis(g) => g.leader(view),
         }
     }
 
     pub fn total_nodes(&self) -> usize {
         match &self.snapshot {
             EpochMembershipSnapshot::Epoch { snapshot, .. } => snapshot.total_nodes(),
-            EpochMembershipSnapshot::NonEpoch(s) => s.total_nodes(),
+            EpochMembershipSnapshot::Genesis(g) => g.total_nodes(),
         }
     }
 
     pub fn da_total_nodes(&self) -> usize {
         match &self.snapshot {
             EpochMembershipSnapshot::Epoch { snapshot, .. } => snapshot.da_total_nodes(),
-            EpochMembershipSnapshot::NonEpoch(s) => s.da_total_nodes(),
+            EpochMembershipSnapshot::Genesis(g) => g.da_total_nodes(),
         }
     }
 
     pub fn success_threshold(&self) -> U256 {
         match &self.snapshot {
             EpochMembershipSnapshot::Epoch { snapshot, .. } => snapshot.success_threshold(),
-            EpochMembershipSnapshot::NonEpoch(s) => s.success_threshold(),
+            EpochMembershipSnapshot::Genesis(g) => g.success_threshold(),
         }
     }
 
     pub fn da_success_threshold(&self) -> U256 {
         match &self.snapshot {
             EpochMembershipSnapshot::Epoch { snapshot, .. } => snapshot.da_success_threshold(),
-            EpochMembershipSnapshot::NonEpoch(s) => s.da_success_threshold(),
+            EpochMembershipSnapshot::Genesis(g) => g.da_success_threshold(),
         }
     }
 
     pub fn failure_threshold(&self) -> U256 {
         match &self.snapshot {
             EpochMembershipSnapshot::Epoch { snapshot, .. } => snapshot.failure_threshold(),
-            EpochMembershipSnapshot::NonEpoch(s) => s.failure_threshold(),
+            EpochMembershipSnapshot::Genesis(g) => g.failure_threshold(),
         }
     }
 
     pub fn upgrade_threshold(&self) -> U256 {
         match &self.snapshot {
             EpochMembershipSnapshot::Epoch { snapshot, .. } => snapshot.upgrade_threshold(),
-            EpochMembershipSnapshot::NonEpoch(s) => s.upgrade_threshold(),
+            EpochMembershipSnapshot::Genesis(g) => g.upgrade_threshold(),
         }
     }
 
     pub fn stake_table_hash(&self) -> Option<Commitment<SnapshotStakeTableHash<TYPES>>> {
         match &self.snapshot {
             EpochMembershipSnapshot::Epoch { snapshot, .. } => snapshot.stake_table_hash(),
-            EpochMembershipSnapshot::NonEpoch(_) => None,
+            EpochMembershipSnapshot::Genesis(_) => None,
         }
     }
 }

@@ -16,7 +16,7 @@ use hotshot_new_protocol::storage::NewProtocolStorage;
 use hotshot_types::simple_certificate::{Certificate1, Certificate2};
 #[cfg(feature = "node")]
 use hotshot_types::{
-    data::{DaProposal, DaProposal2, QuorumProposalWrapper, VidCommitment, VidDisperseShare},
+    data::{DaProposal2, QuorumProposalWrapper, VidCommitment, VidDisperseShare},
     drb::DrbInput,
     event::{HotShotAction, LeafInfo},
     initializer::{HotShotInitializer, InitializerEpochInfo},
@@ -957,11 +957,6 @@ pub trait SequencerPersistence:
         &self,
         proposal: &Proposal<SeqTypes, VidDisperseShare<SeqTypes>>,
     ) -> anyhow::Result<()>;
-    async fn append_da(
-        &self,
-        proposal: &Proposal<SeqTypes, DaProposal<SeqTypes>>,
-        vid_commit: VidCommitment,
-    ) -> anyhow::Result<()>;
     async fn record_action(&self, view: ViewNumber, action: HotShotAction) -> anyhow::Result<()>;
 
     async fn append_quorum_proposal2(
@@ -1000,12 +995,19 @@ pub trait SequencerPersistence:
         Ok(None)
     }
 
-    /// Update the current eQC in storage.
-    async fn store_eqc(
-        &self,
-        _high_qc: QuorumCertificate2<SeqTypes>,
-        _next_epoch_high_qc: NextEpochQuorumCertificate2<SeqTypes>,
-    ) -> anyhow::Result<()>;
+    /// Persist the new protocol's latest epoch boundary certificate: the own
+    /// `Certificate1` of the last block of an epoch, at the block's view.
+    ///
+    /// Implementations must apply this as an atomic monotonic compare-and-set,
+    /// ordered by epoch, then view, like [`Self::append_high_qc2`].
+    async fn append_boundary_qc2(&self, _qc: QuorumCertificate2<SeqTypes>) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    /// Load the persisted boundary certificate, if any.
+    async fn load_boundary_qc2(&self) -> anyhow::Result<Option<QuorumCertificate2<SeqTypes>>> {
+        Ok(None)
+    }
 
     /// Load the current eQC from storage.
     async fn load_eqc(
@@ -1025,13 +1027,6 @@ pub trait SequencerPersistence:
             Some((leaf, _)) => Ok(leaf.view_number()),
             None => Ok(ViewNumber::genesis()),
         }
-    }
-
-    async fn append_next_epoch_high_qc2(
-        &self,
-        _next_epoch_high_qc: NextEpochQuorumCertificate2<SeqTypes>,
-    ) -> anyhow::Result<()> {
-        Ok(())
     }
 
     async fn append_da2(
@@ -1088,14 +1083,6 @@ impl<P: SequencerPersistence> Storage<SeqTypes> for Arc<P> {
         proposal: &Proposal<SeqTypes, VidDisperseShare<SeqTypes>>,
     ) -> anyhow::Result<()> {
         (**self).append_vid(proposal).await
-    }
-
-    async fn append_da(
-        &self,
-        proposal: &Proposal<SeqTypes, DaProposal<SeqTypes>>,
-        vid_commit: VidCommitment,
-    ) -> anyhow::Result<()> {
-        (**self).append_da(proposal, vid_commit).await
     }
 
     async fn append_da2(
@@ -1171,6 +1158,14 @@ impl<P: SequencerPersistence> NewProtocolStorage<SeqTypes> for Arc<P> {
 
     async fn load_high_qc2(&self) -> anyhow::Result<Option<Certificate1<SeqTypes>>> {
         (**self).load_high_qc2().await
+    }
+
+    async fn append_boundary_qc2(&self, qc: Certificate1<SeqTypes>) -> anyhow::Result<()> {
+        (**self).append_boundary_qc2(qc).await
+    }
+
+    async fn load_boundary_qc2(&self) -> anyhow::Result<Option<Certificate1<SeqTypes>>> {
+        (**self).load_boundary_qc2().await
     }
 }
 

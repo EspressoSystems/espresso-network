@@ -14,8 +14,10 @@
 use std::net::Ipv4Addr;
 use std::{collections::BTreeMap, time::Duration};
 
+use hotshot_example_types::node_types::TestTypes;
 #[cfg(target_os = "linux")]
 use hotshot_types::addr::NetAddr;
+use hotshot_types::traits::block_contents::BlockHeader;
 use versions::{TIMEOUT_EPOCH_VERSION, Upgrade};
 
 use crate::tests::common::{
@@ -246,12 +248,26 @@ async fn validator_leaves_at_epoch_boundary() {
         .build();
     runner.run().await.unwrap();
 
-    // All views 1..=35 decided, so view == block height; node 5's membership
-    // ends with epoch 2 at view 20.
+    // Node 5's membership ends with epoch 2. It may still vote for that epoch,
+    // on a re-vote of epoch 2's last block, until it enters epoch 3 (the
+    // specification's `NotBehind`), which can be after the block's own view.
+    // Without faults it enters epoch 3 by the view of epoch 3's first block,
+    // block 21, which a re-vote may share, so that view bounds its actions here.
+    let epoch_three_view = runner.node_storages()[0]
+        .proposals_cloned()
+        .await
+        .into_values()
+        .filter(|proposal| {
+            BlockHeader::<TestTypes>::block_number(proposal.data.block_header()) == 21
+        })
+        .map(|proposal| proposal.data.view_number())
+        .max()
+        .expect("node 0 holds the first block of epoch 3");
     for (view, action) in runner.node_storages()[5].action_log().await {
         assert!(
-            *view <= 20,
-            "node 5 recorded {action:?} for view {view} after its membership ended"
+            view <= epoch_three_view,
+            "node 5 recorded {action:?} for view {view} after epoch 3 began at view \
+             {epoch_three_view}"
         );
     }
 

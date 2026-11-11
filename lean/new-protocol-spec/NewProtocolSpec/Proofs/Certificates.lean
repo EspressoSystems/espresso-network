@@ -11,7 +11,9 @@ by the rules. So a backed `Cert1` names a well-formed block some honest node
 received, a backed `Cert2` presupposes a backed `Cert1` over the same block, and
 two certificates of one epoch at one view name one block. A certificate is at its
 block's view or, for the last block of an epoch voted on again (`RevoteRequest`), a later
-one.
+one. The parent of a block with a backed `Cert1` is available: an honest node held
+it with its payload, unless it is the anchor or the block opens an epoch
+(`cert1_parent_ready`).
 
 `cert1_step` is where the signing rules meet: one step back from a certified block,
 to its parent or to the certificate a re-vote voted on again, skips no committed
@@ -83,6 +85,39 @@ theorem cert1Backed_block {C : Committee} {N : Network cfg C} {c : Cert1}
   exact ⟨b, hview, rfl, rfl, rfl⟩
 
 /--
+**The parent of a certified block is available.** A backed `Cert1` is over a
+block whose parent an honest node held with the parent's payload, unless the
+parent is the anchor or the block opens an epoch (`ParentReady`).
+
+By induction on the view, as for `cert1_origin`. An honest signer either voted on
+the proposal, which needs `ParentReady`, or answered a re-vote request, whose
+certificate is over the same block at an earlier view.
+-/
+theorem cert1_parent_ready {C : Committee} (N : Network cfg C) :
+    ∀ n (c : Cert1), c.view.toNat ≤ n → Cert1Backed N.trace c →
+      ∃ k, ∃ hk : C.Honest k, ∃ m p, c.data.blockHash = blockHash p
+        ∧ ParentReady cfg ((N.trace k hk).history (m + 1)) p := by
+  intro n
+  induction n using Nat.strongRecOn with
+  | ind n ih =>
+    intro c hle hc
+    obtain ⟨k, he, m, hm⟩ := cert1_signer N hc
+    obtain ⟨-, hcase⟩ := (N.safe_at k (.of he) m).vote1Justified m _
+      ⟨(N.trace k (.of he) m), (Trace.history_getElem? _ (Nat.lt_succ_self m)), hm⟩ he
+    rw [Trace.history_upTo _ (Nat.le_refl _)] at hcase
+    rcases hcase with ⟨-, p, -, -, -, -, -, -, hpr, -, hdata⟩
+      | ⟨sender, r, hrec, hwf, -, hview, hdata⟩
+    · exact ⟨k, .of he, m, p, congrArg Vote1Data.blockHash hdata, hpr⟩
+    · obtain ⟨i, -, hi⟩ := (Trace.received_history _).mp hrec
+      have hrv : r.cert.view.toNat < c.view.toNat := by
+        rw [show c.view = r.view from hview]; exact hwf.1
+      obtain ⟨k', hk', m', p, hhash, hpr⟩ :=
+        ih r.cert.view.toNat (Nat.lt_of_lt_of_le hrv hle) r.cert (Nat.le_refl _)
+          (N.revoteGenuine k (.of he) i sender r hi)
+      exact ⟨k', hk', m', p, (congrArg Vote1Data.blockHash (show c.data = r.cert.data from hdata)).trans hhash,
+        hpr⟩
+
+/--
 A backed `Cert1` is at a view after the anchor's.
 
 The proposal it is over has a parent at an earlier view, the anchor's certificate
@@ -139,14 +174,41 @@ theorem cert1_proposal {C : Committee} (N : Network cfg C)
 /-- Two backed `Cert1`s of one epoch at one view carry the same data. -/
 theorem cert1_unique (cfg : Config) {C : Committee} (N : Network cfg C) {c c' : Cert1}
     (h : Cert1Backed N.trace c) (h' : Cert1Backed N.trace c')
-    (he : c.data.epoch = c'.data.epoch) (hv : c.view = c'.view) :
-    c.data.blockHash = c'.data.blockHash := by
+    (he : c.data.epoch = c'.data.epoch) (hv : c.view = c'.view) : c.data = c'.data := by
   obtain ⟨q, hq, hcast⟩ := h
   obtain ⟨q', hq', hcast'⟩ := h'
   obtain ⟨k, hk, hk', hhon⟩ := C.intersect c.data.epoch q q' hq (he ▸ hq')
   have hhon' : C.honest c'.data.epoch k := he ▸ hhon
   have hagree := vote1_agree N (hcast k hk hhon) (hcast' k hk' hhon') hhon he hv
-  exact congrArg (fun v : Vote1 => v.data.blockHash) hagree
+  exact congrArg (fun v : Vote1 => v.data) hagree
+
+/--
+Two vote2s an honest node sends for one epoch and view are the same vote.
+
+No signing rule says so: each names the data of a `Cert1` the node held at the
+vote's view (`SafeHistory.vote2Justified`), never the anchor's, and two backed
+`Cert1`s of one epoch at one view agree (`cert1_unique`).
+-/
+theorem vote2_agree (cfg : Config) {C : Committee} (N : Network cfg C) (hcfg : ConfigCoherent cfg)
+    {k : PubKey} {h : C.Honest k} {v v' : Vote2}
+    (hs : SentBy (N.trace k h) (.vote2 v)) (hs' : SentBy (N.trace k h) (.vote2 v'))
+    (he : C.honest v.data.epoch k) (heq : v.data.epoch = v'.data.epoch) (hv : v.view = v'.view) :
+    v = v' := by
+  obtain ⟨hk, hgen, c, hcv, hcd, n, hc⟩ := vote2_signed N hs he
+  obtain ⟨hk', -, c', hcv', hcd', n', hc'⟩ := vote2_signed N hs' (heq ▸ he)
+  have backed : ∀ {c : Cert1}, v.view = c.view →
+      (∃ n, ((N.trace k h).history (n + 1)).HasCert1 cfg c) → Cert1Backed N.trace c := by
+    rintro c hview ⟨n, hc⟩
+    refine (cert1_held_backed N hc).resolve_left fun ha => ?_
+    rw [hview, ha, hcfg.anchorCertView] at hgen
+    exact Nat.lt_irrefl _ hgen
+  have hdata := cert1_unique cfg N (backed hcv ⟨n, hc⟩) (backed (hv.trans hcv') ⟨n', hc'⟩)
+    ((congrArg Vote2Data.epoch hcd).symm.trans (heq.trans (congrArg Vote2Data.epoch hcd')))
+    (hcv.symm.trans (hv.trans hcv'))
+  cases v; cases v'
+  simp only at hk hk' hcd hcd' hv
+  subst hk hk' hv
+  rw [hcd, hcd', hdata]
 
 /-- A backed `Cert2` presupposes a backed `Cert1` over the same block, at the same view. -/
 theorem cert2_implies_cert1 (cfg : Config) {C : Committee} (N : Network cfg C)
