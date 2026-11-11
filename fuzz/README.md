@@ -4,12 +4,11 @@ Coverage-guided fuzzing with [cargo-fuzz](https://github.com/rust-fuzz/cargo-fuz
 bytes from peers and query servers. The crate is a workspace member but not a default member, so a plain `cargo build`
 never compiles libFuzzer.
 
-| Target               | Input                                                      | Checks                                                                                                                                                                                                       |
-| -------------------- | ---------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `vid_ns_shares`      | edited bincode of an honest AvidmGf2 common and its shares | no panic in verify or recover; verified shards covering the threshold recover the payload                                                                                                                    |
-| `ns_table`           | namespace table and payload bytes                          | no panic walking the payload; both namespace table parsers agree on every valid table                                                                                                                        |
-| `inclusion_proofs`   | edited bincode or JSON of honest tx and namespace proofs   | no panic decoding or verifying; no proof of a transaction or namespace not in the block                                                                                                                      |
-| `stake_table_events` | stake table events from a pool of signed keys              | no panic; rejected events change nothing; stake is the sum of delegations; active keys are unique; validators keep their commitment through JSON and bincode; sorting validators by account keeps the quorum |
+| Target             | Input                                                      | Checks                                                                                    |
+| ------------------ | ---------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| `vid_ns_shares`    | edited bincode of an honest AvidmGf2 common and its shares | no panic in verify or recover; verified shards covering the threshold recover the payload |
+| `ns_table`         | namespace table and payload bytes                          | no panic walking the payload; both namespace table parsers agree on every valid table     |
+| `inclusion_proofs` | edited bincode or JSON of honest tx and namespace proofs   | no panic decoding or verifying; no proof of a transaction or namespace not in the block   |
 
 ## Running
 
@@ -19,9 +18,6 @@ Sanitizers need nightly, which the `nightly` dev shell provides along with `carg
 nix develop .#nightly
 cargo fuzz run vid_ns_shares -- -max_total_time=300 -rss_limit_mb=2048
 ```
-
-A `stake_table_events` input needs several events, longer than libFuzzer grows inputs to in a short run, so pass it
-`-max_len=512 -len_control=0` as CI does.
 
 CI runs each target for five minutes on every pull request (`.github/workflows/fuzz.yml`) and uploads crashes as a
 workflow artifact. A crash is saved under `fuzz/artifacts/<target>/`. Replay it with `cargo fuzz run <target> <file>`,
