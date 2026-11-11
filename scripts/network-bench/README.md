@@ -607,6 +607,30 @@ just bench aws publish bench-state/aws/<fleet>/runs/01-run   # retry, or backfil
   `user.email` come from the user's git config.
 - Published files: [Artifacts](#published-files).
 
+### VID dispersal model
+
+```
+./scripts/network-bench/vid-race-model.py --profile decaf-2025 -n 10 --stake equal --policy registration nearest
+./scripts/network-bench/vid-race-model.py --profile decaf-2025 -n 10 --stake top:1:0.2 top:2:0.15 --policy stake nearest
+./scripts/network-bench/vid-race-model.py --profile mainnet -n 92 --stake profile --threshold 1/3 2/3
+```
+
+- A timing model of one view's VID dispersal, no network: the leader unicasts each node its stake-weighted share over a
+  fairly shared egress, every node rebroadcasts its share to every peer, and a replica drains what arrives at its
+  bandwidth. Per replica it computes when a recovery threshold of shares is in hand (decode) and when every holder of
+  the systematic range has delivered (concat), each plus its reconstruction cost. It prints, per path, the time until
+  two thirds of the stake hold the payload, averaged over every node as leader, the share of replicas where concat
+  finishes first, and each node's egress.
+- Sweeps: `--stake` (`equal`, `profile` from the locations file, `top:K:F`), `--policy` (where the systematic range
+  lands), `--threshold`, `--parity none` (systematic shards only), `--relay` (`stake`, `equal`, `tree`), `--pipelined`,
+  `--payload-mb`, `--bw` (MB/s per node, default 1800). `--profile` names a `--latency` profile of `latency.py`. Stdlib
+  only.
+- A complete systematic set is itself a threshold, so decode is never ready later than concat; the race can only save
+  the reconstruction cost gap (defaults 0.51 versus 0.37 ms/MB, from the 5 November runs' reconstruct histograms).
+- Stake concentration: the third example's `max node MB` is what the largest staker rebroadcasts per 100 MB block, about
+  2.2 GB at threshold 1/3 on the mainnet stake table. Concat waits for every systematic holder's rebroadcast, so on that
+  table it trails decode by 0.2 to 1.2 s.
+
 ## Options
 
 ### aws-bench commands
@@ -1085,6 +1109,7 @@ scripts/network-bench/
   leadertrace.py         leader critical-path breakdown and trace/sample readers used by trace-plots
   finalization_timeline.py timeline.svg of trace-plots
   leader_window.py       leader_window.png of trace-plots
+  vid-race-model.py      timing model of one view's VID dispersal, see VID dispersal model
   instance-types.md      leader block-build time and cost per block per instance type
   genesis.toml           0.6, 100 MB blocks, 1 wei base fee
   process-compose.yaml   local 3-node network
