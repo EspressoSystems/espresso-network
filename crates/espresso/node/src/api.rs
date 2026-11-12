@@ -7185,8 +7185,8 @@ mod test {
         }
 
         // A fresh node holds the seeded window only, which starts at most 4 epochs below its top:
-        // the epochs between its genesis pair and the window are not walked until something asks
-        // for one, and then the walk leaves the window held.
+        // the epochs below it stay empty until something asks for one, which is a second seed that
+        // follows its target and leaves the window held.
         let skipped = EpochNumber::new(seed_epoch.saturating_sub(5));
         if fresh_storage && *skipped > 2 {
             assert!(
