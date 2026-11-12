@@ -430,24 +430,27 @@ where
             end_height
         );
 
-        self.verify_leaf_chain(&leaves, known_finalized, cache)
-            .await?;
-        Ok(leaves)
+        self.verify_leaf_chain(leaves, known_finalized, cache).await
     }
 
     /// Verify unproven leaves by chaining them to a leaf already known to be finalized.
     ///
     /// `leaves` must be consecutive and end just below `known_finalized`, which the caller has
     /// verified. Each leaf is then pinned by the parent commitment of the one above it, so the
-    /// whole run inherits the anchor's finality without a proof of its own.
+    /// whole run inherits the anchor's finality without a proof of its own. Returns the leaves
+    /// with each QC replaced by the justify QC of the leaf above it.
     async fn verify_leaf_chain(
         &self,
-        leaves: &[LeafQueryData<SeqTypes>],
+        leaves: Vec<LeafQueryData<SeqTypes>>,
         known_finalized: &LeafQueryData<SeqTypes>,
         cache: CacheLeaves,
-    ) -> Result<()> {
+    ) -> Result<Vec<LeafQueryData<SeqTypes>>> {
         let mut expected_parent = known_finalized.leaf().parent_commitment();
-        for leaf in leaves.iter().rev() {
+        // The QC the server sent with a leaf is never checked, but the justify QC of the leaf above
+        // is bound by that leaf's hash, so it is the one to keep.
+        let mut qc = known_finalized.leaf().justify_qc().clone();
+        let mut verified = Vec::with_capacity(leaves.len());
+        for leaf in leaves.into_iter().rev() {
             let leaf_hash = leaf.hash();
             if leaf_hash != expected_parent {
                 return Err(self.verification_failure(anyhow!(
@@ -457,13 +460,19 @@ where
                 )));
             }
             expected_parent = leaf.leaf().parent_commitment();
+            let parent_qc = leaf.leaf().justify_qc().clone();
+            let leaf = LeafQueryData::new(leaf.leaf().clone(), qc)
+                .map_err(|err| self.verification_failure(err.into()))?;
+            verified.push(leaf);
+            qc = parent_qc;
         }
+        verified.reverse();
 
         if cache == CacheLeaves::No {
-            return Ok(());
+            return Ok(verified);
         }
         // Cache the verified leaves, but do not fail the fetch if caching does.
-        for leaf in leaves {
+        for leaf in &verified {
             if let Err(err) = self
                 .metrics
                 .db_write(self.db.insert_leaf(leaf.clone()))
@@ -477,7 +486,7 @@ where
             }
         }
 
-        Ok(())
+        Ok(verified)
     }
 
     /// Fetch and verify the leaves in a set of height ranges.
@@ -585,9 +594,10 @@ where
                 };
                 run.push(leaf);
             }
-            self.verify_leaf_chain(&run, &anchor, CacheLeaves::Yes)
-                .await?;
-            leaves.extend(run);
+            leaves.extend(
+                self.verify_leaf_chain(run, &anchor, CacheLeaves::Yes)
+                    .await?,
+            );
             leaves.push(anchor);
         }
 
@@ -1577,6 +1587,36 @@ mod test {
 
         // Only the proven last leaf is cached; the ones chained to it are not.
         assert_eq!(lc.db.get_leaves_in_range(1, 4).await.unwrap(), vec![leaf3]);
+    }
+
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_fetch_leaves_drops_forged_range_qc() {
+        let client = TestClient::default();
+        let leaves = vec![
+            client.remember_leaf(1).await,
+            client.remember_leaf(2).await,
+            client.remember_leaf(3).await,
+        ];
+        client.forge_range_qc(1).await;
+
+        let lc = LightClient::from_genesis(
+            SqlStorage::default().await.unwrap(),
+            client.clone(),
+            client.genesis().await,
+        );
+        assert_eq!(lc.fetch_leaves_in_range(1, 4).await.unwrap(), leaves);
+        assert_eq!(lc.db.get_leaves_in_range(1, 4).await.unwrap(), leaves);
+
+        let lc = LightClient::from_genesis(
+            SqlStorage::default().await.unwrap(),
+            client.clone(),
+            client.genesis().await,
+        );
+        #[allow(clippy::single_range_in_vec_init)]
+        let fetched = lc.fetch_leaves_for_ranges(&[1..4]).await.unwrap();
+        assert_eq!(fetched, leaves);
+        assert_eq!(lc.db.get_leaves_in_range(1, 4).await.unwrap(), leaves);
     }
 
     #[tokio::test]
