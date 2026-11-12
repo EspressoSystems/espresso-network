@@ -60,7 +60,9 @@ type SnapshotStakeTableHash<T> = <Snapshot<T> as MembershipSnapshot<T>>::StakeTa
 
 /// Hook that may install stake tables for `catchup(target)` when the held pair `(start-1, start)` is
 /// more than one epoch below `target`. Called with `(target, start, coordinator)`. Returns the walk
-/// start, at or above `start`, or an error that ends the catchup attempt without a walk.
+/// start `start'`, at or above `start`, or an error that ends the catchup attempt without a walk.
+/// The pair `(start'-1, start')` is held on return. The hook bounds its own duration (no timeout,
+/// `seed_lock` held) and must not await a catchup on this coordinator.
 pub type CatchupSeedFn<TYPES> = Arc<
     dyn Fn(
             EpochNumber,
@@ -152,10 +154,7 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
 
     /// Sets the hook once; all clones share it.
     pub fn set_catchup_seed(&self, f: CatchupSeedFn<TYPES>) {
-        assert!(
-            self.catchup_seed.set(f).is_ok(),
-            "lc contract seed set twice"
-        );
+        assert!(self.catchup_seed.set(f).is_ok(), "catchup seed set twice");
     }
 
     /// Get a reference to the membership
@@ -354,6 +353,7 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
     /// where the walk stops, not where it starts, so an epoch nobody can serve
     /// costs one fetch attempt at the first gap rather than a probe of every
     /// earlier epoch.
+    /// A set catchup seed hook may move the start; it runs under `seed_lock`.
     ///
     /// Concurrent catchups walk the same epochs and share one attempt per
     /// epoch, so whichever reaches an epoch first fetches it while the others

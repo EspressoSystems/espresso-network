@@ -720,11 +720,9 @@ where
     })
 }
 
-/// Scans the whole L1 contract history when nothing is persisted yet, keeping every
-/// `bootstrap_epoch_window` step bounded to one epoch instead of loading that scan onto
-/// the first step, which silently downgrades the node to a stale epoch window when it
-/// exceeds its timeout. Untimed: an unreachable L1 panics after
-/// `l1_events_max_retry_duration`.
+/// Scans the whole L1 contract history when nothing is persisted yet, so that the follower walk,
+/// the seed's installs and the startup dial do not load that scan onto their first read.
+/// Untimed: an unreachable L1 panics after `l1_events_max_retry_duration`.
 pub(crate) async fn prefetch_stake_table_events(
     fetcher: &Fetcher,
     l1_client: &espresso_types::v0::L1Client,
