@@ -104,7 +104,12 @@ jobs:
           for pr in $pr_numbers; do
             branch=$(gh pr view "$pr" --json headRefName -q .headRefName)
             git fetch origin "$branch"
-            if git grep -lE '^<<<<<<< ' "origin/$branch" -- >/dev/null; then
+            # Files scripts/backport-dispatch removed because git could not merge them.
+            removed=$(git log -1 --format='%(trailers:key=Backport-Missing,key=Backport-Deleted)' "origin/$branch")
+            if [ -n "$removed" ]; then
+              printf 'PR #%s:\n%s\n' "$pr" "$removed" >> "$RUNNER_TEMP/removed-files.txt"
+            fi
+            if [ -n "$removed" ] || git grep -lE '^<<<<<<< ' "origin/$branch" -- >/dev/null; then
               needs_claude="$needs_claude $pr"
             else
               gh pr ready "$pr" || true
@@ -125,8 +130,9 @@ jobs:
           # Read the prompt from the triggering commit: the working tree is now on
           # the backport branch, which may predate this file.
           prompt_body=$(git show "$GITHUB_SHA:.github/claude/backport-resolve.md")
-          prompt=$(printf 'Mergiraf left conflict markers in these backport PRs:\n%s\n\n%s' \
-            "$NEEDS_CLAUDE" "$prompt_body")
+          removed_files=$(cat "$RUNNER_TEMP/removed-files.txt" 2>/dev/null || echo none)
+          prompt=$(printf 'These backport PRs have conflicts to resolve:\n%s\n\nFiles the backport removed, per PR:\n%s\n\n%s' \
+            "$NEEDS_CLAUDE" "$removed_files" "$prompt_body")
           claude -p "$prompt" --model claude-opus-4-8 --dangerously-skip-permissions
 
       - name: Install protoc

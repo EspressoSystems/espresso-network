@@ -63,9 +63,32 @@ if [[ "${cherry_status}" -ne 0 ]]; then
     exit 1
   fi
 
-  git add -- "${conflicted[@]}"
-  git commit -m "backport: cherry-pick #${pr_number} to ${target_branch}" \
-             -m "Cherry-picked from ${sha}; conflict markers committed for resolution."
+  # A file changed on one side and deleted on the other gets no conflict markers. Committing it
+  # as git leaves it would keep the source branch's whole copy of a file the target lacks (DU),
+  # or keep a file the original PR deleted (UD). Remove it, and name it in a trailer so the
+  # resolution step ports the change to where the target keeps that code.
+  mapfile -d '' -t status < <(git status --porcelain -z --untracked-files=no)
+  trailers=()
+  for ((i = 0; i < ${#status[@]}; i++)); do
+    entry="${status[i]}"
+    case "${entry:0:2}" in
+      DU) trailers+=(--trailer "Backport-Missing: ${entry:3}") ;;
+      UD) trailers+=(--trailer "Backport-Deleted: ${entry:3}") ;;
+      # A rename or copy carries its source path in the next entry.
+      R? | C? | ?R | ?C) i=$((i + 1)); continue ;;
+      *) continue ;;
+    esac
+    git --literal-pathspecs rm -q -f -- "${entry:3}"
+  done
+
+  mapfile -d '' -t conflicted < <(git diff -z --name-only --diff-filter=U)
+  if [[ ${#conflicted[@]} -gt 0 ]]; then
+    git add -- "${conflicted[@]}"
+  fi
+  # --allow-empty: removing the files above can leave nothing to commit.
+  git commit --allow-empty -m "backport: cherry-pick #${pr_number} to ${target_branch}" \
+             -m "Cherry-picked from ${sha}; conflicts committed for resolution." \
+             ${trailers[@]+"${trailers[@]}"}
 fi
 
 git push -u origin "${branch}"
