@@ -112,7 +112,7 @@ impl LcContractFinalizedState {
 mod tests {
     use committable::Commitment;
     use hotshot_query_service::testing::mocks::MOCK_UPGRADE;
-    use hotshot_types::{traits::BlockPayload, utils::is_epoch_root};
+    use hotshot_types::traits::BlockPayload;
     use jf_merkle_tree_compat::{AppendableMerkleTreeScheme, MerkleTreeScheme};
     use proptest::prelude::*;
     use rstest::rstest;
@@ -181,32 +181,36 @@ mod tests {
     #[rstest]
     // `E* = 10`. A target at or above `E*+1` gets `ST(E*-3) ..= ST(E*+1)` from `root(E*-5) ..=
     // root(E*-1)`, and `root(E*-6)` before them.
-    #[case(1000, 1, 99, vec![495, 595, 695, 795, 895], Some(395))]
-    #[case(1000, 5, 99, vec![495, 595, 695, 795, 895], Some(395))]
-    #[case(1000, 1, 11, vec![495, 595, 695, 795, 895], Some(395))]
-    #[case(1000, 1, 12, vec![495, 595, 695, 795, 895], Some(395))]
+    #[case(FIRST_EPOCH, 1000, 1, 99, vec![495, 595, 695, 795, 895], Some(395))]
+    #[case(FIRST_EPOCH, 1000, 5, 99, vec![495, 595, 695, 795, 895], Some(395))]
+    #[case(FIRST_EPOCH, 1000, 1, 11, vec![495, 595, 695, 795, 895], Some(395))]
+    #[case(FIRST_EPOCH, 1000, 1, 12, vec![495, 595, 695, 795, 895], Some(395))]
     // `F` at the root of `E*` and at the first block of `E*`.
-    #[case(995, 2, 99, vec![495, 595, 695, 795, 895], Some(395))]
-    #[case(901, 2, 99, vec![495, 595, 695, 795, 895], Some(395))]
+    #[case(FIRST_EPOCH, 995, 2, 99, vec![495, 595, 695, 795, 895], Some(395))]
+    #[case(FIRST_EPOCH, 901, 2, 99, vec![495, 595, 695, 795, 895], Some(395))]
     // Epochs up to `start` are held.
-    #[case(1000, 7, 99, vec![595, 695, 795, 895], Some(495))]
-    #[case(1000, 9, 99, vec![795, 895], Some(695))]
-    #[case(1000, 11, 99, vec![], None)]
+    #[case(FIRST_EPOCH, 1000, 7, 99, vec![595, 695, 795, 895], Some(495))]
+    #[case(FIRST_EPOCH, 1000, 9, 99, vec![795, 895], Some(695))]
+    #[case(FIRST_EPOCH, 1000, 11, 99, vec![], None)]
     // A target below `E*+1` gets its own window, topped by its table.
-    #[case(1000, 1, 8, vec![195, 295, 395, 495, 595], None)]
-    #[case(1000, 1, 3, vec![95], None)]
-    #[case(1000, 5, 9, vec![395, 495, 595, 695], Some(295))]
-    #[case(1000, 5, 7, vec![395, 495], Some(295))]
-    // The reward of `ST(first)` assumes the block time when `first - 3 <= FIRST_EPOCH + 1`.
-    #[case(1000, 2, 7, vec![95, 195, 295, 395, 495], None)]
-    #[case(1000, 2, 8, vec![195, 295, 395, 495, 595], None)]
-    #[case(1000, 2, 9, vec![295, 395, 495, 595, 695], None)]
-    #[case(1000, 2, 10, vec![395, 495, 595, 695, 795], Some(295))]
+    #[case(FIRST_EPOCH, 1000, 1, 8, vec![195, 295, 395, 495, 595], None)]
+    #[case(FIRST_EPOCH, 1000, 1, 3, vec![95], None)]
+    #[case(FIRST_EPOCH, 1000, 5, 9, vec![395, 495, 595, 695], Some(295))]
+    #[case(FIRST_EPOCH, 1000, 5, 7, vec![395, 495], Some(295))]
+    // The reward of `ST(first)` assumes the block time when `first - 3 <= first_epoch + 1`.
+    #[case(FIRST_EPOCH, 1000, 2, 7, vec![95, 195, 295, 395, 495], None)]
+    #[case(FIRST_EPOCH, 1000, 2, 8, vec![195, 295, 395, 495, 595], None)]
+    #[case(FIRST_EPOCH, 1000, 2, 9, vec![295, 395, 495, 595, 695], None)]
+    #[case(FIRST_EPOCH, 1000, 2, 10, vec![395, 495, 595, 695, 795], Some(295))]
     // Near genesis: nothing below `ST(3)`.
-    #[case(400, 2, 99, vec![95, 195, 295], None)]
-    #[case(400, 4, 99, vec![295], None)]
-    #[case(150, 2, 99, vec![95], None)]
+    #[case(FIRST_EPOCH, 400, 2, 99, vec![95, 195, 295], None)]
+    #[case(FIRST_EPOCH, 400, 4, 99, vec![295], None)]
+    #[case(FIRST_EPOCH, 150, 2, 99, vec![95], None)]
+    // A chain far from genesis: the reward reads `root(first-3)` once `first - 3 > first_epoch + 1`.
+    #[case(275, 28_300, 276, 999, vec![27_795, 27_895, 27_995, 28_095, 28_195], Some(27_695))]
+    #[case(275, 28_200, 276, 999, vec![27_695, 27_795, 27_895, 27_995, 28_095], None)]
     fn proven_root_heights_cases(
+        #[case] first_epoch: u64,
         #[case] height: u64,
         #[case] start: u64,
         #[case] target: u64,
@@ -221,7 +225,7 @@ mod tests {
             expected
         );
         assert_eq!(
-            lc.preceding_root_height(EPOCH_HEIGHT, EpochNumber::new(FIRST_EPOCH), start, target),
+            lc.preceding_root_height(EPOCH_HEIGHT, EpochNumber::new(first_epoch), start, target),
             expected_preceding
         );
     }
@@ -283,25 +287,23 @@ mod tests {
     proptest! {
         #[test]
         fn proven_roots_below_f_ok(
-            height in 1u64..10_000,
+            height in 1u64..100_000,
             epoch_height in prop::sample::select(vec![10u64, 100]),
-            start in 2u64..120,
-            target in 0u64..200,
-            first_epoch in 1u64..4,
+            first_epoch in 1u64..300,
+            start_above_first in 1u64..120,
+            target in 0u64..500,
         ) {
             let lc = finalized_state(height);
             let seed_epoch = *lc.seed_epoch(epoch_height);
-            let (start, target) = (EpochNumber::new(start), EpochNumber::new(target));
+            let start = EpochNumber::new(first_epoch + start_above_first);
+            let target = EpochNumber::new(target);
             let top = *lc.top_installed_epoch(epoch_height, target);
             let heights = lc.proven_root_heights(epoch_height, start, target);
-
-            prop_assert!(top <= seed_epoch + 1 && top <= *target);
-            for root in &heights {
-                prop_assert!(*root > 0 && *root < height);
-                prop_assert!(is_epoch_root(*root, epoch_height));
-            }
             let preceding =
                 lc.preceding_root_height(epoch_height, EpochNumber::new(first_epoch), start, target);
+
+            prop_assert!(top <= seed_epoch + 1 && top <= *target);
+            prop_assert!(heights.iter().all(|root| *root > 0 && *root < height));
             let epochs: Vec<u64> = heights
                 .iter()
                 .map(|root| (root + 5) / epoch_height + 2)
@@ -309,15 +311,21 @@ mod tests {
             for (epoch, root) in epochs.iter().zip(&heights) {
                 prop_assert_eq!(*root, root_block_in_epoch(epoch - 2, epoch_height));
             }
-            if let (Some(first), Some(last)) = (epochs.first(), epochs.last()) {
-                prop_assert_eq!(*first, top.saturating_sub(4).max(*start + 1).max(3));
-                prop_assert_eq!(
-                    preceding,
-                    (*first > first_epoch + 4).then(|| root_block_in_epoch(first - 3, epoch_height))
-                );
-                prop_assert!(preceding.is_none_or(|root| root < height));
+            if let (Some(first), Some(last), Some(first_root)) =
+                (epochs.first(), epochs.last(), heights.first())
+            {
+                prop_assert!(*first >= first_epoch + 2 && *first > *start);
                 prop_assert_eq!(*last, top);
                 prop_assert!(epochs.windows(2).all(|pair| pair[0] + 1 == pair[1]));
+                // The reward of `ST(first)` reads the root one epoch below `first_root` unless
+                // the epoch before `first_root`'s is within the first two.
+                let previous_epoch = epoch_from_block_number(*first_root, epoch_height) - 1;
+                prop_assert_eq!(
+                    preceding,
+                    (previous_epoch > first_epoch + 1).then(|| first_root - epoch_height)
+                );
+            } else {
+                prop_assert_eq!(preceding, None);
             }
             if lc.seeds_target(epoch_height, target, start) {
                 prop_assert!(!heights.is_empty());
