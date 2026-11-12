@@ -301,7 +301,7 @@ impl EpochCommittees {
             && previous_epoch > first_epoch + 1
             && self.snapshot(previous_epoch.into()).is_none()
         {
-            debug!(?previous_epoch, "missing stake table for previous epoch");
+            warn!(?previous_epoch, "missing stake table for previous epoch");
             return Ok(None);
         }
 
@@ -535,27 +535,12 @@ impl EpochCommittees {
         self
     }
 
-    /// `add_epoch_root` without the panic: a `next_stake_table_hash` mismatch with the held table
-    /// of the epoch below is `StakeTableHashMismatch`, returned before the epoch is put in memory.
-    /// `add_epoch_root` calls it and keeps its panic. Returns whether this call created the
-    /// epoch's committee (decided under the same lock as the insert), so a caller can undo only
-    /// its own installs.
-    #[cfg(feature = "node")]
-    pub async fn install_epoch_root(
-        &self,
-        block_header: Header,
-        coordinator: &EpochMembershipCoordinator<SeqTypes>,
-    ) -> Result<Option<EpochNumber>, EpochCommitteesError> {
-        let mut created = Vec::new();
-        self.install_root(block_header, PreviousRoot::Peers, coordinator, &mut created)
-            .await?;
-        Ok(created.pop())
-    }
-
-    /// `install_epoch_root` with the reward timestamp source `previous_root`. An epoch this call
-    /// inserts is pushed to `created` under the lock of the insert, so a dropped future leaves it
-    /// listed. Under `PreviousRoot::Seed` a table without a block reward is an error and
-    /// `prune_epochs` is left to the caller.
+    /// Adds the epoch committee and block reward for a given epoch,
+    /// either by fetching from L1 or using local state if available.
+    /// It also calculates and stores the block reward based on header version.
+    ///
+    /// `previous_root` is the source of the timestamp for the block reward. An epoch this call
+    /// inserts is pushed to `created`, under the lock of the insert.
     #[cfg(feature = "node")]
     async fn install_root(
         &self,
@@ -563,7 +548,7 @@ impl EpochCommittees {
         previous_root: PreviousRoot<'_>,
         coordinator: &EpochMembershipCoordinator<SeqTypes>,
         created: &mut Vec<EpochNumber>,
-    ) -> Result<Option<EpochNumber>, EpochCommitteesError> {
+    ) -> Result<(), EpochCommitteesError> {
         let block_number = block_header.block_number();
 
         let epoch_height = *self.epoch_height;
@@ -639,7 +624,7 @@ impl EpochCommittees {
                     "committee already has block reward, header, and stake table hash; skipping \
                      add_epoch_root"
                 );
-                return Ok(None);
+                return Ok(());
             },
 
             Some(committee) => {
@@ -702,6 +687,8 @@ impl EpochCommittees {
             info!(?epoch, "calculated dynamic block reward = {reward:?}");
             block_reward = reward;
         }
+
+        // A seeded table without a reward is not persisted.
         if previous_root.is_seed() && block_reward.is_none() {
             return Err(EpochCommitteesError::Reward(anyhow::anyhow!(
                 "no block reward for the table of epoch {epoch}"
@@ -715,25 +702,24 @@ impl EpochCommittees {
             Some(block_header.clone()),
         );
 
-        // previous_epoch is the epoch prior to `epoch`,
-        // or the epoch immediately succeeding the block header
-        let previous_epoch = EpochNumber::new(epoch.saturating_sub(1));
-        let decided_hash = block_header.next_stake_table_hash();
-
-        let inserted;
+        let previous_epoch;
         let previous_committee;
         let previous_validators;
         {
             let mut inner = self.inner.write();
-            // The previous epoch's stake table is stored below only if the decided
-            // stake_table_hash is consistent with what we get.
+            // previous_epoch is the epoch prior to `epoch`,
+            // or the epoch immediately succeeding the block header
+            previous_epoch = EpochNumber::new(epoch.saturating_sub(1));
+
+            // we store the information from the previous epoch's in-memory committeee
+            // if the decided stake_table_hash is consistent with what we get
             //
             // in principle this is unnecessary and we could've stored these right away,
             // without offsetting the epoch. but the intention is to catch L1 provider issues
             // if there is a mismatch
             //
-            // Checked under the write lock before anything of `epoch` is put in memory, so the
-            // checked committee is the one stored and a mismatch installs nothing.
+            // Checked before anything of `epoch` is put in memory, so a mismatch installs nothing.
+            let decided_hash = block_header.next_stake_table_hash();
             if let Some(previous_committee) = inner.epoch_committee(previous_epoch)
                 && decided_hash.is_some()
                 && decided_hash != previous_committee.stake_table_hash
@@ -744,17 +730,18 @@ impl EpochCommittees {
                     held: previous_committee.stake_table_hash,
                 });
             }
-            inserted = inner.epoch_committee(epoch).is_none();
-            inner.put_epoch_committee(epoch, Arc::new(committee));
-            if inserted {
+
+            if inner.epoch_committee(epoch).is_none() {
                 created.push(epoch);
             }
+            inner.put_epoch_committee(epoch, Arc::new(committee));
             previous_committee = inner.epoch_committee(previous_epoch).cloned();
             // garbage collect the validator set
             inner.all_validators = inner.all_validators.split_off(&previous_epoch);
             // extract `all_validators` for the previous epoch
             previous_validators = inner.all_validators.remove(&previous_epoch);
             inner.all_validators.insert(epoch, all_validators.clone());
+            // A seed batch prunes once, after it succeeded.
             if !previous_root.is_seed() {
                 inner.prune_epochs(epoch);
             }
@@ -788,7 +775,20 @@ impl EpochCommittees {
             }
         }
 
-        Ok(inserted.then_some(epoch))
+        Ok(())
+    }
+
+    /// `add_epoch_root` without the panic on a `next_stake_table_hash` mismatch, which is
+    /// `StakeTableHashMismatch` instead.
+    #[cfg(feature = "node")]
+    pub async fn install_epoch_root(
+        &self,
+        block_header: Header,
+        coordinator: &EpochMembershipCoordinator<SeqTypes>,
+    ) -> Result<(), EpochCommitteesError> {
+        let mut created = Vec::new();
+        self.install_root(block_header, PreviousRoot::Peers, coordinator, &mut created)
+            .await
     }
 
     /// Installs the epoch roots `roots`, ascending, as `install_epoch_root` does, for a seed: the
@@ -833,17 +833,8 @@ impl EpochCommittees {
                     coordinator.catchup_timeout()
                 ))
             })?;
-            if let Err(
-                err @ EpochCommitteesError::StakeTableHashMismatch {
-                    epoch,
-                    decided,
-                    held,
-                },
-            ) = &installed
-            {
-                error!(
-                    %epoch, ?decided, ?held, "seed epoch root does not match the held stake table: {err}"
-                );
+            if let Err(err @ EpochCommitteesError::StakeTableHashMismatch { .. }) = &installed {
+                error!("seed epoch root does not match the held stake table: {err}");
             }
             installed?;
             newest = Some(EpochNumber::new(
@@ -1215,13 +1206,12 @@ impl Membership<SeqTypes> for EpochCommittees {
         coordinator: &EpochMembershipCoordinator<SeqTypes>,
     ) -> Result<(), Self::Error> {
         match self.install_epoch_root(block_header, coordinator).await {
-            Ok(_) => Ok(()),
             Err(EpochCommitteesError::StakeTableHashMismatch { decided, held, .. }) => panic!(
                 "The decided block header's `next_stake_table_hash` does not match the hash of \
                  the stake table we have. This is an unrecoverable error likely due to issues \
                  with your L1 RPC provider. Decided:\n\n{decided:?}Actual:\n\n{held:?}"
             ),
-            Err(err) => Err(err),
+            result => result,
         }
     }
 
