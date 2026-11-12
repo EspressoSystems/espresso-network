@@ -408,22 +408,26 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
     }
 
     /// The top `start` of the highest consecutive held pair `(start-1, start)` with
-    /// `start <= epoch - 1`, floored at `seeded`.
+    /// `start <= epoch - 1`, floored at `seeded`. Pairs in memory are found before any storage
+    /// load; storage completes only a pair whose top is in memory or is `epoch - 1`.
     async fn held_pair_top(&self, epoch: EpochNumber, seeded: EpochNumber) -> Result<EpochNumber> {
         let known = self.membership.highest_known_epoch().unwrap_or(seeded);
-
-        let mut start = known
+        let top = known
             .min(EpochNumber::new(epoch.saturating_sub(1)))
             .max(seeded);
+        let in_memory = |e: EpochNumber| self.membership.snapshot(e).is_some();
+        let candidates = || (*seeded + 1..=*top).rev().map(EpochNumber::new);
 
-        while start > seeded {
+        if let Some(start) = candidates().find(|&start| in_memory(start) && in_memory(start - 1)) {
+            return Ok(start);
+        }
+        for start in candidates().filter(|&start| start == top || in_memory(start)) {
             if self.stake_table_present(start).await? && self.stake_table_present(start - 1).await?
             {
-                break;
+                return Ok(start);
             }
-            start = start - 1;
         }
-        Ok(start)
+        Ok(seeded)
     }
 
     /// The membership for `epoch`, if its stake table is in memory.
