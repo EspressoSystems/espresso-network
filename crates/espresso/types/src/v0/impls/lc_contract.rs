@@ -29,8 +29,8 @@ impl LcContractFinalizedState {
         EpochNumber::new(epoch_from_block_number(self.height, epoch_height))
     }
 
-    /// The top table the seed installs: `min(E*+1, target)`. Roots at or above `F` are not
-    /// provable, so the top is never above `E*+1`. Pure.
+    /// The top table the seed installs: `min(E*+1, target)`. `ST(E*+2)` is left to the walk even
+    /// when its root is below `F`. Pure.
     pub fn top_installed_epoch(&self, epoch_height: u64, target: EpochNumber) -> EpochNumber {
         target.min(self.seed_epoch(epoch_height) + 1)
     }
@@ -51,8 +51,9 @@ impl LcContractFinalizedState {
     /// Whether a seed is needed: `target > start + 1` and `E* > start + 1`.
     ///
     /// The DRB of a target at or below `E*+1` needs `ST(target-1)` and `ST(target-2)`, installed
-    /// or held. Both hold: `top-2 >= start` is held, and anything above `start` up to `top` is
-    /// installed. A target above `E*+1` continues as a walk from `ST(E*+1)`. Pure.
+    /// or held. Both hold: the tables one and two below the target lie in the installed window or
+    /// the lower one is `start`, which is held. A target above `E*+1` continues as a walk from
+    /// `ST(E*+1)`. Pure.
     pub fn seeds_target(&self, epoch_height: u64, target: EpochNumber, start: EpochNumber) -> bool {
         target > start + 1 && self.seed_epoch(epoch_height) > start + 1
     }
@@ -184,6 +185,9 @@ mod tests {
     #[case(1000, 5, 99, vec![495, 595, 695, 795, 895], Some(395))]
     #[case(1000, 1, 11, vec![495, 595, 695, 795, 895], Some(395))]
     #[case(1000, 1, 12, vec![495, 595, 695, 795, 895], Some(395))]
+    // `F` at the root of `E*` and at the first block of `E*`.
+    #[case(995, 2, 99, vec![495, 595, 695, 795, 895], Some(395))]
+    #[case(901, 2, 99, vec![495, 595, 695, 795, 895], Some(395))]
     // Epochs up to `start` are held.
     #[case(1000, 7, 99, vec![595, 695, 795, 895], Some(495))]
     #[case(1000, 9, 99, vec![795, 895], Some(695))]
