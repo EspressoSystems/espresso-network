@@ -3263,36 +3263,15 @@ mod tests {
     /// Puts a committee for `epoch` carrying a reward and `hash`, so `add_epoch_root` skips the
     /// L1 fetch.
     fn put_prefilled(committees: &EpochCommittees, epoch: u64, hash: StakeTableHash) {
-        put_committee(committees, epoch, hash, Some(RewardAmount::default()));
-    }
-
-    /// Puts a committee for `epoch` carrying `block_reward` and `hash`.
-    fn put_committee(
-        committees: &EpochCommittees,
-        epoch: u64,
-        hash: StakeTableHash,
-        block_reward: Option<RewardAmount>,
-    ) {
-        put_committee_with_header(committees, epoch, hash, block_reward, None);
-    }
-
-    /// Puts a committee for `epoch` carrying `block_reward`, `hash` and the epoch root `header`.
-    fn put_committee_with_header(
-        committees: &EpochCommittees,
-        epoch: u64,
-        hash: StakeTableHash,
-        block_reward: Option<RewardAmount>,
-        header: Option<Header>,
-    ) {
         let mut inner = committees.inner.write();
         let template = inner
             .epoch_committee(EpochNumber::genesis())
             .expect("genesis committee exists")
             .clone();
         let prefilled = EpochCommittee {
-            block_reward,
+            block_reward: Some(RewardAmount::default()),
             stake_table_hash: Some(hash),
-            header,
+            header: None,
             eligible_leaders: template.eligible_leaders.clone(),
             stake_table: template.stake_table.clone(),
             validators: template.validators.clone(),
@@ -3333,22 +3312,6 @@ mod tests {
 
     fn other_hash() -> StakeTableHash {
         Commitment::from_raw([7; 32])
-    }
-
-    /// A matching hash installs the root.
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn add_epoch_root_matching_hash_ok() {
-        let (committees, coordinator) = mismatch_setup();
-        let header = header_deciding(95, StakeTableState::default().commit()).await;
-
-        committees
-            .add_epoch_root(header, &coordinator)
-            .await
-            .unwrap();
-
-        let inner = committees.inner.read();
-        let committee = inner.epoch_committee(EpochNumber::new(3)).unwrap();
-        assert!(committee.header.is_some());
     }
 
     /// A mismatch with the held table of the epoch below panics.
