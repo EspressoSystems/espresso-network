@@ -7084,7 +7084,13 @@ mod test {
         .expect("the joined node did not decide with the network");
 
         let coordinator = node.node_state().coordinator;
-        for epoch in seed_epoch - 1..=seed_epoch + 1 {
+        // A fresh node's whole window has rewards; a stale one holds older epochs it already had.
+        let first_rewarded = if fresh_storage {
+            seed_epoch.saturating_sub(3).max(3)
+        } else {
+            seed_epoch - 1
+        };
+        for epoch in first_rewarded..=seed_epoch + 1 {
             assert!(
                 coordinator
                     .membership()
@@ -7098,7 +7104,7 @@ mod test {
         // A fresh node holds the seeded window only: the epochs between its genesis pair and the
         // window are not walked until something asks for one, and then the walk leaves the
         // window held.
-        let skipped = EpochNumber::new(seed_epoch.saturating_sub(5));
+        let skipped = EpochNumber::new(seed_epoch.saturating_sub(4));
         if fresh_storage && *skipped > 2 {
             assert!(
                 coordinator.membership().snapshot(skipped).is_none(),
@@ -7112,7 +7118,7 @@ mod test {
                 .wait_for_catchup(skipped)
                 .await
                 .expect("catchup below the seeded window");
-            for epoch in (seed_epoch - 4..=seed_epoch + 1).chain([*skipped]) {
+            for epoch in (seed_epoch - 3..=seed_epoch + 1).chain([*skipped]) {
                 assert!(
                     coordinator
                         .membership()

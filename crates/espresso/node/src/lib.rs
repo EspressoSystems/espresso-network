@@ -379,7 +379,9 @@ where
     )
     .await?;
     let coordinator = instance_state.coordinator.clone();
-    let lc_contract_seed = LcContractSeed::new(instance_state.clone(), state_peers, http_delay);
+    let lc_contract_seed = instance_state
+        .lc_contract_reader()
+        .map(|reader| LcContractSeed::new(reader, state_peers, http_delay));
 
     check_cliquenet_info_registered(
         coordinator.membership(),
@@ -1670,7 +1672,9 @@ pub mod testing {
                 )
             };
 
-            let lc_contract_seed = LcContractSeed::new(node_state.clone(), vec![], Duration::ZERO);
+            let lc_contract_seed = node_state
+                .lc_contract_reader()
+                .map(|reader| LcContractSeed::new(reader, vec![], Duration::ZERO));
 
             let (initializer, anchor_view) = persistence
                 .load_consensus_state(node_state, upgrade)

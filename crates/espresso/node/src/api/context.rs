@@ -195,7 +195,7 @@ where
         timeout: Duration,
     ) -> BoxFuture<'static, anyhow::Result<Vec<VidShare>>> {
         super::request_vid_shares(
-            self.request_response_protocol.clone(),
+            self.request_response_protocol.as_ref().clone(),
             block_number,
             vid_common,
             timeout,

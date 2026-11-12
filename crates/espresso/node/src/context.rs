@@ -93,7 +93,7 @@ pub struct SequencerContext<P: SequencerPersistence> {
     /// The request-response protocol
     #[derivative(Debug = "ignore")]
     #[allow(dead_code)]
-    pub request_response_protocol: RequestResponseProtocol<P>,
+    pub request_response_protocol: Arc<RequestResponseProtocol<P>>,
 
     /// Light client state signatures produced by the state signer task.
     state_signatures: Arc<RwLock<StateSignatureMemStorage>>,
@@ -131,7 +131,7 @@ where
         anchor_view: Option<ViewNumber>,
         storage: Option<RequestResponseStorage>,
         state_catchup: ParallelStateCatchup,
-        lc_contract_seed: LcContractSeed<P>,
+        lc_contract_seed: Option<LcContractSeed<P>>,
         persistence: Arc<P>,
         coordinator_network: F,
         state_relay_server: Option<Url>,
@@ -181,8 +181,10 @@ where
 
         // Installed before `apply_epoch`, which can start a catchup that would run without a seed.
         // The requests cell is set later: the protocol needs the consensus handle.
-        let seed_requests = lc_contract_seed.requests_cell();
-        membership_coordinator.set_lc_contract_seed(lc_contract_seed.into_seed_fn());
+        let seed_requests = lc_contract_seed.as_ref().map(LcContractSeed::requests_cell);
+        if let Some(seed) = lc_contract_seed {
+            membership_coordinator.set_catchup_seed(seed.into_seed_fn());
+        }
 
         // Dials the N-1/N/N+1 window of the stored anchor; a node behind it is seeded after start.
         let anchor_epoch = initializer
@@ -305,7 +307,7 @@ where
         };
 
         // Create the request-response protocol
-        let request_response_protocol = RequestResponseProtocol::new(
+        let request_response_protocol = Arc::new(RequestResponseProtocol::new(
             request_response_config,
             RequestResponseSender::new(outbound_message_sender),
             request_response_receiver,
@@ -323,16 +325,22 @@ where
             },
             validator_config.public_key,
             validator_config.private_key.clone(),
-        );
+        ));
 
         // Add the request-response protocol to the list of providers for state catchup. Since the interior is mutable,
         // the request-response protocol will now retroactively be used anywhere we passed in the original struct (e.g. in consensus
         // itself)
-        state_catchup.add_provider(Arc::new(request_response_protocol.clone()));
-        assert!(
-            seed_requests.set(request_response_protocol.clone()).is_ok(),
-            "the seed's request-response protocol is set once"
-        );
+        state_catchup.add_provider(Arc::new(RequestResponseProtocol::clone(
+            &request_response_protocol,
+        )));
+        if let Some(seed_requests) = seed_requests {
+            assert!(
+                seed_requests
+                    .set(Arc::downgrade(&request_response_protocol))
+                    .is_ok(),
+                "the seed's request-response protocol is set once"
+            );
+        }
 
         // Create the external event handler
         let mut tasks = TaskList::default();
@@ -374,7 +382,7 @@ where
         persistence: Arc<P>,
         state_signer: StateSigner<SequencerApiVersion>,
         external_event_handler: ExternalEventHandler,
-        request_response_protocol: RequestResponseProtocol<P>,
+        request_response_protocol: Arc<RequestResponseProtocol<P>>,
         node_state: NodeState,
         network_config: NetworkConfig<SeqTypes>,
         validator_config: ValidatorConfig<SeqTypes>,
@@ -622,10 +630,12 @@ fn running_version(upgrade_lock: &UpgradeLock<SeqTypes>) -> Version {
 }
 
 /// Dials `ST(now)` (`NodeState::l1_finalized_peers`) and returns the dialed keys, those with
-/// connect info that the network does not hold. Held peers keep the addresses `apply_epoch` set:
-/// re-adding one at another address, as L1 may register a stale one, redials it there. The first `apply_epoch` of consensus drops the dialed
-/// peers outside its window. A failure is logged and leaves no extra peers: the node still boots
-/// with the window of its stored anchor.
+/// connect info that the network does not hold. Held keys keep the connect info of the held
+/// tables, which may be older than L1's.
+///
+/// The dial runs once at startup; a failure is logged and leaves no extra peers until restart. The
+/// first `apply_epoch` for a higher epoch with a table drops the dialed peers, which an
+/// intermediate epoch can do before a seed completes.
 async fn dial_l1_finalized_peers(
     network: &mut Cliquenet<SeqTypes>,
     node_state: &NodeState,

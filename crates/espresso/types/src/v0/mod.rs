@@ -16,6 +16,8 @@ mod txproof;
 mod utils;
 
 pub use header::Header;
+#[cfg(feature = "node")]
+pub use impls::LcContractReader;
 #[cfg(any(test, feature = "testing"))]
 pub use impls::mock;
 // export reward types for staking-ui-service

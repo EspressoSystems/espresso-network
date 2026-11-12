@@ -9,20 +9,20 @@ use anyhow::{Context, bail};
 use async_lock::Mutex;
 use async_trait::async_trait;
 #[cfg(feature = "node")]
-use hotshot_contract_adapter::sol_types::{LightClientStateSol, LightClientV3, StakeTableV3};
+use hotshot_contract_adapter::sol_types::{LightClientV3, StakeTableV3};
+#[cfg(feature = "node")]
+use hotshot_types::PeerConfig;
 use hotshot_types::{
     HotShotConfig, data::EpochNumber, drb::DrbResult, epoch_membership::EpochMembershipCoordinator,
     traits::states::InstanceState,
 };
-#[cfg(feature = "node")]
-use hotshot_types::{PeerConfig, light_client::LightClientState};
 #[cfg(feature = "node")]
 use indexmap::IndexMap;
 use moka::future::Cache;
 use vbs::version::Version;
 
 #[cfg(feature = "node")]
-use super::LcContractFinalizedState;
+use super::LcContractReader;
 use super::{
     SeqTypes, UpgradeType, ViewBasedUpgrade,
     state::ValidatedState,
@@ -42,9 +42,9 @@ use crate::{
     },
     v0_3::{RegisteredValidator, RewardAmount},
 };
-/// How long `NodeState::l1_finalized_block` waits for the L1 client to see a finalized block.
+// How long to wait for the L1 client to see a finalized block.
 #[cfg(feature = "node")]
-const L1_FINALIZED_WAIT: Duration = Duration::from_secs(30);
+pub(super) const L1_FINALIZED_WAIT: Duration = Duration::from_secs(30);
 
 /// Represents the immutable state of a node.
 ///
@@ -107,25 +107,10 @@ impl NodeState {
 
     #[cfg(feature = "node")]
     pub async fn light_client_contract_address(&self) -> anyhow::Result<Address> {
-        match self.light_client_contract_address.get(&()).await {
-            Some(address) => Ok(address),
-            None => {
-                let stake_table_address = self
-                    .chain_config
-                    .stake_table_contract
-                    .context("No stake table contract in chain config")?;
-
-                let stake_table =
-                    StakeTableV3::new(stake_table_address, self.l1_client.provider.clone());
-                let light_client_contract_address = stake_table.lightClient().call().await?;
-
-                self.light_client_contract_address
-                    .insert((), light_client_contract_address)
-                    .await;
-
-                Ok(light_client_contract_address)
-            },
-        }
+        self.lc_contract_reader()
+            .context("No stake table contract in chain config")?
+            .address()
+            .await
     }
 
     #[cfg(feature = "node")]
@@ -178,41 +163,16 @@ impl NodeState {
         }
     }
 
-    /// The number of the L1 finalized block, waiting up to `L1_FINALIZED_WAIT` for the first one.
+    /// A reader of the LC contract, whose address comes from the stake table contract: `None` when
+    /// the chain config names none.
     #[cfg(feature = "node")]
-    async fn l1_finalized_block(&self) -> anyhow::Result<u64> {
-        tokio::time::timeout(L1_FINALIZED_WAIT, async {
-            loop {
-                if let Some(finalized) = self.l1_client.snapshot().await.finalized {
-                    return finalized.number;
-                }
-                tokio::time::sleep(Duration::from_millis(100)).await;
-            }
-        })
-        .await
-        .context("no L1 finalized block yet")
-    }
-
-    /// The LC contract's `finalizedState` at the L1 finalized block, waiting up to
-    /// `L1_FINALIZED_WAIT` for the first one. One L1 call.
-    #[cfg(feature = "node")]
-    pub async fn lc_contract_finalized_state(&self) -> anyhow::Result<LcContractFinalizedState> {
-        let block = BlockId::number(self.l1_finalized_block().await?);
-        let light_client_contract = LightClientV3::new(
-            self.light_client_contract_address().await?,
-            self.l1_client.provider.clone(),
-        );
-        let state = light_client_contract
-            .finalizedState()
-            .block(block)
-            .call()
-            .await
-            .context("failed to read finalizedState")?;
-        let state = LightClientState::from(LightClientStateSol::from(state));
-        Ok(LcContractFinalizedState {
-            height: state.block_height,
-            block_comm_root: state.block_comm_root,
-        })
+    pub fn lc_contract_reader(&self) -> Option<LcContractReader> {
+        let stake_table_contract = self.chain_config.stake_table_contract?;
+        Some(LcContractReader::new(
+            self.l1_client.clone(),
+            stake_table_contract,
+            self.light_client_contract_address.clone(),
+        ))
     }
 
     /// `ST(now)`: the active set from stake-table events up to the L1 finalized block, at
@@ -222,7 +182,13 @@ impl NodeState {
         &self,
         version: Version,
     ) -> anyhow::Result<IndexMap<PubKey, PeerConfig<SeqTypes>>> {
-        let l1_block = self.l1_finalized_block().await?;
+        let l1_block = tokio::time::timeout(
+            L1_FINALIZED_WAIT,
+            self.l1_client.wait_for_latest_finalized_at_least(0),
+        )
+        .await
+        .context("no L1 finalized block yet")?
+        .number;
         self.coordinator
             .membership()
             .fetcher()

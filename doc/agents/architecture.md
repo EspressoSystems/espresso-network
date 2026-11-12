@@ -46,18 +46,23 @@ StakeTable contract for peer discovery.
 (`NodeState::l1_finalized_peers`: the active set from stake table events up to the L1 finalized block). `ST(now)` keys
 stay extra request-response responders. `state_peers` is optional for validators.
 
+The seed exists when the chain config names a stake table contract (the LC contract address is read from it);
+without one the catchup walks only. The follower has no seed and still walks at startup
+(`bootstrap_epoch_window`).
+
 A node behind the stored window is caught up by `EpochMembershipCoordinator::catchup`. When the held pair is more than
-one epoch below the target, the `LcContractSeedFn` hook (`crates/espresso/node/src/lc_contract_seed.rs`) runs first, one
+one epoch below the target, the `CatchupSeedFn` hook (`crates/espresso/node/src/lc_contract_seed.rs`) runs first, one
 seed at a time:
 
 1. Reads `finalizedState` (`F`, `blockCommRoot`) of the LC contract at the L1 finalized block; `E* = epoch(F)`. A target
-   below `E*` is not seeded: the walk serves it.
+   below the first installed table is not seeded: the walk serves it.
 2. Fetches the header at `F` unverified and accepts it iff its height is `F` and its `block_comm_root` matches.
-3. `Request::HeaderProof { root: F, height }` proves `root(E*-6) ..= root(E*-1)` against it. The peer requests are
-   bounded by 30 s.
-4. Installs the tables above the held pair within `ST(E*-4) ..= ST(E*+1)`, so the rewards of `E*-1 ..= E*+1` exist; a
-   hash mismatch evicts what it installed and errors. The existing walk continues from `E*+1`; `drb_ready` supplies
-   the target's DRB.
+3. `Request::HeaderProof { root: F, height }` proves `root(E*-6) ..= root(E*-1)` against it; `root(E*-6)` only supplies
+   a block time. The peer requests are bounded by 30 s.
+4. Installs the tables above the held pair within `ST(E*-3) ..= ST(E*+1)`, each with a block reward computed from the
+   proven roots, each root bounded by the catchup timeout. A hash mismatch logs at ERROR, evicts what the seed
+   installed and errors; the catchup retries. The existing walk continues from `E*+1`; `drb_ready` supplies the
+   target's DRB.
 5. Requests go over request-response. With `--state-peers`, they also go over HTTP after `--http-catchup-delay`, at once
    before the protocol is up.
 

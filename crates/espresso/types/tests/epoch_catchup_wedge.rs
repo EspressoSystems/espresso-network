@@ -60,7 +60,7 @@ use hotshot_types::{
     PeerConfig, ValidatorConfig,
     data::EpochNumber,
     drb::DrbResult,
-    epoch_membership::{EpochMembershipCoordinator, LcContractSeedFn},
+    epoch_membership::{CatchupSeedFn, EpochMembershipCoordinator},
     signature_key::BLSPubKey,
     traits::election::Membership,
 };
@@ -498,12 +498,12 @@ type SeedCalls = Arc<Mutex<Vec<(u64, u64)>>>;
 /// `answer`.
 fn recording_seed(
     answer: impl Fn(EpochNumber) -> anyhow::Result<EpochNumber> + Send + Sync + 'static,
-) -> (LcContractSeedFn<SeqTypes>, SeedCalls, Arc<AtomicUsize>) {
+) -> (CatchupSeedFn<SeqTypes>, SeedCalls, Arc<AtomicUsize>) {
     let calls = Arc::new(Mutex::new(Vec::new()));
     let peak = Arc::new(AtomicUsize::new(0));
     let running = Arc::new(AtomicUsize::new(0));
     let answer = Arc::new(answer);
-    let seed: LcContractSeedFn<SeqTypes> = {
+    let seed: CatchupSeedFn<SeqTypes> = {
         let (calls, peak) = (Arc::clone(&calls), Arc::clone(&peak));
         Arc::new(move |target, start, _coordinator| {
             let (calls, peak, running, answer) = (
@@ -530,7 +530,7 @@ fn recording_seed(
 async fn catchup_calls_seed_when_far_ok() {
     let (_store, coordinator) = setup();
     let (seed, calls, _) = recording_seed(Ok);
-    coordinator.set_lc_contract_seed(seed);
+    coordinator.set_catchup_seed(seed);
 
     assert!(
         coordinator
@@ -546,7 +546,7 @@ async fn catchup_calls_seed_when_far_ok() {
 async fn catchup_skips_seed_when_adjacent_ok() {
     let (store, coordinator) = setup();
     let (seed, calls, _) = recording_seed(Ok);
-    coordinator.set_lc_contract_seed(seed);
+    coordinator.set_catchup_seed(seed);
 
     // Epoch 3 is one beyond the held pair; the walk starts, the seed does not.
     assert!(
@@ -564,7 +564,7 @@ async fn catchup_skips_seed_when_adjacent_ok() {
 async fn seed_error_ends_catchup() {
     let (store, coordinator) = setup();
     let (seed, calls, _) = recording_seed(|_| Err(anyhow::anyhow!("no peer answered")));
-    coordinator.set_lc_contract_seed(seed);
+    coordinator.set_catchup_seed(seed);
     let target = EpochNumber::new(TARGET_EPOCH);
 
     assert!(coordinator.stake_table_for_epoch(Some(target)).is_err());
@@ -590,7 +590,7 @@ async fn seed_error_ends_catchup() {
 async fn seeds_do_not_overlap_ok() {
     let (_store, coordinator) = setup();
     let (seed, calls, peak) = recording_seed(|_| Err(anyhow::anyhow!("not yet")));
-    coordinator.set_lc_contract_seed(seed);
+    coordinator.set_catchup_seed(seed);
 
     for target in [TARGET_EPOCH, TARGET_EPOCH + 1, TARGET_EPOCH + 2] {
         let _ = coordinator.stake_table_for_epoch(Some(EpochNumber::new(target)));
@@ -606,7 +606,7 @@ async fn seeded_start_resumes_the_walk_ok() {
     let (store, coordinator) = setup();
     let seeded = EpochNumber::new(TARGET_EPOCH - 1);
     let (seed, ..) = recording_seed(move |_| Ok(seeded));
-    coordinator.set_lc_contract_seed(seed);
+    coordinator.set_catchup_seed(seed);
 
     assert!(
         coordinator

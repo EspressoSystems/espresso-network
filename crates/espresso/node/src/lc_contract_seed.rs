@@ -2,13 +2,13 @@
 
 use std::{
     pin::pin,
-    sync::{Arc, OnceLock},
+    sync::{Arc, OnceLock, Weak},
     time::Duration,
 };
 
 use anyhow::{Context, anyhow, bail, ensure};
 use espresso_types::{
-    Header, LcContractFinalizedState, NodeState, SeqTypes, traits::SequencerPersistence,
+    Header, LcContractFinalizedState, LcContractReader, SeqTypes, traits::SequencerPersistence,
 };
 use futures::{
     FutureExt, StreamExt, TryStreamExt,
@@ -18,7 +18,7 @@ use futures::{
 use hotshot_query_service::node::BlockId;
 use hotshot_types::{
     data::EpochNumber,
-    epoch_membership::{EpochMembershipCoordinator, LcContractSeedFn},
+    epoch_membership::{CatchupSeedFn, EpochMembershipCoordinator},
 };
 use light_client::{
     client::{Client, FallbackClient, QueryServiceClient},
@@ -37,7 +37,7 @@ const MAX_CONCURRENT_REQUESTS: usize = 3;
 /// Bound on the peer requests of one seed: with no answering peer the attempt fails within it.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// The LC-contract seed of the catchup, behind `LcContractSeedFn`; steps in
+/// The LC-contract seed of the catchup, behind `CatchupSeedFn`; steps in
 /// `doc/agents/architecture.md`.
 ///
 /// Trust: `F` and `blockCommRoot` come from the SNARK-verified LC contract. A peer's header at `F`
@@ -49,17 +49,18 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 ///   header at `F` that `verify_header` accepted.
 /// - I2: every proven height is below `F`.
 /// - I3: only epochs above `start` are installed; eviction is `install_epoch_roots`' own.
+/// - I7: every table the seed installs has a block reward.
 pub struct LcContractSeed<P: SequencerPersistence> {
-    node_state: NodeState,
+    lc_contract: LcContractReader,
     sources: FallbackSeedSource<RequestResponseProtocol<P>, FallbackClient<QueryServiceClient>>,
 }
 
 /// Late-bound request-response protocol of a seed.
-pub(crate) type RequestsCell<P> = Arc<OnceLock<RequestResponseProtocol<P>>>;
+pub(crate) type RequestsCell<P> = Arc<OnceLock<Weak<RequestResponseProtocol<P>>>>;
 
 impl<P: SequencerPersistence> LcContractSeed<P> {
     /// A seed over `node_state`. `state_peers` answer over HTTP after `http_delay`; none, no HTTP.
-    pub fn new(node_state: NodeState, state_peers: Vec<Url>, http_delay: Duration) -> Self {
+    pub fn new(lc_contract: LcContractReader, state_peers: Vec<Url>, http_delay: Duration) -> Self {
         let fallback = (!state_peers.is_empty()).then(|| {
             FallbackClient::new(
                 state_peers
@@ -70,7 +71,7 @@ impl<P: SequencerPersistence> LcContractSeed<P> {
             .expect("FallbackClient::new fails only on an unset builder field; clients is set")
         });
         Self {
-            node_state,
+            lc_contract,
             sources: FallbackSeedSource {
                 primary: Arc::default(),
                 fallback,
@@ -93,7 +94,7 @@ impl<P: SequencerPersistence> LcContractSeed<P> {
         coordinator: EpochMembershipCoordinator<SeqTypes>,
     ) -> anyhow::Result<EpochNumber> {
         let started = tokio::time::Instant::now();
-        let lc = self.node_state.lc_contract_finalized_state().await?;
+        let lc = self.lc_contract.finalized_state().await?;
         let epoch_height = *coordinator.epoch_height();
         let seed_epoch = lc.seed_epoch(epoch_height);
         let log = |outcome: &str| {
@@ -108,7 +109,8 @@ impl<P: SequencerPersistence> LcContractSeed<P> {
                 "lc contract seed"
             );
         };
-        match seed_decision(seed_epoch, target, start) {
+        let first = lc.first_installed_epoch(epoch_height, start);
+        match seed_decision(first, seed_epoch, target, start) {
             SeedDecision::NotNeeded => {
                 log("not needed");
                 return Ok(start);
@@ -116,7 +118,7 @@ impl<P: SequencerPersistence> LcContractSeed<P> {
             SeedDecision::Seed => {},
         }
 
-        let roots = tokio::time::timeout(
+        let SeedRoots { preceding, roots } = tokio::time::timeout(
             REQUEST_TIMEOUT,
             fetch_seed_roots(&self.sources, &lc, epoch_height, start),
         )
@@ -128,15 +130,15 @@ impl<P: SequencerPersistence> LcContractSeed<P> {
         })??;
         coordinator
             .membership()
-            .install_epoch_roots(roots, &coordinator)
+            .install_epoch_roots(preceding, roots, &coordinator)
             .await?;
 
         log("seeded");
         Ok(seed_epoch + 1)
     }
 
-    /// The hook for `EpochMembershipCoordinator::set_lc_contract_seed`.
-    pub fn into_seed_fn(self) -> LcContractSeedFn<SeqTypes> {
+    /// The hook for `EpochMembershipCoordinator::set_catchup_seed`.
+    pub fn into_seed_fn(self) -> CatchupSeedFn<SeqTypes> {
         let seed = Arc::new(self);
         Arc::new(move |target, start, coordinator| {
             let seed = Arc::clone(&seed);
@@ -148,36 +150,56 @@ impl<P: SequencerPersistence> LcContractSeed<P> {
 /// What a seed attempt does for `catchup(target)` with held pair top `start`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SeedDecision {
-    /// The seed epoch is at most `start + 1`, or the target is below it: the walk runs unchanged.
+    /// The seed epoch is at most `start + 1`, or the target is below the first installed table:
+    /// the walk runs unchanged.
     NotNeeded,
     /// Install the window of the seed epoch.
     Seed,
 }
 
-/// `NotNeeded` if `seed_epoch <= start + 1` or `target < seed_epoch`, else `Seed`. Pure.
-fn seed_decision(seed_epoch: EpochNumber, target: EpochNumber, start: EpochNumber) -> SeedDecision {
-    if seed_epoch <= start + 1 || target < seed_epoch {
+/// `NotNeeded` if `seed_epoch <= start + 1` or `target < first_installed`, else `Seed`. Pure.
+fn seed_decision(
+    first_installed: EpochNumber,
+    seed_epoch: EpochNumber,
+    target: EpochNumber,
+    start: EpochNumber,
+) -> SeedDecision {
+    if seed_epoch <= start + 1 || target < first_installed {
         SeedDecision::NotNeeded
     } else {
         SeedDecision::Seed
     }
 }
 
-/// The headers of `lc.proven_root_heights(epoch_height, start)`, ascending, each proven against the
-/// block Merkle root of the header at `F` that `lc.verify_header` accepted.
+/// The headers a seed installs and the root below them, proven against the block Merkle root of
+/// the header at `F`.
+#[cfg_attr(test, derive(Debug))]
+struct SeedRoots {
+    /// `lc.preceding_root_height`: the block time source of the lowest installed reward.
+    preceding: Option<Header>,
+    /// `lc.proven_root_heights`, ascending.
+    roots: Vec<Header>,
+}
+
+/// The `SeedRoots` of `lc` above `start`, each proven against the header at `F` that
+/// `lc.verify_header` accepted.
 async fn fetch_seed_roots(
     source: &impl LcContractSeedSource,
     lc: &LcContractFinalizedState,
     epoch_height: u64,
     start: EpochNumber,
-) -> anyhow::Result<Vec<Header>> {
+) -> anyhow::Result<SeedRoots> {
     let checked_lc = lc.clone();
     let lc_header = source
         .header_at(lc.height, move |header: &Header| {
             checked_lc.verify_header(header)
         })
         .await?;
-    stream::iter(lc.proven_root_heights(epoch_height, start))
+    let preceding = lc.preceding_root_height(epoch_height, start);
+    let heights = preceding
+        .into_iter()
+        .chain(lc.proven_root_heights(epoch_height, start));
+    let mut headers: Vec<Header> = stream::iter(heights)
         .map(|height| {
             let lc_header = lc_header.clone();
             source.proven_header(lc.height, height, move |proof| {
@@ -186,7 +208,12 @@ async fn fetch_seed_roots(
         })
         .buffered(MAX_CONCURRENT_REQUESTS)
         .try_collect()
-        .await
+        .await?;
+    let preceding = preceding.map(|_| headers.remove(0));
+    Ok(SeedRoots {
+        preceding,
+        roots: headers,
+    })
 }
 
 /// The header at `expected_height`, if `proof` holds against the block Merkle root of
@@ -282,7 +309,8 @@ impl<P: SequencerPersistence> LcContractSeedSource for RequestResponseProtocol<P
     }
 }
 
-/// Any light-client `Client`, in the node the `--state-peers`: a rejected answer is an error.
+/// Any light-client `Client`, in the node the `--state-peers`. A rejected answer fails the HTTP
+/// side of that request; the next state peer is not asked.
 impl<C: Client> LcContractSeedSource for C {
     async fn header_at(
         &self,
@@ -325,7 +353,8 @@ impl<C: Client> LcContractSeedSource for C {
 ///   erred; without a fallback no HTTP request is made.
 /// - I6: no task outlives a call; dropping its future drops both sides.
 pub(crate) struct FallbackSeedSource<Primary, Fallback> {
-    primary: Arc<OnceLock<Primary>>,
+    /// Weak, so the seed owns no path to the coordinator that the protocol holds.
+    primary: Arc<OnceLock<Weak<Primary>>>,
     /// `None` without state peers: requests run on the primary alone, with no `race`.
     fallback: Option<Fallback>,
     http_delay: Duration,
@@ -365,10 +394,11 @@ async fn race<T>(
 }
 
 impl<Primary, Fallback> FallbackSeedSource<Primary, Fallback> {
-    /// The primary, or an error while its cell is unset.
-    fn primary(&self) -> anyhow::Result<&Primary> {
+    /// The primary, or an error while its cell is unset or its owner is gone.
+    fn primary(&self) -> anyhow::Result<Arc<Primary>> {
         self.primary
             .get()
+            .and_then(Weak::upgrade)
             .context("the request-response protocol is not started")
     }
 }
@@ -481,8 +511,9 @@ mod tests {
             .await
             .unwrap();
 
-        let heights: Vec<_> = roots.iter().map(Header::height).collect();
-        assert_eq!(heights, [5, 15, 25, 35, 45, 55]);
+        let heights: Vec<_> = roots.roots.iter().map(Header::height).collect();
+        assert_eq!(heights, [15, 25, 35, 45, 55]);
+        assert_eq!(roots.preceding.map(|root| root.height()), Some(5));
     }
 
     #[tokio::test]
@@ -617,18 +648,36 @@ mod tests {
         }
     }
 
+    /// A `FallbackSeedSource` with its primary kept alive for the test.
+    struct Sources<Primary, Fallback> {
+        source: FallbackSeedSource<Primary, Fallback>,
+        primary: Option<Arc<Primary>>,
+    }
+
+    impl<Primary, Fallback> std::ops::Deref for Sources<Primary, Fallback> {
+        type Target = FallbackSeedSource<Primary, Fallback>;
+
+        fn deref(&self) -> &Self::Target {
+            &self.source
+        }
+    }
+
     fn sources<Primary, Fallback>(
         primary: Option<Primary>,
         fallback: Option<Fallback>,
-    ) -> FallbackSeedSource<Primary, Fallback> {
+    ) -> Sources<Primary, Fallback> {
+        let primary = primary.map(Arc::new);
         let cell = OnceLock::new();
-        if let Some(primary) = primary {
-            assert!(cell.set(primary).is_ok());
+        if let Some(primary) = &primary {
+            assert!(cell.set(Arc::downgrade(primary)).is_ok());
         }
-        FallbackSeedSource {
-            primary: Arc::new(cell),
-            fallback,
-            http_delay: HTTP_DELAY,
+        Sources {
+            source: FallbackSeedSource {
+                primary: Arc::new(cell),
+                fallback,
+                http_delay: HTTP_DELAY,
+            },
+            primary,
         }
     }
 
@@ -676,7 +725,7 @@ mod tests {
             .await
             .unwrap_err();
 
-        assert!(source.primary.get().unwrap().was_dropped());
+        assert!(source.primary.as_ref().unwrap().was_dropped());
         assert!(source.fallback.as_ref().unwrap().was_dropped());
     }
 
@@ -753,24 +802,32 @@ mod tests {
 
     #[rstest]
     // The seed epoch is at most `start + 1`.
-    #[case(4, 9, 3, SeedDecision::NotNeeded)]
-    #[case(2, 9, 3, SeedDecision::NotNeeded)]
-    // The target is below the seed epoch: the walk serves it.
-    #[case(6, 5, 2, SeedDecision::NotNeeded)]
-    // At or above it.
-    #[case(6, 6, 2, SeedDecision::Seed)]
-    #[case(6, 9, 2, SeedDecision::Seed)]
+    #[case(4, 4, 9, 3, SeedDecision::NotNeeded)]
+    #[case(3, 3, 3, 2, SeedDecision::NotNeeded)]
+    // Below the first installed table: the walk serves it.
+    #[case(7, 10, 6, 2, SeedDecision::NotNeeded)]
+    // At or above it, also below the seed epoch.
+    #[case(7, 10, 7, 2, SeedDecision::Seed)]
+    #[case(7, 10, 9, 2, SeedDecision::Seed)]
+    #[case(7, 10, 10, 2, SeedDecision::Seed)]
+    #[case(7, 10, 15, 2, SeedDecision::Seed)]
     // The held pair is the seeded genesis pair.
-    #[case(3, 3, 2, SeedDecision::NotNeeded)]
-    #[case(4, 4, 2, SeedDecision::Seed)]
+    #[case(3, 6, 3, 2, SeedDecision::Seed)]
+    #[case(3, 4, 4, 2, SeedDecision::Seed)]
     fn seed_decision_cases(
+        #[case] first_installed: u64,
         #[case] seed_epoch: u64,
         #[case] target: u64,
         #[case] start: u64,
         #[case] expected: SeedDecision,
     ) {
         assert_eq!(
-            seed_decision(epoch(seed_epoch), epoch(target), epoch(start)),
+            seed_decision(
+                epoch(first_installed),
+                epoch(seed_epoch),
+                epoch(target),
+                epoch(start)
+            ),
             expected
         );
     }

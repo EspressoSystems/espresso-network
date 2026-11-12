@@ -9,7 +9,7 @@ use hotshot_types::{
     traits::election::Membership,
 };
 use request_response::recipient_source::RecipientSource as RecipientSourceTrait;
-use tracing::{debug, warn};
+use tracing::debug;
 
 use super::request::Request;
 use crate::consensus_handle::ConsensusHandle;
@@ -36,9 +36,9 @@ impl<P: SequencerPersistence> RecipientSourceTrait<Request, PubKey> for Recipien
             .current_epoch()
             .await
             .unwrap_or(EpochNumber::genesis());
-        // Far behind: `l1_finalized_peers` are the only recipients.
+        // Without a usable table, `l1_finalized_peers` are the only recipients.
         let membership = responder_membership(&self.memberships, current_epoch)
-            .inspect_err(|err| warn!("{err:#}"))
+            .inspect_err(|err| debug!("{err:#}"))
             .ok();
 
         let table_keys = membership

@@ -58,11 +58,10 @@ type Snapshot<T> = <<T as NodeType>::Membership as Membership<T>>::Snapshot;
 /// snapshot.
 type SnapshotStakeTableHash<T> = <Snapshot<T> as MembershipSnapshot<T>>::StakeTableHash;
 
-/// Seeds `catchup(target)` from the LC contract when the held pair `(start-1, start)` is more than
-/// one epoch below `target`. Called with `(target, start, coordinator)`. Returns the walk start:
-/// `start`, or higher once tables through it are installed. An error ends the catchup attempt,
-/// without a walk from genesis.
-pub type LcContractSeedFn<TYPES> = Arc<
+/// Hook that may install stake tables for `catchup(target)` when the held pair `(start-1, start)` is
+/// more than one epoch below `target`. Called with `(target, start, coordinator)`. Returns the walk
+/// start, at or above `start`, or an error that ends the catchup attempt without a walk.
+pub type CatchupSeedFn<TYPES> = Arc<
     dyn Fn(
             EpochNumber,
             EpochNumber,
@@ -83,7 +82,7 @@ pub struct EpochMembershipCoordinator<TYPES: NodeType> {
     store_drb_progress_fn: StoreDrbProgressFn,
     load_drb_progress_fn: LoadDrbProgressFn,
     store_drb_result_fn: StoreDrbResultFn,
-    lc_contract_seed: Arc<OnceLock<LcContractSeedFn<TYPES>>>,
+    catchup_seed: Arc<OnceLock<CatchupSeedFn<TYPES>>>,
     seed_lock: Arc<AsyncMutex<()>>,
     drb_difficulty_selector: Arc<RwLock<Option<DrbDifficultySelectorFn>>>,
 }
@@ -101,7 +100,7 @@ impl<TYPES: NodeType> Clone for EpochMembershipCoordinator<TYPES> {
             load_drb_progress_fn: Arc::clone(&self.load_drb_progress_fn),
             store_drb_result_fn: self.store_drb_result_fn.clone(),
             drb_difficulty_selector: Arc::clone(&self.drb_difficulty_selector),
-            lc_contract_seed: Arc::clone(&self.lc_contract_seed),
+            catchup_seed: Arc::clone(&self.catchup_seed),
             seed_lock: Arc::clone(&self.seed_lock),
         }
     }
@@ -125,13 +124,18 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
             load_drb_progress_fn: load_drb_progress_fn(storage.clone()),
             store_drb_result_fn: store_drb_result_fn(storage.clone()),
             drb_difficulty_selector: Arc::new(RwLock::new(None)),
-            lc_contract_seed: Arc::default(),
+            catchup_seed: Arc::default(),
             seed_lock: Arc::default(),
         }
     }
 
     pub fn epoch_height(&self) -> BlockNumber {
         self.epoch_height
+    }
+
+    /// The bound on a single catchup step.
+    pub fn catchup_timeout(&self) -> Duration {
+        self.catchup_timeout
     }
 
     /// Override the bound on a single catchup step. Mostly for tests.
@@ -147,9 +151,9 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
     }
 
     /// Sets the hook once; all clones share it.
-    pub fn set_lc_contract_seed(&self, f: LcContractSeedFn<TYPES>) {
+    pub fn set_catchup_seed(&self, f: CatchupSeedFn<TYPES>) {
         assert!(
-            self.lc_contract_seed.set(f).is_ok(),
+            self.catchup_seed.set(f).is_ok(),
             "lc contract seed set twice"
         );
     }
@@ -368,13 +372,13 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
         let mut start = self.held_pair_top(epoch, seeded).await?;
 
         if start + 1 < epoch
-            && let Some(seed) = self.lc_contract_seed.get()
+            && let Some(seed) = self.catchup_seed.get()
         {
             // One seed at a time; a seed that ran meanwhile may have made this one unnecessary.
             let _seeding = self.seed_lock.lock().await;
             start = self.held_pair_top(epoch, seeded).await?;
             if start + 1 < epoch {
-                start = self.seed_from_lc_contract(seed, epoch, start).await?;
+                start = self.run_catchup_seed(seed, epoch, start).await?;
             }
         }
 
@@ -421,15 +425,15 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
     }
 
     /// Runs `seed` and returns the walk start.
-    async fn seed_from_lc_contract(
+    async fn run_catchup_seed(
         &self,
-        seed: &LcContractSeedFn<TYPES>,
+        seed: &CatchupSeedFn<TYPES>,
         epoch: EpochNumber,
         start: EpochNumber,
     ) -> Result<EpochNumber> {
         seed(epoch, start, self.clone())
             .await
-            .map_err(|err| anytrace::error!("lc contract seed for epoch {epoch} failed: {err:#}"))
+            .map_err(|err| anytrace::error!("catchup seed for epoch {epoch} failed: {err:#}"))
     }
 
     /// The membership for `epoch`, if its stake table is in memory.
