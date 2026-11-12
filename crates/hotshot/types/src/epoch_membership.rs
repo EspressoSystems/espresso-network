@@ -1,6 +1,6 @@
 use std::{
     collections::{HashMap, hash_map::Entry},
-    sync::Arc,
+    sync::{Arc, OnceLock},
     time::Duration,
 };
 
@@ -11,7 +11,7 @@ use futures::future::{BoxFuture, FutureExt, Shared};
 use hotshot_utils::anytrace::{self, Wrap};
 use parking_lot::{Mutex, RwLock};
 use sha2::{Digest, Sha256};
-use tokio::{spawn, time::timeout};
+use tokio::{spawn, sync::Mutex as AsyncMutex, time::timeout};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 use versions::DRB_FIX_VERSION;
@@ -58,6 +58,19 @@ type Snapshot<T> = <<T as NodeType>::Membership as Membership<T>>::Snapshot;
 /// snapshot.
 type SnapshotStakeTableHash<T> = <Snapshot<T> as MembershipSnapshot<T>>::StakeTableHash;
 
+/// Hook that may install stake tables for `catchup(target)` when the held pair `(start-1, start)` is
+/// more than one epoch below `target`. Called with `(target, start, coordinator)`. Returns the walk
+/// start, at or above `start`, or an error that ends the catchup attempt without a walk.
+pub type CatchupSeedFn<TYPES> = Arc<
+    dyn Fn(
+            EpochNumber,
+            EpochNumber,
+            EpochMembershipCoordinator<TYPES>,
+        ) -> BoxFuture<'static, anyhow::Result<EpochNumber>>
+        + Send
+        + Sync,
+>;
+
 /// Struct to Coordinate membership catchup
 pub struct EpochMembershipCoordinator<TYPES: NodeType> {
     membership: Arc<TYPES::Membership>,
@@ -69,6 +82,8 @@ pub struct EpochMembershipCoordinator<TYPES: NodeType> {
     store_drb_progress_fn: StoreDrbProgressFn,
     load_drb_progress_fn: LoadDrbProgressFn,
     store_drb_result_fn: StoreDrbResultFn,
+    catchup_seed: Arc<OnceLock<CatchupSeedFn<TYPES>>>,
+    seed_lock: Arc<AsyncMutex<()>>,
     drb_difficulty_selector: Arc<RwLock<Option<DrbDifficultySelectorFn>>>,
 }
 
@@ -85,6 +100,8 @@ impl<TYPES: NodeType> Clone for EpochMembershipCoordinator<TYPES> {
             load_drb_progress_fn: Arc::clone(&self.load_drb_progress_fn),
             store_drb_result_fn: self.store_drb_result_fn.clone(),
             drb_difficulty_selector: Arc::clone(&self.drb_difficulty_selector),
+            catchup_seed: Arc::clone(&self.catchup_seed),
+            seed_lock: Arc::clone(&self.seed_lock),
         }
     }
 }
@@ -107,6 +124,8 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
             load_drb_progress_fn: load_drb_progress_fn(storage.clone()),
             store_drb_result_fn: store_drb_result_fn(storage.clone()),
             drb_difficulty_selector: Arc::new(RwLock::new(None)),
+            catchup_seed: Arc::default(),
+            seed_lock: Arc::default(),
         }
     }
 
@@ -124,6 +143,14 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
     pub fn with_store_drb_result_fn(mut self, f: StoreDrbResultFn) -> Self {
         self.store_drb_result_fn = f;
         self
+    }
+
+    /// Sets the hook once; all clones share it.
+    pub fn set_catchup_seed(&self, f: CatchupSeedFn<TYPES>) {
+        assert!(
+            self.catchup_seed.set(f).is_ok(),
+            "lc contract seed set twice"
+        );
     }
 
     /// Get a reference to the membership
@@ -337,18 +364,19 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
             ));
         }
 
-        let known = self.membership.highest_known_epoch().unwrap_or(seeded);
+        let mut start = self.held_pair_top(epoch, seeded).await?;
 
-        let mut start = known
-            .min(EpochNumber::new(epoch.saturating_sub(1)))
-            .max(seeded);
-
-        while start > seeded {
-            if self.stake_table_present(start).await? && self.stake_table_present(start - 1).await?
-            {
-                break;
+        if start + 1 < epoch
+            && let Some(seed) = self.catchup_seed.get()
+        {
+            // One seed at a time; a seed that ran meanwhile may have made this one unnecessary.
+            let _seeding = self.seed_lock.lock().await;
+            start = self.held_pair_top(epoch, seeded).await?;
+            if start + 1 < epoch {
+                start = seed(epoch, start, self.clone()).await.map_err(|err| {
+                    anytrace::error!("catchup seed for epoch {epoch} failed: {err:#}")
+                })?;
             }
-            start = start - 1;
         }
 
         info!(target: "announce::catchup", %epoch, %start, "catching up to epoch");
@@ -372,6 +400,25 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
         }
 
         self.drb_ready(epoch).await
+    }
+
+    /// The top `start` of the highest consecutive held pair `(start-1, start)` with
+    /// `start <= epoch - 1`, floored at `seeded`.
+    async fn held_pair_top(&self, epoch: EpochNumber, seeded: EpochNumber) -> Result<EpochNumber> {
+        let known = self.membership.highest_known_epoch().unwrap_or(seeded);
+
+        let mut start = known
+            .min(EpochNumber::new(epoch.saturating_sub(1)))
+            .max(seeded);
+
+        while start > seeded {
+            if self.stake_table_present(start).await? && self.stake_table_present(start - 1).await?
+            {
+                break;
+            }
+            start = start - 1;
+        }
+        Ok(start)
     }
 
     /// The membership for `epoch`, if its stake table is in memory.
