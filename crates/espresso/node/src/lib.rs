@@ -1273,7 +1273,7 @@ pub mod testing {
                 l1_url: anvil_provider.anvil().endpoint().parse().unwrap(),
                 l1_opt: L1ClientOptions {
                     stake_table_update_interval: Duration::from_secs(5),
-                    l1_events_max_block_range: 1000,
+                    l1_events_max_block_range: std::num::NonZeroU64::new(1000).unwrap(),
                     l1_polling_interval: Duration::from_secs(1),
                     subscription_timeout: Duration::from_secs(5),
                     ..Default::default()
