@@ -2,13 +2,14 @@
 
 use std::{
     pin::pin,
-    sync::{Arc, Weak},
+    sync::{Arc, OnceLock, Weak},
     time::Duration,
 };
 
 use anyhow::{Context, anyhow, bail};
 use espresso_types::{
-    BlockMerkleCommitment, Header, LcContractFinalizedState, SeqTypes, traits::SequencerPersistence,
+    BlockMerkleCommitment, ChainConfig, Header, LcContractFinalizedState, SeqTypes,
+    traits::SequencerPersistence,
 };
 use futures::{
     FutureExt, StreamExt, TryStreamExt,
@@ -38,34 +39,44 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 /// from a header proven against the block Merkle root of a header at `F` that `verify_header`
 /// accepted, whichever source answered. Proven heights are below `F`, installed epochs above
 /// `start`, and every table has a block reward.
+#[derive(Clone)]
 pub struct LcContractSeed<P: SequencerPersistence> {
-    /// Weak, so the seed owns no path to the coordinator that the protocol holds.
-    requests: Weak<RequestResponseProtocol<P>>,
+    /// Set by `bind_requests` once consensus exists; weak, so the seed owns no path to the
+    /// coordinator that the protocol holds.
+    requests: Arc<OnceLock<Weak<RequestResponseProtocol<P>>>>,
     /// Asked in order after `http_delay`; none, no HTTP.
     state_peers: Vec<QueryServiceClient>,
     http_delay: Duration,
 }
 
 impl<P: SequencerPersistence> LcContractSeed<P> {
-    /// A seed without request-response; `state_peers` answer at once then, else after `http_delay`.
-    pub fn new(state_peers: Vec<Url>, http_delay: Duration) -> Self {
-        Self {
-            requests: Weak::new(),
+    /// A seed without a request-response protocol, `None` when `chain_config` names no stake
+    /// table contract to read the LC contract from. Until `bind_requests`, `state_peers` answer
+    /// at once, else after `http_delay`.
+    pub fn new(
+        chain_config: &ChainConfig,
+        state_peers: Vec<Url>,
+        http_delay: Duration,
+    ) -> Option<Self> {
+        chain_config.stake_table_contract.map(|_| Self {
+            requests: Arc::default(),
             state_peers: state_peers
                 .into_iter()
                 .map(QueryServiceClient::new)
                 .collect(),
             http_delay,
-        }
+        })
     }
 
-    /// Sets the catchup hook of `coordinator` to this seed, asking `requests` first.
-    pub fn install(
-        mut self,
-        coordinator: &EpochMembershipCoordinator<SeqTypes>,
-        requests: &Arc<RequestResponseProtocol<P>>,
-    ) {
-        self.requests = Arc::downgrade(requests);
+    /// Binds the request-response protocol, which exists only after consensus is constructed.
+    pub fn bind_requests(&self, requests: &Arc<RequestResponseProtocol<P>>) {
+        self.requests
+            .set(Arc::downgrade(requests))
+            .expect("the request-response protocol is bound once");
+    }
+
+    /// Sets the catchup hook of `coordinator` to this seed.
+    pub fn install(self, coordinator: &EpochMembershipCoordinator<SeqTypes>) {
         let seed = Arc::new(self);
         coordinator.set_catchup_seed(Arc::new(move |target, start, coordinator| {
             let seed = Arc::clone(&seed);
@@ -225,7 +236,8 @@ impl<P: SequencerPersistence> LcContractSeed<P> {
     /// The request-response protocol, or an error when its owner is gone or it was never set.
     fn upgrade_requests(&self) -> anyhow::Result<Arc<RequestResponseProtocol<P>>> {
         self.requests
-            .upgrade()
+            .get()
+            .and_then(Weak::upgrade)
             .context("the request-response protocol is not available")
     }
 }
