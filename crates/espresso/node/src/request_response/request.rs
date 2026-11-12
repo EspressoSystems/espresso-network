@@ -41,7 +41,8 @@ pub enum Request {
     RewardMerkleTreeV2(u64, ViewNumber),
     /// A request for the cert2 at or above the given height
     Cert2(Height),
-    /// Header at `height` with its block Merkle path at snapshot `root`; `height < root`.
+    /// Header at `height` with its block Merkle path at snapshot `root`; `height < root`. Only nodes
+    /// with SQL storage answer.
     HeaderProof { root: Height, height: Height },
 }
 
