@@ -14371,7 +14371,7 @@ mod test {
             .epoch_start_block(0)
             // No transactions here, so this sets the seconds per block, and the
             // test is bound by block count.
-            .builder_timeout(Duration::from_millis(250))
+            .empty_block_delay(Duration::from_millis(250))
             .build();
 
         let (storage, persistence) = node_storage::<D, NUM_NODES>().await;
@@ -14607,12 +14607,12 @@ mod test {
         let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
 
         // Slow empty-block production so we comfortably stop at the exact target height. On an idle
-        // chain the empty-block time is ~`builder_timeout`; raise `next_view_timeout` above it so
+        // chain the empty-block time is ~`empty_block_delay`; raise `consensus_timeout` above it so
         // the slow (but healthy) views aren't treated as failures.
         let network_config = TestConfigBuilder::<NUM_NODES>::default()
             .epoch_height(EPOCH_HEIGHT)
-            .builder_timeout(Duration::from_secs(3))
-            .next_view_timeout(Duration::from_secs(10))
+            .empty_block_delay(Duration::from_secs(3))
+            .consensus_timeout(Duration::from_secs(10))
             .build();
 
         let (storage, persistence) = node_storage::<D, NUM_NODES>().await;
