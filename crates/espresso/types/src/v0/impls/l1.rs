@@ -988,14 +988,12 @@ impl L1Client {
 
     /// The number of the latest finalized block; waits up to `L1_FINALIZED_WAIT` for the first one.
     pub async fn finalized_number_within_wait(&self) -> anyhow::Result<u64> {
-        self.finalized_number_within(L1_FINALIZED_WAIT).await
-    }
-
-    /// The number of the latest finalized block; waits up to `wait` for the first one.
-    async fn finalized_number_within(&self, wait: Duration) -> anyhow::Result<u64> {
-        let block = tokio::time::timeout(wait, self.wait_for_latest_finalized_at_least(0))
-            .await
-            .context("no L1 finalized block yet")?;
+        let block = tokio::time::timeout(
+            L1_FINALIZED_WAIT,
+            self.wait_for_latest_finalized_at_least(0),
+        )
+        .await
+        .context("no L1 finalized block yet")?;
         Ok(block.number)
     }
 
@@ -2213,17 +2211,16 @@ mod test {
     }
 
     /// The wait for a finalized L1 block is bounded.
-    #[test_log::test(tokio::test)]
+    #[test_log::test(tokio::test(start_paused = true))]
     async fn finalized_number_wait_is_bounded() {
         let l1_client = L1ClientOptions::default()
             .connect(vec!["http://localhost:1".parse().unwrap()])
             .unwrap();
 
-        let err = l1_client
-            .finalized_number_within(Duration::from_millis(200))
-            .await
-            .unwrap_err();
+        let start = tokio::time::Instant::now();
+        let err = l1_client.finalized_number_within_wait().await.unwrap_err();
 
+        assert!(start.elapsed() >= L1_FINALIZED_WAIT);
         assert!(
             format!("{err:#}").contains("no L1 finalized block yet"),
             "{err:#}"
