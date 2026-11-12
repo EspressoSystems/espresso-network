@@ -90,8 +90,8 @@ const OTHER_EPOCH: u64 = 8;
 /// catchup is making no progress. Far longer than any real catchup here.
 const RECOVERY_BUDGET: Duration = Duration::from_secs(3);
 
-/// Stands in for the node's Postgres. `load_stake` never returns, modelling a
-/// query that has stalled; every other method answers immediately.
+/// Stands in for the node's Postgres. `load_stake` never returns for epochs not in
+/// `served_epochs`, modelling a stalled query; every other method answers immediately.
 #[derive(Debug, Default)]
 struct StalledStakeStore {
     /// Epochs `load_stake` has been entered for, in call order.
@@ -627,21 +627,22 @@ async fn seeded_start_resumes_the_walk_ok() {
 async fn queued_catchup_skips_seed_once_pair_is_held_ok() {
     let (store, coordinator) = setup();
     let calls = Arc::new(Mutex::new(Vec::new()));
+    let loaded = Arc::new(Mutex::new(Vec::new()));
     let seed: CatchupSeedFn<SeqTypes> = {
-        let (store, calls) = (Arc::clone(&store), Arc::clone(&calls));
+        let (store, calls, loaded) = (Arc::clone(&store), Arc::clone(&calls), Arc::clone(&loaded));
         Arc::new(move |target, start, coordinator| {
-            let (store, calls) = (Arc::clone(&store), Arc::clone(&calls));
+            let (store, calls, loaded) =
+                (Arc::clone(&store), Arc::clone(&calls), Arc::clone(&loaded));
             Box::pin(async move {
                 calls.lock().push((*target, *start));
                 tokio::time::sleep(Duration::from_millis(300)).await;
                 for epoch in [TARGET_EPOCH - 2, TARGET_EPOCH - 1] {
                     store.serve(epoch);
-                    assert!(
-                        coordinator
-                            .membership()
-                            .load_stake_table(EpochNumber::new(epoch))
-                            .await
-                    );
+                    let found = coordinator
+                        .membership()
+                        .load_stake_table(EpochNumber::new(epoch))
+                        .await;
+                    loaded.lock().push((epoch, found));
                 }
                 Ok(EpochNumber::new(TARGET_EPOCH - 1))
             })
@@ -656,4 +657,9 @@ async fn queued_catchup_skips_seed_once_pair_is_held_ok() {
     tokio::time::sleep(Duration::from_secs(1)).await;
 
     assert_eq!(*calls.lock(), vec![(TARGET_EPOCH, FIRST_EPOCH + 1)]);
+    assert_eq!(
+        *loaded.lock(),
+        vec![(TARGET_EPOCH - 2, true), (TARGET_EPOCH - 1, true)],
+        "the seed did not install its pair"
+    );
 }
