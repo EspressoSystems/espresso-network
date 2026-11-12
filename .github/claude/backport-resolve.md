@@ -15,8 +15,8 @@ For each PR, do the following:
      target branch's own changes. Find where the original PR moved the file's code, if anywhere, and carry over those
      changes if the target needs them. Do not add the file back.
    - `Backport-Unresolved: <path>`: a binary file or a symlink that both sides changed (it holds the target branch's
-     version), or a file that both sides renamed (both names are present). Apply the original change if the target needs
-     it, and keep one copy.
+     version), or a file that both sides renamed (present under both names, maybe with conflict markers in both). Apply
+     the original change if the target needs it, and keep one copy.
 4. Run `just fmt`.
 5. Stage all changes with `git add -A`.
 6. Commit. If the target needs none of the changes from step 3 and there were no conflict markers, commit with
