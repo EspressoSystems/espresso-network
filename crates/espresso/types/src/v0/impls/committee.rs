@@ -696,19 +696,12 @@ impl EpochCommittees {
         );
 
         let previous_epoch = EpochNumber::new(epoch.saturating_sub(1));
+        let decided_hash = block_header.next_stake_table_hash();
         let (previous_committee, previous_validators) = {
             let inner = self.inner.read();
             // Guards the store of the previous epoch's table: the decided hash must match the
-            // table in memory, which catches L1 provider issues. Runs before anything is stored
-            // or `epoch` is put in memory.
-            let decided_hash = block_header.next_stake_table_hash();
-            let actual_hash = inner
-                .epoch_committee(previous_epoch)
-                .map(|previous| previous.stake_table_hash);
-            if let Some(actual_hash) = actual_hash
-                && decided_hash.is_some()
-                && decided_hash != actual_hash
-            {
+            // table in memory, which catches L1 provider issues. Runs before anything is stored.
+            if let Some(actual_hash) = inner.hash_mismatch(previous_epoch, decided_hash) {
                 drop(inner);
                 end_process_on_hash_mismatch(decided_hash, actual_hash);
             }
@@ -722,7 +715,7 @@ impl EpochCommittees {
         // midway leaves storage ahead of memory and a retry completes it.
         if let Some(previous_committee) = previous_committee {
             let persistence_lock = self.fetcher.persistence.lock().await;
-            if let Err(e) = persistence_lock
+            persistence_lock
                 .store_stake(
                     previous_epoch,
                     previous_committee.validators.clone(),
@@ -730,25 +723,31 @@ impl EpochCommittees {
                     previous_committee.stake_table_hash,
                 )
                 .await
-            {
-                error!(
-                    ?e,
-                    ?previous_epoch,
-                    "`add_epoch_root`, error storing stake table"
-                );
-            }
+                .map_err(EpochCommitteesError::Storage)?;
 
-            if let Some(previous_validators) = previous_validators
-                && let Err(e) = persistence_lock
+            if let Some(previous_validators) = previous_validators {
+                persistence_lock
                     .store_all_validators(previous_epoch, previous_validators)
                     .await
-            {
-                error!(?e, ?epoch, "`add_epoch_root`, error storing all validators");
+                    .map_err(EpochCommitteesError::Storage)?;
             }
         }
 
         {
             let mut inner = self.inner.write();
+            // The table below may have changed while storage was written.
+            if let Some(actual_hash) = inner.hash_mismatch(previous_epoch, decided_hash) {
+                drop(inner);
+                end_process_on_hash_mismatch(decided_hash, actual_hash);
+            }
+            if committee.block_reward.is_none()
+                && inner
+                    .epoch_committee(epoch)
+                    .is_some_and(|held| held.block_reward.is_some())
+            {
+                info!(?epoch, "a table with a block reward is held; keeping it");
+                return Ok(());
+            }
             inner.put_epoch_committee(epoch, Arc::new(committee));
             // garbage collect the validator set, including the previous epoch's, now stored
             inner.all_validators = inner.all_validators.split_off(&previous_epoch);
@@ -1320,6 +1319,10 @@ pub enum EpochCommitteesError {
 
     #[error("reward calculation error: {0}")]
     Reward(#[source] anyhow::Error),
+
+    /// A stake table or validator set write failed.
+    #[error("storage error: {0}")]
+    Storage(#[source] anyhow::Error),
 }
 
 /// Where the block reward of an installed table takes the timestamp of the root below its header.
@@ -1342,6 +1345,17 @@ impl PreviousRoot<'_> {
 }
 
 impl Inner {
+    #[cfg_attr(not(feature = "node"), allow(dead_code))]
+    /// The held stake table hash of `epoch`, when `decided` is set and differs from it.
+    fn hash_mismatch(
+        &self,
+        epoch: EpochNumber,
+        decided: Option<StakeTableHash>,
+    ) -> Option<Option<StakeTableHash>> {
+        let actual = self.epoch_committee(epoch)?.stake_table_hash;
+        (decided.is_some() && decided != actual).then_some(actual)
+    }
+
     /// The DA committee that applies to `epoch`, or the genesis DA committee
     /// when `epoch` is `None` or no explicit DA committee covers it.
     fn resolve_da_committee(&self, epoch: Option<EpochNumber>) -> Arc<DaCommittee> {
@@ -1423,13 +1437,15 @@ impl Inner {
     }
 
     /// Evict snapshots more than [`RECENT_STAKE_TABLES_LIMIT`] epochs below
-    /// `added`.
+    /// `added`. Below `prune_cutoff` only a table whose successor is held goes, as the successor
+    /// install is what stores it.
     ///
     /// `prune_cutoff` only ever moves forward: `add_epoch_root` also runs for old
     /// epochs during catchup, and a lagging insert must neither evict newer
     /// state nor evict itself before its readers had a chance to observe it.
     /// An insert below `prune_cutoff`, a walk below a seeded window, evicts
-    /// below its own cutoff and leaves everything above it.
+    /// below its own cutoff and leaves everything above it. A contiguous walk keeps its
+    /// last `RECENT_STAKE_TABLES_LIMIT + 1` tables.
     ///
     /// `da_committees` is exempt: it holds one entry per configured DA
     /// committee (seeded from config at startup and on upgrade certificates),
@@ -1438,11 +1454,24 @@ impl Inner {
     #[cfg_attr(not(feature = "node"), allow(dead_code))]
     fn prune_epochs(&mut self, added: EpochNumber) {
         let cutoff = EpochNumber::new(added.saturating_sub(RECENT_STAKE_TABLES_LIMIT));
+        let below_cutoff = cutoff < self.prune_cutoff;
         self.prune_cutoff = self.prune_cutoff.max(cutoff);
         // The snapshots for `first_epoch` and `first_epoch + 1` (seeded by
         // `new`) are never evicted:
         let keep = self.first_epoch + 1u64;
-        self.snapshots.retain(|e, _| *e <= keep || *e >= cutoff);
+        let evict: Vec<_> = self
+            .snapshots
+            .keys()
+            .filter(|e| {
+                **e > keep
+                    && **e < cutoff
+                    && (!below_cutoff || self.snapshots.contains_key(&(**e + 1)))
+            })
+            .copied()
+            .collect();
+        for epoch in evict {
+            self.snapshots.remove(&epoch);
+        }
     }
 }
 
@@ -3632,13 +3661,15 @@ mod tests {
     }
 
     /// Persistence of a seed test: `events` are the complete stake table events, `load_stake`
-    /// counts its calls and finds nothing, and `store_stake` records its epoch, or never returns
-    /// while `stall_store_stake` is set.
+    /// counts its calls and finds nothing, and `store_stake` counts its entries, then waits while
+    /// `stall_store_stake` is set, fails while `fail_store_stake` is set, else records its epoch.
     #[derive(Debug)]
     struct StalledStakeStore {
         events: Vec<(crate::v0_3::EventKey, crate::v0_3::StakeTableEvent)>,
         load_stake_calls: Arc<AtomicUsize>,
         stall_store_stake: Arc<AtomicBool>,
+        fail_store_stake: Arc<AtomicBool>,
+        store_stake_entries: Arc<AtomicUsize>,
         stored_epochs: Arc<parking_lot::Mutex<Vec<u64>>>,
     }
 
@@ -3682,9 +3713,14 @@ mod tests {
             _block_reward: Option<RewardAmount>,
             _stake_table_hash: Option<StakeTableHash>,
         ) -> anyhow::Result<()> {
-            if self.stall_store_stake.load(Ordering::SeqCst) {
-                std::future::pending::<()>().await;
+            self.store_stake_entries.fetch_add(1, Ordering::SeqCst);
+            while self.stall_store_stake.load(Ordering::SeqCst) {
+                tokio::time::sleep(Duration::from_millis(10)).await;
             }
+            anyhow::ensure!(
+                !self.fail_store_stake.load(Ordering::SeqCst),
+                "injected store_stake failure"
+            );
             self.stored_epochs.lock().push(*epoch);
             Ok(())
         }
@@ -3798,7 +3834,7 @@ mod tests {
         assert!(snapshot.epoch_block_reward().is_none());
     }
 
-    /// A seed of epoch 21 whose `store_stake` stalls until `stall_store_stake` is cleared.
+    /// A seed of epoch 21 whose `store_stake` waits until `stall_store_stake` is cleared.
     struct StalledInstall {
         /// Committees holding epoch 20.
         committees: EpochCommittees,
@@ -3810,8 +3846,12 @@ mod tests {
         preceding: Header,
         /// Calls of `load_stake` so far.
         load_stake_calls: Arc<AtomicUsize>,
-        /// While set, `store_stake` never returns.
+        /// While set, `store_stake` waits.
         stall_store_stake: Arc<AtomicBool>,
+        /// While set, `store_stake` fails.
+        fail_store_stake: Arc<AtomicBool>,
+        /// Entries of `store_stake` so far.
+        store_stake_entries: Arc<AtomicUsize>,
         /// Epochs `store_stake` completed for, in order.
         stored_epochs: Arc<parking_lot::Mutex<Vec<u64>>>,
     }
@@ -3820,6 +3860,8 @@ mod tests {
     async fn stalled_install_setup(catchup_timeout: Duration) -> StalledInstall {
         let load_stake_calls = Arc::new(AtomicUsize::new(0));
         let stall_store_stake = Arc::new(AtomicBool::new(true));
+        let fail_store_stake = Arc::<AtomicBool>::default();
+        let store_stake_entries = Arc::<AtomicUsize>::default();
         let stored_epochs = Arc::<parking_lot::Mutex<Vec<u64>>>::default();
         let validator = super::super::stake_table::testing::TestValidator::random();
         let events = vec![
@@ -3844,6 +3886,8 @@ mod tests {
                 events,
                 load_stake_calls: Arc::clone(&load_stake_calls),
                 stall_store_stake: Arc::clone(&stall_store_stake),
+                fail_store_stake: Arc::clone(&fail_store_stake),
+                store_stake_entries: Arc::clone(&store_stake_entries),
                 stored_epochs: Arc::clone(&stored_epochs),
             })),
             crate::L1Client::new(vec!["http://localhost:3331".parse().unwrap()])
@@ -3880,6 +3924,8 @@ mod tests {
             preceding,
             load_stake_calls,
             stall_store_stake,
+            fail_store_stake,
+            store_stake_entries,
             stored_epochs,
         }
     }
@@ -3932,6 +3978,163 @@ mod tests {
         install_setup_root(&setup).await.unwrap();
 
         assert_eq!(*setup.stored_epochs.lock(), vec![20]);
+    }
+
+    /// A failed write of the table below fails the install and leaves the epoch out of memory,
+    /// so the retry stores that table.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn install_fails_on_a_failed_previous_table_write() {
+        let setup = stalled_install_setup(Duration::from_secs(60)).await;
+        setup.stall_store_stake.store(false, Ordering::SeqCst);
+        setup.fail_store_stake.store(true, Ordering::SeqCst);
+
+        let err = install_setup_root(&setup).await.unwrap_err();
+
+        assert!(format!("{err:#}").contains("injected store_stake failure"));
+        assert!(
+            setup
+                .committees
+                .inner
+                .read()
+                .epoch_committee(EpochNumber::new(21))
+                .is_none()
+        );
+        setup.fail_store_stake.store(false, Ordering::SeqCst);
+        install_setup_root(&setup).await.unwrap();
+        assert_eq!(*setup.stored_epochs.lock(), vec![20]);
+    }
+
+    /// Epoch 21 is held without a block reward, and `root` is installed by the walk while its
+    /// `store_stake` of epoch 20 waits. Returns the install task once it waits.
+    async fn parked_walk_install(
+        setup: &StalledInstall,
+        root: Header,
+    ) -> tokio::task::JoinHandle<Result<(), EpochCommitteesError>> {
+        put_committee(
+            &setup.committees,
+            21,
+            StakeTableState::default().commit(),
+            None,
+        );
+        let (committees, coordinator) = (setup.committees.clone(), setup.coordinator.clone());
+        let task = tokio::spawn(async move { committees.add_epoch_root(root, &coordinator).await });
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while setup.store_stake_entries.load(Ordering::SeqCst) == 0 {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("the install did not reach store_stake within 10 s");
+        task
+    }
+
+    /// A table with a block reward that appears while a walk install computed none is kept.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn walk_install_keeps_a_table_with_a_reward_ok() {
+        let setup = stalled_install_setup(Duration::from_secs(60)).await;
+        let task = parked_walk_install(&setup, setup.root.clone()).await;
+        put_committee(
+            &setup.committees,
+            21,
+            StakeTableState::default().commit(),
+            Some(RewardAmount::default()),
+        );
+        setup.stall_store_stake.store(false, Ordering::SeqCst);
+
+        task.await.unwrap().unwrap();
+
+        assert!(
+            setup
+                .committees
+                .epoch_block_reward(EpochNumber::new(21))
+                .is_some()
+        );
+    }
+
+    /// The hash comparison runs again under the write lock: a table below that changed while the
+    /// install waited for storage ends the process.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn install_compares_the_hash_again_before_the_insert() {
+        let setup = stalled_install_setup(Duration::from_secs(60)).await;
+        let root = header_deciding(100 * 19 - 5, StakeTableState::default().commit()).await;
+        let task = parked_walk_install(&setup, root).await;
+        put_prefilled(&setup.committees, 20, other_hash());
+        setup.stall_store_stake.store(false, Ordering::SeqCst);
+
+        assert!(task.await.unwrap_err().is_panic());
+    }
+
+    /// The mismatch is the held hash of a table below, and only when a decided hash differs from it.
+    #[test]
+    fn hash_mismatch_cases() {
+        let held = StakeTableState::default().commit();
+        let committees = build_committees(4);
+        put_prefilled(&committees, 5, held);
+        let inner = committees.inner.read();
+        let epoch = EpochNumber::new(5);
+
+        assert_eq!(inner.hash_mismatch(epoch, None), None);
+        assert_eq!(inner.hash_mismatch(epoch, Some(held)), None);
+        assert_eq!(
+            inner.hash_mismatch(epoch, Some(other_hash())),
+            Some(Some(held))
+        );
+        assert_eq!(
+            inner.hash_mismatch(EpochNumber::new(6), Some(other_hash())),
+            None
+        );
+    }
+
+    /// The snapshot `load_stake_table` returns carries the stored table, header and DRB result
+    /// without a second lookup, so an eviction right after the load does not change it.
+    #[tokio::test]
+    async fn load_stake_table_returns_the_loaded_snapshot() {
+        let store = MockStakeStore {
+            header: build_epoch_root_header().await,
+            stored_headers: Default::default(),
+            fail_next_store: Default::default(),
+        };
+        let fetcher = Fetcher::new(
+            Arc::new(crate::mock::MockStateCatchup::default()),
+            Arc::new(AsyncMutex::new(store)),
+            crate::L1Client::new(vec!["http://localhost:3331".parse().unwrap()])
+                .expect("Failed to create L1 client"),
+            crate::ChainConfig::default(),
+        );
+        let committees = build_committees_with_fetcher(4, fetcher, EpochNumber::genesis());
+        let seven = EpochNumber::new(7);
+
+        let snapshot = committees.load_stake_table(seven).await.unwrap();
+        committees.inner.write().snapshots.remove(&seven);
+
+        assert!(committees.snapshot(seven).is_none());
+        assert!(snapshot.has_drb());
+        assert!(snapshot.inner.committee.header.is_some());
+    }
+
+    /// A prune below the cutoff keeps a table until the table above it is held, which is when it
+    /// is stored, however far another install stream is ahead.
+    #[test]
+    fn prune_below_cutoff_keeps_tables_not_yet_stored() {
+        let committees = build_committees(4);
+        let mut inner = committees.inner.write();
+        inner.first_epoch = EpochNumber::new(1);
+        inner.prune_cutoff = EpochNumber::new(200);
+        let template = inner
+            .epoch_committee(EpochNumber::genesis())
+            .expect("genesis committee exists")
+            .clone();
+
+        for added in [100, 130] {
+            inner.put_epoch_committee(EpochNumber::new(added), template.clone());
+            inner.prune_epochs(EpochNumber::new(added));
+        }
+        assert!(inner.snapshots.contains_key(&EpochNumber::new(100)));
+
+        inner.put_epoch_committee(EpochNumber::new(101), template);
+        inner.prune_epochs(EpochNumber::new(131));
+        assert!(!inner.snapshots.contains_key(&EpochNumber::new(100)));
+        assert!(inner.snapshots.contains_key(&EpochNumber::new(101)));
     }
 
     /// Requests epoch 25 with a seed hook that records `(target, start)` and fails. Returns the
