@@ -756,8 +756,9 @@ impl EpochCommittees {
         Ok(())
     }
 
-    /// the first (`None` near genesis). A failed batch keeps the tables installed before it.
-    /// the first (`None` near genesis). A failed batch keeps the tables installed before the failure.
+    /// Installs `roots` in ascending order, each under the coordinator's catchup timeout.
+    /// `preceding_root` is the root below the first (`None` near genesis). A failed batch keeps the
+    /// tables it installed.
     #[cfg(feature = "node")]
     pub async fn install_epoch_roots(
         &self,
@@ -3673,6 +3674,50 @@ mod tests {
         }
     }
 
+    /// Roots that skip an epoch fail the previous root check, and the table after the gap gets no
+    /// reward.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn install_epoch_roots_skipping_an_epoch_fails() {
+        let (committees, coordinator) = seed_window_setup(60, 64).await;
+        let (preceding, mut roots) = seed_window_roots(60, 64).await;
+        roots.remove(2);
+
+        let err = committees
+            .install_epoch_roots(Some(preceding), roots, &coordinator)
+            .await
+            .unwrap_err();
+
+        assert!(matches!(err, EpochCommitteesError::Reward(_)), "{err:#}");
+        assert!(
+            format!("{err:#}").contains("previous epoch root is at height"),
+            "{err:#}"
+        );
+        let snapshot = committees.snapshot(EpochNumber::new(63)).unwrap();
+        assert!(snapshot.epoch_block_reward().is_none());
+    }
+
+    /// A preceding root not one epoch below the first root fails the check, and the first table
+    /// gets no reward.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn install_epoch_roots_wrong_preceding_root_fails() {
+        let (committees, coordinator) = seed_window_setup(60, 64).await;
+        let (_, roots) = seed_window_roots(60, 64).await;
+        let preceding = timed_root(100 * (60 - 4) - 5).await;
+
+        let err = committees
+            .install_epoch_roots(Some(preceding), roots, &coordinator)
+            .await
+            .unwrap_err();
+
+        assert!(matches!(err, EpochCommitteesError::Reward(_)), "{err:#}");
+        assert!(
+            format!("{err:#}").contains("previous epoch root is at height"),
+            "{err:#}"
+        );
+        let snapshot = committees.snapshot(EpochNumber::new(60)).unwrap();
+        assert!(snapshot.epoch_block_reward().is_none());
+    }
+
     /// A table without a block reward is an error and the held committee stays as it was.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn install_epoch_roots_without_reward_fails() {
@@ -3812,9 +3857,13 @@ mod tests {
         let _ = setup
             .coordinator
             .stake_table_for_epoch(Some(EpochNumber::new(25)));
-        while calls.lock().is_empty() {
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while calls.lock().is_empty() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("the catchup did not call the seed hook within 10 s");
 
         let loads = setup.load_stake_calls.load(Ordering::SeqCst) - loads_before;
         (calls.lock().clone(), loads)
