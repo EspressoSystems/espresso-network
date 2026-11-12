@@ -204,9 +204,8 @@ mod tests {
         );
     }
 
-    /// A batch that failed after exactly one root leaves a lone table, so the held pair top stays
-    /// and the next seed covers the same window. After two roots the pair `ST(7), ST(8)` is held
-    /// and the next seed starts above it.
+    /// A seed from the genesis pair top covers the whole window; from top 8 it covers the window
+    /// without its first two roots.
     #[test]
     fn seed_after_failed_batch_resumes_ok() {
         let lc = finalized_state(100);
@@ -218,10 +217,7 @@ mod tests {
         let window = lc.proven_root_heights(10, genesis_pair_top);
         assert_eq!(window, vec![45, 55, 65, 75, 85]);
 
-        // Exactly one root installed: `ST(7)` is held, the top is still the genesis pair's.
         assert!(lc.seeds_target(10, target, genesis_pair_top));
-        assert_eq!(lc.proven_root_heights(10, genesis_pair_top), window);
-
         assert!(lc.seeds_target(10, target, pair_top));
         assert_eq!(lc.proven_root_heights(10, pair_top), window[2..].to_vec());
     }
