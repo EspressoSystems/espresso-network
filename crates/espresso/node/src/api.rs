@@ -5810,7 +5810,10 @@ mod test {
     ) -> anyhow::Result<()> {
         const NUM_NODES: usize = 5;
         const EPOCH_HEIGHT: u64 = 10;
-        const EPOCHS_TO_FOLLOW: u64 = 4;
+        const EPOCHS_TO_FOLLOW: u64 = 10;
+        /// Inside epoch 8, which starts at height 71.
+        const LC_CONTRACT_HEIGHT: u64 = 72;
+        const EPOCHS_BEFORE_START: u64 = 8;
         const NEW_PROTOCOL: Upgrade = Upgrade::trivial(NEW_PROTOCOL_VERSION);
 
         let network_config = TestConfigBuilder::default()
@@ -5864,9 +5867,23 @@ mod test {
             "node 0 query API did not come up"
         );
 
-        // Let the validators decide the first epoch before the follower bootstraps from them.
+        // The mock LC contract is finalized in epoch 8 while the follower holds only the genesis pair.
         let mut events = network.server.event_stream();
-        wait_for_epochs(&mut events, EPOCH_HEIGHT, 1).await;
+        wait_for_epochs(&mut events, EPOCH_HEIGHT, EPOCHS_BEFORE_START).await;
+        let lc_contract_header: Header = api_client
+            .get(&format!("availability/header/{LC_CONTRACT_HEIGHT}"))
+            .send()
+            .await?;
+        network
+            .cfg
+            .set_lc_contract_finalized_state(
+                network
+                    .contracts
+                    .as_ref()
+                    .expect("the network deploys contracts"),
+                &lc_contract_header,
+            )
+            .await?;
 
         let genesis = follower_genesis(&network.cfg, &genesis_state, NEW_PROTOCOL);
         let params = FollowerParams {
@@ -5901,6 +5918,22 @@ mod test {
             l1_params(),
         )
         .await?;
+
+        // Before the merklized state loop replays old heights and asks for their epochs.
+        follower.decided_leaf().await;
+        let coordinator = follower.node_state().coordinator;
+        let membership = coordinator.membership();
+        let held = |epoch: u64| membership.snapshot(EpochNumber::new(epoch)).is_some();
+        let seed_epoch = epoch_from_block_number(LC_CONTRACT_HEIGHT, EPOCH_HEIGHT);
+        assert!(
+            !held(seed_epoch - 4),
+            "epoch {} below the seeded window was walked",
+            seed_epoch - 4
+        );
+        assert!(
+            (seed_epoch..=seed_epoch + 1).all(held),
+            "the seeded window is not held"
+        );
 
         wait_for_epochs(&mut events, EPOCH_HEIGHT, EPOCHS_TO_FOLLOW).await;
         let tip = network.server.decided_leaf().await.height();

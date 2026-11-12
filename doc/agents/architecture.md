@@ -47,8 +47,8 @@ StakeTable contract for peer discovery.
 stay extra request-response responders. `state_peers` is optional for validators.
 
 The seed exists when the chain config names a stake table contract (the LC contract address is read from it);
-without one the catchup walks only. The follower has no seed and still walks at startup
-(`bootstrap_epoch_window`).
+without one the catchup walks only. The follower installs the same seed with its upstreams as the only source,
+and asks the coordinator for the stake tables of the epoch it is about to ingest.
 
 A node behind the stored window is caught up by `EpochMembershipCoordinator::catchup`. When the held pair is more than
 one epoch below the target, the `CatchupSeedFn` hook (`crates/espresso/node/src/lc_contract_seed.rs`) runs first, one

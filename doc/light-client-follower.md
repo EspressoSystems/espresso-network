@@ -35,8 +35,8 @@ Tuning, as options of the `follower` module:
 - `--max-blocks-per-poll` (`ESPRESSO_NODE_FOLLOWER_MAX_BLOCKS_PER_POLL`, 10): how many blocks one poll ingests. Older
   heights are backfilled by the query service, so a fresh follower serves the tip promptly and fills history in the
   background. A fresh follower with `--prune` is the exception: it never fetches heights below its first block (see
-  [Cold start](#cold-start)). Stake tables for epoch roots skipped this way are caught up from the peers before
-  following on.
+  [Cold start](#cold-start)). Stake tables for epoch roots skipped this way, and at start, come from the LC contract
+  and the peers before following on.
 - `--light-client-genesis <file>` (`ESPRESSO_NODE_LIGHT_CLIENT_GENESIS`): pin the light client's root of trust to a
   reviewed TOML file (see `crates/light-client-query-service/genesis/`) instead of deriving it from the network config
   fetched from the peers.
