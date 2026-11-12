@@ -129,6 +129,7 @@ pub async fn main(migrated_envs: Vec<(&str, &str)>) -> anyhow::Result<()> {
              (ESPRESSO_NODE_API_PEERS)"
         );
     }
+    warn_of_storage_changes(&modules);
 
     let public_node_config = PublicNodeConfig::new(&opt, &modules, &genesis);
 
@@ -186,6 +187,26 @@ pub async fn main(migrated_envs: Vec<(&str, &str)>) -> anyhow::Result<()> {
         h.shutdown();
     }
     result
+}
+
+/// Error level, so that operators see these before the release that changes their node.
+fn warn_of_storage_changes(modules: &Modules) {
+    let Some(sql) = &modules.storage_sql else {
+        tracing::error!(
+            "This node uses file-system storage. A future release will replace it with SQLite, \
+             and query nodes will then prune block data by default. Do not switch to SQLite by \
+             hand before that release: the node would start without its consensus state."
+        );
+        return;
+    };
+    if modules.query.is_some() && !sql.prune && !sql.archive {
+        tracing::error!(
+            "Neither --prune nor --archive is set, so this node keeps all block data. A future \
+             release will prune by default. To keep all block data after that release, set \
+             --archive (ESPRESSO_NODE_ARCHIVE=true). To prune now, set --prune \
+             (ESPRESSO_NODE_DATABASE_PRUNE=true)."
+        );
+    }
 }
 
 async fn run_with_storage<S>(
