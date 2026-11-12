@@ -701,9 +701,9 @@ impl EpochCommittees {
             let inner = self.inner.read();
             // Guards the store of the previous epoch's table: the decided hash must match the
             // table in memory, which catches L1 provider issues. Runs before anything is stored.
-            if let Some(actual_hash) = inner.hash_mismatch(previous_epoch, decided_hash) {
+            if let Some(held_hash) = inner.hash_mismatch(previous_epoch, decided_hash) {
                 drop(inner);
-                end_process_on_hash_mismatch(decided_hash, actual_hash);
+                end_process_on_hash_mismatch(decided_hash, Some(held_hash));
             }
             (
                 inner.epoch_committee(previous_epoch).cloned(),
@@ -736,9 +736,9 @@ impl EpochCommittees {
         {
             let mut inner = self.inner.write();
             // The table below may have changed while storage was written.
-            if let Some(actual_hash) = inner.hash_mismatch(previous_epoch, decided_hash) {
+            if let Some(held_hash) = inner.hash_mismatch(previous_epoch, decided_hash) {
                 drop(inner);
-                end_process_on_hash_mismatch(decided_hash, actual_hash);
+                end_process_on_hash_mismatch(decided_hash, Some(held_hash));
             }
             if committee.block_reward.is_none()
                 && inner
@@ -1346,14 +1346,22 @@ impl PreviousRoot<'_> {
 
 impl Inner {
     #[cfg_attr(not(feature = "node"), allow(dead_code))]
-    /// The held stake table hash of `epoch`, when `decided` is set and differs from it.
+    /// The held stake table hash of `epoch`, when both it and `decided` are set and differ. A held
+    /// table without a hash is not compared; that logs a warning.
     fn hash_mismatch(
         &self,
         epoch: EpochNumber,
         decided: Option<StakeTableHash>,
-    ) -> Option<Option<StakeTableHash>> {
-        let actual = self.epoch_committee(epoch)?.stake_table_hash;
-        (decided.is_some() && decided != actual).then_some(actual)
+    ) -> Option<StakeTableHash> {
+        let decided = decided?;
+        let Some(held) = self.epoch_committee(epoch)?.stake_table_hash else {
+            warn!(
+                ?epoch,
+                "stake table has no stored hash, skipping the hash comparison"
+            );
+            return None;
+        };
+        (decided != held).then_some(held)
     }
 
     /// The DA committee that applies to `epoch`, or the genesis DA committee
@@ -1653,6 +1661,8 @@ fn end_process_on_hash_mismatch(
         panic!("{message}");
     }
     error!("{message}");
+    // Lets the batched log exporter send the line.
+    std::thread::sleep(Duration::from_secs(2));
     std::process::abort()
 }
 
@@ -3399,8 +3409,8 @@ mod tests {
 
     /// Puts a committee for `epoch` carrying a reward and `hash`, so `add_epoch_root` skips the
     /// L1 fetch.
-    fn put_prefilled(committees: &EpochCommittees, epoch: u64, hash: StakeTableHash) {
-        put_committee(committees, epoch, hash, Some(RewardAmount::default()));
+    fn put_prefilled(committees: &EpochCommittees, epoch: u64, hash: Option<StakeTableHash>) {
+        put_committee_with_header(committees, epoch, hash, Some(RewardAmount::default()), None);
     }
 
     /// Puts a committee for `epoch` carrying `block_reward` and `hash`.
@@ -3410,14 +3420,14 @@ mod tests {
         hash: StakeTableHash,
         block_reward: Option<RewardAmount>,
     ) {
-        put_committee_with_header(committees, epoch, hash, block_reward, None);
+        put_committee_with_header(committees, epoch, Some(hash), block_reward, None);
     }
 
     /// Puts a committee for `epoch` carrying `block_reward`, `hash` and the epoch root `header`.
     fn put_committee_with_header(
         committees: &EpochCommittees,
         epoch: u64,
-        hash: StakeTableHash,
+        hash: Option<StakeTableHash>,
         block_reward: Option<RewardAmount>,
         header: Option<Header>,
     ) {
@@ -3428,7 +3438,7 @@ mod tests {
             .clone();
         let prefilled = EpochCommittee {
             block_reward,
-            stake_table_hash: Some(hash),
+            stake_table_hash: hash,
             header,
             eligible_leaders: template.eligible_leaders.clone(),
             stake_table: template.stake_table.clone(),
@@ -3458,8 +3468,8 @@ mod tests {
 
     fn mismatch_setup() -> (EpochCommittees, EpochMembershipCoordinator<SeqTypes>) {
         let committees = build_committees(4);
-        put_prefilled(&committees, 2, StakeTableState::default().commit());
-        put_prefilled(&committees, 3, StakeTableState::default().commit());
+        put_prefilled(&committees, 2, Some(StakeTableState::default().commit()));
+        put_prefilled(&committees, 3, Some(StakeTableState::default().commit()));
         let coordinator = EpochMembershipCoordinator::<SeqTypes>::new(
             committees.clone(),
             *committees.epoch_height(),
@@ -3477,6 +3487,23 @@ mod tests {
     async fn add_epoch_root_matching_hash_ok() {
         let (committees, coordinator) = mismatch_setup();
         let header = header_deciding(95, StakeTableState::default().commit()).await;
+
+        committees
+            .add_epoch_root(header, &coordinator)
+            .await
+            .unwrap();
+
+        let inner = committees.inner.read();
+        let committee = inner.epoch_committee(EpochNumber::new(3)).unwrap();
+        assert!(committee.header.is_some());
+    }
+
+    /// A held table without a hash is not compared: the root is installed and nothing aborts.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn add_epoch_root_skips_comparison_without_held_hash() {
+        let (committees, coordinator) = mismatch_setup();
+        put_prefilled(&committees, 2, None);
+        let header = header_deciding(95, other_hash()).await;
 
         committees
             .add_epoch_root(header, &coordinator)
@@ -3553,7 +3580,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn install_epoch_roots_mismatch_keeps_held_epochs() {
         let (committees, coordinator) = mismatch_setup();
-        put_prefilled(&committees, 4, other_hash());
+        put_prefilled(&committees, 4, Some(other_hash()));
         let matching = header_deciding(95, StakeTableState::default().commit()).await;
         // Epoch 4's previous table (epoch 3) holds the default hash, not this one.
         let mismatching = header_deciding(195, other_hash()).await;
@@ -3639,9 +3666,13 @@ mod tests {
             .await
             .unwrap();
 
-        put_prefilled(&committees, 2, StakeTableState::default().commit());
+        put_prefilled(&committees, 2, Some(StakeTableState::default().commit()));
         for epoch in 3..=40 {
-            put_prefilled(&committees, epoch, StakeTableState::default().commit());
+            put_prefilled(
+                &committees,
+                epoch,
+                Some(StakeTableState::default().commit()),
+            );
             let root =
                 header_deciding(100 * (epoch - 2) - 5, StakeTableState::default().commit()).await;
             committees.add_epoch_root(root, &coordinator).await.unwrap();
@@ -3899,7 +3930,7 @@ mod tests {
         );
         *fetcher.initial_supply.write().await = Some(U256::from(1_000_000u64));
         let committees = build_committees_with_fetcher(4, fetcher, EpochNumber::genesis());
-        put_prefilled(&committees, 20, StakeTableState::default().commit());
+        put_prefilled(&committees, 20, Some(StakeTableState::default().commit()));
         let coordinator = EpochMembershipCoordinator::<SeqTypes>::new(
             committees.clone(),
             *committees.epoch_height(),
@@ -4058,29 +4089,32 @@ mod tests {
         let setup = stalled_install_setup(Duration::from_secs(60)).await;
         let root = header_deciding(100 * 19 - 5, StakeTableState::default().commit()).await;
         let task = parked_walk_install(&setup, root).await;
-        put_prefilled(&setup.committees, 20, other_hash());
+        put_prefilled(&setup.committees, 20, Some(other_hash()));
         setup.stall_store_stake.store(false, Ordering::SeqCst);
 
         assert!(task.await.unwrap_err().is_panic());
     }
 
-    /// The mismatch is the held hash of a table below, and only when a decided hash differs from it.
+    /// The mismatch is the held hash of a table below, only when both it and a decided hash are set
+    /// and differ.
     #[test]
     fn hash_mismatch_cases() {
         let held = StakeTableState::default().commit();
         let committees = build_committees(4);
-        put_prefilled(&committees, 5, held);
+        put_prefilled(&committees, 5, Some(held));
+        put_prefilled(&committees, 7, None);
         let inner = committees.inner.read();
         let epoch = EpochNumber::new(5);
 
         assert_eq!(inner.hash_mismatch(epoch, None), None);
         assert_eq!(inner.hash_mismatch(epoch, Some(held)), None);
-        assert_eq!(
-            inner.hash_mismatch(epoch, Some(other_hash())),
-            Some(Some(held))
-        );
+        assert_eq!(inner.hash_mismatch(epoch, Some(other_hash())), Some(held));
         assert_eq!(
             inner.hash_mismatch(EpochNumber::new(6), Some(other_hash())),
+            None
+        );
+        assert_eq!(
+            inner.hash_mismatch(EpochNumber::new(7), Some(other_hash())),
             None
         );
     }
@@ -4185,7 +4219,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn install_epoch_roots_success_sets_rewards_and_prunes() {
         let (committees, coordinator) = seed_window_setup(60, 64).await;
-        put_prefilled(&committees, 5, StakeTableState::default().commit());
+        put_prefilled(&committees, 5, Some(StakeTableState::default().commit()));
         let (preceding, roots) = seed_window_roots(60, 64).await;
 
         committees
@@ -4213,7 +4247,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn install_epoch_roots_below_prune_cutoff_keeps_window() {
         let (committees, coordinator) = seed_window_setup(60, 64).await;
-        put_prefilled(&committees, 100, StakeTableState::default().commit());
+        put_prefilled(&committees, 100, Some(StakeTableState::default().commit()));
         committees.inner.write().prune_cutoff = EpochNumber::new(100 - RECENT_STAKE_TABLES_LIMIT);
         let (preceding, roots) = seed_window_roots(60, 64).await;
 
@@ -4244,11 +4278,15 @@ mod tests {
         let root = roots.remove(0);
 
         let (walked, walked_coordinator) = seed_window_setup(epoch, epoch).await;
-        put_prefilled(&walked, epoch - 3, StakeTableState::default().commit());
+        put_prefilled(
+            &walked,
+            epoch - 3,
+            Some(StakeTableState::default().commit()),
+        );
         put_committee_with_header(
             &walked,
             epoch - 1,
-            StakeTableState::default().commit(),
+            Some(StakeTableState::default().commit()),
             Some(RewardAmount::default()),
             Some(preceding.clone()),
         );

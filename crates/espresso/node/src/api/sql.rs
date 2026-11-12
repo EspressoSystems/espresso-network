@@ -1214,11 +1214,12 @@ mod request_storage {
             VersionedDataSource as _,
             storage::{
                 AvailabilityStorage as _, MerklizedStateHeightStorage as _,
-                MerklizedStateStorage as _,
+                MerklizedStateStorage as _, SerializableRetry as _,
             },
         },
         merklized_state::Snapshot,
         node::BlockId,
+        serializable_retry,
     };
     use hotshot_types::data::{VidShare, ViewNumber};
     use jf_merkle_tree_compat::MerkleTreeScheme as _;
@@ -1306,28 +1307,38 @@ mod request_storage {
     }
 
     /// Local reads only: a header missing from storage is an error, never fetched from peers.
+    /// Reads are retried on serialization conflicts.
     #[async_trait]
     impl HeaderProofReads for SqlStorage {
         async fn header(&self, id: BlockId<SeqTypes>) -> Result<Header, Error> {
-            let mut tx = self
-                .read()
-                .await
-                .map_err(|err| query_error(storage_query_error(err)))?;
-            tx.get_header(id).await.map_err(query_error)
+            serializable_retry!(self, || async {
+                let mut tx = self
+                    .read()
+                    .await
+                    .map_err(|err| query_error(storage_query_error(err)))?;
+                tx.get_header(id).await.map_err(query_error)
+            })
+            .await
         }
 
         async fn block_path(&self, index: u64, height: u64) -> QueryResult<BlockMerkleProof> {
-            let mut tx = self.read().await.map_err(storage_query_error)?;
-            tx.get_path(
-                Snapshot::<SeqTypes, BlockMerkleTree, { BlockMerkleTree::ARITY }>::Index(index),
-                height,
-            )
+            serializable_retry!(self, || async {
+                let mut tx = self.read().await.map_err(storage_query_error)?;
+                tx.get_path(
+                    Snapshot::<SeqTypes, BlockMerkleTree, { BlockMerkleTree::ARITY }>::Index(index),
+                    height,
+                )
+                .await
+            })
             .await
         }
 
         async fn last_state_height(&self) -> QueryResult<usize> {
-            let mut tx = self.read().await.map_err(storage_query_error)?;
-            tx.get_last_state_height().await
+            serializable_retry!(self, || async {
+                let mut tx = self.read().await.map_err(storage_query_error)?;
+                tx.get_last_state_height().await
+            })
+            .await
         }
     }
 

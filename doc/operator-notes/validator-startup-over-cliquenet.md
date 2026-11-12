@@ -16,4 +16,3 @@ by its post-start catchup, over request-response, after about one view timeout.
 - `/v1/node/all-validators/{epoch_number}/{offset}/{limit}` is empty for epochs a seed skipped.
 - `--bootstrap-epoch-catchup-timeout` is ignored for validators.
 - Followers are unchanged: they still walk epochs at startup.
-- A stake table hash mismatch stops the node; restart it after fixing the L1 RPC provider.
