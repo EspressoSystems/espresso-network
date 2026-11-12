@@ -266,14 +266,13 @@ impl EpochCommittees {
     /// - If `p <= 0.01`: R(p) = 0.03 / sqrt(2 * 0.01)
     /// - Else: R(p) = 0.03 / sqrt(2 * p)
     ///
-    /// `previous_root` is the header of the epoch root below `header`; with it the block time needs
-    /// neither a held `ST(epoch-3)` nor a peer fetch.
+    /// `previous_root` is where the timestamp of the epoch root below `header` comes from.
     async fn calculate_dynamic_block_reward(
         &self,
         epoch: EpochNumber,
         header: &Header,
         validators: &AuthenticatedValidatorMap,
-        previous_root: Option<&Header>,
+        previous_root: PreviousRoot<'_>,
         coordinator: &EpochMembershipCoordinator<SeqTypes>,
     ) -> anyhow::Result<Option<RewardAmount>> {
         let epoch_height = self.epoch_height;
@@ -287,7 +286,7 @@ impl EpochCommittees {
 
         // Return early if previous epoch is not the first two epochs
         // and we don't have the stake table.
-        if previous_root.is_none()
+        if matches!(previous_root, PreviousRoot::Peers)
             && previous_epoch > first_epoch + 1
             && self.snapshot(previous_epoch.into()).is_none()
         {
@@ -327,7 +326,7 @@ impl EpochCommittees {
                  height",
             )?;
             let held_ts = match previous_root {
-                Some(previous_root) => {
+                PreviousRoot::Seed(Some(previous_root)) => {
                     ensure!(
                         previous_root.height() == root_height,
                         "previous epoch root is at height {}, expected {root_height}",
@@ -335,7 +334,12 @@ impl EpochCommittees {
                     );
                     Some(previous_root.timestamp_millis_internal())
                 },
-                None => self.map_header(next_epoch, |h| h.timestamp_millis_internal()),
+                PreviousRoot::Seed(None) => {
+                    bail!("no previous epoch root for the block reward of epoch {epoch}")
+                },
+                PreviousRoot::Peers => {
+                    self.map_header(next_epoch, |h| h.timestamp_millis_internal())
+                },
             };
             let prev_ts = match held_ts {
                 Some(ts) => ts,
@@ -666,7 +670,7 @@ impl EpochCommittees {
                     epoch,
                     &block_header,
                     &active_validators,
-                    previous_root.header(),
+                    previous_root,
                     coordinator,
                 )
                 .await
@@ -979,7 +983,7 @@ pub async fn fetch_and_calculate_block_reward(
             current_epoch,
             &header,
             &committee.validators,
-            None,
+            PreviousRoot::Peers,
             &coordinator,
         )
         .await
@@ -1318,25 +1322,18 @@ pub enum EpochCommitteesError {
 }
 
 /// Where the block reward of an installed table takes the timestamp of the root below its header.
-#[cfg(feature = "node")]
+#[cfg_attr(not(feature = "node"), allow(dead_code))]
 #[derive(Clone, Copy)]
 enum PreviousRoot<'a> {
     /// The held committee below, else a leaf from peers; a missing reward is stored as such.
     Peers,
-    /// The given header (`None` near genesis): no peer fetch; a missing reward is an error.
+    /// The given header (`None` where the reward assumes the block time): no held header, no peer
+    /// fetch; a missing reward is an error.
     Seed(Option<&'a Header>),
 }
 
 #[cfg(feature = "node")]
-impl<'a> PreviousRoot<'a> {
-    /// The given header, if any.
-    fn header(self) -> Option<&'a Header> {
-        match self {
-            Self::Peers => None,
-            Self::Seed(header) => header,
-        }
-    }
-
+impl PreviousRoot<'_> {
     /// Whether this is a seed install.
     fn is_seed(self) -> bool {
         matches!(self, Self::Seed(_))
@@ -3747,7 +3744,8 @@ mod tests {
         assert!(snapshot.epoch_block_reward().is_none());
     }
 
-    /// A table without a block reward is an error and the held committee stays as it was.
+    /// A table whose reward needs a preceding root that is not given is an error, with no held header
+    /// or peer fetch in its place, and the held committee stays as it was.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn install_epoch_roots_without_reward_fails() {
         let (committees, coordinator) = seed_window_setup(20, 22).await;
@@ -3759,6 +3757,10 @@ mod tests {
             .unwrap_err();
 
         assert!(matches!(err, EpochCommitteesError::Reward(_)), "{err:#}");
+        assert!(
+            format!("{err:#}").contains("no previous epoch root"),
+            "{err:#}"
+        );
         let snapshot = committees.snapshot(EpochNumber::new(20)).unwrap();
         assert!(snapshot.epoch_block_reward().is_none());
     }
