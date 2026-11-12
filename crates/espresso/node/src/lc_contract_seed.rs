@@ -1,12 +1,14 @@
 //! Seeds the post-start epoch catchup from the LC contract.
 
 use std::{
-    sync::{Arc, Weak},
+    sync::{Arc, OnceLock, Weak},
     time::Duration,
 };
 
 use anyhow::{Context, anyhow, bail};
-use espresso_types::{Header, LcContractFinalizedState, SeqTypes, traits::SequencerPersistence};
+use espresso_types::{
+    ChainConfig, Header, LcContractFinalizedState, SeqTypes, traits::SequencerPersistence,
+};
 use futures::{FutureExt, StreamExt, TryStreamExt, stream};
 use hotshot_types::{data::EpochNumber, epoch_membership::EpochMembershipCoordinator};
 
@@ -28,20 +30,33 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 /// from a header proven against the block Merkle root of a header at `F` that `verify_header`
 /// accepted. Proven heights are below `F`, installed epochs above `start`, and every table has a
 /// block reward.
+#[derive(Clone)]
 pub struct LcContractSeed<P: SequencerPersistence> {
-    /// Weak, so the seed owns no path to the coordinator that the protocol holds.
-    requests: Weak<RequestResponseProtocol<P>>,
+    /// Set by `bind_requests` once consensus exists; weak, so the seed owns no path to the
+    /// coordinator that the protocol holds.
+    requests: Arc<OnceLock<Weak<RequestResponseProtocol<P>>>>,
 }
 
 impl<P: SequencerPersistence> LcContractSeed<P> {
-    /// Sets the catchup hook of `coordinator` to a seed over `requests`.
-    pub fn install(
-        coordinator: &EpochMembershipCoordinator<SeqTypes>,
-        requests: &Arc<RequestResponseProtocol<P>>,
-    ) {
-        let seed = Arc::new(Self {
-            requests: Arc::downgrade(requests),
-        });
+    /// A seed without a request-response protocol, `None` when `chain_config` names no stake
+    /// table contract to read the LC contract from.
+    pub fn new(chain_config: &ChainConfig) -> Option<Self> {
+        chain_config.stake_table_contract.map(|_| Self {
+            requests: Arc::default(),
+        })
+    }
+
+    /// Binds the request-response protocol, which exists only after consensus is constructed.
+    pub fn bind_requests(&self, requests: &Arc<RequestResponseProtocol<P>>) {
+        self.requests
+            .set(Arc::downgrade(requests))
+            .expect("the request-response protocol is bound once");
+    }
+
+    /// Sets the catchup hook of `coordinator` to this seed. An attempt before `bind_requests`
+    /// fails and the next catchup retries it.
+    pub fn install(self, coordinator: &EpochMembershipCoordinator<SeqTypes>) {
+        let seed = Arc::new(self);
         coordinator.set_catchup_seed(Arc::new(move |target, start, coordinator| {
             let seed = Arc::clone(&seed);
             async move { seed.run(target, start, coordinator).await }.boxed()
@@ -113,8 +128,9 @@ impl<P: SequencerPersistence> LcContractSeed<P> {
     ) -> anyhow::Result<(Option<Header>, Vec<Header>)> {
         let protocol = self
             .requests
-            .upgrade()
-            .context("the request-response protocol is gone")?;
+            .get()
+            .and_then(Weak::upgrade)
+            .context("the request-response protocol is not available")?;
         let checked_lc = lc.clone();
         let lc_header = protocol
             .request_indefinitely(
