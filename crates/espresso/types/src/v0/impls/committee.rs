@@ -703,16 +703,15 @@ impl EpochCommittees {
             // the table in memory, which catches L1 provider issues. Runs before `epoch` is put
             // in memory.
             let decided_hash = block_header.next_stake_table_hash();
-            if let Some(previous_committee) = inner.epoch_committee(previous_epoch)
+            let actual_hash = inner
+                .epoch_committee(previous_epoch)
+                .map(|previous| previous.stake_table_hash);
+            if let Some(actual_hash) = actual_hash
                 && decided_hash.is_some()
-                && decided_hash != previous_committee.stake_table_hash
+                && decided_hash != actual_hash
             {
-                panic!(
-                    "The decided block header's `next_stake_table_hash` does not match the hash \
-                     of the stake table we have. This is an unrecoverable error likely due to \
-                     issues with your L1 RPC provider. Decided:\n\n{decided_hash:?}Actual:\n\n{:?}",
-                    previous_committee.stake_table_hash
-                );
+                drop(inner);
+                end_process_on_hash_mismatch(decided_hash, actual_hash);
             }
 
             inner.put_epoch_committee(epoch, Arc::new(committee));
@@ -1610,6 +1609,24 @@ impl MembershipSnapshot<SeqTypes> for EpochSnapshot {
     fn stake_table_hash(&self) -> Option<Commitment<Self::StakeTableHash>> {
         self.inner.committee.stake_table_hash
     }
+}
+
+/// Ends the process, as a retry cannot fix a hash mismatch. Panics under test.
+#[cfg(feature = "node")]
+fn end_process_on_hash_mismatch(
+    decided: Option<StakeTableHash>,
+    actual: Option<StakeTableHash>,
+) -> ! {
+    let message = format!(
+        "The decided block header's `next_stake_table_hash` does not match the hash of the stake \
+         table we have. This is an unrecoverable error likely due to issues with your L1 RPC \
+         provider. Decided:\n\n{decided:?}Actual:\n\n{actual:?}"
+    );
+    if cfg!(test) {
+        panic!("{message}");
+    }
+    error!("{message}");
+    std::process::abort()
 }
 
 #[cfg(test)]
