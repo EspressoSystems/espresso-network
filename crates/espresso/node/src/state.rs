@@ -720,16 +720,24 @@ where
 /// None while the light client has not finalized past the first epoch, as no proofs are stored
 /// then, and at most [`REWARD_TREES_BELOW_START`].
 fn reward_boundaries_below(start: u64, finalized: u64, epoch_height: u64) -> Vec<u64> {
-    let proof_boundary = if is_last_block(finalized, epoch_height) {
-        finalized
-    } else {
-        (epoch_from_block_number(finalized, epoch_height) - 1) * epoch_height
-    };
-    if proof_boundary == 0 {
+    let Some(proof_boundary) = reward_proof_boundary(finalized, epoch_height) else {
         return Vec::new();
-    }
+    };
     let lowest = proof_boundary.max(start.saturating_sub(REWARD_TREES_BELOW_START * epoch_height));
     (lowest..start).step_by(epoch_height as usize).collect()
+}
+
+/// The epoch boundary whose reward tree `persist_reward_proofs` stores reward proofs from when the
+/// L1 light client has finalized the HotShot height `finalized`: `finalized` itself when it ends
+/// an epoch, else the newest boundary below it. None while that is genesis, as no proofs are
+/// stored for the first epoch, and without epochs.
+pub(crate) fn reward_proof_boundary(finalized: u64, epoch_height: u64) -> Option<u64> {
+    let boundary = if is_last_block(finalized, epoch_height) {
+        finalized
+    } else {
+        epoch_from_block_number(finalized, epoch_height).saturating_sub(1) * epoch_height
+    };
+    (boundary > 0).then_some(boundary)
 }
 
 /// The height of the newest block in local storage, once it is above `pruned`.
@@ -1091,7 +1099,7 @@ impl<T> SequencerStateUpdate for T where
 mod test {
     use rstest::rstest;
 
-    use super::reward_boundaries_below;
+    use super::{reward_boundaries_below, reward_proof_boundary};
 
     /// A node whose state starts at the boundary `start` needs the reward trees from the boundary
     /// the L1 light client has finalized, where it stores reward proofs, up to `start`: the newest
@@ -1128,6 +1136,39 @@ mod test {
             reward_boundaries_below(start, finalized, epoch_height),
             expected,
             "start {start}, L1-finalized height {finalized}, epoch height {epoch_height}"
+        );
+    }
+
+    /// Reward proofs for the L1-finalized height `finalized` come from the tree at `finalized`
+    /// itself when it is the last block of an epoch, else from the newest epoch boundary below it.
+    /// There is none in the first epoch, where that boundary would be genesis, and none without
+    /// epochs.
+    #[rstest]
+    #[case::genesis(0, 10, None)]
+    #[case::inside_first_epoch(5, 10, None)]
+    #[case::last_block_before_first_boundary(9, 10, None)]
+    #[case::first_boundary(10, 10, Some(10))]
+    #[case::just_past_first_boundary(11, 10, Some(10))]
+    #[case::just_below_second_boundary(19, 10, Some(10))]
+    #[case::second_boundary(20, 10, Some(20))]
+    #[case::inside_later_epoch(75, 10, Some(70))]
+    #[case::epoch_height_one(5, 1, Some(5))]
+    #[case::water_devnet_inside_epoch(1_537_500, 3000, Some(1_536_000))]
+    #[case::water_devnet_at_boundary(1_539_000, 3000, Some(1_539_000))]
+    #[case::mainnet_inside_epoch(31_700_000, 40_000, Some(31_680_000))]
+    #[case::mainnet_at_boundary(31_840_000, 40_000, Some(31_840_000))]
+    #[case::no_epochs_genesis(0, 0, None)]
+    #[case::no_epochs(31_700_000, 0, None)]
+    #[case::no_epochs_max_height(u64::MAX, 0, None)]
+    fn test_reward_proof_boundary(
+        #[case] finalized: u64,
+        #[case] epoch_height: u64,
+        #[case] expected: Option<u64>,
+    ) {
+        assert_eq!(
+            reward_proof_boundary(finalized, epoch_height),
+            expected,
+            "L1-finalized height {finalized}, epoch height {epoch_height}"
         );
     }
 }
