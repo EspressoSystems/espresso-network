@@ -38,6 +38,9 @@ Tuning, as options of the `follower` module:
   background. A fresh follower with `--prune` is the exception: it never fetches heights below its first block (see
   [Cold start](#cold-start)). Stake tables for epoch roots skipped this way, and at start, come from the LC contract
   and the peers before following on.
+- `--bootstrap-epoch-catchup-timeout` (`ESPRESSO_NODE_BOOTSTRAP_EPOCH_CATCHUP_TIMEOUT`, 30s): bound of the wait for the
+  stake table the follower needs, at startup and at each poll. Exceeding it or failing logs a warning and the next poll
+  retries; startup does not depend on the upstreams being reachable.
 - `--light-client-genesis <file>` (`ESPRESSO_NODE_LIGHT_CLIENT_GENESIS`): pin the light client's root of trust to a
   reviewed TOML file (see `crates/light-client-query-service/genesis/`) instead of deriving it from the network config
   fetched from the peers.

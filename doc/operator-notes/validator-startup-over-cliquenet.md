@@ -14,7 +14,8 @@ the LC contract by its post-start catchup, over request-response, after about on
   `/light-client`) after `--http-catchup-delay`; a validator whose cliquenet peers do not answer `HeaderProof` yet can
   set it.
 - `--bootstrap-epoch-catchup-timeout` is ignored for validators.
-  For followers it bounds the wait per poll for the stake table it needs; exceeding it fails the poll, which is retried.
+  For followers it bounds the wait for the stake table it needs, at startup and at each poll. Exceeding it or failing
+  logs a warning and the next poll retries; a follower no longer exits at startup when the upstreams or L1 are down.
 - Followers no longer walk epochs at startup either. They have no request-response: their upstreams (the query
   module's `--peers`) serve the seed over HTTP at once, and `--http-catchup-delay` does not apply.
 - A stake table hash mismatch stops the node; restart it after fixing the L1 RPC provider.

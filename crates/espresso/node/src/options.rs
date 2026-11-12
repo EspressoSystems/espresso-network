@@ -190,8 +190,8 @@ pub struct Options {
     #[clap(long, env = "ESPRESSO_NODE_HTTP_CATCHUP_DELAY", default_value = "2s", value_parser = parse_duration)]
     pub http_catchup_delay: Duration,
 
-    /// Timeout of the follower's wait, per poll, for the stake table it needs.
-    /// Exceeding it fails the poll, and the next poll asks again.
+    /// Bound of the follower's wait for the stake table it needs, at startup and at each poll.
+    /// Exceeding it or failing logs a warning and the next poll retries; startup does not need the upstreams.
     #[clap(long, env = "ESPRESSO_NODE_BOOTSTRAP_EPOCH_CATCHUP_TIMEOUT", default_value = "30s", value_parser = parse_duration)]
     pub bootstrap_epoch_catchup_timeout: Duration,
 
