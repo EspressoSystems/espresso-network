@@ -98,7 +98,7 @@ impl<P: SequencerPersistence> LcContractSeed<P> {
     }
 
     /// One seed attempt for `catchup(target)` with held pair top `start`: the walk start, `start`
-    /// when not needed, the top installed epoch `min(E*+1, target)` when seeded. The L1 read, the
+    /// when not needed, the last installed epoch when seeded. The L1 read, the
     /// peer requests and each install are bounded.
     async fn run(
         &self,
@@ -126,21 +126,21 @@ impl<P: SequencerPersistence> LcContractSeed<P> {
                 "lc contract seed"
             );
         };
-        if !lc.seeds_target(epoch_height, target, start) {
-            log("not needed");
-            return Ok(start);
-        }
-
-        let preceding_height = lc.preceding_root_height(
+        let Some(window) = lc.seed_window(
             epoch_height,
             coordinator.membership().first_epoch(),
             start,
             target,
-        );
-        let heights = lc.proven_root_heights(epoch_height, start, target);
+        ) else {
+            log("not needed");
+            return Ok(start);
+        };
+
+        let heights = window.root_heights(epoch_height).collect();
         let requests = self.requests.get().and_then(Weak::upgrade);
         let sources = Sources::new(requests.as_ref(), &self.state_peers, self.http_delay);
-        let (preceding, roots) = fetch_headers(&sources, &lc, preceding_height, heights).await?;
+        let (preceding, roots) = fetch_headers(&sources, &lc, window.preceding_root, heights)
+            .await?;
         coordinator
             .membership()
             .install_epoch_roots(preceding, roots, &coordinator)
@@ -148,7 +148,7 @@ impl<P: SequencerPersistence> LcContractSeed<P> {
 
         self.seeded.add(1);
         log("seeded");
-        Ok(lc.top_installed_epoch(epoch_height, target))
+        Ok(*window.epochs.end())
     }
 }
 
