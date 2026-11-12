@@ -4247,7 +4247,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn install_epoch_roots_below_prune_cutoff_keeps_window() {
         let (committees, coordinator) = seed_window_setup(60, 64).await;
-        put_prefilled(&committees, 100, StakeTableState::default().commit());
+        put_prefilled(&committees, 100, Some(StakeTableState::default().commit()));
         committees.inner.write().prune_cutoff = EpochNumber::new(100 - RECENT_STAKE_TABLES_LIMIT);
         let (preceding, roots) = seed_window_roots(60, 64).await;
 
