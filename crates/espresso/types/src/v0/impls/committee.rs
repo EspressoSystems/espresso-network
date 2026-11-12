@@ -3326,6 +3326,22 @@ mod tests {
         Commitment::from_raw([7; 32])
     }
 
+    /// A matching hash installs the root.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn add_epoch_root_matching_hash_ok() {
+        let (committees, coordinator) = mismatch_setup();
+        let header = header_deciding(95, StakeTableState::default().commit()).await;
+
+        committees
+            .add_epoch_root(header, &coordinator)
+            .await
+            .unwrap();
+
+        let inner = committees.inner.read();
+        let committee = inner.epoch_committee(EpochNumber::new(3)).unwrap();
+        assert!(committee.header.is_some());
+    }
+
     /// A mismatch with the held table of the epoch below panics before the new epoch is put in
     /// memory or any validator set is dropped.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
