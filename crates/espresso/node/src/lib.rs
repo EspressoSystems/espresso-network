@@ -38,6 +38,7 @@ use espresso_types::{
     v0_1::{ChainId, DECAF_CHAIN_ID, MAINNET_CHAIN_ID},
     v0_3::Fetcher,
 };
+use lc_contract_seed::LcContractSeed;
 
 pub(crate) const MAINNET_TELEMETRY_ENDPOINT: &str = "https://telemetry.main.net.espresso.network";
 pub(crate) const DECAF_TELEMETRY_ENDPOINT: &str =
@@ -306,6 +307,10 @@ where
     );
 
     let catchup_params = network_params.catchup;
+    let (state_peers, http_delay) = (
+        catchup_params.state_peers.clone(),
+        catchup_params.http_delay,
+    );
 
     let loaded_network_config = load_or_fetch_network_config(
         &persistence,
@@ -374,6 +379,7 @@ where
     )
     .await?;
     let coordinator = instance_state.coordinator.clone();
+    let lc_contract_seed = LcContractSeed::new(instance_state.clone(), state_peers, http_delay);
 
     check_cliquenet_info_registered(
         coordinator.membership(),
@@ -426,6 +432,7 @@ where
         anchor_view,
         storage,
         state_catchup_providers,
+        lc_contract_seed,
         persistence,
         cliquenet,
         Some(network_params.state_relay_server_url),
@@ -844,8 +851,8 @@ pub mod testing {
         network_config::light_client_genesis_from_stake_table,
     };
     use espresso_types::{
-        ChainConfig, FeeAccount, L1Client, NetworkConfig, PubKey, SeqTypes, Transaction, Upgrade,
-        UpgradeMap, UpgradeMode,
+        ChainConfig, FeeAccount, Header, L1Client, NetworkConfig, PubKey, SeqTypes, Transaction,
+        Upgrade, UpgradeMap, UpgradeMode,
         eth_signature_key::EthKeyPair,
         v0::traits::{EventConsumer, NullEventConsumer, PersistenceOptions, StateCatchup},
     };
@@ -854,14 +861,14 @@ pub mod testing {
         stream::{Stream, StreamExt},
     };
     use hotshot_contract_adapter::{
-        sol_types::{LightClientStateSol, LightClientV3Mock, StakeTableStateSol},
+        sol_types::{LightClientStateSol, LightClientV3Mock},
         stake_table::StakeTableContractVersion,
     };
     use hotshot_types::{
         HotShotConfig, PeerConfig, PeerConnectInfo,
         data::EpochNumber,
         event::LeafInfo,
-        light_client::{StakeTableState as StakeTableCommitment, StateKeyPair},
+        light_client::StateKeyPair,
         new_protocol::CoordinatorEvent,
         traits::{
             BlockPayload, EncodeBytes, block_contents::BlockHeader, metrics::NoMetrics,
@@ -1406,14 +1413,13 @@ pub mod testing {
             self.contracts.clone()
         }
 
-        /// Sets `finalizedState.blockHeight` and `votingStakeTableState` of the mock LC contract
-        /// the way a prover would after proving epoch roots. A `TestNetwork` has no prover, so
-        /// the LC contract otherwise stays at genesis. `contracts` are those the network deployed.
-        pub async fn set_lc_contract_voting_state(
+        /// Sets the mock LC contract's `finalizedState` to `header`'s height and `block_comm_root`,
+        /// as a prover would after proving it; `viewNum` keeps its value. `contracts` are those the
+        /// network deployed.
+        pub async fn set_lc_contract_finalized_state(
             &self,
             contracts: &Contracts,
-            finalized_block_height: u64,
-            commitment: StakeTableCommitment,
+            header: &Header,
         ) -> anyhow::Result<()> {
             let address = contracts
                 .address(Contract::LightClientProxy)
@@ -1422,17 +1428,14 @@ pub mod testing {
                 .wallet(EthereumWallet::from(self.signer.clone()))
                 .connect_http(self.l1_url.clone());
             let lc = LightClientV3Mock::new(address, &provider);
-            let current = lc.finalizedState().call().await?;
+            let current = LightClientStateSol::from(lc.finalizedState().call().await?);
+            let proven =
+                LightClientStateSol::from(header.get_light_client_state(ViewNumber::new(0))?);
             let state = LightClientStateSol {
-                blockHeight: finalized_block_height,
-                ..LightClientStateSol::from(current)
+                viewNum: current.viewNum,
+                ..proven
             };
             lc.setFinalizedState(state.into())
-                .send()
-                .await?
-                .watch()
-                .await?;
-            lc.setVotingStakeTableState(StakeTableStateSol::from(commitment).into())
                 .send()
                 .await?
                 .watch()
@@ -1667,6 +1670,8 @@ pub mod testing {
                 )
             };
 
+            let lc_contract_seed = LcContractSeed::new(node_state.clone(), vec![], Duration::ZERO);
+
             let (initializer, anchor_view) = persistence
                 .load_consensus_state(node_state, upgrade)
                 .await
@@ -1686,6 +1691,7 @@ pub mod testing {
                 anchor_view,
                 storage,
                 catchup_providers,
+                lc_contract_seed,
                 persistence,
                 coordinator_network,
                 self.state_relay_url.clone(),

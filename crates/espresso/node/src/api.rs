@@ -6950,20 +6950,31 @@ mod test {
             .expect("failed to get stake table");
     }
 
-    /// A validator that starts with the LC contract at the voting epoch `lc_voting_epoch` while the
+    /// Where the mock LC contract is finalized when the validator starts.
+    enum LcContractAt {
+        /// A fixed block height.
+        Height(u64),
+        /// The newest block the network decided.
+        NetworkTip,
+    }
+
+    /// A validator that starts with the LC contract finalized at `lc_contract_height` while the
     /// network is at epoch `NETWORK_EPOCH`, is seeded by its post-start catchup and votes.
     ///
     /// Six validators run to `STOPPED_AT_EPOCH`, node 1 is stopped, the network runs on to
-    /// `NETWORK_EPOCH`, the mock LC contract is set to the table of `lc_voting_epoch`, and node 1
-    /// starts again from `storage`: empty, or its own stale storage. It has no HTTP state peers.
+    /// `NETWORK_EPOCH`, the mock LC contract is set to the header at `lc_contract_height`, and
+    /// node 1 starts again from `storage`: empty, or its own stale storage. It has no HTTP state
+    /// peers.
     async fn validator_joins_over_cliquenet<D: TestableSqlDataSource>(
-        lc_voting_epoch: u64,
+        lc_contract: LcContractAt,
         fresh_storage: bool,
     ) {
         const EPOCH_HEIGHT: u64 = 10;
         const NUM_NODES: usize = 6;
         const STOPPED_AT_EPOCH: u64 = 2;
         const NETWORK_EPOCH: u64 = 7;
+        // One more epoch below the tip, so that epochs lie between the genesis pair and the window.
+        const TIP_NETWORK_EPOCH: u64 = 8;
         const JOIN_TIMEOUT: Duration = Duration::from_secs(240);
 
         let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
@@ -6993,26 +7004,31 @@ mod test {
         network.peers.remove(0);
 
         let mut events = network.server.event_stream();
-        wait_for_epochs(&mut events, EPOCH_HEIGHT, NETWORK_EPOCH).await;
+        let network_epoch = match lc_contract {
+            LcContractAt::Height(_) => NETWORK_EPOCH,
+            LcContractAt::NetworkTip => TIP_NETWORK_EPOCH,
+        };
+        wait_for_epochs(&mut events, EPOCH_HEIGHT, network_epoch).await;
 
-        // The LC contract commits to the table of `lc_voting_epoch`, as after a prover update
-        // at a non-root block of that epoch.
-        let server_coordinator = network.server.node_state().coordinator;
-        let committed = HSStakeTable::from_iter(
-            server_coordinator
-                .stake_table_for_epoch(Some(EpochNumber::new(lc_voting_epoch)))
-                .unwrap()
-                .stake_table(),
-        );
+        let client: Client<ClientErr, SequencerApiVersion> =
+            Client::new(format!("http://localhost:{port}").parse().unwrap());
+        let lc_contract_height = match lc_contract {
+            LcContractAt::Height(height) => height,
+            LcContractAt::NetworkTip => network.server.decided_leaf().await.height(),
+        };
+        let header: Header = client
+            .get(&format!("availability/header/{lc_contract_height}"))
+            .send()
+            .await
+            .unwrap();
         network
             .cfg
-            .set_lc_contract_voting_state(
+            .set_lc_contract_finalized_state(
                 network
                     .contracts
                     .as_ref()
                     .expect("the network deploys contracts"),
-                (lc_voting_epoch - 1) * EPOCH_HEIGHT + 2,
-                committed.commitment(STAKE_TABLE_CAPACITY_FOR_TEST).unwrap(),
+                &header,
             )
             .await
             .unwrap();
@@ -7046,7 +7062,14 @@ mod test {
         // The post-start catchup seeds the window from the LC contract.
         let mut events = node.event_stream();
         node.start_consensus().await;
-        let height = network.server.decided_leaf().await.height();
+        let seed_epoch = epoch_from_block_number(lc_contract_height, EPOCH_HEIGHT);
+        // Past the end of the seed epoch and of the next one, where block rewards are read.
+        let height = network
+            .server
+            .decided_leaf()
+            .await
+            .height()
+            .max((seed_epoch + 1) * EPOCH_HEIGHT);
         timeout(JOIN_TIMEOUT, async {
             while let Some(event) = events.next().await {
                 if let CoordinatorEvent::NewDecide { leaf_infos, .. } = event
@@ -7060,18 +7083,44 @@ mod test {
         .await
         .expect("the joined node did not decide with the network");
 
-        // A fresh node holds the seeded window only: the epochs between its genesis pair and the
-        // window are not walked.
-        let skipped = lc_voting_epoch - 4;
-        if fresh_storage && skipped > 2 {
-            let coordinator = node.node_state().coordinator;
+        let coordinator = node.node_state().coordinator;
+        for epoch in seed_epoch - 1..=seed_epoch + 1 {
             assert!(
                 coordinator
                     .membership()
-                    .snapshot(EpochNumber::new(skipped))
-                    .is_none(),
+                    .snapshot(EpochNumber::new(epoch))
+                    .and_then(|snapshot| snapshot.epoch_block_reward())
+                    .is_some(),
+                "no block reward for epoch {epoch}"
+            );
+        }
+
+        // A fresh node holds the seeded window only: the epochs between its genesis pair and the
+        // window are not walked until something asks for one, and then the walk leaves the
+        // window held.
+        let skipped = EpochNumber::new(seed_epoch.saturating_sub(5));
+        if fresh_storage && *skipped > 2 {
+            assert!(
+                coordinator.membership().snapshot(skipped).is_none(),
                 "epoch {skipped} below the seeded window was walked"
             );
+            assert!(
+                coordinator.membership_for_epoch(Some(skipped)).is_err(),
+                "epoch {skipped} below the seeded window is held"
+            );
+            coordinator
+                .wait_for_catchup(skipped)
+                .await
+                .expect("catchup below the seeded window");
+            for epoch in (seed_epoch - 4..=seed_epoch + 1).chain([*skipped]) {
+                assert!(
+                    coordinator
+                        .membership()
+                        .snapshot(EpochNumber::new(epoch))
+                        .is_some(),
+                    "epoch {epoch} is not held after catching up to epoch {skipped}"
+                );
+            }
         }
     }
 
@@ -7081,16 +7130,25 @@ mod test {
     async fn test_new_protocol_fresh_validator_joins_over_cliquenet<D: TestableSqlDataSource>(
         _d: PhantomData<D>,
     ) {
-        validator_joins_over_cliquenet::<D>(7, true).await;
+        validator_joins_over_cliquenet::<D>(LcContractAt::Height(62), true).await;
     }
 
-    /// Prover lag: the LC contract is at epoch 4 while the network is at epoch 7, so the seed at
-    /// epoch 4 is followed by the walk.
+    /// The LC contract is in the network's current epoch: the node crosses the end of that epoch
+    /// and of the next one, where it reads block rewards.
+    #[apply(sql_data_sources)]
+    async fn test_new_protocol_fresh_validator_joins_at_epoch_boundary<D: TestableSqlDataSource>(
+        _d: PhantomData<D>,
+    ) {
+        validator_joins_over_cliquenet::<D>(LcContractAt::NetworkTip, true).await;
+    }
+
+    /// Prover lag: the LC contract is at height 35 (the root of epoch 4) while the network is at
+    /// epoch 7, so the seed at epoch 4 is followed by the walk.
     #[apply(sql_data_sources)]
     async fn test_new_protocol_fresh_validator_joins_with_prover_lag<D: TestableSqlDataSource>(
         _d: PhantomData<D>,
     ) {
-        validator_joins_over_cliquenet::<D>(4, true).await;
+        validator_joins_over_cliquenet::<D>(LcContractAt::Height(35), true).await;
     }
 
     /// `TEST:restart-more-than-lookahead-behind-reaches-current-ok`: stored anchor in epoch 2, the
@@ -7101,7 +7159,7 @@ mod test {
     >(
         _d: PhantomData<D>,
     ) {
-        validator_joins_over_cliquenet::<D>(7, false).await;
+        validator_joins_over_cliquenet::<D>(LcContractAt::Height(62), false).await;
     }
 
     #[apply(sql_data_sources)]

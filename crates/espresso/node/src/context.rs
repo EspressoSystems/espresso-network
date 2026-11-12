@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeMap, HashMap, HashSet},
+    collections::BTreeMap,
     fmt::{Debug, Display},
     future::Future,
     path::PathBuf,
@@ -131,6 +131,7 @@ where
         anchor_view: Option<ViewNumber>,
         storage: Option<RequestResponseStorage>,
         state_catchup: ParallelStateCatchup,
+        lc_contract_seed: LcContractSeed<P>,
         persistence: Arc<P>,
         coordinator_network: F,
         state_relay_server: Option<Url>,
@@ -178,13 +179,10 @@ where
 
         let mut coordinator_network = coordinator_network(upgrade_lock.clone()).await?;
 
-        let seed = LcContractSeed::<P>::new(
-            instance_state.clone(),
-            upgrade_lock.clone(),
-            stake_table_capacity,
-        );
-        let seed_requests = seed.requests_cell();
-        membership_coordinator.set_lc_contract_seed(seed.into_seed_fn());
+        // Installed before `apply_epoch`, which can start a catchup that would run without a seed.
+        // The requests cell is set later: the protocol needs the consensus handle.
+        let seed_requests = lc_contract_seed.requests_cell();
+        membership_coordinator.set_lc_contract_seed(lc_contract_seed.into_seed_fn());
 
         // Dials the N-1/N/N+1 window of the stored anchor; a node behind it is seeded after start.
         let anchor_epoch = initializer
@@ -197,8 +195,6 @@ where
         let l1_finalized_peers = dial_l1_finalized_peers(
             &mut coordinator_network,
             &instance_state,
-            &membership_coordinator,
-            anchor_epoch,
             running_version(&upgrade_lock),
         )
         .await;
@@ -626,28 +622,22 @@ fn running_version(upgrade_lock: &UpgradeLock<SeqTypes>) -> Version {
 }
 
 /// Dials `ST(now)` (`NodeState::l1_finalized_peers`) and returns the dialed keys, those with
-/// connect info and outside the window of `anchor_epoch`. The window peers keep the addresses of
-/// the node's held tables, which `apply_epoch` set: re-adding one at another address, as L1 may
-/// register a stale one, redials it there. The first `apply_epoch` of consensus drops the dialed
+/// connect info that the network does not hold. Held peers keep the addresses `apply_epoch` set:
+/// re-adding one at another address, as L1 may register a stale one, redials it there. The first `apply_epoch` of consensus drops the dialed
 /// peers outside its window. A failure is logged and leaves no extra peers: the node still boots
 /// with the window of its stored anchor.
 async fn dial_l1_finalized_peers(
     network: &mut Cliquenet<SeqTypes>,
     node_state: &NodeState,
-    coordinator: &EpochMembershipCoordinator<SeqTypes>,
-    anchor_epoch: EpochNumber,
     version: Version,
 ) -> Vec<PubKey> {
     let dial = async {
-        let window: HashSet<PubKey> = (anchor_epoch.saturating_sub(1)..=*anchor_epoch + 1)
-            .filter_map(|epoch| coordinator.epoch_peers(Some(EpochNumber::new(epoch))))
-            .flat_map(HashMap::into_keys)
-            .collect();
+        let held = network.peer_keys();
         let targets = node_state
             .l1_finalized_peers(version)
             .await?
             .into_iter()
-            .filter(|(key, _)| !window.contains(key))
+            .filter(|(key, _)| !held.contains(key))
             .filter_map(|(key, peer)| {
                 let info = peer.connect_info?;
                 Some((key, (info.x25519_key.into(), info.p2p_addr)))

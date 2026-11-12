@@ -9,20 +9,20 @@ use anyhow::{Context, bail};
 use async_lock::Mutex;
 use async_trait::async_trait;
 #[cfg(feature = "node")]
-use hotshot_contract_adapter::sol_types::{LightClientV3, StakeTableStateSol, StakeTableV3};
-#[cfg(feature = "node")]
-use hotshot_types::PeerConfig;
+use hotshot_contract_adapter::sol_types::{LightClientStateSol, LightClientV3, StakeTableV3};
 use hotshot_types::{
     HotShotConfig, data::EpochNumber, drb::DrbResult, epoch_membership::EpochMembershipCoordinator,
     traits::states::InstanceState,
 };
+#[cfg(feature = "node")]
+use hotshot_types::{PeerConfig, light_client::LightClientState};
 #[cfg(feature = "node")]
 use indexmap::IndexMap;
 use moka::future::Cache;
 use vbs::version::Version;
 
 #[cfg(feature = "node")]
-use super::LcContractVotingStakeTable;
+use super::LcContractFinalizedState;
 use super::{
     SeqTypes, UpgradeType, ViewBasedUpgrade,
     state::ValidatedState,
@@ -193,37 +193,25 @@ impl NodeState {
         .context("no L1 finalized block yet")
     }
 
-    /// `finalizedState` and `votingStakeTableState` at the L1 finalized block.
+    /// The LC contract's `finalizedState` at the L1 finalized block, waiting up to
+    /// `L1_FINALIZED_WAIT` for the first one. One L1 call.
     #[cfg(feature = "node")]
-    pub async fn lc_contract_voting_stake_table(
-        &self,
-    ) -> anyhow::Result<LcContractVotingStakeTable> {
-        let l1_block = self.l1_finalized_block().await?;
-        let block = BlockId::number(l1_block);
+    pub async fn lc_contract_finalized_state(&self) -> anyhow::Result<LcContractFinalizedState> {
+        let block = BlockId::number(self.l1_finalized_block().await?);
         let light_client_contract = LightClientV3::new(
             self.light_client_contract_address().await?,
             self.l1_client.provider.clone(),
         );
-        let finalized_block_height = light_client_contract
+        let state = light_client_contract
             .finalizedState()
             .block(block)
             .call()
             .await
-            .context("failed to read finalizedState")?
-            .blockHeight;
-        let voting_stake_table_state = light_client_contract
-            .votingStakeTableState()
-            .block(block)
-            .call()
-            .await
-            .context("failed to read votingStakeTableState")?;
-        Ok(LcContractVotingStakeTable {
-            l1_block,
-            voting_epoch: LcContractVotingStakeTable::voting_epoch(
-                finalized_block_height,
-                *self.coordinator.epoch_height(),
-            ),
-            commitment: StakeTableStateSol::from(voting_stake_table_state).into(),
+            .context("failed to read finalizedState")?;
+        let state = LightClientState::from(LightClientStateSol::from(state));
+        Ok(LcContractFinalizedState {
+            height: state.block_height,
+            block_comm_root: state.block_comm_root,
         })
     }
 

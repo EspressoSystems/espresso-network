@@ -26,9 +26,7 @@ use hotshot_types::{
     utils::{epoch_from_block_number, root_block_in_epoch, transition_block_for_epoch},
 };
 #[cfg(feature = "node")]
-use hotshot_types::{
-    stake_table::HSStakeTable, traits::block_contents::BlockHeader, utils::is_epoch_root,
-};
+use hotshot_types::{traits::block_contents::BlockHeader, utils::is_epoch_root};
 use indexmap::IndexMap;
 use parking_lot::RwLock;
 use thiserror::Error;
@@ -520,21 +518,6 @@ impl EpochCommittees {
         self
     }
 
-    /// The table `header` defines, derived from L1 events at `header.l1_finalized` under
-    /// `header.version()`, in `committee_peer_configs` order. Installs nothing.
-    #[cfg(feature = "node")]
-    pub async fn l1_derived_stake_table(
-        &self,
-        header: &Header,
-    ) -> anyhow::Result<HSStakeTable<SeqTypes>> {
-        let epoch =
-            EpochNumber::new(epoch_from_block_number(header.height(), *self.epoch_height) + 2);
-        let set = self.fetcher.fetch(epoch, header).await?;
-        Ok(HSStakeTable::from_iter(
-            committee_peer_configs(set.active_validators()).values(),
-        ))
-    }
-
     /// `add_epoch_root` without the panic: a `next_stake_table_hash` mismatch with the held table
     /// of the epoch below is `StakeTableHashMismatch`, returned before the epoch is put in memory.
     /// `add_epoch_root` calls it and keeps its panic. Returns whether this call created the
@@ -758,8 +741,10 @@ impl EpochCommittees {
         Ok(inserted.then_some(epoch))
     }
 
-    /// Installs the epoch roots `roots`, ascending, as `install_epoch_root` does. Any error, and
-    /// the future being dropped, evicts the epochs this call created; epochs held before stay.
+    /// Installs the epoch roots `roots`, ascending, as `install_epoch_root` does. An error or a drop
+    /// of the future evicts the in-memory committees and validator sets this call created; epochs
+    /// held before stay. Not rolled back: snapshots `prune_epochs` evicted, `prune_cutoff`, and
+    /// the epoch roots and stake tables already stored.
     #[cfg(feature = "node")]
     pub async fn install_epoch_roots(
         &self,

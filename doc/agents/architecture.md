@@ -50,14 +50,16 @@ A node behind the stored window is caught up by `EpochMembershipCoordinator::cat
 one epoch below the target, the `LcContractSeedFn` hook (`crates/espresso/node/src/lc_contract_seed.rs`) runs first, one
 seed at a time:
 
-1. Reads `finalizedState` and `votingStakeTableState` of the LC contract at the L1 finalized block; `E'` is the epoch
-   whose table that commitment is. A target below `E'` fails fast.
-2. Fetches the epoch root leaf `root(E'-2)` unverified and accepts it if its L1-derived table commits to
-   `votingStakeTableState`; that table is only the quorum for the anchor.
-3. A cert2 under that quorum plus parent links give the anchor `H*(E'-1)+1`; `Request::HeaderProof` proves
-   `root(E'-5) ..= root(E'-2)` against it.
-4. Installs the tables above the held pair within `ST(E'-3) ..= ST(E'+1)`, and `DRB(E')`; a hash mismatch evicts what it
-   installed and errors. The existing walk continues from `E'+1`.
+1. Reads `finalizedState` (`F`, `blockCommRoot`) of the LC contract at the L1 finalized block; `E* = epoch(F)`. A target
+   below `E*` is not seeded: the walk serves it.
+2. Fetches the header at `F` unverified and accepts it iff its height is `F` and its `block_comm_root` matches.
+3. `Request::HeaderProof { root: F, height }` proves `root(E*-6) ..= root(E*-1)` against it. The peer requests are
+   bounded by 30 s.
+4. Installs the tables above the held pair within `ST(E*-4) ..= ST(E*+1)`, so the rewards of `E*-1 ..= E*+1` exist; a
+   hash mismatch evicts what it installed and errors. The existing walk continues from `E*+1`; `drb_ready` supplies
+   the target's DRB.
+5. Requests go over request-response. With `--state-peers`, they also go over HTTP after `--http-catchup-delay`, at once
+   before the protocol is up.
 
 ## Consensus upgrades
 
