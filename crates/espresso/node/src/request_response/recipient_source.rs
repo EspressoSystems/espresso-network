@@ -26,8 +26,8 @@ pub struct RecipientSource<P: SequencerPersistence> {
     /// The public key of the node
     pub public_key: PubKey,
     /// Keys of the validators active at the L1 finalized block at startup that the network did not
-    /// hold; added to the keys of the consensus-epoch table, deduplicated, without self, while the
-    /// network still holds them.
+    /// hold; responders are these and the keys of the consensus-epoch table that the network holds
+    /// at request time, deduplicated, without self.
     pub l1_finalized_peers: Vec<PubKey>,
     /// The network, for the keys it holds at request time.
     pub network: Sender<SeqTypes>,
@@ -57,7 +57,7 @@ impl<P: SequencerPersistence> RecipientSourceTrait<Request, PubKey> for Recipien
     }
 }
 
-/// `table_keys` and those `l1_finalized_peers` that are in `held`, deduplicated, without `own_key`.
+/// The `table_keys` and `l1_finalized_peers` that are in `held`, deduplicated, without `own_key`.
 fn responders(
     table_keys: impl Iterator<Item = PubKey>,
     l1_finalized_peers: &[PubKey],
@@ -65,13 +65,8 @@ fn responders(
     own_key: &PubKey,
 ) -> Vec<PubKey> {
     let keys: BTreeSet<PubKey> = table_keys
-        .chain(
-            l1_finalized_peers
-                .iter()
-                .filter(|key| held.contains(key))
-                .copied(),
-        )
-        .filter(|key| key != own_key)
+        .chain(l1_finalized_peers.iter().copied())
+        .filter(|key| held.contains(key) && key != own_key)
         .collect();
     keys.into_iter().collect()
 }
@@ -133,13 +128,23 @@ mod tests {
         let own = key(0);
         let table = [own, key(1), key(2)];
         let l1_finalized = [key(2), key(3), key(4), own];
-        let held = HashSet::from([key(3), own]);
+        let held = HashSet::from([key(1), key(3), own]);
 
         let out = responders(table.into_iter(), &l1_finalized, &held, &own);
 
-        let mut expected = vec![key(1), key(2), key(3)];
+        let mut expected = vec![key(1), key(3)];
         expected.sort();
         assert_eq!(out, expected);
+    }
+
+    /// A network that holds no peer yields no responders.
+    #[test]
+    fn responders_without_held_peers_are_empty() {
+        let own = key(0);
+
+        let out = responders([key(1)].into_iter(), &[key(2)], &HashSet::new(), &own);
+
+        assert!(out.is_empty());
     }
 
     /// A membership holding the stake tables for `FIRST_EPOCH` and the epoch after it.
