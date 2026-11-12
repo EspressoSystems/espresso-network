@@ -671,14 +671,9 @@ impl EpochCommittees {
             // or the epoch immediately succeeding the block header
             previous_epoch = EpochNumber::new(epoch.saturating_sub(1));
 
-            // we store the information from the previous epoch's in-memory committeee
-            // if the decided stake_table_hash is consistent with what we get
-            //
-            // in principle this is unnecessary and we could've stored these right away,
-            // without offsetting the epoch. but the intention is to catch L1 provider issues
-            // if there is a mismatch
-            //
-            // Checked before anything of `epoch` is put in memory.
+            // Guards the later store of the previous epoch's table: the decided hash must match
+            // the table in memory, which catches L1 provider issues. Runs before `epoch` is put
+            // in memory.
             let decided_hash = block_header.next_stake_table_hash();
             if let Some(previous_committee) = inner.epoch_committee(previous_epoch)
                 && decided_hash.is_some()
@@ -3314,13 +3309,38 @@ mod tests {
         Commitment::from_raw([7; 32])
     }
 
-    /// A mismatch with the held table of the epoch below panics.
+    /// A mismatch with the held table of the epoch below panics before the new epoch is put in
+    /// memory or any validator set is dropped.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    #[should_panic(expected = "unrecoverable")]
     async fn add_epoch_root_panics_on_hash_mismatch() {
         let (committees, coordinator) = mismatch_setup();
         let header = header_deciding(95, other_hash()).await;
+        {
+            let mut inner = committees.inner.write();
+            inner
+                .all_validators
+                .insert(EpochNumber::new(1), Default::default());
+            inner
+                .all_validators
+                .insert(EpochNumber::new(2), Default::default());
+        }
 
-        let _ = committees.add_epoch_root(header, &coordinator).await;
+        let task = tokio::spawn({
+            let committees = committees.clone();
+            async move { committees.add_epoch_root(header, &coordinator).await }
+        });
+        let err = task.await.expect_err("the hash mismatch panics");
+        assert!(err.is_panic(), "task failed without a panic: {err:?}");
+
+        let inner = committees.inner.read();
+        let epoch = inner
+            .epoch_committee(EpochNumber::new(3))
+            .expect("prefilled committee stays");
+        assert!(
+            epoch.header.is_none(),
+            "the mismatching root replaced the committee"
+        );
+        let held: Vec<_> = inner.all_validators.keys().copied().collect();
+        assert_eq!(held, [EpochNumber::new(1), EpochNumber::new(2)]);
     }
 }
