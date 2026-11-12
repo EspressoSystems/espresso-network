@@ -83,14 +83,15 @@ if [[ "${cherry_status}" -ne 0 ]]; then
 
   mapfile -d '' -t conflicted < <(git diff -z --name-only --diff-filter=U)
   for path in ${conflicted[@]+"${conflicted[@]}"}; do
-    # Git leaves other conflicts without markers too: a binary file keeps the target's version,
-    # and a file that both sides renamed is present under both names.
-    if [[ -f "${path}" ]] && ! grep -q -e '^<<<<<<< ' -- "${path}"; then
+    # Git leaves other conflicts without markers too: a binary file or a symlink keeps the
+    # target's version, and a file that both sides renamed is present under both names.
+    # -I: a binary file never counts as having markers.
+    if [[ -L "${path}" ]] || { [[ -f "${path}" ]] && ! grep -q -I -e '^<<<<<<< ' -- "${path}"; }; then
       trailers+=(--trailer "Backport-Unresolved: ${path}")
     fi
   done
   if [[ ${#conflicted[@]} -gt 0 ]]; then
-    git add -- "${conflicted[@]}"
+    git --literal-pathspecs add -- "${conflicted[@]}"
   fi
   # --allow-empty: removing the files above can leave nothing to commit.
   git commit --allow-empty -m "backport: cherry-pick #${pr_number} to ${target_branch}" \

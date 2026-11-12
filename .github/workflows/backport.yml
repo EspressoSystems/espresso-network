@@ -105,10 +105,13 @@ jobs:
             branch=$(gh pr view "$pr" --json headRefName -q .headRefName)
             git fetch origin "$branch"
             # Files scripts/backport-dispatch flagged because git left them without markers. Read
-            # them from its own commit only: after a clean cherry-pick the tip is the original
-            # commit, whose message can carry copied trailers.
+            # them only from its own commit, whose subject it writes exactly like this: after a
+            # clean cherry-pick the tip is the original commit, whose message can carry copied
+            # trailers.
+            spec=${branch#backport-}
+            dispatch_subject="backport: cherry-pick #${spec%%-to-*} to ${spec#*-to-}"
             flagged=""
-            if [[ "$(git log -1 --format=%s "origin/$branch")" == "backport: cherry-pick #"* ]]; then
+            if [[ "$(git log -1 --format=%s "origin/$branch")" == "$dispatch_subject" ]]; then
               flagged=$(git log -1 --format='%(trailers:key=Backport-Missing,key=Backport-Deleted,key=Backport-Unresolved)' "origin/$branch")
             fi
             if [ -n "$flagged" ]; then
