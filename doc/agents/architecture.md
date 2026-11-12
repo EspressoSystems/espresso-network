@@ -55,16 +55,18 @@ one epoch below the target, the `CatchupSeedFn` hook (`crates/espresso/node/src/
 seed at a time:
 
 1. Reads `finalizedState` (`F`, `blockCommRoot`) of the LC contract at the L1 finalized block; `E* = epoch(F)`. A target
-   below the first installed table is not seeded: the walk serves it.
+   below the second installed table is not seeded: its DRB needs `ST(target-1)` and `ST(target-2)`, so the walk serves
+   it.
 2. Fetches the header at `F` unverified and accepts it iff its height is `F` and its `block_comm_root` matches.
 3. `Request::HeaderProof { root: F, height }` proves `root(E*-6) ..= root(E*-1)` against it; `root(E*-6)` only supplies
-   a block time. The peer requests are bounded by 30 s.
+   a block time. The L1 read, the peer requests (30 s) and each install are bounded.
 4. Installs the tables above the held pair within `ST(E*-3) ..= ST(E*+1)`, each with a block reward computed from the
-   proven roots, each root bounded by the catchup timeout. A hash mismatch logs at ERROR, evicts what the seed
-   installed and errors; the catchup retries. The existing walk continues from `E*+1`; `drb_ready` supplies the
-   target's DRB.
+   proven roots, each root bounded by the catchup timeout. A stake table hash mismatch panics as in the walk; a timeout
+   or another error evicts what the seed installed and the catchup retries. The walk then runs from `E*+1` up to the
+   target (nothing for a target at or below `E*+1`); `drb_ready` supplies the target's DRB.
 5. Requests go over request-response. With `--state-peers`, they also go over HTTP after `--http-catchup-delay`, at once
-   before the protocol is up.
+   before the protocol is up; the state peers are asked in order and an answer that fails its check moves on to the
+   next.
 
 ## Consensus upgrades
 

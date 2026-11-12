@@ -718,17 +718,18 @@ impl EpochCommittees {
             // without offsetting the epoch. but the intention is to catch L1 provider issues
             // if there is a mismatch
             //
-            // Checked before anything of `epoch` is put in memory, so a mismatch installs nothing.
+            // Checked before anything of `epoch` is put in memory.
             let decided_hash = block_header.next_stake_table_hash();
             if let Some(previous_committee) = inner.epoch_committee(previous_epoch)
                 && decided_hash.is_some()
                 && decided_hash != previous_committee.stake_table_hash
             {
-                return Err(EpochCommitteesError::StakeTableHashMismatch {
-                    epoch,
-                    decided: decided_hash,
-                    held: previous_committee.stake_table_hash,
-                });
+                panic!(
+                    "The decided block header's `next_stake_table_hash` does not match the hash \
+                     of the stake table we have. This is an unrecoverable error likely due to \
+                     issues with your L1 RPC provider. Decided:\n\n{decided_hash:?}Actual:\n\n{:?}",
+                    previous_committee.stake_table_hash
+                );
             }
 
             if inner.epoch_committee(epoch).is_none() {
@@ -778,29 +779,18 @@ impl EpochCommittees {
         Ok(())
     }
 
-    /// `add_epoch_root` without the panic on a `next_stake_table_hash` mismatch, which is
-    /// `StakeTableHashMismatch` instead.
-    #[cfg(feature = "node")]
-    pub async fn install_epoch_root(
-        &self,
-        block_header: Header,
-        coordinator: &EpochMembershipCoordinator<SeqTypes>,
-    ) -> Result<(), EpochCommitteesError> {
-        let mut created = Vec::new();
-        self.install_root(block_header, PreviousRoot::Peers, coordinator, &mut created)
-            .await
-    }
-
-    /// Installs the epoch roots `roots`, ascending, as `install_epoch_root` does, for a seed: the
+    /// Installs the epoch roots `roots`, ascending, as `add_epoch_root` does, for a seed: the
     /// block reward of each table takes the timestamp of the root below it from the previous root
     /// of the batch, or from `preceding_root` for the first (`None` near genesis, where the assumed
     /// block time applies). A table without a reward is an error. Each root is bounded by the
     /// coordinator's catchup timeout, and `prune_epochs` runs once the batch succeeded.
     ///
     /// An error or a drop of the future evicts the in-memory committees and validator sets this call
-    /// created; epochs held before stay. Not rolled back: snapshots `prune_epochs` evicted,
-    /// `prune_cutoff`, and the epoch roots and stake tables already stored. A concurrent catchup may
-    /// have seen an evicted epoch as present; it fails and retries.
+    /// created; epochs held before stay. A stake table hash mismatch panics as in `add_epoch_root`.
+    /// Not rolled back: snapshots `prune_epochs` evicted, `prune_cutoff`, the epoch roots and stake
+    /// tables already stored, the `all_validators` entries dropped by `split_off` and the previous
+    /// epoch's set taken out of memory before `store_all_validators`. A concurrent catchup may have
+    /// seen an evicted epoch as present; it fails and retries.
     #[cfg(feature = "node")]
     pub async fn install_epoch_roots(
         &self,
@@ -808,16 +798,19 @@ impl EpochCommittees {
         roots: Vec<Header>,
         coordinator: &EpochMembershipCoordinator<SeqTypes>,
     ) -> Result<(), EpochCommitteesError> {
+        let Some(last) = roots.last() else {
+            return Ok(());
+        };
+        let newest =
+            EpochNumber::new(epoch_from_block_number(last.height(), *self.epoch_height) + 2);
         let mut created = EvictOnDrop {
             committees: self,
             epochs: Vec::new(),
         };
-        let epoch_height = *self.epoch_height;
         let mut previous = preceding_root;
-        let mut newest = None;
         for header in roots {
             let height = header.height();
-            let installed = tokio::time::timeout(
+            tokio::time::timeout(
                 coordinator.catchup_timeout(),
                 self.install_root(
                     header.clone(),
@@ -832,19 +825,10 @@ impl EpochCommittees {
                     "installing the epoch root at height {height} exceeded {:?}",
                     coordinator.catchup_timeout()
                 ))
-            })?;
-            if let Err(err @ EpochCommitteesError::StakeTableHashMismatch { .. }) = &installed {
-                error!("seed epoch root does not match the held stake table: {err}");
-            }
-            installed?;
-            newest = Some(EpochNumber::new(
-                epoch_from_block_number(height, epoch_height) + 2,
-            ));
+            })??;
             previous = Some(header);
         }
-        if let Some(newest) = newest {
-            self.inner.write().prune_epochs(newest);
-        }
+        self.inner.write().prune_epochs(newest);
         created.epochs.clear();
         Ok(())
     }
@@ -1205,14 +1189,13 @@ impl Membership<SeqTypes> for EpochCommittees {
         block_header: Header,
         coordinator: &EpochMembershipCoordinator<SeqTypes>,
     ) -> Result<(), Self::Error> {
-        match self.install_epoch_root(block_header, coordinator).await {
-            Err(EpochCommitteesError::StakeTableHashMismatch { decided, held, .. }) => panic!(
-                "The decided block header's `next_stake_table_hash` does not match the hash of \
-                 the stake table we have. This is an unrecoverable error likely due to issues \
-                 with your L1 RPC provider. Decided:\n\n{decided:?}Actual:\n\n{held:?}"
-            ),
-            result => result,
-        }
+        self.install_root(
+            block_header,
+            PreviousRoot::Peers,
+            coordinator,
+            &mut Vec::new(),
+        )
+        .await
     }
 
     async fn get_epoch_root(
@@ -1390,16 +1373,6 @@ pub enum EpochCommitteesError {
 
     #[error("reward calculation error: {0}")]
     Reward(#[source] anyhow::Error),
-
-    #[error(
-        "epoch root of epoch {epoch}: next_stake_table_hash {decided:?} does not match the held \
-         table's {held:?}"
-    )]
-    StakeTableHashMismatch {
-        epoch: EpochNumber,
-        decided: Option<StakeTableHash>,
-        held: Option<StakeTableHash>,
-    },
 }
 
 /// Where the block reward of an installed table takes the timestamp of the root below its header.
@@ -1528,9 +1501,11 @@ impl Inner {
     /// Evict snapshots more than [`RECENT_STAKE_TABLES_LIMIT`] epochs below
     /// `added`.
     ///
-    /// The cutoff only ever moves forward: `add_epoch_root` also runs for old
+    /// `prune_cutoff` only ever moves forward: `add_epoch_root` also runs for old
     /// epochs during catchup, and a lagging insert must neither evict newer
     /// state nor evict itself before its readers had a chance to observe it.
+    /// An insert below `prune_cutoff`, a walk below a seeded window, evicts
+    /// below its own cutoff and leaves everything above it.
     ///
     /// `da_committees` is exempt: it holds one entry per configured DA
     /// committee (seeded from config at startup and on upgrade certificates),
@@ -1539,10 +1514,7 @@ impl Inner {
     #[cfg_attr(not(feature = "node"), allow(dead_code))]
     fn prune_epochs(&mut self, added: EpochNumber) {
         let cutoff = EpochNumber::new(added.saturating_sub(RECENT_STAKE_TABLES_LIMIT));
-        if cutoff <= self.prune_cutoff {
-            return;
-        }
-        self.prune_cutoff = cutoff;
+        self.prune_cutoff = self.prune_cutoff.max(cutoff);
         // The snapshots for `first_epoch` and `first_epoch + 1` (seeded by
         // `new`) are never evicted:
         let keep = self.first_epoch + 1u64;
@@ -1727,7 +1699,7 @@ mod tests {
         traits::{BlockPayload, block_contents::BlockHeader},
     };
     use rstest::rstest;
-    use tokio::{task::JoinSet, time::Duration};
+    use tokio::{sync::Notify, task::JoinSet, time::Duration};
 
     use super::*;
     use crate::{NodeState, Payload, Transaction, traits::MembershipPersistence};
@@ -3462,6 +3434,17 @@ mod tests {
         hash: StakeTableHash,
         block_reward: Option<RewardAmount>,
     ) {
+        put_committee_with_header(committees, epoch, hash, block_reward, None);
+    }
+
+    /// Puts a committee for `epoch` carrying `block_reward`, `hash` and the epoch root `header`.
+    fn put_committee_with_header(
+        committees: &EpochCommittees,
+        epoch: u64,
+        hash: StakeTableHash,
+        block_reward: Option<RewardAmount>,
+        header: Option<Header>,
+    ) {
         let mut inner = committees.inner.write();
         let template = inner
             .epoch_committee(EpochNumber::genesis())
@@ -3470,7 +3453,7 @@ mod tests {
         let prefilled = EpochCommittee {
             block_reward,
             stake_table_hash: Some(hash),
-            header: None,
+            header,
             eligible_leaders: template.eligible_leaders.clone(),
             stake_table: template.stake_table.clone(),
             validators: template.validators.clone(),
@@ -3513,42 +3496,14 @@ mod tests {
         Commitment::from_raw([7; 32])
     }
 
-    /// A mismatch with the held table of the epoch below is an error and installs nothing.
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn install_epoch_root_hash_mismatch_fails() {
-        let (committees, coordinator) = mismatch_setup();
-        let header = header_deciding(95, other_hash()).await;
-
-        let err = committees
-            .install_epoch_root(header, &coordinator)
-            .await
-            .unwrap_err();
-
-        assert!(
-            matches!(
-                err,
-                EpochCommitteesError::StakeTableHashMismatch { epoch, .. }
-                    if epoch == EpochNumber::new(3)
-            ),
-            "{err:#}"
-        );
-        let inner = committees.inner.read();
-        let committee = inner.epoch_committee(EpochNumber::new(3)).unwrap();
-        assert!(
-            committee.header.is_none(),
-            "nothing of epoch 3 is installed"
-        );
-        assert!(!inner.all_validators.contains_key(&EpochNumber::new(3)));
-    }
-
     /// A matching hash installs the root.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn install_epoch_root_matching_hash_ok() {
+    async fn add_epoch_root_matching_hash_ok() {
         let (committees, coordinator) = mismatch_setup();
         let header = header_deciding(95, StakeTableState::default().commit()).await;
 
         committees
-            .install_epoch_root(header, &coordinator)
+            .add_epoch_root(header, &coordinator)
             .await
             .unwrap();
 
@@ -3557,7 +3512,7 @@ mod tests {
         assert!(committee.header.is_some());
     }
 
-    /// `add_epoch_root` keeps its panic on a mismatch.
+    /// A mismatch with the held table of the epoch below panics.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     #[should_panic(expected = "unrecoverable")]
     async fn add_epoch_root_panics_on_hash_mismatch() {
@@ -3598,7 +3553,22 @@ mod tests {
         assert!(!inner.all_validators.contains_key(&EpochNumber::new(4)));
     }
 
-    /// A mismatch on the second root errors and the epochs held before stay, whether or not the
+    /// Runs `install_epoch_roots` on its own task and asserts that it panics.
+    async fn install_epoch_roots_panics(
+        committees: &EpochCommittees,
+        coordinator: &EpochMembershipCoordinator<SeqTypes>,
+        roots: Vec<Header>,
+    ) {
+        let (committees, coordinator) = (committees.clone(), coordinator.clone());
+        let task = tokio::spawn(async move {
+            committees
+                .install_epoch_roots(None, roots, &coordinator)
+                .await
+        });
+        assert!(task.await.unwrap_err().is_panic());
+    }
+
+    /// A mismatch on the second root panics and the epochs held before stay, whether or not the
     /// first root was already installed.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn install_epoch_roots_mismatch_keeps_held_epochs() {
@@ -3608,19 +3578,8 @@ mod tests {
         // Epoch 4's previous table (epoch 3) holds the default hash, not this one.
         let mismatching = header_deciding(195, other_hash()).await;
 
-        let err = committees
-            .install_epoch_roots(None, vec![matching, mismatching], &coordinator)
-            .await
-            .unwrap_err();
+        install_epoch_roots_panics(&committees, &coordinator, vec![matching, mismatching]).await;
 
-        assert!(
-            matches!(
-                err,
-                EpochCommitteesError::StakeTableHashMismatch { epoch, .. }
-                    if epoch == EpochNumber::new(4)
-            ),
-            "{err:#}"
-        );
         let inner = committees.inner.read();
         for epoch in [2, 3, 4] {
             assert!(inner.epoch_committee(EpochNumber::new(epoch)).is_some());
@@ -3664,15 +3623,46 @@ mod tests {
         }
     }
 
+    /// The roots of a seed window `first ..= last`: the root below the window and the root that
+    /// defines each table.
+    async fn seed_window_roots(first: u64, last: u64) -> (Header, Vec<Header>) {
+        let preceding = timed_root(100 * (first - 3) - 5).await;
+        let mut roots = Vec::new();
+        for epoch in first..=last {
+            roots.push(timed_root(100 * (epoch - 2) - 5).await);
+        }
+        (preceding, roots)
+    }
+
+    /// A walk below a seeded window keeps a bounded number of snapshots in memory.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn walk_below_seeded_window_bounds_memory() {
+        let (committees, coordinator) = seed_window_setup(60, 64).await;
+        let (preceding, roots) = seed_window_roots(60, 64).await;
+        committees
+            .install_epoch_roots(Some(preceding), roots, &coordinator)
+            .await
+            .unwrap();
+
+        put_prefilled(&committees, 2, StakeTableState::default().commit());
+        for epoch in 3..=40 {
+            put_prefilled(&committees, epoch, StakeTableState::default().commit());
+            let root =
+                header_deciding(100 * (epoch - 2) - 5, StakeTableState::default().commit()).await;
+            committees.add_epoch_root(root, &coordinator).await.unwrap();
+        }
+
+        let held = committees.inner.read().snapshots.len();
+        // The walked window, the seeded window and the first two epochs.
+        let bound = RECENT_STAKE_TABLES_LIMIT as usize + 1 + 5 + 2;
+        assert!(held <= bound, "{held} snapshots held, bound {bound}");
+    }
+
     /// Every table of a seed window far from genesis has a block reward.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn install_epoch_roots_far_from_genesis_sets_rewards() {
         let (committees, coordinator) = seed_window_setup(20, 24).await;
-        let preceding = timed_root(100 * 17 - 5).await;
-        let mut roots = Vec::new();
-        for epoch in 20..=24 {
-            roots.push(timed_root(100 * (epoch - 2) - 5).await);
-        }
+        let (preceding, roots) = seed_window_roots(20, 24).await;
 
         committees
             .install_epoch_roots(Some(preceding), roots, &coordinator)
@@ -3689,10 +3679,11 @@ mod tests {
     }
 
     /// Persistence of a seed test: `events` are the complete stake table events, and `store_stake`
-    /// never returns.
+    /// signals `stalled`, then never returns.
     #[derive(Debug)]
     struct StalledStakeStore {
         events: Vec<(crate::v0_3::EventKey, crate::v0_3::StakeTableEvent)>,
+        stalled: Arc<Notify>,
     }
 
     #[async_trait::async_trait]
@@ -3734,6 +3725,7 @@ mod tests {
             _block_reward: Option<RewardAmount>,
             _stake_table_hash: Option<StakeTableHash>,
         ) -> anyhow::Result<()> {
+            self.stalled.notify_one();
             std::future::pending().await
         }
 
@@ -3808,10 +3800,7 @@ mod tests {
         // Epoch 32's previous table (epoch 31) holds the default hash, not this one.
         let mismatching = header_deciding(2995, other_hash()).await;
 
-        committees
-            .install_epoch_roots(None, vec![far, mismatching], &coordinator)
-            .await
-            .unwrap_err();
+        install_epoch_roots_panics(&committees, &coordinator, vec![far, mismatching]).await;
 
         let inner = committees.inner.read();
         for epoch in [2, 3, 4, 31, 32] {
@@ -3819,9 +3808,19 @@ mod tests {
         }
     }
 
-    /// A dropped install evicts the epoch it inserted, also when it stopped after the insert.
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn install_epoch_roots_dropped_mid_install_evicts_created_epoch() {
+    /// A seed of epoch 21 whose `store_stake` stalls after the insert: committees holding epoch 20,
+    /// a coordinator with `catchup_timeout`, the root of epoch 21 with the root below it, and the
+    /// signal of the stalled store.
+    async fn stalled_install_setup(
+        catchup_timeout: Duration,
+    ) -> (
+        EpochCommittees,
+        EpochMembershipCoordinator<SeqTypes>,
+        Header,
+        Header,
+        Arc<Notify>,
+    ) {
+        let stalled = Arc::new(Notify::new());
         let validator = super::super::stake_table::testing::TestValidator::random();
         let events = vec![
             (
@@ -3841,7 +3840,10 @@ mod tests {
         ];
         let fetcher = Fetcher::new(
             Arc::new(crate::mock::MockStateCatchup::default()),
-            Arc::new(AsyncMutex::new(StalledStakeStore { events })),
+            Arc::new(AsyncMutex::new(StalledStakeStore {
+                events,
+                stalled: Arc::clone(&stalled),
+            })),
             crate::L1Client::new(vec!["http://localhost:3331".parse().unwrap()])
                 .expect("Failed to create L1 client"),
             crate::ChainConfig {
@@ -3856,7 +3858,8 @@ mod tests {
             committees.clone(),
             *committees.epoch_height(),
             &hotshot_example_types::storage_types::TestStorage::default(),
-        );
+        )
+        .with_catchup_timeout(catchup_timeout);
         let mut root = timed_root(100 * 19 - 5).await;
         *root.l1_finalized_mut() = Some(crate::L1BlockInfo::default());
         let Header::V4(fields) = &mut root else {
@@ -3868,18 +3871,104 @@ mod tests {
         }
         .into();
         let preceding = timed_root(100 * 18 - 5).await;
+        (committees, coordinator, root, preceding, stalled)
+    }
 
-        let result = tokio::time::timeout(
-            Duration::from_millis(500),
-            committees.install_epoch_roots(Some(preceding), vec![root], &coordinator),
-        )
-        .await;
+    /// A dropped install evicts the epoch it inserted: the drop comes after the stalled store
+    /// signaled that the insert happened.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn install_epoch_roots_dropped_mid_install_evicts_created_epoch() {
+        let (committees, coordinator, root, preceding, stalled) =
+            stalled_install_setup(Duration::from_secs(60)).await;
+        let mut install =
+            Box::pin(committees.install_epoch_roots(Some(preceding), vec![root], &coordinator));
 
+        tokio::select! {
+            result = &mut install => panic!("the install is expected to stall: {result:?}"),
+            () = stalled.notified() => {},
+        }
+        assert!(committees.snapshot(EpochNumber::new(21)).is_some());
+        drop(install);
+
+        assert!(committees.snapshot(EpochNumber::new(21)).is_none());
+        assert!(committees.snapshot(EpochNumber::new(20)).is_some());
+    }
+
+    /// A root that exceeds the catchup timeout is an error and its epoch is evicted.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn install_epoch_roots_timeout_fails_and_evicts() {
+        let (committees, coordinator, root, preceding, stalled) =
+            stalled_install_setup(Duration::from_millis(500)).await;
+
+        let err = committees
+            .install_epoch_roots(Some(preceding), vec![root], &coordinator)
+            .await
+            .unwrap_err();
+
+        stalled.notified().await;
         assert!(
-            result.is_err(),
-            "the install is expected to stall: {result:?}"
+            matches!(&err, EpochCommitteesError::Message(message) if message.contains("exceeded")),
+            "{err:#}"
         );
         assert!(committees.snapshot(EpochNumber::new(21)).is_none());
         assert!(committees.snapshot(EpochNumber::new(20)).is_some());
+    }
+
+    /// A successful batch prunes once, after its last root: old epochs go, the window stays.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn install_epoch_roots_success_prunes() {
+        let (committees, coordinator) = seed_window_setup(60, 64).await;
+        put_prefilled(&committees, 5, StakeTableState::default().commit());
+        let (preceding, roots) = seed_window_roots(60, 64).await;
+
+        committees
+            .install_epoch_roots(Some(preceding), roots, &coordinator)
+            .await
+            .unwrap();
+
+        let inner = committees.inner.read();
+        assert_eq!(
+            inner.prune_cutoff,
+            EpochNumber::new(64 - RECENT_STAKE_TABLES_LIMIT)
+        );
+        assert!(inner.epoch_committee(EpochNumber::new(5)).is_none());
+        for epoch in 60..=64 {
+            assert!(inner.epoch_committee(EpochNumber::new(epoch)).is_some());
+        }
+    }
+
+    /// The block reward of a seeded table equals the one the walk computes for it.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn seeded_block_reward_equals_walked_block_reward() {
+        let epoch = 30;
+        let (preceding, mut roots) = seed_window_roots(epoch, epoch).await;
+        let root = roots.remove(0);
+
+        let (walked, walked_coordinator) = seed_window_setup(epoch, epoch).await;
+        put_prefilled(&walked, epoch - 3, StakeTableState::default().commit());
+        put_committee_with_header(
+            &walked,
+            epoch - 1,
+            StakeTableState::default().commit(),
+            Some(RewardAmount::default()),
+            Some(preceding.clone()),
+        );
+        walked
+            .add_epoch_root(root.clone(), &walked_coordinator)
+            .await
+            .unwrap();
+
+        let (seeded, seeded_coordinator) = seed_window_setup(epoch, epoch).await;
+        seeded
+            .install_epoch_roots(Some(preceding), vec![root], &seeded_coordinator)
+            .await
+            .unwrap();
+
+        let walked_reward = walked.epoch_block_reward(EpochNumber::new(epoch));
+        assert!(walked_reward.is_some());
+        assert_eq!(
+            seeded.epoch_block_reward(EpochNumber::new(epoch)),
+            walked_reward
+        );
     }
 }

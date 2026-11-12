@@ -21,7 +21,7 @@ use hotshot_types::{
     epoch_membership::{CatchupSeedFn, EpochMembershipCoordinator},
 };
 use light_client::{
-    client::{Client, FallbackClient, QueryServiceClient},
+    client::{Client, QueryServiceClient},
     consensus::header::HeaderProof,
 };
 use url::Url;
@@ -52,23 +52,22 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 /// - I7: every table the seed installs has a block reward.
 pub struct LcContractSeed<P: SequencerPersistence> {
     lc_contract: LcContractReader,
-    sources: FallbackSeedSource<RequestResponseProtocol<P>, FallbackClient<QueryServiceClient>>,
+    sources: FallbackSeedSource<RequestResponseProtocol<P>, StatePeerSources<QueryServiceClient>>,
 }
 
 /// Late-bound request-response protocol of a seed.
 pub(crate) type RequestsCell<P> = Arc<OnceLock<Weak<RequestResponseProtocol<P>>>>;
 
 impl<P: SequencerPersistence> LcContractSeed<P> {
-    /// A seed over `node_state`. `state_peers` answer over HTTP after `http_delay`; none, no HTTP.
+    /// A seed over `lc_contract`. `state_peers` answer over HTTP after `http_delay`; none, no HTTP.
     pub fn new(lc_contract: LcContractReader, state_peers: Vec<Url>, http_delay: Duration) -> Self {
         let fallback = (!state_peers.is_empty()).then(|| {
-            FallbackClient::new(
+            StatePeerSources(
                 state_peers
                     .into_iter()
                     .map(QueryServiceClient::new)
                     .collect(),
             )
-            .expect("FallbackClient::new fails only on an unset builder field; clients is set")
         });
         Self {
             lc_contract,
@@ -86,7 +85,8 @@ impl<P: SequencerPersistence> LcContractSeed<P> {
     }
 
     /// One seed attempt for `catchup(target)` with held pair top `start`: the walk start, `start`
-    /// when not needed, `E* + 1` when seeded. Only the peer requests are bounded.
+    /// when not needed, `E* + 1` when seeded. The L1 read, the peer requests and each install are
+    /// bounded.
     pub async fn run(
         &self,
         target: EpochNumber,
@@ -109,8 +109,7 @@ impl<P: SequencerPersistence> LcContractSeed<P> {
                 "lc contract seed"
             );
         };
-        let first = lc.first_installed_epoch(epoch_height, start);
-        match seed_decision(first, seed_epoch, target, start) {
+        match seed_decision(&lc, epoch_height, target, start) {
             SeedDecision::NotNeeded => {
                 log("not needed");
                 return Ok(start);
@@ -150,21 +149,24 @@ impl<P: SequencerPersistence> LcContractSeed<P> {
 /// What a seed attempt does for `catchup(target)` with held pair top `start`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SeedDecision {
-    /// The seed epoch is at most `start + 1`, or the target is below the first installed table:
-    /// the walk runs unchanged.
+    /// The seed epoch is at most `start + 1`, or the seeded window cannot serve the target: the
+    /// walk runs unchanged.
     NotNeeded,
     /// Install the window of the seed epoch.
     Seed,
 }
 
-/// `NotNeeded` if `seed_epoch <= start + 1` or `target < first_installed`, else `Seed`. Pure.
+/// `NotNeeded` if `seed_epoch <= start + 1` or `target < first_installed + 2`, else `Seed`. The DRB
+/// of the target needs `ST(target-1)` and `ST(target-2)`, which the window holds from
+/// `first_installed + 2`; below that the walk serves the target. Pure.
 fn seed_decision(
-    first_installed: EpochNumber,
-    seed_epoch: EpochNumber,
+    lc: &LcContractFinalizedState,
+    epoch_height: u64,
     target: EpochNumber,
     start: EpochNumber,
 ) -> SeedDecision {
-    if seed_epoch <= start + 1 || target < first_installed {
+    let first_installed = lc.first_installed_epoch(epoch_height, start);
+    if lc.seed_epoch(epoch_height) <= start + 1 || target < first_installed + 2 {
         SeedDecision::NotNeeded
     } else {
         SeedDecision::Seed
@@ -309,8 +311,50 @@ impl<P: SequencerPersistence> LcContractSeedSource for RequestResponseProtocol<P
     }
 }
 
-/// Any light-client `Client`, in the node the `--state-peers`. A rejected answer fails the HTTP
-/// side of that request; the next state peer is not asked.
+/// The state peers, asked in order for each request: the first answer `check` accepts wins; an error
+/// or a rejection moves on to the next peer, and all failing returns the last error. Spawns nothing.
+pub(crate) struct StatePeerSources<S>(Vec<S>);
+
+impl<S: LcContractSeedSource> LcContractSeedSource for StatePeerSources<S> {
+    async fn header_at(
+        &self,
+        height: u64,
+        check: impl Fn(&Header) -> anyhow::Result<()> + Clone + Send + Sync + 'static,
+    ) -> anyhow::Result<Header> {
+        let mut last_err = anyhow!("no state peers");
+        for peer in &self.0 {
+            match peer.header_at(height, check.clone()).await {
+                Ok(header) => return Ok(header),
+                Err(err) => {
+                    tracing::debug!("state peer header failed: {err:#}");
+                    last_err = err;
+                },
+            }
+        }
+        Err(last_err)
+    }
+
+    async fn proven_header(
+        &self,
+        root: u64,
+        height: u64,
+        check: impl Fn(HeaderProof) -> anyhow::Result<Header> + Clone + Send + Sync + 'static,
+    ) -> anyhow::Result<Header> {
+        let mut last_err = anyhow!("no state peers");
+        for peer in &self.0 {
+            match peer.proven_header(root, height, check.clone()).await {
+                Ok(header) => return Ok(header),
+                Err(err) => {
+                    tracing::debug!("state peer header proof failed: {err:#}");
+                    last_err = err;
+                },
+            }
+        }
+        Err(last_err)
+    }
+}
+
+/// Any light-client `Client`: one state peer.
 impl<C: Client> LcContractSeedSource for C {
     async fn header_at(
         &self,
@@ -521,9 +565,17 @@ mod tests {
         let client = TestClient::with_epoch_height(EPOCH_HEIGHT);
         let lc = finalized_state(&header(&client, 62).await);
 
-        let err = fetch_seed_roots(&ForgingSource(client), &lc, EPOCH_HEIGHT, epoch(2))
-            .await
-            .unwrap_err();
+        let err = fetch_seed_roots(
+            &ForgingSource {
+                client,
+                forging: true,
+            },
+            &lc,
+            EPOCH_HEIGHT,
+            epoch(2),
+        )
+        .await
+        .unwrap_err();
 
         assert!(
             format!("{err:#}").contains("block commitment root"),
@@ -621,8 +673,12 @@ mod tests {
         }
     }
 
-    /// Serves the headers of `client` with a changed block Merkle root where it is asked for one.
-    struct ForgingSource(TestClient);
+    /// Serves the headers of `client`; with `forging`, with a changed block Merkle root where it is
+    /// asked for one.
+    struct ForgingSource {
+        client: TestClient,
+        forging: bool,
+    }
 
     impl LcContractSeedSource for ForgingSource {
         async fn header_at(
@@ -630,12 +686,14 @@ mod tests {
             height: u64,
             check: impl Fn(&Header) -> anyhow::Result<()> + Clone + Send + Sync + 'static,
         ) -> anyhow::Result<Header> {
-            let mut forged = self.0.header_at(height, accept).await?;
-            forged
-                .block_merkle_tree_root_mut()
-                .clone_from(&header(&self.0, 61).await.block_merkle_tree_root());
-            check(&forged)?;
-            Ok(forged)
+            let mut served = self.client.header_at(height, accept).await?;
+            if self.forging {
+                served
+                    .block_merkle_tree_root_mut()
+                    .clone_from(&header(&self.client, 61).await.block_merkle_tree_root());
+            }
+            check(&served)?;
+            Ok(served)
         }
 
         async fn proven_header(
@@ -644,8 +702,56 @@ mod tests {
             height: u64,
             check: impl Fn(HeaderProof) -> anyhow::Result<Header> + Clone + Send + Sync + 'static,
         ) -> anyhow::Result<Header> {
-            self.0.proven_header(root, height, check).await
+            self.client.proven_header(root, height, check).await
         }
+    }
+
+    /// The next state peer is asked when an answer is rejected.
+    #[tokio::test]
+    async fn state_peers_skip_rejected_answer_ok() {
+        let client = TestClient::with_epoch_height(EPOCH_HEIGHT);
+        let lc = finalized_state(&header(&client, 62).await);
+        let peers = StatePeerSources(vec![
+            ForgingSource {
+                client: client.clone(),
+                forging: true,
+            },
+            ForgingSource {
+                client,
+                forging: false,
+            },
+        ]);
+
+        let served = peers
+            .header_at(62, move |header: &Header| lc.verify_header(header))
+            .await
+            .unwrap();
+
+        assert_eq!(served.height(), 62);
+    }
+
+    #[tokio::test]
+    async fn state_peers_all_rejecting_fails() {
+        let client = TestClient::with_epoch_height(EPOCH_HEIGHT);
+        let lc = finalized_state(&header(&client, 62).await);
+        let peers = StatePeerSources(
+            (0..2)
+                .map(|_| ForgingSource {
+                    client: client.clone(),
+                    forging: true,
+                })
+                .collect(),
+        );
+
+        let err = peers
+            .header_at(62, move |header: &Header| lc.verify_header(header))
+            .await
+            .unwrap_err();
+
+        assert!(
+            format!("{err:#}").contains("block commitment root"),
+            "{err:#}"
+        );
     }
 
     /// A `FallbackSeedSource` with its primary kept alive for the test.
@@ -802,32 +908,34 @@ mod tests {
 
     #[rstest]
     // The seed epoch is at most `start + 1`.
-    #[case(4, 4, 9, 3, SeedDecision::NotNeeded)]
-    #[case(3, 3, 3, 2, SeedDecision::NotNeeded)]
-    // Below the first installed table: the walk serves it.
-    #[case(7, 10, 6, 2, SeedDecision::NotNeeded)]
-    // At or above it, also below the seed epoch.
-    #[case(7, 10, 7, 2, SeedDecision::Seed)]
-    #[case(7, 10, 9, 2, SeedDecision::Seed)]
-    #[case(7, 10, 10, 2, SeedDecision::Seed)]
-    #[case(7, 10, 15, 2, SeedDecision::Seed)]
-    // The held pair is the seeded genesis pair.
-    #[case(3, 6, 3, 2, SeedDecision::Seed)]
-    #[case(3, 4, 4, 2, SeedDecision::Seed)]
+    #[case(4, 9, 3, SeedDecision::NotNeeded)]
+    #[case(3, 3, 2, SeedDecision::NotNeeded)]
+    // The window is `ST(7) ..= ST(11)`: its two lowest tables lack `ST(target-2)`.
+    #[case(10, 6, 2, SeedDecision::NotNeeded)]
+    #[case(10, 7, 2, SeedDecision::NotNeeded)]
+    #[case(10, 8, 2, SeedDecision::NotNeeded)]
+    #[case(10, 9, 2, SeedDecision::Seed)]
+    #[case(10, 10, 2, SeedDecision::Seed)]
+    #[case(10, 15, 2, SeedDecision::Seed)]
+    // The held pair is the seeded genesis pair: the window is `ST(3) ..= ST(7)`.
+    #[case(6, 4, 2, SeedDecision::NotNeeded)]
+    #[case(6, 5, 2, SeedDecision::Seed)]
+    #[case(4, 4, 2, SeedDecision::NotNeeded)]
+    #[case(4, 5, 2, SeedDecision::Seed)]
     fn seed_decision_cases(
-        #[case] first_installed: u64,
         #[case] seed_epoch: u64,
         #[case] target: u64,
         #[case] start: u64,
         #[case] expected: SeedDecision,
     ) {
+        // The last block of `seed_epoch`.
+        let lc = LcContractFinalizedState {
+            height: seed_epoch * EPOCH_HEIGHT,
+            block_comm_root: Default::default(),
+        };
+
         assert_eq!(
-            seed_decision(
-                epoch(first_installed),
-                epoch(seed_epoch),
-                epoch(target),
-                epoch(start)
-            ),
+            seed_decision(&lc, EPOCH_HEIGHT, epoch(target), epoch(start)),
             expected
         );
     }

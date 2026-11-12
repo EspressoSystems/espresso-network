@@ -90,9 +90,8 @@ pub struct SequencerContext<P: SequencerPersistence> {
     #[derivative(Debug = "ignore")]
     persistence: Arc<P>,
 
-    /// The request-response protocol
+    /// The request-response protocol; owns it for the catchup seed, which holds it weakly.
     #[derivative(Debug = "ignore")]
-    #[allow(dead_code)]
     pub request_response_protocol: Arc<RequestResponseProtocol<P>>,
 
     /// Light client state signatures produced by the state signer task.
