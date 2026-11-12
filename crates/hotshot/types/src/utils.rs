@@ -12,7 +12,7 @@ use std::{
     sync::Arc,
 };
 
-use anyhow::{anyhow, ensure};
+use anyhow::anyhow;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use bincode::{
     DefaultOptions, Options,
@@ -104,32 +104,34 @@ pub type StateAndDelta<TYPES> = (
     Option<Arc<<<TYPES as NodeType>::ValidatedState as ValidatedState<TYPES>>::Delta>>,
 );
 
-/// A stake table this node does not hold yet.
-///
-/// Unlike every other leaf chain verification error, this one is about this node, not about the
-/// chain: looking the table up starts its catchup, so verifying again later can succeed.
+/// Why a leaf chain did not verify.
 #[derive(Debug, thiserror::Error)]
-#[error("no stake table available for epoch {0}")]
-pub struct StakeTableUnavailable(pub EpochNumber);
+pub enum LeafChainError {
+    /// This node does not hold the stake table of this epoch yet.
+    ///
+    /// Unlike [`Self::Invalid`], this is about this node, not about the chain: looking the table
+    /// up starts its catchup, so verifying again later can succeed.
+    #[error("no stake table available for epoch {0}")]
+    StakeTableUnavailable(EpochNumber),
+    /// The chain does not prove the leaf.
+    #[error(transparent)]
+    Invalid(#[from] anyhow::Error),
+}
 
 /// The stake table that verifies certificates of `epoch`.
-///
-/// Fails with a [`StakeTableUnavailable`] context, found by `downcast_ref`, when this node does
-/// not hold the table yet.
 pub fn certifying_stake_table<T: NodeType>(
     coordinator: &EpochMembershipCoordinator<T>,
     epoch: EpochNumber,
-) -> anyhow::Result<EpochMembership<T>> {
+) -> Result<EpochMembership<T>, LeafChainError> {
     coordinator
         .stake_table_for_epoch(Some(epoch))
         .map_err(|err| {
-            let err = anyhow!("{err:?}");
             if epoch < coordinator.membership().first_epoch() {
-                err.context(format!(
-                    "no stake table for epoch {epoch}, before the first epoch"
+                LeafChainError::Invalid(anyhow!(
+                    "no stake table for epoch {epoch}, before the first epoch: {err:?}"
                 ))
             } else {
-                err.context(StakeTableUnavailable(epoch))
+                LeafChainError::StakeTableUnavailable(epoch)
             }
         })
 }
@@ -139,46 +141,55 @@ pub async fn verify_leaf_chain<T: NodeType>(
     coordinator: &EpochMembershipCoordinator<T>,
     expected_height: u64,
     upgrade_lock: &UpgradeLock<T>,
-) -> anyhow::Result<Leaf2<T>> {
+) -> Result<Leaf2<T>, LeafChainError> {
     let epoch_height = *coordinator.epoch_height();
     let first_epoch = coordinator.membership().first_epoch();
     // Derive each QC's epoch from the height of the leaf it certifies; trusting
     // the epoch claimed in the QC would let a stale epoch's quorum pick the
     // stake table that verifies its own signatures.
-    let validate_qc = |qc: &QuorumCertificate2<T>, certified_height: u64| -> anyhow::Result<()> {
+    let validate_qc = |qc: &QuorumCertificate2<T>,
+                       certified_height: u64|
+     -> Result<(), LeafChainError> {
         let epoch = EpochNumber::new(epoch_from_block_number(certified_height, epoch_height));
         let membership = match qc.data.epoch() {
             // QCs formed before epochs were enabled carry no epoch. Epochs start part way
             // through the first epoch, which runs on the genesis stake table like the
             // non-epoch chain before it, so no later height may be certified this way.
             None => {
-                ensure!(
-                    epoch <= first_epoch,
-                    "QC claims no epoch but certifies the leaf at height {certified_height} in \
-                     epoch {epoch}, after the first epoch {first_epoch}"
-                );
+                if epoch > first_epoch {
+                    return Err(anyhow!(
+                        "QC claims no epoch but certifies the leaf at height {certified_height} \
+                         in epoch {epoch}, after the first epoch {first_epoch}"
+                    )
+                    .into());
+                }
                 coordinator
                     .stake_table_for_epoch(None)
                     .map_err(|err| anyhow!("no stake table available for epoch {epoch}: {err:?}"))?
             },
             Some(claimed) => {
-                ensure!(
-                    claimed == epoch,
-                    "QC claims epoch {claimed} but certifies the leaf at height \
-                     {certified_height} in epoch {epoch}"
-                );
+                if claimed != epoch {
+                    return Err(anyhow!(
+                        "QC claims epoch {claimed} but certifies the leaf at height \
+                         {certified_height} in epoch {epoch}"
+                    )
+                    .into());
+                }
                 certifying_stake_table(coordinator, epoch)?
             },
         };
-        if let Some(block_number) = qc.data.block_number {
-            ensure!(
-                block_number == certified_height,
+        if let Some(block_number) = qc.data.block_number
+            && block_number != certified_height
+        {
+            return Err(anyhow!(
                 "QC claims block number {block_number} but certifies the leaf at height \
                  {certified_height}"
-            );
+            )
+            .into());
         }
         let entries = StakeTableEntries::<T>::from_iter(membership.stake_table()).0;
-        qc.is_valid_cert(&entries, membership.success_threshold(), upgrade_lock)?;
+        qc.is_valid_cert(&entries, membership.success_threshold(), upgrade_lock)
+            .map_err(anyhow::Error::from)?;
         Ok(())
     };
 
@@ -189,7 +200,7 @@ pub async fn verify_leaf_chain<T: NodeType>(
 
     // Check we actually have a chain long enough for deciding
     if leaf_chain.len() < 3 {
-        return Err(anyhow!("Leaf chain is not long enough for a decide"));
+        return Err(anyhow!("Leaf chain is not long enough for a decide").into());
     }
 
     let newest_leaf = leaf_chain.first().unwrap();
@@ -200,32 +211,36 @@ pub async fn verify_leaf_chain<T: NodeType>(
     if newest_leaf.justify_qc().view_number() != parent.view_number()
         || parent.justify_qc().view_number() != grand_parent.view_number()
     {
-        return Err(anyhow!("Leaf views do not chain"));
+        return Err(anyhow!("Leaf views do not chain").into());
     }
     if newest_leaf.justify_qc().data.leaf_commit != parent.commit()
         || parent.justify_qc().data().leaf_commit != grand_parent.commit()
     {
-        return Err(anyhow!("Leaf commits do not chain"));
+        return Err(anyhow!("Leaf commits do not chain").into());
     }
     if parent.view_number() != grand_parent.view_number() + 1 {
-        return Err(anyhow::anyhow!(
-            "Decide rule failed, parent does not directly extend grandparent"
-        ));
+        return Err(
+            anyhow!("Decide rule failed, parent does not directly extend grandparent").into(),
+        );
     }
 
     // Verify the root is in the chain of decided leaves
     validate_qc(newest_leaf.justify_qc(), parent.height())?;
     let mut last_leaf = parent;
     for leaf in leaf_chain.iter().skip(2) {
-        ensure!(last_leaf.justify_qc().view_number() == leaf.view_number());
-        ensure!(last_leaf.justify_qc().data().leaf_commit == leaf.commit());
+        if last_leaf.justify_qc().view_number() != leaf.view_number() {
+            return Err(anyhow!("Leaf views do not chain to the requested leaf").into());
+        }
+        if last_leaf.justify_qc().data().leaf_commit != leaf.commit() {
+            return Err(anyhow!("Leaf commits do not chain to the requested leaf").into());
+        }
         validate_qc(last_leaf.justify_qc(), leaf.height())?;
         if leaf.height() == expected_height {
             return Ok(leaf.clone());
         }
         last_leaf = leaf;
     }
-    Err(anyhow!("Epoch Root was not found in the decided chain"))
+    Err(anyhow!("Epoch Root was not found in the decided chain").into())
 }
 
 impl<TYPES: NodeType> ViewInner<TYPES> {

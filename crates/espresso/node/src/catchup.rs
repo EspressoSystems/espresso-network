@@ -137,8 +137,8 @@ impl<ApiVer: StaticVersionType> StatePeers<ApiVer> {
     ///
     /// A response rejected as [`VerifyError::Invalid`] counts against its peer, like a failed
     /// request. One rejected as [`VerifyError::Unavailable`] is not the peer's fault: it is not
-    /// scored and the next peer is tried. If no peer verifies and any response was `Unavailable`,
-    /// that is the error returned, so a caller can downcast to it.
+    /// scored and the next peer is tried. If no peer verifies, the error is the `Unavailable`
+    /// verdict when there was one, else the last `Invalid` one, so that it says why.
     async fn fetch_verified<R, Fut>(
         &self,
         retry: usize,
@@ -194,6 +194,7 @@ impl<ApiVer: StaticVersionType> StatePeers<ApiVer> {
         let mut requests = HashMap::new();
         let mut res = Err(anyhow!("failed fetching from every peer"));
         let mut unavailable = None;
+        let mut invalid = None;
 
         // Try each peer in order of reliability score, until we succeed. We clone out of
         // `self.scores` because it is small (contains only numeric IDs and scores), so this clone
@@ -254,13 +255,16 @@ impl<ApiVer: StaticVersionType> StatePeers<ApiVer> {
                         client.url
                     ));
                     requests.insert(id, false);
+                    invalid = Some(err);
                 },
             }
         }
-        if res.is_err()
-            && let Some(epoch) = unavailable
-        {
-            res = Err(VerifyError::Unavailable(epoch).into());
+        if res.is_err() {
+            if let Some(epoch) = unavailable {
+                res = Err(VerifyError::Unavailable(epoch).into());
+            } else if let Some(err) = invalid {
+                res = Err(VerifyError::Invalid(err).into());
+            }
         }
 
         if !logs.is_empty() {
@@ -1846,6 +1850,22 @@ mod test {
         assert_eq!((bad.requests, bad.failures), (11, 1));
         let good = score(&peers, 1).await;
         assert_eq!((good.requests, good.failures), (11, 5));
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn when_every_response_is_invalid_the_error_says_why() {
+        let peers = ranked_peers().await;
+
+        let err = peers
+            .fetch_with(
+                0,
+                |client| async move { anyhow::Ok(client.url) },
+                |_: Url| async move { Err::<(), _>(VerifyError::Invalid(anyhow!("bad proof"))) },
+            )
+            .await
+            .unwrap_err();
+
+        assert!(format!("{err:#}").contains("bad proof"), "{err:#}");
     }
 
     /// Leaves at heights 1 to 6, legacy up to 3 and new-protocol from 4.

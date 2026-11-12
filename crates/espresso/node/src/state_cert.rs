@@ -11,9 +11,6 @@ pub enum StateCertFetchError {
     #[error("failed to fetch state certificate: {0:#}")]
     FetchError(anyhow::Error),
 
-    #[error("state certificate validation failed: {0:#}")]
-    ValidationError(anyhow::Error),
-
     #[error("state certificate error: {0:#}")]
     Other(anyhow::Error),
 

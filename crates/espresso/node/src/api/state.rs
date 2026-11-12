@@ -3750,9 +3750,7 @@ fn state_cert_error(err: StateCertFetchError) -> anyhow::Error {
         StateCertFetchError::EpochsNotStarted { .. }
         | StateCertFetchError::BeforeFirstEpoch { .. }
         | StateCertFetchError::RootNotDecided { .. } => not_found(err.to_string()),
-        StateCertFetchError::FetchError(_)
-        | StateCertFetchError::ValidationError(_)
-        | StateCertFetchError::Other(_) => err.into(),
+        StateCertFetchError::FetchError(_) | StateCertFetchError::Other(_) => err.into(),
     }
 }
 
@@ -6123,7 +6121,6 @@ mod tests {
 
     #[rstest::rstest]
     #[case::fetch(StateCertFetchError::FetchError(anyhow::anyhow!("timeout")))]
-    #[case::validation(StateCertFetchError::ValidationError(anyhow::anyhow!("bad")))]
     #[case::other(StateCertFetchError::Other(anyhow::anyhow!("catchup")))]
     fn state_cert_fetch_failure_is_internal(#[case] err: StateCertFetchError) {
         let err = state_cert_error(err);

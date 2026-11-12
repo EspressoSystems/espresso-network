@@ -30,8 +30,8 @@ use espresso_api::{
     },
 };
 use espresso_types::{
-    AccountQueryData, AuthenticatedValidatorMap, BlockMerkleTree, ChainId, FeeAccount,
-    FeeMerkleTree, Leaf2, NodeState, PubKey, Transaction,
+    AccountQueryData, AuthenticatedValidatorMap, BackoffParams, BlockMerkleTree, ChainId,
+    FeeAccount, FeeMerkleTree, Leaf2, NodeState, PubKey, Transaction,
     catchup::{StateCertFor, Verified},
     config::PublicNetworkConfig,
     retain_accounts,
@@ -46,7 +46,7 @@ use espresso_types::{
         RewardMerkleTreeV2Data,
     },
 };
-use futures::future::{BoxFuture, Future, FutureExt};
+use futures::future::{BoxFuture, Future, FutureExt, TryFutureExt};
 use hotshot_contract_adapter::sol_types::EspToken;
 use hotshot_query_service::{
     availability::VidCommonQueryData,
@@ -635,12 +635,24 @@ impl StateCertFetchingDataSource<SeqTypes> for ApiState {
 
         let state_catchup = self.context().await.node_state().state_catchup.clone();
 
-        let result = tokio::time::timeout(timeout, state_catchup.fetch_state_cert(&req)).await;
+        // A certificate that fails validation makes its provider try the next source instead of
+        // failing the fetch, so only the last attempt's error says why none had a valid one.
+        let mut last_error = None;
+        let backoff = BackoffParams::default();
+        let fetch = backoff.retry(&mut last_error, |last_error, retry| {
+            state_catchup
+                .try_fetch_state_cert(retry, &req)
+                .inspect_err(|err| **last_error = Some(format!("{err:#}")))
+                .boxed()
+        });
 
-        match result {
-            Err(_) => Err(StateCertFetchError::FetchError(anyhow::anyhow!(
-                "timeout while fetching state cert for epoch {epoch}"
-            ))),
+        match tokio::time::timeout(timeout, fetch).await {
+            Err(_) => Err(StateCertFetchError::FetchError(match last_error {
+                Some(err) => {
+                    anyhow::anyhow!("timeout while fetching state cert for epoch {epoch}: {err}")
+                },
+                None => anyhow::anyhow!("timeout while fetching state cert for epoch {epoch}"),
+            })),
             Ok(Ok(cert)) => {
                 tracing::info!("fetched and validated state certificate for epoch {epoch}");
                 Ok(cert)

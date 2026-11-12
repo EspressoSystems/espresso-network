@@ -11,7 +11,7 @@ use std::{fmt, future::Future, sync::Arc};
 use anyhow::{Context, anyhow, ensure};
 use committable::{Commitment, Committable};
 #[cfg(feature = "node")]
-use hotshot_types::utils::{StakeTableUnavailable, verify_leaf_chain};
+use hotshot_types::utils::{LeafChainError, verify_leaf_chain};
 use hotshot_types::{
     data::{EpochNumber, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
@@ -26,6 +26,7 @@ use versions::{EPOCH_VERSION, NEW_PROTOCOL_VERSION, Upgrade};
 use crate::{
     BlockMerkleTree, FEE_MERKLE_TREE_HEIGHT, FeeAccount, FeeAccountProof, FeeMerkleCommitment,
     FeeMerkleTree, SeqTypes,
+    v0::impls::validate_state_cert,
     v0_3::{
         ChainConfig, REWARD_MERKLE_TREE_V1_HEIGHT, RewardAccountProofV1, RewardAccountV1,
         RewardMerkleCommitmentV1, RewardMerkleTreeV1,
@@ -34,7 +35,6 @@ use crate::{
         PermittedRewardMerkleTreeV2, RewardAccountV2, RewardMerkleCommitmentV2,
         RewardMerkleTreeV2Data, forgotten_accounts_include,
     },
-    validate_state_cert,
 };
 #[cfg(feature = "node")]
 use crate::{Certificate2, Leaf2};
@@ -329,31 +329,6 @@ impl LeafAt {
         }
         Ok(leaves.iter().map(Leaf2::height).max())
     }
-
-    async fn verify_chain(&self, response: LeafResponse) -> anyhow::Result<Leaf2> {
-        let Some(cert2_height) = self.cert2_height(&response.leaves)? else {
-            let upgrade_lock = UpgradeLock::<SeqTypes>::new(Upgrade::trivial(EPOCH_VERSION));
-            return verify_leaf_chain(
-                response.leaves,
-                &self.coordinator,
-                self.height,
-                &upgrade_lock,
-            )
-            .await;
-        };
-        let cert2 = response
-            .cert2
-            .with_context(|| format!("leaf chain is missing its cert2 at height {cert2_height}"))?;
-        let upgrade_lock = UpgradeLock::<SeqTypes>::new(Upgrade::trivial(NEW_PROTOCOL_VERSION));
-        hotshot_new_protocol::utils::verify_new_protocol_leaf_chain(
-            response.leaves,
-            &self.coordinator,
-            self.height,
-            &upgrade_lock,
-            cert2,
-        )
-        .await
-    }
 }
 
 #[cfg(feature = "node")]
@@ -363,16 +338,45 @@ impl CatchupRequest for LeafAt {
 
     /// The leaf at [`Self::height`], finalized by the chain in `response`.
     async fn verify(&self, response: LeafResponse) -> Result<Verified<Leaf2>, VerifyError> {
-        let err = match self.verify_chain(response).await {
-            Ok(leaf) => return Ok(Verified::new(leaf)),
-            Err(err) => err.context(format!(
+        let verified = match self.cert2_height(&response.leaves)? {
+            None => {
+                let upgrade_lock = UpgradeLock::<SeqTypes>::new(Upgrade::trivial(EPOCH_VERSION));
+                verify_leaf_chain(
+                    response.leaves,
+                    &self.coordinator,
+                    self.height,
+                    &upgrade_lock,
+                )
+                .await
+            },
+            Some(cert2_height) => {
+                let cert2 = response.cert2.ok_or_else(|| {
+                    VerifyError::Invalid(anyhow!(
+                        "leaf chain at height {} is missing its cert2 at height {cert2_height}",
+                        self.height
+                    ))
+                })?;
+                let upgrade_lock =
+                    UpgradeLock::<SeqTypes>::new(Upgrade::trivial(NEW_PROTOCOL_VERSION));
+                hotshot_new_protocol::utils::verify_new_protocol_leaf_chain(
+                    response.leaves,
+                    &self.coordinator,
+                    self.height,
+                    &upgrade_lock,
+                    cert2,
+                )
+                .await
+            },
+        };
+        match verified {
+            Ok(leaf) => Ok(Verified::new(leaf)),
+            Err(LeafChainError::StakeTableUnavailable(epoch)) => {
+                Err(VerifyError::Unavailable(epoch))
+            },
+            Err(LeafChainError::Invalid(err)) => Err(VerifyError::Invalid(err.context(format!(
                 "failed to verify leaf chain at height {}",
                 self.height
-            )),
-        };
-        match err.downcast_ref::<StakeTableUnavailable>() {
-            Some(StakeTableUnavailable(epoch)) => Err(VerifyError::Unavailable(*epoch)),
-            None => Err(VerifyError::Invalid(err)),
+            )))),
         }
     }
 }
@@ -391,7 +395,7 @@ impl CatchupRequest for StateCertFor {
     type Output = LightClientStateUpdateCertificateV2<SeqTypes>;
 
     /// Accepts `cert` if it certifies the root block of [`Self::epoch`] with enough of
-    /// [`Self::stake_table`], as [`validate_state_cert`] checks.
+    /// [`Self::stake_table`].
     async fn verify(
         &self,
         cert: LightClientStateUpdateCertificateV2<SeqTypes>,

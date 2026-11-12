@@ -27,4 +27,4 @@ pub use state::{
     BuilderValidationError, ProposalValidationError, StateValidationError, ValidatedState,
     get_l1_deposits,
 };
-pub use state_cert::validate_state_cert;
+pub(crate) use state_cert::validate_state_cert;

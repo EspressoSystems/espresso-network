@@ -19,7 +19,7 @@ use crate::SeqTypes;
 
 /// Validates a state certificate: that it belongs to `expected_epoch`, and that its
 /// signatures reach the threshold under `stake_table`.
-pub fn validate_state_cert(
+pub(crate) fn validate_state_cert(
     cert: &LightClientStateUpdateCertificateV2<SeqTypes>,
     stake_table: &HSStakeTable<SeqTypes>,
     expected_epoch: EpochNumber,

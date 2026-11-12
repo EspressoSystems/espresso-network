@@ -29,7 +29,7 @@ pub use impls::testing;
 pub use impls::{
     BuilderValidationError, EpochCommittees, EpochCommitteesError, EpochSnapshot, FeeError,
     ProposalValidationError, RECENT_STAKE_TABLES_LIMIT, StateValidationError, ValidatorSet,
-    get_l1_deposits, retain_accounts, validate_state_cert, validators_from_l1_events,
+    get_l1_deposits, retain_accounts, validators_from_l1_events,
 };
 pub use nsproof::*;
 pub use txproof::*;

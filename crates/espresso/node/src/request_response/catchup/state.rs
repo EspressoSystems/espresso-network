@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use anyhow::Context;
 use async_trait::async_trait;
 use committable::Commitment;
@@ -21,18 +19,28 @@ use crate::request_response::{
     request::{Request, Response},
 };
 
-/// A new-protocol leaf chain waiting for the cert2 that finalizes it.
-#[derive(Clone)]
-struct LeafChainAt {
-    req: LeafAt,
+/// A leaf chain that the leaf chain request accepted.
+enum LeafChain<'a> {
+    /// A legacy chain decides the requested leaf on its own, so it comes with its verdict.
+    Legacy(Box<Result<Verified<Leaf2>, VerifyError>>),
+    NewProtocol {
+        pending: PendingLeafChain<'a>,
+        cert2_height: u64,
+    },
+}
+
+/// A new-protocol leaf chain that still needs the cert2 that finalizes it.
+struct PendingLeafChain<'a> {
+    req: &'a LeafAt,
     leaves: Vec<Leaf2>,
 }
 
-impl CatchupRequest for LeafChainAt {
+impl CatchupRequest for PendingLeafChain<'_> {
     type Response = Certificate2<SeqTypes>;
     type Output = Leaf2;
 
     async fn verify(&self, cert2: Certificate2<SeqTypes>) -> Result<Verified<Leaf2>, VerifyError> {
+        // Verification consumes the chain, and a rejected cert2 can be followed by another.
         self.req
             .verify(LeafResponse {
                 leaves: self.leaves.clone(),
@@ -45,32 +53,61 @@ impl CatchupRequest for LeafChainAt {
 impl<P: SequencerPersistence> RequestResponseProtocol<P> {
     /// Waits for a response to `request` that verifies against `req`. `extract` takes the payload
     /// out of a response of the kind `request` asks for.
-    async fn request_verified<R>(
+    async fn request_verified<R: CatchupRequest>(
         &self,
         req: &R,
         request: Request,
         extract: fn(Response) -> Option<R::Response>,
-    ) -> anyhow::Result<Verified<R::Output>>
-    where
-        R: CatchupRequest + Clone + 'static,
-    {
-        let req = Arc::new(req.clone());
-        let outcome = self
-            .request_indefinitely(request, move |_request: &Request, response: Response| {
-                let req = Arc::clone(&req);
-                async move {
+    ) -> anyhow::Result<Verified<R::Output>> {
+        let verdict = self
+            .request_indefinitely(
+                request,
+                move |_request: &Request, response: Response| async move {
                     let response = extract(response)
                         .context("response is of another kind than the request")?;
                     match req.verify(response).await {
                         Err(VerifyError::Invalid(err)) => Err(err),
                         // No other responder can supply the stake table this node lacks, so
                         // `Unavailable` ends the wait instead of rejecting the response.
-                        outcome => Ok(outcome),
+                        verdict => Ok(verdict),
                     }
-                }
-            })
+                },
+            )
             .await?;
-        Ok(outcome?)
+        Ok(verdict?)
+    }
+
+    /// Waits for a leaf chain that has the leaf `req` asks for. A legacy chain must also verify.
+    ///
+    /// For new-protocol heights the responder returns the leaf range `[height..=cert2_height]`,
+    /// for legacy-protocol heights a 3-chain.
+    async fn request_leaf_chain<'a>(&self, req: &'a LeafAt) -> anyhow::Result<LeafChain<'a>> {
+        let chain = self
+            .request_indefinitely(
+                Request::Leaf(req.height),
+                move |_request: &Request, response: Response| async move {
+                    let Response::Leaf(leaves) = response else {
+                        anyhow::bail!("expected leaf response");
+                    };
+                    let Some(cert2_height) = req.cert2_height(&leaves)? else {
+                        let response = LeafResponse {
+                            leaves,
+                            cert2: None,
+                        };
+                        return match req.verify(response).await {
+                            Err(VerifyError::Invalid(err)) => Err(err),
+                            // As in `request_verified`, `Unavailable` ends the wait.
+                            verdict => Ok(LeafChain::Legacy(Box::new(verdict))),
+                        };
+                    };
+                    Ok(LeafChain::NewProtocol {
+                        pending: PendingLeafChain { req, leaves },
+                        cert2_height,
+                    })
+                },
+            )
+            .await?;
+        Ok(chain)
     }
 }
 
@@ -211,40 +248,19 @@ impl<P: SequencerPersistence> StateCatchup for RequestResponseProtocol<P> {
 
         let cert2_wait = self.config.request_batch_interval * 3;
         let leaf = loop {
-            // For new-protocol heights the responder returns the leaf range
-            // `[height..=cert2_height]`; for legacy-protocol heights, it returns a 3-chain.
-            let owned_req = req.clone();
-            let leaves = self
-                .request_indefinitely(
-                    Request::Leaf(height),
-                    move |_request: &Request, response: Response| {
-                        let req = owned_req.clone();
-                        async move {
-                            let Response::Leaf(leaves) = response else {
-                                return Err(anyhow::anyhow!("expected leaf response"));
-                            };
-                            req.cert2_height(&leaves)?;
-                            Ok(leaves)
-                        }
-                    },
-                )
+            let chain = self
+                .request_leaf_chain(req)
                 .await
                 .context("failed to request leaf chain")?;
-
-            let Some(cert2_height) = req.cert2_height(&leaves)? else {
-                break req
-                    .verify(LeafResponse {
-                        leaves,
-                        cert2: None,
-                    })
-                    .await?;
-            };
-            let chain = LeafChainAt {
-                req: req.clone(),
-                leaves,
+            let (pending, cert2_height) = match chain {
+                LeafChain::Legacy(verdict) => break (*verdict)?,
+                LeafChain::NewProtocol {
+                    pending,
+                    cert2_height,
+                } => (pending, cert2_height),
             };
             let verified =
-                self.request_verified(&chain, Request::Cert2(cert2_height), |response| {
+                self.request_verified(&pending, Request::Cert2(cert2_height), |response| {
                     match response {
                         Response::Cert2(cert2) => Some(cert2),
                         _ => None,
