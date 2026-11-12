@@ -423,6 +423,10 @@ const MAX_CONSECUTIVE_RATE_LIMITS: usize = 2;
 #[cfg(feature = "node")]
 const MAX_RATE_LIMIT_BACKOFF: Duration = Duration::from_secs(300);
 
+/// How long to wait for the L1 client to see a finalized block.
+#[cfg(feature = "node")]
+pub(super) const L1_FINALIZED_WAIT: Duration = Duration::from_secs(30);
+
 /// The configured delay is operator-set and used as-is; a server-provided one is capped.
 #[cfg(feature = "node")]
 fn rate_limit_backoff(retry_after: Option<Duration>, configured: Duration) -> Duration {
@@ -979,6 +983,17 @@ impl L1Client {
     /// finalized block, without fetching block `number` itself.
     pub async fn wait_for_latest_finalized_at_least(&self, number: u64) -> L1BlockInfo {
         self.lock_once_finalized_reaches(number).await.1
+    }
+
+    /// The number of the latest finalized block; waits up to `L1_FINALIZED_WAIT` for the first one.
+    pub async fn finalized_number_within_wait(&self) -> anyhow::Result<u64> {
+        let block = tokio::time::timeout(
+            L1_FINALIZED_WAIT,
+            self.wait_for_latest_finalized_at_least(0),
+        )
+        .await
+        .context("no L1 finalized block yet")?;
+        Ok(block.number)
     }
 
     /// Wait until the finalized block number reaches at least `number`, returning the locked

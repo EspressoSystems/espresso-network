@@ -35,7 +35,7 @@ use futures::future::BoxFuture;
 #[cfg(feature = "node")]
 use hotshot_contract_adapter::sol_types::{
     EspToken::{self, EspTokenInstance},
-    StakeTableV3,
+    LightClientStateSol, LightClientV3, StakeTableV3,
 };
 use hotshot_contract_adapter::{
     sol_types::StakeTableV3::{
@@ -45,6 +45,8 @@ use hotshot_contract_adapter::{
     },
     stake_table::StakeTableSolError,
 };
+#[cfg(feature = "node")]
+use hotshot_types::light_client::LightClientState;
 use hotshot_types::{
     addr::NetAddr,
     data::{EpochNumber, vid_disperse::VID_TARGET_TOTAL_STAKE},
@@ -66,6 +68,10 @@ use vbs::version::Version;
 
 #[cfg(feature = "node")]
 use super::L1Client;
+#[cfg(feature = "node")]
+use super::LcContractFinalizedState;
+#[cfg(feature = "node")]
+use super::l1::L1_FINALIZED_WAIT;
 #[cfg(any(test, feature = "testing"))]
 use super::v0_3::DAMembers;
 use super::{
@@ -1918,6 +1924,38 @@ impl Fetcher {
                 bail!("failed to construct stake table {e:?}");
             },
         }
+    }
+
+    /// The LC contract's `finalizedState` at the L1 finalized block. The wait for that block and the
+    /// contract reads are each bounded by `L1_FINALIZED_WAIT`.
+    #[cfg(feature = "node")]
+    pub async fn lc_contract_finalized_state(&self) -> anyhow::Result<LcContractFinalizedState> {
+        let chain_config = *self.chain_config.lock().await;
+        let Some(stake_table_contract) = chain_config.stake_table_contract else {
+            bail!("No stake table contract address found in Chain config");
+        };
+        let block = self.l1_client.finalized_number_within_wait().await?;
+        let state = tokio::time::timeout(L1_FINALIZED_WAIT, async {
+            let provider = self.l1_client.provider.clone();
+            let lc_contract = StakeTableV3::new(stake_table_contract, provider.clone())
+                .lightClient()
+                .call()
+                .await
+                .context("failed to read the LC contract address")?;
+            LightClientV3::new(lc_contract, provider)
+                .finalizedState()
+                .block(BlockId::number(block))
+                .call()
+                .await
+                .context("failed to read finalizedState")
+        })
+        .await
+        .context("reading the LC contract exceeded the L1 wait")??;
+        let state = LightClientState::from(LightClientStateSol::from(state));
+        Ok(LcContractFinalizedState {
+            height: state.block_height,
+            block_comm_root: state.block_comm_root,
+        })
     }
 
     /// Retrieve and verify `ChainConfig`
