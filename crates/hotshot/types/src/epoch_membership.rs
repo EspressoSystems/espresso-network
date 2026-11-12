@@ -133,6 +133,11 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
         self.epoch_height
     }
 
+    /// The bound on a single catchup step.
+    pub fn catchup_timeout(&self) -> Duration {
+        self.catchup_timeout
+    }
+
     /// Override the bound on a single catchup step. Mostly for tests.
     pub fn with_catchup_timeout(mut self, timeout: Duration) -> Self {
         self.catchup_timeout = timeout;
