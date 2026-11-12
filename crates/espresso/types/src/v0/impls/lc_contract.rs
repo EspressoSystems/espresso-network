@@ -8,10 +8,12 @@ use hotshot_types::{
     utils::{epoch_from_block_number, root_block_in_epoch},
 };
 
-use crate::Header;
+use crate::{BlockMerkleCommitment, Header};
 
 /// The LC contract's `finalizedState` at one L1 finalized block: `F` and the block commitment
 /// root of the header at `F`. Only headers below `F` are provable against that header.
+///
+/// An `epoch_height` of 5 or less is unsupported: the chain cannot run that way.
 #[derive(Clone, Debug, PartialEq)]
 pub struct LcContractFinalizedState {
     /// `finalizedState.blockHeight`: `F`.
@@ -85,8 +87,8 @@ impl LcContractFinalizedState {
     }
 
     /// Accepts `header` iff it is at `F` and `Header::get_light_client_state(..).block_comm_root`
-    /// equals the LC contract's. Callers trust only its block Merkle root afterwards. Pure.
-    pub fn verify_header(&self, header: &Header) -> anyhow::Result<()> {
+    /// equals the LC contract's, and returns its block Merkle root, the only part to trust. Pure.
+    pub fn verify_header(&self, header: &Header) -> anyhow::Result<BlockMerkleCommitment> {
         ensure!(
             header.height() == self.height,
             "header is at height {}, expected {}",
@@ -101,7 +103,7 @@ impl LcContractFinalizedState {
             "header at height {} does not match the LC contract block commitment root",
             self.height
         );
-        Ok(())
+        Ok(header.block_merkle_tree_root())
     }
 }
 
@@ -152,7 +154,10 @@ mod tests {
         let header = header_at(62).await;
         let lc = state_of(&header);
 
-        lc.verify_header(&header).unwrap();
+        assert_eq!(
+            lc.verify_header(&header).unwrap(),
+            header.block_merkle_tree_root()
+        );
         lc.verify_header(&header_at(61).await).unwrap_err();
 
         let mut tree = BlockMerkleTree::new(BLOCK_MERKLE_TREE_HEIGHT);
