@@ -42,12 +42,12 @@ StakeTable contract for peer discovery.
 
 ## Validator startup
 
-`SequencerContext::init` does no epoch walk. It applies the stored anchor's epoch to cliquenet and dials `ST(now)`
+`SequencerContext::init` applies the stored anchor's epoch to cliquenet and dials `ST(now)`
 (`NodeState::l1_finalized_peers`: the active set from stake table events up to the L1 finalized block). `ST(now)` keys
 stay extra request-response responders. `state_peers` is optional for validators.
 
 The seed exists when the chain config names a stake table contract (the LC contract address is read from it);
-without one the catchup walks only. The follower has no seed and still walks at startup
+without one the catchup walks only. The follower has no seed and walks at startup
 (`bootstrap_epoch_window`).
 
 A node behind the stored window is caught up by `EpochMembershipCoordinator::catchup`. When the held pair is more than
