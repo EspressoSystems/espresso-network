@@ -1928,7 +1928,7 @@ impl Fetcher {
     }
 
     /// The LC contract's `finalizedState` at the L1 finalized block. The wait for that block and the
-    /// contract reads are each bounded by `L1_FINALIZED_WAIT`.
+    /// contract reads (address and state, together) are each bounded by `L1_FINALIZED_WAIT`.
     #[cfg(feature = "node")]
     pub async fn lc_contract_finalized_state(&self) -> anyhow::Result<LcContractFinalizedState> {
         let chain_config = *self.chain_config.lock().await;
@@ -2469,17 +2469,7 @@ mod tests {
         );
         l1_client.anvil_mine(Some(5), None).await?;
 
-        let state = tokio::time::timeout(Duration::from_secs(30), async {
-            loop {
-                let state = fetcher.lc_contract_finalized_state().await?;
-                if state.height == 42 {
-                    return anyhow::Ok(state);
-                }
-                tokio::time::sleep(Duration::from_millis(200)).await;
-            }
-        })
-        .await
-        .expect("the finalized state was never read")?;
+        let state = fetcher.lc_contract_finalized_state().await?;
 
         assert_eq!(state.height, 42);
         assert_eq!(state.block_comm_root, CircuitField::from(7u64));
