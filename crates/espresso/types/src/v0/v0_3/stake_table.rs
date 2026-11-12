@@ -4,9 +4,9 @@ use alloy::{
     primitives::{Address, Log, U256},
     transports::{RpcError, TransportErrorKind},
 };
-use async_lock::{Mutex, RwLock};
 #[cfg(feature = "node")]
 use async_lock::OnceCell;
+use async_lock::{Mutex, RwLock};
 use committable::{Commitment, Committable, RawCommitmentBuilder};
 use derive_more::derive::{From, Into};
 use hotshot_contract_adapter::sol_types::StakeTableV3::{
