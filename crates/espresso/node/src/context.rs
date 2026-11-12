@@ -130,6 +130,7 @@ where
         anchor_view: Option<ViewNumber>,
         storage: Option<RequestResponseStorage>,
         state_catchup: ParallelStateCatchup,
+        lc_contract_seed: LcContractSeed<P>,
         persistence: Arc<P>,
         coordinator_network: F,
         state_relay_server: Option<Url>,
@@ -313,7 +314,7 @@ where
             &request_response_protocol,
         )));
         if instance_state.chain_config.stake_table_contract.is_some() {
-            LcContractSeed::install(&membership_coordinator, &request_response_protocol);
+            lc_contract_seed.install(&membership_coordinator, &request_response_protocol);
         }
 
         // Create the external event handler

@@ -64,6 +64,9 @@ seed at a time:
    proven roots, each root bounded by the catchup timeout. A stake table hash mismatch panics as in the walk; a timeout
    or another error keeps the installed tables and the catchup retries above them. The walk then runs from `E*+1` up to
    the target (nothing for a target at or below `E*+1`); `drb_ready` supplies the target's DRB.
+5. Requests go over request-response. With `--state-peers`, they also go over HTTP after `--http-catchup-delay`, at once
+   when the protocol is not available; the state peers are asked in order and an answer that fails its check moves on to
+   the next.
 
 ## Consensus upgrades
 
