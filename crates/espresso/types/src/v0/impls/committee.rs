@@ -699,14 +699,9 @@ impl EpochCommittees {
             // or the epoch immediately succeeding the block header
             previous_epoch = EpochNumber::new(epoch.saturating_sub(1));
 
-            // we store the information from the previous epoch's in-memory committeee
-            // if the decided stake_table_hash is consistent with what we get
-            //
-            // in principle this is unnecessary and we could've stored these right away,
-            // without offsetting the epoch. but the intention is to catch L1 provider issues
-            // if there is a mismatch
-            //
-            // Checked before anything of `epoch` is put in memory.
+            // Guards the later store of the previous epoch's table: the decided hash must match
+            // the table in memory, which catches L1 provider issues. Runs before `epoch` is put
+            // in memory.
             let decided_hash = block_header.next_stake_table_hash();
             if let Some(previous_committee) = inner.epoch_committee(previous_epoch)
                 && decided_hash.is_some()
@@ -761,8 +756,9 @@ impl EpochCommittees {
         Ok(())
     }
 
-    /// the first (`None` near genesis). A failed batch keeps the tables installed before it.
-    /// the first (`None` near genesis). A failed batch keeps the tables installed before the failure.
+    /// Installs `roots` in ascending order, each under the coordinator's catchup timeout.
+    /// `preceding_root` is the root below the first (`None` near genesis). A failed batch keeps the
+    /// tables it installed.
     #[cfg(feature = "node")]
     pub async fn install_epoch_roots(
         &self,
@@ -3443,14 +3439,39 @@ mod tests {
         assert!(committee.header.is_some());
     }
 
-    /// A mismatch with the held table of the epoch below panics.
+    /// A mismatch with the held table of the epoch below panics before the new epoch is put in
+    /// memory or any validator set is dropped.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    #[should_panic(expected = "unrecoverable")]
     async fn add_epoch_root_panics_on_hash_mismatch() {
         let (committees, coordinator) = mismatch_setup();
         let header = header_deciding(95, other_hash()).await;
+        {
+            let mut inner = committees.inner.write();
+            inner
+                .all_validators
+                .insert(EpochNumber::new(1), Default::default());
+            inner
+                .all_validators
+                .insert(EpochNumber::new(2), Default::default());
+        }
 
-        let _ = committees.add_epoch_root(header, &coordinator).await;
+        let task = tokio::spawn({
+            let committees = committees.clone();
+            async move { committees.add_epoch_root(header, &coordinator).await }
+        });
+        let err = task.await.expect_err("the hash mismatch panics");
+        assert!(err.is_panic(), "task failed without a panic: {err:?}");
+
+        let inner = committees.inner.read();
+        let epoch = inner
+            .epoch_committee(EpochNumber::new(3))
+            .expect("prefilled committee stays");
+        assert!(
+            epoch.header.is_none(),
+            "the mismatching root replaced the committee"
+        );
+        let held: Vec<_> = inner.all_validators.keys().copied().collect();
+        assert_eq!(held, [EpochNumber::new(1), EpochNumber::new(2)]);
     }
 
     /// Runs `install_epoch_roots` on its own task and asserts that it panics.
@@ -3653,6 +3674,50 @@ mod tests {
         }
     }
 
+    /// Roots that skip an epoch fail the previous root check, and the table after the gap gets no
+    /// reward.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn install_epoch_roots_skipping_an_epoch_fails() {
+        let (committees, coordinator) = seed_window_setup(60, 64).await;
+        let (preceding, mut roots) = seed_window_roots(60, 64).await;
+        roots.remove(2);
+
+        let err = committees
+            .install_epoch_roots(Some(preceding), roots, &coordinator)
+            .await
+            .unwrap_err();
+
+        assert!(matches!(err, EpochCommitteesError::Reward(_)), "{err:#}");
+        assert!(
+            format!("{err:#}").contains("previous epoch root is at height"),
+            "{err:#}"
+        );
+        let snapshot = committees.snapshot(EpochNumber::new(63)).unwrap();
+        assert!(snapshot.epoch_block_reward().is_none());
+    }
+
+    /// A preceding root not one epoch below the first root fails the check, and the first table
+    /// gets no reward.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn install_epoch_roots_wrong_preceding_root_fails() {
+        let (committees, coordinator) = seed_window_setup(60, 64).await;
+        let (_, roots) = seed_window_roots(60, 64).await;
+        let preceding = timed_root(100 * (60 - 4) - 5).await;
+
+        let err = committees
+            .install_epoch_roots(Some(preceding), roots, &coordinator)
+            .await
+            .unwrap_err();
+
+        assert!(matches!(err, EpochCommitteesError::Reward(_)), "{err:#}");
+        assert!(
+            format!("{err:#}").contains("previous epoch root is at height"),
+            "{err:#}"
+        );
+        let snapshot = committees.snapshot(EpochNumber::new(60)).unwrap();
+        assert!(snapshot.epoch_block_reward().is_none());
+    }
+
     /// A table without a block reward is an error and the held committee stays as it was.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn install_epoch_roots_without_reward_fails() {
@@ -3792,9 +3857,13 @@ mod tests {
         let _ = setup
             .coordinator
             .stake_table_for_epoch(Some(EpochNumber::new(25)));
-        while calls.lock().is_empty() {
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while calls.lock().is_empty() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("the catchup did not call the seed hook within 10 s");
 
         let loads = setup.load_stake_calls.load(Ordering::SeqCst) - loads_before;
         (calls.lock().clone(), loads)

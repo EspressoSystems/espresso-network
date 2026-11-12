@@ -423,7 +423,8 @@ const MAX_CONSECUTIVE_RATE_LIMITS: usize = 2;
 #[cfg(feature = "node")]
 const MAX_RATE_LIMIT_BACKOFF: Duration = Duration::from_secs(300);
 
-/// How long to wait for the L1 client to see a finalized block.
+/// How long to wait for the L1 client to see a finalized block, and the bound on each LC contract
+/// read.
 #[cfg(feature = "node")]
 pub(super) const L1_FINALIZED_WAIT: Duration = Duration::from_secs(30);
 

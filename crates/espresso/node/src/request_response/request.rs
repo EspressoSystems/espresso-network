@@ -135,9 +135,10 @@ mod tests {
         };
         assert_eq!(*decoded, proof);
 
-        // The variant is appended: `Cert2` keeps its tag and `HeaderProof` follows it.
+        // The variant is appended: `Cert2` keeps its tag and `HeaderProof` follows it (both enums).
         let tag = |request: &Request| bincode::serialize(request).unwrap()[0];
         assert_eq!(tag(&Request::Cert2(1)), 9);
         assert_eq!(tag(&request), 10);
+        assert_eq!(bincode::serialize(&response).unwrap()[0], 10);
     }
 }

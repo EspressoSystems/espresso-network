@@ -104,6 +104,11 @@ impl StalledStakeStore {
         self.load_stake_calls.load(Ordering::SeqCst)
     }
 
+    /// The first epoch `load_stake` was entered for.
+    fn first_loaded_epoch(&self) -> Option<u64> {
+        self.load_stake_epochs.lock().first().copied()
+    }
+
     fn epochs_seen(&self) -> HashSet<u64> {
         self.load_stake_epochs.lock().iter().copied().collect()
     }
@@ -601,8 +606,8 @@ async fn seeded_start_resumes_the_walk_ok() {
     assert!(wait_until(RECOVERY_BUDGET, || store.loads_of(TARGET_EPOCH) >= 1).await);
     assert_eq!(*calls.lock(), vec![(TARGET_EPOCH, FIRST_EPOCH + 1)]);
     assert_eq!(
-        store.loads_of(WALK_EPOCH),
-        0,
+        store.first_loaded_epoch(),
+        Some(TARGET_EPOCH),
         "the walk began at the held pair"
     );
 }

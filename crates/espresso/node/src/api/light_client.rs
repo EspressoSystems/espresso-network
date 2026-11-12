@@ -1946,7 +1946,7 @@ mod test {
             }
         }
 
-        // The responder never fetches: an unknown header is an error.
+        // An unknown header is an error.
         storage.get_header_proof(100, 50).await.unwrap_err();
         // A height at or above the root is an error.
         storage.get_header_proof(5, 5).await.unwrap_err();

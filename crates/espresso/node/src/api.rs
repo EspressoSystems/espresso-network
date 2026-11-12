@@ -6981,10 +6981,11 @@ mod test {
     }
 
     /// A validator that starts with the LC contract finalized at `lc_contract_height` while the
-    /// network is at epoch `NETWORK_EPOCH`, is seeded by its post-start catchup and votes.
+    /// network is at epoch `NETWORK_EPOCH` (`TIP_NETWORK_EPOCH` for `NetworkTip`), is seeded by its
+    /// post-start catchup and votes.
     ///
     /// Six validators run to `STOPPED_AT_EPOCH`, node 1 is stopped, the network runs on to
-    /// `NETWORK_EPOCH`, the mock LC contract is set to the header at `lc_contract_height`, and
+    /// the network epoch, the mock LC contract is set to the header at `lc_contract_height`, and
     /// node 1 starts again from `storage`: empty, or its own stale storage. It has no HTTP state
     /// peers.
     async fn validator_joins_over_cliquenet<D: TestableSqlDataSource>(
@@ -7034,15 +7035,15 @@ mod test {
 
         let client: Client<ClientErr, SequencerApiVersion> =
             Client::new(format!("http://localhost:{port}").parse().unwrap());
-        let lc_contract_height = match lc_contract {
-            LcContractAt::Height(height) => height,
-            LcContractAt::NetworkTip => network.server.decided_leaf().await.height(),
+        let header: Header = match lc_contract {
+            LcContractAt::Height(height) => client
+                .get(&format!("availability/header/{height}"))
+                .send()
+                .await
+                .unwrap(),
+            LcContractAt::NetworkTip => network.server.decided_leaf().await.block_header().clone(),
         };
-        let header: Header = client
-            .get(&format!("availability/header/{lc_contract_height}"))
-            .send()
-            .await
-            .unwrap();
+        let lc_contract_height = header.height();
         network
             .cfg
             .set_lc_contract_finalized_state(
