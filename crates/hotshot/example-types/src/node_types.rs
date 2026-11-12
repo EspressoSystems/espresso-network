@@ -9,10 +9,8 @@ use std::{
 };
 
 use hotshot_types::{
-    constants::TEST_UPGRADE_CONSTANTS,
     signature_key::{BLSPubKey, BuilderKey, SchnorrPubKey},
     traits::node_implementation::NodeType,
-    upgrade_config::UpgradeConstants,
 };
 use vbs::version::StaticVersion;
 use versions::{NEW_PROTOCOL_VERSION, Upgrade, version};
@@ -47,8 +45,6 @@ use crate::{
 /// to select our traits
 pub struct TestTypes;
 impl NodeType for TestTypes {
-    const UPGRADE_CONSTANTS: UpgradeConstants = TEST_UPGRADE_CONSTANTS;
-
     type BlockHeader = TestBlockHeader;
     type BlockPayload = TestBlockPayload;
     type SignatureKey = BLSPubKey;
@@ -77,8 +73,6 @@ impl NodeType for TestTypes {
 /// to select our traits
 pub struct TestTypesRandomizedLeader;
 impl NodeType for TestTypesRandomizedLeader {
-    const UPGRADE_CONSTANTS: UpgradeConstants = TEST_UPGRADE_CONSTANTS;
-
     type BlockHeader = TestBlockHeader;
     type BlockPayload = TestBlockPayload;
     type SignatureKey = BLSPubKey;
@@ -141,8 +135,6 @@ impl<StakeTable: TestStakeTable<BLSPubKey, SchnorrPubKey>> Clone
 impl<StakeTable: TestStakeTable<BLSPubKey, SchnorrPubKey> + 'static> NodeType
     for TestTypesEpochCatchupTypes<StakeTable>
 {
-    const UPGRADE_CONSTANTS: UpgradeConstants = TEST_UPGRADE_CONSTANTS;
-
     type BlockHeader = TestBlockHeader;
     type BlockPayload = TestBlockPayload;
     type SignatureKey = BLSPubKey;
@@ -180,8 +172,6 @@ pub struct TestTypesRandomizedCommitteeMembers<
 impl<QuorumConfig: QuorumFilterConfig, DaConfig: QuorumFilterConfig> NodeType
     for TestTypesRandomizedCommitteeMembers<QuorumConfig, DaConfig>
 {
-    const UPGRADE_CONSTANTS: UpgradeConstants = TEST_UPGRADE_CONSTANTS;
-
     type BlockHeader = TestBlockHeader;
     type BlockPayload = TestBlockPayload;
     type SignatureKey = BLSPubKey;
@@ -213,8 +203,6 @@ impl<QuorumConfig: QuorumFilterConfig, DaConfig: QuorumFilterConfig> NodeType
 /// to select our traits
 pub struct TestConsecutiveLeaderTypes;
 impl NodeType for TestConsecutiveLeaderTypes {
-    const UPGRADE_CONSTANTS: UpgradeConstants = TEST_UPGRADE_CONSTANTS;
-
     type BlockHeader = TestBlockHeader;
     type BlockPayload = TestBlockPayload;
     type SignatureKey = BLSPubKey;
@@ -246,8 +234,6 @@ impl NodeType for TestConsecutiveLeaderTypes {
 /// to select our traits
 pub struct TestTwoStakeTablesTypes;
 impl NodeType for TestTwoStakeTablesTypes {
-    const UPGRADE_CONSTANTS: UpgradeConstants = TEST_UPGRADE_CONSTANTS;
-
     type BlockHeader = TestBlockHeader;
     type BlockPayload = TestBlockPayload;
     type SignatureKey = BLSPubKey;
@@ -263,20 +249,14 @@ impl NodeType for TestTwoStakeTablesTypes {
 #[non_exhaustive]
 pub struct TestVersions {
     pub test: Upgrade,
-    pub epoch: Upgrade,
     pub da_committee: Upgrade,
     pub vid2: Upgrade,
-    pub epoch_upgrade: Upgrade,
-    pub vid2_upgrade: Upgrade,
 }
 
 pub const TEST_VERSIONS: TestVersions = TestVersions {
-    epoch: Upgrade::trivial(version(0, 3)),
     da_committee: Upgrade::trivial(version(0, 4)),
     vid2: Upgrade::trivial(NEW_PROTOCOL_VERSION),
     test: Upgrade::trivial(NEW_PROTOCOL_VERSION),
-    epoch_upgrade: Upgrade::new(version(0, 3), version(0, 4)),
-    vid2_upgrade: Upgrade::new(version(0, 5), version(0, 6)),
 };
 
 pub type EpochVersion = StaticVersion<0, 3>;
@@ -296,7 +276,7 @@ mod tests {
             SimpleCertificate, TimeoutCertificate2, TimeoutCertificate3, TimeoutEvidence,
             optional_timeout_evidence,
         },
-        simple_vote::{HasEpoch, TimeoutData2, TimeoutData3, VersionedVoteData},
+        simple_vote::{HasEpoch, TimeoutData2, VersionedVoteData},
         utils::{genesis_epoch_from_version, option_epoch_from_block_number},
     };
     use serde::{Deserialize, Serialize};
@@ -335,17 +315,20 @@ mod tests {
     }
 
     fn timeout_cert_v3() -> TimeoutCertificate3<TestTypes> {
-        let data = TimeoutData3 {
-            view: ViewNumber::new(7),
-            epoch: EpochNumber::new(1),
-        };
-        SimpleCertificate::new(
-            data.clone(),
-            data.commit(),
+        use alloy::primitives::U256;
+        use hotshot_types::{signature_key::BLSPubKey, traits::signature_key::SignatureKey};
+
+        let (key, private_key) = BLSPubKey::generated_from_seed_indexed([0u8; 32], 0);
+        let entries = vec![key.stake_table_entry(U256::from(1))];
+        let signature = BLSPubKey::sign(&private_key, b"timeout").unwrap();
+        TimeoutCertificate3::assemble(
             ViewNumber::new(7),
+            EpochNumber::new(1),
+            &entries,
+            [(None, key, signature)],
             None,
-            PhantomData,
         )
+        .unwrap()
     }
 
     /// The proposal field, so the tests exercise the encoding in the position

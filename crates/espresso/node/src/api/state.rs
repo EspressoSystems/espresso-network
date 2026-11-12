@@ -2,7 +2,7 @@
 //! data source this type wraps.
 
 use std::{
-    collections::HashMap,
+    collections::{BTreeSet, HashMap},
     num::NonZeroUsize,
     ops::{Bound, Deref, Range},
     time::Duration,
@@ -15,11 +15,15 @@ use disco_types::{error::Error as _, status::StatusCode};
 use espresso_api::{
     error::{AvailabilityError, SubmitError, to_status},
     proto,
-    v1::{self, HotShotAvailabilityApi},
+    v1::{
+        self, HotShotAvailabilityApi,
+        database::{MigrationStatus, TableSize},
+        node::StakeTableWithEpochNumber,
+        status::NodePublicKeys,
+    },
 };
 use espresso_types::{
     NamespaceId, NamespaceProofQueryData, NsProof, SeqTypes,
-    v0::sparse_mt::KeccakNode,
     v0_3::{RewardAccountV1, RewardAmount as InternalRewardAmount, RewardMerkleTreeV1},
     v0_4::{
         RewardAccountQueryDataV2 as InternalRewardAccountQueryData, RewardAccountV2,
@@ -56,10 +60,7 @@ use hotshot_types::{
     utils::{epoch_from_block_number, root_block_in_epoch},
     vid::avidm::AvidMShare,
 };
-use jf_merkle_tree_compat::{
-    MerkleTreeScheme,
-    prelude::{MerkleProof as InternalMerkleProof, MerkleProof as JfMerkleProof},
-};
+use jf_merkle_tree_compat::{MerkleTreeScheme, prelude::MerkleProof as JfMerkleProof};
 use prometheus::Encoder as _;
 use serde_json;
 use tagged_base64::TaggedBase64;
@@ -67,13 +68,13 @@ use tagged_base64::TaggedBase64;
 use super::{
     RewardMerkleTreeDataSource, RewardMerkleTreeV2Data as InternalRewardTreeData,
     data_source::{
-        CatchupDataSource, DatabaseMetadataSource, HotShotConfigDataSource, MigrationStatus,
-        NodeKeysDataSource, NodePublicKeys, NodeStateDataSource, PruningDataSource,
-        RequestResponseDataSource, StakeTableDataSource, StakeTableWithEpochNumber,
+        CatchupDataSource, DatabaseMetadataSource, HotShotConfigDataSource, NodeKeysDataSource,
+        NodeStateDataSource, PruningDataSource, RequestResponseDataSource, StakeTableDataSource,
         StateCertDataSource, StateCertFetchingDataSource, StateSignatureDataSource,
-        SubmitDataSource, TableSize, TokenDataSource,
+        SubmitDataSource, TokenDataSource,
     },
 };
+use crate::state_cert::StateCertFetchError;
 
 /// Timeout for failing requests due to missing data.
 ///
@@ -83,6 +84,10 @@ use super::{
 ///
 /// Matches the `hotshot_query_service` availability API default.
 const FETCH_TIMEOUT: Duration = Duration::from_millis(500);
+
+/// Bounds the namespace list of a v2 multi-namespace light-client request, as the URL length
+/// bounds v1's, since every namespace costs a lookup in every block of the range.
+const MAX_NAMESPACES_PER_REQUEST: usize = 100;
 
 /// Node API state implementation
 ///
@@ -123,6 +128,12 @@ impl<D> NodeApiStateImpl<D> {
         self.public_node_config = config.map(std::sync::Arc::new);
         self
     }
+
+    fn cloned_public_node_config(&self) -> anyhow::Result<crate::options::PublicNodeConfig> {
+        self.public_node_config.as_deref().cloned().ok_or_else(|| {
+            AvailabilityError::NotFound("runtime config not available".to_string()).into()
+        })
+    }
 }
 
 #[async_trait]
@@ -145,29 +156,6 @@ where
         > + Send
         + Sync,
 {
-    type RewardClaimInput = InternalRewardClaimInput;
-    type RewardBalance = InternalRewardAmount;
-    type RewardAccountQueryData = InternalRewardAccountQueryData;
-    type RewardAmounts = Vec<(alloy::primitives::Address, InternalRewardAmount)>;
-    type RewardMerkleTreeData = Vec<u8>;
-    type RewardAccountQueryDataV1 = espresso_types::v0_3::RewardAccountQueryDataV1;
-    type RewardStatePathV1 = InternalMerkleProof<
-        InternalRewardAmount,
-        espresso_types::v0_3::RewardAccountV1,
-        jf_merkle_tree_compat::prelude::Sha3Node,
-        {
-            <espresso_types::v0_3::RewardMerkleTreeV1 as jf_merkle_tree_compat::MerkleTreeScheme>::ARITY
-        },
-    >;
-    type RewardStatePathV2 = InternalMerkleProof<
-        InternalRewardAmount,
-        RewardAccountV2,
-        KeccakNode,
-        {
-            <espresso_types::v0_4::RewardMerkleTreeV2 as jf_merkle_tree_compat::MerkleTreeScheme>::ARITY
-        },
-    >;
-
     async fn get_reward_state_height(&self) -> anyhow::Result<u64> {
         let ds = &*self.data_source;
         ds.get_last_state_height()
@@ -186,7 +174,7 @@ where
         &self,
         height: u64,
         address: String,
-    ) -> anyhow::Result<Self::RewardAccountQueryDataV1> {
+    ) -> anyhow::Result<espresso_types::v0_3::RewardAccountQueryDataV1> {
         let account: RewardAccountV1 = address
             .parse()
             .map_err(|_| bad_request(format!("invalid ethereum address: {}", address)))?;
@@ -206,7 +194,7 @@ where
         &self,
         block_height: u64,
         address: String,
-    ) -> anyhow::Result<Self::RewardClaimInput> {
+    ) -> anyhow::Result<InternalRewardClaimInput> {
         // Parse the Ethereum address
         let addr: alloy::primitives::Address = address
             .parse()
@@ -247,7 +235,7 @@ where
         &self,
         height: u64,
         address: String,
-    ) -> anyhow::Result<Self::RewardBalance> {
+    ) -> anyhow::Result<InternalRewardAmount> {
         // Parse the Ethereum address
         let addr: alloy::primitives::Address = address
             .parse()
@@ -271,7 +259,7 @@ where
     async fn get_latest_reward_balance(
         &self,
         address: String,
-    ) -> anyhow::Result<Self::RewardBalance> {
+    ) -> anyhow::Result<InternalRewardAmount> {
         let addr: alloy::primitives::Address = address
             .parse()
             .map_err(|_| bad_request(format!("invalid ethereum address: {}", address)))?;
@@ -294,7 +282,7 @@ where
         &self,
         height: u64,
         address: String,
-    ) -> anyhow::Result<Self::RewardAccountQueryData> {
+    ) -> anyhow::Result<InternalRewardAccountQueryData> {
         // Parse the Ethereum address
         let addr: alloy::primitives::Address = address
             .parse()
@@ -318,7 +306,7 @@ where
     async fn get_latest_reward_account_proof(
         &self,
         address: String,
-    ) -> anyhow::Result<Self::RewardAccountQueryData> {
+    ) -> anyhow::Result<InternalRewardAccountQueryData> {
         // Parse the Ethereum address
         let addr: alloy::primitives::Address = address
             .parse()
@@ -343,7 +331,7 @@ where
         height: u64,
         offset: u64,
         limit: u64,
-    ) -> anyhow::Result<Self::RewardAmounts> {
+    ) -> anyhow::Result<Vec<(alloy::primitives::Address, InternalRewardAmount)>> {
         if limit > 10000 {
             return Err(bad_request(format!(
                 "limit {} exceeds maximum allowed value of 10000",
@@ -385,10 +373,7 @@ where
         Ok(result)
     }
 
-    async fn get_reward_merkle_tree_v2(
-        &self,
-        height: u64,
-    ) -> anyhow::Result<Self::RewardMerkleTreeData> {
+    async fn get_reward_merkle_tree_v2(&self, height: u64) -> anyhow::Result<Vec<u8>> {
         self.data_source.load_tree(height).await.map_err(|err| {
             not_found(format!(
                 "failed to load reward tree at height {}: {}",
@@ -401,7 +386,7 @@ where
         &self,
         snapshot: v1::Snapshot,
         key: String,
-    ) -> anyhow::Result<Self::RewardStatePathV1> {
+    ) -> anyhow::Result<v1::reward_state_v2::RewardStatePathV1> {
         let hs_snapshot = match snapshot {
             v1::Snapshot::Height(h) => HsSnapshot::Index(h),
             v1::Snapshot::Commit(c) => {
@@ -427,7 +412,7 @@ where
         &self,
         snapshot: v1::Snapshot,
         key: String,
-    ) -> anyhow::Result<Self::RewardStatePathV2> {
+    ) -> anyhow::Result<v1::reward_state_v2::RewardStatePathV2> {
         let hs_snapshot = match snapshot {
             v1::Snapshot::Height(h) => HsSnapshot::Index(h),
             v1::Snapshot::Commit(c) => {
@@ -465,16 +450,11 @@ where
         + Send
         + Sync,
 {
-    type NamespaceProofQueryData = espresso_types::NamespaceProofQueryData;
-    type IncorrectEncodingProof = espresso_types::v0_3::AvidMIncorrectEncodingNsProof;
-    type StateCertQueryDataV1 = espresso_types::StateCertQueryDataV1<SeqTypes>;
-    type StateCertQueryDataV2 = espresso_types::StateCertQueryDataV2<SeqTypes>;
-
     async fn get_namespace_proof(
         &self,
         block_id: v1::availability::BlockId,
         namespace: u32,
-    ) -> anyhow::Result<Self::NamespaceProofQueryData> {
+    ) -> anyhow::Result<espresso_types::NamespaceProofQueryData> {
         let ns_id = NamespaceId::from(namespace);
 
         // Convert v1 BlockId to hotshot BlockId
@@ -544,7 +524,7 @@ where
         from: u64,
         until: u64,
         namespace: u32,
-    ) -> anyhow::Result<Vec<Self::NamespaceProofQueryData>> {
+    ) -> anyhow::Result<Vec<espresso_types::NamespaceProofQueryData>> {
         let ns_id = NamespaceId::from(namespace);
 
         // Validate range
@@ -634,7 +614,7 @@ where
         &self,
         from: usize,
         namespace: u32,
-    ) -> anyhow::Result<BoxStream<'static, Self::NamespaceProofQueryData>> {
+    ) -> anyhow::Result<BoxStream<'static, espresso_types::NamespaceProofQueryData>> {
         let ns_id = NamespaceId::from(namespace);
         let ds = self.data_source.clone();
         let blocks = (*ds).subscribe_blocks(from).await;
@@ -673,7 +653,7 @@ where
         &self,
         block_id: v1::availability::BlockId,
         namespace: u32,
-    ) -> anyhow::Result<Self::IncorrectEncodingProof> {
+    ) -> anyhow::Result<espresso_types::v0_3::AvidMIncorrectEncodingNsProof> {
         let ns_id = NamespaceId::from(namespace);
 
         let hs_block_id = match block_id {
@@ -750,38 +730,19 @@ where
         }
     }
 
-    async fn get_state_cert(&self, epoch: u64) -> anyhow::Result<Self::StateCertQueryDataV1> {
-        // Try to get from local storage first
-        let state_cert = self.data_source.get_state_cert_by_epoch(epoch).await?;
-
-        let cert = match state_cert {
-            Some(cert) => cert,
-            None => {
-                // Not found locally, try to fetch from peers
-                const TIMEOUT: Duration = Duration::from_secs(40);
-                let cert = self
-                    .data_source
-                    .request_state_cert(epoch, TIMEOUT)
-                    .await
-                    .map_err(|e| {
-                        anyhow::anyhow!("failed to fetch state cert for epoch {}: {}", epoch, e)
-                    })?;
-
-                // Store the fetched certificate
-                self.data_source
-                    .insert_state_cert(epoch, cert.clone())
-                    .await?;
-
-                cert
-            },
-        };
-
-        Ok(espresso_types::StateCertQueryDataV1::from(
-            espresso_types::StateCertQueryDataV2(cert),
-        ))
+    async fn get_state_cert(
+        &self,
+        epoch: u64,
+    ) -> anyhow::Result<espresso_types::StateCertQueryDataV1<SeqTypes>> {
+        self.get_state_cert_v2(epoch)
+            .await
+            .map(espresso_types::StateCertQueryDataV1::from)
     }
 
-    async fn get_state_cert_v2(&self, epoch: u64) -> anyhow::Result<Self::StateCertQueryDataV2> {
+    async fn get_state_cert_v2(
+        &self,
+        epoch: u64,
+    ) -> anyhow::Result<espresso_types::StateCertQueryDataV2<SeqTypes>> {
         // Try to get from local storage first
         let state_cert = self.data_source.get_state_cert_by_epoch(epoch).await?;
 
@@ -794,9 +755,7 @@ where
                     .data_source
                     .request_state_cert(epoch, TIMEOUT)
                     .await
-                    .map_err(|e| {
-                        anyhow::anyhow!("failed to fetch state cert for epoch {}: {}", epoch, e)
-                    })?;
+                    .map_err(state_cert_error)?;
 
                 // Store the fetched certificate
                 self.data_source
@@ -894,18 +853,10 @@ where
     for<'a> <D::Target as hotshot_query_service::data_source::VersionedDataSource>::ReadOnly<'a>:
         hotshot_query_service::data_source::storage::AvailabilityStorage<SeqTypes>,
 {
-    type Leaf = LeafQueryData<SeqTypes>;
-    type Block = BlockQueryData<SeqTypes>;
-    type Header = HsHeader<SeqTypes>;
-    type Payload = PayloadQueryData<SeqTypes>;
-    type VidCommon = VidCommonQueryData<SeqTypes>;
-    type Transaction = TransactionQueryData<SeqTypes>;
-    type TransactionWithProof = TransactionWithProofQueryData<SeqTypes>;
-    type BlockSummary = BlockSummaryQueryData<SeqTypes>;
-    type Limits = HsLimits;
-    type Cert2 = Certificate2<SeqTypes>;
-
-    async fn get_leaf(&self, id: v1::availability::LeafId) -> anyhow::Result<Self::Leaf> {
+    async fn get_leaf(
+        &self,
+        id: v1::availability::LeafId,
+    ) -> anyhow::Result<LeafQueryData<SeqTypes>> {
         let hs_id = match id {
             v1::availability::LeafId::Height(h) => HsLeafId::Number(h as usize),
             v1::availability::LeafId::Hash(h) => {
@@ -920,7 +871,11 @@ where
             .ok_or_else(|| not_found("leaf not found"))
     }
 
-    async fn get_leaf_range(&self, from: usize, until: usize) -> anyhow::Result<Vec<Self::Leaf>> {
+    async fn get_leaf_range(
+        &self,
+        from: usize,
+        until: usize,
+    ) -> anyhow::Result<Vec<LeafQueryData<SeqTypes>>> {
         enforce_range(from, until, small_object_range_limit())?;
         let timeout = FETCH_TIMEOUT;
         let ds = &*self.data_source;
@@ -939,7 +894,10 @@ where
         Ok(results)
     }
 
-    async fn get_header(&self, id: v1::availability::BlockId) -> anyhow::Result<Self::Header> {
+    async fn get_header(
+        &self,
+        id: v1::availability::BlockId,
+    ) -> anyhow::Result<HsHeader<SeqTypes>> {
         let hs_id = block_id_to_hs(id)?;
         let ds = &*self.data_source;
         ds.get_header(hs_id)
@@ -953,7 +911,7 @@ where
         &self,
         from: usize,
         until: usize,
-    ) -> anyhow::Result<Vec<Self::Header>> {
+    ) -> anyhow::Result<Vec<HsHeader<SeqTypes>>> {
         enforce_range(from, until, large_object_range_limit())?;
         let timeout = FETCH_TIMEOUT;
         let ds = &*self.data_source;
@@ -972,7 +930,10 @@ where
         Ok(results)
     }
 
-    async fn get_block(&self, id: v1::availability::BlockId) -> anyhow::Result<Self::Block> {
+    async fn get_block(
+        &self,
+        id: v1::availability::BlockId,
+    ) -> anyhow::Result<BlockQueryData<SeqTypes>> {
         let hs_id = block_id_to_hs(id)?;
         let ds = &*self.data_source;
         ds.get_block(hs_id)
@@ -982,7 +943,11 @@ where
             .ok_or_else(|| not_found(format!("block not found for {}", hs_id)))
     }
 
-    async fn get_block_range(&self, from: usize, until: usize) -> anyhow::Result<Vec<Self::Block>> {
+    async fn get_block_range(
+        &self,
+        from: usize,
+        until: usize,
+    ) -> anyhow::Result<Vec<BlockQueryData<SeqTypes>>> {
         enforce_range(from, until, large_object_range_limit())?;
         let timeout = FETCH_TIMEOUT;
         let ds = &*self.data_source;
@@ -1001,7 +966,10 @@ where
         Ok(results)
     }
 
-    async fn get_payload(&self, id: v1::availability::PayloadId) -> anyhow::Result<Self::Payload> {
+    async fn get_payload(
+        &self,
+        id: v1::availability::PayloadId,
+    ) -> anyhow::Result<PayloadQueryData<SeqTypes>> {
         let hs_id = payload_id_to_hs(id)?;
         let ds = &*self.data_source;
         ds.get_payload(hs_id)
@@ -1015,7 +983,7 @@ where
         &self,
         from: usize,
         until: usize,
-    ) -> anyhow::Result<Vec<Self::Payload>> {
+    ) -> anyhow::Result<Vec<PayloadQueryData<SeqTypes>>> {
         enforce_range(from, until, large_object_range_limit())?;
         let timeout = FETCH_TIMEOUT;
         let ds = &*self.data_source;
@@ -1037,7 +1005,7 @@ where
     async fn get_vid_common(
         &self,
         id: v1::availability::BlockId,
-    ) -> anyhow::Result<Self::VidCommon> {
+    ) -> anyhow::Result<VidCommonQueryData<SeqTypes>> {
         let hs_id = block_id_to_hs(id)?;
         let ds = &*self.data_source;
         ds.get_vid_common(hs_id)
@@ -1051,7 +1019,7 @@ where
         &self,
         from: usize,
         until: usize,
-    ) -> anyhow::Result<Vec<Self::VidCommon>> {
+    ) -> anyhow::Result<Vec<VidCommonQueryData<SeqTypes>>> {
         enforce_range(from, until, small_object_range_limit())?;
         let timeout = FETCH_TIMEOUT;
         let ds = &*self.data_source;
@@ -1070,7 +1038,10 @@ where
         Ok(results)
     }
 
-    async fn get_leaf_ranges(&self, ranges: Vec<Range<u64>>) -> anyhow::Result<Vec<Self::Leaf>> {
+    async fn get_leaf_ranges(
+        &self,
+        ranges: Vec<Range<u64>>,
+    ) -> anyhow::Result<Vec<LeafQueryData<SeqTypes>>> {
         let ranges = validate_ranges(ranges, small_object_range_limit())?;
 
         // One read when every height is present. A miss falls through to the range endpoints,
@@ -1091,7 +1062,10 @@ where
         Ok(ranges.into_iter().flatten().collect())
     }
 
-    async fn get_block_ranges(&self, ranges: Vec<Range<u64>>) -> anyhow::Result<Vec<Self::Block>> {
+    async fn get_block_ranges(
+        &self,
+        ranges: Vec<Range<u64>>,
+    ) -> anyhow::Result<Vec<BlockQueryData<SeqTypes>>> {
         let ranges = validate_ranges(ranges, large_object_range_limit())?;
 
         let heights: u64 = ranges.iter().map(|range| range.end - range.start).sum();
@@ -1113,7 +1087,7 @@ where
     async fn get_vid_common_ranges(
         &self,
         ranges: Vec<Range<u64>>,
-    ) -> anyhow::Result<Vec<Self::VidCommon>> {
+    ) -> anyhow::Result<Vec<VidCommonQueryData<SeqTypes>>> {
         let ranges = validate_ranges(ranges, small_object_range_limit())?;
 
         let heights: u64 = ranges.iter().map(|range| range.end - range.start).sum();
@@ -1136,7 +1110,7 @@ where
         &self,
         height: u64,
         index: u64,
-    ) -> anyhow::Result<Self::Transaction> {
+    ) -> anyhow::Result<TransactionQueryData<SeqTypes>> {
         let ds = &*self.data_source;
         let block = ds
             .get_block(HsBlockId::Number(height as usize))
@@ -1161,7 +1135,10 @@ where
             .ok_or_else(|| anyhow::anyhow!("failed to build transaction query data"))
     }
 
-    async fn get_transaction_by_hash(&self, hash: String) -> anyhow::Result<Self::Transaction> {
+    async fn get_transaction_by_hash(
+        &self,
+        hash: String,
+    ) -> anyhow::Result<TransactionQueryData<SeqTypes>> {
         let ds = &*self.data_source;
         let tx_hash: hotshot_query_service::availability::TransactionHash<SeqTypes> = hash
             .parse()
@@ -1179,7 +1156,7 @@ where
         &self,
         height: u64,
         index: u64,
-    ) -> anyhow::Result<Self::TransactionWithProof> {
+    ) -> anyhow::Result<TransactionWithProofQueryData<SeqTypes>> {
         let ds = &*self.data_source;
         let timeout = FETCH_TIMEOUT;
 
@@ -1219,7 +1196,7 @@ where
     async fn get_transaction_proof_by_hash(
         &self,
         hash: String,
-    ) -> anyhow::Result<Self::TransactionWithProof> {
+    ) -> anyhow::Result<TransactionWithProofQueryData<SeqTypes>> {
         let ds = &*self.data_source;
         let timeout = FETCH_TIMEOUT;
 
@@ -1252,7 +1229,10 @@ where
         Ok(TransactionWithProofQueryData::new(bwt.transaction, proof))
     }
 
-    async fn get_block_summary(&self, height: usize) -> anyhow::Result<Self::BlockSummary> {
+    async fn get_block_summary(
+        &self,
+        height: usize,
+    ) -> anyhow::Result<BlockSummaryQueryData<SeqTypes>> {
         let ds = &*self.data_source;
         let block = ds
             .get_block(HsBlockId::Number(height))
@@ -1267,7 +1247,7 @@ where
         &self,
         from: usize,
         until: usize,
-    ) -> anyhow::Result<Vec<Self::BlockSummary>> {
+    ) -> anyhow::Result<Vec<BlockSummaryQueryData<SeqTypes>>> {
         enforce_range(from, until, large_object_range_limit())?;
         let timeout = FETCH_TIMEOUT;
         let ds = &*self.data_source;
@@ -1286,14 +1266,14 @@ where
         Ok(results)
     }
 
-    async fn get_limits(&self) -> anyhow::Result<Self::Limits> {
+    async fn get_limits(&self) -> anyhow::Result<HsLimits> {
         Ok(HsLimits {
             small_object_range_limit: small_object_range_limit(),
             large_object_range_limit: large_object_range_limit(),
         })
     }
 
-    async fn get_cert2(&self, height: u64) -> anyhow::Result<Option<Self::Cert2>> {
+    async fn get_cert2(&self, height: u64) -> anyhow::Result<Option<Certificate2<SeqTypes>>> {
         Ok(self
             .data_source
             .get_cert2(height)
@@ -1302,7 +1282,10 @@ where
             .await)
     }
 
-    async fn stream_leaves(&self, from: usize) -> anyhow::Result<BoxStream<'static, Self::Leaf>> {
+    async fn stream_leaves(
+        &self,
+        from: usize,
+    ) -> anyhow::Result<BoxStream<'static, LeafQueryData<SeqTypes>>> {
         let ds = self.data_source.clone();
         Ok((*ds).subscribe_leaves(from).await.boxed())
     }
@@ -1310,12 +1293,15 @@ where
     async fn stream_headers(
         &self,
         from: usize,
-    ) -> anyhow::Result<BoxStream<'static, Self::Header>> {
+    ) -> anyhow::Result<BoxStream<'static, HsHeader<SeqTypes>>> {
         let ds = self.data_source.clone();
         Ok((*ds).subscribe_headers(from).await.boxed())
     }
 
-    async fn stream_blocks(&self, from: usize) -> anyhow::Result<BoxStream<'static, Self::Block>> {
+    async fn stream_blocks(
+        &self,
+        from: usize,
+    ) -> anyhow::Result<BoxStream<'static, BlockQueryData<SeqTypes>>> {
         let ds = self.data_source.clone();
         Ok((*ds).subscribe_blocks(from).await.boxed())
     }
@@ -1323,7 +1309,7 @@ where
     async fn stream_payloads(
         &self,
         from: usize,
-    ) -> anyhow::Result<BoxStream<'static, Self::Payload>> {
+    ) -> anyhow::Result<BoxStream<'static, PayloadQueryData<SeqTypes>>> {
         let ds = self.data_source.clone();
         Ok((*ds).subscribe_payloads(from).await.boxed())
     }
@@ -1331,7 +1317,7 @@ where
     async fn stream_vid_common(
         &self,
         from: usize,
-    ) -> anyhow::Result<BoxStream<'static, Self::VidCommon>> {
+    ) -> anyhow::Result<BoxStream<'static, VidCommonQueryData<SeqTypes>>> {
         let ds = self.data_source.clone();
         Ok((*ds).subscribe_vid_common(from).await.boxed())
     }
@@ -1340,14 +1326,14 @@ where
         &self,
         from: usize,
         namespace: Option<u32>,
-    ) -> anyhow::Result<BoxStream<'static, Self::Transaction>> {
+    ) -> anyhow::Result<BoxStream<'static, TransactionQueryData<SeqTypes>>> {
         let ds = self.data_source.clone();
         let stream = (*ds)
             .subscribe_blocks(from)
             .await
             .flat_map(move |block| {
                 let ns_filter = namespace.map(NamespaceId::from);
-                let txs: Vec<Self::Transaction> = block
+                let txs: Vec<TransactionQueryData<SeqTypes>> = block
                     .enumerate()
                     .enumerate()
                     .filter_map(|(position_in_block, (tx_index, _tx))| {
@@ -1423,18 +1409,11 @@ where
         + Send
         + Sync,
 {
-    type MerkleProof = InternalMerkleProof<
-        committable::Commitment<espresso_types::Header>,
-        u64,
-        jf_merkle_tree_compat::prelude::Sha3Node,
-        3,
-    >;
-
     async fn get_block_state_path(
         &self,
         snapshot: v1::Snapshot,
         key: String,
-    ) -> anyhow::Result<Self::MerkleProof> {
+    ) -> anyhow::Result<v1::merklized_state::BlockStatePath> {
         let hs_snapshot = match snapshot {
             v1::Snapshot::Height(h) => HsSnapshot::Index(h),
             v1::Snapshot::Commit(c) => {
@@ -1481,19 +1460,11 @@ where
         + Send
         + Sync,
 {
-    type MerkleProof = InternalMerkleProof<
-        espresso_types::FeeAmount,
-        espresso_types::FeeAccount,
-        jf_merkle_tree_compat::prelude::Sha3Node,
-        256,
-    >;
-    type FeeAmount = espresso_types::FeeAmount;
-
     async fn get_fee_state_path(
         &self,
         snapshot: v1::Snapshot,
         key: String,
-    ) -> anyhow::Result<Self::MerkleProof> {
+    ) -> anyhow::Result<v1::merklized_state::FeeStatePath> {
         let hs_snapshot = match snapshot {
             v1::Snapshot::Height(h) => HsSnapshot::Index(h),
             v1::Snapshot::Commit(c) => {
@@ -1530,7 +1501,7 @@ where
     async fn get_fee_balance_latest(
         &self,
         address: String,
-    ) -> anyhow::Result<Option<Self::FeeAmount>> {
+    ) -> anyhow::Result<Option<espresso_types::FeeAmount>> {
         let key: espresso_types::FeeAccount = address
             .parse()
             .map_err(|_| bad_request("failed to parse address"))?;
@@ -1561,8 +1532,6 @@ where
     D: Deref + Clone + Send + Sync + 'static,
     D::Target: hotshot_query_service::status::StatusDataSource + NodeKeysDataSource + Send + Sync,
 {
-    type Keys = NodePublicKeys;
-
     async fn block_height(&self) -> anyhow::Result<u64> {
         let ds = &*self.data_source;
         let h = hotshot_query_service::status::StatusDataSource::block_height(ds)
@@ -1670,10 +1639,7 @@ where
     D: Deref + Clone + Send + Sync + 'static,
     D::Target: HotShotConfigDataSource + Send + Sync,
 {
-    type HotShotConfig = espresso_types::config::PublicNetworkConfig;
-    type RuntimeConfig = crate::options::PublicNodeConfig;
-
-    async fn hotshot_config(&self) -> anyhow::Result<Self::HotShotConfig> {
+    async fn hotshot_config(&self) -> anyhow::Result<espresso_types::config::PublicNetworkConfig> {
         let ds = &*self.data_source;
         Ok(ds.get_config().await)
     }
@@ -1682,13 +1648,8 @@ where
         Ok((*self.env_vars).clone())
     }
 
-    async fn runtime_config(&self) -> anyhow::Result<Self::RuntimeConfig> {
-        self.public_node_config.as_deref().cloned().ok_or_else(|| {
-            espresso_api::error::AvailabilityError::NotFound(
-                "runtime config not available".to_string(),
-            )
-            .into()
-        })
+    async fn runtime_config(&self) -> anyhow::Result<v1::config::RuntimeConfig> {
+        Ok(Box::new(self.cloned_public_node_config()?))
     }
 }
 
@@ -1733,9 +1694,7 @@ where
         &self,
         _request: tonic::Request<proto::GetRuntimeConfigRequest>,
     ) -> Result<tonic::Response<proto::RuntimeConfigResponse>, tonic::Status> {
-        let config = <Self as v1::ConfigApi>::runtime_config(self)
-            .await
-            .map_err(to_status)?;
+        let config = self.cloned_public_node_config().map_err(to_status)?;
         Ok(tonic::Response::new(config.into()))
     }
 }
@@ -1750,23 +1709,6 @@ where
         + Send
         + Sync,
 {
-    type VidShare = hotshot_types::data::VidShare;
-    type SyncStatus = hotshot_query_service::node::SyncStatusQueryData;
-    type HeaderWindow =
-        hotshot_query_service::node::TimeWindowQueryData<hotshot_query_service::Header<SeqTypes>>;
-    type Limits = hotshot_query_service::node::Limits;
-    type StakeTable = Vec<hotshot_types::PeerConfig<SeqTypes>>;
-    type StakeTableCurrent = StakeTableWithEpochNumber<SeqTypes>;
-    type Validators = indexmap::IndexMap<
-        alloy::primitives::Address,
-        espresso_types::v0_3::AuthenticatedValidator<espresso_types::PubKey>,
-    >;
-    type AllValidators = Vec<espresso_types::v0_3::RegisteredValidator<espresso_types::PubKey>>;
-    type Participation = std::collections::HashMap<espresso_types::PubKey, f64>;
-    type BlockReward = Option<espresso_types::v0_3::RewardAmount>;
-    type Block = hotshot_query_service::availability::BlockQueryData<SeqTypes>;
-    type Leaf = hotshot_query_service::availability::LeafQueryData<SeqTypes>;
-
     async fn block_height(&self) -> anyhow::Result<u64> {
         let ds = &*self.data_source;
         let h = hotshot_query_service::node::NodeDataSource::block_height(ds)
@@ -1821,7 +1763,10 @@ where
         Ok(size as u64)
     }
 
-    async fn get_vid_share(&self, id: v1::VidShareId) -> anyhow::Result<Self::VidShare> {
+    async fn get_vid_share(
+        &self,
+        id: v1::VidShareId,
+    ) -> anyhow::Result<hotshot_types::data::VidShare> {
         let ds = &*self.data_source;
         let node_id: HsBlockId<SeqTypes> = match id {
             v1::VidShareId::Height(h) => HsBlockId::Number(h as usize),
@@ -1839,7 +1784,9 @@ where
             .map_err(classify_query_error)
     }
 
-    async fn sync_status(&self) -> anyhow::Result<Self::SyncStatus> {
+    async fn sync_status(
+        &self,
+    ) -> anyhow::Result<hotshot_query_service::node::SyncStatusQueryData> {
         let ds = &*self.data_source;
         hotshot_query_service::node::NodeDataSource::sync_status(ds)
             .await
@@ -1850,7 +1797,9 @@ where
         &self,
         start: v1::HeaderWindowStart,
         end: u64,
-    ) -> anyhow::Result<Self::HeaderWindow> {
+    ) -> anyhow::Result<
+        hotshot_query_service::node::TimeWindowQueryData<hotshot_query_service::Header<SeqTypes>>,
+    > {
         let ds = &*self.data_source;
         let start: WindowStart<SeqTypes> = match start {
             v1::HeaderWindowStart::Time(t) => WindowStart::Time(t),
@@ -1865,35 +1814,49 @@ where
             .map_err(classify_query_error)
     }
 
-    async fn limits(&self) -> anyhow::Result<Self::Limits> {
+    async fn limits(&self) -> anyhow::Result<hotshot_query_service::node::Limits> {
         Ok(hotshot_query_service::node::Limits {
             window_limit: node_window_limit(),
         })
     }
 
-    async fn stake_table(&self, epoch: u64) -> anyhow::Result<Self::StakeTable> {
+    async fn stake_table(
+        &self,
+        epoch: u64,
+    ) -> anyhow::Result<Vec<hotshot_types::PeerConfig<SeqTypes>>> {
         let ds = &*self.data_source;
         ds.get_stake_table(Some(hotshot_types::data::EpochNumber::new(epoch)))
             .await
     }
 
-    async fn stake_table_current(&self) -> anyhow::Result<Self::StakeTableCurrent> {
+    async fn stake_table_current(&self) -> anyhow::Result<StakeTableWithEpochNumber<SeqTypes>> {
         let ds = &*self.data_source;
         ds.get_stake_table_current().await
     }
 
-    async fn da_stake_table(&self, epoch: u64) -> anyhow::Result<Self::StakeTable> {
+    async fn da_stake_table(
+        &self,
+        epoch: u64,
+    ) -> anyhow::Result<Vec<hotshot_types::PeerConfig<SeqTypes>>> {
         let ds = &*self.data_source;
         ds.get_da_stake_table(Some(hotshot_types::data::EpochNumber::new(epoch)))
             .await
     }
 
-    async fn da_stake_table_current(&self) -> anyhow::Result<Self::StakeTableCurrent> {
+    async fn da_stake_table_current(&self) -> anyhow::Result<StakeTableWithEpochNumber<SeqTypes>> {
         let ds = &*self.data_source;
         ds.get_da_stake_table_current().await
     }
 
-    async fn get_validators(&self, epoch: u64) -> anyhow::Result<Self::Validators> {
+    async fn get_validators(
+        &self,
+        epoch: u64,
+    ) -> anyhow::Result<
+        indexmap::IndexMap<
+            alloy::primitives::Address,
+            espresso_types::v0_3::AuthenticatedValidator<espresso_types::PubKey>,
+        >,
+    > {
         let ds = &*self.data_source;
         ds.get_validators(hotshot_types::data::EpochNumber::new(epoch))
             .await
@@ -1904,7 +1867,8 @@ where
         epoch: u64,
         offset: u64,
         limit: u64,
-    ) -> anyhow::Result<Self::AllValidators> {
+    ) -> anyhow::Result<Vec<espresso_types::v0_3::RegisteredValidator<espresso_types::PubKey>>>
+    {
         if limit > 1000 {
             return Err(bad_request("Limit cannot be greater than 1000"));
         }
@@ -1913,42 +1877,59 @@ where
             .await
     }
 
-    async fn current_proposal_participation(&self) -> anyhow::Result<Self::Participation> {
+    async fn current_proposal_participation(
+        &self,
+    ) -> anyhow::Result<std::collections::HashMap<espresso_types::PubKey, f64>> {
         let ds = &*self.data_source;
         Ok(ds.current_proposal_participation().await)
     }
 
-    async fn proposal_participation(&self, epoch: u64) -> anyhow::Result<Self::Participation> {
+    async fn proposal_participation(
+        &self,
+        epoch: u64,
+    ) -> anyhow::Result<std::collections::HashMap<espresso_types::PubKey, f64>> {
         let ds = &*self.data_source;
         Ok(ds
             .proposal_participation(hotshot_types::data::EpochNumber::new(epoch))
             .await)
     }
 
-    async fn current_vote_participation(&self) -> anyhow::Result<Self::Participation> {
+    async fn current_vote_participation(
+        &self,
+    ) -> anyhow::Result<std::collections::HashMap<espresso_types::PubKey, f64>> {
         let ds = &*self.data_source;
         Ok(ds.current_vote_participation().await)
     }
 
-    async fn vote_participation(&self, epoch: u64) -> anyhow::Result<Self::Participation> {
+    async fn vote_participation(
+        &self,
+        epoch: u64,
+    ) -> anyhow::Result<std::collections::HashMap<espresso_types::PubKey, f64>> {
         let ds = &*self.data_source;
         Ok(ds
             .vote_participation(hotshot_types::data::EpochNumber::new(epoch))
             .await)
     }
 
-    async fn get_block_reward(&self, epoch: Option<u64>) -> anyhow::Result<Self::BlockReward> {
+    async fn get_block_reward(
+        &self,
+        epoch: Option<u64>,
+    ) -> anyhow::Result<Option<espresso_types::v0_3::RewardAmount>> {
         let ds = &*self.data_source;
         ds.get_block_reward(epoch.map(hotshot_types::data::EpochNumber::new))
             .await
     }
 
-    async fn get_oldest_block(&self) -> anyhow::Result<Option<Self::Block>> {
+    async fn get_oldest_block(
+        &self,
+    ) -> anyhow::Result<Option<hotshot_query_service::availability::BlockQueryData<SeqTypes>>> {
         let ds = &*self.data_source;
         ds.get_oldest_block().await
     }
 
-    async fn get_oldest_leaf(&self) -> anyhow::Result<Option<Self::Leaf>> {
+    async fn get_oldest_leaf(
+        &self,
+    ) -> anyhow::Result<Option<hotshot_query_service::availability::LeafQueryData<SeqTypes>>> {
         let ds = &*self.data_source;
         ds.get_oldest_leaf().await
     }
@@ -2367,17 +2348,6 @@ impl From<crate::options::ApiModulesConfig> for proto::ApiModules {
     }
 }
 
-// Stays here rather than in the api crate's `render`: the source type is this crate's, and the
-// api crate cannot depend on this one.
-impl From<StakeTableWithEpochNumber<SeqTypes>> for proto::StakeTableResponse {
-    fn from(table: StakeTableWithEpochNumber<SeqTypes>) -> Self {
-        Self {
-            epoch: table.epoch.map(|epoch| *epoch),
-            stake_table: table.stake_table.into_iter().map(Into::into).collect(),
-        }
-    }
-}
-
 fn node_window_limit() -> usize {
     hotshot_query_service::node::Options::default().window_limit
 }
@@ -2388,29 +2358,12 @@ where
     D: Deref + Clone + Send + Sync + 'static,
     D::Target: CatchupDataSource + NodeStateDataSource + Send + Sync,
 {
-    type FeeAccount = espresso_types::FeeAccount;
-    type RewardAccountV1 = espresso_types::v0_3::RewardAccountV1;
-    type RewardAccountV2 = espresso_types::v0_4::RewardAccountV2;
-
-    type AccountQueryData = espresso_types::AccountQueryData;
-    type FeeMerkleTree = espresso_types::FeeMerkleTree;
-    type BlocksFrontier = super::BlocksFrontier;
-    type ChainConfig = espresso_types::v0_3::ChainConfig;
-    type LeafChain = Vec<espresso_types::Leaf2>;
-    type Cert2 = espresso_types::Certificate2<SeqTypes>;
-    type RewardAccountQueryDataV1 = espresso_types::v0_3::RewardAccountQueryDataV1;
-    type RewardMerkleTreeV1 = espresso_types::v0_3::RewardMerkleTreeV1;
-    type RewardAccountQueryDataV2 = espresso_types::v0_4::RewardAccountQueryDataV2;
-    type RewardMerkleTreeV2Data = serde_json::Value;
-    type StateCert =
-        hotshot_types::simple_certificate::LightClientStateUpdateCertificateV2<SeqTypes>;
-
     async fn get_account(
         &self,
         height: u64,
         view: u64,
         address: String,
-    ) -> anyhow::Result<Self::AccountQueryData> {
+    ) -> anyhow::Result<espresso_types::AccountQueryData> {
         let ds = &*self.data_source;
         let view = hotshot_types::data::ViewNumber::new(view);
         let account: espresso_types::FeeAccount = address
@@ -2426,8 +2379,8 @@ where
         &self,
         height: u64,
         view: u64,
-        accounts: Vec<Self::FeeAccount>,
-    ) -> anyhow::Result<Self::FeeMerkleTree> {
+        accounts: Vec<espresso_types::FeeAccount>,
+    ) -> anyhow::Result<espresso_types::FeeMerkleTree> {
         let ds = &*self.data_source;
         let view = hotshot_types::data::ViewNumber::new(view);
         let instance = ds.node_state().await;
@@ -2440,7 +2393,7 @@ where
         &self,
         height: u64,
         view: u64,
-    ) -> anyhow::Result<Self::BlocksFrontier> {
+    ) -> anyhow::Result<super::BlocksFrontier> {
         let ds = &*self.data_source;
         let view = hotshot_types::data::ViewNumber::new(view);
         let instance = ds.node_state().await;
@@ -2449,7 +2402,10 @@ where
             .map_err(|err| not_found(format!("{err:#}")))
     }
 
-    async fn get_chain_config(&self, commitment: String) -> anyhow::Result<Self::ChainConfig> {
+    async fn get_chain_config(
+        &self,
+        commitment: String,
+    ) -> anyhow::Result<espresso_types::v0_3::ChainConfig> {
         let ds = &*self.data_source;
         let parsed: committable::Commitment<espresso_types::v0_3::ChainConfig> = commitment
             .parse()
@@ -2459,14 +2415,17 @@ where
             .map_err(|err| not_found(format!("{err:#}")))
     }
 
-    async fn get_leaf_chain(&self, height: u64) -> anyhow::Result<Self::LeafChain> {
+    async fn get_leaf_chain(&self, height: u64) -> anyhow::Result<Vec<espresso_types::Leaf2>> {
         let ds = &*self.data_source;
         ds.get_leaf_chain(height)
             .await
             .map_err(|err| not_found(format!("{err:#}")))
     }
 
-    async fn get_cert2(&self, height: u64) -> anyhow::Result<Self::Cert2> {
+    async fn get_cert2(
+        &self,
+        height: u64,
+    ) -> anyhow::Result<espresso_types::Certificate2<SeqTypes>> {
         let ds = &*self.data_source;
         let response = ds
             .get_cert2(height)
@@ -2480,7 +2439,7 @@ where
         height: u64,
         view: u64,
         address: String,
-    ) -> anyhow::Result<Self::RewardAccountQueryDataV1> {
+    ) -> anyhow::Result<espresso_types::v0_3::RewardAccountQueryDataV1> {
         let ds = &*self.data_source;
         let view = hotshot_types::data::ViewNumber::new(view);
         let account: espresso_types::v0_4::RewardAccountV2 = address
@@ -2496,8 +2455,8 @@ where
         &self,
         height: u64,
         view: u64,
-        accounts: Vec<Self::RewardAccountV1>,
-    ) -> anyhow::Result<Self::RewardMerkleTreeV1> {
+        accounts: Vec<espresso_types::v0_3::RewardAccountV1>,
+    ) -> anyhow::Result<espresso_types::v0_3::RewardMerkleTreeV1> {
         let ds = &*self.data_source;
         let view = hotshot_types::data::ViewNumber::new(view);
         let instance = ds.node_state().await;
@@ -2511,7 +2470,7 @@ where
         height: u64,
         view: u64,
         address: String,
-    ) -> anyhow::Result<Self::RewardAccountQueryDataV2> {
+    ) -> anyhow::Result<espresso_types::v0_4::RewardAccountQueryDataV2> {
         let ds = &*self.data_source;
         let view = hotshot_types::data::ViewNumber::new(view);
         let account: espresso_types::v0_4::RewardAccountV2 = address
@@ -2527,7 +2486,7 @@ where
         &self,
         height: u64,
         view: u64,
-    ) -> anyhow::Result<Self::RewardMerkleTreeV2Data> {
+    ) -> anyhow::Result<serde_json::Value> {
         let ds = &*self.data_source;
         let view = hotshot_types::data::ViewNumber::new(view);
         let bytes = ds
@@ -2539,12 +2498,204 @@ where
         Ok(serde_json::to_value(bytes)?)
     }
 
-    async fn get_state_cert(&self, epoch: u64) -> anyhow::Result<Self::StateCert> {
+    async fn get_state_cert(
+        &self,
+        epoch: u64,
+    ) -> anyhow::Result<
+        hotshot_types::simple_certificate::LightClientStateUpdateCertificateV2<SeqTypes>,
+    > {
         let ds = &*self.data_source;
         ds.get_state_cert(epoch)
             .await
             .map_err(|err| not_found(format!("{err:#}")))
     }
+}
+
+#[tonic::async_trait]
+impl<D> proto::catchup_service_server::CatchupService for NodeApiStateImpl<D>
+where
+    D: Deref + Clone + Send + Sync + 'static,
+    D::Target: CatchupDataSource + NodeStateDataSource + Send + Sync,
+{
+    async fn get_catchup_fee_account(
+        &self,
+        request: tonic::Request<proto::GetCatchupFeeAccountRequest>,
+    ) -> Result<tonic::Response<proto::FeeAccountProofResponse>, tonic::Status> {
+        let request = request.into_inner();
+        let (height, view) = catchup_at(request.height, request.view)?;
+        let address = required(request.address, "address")?;
+        let query = <Self as v1::CatchupApi>::get_account(self, height, view, address)
+            .await
+            .map_err(to_status)?;
+        Ok(tonic::Response::new(query.into()))
+    }
+
+    async fn get_catchup_fee_accounts(
+        &self,
+        request: tonic::Request<proto::GetCatchupFeeAccountsRequest>,
+    ) -> Result<tonic::Response<proto::FeeMerkleTreeResponse>, tonic::Status> {
+        let request = request.into_inner();
+        let (height, view) = catchup_at(request.height, request.view)?;
+        let accounts = request
+            .addresses
+            .iter()
+            .map(|account| {
+                account.parse().map_err(|err| {
+                    tonic::Status::invalid_argument(format!(
+                        "malformed fee account {account}: {err}"
+                    ))
+                })
+            })
+            .collect::<Result<Vec<espresso_types::FeeAccount>, _>>()?;
+        let tree = <Self as v1::CatchupApi>::get_accounts(self, height, view, accounts)
+            .await
+            .map_err(to_status)?;
+        Ok(tonic::Response::new(proto::FeeMerkleTreeResponse {
+            tree: serialize_tree(&tree)?,
+        }))
+    }
+
+    async fn get_catchup_blocks_frontier(
+        &self,
+        request: tonic::Request<proto::GetCatchupBlocksFrontierRequest>,
+    ) -> Result<tonic::Response<proto::MerklePathResponse>, tonic::Status> {
+        let request = request.into_inner();
+        let (height, view) = catchup_at(request.height, request.view)?;
+        let frontier = <Self as v1::CatchupApi>::get_blocks_frontier(self, height, view)
+            .await
+            .map_err(to_status)?;
+        Ok(tonic::Response::new((&frontier).into()))
+    }
+
+    async fn get_catchup_chain_config(
+        &self,
+        request: tonic::Request<proto::GetCatchupChainConfigRequest>,
+    ) -> Result<tonic::Response<proto::CatchupChainConfigResponse>, tonic::Status> {
+        let commitment = required(request.into_inner().commitment, "commitment")?;
+        let config = <Self as v1::CatchupApi>::get_chain_config(self, commitment)
+            .await
+            .map_err(to_status)?;
+        Ok(tonic::Response::new(proto::CatchupChainConfigResponse {
+            chain_config: Some((&config).into()),
+        }))
+    }
+
+    async fn get_catchup_leaf_chain(
+        &self,
+        request: tonic::Request<proto::GetCatchupLeafChainRequest>,
+    ) -> Result<tonic::Response<proto::CatchupLeafChainResponse>, tonic::Status> {
+        let height = required(request.into_inner().height, "height")?;
+        let leaves = <Self as v1::CatchupApi>::get_leaf_chain(self, height)
+            .await
+            .map_err(to_status)?;
+        Ok(tonic::Response::new(leaves.as_slice().into()))
+    }
+
+    async fn get_catchup_cert2(
+        &self,
+        request: tonic::Request<proto::GetCatchupCert2Request>,
+    ) -> Result<tonic::Response<proto::Cert2Response>, tonic::Status> {
+        let height = required(request.into_inner().height, "height")?;
+        let cert = <Self as v1::CatchupApi>::get_cert2(self, height)
+            .await
+            .map_err(to_status)?;
+        Ok(tonic::Response::new(proto::Cert2Response {
+            certificate: Some((&cert).into()),
+        }))
+    }
+
+    async fn get_catchup_reward_account(
+        &self,
+        request: tonic::Request<proto::GetCatchupRewardAccountRequest>,
+    ) -> Result<tonic::Response<proto::RewardAccountProofResponse>, tonic::Status> {
+        let request = request.into_inner();
+        let (height, view) = catchup_at(request.height, request.view)?;
+        let address = required(request.address, "address")?;
+        let query = <Self as v1::CatchupApi>::get_reward_account_v1(self, height, view, address)
+            .await
+            .map_err(to_status)?;
+        Ok(tonic::Response::new(query.into()))
+    }
+
+    async fn get_catchup_reward_accounts(
+        &self,
+        request: tonic::Request<proto::GetCatchupRewardAccountsRequest>,
+    ) -> Result<tonic::Response<proto::RewardMerkleTreeV1Response>, tonic::Status> {
+        let request = request.into_inner();
+        let (height, view) = catchup_at(request.height, request.view)?;
+        let accounts = request
+            .addresses
+            .iter()
+            .map(|account| {
+                account.parse().map_err(|err| {
+                    tonic::Status::invalid_argument(format!(
+                        "malformed reward account {account}: {err}"
+                    ))
+                })
+            })
+            .collect::<Result<Vec<RewardAccountV1>, _>>()?;
+        let tree = <Self as v1::CatchupApi>::get_reward_accounts_v1(self, height, view, accounts)
+            .await
+            .map_err(to_status)?;
+        Ok(tonic::Response::new(proto::RewardMerkleTreeV1Response {
+            tree: serialize_tree(&tree)?,
+        }))
+    }
+
+    async fn get_catchup_reward_account_v2(
+        &self,
+        request: tonic::Request<proto::GetCatchupRewardAccountV2Request>,
+    ) -> Result<tonic::Response<proto::RewardAccountProofResponse>, tonic::Status> {
+        let request = request.into_inner();
+        let (height, view) = catchup_at(request.height, request.view)?;
+        let address = required(request.address, "address")?;
+        let query = <Self as v1::CatchupApi>::get_reward_account_v2(self, height, view, address)
+            .await
+            .map_err(to_status)?;
+        Ok(tonic::Response::new(query.into()))
+    }
+
+    async fn get_catchup_reward_merkle_tree_v2(
+        &self,
+        request: tonic::Request<proto::GetCatchupRewardMerkleTreeV2Request>,
+    ) -> Result<tonic::Response<proto::RewardMerkleTreeV2Response>, tonic::Status> {
+        let request = request.into_inner();
+        let (height, view) = catchup_at(request.height, request.view)?;
+        // v1 wraps these bytes in a `serde_json::Value`, so take them from the source instead.
+        let tree = self
+            .data_source
+            .get_reward_merkle_tree_v2(height, hotshot_types::data::ViewNumber::new(view))
+            .await
+            .map_err(|err| to_status(not_found(format!("{err:#}"))))?;
+        Ok(tonic::Response::new(proto::RewardMerkleTreeV2Response {
+            tree,
+        }))
+    }
+
+    async fn get_catchup_state_cert(
+        &self,
+        request: tonic::Request<proto::GetCatchupStateCertRequest>,
+    ) -> Result<tonic::Response<proto::StateCertV2Response>, tonic::Status> {
+        let epoch = required(request.into_inner().epoch, "epoch")?;
+        let cert = <Self as v1::CatchupApi>::get_state_cert(self, epoch)
+            .await
+            .map_err(to_status)?;
+        Ok(tonic::Response::new(
+            (&espresso_types::v0_4::StateCertQueryDataV2(cert)).into(),
+        ))
+    }
+}
+
+/// A tree travels as bincode, the encoding peers already decode from v1 and from the v2
+/// reward tree route.
+fn serialize_tree<T: serde::Serialize>(tree: &T) -> Result<Vec<u8>, tonic::Status> {
+    bincode::serialize(tree)
+        .map_err(|err| tonic::Status::internal(format!("serializing tree: {err}")))
+}
+
+/// The `(height, view)` the catchup routes over a merkle tree are asked for.
+fn catchup_at(height: Option<u64>, view: Option<u64>) -> Result<(u64, u64), tonic::Status> {
+    Ok((required(height, "height")?, required(view, "view")?))
 }
 
 #[async_trait]
@@ -2553,10 +2704,10 @@ where
     D: Deref + Clone + Send + Sync + 'static,
     D::Target: SubmitDataSourceErased + Send + Sync,
 {
-    type Transaction = espresso_types::Transaction;
-    type TxHash = committable::Commitment<espresso_types::Transaction>;
-
-    async fn submit(&self, tx: Self::Transaction) -> anyhow::Result<Self::TxHash> {
+    async fn submit(
+        &self,
+        tx: espresso_types::Transaction,
+    ) -> anyhow::Result<committable::Commitment<espresso_types::Transaction>> {
         let ds = &*self.data_source;
         ds.submit_erased(tx).await.map_err(|err| {
             // Keep rejections typed for `classify`.
@@ -2635,9 +2786,10 @@ where
     D: Deref + Clone + Send + Sync + 'static,
     D::Target: StateSignatureDataSourceErased + Send + Sync,
 {
-    type Signature = hotshot_types::light_client::LCV3StateSignatureRequestBody;
-
-    async fn get_state_signature(&self, height: u64) -> anyhow::Result<Self::Signature> {
+    async fn get_state_signature(
+        &self,
+        height: u64,
+    ) -> anyhow::Result<hotshot_types::light_client::LCV3StateSignatureRequestBody> {
         let ds = &*self.data_source;
         ds.get_state_signature_erased(height)
             .await
@@ -2703,15 +2855,10 @@ where
     D: Deref + Clone + Send + Sync + 'static,
     D::Target: hotshot_query_service::explorer::ExplorerDataSource<SeqTypes> + Send + Sync,
 {
-    type BlockDetail = hotshot_query_service::explorer::BlockDetailResponse<SeqTypes>;
-    type BlockSummaries = hotshot_query_service::explorer::BlockSummaryResponse<SeqTypes>;
-    type TransactionDetail = hotshot_query_service::explorer::TransactionDetailResponse<SeqTypes>;
-    type TransactionSummaries =
-        hotshot_query_service::explorer::TransactionSummariesResponse<SeqTypes>;
-    type ExplorerSummary = hotshot_query_service::explorer::ExplorerSummaryResponse<SeqTypes>;
-    type SearchResult = hotshot_query_service::explorer::SearchResultResponse<SeqTypes>;
-
-    async fn get_block_detail(&self, ident: v1::BlockIdent) -> anyhow::Result<Self::BlockDetail> {
+    async fn get_block_detail(
+        &self,
+        ident: v1::BlockIdent,
+    ) -> anyhow::Result<hotshot_query_service::explorer::BlockDetailResponse<SeqTypes>> {
         let ds = &*self.data_source;
         let target = match ident {
             v1::BlockIdent::Height(h) => BlockIdentifier::Height(h as usize),
@@ -2732,7 +2879,7 @@ where
         &self,
         target: v1::BlockIdent,
         limit: u64,
-    ) -> anyhow::Result<Self::BlockSummaries> {
+    ) -> anyhow::Result<hotshot_query_service::explorer::BlockSummaryResponse<SeqTypes>> {
         let ds = &*self.data_source;
         let num_blocks = std::num::NonZeroUsize::new(limit as usize)
             .ok_or_else(|| bad_request("limit must be greater than 0"))?;
@@ -2757,7 +2904,7 @@ where
     async fn get_transaction_detail(
         &self,
         ident: v1::TxIdent,
-    ) -> anyhow::Result<Self::TransactionDetail> {
+    ) -> anyhow::Result<hotshot_query_service::explorer::TransactionDetailResponse<SeqTypes>> {
         let ds = &*self.data_source;
         let target = match ident {
             v1::TxIdent::HeightAndOffset(h, o) => {
@@ -2781,7 +2928,8 @@ where
         target: v1::TxIdent,
         limit: u64,
         filter: v1::TxSummaryFilter,
-    ) -> anyhow::Result<Self::TransactionSummaries> {
+    ) -> anyhow::Result<hotshot_query_service::explorer::TransactionSummariesResponse<SeqTypes>>
+    {
         let ds = &*self.data_source;
         let num_transactions = std::num::NonZeroUsize::new(limit as usize)
             .ok_or_else(|| bad_request("limit must be greater than 0"))?;
@@ -2821,7 +2969,9 @@ where
         .map_err(explorer_error)
     }
 
-    async fn get_explorer_summary(&self) -> anyhow::Result<Self::ExplorerSummary> {
+    async fn get_explorer_summary(
+        &self,
+    ) -> anyhow::Result<hotshot_query_service::explorer::ExplorerSummaryResponse<SeqTypes>> {
         let ds = &*self.data_source;
         ds.get_explorer_summary()
             .await
@@ -2830,7 +2980,10 @@ where
             .map_err(explorer_error)
     }
 
-    async fn get_search_result(&self, query: String) -> anyhow::Result<Self::SearchResult> {
+    async fn get_search_result(
+        &self,
+        query: String,
+    ) -> anyhow::Result<hotshot_query_service::explorer::SearchResultResponse<SeqTypes>> {
         let ds = &*self.data_source;
         let parsed: tagged_base64::TaggedBase64 = query
             .parse()
@@ -3013,17 +3166,11 @@ where
         hotshot_query_service::data_source::storage::NodeStorage<SeqTypes>
             + hotshot_query_service::data_source::storage::AvailabilityStorage<SeqTypes>,
 {
-    type LeafProof = light_client::consensus::leaf::LeafProof;
-    type HeaderProof = light_client::consensus::header::HeaderProof;
-    type StakeTableEvents = Vec<espresso_types::v0_3::StakeTableEvent>;
-    type PayloadProof = light_client::consensus::payload::PayloadProof;
-    type NamespaceProof = light_client::consensus::namespace::NamespaceProof;
-
     async fn get_leaf_proof(
         &self,
         query: v1::LeafQuery,
         finalized: Option<u64>,
-    ) -> anyhow::Result<Self::LeafProof> {
+    ) -> anyhow::Result<light_client::consensus::leaf::LeafProof> {
         let ds = &*self.data_source;
         let fetch_timeout = FETCH_TIMEOUT;
 
@@ -3078,7 +3225,7 @@ where
         &self,
         root: u64,
         requested: v1::HeaderQuery,
-    ) -> anyhow::Result<Self::HeaderProof> {
+    ) -> anyhow::Result<light_client::consensus::header::HeaderProof> {
         let ds = &*self.data_source;
         let fetch_timeout = FETCH_TIMEOUT;
         let requested = match requested {
@@ -3100,7 +3247,7 @@ where
     async fn get_light_client_stake_table(
         &self,
         epoch: u64,
-    ) -> anyhow::Result<Self::StakeTableEvents> {
+    ) -> anyhow::Result<Vec<espresso_types::v0_3::StakeTableEvent>> {
         let ds = &*self.data_source;
         let fetch_timeout = FETCH_TIMEOUT;
 
@@ -3158,7 +3305,10 @@ where
         StakeTableDataSource::stake_table_events(ds, from_l1_block, to_l1_block).await
     }
 
-    async fn get_payload_proof(&self, height: u64) -> anyhow::Result<Self::PayloadProof> {
+    async fn get_payload_proof(
+        &self,
+        height: u64,
+    ) -> anyhow::Result<light_client::consensus::payload::PayloadProof> {
         let ds = &*self.data_source;
         let fetch_timeout = FETCH_TIMEOUT;
         let height = height as usize;
@@ -3182,7 +3332,7 @@ where
         &self,
         start: u64,
         end: u64,
-    ) -> anyhow::Result<Vec<Self::PayloadProof>> {
+    ) -> anyhow::Result<Vec<light_client::consensus::payload::PayloadProof>> {
         let ds = &*self.data_source;
         let fetch_timeout = FETCH_TIMEOUT;
         let start = start as usize;
@@ -3219,7 +3369,7 @@ where
     async fn get_payload_proof_ranges(
         &self,
         ranges: Vec<Range<u64>>,
-    ) -> anyhow::Result<Vec<Self::PayloadProof>> {
+    ) -> anyhow::Result<Vec<light_client::consensus::payload::PayloadProof>> {
         let ranges = validate_ranges(ranges, lc_large_object_range_limit())?;
 
         let heights: u64 = ranges.iter().map(|range| range.end - range.start).sum();
@@ -3264,13 +3414,16 @@ where
         &self,
         height: u64,
         namespace: u64,
-    ) -> anyhow::Result<Self::NamespaceProof> {
+    ) -> anyhow::Result<light_client::consensus::namespace::NamespaceProof> {
         let ds = &*self.data_source;
         let fetch_timeout = FETCH_TIMEOUT;
+        let end = height
+            .checked_add(1)
+            .ok_or_else(|| not_found(format!("no block at height {height}")))?;
         let mut proofs = crate::api::light_client::get_namespace_proof_range(
             ds,
             height as usize,
-            (height + 1) as usize,
+            end as usize,
             namespace,
             fetch_timeout,
             lc_large_object_range_limit(),
@@ -3288,7 +3441,7 @@ where
         start: u64,
         end: u64,
         namespace: u64,
-    ) -> anyhow::Result<Vec<Self::NamespaceProof>> {
+    ) -> anyhow::Result<Vec<light_client::consensus::namespace::NamespaceProof>> {
         let ds = &*self.data_source;
         let fetch_timeout = FETCH_TIMEOUT;
         crate::api::light_client::get_namespace_proof_range(
@@ -3308,7 +3461,9 @@ where
         start: u64,
         end: u64,
         namespaces: String,
-    ) -> anyhow::Result<Vec<std::collections::HashMap<u64, Self::NamespaceProof>>> {
+    ) -> anyhow::Result<
+        Vec<std::collections::HashMap<u64, light_client::consensus::namespace::NamespaceProof>>,
+    > {
         let namespaces = crate::api::light_client::parse_namespaces_str(&namespaces)
             .map_err(|err| bad_request(err.to_string()))?;
         let ds = &*self.data_source;
@@ -3323,6 +3478,250 @@ where
         )
         .await
         .map_err(lc_error)
+    }
+}
+
+#[tonic::async_trait]
+impl<D> proto::light_client_service_server::LightClientService for NodeApiStateImpl<D>
+where
+    D: Deref + Clone + Send + Sync + 'static,
+    D::Target: AvailabilityDataSource<SeqTypes>
+        + hotshot_query_service::merklized_state::MerklizedStateDataSource<
+            SeqTypes,
+            espresso_types::BlockMerkleTree,
+            3,
+        > + hotshot_query_service::merklized_state::MerklizedStateHeightPersistence
+        + NodeStateDataSource
+        + StakeTableDataSource<SeqTypes>
+        + hotshot_query_service::data_source::VersionedDataSource
+        + Sized
+        + Clone
+        + Send
+        + Sync
+        + 'static,
+    for<'a> <D::Target as hotshot_query_service::data_source::VersionedDataSource>::ReadOnly<'a>:
+        hotshot_query_service::data_source::storage::NodeStorage<SeqTypes>
+            + hotshot_query_service::data_source::storage::AvailabilityStorage<SeqTypes>,
+{
+    async fn get_light_client_leaf_proof(
+        &self,
+        request: tonic::Request<proto::GetLightClientLeafProofRequest>,
+    ) -> Result<tonic::Response<proto::LightClientLeafProofResponse>, tonic::Status> {
+        let proto::GetLightClientLeafProofRequest {
+            height,
+            hash,
+            block_hash,
+            payload_hash,
+            finalized,
+        } = request.into_inner();
+        let query = leaf_query(height, hash, block_hash, payload_hash)?;
+        let proof = <Self as v1::LightClientApi>::get_leaf_proof(self, query, finalized)
+            .await
+            .map_err(to_status)?;
+        Ok(tonic::Response::new((&proof).into()))
+    }
+
+    async fn get_light_client_header_proof(
+        &self,
+        request: tonic::Request<proto::GetLightClientHeaderProofRequest>,
+    ) -> Result<tonic::Response<proto::LightClientHeaderProofResponse>, tonic::Status> {
+        let proto::GetLightClientHeaderProofRequest {
+            root,
+            height,
+            block_hash,
+            payload_hash,
+        } = request.into_inner();
+        let root = required(root, "root")?;
+        let query = header_query(height, block_hash, payload_hash)?;
+        let proof = <Self as v1::LightClientApi>::get_header_proof(self, root, query)
+            .await
+            .map_err(to_status)?;
+        Ok(tonic::Response::new(
+            proto::LightClientHeaderProofResponse {
+                header: Some(proof.header().into()),
+                proof: Some(proof.proof().into()),
+            },
+        ))
+    }
+
+    async fn get_light_client_stake_table(
+        &self,
+        request: tonic::Request<proto::GetLightClientStakeTableRequest>,
+    ) -> Result<tonic::Response<proto::LightClientStakeTableResponse>, tonic::Status> {
+        let epoch = required(request.into_inner().epoch, "epoch")?;
+        let events = <Self as v1::LightClientApi>::get_light_client_stake_table(self, epoch)
+            .await
+            .map_err(to_status)?;
+        Ok(tonic::Response::new(proto::LightClientStakeTableResponse {
+            events: events.iter().map(Into::into).collect(),
+        }))
+    }
+
+    async fn get_light_client_payload_proof(
+        &self,
+        request: tonic::Request<proto::GetLightClientPayloadProofRequest>,
+    ) -> Result<tonic::Response<proto::LightClientPayloadProofResponse>, tonic::Status> {
+        let height = required(request.into_inner().height, "height")?;
+        let proof = <Self as v1::LightClientApi>::get_payload_proof(self, height)
+            .await
+            .map_err(to_status)?;
+        Ok(tonic::Response::new((&proof).try_into()?))
+    }
+
+    async fn get_light_client_payload_proof_range(
+        &self,
+        request: tonic::Request<proto::GetLightClientPayloadProofRangeRequest>,
+    ) -> Result<tonic::Response<proto::LightClientPayloadProofRangeResponse>, tonic::Status> {
+        let request = request.into_inner();
+        let range = range_from_query(request.from, request.until)?;
+        let proofs = <Self as v1::LightClientApi>::get_payload_proof_ranges(self, vec![range])
+            .await
+            .map_err(to_status)?;
+        Ok(tonic::Response::new(
+            proto::LightClientPayloadProofRangeResponse {
+                proofs: proofs
+                    .iter()
+                    .map(TryInto::try_into)
+                    .collect::<Result<_, _>>()?,
+            },
+        ))
+    }
+
+    async fn get_light_client_payload_proof_ranges(
+        &self,
+        request: tonic::Request<proto::GetLightClientPayloadProofRangesRequest>,
+    ) -> Result<tonic::Response<proto::LightClientPayloadProofRangeResponse>, tonic::Status> {
+        let ranges = ranges_from_body(request.into_inner().ranges)?;
+        let proofs = <Self as v1::LightClientApi>::get_payload_proof_ranges(self, ranges)
+            .await
+            .map_err(to_status)?;
+        Ok(tonic::Response::new(
+            proto::LightClientPayloadProofRangeResponse {
+                proofs: proofs
+                    .iter()
+                    .map(TryInto::try_into)
+                    .collect::<Result<_, _>>()?,
+            },
+        ))
+    }
+
+    async fn get_light_client_namespace_proof(
+        &self,
+        request: tonic::Request<proto::GetLightClientNamespaceProofRequest>,
+    ) -> Result<tonic::Response<proto::LightClientNamespaceProofResponse>, tonic::Status> {
+        let request = request.into_inner();
+        let height = required(request.height, "height")?;
+        let namespace = required(namespace_from_query(request.namespace)?, "namespace")?.into();
+        let proof = <Self as v1::LightClientApi>::get_lc_namespace_proof(self, height, namespace)
+            .await
+            .map_err(to_status)?;
+        Ok(tonic::Response::new((&proof).try_into()?))
+    }
+
+    async fn get_light_client_namespace_proof_range(
+        &self,
+        request: tonic::Request<proto::GetLightClientNamespaceProofRangeRequest>,
+    ) -> Result<tonic::Response<proto::LightClientNamespaceProofRangeResponse>, tonic::Status> {
+        let request = request.into_inner();
+        let range = range_from_query(request.from, request.until)?;
+        let namespace = required(namespace_from_query(request.namespace)?, "namespace")?.into();
+        let proofs = <Self as v1::LightClientApi>::get_lc_namespace_proof_range(
+            self,
+            range.start,
+            range.end,
+            namespace,
+        )
+        .await
+        .map_err(to_status)?;
+        Ok(tonic::Response::new(
+            proto::LightClientNamespaceProofRangeResponse {
+                proofs: proofs
+                    .iter()
+                    .map(TryInto::try_into)
+                    .collect::<Result<_, _>>()?,
+            },
+        ))
+    }
+
+    async fn get_light_client_namespaces_proof_range(
+        &self,
+        request: tonic::Request<proto::GetLightClientNamespacesProofRangeRequest>,
+    ) -> Result<tonic::Response<proto::LightClientNamespacesProofRangeResponse>, tonic::Status>
+    {
+        let request = request.into_inner();
+        let range = range_from_query(request.from, request.until)?;
+        let namespaces = request
+            .namespaces
+            .into_iter()
+            .map(|namespace| namespace_id(namespace).map(u64::from))
+            .collect::<Result<BTreeSet<_>, _>>()?;
+        if namespaces.len() > MAX_NAMESPACES_PER_REQUEST {
+            return Err(tonic::Status::invalid_argument(format!(
+                "at most {MAX_NAMESPACES_PER_REQUEST} distinct namespaces per request"
+            )));
+        }
+        let namespaces: Vec<u64> = namespaces.into_iter().collect();
+        // v1's trait method takes the namespaces as its TaggedBase64 path segment, which this
+        // would only build to have it parsed straight back.
+        let blocks = crate::api::light_client::get_namespaces_proof_range(
+            &*self.data_source,
+            range.start as usize,
+            range.end as usize,
+            &namespaces,
+            FETCH_TIMEOUT,
+            lc_large_object_range_limit(),
+        )
+        .await
+        .map_err(|err| to_status(lc_error(err)))?;
+        let blocks = blocks
+            .iter()
+            .map(|block| {
+                Ok(proto::LightClientNamespacesProof {
+                    proofs: block
+                        .iter()
+                        .filter_map(|(namespace, proof)| {
+                            let contents = proof.contents()?.try_into();
+                            Some(contents.map(|contents| (*namespace, contents)))
+                        })
+                        .collect::<Result<_, tonic::Status>>()?,
+                })
+            })
+            .collect::<Result<_, tonic::Status>>()?;
+        Ok(tonic::Response::new(
+            proto::LightClientNamespacesProofRangeResponse { blocks },
+        ))
+    }
+}
+
+fn leaf_query(
+    height: Option<u64>,
+    hash: Option<String>,
+    block_hash: Option<String>,
+    payload_hash: Option<String>,
+) -> Result<v1::LeafQuery, tonic::Status> {
+    match (height, hash, block_hash, payload_hash) {
+        (Some(height), None, None, None) => Ok(v1::LeafQuery::Height(height)),
+        (None, Some(hash), None, None) => Ok(v1::LeafQuery::Hash(hash)),
+        (None, None, Some(block_hash), None) => Ok(v1::LeafQuery::BlockHash(block_hash)),
+        (None, None, None, Some(payload_hash)) => Ok(v1::LeafQuery::PayloadHash(payload_hash)),
+        _ => Err(tonic::Status::invalid_argument(
+            "set exactly one of height, hash, block_hash or payload_hash",
+        )),
+    }
+}
+
+fn header_query(
+    height: Option<u64>,
+    block_hash: Option<String>,
+    payload_hash: Option<String>,
+) -> Result<v1::HeaderQuery, tonic::Status> {
+    match (height, block_hash, payload_hash) {
+        (Some(height), None, None) => Ok(v1::HeaderQuery::Height(height)),
+        (None, Some(block_hash), None) => Ok(v1::HeaderQuery::Hash(block_hash)),
+        (None, None, Some(payload_hash)) => Ok(v1::HeaderQuery::PayloadHash(payload_hash)),
+        _ => Err(tonic::Status::invalid_argument(
+            "set exactly one of height, block_hash or payload_hash",
+        )),
     }
 }
 
@@ -3344,6 +3743,17 @@ pub(crate) fn lc_error(err: hotshot_query_service::Error) -> anyhow::Error {
 /// Like [`lc_error`], for explorer data source errors.
 fn explorer_error(err: ExplorerError) -> anyhow::Error {
     lc_error(hotshot_query_service::Error::Explorer { source: err })
+}
+
+fn state_cert_error(err: StateCertFetchError) -> anyhow::Error {
+    match err {
+        StateCertFetchError::EpochsNotStarted { .. }
+        | StateCertFetchError::BeforeFirstEpoch { .. }
+        | StateCertFetchError::RootNotDecided { .. } => not_found(err.to_string()),
+        StateCertFetchError::FetchError(_)
+        | StateCertFetchError::ValidationError(_)
+        | StateCertFetchError::Other(_) => err.into(),
+    }
 }
 
 /// Bounds the leaves in a single leaf proof, and so the memory to build and serialize it.
@@ -3495,15 +3905,12 @@ where
     D: Deref + Clone + Send + Sync + 'static,
     D::Target: DatabaseMetadataSource + Send + Sync,
 {
-    type TableSizes = Vec<TableSize>;
-    type MigrationStatus = Vec<MigrationStatus>;
-
-    async fn get_table_sizes(&self) -> anyhow::Result<Self::TableSizes> {
+    async fn get_table_sizes(&self) -> anyhow::Result<Vec<TableSize>> {
         let ds = &*self.data_source;
         ds.get_table_sizes().await
     }
 
-    async fn get_migration_status(&self) -> anyhow::Result<Self::MigrationStatus> {
+    async fn get_migration_status(&self) -> anyhow::Result<Vec<MigrationStatus>> {
         let ds = &*self.data_source;
         ds.get_migration_status().await
     }
@@ -3576,15 +3983,15 @@ fn block_id_from_query(
     }
 }
 
+fn namespace_from_query(namespace: Option<u64>) -> Result<Option<u32>, tonic::Status> {
+    namespace.map(namespace_id).transpose()
+}
+
 /// Namespace ids are 32 bits on chain but travel as uint64 so they round-trip with the
 /// responses' `namespace` fields. Anything wider is a client error, not a truncation.
-fn namespace_from_query(namespace: Option<u64>) -> Result<Option<u32>, tonic::Status> {
-    namespace
-        .map(|namespace| {
-            u32::try_from(namespace)
-                .map_err(|_| tonic::Status::invalid_argument("namespace does not fit in 32 bits"))
-        })
-        .transpose()
+fn namespace_id(namespace: u64) -> Result<u32, tonic::Status> {
+    u32::try_from(namespace)
+        .map_err(|_| tonic::Status::invalid_argument("namespace does not fit in 32 bits"))
 }
 
 fn required<T>(value: Option<T>, name: &str) -> Result<T, tonic::Status> {
@@ -5305,7 +5712,7 @@ mod tests {
 
     #[test]
     fn vid_common_mirrors_the_reference_vectors() {
-        use proto::vid_common_response::Common;
+        use proto::vid_common::Common;
 
         let (reference, json): (VidCommonQueryData<SeqTypes>, _) =
             load_vector("../../../data/v1/vid_common_v0.json");
@@ -5315,7 +5722,7 @@ mod tests {
         assert_eq!(converted.height, json["height"].as_u64().unwrap());
         assert_eq!(converted.block_hash, json["block_hash"]);
         assert_eq!(converted.payload_hash, json["payload_hash"]);
-        let Some(Common::V0(advz)) = converted.common else {
+        let Some(Common::V0(advz)) = converted.common.unwrap().common else {
             panic!("the ADVZ vector must select the v0 arm");
         };
         let expected = &json["common"]["V0"];
@@ -5340,6 +5747,8 @@ mod tests {
         let Some(Common::V1(avidm)) = proto::VidCommonResponse::try_from(&reference)
             .unwrap()
             .common
+            .unwrap()
+            .common
         else {
             panic!("the AvidM vector must select the v1 arm");
         };
@@ -5357,6 +5766,8 @@ mod tests {
             load_vector("../../../data/v2/vid_common_v2.json");
         assert_same_fields("AvidmGf2Common", &json["common"]["V2"]);
         let Some(Common::V2(gf2)) = proto::VidCommonResponse::try_from(&reference)
+            .unwrap()
+            .common
             .unwrap()
             .common
         else {
@@ -5693,6 +6104,30 @@ mod tests {
             err.downcast_ref::<AvailabilityError>(),
             Some(AvailabilityError::BadRequest(_))
         ));
+    }
+
+    #[rstest::rstest]
+    #[case::epochs_not_started(StateCertFetchError::EpochsNotStarted { epoch: 1 })]
+    #[case::before_first_epoch(StateCertFetchError::BeforeFirstEpoch { epoch: 0, first_epoch: 1 })]
+    #[case::root_not_decided(StateCertFetchError::RootNotDecided { epoch: 3, decided_height: 100 })]
+    fn state_cert_that_cannot_exist_is_not_found(#[case] err: StateCertFetchError) {
+        let err = state_cert_error(err);
+        assert!(
+            matches!(
+                err.downcast_ref::<AvailabilityError>(),
+                Some(AvailabilityError::NotFound(_))
+            ),
+            "{err:#}"
+        );
+    }
+
+    #[rstest::rstest]
+    #[case::fetch(StateCertFetchError::FetchError(anyhow::anyhow!("timeout")))]
+    #[case::validation(StateCertFetchError::ValidationError(anyhow::anyhow!("bad")))]
+    #[case::other(StateCertFetchError::Other(anyhow::anyhow!("catchup")))]
+    fn state_cert_fetch_failure_is_internal(#[case] err: StateCertFetchError) {
+        let err = state_cert_error(err);
+        assert!(err.downcast_ref::<AvailabilityError>().is_none(), "{err:#}");
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -6191,5 +6626,122 @@ mod tests {
                 tonic::Code::InvalidArgument
             );
         }
+    }
+
+    /// Every stake table event, compared field by field with the JSON v1 serves for it. The two
+    /// spell a field differently (`blsVK` against `blsVk`) and encode amounts, timestamps and
+    /// bytes differently, so each pair of values is compared as the quantity or bytes it holds.
+    #[test]
+    fn stake_table_events_carry_every_v1_field() {
+        use espresso_types::{testing::TestValidator, v0_3::StakeTableEvent};
+        use hotshot_contract_adapter::sol_types::StakeTableV3::{
+            CommissionUpdated, Delegated, Undelegated, UndelegatedV2, ValidatorExitV2,
+        };
+
+        let validator = TestValidator::random();
+        let delegator = Address::repeat_byte(7);
+        let events = [
+            StakeTableEvent::Register((&validator).into()),
+            StakeTableEvent::RegisterV2((&validator).into()),
+            StakeTableEvent::RegisterV3((&validator).into()),
+            StakeTableEvent::Deregister((&validator).into()),
+            StakeTableEvent::DeregisterV2(ValidatorExitV2 {
+                validator: validator.account,
+                unlocksAt: U256::from(1_700_000_000u64),
+            }),
+            StakeTableEvent::Delegate(Delegated {
+                delegator,
+                validator: validator.account,
+                amount: U256::from(10u64).pow(U256::from(20u64)),
+            }),
+            StakeTableEvent::Undelegate(Undelegated {
+                delegator,
+                validator: validator.account,
+                amount: U256::from(12_345u64),
+            }),
+            StakeTableEvent::UndelegateV2(UndelegatedV2 {
+                delegator,
+                validator: validator.account,
+                undelegationId: 7,
+                amount: U256::from(54_321u64),
+                unlocksAt: U256::from(1_700_000_001u64),
+            }),
+            StakeTableEvent::KeyUpdate((&validator).into()),
+            StakeTableEvent::KeyUpdateV2((&validator).into()),
+            StakeTableEvent::CommissionUpdate(CommissionUpdated {
+                validator: validator.account,
+                timestamp: U256::from(1_700_000_002u64),
+                oldCommission: 100,
+                newCommission: 250,
+            }),
+            validator.x25519_update([9; 32]),
+            validator.p2p_update("10.0.0.1:9000"),
+        ];
+        for event in &events {
+            let v1 = serde_json::to_value(event).unwrap();
+            let (variant, v1) = v1.as_object().unwrap().iter().next().unwrap();
+            let v2 = serde_json::to_value(proto::StakeTableEvent::from(event)).unwrap();
+            let v2 = v2.as_object().unwrap().values().next().unwrap();
+            assert_same_event_value(variant, v1, v2);
+        }
+    }
+
+    /// protoJSON omits a zero value, so a field v2 leaves out must be zero on v1.
+    fn assert_same_event_value(path: &str, v1: &serde_json::Value, v2: &serde_json::Value) {
+        use serde_json::Value;
+
+        let normalize = |key: &str| key.replace('_', "").to_lowercase();
+        match (v1, v2) {
+            (Value::Object(v1), Value::Object(v2)) => {
+                let v2: HashMap<String, &Value> = v2
+                    .iter()
+                    .map(|(key, value)| (normalize(key), value))
+                    .collect();
+                assert!(
+                    v2.keys()
+                        .all(|key| v1.keys().any(|v1_key| normalize(v1_key) == *key)),
+                    "{path}: v2 has a field v1 does not"
+                );
+                for (key, v1_value) in v1 {
+                    let path = format!("{path}.{key}");
+                    match v2.get(&normalize(key)) {
+                        Some(v2_value) => assert_same_event_value(&path, v1_value, v2_value),
+                        None => assert!(
+                            is_zero(v1_value),
+                            "{path}: v1 has {v1_value}, which v2 does not carry"
+                        ),
+                    }
+                }
+            },
+            (Value::Number(v1), Value::Number(v2)) => assert_eq!(v1, v2, "{path}"),
+            (Value::Number(v1), Value::String(v2)) => assert_eq!(v1.to_string(), *v2, "{path}"),
+            (Value::String(v1), Value::String(v2)) => {
+                let same = v1.eq_ignore_ascii_case(v2)
+                    || hex_quantity(v1).is_some_and(|v1| v2.parse::<U256>().ok() == Some(v1))
+                    || hex_bytes(v1).is_some_and(|v1| {
+                        base64::engine::general_purpose::STANDARD.decode(v2).ok() == Some(v1)
+                    });
+                assert!(same, "{path}: v1 {v1:?}, v2 {v2:?}");
+            },
+            _ => panic!("{path}: v1 {v1}, v2 {v2}"),
+        }
+    }
+
+    fn is_zero(value: &serde_json::Value) -> bool {
+        match value {
+            serde_json::Value::Number(number) => number.as_u64() == Some(0),
+            serde_json::Value::String(string) => {
+                string.is_empty() || hex_quantity(string) == Some(U256::ZERO)
+            },
+            _ => false,
+        }
+    }
+
+    fn hex_quantity(value: &str) -> Option<U256> {
+        U256::from_str_radix(value.strip_prefix("0x")?, 16).ok()
+    }
+
+    fn hex_bytes(value: &str) -> Option<Vec<u8>> {
+        alloy::hex::decode(value.strip_prefix("0x")?).ok()
     }
 }

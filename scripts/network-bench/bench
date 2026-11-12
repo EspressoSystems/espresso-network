@@ -702,7 +702,6 @@ def command_output(cmd: list[str]) -> str:
 def binary_info(bin_dir: Path) -> dict[str, dict[str, Any]]:
     names = (
         "espresso-node",
-        "espresso-node-sqlite",
         "orchestrator",
         "state-relay-server",
         "deploy",

@@ -1,7 +1,7 @@
 version: "3"
 
 # Benchmark network: 3 equal-stake validators, so every certificate needs all 3.
-# node0: espresso-node on Postgres with the query service. node1, node2: espresso-node-sqlite.
+# node0: espresso-node on Postgres with the query service. node1, node2: espresso-node on SQLite.
 # node0 is the only availability provider, so it has no API peers to fetch missing data from.
 # Started by scripts/network-bench/bench from the repo root with BENCH_OUT and
 # ESPRESSO_BASE_STORAGE_PATH set. Keys, ports and addresses come from the repo .env.
@@ -139,7 +139,7 @@ processes:
     availability: *run-forever
 
   espresso-node-1:
-    command: RUST_LOG=info RUST_LOG_FORMAT=json espresso-node-sqlite -- storage-sql -- http -- status -- submit -- catchup -- config -- light-client
+    command: RUST_LOG=info RUST_LOG_FORMAT=json ESPRESSO_NODE_EMBEDDED_DB=true espresso-node -- storage-sql -- http -- status -- submit -- catchup -- config -- light-client
     log_location: ${BENCH_OUT}/logs/node1.log
     environment:
       - ESPRESSO_NODE_TELEMETRY_LOGS_ENABLE=false
@@ -169,7 +169,7 @@ processes:
     availability: *run-forever
 
   espresso-node-2:
-    command: RUST_LOG=info RUST_LOG_FORMAT=json espresso-node-sqlite -- storage-sql -- http -- status -- submit -- catchup -- config -- light-client
+    command: RUST_LOG=info RUST_LOG_FORMAT=json ESPRESSO_NODE_EMBEDDED_DB=true espresso-node -- storage-sql -- http -- status -- submit -- catchup -- config -- light-client
     log_location: ${BENCH_OUT}/logs/node2.log
     environment:
       - ESPRESSO_NODE_TELEMETRY_LOGS_ENABLE=false

@@ -244,17 +244,14 @@ where
     R: Fn() -> Fut,
     Fut: Future<Output = anyhow::Result<Option<LcContractHeader>>>,
 {
-    /// `FirstEpochUnset` without a first epoch, `EpochHeightZero` for `epoch_height == 0`.
+    /// `EpochHeightZero` for `epoch_height == 0`.
     fn new(
         coordinator: &'a EpochMembershipCoordinator<SeqTypes>,
         state_peers: &'a [(Url, C)],
         params: &'a StartupCatchupParams,
         read_lc_contract_header: R,
     ) -> Result<Self, StartupCatchupError> {
-        let first_epoch = coordinator
-            .membership()
-            .first_epoch()
-            .ok_or(StartupCatchupError::FirstEpochUnset)?;
+        let first_epoch = coordinator.membership().first_epoch();
         let epoch_height = coordinator.epoch_height().u64();
         if epoch_height == 0 {
             return Err(StartupCatchupError::EpochHeightZero);
@@ -569,10 +566,6 @@ pub struct StartupCatchupParams {
 /// Why the startup catchup failed.
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum StartupCatchupError {
-    /// The membership has no first epoch to seed from.
-    #[error("first_epoch not seeded; genesis stake table missing")]
-    FirstEpochUnset,
-
     /// `epoch_height == 0`; epochs are always on.
     #[error("epoch_height is 0; epochs are always on")]
     EpochHeightZero,
@@ -1101,12 +1094,6 @@ mod tests {
 
     /// Committees over `store` with the first epoch set, as `init_node_state` leaves them.
     fn committees(store: SeededStore) -> EpochCommittees {
-        let committees = unseeded_committees(store);
-        committees.set_first_epoch(EpochNumber::new(FIRST_EPOCH), [0u8; 32]);
-        committees
-    }
-
-    fn unseeded_committees(store: SeededStore) -> EpochCommittees {
         let fetcher = Fetcher::new(
             Arc::new(MockStateCatchup::default()),
             Arc::new(AsyncMutex::new(store)),
@@ -1124,7 +1111,14 @@ mod tests {
                 .public_config()
             })
             .collect();
-        EpochCommittees::new_stake(peers.clone(), peers, None, fetcher, EPOCH_HEIGHT)
+        EpochCommittees::new(
+            peers.clone(),
+            peers,
+            None,
+            fetcher,
+            EPOCH_HEIGHT,
+            EpochNumber::new(FIRST_EPOCH),
+        )
     }
 
     /// Storage holding the tables of `first + 2 ..= N+1`, none of them visible until a root adds it.
@@ -1923,15 +1917,6 @@ mod tests {
         .unwrap();
 
         assert_eq!(current, EpochNumber::new(FIRST_EPOCH));
-    }
-
-    #[test_log::test(tokio::test)]
-    async fn unseeded_membership_fails_with_first_epoch_unset() {
-        let coordinator = coordinator_over(unseeded_committees(SeededStore::default()));
-
-        let result = run_catchup(&coordinator, None, &[], PARAMS, None).await;
-
-        assert_matches!(result, Err(StartupCatchupError::FirstEpochUnset));
     }
 
     #[test_log::test(tokio::test)]

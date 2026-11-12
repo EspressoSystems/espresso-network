@@ -29,12 +29,13 @@ use crate::{
     light_client::{LightClientState, StakeTableState},
     message::UpgradeLock,
     simple_vote::{
-        DaData, DaData2, HasEpoch, NextEpochQuorumData2, QuorumData, QuorumData2, QuorumMarker,
-        TimeoutData, TimeoutData2, TimeoutData3, UpgradeProposalData, UpgradeProposalData2,
-        VersionedVoteData, ViewSyncCommitData, ViewSyncCommitData2, ViewSyncFinalizeData,
-        ViewSyncFinalizeData2, ViewSyncPreCommitData, ViewSyncPreCommitData2, Vote2Data, Voteable,
+        DaData, DaData2, HasEpoch, LockView, NextEpochQuorumData2, QuorumData, QuorumData2,
+        QuorumMarker, TimeoutData, TimeoutData2, TimeoutLock, UpgradeProposalData,
+        UpgradeProposalData2, VersionedVoteData, ViewSyncCommitData, ViewSyncCommitData2,
+        ViewSyncFinalizeData, ViewSyncFinalizeData2, ViewSyncPreCommitData, ViewSyncPreCommitData2,
+        Vote2Data, Voteable,
     },
-    stake_table::{HSStakeTable, StakeTableEntries},
+    stake_table::HSStakeTable,
     traits::{
         node_implementation::NodeType,
         signature_key::{SignatureKey, StateSignatureKey},
@@ -42,6 +43,10 @@ use crate::{
     utils::{is_epoch_root, is_epoch_transition},
     vote::{Certificate, HasViewNumber},
 };
+
+mod timeout3;
+
+pub use timeout3::{LatestTimeoutSignatures, TimeoutCertificate3, TimeoutSignatures};
 
 /// Trait which allows use to inject different threshold calculations into a Certificate type
 pub trait Threshold<TYPES: NodeType> {
@@ -439,53 +444,6 @@ impl<TYPES: NodeType> Display for QuorumCertificate<TYPES> {
     }
 }
 
-impl<TYPES: NodeType> UpgradeCertificate<TYPES> {
-    /// Determines whether or not a certificate is relevant (i.e. we still have time to reach a
-    /// decide)
-    ///
-    /// # Errors
-    /// Returns an error when the certificate is no longer relevant
-    pub async fn is_relevant(&self, view_number: ViewNumber) -> Result<()> {
-        ensure!(
-            self.data.new_version_first_view >= view_number,
-            "Upgrade certificate is no longer relevant."
-        );
-
-        Ok(())
-    }
-
-    /// Validate an upgrade certificate.
-    /// # Errors
-    /// Returns an error when the upgrade certificate is invalid.
-    pub async fn validate(
-        upgrade_certificate: &Option<Self>,
-        membership: &EpochMembership<TYPES>,
-        epoch: Option<EpochNumber>,
-        upgrade_lock: &UpgradeLock<TYPES>,
-    ) -> Result<()> {
-        ensure!(epoch == membership.epoch(), "Epochs don't match!");
-        if let Some(cert) = upgrade_certificate {
-            let membership_stake_table = membership.stake_table();
-            let membership_upgrade_threshold = membership.upgrade_threshold();
-
-            cert.is_valid_cert(
-                &StakeTableEntries::from_iter(membership_stake_table).0,
-                membership_upgrade_threshold,
-                upgrade_lock,
-            )
-            .context(|e| warn!("Invalid upgrade certificate: {e}"))?;
-        }
-
-        Ok(())
-    }
-
-    /// Given an upgrade certificate and a view, tests whether the view is in the period
-    /// where we are upgrading, which requires that we propose with null blocks.
-    pub fn upgrading_in(&self, view: ViewNumber) -> bool {
-        view > self.data.old_version_last_view && view < self.data.new_version_first_view
-    }
-}
-
 impl<TYPES: NodeType> QuorumCertificate<TYPES> {
     /// Convert a `QuorumCertificate` into a `QuorumCertificate2`
     pub fn to_qc2(self) -> QuorumCertificate2<TYPES> {
@@ -530,134 +488,6 @@ impl<TYPES: NodeType> QuorumCertificate2<TYPES> {
     }
 }
 
-impl<TYPES: NodeType> DaCertificate<TYPES> {
-    /// Convert a `DaCertificate` into a `DaCertificate2`
-    pub fn to_dac2(self) -> DaCertificate2<TYPES> {
-        let data = DaData2 {
-            payload_commit: self.data.payload_commit,
-            next_epoch_payload_commit: None,
-            epoch: None,
-        };
-
-        let bytes: [u8; 32] = self.vote_commitment.into();
-        let vote_commitment = Commitment::from_raw(bytes);
-
-        SimpleCertificate {
-            data,
-            vote_commitment,
-            view_number: self.view_number,
-            signatures: self.signatures.clone(),
-            _pd: PhantomData,
-        }
-    }
-}
-
-impl<TYPES: NodeType> DaCertificate2<TYPES> {
-    /// Convert a `DaCertificate` into a `DaCertificate2`
-    pub fn to_dac(self) -> DaCertificate<TYPES> {
-        let data = DaData {
-            payload_commit: self.data.payload_commit,
-        };
-
-        let bytes: [u8; 32] = self.vote_commitment.into();
-        let vote_commitment = Commitment::from_raw(bytes);
-
-        SimpleCertificate {
-            data,
-            vote_commitment,
-            view_number: self.view_number,
-            signatures: self.signatures.clone(),
-            _pd: PhantomData,
-        }
-    }
-}
-
-impl<TYPES: NodeType> ViewSyncPreCommitCertificate<TYPES> {
-    /// Convert a `DaCertificate` into a `DaCertificate2`
-    pub fn to_vsc2(self) -> ViewSyncPreCommitCertificate2<TYPES> {
-        let data = ViewSyncPreCommitData2 {
-            relay: self.data.relay,
-            round: self.data.round,
-            epoch: None,
-        };
-
-        let bytes: [u8; 32] = self.vote_commitment.into();
-        let vote_commitment = Commitment::from_raw(bytes);
-
-        SimpleCertificate {
-            data,
-            vote_commitment,
-            view_number: self.view_number,
-            signatures: self.signatures.clone(),
-            _pd: PhantomData,
-        }
-    }
-}
-
-impl<TYPES: NodeType> ViewSyncPreCommitCertificate2<TYPES> {
-    /// Convert a `DaCertificate` into a `DaCertificate2`
-    pub fn to_vsc(self) -> ViewSyncPreCommitCertificate<TYPES> {
-        let data = ViewSyncPreCommitData {
-            relay: self.data.relay,
-            round: self.data.round,
-        };
-
-        let bytes: [u8; 32] = self.vote_commitment.into();
-        let vote_commitment = Commitment::from_raw(bytes);
-
-        SimpleCertificate {
-            data,
-            vote_commitment,
-            view_number: self.view_number,
-            signatures: self.signatures.clone(),
-            _pd: PhantomData,
-        }
-    }
-}
-
-impl<TYPES: NodeType> ViewSyncCommitCertificate<TYPES> {
-    /// Convert a `DaCertificate` into a `DaCertificate2`
-    pub fn to_vsc2(self) -> ViewSyncCommitCertificate2<TYPES> {
-        let data = ViewSyncCommitData2 {
-            relay: self.data.relay,
-            round: self.data.round,
-            epoch: None,
-        };
-
-        let bytes: [u8; 32] = self.vote_commitment.into();
-        let vote_commitment = Commitment::from_raw(bytes);
-
-        SimpleCertificate {
-            data,
-            vote_commitment,
-            view_number: self.view_number,
-            signatures: self.signatures.clone(),
-            _pd: PhantomData,
-        }
-    }
-}
-
-impl<TYPES: NodeType> ViewSyncCommitCertificate2<TYPES> {
-    /// Convert a `DaCertificate` into a `DaCertificate2`
-    pub fn to_vsc(self) -> ViewSyncCommitCertificate<TYPES> {
-        let data = ViewSyncCommitData {
-            relay: self.data.relay,
-            round: self.data.round,
-        };
-
-        let bytes: [u8; 32] = self.vote_commitment.into();
-        let vote_commitment = Commitment::from_raw(bytes);
-
-        SimpleCertificate {
-            data,
-            vote_commitment,
-            view_number: self.view_number,
-            signatures: self.signatures.clone(),
-            _pd: PhantomData,
-        }
-    }
-}
-
 impl<TYPES: NodeType> ViewSyncFinalizeCertificate<TYPES> {
     /// Convert a `DaCertificate` into a `DaCertificate2`
     pub fn to_vsc2(self) -> ViewSyncFinalizeCertificate2<TYPES> {
@@ -665,27 +495,6 @@ impl<TYPES: NodeType> ViewSyncFinalizeCertificate<TYPES> {
             relay: self.data.relay,
             round: self.data.round,
             epoch: None,
-        };
-
-        let bytes: [u8; 32] = self.vote_commitment.into();
-        let vote_commitment = Commitment::from_raw(bytes);
-
-        SimpleCertificate {
-            data,
-            vote_commitment,
-            view_number: self.view_number,
-            signatures: self.signatures.clone(),
-            _pd: PhantomData,
-        }
-    }
-}
-
-impl<TYPES: NodeType> ViewSyncFinalizeCertificate2<TYPES> {
-    /// Convert a `DaCertificate` into a `DaCertificate2`
-    pub fn to_vsc(self) -> ViewSyncFinalizeCertificate<TYPES> {
-        let data = ViewSyncFinalizeData {
-            relay: self.data.relay,
-            round: self.data.round,
         };
 
         let bytes: [u8; 32] = self.vote_commitment.into();
@@ -722,26 +531,6 @@ impl<TYPES: NodeType> TimeoutCertificate<TYPES> {
     }
 }
 
-impl<TYPES: NodeType> TimeoutCertificate2<TYPES> {
-    /// Convert a `DaCertificate` into a `DaCertificate2`
-    pub fn to_tc(self) -> TimeoutCertificate<TYPES> {
-        let data = TimeoutData {
-            view: self.data.view,
-        };
-
-        let bytes: [u8; 32] = self.vote_commitment.into();
-        let vote_commitment = Commitment::from_raw(bytes);
-
-        SimpleCertificate {
-            data,
-            vote_commitment,
-            view_number: self.view_number,
-            signatures: self.signatures.clone(),
-            _pd: PhantomData,
-        }
-    }
-}
-
 /// A timeout certificate, in one of the forms its signers may have used.
 #[derive(derive_more::Debug, Clone, Eq, PartialEq, Hash)]
 pub enum TimeoutEvidence<T: NodeType> {
@@ -754,7 +543,30 @@ impl<T: NodeType> TimeoutEvidence<T> {
         matches!(self, Self::V3(_))
     }
 
+    /// The certificate's lock, and the `Certificate1` that shows it.
+    ///
+    /// `None` for a certificate whose signers did not sign their locks, and
+    /// for one whose signers are all locked on nothing but genesis.
+    pub fn lock(&self) -> Option<(LockView, &QuorumCertificate2<T>)> {
+        match self {
+            Self::V2(_) => None,
+            Self::V3(cert) => cert.lock_cert().map(|cert| (LockView::of(cert), cert)),
+        }
+    }
+
+    /// The certificate's lock, by what is checked of it; [`TimeoutLock::None`]
+    /// for a certificate whose signers did not sign their locks.
+    pub fn timeout_lock(&self) -> TimeoutLock<'_, T> {
+        match self {
+            Self::V2(_) => TimeoutLock::None,
+            Self::V3(cert) => cert.timeout_lock(),
+        }
+    }
+
     /// Check that this is the form its view requires, then check the threshold signature.
+    ///
+    /// For a [`Self::V3`] that is the signers' signatures only, not those of
+    /// the lock certificate it carries, which its own epoch's committee signs.
     pub fn is_valid_cert(
         &self,
         stake_table: &[<T::SignatureKey as SignatureKey>::StakeTableEntry],
@@ -774,16 +586,16 @@ impl<T: NodeType> TimeoutEvidence<T> {
                 }
                 cert.is_valid_cert(stake_table, threshold, upgrade_lock)
             },
+            // The lock certificate is signed by its own epoch's committee,
+            // which may not be the one given here, and is NOT checked: a V3
+            // certificate passing this is valid only once the caller has
+            // checked its lock certificate as well.
             Self::V3(cert) => {
                 ensure! {
                     upgrade_lock.timeout_epoch_bound(view),
                     "timeout certificate for view {} must bind its epoch", view
                 }
-                ensure! {
-                    view == cert.data.view,
-                    "timeout certificate view {} != data view {}", view, cert.data.view
-                }
-                cert.is_valid_cert(stake_table, threshold, upgrade_lock)
+                cert.check_signatures(stake_table, threshold, upgrade_lock)
             },
         }
     }
@@ -802,7 +614,7 @@ impl<T: NodeType> HasEpoch for TimeoutEvidence<T> {
     fn epoch(&self) -> Option<EpochNumber> {
         match self {
             Self::V2(cert) => cert.data.epoch,
-            Self::V3(cert) => Some(cert.data.epoch),
+            Self::V3(cert) => Some(cert.epoch),
         }
     }
 }
@@ -929,8 +741,6 @@ pub type DaCertificate2<TYPES> = SimpleCertificate<TYPES, DaData2, SuccessThresh
 pub type TimeoutCertificate<TYPES> = SimpleCertificate<TYPES, TimeoutData, SuccessThreshold>;
 /// Type alias for a `TimeoutCertificate2`, which is a `SimpleCertificate` over `TimeoutData2`
 pub type TimeoutCertificate2<TYPES> = SimpleCertificate<TYPES, TimeoutData2, SuccessThreshold>;
-/// Type alias for a `TimeoutCertificate3`, which is a `SimpleCertificate` over `TimeoutData3`
-pub type TimeoutCertificate3<TYPES> = SimpleCertificate<TYPES, TimeoutData3, SuccessThreshold>;
 /// Type alias for a `ViewSyncPreCommit` certificate over a view number
 pub type ViewSyncPreCommitCertificate<TYPES> =
     SimpleCertificate<TYPES, ViewSyncPreCommitData, OneHonestThreshold>;

@@ -282,8 +282,22 @@ pub async fn custom_epoch_change_leaf_chain(
     .await
 }
 
-#[derive(Clone, Copy, Debug, Default)]
-pub struct AlwaysTrueQuorum;
+/// The epoch height for the chains [`custom_leaf_chain`] builds.
+///
+/// Their certificates pin epoch 1, so every height they use lies in the first epoch.
+pub const LEAF_CHAIN_EPOCH_HEIGHT: u64 = 1000;
+
+/// A quorum which accepts every signature.
+#[derive(Clone, Copy, Debug)]
+pub struct AlwaysTrueQuorum {
+    epoch_height: u64,
+}
+
+impl AlwaysTrueQuorum {
+    pub fn new(epoch_height: u64) -> Self {
+        Self { epoch_height }
+    }
+}
 
 impl Quorum for AlwaysTrueQuorum {
     async fn verify_static<V: StaticVersionType + 'static>(&self, _: &Certificate) -> Result<()> {
@@ -296,10 +310,23 @@ impl Quorum for AlwaysTrueQuorum {
     ) -> Result<()> {
         Ok(())
     }
+
+    fn epoch_height(&self) -> u64 {
+        self.epoch_height
+    }
 }
 
-#[derive(Clone, Copy, Debug, Default)]
-pub struct AlwaysFalseQuorum;
+/// A quorum which rejects every signature.
+#[derive(Clone, Copy, Debug)]
+pub struct AlwaysFalseQuorum {
+    epoch_height: u64,
+}
+
+impl AlwaysFalseQuorum {
+    pub fn new(epoch_height: u64) -> Self {
+        Self { epoch_height }
+    }
+}
 
 impl Quorum for AlwaysFalseQuorum {
     async fn verify_static<V: StaticVersionType + 'static>(&self, _: &Certificate) -> Result<()> {
@@ -312,6 +339,10 @@ impl Quorum for AlwaysFalseQuorum {
     ) -> Result<()> {
         bail!("always false quorum");
     }
+
+    fn epoch_height(&self) -> u64 {
+        self.epoch_height
+    }
 }
 
 /// A quorum which verifies that calls to `verify` use the correct version, but does not check
@@ -319,15 +350,17 @@ impl Quorum for AlwaysFalseQuorum {
 #[derive(Clone, Debug, Default)]
 pub struct VersionCheckQuorum {
     leaves: HashMap<Commitment<Leaf2>, Leaf2>,
+    epoch_height: u64,
 }
 
 impl VersionCheckQuorum {
-    pub fn new(leaves: impl IntoIterator<Item = Leaf2>) -> Self {
+    pub fn new(leaves: impl IntoIterator<Item = Leaf2>, epoch_height: u64) -> Self {
         Self {
             leaves: leaves
                 .into_iter()
                 .map(|leaf| (leaf.commit(), leaf))
                 .collect(),
+            epoch_height,
         }
     }
 }
@@ -355,6 +388,10 @@ impl Quorum for VersionCheckQuorum {
         _: &Certificate2<SeqTypes>,
     ) -> Result<()> {
         Ok(())
+    }
+
+    fn epoch_height(&self) -> u64 {
+        self.epoch_height
     }
 }
 
@@ -386,6 +423,10 @@ impl Quorum for EpochChangeQuorum {
         _: &Certificate2<SeqTypes>,
     ) -> Result<()> {
         Ok(())
+    }
+
+    fn epoch_height(&self) -> u64 {
+        self.epoch_height
     }
 }
 

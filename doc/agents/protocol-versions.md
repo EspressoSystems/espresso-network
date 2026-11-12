@@ -13,10 +13,19 @@
 - V0_6, `NEW_PROTOCOL_VERSION`: AvidmGf2 VID proofs, cliquenet, DA upgrade; reuses the V0_5 header; no fees, no L1
   deposit reads, fee tree untouched
 - V0_7, `TIMEOUT_EPOCH_VERSION` (also `LARGE_BLOCK_VERSION`, `NO_BUILDER_COMMITMENT_VERSION`, `MAX_SUPPORTED_VERSION`):
-  timeout votes and certificates bind the epoch (`TimeoutData3`, `TimeoutVote3`, `TimeoutCertificate3`,
-  `CatchupEvidence::Tc3`; form chosen by `UpgradeLock::timeout_epoch_bound`); `Header::V7` is the V0_6 header without
-  `builder_commitment`; `LargeBlock` chain-config change raises `max_block_size`, run by the new protocol's upgrade
-  sub-protocol (`crates/hotshot/new-protocol/src/upgrade.rs`)
+  - timeout votes and certificates bind the epoch (`TimeoutData3`, `TimeoutVote3`, `TimeoutCertificate3`,
+    `CatchupEvidence::Tc3`; form chosen by `UpgradeLock::timeout_epoch_bound`)
+  - `Header::V7` is the V0_6 header without `builder_commitment`
+  - `LargeBlock` chain-config change raises `max_block_size`, run by the new protocol's upgrade sub-protocol
+    (`crates/hotshot/new-protocol/src/upgrade.rs`)
+  - vote rules switch to the certificate rule (`UpgradeLock::certificate_rule`):
+    - `TimeoutData3` signs the signer's lock; `TimeoutCertificate3` groups its signers by lock and carries the latest
+      lock's `Certificate1`
+    - no vote2 at or before a view the node sent a timeout vote for
+    - after a timeout, a vote1 checks the parent against the certificate's lock
+    - locks are ordered by epoch, then view
+  - an epoch's last block without a `Certificate2` is committed by a re-vote (`ReVote`) at a later view; the next
+    epoch's first block names the block's own `Certificate1`, persisted as `boundary_qc2` (migration `V1506`)
 
 Every network runs epochs: each `data/genesis/*.toml` has `base_version` 0.6 or later and a positive `epoch_height`.
 Pre-epoch chains (`epoch_height` 0, versions below V0_3) do not exist. Code for them is dead and may fail or be removed.

@@ -11,10 +11,7 @@ use espresso_types::{
     v0_3::{EventKey, IndexedStake, RegisteredValidator, RewardAmount, StakeTableEvent},
 };
 use hotshot_types::{
-    data::{
-        DaProposal, DaProposal2, EpochNumber, QuorumProposalWrapper, VidCommitment,
-        VidDisperseShare,
-    },
+    data::{DaProposal2, EpochNumber, QuorumProposalWrapper, VidCommitment, VidDisperseShare},
     drb::{DrbInput, DrbResult},
     event::{HotShotAction, LeafInfo},
     initializer::InitializerEpochInfo,
@@ -135,19 +132,7 @@ impl SequencerPersistence for NoStorage {
     ) -> anyhow::Result<()> {
         Ok(())
     }
-    async fn append_da(
-        &self,
-        _proposal: &Proposal<SeqTypes, DaProposal<SeqTypes>>,
-        _vid_commit: VidCommitment,
-    ) -> anyhow::Result<()> {
-        Ok(())
-    }
-    async fn record_action(
-        &self,
-        _view: ViewNumber,
-        _epoch: Option<EpochNumber>,
-        _action: HotShotAction,
-    ) -> anyhow::Result<()> {
+    async fn record_action(&self, _view: ViewNumber, _action: HotShotAction) -> anyhow::Result<()> {
         Ok(())
     }
     async fn append_quorum_proposal2(
@@ -159,20 +144,6 @@ impl SequencerPersistence for NoStorage {
     async fn store_upgrade_certificate(
         &self,
         _decided_upgrade_certificate: Option<UpgradeCertificate<SeqTypes>>,
-    ) -> anyhow::Result<()> {
-        Ok(())
-    }
-
-    async fn load_next_epoch_quorum_certificate(
-        &self,
-    ) -> anyhow::Result<Option<NextEpochQuorumCertificate2<SeqTypes>>> {
-        Ok(None)
-    }
-
-    async fn store_eqc(
-        &self,
-        _high_qc: QuorumCertificate2<SeqTypes>,
-        _next_epoch_high_qc: NextEpochQuorumCertificate2<SeqTypes>,
     ) -> anyhow::Result<()> {
         Ok(())
     }
@@ -190,13 +161,6 @@ impl SequencerPersistence for NoStorage {
         &self,
         _proposal: &Proposal<SeqTypes, DaProposal2<SeqTypes>>,
         _vid_commit: VidCommitment,
-    ) -> anyhow::Result<()> {
-        Ok(())
-    }
-
-    async fn append_proposal2(
-        &self,
-        _proposal: &Proposal<SeqTypes, QuorumProposalWrapper<SeqTypes>>,
     ) -> anyhow::Result<()> {
         Ok(())
     }

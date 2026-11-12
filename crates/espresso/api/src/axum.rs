@@ -33,14 +33,32 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::Semaphore;
 
 use crate::{
-    dyn_api::{
-        AvailabilityState, BlockState, CatchupState, ConfigState, DatabaseState, ExplorerState,
-        FeeState, LightClientState, NodeState, RewardState, StateSignatureState, StatusState,
-        SubmitState, TokenState,
-    },
     error::{ApiError, classify as classify_availability_error},
     v1,
 };
+
+// The `router_*` builders take trait objects so each is compiled once, not once per state type.
+type RewardState = Arc<dyn v1::RewardApi + Send + Sync>;
+type AvailabilityState = Arc<dyn Availability>;
+type BlockState = Arc<dyn v1::BlockStateApi + Send + Sync>;
+type FeeState = Arc<dyn v1::FeeStateApi + Send + Sync>;
+type StatusState = Arc<dyn v1::StatusApi + Send + Sync>;
+type ConfigState = Arc<dyn v1::ConfigApi + Send + Sync>;
+type NodeState = Arc<dyn v1::NodeApi + Send + Sync>;
+type CatchupState = Arc<dyn v1::CatchupApi + Send + Sync>;
+type SubmitState = Arc<dyn v1::SubmitApi + Send + Sync>;
+type StateSignatureState = Arc<dyn v1::StateSignatureApi + Send + Sync>;
+type LightClientState = Arc<dyn v1::LightClientApi + Send + Sync>;
+type ExplorerState = Arc<dyn v1::ExplorerApi + Send + Sync>;
+type DatabaseState = Arc<dyn v1::DatabaseApi + Send + Sync>;
+type TokenState = Arc<dyn v1::TokenApi + Send + Sync>;
+
+/// The availability router serves both availability traits from one state object.
+pub(crate) trait Availability:
+    v1::AvailabilityApi + v1::HotShotAvailabilityApi + Send + Sync
+{
+}
+impl<T: v1::AvailabilityApi + v1::HotShotAvailabilityApi + Send + Sync> Availability for T {}
 
 /// API error response, wire-compatible with the `Custom` variant of the per-module error enums
 /// (`node::Error::Custom`, `merklized_state::Error::Custom`, etc.) that all of tide-disco's
@@ -2372,7 +2390,11 @@ pub(crate) fn router_catchup(state: CatchupState) -> ApiRouter {
                             Path((height, view)): Path<(u64, u64)>,
                             headers: HeaderMap,
                             body: Bytes| async move {
-        let tree = state.get_accounts(height, view, &headers, &body).await?;
+        let accounts = decode_body(&headers, &body)?;
+        let tree = state
+            .get_accounts(height, view, accounts)
+            .await
+            .map_err(classify_availability_error)?;
         Ok::<_, ApiError>(encode_response(&headers, tree))
     };
 
@@ -2424,9 +2446,11 @@ pub(crate) fn router_catchup(state: CatchupState) -> ApiRouter {
                                    Path((height, view)): Path<(u64, u64)>,
                                    headers: HeaderMap,
                                    body: Bytes| async move {
+        let accounts = decode_body(&headers, &body)?;
         let tree = state
-            .get_reward_accounts_v1(height, view, &headers, &body)
-            .await?;
+            .get_reward_accounts_v1(height, view, accounts)
+            .await
+            .map_err(classify_availability_error)?;
         Ok::<_, ApiError>(encode_response(&headers, tree))
     };
 
@@ -2590,7 +2614,11 @@ pub(crate) fn router_submit(state: SubmitState) -> ApiRouter {
     // Submit handler: body is decoded as VBS (binary) or JSON based on Content-Type, matching
     // tide-disco's `body_auto`.
     let submit_submit = |State(state): State<SubmitState>, headers: HeaderMap, body: Bytes| async move {
-        let hash = state.submit(&headers, &body).await?;
+        let tx = decode_body(&headers, &body)?;
+        let hash = state
+            .submit(tx)
+            .await
+            .map_err(classify_availability_error)?;
         Ok::<_, ApiError>(encode_response(&headers, hash))
     };
 
@@ -3768,6 +3796,7 @@ fn declare_path_template_parameters(api: &mut OpenApi) {
 mod tests {
     use std::collections::BTreeMap;
 
+    use espresso_types::SeqTypes;
     use futures::stream::BoxStream;
     use http_wire::WireVersion;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -3897,15 +3926,6 @@ mod tests {
 
     #[async_trait::async_trait]
     impl v1::RewardApi for MockState {
-        type RewardClaimInput = ();
-        type RewardBalance = ();
-        type RewardAccountQueryData = ();
-        type RewardAmounts = ();
-        type RewardMerkleTreeData = ();
-        type RewardAccountQueryDataV1 = ();
-        type RewardStatePathV1 = ();
-        type RewardStatePathV2 = ();
-
         async fn get_reward_state_height(&self) -> anyhow::Result<u64> {
             unimplemented!()
         }
@@ -3916,40 +3936,40 @@ mod tests {
             &self,
             _height: u64,
             _address: String,
-        ) -> anyhow::Result<Self::RewardAccountQueryDataV1> {
+        ) -> anyhow::Result<espresso_types::v0_3::RewardAccountQueryDataV1> {
             unimplemented!()
         }
         async fn get_reward_claim_input(
             &self,
             _block_height: u64,
             _address: String,
-        ) -> anyhow::Result<Self::RewardClaimInput> {
+        ) -> anyhow::Result<hotshot_contract_adapter::reward::RewardClaimInput> {
             unimplemented!()
         }
         async fn get_reward_balance(
             &self,
             _height: u64,
             _address: String,
-        ) -> anyhow::Result<Self::RewardBalance> {
+        ) -> anyhow::Result<espresso_types::v0_3::RewardAmount> {
             unimplemented!()
         }
         async fn get_latest_reward_balance(
             &self,
             _address: String,
-        ) -> anyhow::Result<Self::RewardBalance> {
+        ) -> anyhow::Result<espresso_types::v0_3::RewardAmount> {
             unimplemented!()
         }
         async fn get_reward_account_proof(
             &self,
             _height: u64,
             _address: String,
-        ) -> anyhow::Result<Self::RewardAccountQueryData> {
+        ) -> anyhow::Result<espresso_types::v0_4::RewardAccountQueryDataV2> {
             unimplemented!()
         }
         async fn get_latest_reward_account_proof(
             &self,
             _address: String,
-        ) -> anyhow::Result<Self::RewardAccountQueryData> {
+        ) -> anyhow::Result<espresso_types::v0_4::RewardAccountQueryDataV2> {
             unimplemented!()
         }
         async fn get_reward_amounts(
@@ -3957,43 +3977,40 @@ mod tests {
             _height: u64,
             _offset: u64,
             _limit: u64,
-        ) -> anyhow::Result<Self::RewardAmounts> {
+        ) -> anyhow::Result<
+            Vec<(
+                alloy::primitives::Address,
+                espresso_types::v0_3::RewardAmount,
+            )>,
+        > {
             unimplemented!()
         }
-        async fn get_reward_merkle_tree_v2(
-            &self,
-            _height: u64,
-        ) -> anyhow::Result<Self::RewardMerkleTreeData> {
+        async fn get_reward_merkle_tree_v2(&self, _height: u64) -> anyhow::Result<Vec<u8>> {
             unimplemented!()
         }
         async fn get_reward_state_path_v1(
             &self,
             _snapshot: v1::merklized_state::Snapshot,
             _key: String,
-        ) -> anyhow::Result<Self::RewardStatePathV1> {
+        ) -> anyhow::Result<v1::reward_state_v2::RewardStatePathV1> {
             unimplemented!()
         }
         async fn get_reward_state_path_v2(
             &self,
             _snapshot: v1::merklized_state::Snapshot,
             _key: String,
-        ) -> anyhow::Result<Self::RewardStatePathV2> {
+        ) -> anyhow::Result<v1::reward_state_v2::RewardStatePathV2> {
             unimplemented!()
         }
     }
 
     #[async_trait::async_trait]
     impl v1::AvailabilityApi for MockState {
-        type NamespaceProofQueryData = ();
-        type IncorrectEncodingProof = ();
-        type StateCertQueryDataV1 = ();
-        type StateCertQueryDataV2 = ();
-
         async fn get_namespace_proof(
             &self,
             _block_id: v1::BlockId,
             _namespace: u32,
-        ) -> anyhow::Result<Self::NamespaceProofQueryData> {
+        ) -> anyhow::Result<espresso_types::NamespaceProofQueryData> {
             unimplemented!()
         }
         async fn get_namespace_proof_range(
@@ -4001,205 +4018,263 @@ mod tests {
             _from: u64,
             _until: u64,
             _namespace: u32,
-        ) -> anyhow::Result<Vec<Self::NamespaceProofQueryData>> {
+        ) -> anyhow::Result<Vec<espresso_types::NamespaceProofQueryData>> {
             unimplemented!()
         }
         async fn stream_namespace_proofs(
             &self,
             _from: usize,
             _namespace: u32,
-        ) -> anyhow::Result<BoxStream<'static, Self::NamespaceProofQueryData>> {
+        ) -> anyhow::Result<BoxStream<'static, espresso_types::NamespaceProofQueryData>> {
             unimplemented!()
         }
         async fn get_incorrect_encoding_proof(
             &self,
             _block_id: v1::BlockId,
             _namespace: u32,
-        ) -> anyhow::Result<Self::IncorrectEncodingProof> {
+        ) -> anyhow::Result<espresso_types::v0_3::AvidMIncorrectEncodingNsProof> {
             unimplemented!()
         }
-        async fn get_state_cert(&self, _epoch: u64) -> anyhow::Result<Self::StateCertQueryDataV1> {
+        async fn get_state_cert(
+            &self,
+            _epoch: u64,
+        ) -> anyhow::Result<espresso_types::StateCertQueryDataV1<SeqTypes>> {
             unimplemented!()
         }
         async fn get_state_cert_v2(
             &self,
             _epoch: u64,
-        ) -> anyhow::Result<Self::StateCertQueryDataV2> {
+        ) -> anyhow::Result<espresso_types::StateCertQueryDataV2<SeqTypes>> {
             unimplemented!()
         }
     }
 
     #[async_trait::async_trait]
     impl v1::HotShotAvailabilityApi for MockState {
-        type Leaf = ();
-        type Block = ();
-        type Header = ();
-        type Payload = ();
-        type VidCommon = ();
-        type Transaction = ();
-        type TransactionWithProof = ();
-        type BlockSummary = ();
-        type Limits = ();
-        type Cert2 = ();
-
-        async fn get_leaf(&self, _id: v1::LeafId) -> anyhow::Result<Self::Leaf> {
+        async fn get_leaf(
+            &self,
+            _id: v1::LeafId,
+        ) -> anyhow::Result<hotshot_query_service_types::availability::LeafQueryData<SeqTypes>>
+        {
             unimplemented!()
         }
         async fn get_leaf_range(
             &self,
             _from: usize,
             _until: usize,
-        ) -> anyhow::Result<Vec<Self::Leaf>> {
+        ) -> anyhow::Result<Vec<hotshot_query_service_types::availability::LeafQueryData<SeqTypes>>>
+        {
             unimplemented!()
         }
-        async fn get_header(&self, _id: v1::BlockId) -> anyhow::Result<Self::Header> {
+        async fn get_header(
+            &self,
+            _id: v1::BlockId,
+        ) -> anyhow::Result<hotshot_query_service_types::Header<SeqTypes>> {
             unimplemented!()
         }
         async fn get_header_range(
             &self,
             _from: usize,
             _until: usize,
-        ) -> anyhow::Result<Vec<Self::Header>> {
+        ) -> anyhow::Result<Vec<hotshot_query_service_types::Header<SeqTypes>>> {
             unimplemented!()
         }
-        async fn get_block(&self, _id: v1::BlockId) -> anyhow::Result<Self::Block> {
+        async fn get_block(
+            &self,
+            _id: v1::BlockId,
+        ) -> anyhow::Result<hotshot_query_service_types::availability::BlockQueryData<SeqTypes>>
+        {
             unimplemented!()
         }
         async fn get_block_range(
             &self,
             _from: usize,
             _until: usize,
-        ) -> anyhow::Result<Vec<Self::Block>> {
+        ) -> anyhow::Result<Vec<hotshot_query_service_types::availability::BlockQueryData<SeqTypes>>>
+        {
             unimplemented!()
         }
-        async fn get_payload(&self, _id: v1::PayloadId) -> anyhow::Result<Self::Payload> {
+        async fn get_payload(
+            &self,
+            _id: v1::PayloadId,
+        ) -> anyhow::Result<hotshot_query_service_types::availability::PayloadQueryData<SeqTypes>>
+        {
             unimplemented!()
         }
         async fn get_payload_range(
             &self,
             _from: usize,
             _until: usize,
-        ) -> anyhow::Result<Vec<Self::Payload>> {
+        ) -> anyhow::Result<
+            Vec<hotshot_query_service_types::availability::PayloadQueryData<SeqTypes>>,
+        > {
             unimplemented!()
         }
-        async fn get_vid_common(&self, _id: v1::BlockId) -> anyhow::Result<Self::VidCommon> {
+        async fn get_vid_common(
+            &self,
+            _id: v1::BlockId,
+        ) -> anyhow::Result<hotshot_query_service_types::availability::VidCommonQueryData<SeqTypes>>
+        {
             unimplemented!()
         }
         async fn get_vid_common_range(
             &self,
             _from: usize,
             _until: usize,
-        ) -> anyhow::Result<Vec<Self::VidCommon>> {
+        ) -> anyhow::Result<
+            Vec<hotshot_query_service_types::availability::VidCommonQueryData<SeqTypes>>,
+        > {
             unimplemented!()
         }
         async fn get_leaf_ranges(
             &self,
             _ranges: Vec<Range<u64>>,
-        ) -> anyhow::Result<Vec<Self::Leaf>> {
+        ) -> anyhow::Result<Vec<hotshot_query_service_types::availability::LeafQueryData<SeqTypes>>>
+        {
             unimplemented!()
         }
         async fn get_block_ranges(
             &self,
             _ranges: Vec<Range<u64>>,
-        ) -> anyhow::Result<Vec<Self::Block>> {
+        ) -> anyhow::Result<Vec<hotshot_query_service_types::availability::BlockQueryData<SeqTypes>>>
+        {
             unimplemented!()
         }
         async fn get_vid_common_ranges(
             &self,
             _ranges: Vec<Range<u64>>,
-        ) -> anyhow::Result<Vec<Self::VidCommon>> {
+        ) -> anyhow::Result<
+            Vec<hotshot_query_service_types::availability::VidCommonQueryData<SeqTypes>>,
+        > {
             unimplemented!()
         }
         async fn get_transaction_by_position(
             &self,
             _height: u64,
             _index: u64,
-        ) -> anyhow::Result<Self::Transaction> {
+        ) -> anyhow::Result<hotshot_query_service_types::availability::TransactionQueryData<SeqTypes>>
+        {
             unimplemented!()
         }
         async fn get_transaction_by_hash(
             &self,
             _hash: String,
-        ) -> anyhow::Result<Self::Transaction> {
+        ) -> anyhow::Result<hotshot_query_service_types::availability::TransactionQueryData<SeqTypes>>
+        {
             unimplemented!()
         }
         async fn get_transaction_proof_by_position(
             &self,
             _height: u64,
             _index: u64,
-        ) -> anyhow::Result<Self::TransactionWithProof> {
+        ) -> anyhow::Result<
+            hotshot_query_service_types::availability::TransactionWithProofQueryData<SeqTypes>,
+        > {
             unimplemented!()
         }
         async fn get_transaction_proof_by_hash(
             &self,
             _hash: String,
-        ) -> anyhow::Result<Self::TransactionWithProof> {
+        ) -> anyhow::Result<
+            hotshot_query_service_types::availability::TransactionWithProofQueryData<SeqTypes>,
+        > {
             unimplemented!()
         }
-        async fn get_block_summary(&self, _height: usize) -> anyhow::Result<Self::BlockSummary> {
+        async fn get_block_summary(
+            &self,
+            _height: usize,
+        ) -> anyhow::Result<
+            hotshot_query_service_types::availability::BlockSummaryQueryData<SeqTypes>,
+        > {
             unimplemented!()
         }
         async fn get_block_summary_range(
             &self,
             _from: usize,
             _until: usize,
-        ) -> anyhow::Result<Vec<Self::BlockSummary>> {
+        ) -> anyhow::Result<
+            Vec<hotshot_query_service_types::availability::BlockSummaryQueryData<SeqTypes>>,
+        > {
             unimplemented!()
         }
-        async fn get_limits(&self) -> anyhow::Result<Self::Limits> {
+        async fn get_limits(
+            &self,
+        ) -> anyhow::Result<hotshot_query_service_types::availability::Limits> {
             unimplemented!()
         }
-        async fn get_cert2(&self, _height: u64) -> anyhow::Result<Option<Self::Cert2>> {
+        async fn get_cert2(
+            &self,
+            _height: u64,
+        ) -> anyhow::Result<Option<hotshot_types::simple_certificate::Certificate2<SeqTypes>>>
+        {
             unimplemented!()
         }
         async fn stream_leaves(
             &self,
             _from: usize,
-        ) -> anyhow::Result<BoxStream<'static, Self::Leaf>> {
+        ) -> anyhow::Result<
+            BoxStream<'static, hotshot_query_service_types::availability::LeafQueryData<SeqTypes>>,
+        > {
             unimplemented!()
         }
         async fn stream_headers(
             &self,
             _from: usize,
-        ) -> anyhow::Result<BoxStream<'static, Self::Header>> {
+        ) -> anyhow::Result<BoxStream<'static, hotshot_query_service_types::Header<SeqTypes>>>
+        {
             unimplemented!()
         }
         async fn stream_blocks(
             &self,
             _from: usize,
-        ) -> anyhow::Result<BoxStream<'static, Self::Block>> {
+        ) -> anyhow::Result<
+            BoxStream<'static, hotshot_query_service_types::availability::BlockQueryData<SeqTypes>>,
+        > {
             unimplemented!()
         }
         async fn stream_payloads(
             &self,
             _from: usize,
-        ) -> anyhow::Result<BoxStream<'static, Self::Payload>> {
+        ) -> anyhow::Result<
+            BoxStream<
+                'static,
+                hotshot_query_service_types::availability::PayloadQueryData<SeqTypes>,
+            >,
+        > {
             unimplemented!()
         }
         async fn stream_vid_common(
             &self,
             _from: usize,
-        ) -> anyhow::Result<BoxStream<'static, Self::VidCommon>> {
+        ) -> anyhow::Result<
+            BoxStream<
+                'static,
+                hotshot_query_service_types::availability::VidCommonQueryData<SeqTypes>,
+            >,
+        > {
             unimplemented!()
         }
         async fn stream_transactions(
             &self,
             _from: usize,
             _namespace: Option<u32>,
-        ) -> anyhow::Result<BoxStream<'static, Self::Transaction>> {
+        ) -> anyhow::Result<
+            BoxStream<
+                'static,
+                hotshot_query_service_types::availability::TransactionQueryData<SeqTypes>,
+            >,
+        > {
             unimplemented!()
         }
     }
 
     #[async_trait::async_trait]
     impl v1::BlockStateApi for MockState {
-        type MerkleProof = ();
-
         async fn get_block_state_path(
             &self,
             _snapshot: v1::merklized_state::Snapshot,
             _key: String,
-        ) -> anyhow::Result<Self::MerkleProof> {
+        ) -> anyhow::Result<v1::merklized_state::BlockStatePath> {
             unimplemented!()
         }
         async fn get_block_state_height(&self) -> anyhow::Result<u64> {
@@ -4209,14 +4284,11 @@ mod tests {
 
     #[async_trait::async_trait]
     impl v1::FeeStateApi for MockState {
-        type MerkleProof = ();
-        type FeeAmount = ();
-
         async fn get_fee_state_path(
             &self,
             _snapshot: v1::merklized_state::Snapshot,
             _key: String,
-        ) -> anyhow::Result<Self::MerkleProof> {
+        ) -> anyhow::Result<v1::merklized_state::FeeStatePath> {
             unimplemented!()
         }
         async fn get_fee_state_height(&self) -> anyhow::Result<u64> {
@@ -4225,15 +4297,13 @@ mod tests {
         async fn get_fee_balance_latest(
             &self,
             _address: String,
-        ) -> anyhow::Result<Option<Self::FeeAmount>> {
+        ) -> anyhow::Result<Option<espresso_types::FeeAmount>> {
             unimplemented!()
         }
     }
 
     #[async_trait::async_trait]
     impl v1::StatusApi for MockState {
-        type Keys = ();
-
         async fn block_height(&self) -> anyhow::Result<u64> {
             unimplemented!()
         }
@@ -4246,7 +4316,7 @@ mod tests {
         async fn metrics(&self) -> anyhow::Result<String> {
             unimplemented!()
         }
-        async fn keys(&self) -> anyhow::Result<Self::Keys> {
+        async fn keys(&self) -> anyhow::Result<v1::status::NodePublicKeys> {
             Err(
                 crate::error::AvailabilityError::NotFound("this node has no validator keys".into())
                     .into(),
@@ -4256,35 +4326,21 @@ mod tests {
 
     #[async_trait::async_trait]
     impl v1::ConfigApi for MockState {
-        type HotShotConfig = ();
-        type RuntimeConfig = ();
-
-        async fn hotshot_config(&self) -> anyhow::Result<Self::HotShotConfig> {
+        async fn hotshot_config(
+            &self,
+        ) -> anyhow::Result<espresso_types::config::PublicNetworkConfig> {
             unimplemented!()
         }
         async fn env(&self) -> anyhow::Result<Vec<String>> {
             unimplemented!()
         }
-        async fn runtime_config(&self) -> anyhow::Result<Self::RuntimeConfig> {
+        async fn runtime_config(&self) -> anyhow::Result<v1::config::RuntimeConfig> {
             unimplemented!()
         }
     }
 
     #[async_trait::async_trait]
     impl v1::NodeApi for MockState {
-        type VidShare = ();
-        type SyncStatus = ();
-        type HeaderWindow = ();
-        type Limits = ();
-        type StakeTable = ();
-        type StakeTableCurrent = ();
-        type Validators = ();
-        type AllValidators = ();
-        type Participation = ();
-        type BlockReward = ();
-        type Block = ();
-        type Leaf = ();
-
         async fn block_height(&self) -> anyhow::Result<u64> {
             unimplemented!()
         }
@@ -4304,35 +4360,62 @@ mod tests {
         ) -> anyhow::Result<u64> {
             unimplemented!()
         }
-        async fn get_vid_share(&self, _id: v1::VidShareId) -> anyhow::Result<Self::VidShare> {
+        async fn get_vid_share(
+            &self,
+            _id: v1::VidShareId,
+        ) -> anyhow::Result<hotshot_types::data::VidShare> {
             unimplemented!()
         }
-        async fn sync_status(&self) -> anyhow::Result<Self::SyncStatus> {
+        async fn sync_status(
+            &self,
+        ) -> anyhow::Result<hotshot_query_service_types::node::SyncStatusQueryData> {
             unimplemented!()
         }
         async fn get_header_window(
             &self,
             _start: v1::HeaderWindowStart,
             _end: u64,
-        ) -> anyhow::Result<Self::HeaderWindow> {
+        ) -> anyhow::Result<
+            hotshot_query_service_types::node::TimeWindowQueryData<
+                hotshot_query_service_types::Header<SeqTypes>,
+            >,
+        > {
             unimplemented!()
         }
-        async fn limits(&self) -> anyhow::Result<Self::Limits> {
+        async fn limits(&self) -> anyhow::Result<hotshot_query_service_types::node::Limits> {
             unimplemented!()
         }
-        async fn stake_table(&self, _epoch: u64) -> anyhow::Result<Self::StakeTable> {
+        async fn stake_table(
+            &self,
+            _epoch: u64,
+        ) -> anyhow::Result<Vec<hotshot_types::PeerConfig<SeqTypes>>> {
             unimplemented!()
         }
-        async fn stake_table_current(&self) -> anyhow::Result<Self::StakeTableCurrent> {
+        async fn stake_table_current(
+            &self,
+        ) -> anyhow::Result<v1::node::StakeTableWithEpochNumber<SeqTypes>> {
             unimplemented!()
         }
-        async fn da_stake_table(&self, _epoch: u64) -> anyhow::Result<Self::StakeTable> {
+        async fn da_stake_table(
+            &self,
+            _epoch: u64,
+        ) -> anyhow::Result<Vec<hotshot_types::PeerConfig<SeqTypes>>> {
             unimplemented!()
         }
-        async fn da_stake_table_current(&self) -> anyhow::Result<Self::StakeTableCurrent> {
+        async fn da_stake_table_current(
+            &self,
+        ) -> anyhow::Result<v1::node::StakeTableWithEpochNumber<SeqTypes>> {
             unimplemented!()
         }
-        async fn get_validators(&self, _epoch: u64) -> anyhow::Result<Self::Validators> {
+        async fn get_validators(
+            &self,
+            _epoch: u64,
+        ) -> anyhow::Result<
+            indexmap::IndexMap<
+                alloy::primitives::Address,
+                espresso_types::v0_3::AuthenticatedValidator<espresso_types::PubKey>,
+            >,
+        > {
             unimplemented!()
         }
         async fn get_all_validators(
@@ -4340,79 +4423,92 @@ mod tests {
             _epoch: u64,
             _offset: u64,
             _limit: u64,
-        ) -> anyhow::Result<Self::AllValidators> {
+        ) -> anyhow::Result<Vec<espresso_types::v0_3::RegisteredValidator<espresso_types::PubKey>>>
+        {
             unimplemented!()
         }
-        async fn current_proposal_participation(&self) -> anyhow::Result<Self::Participation> {
+        async fn current_proposal_participation(
+            &self,
+        ) -> anyhow::Result<std::collections::HashMap<espresso_types::PubKey, f64>> {
             unimplemented!()
         }
-        async fn proposal_participation(&self, _epoch: u64) -> anyhow::Result<Self::Participation> {
+        async fn proposal_participation(
+            &self,
+            _epoch: u64,
+        ) -> anyhow::Result<std::collections::HashMap<espresso_types::PubKey, f64>> {
             unimplemented!()
         }
-        async fn current_vote_participation(&self) -> anyhow::Result<Self::Participation> {
+        async fn current_vote_participation(
+            &self,
+        ) -> anyhow::Result<std::collections::HashMap<espresso_types::PubKey, f64>> {
             unimplemented!()
         }
-        async fn vote_participation(&self, _epoch: u64) -> anyhow::Result<Self::Participation> {
+        async fn vote_participation(
+            &self,
+            _epoch: u64,
+        ) -> anyhow::Result<std::collections::HashMap<espresso_types::PubKey, f64>> {
             unimplemented!()
         }
-        async fn get_block_reward(&self, _epoch: Option<u64>) -> anyhow::Result<Self::BlockReward> {
+        async fn get_block_reward(
+            &self,
+            _epoch: Option<u64>,
+        ) -> anyhow::Result<Option<espresso_types::v0_3::RewardAmount>> {
             unimplemented!()
         }
-        async fn get_oldest_block(&self) -> anyhow::Result<Option<Self::Block>> {
+        async fn get_oldest_block(
+            &self,
+        ) -> anyhow::Result<
+            Option<hotshot_query_service_types::availability::BlockQueryData<SeqTypes>>,
+        > {
             unimplemented!()
         }
-        async fn get_oldest_leaf(&self) -> anyhow::Result<Option<Self::Leaf>> {
+        async fn get_oldest_leaf(
+            &self,
+        ) -> anyhow::Result<
+            Option<hotshot_query_service_types::availability::LeafQueryData<SeqTypes>>,
+        > {
             unimplemented!()
         }
     }
 
     #[async_trait::async_trait]
     impl v1::CatchupApi for MockState {
-        type FeeAccount = ();
-        type RewardAccountV1 = ();
-        type RewardAccountV2 = ();
-        type AccountQueryData = ();
-        type FeeMerkleTree = ();
-        type BlocksFrontier = ();
-        type ChainConfig = ();
-        type LeafChain = ();
-        type Cert2 = ();
-        type RewardAccountQueryDataV1 = ();
-        type RewardMerkleTreeV1 = ();
-        type RewardAccountQueryDataV2 = ();
-        type RewardMerkleTreeV2Data = ();
-        type StateCert = ();
-
         async fn get_account(
             &self,
             _height: u64,
             _view: u64,
             _address: String,
-        ) -> anyhow::Result<Self::AccountQueryData> {
+        ) -> anyhow::Result<espresso_types::AccountQueryData> {
             unimplemented!()
         }
         async fn get_accounts(
             &self,
             _height: u64,
             _view: u64,
-            _accounts: Vec<Self::FeeAccount>,
-        ) -> anyhow::Result<Self::FeeMerkleTree> {
+            _accounts: Vec<espresso_types::FeeAccount>,
+        ) -> anyhow::Result<espresso_types::FeeMerkleTree> {
             unimplemented!()
         }
         async fn get_blocks_frontier(
             &self,
             _height: u64,
             _view: u64,
-        ) -> anyhow::Result<Self::BlocksFrontier> {
+        ) -> anyhow::Result<<espresso_types::BlockMerkleTree as jf_merkle_tree_compat::MerkleTreeScheme>::MembershipProof>{
             unimplemented!()
         }
-        async fn get_chain_config(&self, _commitment: String) -> anyhow::Result<Self::ChainConfig> {
+        async fn get_chain_config(
+            &self,
+            _commitment: String,
+        ) -> anyhow::Result<espresso_types::v0_3::ChainConfig> {
             unimplemented!()
         }
-        async fn get_leaf_chain(&self, _height: u64) -> anyhow::Result<Self::LeafChain> {
+        async fn get_leaf_chain(&self, _height: u64) -> anyhow::Result<Vec<espresso_types::Leaf2>> {
             unimplemented!()
         }
-        async fn get_cert2(&self, _height: u64) -> anyhow::Result<Self::Cert2> {
+        async fn get_cert2(
+            &self,
+            _height: u64,
+        ) -> anyhow::Result<hotshot_types::simple_certificate::Certificate2<SeqTypes>> {
             unimplemented!()
         }
         async fn get_reward_account_v1(
@@ -4420,15 +4516,15 @@ mod tests {
             _height: u64,
             _view: u64,
             _address: String,
-        ) -> anyhow::Result<Self::RewardAccountQueryDataV1> {
+        ) -> anyhow::Result<espresso_types::v0_3::RewardAccountQueryDataV1> {
             unimplemented!()
         }
         async fn get_reward_accounts_v1(
             &self,
             _height: u64,
             _view: u64,
-            _accounts: Vec<Self::RewardAccountV1>,
-        ) -> anyhow::Result<Self::RewardMerkleTreeV1> {
+            _accounts: Vec<espresso_types::v0_3::RewardAccountV1>,
+        ) -> anyhow::Result<espresso_types::v0_3::RewardMerkleTreeV1> {
             unimplemented!()
         }
         async fn get_reward_account_v2(
@@ -4436,89 +4532,92 @@ mod tests {
             _height: u64,
             _view: u64,
             _address: String,
-        ) -> anyhow::Result<Self::RewardAccountQueryDataV2> {
+        ) -> anyhow::Result<espresso_types::v0_4::RewardAccountQueryDataV2> {
             unimplemented!()
         }
         async fn get_reward_merkle_tree_v2(
             &self,
             _height: u64,
             _view: u64,
-        ) -> anyhow::Result<Self::RewardMerkleTreeV2Data> {
+        ) -> anyhow::Result<serde_json::Value> {
             unimplemented!()
         }
-        async fn get_state_cert(&self, _epoch: u64) -> anyhow::Result<Self::StateCert> {
+        async fn get_state_cert(
+            &self,
+            _epoch: u64,
+        ) -> anyhow::Result<
+            hotshot_types::simple_certificate::LightClientStateUpdateCertificateV2<SeqTypes>,
+        > {
             unimplemented!()
         }
     }
 
     #[async_trait::async_trait]
     impl v1::SubmitApi for MockState {
-        type Transaction = ();
-        type TxHash = ();
-
-        async fn submit(&self, _tx: Self::Transaction) -> anyhow::Result<Self::TxHash> {
+        async fn submit(
+            &self,
+            _tx: espresso_types::Transaction,
+        ) -> anyhow::Result<committable::Commitment<espresso_types::Transaction>> {
             unimplemented!()
         }
     }
 
     #[async_trait::async_trait]
     impl v1::StateSignatureApi for MockState {
-        type Signature = ();
-
-        async fn get_state_signature(&self, _height: u64) -> anyhow::Result<Self::Signature> {
+        async fn get_state_signature(
+            &self,
+            _height: u64,
+        ) -> anyhow::Result<hotshot_types::light_client::LCV3StateSignatureRequestBody> {
             unimplemented!()
         }
     }
 
     #[async_trait::async_trait]
     impl v1::LightClientApi for MockState {
-        type LeafProof = ();
-        type HeaderProof = ();
-        type StakeTableEvents = ();
-        type PayloadProof = ();
-        type NamespaceProof = ();
-
         async fn get_leaf_proof(
             &self,
             _query: v1::LeafQuery,
             _finalized: Option<u64>,
-        ) -> anyhow::Result<Self::LeafProof> {
+        ) -> anyhow::Result<light_client::consensus::leaf::LeafProof> {
             unimplemented!()
         }
         async fn get_header_proof(
             &self,
             _root: u64,
             _requested: v1::HeaderQuery,
-        ) -> anyhow::Result<Self::HeaderProof> {
+        ) -> anyhow::Result<light_client::consensus::header::HeaderProof> {
             unimplemented!()
         }
         async fn get_light_client_stake_table(
             &self,
             _epoch: u64,
-        ) -> anyhow::Result<Self::StakeTableEvents> {
+        ) -> anyhow::Result<Vec<espresso_types::v0_3::StakeTableEvent>> {
             unimplemented!()
         }
-        async fn get_payload_proof(&self, _height: u64) -> anyhow::Result<Self::PayloadProof> {
+        async fn get_payload_proof(
+            &self,
+            _height: u64,
+        ) -> anyhow::Result<light_client::consensus::payload::PayloadProof> {
             unimplemented!()
         }
         async fn get_payload_proof_range(
             &self,
             _start: u64,
             _end: u64,
-        ) -> anyhow::Result<Vec<Self::PayloadProof>> {
+        ) -> anyhow::Result<Vec<light_client::consensus::payload::PayloadProof>> {
             unimplemented!()
         }
         async fn get_payload_proof_ranges(
             &self,
             _ranges: Vec<Range<u64>>,
-        ) -> anyhow::Result<Vec<Self::PayloadProof>> {
+        ) -> anyhow::Result<Vec<light_client::consensus::payload::PayloadProof>> {
             unimplemented!()
         }
         async fn get_lc_namespace_proof(
             &self,
             _height: u64,
             _namespace: u64,
-        ) -> anyhow::Result<Self::NamespaceProof> {
+        ) -> anyhow::Result<light_client::consensus::namespace::NamespaceProof> {
             unimplemented!()
         }
         async fn get_lc_namespace_proof_range(
@@ -4526,7 +4625,7 @@ mod tests {
             _start: u64,
             _end: u64,
             _namespace: u64,
-        ) -> anyhow::Result<Vec<Self::NamespaceProof>> {
+        ) -> anyhow::Result<Vec<light_client::consensus::namespace::NamespaceProof>> {
             unimplemented!()
         }
         async fn get_lc_namespaces_proof_range(
@@ -4534,37 +4633,38 @@ mod tests {
             _start: u64,
             _end: u64,
             _namespaces: String,
-        ) -> anyhow::Result<Vec<std::collections::HashMap<u64, Self::NamespaceProof>>> {
+        ) -> anyhow::Result<
+            Vec<std::collections::HashMap<u64, light_client::consensus::namespace::NamespaceProof>>,
+        > {
             unimplemented!()
         }
     }
 
     #[async_trait::async_trait]
     impl v1::ExplorerApi for MockState {
-        type BlockDetail = ();
-        type BlockSummaries = ();
-        type TransactionDetail = ();
-        type TransactionSummaries = ();
-        type ExplorerSummary = ();
-        type SearchResult = ();
-
         async fn get_block_detail(
             &self,
             _ident: v1::BlockIdent,
-        ) -> anyhow::Result<Self::BlockDetail> {
+        ) -> anyhow::Result<
+            hotshot_query_service_types::explorer::response::BlockDetailResponse<SeqTypes>,
+        > {
             unimplemented!()
         }
         async fn get_block_summaries(
             &self,
             _target: v1::BlockIdent,
             _limit: u64,
-        ) -> anyhow::Result<Self::BlockSummaries> {
+        ) -> anyhow::Result<
+            hotshot_query_service_types::explorer::response::BlockSummaryResponse<SeqTypes>,
+        > {
             unimplemented!()
         }
         async fn get_transaction_detail(
             &self,
             _ident: v1::TxIdent,
-        ) -> anyhow::Result<Self::TransactionDetail> {
+        ) -> anyhow::Result<
+            hotshot_query_service_types::explorer::response::TransactionDetailResponse<SeqTypes>,
+        > {
             unimplemented!()
         }
         async fn get_transaction_summaries(
@@ -4572,13 +4672,24 @@ mod tests {
             _target: v1::TxIdent,
             _limit: u64,
             _filter: v1::TxSummaryFilter,
-        ) -> anyhow::Result<Self::TransactionSummaries> {
+        ) -> anyhow::Result<
+            hotshot_query_service_types::explorer::response::TransactionSummariesResponse<SeqTypes>,
+        > {
             unimplemented!()
         }
-        async fn get_explorer_summary(&self) -> anyhow::Result<Self::ExplorerSummary> {
+        async fn get_explorer_summary(
+            &self,
+        ) -> anyhow::Result<
+            hotshot_query_service_types::explorer::response::ExplorerSummaryResponse<SeqTypes>,
+        > {
             unimplemented!()
         }
-        async fn get_search_result(&self, _query: String) -> anyhow::Result<Self::SearchResult> {
+        async fn get_search_result(
+            &self,
+            _query: String,
+        ) -> anyhow::Result<
+            hotshot_query_service_types::explorer::response::SearchResultResponse<SeqTypes>,
+        > {
             unimplemented!()
         }
     }
@@ -4604,13 +4715,10 @@ mod tests {
 
     #[async_trait::async_trait]
     impl v1::DatabaseApi for MockState {
-        type TableSizes = ();
-        type MigrationStatus = ();
-
-        async fn get_table_sizes(&self) -> anyhow::Result<Self::TableSizes> {
+        async fn get_table_sizes(&self) -> anyhow::Result<Vec<v1::database::TableSize>> {
             unimplemented!()
         }
-        async fn get_migration_status(&self) -> anyhow::Result<Self::MigrationStatus> {
+        async fn get_migration_status(&self) -> anyhow::Result<Vec<v1::database::MigrationStatus>> {
             unimplemented!()
         }
     }
@@ -5004,6 +5112,26 @@ mod tests {
             "/v2/explorer/transactions",
             "/v2/explorer/summary",
             "/v2/explorer/search",
+            "/v2/catchup/fee-account",
+            "/v2/catchup/fee-accounts",
+            "/v2/catchup/blocks-frontier",
+            "/v2/catchup/chain-config",
+            "/v2/catchup/leaf-chain",
+            "/v2/catchup/cert2",
+            "/v2/catchup/reward-account",
+            "/v2/catchup/reward-accounts",
+            "/v2/catchup/reward-account-v2",
+            "/v2/catchup/reward-merkle-tree-v2",
+            "/v2/catchup/state-cert",
+            "/v2/light-client/leaf",
+            "/v2/light-client/header",
+            "/v2/light-client/stake-table",
+            "/v2/light-client/payload",
+            "/v2/light-client/payload-range",
+            "/v2/light-client/payload-ranges",
+            "/v2/light-client/namespace",
+            "/v2/light-client/namespace-range",
+            "/v2/light-client/namespaces-range",
         ]
         .into_iter()
         .collect();
@@ -5550,6 +5678,175 @@ mod tests {
             &self,
             _request: tonic::Request<crate::proto::GetStateSignatureRequest>,
         ) -> Result<tonic::Response<crate::proto::StateSignatureResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+    }
+
+    #[tonic::async_trait]
+    impl crate::proto::light_client_service_server::LightClientService for MockV2State {
+        async fn get_light_client_leaf_proof(
+            &self,
+            _request: tonic::Request<crate::proto::GetLightClientLeafProofRequest>,
+        ) -> Result<tonic::Response<crate::proto::LightClientLeafProofResponse>, tonic::Status>
+        {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_light_client_header_proof(
+            &self,
+            _request: tonic::Request<crate::proto::GetLightClientHeaderProofRequest>,
+        ) -> Result<tonic::Response<crate::proto::LightClientHeaderProofResponse>, tonic::Status>
+        {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_light_client_stake_table(
+            &self,
+            _request: tonic::Request<crate::proto::GetLightClientStakeTableRequest>,
+        ) -> Result<tonic::Response<crate::proto::LightClientStakeTableResponse>, tonic::Status>
+        {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_light_client_payload_proof(
+            &self,
+            _request: tonic::Request<crate::proto::GetLightClientPayloadProofRequest>,
+        ) -> Result<tonic::Response<crate::proto::LightClientPayloadProofResponse>, tonic::Status>
+        {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_light_client_payload_proof_range(
+            &self,
+            _request: tonic::Request<crate::proto::GetLightClientPayloadProofRangeRequest>,
+        ) -> Result<
+            tonic::Response<crate::proto::LightClientPayloadProofRangeResponse>,
+            tonic::Status,
+        > {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_light_client_payload_proof_ranges(
+            &self,
+            _request: tonic::Request<crate::proto::GetLightClientPayloadProofRangesRequest>,
+        ) -> Result<
+            tonic::Response<crate::proto::LightClientPayloadProofRangeResponse>,
+            tonic::Status,
+        > {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_light_client_namespace_proof(
+            &self,
+            _request: tonic::Request<crate::proto::GetLightClientNamespaceProofRequest>,
+        ) -> Result<tonic::Response<crate::proto::LightClientNamespaceProofResponse>, tonic::Status>
+        {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_light_client_namespace_proof_range(
+            &self,
+            _request: tonic::Request<crate::proto::GetLightClientNamespaceProofRangeRequest>,
+        ) -> Result<
+            tonic::Response<crate::proto::LightClientNamespaceProofRangeResponse>,
+            tonic::Status,
+        > {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_light_client_namespaces_proof_range(
+            &self,
+            _request: tonic::Request<crate::proto::GetLightClientNamespacesProofRangeRequest>,
+        ) -> Result<
+            tonic::Response<crate::proto::LightClientNamespacesProofRangeResponse>,
+            tonic::Status,
+        > {
+            Err(tonic::Status::internal("mock"))
+        }
+    }
+
+    #[tonic::async_trait]
+    impl crate::proto::catchup_service_server::CatchupService for MockV2State {
+        async fn get_catchup_fee_account(
+            &self,
+            _request: tonic::Request<crate::proto::GetCatchupFeeAccountRequest>,
+        ) -> Result<tonic::Response<crate::proto::FeeAccountProofResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_catchup_fee_accounts(
+            &self,
+            _request: tonic::Request<crate::proto::GetCatchupFeeAccountsRequest>,
+        ) -> Result<tonic::Response<crate::proto::FeeMerkleTreeResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_catchup_blocks_frontier(
+            &self,
+            _request: tonic::Request<crate::proto::GetCatchupBlocksFrontierRequest>,
+        ) -> Result<tonic::Response<crate::proto::MerklePathResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_catchup_chain_config(
+            &self,
+            _request: tonic::Request<crate::proto::GetCatchupChainConfigRequest>,
+        ) -> Result<tonic::Response<crate::proto::CatchupChainConfigResponse>, tonic::Status>
+        {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_catchup_leaf_chain(
+            &self,
+            _request: tonic::Request<crate::proto::GetCatchupLeafChainRequest>,
+        ) -> Result<tonic::Response<crate::proto::CatchupLeafChainResponse>, tonic::Status>
+        {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_catchup_cert2(
+            &self,
+            _request: tonic::Request<crate::proto::GetCatchupCert2Request>,
+        ) -> Result<tonic::Response<crate::proto::Cert2Response>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_catchup_reward_account(
+            &self,
+            _request: tonic::Request<crate::proto::GetCatchupRewardAccountRequest>,
+        ) -> Result<tonic::Response<crate::proto::RewardAccountProofResponse>, tonic::Status>
+        {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_catchup_reward_accounts(
+            &self,
+            _request: tonic::Request<crate::proto::GetCatchupRewardAccountsRequest>,
+        ) -> Result<tonic::Response<crate::proto::RewardMerkleTreeV1Response>, tonic::Status>
+        {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_catchup_reward_account_v2(
+            &self,
+            _request: tonic::Request<crate::proto::GetCatchupRewardAccountV2Request>,
+        ) -> Result<tonic::Response<crate::proto::RewardAccountProofResponse>, tonic::Status>
+        {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_catchup_reward_merkle_tree_v2(
+            &self,
+            _request: tonic::Request<crate::proto::GetCatchupRewardMerkleTreeV2Request>,
+        ) -> Result<tonic::Response<crate::proto::RewardMerkleTreeV2Response>, tonic::Status>
+        {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_catchup_state_cert(
+            &self,
+            _request: tonic::Request<crate::proto::GetCatchupStateCertRequest>,
+        ) -> Result<tonic::Response<crate::proto::StateCertV2Response>, tonic::Status> {
             Err(tonic::Status::internal("mock"))
         }
     }

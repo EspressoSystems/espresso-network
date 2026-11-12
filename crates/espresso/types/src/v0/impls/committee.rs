@@ -13,14 +13,14 @@ use hotshot_types::{
     PeerConfig, PeerConnectInfo,
     data::{BlockNumber, EpochNumber, ViewNumber},
     drb::{
-        DrbResult,
+        DrbResult, INITIAL_DRB_RESULT,
         election::{RandomizedCommittee, generate_stake_cdf, select_randomized_leader},
     },
     epoch_membership::EpochMembershipCoordinator,
     signature_key::BLSPubKey,
     stake_table::StakeTableEntry,
     traits::{
-        election::{Membership, MembershipSnapshot, NonEpochMembershipSnapshot},
+        election::{GenesisStakeTables, Membership, MembershipSnapshot},
         signature_key::{SignatureKey as _, StakeTableEntryType},
     },
     utils::{epoch_from_block_number, root_block_in_epoch, transition_block_for_epoch},
@@ -77,11 +77,13 @@ pub struct EpochCommittees {
 
 #[derive(Debug)]
 struct Inner {
-    /// Captured pre-epoch view.
+    /// The stake tables of views before the first epoch.
     ///
-    /// Built once at constructor time. `add_da_committee` operates on the
-    /// per-epoch `da_committees` map and does not modify the pre-epoch view.
-    non_epoch_snapshot: NonEpochSnapshot,
+    /// Built once at constructor time. `add_da_committee` does not change it.
+    genesis: Arc<GenesisStakeTables<SeqTypes>>,
+
+    /// The DA committee of the epochs that no entry of `da_committees` covers.
+    genesis_da_committee: Arc<DaCommittee>,
 
     /// Per-epoch snapshots.
     ///
@@ -102,7 +104,7 @@ struct Inner {
     /// Only ever moves forward.
     prune_cutoff: EpochNumber,
 
-    first_epoch: Option<EpochNumber>,
+    first_epoch: EpochNumber,
 
     /// Fixed block reward (used only in V3).
     ///
@@ -114,22 +116,6 @@ struct Inner {
 struct DaCommittee {
     committee: Vec<PeerConfig<SeqTypes>>,
     indexed_committee: HashMap<PubKey, PeerConfig<SeqTypes>>,
-}
-
-/// Pre-epoch stake-table state.
-#[derive(Debug)]
-struct NonEpochCommittee {
-    /// The nodes eligible for leadership.
-    ///
-    /// NOTE: This is currently a hack because the DA leader needs to be the quorum
-    /// leader but without voting rights.
-    eligible_leaders: Vec<PeerConfig<SeqTypes>>,
-
-    /// Keys for nodes participating in the network
-    stake_table: Vec<PeerConfig<SeqTypes>>,
-
-    /// Stake entries indexed by public key, for efficient lookup.
-    indexed_stake_table: HashMap<PubKey, PeerConfig<SeqTypes>>,
 }
 
 /// Holds Stake table and da stake
@@ -199,7 +185,7 @@ impl EpochCommittees {
         self.epoch_height
     }
 
-    pub fn first_epoch(&self) -> Option<EpochNumber> {
+    pub fn first_epoch(&self) -> EpochNumber {
         self.inner.read().first_epoch
     }
 
@@ -222,13 +208,7 @@ impl EpochCommittees {
                 return Some(cfg.clone());
             }
         }
-        inner
-            .non_epoch_snapshot
-            .inner
-            .committee
-            .indexed_stake_table
-            .get(key)
-            .cloned()
+        inner.genesis.stake(key)
     }
 
     pub fn latest_account(&self, key: &PubKey) -> Option<Address> {
@@ -299,7 +279,7 @@ impl EpochCommittees {
             .context("underflow: cannot get previous epoch when current_epoch is 0")?;
         debug!(?epoch, "previous_epoch={previous_epoch:?}");
 
-        let first_epoch = *self.first_epoch().context("first epoch is None")?;
+        let first_epoch = *self.first_epoch();
 
         // Return early if previous epoch is not the first two epochs
         // and we don't have the stake table.
@@ -417,15 +397,17 @@ impl EpochCommittees {
             .cloned()
     }
 
-    // We need a constructor to match our concrete type.
-    pub fn new_stake<B: Into<BlockNumber>>(
-        // TODO remove `new` from trait and rename this to `new`.
-        // https://github.com/EspressoSystems/HotShot/commit/fcb7d54a4443e29d643b3bbc53761856aef4de8b
+    /// The membership of a chain whose epochs start at `first_epoch`.
+    ///
+    /// `first_epoch` and `first_epoch + 1` run on the genesis stake table,
+    /// `committee_members`, with the initial DRB result.
+    pub fn new<B: Into<BlockNumber>>(
         committee_members: Vec<PeerConfig<SeqTypes>>,
         da_members: Vec<PeerConfig<SeqTypes>>,
         fixed_block_reward: Option<RewardAmount>,
         fetcher: Fetcher,
         epoch_height: B,
+        first_epoch: EpochNumber,
     ) -> Self {
         // For each member, get the stake table entry
         let stake_table: Vec<_> = committee_members
@@ -443,17 +425,6 @@ impl EpochCommittees {
             .collect();
 
         // Index the stake table by public key
-        let indexed_stake_table: HashMap<PubKey, _> = stake_table
-            .iter()
-            .map(|peer_config| {
-                (
-                    PubKey::public_key(&peer_config.stake_table_entry),
-                    peer_config.clone(),
-                )
-            })
-            .collect();
-
-        // Index the stake table by public key
         let indexed_da_members: HashMap<PubKey, _> = da_members
             .iter()
             .map(|peer_config| {
@@ -464,23 +435,18 @@ impl EpochCommittees {
             })
             .collect();
 
+        let genesis = Arc::new(GenesisStakeTables::new(
+            stake_table.clone(),
+            da_members.clone(),
+        ));
         let da_committee = Arc::new(DaCommittee {
             committee: da_members,
             indexed_committee: indexed_da_members,
         });
 
-        let members = Arc::new(NonEpochCommittee {
-            eligible_leaders,
-            stake_table,
-            indexed_stake_table,
-        });
-
-        let non_epoch_snapshot = NonEpochSnapshot::new(members.clone(), da_committee.clone());
-
         let epoch_committee = Arc::new(EpochCommittee {
-            eligible_leaders: members.eligible_leaders.clone(),
-            stake_table: members
-                .stake_table
+            eligible_leaders,
+            stake_table: stake_table
                 .iter()
                 .map(|x| (PubKey::public_key(&x.stake_table_entry), x.clone()))
                 .collect(),
@@ -496,7 +462,7 @@ impl EpochCommittees {
             EpochNumber::genesis(),
             EpochSnapshot::new(
                 EpochNumber::genesis(),
-                None,
+                first_epoch,
                 epoch_committee.clone(),
                 None,
                 da_committee.clone(),
@@ -507,21 +473,22 @@ impl EpochCommittees {
             EpochNumber::genesis() + 1u64,
             EpochSnapshot::new(
                 EpochNumber::genesis() + 1u64,
-                None,
+                first_epoch,
                 epoch_committee,
                 None,
-                da_committee,
+                da_committee.clone(),
             ),
         );
 
-        Self {
+        let committees = Self {
             inner: Arc::new(RwLock::new(Inner {
-                non_epoch_snapshot,
+                genesis,
+                genesis_da_committee: da_committee,
                 da_committees: BTreeMap::new(),
                 snapshots,
                 all_validators: BTreeMap::new(),
                 prune_cutoff: EpochNumber::genesis(),
-                first_epoch: None,
+                first_epoch,
                 fixed_block_reward,
             })),
             fetcher: Arc::new(fetcher),
@@ -529,7 +496,9 @@ impl EpochCommittees {
             load_from_storage_lock: Arc::new(AsyncMutex::new(())),
             storage_read_timeout: DEFAULT_STORAGE_READ_TIMEOUT,
             epoch_height: epoch_height.into(),
-        }
+        };
+        committees.seed_first_epoch(first_epoch);
+        committees
     }
 
     /// Override how long `load_stake_table` may spend on each of its two
@@ -565,7 +534,12 @@ impl EpochCommittees {
             },
         };
 
+        let first_epoch = self.inner.read().first_epoch;
         for (epoch, (validators, block_reward), stake_table_hash) in loaded_stake {
+            // `new` seeded the epochs up to `first_epoch + 1` with the genesis stake table.
+            if epoch <= first_epoch + 1 {
+                continue;
+            }
             let header = match persistence.load_epoch_root(epoch).await {
                 Ok(header) => header,
                 Err(err) => {
@@ -590,6 +564,27 @@ impl EpochCommittees {
             .read()
             .epoch_committee(epoch.into())
             .and_then(|committee| committee.header.as_ref().map(f))
+    }
+
+    /// Run `epoch` and `epoch + 1` on the genesis stake table with the initial DRB result.
+    fn seed_first_epoch(&self, epoch: EpochNumber) {
+        let rand_comm = Arc::new(
+            self.randomized_committee(EpochNumber::genesis(), INITIAL_DRB_RESULT)
+                .expect("committee exist at genesis"),
+        );
+
+        let mut inner = self.inner.write();
+        let epoch_committee = inner
+            .epoch_committee(EpochNumber::genesis())
+            .expect("committee exists at genesis")
+            .clone();
+
+        // Build snapshots for `epoch` and `epoch + 1` with the genesis
+        // stake table and the initial DRB result.
+        inner.put_epoch_committee(epoch, epoch_committee.clone());
+        inner.put_randomized_committee(epoch, rand_comm.clone());
+        inner.put_epoch_committee(epoch + 1, epoch_committee);
+        inner.put_randomized_committee(epoch + 1, rand_comm);
     }
 
     fn randomized_committee(
@@ -647,9 +642,7 @@ pub async fn fetch_and_calculate_block_reward(
             return Ok(reward);
         }
 
-        first_epoch = membership.first_epoch.context(format!(
-            "First epoch not initialized (current_epoch={current_epoch})"
-        ))?;
+        first_epoch = membership.first_epoch;
     }
 
     if *current_epoch <= *first_epoch + 1 {
@@ -714,7 +707,6 @@ pub async fn fetch_and_calculate_block_reward(
 impl Membership<SeqTypes> for EpochCommittees {
     type Error = EpochCommitteesError;
     type Snapshot = EpochSnapshot;
-    type NonEpochSnapshot = NonEpochSnapshot;
 
     fn snapshot(&self, epoch: EpochNumber) -> Option<Self::Snapshot> {
         self.inner.read().snapshots.get(&epoch).cloned()
@@ -833,8 +825,8 @@ impl Membership<SeqTypes> for EpochCommittees {
         true
     }
 
-    fn non_epoch_snapshot(&self) -> Self::NonEpochSnapshot {
-        self.inner.read().non_epoch_snapshot.clone()
+    fn genesis_stake_tables(&self) -> Arc<GenesisStakeTables<SeqTypes>> {
+        self.inner.read().genesis.clone()
     }
 
     /// Adds the epoch committee and block reward for a given epoch,
@@ -1161,29 +1153,7 @@ impl Membership<SeqTypes> for EpochCommittees {
         }
     }
 
-    fn set_first_epoch(&self, epoch: EpochNumber, initial_drb_result: DrbResult) {
-        let rand_comm = Arc::new(
-            self.randomized_committee(EpochNumber::genesis(), initial_drb_result)
-                .expect("committee exist at genesis"),
-        );
-
-        let mut inner = self.inner.write();
-        inner.first_epoch = Some(epoch);
-
-        let epoch_committee = inner
-            .epoch_committee(EpochNumber::genesis())
-            .expect("committee exists at genesis")
-            .clone();
-
-        // Build snapshots for `epoch` and `epoch + 1` with the genesis
-        // stake table and the initial DRB result.
-        inner.put_epoch_committee(epoch, epoch_committee.clone());
-        inner.put_randomized_committee(epoch, rand_comm.clone());
-        inner.put_epoch_committee(epoch + 1, epoch_committee);
-        inner.put_randomized_committee(epoch + 1, rand_comm);
-    }
-
-    fn first_epoch(&self) -> Option<EpochNumber> {
+    fn first_epoch(&self) -> EpochNumber {
         self.inner.read().first_epoch
     }
 
@@ -1283,7 +1253,7 @@ pub enum EpochCommitteesError {
 }
 
 impl Inner {
-    /// The DA committee that applies to `epoch`, or the non-epoch fallback
+    /// The DA committee that applies to `epoch`, or the genesis DA committee
     /// when `epoch` is `None` or no explicit DA committee covers it.
     fn resolve_da_committee(&self, epoch: Option<EpochNumber>) -> Arc<DaCommittee> {
         if let Some(e) = epoch {
@@ -1292,9 +1262,9 @@ impl Inner {
                 .range((Bound::Included(0.into()), Bound::Included(e)))
                 .last()
                 .map(|(_, committee)| committee.clone())
-                .unwrap_or_else(|| self.non_epoch_snapshot.inner.da_committee.clone())
+                .unwrap_or_else(|| self.genesis_da_committee.clone())
         } else {
-            self.non_epoch_snapshot.inner.da_committee.clone()
+            self.genesis_da_committee.clone()
         }
     }
 
@@ -1382,8 +1352,8 @@ impl Inner {
         }
         self.prune_cutoff = cutoff;
         // The snapshots for `first_epoch` and `first_epoch + 1` (seeded by
-        // `set_first_epoch`) are never evicted:
-        let keep = self.first_epoch.unwrap_or_else(EpochNumber::genesis) + 1u64;
+        // `new`) are never evicted:
+        let keep = self.first_epoch + 1u64;
         self.snapshots.retain(|e, _| *e <= keep || *e >= cutoff);
     }
 }
@@ -1399,7 +1369,7 @@ pub struct EpochSnapshot {
 #[derive(Debug)]
 struct EpochSnapshotInner {
     epoch: EpochNumber,
-    first_epoch: Option<EpochNumber>,
+    first_epoch: EpochNumber,
     committee: Arc<EpochCommittee>,
     randomized: Option<Arc<RandomizedCommittee<StakeTableEntry<PubKey>>>>,
     da_committee: Arc<DaCommittee>,
@@ -1408,7 +1378,7 @@ struct EpochSnapshotInner {
 impl EpochSnapshot {
     fn new(
         epoch: EpochNumber,
-        first_epoch: Option<EpochNumber>,
+        first_epoch: EpochNumber,
         committee: Arc<EpochCommittee>,
         randomized: Option<Arc<RandomizedCommittee<StakeTableEntry<PubKey>>>>,
         da_committee: Arc<DaCommittee>,
@@ -1469,7 +1439,7 @@ impl MembershipSnapshot<SeqTypes> for EpochSnapshot {
         self.inner.epoch
     }
 
-    fn first_epoch(&self) -> Option<EpochNumber> {
+    fn first_epoch(&self) -> EpochNumber {
         self.inner.first_epoch
     }
 
@@ -1517,17 +1487,12 @@ impl MembershipSnapshot<SeqTypes> for EpochSnapshot {
     ///
     /// # Errors
     ///
-    /// Returns `LeaderLookupError` if `first_epoch` is unset, the snapshot's
-    /// epoch is before `first_epoch`, or the randomized committee is missing.
+    /// Returns `LeaderLookupError` if the snapshot's epoch is before
+    /// `first_epoch`, the randomized committee is missing, or the epoch has
+    /// no eligible leader.
     fn lookup_leader(&self, view: ViewNumber) -> Result<PubKey, Self::Error> {
         let inner = &self.inner;
-        let Some(first_epoch) = inner.first_epoch else {
-            error!(
-                "leader requested for epoch {} but first_epoch is unset",
-                inner.epoch,
-            );
-            return Err(EpochCommitteesError::LeaderLookupError);
-        };
+        let first_epoch = inner.first_epoch;
         if inner.epoch < first_epoch {
             error!(
                 "leader requested for epoch {} before first epoch {first_epoch}",
@@ -1542,91 +1507,17 @@ impl MembershipSnapshot<SeqTypes> for EpochSnapshot {
             );
             return Err(EpochCommitteesError::LeaderLookupError);
         };
+        // `select_randomized_leader` panics on an empty committee. `new` seeds
+        // one when the genesis stake table has no staked member.
+        if inner.committee.eligible_leaders.is_empty() {
+            error!("no eligible leader for epoch {}", inner.epoch);
+            return Err(EpochCommitteesError::LeaderLookupError);
+        }
         Ok(PubKey::public_key(&select_randomized_leader(rand, *view)))
     }
 
     fn stake_table_hash(&self) -> Option<Commitment<Self::StakeTableHash>> {
         self.inner.committee.stake_table_hash
-    }
-}
-
-/// A consistent pre-epoch view of `EpochCommittees`.
-///
-/// Returned by [`Membership::non_epoch_snapshot`].
-#[derive(Clone, Debug)]
-pub struct NonEpochSnapshot {
-    inner: Arc<NonEpochSnapshotInner>,
-}
-
-#[derive(Debug)]
-struct NonEpochSnapshotInner {
-    committee: Arc<NonEpochCommittee>,
-    da_committee: Arc<DaCommittee>,
-}
-
-impl NonEpochSnapshot {
-    fn new(committee: Arc<NonEpochCommittee>, da_committee: Arc<DaCommittee>) -> Self {
-        Self {
-            inner: Arc::new(NonEpochSnapshotInner {
-                committee,
-                da_committee,
-            }),
-        }
-    }
-}
-
-impl NonEpochMembershipSnapshot<SeqTypes> for NonEpochSnapshot {
-    type Error = EpochCommitteesError;
-
-    fn stake_table(&self) -> impl ExactSizeIterator<Item = &PeerConfig<SeqTypes>> + Send + '_ {
-        self.inner.committee.stake_table.iter()
-    }
-
-    fn da_stake_table(&self) -> impl ExactSizeIterator<Item = &PeerConfig<SeqTypes>> + Send + '_ {
-        self.inner.da_committee.committee.iter()
-    }
-
-    fn committee_members(
-        &self,
-        _: ViewNumber,
-    ) -> impl ExactSizeIterator<Item = &PubKey> + Send + '_ {
-        self.inner.committee.indexed_stake_table.keys()
-    }
-
-    fn da_committee_members(
-        &self,
-        _: ViewNumber,
-    ) -> impl ExactSizeIterator<Item = &PubKey> + Send + '_ {
-        self.inner.da_committee.indexed_committee.keys()
-    }
-
-    fn stake(&self, key: &PubKey) -> Option<PeerConfig<SeqTypes>> {
-        self.inner.committee.indexed_stake_table.get(key).cloned()
-    }
-
-    fn da_stake(&self, key: &PubKey) -> Option<PeerConfig<SeqTypes>> {
-        self.inner.da_committee.indexed_committee.get(key).cloned()
-    }
-
-    fn has_stake(&self, key: &PubKey) -> bool {
-        self.stake(key)
-            .map(|x| x.stake_table_entry.stake() > U256::ZERO)
-            .unwrap_or_default()
-    }
-
-    fn has_da_stake(&self, key: &PubKey) -> bool {
-        self.da_stake(key)
-            .map(|x| x.stake_table_entry.stake() > U256::ZERO)
-            .unwrap_or_default()
-    }
-
-    fn lookup_leader(&self, view: ViewNumber) -> Result<PubKey, Self::Error> {
-        let leaders = &self.inner.committee.eligible_leaders;
-        if leaders.is_empty() {
-            return Err(EpochCommitteesError::LeaderLookupError);
-        }
-        let index = *view as usize % leaders.len();
-        Ok(PubKey::public_key(&leaders[index].stake_table_entry))
     }
 }
 
@@ -1655,10 +1546,14 @@ mod tests {
     const TEST_DURATION: Duration = Duration::from_secs(5);
 
     fn build_committees(num_peers: u64) -> EpochCommittees {
-        build_committees_with_fetcher(num_peers, Fetcher::mock())
+        build_committees_with_fetcher(num_peers, Fetcher::mock(), EpochNumber::genesis())
     }
 
-    fn build_committees_with_fetcher(num_peers: u64, fetcher: Fetcher) -> EpochCommittees {
+    fn build_committees_with_fetcher(
+        num_peers: u64,
+        fetcher: Fetcher,
+        first_epoch: EpochNumber,
+    ) -> EpochCommittees {
         let peers: Vec<PeerConfig<SeqTypes>> = (0..num_peers)
             .map(|i| {
                 ValidatorConfig::<SeqTypes>::generated_from_seed_indexed(
@@ -1670,7 +1565,7 @@ mod tests {
                 .public_config()
             })
             .collect();
-        EpochCommittees::new_stake(peers.clone(), peers, None, fetcher, 100u64)
+        EpochCommittees::new(peers.clone(), peers, None, fetcher, 100u64, first_epoch)
     }
 
     /// Persistence stub holding stake tables for epochs 7 and 8, plus a DRB
@@ -1796,7 +1691,7 @@ mod tests {
                 .expect("Failed to create L1 client"),
             crate::ChainConfig::default(),
         );
-        let committees = build_committees_with_fetcher(4, fetcher);
+        let committees = build_committees_with_fetcher(4, fetcher, EpochNumber::genesis());
 
         // Epoch 7 has a stake table, a DRB result and a root header in storage.
         let seven = EpochNumber::new(7);
@@ -1833,7 +1728,7 @@ mod tests {
                 .expect("Failed to create L1 client"),
             crate::ChainConfig::default(),
         );
-        let committees = build_committees_with_fetcher(4, fetcher);
+        let committees = build_committees_with_fetcher(4, fetcher, EpochNumber::genesis());
 
         let stored = committees.stored_epoch_root(EpochNumber::new(7)).await;
         assert_eq!(stored.unwrap(), Some(header));
@@ -1862,7 +1757,7 @@ mod tests {
                 .expect("Failed to create L1 client"),
             crate::ChainConfig::default(),
         );
-        let committees = build_committees_with_fetcher(4, fetcher)
+        let committees = build_committees_with_fetcher(4, fetcher, EpochNumber::genesis())
             .with_storage_read_timeout(Duration::from_millis(400));
 
         // Hold the persistence lock for the whole test, well past the
@@ -1907,7 +1802,7 @@ mod tests {
     fn prune_epochs_keeps_recent_window() {
         let committees = build_committees(4);
         let mut inner = committees.inner.write();
-        inner.first_epoch = Some(EpochNumber::new(1));
+        inner.first_epoch = EpochNumber::new(1);
         let template = inner
             .epoch_committee(EpochNumber::genesis())
             .expect("genesis committee exists")
@@ -1956,7 +1851,6 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn concurrent_reads_during_mutations() {
         let committees = build_committees(8);
-        committees.set_first_epoch(EpochNumber::new(1), [0u8; 32]);
 
         // Pre-populate snapshots for epochs 2..6 by cloning the genesis
         // committee. `add_drb_result(e)` is a no-op when no snapshot for
@@ -1986,7 +1880,7 @@ mod tests {
                 while !stop.load(Ordering::Relaxed) {
                     // Stable epoch — the writer never touches
                     // `inner.state[1]` or `inner.randomized_committees[1]`
-                    // (both were set by `set_first_epoch` before this
+                    // (both were set by `new` before this
                     // loop and stay unchanged thereafter), so the
                     // assertions below hold even across separate snapshots.
                     let stable_snap = c.snapshot(stable).expect("stable snapshot");
@@ -1997,7 +1891,7 @@ mod tests {
                         stable_snap.committee_members(view).any(|p| p == &leader),
                         "leader {leader:?} not in committee_members for stable epoch",
                     );
-                    assert_eq!(c.first_epoch(), Some(stable));
+                    assert_eq!(c.first_epoch(), stable);
 
                     // Mutating epoch — the writer churns
                     // `randomized_committees[3]`. Just exercise the API
@@ -2057,112 +1951,6 @@ mod tests {
         }
     }
 
-    // A task concurrent with `set_first_epoch` must never see a
-    // partially-applied state, since all mutations in `set_first_epoch`
-    // happen under a single write lock.
-    //
-    // We can't verify this through the public API because each method
-    // takes its own lock — between two reader calls the writer can run
-    // to completion (a real TOCTOU window in the new locking model, not
-    // a torn read). Instead we take a single-locked snapshot of all
-    // affected fields directly and assert the snapshot is internally
-    // consistent: either the pre-state (nothing set) or the post-state
-    // (everything set together).
-    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    async fn set_first_epoch_is_atomic() {
-        // Snapshot all fields touched by `set_first_epoch` under a
-        // single read lock so the reader observes one consistent state.
-        fn snapshot(c: &EpochCommittees, e: EpochNumber) -> Snapshot {
-            let inner = c.inner.read();
-            Snapshot {
-                first_epoch: inner.first_epoch,
-                state_e: inner.snapshots.contains_key(&e),
-                state_e1: inner.snapshots.contains_key(&(e + 1)),
-                rand_e: inner
-                    .snapshots
-                    .get(&e)
-                    .is_some_and(|s| s.inner.randomized.is_some()),
-                rand_e1: inner
-                    .snapshots
-                    .get(&(e + 1))
-                    .is_some_and(|s| s.inner.randomized.is_some()),
-            }
-        }
-
-        #[derive(Debug)]
-        struct Snapshot {
-            first_epoch: Option<EpochNumber>,
-            state_e: bool,
-            state_e1: bool,
-            rand_e: bool,
-            rand_e1: bool,
-        }
-
-        let target = EpochNumber::new(10);
-
-        // Concurrency bugs are flaky — loop until we've spent
-        // `TEST_DURATION` widening the window for catching a torn
-        // state. Each round is one race attempt against
-        // `set_first_epoch`.
-        let test_start = tokio::time::Instant::now();
-        let mut round: u64 = 0;
-        while test_start.elapsed() < TEST_DURATION {
-            let committees = build_committees(4);
-            let stop = Arc::new(AtomicBool::new(false));
-            let post_observations = Arc::new(AtomicUsize::new(0));
-
-            let reader = {
-                let c = committees.clone();
-                let stop = Arc::clone(&stop);
-                let post = Arc::clone(&post_observations);
-                tokio::spawn(async move {
-                    while !stop.load(Ordering::Relaxed) {
-                        let s = snapshot(&c, target);
-                        match s.first_epoch {
-                            None => assert!(
-                                !s.state_e && !s.state_e1 && !s.rand_e && !s.rand_e1,
-                                "torn snapshot: first_epoch=None but some target state present: \
-                                 {s:?}",
-                            ),
-                            Some(e) => {
-                                assert_eq!(e, target, "only target is ever set");
-                                assert!(
-                                    s.state_e && s.state_e1 && s.rand_e && s.rand_e1,
-                                    "torn snapshot: first_epoch=Some but some target state \
-                                     missing: {s:?}",
-                                );
-                                post.fetch_add(1, Ordering::Relaxed);
-                            },
-                        }
-                        tokio::task::yield_now().await;
-                    }
-                })
-            };
-
-            // Brief warmup so the reader is in its loop.
-            tokio::time::sleep(Duration::from_millis(2)).await;
-            committees.set_first_epoch(target, [(round as u8) ^ 0xA5; 32]);
-
-            // Wait until the reader has observed the post-state at least
-            // once, with a generous timeout.
-            let deadline = tokio::time::Instant::now() + Duration::from_millis(200);
-            while tokio::time::Instant::now() < deadline
-                && post_observations.load(Ordering::Relaxed) == 0
-            {
-                tokio::task::yield_now().await;
-            }
-
-            stop.store(true, Ordering::Relaxed);
-            reader.await.expect("reader panicked");
-            assert!(
-                post_observations.load(Ordering::Relaxed) > 0,
-                "round {round}: reader never observed post-set state",
-            );
-            round += 1;
-        }
-        assert!(round > 0, "test loop never executed a round");
-    }
-
     // Many writer tasks hammer `add_drb_result` for the same epoch with
     // distinct DRBs. While they do, reader tasks call `lookup_leader`,
     // which must always succeed once the randomized committee is set —
@@ -2172,9 +1960,6 @@ mod tests {
     async fn concurrent_add_drb_result_same_epoch() {
         let committees = build_committees(4);
         let epoch = EpochNumber::new(1);
-        // `has_randomized_stake_table` and `lookup_leader` both
-        // require `first_epoch` to be set.
-        committees.set_first_epoch(epoch, [0u8; 32]);
 
         let stop = Arc::new(AtomicBool::new(false));
         let writes = Arc::new(AtomicUsize::new(0));
@@ -2406,7 +2191,7 @@ mod tests {
                 .expect("Failed to create L1 client"),
             crate::ChainConfig::default(),
         );
-        let committees = build_committees_with_fetcher(4, fetcher);
+        let committees = build_committees_with_fetcher(4, fetcher, EpochNumber::genesis());
         let epoch_height = *committees.epoch_height();
         let epoch = EpochNumber::new(epoch_from_block_number(header.height(), epoch_height) + 2);
 
@@ -2521,11 +2306,10 @@ mod tests {
                 .collect()
         }
 
-        // `EpochNumber::genesis()` is 1, so `new_stake` seeds snapshots
-        // for epochs 1 and 2. `set_first_epoch(2, ...)` then rebuilds
-        // snapshots for epochs 2 and 3, all with the bootstrap DA.
-        let committees = build_committees(4);
-        committees.set_first_epoch(EpochNumber::new(2), [0u8; 32]);
+        // `EpochNumber::genesis()` is 1, so `new` keeps snapshots for
+        // epochs 1 and 2, and seeds epochs 2 and 3 for `first_epoch = 2`,
+        // all with the bootstrap DA.
+        let committees = build_committees_with_fetcher(4, Fetcher::mock(), EpochNumber::new(2));
 
         let initial_e2 = da_keys(&committees, EpochNumber::new(2));
         let initial_e3 = da_keys(&committees, EpochNumber::new(3));
@@ -2573,7 +2357,7 @@ mod tests {
         );
         // Sanity: the original epoch-2 and epoch-3 snapshots both used
         // the bootstrap DA before the call. If a future change to
-        // `set_first_epoch` makes these diverge, this assertion will
+        // `new` makes these diverge, this assertion will
         // catch it so the test setup can be revisited.
         assert_eq!(initial_e2, initial_e3);
     }
@@ -2592,10 +2376,9 @@ mod tests {
         }
 
         let committees = build_committees(4);
-        committees.set_first_epoch(EpochNumber::new(1), [0u8; 32]);
 
-        // Pre-populate snapshots for epochs 2..6 (set_first_epoch only
-        // covers 1 and 2, but the range query needs more epochs to
+        // Pre-populate snapshots for epochs 2..6 (`new` only seeds 1
+        // and 2, but the range query needs more epochs to
         // exercise the layered case).
         {
             let mut inner = committees.inner.write();
@@ -2651,6 +2434,850 @@ mod tests {
             da_keys(&committees, EpochNumber::new(5)),
             da_c_keys,
             "epoch 5 must keep C — it is outside B's range",
+        );
+    }
+
+    fn peer(seed: u8, index: u64, stake: u64) -> PeerConfig<SeqTypes> {
+        ValidatorConfig::<SeqTypes>::generated_from_seed_indexed(
+            [seed; 32],
+            index,
+            U256::from(stake),
+            true,
+        )
+        .public_config()
+    }
+
+    /// Genesis committee members: four with stake, and one without stake in
+    /// the middle, which no stake table may hold. Returns all members and the
+    /// staked ones.
+    fn genesis_members() -> (Vec<PeerConfig<SeqTypes>>, Vec<PeerConfig<SeqTypes>>) {
+        let staked: Vec<_> = (0..4).map(|i| peer(42, i, 100)).collect();
+        let mut all = staked.clone();
+        all.insert(2, peer(42, 4, 0));
+        (all, staked)
+    }
+
+    fn committees_from_first_epoch(first_epoch: EpochNumber, fetcher: Fetcher) -> EpochCommittees {
+        let (members, _) = genesis_members();
+        EpochCommittees::new(members.clone(), members, None, fetcher, 100u64, first_epoch)
+    }
+
+    /// Asserts that `epoch` runs on exactly the `staked` committee, has a DRB
+    /// result, and picks its leaders from `staked`.
+    fn assert_runs_on_committee(
+        committees: &EpochCommittees,
+        epoch: EpochNumber,
+        staked: &[PeerConfig<SeqTypes>],
+    ) {
+        let snapshot = committees
+            .snapshot(epoch)
+            .unwrap_or_else(|| panic!("no snapshot for epoch {epoch}"));
+
+        assert_eq!(
+            snapshot.stake_table().len(),
+            staked.len(),
+            "epoch {epoch}: stake table size"
+        );
+        for peer in staked {
+            let key = PubKey::public_key(&peer.stake_table_entry);
+            assert_eq!(
+                snapshot.stake(&key).as_ref(),
+                Some(peer),
+                "epoch {epoch}: stake table entry of {key}"
+            );
+        }
+
+        assert!(snapshot.has_drb(), "epoch {epoch}: no DRB result");
+
+        let keys: std::collections::HashSet<PubKey> = staked
+            .iter()
+            .map(|p| PubKey::public_key(&p.stake_table_entry))
+            .collect();
+        for view in 0..64 {
+            let leader = snapshot
+                .lookup_leader(ViewNumber::new(view))
+                .unwrap_or_else(|err| panic!("epoch {epoch}, view {view}: no leader: {err}"));
+            assert!(
+                keys.contains(&leader),
+                "epoch {epoch}, view {view}: leader {leader} is not in the committee"
+            );
+        }
+    }
+
+    // The constructor seeds `first_epoch` and `first_epoch + 1` with the
+    // genesis committee and the initial DRB result, also when the chain does
+    // not start its epochs at genesis.
+    #[rstest]
+    #[case::genesis(1)]
+    #[case::later(5)]
+    #[case::mainnet(275)]
+    fn new_seeds_first_two_epochs_with_genesis_committee(#[case] first_epoch: u64) {
+        let first_epoch = EpochNumber::new(first_epoch);
+        let (_, staked) = genesis_members();
+        let committees = committees_from_first_epoch(first_epoch, Fetcher::mock());
+
+        assert_runs_on_committee(&committees, first_epoch, &staked);
+        assert_runs_on_committee(&committees, first_epoch + 1, &staked);
+    }
+
+    // A snapshot rebuilt after construction must still know the first epoch:
+    // without it, `lookup_leader` fails.
+    #[rstest]
+    #[case::genesis(1)]
+    #[case::later(5)]
+    fn add_da_committee_keeps_leaders_of_first_two_epochs(#[case] first_epoch: u64) {
+        let first_epoch = EpochNumber::new(first_epoch);
+        let (_, staked) = genesis_members();
+        let committees = committees_from_first_epoch(first_epoch, Fetcher::mock());
+
+        let other_da: Vec<_> = (0..2).map(|i| peer(123, i, 50)).collect();
+        committees.add_da_committee(first_epoch, other_da.clone());
+
+        for epoch in [first_epoch, first_epoch + 1] {
+            assert_runs_on_committee(&committees, epoch, &staked);
+            let da: Vec<_> = committees
+                .snapshot(epoch)
+                .expect("snapshot")
+                .da_stake_table()
+                .cloned()
+                .collect();
+            assert_eq!(da, other_da, "epoch {epoch}: DA committee");
+        }
+    }
+
+    /// `count` committee members, none of them with stake.
+    fn unstaked_members(count: u64) -> Vec<PeerConfig<SeqTypes>> {
+        (0..count).map(|i| peer(42, i, 0)).collect()
+    }
+
+    // Without a staked member, the seeded first two epochs have no leader
+    // candidates. A leader lookup there must fail, not panic.
+    #[rstest]
+    #[case::empty_from_genesis(0, EpochNumber::genesis())]
+    #[case::empty_from_later(0, EpochNumber::new(5))]
+    #[case::zero_stake_from_genesis(3, EpochNumber::genesis())]
+    #[case::zero_stake_from_later(3, EpochNumber::new(5))]
+    fn lookup_leader_errors_without_staked_members(
+        #[case] members: u64,
+        #[case] first_epoch: EpochNumber,
+    ) {
+        let members = unstaked_members(members);
+        let committees = EpochCommittees::new(
+            members.clone(),
+            members,
+            None,
+            Fetcher::mock(),
+            100u64,
+            first_epoch,
+        );
+
+        for epoch in [first_epoch, first_epoch + 1] {
+            let snapshot = committees
+                .snapshot(epoch)
+                .unwrap_or_else(|| panic!("no snapshot for epoch {epoch}"));
+            for view in [0, 1, 7, 1000] {
+                let result = snapshot.lookup_leader(ViewNumber::new(view));
+                assert!(
+                    matches!(result, Err(EpochCommitteesError::LeaderLookupError)),
+                    "epoch {epoch}, view {view}: expected LeaderLookupError, got {result:?}"
+                );
+            }
+        }
+    }
+
+    // `NodeState::mock()` builds its membership without a staked member.
+    #[tokio::test]
+    async fn mock_coordinator_leader_errors_without_staked_members() {
+        let coordinator = NodeState::mock().coordinator;
+        let first_epoch = coordinator.membership().first_epoch();
+
+        for epoch in [first_epoch, first_epoch + 1] {
+            let membership = coordinator
+                .membership_for_epoch(Some(epoch))
+                .unwrap_or_else(|err| panic!("epoch {epoch} is not seeded: {err:#}"));
+            for view in [0, 1, 7, 1000] {
+                let result = membership.leader(ViewNumber::new(view));
+                assert!(
+                    result.is_err(),
+                    "epoch {epoch}, view {view}: expected an error, got {result:?}"
+                );
+            }
+        }
+    }
+
+    /// Persistence stub whose `load_latest_stake` returns `stakes`. Every
+    /// other read finds nothing, and every write is dropped.
+    struct LatestStakeStore {
+        stakes: Vec<crate::v0_3::IndexedStake>,
+    }
+
+    #[async_trait::async_trait]
+    impl crate::traits::MembershipPersistence for LatestStakeStore {
+        async fn load_stake(
+            &self,
+            _epoch: EpochNumber,
+        ) -> anyhow::Result<Option<crate::traits::StakeTuple>> {
+            Ok(None)
+        }
+
+        async fn load_latest_stake(
+            &self,
+            _limit: u64,
+        ) -> anyhow::Result<Option<Vec<crate::v0_3::IndexedStake>>> {
+            Ok(Some(self.stakes.clone()))
+        }
+
+        async fn load_drb_result(&self, _epoch: EpochNumber) -> anyhow::Result<Option<DrbResult>> {
+            Ok(None)
+        }
+
+        async fn load_epoch_root(&self, _epoch: EpochNumber) -> anyhow::Result<Option<Header>> {
+            Ok(None)
+        }
+
+        async fn store_epoch_root(
+            &self,
+            _epoch: EpochNumber,
+            _block_header: Header,
+        ) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        async fn store_stake(
+            &self,
+            _epoch: EpochNumber,
+            _stake: AuthenticatedValidatorMap,
+            _block_reward: Option<RewardAmount>,
+            _stake_table_hash: Option<StakeTableHash>,
+        ) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        async fn store_events(
+            &self,
+            _l1_finalized: u64,
+            _events: Vec<(crate::v0_3::EventKey, crate::v0_3::StakeTableEvent)>,
+        ) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        async fn load_events(
+            &self,
+            _from_l1_block: u64,
+            _l1_finalized: u64,
+        ) -> anyhow::Result<(
+            Option<crate::traits::EventsPersistenceRead>,
+            Vec<(crate::v0_3::EventKey, crate::v0_3::StakeTableEvent)>,
+        )> {
+            Ok((None, vec![]))
+        }
+
+        async fn delete_stake_tables(&self) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        async fn store_all_validators(
+            &self,
+            _epoch: EpochNumber,
+            _all_validators: IndexMap<Address, crate::v0_3::RegisteredValidator<PubKey>>,
+        ) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        async fn load_all_validators(
+            &self,
+            _epoch: EpochNumber,
+            _offset: u64,
+            _limit: u64,
+        ) -> anyhow::Result<Vec<crate::v0_3::RegisteredValidator<PubKey>>> {
+            Ok(vec![])
+        }
+    }
+
+    // On restart, storage can hold stake tables for the first two epochs.
+    // They must not replace the genesis committee those epochs run on. A
+    // stored table for a later epoch is loaded, and its snapshot knows the
+    // first epoch once its DRB result arrives.
+    #[rstest]
+    #[case::genesis(1)]
+    #[case::later(5)]
+    #[tokio::test]
+    async fn reload_stake_keeps_genesis_committee_of_first_two_epochs(#[case] first_epoch: u64) {
+        let first_epoch = EpochNumber::new(first_epoch);
+        let (_, staked) = genesis_members();
+
+        let stored = AuthenticatedValidator::mock();
+        let stored_key = *stored.stake_table_key();
+        let stored_table: AuthenticatedValidatorMap =
+            [(stored.account, stored)].into_iter().collect();
+        let store = LatestStakeStore {
+            stakes: [first_epoch, first_epoch + 1, first_epoch + 2]
+                .into_iter()
+                .map(|epoch| (epoch, (stored_table.clone(), None), None))
+                .collect(),
+        };
+        let fetcher = Fetcher::new(
+            Arc::new(crate::mock::MockStateCatchup::default()),
+            Arc::new(AsyncMutex::new(store)),
+            crate::L1Client::new(vec!["http://localhost:3331".parse().unwrap()])
+                .expect("Failed to create L1 client"),
+            crate::ChainConfig::default(),
+        );
+        let mut committees = committees_from_first_epoch(first_epoch, fetcher);
+
+        committees.reload_stake(RECENT_STAKE_TABLES_LIMIT).await;
+
+        assert_runs_on_committee(&committees, first_epoch, &staked);
+        assert_runs_on_committee(&committees, first_epoch + 1, &staked);
+
+        let later = first_epoch + 2;
+        let loaded: Vec<PubKey> = committees
+            .snapshot(later)
+            .unwrap_or_else(|| panic!("stored stake table for epoch {later} was not loaded"))
+            .stake_table()
+            .map(|p| PubKey::public_key(&p.stake_table_entry))
+            .collect();
+        assert_eq!(loaded, vec![stored_key], "epoch {later}: stake table");
+
+        committees.add_drb_result(later, [7u8; 32]);
+        let leader = committees
+            .snapshot(later)
+            .expect("snapshot")
+            .lookup_leader(ViewNumber::new(0))
+            .unwrap_or_else(|err| panic!("epoch {later}: no leader: {err}"));
+        assert_eq!(leader, stored_key, "epoch {later}: leader");
+    }
+
+    // The coordinator serves stake tables from the first epoch on, and
+    // rejects epochs before it.
+    #[rstest]
+    #[case::later(5)]
+    #[case::mainnet(275)]
+    #[tokio::test]
+    async fn coordinator_serves_stake_tables_from_first_epoch(#[case] first_epoch: u64) {
+        let before = EpochNumber::new(first_epoch - 1);
+        let first_epoch = EpochNumber::new(first_epoch);
+        let committees = committees_from_first_epoch(first_epoch, Fetcher::mock());
+        let coordinator = EpochMembershipCoordinator::<SeqTypes>::new(
+            committees,
+            100u64,
+            &hotshot_example_types::storage_types::TestStorage::default(),
+        );
+
+        for epoch in [first_epoch, first_epoch + 1] {
+            coordinator
+                .stake_table_for_epoch(Some(epoch))
+                .unwrap_or_else(|err| panic!("epoch {epoch}: no stake table: {err}"));
+            coordinator
+                .membership_for_epoch(Some(epoch))
+                .unwrap_or_else(|err| panic!("epoch {epoch}: no randomized stake table: {err}"));
+        }
+        assert!(
+            coordinator.stake_table_for_epoch(Some(before)).is_err(),
+            "epoch {before} is before the first epoch {first_epoch}"
+        );
+    }
+
+    type SeqEpochMembership = hotshot_types::epoch_membership::EpochMembership<SeqTypes>;
+
+    fn coordinator_for(committees: EpochCommittees) -> EpochMembershipCoordinator<SeqTypes> {
+        EpochMembershipCoordinator::<SeqTypes>::new(
+            committees,
+            100u64,
+            &hotshot_example_types::storage_types::TestStorage::default(),
+        )
+    }
+
+    /// The membership of `epoch`, read once with each lookup of the
+    /// coordinator. Panics if a lookup fails.
+    fn lookups(
+        coordinator: &EpochMembershipCoordinator<SeqTypes>,
+        epoch: Option<EpochNumber>,
+    ) -> [(&'static str, SeqEpochMembership); 2] {
+        [
+            (
+                "stake_table_for_epoch",
+                coordinator.stake_table_for_epoch(epoch),
+            ),
+            (
+                "membership_for_epoch",
+                coordinator.membership_for_epoch(epoch),
+            ),
+        ]
+        .map(|(lookup, result)| {
+            let membership = result.unwrap_or_else(|err| panic!("{lookup}({epoch:?}): {err}"));
+            (lookup, membership)
+        })
+    }
+
+    /// Asserts that every read of the quorum stake table through a `None`
+    /// epoch gives the same answer as through `first_epoch`. `members` are the
+    /// keys to check `stake` and `has_stake` for, next to one key that is not
+    /// a member.
+    fn assert_none_reads_first_epoch(
+        coordinator: &EpochMembershipCoordinator<SeqTypes>,
+        first_epoch: EpochNumber,
+        members: &[PeerConfig<SeqTypes>],
+    ) {
+        for ((lookup, none), (_, first)) in lookups(coordinator, None)
+            .into_iter()
+            .zip(lookups(coordinator, Some(first_epoch)))
+        {
+            let context = format!("{lookup}(None) vs {lookup}(Some({first_epoch}))");
+            assert_same_reads(&context, &none, &first, members);
+        }
+    }
+
+    fn assert_same_reads(
+        context: &str,
+        none: &SeqEpochMembership,
+        first: &SeqEpochMembership,
+        members: &[PeerConfig<SeqTypes>],
+    ) {
+        let stake_table = |m: &SeqEpochMembership| m.stake_table().cloned().collect::<Vec<_>>();
+        let committee_members = |m: &SeqEpochMembership| {
+            m.committee_members(ViewNumber::new(0))
+                .copied()
+                .collect::<std::collections::HashSet<_>>()
+        };
+
+        assert_eq!(
+            stake_table(none),
+            stake_table(first),
+            "{context}: stake table"
+        );
+        assert_eq!(
+            committee_members(none),
+            committee_members(first),
+            "{context}: committee members"
+        );
+        assert_eq!(
+            none.total_nodes(),
+            first.total_nodes(),
+            "{context}: total nodes"
+        );
+        assert_eq!(
+            none.success_threshold(),
+            first.success_threshold(),
+            "{context}: success threshold"
+        );
+
+        let outsider = peer(99, 0, 100);
+        for member in members.iter().chain(std::iter::once(&outsider)) {
+            let key = PubKey::public_key(&member.stake_table_entry);
+            assert_eq!(
+                none.stake(&key),
+                first.stake(&key),
+                "{context}: stake({key})"
+            );
+            assert_eq!(
+                none.has_stake(&key),
+                first.has_stake(&key),
+                "{context}: has_stake({key})"
+            );
+        }
+    }
+
+    /// Asserts that every read of the DA committee of `membership` gives
+    /// `expected`, in order, and nothing else.
+    fn assert_da_committee(
+        context: &str,
+        membership: &SeqEpochMembership,
+        expected: &[PeerConfig<SeqTypes>],
+    ) {
+        let da: Vec<_> = membership.da_stake_table().cloned().collect();
+        assert_eq!(da, expected, "{context}: DA stake table");
+        assert_eq!(
+            membership.da_total_nodes(),
+            expected.len(),
+            "{context}: DA total nodes"
+        );
+
+        let keys: std::collections::HashSet<PubKey> = expected
+            .iter()
+            .map(|p| PubKey::public_key(&p.stake_table_entry))
+            .collect();
+        let members: std::collections::HashSet<PubKey> = membership
+            .da_committee_members(ViewNumber::new(0))
+            .copied()
+            .collect();
+        assert_eq!(members, keys, "{context}: DA committee members");
+
+        for peer in expected {
+            let key = PubKey::public_key(&peer.stake_table_entry);
+            assert_eq!(
+                membership.da_stake(&key).as_ref(),
+                Some(peer),
+                "{context}: da_stake({key})"
+            );
+            assert!(
+                membership.has_da_stake(&key),
+                "{context}: has_da_stake({key})"
+            );
+        }
+        let outsider = PubKey::public_key(&peer(99, 0, 100).stake_table_entry);
+        assert!(
+            !membership.has_da_stake(&outsider),
+            "{context}: has_da_stake of a key outside the DA committee"
+        );
+    }
+
+    // Data from before epochs were enabled is read with a `None` epoch. It
+    // runs on the genesis stake table, as the first epoch does.
+    #[rstest]
+    #[case::genesis(1)]
+    #[case::later(5)]
+    #[case::mainnet(275)]
+    #[tokio::test]
+    async fn none_epoch_reads_first_epoch_stake_table(#[case] first_epoch: u64) {
+        let first_epoch = EpochNumber::new(first_epoch);
+        let (members, staked) = genesis_members();
+        let coordinator =
+            coordinator_for(committees_from_first_epoch(first_epoch, Fetcher::mock()));
+
+        assert_none_reads_first_epoch(&coordinator, first_epoch, &members);
+        // The genesis DA members are the genesis members, and `new` drops the
+        // ones without stake.
+        for (lookup, membership) in lookups(&coordinator, None) {
+            assert_da_committee(&format!("{lookup}(None)"), &membership, &staked);
+        }
+    }
+
+    // Views before epochs were enabled were led in turn by the staked genesis
+    // members, in genesis order, whatever their stake. Epochs pick leaders at
+    // random instead.
+    #[rstest]
+    #[case::genesis(1)]
+    #[case::later(5)]
+    #[case::mainnet(275)]
+    #[tokio::test]
+    async fn none_epoch_leaders_rotate_round_robin(#[case] first_epoch: u64) {
+        let first_epoch = EpochNumber::new(first_epoch);
+        let (all, staked) = unordered_genesis_members();
+        let committees =
+            EpochCommittees::new(all.clone(), all, None, Fetcher::mock(), 100u64, first_epoch);
+        let coordinator = coordinator_for(committees);
+
+        for (lookup, membership) in lookups(&coordinator, None) {
+            for view in 0..64 {
+                let expected =
+                    PubKey::public_key(&staked[view as usize % staked.len()].stake_table_entry);
+                let leader = membership
+                    .leader(ViewNumber::new(view))
+                    .unwrap_or_else(|err| panic!("{lookup}(None), view {view}: no leader: {err}"));
+                assert_eq!(leader, expected, "{lookup}(None), view {view}: leader");
+            }
+        }
+    }
+
+    /// Genesis members in an order sorted neither by index nor by stake, with
+    /// unequal stakes and two members without stake. Returns all members and
+    /// the staked ones, in the given order.
+    fn unordered_genesis_members() -> (Vec<PeerConfig<SeqTypes>>, Vec<PeerConfig<SeqTypes>>) {
+        let all: Vec<_> = [
+            (5, 300),
+            (0, 0),
+            (7, 100),
+            (2, 500),
+            (6, 0),
+            (1, 200),
+            (3, 400),
+        ]
+        .into_iter()
+        .map(|(index, stake)| peer(42, index, stake))
+        .collect();
+        let staked = all
+            .iter()
+            .filter(|p| p.stake_table_entry.stake() > U256::ZERO)
+            .cloned()
+            .collect();
+        (all, staked)
+    }
+
+    // VID shares and the light client stake table commitment depend on the
+    // order of the stake table.
+    #[rstest]
+    #[case::genesis(1)]
+    #[case::later(5)]
+    #[case::mainnet(275)]
+    #[tokio::test]
+    async fn none_epoch_stake_table_is_staked_genesis_members_in_order(#[case] first_epoch: u64) {
+        let first_epoch = EpochNumber::new(first_epoch);
+        let (all, staked) = unordered_genesis_members();
+        let unstaked: Vec<PubKey> = all
+            .iter()
+            .filter(|p| p.stake_table_entry.stake() == U256::ZERO)
+            .map(|p| PubKey::public_key(&p.stake_table_entry))
+            .collect();
+        let committees =
+            EpochCommittees::new(all.clone(), all, None, Fetcher::mock(), 100u64, first_epoch);
+        let coordinator = coordinator_for(committees);
+
+        for (lookup, membership) in lookups(&coordinator, None) {
+            let stake_table: Vec<_> = membership.stake_table().cloned().collect();
+            assert_eq!(stake_table, staked, "{lookup}(None): stake table");
+            for key in &unstaked {
+                assert!(
+                    membership.stake(key).is_none(),
+                    "{lookup}(None): member {key} without stake is in the stake table"
+                );
+            }
+        }
+    }
+
+    // Before epochs were enabled, the DA committee was the genesis one. A DA
+    // committee that starts at the first epoch does not change that.
+    #[rstest]
+    #[case::genesis(1)]
+    #[case::later(5)]
+    #[case::mainnet(275)]
+    #[tokio::test]
+    async fn none_epoch_keeps_genesis_da_committee_when_first_epoch_has_another(
+        #[case] first_epoch: u64,
+    ) {
+        let first_epoch = EpochNumber::new(first_epoch);
+        let (members, staked) = genesis_members();
+        let committees = committees_from_first_epoch(first_epoch, Fetcher::mock());
+        let other_da: Vec<_> = (0..2).map(|i| peer(123, i, 50)).collect();
+        committees.add_da_committee(first_epoch, other_da.clone());
+        let coordinator = coordinator_for(committees);
+
+        for (lookup, membership) in lookups(&coordinator, Some(first_epoch)) {
+            assert_da_committee(&format!("{lookup}({first_epoch})"), &membership, &other_da);
+        }
+        for (lookup, membership) in lookups(&coordinator, None) {
+            assert_da_committee(&format!("{lookup}(None)"), &membership, &staked);
+        }
+        assert_none_reads_first_epoch(&coordinator, first_epoch, &members);
+    }
+
+    /// A fetcher whose persistence returns `stakes` as the latest stored
+    /// stake tables.
+    fn fetcher_with_latest_stake(stakes: Vec<crate::v0_3::IndexedStake>) -> Fetcher {
+        Fetcher::new(
+            Arc::new(crate::mock::MockStateCatchup::default()),
+            Arc::new(AsyncMutex::new(LatestStakeStore { stakes })),
+            crate::L1Client::new(vec!["http://localhost:3331".parse().unwrap()])
+                .expect("Failed to create L1 client"),
+            crate::ChainConfig::default(),
+        )
+    }
+
+    #[rstest]
+    #[case::genesis(1)]
+    #[case::later(5)]
+    #[case::mainnet(275)]
+    #[tokio::test]
+    async fn none_epoch_ignores_stake_table_and_da_committee_of_later_epoch(
+        #[case] first_epoch: u64,
+    ) {
+        let first_epoch = EpochNumber::new(first_epoch);
+        let later = first_epoch + 2;
+        let (_, staked) = genesis_members();
+
+        let stored = AuthenticatedValidator::mock();
+        let stored_key = *stored.stake_table_key();
+        let stored_table: AuthenticatedValidatorMap =
+            [(stored.account, stored)].into_iter().collect();
+        let fetcher = fetcher_with_latest_stake(vec![(later, (stored_table, None), None)]);
+        let mut committees = committees_from_first_epoch(first_epoch, fetcher);
+        committees.reload_stake(RECENT_STAKE_TABLES_LIMIT).await;
+        let coordinator = coordinator_for(committees);
+        let later_da: Vec<_> = (0..2).map(|i| peer(77, i, 50)).collect();
+        coordinator
+            .membership()
+            .add_da_committee(later, later_da.clone());
+
+        let loaded = coordinator
+            .stake_table_for_epoch(Some(later))
+            .unwrap_or_else(|err| panic!("epoch {later}: no stake table: {err}"));
+        let loaded_keys: Vec<PubKey> = loaded
+            .stake_table()
+            .map(|p| PubKey::public_key(&p.stake_table_entry))
+            .collect();
+        assert_eq!(loaded_keys, vec![stored_key], "epoch {later}: stake table");
+        let loaded_da: Vec<_> = loaded.da_stake_table().cloned().collect();
+        assert_eq!(loaded_da, later_da, "epoch {later}: DA committee");
+
+        // The genesis DA members are all staked, so the genesis DA committee
+        // is `staked` as well.
+        for (lookup, membership) in lookups(&coordinator, None) {
+            let stake_table: Vec<_> = membership.stake_table().cloned().collect();
+            assert_eq!(stake_table, staked, "{lookup}(None): stake table");
+            let da: Vec<_> = membership.da_stake_table().cloned().collect();
+            assert_eq!(da, staked, "{lookup}(None): DA committee");
+        }
+    }
+
+    // Without a staked member, the first epoch has no leader, so a `None`
+    // epoch must not have one either.
+    #[rstest]
+    #[case::empty_from_genesis(0, EpochNumber::genesis())]
+    #[case::empty_from_later(0, EpochNumber::new(5))]
+    #[case::zero_stake_from_genesis(3, EpochNumber::genesis())]
+    #[case::zero_stake_from_later(3, EpochNumber::new(5))]
+    #[tokio::test]
+    async fn none_epoch_leader_errors_without_staked_members(
+        #[case] members: u64,
+        #[case] first_epoch: EpochNumber,
+    ) {
+        let members = unstaked_members(members);
+        let committees = EpochCommittees::new(
+            members.clone(),
+            members,
+            None,
+            Fetcher::mock(),
+            100u64,
+            first_epoch,
+        );
+        let coordinator = coordinator_for(committees);
+
+        for (lookup, membership) in lookups(&coordinator, None) {
+            for view in [0, 1, 7, 1000] {
+                let result = membership.leader(ViewNumber::new(view));
+                assert!(
+                    result.is_err(),
+                    "{lookup}(None), view {view}: expected an error, got {result:?}"
+                );
+            }
+        }
+    }
+
+    /// One member for each of `stakes`, in order, with keys from `seed`.
+    fn members_with_stakes(seed: u8, stakes: &[u64]) -> Vec<PeerConfig<SeqTypes>> {
+        (0..)
+            .zip(stakes)
+            .map(|(index, &stake)| peer(seed, index, stake))
+            .collect()
+    }
+
+    /// A member with `stake`, given in hexadecimal, so it may not fit in a
+    /// `u64`.
+    fn member_with_hex_stake(seed: u8, stake: &str) -> PeerConfig<SeqTypes> {
+        ValidatorConfig::<SeqTypes>::generated_from_seed_indexed(
+            [seed; 32],
+            0,
+            hex_u256(stake),
+            true,
+        )
+        .public_config()
+    }
+
+    fn hex_u256(hex: &str) -> U256 {
+        U256::from_str_radix(hex, 16).unwrap_or_else(|err| panic!("{hex}: {err}"))
+    }
+
+    /// Asserts the failure threshold and the DA success threshold of the
+    /// first two epochs of a chain whose genesis stake table is `quorum` and
+    /// whose genesis DA committee is `da`. Reads both from the epoch snapshot
+    /// and from each lookup of the coordinator.
+    fn assert_epoch_thresholds(
+        quorum: Vec<PeerConfig<SeqTypes>>,
+        da: Vec<PeerConfig<SeqTypes>>,
+        failure: U256,
+        da_success: U256,
+    ) {
+        let first_epoch = EpochNumber::new(5);
+        let committees =
+            EpochCommittees::new(quorum, da, None, Fetcher::mock(), 100u64, first_epoch);
+        let coordinator = coordinator_for(committees);
+
+        for epoch in [first_epoch, first_epoch + 1] {
+            let snapshot = coordinator
+                .membership()
+                .snapshot(epoch)
+                .unwrap_or_else(|| panic!("no snapshot for epoch {epoch}"));
+            assert_eq!(
+                snapshot.failure_threshold(),
+                failure,
+                "snapshot({epoch}): failure threshold"
+            );
+            assert_eq!(
+                snapshot.da_success_threshold(),
+                da_success,
+                "snapshot({epoch}): DA success threshold"
+            );
+
+            for (lookup, membership) in lookups(&coordinator, Some(epoch)) {
+                assert_eq!(
+                    membership.failure_threshold(),
+                    failure,
+                    "{lookup}({epoch}): failure threshold"
+                );
+                assert_eq!(
+                    membership.da_success_threshold(),
+                    da_success,
+                    "{lookup}({epoch}): DA success threshold"
+                );
+            }
+        }
+    }
+
+    // The failure threshold is one third of the quorum stake, rounded down,
+    // plus one. The DA success threshold is two thirds of the DA stake,
+    // rounded down, plus one. The quorum and DA totals differ in most cases,
+    // so a threshold read from the wrong table fails the test.
+    #[rstest]
+    #[case::empty(&[], &[], 1, 1)]
+    #[case::quorum_1_da_100(&[1], &[40, 60], 1, 67)]
+    #[case::quorum_2_da_10(&[1, 1], &[1, 2, 3, 4], 1, 7)]
+    #[case::quorum_3_da_4(&[1, 1, 1], &[4], 2, 3)]
+    #[case::quorum_4_da_3(&[1, 3], &[1, 1, 1], 2, 3)]
+    #[case::quorum_7_da_5(&[7], &[2, 3], 3, 4)]
+    #[case::quorum_10_da_2(&[1, 2, 3, 4], &[2], 4, 2)]
+    #[case::quorum_100_da_1(&[10, 20, 30, 40], &[1], 34, 1)]
+    #[case::quorum_1000_da_11(&[100, 200, 300, 400], &[5, 6], 334, 8)]
+    #[tokio::test]
+    async fn epoch_failure_and_da_success_thresholds(
+        #[case] quorum: &[u64],
+        #[case] da: &[u64],
+        #[case] failure: u64,
+        #[case] da_success: u64,
+    ) {
+        assert_epoch_thresholds(
+            members_with_stakes(42, quorum),
+            members_with_stakes(123, da),
+            U256::from(failure),
+            U256::from(da_success),
+        );
+    }
+
+    // Totals of at least `U256::MAX / 2` take another branch of the DA
+    // success threshold, because doubling them overflows.
+    #[rstest]
+    // Quorum `U256::MAX`, DA `U256::MAX / 2 - 1`.
+    #[case::da_just_below_half_of_max(
+        "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        "7ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffe",
+        "5555555555555555555555555555555555555555555555555555555555555556",
+        "5555555555555555555555555555555555555555555555555555555555555555"
+    )]
+    // Quorum `U256::MAX / 2 - 1`, DA `U256::MAX / 2`.
+    #[case::da_half_of_max(
+        "7ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffe",
+        "7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        "2aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaab",
+        "5555555555555555555555555555555555555555555555555555555555555556"
+    )]
+    // Quorum 1, DA `U256::MAX`.
+    #[case::da_max(
+        "1",
+        "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        "1",
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaac"
+    )]
+    #[tokio::test]
+    async fn epoch_failure_and_da_success_thresholds_near_u256_max(
+        #[case] quorum: &str,
+        #[case] da: &str,
+        #[case] failure: &str,
+        #[case] da_success: &str,
+    ) {
+        assert_epoch_thresholds(
+            vec![member_with_hex_stake(42, quorum)],
+            vec![member_with_hex_stake(123, da)],
+            hex_u256(failure),
+            hex_u256(da_success),
         );
     }
 }

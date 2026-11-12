@@ -96,7 +96,7 @@ mod test {
 
     use committable::Committable as _;
     use espresso_types::{
-        FeeAccount, Header, Leaf, Leaf2, NodeState, Payload, Transaction as Tx,
+        Header, Leaf, Leaf2, NodeState, Payload, Transaction as Tx,
         traits::{PersistenceOptions as _, SequencerPersistence as _},
     };
     use hotshot_example_types::node_types::TEST_VERSIONS;
@@ -107,17 +107,10 @@ mod test {
         },
     };
     use hotshot_types::{
-        data::{EpochNumber, QuorumProposal, ViewNumber, vid_commitment},
+        data::{QuorumProposal, ViewNumber},
         event::HotShotAction,
         simple_certificate::QuorumCertificate,
-        traits::{
-            EncodeBytes,
-            block_contents::{
-                BlockHeader, BlockPayload as _, BuilderFee, GENESIS_VID_NUM_STORAGE_NODES,
-            },
-            election::Membership,
-            signature_key::BuilderSignatureKey,
-        },
+        traits::block_contents::{BlockHeader, BlockPayload as _},
     };
     use sqlx::{Row as _, query};
 
@@ -154,11 +147,6 @@ mod test {
     }
 
     async fn test_postgres_read_ns_table(instance_state: NodeState) {
-        instance_state
-            .coordinator
-            .membership()
-            .set_first_epoch(EpochNumber::genesis(), Default::default());
-
         let tmp = Persistence::tmp_storage().await;
         let mut opt = Persistence::options(&tmp);
         let storage = opt.create().await.unwrap();
@@ -173,42 +161,20 @@ mod test {
         let justify_qc =
             QuorumCertificate::genesis(&validated_state, &instance_state, TEST_VERSIONS.test).await;
         let view_number: ViewNumber = justify_qc.view_number + 1;
-        let parent_leaf = Leaf::genesis(&validated_state, &instance_state, TEST_VERSIONS.test.base)
-            .await
-            .into();
 
         let (payload, ns_table) =
             Payload::from_transactions(&txs, &validated_state, &instance_state)
                 .await
                 .unwrap();
-        let payload_bytes = payload.encode();
-        let payload_commitment = vid_commitment(
-            &payload_bytes,
-            &ns_table.encode(),
-            GENESIS_VID_NUM_STORAGE_NODES,
+        // Exercise historical header storage without invoking retired proposal production.
+        let mut block_header = Header::genesis(
+            &instance_state,
+            payload.clone(),
+            &ns_table,
             instance_state.current_version,
         );
-        let builder_commitment = payload.builder_commitment(&ns_table);
-        let (fee_account, fee_key) = FeeAccount::generated_from_seed_indexed([0; 32], 0);
-        let fee_amount = 0;
-        let fee_signature = FeeAccount::sign_fee(&fee_key, fee_amount, &ns_table).unwrap();
-        let block_header = Header::new(
-            &validated_state,
-            &instance_state,
-            &parent_leaf,
-            payload_commitment,
-            builder_commitment,
-            ns_table,
-            BuilderFee {
-                fee_amount,
-                fee_account,
-                fee_signature,
-            },
-            instance_state.current_version,
-            view_number.u64(),
-        )
-        .await
-        .unwrap();
+        *block_header.height_mut() = 1;
+        assert_eq!(block_header.version(), instance_state.current_version);
         let proposal = QuorumProposal {
             block_header: block_header.clone(),
             view_number,
@@ -285,7 +251,7 @@ mod test {
                 let storage = Arc::clone(&storage);
                 tokio::spawn(async move {
                     storage
-                        .record_action(ViewNumber::new(i), None, HotShotAction::Vote)
+                        .record_action(ViewNumber::new(i), HotShotAction::Vote)
                         .await
                 })
             })

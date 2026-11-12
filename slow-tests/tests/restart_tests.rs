@@ -21,9 +21,9 @@ use espresso_contract_deployer::{
     Contract, Contracts, builder::DeployerArgsBuilder,
     network_config::light_client_genesis_from_stake_table,
 };
-#[cfg(not(feature = "embedded-db"))]
+#[cfg(not(feature = "sqlite"))]
 use espresso_node::api::sql::postgres::DataSource as SqlDataSource;
-#[cfg(feature = "embedded-db")]
+#[cfg(feature = "sqlite")]
 use espresso_node::api::sql::sqlite::DataSource as SqlDataSource;
 use espresso_node::{
     SequencerApiVersion,

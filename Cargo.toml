@@ -16,7 +16,6 @@ members = [
     "crates/espresso/dev-node",
     "crates/espresso/keyset",
     "crates/espresso/node",
-    "crates/espresso/node-sqlite",
     "crates/espresso/telemetry",
     "crates/espresso/types",
     "crates/espresso/utils",
@@ -35,21 +34,24 @@ members = [
     "crates/light-client-query-service",
     "crates/node-metrics",
     "crates/process-metrics",
+    "crates/query-watchdog",
     "crates/request-response",
     "crates/staking-cli",
     "crates/test-server",
     "crates/test-utils",
     "crates/versions",
     "crates/vid",
+    "fuzz",
     "sdks/crypto-helper",
     "slow-tests",
     "sp1/target-check",
     "tests",
 ]
 
-# All crates except espresso-node-sqlite, espresso-dev-node, and crypto-helper.
-# espresso-node-sqlite/espresso-dev-node: embedded-db feature conflict
+# All crates except espresso-dev-node, crypto-helper and fuzz.
+# espresso-dev-node: enables the espresso-node testing feature
 # crypto-helper: vendored openssl leaks to workspace via feature unification
+# fuzz: compiles libFuzzer, and is run through cargo-fuzz
 default-members = [
     "contracts/rust/adapter",
     "contracts/rust/deployer",
@@ -80,6 +82,7 @@ default-members = [
     "crates/light-client-query-service",
     "crates/node-metrics",
     "crates/process-metrics",
+    "crates/query-watchdog",
     "crates/request-response",
     "crates/staking-cli",
     "crates/test-server",
@@ -90,7 +93,6 @@ default-members = [
     "sp1/target-check",
     "tests",
 ]
-exclude = ["crates/espresso/node-sqlite"]
 # Note: workspace members/default-members reference directory paths, not crate names.
 
 [workspace.package]
@@ -365,7 +367,6 @@ test-log = { version = "0.2", features = ["color", "trace"] }
 test-server = { path = "crates/test-server" }
 test-utils = { path = "crates/test-utils" }
 thiserror = "2"
-tide-disco = "0.9"
 time = "0.3"
 tokio = { version = "1", features = ["macros", "time", "rt-multi-thread"] }
 tokio-tungstenite = "0.28"

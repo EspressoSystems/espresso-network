@@ -1,5 +1,6 @@
 """Leader critical-path breakdown of consensus views from the per-node `leader_trace_node{N}.csv` files that
-espresso-node writes under `ESPRESSO_NODE_LEADER_TRACE_DIR`. Pure functions, stdlib only.
+espresso-node writes under `ESPRESSO_NODE_LEADER_TRACE_DIR`, and readers of the `cpu_node{N}.csv` and
+`net_node{N}.csv` samples aws-bench writes beside them. Pure functions, stdlib only.
 
 Every row is keyed by the subject view the event is about. The leader of view V is the node
 whose trace has `proposal_queued` for V. Values that span hosts (wait to propose, finality, and
@@ -10,27 +11,34 @@ import itertools
 from collections import Counter
 from collections.abc import Iterable
 from pathlib import Path
+from typing import cast
 
 # node -> view -> event -> first ts_ns
 Trace = dict[int, dict[int, dict[str, int]]]
+# (t_ns, dt_ns, cpu_us) per sampling interval, t_ns its end
+Cpu = list[tuple[int, int, int]]
+# (t_ns, dt_ns, rx_bytes, tx_bytes) per sampling interval, t_ns its end
+Net = list[tuple[int, int, int, int]]
 
 HEADER = ["view", "node_id", "event", "ts_ns"]
+CPU_HEADER = ["t_ns", "usage_usec"]
+NET_HEADER = ["t_ns", "rx_bytes", "tx_bytes"]
 # (segment, end event on the leader of V); each segment starts where the previous one ends
 LEADER_PATH = (
     ("wait to propose", "request_block_header_queued"),
     ("block build", "block_built_applied"),
-    ("header", "header_created_applied"),
-    # The leaf commitment needs the parent's Cert1: this segment waits on the votes of V - 1,
+    ("parent state + header", "header_created_applied"),
+    # The proposal needs the parent's Cert1: this segment waits on the votes of V - 1,
     # it is not leader-local work.
-    ("parent Cert1 wait", "leaf2_commit_computed"),
+    ("parent Cert1 wait", "proposal_assembled"),
     ("commit + sign", "proposal_queued"),
-    ("outbox wait", "proposal_broadcast_start"),
-    ("proposal broadcast", "proposal_broadcast_end"),
+    ("persist proposal + action", "proposal_broadcast_start"),
+    ("proposal serialize + enqueue", "proposal_broadcast_end"),
     ("validate own proposal", "proposal_validated_v_minus_1"),
-    ("validated -> vote1 sent", "vote1_broadcast_start"),
-    ("collect vote1 -> Cert1", "cert1_v_minus_1_input_dispatched"),
+    ("validated -> vote1 sent", "vote1_v_minus_1_broadcast_start"),
+    ("collect vote1 -> Cert1", "cert1_v_minus_1_obtained"),
     ("Cert1 -> vote2 sent", "vote2_v_minus_1_broadcast_end"),
-    ("collect vote2 -> Cert2", "cert2_v_minus_1_input_dispatched"),
+    ("collect vote2 -> Cert2", "cert2_v_minus_1_obtained"),
     ("Cert2 -> decided", "leaf_decided"),
 )
 DECIDED = "leaf_decided"
@@ -55,6 +63,48 @@ def read_traces(paths: Iterable[Path]) -> Trace:
     return trace
 
 
+def read_csv_rows(path: Path, header: list[str]) -> list[list[str]]:
+    with path.open(newline="") as f:
+        reader = csv.reader(f)
+        if next(reader, None) != header:
+            raise ValueError(f"{path}:1: header is not {','.join(header)}")
+        rows = list(reader)
+    # The sampler may be killed mid-write: only the final row can be truncated.
+    if rows and (len(rows[-1]) != len(header) or not all(rows[-1])):
+        rows.pop()
+    return rows
+
+
+def intervals(samples: list[tuple[int, ...]]) -> list[tuple[int, ...]]:
+    """(t_ns, dt_ns, *deltas) per pair of consecutive cumulative samples (t_ns, *counters). An
+    interval is dropped when time does not advance (clock step) or a counter decreased (the
+    container was recreated)."""
+    out = []
+    for prev, cur in itertools.pairwise(sorted(samples)):
+        dt = cur[0] - prev[0]
+        deltas = [c - p for c, p in zip(cur[1:], prev[1:], strict=True)]
+        if dt > 0 and min(deltas) >= 0:
+            out.append((cur[0], dt, *deltas))
+    return out
+
+
+def read_cpu(path: Path) -> Cpu:
+    """`cpu_node{N}.csv` of aws-bench's sampler, cumulative `usage_usec` of the node container,
+    as the CPU time of each interval."""
+    rows = [(int(t_ns), int(usage)) for t_ns, usage in read_csv_rows(path, CPU_HEADER)]
+    return cast(Cpu, intervals(rows))
+
+
+def read_net(path: Path) -> Net:
+    """`net_node{N}.csv`, cumulative rx and tx bytes of the primary interface, as the bytes of
+    each interval."""
+    rows = [
+        (int(t_ns), int(rx), int(tx))
+        for t_ns, rx, tx in read_csv_rows(path, NET_HEADER)
+    ]
+    return cast(Net, intervals(rows))
+
+
 def leaders(trace: Trace) -> dict[int, tuple[int, int]]:
     """View to (leader node, proposal_queued ts_ns)."""
     found: dict[int, tuple[int, int]] = {}
@@ -77,9 +127,11 @@ def view_times(trace: Trace) -> dict[int, float]:
 
 def leader_path(
     trace: Trace, warmup: int = DEFAULT_WARMUP
-) -> tuple[dict[int, list[float]], Counter[str]]:
-    """View to the durations in ms of the `LEADER_PATH` segments, and the counts of views left
-    out by reason.
+) -> tuple[dict[int, list[float]], int, Counter[str]]:
+    """View to the durations in ms of the `LEADER_PATH` segments, the number of views left out,
+    and the counts of what left views out. A view without a t0 anchor counts once under
+    `no t0 anchor`; a view lacking events counts once under `missing <event>` for each absent
+    event, so the sum exceeds the number of views skipped.
 
     t0 is the previous leader's `proposal_queued`, so "wait to propose" is measured across hosts
     and includes clock skew. All other segments use the clock of the leader of V. Durations are
@@ -95,11 +147,11 @@ def leader_path(
         events = trace[lead[view][0]][view]
         absent = [event for _, event in LEADER_PATH if event not in events]
         if absent:
-            skipped[f"missing {absent[0]}"] += 1
+            skipped.update(f"missing {event}" for event in absent)
             continue
         stamps = [lead[view - 1][1], *(events[event] for _, event in LEADER_PATH)]
         path[view] = [(b - a) / NS_PER_MS for a, b in itertools.pairwise(stamps)]
-    return path, skipped
+    return path, sum(v >= warmup for v in lead) - len(path), skipped
 
 
 def cluster_finality_ms(

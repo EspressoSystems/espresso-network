@@ -33,8 +33,6 @@ pub struct TwoStakeTables<
     epochs: BTreeSet<u64>,
 
     drb_results: BTreeMap<u64, DrbResult>,
-
-    first_epoch: Option<u64>,
 }
 
 impl<PubKey, StatePubKey> TestStakeTable<PubKey, StatePubKey>
@@ -73,7 +71,6 @@ where
                 .filter(|(idx, _)| idx % 2 == 1)
                 .map(|(_, entry)| entry.clone())
                 .collect(),
-            first_epoch: None,
             epochs: BTreeSet::new(),
             drb_results: BTreeMap::new(),
         }
@@ -131,8 +128,6 @@ where
     }
 
     fn set_first_epoch(&mut self, epoch: u64, initial_drb_result: DrbResult) {
-        self.first_epoch = Some(epoch);
-
         self.add_epoch_root(epoch);
         self.add_epoch_root(epoch + 1);
 
@@ -145,10 +140,6 @@ where
             .get(&epoch)
             .context("DRB result missing")
             .copied()
-    }
-
-    fn first_epoch(&self) -> Option<u64> {
-        self.first_epoch
     }
 
     fn add_da_committee(

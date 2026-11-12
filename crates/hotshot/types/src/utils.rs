@@ -31,7 +31,7 @@ use vbs::version::Version;
 use versions::EPOCH_VERSION;
 
 use crate::{
-    data::{EpochNumber, Leaf2, VidCommitment, ViewNumber},
+    data::{EpochNumber, Leaf2, VidCommitment},
     epoch_membership::EpochMembershipCoordinator,
     message::UpgradeLock,
     simple_certificate::QuorumCertificate2,
@@ -123,9 +123,9 @@ pub async fn verify_leaf_chain<T: NodeType>(
             // non-epoch chain before it, so no later height may be certified this way.
             None => {
                 ensure!(
-                    first_epoch.is_some_and(|first| epoch <= first),
+                    epoch <= first_epoch,
                     "QC claims no epoch but certifies the leaf at height {certified_height} in \
-                     epoch {epoch}, after the first epoch {first_epoch:?}"
+                     epoch {epoch}, after the first epoch {first_epoch}"
                 );
                 coordinator.stake_table_for_epoch(None)
             },
@@ -275,13 +275,6 @@ impl<TYPES: NodeType> Deref for View<TYPES> {
 pub struct View<TYPES: NodeType> {
     /// The view data. Wrapped in a struct so we can mutate
     pub view_inner: ViewInner<TYPES>,
-}
-
-/// A struct containing information about a finished round.
-#[derive(Debug, Clone)]
-pub struct RoundFinishedEvent {
-    /// The round that finished
-    pub view_number: ViewNumber,
 }
 
 /// Type alias for byte array of SHA256 digest length

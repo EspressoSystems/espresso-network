@@ -9,9 +9,9 @@ use std::{collections::HashSet, time::Duration};
 
 use alloy::primitives::{Address, U256, utils::parse_ether};
 use espresso_contract_deployer::Contract;
-#[cfg(not(feature = "embedded-db"))]
+#[cfg(not(feature = "sqlite"))]
 use espresso_node::api::sql::postgres::DataSource as SqlDataSource;
-#[cfg(feature = "embedded-db")]
+#[cfg(feature = "sqlite")]
 use espresso_node::api::sql::sqlite::DataSource as SqlDataSource;
 use espresso_node::{
     SequencerApiVersion,

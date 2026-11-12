@@ -1,10 +1,9 @@
-use std::{
-    collections::{BTreeMap, HashSet},
-    time::Duration,
-};
+use std::{collections::BTreeMap, time::Duration};
 
+use hotshot_example_types::{node_types::TestTypes, storage_types::TestStorage};
 use hotshot_types::{
     data::{EpochNumber, ViewNumber},
+    event::HotShotAction,
     signature_key::BLSPubKey,
     traits::signature_key::SignatureKey,
 };
@@ -115,14 +114,7 @@ async fn restart_all_nodes_with_storage() {
     runner.run().await.unwrap();
 
     for (idx, storage) in runner.node_storages().iter().enumerate() {
-        let mut seen = HashSet::new();
-        for (view, action) in storage.action_log().await {
-            assert!(
-                seen.insert((view, action)),
-                "node {idx} recorded {action:?} twice for view {view} — it re-entered a view it \
-                 had already acted in"
-            );
-        }
+        assert_no_view_reentered(idx, storage).await;
 
         let (anchor, _) = storage
             .anchor_leaf()
@@ -162,14 +154,7 @@ async fn restart_all_nodes_at_epoch_boundary() {
     runner.run().await.unwrap();
 
     for (idx, storage) in runner.node_storages().iter().enumerate() {
-        let mut seen = HashSet::new();
-        for (view, action) in storage.action_log().await {
-            assert!(
-                seen.insert((view, action)),
-                "node {idx} recorded {action:?} twice for view {view} — it re-entered a view it \
-                 had already acted in"
-            );
-        }
+        assert_no_view_reentered(idx, storage).await;
 
         let (anchor, _) = storage
             .anchor_leaf()
@@ -339,4 +324,30 @@ async fn late_start_f_nodes_with_epochs() {
         .run()
         .await
         .unwrap();
+}
+
+/// A restarted node votes and proposes only in views after every view it acted
+/// in before the restart.
+///
+/// It may still time out the view it stopped in, which it resumes in and has
+/// to leave. Within one run a view may repeat: a node may act in one view in
+/// two epochs.
+async fn assert_no_view_reentered(idx: usize, storage: &TestStorage<TestTypes>) {
+    let mut latest: Option<ViewNumber> = None;
+    for run in storage.action_log_by_run().await {
+        if let Some(latest) = latest {
+            for (view, action) in &run {
+                let allowed = match action {
+                    HotShotAction::TimeoutVote => *view >= latest,
+                    _ => *view > latest,
+                };
+                assert!(
+                    allowed,
+                    "node {idx} recorded {action:?} for view {view} after a restart, having acted \
+                     up to view {latest} before it"
+                );
+            }
+        }
+        latest = latest.max(run.iter().map(|(view, _)| *view).max());
+    }
 }

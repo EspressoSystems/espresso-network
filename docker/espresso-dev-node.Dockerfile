@@ -6,7 +6,7 @@ COPY target/$TARGETARCH/release/espresso-dev-node /bin/espresso-dev-node
 RUN chmod +x /bin/espresso-dev-node
 
 # Download the anvil binary
-RUN curl -L https://github.com/foundry-rs/foundry/releases/download/nightly/foundry_nightly_linux_${TARGETARCH}.tar.gz --output -| tar -xzvf - -C /bin/ anvil
+RUN curl -L https://github.com/foundry-rs/foundry/releases/download/v1.8.7/foundry_v1.8.7_linux_${TARGETARCH}.tar.gz --output -| tar -xzvf - -C /bin/ anvil
 
 # When running as a Docker service, we always want a healthcheck endpoint, so set a default for the
 # port that the HTTP server will run on. This can be overridden in any given deployment environment.
