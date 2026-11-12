@@ -618,8 +618,9 @@ const STARTUP_DIAL_TIMEOUT: Duration = Duration::from_secs(60);
 /// finalized block that it does not hold. Returns the dialed keys.
 ///
 /// Held keys keep the connect info of the held tables, which may be older than L1's. The dial runs
-/// once, bounded by `STARTUP_DIAL_TIMEOUT`; a failure leaves no extra peers until restart. The first `apply_epoch` for a higher epoch
-/// with a table drops the dialed peers.
+/// once, bounded by `STARTUP_DIAL_TIMEOUT`; a failure leaves no extra peers until restart. The
+/// first `apply_epoch` for a higher epoch with a table drops the dialed peers outside that epoch's
+/// window.
 async fn connect_startup_peers(
     network: &mut Cliquenet<SeqTypes>,
     membership_coordinator: &EpochMembershipCoordinator<SeqTypes>,
