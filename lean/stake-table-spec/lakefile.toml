@@ -1,0 +1,9 @@
+name = "stake-table-spec"
+defaultTargets = ["StakeTableSpec"]
+
+[[lean_lib]]
+name = "StakeTableSpec"
+
+# An unknown name in a signature is an error, not a new implicit variable.
+[leanOptions]
+autoImplicit = false

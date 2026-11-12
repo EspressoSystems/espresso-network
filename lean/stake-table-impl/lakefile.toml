@@ -1,0 +1,20 @@
+name = "stake-table-impl"
+defaultTargets = ["StakeTableImpl"]
+
+# The specification is a dependency, never a sibling directory: this package
+# can read it, and it cannot read this one.
+[[require]]
+name = "stake-table-spec"
+path = "../stake-table-spec"
+
+[[lean_lib]]
+name = "StakeTableImpl"
+
+# An unknown name in a signature is an error, not a new implicit variable.
+[leanOptions]
+autoImplicit = false
+
+# Replay timing for the list and the indexed state.
+[[lean_exe]]
+name = "bench"
+root = "Bench"
