@@ -82,6 +82,13 @@ if [[ "${cherry_status}" -ne 0 ]]; then
   done
 
   mapfile -d '' -t conflicted < <(git diff -z --name-only --diff-filter=U)
+  for path in ${conflicted[@]+"${conflicted[@]}"}; do
+    # Git leaves other conflicts without markers too: a binary file keeps the target's version,
+    # and a file that both sides renamed is present under both names.
+    if [[ -f "${path}" ]] && ! grep -q -e '^<<<<<<< ' -- "${path}"; then
+      trailers+=(--trailer "Backport-Unresolved: ${path}")
+    fi
+  done
   if [[ ${#conflicted[@]} -gt 0 ]]; then
     git add -- "${conflicted[@]}"
   fi
