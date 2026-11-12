@@ -1533,6 +1533,8 @@ fn end_process_on_hash_mismatch(
         panic!("{message}");
     }
     error!("{message}");
+    // Lets the batched log exporter send the line.
+    std::thread::sleep(Duration::from_secs(2));
     std::process::abort()
 }
 
