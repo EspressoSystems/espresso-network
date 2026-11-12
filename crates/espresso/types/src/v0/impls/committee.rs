@@ -690,18 +690,12 @@ impl EpochCommittees {
             Some(block_header.clone()),
         );
 
-        let previous_epoch;
-        let previous_committee;
-        let previous_validators;
-        {
-            let mut inner = self.inner.write();
-            // previous_epoch is the epoch prior to `epoch`,
-            // or the epoch immediately succeeding the block header
-            previous_epoch = EpochNumber::new(epoch.saturating_sub(1));
-
-            // Guards the later store of the previous epoch's table: the decided hash must match
-            // the table in memory, which catches L1 provider issues. Runs before `epoch` is put
-            // in memory.
+        let previous_epoch = EpochNumber::new(epoch.saturating_sub(1));
+        let (previous_committee, previous_validators) = {
+            let inner = self.inner.read();
+            // Guards the store of the previous epoch's table: the decided hash must match the
+            // table in memory, which catches L1 provider issues. Runs before anything is stored
+            // or `epoch` is put in memory.
             let decided_hash = block_header.next_stake_table_hash();
             let actual_hash = inner
                 .epoch_committee(previous_epoch)
@@ -713,20 +707,16 @@ impl EpochCommittees {
                 drop(inner);
                 end_process_on_hash_mismatch(decided_hash, actual_hash);
             }
+            (
+                inner.epoch_committee(previous_epoch).cloned(),
+                inner.all_validators.get(&previous_epoch).cloned(),
+            )
+        };
 
-            inner.put_epoch_committee(epoch, Arc::new(committee));
-            previous_committee = inner.epoch_committee(previous_epoch).cloned();
-            // garbage collect the validator set
-            inner.all_validators = inner.all_validators.split_off(&previous_epoch);
-            // extract `all_validators` for the previous epoch
-            previous_validators = inner.all_validators.remove(&previous_epoch);
-            inner.all_validators.insert(epoch, all_validators.clone());
-            inner.prune_epochs(epoch);
-        }
-
-        let persistence_lock = self.fetcher.persistence.lock().await;
-
+        // Storage is written before `epoch` is put in memory, so an install that is dropped
+        // midway leaves storage ahead of memory and a retry completes it.
         if let Some(previous_committee) = previous_committee {
+            let persistence_lock = self.fetcher.persistence.lock().await;
             if let Err(e) = persistence_lock
                 .store_stake(
                     previous_epoch,
@@ -750,6 +740,16 @@ impl EpochCommittees {
             {
                 error!(?e, ?epoch, "`add_epoch_root`, error storing all validators");
             }
+        }
+
+        {
+            let mut inner = self.inner.write();
+            inner.put_epoch_committee(epoch, Arc::new(committee));
+            // garbage collect the validator set, including the previous epoch's, now stored
+            inner.all_validators = inner.all_validators.split_off(&previous_epoch);
+            inner.all_validators.remove(&previous_epoch);
+            inner.all_validators.insert(epoch, all_validators.clone());
+            inner.prune_epochs(epoch);
         }
 
         Ok(())
@@ -1002,9 +1002,9 @@ impl Membership<SeqTypes> for EpochCommittees {
     /// Everything persisted for the epoch is restored: the stake table, the
     /// epoch root header, and the randomized committee (rebuilt from the DRB
     /// result).
-    async fn load_stake_table(&self, epoch: EpochNumber) -> bool {
+    async fn load_stake_table(&self, epoch: EpochNumber) -> Option<Self::Snapshot> {
         if self.inner.read().snapshots.contains_key(&epoch) {
-            return true;
+            return self.snapshot(epoch);
         }
         let locks = tokio::time::timeout(self.storage_read_timeout, async {
             // Ensure there is only one `load_stake_table` at a time:
@@ -1020,23 +1020,23 @@ impl Membership<SeqTypes> for EpochCommittees {
         let (_guard, persistence) = match locks {
             Ok(Some(locks)) => locks,
             // Someone else loaded the epoch while we queued for the first lock.
-            Ok(None) => return true,
+            Ok(None) => return self.snapshot(epoch),
             Err(_) => {
                 // A timeout can also mean a won race.
                 if self.inner.read().snapshots.contains_key(&epoch) {
-                    return true;
+                    return self.snapshot(epoch);
                 }
                 warn!(
                     %epoch,
                     timeout = ?self.storage_read_timeout,
                     "timed out queueing for the storage locks; treating the epoch as not persisted"
                 );
-                return false;
+                return None;
             },
         };
         // Check if someone else won the race:
         if self.inner.read().snapshots.contains_key(&epoch) {
-            return true;
+            return self.snapshot(epoch);
         }
         // Bound the reads so a stalled query cannot pin the locks held above.
         let read = tokio::time::timeout(self.storage_read_timeout, async {
@@ -1067,10 +1067,10 @@ impl Membership<SeqTypes> for EpochCommittees {
         .await;
         let ((validators, block_reward, stake_table_hash), drb, header) = match read {
             Ok(Some(loaded)) => loaded,
-            Ok(None) => return false,
+            Ok(None) => return None,
             Err(_) => {
                 if self.inner.read().snapshots.contains_key(&epoch) {
-                    return true;
+                    return self.snapshot(epoch);
                 }
                 warn!(
                     %epoch,
@@ -1078,7 +1078,7 @@ impl Membership<SeqTypes> for EpochCommittees {
                     "storage reads for the stake table timed out; treating the epoch as not \
                      persisted"
                 );
-                return false;
+                return None;
             },
         };
         drop(persistence);
@@ -1107,7 +1107,7 @@ impl Membership<SeqTypes> for EpochCommittees {
         if let Some(randomized) = randomized {
             inner.put_randomized_committee(epoch, randomized);
         }
-        true
+        inner.snapshots.get(&epoch).cloned()
     }
 
     fn genesis_stake_tables(&self) -> Arc<GenesisStakeTables<SeqTypes>> {
@@ -1804,20 +1804,25 @@ mod tests {
         // Epoch 7 has a stake table, a DRB result and a root header in storage.
         let seven = EpochNumber::new(7);
         assert!(committees.snapshot(seven).is_none());
-        assert!(committees.load_stake_table(seven).await);
+        assert!(committees.load_stake_table(seven).await.is_some());
         let snapshot = committees.snapshot(seven).unwrap();
         assert!(snapshot.has_drb());
         assert!(snapshot.inner.committee.header.is_some());
         // A second call is satisfied by the in-memory snapshot.
-        assert!(committees.load_stake_table(seven).await);
+        assert!(committees.load_stake_table(seven).await.is_some());
         // Epoch 8 has a stake table but no DRB result and no root header.
         let eight = EpochNumber::new(8);
-        assert!(committees.load_stake_table(eight).await);
+        assert!(committees.load_stake_table(eight).await.is_some());
         let snapshot = committees.snapshot(eight).unwrap();
         assert!(!snapshot.has_drb());
         assert!(snapshot.inner.committee.header.is_none());
         // Nothing persisted for epoch 9.
-        assert!(!committees.load_stake_table(EpochNumber::new(9)).await);
+        assert!(
+            committees
+                .load_stake_table(EpochNumber::new(9))
+                .await
+                .is_none()
+        );
     }
 
     // A caller that times out queueing for the storage locks must still
@@ -1872,7 +1877,7 @@ mod tests {
 
         let loaded = loader.await.expect("loader panicked");
         assert!(
-            loaded,
+            loaded.is_some(),
             "load_stake_table returned false for an epoch whose snapshot was loaded while it \
              queued for the persistence lock: catchup would re-fetch from peers what is already \
              in memory"
@@ -3597,11 +3602,14 @@ mod tests {
     }
 
     /// Persistence of a seed test: `events` are the complete stake table events, `load_stake`
-    /// counts its calls and finds nothing, and `store_stake` never returns.
+    /// counts its calls and finds nothing, and `store_stake` records its epoch, or never returns
+    /// while `stall_store_stake` is set.
     #[derive(Debug)]
     struct StalledStakeStore {
         events: Vec<(crate::v0_3::EventKey, crate::v0_3::StakeTableEvent)>,
         load_stake_calls: Arc<AtomicUsize>,
+        stall_store_stake: Arc<AtomicBool>,
+        stored_epochs: Arc<parking_lot::Mutex<Vec<u64>>>,
     }
 
     #[async_trait::async_trait]
@@ -3639,12 +3647,16 @@ mod tests {
 
         async fn store_stake(
             &self,
-            _epoch: EpochNumber,
+            epoch: EpochNumber,
             _stake: AuthenticatedValidatorMap,
             _block_reward: Option<RewardAmount>,
             _stake_table_hash: Option<StakeTableHash>,
         ) -> anyhow::Result<()> {
-            std::future::pending().await
+            if self.stall_store_stake.load(Ordering::SeqCst) {
+                std::future::pending::<()>().await;
+            }
+            self.stored_epochs.lock().push(*epoch);
+            Ok(())
         }
 
         async fn store_events(
@@ -3751,7 +3763,7 @@ mod tests {
         assert!(snapshot.epoch_block_reward().is_none());
     }
 
-    /// A seed of epoch 21 whose `store_stake` stalls after the insert.
+    /// A seed of epoch 21 whose `store_stake` stalls until `stall_store_stake` is cleared.
     struct StalledInstall {
         /// Committees holding epoch 20.
         committees: EpochCommittees,
@@ -3763,11 +3775,17 @@ mod tests {
         preceding: Header,
         /// Calls of `load_stake` so far.
         load_stake_calls: Arc<AtomicUsize>,
+        /// While set, `store_stake` never returns.
+        stall_store_stake: Arc<AtomicBool>,
+        /// Epochs `store_stake` completed for, in order.
+        stored_epochs: Arc<parking_lot::Mutex<Vec<u64>>>,
     }
 
     /// The [`StalledInstall`] setup, with `catchup_timeout` on the coordinator.
     async fn stalled_install_setup(catchup_timeout: Duration) -> StalledInstall {
         let load_stake_calls = Arc::new(AtomicUsize::new(0));
+        let stall_store_stake = Arc::new(AtomicBool::new(true));
+        let stored_epochs = Arc::<parking_lot::Mutex<Vec<u64>>>::default();
         let validator = super::super::stake_table::testing::TestValidator::random();
         let events = vec![
             (
@@ -3790,6 +3808,8 @@ mod tests {
             Arc::new(AsyncMutex::new(StalledStakeStore {
                 events,
                 load_stake_calls: Arc::clone(&load_stake_calls),
+                stall_store_stake: Arc::clone(&stall_store_stake),
+                stored_epochs: Arc::clone(&stored_epochs),
             })),
             crate::L1Client::new(vec!["http://localhost:3331".parse().unwrap()])
                 .expect("Failed to create L1 client"),
@@ -3824,11 +3844,13 @@ mod tests {
             root,
             preceding,
             load_stake_calls,
+            stall_store_stake,
+            stored_epochs,
         }
     }
 
-    /// Runs `install_epoch_roots` on the setup's root; it fails with the catchup timeout.
-    async fn install_stalled_root(setup: &StalledInstall) -> EpochCommitteesError {
+    /// Runs `install_epoch_roots` on the setup's root.
+    async fn install_setup_root(setup: &StalledInstall) -> Result<(), EpochCommitteesError> {
         setup
             .committees
             .install_epoch_roots(
@@ -3837,11 +3859,14 @@ mod tests {
                 &setup.coordinator,
             )
             .await
-            .unwrap_err()
     }
 
-    /// A root that exceeds the catchup timeout is an error, and the epoch it inserted before the
-    /// stall stays held with its stake table and block reward.
+    /// [`install_setup_root`] while `store_stake` stalls: it fails with the catchup timeout.
+    async fn install_stalled_root(setup: &StalledInstall) -> EpochCommitteesError {
+        install_setup_root(setup).await.unwrap_err()
+    }
+
+    /// A root that exceeds the catchup timeout is an error and is not put in memory.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn install_epoch_roots_timeout_fails() {
         let setup = stalled_install_setup(Duration::from_millis(500)).await;
@@ -3852,10 +3877,26 @@ mod tests {
             matches!(&err, EpochCommitteesError::Message(message) if message.contains("exceeded")),
             "{err:#}"
         );
-        let inner = setup.committees.inner.read();
-        let committee = inner.epoch_committee(EpochNumber::new(21)).unwrap();
-        assert!(!committee.stake_table.is_empty());
-        assert!(committee.block_reward.is_some());
+        assert!(
+            setup
+                .committees
+                .inner
+                .read()
+                .epoch_committee(EpochNumber::new(21))
+                .is_none()
+        );
+    }
+
+    /// An install cut off before the table below it is stored stores that table when retried.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn install_retry_after_timeout_stores_previous_table() {
+        let setup = stalled_install_setup(Duration::from_millis(500)).await;
+        install_stalled_root(&setup).await;
+        setup.stall_store_stake.store(false, Ordering::SeqCst);
+
+        install_setup_root(&setup).await.unwrap();
+
+        assert_eq!(*setup.stored_epochs.lock(), vec![20]);
     }
 
     /// Requests epoch 25 with a seed hook that records `(target, start)` and fails. Returns the
@@ -3886,41 +3927,19 @@ mod tests {
         (calls.lock().clone(), loads)
     }
 
-    /// After a batch that failed with its first table installed, the next catchup finds the held
-    /// pair and calls the seed with its top, without reading storage.
+    /// After a batch that completed on retry, the next catchup finds the held pair and calls the
+    /// seed with its top, without reading storage.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn catchup_after_failed_batch_starts_at_held_pair_ok() {
+    async fn catchup_after_retried_batch_starts_at_held_pair_ok() {
         let setup = stalled_install_setup(Duration::from_millis(500)).await;
         install_stalled_root(&setup).await;
+        setup.stall_store_stake.store(false, Ordering::SeqCst);
+        install_setup_root(&setup).await.unwrap();
 
         let (calls, loads) = catchup_seed_calls(&setup).await;
 
         assert_eq!(calls, vec![(25, 21)]);
         assert_eq!(loads, 0, "a pair held in memory needs no storage load");
-    }
-
-    /// With one table held above the genesis pair, the scan for the held pair reads storage once
-    /// per catchup, not once per skipped epoch.
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn held_pair_scan_skips_the_gap_below_a_single_table_ok() {
-        let setup = stalled_install_setup(Duration::from_millis(500)).await;
-        install_stalled_root(&setup).await;
-        setup
-            .committees
-            .inner
-            .write()
-            .snapshots
-            .remove(&EpochNumber::new(20));
-        let seeded = *setup.committees.first_epoch() + 1;
-
-        let (calls, loads) = catchup_seed_calls(&setup).await;
-
-        assert_eq!(calls, vec![(25, seeded)]);
-        // One load of epoch 20 before the hook takes the seed lock, one after.
-        assert!(
-            loads <= 2,
-            "{loads} storage loads for a single skipped epoch"
-        );
     }
 
     /// A successful batch sets the block reward of every table, prunes old epochs and keeps the

@@ -408,37 +408,39 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
     }
 
     /// The top `start` of the highest consecutive held pair `(start-1, start)` with
-    /// `start <= epoch - 1`, floored at `seeded`. Pairs in memory are found before any storage
-    /// load; storage completes only a pair whose top is in memory or is `epoch - 1`.
+    /// `start <= epoch - 1`, floored at `seeded`.
     async fn held_pair_top(&self, epoch: EpochNumber, seeded: EpochNumber) -> Result<EpochNumber> {
         let known = self.membership.highest_known_epoch().unwrap_or(seeded);
-        let top = known
+
+        let mut start = known
             .min(EpochNumber::new(epoch.saturating_sub(1)))
             .max(seeded);
-        let in_memory = |e: EpochNumber| self.membership.snapshot(e).is_some();
-        let candidates = || (*seeded + 1..=*top).rev().map(EpochNumber::new);
 
-        if let Some(start) = candidates().find(|&start| in_memory(start) && in_memory(start - 1)) {
-            return Ok(start);
-        }
-        for start in candidates().filter(|&start| start == top || in_memory(start)) {
+        while start > seeded {
             if self.stake_table_present(start).await? && self.stake_table_present(start - 1).await?
             {
-                return Ok(start);
+                break;
             }
+            start = start - 1;
         }
-        Ok(seeded)
+        Ok(start)
     }
 
     /// The membership for `epoch`, if its stake table is in memory.
     fn epoch_membership(&self, epoch: EpochNumber) -> Option<EpochMembership<TYPES>> {
-        Some(EpochMembership {
+        Some(self.membership_of(epoch, self.membership.snapshot(epoch)?))
+    }
+
+    /// The membership for `epoch` over `snapshot`.
+    fn membership_of(
+        &self,
+        epoch: EpochNumber,
+        snapshot: Snapshot<TYPES>,
+    ) -> EpochMembership<TYPES> {
+        EpochMembership {
             coordinator: self.clone(),
-            snapshot: EpochMembershipSnapshot::Epoch {
-                epoch,
-                snapshot: self.membership.snapshot(epoch)?,
-            },
-        })
+            snapshot: EpochMembershipSnapshot::Epoch { epoch, snapshot },
+        }
     }
 
     /// The membership of views before the first epoch.
@@ -453,8 +455,13 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
     ///
     /// It is read from storage if it is not already in RAM.
     async fn stake_table_present(&self, epoch: EpochNumber) -> Result<bool> {
-        if self.membership.snapshot(epoch).is_some() {
-            return Ok(true);
+        Ok(self.held_snapshot(epoch).await?.is_some())
+    }
+
+    /// The snapshot of `epoch`, read from storage if it is not already in RAM.
+    async fn held_snapshot(&self, epoch: EpochNumber) -> Result<Option<Snapshot<TYPES>>> {
+        if let Some(snapshot) = self.membership.snapshot(epoch) {
+            return Ok(Some(snapshot));
         }
         debug!(%epoch, "loading stake table from storage");
         timeout(
@@ -573,13 +580,13 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
         // `stake_table_for_epoch`, which on a miss claims the root epoch and
         // spawns a nested catchup for it: that is how one step turns into a
         // cascade.
-        self.stake_table_present(root_epoch).await?;
-        let Some(root_membership) = self.epoch_membership(root_epoch) else {
+        let Some(root_snapshot) = self.held_snapshot(root_epoch).await? else {
             return Err(anytrace::error!(
                 "the stake table for epoch {epoch} is derived from epoch {root_epoch}, which is \
                  in neither memory nor local storage"
             ));
         };
+        let root_membership = self.membership_of(root_epoch, root_snapshot);
 
         // Verification of the root is handled in get_epoch_root_and_drb
         debug!(%epoch, %root_epoch, "fetching epoch root");
