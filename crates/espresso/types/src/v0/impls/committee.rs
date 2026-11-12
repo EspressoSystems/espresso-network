@@ -3348,13 +3348,23 @@ mod tests {
         });
         let err = task.await.expect_err("the hash mismatch panics");
         assert!(err.is_panic(), "task failed without a panic: {err:?}");
+        let payload = err.into_panic();
+        let message = payload
+            .downcast_ref::<String>()
+            .map(String::as_str)
+            .or_else(|| payload.downcast_ref::<&str>().copied())
+            .expect("panic payload is a string");
+        assert!(
+            message.contains("next_stake_table_hash"),
+            "unexpected panic message: {message}"
+        );
 
         let inner = committees.inner.read();
-        let epoch = inner
+        let committee = inner
             .epoch_committee(EpochNumber::new(3))
             .expect("prefilled committee stays");
         assert!(
-            epoch.header.is_none(),
+            committee.header.is_none(),
             "the mismatching root replaced the committee"
         );
         let held: Vec<_> = inner.all_validators.keys().copied().collect();
