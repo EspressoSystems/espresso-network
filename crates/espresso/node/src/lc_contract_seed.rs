@@ -139,8 +139,8 @@ impl<P: SequencerPersistence> LcContractSeed<P> {
         let heights = window.root_heights(epoch_height).collect();
         let requests = self.requests.get().and_then(Weak::upgrade);
         let sources = Sources::new(requests.as_ref(), &self.state_peers, self.http_delay);
-        let (preceding, roots) = fetch_headers(&sources, &lc, window.preceding_root, heights)
-            .await?;
+        let (preceding, roots) =
+            fetch_headers(&sources, &lc, window.preceding_root, heights).await?;
         coordinator
             .membership()
             .install_epoch_roots(preceding, roots, &coordinator)
