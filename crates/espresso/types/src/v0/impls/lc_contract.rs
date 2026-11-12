@@ -49,6 +49,13 @@ impl LcContractFinalizedState {
         EpochNumber::new(seed_epoch.saturating_sub(3).max(*start + 1).max(3))
     }
 
+    /// Whether a seed is needed: `seed_epoch > start + 1` and `target >= first_installed + 2`.
+    /// The DRB of `target` needs `ST(target-1)` and `ST(target-2)`. Pure.
+    pub fn seeds_target(&self, epoch_height: u64, target: EpochNumber, start: EpochNumber) -> bool {
+        let first_installed = self.first_installed_epoch(epoch_height, start);
+        self.seed_epoch(epoch_height) > start + 1 && target >= first_installed + 2
+    }
+
     /// Heights `root(e-2)` defining `ST(e)` for `e` in `first_installed_epoch ..= E*+1`, ascending.
     /// Every height is positive and below `F`. Pure.
     pub fn proven_root_heights(&self, epoch_height: u64, start: EpochNumber) -> Vec<u64> {
@@ -211,6 +218,37 @@ mod tests {
         assert_eq!(
             lc.preceding_root_height(EPOCH_HEIGHT, start),
             expected_preceding
+        );
+    }
+
+    #[rstest]
+    // The seed epoch is at most `start + 1`.
+    #[case(4, 9, 3, false)]
+    #[case(3, 3, 2, false)]
+    // The window is `ST(7) ..= ST(11)`: its two lowest tables lack `ST(target-2)`.
+    #[case(10, 6, 2, false)]
+    #[case(10, 7, 2, false)]
+    #[case(10, 8, 2, false)]
+    #[case(10, 9, 2, true)]
+    #[case(10, 10, 2, true)]
+    #[case(10, 15, 2, true)]
+    // The held pair is the seeded genesis pair: the window is `ST(3) ..= ST(7)`.
+    #[case(6, 4, 2, false)]
+    #[case(6, 5, 2, true)]
+    #[case(4, 4, 2, false)]
+    #[case(4, 5, 2, true)]
+    fn seeds_target_cases(
+        #[case] seed_epoch: u64,
+        #[case] target: u64,
+        #[case] start: u64,
+        #[case] expected: bool,
+    ) {
+        // The last block of `seed_epoch`.
+        let lc = finalized_state(seed_epoch * 10);
+
+        assert_eq!(
+            lc.seeds_target(10, EpochNumber::new(target), EpochNumber::new(start)),
+            expected
         );
     }
 

@@ -6,7 +6,7 @@ use std::{
     time::Duration,
 };
 
-use anyhow::{Context, anyhow, bail, ensure};
+use anyhow::{Context, anyhow, bail};
 use espresso_types::{
     Header, LcContractFinalizedState, LcContractReader, SeqTypes, traits::SequencerPersistence,
 };
@@ -109,17 +109,14 @@ impl<P: SequencerPersistence> LcContractSeed<P> {
                 "lc contract seed"
             );
         };
-        match seed_decision(&lc, epoch_height, target, start) {
-            SeedDecision::NotNeeded => {
-                log("not needed");
-                return Ok(start);
-            },
-            SeedDecision::Seed => {},
+        if !lc.seeds_target(epoch_height, target, start) {
+            log("not needed");
+            return Ok(start);
         }
 
         let SeedRoots { preceding, roots } = tokio::time::timeout(
             REQUEST_TIMEOUT,
-            fetch_seed_roots(&self.sources, &lc, epoch_height, start),
+            SeedRoots::fetch(&self.sources, &lc, epoch_height, start),
         )
         .await
         .map_err(|_| {
@@ -146,33 +143,6 @@ impl<P: SequencerPersistence> LcContractSeed<P> {
     }
 }
 
-/// What a seed attempt does for `catchup(target)` with held pair top `start`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum SeedDecision {
-    /// The seed epoch is at most `start + 1`, or the seeded window cannot serve the target: the
-    /// walk runs unchanged.
-    NotNeeded,
-    /// Install the window of the seed epoch.
-    Seed,
-}
-
-/// `NotNeeded` if `seed_epoch <= start + 1` or `target < first_installed + 2`, else `Seed`. The DRB
-/// of the target needs `ST(target-1)` and `ST(target-2)`, which the window holds from
-/// `first_installed + 2`; below that the walk serves the target. Pure.
-fn seed_decision(
-    lc: &LcContractFinalizedState,
-    epoch_height: u64,
-    target: EpochNumber,
-    start: EpochNumber,
-) -> SeedDecision {
-    let first_installed = lc.first_installed_epoch(epoch_height, start);
-    if lc.seed_epoch(epoch_height) <= start + 1 || target < first_installed + 2 {
-        SeedDecision::NotNeeded
-    } else {
-        SeedDecision::Seed
-    }
-}
-
 /// The headers a seed installs and the root below them, proven against the block Merkle root of
 /// the header at `F`.
 #[cfg_attr(test, derive(Debug))]
@@ -183,55 +153,41 @@ struct SeedRoots {
     roots: Vec<Header>,
 }
 
-/// The `SeedRoots` of `lc` above `start`, each proven against the header at `F` that
-/// `lc.verify_header` accepted.
-async fn fetch_seed_roots(
-    source: &impl LcContractSeedSource,
-    lc: &LcContractFinalizedState,
-    epoch_height: u64,
-    start: EpochNumber,
-) -> anyhow::Result<SeedRoots> {
-    let checked_lc = lc.clone();
-    let lc_header = source
-        .header_at(lc.height, move |header: &Header| {
-            checked_lc.verify_header(header)
-        })
-        .await?;
-    let preceding = lc.preceding_root_height(epoch_height, start);
-    let heights = preceding
-        .into_iter()
-        .chain(lc.proven_root_heights(epoch_height, start));
-    let mut headers: Vec<Header> = stream::iter(heights)
-        .map(|height| {
-            let lc_header = lc_header.clone();
-            source.proven_header(lc.height, height, move |proof| {
-                verify_header_proof(&lc_header, proof, height)
+impl SeedRoots {
+    /// The `SeedRoots` of `lc` above `start`, each proven against the header at `F` that
+    /// `lc.verify_header` accepted.
+    async fn fetch(
+        source: &impl LcContractSeedSource,
+        lc: &LcContractFinalizedState,
+        epoch_height: u64,
+        start: EpochNumber,
+    ) -> anyhow::Result<Self> {
+        let checked_lc = lc.clone();
+        let lc_header = source
+            .header_at(lc.height, move |header: &Header| {
+                checked_lc.verify_header(header)
             })
+            .await?;
+        let preceding = lc.preceding_root_height(epoch_height, start);
+        let heights = preceding
+            .into_iter()
+            .chain(lc.proven_root_heights(epoch_height, start));
+        let mut headers: Vec<Header> = stream::iter(heights)
+            .map(|height| {
+                let root = lc_header.block_merkle_tree_root();
+                source.proven_header(lc.height, height, move |proof| {
+                    proof.verify_at_height(root, height)
+                })
+            })
+            .buffered(MAX_CONCURRENT_REQUESTS)
+            .try_collect()
+            .await?;
+        let preceding = preceding.map(|_| headers.remove(0));
+        Ok(Self {
+            preceding,
+            roots: headers,
         })
-        .buffered(MAX_CONCURRENT_REQUESTS)
-        .try_collect()
-        .await?;
-    let preceding = preceding.map(|_| headers.remove(0));
-    Ok(SeedRoots {
-        preceding,
-        roots: headers,
-    })
-}
-
-/// The header at `expected_height`, if `proof` holds against the block Merkle root of
-/// `root_header`. `HeaderProof::verify` does not check the height; this does. Pure.
-fn verify_header_proof(
-    root_header: &Header,
-    proof: HeaderProof,
-    expected_height: u64,
-) -> anyhow::Result<Header> {
-    let header = proof.verify(root_header.block_merkle_tree_root())?;
-    ensure!(
-        header.height() == expected_height,
-        "header proof is for height {}, expected {expected_height}",
-        header.height()
-    );
-    Ok(header)
+    }
 }
 
 /// Where the seed reads headers; every answer goes through the caller's `check`. The returned
@@ -404,39 +360,6 @@ pub(crate) struct FallbackSeedSource<Primary, Fallback> {
     http_delay: Duration,
 }
 
-/// The first `Ok` of `primary` and `fallback`, the latter polled once `primary` errs or `http_delay`
-/// passes (`tokio::select!`, then `futures::future::select`). Spawns nothing; the last error wins.
-async fn race<T>(
-    primary: impl Future<Output = anyhow::Result<T>> + Send,
-    fallback: impl Future<Output = anyhow::Result<T>> + Send,
-    http_delay: Duration,
-) -> anyhow::Result<T> {
-    let mut primary = pin!(primary);
-    tokio::select! {
-        result = primary.as_mut() => match result {
-            Ok(value) => return Ok(value),
-            Err(err) => {
-                tracing::debug!("primary seed source failed: {err:#}");
-                return fallback.await;
-            },
-        },
-        () = tokio::time::sleep(http_delay) => {
-            tracing::debug!(?http_delay, "starting the HTTP side of a seed request");
-        },
-    }
-    match select(primary, pin!(fallback)).await {
-        Either::Left((Ok(value), _)) | Either::Right((Ok(value), _)) => Ok(value),
-        Either::Left((Err(err), rest)) => {
-            tracing::debug!("primary seed source failed: {err:#}");
-            rest.await
-        },
-        Either::Right((Err(err), rest)) => {
-            tracing::debug!("fallback seed source failed: {err:#}");
-            rest.await
-        },
-    }
-}
-
 impl<Primary, Fallback> FallbackSeedSource<Primary, Fallback> {
     /// The primary, or an error while its cell is unset or its owner is gone.
     fn primary(&self) -> anyhow::Result<Arc<Primary>> {
@@ -444,6 +367,40 @@ impl<Primary, Fallback> FallbackSeedSource<Primary, Fallback> {
             .get()
             .and_then(Weak::upgrade)
             .context("the request-response protocol is not started")
+    }
+
+    /// The first `Ok` of `primary` and `fallback`, the latter polled once `primary` errs or
+    /// `http_delay` passes (`tokio::select!`, then `futures::future::select`). Spawns nothing; the
+    /// last error wins.
+    async fn race<T>(
+        primary: impl Future<Output = anyhow::Result<T>> + Send,
+        fallback: impl Future<Output = anyhow::Result<T>> + Send,
+        http_delay: Duration,
+    ) -> anyhow::Result<T> {
+        let mut primary = pin!(primary);
+        tokio::select! {
+            result = primary.as_mut() => match result {
+                Ok(value) => return Ok(value),
+                Err(err) => {
+                    tracing::debug!("primary seed source failed: {err:#}");
+                    return fallback.await;
+                },
+            },
+            () = tokio::time::sleep(http_delay) => {
+                tracing::debug!(?http_delay, "starting the HTTP side of a seed request");
+            },
+        }
+        match select(primary, pin!(fallback)).await {
+            Either::Left((Ok(value), _)) | Either::Right((Ok(value), _)) => Ok(value),
+            Either::Left((Err(err), rest)) => {
+                tracing::debug!("primary seed source failed: {err:#}");
+                rest.await
+            },
+            Either::Right((Err(err), rest)) => {
+                tracing::debug!("fallback seed source failed: {err:#}");
+                rest.await
+            },
+        }
     }
 }
 
@@ -465,7 +422,7 @@ where
         match &self.fallback {
             None => primary.await,
             Some(fallback) => {
-                race(
+                Self::race(
                     primary,
                     fallback.header_at(height, check.clone()),
                     self.http_delay,
@@ -488,7 +445,7 @@ where
         match &self.fallback {
             None => primary.await,
             Some(fallback) => {
-                race(
+                Self::race(
                     primary,
                     fallback.proven_header(root, height, check.clone()),
                     self.http_delay,
@@ -505,7 +462,6 @@ mod tests {
 
     use hotshot_types::{data::ViewNumber, traits::block_contents::BlockHeader};
     use light_client::testing::TestClient;
-    use rstest::rstest;
     use tokio::time::timeout;
 
     use super::*;
@@ -551,7 +507,7 @@ mod tests {
         let client = TestClient::with_epoch_height(EPOCH_HEIGHT);
         let lc = finalized_state(&header(&client, 62).await);
 
-        let roots = fetch_seed_roots(&client, &lc, EPOCH_HEIGHT, epoch(2))
+        let roots = SeedRoots::fetch(&client, &lc, EPOCH_HEIGHT, epoch(2))
             .await
             .unwrap();
 
@@ -565,7 +521,7 @@ mod tests {
         let client = TestClient::with_epoch_height(EPOCH_HEIGHT);
         let lc = finalized_state(&header(&client, 62).await);
 
-        let err = fetch_seed_roots(
+        let err = SeedRoots::fetch(
             &ForgingSource {
                 client,
                 forging: true,
@@ -581,16 +537,6 @@ mod tests {
             format!("{err:#}").contains("block commitment root"),
             "{err:#}"
         );
-    }
-
-    #[tokio::test]
-    async fn header_proof_of_another_height_fails() {
-        let client = TestClient::with_epoch_height(EPOCH_HEIGHT);
-        let root = header(&client, 7).await;
-        let proof = client.header_proof(7, BlockId::Number(3)).await.unwrap();
-
-        verify_header_proof(&root, proof.clone(), 3).unwrap();
-        verify_header_proof(&root, proof, 4).unwrap_err();
     }
 
     /// What a `ScriptedSource` does with a request.
@@ -904,39 +850,5 @@ mod tests {
         let header = source.header_at(7, accept).await.unwrap();
 
         assert_eq!(header.height(), 7);
-    }
-
-    #[rstest]
-    // The seed epoch is at most `start + 1`.
-    #[case(4, 9, 3, SeedDecision::NotNeeded)]
-    #[case(3, 3, 2, SeedDecision::NotNeeded)]
-    // The window is `ST(7) ..= ST(11)`: its two lowest tables lack `ST(target-2)`.
-    #[case(10, 6, 2, SeedDecision::NotNeeded)]
-    #[case(10, 7, 2, SeedDecision::NotNeeded)]
-    #[case(10, 8, 2, SeedDecision::NotNeeded)]
-    #[case(10, 9, 2, SeedDecision::Seed)]
-    #[case(10, 10, 2, SeedDecision::Seed)]
-    #[case(10, 15, 2, SeedDecision::Seed)]
-    // The held pair is the seeded genesis pair: the window is `ST(3) ..= ST(7)`.
-    #[case(6, 4, 2, SeedDecision::NotNeeded)]
-    #[case(6, 5, 2, SeedDecision::Seed)]
-    #[case(4, 4, 2, SeedDecision::NotNeeded)]
-    #[case(4, 5, 2, SeedDecision::Seed)]
-    fn seed_decision_cases(
-        #[case] seed_epoch: u64,
-        #[case] target: u64,
-        #[case] start: u64,
-        #[case] expected: SeedDecision,
-    ) {
-        // The last block of `seed_epoch`.
-        let lc = LcContractFinalizedState {
-            height: seed_epoch * EPOCH_HEIGHT,
-            block_comm_root: Default::default(),
-        };
-
-        assert_eq!(
-            seed_decision(&lc, EPOCH_HEIGHT, epoch(target), epoch(start)),
-            expected
-        );
     }
 }
