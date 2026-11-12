@@ -16,7 +16,11 @@ use futures::{
     stream,
 };
 use hotshot_query_service::node::BlockId;
-use hotshot_types::{data::EpochNumber, epoch_membership::EpochMembershipCoordinator};
+use hotshot_types::{
+    data::EpochNumber,
+    epoch_membership::EpochMembershipCoordinator,
+    traits::metrics::{Counter, Metrics},
+};
 use light_client::client::{Client, QueryServiceClient};
 use url::Url;
 
@@ -44,11 +48,13 @@ pub struct LcContractSeed<P: SequencerPersistence> {
     /// Asked in order after `http_delay`; none, no HTTP.
     state_peers: Vec<QueryServiceClient>,
     http_delay: Duration,
+    /// Seed attempts that installed a window.
+    seeded: Box<dyn Counter>,
 }
 
 impl<P: SequencerPersistence> LcContractSeed<P> {
-    /// A seed without request-response; `state_peers` answer at once then, else after `http_delay`.
-    pub fn new(state_peers: Vec<Url>, http_delay: Duration) -> Self {
+    /// A seed without request-response, so `state_peers` answer at once.
+    pub fn new(state_peers: Vec<Url>, http_delay: Duration, metrics: &dyn Metrics) -> Self {
         Self {
             requests: Weak::new(),
             state_peers: state_peers
@@ -56,16 +62,20 @@ impl<P: SequencerPersistence> LcContractSeed<P> {
                 .map(QueryServiceClient::new)
                 .collect(),
             http_delay,
+            seeded: metrics
+                .subgroup("catchup".into())
+                .create_counter("lc_contract_seeds".into(), None),
         }
     }
 
-    /// Sets the catchup hook of `coordinator` to this seed, asking `requests` first.
-    pub fn install(
-        mut self,
-        coordinator: &EpochMembershipCoordinator<SeqTypes>,
-        requests: &Arc<RequestResponseProtocol<P>>,
-    ) {
+    /// The seed asking `requests` first, and the state peers after `http_delay`.
+    pub fn with_requests(mut self, requests: &Arc<RequestResponseProtocol<P>>) -> Self {
         self.requests = Arc::downgrade(requests);
+        self
+    }
+
+    /// Sets the catchup hook of `coordinator` to this seed.
+    pub fn install(self, coordinator: &EpochMembershipCoordinator<SeqTypes>) {
         let seed = Arc::new(self);
         coordinator.set_catchup_seed(Arc::new(move |target, start, coordinator| {
             let seed = Arc::clone(&seed);
@@ -122,6 +132,7 @@ impl<P: SequencerPersistence> LcContractSeed<P> {
             .install_epoch_roots(preceding, roots, &coordinator)
             .await?;
 
+        self.seeded.add(1);
         log("seeded");
         Ok(seed_epoch + 1)
     }

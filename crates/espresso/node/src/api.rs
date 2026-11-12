@@ -5810,7 +5810,10 @@ mod test {
     ) -> anyhow::Result<()> {
         const NUM_NODES: usize = 5;
         const EPOCH_HEIGHT: u64 = 10;
-        const EPOCHS_TO_FOLLOW: u64 = 4;
+        const EPOCHS_TO_FOLLOW: u64 = 10;
+        /// Inside epoch 8, which starts at height 71.
+        const LC_CONTRACT_HEIGHT: u64 = 72;
+        const EPOCHS_BEFORE_START: u64 = 8;
         const NEW_PROTOCOL: Upgrade = Upgrade::trivial(NEW_PROTOCOL_VERSION);
 
         let network_config = TestConfigBuilder::default()
@@ -5864,9 +5867,23 @@ mod test {
             "node 0 query API did not come up"
         );
 
-        // Let the validators decide the first epoch before the follower bootstraps from them.
+        // The mock LC contract is finalized in epoch 8 while the follower holds only the genesis pair.
         let mut events = network.server.event_stream();
-        wait_for_epochs(&mut events, EPOCH_HEIGHT, 1).await;
+        wait_for_epochs(&mut events, EPOCH_HEIGHT, EPOCHS_BEFORE_START).await;
+        let lc_contract_header: Header = api_client
+            .get(&format!("availability/header/{LC_CONTRACT_HEIGHT}"))
+            .send()
+            .await?;
+        network
+            .cfg
+            .set_lc_contract_finalized_state(
+                network
+                    .contracts
+                    .as_ref()
+                    .expect("the network deploys contracts"),
+                &lc_contract_header,
+            )
+            .await?;
 
         let genesis = follower_genesis(&network.cfg, &genesis_state, NEW_PROTOCOL);
         let params = FollowerParams {
@@ -5919,6 +5936,10 @@ mod test {
         assert!(
             metric_value(&export, "light_client_latest_stake_table_epoch")
                 >= Some(epoch_from_block_number(tip, EPOCH_HEIGHT) as f64),
+            "{export}"
+        );
+        assert!(
+            metric_value(&export, "consensus_catchup_lc_contract_seeds") >= Some(1.0),
             "{export}"
         );
         assert_eq!(

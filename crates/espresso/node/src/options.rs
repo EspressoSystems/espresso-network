@@ -190,9 +190,9 @@ pub struct Options {
     #[clap(long, env = "ESPRESSO_NODE_HTTP_CATCHUP_DELAY", default_value = "2s", value_parser = parse_duration)]
     pub http_catchup_delay: Duration,
 
-    /// Per-step timeout for the follower startup stake-table catchup walk.
+    /// Timeout of the follower's stake-table catchup.
     ///
-    /// Bounds a single `wait_for_stake_table` call during `bootstrap_epoch_window`. The
+    /// Bounds a single `wait_for_stake_table` call while the follower catches up. The
     /// underlying peer leaf fetch is bounded to 3 attempts, so exceeding this means a slow
     /// or unresponsive peer set, not a retry loop. Exceeding it terminates the walk but
     /// does not cancel the catchup task, which is a detached `tokio::spawn` bounded by its

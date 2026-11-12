@@ -8,7 +8,7 @@
 //! default to the very upstreams it verifies. Pin the genesis wherever the upstreams are not
 //! trusted on first start.
 
-use std::{cmp::max, collections::HashMap, ops::Range, sync::Arc, time::Duration};
+use std::{cmp::max, collections::HashMap, sync::Arc, time::Duration};
 
 use ::light_client::{
     LightClient, LightClientMetrics,
@@ -67,8 +67,9 @@ use crate::{
     },
     apply_genesis_overrides,
     context::TaskList,
-    init_node_state, load_or_fetch_network_config,
-    startup_catchup::bootstrap_epoch_window,
+    init_node_state,
+    lc_contract_seed::LcContractSeed,
+    load_or_fetch_network_config,
     state_signature::StateSignatureMemStorage,
 };
 
@@ -267,14 +268,10 @@ where
     .await?;
     let coordinator = node_state.coordinator.clone();
 
-    let current_epoch = bootstrap_epoch_window(
-        &coordinator,
-        epoch_height,
-        params.bootstrap_epoch_catchup_timeout,
-    )
-    .await
-    .context("startup stake-table catchup failed")?;
-    tracing::info!(%current_epoch, "startup catchup complete");
+    if node_state.chain_config.stake_table_contract.is_some() {
+        LcContractSeed::<P>::new(params.upstreams.clone(), Duration::ZERO, &*metrics)
+            .install(&coordinator);
+    }
 
     let (source, light_client): (Arc<dyn ChainSource>, _) = match upstream {
         #[cfg(any(test, feature = "testing"))]
@@ -640,9 +637,9 @@ impl<P: SequencerPersistence> Follower<P> {
                 tip,
                 "skipping ahead; the query service backfills the gap above its pruned height"
             );
-            self.catch_up_skipped_epochs(self.next..from).await?;
             self.next = from;
         }
+        self.require_stake_tables(from).await?;
         for block in self.source.fetch_range(from, tip).await? {
             let height = block.leaf.height();
             ensure!(
@@ -735,38 +732,23 @@ impl<P: SequencerPersistence> Follower<P> {
         Ok(())
     }
 
-    /// Skipping an epoch root skips the stake table it derives, which later roots build on. DRBs
-    /// the skipped transition blocks carried are left to the coordinator, which fetches them on
-    /// demand.
-    async fn catch_up_skipped_epochs(&self, skipped: Range<u64>) -> anyhow::Result<()> {
-        if skipped.is_empty() {
+    /// Holds the stake tables that following from `height` needs: the next epoch's, and the one
+    /// after it once the epoch's root block lies below `height` and derives nothing. Far behind,
+    /// the coordinator seeds them from the LC contract.
+    async fn require_stake_tables(&self, height: u64) -> anyhow::Result<()> {
+        let epoch = epoch_from_block_number(height, self.epoch_height);
+        let root_skipped = root_block_in_epoch(epoch, self.epoch_height) < height;
+        let needed = EpochNumber::new(epoch + 1 + u64::from(root_skipped));
+        if self.has_stake_table(needed) {
             return Ok(());
         }
-        let first_epoch = self.coordinator.membership().first_epoch();
-        let first = max(
-            epoch_from_block_number(skipped.start, self.epoch_height),
-            first_epoch.u64(),
-        );
-        let last = epoch_from_block_number(skipped.end - 1, self.epoch_height);
-        let missing = (first..=last).any(|epoch| {
-            skipped.contains(&root_block_in_epoch(epoch, self.epoch_height))
-                && !self.has_stake_table(EpochNumber::new(epoch + 2))
-        });
-        if !missing {
-            return Ok(());
-        }
-        tracing::warn!(
-            ?skipped,
-            "skipped epoch roots whose stake tables are missing; catching up from peers"
-        );
-        let current_epoch = bootstrap_epoch_window(
-            &self.coordinator,
-            self.epoch_height,
+        tokio::time::timeout(
             self.bootstrap_epoch_catchup_timeout,
+            self.coordinator.wait_for_stake_table(needed),
         )
         .await
-        .context("stake-table catchup after skipping ahead")?;
-        tracing::info!(%current_epoch, "stake-table catchup complete");
+        .with_context(|| format!("catching up to the stake table of epoch {needed} timed out"))?
+        .map_err(|err| anyhow!("catching up to the stake table of epoch {needed}: {err}"))?;
         Ok(())
     }
 

@@ -3,7 +3,6 @@ mod lc_contract_seed;
 mod message_compat_tests;
 mod proposal_fetcher;
 mod request_response;
-mod startup_catchup;
 
 pub mod api;
 pub mod catchup;
@@ -310,6 +309,7 @@ where
     let lc_contract_seed = LcContractSeed::new(
         catchup_params.state_peers.clone(),
         catchup_params.http_delay,
+        &*metrics,
     );
 
     let loaded_network_config = load_or_fetch_network_config(
@@ -720,7 +720,7 @@ where
 }
 
 /// Scans the whole L1 contract history when nothing is persisted yet, keeping every
-/// `bootstrap_epoch_window` step bounded to one epoch instead of loading that scan onto
+/// catchup step bounded to one epoch instead of loading that scan onto
 /// the first step, which silently downgrades the node to a stale epoch window when it
 /// exceeds its timeout. Untimed: an unreachable L1 panics after
 /// `l1_events_max_retry_duration`.
@@ -1688,7 +1688,7 @@ pub mod testing {
                 anchor_view,
                 storage,
                 catchup_providers,
-                LcContractSeed::new(vec![], Duration::ZERO),
+                LcContractSeed::new(vec![], Duration::ZERO, &NoMetrics),
                 persistence,
                 coordinator_network,
                 self.state_relay_url.clone(),

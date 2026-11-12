@@ -314,7 +314,9 @@ where
             &request_response_protocol,
         )));
         if instance_state.chain_config.stake_table_contract.is_some() {
-            lc_contract_seed.install(&membership_coordinator, &request_response_protocol);
+            lc_contract_seed
+                .with_requests(&request_response_protocol)
+                .install(&membership_coordinator);
         }
 
         // Create the external event handler
