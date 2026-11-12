@@ -12,3 +12,4 @@ by its post-start catchup, over request-response, after about one view timeout.
 - `--state-peers` is optional for validators.
 - `--bootstrap-epoch-catchup-timeout` is ignored for validators.
 - Followers are unchanged: they still walk epochs at startup.
+- A stake table hash mismatch stops the node; restart it after fixing the L1 RPC provider.

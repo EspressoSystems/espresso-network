@@ -3579,6 +3579,7 @@ mod test {
             storage::{StorageConnectionType, UpdateAvailabilityStorage},
         },
         explorer::TransactionSummariesResponse,
+        metrics::PrometheusMetrics,
         node::{SyncStatus, SyncStatusQueryData},
         types::HeightIndexed,
     };
@@ -7108,6 +7109,7 @@ mod test {
             .await
             .unwrap();
 
+        let metrics = PrometheusMetrics::default();
         // Dropping it stops the temporary database, so it lives to the end of the test.
         let fresh_db = if fresh_storage {
             Some(D::create_storage().await)
@@ -7126,7 +7128,7 @@ mod test {
                 options,
                 None::<NullStateCatchup>,
                 None,
-                &NoMetrics,
+                &metrics,
                 test_helpers::STAKE_TABLE_CAPACITY_FOR_TEST,
                 NullEventConsumer,
                 TEST_UPGRADE,
@@ -7158,6 +7160,12 @@ mod test {
         .await
         .expect("the joined node did not decide with the network");
 
+        let export = metrics.export().unwrap();
+        assert!(
+            metric_value(&export, "catchup_lc_contract_seeds") >= Some(1.0),
+            "no seed ran:\n{export}"
+        );
+
         let coordinator = node.node_state().coordinator;
         // A fresh node's whole window has rewards; a stale one holds older epochs it already had.
         let first_rewarded = if fresh_storage {
@@ -7176,10 +7184,10 @@ mod test {
             );
         }
 
-        // A fresh node holds the seeded window only: the epochs between its genesis pair and the
-        // window are not walked until something asks for one, and then the walk leaves the
-        // window held.
-        let skipped = EpochNumber::new(seed_epoch.saturating_sub(4));
+        // A fresh node holds the seeded window only, which starts at most 4 epochs below its top:
+        // the epochs between its genesis pair and the window are not walked until something asks
+        // for one, and then the walk leaves the window held.
+        let skipped = EpochNumber::new(seed_epoch.saturating_sub(5));
         if fresh_storage && *skipped > 2 {
             assert!(
                 coordinator.membership().snapshot(skipped).is_none(),

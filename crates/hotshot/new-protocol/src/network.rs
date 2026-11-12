@@ -203,11 +203,6 @@ impl<T: NodeType> Cliquenet<T> {
         Ok(())
     }
 
-    /// Keys of the peers the network holds.
-    pub fn peer_keys(&self) -> HashSet<T::SignatureKey> {
-        self.inner.shared.read().peers.keys().cloned().collect()
-    }
-
     pub fn add_peers(
         &mut self,
         r: Role,
@@ -411,6 +406,11 @@ impl<T: NodeType> Cliquenet<T> {
 }
 
 impl<T: NodeType> Sender<T> {
+    /// Keys of the peers the network holds now.
+    pub fn peer_keys(&self) -> HashSet<T::SignatureKey> {
+        self.shared.read().peers.keys().cloned().collect()
+    }
+
     pub fn unicast(
         &self,
         v: ViewNumber,

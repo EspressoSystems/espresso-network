@@ -7,10 +7,15 @@ use std::{
 
 use anyhow::{Context, anyhow, bail};
 use espresso_types::{
-    ChainConfig, Header, LcContractFinalizedState, SeqTypes, traits::SequencerPersistence,
+    BlockMerkleCommitment, ChainConfig, Header, LcContractFinalizedState, SeqTypes,
+    traits::SequencerPersistence,
 };
 use futures::{FutureExt, StreamExt, TryStreamExt, stream};
-use hotshot_types::{data::EpochNumber, epoch_membership::EpochMembershipCoordinator};
+use hotshot_types::{
+    data::EpochNumber,
+    epoch_membership::EpochMembershipCoordinator,
+    traits::metrics::{Counter, Metrics},
+};
 
 use crate::request_response::{
     RequestResponseProtocol,
@@ -32,17 +37,22 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 /// block reward.
 #[derive(Clone)]
 pub struct LcContractSeed<P: SequencerPersistence> {
-    /// Set by `bind_requests` once consensus exists; weak, so the seed owns no path to the
-    /// coordinator that the protocol holds.
+    /// Set by `bind_requests` once consensus exists; weak, as `SequencerContext` owns the protocol.
     requests: Arc<OnceLock<Weak<RequestResponseProtocol<P>>>>,
+    /// Seed attempts that installed a window.
+    seeded: Arc<dyn Counter>,
 }
 
 impl<P: SequencerPersistence> LcContractSeed<P> {
     /// A seed without a request-response protocol, `None` when `chain_config` names no stake
     /// table contract to read the LC contract from.
-    pub fn new(chain_config: &ChainConfig) -> Option<Self> {
+    pub fn new(chain_config: &ChainConfig, metrics: &dyn Metrics) -> Option<Self> {
         chain_config.stake_table_contract.map(|_| Self {
             requests: Arc::default(),
+            seeded: metrics
+                .subgroup("catchup".into())
+                .create_counter("lc_contract_seeds".into(), None)
+                .into(),
         })
     }
 
@@ -64,8 +74,8 @@ impl<P: SequencerPersistence> LcContractSeed<P> {
     }
 
     /// One seed attempt for `catchup(target)` with held pair top `start`: the walk start, `start`
-    /// when not needed, `E* + 1` when seeded. The L1 read, the peer requests and each install are
-    /// bounded.
+    /// when not needed, the top installed epoch `min(E*+1, target)` when seeded. The L1 read, the
+    /// peer requests and each install are bounded.
     async fn run(
         &self,
         target: EpochNumber,
@@ -97,9 +107,16 @@ impl<P: SequencerPersistence> LcContractSeed<P> {
             return Ok(start);
         }
 
+        let preceding_height = lc.preceding_root_height(
+            epoch_height,
+            coordinator.membership().first_epoch(),
+            start,
+            target,
+        );
+        let heights = lc.proven_root_heights(epoch_height, start, target);
         let (preceding, roots) = tokio::time::timeout(
             REQUEST_TIMEOUT,
-            self.fetch_headers(&lc, epoch_height, start),
+            self.fetch_headers(&lc, preceding_height, heights),
         )
         .await
         .map_err(|_| {
@@ -112,19 +129,20 @@ impl<P: SequencerPersistence> LcContractSeed<P> {
             .install_epoch_roots(preceding, roots, &coordinator)
             .await?;
 
+        self.seeded.add(1);
         log("seeded");
-        Ok(seed_epoch + 1)
+        Ok(lc.top_installed_epoch(epoch_height, target))
     }
 
-    /// The header at `F`, accepted by `lc.verify_header`, then the headers it proves: the
-    /// preceding root (`lc.preceding_root_height`, the block time source of the lowest installed
-    /// reward) and `lc.proven_root_heights`, ascending. A rejected answer is skipped and the request
-    /// keeps waiting (`request_indefinitely`).
+    /// The block Merkle root of the header at `F`, accepted by `lc.verify_header`, then the headers
+    /// it proves: the preceding root (the block time source of the lowest installed reward) and
+    /// `proven_heights`, ascending. A rejected answer is skipped and the request keeps waiting
+    /// (`request_indefinitely`).
     async fn fetch_headers(
         &self,
         lc: &LcContractFinalizedState,
-        epoch_height: u64,
-        start: EpochNumber,
+        preceding_height: Option<u64>,
+        proven_heights: Vec<u64>,
     ) -> anyhow::Result<(Option<Header>, Vec<Header>)> {
         let protocol = self
             .requests
@@ -132,7 +150,7 @@ impl<P: SequencerPersistence> LcContractSeed<P> {
             .and_then(Weak::upgrade)
             .context("the request-response protocol is not available")?;
         let checked_lc = lc.clone();
-        let lc_header = protocol
+        let root: BlockMerkleCommitment = protocol
             .request_indefinitely(
                 Request::Leaf(lc.height),
                 move |_: &Request, response: Response| {
@@ -141,13 +159,8 @@ impl<P: SequencerPersistence> LcContractSeed<P> {
                         let Response::Leaf(leaves) = response else {
                             bail!("expected leaf response");
                         };
-                        let header = leaves
-                            .first()
-                            .context("empty leaf chain")?
-                            .block_header()
-                            .clone();
-                        lc.verify_header(&header)?;
-                        Ok(header)
+                        let header = leaves.first().context("empty leaf chain")?.block_header();
+                        lc.verify_header(header)
                     }
                     .map(|result| {
                         result.inspect_err(|err| tracing::debug!("seed header rejected: {err:#}"))
@@ -156,11 +169,7 @@ impl<P: SequencerPersistence> LcContractSeed<P> {
             )
             .await?;
 
-        let root = lc_header.block_merkle_tree_root();
-        let preceding = lc.preceding_root_height(epoch_height, start);
-        let heights = preceding
-            .into_iter()
-            .chain(lc.proven_root_heights(epoch_height, start));
+        let heights = preceding_height.into_iter().chain(proven_heights);
         let mut headers: Vec<Header> = stream::iter(heights)
             .map(|height| {
                 let protocol = Arc::clone(&protocol);
@@ -192,7 +201,7 @@ impl<P: SequencerPersistence> LcContractSeed<P> {
             .buffered(MAX_CONCURRENT_REQUESTS)
             .try_collect()
             .await?;
-        let preceding = preceding.map(|_| headers.remove(0));
+        let preceding = preceding_height.map(|_| headers.remove(0));
         Ok((preceding, headers))
     }
 }
