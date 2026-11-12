@@ -673,17 +673,21 @@ impl EpochCommittees {
 
             // Guards the later store of the previous epoch's table: the decided hash must match
             // the table in memory, which catches L1 provider issues. Runs before `epoch` is put
-            // in memory.
+            // in memory. Ends the process only when both hashes are present and differ.
             let decided_hash = block_header.next_stake_table_hash();
-            let actual_hash = inner
+            let held_hash = inner
                 .epoch_committee(previous_epoch)
                 .map(|previous| previous.stake_table_hash);
-            if let Some(actual_hash) = actual_hash
-                && decided_hash.is_some()
-                && decided_hash != actual_hash
-            {
-                drop(inner);
-                end_process_on_hash_mismatch(decided_hash, actual_hash);
+            match (decided_hash, held_hash) {
+                (Some(decided), Some(Some(held))) if decided != held => {
+                    drop(inner);
+                    end_process_on_hash_mismatch(Some(decided), Some(held));
+                },
+                (Some(_), Some(None)) => warn!(
+                    ?previous_epoch,
+                    "stake table of the previous epoch has no stored hash, skipping the comparison"
+                ),
+                _ => {},
             }
 
             inner.put_epoch_committee(epoch, Arc::new(committee));
@@ -3276,7 +3280,7 @@ mod tests {
 
     /// Puts a committee for `epoch` carrying a reward and `hash`, so `add_epoch_root` skips the
     /// L1 fetch.
-    fn put_prefilled(committees: &EpochCommittees, epoch: u64, hash: StakeTableHash) {
+    fn put_prefilled(committees: &EpochCommittees, epoch: u64, hash: Option<StakeTableHash>) {
         let mut inner = committees.inner.write();
         let template = inner
             .epoch_committee(EpochNumber::genesis())
@@ -3284,7 +3288,7 @@ mod tests {
             .clone();
         let prefilled = EpochCommittee {
             block_reward: Some(RewardAmount::default()),
-            stake_table_hash: Some(hash),
+            stake_table_hash: hash,
             header: None,
             eligible_leaders: template.eligible_leaders.clone(),
             stake_table: template.stake_table.clone(),
@@ -3314,8 +3318,8 @@ mod tests {
 
     fn mismatch_setup() -> (EpochCommittees, EpochMembershipCoordinator<SeqTypes>) {
         let committees = build_committees(4);
-        put_prefilled(&committees, 2, StakeTableState::default().commit());
-        put_prefilled(&committees, 3, StakeTableState::default().commit());
+        put_prefilled(&committees, 2, Some(StakeTableState::default().commit()));
+        put_prefilled(&committees, 3, Some(StakeTableState::default().commit()));
         let coordinator = EpochMembershipCoordinator::<SeqTypes>::new(
             committees.clone(),
             *committees.epoch_height(),
@@ -3333,6 +3337,23 @@ mod tests {
     async fn add_epoch_root_matching_hash_ok() {
         let (committees, coordinator) = mismatch_setup();
         let header = header_deciding(95, StakeTableState::default().commit()).await;
+
+        committees
+            .add_epoch_root(header, &coordinator)
+            .await
+            .unwrap();
+
+        let inner = committees.inner.read();
+        let committee = inner.epoch_committee(EpochNumber::new(3)).unwrap();
+        assert!(committee.header.is_some());
+    }
+
+    /// A held table without a hash is not compared: the root is installed and nothing aborts.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn add_epoch_root_skips_comparison_without_held_hash() {
+        let (committees, coordinator) = mismatch_setup();
+        put_prefilled(&committees, 2, None);
+        let header = header_deciding(95, other_hash()).await;
 
         committees
             .add_epoch_root(header, &coordinator)
