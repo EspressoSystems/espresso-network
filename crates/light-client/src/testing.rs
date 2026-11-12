@@ -19,12 +19,15 @@ use espresso_types::{
     StakeTableHash, StakeTableState, Transaction,
     v0_3::{AuthenticatedValidator, RegisteredValidator, StakeTableEvent},
 };
-use hotshot_contract_adapter::sol_types::StakeTableV3::{Delegated, ValidatorRegistered};
+use hotshot_contract_adapter::sol_types::StakeTableV3::{
+    Delegated, P2pAddrUpdated, ValidatorRegistered, X25519KeyUpdated,
+};
 use hotshot_query_service_types::{
     availability::{LeafHash, LeafId, LeafQueryData},
     node::{BlockHash, BlockId},
 };
 use hotshot_types::{
+    addr::NetAddr,
     data::{
         EpochNumber, QuorumProposal2, QuorumProposalWrapper, VidCommitment, VidCommon, ViewNumber,
         vid_commitment,
@@ -43,6 +46,7 @@ use hotshot_types::{
     utils::{epoch_from_block_number, is_epoch_transition, is_ge_epoch_root},
     vid::avidm::init_avidm_param,
     vote::Certificate as _,
+    x25519,
 };
 use jf_merkle_tree_compat::{
     AppendableMerkleTreeScheme, MerkleTreeScheme, prelude::SHA3MerkleTree,
@@ -481,6 +485,12 @@ struct InnerTestClient {
     fail_payload_proof_ranges: bool,
     /// If set, fail header proofs, like a server that pruned the root's merklized state.
     fail_header_proofs: bool,
+    /// Epochs whose registrations are served in reverse order, as a malicious server can
+    /// without changing the stake table hash.
+    reordered_registrations: HashSet<u64>,
+    /// Whether validators register a network key and address, as selection asks for from
+    /// `NEW_PROTOCOL_VERSION` on.
+    network_info: bool,
 }
 
 impl InnerTestClient {
@@ -505,16 +515,25 @@ impl InnerTestClient {
                 self.quorum.len() as u64,
             );
             let stake = U256::from(self.quorum.len() + 1) * U256::from(1_000_000_000u128);
+            // Accounts increase in registration order, so the committee is listed alike
+            // before and from `CANONICAL_STAKE_TABLE_ORDER_VERSION` on.
+            let index = (self.quorum.len() as u64 + 1).to_be_bytes();
+            let mut x25519_key = [1u8; 32];
+            x25519_key[..8].copy_from_slice(&index);
             let validator: AuthenticatedValidator<PubKey> = RegisteredValidator {
-                account: Address::random(),
+                account: Address::left_padding_from(&index),
                 stake_table_key: Some(stake_table_key),
                 state_ver_key: Some(state_ver_key),
                 stake,
                 commission: 1,
                 delegators: [(Address::random(), stake)].into_iter().collect(),
                 authenticated: true,
-                x25519_key: None,
-                p2p_addr: None,
+                x25519_key: self
+                    .network_info
+                    .then(|| x25519::PublicKey::try_from(x25519_key.as_slice()).unwrap()),
+                p2p_addr: self
+                    .network_info
+                    .then(|| "127.0.0.1:9000".parse::<NetAddr>().unwrap()),
             }
             .try_into()
             .expect("authenticated validator");
@@ -529,10 +548,12 @@ impl InnerTestClient {
         let mut validators = RegisteredValidatorMap::default();
         let mut used_bls_keys = HashSet::default();
         let mut used_schnorr_keys = HashSet::default();
+        let mut used_x25519_keys = HashSet::default();
         for (_, validator) in quorum {
             validators.insert(validator.account, validator.clone().into());
             used_bls_keys.insert(*validator.stake_table_key());
             used_schnorr_keys.insert(validator.state_ver_key().clone());
+            used_x25519_keys.extend(validator.x25519_key);
         }
 
         let state = StakeTableState::new(
@@ -540,7 +561,7 @@ impl InnerTestClient {
             Default::default(),
             used_bls_keys,
             used_schnorr_keys,
-            HashSet::default(),
+            used_x25519_keys,
         );
         state.commit()
     }
@@ -943,6 +964,34 @@ impl TestClient {
         inner.fail_header_proofs = true;
     }
 
+    /// Have validators register a network key and address. Call it before anything asks
+    /// for a quorum.
+    pub async fn register_network_info(&self) {
+        self.inner.lock().await.network_info = true;
+    }
+
+    /// Serve the registrations of `epoch` in reverse order.
+    ///
+    /// Only the first epoch with a dynamic stake table has more than one registration, so
+    /// only for it does this change anything. The stake table hash covers no order, so the
+    /// reordered events still match it.
+    pub async fn reorder_registrations(&self, epoch: EpochNumber) {
+        self.inner
+            .lock()
+            .await
+            .reordered_registrations
+            .insert(*epoch);
+    }
+
+    /// Serve the registrations of `epoch` in their order again.
+    pub async fn restore_registration_order(&self, epoch: EpochNumber) {
+        self.inner
+            .lock()
+            .await
+            .reordered_registrations
+            .remove(&*epoch);
+    }
+
     /// Drop the `Certificate2` finalizing the leaf at `height`, like a server that never stored it.
     pub async fn forget_cert2(&self, height: usize) {
         let mut inner = self.inner.lock().await;
@@ -1136,7 +1185,16 @@ impl Client for TestClient {
         if *epoch == inner.first_epoch_with_dynamic_stake_table {
             // Generate events such that the first dynamic stake table is the same as the static
             // stake table we started with.
-            for (_, validator) in inner.quorum_for_epoch(*epoch) {
+            let reorder = inner.reordered_registrations.contains(&*epoch);
+            let mut validators: Vec<_> = inner
+                .quorum_for_epoch(*epoch)
+                .iter()
+                .map(|(_, validator)| validator.clone())
+                .collect();
+            if reorder {
+                validators.reverse();
+            }
+            for validator in &validators {
                 register_validator_events(&mut events, validator);
             }
         } else if *epoch > inner.first_epoch_with_dynamic_stake_table {
@@ -1276,7 +1334,8 @@ impl Client for TestClient {
     }
 }
 
-fn register_validator_events(
+/// The events that register `validator`, delegate its stake and set its network keys.
+pub fn register_validator_events(
     events: &mut Vec<StakeTableEvent>,
     validator: &AuthenticatedValidator<PubKey>,
 ) {
@@ -1291,6 +1350,18 @@ fn register_validator_events(
             delegator,
             validator: validator.account,
             amount,
+        }));
+    }
+    if let Some(key) = validator.x25519_key {
+        events.push(StakeTableEvent::X25519KeyUpdate(X25519KeyUpdated {
+            validator: validator.account,
+            x25519Key: key.as_bytes().into(),
+        }));
+    }
+    if let Some(addr) = &validator.p2p_addr {
+        events.push(StakeTableEvent::P2pAddrUpdate(P2pAddrUpdated {
+            validator: validator.account,
+            p2pAddr: addr.to_string(),
         }));
     }
 }

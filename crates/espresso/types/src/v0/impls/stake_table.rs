@@ -63,6 +63,7 @@ use tokio::time::sleep;
 #[cfg(feature = "node")]
 use tracing::Instrument;
 use vbs::version::Version;
+use versions::CANONICAL_STAKE_TABLE_ORDER_VERSION;
 
 #[cfg(feature = "node")]
 use super::L1Client;
@@ -991,13 +992,17 @@ pub fn validators_from_l1_events<I: Iterator<Item = StakeTableEvent>>(
 /// Filters out unauthenticated validator candidates, those without stake, and selects
 /// the top [`MAX_VALIDATORS`] staked validators.
 /// Returns a new AuthenticatedValidatorMap containing only the selected validators.
+///
+/// From [`CANONICAL_STAKE_TABLE_ORDER_VERSION`] on, the result depends only on the
+/// candidates' contents, not on their registration order: equal stakes are ranked by
+/// address, and the selected validators are listed by address.
 pub(crate) fn select_active_validator_set(
     candidates: &RegisteredValidatorMap,
     protocol_version: Version,
 ) -> Result<AuthenticatedValidatorMap, StakeTableError> {
     let total_candidates = candidates.len();
 
-    let valid_validators: AuthenticatedValidatorMap = candidates
+    let mut valid_validators: AuthenticatedValidatorMap = candidates
         .iter()
         .filter_map(
             |(address, validator)| match AuthenticatedValidator::try_from(validator) {
@@ -1037,6 +1042,13 @@ pub(crate) fn select_active_validator_set(
     if valid_validators.is_empty() {
         tracing::warn!("Validator selection failed: no validators passed minimum criteria");
         return Err(StakeTableError::NoValidValidators);
+    }
+
+    if protocol_version >= CANONICAL_STAKE_TABLE_ORDER_VERSION {
+        // In address order, the stable sort by stake below ranks equal stakes by
+        // address, and the selected validators are listed by address. Certificate
+        // signers are given by position in that list.
+        valid_validators.sort_unstable_keys();
     }
 
     let maximum_stake = valid_validators.values().map(|v| v.stake).max().unwrap();
@@ -4544,6 +4556,69 @@ mod tests {
 
         let result = select_active_validator_set(&map, NEW_PROTOCOL_VERSION);
         assert_matches!(result, Err(StakeTableError::NoValidValidators));
+    }
+
+    /// A complete validator with `stake`, delegated by a single delegator.
+    fn staked_mock_validator(stake: u64) -> RegisteredValidator<BLSPubKey> {
+        let mut v = complete_mock_validator();
+        v.stake = U256::from(stake);
+        v.delegators = [(Address::random(), v.stake)].into_iter().collect();
+        v
+    }
+
+    /// The candidates, registered in the order given.
+    fn registered(order: &[&RegisteredValidator<BLSPubKey>]) -> RegisteredValidatorMap {
+        order.iter().map(|v| (v.account, (*v).clone())).collect()
+    }
+
+    /// From the canonical order on, the selected validators and the order they are listed in
+    /// depend only on the candidates, not on the order they registered in.
+    #[test]
+    fn test_select_canonical_order_ignores_registration_order() {
+        let validators: Vec<_> = [3, 1, 2, 2, 1]
+            .into_iter()
+            .map(staked_mock_validator)
+            .collect();
+        let forward: Vec<_> = validators.iter().collect();
+        let backward: Vec<_> = validators.iter().rev().collect();
+
+        let select = |order: &[&RegisteredValidator<BLSPubKey>]| {
+            select_active_validator_set(&registered(order), CANONICAL_STAKE_TABLE_ORDER_VERSION)
+                .unwrap()
+                .into_iter()
+                .collect::<Vec<_>>()
+        };
+        let active = select(&forward);
+        assert_eq!(active, select(&backward));
+        assert!(active.is_sorted_by_key(|(address, _)| *address));
+    }
+
+    /// When stakes tie at the cut-off, the validator with the lower address is selected from
+    /// the canonical order on, and the one that registered first before it.
+    #[test]
+    fn test_select_canonical_order_breaks_cutoff_ties_by_address() {
+        let others: Vec<_> = (0..MAX_VALIDATORS - 1)
+            .map(|_| staked_mock_validator(2))
+            .collect();
+        let (low, high) = {
+            let a = staked_mock_validator(1);
+            let b = staked_mock_validator(1);
+            if a.account < b.account {
+                (a, b)
+            } else {
+                (b, a)
+            }
+        };
+        let mut order: Vec<_> = others.iter().collect();
+        order.extend([&high, &low]);
+        let candidates = registered(&order);
+
+        let canonical =
+            select_active_validator_set(&candidates, CANONICAL_STAKE_TABLE_ORDER_VERSION).unwrap();
+        assert!(canonical.contains_key(&low.account) && !canonical.contains_key(&high.account));
+
+        let before = select_active_validator_set(&candidates, NEW_PROTOCOL_VERSION).unwrap();
+        assert!(before.contains_key(&high.account) && !before.contains_key(&low.account));
     }
 
     /// Integration test: a RegisterV3 event with an unparsable p2p address results in
