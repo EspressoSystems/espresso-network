@@ -1,5 +1,5 @@
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, HashSet},
     fmt::{Debug, Display},
     future::Future,
     path::PathBuf,
@@ -26,6 +26,7 @@ use hotshot_new_protocol::{
 use hotshot_orchestrator::client::OrchestratorClient;
 use hotshot_types::{
     HotShotConfig, PeerConfig, ValidatorConfig,
+    addr::NetAddr,
     consensus::ConsensusMetricsValue,
     constants::EXTERNAL_EVENT_CHANNEL_SIZE,
     data::{EpochNumber, Leaf2, ViewNumber},
@@ -40,6 +41,7 @@ use hotshot_types::{
         metrics::{Counter, Gauge, Histogram, Metrics},
     },
     upgrade_config::UpgradeConfig,
+    x25519,
 };
 use parking_lot::Mutex;
 use request_response::RequestResponseConfig;
@@ -649,16 +651,21 @@ async fn connect_startup_peers(
             .fetcher()
             .validator_set_at(l1_block, version)
             .await?;
-        let targets = validators
-            .active_validators()
-            .values()
-            .filter(|validator| !held.contains(validator.stake_table_key()))
-            .filter_map(|validator| {
-                let info = (validator.x25519_key?.into(), validator.p2p_addr.clone()?);
-                Some((*validator.stake_table_key(), info))
-            })
-            .collect::<Vec<_>>();
+        let targets = startup_dial_targets(
+            validators.active_validators().values().map(|validator| {
+                (
+                    *validator.stake_table_key(),
+                    validator.x25519_key,
+                    validator.p2p_addr.clone(),
+                )
+            }),
+            &held,
+        );
         let dialed = targets.iter().map(|(key, _)| *key).collect();
+        let targets = targets
+            .into_iter()
+            .map(|(key, (x25519_key, addr))| (key, (x25519_key.into(), addr)))
+            .collect();
         network.add_peers(Role::Active, targets)?;
         anyhow::Ok(dialed)
     };
@@ -677,6 +684,17 @@ async fn connect_startup_peers(
         "startup peers"
     );
     l1_finalized_peers
+}
+
+/// The `(key, (x25519 key, address))` of the `validators` that `held` lacks and that have both.
+fn startup_dial_targets(
+    validators: impl Iterator<Item = (PubKey, Option<x25519::PublicKey>, Option<NetAddr>)>,
+    held: &HashSet<PubKey>,
+) -> Vec<(PubKey, (x25519::PublicKey, NetAddr))> {
+    validators
+        .filter(|(key, ..)| !held.contains(key))
+        .filter_map(|(key, x25519_key, p2p_addr)| Some((key, (x25519_key?, p2p_addr?))))
+        .collect()
 }
 
 async fn seed_membership(
@@ -1008,5 +1026,75 @@ impl TaskList {
 impl Drop for TaskList {
     fn drop(&mut self) {
         self.shut_down()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use hotshot_types::{signature_key::BLSPubKey, traits::signature_key::SignatureKey};
+    use rstest::rstest;
+
+    use super::*;
+
+    fn key(i: u64) -> PubKey {
+        BLSPubKey::generated_from_seed_indexed([0; 32], i).0
+    }
+
+    fn x25519_key() -> Option<x25519::PublicKey> {
+        Some(x25519::Keypair::generate().unwrap().public_key())
+    }
+
+    fn addr() -> Option<NetAddr> {
+        Some("127.0.0.1:9000".parse().unwrap())
+    }
+
+    /// A validator is a dial target when it is not held and has an x25519 key and an address.
+    #[rstest]
+    #[case::complete(false, true, true, true)]
+    #[case::held(true, true, true, false)]
+    #[case::no_x25519_key(false, false, true, false)]
+    #[case::no_address(false, true, false, false)]
+    #[case::held_without_address(true, true, false, false)]
+    fn startup_dial_targets_cases(
+        #[case] held: bool,
+        #[case] has_key: bool,
+        #[case] has_addr: bool,
+        #[case] dialed: bool,
+    ) {
+        let validator = (
+            key(1),
+            has_key.then(x25519_key).flatten(),
+            has_addr.then(addr).flatten(),
+        );
+        let held = if held {
+            HashSet::from([key(1)])
+        } else {
+            HashSet::new()
+        };
+
+        let targets = startup_dial_targets([validator].into_iter(), &held);
+
+        assert_eq!(
+            targets.iter().map(|(key, _)| *key).collect::<Vec<_>>(),
+            if dialed { vec![key(1)] } else { vec![] }
+        );
+    }
+
+    /// Only the validators that qualify remain, in order.
+    #[test]
+    fn startup_dial_targets_keep_the_order_of_the_qualifying_validators() {
+        let validators = [
+            (key(1), x25519_key(), addr()),
+            (key(2), None, addr()),
+            (key(3), x25519_key(), addr()),
+            (key(4), x25519_key(), addr()),
+        ];
+
+        let targets = startup_dial_targets(validators.into_iter(), &HashSet::from([key(3)]));
+
+        assert_eq!(
+            targets.iter().map(|(key, _)| *key).collect::<Vec<_>>(),
+            vec![key(1), key(4)]
+        );
     }
 }

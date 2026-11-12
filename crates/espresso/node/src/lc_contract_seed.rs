@@ -1,6 +1,8 @@
 //! Seeds the post-start epoch catchup from the LC contract.
 
 use std::{
+    fmt::Display,
+    future::Future,
     sync::{Arc, OnceLock, Weak},
     time::Duration,
 };
@@ -25,7 +27,7 @@ use crate::request_response::{
 /// Most requests of one seed in flight; peers answer 4 requests per key at a time.
 const MAX_CONCURRENT_REQUESTS: usize = 3;
 
-/// Bound on the peer requests of one seed: with no answering peer the attempt fails within it.
+/// Bound on each peer request of a seed: with no answering peer the attempt fails within it.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// The LC-contract seed of the catchup, behind `CatchupSeedFn`; steps in
@@ -114,16 +116,7 @@ impl<P: SequencerPersistence> LcContractSeed<P> {
             target,
         );
         let heights = lc.proven_root_heights(epoch_height, start, target);
-        let (preceding, roots) = tokio::time::timeout(
-            REQUEST_TIMEOUT,
-            self.fetch_headers(&lc, preceding_height, heights),
-        )
-        .await
-        .map_err(|_| {
-            anyhow!(
-                "seed requests for the LC contract header and proofs exceeded {REQUEST_TIMEOUT:?}"
-            )
-        })??;
+        let (preceding, roots) = self.fetch_headers(&lc, preceding_height, heights).await?;
         coordinator
             .membership()
             .install_epoch_roots(preceding, roots, &coordinator)
@@ -136,8 +129,8 @@ impl<P: SequencerPersistence> LcContractSeed<P> {
 
     /// The block Merkle root of the header at `F`, accepted by `lc.verify_header`, then the headers
     /// it proves: the preceding root (the block time source of the lowest installed reward) and
-    /// `proven_heights`, ascending. A rejected answer is skipped and the request keeps waiting
-    /// (`request_indefinitely`).
+    /// `proven_heights`, ascending. A rejected answer is skipped and the request keeps waiting, up
+    /// to `REQUEST_TIMEOUT` for each request.
     async fn fetch_headers(
         &self,
         lc: &LcContractFinalizedState,
@@ -150,8 +143,9 @@ impl<P: SequencerPersistence> LcContractSeed<P> {
             .and_then(Weak::upgrade)
             .context("the request-response protocol is not available")?;
         let checked_lc = lc.clone();
-        let root: BlockMerkleCommitment = protocol
-            .request_indefinitely(
+        let root: BlockMerkleCommitment = within_request_timeout(
+            format!("the LC contract header at height {}", lc.height),
+            protocol.request_indefinitely(
                 Request::Leaf(lc.height),
                 move |_: &Request, response: Response| {
                     let lc = checked_lc.clone();
@@ -166,16 +160,18 @@ impl<P: SequencerPersistence> LcContractSeed<P> {
                         result.inspect_err(|err| tracing::debug!("seed header rejected: {err:#}"))
                     })
                 },
-            )
-            .await?;
+            ),
+        )
+        .await?;
 
         let heights = preceding_height.into_iter().chain(proven_heights);
         let mut headers: Vec<Header> = stream::iter(heights)
             .map(|height| {
                 let protocol = Arc::clone(&protocol);
                 async move {
-                    protocol
-                        .request_indefinitely(
+                    within_request_timeout(
+                        format!("the header proof at height {height}"),
+                        protocol.request_indefinitely(
                             Request::HeaderProof {
                                 root: lc.height,
                                 height,
@@ -193,9 +189,9 @@ impl<P: SequencerPersistence> LcContractSeed<P> {
                                     })
                                 })
                             },
-                        )
-                        .await
-                        .map_err(anyhow::Error::from)
+                        ),
+                    )
+                    .await
                 }
             })
             .buffered(MAX_CONCURRENT_REQUESTS)
@@ -204,4 +200,15 @@ impl<P: SequencerPersistence> LcContractSeed<P> {
         let preceding = preceding_height.map(|_| headers.remove(0));
         Ok((preceding, headers))
     }
+}
+
+/// Awaits `request` for at most `REQUEST_TIMEOUT`; the timeout error names `what`.
+async fn within_request_timeout<T, E: Into<anyhow::Error>>(
+    what: impl Display,
+    request: impl Future<Output = Result<T, E>>,
+) -> anyhow::Result<T> {
+    tokio::time::timeout(REQUEST_TIMEOUT, request)
+        .await
+        .map_err(|_| anyhow!("{what} not received within {REQUEST_TIMEOUT:?}"))?
+        .map_err(Into::into)
 }
