@@ -296,6 +296,13 @@ mod tests {
         type Storage: Sync;
 
         async fn tmp_storage() -> Self::Storage;
+
+        /// Seed the historical eQC format without depending on a production writer.
+        async fn insert_legacy_eqc(
+            &self,
+            high_qc: &QuorumCertificate2<SeqTypes>,
+            next_epoch_qc: &NextEpochQuorumCertificate2<SeqTypes>,
+        ) -> anyhow::Result<()>;
         fn options(storage: &Self::Storage) -> impl PersistenceOptions<Persistence = Self>;
 
         async fn connect(storage: &Self::Storage) -> Self {
@@ -1232,7 +1239,7 @@ mod tests {
         assert_eq!(initializer.high_qc().view_number, ViewNumber::new(9));
     }
 
-    /// `load_consensus_state` adopts the running high QC persisted via `update_high_qc2` over an
+    /// `load_consensus_state` adopts the running high QC persisted via `append_high_qc2` over an
     /// older eQC checkpoint.
     #[rstest_reuse::apply(persistence_types)]
     pub async fn test_load_consensus_state_prefers_running_high_qc_over_eqc<
@@ -1277,12 +1284,26 @@ mod tests {
         .await;
         eqc_high_qc.view_number = ViewNumber::new(5);
         storage
-            .store_eqc(eqc_high_qc.clone(), next_epoch_qc.clone())
+            .insert_legacy_eqc(&eqc_high_qc, &next_epoch_qc)
             .await
             .unwrap();
 
-        // A newer running high QC (view 9): recovery adopts it over the eQC checkpoint.
+        let storage = P::connect(&tmp).await;
+        assert_eq!(
+            storage.load_eqc().await,
+            Some((eqc_high_qc.clone(), next_epoch_qc))
+        );
         let epoch_height = 10;
+        let (initializer, _) = storage
+            .load_consensus_state(
+                NodeState::mock().with_epoch_height(epoch_height),
+                Upgrade::trivial(versions::EPOCH_REWARD_VERSION),
+            )
+            .await
+            .unwrap();
+        assert_eq!(initializer.high_qc().view_number, ViewNumber::new(5));
+
+        // A newer running high QC (view 9): recovery adopts it over the eQC checkpoint.
         let mut running_high_qc = eqc_high_qc.clone();
         running_high_qc.view_number = ViewNumber::new(9);
         running_high_qc.data.block_number = Some(epoch_height);

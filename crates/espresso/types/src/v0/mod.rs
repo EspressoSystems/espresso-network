@@ -169,8 +169,6 @@ pub type EpochRewardVersion = StaticVersion<0, 5>;
 pub type Leaf = hotshot_types::data::Leaf<SeqTypes>;
 pub type Leaf2 = hotshot_types::data::Leaf2<SeqTypes>;
 
-pub type Event = hotshot_types::event::Event<SeqTypes>;
-
 pub type PubKey = BLSPubKey;
 pub type PrivKey = <PubKey as SignatureKey>::PrivateKey;
 

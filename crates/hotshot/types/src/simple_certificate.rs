@@ -35,7 +35,7 @@ use crate::{
         ViewSyncFinalizeData, ViewSyncFinalizeData2, ViewSyncPreCommitData, ViewSyncPreCommitData2,
         Vote2Data, Voteable,
     },
-    stake_table::{HSStakeTable, StakeTableEntries},
+    stake_table::HSStakeTable,
     traits::{
         node_implementation::NodeType,
         signature_key::{SignatureKey, StateSignatureKey},
@@ -444,53 +444,6 @@ impl<TYPES: NodeType> Display for QuorumCertificate<TYPES> {
     }
 }
 
-impl<TYPES: NodeType> UpgradeCertificate<TYPES> {
-    /// Determines whether or not a certificate is relevant (i.e. we still have time to reach a
-    /// decide)
-    ///
-    /// # Errors
-    /// Returns an error when the certificate is no longer relevant
-    pub async fn is_relevant(&self, view_number: ViewNumber) -> Result<()> {
-        ensure!(
-            self.data.new_version_first_view >= view_number,
-            "Upgrade certificate is no longer relevant."
-        );
-
-        Ok(())
-    }
-
-    /// Validate an upgrade certificate.
-    /// # Errors
-    /// Returns an error when the upgrade certificate is invalid.
-    pub async fn validate(
-        upgrade_certificate: &Option<Self>,
-        membership: &EpochMembership<TYPES>,
-        epoch: Option<EpochNumber>,
-        upgrade_lock: &UpgradeLock<TYPES>,
-    ) -> Result<()> {
-        ensure!(epoch == membership.epoch(), "Epochs don't match!");
-        if let Some(cert) = upgrade_certificate {
-            let membership_stake_table = membership.stake_table();
-            let membership_upgrade_threshold = membership.upgrade_threshold();
-
-            cert.is_valid_cert(
-                &StakeTableEntries::from_iter(membership_stake_table).0,
-                membership_upgrade_threshold,
-                upgrade_lock,
-            )
-            .context(|e| warn!("Invalid upgrade certificate: {e}"))?;
-        }
-
-        Ok(())
-    }
-
-    /// Given an upgrade certificate and a view, tests whether the view is in the period
-    /// where we are upgrading, which requires that we propose with null blocks.
-    pub fn upgrading_in(&self, view: ViewNumber) -> bool {
-        view > self.data.old_version_last_view && view < self.data.new_version_first_view
-    }
-}
-
 impl<TYPES: NodeType> QuorumCertificate<TYPES> {
     /// Convert a `QuorumCertificate` into a `QuorumCertificate2`
     pub fn to_qc2(self) -> QuorumCertificate2<TYPES> {
@@ -520,92 +473,6 @@ impl<TYPES: NodeType> QuorumCertificate2<TYPES> {
         let bytes: [u8; 32] = self.data.leaf_commit.into();
         let data = QuorumData {
             leaf_commit: Commitment::from_raw(bytes),
-        };
-
-        let bytes: [u8; 32] = self.vote_commitment.into();
-        let vote_commitment = Commitment::from_raw(bytes);
-
-        SimpleCertificate {
-            data,
-            vote_commitment,
-            view_number: self.view_number,
-            signatures: self.signatures.clone(),
-            _pd: PhantomData,
-        }
-    }
-}
-
-impl<TYPES: NodeType> DaCertificate<TYPES> {
-    /// Convert a `DaCertificate` into a `DaCertificate2`
-    pub fn to_dac2(self) -> DaCertificate2<TYPES> {
-        let data = DaData2 {
-            payload_commit: self.data.payload_commit,
-            next_epoch_payload_commit: None,
-            epoch: None,
-        };
-
-        let bytes: [u8; 32] = self.vote_commitment.into();
-        let vote_commitment = Commitment::from_raw(bytes);
-
-        SimpleCertificate {
-            data,
-            vote_commitment,
-            view_number: self.view_number,
-            signatures: self.signatures.clone(),
-            _pd: PhantomData,
-        }
-    }
-}
-
-impl<TYPES: NodeType> DaCertificate2<TYPES> {
-    /// Convert a `DaCertificate` into a `DaCertificate2`
-    pub fn to_dac(self) -> DaCertificate<TYPES> {
-        let data = DaData {
-            payload_commit: self.data.payload_commit,
-        };
-
-        let bytes: [u8; 32] = self.vote_commitment.into();
-        let vote_commitment = Commitment::from_raw(bytes);
-
-        SimpleCertificate {
-            data,
-            vote_commitment,
-            view_number: self.view_number,
-            signatures: self.signatures.clone(),
-            _pd: PhantomData,
-        }
-    }
-}
-
-impl<TYPES: NodeType> ViewSyncPreCommitCertificate<TYPES> {
-    /// Convert a `DaCertificate` into a `DaCertificate2`
-    pub fn to_vsc2(self) -> ViewSyncPreCommitCertificate2<TYPES> {
-        let data = ViewSyncPreCommitData2 {
-            relay: self.data.relay,
-            round: self.data.round,
-            epoch: None,
-        };
-
-        let bytes: [u8; 32] = self.vote_commitment.into();
-        let vote_commitment = Commitment::from_raw(bytes);
-
-        SimpleCertificate {
-            data,
-            vote_commitment,
-            view_number: self.view_number,
-            signatures: self.signatures.clone(),
-            _pd: PhantomData,
-        }
-    }
-}
-
-impl<TYPES: NodeType> ViewSyncCommitCertificate<TYPES> {
-    /// Convert a `DaCertificate` into a `DaCertificate2`
-    pub fn to_vsc2(self) -> ViewSyncCommitCertificate2<TYPES> {
-        let data = ViewSyncCommitData2 {
-            relay: self.data.relay,
-            round: self.data.round,
-            epoch: None,
         };
 
         let bytes: [u8; 32] = self.vote_commitment.into();

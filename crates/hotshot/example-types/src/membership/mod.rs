@@ -12,13 +12,13 @@ use async_broadcast::Receiver;
 use hotshot_types::{
     PeerConfig,
     data::EpochNumber,
-    event::Event,
     traits::{
         election::Membership, leaf_fetcher_network::LeafFetcherNetwork,
         node_implementation::NodeType,
     },
 };
 
+use self::fetcher::ExternalMessage;
 use crate::storage_types::TestStorage;
 
 /// leader completely randomized every view
@@ -65,6 +65,6 @@ pub trait TestableMembership<TYPES: NodeType>: Membership<TYPES> {
         network: Arc<dyn LeafFetcherNetwork<TYPES>>,
         storage: TestStorage<TYPES>,
         public_key: TYPES::SignatureKey,
-        channel: Receiver<Event<TYPES>>,
+        channel: Receiver<ExternalMessage>,
     );
 }
