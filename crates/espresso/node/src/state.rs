@@ -365,9 +365,10 @@ const PRUNED_LEAF_CHECK_INTERVAL: Duration = Duration::from_secs(10);
 const BOUNDARY_RETRY_INTERVAL: Duration = Duration::from_secs(10);
 
 /// The most epoch boundaries below its start whose reward trees a loop that starts from a recent
-/// boundary fetches. Peers keep the reward trees of 5 epochs only (`save_and_gc_reward_tree_v2`):
-/// the boundary the loop starts from, and the 4 below it.
-const REWARD_TREES_BELOW_START: u64 = 4;
+/// boundary fetches. A peer whose newest boundary is the start keeps the trees of the 5
+/// boundaries below it: `save_and_gc_reward_tree_v2` deletes only the trees strictly below
+/// `start - 5 * epoch_height`.
+const REWARD_TREES_BELOW_START: u64 = 5;
 
 /// How long a loop that starts from a recent boundary tries to fetch the reward tree at one
 /// boundary below its start, before it goes on without it.
@@ -1104,9 +1105,9 @@ mod test {
     /// A node whose state starts at the boundary `start` needs the reward trees from the boundary
     /// the L1 light client has finalized, where it stores reward proofs, up to `start`: the newest
     /// boundary at or below `finalized`, or `finalized` itself when it ends an epoch. It needs at
-    /// most the 4 boundaries below `start`, as peers keep the trees of about 5 epochs only, never
-    /// the first epoch's, for which no proofs are stored, and none once the light client has
-    /// reached `start`.
+    /// most the 5 boundaries below `start`, as peers keep the trees of the 5 epochs below their
+    /// newest boundary only, never the first epoch's, for which no proofs are stored, and none
+    /// once the light client has reached `start`.
     #[rstest]
     #[case::finalized_two_epochs_below(100, 75, 10, vec![70, 80, 90])]
     #[case::finalized_in_epoch_below_start(100, 95, 10, vec![90])]
@@ -1115,8 +1116,8 @@ mod test {
     #[case::finalized_last_block_below_start(100, 90, 10, vec![90])]
     #[case::finalized_just_below_last_block(100, 89, 10, vec![80, 90])]
     #[case::finalized_just_below_start(100, 99, 10, vec![90])]
-    #[case::capped_at_four_boundaries(100, 15, 10, vec![60, 70, 80, 90])]
-    #[case::capped_finalized_first_boundary(100, 10, 10, vec![60, 70, 80, 90])]
+    #[case::capped_at_five_boundaries(100, 15, 10, vec![50, 60, 70, 80, 90])]
+    #[case::capped_finalized_first_boundary(100, 10, 10, vec![50, 60, 70, 80, 90])]
     #[case::finalized_at_start(100, 100, 10, vec![])]
     #[case::finalized_above_start(100, 105, 10, vec![])]
     #[case::finalized_genesis(100, 0, 10, vec![])]
@@ -1127,6 +1128,43 @@ mod test {
     #[case::start_at_first_boundary(10, 5, 10, vec![])]
     #[case::water_devnet(1_542_000, 1_537_500, 3000, vec![1_536_000, 1_539_000])]
     fn test_reward_boundaries_below(
+        #[case] start: u64,
+        #[case] finalized: u64,
+        #[case] epoch_height: u64,
+        #[case] expected: Vec<u64>,
+    ) {
+        assert_eq!(
+            reward_boundaries_below(start, finalized, epoch_height),
+            expected,
+            "start {start}, L1-finalized height {finalized}, epoch height {epoch_height}"
+        );
+    }
+
+    /// The window of boundaries below `start` holds 5 boundaries, down to `start - 5 * eh`: a peer
+    /// whose newest boundary is `start` deletes only the reward trees strictly below
+    /// `start - 5 * eh`, so it still serves the tree at `start - 5 * eh`, and the node needs that
+    /// tree whenever the L1 light client has finalized a height in
+    /// `[start - 5 * eh, start - 4 * eh)`. The window never reaches below `start - 5 * eh`.
+    #[rstest]
+    #[case::finalized_at_fifth_boundary(100, 50, 10, vec![50, 60, 70, 80, 90])]
+    #[case::finalized_inside_epoch_above_fifth_boundary(100, 55, 10, vec![50, 60, 70, 80, 90])]
+    #[case::finalized_just_below_fourth_boundary(100, 59, 10, vec![50, 60, 70, 80, 90])]
+    #[case::finalized_just_below_fifth_boundary(100, 49, 10, vec![50, 60, 70, 80, 90])]
+    #[case::capped_at_five_boundaries(70, 15, 10, vec![20, 30, 40, 50, 60])]
+    #[case::start_five_epochs_above_proof_boundary(60, 15, 10, vec![10, 20, 30, 40, 50])]
+    #[case::water_devnet_fifth_boundary(
+        1_542_000,
+        1_528_500,
+        3000,
+        vec![1_527_000, 1_530_000, 1_533_000, 1_536_000, 1_539_000]
+    )]
+    #[case::mainnet_fifth_boundary(
+        31_880_000,
+        31_700_000,
+        40_000,
+        vec![31_680_000, 31_720_000, 31_760_000, 31_800_000, 31_840_000]
+    )]
+    fn test_reward_boundaries_below_keeps_the_fifth_boundary(
         #[case] start: u64,
         #[case] finalized: u64,
         #[case] epoch_height: u64,

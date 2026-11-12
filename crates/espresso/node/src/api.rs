@@ -7935,15 +7935,15 @@ mod test {
 
     /// The HotShot height the L1 light client has finalized when the query node of
     /// [`test_state_loop_starts_on_pruned_data`] starts from a boundary: in the second epoch, so
-    /// reward proofs go at the first boundary, which lies below the start, and more than 4 epochs
-    /// below it when the start is above 50.
+    /// reward proofs go at the first boundary, which lies below the start, and more than 5 epochs
+    /// below it when the start is above 60.
     const PRUNED_START_L1_FINALIZED_HEIGHT: u64 =
         PRUNED_START_EPOCH_HEIGHT + PRUNED_START_EPOCH_HEIGHT / 2;
 
     /// Check that a query node whose state started from the boundary `start` serves, through
     /// `actual`, the reward trees it needs to store reward proofs for the L1-finalized height
     /// [`PRUNED_START_L1_FINALIZED_HEIGHT`]: the same as node 0 (`expected`) serves at each
-    /// boundary from the finalized one up to `start`, at most 4 of them, and none below.
+    /// boundary from the finalized one up to `start`, at most 5 of them, and none below.
     async fn check_reward_trees_below_start(
         expected: &Client<ClientErr, StaticVersion<0, 1>>,
         actual: &Client<ClientErr, StaticVersion<0, 1>>,
@@ -7951,7 +7951,7 @@ mod test {
     ) -> anyhow::Result<()> {
         let epoch = PRUNED_START_EPOCH_HEIGHT;
         let proof_boundary = l1_finalized_proof_boundary(PRUNED_START_L1_FINALIZED_HEIGHT, epoch);
-        let lowest = proof_boundary.max(start.saturating_sub(4 * epoch));
+        let lowest = proof_boundary.max(start.saturating_sub(5 * epoch));
         let context = || {
             format!(
                 "L1-finalized height {PRUNED_START_L1_FINALIZED_HEIGHT}, its boundary \
