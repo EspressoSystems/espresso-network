@@ -70,7 +70,8 @@ seed at a time:
 5. Requests go over request-response. With `--state-peers`, they also go over HTTP, eligible `--http-catchup-delay`
    after the fetch starts (one delay for the whole fetch), at once when the protocol is not available. The state peers
    are asked in order; a peer that fails or answers wrongly moves to the back for the rest of the process. When both
-   sides fail, the error carries both reasons.
+   sides fail, the error carries both reasons. The delay is at most a third of the 30 s request bound, and the timeout
+   error of a request carries the last state peer error.
 
 ## Consensus upgrades
 

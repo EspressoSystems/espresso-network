@@ -1,6 +1,7 @@
 //! Seeds the post-start epoch catchup from the LC contract.
 
 use std::{
+    fmt::Display,
     future::Future,
     pin::pin,
     sync::{Arc, OnceLock, Weak},
@@ -47,7 +48,8 @@ pub struct LcContractSeed<P: SequencerPersistence> {
     requests: Arc<OnceLock<Weak<RequestResponseProtocol<P>>>>,
     /// Asked in order once eligible; none, no HTTP.
     state_peers: Arc<StatePeers<QueryServiceClient>>,
-    /// How long after a fetch starts the state peers become eligible.
+    /// How long after a fetch starts the state peers become eligible, at most a third of
+    /// `REQUEST_TIMEOUT`.
     http_delay: Duration,
     /// Seed attempts that installed a window.
     seeded: Arc<dyn Counter>,
@@ -71,7 +73,7 @@ impl<P: SequencerPersistence> LcContractSeed<P> {
                     .map(|url| (url.clone(), QueryServiceClient::new(url)))
                     .collect(),
             )),
-            http_delay,
+            http_delay: http_delay.min(REQUEST_TIMEOUT / 3),
             seeded: metrics
                 .subgroup("catchup".into())
                 .create_counter("lc_contract_seeds".into(), None)
@@ -138,16 +140,7 @@ impl<P: SequencerPersistence> LcContractSeed<P> {
         let heights = lc.proven_root_heights(epoch_height, start, target);
         let requests = self.requests.get().and_then(Weak::upgrade);
         let sources = Sources::new(requests.as_ref(), &self.state_peers, self.http_delay);
-        let (preceding, roots) = tokio::time::timeout(
-            REQUEST_TIMEOUT,
-            fetch_headers(&sources, &lc, preceding_height, heights),
-        )
-        .await
-        .map_err(|_| {
-            anyhow!(
-                "seed requests for the LC contract header and proofs exceeded {REQUEST_TIMEOUT:?}"
-            )
-        })??;
+        let (preceding, roots) = fetch_headers(&sources, &lc, preceding_height, heights).await?;
         coordinator
             .membership()
             .install_epoch_roots(preceding, roots, &coordinator)
@@ -331,7 +324,12 @@ impl<'a, R: PeerRequests, C: Client> Sources<'a, R, C> {
                 .root(lc)
                 .await
         };
-        race(requests, self.state_peers.root(lc), self.state_peers_from).await
+        self.request(
+            format!("the LC contract header at height {}", lc.height),
+            requests,
+            self.state_peers.root(lc),
+        )
+        .await
     }
 
     /// The header at `height`, proven against `root` of the header at `root_height`.
@@ -347,12 +345,42 @@ impl<'a, R: PeerRequests, C: Client> Sources<'a, R, C> {
                 .proven_header(root_height, height, root)
                 .await
         };
-        race(
+        self.request(
+            format!("the header proof at height {height}"),
             requests,
             self.state_peers.proven_header(root_height, height, root),
-            self.state_peers_from,
         )
         .await
+    }
+
+    /// `requests` raced against `state_peers` under `REQUEST_TIMEOUT`; a timeout error names
+    /// `what` and the last error of the state peers.
+    async fn request<T>(
+        &self,
+        what: impl Display,
+        requests: impl Future<Output = anyhow::Result<T>>,
+        state_peers: impl Future<Output = anyhow::Result<T>>,
+    ) -> anyhow::Result<T> {
+        let last_state_peer_error = Mutex::new(None::<String>);
+        let state_peers = async {
+            state_peers
+                .await
+                .inspect_err(|err| *last_state_peer_error.lock() = Some(format!("{err:#}")))
+        };
+        tokio::time::timeout(
+            REQUEST_TIMEOUT,
+            race(requests, state_peers, self.state_peers_from),
+        )
+        .await
+        .map_err(|_| {
+            let last_error = last_state_peer_error.lock().take();
+            match last_error {
+                Some(err) => anyhow!(
+                    "{what} not received within {REQUEST_TIMEOUT:?}; last state peer error: {err}"
+                ),
+                None => anyhow!("{what} not received within {REQUEST_TIMEOUT:?}"),
+            }
+        })?
     }
 }
 
@@ -417,10 +445,14 @@ fn both_failed(primary_err: anyhow::Error, fallback_err: anyhow::Error) -> anyho
 
 #[cfg(test)]
 mod tests {
-    use hotshot_types::{data::ViewNumber, traits::block_contents::BlockHeader};
+    use hotshot_types::{
+        data::ViewNumber,
+        traits::{block_contents::BlockHeader, metrics::NoMetrics},
+    };
     use light_client::testing::TestClient;
 
     use super::*;
+    use crate::persistence::no_storage::NoStorage;
 
     const EPOCH_HEIGHT: u64 = 10;
     const HTTP_DELAY: Duration = Duration::from_secs(5);
@@ -710,6 +742,48 @@ mod tests {
         assert_eq!(roots.len(), 5);
         assert!(preceding.is_some());
         assert_eq!(started.elapsed(), HTTP_DELAY);
+    }
+
+    /// The timeout error of a request names the request and the last error of the state peers.
+    #[tokio::test(start_paused = true)]
+    async fn fetch_headers_timeout_names_the_state_peer_error() {
+        let client = TestClient::with_epoch_height(EPOCH_HEIGHT);
+        let lc = finalized_state(&header(&client, 62).await);
+        let forging = TestClient::with_epoch_height(EPOCH_HEIGHT);
+        forging.return_wrong_leaf(62, 61).await;
+        let peers = state_peers(vec![forging]);
+        let sources = Sources::new(Some(&Silent), &peers, HTTP_DELAY);
+        let started = Instant::now();
+
+        let err = fetch_headers(&sources, &lc, None, vec![15])
+            .await
+            .unwrap_err();
+
+        let message = format!("{err:#}");
+        assert!(
+            message.contains("the LC contract header at height 62"),
+            "{message}"
+        );
+        assert!(message.contains("expected 62"), "{message}");
+        assert_eq!(started.elapsed(), REQUEST_TIMEOUT);
+    }
+
+    /// The HTTP delay is at most a third of the request bound.
+    #[test]
+    fn http_delay_is_at_most_a_third_of_the_request_bound() {
+        let chain_config = ChainConfig {
+            stake_table_contract: Some(Default::default()),
+            ..Default::default()
+        };
+
+        let delay = |http_delay| {
+            LcContractSeed::<NoStorage>::new(&chain_config, vec![], http_delay, &NoMetrics)
+                .unwrap()
+                .http_delay
+        };
+
+        assert_eq!(delay(Duration::from_secs(3600)), REQUEST_TIMEOUT / 3);
+        assert_eq!(delay(Duration::from_secs(2)), Duration::from_secs(2));
     }
 
     /// A header at `F` whose block commitment root is not the LC contract's is rejected.
